@@ -23,6 +23,8 @@ const MAX_TEXT_BYTES: usize = 2 * 1024;
 const MAX_TAG_BYTES: usize = 96;
 const IDLE_UNCROSSED_SOFT_BLINK: &str = "idle.uncrossed.soft_blink";
 const IDLE_CROSSED_SOFT_BLINK: &str = "idle.crossed.soft_blink";
+const IDLE_CROSS_ARMS_TRANSITION: &str = "transition.neutral_to_crossed";
+const IDLE_UNCROSS_ARMS_TRANSITION: &str = "transition.uncross_arms";
 const IDLE_CONTROL_POLL_MS: u64 = 100;
 const IDLE_BLINK_AVERAGE_MS: u64 = 10_000;
 const IDLE_BLINK_WINDOW_MS: u64 = 5_000;
@@ -141,6 +143,7 @@ struct LillyIdleStrategy {
     rng: crate::tyche::SoftRng,
     active: bool,
     crossed: bool,
+    pending_crossed: Option<bool>,
     next_blink: Instant,
     next_arms_change: Instant,
 }
@@ -164,6 +167,7 @@ impl LillyIdleStrategy {
             rng,
             active: true,
             crossed: false,
+            pending_crossed: None,
             next_blink,
             next_arms_change,
         }
@@ -195,18 +199,33 @@ impl LillyIdleStrategy {
     ) -> Result<LillyScheduledAnimation, LillyProtocolError> {
         self.resume(now);
 
+        if let Some(crossed) = self.pending_crossed.take() {
+            self.crossed = crossed;
+            crate::log_info!(
+                target: "gfx";
+                "trueos-spirit: idle strategy event=arms-transition-complete posture={}\n",
+                idle_posture_name(self.crossed),
+            );
+        }
+
         if now >= self.next_arms_change {
-            self.crossed = !self.crossed;
+            let target_crossed = !self.crossed;
+            let transition_key = idle_transition_key(target_crossed);
+            let scheduled = resolve(transition_key, rgba)?;
             let next_ms =
                 centered_interval_ms(&mut self.rng, IDLE_ARMS_AVERAGE_MS, IDLE_ARMS_WINDOW_MS);
             self.next_arms_change = now + Duration::from_millis(next_ms);
+            self.pending_crossed = Some(target_crossed);
             crate::log_info!(
                 target: "gfx";
-                "trueos-spirit: idle strategy event=arms posture={} next_average_ms={} next_window_ms={}\n",
+                "trueos-spirit: idle strategy event=arms-transition-start from={} to={} clip={} next_average_ms={} next_window_ms={}\n",
                 idle_posture_name(self.crossed),
+                idle_posture_name(target_crossed),
+                transition_key,
                 IDLE_ARMS_AVERAGE_MS,
                 IDLE_ARMS_WINDOW_MS,
             );
+            return Ok(scheduled);
         }
 
         if now >= self.next_blink {
@@ -500,6 +519,14 @@ const fn idle_animation_key(crossed: bool) -> &'static str {
         IDLE_CROSSED_SOFT_BLINK
     } else {
         IDLE_UNCROSSED_SOFT_BLINK
+    }
+}
+
+const fn idle_transition_key(target_crossed: bool) -> &'static str {
+    if target_crossed {
+        IDLE_CROSS_ARMS_TRANSITION
+    } else {
+        IDLE_UNCROSS_ARMS_TRANSITION
     }
 }
 

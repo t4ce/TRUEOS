@@ -14,6 +14,7 @@ pub mod keyboard;
 pub mod keyboard_control_service;
 pub mod lfm25_decode;
 pub mod lfm25_ffn;
+pub mod lfm25_f32;
 pub mod lfm25_hybrid_cpu_backend;
 pub mod lfm25_model;
 pub mod lfm25_tokenizer;

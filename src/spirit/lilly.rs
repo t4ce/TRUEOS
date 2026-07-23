@@ -8,7 +8,7 @@ use spin::Mutex;
 
 const LILLY_ARCHIVE_7Z: &[u8] = include_bytes!("../../tools/Lilly.7z");
 const LILLY_CATALOG: &str = include_str!("../../tools/Lilly.catalog");
-const LILLY_EXPECTED_ASSETS: usize = 68;
+const LILLY_EXPECTED_ASSETS: usize = 70;
 const LILLY_FRAMES_PER_ASSET: usize = 7;
 const LILLY_EXPECTED_LOGICAL_FRAMES: usize = LILLY_EXPECTED_ASSETS * LILLY_FRAMES_PER_ASSET;
 const LILLY_IDENTITY_SOURCE_MAP: [u8; LILLY_FRAMES_PER_ASSET] = [1, 2, 3, 4, 5, 6, 7];

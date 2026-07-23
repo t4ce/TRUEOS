@@ -645,11 +645,11 @@ async fn run_layer_streamed(
 
 fn stream_silu_result(result: crate::tga::Lfm25StreamResult) -> Result<i64, Error> {
     match result.error_code {
-        0 => Ok(result.result_q30),
-        // ERROR_SILU means the persisted row-stream firmware rejected only
-        // its fixture-specific polynomial range. Gate and up were already
-        // fully computed and published before that guard fired.
-        4 => trueos_lfm25_cpu::silu_mul_q30(result.gate_q30, result.up_q30)
+        // Gate and up are the authoritative fixed-function projections. Use
+        // the published Q30 values for the exact F32 activation on every row,
+        // including rows for which the fixture-bounded hardware polynomial
+        // reports success.
+        0 | 4 => trueos_lfm25_cpu::silu_mul_q30(result.gate_q30, result.up_q30)
             .map_err(|_| Error::Arithmetic),
         code => Err(Error::Fpga(fpga_offload::Error::Device(code as i32))),
     }

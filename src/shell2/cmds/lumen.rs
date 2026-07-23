@@ -113,6 +113,17 @@ async fn lum_task(target: MatrixTarget, prompt: String) {
     );
 
     let before = crate::r::fpga_offload::stats();
+    let row_completions_before = match crate::r::fpga_offload::lfm25_stream_completion_count() {
+        Ok(count) => count,
+        Err(error) => {
+            print_matrix_target_line(
+                &target,
+                alloc::format!("lum: failed stage=prefill-counters error={error:?}").as_str(),
+            );
+            set_matrix_target_active(&target, false);
+            return;
+        }
+    };
     let mut next_token = None;
     let mut last_callback = 0u64;
     for (index, &token) in prompt_tokens.iter().enumerate() {
@@ -146,6 +157,78 @@ async fn lum_task(target: MatrixTarget, prompt: String) {
                 alloc::format!("lum: prefill={}/{}", index + 1, prompt_tokens.len()).as_str(),
             );
         }
+    }
+
+    let first_token = match next_token {
+        Some(token) => token,
+        None => {
+            print_matrix_target_line(&target, "lum: failed stage=prefill no next token");
+            set_matrix_target_active(&target, false);
+            return;
+        }
+    };
+    let first_piece_bytes = match tokenizer.decode(&[first_token], true) {
+        Ok(piece) => piece,
+        Err(error) => {
+            print_matrix_target_line(
+                &target,
+                alloc::format!("lum: failed stage=prefill-detokenize error={error:?}").as_str(),
+            );
+            set_matrix_target_active(&target, false);
+            return;
+        }
+    };
+    let first_piece = String::from_utf8_lossy(&first_piece_bytes);
+    let row_completions_after = match crate::r::fpga_offload::lfm25_stream_completion_count() {
+        Ok(count) => count,
+        Err(error) => {
+            print_matrix_target_line(
+                &target,
+                alloc::format!("lum: failed stage=prefill-counters error={error:?}").as_str(),
+            );
+            set_matrix_target_active(&target, false);
+            return;
+        }
+    };
+    let prefill_after = crate::r::fpga_offload::stats();
+    let callback_count = last_callback;
+    let fpga_row_completions = row_completions_after.wrapping_sub(row_completions_before) as u64;
+    let timeout_recovery_count = prefill_after
+        .timeout_recoveries
+        .saturating_sub(before.timeout_recoveries);
+    let expected_callbacks =
+        prompt_tokens.len() as u64 * trueos_fpga_abi::lfm25_decode::OPS_PER_TOKEN as u64;
+    let expected_fpga_rows = prompt_tokens.len() as u64
+        * trueos_fpga_abi::lfm25::MODEL_LAYER_COUNT as u64
+        * crate::r::lfm25_ffn::FPGA_STREAM_ROWS_PER_FFN;
+    print_matrix_target_line(
+        &target,
+        alloc::format!(
+            "lum: prefill_diag first_token={} first_piece={:?} callbacks={} fpga_rows={} timeout_recovery={}",
+            first_token,
+            first_piece,
+            callback_count,
+            fpga_row_completions,
+            timeout_recovery_count,
+        )
+        .as_str(),
+    );
+    if callback_count != expected_callbacks
+        || fpga_row_completions != expected_fpga_rows
+        || timeout_recovery_count != 0
+        || (prompt == "hi" && (first_token != 36_309 || !first_piece.starts_with("Hello")))
+    {
+        print_matrix_target_line(
+            &target,
+            alloc::format!(
+                "lum: failed stage=prefill-parity expected_callbacks={} expected_fpga_rows={} hi_expected_token=36309",
+                expected_callbacks,
+                expected_fpga_rows,
+            )
+            .as_str(),
+        );
+        set_matrix_target_active(&target, false);
+        return;
     }
 
     let mut generated = alloc::vec::Vec::new();

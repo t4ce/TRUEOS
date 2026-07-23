@@ -7,6 +7,7 @@ license-file = "../../LICENSE"
 [dependencies]
 half = { path = "../../vendor/half-2.7.1", default-features = false }
 libm = { version = "0.2", default-features = false }
+sha2 = { version = "0.10.9", default-features = false }
 trueos-fpga-abi = { path = "../trueos-fpga-abi" }
 
 [[bin]]
@@ -16,3 +17,7 @@ path = "src/bin/token1.rs"
 [[bin]]
 name = "lfm25-tokenizer-seal"
 path = "src/bin/tokenizer_seal.rs"
+
+[[bin]]
+name = "lfm25-f32-seal"
+path = "src/bin/f32_seal.rs"

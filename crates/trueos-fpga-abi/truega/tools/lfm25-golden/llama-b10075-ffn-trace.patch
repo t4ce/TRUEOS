@@ -16,6 +16,40 @@ diff --git a/src/models/lfm2.cpp b/src/models/lfm2.cpp
 index 70e837d..f4f4d80 100644
 --- a/src/models/lfm2.cpp
 +++ b/src/models/lfm2.cpp
+@@ -143,7 +143,9 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
+                           attn_factor, beta_fast, beta_slow);
+         k = ggml_rope_ext(ctx0, k, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
+                           attn_factor, beta_fast, beta_slow);
++        cb(q, "model.layers.{}.self_attn.q_rope", il);
++        cb(k, "model.layers.{}.self_attn.k_rope", il);
+ 
+         cur = build_attn(inp_attn,
+                 model.layers[il].wo, NULL, model.layers[il].wo_s,
+@@ -193,7 +195,8 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         // causal prepends the state, non-causal pads symmetrically for a centered window
+         if (hparams.causal_attn) {
+             bx = ggml_concat(ctx0, conv, bx, 0);
++            cb(bx, "model.layers.{}.conv.bx", il);
+         } else {
+             const int64_t pad = (hparams.n_shortconv_l_cache - 1) / 2;
+             auto * left = ggml_cont(ctx0,
+@@ -205,7 +208,8 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         // last d_conv columns is a new conv state
+         auto * new_conv = ggml_view_3d(ctx0, bx, conv->ne[0], bx->ne[1], bx->ne[2], bx->nb[1], bx->nb[2],
+                                        (bx->ne[0] - conv->ne[0]) * ggml_element_size(bx));
++        cb(new_conv, "model.layers.{}.conv.state", il);
+         GGML_ASSERT(ggml_are_same_shape(conv, new_conv));
+ 
+         // write new conv conv state
+@@ -217,7 +221,8 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         cb(conv_out, "model.layers.{}.conv.conv", il);
+ 
+         auto * y = ggml_mul(ctx0, c, conv_out);
++        cb(y, "model.layers.{}.conv.mix", il);
+         y        = build_lora_mm(model.layers[il].shortconv.out_proj, y);
+         cb(y, "model.layers.{}.conv.out_proj", il);
+         // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
 @@ -257,13 +257,14 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
          }
  

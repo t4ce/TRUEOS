@@ -19,7 +19,7 @@ use crate::r::lfm25_decode::{
     AotDecodeBackend, AotDecodeCallback, AotDecodeOutput, AotDecodeRequest, HiddenQ8, HiddenQ30,
     ResidentTensorHandle,
 };
-use crate::r::{lfm25_ffn, lfm25_model};
+use crate::r::{lfm25_f32, lfm25_ffn, lfm25_model};
 
 const HIDDEN: usize = lfm25::MODEL_HIDDEN_SIZE as usize;
 const HEADS: usize = lfm25::MODEL_ATTENTION_HEADS as usize;
@@ -34,6 +34,7 @@ const CPU_SESSION_EPOCH: u32 = 1;
 #[derive(Debug)]
 pub enum HybridCpuBackendError {
     Model(lfm25_model::Error),
+    F32(lfm25_f32::Error),
     Ffn(lfm25_ffn::Error),
     Kernel(cpu::Error),
     Tensor,
@@ -49,6 +50,12 @@ pub enum HybridCpuBackendError {
 impl From<lfm25_model::Error> for HybridCpuBackendError {
     fn from(error: lfm25_model::Error) -> Self {
         Self::Model(error)
+    }
+}
+
+impl From<lfm25_f32::Error> for HybridCpuBackendError {
+    fn from(error: lfm25_f32::Error) -> Self {
+        Self::F32(error)
     }
 }
 
@@ -78,12 +85,13 @@ enum CpuTensor {
 
 #[derive(Default)]
 struct KvCache {
-    keys: Vec<f32>,
-    values: Vec<f32>,
+    keys: Vec<u16>,
+    values: Vec<u16>,
 }
 
 pub struct HybridCpuAotDecodeBackend {
     model: Vec<u8>,
+    f32: cpu::F32Sidecar,
     slots: Vec<Option<CpuTensor>>,
     shortconv: Vec<Vec<[f32; 2]>>,
     kv: Vec<KvCache>,
@@ -94,6 +102,10 @@ pub async fn open_hybrid_backend() -> Result<HybridCpuAotDecodeBackend, HybridCp
     if !crate::r::fpga_offload::lfm25_row_stream_available() {
         return Err(HybridCpuBackendError::Ffn(lfm25_ffn::Error::StreamUnavailable));
     }
+    // This is intentionally loaded before any short-convolution or K/V state
+    // is allocated, so a missing or mismatched sidecar cannot partially mutate
+    // a decoder session.
+    let f32 = lfm25_f32::load().await?;
     let image = lfm25_model::open().await?;
     let bytes = usize::try_from(image.len()).map_err(|_| HybridCpuBackendError::Allocation)?;
     let mut model = Vec::new();
@@ -136,6 +148,7 @@ pub async fn open_hybrid_backend() -> Result<HybridCpuAotDecodeBackend, HybridCp
 
     Ok(HybridCpuAotDecodeBackend {
         model,
+        f32,
         slots: Vec::new(),
         shortconv,
         kv,
@@ -166,14 +179,14 @@ impl HybridCpuAotDecodeBackend {
             .ok_or(HybridCpuBackendError::Tensor)
     }
 
-    fn bf16_tensor(
+    fn f32_tensor(
         &self,
         descriptor: NativeTensorDescriptor,
     ) -> Result<Vec<f32>, HybridCpuBackendError> {
         if TensorFormat::from_raw(descriptor.format) != Some(TensorFormat::Bf16Le) {
             return Err(HybridCpuBackendError::Tensor);
         }
-        Ok(cpu::decode_bf16_vector(self.tensor(descriptor)?)?)
+        Ok(self.f32.tensor(descriptor.tensor_id)?.to_vec())
     }
 
     async fn project(
@@ -318,7 +331,7 @@ impl HybridCpuAotDecodeBackend {
         input: HiddenQ30,
     ) -> Result<HiddenQ8, HybridCpuBackendError> {
         let values = self.q30_values(input)?.to_vec();
-        let weights = self.bf16_tensor(Self::descriptor(layer, role)?)?;
+        let weights = self.f32_tensor(Self::descriptor(layer, role)?)?;
         self.allocate_q8(cpu::rms_norm(&values, &weights)?)
     }
 
@@ -342,7 +355,7 @@ impl HybridCpuAotDecodeBackend {
             return Err(HybridCpuBackendError::Tensor);
         }
         let kernel =
-            self.bf16_tensor(Self::descriptor(Some(layer), TensorRole::ShortConvKernel)?)?;
+            self.f32_tensor(Self::descriptor(Some(layer), TensorRole::ShortConvKernel)?)?;
         if kernel.len() != 3 * HIDDEN {
             return Err(HybridCpuBackendError::Tensor);
         }
@@ -402,8 +415,8 @@ impl HybridCpuAotDecodeBackend {
         {
             return Err(HybridCpuBackendError::Tensor);
         }
-        let query_norm = self.bf16_tensor(Self::descriptor(Some(layer), TensorRole::QueryNorm)?)?;
-        let key_norm = self.bf16_tensor(Self::descriptor(Some(layer), TensorRole::KeyNorm)?)?;
+        let query_norm = self.f32_tensor(Self::descriptor(Some(layer), TensorRole::QueryNorm)?)?;
+        let key_norm = self.f32_tensor(Self::descriptor(Some(layer), TensorRole::KeyNorm)?)?;
         for head in query.chunks_exact_mut(HEAD_DIM) {
             cpu::rms_norm_head_in_place(head, &query_norm)?;
             cpu::rope_neox_in_place(head, position)?;
@@ -427,8 +440,12 @@ impl HybridCpuAotDecodeBackend {
             .values
             .try_reserve_exact(KV_ELEMENTS)
             .map_err(|_| HybridCpuBackendError::Allocation)?;
-        self.kv[slot].keys.extend_from_slice(&key);
-        self.kv[slot].values.extend_from_slice(&value);
+        for value in key {
+            self.kv[slot].keys.push(cpu::f16_cache_bits(value)?);
+        }
+        for value in value {
+            self.kv[slot].values.push(cpu::f16_cache_bits(value)?);
+        }
 
         let positions = position as usize + 1;
         let mut context = vec![0.0f32; HIDDEN];
@@ -441,13 +458,13 @@ impl HybridCpuAotDecodeBackend {
             scores.clear();
             let query_start = query_head * HEAD_DIM;
             let query_values = &query[query_start..query_start + HEAD_DIM];
-            let kv_head = query_head * KV_HEADS / HEADS;
+            let kv_head = cpu::gqa_kv_head(query_head, HEADS, KV_HEADS)?;
             for cache_position in 0..positions {
                 let key_start = cache_position * KV_ELEMENTS + kv_head * HEAD_DIM;
                 let key_values = &self.kv[slot].keys[key_start..key_start + HEAD_DIM];
                 let mut dot = 0.0f32;
                 for (&query, &key) in query_values.iter().zip(key_values) {
-                    dot += query * key;
+                    dot += query * cpu::f16_cache_f32(key);
                 }
                 scores.push(dot * scale);
             }
@@ -457,7 +474,7 @@ impl HybridCpuAotDecodeBackend {
                 let mut sum = 0.0f32;
                 for (cache_position, &weight) in scores.iter().enumerate() {
                     let value_index = cache_position * KV_ELEMENTS + kv_head * HEAD_DIM + dimension;
-                    sum += weight * self.kv[slot].values[value_index];
+                    sum += weight * cpu::f16_cache_f32(self.kv[slot].values[value_index]);
                 }
                 context[output_start + dimension] = sum;
             }

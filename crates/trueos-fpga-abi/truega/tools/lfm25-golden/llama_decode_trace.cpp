@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <limits>
 #include <string>
 #include <vector>
 
@@ -15,10 +14,13 @@ namespace {
 
 constexpr uint32_t kLayers = 16;
 constexpr uint32_t kHidden = 1024;
+constexpr uint32_t kFfn = 4608;
+constexpr uint32_t kKv = 512;
 constexpr uint32_t kVocabulary = 65536;
-constexpr uint32_t kCheckpointsPerLayer = 6;
-constexpr uint32_t kCheckpointCount = 1 + kLayers * kCheckpointsPerLayer + 2;
 constexpr uint32_t kHeaderBytes = 256;
+constexpr std::array<uint32_t, 10> kTokens = {
+    1, 6, 6423, 708, 6928, 7, 708, 6, 64015, 708,
+};
 constexpr std::array<uint8_t, kLayers> kAttention = {
     0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0,
 };
@@ -36,99 +38,129 @@ constexpr std::array<uint8_t, 32> kContractSha256 = {
     0x38, 0x88, 0x1f, 0x77, 0x25, 0x20, 0xa4, 0x32, 0x90, 0xbb, 0xea, 0x81, 0x8f, 0xab, 0xc1, 0xc4,
 };
 
-struct checkpoint {
+struct checkpoint_spec {
     std::array<char, 64> name = {};
+    uint32_t elements = 0;
+};
+
+struct checkpoint {
+    checkpoint_spec spec;
     std::vector<float> values;
     bool seen = false;
 };
 
 struct capture_state {
-    std::array<checkpoint, kCheckpointCount> checkpoints;
+    std::vector<std::vector<checkpoint>> tokens;
+    size_t current_token = 0;
     std::string error;
 };
 
-void expected_name(uint32_t index, char * output, size_t capacity) {
-    if (index == 0) {
-        std::snprintf(output, capacity, "model.embed_tokens");
-        return;
+checkpoint_spec spec(const char * format, int layer, uint32_t elements) {
+    checkpoint_spec result;
+    if (layer < 0) {
+        std::snprintf(result.name.data(), result.name.size(), "%s", format);
+    } else {
+        std::snprintf(result.name.data(), result.name.size(), format, static_cast<unsigned>(layer));
     }
-    if (index == kCheckpointCount - 2) {
-        std::snprintf(output, capacity, "result_norm");
-        return;
-    }
-    if (index == kCheckpointCount - 1) {
-        std::snprintf(output, capacity, "result_output");
-        return;
-    }
-
-    const uint32_t relative = index - 1;
-    const uint32_t layer = relative / kCheckpointsPerLayer;
-    switch (relative % kCheckpointsPerLayer) {
-        case 0:
-            std::snprintf(output, capacity, "model.layers.{}.operator_norm-%u", layer);
-            break;
-        case 1:
-            std::snprintf(output, capacity,
-                          kAttention[layer] ? "model.layers.{}.self_attn.out_proj-%u"
-                                            : "model.layers.{}.conv.out_proj-%u",
-                          layer);
-            break;
-        case 2:
-            std::snprintf(output, capacity, "model.layers.{}.operator_residual-%u", layer);
-            break;
-        case 3:
-            std::snprintf(output, capacity, "model.layers.{}.ffn_norm-%u", layer);
-            break;
-        case 4:
-            std::snprintf(output, capacity, "model.layers.{}.ffn_out-%u", layer);
-            break;
-        default:
-            std::snprintf(output, capacity, "l_out-%u", layer);
-            break;
-    }
+    result.elements = elements;
+    return result;
 }
 
-uint32_t expected_elements(uint32_t index) {
-    return index == kCheckpointCount - 1 ? kVocabulary : kHidden;
+std::vector<checkpoint_spec> checkpoint_specs() {
+    std::vector<checkpoint_spec> result;
+    result.push_back(spec("model.embed_tokens", -1, kHidden));
+    for (uint32_t layer = 0; layer < kLayers; ++layer) {
+        result.push_back(spec("model.layers.{}.operator_norm-%u", layer, kHidden));
+        if (kAttention[layer]) {
+            result.push_back(spec("Qcur-%u", layer, kHidden));
+            result.push_back(spec("Kcur-%u", layer, kKv));
+            result.push_back(spec("Vcur-%u", layer, kKv));
+            result.push_back(
+                spec("model.layers.{}.self_attn.q_layernorm-%u", layer, kHidden));
+            result.push_back(
+                spec("model.layers.{}.self_attn.k_layernorm-%u", layer, kKv));
+            result.push_back(spec("model.layers.{}.self_attn.q_rope-%u", layer, kHidden));
+            result.push_back(spec("model.layers.{}.self_attn.k_rope-%u", layer, kKv));
+            result.push_back(spec("kqv_out-%u", layer, kHidden));
+            result.push_back(
+                spec("model.layers.{}.self_attn.out_proj-%u", layer, kHidden));
+        } else {
+            result.push_back(spec("model.layers.{}.conv.in_proj-%u", layer, 3 * kHidden));
+            result.push_back(spec("model.layers.{}.conv.bx-%u", layer, 3 * kHidden));
+            result.push_back(spec("model.layers.{}.conv.state-%u", layer, 2 * kHidden));
+            result.push_back(spec("model.layers.{}.conv.conv-%u", layer, kHidden));
+            result.push_back(spec("model.layers.{}.conv.mix-%u", layer, kHidden));
+            result.push_back(spec("model.layers.{}.conv.out_proj-%u", layer, kHidden));
+        }
+        result.push_back(spec("model.layers.{}.operator_residual-%u", layer, kHidden));
+        result.push_back(spec("model.layers.{}.ffn_norm-%u", layer, kHidden));
+        result.push_back(spec("ffn_up-%u", layer, kFfn));
+        result.push_back(spec("ffn_gate-%u", layer, kFfn));
+        result.push_back(spec("ffn_silu-%u", layer, kFfn));
+        result.push_back(spec("ffn_gate_par-%u", layer, kFfn));
+        result.push_back(spec("model.layers.{}.ffn_out-%u", layer, kHidden));
+        result.push_back(spec("l_out-%u", layer, kHidden));
+    }
+    result.push_back(spec("result_norm", -1, kHidden));
+    result.push_back(spec("result_output", -1, kVocabulary));
+    return result;
 }
 
-int checkpoint_index(const char * name) {
-    std::array<char, 64> expected = {};
-    for (uint32_t index = 0; index < kCheckpointCount; ++index) {
-        expected_name(index, expected.data(), expected.size());
-        if (std::strcmp(name, expected.data()) == 0) {
-            return static_cast<int>(index);
+capture_state make_capture_state() {
+    capture_state state;
+    const auto specs = checkpoint_specs();
+    state.tokens.resize(kTokens.size());
+    for (auto & token : state.tokens) {
+        token.reserve(specs.size());
+        for (const auto & item : specs) {
+            checkpoint value;
+            value.spec = item;
+            token.push_back(std::move(value));
         }
     }
-    return -1;
+    return state;
 }
 
 bool capture_callback(ggml_tensor * tensor, bool ask, void * opaque) {
     auto & state = *static_cast<capture_state *>(opaque);
-    const int index = checkpoint_index(tensor->name);
-    if (ask) {
-        return index >= 0;
+    auto & checkpoints = state.tokens[state.current_token];
+    auto found = checkpoints.end();
+    for (auto it = checkpoints.begin(); it != checkpoints.end(); ++it) {
+        if (std::strcmp(tensor->name, it->spec.name.data()) == 0) {
+            found = it;
+            break;
+        }
     }
-    if (index < 0 || !state.error.empty()) {
+    if (ask) {
+        return found != checkpoints.end();
+    }
+    if (found == checkpoints.end() || !state.error.empty()) {
         return true;
     }
-
-    auto & checkpoint = state.checkpoints[static_cast<size_t>(index)];
-    if (checkpoint.seen) {
+    if (found->seen) {
         state.error = std::string("checkpoint evaluated twice: ") + tensor->name;
         return true;
     }
     if (tensor->type != GGML_TYPE_F32 || !ggml_is_contiguous(tensor) ||
-        ggml_nelements(tensor) != expected_elements(static_cast<uint32_t>(index))) {
+        ggml_nelements(tensor) != found->spec.elements) {
         state.error = std::string("checkpoint shape/type mismatch: ") + tensor->name;
         return true;
     }
-    expected_name(static_cast<uint32_t>(index), checkpoint.name.data(), checkpoint.name.size());
-    checkpoint.values.resize(expected_elements(static_cast<uint32_t>(index)));
-    ggml_backend_tensor_get(tensor, checkpoint.values.data(), 0,
-                            checkpoint.values.size() * sizeof(float));
-    checkpoint.seen = true;
+    found->values.resize(found->spec.elements);
+    ggml_backend_tensor_get(
+        tensor, found->values.data(), 0, found->values.size() * sizeof(float));
+    found->seen = true;
     return true;
+}
+
+uint32_t argmax_token(const std::vector<float> & logits) {
+    uint32_t best = 0;
+    for (uint32_t token = 1; token < logits.size(); ++token) {
+        if (logits[token] > logits[best]) {
+            best = token;
+        }
+    }
+    return best;
 }
 
 bool write_bytes(FILE * file, const void * bytes, size_t length) {
@@ -143,58 +175,70 @@ bool write_u32(FILE * file, uint32_t value) {
     return write_bytes(file, bytes, sizeof(bytes));
 }
 
-uint32_t argmax_token(const std::vector<float> & logits) {
-    uint32_t best = 0;
-    for (uint32_t token = 1; token < logits.size(); ++token) {
-        if (logits[token] > logits[best]) {
-            best = token;
-        }
-    }
-    return best;
+void header_u32(std::array<uint8_t, kHeaderBytes> & header, size_t offset, uint32_t value) {
+    header[offset + 0] = static_cast<uint8_t>(value);
+    header[offset + 1] = static_cast<uint8_t>(value >> 8);
+    header[offset + 2] = static_cast<uint8_t>(value >> 16);
+    header[offset + 3] = static_cast<uint8_t>(value >> 24);
 }
 
-bool write_trace(const char * path, const capture_state & state, uint32_t input_token) {
+bool write_trace(const char * path, const capture_state & state) {
     FILE * file = std::fopen(path, "wb");
     if (file == nullptr) {
         std::fprintf(stderr, "cannot create %s: %s\n", path, std::strerror(errno));
         return false;
     }
-
-    const uint32_t output_token = argmax_token(state.checkpoints.back().values);
+    const uint32_t checkpoints_per_token =
+        static_cast<uint32_t>(state.tokens.front().size());
     std::array<uint8_t, kHeaderBytes> header = {};
-    std::memcpy(header.data(), "TGALDEC1", 8);
-    auto set_u32 = [&header](size_t offset, uint32_t value) {
-        header[offset + 0] = static_cast<uint8_t>(value);
-        header[offset + 1] = static_cast<uint8_t>(value >> 8);
-        header[offset + 2] = static_cast<uint8_t>(value >> 16);
-        header[offset + 3] = static_cast<uint8_t>(value >> 24);
-    };
-    set_u32(8, 1);
-    set_u32(12, kHeaderBytes);
-    set_u32(16, input_token);
-    set_u32(20, kCheckpointCount);
-    set_u32(24, output_token);
-    std::memcpy(header.data() + 32, kCommit, 40);
-    std::memcpy(header.data() + 72, kGgufSha256.data(), kGgufSha256.size());
-    std::memcpy(header.data() + 104, kNativeSha256.data(), kNativeSha256.size());
-    std::memcpy(header.data() + 136, kContractSha256.data(), kContractSha256.size());
+    std::memcpy(header.data(), "TGALDE2\0", 8);
+    header_u32(header, 8, 2);
+    header_u32(header, 12, kHeaderBytes);
+    header_u32(header, 16, static_cast<uint32_t>(kTokens.size()));
+    header_u32(header, 20, checkpoints_per_token);
+    header_u32(header, 24, checkpoints_per_token * kTokens.size());
+    for (size_t index = 0; index < kTokens.size(); ++index) {
+        header_u32(header, 32 + index * 4, kTokens[index]);
+        header_u32(
+            header, 72 + index * 4, argmax_token(state.tokens[index].back().values));
+    }
+    std::memcpy(header.data() + 112, kCommit, 40);
+    std::memcpy(header.data() + 152, kGgufSha256.data(), kGgufSha256.size());
+    std::memcpy(header.data() + 184, kNativeSha256.data(), kNativeSha256.size());
+    std::memcpy(header.data() + 216, kContractSha256.data(), kContractSha256.size());
 
     bool ok = write_bytes(file, header.data(), header.size());
-    for (const auto & checkpoint : state.checkpoints) {
-        ok = ok && write_bytes(file, checkpoint.name.data(), checkpoint.name.size()) &&
-             write_u32(file, static_cast<uint32_t>(checkpoint.values.size())) &&
-             write_u32(file, static_cast<uint32_t>(checkpoint.values.size() * sizeof(float)));
-        for (float value : checkpoint.values) {
-            uint32_t bits = 0;
-            std::memcpy(&bits, &value, sizeof(bits));
-            ok = ok && write_u32(file, bits);
+    for (const auto & token : state.tokens) {
+        for (const auto & value : token) {
+            ok = ok && write_bytes(file, value.spec.name.data(), value.spec.name.size()) &&
+                 write_u32(file, static_cast<uint32_t>(value.values.size())) &&
+                 write_u32(file, static_cast<uint32_t>(value.values.size() * sizeof(float)));
+            for (float element : value.values) {
+                uint32_t bits = 0;
+                std::memcpy(&bits, &element, sizeof(bits));
+                ok = ok && write_u32(file, bits);
+            }
         }
     }
     ok = std::fclose(file) == 0 && ok;
     if (ok) {
-        std::fprintf(stderr,
-                     "truega-decode-trace token=%u checkpoints=%u output_token=%u path=%s\n",
-                     input_token, kCheckpointCount, output_token, path);
+        std::fprintf(
+            stderr,
+            "truega-decode-trace tokens=%zu checkpoints_per_token=%u total=%u final_token=%u path=%s\n",
+            kTokens.size(), checkpoints_per_token, checkpoints_per_token * kTokens.size(),
+            argmax_token(state.tokens.back().back().values), path);
+    }
+    return ok;
+}
+
+bool all_seen(const capture_state & state, size_t token) {
+    bool ok = true;
+    for (const auto & checkpoint : state.tokens[token]) {
+        if (!checkpoint.seen) {
+            std::fprintf(
+                stderr, "capture token=%zu missed %s\n", token, checkpoint.spec.name.data());
+            ok = false;
+        }
     }
     return ok;
 }
@@ -226,7 +270,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    capture_state state;
+    capture_state state = make_capture_state();
     llama_context_params context_params = llama_context_default_params();
     context_params.n_ctx = 128;
     context_params.n_batch = 1;
@@ -234,6 +278,8 @@ int main(int argc, char ** argv) {
     context_params.n_seq_max = 1;
     context_params.n_threads = 1;
     context_params.n_threads_batch = 1;
+    context_params.type_k = GGML_TYPE_F16;
+    context_params.type_v = GGML_TYPE_F16;
     context_params.cb_eval = capture_callback;
     context_params.cb_eval_user_data = &state;
     context_params.offload_kqv = false;
@@ -242,24 +288,18 @@ int main(int argc, char ** argv) {
 
     llama_context * context = llama_init_from_model(model, context_params);
     bool ok = context != nullptr;
-    llama_token token = 1;
-    if (ok) {
+    for (size_t index = 0; ok && index < kTokens.size(); ++index) {
+        state.current_token = index;
+        llama_token token = static_cast<llama_token>(kTokens[index]);
         ok = llama_decode(context, llama_batch_get_one(&token, 1)) == 0;
-    }
-    if (!state.error.empty()) {
-        std::fprintf(stderr, "capture failed: %s\n", state.error.c_str());
-        ok = false;
-    }
-    for (uint32_t index = 0; index < kCheckpointCount; ++index) {
-        if (!state.checkpoints[index].seen) {
-            std::array<char, 64> name = {};
-            expected_name(index, name.data(), name.size());
-            std::fprintf(stderr, "capture missed %s\n", name.data());
+        if (!state.error.empty()) {
+            std::fprintf(stderr, "capture token=%zu failed: %s\n", index, state.error.c_str());
             ok = false;
         }
+        ok = all_seen(state, index) && ok;
     }
     if (ok) {
-        ok = write_trace(argv[2], state, static_cast<uint32_t>(token));
+        ok = write_trace(argv[2], state);
     }
 
     if (context != nullptr) {

@@ -11,7 +11,7 @@ TRACE_TOOL="$SCRIPT_DIR/lfm25-golden"
 TRACE_PATCH="$TRACE_TOOL/llama-b10075-ffn-trace.patch"
 TRACE_BUILD="${TRUEGA_LFM25_TRACE_BUILD:-/tmp/truega-lfm25-trace-build}"
 GGUF="${TRUEGA_LFM25_GGUF:-$MODEL_DIR/LFM2.5-350M-Q8_0.gguf}"
-OUTPUT="${TRUEGA_LFM25_DECODE_GOLDEN:-$PROJECT_DIR/artifacts/lfm25_token1_decode.golden.bin}"
+OUTPUT="${TRUEGA_LFM25_DECODE_GOLDEN:-$PROJECT_DIR/artifacts/lfm25_hi_decode.golden.bin}"
 
 actual_commit="$(git -C "$LLAMA_SOURCE" rev-parse HEAD)"
 if [[ "$actual_commit" != "$LLAMA_COMMIT" ]]; then
@@ -37,5 +37,5 @@ cmake --build "$TRACE_BUILD" --target truega-lfm25-decode-trace -j"$(nproc)"
   sha256sum --check "$(basename "$OUTPUT").sha256"
 )
 
-echo "decode capture complete token=1 llama_commit=$LLAMA_COMMIT artifact=$OUTPUT"
+echo "decode capture complete tokens='1 6 6423 708 6928 7 708 6 64015 708' llama_commit=$LLAMA_COMMIT artifact=$OUTPUT"
 echo "host-only reference generation; FPGA and flash were not build inputs"

@@ -65,6 +65,8 @@ threaten.fists|Threaten/threaten_frames|once_hold|60|guard,guard_to_raise_fist,r
 tired.rub_eyes|Tired/sleepy-rubbing-eyes_frames|once|85|drowsy,drowsy_to_rub_start,rub_start,rub_start_to_rub_both,rub_both,rub_both_to_recover,recover|1,1,3,3,5,5,7
 tired.sleepy|Tired/sleepy_frames|loop|130|awake,awake_to_eyes_heavy,eyes_heavy,eyes_heavy_to_doze,doze,doze_to_wake,wake
 tired.yawn|Tired/yawn_frames|once|95|tired,tired_to_yawn_start,yawn_start,yawn_start_to_yawn_wide,yawn_wide,yawn_wide_to_recover,recover|1,1,3,3,5,5,7
+transition.neutral_to_crossed|Transitions/transition-neutral-to-crossing-arms_frames|once_hold|57|neutral,neutral_to_draw_in,draw_in,draw_in_to_fold,fold,fold_to_crossed,crossed|1,1,3,3,5,5,7
+transition.uncross_arms|Transitions/transition-unfolding-arms_frames|once_hold|57|crossed,crossed_to_release,release,release_to_lower,lower,lower_to_neutral,neutral|1,1,3,3,5,5,7
 wave.excited|Waving/waving-excited_frames|loop|55|ready,ready_to_wave_high,wave_high,wave_high_to_wave_fast,wave_fast,wave_fast_to_settle,settle
 wave.neutral|Waving/waving-neutral_frames|loop|65|ready,ready_to_wave,wave,wave_to_wave_return,wave_return,wave_return_to_settle,settle
 wave.shy|Waving/waving-shy_frames|loop|70|shy_ready,shy_ready_to_wave_blush,wave_blush,wave_blush_to_wave_hold,wave_hold,wave_hold_to_settle,settle

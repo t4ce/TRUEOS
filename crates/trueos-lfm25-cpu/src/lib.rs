@@ -11,6 +11,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use half::{bf16, f16};
+use sha2::{Digest, Sha256};
 
 pub const RMS_EPSILON: f32 = 1.0e-5;
 pub const ROPE_FREQUENCY_BASE: f32 = 1_000_000.0;
@@ -32,6 +33,150 @@ pub enum Error {
 const TOKENIZER_MAGIC: [u8; 8] = *b"LFTOK1\0\0";
 const TOKENIZER_VERSION: u32 = 1;
 const TOKENIZER_HEADER_BYTES: usize = 72;
+
+pub const F32_SIDECAR_MAGIC: [u8; 8] = *b"LFMF32V1";
+pub const F32_SIDECAR_VERSION: u32 = 1;
+pub const F32_SIDECAR_HEADER_BYTES: usize = 160;
+pub const F32_SIDECAR_TENSOR_COUNT: usize = 55;
+pub const F32_SIDECAR_ENTRY_BYTES: usize = 16;
+pub const F32_SIDECAR_ELEMENT_COUNT: usize = 65_280;
+pub const F32_SIDECAR_PAYLOAD_OFFSET: usize =
+    F32_SIDECAR_HEADER_BYTES + F32_SIDECAR_TENSOR_COUNT * F32_SIDECAR_ENTRY_BYTES;
+pub const F32_SIDECAR_BYTES: usize =
+    F32_SIDECAR_PAYLOAD_OFFSET + F32_SIDECAR_ELEMENT_COUNT * 4;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct F32SidecarEntry {
+    tensor_id: u16,
+    element_offset: usize,
+    elements: usize,
+}
+
+/// Validated software-only view of every source-F32 tensor used by the hybrid
+/// decoder. The tensor IDs and order are the generated native-image IDs, even
+/// though the fixed native image stores these particular tensors as BF16.
+pub struct F32Sidecar {
+    entries: Vec<F32SidecarEntry>,
+    values: Vec<f32>,
+}
+
+impl F32Sidecar {
+    pub fn from_artifact(artifact: &[u8]) -> Result<Self, Error> {
+        if artifact.len() != F32_SIDECAR_BYTES
+            || artifact.get(..8) != Some(F32_SIDECAR_MAGIC.as_slice())
+            || artifact_u32(artifact, 8)? != F32_SIDECAR_VERSION
+            || artifact_u32(artifact, 12)? as usize != F32_SIDECAR_HEADER_BYTES
+            || artifact_u32(artifact, 16)? as usize != F32_SIDECAR_TENSOR_COUNT
+            || artifact_u32(artifact, 20)? as usize != F32_SIDECAR_ENTRY_BYTES
+            || artifact_u32(artifact, 24)? as usize != F32_SIDECAR_ELEMENT_COUNT
+            || artifact_u32(artifact, 28)? as usize != F32_SIDECAR_PAYLOAD_OFFSET
+            || artifact.get(32..64)
+                != Some(trueos_fpga_abi::lfm25::PINNED_GGUF_SHA256.as_slice())
+            || artifact.get(64..96)
+                != Some(trueos_fpga_abi::lfm25::PINNED_NATIVE_IMAGE_SHA256.as_slice())
+            || artifact.get(96..128)
+                != Some(
+                    trueos_fpga_abi::lfm25::generated::MODEL_SEAL
+                        .tensor_table_sha256
+                        .as_slice(),
+                )
+        {
+            return Err(Error::Artifact);
+        }
+        let payload = artifact
+            .get(F32_SIDECAR_PAYLOAD_OFFSET..)
+            .ok_or(Error::Artifact)?;
+        let observed_payload_hash: [u8; 32] = Sha256::digest(payload).into();
+        if artifact.get(128..160) != Some(observed_payload_hash.as_slice()) {
+            return Err(Error::Artifact);
+        }
+
+        let expected = trueos_fpga_abi::lfm25::generated::TENSORS
+            .iter()
+            .filter(|descriptor| {
+                trueos_fpga_abi::lfm25::TensorFormat::from_raw(descriptor.format)
+                    == Some(trueos_fpga_abi::lfm25::TensorFormat::Bf16Le)
+            });
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(F32_SIDECAR_TENSOR_COUNT)
+            .map_err(|_| Error::Allocation)?;
+        let mut next_payload = F32_SIDECAR_PAYLOAD_OFFSET;
+        let mut total_elements = 0usize;
+        for (entry_index, descriptor) in expected.enumerate() {
+            if entry_index >= F32_SIDECAR_TENSOR_COUNT {
+                return Err(Error::Artifact);
+            }
+            let offset = F32_SIDECAR_HEADER_BYTES + entry_index * F32_SIDECAR_ENTRY_BYTES;
+            let tensor_id = artifact_u16(artifact, offset)?;
+            let reserved = artifact_u16(artifact, offset + 2)?;
+            let elements = artifact_u32(artifact, offset + 4)? as usize;
+            let payload_offset = artifact_u32(artifact, offset + 8)? as usize;
+            let payload_bytes = artifact_u32(artifact, offset + 12)? as usize;
+            let expected_elements = (descriptor.ggml_ne0 as usize)
+                .checked_mul(descriptor.ggml_ne1 as usize)
+                .ok_or(Error::Artifact)?;
+            if tensor_id != descriptor.tensor_id
+                || reserved != 0
+                || elements != expected_elements
+                || payload_offset != next_payload
+                || payload_bytes != elements.checked_mul(4).ok_or(Error::Artifact)?
+            {
+                return Err(Error::Artifact);
+            }
+            entries.push(F32SidecarEntry {
+                tensor_id,
+                element_offset: total_elements,
+                elements,
+            });
+            total_elements = total_elements.checked_add(elements).ok_or(Error::Artifact)?;
+            next_payload = next_payload
+                .checked_add(payload_bytes)
+                .ok_or(Error::Artifact)?;
+        }
+        if entries.len() != F32_SIDECAR_TENSOR_COUNT
+            || total_elements != F32_SIDECAR_ELEMENT_COUNT
+            || next_payload != artifact.len()
+        {
+            return Err(Error::Artifact);
+        }
+
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(F32_SIDECAR_ELEMENT_COUNT)
+            .map_err(|_| Error::Allocation)?;
+        for word in payload.chunks_exact(4) {
+            values.push(f32::from_bits(u32::from_le_bytes(
+                word.try_into().map_err(|_| Error::Artifact)?,
+            )));
+        }
+        if values.len() != F32_SIDECAR_ELEMENT_COUNT
+            || values.iter().any(|value| !value.is_finite())
+        {
+            return Err(Error::Artifact);
+        }
+        Ok(Self { entries, values })
+    }
+
+    pub fn tensor(&self, tensor_id: u16) -> Result<&[f32], Error> {
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| entry.tensor_id == tensor_id)
+            .ok_or(Error::Artifact)?;
+        self.values
+            .get(entry.element_offset..entry.element_offset + entry.elements)
+            .ok_or(Error::Artifact)
+    }
+
+    pub fn tensor_ids(&self) -> impl Iterator<Item = u16> + '_ {
+        self.entries.iter().map(|entry| entry.tensor_id)
+    }
+
+    pub const fn element_count(&self) -> usize {
+        self.values.len()
+    }
+}
 
 /// Compact no_std view of the exact LFM2.5 GPT-2/Llama-3 BPE vocabulary.
 ///
@@ -271,6 +416,17 @@ fn artifact_u32(bytes: &[u8], offset: usize) -> Result<u32, Error> {
     ))
 }
 
+fn artifact_u16(bytes: &[u8], offset: usize) -> Result<u16, Error> {
+    let end = offset.checked_add(2).ok_or(Error::Artifact)?;
+    Ok(u16::from_le_bytes(
+        bytes
+            .get(offset..end)
+            .ok_or(Error::Artifact)?
+            .try_into()
+            .map_err(|_| Error::Artifact)?,
+    ))
+}
+
 fn is_letter(ch: char) -> bool {
     ch.is_alphabetic()
 }
@@ -438,6 +594,21 @@ pub fn decode_bf16_vector(bytes: &[u8]) -> Result<Vec<f32>, Error> {
         output.push(bf16_from_le_bytes(word)?);
     }
     Ok(output)
+}
+
+/// Round an attention-cache value exactly once to the pinned F16 storage type.
+#[inline]
+pub fn f16_cache_bits(value: f32) -> Result<u16, Error> {
+    if !value.is_finite() {
+        return Err(Error::NonFinite);
+    }
+    Ok(f16::from_f32(value).to_bits())
+}
+
+/// Consume one value from the pinned F16 attention cache as F32.
+#[inline]
+pub fn f16_cache_f32(bits: u16) -> f32 {
+    f16::from_bits(bits).to_f32()
 }
 
 #[inline]
@@ -676,6 +847,22 @@ pub fn softmax_in_place(values: &mut [f32]) -> Result<(), Error> {
     Ok(())
 }
 
+/// Map one query head to its grouped-query K/V head.
+pub fn gqa_kv_head(
+    query_head: usize,
+    query_heads: usize,
+    kv_heads: usize,
+) -> Result<usize, Error> {
+    if query_heads == 0
+        || kv_heads == 0
+        || query_heads % kv_heads != 0
+        || query_head >= query_heads
+    {
+        return Err(Error::Shape);
+    }
+    Ok(query_head * kv_heads / query_heads)
+}
+
 /// One causal LFM2.5 short-convolution channel.
 ///
 /// Kernel order is oldest, newest, current. The returned state is
@@ -758,6 +945,116 @@ mod tests {
     use super::*;
     use alloc::vec;
 
+    fn synthetic_f32_sidecar() -> Vec<u8> {
+        let mut artifact = vec![0u8; F32_SIDECAR_BYTES];
+        artifact[..8].copy_from_slice(&F32_SIDECAR_MAGIC);
+        for (offset, value) in [
+            (8, F32_SIDECAR_VERSION),
+            (12, F32_SIDECAR_HEADER_BYTES as u32),
+            (16, F32_SIDECAR_TENSOR_COUNT as u32),
+            (20, F32_SIDECAR_ENTRY_BYTES as u32),
+            (24, F32_SIDECAR_ELEMENT_COUNT as u32),
+            (28, F32_SIDECAR_PAYLOAD_OFFSET as u32),
+        ] {
+            artifact[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        artifact[32..64].copy_from_slice(&trueos_fpga_abi::lfm25::PINNED_GGUF_SHA256);
+        artifact[64..96]
+            .copy_from_slice(&trueos_fpga_abi::lfm25::PINNED_NATIVE_IMAGE_SHA256);
+        artifact[96..128].copy_from_slice(
+            &trueos_fpga_abi::lfm25::generated::MODEL_SEAL.tensor_table_sha256,
+        );
+        let mut payload_offset = F32_SIDECAR_PAYLOAD_OFFSET;
+        let mut value_index = 0usize;
+        for (entry_index, descriptor) in trueos_fpga_abi::lfm25::generated::TENSORS
+            .iter()
+            .filter(|descriptor| {
+                trueos_fpga_abi::lfm25::TensorFormat::from_raw(descriptor.format)
+                    == Some(trueos_fpga_abi::lfm25::TensorFormat::Bf16Le)
+            })
+            .enumerate()
+        {
+            let elements = descriptor.ggml_ne0 as usize * descriptor.ggml_ne1 as usize;
+            let entry = F32_SIDECAR_HEADER_BYTES + entry_index * F32_SIDECAR_ENTRY_BYTES;
+            artifact[entry..entry + 2].copy_from_slice(&descriptor.tensor_id.to_le_bytes());
+            artifact[entry + 4..entry + 8]
+                .copy_from_slice(&(elements as u32).to_le_bytes());
+            artifact[entry + 8..entry + 12]
+                .copy_from_slice(&(payload_offset as u32).to_le_bytes());
+            artifact[entry + 12..entry + 16]
+                .copy_from_slice(&((elements * 4) as u32).to_le_bytes());
+            for _ in 0..elements {
+                let value = value_index as f32 * 0.000_031_25 - 1.0;
+                artifact[payload_offset..payload_offset + 4]
+                    .copy_from_slice(&value.to_bits().to_le_bytes());
+                payload_offset += 4;
+                value_index += 1;
+            }
+        }
+        let payload_hash: [u8; 32] =
+            Sha256::digest(&artifact[F32_SIDECAR_PAYLOAD_OFFSET..]).into();
+        artifact[128..160].copy_from_slice(&payload_hash);
+        artifact
+    }
+
+    #[test]
+    fn f32_sidecar_has_exact_generated_ids_elements_and_source_bits() {
+        let artifact = synthetic_f32_sidecar();
+        let sidecar = F32Sidecar::from_artifact(&artifact).unwrap();
+        let expected_ids: Vec<u16> = trueos_fpga_abi::lfm25::generated::TENSORS
+            .iter()
+            .filter(|descriptor| {
+                trueos_fpga_abi::lfm25::TensorFormat::from_raw(descriptor.format)
+                    == Some(trueos_fpga_abi::lfm25::TensorFormat::Bf16Le)
+            })
+            .map(|descriptor| descriptor.tensor_id)
+            .collect();
+        assert_eq!(sidecar.tensor_ids().collect::<Vec<_>>(), expected_ids);
+        assert_eq!(sidecar.element_count(), F32_SIDECAR_ELEMENT_COUNT);
+        let first = sidecar.tensor(expected_ids[0]).unwrap()[0];
+        let source_bits = u32::from_le_bytes(
+            artifact[F32_SIDECAR_PAYLOAD_OFFSET..F32_SIDECAR_PAYLOAD_OFFSET + 4]
+                .try_into()
+                .unwrap(),
+        );
+        assert_eq!(first.to_bits(), source_bits);
+    }
+
+    #[test]
+    fn f32_sidecar_rejects_truncation_corruption_and_reordering() {
+        let artifact = synthetic_f32_sidecar();
+        assert!(matches!(
+            F32Sidecar::from_artifact(&artifact[..artifact.len() - 1]),
+            Err(Error::Artifact)
+        ));
+
+        let mut corrupt = artifact.clone();
+        corrupt[F32_SIDECAR_PAYLOAD_OFFSET + 17] ^= 0x80;
+        assert!(matches!(
+            F32Sidecar::from_artifact(&corrupt),
+            Err(Error::Artifact)
+        ));
+
+        let mut reordered = artifact;
+        let first = F32_SIDECAR_HEADER_BYTES;
+        let second = first + F32_SIDECAR_ENTRY_BYTES;
+        for byte in 0..F32_SIDECAR_ENTRY_BYTES {
+            reordered.swap(first + byte, second + byte);
+        }
+        assert!(matches!(
+            F32Sidecar::from_artifact(&reordered),
+            Err(Error::Artifact)
+        ));
+    }
+
+    #[test]
+    fn f16_cache_commit_rounds_before_consumption() {
+        let value = 1.000_7f32;
+        let bits = f16_cache_bits(value).unwrap();
+        assert_eq!(f16_cache_f32(bits).to_bits(), f16::from_f32(value).to_f32().to_bits());
+        assert_ne!(f16_cache_f32(bits).to_bits(), value.to_bits());
+    }
+
     #[test]
     fn silu_q30_covers_values_outside_the_sealed_fpga_polynomial_domain() {
         const ONE_Q30: i64 = 1i64 << 30;
@@ -795,5 +1092,79 @@ mod tests {
             shortconv_channel(2.0, 3.0, 4.0, 5.0, 6.0, [0.5, 0.25, 0.125]).unwrap();
         assert_eq!((oldest, newest), (6.0, 8.0));
         assert_eq!(output, 15.0);
+    }
+
+    #[test]
+    fn causal_shortconv_preserves_oldest_newest_order_across_three_positions() {
+        let kernel = [1.0, 10.0, 100.0];
+        let mut state = [0.0, 0.0];
+        let mut output = Vec::new();
+        for x in [1.0, 2.0, 3.0] {
+            let (value, oldest, newest) =
+                shortconv_channel(1.0, 1.0, x, state[0], state[1], kernel).unwrap();
+            state = [oldest, newest];
+            output.push(value);
+        }
+        assert_eq!(output, [100.0, 210.0, 321.0]);
+        assert_eq!(state, [2.0, 3.0]);
+    }
+
+    #[test]
+    fn nonzero_neox_rope_pairs_low_and_high_halves() {
+        let mut head = vec![0.0; HEAD_DIMENSION];
+        head[0] = 2.0;
+        head[HALF_HEAD_DIMENSION] = 3.0;
+        rope_neox_in_place(&mut head, 1).unwrap();
+        let cosine = libm::cosf(1.0);
+        let sine = libm::sinf(1.0);
+        assert!((head[0] - (2.0 * cosine - 3.0 * sine)).abs() < 1.0e-6);
+        assert!(
+            (head[HALF_HEAD_DIMENSION] - (2.0 * sine + 3.0 * cosine)).abs() < 1.0e-6
+        );
+    }
+
+    #[test]
+    fn multi_position_softmax_is_normalized_and_ordered() {
+        let mut scores = [-2.0, 0.0, 1.5, -0.5];
+        softmax_in_place(&mut scores).unwrap();
+        assert!((scores.iter().sum::<f32>() - 1.0).abs() < 1.0e-6);
+        assert!(scores[2] > scores[1] && scores[1] > scores[3] && scores[3] > scores[0]);
+    }
+
+    #[test]
+    fn pinned_gqa_maps_two_query_heads_to_each_kv_head() {
+        let observed: Vec<usize> = (0..16)
+            .map(|query| gqa_kv_head(query, 16, 8).unwrap())
+            .collect();
+        assert_eq!(observed, [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7]);
+        assert_eq!(gqa_kv_head(16, 16, 8), Err(Error::Shape));
+    }
+
+    #[test]
+    fn q8_halfway_ties_use_nearest_even() {
+        let mut input = vec![0.0; Q8_BLOCK_VALUES];
+        input[0] = 1.0;
+        input[1] = 0.5 / 127.0;
+        input[2] = 1.5 / 127.0;
+        input[3] = -0.5 / 127.0;
+        input[4] = -1.5 / 127.0;
+        let block = quantize_q8(&input).unwrap().remove(0);
+        assert_eq!(
+            [
+                block[2] as i8,
+                block[3] as i8,
+                block[4] as i8,
+                block[5] as i8,
+                block[6] as i8
+            ],
+            [127, 0, 2, 0, -2]
+        );
+    }
+
+    #[test]
+    fn residual_addition_uses_matching_lanes() {
+        let residual = [1.0, -2.0, 4.0];
+        let branch = [0.25, 0.5, -8.0];
+        assert_eq!(add(&residual, &branch).unwrap(), [1.25, -1.5, -4.0]);
     }
 }
