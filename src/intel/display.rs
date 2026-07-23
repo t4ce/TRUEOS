@@ -11,6 +11,7 @@
 
 use crate::intel::types::{Rgba8, UiRect, UiSurface, UiSurfaceFormat};
 use alloc::{collections::VecDeque, string::String, vec::Vec};
+use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
@@ -1988,6 +1989,95 @@ pub(super) fn display_pipeline_snapshots()
         return [None; DISPLAY_PIPELINE_COUNT];
     };
     display_pipeline_snapshots_for_dev(dev).map(Some)
+}
+
+/// Produce a read-only display-engine register snapshot suitable for a
+/// persistent diagnostic dump.
+pub(crate) fn diagnostic_snapshot_text() -> String {
+    let mut out = String::new();
+    let Some(dev) = crate::intel::claimed_device() else {
+        let _ = writeln!(out, "Intel display device not claimed");
+        return out;
+    };
+
+    let _ = writeln!(
+        out,
+        "device={:02X}:{:02X}.{} did=0x{:04X} rev=0x{:02X} mmio=0x{:016X} mmio_len=0x{:X}",
+        dev.bus, dev.slot, dev.function, dev.device_id, dev.revision_id, dev.mmio as u64, dev.mmio_len
+    );
+    let snapshots = display_pipeline_snapshots_for_dev(dev);
+    let selection = select_compatibility_pipeline_from_snapshots(&snapshots);
+    for snapshot in snapshots {
+        let (width, height) = snapshot
+            .target
+            .map(|target| (target.width, target.height))
+            .unwrap_or((0, 0));
+        let selected = selection
+            .map(|selection| selection.snapshot.pipeline == snapshot.pipeline)
+            .unwrap_or(false);
+        let selection_reason = selection
+            .filter(|selection| selection.snapshot.pipeline == snapshot.pipeline)
+            .map(|selection| selection.reason)
+            .unwrap_or("-");
+        let _ = writeln!(
+            out,
+            "pipeline={} slot={} activity={} observed={} mode={}x{} selected={} reason={}",
+            snapshot.pipeline.name(),
+            snapshot.pipeline.slot(),
+            snapshot.activity.name(),
+            snapshot.observed,
+            width,
+            height,
+            selected,
+            selection_reason
+        );
+        let _ = writeln!(
+            out,
+            "  pipe_enabled={} transcoder_enabled={} primary_enabled={} primary_bound={} ddi={} link_mode={} bpc={} sync_polarity=0x{:X} port_width={}",
+            snapshot.pipe_enabled,
+            snapshot.transcoder_enabled,
+            snapshot.primary_enabled,
+            snapshot.primary_bound,
+            snapshot.route.ddi.name(),
+            snapshot.route.mode_name(),
+            snapshot.route.bits_per_color(),
+            snapshot.route.sync_polarity,
+            snapshot.route.port_width
+        );
+        let _ = writeln!(
+            out,
+            "  pipe_src=0x{:08X} pipeconf=0x{:08X} transcoder=0x{:08X} primary_ctl=0x{:08X} primary_surf=0x{:08X} primary_live=0x{:08X}",
+            snapshot.pipe_src,
+            snapshot.pipeconf,
+            snapshot.transcoder,
+            snapshot.primary_ctl,
+            snapshot.primary_surf,
+            snapshot.primary_live
+        );
+    }
+
+    let main_bios = crate::intel::mmio_read(dev, HSW_PWR_WELL_CTL1);
+    let main_driver = crate::intel::mmio_read(dev, HSW_PWR_WELL_CTL2);
+    let main_kvmr = crate::intel::mmio_read(dev, HSW_PWR_WELL_CTL3);
+    let main_debug = crate::intel::mmio_read(dev, HSW_PWR_WELL_CTL4);
+    let aux_bios = crate::intel::mmio_read(dev, ICL_PWR_WELL_CTL_AUX1);
+    let aux_driver = crate::intel::mmio_read(dev, ICL_PWR_WELL_CTL_AUX2);
+    let aux_debug = crate::intel::mmio_read(dev, ICL_PWR_WELL_CTL_AUX4);
+    let ddi_bios = crate::intel::mmio_read(dev, ICL_PWR_WELL_CTL_DDI1);
+    let ddi_driver = crate::intel::mmio_read(dev, ICL_PWR_WELL_CTL_DDI2);
+    let ddi_debug = crate::intel::mmio_read(dev, ICL_PWR_WELL_CTL_DDI4);
+    let fuse = crate::intel::mmio_read(dev, SKL_FUSE_STATUS);
+    let _ = writeln!(
+        out,
+        "power_wells main_bios=0x{:08X} main_driver=0x{:08X} main_kvmr=0x{:08X} main_debug=0x{:08X}",
+        main_bios, main_driver, main_kvmr, main_debug
+    );
+    let _ = writeln!(
+        out,
+        "power_wells aux_bios=0x{:08X} aux_driver=0x{:08X} aux_debug=0x{:08X} ddi_bios=0x{:08X} ddi_driver=0x{:08X} ddi_debug=0x{:08X} fuse=0x{:08X}",
+        aux_bios, aux_driver, aux_debug, ddi_bios, ddi_driver, ddi_debug, fuse
+    );
+    out
 }
 
 fn display_pipeline_target_for_pipe(

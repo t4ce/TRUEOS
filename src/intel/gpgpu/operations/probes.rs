@@ -599,10 +599,20 @@ pub(crate) fn activity_snapshot() -> GpgpuActivitySnapshot {
         submit_seq,
         ring_head: super::mmio_read(dev, RCS_RING_HEAD),
         ring_tail: super::mmio_read(dev, RCS_RING_TAIL),
+        ring_start: super::mmio_read(dev, RCS_RING_START),
+        ring_ctl: super::mmio_read(dev, RCS_RING_CTL),
         acthd: super::mmio_read(dev, RCS_RING_ACTHD),
+        mi_mode: super::mmio_read(dev, RCS_RING_MI_MODE),
+        mode: super::mmio_read(dev, RCS_RING_MODE_GEN7),
+        context_control: super::mmio_read(dev, RCS_RING_CONTEXT_CONTROL),
+        execlist_control: super::mmio_read(dev, RCS_RING_EXECLIST_CONTROL),
+        execlist_status_lo: super::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO),
+        execlist_status_hi: super::mmio_read(dev, RCS_RING_EXECLIST_STATUS_HI),
         ipeir: super::mmio_read(dev, RCS_RING_IPEIR),
         ipehr: super::mmio_read(dev, RCS_RING_IPEHR),
         eir: super::mmio_read(dev, RCS_RING_EIR),
+        instdone: super::mmio_read(dev, RCS_RING_INSTDONE),
+        instps: super::mmio_read(dev, RCS_RING_INSTPS),
     }
 }
 

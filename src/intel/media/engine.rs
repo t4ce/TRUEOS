@@ -1014,6 +1014,25 @@ fn rebuild_kickoff_state(stage: MediaKickoffStage) -> Option<MediaKickoffState> 
     })
 }
 
+/// Capture current media forcewake and VCS register state without submitting,
+/// resetting, or reconfiguring an engine.
+pub(crate) fn diagnostic_snapshot() -> Option<MediaKickoffState> {
+    let stage = MEDIA_KICKOFF_STATE
+        .lock()
+        .as_ref()
+        .map(|state| state.stage)
+        .unwrap_or(MediaKickoffStage::CommandEncoding);
+    rebuild_kickoff_state(stage)
+}
+
+pub(crate) fn kickoff_ran() -> bool {
+    MEDIA_KICKOFF_RAN.load(Ordering::Acquire)
+}
+
+pub(crate) fn decode_ran() -> bool {
+    MEDIA_DECODE_RAN.load(Ordering::Acquire)
+}
+
 fn store_kickoff_state(stage: MediaKickoffStage) {
     *MEDIA_KICKOFF_STATE.lock() = rebuild_kickoff_state(stage);
 }

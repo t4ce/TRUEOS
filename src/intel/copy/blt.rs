@@ -135,6 +135,59 @@ pub(crate) struct GucBcs0FastCopyProbe {
     pub(crate) retire_ms: u64,
 }
 
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CopyEngineActivitySnapshot {
+    pub(crate) available: bool,
+    pub(crate) guc_lane_busy: bool,
+    pub(crate) submit_counter: u32,
+    pub(crate) head: u32,
+    pub(crate) tail: u32,
+    pub(crate) start: u32,
+    pub(crate) ctl: u32,
+    pub(crate) acthd: u32,
+    pub(crate) mi_mode: u32,
+    pub(crate) mode: u32,
+    pub(crate) context_control: u32,
+    pub(crate) execlist_control: u32,
+    pub(crate) execlist_status_lo: u32,
+    pub(crate) execlist_status_hi: u32,
+    pub(crate) ipeir: u32,
+    pub(crate) ipehr: u32,
+    pub(crate) eir: u32,
+}
+
+pub(crate) fn activity_snapshot() -> CopyEngineActivitySnapshot {
+    let guc_lane_busy = GUC_BLT_LANE_BUSY.load(Ordering::Acquire);
+    let submit_counter = DIRECT_BLT_SUBMIT_COUNTER.load(Ordering::Relaxed);
+    let Some(dev) = crate::intel::claimed_device() else {
+        return CopyEngineActivitySnapshot {
+            guc_lane_busy,
+            submit_counter,
+            ..CopyEngineActivitySnapshot::default()
+        };
+    };
+
+    CopyEngineActivitySnapshot {
+        available: true,
+        guc_lane_busy,
+        submit_counter,
+        head: super::mmio_read(dev, BCS0_RING_BASE + RING_HEAD),
+        tail: super::mmio_read(dev, BCS0_RING_BASE + RING_TAIL),
+        start: super::mmio_read(dev, BCS0_RING_BASE + RING_START),
+        ctl: super::mmio_read(dev, BCS0_RING_BASE + RING_CTL),
+        acthd: super::mmio_read(dev, BCS0_RING_BASE + RING_ACTHD),
+        mi_mode: super::mmio_read(dev, BCS0_RING_BASE + RING_MI_MODE),
+        mode: super::mmio_read(dev, BCS0_RING_BASE + RING_MODE_GEN7),
+        context_control: super::mmio_read(dev, BCS0_RING_BASE + RING_CONTEXT_CONTROL),
+        execlist_control: super::mmio_read(dev, BCS0_RING_BASE + RING_EXECLIST_CONTROL),
+        execlist_status_lo: super::mmio_read(dev, BCS0_RING_BASE + RING_EXECLIST_STATUS_LO),
+        execlist_status_hi: super::mmio_read(dev, BCS0_RING_BASE + RING_EXECLIST_STATUS_HI),
+        ipeir: super::mmio_read(dev, BCS0_RING_BASE + RING_IPEIR),
+        ipehr: super::mmio_read(dev, BCS0_RING_BASE + RING_IPEHR),
+        eir: super::mmio_read(dev, BCS0_RING_BASE + RING_EIR),
+    }
+}
+
 impl GucBcs0FastCopyProbe {
     pub(crate) const fn passed(self) -> bool {
         self.submitted

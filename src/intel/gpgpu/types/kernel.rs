@@ -5,10 +5,20 @@ pub(crate) struct GpgpuActivitySnapshot {
     pub(crate) submit_seq: u32,
     pub(crate) ring_head: u32,
     pub(crate) ring_tail: u32,
+    pub(crate) ring_start: u32,
+    pub(crate) ring_ctl: u32,
     pub(crate) acthd: u32,
+    pub(crate) mi_mode: u32,
+    pub(crate) mode: u32,
+    pub(crate) context_control: u32,
+    pub(crate) execlist_control: u32,
+    pub(crate) execlist_status_lo: u32,
+    pub(crate) execlist_status_hi: u32,
     pub(crate) ipeir: u32,
     pub(crate) ipehr: u32,
     pub(crate) eir: u32,
+    pub(crate) instdone: u32,
+    pub(crate) instps: u32,
 }
 
 #[repr(C)]
