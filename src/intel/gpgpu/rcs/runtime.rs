@@ -84,6 +84,7 @@ impl DirectRcsSubmitRuntime {
 struct Ui4CompositorPending {
     submission: Ui4CompositorSubmission,
     job_slot: usize,
+    queue_depth_at_admission: usize,
     started_tick: u64,
     admitted_tick: u64,
     marker_slot: usize,

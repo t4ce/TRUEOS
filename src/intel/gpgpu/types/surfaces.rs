@@ -486,8 +486,8 @@ pub(crate) struct GpgpuWorklistSubmitResult {
     pub(crate) outcome: GpgpuSubmissionOutcome,
 }
 
-/// Opaque serial and executor submission for the one-deep persistent UI4
-/// compositor queue.
+/// Opaque serial and executor submission for one slot in the persistent UI4
+/// compositor ring.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4CompositorSubmission {
     serial: u64,

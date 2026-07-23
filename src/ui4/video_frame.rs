@@ -20,7 +20,7 @@ use super::{
     WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer, begin_window_session,
     cancel_frame_buffer, create_frame, create_window, destroy_frame, finish_window_session,
     finish_window_session_with_request, gpgpu_rgba_surface, publish_gpgpu_video_frame_buffer,
-    publish_window_frame, take_owner_input_events, wait_frame_buffer_release,
+    publish_window_frame, take_owner_input_events,
 };
 
 // The decoded-video producer owns one ordinary broker window independently of
@@ -30,7 +30,7 @@ const VIDEO_OUTPUT: OutputId = OutputId::from_slot(0).unwrap();
 const VIDEO_PLANE_SLOT: usize = super::ALPHA_OVERLAY_PLANE_SLOT;
 const VIDEO_RGBA_BUFFERING: FrameBuffering = FrameBuffering::Triple;
 const VIDEO_RGBA_BUFFER_COUNT: usize = VIDEO_RGBA_BUFFERING.count();
-/// At most one conversion may execute while one decoded DPB surface waits.
+/// Two ordered conversions may occupy the immutable RCS job slots at once.
 /// The current AVC path retains three references in four slots; the playback
 /// loop additionally drains this queue before every later IDR reuses slot 0.
 const VIDEO_CONVERSION_OUTSTANDING_CAP: usize = 2;
@@ -1203,7 +1203,9 @@ async fn convert_publish_decoded_nv12_stream_frame(
                     report,
                     worker_online,
                 );
-                wait_frame_buffer_release(stream.frame).await;
+                // Two conversion lanes may wait simultaneously, while the
+                // frame-pool notification is intentionally single-waker.
+                Timer::after(Duration::from_millis(1)).await;
             }
             Err(error) => {
                 crate::log_warn!(target: "ui4";

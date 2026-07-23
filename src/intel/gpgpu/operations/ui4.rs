@@ -178,6 +178,7 @@ pub(crate) fn queue_ui4_compositor_layers(
     runtime.pending.push_back(Ui4CompositorPending {
         submission,
         job_slot: 0,
+        queue_depth_at_admission: 1,
         started_tick,
         admitted_tick,
         marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
@@ -363,6 +364,7 @@ pub(crate) fn queue_ui4_blueprint_alpha_rects(
     runtime.pending.push_back(Ui4CompositorPending {
         submission,
         job_slot: 0,
+        queue_depth_at_admission: 1,
         started_tick,
         admitted_tick,
         marker_slot: RECT_WORKLIST_POST_MARKER_SLOT,
@@ -505,6 +507,7 @@ fn queue_ui4_sprite_quad_runs(
     runtime.pending.push_back(Ui4CompositorPending {
         submission,
         job_slot: 0,
+        queue_depth_at_admission: 1,
         started_tick,
         admitted_tick,
         marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
@@ -710,9 +713,11 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         probe.gpu_h2g_consumed_observe_timestamp = direct_rcs_read_render_timestamp(dev);
     }
     let submission = Ui4CompositorSubmission { serial, gpu };
+    let queue_depth_at_admission = runtime.pending.len().saturating_add(1);
     runtime.pending.push_back(Ui4CompositorPending {
         submission,
         job_slot,
+        queue_depth_at_admission,
         started_tick,
         admitted_tick,
         marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
@@ -733,14 +738,14 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
             submit_attempt,
             serial,
             job_slot,
-            runtime.pending.len(),
+            queue_depth_at_admission,
         );
     }
     crate::log_trace!(target: "ui4";
         "ui4/guc-video-frame: queued serial={} job_slot={} queue_depth={} queue_capacity={} native=media-ytile-nv12 output={}x{} content={}x{}@{},{} source={},{} source_gpu=0x{:X} media_gpu=0x{:X} dst_gpu=0x{:X} ppgtt=source-slot-private-alias-pat0-wb,dst-base-pat3-uc bindings=3 base_alias=exact-dst-same-pte display_plane_writes=0\n",
         serial,
         job_slot,
-        runtime.pending.len(),
+        queue_depth_at_admission,
         UI4_COMPOSITOR_RCS_JOB_SLOTS,
         dst.width,
         dst.height,
@@ -948,9 +953,10 @@ pub(crate) fn poll_ui4_compositor_submission(
         drop(runtime);
         let _ = crate::gpu::executor::complete_kernel_submission(submission.gpu, true);
         crate::log_trace!(target: "ui4";
-            "ui4/guc-compositor: complete serial={} job_slot={} remaining_queue_depth={} kernel={} descs={} walkers={} elapsed_ms={} gpu_phase_us=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_phase_ticks=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_timestamps=host_pre_submit:{},h2g_consumed_observe:{},batch_enter:{},pre_walker:{},post_walker:{},post_release:{},host_observe:{} guc_h2g_publish_sequence={} gpu_timestamp_hz={} gpu_walker_valid={} gpu_phase_valid={} gpu_h2g_split_valid={} h2g_split_bounds=consume-upper+dispatch-lower poll=ordered-ring\n",
+            "ui4/guc-compositor: complete serial={} job_slot={} admission_queue_depth={} remaining_queue_depth={} kernel={} descs={} walkers={} elapsed_ms={} gpu_phase_us=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_phase_ticks=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_timestamps=host_pre_submit:{},h2g_consumed_observe:{},batch_enter:{},pre_walker:{},post_walker:{},post_release:{},host_observe:{} guc_h2g_publish_sequence={} gpu_timestamp_hz={} gpu_walker_valid={} gpu_phase_valid={} gpu_h2g_split_valid={} h2g_split_bounds=consume-upper+dispatch-lower poll=ordered-ring\n",
             pending.submission.serial,
             pending.job_slot,
+            pending.queue_depth_at_admission,
             remaining_depth,
             pending.kernel,
             pending.stats.descs,
