@@ -1,31 +1,32 @@
-# TrueOS-Spirit Lilly semantic catalog v3
-# key|archive-directory|kind|frame-period-ms|seven semantic frames in archive order
+# TrueOS-Spirit Lilly semantic catalog v4
+# key|archive-directory|kind|frame-period-ms|seven semantic frames in playback order|optional archive source map
 # Kinds: loop, once, once_hold.
 # Original keyframes retain their semantics at positions 1, 3, 5, and 7.
+# The source map defaults to 1,2,3,4,5,6,7; repeated indices reuse one decoded surface.
 angry.fists_clenched|Angry/fists-clenched_frames|once|60|tense,tense_to_raise_fists,raise_fists,raise_fists_to_clench,clench,clench_to_hold_fists,hold_fists
 angry.fists_raised|Angry/fists_frames|once|55|wind_up,wind_up_to_raise,raise,raise_to_flare,flare,flare_to_settle,settle
-affection.blow_kiss|Blow-Kiss/blow-kiss_frames|once|70|touch_lips,touch_lips_to_inhale,inhale,inhale_to_kiss,kiss,kiss_to_release,release
+affection.blow_kiss|Blow-Kiss/blow-kiss_frames|once|70|touch_lips,touch_lips_to_inhale,inhale,inhale_to_kiss,kiss,kiss_to_release,release|1,1,3,3,5,5,7
 blush.evil|Blush/blush-evil_frames|once|75|neutral,neutral_to_smirk,smirk,smirk_to_deep_smirk,deep_smirk,deep_smirk_to_wink,wink
 blush.flustered|Blush/blush-flustered_frames|once|75|uneasy,uneasy_to_flush,flush,flush_to_overwhelmed,overwhelmed,overwhelmed_to_steam,steam
 blush.shy|Blush/blush-shy_frames|once|75|soft_smile,soft_smile_to_eyes_closed,eyes_closed,eyes_closed_to_bright_blush,bright_blush,bright_blush_to_glance,glance
-blush.teasing|Blush/blush-teasing_frames|once|70|hand_to_chest,hand_to_chest_to_cover_mouth,cover_mouth,cover_mouth_to_deep_blush,deep_blush,deep_blush_to_recover,recover
+blush.teasing|Blush/blush-teasing_frames|once|70|hand_to_chest,hand_to_chest_to_cover_mouth,cover_mouth,cover_mouth_to_deep_blush,deep_blush,deep_blush_to_recover,recover|1,1,3,3,5,5,7
 blush.warm|Blush/blush_frames|once|75|neutral,neutral_to_warm,warm,warm_to_flustered,flustered,flustered_to_settle,settle
 confused.question|Confused/question-mark_frames|once|90|puzzled,puzzled_to_question,question,question_to_ponder,ponder,ponder_to_reset,reset
-cry.two_hands|Cry/crying-two-hands_frames|once_hold|85|hurt,hurt_to_cover_eyes,cover_eyes,cover_eyes_to_sob,sob,sob_to_wipe_down,wipe_down
-cry.wipe|Cry/crying-wipe_frames|once|85|hurt,hurt_to_wipe,wipe,wipe_to_tears,tears,tears_to_fold_arms,fold_arms
+cry.two_hands|Cry/crying-two-hands_frames|once_hold|85|hurt,hurt_to_cover_eyes,cover_eyes,cover_eyes_to_sob,sob,sob_to_wipe_down,wipe_down|1,1,3,3,5,5,7
+cry.wipe|Cry/crying-wipe_frames|once|85|hurt,hurt_to_wipe,wipe,wipe_to_tears,tears,tears_to_fold_arms,fold_arms|1,1,3,3,5,5,7
 cry.tears|Cry/crying_frames|once_hold|90|sad,sad_to_well_up,well_up,well_up_to_cry,cry,cry_to_recover,recover
 disapprove.head_shake|Disapprove/disapprove-head-shake_frames|once|65|center,center_to_turn_left,turn_left,turn_left_to_turn_right,turn_right,turn_right_to_return,return
 disapprove.tsk|Disapprove/disapprove-tsk_frames|once|75|center,center_to_eyes_closed,eyes_closed,eyes_closed_to_tsk,tsk,tsk_to_return,return
 disapprove.arms_crossed|Disapprove/shake-head_frames|once|65|center,center_to_turn_left,turn_left,turn_left_to_turn_right,turn_right,turn_right_to_blink,blink
-eat.cookie|Eat/eat-cookie_frames|once|80|present,present_to_bite,bite,bite_to_chew,chew,chew_to_finish,finish
+eat.cookie|Eat/eat-cookie_frames|once|80|present,present_to_bite,bite,bite_to_chew,chew,chew_to_finish,finish|1,1,3,3,5,5,7
 eat.onigiri|Eat/eat-onigiri_frames|once|85|hold,hold_to_bite,bite,bite_to_savor,savor,savor_to_finish,finish
-reaction.facepalm|Facepalm/facepalm_frames|once|80|raise_hand,raise_hand_to_facepalm,facepalm,facepalm_to_sigh,sigh,sigh_to_lower_hand,lower_hand
+reaction.facepalm|Facepalm/facepalm_frames|once|80|raise_hand,raise_hand_to_facepalm,facepalm,facepalm_to_sigh,sigh,sigh_to_lower_hand,lower_hand|1,1,3,3,5,5,7
 gesture.finger_guns|Finger-Gun/finger-guns_frames|once|55|ready,ready_to_aim,aim,aim_to_fire,fire,fire_to_reset,reset
 fish_face.annoyed|Fish-Face/fish-face-annoyed_frames|once|75|neutral,neutral_to_puff,puff,puff_to_pout,pout,pout_to_release,release
 fish_face.pout|Fish-Face/fish-face-pout_frames|once|75|neutral,neutral_to_pout_left,pout_left,pout_left_to_pout_full,pout_full,pout_full_to_release,release
 flirt.come_here|Flirt/flirt-come-here_frames|once|65|neutral,neutral_to_extend_hand,extend_hand,extend_hand_to_beckon,beckon,beckon_to_smile,smile
 flirt.finger_heart|Flirt/flirt-finger-heart_frames|once|70|ready,ready_to_form_heart,form_heart,form_heart_to_wink,wink,wink_to_reveal,reveal
-flirt.hair_tuck|Flirt/flirt-hair-tuck_frames|once|75|reach_hair,reach_hair_to_tuck,tuck,tuck_to_smile,smile,smile_to_release,release
+flirt.hair_tuck|Flirt/flirt-hair-tuck_frames|once|75|reach_hair,reach_hair_to_tuck,tuck,tuck_to_smile,smile,smile_to_release,release|1,1,3,3,5,5,7
 flirt.heart_hands|Flirt/flirt-heart-hands_frames|once|70|ready,ready_to_form_heart,form_heart,form_heart_to_beam,beam,beam_to_release,release
 flirt.lean_in|Flirt/flirt-lean-in_frames|once|75|neutral,neutral_to_lean,lean,lean_to_closer,closer,closer_to_return,return
 happy.cheer|Happy/cheer_frames|once|55|ready,ready_to_raise_fists,raise_fists,raise_fists_to_hands_up,hands_up,hands_up_to_celebrate,celebrate
@@ -47,7 +48,7 @@ scared.panic|Scared/scared_frames|once|65|concern,concern_to_shock,shock,shock_t
 silly.cat_mouth|Silly/silly-cat-mouth_frames|once|70|neutral,neutral_to_cat_smile,cat_smile,cat_smile_to_cat_grin,cat_grin,cat_grin_to_reset,reset
 silly.puffed_cheeks|Silly/silly-puffed-cheeks_frames|once|75|neutral,neutral_to_puff,puff,puff_to_puff_hold,puff_hold,puff_hold_to_release,release
 silly.roar|Silly/silly-roar_frames|once|60|ready,ready_to_paws_up,paws_up,paws_up_to_roar,roar,roar_to_settle,settle
-silly.teehee|Silly/silly-teehee_frames|once|70|smile,smile_to_cover_mouth,cover_mouth,cover_mouth_to_laugh,laugh,laugh_to_release,release
+silly.teehee|Silly/silly-teehee_frames|once|70|smile,smile_to_cover_mouth,cover_mouth,cover_mouth_to_laugh,laugh,laugh_to_release,release|1,1,3,3,5,5,7
 silly.tongue_out|Silly/silly-tongue-out_frames|once|65|neutral,neutral_to_tongue_left,tongue_left,tongue_left_to_tongue_right,tongue_right,tongue_right_to_reset,reset
 talk.annoyed.uncrossed|Talk/talk-annoyed-2_frames|loop|45|mouth_closed,mouth_closed_to_mouth_open,mouth_open,mouth_open_to_mouth_wide,mouth_wide,mouth_wide_to_settle,settle
 talk.annoyed.crossed|Talk/talk-annoyed_frames|loop|45|mouth_closed,mouth_closed_to_mouth_open,mouth_open,mouth_open_to_mouth_wide,mouth_wide,mouth_wide_to_settle,settle
@@ -59,11 +60,11 @@ talk.shy.uncrossed|Talk/talk-shy-2_frames|loop|50|mouth_closed,mouth_closed_to_m
 talk.shy.crossed|Talk/talk-shy_frames|loop|50|mouth_closed,mouth_closed_to_mouth_open,mouth_open,mouth_open_to_mouth_wide,mouth_wide,mouth_wide_to_settle,settle
 talk.waving|Talk/talk-wave_frames|loop|45|mouth_closed,mouth_closed_to_wave_open,wave_open,wave_open_to_wave_wide,wave_wide,wave_wide_to_settle,settle
 taunt.beckon|Taunt/taunt-beckon_frames|once|60|neutral,neutral_to_beckon_start,beckon_start,beckon_start_to_beckon_pull,beckon_pull,beckon_pull_to_smirk,smirk
-taunt.tongue_out|Taunt/taunt-tongue-out_frames|once|60|neutral,neutral_to_tongue_left,tongue_left,tongue_left_to_tongue_right,tongue_right,tongue_right_to_reset,reset
+taunt.tongue_out|Taunt/taunt-tongue-out_frames|once|60|neutral,neutral_to_tongue_left,tongue_left,tongue_left_to_tongue_right,tongue_right,tongue_right_to_reset,reset|1,1,3,3,5,5,7
 threaten.fists|Threaten/threaten_frames|once_hold|60|guard,guard_to_raise_fist,raise_fist,raise_fist_to_both_fists,both_fists,both_fists_to_glare,glare
-tired.rub_eyes|Tired/sleepy-rubbing-eyes_frames|once|85|drowsy,drowsy_to_rub_start,rub_start,rub_start_to_rub_both,rub_both,rub_both_to_recover,recover
+tired.rub_eyes|Tired/sleepy-rubbing-eyes_frames|once|85|drowsy,drowsy_to_rub_start,rub_start,rub_start_to_rub_both,rub_both,rub_both_to_recover,recover|1,1,3,3,5,5,7
 tired.sleepy|Tired/sleepy_frames|loop|130|awake,awake_to_eyes_heavy,eyes_heavy,eyes_heavy_to_doze,doze,doze_to_wake,wake
-tired.yawn|Tired/yawn_frames|once|95|tired,tired_to_yawn_start,yawn_start,yawn_start_to_yawn_wide,yawn_wide,yawn_wide_to_recover,recover
+tired.yawn|Tired/yawn_frames|once|95|tired,tired_to_yawn_start,yawn_start,yawn_start_to_yawn_wide,yawn_wide,yawn_wide_to_recover,recover|1,1,3,3,5,5,7
 wave.excited|Waving/waving-excited_frames|loop|55|ready,ready_to_wave_high,wave_high,wave_high_to_wave_fast,wave_fast,wave_fast_to_settle,settle
 wave.neutral|Waving/waving-neutral_frames|loop|65|ready,ready_to_wave,wave,wave_to_wave_return,wave_return,wave_return_to_settle,settle
 wave.shy|Waving/waving-shy_frames|loop|70|shy_ready,shy_ready_to_wave_blush,wave_blush,wave_blush_to_wave_hold,wave_hold,wave_hold_to_settle,settle

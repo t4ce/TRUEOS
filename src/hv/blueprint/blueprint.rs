@@ -4,6 +4,11 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::ffi::{c_char, c_void};
 use core::sync::atomic::{AtomicUsize, Ordering};
+use object::read::elf::{ElfFile64, SectionHeader as _};
+use object::{
+    Architecture, Object, ObjectKind, ObjectSection, ObjectSymbol, RelocationFlags,
+    RelocationTarget, SectionFlags, SectionIndex, SymbolFlags, SymbolIndex, SymbolSection,
+};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
 
@@ -13,15 +18,9 @@ const BLUEPRINT_PAYLOAD_RAW: u16 = 1;
 const BLUEPRINT_PAYLOAD_7Z: u16 = 2;
 pub(crate) const BLUEPRINT_CAP_REPLICATABLE: u16 = 1 << 8;
 const ELF64_HEADER_LEN: usize = 64;
-const ELF64_SECTION_HEADER_LEN: usize = 64;
-const ELF64_SYM_LEN: usize = 24;
 const ELF64_RELA_LEN: usize = 24;
 const SHT_PROGBITS: u32 = 1;
-const SHT_SYMTAB: u32 = 2;
-const SHT_RELA: u32 = 4;
 const SHT_NOBITS: u32 = 8;
-const SHN_UNDEF: u16 = 0;
-const SHN_ABS: u16 = 0xfff1;
 const STB_GLOBAL: u8 = 1;
 const STB_WEAK: u8 = 2;
 const SHF_ALLOC: u64 = 0x2;
@@ -62,23 +61,13 @@ pub(crate) struct ElfAllocStats {
     pub(crate) alloc_bytes: usize,
 }
 
-#[derive(Copy, Clone)]
-struct ElfSection {
-    section_type: u32,
-    flags: u64,
-    file_offset: usize,
-    size: usize,
-    link: usize,
-    info: usize,
-    align: usize,
-    entsize: usize,
-}
+type ParsedElf<'data> = ElfFile64<'data, object::Endianness>;
 
 #[derive(Copy, Clone)]
-struct ElfSymbol {
-    name_offset: usize,
+struct ParsedElfSymbol<'data> {
+    name: &'data str,
     info: u8,
-    section_index: u16,
+    section: SymbolSection,
     value: u64,
 }
 
@@ -493,10 +482,7 @@ unsafe extern "C" fn portal_unwind_raise_exception(
 }
 
 include!(concat!(env!("OUT_DIR"), "/generated_portal_imports.rs"));
-include!(concat!(
-    env!("OUT_DIR"),
-    "/generated_ring_runtime_imports.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/generated_ring_runtime_imports.rs"));
 
 pub(crate) fn entry_hint_section(entry: u64) -> u32 {
     (entry >> 32) as u32
@@ -517,7 +503,7 @@ fn align_up(value: usize, align: usize) -> Result<usize, &'static str> {
         .ok_or("alignment overflow")
 }
 
-fn parse_sections(bytes: &[u8]) -> Result<Vec<ElfSection>, &'static str> {
+fn parse_elf(bytes: &[u8]) -> Result<ParsedElf<'_>, &'static str> {
     if bytes.len() < ELF64_HEADER_LEN {
         return Err("ELF header truncated");
     }
@@ -527,146 +513,100 @@ fn parse_sections(bytes: &[u8]) -> Result<Vec<ElfSection>, &'static str> {
     if bytes.get(4).copied() != Some(2) || bytes.get(5).copied() != Some(1) {
         return Err("unsupported ELF class/data");
     }
-
-    let shoff = le_u64(bytes, 40).ok_or("ELF header truncated")? as usize;
-    let shentsize = le_u16(bytes, 58).ok_or("ELF header truncated")? as usize;
-    let shnum = le_u16(bytes, 60).ok_or("ELF header truncated")? as usize;
-    if shentsize != ELF64_SECTION_HEADER_LEN {
-        return Err("unsupported ELF section header size");
-    }
-    let section_bytes = shnum
-        .checked_mul(shentsize)
-        .ok_or("ELF section header overflow")?;
-    let section_end = shoff
-        .checked_add(section_bytes)
-        .ok_or("ELF section header overflow")?;
-    if section_end > bytes.len() {
-        return Err("ELF section header truncated");
-    }
-
-    let mut out = Vec::with_capacity(shnum);
-    for section_index in 0..shnum {
-        let shdr_off = shoff
-            .checked_add(
-                section_index
-                    .checked_mul(shentsize)
-                    .ok_or("ELF section header overflow")?,
-            )
-            .ok_or("ELF section header overflow")?;
-        let shdr = bytes
-            .get(shdr_off..shdr_off + ELF64_SECTION_HEADER_LEN)
-            .ok_or("ELF section header truncated")?;
-        out.push(ElfSection {
-            section_type: le_u32(shdr, 4).ok_or("ELF section header truncated")?,
-            flags: le_u64(shdr, 8).ok_or("ELF section header truncated")?,
-            file_offset: le_u64(shdr, 24).ok_or("ELF section header truncated")? as usize,
-            size: le_u64(shdr, 32).ok_or("ELF section header truncated")? as usize,
-            link: le_u32(shdr, 40).ok_or("ELF section header truncated")? as usize,
-            info: le_u32(shdr, 44).ok_or("ELF section header truncated")? as usize,
-            align: le_u64(shdr, 48).ok_or("ELF section header truncated")? as usize,
-            entsize: le_u64(shdr, 56).ok_or("ELF section header truncated")? as usize,
-        });
-    }
-    Ok(out)
+    ParsedElf::parse(bytes).map_err(|_| "malformed ELF")
 }
 
-fn read_symbol(symtab: &[u8], index: usize) -> Result<ElfSymbol, &'static str> {
-    let sym_off = index
-        .checked_mul(ELF64_SYM_LEN)
-        .ok_or("ELF symbol table overflow")?;
-    let sym = symtab
-        .get(sym_off..sym_off + ELF64_SYM_LEN)
-        .ok_or("ELF symbol truncated")?;
-    Ok(ElfSymbol {
-        name_offset: le_u32(sym, 0).ok_or("ELF symbol truncated")? as usize,
-        info: *sym.get(4).ok_or("ELF symbol truncated")?,
-        section_index: le_u16(sym, 6).ok_or("ELF symbol truncated")?,
-        value: le_u64(sym, 8).ok_or("ELF symbol truncated")?,
+fn section_is_alloc(flags: SectionFlags) -> bool {
+    matches!(flags, SectionFlags::Elf { sh_flags } if sh_flags & SHF_ALLOC != 0)
+}
+
+fn section_type(file: &ParsedElf<'_>, index: SectionIndex) -> Result<u32, &'static str> {
+    file.elf_section_table()
+        .section(index)
+        .map(|section| section.sh_type(file.endian()))
+        .map_err(|_| "ELF section out of range")
+}
+
+fn require_symtab(file: &ParsedElf<'_>) -> Result<(), &'static str> {
+    if file.elf_symbol_table().is_empty() {
+        Err("ELF symbol table missing")
+    } else {
+        Ok(())
+    }
+}
+
+fn read_symbol<'data>(
+    file: &ParsedElf<'data>,
+    sym_index: usize,
+) -> Result<ParsedElfSymbol<'data>, String> {
+    require_symtab(file)?;
+    if sym_index == 0 {
+        return Ok(ParsedElfSymbol {
+            name: "",
+            info: 0,
+            section: SymbolSection::Undefined,
+            value: 0,
+        });
+    }
+    let symbol = file
+        .symbol_by_index(SymbolIndex(sym_index))
+        .map_err(|_| String::from("ELF symbol truncated"))?;
+    let name = symbol
+        .name()
+        .map_err(|_| String::from("ELF symbol name is not UTF-8"))?;
+    let info = match symbol.flags() {
+        SymbolFlags::Elf { st_info, .. } => st_info,
+        _ => return Err(String::from("ELF symbol metadata missing")),
+    };
+    Ok(ParsedElfSymbol {
+        name,
+        info,
+        section: symbol.section(),
+        value: symbol.address(),
     })
 }
 
-fn sym_name<'a>(strtab: &'a [u8], sym: &ElfSymbol) -> Result<&'a str, &'static str> {
-    let name_bytes = strtab
-        .get(sym.name_offset..)
-        .ok_or("ELF symbol name truncated")?;
-    let name_len = name_bytes
-        .iter()
-        .position(|&b| b == 0)
-        .ok_or("ELF symbol name unterminated")?;
-    core::str::from_utf8(&name_bytes[..name_len]).map_err(|_| "ELF symbol name is not UTF-8")
-}
-
-fn find_symtab(sections: &[ElfSection]) -> Result<usize, &'static str> {
-    sections
-        .iter()
-        .position(|section| section.section_type == SHT_SYMTAB)
-        .ok_or("ELF symbol table missing")
-}
-
-fn read_symbol_with_name<'a>(
-    bytes: &'a [u8],
-    sections: &[ElfSection],
-    symtab_index: usize,
-    sym_index: usize,
-) -> Result<(ElfSymbol, &'a str), String> {
-    let symtab_section = sections
-        .get(symtab_index)
-        .ok_or("ELF symbol table missing")?;
-    let symtab = bytes
-        .get(symtab_section.file_offset..symtab_section.file_offset + symtab_section.size)
-        .ok_or("ELF symbol table truncated")?;
-    let strtab_section = sections
-        .get(symtab_section.link)
-        .ok_or("ELF string table missing")?;
-    let strtab = bytes
-        .get(strtab_section.file_offset..strtab_section.file_offset + strtab_section.size)
-        .ok_or("ELF string table truncated")?;
-    let sym = read_symbol(symtab, sym_index)?;
-    let name = sym_name(strtab, &sym)?;
-    Ok((sym, name))
-}
-
 fn rel_symbol_value(
-    bytes: &[u8],
-    sections: &[ElfSection],
+    file: &ParsedElf<'_>,
     loaded: &[usize],
-    symtab_index: usize,
     sym_index: usize,
 ) -> Result<usize, String> {
-    let (sym, name) = read_symbol_with_name(bytes, sections, symtab_index, sym_index)?;
+    let sym = read_symbol(file, sym_index)?;
     let bind = sym.info >> 4;
 
-    match sym.section_index {
-        SHN_UNDEF => {
-            if name.is_empty() {
+    match sym.section {
+        SymbolSection::Undefined => {
+            if sym.name.is_empty() {
                 return Ok(0);
             }
-            if let Some(addr) = resolve_import(name) {
+            if let Some(addr) = resolve_import(sym.name) {
                 return Ok(addr);
             }
             if bind == STB_WEAK {
                 return Ok(0);
             }
-            Err(alloc::format!("unresolved import: {} (sym={} bind={})", name, sym_index, bind))
+            Err(alloc::format!("unresolved import: {} (sym={} bind={})", sym.name, sym_index, bind))
         }
-        SHN_ABS => Ok(sym.value as usize),
-        section_index => {
-            let section_index = usize::from(section_index);
-            let Some(&base) = loaded.get(section_index) else {
+        SymbolSection::Absolute => usize::try_from(sym.value)
+            .map_err(|_| String::from("ELF absolute symbol address out of range")),
+        SymbolSection::Section(section_index) => {
+            let Some(&base) = loaded.get(section_index.0) else {
                 return Err(String::from("ELF symbol section out of range"));
             };
             if base == 0 {
                 return Err(String::from("ELF symbol section not loaded"));
             }
-            base.checked_add(sym.value as usize)
+            let value = usize::try_from(sym.value)
+                .map_err(|_| String::from("ELF symbol value out of range"))?;
+            base.checked_add(value)
                 .ok_or_else(|| String::from("ELF symbol address overflow"))
         }
+        _ => Err(String::from("unsupported ELF symbol section")),
     }
 }
 
 fn find_main_addr(
-    bytes: &[u8],
-    sections: &[ElfSection],
+    file: &ParsedElf<'_>,
     loaded: &[usize],
     entry_hint: u64,
 ) -> Result<usize, String> {
@@ -681,53 +621,39 @@ fn find_main_addr(
             .ok_or_else(|| String::from("entry hint overflow"));
     }
 
-    let symtab_index = find_symtab(sections)?;
-    let symtab_section = sections
-        .get(symtab_index)
-        .ok_or("ELF symbol table missing")?;
-    let symtab = bytes
-        .get(symtab_section.file_offset..symtab_section.file_offset + symtab_section.size)
-        .ok_or("ELF symbol table truncated")?;
-    let strtab_section = sections
-        .get(symtab_section.link)
-        .ok_or("ELF string table missing")?;
-    let strtab = bytes
-        .get(strtab_section.file_offset..strtab_section.file_offset + strtab_section.size)
-        .ok_or("ELF string table truncated")?;
-
+    require_symtab(file)?;
     let mut rust_main: Option<(usize, usize)> = None;
-
-    for index in 0..(symtab.len() / ELF64_SYM_LEN) {
-        let sym = read_symbol(symtab, index)?;
-        if sym.section_index == SHN_UNDEF {
+    for index in 0..file.elf_symbol_table().len() {
+        let sym = read_symbol(file, index)?;
+        let SymbolSection::Section(section_index) = sym.section else {
             continue;
-        }
+        };
         if sym.info & 0x0f != 2 {
             continue;
         }
-        let name = sym_name(strtab, &sym)?;
-        if name != "main" && !looks_like_rust_main_symbol(name) {
+        if sym.name != "main" && !looks_like_rust_main_symbol(sym.name) {
             continue;
         }
-        let section_index = usize::from(sym.section_index);
         let base = *loaded
-            .get(section_index)
+            .get(section_index.0)
             .ok_or_else(|| String::from("ELF main section out of range"))?;
         if base == 0 {
             return Err(String::from("ELF main section not loaded"));
         }
+        let value = usize::try_from(sym.value)
+            .map_err(|_| String::from("ELF main symbol value out of range"))?;
         let addr = base
-            .checked_add(sym.value as usize)
+            .checked_add(value)
             .ok_or_else(|| String::from("ELF main address overflow"))?;
-        if name == "main" {
+        if sym.name == "main" {
             return Ok(addr);
         }
         let prefer_rust_main = match &rust_main {
-            Some((_, best_len)) => name.len() < *best_len,
+            Some((_, best_len)) => sym.name.len() < *best_len,
             None => true,
         };
         if prefer_rust_main {
-            rust_main = Some((addr, name.len()));
+            rust_main = Some((addr, sym.name.len()));
         }
     }
 
@@ -744,31 +670,31 @@ fn looks_like_rust_main_symbol(name: &str) -> bool {
 }
 
 fn best_entry_symbol<'a>(
-    bytes: &'a [u8],
-    sections: &[ElfSection],
-    symtab_index: usize,
+    file: &ParsedElf<'a>,
 ) -> Result<Option<(&'static str, String, u16, u64)>, String> {
-    let symtab_section = sections
-        .get(symtab_index)
-        .ok_or_else(|| String::from("ELF symbol table missing"))?;
-    let sym_count = symtab_section.size / ELF64_SYM_LEN;
+    require_symtab(file)?;
     let mut rust_main: Option<(String, u16, u64)> = None;
 
-    for sym_index in 0..sym_count {
-        let (sym, name) = read_symbol_with_name(bytes, sections, symtab_index, sym_index)?;
-        if sym.section_index == SHN_UNDEF || sym.info & 0x0f != 2 {
+    for sym_index in 0..file.elf_symbol_table().len() {
+        let sym = read_symbol(file, sym_index)?;
+        let SymbolSection::Section(section_index) = sym.section else {
+            continue;
+        };
+        if sym.info & 0x0f != 2 {
             continue;
         }
-        if name == "main" {
-            return Ok(Some(("exact", String::from(name), sym.section_index, sym.value)));
+        let section_index = u16::try_from(section_index.0)
+            .map_err(|_| String::from("ELF symbol section index out of range"))?;
+        if sym.name == "main" {
+            return Ok(Some(("exact", String::from(sym.name), section_index, sym.value)));
         }
-        if looks_like_rust_main_symbol(name) {
+        if looks_like_rust_main_symbol(sym.name) {
             let prefer = match &rust_main {
-                Some((best_name, _, _)) => name.len() < best_name.len(),
+                Some((best_name, _, _)) => sym.name.len() < best_name.len(),
                 None => true,
             };
             if prefer {
-                rust_main = Some((String::from(name), sym.section_index, sym.value));
+                rust_main = Some((String::from(sym.name), section_index, sym.value));
             }
         }
     }
@@ -789,29 +715,69 @@ fn is_gotpc_rel_relocation(r_type: u32) -> bool {
     matches!(r_type, R_X86_64_GOTPCREL | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX)
 }
 
-fn collect_gotpc_rel_symbols(bytes: &[u8], sections: &[ElfSection]) -> Result<Vec<usize>, String> {
-    let mut symbols = BTreeMap::new();
-    for section in sections.iter() {
-        if section.section_type != SHT_RELA {
+fn relocation_type(relocation: &object::Relocation) -> Result<u32, String> {
+    match relocation.flags() {
+        RelocationFlags::Elf { r_type } => Ok(r_type),
+        _ => Err(String::from("unsupported non-ELF relocation")),
+    }
+}
+
+fn relocation_symbol(relocation: &object::Relocation) -> Result<usize, String> {
+    match relocation.target() {
+        RelocationTarget::Symbol(index) => Ok(index.0),
+        RelocationTarget::Absolute => Ok(0),
+        _ => Err(String::from("unsupported ELF relocation target")),
+    }
+}
+
+fn validate_alloc_relocations(file: &ParsedElf<'_>) -> Result<(), String> {
+    let endian = file.endian();
+    let data = file.data();
+    let sections = file.elf_section_table();
+    let symtab_section = file.elf_symbol_table().section();
+    for raw_section in sections.iter() {
+        let section_type = raw_section.sh_type(endian);
+        if section_type != object::elf::SHT_RELA && section_type != object::elf::SHT_REL {
             continue;
         }
-        let Some(target) = sections.get(section.info) else {
-            return Err(String::from("ELF relocation target out of range"));
-        };
-        if target.flags & SHF_ALLOC == 0 {
+        let target_index = raw_section.info_link(endian);
+        let target = file
+            .section_by_index(target_index)
+            .map_err(|_| String::from("ELF relocation target out of range"))?;
+        if !section_is_alloc(target.flags()) {
             continue;
         }
-        if section.entsize != ELF64_RELA_LEN {
+        if section_type != object::elf::SHT_RELA {
+            return Err(String::from("unsupported ELF REL relocation"));
+        }
+        if raw_section.link(endian) != symtab_section {
+            return Err(String::from("unsupported ELF relocation symbol table"));
+        }
+        let entsize = usize::try_from(raw_section.sh_entsize(endian))
+            .map_err(|_| String::from("unsupported ELF relocation size"))?;
+        if entsize != ELF64_RELA_LEN {
             return Err(String::from("unsupported ELF relocation size"));
         }
-        let rela = bytes
-            .get(section.file_offset..section.file_offset + section.size)
-            .ok_or_else(|| String::from("ELF relocation section truncated"))?;
-        for chunk in rela.chunks_exact(ELF64_RELA_LEN) {
-            let r_info =
-                le_u64(chunk, 8).ok_or_else(|| String::from("ELF relocation truncated"))?;
-            if is_gotpc_rel_relocation(r_info as u32) {
-                symbols.insert((r_info >> 32) as usize, ());
+        raw_section
+            .rela(endian, data)
+            .map_err(|_| String::from("ELF relocation section truncated"))?
+            .ok_or_else(|| String::from("ELF relocation section missing"))?;
+    }
+    Ok(())
+}
+
+fn collect_gotpc_rel_symbols(file: &ParsedElf<'_>) -> Result<Vec<usize>, String> {
+    let mut symbols = BTreeMap::new();
+    for target in file.sections() {
+        if !section_is_alloc(target.flags()) {
+            continue;
+        }
+        for (_, relocation) in target.relocations() {
+            if relocation.has_implicit_addend() {
+                return Err(String::from("unsupported ELF REL relocation"));
+            }
+            if is_gotpc_rel_relocation(relocation_type(&relocation)?) {
+                symbols.insert(relocation_symbol(&relocation)?, ());
             }
         }
     }
@@ -819,40 +785,27 @@ fn collect_gotpc_rel_symbols(bytes: &[u8], sections: &[ElfSection]) -> Result<Ve
 }
 
 fn collect_pc_relative_import_symbols(
-    bytes: &[u8],
-    sections: &[ElfSection],
-    symtab_index: usize,
+    file: &ParsedElf<'_>,
 ) -> Result<BTreeMap<usize, usize>, String> {
     let mut imports = BTreeMap::new();
-    for section in sections.iter() {
-        if section.section_type != SHT_RELA {
+    for target in file.sections() {
+        if !section_is_alloc(target.flags()) {
             continue;
         }
-        let Some(target) = sections.get(section.info) else {
-            return Err(String::from("ELF relocation target out of range"));
-        };
-        if target.flags & SHF_ALLOC == 0 {
-            continue;
-        }
-        if section.entsize != ELF64_RELA_LEN {
-            return Err(String::from("unsupported ELF relocation size"));
-        }
-        let rela = bytes
-            .get(section.file_offset..section.file_offset + section.size)
-            .ok_or_else(|| String::from("ELF relocation section truncated"))?;
-        for chunk in rela.chunks_exact(ELF64_RELA_LEN) {
-            let r_info =
-                le_u64(chunk, 8).ok_or_else(|| String::from("ELF relocation truncated"))?;
-            let r_sym = (r_info >> 32) as usize;
-            match r_info as u32 {
+        for (_, relocation) in target.relocations() {
+            if relocation.has_implicit_addend() {
+                return Err(String::from("unsupported ELF REL relocation"));
+            }
+            match relocation_type(&relocation)? {
                 R_X86_64_PC32 | R_X86_64_PLT32 => {}
                 _ => continue,
             }
-            let (sym, name) = read_symbol_with_name(bytes, sections, symtab_index, r_sym)?;
-            if sym.section_index != SHN_UNDEF || name.is_empty() {
+            let r_sym = relocation_symbol(&relocation)?;
+            let sym = read_symbol(file, r_sym)?;
+            if sym.section != SymbolSection::Undefined || sym.name.is_empty() {
                 continue;
             }
-            if let Some(addr) = resolve_import(name) {
+            if let Some(addr) = resolve_import(sym.name) {
                 imports.insert(r_sym, addr);
                 continue;
             }
@@ -861,7 +814,7 @@ fn collect_pc_relative_import_symbols(
             }
             return Err(alloc::format!(
                 "unresolved import: {} (sym={} bind={})",
-                name,
+                sym.name,
                 r_sym,
                 sym.info >> 4
             ));
@@ -885,28 +838,62 @@ unsafe fn write_import_thunk(thunk: *mut u8, target: usize) {
     }
 }
 
+fn relocation_place(
+    target_base: usize,
+    target_size: usize,
+    offset: u64,
+    write_size: usize,
+) -> Result<usize, String> {
+    let offset =
+        usize::try_from(offset).map_err(|_| String::from("ELF relocation offset out of range"))?;
+    let end = offset
+        .checked_add(write_size)
+        .ok_or_else(|| String::from("ELF relocation place overflow"))?;
+    if end > target_size {
+        return Err(String::from("ELF relocation write outside target section"));
+    }
+    target_base
+        .checked_add(offset)
+        .ok_or_else(|| String::from("ELF relocation place overflow"))
+}
+
 fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
-    let sections = parse_sections(bytes)?;
-    let mut section_offsets = vec![0usize; sections.len()];
-    let mut section_bases = vec![0usize; sections.len()];
+    let file = parse_elf(bytes)?;
+    if file.kind() != ObjectKind::Relocatable {
+        return Err(String::from("only ELF REL images can be loaded"));
+    }
+    if file.architecture() != Architecture::X86_64 {
+        return Err(String::from("unsupported ELF architecture"));
+    }
+    require_symtab(&file)?;
+    validate_alloc_relocations(&file)?;
+    let section_count = file.elf_section_table().len();
+    let mut section_offsets = vec![0usize; section_count];
+    let mut section_bases = vec![0usize; section_count];
     let mut total_size = 0usize;
     let mut max_align = 1usize;
-    let symtab_index = find_symtab(sections.as_slice())?;
-    let got_symbols = collect_gotpc_rel_symbols(bytes, sections.as_slice())?;
-    let import_thunk_symbols =
-        collect_pc_relative_import_symbols(bytes, sections.as_slice(), symtab_index)?;
+    let got_symbols = collect_gotpc_rel_symbols(&file)?;
+    let import_thunk_symbols = collect_pc_relative_import_symbols(&file)?;
 
-    for (index, section) in sections.iter().enumerate() {
-        if section.flags & SHF_ALLOC == 0 {
+    for section in file.sections() {
+        if !section_is_alloc(section.flags()) {
             continue;
         }
-        let align = section.align.max(1);
+        let index = section.index().0;
+        let align = usize::try_from(section.align())
+            .map_err(|_| String::from("ELF section alignment out of range"))?
+            .max(1);
+        if !align.is_power_of_two() {
+            return Err(String::from("ELF section alignment is not a power of two"));
+        }
+        let section_size = usize::try_from(section.size())
+            .map_err(|_| String::from("ELF section size out of range"))?;
         max_align = max_align.max(align);
         total_size = align_up(total_size, align)?;
         section_offsets[index] = total_size;
-        if section.size != 0 {
+        if section_size != 0 {
             total_size = total_size
-                .checked_add(section.size)
+                .checked_add(section_size)
                 .ok_or_else(|| String::from("ELF image too large"))?;
         }
     }
@@ -962,22 +949,28 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
         core::ptr::write_bytes(base, 0, total_size);
     }
 
-    for (index, section) in sections.iter().enumerate() {
-        if section.flags & SHF_ALLOC == 0 {
+    for section in file.sections() {
+        if !section_is_alloc(section.flags()) {
             continue;
         }
+        let index = section.index().0;
+        let section_size = usize::try_from(section.size())
+            .map_err(|_| String::from("ELF section size out of range"))?;
         let section_base = unsafe { base.add(section_offsets[index]) };
         section_bases[index] = section_base as usize;
-        if section.size == 0 {
+        if section_size == 0 {
             continue;
         }
-        match section.section_type {
+        match section_type(&file, section.index())? {
             SHT_PROGBITS => {
-                let src = bytes
-                    .get(section.file_offset..section.file_offset + section.size)
-                    .ok_or_else(|| String::from("ELF section truncated"))?;
+                let src = section
+                    .data()
+                    .map_err(|_| String::from("ELF section truncated"))?;
+                if src.len() != section_size {
+                    return Err(String::from("ELF section size mismatch"));
+                }
                 unsafe {
-                    core::ptr::copy_nonoverlapping(src.as_ptr(), section_base, section.size);
+                    core::ptr::copy_nonoverlapping(src.as_ptr(), section_base, section_size);
                 }
             }
             SHT_NOBITS => {}
@@ -989,13 +982,7 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
     if let Some(got_offset) = synthetic_got_offset {
         for (slot, sym_index) in got_symbols.iter().copied().enumerate() {
             let entry = unsafe { base.add(got_offset + slot * core::mem::size_of::<u64>()) };
-            let sym = rel_symbol_value(
-                bytes,
-                sections.as_slice(),
-                section_bases.as_slice(),
-                symtab_index,
-                sym_index,
-            )?;
+            let sym = rel_symbol_value(&file, section_bases.as_slice(), sym_index)?;
             unsafe {
                 (entry as *mut u64).write_unaligned(sym as u64);
             }
@@ -1013,51 +1000,46 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
         }
     }
 
-    for section in sections.iter() {
-        if section.section_type != SHT_RELA {
+    for target in file.sections() {
+        if !section_is_alloc(target.flags()) {
             continue;
         }
-        let Some(target) = sections.get(section.info) else {
-            return Err(String::from("ELF relocation target out of range"));
-        };
-        if target.flags & SHF_ALLOC == 0 {
-            continue;
-        }
+        let target_index = target.index().0;
         let target_base = *section_bases
-            .get(section.info)
+            .get(target_index)
             .ok_or_else(|| String::from("ELF relocation target out of range"))?;
         if target_base == 0 {
             return Err(String::from("ELF relocation target not loaded"));
         }
-        if section.entsize != ELF64_RELA_LEN {
-            return Err(String::from("unsupported ELF relocation size"));
-        }
-        let rela = bytes
-            .get(section.file_offset..section.file_offset + section.size)
-            .ok_or_else(|| String::from("ELF relocation section truncated"))?;
-        for chunk in rela.chunks_exact(ELF64_RELA_LEN) {
-            let r_offset =
-                le_u64(chunk, 0).ok_or_else(|| String::from("ELF relocation truncated"))? as usize;
-            let r_info =
-                le_u64(chunk, 8).ok_or_else(|| String::from("ELF relocation truncated"))?;
-            let r_addend =
-                le_u64(chunk, 16).ok_or_else(|| String::from("ELF relocation truncated"))? as i64;
-            let r_sym = (r_info >> 32) as usize;
-            let r_type = r_info as u32;
-            let place = target_base
-                .checked_add(r_offset)
-                .ok_or_else(|| String::from("ELF relocation place overflow"))?;
-            let sym = rel_symbol_value(
-                bytes,
-                sections.as_slice(),
-                section_bases.as_slice(),
-                symtab_index,
-                r_sym,
-            )? as i64;
+        let target_size = usize::try_from(target.size())
+            .map_err(|_| String::from("ELF relocation target size out of range"))?;
+        for (r_offset, relocation) in target.relocations() {
+            if relocation.has_implicit_addend() {
+                return Err(String::from("unsupported ELF REL relocation"));
+            }
+            let r_type = relocation_type(&relocation)?;
+            if r_type == R_X86_64_NONE {
+                continue;
+            }
+            let write_size = match r_type {
+                R_X86_64_64 => core::mem::size_of::<u64>(),
+                R_X86_64_32S
+                | R_X86_64_PC32
+                | R_X86_64_PLT32
+                | R_X86_64_GOTPCREL
+                | R_X86_64_GOTPCRELX
+                | R_X86_64_REX_GOTPCRELX => core::mem::size_of::<i32>(),
+                _ => {
+                    return Err(alloc::format!("unsupported ELF relocation type: {}", r_type));
+                }
+            };
+            let place = relocation_place(target_base, target_size, r_offset, write_size)?;
+            let r_sym = relocation_symbol(&relocation)?;
+            let r_addend = relocation.addend();
+            let sym = rel_symbol_value(&file, section_bases.as_slice(), r_sym)? as i64;
             let place_i64 = place as i64;
             unsafe {
                 match r_type {
-                    R_X86_64_NONE => {}
                     R_X86_64_64 => {
                         let value = sym
                             .checked_add(r_addend)
@@ -1098,7 +1080,7 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
                             .map_err(|_| String::from("R_X86_64_GOTPCREL out of range"))?;
                         (place as *mut i32).write_unaligned(value_i32);
                     }
-                    _ => return Err(alloc::format!("unsupported ELF relocation type: {}", r_type)),
+                    _ => unreachable!("relocation type checked above"),
                 }
             }
         }
@@ -1129,42 +1111,44 @@ fn le_u64(bytes: &[u8], offset: usize) -> Option<u64> {
 }
 
 pub(crate) fn elf_type_name(bytes: &[u8]) -> Option<&'static str> {
-    match le_u16(bytes, 16)? {
-        1 => Some("REL"),
-        2 => Some("EXEC"),
-        3 => Some("DYN"),
-        4 => Some("CORE"),
+    match parse_elf(bytes).ok()?.kind() {
+        ObjectKind::Relocatable => Some("REL"),
+        ObjectKind::Executable => Some("EXEC"),
+        ObjectKind::Dynamic => Some("DYN"),
+        ObjectKind::Core => Some("CORE"),
         _ => Some("UNKNOWN"),
     }
 }
 
 pub(crate) fn elf_alloc_stats(bytes: &[u8]) -> Result<ElfAllocStats, String> {
-    let sections = parse_sections(bytes).map_err(String::from)?;
-    Ok(elf_alloc_stats_from_sections(sections.as_slice()))
+    let file = parse_elf(bytes).map_err(String::from)?;
+    Ok(elf_alloc_stats_from_file(&file))
 }
 
-fn elf_alloc_stats_from_sections(sections: &[ElfSection]) -> ElfAllocStats {
+fn elf_alloc_stats_from_file(file: &ParsedElf<'_>) -> ElfAllocStats {
     let mut stats = ElfAllocStats {
-        sections: sections.len(),
+        sections: file.elf_section_table().len(),
         alloc_sections: 0,
         alloc_bytes: 0,
     };
-    for section in sections.iter() {
-        if section.flags & SHF_ALLOC == 0 {
+    for section in file.sections() {
+        if !section_is_alloc(section.flags()) {
             continue;
         }
         stats.alloc_sections += 1;
-        stats.alloc_bytes = stats.alloc_bytes.saturating_add(section.size);
+        stats.alloc_bytes = stats
+            .alloc_bytes
+            .saturating_add(usize::try_from(section.size()).unwrap_or(usize::MAX));
     }
     stats
 }
 
 pub(crate) fn elf_rel_debug_summary(bytes: &[u8], entry_hint: u64) -> Result<String, String> {
-    let sections = parse_sections(bytes).map_err(String::from)?;
-    let stats = elf_alloc_stats_from_sections(sections.as_slice());
+    let file = parse_elf(bytes).map_err(String::from)?;
+    let stats = elf_alloc_stats_from_file(&file);
 
-    let entry_symbol = match find_symtab(sections.as_slice()) {
-        Ok(symtab_index) => match best_entry_symbol(bytes, sections.as_slice(), symtab_index) {
+    let entry_symbol = match require_symtab(&file) {
+        Ok(()) => match best_entry_symbol(&file) {
             Ok(Some((kind, name, section_index, value))) => alloc::format!(
                 "entry_symbol={} sec={} value=0x{:x} kind={}",
                 abbreviate_symbol_name(name.as_str()),
@@ -1190,92 +1174,22 @@ pub(crate) fn elf_rel_debug_summary(bytes: &[u8], entry_hint: u64) -> Result<Str
 }
 
 pub(crate) fn elf_imports<'a>(bytes: &'a [u8]) -> Result<Vec<ElfImport<'a>>, &'static str> {
-    if bytes.len() < ELF64_HEADER_LEN {
-        return Err("ELF header truncated");
-    }
-    if bytes.get(0..4) != Some(b"\x7fELF") {
-        return Err("payload is not ELF");
-    }
-    if bytes.get(4).copied() != Some(2) || bytes.get(5).copied() != Some(1) {
-        return Err("unsupported ELF class/data");
-    }
-
-    let shoff = le_u64(bytes, 40).ok_or("ELF header truncated")? as usize;
-    let shentsize = le_u16(bytes, 58).ok_or("ELF header truncated")? as usize;
-    let shnum = le_u16(bytes, 60).ok_or("ELF header truncated")? as usize;
-    if shentsize != ELF64_SECTION_HEADER_LEN {
-        return Err("unsupported ELF section header size");
-    }
-
+    let file = parse_elf(bytes)?;
+    require_symtab(&file)?;
     let mut imports = Vec::new();
-    for section_index in 0..shnum {
-        let shdr_off = shoff
-            .checked_add(
-                section_index
-                    .checked_mul(shentsize)
-                    .ok_or("ELF section header overflow")?,
-            )
-            .ok_or("ELF section header overflow")?;
-        let shdr = bytes
-            .get(shdr_off..shdr_off + ELF64_SECTION_HEADER_LEN)
-            .ok_or("ELF section header truncated")?;
-
-        let section_type = le_u32(shdr, 4).ok_or("ELF section header truncated")?;
-        if section_type != SHT_SYMTAB {
+    for sym_index in 0..file.elf_symbol_table().len() {
+        let sym = read_symbol(&file, sym_index).map_err(|_| "ELF symbol table malformed")?;
+        let bind = sym.info >> 4;
+        if sym.section != SymbolSection::Undefined
+            || !(bind == STB_GLOBAL || bind == STB_WEAK)
+            || sym.name.is_empty()
+        {
             continue;
         }
-
-        let sym_off = le_u64(shdr, 24).ok_or("ELF section header truncated")? as usize;
-        let sym_size = le_u64(shdr, 32).ok_or("ELF section header truncated")? as usize;
-        let link = le_u32(shdr, 40).ok_or("ELF section header truncated")? as usize;
-        let entsize = le_u64(shdr, 56).ok_or("ELF section header truncated")? as usize;
-        if entsize != ELF64_SYM_LEN {
-            return Err("unsupported ELF symbol size");
-        }
-
-        let str_shdr_off = shoff
-            .checked_add(
-                link.checked_mul(shentsize)
-                    .ok_or("ELF string table overflow")?,
-            )
-            .ok_or("ELF string table overflow")?;
-        let str_shdr = bytes
-            .get(str_shdr_off..str_shdr_off + ELF64_SECTION_HEADER_LEN)
-            .ok_or("ELF string table truncated")?;
-        let str_off = le_u64(str_shdr, 24).ok_or("ELF string table truncated")? as usize;
-        let str_size = le_u64(str_shdr, 32).ok_or("ELF string table truncated")? as usize;
-        let strtab = bytes
-            .get(str_off..str_off + str_size)
-            .ok_or("ELF string table truncated")?;
-
-        let symtab = bytes
-            .get(sym_off..sym_off + sym_size)
-            .ok_or("ELF symbol table truncated")?;
-
-        for sym in symtab.chunks_exact(ELF64_SYM_LEN) {
-            let name_off = le_u32(sym, 0).ok_or("ELF symbol truncated")? as usize;
-            let info = *sym.get(4).ok_or("ELF symbol truncated")?;
-            let shndx = le_u16(sym, 6).ok_or("ELF symbol truncated")?;
-            let bind = info >> 4;
-            if shndx != SHN_UNDEF || !(bind == STB_GLOBAL || bind == STB_WEAK) {
-                continue;
-            }
-
-            let name_bytes = strtab.get(name_off..).ok_or("ELF symbol name truncated")?;
-            let name_len = name_bytes
-                .iter()
-                .position(|&b| b == 0)
-                .ok_or("ELF symbol name unterminated")?;
-            if name_len == 0 {
-                continue;
-            }
-            let name = core::str::from_utf8(&name_bytes[..name_len])
-                .map_err(|_| "ELF symbol name is not UTF-8")?;
-            imports.push(ElfImport {
-                name,
-                resolved_addr: resolve_known_import(name),
-            });
-        }
+        imports.push(ElfImport {
+            name: sym.name,
+            resolved_addr: resolve_known_import(sym.name),
+        });
     }
 
     imports.sort_by(|a, b| a.name.cmp(b.name));
@@ -1728,10 +1642,7 @@ pub(crate) fn build_process_env(
     // from the host.  Keep the primary address convenient and expose indexed
     // addresses for blueprints that have more than one NIC.
     let primary_device = crate::net::primary_device_index();
-    vars.insert(
-        String::from("TRUEOS_NET_PRIMARY_DEVICE"),
-        alloc::format!("{primary_device}"),
-    );
+    vars.insert(String::from("TRUEOS_NET_PRIMARY_DEVICE"), alloc::format!("{primary_device}"));
     vars.insert(
         String::from("TRUEOS_NET_DEVICE_COUNT"),
         alloc::format!("{}", crate::net::device_count()),
@@ -1876,9 +1787,8 @@ pub(crate) fn invoke_host_rel(
     app_fs_root: Option<String>,
 ) -> Result<(), String> {
     let image = load_rel_image(unpacked)?;
-    let sections = parse_sections(unpacked)?;
-    let main_addr =
-        find_main_addr(unpacked, sections.as_slice(), image.section_bases.as_slice(), entry_hint)?;
+    let file = parse_elf(unpacked)?;
+    let main_addr = find_main_addr(&file, image.section_bases.as_slice(), entry_hint)?;
     let entry_section = entry_hint_section(entry_hint) as usize;
     let entry_section_base = image.section_bases.get(entry_section).copied().unwrap_or(0);
     let vm_for_stats = portal_guest_alloc_vm_id().unwrap_or(0);

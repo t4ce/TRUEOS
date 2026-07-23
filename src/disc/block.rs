@@ -7,10 +7,9 @@ use core::{
     pin::Pin,
     ptr,
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
-    task::Waker,
 };
 use embassy_executor::Spawner;
-use embassy_sync::signal::Signal;
+use embassy_sync::{mutex::Mutex as AsyncMutex, signal::Signal};
 
 const DEFAULT_DMA_ALIGNMENT: u32 = 64;
 const DEFAULT_MAX_TRANSFER_BYTES: u64 = 256 * 1024;
@@ -33,78 +32,6 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 const BLOCK_DEVICE_SERVICE_TASK_POOL: usize = 3;
-
-struct AsyncMutex<T> {
-    locked: core::sync::atomic::AtomicBool,
-    waiters: spin::Mutex<Vec<Waker>>,
-    value: core::cell::UnsafeCell<T>,
-}
-
-unsafe impl<T: Send> Sync for AsyncMutex<T> {}
-
-impl<T> AsyncMutex<T> {
-    const fn new(value: T) -> Self {
-        Self {
-            locked: core::sync::atomic::AtomicBool::new(false),
-            waiters: spin::Mutex::new(Vec::new()),
-            value: core::cell::UnsafeCell::new(value),
-        }
-    }
-
-    async fn lock(&self) -> AsyncMutexGuard<'_, T> {
-        core::future::poll_fn(|cx| self.poll_lock(cx)).await
-    }
-
-    fn poll_lock(
-        &self,
-        cx: &mut core::task::Context<'_>,
-    ) -> core::task::Poll<AsyncMutexGuard<'_, T>> {
-        if self
-            .locked
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_ok()
-        {
-            return core::task::Poll::Ready(AsyncMutexGuard { m: self });
-        }
-
-        let mut waiters = self.waiters.lock();
-        let waker = cx.waker();
-        wait::register_waker_list(&mut waiters, waker);
-        core::task::Poll::Pending
-    }
-
-    fn unlock(&self) {
-        self.locked.store(false, Ordering::Release);
-        let waiters = core::mem::take(&mut *self.waiters.lock());
-        for w in waiters {
-            w.wake();
-        }
-    }
-}
-
-struct AsyncMutexGuard<'a, T> {
-    m: &'a AsyncMutex<T>,
-}
-
-impl<T> core::ops::Deref for AsyncMutexGuard<'_, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*self.m.value.get() }
-    }
-}
-
-impl<T> core::ops::DerefMut for AsyncMutexGuard<'_, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.m.value.get() }
-    }
-}
-
-impl<T> Drop for AsyncMutexGuard<'_, T> {
-    fn drop(&mut self) {
-        self.m.unlock();
-    }
-}
 
 /// Minimal async block-device interface expected by the kernel and upper layers.
 ///
@@ -674,7 +601,7 @@ impl DeviceHandle {
 
 struct DeviceNode {
     info: DeviceInfo,
-    driver: AsyncMutex<Box<dyn BlockDevice>>,
+    driver: AsyncMutex<wait::EmbassySpinRawMutex, Box<dyn BlockDevice>>,
 }
 
 impl DeviceNode {

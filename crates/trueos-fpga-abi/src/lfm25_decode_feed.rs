@@ -13,6 +13,10 @@
 use core::mem::{align_of, size_of};
 
 use super::lfm25::{self, LayerKind, NativeTensorDescriptor, TensorFormat, TensorRole};
+use zerocopy::{
+    FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
+    byteorder::little_endian::{U16, U32},
+};
 
 pub const FEED_ABI_VERSION: u16 = 2;
 pub const FEED_CAPABILITY_MAGIC: u32 = 0x3246_4754; // "TGF2"
@@ -759,62 +763,82 @@ pub struct FeedCommitRecord {
     pub commit_magic: u32,
 }
 
+macro_rules! little_endian_wire_record {
+    (
+        $(#[$meta:meta])*
+        struct $wire:ident for $native:ty {
+            $($field:ident: $wire_type:ty),+ $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        #[repr(C)]
+        #[derive(Copy, Clone, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+        struct $wire {
+            $($field: $wire_type),+
+        }
+
+        impl From<$native> for $wire {
+            fn from(record: $native) -> Self {
+                Self {
+                    $($field: record.$field.into()),+
+                }
+            }
+        }
+
+        impl From<$wire> for $native {
+            fn from(record: $wire) -> Self {
+                Self {
+                    $($field: record.$field.into()),+
+                }
+            }
+        }
+    };
+}
+
+little_endian_wire_record! {
+    /// Byte-exact representation of [`FeedCommitRecord`] in the TGF2 wire format.
+    ///
+    /// The endian-aware fields make the protocol independent of host endianness. Deriving
+    /// `IntoBytes` also makes unexpected compiler padding a compile error instead of silently
+    /// leaking it into BAR2.
+    struct FeedCommitRecordLe for FeedCommitRecord {
+        record_magic: U32,
+        abi_version: U16,
+        record_bytes: U16,
+        capability_bits: U32,
+        mode: u8,
+        layer: u8,
+        lane_mask: u8,
+        payload_format: u8,
+        session_epoch: U32,
+        sequence: U32,
+        position: U32,
+        token: U32,
+        item: U32,
+        stages_per_lane: U16,
+        last_stage_slot: U16,
+        payload_bytes_per_stage: U16,
+        reserved0: U16,
+        stage_generation: U32,
+        shape_tag: U32,
+        model_generation: U32,
+        reserved1: [u8; 4],
+        commit_magic: U32,
+    }
+}
+
 impl FeedCommitRecord {
     pub fn encode_le(self) -> [u8; FEED_COMMIT_RECORD_BYTES as usize] {
-        let mut bytes = [0u8; FEED_COMMIT_RECORD_BYTES as usize];
-        put_u32(&mut bytes, 0, self.record_magic);
-        put_u16(&mut bytes, 4, self.abi_version);
-        put_u16(&mut bytes, 6, self.record_bytes);
-        put_u32(&mut bytes, 8, self.capability_bits);
-        bytes[12] = self.mode;
-        bytes[13] = self.layer;
-        bytes[14] = self.lane_mask;
-        bytes[15] = self.payload_format;
-        put_u32(&mut bytes, 16, self.session_epoch);
-        put_u32(&mut bytes, 20, self.sequence);
-        put_u32(&mut bytes, 24, self.position);
-        put_u32(&mut bytes, 28, self.token);
-        put_u32(&mut bytes, 32, self.item);
-        put_u16(&mut bytes, 36, self.stages_per_lane);
-        put_u16(&mut bytes, 38, self.last_stage_slot);
-        put_u16(&mut bytes, 40, self.payload_bytes_per_stage);
-        put_u16(&mut bytes, 42, self.reserved0);
-        put_u32(&mut bytes, 44, self.stage_generation);
-        put_u32(&mut bytes, 48, self.shape_tag);
-        put_u32(&mut bytes, 52, self.model_generation);
-        bytes[56..60].copy_from_slice(&self.reserved1);
-        put_u32(&mut bytes, 60, self.commit_magic);
+        let wire = FeedCommitRecordLe::from(self);
+        let mut bytes = [0; FEED_COMMIT_RECORD_BYTES as usize];
+        bytes.copy_from_slice(wire.as_bytes());
         bytes
     }
 
     pub fn decode_le(bytes: &[u8]) -> Result<Self, FeedError> {
-        if bytes.len() != FEED_COMMIT_RECORD_BYTES as usize {
-            return Err(FeedError::InvalidEncoding);
-        }
-        let record = Self {
-            record_magic: get_u32(bytes, 0),
-            abi_version: get_u16(bytes, 4),
-            record_bytes: get_u16(bytes, 6),
-            capability_bits: get_u32(bytes, 8),
-            mode: bytes[12],
-            layer: bytes[13],
-            lane_mask: bytes[14],
-            payload_format: bytes[15],
-            session_epoch: get_u32(bytes, 16),
-            sequence: get_u32(bytes, 20),
-            position: get_u32(bytes, 24),
-            token: get_u32(bytes, 28),
-            item: get_u32(bytes, 32),
-            stages_per_lane: get_u16(bytes, 36),
-            last_stage_slot: get_u16(bytes, 38),
-            payload_bytes_per_stage: get_u16(bytes, 40),
-            reserved0: get_u16(bytes, 42),
-            stage_generation: get_u32(bytes, 44),
-            shape_tag: get_u32(bytes, 48),
-            model_generation: get_u32(bytes, 52),
-            reserved1: [bytes[56], bytes[57], bytes[58], bytes[59]],
-            commit_magic: get_u32(bytes, 60),
-        };
+        let wire =
+            FeedCommitRecordLe::read_from_bytes(bytes).map_err(|_| FeedError::InvalidEncoding)?;
+        let record = Self::from(wire);
         if !record.header_is_exact() {
             return Err(FeedError::InvalidEncoding);
         }
@@ -1186,29 +1210,13 @@ const fn stage_bank(lane: u8) -> StageBank {
     }
 }
 
-fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
-    bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
-}
-
-fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn get_u16(bytes: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
-}
-
-fn get_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes([
-        bytes[offset],
-        bytes[offset + 1],
-        bytes[offset + 2],
-        bytes[offset + 3],
-    ])
-}
-
 const _: [(); FEED_COMMIT_RECORD_BYTES as usize] = [(); size_of::<FeedCommitRecord>()];
 const _: [(); 64] = [(); align_of::<FeedCommitRecord>()];
+const _: [(); FEED_COMMIT_RECORD_BYTES as usize] = [(); size_of::<FeedCommitRecordLe>()];
+const _: [(); 1] = [(); align_of::<FeedCommitRecordLe>()];
+const _: [(); 36] = [(); core::mem::offset_of!(FeedCommitRecordLe, stages_per_lane)];
+const _: [(); 44] = [(); core::mem::offset_of!(FeedCommitRecordLe, stage_generation)];
+const _: [(); 60] = [(); core::mem::offset_of!(FeedCommitRecordLe, commit_magic)];
 
 #[cfg(test)]
 mod tests {
@@ -1517,6 +1525,48 @@ mod tests {
         clean.commit(record).unwrap();
         assert_eq!(clean.expected_item(), 1);
         assert!(!clean.staging_complete());
+    }
+
+    #[test]
+    fn commit_record_has_the_exact_little_endian_wire_image() {
+        let record = FeedCommitRecord {
+            record_magic: FEED_RECORD_MAGIC,
+            abi_version: FEED_ABI_VERSION,
+            record_bytes: FEED_COMMIT_RECORD_BYTES,
+            capability_bits: REQUIRED_CAPABILITY_BITS,
+            mode: FeedMode::FfnGateUpRows as u8,
+            layer: 2,
+            lane_mask: 7,
+            payload_format: FeedPayloadFormat::GgmlQ8_0Block as u8,
+            session_epoch: 0x1122_3344,
+            sequence: 0x5566_7788,
+            position: 0x99AA_BBCC,
+            token: 0xDDEE_FF00,
+            item: 0x1020_3040,
+            stages_per_lane: 0x5060,
+            last_stage_slot: 0x7080,
+            payload_bytes_per_stage: 0x90A0,
+            reserved0: 0,
+            stage_generation: 0xB1B2_B3B4,
+            shape_tag: 0xC1C2_C3C4,
+            model_generation: lfm25::MODEL_GENERATION,
+            reserved1: [0; 4],
+            commit_magic: FEED_COMMIT_MAGIC,
+        };
+        let expected = [
+            0x54, 0x46, 0x44, 0x32, 0x02, 0x00, 0x40, 0x00, 0xFF, 0x01, 0x00, 0x00, 0x0D, 0x02,
+            0x07, 0x03, 0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55, 0xCC, 0xBB, 0xAA, 0x99,
+            0x00, 0xFF, 0xEE, 0xDD, 0x40, 0x30, 0x20, 0x10, 0x60, 0x50, 0x80, 0x70, 0xA0, 0x90,
+            0x00, 0x00, 0xB4, 0xB3, 0xB2, 0xB1, 0xC4, 0xC3, 0xC2, 0xC1, 0x01, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x46, 0x43, 0x4D, 0x32,
+        ];
+
+        assert_eq!(record.encode_le(), expected);
+        assert_eq!(FeedCommitRecord::decode_le(&expected), Ok(record));
+        assert_eq!(
+            FeedCommitRecord::decode_le(&expected[..expected.len() - 1]),
+            Err(FeedError::InvalidEncoding)
+        );
     }
 
     #[test]

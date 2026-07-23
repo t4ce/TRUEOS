@@ -499,6 +499,9 @@ dependencies = [
 [[package]]
 name = "trueos-fpga-abi"
 version = "0.1.0"
+dependencies = [
+ "zerocopy",
+]
 
 [[package]]
 name = "typenum"

@@ -80,7 +80,13 @@ module truega_lfm25_shortconv_token_slot (
     reg [9:0] channel_index;
     reg [4:0] output_block_index;
 
-    reg [271:0] activation_memory [0:31];
+    // Unreset synchronous activation store.  Keep the read in its own
+    // registered process, matching the projection-engine RAM template, so
+    // Gowin can implement the 32x272 payload as parallel BSRAM slices instead
+    // of a wide bank of flip-flops and dynamic muxes.
+    reg [271:0] activation_memory [0:31]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg [4:0] activation_read_index;
     reg [271:0] activation_block;
     // Keep each recurrent layer in its own 1K-deep physical bank.  Flattening
     // this as 10,240x64 makes Gowin select its 16K-deep BSRAM geometry and
@@ -236,6 +242,15 @@ module truega_lfm25_shortconv_token_slot (
         .samples_accepted_o(quant_samples), .q8_block_o(quant_block)
     );
 
+    // The address is prefetched while the serialized triplet GEMV retires the
+    // preceding block.  No row can be accepted until triplet_feeder_ready, so
+    // the registered BSRAM output is stable before the next acceptance edge.
+    // Contents and the output register are intentionally unreset; the complete
+    // 32-block load and controller state are their validity metadata.
+    always @(posedge clk) begin
+        activation_block <= activation_memory[activation_read_index];
+    end
+
     // Registered normal-mode read port.  This is deliberately separate from
     // the write process below: combining an unconditional read with a
     // conditional write makes Gowin infer WRITE_MODE=read-before-write, which
@@ -352,7 +367,7 @@ module truega_lfm25_shortconv_token_slot (
             activation_count <= 6'd0;
             channel_index <= 10'd0;
             output_block_index <= 5'd0;
-            activation_block <= 272'd0;
+            activation_read_index <= 5'd0;
             state_read_channel <= 10'd0;
             layer_state_valid <= 10'd0;
             layer_state_poisoned <= 10'd0;
@@ -423,6 +438,7 @@ module truega_lfm25_shortconv_token_slot (
                             activation_count <= 6'd0;
                             channel_index <= 10'd0;
                             output_block_index <= 5'd0;
+                            activation_read_index <= 5'd0;
                             output_block <= 272'd0;
                             channels_retired_o <= 11'd0;
                             blocks_retired_o <= 6'd0;
@@ -449,12 +465,12 @@ module truega_lfm25_shortconv_token_slot (
                 ST_QUANT_START: begin
                     quant_start <= 1'b1;
                     quant_sample_valid <= 1'b0;
+                    activation_read_index <= 5'd0;
                     state <= ST_ROW_START;
                 end
 
                 ST_ROW_START: begin
                     triplet_start <= 1'b1;
-                    activation_block <= activation_memory[0];
                     state_read_channel <= channel_index;
                     state <= ST_ROW_FEED;
                 end
@@ -467,7 +483,8 @@ module truega_lfm25_shortconv_token_slot (
                             kernel_current <= kernel_current_bf16_i;
                         end
                         if (triplet_block_index != 5'd31)
-                            activation_block <= activation_memory[triplet_block_index + 5'd1];
+                            activation_read_index
+                                <= triplet_block_index + 5'd1;
                         else
                             state <= ST_WAIT_TRIPLET;
                     end
@@ -518,6 +535,7 @@ module truega_lfm25_shortconv_token_slot (
                             state <= ST_WAIT_QUANT;
                         end else begin
                             channel_index <= channel_index + 10'd1;
+                            activation_read_index <= 5'd0;
                             state <= ST_ROW_START;
                         end
                     end

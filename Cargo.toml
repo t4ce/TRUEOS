@@ -45,6 +45,7 @@ half = { version = "2.7.1", default-features = false }
 skrifa = { version = "0.44.0", default-features = false, features = ["libm"] }
 hashbrown = { version = "0.17.0", default-features = false }
 memchr = { version = "2.8.0", default-features = false }
+object = { version = "0.39.1", default-features = false, features = ["read_core", "elf"] }
 regex-automata = { version = "0.4.14", default-features = false, features = ["alloc", "meta", "syntax"] }
 unicode-segmentation = { version = "1", default-features = false }
 unicode-width = { version = "0.2.2", default-features = false }
@@ -114,10 +115,7 @@ fdeflate = { path = "vendor/fdeflate-0.3.7" }
 simd-adler32 = { path = "vendor/simd-adler32-0.3.8" }
 num-traits = { path = "vendor/num-traits-0.2.19" }
 hyper = { path = "vendor/hyper-1.9.0" }
-h3 = { path = "vendor/h3-0.0.8" }
-h3-quinn = { path = "vendor/h3-quinn-0.0.10" }
 base64 = { path = "vendor/base64-0.22.1" }
-bincode = { path = "vendor/bincode-1.3.3" }
 http = { path = "vendor/http-1.4.0" }
 http-body = { path = "vendor/http-body-1.0.1" }
 httpdate = { path = "vendor/httpdate-1.0.3" }
@@ -125,11 +123,7 @@ tower = { path = "vendor/tower-0.5.3" }
 tower-layer = { path = "vendor/tower-layer-0.3.3" }
 tower-service = { path = "vendor/tower-service-0.3.3" }
 want = { path = "vendor/want-0.3.1" }
-ndarray-rand = { path = "vendor/ndarray-rand-0.14.0" }
 rand = { path = "vendor/rand-0.8.6" }
-rand_distr = { path = "vendor/rand_distr-0.4.3" }
-serde_path_to_error = { path = "vendor/serde_path_to_error-0.1.20" }
-tungstenite = { path = "vendor/tungstenite-0.29.0" }
 crc32fast = { path = "vendor/crc32fast-1.5.0" }
 embedded-websocket = { path = "vendor/embedded-websocket-0.9.4" }
 lazy_static = { path = "vendor/lazy_static-1.5.0" }

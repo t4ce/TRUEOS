@@ -1,6 +1,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_sync::watch::Watch;
+use embassy_time::{Duration as EmbassyDuration, with_timeout};
 
 // V-layer readiness flags.
 //
@@ -84,6 +85,13 @@ const READINESS_FLAGS: &[(u32, &str)] = &[
 
 static READY: AtomicU32 = AtomicU32::new(0);
 
+// Readiness waits occur in executor task context across the BSP and AP realms.
+// Keep enough receiver slots for every current readiness-gated service to wait
+// concurrently while retaining a fixed, allocation-free no_std footprint.
+const READINESS_WATCH_RECEIVERS: usize = 64;
+static READINESS_WATCH: Watch<crate::wait::EmbassySpinRawMutex, u32, READINESS_WATCH_RECEIVERS> =
+    Watch::new_with(0);
+
 #[inline]
 pub fn mask() -> u32 {
     READY.load(Ordering::Acquire)
@@ -115,17 +123,29 @@ pub fn set(flags: u32) {
     if combined & APP_VM_READY_REQUIRED == APP_VM_READY_REQUIRED {
         READY.fetch_or(APP_VM_READY, Ordering::AcqRel);
     }
+
+    // Load after all monotonic updates so concurrent setters can never publish
+    // an older snapshot after a newer one.
+    let published = mask();
+    if published != prev {
+        READINESS_WATCH.sender().send(published);
+    }
 }
 
 /// Wait until all required flags are set.
 ///
-/// This is a simple polling waiter to avoid additional dependencies.
 pub async fn wait_for(required: u32) {
-    loop {
-        if is_set(required) {
-            return;
-        }
-        Timer::after(EmbassyDuration::from_millis(25)).await;
+    if is_set(required) {
+        return;
+    }
+
+    let mut receiver = READINESS_WATCH
+        .receiver()
+        .expect("readiness watch receiver capacity exhausted");
+    let mut current = receiver.get().await;
+
+    while current & required != required {
+        current = receiver.changed().await;
     }
 }
 
@@ -133,14 +153,9 @@ pub async fn wait_for(required: u32) {
 ///
 /// Returns `true` if the flags became ready, `false` on timeout.
 pub async fn wait_for_timeout(required: u32, timeout: EmbassyDuration) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if is_set(required) {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        Timer::after(EmbassyDuration::from_millis(25)).await;
+    if is_set(required) {
+        return true;
     }
+
+    with_timeout(timeout, wait_for(required)).await.is_ok()
 }
