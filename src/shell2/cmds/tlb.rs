@@ -18,14 +18,14 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 pub(crate) const DUMP_FILE_PATH: &str = "trueos/pci/tlb.txt";
 
-const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|turbo|ucode|pmu|rapl|thermal|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb [probe]|dump]`";
+const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|turbo|ucode|pmu|rapl|thermal|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|smbios|x2apic|usb [probe]|dump]`";
 const TLB_ACPI_USAGE: &str = "tlb: usage `tlb acpi [sig [index]]`";
 const TLB_AML_USAGE: &str = "tlb: usage `tlb aml [ec|symbol <path>|prefix <path>]`";
 const ACPI_HEXDUMP_MAX_BYTES: usize = 512;
 const ACPI_HEXDUMP_ROW_BYTES: usize = 16;
 const ACPI_AML_DUMP_MAX_BYTES: usize = 1024;
 const TLB_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const TLB_MENU_ROWS: [(&str, &str); 20] = [
+const TLB_MENU_ROWS: [(&str, &str); 21] = [
     ("pci", "List PCI devices"),
     ("pcibar", "List PCI BAR windows"),
     ("mem", "List memory map"),
@@ -43,6 +43,7 @@ const TLB_MENU_ROWS: [(&str, &str); 20] = [
     ("mcfg", "Show MCFG details"),
     ("ssdt", "Show SSDT details"),
     ("uefi", "List UEFI tables"),
+    ("smbios", "Decode complete SMBIOS hardware inventory"),
     ("x2apic", "List x2APIC topology"),
     ("usb", "List USB controllers and ports (`tlb usb probe` for live state)"),
     ("dump", "Write all tables to trueos/pci/tlb.txt"),
@@ -653,6 +654,71 @@ fn append_table_header_details(out: &mut String, bytes: &[u8]) {
     writeln!(out, "  OEM Revision: 0x{:08X}", oem_revision).unwrap();
     writeln!(out, "  Creator ID: {}", creator_id).unwrap();
     writeln!(out, "  Creator Revision: 0x{:08X}", creator_revision).unwrap();
+}
+
+fn append_rsdp_dump(out: &mut String) {
+    const RSDP_V1_BYTES: usize = 20;
+    const RSDP_V2_BYTES: usize = 36;
+
+    let Some(raw) = crate::limine::rsdp_address() else {
+        writeln!(out, "RSDP: bootloader response unavailable").unwrap();
+        return;
+    };
+    let Some(phys) = crate::limine::try_as_phys_addr(raw) else {
+        writeln!(out, "RSDP: raw=0x{:016X} physical translation failed", raw).unwrap();
+        return;
+    };
+    if !crate::limine::memmap_contains_phys_range(phys, RSDP_V2_BYTES) {
+        writeln!(out, "RSDP: raw=0x{:016X} phys=0x{:016X} range validation failed", raw, phys)
+            .unwrap();
+        return;
+    }
+    let Ok(ptr) = crate::pci::mmio::map_mmio_region_exact(phys, RSDP_V2_BYTES) else {
+        writeln!(out, "RSDP: raw=0x{:016X} phys=0x{:016X} map failed", raw, phys).unwrap();
+        return;
+    };
+    let bytes = unsafe { core::slice::from_raw_parts(ptr.as_ptr(), RSDP_V2_BYTES) };
+    let signature_ok = bytes.get(..8) == Some(b"RSD PTR ");
+    let base_checksum_ok = bytes[..RSDP_V1_BYTES]
+        .iter()
+        .copied()
+        .fold(0u8, u8::wrapping_add)
+        == 0;
+    let oem = format_acpi_text_field(&bytes[9..15]);
+    let revision = bytes[15];
+    let rsdt = u32::from_le_bytes(bytes[16..20].try_into().unwrap_or([0; 4]));
+    writeln!(
+        out,
+        "RSDP: raw=0x{:016X} phys=0x{:016X} signature={} revision={} oem={} base_checksum={} rsdt=0x{:08X}",
+        raw,
+        phys,
+        if signature_ok { "ok" } else { "BAD" },
+        revision,
+        oem,
+        if base_checksum_ok { "ok" } else { "BAD" },
+        rsdt
+    )
+    .unwrap();
+    if revision >= 2 {
+        let length = u32::from_le_bytes(bytes[20..24].try_into().unwrap_or([0; 4]));
+        let xsdt = u64::from_le_bytes(bytes[24..32].try_into().unwrap_or([0; 8]));
+        let extended_checksum = if length as usize == RSDP_V2_BYTES {
+            if bytes.iter().copied().fold(0u8, u8::wrapping_add) == 0 {
+                "ok"
+            } else {
+                "BAD"
+            }
+        } else {
+            "unavailable-nonstandard-length"
+        };
+        writeln!(
+            out,
+            "      length={} xsdt=0x{:016X} extended_checksum={}",
+            length, xsdt, extended_checksum
+        )
+        .unwrap();
+    }
+    writeln!(out).unwrap();
 }
 
 fn append_aml_dump(out: &mut String, bytes: &[u8], max_bytes: usize) {
@@ -2312,6 +2378,8 @@ fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
     emit_table_header(io, &summary_cols);
     let st_revision = st.hdr.revision;
     let st_header_size = st.hdr.header_size;
+    let firmware_vendor =
+        crate::efi::firmware_vendor_string().unwrap_or_else(|| String::from("<unavailable>"));
     emit_table_row(io, &summary_cols, &["Signature", "EFI SYSTEM TABLE"]);
     if let Some(resp) = limine_st {
         let limine_ptr = alloc::format!("0x{:016X}", resp.address as u64);
@@ -2322,8 +2390,51 @@ fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
             emit_table_row(io, &summary_cols, &["Mapped ST Phys", &phys_text]);
         }
     }
+    emit_table_row(io, &summary_cols, &["Firmware Vendor", &firmware_vendor]);
+    emit_table_row(
+        io,
+        &summary_cols,
+        &[
+            "Firmware Revision",
+            &alloc::format!("0x{:08X}", st.firmware_revision),
+        ],
+    );
     emit_table_row(io, &summary_cols, &["Revision", &alloc::format!("0x{:08X}", st_revision)]);
     emit_table_row(io, &summary_cols, &["Header Size", &alloc::format!("0x{:X}", st_header_size)]);
+    emit_table_row(io, &summary_cols, &["Stored CRC32", &alloc::format!("0x{:08X}", st.hdr.crc32)]);
+    if let Some(validation) = crate::efi::system_table_validation() {
+        emit_table_row(
+            io,
+            &summary_cols,
+            &[
+                "Computed CRC32",
+                &alloc::format!("0x{:08X}", validation.computed_crc32),
+            ],
+        );
+        emit_table_row(
+            io,
+            &summary_cols,
+            &["CRC Valid", if validation.crc_valid { "yes" } else { "NO" }],
+        );
+        emit_table_row(
+            io,
+            &summary_cols,
+            &[
+                "Validated Stored CRC",
+                &alloc::format!("0x{:08X}", validation.stored_crc32),
+            ],
+        );
+        emit_table_row(
+            io,
+            &summary_cols,
+            &[
+                "System Table Phys",
+                &alloc::format!("0x{:016X}", validation.physical_address),
+            ],
+        );
+    } else {
+        emit_table_row(io, &summary_cols, &["CRC Valid", "unavailable"]);
+    }
     emit_table_row(
         io,
         &summary_cols,
@@ -2370,27 +2481,20 @@ fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
     ];
     emit_table_header(io, &cfg_cols);
 
-    let entries = st.number_of_table_entries;
-    let cfg_addr = st.configuration_table as u64;
-
-    if entries == 0 {
-        line(io, "No UEFI configuration tables reported.");
-        return;
-    }
-
-    let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr) else {
-        line(io, "Cannot translate UEFI configuration table pointer to physical address.");
-        return;
+    let slice = match crate::efi::configuration_tables() {
+        Ok(slice) => slice,
+        Err(crate::efi::EfiConfigurationTableError::NoEntries) => {
+            line(io, "No UEFI configuration tables reported.");
+            return;
+        }
+        Err(error) => {
+            line(
+                io,
+                alloc::format!("UEFI configuration table validation failed: {:?}", error).as_str(),
+            );
+            return;
+        }
     };
-
-    let Ok((cfg_ptr, _)) =
-        crate::pci::mmio::map_limine_slice::<crate::efi::EfiConfigurationTable>(phys, entries)
-    else {
-        line(io, "Failed to map UEFI configuration table entries.");
-        return;
-    };
-
-    let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
     for (index, entry) in slice.iter().enumerate() {
         let idx = alloc::format!("{}", index);
         let name = crate::efi::cfg_guid_name(&entry.vendor_guid).unwrap_or("Unknown");
@@ -2398,6 +2502,12 @@ fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
         let ptr = alloc::format!("0x{:016X}", entry.vendor_table as u64);
         emit_table_row(io, &cfg_cols, &[&idx, &guid, name, &ptr]);
     }
+}
+
+fn cmd_tlb_smbios(io: &'static dyn ShellBackend2) {
+    let mut out = String::new();
+    super::tlb_smbios::append_dump(&mut out);
+    multiline(io, &out);
 }
 
 fn cmd_tlb_x2apic(io: &'static dyn ShellBackend2) {
@@ -2467,8 +2577,311 @@ fn cmd_tlb_x2apic(io: &'static dyn ShellBackend2) {
     }
 }
 
+fn append_microcode_dump(out: &mut String) {
+    let snapshot = crate::microcode::snapshot();
+    writeln!(out, "=== CPU Microcode ===").unwrap();
+    writeln!(out, "intel={}", yes_no(snapshot.intel)).unwrap();
+    writeln!(out, "target={}", snapshot.target_name).unwrap();
+    writeln!(out, "signature=0x{:08X}", snapshot.signature).unwrap();
+    writeln!(out, "family_model_stepping={}", snapshot.fms).unwrap();
+    writeln!(out, "platform_mask=0x{:02X}", snapshot.platform_mask).unwrap();
+    writeln!(out, "current_revision=0x{:08X}", snapshot.current_revision).unwrap();
+    writeln!(out, "selected_revision=0x{:08X}", snapshot.selected_revision).unwrap();
+    writeln!(out, "selected_length=0x{:X}", snapshot.selected_len).unwrap();
+    for source in snapshot.embedded_sources {
+        writeln!(out, "embedded={} length=0x{:X}", source.name, source.len).unwrap();
+    }
+    writeln!(out).unwrap();
+}
+
+fn append_pmu_dump(out: &mut String) {
+    let snapshot = crate::pmu::snapshot();
+    let gpu = crate::intel::gpgpu::activity_snapshot();
+
+    writeln!(out, "=== PMU and GPGPU Activity ===").unwrap();
+    writeln!(out, "capture_policy=read-only (dump does not arm or reconfigure PMU counters)")
+        .unwrap();
+    writeln!(out, "architectural_perfmon={}", yes_no(snapshot.arch_perfmon)).unwrap();
+    writeln!(out, "version={}", snapshot.version).unwrap();
+    writeln!(
+        out,
+        "general_counters={} width_bits={}",
+        snapshot.gp_counter_count, snapshot.gp_counter_bits
+    )
+    .unwrap();
+    writeln!(out, "event_mask_length={}", snapshot.event_mask_len).unwrap();
+    writeln!(out, "unavailable_events=0x{:08X}", snapshot.unavailable_events).unwrap();
+    writeln!(
+        out,
+        "fixed_counters={} width_bits={}",
+        snapshot.fixed_counter_count, snapshot.fixed_counter_bits
+    )
+    .unwrap();
+    writeln!(out, "perf_global_ctrl={}", fmt_opt_u64_hex(snapshot.perf_global_ctrl)).unwrap();
+    writeln!(out, "fixed_ctr_ctrl={}", fmt_opt_u64_hex(snapshot.fixed_ctr_ctrl)).unwrap();
+    writeln!(out, "pmc0={}", fmt_opt_u64_hex(snapshot.pmc0)).unwrap();
+    for (index, value) in snapshot.fixed_ctr.iter().copied().enumerate() {
+        writeln!(out, "fixed_ctr{}={}", index, fmt_opt_u64_hex(value)).unwrap();
+    }
+    writeln!(out, "gpgpu_available={}", yes_no(gpu.available)).unwrap();
+    writeln!(out, "gpgpu_direct_rcs_enabled={}", yes_no(gpu.direct_rcs_enabled)).unwrap();
+    writeln!(out, "gpgpu_submit_seq={}", gpu.submit_seq).unwrap();
+    writeln!(
+        out,
+        "gpgpu_rcs head=0x{:08X} tail=0x{:08X} acthd=0x{:08X}",
+        gpu.ring_head, gpu.ring_tail, gpu.acthd
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "gpgpu_errors ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X}",
+        gpu.ipeir, gpu.ipehr, gpu.eir
+    )
+    .unwrap();
+    writeln!(out).unwrap();
+}
+
+fn append_power_dump(out: &mut String) {
+    writeln!(out, "=== Intel RAPL Energy ===").unwrap();
+    crate::power::rapl::init();
+    out.push_str(&crate::power::rapl::latest_snapshot_text());
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    writeln!(out).unwrap();
+
+    writeln!(out, "=== Intel Thermal Sensors ===").unwrap();
+    crate::power::thermal::init();
+    out.push_str(&crate::power::thermal::latest_snapshot_text());
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    writeln!(out).unwrap();
+
+    writeln!(out, "=== CPU Turbo ===").unwrap();
+    writeln!(
+        out,
+        "capture_policy=local read-only (dump does not submit an all-core mailbox verify)"
+    )
+    .unwrap();
+    writeln!(out, "write_gate_armed={}", yes_no(crate::power::turbo::armed())).unwrap();
+    match crate::power::turbo::local_status() {
+        crate::power::turbo::TurboStatus::Unsupported => {
+            writeln!(out, "local_state=unsupported").unwrap();
+        }
+        crate::power::turbo::TurboStatus::State(state) => {
+            writeln!(out, "local_state={}", turbo_state_text(state)).unwrap();
+        }
+    }
+    writeln!(out).unwrap();
+}
+
+fn append_fixed_acpi_dump(out: &mut String) {
+    writeln!(out, "=== FACP/FADT ===").unwrap();
+    if let Some(tables) = crate::efi::acpi::ensure_tables() {
+        if let Some(fadt) = tables.find_table::<Fadt>() {
+            writeln!(out, "physical_address=0x{:016X}", fadt.physical_start).unwrap();
+            writeln!(out, "{:#?}", unsafe { fadt.virtual_start.as_ref() }).unwrap();
+        } else {
+            writeln!(out, "FACP/FADT not found").unwrap();
+        }
+    } else {
+        writeln!(out, "No ACPI tables found").unwrap();
+    }
+    writeln!(out).unwrap();
+
+    writeln!(out, "=== MADT Interrupt Topology ===").unwrap();
+    let mut madt_found = false;
+    crate::efi::acpi::madt::walk_subtables(|entry| {
+        madt_found = true;
+        writeln!(out, "{:#?}", entry).unwrap();
+    });
+    if !madt_found {
+        writeln!(out, "MADT not found").unwrap();
+    }
+    writeln!(out).unwrap();
+
+    writeln!(out, "=== HPET ===").unwrap();
+    writeln!(
+        out,
+        "capture_policy=firmware decode plus existing runtime only (dump does not initialize or reprogram HPET)"
+    )
+    .unwrap();
+    if let Some(tables) = crate::efi::acpi::ensure_tables() {
+        match acpi::sdt::hpet::HpetInfo::new(tables) {
+            Ok(info) => writeln!(out, "firmware={:#?}", info).unwrap(),
+            Err(error) => writeln!(out, "firmware_error={:?}", error).unwrap(),
+        }
+    } else {
+        writeln!(out, "firmware_error=no ACPI tables").unwrap();
+    }
+    if let Some(hpet) = crate::efi::acpi::hpet::existing() {
+        writeln!(out, "runtime_initialized=yes").unwrap();
+        writeln!(out, "runtime={:#?}", hpet).unwrap();
+        writeln!(out, "runtime_frequency_hz={}", hpet.frequency_hz()).unwrap();
+        writeln!(out, "runtime_main_counter=0x{:016X}", hpet.main_counter()).unwrap();
+    } else {
+        writeln!(out, "runtime_initialized=no").unwrap();
+    }
+    writeln!(out).unwrap();
+}
+
+fn mac_state(mac: [u8; 6]) -> &'static str {
+    if mac == [0; 6] {
+        "INVALID-ZERO"
+    } else if mac == [0xFF; 6] {
+        "INVALID-BROADCAST"
+    } else if mac[0] & 1 != 0 {
+        "INVALID-MULTICAST"
+    } else if mac[0] & 2 != 0 {
+        "valid-local"
+    } else {
+        "valid-global"
+    }
+}
+
+fn format_mac(mac: [u8; 6]) -> String {
+    alloc::format!(
+        "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        mac[0],
+        mac[1],
+        mac[2],
+        mac[3],
+        mac[4],
+        mac[5]
+    )
+}
+
+fn append_nic_driver_snapshots(out: &mut String) {
+    writeln!(out, "=== NIC Driver Snapshots ===").unwrap();
+
+    if let Some(snapshot) = crate::net::i226::primary_snapshot() {
+        writeln!(
+            out,
+            "i226 bdf={:02X}:{:02X}.{} vid={:04X} did={:04X} rev={:02X} class={:02X}/{:02X}/{:02X} passive={}",
+            snapshot.bus,
+            snapshot.slot,
+            snapshot.function,
+            snapshot.vendor,
+            snapshot.device,
+            snapshot.revision,
+            snapshot.class,
+            snapshot.subclass,
+            snapshot.prog_if,
+            yes_no(snapshot.passive)
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "  mac={} state={} ctrl=0x{:08X} status=0x{:08X} eecd=0x{:08X}",
+            format_mac(snapshot.mac),
+            mac_state(snapshot.mac),
+            snapshot.ctrl,
+            snapshot.status,
+            snapshot.eecd
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "  link={} full_duplex={} speed_mbps={} icr=0x{:08X} ims=0x{:08X} rctl=0x{:08X} tctl=0x{:08X}",
+            yes_no(snapshot.raw_link_up()),
+            yes_no(snapshot.raw_full_duplex()),
+            snapshot.raw_speed_mbps(),
+            snapshot.icr,
+            snapshot.ims,
+            snapshot.rctl,
+            snapshot.tctl
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "  pci_command=0x{:04X}->0x{:04X} pci_status=0x{:04X} bar{}=0x{:016X} bar_size=0x{:X} map_size=0x{:X}",
+            snapshot.pci_command_before,
+            snapshot.pci_command_after,
+            snapshot.pci_status,
+            snapshot.bar_index,
+            snapshot.bar_phys,
+            snapshot.bar_size,
+            snapshot.map_size
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "  capabilities=0x{:08X} ({}) msix_vectors={}",
+            snapshot.cap_mask,
+            snapshot.caps_text(),
+            snapshot.msix_vectors
+        )
+        .unwrap();
+    } else {
+        writeln!(out, "i226 snapshot unavailable").unwrap();
+    }
+
+    let r8125 = crate::net::r8125::snapshots();
+    if r8125.is_empty() {
+        writeln!(out, "r8125 snapshots unavailable").unwrap();
+    } else {
+        for snapshot in r8125 {
+            writeln!(
+                out,
+                "r8125 bdf={:02X}:{:02X}.{} rev={:02X} subsys={:04X}:{:04X} xid={:03X} family={} firmware_hint={}",
+                snapshot.bus,
+                snapshot.slot,
+                snapshot.function,
+                snapshot.revision,
+                snapshot.subsystem_vendor,
+                snapshot.subsystem_device,
+                snapshot.xid,
+                snapshot.family,
+                snapshot.firmware_hint
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "  mac_after_reset={} state={} initial_tcr=0x{:08X} rcr=0x{:08X} mar=0x{:016X}",
+                format_mac(snapshot.mac_after_reset),
+                mac_state(snapshot.mac_after_reset),
+                snapshot.initial_tcr,
+                snapshot.rcr,
+                snapshot.multicast_hash
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "  accept_own={} accept_broadcast={} accept_multicast={} promiscuous={} cplus=0x{:04X}",
+                yes_no(snapshot.accepts_own_mac()),
+                yes_no(snapshot.accepts_broadcast()),
+                yes_no(snapshot.accepts_multicast()),
+                yes_no(snapshot.promiscuous()),
+                snapshot.cplus
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "  mcu=0x{:02X}->0x{:02X} config3=0x{:02X} config5=0x{:02X}",
+                snapshot.mcu_before, snapshot.mcu_after, snapshot.config3, snapshot.config5
+            )
+            .unwrap();
+        }
+    }
+    writeln!(out).unwrap();
+}
+
 pub(crate) async fn build_dump_text() -> String {
     let mut out = String::new();
+
+    writeln!(out, "TRUEOS TLB UNDER-THE-HOOD DUMP v2").unwrap();
+    writeln!(
+        out,
+        "Contains live hardware identifiers, firmware serials, UUIDs, addresses, and raw table data."
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "Capture is observational: invasive PMU, turbo, and HPET setup paths are not triggered."
+    )
+    .unwrap();
+    writeln!(out).unwrap();
 
     writeln!(out, "=== Memory Map ===").unwrap();
     let memmap = crate::limine::memmap_entries().unwrap_or(&[]);
@@ -2496,8 +2909,14 @@ pub(crate) async fn build_dump_text() -> String {
         .await
         .ok()
         .flatten();
-    writeln!(out, "{:30}  {:10}  {:6}  {:6}", "Name", "Address", "VID", "PID").unwrap();
-    writeln!(out, "{:-<30}  {:-<10}  {:-<6}  {:-<6}", "", "", "", "").unwrap();
+    writeln!(
+        out,
+        "{:30}  {:10}  {:6}  {:6}  {:4}  {:16}",
+        "Name", "Address", "VID", "PID", "Rev", "Chip/XID"
+    )
+    .unwrap();
+    writeln!(out, "{:-<30}  {:-<10}  {:-<6}  {:-<6}  {:-<4}  {:-<16}", "", "", "", "", "", "")
+        .unwrap();
     for row in pci_device_rows(db.as_deref()) {
         let name_disp = if row.name.chars().count() > 30 {
             let mut s: String = row.name.chars().take(29).collect();
@@ -2506,7 +2925,12 @@ pub(crate) async fn build_dump_text() -> String {
         } else {
             row.name
         };
-        writeln!(out, "{:30}  {:10}  {:6}  {:6}", name_disp, row.addr, row.vid, row.pid).unwrap();
+        writeln!(
+            out,
+            "{:30}  {:10}  {:6}  {:6}  {:4}  {:16}",
+            name_disp, row.addr, row.vid, row.pid, row.revision, row.chip
+        )
+        .unwrap();
     }
     writeln!(out).unwrap();
 
@@ -2522,8 +2946,9 @@ pub(crate) async fn build_dump_text() -> String {
     if !crate::smp::is_init() {
         writeln!(out, "SMP not initialized").unwrap();
     } else {
-        writeln!(out, "{:6}  {:6}  {:8}  {:10}", "Slot", "APIC", "Role", "State").unwrap();
-        writeln!(out, "{:-<6}  {:-<6}  {:-<8}  {:-<10}", "", "", "", "").unwrap();
+        writeln!(out, "{:6}  {:10}  {:8}  {:10}  {:8}", "Slot", "APIC", "Role", "State", "Seq")
+            .unwrap();
+        writeln!(out, "{:-<6}  {:-<10}  {:-<8}  {:-<10}  {:-<8}", "", "", "", "", "").unwrap();
         let count = crate::smp::cpu_count();
         let slots = crate::percpu::cpu_slots();
         for slot in 0..count {
@@ -2541,16 +2966,36 @@ pub(crate) async fn build_dump_text() -> String {
                     crate::smp::STATE_DONE => "Done",
                     _ => "Unknown",
                 };
-                writeln!(out, "{:6}  {:<6}  {:<8}  {:<10}", slot, lapic_id, role, state).unwrap();
+                writeln!(
+                    out,
+                    "{:6}  0x{:<8X}  {:<8}  {:<10}  {:8}",
+                    slot, lapic_id, role, state, info.seq
+                )
+                .unwrap();
             }
         }
     }
     writeln!(out).unwrap();
 
+    append_microcode_dump(&mut out);
+    append_pmu_dump(&mut out);
+    append_power_dump(&mut out);
+
     writeln!(out, "=== ACPI Tables ===").unwrap();
+    append_rsdp_dump(&mut out);
     if let Some(tables) = crate::efi::acpi::ensure_tables() {
-        writeln!(out, "{:10}  {:18}  {:10}", "Signature", "Address", "Length").unwrap();
-        writeln!(out, "{:-<10}  {:-<18}  {:-<10}", "", "", "").unwrap();
+        writeln!(
+            out,
+            "{:8}  {:18}  {:10}  {:4}  {:8}  {:8}  {:10}",
+            "Sig", "Address", "Length", "Rev", "Checksum", "OEM", "Table ID"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "{:-<8}  {:-<18}  {:-<10}  {:-<4}  {:-<8}  {:-<8}  {:-<10}",
+            "", "", "", "", "", "", ""
+        )
+        .unwrap();
         let mut total_bytes: u64 = 0;
         let mut ssdt_count: usize = 0;
         let mut largest_sig = String::new();
@@ -2575,7 +3020,49 @@ pub(crate) async fn build_dump_text() -> String {
             } else {
                 sig_stats.push((sig.to_string(), 1, length as u64));
             }
-            writeln!(out, "{:10}  0x{:016X}  0x{:X}", sig, phys, length).unwrap();
+            if let Some(bytes) = crate::efi::acpi::map_table_bytes(phys) {
+                let checksum_ok = bytes.iter().copied().fold(0u8, u8::wrapping_add) == 0;
+                let oem = bytes
+                    .get(10..16)
+                    .map(format_acpi_text_field)
+                    .unwrap_or_else(|| String::from("-"));
+                let table_id = bytes
+                    .get(16..24)
+                    .map(format_acpi_text_field)
+                    .unwrap_or_else(|| String::from("-"));
+                writeln!(
+                    out,
+                    "{:8}  0x{:016X}  0x{:<8X}  {:4}  {:8}  {:8}  {:10}",
+                    sig,
+                    phys,
+                    length,
+                    hdr.revision,
+                    if checksum_ok { "ok" } else { "BAD" },
+                    oem,
+                    table_id
+                )
+                .unwrap();
+                if bytes.len() >= crate::efi::acpi::SDT_HEADER_LEN {
+                    let oem_revision =
+                        u32::from_le_bytes(bytes[24..28].try_into().unwrap_or([0; 4]));
+                    let creator = format_acpi_text_field(&bytes[28..32]);
+                    let creator_revision =
+                        u32::from_le_bytes(bytes[32..36].try_into().unwrap_or([0; 4]));
+                    writeln!(
+                        out,
+                        "          identity oem_revision=0x{:08X} creator={} creator_revision=0x{:08X}",
+                        oem_revision, creator, creator_revision
+                    )
+                    .unwrap();
+                }
+            } else {
+                writeln!(
+                    out,
+                    "{:8}  0x{:016X}  0x{:<8X}  {:4}  {:8}  {:8}  {:10}",
+                    sig, phys, length, hdr.revision, "unmapped", "-", "-"
+                )
+                .unwrap();
+            }
         }
         writeln!(out).unwrap();
         writeln!(
@@ -2608,6 +3095,8 @@ pub(crate) async fn build_dump_text() -> String {
         writeln!(out, "No tables found").unwrap();
     }
     writeln!(out).unwrap();
+
+    append_fixed_acpi_dump(&mut out);
 
     writeln!(out, "=== ACPI AML ===").unwrap();
     append_ssdt_dump_text(&mut out);
@@ -2659,25 +3148,43 @@ pub(crate) async fn build_dump_text() -> String {
     writeln!(out, "=== UEFI Tables ===").unwrap();
     if let Some(st) = crate::efi::system_table() {
         let st_revision = st.hdr.revision;
+        let firmware_vendor =
+            crate::efi::firmware_vendor_string().unwrap_or_else(|| String::from("<unavailable>"));
         writeln!(out, "Signature: EFI SYSTEM TABLE").unwrap();
+        writeln!(out, "Firmware vendor: {}", firmware_vendor).unwrap();
+        writeln!(out, "Firmware revision: 0x{:08X}", st.firmware_revision).unwrap();
         writeln!(out, "Revision: 0x{:08X}", st_revision).unwrap();
+        writeln!(out, "Header size: 0x{:X}", st.hdr.header_size).unwrap();
+        writeln!(out, "Stored CRC32: 0x{:08X}", st.hdr.crc32).unwrap();
+        if let Some(validation) = crate::efi::system_table_validation() {
+            writeln!(
+                out,
+                "Validation: phys=0x{:016X} header_bytes=0x{:X} computed_crc32=0x{:08X} crc_valid={}",
+                validation.physical_address,
+                validation.header_size,
+                validation.computed_crc32,
+                if validation.crc_valid { "yes" } else { "NO" }
+            )
+            .unwrap();
+            writeln!(out, "Validation stored CRC32: 0x{:08X}", validation.stored_crc32).unwrap();
+        } else {
+            writeln!(out, "Validation: unavailable").unwrap();
+        }
         writeln!(out, "Runtime Services: 0x{:016X}", st.runtime_services as u64).unwrap();
         writeln!(out, "Boot Services: 0x{:016X}", st.boot_services as u64).unwrap();
+        writeln!(
+            out,
+            "Configuration table: raw=0x{:016X} entries={}",
+            st.configuration_table as u64, st.number_of_table_entries
+        )
+        .unwrap();
         writeln!(out).unwrap();
 
-        let entries = st.number_of_table_entries;
-        let cfg_addr = st.configuration_table as u64;
         writeln!(out, "{:6}  {:40}  {:24}  {:18}", "Index", "GUID", "Name", "Table Ptr").unwrap();
         writeln!(out, "{:-<6}  {:-<40}  {:-<24}  {:-<18}", "", "", "", "").unwrap();
 
-        if entries == 0 {
-            writeln!(out, "No UEFI configuration tables reported").unwrap();
-        } else if let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr) {
-            if let Ok((cfg_ptr, _)) = crate::pci::mmio::map_limine_slice::<
-                crate::efi::EfiConfigurationTable,
-            >(phys, entries)
-            {
-                let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
+        match crate::efi::configuration_tables() {
+            Ok(slice) => {
                 for (index, entry) in slice.iter().enumerate() {
                     let name = crate::efi::cfg_guid_name(&entry.vendor_guid).unwrap_or("Unknown");
                     writeln!(
@@ -2690,17 +3197,20 @@ pub(crate) async fn build_dump_text() -> String {
                     )
                     .unwrap();
                 }
-            } else {
-                writeln!(out, "Failed to map UEFI configuration tables").unwrap();
             }
-        } else {
-            writeln!(out, "Cannot translate UEFI configuration table pointer to physical address")
-                .unwrap();
+            Err(crate::efi::EfiConfigurationTableError::NoEntries) => {
+                writeln!(out, "No UEFI configuration tables reported").unwrap();
+            }
+            Err(error) => {
+                writeln!(out, "UEFI configuration table validation failed: {:?}", error).unwrap();
+            }
         }
     } else {
         writeln!(out, "No UEFI system table found").unwrap();
     }
     writeln!(out).unwrap();
+
+    super::tlb_smbios::append_dump(&mut out);
 
     writeln!(out, "=== x2APIC Topology ===").unwrap();
     let topo = crate::x2apic::detect_x2apic_topology();
@@ -2731,30 +3241,38 @@ pub(crate) async fn build_dump_text() -> String {
     if net_count == 0 {
         writeln!(out, "No network interfaces found").unwrap();
     } else {
-        writeln!(out, "{:4}  {:20}  {:17}  {:10}", "Idx", "Name", "MAC Address", "Primary")
-            .unwrap();
-        writeln!(out, "{:-<4}  {:-<20}  {:-<17}  {:-<10}", "", "", "", "").unwrap();
+        writeln!(
+            out,
+            "{:4}  {:20}  {:17}  {:18}  {:10}",
+            "Idx", "Name", "MAC Address", "MAC State", "Primary"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "{:-<4}  {:-<20}  {:-<17}  {:-<18}  {:-<10}",
+            "", "", "", "", ""
+        )
+        .unwrap();
         let primary = crate::net::primary_device_index();
         for index in 0..net_count {
             let name = crate::net::device_name_at(index).unwrap_or("Unknown");
-            let mac = if let Some(addr) = crate::net::mac_address_at(index) {
-                alloc::format!(
-                    "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                    addr[0],
-                    addr[1],
-                    addr[2],
-                    addr[3],
-                    addr[4],
-                    addr[5]
-                )
+            let (mac, state) = if let Some(addr) = crate::net::mac_address_at(index) {
+                (format_mac(addr), mac_state(addr))
             } else {
-                String::from("??:??:??:??:??:??")
+                (String::from("??:??:??:??:??:??"), "unavailable")
             };
             let primary_mark = if index == primary { "*" } else { "" };
-            writeln!(out, "{:<4}  {:<20}  {:<17}  {:<10}", index, name, mac, primary_mark).unwrap();
+            writeln!(
+                out,
+                "{:<4}  {:<20}  {:<17}  {:<18}  {:<10}",
+                index, name, mac, state, primary_mark
+            )
+            .unwrap();
         }
     }
     writeln!(out).unwrap();
+
+    append_nic_driver_snapshots(&mut out);
 
     writeln!(out, "=== Block Devices ===").unwrap();
     let devices: alloc::vec::Vec<_> = crate::disc::block::devices()
@@ -3772,6 +4290,7 @@ pub(crate) fn try_parse(
         Some("mcfg") if ensure_no_args(io, args, "tlb: usage `tlb mcfg`") => cmd_tlb_mcfg(io),
         Some("ssdt") if ensure_no_args(io, args, "tlb: usage `tlb ssdt`") => cmd_tlb_ssdt(io),
         Some("uefi") if ensure_no_args(io, args, "tlb: usage `tlb uefi`") => cmd_tlb_uefi(io),
+        Some("smbios") if ensure_no_args(io, args, "tlb: usage `tlb smbios`") => cmd_tlb_smbios(io),
         Some("x2apic") if ensure_no_args(io, args, "tlb: usage `tlb x2apic`") => cmd_tlb_x2apic(io),
         Some("usb") if ensure_no_args(io, args, "tlb: usage `tlb usb`") => cmd_tlb_usb(io),
         Some("dump") if ensure_no_args(io, args, "tlb: usage `tlb dump`") => {

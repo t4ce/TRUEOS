@@ -134,7 +134,7 @@ LEGACY_OPENCL_C_ISO_PATH := bld/trueos-legacy-opencl-c.iso
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel kernel-cpp-aot kernel-legacy-opencl-c intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-spirit-cpp intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine baremetal-reboot-log net-shell-console iso iso-cpp-aot iso-legacy-opencl-c provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: images empty-libs kernel kernel-cpp-aot kernel-legacy-opencl-c cpp intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine baremetal-reboot-log net-shell-console iso iso-cpp-aot iso-legacy-opencl-c provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -169,6 +169,17 @@ intel-gpu-bake-audio-visualizer-cpp:
 
 intel-gpu-bake-spirit-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_spirit.sh"
+
+intel-gpu-bake-cpp-artifacts:
+	$(MAKE) --no-print-directory intel-gpu-bake-copy-cpp
+	$(MAKE) --no-print-directory intel-gpu-bake-cpp-demo
+	$(MAKE) --no-print-directory intel-gpu-bake-audio-visualizer-cpp
+	$(MAKE) --no-print-directory intel-gpu-bake-spirit-cpp
+
+intel-gpu-refresh-cpp-artifacts: intel-gpu-bake-cpp-artifacts
+	$(MAKE) --no-print-directory intel-gpu-verify-cpp-artifacts
+
+cpp: intel-gpu-refresh-cpp-artifacts
 
 intel-gpu-verify-cpp-artifacts:
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify.py" --artifact-dir "$(INTEL_GPU_CPP_ARTIFACT_DIR)"

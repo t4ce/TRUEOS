@@ -51,6 +51,7 @@ pub(crate) enum KnownKernelRole {
     Chart,
     Pixel,
     CppDemo,
+    CppAudio,
     Font,
 }
 
@@ -71,6 +72,8 @@ const CHART_CROSS_THREAD_BYTES: u32 = 128;
 const PIXEL_PLASMA_CROSS_THREAD_BYTES: u32 = 128;
 const CPP_DEMO_CROSS_THREAD_BYTES: u32 =
     gpgpu::CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
+const CPP_AUDIO_VISUALIZER_CROSS_THREAD_BYTES: u32 =
+    gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
 const FONT_OUTLINE_MESH_CROSS_THREAD_BYTES: u32 = 128;
 const FONT_OUTLINE_COVERAGE_R8_CROSS_THREAD_BYTES: u32 = 128;
 const GENERIC_PER_THREAD_BYTES: u32 = 96;
@@ -538,6 +541,34 @@ const CPP_DEMO_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     consumers: &["shell2:cpp", "ui4::gpgpu_preview_consumer_service_task"],
 };
 
+const CPP_AUDIO_VISUALIZER_ARGS: &[KernelCallArg<'_>] = &[
+    ro_buf!(0, "audio_snapshot", "__global const uint*", 0, 12),
+    rw_buf!(1, "dst_rgba", "__global uint*", 1, 14),
+    u32_arg!(2, "dst_pitch_bytes", 16),
+    u32_arg!(3, "dst_width", 17),
+    u32_arg!(4, "dst_height", 18),
+    f32_arg!(5, "time_seconds", 19),
+    u32_arg!(6, "frame", 20),
+    u32_arg!(7, "flags", 21),
+];
+const CPP_AUDIO_VISUALIZER_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
+    name: gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME,
+    source_path: gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_SOURCE_PATH,
+    producer: IGC,
+    target: ADLS,
+    entry_text_offset_bytes: gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset,
+    cross_thread_bytes: CPP_AUDIO_VISUALIZER_CROSS_THREAD_BYTES,
+    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
+    binding_count: 2,
+    args: CPP_AUDIO_VISUALIZER_ARGS,
+    descriptor_layouts: NO_DESCS,
+    launch: KernelLaunchContract::nd_range_2d(Some(2)),
+    consumers: &[
+        "shell2:cpp audio",
+        "ui4::gpgpu_preview_consumer_service_task",
+    ],
+};
+
 const FONT_OUTLINE_MESH_ARGS: &[KernelCallArg<'_>] = &[
     ro_buf!(0, "outline_ops", "__global const uint*", 0, 12),
     rw_buf!(1, "output", "__global uint*", 1, 14),
@@ -703,6 +734,14 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         upload: gpgpu::upload_cpp_demo_rgba8_kernel,
         status: gpgpu::cpp_demo_rgba8_upload_status,
         role: KnownKernelRole::CppDemo,
+    },
+    KnownAotKernel {
+        name: gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME,
+        artifact: &gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT,
+        contract: &CPP_AUDIO_VISUALIZER_CONTRACT,
+        upload: gpgpu::upload_cpp_audio_visualizer_rgba8_kernel,
+        status: gpgpu::cpp_audio_visualizer_rgba8_upload_status,
+        role: KnownKernelRole::CppAudio,
     },
     KnownAotKernel {
         name: gpgpu::FONT_OUTLINE_MESH_KERNEL_NAME,

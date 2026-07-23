@@ -8,6 +8,8 @@ pub type BootloaderPerformanceResponse = request::BootloaderPerformanceResponse;
 pub type BootloaderPerformanceRequest = request::BootloaderPerformanceRequest;
 pub type EfiSystemTableResponse = request::EfiResponse;
 pub type EfiSystemTableRequest = request::EfiRequest;
+pub type SmbiosResponse = request::SmbiosResponse;
+pub type SmbiosRequest = request::SmbiosRequest;
 
 const UNSET_U64: u64 = u64::MAX;
 
@@ -68,6 +70,10 @@ pub static RSDP_REQUEST: request::RsdpRequest = request::RsdpRequest::new();
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 pub static EFI_SYSTEM_TABLE_REQUEST: EfiSystemTableRequest = EfiSystemTableRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+pub static SMBIOS_REQUEST: SmbiosRequest = SmbiosRequest::new();
 
 pub fn hhdm_offset() -> Option<u64> {
     let resp = HHDM_REQUEST.response()?;
@@ -207,6 +213,20 @@ pub fn efi_system_table_address() -> Option<u64> {
     Some(resp.address as u64)
 }
 
+pub fn smbios_response() -> Option<&'static SmbiosResponse> {
+    SMBIOS_REQUEST.response()
+}
+
+/// Return the bootloader-provided SMBIOS 3.x and 2.x entry-point addresses.
+///
+/// Limine may report either address as zero when that entry-point format is not
+/// available. Callers must still validate the entry-point anchor, length and
+/// checksum before trusting the structure-table address it contains.
+pub fn smbios_entry_point_addresses() -> Option<(u64, u64)> {
+    let resp = smbios_response()?;
+    Some((resp.entry_64 as u64, resp.entry_32 as u64))
+}
+
 /// Returns true if `phys` lies within any Limine-reported memory map range.
 ///
 /// Note: This is a containment check only. It does not imply the region is safe to keep
@@ -223,6 +243,27 @@ pub fn memmap_contains_phys(phys: u64) -> bool {
         }
     }
     false
+}
+
+/// Returns true when the complete non-empty physical range is contained in one
+/// Limine memory-map entry.
+pub fn memmap_contains_phys_range(phys: u64, byte_len: usize) -> bool {
+    if byte_len == 0 {
+        return false;
+    }
+    let Ok(byte_len) = u64::try_from(byte_len) else {
+        return false;
+    };
+    let Some(last) = phys.checked_add(byte_len - 1) else {
+        return false;
+    };
+    let Some(entries) = memmap_entries() else {
+        return false;
+    };
+    entries.iter().any(|entry| {
+        let end = entry.base.saturating_add(entry.length);
+        phys >= entry.base && last < end
+    })
 }
 
 /// Try to interpret an address as something that can be treated as physical memory.

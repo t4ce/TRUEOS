@@ -1,10 +1,11 @@
 # TRUEOS Intel GPU artifact bakery
 
-The compiler bakery is an **opt-in host tool**. It is not called by `build.rs`
-or an ordinary Cargo build. The normal Make lane runs only its compiler-free
-artifact verifier. TRUEOS embeds the resulting SPIR-V, Intel Zebin, and compact
-generated Rust contract; Clang, `llvm-spirv`, `ocloc`, IGC, and C++ are absent
-at runtime.
+The compiler bakery is an **opt-in host tool**. Run `make cpp` to refresh every
+C++ artifact and perform the publication audit. Normal `make iso`, `make run`,
+and kernel builds consume the checked-in artifacts and run only the
+compiler-free verifier. TRUEOS embeds the resulting SPIR-V, Intel Zebin, and
+compact generated Rust contract; Clang, `llvm-spirv`, `ocloc`, IGC, and C++ are
+absent at runtime.
 
 The C++ path is:
 

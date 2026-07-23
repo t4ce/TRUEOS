@@ -1,9 +1,12 @@
 use crate::pci::mmio;
 
 use crate::limine;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 pub mod acpi;
+pub mod smbios;
 // pub mod acpi_uefi;  asdasd
 
 const EFI_SYSTEM_TABLE_SIGNATURE: u64 = 0x5453_5953_2049_4249; // "IBI SYST"
@@ -98,6 +101,25 @@ pub struct EfiConfigurationTable {
     pub vendor_table: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct EfiSystemTableValidation {
+    pub physical_address: u64,
+    pub header_size: usize,
+    pub stored_crc32: u32,
+    pub computed_crc32: u32,
+    pub crc_valid: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EfiConfigurationTableError {
+    SystemTableUnavailable,
+    NoEntries,
+    TooManyEntries,
+    AddressInvalid,
+    RangeInvalid,
+    MapFailed,
+}
+
 pub fn cfg_guid_name(guid: &EfiGuid) -> Option<&'static str> {
     // Common config-table GUIDs.
     const ACPI_20: EfiGuid =
@@ -130,6 +152,12 @@ pub fn cfg_guid_name(guid: &EfiGuid) -> Option<&'static str> {
         EfiGuid::new(0x060cc026, 0x4c0d, 0x4dda, [0x8f, 0x41, 0x59, 0x5f, 0xef, 0x00, 0xa5, 0x02]);
     const MEMORY_ATTRIBUTES_TABLE: EfiGuid =
         EfiGuid::new(0xdcfa911d, 0x26eb, 0x469f, [0xa2, 0x20, 0x38, 0xb7, 0xdc, 0x46, 0x12, 0x20]);
+    const SYSTEM_RESOURCE_TABLE: EfiGuid =
+        EfiGuid::new(0xb122a263, 0x3661, 0x4f68, [0x99, 0x29, 0x78, 0xf8, 0xb0, 0xd6, 0x21, 0x80]);
+    const PROPERTIES_TABLE: EfiGuid =
+        EfiGuid::new(0x880aaca3, 0x4adc, 0x4a04, [0x90, 0x79, 0xb7, 0x47, 0x34, 0x08, 0x25, 0xe5]);
+    const TPM_FINAL_EVENTS_TABLE: EfiGuid =
+        EfiGuid::new(0x1e2ed096, 0x30e2, 0x4254, [0xbd, 0x89, 0x86, 0x3b, 0xbe, 0xf8, 0x23, 0x25]);
 
     if guid.data1 == ACPI_20.data1
         && guid.data2 == ACPI_20.data2
@@ -230,6 +258,27 @@ pub fn cfg_guid_name(guid: &EfiGuid) -> Option<&'static str> {
     {
         return Some("Memory attributes table");
     }
+    if guid.data1 == SYSTEM_RESOURCE_TABLE.data1
+        && guid.data2 == SYSTEM_RESOURCE_TABLE.data2
+        && guid.data3 == SYSTEM_RESOURCE_TABLE.data3
+        && guid.data4 == SYSTEM_RESOURCE_TABLE.data4
+    {
+        return Some("EFI system resource table");
+    }
+    if guid.data1 == PROPERTIES_TABLE.data1
+        && guid.data2 == PROPERTIES_TABLE.data2
+        && guid.data3 == PROPERTIES_TABLE.data3
+        && guid.data4 == PROPERTIES_TABLE.data4
+    {
+        return Some("EFI properties table");
+    }
+    if guid.data1 == TPM_FINAL_EVENTS_TABLE.data1
+        && guid.data2 == TPM_FINAL_EVENTS_TABLE.data2
+        && guid.data3 == TPM_FINAL_EVENTS_TABLE.data3
+        && guid.data4 == TPM_FINAL_EVENTS_TABLE.data4
+    {
+        return Some("TPM final events table");
+    }
 
     None
 }
@@ -240,12 +289,101 @@ pub fn system_table() -> Option<&'static EfiSystemTable> {
         _ => return None,
     };
     let phys = limine::try_as_phys_addr(phys_or_virt)?;
+    if !limine::memmap_contains_phys_range(phys, core::mem::size_of::<EfiSystemTable>()) {
+        return None;
+    }
     let mapped = mmio::map_limine_struct::<EfiSystemTable>(phys).ok()?;
     let st = unsafe { mapped.as_ref() };
     if st.hdr.signature != EFI_SYSTEM_TABLE_SIGNATURE {
         return None;
     }
     Some(st)
+}
+
+/// Validate the complete EFI system-table header, including its CRC32.
+pub fn system_table_validation() -> Option<EfiSystemTableValidation> {
+    const MAX_HEADER_BYTES: usize = 4096;
+
+    let raw = limine::efi_system_table_address()?;
+    let physical_address = limine::try_as_phys_addr(raw)?;
+    if !limine::memmap_contains_phys_range(
+        physical_address,
+        core::mem::size_of::<EfiTableHeader>(),
+    ) {
+        return None;
+    }
+    let header_ptr = mmio::map_limine_struct::<EfiTableHeader>(physical_address).ok()?;
+    let header = unsafe { header_ptr.as_ref() };
+    if header.signature != EFI_SYSTEM_TABLE_SIGNATURE {
+        return None;
+    }
+    let header_size = header.header_size as usize;
+    if header_size < core::mem::size_of::<EfiSystemTable>() || header_size > MAX_HEADER_BYTES {
+        return None;
+    }
+    if !limine::memmap_contains_phys_range(physical_address, header_size) {
+        return None;
+    }
+    let ptr = mmio::map_mmio_region_exact(physical_address, header_size).ok()?;
+    let bytes = unsafe { core::slice::from_raw_parts(ptr.as_ptr(), header_size) };
+    let mut crc_bytes = Vec::from(bytes);
+    crc_bytes.get_mut(16..20)?.fill(0);
+    let computed_crc32 = crc32fast::hash(&crc_bytes);
+    Some(EfiSystemTableValidation {
+        physical_address,
+        header_size,
+        stored_crc32: header.crc32,
+        computed_crc32,
+        crc_valid: computed_crc32 == header.crc32,
+    })
+}
+
+/// Decode the firmware-vendor UTF-16 string with a hard upper bound.
+pub fn firmware_vendor_string() -> Option<String> {
+    const MAX_VENDOR_CODE_UNITS: usize = 256;
+
+    let st = system_table()?;
+    let raw = st.firmware_vendor as u64;
+    if raw == 0 {
+        return None;
+    }
+    let phys = limine::try_as_phys_addr(raw)?;
+    let byte_len = MAX_VENDOR_CODE_UNITS * core::mem::size_of::<u16>();
+    if !limine::memmap_contains_phys_range(phys, byte_len) {
+        return None;
+    }
+    let ptr = mmio::map_mmio_region_exact(phys, byte_len).ok()?;
+    let units =
+        unsafe { core::slice::from_raw_parts(ptr.as_ptr() as *const u16, MAX_VENDOR_CODE_UNITS) };
+    let len = units.iter().position(|unit| *unit == 0)?;
+    Some(String::from_utf16_lossy(&units[..len]))
+}
+
+/// Return the EFI configuration-table array after validating its count and
+/// complete physical range.
+pub fn configuration_tables() -> Result<&'static [EfiConfigurationTable], EfiConfigurationTableError>
+{
+    const MAX_CONFIGURATION_TABLES: usize = 4096;
+
+    let st = system_table().ok_or(EfiConfigurationTableError::SystemTableUnavailable)?;
+    let count = st.number_of_table_entries;
+    if count == 0 {
+        return Err(EfiConfigurationTableError::NoEntries);
+    }
+    if count > MAX_CONFIGURATION_TABLES {
+        return Err(EfiConfigurationTableError::TooManyEntries);
+    }
+    let raw = st.configuration_table as u64;
+    let phys = limine::try_as_phys_addr(raw).ok_or(EfiConfigurationTableError::AddressInvalid)?;
+    let byte_len = core::mem::size_of::<EfiConfigurationTable>()
+        .checked_mul(count)
+        .ok_or(EfiConfigurationTableError::TooManyEntries)?;
+    if !limine::memmap_contains_phys_range(phys, byte_len) {
+        return Err(EfiConfigurationTableError::RangeInvalid);
+    }
+    let (ptr, _) = mmio::map_limine_slice::<EfiConfigurationTable>(phys, count)
+        .map_err(|_| EfiConfigurationTableError::MapFailed)?;
+    Ok(unsafe { core::slice::from_raw_parts(ptr.as_ptr(), count) })
 }
 
 #[repr(C)]

@@ -79,6 +79,14 @@ pub fn ensure() -> Option<&'static Hpet> {
     HPET_INSTANCE.get().and_then(|hpet| hpet.as_ref())
 }
 
+/// Returns the HPET runtime only when some earlier subsystem initialized it.
+///
+/// Unlike [`ensure`], this is strictly observational: it never maps or
+/// reprograms the hardware timer.
+pub fn existing() -> Option<&'static Hpet> {
+    HPET_INSTANCE.get().and_then(|hpet| hpet.as_ref())
+}
+
 fn init_hpet() -> Option<Hpet> {
     let tables = ensure_tables()?;
     let info = match HpetInfo::new(tables) {
