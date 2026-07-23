@@ -80,6 +80,7 @@ define_started_flags!(
     UI4_SCREENSHOT_SERVICE_STARTED,
     UI4_H264_ENCODE_PROBE_STARTED,
     UI4_COMPOSITOR_STARTED,
+    UI4_WINDOW_BROKER_SNAPSHOT_STARTED,
     UI4_VIDEO_CONVERSION_STARTED,
     GPGPU_UI4_PREVIEW_CONSUMER_STARTED,
     GPGPU_UI4_SVG_PROBE_CONSUMER_STARTED,
@@ -593,6 +594,10 @@ fn spawn_ui4_h264_encode_probe_task(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ui4_compositor_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_compositor_service_task())
+}
+
+fn spawn_ui4_window_broker_snapshot_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::ui4::ui4_window_broker_snapshot_service_task())
 }
 
 fn spawn_ui4_video_conversion_service_task(spawner: Spawner) -> SpawnAttempt {
@@ -1294,7 +1299,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 71
+const TASK_COUNT: usize = 72
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_probe") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1602,6 +1607,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         ui4_compositor_gate,
         &UI4_COMPOSITOR_STARTED,
         spawn_ui4_compositor_service_task,
+    ),
+    TaskSpec::enabled_gated(
+        "ui4-window-broker-snapshot",
+        0,
+        ui4_compositor_gate,
+        &UI4_WINDOW_BROKER_SNAPSHOT_STARTED,
+        spawn_ui4_window_broker_snapshot_service_task,
     ),
     TaskSpec::enabled_gated(
         "ui4-video-conversion-service",

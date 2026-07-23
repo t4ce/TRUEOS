@@ -5,7 +5,11 @@
 //! from its trusted execution context rather than accepting it from a client.
 
 use alloc::vec::Vec;
-use embassy_sync::signal::Signal;
+use embassy_sync::{
+    signal::Signal,
+    watch::{Receiver as WatchReceiver, Watch},
+};
+use embassy_time::{Duration, Timer};
 use spin::Mutex;
 
 use super::{DamageRect, DamageRegion, FrameBuffering, FrameHandle, OutputId};
@@ -20,6 +24,8 @@ const MAX_SESSIONS: usize = 64;
 /// windows each own one of the four application planes; single-buffered
 /// windows remain unrestricted by this soft cap and may share those planes.
 pub(super) const MAX_EXPENSIVE_WINDOWS: usize = super::INTERACTION_OVERLAY_PLANE_SLOT;
+pub(crate) const WINDOW_BROKER_SNAPSHOT_PERIOD_MS: u64 = 3_000;
+const WINDOW_BROKER_SNAPSHOT_RECEIVERS: usize = 8;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WindowOwner {
@@ -39,6 +45,22 @@ impl WindowOwner {
     pub(crate) const GPGPU_PREVIEW: Self = Self::KernelApp(5);
     pub(crate) const FONT_STAMP: Self = Self::KernelApp(6);
     pub(crate) const SVG_OUTLINE_PROBE: Self = Self::KernelApp(7);
+
+    /// Stable, allocation-free producer name for diagnostics. The enum still
+    /// carries the application or VM instance where the name is shared.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Kernel => "kernel",
+            Self::VIDEO_PLAYER => "video-player",
+            Self::DRAW3D_SERVICE => "draw3d-service",
+            Self::GRIDPAPER_SERVICE => "gridpaper-service",
+            Self::GPGPU_PREVIEW => "gpgpu-preview",
+            Self::FONT_STAMP => "font-stamp",
+            Self::SVG_OUTLINE_PROBE => "svg-outline-probe",
+            Self::KernelApp(_) => "kernel-app",
+            Self::Vm(_) => "blueprint-vm",
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -258,6 +280,7 @@ impl<'a> WindowSessionCloseRequest<'a> {
 pub(crate) struct WindowSnapshot {
     pub(crate) id: WindowId,
     pub(crate) owner: WindowOwner,
+    pub(crate) producer_name: &'static str,
     pub(crate) session: WindowSessionId,
     pub(crate) frame: FrameHandle,
     pub(crate) buffering: FrameBuffering,
@@ -271,6 +294,74 @@ pub(crate) struct WindowSnapshot {
     pub(crate) damage: Option<DamageRegion>,
     pub(crate) maximized: bool,
 }
+
+/// Small aggregate view accompanying a published broker snapshot.
+///
+/// `composable_windows` matches the broker-side conditions for a window to be
+/// considered by a compositor: Ready/Closing, visible, and not yet closed.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct WindowBrokerSnapshotStats {
+    pub(crate) registry_window_slots: usize,
+    pub(crate) registry_session_slots: usize,
+    pub(crate) active_sessions: usize,
+    pub(crate) live_windows: usize,
+    pub(crate) composable_windows: usize,
+    pub(crate) pending_windows: usize,
+    pub(crate) ready_windows: usize,
+    pub(crate) closing_windows: usize,
+    pub(crate) damaged_windows: usize,
+    pub(crate) maximized_windows: usize,
+    pub(crate) windows_per_output: [usize; super::OUTPUT_COUNT],
+}
+
+/// Low-frequency, informational copy of the complete live window registry.
+///
+/// This is deliberately separate from the compositor's live snapshots.
+/// Reading it never locks or otherwise influences the broker, and stale data
+/// is expected between periodic publications.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WindowBrokerSnapshot {
+    pub(crate) update_count: u64,
+    pub(crate) published_at_ms: u64,
+    pub(crate) composition_revision: u64,
+    pub(crate) stats: WindowBrokerSnapshotStats,
+    pub(crate) windows: Vec<WindowSnapshot>,
+}
+
+impl WindowBrokerSnapshot {
+    pub(crate) const fn empty() -> Self {
+        Self {
+            update_count: 0,
+            published_at_ms: 0,
+            composition_revision: 0,
+            stats: WindowBrokerSnapshotStats {
+                registry_window_slots: 0,
+                registry_session_slots: 0,
+                active_sessions: 0,
+                live_windows: 0,
+                composable_windows: 0,
+                pending_windows: 0,
+                ready_windows: 0,
+                closing_windows: 0,
+                damaged_windows: 0,
+                maximized_windows: 0,
+                windows_per_output: [0; super::OUTPUT_COUNT],
+            },
+            windows: Vec::new(),
+        }
+    }
+
+    pub(crate) const fn has_data(&self) -> bool {
+        self.update_count != 0
+    }
+}
+
+pub(crate) type WindowBrokerSnapshotReceiver<'a> = WatchReceiver<
+    'a,
+    crate::wait::EmbassySpinRawMutex,
+    WindowBrokerSnapshot,
+    WINDOW_BROKER_SNAPSHOT_RECEIVERS,
+>;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WindowPlacementTransition {
@@ -832,6 +923,63 @@ impl WindowBroker {
         snapshots
     }
 
+    fn published_snapshot(&self, update_count: u64, published_at_ms: u64) -> WindowBrokerSnapshot {
+        let mut stats = WindowBrokerSnapshotStats {
+            registry_window_slots: self.windows.len(),
+            registry_session_slots: self.sessions.len(),
+            active_sessions: self
+                .sessions
+                .iter()
+                .filter(|session| session.active)
+                .count(),
+            ..WindowBrokerSnapshotStats::default()
+        };
+        let mut windows = Vec::new();
+        for (slot, window) in self.windows.iter().copied().enumerate() {
+            if window.state == WindowState::Closed {
+                continue;
+            }
+            let Some(snapshot) = window.snapshot(slot) else {
+                continue;
+            };
+            stats.live_windows = stats.live_windows.saturating_add(1);
+            stats.windows_per_output[snapshot.output.slot()] =
+                stats.windows_per_output[snapshot.output.slot()].saturating_add(1);
+            match snapshot.state {
+                WindowState::Pending => {
+                    stats.pending_windows = stats.pending_windows.saturating_add(1);
+                }
+                WindowState::Ready => {
+                    stats.ready_windows = stats.ready_windows.saturating_add(1);
+                }
+                WindowState::Closing => {
+                    stats.closing_windows = stats.closing_windows.saturating_add(1);
+                }
+                WindowState::Closed => {}
+            }
+            if matches!(snapshot.state, WindowState::Ready | WindowState::Closing)
+                && snapshot.placement.visible
+            {
+                stats.composable_windows = stats.composable_windows.saturating_add(1);
+            }
+            stats.damaged_windows = stats
+                .damaged_windows
+                .saturating_add(usize::from(snapshot.damage.is_some()));
+            stats.maximized_windows = stats
+                .maximized_windows
+                .saturating_add(usize::from(snapshot.maximized));
+            windows.push(snapshot);
+        }
+        windows.sort_unstable_by_key(|window| (window.output, window.placement.z, window.id));
+        WindowBrokerSnapshot {
+            update_count,
+            published_at_ms,
+            composition_revision: self.composition_revision,
+            stats,
+            windows,
+        }
+    }
+
     fn acknowledge(&mut self, id: WindowId, publish_serial: u64) -> bool {
         let Ok((slot, generation)) = unpack_handle(id.0) else {
             return false;
@@ -875,6 +1023,7 @@ impl WindowRecord {
         Some(WindowSnapshot {
             id: WindowId(pack_handle(slot, self.generation).ok()?),
             owner: self.owner,
+            producer_name: self.owner.name(),
             session: self.session,
             frame: self.frame,
             buffering: self.buffering,
@@ -894,6 +1043,47 @@ impl WindowRecord {
 static WINDOW_BROKER: Mutex<WindowBroker> = Mutex::new(WindowBroker::new());
 static TRANSITION_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 static WINDOW_COMPOSITION_CHANGED: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
+static WINDOW_BROKER_SNAPSHOT: Watch<
+    crate::wait::EmbassySpinRawMutex,
+    WindowBrokerSnapshot,
+    WINDOW_BROKER_SNAPSHOT_RECEIVERS,
+> = Watch::new_with(WindowBrokerSnapshot::empty());
+
+/// Return the last periodically published diagnostic copy. This operation
+/// never takes the live broker lock.
+pub(crate) fn latest_window_broker_snapshot() -> WindowBrokerSnapshot {
+    WINDOW_BROKER_SNAPSHOT
+        .try_get()
+        .unwrap_or_else(WindowBrokerSnapshot::empty)
+}
+
+/// Optionally subscribe to future diagnostic publications.
+pub(crate) fn subscribe_window_broker_snapshots() -> Option<WindowBrokerSnapshotReceiver<'static>> {
+    WINDOW_BROKER_SNAPSHOT.receiver()
+}
+
+fn publish_window_broker_snapshot_once() -> WindowBrokerSnapshot {
+    let update_count = next_serial(latest_window_broker_snapshot().update_count);
+    let published_at_ms = embassy_time::Instant::now().as_millis();
+    let snapshot = WINDOW_BROKER
+        .lock()
+        .published_snapshot(update_count, published_at_ms);
+    WINDOW_BROKER_SNAPSHOT.sender().send(snapshot.clone());
+    snapshot
+}
+
+#[embassy_executor::task(pool_size = 1)]
+pub(crate) async fn ui4_window_broker_snapshot_service_task() {
+    crate::log_info!(
+        target: "ui4";
+        "ui4 window-broker snapshot publisher online period_ms={} scope=informational access=optional\n",
+        WINDOW_BROKER_SNAPSHOT_PERIOD_MS,
+    );
+    loop {
+        let _ = publish_window_broker_snapshot_once();
+        Timer::after(Duration::from_millis(WINDOW_BROKER_SNAPSHOT_PERIOD_MS)).await;
+    }
+}
 
 pub(crate) fn begin_window_session(
     owner: WindowOwner,
@@ -1447,4 +1637,87 @@ fn unpack_handle(raw: u32) -> Result<(usize, u16), WindowBrokerError> {
         return Err(WindowBrokerError::InvalidHandle);
     }
     Ok((usize::from(low - 1), generation))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_window(
+        owner: WindowOwner,
+        session: WindowSessionId,
+        frame: u64,
+        output: usize,
+        z: i32,
+        visible: bool,
+    ) -> WindowCreate {
+        WindowCreate {
+            owner,
+            session,
+            frame: FrameHandle::from_raw(frame).unwrap(),
+            output: OutputId::from_slot(output).unwrap(),
+            plane: WindowPlane::Primary,
+            placement: WindowPlacement {
+                x: 10 + z,
+                y: 20 + z,
+                width: 320,
+                height: 200,
+                z,
+                opacity: u8::MAX,
+                visible,
+            },
+            interaction: WindowInteraction::MOVABLE_FRAME,
+        }
+    }
+
+    #[test]
+    fn published_snapshot_reports_all_live_windows_without_closed_slots() {
+        let owner = WindowOwner::GPGPU_PREVIEW;
+        let mut broker = WindowBroker::new();
+        let session = broker.begin_additional_session(owner).unwrap();
+        let ready = broker
+            .create(test_window(owner, session, 1, 0, 4, true), FrameBuffering::Single)
+            .unwrap();
+        let closing = broker
+            .create(test_window(owner, session, 2, 1, 2, false), FrameBuffering::Single)
+            .unwrap();
+        let closed = broker
+            .create(test_window(owner, session, 3, 0, 1, true), FrameBuffering::Single)
+            .unwrap();
+
+        let (ready_slot, _) = unpack_handle(ready.raw()).unwrap();
+        broker.windows[ready_slot].state = WindowState::Ready;
+        broker.windows[ready_slot].damage = Some(DamageRegion::FULL);
+        broker.windows[ready_slot].restore_placement = Some(broker.windows[ready_slot].placement);
+        let (closing_slot, _) = unpack_handle(closing.raw()).unwrap();
+        broker.windows[closing_slot].state = WindowState::Closing;
+        let (closed_slot, _) = unpack_handle(closed.raw()).unwrap();
+        broker.windows[closed_slot].state = WindowState::Closed;
+
+        let snapshot = broker.published_snapshot(7, 12_000);
+        assert_eq!(snapshot.update_count, 7);
+        assert_eq!(snapshot.published_at_ms, 12_000);
+        assert_eq!(snapshot.windows.len(), 2);
+        assert_eq!(snapshot.windows[0].id, ready);
+        assert_eq!(snapshot.windows[0].producer_name, "gpgpu-preview");
+        assert_eq!(snapshot.windows[1].id, closing);
+        assert_eq!(snapshot.stats.registry_window_slots, 3);
+        assert_eq!(snapshot.stats.active_sessions, 1);
+        assert_eq!(snapshot.stats.live_windows, 2);
+        assert_eq!(snapshot.stats.composable_windows, 1);
+        assert_eq!(snapshot.stats.ready_windows, 1);
+        assert_eq!(snapshot.stats.closing_windows, 1);
+        assert_eq!(snapshot.stats.damaged_windows, 1);
+        assert_eq!(snapshot.stats.maximized_windows, 1);
+        assert_eq!(snapshot.stats.windows_per_output, [1, 1, 0, 0]);
+    }
+
+    #[test]
+    fn owner_names_keep_instance_identity_in_the_enum() {
+        assert_eq!(WindowOwner::VIDEO_PLAYER.name(), "video-player");
+        assert_eq!(WindowOwner::KernelApp(42).name(), "kernel-app");
+        assert_eq!(WindowOwner::Vm(9).name(), "blueprint-vm");
+        assert_ne!(WindowOwner::KernelApp(42), WindowOwner::KernelApp(43));
+        assert_ne!(WindowOwner::Vm(9), WindowOwner::Vm(10));
+    }
 }

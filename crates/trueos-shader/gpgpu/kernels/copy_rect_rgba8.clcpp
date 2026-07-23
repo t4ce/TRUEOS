@@ -1,0 +1,48 @@
+// C++ for OpenCL opt-in twin of copy_rect_rgba8.cl.
+//
+// This source is intentionally not selected by the production artifact bakery
+// yet. It preserves the existing kernel symbol, argument order/types, SIMD16
+// requirement, and pixel behavior while proving the offline C++ frontend path.
+
+#include "include/trueos_clcpp.hpp"
+
+TRUEOS_REQD_SUB_GROUP_SIZE_16
+__kernel void copy_rect_rgba8(
+    __global const uint *src_rgba,
+    __global uint *dst_rgba,
+    uint src_pitch_bytes,
+    uint dst_pitch_bytes,
+    uint src_x,
+    uint src_y,
+    uint dst_x,
+    uint dst_y,
+    uint width,
+    uint height)
+{
+    const uint base_x =
+        static_cast<uint>(get_global_id(0)) << 1;
+    const uint y = static_cast<uint>(get_global_id(1));
+
+    if (base_x >= width || y >= height) {
+        return;
+    }
+
+    const uint src_pitch_pixels =
+        src_pitch_bytes / trueos::gpgpu::rgba8_bytes_per_pixel;
+    const uint dst_pitch_pixels =
+        dst_pitch_bytes / trueos::gpgpu::rgba8_bytes_per_pixel;
+
+    for (uint pixel = 0;
+         pixel < trueos::gpgpu::copy_rect_pixels_per_work_item;
+         ++pixel) {
+        const uint x = base_x + pixel;
+        if (x < width) {
+            const uint src_index =
+                (src_y + y) * src_pitch_pixels + src_x + x;
+            const uint dst_index =
+                (dst_y + y) * dst_pitch_pixels + dst_x + x;
+            trueos::gpgpu::copy_element(
+                src_rgba, dst_rgba, src_index, dst_index);
+        }
+    }
+}

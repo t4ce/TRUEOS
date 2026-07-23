@@ -3,6 +3,11 @@
 This directory holds the small OpenCL C kernels intended to become embedded
 Gen12/Alder Lake artifacts for TRUEOS.
 
+`copy_rect_rgba8.clcpp` is the first non-production C++ for OpenCL opt-in. Its
+side-by-side artifact identity, exact offline frontend flags, ADL-S ABI
+comparison, and remaining hardware promotion gate are recorded in
+[`CPP_FOR_OPENCL_OPT_IN.md`](CPP_FOR_OPENCL_OPT_IN.md).
+
 `copy_rect_rgba8.cl` is the first standalone graphics value target:
 
 - source: linear RGBA8
@@ -53,7 +58,7 @@ for targeted bring-up.
 converts a decoder-owned Tile64 NV12 source into the complete, exact UI4 RGBA8
 lease (opaque black outside the selected native viewport); it neither reads a
 display backbuffer nor programs a plane. The Alder Lake S artifact SHA-256 is
-`75c2c230cc45ae1987910479a21da79226ed85cff8e4cf8e2a61b6b69cc017b3`.
+`f33f0f2f531aa4df74b932fd519d5c096f9576b94c09cf1e20b742151092e0b5`.
 
 `artifacts/adls/copy_rect_rgba8.bin` is the current Alder Lake S build produced
 with Intel `ocloc`/IGC. Its SHA-256 is:

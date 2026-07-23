@@ -9,6 +9,7 @@ use spin::Mutex;
 // implementation in one namespace preserves all existing crate-visible paths,
 // private helper access, static initialization, and kernel ABI types while
 // allowing each concern to live in a focused source file.
+include!("artifacts/contract.rs");
 include!("kernel_catalog.rs");
 include!("rcs/constants.rs");
 include!("runtime_state.rs");
