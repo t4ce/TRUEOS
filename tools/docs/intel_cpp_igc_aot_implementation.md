@@ -99,12 +99,20 @@ make intel-gpu-verify-copy-cpp
 
 # Verifies first, then builds TRUEOS with the C++ artifact selected.
 make kernel-cpp-aot
+
+# Carries the same feature through the complete bootable ISO workflow.
+make iso-cpp-aot
 ```
 
 The OpenCL-shaped bridge reports this boundary truthfully:
 `known_source_aot_lookup=true`, because an exact known source string can select
 an already baked program, and `source_compile=false`, because no compiler is
 linked into or loaded by TRUEOS.
+
+`kernel-cpp-aot` additionally scans the final linked ELF for the complete
+selected Zebin and requires the complete legacy copy Zebin to be absent. This
+guards the deployment boundary itself rather than inferring feature selection
+only from source-level `cfg` declarations.
 
 Host-side ABI equivalence is necessary but not sufficient for promotion. The
 bare-metal copy probe must cover:
@@ -119,7 +127,8 @@ bare-metal copy probe must cover:
 Deleting the C fallback requires a second build using the legacy artifact and
 equal destination results for the same cases.
 
-On the exact ADL-S `0x4680` machine, boot the `kernel-cpp-aot` image and run:
+Build with `make iso-cpp-aot`, boot that image on the exact ADL-S `0x4680`
+machine, and run:
 
 ```text
 gpgpu probe copy-rect
@@ -172,6 +181,12 @@ byte-for-byte. Passing the source once by absolute path and once by a relative
 path changed all hashes because Clang embeds the source spelling. The bakery
 therefore invokes Clang from the source directory with a normalized basename
 and performs its reproducibility build under a second temporary root.
+
+Resolved compiler locations are execution details, not artifact identity. The
+published manifest and reviewed toolchain lock retain executable/library
+hashes and versions but omit absolute host paths, so an equivalent installation
+in a different directory does not dirty the generated provenance. The initial
+exploration note keeps its developer-machine paths only as historical context.
 
 ### `ocloc` writes outside `-out_dir`
 
@@ -229,9 +244,9 @@ temporary copies and treat published artifacts as immutable inputs.
 - the matching `ocloc` package
 - target PCI device `0x4680`
 
-The paths from the developer-machine proof are intentionally not encoded in
-the repository. The bakery accepts explicit tool paths/environment variables
-and records resolved versions and binary hashes in the output manifest.
+Developer-machine paths do not participate in the generated manifest or lock
+identity. The bakery accepts explicit tool paths/environment variables and
+records versions and binary hashes in the output manifest.
 
 ## Tailoring points for later review
 

@@ -85,6 +85,14 @@ Zebin/SPIR-V, profile, ABI-reference, source, and transitive-header hashes; and
 regenerates the Rust contract in memory. It needs only the Python standard
 library.
 
+After linking a feature-selected kernel, the Make target also proves that the
+final TRUEOS ELF contains the complete C++ Zebin and no complete copy of the
+legacy copy Zebin:
+
+```sh
+make intel-gpu-verify-linked-copy-cpp
+```
+
 Existing artifacts can receive a contract without rebaking:
 
 ```sh

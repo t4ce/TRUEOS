@@ -771,6 +771,19 @@ unsafe extern "C" {
     pub fn trueos_cabi_shell2_print_line(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell_attached_write(data_ptr: *const u8, data_len: usize) -> usize;
+    pub fn trueos_cabi_ssh_shell_open(cols: u32, rows: u32) -> i64;
+    pub fn trueos_cabi_ssh_shell_write(
+        session: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> isize;
+    pub fn trueos_cabi_ssh_shell_read(
+        session: u32,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
+    pub fn trueos_cabi_ssh_shell_resize(session: u32, cols: u32, rows: u32) -> i32;
+    pub fn trueos_cabi_ssh_shell_close(session: u32) -> i32;
     pub fn trueos_cabi_shell_attached_read_byte() -> i32;
     pub fn trueos_cabi_shell_attached_retarget_slot(slot_ptr: *const u8, slot_len: usize) -> i32;
     pub fn trueos_cabi_shell2_raw_write(data_ptr: *const u8, data_len: usize) -> usize;

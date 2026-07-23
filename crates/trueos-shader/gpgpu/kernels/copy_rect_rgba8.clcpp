@@ -1,8 +1,9 @@
 // C++ for OpenCL opt-in twin of copy_rect_rgba8.cl.
 //
-// This source is intentionally not selected by the production artifact bakery
-// yet. It preserves the existing kernel symbol, argument order/types, SIMD16
-// requirement, and pixel behavior while proving the offline C++ frontend path.
+// This source is selected only by the explicit C++ bakery and the
+// `intel_gpu_cpp_aot` Cargo feature; the OpenCL C twin remains the default.
+// It preserves the existing kernel symbol, argument order/types, SIMD16
+// requirement, and pixel behavior.
 
 #include "include/trueos_clcpp.hpp"
 

@@ -113,6 +113,11 @@ pub const OP_BP_UI4_SCENE_RESIZE_EVENT_TAKE: u32 = 0xE5; // arg0 window -> rc + 
 pub const OP_BP_UI4_SCENE_SET_CUSTOM_CURSOR: u32 = 0xE6; // arg0 window,arg1 enabled -> rc
 pub const OP_BP_UI4_SCENE_SET_CURSOR_ICON: u32 = 0xE7; // arg0 window,arg1 icon,optional cursor-source payload -> rc
 pub const OP_BP_UI4_SCENE_POINTER_EVENT_TAKE: u32 = 0xE8; // arg0 window -> rc + PointerEvent payload
+pub const OP_BP_SSH_SHELL_OPEN: u32 = 0xE9; // arg0 cols,arg1 rows -> session id
+pub const OP_BP_SSH_SHELL_WRITE: u32 = 0xEA; // arg0 session,payload terminal input -> bytes
+pub const OP_BP_SSH_SHELL_READ: u32 = 0xEB; // arg0 session,arg1 cap -> terminal output
+pub const OP_BP_SSH_SHELL_RESIZE: u32 = 0xEC; // arg0 session,arg1 cols:rows -> rc
+pub const OP_BP_SSH_SHELL_CLOSE: u32 = 0xED; // arg0 session -> rc
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1980,6 +1985,57 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let data = unsafe { &(&(*p).payload)[..n] };
             let written = crate::hv::blueprint_console_write(vm_id, data);
             write_response(vm_id, seq, STATUS_OK, written as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SSH_SHELL_OPEN => {
+            let session = crate::shell2::backends::net_tcp::ssh_shell_open(
+                arg0 as usize,
+                arg1 as usize,
+            )
+            .map_or((-16i64) as u64, u64::from);
+            write_response(vm_id, seq, STATUS_OK, session, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SSH_SHELL_WRITE => {
+            let Some(data) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let written = crate::shell2::backends::net_tcp::ssh_shell_write(
+                arg0 as u32,
+                data,
+            )
+            .map_or((-22i64) as u64, |written| written as u64);
+            write_response(vm_id, seq, STATUS_OK, written, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SSH_SHELL_READ => {
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let cap = (arg1 as usize).min(PAYLOAD_CAP);
+            let output = unsafe { &mut (&mut (*page).payload)[..cap] };
+            match crate::shell2::backends::net_tcp::ssh_shell_read(arg0 as u32, output) {
+                Some(read) => write_response(vm_id, seq, STATUS_OK, read as u64, read as u32),
+                None => write_response(vm_id, seq, STATUS_OK, (-22i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_SSH_SHELL_RESIZE => {
+            let cols = (arg1 >> 32) as usize;
+            let rows = (arg1 & 0xffff_ffff) as usize;
+            let ok = crate::shell2::backends::net_tcp::ssh_shell_resize(
+                arg0 as u32,
+                cols,
+                rows,
+            );
+            write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-22i64) as u64 }, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SSH_SHELL_CLOSE => {
+            let ok = crate::shell2::backends::net_tcp::ssh_shell_close(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-22i64) as u64 }, 0);
             DispatchOutcome::Resume
         }
         OP_BP_SHELL_RAW_WRITE => {

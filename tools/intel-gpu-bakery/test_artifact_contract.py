@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -26,6 +28,7 @@ ARTIFACT_ROOT = (
     / "artifacts"
     / "adls"
 )
+KERNEL_CATALOG = REPO_ROOT / "src" / "intel" / "gpgpu" / "kernel_catalog.rs"
 
 
 class ArtifactContractTests(unittest.TestCase):
@@ -36,6 +39,30 @@ class ArtifactContractTests(unittest.TestCase):
             with self.subTest(binary=binary.name):
                 analysis = analyze_zebin(binary)
                 self.assertGreaterEqual(len(analysis["kernels"]), 1)
+
+    def test_every_legacy_catalog_hash_matches_its_zebin(self) -> None:
+        catalog = KERNEL_CATALOG.read_text(encoding="utf-8")
+        declarations = re.findall(
+            r"pub\(crate\) const ([A-Z0-9_]+)_ADLS_BIN_SHA256:"
+            r"\s*\[u8;\s*32\]\s*=\s*\[(.*?)\];",
+            catalog,
+            flags=re.DOTALL,
+        )
+        binaries = sorted(ARTIFACT_ROOT.glob("*.bin"))
+        self.assertEqual(len(declarations), len(binaries))
+        observed_names = set()
+        for stem, byte_source in declarations:
+            binary = ARTIFACT_ROOT / f"{stem.lower()}.bin"
+            observed_names.add(binary.name)
+            with self.subTest(binary=binary.name):
+                self.assertTrue(binary.is_file())
+                expected = bytes(
+                    int(value, 16)
+                    for value in re.findall(r"0x([0-9A-Fa-f]{2})", byte_source)
+                )
+                self.assertEqual(len(expected), 32)
+                self.assertEqual(hashlib.sha256(binary.read_bytes()).digest(), expected)
+        self.assertEqual(observed_names, {binary.name for binary in binaries})
 
     def test_copy_contract_distinguishes_section_and_entry_ranges(self) -> None:
         analysis = analyze_zebin(ARTIFACT_ROOT / "copy_rect_rgba8.bin")

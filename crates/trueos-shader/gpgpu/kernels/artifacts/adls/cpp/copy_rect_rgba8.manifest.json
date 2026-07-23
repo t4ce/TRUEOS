@@ -418,8 +418,8 @@
     "inputs": [
       {
         "path": "crates/trueos-shader/gpgpu/kernels/copy_rect_rgba8.clcpp",
-        "sha256": "dfe1cfbdf6714d9204038ace969223c05c79799e40b2b5eb9a94e54d04e8ebf5",
-        "size_bytes": 1481
+        "sha256": "cfbd7a9ff1d250c094e2759fc80aeda1f794727abbfb25a995197a5cbc9dda64",
+        "size_bytes": 1497
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/include/trueos_clcpp.hpp",

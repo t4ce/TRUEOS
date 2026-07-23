@@ -244,6 +244,20 @@ impl GpgpuKernelAbiContract {
                     {
                         return Err(GpgpuKernelAbiContractError::MissingPointerQualifier);
                     }
+                    if matches!(arg.address_mode, GpgpuArtifactAddressMode::Stateful) {
+                        let mut binding_index = 0;
+                        let mut binding_found = false;
+                        while binding_index < self.bindings.len() {
+                            if self.bindings[binding_index].arg_index == arg.arg_index {
+                                binding_found = true;
+                                break;
+                            }
+                            binding_index += 1;
+                        }
+                        if !binding_found {
+                            return Err(GpgpuKernelAbiContractError::StatefulPointerWithoutBinding);
+                        }
+                    }
                 }
                 GpgpuArtifactArgKind::ByValue => {
                     if !matches!(arg.access, GpgpuArtifactArgAccess::None)
@@ -334,6 +348,7 @@ pub(crate) enum GpgpuKernelAbiContractError {
     PayloadArgOutOfBounds,
     DuplicatePayloadArg,
     OverlappingPayloadArgs,
+    StatefulPointerWithoutBinding,
     BindingWithoutPointerPayload,
     DuplicateBindingArg,
     DuplicateBindingTableIndex,
@@ -363,6 +378,7 @@ impl GpgpuKernelAbiContractError {
             Self::PayloadArgOutOfBounds => "contract-payload-arg-out-of-bounds",
             Self::DuplicatePayloadArg => "contract-duplicate-payload-arg",
             Self::OverlappingPayloadArgs => "contract-overlapping-payload-args",
+            Self::StatefulPointerWithoutBinding => "contract-stateful-pointer-without-binding",
             Self::BindingWithoutPointerPayload => "contract-binding-without-pointer-payload",
             Self::DuplicateBindingArg => "contract-duplicate-binding-arg",
             Self::DuplicateBindingTableIndex => "contract-duplicate-bti",
@@ -715,6 +731,18 @@ mod tests {
             ..CONTRACT
         };
         assert_eq!(invalid.validate(), Err(GpgpuKernelAbiContractError::MissingPointerQualifier));
+    }
+
+    #[test]
+    fn contract_rejects_stateful_pointer_without_binding() {
+        let invalid = GpgpuKernelAbiContract {
+            bindings: &[],
+            ..CONTRACT
+        };
+        assert_eq!(
+            invalid.validate(),
+            Err(GpgpuKernelAbiContractError::StatefulPointerWithoutBinding)
+        );
     }
 
     #[test]

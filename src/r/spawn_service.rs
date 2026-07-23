@@ -1391,7 +1391,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &SNTP_SERVICE_STARTED,
         spawn_sntp_service,
     ),
-    TaskSpec::enabled("net-shell", 0, &NET_SHELL_STARTED, spawn_net_shell),
+    TaskSpec::disabled("legacy-raw-net-shell", 0, &NET_SHELL_STARTED, spawn_net_shell),
     TaskSpec::enabled(
         "draw3d-service",
         crate::r::readiness::NET_ANY_CONFIGURED,

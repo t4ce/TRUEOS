@@ -91,11 +91,13 @@ CARGO_GFX_FLAGS =
 
 INTEL_GPU_BAKERY_DIR := tools/intel-gpu-bakery
 INTEL_GPU_CPP_ARTIFACT_DIR := crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp
+INTEL_GPU_CPP_COPY_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/copy_rect_rgba8.bin
+INTEL_GPU_LEGACY_COPY_BIN := crates/trueos-shader/gpgpu/kernels/artifacts/adls/copy_rect_rgba8.bin
 INTEL_GPU_BAKERY_PYTHON ?= python3
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel kernel-cpp-aot intel-gpu-bake-copy-cpp intel-gpu-verify-copy-cpp artifacts limine baremetal-reboot-log net-shell-console iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: images empty-libs kernel kernel-cpp-aot intel-gpu-bake-copy-cpp intel-gpu-verify-copy-cpp intel-gpu-verify-linked-copy-cpp artifacts limine baremetal-reboot-log net-shell-console iso iso-cpp-aot provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -114,12 +116,16 @@ kernel: empty-libs
 
 kernel-cpp-aot: empty-libs intel-gpu-verify-copy-cpp
 	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) --features intel_gpu_cpp_aot -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
+	$(MAKE) --no-print-directory intel-gpu-verify-linked-copy-cpp
 
 intel-gpu-bake-copy-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_copy_rect.sh"
 
 intel-gpu-verify-copy-cpp:
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify.py" --artifact-dir "$(INTEL_GPU_CPP_ARTIFACT_DIR)"
+
+intel-gpu-verify-linked-copy-cpp:
+	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_linked.py" --elf "$(KERNEL_BIN)" --selected-bin "$(INTEL_GPU_CPP_COPY_BIN)" --forbidden-bin "$(INTEL_GPU_LEGACY_COPY_BIN)"
 
 artifacts: kernel
 	mkdir -p $(ARTIFACT_DIR)
@@ -299,6 +305,10 @@ iso: artifacts images limine
 	else \
 		echo "iso: skipping net shell console (START_NET_SHELL_CONSOLE=$(START_NET_SHELL_CONSOLE))"; \
 	fi
+
+iso-cpp-aot: intel-gpu-verify-copy-cpp
+	$(MAKE) --no-print-directory CARGO_BUILD_FLAGS="$(strip $(CARGO_BUILD_FLAGS) --features intel_gpu_cpp_aot)" iso
+	$(MAKE) --no-print-directory intel-gpu-verify-linked-copy-cpp
 
 provenance-git-clean:
 	@if [ "$(PROVENANCE_CLEAN_FLAG)" = "--require-clean" ]; then \
