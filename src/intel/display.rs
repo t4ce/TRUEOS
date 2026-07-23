@@ -276,7 +276,7 @@ enum PlaneSurfaceFlipQueueResult {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Ui4PlaneSurfaceFlipPoll {
     Pending,
-    Complete,
+    Complete { wait_ns: u64, polls: u32 },
     Failed,
 }
 
@@ -5899,9 +5899,13 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
             }
         }
     }
+    let polls = batch.polls;
     *batch = PlaneSurfaceFlipBatch::new();
     if committed {
-        Ui4PlaneSurfaceFlipPoll::Complete
+        Ui4PlaneSurfaceFlipPoll::Complete {
+            wait_ns: elapsed_ns,
+            polls,
+        }
     } else {
         Ui4PlaneSurfaceFlipPoll::Failed
     }
@@ -5916,7 +5920,7 @@ pub(crate) fn finish_ui4_plane_surface_flip_batch() -> bool {
     loop {
         match poll_ui4_plane_surface_flip_batch() {
             Ui4PlaneSurfaceFlipPoll::Pending => core::hint::spin_loop(),
-            Ui4PlaneSurfaceFlipPoll::Complete => return true,
+            Ui4PlaneSurfaceFlipPoll::Complete { .. } => return true,
             Ui4PlaneSurfaceFlipPoll::Failed => return false,
         }
     }

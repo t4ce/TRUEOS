@@ -4,7 +4,13 @@
 
 `vid` starts the hardware-validated embedded path. `vid online` downloads the fixed AVC1 MP4 asset, demuxes it to Annex-B, and then enters the same UI4 playback tail. Add `loop` to either mode to repeat it while keeping the same UI4 window lifetime. There is no boot delay, autostart playback, ten-cut harness, browser-media playback route, or configurable legacy Shell2 route.
 
-The recorded 200-frame run showed recognizable moving video, 200 GuC conversion submissions and retirements, normal SURFLIVE ownership, and the final 200 ms shrink/fade close. This validates the fixed asset and hardware path; it does not yet validate arbitrary codecs, resolutions, color metadata, or sources. The two-slot continuously fed RCS ring described below is compile-validated but still awaits its first end-to-end hardware trace.
+The recorded runs show recognizable moving video, complete GuC conversion
+submission/retirement, normal SURFLIVE ownership, and the final 200 ms
+shrink/fade close. This validates the fixed asset and hardware path; it does
+not yet validate arbitrary codecs, resolutions, color metadata, or sources.
+The two-slot continuously fed RCS ring is hardware-validated: queued depth-2
+followers enter the next batch within microseconds of the preceding release
+and overwhelmingly avoid a second slow scheduler admission.
 
 ## Command and service routing
 
@@ -150,11 +156,13 @@ the request, not CTB intake. The two-slot ring directly tests that conclusion.
 Each completion record now includes `job_slot`,
 `admission_queue_depth`, and `remaining_queue_depth`. Comparing
 `admission_queue_depth=1` starters with `admission_queue_depth=2` followers,
-using the existing GPU `pre_submit_to_batch` and H2G split markers, answers
-whether queued tails preserve the useful residency window. No performance
-claim should be made until that hardware comparison exists. A follower may
-observe its exact H2G stream position while it is still behind the retirement
-head, so ordered completion does not artificially inflate its CTB split.
+using the existing GPU `pre_submit_to_batch` and H2G split markers, proves
+that queued tails preserve the useful residency window. In the warm full-HD
+capture, 44 of 132 depth-1 leaders entered the slow bucket, versus only 3 of
+68 depth-2 followers; predecessor release to follower batch entry was 3.3 us
+median. A follower may observe its exact H2G stream position while it is still
+behind the retirement head, so ordered completion does not artificially
+inflate its CTB split.
 
 SURFLIVE is the software-visible scanout boundary, not part of the converter.
 The path leading to it still matters to presentation latency: publication,
@@ -172,6 +180,31 @@ boundary: an RGBA target is not reusable until a replacement SURFLIVE releases
 its old display lease. That wait is intentionally charged to the conversion
 worker's `rgba_acquire` phase. It is distinct from both the 10-11 ms
 pre-batch-entry delay and the negligible bookkeeping after observed SURFLIVE.
+
+The `ui4 video-surface-lifecycle` probe resolves that wait without changing
+the lease contract:
+
+```text
+rgba-acquired
+  -> first-busy front/acquired/reader masks and exact reader counts
+published
+  -> producer buffer, Frame/window serial, and monotonic timestamp
+surflive-observed
+  -> replacement/previous buffers, pre-flip time, hardware flip wait, polls
+display-release
+  -> exact old buffer made eligible for producer reuse
+```
+
+Run `tools/analyze_video_surface_lifecycle.py <bare-metal-log>` after a
+capture. For every blocked acquisition it derives the wait-start timestamp and
+matches the exact acquired buffer's display release. `wait_start_to_release`
+is real display-lifetime backpressure; `release_to_acquire` is worker
+notification/poll latency. `no_display_release_in_wait` means another state
+change made a buffer eligible, normally a front-buffer rotation rather than a
+SURFLIVE release. The initial ownership masks distinguish a display reader
+from the other producer lane and the protected front buffer. The same report
+splits publication-to-SURFLIVE into compositor `pre_flip` and hardware
+`flip_wait`, and identifies a video flip coupled to another plane or GuC job.
 
 ## Lifecycle
 

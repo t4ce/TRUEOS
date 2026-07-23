@@ -1,0 +1,362 @@
+// TRUEOS C++ for OpenCL generative demo suite.
+//
+// One stable output ABI exposes several deliberately different workloads:
+// - gallery: four live panels in one surface;
+// - aurora: vector/transcendental field evaluation;
+// - julia: bounded iterative control flow;
+// - sdf: signed-distance geometry and analytical antialiasing;
+// - voronoi: integer hashing and neighbourhood search.
+//
+// The complete compiler stack remains offline. TRUEOS embeds only the audited
+// SPIR-V/Zebin pair and submits it through the existing direct-RCS/GuC path.
+
+#include "include/trueos_clcpp.hpp"
+
+namespace trueos::gpgpu::cpp_demo {
+
+#define TRUEOS_CPP_DEMO_INLINE __attribute__((always_inline)) inline
+
+inline constexpr uint mode_gallery = 0u;
+inline constexpr uint mode_aurora = 1u;
+inline constexpr uint mode_julia = 2u;
+inline constexpr uint mode_sdf = 3u;
+inline constexpr uint mode_voronoi = 4u;
+inline constexpr uint mode_count = 5u;
+
+TRUEOS_CPP_DEMO_INLINE float saturate(float value)
+{
+    return clamp(value, 0.0f, 1.0f);
+}
+
+TRUEOS_CPP_DEMO_INLINE float2 rotate(float2 point, float angle)
+{
+    const float sine = native_sin(angle);
+    const float cosine = native_cos(angle);
+    return (float2)(
+        point.x * cosine - point.y * sine,
+        point.x * sine + point.y * cosine);
+}
+
+TRUEOS_CPP_DEMO_INLINE float vector_length(float2 value)
+{
+    return native_sqrt(dot(value, value));
+}
+
+TRUEOS_CPP_DEMO_INLINE uint pack_opaque(float3 color)
+{
+    const float3 bounded = clamp(color, (float3)(0.0f), (float3)(1.0f));
+    const uint red = static_cast<uint>(bounded.x * 255.0f + 0.5f);
+    const uint green = static_cast<uint>(bounded.y * 255.0f + 0.5f);
+    const uint blue = static_cast<uint>(bounded.z * 255.0f + 0.5f);
+    return 0xFF000000u | (blue << 16) | (green << 8) | red;
+}
+
+TRUEOS_CPP_DEMO_INLINE float3 cosine_palette(
+    float value,
+    float3 base,
+    float3 amplitude,
+    float3 frequency,
+    float3 phase)
+{
+    constexpr float tau = 6.28318530718f;
+    return base + amplitude * native_cos(tau * (frequency * value + phase));
+}
+
+TRUEOS_CPP_DEMO_INLINE uint hash_u32(uint value)
+{
+    value ^= value >> 16;
+    value *= 0x7FEB352Du;
+    value ^= value >> 15;
+    value *= 0x846CA68Bu;
+    value ^= value >> 16;
+    return value;
+}
+
+TRUEOS_CPP_DEMO_INLINE float hash_unit(int2 cell, uint seed, uint lane)
+{
+    const uint x = as_uint(cell.x);
+    const uint y = as_uint(cell.y);
+    const uint mixed =
+        hash_u32(x * 0x9E3779B9u ^ y * 0x85EBCA6Bu ^ seed ^ lane * 0xC2B2AE35u);
+    return static_cast<float>(mixed & 0x00FFFFFFu) * (1.0f / 16777216.0f);
+}
+
+TRUEOS_CPP_DEMO_INLINE float3 render_aurora(float2 uv, float time, uint seed)
+{
+    float2 point = uv;
+    point.x *= 1.45f;
+    const float seed_phase = static_cast<float>(seed & 255u) * (1.0f / 255.0f);
+
+    float field = 0.0f;
+    float weight = 0.55f;
+    for (uint octave = 0u; octave < 5u; ++octave) {
+        const float octave_f = static_cast<float>(octave);
+        const float wave = native_sin(
+            point.x * (2.1f + octave_f * 0.73f)
+            + native_cos(point.y * (2.7f + octave_f * 0.41f) - time * 0.31f)
+            + time * (0.34f + octave_f * 0.08f)
+            + seed_phase * 2.0f);
+        field += wave * weight;
+        point = rotate(point * 1.47f + (float2)(0.17f, -0.11f), 0.39f);
+        weight *= 0.58f;
+    }
+
+    const float ribbons = native_exp(-9.0f * fabs(uv.y * 0.78f - field * 0.22f));
+    const float shimmer =
+        0.5f + 0.5f * native_sin(uv.x * 11.0f + field * 3.0f + time * 0.9f);
+    float3 color = cosine_palette(
+        field * 0.19f + time * 0.025f,
+        (float3)(0.45f, 0.48f, 0.55f),
+        (float3)(0.45f, 0.42f, 0.40f),
+        (float3)(1.00f, 1.17f, 1.31f),
+        (float3)(0.08f, 0.31f, 0.58f));
+    color *= 0.14f + ribbons * (0.72f + shimmer * 0.42f);
+    color += (float3)(0.02f, 0.035f, 0.08f) * (1.0f - saturate(ribbons));
+    return color;
+}
+
+template <uint MaxIterations>
+TRUEOS_CPP_DEMO_INLINE float julia_escape(float2 point, float2 julia_c)
+{
+    float2 z = point;
+    uint iteration = 0u;
+    float magnitude_squared = dot(z, z);
+    for (; iteration < MaxIterations && magnitude_squared <= 64.0f; ++iteration) {
+        z = (float2)(
+            z.x * z.x - z.y * z.y,
+            2.0f * z.x * z.y) + julia_c;
+        magnitude_squared = dot(z, z);
+    }
+
+    if (iteration == MaxIterations) {
+        return 0.0f;
+    }
+    const float smooth_iteration =
+        static_cast<float>(iteration) + 1.0f
+        - native_log2(fmax(1.0f, native_log2(fmax(2.0f, magnitude_squared)))) * 0.5f;
+    return saturate(smooth_iteration / static_cast<float>(MaxIterations));
+}
+
+TRUEOS_CPP_DEMO_INLINE float3 render_julia(float2 uv, float time, uint seed)
+{
+    const float seed_phase = static_cast<float>(seed & 1023u) * (1.0f / 1023.0f);
+    const float angle = time * 0.105f + seed_phase * 0.8f;
+    const float2 julia_c = (float2)(
+        -0.745f + native_cos(angle * 1.37f) * 0.055f,
+        0.113f + native_sin(angle) * 0.095f);
+    const float2 point = rotate(uv * 1.48f, time * 0.035f);
+    const float escape = julia_escape<96u>(point, julia_c);
+    const float edge = escape > 0.0f
+        ? native_exp2(native_log2(escape) * 0.42f)
+        : 0.0f;
+    float3 color = cosine_palette(
+        edge * 1.25f + time * 0.018f,
+        (float3)(0.48f),
+        (float3)(0.48f),
+        (float3)(1.0f, 1.2f, 1.55f),
+        (float3)(0.02f, 0.23f, 0.52f));
+    const float interior_glow =
+        native_exp(-12.0f * fabs(vector_length(point) - 0.64f)) * (1.0f - escape);
+    color *= 0.08f + edge * 1.15f;
+    color += (float3)(0.18f, 0.05f, 0.32f) * interior_glow;
+    return color;
+}
+
+TRUEOS_CPP_DEMO_INLINE float sdf_circle(float2 point, float radius)
+{
+    return vector_length(point) - radius;
+}
+
+TRUEOS_CPP_DEMO_INLINE float sdf_box(float2 point, float2 half_extent, float rounding)
+{
+    const float2 delta = fabs(point) - half_extent + rounding;
+    return vector_length(fmax(delta, (float2)(0.0f)))
+        + fmin(fmax(delta.x, delta.y), 0.0f) - rounding;
+}
+
+TRUEOS_CPP_DEMO_INLINE float sdf_ring(float2 point, float radius, float thickness)
+{
+    return fabs(vector_length(point) - radius) - thickness;
+}
+
+TRUEOS_CPP_DEMO_INLINE float3 render_sdf(float2 uv, float time, uint seed)
+{
+    const float seed_phase = static_cast<float>(seed & 511u) * (1.0f / 511.0f);
+    const float2 spun = rotate(uv, time * 0.31f + seed_phase);
+    const float box = sdf_box(
+        rotate(spun - (float2)(0.29f, 0.02f), -time * 0.47f),
+        (float2)(0.30f, 0.19f),
+        0.075f);
+    const float circle = sdf_circle(
+        spun + (float2)(0.27f, -0.05f),
+        0.31f + 0.035f * native_sin(time * 1.3f));
+    const float ring = sdf_ring(uv, 0.71f, 0.025f);
+    const float merged = fmin(box, circle);
+    const float cut = fmax(merged, -sdf_circle(spun, 0.17f));
+    const float aa = 2.0f / 720.0f;
+    const float shape_alpha = 1.0f - smoothstep(-aa, aa, cut);
+    const float ring_alpha = 1.0f - smoothstep(-aa, aa, ring);
+    const float edge_glow = native_exp(-18.0f * fabs(cut));
+
+    float3 background = (float3)(0.012f, 0.018f, 0.045f);
+    background +=
+        (float3)(0.025f, 0.035f, 0.07f) * (1.0f - vector_length(uv) * 0.45f);
+    const float3 shape = cosine_palette(
+        spun.x * 0.11f + spun.y * 0.17f + time * 0.035f,
+        (float3)(0.55f),
+        (float3)(0.44f),
+        (float3)(1.0f, 1.25f, 1.5f),
+        (float3)(0.0f, 0.23f, 0.51f));
+    float3 color = mix(background, shape, shape_alpha);
+    color += (float3)(0.18f, 0.44f, 0.85f) * edge_glow * 0.38f;
+    color += (float3)(0.95f, 0.35f, 0.18f) * ring_alpha;
+    return color;
+}
+
+TRUEOS_CPP_DEMO_INLINE float3 render_voronoi(float2 uv, float time, uint seed)
+{
+    const float2 scaled = uv * 4.2f;
+    const int2 base = convert_int2_rtn(floor(scaled));
+    const float2 cell_local = scaled - floor(scaled);
+    float nearest = 100.0f;
+    float second = 100.0f;
+    float cell_id = 0.0f;
+
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            const int2 cell = base + (int2)(x, y);
+            float2 feature = (float2)(
+                hash_unit(cell, seed, 0u),
+                hash_unit(cell, seed, 1u));
+            feature = 0.5f
+                + 0.42f * native_sin(time * (float2)(0.63f, 0.71f)
+                    + feature * 6.28318530718f);
+            const float2 delta = (float2)(
+                static_cast<float>(x),
+                static_cast<float>(y)) + feature - cell_local;
+            const float distance_squared = dot(delta, delta);
+            if (distance_squared < nearest) {
+                second = nearest;
+                nearest = distance_squared;
+                cell_id = hash_unit(cell, seed, 2u);
+            } else if (distance_squared < second) {
+                second = distance_squared;
+            }
+        }
+    }
+
+    const float edge =
+        saturate((native_sqrt(second) - native_sqrt(nearest)) * 5.0f);
+    const float center = native_exp(-6.5f * nearest);
+    float3 color = cosine_palette(
+        cell_id + time * 0.025f,
+        (float3)(0.49f),
+        (float3)(0.46f),
+        (float3)(1.0f, 1.27f, 1.61f),
+        (float3)(0.03f, 0.27f, 0.53f));
+    color *= 0.26f + center * 0.92f;
+    color += (float3)(0.72f, 0.90f, 1.0f) * (1.0f - edge) * 0.45f;
+    return color;
+}
+
+template <uint Mode>
+TRUEOS_CPP_DEMO_INLINE float3 render_mode(float2 uv, float time, uint seed)
+{
+    if constexpr (Mode == mode_aurora) {
+        return render_aurora(uv, time, seed);
+    } else if constexpr (Mode == mode_julia) {
+        return render_julia(uv, time, seed);
+    } else if constexpr (Mode == mode_sdf) {
+        return render_sdf(uv, time, seed);
+    } else {
+        static_assert(Mode == mode_voronoi, "unsupported C++ demo mode");
+        return render_voronoi(uv, time, seed);
+    }
+}
+
+TRUEOS_CPP_DEMO_INLINE float3 render_selected(uint mode, float2 uv, float time, uint seed)
+{
+    switch (mode) {
+        case mode_aurora:
+            return render_mode<mode_aurora>(uv, time, seed);
+        case mode_julia:
+            return render_mode<mode_julia>(uv, time, seed);
+        case mode_sdf:
+            return render_mode<mode_sdf>(uv, time, seed);
+        case mode_voronoi:
+            return render_mode<mode_voronoi>(uv, time, seed);
+        default:
+            return (float3)(0.0f);
+    }
+}
+
+TRUEOS_CPP_DEMO_INLINE float3 render_gallery(float2 normalized, float time, uint seed)
+{
+    const uint column = normalized.x >= 0.5f ? 1u : 0u;
+    const uint row = normalized.y >= 0.5f ? 1u : 0u;
+    const uint mode = 1u + row * 2u + column;
+    const float2 panel_position = normalized * 2.0f;
+    const float2 panel_fraction = panel_position - floor(panel_position);
+    const float2 panel_uv = panel_fraction * 2.0f - 1.0f;
+    float3 color = render_selected(mode, panel_uv, time, seed + mode * 101u);
+
+    const float2 edge_distance = fabs(panel_fraction - 0.5f);
+    const float panel_edge = fmax(edge_distance.x, edge_distance.y);
+    const float border = smoothstep(0.465f, 0.495f, panel_edge);
+    color = mix(color, (float3)(0.72f, 0.84f, 1.0f), border * 0.72f);
+    return color;
+}
+
+} // namespace trueos::gpgpu::cpp_demo
+
+#undef TRUEOS_CPP_DEMO_INLINE
+
+TRUEOS_REQD_SUB_GROUP_SIZE_16
+__kernel void cpp_demo_rgba8(
+    __global uint *dst_rgba,
+    uint dst_pitch_bytes,
+    uint dst_width,
+    uint dst_height,
+    uint rect_x,
+    uint rect_y,
+    uint rect_width,
+    uint rect_height,
+    float time_seconds,
+    uint demo_mode,
+    uint seed,
+    uint flags)
+{
+    using namespace trueos::gpgpu::cpp_demo;
+
+    const uint local_x = static_cast<uint>(get_global_id(0));
+    const uint local_y = static_cast<uint>(get_global_id(1));
+    if (local_x >= rect_width || local_y >= rect_height
+        || rect_x >= dst_width || rect_y >= dst_height
+        || local_x >= dst_width - rect_x || local_y >= dst_height - rect_y) {
+        return;
+    }
+
+    const uint x = rect_x + local_x;
+    const uint y = rect_y + local_y;
+    const float2 normalized = (float2)(
+        (static_cast<float>(local_x) + 0.5f) / static_cast<float>(rect_width),
+        (static_cast<float>(local_y) + 0.5f) / static_cast<float>(rect_height));
+    const float aspect =
+        static_cast<float>(rect_width) / fmax(1.0f, static_cast<float>(rect_height));
+    const float2 uv = (normalized * 2.0f - 1.0f) * (float2)(aspect, 1.0f);
+    const uint bounded_mode = demo_mode < mode_count ? demo_mode : mode_gallery;
+
+    float3 color = bounded_mode == mode_gallery
+        ? render_gallery(normalized, time_seconds, seed)
+        : render_selected(bounded_mode, uv, time_seconds, seed);
+    if ((flags & 1u) != 0u) {
+        const float vignette =
+            saturate(1.16f - 0.34f * dot(normalized * 2.0f - 1.0f,
+                                        normalized * 2.0f - 1.0f));
+        color *= vignette;
+    }
+
+    const uint pitch_pixels =
+        dst_pitch_bytes / trueos::gpgpu::rgba8_bytes_per_pixel;
+    dst_rgba[y * pitch_pixels + x] = pack_opaque(color);
+}

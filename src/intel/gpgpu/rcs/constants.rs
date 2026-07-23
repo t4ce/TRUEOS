@@ -20,6 +20,9 @@ const SCENE_AABB_ADLS_GPU: u64 = 0x0D41_0000;
 const LAB256_MULTIPHASE_ADLS_GPU: u64 = 0x0D42_0000;
 const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU: u64 = 0x0D43_0000;
 const SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU: u64 = 0x0D44_0000;
+// The large Spirit sprite image extends through 0x0D4C_xxxx. Keep the C++
+// demo at the next 64 KiB boundary so resident kernel mappings never overlap.
+const CPP_DEMO_RGBA8_ADLS_GPU: u64 = 0x0D4D_0000;
 #[cfg(not(feature = "intel_gpu_cpp_aot"))]
 pub(crate) const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 #[cfg(feature = "intel_gpu_cpp_aot")]
@@ -42,6 +45,8 @@ const GLYPH_MASK_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const SKYBOX_SAMPLE_RGB565_TEXT_OFFSET_BYTES: u64 = 0x40;
 const CHART_SINE_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const PIXEL_PLASMA_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
+const CPP_DEMO_RGBA8_TEXT_OFFSET_BYTES: u64 =
+    CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const FONT_OUTLINE_MESH_TEXT_OFFSET_BYTES: u64 = 0x40;
 const SCENE_AABB_TEXT_OFFSET_BYTES: u64 = 0x40;
 const LAB256_STEP_TEXT_OFFSET_BYTES: u64 = 0x0040;
@@ -351,6 +356,21 @@ const PIXEL_PLASMA_PRE_MARKER_SLOT: usize = 31;
 const PIXEL_PLASMA_POST_MARKER_SLOT: usize = 30;
 const PIXEL_PLASMA_PRE_MARKER: u32 = 0xC0DE_A801;
 const PIXEL_PLASMA_POST_MARKER: u32 = 0xC0DE_A802;
+const CPP_DEMO_IDD_OFFSET_BYTES: usize = 0x6800;
+const CPP_DEMO_BINDING_TABLE_OFFSET_BYTES: usize = 0x6840;
+const CPP_DEMO_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x6880;
+const CPP_DEMO_PAYLOAD_OFFSET_BYTES: usize = 0x6A00;
+const CPP_DEMO_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
+const CPP_DEMO_CROSS_THREAD_BYTES: usize =
+    CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes as usize;
+const CPP_DEMO_PER_THREAD_BYTES: usize =
+    CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes as usize;
+const CPP_DEMO_INDIRECT_BYTES: usize =
+    CPP_DEMO_CROSS_THREAD_BYTES + CPP_DEMO_PER_THREAD_BYTES;
+const CPP_DEMO_PRE_MARKER_SLOT: usize = 41;
+const CPP_DEMO_POST_MARKER_SLOT: usize = 40;
+const CPP_DEMO_PRE_MARKER: u32 = 0xC0DE_C901;
+const CPP_DEMO_POST_MARKER: u32 = 0xC0DE_C902;
 
 // A UI4 compute producer may be queued behind the compositor on RCS0. In
 // particular, the first use of each primary swap buffer seeds and composes a

@@ -721,30 +721,32 @@ def main(argv: list[str] | None = None) -> int:
         raise ContractError("ocloc-cl frontend requires a .cl source")
     variant = args.variant or ("cpp" if frontend == "clang-clcpp" else "legacy")
     if frontend == "clang-clcpp" and args.publish_dir:
-        if variant != "cpp":
+        if variant not in ("cpp", "cpp-native"):
             raise ContractError(
                 "published clang-clcpp artifacts must use the reviewed cpp "
-                "ABI-twin variant"
+                "ABI-twin or cpp-native variant"
             )
         missing_gates = []
         if not args.toolchain_lock:
             missing_gates.append("--toolchain-lock")
         if not args.repro_check:
             missing_gates.append("--repro-check")
+        if not args.expect_kernel:
+            missing_gates.append("--expect-kernel")
         if missing_gates:
             raise ContractError(
                 "publishing C++ artifacts requires "
                 + " and ".join(missing_gates)
                 + "; prepare a reviewed lock without --publish-dir first"
             )
-        if not args.abi_reference_bin:
-            missing_gates.append("--abi-reference-bin")
-        if not args.expect_kernel:
-            missing_gates.append("--expect-kernel")
-        if missing_gates:
+        if variant == "cpp" and not args.abi_reference_bin:
             raise ContractError(
-                "publishing the cpp ABI-twin variant requires "
-                + " and ".join(missing_gates)
+                "publishing the cpp ABI-twin variant requires --abi-reference-bin"
+            )
+        if variant == "cpp-native" and args.abi_reference_bin:
+            raise ContractError(
+                "cpp-native is a new-kernel publication policy and must not "
+                "claim a legacy ABI reference"
             )
 
     ocloc_candidates = [
@@ -902,10 +904,14 @@ def main(argv: list[str] | None = None) -> int:
             "reproducibility_check": "passed" if args.repro_check else "not-requested",
             "publication_policy": (
                 {
-                    "name": "cpp-legacy-abi-twin-v1",
+                    "name": (
+                        "cpp-legacy-abi-twin-v1"
+                        if variant == "cpp"
+                        else "cpp-native-aot-v1"
+                    ),
                     "expected_kernels": sorted(args.expect_kernel),
                 }
-                if variant == "cpp"
+                if variant in ("cpp", "cpp-native")
                 else None
             ),
         },

@@ -235,6 +235,49 @@ impl PixelPlasmaRgba8Params {
     }
 }
 
+pub(crate) const CPP_DEMO_MODE_GALLERY: u32 = 0;
+pub(crate) const CPP_DEMO_MODE_AURORA: u32 = 1;
+pub(crate) const CPP_DEMO_MODE_JULIA: u32 = 2;
+pub(crate) const CPP_DEMO_MODE_SDF: u32 = 3;
+pub(crate) const CPP_DEMO_MODE_VORONOI: u32 = 4;
+pub(crate) const CPP_DEMO_MODE_COUNT: u32 = 5;
+pub(crate) const CPP_DEMO_FLAG_VIGNETTE: u32 = 1 << 0;
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct CppDemoRgba8Params {
+    pub(crate) dst_gpu: u64,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) dst_width: u32,
+    pub(crate) dst_height: u32,
+    pub(crate) rect_x: u32,
+    pub(crate) rect_y: u32,
+    pub(crate) rect_width: u32,
+    pub(crate) rect_height: u32,
+    pub(crate) time_seconds: f32,
+    pub(crate) demo_mode: u32,
+    pub(crate) seed: u32,
+    pub(crate) flags: u32,
+}
+
+impl CppDemoRgba8Params {
+    pub(crate) const fn new(time_seconds: f32, demo_mode: u32, seed: u32) -> Self {
+        Self {
+            dst_gpu: 0,
+            dst_pitch_bytes: 0,
+            dst_width: 0,
+            dst_height: 0,
+            rect_x: 0,
+            rect_y: 0,
+            rect_width: 0,
+            rect_height: 0,
+            time_seconds,
+            demo_mode,
+            seed,
+            flags: CPP_DEMO_FLAG_VIGNETTE,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 struct FontOutlineMeshParams {
     src_gpu: u64,

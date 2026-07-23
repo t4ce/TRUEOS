@@ -1182,6 +1182,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
 
     let rgba_acquire_started = Instant::now();
     let mut rgba_buffer_wait_counted = false;
+    let mut ownership_at_first_busy = None;
     let write = loop {
         match acquire_frame_buffer(stream.frame) {
             Ok(write) => break write,
@@ -1189,6 +1190,10 @@ async fn convert_publish_decoded_nv12_stream_frame(
                 // Buffer reuse is driven directly by the compositor releasing
                 // a non-front RGBA read lease after SURFLIVE. No decoder pixels
                 // are copied, replaced, or published while ownership is busy.
+                if ownership_at_first_busy.is_none() {
+                    ownership_at_first_busy =
+                        super::frame_buffer_ownership_probe(stream.frame).ok();
+                }
                 let (report, worker_online) = {
                     let mut state = VIDEO_CONVERSION_STATE.lock();
                     if !rgba_buffer_wait_counted {
@@ -1220,6 +1225,39 @@ async fn convert_publish_decoded_nv12_stream_frame(
     };
     probe.rgba_acquire_us =
         video_conversion_ticks_to_micros(rgba_acquire_started.elapsed().as_ticks());
+    let ownership_after_acquire = super::frame_buffer_ownership_probe(stream.frame).ok();
+    let start_buffer_count = ownership_at_first_busy.map_or(0, |state| state.buffer_count);
+    let start_front = ownership_at_first_busy
+        .and_then(|state| state.front_buffer)
+        .map_or(u8::MAX, |index| index);
+    let start_acquired_mask = ownership_at_first_busy.map_or(0, |state| state.acquired_mask);
+    let start_reader_mask = ownership_at_first_busy.map_or(0, |state| state.reader_mask);
+    let start_readers = ownership_at_first_busy.map_or([0u16; 3], |state| state.readers);
+    let end_front = ownership_after_acquire
+        .and_then(|state| state.front_buffer)
+        .map_or(u8::MAX, |index| index);
+    let end_acquired_mask = ownership_after_acquire.map_or(0, |state| state.acquired_mask);
+    let end_reader_mask = ownership_after_acquire.map_or(0, |state| state.reader_mask);
+    let end_readers = ownership_after_acquire.map_or([0u16; 3], |state| state.readers);
+    crate::log_trace!(target: "ui4";
+        "ui4 video-surface-lifecycle event=rgba-acquired playback_frame={} decode_seq={} frame={} buffer={} busy={} wait_us={} observed_ns={} start_buffers={} start_front={} start_acquired_mask=0x{:X} start_reader_mask=0x{:X} start_readers={:?} end_front={} end_acquired_mask=0x{:X} end_reader_mask=0x{:X} end_readers={:?} probe=lock-consistent-snapshots ownership_unchanged=1\n",
+        playback_frame,
+        source.decode_sequence,
+        stream.frame.raw(),
+        write.buffer_index,
+        rgba_buffer_wait_counted as u8,
+        probe.rgba_acquire_us,
+        crate::chronos::monotonic_nanos(),
+        start_buffer_count,
+        start_front,
+        start_acquired_mask,
+        start_reader_mask,
+        start_readers,
+        end_front,
+        end_acquired_mask,
+        end_reader_mask,
+        end_readers,
+    );
 
     let surface_prepare_started = Instant::now();
     let destination = match gpgpu_rgba_surface(write) {
@@ -1390,6 +1428,17 @@ async fn convert_publish_decoded_nv12_stream_frame(
         }
     };
     probe.publish_us = video_conversion_ticks_to_micros(publish_started.elapsed().as_ticks());
+    crate::log_trace!(target: "ui4";
+        "ui4 video-surface-lifecycle event=published playback_frame={} decode_seq={} frame={} buffer={} frame_serial={} window_serial={} producer_release={} observed_ns={} probe=producer-to-display-chain ownership_unchanged=1\n",
+        playback_frame,
+        source.decode_sequence,
+        stream.frame.raw(),
+        published.buffer_index,
+        published.publish_serial,
+        window_serial,
+        release.sequence(),
+        crate::chronos::monotonic_nanos(),
+    );
     if sequence <= 8 || sequence.is_multiple_of(120) {
         crate::log_info!(target: "ui4";
             "ui4 video-frame published seq={} decode_seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-nv12-to-ui4-rgba8-frame producer_release={} submit_ms={} source=media-ytile-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} media_gpu=0x{:X} target_gpu=0x{:X} rgba_buffers={} rgba_ownership=producer-write+broker-pending+display-live plane_route=slot1-rgba8 decoder_source_release=guc-completion display_release=surflive native_attachment=0 linked_nv12_slots=0 producer_plane_mmio=0 cpu_pixel_copy=0\n",

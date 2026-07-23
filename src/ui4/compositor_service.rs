@@ -673,7 +673,8 @@ fn drive_async_frame(
             .saturating_add(crate::chronos::monotonic_nanos().saturating_sub(phase_started_ns));
         return match poll {
             crate::intel::Ui4PlaneSurfaceFlipPoll::Pending => Ok(DriveResult::Pending),
-            crate::intel::Ui4PlaneSurfaceFlipPoll::Complete => {
+            crate::intel::Ui4PlaneSurfaceFlipPoll::Complete { wait_ns, polls } => {
+                trace_video_surflive_transitions(runtime, pending, wait_ns, polls);
                 for composition in pending.completed.iter().copied() {
                     crate::intel::commit_ui4_composition_flip(composition);
                 }
@@ -1152,6 +1153,54 @@ fn commit_direct_leases(runtime: &mut Runtime, pending: &mut PendingFrame) {
     }
 }
 
+fn trace_video_surflive_transitions(
+    runtime: &Runtime,
+    pending: &PendingFrame,
+    flip_wait_ns: u64,
+    flip_polls: u32,
+) {
+    let observed_ns = crate::chronos::monotonic_nanos();
+    let transaction_ns = observed_ns.saturating_sub(pending.started_ns);
+    let pre_flip_ns = transaction_ns.saturating_sub(flip_wait_ns);
+    let guc_jobs = pending
+        .completed
+        .iter()
+        .copied()
+        .filter(|composition| crate::intel::ui4_composition_has_guc_work(*composition))
+        .count();
+    for plan in pending.plans.iter().filter(|plan| plan.changed) {
+        let slot = target_plane_slot(plan.target);
+        let Some(replacement) = pending.direct_leases[slot] else {
+            continue;
+        };
+        if !frame_snapshot(replacement.frame)
+            .is_ok_and(|snapshot| snapshot.plan.content == FrameContent::Video)
+        {
+            continue;
+        }
+        let publish_serial = pending.direct_windows[slot]
+            .and_then(|id| pending.windows.iter().find(|window| window.id == id))
+            .map_or(0, |window| window.publish_serial);
+        let previous = runtime.live_direct[slot];
+        crate::log_trace!(target: "ui4";
+            "ui4 video-surface-lifecycle event=surflive-observed frame={} buffer={} publish_serial={} slot={} previous_frame={} previous_buffer={} observed_ns={} transaction_us={} pre_flip_us={} flip_wait_us={} flip_polls={} batch_planes={} batch_guc_jobs={} boundary=surflive-before-old-display-release ownership_unchanged=1\n",
+            replacement.frame.raw(),
+            replacement.buffer_index,
+            publish_serial,
+            slot,
+            previous.map_or(0, |lease| lease.frame.raw()),
+            previous.map_or(u8::MAX, |lease| lease.buffer_index),
+            observed_ns,
+            transaction_ns / 1_000,
+            pre_flip_ns / 1_000,
+            flip_wait_ns / 1_000,
+            flip_polls,
+            pending.completed.len(),
+            guc_jobs,
+        );
+    }
+}
+
 /// Drop the old scanout owner's exact buffer only after the caller proved that
 /// the replacement surface is live. Video logs this boundary explicitly so a
 /// hardware run can distinguish producer completion from display retirement.
@@ -1163,6 +1212,16 @@ fn release_replaced_direct_lease(slot: usize, lease: FrameReadLease, boundary: &
         let sequence = VIDEO_SURFLIVE_RELEASE_SEQUENCE
             .fetch_add(1, Ordering::Relaxed)
             .saturating_add(1);
+        crate::log_trace!(target: "ui4";
+            "ui4 video-surface-lifecycle event=display-release seq={} frame={} buffer={} slot={} released={} observed_ns={} boundary=surflive-{} ownership_unchanged=1\n",
+            sequence,
+            lease.frame.raw(),
+            lease.buffer_index,
+            slot,
+            released as u8,
+            crate::chronos::monotonic_nanos(),
+            boundary,
+        );
         if sequence <= 8 || sequence.is_multiple_of(120) || !released {
             crate::log_info!(target: "ui4";
                 "ui4 video-frame display-retired seq={} frame={} buffer={} slot={} boundary=surflive-{} display_lease_released={} display_ownership_released={} cpu_pixel_copy=0\n",

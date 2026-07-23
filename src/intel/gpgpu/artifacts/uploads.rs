@@ -46,6 +46,10 @@ pub(crate) fn pixel_plasma_rgba8_upload_status() -> Option<UploadedKernelArtifac
     *PIXEL_PLASMA_RGBA8_UPLOAD.lock()
 }
 
+pub(crate) fn cpp_demo_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
+    *CPP_DEMO_RGBA8_UPLOAD.lock()
+}
+
 pub(crate) fn font_outline_mesh_upload_status() -> Option<UploadedKernelArtifact> {
     *FONT_OUTLINE_MESH_UPLOAD.lock()
 }
@@ -339,6 +343,24 @@ pub(crate) fn upload_pixel_plasma_rgba8_kernel() -> Option<UploadedKernelArtifac
     Some(upload)
 }
 
+pub(crate) fn upload_cpp_demo_rgba8_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *CPP_DEMO_RGBA8_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/gpgpu: cpp-demo-rgba8 upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload = upload_artifact(dev, CPP_DEMO_RGBA8_ADLS_ARTIFACT, CPP_DEMO_RGBA8_ADLS_GPU)?;
+    *CPP_DEMO_RGBA8_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
 pub(crate) fn upload_font_outline_mesh_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *FONT_OUTLINE_MESH_UPLOAD.lock() {
         return Some(upload);
@@ -471,6 +493,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
     CHART_SINE_RGBA8_KERNEL_NAME,
     PIXEL_PLASMA_RGBA8_KERNEL_NAME,
+    CPP_DEMO_RGBA8_KERNEL_NAME,
     FONT_OUTLINE_MESH_KERNEL_NAME,
     FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
     SCENE_AABB_KERNEL_NAME,
@@ -622,6 +645,11 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT,
             gpu: PIXEL_PLASMA_RGBA8_ADLS_GPU,
             upload: &PIXEL_PLASMA_RGBA8_UPLOAD,
+        }),
+        CPP_DEMO_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: CPP_DEMO_RGBA8_ADLS_ARTIFACT,
+            gpu: CPP_DEMO_RGBA8_ADLS_GPU,
+            upload: &CPP_DEMO_RGBA8_UPLOAD,
         }),
         FONT_OUTLINE_MESH_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: FONT_OUTLINE_MESH_ADLS_ARTIFACT,

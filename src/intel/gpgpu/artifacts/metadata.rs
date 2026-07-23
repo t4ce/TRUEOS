@@ -193,6 +193,15 @@ pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         PIXEL_PLASMA_RGBA8_ADLS_BIN_SHA256,
     );
 
+pub(crate) const CPP_DEMO_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::new(
+    CPP_DEMO_RGBA8_KERNEL_NAME,
+    CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.target,
+    CPP_DEMO_RGBA8_ADLS_BIN,
+    CPP_DEMO_RGBA8_ADLS_SPV,
+    CPP_DEMO_RGBA8_ADLS_BIN_SHA256,
+    Some(&CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT),
+);
+
 pub(crate) const FONT_OUTLINE_MESH_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::legacy_adls(
         FONT_OUTLINE_MESH_KERNEL_NAME,

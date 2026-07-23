@@ -119,6 +119,18 @@ pub(crate) struct FrameSnapshot {
     pub(crate) publish_serial: u64,
 }
 
+/// One lock-consistent view of the allocation blockers seen by a streaming
+/// producer. This is diagnostic state only: ownership is still transferred
+/// exclusively through the checked read/write lease APIs.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FrameBufferOwnershipProbe {
+    pub(crate) buffer_count: u8,
+    pub(crate) front_buffer: Option<u8>,
+    pub(crate) acquired_mask: u8,
+    pub(crate) reader_mask: u8,
+    pub(crate) readers: [u16; 3],
+}
+
 #[derive(Copy, Clone)]
 struct AcquiredBuffer {
     index: u8,
@@ -315,6 +327,30 @@ pub(crate) fn acquire_frame_buffer(handle: FrameHandle) -> Result<FrameWriteLeas
         frame: handle,
         buffer_index: index,
         token: acquired.token,
+    })
+}
+
+pub(crate) fn frame_buffer_ownership_probe(
+    handle: FrameHandle,
+) -> Result<FrameBufferOwnershipProbe, FramePoolError> {
+    let pool = FRAME_POOL.lock();
+    let frame = pool.checked(handle)?;
+    let mut acquired_mask = 0u8;
+    let mut reader_mask = 0u8;
+    for index in 0..frame.buffer_count as usize {
+        if frame.acquired[index].is_some() {
+            acquired_mask |= 1u8 << index;
+        }
+        if frame.readers[index] != 0 {
+            reader_mask |= 1u8 << index;
+        }
+    }
+    Ok(FrameBufferOwnershipProbe {
+        buffer_count: frame.buffer_count,
+        front_buffer: frame.front_buffer,
+        acquired_mask,
+        reader_mask,
+        readers: frame.readers,
     })
 }
 

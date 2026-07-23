@@ -1084,7 +1084,8 @@ def verify_manifest(
     toolchain = provenance.get("toolchain")
     if not isinstance(toolchain, dict):
         raise ContractError(f"{manifest_path}: toolchain provenance is missing")
-    if manifest.get("variant") == "cpp" and (
+    cpp_variant = manifest.get("variant")
+    if cpp_variant in ("cpp", "cpp-native") and (
         toolchain.get("frontend") != "clang-clcpp"
         or not isinstance(toolchain.get("tools"), dict)
         or not toolchain["tools"]
@@ -1120,14 +1121,19 @@ def verify_manifest(
                 f"{manifest_path}: toolchain provenance does not match reviewed lock"
             )
     if toolchain.get("frontend") == "clang-clcpp":
-        if manifest.get("variant") != "cpp":
+        if cpp_variant not in ("cpp", "cpp-native"):
             raise ContractError(
                 f"{manifest_path}: clang-clcpp publication has an unreviewed variant"
             )
         policy = provenance.get("publication_policy")
-        if not isinstance(policy, dict) or policy.get("name") != "cpp-legacy-abi-twin-v1":
+        expected_policy = (
+            "cpp-legacy-abi-twin-v1"
+            if cpp_variant == "cpp"
+            else "cpp-native-aot-v1"
+        )
+        if not isinstance(policy, dict) or policy.get("name") != expected_policy:
             raise ContractError(
-                f"{manifest_path}: cpp ABI-twin publication policy is missing"
+                f"{manifest_path}: {cpp_variant} publication policy is missing"
             )
         expected_kernels = policy.get("expected_kernels")
         actual_kernels = sorted(
@@ -1141,9 +1147,14 @@ def verify_manifest(
             raise ContractError(
                 f"{manifest_path}: expected kernel set is missing or stale"
             )
-        if not isinstance(reference, dict) or reference.get("result") != "exact-match":
+        if cpp_variant == "cpp":
+            if not isinstance(reference, dict) or reference.get("result") != "exact-match":
+                raise ContractError(
+                    f"{manifest_path}: cpp ABI twin lacks an exact ABI reference"
+                )
+        elif reference is not None:
             raise ContractError(
-                f"{manifest_path}: cpp ABI twin lacks an exact ABI reference"
+                f"{manifest_path}: cpp-native artifact has an unexpected ABI reference"
             )
     rendered = render_rust_contracts(manifest)
     existing = contract_path.read_text(encoding="utf-8")

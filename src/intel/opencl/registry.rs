@@ -50,6 +50,7 @@ pub(crate) enum KnownKernelRole {
     FluidX3d,
     Chart,
     Pixel,
+    CppDemo,
     Font,
 }
 
@@ -68,6 +69,8 @@ const GLYPH_MASK_CROSS_THREAD_BYTES: u32 = 128;
 const SKYBOX_CROSS_THREAD_BYTES: u32 = 160;
 const CHART_CROSS_THREAD_BYTES: u32 = 128;
 const PIXEL_PLASMA_CROSS_THREAD_BYTES: u32 = 128;
+const CPP_DEMO_CROSS_THREAD_BYTES: u32 =
+    gpgpu::CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
 const FONT_OUTLINE_MESH_CROSS_THREAD_BYTES: u32 = 128;
 const FONT_OUTLINE_COVERAGE_R8_CROSS_THREAD_BYTES: u32 = 128;
 const GENERIC_PER_THREAD_BYTES: u32 = 96;
@@ -506,6 +509,38 @@ const PIXEL_PLASMA_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     ],
 };
 
+const CPP_DEMO_ARGS: &[KernelCallArg<'_>] = &[
+    rw_buf!(0, "dst_rgba", "__global uint*", 0, 12),
+    u32_arg!(1, "dst_pitch_bytes", 14),
+    u32_arg!(2, "dst_width", 15),
+    u32_arg!(3, "dst_height", 16),
+    u32_arg!(4, "rect_x", 17),
+    u32_arg!(5, "rect_y", 18),
+    u32_arg!(6, "rect_width", 19),
+    u32_arg!(7, "rect_height", 20),
+    f32_arg!(8, "time_seconds", 21),
+    u32_arg!(9, "demo_mode", 22),
+    u32_arg!(10, "seed", 23),
+    u32_arg!(11, "flags", 24),
+];
+const CPP_DEMO_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
+    name: gpgpu::CPP_DEMO_RGBA8_KERNEL_NAME,
+    source_path: gpgpu::CPP_DEMO_RGBA8_SOURCE_PATH,
+    producer: IGC,
+    target: ADLS,
+    entry_text_offset_bytes: gpgpu::CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset,
+    cross_thread_bytes: CPP_DEMO_CROSS_THREAD_BYTES,
+    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
+    binding_count: 1,
+    args: CPP_DEMO_ARGS,
+    descriptor_layouts: NO_DESCS,
+    launch: KernelLaunchContract::nd_range_2d(None),
+    consumers: &[
+        "shell2:cpp",
+        "ui4::gpgpu_preview_consumer_service_task",
+    ],
+};
+
 const FONT_OUTLINE_MESH_ARGS: &[KernelCallArg<'_>] = &[
     ro_buf!(0, "outline_ops", "__global const uint*", 0, 12),
     rw_buf!(1, "output", "__global uint*", 1, 14),
@@ -663,6 +698,14 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         upload: gpgpu::upload_pixel_plasma_rgba8_kernel,
         status: gpgpu::pixel_plasma_rgba8_upload_status,
         role: KnownKernelRole::Pixel,
+    },
+    KnownAotKernel {
+        name: gpgpu::CPP_DEMO_RGBA8_KERNEL_NAME,
+        artifact: &gpgpu::CPP_DEMO_RGBA8_ADLS_ARTIFACT,
+        contract: &CPP_DEMO_CONTRACT,
+        upload: gpgpu::upload_cpp_demo_rgba8_kernel,
+        status: gpgpu::cpp_demo_rgba8_upload_status,
+        role: KnownKernelRole::CppDemo,
     },
     KnownAotKernel {
         name: gpgpu::FONT_OUTLINE_MESH_KERNEL_NAME,
