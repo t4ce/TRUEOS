@@ -325,7 +325,7 @@ fn resident_upload_matches(
         && upload.gpu == gpu
         && upload.phys != 0
         && upload.bytes == bin_bytes
-        && upload.mapped_bytes >= upload.bytes
+        && align_up(bin_bytes, super::WARM_ALIGN) == Some(upload.mapped_bytes)
         && upload.verified
         && upload.bin_sha256 == admitted_sha256
         && upload.device_id == dev.device_id

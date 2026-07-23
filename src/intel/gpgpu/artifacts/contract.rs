@@ -306,9 +306,7 @@ impl GpgpuKernelAbiContract {
             return Err(GpgpuKernelAbiContractError::UnsupportedPerThreadPayload);
         }
         let per_thread = self.per_thread_payload_args[0];
-        let Some(per_thread_end) = per_thread
-            .offset_bytes
-            .checked_add(per_thread.size_bytes)
+        let Some(per_thread_end) = per_thread.offset_bytes.checked_add(per_thread.size_bytes)
         else {
             return Err(GpgpuKernelAbiContractError::UnsupportedPerThreadPayload);
         };
@@ -368,15 +366,12 @@ impl GpgpuKernelAbiContract {
             let mut implicit_index = 0;
             while implicit_index < self.implicit_payload_args.len() {
                 let implicit = self.implicit_payload_args[implicit_index];
-                let Some(implicit_end) =
-                    implicit.offset_bytes.checked_add(implicit.size_bytes)
+                let Some(implicit_end) = implicit.offset_bytes.checked_add(implicit.size_bytes)
                 else {
                     return Err(GpgpuKernelAbiContractError::ImplicitPayloadOutOfBounds);
                 };
                 if arg.offset_bytes < implicit_end && implicit.offset_bytes < end {
-                    return Err(
-                        GpgpuKernelAbiContractError::ExplicitImplicitPayloadOverlap,
-                    );
+                    return Err(GpgpuKernelAbiContractError::ExplicitImplicitPayloadOverlap);
                 }
                 implicit_index += 1;
             }
@@ -484,18 +479,10 @@ impl GpgpuKernelAbiContractError {
             Self::InvalidCrossThreadData => "contract-invalid-cross-thread-data",
             Self::UnsupportedPerThreadData => "contract-unsupported-per-thread-data",
             Self::UnsupportedImplicitPayload => "contract-unsupported-implicit-payload",
-            Self::ImplicitPayloadOutOfBounds => {
-                "contract-implicit-payload-out-of-bounds"
-            }
-            Self::OverlappingImplicitPayloadArgs => {
-                "contract-overlapping-implicit-payload-args"
-            }
-            Self::ExplicitImplicitPayloadOverlap => {
-                "contract-explicit-implicit-payload-overlap"
-            }
-            Self::UnsupportedPerThreadPayload => {
-                "contract-unsupported-per-thread-payload"
-            }
+            Self::ImplicitPayloadOutOfBounds => "contract-implicit-payload-out-of-bounds",
+            Self::OverlappingImplicitPayloadArgs => "contract-overlapping-implicit-payload-args",
+            Self::ExplicitImplicitPayloadOverlap => "contract-explicit-implicit-payload-overlap",
+            Self::UnsupportedPerThreadPayload => "contract-unsupported-per-thread-payload",
             Self::InvalidPayloadArg => "contract-invalid-payload-arg",
             Self::InvalidPointerSize => "contract-invalid-pointer-size",
             Self::MissingPointerQualifier => "contract-missing-pointer-qualifier",

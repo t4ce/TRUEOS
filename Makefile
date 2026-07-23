@@ -94,10 +94,14 @@ INTEL_GPU_CPP_ARTIFACT_DIR := crates/trueos-shader/gpgpu/kernels/artifacts/adls/
 INTEL_GPU_CPP_COPY_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/copy_rect_rgba8.bin
 INTEL_GPU_LEGACY_COPY_BIN := crates/trueos-shader/gpgpu/kernels/artifacts/adls/copy_rect_rgba8.bin
 INTEL_GPU_BAKERY_PYTHON ?= python3
+INTEL_GPU_LINKED_ELF ?= $(KERNEL_BIN)
+CPP_AOT_ARTIFACT_DIR := bld/artifacts/$(BUILD_MODE)-$(ARTIFACT_BUILD_ID)-cpp-aot
+CPP_AOT_ISO_BOOT_DIR := bld/iso-bootroot-cpp-aot
+CPP_AOT_ISO_PATH := bld/trueos-cpp-aot.iso
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel kernel-cpp-aot intel-gpu-bake-copy-cpp intel-gpu-verify-copy-cpp intel-gpu-verify-linked-copy-cpp artifacts limine baremetal-reboot-log net-shell-console iso iso-cpp-aot provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: images empty-libs kernel kernel-cpp-aot intel-gpu-bake-copy-cpp intel-gpu-verify-copy-cpp intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy-cpp artifacts limine baremetal-reboot-log net-shell-console iso iso-cpp-aot provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -123,9 +127,13 @@ intel-gpu-bake-copy-cpp:
 
 intel-gpu-verify-copy-cpp:
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify.py" --artifact-dir "$(INTEL_GPU_CPP_ARTIFACT_DIR)"
+	$(INTEL_GPU_BAKERY_PYTHON) -B -m unittest discover -s "$(INTEL_GPU_BAKERY_DIR)" -p 'test_*.py'
 
 intel-gpu-verify-linked-copy-cpp:
-	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_linked.py" --elf "$(KERNEL_BIN)" --selected-bin "$(INTEL_GPU_CPP_COPY_BIN)" --forbidden-bin "$(INTEL_GPU_LEGACY_COPY_BIN)"
+	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_linked.py" --elf "$(INTEL_GPU_LINKED_ELF)" --selected-bin "$(INTEL_GPU_CPP_COPY_BIN)" --forbidden-bin "$(INTEL_GPU_LEGACY_COPY_BIN)"
+
+intel-gpu-verify-packaged-copy-cpp:
+	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_packaged.py" --runtime-elf "$(ARTIFACT_RUNTIME_ELF)" --staged-elf "$(ISO_BOOT_DIR)/TRUEOS.elf" --iso "$(ISO_PATH)" --selected-bin "$(INTEL_GPU_CPP_COPY_BIN)" --forbidden-bin "$(INTEL_GPU_LEGACY_COPY_BIN)"
 
 artifacts: kernel
 	mkdir -p $(ARTIFACT_DIR)
@@ -139,6 +147,8 @@ artifacts: kernel
 		printf "build_id=%s\n" "$(ARTIFACT_BUILD_ID)"; \
 		printf "commit=%s\n" "$$commit"; \
 		printf "timestamp_utc=%s\n" "$$ts"; \
+		printf "cargo_build_flags=%s\n" "$(strip $(CARGO_BUILD_FLAGS))"; \
+		printf "intel_gpu_cpp_aot=%s\n" "$(if $(findstring intel_gpu_cpp_aot,$(CARGO_BUILD_FLAGS)),1,0)"; \
 		printf "runtime_elf=%s\n" "$(ARTIFACT_RUNTIME_ELF)"; \
 		printf "debug_elf=%s\n" "$(ARTIFACT_DEBUG_ELF)"; \
 	} > $(ARTIFACT_BUILD_INFO)
@@ -307,8 +317,8 @@ iso: artifacts images limine
 	fi
 
 iso-cpp-aot: intel-gpu-verify-copy-cpp
-	$(MAKE) --no-print-directory CARGO_BUILD_FLAGS="$(strip $(CARGO_BUILD_FLAGS) --features intel_gpu_cpp_aot)" iso
-	$(MAKE) --no-print-directory intel-gpu-verify-linked-copy-cpp
+	$(MAKE) --no-print-directory CARGO_BUILD_FLAGS="$(strip $(CARGO_BUILD_FLAGS) --features intel_gpu_cpp_aot)" ARTIFACT_DIR="$(CPP_AOT_ARTIFACT_DIR)" ISO_BOOT_DIR="$(CPP_AOT_ISO_BOOT_DIR)" ISO_PATH="$(CPP_AOT_ISO_PATH)" iso
+	$(MAKE) --no-print-directory ARTIFACT_DIR="$(CPP_AOT_ARTIFACT_DIR)" ISO_BOOT_DIR="$(CPP_AOT_ISO_BOOT_DIR)" ISO_PATH="$(CPP_AOT_ISO_PATH)" intel-gpu-verify-packaged-copy-cpp
 
 provenance-git-clean:
 	@if [ "$(PROVENANCE_CLEAN_FLAG)" = "--require-clean" ]; then \

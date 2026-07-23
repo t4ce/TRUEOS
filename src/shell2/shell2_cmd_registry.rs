@@ -47,7 +47,6 @@ const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"i
 const TOOL_JSON_SHA: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to hash with SHA-256."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SSH: &str = r#"{"type":"object","properties":{"endpoint":{"type":"string","description":"SSH target in [user@]host[:port] form. Port 22 is used when omitted."}},"required":["endpoint"],"additionalProperties":false}"#;
-const TOOL_JSON_SSHD: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["start","authorize"],"description":"Start sshd or authorize an OpenSSH public key."},"public_key":{"type":"string","description":"OpenSSH public key line for authorize."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_TGA: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","test","add","xor"],"description":"Inspect TRUEGA or issue an end-to-end work package."},"a":{"type":"integer","minimum":0,"maximum":4294967295,"description":"First u32 argument for add or xor."},"b":{"type":"integer","minimum":0,"maximum":4294967295,"description":"Second u32 argument for add or xor."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
 const TOOL_JSON_TXT: &str = r#"{"type":"object","properties":{"file":{"type":"string","description":"Optional file path to open in the Blueprint terminal editor."}},"required":[],"additionalProperties":false}"#;
@@ -123,10 +122,6 @@ fn dispatch_smp(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
 
 fn dispatch_ssh(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::ssh::try_parse(spawner, io, rest)
-}
-
-fn dispatch_sshd(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::sshd::try_parse(spawner, io, rest)
 }
 
 fn dispatch_update(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -523,17 +518,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
             "Open an authenticated SSH-2 PTY session through the ssh Blueprint.",
         ),
         tool_parameters_json: Some(TOOL_JSON_SSH),
-    },
-    BuiltinShell2CmdEntry {
-        name: "sshd",
-        mode: "cmd",
-        color: Some(STATUS_NETWORK_RGB),
-        advertised: true,
-        handler: dispatch_sshd,
-        tool_description: Some(
-            "Authorize a public key or start the authenticated SSH-2 Shell2 server on port 22.",
-        ),
-        tool_parameters_json: Some(TOOL_JSON_SSHD),
     },
 ];
 

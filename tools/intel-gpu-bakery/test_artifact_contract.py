@@ -6,9 +6,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from artifact_contract import (
@@ -19,6 +21,7 @@ from artifact_contract import (
     validate_constraints,
     verify_manifest,
 )
+from bake import _environment
 
 
 TOOL_DIR = Path(__file__).resolve().parent
@@ -36,6 +39,25 @@ KERNEL_CATALOG = REPO_ROOT / "src" / "intel" / "gpgpu" / "kernel_catalog.rs"
 
 
 class ArtifactContractTests(unittest.TestCase):
+    def test_bake_environment_drops_unmodeled_compiler_inputs(self) -> None:
+        hostile = {
+            "CCC_OVERRIDE_OPTIONS": "+-DTRUEOS_ENV_OVERRIDE=1",
+            "CPATH": "/unreviewed/include",
+            "CPLUS_INCLUDE_PATH": "/unreviewed/cpp",
+            "COMPILER_PATH": "/unreviewed/bin",
+            "GCC_EXEC_PREFIX": "/unreviewed/gcc",
+            "LD_AUDIT": "/unreviewed/audit.so",
+            "LD_LIBRARY_PATH": "/unreviewed/lib",
+            "LD_PRELOAD": "/unreviewed/preload.so",
+            "LIBRARY_PATH": "/unreviewed/archive",
+        }
+        with mock.patch.dict(os.environ, hostile, clear=False):
+            environment = _environment([])
+        for name in hostile:
+            self.assertNotIn(name, environment)
+        self.assertEqual(environment["SOURCE_DATE_EPOCH"], "0")
+        self.assertEqual(environment["LC_ALL"], "C")
+
     def test_every_legacy_zebin_is_unambiguously_parseable(self) -> None:
         binaries = sorted(ARTIFACT_ROOT.glob("*.bin"))
         self.assertGreater(len(binaries), 10)
@@ -185,6 +207,12 @@ class ArtifactContractTests(unittest.TestCase):
             any(name.startswith("libclang-cpp") for name in clang_dependencies)
         )
         self.assertTrue(any(name.startswith("libLLVM") for name in clang_dependencies))
+        resource_tree = manifest["provenance"]["toolchain"]["tools"]["clang"][
+            "resource_tree"
+        ]
+        self.assertGreater(resource_tree["file_count"], 0)
+        self.assertGreater(resource_tree["size_bytes"], 0)
+        self.assertRegex(resource_tree["tree_sha256"], r"^[0-9a-f]{64}$")
         serialized = json.dumps(manifest, sort_keys=True)
         self.assertNotIn(str(REPO_ROOT.parent), serialized)
 

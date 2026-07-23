@@ -62,7 +62,7 @@
     }
   ],
   "frontend": "clang-clcpp",
-  "profile_sha256": "0906bebf89f71d287a2a25c5cfd70682f83abdd859908b0ea0cd802905cddee6",
+  "profile_sha256": "25ec0abbdf27a51df74a4508bbbba8768431bddaefd671b5eced32318d395925",
   "schema_version": 1,
   "tools": {
     "clang": {
@@ -81,6 +81,11 @@
         }
       ],
       "executable_sha256": "412bbe8c60571a1eb06f48fde89635033621caeb01a9b4ee76d46711bae8e932",
+      "resource_tree": {
+        "file_count": 405,
+        "size_bytes": 65550014,
+        "tree_sha256": "79459e49c99a7dff653b1d1c3a3b331afc282aac5d5ce62668f6e964973d6b91"
+      },
       "version": "Ubuntu clang version 21.1.8 (6ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix"
     },
     "llvm_spirv": {

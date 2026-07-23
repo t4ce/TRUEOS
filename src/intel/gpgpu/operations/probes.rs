@@ -179,6 +179,7 @@ impl GpgpuCopyRectProbeCaseResult {
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuCopyRectProbeResult {
     pub(crate) ok: bool,
+    pub(crate) reboot_required: bool,
     pub(crate) frontend: &'static str,
     pub(crate) feature: &'static str,
     pub(crate) feature_enabled: bool,
@@ -211,6 +212,7 @@ impl GpgpuCopyRectProbeResult {
         }
         Self {
             ok: false,
+            reboot_required: false,
             frontend: COPY_RECT_RGBA8_ARTIFACT_FRONTEND,
             feature: "intel_gpu_cpp_aot",
             feature_enabled: cfg!(feature = "intel_gpu_cpp_aot"),
@@ -288,6 +290,7 @@ pub(crate) fn shell_copy_rect_rgba8_probe() -> GpgpuCopyRectProbeResult {
 
     let _submit_guard = DIRECT_RCS_SUBMIT_LOCK.lock();
     if direct_rcs_context_is_quarantined() {
+        result.reboot_required = true;
         result.fail_setup("direct-rcs-quarantined-reboot-required");
         return result;
     }
@@ -302,9 +305,9 @@ pub(crate) fn shell_copy_rect_rgba8_probe() -> GpgpuCopyRectProbeResult {
         result.observe_case(case_result);
 
         // A submitted batch without a retired post marker may still own the
-        // scratch and batch allocations. Do not rewrite either for a later
-        // case. Pre-submit setup failures are likewise deterministic and do
-        // not become safer by retrying within the same shell invocation.
+        // scratch and batch allocations. The poll path has quarantined shared
+        // direct-RCS state until reboot; stop this invocation before rewriting
+        // it for another case. Pre-submit setup failures are deterministic too.
         if !case_result.retired && !case_result.ok {
             break;
         }
@@ -313,6 +316,7 @@ pub(crate) fn shell_copy_rect_rgba8_probe() -> GpgpuCopyRectProbeResult {
     result.ok = result.attempted_cases == result.case_count
         && result.retired_cases == result.case_count
         && result.passed_cases == result.case_count;
+    result.reboot_required = direct_rcs_context_is_quarantined();
     if result.ok {
         result.first_failure_case = "none";
         result.first_failure = "none";
@@ -320,8 +324,9 @@ pub(crate) fn shell_copy_rect_rgba8_probe() -> GpgpuCopyRectProbeResult {
 
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: copy-rect probe ok={} frontend={} feature={} feature_enabled={} artifact={} source={} target={} verified={} device={:02X}:{:02X}.{}-0x{:04X}-r{:02X} cases={}/{} retired={} passed={} first_failure_case={} first_failure={}\n",
+        "intel/gpgpu: copy-rect probe ok={} reboot_required={} frontend={} feature={} feature_enabled={} artifact={} source={} target={} verified={} device={:02X}:{:02X}.{}-0x{:04X}-r{:02X} cases={}/{} retired={} passed={} first_failure_case={} first_failure={}\n",
         result.ok as u8,
+        result.reboot_required as u8,
         result.frontend,
         result.feature,
         result.feature_enabled as u8,

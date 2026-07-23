@@ -24,7 +24,6 @@ pub(crate) mod sevenz;
 pub(crate) mod sha;
 pub(crate) mod smp;
 pub(crate) mod ssh;
-pub(crate) mod sshd;
 pub(crate) mod tga;
 pub(crate) mod tlb;
 pub(crate) mod tlb_helper;

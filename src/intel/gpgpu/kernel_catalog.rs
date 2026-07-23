@@ -5,8 +5,7 @@ pub(crate) const COPY_RECT_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/cop
 pub(crate) const COPY_RECT_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/copy_rect_rgba8.clcpp");
 #[cfg(not(feature = "intel_gpu_cpp_aot"))]
-pub(crate) const COPY_RECT_RGBA8_SOURCE_PATH: &str =
-    "src/intel/gpgpu/kernels/copy_rect_rgba8.cl";
+pub(crate) const COPY_RECT_RGBA8_SOURCE_PATH: &str = "src/intel/gpgpu/kernels/copy_rect_rgba8.cl";
 #[cfg(feature = "intel_gpu_cpp_aot")]
 pub(crate) const COPY_RECT_RGBA8_SOURCE_PATH: &str =
     "src/intel/gpgpu/kernels/copy_rect_rgba8.clcpp";
@@ -231,42 +230,21 @@ const _: () = {
     assert!(contract.payload_args[0].arg_index == 0);
     assert!(contract.payload_args[0].offset_bytes == 48);
     assert!(contract.payload_args[0].size_bytes == 8);
-    assert!(matches!(
-        contract.payload_args[0].kind,
-        GpgpuArtifactArgKind::ByPointer
-    ));
-    assert!(matches!(
-        contract.payload_args[0].access,
-        GpgpuArtifactArgAccess::ReadOnly
-    ));
-    assert!(matches!(
-        contract.payload_args[0].address_mode,
-        GpgpuArtifactAddressMode::Stateful
-    ));
+    assert!(matches!(contract.payload_args[0].kind, GpgpuArtifactArgKind::ByPointer));
+    assert!(matches!(contract.payload_args[0].access, GpgpuArtifactArgAccess::ReadOnly));
+    assert!(matches!(contract.payload_args[0].address_mode, GpgpuArtifactAddressMode::Stateful));
     assert!(contract.payload_args[1].arg_index == 1);
     assert!(contract.payload_args[1].offset_bytes == 56);
     assert!(contract.payload_args[1].size_bytes == 8);
-    assert!(matches!(
-        contract.payload_args[1].kind,
-        GpgpuArtifactArgKind::ByPointer
-    ));
-    assert!(matches!(
-        contract.payload_args[1].access,
-        GpgpuArtifactArgAccess::ReadWrite
-    ));
-    assert!(matches!(
-        contract.payload_args[1].address_mode,
-        GpgpuArtifactAddressMode::Stateful
-    ));
+    assert!(matches!(contract.payload_args[1].kind, GpgpuArtifactArgKind::ByPointer));
+    assert!(matches!(contract.payload_args[1].access, GpgpuArtifactArgAccess::ReadWrite));
+    assert!(matches!(contract.payload_args[1].address_mode, GpgpuArtifactAddressMode::Stateful));
     let mut scalar = 2;
     while scalar < contract.payload_args.len() {
         assert!(contract.payload_args[scalar].arg_index as usize == scalar);
         assert!(contract.payload_args[scalar].offset_bytes == 56 + scalar as u32 * 4);
         assert!(contract.payload_args[scalar].size_bytes == 4);
-        assert!(matches!(
-            contract.payload_args[scalar].kind,
-            GpgpuArtifactArgKind::ByValue
-        ));
+        assert!(matches!(contract.payload_args[scalar].kind, GpgpuArtifactArgKind::ByValue));
         scalar += 1;
     }
 };

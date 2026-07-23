@@ -46,14 +46,19 @@ kernel entry symbol:
 - SIMD width and GRF count;
 - scratch and SLM requirements;
 - rounded cross-thread and exact per-thread payload sizes;
+- exact implicit global-ID-offset, local-size, and enqueued-local-size records;
+- exact per-thread local-ID record;
 - binding-table indices;
 - argument payload offsets, sizes, access, and address mode;
 - Zebin and SPIR-V SHA-256 values;
 - exact target PCI IDs and revision range.
 
-The JSON additionally retains source argument names, type spellings,
-qualifiers, per-thread payload records, tool versions, normalized commands,
-and hashes for the source plus transitive quoted headers.
+The JSON additionally retains the complete `.ze_info` execution environment,
+source argument names, type spellings, qualifiers, tool versions, normalized
+commands, the reviewed publication policy, and hashes for the source plus
+transitive quoted headers. The lock also binds the resolved Clang/LLVM
+implementation libraries, the complete Clang resource tree, and ocloc/IGC
+compiler resources.
 
 ### 2. Runtime admission and target enforcement
 
@@ -73,9 +78,18 @@ An on-disk override is therefore not a mechanism for injecting a newly built
 binary. Until signed external manifests exist, it can only reproduce an
 already allowlisted artifact.
 
-The initial artifact target is deliberately exact: ADL-S device `0x4680`,
-revisions `0x00..0xff`. ADL-N and Raptor Lake require their own bake profile
-and checked artifact instead of inheriting ADL-S by family resemblance.
+Strict reload never falls back to embedded bytes when the filesystem artifact
+is missing, empty, unreadable, or cannot be read safely from the current
+executor context. A repeated exact reload performs full admission and reuses
+the resident allocation; it does not allocate/remap the same GPU VA and leak
+the prior DMA object. Replacing a resident image needs a future quiescent
+retirement protocol.
+
+The initial target is PCI-device exact but revision-broad: ADL-S device
+`0x4680`, revisions `0x00..0xff`. Hardware evidence covers the tested
+stepping; narrowing promotion to that revision remains an explicit policy
+choice. ADL-N and Raptor Lake require their own bake profile and checked
+artifact instead of inheriting ADL-S by family resemblance.
 
 ### 3. First opt-in and hardware promotion
 
@@ -100,7 +114,8 @@ make intel-gpu-verify-copy-cpp
 # Verifies first, then builds TRUEOS with the C++ artifact selected.
 make kernel-cpp-aot
 
-# Carries the same feature through the complete bootable ISO workflow.
+# Carries the same feature through the complete bootable ISO workflow, emits
+# bld/trueos-cpp-aot.iso, and verifies its extracted stripped runtime ELF.
 make iso-cpp-aot
 ```
 
@@ -110,7 +125,10 @@ an already baked program, and `source_compile=false`, because no compiler is
 linked into or loaded by TRUEOS.
 
 `kernel-cpp-aot` additionally scans the final linked ELF for the complete
-selected Zebin and requires the complete legacy copy Zebin to be absent. This
+selected Zebin and requires the complete legacy copy Zebin to be absent.
+`iso-cpp-aot` uses separate `-cpp-aot` artifact/staging/ISO paths, records the
+feature in `BUILD_INFO`, extracts `/TRUEOS.elf` from the completed ISO, proves
+it is byte-identical to the stripped runtime ELF, and repeats that scan. This
 guards the deployment boundary itself rather than inferring feature selection
 only from source-level `cfg` declarations.
 
@@ -135,11 +153,13 @@ gpgpu probe copy-rect
 ```
 
 Promotion requires the summary to contain
-`ok=1 frontend=cpp-for-opencl feature_enabled=1 verified=1 cases=4/4
-retired=4 passed=4 first_failure=none`; every case must report
+`ok=1 reboot_required=0 frontend=cpp-for-opencl feature_enabled=1 verified=1
+hash=b36d1c7742003591a5074663d81a4162412618ae425c47d30be6d068ee144a25
+cases=4/4 retired=4 passed=4 first_failure=none`; every case must report
 `submitted=1 retired=1 ok=1` and markers
 `[0xC0DEA701,0xC0DEA702]`. If a submitted case does not retire, do not run the
-probe again until the engine is recovered or the machine is rebooted.
+probe again. The lane is quarantined and reports `reboot_required=1`; recover
+the engine or reboot the machine first.
 
 ## Findings that changed the implementation
 
@@ -188,6 +208,24 @@ hashes and versions but omit absolute host paths, so an equivalent installation
 in a different directory does not dirty the generated provenance. The initial
 exploration note keeps its developer-machine paths only as historical context.
 
+### Compiler identity includes resources and a sanitized environment
+
+The Clang executable is only a small driver on the proof host. Its frontend
+implementation lives in `libclang-cpp`/`libLLVM`, and the canonical OpenCL
+compile implicitly reads the resource header
+`lib/clang/21/include/opencl-c-base.h` even though `-MMD` omits it from the
+quoted-header depfile. Executable hashing alone was therefore insufficient.
+The lock now records path-independent hashes for resolved compiler libraries
+and a deterministic relative-path/content digest of the complete Clang
+resource tree.
+
+Clang also honors ambient inputs such as `CCC_OVERRIDE_OPTIONS`, `CPATH`, and
+`COMPILER_PATH`. The bakery constructs a minimal environment rather than
+copying the caller environment; only the modeled ocloc/IGC library roots,
+locale, system command path, UTC, and `SOURCE_DATE_EPOCH=0` survive. The
+profile adds `-Wdate-time`, so source time macros cannot evade a same-host
+two-root reproducibility check.
+
 ### `ocloc` writes outside `-out_dir`
 
 The tested package can create `IGC_REVISION` and `NEO_REVISION` in its process
@@ -215,6 +253,22 @@ Without `intel_reqd_sub_group_size(16)`, IGC selected SIMD32 and a 192-byte
 per-thread payload in an early probe. The TRUEOS direct-RCS encoder currently
 programs SIMD16 local IDs with 96 per-thread bytes, so the shared header makes
 SIMD16 explicit and the generated contract rejects other widths.
+
+### Completion markers must prove ordered retirement
+
+The first copy probe used a cache flush followed by `MI_STORE_DATA_IMM`.
+That store could show command-stream progress without being the established
+dataport/cache-release proof. Copy completion now uses the shared ordered
+PIPE_CONTROL post-sync epilogue. Its QWord occupies result slots 4–5 and the
+diagnostic pre-marker moved to slot 6, with compile-time overlap/alignment
+assertions.
+
+A software submission timeout cannot cancel a physical GuC request. Before
+completion bookkeeping releases the submit lock, TRUEOS therefore quarantines
+the affected persistent system-service or execution lane. State access then
+fails before batch/result/PPGTT/scratch reuse. This prevents TRUEOS from
+rewriting memory a late request may still fetch, but cannot cancel that
+request; engine recovery or reboot remains mandatory.
 
 ### Hash enforcement exposed stale metadata
 
@@ -256,6 +310,8 @@ The first implementation intentionally leaves these decisions explicit:
   move to a detached provenance bundle;
 - how to sign and admit external artifact updates;
 - whether revisions should remain a range or become exact stepping entries;
+- whether the bakery should move from a reviewed minimal environment to a
+  fully containerized/hermetic compiler image;
 - when scratch and SLM programming become supported runtime capabilities;
 - whether an RPL-S profile should be a separate artifact or a proven,
   documented compatibility set;

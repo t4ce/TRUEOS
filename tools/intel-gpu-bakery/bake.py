@@ -156,12 +156,22 @@ def _ocloc_library_paths(ocloc: Path, requested: list[Path]) -> list[Path]:
 
 
 def _environment(library_paths: list[Path]) -> dict[str, str]:
-    environment = os.environ.copy()
-    existing = environment.get("LD_LIBRARY_PATH", "")
+    # Compiler drivers honor a large ambient environment surface
+    # (`CCC_OVERRIDE_OPTIONS`, CPATH, COMPILER_PATH, LD_PRELOAD, ...).  A
+    # publication bake must not inherit inputs that are absent from its
+    # manifest and toolchain lock.  Every executable is already resolved to an
+    # absolute path; retain only a system command search path for `ldd` and the
+    # explicitly modeled ocloc/IGC library roots.
     joined = ":".join(str(path) for path in library_paths)
-    environment["LD_LIBRARY_PATH"] = f"{joined}:{existing}".strip(":")
-    environment["LC_ALL"] = "C"
-    environment["LANG"] = "C"
+    environment = {
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": os.defpath,
+        "SOURCE_DATE_EPOCH": "0",
+        "TZ": "UTC",
+    }
+    if joined:
+        environment["LD_LIBRARY_PATH"] = joined
     return environment
 
 
@@ -335,20 +345,69 @@ def _dynamic_compiler_libraries(
     return [records[key] for key in sorted(records)]
 
 
+def _clang_resource_tree(
+    clang: Path,
+    *,
+    cwd: Path,
+    environment: dict[str, str],
+) -> dict[str, Any]:
+    raw_root = _version(
+        clang,
+        ["-print-resource-dir"],
+        cwd=cwd,
+        environment=environment,
+    )
+    root = Path(raw_root).resolve()
+    if not root.is_dir():
+        raise ContractError(f"Clang resource directory is missing: {raw_root}")
+
+    tree_digest = hashlib.sha256()
+    file_count = 0
+    size_bytes = 0
+    for path in sorted(
+        (candidate for candidate in root.rglob("*") if candidate.is_file()),
+        key=lambda candidate: candidate.relative_to(root).as_posix(),
+    ):
+        relative = path.relative_to(root).as_posix()
+        file_size = path.stat().st_size
+        file_digest = sha256_file(path)
+        tree_digest.update(relative.encode("utf-8"))
+        tree_digest.update(b"\0")
+        tree_digest.update(str(file_size).encode("ascii"))
+        tree_digest.update(b"\0")
+        tree_digest.update(bytes.fromhex(file_digest))
+        file_count += 1
+        size_bytes += file_size
+    if file_count == 0:
+        raise ContractError(f"Clang resource directory is empty: {raw_root}")
+    return {
+        "file_count": file_count,
+        "size_bytes": size_bytes,
+        "tree_sha256": tree_digest.hexdigest(),
+    }
+
+
 def _tool_record(
-    path: Path, version: str, environment: dict[str, str]
+    path: Path,
+    version: str,
+    environment: dict[str, str],
+    *,
+    resource_tree: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     resolved = path.resolve()
     stable_version = "\n".join(
         line for line in version.splitlines() if not line.startswith("InstalledDir:")
     )
-    return {
+    record = {
         "executable_sha256": sha256_file(resolved),
         "dynamic_compiler_libraries": _dynamic_compiler_libraries(
             resolved, environment
         ),
         "version": stable_version,
     }
+    if resource_tree is not None:
+        record["resource_tree"] = resource_tree
+    return record
 
 
 def _toolchain_fingerprint(
@@ -369,6 +428,9 @@ def _toolchain_fingerprint(
             clang,
             _version(clang, ["--version"], cwd=query_dir, environment=environment),
             environment,
+            resource_tree=_clang_resource_tree(
+                clang, cwd=query_dir, environment=environment
+            ),
         )
     if llvm_spirv is not None:
         tools["llvm_spirv"] = _tool_record(
@@ -396,14 +458,16 @@ def _lock_projection(fingerprint: dict[str, Any]) -> dict[str, Any]:
     # Tool identity is content/version based and does not constrain the host's
     # installation path. Published manifests therefore contain the same
     # path-independent representation as the reviewed lock.
-    tools = {
-        name: {
+    tools = {}
+    for name, value in fingerprint["tools"].items():
+        record = {
             "dynamic_compiler_libraries": value["dynamic_compiler_libraries"],
             "executable_sha256": value["executable_sha256"],
             "version": value["version"],
         }
-        for name, value in fingerprint["tools"].items()
-    }
+        if "resource_tree" in value:
+            record["resource_tree"] = value["resource_tree"]
+        tools[name] = record
     return {
         "schema_version": fingerprint["schema_version"],
         "frontend": fingerprint["frontend"],

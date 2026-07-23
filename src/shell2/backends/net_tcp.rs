@@ -14,9 +14,6 @@ pub(crate) static NET_TCP_SHELL_BACKEND: NetTcpShellBackend = NetTcpShellBackend
 static NET_TCP_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 pub(crate) static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_DIRECT_OWNER: AtomicU32 = AtomicU32::new(0);
-static NET_SHELL_SSH_SESSION: AtomicU32 = AtomicU32::new(0);
-static NET_SHELL_SSH_NEXT_SESSION: AtomicU32 = AtomicU32::new(1);
-static NET_SHELL_SSH_OWNER_VM: AtomicU32 = AtomicU32::new(0);
 static NET_SHELL_DIRECT_RX_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 // Direct terminal apps may stop before their userspace guard flushes its
 // cleanup, and release_net_shell_direct intentionally drops queued app paint.
@@ -63,118 +60,6 @@ pub(crate) fn net_shell_write_bytes(bytes: &[u8]) {
     if dropped != 0 {
         crate::log!("net-shell: tx buffer dropped {} bytes at cap={}\n", dropped, MAX_TX);
     }
-}
-
-fn ssh_shell_owner_tag(vm_id: u8) -> u32 {
-    u32::from(vm_id).saturating_add(1)
-}
-
-fn ssh_shell_owned_by(vm_id: u8, session: u32) -> bool {
-    session != 0
-        && NET_SHELL_SSH_OWNER_VM.load(Ordering::Acquire) == ssh_shell_owner_tag(vm_id)
-        && NET_SHELL_SSH_SESSION.load(Ordering::Acquire) == session
-}
-
-pub(crate) fn ssh_shell_open(vm_id: u8, cols: usize, rows: usize) -> Option<u32> {
-    if net_shell_direct_active() {
-        return None;
-    }
-    let owner_tag = ssh_shell_owner_tag(vm_id);
-    if NET_SHELL_SSH_OWNER_VM
-        .compare_exchange(0, owner_tag, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return None;
-    }
-    let session = NET_SHELL_SSH_NEXT_SESSION
-        .fetch_add(1, Ordering::Relaxed)
-        .max(1);
-    NET_SHELL_SSH_SESSION.store(session, Ordering::Release);
-    {
-        let mut state = NET_SHELL_STATE.lock();
-        state.handle = None;
-        state.rx.clear();
-        state.tx.clear();
-    }
-    NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
-    let _ = crate::shell2::apply_reported_terminal_size_for_backend(
-        &NET_TCP_SHELL_BACKEND,
-        cols.max(1),
-        rows.max(1),
-    );
-    crate::shell2::repaint_backend_screen(&NET_TCP_SHELL_BACKEND);
-    Some(session)
-}
-
-pub(crate) fn ssh_shell_write(vm_id: u8, session: u32, bytes: &[u8]) -> Option<usize> {
-    const MAX_RX: usize = 64 * 1024;
-    if !ssh_shell_owned_by(vm_id, session) {
-        return None;
-    }
-    let mut state = NET_SHELL_STATE.lock();
-    let available = MAX_RX.saturating_sub(state.rx.len());
-    let written = available.min(bytes.len());
-    state.rx.extend(bytes[..written].iter().copied());
-    Some(written)
-}
-
-pub(crate) fn ssh_shell_read(vm_id: u8, session: u32, out: &mut [u8]) -> Option<usize> {
-    if !ssh_shell_owned_by(vm_id, session) {
-        return None;
-    }
-    let mut state = NET_SHELL_STATE.lock();
-    let read = out.len().min(state.tx.len());
-    for byte in &mut out[..read] {
-        *byte = state.tx.pop_front().unwrap_or_default();
-    }
-    Some(read)
-}
-
-pub(crate) fn ssh_shell_resize(vm_id: u8, session: u32, cols: usize, rows: usize) -> bool {
-    if !ssh_shell_owned_by(vm_id, session) {
-        return false;
-    }
-    let changed = crate::shell2::apply_reported_terminal_size_for_backend(
-        &NET_TCP_SHELL_BACKEND,
-        cols.max(1),
-        rows.max(1),
-    );
-    if changed && !net_shell_direct_active() {
-        crate::shell2::repaint_backend_screen(&NET_TCP_SHELL_BACKEND);
-    }
-    true
-}
-
-pub(crate) fn ssh_shell_close(vm_id: u8, session: u32) -> bool {
-    if !ssh_shell_owned_by(vm_id, session)
-        || NET_SHELL_SSH_SESSION
-            .compare_exchange(session, 0, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-    {
-        return false;
-    }
-    NET_SHELL_SSH_OWNER_VM.store(0, Ordering::Release);
-    NET_SHELL_DIRECT_OWNER.store(0, Ordering::Release);
-    let mut state = NET_SHELL_STATE.lock();
-    state.handle = None;
-    state.rx.clear();
-    state.tx.clear();
-    true
-}
-
-pub(crate) fn ssh_shell_release_owner(vm_id: u8) {
-    if NET_SHELL_SSH_OWNER_VM
-        .compare_exchange(ssh_shell_owner_tag(vm_id), 0, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
-    }
-    NET_SHELL_SSH_SESSION.store(0, Ordering::Release);
-    NET_SHELL_DIRECT_OWNER.store(0, Ordering::Release);
-    let mut state = NET_SHELL_STATE.lock();
-    state.handle = None;
-    state.rx.clear();
-    state.tx.clear();
 }
 
 pub(crate) fn net_shell_direct_reset_terminal() {

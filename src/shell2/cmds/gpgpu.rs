@@ -665,8 +665,9 @@ fn run_copy_rect_probe(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "gpgpu probe copy-rect: ok={} frontend={} feature={} feature_enabled={} artifact={} artifact_source={} target={} verified={} device={:02X}:{:02X}.{}-0x{:04X}-r{:02X} hash={} cases={}/{} retired={} passed={} first_failure_case={} first_failure={}",
+            "gpgpu probe copy-rect: ok={} reboot_required={} frontend={} feature={} feature_enabled={} artifact={} artifact_source={} target={} verified={} device={:02X}:{:02X}.{}-0x{:04X}-r{:02X} hash={} cases={}/{} retired={} passed={} first_failure_case={} first_failure={}",
             result.ok as u8,
+            result.reboot_required as u8,
             result.frontend,
             result.feature,
             result.feature_enabled as u8,
