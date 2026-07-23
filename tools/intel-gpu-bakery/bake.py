@@ -269,7 +269,6 @@ def _compiler_libraries(paths: list[Path]) -> list[dict[str, Any]]:
 def _tool_record(path: Path, version: str) -> dict[str, Any]:
     resolved = path.resolve()
     return {
-        "path": resolved.as_posix(),
         "executable_sha256": sha256_file(resolved),
         "version": version,
     }
@@ -314,7 +313,9 @@ def _toolchain_fingerprint(
 
 
 def _lock_projection(fingerprint: dict[str, Any]) -> dict[str, Any]:
-    # Absolute paths report what ran, but do not constrain installation location.
+    # Tool identity is content/version based and does not constrain the host's
+    # installation path. Published manifests therefore contain the same
+    # path-independent representation as the reviewed lock.
     tools = {
         name: {
             "executable_sha256": value["executable_sha256"],

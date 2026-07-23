@@ -36,6 +36,7 @@ pub(crate) struct KnownKernelInfo {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SourceBuildSmoke {
+    pub(crate) known_source_aot_lookup_cap: bool,
     pub(crate) source_compile_cap: bool,
     pub(crate) source_build_error: Option<ClError>,
     pub(crate) registry_kernels: usize,
@@ -132,6 +133,7 @@ pub(crate) fn trueos_cl_source_build_smoke() -> SourceBuildSmoke {
         };
 
     SourceBuildSmoke {
+        known_source_aot_lookup_cap: caps.known_source_aot_lookup,
         source_compile_cap: caps.source_compile,
         source_build_error,
         registry_kernels: registry.registry_kernels,

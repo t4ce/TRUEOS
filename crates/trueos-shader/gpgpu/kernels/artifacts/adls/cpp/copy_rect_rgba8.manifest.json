@@ -397,17 +397,14 @@
       "tools": {
         "clang": {
           "executable_sha256": "412bbe8c60571a1eb06f48fde89635033621caeb01a9b4ee76d46711bae8e932",
-          "path": "/usr/lib/llvm-21/bin/clang",
           "version": "Ubuntu clang version 21.1.8 (6ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/lib/llvm-21/bin"
         },
         "llvm_spirv": {
           "executable_sha256": "b4eb2c129fcad0fa301d3624be3cd298daca6bbdc83b83b251e62217a6be49c4",
-          "path": "/home/t4ce/REPOS/blender-default-cube-toggle/lib/linux_x64/dpcpp/bin/llvm-spirv",
           "version": "LLVM (http://llvm.org/):\n  LLVM version 21.0.0git\n  Optimized build with assertions."
         },
         "ocloc": {
           "executable_sha256": "a32b2551706458e01a855e14e974674a38102ec83b42586931b2b09f78cbb384",
-          "path": "/home/t4ce/REPOS/blender-default-cube-toggle/lib/linux_x64/dpcpp/lib/ocloc/bin/ocloc",
           "version": "25.31.034666"
         }
       }

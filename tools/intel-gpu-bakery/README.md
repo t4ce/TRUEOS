@@ -55,7 +55,7 @@ Toolchain updates are intentional review events. After reviewing changed
 compiler output and metadata, a maintainer can generate a candidate lock with:
 
 ```sh
-python3 tools/intel-gpu-bakery/bake.py \
+python3 -B tools/intel-gpu-bakery/bake.py \
   --source crates/trueos-shader/gpgpu/kernels/copy_rect_rgba8.clcpp \
   --artifact-name copy_rect_rgba8 \
   --variant cpp \
@@ -73,10 +73,10 @@ replacing the repository lock.
 CI and ordinary development machines do not need compiler tools:
 
 ```sh
-python3 tools/intel-gpu-bakery/verify.py \
+python3 -B tools/intel-gpu-bakery/verify.py \
   --artifact-dir crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp
 
-python3 -m unittest discover \
+python3 -B -m unittest discover \
   -s tools/intel-gpu-bakery -p 'test_*.py'
 ```
 
@@ -88,7 +88,7 @@ library.
 Existing artifacts can receive a contract without rebaking:
 
 ```sh
-python3 tools/intel-gpu-bakery/generate_existing.py \
+python3 -B tools/intel-gpu-bakery/generate_existing.py \
   --bin path/kernel.bin \
   --spv path/kernel.spv \
   --source path/kernel.cl \

@@ -18,6 +18,9 @@ pub(crate) struct BackendCaps {
     pub(crate) upload_status: bool,
     pub(crate) known_kernel_upload: bool,
     pub(crate) known_kernel_execute_stub: bool,
+    /// Exact checked-in source strings can resolve to already baked artifacts.
+    pub(crate) known_source_aot_lookup: bool,
+    /// No Clang, NEO, IGC, or other source compiler exists in the TRUEOS image.
     pub(crate) source_compile: bool,
     pub(crate) svm: bool,
 }
@@ -28,7 +31,8 @@ impl BackendCaps {
         upload_status: true,
         known_kernel_upload: true,
         known_kernel_execute_stub: true,
-        source_compile: true,
+        known_source_aot_lookup: true,
+        source_compile: false,
         svm: false,
     };
 }
@@ -194,15 +198,19 @@ impl IntelOpenClBackend {
         source: &str,
         options: &str,
     ) -> ClResult<BuiltProgram<'static>> {
-        if !self.caps.source_compile {
-            return Err(ClError::CompilerNotAvailable);
-        }
         if !options.trim().is_empty() {
             return Err(ClError::InvalidBuildOptions);
         }
 
-        registry::build_program_from_known_source(source, options)
-            .ok_or(ClError::BuildProgramFailure)
+        if self.caps.known_source_aot_lookup {
+            if let Some(program) = registry::build_program_from_known_source(source, options) {
+                return Ok(program);
+            }
+        }
+        if !self.caps.source_compile {
+            return Err(ClError::CompilerNotAvailable);
+        }
+        Err(ClError::BuildProgramFailure)
     }
 
     pub(crate) fn upload_fill_rect_worklist_rgba8(&self) -> Option<UploadedKernelRef> {

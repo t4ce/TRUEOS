@@ -89,9 +89,13 @@ CARGO_BUILD_FLAGS ?=
 
 CARGO_GFX_FLAGS =
 
+INTEL_GPU_BAKERY_DIR := tools/intel-gpu-bakery
+INTEL_GPU_CPP_ARTIFACT_DIR := crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp
+INTEL_GPU_BAKERY_PYTHON ?= python3
+
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel artifacts limine baremetal-reboot-log net-shell-console iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: images empty-libs kernel kernel-cpp-aot intel-gpu-bake-copy-cpp intel-gpu-verify-copy-cpp artifacts limine baremetal-reboot-log net-shell-console iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -107,6 +111,15 @@ empty-libs:
 
 kernel: empty-libs
 	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
+
+kernel-cpp-aot: empty-libs intel-gpu-verify-copy-cpp
+	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) --features intel_gpu_cpp_aot -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
+
+intel-gpu-bake-copy-cpp:
+	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_copy_rect.sh"
+
+intel-gpu-verify-copy-cpp:
+	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify.py" --artifact-dir "$(INTEL_GPU_CPP_ARTIFACT_DIR)"
 
 artifacts: kernel
 	mkdir -p $(ARTIFACT_DIR)

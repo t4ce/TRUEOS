@@ -187,10 +187,10 @@ const COPY_RECT_ARGS: &[KernelCallArg<'_>] = &[
 ];
 const COPY_RECT_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::COPY_RECT_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/copy_rect_rgba8.cl",
+    source_path: gpgpu::COPY_RECT_RGBA8_SOURCE_PATH,
     producer: IGC,
     target: ADLS,
-    entry_text_offset_bytes: TEXT_OFFSET,
+    entry_text_offset_bytes: gpgpu::COPY_RECT_RGBA8_TEXT_OFFSET_BYTES,
     cross_thread_bytes: COPY_CROSS_THREAD_BYTES,
     per_thread_bytes: COPY_PER_THREAD_BYTES,
     binding_count: 2,

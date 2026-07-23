@@ -88,6 +88,24 @@ The legacy OpenCL C artifact remains the default. The C++ pair lives under
 `intel_gpu_cpp_aot` Cargo feature. Both frontends feed the same Rust payload,
 surface-state, interface-descriptor, walker, and GuC code.
 
+The host actions are deliberately separate:
+
+```sh
+# Uses the pinned host compiler stack and republishes only after a double bake.
+make intel-gpu-bake-copy-cpp
+
+# Standard-library-only verification of the checked-in artifact and contract.
+make intel-gpu-verify-copy-cpp
+
+# Verifies first, then builds TRUEOS with the C++ artifact selected.
+make kernel-cpp-aot
+```
+
+The OpenCL-shaped bridge reports this boundary truthfully:
+`known_source_aot_lookup=true`, because an exact known source string can select
+an already baked program, and `source_compile=false`, because no compiler is
+linked into or loaded by TRUEOS.
+
 Host-side ABI equivalence is necessary but not sufficient for promotion. The
 bare-metal copy probe must cover:
 
@@ -100,6 +118,19 @@ bare-metal copy probe must cover:
 
 Deleting the C fallback requires a second build using the legacy artifact and
 equal destination results for the same cases.
+
+On the exact ADL-S `0x4680` machine, boot the `kernel-cpp-aot` image and run:
+
+```text
+gpgpu probe copy-rect
+```
+
+Promotion requires the summary to contain
+`ok=1 frontend=cpp-for-opencl feature_enabled=1 verified=1 cases=4/4
+retired=4 passed=4 first_failure=none`; every case must report
+`submitted=1 retired=1 ok=1` and markers
+`[0xC0DEA701,0xC0DEA702]`. If a submitted case does not retire, do not run the
+probe again until the engine is recovered or the machine is rebooted.
 
 ## Findings that changed the implementation
 

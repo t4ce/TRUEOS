@@ -108,6 +108,10 @@ class ArtifactContractTests(unittest.TestCase):
             "crates/trueos-shader/gpgpu/kernels/include/trueos_clcpp.hpp",
             input_paths,
         )
+        for tool in manifest["provenance"]["toolchain"]["tools"].values():
+            self.assertNotIn("path", tool)
+        serialized = json.dumps(manifest, sort_keys=True)
+        self.assertNotIn(str(REPO_ROOT.parent), serialized)
 
 
 if __name__ == "__main__":

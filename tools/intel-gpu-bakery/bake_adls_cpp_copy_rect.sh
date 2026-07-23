@@ -9,7 +9,7 @@ tool_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 trueos_root="$(cd "${tool_dir}/../.." && pwd)"
 python_bin="${PYTHON:-python3}"
 
-exec "${python_bin}" "${tool_dir}/bake.py" \
+exec "${python_bin}" -B "${tool_dir}/bake.py" \
   --source "${trueos_root}/crates/trueos-shader/gpgpu/kernels/copy_rect_rgba8.clcpp" \
   --artifact-name copy_rect_rgba8 \
   --variant cpp \

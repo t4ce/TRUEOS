@@ -32,7 +32,7 @@ fi
 #     --artifact-name copy_rect_rgba8 --variant cpp \
 #     --publish-dir kernels/artifacts/adls/cpp --repro-check
 if [[ "$#" -gt 0 && "${1}" == --* ]]; then
-  exec "${python_bin}" "${bakery}" --profile "${profile}" "$@"
+  exec "${python_bin}" -B "${bakery}" --profile "${profile}" "$@"
 fi
 
 device="${DEVICE:-0x4680}"
@@ -81,7 +81,7 @@ for kernel in "${kernels[@]}"; do
     exit 1
   fi
   echo "bake ${target}/${kernel} device=${device}"
-  "${python_bin}" "${bakery}" \
+  "${python_bin}" -B "${bakery}" \
     --source "${src}" \
     --artifact-name "${kernel}" \
     --frontend ocloc-cl \
