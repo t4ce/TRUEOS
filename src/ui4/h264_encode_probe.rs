@@ -140,7 +140,7 @@ pub(crate) async fn ui4_h264_encode_probe_task() {
         }
         if avc_probe.state == crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Passed {
             crate::log_info!(target: "intel/media-encode";
-                "intel/media-encode: avc-idr-probe accepted=1 engine=vcs0 submission_owner=guc source_frame=0 source_layout=nv12-linear visible=512x512 pitch=512 i420_bytes={} nv12_bytes={} i420_fnv1a32=0x{:08X} nv12_fnv1a32=0x{:08X} backing={} surface_uploaded={} batch={} batch_bytes={} codec_packets={} bitstream_buffer_bound={} registered={} submitted={} retired={} context_destroyed={} serial={} hwlrca=0x{:08X}:0x{:08X} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} coded_output_validated=0 hardware_encode=0 next=coded-output-validation\n",
+                "intel/media-encode: avc-idr-probe accepted=1 engine=vcs0 submission_owner=guc terminal_fence=mi-flush-post-sync source_frame=0 source_layout=nv12-linear visible=512x512 pitch=512 i420_bytes={} nv12_bytes={} i420_fnv1a32=0x{:08X} nv12_fnv1a32=0x{:08X} backing={} surface_uploaded={} batch={} batch_bytes={} codec_packets={} bitstream_buffer_bound={} registered={} submitted={} retired={} context_destroyed={} serial={} hwlrca=0x{:08X}:0x{:08X} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} coded_output_validated=0 hardware_encode=0 next=coded-output-validation\n",
                 avc_probe.source_i420_bytes,
                 avc_probe.source_nv12_bytes,
                 avc_probe.source_i420_fnv1a32,
@@ -168,7 +168,7 @@ pub(crate) async fn ui4_h264_encode_probe_task() {
             );
         } else {
             crate::log_error!(target: "intel/media-encode";
-                "intel/media-encode: avc-idr-probe accepted=0 state={:?} failure={} forcewake={} backing={} surface_uploaded={} batch={} batch_bytes={} codec_packets={} bitstream_buffer_bound={} registered={} submitted={} retired={} context_destroyed={} serial={} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} coded_output_validated=0 hardware_encode=0 fallback=software\n",
+                "intel/media-encode: avc-idr-probe accepted=0 state={:?} failure={} terminal_fence=mi-flush-post-sync forcewake={} backing={} surface_uploaded={} batch={} batch_bytes={} codec_packets={} bitstream_buffer_bound={} registered={} submitted={} retired={} context_destroyed={} serial={} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} coded_output_validated=0 hardware_encode=0 fallback=software\n",
                 avc_probe.state,
                 avc_probe.failure.name(),
                 avc_probe.forcewake as u8,

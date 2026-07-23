@@ -27,11 +27,14 @@ def _settings(args: argparse.Namespace) -> InterpolationSettings:
         background=args.background,
         inference_scale=args.inference_scale,
         blend_mode=args.blend_mode,
+        ensemble=args.ensemble,
     )
 
 
 def _add_common_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--work-scale", type=int, default=8, choices=(1, 2, 4, 8))
+    parser.add_argument(
+        "--work-scale", type=int, default=8, choices=(1, 2, 4, 8, 16)
+    )
     parser.add_argument("--timestep", type=float, default=0.5)
     parser.add_argument("--alpha-threshold", type=float, default=0.5)
     parser.add_argument("--quantize", choices=("pair", "none"), default="pair")
@@ -43,6 +46,15 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
         "--blend-mode",
         choices=("temporal-alpha", "rife"),
         default="rife",
+    )
+    parser.add_argument(
+        "--ensemble",
+        choices=("none", "median", "medoid"),
+        default="medoid",
+        help=(
+            "refinement strategy (default: medoid, a 12-pass "
+            "background/direction/horizontal-flip ensemble)"
+        ),
     )
     parser.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
     parser.add_argument("--rife-dir", type=Path, default=DEFAULT_RIFE_DIR)
@@ -118,6 +130,10 @@ def main() -> None:
                 {
                     "output_directory": report["output_directory"],
                     "evaluated_keyframes": len(report["evaluations"]),
+                    "inference_seconds": sum(
+                        item["prediction"]["inference_seconds"]
+                        for item in report["evaluations"]
+                    ),
                     "passes_quality_gate": report["passes_quality_gate"],
                     "mean_metrics": report["mean_metrics"],
                     "backend": report["backend"],
@@ -137,6 +153,9 @@ def main() -> None:
     summary = {
         "output_directory": report["output_directory"],
         "generated_frames": len(report["frames"]),
+        "inference_seconds": sum(
+            item["inference_seconds"] for item in report["frames"]
+        ),
         "loop": report["loop"],
         "backend": report["backend"],
     }

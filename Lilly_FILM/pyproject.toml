@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools==75.8.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lilly-film"
+version = "0.1.0"
+description = "Isolated FILM large-motion experiments for selected Lilly animations"
+requires-python = ">=3.9,<3.10"
+dependencies = [
+    "numpy==1.19.5",
+    "Pillow==9.5.0",
+    "protobuf==3.20.3",
+    "scipy==1.7.3",
+    "tensorflow==2.6.2",
+]
+
+[project.scripts]
+lilly-film = "lilly_film.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["lilly_film*"]
+

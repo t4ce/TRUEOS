@@ -80,6 +80,9 @@ Useful tuning switches:
 --blend-mode rife      use RIFE's learned occlusion blend for all RGBA
 --blend-mode temporal-alpha
                        experimentally retain one-sided sprite occupancy
+--ensemble medoid      default: most representative of 12 intact candidates
+--ensemble median      combine the robust middle result per working pixel
+--ensemble none        fast single-pass mode
 ```
 
 The defaults favor canonical pixel-art output: box-filtered reduction followed
@@ -88,6 +91,13 @@ by endpoint-palette quantization and strictly binary alpha. The experimental
 the learned mask from deleting a limb that exists at only one endpoint. That
 can retain disoccluded parts at the cost of double edges, so it is deliberately
 not the default.
+
+The default `medoid` mode spends roughly twelve times the RIFE compute without
+changing the final 128x128 dimensions. It evaluates three neutral backgrounds,
+both temporal directions, and original/horizontally mirrored inputs, then keeps
+the intact candidate nearest to their consensus. `median` combines the robust
+middle result per working pixel instead. Use `--ensemble none` for the original
+fast single-pass behavior.
 
 ## Held-out accuracy check
 

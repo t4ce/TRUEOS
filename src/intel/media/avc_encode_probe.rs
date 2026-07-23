@@ -848,9 +848,12 @@ fn build_idr_batch(batch_virt: *mut u8) -> Option<(usize, usize)> {
         batch,
         &mut idx,
         5,
-        media::MI_FLUSH_DW
-            | media::MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE
-            | media::MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
+        // VD_PIPELINE_FLUSH immediately above already waits for MFX/VDEnc and
+        // flushes the VDEnc pipeline. Combining another video-pipeline cache
+        // invalidate with this post-sync write parks VCS0 on Xe_LPM+ even
+        // though the coded frame and status registers are complete. Keep this
+        // final command as the ordered memory completion fence only.
+        media::MI_FLUSH_DW | media::MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
     )?;
     media::packet_write_addr64(batch, flush, 1, RESULT_GPU + media::MEDIA_RESULT_COMPLETE_SLOT);
     batch[flush + 3] = COMPLETE_MARKER;
@@ -1023,8 +1026,7 @@ fn capture_timeout_diagnostics(
     let ring_acthd_lo = crate::intel::mmio_read(dev, base + media::RING_ACTHD);
     let ring_acthd_hi = crate::intel::mmio_read(dev, base + media::RING_ACTHD_UDW);
     let acthd = ((ring_acthd_hi as u64) << 32) | ring_acthd_lo as u64;
-    let (acthd_region, acthd_offset_bytes, acthd_dword) =
-        classify_acthd(acthd, backing);
+    let (acthd_region, acthd_offset_bytes, acthd_dword) = classify_acthd(acthd, backing);
 
     AvcEncodeTimeoutDiagnostics {
         valid: true,
@@ -1058,18 +1060,12 @@ fn capture_timeout_diagnostics(
         mfx_error: crate::intel::mmio_read(dev, MFX_ERROR_FLAG),
         mfx_frame_crc: crate::intel::mmio_read(dev, MFX_FRAME_CRC),
         mfx_mb_count: crate::intel::mmio_read(dev, MFX_MB_COUNT),
-        mfc_bitstream_bytecount_frame: crate::intel::mmio_read(
-            dev,
-            MFC_BITSTREAM_BYTECOUNT_FRAME,
-        ),
+        mfc_bitstream_bytecount_frame: crate::intel::mmio_read(dev, MFC_BITSTREAM_BYTECOUNT_FRAME),
         mfc_bitstream_se_bitcount_frame: crate::intel::mmio_read(
             dev,
             MFC_BITSTREAM_SE_BITCOUNT_FRAME,
         ),
-        mfc_bitstream_bytecount_slice: crate::intel::mmio_read(
-            dev,
-            MFC_BITSTREAM_BYTECOUNT_SLICE,
-        ),
+        mfc_bitstream_bytecount_slice: crate::intel::mmio_read(dev, MFC_BITSTREAM_BYTECOUNT_SLICE),
         mfc_image_status_mask: crate::intel::mmio_read(dev, MFC_IMAGE_STATUS_MASK),
         mfc_image_status_control: crate::intel::mmio_read(dev, MFC_IMAGE_STATUS_CONTROL),
         mfc_qp_status_count: crate::intel::mmio_read(dev, MFC_QP_STATUS_COUNT),

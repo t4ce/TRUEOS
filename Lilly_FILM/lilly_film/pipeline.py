@@ -6,17 +6,17 @@ import shutil
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Dict, List, Literal, Sequence, Tuple
 
 import numpy as np
 from PIL import Image
 from scipy.ndimage import binary_erosion, distance_transform_edt
 
-from .backend import RifeBackend
+from .backend import FilmBackend
 
 
 QuantizeMode = Literal["pair", "none"]
-EnsembleMode = Literal["none", "median", "medoid"]
+ColorMode = Literal["gray", "matte", "premultiplied"]
 QUALITY_GATE = {
     "minimum_alpha_iou": 0.85,
     "minimum_edge_f1_with_1px_tolerance": 0.70,
@@ -28,14 +28,11 @@ QUALITY_GATE = {
 
 @dataclass(frozen=True)
 class InterpolationSettings:
-    work_scale: int = 8
+    work_scale: int = 1
     timestep: float = 0.5
-    alpha_threshold: float = 0.5
+    alpha_threshold: float = 0.4
     quantize: QuantizeMode = "pair"
-    background: int = 127
-    inference_scale: float = 1.0
-    blend_mode: Literal["temporal-alpha", "rife"] = "rife"
-    ensemble: EnsembleMode = "medoid"
+    color_mode: ColorMode = "matte"
 
 
 @dataclass(frozen=True)
@@ -47,16 +44,12 @@ class FrameReport:
     output: str
     width: int
     height: int
-    opaque_pixels_a: int
-    opaque_pixels_b: int
-    opaque_pixels_output: int
-    opaque_colors_output: int
-    alpha_values: list[int]
-    transparent_rgba_zero: bool
-    inference_candidates: int
+    inference_calls: int
     inference_seconds: float
-    selected_candidate: str
-    settings: dict[str, object]
+    alpha_values: List[int]
+    transparent_rgba_zero: bool
+    opaque_colors_output: int
+    settings: Dict[str, object]
 
 
 def sha256_file(path: Path) -> str:
@@ -69,10 +62,7 @@ def sha256_file(path: Path) -> str:
 
 def load_rgba(path: Path) -> np.ndarray:
     with Image.open(path) as image:
-        rgba = np.asarray(image.convert("RGBA"), dtype=np.uint8)
-    if rgba.ndim != 3 or rgba.shape[2] != 4:
-        raise ValueError(f"{path} is not RGBA-compatible")
-    return rgba
+        return np.asarray(image.convert("RGBA"), dtype=np.uint8)
 
 
 def validate_lilly_input(path: Path, rgba: np.ndarray) -> None:
@@ -80,30 +70,14 @@ def validate_lilly_input(path: Path, rgba: np.ndarray) -> None:
         raise ValueError(f"{path} must be exactly 128x128 RGBA")
     alpha_values = set(np.unique(rgba[:, :, 3]).tolist())
     if not alpha_values.issubset({0, 255}):
-        raise ValueError(f"{path} has non-binary alpha values: {sorted(alpha_values)}")
+        raise ValueError(f"{path} has non-binary alpha: {sorted(alpha_values)}")
     if 255 not in alpha_values:
         raise ValueError(f"{path} contains no opaque pixels")
 
 
-def extend_opaque_rgb(rgba: np.ndarray) -> np.ndarray:
-    """Fill transparent RGB with the nearest opaque pixel's colour."""
-
-    rgb = rgba[:, :, :3].copy()
-    opaque = rgba[:, :, 3] > 0
-    if opaque.all():
-        return rgb
-    if not opaque.any():
-        raise ValueError("cannot extend RGB for a fully transparent image")
-    nearest = distance_transform_edt(~opaque, return_distances=False, return_indices=True)
-    transparent = ~opaque
-    rgb[transparent] = rgb[
-        nearest[0][transparent],
-        nearest[1][transparent],
-    ]
-    return rgb
-
-
-def _resize_rgb(rgb: np.ndarray, size: tuple[int, int], resample: int) -> np.ndarray:
+def _resize_rgb(
+    rgb: np.ndarray, size: Tuple[int, int], resample: int
+) -> np.ndarray:
     return np.array(
         Image.fromarray(rgb, mode="RGB").resize(size, resample=resample),
         dtype=np.uint8,
@@ -111,9 +85,20 @@ def _resize_rgb(rgb: np.ndarray, size: tuple[int, int], resample: int) -> np.nda
     )
 
 
-def _resize_float(channel: np.ndarray, size: tuple[int, int], resample: int) -> np.ndarray:
+def _resize_float(
+    channel: np.ndarray, size: Tuple[int, int], resample: int
+) -> np.ndarray:
     image = Image.fromarray(channel.astype(np.float32), mode="F")
     return np.asarray(image.resize(size, resample=resample), dtype=np.float32)
+
+
+def _resize_float_rgb(
+    rgb: np.ndarray, size: Tuple[int, int], resample: int
+) -> np.ndarray:
+    return np.stack(
+        [_resize_float(rgb[:, :, index], size, resample) for index in range(3)],
+        axis=2,
+    )
 
 
 def _pair_palette(rgba0: np.ndarray, rgba1: np.ndarray) -> np.ndarray:
@@ -133,8 +118,7 @@ def _quantize_to_palette(rgb: np.ndarray, colors: np.ndarray) -> np.ndarray:
     palette = Image.new("P", (1, 1))
     padded = np.repeat(colors[-1:, :], 256, axis=0).astype(np.uint8)
     padded[: len(colors)] = colors
-    values = padded.reshape(-1).tolist()
-    palette.putpalette(values)
+    palette.putpalette(padded.reshape(-1).tolist())
     quantized = Image.fromarray(rgb, mode="RGB").quantize(
         palette=palette,
         dither=Image.Dither.NONE,
@@ -142,34 +126,8 @@ def _quantize_to_palette(rgb: np.ndarray, colors: np.ndarray) -> np.ndarray:
     return np.array(quantized.convert("RGB"), dtype=np.uint8, copy=True)
 
 
-def _finalize_interpolated(
-    interpolated: np.ndarray,
-    width: int,
-    height: int,
-    settings: InterpolationSettings,
-    palette: np.ndarray,
-) -> np.ndarray:
-    rgb_work = np.rint(interpolated[:, :, :3] * 255.0).astype(np.uint8)
-    alpha_work = interpolated[:, :, 3]
-    rgb = _resize_rgb(rgb_work, (width, height), Image.Resampling.BOX)
-    alpha_coverage = _resize_float(
-        alpha_work, (width, height), Image.Resampling.BOX
-    )
-    alpha = np.where(alpha_coverage >= settings.alpha_threshold, 255, 0).astype(
-        np.uint8
-    )
-
-    if settings.quantize == "pair":
-        rgb = _quantize_to_palette(rgb, palette)
-    elif settings.quantize != "none":
-        raise ValueError(f"unknown quantization mode: {settings.quantize}")
-
-    rgb[alpha == 0] = 0
-    return np.dstack((rgb, alpha))
-
-
 def interpolate_pair(
-    backend: RifeBackend,
+    backend: FilmBackend,
     input_a: Path,
     input_b: Path,
     output: Path,
@@ -179,119 +137,129 @@ def interpolate_pair(
     rgba1 = load_rgba(input_b)
     validate_lilly_input(input_a, rgba0)
     validate_lilly_input(input_b, rgba1)
-
-    if settings.work_scale not in {1, 2, 4, 8, 16}:
-        raise ValueError("work_scale must be one of 1, 2, 4, 8, or 16")
+    if settings.work_scale not in {1, 2, 4}:
+        raise ValueError("work_scale must be one of 1, 2, or 4")
     if not 0.0 < settings.alpha_threshold < 1.0:
         raise ValueError("alpha_threshold must be strictly between 0 and 1")
-    if not 0 <= settings.background <= 255:
-        raise ValueError("background must be between 0 and 255")
 
     height, width = rgba0.shape[:2]
     work_size = (width * settings.work_scale, height * settings.work_scale)
     nearest = Image.Resampling.NEAREST
-
-    filled0 = extend_opaque_rgb(rgba0)
-    filled1 = extend_opaque_rgb(rgba1)
     alpha0 = rgba0[:, :, 3].astype(np.float32) / 255.0
     alpha1 = rgba1[:, :, 3].astype(np.float32) / 255.0
+    rgb0 = rgba0[:, :, :3].astype(np.float32) / 255.0
+    rgb1 = rgba1[:, :, :3].astype(np.float32) / 255.0
 
-    filled0_work = _resize_rgb(filled0, work_size, nearest).astype(np.float32) / 255.0
-    filled1_work = _resize_rgb(filled1, work_size, nearest).astype(np.float32) / 255.0
+    if settings.color_mode == "gray":
+        color0 = rgb0 * alpha0[:, :, None] + np.float32(0.5) * (
+            1.0 - alpha0[:, :, None]
+        )
+        color1 = rgb1 * alpha1[:, :, None] + np.float32(0.5) * (
+            1.0 - alpha1[:, :, None]
+        )
+    elif settings.color_mode in {"matte", "premultiplied"}:
+        color0 = rgb0 * alpha0[:, :, None]
+        color1 = rgb1 * alpha1[:, :, None]
+    else:
+        raise ValueError(f"unknown color mode: {settings.color_mode}")
+    color0_work = (
+        _resize_rgb(
+            np.rint(color0 * 255.0).astype(np.uint8),
+            work_size,
+            nearest,
+        ).astype(np.float32)
+        / 255.0
+    )
+    color1_work = (
+        _resize_rgb(
+            np.rint(color1 * 255.0).astype(np.uint8),
+            work_size,
+            nearest,
+        ).astype(np.float32)
+        / 255.0
+    )
     alpha0_work = _resize_float(alpha0, work_size, nearest)
     alpha1_work = _resize_float(alpha1, work_size, nearest)
+    alpha_rgb0 = np.repeat(alpha0_work[:, :, None], 3, axis=2)
+    alpha_rgb1 = np.repeat(alpha1_work[:, :, None], 3, axis=2)
 
-    payload0 = np.concatenate((filled0_work, alpha0_work[:, :, None]), axis=2)
-    payload1 = np.concatenate((filled1_work, alpha1_work[:, :, None]), axis=2)
-    if settings.ensemble == "none":
-        candidate_specs = ((settings.background, False, False),)
-    elif settings.ensemble in {"median", "medoid"}:
-        backgrounds = tuple(sorted({32, settings.background, 224}))
-        candidate_specs = tuple(
-            (background, reverse, flip)
-            for background in backgrounds
-            for reverse in (False, True)
-            for flip in (False, True)
+    color_work, color_seconds = backend.interpolate(
+        color0_work,
+        color1_work,
+        settings.timestep,
+    )
+    if settings.color_mode == "matte":
+        white0 = rgb0 * alpha0[:, :, None] + (1.0 - alpha0[:, :, None])
+        white1 = rgb1 * alpha1[:, :, None] + (1.0 - alpha1[:, :, None])
+        white0_work = (
+            _resize_rgb(
+                np.rint(white0 * 255.0).astype(np.uint8),
+                work_size,
+                nearest,
+            ).astype(np.float32)
+            / 255.0
+        )
+        white1_work = (
+            _resize_rgb(
+                np.rint(white1 * 255.0).astype(np.uint8),
+                work_size,
+                nearest,
+            ).astype(np.float32)
+            / 255.0
+        )
+        white_work, alpha_seconds = backend.interpolate(
+            white0_work,
+            white1_work,
+            settings.timestep,
+        )
+        alpha_work = np.clip(
+            1.0 - np.mean(white_work - color_work, axis=2),
+            0.0,
+            1.0,
+        ).astype(np.float32)
+    else:
+        alpha_rgb_work, alpha_seconds = backend.interpolate(
+            alpha_rgb0.astype(np.float32),
+            alpha_rgb1.astype(np.float32),
+            settings.timestep,
+        )
+        alpha_work = np.mean(alpha_rgb_work, axis=2).astype(np.float32)
+
+    color = _resize_float_rgb(
+        color_work,
+        (width, height),
+        Image.Resampling.BOX,
+    )
+    alpha_coverage = _resize_float(
+        alpha_work,
+        (width, height),
+        Image.Resampling.BOX,
+    )
+    if settings.color_mode in {"matte", "premultiplied"}:
+        straight_rgb = color / np.maximum(
+            alpha_coverage[:, :, None], np.float32(1e-4)
         )
     else:
-        raise ValueError(f"unknown ensemble mode: {settings.ensemble}")
-
-    candidates: list[np.ndarray] = []
-    inference_started = time.perf_counter()
-    for background_value, reverse, flip in candidate_specs:
-        background = np.float32(background_value / 255.0)
-        motion0 = (
-            filled0_work * alpha0_work[:, :, None]
-            + background * (1.0 - alpha0_work[:, :, None])
-        )
-        motion1 = (
-            filled1_work * alpha1_work[:, :, None]
-            + background * (1.0 - alpha1_work[:, :, None])
-        )
-        candidate_motion0, candidate_motion1 = motion0, motion1
-        candidate_payload0, candidate_payload1 = payload0, payload1
-        candidate_timestep = settings.timestep
-        if reverse:
-            candidate_motion0, candidate_motion1 = motion1, motion0
-            candidate_payload0, candidate_payload1 = payload1, payload0
-            candidate_timestep = 1.0 - settings.timestep
-        if flip:
-            candidate_motion0 = np.flip(candidate_motion0, axis=1).copy()
-            candidate_motion1 = np.flip(candidate_motion1, axis=1).copy()
-            candidate_payload0 = np.flip(candidate_payload0, axis=1).copy()
-            candidate_payload1 = np.flip(candidate_payload1, axis=1).copy()
-        candidate = backend.interpolate_payload(
-            candidate_motion0,
-            candidate_motion1,
-            candidate_payload0,
-            candidate_payload1,
-            timestep=candidate_timestep,
-            inference_scale=settings.inference_scale,
-            blend_mode=settings.blend_mode,
-        )
-        if flip:
-            candidate = np.flip(candidate, axis=1).copy()
-        candidates.append(candidate)
-    inference_seconds = time.perf_counter() - inference_started
-
-    palette = _pair_palette(rgba0, rgba1)
-    if settings.ensemble == "none":
-        output_rgba = _finalize_interpolated(
-            candidates[0], width, height, settings, palette
-        )
-        selected_candidate = (
-            f"background={candidate_specs[0][0]},reverse=false,flip=false"
-        )
-    else:
-        candidate_stack = np.stack(candidates, axis=0)
-        candidate_median = np.median(candidate_stack, axis=0)
-        if settings.ensemble == "median":
-            interpolated = candidate_median
-            output_rgba = _finalize_interpolated(
-                interpolated, width, height, settings, palette
-            )
-            selected_candidate = "per-pixel-median"
-        else:
-            distances = np.mean(
-                np.abs(candidate_stack - candidate_median[None, ...]),
-                axis=(1, 2, 3),
-            )
-            selected_index = int(np.argmin(distances))
-            output_rgba = _finalize_interpolated(
-                candidate_stack[selected_index], width, height, settings, palette
-            )
-            background_value, reverse, flip = candidate_specs[selected_index]
-            selected_candidate = (
-                f"background={background_value},"
-                f"reverse={str(reverse).lower()},flip={str(flip).lower()}"
-            )
+        straight_rgb = color
+    rgb = np.rint(np.clip(straight_rgb, 0.0, 1.0) * 255.0).astype(np.uint8)
+    alpha = np.where(
+        alpha_coverage >= settings.alpha_threshold, 255, 0
+    ).astype(np.uint8)
+    if settings.quantize == "pair":
+        rgb = _quantize_to_palette(rgb, _pair_palette(rgba0, rgba1))
+    elif settings.quantize != "none":
+        raise ValueError(f"unknown quantize mode: {settings.quantize}")
+    rgb[alpha == 0] = 0
+    output_rgba = np.dstack((rgb, alpha))
 
     output.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(output_rgba, mode="RGBA").save(output, format="PNG")
-
-    alpha_values = sorted(np.unique(output_rgba[:, :, 3]).astype(int).tolist())
+    alpha_values = sorted(
+        np.unique(output_rgba[:, :, 3]).astype(int).tolist()
+    )
     opaque_colors = np.unique(
-        output_rgba[:, :, :3][output_rgba[:, :, 3] == 255], axis=0
+        output_rgba[:, :, :3][output_rgba[:, :, 3] == 255],
+        axis=0,
     )
     report = FrameReport(
         input_a=str(input_a.resolve()),
@@ -301,53 +269,55 @@ def interpolate_pair(
         output=str(output.resolve()),
         width=width,
         height=height,
-        opaque_pixels_a=int(np.count_nonzero(rgba0[:, :, 3])),
-        opaque_pixels_b=int(np.count_nonzero(rgba1[:, :, 3])),
-        opaque_pixels_output=int(np.count_nonzero(output_rgba[:, :, 3])),
-        opaque_colors_output=int(len(opaque_colors)),
+        inference_calls=2,
+        inference_seconds=color_seconds + alpha_seconds,
         alpha_values=alpha_values,
         transparent_rgba_zero=bool(
             np.all(output_rgba[output_rgba[:, :, 3] == 0] == 0)
         ),
-        inference_candidates=len(candidates),
-        inference_seconds=inference_seconds,
-        selected_candidate=selected_candidate,
+        opaque_colors_output=int(len(opaque_colors)),
         settings=asdict(settings),
     )
     if report.alpha_values not in ([0, 255], [255]):
-        raise RuntimeError(f"generated alpha invariant failed: {report.alpha_values}")
+        raise RuntimeError("generated alpha invariant failed")
     if not report.transparent_rgba_zero:
-        raise RuntimeError("generated transparent-pixel invariant failed")
+        raise RuntimeError("transparent-pixel invariant failed")
     return report
 
 
 def _checker_composite(image: Image.Image) -> Image.Image:
     rgba = image.convert("RGBA")
     width, height = rgba.size
-    tile = 8
     y, x = np.indices((height, width))
-    checker = np.where(((x // tile + y // tile) % 2)[:, :, None], 205, 235)
+    checker = np.where(((x // 8 + y // 8) % 2)[:, :, None], 205, 235)
     background = np.concatenate(
-        (np.repeat(checker, 3, axis=2), np.full((height, width, 1), 255)), axis=2
+        (
+            np.repeat(checker, 3, axis=2),
+            np.full((height, width, 1), 255),
+        ),
+        axis=2,
     ).astype(np.uint8)
-    base = Image.fromarray(background, mode="RGBA")
-    return Image.alpha_composite(base, rgba).convert("RGB")
+    return Image.alpha_composite(
+        Image.fromarray(background, mode="RGBA"), rgba
+    ).convert("RGB")
 
 
-def write_previews(frame_paths: list[Path], output_dir: Path) -> None:
+def write_previews(frame_paths: Sequence[Path], output_dir: Path) -> None:
     frames = [Image.open(path).convert("RGBA") for path in frame_paths]
     try:
-        zoom = 4
         rendered = [
             _checker_composite(frame).resize(
-                (frame.width * zoom, frame.height * zoom),
+                (frame.width * 4, frame.height * 4),
                 resample=Image.Resampling.NEAREST,
             )
             for frame in frames
         ]
         sheet = Image.new(
             "RGB",
-            (sum(frame.width for frame in rendered), max(frame.height for frame in rendered)),
+            (
+                sum(frame.width for frame in rendered),
+                max(frame.height for frame in rendered),
+            ),
             color=(235, 235, 235),
         )
         cursor = 0
@@ -355,7 +325,6 @@ def write_previews(frame_paths: list[Path], output_dir: Path) -> None:
             sheet.paste(frame, (cursor, 0))
             cursor += frame.width
         sheet.save(output_dir / "contact-sheet.png", format="PNG")
-
         frames[0].save(
             output_dir / "preview.png",
             format="PNG",
@@ -371,29 +340,38 @@ def write_previews(frame_paths: list[Path], output_dir: Path) -> None:
             frame.close()
 
 
-def interpolate_sequence(
-    backend: RifeBackend,
-    input_dir: Path,
-    output_dir: Path,
-    settings: InterpolationSettings,
-    loop: bool,
-) -> dict[str, object]:
+def _source_frames(input_dir: Path) -> List[Path]:
     sources = sorted(input_dir.glob("frame_*.png"))
     if len(sources) != 4:
-        raise ValueError(f"{input_dir} must contain exactly four frame_*.png files")
+        raise ValueError(
+            f"{input_dir} must contain exactly four frame_*.png files"
+        )
+    return sources
+
+
+def _require_empty_output(output_dir: Path) -> None:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    reports: list[FrameReport] = []
-    output_frames: list[Path] = []
+
+def interpolate_sequence(
+    backend: FilmBackend,
+    input_dir: Path,
+    output_dir: Path,
+    settings: InterpolationSettings,
+    loop: bool,
+) -> Dict[str, object]:
+    sources = _source_frames(input_dir)
+    _require_empty_output(output_dir)
+    reports: List[FrameReport] = []
+    output_frames: List[Path] = []
     for index, source in enumerate(sources):
         original_output = output_dir / f"frame_{index * 2 + 1:02d}.png"
         shutil.copy2(source, original_output)
         if sha256_file(source) != sha256_file(original_output):
             raise RuntimeError(f"source copy hash mismatch for {source}")
         output_frames.append(original_output)
-
         if index < len(sources) - 1:
             next_source = sources[index + 1]
         elif loop:
@@ -403,15 +381,10 @@ def interpolate_sequence(
         generated_output = output_dir / f"frame_{index * 2 + 2:02d}.png"
         reports.append(
             interpolate_pair(
-                backend,
-                source,
-                next_source,
-                generated_output,
-                settings,
+                backend, source, next_source, generated_output, settings
             )
         )
         output_frames.append(generated_output)
-
     report = {
         "input_directory": str(input_dir.resolve()),
         "output_directory": str(output_dir.resolve()),
@@ -426,14 +399,15 @@ def interpolate_sequence(
     return report
 
 
-def _prediction_metrics(prediction: np.ndarray, target: np.ndarray) -> dict[str, float]:
+def prediction_metrics(
+    prediction: np.ndarray, target: np.ndarray
+) -> Dict[str, float]:
     predicted_mask = prediction[:, :, 3] == 255
     target_mask = target[:, :, 3] == 255
     intersection = np.count_nonzero(predicted_mask & target_mask)
     union = np.count_nonzero(predicted_mask | target_mask)
     predicted_area = np.count_nonzero(predicted_mask)
     target_area = np.count_nonzero(target_mask)
-
     both = predicted_mask & target_mask
     if np.any(both):
         rgb_mae = float(
@@ -445,7 +419,6 @@ def _prediction_metrics(prediction: np.ndarray, target: np.ndarray) -> dict[str,
         )
     else:
         rgb_mae = 1.0
-
     structure = np.ones((3, 3), dtype=bool)
     predicted_edge = predicted_mask ^ binary_erosion(
         predicted_mask, structure=structure, border_value=0
@@ -453,38 +426,41 @@ def _prediction_metrics(prediction: np.ndarray, target: np.ndarray) -> dict[str,
     target_edge = target_mask ^ binary_erosion(
         target_mask, structure=structure, border_value=0
     )
-    predicted_edge_count = np.count_nonzero(predicted_edge)
-    target_edge_count = np.count_nonzero(target_edge)
     target_distance = distance_transform_edt(~target_edge)
     predicted_distance = distance_transform_edt(~predicted_edge)
-    edge_precision = (
+    predicted_count = np.count_nonzero(predicted_edge)
+    target_count = np.count_nonzero(target_edge)
+    precision = (
         float(np.count_nonzero(predicted_edge & (target_distance <= 1.5)))
-        / predicted_edge_count
-        if predicted_edge_count
+        / predicted_count
+        if predicted_count
         else 0.0
     )
-    edge_recall = (
+    recall = (
         float(np.count_nonzero(target_edge & (predicted_distance <= 1.5)))
-        / target_edge_count
-        if target_edge_count
+        / target_count
+        if target_count
         else 0.0
     )
     edge_f1 = (
-        2.0 * edge_precision * edge_recall / (edge_precision + edge_recall)
-        if edge_precision + edge_recall
+        2.0 * precision * recall / (precision + recall)
+        if precision + recall
         else 0.0
     )
-    rgba_exact = float(np.all(prediction == target, axis=2).mean())
     return {
         "alpha_iou": float(intersection / union) if union else 1.0,
-        "alpha_area_ratio": float(predicted_area / target_area) if target_area else 1.0,
+        "alpha_area_ratio": (
+            float(predicted_area / target_area) if target_area else 1.0
+        ),
         "edge_f1_with_1px_tolerance": edge_f1,
         "rgb_mae_on_shared_opaque": rgb_mae,
-        "rgba_exact_fraction": rgba_exact,
+        "rgba_exact_fraction": float(
+            np.all(prediction == target, axis=2).mean()
+        ),
     }
 
 
-def _passes_quality_gate(metrics: dict[str, float]) -> bool:
+def _passes_quality_gate(metrics: Dict[str, float]) -> bool:
     return bool(
         metrics["alpha_iou"] >= QUALITY_GATE["minimum_alpha_iou"]
         and metrics["edge_f1_with_1px_tolerance"]
@@ -498,21 +474,14 @@ def _passes_quality_gate(metrics: dict[str, float]) -> bool:
 
 
 def evaluate_sequence(
-    backend: RifeBackend,
+    backend: FilmBackend,
     input_dir: Path,
     output_dir: Path,
     settings: InterpolationSettings,
     loop: bool,
-) -> dict[str, object]:
-    """Predict held-out keyframes from their two temporal neighbours."""
-
-    sources = sorted(input_dir.glob("frame_*.png"))
-    if len(sources) != 4:
-        raise ValueError(f"{input_dir} must contain exactly four frame_*.png files")
-    if output_dir.exists() and any(output_dir.iterdir()):
-        raise FileExistsError(f"output directory is not empty: {output_dir}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
+) -> Dict[str, object]:
+    sources = _source_frames(input_dir)
+    _require_empty_output(output_dir)
     evaluations = [
         ("frame_02", sources[0], sources[2], sources[1]),
         ("frame_03", sources[1], sources[3], sources[2]),
@@ -524,21 +493,16 @@ def evaluate_sequence(
                 ("frame_01_loop", sources[3], sources[1], sources[0]),
             )
         )
-
-    results: list[dict[str, object]] = []
-    preview_paths: list[Path] = []
+    results = []
+    preview_paths: List[Path] = []
     for name, endpoint_a, endpoint_b, target_path in evaluations:
         prediction_path = output_dir / f"predicted_{name}.png"
         frame_report = interpolate_pair(
-            backend,
-            endpoint_a,
-            endpoint_b,
-            prediction_path,
-            settings,
+            backend, endpoint_a, endpoint_b, prediction_path, settings
         )
-        prediction = load_rgba(prediction_path)
-        target = load_rgba(target_path)
-        metrics = _prediction_metrics(prediction, target)
+        metrics = prediction_metrics(
+            load_rgba(prediction_path), load_rgba(target_path)
+        )
         results.append(
             {
                 "name": name,
@@ -551,11 +515,12 @@ def evaluate_sequence(
                 "passes_quality_gate": _passes_quality_gate(metrics),
             }
         )
-        preview_paths.extend((endpoint_a, prediction_path, target_path, endpoint_b))
-
+        preview_paths.extend(
+            (endpoint_a, prediction_path, target_path, endpoint_b)
+        )
     metric_names = tuple(results[0]["metrics"].keys())
     means = {
-        name: float(np.mean([result["metrics"][name] for result in results]))
+        name: float(np.mean([item["metrics"][name] for item in results]))
         for name in metric_names
     }
     report = {
@@ -565,7 +530,7 @@ def evaluate_sequence(
         "backend": asdict(backend.info),
         "quality_gate": QUALITY_GATE,
         "passes_quality_gate": all(
-            bool(result["passes_quality_gate"]) for result in results
+            bool(item["passes_quality_gate"]) for item in results
         ),
         "mean_metrics": means,
         "evaluations": results,
@@ -574,4 +539,57 @@ def evaluate_sequence(
         json.dumps(report, indent=2) + "\n", encoding="utf-8"
     )
     write_previews(preview_paths, output_dir)
+    return report
+
+
+def run_corpus(
+    backend: FilmBackend,
+    input_root: Path,
+    output_root: Path,
+    settings: InterpolationSettings,
+    loop: bool,
+) -> Dict[str, object]:
+    source_dirs = sorted(
+        path for path in input_root.rglob("*_frames") if path.is_dir()
+    )
+    if not source_dirs:
+        raise ValueError(f"no *_frames directories found under {input_root}")
+    _require_empty_output(output_root)
+    started = time.perf_counter()
+    sequences = []
+    for source_dir in source_dirs:
+        relative = source_dir.relative_to(input_root)
+        item_root = output_root / relative
+        sequence = interpolate_sequence(
+            backend,
+            source_dir,
+            item_root / "sequence",
+            settings,
+            loop,
+        )
+        evaluation = evaluate_sequence(
+            backend,
+            source_dir,
+            item_root / "evaluation",
+            settings,
+            loop,
+        )
+        sequences.append(
+            {
+                "relative_directory": str(relative),
+                "sequence_report": sequence,
+                "evaluation_report": evaluation,
+            }
+        )
+    report = {
+        "input_root": str(input_root.resolve()),
+        "output_root": str(output_root.resolve()),
+        "loop": loop,
+        "elapsed_seconds": time.perf_counter() - started,
+        "backend": asdict(backend.info),
+        "sequences": sequences,
+    }
+    (output_root / "corpus.json").write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
     return report

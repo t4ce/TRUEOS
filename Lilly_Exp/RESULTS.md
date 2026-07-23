@@ -13,7 +13,7 @@ Environment:
 - endpoint-palette quantization
 - binary alpha threshold 0.5
 
-Held-out keyframe means:
+Held-out keyframe means for the original single-pass baseline:
 
 | Pilot | Difficulty | Alpha IoU | Edge F1 | RGB MAE | Exact RGBA |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -35,3 +35,29 @@ The experimental `temporal-alpha` blend retains limbs that occur in only one
 endpoint, but it creates double edges around fingers on the supplied wave. The
 standard RIFE blend remains the default.
 
+## Refined default
+
+The default now evaluates twelve intact candidates: dark/mid/light neutral
+backgrounds, both temporal directions, and original/horizontally mirrored
+inputs. It selects the candidate nearest to their working-resolution consensus
+before the final 128x128 reduction and hard-alpha cleanup.
+
+| Pilot | Alpha IoU | Edge F1 | RGB MAE | Exact RGBA |
+| --- | ---: | ---: | ---: | ---: |
+| `Idle/Crossed-Arms/idle-5` | 1.0000 | 1.0000 | 0.0125 | 0.9397 |
+| `Waving/waving-smile` | 0.9326 | 0.8471 | 0.0165 | 0.9032 |
+| `Happy/cheer` | 0.6488 | 0.3977 | 0.1057 | 0.5892 |
+
+On the supplied looped wave, measured RIFE inference increased from 0.36 s for
+four single-pass midpoints to 2.77 s for four refined midpoints. This is twelve
+model evaluations per midpoint and about 7.7x observed GPU inference time due
+to fixed overheads. Both paths still emit only 128x128 output.
+
+The refined mode improves wave edge agreement and exact RGBA agreement, remains
+effectively neutral on the low-motion set, and substantially improves silhouette
+IoU on the hard set. The hard `cheer` transition still fails the quality gate:
+extra inference cannot reconstruct a pose absent from both adjacent endpoints.
+
+Increasing the working scale from 8x to 16x did not provide a consistent win.
+On the wave it slightly improved alpha IoU and RGB error but reduced edge F1;
+8x therefore remains the default while 16x stays available as an experiment.
