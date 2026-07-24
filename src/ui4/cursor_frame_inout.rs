@@ -2,19 +2,18 @@
 //!
 //! # UI4 selection contract
 //!
-//! Across every UI4 screen, output, and hardware plane there is **exactly zero
-//! or one selected frame**. Only that selected frame may receive application
-//! keyboard or pointer input, and only that frame may activate cursor
-//! overrides. A click which changes the selected frame is an absorb-select:
-//! its down, motion, and up transitions are never delivered to an application.
+//! Every cursor source owns **exactly zero or one selected frame**. UI4 also
+//! retains the most recently selected frame as its application input focus.
+//! A click which changes either association is an absorb-select: its down,
+//! motion, and up transitions are never delivered to an application.
 //!
 //! Keyboard hooks are global and run before selected-frame routing. A hook may
 //! consume an event so it never reaches UI4, or explicitly pass it through.
 //!
 //! Cursor identity is not singular: the kernel retains up to N independent
 //! cursor sources. Each frame owns one fallback cursor plus optional overrides
-//! for individual sources, and the selected frame remembers every cursor which
-//! selected it so slot 4 can paint their colored ownership segments.
+//! for individual sources, and every cursor/frame association remains present
+//! so slot 4 can paint colored ownership segments on several frames at once.
 
 use heapless::Vec;
 use spin::Mutex;
@@ -100,6 +99,7 @@ struct FrameCursorState {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct SelectingCursor {
     source: Ui4CursorSource,
+    selected: CursorFrameKey,
     color: crate::graphics::primitives::Rgba8,
 }
 
@@ -107,7 +107,10 @@ struct SelectingCursor {
 pub(crate) struct SelectionChange {
     pub(crate) previous: Option<CursorFrameKey>,
     pub(crate) selected: Option<CursorFrameKey>,
+    /// The calling cursor changed its own selected-frame association.
     pub(crate) changed: bool,
+    /// The most recently selected application input-focus frame changed.
+    pub(crate) focus_changed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -164,9 +167,12 @@ impl CursorFrameRig {
         let previous_len = self.frames.len();
         self.frames.retain(|frame| frame.key != key);
         let mut changed = self.frames.len() != previous_len;
+        let previous_selectors = self.selecting_cursors.len();
+        self.selecting_cursors
+            .retain(|cursor| cursor.selected != key);
+        changed |= self.selecting_cursors.len() != previous_selectors;
         if self.selected == Some(key) {
             self.selected = None;
-            self.selecting_cursors.clear();
             changed = true;
         }
         changed
@@ -182,9 +188,13 @@ impl CursorFrameRig {
         self.frames
             .retain(|frame| frame.key.owner != owner || frame.session != session);
         let mut changed = self.frames.len() != previous_len;
+        let frames = &self.frames;
+        let previous_selectors = self.selecting_cursors.len();
+        self.selecting_cursors
+            .retain(|cursor| frames.iter().any(|frame| frame.key == cursor.selected));
+        changed |= self.selecting_cursors.len() != previous_selectors;
         if selected_was_closed {
             self.selected = None;
-            self.selecting_cursors.clear();
             changed = true;
         }
         changed
@@ -194,12 +204,15 @@ impl CursorFrameRig {
         let previous_len = self.frames.len();
         self.frames.retain(|frame| frame.key.owner != owner);
         let mut changed = self.frames.len() != previous_len;
+        let previous_selectors = self.selecting_cursors.len();
+        self.selecting_cursors
+            .retain(|cursor| cursor.selected.owner != owner);
+        changed |= self.selecting_cursors.len() != previous_selectors;
         if self
             .selected
             .is_some_and(|selected| selected.owner == owner)
         {
             self.selected = None;
-            self.selecting_cursors.clear();
             changed = true;
         }
         changed
@@ -212,28 +225,45 @@ impl CursorFrameRig {
         color: crate::graphics::primitives::Rgba8,
     ) -> (SelectionChange, bool) {
         let previous = self.selected;
-        let changed = previous != selected;
-        let mut visual_changed = changed;
-        if changed {
+        let focus_changed = previous != selected;
+        if focus_changed {
             self.selected = selected;
-            self.selecting_cursors.clear();
         }
-        if selected.is_some()
-            && !self
-                .selecting_cursors
-                .iter()
-                .any(|cursor| cursor.source == source)
-        {
-            visual_changed |= self
-                .selecting_cursors
-                .push(SelectingCursor { source, color })
-                .is_ok();
+        let source_previous = self.selected_frame_for_source(source);
+        let changed = source_previous != selected;
+        let mut visual_changed = focus_changed || changed;
+        match selected {
+            Some(selected) => {
+                if let Some(cursor) = self
+                    .selecting_cursors
+                    .iter_mut()
+                    .find(|cursor| cursor.source == source)
+                {
+                    visual_changed |= cursor.color != color;
+                    cursor.selected = selected;
+                    cursor.color = color;
+                } else {
+                    visual_changed |= self
+                        .selecting_cursors
+                        .push(SelectingCursor {
+                            source,
+                            selected,
+                            color,
+                        })
+                        .is_ok();
+                }
+            }
+            None => {
+                self.selecting_cursors
+                    .retain(|cursor| cursor.source != source);
+            }
         }
         (
             SelectionChange {
                 previous,
                 selected,
                 changed,
+                focus_changed,
             },
             visual_changed,
         )
@@ -271,11 +301,15 @@ impl CursorFrameRig {
             frame.fallback = icon;
             changed
         };
-        Ok(changed && self.selected == Some(key))
+        Ok(changed
+            && self
+                .selecting_cursors
+                .iter()
+                .any(|cursor| cursor.selected == key))
     }
 
     fn cursor_icon(&self, key: CursorFrameKey, source: Ui4CursorSource) -> Ui4CursorIcon {
-        if self.selected != Some(key) {
+        if self.selected_frame_for_source(source) != Some(key) {
             return Ui4CursorIcon::Default;
         }
         let Some(frame) = self.frames.iter().find(|frame| frame.key == key) else {
@@ -290,9 +324,15 @@ impl CursorFrameRig {
     }
 
     fn source_selected(&self, source: Ui4CursorSource) -> bool {
+        self.selected_frame_for_source(source)
+            .is_some_and(|selected| self.selected == Some(selected))
+    }
+
+    fn selected_frame_for_source(&self, source: Ui4CursorSource) -> Option<CursorFrameKey> {
         self.selecting_cursors
             .iter()
-            .any(|cursor| cursor.source == source)
+            .find(|cursor| cursor.source == source)
+            .map(|cursor| cursor.selected)
     }
 
     fn cursor_retired(&mut self, source: Ui4CursorSource) -> bool {
@@ -356,6 +396,10 @@ pub(crate) fn source_selected(source: Ui4CursorSource) -> bool {
     CURSOR_FRAME_RIG.lock().source_selected(source)
 }
 
+pub(crate) fn selected_frame_for_source(source: Ui4CursorSource) -> Option<CursorFrameKey> {
+    CURSOR_FRAME_RIG.lock().selected_frame_for_source(source)
+}
+
 pub(super) fn cursor_retired(source: Ui4CursorSource) {
     if CURSOR_FRAME_RIG.lock().cursor_retired(source) {
         signal_visual_change();
@@ -399,52 +443,69 @@ pub(crate) fn set_window_cursor_icon(
     Ok(())
 }
 
-pub(crate) fn selection_strip(
+pub(crate) fn selection_strips(
     output: OutputId,
     screen_width: u32,
     screen_height: u32,
-) -> Option<CursorSelectionStrip> {
-    let (selected, colors) = {
-        let rig = CURSOR_FRAME_RIG.lock();
-        let selected = rig.selected?;
-        let mut colors = Vec::new();
-        for cursor in &rig.selecting_cursors {
-            let _ = colors.push(cursor.color);
+) -> Vec<CursorSelectionStrip, MAX_CURSOR_SOURCES> {
+    let selectors = CURSOR_FRAME_RIG.lock().selecting_cursors.clone();
+    let mut strips: Vec<(CursorFrameKey, CursorSelectionStrip), MAX_CURSOR_SOURCES> = Vec::new();
+    for selector in selectors {
+        if let Some((_, strip)) = strips.iter_mut().find(|(key, _)| *key == selector.selected) {
+            let _ = strip.colors.push(selector.color);
+            continue;
         }
-        (selected, colors)
-    };
-    if colors.is_empty() {
-        return None;
+        let Some(window) = super::window_broker::window_snapshot(
+            selector.selected.owner,
+            selector.selected.window,
+        ) else {
+            continue;
+        };
+        if window.output != output
+            || window.state != WindowState::Ready
+            || !window.placement.visible
+            || window.placement.y <= 0
+        {
+            continue;
+        }
+        let top = window.placement.y - 1;
+        if top < 0 || top as u32 >= screen_height {
+            continue;
+        }
+        let left = i64::from(window.placement.x).clamp(0, i64::from(screen_width));
+        let right = i64::from(window.placement.x)
+            .saturating_add(i64::from(window.placement.width))
+            .clamp(0, i64::from(screen_width));
+        if right <= left {
+            continue;
+        }
+        let mut colors = Vec::new();
+        let _ = colors.push(selector.color);
+        let _ = strips.push((
+            selector.selected,
+            CursorSelectionStrip {
+                x: left as u32,
+                y: top as u32,
+                width: (right - left) as u32,
+                colors,
+            },
+        ));
     }
-    let window = super::window_broker::window_snapshot(selected.owner, selected.window)?;
-    if window.output != output
-        || window.state != WindowState::Ready
-        || !window.placement.visible
-        || window.placement.y <= 0
-    {
-        return None;
+    let mut output = Vec::new();
+    for (_, strip) in strips {
+        let _ = output.push(strip);
     }
-    let top = window.placement.y - 1;
-    if top < 0 || top as u32 >= screen_height {
-        return None;
-    }
-    let left = i64::from(window.placement.x).clamp(0, i64::from(screen_width));
-    let right = i64::from(window.placement.x)
-        .saturating_add(i64::from(window.placement.width))
-        .clamp(0, i64::from(screen_width));
-    if right <= left {
-        return None;
-    }
-    Some(CursorSelectionStrip {
-        x: left as u32,
-        y: top as u32,
-        width: (right - left) as u32,
-        colors,
-    })
+    output
 }
 
 pub(super) fn frame_visual_changed(owner: WindowOwner, window: WindowId) {
-    if selected_frame() == Some(CursorFrameKey::new(owner, window)) {
+    let key = CursorFrameKey::new(owner, window);
+    if CURSOR_FRAME_RIG
+        .lock()
+        .selecting_cursors
+        .iter()
+        .any(|cursor| cursor.selected == key)
+    {
         signal_visual_change();
     }
 }
@@ -580,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn selection_is_global_while_selectors_are_plural() {
+    fn cursor_selections_survive_another_cursor_changing_focus() {
         let mut rig = CursorFrameRig::new();
         let first = CursorFrameKey::new(WindowOwner::KernelApp(1), WindowId::from_raw(1).unwrap());
         let second = CursorFrameKey::new(WindowOwner::KernelApp(2), WindowId::from_raw(2).unwrap());
@@ -591,13 +652,19 @@ mod tests {
         let (change, _) = rig.select(Some(first), source(1), Rgba8::new(1, 2, 3, 255));
         assert!(change.changed);
         let (change, _) = rig.select(Some(first), source(2), Rgba8::new(4, 5, 6, 255));
-        assert!(!change.changed);
+        assert!(change.changed);
+        assert!(!change.focus_changed);
         assert_eq!(rig.selecting_cursors.len(), 2);
 
         let (change, _) = rig.select(Some(second), source(3), Rgba8::new(7, 8, 9, 255));
         assert_eq!(change.previous, Some(first));
         assert_eq!(rig.selected, Some(second));
-        assert_eq!(rig.selecting_cursors.len(), 1);
+        assert_eq!(rig.selecting_cursors.len(), 3);
+        assert_eq!(rig.selected_frame_for_source(source(1)), Some(first));
+        assert_eq!(rig.selected_frame_for_source(source(2)), Some(first));
+        assert_eq!(rig.selected_frame_for_source(source(3)), Some(second));
+        assert!(!rig.source_selected(source(1)));
+        assert!(rig.source_selected(source(3)));
     }
 
     #[test]
@@ -610,6 +677,7 @@ mod tests {
         rig.set_cursor(frame, Some(source(2)), Ui4CursorIcon::ResizeHorizontal)
             .unwrap();
         rig.select(Some(frame), source(1), Rgba8::new(1, 2, 3, 255));
+        rig.select(Some(frame), source(2), Rgba8::new(4, 5, 6, 255));
 
         assert_eq!(rig.cursor_icon(frame, source(1)), Ui4CursorIcon::Loading);
         assert_eq!(rig.cursor_icon(frame, source(2)), Ui4CursorIcon::ResizeHorizontal);

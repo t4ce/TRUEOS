@@ -1024,7 +1024,8 @@ static MOVE_PORTAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 static MOVE_PORTAL_STARTED_MS: AtomicU64 = AtomicU64::new(0);
 
 const GLOBAL_AURA_HALF_CYCLE_MS: u64 = 1_000;
-const IDLE_VFX_OPACITY_RAMP_MS: u64 = 1_000;
+const IDLE_VFX_TRANSITION_MS: u64 = 1_000;
+const REASONING_VFX_TRANSITION_MS: u64 = 2_000;
 // Aura bloom is Spirit's single global sprite shader for now. The comparison
 // grid's normalized controls are
 // `[-0.3 -> 0 -> -0.3, +1, -1, -1]`. For Aura bloom those positions map to
@@ -1032,39 +1033,66 @@ const IDLE_VFX_OPACITY_RAMP_MS: u64 = 1_000;
 const GLOBAL_AURA_RADIUS_MIN: f32 = 9.0;
 const GLOBAL_AURA_RADIUS_MAX: f32 = 12.0;
 const GLOBAL_AURA_STRENGTH: f32 = 2.5;
-// Every procedural background is presented inside the same fixed fraction of
-// Spirit's 256x256 cursor allocation. The control-page scale dword remains for
-// the stable kernel ABI, but the live Spirit path does not let individual
-// effects or the move transition grow beyond this footprint.
+// Ordinary procedural backgrounds are presented inside the same fixed fraction
+// of Spirit's 256x256 cursor allocation. The reasoning and idle-clock
+// transitions intentionally animate their scale controls; all other effects
+// and the move transition retain this fixed footprint.
 // The authored reference ring sits at normalized radius 0.32. A scale of
 // 1.171875 maps it to radius 96 in the 256px cursor surface, leaving one
 // invariant 32px margin on every side for every live Spirit background.
 const SPIRIT_BACKGROUND_PRESENT_SCALE: f32 = 1.171875;
 
 #[derive(Copy, Clone)]
-struct IdleVfxState {
+struct SpiritVfxTransition {
     active: bool,
     transition_started_ms: u64,
-    transition_from_opacity: f32,
+    transition_from: f32,
+    transition_to: f32,
+    duration_ms: u64,
 }
 
-impl IdleVfxState {
+impl SpiritVfxTransition {
     const INACTIVE: Self = Self {
         active: false,
         transition_started_ms: 0,
-        transition_from_opacity: 0.0,
+        transition_from: 0.0,
+        transition_to: 0.0,
+        duration_ms: 1,
     };
 
-    fn opacity(self, now_ms: u64) -> f32 {
-        let progress = (now_ms.saturating_sub(self.transition_started_ms) as f32
-            / IDLE_VFX_OPACITY_RAMP_MS as f32)
-            .min(1.0);
-        let target = if self.active { 1.0 } else { 0.0 };
-        self.transition_from_opacity + (target - self.transition_from_opacity) * progress
+    fn set_active(&mut self, active: bool, now_ms: u64, duration_ms: u64) -> bool {
+        if active == self.active {
+            return false;
+        }
+        let current = self.level_at(now_ms);
+        self.active = active;
+        self.transition_started_ms = now_ms;
+        self.transition_from = current;
+        self.transition_to = if active { 1.0 } else { 0.0 };
+        self.duration_ms = duration_ms.max(1);
+        true
+    }
+
+    fn sample(&mut self, active: bool, now_ms: u64, duration_ms: u64) -> f32 {
+        self.set_active(active, now_ms, duration_ms);
+        self.level_at(now_ms)
+    }
+
+    fn level_at(self, now_ms: u64) -> f32 {
+        let linear = (now_ms.saturating_sub(self.transition_started_ms) as f32
+            / self.duration_ms as f32)
+            .clamp(0.0, 1.0);
+        if linear >= 1.0 {
+            return self.transition_to;
+        }
+        let eased = 0.5 - 0.5 * libm::cosf(core::f32::consts::PI * linear);
+        self.transition_from + (self.transition_to - self.transition_from) * eased
     }
 }
 
-static IDLE_VFX_STATE: Mutex<IdleVfxState> = Mutex::new(IdleVfxState::INACTIVE);
+static IDLE_VFX_TRANSITION: Mutex<SpiritVfxTransition> = Mutex::new(SpiritVfxTransition::INACTIVE);
+static REASONING_VFX_TRANSITION: Mutex<SpiritVfxTransition> =
+    Mutex::new(SpiritVfxTransition::INACTIVE);
 static WINDOW_BACKGROUND_VFX: Mutex<Option<SpiritVfxBackgroundEffect>> = Mutex::new(None);
 
 pub(crate) fn control_panel_snapshot() -> (u64, SpiritVfxControlPanel) {
@@ -1141,18 +1169,15 @@ pub(super) fn set_move_portal_transition(active: bool) {
 
 /// Select the idle background without replacing the persistent VFX panel. The
 /// transition is recorded only on real idle edges, so clip/control boundaries
-/// do not restart the Magic circle opacity envelope.
+/// do not restart the Magic circle control envelope.
 pub(super) fn set_idle_vfx(active: bool) {
     let now_ms = Instant::now().as_millis();
-    let mut state = IDLE_VFX_STATE.lock();
-    if state.active == active {
+    if !IDLE_VFX_TRANSITION
+        .lock()
+        .set_active(active, now_ms, IDLE_VFX_TRANSITION_MS)
+    {
         return;
     }
-    let current_opacity = state.opacity(now_ms);
-    state.active = active;
-    state.transition_started_ms = now_ms;
-    state.transition_from_opacity = current_opacity;
-    drop(state);
     CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel);
 }
 
@@ -1209,13 +1234,20 @@ pub(crate) fn set_edge_fade_pixels(pixels: f32) -> Result<u64, SpiritVfxControlE
 pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     let (revision, panel) = control_panel_snapshot();
     let now = Instant::now();
+    let now_ms = now.as_millis();
     let reasoning_active = crate::r::ai_activity::reasoning_active();
-    let idle_vfx = *IDLE_VFX_STATE.lock();
-    let idle_opacity = idle_vfx.opacity(now.as_millis());
+    let (reasoning_level, reasoning_visible) = {
+        let mut transition = REASONING_VFX_TRANSITION.lock();
+        let level = transition.sample(reasoning_active, now_ms, REASONING_VFX_TRANSITION_MS);
+        (level, transition.active || level > 0.0)
+    };
+    let idle_transition = *IDLE_VFX_TRANSITION.lock();
+    let idle_level = idle_transition.level_at(now_ms);
+    let idle_visible = idle_transition.active || idle_level > 0.0;
     let window_background = *WINDOW_BACKGROUND_VFX.lock();
     let move_portal_active = MOVE_PORTAL_ACTIVE.load(Ordering::Acquire);
-    let background = if reasoning_active {
-        application_background(SpiritVfxBackgroundEffect::BokehField)
+    let (background, transition_scale) = if reasoning_visible {
+        (reasoning_background(reasoning_level), true)
     } else if move_portal_active {
         let elapsed_ms = now
             .as_millis()
@@ -1224,27 +1256,18 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
         let ramp = move_portal_ramp(elapsed_ms);
         background.speed *= ramp;
         background.intensity = 0.5 + (background.intensity - 0.5) * ramp;
-        background
+        (background, false)
     } else if let Some(effect) = window_background {
-        application_background(effect)
-    } else if idle_opacity > 0.0 {
-        let (_, bg_color_a, bg_color_b) = SpiritVfxBackgroundEffect::MagicTimeCircle.demo_style();
-        SpiritVfxAlphaBackground {
-            effect: SpiritVfxBackgroundEffect::MagicTimeCircle,
-            opacity: idle_opacity,
-            scale: SPIRIT_BACKGROUND_PRESENT_SCALE,
-            speed: 1.0,
-            intensity: 1.0,
-            bg_color_a,
-            bg_color_b,
-        }
+        (application_background(effect), false)
+    } else if idle_visible {
+        (idle_clock_background(idle_level), true)
     } else {
-        panel.alpha_background
+        (panel.alpha_background, false)
     };
     let (fx_color_a, fx_color_b) = SpiritVfxEffect::AuraBloom.demo_colors();
     let sprite_shader = SpiritVfxSpriteShader {
         effect: SpiritVfxEffect::AuraBloom,
-        parameters: global_aura_parameters(now.as_millis()),
+        parameters: global_aura_parameters(now_ms),
         fx_color_a,
         fx_color_b,
     };
@@ -1255,7 +1278,11 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
             .map(|seconds| (seconds % 86_400) as u32)
             .unwrap_or(0),
         opacity: background.opacity,
-        background_scale: SPIRIT_BACKGROUND_PRESENT_SCALE,
+        background_scale: if transition_scale {
+            background.scale
+        } else {
+            SPIRIT_BACKGROUND_PRESENT_SCALE
+        },
         speed: background.speed,
         intensity: background.intensity,
         color_a: background.bg_color_a.packed_rgb(),
@@ -1271,6 +1298,50 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
         fx_color_a: sprite_shader.fx_color_a.packed_rgb(),
         fx_color_b: sprite_shader.fx_color_b.packed_rgb(),
     }
+}
+
+fn reasoning_background(level: f32) -> SpiritVfxAlphaBackground {
+    transitioned_background(
+        SpiritVfxBackgroundEffect::WaterRipples,
+        level,
+        [
+            ALPHA_BACKGROUND_CONTROLS[0].max,
+            ALPHA_BACKGROUND_CONTROLS[1].max,
+            ALPHA_BACKGROUND_CONTROLS[2].max,
+            ALPHA_BACKGROUND_CONTROLS[3].max,
+        ],
+    )
+}
+
+fn idle_clock_background(level: f32) -> SpiritVfxAlphaBackground {
+    transitioned_background(
+        SpiritVfxBackgroundEffect::MagicTimeCircle,
+        level,
+        [1.0, SPIRIT_BACKGROUND_PRESENT_SCALE, 1.0, 1.0],
+    )
+}
+
+fn transitioned_background(
+    effect: SpiritVfxBackgroundEffect,
+    level: f32,
+    targets: [f32; 4],
+) -> SpiritVfxAlphaBackground {
+    let level = level.clamp(0.0, 1.0);
+    let (_, bg_color_a, bg_color_b) = effect.demo_style();
+    SpiritVfxAlphaBackground {
+        effect,
+        opacity: control_range_at(0, targets[0], level),
+        scale: control_range_at(1, targets[1], level),
+        speed: control_range_at(2, targets[2], level),
+        intensity: control_range_at(3, targets[3], level),
+        bg_color_a,
+        bg_color_b,
+    }
+}
+
+fn control_range_at(index: usize, target: f32, level: f32) -> f32 {
+    let control = ALPHA_BACKGROUND_CONTROLS[index];
+    control.min + (target.clamp(control.min, control.max) - control.min) * level
 }
 
 fn application_background(effect: SpiritVfxBackgroundEffect) -> SpiritVfxAlphaBackground {

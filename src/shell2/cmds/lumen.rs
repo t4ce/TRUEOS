@@ -653,6 +653,8 @@ async fn run_lum_turn(
     let reply = String::from_utf8_lossy(&reply_bytes);
     let after = crate::intel::gpgpu::lfm25_q8_project_stats();
     reasoning.finish();
+    let response_turn = conversation.turns.saturating_add(1);
+    crate::spirit::enqueue_reasoning_response(response_turn, reply.as_ref());
     print_matrix_target_line(target, alloc::format!("lum: {reply}").as_str());
     print_matrix_target_line(
         target,

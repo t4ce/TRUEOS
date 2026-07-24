@@ -10,6 +10,7 @@
 extern crate alloc;
 
 use alloc::string::String;
+use alloc::vec::Vec;
 use embassy_time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
@@ -21,6 +22,8 @@ const PACKAGE_VERSION: u8 = 1;
 const MAX_JSON_BYTES: usize = 4 * 1024;
 const MAX_TEXT_BYTES: usize = 2 * 1024;
 const MAX_TAG_BYTES: usize = 96;
+const MIN_EMOTIONS_PER_SEQUENCE: usize = 1;
+const MAX_EMOTIONS_PER_SEQUENCE: usize = 3;
 const IDLE_UNCROSSED_SOFT_BLINK: &str = "idle.uncrossed.soft_blink";
 const IDLE_CROSSED_SOFT_BLINK: &str = "idle.crossed.soft_blink";
 const IDLE_CROSS_ARMS_TRANSITION: &str = "transition.neutral_to_crossed";
@@ -44,6 +47,122 @@ const IDLE_WINK_WINDOW_MS: u64 = 60_000;
 const _: () = assert!(IDLE_BLINK_WINDOW_MS <= IDLE_BLINK_AVERAGE_MS * 2);
 const _: () = assert!(IDLE_ARMS_WINDOW_MS <= IDLE_ARMS_AVERAGE_MS * 2);
 const _: () = assert!(IDLE_WINK_WINDOW_MS <= IDLE_WINK_AVERAGE_MS * 2);
+
+const ANGER_VARIANTS: [&str; 3] = [
+    "angry.fists_clenched",
+    "angry.fists_raised",
+    "threaten.fists",
+];
+const DISGUST_VARIANTS: [&str; 4] = [
+    "disapprove.head_shake",
+    "disapprove.tsk",
+    "disapprove.arms_crossed",
+    "reaction.facepalm",
+];
+const FEAR_VARIANTS: [&str; 1] = ["scared.panic"];
+const JOY_VARIANTS: [&str; 3] = ["happy.cheer", "idle.uncrossed.quiet_laugh", "silly.teehee"];
+const SADNESS_VARIANTS: [&str; 3] = ["cry.two_hands", "cry.wipe", "cry.tears"];
+// Lilly does not have an archive category literally named `Surprise`.
+// Realization and puzzled surprise are the two catalog-native expressions of
+// that base emotion, so the high-level API does not leak this asset detail.
+const SURPRISE_VARIANTS: [&str; 2] = ["idea.finger_up", "confused.question"];
+
+/// The deliberately small emotion vocabulary exposed to local reasoning.
+///
+/// Spirit owns the mapping from these base themes to Lilly's catalog. An AI
+/// producer therefore emits only a word such as `anger`; it never needs to
+/// know animation tags, archive names, frame counts, or which visual variant
+/// was selected.
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum LillyEmotion {
+    Anger,
+    Disgust,
+    Fear,
+    Joy,
+    Sadness,
+    Surprise,
+}
+
+impl LillyEmotion {
+    const COUNT: usize = 6;
+
+    /// Parse one model-facing base-emotion word. Common one-word inflections
+    /// are accepted, but phrases and arbitrary animation tags are not.
+    pub(crate) fn from_word(word: &str) -> Option<Self> {
+        let word = word.trim();
+        if word.eq_ignore_ascii_case("anger") || word.eq_ignore_ascii_case("angry") {
+            Some(Self::Anger)
+        } else if word.eq_ignore_ascii_case("disgust") || word.eq_ignore_ascii_case("disgusted") {
+            Some(Self::Disgust)
+        } else if word.eq_ignore_ascii_case("fear")
+            || word.eq_ignore_ascii_case("afraid")
+            || word.eq_ignore_ascii_case("scared")
+        {
+            Some(Self::Fear)
+        } else if word.eq_ignore_ascii_case("joy")
+            || word.eq_ignore_ascii_case("happy")
+            || word.eq_ignore_ascii_case("happiness")
+        {
+            Some(Self::Joy)
+        } else if word.eq_ignore_ascii_case("sad") || word.eq_ignore_ascii_case("sadness") {
+            Some(Self::Sadness)
+        } else if word.eq_ignore_ascii_case("surprise") || word.eq_ignore_ascii_case("surprised") {
+            Some(Self::Surprise)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) const fn as_word(self) -> &'static str {
+        match self {
+            Self::Anger => "anger",
+            Self::Disgust => "disgust",
+            Self::Fear => "fear",
+            Self::Joy => "joy",
+            Self::Sadness => "sadness",
+            Self::Surprise => "surprise",
+        }
+    }
+
+    const fn index(self) -> usize {
+        self as usize
+    }
+
+    const fn variants(self) -> &'static [&'static str] {
+        match self {
+            Self::Anger => &ANGER_VARIANTS,
+            Self::Disgust => &DISGUST_VARIANTS,
+            Self::Fear => &FEAR_VARIANTS,
+            Self::Joy => &JOY_VARIANTS,
+            Self::Sadness => &SADNESS_VARIANTS,
+            Self::Surprise => &SURPRISE_VARIANTS,
+        }
+    }
+}
+
+struct LillyEmotionSelector {
+    rng: crate::tyche::SoftRng,
+    last_variant: [Option<usize>; LillyEmotion::COUNT],
+}
+
+impl LillyEmotionSelector {
+    fn new() -> Self {
+        Self {
+            rng: crate::tyche::soft_rng(),
+            last_variant: [None; LillyEmotion::COUNT],
+        }
+    }
+
+    fn select(&mut self, emotion: LillyEmotion) -> (&'static str, usize, usize) {
+        let variants = emotion.variants();
+        let emotion_index = emotion.index();
+        let previous = self.last_variant[emotion_index];
+        let variant_index = next_distinct_variant(&mut self.rng, previous, variants.len());
+        self.last_variant[emotion_index] = Some(variant_index);
+        (variants[variant_index], variant_index, variants.len())
+    }
+}
 
 /// Straight RGBA modulation supplied by the producer. The eventual sprite
 /// compositor applies alpha while preserving the resident premultiplied-RGBA8
@@ -126,6 +245,8 @@ pub(crate) enum LillyProtocolError {
     UnknownAnimation,
     RingFull,
     CatalogInvariant,
+    EmotionCount,
+    UnknownEmotion,
 }
 
 /// One fully resolved clip for the presentation side. Its resident GPU
@@ -353,11 +474,22 @@ impl SpiritPackageRing {
         }
         Ok(self.len)
     }
+
+    fn push_many(&mut self, packages: &[SpiritPackage]) -> Result<usize, LillyProtocolError> {
+        if packages.len() > PACKAGE_RING_CAPACITY.saturating_sub(self.len) {
+            return Err(LillyProtocolError::RingFull);
+        }
+        for package in packages {
+            self.push(package.clone())?;
+        }
+        Ok(self.len)
+    }
 }
 
 static PACKAGE_RING: Mutex<SpiritPackageRing> = Mutex::new(SpiritPackageRing::new());
 static LAST_RGBA: Mutex<SpiritRgba8> = Mutex::new(SpiritRgba8::WHITE);
 static IDLE_STRATEGY: Mutex<Option<LillyIdleStrategy>> = Mutex::new(None);
+static EMOTION_SELECTOR: Mutex<Option<LillyEmotionSelector>> = Mutex::new(None);
 
 /// Queue one owned API package. Validation happens before publication, so the
 /// reader never encounters an unsupported schema or a bad animation tag.
@@ -429,11 +561,99 @@ pub(crate) fn enqueue_animation(tag: &str, rgba: SpiritRgba8) -> Result<usize, L
     ))
 }
 
-/// Convenience wrapper for text-only packages. Text is logged and discarded
-/// by the current reader until the visual text presenter is connected.
+/// Convenience wrapper for text-only packages. The Spirit reader forwards
+/// drained text to its retained on-demand Gridpaper response document.
 #[allow(dead_code)]
 pub(crate) fn enqueue_text(text: &str) -> Result<usize, LillyProtocolError> {
     enqueue_package(SpiritPackage::new(Some(String::from(text)), None))
+}
+
+/// Map and queue one to three model-facing emotion words as whole Lilly clips.
+///
+/// The request is all-or-nothing: every word and resident catalog mapping is
+/// validated before the package ring changes. Variants are selected through
+/// Tyche's soft RNG and the same theme avoids an immediate repeat whenever it
+/// has more than one visual variant.
+#[allow(dead_code)]
+pub(crate) fn enqueue_emotion_words(words: &[&str]) -> Result<usize, LillyProtocolError> {
+    if !(MIN_EMOTIONS_PER_SEQUENCE..=MAX_EMOTIONS_PER_SEQUENCE).contains(&words.len()) {
+        crate::log_warn!(
+            target: "gfx";
+            "trueos-spirit: emotion sequence rejected count={} allowed={}..={} action=drop\n",
+            words.len(),
+            MIN_EMOTIONS_PER_SEQUENCE,
+            MAX_EMOTIONS_PER_SEQUENCE,
+        );
+        return Err(LillyProtocolError::EmotionCount);
+    }
+
+    let mut emotions = Vec::with_capacity(words.len());
+    for word in words {
+        let Some(emotion) = LillyEmotion::from_word(word) else {
+            crate::log_warn!(
+                target: "gfx";
+                "trueos-spirit: emotion sequence rejected word={:?} error=unknown-emotion action=drop\n",
+                word,
+            );
+            return Err(LillyProtocolError::UnknownEmotion);
+        };
+        emotions.push(emotion);
+    }
+    enqueue_emotions(&emotions)
+}
+
+/// Strongly typed ingress for in-kernel producers which already use
+/// [`LillyEmotion`]. Callers with model text should use
+/// [`enqueue_emotion_words`] so the vocabulary boundary remains explicit.
+#[allow(dead_code)]
+pub(crate) fn enqueue_emotions(emotions: &[LillyEmotion]) -> Result<usize, LillyProtocolError> {
+    if !(MIN_EMOTIONS_PER_SEQUENCE..=MAX_EMOTIONS_PER_SEQUENCE).contains(&emotions.len()) {
+        return Err(LillyProtocolError::EmotionCount);
+    }
+    if lilly::resident_frame_count() == 0 {
+        return Err(LillyProtocolError::AssetsNotReady);
+    }
+
+    let mut selected = Vec::with_capacity(emotions.len());
+    {
+        let mut selector = EMOTION_SELECTOR.lock();
+        let selector = selector.get_or_insert_with(LillyEmotionSelector::new);
+        for emotion in emotions {
+            let (tag, variant_index, variant_count) = selector.select(*emotion);
+            selected.push((*emotion, tag, variant_index, variant_count));
+        }
+    }
+
+    let mut packages = Vec::with_capacity(selected.len());
+    for (_, tag, _, _) in &selected {
+        let package = SpiritPackage::new(
+            None,
+            Some(SpiritGesture {
+                tag: String::from(*tag),
+                rgba: SpiritRgba8::WHITE,
+            }),
+        );
+        validate_package(&package)?;
+        packages.push(package);
+    }
+
+    let ring_len = PACKAGE_RING.lock().push_many(&packages)?;
+    for (sequence_index, (emotion, tag, variant_index, variant_count)) in
+        selected.iter().enumerate()
+    {
+        crate::log_info!(
+            target: "gfx";
+            "trueos-spirit: emotion queued theme={} clip={} variant={}/{} sequence={}/{} ring_len={}\n",
+            emotion.as_word(),
+            tag,
+            variant_index + 1,
+            variant_count,
+            sequence_index + 1,
+            selected.len(),
+            ring_len,
+        );
+    }
+    Ok(ring_len)
 }
 
 /// Atomically discard queued work and install the next timeline. The active
@@ -492,8 +712,11 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
             return next_idle_animation(*LAST_RGBA.lock());
         };
         log_drained_package(&package, ring_remaining);
+        if let Some(text) = package.text.as_deref() {
+            super::response_window::enqueue_package_text(text);
+        }
         let Some(gesture) = package.gesture else {
-            // Text has reached Spirit and was logged above. Keep draining so a
+            // Text has reached the response presenter. Keep draining so a
             // later gesture in the same reader turn can flow normally.
             continue;
         };
@@ -521,7 +744,7 @@ fn log_drained_package(package: &SpiritPackage, ring_remaining: usize) {
         gesture_tag,
         rgba,
         ring_remaining,
-        if package.text.is_some() { "log-only" } else { "none" },
+        if package.text.is_some() { "ui4-response" } else { "none" },
         if package.gesture.is_some() { "sequence" } else { "none" },
     );
 }

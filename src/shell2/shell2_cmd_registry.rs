@@ -302,7 +302,9 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_ORANGE_RGB),
         advertised: true,
         handler: dispatch_grid,
-        tool_description: Some("Open the Gridpaper Blueprint."),
+        tool_description: Some(
+            "Open a resident kernel Gridpaper document without a Blueprint container.",
+        ),
         tool_parameters_json: Some(TOOL_JSON_GRID),
     },
     BuiltinShell2CmdEntry {

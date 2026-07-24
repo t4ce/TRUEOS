@@ -40,6 +40,7 @@ define_started_flags!(
     TRUEOSFS_REQUEST_BROKER_STARTED,
     DNS_REQUEST_BROKER_STARTED,
     BLOCKING_JOB_DISPATCHER_STARTED,
+    FONT_WARM_POOL_STARTED,
     TTSTT_CPU_SERVICE_STARTED,
     LFM25_WARM_POOL_STARTED,
     SMP_HLT_HISTORY_STARTED,
@@ -73,6 +74,7 @@ define_started_flags!(
     FPGA_OFFLOAD_HEARTBEAT_STARTED,
     GPU_COMPLETION_REAPER_STARTED,
     TRUEOS_SPIRIT_STARTED,
+    SPIRIT_RESPONSE_WINDOW_STARTED,
     MOUSE_MOTION_SERVICE_STARTED,
     KEYBOARD_CONTROL_SERVICE_STARTED,
     GAMEPAD_CONTROL_SERVICE_STARTED,
@@ -272,6 +274,20 @@ fn spawn_dns_request_broker(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_blocking_service_lanes(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::blocking::blocking_job_dispatcher_task())
+}
+
+fn font_warm_pool_gate() -> bool {
+    crate::workers::all_topology_spawners_registered()
+        && crate::workers::has_background_worker_slot()
+}
+
+fn spawn_font_warm_pool(spawner: Spawner) -> SpawnAttempt {
+    let _ = spawner;
+    spawn_bool_result_to_attempt(crate::graphics::font::spawn_font_warm_pool())
+}
+
+pub(crate) fn retry_font_warm_pool_autostart() {
+    FONT_WARM_POOL_STARTED.store(false, Ordering::Release);
 }
 
 fn spawn_ttstt_cpu_service(spawner: Spawner) -> SpawnAttempt {
@@ -587,6 +603,12 @@ fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
         }
         SpawnAttempt::Spawned
     }
+}
+
+fn spawn_spirit_response_window_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |worker_spawner| {
+        crate::spirit::spirit_response_window_service_task(worker_spawner.cpu_slot())
+    })
 }
 
 fn spawn_mouse_motion_service_task(spawner: Spawner) -> SpawnAttempt {
@@ -1416,7 +1438,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 73
+const TASK_COUNT: usize = 75
     + cfg!(feature = "trueos_lumen") as usize
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize;
@@ -1449,6 +1471,14 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &BLOCKING_JOB_DISPATCHER_STARTED,
         spawn_blocking_service_lanes,
+    ),
+    TaskSpec::enabled_gated(
+        "font-warm-pool",
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+            | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        font_warm_pool_gate,
+        &FONT_WARM_POOL_STARTED,
+        spawn_font_warm_pool,
     ),
     TaskSpec::enabled_gated(
         "ttstt-cpu-service",
@@ -1679,6 +1709,16 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         trueos_spirit_gate,
         &TRUEOS_SPIRIT_STARTED,
         spawn_trueos_spirit_workers,
+    ),
+    // Spirit owns no application plane while idle. Completed local-model
+    // responses reveal one retained kernel Gridpaper document, type through
+    // Lilly's paired virtual input devices, then hide its UI4 presentation.
+    TaskSpec::enabled_gated(
+        "spirit-response-gridpaper",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        ui4_compositor_gate,
+        &SPIRIT_RESPONSE_WINDOW_STARTED,
+        spawn_spirit_response_window_task,
     ),
     TaskSpec::enabled_gated(
         "mouse-motion-service",

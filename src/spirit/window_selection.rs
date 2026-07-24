@@ -197,10 +197,16 @@ fn selection_is_owned(
     source: crate::ui4::Ui4CursorSource,
     key: crate::ui4::CursorFrameKey,
 ) -> bool {
-    crate::ui4::source_selected(source) && crate::ui4::selected_frame() == Some(key)
+    crate::ui4::selected_frame_for_source(source) == Some(key)
 }
 
 fn profile_for_window(window: crate::ui4::WindowSnapshot) -> Option<WindowVfxProfile> {
+    // Spirit's retained response document has its own cell-zero click and
+    // keyboard choreography. Leave it to that path so the generic Gridpaper
+    // selector cannot race the exact target or replace the current chat VFX.
+    if crate::r::gridpaper_service::is_spirit_response_grid_window(window.id) {
+        return None;
+    }
     if window.owner == crate::ui4::WindowOwner::GRIDPAPER_SERVICE
         || window
             .producer_name

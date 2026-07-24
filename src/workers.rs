@@ -237,6 +237,29 @@ pub fn pick_background_spawner_with_slot() -> Option<(u32, u8, WorkerSpawner)> {
     pick_background_spawner_with_filter(|_| true)
 }
 
+/// Pick up to `limit` distinct AP2+ workers using the kernel's core-profile
+/// policy.
+///
+/// Profile-identified performance cores are preferred, then efficient or
+/// unknown cores fill any remaining places. Callers that need a fixed-size
+/// task pool may share the returned workers when the eligible fleet is smaller
+/// than the pool.
+pub fn pick_background_spawners_with_slots(limit: usize) -> Vec<(u32, u8, WorkerSpawner)> {
+    let eligible = background_worker_slots().len().min(limit);
+    let mut selected = Vec::with_capacity(eligible);
+    while selected.len() < eligible {
+        let Some(worker) = pick_background_spawner_with_filter(|slot| {
+            !selected
+                .iter()
+                .any(|(selected_slot, _, _)| *selected_slot == slot)
+        }) else {
+            break;
+        };
+        selected.push(worker);
+    }
+    selected
+}
+
 pub fn pick_perf_background_spawner() -> Option<WorkerSpawner> {
     pick_perf_background_spawner_with_slot().map(|(_, _, spawner)| spawner)
 }

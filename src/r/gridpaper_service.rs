@@ -1,9 +1,10 @@
 //! Embassy consumer for GridPaper's fixed snapshot format.
 //!
-//! The Blueprint owns snapshot publication cadence. This service owns the
-//! accepted working copy, UI4 editing/focus state, GPU allocations, and
-//! presentation lifetime. No UI4 handles or generic drawing operations cross
-//! the ABI.
+//! Blueprint producers own their snapshot publication cadence; trusted kernel
+//! clients lease the same resident workers through a narrow control plane.
+//! This service owns the accepted working copy, UI4 editing/focus state, GPU
+//! allocations, and presentation lifetime. No UI4 handles or generic drawing
+//! operations cross the Blueprint ABI.
 
 use alloc::{collections::VecDeque, string::String, vec, vec::Vec};
 
@@ -188,11 +189,68 @@ static LEGACY_RESIDENT_UI4_WARNED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 static GRIDPAPER_COMPUTE_QUARANTINED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
+static OUTLINELESS_CELL_PATCH_WARNINGS: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+static NEXT_KERNEL_GRID_TOKEN: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(1);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KernelGridClient {
+    Shell2,
+    SpiritResponse,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KernelGridOwner {
+    client: KernelGridClient,
+    token: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GridPaperProducer {
+    Blueprint(u8),
+    Kernel(KernelGridOwner),
+}
+
+impl GridPaperProducer {
+    const fn blueprint_owner(self) -> Option<u8> {
+        match self {
+            Self::Blueprint(owner) => Some(owner),
+            Self::Kernel(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct KernelGridLease {
+    owner: KernelGridOwner,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct KernelGridPresentation {
+    pub(crate) window: crate::ui4::WindowId,
+    pub(crate) cell_zero_x: i32,
+    pub(crate) cell_zero_y: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum KernelGridError {
+    InvalidSize,
+    PoolFull,
+    LeaseLost,
+}
+
+#[derive(Clone, Copy)]
+struct KernelGridPresentationRecord {
+    owner: KernelGridOwner,
+    presentation: KernelGridPresentation,
+}
 
 struct SnapshotStore {
     buffers: [[u8; PAGE_BYTES]; 2],
     published: usize,
     owner: Option<u8>,
+    kernel_owner: Option<KernelGridOwner>,
     local_instance_id: Option<u32>,
     lease_epoch: u64,
     producer_connected: bool,
@@ -211,6 +269,7 @@ impl SnapshotStore {
             buffers: [[0; PAGE_BYTES]; 2],
             published: 0,
             owner: None,
+            kernel_owner: None,
             local_instance_id: None,
             lease_epoch: 0,
             producer_connected: false,
@@ -228,6 +287,7 @@ impl SnapshotStore {
         let lease_epoch = self.lease_epoch.wrapping_add(1).max(1);
         self.published = 0;
         self.owner = Some(owner);
+        self.kernel_owner = None;
         self.local_instance_id = Some(local_instance_id);
         self.lease_epoch = lease_epoch;
         self.producer_connected = true;
@@ -240,8 +300,27 @@ impl SnapshotStore {
         self.animation_serial = 0;
     }
 
+    fn claim_kernel(&mut self, owner: KernelGridOwner, size: GridSize, visible: bool) {
+        let lease_epoch = self.lease_epoch.wrapping_add(1).max(1);
+        self.buffers = [[0; PAGE_BYTES]; 2];
+        self.published = 0;
+        self.owner = None;
+        self.kernel_owner = Some(owner);
+        self.local_instance_id = Some(owner.token);
+        self.lease_epoch = lease_epoch;
+        self.producer_connected = true;
+        self.lifecycle_paused = !visible;
+        self.generation = 1;
+        self.scale_percent = NATIVE_SCALE_PERCENT;
+        self.size = size;
+        self.serial = 1;
+        self.text_animations = [None; TEXT_ANIMATION_COLOR_SLOTS];
+        self.animation_serial = 0;
+    }
+
     fn release(&mut self) {
         self.owner = None;
+        self.kernel_owner = None;
         self.local_instance_id = None;
         self.lease_epoch = self.lease_epoch.wrapping_add(1).max(1);
         self.producer_connected = false;
@@ -256,6 +335,9 @@ impl SnapshotStore {
 
 static SNAPSHOTS: Mutex<[SnapshotStore; GRIDPAPER_POOL_SOFT_CAP]> =
     Mutex::new([const { SnapshotStore::new() }; GRIDPAPER_POOL_SOFT_CAP]);
+static KERNEL_GRID_PRESENTATIONS: Mutex<
+    [Option<KernelGridPresentationRecord>; GRIDPAPER_POOL_SOFT_CAP],
+> = Mutex::new([None; GRIDPAPER_POOL_SOFT_CAP]);
 
 fn valid_local_instance(instance_id: u32) -> bool {
     usize::try_from(instance_id).is_ok_and(|index| index < BLUEPRINT_INSTANCE_CAPACITY)
@@ -287,7 +369,10 @@ fn resolve_or_claim_pool_slot(owner: u8, local_instance_id: u32) -> Result<usize
     if let Some(slot) = find_pool_slot(&stores, owner, local_instance_id) {
         return Ok(slot);
     }
-    let Some(slot) = stores.iter().position(|store| store.owner.is_none()) else {
+    let Some(slot) = stores
+        .iter()
+        .position(|store| store.owner.is_none() && store.kernel_owner.is_none())
+    else {
         return Err(ERROR_POOL_FULL);
     };
     stores[slot].claim(owner, local_instance_id);
@@ -302,10 +387,173 @@ fn resolve_or_claim_pool_slot(owner: u8, local_instance_id: u32) -> Result<usize
     Ok(slot)
 }
 
+fn next_kernel_grid_token() -> u32 {
+    use core::sync::atomic::Ordering;
+
+    loop {
+        let token = NEXT_KERNEL_GRID_TOKEN.fetch_add(1, Ordering::Relaxed);
+        if token != 0 {
+            return token;
+        }
+    }
+}
+
+fn find_kernel_pool_slot(
+    stores: &[SnapshotStore; GRIDPAPER_POOL_SOFT_CAP],
+    owner: KernelGridOwner,
+) -> Option<usize> {
+    stores
+        .iter()
+        .position(|store| store.kernel_owner == Some(owner))
+}
+
+fn request_kernel_grid(
+    client: KernelGridClient,
+    columns: u32,
+    rows: u32,
+) -> Result<KernelGridLease, KernelGridError> {
+    let size = GridSize::new(columns, rows).ok_or(KernelGridError::InvalidSize)?;
+    let mut stores = SNAPSHOTS.lock();
+    if client == KernelGridClient::SpiritResponse
+        && let Some((slot, store)) = stores.iter_mut().enumerate().find(|(_, store)| {
+            store
+                .kernel_owner
+                .is_some_and(|owner| owner.client == KernelGridClient::SpiritResponse)
+        })
+    {
+        let owner = store
+            .kernel_owner
+            .expect("matched Spirit Gridpaper kernel owner");
+        if store.size != size {
+            store.size = size;
+            store.lease_epoch = store.lease_epoch.wrapping_add(1).max(1);
+        }
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: kernel lease reused slot={} client={:?} token={} grid={}x{} residency=retained\n",
+            slot,
+            client,
+            owner.token,
+            size.columns(),
+            size.rows(),
+        );
+        return Ok(KernelGridLease { owner });
+    }
+
+    let Some(slot) = stores
+        .iter()
+        .position(|store| store.owner.is_none() && store.kernel_owner.is_none())
+    else {
+        return Err(KernelGridError::PoolFull);
+    };
+    let owner = KernelGridOwner {
+        client,
+        token: next_kernel_grid_token(),
+    };
+    stores[slot].claim_kernel(owner, size, client == KernelGridClient::Shell2);
+    crate::log_info!(
+        target: "gridpaper";
+        "gridpaper: kernel lease claimed slot={} client={:?} token={} grid={}x{} soft_cap={}\n",
+        slot,
+        client,
+        owner.token,
+        size.columns(),
+        size.rows(),
+        GRIDPAPER_POOL_SOFT_CAP,
+    );
+    Ok(KernelGridLease { owner })
+}
+
+/// Open a user-requested Gridpaper document directly in the resident kernel
+/// service. No Blueprint guest or virtual container participates.
+pub(crate) fn request_shell_grid(
+    columns: u32,
+    rows: u32,
+) -> Result<KernelGridLease, KernelGridError> {
+    request_kernel_grid(KernelGridClient::Shell2, columns, rows)
+}
+
+/// Obtain Spirit's one stable Gridpaper document. Repeated calls return the
+/// same lease so its GPU scene can stay warm while its UI4 presentation is
+/// hidden between replies.
+pub(crate) fn request_spirit_response_grid(
+    columns: u32,
+    rows: u32,
+) -> Result<KernelGridLease, KernelGridError> {
+    request_kernel_grid(KernelGridClient::SpiritResponse, columns, rows)
+}
+
+fn with_kernel_grid_store<R>(
+    lease: KernelGridLease,
+    update: impl FnOnce(usize, &mut SnapshotStore) -> R,
+) -> Result<R, KernelGridError> {
+    let mut stores = SNAPSHOTS.lock();
+    let slot = find_kernel_pool_slot(&stores, lease.owner).ok_or(KernelGridError::LeaseLost)?;
+    Ok(update(slot, &mut stores[slot]))
+}
+
+/// Clear the retained document and request a fresh UI4 presentation. The
+/// worker and GPU allocations remain the same when the logical size is stable.
+pub(crate) fn reset_and_show_kernel_grid(lease: KernelGridLease) -> Result<(), KernelGridError> {
+    with_kernel_grid_store(lease, |slot, store| {
+        let next = store.published ^ 1;
+        store.buffers[next].fill(0);
+        store.published = next;
+        store.generation = store.generation.wrapping_add(1).max(1);
+        store.serial = store.serial.wrapping_add(1).max(1);
+        store.lifecycle_paused = false;
+        store.producer_connected = true;
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: kernel document reset+show slot={} client={:?} token={} generation={} serial={} retained-runtime=1\n",
+            slot,
+            lease.owner.client,
+            lease.owner.token,
+            store.generation,
+            store.serial,
+        );
+    })
+}
+
+/// Detach only the UI4 window. The document, compute scene, frame, and pool
+/// lease stay resident for a later low-latency show.
+pub(crate) fn hide_kernel_grid(lease: KernelGridLease) -> Result<(), KernelGridError> {
+    with_kernel_grid_store(lease, |slot, store| {
+        store.lifecycle_paused = true;
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: kernel document hide requested slot={} client={:?} token={} action=detach-ui4+retain-gpu-scene\n",
+            slot,
+            lease.owner.client,
+            lease.owner.token,
+        );
+    })
+}
+
+pub(crate) fn kernel_grid_presentation(lease: KernelGridLease) -> Option<KernelGridPresentation> {
+    KERNEL_GRID_PRESENTATIONS
+        .lock()
+        .iter()
+        .flatten()
+        .find(|record| record.owner == lease.owner)
+        .map(|record| record.presentation)
+}
+
+pub(crate) fn is_spirit_response_grid_window(window: crate::ui4::WindowId) -> bool {
+    KERNEL_GRID_PRESENTATIONS
+        .lock()
+        .iter()
+        .flatten()
+        .any(|record| {
+            record.owner.client == KernelGridClient::SpiritResponse
+                && record.presentation.window == window
+        })
+}
+
 #[derive(Clone)]
 struct OwnedSnapshot {
     raw: Vec<u8>,
-    owner: u8,
+    producer: GridPaperProducer,
     generation: u64,
     scale_percent: u16,
     size: GridSize,
@@ -358,6 +606,7 @@ fn next_print_request_token() -> u32 {
 }
 
 fn queue_print_request(instance_id: u32, snapshot: &OwnedSnapshot) -> Option<u32> {
+    let owner = snapshot.producer.blueprint_owner()?;
     let token = next_print_request_token();
     let mut requests = GRIDPAPER_PRINT_REQUESTS.lock();
     if requests.len() >= PRINT_REQUEST_CAPACITY {
@@ -365,14 +614,14 @@ fn queue_print_request(instance_id: u32, snapshot: &OwnedSnapshot) -> Option<u32
     }
     requests.push_back(GridPaperPrintRequest {
         instance_id,
-        owner: snapshot.owner,
+        owner,
         token,
         generation: snapshot.generation,
         size: snapshot.size,
         raw: snapshot.raw.clone(),
     });
     drop(requests);
-    crate::log_os::gridpaper_print_requested(snapshot.owner, token, snapshot.generation);
+    crate::log_os::gridpaper_print_requested(owner, token, snapshot.generation);
     Some(token)
 }
 
@@ -819,7 +1068,10 @@ fn snapshot_after(pool_slot: usize, serial: u64) -> Option<OwnedSnapshot> {
     }
     Some(OwnedSnapshot {
         raw: snapshots.buffers[snapshots.published].to_vec(),
-        owner: snapshots.owner?,
+        producer: snapshots
+            .owner
+            .map(GridPaperProducer::Blueprint)
+            .or_else(|| snapshots.kernel_owner.map(GridPaperProducer::Kernel))?,
         generation: snapshots.generation,
         scale_percent: snapshots.scale_percent,
         size: snapshots.size,
@@ -1288,7 +1540,7 @@ fn valid_single_glyph(encoded: &[u8]) -> bool {
 
 #[derive(Copy, Clone)]
 struct GridPaperPresentation {
-    producer: u8,
+    producer: GridPaperProducer,
     session: crate::ui4::WindowSessionId,
     window: crate::ui4::WindowId,
 }
@@ -1393,9 +1645,9 @@ fn initialize_surface(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PoolLeaseState {
     epoch: u64,
-    owner: Option<u8>,
+    producer: Option<GridPaperProducer>,
     local_instance_id: Option<u32>,
-    presentable_owner: Option<u8>,
+    presentable_producer: Option<GridPaperProducer>,
     size: GridSize,
 }
 
@@ -1405,32 +1657,36 @@ fn pool_lease_state(pool_slot: usize) -> PoolLeaseState {
     // request presentation; UI4's broker is the sole authority which isolates
     // non-single-buffer windows across the four ordinary application planes.
     let snapshots = &mut stores[pool_slot];
-    let owner = snapshots.owner;
-    let presentable_owner = if let Some(candidate_owner) =
-        owner.filter(|_| !snapshots.lifecycle_paused && snapshots.producer_connected)
-    {
-        let state = crate::hv::vm_state(candidate_owner);
-        if state.running || state.starting {
-            Some(candidate_owner)
-        } else {
-            snapshots.producer_connected = false;
-            None
-        }
-    } else {
-        None
-    };
+    let producer = snapshots
+        .owner
+        .map(GridPaperProducer::Blueprint)
+        .or_else(|| snapshots.kernel_owner.map(GridPaperProducer::Kernel));
+    let presentable_producer = producer
+        .filter(|_| !snapshots.lifecycle_paused && snapshots.producer_connected)
+        .and_then(|candidate| match candidate {
+            GridPaperProducer::Blueprint(owner) => {
+                let state = crate::hv::vm_state(owner);
+                if state.running || state.starting {
+                    Some(candidate)
+                } else {
+                    snapshots.producer_connected = false;
+                    None
+                }
+            }
+            GridPaperProducer::Kernel(_) => Some(candidate),
+        });
     PoolLeaseState {
         epoch: snapshots.lease_epoch,
-        owner,
+        producer,
         local_instance_id: snapshots.local_instance_id,
-        presentable_owner,
+        presentable_producer,
         size: snapshots.size,
     }
 }
 
 fn attach_presentation(
     surface: &mut GridPaperSurface,
-    producer: u8,
+    producer: GridPaperProducer,
     session: crate::ui4::WindowSessionId,
     expose_retained_front: bool,
 ) -> Result<GridPaperPresentation, ServiceError> {
@@ -1452,7 +1708,7 @@ fn attach_presentation(
         .saturating_sub(grid_height)
         .saturating_div(2)
         .saturating_sub(surface.height.saturating_sub(grid_height));
-    // Every Blueprint owns one same-sized scene. Cascade separately leased
+    // Every producer owns one same-sized scene. Cascade separately leased
     // windows just enough that another instance remains reachable for drag.
     let cascade = (surface.pool_slot as u32 % 5).saturating_mul(24);
     let x = primary_x
@@ -1492,6 +1748,26 @@ fn attach_presentation(
         window,
     };
     surface.presentation = Some(presentation);
+    if let GridPaperProducer::Kernel(owner) = producer {
+        let cell_zero_x = x as i32
+            + libm::roundf(
+                (RULER_GUTTER_MM as f32 + CELL_EDGE_MM as f32 * 0.5) * surface.width as f32
+                    / surface.size.scene_width().max(1) as f32,
+            ) as i32;
+        let cell_zero_y = y as i32
+            + libm::roundf(
+                (RULER_GUTTER_MM as f32 + CELL_EDGE_MM as f32 * 0.5) * surface.height as f32
+                    / surface.size.scene_height().max(1) as f32,
+            ) as i32;
+        KERNEL_GRID_PRESENTATIONS.lock()[surface.pool_slot] = Some(KernelGridPresentationRecord {
+            owner,
+            presentation: KernelGridPresentation {
+                window,
+                cell_zero_x,
+                cell_zero_y,
+            },
+        });
+    }
     Ok(presentation)
 }
 
@@ -1741,6 +2017,7 @@ struct CellSceneContent {
     background: Option<(u8, SceneRect)>,
     decorations: Vec<(u8, SceneRect)>,
     texts: Vec<TextCell>,
+    outline_less_glyphs: u8,
 }
 
 fn build_cell_scene_content(
@@ -1772,6 +2049,7 @@ fn build_cell_scene_content(
         background,
         decorations: Vec::new(),
         texts: Vec::new(),
+        outline_less_glyphs: 0,
     };
     if foreground == COLOR_TRANSPARENT || primary_len == 0 {
         return Ok(content);
@@ -1790,35 +2068,44 @@ fn build_cell_scene_content(
     let font_pixels = (DEFAULT_REGULAR_ROW_FONT_PIXELS * metrics.visible_scene_y * metrics.scale)
         .clamp(metrics.visible_scene_y, 256.0);
     let baseline = bounds.top + metrics.cell_height * 0.72;
-    let has_upper = upper.is_some();
-    content.texts.push(TextCell {
-        text: String::from(primary),
-        font: font_for_glyph(instance_id, primary),
-        color: foreground,
-        center_x: (bounds.left + bounds.right) * 0.5
-            - if has_upper {
-                metrics.cell_width * 0.10
+    let primary_font = visible_font_for_glyph(instance_id, primary)?;
+    let upper_font = upper
+        .map(|upper| visible_font_for_glyph(instance_id, upper))
+        .transpose()?
+        .flatten();
+    content.outline_less_glyphs = u8::from(primary_font.is_none())
+        .saturating_add(u8::from(upper.is_some() && upper_font.is_none()));
+    let has_upper = upper_font.is_some();
+    if let Some(font) = primary_font {
+        content.texts.push(TextCell {
+            text: String::from(primary),
+            font,
+            color: foreground,
+            center_x: (bounds.left + bounds.right) * 0.5
+                - if has_upper {
+                    metrics.cell_width * 0.10
+                } else {
+                    0.0
+                },
+            center_y: (bounds.top + bounds.bottom) * 0.5
+                + if has_upper {
+                    metrics.cell_height * 0.08
+                } else {
+                    0.0
+                },
+            font_pixels: if has_upper {
+                font_pixels * 0.82
             } else {
-                0.0
+                font_pixels
             },
-        center_y: (bounds.top + bounds.bottom) * 0.5
-            + if has_upper {
-                metrics.cell_height * 0.08
-            } else {
-                0.0
-            },
-        font_pixels: if has_upper {
-            font_pixels * 0.82
-        } else {
-            font_pixels
-        },
-        bold: style & STYLE_BOLD != 0,
-        italic: style & STYLE_ITALIC != 0,
-    });
-    if let Some(upper) = upper {
+            bold: style & STYLE_BOLD != 0,
+            italic: style & STYLE_ITALIC != 0,
+        });
+    }
+    if let (Some(upper), Some(font)) = (upper, upper_font) {
         content.texts.push(TextCell {
             text: String::from(upper),
-            font: font_for_glyph(instance_id, upper),
+            font,
             color: foreground,
             center_x: (bounds.left + bounds.right) * 0.5 + metrics.cell_width * 0.24,
             center_y: (bounds.top + bounds.bottom) * 0.5 - metrics.cell_height * 0.24,
@@ -1917,6 +2204,28 @@ fn font_for_glyph(instance_id: u32, glyph: &str) -> GpuFontFace {
         }
     }
     GpuFontFace::Default
+}
+
+fn visible_font_for_glyph(
+    instance_id: u32,
+    glyph: &str,
+) -> Result<Option<GpuFontFace>, &'static str> {
+    // A space is real Gridpaper content because it advances the selected
+    // cell, but it intentionally has no outline to submit. Keep it out of the
+    // font batches: both the resident mesh and analytical coverage builders
+    // reject outline-less jobs as malformed rendering work.
+    if glyph.chars().all(char::is_whitespace) {
+        return Ok(None);
+    }
+    let font = font_for_glyph(instance_id, glyph);
+    match crate::graphics::font::gpu_outline_for_text(font.registry_name(), glyph) {
+        Ok(_) => Ok(Some(font)),
+        // Default-ignorable or unsupported scalars can also legitimately
+        // resolve to no ink. They must behave like a blank cell rather than
+        // poisoning every later snapshot rebuild.
+        Err("outline-empty") => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn axis_tick_length_mm(cell_index: usize) -> f32 {
@@ -2287,6 +2596,7 @@ fn build_resident_cell_patch(
     let cell = &snapshot.raw[offset..offset + CELL_BYTES];
     let content = build_cell_scene_content(instance_id, cell, paper, metrics)?;
     let foreground = content.foreground;
+    let outline_less_glyphs = content.outline_less_glyphs;
     let background = content
         .background
         .map(|(color, rect)| (rect, u32::from_le_bytes(palette(color, true))));
@@ -2296,6 +2606,36 @@ fn build_resident_cell_patch(
         .map(|(color, rect)| (rect, u32::from_le_bytes(palette(color, false))))
         .collect::<Vec<_>>();
     let texts = content.texts;
+
+    if outline_less_glyphs != 0 {
+        let warning = OUTLINELESS_CELL_PATCH_WARNINGS
+            .fetch_add(1, core::sync::atomic::Ordering::AcqRel)
+            .saturating_add(1);
+        if warning <= 8 || warning.is_multiple_of(120) {
+            crate::log_warn!(
+                target: "gridpaper";
+                "gridpaper: outline-less cell content retained instance={} column={} row={} warning_seq={} primary_utf8_bytes={} upper_utf8_bytes={} outline_less_glyphs={} reason=whitespace-or-no-font-outline action=early-return-before-font-coverage+retain-intentional-blank-cell future=advance-text-layout-contract log_policy=first-8+each-120\n",
+                instance_id,
+                selection.column,
+                selection.row,
+                warning,
+                cell[PRIMARY_LENGTH_OFFSET],
+                cell[UPPER_LENGTH_OFFSET],
+                outline_less_glyphs,
+            );
+        }
+        if texts.is_empty() {
+            return Ok(ResidentCellPatch {
+                serial: 0,
+                selection,
+                paper,
+                background,
+                grid,
+                decorations,
+                coverage: Vec::new(),
+            });
+        }
+    }
 
     let mut coverage = Vec::new();
     for font in [
@@ -3336,7 +3676,7 @@ fn render_print_page(
     let (print_capture_width, print_capture_height) = size.print_capture_extent();
     let snapshot = OwnedSnapshot {
         raw: request.raw,
-        owner: 0,
+        producer: GridPaperProducer::Blueprint(0),
         generation: request.generation,
         scale_percent: 100,
         size,
@@ -3563,7 +3903,7 @@ impl GridPaperRuntime {
         }
     }
 
-    fn presented_owner(&self) -> Option<u8> {
+    fn presented_producer(&self) -> Option<GridPaperProducer> {
         self.surface
             .presentation
             .map(|presentation| presentation.producer)
@@ -3694,11 +4034,17 @@ fn take_routed_input_events(pool_slot: usize) -> VecDeque<crate::ui4::Ui4InputEv
 
 fn attach_runtime_presentation(
     runtime: &mut GridPaperRuntime,
-    producer: u8,
+    producer: GridPaperProducer,
 ) -> Result<crate::ui4::WindowSessionId, ServiceError> {
     let session = crate::ui4::begin_additional_window_session(UI4_OWNER)?;
+    let snapshot_is_current =
+        snapshot_after(runtime.surface.pool_slot, runtime.observed_serial).is_none();
+    let expose_retained_front = runtime.active.is_some()
+        && runtime.pending.is_none()
+        && runtime.queued_snapshot.is_none()
+        && snapshot_is_current;
     if let Err(error) =
-        attach_presentation(&mut runtime.surface, producer, session, runtime.active.is_some())
+        attach_presentation(&mut runtime.surface, producer, session, expose_retained_front)
     {
         let _ = crate::ui4::finish_window_session(UI4_OWNER, session);
         runtime.surface.presentation = None;
@@ -3724,11 +4070,14 @@ fn release_runtime_presentation(
     let Some(presentation) = release_presentation(&mut runtime.surface) else {
         return frame_transferred;
     };
+    if matches!(presentation.producer, GridPaperProducer::Kernel(_)) {
+        KERNEL_GRID_PRESENTATIONS.lock()[runtime.surface.pool_slot] = None;
+    }
     runtime.reset_detached_input();
     match release {
         Ok(closed_windows) => crate::log_info!(
             target: "gridpaper";
-            "gridpaper: presentation released pool_slot={} instance={} producer={} session={} window={} frame={} closed_windows={} retained_gpu_scene=1 retained_frame=1\n",
+            "gridpaper: presentation released pool_slot={} instance={} producer={:?} session={} window={} frame={} closed_windows={} retained_gpu_scene=1 retained_frame=1\n",
             runtime.surface.pool_slot,
             runtime.surface.instance_id,
             presentation.producer,
@@ -3739,7 +4088,7 @@ fn release_runtime_presentation(
         ),
         Err(error) => crate::log_warn!(
             target: "gridpaper";
-            "gridpaper: presentation release pool_slot={} instance={} producer={} session={} window={} frame={} error={:?} action=consider-detached retained_gpu_scene=1 retained_frame=1\n",
+            "gridpaper: presentation release pool_slot={} instance={} producer={:?} session={} window={} frame={} error={:?} action=consider-detached retained_gpu_scene=1 retained_frame=1\n",
             runtime.surface.pool_slot,
             runtime.surface.instance_id,
             presentation.producer,
@@ -4446,9 +4795,9 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
                 Ok(surface) => {
                     crate::log_info!(
                         target: "gridpaper";
-                        "gridpaper: pool runtime activated pool_slot={} owner={} local_instance={} grid={}x{} soft_caps={}x{} worker_slot={} ui4={}x{} extent_source={} default_scale={}\n",
+                        "gridpaper: pool runtime activated pool_slot={} producer={:?} local_instance={} grid={}x{} soft_caps={}x{} worker_slot={} ui4={}x{} extent_source={} default_scale={}\n",
                         pool_slot,
-                        lease.owner.unwrap_or(u8::MAX),
+                        lease.producer,
                         instance_id,
                         lease.size.columns(),
                         lease.size.rows(),
@@ -4484,13 +4833,13 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
             .as_mut()
             .expect("leased GridPaper runtime initialized");
         let presentation_now_ms = Instant::now().as_millis();
-        if lease.presentable_owner != runtime_ref.presented_owner()
+        if lease.presentable_producer != runtime_ref.presented_producer()
             && presentation_now_ms >= presentation_retry_after_ms
         {
             if let Some(session) = presentation_session.take() {
                 let _ = release_runtime_presentation(runtime_ref, session, false);
             }
-            if let Some(producer) = lease.presentable_owner {
+            if let Some(producer) = lease.presentable_producer {
                 match attach_runtime_presentation(runtime_ref, producer) {
                     Ok(session) => {
                         presentation_session = Some(session);
@@ -4500,7 +4849,7 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
                             .expect("attached GridPaper presentation");
                         crate::log_info!(
                             target: "gridpaper";
-                            "gridpaper: presentation attached pool_slot={} instance={} producer={} session={} window={} frame={} retained_front={} persistent_compute_scene=1 resident3d_ui4=disabled\n",
+                            "gridpaper: presentation attached pool_slot={} instance={} producer={:?} session={} window={} frame={} retained_front={} persistent_compute_scene=1 resident3d_ui4=disabled\n",
                             pool_slot,
                             runtime_ref.surface.instance_id,
                             presentation.producer,
@@ -4573,8 +4922,8 @@ fn spawn_gridpaper_instance_pool() -> usize {
     spawned
 }
 
-/// Kernel controller for the GridPaper Blueprint worker pool. Each Blueprint
-/// contributes one local document; up to ten owner-local leases retain their
+/// Kernel controller for the Gridpaper worker pool. Blueprint documents and
+/// trusted kernel clients share up to ten isolated leases, each retaining its
 /// own UI4 frame and scene worker. Compute presentation and print-only resident
 /// capture are serialized across those workers.
 #[embassy_executor::task]
@@ -4723,7 +5072,7 @@ mod tests {
     fn keyboard_primary_advances_while_upper_stays_and_delete_restores_primary_only() {
         let mut snapshot = OwnedSnapshot {
             raw: Vec::from([0u8; PAGE_BYTES]),
-            owner: 0,
+            producer: GridPaperProducer::Blueprint(0),
             generation: 1,
             scale_percent: 100,
             size: GridSize::FULL,
@@ -4805,6 +5154,23 @@ mod tests {
         assert_eq!(dirty.len(), 2);
         assert_eq!(dirty.pop_front(), Some(second));
         assert_eq!(dirty.pop_front(), Some(first));
+    }
+
+    #[test]
+    fn space_is_cell_content_without_a_font_submission() {
+        let mut cell = [0u8; CELL_BYTES];
+        cell[PRIMARY_LENGTH_OFFSET] = 1;
+        cell[PRIMARY_OFFSET] = b' ';
+        let metrics = GridSceneMetrics::new(GridSize::FULL, 100, 853, 1_196);
+        let content = build_cell_scene_content(
+            PRIMARY_INSTANCE_ID,
+            &cell,
+            metrics.cell_rect(GridCellSelection { column: 2, row: 3 }),
+            metrics,
+        )
+        .expect("space cell is valid");
+        assert!(content.texts.is_empty());
+        assert_eq!(content.outline_less_glyphs, 1);
     }
 
     #[test]

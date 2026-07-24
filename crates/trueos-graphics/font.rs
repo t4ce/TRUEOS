@@ -5,8 +5,12 @@
 //! tessellation, raster masks, and GPU coverage as later consumers.
 
 use alloc::{string::String, vec::Vec};
-use core::mem::size_of;
+use core::{
+    mem::size_of,
+    sync::atomic::{AtomicBool, AtomicU8, Ordering},
+};
 
+use embassy_executor::SpawnError;
 use skrifa::{
     FontRef, GlyphId, MetadataProvider,
     instance::{LocationRef, Size},
@@ -45,7 +49,26 @@ const TRUEOSFS_FONTS: [TrueosFsFontSpec; 2] = [
     },
 ];
 const TRUEOSFS_FONT_HEARTBEAT_SECS: u64 = 30;
+const FONT_WARM_POOL_SIZE: usize = 2;
+const FONT_WARM_JOB_COUNT: usize = 3;
+const FONT_WARM_ALL_READY: u8 = (1 << FONT_WARM_JOB_COUNT) - 1;
 static FONT_REGISTRY: Mutex<FontRegistry> = Mutex::new(FontRegistry::new());
+static FONT_WARM_WORKERS_ADMITTED: AtomicU8 = AtomicU8::new(0);
+static FONT_WARM_READY: AtomicU8 = AtomicU8::new(0);
+static FONT_WARM_READY_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy)]
+enum FontWarmJob {
+    Embedded(usize),
+    TrueosFs(usize),
+}
+
+// These are the complete, deliberately hardcoded TTF warm jobs known at boot.
+const FONT_WARM_JOBS: [FontWarmJob; FONT_WARM_JOB_COUNT] = [
+    FontWarmJob::Embedded(0),
+    FontWarmJob::TrueosFs(0),
+    FontWarmJob::TrueosFs(1),
+];
 
 #[derive(Clone, Copy)]
 struct EmbeddedFontSpec {
@@ -921,74 +944,28 @@ fn register_warmed_font(
     summary
 }
 
-#[embassy_executor::task]
-pub(crate) async fn font_warm_task() {
-    for (index, spec) in EMBEDDED_FONTS.iter().enumerate() {
-        crate::log_info!(
-            target: "boot";
-            "graphics-font: status=warming name={} file={} warm_index={} warm_total={} warm_policy=eager-all\n",
-            spec.name,
-            spec.file_name,
-            index + 1,
-            EMBEDDED_FONTS.len(),
-        );
-
-        match warm_embedded_font_once(index) {
-            Ok(summary) => crate::log_info!(
-                target: "boot";
-                "graphics-font: status={} name={} file={} endstate={} resident_bytes={} outline_cache_bytes={} glyphs={} success={} empty={} failures={} commands={} outline_ms={} total_ms={} warm_index={} warm_total={} warm_policy=eager-all\n",
-                summary.status,
-                summary.name,
-                summary.file_name,
-                summary.endstate,
-                summary.resident_bytes,
-                summary.cache_bytes,
-                summary.glyphs,
-                summary.outline_success,
-                summary.empty_outlines,
-                summary.outline_failures,
-                summary.commands,
-                summary.outline_ms,
-                summary.total_ms,
-                index + 1,
-                EMBEDDED_FONTS.len(),
-            ),
-            Err(err) => crate::log_warn!(
-                target: "boot";
-                "graphics-font: status=failed name={} file={} warm_index={} warm_total={} warm_policy=eager-all err={:?}\n",
-                spec.name,
-                spec.file_name,
-                index + 1,
-                EMBEDDED_FONTS.len(),
-                err,
-            ),
-        }
-    }
-
+async fn warm_trueosfs_font(job_index: usize, spec_index: usize, slot: u32) {
+    let spec = TRUEOSFS_FONTS[spec_index];
     let mut heartbeat = 0u64;
     loop {
         heartbeat = heartbeat.saturating_add(1);
-        if TRUEOSFS_FONTS
-            .iter()
-            .all(|spec| font_summary(spec.name).is_some())
-        {
+        if font_summary(spec.name).is_some() {
+            record_font_warm_ready(job_index, slot);
             return;
         }
 
         if !crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
-            for spec in TRUEOSFS_FONTS
-                .iter()
-                .filter(|spec| font_summary(spec.name).is_none())
-            {
-                crate::log_info!(
-                    target: "boot";
-                    "graphics-font: status=waiting name={} path=trueosfs:/{} reason=root-not-ready heartbeat={} retry_secs={}\n",
-                    spec.name,
-                    spec.path,
-                    heartbeat,
-                    TRUEOSFS_FONT_HEARTBEAT_SECS,
-                );
-            }
+            crate::log_info!(
+                target: "boot";
+                "graphics-font: status=waiting name={} path=trueosfs:/{} reason=root-not-ready slot={} heartbeat={} retry_secs={} warm_index={} warm_total={}\n",
+                spec.name,
+                spec.path,
+                slot,
+                heartbeat,
+                TRUEOSFS_FONT_HEARTBEAT_SECS,
+                job_index + 1,
+                FONT_WARM_JOB_COUNT,
+            );
             embassy_time::Timer::after(embassy_time::Duration::from_secs(
                 TRUEOSFS_FONT_HEARTBEAT_SECS,
             ))
@@ -997,19 +974,17 @@ pub(crate) async fn font_warm_task() {
         }
 
         let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-            for spec in TRUEOSFS_FONTS
-                .iter()
-                .filter(|spec| font_summary(spec.name).is_none())
-            {
-                crate::log_info!(
-                    target: "boot";
-                    "graphics-font: status=waiting name={} path=trueosfs:/{} reason=root-not-mounted heartbeat={} retry_secs={}\n",
-                    spec.name,
-                    spec.path,
-                    heartbeat,
-                    TRUEOSFS_FONT_HEARTBEAT_SECS,
-                );
-            }
+            crate::log_info!(
+                target: "boot";
+                "graphics-font: status=waiting name={} path=trueosfs:/{} reason=root-not-mounted slot={} heartbeat={} retry_secs={} warm_index={} warm_total={}\n",
+                spec.name,
+                spec.path,
+                slot,
+                heartbeat,
+                TRUEOSFS_FONT_HEARTBEAT_SECS,
+                job_index + 1,
+                FONT_WARM_JOB_COUNT,
+            );
             embassy_time::Timer::after(embassy_time::Duration::from_secs(
                 TRUEOSFS_FONT_HEARTBEAT_SECS,
             ))
@@ -1017,31 +992,25 @@ pub(crate) async fn font_warm_task() {
             continue;
         };
 
-        for (index, spec) in TRUEOSFS_FONTS.iter().enumerate() {
-            if font_summary(spec.name).is_some() {
-                continue;
-            }
-            match crate::r::fs::trueosfs::file_out_async(disk, spec.path).await {
-                Ok(Some(bytes)) => {
-                    crate::log_info!(
-                        target: "boot";
-                        "graphics-font: status=warming name={} file={} path=trueosfs:/{} source=trueosfs resident_input_bytes={} heartbeat={} warm_index={} warm_total={} warm_policy=eager-all\n",
-                        spec.name,
-                        spec.file_name,
-                        spec.path,
-                        bytes.len(),
-                        heartbeat,
-                        index + 1,
-                        TRUEOSFS_FONTS.len(),
-                    );
-                    match warm_font_bytes_once(
-                        spec.name,
-                        spec.file_name,
-                        FontBytes::TrueosFs(bytes),
-                    ) {
-                        Ok(summary) => crate::log_info!(
+        match crate::r::fs::trueosfs::file_out_async(disk, spec.path).await {
+            Ok(Some(bytes)) => {
+                crate::log_info!(
+                    target: "boot";
+                    "graphics-font: status=warming name={} file={} path=trueosfs:/{} source=trueosfs resident_input_bytes={} slot={} heartbeat={} warm_index={} warm_total={} warm_policy=eager-all\n",
+                    spec.name,
+                    spec.file_name,
+                    spec.path,
+                    bytes.len(),
+                    slot,
+                    heartbeat,
+                    job_index + 1,
+                    FONT_WARM_JOB_COUNT,
+                );
+                match warm_font_bytes_once(spec.name, spec.file_name, FontBytes::TrueosFs(bytes)) {
+                    Ok(summary) => {
+                        crate::log_info!(
                             target: "boot";
-                            "graphics-font: status={} name={} file={} path=trueosfs:/{} source=trueosfs endstate={} resident_bytes={} outline_cache_bytes={} glyphs={} success={} empty={} failures={} commands={} outline_ms={} total_ms={} heartbeat={} warm_index={} warm_total={} warm_policy=eager-all\n",
+                            "graphics-font: status={} name={} file={} path=trueosfs:/{} source=trueosfs endstate={} resident_bytes={} outline_cache_bytes={} glyphs={} success={} empty={} failures={} commands={} outline_ms={} total_ms={} slot={} heartbeat={} warm_index={} warm_total={} warm_policy=eager-all\n",
                             summary.status,
                             summary.name,
                             summary.file_name,
@@ -1056,58 +1025,248 @@ pub(crate) async fn font_warm_task() {
                             summary.commands,
                             summary.outline_ms,
                             summary.total_ms,
+                            slot,
                             heartbeat,
-                            index + 1,
-                            TRUEOSFS_FONTS.len(),
-                        ),
-                        Err(err) => crate::log_warn!(
-                            target: "boot";
-                            "graphics-font: status=invalid name={} file={} path=trueosfs:/{} source=trueosfs heartbeat={} retry_secs={} warm_index={} warm_total={} err={:?}\n",
-                            spec.name,
-                            spec.file_name,
-                            spec.path,
-                            heartbeat,
-                            TRUEOSFS_FONT_HEARTBEAT_SECS,
-                            index + 1,
-                            TRUEOSFS_FONTS.len(),
-                            err,
-                        ),
+                            job_index + 1,
+                            FONT_WARM_JOB_COUNT,
+                        );
+                        record_font_warm_ready(job_index, slot);
+                        return;
                     }
+                    Err(err) => crate::log_warn!(
+                        target: "boot";
+                        "graphics-font: status=invalid name={} file={} path=trueosfs:/{} source=trueosfs slot={} heartbeat={} retry_secs={} warm_index={} warm_total={} err={:?}\n",
+                        spec.name,
+                        spec.file_name,
+                        spec.path,
+                        slot,
+                        heartbeat,
+                        TRUEOSFS_FONT_HEARTBEAT_SECS,
+                        job_index + 1,
+                        FONT_WARM_JOB_COUNT,
+                        err,
+                    ),
                 }
-                Ok(None) => crate::log_info!(
-                    target: "boot";
-                    "graphics-font: status=waiting name={} path=trueosfs:/{} reason=file-not-present heartbeat={} retry_secs={} warm_index={} warm_total={}\n",
-                    spec.name,
-                    spec.path,
-                    heartbeat,
-                    TRUEOSFS_FONT_HEARTBEAT_SECS,
-                    index + 1,
-                    TRUEOSFS_FONTS.len(),
-                ),
-                Err(err) => crate::log_warn!(
-                    target: "boot";
-                    "graphics-font: status=waiting name={} path=trueosfs:/{} reason=file-read-failed heartbeat={} retry_secs={} warm_index={} warm_total={} err={:?}\n",
-                    spec.name,
-                    spec.path,
-                    heartbeat,
-                    TRUEOSFS_FONT_HEARTBEAT_SECS,
-                    index + 1,
-                    TRUEOSFS_FONTS.len(),
-                    err,
-                ),
             }
-        }
-
-        if TRUEOSFS_FONTS
-            .iter()
-            .all(|spec| font_summary(spec.name).is_some())
-        {
-            return;
+            Ok(None) => crate::log_info!(
+                target: "boot";
+                "graphics-font: status=waiting name={} path=trueosfs:/{} reason=file-not-present slot={} heartbeat={} retry_secs={} warm_index={} warm_total={}\n",
+                spec.name,
+                spec.path,
+                slot,
+                heartbeat,
+                TRUEOSFS_FONT_HEARTBEAT_SECS,
+                job_index + 1,
+                FONT_WARM_JOB_COUNT,
+            ),
+            Err(err) => crate::log_warn!(
+                target: "boot";
+                "graphics-font: status=waiting name={} path=trueosfs:/{} reason=file-read-failed slot={} heartbeat={} retry_secs={} warm_index={} warm_total={} err={:?}\n",
+                spec.name,
+                spec.path,
+                slot,
+                heartbeat,
+                TRUEOSFS_FONT_HEARTBEAT_SECS,
+                job_index + 1,
+                FONT_WARM_JOB_COUNT,
+                err,
+            ),
         }
 
         embassy_time::Timer::after(embassy_time::Duration::from_secs(TRUEOSFS_FONT_HEARTBEAT_SECS))
             .await;
     }
+}
+
+fn warm_embedded_font_job(job_index: usize, spec_index: usize, slot: u32) {
+    let spec = EMBEDDED_FONTS[spec_index];
+    crate::log_info!(
+        target: "boot";
+        "graphics-font: status=warming name={} file={} source=embedded slot={} warm_index={} warm_total={} warm_policy=eager-all\n",
+        spec.name,
+        spec.file_name,
+        slot,
+        job_index + 1,
+        FONT_WARM_JOB_COUNT,
+    );
+    match warm_embedded_font_once(spec_index) {
+        Ok(summary) => {
+            crate::log_info!(
+                target: "boot";
+                "graphics-font: status={} name={} file={} source=embedded endstate={} resident_bytes={} outline_cache_bytes={} glyphs={} success={} empty={} failures={} commands={} outline_ms={} total_ms={} slot={} warm_index={} warm_total={} warm_policy=eager-all\n",
+                summary.status,
+                summary.name,
+                summary.file_name,
+                summary.endstate,
+                summary.resident_bytes,
+                summary.cache_bytes,
+                summary.glyphs,
+                summary.outline_success,
+                summary.empty_outlines,
+                summary.outline_failures,
+                summary.commands,
+                summary.outline_ms,
+                summary.total_ms,
+                slot,
+                job_index + 1,
+                FONT_WARM_JOB_COUNT,
+            );
+            record_font_warm_ready(job_index, slot);
+        }
+        Err(err) => crate::log_warn!(
+            target: "boot";
+            "graphics-font: status=failed name={} file={} source=embedded slot={} warm_index={} warm_total={} warm_policy=eager-all err={:?}\n",
+            spec.name,
+            spec.file_name,
+            slot,
+            job_index + 1,
+            FONT_WARM_JOB_COUNT,
+            err,
+        ),
+    }
+}
+
+fn record_font_warm_ready(job_index: usize, slot: u32) {
+    let ready_bit = 1u8 << job_index;
+    let ready = FONT_WARM_READY.fetch_or(ready_bit, Ordering::AcqRel) | ready_bit;
+    crate::log_info!(
+        target: "boot";
+        "graphics-font: job-ready warm_index={} warm_total={} slot={} ready_mask=0x{:02X}\n",
+        job_index + 1,
+        FONT_WARM_JOB_COUNT,
+        slot,
+        ready,
+    );
+    if ready == FONT_WARM_ALL_READY
+        && FONT_WARM_READY_LOGGED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    {
+        crate::log_info!(
+            target: "boot";
+            "graphics-font: resident-ready fonts={} workers={} placement=AP2+-profile-selected bsp=excluded ui_core=excluded\n",
+            FONT_WARM_JOB_COUNT,
+            FONT_WARM_POOL_SIZE,
+        );
+    }
+}
+
+#[embassy_executor::task(pool_size = FONT_WARM_POOL_SIZE)]
+async fn font_warm_worker_task(worker_index: usize, expected_slot: u32, expected_kind: u8) {
+    let actual_slot = crate::percpu::current_slot() as u32;
+    let actual_kind = crate::workers::core_kind_for_slot(actual_slot);
+    if actual_slot != expected_slot
+        || actual_kind != expected_kind
+        || !crate::workers::is_background_worker_slot(actual_slot)
+    {
+        crate::log_warn!(
+            target: "boot";
+            "graphics-font: worker-refused worker={} expected_slot={} actual_slot={} expected_kind={} actual_kind={} placement=AP2+-profile-selected\n",
+            worker_index,
+            expected_slot,
+            actual_slot,
+            expected_kind,
+            actual_kind,
+        );
+        FONT_WARM_WORKERS_ADMITTED.fetch_and(!(1u8 << worker_index), Ordering::AcqRel);
+        crate::r::spawn_service::retry_font_warm_pool_autostart();
+        return;
+    }
+
+    crate::log_info!(
+        target: "boot";
+        "graphics-font: worker-online worker={} slot={} core_kind={} jobs={} placement=AP2+-profile-selected\n",
+        worker_index,
+        actual_slot,
+        actual_kind,
+        FONT_WARM_JOBS
+            .iter()
+            .skip(worker_index)
+            .step_by(FONT_WARM_POOL_SIZE)
+            .count(),
+    );
+    for job_index in (worker_index..FONT_WARM_JOB_COUNT).step_by(FONT_WARM_POOL_SIZE) {
+        match FONT_WARM_JOBS[job_index] {
+            FontWarmJob::Embedded(spec_index) => {
+                warm_embedded_font_job(job_index, spec_index, actual_slot);
+            }
+            FontWarmJob::TrueosFs(spec_index) => {
+                warm_trueosfs_font(job_index, spec_index, actual_slot).await;
+            }
+        }
+    }
+    crate::log_info!(
+        target: "boot";
+        "graphics-font: worker-complete worker={} slot={} core_kind={}\n",
+        worker_index,
+        actual_slot,
+        actual_kind,
+    );
+}
+
+/// Admit the two font warm workers onto the profile-selected AP2+ fleet.
+///
+/// Two distinct executors are used when available. On a one-worker fleet both
+/// pool tasks safely share that AP; the BSP and AP1 UI core are never fallbacks.
+pub(crate) fn spawn_font_warm_pool() -> Result<bool, SpawnError> {
+    if !crate::workers::all_topology_spawners_registered() {
+        return Ok(false);
+    }
+    let workers = crate::workers::pick_background_spawners_with_slots(FONT_WARM_POOL_SIZE);
+    if workers.is_empty() {
+        return Ok(false);
+    }
+
+    let mut admitted = 0usize;
+    let mut spawned = 0usize;
+    for worker_index in 0..FONT_WARM_POOL_SIZE {
+        let worker_bit = 1u8 << worker_index;
+        if FONT_WARM_WORKERS_ADMITTED.fetch_or(worker_bit, Ordering::AcqRel) & worker_bit != 0 {
+            admitted += 1;
+            continue;
+        }
+
+        let (slot, core_kind, spawner) = workers[worker_index % workers.len()];
+        let token = match font_warm_worker_task(worker_index, slot, core_kind) {
+            Ok(token) => token,
+            Err(error) => {
+                FONT_WARM_WORKERS_ADMITTED.fetch_and(!worker_bit, Ordering::AcqRel);
+                if admitted == 0 && spawned == 0 {
+                    return Err(error);
+                }
+                crate::log_warn!(
+                    target: "boot";
+                    "graphics-font: worker-spawn-failed worker={} slot={} core_kind={} err={:?}\n",
+                    worker_index,
+                    slot,
+                    core_kind,
+                    error,
+                );
+                continue;
+            }
+        };
+        let wake_sent = spawner.spawn_and_wake_remote(token);
+        crate::log_info!(
+            target: "boot";
+            "graphics-font: worker-spawned worker={} slot={} core_kind={} wake_sent={}\n",
+            worker_index,
+            slot,
+            core_kind,
+            wake_sent,
+        );
+        admitted += 1;
+        spawned += 1;
+    }
+    crate::log_info!(
+        target: "boot";
+        "graphics-font: pool-admitted spawned_now={} active_or_admitted={} workers={} fonts={} selected_slots={} placement=AP2+-profile-selected\n",
+        spawned,
+        admitted,
+        FONT_WARM_POOL_SIZE,
+        FONT_WARM_JOB_COUNT,
+        workers.len(),
+    );
+    Ok(admitted == FONT_WARM_POOL_SIZE)
 }
 
 struct FontRegistry {

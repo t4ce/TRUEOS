@@ -62,8 +62,8 @@ pub(crate) use compositor_service::ui4_compositor_service_task;
 pub(crate) use cursor_frame_inout::{
     CursorFrameKey, GlobalKeyboardDisposition, GlobalKeyboardHookId, Ui4CursorIcon,
     Ui4CursorSource, cursor_icon_for, register_global_keyboard_hook, selected_frame,
-    selection_strip, set_window_cursor_icon, set_window_custom_cursor, source_selected,
-    unregister_global_keyboard_hook,
+    selected_frame_for_source, selection_strips, set_window_cursor_icon, set_window_custom_cursor,
+    source_selected, unregister_global_keyboard_hook,
 };
 pub(crate) use damage::{DamageRect, DamageRegion};
 pub(crate) use font_stamp::{present_font_stamp, ui4_font_stamp_service_task};

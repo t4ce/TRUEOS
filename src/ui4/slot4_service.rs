@@ -50,7 +50,7 @@ impl Slot4State {
 pub(crate) async fn ui4_slot4_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
     crate::log_info!(target: "ui4/slot4";
-        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+external-selected-frame-strip+selection-outline+maximize-preview+context-menu/per-cursor-color cursor-set=default+loading+resize-horizontal+resize-vertical+resize-diagonal+app-owned scope=selected-frame/per-source press=default-contract-25-percent hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=changed-pixels/disjoint gpu_submits=0 synthetic-motion=off\n",
+        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+per-cursor-selected-frame-strips+selection-outline+maximize-preview+context-menu/per-cursor-color cursor-set=default+loading+resize-horizontal+resize-vertical+resize-diagonal+app-owned scope=selected-frame/per-source press=default-contract-25-percent hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=changed-pixels/disjoint gpu_submits=0 synthetic-motion=off\n",
         super::INTERACTION_CADENCE_HZ,
     );
 
@@ -312,21 +312,21 @@ fn software_cursor_rects() -> Slot4Rects {
     let mut rects = Slot4Rects::new();
     let (screen_w, screen_h) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
 
-    if let Some(output) = super::OutputId::from_slot(0)
-        && let Some(strip) = super::selection_strip(output, screen_w, screen_h)
-    {
-        let count = strip.colors.len() as u64;
-        for (index, color) in strip.colors.iter().copied().enumerate() {
-            let start = u64::from(strip.width).saturating_mul(index as u64) / count;
-            let end = u64::from(strip.width).saturating_mul(index as u64 + 1) / count;
-            push_overlay_rect(
-                &mut rects,
-                strip.x.saturating_add(start as u32),
-                strip.y,
-                end.saturating_sub(start) as u32,
-                1,
-                color,
-            );
+    if let Some(output) = super::OutputId::from_slot(0) {
+        for strip in super::selection_strips(output, screen_w, screen_h) {
+            let count = strip.colors.len() as u64;
+            for (index, color) in strip.colors.iter().copied().enumerate() {
+                let start = u64::from(strip.width).saturating_mul(index as u64) / count;
+                let end = u64::from(strip.width).saturating_mul(index as u64 + 1) / count;
+                push_overlay_rect(
+                    &mut rects,
+                    strip.x.saturating_add(start as u32),
+                    strip.y,
+                    end.saturating_sub(start) as u32,
+                    1,
+                    color,
+                );
+            }
         }
     }
 

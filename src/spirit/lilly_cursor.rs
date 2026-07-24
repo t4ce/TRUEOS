@@ -9,12 +9,15 @@ use spin::Mutex;
 use crate::graphics::primitives::Rgba8;
 use crate::r::mouse_motion_service::{
     MOUSE_CONTROL_EASING_LINEAR, MOUSE_CONTROL_EASING_NATURAL, MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
-    MOUSE_CONTROL_OPCODE_STROKE, MOUSE_CONTROL_PATH_LINE, MOUSE_CONTROL_PATH_QUADRATIC,
-    MouseControlCommand, MouseControlCursor, MouseControlError, MouseControlPrincipal,
+    MOUSE_CONTROL_OPCODE_BUTTONS, MOUSE_CONTROL_OPCODE_STROKE, MOUSE_CONTROL_PATH_LINE,
+    MOUSE_CONTROL_PATH_QUADRATIC, MouseControlCommand, MouseControlCursor, MouseControlError,
+    MouseControlPrincipal,
 };
 
 const LILLY_CURSOR_LABEL: &str = "Spirit/Lilly";
+const LILLY_HUT_COMBO_ID: u32 = 0x4C49_4C59;
 const LILLY_CURSOR_COLOR: Rgba8 = Rgba8::new(255, 55, 255, 255);
+const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const LILLY_INITIAL_APPROACH_MS: u32 = 420;
 const LILLY_OUTLINE_EDGE_MS: u32 = 240;
 const LILLY_WINDOW_APPROACH_MIN_MS: u32 = 260;
@@ -166,6 +169,48 @@ pub(super) fn queue_window_approach(
 pub(super) fn window_approach_complete() -> Result<bool, MouseControlError> {
     let cursor = register_once()?;
     crate::r::mouse_motion_service::cursor_is_idle(MouseControlPrincipal::Kernel, cursor.handle)
+}
+
+/// Bind Spirit's cursor and keyboard into one AI HUT combo. This keeps Lilly's
+/// keystrokes routed to Lilly's own selected frame even if a physical mouse
+/// selects a different user window while she is typing.
+pub(super) fn bind_keyboard(keyboard_slot: u32) -> Result<(), &'static str> {
+    let cursor = register_once().map_err(|_| "lilly-cursor-unavailable")?;
+    if !crate::usb2::hid::hut::upsert_combo(
+        LILLY_HUT_COMBO_ID,
+        crate::usb2::hid::hut::HidSourceKind::Ai,
+        LILLY_CURSOR_LABEL,
+    ) || !crate::usb2::hid::hut::bind_combo_mouse(LILLY_HUT_COMBO_ID, 0, cursor.slot_id, 0)
+        || !crate::usb2::hid::hut::bind_combo_keyboard(LILLY_HUT_COMBO_ID, 0, keyboard_slot, 0)
+    {
+        return Err("lilly-hut-combo-capacity");
+    }
+    Ok(())
+}
+
+/// Enqueue a real primary-button down/up pair at Lilly's current software
+/// cursor position. The response path calls this only after direct UI4 focus,
+/// so the click reaches Gridpaper cell zero rather than being absorbed.
+pub(super) fn queue_primary_click() -> Result<(), MouseControlError> {
+    let cursor = register_once()?;
+    let program = [
+        MouseControlCommand {
+            opcode: MOUSE_CONTROL_OPCODE_BUTTONS,
+            flags: MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
+            buttons_set: PRIMARY_BUTTON_MASK,
+            ..MouseControlCommand::default()
+        },
+        MouseControlCommand {
+            opcode: MOUSE_CONTROL_OPCODE_BUTTONS,
+            buttons_clear: PRIMARY_BUTTON_MASK,
+            ..MouseControlCommand::default()
+        },
+    ];
+    crate::r::mouse_motion_service::submit_program(
+        MouseControlPrincipal::Kernel,
+        cursor.handle,
+        &program,
+    )
 }
 
 /// Queue one atomic approach-plus-outline program after Spirit's first real

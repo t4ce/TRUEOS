@@ -1,10 +1,11 @@
 //! UI4 input focus and delivery over the kernel HID rings.
 //!
 //! The HID/HUT layer owns device discovery and identity. UI4 starts at its
-//! sequence rings: it hit-tests windows, enforces the one global selected
-//! frame, keeps pointer capture per cursor source, associates keyboards through
-//! HUT combos, and queues callbacks for the trusted `WindowOwner`. Consumers
-//! never drain a global HID queue.
+//! sequence rings: it hit-tests windows, keeps one selected-frame association
+//! per cursor plus a most-recent application input focus, maintains pointer
+//! capture per cursor source, associates keyboards through HUT combos, and
+//! queues callbacks for the trusted `WindowOwner`. Consumers never drain a
+//! global HID queue.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -358,39 +359,45 @@ impl InputBroker {
         );
         self.selection_serial = self.selection_serial.wrapping_add(1).max(1);
         self.cursors[cursor_index].selection_serial = self.selection_serial;
-        if !change.changed {
+        if !change.changed && !change.focus_changed {
             return false;
         }
-        for route in &mut self.cursors {
-            // Context menus belong to cursor routes, not to the globally
-            // selected frame. The cursor performing the selection dismisses
-            // its own menu in `process_cursor`; other cursors keep theirs.
-            route.clear_frame_interaction();
-            route.absorb_select |= route.buttons_down != 0;
+        if change.focus_changed {
+            for route in &mut self.cursors {
+                // Context menus belong to cursor routes, not to the globally
+                // focused frame. The cursor performing the selection dismisses
+                // its own menu in `process_cursor`; other cursors keep theirs.
+                route.clear_frame_interaction();
+                route.absorb_select |= route.buttons_down != 0;
+            }
+        } else {
+            self.cursors[cursor_index].clear_frame_interaction();
         }
-        if let Some(previous) = change.previous.map(WindowTarget::from) {
-            enqueue_owner_event(
-                previous.owner,
-                Ui4InputEvent::Focus(Ui4FocusEvent {
-                    source,
-                    window: previous.window,
-                    focused: false,
-                    combo_id,
-                    vcursor,
-                }),
-            );
-        }
-        if let Some(next) = change.selected.map(WindowTarget::from) {
-            enqueue_owner_event(
-                next.owner,
-                Ui4InputEvent::Focus(Ui4FocusEvent {
-                    source,
-                    window: next.window,
-                    focused: true,
-                    combo_id,
-                    vcursor,
-                }),
-            );
+        if change.focus_changed {
+            if let Some(previous) = change.previous.map(WindowTarget::from) {
+                enqueue_owner_event(
+                    previous.owner,
+                    Ui4InputEvent::Focus(Ui4FocusEvent {
+                        source,
+                        window: previous.window,
+                        focused: false,
+                        combo_id,
+                        vcursor,
+                    }),
+                );
+            }
+            if let Some(next) = change.selected.map(WindowTarget::from) {
+                enqueue_owner_event(
+                    next.owner,
+                    Ui4InputEvent::Focus(Ui4FocusEvent {
+                        source,
+                        window: next.window,
+                        focused: true,
+                        combo_id,
+                        vcursor,
+                    }),
+                );
+            }
         }
         true
     }
@@ -843,15 +850,6 @@ impl InputBroker {
             super::screenshot::request_window_capture(window, route.x, route.y);
             return;
         }
-        let Some(target) = super::selected_frame().map(WindowTarget::from) else {
-            return;
-        };
-        let Some(window) = window_snapshot_for_target(target) else {
-            return;
-        };
-        if !window.interaction.receives_input {
-            return;
-        }
         let matched_route = self
             .cursors
             .iter()
@@ -887,8 +885,25 @@ impl InputBroker {
         let Some(route_index) = route_index else {
             return;
         };
+        let route_source = self.cursors[route_index].source;
+        let Some(key) = super::selected_frame_for_source(route_source) else {
+            return;
+        };
+        let target = WindowTarget {
+            owner: key.owner,
+            window: key.window,
+        };
+        let Some(window) = window_snapshot_for_target(target) else {
+            return;
+        };
+        if !window.interaction.receives_input {
+            return;
+        }
         // Keep the keyboard identity beside the cursor which participated in
-        // selecting the one global frame. Blueprint game consumers can then
+        // selecting its frame. An exact HUT combo (including Lilly's paired
+        // vCursor/vKeyboard) therefore cannot type into a more recently
+        // selected frame owned by another cursor. Blueprint game consumers can
+        // then
         // sample held HID usages without access to the global HUT list.
         self.cursors[route_index].keyboard_source = Some(event.into());
         enqueue_owner_event(
@@ -995,7 +1010,8 @@ impl InputBroker {
             }
             let icon = topmost_window_at(route.x, route.y)
                 .filter(|window| {
-                    super::selected_frame() == Some(WindowTarget::from(*window).cursor_frame_key())
+                    super::selected_frame_for_source(route.source)
+                        == Some(WindowTarget::from(*window).cursor_frame_key())
                 })
                 .map(|window| {
                     super::cursor_icon_for(
@@ -1030,7 +1046,7 @@ static SLOT4_VISUAL_CHANGE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signa
 #[embassy_executor::task]
 pub(crate) async fn ui4_input_service_task() {
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings pump_hz={} pump_clock=absolute-fractional selection=global-zero-or-one-frame first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/selected-frame-only maximize=interaction-capability-gated outline=primary-button/selected-frame-only owner_events=selected-frame-only screenshot=parked\n",
+        "ui4/input: service online source=hid-sequence-rings pump_hz={} pump_clock=absolute-fractional selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/selected-frame-only maximize=interaction-capability-gated outline=primary-button/selected-frame-only owner_events=selected-frame-only screenshot=parked\n",
         super::INTERACTION_CADENCE_HZ,
     );
     let mut cadence = super::InteractionCadence::new();
