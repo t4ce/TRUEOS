@@ -1568,7 +1568,65 @@ pub(super) fn window_snapshot(owner: WindowOwner, id: WindowId) -> Option<Window
 /// If the producer published again meanwhile, the serial differs and its new
 /// damage remains pending.
 pub(crate) fn acknowledge_window_frame(id: WindowId, publish_serial: u64) -> bool {
-    WINDOW_BROKER.lock().acknowledge(id, publish_serial)
+    let (acknowledged, first_presentation) = {
+        let mut broker = WINDOW_BROKER.lock();
+        let first_presentation = {
+            let Ok((slot, generation)) = unpack_handle(id.0) else {
+                return false;
+            };
+            let Some(window) = broker.windows.get_mut(slot) else {
+                return false;
+            };
+            if window.generation != generation
+                || !matches!(window.state, WindowState::Ready | WindowState::Closing)
+                || window.first_presentation_emitted
+            {
+                None
+            } else {
+                // This operation is called only after the compositor's plane
+                // batch reports SURFLIVE. Mark the window even when a faster
+                // producer has already advanced `publish_serial`: the older
+                // frame was still physically presented and its newer damage
+                // must simply remain pending.
+                window.first_presentation_emitted = true;
+                window.snapshot(slot)
+            }
+        };
+        let acknowledged = broker.acknowledge(id, publish_serial);
+        (acknowledged, first_presentation)
+    };
+    if let Some(window) = first_presentation {
+        publish_window_first_presentation(window);
+    }
+    acknowledged
+}
+
+fn publish_window_first_presentation(window: WindowSnapshot) {
+    let mut queue = WINDOW_FIRST_PRESENTATIONS.lock();
+    if queue.is_full() {
+        let dropped = queue.pop_front();
+        crate::log_warn!(
+            target: "ui4";
+            "ui4/window: first-presentation queue full capacity={} dropped_window={:?} policy=retain-newest\n",
+            WINDOW_FIRST_PRESENTATION_QUEUE_CAP,
+            dropped.map(|window| window.id.raw()),
+        );
+    }
+    let _ = queue.push_back(window);
+    drop(queue);
+    WINDOW_FIRST_PRESENTATION_READY.signal(());
+}
+
+/// Wait for the next window whose first composed frame has crossed the actual
+/// display SURFLIVE boundary. The bounded queue preserves launch order while
+/// a consumer performs asynchronous cursor choreography.
+pub(crate) async fn wait_for_window_first_presentation() -> WindowSnapshot {
+    loop {
+        if let Some(window) = WINDOW_FIRST_PRESENTATIONS.lock().pop_front() {
+            return window;
+        }
+        WINDOW_FIRST_PRESENTATION_READY.wait().await;
+    }
 }
 
 fn close_transition_placement(
