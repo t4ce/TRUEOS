@@ -1023,14 +1023,15 @@ static CONTROL_PANEL_REVISION: AtomicU64 = AtomicU64::new(1);
 static MOVE_PORTAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 static MOVE_PORTAL_STARTED_MS: AtomicU64 = AtomicU64::new(0);
 
-const IDLE_AURA_HALF_CYCLE_MS: u64 = 1_000;
+const GLOBAL_AURA_HALF_CYCLE_MS: u64 = 1_000;
 const IDLE_VFX_OPACITY_RAMP_MS: u64 = 1_000;
-// The comparison grid's normalized controls are
+// Aura bloom is Spirit's single global sprite shader for now. The comparison
+// grid's normalized controls are
 // `[-0.3 -> 0 -> -0.3, +1, -1, -1]`. For Aura bloom those positions map to
 // the kernel's `[radius 9 -> 12 -> 9, strength 2.5, pulse 0, brighten 0]`.
-const IDLE_AURA_RADIUS_MIN: f32 = 9.0;
-const IDLE_AURA_RADIUS_MAX: f32 = 12.0;
-const IDLE_AURA_STRENGTH: f32 = 2.5;
+const GLOBAL_AURA_RADIUS_MIN: f32 = 9.0;
+const GLOBAL_AURA_RADIUS_MAX: f32 = 12.0;
+const GLOBAL_AURA_STRENGTH: f32 = 2.5;
 // Every procedural background is presented inside the same fixed fraction of
 // Spirit's 256x256 cursor allocation. The control-page scale dword remains for
 // the stable kernel ABI, but the live Spirit path does not let individual
@@ -1045,7 +1046,6 @@ struct IdleVfxState {
     active: bool,
     transition_started_ms: u64,
     transition_from_opacity: f32,
-    sprite_started_ms: u64,
 }
 
 impl IdleVfxState {
@@ -1053,7 +1053,6 @@ impl IdleVfxState {
         active: false,
         transition_started_ms: 0,
         transition_from_opacity: 0.0,
-        sprite_started_ms: 0,
     };
 
     fn opacity(self, now_ms: u64) -> f32 {
@@ -1140,9 +1139,9 @@ pub(super) fn set_move_portal_transition(active: bool) {
     }
 }
 
-/// Select the idle VFX pair without replacing the persistent VFX panel. The
+/// Select the idle background without replacing the persistent VFX panel. The
 /// transition is recorded only on real idle edges, so clip/control boundaries
-/// neither restart Aura bloom nor the Magic circle opacity envelope.
+/// do not restart the Magic circle opacity envelope.
 pub(super) fn set_idle_vfx(active: bool) {
     let now_ms = Instant::now().as_millis();
     let mut state = IDLE_VFX_STATE.lock();
@@ -1153,9 +1152,6 @@ pub(super) fn set_idle_vfx(active: bool) {
     state.active = active;
     state.transition_started_ms = now_ms;
     state.transition_from_opacity = current_opacity;
-    if active {
-        state.sprite_started_ms = now_ms;
-    }
     drop(state);
     CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel);
 }
@@ -1219,7 +1215,7 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     let window_background = *WINDOW_BACKGROUND_VFX.lock();
     let move_portal_active = MOVE_PORTAL_ACTIVE.load(Ordering::Acquire);
     let background = if reasoning_active {
-        SpiritVfxAlphaBackground::default()
+        application_background(SpiritVfxBackgroundEffect::BokehField)
     } else if move_portal_active {
         let elapsed_ms = now
             .as_millis()
@@ -1245,19 +1241,12 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     } else {
         panel.alpha_background
     };
-    let sprite_shader = if reasoning_active {
-        sprite_shader_for_effect(SpiritVfxEffect::GhostTrail)
-    } else if window_background.is_none() && idle_vfx.active {
-        let elapsed_ms = now.as_millis().saturating_sub(idle_vfx.sprite_started_ms);
-        let (fx_color_a, fx_color_b) = SpiritVfxEffect::AuraBloom.demo_colors();
-        SpiritVfxSpriteShader {
-            effect: SpiritVfxEffect::AuraBloom,
-            parameters: idle_aura_parameters(elapsed_ms),
-            fx_color_a,
-            fx_color_b,
-        }
-    } else {
-        panel.sprite_shader
+    let (fx_color_a, fx_color_b) = SpiritVfxEffect::AuraBloom.demo_colors();
+    let sprite_shader = SpiritVfxSpriteShader {
+        effect: SpiritVfxEffect::AuraBloom,
+        parameters: global_aura_parameters(now.as_millis()),
+        fx_color_a,
+        fx_color_b,
     };
     SpiritVfxGpuSnapshot {
         revision,
@@ -1284,20 +1273,6 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     }
 }
 
-fn sprite_shader_for_effect(effect: SpiritVfxEffect) -> SpiritVfxSpriteShader {
-    let mut parameters = [0.0; 4];
-    for (parameter, control) in parameters.iter_mut().zip(effect.controls()) {
-        *parameter = control.default;
-    }
-    let (fx_color_a, fx_color_b) = effect.demo_colors();
-    SpiritVfxSpriteShader {
-        effect,
-        parameters,
-        fx_color_a,
-        fx_color_b,
-    }
-}
-
 fn application_background(effect: SpiritVfxBackgroundEffect) -> SpiritVfxAlphaBackground {
     if effect == SpiritVfxBackgroundEffect::NebulaSmoke {
         return SpiritVfxAlphaBackground::NEBULA_SMOKE;
@@ -1314,17 +1289,17 @@ fn application_background(effect: SpiritVfxBackgroundEffect) -> SpiritVfxAlphaBa
     }
 }
 
-fn idle_aura_parameters(elapsed_ms: u64) -> [f32; 4] {
-    let cycle_ms = IDLE_AURA_HALF_CYCLE_MS * 2;
+fn global_aura_parameters(elapsed_ms: u64) -> [f32; 4] {
+    let cycle_ms = GLOBAL_AURA_HALF_CYCLE_MS * 2;
     let phase_ms = elapsed_ms % cycle_ms;
-    let ramp = if phase_ms <= IDLE_AURA_HALF_CYCLE_MS {
-        phase_ms as f32 / IDLE_AURA_HALF_CYCLE_MS as f32
+    let ramp = if phase_ms <= GLOBAL_AURA_HALF_CYCLE_MS {
+        phase_ms as f32 / GLOBAL_AURA_HALF_CYCLE_MS as f32
     } else {
-        (cycle_ms - phase_ms) as f32 / IDLE_AURA_HALF_CYCLE_MS as f32
+        (cycle_ms - phase_ms) as f32 / GLOBAL_AURA_HALF_CYCLE_MS as f32
     };
     [
-        IDLE_AURA_RADIUS_MIN + (IDLE_AURA_RADIUS_MAX - IDLE_AURA_RADIUS_MIN) * ramp,
-        IDLE_AURA_STRENGTH,
+        GLOBAL_AURA_RADIUS_MIN + (GLOBAL_AURA_RADIUS_MAX - GLOBAL_AURA_RADIUS_MIN) * ramp,
+        GLOBAL_AURA_STRENGTH,
         0.0,
         0.0,
     ]
