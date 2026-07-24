@@ -214,8 +214,7 @@ where
     while !prepared(0) {
         Timer::after(Duration::from_millis(PREPARED_FRAME_POLL_MS)).await;
     }
-    let prefill_us =
-        crate::chronos::monotonic_nanos().saturating_sub(prefill_started_ns) / 1_000;
+    let prefill_us = crate::chronos::monotonic_nanos().saturating_sub(prefill_started_ns) / 1_000;
     crate::log_info!(target: "intel/media-encode";
         "intel/media-encode: udp-live preparation=prefilled session={} sequence=0 prefill_us={} buffering=double action=start-cadence\n",
         session_id,

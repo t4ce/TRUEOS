@@ -720,8 +720,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
     loop {
         STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
         let mut stats = LiveEncodeStats::default();
-        let access_unit_count =
-            crate::allcaps::media_encode::VALIDATION_SESSION_ACCESS_UNITS;
+        let access_unit_count = crate::allcaps::media_encode::VALIDATION_SESSION_ACCESS_UNITS;
         let udp_report = super::h264_encode_udp::stream_generated_annex_b(
             &mut udp_transport,
             stream_session_id,
@@ -834,8 +833,7 @@ fn encode_prepared_scanout(
     }
 
     STATE.store(H264EncodeStreamState::Encoding as u8, Ordering::Release);
-    let encode =
-        crate::intel::media::avc_encode_probe::run_nv12_frame(prepared.nv12.as_slice());
+    let encode = crate::intel::media::avc_encode_probe::run_nv12_frame(prepared.nv12.as_slice());
     STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
     release_prepared_scanout(&mut prepared);
     if encode.state != crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Passed
