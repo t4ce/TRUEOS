@@ -9,14 +9,21 @@ subscriber-driven kernel service:
    output all validate. No diagnostic media file or software encoder is linked
    into the kernel.
 2. A receiver sends `TME1GET1` to UDP port 9650.
-3. On subscription, a dedicated performance-preferred background worker
-   captures the current 2560x1440 logical UI4 D01 composition in memory, takes
-   the fixed 1920x1088 rectangle at top-left `(0,0)`, converts straight-alpha
-   RGBA to limited-range BT.601 NV12, and hardware-encodes a fresh IDR access
-   unit on each absolute 20 Hz deadline. This test-rig baseline intentionally
-   performs no scale, aspect correction, or dynamic crop selection. The
-   logical capture follows UI4 plane/z order but is not a bit-exact latch of
-   the physical scanout and does not include the hardware cursor.
+3. On subscription, two distinct performance-preferred background workers
+   enter a bounded producer/consumer pipeline. The producer captures the
+   current 2560x1440 logical UI4 D01 composition in memory, takes the fixed
+   1920x1088 rectangle at top-left `(0,0)`, and converts straight-alpha RGBA to
+   limited-range BT.601 NV12. Exactly two reusable NV12 slots let preparation
+   of the next frame overlap Gen12 VDEnc/MFX encode and UDP egress of the
+   preceding frame. The consumer emits a fresh IDR access unit on each absolute
+   20 Hz deadline. The first frame is prepared before cadence measurement
+   begins, and the producer cannot advance more than one frame ahead of the
+   consumer.
+
+   This test-rig baseline intentionally performs no scale, aspect correction,
+   or dynamic crop selection. The logical capture follows UI4 plane/z order
+   but is not a bit-exact latch of the physical scanout and does not include
+   the hardware cursor.
 4. Each access unit is immediately fragmented into CRC-protected TME1
    datagrams and unicast to the subscriber. The media socket has a 64 KiB
    transmit ring, and every datagram carries an internal adapter receipt token.
