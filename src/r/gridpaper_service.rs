@@ -5,7 +5,7 @@
 //! presentation lifetime. No UI4 handles or generic drawing operations cross
 //! the ABI.
 
-use alloc::{collections::VecDeque, string::String, vec::Vec};
+use alloc::{collections::VecDeque, string::String, vec, vec::Vec};
 
 use embassy_sync::mutex::Mutex as AsyncMutex;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
@@ -1529,6 +1529,15 @@ struct ResidentPage {
     layers: Vec<ResidentLayer>,
     font_instance_state: Option<crate::intel::gpgpu::GpgpuOwnedFontInstanceState>,
     font_instance_animation_serial: core::sync::atomic::AtomicU64,
+    static_base: Option<crate::intel::gpgpu::GpgpuOwnedRgba8Surface>,
+    static_base_animation_serial: core::sync::atomic::AtomicU64,
+}
+
+impl ResidentPage {
+    fn invalidate_static_base(&self) {
+        self.static_base_animation_serial
+            .store(u64::MAX, core::sync::atomic::Ordering::Release);
+    }
 }
 
 struct Geometry {
@@ -1603,6 +1612,49 @@ struct TextCell {
     italic: bool,
 }
 
+fn spread_u16_bits(mut value: u32) -> u32 {
+    value &= 0x0000_FFFF;
+    value = (value | value << 8) & 0x00FF_00FF;
+    value = (value | value << 4) & 0x0F0F_0F0F;
+    value = (value | value << 2) & 0x3333_3333;
+    (value | value << 1) & 0x5555_5555
+}
+
+fn font_entry_spatial_key(
+    entry: crate::intel::gpu_font::GpuFontJobEntry<'_>,
+    scene_width: u32,
+    scene_height: u32,
+) -> u32 {
+    let quantize = |value: f32, extent: u32| {
+        let normalized = (value / extent.max(1) as f32).clamp(0.0, 1.0);
+        libm::roundf(normalized * u16::MAX as f32) as u32
+    };
+    let x = quantize(entry.position[0], scene_width);
+    let y = quantize(entry.position[1], scene_height);
+    spread_u16_bits(x) | (spread_u16_bits(y) << 1)
+}
+
+fn partition_font_entries<'a>(
+    entries: &[crate::intel::gpu_font::GpuFontJobEntry<'a>],
+    partition_count: usize,
+    scene_width: u32,
+    scene_height: u32,
+) -> Vec<Vec<crate::intel::gpu_font::GpuFontJobEntry<'a>>> {
+    let mut ordered = entries.to_vec();
+    ordered.sort_unstable_by_key(|entry| font_entry_spatial_key(*entry, scene_width, scene_height));
+    let partition_count = partition_count.clamp(1, ordered.len());
+    let mut partitions = Vec::with_capacity(partition_count);
+    let mut cursor = 0usize;
+    for partition in 0..partition_count {
+        let remaining_entries = ordered.len() - cursor;
+        let remaining_partitions = partition_count - partition;
+        let take = remaining_entries.div_ceil(remaining_partitions);
+        partitions.push(ordered[cursor..cursor + take].to_vec());
+        cursor += take;
+    }
+    partitions
+}
+
 fn font_preferences(_instance_id: u32) -> [GpuFontFace; 3] {
     // Preserve the former native/100% debug scene as the sole Blueprint
     // document contract.
@@ -1636,6 +1688,7 @@ fn axis_tick_length_mm(cell_index: usize) -> f32 {
 fn build_resident_page(
     instance_id: u32,
     snapshot: &OwnedSnapshot,
+    text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     raster_width: u32,
     raster_height: u32,
     pan: ScenePan,
@@ -1820,6 +1873,7 @@ fn build_resident_page(
         push_geometry_layer(&mut layers, geometry, palette(color, false))?;
     }
 
+    let mut font_groups = Vec::new();
     for font in [
         GpuFontFace::Inconsolata,
         GpuFontFace::NotoSansSc,
@@ -1858,6 +1912,74 @@ fn build_resident_page(
                     });
                 }
             }
+            font_groups.push((font, color, entries));
+        }
+    }
+
+    if font_groups.len() > crate::intel::gpgpu::GPGPU_FONT_INSTANCE_MAX_LAYERS {
+        return Err("gridpaper-font-instance-group-capacity");
+    }
+    let font_group_count = font_groups.len();
+    let mut partition_counts = vec![1usize; font_groups.len()];
+    let mut partition_total = font_groups.len();
+    while partition_total < crate::intel::gpgpu::GPGPU_FONT_INSTANCE_MAX_LAYERS {
+        let mut best_index = None;
+        let mut best_score = 1usize;
+        for (index, (_, color, entries)) in font_groups.iter().enumerate() {
+            if text_animations
+                .get(usize::from(*color))
+                .copied()
+                .flatten()
+                .is_none()
+            {
+                continue;
+            }
+            if partition_counts[index] >= entries.len() {
+                continue;
+            }
+            let score = entries.len().div_ceil(partition_counts[index]);
+            if score > best_score {
+                best_score = score;
+                best_index = Some(index);
+            }
+        }
+        let Some(index) = best_index else {
+            break;
+        };
+        partition_counts[index] += 1;
+        partition_total += 1;
+    }
+
+    let font_entry_count = font_groups
+        .iter()
+        .map(|(_, _, entries)| entries.len())
+        .sum::<usize>();
+    let dynamic_group_count = font_groups
+        .iter()
+        .filter(|(_, color, _)| {
+            text_animations
+                .get(usize::from(*color))
+                .copied()
+                .flatten()
+                .is_some()
+        })
+        .count();
+    let dynamic_entry_count = font_groups
+        .iter()
+        .filter(|(_, color, _)| {
+            text_animations
+                .get(usize::from(*color))
+                .copied()
+                .flatten()
+                .is_some()
+        })
+        .map(|(_, _, entries)| entries.len())
+        .sum::<usize>();
+    for ((font, color, entries), partition_count) in
+        font_groups.into_iter().zip(partition_counts.into_iter())
+    {
+        for entries in partition_font_entries(&entries, partition_count, scene_width, scene_height)
+        {
             let mesh = create_resident_font_centered_scene_mesh_at_raster(
                 &entries,
                 font,
@@ -1914,6 +2036,18 @@ fn build_resident_page(
         .iter()
         .filter(|layer| layer.coverage.is_some())
         .count();
+    crate::log_info!(
+        target: "gridpaper";
+        "gridpaper: font coverage partitioned instance={} groups={} entries={} dynamic_groups={} dynamic_entries={} masks={} assigned_partitions={} descriptor_capacity={} order=morton-2d policy=animated-priority-static-aggregate\n",
+        instance_id,
+        font_group_count,
+        font_entry_count,
+        dynamic_group_count,
+        dynamic_entry_count,
+        coverage_layer_count,
+        partition_total,
+        crate::intel::gpgpu::GPGPU_FONT_INSTANCE_MAX_LAYERS,
+    );
     let font_instance_state = if coverage_layer_count == 0 {
         None
     } else {
@@ -1928,6 +2062,8 @@ fn build_resident_page(
         }
         Some(state)
     };
+    let static_base =
+        crate::intel::gpgpu::allocate_font_instance_rgba8_surface(raster_width, raster_height);
 
     Ok(ResidentPage {
         serial: snapshot.serial,
@@ -1938,6 +2074,8 @@ fn build_resident_page(
         layers,
         font_instance_state,
         font_instance_animation_serial: core::sync::atomic::AtomicU64::new(u64::MAX),
+        static_base,
+        static_base_animation_serial: core::sync::atomic::AtomicU64::new(u64::MAX),
     })
 }
 
@@ -2018,6 +2156,7 @@ impl GridPaperComputeFailure {
 
 struct GridPaperFrameResult {
     changed_pixels: usize,
+    static_base_rebuilt: bool,
     frame_us: u64,
     geometry_us: u64,
     geometry_rects: usize,
@@ -2097,7 +2236,7 @@ fn publish_page(
     if !GPU_COMPUTE_PRESENT_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: live frame path=gpgpu-compute-blueprint-scene-to-ui4-triple size={}x{} pitch={} target_gpu=0x{:X} buffers=3 plane_slot={} cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=0 rectangles={} rectangle_submits={} coverage_submits={} coverage_walkers={} cursor_overlay=gpgpu-worklist final_release=compute-pat3-uc+pipe-control-post-sync publish=exact-surface surflive=display-ownership resident3d_ui4=disabled\n",
+            "gridpaper: live frame path=gpgpu-compute-blueprint-scene-to-ui4-triple size={}x{} pitch={} target_gpu=0x{:X} buffers=3 plane_slot={} cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=1 rectangles={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} cursor_overlay=gpgpu-worklist final_release=compute-pat3-uc+pipe-control-post-sync publish=exact-surface surflive=display-ownership resident3d_ui4=disabled\n",
             destination.width,
             destination.height,
             destination.pitch_bytes,
@@ -2107,6 +2246,7 @@ fn publish_page(
             result.geometry_submits,
             result.coverage_submits,
             result.coverage_walkers,
+            result.static_base_rebuilt,
         );
     }
     if let Err(error) = crate::ui4::publish_gpgpu_scene_frame_buffer(lease, result.release) {
@@ -2245,25 +2385,92 @@ fn update_font_instance_descriptors(
     Ok(())
 }
 
-fn render_compute_page_frame(
+#[derive(Default)]
+struct StaticBaseBuildStats {
+    geometry_rects: usize,
+    geometry_submits: usize,
+    coverage_submits: usize,
+    coverage_walkers: usize,
+}
+
+fn lower_resident_font_instance_layer(
+    layer: &ResidentLayer,
+    programs: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    viewport_translation_px: [f32; 2],
+) -> Option<crate::intel::gpgpu::GpgpuFontInstanceLayer> {
+    let coverage = layer.coverage.as_ref()?;
+    let origin = coverage.origin_px();
+    let descriptor_index = layer.font_instance_descriptor?;
+    let program = instance_program_for_layer(layer, programs);
+    let style = program.map_or(GpuFontInstanceStyle::IDENTITY, |program| program.style);
+    let motion = program.map_or(GpuFontInstanceMotion::NONE, |program| program.motion);
+    let affine =
+        style.scale_permille != 1_000 || style.rotation_centidegrees != 0 || motion.is_active();
+    let translation = if affine {
+        viewport_translation_px
+    } else {
+        [
+            libm::roundf(viewport_translation_px[0]),
+            libm::roundf(viewport_translation_px[1]),
+        ]
+    };
+    let center = [
+        origin[0] as f32 + coverage.full_rect().width as f32 * 0.5 + translation[0],
+        origin[1] as f32 + coverage.full_rect().height as f32 * 0.5 + translation[1],
+    ];
+    let (left, top, right, bottom) = if affine {
+        let base_scale = f32::from(style.scale_permille) / 1_000.0;
+        let max_scale =
+            base_scale * (1.0 + (f32::from(motion.scale_amplitude_permille) / 1_000.0).abs());
+        let width = coverage.full_rect().width as f32;
+        let height = coverage.full_rect().height as f32;
+        let radius = libm::sqrtf(width * width + height * height) * 0.5 * max_scale;
+        let extent_x = radius + (f32::from(motion.translation_x_tenths_px) / 10.0).abs() + 2.0;
+        let extent_y = radius + (f32::from(motion.translation_y_tenths_px) / 10.0).abs() + 2.0;
+        (
+            libm::floorf(center[0] - extent_x) as i32,
+            libm::floorf(center[1] - extent_y) as i32,
+            libm::ceilf(center[0] + extent_x) as i32,
+            libm::ceilf(center[1] + extent_y) as i32,
+        )
+    } else {
+        let left = origin[0].saturating_add(translation[0] as i32);
+        let top = origin[1].saturating_add(translation[1] as i32);
+        (
+            left,
+            top,
+            left.saturating_add(coverage.full_rect().width as i32),
+            top.saturating_add(coverage.full_rect().height as i32),
+        )
+    };
+    Some(crate::intel::gpgpu::GpgpuFontInstanceLayer {
+        mask: coverage.surface(),
+        mask_rect: coverage.full_rect(),
+        dst_center: center,
+        dispatch_rect: crate::intel::gpgpu::GpgpuRect::new(
+            left,
+            top,
+            right.saturating_sub(left) as u32,
+            bottom.saturating_sub(top) as u32,
+        ),
+        descriptor_index,
+    })
+}
+
+fn rebuild_static_font_base(
     page: &ResidentPage,
     text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
-    animation_serial: u64,
-    animation_elapsed_ms: u64,
-    final_rects: &[crate::intel::gpgpu::GpgpuSolidRect],
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
-) -> Result<GridPaperFrameResult, GridPaperComputeFailure> {
+    viewport_translation_px: [f32; 2],
+) -> Result<StaticBaseBuildStats, GridPaperComputeFailure> {
     use crate::intel::gpgpu::GpgpuSubmissionOutcome;
 
-    let frame_started_ns = crate::chronos::monotonic_nanos();
-    let viewport_translation_px = [
-        page.pan.x * destination.width as f32 / page.size.scene_width() as f32,
-        page.pan.y * destination.height as f32 / page.size.scene_height() as f32,
-    ];
-    update_font_instance_descriptors(page, text_animations, animation_serial)
-        .map_err(GridPaperComputeFailure::Unavailable)?;
+    let destination = page
+        .static_base
+        .as_ref()
+        .ok_or(GridPaperComputeFailure::Unavailable("gridpaper-static-base-missing"))?
+        .surface();
     let clear = crate::intel::gpgpu::GpgpuSolidRect {
-        rect: crate::intel::gpgpu::GpgpuRect::new(0, 0, destination.width, destination.height),
+        rect: destination.bounds(),
         color_rgba: 0,
     };
     let clear_result = crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(
@@ -2274,24 +2481,26 @@ fn render_compute_page_frame(
         GpgpuSubmissionOutcome::Complete => {}
         GpgpuSubmissionOutcome::SubmittedIncomplete => {
             return Err(GridPaperComputeFailure::SubmittedIncomplete(
-                "gridpaper-compute-clear-incomplete",
+                "gridpaper-static-base-clear-incomplete",
             ));
         }
         GpgpuSubmissionOutcome::Unavailable => {
             return Err(GridPaperComputeFailure::Unavailable(
-                "gridpaper-compute-clear-unavailable",
+                "gridpaper-static-base-clear-unavailable",
             ));
         }
     }
 
-    let mut geometry_rects = 1usize;
-    let mut geometry_submits = clear_result.stats.submits;
+    let mut stats = StaticBaseBuildStats {
+        geometry_rects: 1,
+        geometry_submits: clear_result.stats.submits,
+        ..StaticBaseBuildStats::default()
+    };
     for layer in &page.layers {
         if layer.logical_rects.is_empty() {
             continue;
         }
-        let color_rgba =
-            u32::from_le_bytes(resident_layer_color(layer, text_animations, animation_elapsed_ms));
+        let color_rgba = u32::from_le_bytes(layer.base_color);
         let rects = layer
             .logical_rects
             .iter()
@@ -2314,90 +2523,119 @@ fn render_compute_page_frame(
         );
         match rendered.outcome {
             GpgpuSubmissionOutcome::Complete => {
-                geometry_rects = geometry_rects.saturating_add(rendered.stats.descs);
-                geometry_submits = geometry_submits.saturating_add(rendered.stats.submits);
+                stats.geometry_rects = stats.geometry_rects.saturating_add(rendered.stats.descs);
+                stats.geometry_submits = stats
+                    .geometry_submits
+                    .saturating_add(rendered.stats.submits);
             }
             GpgpuSubmissionOutcome::SubmittedIncomplete => {
                 return Err(GridPaperComputeFailure::SubmittedIncomplete(
-                    "gridpaper-compute-rectangles-incomplete",
+                    "gridpaper-static-base-rectangles-incomplete",
                 ));
             }
             GpgpuSubmissionOutcome::Unavailable => {
                 return Err(GridPaperComputeFailure::Unavailable(
-                    "gridpaper-compute-rectangles-unavailable",
+                    "gridpaper-static-base-rectangles-unavailable",
                 ));
             }
         }
     }
+
+    let static_layers = page
+        .layers
+        .iter()
+        .filter(|layer| instance_program_for_layer(layer, text_animations).is_none())
+        .filter_map(|layer| {
+            lower_resident_font_instance_layer(layer, text_animations, viewport_translation_px)
+        })
+        .collect::<Vec<_>>();
+    if !static_layers.is_empty() {
+        let descriptor_state = page
+            .font_instance_state
+            .as_ref()
+            .ok_or(GridPaperComputeFailure::Unavailable("gridpaper-font-instance-state-missing"))?;
+        let coverage = crate::intel::gpgpu::font_instance_layers_rgba8_2d_mode(
+            static_layers.as_slice(),
+            descriptor_state,
+            destination,
+            true,
+            0.0,
+        );
+        if !coverage.ok {
+            return Err(if coverage.submitted {
+                GridPaperComputeFailure::SubmittedIncomplete(
+                    "gridpaper-static-base-font-instance-incomplete",
+                )
+            } else {
+                GridPaperComputeFailure::Unavailable(
+                    "gridpaper-static-base-font-instance-unavailable",
+                )
+            });
+        }
+        stats.coverage_submits = coverage.submits;
+        stats.coverage_walkers = coverage.active_walkers;
+    }
+    Ok(stats)
+}
+
+fn render_compute_page_frame(
+    page: &ResidentPage,
+    text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    animation_serial: u64,
+    animation_elapsed_ms: u64,
+    final_rects: &[crate::intel::gpgpu::GpgpuSolidRect],
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> Result<GridPaperFrameResult, GridPaperComputeFailure> {
+    use crate::intel::gpgpu::GpgpuSubmissionOutcome;
+
+    let frame_started_ns = crate::chronos::monotonic_nanos();
+    let viewport_translation_px = [
+        page.pan.x * destination.width as f32 / page.size.scene_width() as f32,
+        page.pan.y * destination.height as f32 / page.size.scene_height() as f32,
+    ];
+    update_font_instance_descriptors(page, text_animations, animation_serial)
+        .map_err(GridPaperComputeFailure::Unavailable)?;
+    let static_base_rebuilt = page
+        .static_base_animation_serial
+        .load(core::sync::atomic::Ordering::Acquire)
+        != animation_serial;
+    let base_stats = if static_base_rebuilt {
+        let stats = rebuild_static_font_base(page, text_animations, viewport_translation_px)?;
+        page.static_base_animation_serial
+            .store(animation_serial, core::sync::atomic::Ordering::Release);
+        stats
+    } else {
+        StaticBaseBuildStats::default()
+    };
+    let static_base = page
+        .static_base
+        .as_ref()
+        .ok_or(GridPaperComputeFailure::Unavailable("gridpaper-static-base-missing"))?
+        .surface();
+    if !crate::intel::gpgpu::copy_rect_rgba8_complete_mode(
+        static_base,
+        static_base.bounds(),
+        destination,
+        crate::intel::gpgpu::GpgpuPoint::new(0, 0),
+        true,
+    ) {
+        return Err(GridPaperComputeFailure::SubmittedIncomplete(
+            "gridpaper-static-base-copy-incomplete",
+        ));
+    }
+    let geometry_rects = base_stats.geometry_rects;
+    let geometry_submits = base_stats.geometry_submits.saturating_add(1);
     let geometry_finished_ns = crate::chronos::monotonic_nanos();
 
     let coverage_layers = page
         .layers
         .iter()
+        .filter(|layer| instance_program_for_layer(layer, text_animations).is_some())
         .filter_map(|layer| {
-            let coverage = layer.coverage.as_ref()?;
-            let origin = coverage.origin_px();
-            let descriptor_index = layer.font_instance_descriptor?;
-            let program = instance_program_for_layer(layer, text_animations);
-            let style = program.map_or(GpuFontInstanceStyle::IDENTITY, |program| program.style);
-            let motion = program.map_or(GpuFontInstanceMotion::NONE, |program| program.motion);
-            let affine = style.scale_permille != 1_000
-                || style.rotation_centidegrees != 0
-                || motion.is_active();
-            let translation = if affine {
-                viewport_translation_px
-            } else {
-                [
-                    libm::roundf(viewport_translation_px[0]),
-                    libm::roundf(viewport_translation_px[1]),
-                ]
-            };
-            let center = [
-                origin[0] as f32 + coverage.full_rect().width as f32 * 0.5 + translation[0],
-                origin[1] as f32 + coverage.full_rect().height as f32 * 0.5 + translation[1],
-            ];
-            let (left, top, right, bottom) = if affine {
-                let base_scale = f32::from(style.scale_permille) / 1_000.0;
-                let max_scale = base_scale
-                    * (1.0 + (f32::from(motion.scale_amplitude_permille) / 1_000.0).abs());
-                let width = coverage.full_rect().width as f32;
-                let height = coverage.full_rect().height as f32;
-                let radius = libm::sqrtf(width * width + height * height) * 0.5 * max_scale;
-                let extent_x =
-                    radius + (f32::from(motion.translation_x_tenths_px) / 10.0).abs() + 2.0;
-                let extent_y =
-                    radius + (f32::from(motion.translation_y_tenths_px) / 10.0).abs() + 2.0;
-                (
-                    libm::floorf(center[0] - extent_x) as i32,
-                    libm::floorf(center[1] - extent_y) as i32,
-                    libm::ceilf(center[0] + extent_x) as i32,
-                    libm::ceilf(center[1] + extent_y) as i32,
-                )
-            } else {
-                let left = origin[0].saturating_add(translation[0] as i32);
-                let top = origin[1].saturating_add(translation[1] as i32);
-                (
-                    left,
-                    top,
-                    left.saturating_add(coverage.full_rect().width as i32),
-                    top.saturating_add(coverage.full_rect().height as i32),
-                )
-            };
-            Some(crate::intel::gpgpu::GpgpuFontInstanceLayer {
-                mask: coverage.surface(),
-                mask_rect: coverage.full_rect(),
-                dst_center: center,
-                dispatch_rect: crate::intel::gpgpu::GpgpuRect::new(
-                    left,
-                    top,
-                    right.saturating_sub(left) as u32,
-                    bottom.saturating_sub(top) as u32,
-                ),
-                descriptor_index,
-            })
+            lower_resident_font_instance_layer(layer, text_animations, viewport_translation_px)
         })
         .collect::<Vec<_>>();
-    let (coverage_submits, coverage_walkers) = if coverage_layers.is_empty() {
+    let (dynamic_coverage_submits, dynamic_coverage_walkers) = if coverage_layers.is_empty() {
         (0, 0)
     } else {
         let descriptor_state = page
@@ -2420,6 +2658,12 @@ fn render_compute_page_frame(
         }
         (coverage.submits, coverage.active_walkers)
     };
+    let coverage_submits = base_stats
+        .coverage_submits
+        .saturating_add(dynamic_coverage_submits);
+    let coverage_walkers = base_stats
+        .coverage_walkers
+        .saturating_add(dynamic_coverage_walkers);
     let coverage_finished_ns = crate::chronos::monotonic_nanos();
 
     if !final_rects.is_empty() {
@@ -2457,6 +2701,7 @@ fn render_compute_page_frame(
     let finished_ns = crate::chronos::monotonic_nanos();
     Ok(GridPaperFrameResult {
         changed_pixels: destination.width as usize * destination.height as usize,
+        static_base_rebuilt,
         frame_us: finished_ns.saturating_sub(frame_started_ns) / 1_000,
         geometry_us: geometry_finished_ns.saturating_sub(frame_started_ns) / 1_000,
         geometry_rects,
@@ -2622,6 +2867,7 @@ fn render_print_page(
         let page = build_resident_page(
             PRIMARY_INSTANCE_ID,
             &snapshot,
+            text_animations,
             print_capture_width,
             print_capture_height,
             ScenePan::ZERO,
@@ -2996,18 +3242,29 @@ fn refresh_runtime(runtime: &mut GridPaperRuntime) {
     let pool_slot = runtime.surface.pool_slot;
     let instance_id = runtime.surface.instance_id;
     if let Some(update) = text_animations_after(pool_slot, runtime.observed_animation_serial) {
+        let topology_changed = runtime
+            .text_animations
+            .iter()
+            .zip(update.programs.iter())
+            .any(|(before, after)| before.is_some() != after.is_some());
         runtime.observed_animation_serial = update.serial;
         runtime.text_animations = update.programs;
         runtime.animation_started_ms = Instant::now().as_millis();
         runtime.animation_dirty = true;
+        if topology_changed && let Some(snapshot) = runtime.latest_snapshot.as_ref() {
+            runtime.pending = None;
+            runtime.queued_snapshot = Some(snapshot.clone());
+        }
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: font-instance-table activated pool_slot={} instance={} serial={} programs={} cadence_ms={} clock=monotonic-elapsed evaluator=c++-igc-gpu descriptor_updates=changed-table-only geometry_uploads=0\n",
+            "gridpaper: font-instance-table activated pool_slot={} instance={} serial={} programs={} cadence_ms={} clock=monotonic-elapsed evaluator=c++-igc-gpu descriptor_updates=changed-table-only topology_changed={} topology_rebuild={} geometry_uploads=0\n",
             pool_slot,
             instance_id,
             runtime.observed_animation_serial,
             runtime.text_animations.iter().flatten().count(),
             SERVICE_PERIOD_MS,
+            topology_changed,
+            topology_changed && runtime.latest_snapshot.is_some(),
         );
     }
 
@@ -3018,6 +3275,7 @@ fn refresh_runtime(runtime: &mut GridPaperRuntime) {
             runtime.pan = clamped_pan;
             if let Some(page) = runtime.active.as_mut() {
                 page.pan = runtime.pan;
+                page.invalidate_static_base();
             }
             runtime.pan_dirty = true;
         }
@@ -3166,9 +3424,11 @@ fn pan_gridpaper(runtime: &mut GridPaperRuntime, event: crate::ui4::Ui4PanEvent)
             ) {
                 if let Some(page) = runtime.pending.as_mut() {
                     page.pan = runtime.pan;
+                    page.invalidate_static_base();
                 }
                 if let Some(page) = runtime.active.as_mut() {
                     page.pan = runtime.pan;
+                    page.invalidate_static_base();
                 }
                 runtime.pan_dirty = true;
             }
@@ -3238,6 +3498,7 @@ fn build_queued_page(runtime: &mut GridPaperRuntime) {
     match build_resident_page(
         runtime.surface.instance_id,
         snapshot,
+        &runtime.text_animations,
         runtime.surface.width,
         runtime.surface.height,
         runtime.pan,
@@ -3317,7 +3578,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     .count();
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} font_path=skrifa-r8-to-c++-igc-instance persistence=coverage+descriptors-retained-until-next-snapshot pan_transform=font-instance-center frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0 resident3d_ui4=disabled\n",
+                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} font_path=skrifa-r8-to-c++-igc-instance persistence=coverage+descriptors+static-rgba-base-retained-until-next-snapshot pan_transform=font-instance-center frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=1 resident3d_ui4=disabled\n",
                     runtime.surface.instance_id,
                     published.serial,
                     published.generation,
@@ -3330,6 +3591,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     result.geometry_submits,
                     result.coverage_submits,
                     result.coverage_walkers,
+                    result.static_base_rebuilt,
                     result.changed_pixels,
                     result.frame_us,
                     result.geometry_us,
@@ -3405,7 +3667,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                 if runtime.hot_pan_frames <= 8 || runtime.hot_pan_frames.is_multiple_of(120) {
                     crate::log_info!(
                         target: "gridpaper";
-                        "gridpaper: hot-pan-frame instance={} seq={} pan_scene={:.3},{:.3} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=compute-dst-translation final_clip=compute-surface frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0\n",
+                        "gridpaper: hot-pan-frame instance={} seq={} pan_scene={:.3},{:.3} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=compute-dst-translation final_clip=compute-surface frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=1\n",
                         runtime.surface.instance_id,
                         runtime.hot_pan_frames,
                         page.pan.x,
@@ -3414,6 +3676,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                         result.geometry_submits,
                         result.coverage_submits,
                         result.coverage_walkers,
+                        result.static_base_rebuilt,
                         result.changed_pixels,
                         result.frame_us,
                         result.geometry_us,
@@ -3430,7 +3693,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
             {
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: text-animation-frame instance={} seq={} animation_serial={} elapsed_ms={} programs={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} geometry_uploads=0 resident_mesh_rebuilds=0 frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0\n",
+                    "gridpaper: text-animation-frame instance={} seq={} animation_serial={} elapsed_ms={} programs={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} geometry_uploads=0 resident_mesh_rebuilds=0 frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=1\n",
                     runtime.surface.instance_id,
                     runtime.animation_frames,
                     runtime.observed_animation_serial,
@@ -3440,6 +3703,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     result.geometry_submits,
                     result.coverage_submits,
                     result.coverage_walkers,
+                    result.static_base_rebuilt,
                     result.changed_pixels,
                     result.frame_us,
                     result.geometry_us,

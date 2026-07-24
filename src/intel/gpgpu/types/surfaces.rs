@@ -122,6 +122,32 @@ impl GpgpuRgba8Surface {
     }
 }
 
+/// Persistent linear RGBA8 storage owned by one GPU-side producer.
+///
+/// Gridpaper uses this for its immutable page base: geometry and static glyph
+/// instances are rendered once, then the C++ copy kernel seeds each scanout
+/// buffer before the animated font instances are composited.
+pub(crate) struct GpgpuOwnedRgba8Surface {
+    surface: GpgpuRgba8Surface,
+    virt: *mut u8,
+}
+
+unsafe impl Send for GpgpuOwnedRgba8Surface {}
+unsafe impl Sync for GpgpuOwnedRgba8Surface {}
+
+impl GpgpuOwnedRgba8Surface {
+    pub(crate) const fn surface(&self) -> GpgpuRgba8Surface {
+        self.surface
+    }
+}
+
+impl Drop for GpgpuOwnedRgba8Surface {
+    fn drop(&mut self) {
+        crate::dma::dealloc(self.virt, self.surface.bytes);
+        recycle_font_coverage_gpu_va(self.surface.gpu, self.surface.bytes);
+    }
+}
+
 /// Decoder-owned Xe media Tile64 NV12 storage mapped read-only by convention into the
 /// compositor's private PPGTT.  The media engine's VA is only an opaque alias;
 /// direct RCS installs its own PTEs for the same physical picture.

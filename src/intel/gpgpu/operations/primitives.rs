@@ -182,6 +182,41 @@ pub(crate) fn allocate_font_coverage_mask(
     Some(GpgpuOwnedMask8Surface { surface, virt })
 }
 
+/// Allocate the persistent RGBA base consumed by the font-instance engine.
+///
+/// It shares the font residency VA allocator so every live page owns a unique
+/// PPGTT range and can be copied without remapping another page's storage.
+pub(crate) fn allocate_font_instance_rgba8_surface(
+    width: u32,
+    height: u32,
+) -> Option<GpgpuOwnedRgba8Surface> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let row_bytes = (width as usize).checked_mul(core::mem::size_of::<u32>())?;
+    let pitch_bytes = u32::try_from(align_up(row_bytes, 64)?).ok()?;
+    let raw_bytes = (pitch_bytes as usize).checked_mul(height as usize)?;
+    let bytes = align_up(raw_bytes, super::WARM_ALIGN)?;
+    if bytes > DIRECT_RCS_FONT_COVERAGE_MASK_MAX_BYTES {
+        return None;
+    }
+    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+    let Some(gpu) = reserve_font_coverage_gpu_va(bytes) else {
+        crate::dma::dealloc(virt, bytes);
+        return None;
+    };
+    unsafe {
+        core::ptr::write_bytes(virt, 0, bytes);
+    }
+    super::dma_flush(virt, bytes);
+    let Some(surface) = GpgpuRgba8Surface::new(phys, gpu, bytes, width, height, pitch_bytes) else {
+        crate::dma::dealloc(virt, bytes);
+        recycle_font_coverage_gpu_va(gpu, bytes);
+        return None;
+    };
+    Some(GpgpuOwnedRgba8Surface { surface, virt })
+}
+
 pub(crate) fn allocate_font_instance_state(capacity: usize) -> Option<GpgpuOwnedFontInstanceState> {
     if capacity == 0 || capacity > GPGPU_FONT_INSTANCE_MAX_LAYERS {
         return None;
