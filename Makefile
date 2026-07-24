@@ -13,12 +13,9 @@ PROVENANCE_LATEST_SOURCE_MANIFEST := $(PROVENANCE_DIR)/latest.source-files.sha25
 PROVENANCE_SCRIPT := tools/provenance_chain.py
 PROVENANCE_CLEAN_FLAG ?= --require-clean
 PROVENANCE_SOURCE_MANIFEST ?= git-commit
+# Normal ISO deployment uses the test rig's ESP32-latched physical reset button.
 START_BAREMETAL_LOG ?= 1
 RELEASE_BUMP_CNT ?= $(if $(CI),0,1)
-# The recovery listener accepts one interactive owner at a time. Keep the
-# developer console opt-in so an ISO build cannot silently claim :4245 and
-# lock out a deliberate connection from another machine.
-START_NET_SHELL_CONSOLE ?= 0
 ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
@@ -76,7 +73,7 @@ QEMU_HOST_TCP_PORT_NET_SHELL ?= 14245
 QEMU_HOST_UDP_PORT_32343 ?= 32343
 QEMU_RUN_ENV = ISO_PATH="$(ISO_PATH)" QEMU_BIN="$(QEMU_BIN)" QEMU_MEMORY="$(QEMU_MEMORY)" QEMU_UEFI_FIRMWARE="$(QEMU_UEFI_FIRMWARE)" QEMU_NVME_IMG="$(NVME_IMG)" QEMU_BRIDGE="$(QEMU_BRIDGE)" QEMU_BRIDGE_HELPER="$(QEMU_BRIDGE_HELPER)" QEMU_HDA_AUDIODEV="$(QEMU_HDA_AUDIODEV)" QEMU_HOST_TCP_PORT_3="$(QEMU_HOST_TCP_PORT_3)" QEMU_HOST_TCP_PORT_4="$(QEMU_HOST_TCP_PORT_4)" QEMU_HOST_TCP_PORT_100="$(QEMU_HOST_TCP_PORT_100)" QEMU_HOST_TCP_PORT_80="$(QEMU_HOST_TCP_PORT_80)" QEMU_HOST_TCP_PORT_54321="$(QEMU_HOST_TCP_PORT_54321)" QEMU_HOST_TCP_PORT_32123="$(QEMU_HOST_TCP_PORT_32123)" QEMU_HOST_TCP_PORT_NET_SHELL="$(QEMU_HOST_TCP_PORT_NET_SHELL)" QEMU_HOST_UDP_PORT_32343="$(QEMU_HOST_UDP_PORT_32343)"
 BAREMETAL_LOG_DRAIN := tools/baremetal-log-drain.sh
-BAREMETAL_REBOOT_HELPER := tools/baremetal-reboot-ack.py
+TESTRIG_PHYSICAL_RESET_HELPER := tools/testrig-physical-reset-button.py
 BAREMETAL_LOG_HOST ?= 192.168.178.94
 BAREMETAL_LOG_PORT ?= 1
 BAREMETAL_LOG_DELAY ?= 15
@@ -85,23 +82,21 @@ BAREMETAL_LOG_DIR ?= bld/baremetal-logs
 BAREMETAL_LOG_SLOTS ?= 3
 BAREMETAL_LOG_WAIT_TIMEOUT ?= 180
 BAREMETAL_BOOT_MARKER ?= [boot] [info] boot: stage=bsp-early
-BAREMETAL_SHELL_HOST ?= $(BAREMETAL_LOG_HOST)
-BAREMETAL_SHELL_PORT ?= 4245
-BAREMETAL_SHELL_COMMAND ?= acpi reboot
-BAREMETAL_SHELL_CONNECT_TIMEOUT ?= 5
-BAREMETAL_SHELL_RESPONSE_TIMEOUT ?= 2
+# Test-rig reset contract: the ESP32 sends the bytes "probe" to host UDP/7777.
+# Replying "ack" to ESP32 UDP/7777 latches its physical reset-button circuit.
+# This hardware button is the normal reboot path; it is not a Shell2 command.
+TESTRIG_PHYSICAL_RESET_BIND_HOST ?= 0.0.0.0
+TESTRIG_PHYSICAL_RESET_PORT ?= 7777
+TESTRIG_PHYSICAL_RESET_RESPONSE_PORT ?= $(TESTRIG_PHYSICAL_RESET_PORT)
+TESTRIG_PHYSICAL_RESET_PROBE_TIMEOUT ?= 30
 BAREMETAL_TFTP_READ_TIMEOUT ?= 240
 BAREMETAL_TFTP_VERIFY ?= 1
 BAREMETAL_TFTP_BOOTFILE ?= $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
 BAREMETAL_TFTP_KERNEL ?= $(ISO_DIR)/TRUEOS.elf
-BAREMETAL_REBOOT_RECEIPT ?= $(ISO_DIR)/baremetal-reboot-receipt.json
+TESTRIG_PHYSICAL_RESET_RECEIPT ?= $(ISO_DIR)/testrig-physical-reset-receipt.json
 EMULATOR_LOG_CAPTURE := tools/emulator-log-capture.sh
 EMULATOR_LOG_DIR ?= bld/emulator-logs
 EMULATOR_LOG_SLOTS ?= 3
-NET_SHELL_CONSOLE_HOST ?= 192.168.178.94
-NET_SHELL_CONSOLE_PORT ?= 4245
-NET_SHELL_CONSOLE_PID := $(ISO_DIR)/net-shell-console.pid
-NET_SHELL_CONSOLE_LOG := $(ISO_DIR)/net-shell-console.log
 
 CARGO_BUILD_FLAGS ?=
 CARGO_GFX_FLAGS =
@@ -150,7 +145,7 @@ LEGACY_OPENCL_C_ISO_PATH := bld/trueos-legacy-opencl-c.iso
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel kernel-cpp-aot kernel-legacy-opencl-c cpp lfm25-cpp lfm25-cpp-verify lfm25-igpu-verify intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-lfm25-q8-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine baremetal-reboot-log net-shell-console iso iso-cpp-aot iso-legacy-opencl-c provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: images empty-libs kernel kernel-cpp-aot kernel-legacy-opencl-c cpp lfm25-cpp lfm25-cpp-verify lfm25-igpu-verify intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-lfm25-q8-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine testrig-physical-reset-log baremetal-reboot-log iso iso-cpp-aot iso-legacy-opencl-c provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -311,7 +306,10 @@ limine:
 	make -C "$(LIMINE_BUILD_DIR)" install; \
 	printf 'ok\n' > "$(LIMINE_INSTALL_STAMP)"
 
-baremetal-reboot-log:
+# Compatibility entry point for older invocations.
+baremetal-reboot-log: testrig-physical-reset-log
+
+testrig-physical-reset-log:
 	@set -eu; \
 	case "$(BAREMETAL_TFTP_VERIFY)" in \
 		0|1) ;; \
@@ -337,33 +335,29 @@ baremetal-reboot-log:
 	TRUEOS_BAREMETAL_LOG_WAIT_TIMEOUT="$(BAREMETAL_LOG_WAIT_TIMEOUT)" \
 	TRUEOS_BAREMETAL_BOOT_MARKER="$(BAREMETAL_BOOT_MARKER)" \
 	"$(BAREMETAL_LOG_DRAIN)" stop; \
-	rm -f -- "$(BAREMETAL_REBOOT_RECEIPT)"; \
+	rm -f -- "$(TESTRIG_PHYSICAL_RESET_RECEIPT)"; \
 	if [ "$(BAREMETAL_TFTP_VERIFY)" = "1" ]; then \
-		python3 "$(BAREMETAL_REBOOT_HELPER)" \
-			--shell-host "$(BAREMETAL_SHELL_HOST)" \
-			--shell-port "$(BAREMETAL_SHELL_PORT)" \
-			--command "$(BAREMETAL_SHELL_COMMAND)" \
-			--connect-timeout "$(BAREMETAL_SHELL_CONNECT_TIMEOUT)" \
-			--response-timeout "$(BAREMETAL_SHELL_RESPONSE_TIMEOUT)" \
+		python3 "$(TESTRIG_PHYSICAL_RESET_HELPER)" \
+			--bind-host "$(TESTRIG_PHYSICAL_RESET_BIND_HOST)" \
+			--listen-port "$(TESTRIG_PHYSICAL_RESET_PORT)" \
+			--response-port "$(TESTRIG_PHYSICAL_RESET_RESPONSE_PORT)" \
+			--probe-timeout "$(TESTRIG_PHYSICAL_RESET_PROBE_TIMEOUT)" \
 			--tftp-timeout "$(BAREMETAL_TFTP_READ_TIMEOUT)" \
-			--repo-root "$(CURDIR)" \
 			--watch "$(BAREMETAL_TFTP_BOOTFILE)=$$bootfile_sha" \
 			--watch "$(BAREMETAL_TFTP_KERNEL)=$$runtime_sha" \
 			--identity "runtime_elf_sha256=$$runtime_sha" \
 			--identity "iso_sha256=$$iso_sha" \
-			--receipt "$(BAREMETAL_REBOOT_RECEIPT)"; \
+			--receipt "$(TESTRIG_PHYSICAL_RESET_RECEIPT)"; \
 	else \
-		echo "baremetal-reboot-log: PXE read verification explicitly disabled (BAREMETAL_TFTP_VERIFY=0)"; \
-		python3 "$(BAREMETAL_REBOOT_HELPER)" \
-			--shell-host "$(BAREMETAL_SHELL_HOST)" \
-			--shell-port "$(BAREMETAL_SHELL_PORT)" \
-			--command "$(BAREMETAL_SHELL_COMMAND)" \
-			--connect-timeout "$(BAREMETAL_SHELL_CONNECT_TIMEOUT)" \
-			--response-timeout "$(BAREMETAL_SHELL_RESPONSE_TIMEOUT)" \
-			--repo-root "$(CURDIR)" \
+		echo "testrig-physical-reset-log: PXE read verification explicitly disabled (BAREMETAL_TFTP_VERIFY=0)"; \
+		python3 "$(TESTRIG_PHYSICAL_RESET_HELPER)" \
+			--bind-host "$(TESTRIG_PHYSICAL_RESET_BIND_HOST)" \
+			--listen-port "$(TESTRIG_PHYSICAL_RESET_PORT)" \
+			--response-port "$(TESTRIG_PHYSICAL_RESET_RESPONSE_PORT)" \
+			--probe-timeout "$(TESTRIG_PHYSICAL_RESET_PROBE_TIMEOUT)" \
 			--identity "runtime_elf_sha256=$$runtime_sha" \
 			--identity "iso_sha256=$$iso_sha" \
-			--receipt "$(BAREMETAL_REBOOT_RECEIPT)"; \
+			--receipt "$(TESTRIG_PHYSICAL_RESET_RECEIPT)"; \
 	fi; \
 	TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" \
 	TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" \
@@ -375,7 +369,7 @@ baremetal-reboot-log:
 	TRUEOS_BAREMETAL_BOOT_MARKER="$(BAREMETAL_BOOT_MARKER)" \
 	TRUEOS_BAREMETAL_EXPECTED_ELF_SHA256="$$runtime_sha" \
 	TRUEOS_BAREMETAL_EXPECTED_ISO_SHA256="$$iso_sha" \
-	TRUEOS_BAREMETAL_REBOOT_RECEIPT="$(BAREMETAL_REBOOT_RECEIPT)" \
+	TRUEOS_TESTRIG_PHYSICAL_RESET_RECEIPT="$(TESTRIG_PHYSICAL_RESET_RECEIPT)" \
 	"$(BAREMETAL_LOG_DRAIN)" start; \
 	TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" \
 	TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" \
@@ -386,26 +380,7 @@ baremetal-reboot-log:
 	TRUEOS_BAREMETAL_LOG_WAIT_TIMEOUT="$(BAREMETAL_LOG_WAIT_TIMEOUT)" \
 	TRUEOS_BAREMETAL_BOOT_MARKER="$(BAREMETAL_BOOT_MARKER)" \
 	"$(BAREMETAL_LOG_DRAIN)" wait; \
-	echo "baremetal-reboot-log: verified runtime_elf_sha256=$$runtime_sha iso_sha256=$$iso_sha receipt=$(BAREMETAL_REBOOT_RECEIPT)"
-
-net-shell-console:
-	@mkdir -p "$(dir $(NET_SHELL_CONSOLE_PID))"
-	@if [ -f "$(NET_SHELL_CONSOLE_PID)" ]; then \
-		old=$$(cat "$(NET_SHELL_CONSOLE_PID)" 2>/dev/null || true); \
-		if [ -n "$$old" ] && kill -0 "$$old" 2>/dev/null; then \
-			kill "$$old" 2>/dev/null || true; \
-			sleep 0.1; \
-			if kill -0 "$$old" 2>/dev/null; then \
-				kill -9 "$$old" 2>/dev/null || true; \
-			fi; \
-		fi; \
-		rm -f "$(NET_SHELL_CONSOLE_PID)"; \
-	fi
-	@: > "$(NET_SHELL_CONSOLE_LOG)"
-	@nohup setsid konsole --separate --title TRUEOS-net-shell -e sh -c \
-		'trap "stty sane 2>/dev/null || true" EXIT; trap "stty sane 2>/dev/null || true; exit 0" INT TERM; stty -echo -icanon cols 200 rows 60; while :; do nc "$$1" "$$2" 2>/dev/null || true; sleep 1; done' \
-		trueos-net-shell "$(NET_SHELL_CONSOLE_HOST)" "$(NET_SHELL_CONSOLE_PORT)" \
-		</dev/null >>"$(NET_SHELL_CONSOLE_LOG)" 2>&1 & echo $$! > "$(NET_SHELL_CONSOLE_PID)"
+	echo "testrig-physical-reset-log: verified runtime_elf_sha256=$$runtime_sha iso_sha256=$$iso_sha receipt=$(TESTRIG_PHYSICAL_RESET_RECEIPT)"
 
 FORCE:
 
@@ -481,15 +456,10 @@ iso: artifacts images limine
 		-o $(ISO_PATH) $(ISO_BOOT_DIR)
 	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT="$(INTEL_GPU_CPP_AOT)" ARTIFACT_DIR="$(ARTIFACT_DIR)" ISO_BOOT_DIR="$(ISO_BOOT_DIR)" ISO_PATH="$(ISO_PATH)" intel-gpu-verify-packaged-copy
 	@case "$(START_BAREMETAL_LOG)" in \
-		1) $(MAKE) --no-print-directory baremetal-reboot-log ;; \
+		1) $(MAKE) --no-print-directory testrig-physical-reset-log ;; \
 		0) echo "iso: skipping baremetal deploy/log verification (START_BAREMETAL_LOG=0)" ;; \
 		*) echo "error: START_BAREMETAL_LOG must be 0 or 1, got '$(START_BAREMETAL_LOG)'" >&2; exit 2 ;; \
 	esac
-	@if [ "$(START_NET_SHELL_CONSOLE)" = "1" ]; then \
-		$(MAKE) --no-print-directory net-shell-console NET_SHELL_CONSOLE_HOST="$(NET_SHELL_CONSOLE_HOST)" NET_SHELL_CONSOLE_PORT="$(NET_SHELL_CONSOLE_PORT)"; \
-	else \
-		echo "iso: skipping net shell console (START_NET_SHELL_CONSOLE=$(START_NET_SHELL_CONSOLE))"; \
-	fi
 
 iso-cpp-aot:
 	@echo "iso-cpp-aot: C++ AOT is the normal Make default; building $(ISO_PATH)"
@@ -610,8 +580,6 @@ dbg: iso
 		wait $$qemu_pid
 
 run: START_BAREMETAL_LOG=0
-run: NET_SHELL_CONSOLE_HOST=127.0.0.1
-run: NET_SHELL_CONSOLE_PORT=$(QEMU_HOST_TCP_PORT_NET_SHELL)
 run: iso
 	@killall -9 qemu-system-x86_64 || true
 	@$(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & qemu_pid=$$!; \

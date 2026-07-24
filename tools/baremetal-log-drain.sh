@@ -16,7 +16,7 @@ wait_timeout="${TRUEOS_BAREMETAL_LOG_WAIT_TIMEOUT:-180}"
 boot_marker="${TRUEOS_BAREMETAL_BOOT_MARKER:-[boot] [info] boot: stage=bsp-early}"
 expected_elf_sha256="${TRUEOS_BAREMETAL_EXPECTED_ELF_SHA256:-unknown}"
 expected_iso_sha256="${TRUEOS_BAREMETAL_EXPECTED_ISO_SHA256:-unknown}"
-reboot_receipt="${TRUEOS_BAREMETAL_REBOOT_RECEIPT:-none}"
+physical_reset_receipt="${TRUEOS_TESTRIG_PHYSICAL_RESET_RECEIPT:-none}"
 
 script_path="$(realpath -m -- "${BASH_SOURCE[0]}")"
 repo_root="$(realpath -m -- "$(dirname "$script_path")/..")"
@@ -369,7 +369,8 @@ start() {
             "$run_id" "$host" "$port" "$(date -Is)"
         printf 'trueos baremetal log drain: expected_runtime_elf_sha256=%s expected_iso_sha256=%s\n' \
             "$expected_elf_sha256" "$expected_iso_sha256"
-        printf 'trueos baremetal log drain: reboot_receipt=%s\n' "$reboot_receipt"
+        printf 'trueos baremetal log drain: testrig_physical_reset_receipt=%s\n' \
+            "$physical_reset_receipt"
     } >> "$log_path"
 
     rm -f -- "$state_file"
