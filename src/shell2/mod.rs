@@ -929,6 +929,21 @@ pub(crate) fn matrix_target_interrupted(target: &MatrixTarget) -> bool {
         != Some(target.interrupt_generation)
 }
 
+pub(crate) fn matrix_targets_same_live_slot(left: &MatrixTarget, right: &MatrixTarget) -> bool {
+    matrix_targets_same_slot_lifetime(left, right)
+        && matrix::live_slot_interrupt_generation(&left.slot_id, left.slot_lifetime_generation)
+            .is_some()
+}
+
+pub(crate) fn matrix_targets_same_slot_lifetime(left: &MatrixTarget, right: &MatrixTarget) -> bool {
+    left.slot_id == right.slot_id && left.slot_lifetime_generation == right.slot_lifetime_generation
+}
+
+pub(crate) fn matrix_target_lifetime_is_live(target: &MatrixTarget) -> bool {
+    matrix::live_slot_interrupt_generation(&target.slot_id, target.slot_lifetime_generation)
+        .is_some()
+}
+
 pub(crate) fn bind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
     matrix::bind_slot_vm(&target.slot_id, vm_id, false);
 }
@@ -942,7 +957,8 @@ pub(crate) fn unbind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
 }
 
 pub(crate) fn set_matrix_target_app_label(target: &MatrixTarget, label: &str) {
-    matrix::set_slot_app_label(&target.slot_id, label);
+    let _ =
+        matrix::set_live_slot_app_label(&target.slot_id, target.slot_lifetime_generation, label);
 }
 
 pub(crate) fn release_matrix_target_vm_reservation(target: &MatrixTarget) {
@@ -1001,11 +1017,13 @@ fn enqueue_transcript_line(io: &dyn ShellIo2, text: &str) {
 }
 
 pub(crate) fn print_matrix_target_line(target: &MatrixTarget, line: &str) {
-    matrix::record_line_in_slot(&target.slot_id, line);
+    let _ =
+        matrix::record_line_in_live_slot(&target.slot_id, target.slot_lifetime_generation, line);
 }
 
 pub(crate) fn print_matrix_target_system_line(target: &MatrixTarget, line: &str) {
-    matrix::record_line_in_slot(&target.slot_id, line);
+    let _ =
+        matrix::record_line_in_live_slot(&target.slot_id, target.slot_lifetime_generation, line);
 }
 
 pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> usize {
@@ -1173,6 +1191,8 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
         .is_some()
     {
         let (freed_id, vm_ids) = matrix::free_slot(submitted);
+        #[cfg(feature = "trueos_lumen")]
+        cmds::lumen::notify_matrix_slot_closed(freed_id.as_str());
         for vm_id in vm_ids {
             match crate::hv::stop(vm_id) {
                 Ok(true) => matrix::record_line_in_default(
@@ -1613,6 +1633,8 @@ fn handle_control_c(
     let active_slot = matrix::active_slot_id(output_mask);
     matrix::record_line_in_slot(&active_slot, "^C");
     let (_, vm_id) = matrix::request_slot_interrupt(&active_slot);
+    #[cfg(feature = "trueos_lumen")]
+    cmds::lumen::notify_matrix_slot_interrupted(active_slot.as_str());
     if let Some(vm_id) = vm_id {
         match crate::hv::stop(vm_id) {
             Ok(true) => {

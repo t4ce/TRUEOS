@@ -226,6 +226,15 @@ fn validate_runtime_artifact(artifact: &[u8]) -> Result<(), String> {
     if chat != expected {
         return Err(format!("pinned chat tokenization mismatch: {chat:?}"));
     }
+    let followup = tokenizer
+        .encode_followup_user_turn("hello how are you")
+        .map_err(|error| format!("runtime followup tokenize failed: {error:?}"))?;
+    let expected_followup = [
+        708, 6, 6_423, 708, 52_572, 1_531, 938, 1_010, 7, 708, 6, 64_015, 708,
+    ];
+    if followup != expected_followup {
+        return Err(format!("pinned followup tokenization mismatch: {followup:?}"));
+    }
     let decoded = tokenizer
         .decode(cases[0].1, true)
         .map_err(|error| format!("runtime detokenize failed: {error:?}"))?;

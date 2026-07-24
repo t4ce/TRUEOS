@@ -342,6 +342,29 @@ impl Lfm25Tokenizer {
         Ok(tokens)
     }
 
+    /// Exact continuation envelope after the preceding assistant terminator
+    /// has been consumed by the same decode session.
+    ///
+    /// Unlike [`Self::encode_user_turn`], this deliberately omits BOS and the
+    /// previous assistant `<|im_end|>` token. The resident caller feeds the
+    /// actual generated terminator first, then this suffix, preserving the
+    /// existing KV/short-convolution state without replaying chat history.
+    pub fn encode_followup_user_turn(&self, prompt: &str) -> Result<Vec<u32>, Error> {
+        let mut tokens = Vec::new();
+        tokens
+            .try_reserve_exact(prompt.len().saturating_add(9))
+            .map_err(|_| Error::Allocation)?;
+        tokens.extend(self.encode("\n")?);
+        tokens.push(self.im_start);
+        tokens.extend(self.encode("user\n")?);
+        tokens.extend(self.encode(prompt)?);
+        tokens.push(self.im_end);
+        tokens.extend(self.encode("\n")?);
+        tokens.push(self.im_start);
+        tokens.extend(self.encode("assistant\n")?);
+        Ok(tokens)
+    }
+
     pub fn decode(&self, tokens: &[u32], skip_special: bool) -> Result<Vec<u8>, Error> {
         let mut output = Vec::new();
         for &token in tokens {

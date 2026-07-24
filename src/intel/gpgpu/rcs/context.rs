@@ -238,7 +238,17 @@ fn direct_rcs_write_lrc_ring_tail(state: DirectRcsState, ring_tail: u32) {
     let ctx_ctl = dwords[DIRECT_RCS_LRC_STATE_OFFSET_DWORDS + LRC_CONTEXT_CONTROL_VALUE_DW];
     dwords[DIRECT_RCS_LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW] = ring_tail;
     dwords[DIRECT_RCS_LRC_STATE_OFFSET_DWORDS + LRC_CONTEXT_CONTROL_VALUE_DW] = ctx_ctl;
-    super::dma_flush(state.context_virt, DIRECT_RCS_CONTEXT_BYTES);
+    // Only these two values were touched. Both live in the first cache line
+    // of the LRC register state; flushing the complete 88 KiB context image on
+    // every four-DWORD ring append needlessly evicted 1,408 cache lines.
+    let first = DIRECT_RCS_LRC_STATE_OFFSET_DWORDS + LRC_CONTEXT_CONTROL_VALUE_DW;
+    let last = DIRECT_RCS_LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW;
+    unsafe {
+        super::dma_flush(
+            state.context_virt.add(first * core::mem::size_of::<u32>()),
+            (last - first + 1) * core::mem::size_of::<u32>(),
+        );
+    }
 }
 
 fn guc_rcs_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {

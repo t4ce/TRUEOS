@@ -579,6 +579,23 @@ pub(crate) fn record_line_in_slot(slot_id: &MatrixSlotId, text: &str) {
     bump_slot_revision(&mut guard, idx);
 }
 
+pub(crate) fn record_line_in_live_slot(
+    slot_id: &MatrixSlotId,
+    lifetime_generation: u64,
+    text: &str,
+) -> bool {
+    let mut guard = state().lock();
+    let Some(idx) = guard.slots.iter().position(|slot| slot.id == *slot_id) else {
+        return false;
+    };
+    if guard.slots[idx].lifetime_generation != lifetime_generation {
+        return false;
+    }
+    push_line(&mut guard.slots[idx], text);
+    bump_slot_revision(&mut guard, idx);
+    true
+}
+
 pub(crate) fn record_user_input(output_mask: u8, text: &str) {
     crate::user_input_record::capture(output_mask, text);
     let mut guard = state().lock();
@@ -739,6 +756,30 @@ pub(crate) fn set_slot_app_label(slot_id: &MatrixSlotId, label: &str) {
         guard.slots[idx].app_label = next;
         bump_slot_revision(&mut guard, idx);
     }
+}
+
+pub(crate) fn set_live_slot_app_label(
+    slot_id: &MatrixSlotId,
+    lifetime_generation: u64,
+    label: &str,
+) -> bool {
+    let mut guard = state().lock();
+    let Some(idx) = guard.slots.iter().position(|slot| slot.id == *slot_id) else {
+        return false;
+    };
+    if guard.slots[idx].lifetime_generation != lifetime_generation {
+        return false;
+    }
+    let next = if label.trim().is_empty() {
+        None
+    } else {
+        Some(AllocString::from(label.trim()))
+    };
+    if guard.slots[idx].app_label != next {
+        guard.slots[idx].app_label = next;
+        bump_slot_revision(&mut guard, idx);
+    }
+    true
 }
 
 pub(crate) fn release_vm_slot_reservation(
