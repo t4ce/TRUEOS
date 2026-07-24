@@ -13,7 +13,7 @@ subscriber-driven kernel service:
    captures the current 2560x1440 logical UI4 D01 composition in memory, takes
    the fixed 1920x1088 rectangle at top-left `(0,0)`, converts straight-alpha
    RGBA to limited-range BT.601 NV12, and hardware-encodes a fresh IDR access
-   unit on each absolute 10 Hz deadline. This test-rig baseline intentionally
+   unit on each absolute 20 Hz deadline. This test-rig baseline intentionally
    performs no scale, aspect correction, or dynamic crop selection. The
    logical capture follows UI4 plane/z order but is not a bit-exact latch of
    the physical scanout and does not include the hardware cursor.
@@ -26,12 +26,12 @@ subscriber-driven kernel service:
    Accepted fragments have no artificial inter-packet delay. The live
    high-water mark is one access unit; no framebuffer or encoded payload is
    written to TRUEOSFS.
-5. After 100 frames (ten seconds), the socket closes and the resident service
+5. After 200 frames (ten seconds), the socket closes and the resident service
    waits for the next subscriber, which receives a fresh session.
 
 There is no software-codec or filesystem fallback in the kernel path. AVC
 playback and encode share VCS0 with frame-level exclusion: decode keeps its
-session reservation, while the 10 Hz encoder may take a bounded turn between
+session reservation, while the 20 Hz encoder may take a bounded turn between
 decode submissions. A transport-mode change resets and reactivates VCS0 before
 the next complete batch. If a decode reservation is already active while the
 boot hardware proof is waiting, the encoder sleeps and keeps retrying; it does

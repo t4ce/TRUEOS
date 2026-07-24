@@ -113,7 +113,7 @@ impl MediaUdpTransport {
 }
 
 /// Wait for one receiver, then generate and send an access unit on absolute
-/// 10 Hz deadlines. Generation is synchronous by design: capture and hardware
+/// `target_hz` deadlines. Generation is synchronous by design: capture and hardware
 /// submission execute on the caller's dedicated background worker, while this
 /// function owns the non-self-referential per-session socket lifetime.
 pub(super) async fn stream_generated_annex_b<F>(

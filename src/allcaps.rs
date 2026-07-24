@@ -28,7 +28,7 @@ pub mod gfx {
 }
 
 pub mod media_encode {
-    pub const REALTIME_HZ: usize = 10;
+    pub const REALTIME_HZ: usize = 20;
     pub const STREAM_MAX_ACCESS_UNIT_BYTES: usize = 4 * 1024 * 1024;
     pub const VALIDATION_SESSION_SECONDS: usize = 10;
     pub const VALIDATION_SESSION_ACCESS_UNITS: usize = REALTIME_HZ * VALIDATION_SESSION_SECONDS;

@@ -100,11 +100,12 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
         .map(|profile| profile.core_kind_name())
         .unwrap_or("unknown");
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: service online carrier=background-worker worker_slot={} worker_kind={} performance_preferred=1 background_slot_min=2 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=ui4-logical-scanout-d01 encode_size={}x{} target_fps=10 backend=gen12-vdenc-mfx output=udp-only live_high_water_cap=1 filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
+        "intel/media-encode: service online carrier=background-worker worker_slot={} worker_kind={} performance_preferred=1 background_slot_min=2 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=ui4-logical-scanout-d01 encode_size={}x{} target_fps={} backend=gen12-vdenc-mfx output=udp-only live_high_water_cap=1 filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
         worker_slot,
         worker_kind,
         ENCODE_WIDTH,
         ENCODE_HEIGHT,
+        crate::allcaps::media_encode::REALTIME_HZ,
         crate::allports::services::MEDIA_ENCODE_UDP_PORT,
         PROBE_START_DELAY_MS,
     );
