@@ -5,10 +5,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "5dc3891f89fd78a481e5fdb775cc40992af5a5cfe488f40a4200d9f383edeb2d",
-      "size_bytes": 22944,
+      "sha256": "b1a721ac1e73fe13dcbb74374d49edbd6c407a7782f00a32eea2a0d6d36e719e",
+      "size_bytes": 23432,
       "type": "relocatable",
-      "ze_info_section_offset": 18496,
+      "ze_info_section_offset": 18984,
       "ze_info_section_size": 3624
     },
     "kernels": [
@@ -200,13 +200,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 3792,
+          "entry_size": 3856,
           "section_alignment": 0,
           "section_name": ".text.lfm25_q8_project_packed",
           "section_offset": 64,
-          "section_size": 3968,
-          "sha256": "76a728a330ed822c7017a9839d5460eb685168715f33435696a30dcbd310e223",
-          "symbol_size": 3792,
+          "section_size": 4032,
+          "sha256": "8c1a70af0e8cfaabcb15d536770568f84cc294893b5d629276aee531023d5d81",
+          "symbol_size": 3856,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -222,10 +222,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 4104,
-      "embedded_section_size": 14320,
-      "sha256": "6f0990d5222b2bf07908e61d11189d2c3ccb3bea479630b4002389008dce96c4",
-      "size_bytes": 14320
+      "embedded_section_offset": 4168,
+      "embedded_section_size": 14740,
+      "sha256": "8753fcd446108571dc8cec3dff29ad9b6703b6beb7a8c0a4e81b34aa77d7baeb",
+      "size_bytes": 14740
     }
   },
   "provenance": {
@@ -429,8 +429,8 @@
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/lfm25_q8_project_packed.clcpp",
-        "sha256": "e555f6fcb57238a75bc4360ded5c34ed5332c80f52cb47e9a7c241de0fdc298f",
-        "size_bytes": 5411
+        "sha256": "1b8c909413318960785fd1433eaf62b42a32b855d83a9e79773bedf43fbe39bc",
+        "size_bytes": 6164
       }
     ],
     "language": "C++ for OpenCL",

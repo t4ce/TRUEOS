@@ -5,6 +5,7 @@ const SPIRIT_VFX_PERIODIC_TRACE_FRAMES: u32 = 60;
 pub(crate) struct SpiritVfxControl {
     pub(crate) revision: u64,
     pub(crate) background_mode: u32,
+    pub(crate) clock_seconds_of_day: u32,
     pub(crate) background_opacity: f32,
     pub(crate) background_scale: f32,
     pub(crate) background_speed: f32,
@@ -162,11 +163,16 @@ fn spirit_vfx_write_control(
         core::ptr::write_volatile(dwords.add(2), frame);
         core::ptr::write_volatile(
             dwords.add(3),
-            matches!(control.background_mode, 2..=10)
+            matches!(control.background_mode, 2..=11)
                 .then_some(control.background_mode)
                 .unwrap_or(0),
         );
-        core::ptr::write_volatile(dwords.add(4), (frame as f32 * (1.0 / 60.0)).to_bits());
+        let background_time_seconds = if control.background_mode == 11 {
+            control.clock_seconds_of_day.min(86_399) as f32
+        } else {
+            frame as f32 * (1.0 / 60.0)
+        };
+        core::ptr::write_volatile(dwords.add(4), background_time_seconds.to_bits());
         core::ptr::write_volatile(
             dwords.add(5),
             spirit_vfx_bounded(control.background_opacity, 0.0, 1.0, 0.0).to_bits(),
@@ -356,7 +362,7 @@ fn submit_spirit_vfx_batch(
     }
     let started_tick = direct_rcs_now_tick();
     let dev = super::claimed_device()?;
-    let background_upload = if matches!(control.background_mode, 2..=10) {
+    let background_upload = if matches!(control.background_mode, 2..=11) {
         Some(upload_spirit_vfx_background_rgba8_kernel()?)
     } else {
         None

@@ -372,6 +372,7 @@ pub(crate) enum SpiritVfxBackgroundEffect {
     BokehField = 8,
     WaterRipples = 9,
     PixelBurst = 10,
+    MagicTimeCircle = 11,
 }
 
 impl SpiritVfxBackgroundEffect {
@@ -387,6 +388,7 @@ impl SpiritVfxBackgroundEffect {
             8 => Some(Self::BokehField),
             9 => Some(Self::WaterRipples),
             10 => Some(Self::PixelBurst),
+            11 => Some(Self::MagicTimeCircle),
             _ => None,
         }
     }
@@ -403,6 +405,7 @@ impl SpiritVfxBackgroundEffect {
             Self::BokehField => "Bokeh field",
             Self::WaterRipples => "Water ripples",
             Self::PixelBurst => "Pixel burst",
+            Self::MagicTimeCircle => "Magic time circle",
         }
     }
 
@@ -419,6 +422,7 @@ impl SpiritVfxBackgroundEffect {
             Self::BokehField => Some(8),
             Self::WaterRipples => Some(9),
             Self::PixelBurst => Some(10),
+            Self::MagicTimeCircle => Some(11),
             Self::Transparent => None,
         }
     }
@@ -454,6 +458,9 @@ impl SpiritVfxBackgroundEffect {
             }
             Self::PixelBurst => {
                 (1.0, SpiritVfxRgb8::rgb(0xB0, 0x6C, 0xFF), SpiritVfxRgb8::rgb(0x5D, 0xEE, 0xFF))
+            }
+            Self::MagicTimeCircle => {
+                (1.0, SpiritVfxRgb8::rgb(0x8D, 0x68, 0xFF), SpiritVfxRgb8::rgb(0x6C, 0xF2, 0xFF))
             }
         }
     }
@@ -992,6 +999,7 @@ pub(crate) fn publish_control_panel_ui_json(json: &str) -> Result<u64, SpiritVfx
 pub(super) struct SpiritVfxGpuSnapshot {
     pub(super) revision: u64,
     pub(super) background_mode: u32,
+    pub(super) clock_seconds_of_day: u32,
     pub(super) opacity: f32,
     pub(super) background_scale: f32,
     pub(super) speed: f32,
@@ -1201,9 +1209,10 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
         background.intensity = 0.5 + (background.intensity - 0.5) * ramp;
         background
     } else if idle_opacity > 0.0 {
-        let (_, bg_color_a, bg_color_b) = SpiritVfxBackgroundEffect::MagicCircle.demo_style();
+        let (_, bg_color_a, bg_color_b) =
+            SpiritVfxBackgroundEffect::MagicTimeCircle.demo_style();
         SpiritVfxAlphaBackground {
-            effect: SpiritVfxBackgroundEffect::MagicCircle,
+            effect: SpiritVfxBackgroundEffect::MagicTimeCircle,
             opacity: idle_opacity,
             scale: SPIRIT_BACKGROUND_PRESENT_SCALE,
             speed: 1.0,
@@ -1229,6 +1238,9 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     SpiritVfxGpuSnapshot {
         revision,
         background_mode: background.effect.artifact_mode().unwrap_or(0),
+        clock_seconds_of_day: crate::chronos::best_effort_unix_time_seconds()
+            .map(|seconds| (seconds % 86_400) as u32)
+            .unwrap_or(0),
         opacity: background.opacity,
         background_scale: SPIRIT_BACKGROUND_PRESENT_SCALE,
         speed: background.speed,

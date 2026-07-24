@@ -86,9 +86,9 @@ enum {
     LILLY_FRAME_PERIOD_MS = 110,
     SPIRIT_TARGET_HZ = 60,
     REPLAY_FIRST_ID = 2,
-    REPLAY_LAST_ID = 10,
+    REPLAY_LAST_ID = 11,
     REPLAY_MODE_COUNT = REPLAY_LAST_ID - REPLAY_FIRST_ID + 1,
-    PANEL_COLUMNS = 3,
+    PANEL_COLUMNS = 5,
     PANEL_ROWS = (REPLAY_MODE_COUNT + PANEL_COLUMNS - 1) / PANEL_COLUMNS,
     PANEL_WIDTH = SPIRIT_SIZE * PANEL_COLUMNS,
     PANEL_HEIGHT = SPIRIT_SIZE * PANEL_ROWS,
@@ -104,6 +104,7 @@ typedef enum {
     REPLAY_BOKEH_FIELD,
     REPLAY_WATER_RIPPLES,
     REPLAY_PIXEL_BURST,
+    REPLAY_MAGIC_TIME_CIRCLE,
 } ReplayMode;
 
 typedef struct {
@@ -123,6 +124,7 @@ static const BackgroundPreset BACKGROUND_PRESETS[REPLAY_MODE_COUNT] = {
     {"bokeh-field", 1.0f, {0xFF, 0x8E, 0xDC}, {0x75, 0xEA, 0xFF}},
     {"water-ripples", 1.0f, {0x4F, 0x8D, 0xFF}, {0x6E, 0xFF, 0xE4}},
     {"pixel-burst", 1.0f, {0xB0, 0x6C, 0xFF}, {0x5D, 0xEE, 0xFF}},
+    {"magic-time-circle", 1.0f, {0x8D, 0x68, 0xFF}, {0x6C, 0xF2, 0xFF}},
 };
 
 typedef struct {
@@ -134,6 +136,8 @@ static const RuntimeControls DEFAULT_RUNTIME_CONTROLS = {
     .speed = 1.0f,
     .intensity = 1.0f,
 };
+
+static const float MAGIC_TIME_STATIC_PREVIEW_SECONDS = 10.0f * 3600.0f + 9.0f * 60.0f + 42.0f;
 
 typedef struct {
     uint32_t width;
@@ -496,6 +500,14 @@ static uint64_t monotonic_nanoseconds(void) {
     return (uint64_t)now.tv_sec * 1000000000ULL + (uint64_t)now.tv_nsec;
 }
 
+static float utc_seconds_of_day(void) {
+    time_t now = time(NULL);
+    if (now < 0) {
+        return 0.0f;
+    }
+    return (float)((uint64_t)now % 86400ULL);
+}
+
 static void sleep_until(uint64_t deadline_ns) {
     uint64_t now_ns = monotonic_nanoseconds();
     if (now_ns >= deadline_ns) {
@@ -730,7 +742,7 @@ static void run_panel(cl_command_queue queue, cl_kernel background_kernel,
     printf("Spirit VFX panel running; press ESC to close\n");
     printf("  asset:    %s (%u frames, %u ms/frame, loop)\n", LILLY_ASSET_KEY,
            LILLY_FRAME_COUNT, LILLY_FRAME_PERIOD_MS);
-    printf("  grid:     retained background IDs 2..10, row-major, three columns\n");
+    printf("  grid:     retained background IDs 2..11, row-major, five columns\n");
     printf("  cadence:  shader %u Hz; asset %.3f Hz\n", SPIRIT_TARGET_HZ,
            1000.0 / LILLY_FRAME_PERIOD_MS);
     printf("  window:   borderless %ux%u ARGB=%d\n", PANEL_WIDTH, PANEL_HEIGHT, panel.argb);
@@ -747,11 +759,12 @@ static void run_panel(cl_command_queue queue, cl_kernel background_kernel,
         size_t cell_pixels = (size_t)SPIRIT_SIZE * SPIRIT_SIZE;
         for (unsigned mode_index = 0; mode_index < REPLAY_MODE_COUNT; ++mode_index) {
             ReplayMode mode = (ReplayMode)(mode_index + REPLAY_FIRST_ID);
+            float mode_time = mode == REPLAY_MAGIC_TIME_CIRCLE
+                ? utc_seconds_of_day()
+                : (float)shader_frame * (1.0f / SPIRIT_TARGET_HZ);
             uint32_t control[CONTROL_DWORDS];
-            fill_control(control, asset->width, asset->height,
-                         (float)shader_frame * (1.0f / SPIRIT_TARGET_HZ), mode, &runtime);
+            fill_control(control, asset->width, asset->height, mode_time, mode, &runtime);
             control[2] = shader_frame;
-            control[4] = float_bits((float)shader_frame * (1.0f / SPIRIT_TARGET_HZ));
             dispatch_spirit_frame(
                 queue, background_kernel, sprite_kernel, control_buffer,
                 source_buffers[source_frame], cursor_buffer, control,
@@ -883,7 +896,10 @@ int main(int argc, char **argv) {
         size_t cell_pixels = (size_t)SPIRIT_SIZE * SPIRIT_SIZE;
         for (unsigned mode_index = 0; mode_index < REPLAY_MODE_COUNT; ++mode_index) {
             ReplayMode mode = (ReplayMode)(mode_index + REPLAY_FIRST_ID);
-            fill_control(control, asset.width, asset.height, time_seconds, mode, &runtime);
+            float mode_time = mode == REPLAY_MAGIC_TIME_CIRCLE
+                ? MAGIC_TIME_STATIC_PREVIEW_SECONDS
+                : time_seconds;
+            fill_control(control, asset.width, asset.height, mode_time, mode, &runtime);
             dispatch_spirit_frame(
                 queue, background_kernel, sprite_kernel, control_buffer, source_buffers[0],
                 cursor_buffer, control, cursor_grid + (size_t)mode_index * cell_pixels);
@@ -900,8 +916,9 @@ int main(int argc, char **argv) {
         }
         printf("\n");
         printf(
-            "  dispatch: nine 256x256 cells, local 16x1, selected GPU programs\n");
+            "  dispatch: ten 256x256 cells, local 16x1, selected GPU programs\n");
         printf("  time:     %.3f s (frame %u at 60 Hz)\n", time_seconds, control[2]);
+        printf("  clock:    10:09:42 UTC (quantized HH/MM/SS preview)\n");
         printf("  output:   %s\n", output_path);
     }
 

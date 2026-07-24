@@ -8,15 +8,15 @@ TRUEOS. It is a GPU replay, not a CPU rewrite:
 2. By default, the host OpenCL compiler consumes the retained
    `spirit_vfx_background_rgba8.cl` and `spirit_vfx_sprite_rgba8.cl` reference
    sources. Environment-selected C++ SPIR-V exercises the production repass.
-3. Every display tick renders the nine selected procedural backgrounds in
-   stable ID order, 2 through 10.
+3. Every display tick renders the ten selected procedural backgrounds in
+   stable ID order, 2 through 11. ID 11 is the C++ `MagicTimeCircle`.
 4. Each cell uses the kernel's `256x256`, local `16x1` dispatch and exact
    32-dword control page.
 5. Shader time advances at Spirit's 60 Hz target while Lilly independently
    advances one asset frame every 110 ms, exactly as recorded in
    `tools/Lilly.catalog`.
-6. One centered, borderless 768x768 ARGB window presents the nine
-   premultiplied cursor surfaces in a three-column grid. Escape or the window
+6. One centered, borderless 1280x512 ARGB window presents the ten
+   premultiplied cursor surfaces in a five-column grid. Escape or the window
    close action exits the complete grid.
 7. Background opacity is fixed at `1.00` and each effect retains its existing
    scale. The only runtime values are the HTML-matched `Speed` and `Intensity`
@@ -34,7 +34,8 @@ From the repository root:
 make -C tools/spirit-vfx-offline run
 ```
 
-A static PNG of the same nine-cell grid remains available for comparisons:
+A static PNG of the same ten-cell grid remains available for comparisons. Its
+`MagicTimeCircle` cell is fixed at `10:09:42 UTC` for reproducible review:
 
 ```sh
 make -C tools/spirit-vfx-offline render TIME=2.25

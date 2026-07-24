@@ -534,6 +534,7 @@ fn submit_spirit_vfx_frame(
     let control = crate::intel::gpgpu::SpiritVfxControl {
         revision: snapshot.revision,
         background_mode: snapshot.background_mode,
+        clock_seconds_of_day: snapshot.clock_seconds_of_day,
         background_opacity: snapshot.opacity,
         background_scale: snapshot.background_scale,
         background_speed: snapshot.speed,

@@ -136,7 +136,7 @@ static inline SpiritCppBackgroundLayer vfx_cpp_background_layer(
     float time,
     float speed)
 {
-    static_assert(Mode >= 2u && Mode <= 10u, "unsupported Spirit background mode");
+    static_assert(Mode >= 2u && Mode <= 11u, "unsupported Spirit background mode");
     const float animated_time = time * speed;
     const float radial_mask = 1.0f - smoothstep(0.34f, 0.57f, radius);
     float detail = 0.0f;
@@ -235,8 +235,8 @@ static inline SpiritCppBackgroundLayer vfx_cpp_background_layer(
             * (1.0f - smoothstep(0.20f, 0.55f, radius));
         detail = caustic * band * 0.54f;
         color_phase = 0.5f + 0.5f * native_cos(angle * 3.0f - animated_time);
-    } else {
-        // Mode 10: smaller counter-phase chips enrich the pixel burst.
+    } else if constexpr (Mode == 10u) {
+        // Smaller counter-phase chips enrich the pixel burst.
         const float angular_cell = floor((angle + VFX_PI) * (48.0f / VFX_TAU));
         const float radial_phase = radius * 17.0f + animated_time * 1.25f;
         const float radial_cell = floor(radial_phase);
@@ -247,6 +247,55 @@ static inline SpiritCppBackgroundLayer vfx_cpp_background_layer(
         detail = chip * smoothstep(0.10f, 0.17f, radius)
             * (1.0f - smoothstep(0.20f, 0.55f, radius)) * 0.72f;
         color_phase = chip_hash;
+    } else {
+        // Mode 11: MagicTimeCircle. The same segmented circle becomes a
+        // clock face without introducing hands that would cross Lilly. UTC
+        // seconds-of-day arrive through the existing exact-f32 time dword.
+        const float whole_second = floor(clamp(time, 0.0f, 86399.0f));
+        const float hour_index = floor(whole_second * (1.0f / 3600.0f));
+        const float minute_index = floor(whole_second * (1.0f / 60.0f))
+            - hour_index * 60.0f;
+        const float second_index = whole_second
+            - floor(whole_second * (1.0f / 60.0f)) * 60.0f;
+        // Zero is twelve o'clock and positive turns advance clockwise in the
+        // cursor's top-left-origin coordinate system.
+        const float clock_turn = vfx_fract(
+            (angle + 0.5f * VFX_PI) * (1.0f / VFX_TAU) + 1.0f);
+        const float hour_turn = vfx_fract(hour_index * (1.0f / 12.0f));
+        const float minute_turn = minute_index * (1.0f / 60.0f);
+        const float second_turn = second_index * (1.0f / 60.0f);
+        const float hour_delta = fabs(
+            vfx_fract(clock_turn - hour_turn + 0.5f) - 0.5f);
+        const float minute_delta = fabs(
+            vfx_fract(clock_turn - minute_turn + 0.5f) - 0.5f);
+        const float second_delta = fabs(
+            vfx_fract(clock_turn - second_turn + 0.5f) - 0.5f);
+
+        // Large inner HH, smaller middle MM, and a thin outer seconds segment.
+        // Each selector is quantized before any pixel math, so the outer mark
+        // advances once per wall-clock second instead of sweeping at 60 Hz.
+        const float hour_segment =
+            (1.0f - smoothstep(0.020f, 0.032f, hour_delta))
+            * (1.0f - smoothstep(0.028f, 0.041f, fabs(radius - 0.205f)));
+        const float minute_segment =
+            (1.0f - smoothstep(0.007f, 0.014f, minute_delta))
+            * (1.0f - smoothstep(0.017f, 0.027f, fabs(radius - 0.282f)));
+        const float second_segment =
+            (1.0f - smoothstep(0.0035f, 0.0075f, second_delta))
+            * (1.0f - smoothstep(0.011f, 0.019f, fabs(radius - 0.365f)));
+
+        detail = hour_segment * 0.78f
+            + minute_segment * 0.86f
+            + second_segment;
+        const float indicator_sum =
+            hour_segment + minute_segment + second_segment;
+        color_phase = indicator_sum > 0.0f
+            ? vfx_clamp01(
+                (hour_segment * 0.15f
+                    + minute_segment * 0.62f
+                    + second_segment)
+                / indicator_sum)
+            : 0.5f;
     }
     return SpiritCppBackgroundLayer {
         clamp(detail, 0.0f, 0.9f),
@@ -273,6 +322,7 @@ static inline SpiritCppBackgroundLayer vfx_cpp_background_dispatch(
         case 8u: return vfx_cpp_background_layer<8u>(uv, point, radius, angle, time, speed);
         case 9u: return vfx_cpp_background_layer<9u>(uv, point, radius, angle, time, speed);
         case 10u: return vfx_cpp_background_layer<10u>(uv, point, radius, angle, time, speed);
+        case 11u: return vfx_cpp_background_layer<11u>(uv, point, radius, angle, time, speed);
         default: return SpiritCppBackgroundLayer { 0.0f, 0.5f };
     }
 }
@@ -355,6 +405,30 @@ __kernel void spirit_vfx_background_rgba8(
             vfx_hash21f((float2)(glyph_cell, floor(animated_time * 0.4f))))
             * native_exp(-fabs(radius - 0.205f) * 90.0f) * 0.6f;
         alpha = (ring1 + ring2 + spokes * 0.65f + ticks * 0.55f + glyph)
+            * intensity;
+        color_mix = 0.5f + 0.5f * native_sin(angle * 4.0f + radius * 20.0f);
+    } else if (background_id == 11u) {
+        // C++ MagicTimeCircle base: preserve Magic circle's rings and radial
+        // grammar, but replace its freely rotating 48-tick belt with a stable
+        // twelve-hour / sixty-minute clock face. The selected HH/MM/SS
+        // segments are added by the C++-specialized layer above.
+        float ring1 = native_exp(-fabs(radius - 0.32f) * 130.0f);
+        float ring2 = native_exp(-fabs(radius - 0.24f) * 160.0f) * 0.7f;
+        float hour_ticks = vfx_powi(
+            0.5f + 0.5f * native_cos((angle + 0.5f * VFX_PI) * 12.0f),
+            34u)
+            * native_exp(-fabs(radius - 0.235f) * 52.0f);
+        float minute_ticks = vfx_powi(
+            0.5f + 0.5f * native_cos((angle + 0.5f * VFX_PI) * 60.0f),
+            52u)
+            * native_exp(-fabs(radius - 0.325f) * 68.0f);
+        float spokes = vfx_powi(
+            0.5f + 0.5f * native_cos((angle + 0.5f * VFX_PI) * 12.0f),
+            28u)
+            * smoothstep(0.12f, 0.18f, radius)
+            * (1.0f - smoothstep(0.30f, 0.37f, radius));
+        alpha = (ring1 + ring2 + spokes * 0.42f
+                + hour_ticks * 0.52f + minute_ticks * 0.38f)
             * intensity;
         color_mix = 0.5f + 0.5f * native_sin(angle * 4.0f + radius * 20.0f);
     } else if (background_id == 4u) {

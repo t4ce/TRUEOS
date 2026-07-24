@@ -296,7 +296,7 @@ fn format_hash(hash: [u8; 32]) -> String {
 fn print_spirit_list(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "cpp spirit backgrounds: 0=transparent 2=energy-ring 3=magic-circle 4=nebula-smoke 5=cyber-grid 6=portal-vortex 7=speed-lines 8=bokeh-field 9=water-ripples 10=pixel-burst",
+        "cpp spirit backgrounds: 0=transparent 2=energy-ring 3=magic-circle 4=nebula-smoke 5=cyber-grid 6=portal-vortex 7=speed-lines 8=bokeh-field 9=water-ripples 10=pixel-burst 11=magic-time-circle",
     );
     print_shell_line(
         io,
@@ -308,7 +308,7 @@ fn print_spirit_list(io: &'static dyn ShellBackend2) {
     );
     print_shell_line(
         io,
-        "cpp spirit example: \"cpp spirit show 3 9\" = magic-circle + electric-arc",
+        "cpp spirit examples: \"cpp spirit show 3 9\" = magic-circle + electric-arc; \"cpp spirit show 11 1\" = UTC magic-time-circle + aura-bloom",
     );
 }
 

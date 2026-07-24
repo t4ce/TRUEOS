@@ -9,10 +9,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "de5f6c0837da5d7d0fc52e2a5a97acbdc652d02caf6d853303128d7c562ee848",
-      "size_bytes": 98384,
+      "sha256": "a8a778108c0d86d9d134fdddc2441910317b1b8a39404da67bce02ba2b34c355",
+      "size_bytes": 108600,
       "type": "relocatable",
-      "ze_info_section_offset": 95344,
+      "ze_info_section_offset": 105560,
       "ze_info_section_size": 2205
     },
     "kernels": [
@@ -130,13 +130,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 32320,
+          "entry_size": 34648,
           "section_alignment": 0,
           "section_name": ".text.spirit_vfx_background_rgba8",
           "section_offset": 64,
-          "section_size": 32448,
-          "sha256": "64da2740fc38a5dcbb182e1427063b4eacfa255222e811bcf75f06eb093cc503",
-          "symbol_size": 32320,
+          "section_size": 34816,
+          "sha256": "09414e6f5c5dedc6b1901469ec998e736926f32537df6a61d77a30f5b50bdbb1",
+          "symbol_size": 34648,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -152,10 +152,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 32584,
-      "embedded_section_size": 62684,
-      "sha256": "ecaf034ac2db037db071bdbdb3e027d8bd465c8f1047f3d6c3aaeeb52fffcbca",
-      "size_bytes": 62684
+      "embedded_section_offset": 34952,
+      "embedded_section_size": 70536,
+      "sha256": "240b3795dd78b684a12937cd350f1fc7a0da5188c6957640d30aaf4e66912717",
+      "size_bytes": 70536
     }
   },
   "provenance": {
@@ -359,8 +359,8 @@
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_background_rgba8.cl",
-        "sha256": "cb1562a192a757d9ebfe8938384faefb1aee4246d9b6e71bdef921b3b21944c0",
-        "size_bytes": 20591
+        "sha256": "917cdd42f0ac907096fd009ae88272113e7d6de1b5e06af334af0a6532b4ea0c",
+        "size_bytes": 24531
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_background_rgba8.clcpp",

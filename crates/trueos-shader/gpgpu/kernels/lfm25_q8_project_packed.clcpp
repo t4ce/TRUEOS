@@ -2,18 +2,27 @@
 //
 // This is the first graph-native model layout, deliberately specialized to
 // the sealed 350M model.  Sixteen adjacent rows are transposed together for
-// each 32-value Q8 block:
+// each pair of 32-value Q8 blocks:
 //
-//   [16 binary16 scales][word 0 for rows 0..15] ... [word 7 for rows 0..15]
+//   [block 0: 16 binary16 scales]
+//   [block 1: 16 binary16 scales]
+//   [block 0: word 0 for rows 0..15] ... [word 7 for rows 0..15]
+//   [block 1: word 0 for rows 0..15] ... [word 7 for rows 0..15]
 //
-// The tile remains exactly 16 * 34 = 544 bytes, so every tensor keeps its
-// sealed byte offset and extent.  A SIMD16 work-group reads one coalesced
-// signed-int8 dword per lane and uses eight integer dot products per block.
+// The pair is exactly 2 * 16 * 34 = 1088 bytes (seventeen cache lines), so
+// every tensor keeps its sealed byte offset and extent while every SIMD16
+// weight-vector load begins on a 64-byte boundary.  A SIMD16 work-group reads
+// one coalesced signed-int8 dword per lane and uses eight integer dot products
+// per block.
 //
-// Activations use a graph-native 36-byte block: binary16 scale, binary16
-// padding, then eight packed signed-int8 dwords.  The padding removes every
-// unaligned activation load and is also the ABI the future GPU quantizer will
-// produce directly.
+// Activations use a split graph-native layout:
+//
+//   uint scale_slot[blocks];
+//   uint qwords[blocks][8];
+//
+// It remains 36 bytes per block, but the qword region starts on a 64-byte
+// boundary for both admitted column counts.  This is also the ABI the future
+// GPU quantizer will produce directly.
 
 #include "include/trueos_clcpp.hpp"
 
@@ -24,10 +33,15 @@ inline constexpr uint ffn = 4608u;
 inline constexpr uint vocabulary = 65536u;
 inline constexpr uint q8_values = 32u;
 inline constexpr uint rows_per_tile = 16u;
-inline constexpr uint scale_words_per_tile = 8u;
 inline constexpr uint dot_words_per_block = 8u;
-inline constexpr uint packed_tile_words = 136u;       // 544 bytes
-inline constexpr uint activation_block_words = 9u;   // 36 bytes
+inline constexpr uint scale_words_per_block = 8u;
+inline constexpr uint blocks_per_pair = 2u;
+inline constexpr uint scale_words_per_pair =
+    scale_words_per_block * blocks_per_pair;
+inline constexpr uint weight_words_per_block =
+    dot_words_per_block * rows_per_tile;
+inline constexpr uint packed_pair_words =
+    scale_words_per_pair + blocks_per_pair * weight_words_per_block; // 1088 B
 
 __attribute__((always_inline)) inline bool admitted_shape(
     uint columns,
@@ -69,6 +83,7 @@ __kernel void lfm25_q8_project_packed(
     const uint lane = row & (rows_per_tile - 1u);
     const uint row_tile = row / rows_per_tile;
     const uint blocks_per_row = columns / q8_values;
+    const uint pairs_per_row = blocks_per_row / blocks_per_pair;
     const uint tensor_word_offset = weight_offset >> 2u;
     float sum0 = 0.0f;
     float sum1 = 0.0f;
@@ -80,24 +95,32 @@ __kernel void lfm25_q8_project_packed(
     float sum7 = 0.0f;
 
     for (uint block = 0u; block < blocks_per_row; ++block) {
-        const uint tile_block =
+        const uint block_in_pair = block & (blocks_per_pair - 1u);
+        const uint pair =
             tensor_word_offset
-            + (row_tile * blocks_per_row + block) * packed_tile_words;
-        const uint scale_word = weights[tile_block + (lane >> 1u)];
+            + (row_tile * pairs_per_row + block / blocks_per_pair)
+                * packed_pair_words;
+        const uint scale_word = weights[
+            pair
+            + block_in_pair * scale_words_per_block
+            + (lane >> 1u)];
         const uint scale_shift = (lane & 1u) << 4u;
         const ushort weight_scale_bits =
             static_cast<ushort>((scale_word >> scale_shift) & 0xffffu);
 
-        const uint activation_block = block * activation_block_words;
         const ushort activation_scale_bits =
-            static_cast<ushort>(activation[activation_block] & 0xffffu);
+            static_cast<ushort>(activation[block] & 0xffffu);
         const float scale =
             binary16_to_float(weight_scale_bits)
             * binary16_to_float(activation_scale_bits);
 
         const uint weight_words =
-            tile_block + scale_words_per_tile + lane;
-        const uint activation_words = activation_block + 1u;
+            pair
+            + scale_words_per_pair
+            + block_in_pair * weight_words_per_block
+            + lane;
+        const uint activation_words =
+            blocks_per_row + block * dot_words_per_block;
         const int dot0 = dot_4x8packed_ss_int(
             weights[weight_words + 0u * rows_per_tile],
             activation[activation_words + 0u]);
