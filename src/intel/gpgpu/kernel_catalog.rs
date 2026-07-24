@@ -64,6 +64,11 @@ pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/cpp_audio_visualizer_rgba8.clcpp");
 pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_SOURCE_PATH: &str =
     "crates/trueos-shader/gpgpu/kernels/cpp_audio_visualizer_rgba8.clcpp";
+pub(crate) const FONT_INSTANCE_RGBA8_KERNEL_NAME: &str = "font_instance_rgba8";
+pub(crate) const FONT_INSTANCE_RGBA8_OPENCL_SOURCE: &str =
+    include_str!("../../../crates/trueos-shader/gpgpu/kernels/font_instance_rgba8.clcpp");
+pub(crate) const FONT_INSTANCE_RGBA8_SOURCE_PATH: &str =
+    "crates/trueos-shader/gpgpu/kernels/font_instance_rgba8.clcpp";
 pub(crate) const LFM25_Q8_PROJECT_KERNEL_NAME: &str = "lfm25_q8_project";
 pub(crate) const LFM25_Q8_PROJECT_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/lfm25_q8_project.clcpp");
@@ -121,6 +126,7 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some(PIXEL_PLASMA_RGBA8_OPENCL_SOURCE),
         CPP_DEMO_RGBA8_KERNEL_NAME => Some(CPP_DEMO_RGBA8_OPENCL_SOURCE),
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(CPP_AUDIO_VISUALIZER_RGBA8_OPENCL_SOURCE),
+        FONT_INSTANCE_RGBA8_KERNEL_NAME => Some(FONT_INSTANCE_RGBA8_OPENCL_SOURCE),
         LFM25_Q8_PROJECT_KERNEL_NAME => Some(LFM25_Q8_PROJECT_OPENCL_SOURCE),
         LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => Some(LFM25_Q8_PROJECT_PACKED_OPENCL_SOURCE),
         FONT_OUTLINE_MESH_KERNEL_NAME => Some(FONT_OUTLINE_MESH_OPENCL_SOURCE),
@@ -170,6 +176,7 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/pixel_plasma_rgba8.cl"),
         CPP_DEMO_RGBA8_KERNEL_NAME => Some(CPP_DEMO_RGBA8_SOURCE_PATH),
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(CPP_AUDIO_VISUALIZER_RGBA8_SOURCE_PATH),
+        FONT_INSTANCE_RGBA8_KERNEL_NAME => Some(FONT_INSTANCE_RGBA8_SOURCE_PATH),
         LFM25_Q8_PROJECT_KERNEL_NAME => Some(LFM25_Q8_PROJECT_SOURCE_PATH),
         LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => Some(LFM25_Q8_PROJECT_PACKED_SOURCE_PATH),
         FONT_OUTLINE_MESH_KERNEL_NAME => Some("src/intel/gpgpu/kernels/font_outline_mesh.cl"),
@@ -398,6 +405,55 @@ const _: () = {
     assert!(contract.bindings[1].arg_index == 1);
     assert!(contract.bindings[1].bti == 1);
     assert!(contract.payload_args.len() == 8);
+};
+include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/font_instance_rgba8.contract.rs"
+);
+pub(crate) const FONT_INSTANCE_RGBA8_ADLS_BIN: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/font_instance_rgba8.bin"
+);
+pub(crate) const FONT_INSTANCE_RGBA8_ADLS_SPV: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/font_instance_rgba8.spv"
+);
+pub(crate) const FONT_INSTANCE_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
+    FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
+const _: () = assert!(matches!(
+    FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(),
+    Ok(())
+));
+const _: () = assert!(FONT_INSTANCE_RGBA8_ADLS_BIN.len() == 69_224);
+const _: () = {
+    let contract = FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT;
+    assert!(contract.target.pci_device_ids.len() == 1);
+    assert!(contract.target.pci_device_ids[0] == 0x4680);
+    assert!(contract.target.revision_min == 0x0C);
+    assert!(contract.target.revision_max == 0x0C);
+    assert!(contract.entry_offset == 64);
+    assert!(contract.simd_width == 16);
+    assert!(contract.grf_count == 128);
+    assert!(contract.scratch_bytes == 0);
+    assert!(contract.slm_bytes == 0);
+    assert!(contract.cross_thread_data_bytes == 128);
+    assert!(contract.per_thread_data_bytes == 96);
+    assert!(contract.bindings.len() == 3);
+    assert!(contract.bindings[0].arg_index == 0 && contract.bindings[0].bti == 0);
+    assert!(contract.bindings[1].arg_index == 1 && contract.bindings[1].bti == 1);
+    assert!(contract.bindings[2].arg_index == 2 && contract.bindings[2].bti == 2);
+    assert!(contract.payload_args.len() == 11);
+    assert!(contract.payload_args[0].offset_bytes == 48);
+    assert!(contract.payload_args[1].offset_bytes == 56);
+    assert!(contract.payload_args[2].offset_bytes == 64);
+    let mut scalar = 3;
+    while scalar < contract.payload_args.len() {
+        assert!(contract.payload_args[scalar].arg_index as usize == scalar);
+        assert!(contract.payload_args[scalar].offset_bytes == 60 + scalar as u32 * 4);
+        assert!(contract.payload_args[scalar].size_bytes == 4);
+        assert!(matches!(
+            contract.payload_args[scalar].kind,
+            GpgpuArtifactArgKind::ByValue
+        ));
+        scalar += 1;
+    }
 };
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lfm25_q8_project.contract.rs"

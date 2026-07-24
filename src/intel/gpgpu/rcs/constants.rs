@@ -22,6 +22,7 @@ const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU: u64 = 0x0D43_0000;
 // The C++ background is larger than its OpenCL C ABI reference. Give both
 // Spirit images dedicated, non-overlapping instruction windows.
 const SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU: u64 = 0x0D45_0000;
+const FONT_INSTANCE_RGBA8_ADLS_GPU: u64 = 0x0D50_0000;
 // The C++ Spirit sprite image extends through 0x0D4F_xxxx. Keep the standalone
 // demo comfortably outside Spirit's shared instruction-base window.
 const CPP_DEMO_RGBA8_ADLS_GPU: u64 = 0x0D60_0000;
@@ -35,6 +36,10 @@ const _: () = {
     );
     assert!(
         SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU + SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN.len() as u64
+            <= FONT_INSTANCE_RGBA8_ADLS_GPU
+    );
+    assert!(
+        FONT_INSTANCE_RGBA8_ADLS_GPU + FONT_INSTANCE_RGBA8_ADLS_BIN.len() as u64
             <= CPP_DEMO_RGBA8_ADLS_GPU
     );
     assert!(

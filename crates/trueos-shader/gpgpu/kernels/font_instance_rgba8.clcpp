@@ -1,0 +1,360 @@
+// TRUEOS persistent font-instance compositor.
+//
+// Skrifa outline interpretation and the analytical R8 coverage build happen
+// once. This C++ for OpenCL kernel owns the volatile presentation layer:
+// inverse affine sampling, foreground/background source-over, CSS-like color
+// keyframes, and bounded sine animation. The descriptor array is persistent
+// GPU-visible state; a frame changes only time and the scene-space center.
+
+#include "include/trueos_clcpp.hpp"
+
+namespace trueos::gpgpu::font_instance {
+
+#define TRUEOS_FONT_INSTANCE_INLINE __attribute__((always_inline)) inline
+
+inline constexpr uint descriptor_magic = 0x31495446u; // "FTI1"
+
+inline constexpr uint flag_enabled = 1u << 0;
+inline constexpr uint flag_background = 1u << 1;
+inline constexpr uint flag_color_animation = 1u << 2;
+inline constexpr uint flag_timing_sine = 1u << 3;
+inline constexpr uint flag_iteration_shift = 4u;
+inline constexpr uint flag_iteration_mask = 3u << flag_iteration_shift;
+inline constexpr uint flag_channels_shift = 8u;
+inline constexpr uint flag_channels_mask = 15u << flag_channels_shift;
+inline constexpr uint flag_frame_count_shift = 16u;
+inline constexpr uint flag_frame_count_mask = 15u << flag_frame_count_shift;
+
+inline constexpr uint iteration_once = 0u;
+inline constexpr uint iteration_loop = 1u;
+inline constexpr uint iteration_alternate = 2u;
+
+inline constexpr uint channel_red = 1u << 0;
+inline constexpr uint channel_green = 1u << 1;
+inline constexpr uint channel_blue = 1u << 2;
+inline constexpr uint channel_alpha = 1u << 3;
+
+inline constexpr uint field_magic = 0u;
+inline constexpr uint field_flags = 1u;
+inline constexpr uint field_mask_pitch = 2u;
+inline constexpr uint field_mask_x = 3u;
+inline constexpr uint field_mask_y = 4u;
+inline constexpr uint field_mask_width = 5u;
+inline constexpr uint field_mask_height = 6u;
+inline constexpr uint field_base_scale = 7u;
+inline constexpr uint field_base_rotation = 8u;
+inline constexpr uint field_base_opacity = 9u;
+inline constexpr uint field_foreground_rgba = 10u;
+inline constexpr uint field_background_rgba = 11u;
+inline constexpr uint field_color_duration = 12u;
+inline constexpr uint field_motion_period = 13u;
+inline constexpr uint field_motion_phase = 14u;
+inline constexpr uint field_rotation_amplitude = 15u;
+inline constexpr uint field_scale_amplitude = 16u;
+inline constexpr uint field_opacity_amplitude = 17u;
+inline constexpr uint field_translation_x_amplitude = 18u;
+inline constexpr uint field_translation_y_amplitude = 19u;
+inline constexpr uint field_keyframes = 32u;
+
+TRUEOS_FONT_INSTANCE_INLINE float finite_or(float value, float fallback)
+{
+    return isfinite(value) ? value : fallback;
+}
+
+TRUEOS_FONT_INSTANCE_INLINE float saturate(float value)
+{
+    return clamp(value, 0.0f, 1.0f);
+}
+
+TRUEOS_FONT_INSTANCE_INLINE uint div255(uint value)
+{
+    return (value + 127u) / 255u;
+}
+
+TRUEOS_FONT_INSTANCE_INLINE uint rgba_component(uint rgba, uint shift)
+{
+    return (rgba >> shift) & 0xFFu;
+}
+
+TRUEOS_FONT_INSTANCE_INLINE uint replace_component(uint rgba, uint shift, uint value)
+{
+    return (rgba & ~(0xFFu << shift)) | ((value & 0xFFu) << shift);
+}
+
+TRUEOS_FONT_INSTANCE_INLINE uint interpolate_component(uint from, uint to, float progress)
+{
+    const float value =
+        static_cast<float>(from)
+        + (static_cast<float>(to) - static_cast<float>(from)) * saturate(progress);
+    return static_cast<uint>(clamp(value + 0.5f, 0.0f, 255.0f));
+}
+
+TRUEOS_FONT_INSTANCE_INLINE float animation_progress(
+    float time_seconds,
+    float duration_seconds,
+    uint iteration)
+{
+    const float duration = fmax(finite_or(duration_seconds, 1.0f), 0.001f);
+    const float elapsed = fmax(finite_or(time_seconds, 0.0f), 0.0f);
+    if (iteration == iteration_once) {
+        return saturate(elapsed / duration);
+    }
+    const float cycle_position = elapsed / duration;
+    const float within = cycle_position - floor(cycle_position);
+    if (iteration == iteration_alternate) {
+        const uint cycle = static_cast<uint>(floor(cycle_position));
+        return (cycle & 1u) == 0u ? within : 1.0f - within;
+    }
+    return within;
+}
+
+template <uint MaximumFrames>
+TRUEOS_FONT_INSTANCE_INLINE uint sample_color(
+    __global const uint *descriptor,
+    uint flags,
+    float time_seconds)
+{
+    const uint fallback = descriptor[field_foreground_rgba];
+    if ((flags & flag_color_animation) == 0u) {
+        return fallback;
+    }
+
+    const uint frame_count =
+        clamp((flags & flag_frame_count_mask) >> flag_frame_count_shift, 2u, MaximumFrames);
+    const uint channels = (flags & flag_channels_mask) >> flag_channels_shift;
+    const uint iteration = (flags & flag_iteration_mask) >> flag_iteration_shift;
+    float progress = animation_progress(
+        time_seconds,
+        as_float(descriptor[field_color_duration]),
+        iteration);
+    const float progress_permille = progress * 1000.0f;
+
+    uint upper = 1u;
+    for (uint index = 2u; index < MaximumFrames; ++index) {
+        if (index < frame_count
+            && progress_permille
+                > static_cast<float>(descriptor[field_keyframes + index * 2u])) {
+            upper = index;
+        }
+    }
+    const uint lower = upper - 1u;
+    const float from_offset =
+        static_cast<float>(descriptor[field_keyframes + lower * 2u]);
+    const float to_offset =
+        static_cast<float>(descriptor[field_keyframes + upper * 2u]);
+    const float span = fmax(to_offset - from_offset, 1.0f);
+    float segment_progress = saturate((progress_permille - from_offset) / span);
+    if ((flags & flag_timing_sine) != 0u) {
+        segment_progress =
+            0.5f - 0.5f * native_cos(3.14159265359f * segment_progress);
+    }
+
+    const uint from = descriptor[field_keyframes + lower * 2u + 1u];
+    const uint to = descriptor[field_keyframes + upper * 2u + 1u];
+    uint result = descriptor[field_keyframes + 1u];
+    if ((channels & channel_red) != 0u) {
+        result = replace_component(
+            result,
+            0u,
+            interpolate_component(
+                rgba_component(from, 0u),
+                rgba_component(to, 0u),
+                segment_progress));
+    }
+    if ((channels & channel_green) != 0u) {
+        result = replace_component(
+            result,
+            8u,
+            interpolate_component(
+                rgba_component(from, 8u),
+                rgba_component(to, 8u),
+                segment_progress));
+    }
+    if ((channels & channel_blue) != 0u) {
+        result = replace_component(
+            result,
+            16u,
+            interpolate_component(
+                rgba_component(from, 16u),
+                rgba_component(to, 16u),
+                segment_progress));
+    }
+    if ((channels & channel_alpha) != 0u) {
+        result = replace_component(
+            result,
+            24u,
+            interpolate_component(
+                rgba_component(from, 24u),
+                rgba_component(to, 24u),
+                segment_progress));
+    }
+    return result;
+}
+
+TRUEOS_FONT_INSTANCE_INLINE uint apply_alpha_scale(uint rgba, float alpha_scale)
+{
+    const uint alpha = rgba_component(rgba, 24u);
+    const uint scaled = static_cast<uint>(
+        clamp(static_cast<float>(alpha) * saturate(alpha_scale) + 0.5f, 0.0f, 255.0f));
+    return replace_component(rgba, 24u, scaled);
+}
+
+TRUEOS_FONT_INSTANCE_INLINE uint source_over(uint source_rgba, uint destination_rgba, uint coverage)
+{
+    const uint source_alpha = div255(rgba_component(source_rgba, 24u) * coverage);
+    if (source_alpha == 0u) {
+        return destination_rgba;
+    }
+    const uint inverse = 255u - source_alpha;
+    const uint out_r =
+        div255(rgba_component(source_rgba, 0u) * source_alpha
+            + rgba_component(destination_rgba, 0u) * inverse);
+    const uint out_g =
+        div255(rgba_component(source_rgba, 8u) * source_alpha
+            + rgba_component(destination_rgba, 8u) * inverse);
+    const uint out_b =
+        div255(rgba_component(source_rgba, 16u) * source_alpha
+            + rgba_component(destination_rgba, 16u) * inverse);
+    const uint out_a =
+        source_alpha + div255(rgba_component(destination_rgba, 24u) * inverse);
+    return (out_a << 24) | (out_b << 16) | (out_g << 8) | out_r;
+}
+
+TRUEOS_FONT_INSTANCE_INLINE float sample_mask_bilinear(
+    __global const uint *mask_words,
+    uint pitch,
+    uint origin_x,
+    uint origin_y,
+    uint width,
+    uint height,
+    float2 source_position)
+{
+    const float x =
+        clamp(source_position.x, 0.0f, static_cast<float>(width - 1u));
+    const float y =
+        clamp(source_position.y, 0.0f, static_cast<float>(height - 1u));
+    const uint x0 = static_cast<uint>(floor(x));
+    const uint y0 = static_cast<uint>(floor(y));
+    const uint x1 = min(x0 + 1u, width - 1u);
+    const uint y1 = min(y0 + 1u, height - 1u);
+    const float fx = x - static_cast<float>(x0);
+    const float fy = y - static_cast<float>(y0);
+    const uint offset00 = (origin_y + y0) * pitch + origin_x + x0;
+    const uint offset10 = (origin_y + y0) * pitch + origin_x + x1;
+    const uint offset01 = (origin_y + y1) * pitch + origin_x + x0;
+    const uint offset11 = (origin_y + y1) * pitch + origin_x + x1;
+    const float c00 = static_cast<float>(
+        (mask_words[offset00 >> 2] >> ((offset00 & 3u) * 8u)) & 0xFFu);
+    const float c10 = static_cast<float>(
+        (mask_words[offset10 >> 2] >> ((offset10 & 3u) * 8u)) & 0xFFu);
+    const float c01 = static_cast<float>(
+        (mask_words[offset01 >> 2] >> ((offset01 & 3u) * 8u)) & 0xFFu);
+    const float c11 = static_cast<float>(
+        (mask_words[offset11 >> 2] >> ((offset11 & 3u) * 8u)) & 0xFFu);
+    return mix(mix(c00, c10, fx), mix(c01, c11, fx), fy);
+}
+
+} // namespace trueos::gpgpu::font_instance
+
+using namespace trueos::gpgpu::font_instance;
+
+__attribute__((intel_reqd_sub_group_size(16)))
+__kernel void font_instance_rgba8(
+    __global const uint *mask_words,
+    __global uint *dst_rgba,
+    __global const uint *descriptor,
+    uint dst_pitch_bytes,
+    uint dispatch_x,
+    uint dispatch_y,
+    uint dispatch_width,
+    uint dispatch_height,
+    float dst_center_x,
+    float dst_center_y,
+    float time_seconds)
+{
+    const uint local_x = get_global_id(0);
+    const uint local_y = get_global_id(1);
+    if (local_x >= dispatch_width || local_y >= dispatch_height) {
+        return;
+    }
+
+    const uint flags = descriptor[field_flags];
+    if (descriptor[field_magic] != descriptor_magic || (flags & flag_enabled) == 0u) {
+        return;
+    }
+
+    const uint mask_width = descriptor[field_mask_width];
+    const uint mask_height = descriptor[field_mask_height];
+    if (mask_width == 0u || mask_height == 0u) {
+        return;
+    }
+
+    const float period = fmax(finite_or(as_float(descriptor[field_motion_period]), 1.0f), 0.001f);
+    const float phase = finite_or(as_float(descriptor[field_motion_phase]), 0.0f);
+    const float wave = native_sin(
+        6.28318530718f * (fmax(finite_or(time_seconds, 0.0f), 0.0f) / period + phase));
+    const float scale = fmax(
+        0.125f,
+        finite_or(as_float(descriptor[field_base_scale]), 1.0f)
+            * (1.0f + finite_or(as_float(descriptor[field_scale_amplitude]), 0.0f) * wave));
+    const float rotation =
+        finite_or(as_float(descriptor[field_base_rotation]), 0.0f)
+        + finite_or(as_float(descriptor[field_rotation_amplitude]), 0.0f) * wave;
+    const float opacity = saturate(
+        finite_or(as_float(descriptor[field_base_opacity]), 1.0f)
+        + finite_or(as_float(descriptor[field_opacity_amplitude]), 0.0f) * wave);
+    const float2 translation = (float2)(
+        finite_or(as_float(descriptor[field_translation_x_amplitude]), 0.0f) * wave,
+        finite_or(as_float(descriptor[field_translation_y_amplitude]), 0.0f)
+            * native_cos(6.28318530718f
+                * (fmax(finite_or(time_seconds, 0.0f), 0.0f) / period + phase)));
+
+    const float2 destination = (float2)(
+        static_cast<float>(dispatch_x + local_x) + 0.5f,
+        static_cast<float>(dispatch_y + local_y) + 0.5f);
+    const float2 relative =
+        destination - (float2)(dst_center_x, dst_center_y) - translation;
+    const float sine = native_sin(rotation);
+    const float cosine = native_cos(rotation);
+    const float2 unrotated = (float2)(
+        relative.x * cosine + relative.y * sine,
+        -relative.x * sine + relative.y * cosine);
+    const float2 source_local =
+        unrotated / scale
+        + (float2)(
+            static_cast<float>(mask_width) * 0.5f - 0.5f,
+            static_cast<float>(mask_height) * 0.5f - 0.5f);
+    if (source_local.x < 0.0f
+        || source_local.y < 0.0f
+        || source_local.x > static_cast<float>(mask_width - 1u)
+        || source_local.y > static_cast<float>(mask_height - 1u)) {
+        return;
+    }
+
+    const uint dst_index =
+        (dispatch_y + local_y) * (dst_pitch_bytes >> 2) + dispatch_x + local_x;
+    uint destination_rgba = dst_rgba[dst_index];
+    if ((flags & flag_background) != 0u) {
+        const uint background =
+            apply_alpha_scale(descriptor[field_background_rgba], opacity);
+        destination_rgba = source_over(background, destination_rgba, 255u);
+    }
+
+    const float coverage = sample_mask_bilinear(
+        mask_words,
+        descriptor[field_mask_pitch],
+        descriptor[field_mask_x],
+        descriptor[field_mask_y],
+        mask_width,
+        mask_height,
+        source_local);
+    if (coverage > 0.0f) {
+        const uint foreground =
+            apply_alpha_scale(sample_color<8u>(descriptor, flags, time_seconds), opacity);
+        destination_rgba = source_over(
+            foreground,
+            destination_rgba,
+            static_cast<uint>(clamp(coverage + 0.5f, 0.0f, 255.0f)));
+    }
+    dst_rgba[dst_index] = destination_rgba;
+}

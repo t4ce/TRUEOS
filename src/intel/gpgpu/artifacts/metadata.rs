@@ -212,6 +212,16 @@ pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         Some(&CPP_AUDIO_VISUALIZER_RGBA8_ADLS_CPP_ABI_CONTRACT),
     );
 
+pub(crate) const FONT_INSTANCE_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact::new(
+        FONT_INSTANCE_RGBA8_KERNEL_NAME,
+        FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.target,
+        FONT_INSTANCE_RGBA8_ADLS_BIN,
+        FONT_INSTANCE_RGBA8_ADLS_SPV,
+        FONT_INSTANCE_RGBA8_ADLS_BIN_SHA256,
+        Some(&FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT),
+    );
+
 pub(crate) const LFM25_Q8_PROJECT_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::new(
         LFM25_Q8_PROJECT_KERNEL_NAME,

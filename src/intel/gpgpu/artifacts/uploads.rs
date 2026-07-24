@@ -54,6 +54,10 @@ pub(crate) fn cpp_audio_visualizer_rgba8_upload_status() -> Option<UploadedKerne
     *CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD.lock()
 }
 
+pub(crate) fn font_instance_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
+    *FONT_INSTANCE_RGBA8_UPLOAD.lock()
+}
+
 pub(crate) fn lfm25_q8_project_upload_status() -> Option<UploadedKernelArtifact> {
     *LFM25_Q8_PROJECT_UPLOAD.lock()
 }
@@ -217,6 +221,28 @@ pub(crate) fn upload_glyph_mask_rgba8_kernel() -> Option<UploadedKernelArtifact>
 
     let upload = upload_artifact(dev, GLYPH_MASK_RGBA8_ADLS_ARTIFACT, GLYPH_MASK_RGBA8_ADLS_GPU)?;
     *GLYPH_MASK_RGBA8_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
+pub(crate) fn upload_font_instance_rgba8_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *FONT_INSTANCE_RGBA8_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: font-instance-rgba8 upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload = upload_artifact(
+        dev,
+        FONT_INSTANCE_RGBA8_ADLS_ARTIFACT,
+        FONT_INSTANCE_RGBA8_ADLS_GPU,
+    )?;
+    *FONT_INSTANCE_RGBA8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
@@ -580,6 +606,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     CHART_SINE_RGBA8_KERNEL_NAME,
     PIXEL_PLASMA_RGBA8_KERNEL_NAME,
     CPP_DEMO_RGBA8_KERNEL_NAME,
+    FONT_INSTANCE_RGBA8_KERNEL_NAME,
     LFM25_Q8_PROJECT_KERNEL_NAME,
     LFM25_Q8_PROJECT_PACKED_KERNEL_NAME,
     FONT_OUTLINE_MESH_KERNEL_NAME,
@@ -683,6 +710,11 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: GLYPH_MASK_RGBA8_ADLS_ARTIFACT,
             gpu: GLYPH_MASK_RGBA8_ADLS_GPU,
             upload: &GLYPH_MASK_RGBA8_UPLOAD,
+        }),
+        FONT_INSTANCE_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: FONT_INSTANCE_RGBA8_ADLS_ARTIFACT,
+            gpu: FONT_INSTANCE_RGBA8_ADLS_GPU,
+            upload: &FONT_INSTANCE_RGBA8_UPLOAD,
         }),
         SCENE_AABB_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: SCENE_AABB_ADLS_ARTIFACT,
