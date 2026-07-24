@@ -216,18 +216,17 @@ fn submit_fill_rect_worklist(
     let batch_ok = desc_ppgtt_ok
         && direct_rcs_encode_fill_rect_worklist_batch(state, upload, params, dst.bytes, desc.bytes);
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let observed = if submitted && direct_scanout {
+    // Mapping policy and retirement budget are independent. Retained UI
+    // surfaces deliberately use PAT0/WB, but their scene-sized worklists need
+    // the same bounded 1 s service budget as a direct scanout destination.
+    // Falling back to the smoke-test spin count here can quarantine the shared
+    // producer merely because a larger Gridpaper page takes longer to retire.
+    let observed = if submitted {
         direct_rcs_poll_result_slot_timeout_ms(
             state,
             RECT_WORKLIST_POST_MARKER_SLOT,
             FILL_RECT_WORKLIST_POST_MARKER,
             UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
-        )
-    } else if submitted {
-        direct_rcs_poll_result_slot(
-            state,
-            RECT_WORKLIST_POST_MARKER_SLOT,
-            FILL_RECT_WORKLIST_POST_MARKER,
         )
     } else {
         0

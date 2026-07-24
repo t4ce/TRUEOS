@@ -1821,7 +1821,6 @@ struct ResidentPage {
     static_base_animation_serial: core::sync::atomic::AtomicU64,
     cell_patches: Vec<ResidentCellPatch>,
     cell_patch_serial: u64,
-    cell_patch_font_instance_state: Option<crate::intel::gpgpu::GpgpuOwnedFontInstanceState>,
     static_base_cell_patch_serial: core::sync::atomic::AtomicU64,
 }
 
@@ -1832,14 +1831,6 @@ impl ResidentPage {
     }
 
     fn install_cell_patch(&mut self, mut patch: ResidentCellPatch) -> Result<(), &'static str> {
-        if !patch.coverage.is_empty() && self.cell_patch_font_instance_state.is_none() {
-            self.cell_patch_font_instance_state = crate::intel::gpgpu::allocate_font_instance_state(
-                CELL_PATCH_COVERAGE_BATCH_CAPACITY,
-            );
-            if self.cell_patch_font_instance_state.is_none() {
-                return Err("gridpaper-cell-patch-font-instance-state-allocation");
-            }
-        }
         self.cell_patch_serial = self.cell_patch_serial.wrapping_add(1).max(1);
         patch.serial = self.cell_patch_serial;
         if let Some(existing) = self
@@ -2575,7 +2566,6 @@ fn build_resident_page(
         static_base_animation_serial: core::sync::atomic::AtomicU64::new(u64::MAX),
         cell_patches: Vec::new(),
         cell_patch_serial: 0,
-        cell_patch_font_instance_state: None,
         static_base_cell_patch_serial: core::sync::atomic::AtomicU64::new(0),
     })
 }
@@ -2860,7 +2850,7 @@ fn publish_page(
     if !GPU_COMPUTE_PRESENT_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: live frame path=gpgpu-compute-blueprint-scene-to-ui4-triple size={}x{} pitch={} target_gpu=0x{:X} buffers=3 plane_slot={} cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=1 rectangles={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} cursor_overlay=gpgpu-worklist final_release=compute-pat3-uc+pipe-control-post-sync publish=exact-surface surflive=display-ownership resident3d_ui4=disabled\n",
+            "gridpaper: live frame path=gpgpu-compute-blueprint-scene-to-ui4-triple size={}x{} pitch={} target_gpu=0x{:X} buffers=3 plane_slot={} cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=1 rectangles={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} static_base_cache=pat0-wb present_cache=pat3-uc cursor_overlay=gpgpu-worklist final_release=compute-pat3-uc+pipe-control-post-sync publish=exact-surface surflive=display-ownership resident3d_ui4=disabled\n",
             destination.width,
             destination.height,
             destination.pitch_bytes,
@@ -3028,7 +3018,7 @@ fn fill_static_patch_rects(
     if rects.is_empty() {
         return Ok((0, 0));
     }
-    let rendered = crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(destination, rects);
+    let rendered = crate::intel::gpgpu::fill_solid_rects_rgba8_result(destination, rects);
     match rendered.outcome {
         GpgpuSubmissionOutcome::Complete => Ok((rendered.stats.descs, rendered.stats.submits)),
         GpgpuSubmissionOutcome::SubmittedIncomplete => {
@@ -3117,67 +3107,50 @@ fn apply_resident_cell_patches(
         .iter()
         .flat_map(|patch| patch.coverage.iter())
         .collect::<Vec<_>>();
+    // A cell reaches this incremental path only when it has no transform or
+    // animation. Composite that identity coverage directly: the C++ instance
+    // engine remains authoritative for CSS-like dynamic layers, while plain
+    // typing avoids mutable descriptor indirection entirely.
+    //
+    // Keep each independently addressed mask on one submitted walker. The
+    // scene-level multi-IDD batch can retire its final marker even when an
+    // intermediate descriptor/surface-state transition sampled the wrong mask;
+    // that produced a cursor advance with an empty cell. A single-walker
+    // submission makes retirement exact for each typed glyph and preserves the
+    // retained static base after it succeeds.
     for chunk in coverage.chunks(CELL_PATCH_COVERAGE_BATCH_CAPACITY) {
-        let state = page.cell_patch_font_instance_state.as_ref().ok_or(
-            GridPaperComputeFailure::Unavailable(
-                "gridpaper-cell-patch-font-instance-state-missing",
-            ),
-        )?;
         let mut layers = Vec::with_capacity(chunk.len());
-        for (descriptor_index, coverage) in chunk.iter().enumerate() {
-            let descriptor = crate::intel::gpgpu::GpgpuFontInstanceDescriptor::new(
-                coverage.mask.surface(),
-                coverage.mask.full_rect(),
-                coverage.color_rgba,
-            )
-            .ok_or(GridPaperComputeFailure::Unavailable(
-                "gridpaper-cell-patch-font-instance-descriptor-invalid",
-            ))?;
-            if !state.write(descriptor_index, &descriptor) {
-                return Err(GridPaperComputeFailure::Unavailable(
-                    "gridpaper-cell-patch-font-instance-descriptor-write",
-                ));
-            }
+        for coverage in chunk {
             let origin = coverage.mask.origin_px();
             let left = origin[0].saturating_add(translation[0]);
             let top = origin[1].saturating_add(translation[1]);
-            let rect = coverage.mask.full_rect();
-            layers.push(crate::intel::gpgpu::GpgpuFontInstanceLayer {
+            layers.push(crate::intel::gpgpu::GpgpuGlyphMaskLayer {
                 mask: coverage.mask.surface(),
-                mask_rect: rect,
-                dst_center: [
-                    left as f32 + rect.width as f32 * 0.5,
-                    top as f32 + rect.height as f32 * 0.5,
-                ],
-                dispatch_rect: crate::intel::gpgpu::GpgpuRect::new(
-                    left,
-                    top,
-                    rect.width,
-                    rect.height,
-                ),
-                descriptor_index,
+                mask_rect: coverage.mask.full_rect(),
+                dst_xy: crate::intel::gpgpu::GpgpuPoint::new(left, top),
+                color_rgba: coverage.color_rgba,
             });
         }
-        let result = crate::intel::gpgpu::font_instance_layers_rgba8_2d_mode(
-            layers.as_slice(),
-            state,
-            destination,
-            true,
-            0.0,
-        );
-        if !result.ok {
-            return Err(if result.submitted {
-                GridPaperComputeFailure::SubmittedIncomplete(
-                    "gridpaper-cell-patch-font-instance-incomplete",
-                )
-            } else {
-                GridPaperComputeFailure::Unavailable(
-                    "gridpaper-cell-patch-font-instance-unavailable",
-                )
-            });
+        for layer in &layers {
+            let result = crate::intel::gpgpu::glyph_mask_layers_rgba8_2d_mode(
+                core::slice::from_ref(layer),
+                destination,
+                false,
+            );
+            if !result.ok {
+                return Err(if result.submitted {
+                    GridPaperComputeFailure::SubmittedIncomplete(
+                        "gridpaper-cell-patch-single-walker-incomplete",
+                    )
+                } else {
+                    GridPaperComputeFailure::Unavailable(
+                        "gridpaper-cell-patch-single-walker-unavailable",
+                    )
+                });
+            }
+            stats.coverage_submits = stats.coverage_submits.saturating_add(result.submits);
+            stats.coverage_walkers = stats.coverage_walkers.saturating_add(result.active_walkers);
         }
-        stats.coverage_submits = stats.coverage_submits.saturating_add(result.submits);
-        stats.coverage_walkers = stats.coverage_walkers.saturating_add(result.active_walkers);
     }
     Ok(stats)
 }
@@ -3262,7 +3235,7 @@ fn rebuild_static_font_base(
         rect: destination.bounds(),
         color_rgba: 0,
     };
-    let clear_result = crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(
+    let clear_result = crate::intel::gpgpu::fill_solid_rects_rgba8_result(
         destination,
         core::slice::from_ref(&clear),
     );
@@ -3306,10 +3279,8 @@ fn rebuild_static_font_base(
         if rects.is_empty() {
             continue;
         }
-        let rendered = crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(
-            destination,
-            rects.as_slice(),
-        );
+        let rendered =
+            crate::intel::gpgpu::fill_solid_rects_rgba8_result(destination, rects.as_slice());
         match rendered.outcome {
             GpgpuSubmissionOutcome::Complete => {
                 stats.geometry_rects = stats.geometry_rects.saturating_add(rendered.stats.descs);
@@ -3347,7 +3318,7 @@ fn rebuild_static_font_base(
             static_layers.as_slice(),
             descriptor_state,
             destination,
-            true,
+            false,
             0.0,
         );
         if !coverage.ok {
@@ -4238,6 +4209,8 @@ fn queue_dirty_cell(dirty_cells: &mut VecDeque<GridCellSelection>, selection: Gr
 fn edit_gridpaper_cell(
     runtime: &mut GridPaperRuntime,
     event: crate::r::keyboard::TrueosKeyboardOutputEvent,
+    combo_id: u32,
+    virtual_keyboard: bool,
 ) {
     let Some(mut selected) = runtime.selection else {
         return;
@@ -4322,12 +4295,14 @@ fn edit_gridpaper_cell(
         runtime.dirty_cells.clear();
         "rebuild-page-fallback"
     };
-    if runtime.keyboard_edits <= 8 || runtime.keyboard_edits.is_multiple_of(120) || !cell_patch {
+    if runtime.keyboard_edits <= 64 || runtime.keyboard_edits.is_multiple_of(120) || !cell_patch {
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: cell edited instance={} seq={} column={} row={} field={} primary_utf8_bytes={} upper_utf8_bytes={} key_kind={} codepoint={} input=ui4-keyboard action={} animated_or_transformed={} queued_cells={} log_policy=first-8+each-120+fallback\n",
+            "gridpaper: cell edited instance={} edit_seq={} ring_seq={} device_seq={} column={} row={} field={} primary_utf8_bytes={} upper_utf8_bytes={} key_kind={} codepoint={} controller={} slot={} ep={} combo={} virtual_keyboard={} input=ui4-keyboard action={} animated_or_transformed={} queued_cells={} log_policy=first-64+each-120+fallback\n",
             runtime.surface.instance_id,
             runtime.keyboard_edits,
+            event.seq,
+            event.device_seq,
             edited.column,
             edited.row,
             runtime.input_field.name(),
@@ -4335,6 +4310,11 @@ fn edit_gridpaper_cell(
             upper_len,
             event.kind,
             event.codepoint,
+            event.controller_id,
+            event.slot_id,
+            event.ep_target,
+            combo_id,
+            virtual_keyboard,
             action,
             animated_or_transformed,
             runtime.dirty_cells.len(),
@@ -4480,7 +4460,7 @@ fn dispatch_gridpaper_input(runtime: &mut GridPaperRuntime, event: crate::ui4::U
             }
         }
         crate::ui4::Ui4InputEvent::Keyboard(event) => {
-            edit_gridpaper_cell(runtime, event.event);
+            edit_gridpaper_cell(runtime, event.event, event.combo_id, event.virtual_keyboard);
         }
         crate::ui4::Ui4InputEvent::Pan(event) => {
             pan_gridpaper(runtime, event);
@@ -4580,7 +4560,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     .count();
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} font_path=skrifa-r8-to-c++-igc-instance persistence=coverage+descriptors+static-rgba-base-retained-until-next-snapshot pan_transform=font-instance-center frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=1 resident3d_ui4=disabled\n",
+                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} font_path=skrifa-r8-to-c++-igc-instance persistence=coverage+descriptors+static-rgba-base-retained-until-next-snapshot static_base_cache=pat0-wb present_cache=pat3-uc pan_transform=font-instance-center frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=1 resident3d_ui4=disabled\n",
                     runtime.surface.instance_id,
                     published.serial,
                     published.generation,
@@ -4692,7 +4672,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
             if cell_patch_changed {
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: cell-patch-frame instance={} edit_seq={} retained_cells={} queued_cells={} patch_serial={} ui4_damage={},{}+{}x{} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} frame_us={} action=retain-page-topology+patch-static-vm\n",
+                    "gridpaper: cell-patch-frame instance={} edit_seq={} retained_cells={} queued_cells={} patch_serial={} ui4_damage={},{}+{}x{} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} frame_us={} font_path=skrifa-r8-identity-mask submission=one-walker-per-glyph static_base_cache=pat0-wb present_cache=pat3-uc action=retain-page-topology+patch-static-vm\n",
                     runtime.surface.instance_id,
                     runtime.keyboard_edits,
                     page.cell_patches.len(),

@@ -125,8 +125,9 @@ impl GpgpuRgba8Surface {
 /// Persistent linear RGBA8 storage owned by one GPU-side producer.
 ///
 /// Gridpaper uses this for its immutable page base: geometry and static glyph
-/// instances are rendered once, then the C++ copy kernel seeds each scanout
-/// buffer before the animated font instances are composited.
+/// instances are rendered once through ordinary PAT0/WB mappings, then the C++
+/// copy kernel reads it through the same cache policy to seed each PAT3/UC
+/// scanout buffer before animated font instances are composited.
 pub(crate) struct GpgpuOwnedRgba8Surface {
     surface: GpgpuRgba8Surface,
     virt: *mut u8,

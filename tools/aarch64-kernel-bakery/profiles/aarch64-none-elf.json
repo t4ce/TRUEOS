@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "label": "aarch64-generic-bare-metal",
+  "target_triple": "aarch64-none-elf",
+  "architecture": "aarch64",
+  "abi": "AAPCS64",
+  "elf_machine": 183,
+  "clang_options": [
+    "-std=c++20",
+    "-march=armv8-a",
+    "-O2",
+    "-ffreestanding",
+    "-fno-builtin",
+    "-fno-exceptions",
+    "-fno-rtti",
+    "-fno-stack-protector",
+    "-fno-unwind-tables",
+    "-fno-asynchronous-unwind-tables",
+    "-fno-use-cxa-atexit",
+    "-fno-pic",
+    "-fno-pie",
+    "-mno-outline-atomics",
+    "-nostdinc++",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-Wdate-time"
+  ]
+}

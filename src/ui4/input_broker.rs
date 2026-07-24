@@ -38,6 +38,7 @@ const CONTEXT_MENU_WIDTH_PX: u32 = 196;
 const CONTEXT_MENU_HEIGHT_PX: u32 = 116;
 
 static OWNER_QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
+static KEYBOARD_TEXT_FORWARDS: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4PointerEvent {
@@ -906,6 +907,25 @@ impl InputBroker {
         // then
         // sample held HID usages without access to the global HUT list.
         self.cursors[route_index].keyboard_source = Some(event.into());
+        if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT {
+            let forwards = KEYBOARD_TEXT_FORWARDS.fetch_add(1, Ordering::Relaxed) + 1;
+            if forwards <= 64 || forwards.is_multiple_of(120) {
+                crate::log_info!(target: "ui4";
+                    "ui4/input: text forwarded forward_seq={} ring_seq={} device_seq={} codepoint={} controller={} slot={} ep={} owner={:?} window={} combo={} virtual_keyboard={} path=keyboard-output-ring->selected-frame-owner-queue log_policy=first-64+each-120\n",
+                    forwards,
+                    event.seq,
+                    event.device_seq,
+                    event.codepoint,
+                    event.controller_id,
+                    event.slot_id,
+                    event.ep_target,
+                    target.owner,
+                    target.window.raw(),
+                    combo_id,
+                    virtual_keyboard,
+                );
+            }
+        }
         enqueue_owner_event(
             target.owner,
             Ui4InputEvent::Keyboard(Ui4KeyboardEvent {
@@ -1204,24 +1224,96 @@ fn enqueue_owner_event(owner: WindowOwner, event: Ui4InputEvent) {
     {
         queues.len() - 1
     } else {
-        note_owner_queue_drop();
+        note_owner_queue_drop(owner, event, "owner-capacity");
         return;
     };
     let queue = &mut queues[queue_index].events;
-    if queue.push(event).is_err() {
-        let _ = queue.remove(0);
-        if queue.push(event).is_err() {
-            note_owner_queue_drop();
+    if let Some(queued) = queue.last_mut() {
+        if coalesce_owner_state_sample(queued, event) {
+            return;
         }
+    }
+    if queue.push(event).is_ok() {
+        return;
+    }
+
+    // UI4 keyboard events are ordered transitions. Never silently evict an
+    // earlier transition to admit a newer event. Under pressure, discard one
+    // replaceable motion/pan sample first; consumers still receive the newest
+    // absolute coordinates and accumulated delta for every coalesced stream.
+    if !owner_event_is_state_sample(&event)
+        && let Some(index) = queue.iter().position(owner_event_is_state_sample)
+    {
+        let evicted = queue.remove(index);
+        note_owner_queue_drop(owner, evicted, "evict-state-for-transition");
+        if queue.push(event).is_ok() {
+            return;
+        }
+    }
+    note_owner_queue_drop(owner, event, "queue-full-reject-newest");
+}
+
+fn owner_event_is_state_sample(event: &Ui4InputEvent) -> bool {
+    match event {
+        Ui4InputEvent::Pointer(pointer) => {
+            pointer.wheel == 0 && pointer.buttons_pressed == 0 && pointer.buttons_released == 0
+        }
+        Ui4InputEvent::Pan(pan) => pan.phase == Ui4PanPhase::Update,
+        _ => false,
     }
 }
 
-fn note_owner_queue_drop() {
+fn owner_event_kind(event: Ui4InputEvent) -> &'static str {
+    match event {
+        Ui4InputEvent::Pointer(_) => "pointer",
+        Ui4InputEvent::Button(_) => "button",
+        Ui4InputEvent::Pan(_) => "pan",
+        Ui4InputEvent::Resize(_) => "resize",
+        Ui4InputEvent::Keyboard(_) => "keyboard",
+        Ui4InputEvent::Focus(_) => "focus",
+    }
+}
+
+fn coalesce_owner_state_sample(queued: &mut Ui4InputEvent, incoming: Ui4InputEvent) -> bool {
+    match (queued, incoming) {
+        (Ui4InputEvent::Pointer(previous), Ui4InputEvent::Pointer(mut next))
+            if owner_event_is_state_sample(&Ui4InputEvent::Pointer(*previous))
+                && owner_event_is_state_sample(&Ui4InputEvent::Pointer(next))
+                && previous.source == next.source
+                && previous.window == next.window
+                && previous.buttons_down == next.buttons_down =>
+        {
+            next.dx = previous.dx.saturating_add(next.dx);
+            next.dy = previous.dy.saturating_add(next.dy);
+            *previous = next;
+            true
+        }
+        (Ui4InputEvent::Pan(previous), Ui4InputEvent::Pan(mut next))
+            if previous.phase == Ui4PanPhase::Update
+                && next.phase == Ui4PanPhase::Update
+                && previous.source == next.source
+                && previous.window == next.window =>
+        {
+            next.dx = previous.dx.saturating_add(next.dx);
+            next.dy = previous.dy.saturating_add(next.dy);
+            *previous = next;
+            true
+        }
+        _ => false,
+    }
+}
+
+fn note_owner_queue_drop(owner: WindowOwner, event: Ui4InputEvent, reason: &'static str) {
     let drops = OWNER_QUEUE_DROPS.fetch_add(1, Ordering::Relaxed) + 1;
     if drops <= 8 || drops.is_power_of_two() {
+        let keyboard_exact_once_violation = matches!(event, Ui4InputEvent::Keyboard(_));
         crate::log_warn!(target: "ui4";
-            "ui4/input: owner-queue drop count={}\n",
-            drops
+            "ui4/input: owner-queue loss count={} owner={:?} event={} reason={} keyboard_exact_once_violation={}\n",
+            drops,
+            owner,
+            owner_event_kind(event),
+            reason,
+            keyboard_exact_once_violation,
         );
     }
 }

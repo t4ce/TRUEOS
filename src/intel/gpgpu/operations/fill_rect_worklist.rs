@@ -53,13 +53,10 @@ fn fill_rect_worklist_rgba8_result_mode(
     GpgpuWorklistSubmitResult { stats, outcome }
 }
 
-/// Fill an arbitrary retained set of solid rectangles in a scanout allocation
-/// and report whether a failed batch crossed the hardware submission boundary.
-/// UI4 producers use this distinction to cancel an untouched lease or
-/// quarantine an allocation that a late GPU batch may still write.
-pub(crate) fn fill_solid_rects_rgba8_scanout_result(
+fn fill_solid_rects_rgba8_result_mode(
     dst: GpgpuRgba8Surface,
     rects: &[GpgpuSolidRect],
+    direct_scanout: bool,
 ) -> GpgpuWorklistSubmitResult {
     let mut descs = Vec::with_capacity(rects.len());
     for solid in rects {
@@ -87,7 +84,29 @@ pub(crate) fn fill_solid_rects_rgba8_scanout_result(
             ..GpgpuWorklistSubmitResult::default()
         };
     }
-    fill_rect_worklist_rgba8_result_mode(dst, descs.as_slice(), true)
+    fill_rect_worklist_rgba8_result_mode(dst, descs.as_slice(), direct_scanout)
+}
+
+/// Fill an arbitrary retained set of solid rectangles in an ordinary
+/// offscreen allocation and preserve the submitted/incomplete distinction.
+/// Retained surfaces are read again by the GPU and must therefore remain on
+/// the same PAT0/WB contract for both producer and consumer mappings.
+pub(crate) fn fill_solid_rects_rgba8_result(
+    dst: GpgpuRgba8Surface,
+    rects: &[GpgpuSolidRect],
+) -> GpgpuWorklistSubmitResult {
+    fill_solid_rects_rgba8_result_mode(dst, rects, false)
+}
+
+/// Fill an arbitrary retained set of solid rectangles in a scanout allocation
+/// and report whether a failed batch crossed the hardware submission boundary.
+/// UI4 producers use this distinction to cancel an untouched lease or
+/// quarantine an allocation that a late GPU batch may still write.
+pub(crate) fn fill_solid_rects_rgba8_scanout_result(
+    dst: GpgpuRgba8Surface,
+    rects: &[GpgpuSolidRect],
+) -> GpgpuWorklistSubmitResult {
+    fill_solid_rects_rgba8_result_mode(dst, rects, true)
 }
 
 /// Fill a small set of solid rectangles in one worklist submission.

@@ -119,6 +119,10 @@ INTEL_GPU_CPP_PROBE_LOG ?=
 # artifact by default. Direct Cargo invocations retain Cargo.toml's legacy
 # default. Set INTEL_GPU_CPP_AOT=0 for an explicit OpenCL C comparison build.
 INTEL_GPU_CPP_AOT ?= 1
+AARCH64_KERNEL_BAKERY_DIR := tools/aarch64-kernel-bakery
+AARCH64_KERNEL_ARTIFACT_DIR ?= bld/aarch64-kernel-artifacts
+AARCH64_KERNEL_PYTHON ?= python3
+AARCH64_KERNEL_CLANG ?= clang
 ifneq ($(INTEL_GPU_CPP_AOT),0)
 ifneq ($(INTEL_GPU_CPP_AOT),1)
 $(error INTEL_GPU_CPP_AOT must be 0 or 1, got '$(INTEL_GPU_CPP_AOT)')
@@ -147,7 +151,7 @@ LEGACY_OPENCL_C_ISO_PATH := bld/trueos-legacy-opencl-c.iso
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel kernel-cpp-aot kernel-legacy-opencl-c cpp lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-verify lfm25-igpu-packed-verify intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine testrig-physical-reset-log baremetal-reboot-log iso iso-cpp-aot iso-legacy-opencl-c provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: images empty-libs kernel kernel-cpp-aot kernel-legacy-opencl-c cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-verify lfm25-igpu-packed-verify intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine testrig-physical-reset-log baremetal-reboot-log iso iso-cpp-aot iso-legacy-opencl-c provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -205,6 +209,17 @@ intel-gpu-refresh-cpp-artifacts: intel-gpu-bake-cpp-artifacts
 	$(MAKE) --no-print-directory intel-gpu-verify-cpp-artifacts
 
 cpp: intel-gpu-refresh-cpp-artifacts
+
+aarch64-kernel-copy:
+	PYTHON="$(AARCH64_KERNEL_PYTHON)" ARM_CLANG="$(AARCH64_KERNEL_CLANG)" ARM_KERNEL_PUBLISH_DIR="$(abspath $(AARCH64_KERNEL_ARTIFACT_DIR))" "$(AARCH64_KERNEL_BAKERY_DIR)/bake_copy_rect.sh"
+
+aarch64-kernel-verify:
+	$(AARCH64_KERNEL_PYTHON) -B "$(AARCH64_KERNEL_BAKERY_DIR)/verify.py" --artifact-dir "$(AARCH64_KERNEL_ARTIFACT_DIR)"
+
+aarch64-kernel-test:
+	$(AARCH64_KERNEL_PYTHON) -B -m unittest discover -s "$(AARCH64_KERNEL_BAKERY_DIR)" -p 'test_*.py'
+
+aarch64-kernels: aarch64-kernel-copy aarch64-kernel-verify
 
 lfm25-cpp:
 	./tools/lfm2.5-350m/build_cpp.sh
