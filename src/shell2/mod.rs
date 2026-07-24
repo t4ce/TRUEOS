@@ -804,6 +804,10 @@ pub(crate) fn matrix_target_for_backend(io: &'static dyn ShellBackend2) -> Matri
     }
 }
 
+pub(crate) fn matrix_target_slot_name(target: &MatrixTarget) -> &str {
+    target.slot_id.as_str()
+}
+
 pub(crate) fn matrix_target_routes_to(target: &MatrixTarget, output_mask: u8) -> bool {
     (target.output_mask & output_mask) != 0
 }

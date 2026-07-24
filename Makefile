@@ -230,7 +230,7 @@ intel-gpu-verify-linked-copy-cpp:
 	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT=1 INTEL_GPU_LINKED_ELF="$(INTEL_GPU_LINKED_ELF)" intel-gpu-verify-linked-copy
 
 intel-gpu-verify-packaged-copy:
-	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_packaged.py" --runtime-elf "$(ARTIFACT_RUNTIME_ELF)" --staged-elf "$(ISO_BOOT_DIR)/TRUEOS.elf" --iso "$(ISO_PATH)" --selected-bin "$(INTEL_GPU_SELECTED_COPY_BIN)" --forbidden-bin "$(INTEL_GPU_FORBIDDEN_COPY_BIN)" --required-bin "$(INTEL_GPU_CPP_DEMO_BIN)" --required-bin "$(INTEL_GPU_CPP_AUDIO_VISUALIZER_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_BACKGROUND_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_SPRITE_BIN)"
+	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_packaged.py" --runtime-elf "$(ARTIFACT_RUNTIME_ELF)" --staged-elf "$(ISO_BOOT_DIR)/TRUEOS.elf" --iso "$(ISO_PATH)" --selected-bin "$(INTEL_GPU_SELECTED_COPY_BIN)" --forbidden-bin "$(INTEL_GPU_FORBIDDEN_COPY_BIN)" --required-bin "$(INTEL_GPU_CPP_DEMO_BIN)" --required-bin "$(INTEL_GPU_CPP_AUDIO_VISUALIZER_BIN)" --required-bin "$(INTEL_GPU_CPP_LFM25_Q8_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_BACKGROUND_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_SPRITE_BIN)"
 
 intel-gpu-verify-packaged-copy-cpp:
 	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT=1 ARTIFACT_DIR="$(ARTIFACT_DIR)" ISO_BOOT_DIR="$(ISO_BOOT_DIR)" ISO_PATH="$(ISO_PATH)" intel-gpu-verify-packaged-copy

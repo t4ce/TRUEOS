@@ -127,7 +127,14 @@ impl KernelClient {
             // This context feeds a visible video frame into UI4.  It must be
             // able to preempt ordinary persistent GPGPU work instead of
             // waiting through an entire GuC scheduler rotation.
-            Self::Ui4Compositor => PhysicalContextPriority::KernelHigh,
+            //
+            // LFM submissions are likewise bounded interactive batches. A
+            // normal-priority context added one repeatable scheduler quantum
+            // to every model projection on ADL-S, overwhelming the actual
+            // kernel time. Each LFM batch remains bounded to at most three
+            // projection walkers, so it cannot turn into a persistent
+            // high-priority program.
+            Self::Ui4Compositor | Self::Lfm25 => PhysicalContextPriority::KernelHigh,
             _ => PhysicalContextPriority::KernelNormal,
         }
     }
@@ -150,10 +157,7 @@ const _: () = {
         KernelClient::GpgpuExecution.physical_priority(),
         PhysicalContextPriority::KernelNormal
     ));
-    assert!(matches!(
-        KernelClient::Lfm25.physical_priority(),
-        PhysicalContextPriority::KernelNormal
-    ));
+    assert!(matches!(KernelClient::Lfm25.physical_priority(), PhysicalContextPriority::KernelHigh));
     assert!(matches!(
         KernelClient::Ui4Blitter.physical_priority(),
         PhysicalContextPriority::KernelNormal

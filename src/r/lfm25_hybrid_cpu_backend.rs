@@ -205,20 +205,50 @@ impl HybridCpuAotDecodeBackend {
         descriptor: NativeTensorDescriptor,
         input: &[f32],
     ) -> Result<Vec<f32>, HybridCpuBackendError> {
-        if TensorFormat::from_raw(descriptor.format) != Some(TensorFormat::Q8_0)
-            || descriptor.ggml_ne0 as usize != input.len()
+        self.project_many(core::slice::from_ref(&descriptor), input)
+            .await?
+            .pop()
+            .ok_or(HybridCpuBackendError::Tensor)
+    }
+
+    async fn project_many(
+        &self,
+        descriptors: &[NativeTensorDescriptor],
+        input: &[f32],
+    ) -> Result<Vec<Vec<f32>>, HybridCpuBackendError> {
+        if descriptors.is_empty()
+            || descriptors.len() > crate::intel::gpgpu::LFM25_Q8_MAX_BATCH_PROJECTIONS
         {
             return Err(HybridCpuBackendError::Tensor);
         }
-        let rows = descriptor.ggml_ne1 as usize;
         let row_bytes = cpu::q8_row_bytes(input.len())?;
-        if descriptor.native_bytes as usize
-            != rows
-                .checked_mul(row_bytes)
-                .ok_or(HybridCpuBackendError::Tensor)?
-        {
-            return Err(HybridCpuBackendError::Tensor);
+        let mut specs = Vec::new();
+        let mut outputs = Vec::new();
+        specs
+            .try_reserve_exact(descriptors.len())
+            .map_err(|_| HybridCpuBackendError::Allocation)?;
+        outputs
+            .try_reserve_exact(descriptors.len())
+            .map_err(|_| HybridCpuBackendError::Allocation)?;
+        for descriptor in descriptors {
+            let rows = descriptor.ggml_ne1 as usize;
+            if TensorFormat::from_raw(descriptor.format) != Some(TensorFormat::Q8_0)
+                || descriptor.ggml_ne0 as usize != input.len()
+                || descriptor.native_bytes as usize
+                    != rows
+                        .checked_mul(row_bytes)
+                        .ok_or(HybridCpuBackendError::Tensor)?
+            {
+                return Err(HybridCpuBackendError::Tensor);
+            }
+            specs.push(crate::intel::gpgpu::Lfm25Q8ProjectSpec {
+                weight_offset: descriptor.native_offset,
+                columns: descriptor.ggml_ne0,
+                rows: descriptor.ggml_ne1,
+            });
+            outputs.push(vec![0.0f32; rows]);
         }
+
         let quantized = cpu::quantize_q8(input)?;
         let activation = unsafe {
             core::slice::from_raw_parts(
@@ -226,16 +256,15 @@ impl HybridCpuAotDecodeBackend {
                 quantized.len() * cpu::Q8_BLOCK_BYTES,
             )
         };
-        let mut output = vec![0.0f32; rows];
-        crate::intel::gpgpu::lfm25_q8_project(
+        let mut output_slices: Vec<&mut [f32]> =
+            outputs.iter_mut().map(Vec::as_mut_slice).collect();
+        crate::intel::gpgpu::lfm25_q8_project_batch(
             self.gpu_model,
-            descriptor.native_offset,
-            descriptor.ggml_ne0,
-            descriptor.ggml_ne1,
+            &specs,
             activation,
-            &mut output,
+            &mut output_slices,
         )?;
-        Ok(output)
+        Ok(outputs)
     }
 
     fn handle_index(&self, handle: ResidentTensorHandle) -> Result<usize, HybridCpuBackendError> {
@@ -303,9 +332,7 @@ impl HybridCpuAotDecodeBackend {
         if values.len() != HIDDEN {
             return Err(HybridCpuBackendError::Tensor);
         }
-        Ok(HiddenQ8::from_resident(
-            self.allocate(CpuTensor::Q8(CpuQ8Tensor { values }))?,
-        ))
+        Ok(HiddenQ8::from_resident(self.allocate(CpuTensor::Q8(CpuQ8Tensor { values }))?))
     }
 
     fn release(&mut self, handle: ResidentTensorHandle) -> Result<(), HybridCpuBackendError> {
@@ -418,15 +445,21 @@ impl HybridCpuAotDecodeBackend {
             _ => return Err(HybridCpuBackendError::State),
         };
         let input_values = self.q8_tensor(input)?.values.clone();
-        let mut query = self
-            .project(Self::descriptor(Some(layer), TensorRole::Query)?, &input_values)
-            .await?;
-        let mut key = self
-            .project(Self::descriptor(Some(layer), TensorRole::Key)?, &input_values)
-            .await?;
-        let value = self
-            .project(Self::descriptor(Some(layer), TensorRole::Value)?, &input_values)
-            .await?;
+        let descriptors = [
+            Self::descriptor(Some(layer), TensorRole::Query)?,
+            Self::descriptor(Some(layer), TensorRole::Key)?,
+            Self::descriptor(Some(layer), TensorRole::Value)?,
+        ];
+        let mut projections = self
+            .project_many(&descriptors, &input_values)
+            .await?
+            .into_iter();
+        let mut query = projections.next().ok_or(HybridCpuBackendError::Tensor)?;
+        let mut key = projections.next().ok_or(HybridCpuBackendError::Tensor)?;
+        let value = projections.next().ok_or(HybridCpuBackendError::Tensor)?;
+        if projections.next().is_some() {
+            return Err(HybridCpuBackendError::Tensor);
+        }
         if query.len() != HEADS * HEAD_DIM || key.len() != KV_ELEMENTS || value.len() != KV_ELEMENTS
         {
             return Err(HybridCpuBackendError::Tensor);
@@ -539,12 +572,19 @@ impl HybridCpuAotDecodeBackend {
         input: HiddenQ8,
     ) -> Result<HiddenQ30, HybridCpuBackendError> {
         let input_values = self.q8_tensor(input)?.values.clone();
-        let gate = self
-            .project(Self::descriptor(Some(layer), TensorRole::FfnGate)?, &input_values)
-            .await?;
-        let up = self
-            .project(Self::descriptor(Some(layer), TensorRole::FfnUp)?, &input_values)
-            .await?;
+        let descriptors = [
+            Self::descriptor(Some(layer), TensorRole::FfnGate)?,
+            Self::descriptor(Some(layer), TensorRole::FfnUp)?,
+        ];
+        let mut projections = self
+            .project_many(&descriptors, &input_values)
+            .await?
+            .into_iter();
+        let gate = projections.next().ok_or(HybridCpuBackendError::Tensor)?;
+        let up = projections.next().ok_or(HybridCpuBackendError::Tensor)?;
+        if projections.next().is_some() {
+            return Err(HybridCpuBackendError::Tensor);
+        }
         if gate.len() != up.len() {
             return Err(HybridCpuBackendError::Tensor);
         }
