@@ -6,6 +6,7 @@ pub(crate) struct SpiritVfxControl {
     pub(crate) revision: u64,
     pub(crate) background_mode: u32,
     pub(crate) clock_seconds_of_day: u32,
+    pub(crate) background_phase_override: Option<f32>,
     pub(crate) background_opacity: f32,
     pub(crate) background_scale: f32,
     pub(crate) background_speed: f32,
@@ -155,6 +156,12 @@ fn spirit_vfx_write_control(
     control: SpiritVfxControl,
     present_fps: u32,
 ) {
+    let animation_time = frame as f32 * (1.0 / 60.0);
+    let background_speed = match control.background_phase_override {
+        Some(phase) if animation_time > 0.0 => phase / animation_time,
+        Some(_) => 0.0,
+        None => control.background_speed,
+    };
     unsafe {
         core::ptr::write_bytes(control_buffer.virt, 0, control_buffer.bytes);
         let dwords = control_buffer.virt as *mut u32;
@@ -168,9 +175,11 @@ fn spirit_vfx_write_control(
                 .unwrap_or(0),
         );
         // Keep the original smooth animation clock for the sprite walker and
-        // every non-clock background. MagicTimeCircle reads its quantized UTC
-        // clock from the append-only dword 32 instead.
-        core::ptr::write_volatile(dwords.add(4), (frame as f32 * (1.0 / 60.0)).to_bits());
+        // every non-clock background. A changing-speed background supplies a
+        // phase-equivalent coefficient in dword 7, preserving the stable
+        // control ABI. MagicTimeCircle reads its quantized UTC clock from the
+        // append-only dword 32 instead.
+        core::ptr::write_volatile(dwords.add(4), animation_time.to_bits());
         core::ptr::write_volatile(
             dwords.add(5),
             spirit_vfx_bounded(control.background_opacity, 0.0, 1.0, 0.0).to_bits(),
@@ -181,7 +190,7 @@ fn spirit_vfx_write_control(
         );
         core::ptr::write_volatile(
             dwords.add(7),
-            spirit_vfx_bounded(control.background_speed, 0.0, 4.0, 1.0).to_bits(),
+            spirit_vfx_bounded(background_speed, 0.0, 4.0, 1.0).to_bits(),
         );
         core::ptr::write_volatile(
             dwords.add(8),

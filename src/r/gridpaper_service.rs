@@ -41,6 +41,9 @@ const COLOR_COUNT: usize = 18;
 const COLOR_DEFAULT: u8 = 0;
 const COLOR_TRANSPARENT: u8 = 17;
 const TEXT_ANIMATION_COLOR_SLOTS: usize = COLOR_TRANSPARENT as usize;
+const SPIRIT_RAINBOW_SELECTORS: [u8; 6] = [10, 12, 11, 15, 13, 14];
+const SPIRIT_SCALE_MOTION_PERIOD_MS: u32 = 7_000;
+const SPIRIT_SCALE_MOTION_AMPLITUDE_PERMILLE: i16 = 150;
 const TEXT_ANIMATION_WIRE_VERSION_COLOR_ONLY: u8 = 1;
 const TEXT_ANIMATION_WIRE_VERSION_FONT_INSTANCE: u8 = 2;
 const TEXT_ANIMATION_WIRE_HEADER_BYTES: usize = 4;
@@ -245,6 +248,7 @@ pub(crate) enum KernelGridError {
 struct KernelGridPresentationRecord {
     owner: KernelGridOwner,
     presentation: KernelGridPresentation,
+    accepted_text_cells: u64,
 }
 
 struct SnapshotStore {
@@ -500,6 +504,14 @@ pub(crate) fn reset_and_show_kernel_grid(lease: KernelGridLease) -> Result<u64, 
         let next = store.published ^ 1;
         store.buffers[next].fill(0);
         store.published = next;
+        if lease.owner.client == KernelGridClient::SpiritResponse {
+            // Spirit types the next reply through the ordinary identity cell
+            // patch path first. Motion is enabled once the complete,
+            // word-wrapped response is resident, avoiding a full topology
+            // rebuild for every keystroke.
+            store.text_animations = [None; TEXT_ANIMATION_COLOR_SLOTS];
+            store.animation_serial = store.animation_serial.wrapping_add(1).max(1);
+        }
         store.generation = store.generation.wrapping_add(1).max(1);
         store.serial = store.serial.wrapping_add(1).max(1);
         store.lifecycle_paused = false;
@@ -514,6 +526,48 @@ pub(crate) fn reset_and_show_kernel_grid(lease: KernelGridLease) -> Result<u64, 
             store.serial,
         );
         store.generation
+    })
+}
+
+/// Enable Spirit's retained rainbow text presentation after the complete reply
+/// has been typed. Palette color stays fixed per cell; the C++ font-instance
+/// kernel evaluates only the gentle phase-shifted scale oscillator.
+pub(crate) fn enable_spirit_response_rainbow_motion(
+    lease: KernelGridLease,
+) -> Result<u64, KernelGridError> {
+    if lease.owner.client != KernelGridClient::SpiritResponse {
+        return Err(KernelGridError::LeaseLost);
+    }
+    with_kernel_grid_store(lease, |slot, store| {
+        let mut programs = [None; TEXT_ANIMATION_COLOR_SLOTS];
+        for (rainbow_index, selector) in SPIRIT_RAINBOW_SELECTORS.iter().copied().enumerate() {
+            programs[usize::from(selector)] = Some(GpuFontInstanceProgram {
+                color: None,
+                style: GpuFontInstanceStyle::IDENTITY,
+                motion: GpuFontInstanceMotion {
+                    period_ms: SPIRIT_SCALE_MOTION_PERIOD_MS,
+                    phase_permille: (rainbow_index as u16 * 1_000)
+                        / SPIRIT_RAINBOW_SELECTORS.len() as u16,
+                    rotation_amplitude_centidegrees: 0,
+                    scale_amplitude_permille: SPIRIT_SCALE_MOTION_AMPLITUDE_PERMILLE,
+                    opacity_amplitude_permille: 0,
+                    translation_x_tenths_px: 0,
+                    translation_y_tenths_px: 0,
+                },
+            });
+        }
+        store.text_animations = programs;
+        store.animation_serial = store.animation_serial.wrapping_add(1).max(1);
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: Spirit rainbow motion enabled slot={} token={} serial={} selectors={:?} scale=0.85..1.15 period_ms={} phase=palette-staggered evaluator=c++-igc-gpu\n",
+            slot,
+            lease.owner.token,
+            store.animation_serial,
+            SPIRIT_RAINBOW_SELECTORS,
+            SPIRIT_SCALE_MOTION_PERIOD_MS,
+        );
+        store.animation_serial
     })
 }
 
@@ -539,6 +593,15 @@ pub(crate) fn kernel_grid_presentation(lease: KernelGridLease) -> Option<KernelG
         .flatten()
         .find(|record| record.owner == lease.owner)
         .map(|record| record.presentation)
+}
+
+pub(crate) fn kernel_grid_accepted_text_cells(lease: KernelGridLease) -> Option<u64> {
+    KERNEL_GRID_PRESENTATIONS
+        .lock()
+        .iter()
+        .flatten()
+        .find(|record| record.owner == lease.owner)
+        .map(|record| record.accepted_text_cells)
 }
 
 pub(crate) fn is_spirit_response_grid_window(window: crate::ui4::WindowId) -> bool {
@@ -776,23 +839,14 @@ fn edit_snapshot_from_keyboard(
         return outcome;
     }
     match event.key_code {
-        crate::r::keyboard::KEYBOARD_KEY_BACKSPACE | crate::r::keyboard::KEYBOARD_KEY_DELETE => {
-            let offset = (selection.row * COLUMNS + selection.column) * CELL_BYTES;
-            let cell = &mut snapshot.raw[offset..offset + CELL_BYTES];
-            let had_content = match *input_field {
-                CellInputField::Primary => {
-                    cell[PRIMARY_LENGTH_OFFSET] != 0 || cell[UPPER_LENGTH_OFFSET] != 0
-                }
-                CellInputField::Upper => cell[UPPER_LENGTH_OFFSET] != 0,
-            };
-            if had_content {
-                clear_cell_glyph(cell, *input_field);
-                if *input_field == CellInputField::Primary {
-                    clear_cell_glyph(cell, CellInputField::Upper);
-                }
-                outcome.content_changed = true;
-                outcome.edited_cell = Some(*selection);
-            }
+        crate::r::keyboard::KEYBOARD_KEY_BACKSPACE => {
+            let next = selection.column.saturating_sub(1);
+            outcome.selection_changed = next != selection.column;
+            selection.column = next;
+            clear_selected_cell(snapshot, *selection, *input_field, &mut outcome);
+        }
+        crate::r::keyboard::KEYBOARD_KEY_DELETE => {
+            clear_selected_cell(snapshot, *selection, *input_field, &mut outcome);
         }
         crate::r::keyboard::KEYBOARD_KEY_ARROW_LEFT => {
             let next = selection.column.saturating_sub(1);
@@ -809,10 +863,16 @@ fn edit_snapshot_from_keyboard(
             outcome.selection_changed = next != selection.row;
             selection.row = next;
         }
-        crate::r::keyboard::KEYBOARD_KEY_ARROW_DOWN | crate::r::keyboard::KEYBOARD_KEY_ENTER => {
+        crate::r::keyboard::KEYBOARD_KEY_ARROW_DOWN => {
             let next = selection.row.saturating_add(1).min(rows - 1);
             outcome.selection_changed = next != selection.row;
             selection.row = next;
+        }
+        crate::r::keyboard::KEYBOARD_KEY_ENTER => {
+            let next_row = selection.row.saturating_add(1).min(rows - 1);
+            outcome.selection_changed = selection.column != 0 || next_row != selection.row;
+            selection.column = 0;
+            selection.row = next_row;
         }
         crate::r::keyboard::KEYBOARD_KEY_TAB => {
             *input_field = input_field.toggled();
@@ -851,6 +911,31 @@ fn clear_cell_glyph(cell: &mut [u8], input_field: CellInputField) {
     let (length_offset, glyph_offset) = glyph_offsets(input_field);
     cell[length_offset] = 0;
     cell[glyph_offset..glyph_offset + GLYPH_UTF8_CAPACITY].fill(0);
+}
+
+fn clear_selected_cell(
+    snapshot: &mut OwnedSnapshot,
+    selection: GridCellSelection,
+    input_field: CellInputField,
+    outcome: &mut KeyboardGridOutcome,
+) {
+    let offset = (selection.row * COLUMNS + selection.column) * CELL_BYTES;
+    let cell = &mut snapshot.raw[offset..offset + CELL_BYTES];
+    let had_content = match input_field {
+        CellInputField::Primary => {
+            cell[PRIMARY_LENGTH_OFFSET] != 0 || cell[UPPER_LENGTH_OFFSET] != 0
+        }
+        CellInputField::Upper => cell[UPPER_LENGTH_OFFSET] != 0,
+    };
+    if !had_content {
+        return;
+    }
+    clear_cell_glyph(cell, input_field);
+    if input_field == CellInputField::Primary {
+        clear_cell_glyph(cell, CellInputField::Upper);
+    }
+    outcome.content_changed = true;
+    outcome.edited_cell = Some(selection);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1776,6 +1861,7 @@ fn attach_presentation(
                 cell_zero_y,
                 published_generation: 0,
             },
+            accepted_text_cells: 0,
         });
     }
     Ok(presentation)
@@ -4221,6 +4307,23 @@ fn edit_gridpaper_cell(
         };
         let outcome =
             edit_snapshot_from_keyboard(snapshot, &mut selected, &mut runtime.input_field, event);
+        if let Some(edited) = outcome.edited_cell
+            && matches!(
+                snapshot.producer,
+                GridPaperProducer::Kernel(KernelGridOwner {
+                    client: KernelGridClient::SpiritResponse,
+                    ..
+                })
+            )
+        {
+            let offset = (edited.row * COLUMNS + edited.column) * CELL_BYTES;
+            let rainbow_index = edited
+                .row
+                .saturating_mul(snapshot.size.columns())
+                .saturating_add(edited.column)
+                % SPIRIT_RAINBOW_SELECTORS.len();
+            snapshot.raw[offset + FOREGROUND_OFFSET] = SPIRIT_RAINBOW_SELECTORS[rainbow_index];
+        }
         let edited_state = outcome.edited_cell.map(|edited| {
             let offset = (edited.row * COLUMNS + edited.column) * CELL_BYTES;
             (
@@ -4264,6 +4367,14 @@ fn edit_gridpaper_cell(
         return;
     }
     runtime.keyboard_edits = runtime.keyboard_edits.saturating_add(1);
+    if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT {
+        let mut presentations = KERNEL_GRID_PRESENTATIONS.lock();
+        if let Some(record) = presentations[runtime.surface.pool_slot].as_mut()
+            && record.owner.client == KernelGridClient::SpiritResponse
+        {
+            record.accepted_text_cells = record.accepted_text_cells.saturating_add(1);
+        }
+    }
     let (edited, primary_len, upper_len, foreground) =
         edited_state.unwrap_or((selected, 0, 0, COLOR_TRANSPARENT));
     let snapshot = runtime
@@ -5135,6 +5246,76 @@ mod tests {
         let cell = &snapshot.raw[offset..offset + CELL_BYTES];
         assert_eq!(cell[PRIMARY_LENGTH_OFFSET], 1);
         assert_eq!(cell[UPPER_LENGTH_OFFSET], 0);
+    }
+
+    #[test]
+    fn keyboard_backspace_moves_left_and_clears_the_active_field() {
+        let mut snapshot = OwnedSnapshot {
+            raw: Vec::from([0u8; PAGE_BYTES]),
+            producer: GridPaperProducer::Blueprint(0),
+            generation: 1,
+            scale_percent: 100,
+            size: GridSize::new(19, 13).unwrap(),
+            serial: 1,
+        };
+        let target = GridCellSelection { column: 2, row: 3 };
+        let offset = (target.row * COLUMNS + target.column) * CELL_BYTES;
+        let cell = &mut snapshot.raw[offset..offset + CELL_BYTES];
+        write_cell_glyph(cell, CellInputField::Primary, b"x");
+        write_cell_glyph(cell, CellInputField::Upper, "²".as_bytes());
+
+        let mut selection = GridCellSelection { column: 3, row: 3 };
+        let mut input_field = CellInputField::Upper;
+        let mut backspace = crate::r::keyboard::TrueosKeyboardOutputEvent::default();
+        backspace.kind = crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY;
+        backspace.key_code = crate::r::keyboard::KEYBOARD_KEY_BACKSPACE;
+
+        let upper =
+            edit_snapshot_from_keyboard(&mut snapshot, &mut selection, &mut input_field, backspace);
+        assert!(upper.content_changed);
+        assert!(upper.selection_changed);
+        assert_eq!(upper.edited_cell, Some(target));
+        assert_eq!(selection, target);
+        let cell = &snapshot.raw[offset..offset + CELL_BYTES];
+        assert_eq!(cell[PRIMARY_LENGTH_OFFSET], 1);
+        assert_eq!(cell[UPPER_LENGTH_OFFSET], 0);
+
+        let cell = &mut snapshot.raw[offset..offset + CELL_BYTES];
+        write_cell_glyph(cell, CellInputField::Upper, "²".as_bytes());
+        selection.column = 3;
+        input_field = CellInputField::Primary;
+        let primary =
+            edit_snapshot_from_keyboard(&mut snapshot, &mut selection, &mut input_field, backspace);
+        assert!(primary.content_changed);
+        assert!(primary.selection_changed);
+        assert_eq!(primary.edited_cell, Some(target));
+        assert_eq!(selection, target);
+        let cell = &snapshot.raw[offset..offset + CELL_BYTES];
+        assert_eq!(cell[PRIMARY_LENGTH_OFFSET], 0);
+        assert_eq!(cell[UPPER_LENGTH_OFFSET], 0);
+        assert_eq!(validate_page(&snapshot.raw), Ok(()));
+    }
+
+    #[test]
+    fn keyboard_enter_moves_to_the_first_cell_of_the_next_row() {
+        let mut snapshot = OwnedSnapshot {
+            raw: Vec::from([0u8; PAGE_BYTES]),
+            producer: GridPaperProducer::Blueprint(0),
+            generation: 1,
+            scale_percent: 100,
+            size: GridSize::new(19, 13).unwrap(),
+            serial: 1,
+        };
+        let mut selection = GridCellSelection { column: 16, row: 4 };
+        let mut input_field = CellInputField::Primary;
+        let mut enter = crate::r::keyboard::TrueosKeyboardOutputEvent::default();
+        enter.kind = crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY;
+        enter.key_code = crate::r::keyboard::KEYBOARD_KEY_ENTER;
+
+        let outcome =
+            edit_snapshot_from_keyboard(&mut snapshot, &mut selection, &mut input_field, enter);
+        assert!(outcome.selection_changed);
+        assert_eq!(selection, GridCellSelection { column: 0, row: 5 });
     }
 
     #[test]

@@ -6,11 +6,7 @@
 //! UI4 session after the reading interval retains the Gridpaper GPU scene and
 //! document allocation for the next response.
 
-use alloc::{
-    collections::VecDeque,
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use embassy_sync::signal::Signal;
@@ -33,6 +29,7 @@ const RESPONSE_SERVICE_POLL_MS: u64 = 16;
 const RESPONSE_READ_MS: u64 = 30_000;
 const INPUT_BROKER_SETTLE_MS: u64 = 32;
 const CURSOR_SETTLE_GRACE_MS: u64 = 250;
+const GRID_TEXT_ACCEPT_TIMEOUT_MS: u64 = 5_000;
 const KEYBOARD_STROKE_MS: u32 = 48;
 const KEYBOARD_CHUNK_SCALARS: usize = 64;
 const SPIRIT_KEYBOARD_LABEL: &str = "Spirit/Lilly chat";
@@ -87,39 +84,97 @@ pub(super) fn enqueue_package_text(text: &str) -> bool {
 }
 
 fn sanitize_response(text: &str) -> String {
-    let mut scalars = Vec::with_capacity(SPIRIT_GRID_CELL_CAPACITY);
-    let mut pending_space = false;
+    let mut words = Vec::new();
+    for source in text.split_whitespace() {
+        let word = source
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .collect::<Vec<_>>();
+        if !word.is_empty() {
+            words.push(word);
+        }
+    }
+    if words.is_empty() {
+        words.push("(no".chars().collect());
+        words.push("text".chars().collect());
+        words.push("response)".chars().collect());
+    }
+
+    let mut lines = alloc::vec![Vec::new()];
     let mut truncated = false;
-    for ch in text.chars() {
-        if ch.is_whitespace() {
-            pending_space = !scalars.is_empty();
-            continue;
-        }
-        if ch.is_control() {
-            continue;
-        }
-        if pending_space {
-            if scalars.len() == SPIRIT_GRID_CELL_CAPACITY {
-                truncated = true;
-                break;
+    'words: for word in words {
+        let mut word_offset = 0usize;
+        while word_offset < word.len() {
+            let line_len = lines.last().map_or(0, Vec::len);
+            let remaining = word.len() - word_offset;
+            if remaining <= SPIRIT_GRID_COLUMNS as usize {
+                if line_len == 0 {
+                    lines
+                        .last_mut()
+                        .expect("Spirit response always has one line")
+                        .extend_from_slice(&word[word_offset..]);
+                    word_offset = word.len();
+                } else if line_len + 1 + remaining <= SPIRIT_GRID_COLUMNS as usize {
+                    let line = lines
+                        .last_mut()
+                        .expect("Spirit response always has one line");
+                    line.push(' ');
+                    line.extend_from_slice(&word[word_offset..]);
+                    word_offset = word.len();
+                } else if lines.len() < SPIRIT_GRID_ROWS as usize {
+                    // The separating whitespace becomes a row transition. The
+                    // word itself stays intact on the next line.
+                    lines.push(Vec::new());
+                } else {
+                    truncated = true;
+                    break 'words;
+                }
+                continue;
             }
-            scalars.push(' ');
-            pending_space = false;
+
+            // A single token wider than the grid has no whitespace boundary
+            // at which it can fit. Hard-wrap only that exceptional token.
+            if line_len != 0 {
+                if lines.len() < SPIRIT_GRID_ROWS as usize {
+                    lines.push(Vec::new());
+                    continue;
+                }
+                truncated = true;
+                break 'words;
+            }
+            let take = remaining.min(SPIRIT_GRID_COLUMNS as usize);
+            lines
+                .last_mut()
+                .expect("Spirit response always has one line")
+                .extend_from_slice(&word[word_offset..word_offset + take]);
+            word_offset += take;
+            if word_offset < word.len() {
+                if lines.len() < SPIRIT_GRID_ROWS as usize {
+                    lines.push(Vec::new());
+                } else {
+                    truncated = true;
+                    break 'words;
+                }
+            }
         }
-        if scalars.len() == SPIRIT_GRID_CELL_CAPACITY {
-            truncated = true;
-            break;
+    }
+
+    if truncated {
+        let line = lines
+            .last_mut()
+            .expect("Spirit response always has one line");
+        line.truncate((SPIRIT_GRID_COLUMNS as usize).saturating_sub(3));
+        line.extend(['.', '.', '.']);
+    }
+
+    let mut wrapped = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        if index != 0 {
+            wrapped.push('\n');
         }
-        scalars.push(ch);
+        wrapped.extend(line.iter().copied());
     }
-    if scalars.is_empty() {
-        return "(no text response)".to_string();
-    }
-    if truncated && SPIRIT_GRID_CELL_CAPACITY >= 3 {
-        scalars.truncate(SPIRIT_GRID_CELL_CAPACITY - 3);
-        scalars.extend(['.', '.', '.']);
-    }
-    scalars.into_iter().collect()
+    wrapped
 }
 
 fn take_latest_response() -> Option<ResponseRequest> {
@@ -250,10 +305,28 @@ async fn type_response(keyboard: KeyboardControlDevice, text: &str) -> Result<us
             chunk_index == 0,
         )
         .map_err(|_| "lilly-keyboard-submit")?;
-        typed = typed.saturating_add(chunk.len());
+        typed = typed.saturating_add(chunk.iter().filter(|ch| !matches!(ch, '\n' | '\r')).count());
     }
     wait_for_keyboard_idle(keyboard).await?;
     Ok(typed)
+}
+
+async fn wait_for_grid_text_acceptance(
+    lease: KernelGridLease,
+    expected_cells: usize,
+) -> Result<(), &'static str> {
+    let expected_cells = u64::try_from(expected_cells).map_err(|_| "gridpaper-text-count-range")?;
+    let deadline = Instant::now() + Duration::from_millis(GRID_TEXT_ACCEPT_TIMEOUT_MS);
+    loop {
+        match crate::r::gridpaper_service::kernel_grid_accepted_text_cells(lease) {
+            Some(accepted) if accepted >= expected_cells => return Ok(()),
+            Some(_) if Instant::now() < deadline => {
+                Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await;
+            }
+            Some(_) => return Err("gridpaper-text-accept-timeout"),
+            None => return Err("gridpaper-presentation-lost"),
+        }
+    }
 }
 
 async fn request_spirit_grid() -> KernelGridLease {
@@ -321,7 +394,7 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
     let keyboard = request_spirit_keyboard().await;
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: response Gridpaper service online assigned_slot={} current_slot={} grid={}x{} cells={} ownership=kernel-dedicated cursor=Spirit/Lilly keyboard_slot={} input=cell-zero-click+paired-vkeyboard hide_after_ms={} residency=warm-hidden no-blueprint-vm=1\n",
+        "trueos-spirit: response Gridpaper service online assigned_slot={} current_slot={} grid={}x{} cells={} ownership=kernel-dedicated cursor=Spirit/Lilly keyboard_slot={} input=cell-zero-click+paired-vkeyboard wrap=whitespace-before-word style=rainbow-palette+cpp-scale-0.85..1.15 hide_after_ms={} residency=warm-hidden no-blueprint-vm=1\n",
         expected_slot,
         crate::percpu::current_slot(),
         SPIRIT_GRID_COLUMNS,
@@ -365,15 +438,32 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
             continue;
         }
         match type_response(keyboard, request.text.as_str()).await {
-            Ok(typed) => crate::log_info!(
-                target: "gfx";
-                "trueos-spirit: response typed turn={} window={} cells={} latency_ms={} path=paired-vkeyboard->ui4->gridpaper-cell-patches gpu-scene=resident read_ms={}\n",
-                request.turn,
-                presentation.window.raw(),
-                typed,
-                Instant::now().as_millis().saturating_sub(request.enqueued_ms),
-                RESPONSE_READ_MS,
-            ),
+            Ok(typed) => {
+                let accepted = wait_for_grid_text_acceptance(lease, typed).await;
+                match accepted.and_then(|()| {
+                    crate::r::gridpaper_service::enable_spirit_response_rainbow_motion(lease)
+                        .map_err(|_| "gridpaper-motion-enable")
+                }) {
+                    Ok(animation_serial) => crate::log_info!(
+                        target: "gfx";
+                        "trueos-spirit: response typed turn={} window={} cells={} latency_ms={} path=paired-vkeyboard->ui4->gridpaper-cell-patches wrap=whitespace-before-word palette=rainbow animation_serial={} animation=cpp-scale-sine-0.85..1.15 gpu-scene=resident read_ms={}\n",
+                        request.turn,
+                        presentation.window.raw(),
+                        typed,
+                        Instant::now().as_millis().saturating_sub(request.enqueued_ms),
+                        animation_serial,
+                        RESPONSE_READ_MS,
+                    ),
+                    Err(reason) => crate::log_warn!(
+                        target: "gfx";
+                        "trueos-spirit: response typed without motion turn={} window={} cells={} reason={} retained_static_rainbow=1\n",
+                        request.turn,
+                        presentation.window.raw(),
+                        typed,
+                        reason,
+                    ),
+                }
+            }
             Err(reason) => crate::log_warn!(
                 target: "gfx";
                 "trueos-spirit: response typing stopped turn={} window={} reason={}\n",
@@ -408,11 +498,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn response_is_bounded_by_grid_cells_and_collapses_whitespace() {
+    fn response_is_bounded_by_grid_cells_and_wraps_whitespace() {
         let input = alloc::format!("hello\n\tworld {}", "x".repeat(SPIRIT_GRID_CELL_CAPACITY + 20));
         let output = sanitize_response(input.as_str());
-        assert_eq!(output.chars().count(), SPIRIT_GRID_CELL_CAPACITY);
-        assert!(output.starts_with("hello world "));
+        let lines = output.lines().collect::<Vec<_>>();
+        assert!(lines.len() <= SPIRIT_GRID_ROWS as usize);
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.chars().count() <= SPIRIT_GRID_COLUMNS as usize)
+        );
+        assert!(output.starts_with("hello world\n"));
         assert!(output.ends_with("..."));
+    }
+
+    #[test]
+    fn response_moves_a_word_to_the_next_row_before_splitting_it() {
+        let output = sanitize_response("1234567890123456 abc next");
+        assert_eq!(output, "1234567890123456\nabc next");
     }
 }

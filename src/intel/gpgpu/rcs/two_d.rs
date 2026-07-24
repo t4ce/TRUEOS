@@ -507,7 +507,7 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
         return false;
     }
     let payload_end = GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES
-        .saturating_add(active_walkers.saturating_mul(GLYPH_MASK_INDIRECT_BYTES));
+        .saturating_add(active_walkers.saturating_mul(GLYPH_MASK_PAYLOAD_STRIDE_BYTES));
     if payload_end > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
@@ -554,8 +554,8 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
         ) {
             return false;
         }
-        let payload_offset =
-            GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES + walker_index * GLYPH_MASK_INDIRECT_BYTES;
+        let payload_offset = GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES
+            + walker_index * GLYPH_MASK_PAYLOAD_STRIDE_BYTES;
         if !direct_rcs_write_glyph_mask_payload_at(state, payload_offset, params, layer.color_rgba)
         {
             return false;
@@ -593,8 +593,8 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
         let state_block = GLYPH_MASK_BATCH_STATE_BASE_OFFSET_BYTES
             + walker_index * GLYPH_MASK_BATCH_STATE_BLOCK_BYTES;
         let idd_offset = state_block + GLYPH_MASK_BATCH_IDD_OFFSET_IN_BLOCK_BYTES;
-        let payload_offset =
-            GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES + walker_index * GLYPH_MASK_INDIRECT_BYTES;
+        let payload_offset = GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES
+            + walker_index * GLYPH_MASK_PAYLOAD_STRIDE_BYTES;
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
         ok &= direct_rcs_push(batch, &mut cursor, 0);
         ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
@@ -659,7 +659,7 @@ fn direct_rcs_encode_font_instance_layers_2d_batch(
         return false;
     }
     let payload_end = FONT_INSTANCE_BATCH_PAYLOAD_BASE_OFFSET_BYTES
-        .saturating_add(active_walkers.saturating_mul(FONT_INSTANCE_INDIRECT_BYTES));
+        .saturating_add(active_walkers.saturating_mul(FONT_INSTANCE_PAYLOAD_STRIDE_BYTES));
     if payload_end > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
@@ -715,7 +715,7 @@ fn direct_rcs_encode_font_instance_layers_2d_batch(
             return false;
         }
         let payload_offset = FONT_INSTANCE_BATCH_PAYLOAD_BASE_OFFSET_BYTES
-            + walker_index * FONT_INSTANCE_INDIRECT_BYTES;
+            + walker_index * FONT_INSTANCE_PAYLOAD_STRIDE_BYTES;
         if !direct_rcs_write_font_instance_payload_at(
             state,
             payload_offset,
@@ -758,7 +758,7 @@ fn direct_rcs_encode_font_instance_layers_2d_batch(
             + walker_index * FONT_INSTANCE_BATCH_STATE_BLOCK_BYTES;
         let idd_offset = state_block + FONT_INSTANCE_BATCH_IDD_OFFSET_IN_BLOCK_BYTES;
         let payload_offset = FONT_INSTANCE_BATCH_PAYLOAD_BASE_OFFSET_BYTES
-            + walker_index * FONT_INSTANCE_INDIRECT_BYTES;
+            + walker_index * FONT_INSTANCE_PAYLOAD_STRIDE_BYTES;
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
         ok &= direct_rcs_push(batch, &mut cursor, 0);
         ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
