@@ -82,8 +82,8 @@ byte for byte. The runner reports the selected device, projection count,
 OpenCL event-profiled kernel time, NEO driver version, and the size and SHA-256
 of the host-specific executable returned after the IGC build.
 
-The experimental endgame projection lane is kept separate from that proven
-path:
+The packed endgame projection lane is verified independently before it enters
+the TRUEOS product image:
 
 ```sh
 make intel-gpu-bake-lfm25-q8-packed-cpp
@@ -103,9 +103,12 @@ reference through all 930 projections in the sealed ten-token `hi` trace. The
 ISA gate requires eight real SIMD16 DP4A instructions, no scratch, no SLM, and
 at most one remaining scale-byte gather. The Ubuntu hardware gate feeds only
 the packed SPIR-V to NEO, reports effective model-weight GB/s, and requires
-sealed `hi` plus `hi ai` parity before this layout is eligible for a TRUEOS
-port. Neither `lum` nor the current TrueOS projection artifact selects this
-lane.
+sealed `hi` plus `hi ai` parity. After that gate passes, TRUEOS repacks the
+sealed model once in place, verifies the packed hash, and selects the checked
+packed ADL-S artifact through the existing hybrid backend. The Shell2 `lum`
+command is unchanged, the legacy projection artifact remains published, and
+the product build requires both artifacts while rerunning the packed ISA
+check.
 
 The checked-in `lfm25_q8_project.bin` is the separate ADL-S Zebin admitted by
 the TRUEOS artifact contract. Ubuntu does not submit that ADL-S binary to the

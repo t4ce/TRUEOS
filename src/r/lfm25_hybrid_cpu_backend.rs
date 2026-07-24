@@ -9,11 +9,13 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use sha2::{Digest, Sha256};
 
 use trueos_fpga_abi::lfm25::{self, NativeTensorDescriptor, TensorFormat, TensorRole};
-use trueos_fpga_abi::lfm25_decode::{DecodeCapabilities, DecodeOpKind, LayerStateSlot};
+use trueos_fpga_abi::lfm25_decode::{
+    DecodeCapabilities, DecodeOpKind, EmbeddingRowPlan, LayerStateSlot,
+};
 use trueos_lfm25_cpu as cpu;
 
 use crate::r::lfm25_decode::{
@@ -29,6 +31,7 @@ const HEAD_DIM: usize = lfm25::MODEL_HEAD_DIMENSION as usize;
 const KV_ELEMENTS: usize = KV_HEADS * HEAD_DIM;
 const ATTENTION_REDUCTION_TILE: usize = 256;
 const MODEL_READ_CHUNK: usize = 256 * 1024;
+const MODEL_ALIGNMENT: usize = 64;
 const CPU_CONNECTION_GENERATION: u32 = 0x4350_5531; // "CPU1"
 const CPU_SESSION_EPOCH: u32 = 1;
 
@@ -90,7 +93,8 @@ struct KvCache {
 }
 
 pub struct HybridCpuAotDecodeBackend {
-    model: Vec<u8>,
+    model_storage: Vec<u8>,
+    model_offset: usize,
     gpu_model: crate::intel::gpgpu::Lfm25Q8ModelMapping,
     f32: cpu::F32Sidecar,
     slots: Vec<Option<CpuTensor>>,
@@ -102,7 +106,7 @@ pub struct HybridCpuAotDecodeBackend {
 pub type IntelIgcAotDecodeBackend = HybridCpuAotDecodeBackend;
 
 pub async fn open_intel_igc_backend() -> Result<IntelIgcAotDecodeBackend, HybridCpuBackendError> {
-    if !crate::intel::gpgpu::lfm25_q8_project_supported() {
+    if !crate::intel::gpgpu::lfm25_q8_packed_project_supported() {
         return Err(HybridCpuBackendError::Gpu(
             crate::intel::gpgpu::Lfm25Q8ProjectError::UnsupportedTarget,
         ));
@@ -113,11 +117,22 @@ pub async fn open_intel_igc_backend() -> Result<IntelIgcAotDecodeBackend, Hybrid
     let f32 = lfm25_f32::load().await?;
     let image = lfm25_model::open().await?;
     let bytes = usize::try_from(image.len()).map_err(|_| HybridCpuBackendError::Allocation)?;
-    let mut model = Vec::new();
-    model
-        .try_reserve_exact(bytes)
+    let allocation_bytes = bytes
+        .checked_add(MODEL_ALIGNMENT - 1)
+        .ok_or(HybridCpuBackendError::Allocation)?;
+    let mut model_storage = Vec::new();
+    model_storage
+        .try_reserve_exact(allocation_bytes)
         .map_err(|_| HybridCpuBackendError::Allocation)?;
-    model.resize(bytes, 0);
+    model_storage.resize(allocation_bytes, 0);
+    let misalignment = model_storage.as_ptr() as usize % MODEL_ALIGNMENT;
+    let model_offset = (MODEL_ALIGNMENT - misalignment) % MODEL_ALIGNMENT;
+    let model_end = model_offset
+        .checked_add(bytes)
+        .ok_or(HybridCpuBackendError::Allocation)?;
+    let model = model_storage
+        .get_mut(model_offset..model_end)
+        .ok_or(HybridCpuBackendError::Allocation)?;
     let mut hasher = Sha256::new();
     let mut offset = 0usize;
     while offset < model.len() {
@@ -136,7 +151,26 @@ pub async fn open_intel_igc_backend() -> Result<IntelIgcAotDecodeBackend, Hybrid
             expected: lfm25_model::NATIVE_IMAGE_SHA256,
         });
     }
-    let gpu_model = crate::intel::gpgpu::bind_lfm25_q8_model(&model)?;
+    let pack_started_ms = Instant::now().as_millis();
+    let packed = cpu::pack_q8x16_model_in_place(model)?;
+    let packed_observed: [u8; 32] = Sha256::digest(&*model).into();
+    if packed_observed != cpu::PACKED_Q8X16_IMAGE_SHA256 {
+        return Err(HybridCpuBackendError::ModelHash {
+            observed: packed_observed,
+            expected: cpu::PACKED_Q8X16_IMAGE_SHA256,
+        });
+    }
+    crate::log_info!(
+        target: "r";
+        "lfm25: packed model ready weight_layout=pair1088-x16-dp4a bytes={} tensors={} block_tiles={} quantized_values={} subnormal_scales={} pack_seal_ms={} sha256=90876f02e0cc224fe23e01c8739dcbb94d7bcc8fbfa3d36204c6267a440f5fd8\n",
+        model.len(),
+        packed.tensor_count,
+        packed.block_tiles,
+        packed.quantized_values,
+        packed.subnormal_scales,
+        Instant::now().as_millis().saturating_sub(pack_started_ms),
+    );
+    let gpu_model = crate::intel::gpgpu::bind_lfm25_q8_packed_model(model)?;
 
     let mut shortconv = Vec::new();
     shortconv
@@ -153,7 +187,8 @@ pub async fn open_intel_igc_backend() -> Result<IntelIgcAotDecodeBackend, Hybrid
     }
 
     Ok(HybridCpuAotDecodeBackend {
-        model,
+        model_storage,
+        model_offset,
         gpu_model,
         f32,
         slots: Vec::new(),
@@ -181,13 +216,19 @@ impl HybridCpuAotDecodeBackend {
     }
 
     fn tensor(&self, descriptor: NativeTensorDescriptor) -> Result<&[u8], HybridCpuBackendError> {
+        let model_end = self
+            .model_offset
+            .checked_add(lfm25::PINNED_NATIVE_IMAGE_BYTES as usize)
+            .ok_or(HybridCpuBackendError::Tensor)?;
+        let model = self
+            .model_storage
+            .get(self.model_offset..model_end)
+            .ok_or(HybridCpuBackendError::Tensor)?;
         let start = descriptor.native_offset as usize;
         let end = start
             .checked_add(descriptor.native_bytes as usize)
             .ok_or(HybridCpuBackendError::Tensor)?;
-        self.model
-            .get(start..end)
-            .ok_or(HybridCpuBackendError::Tensor)
+        model.get(start..end).ok_or(HybridCpuBackendError::Tensor)
     }
 
     fn f32_tensor(
@@ -349,21 +390,35 @@ impl HybridCpuAotDecodeBackend {
         self.release(tensor.resident())
     }
 
-    fn embedding(
-        &mut self,
-        native_offset: u32,
-        native_bytes: u32,
-    ) -> Result<HiddenQ30, HybridCpuBackendError> {
-        let start = native_offset as usize;
-        let end = start
-            .checked_add(native_bytes as usize)
+    fn embedding(&mut self, row: EmbeddingRowPlan) -> Result<HiddenQ30, HybridCpuBackendError> {
+        let descriptor = Self::descriptor(None, TensorRole::TokenEmbedding)?;
+        let row_bytes = cpu::q8_row_bytes(descriptor.ggml_ne0 as usize)?;
+        let expected_offset = descriptor
+            .native_offset
+            .checked_add(
+                row.token
+                    .checked_mul(row_bytes as u32)
+                    .ok_or(HybridCpuBackendError::Tensor)?,
+            )
             .ok_or(HybridCpuBackendError::Tensor)?;
-        let row = self
-            .model
-            .get(start..end)
-            .ok_or(HybridCpuBackendError::Tensor)?;
+        if row.tensor_id != descriptor.tensor_id
+            || row.native_offset != expected_offset
+            || row.native_bytes as usize != row_bytes
+            || row.token >= descriptor.ggml_ne1
+            || TensorFormat::from_raw(descriptor.format) != Some(TensorFormat::Q8_0)
+            || descriptor.ggml_ne0 as usize != HIDDEN
+        {
+            return Err(HybridCpuBackendError::Tensor);
+        }
+        let matrix = self.tensor(descriptor)?;
         let mut values = vec![0.0f32; HIDDEN];
-        cpu::dequantize_q8_row(row, &mut values)?;
+        cpu::dequantize_q8x16_row(
+            matrix,
+            descriptor.ggml_ne1 as usize,
+            descriptor.ggml_ne0 as usize,
+            row.token as usize,
+            &mut values,
+        )?;
         self.allocate_q30(values)
     }
 
@@ -665,7 +720,7 @@ impl AotDecodeBackend for HybridCpuAotDecodeBackend {
         let operation = request.kind();
         let output = match request {
             AotDecodeRequest::TokenEmbedding { row } => {
-                AotDecodeOutput::HiddenQ30(self.embedding(row.native_offset, row.native_bytes)?)
+                AotDecodeOutput::HiddenQ30(self.embedding(row)?)
             }
             AotDecodeRequest::OperatorRmsNorm { layer, input } => AotDecodeOutput::HiddenQ8(
                 self.norm(Some(layer), TensorRole::OperatorNorm, input)?,

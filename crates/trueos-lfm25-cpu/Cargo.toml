@@ -21,3 +21,7 @@ path = "src/bin/tokenizer_seal.rs"
 [[bin]]
 name = "lfm25-f32-seal"
 path = "src/bin/f32_seal.rs"
+
+[[bin]]
+name = "lfm25-packed-seal"
+path = "src/bin/packed_seal.rs"

@@ -10,6 +10,7 @@ use embassy_sync::{
     watch::{Receiver as WatchReceiver, Watch},
 };
 use embassy_time::{Duration, Timer};
+use heapless::Deque;
 use spin::Mutex;
 
 use super::{DamageRect, DamageRegion, FrameBuffering, FrameHandle, OutputId};
@@ -26,6 +27,7 @@ const MAX_SESSIONS: usize = 64;
 pub(super) const MAX_EXPENSIVE_WINDOWS: usize = super::INTERACTION_OVERLAY_PLANE_SLOT;
 pub(crate) const WINDOW_BROKER_SNAPSHOT_PERIOD_MS: u64 = 3_000;
 const WINDOW_BROKER_SNAPSHOT_RECEIVERS: usize = 8;
+const WINDOW_FIRST_PRESENTATION_QUEUE_CAP: usize = 32;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WindowOwner {
@@ -397,6 +399,7 @@ struct WindowRecord {
     state: WindowState,
     revision: u64,
     publish_serial: u64,
+    first_presentation_emitted: bool,
     damage: Option<DamageRegion>,
     restore_placement: Option<WindowPlacement>,
     close_transition: Option<WindowCloseTransition>,
@@ -1013,6 +1016,7 @@ impl WindowRecord {
             state: WindowState::Pending,
             revision: 1,
             publish_serial: 0,
+            first_presentation_emitted: false,
             damage: None,
             restore_placement: None,
             close_transition: None,
@@ -1043,6 +1047,11 @@ impl WindowRecord {
 static WINDOW_BROKER: Mutex<WindowBroker> = Mutex::new(WindowBroker::new());
 static TRANSITION_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 static WINDOW_COMPOSITION_CHANGED: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
+static WINDOW_FIRST_PRESENTATIONS: Mutex<
+    Deque<WindowSnapshot, WINDOW_FIRST_PRESENTATION_QUEUE_CAP>,
+> = Mutex::new(Deque::new());
+static WINDOW_FIRST_PRESENTATION_READY: Signal<crate::wait::EmbassySpinRawMutex, ()> =
+    Signal::new();
 static WINDOW_BROKER_SNAPSHOT: Watch<
     crate::wait::EmbassySpinRawMutex,
     WindowBrokerSnapshot,

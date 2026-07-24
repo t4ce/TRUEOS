@@ -19,6 +19,30 @@ pub const Q8_BLOCK_VALUES: usize = trueos_fpga_abi::lfm25::Q8_0_BLOCK_VALUES;
 pub const Q8_BLOCK_BYTES: usize = trueos_fpga_abi::lfm25::Q8_0_BLOCK_BYTES;
 pub const HEAD_DIMENSION: usize = trueos_fpga_abi::lfm25::MODEL_HEAD_DIMENSION as usize;
 pub const HALF_HEAD_DIMENSION: usize = HEAD_DIMENSION / 2;
+pub const PACKED_Q8X16_ROWS: usize = 16;
+pub const PACKED_Q8X16_BLOCKS_PER_PAIR: usize = 2;
+pub const PACKED_Q8X16_WORDS_PER_BLOCK: usize = Q8_BLOCK_VALUES / 4;
+pub const PACKED_Q8X16_PAIR_BYTES: usize = PACKED_Q8X16_BLOCKS_PER_PAIR
+    * (PACKED_Q8X16_ROWS * core::mem::size_of::<u16>() + PACKED_Q8X16_ROWS * Q8_BLOCK_VALUES);
+pub const PACKED_Q8X16_TENSOR_COUNT: usize = 93;
+pub const PACKED_Q8X16_BLOCK_TILES: u64 = 692_224;
+pub const PACKED_Q8X16_QUANTIZED_VALUES: u64 = 354_418_688;
+pub const PACKED_Q8X16_SUBNORMAL_SCALES: u64 = 25_994;
+pub const PACKED_Q8X16_IMAGE_SHA256: [u8; 32] = [
+    0x90, 0x87, 0x6f, 0x02, 0xe0, 0xcc, 0x22, 0x4f, 0xe2, 0x3e, 0x01, 0xc8, 0x73, 0x9d, 0xcb, 0xb9,
+    0x4d, 0x7b, 0xcc, 0x8f, 0xbf, 0xa3, 0xd3, 0x62, 0x04, 0xc6, 0x26, 0x7a, 0x44, 0x0f, 0x5f, 0xd8,
+];
+
+const _: () = assert!(PACKED_Q8X16_PAIR_BYTES == 1_088);
+const _: () = assert!(PACKED_Q8X16_PAIR_BYTES.is_multiple_of(64));
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PackedQ8x16Stats {
+    pub tensor_count: usize,
+    pub block_tiles: u64,
+    pub quantized_values: u64,
+    pub subnormal_scales: u64,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -645,6 +669,271 @@ pub fn q8_row_bytes(elements: usize) -> Result<usize, Error> {
         .ok_or(Error::Shape)
 }
 
+fn packed_q8x16_admitted_shape(columns: usize, rows: usize) -> bool {
+    if columns == trueos_fpga_abi::lfm25::MODEL_HIDDEN_SIZE as usize {
+        matches!(rows, 512 | 1_024 | 3_072 | 4_608 | 65_536)
+    } else {
+        columns == trueos_fpga_abi::lfm25::MODEL_FEED_FORWARD_SIZE as usize && rows == 1_024
+    }
+}
+
+fn packed_q8x16_scale(bits: u16) -> Result<bool, Error> {
+    if bits & 0x8000 != 0 || bits & 0x7c00 == 0x7c00 {
+        return Err(Error::NonFinite);
+    }
+    Ok(bits & 0x7c00 == 0 && bits & 0x03ff != 0)
+}
+
+fn pack_q8x16_tensor_in_place(
+    matrix: &mut [u8],
+    rows: usize,
+    columns: usize,
+    scratch: &mut [u8],
+    stats: &mut PackedQ8x16Stats,
+) -> Result<(), Error> {
+    if !packed_q8x16_admitted_shape(columns, rows)
+        || rows % PACKED_Q8X16_ROWS != 0
+        || columns % (Q8_BLOCK_VALUES * PACKED_Q8X16_BLOCKS_PER_PAIR) != 0
+    {
+        return Err(Error::Shape);
+    }
+    let blocks = columns / Q8_BLOCK_VALUES;
+    let pairs = blocks / PACKED_Q8X16_BLOCKS_PER_PAIR;
+    let row_bytes = q8_row_bytes(columns)?;
+    let tile_bytes = PACKED_Q8X16_ROWS
+        .checked_mul(row_bytes)
+        .ok_or(Error::Shape)?;
+    if matrix.len() != rows.checked_mul(row_bytes).ok_or(Error::Shape)?
+        || scratch.len() < tile_bytes
+        || pairs.checked_mul(PACKED_Q8X16_PAIR_BYTES) != Some(tile_bytes)
+    {
+        return Err(Error::Shape);
+    }
+
+    let scale_tile_bytes = PACKED_Q8X16_ROWS * core::mem::size_of::<u16>();
+    let quant_tile_bytes = PACKED_Q8X16_ROWS * Q8_BLOCK_VALUES;
+    for row_tile in 0..rows / PACKED_Q8X16_ROWS {
+        let tile_start = row_tile * tile_bytes;
+        let tile_end = tile_start + tile_bytes;
+        scratch[..tile_bytes].copy_from_slice(&matrix[tile_start..tile_end]);
+
+        for pair in 0..pairs {
+            let destination_pair = tile_start + pair * PACKED_Q8X16_PAIR_BYTES;
+            for block_in_pair in 0..PACKED_Q8X16_BLOCKS_PER_PAIR {
+                let block = pair * PACKED_Q8X16_BLOCKS_PER_PAIR + block_in_pair;
+                let scale_destination = destination_pair + block_in_pair * scale_tile_bytes;
+                let quant_destination = destination_pair
+                    + PACKED_Q8X16_BLOCKS_PER_PAIR * scale_tile_bytes
+                    + block_in_pair * quant_tile_bytes;
+
+                for lane in 0..PACKED_Q8X16_ROWS {
+                    let source_block = lane * row_bytes + block * Q8_BLOCK_BYTES;
+                    let scale =
+                        u16::from_le_bytes([scratch[source_block], scratch[source_block + 1]]);
+                    if packed_q8x16_scale(scale)? {
+                        stats.subnormal_scales = stats.subnormal_scales.saturating_add(1);
+                    }
+                    let scale_offset = scale_destination + lane * core::mem::size_of::<u16>();
+                    matrix[scale_offset..scale_offset + 2].copy_from_slice(&scale.to_le_bytes());
+
+                    for word in 0..PACKED_Q8X16_WORDS_PER_BLOCK {
+                        let source = source_block + 2 + word * core::mem::size_of::<u32>();
+                        let values = u32::from_le_bytes(
+                            scratch[source..source + 4]
+                                .try_into()
+                                .map_err(|_| Error::Encoding)?,
+                        );
+                        if values.to_le_bytes().into_iter().any(|value| value == 0x80) {
+                            return Err(Error::Encoding);
+                        }
+                        let destination = quant_destination
+                            + word * PACKED_Q8X16_ROWS * core::mem::size_of::<u32>()
+                            + lane * core::mem::size_of::<u32>();
+                        matrix[destination..destination + 4].copy_from_slice(&values.to_le_bytes());
+                    }
+                }
+            }
+        }
+    }
+
+    stats.tensor_count = stats.tensor_count.saturating_add(1);
+    stats.block_tiles = stats
+        .block_tiles
+        .saturating_add((rows / PACKED_Q8X16_ROWS * blocks) as u64);
+    stats.quantized_values = stats
+        .quantized_values
+        .saturating_add((rows * columns) as u64);
+    Ok(())
+}
+
+/// Repack the exact sealed LFM2.5 Q8 matrices in place for the SIMD16 DP4A
+/// kernel. A complete sixteen-row native tile is copied to a small scratch
+/// buffer before its bytes are overwritten, so resident model memory stays at
+/// one image plus at most 78,336 bytes.
+pub fn pack_q8x16_model_in_place(model: &mut [u8]) -> Result<PackedQ8x16Stats, Error> {
+    if model.len() != trueos_fpga_abi::lfm25::PINNED_NATIVE_IMAGE_BYTES as usize {
+        return Err(Error::Artifact);
+    }
+
+    let maximum_tile_bytes = trueos_fpga_abi::lfm25::generated::TENSORS
+        .iter()
+        .filter(|descriptor| {
+            trueos_fpga_abi::lfm25::TensorFormat::from_raw(descriptor.format)
+                == Some(trueos_fpga_abi::lfm25::TensorFormat::Q8_0)
+        })
+        .map(|descriptor| {
+            q8_row_bytes(descriptor.ggml_ne0 as usize)
+                .and_then(|bytes| bytes.checked_mul(PACKED_Q8X16_ROWS).ok_or(Error::Shape))
+        })
+        .try_fold(0usize, |maximum, bytes| bytes.map(|bytes| maximum.max(bytes)))?;
+    let mut scratch = Vec::new();
+    scratch
+        .try_reserve_exact(maximum_tile_bytes)
+        .map_err(|_| Error::Allocation)?;
+    scratch.resize(maximum_tile_bytes, 0);
+
+    let mut stats = PackedQ8x16Stats::default();
+    for descriptor in trueos_fpga_abi::lfm25::generated::TENSORS {
+        if trueos_fpga_abi::lfm25::TensorFormat::from_raw(descriptor.format)
+            != Some(trueos_fpga_abi::lfm25::TensorFormat::Q8_0)
+        {
+            continue;
+        }
+        let columns = descriptor.ggml_ne0 as usize;
+        let rows = descriptor.ggml_ne1 as usize;
+        let start = descriptor.native_offset as usize;
+        let end = start
+            .checked_add(descriptor.native_bytes as usize)
+            .ok_or(Error::Artifact)?;
+        let expected_bytes = rows
+            .checked_mul(q8_row_bytes(columns)?)
+            .ok_or(Error::Artifact)?;
+        if descriptor.rank != 2
+            || descriptor.native_offset % 64 != 0
+            || descriptor.native_bytes as usize != expected_bytes
+        {
+            return Err(Error::Artifact);
+        }
+        let tensor = model.get_mut(start..end).ok_or(Error::Artifact)?;
+        pack_q8x16_tensor_in_place(tensor, rows, columns, &mut scratch, &mut stats)?;
+    }
+    if stats.tensor_count != PACKED_Q8X16_TENSOR_COUNT
+        || stats.block_tiles != PACKED_Q8X16_BLOCK_TILES
+        || stats.quantized_values != PACKED_Q8X16_QUANTIZED_VALUES
+        || stats.subnormal_scales != PACKED_Q8X16_SUBNORMAL_SCALES
+    {
+        return Err(Error::Artifact);
+    }
+    Ok(stats)
+}
+
+pub fn packed_q8x16_activation_bytes(columns: usize) -> Result<usize, Error> {
+    if columns != trueos_fpga_abi::lfm25::MODEL_HIDDEN_SIZE as usize
+        && columns != trueos_fpga_abi::lfm25::MODEL_FEED_FORWARD_SIZE as usize
+    {
+        return Err(Error::Shape);
+    }
+    (columns / Q8_BLOCK_VALUES)
+        .checked_mul(core::mem::size_of::<u32>() * (1 + PACKED_Q8X16_WORDS_PER_BLOCK))
+        .ok_or(Error::Shape)
+}
+
+/// Convert native 34-byte Q8 blocks into `uint scale[blocks]` followed by
+/// `uint qwords[blocks][8]`, exactly matching the packed C++ kernel ABI.
+pub fn pack_q8x16_activation(
+    native: &[u8],
+    columns: usize,
+    output: &mut [u8],
+) -> Result<(), Error> {
+    let blocks = columns.checked_div(Q8_BLOCK_VALUES).ok_or(Error::Shape)?;
+    let native_bytes = q8_row_bytes(columns)?;
+    let packed_bytes = packed_q8x16_activation_bytes(columns)?;
+    if native.len() != native_bytes || output.len() != packed_bytes {
+        return Err(Error::Shape);
+    }
+    output.fill(0);
+
+    let qword_base = blocks * core::mem::size_of::<u32>();
+    for (block, source) in native.chunks_exact(Q8_BLOCK_BYTES).enumerate() {
+        let scale = u16::from_le_bytes([source[0], source[1]]);
+        packed_q8x16_scale(scale)?;
+        let scale_offset = block * core::mem::size_of::<u32>();
+        output[scale_offset..scale_offset + 4].copy_from_slice(&(scale as u32).to_le_bytes());
+        for word in 0..PACKED_Q8X16_WORDS_PER_BLOCK {
+            let source_offset = 2 + word * core::mem::size_of::<u32>();
+            let values: [u8; 4] = source[source_offset..source_offset + 4]
+                .try_into()
+                .map_err(|_| Error::Encoding)?;
+            if values.into_iter().any(|value| value == 0x80) {
+                return Err(Error::Encoding);
+            }
+            let destination = qword_base
+                + (block * PACKED_Q8X16_WORDS_PER_BLOCK + word) * core::mem::size_of::<u32>();
+            output[destination..destination + 4].copy_from_slice(&values);
+        }
+    }
+    Ok(())
+}
+
+/// Read one row from a packed fixed-shape matrix. This is used only for the
+/// tied token embedding; projections consume the same bytes directly on GPU.
+pub fn dequantize_q8x16_row(
+    matrix: &[u8],
+    rows: usize,
+    columns: usize,
+    row: usize,
+    output: &mut [f32],
+) -> Result<(), Error> {
+    if !packed_q8x16_admitted_shape(columns, rows)
+        || row >= rows
+        || output.len() != columns
+        || matrix.len()
+            != rows
+                .checked_mul(q8_row_bytes(columns)?)
+                .ok_or(Error::Shape)?
+    {
+        return Err(Error::Shape);
+    }
+    let blocks = columns / Q8_BLOCK_VALUES;
+    let pairs = blocks / PACKED_Q8X16_BLOCKS_PER_PAIR;
+    let row_tile = row / PACKED_Q8X16_ROWS;
+    let lane = row % PACKED_Q8X16_ROWS;
+    let scale_tile_bytes = PACKED_Q8X16_ROWS * core::mem::size_of::<u16>();
+    let quant_tile_bytes = PACKED_Q8X16_ROWS * Q8_BLOCK_VALUES;
+
+    for block in 0..blocks {
+        let block_in_pair = block % PACKED_Q8X16_BLOCKS_PER_PAIR;
+        let pair =
+            (row_tile * pairs + block / PACKED_Q8X16_BLOCKS_PER_PAIR) * PACKED_Q8X16_PAIR_BYTES;
+        let scale_offset =
+            pair + block_in_pair * scale_tile_bytes + lane * core::mem::size_of::<u16>();
+        let scale_bits = u16::from_le_bytes(
+            matrix[scale_offset..scale_offset + 2]
+                .try_into()
+                .map_err(|_| Error::Encoding)?,
+        );
+        packed_q8x16_scale(scale_bits)?;
+        let scale = f16::from_bits(scale_bits).to_f32();
+        let quant_base = pair
+            + PACKED_Q8X16_BLOCKS_PER_PAIR * scale_tile_bytes
+            + block_in_pair * quant_tile_bytes
+            + lane * core::mem::size_of::<u32>();
+        for word in 0..PACKED_Q8X16_WORDS_PER_BLOCK {
+            let source = quant_base + word * PACKED_Q8X16_ROWS * core::mem::size_of::<u32>();
+            let values: [u8; 4] = matrix[source..source + 4]
+                .try_into()
+                .map_err(|_| Error::Encoding)?;
+            for (byte, quant) in values.into_iter().enumerate() {
+                if quant == 0x80 {
+                    return Err(Error::Encoding);
+                }
+                output[block * Q8_BLOCK_VALUES + word * 4 + byte] = scale * f32::from(quant as i8);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn dequantize_q8_row(row: &[u8], output: &mut [f32]) -> Result<(), Error> {
     if row.len() != q8_row_bytes(output.len())? {
         return Err(Error::Shape);
@@ -1230,6 +1519,98 @@ mod tests {
         let negative = silu_mul_q30(-2 * ONE_Q30, ONE_Q30).unwrap();
         assert!((positive - 1_891_497_322).abs() <= 256);
         assert!((negative + 255_986_326).abs() <= 256);
+    }
+
+    #[test]
+    fn packed_q8x16_generated_contract_is_the_fixed_93_tensor_graph() {
+        let mut tensors = 0usize;
+        let mut block_tiles = 0u64;
+        let mut quantized_values = 0u64;
+        let mut maximum_tile_bytes = 0usize;
+        for descriptor in trueos_fpga_abi::lfm25::generated::TENSORS {
+            if trueos_fpga_abi::lfm25::TensorFormat::from_raw(descriptor.format)
+                != Some(trueos_fpga_abi::lfm25::TensorFormat::Q8_0)
+            {
+                continue;
+            }
+            let rows = descriptor.ggml_ne1 as usize;
+            let columns = descriptor.ggml_ne0 as usize;
+            assert!(packed_q8x16_admitted_shape(columns, rows));
+            assert_eq!(descriptor.rank, 2);
+            assert_eq!(descriptor.native_offset % 64, 0);
+            assert_eq!(descriptor.native_bytes as usize, rows * q8_row_bytes(columns).unwrap());
+            tensors += 1;
+            block_tiles += (rows / PACKED_Q8X16_ROWS * (columns / Q8_BLOCK_VALUES)) as u64;
+            quantized_values += (rows * columns) as u64;
+            maximum_tile_bytes =
+                maximum_tile_bytes.max(PACKED_Q8X16_ROWS * q8_row_bytes(columns).unwrap());
+        }
+        assert_eq!(tensors, PACKED_Q8X16_TENSOR_COUNT);
+        assert_eq!(block_tiles, PACKED_Q8X16_BLOCK_TILES);
+        assert_eq!(quantized_values, PACKED_Q8X16_QUANTIZED_VALUES);
+        assert_eq!(maximum_tile_bytes, 78_336);
+    }
+
+    #[test]
+    fn packed_q8x16_in_place_rows_and_activation_match_native_bytes() {
+        let rows = 512usize;
+        let columns = 1_024usize;
+        let row_bytes = q8_row_bytes(columns).unwrap();
+        let mut native = vec![0u8; rows * row_bytes];
+        for row in 0..rows {
+            for block in 0..columns / Q8_BLOCK_VALUES {
+                let offset = row * row_bytes + block * Q8_BLOCK_BYTES;
+                let scale = f16::from_f32(0.000_5 + (row % 17) as f32 * 0.000_1);
+                native[offset..offset + 2].copy_from_slice(&scale.to_bits().to_le_bytes());
+                for quant in 0..Q8_BLOCK_VALUES {
+                    native[offset + 2 + quant] =
+                        (((row * 13 + block * 7 + quant) % 255) as i16 - 127) as i8 as u8;
+                }
+            }
+        }
+
+        let original = native.clone();
+        let mut scratch = vec![0u8; PACKED_Q8X16_ROWS * row_bytes];
+        let mut stats = PackedQ8x16Stats::default();
+        pack_q8x16_tensor_in_place(&mut native, rows, columns, &mut scratch, &mut stats).unwrap();
+        assert_eq!(
+            stats,
+            PackedQ8x16Stats {
+                tensor_count: 1,
+                block_tiles: 1_024,
+                quantized_values: 524_288,
+                subnormal_scales: 0,
+            }
+        );
+
+        for row in [0usize, 15, 16, 255, 511] {
+            let mut expected = vec![0.0f32; columns];
+            let mut observed = vec![0.0f32; columns];
+            dequantize_q8_row(&original[row * row_bytes..(row + 1) * row_bytes], &mut expected)
+                .unwrap();
+            dequantize_q8x16_row(&native, rows, columns, row, &mut observed).unwrap();
+            assert_eq!(observed, expected);
+        }
+
+        let activation_native = &original[5 * row_bytes..6 * row_bytes];
+        let mut activation = vec![0u8; packed_q8x16_activation_bytes(columns).unwrap()];
+        pack_q8x16_activation(activation_native, columns, &mut activation).unwrap();
+        let blocks = columns / Q8_BLOCK_VALUES;
+        for block in 0..blocks {
+            assert_eq!(
+                &activation[block * 4..block * 4 + 4],
+                &u32::from(u16::from_le_bytes([
+                    activation_native[block * Q8_BLOCK_BYTES],
+                    activation_native[block * Q8_BLOCK_BYTES + 1],
+                ]))
+                .to_le_bytes()
+            );
+            for word in 0..PACKED_Q8X16_WORDS_PER_BLOCK {
+                let packed = blocks * 4 + (block * PACKED_Q8X16_WORDS_PER_BLOCK + word) * 4;
+                let source = block * Q8_BLOCK_BYTES + 2 + word * 4;
+                assert_eq!(&activation[packed..packed + 4], &activation_native[source..source + 4]);
+            }
+        }
     }
 
     #[test]

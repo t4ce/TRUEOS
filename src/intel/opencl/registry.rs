@@ -77,6 +77,8 @@ const CPP_AUDIO_VISUALIZER_CROSS_THREAD_BYTES: u32 =
     gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
 const LFM25_Q8_PROJECT_CROSS_THREAD_BYTES: u32 =
     gpgpu::LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
+const LFM25_Q8_PROJECT_PACKED_CROSS_THREAD_BYTES: u32 =
+    gpgpu::LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
 const FONT_OUTLINE_MESH_CROSS_THREAD_BYTES: u32 = 128;
 const FONT_OUTLINE_COVERAGE_R8_CROSS_THREAD_BYTES: u32 = 128;
 const GENERIC_PER_THREAD_BYTES: u32 = 96;
@@ -594,6 +596,20 @@ const LFM25_Q8_PROJECT_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     launch: KernelLaunchContract::nd_range_1d(),
     consumers: &["lfm2.5 fixed Q8 reasoning projection"],
 };
+const LFM25_Q8_PROJECT_PACKED_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
+    name: gpgpu::LFM25_Q8_PROJECT_PACKED_KERNEL_NAME,
+    source_path: gpgpu::LFM25_Q8_PROJECT_PACKED_SOURCE_PATH,
+    producer: IGC,
+    target: ADLS,
+    entry_text_offset_bytes: gpgpu::LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.entry_offset,
+    cross_thread_bytes: LFM25_Q8_PROJECT_PACKED_CROSS_THREAD_BYTES,
+    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
+    binding_count: 3,
+    args: LFM25_Q8_PROJECT_ARGS,
+    descriptor_layouts: NO_DESCS,
+    launch: KernelLaunchContract::nd_range_1d(),
+    consumers: &["lfm2.5 fixed packed Q8x16 DP4A reasoning projection"],
+};
 
 const FONT_OUTLINE_MESH_ARGS: &[KernelCallArg<'_>] = &[
     ro_buf!(0, "outline_ops", "__global const uint*", 0, 12),
@@ -775,6 +791,14 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         contract: &LFM25_Q8_PROJECT_CONTRACT,
         upload: gpgpu::upload_lfm25_q8_project_kernel,
         status: gpgpu::lfm25_q8_project_upload_status,
+        role: KnownKernelRole::Lfm25Q8,
+    },
+    KnownAotKernel {
+        name: gpgpu::LFM25_Q8_PROJECT_PACKED_KERNEL_NAME,
+        artifact: &gpgpu::LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT,
+        contract: &LFM25_Q8_PROJECT_PACKED_CONTRACT,
+        upload: gpgpu::upload_lfm25_q8_project_packed_kernel,
+        status: gpgpu::lfm25_q8_project_packed_upload_status,
         role: KnownKernelRole::Lfm25Q8,
     },
     KnownAotKernel {

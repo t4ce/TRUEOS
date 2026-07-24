@@ -1,13 +1,13 @@
 fn direct_rcs_write_lfm25_q8_payload(
     state: DirectRcsState,
+    upload: UploadedKernelArtifact,
     params: Lfm25Q8ProjectParams,
     payload_offset: usize,
 ) -> bool {
     if payload_offset + LFM25_Q8_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
-    let Some(known) = super::opencl::registry::known_aot_kernel(LFM25_Q8_PROJECT_KERNEL_NAME)
-    else {
+    let Some(known) = super::opencl::registry::known_aot_kernel(upload.name) else {
         return false;
     };
 
@@ -57,6 +57,7 @@ const fn lfm25_q8_state_offset(dispatch: usize, relative: usize) -> usize {
 
 fn direct_rcs_write_lfm25_q8_dispatch_state(
     state: DirectRcsState,
+    upload: UploadedKernelArtifact,
     params: Lfm25Q8ProjectParams,
     dispatch: usize,
 ) -> bool {
@@ -71,12 +72,17 @@ fn direct_rcs_write_lfm25_q8_dispatch_state(
         lfm25_q8_state_offset(dispatch, LFM25_Q8_OUTPUT_SURFACE_STATE_RELATIVE_OFFSET_BYTES);
     let payload_offset = lfm25_q8_state_offset(dispatch, LFM25_Q8_PAYLOAD_RELATIVE_OFFSET_BYTES);
     let cross_thread_grfs = LFM25_Q8_CROSS_THREAD_BYTES.div_ceil(32) as u32;
+    let text_offset = match upload.name {
+        LFM25_Q8_PROJECT_KERNEL_NAME => LFM25_Q8_PROJECT_TEXT_OFFSET_BYTES,
+        LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => LFM25_Q8_PROJECT_PACKED_TEXT_OFFSET_BYTES,
+        _ => return false,
+    };
 
     if !direct_rcs_write_interface_descriptor_at(
         state,
         idd_offset,
         binding_offset,
-        LFM25_Q8_PROJECT_TEXT_OFFSET_BYTES,
+        text_offset,
         3,
         cross_thread_grfs,
     ) {
@@ -103,7 +109,23 @@ fn direct_rcs_write_lfm25_q8_dispatch_state(
         output_surface_offset,
         params.output_gpu,
         params.output_bytes,
-    ) && direct_rcs_write_lfm25_q8_payload(state, params, payload_offset)
+    ) && direct_rcs_write_lfm25_q8_payload(state, upload, params, payload_offset)
+}
+
+fn lfm25_q8_project_upload_valid(upload: UploadedKernelArtifact) -> bool {
+    match upload.name {
+        LFM25_Q8_PROJECT_KERNEL_NAME => {
+            upload.bin_sha256 == LFM25_Q8_PROJECT_ADLS_BIN_SHA256
+                && upload.gpu == LFM25_Q8_PROJECT_ADLS_GPU
+                && upload.bytes == LFM25_Q8_PROJECT_ADLS_BIN.len()
+        }
+        LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => {
+            upload.bin_sha256 == LFM25_Q8_PROJECT_PACKED_ADLS_BIN_SHA256
+                && upload.gpu == LFM25_Q8_PROJECT_PACKED_ADLS_GPU
+                && upload.bytes == LFM25_Q8_PROJECT_PACKED_ADLS_BIN.len()
+        }
+        _ => false,
+    }
 }
 
 fn direct_rcs_encode_lfm25_q8_batch(
@@ -113,12 +135,16 @@ fn direct_rcs_encode_lfm25_q8_batch(
 ) -> bool {
     if params.is_empty()
         || params.len() > LFM25_Q8_MAX_BATCH_PROJECTIONS
-        || upload.bin_sha256 != LFM25_Q8_PROJECT_ADLS_BIN_SHA256
-        || upload.gpu != LFM25_Q8_PROJECT_ADLS_GPU
-        || upload.bytes != LFM25_Q8_PROJECT_ADLS_BIN.len()
+        || !lfm25_q8_project_upload_valid(upload)
         || params.iter().any(|params| {
+            let blocks = params.columns as usize / trueos_lfm25_cpu::Q8_BLOCK_VALUES;
+            let activation_bytes = if upload.name == LFM25_Q8_PROJECT_PACKED_KERNEL_NAME {
+                blocks * (core::mem::size_of::<u32>() * 9)
+            } else {
+                blocks * trueos_lfm25_cpu::Q8_BLOCK_BYTES
+            };
             !lfm25_q8_admitted_shape(params.columns, params.rows)
-                || params.activation_bytes == 0
+                || params.activation_bytes != activation_bytes
                 || params.output_bytes != params.rows as usize * core::mem::size_of::<f32>()
         })
     {
@@ -151,7 +177,7 @@ fn direct_rcs_encode_lfm25_q8_batch(
     }
 
     for (dispatch, params) in params.iter().copied().enumerate() {
-        if !direct_rcs_write_lfm25_q8_dispatch_state(state, params, dispatch) {
+        if !direct_rcs_write_lfm25_q8_dispatch_state(state, upload, params, dispatch) {
             return false;
         }
     }

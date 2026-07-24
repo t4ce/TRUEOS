@@ -222,6 +222,16 @@ pub(crate) const LFM25_Q8_PROJECT_ADLS_ARTIFACT: GpgpuKernelArtifact =
         Some(&LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT),
     );
 
+pub(crate) const LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact::new(
+        LFM25_Q8_PROJECT_PACKED_KERNEL_NAME,
+        LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.target,
+        LFM25_Q8_PROJECT_PACKED_ADLS_BIN,
+        LFM25_Q8_PROJECT_PACKED_ADLS_SPV,
+        LFM25_Q8_PROJECT_PACKED_ADLS_BIN_SHA256,
+        Some(&LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT),
+    );
+
 pub(crate) const FONT_OUTLINE_MESH_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::legacy_adls(
         FONT_OUTLINE_MESH_KERNEL_NAME,

@@ -2,11 +2,10 @@
 
 ## Boundary
 
-This is the first model-specific step toward the resident GPU graph. It changes
-neither Shell2 `lum` nor the proven TRUEOS `lfm25_q8_project` runtime. The local
-Ubuntu lane consumes SPIR-V through Intel NEO/IGC; the checked ADL-S Zebin is
-only a reproducible ISA proof until the Ubuntu parity and performance gates
-pass.
+This is the first model-specific step toward the resident GPU graph. The local
+Ubuntu lane consumes SPIR-V through Intel NEO/IGC; after its parity and
+performance gates pass, the same fixed ABI is selected by the TRUEOS GuC/RCS
+runtime. Shell2 `lum` itself is unchanged.
 
 The model contract is fixed:
 
@@ -119,7 +118,7 @@ kernel time. This is intentionally still a projection-only lane; norms,
 shortconv, attention, state and nonlinearities remain on the CPU until packed
 projection parity and bandwidth are measured.
 
-## Gates before a TRUEOS port
+## Gates and TRUEOS port
 
 ```sh
 make intel-gpu-bake-lfm25-q8-packed-cpp
@@ -143,7 +142,24 @@ Required evidence:
 - NEO, IGC and successful i915 `EXECBUFFER2` evidence;
 - event-profiled model-weight GB/s and scalar-versus-packed speedup.
 
-Only after those gates pass does the same ABI move into a new TRUEOS operation
-and GuC/RCS encoder. The legacy artifact remains available throughout. Shell2
-`lum` is not changed until a later resident-token graph completes state and
-token parity.
+The port keeps the native and packed artifacts as separate admitted variants
+behind one layout-tagged RCS runtime. This prevents a resident model mapping
+from being dispatched with the wrong instruction image. The packed artifact
+uses GPU VA `0x0D820000`; its page-rounded mapping is compile-time checked
+against the legacy artifact and the fixed model VA window.
+
+At backend open, TRUEOS:
+
+1. loads and verifies the sealed native image;
+2. repacks all Q8 tensors in place using one 78,336-byte scratch tile;
+3. verifies the deterministic packed-image SHA-256;
+4. binds the packed model and artifact as one layout-tagged mapping;
+5. repacks each 1,024- or 4,608-wide activation into the split ABI before
+   submission;
+6. reads the tied token embedding directly from the packed tensor layout.
+
+Tensor offsets, projection batching, the 99-operation CPU control plane, and
+Shell2 `lum` stay unchanged. The legacy artifact and native binder remain
+available as a rollback/debug lane. Linked and packaged product gates require
+the packed binary, and the normal compiler-free artifact gate reruns the
+eight-DP4A ISA proof.
