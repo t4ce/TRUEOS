@@ -133,7 +133,7 @@ TRUEOS_FONT_INSTANCE_INLINE uint sample_color(
     for (uint index = 2u; index < MaximumFrames; ++index) {
         if (index < frame_count
             && progress_permille
-                > static_cast<float>(descriptor[field_keyframes + index * 2u])) {
+                > static_cast<float>(descriptor[field_keyframes + (index - 1u) * 2u])) {
             upper = index;
         }
     }

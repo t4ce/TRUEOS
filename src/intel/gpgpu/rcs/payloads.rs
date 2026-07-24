@@ -264,6 +264,56 @@ fn direct_rcs_write_glyph_mask_payload_at(
     true
 }
 
+fn direct_rcs_write_font_instance_payload_at(
+    state: DirectRcsState,
+    payload_offset: usize,
+    layer: GpgpuFontInstanceLayer,
+    descriptor_gpu: u64,
+    dst: GpgpuRgba8Surface,
+    dispatch: GpgpuRect,
+    time_seconds: f32,
+) -> bool {
+    if payload_offset + FONT_INSTANCE_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES
+        || dispatch.x < 0
+        || dispatch.y < 0
+    {
+        return false;
+    }
+    unsafe {
+        let payload = state.batch_virt.add(payload_offset);
+        core::ptr::write_bytes(payload, 0, FONT_INSTANCE_INDIRECT_BYTES);
+        let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(4), 1);
+        core::ptr::write_volatile(dwords.add(5), 1);
+        core::ptr::write_volatile(dwords.add(8), 16);
+        core::ptr::write_volatile(dwords.add(9), 1);
+        core::ptr::write_volatile(dwords.add(10), 1);
+        core::ptr::write_volatile(dwords.add(12), layer.mask.gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (layer.mask.gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(14), dst.gpu as u32);
+        core::ptr::write_volatile(dwords.add(15), (dst.gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(16), descriptor_gpu as u32);
+        core::ptr::write_volatile(dwords.add(17), (descriptor_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(18), dst.pitch_bytes);
+        core::ptr::write_volatile(dwords.add(19), dispatch.x as u32);
+        core::ptr::write_volatile(dwords.add(20), dispatch.y as u32);
+        core::ptr::write_volatile(dwords.add(21), dispatch.width);
+        core::ptr::write_volatile(dwords.add(22), dispatch.height);
+        core::ptr::write_volatile(dwords.add(23), layer.dst_center[0].to_bits());
+        core::ptr::write_volatile(dwords.add(24), layer.dst_center[1].to_bits());
+        core::ptr::write_volatile(dwords.add(25), time_seconds.to_bits());
+
+        let local_ids = payload.add(FONT_INSTANCE_CROSS_THREAD_BYTES) as *mut u16;
+        for lane in 0..16usize {
+            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
+            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
+            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
+        }
+    }
+    true
+}
+
 fn direct_rcs_write_skybox_sample_rgb565_payload_at(
     state: DirectRcsState,
     payload_offset: usize,

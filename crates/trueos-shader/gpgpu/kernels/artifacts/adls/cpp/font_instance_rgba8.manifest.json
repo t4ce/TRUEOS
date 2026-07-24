@@ -5,10 +5,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "75764d74e0c2e5bc2bc6084e4c676a0e1ab42ec76b5ef9ae5fd961b93801d301",
-      "size_bytes": 69224,
+      "sha256": "d3c0a0c201a205351c4b45a482e6ed04ef9361a9b4110d46106667ab3ab363ee",
+      "size_bytes": 69208,
       "type": "relocatable",
-      "ze_info_section_offset": 63080,
+      "ze_info_section_offset": 63064,
       "ze_info_section_size": 5322
     },
     "kernels": [
@@ -297,7 +297,7 @@
           "section_name": ".text.font_instance_rgba8",
           "section_offset": 64,
           "section_size": 15616,
-          "sha256": "19d62ef931ebf260c06d67c8bc6e02896653b755d219ee0fb9be624bc9bde098",
+          "sha256": "ff9506b74b5592abaea93eee13ed446ea03199d7b806b4914ab720056542efaf",
           "symbol_size": 15432,
           "symbol_value": 0
         },
@@ -315,9 +315,9 @@
     ],
     "spirv": {
       "embedded_section_offset": 15752,
-      "embedded_section_size": 47252,
-      "sha256": "a11485c51b817a67c9e152e935f7f23323578fc28958d8486534378431989f95",
-      "size_bytes": 47252
+      "embedded_section_size": 47240,
+      "sha256": "160a361572c874d351fbce32ebf913c1c35c04836b60a746d6d9d9d7ee8ac68b",
+      "size_bytes": 47240
     }
   },
   "provenance": {
@@ -516,8 +516,8 @@
     "inputs": [
       {
         "path": "crates/trueos-shader/gpgpu/kernels/font_instance_rgba8.clcpp",
-        "sha256": "858c2586842c6b54035a0eb7df09ee171f169b35b9889cf7540fa0d662c57993",
-        "size_bytes": 13789
+        "sha256": "1988b47df82551d18b655d3925e86c6a454714f7fb85afefb60ee83449c6f763",
+        "size_bytes": 13796
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/include/trueos_clcpp.hpp",

@@ -1,3 +1,4 @@
+pub mod ai_activity;
 pub mod blocking;
 pub mod codec;
 pub mod cursor;

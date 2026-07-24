@@ -186,6 +186,92 @@ impl GpuFontColorProgram {
     }
 }
 
+/// Static CSS-like presentation properties retained alongside one analytical
+/// coverage layer. Integer transport units make the producer ABI deterministic
+/// while the C++ kernel consumes normalized floating-point values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GpuFontInstanceStyle {
+    pub(crate) rotation_centidegrees: i16,
+    pub(crate) scale_permille: u16,
+    pub(crate) opacity_permille: u16,
+    pub(crate) background: GpuFontRgba,
+}
+
+impl GpuFontInstanceStyle {
+    pub(crate) const IDENTITY: Self = Self {
+        rotation_centidegrees: 0,
+        scale_permille: 1_000,
+        opacity_permille: 1_000,
+        background: GpuFontRgba::new(0, 0, 0, 0),
+    };
+}
+
+/// One predefined trigonometric oscillator. Rotation, scale, opacity, and
+/// translation are evaluated from the same phase entirely on the GPU.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GpuFontInstanceMotion {
+    pub(crate) period_ms: u32,
+    pub(crate) phase_permille: u16,
+    pub(crate) rotation_amplitude_centidegrees: i16,
+    pub(crate) scale_amplitude_permille: i16,
+    pub(crate) opacity_amplitude_permille: i16,
+    pub(crate) translation_x_tenths_px: i16,
+    pub(crate) translation_y_tenths_px: i16,
+}
+
+impl GpuFontInstanceMotion {
+    pub(crate) const NONE: Self = Self {
+        period_ms: 0,
+        phase_permille: 0,
+        rotation_amplitude_centidegrees: 0,
+        scale_amplitude_permille: 0,
+        opacity_amplitude_permille: 0,
+        translation_x_tenths_px: 0,
+        translation_y_tenths_px: 0,
+    };
+
+    pub(crate) const fn is_active(self) -> bool {
+        self.period_ms != 0
+            && (self.rotation_amplitude_centidegrees != 0
+                || self.scale_amplitude_permille != 0
+                || self.opacity_amplitude_permille != 0
+                || self.translation_x_tenths_px != 0
+                || self.translation_y_tenths_px != 0)
+    }
+}
+
+/// Complete producer-facing program for one Gridpaper text-color selector.
+/// Coverage is deliberately absent: Skrifa owns that immutable input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GpuFontInstanceProgram {
+    pub(crate) color: Option<GpuFontColorProgram>,
+    pub(crate) style: GpuFontInstanceStyle,
+    pub(crate) motion: GpuFontInstanceMotion,
+}
+
+impl GpuFontInstanceProgram {
+    pub(crate) const fn color_only(color: GpuFontColorProgram) -> Self {
+        Self {
+            color: Some(color),
+            style: GpuFontInstanceStyle::IDENTITY,
+            motion: GpuFontInstanceMotion::NONE,
+        }
+    }
+
+    pub(crate) fn sample_color(self, fallback: GpuFontRgba, elapsed_ms: u64) -> GpuFontRgba {
+        self.color
+            .map_or(fallback, |program| program.sample(elapsed_ms))
+    }
+
+    pub(crate) const fn needs_continuous_frames(self) -> bool {
+        self.motion.is_active()
+            || matches!(
+                self.color,
+                Some(GpuFontColorProgram::Transition(_) | GpuFontColorProgram::Keyframes(_))
+            )
+    }
+}
+
 impl GpuFontColorTransition {
     fn sample(self, elapsed_ms: u64) -> GpuFontRgba {
         let linear_progress =

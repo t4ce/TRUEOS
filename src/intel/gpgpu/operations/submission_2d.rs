@@ -631,3 +631,112 @@ fn submit_glyph_mask_layers_2d(
     }
     (submitted, completed)
 }
+
+fn submit_font_instance_layers_2d(
+    layers: &[GpgpuFontInstanceLayer],
+    descriptor_state: &GpgpuOwnedFontInstanceState,
+    dst: GpgpuRgba8Surface,
+    direct_scanout: bool,
+    time_seconds: f32,
+) -> (bool, bool) {
+    if layers.is_empty()
+        || layers.len() > FONT_INSTANCE_BATCH_MAX_LAYERS
+        || !time_seconds.is_finite()
+    {
+        return (false, false);
+    }
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return (false, false);
+    };
+    let Some(upload) = upload_font_instance_rgba8_kernel() else {
+        return (false, false);
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return (false, false);
+    };
+    if !direct_rcs_forcewake(dev)
+        || !direct_rcs_map_state(dev, state)
+        || !direct_rcs_init_ppgtt(state)
+        || !direct_rcs_map_ppgtt_region(
+            state,
+            upload.gpu,
+            upload.phys,
+            upload.mapped_bytes,
+            direct_rcs_ppgtt_pte_flags(),
+        )
+        || !direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, direct_scanout)
+        || !direct_rcs_map_ppgtt_region(
+            state,
+            descriptor_state.gpu(),
+            descriptor_state.phys(),
+            descriptor_state.bytes(),
+            direct_rcs_ppgtt_pte_flags(),
+        )
+    {
+        return (false, false);
+    }
+    for &layer in layers {
+        let Some(dispatch) = lower_font_instance_layer(layer, descriptor_state, dst) else {
+            return (false, false);
+        };
+        if dispatch.is_empty() {
+            continue;
+        }
+        if !direct_rcs_map_ppgtt_region(
+            state,
+            layer.mask.gpu,
+            layer.mask.phys,
+            layer.mask.bytes,
+            direct_rcs_ppgtt_pte_flags(),
+        ) {
+            return (false, false);
+        }
+    }
+    // Publish the complete retained scene address space once before encoding
+    // its ordered walkers.
+    super::dma_flush(state.ppgtt_virt, DIRECT_RCS_PPGTT_BYTES);
+    if !direct_rcs_encode_font_instance_layers_2d_batch(
+        state,
+        upload,
+        layers,
+        descriptor_state,
+        dst,
+        time_seconds,
+    ) {
+        return (false, false);
+    }
+    let submitted = direct_rcs_submit_batch(dev, state);
+    let completion_timeout_ms = if direct_scanout {
+        UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS
+    } else {
+        RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS
+    };
+    let observed = if submitted {
+        direct_rcs_poll_result_slot_timeout_ms(
+            state,
+            COPY_RECT_POST_MARKER_SLOT,
+            COPY_RECT_POST_MARKER,
+            completion_timeout_ms,
+        )
+    } else {
+        0
+    };
+    let completed = observed == COPY_RECT_POST_MARKER;
+    if !completed {
+        let occurrence = FONT_INSTANCE_BATCH_INCOMPLETE_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+        if occurrence <= 8 || occurrence.is_multiple_of(60) {
+            crate::log_warn!(
+                target: "intel-gpgpu";
+                "font_instance_rgba8 batch incomplete occurrence={} layers={} submitted={} pre=0x{:08X} post=0x{:08X} timeout_ms={} action=fail-closed-and-rerender-scene\n",
+                occurrence,
+                layers.len(),
+                submitted as u8,
+                direct_rcs_read_result_slot(state, COPY_RECT_PRE_MARKER_SLOT),
+                observed,
+                completion_timeout_ms,
+            );
+        }
+    }
+    (submitted, completed)
+}

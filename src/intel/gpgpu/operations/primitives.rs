@@ -182,6 +182,30 @@ pub(crate) fn allocate_font_coverage_mask(
     Some(GpgpuOwnedMask8Surface { surface, virt })
 }
 
+pub(crate) fn allocate_font_instance_state(capacity: usize) -> Option<GpgpuOwnedFontInstanceState> {
+    if capacity == 0 || capacity > GPGPU_FONT_INSTANCE_MAX_LAYERS {
+        return None;
+    }
+    let raw_bytes = capacity.checked_mul(GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES)?;
+    let bytes = align_up(raw_bytes, super::WARM_ALIGN)?;
+    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+    let Some(gpu) = reserve_font_coverage_gpu_va(bytes) else {
+        crate::dma::dealloc(virt, bytes);
+        return None;
+    };
+    unsafe {
+        core::ptr::write_bytes(virt, 0, bytes);
+    }
+    super::dma_flush(virt, bytes);
+    Some(GpgpuOwnedFontInstanceState {
+        phys,
+        gpu,
+        bytes,
+        virt,
+        capacity,
+    })
+}
+
 /// Submission ownership state for a direct-RCS operation. A submitted command
 /// that missed its retirement marker is not an ordinary `false`: its mapped
 /// inputs and outputs must remain alive and the shared direct context must not
@@ -329,6 +353,75 @@ pub(crate) fn glyph_mask_layers_rgba8_2d_mode(
         return result;
     }
     let (submitted, completed) = submit_glyph_mask_layers_2d(layers, dst, direct_scanout);
+    result.submitted = submitted;
+    result.ok = completed;
+    result.submits = usize::from(submitted);
+    result
+}
+
+fn lower_font_instance_layer(
+    layer: GpgpuFontInstanceLayer,
+    state: &GpgpuOwnedFontInstanceState,
+    dst: GpgpuRgba8Surface,
+) -> Option<GpgpuRect> {
+    if !layer.mask.is_valid()
+        || !dst.is_valid()
+        || !rect_is_inside_mask(layer.mask, layer.mask_rect)
+        || layer.descriptor_index >= state.capacity()
+        || !layer.dst_center[0].is_finite()
+        || !layer.dst_center[1].is_finite()
+        || layer.dispatch_rect.width == 0
+        || layer.dispatch_rect.height == 0
+    {
+        return None;
+    }
+    let left = i64::from(layer.dispatch_rect.x).max(0);
+    let top = i64::from(layer.dispatch_rect.y).max(0);
+    let right = (i64::from(layer.dispatch_rect.x) + i64::from(layer.dispatch_rect.width))
+        .min(i64::from(dst.width));
+    let bottom = (i64::from(layer.dispatch_rect.y) + i64::from(layer.dispatch_rect.height))
+        .min(i64::from(dst.height));
+    if right <= left || bottom <= top {
+        return Some(GpgpuRect::default());
+    }
+    Some(GpgpuRect::new(left as i32, top as i32, (right - left) as u32, (bottom - top) as u32))
+}
+
+/// Composite persistent Skrifa R8 layers through the C++ font-instance
+/// engine. Descriptor storage remains resident across frames; this call
+/// changes only scene centers and monotonic animation time.
+pub(crate) fn font_instance_layers_rgba8_2d_mode(
+    layers: &[GpgpuFontInstanceLayer],
+    state: &GpgpuOwnedFontInstanceState,
+    dst: GpgpuRgba8Surface,
+    direct_scanout: bool,
+    time_seconds: f32,
+) -> GpgpuFontInstanceBatchResult {
+    let mut result = GpgpuFontInstanceBatchResult {
+        requested_layers: layers.len(),
+        ..GpgpuFontInstanceBatchResult::default()
+    };
+    if !dst.is_valid()
+        || layers.len() > FONT_INSTANCE_BATCH_MAX_LAYERS
+        || state.capacity() < layers.len()
+        || !time_seconds.is_finite()
+    {
+        return result;
+    }
+    for &layer in layers {
+        let Some(rect) = lower_font_instance_layer(layer, state, dst) else {
+            return result;
+        };
+        if rect.width != 0 && rect.height != 0 {
+            result.active_walkers += 1;
+        }
+    }
+    if result.active_walkers == 0 {
+        result.ok = true;
+        return result;
+    }
+    let (submitted, completed) =
+        submit_font_instance_layers_2d(layers, state, dst, direct_scanout, time_seconds);
     result.submitted = submitted;
     result.ok = completed;
     result.submits = usize::from(submitted);

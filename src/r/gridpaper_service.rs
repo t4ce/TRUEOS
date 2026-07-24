@@ -14,7 +14,7 @@ use spin::Mutex;
 use crate::intel::gpu_font::{
     GPU_FONT_COLOR_KEYFRAME_CAPACITY, GpuFontColorChannels, GpuFontColorIteration,
     GpuFontColorKeyframe, GpuFontColorKeyframes, GpuFontColorProgram, GpuFontColorTiming,
-    GpuFontFace, GpuFontRgba,
+    GpuFontFace, GpuFontInstanceMotion, GpuFontInstanceProgram, GpuFontInstanceStyle, GpuFontRgba,
 };
 
 const COLUMN_SOFT_CAP: usize = 39;
@@ -40,9 +40,11 @@ const COLOR_COUNT: usize = 18;
 const COLOR_DEFAULT: u8 = 0;
 const COLOR_TRANSPARENT: u8 = 17;
 const TEXT_ANIMATION_COLOR_SLOTS: usize = COLOR_TRANSPARENT as usize;
-const TEXT_ANIMATION_WIRE_VERSION: u8 = 1;
+const TEXT_ANIMATION_WIRE_VERSION_COLOR_ONLY: u8 = 1;
+const TEXT_ANIMATION_WIRE_VERSION_FONT_INSTANCE: u8 = 2;
 const TEXT_ANIMATION_WIRE_HEADER_BYTES: usize = 4;
 const TEXT_ANIMATION_RECORD_HEADER_BYTES: usize = 12;
+const TEXT_INSTANCE_RECORD_HEADER_BYTES: usize = 40;
 const TEXT_ANIMATION_KEYFRAME_BYTES: usize = 8;
 const MIN_ANIMATION_DURATION_MS: u32 = 16;
 const MAX_ANIMATION_DURATION_MS: u32 = 600_000;
@@ -194,7 +196,7 @@ struct SnapshotStore {
     scale_percent: u16,
     size: GridSize,
     serial: u64,
-    text_animations: [Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    text_animations: [Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_serial: u64,
 }
 
@@ -626,7 +628,7 @@ impl ScenePan {
 
 #[derive(Clone, Copy)]
 struct OwnedTextAnimations {
-    programs: [Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    programs: [Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     serial: u64,
 }
 
@@ -717,12 +719,13 @@ pub(crate) fn submit_text_animations_for_owner(owner: u8, instance_id: u32, raw:
     snapshots.animation_serial = snapshots.animation_serial.wrapping_add(1).max(1);
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: text-animation-table accepted pool_slot={} owner={} local_instance={} serial={} programs={} wire_bytes={} ownership=producer-scoped geometry_uploads=0\n",
+        "gridpaper: font-instance-table accepted pool_slot={} owner={} local_instance={} serial={} programs={} wire_version={} wire_bytes={} ownership=producer-scoped descriptor_residency=gpu-vm geometry_uploads=0\n",
         instance,
         owner,
         instance_id,
         snapshots.animation_serial,
         snapshots.text_animations.iter().flatten().count(),
+        raw.first().copied().unwrap_or(0),
         raw.len(),
     );
     0
@@ -833,14 +836,16 @@ fn text_animations_after(pool_slot: usize, serial: u64) -> Option<OwnedTextAnima
 
 fn decode_text_animations(
     raw: &[u8],
-) -> Result<[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS], ()> {
-    if raw.len() < TEXT_ANIMATION_WIRE_HEADER_BYTES
-        || raw[0] != TEXT_ANIMATION_WIRE_VERSION
-        || raw[2] != 0
-        || raw[3] != 0
-    {
+) -> Result<[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS], ()> {
+    if raw.len() < TEXT_ANIMATION_WIRE_HEADER_BYTES || raw[2] != 0 || raw[3] != 0 {
         return Err(());
     }
+    let version = raw[0];
+    let record_header_bytes = match version {
+        TEXT_ANIMATION_WIRE_VERSION_COLOR_ONLY => TEXT_ANIMATION_RECORD_HEADER_BYTES,
+        TEXT_ANIMATION_WIRE_VERSION_FONT_INSTANCE => TEXT_INSTANCE_RECORD_HEADER_BYTES,
+        _ => return Err(()),
+    };
     let count = usize::from(raw[1]);
     if count > TEXT_ANIMATION_COLOR_SLOTS {
         return Err(());
@@ -848,12 +853,9 @@ fn decode_text_animations(
     let mut programs = [None; TEXT_ANIMATION_COLOR_SLOTS];
     let mut cursor = TEXT_ANIMATION_WIRE_HEADER_BYTES;
     for _ in 0..count {
-        let header_end = cursor
-            .checked_add(TEXT_ANIMATION_RECORD_HEADER_BYTES)
-            .ok_or(())?;
+        let header_end = cursor.checked_add(record_header_bytes).ok_or(())?;
         let header = raw.get(cursor..header_end).ok_or(())?;
         let selector = usize::from(header[0]);
-        let channels = GpuFontColorChannels::from_bits(header[1]).ok_or(())?;
         let timing = match header[2] {
             0 => GpuFontColorTiming::Linear,
             1 => GpuFontColorTiming::EaseInOutSine,
@@ -869,12 +871,84 @@ fn decode_text_animations(
         let frame_count = usize::from(header[8]);
         if selector >= TEXT_ANIMATION_COLOR_SLOTS
             || programs[selector].is_some()
-            || !(MIN_ANIMATION_DURATION_MS..=MAX_ANIMATION_DURATION_MS).contains(&duration_ms)
-            || !(2..=GPU_FONT_COLOR_KEYFRAME_CAPACITY).contains(&frame_count)
             || header[9..12] != [0, 0, 0]
         {
             return Err(());
         }
+        let style = if version == TEXT_ANIMATION_WIRE_VERSION_COLOR_ONLY {
+            GpuFontInstanceStyle::IDENTITY
+        } else {
+            let rotation_centidegrees = i16::from_le_bytes([header[12], header[13]]);
+            let scale_permille = u16::from_le_bytes([header[14], header[15]]);
+            let opacity_permille = u16::from_le_bytes([header[16], header[17]]);
+            if !(-18_000..=18_000).contains(&rotation_centidegrees)
+                || !(125..=8_000).contains(&scale_permille)
+                || opacity_permille > 1_000
+            {
+                return Err(());
+            }
+            GpuFontInstanceStyle {
+                rotation_centidegrees,
+                scale_permille,
+                opacity_permille,
+                background: GpuFontRgba::new(header[18], header[19], header[20], header[21]),
+            }
+        };
+        let motion = if version == TEXT_ANIMATION_WIRE_VERSION_COLOR_ONLY {
+            GpuFontInstanceMotion::NONE
+        } else {
+            let period_ms = u32::from_le_bytes([header[22], header[23], header[24], header[25]]);
+            let phase_permille = u16::from_le_bytes([header[26], header[27]]);
+            let rotation_amplitude_centidegrees = i16::from_le_bytes([header[28], header[29]]);
+            let scale_amplitude_permille = i16::from_le_bytes([header[30], header[31]]);
+            let opacity_amplitude_permille = i16::from_le_bytes([header[32], header[33]]);
+            let translation_x_tenths_px = i16::from_le_bytes([header[34], header[35]]);
+            let translation_y_tenths_px = i16::from_le_bytes([header[36], header[37]]);
+            let has_amplitude = rotation_amplitude_centidegrees != 0
+                || scale_amplitude_permille != 0
+                || opacity_amplitude_permille != 0
+                || translation_x_tenths_px != 0
+                || translation_y_tenths_px != 0;
+            if header[38..40] != [0, 0]
+                || phase_permille > 1_000
+                || !(-18_000..=18_000).contains(&rotation_amplitude_centidegrees)
+                || !(-875..=4_000).contains(&scale_amplitude_permille)
+                || !(-1_000..=1_000).contains(&opacity_amplitude_permille)
+                || (period_ms == 0 && (has_amplitude || phase_permille != 0))
+                || (period_ms != 0
+                    && !(MIN_ANIMATION_DURATION_MS..=MAX_ANIMATION_DURATION_MS)
+                        .contains(&period_ms))
+            {
+                return Err(());
+            }
+            GpuFontInstanceMotion {
+                period_ms,
+                phase_permille,
+                rotation_amplitude_centidegrees,
+                scale_amplitude_permille,
+                opacity_amplitude_permille,
+                translation_x_tenths_px,
+                translation_y_tenths_px,
+            }
+        };
+        let color = if frame_count == 0 {
+            if version == TEXT_ANIMATION_WIRE_VERSION_COLOR_ONLY
+                || header[1] != 0
+                || header[2] != 0
+                || header[3] != 0
+                || duration_ms != 0
+            {
+                return Err(());
+            }
+            None
+        } else {
+            if !(MIN_ANIMATION_DURATION_MS..=MAX_ANIMATION_DURATION_MS).contains(&duration_ms)
+                || !(2..=GPU_FONT_COLOR_KEYFRAME_CAPACITY).contains(&frame_count)
+            {
+                return Err(());
+            }
+            Some(GpuFontColorChannels::from_bits(header[1]).ok_or(())?)
+        };
         cursor = header_end;
         let mut frames = [GpuFontColorKeyframe::EMPTY; GPU_FONT_COLOR_KEYFRAME_CAPACITY];
         let mut previous_offset = None;
@@ -898,17 +972,25 @@ fn decode_text_animations(
             previous_offset = Some(offset_permille);
             cursor = frame_end;
         }
-        if frames[0].offset_permille != 0 || frames[frame_count - 1].offset_permille != 1_000 {
+        if frame_count != 0
+            && (frames[0].offset_permille != 0 || frames[frame_count - 1].offset_permille != 1_000)
+        {
             return Err(());
         }
-        programs[selector] = Some(GpuFontColorProgram::Keyframes(GpuFontColorKeyframes {
-            frames,
-            frame_count: frame_count as u8,
-            channels,
-            duration_ms,
-            timing,
-            iteration,
-        }));
+        programs[selector] = Some(GpuFontInstanceProgram {
+            color: color.map(|channels| {
+                GpuFontColorProgram::Keyframes(GpuFontColorKeyframes {
+                    frames,
+                    frame_count: frame_count as u8,
+                    channels,
+                    duration_ms,
+                    timing,
+                    iteration,
+                })
+            }),
+            style,
+            motion,
+        });
     }
     if cursor != raw.len() {
         return Err(());
@@ -1422,6 +1504,7 @@ struct ResidentLayer {
     logical_rects: Vec<SceneRect>,
     mesh: crate::intel::render::ResidentTriangleMesh,
     coverage: Option<crate::intel::gpu_font::GpuFontCoverageMask>,
+    font_instance_descriptor: Option<usize>,
 }
 
 impl Drop for ResidentLayer {
@@ -1444,6 +1527,8 @@ struct ResidentPage {
     size: GridSize,
     pan: ScenePan,
     layers: Vec<ResidentLayer>,
+    font_instance_state: Option<crate::intel::gpgpu::GpgpuOwnedFontInstanceState>,
+    font_instance_animation_serial: core::sync::atomic::AtomicU64,
 }
 
 struct Geometry {
@@ -1820,9 +1905,29 @@ fn build_resident_page(
                 logical_rects: Vec::new(),
                 mesh,
                 coverage,
+                font_instance_descriptor: None,
             });
         }
     }
+
+    let coverage_layer_count = layers
+        .iter()
+        .filter(|layer| layer.coverage.is_some())
+        .count();
+    let font_instance_state = if coverage_layer_count == 0 {
+        None
+    } else {
+        let state = crate::intel::gpgpu::allocate_font_instance_state(coverage_layer_count)
+            .ok_or("gridpaper-font-instance-state-allocation")?;
+        let mut descriptor_index = 0usize;
+        for layer in &mut layers {
+            if layer.coverage.is_some() {
+                layer.font_instance_descriptor = Some(descriptor_index);
+                descriptor_index += 1;
+            }
+        }
+        Some(state)
+    };
 
     Ok(ResidentPage {
         serial: snapshot.serial,
@@ -1831,6 +1936,8 @@ fn build_resident_page(
         size,
         pan,
         layers,
+        font_instance_state,
+        font_instance_animation_serial: core::sync::atomic::AtomicU64::new(u64::MAX),
     })
 }
 
@@ -1863,6 +1970,7 @@ fn push_geometry_layer(
         logical_rects: geometry.logical_rects,
         mesh,
         coverage: None,
+        font_instance_descriptor: None,
     });
     Ok(())
 }
@@ -1926,7 +2034,8 @@ fn publish_page(
     page: &ResidentPage,
     selection: Option<GridCellSelection>,
     input_field: CellInputField,
-    text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    animation_serial: u64,
     animation_elapsed_ms: u64,
 ) -> Result<GridPaperFrameResult, ServiceError> {
     use core::sync::atomic::Ordering;
@@ -1962,6 +2071,7 @@ fn publish_page(
     let result = match render_compute_page_frame(
         page,
         text_animations,
+        animation_serial,
         animation_elapsed_ms,
         final_rects,
         destination,
@@ -2007,9 +2117,138 @@ fn publish_page(
     Ok(result)
 }
 
+fn rgba_u32(rgba: GpuFontRgba) -> u32 {
+    u32::from_le_bytes([rgba.r, rgba.g, rgba.b, rgba.a])
+}
+
+fn instance_program_for_layer(
+    layer: &ResidentLayer,
+    programs: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+) -> Option<GpuFontInstanceProgram> {
+    layer
+        .text_color_selector
+        .and_then(|selector| programs.get(usize::from(selector)).copied().flatten())
+}
+
+fn update_font_instance_descriptors(
+    page: &ResidentPage,
+    programs: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    animation_serial: u64,
+) -> Result<(), &'static str> {
+    use core::sync::atomic::Ordering;
+
+    let Some(state) = page.font_instance_state.as_ref() else {
+        return if page.layers.iter().any(|layer| layer.coverage.is_some()) {
+            Err("gridpaper-font-instance-state-missing")
+        } else {
+            Ok(())
+        };
+    };
+    if page.font_instance_animation_serial.load(Ordering::Acquire) == animation_serial {
+        return Ok(());
+    }
+
+    for layer in &page.layers {
+        let Some(coverage) = layer.coverage.as_ref() else {
+            continue;
+        };
+        let descriptor_index = layer
+            .font_instance_descriptor
+            .ok_or("gridpaper-font-instance-descriptor-missing")?;
+        let base = GpuFontRgba::new(
+            layer.base_color[0],
+            layer.base_color[1],
+            layer.base_color[2],
+            layer.base_color[3],
+        );
+        let program = instance_program_for_layer(layer, programs);
+        let foreground = match program.and_then(|program| program.color) {
+            Some(GpuFontColorProgram::Static(rgba)) => rgba,
+            Some(GpuFontColorProgram::Transition(transition)) => transition.from,
+            Some(GpuFontColorProgram::Keyframes(keyframes)) => keyframes.frames[0].rgba,
+            None => base,
+        };
+        let mut descriptor = crate::intel::gpgpu::GpgpuFontInstanceDescriptor::new(
+            coverage.surface(),
+            coverage.full_rect(),
+            rgba_u32(foreground),
+        )
+        .ok_or("gridpaper-font-instance-descriptor-invalid")?;
+        let style = program.map_or(GpuFontInstanceStyle::IDENTITY, |program| program.style);
+        descriptor.set_transform(
+            f32::from(style.scale_permille) / 1_000.0,
+            f32::from(style.rotation_centidegrees) * core::f32::consts::PI / 18_000.0,
+            f32::from(style.opacity_permille) / 1_000.0,
+        );
+        descriptor.set_background(rgba_u32(style.background));
+
+        let motion = program.map_or(GpuFontInstanceMotion::NONE, |program| program.motion);
+        if motion.period_ms != 0 {
+            descriptor.set_motion(
+                motion.period_ms as f32 / 1_000.0,
+                f32::from(motion.phase_permille) / 1_000.0,
+                f32::from(motion.rotation_amplitude_centidegrees) * core::f32::consts::PI
+                    / 18_000.0,
+                f32::from(motion.scale_amplitude_permille) / 1_000.0,
+                f32::from(motion.opacity_amplitude_permille) / 1_000.0,
+                [
+                    f32::from(motion.translation_x_tenths_px) / 10.0,
+                    f32::from(motion.translation_y_tenths_px) / 10.0,
+                ],
+            );
+        }
+
+        let color_ok = match program.and_then(|program| program.color) {
+            Some(GpuFontColorProgram::Transition(transition)) => {
+                let frames = [
+                    (0, rgba_u32(transition.from)),
+                    (1_000, rgba_u32(transition.to)),
+                ];
+                descriptor.set_color_animation(
+                    transition.channels.bits(),
+                    transition.timing == GpuFontColorTiming::EaseInOutSine,
+                    match transition.iteration {
+                        GpuFontColorIteration::Once => 0,
+                        GpuFontColorIteration::Loop => 1,
+                        GpuFontColorIteration::Alternate => 2,
+                    },
+                    transition.duration_ms as f32 / 1_000.0,
+                    &frames,
+                )
+            }
+            Some(GpuFontColorProgram::Keyframes(keyframes)) => {
+                let count = usize::from(keyframes.frame_count);
+                let mut frames = [(0u16, 0u32); GPU_FONT_COLOR_KEYFRAME_CAPACITY];
+                for (output, input) in frames.iter_mut().zip(keyframes.frames.iter()).take(count) {
+                    *output = (input.offset_permille, rgba_u32(input.rgba));
+                }
+                descriptor.set_color_animation(
+                    keyframes.channels.bits(),
+                    keyframes.timing == GpuFontColorTiming::EaseInOutSine,
+                    match keyframes.iteration {
+                        GpuFontColorIteration::Once => 0,
+                        GpuFontColorIteration::Loop => 1,
+                        GpuFontColorIteration::Alternate => 2,
+                    },
+                    keyframes.duration_ms as f32 / 1_000.0,
+                    &frames[..count],
+                )
+            }
+            _ => true,
+        };
+        if !color_ok || !state.write(descriptor_index, &descriptor) {
+            return Err("gridpaper-font-instance-descriptor-write");
+        }
+    }
+    page.font_instance_animation_serial
+        .store(animation_serial, Ordering::Release);
+    Ok(())
+}
+
 fn render_compute_page_frame(
     page: &ResidentPage,
-    text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    animation_serial: u64,
     animation_elapsed_ms: u64,
     final_rects: &[crate::intel::gpgpu::GpgpuSolidRect],
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
@@ -2021,6 +2260,8 @@ fn render_compute_page_frame(
         page.pan.x * destination.width as f32 / page.size.scene_width() as f32,
         page.pan.y * destination.height as f32 / page.size.scene_height() as f32,
     ];
+    update_font_instance_descriptors(page, text_animations, animation_serial)
+        .map_err(GridPaperComputeFailure::Unavailable)?;
     let clear = crate::intel::gpgpu::GpgpuSolidRect {
         rect: crate::intel::gpgpu::GpgpuRect::new(0, 0, destination.width, destination.height),
         color_rgba: 0,
@@ -2090,46 +2331,69 @@ fn render_compute_page_frame(
     }
     let geometry_finished_ns = crate::chronos::monotonic_nanos();
 
-    let pan_px = [
-        libm::roundf(viewport_translation_px[0]) as i32,
-        libm::roundf(viewport_translation_px[1]) as i32,
-    ];
     let coverage_layers = page
         .layers
         .iter()
         .filter_map(|layer| {
             let coverage = layer.coverage.as_ref()?;
             let origin = coverage.origin_px();
-            Some(crate::intel::gpgpu::GpgpuGlyphMaskLayer {
+            let descriptor_index = layer.font_instance_descriptor?;
+            let program = instance_program_for_layer(layer, text_animations);
+            let style = program.map_or(GpuFontInstanceStyle::IDENTITY, |program| program.style);
+            let motion = program.map_or(GpuFontInstanceMotion::NONE, |program| program.motion);
+            let center = [
+                origin[0] as f32
+                    + coverage.full_rect().width as f32 * 0.5
+                    + viewport_translation_px[0],
+                origin[1] as f32
+                    + coverage.full_rect().height as f32 * 0.5
+                    + viewport_translation_px[1],
+            ];
+            let base_scale = f32::from(style.scale_permille) / 1_000.0;
+            let max_scale =
+                base_scale * (1.0 + (f32::from(motion.scale_amplitude_permille) / 1_000.0).abs());
+            let width = coverage.full_rect().width as f32;
+            let height = coverage.full_rect().height as f32;
+            let radius = libm::sqrtf(width * width + height * height) * 0.5 * max_scale;
+            let extent_x = radius + (f32::from(motion.translation_x_tenths_px) / 10.0).abs() + 2.0;
+            let extent_y = radius + (f32::from(motion.translation_y_tenths_px) / 10.0).abs() + 2.0;
+            let left = libm::floorf(center[0] - extent_x) as i32;
+            let top = libm::floorf(center[1] - extent_y) as i32;
+            let right = libm::ceilf(center[0] + extent_x) as i32;
+            let bottom = libm::ceilf(center[1] + extent_y) as i32;
+            Some(crate::intel::gpgpu::GpgpuFontInstanceLayer {
                 mask: coverage.surface(),
                 mask_rect: coverage.full_rect(),
-                dst_xy: crate::intel::gpgpu::GpgpuPoint::new(
-                    origin[0].saturating_add(pan_px[0]),
-                    origin[1].saturating_add(pan_px[1]),
+                dst_center: center,
+                dispatch_rect: crate::intel::gpgpu::GpgpuRect::new(
+                    left,
+                    top,
+                    right.saturating_sub(left) as u32,
+                    bottom.saturating_sub(top) as u32,
                 ),
-                color_rgba: u32::from_le_bytes(resident_layer_color(
-                    layer,
-                    text_animations,
-                    animation_elapsed_ms,
-                )),
+                descriptor_index,
             })
         })
         .collect::<Vec<_>>();
     let (coverage_submits, coverage_walkers) = if coverage_layers.is_empty() {
         (0, 0)
     } else {
-        let coverage = crate::intel::gpgpu::glyph_mask_layers_rgba8_2d_mode(
+        let descriptor_state = page
+            .font_instance_state
+            .as_ref()
+            .ok_or(GridPaperComputeFailure::Unavailable("gridpaper-font-instance-state-missing"))?;
+        let coverage = crate::intel::gpgpu::font_instance_layers_rgba8_2d_mode(
             coverage_layers.as_slice(),
+            descriptor_state,
             destination,
             true,
+            animation_elapsed_ms as f32 / 1_000.0,
         );
         if !coverage.ok {
             return Err(if coverage.submitted {
-                GridPaperComputeFailure::SubmittedIncomplete(
-                    "gridpaper-compute-coverage-incomplete",
-                )
+                GridPaperComputeFailure::SubmittedIncomplete("gridpaper-font-instance-incomplete")
             } else {
-                GridPaperComputeFailure::Unavailable("gridpaper-compute-coverage-unavailable")
+                GridPaperComputeFailure::Unavailable("gridpaper-font-instance-unavailable")
             });
         }
         (coverage.submits, coverage.active_walkers)
@@ -2216,7 +2480,7 @@ fn scene_rect_to_surface(
 
 fn capture_resident_page_frame(
     page: &ResidentPage,
-    text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_elapsed_ms: u64,
     viewport_translation_px: [f32; 2],
     width: u32,
@@ -2292,7 +2556,7 @@ fn capture_resident_page_frame(
 
 fn resident_layer_color(
     layer: &ResidentLayer,
-    text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_elapsed_ms: u64,
 ) -> [u8; 4] {
     let Some(selector) = layer.text_color_selector else {
@@ -2305,13 +2569,21 @@ fn resident_layer_color(
     else {
         return layer.base_color;
     };
-    let rgba = program.sample(animation_elapsed_ms);
+    let rgba = program.sample_color(
+        GpuFontRgba::new(
+            layer.base_color[0],
+            layer.base_color[1],
+            layer.base_color[2],
+            layer.base_color[3],
+        ),
+        animation_elapsed_ms,
+    );
     [rgba.r, rgba.g, rgba.b, rgba.a]
 }
 
 fn render_print_page(
     request: PrintRenderRequest,
-    text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_elapsed_ms: u64,
 ) -> PrintRenderResult {
     let size = request.size;
@@ -2357,7 +2629,7 @@ fn render_print_page(
 
 fn sampled_text_colors(
     page: &ResidentPage,
-    text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_elapsed_ms: u64,
 ) -> [Option<[u8; 4]>; TEXT_ANIMATION_COLOR_SLOTS] {
     let mut colors = [None; TEXT_ANIMATION_COLOR_SLOTS];
@@ -2446,7 +2718,7 @@ struct GridPaperRuntime {
     surface: GridPaperSurface,
     observed_serial: u64,
     observed_animation_serial: u64,
-    text_animations: [Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    text_animations: [Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_started_ms: u64,
     animation_dirty: bool,
     last_sampled_text_colors: [Option<[u8; 4]>; TEXT_ANIMATION_COLOR_SLOTS],
@@ -2708,7 +2980,7 @@ fn refresh_runtime(runtime: &mut GridPaperRuntime) {
         runtime.animation_dirty = true;
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: text-animation-table activated pool_slot={} instance={} serial={} programs={} cadence_ms={} clock=monotonic-elapsed geometry_uploads=0\n",
+            "gridpaper: font-instance-table activated pool_slot={} instance={} serial={} programs={} cadence_ms={} clock=monotonic-elapsed evaluator=c++-igc-gpu descriptor_updates=changed-table-only geometry_uploads=0\n",
             pool_slot,
             instance_id,
             runtime.observed_animation_serial,
@@ -2981,6 +3253,14 @@ fn runtime_needs_render(runtime: &GridPaperRuntime, now_ms: u64) -> bool {
     if runtime.pan_dirty || runtime.cursor_dirty || runtime.animation_dirty {
         return true;
     }
+    if runtime
+        .text_animations
+        .iter()
+        .flatten()
+        .any(|program| program.motion.is_active())
+    {
+        return true;
+    }
     let elapsed_ms = now_ms.saturating_sub(runtime.animation_started_ms);
     sampled_text_colors(page, &runtime.text_animations, elapsed_ms)
         != runtime.last_sampled_text_colors
@@ -2998,6 +3278,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
             runtime.selection,
             runtime.input_field,
             &runtime.text_animations,
+            runtime.observed_animation_serial,
             animation_elapsed_ms,
         ) {
             Ok(result) => {
@@ -3014,7 +3295,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     .count();
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} font_path=skrifa-gpgpu-r8-required persistence=retained-until-next-snapshot pan_transform=compute-dst-translation frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0 resident3d_ui4=disabled\n",
+                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} font_path=skrifa-r8-to-c++-igc-instance persistence=coverage+descriptors-retained-until-next-snapshot pan_transform=font-instance-center frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0 resident3d_ui4=disabled\n",
                     runtime.surface.instance_id,
                     published.serial,
                     published.generation,
@@ -3066,7 +3347,13 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
         return;
     };
     let sampled = sampled_text_colors(page, &runtime.text_animations, animation_elapsed_ms);
-    let animation_changed = runtime.animation_dirty || sampled != runtime.last_sampled_text_colors;
+    let gpu_motion_active = runtime
+        .text_animations
+        .iter()
+        .flatten()
+        .any(|program| program.motion.is_active());
+    let animation_changed =
+        runtime.animation_dirty || sampled != runtime.last_sampled_text_colors || gpu_motion_active;
     let hot_pan_frame = runtime.pan_dirty;
     let selection_frame = runtime.cursor_dirty;
     if !animation_changed && !hot_pan_frame && !selection_frame {
@@ -3083,6 +3370,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
         runtime.selection,
         runtime.input_field,
         &runtime.text_animations,
+        runtime.observed_animation_serial,
         animation_elapsed_ms,
     ) {
         Ok(result) => {
@@ -3390,13 +3678,7 @@ mod tests {
         assert_eq!(ROWS as u32 * CELL_EDGE_MM, 275);
         assert_eq!((GRID_WIDTH_MM, GRID_HEIGHT_MM), (195, 275));
         assert_eq!((SURFACE_WIDTH_MM, SURFACE_HEIGHT_MM), (199, 279));
-        assert_eq!(
-            (
-                GridSize::FULL.scene_width(),
-                GridSize::FULL.scene_height()
-            ),
-            (199, 279)
-        );
+        assert_eq!((GridSize::FULL.scene_width(), GridSize::FULL.scene_height()), (199, 279));
     }
 
     #[test]
@@ -3441,30 +3723,10 @@ mod tests {
     fn middle_pan_tracks_drag_and_clamps_to_scaled_document() {
         let mut pan = ScenePan::ZERO;
         assert!(!pan.drag_pixels(100, 100, 853, 1_196, 150, GridSize::FULL));
-        assert!(pan.drag_pixels(
-            -10_000,
-            -10_000,
-            853,
-            1_196,
-            150,
-            GridSize::FULL
-        ));
-        assert_eq!(
-            pan.x,
-            -(GridSize::FULL.scene_width() as f32 * 0.5)
-        );
-        assert_eq!(
-            pan.y,
-            -(GridSize::FULL.scene_height() as f32 * 0.5)
-        );
-        assert!(pan.drag_pixels(
-            10_000,
-            10_000,
-            853,
-            1_196,
-            150,
-            GridSize::FULL
-        ));
+        assert!(pan.drag_pixels(-10_000, -10_000, 853, 1_196, 150, GridSize::FULL));
+        assert_eq!(pan.x, -(GridSize::FULL.scene_width() as f32 * 0.5));
+        assert_eq!(pan.y, -(GridSize::FULL.scene_height() as f32 * 0.5));
+        assert!(pan.drag_pixels(10_000, 10_000, 853, 1_196, 150, GridSize::FULL));
         assert_eq!(pan, ScenePan::ZERO);
 
         assert!(!pan.drag_pixels(-100, -100, 853, 1_196, 100, GridSize::FULL));
@@ -3594,9 +3856,45 @@ mod tests {
 
         let programs = decode_text_animations(&wire).expect("valid keyframe wire");
         let program = programs[13].expect("selector installed");
-        assert_eq!(program.sample(0), GpuFontRgba::new(255, 0, 0, 255));
-        assert_eq!(program.sample(250), GpuFontRgba::new(128, 128, 0, 255));
-        assert_eq!(program.sample(500), GpuFontRgba::new(0, 255, 0, 255));
-        assert_eq!(program.sample(1_000), GpuFontRgba::new(255, 0, 0, 255));
+        let fallback = GpuFontRgba::new(1, 2, 3, 4);
+        assert_eq!(program.sample_color(fallback, 0), GpuFontRgba::new(255, 0, 0, 255));
+        assert_eq!(program.sample_color(fallback, 250), GpuFontRgba::new(128, 128, 0, 255));
+        assert_eq!(program.sample_color(fallback, 500), GpuFontRgba::new(0, 255, 0, 255));
+        assert_eq!(program.sample_color(fallback, 1_000), GpuFontRgba::new(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn font_instance_v2_wire_accepts_transform_background_and_gpu_motion() {
+        let mut wire = Vec::from([2, 1, 0, 0]);
+        let mut record = [0u8; TEXT_INSTANCE_RECORD_HEADER_BYTES];
+        record[0] = 5;
+        record[12..14].copy_from_slice(&(-325i16).to_le_bytes());
+        record[14..16].copy_from_slice(&1_250u16.to_le_bytes());
+        record[16..18].copy_from_slice(&875u16.to_le_bytes());
+        record[18..22].copy_from_slice(&[12, 24, 48, 96]);
+        record[22..26].copy_from_slice(&4_000u32.to_le_bytes());
+        record[26..28].copy_from_slice(&250u16.to_le_bytes());
+        record[28..30].copy_from_slice(&180i16.to_le_bytes());
+        record[30..32].copy_from_slice(&60i16.to_le_bytes());
+        record[32..34].copy_from_slice(&(-120i16).to_le_bytes());
+        record[34..36].copy_from_slice(&15i16.to_le_bytes());
+        record[36..38].copy_from_slice(&(-10i16).to_le_bytes());
+        wire.extend_from_slice(&record);
+
+        let programs = decode_text_animations(&wire).expect("valid v2 font-instance wire");
+        let program = programs[5].expect("selector installed");
+        assert_eq!(program.color, None);
+        assert_eq!(program.style.rotation_centidegrees, -325);
+        assert_eq!(program.style.scale_permille, 1_250);
+        assert_eq!(program.style.opacity_permille, 875);
+        assert_eq!(program.style.background, GpuFontRgba::new(12, 24, 48, 96));
+        assert!(program.motion.is_active());
+        assert_eq!(program.motion.period_ms, 4_000);
+        assert_eq!(program.motion.phase_permille, 250);
+        assert_eq!(program.motion.rotation_amplitude_centidegrees, 180);
+        assert_eq!(program.motion.scale_amplitude_permille, 60);
+        assert_eq!(program.motion.opacity_amplitude_permille, -120);
+        assert_eq!(program.motion.translation_x_tenths_px, 15);
+        assert_eq!(program.motion.translation_y_tenths_px, -10);
     }
 }

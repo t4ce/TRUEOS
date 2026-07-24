@@ -417,11 +417,8 @@ pub(crate) const FONT_INSTANCE_RGBA8_ADLS_SPV: &[u8] = include_bytes!(
 );
 pub(crate) const FONT_INSTANCE_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-const _: () = assert!(matches!(
-    FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(),
-    Ok(())
-));
-const _: () = assert!(FONT_INSTANCE_RGBA8_ADLS_BIN.len() == 69_224);
+const _: () = assert!(matches!(FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
+const _: () = assert!(FONT_INSTANCE_RGBA8_ADLS_BIN.len() == 69_208);
 const _: () = {
     let contract = FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT;
     assert!(contract.target.pci_device_ids.len() == 1);
@@ -448,10 +445,7 @@ const _: () = {
         assert!(contract.payload_args[scalar].arg_index as usize == scalar);
         assert!(contract.payload_args[scalar].offset_bytes == 60 + scalar as u32 * 4);
         assert!(contract.payload_args[scalar].size_bytes == 4);
-        assert!(matches!(
-            contract.payload_args[scalar].kind,
-            GpgpuArtifactArgKind::ByValue
-        ));
+        assert!(matches!(contract.payload_args[scalar].kind, GpgpuArtifactArgKind::ByValue));
         scalar += 1;
     }
 };
@@ -493,10 +487,7 @@ pub(crate) const LFM25_Q8_PROJECT_PACKED_ADLS_SPV: &[u8] = include_bytes!(
 );
 pub(crate) const LFM25_Q8_PROJECT_PACKED_ADLS_BIN_SHA256: [u8; 32] =
     LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-const _: () = assert!(matches!(
-    LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.validate(),
-    Ok(())
-));
+const _: () = assert!(matches!(LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
 const _: () = assert!(LFM25_Q8_PROJECT_PACKED_ADLS_BIN.len() == 23_432);
 const _: () = assert!(LFM25_Q8_PROJECT_PACKED_ADLS_SPV.len() == 14_740);
 const _: () = {

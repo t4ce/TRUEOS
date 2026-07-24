@@ -630,6 +630,164 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
     true
 }
 
+fn direct_rcs_encode_font_instance_layers_2d_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    layers: &[GpgpuFontInstanceLayer],
+    descriptor_state: &GpgpuOwnedFontInstanceState,
+    dst: GpgpuRgba8Surface,
+    time_seconds: f32,
+) -> bool {
+    let mut active_walkers = 0usize;
+    for &layer in layers {
+        let Some(dispatch) = lower_font_instance_layer(layer, descriptor_state, dst) else {
+            return false;
+        };
+        if !dispatch.is_empty() {
+            active_walkers += 1;
+        }
+    }
+    if active_walkers == 0 || active_walkers > FONT_INSTANCE_BATCH_MAX_LAYERS {
+        return false;
+    }
+    let payload_end = FONT_INSTANCE_BATCH_PAYLOAD_BASE_OFFSET_BYTES
+        .saturating_add(active_walkers.saturating_mul(FONT_INSTANCE_INDIRECT_BYTES));
+    if payload_end > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    let mut walker_index = 0usize;
+    for &layer in layers {
+        let Some(dispatch) = lower_font_instance_layer(layer, descriptor_state, dst) else {
+            return false;
+        };
+        if dispatch.is_empty() {
+            continue;
+        }
+        let Some(descriptor_gpu) = descriptor_state.descriptor_gpu(layer.descriptor_index) else {
+            return false;
+        };
+        let state_block = FONT_INSTANCE_BATCH_STATE_BASE_OFFSET_BYTES
+            + walker_index * FONT_INSTANCE_BATCH_STATE_BLOCK_BYTES;
+        let idd_offset = state_block + FONT_INSTANCE_BATCH_IDD_OFFSET_IN_BLOCK_BYTES;
+        let binding_table_offset =
+            state_block + FONT_INSTANCE_BATCH_BINDING_TABLE_OFFSET_IN_BLOCK_BYTES;
+        let mask_surface_offset =
+            state_block + FONT_INSTANCE_BATCH_MASK_SURFACE_OFFSET_IN_BLOCK_BYTES;
+        let dst_surface_offset =
+            state_block + FONT_INSTANCE_BATCH_DST_SURFACE_OFFSET_IN_BLOCK_BYTES;
+        let descriptor_surface_offset =
+            state_block + FONT_INSTANCE_BATCH_DESC_SURFACE_OFFSET_IN_BLOCK_BYTES;
+        if !direct_rcs_write_interface_descriptor_at(
+            state,
+            idd_offset,
+            binding_table_offset,
+            FONT_INSTANCE_RGBA8_TEXT_OFFSET_BYTES,
+            3,
+            (FONT_INSTANCE_CROSS_THREAD_BYTES / 32) as u32,
+        ) || !direct_rcs_write_alpha_blend_worklist_surface_states_at(
+            state,
+            binding_table_offset,
+            mask_surface_offset,
+            dst_surface_offset,
+            descriptor_surface_offset,
+            layer.mask.gpu,
+            layer.mask.bytes,
+            dst.gpu,
+            dst.bytes,
+            descriptor_gpu,
+            GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES,
+        ) {
+            return false;
+        }
+        let payload_offset = FONT_INSTANCE_BATCH_PAYLOAD_BASE_OFFSET_BYTES
+            + walker_index * FONT_INSTANCE_INDIRECT_BYTES;
+        if !direct_rcs_write_font_instance_payload_at(
+            state,
+            payload_offset,
+            layer,
+            descriptor_gpu,
+            dst,
+            dispatch,
+            time_seconds,
+        ) {
+            return false;
+        }
+        walker_index += 1;
+    }
+
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok =
+        direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload, state.gpu_va.batch);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        COPY_RECT_PRE_MARKER_SLOT,
+        COPY_RECT_PRE_MARKER,
+    );
+
+    walker_index = 0;
+    for &layer in layers {
+        let Some(dispatch_rect) = lower_font_instance_layer(layer, descriptor_state, dst) else {
+            return false;
+        };
+        if dispatch_rect.is_empty() {
+            continue;
+        }
+        let Some(dispatch) = fill_rect_2d_dispatch(dispatch_rect.width, dispatch_rect.height)
+        else {
+            return false;
+        };
+        let state_block = FONT_INSTANCE_BATCH_STATE_BASE_OFFSET_BYTES
+            + walker_index * FONT_INSTANCE_BATCH_STATE_BLOCK_BYTES;
+        let idd_offset = state_block + FONT_INSTANCE_BATCH_IDD_OFFSET_IN_BLOCK_BYTES;
+        let payload_offset = FONT_INSTANCE_BATCH_PAYLOAD_BASE_OFFSET_BYTES
+            + walker_index * FONT_INSTANCE_INDIRECT_BYTES;
+        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, 0);
+        ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
+        ok &= direct_rcs_push(batch, &mut cursor, idd_offset as u32);
+        ok &= direct_rcs_push_gpgpu_walker_2d(
+            batch,
+            &mut cursor,
+            payload_offset,
+            FONT_INSTANCE_INDIRECT_BYTES,
+            dispatch.group_x,
+            dispatch.group_y,
+            dispatch.right_mask,
+        );
+        // Every layer blends into the same render target. Preserve descriptor
+        // order so source-over composition remains deterministic.
+        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, 0);
+        walker_index += 1;
+    }
+    ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
+        batch,
+        &mut cursor,
+        state.gpu_va.result,
+        COPY_RECT_POST_MARKER_SLOT,
+        COPY_RECT_POST_MARKER,
+    );
+    if !ok
+        || cursor.saturating_mul(core::mem::size_of::<u32>())
+            > FONT_INSTANCE_BATCH_STATE_BASE_OFFSET_BYTES
+    {
+        return false;
+    }
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
 fn direct_rcs_finish_two_buffer_2d_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,

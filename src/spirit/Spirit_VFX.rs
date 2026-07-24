@@ -1213,11 +1213,14 @@ pub(crate) fn set_edge_fade_pixels(pixels: f32) -> Result<u64, SpiritVfxControlE
 pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     let (revision, panel) = control_panel_snapshot();
     let now = Instant::now();
+    let reasoning_active = crate::r::ai_activity::reasoning_active();
     let idle_vfx = *IDLE_VFX_STATE.lock();
     let idle_opacity = idle_vfx.opacity(now.as_millis());
     let window_background = *WINDOW_BACKGROUND_VFX.lock();
     let move_portal_active = MOVE_PORTAL_ACTIVE.load(Ordering::Acquire);
-    let background = if move_portal_active {
+    let background = if reasoning_active {
+        SpiritVfxAlphaBackground::default()
+    } else if move_portal_active {
         let elapsed_ms = now
             .as_millis()
             .saturating_sub(MOVE_PORTAL_STARTED_MS.load(Ordering::Acquire));
@@ -1242,7 +1245,9 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     } else {
         panel.alpha_background
     };
-    let sprite_shader = if window_background.is_none() && idle_vfx.active {
+    let sprite_shader = if reasoning_active {
+        sprite_shader_for_effect(SpiritVfxEffect::GhostTrail)
+    } else if window_background.is_none() && idle_vfx.active {
         let elapsed_ms = now.as_millis().saturating_sub(idle_vfx.sprite_started_ms);
         let (fx_color_a, fx_color_b) = SpiritVfxEffect::AuraBloom.demo_colors();
         SpiritVfxSpriteShader {
@@ -1276,6 +1281,20 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
         shader_parameters: sprite_shader.parameters,
         fx_color_a: sprite_shader.fx_color_a.packed_rgb(),
         fx_color_b: sprite_shader.fx_color_b.packed_rgb(),
+    }
+}
+
+fn sprite_shader_for_effect(effect: SpiritVfxEffect) -> SpiritVfxSpriteShader {
+    let mut parameters = [0.0; 4];
+    for (parameter, control) in parameters.iter_mut().zip(effect.controls()) {
+        *parameter = control.default;
+    }
+    let (fx_color_a, fx_color_b) = effect.demo_colors();
+    SpiritVfxSpriteShader {
+        effect,
+        parameters,
+        fx_color_a,
+        fx_color_b,
     }
 }
 

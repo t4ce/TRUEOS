@@ -449,11 +449,16 @@ async fn run_lum_turn(
         return false;
     }
     conversation.pending_reply_tail.clear();
+    let turn = conversation.turns.saturating_add(1);
+    let reasoning = crate::r::ai_activity::begin_reasoning(
+        crate::r::ai_activity::AiActivitySource::Lumen,
+        turn,
+    );
     print_matrix_target_line(
         target,
         alloc::format!(
             "lum: running turn={} prompt_tokens={} context_before={} backend=cpu+intel-igc-q8 completion=guc-rcs",
-            conversation.turns + 1,
+            turn,
             prompt_tokens.len(),
             context_before,
         )
@@ -647,6 +652,7 @@ async fn run_lum_turn(
     };
     let reply = String::from_utf8_lossy(&reply_bytes);
     let after = crate::intel::gpgpu::lfm25_q8_project_stats();
+    reasoning.finish();
     print_matrix_target_line(target, alloc::format!("lum: {reply}").as_str());
     print_matrix_target_line(
         target,

@@ -25,13 +25,25 @@ const IDLE_UNCROSSED_SOFT_BLINK: &str = "idle.uncrossed.soft_blink";
 const IDLE_CROSSED_SOFT_BLINK: &str = "idle.crossed.soft_blink";
 const IDLE_CROSS_ARMS_TRANSITION: &str = "transition.neutral_to_crossed";
 const IDLE_UNCROSS_ARMS_TRANSITION: &str = "transition.uncross_arms";
+const AI_REASONING_START_ANIMATION: &str = "agree.firm_nod";
+const AI_REASONING_FINISH_ANIMATION: &str = "idea.finger_up";
+const IDLE_WINK_VARIANTS: [&str; 5] = [
+    "wink.playful",
+    "flirt.finger_heart",
+    "blush.evil",
+    IDLE_UNCROSSED_SOFT_BLINK,
+    IDLE_CROSSED_SOFT_BLINK,
+];
 const IDLE_CONTROL_POLL_MS: u64 = 100;
 const IDLE_BLINK_AVERAGE_MS: u64 = 5_000;
 const IDLE_BLINK_WINDOW_MS: u64 = 5_000;
 const IDLE_ARMS_AVERAGE_MS: u64 = 15_000;
 const IDLE_ARMS_WINDOW_MS: u64 = 30_000;
+const IDLE_WINK_AVERAGE_MS: u64 = 60_000;
+const IDLE_WINK_WINDOW_MS: u64 = 60_000;
 const _: () = assert!(IDLE_BLINK_WINDOW_MS <= IDLE_BLINK_AVERAGE_MS * 2);
 const _: () = assert!(IDLE_ARMS_WINDOW_MS <= IDLE_ARMS_AVERAGE_MS * 2);
+const _: () = assert!(IDLE_WINK_WINDOW_MS <= IDLE_WINK_AVERAGE_MS * 2);
 
 /// Straight RGBA modulation supplied by the producer. The eventual sprite
 /// compositor applies alpha while preserving the resident premultiplied-RGBA8
@@ -146,6 +158,8 @@ struct LillyIdleStrategy {
     pending_crossed: Option<bool>,
     next_blink: Instant,
     next_arms_change: Instant,
+    next_wink: Instant,
+    last_wink_variant: Option<usize>,
 }
 
 impl LillyIdleStrategy {
@@ -163,6 +177,12 @@ impl LillyIdleStrategy {
                 IDLE_ARMS_AVERAGE_MS,
                 IDLE_ARMS_WINDOW_MS,
             ));
+        let next_wink = now
+            + Duration::from_millis(centered_interval_ms(
+                &mut rng,
+                IDLE_WINK_AVERAGE_MS,
+                IDLE_WINK_WINDOW_MS,
+            ));
         Self {
             rng,
             active: true,
@@ -170,6 +190,8 @@ impl LillyIdleStrategy {
             pending_crossed: None,
             next_blink,
             next_arms_change,
+            next_wink,
+            last_wink_variant: None,
         }
     }
 
@@ -206,6 +228,28 @@ impl LillyIdleStrategy {
                 "trueos-spirit: idle strategy event=arms-transition-complete posture={}\n",
                 idle_posture_name(self.crossed),
             );
+        }
+
+        if now >= self.next_wink {
+            let next_ms =
+                centered_interval_ms(&mut self.rng, IDLE_WINK_AVERAGE_MS, IDLE_WINK_WINDOW_MS);
+            self.next_wink = now + Duration::from_millis(next_ms);
+            let variant = next_distinct_variant(
+                &mut self.rng,
+                self.last_wink_variant,
+                IDLE_WINK_VARIANTS.len(),
+            );
+            self.last_wink_variant = Some(variant);
+            let animation_key = IDLE_WINK_VARIANTS[variant];
+            crate::log_info!(
+                target: "gfx";
+                "trueos-spirit: idle strategy event=wink variant={} clip={} next_average_ms={} next_window_ms={}\n",
+                variant + 1,
+                animation_key,
+                IDLE_WINK_AVERAGE_MS,
+                IDLE_WINK_WINDOW_MS,
+            );
+            return resolve(animation_key, rgba);
         }
 
         if now >= self.next_arms_change {
@@ -247,8 +291,10 @@ impl LillyIdleStrategy {
             .next_arms_change
             .saturating_duration_since(now)
             .as_millis();
+        let until_wink_ms = self.next_wink.saturating_duration_since(now).as_millis();
         let boundary_ms = until_blink_ms
             .min(until_arms_ms)
+            .min(until_wink_ms)
             .min(IDLE_CONTROL_POLL_MS)
             .max(1);
         resolve_static_idle(idle_animation_key(self.crossed), rgba, boundary_ms)
@@ -417,6 +463,31 @@ pub(crate) fn stop_after_boundary() -> usize {
 #[allow(dead_code)]
 pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolError> {
     loop {
+        if let Some(event) = crate::r::ai_activity::try_take_reasoning_event() {
+            pause_idle_strategy();
+            let (event_name, animation_key) = match event.phase {
+                crate::r::ai_activity::AiReasoningPhase::Started => {
+                    ("reasoning-start", AI_REASONING_START_ANIMATION)
+                }
+                crate::r::ai_activity::AiReasoningPhase::Finished => {
+                    ("reasoning-finish", AI_REASONING_FINISH_ANIMATION)
+                }
+            };
+            crate::log_info!(
+                target: "gfx";
+                "trueos-spirit: ai animation event={} source={:?} turn={} clip={}\n",
+                event_name,
+                event.source,
+                event.turn,
+                animation_key,
+            );
+            return resolve(animation_key, *LAST_RGBA.lock());
+        }
+
+        if crate::r::ai_activity::reasoning_active() {
+            return next_idle_animation(*LAST_RGBA.lock());
+        }
+
         let Some((package, ring_remaining)) = PACKAGE_RING.lock().pop() else {
             return next_idle_animation(*LAST_RGBA.lock());
         };
@@ -515,6 +586,21 @@ fn centered_interval_ms(rng: &mut crate::tyche::SoftRng, average_ms: u64, window
     let lower_ms = average_ms.saturating_sub(window_ms / 2);
     let offset_range = usize::try_from(window_ms.saturating_add(1)).unwrap_or(usize::MAX);
     lower_ms.saturating_add(rng.usize_below(offset_range) as u64)
+}
+
+fn next_distinct_variant(
+    rng: &mut crate::tyche::SoftRng,
+    previous: Option<usize>,
+    count: usize,
+) -> usize {
+    if count <= 1 {
+        return 0;
+    }
+    let candidate = rng.usize_below(count - usize::from(previous.is_some()));
+    match previous {
+        Some(previous) if candidate >= previous => candidate + 1,
+        _ => candidate,
+    }
 }
 
 const fn idle_animation_key(crossed: bool) -> &'static str {

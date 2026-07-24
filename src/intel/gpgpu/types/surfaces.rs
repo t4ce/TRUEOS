@@ -324,6 +324,212 @@ impl Drop for GpgpuOwnedMask8Surface {
     }
 }
 
+pub(crate) const GPGPU_FONT_INSTANCE_DESCRIPTOR_DWORDS: usize = 64;
+pub(crate) const GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES: usize =
+    GPGPU_FONT_INSTANCE_DESCRIPTOR_DWORDS * core::mem::size_of::<u32>();
+pub(crate) const GPGPU_FONT_INSTANCE_MAX_LAYERS: usize = 64;
+
+const GPGPU_FONT_INSTANCE_MAGIC: u32 = 0x3149_5446;
+const GPGPU_FONT_INSTANCE_FLAG_ENABLED: u32 = 1 << 0;
+const GPGPU_FONT_INSTANCE_FLAG_BACKGROUND: u32 = 1 << 1;
+const GPGPU_FONT_INSTANCE_FLAG_COLOR_ANIMATION: u32 = 1 << 2;
+const GPGPU_FONT_INSTANCE_FLAG_TIMING_SINE: u32 = 1 << 3;
+const GPGPU_FONT_INSTANCE_ITERATION_SHIFT: u32 = 4;
+const GPGPU_FONT_INSTANCE_CHANNELS_SHIFT: u32 = 8;
+const GPGPU_FONT_INSTANCE_FRAME_COUNT_SHIFT: u32 = 16;
+
+/// One immutable-layout font presentation record consumed directly by the
+/// C++/IGC font-instance kernel. The complete record is copied into persistent
+/// GPU-visible storage only when its style program changes.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuFontInstanceDescriptor {
+    dwords: [u32; GPGPU_FONT_INSTANCE_DESCRIPTOR_DWORDS],
+}
+
+impl GpgpuFontInstanceDescriptor {
+    pub(crate) fn new(
+        mask: GpgpuMask8Surface,
+        mask_rect: GpgpuRect,
+        foreground_rgba: u32,
+    ) -> Option<Self> {
+        if !mask.is_valid()
+            || mask_rect.x < 0
+            || mask_rect.y < 0
+            || mask_rect.width == 0
+            || mask_rect.height == 0
+            || (mask_rect.x as u32).checked_add(mask_rect.width)? > mask.width
+            || (mask_rect.y as u32).checked_add(mask_rect.height)? > mask.height
+        {
+            return None;
+        }
+        let mut dwords = [0u32; GPGPU_FONT_INSTANCE_DESCRIPTOR_DWORDS];
+        dwords[0] = GPGPU_FONT_INSTANCE_MAGIC;
+        dwords[1] = GPGPU_FONT_INSTANCE_FLAG_ENABLED;
+        dwords[2] = mask.pitch_bytes;
+        dwords[3] = mask_rect.x as u32;
+        dwords[4] = mask_rect.y as u32;
+        dwords[5] = mask_rect.width;
+        dwords[6] = mask_rect.height;
+        dwords[7] = 1.0f32.to_bits();
+        dwords[8] = 0.0f32.to_bits();
+        dwords[9] = 1.0f32.to_bits();
+        dwords[10] = foreground_rgba;
+        dwords[11] = 0;
+        dwords[12] = 1.0f32.to_bits();
+        dwords[13] = 1.0f32.to_bits();
+        Some(Self { dwords })
+    }
+
+    pub(crate) fn set_transform(&mut self, scale: f32, rotation_radians: f32, opacity: f32) {
+        self.dwords[7] = scale.clamp(0.125, 8.0).to_bits();
+        self.dwords[8] = rotation_radians
+            .clamp(-core::f32::consts::PI, core::f32::consts::PI)
+            .to_bits();
+        self.dwords[9] = opacity.clamp(0.0, 1.0).to_bits();
+    }
+
+    pub(crate) fn set_background(&mut self, rgba: u32) {
+        self.dwords[11] = rgba;
+        if rgba >> 24 == 0 {
+            self.dwords[1] &= !GPGPU_FONT_INSTANCE_FLAG_BACKGROUND;
+        } else {
+            self.dwords[1] |= GPGPU_FONT_INSTANCE_FLAG_BACKGROUND;
+        }
+    }
+
+    pub(crate) fn set_motion(
+        &mut self,
+        period_seconds: f32,
+        phase_cycles: f32,
+        rotation_amplitude_radians: f32,
+        scale_amplitude: f32,
+        opacity_amplitude: f32,
+        translation_amplitude_px: [f32; 2],
+    ) {
+        self.dwords[13] = period_seconds.clamp(0.016, 600.0).to_bits();
+        self.dwords[14] = phase_cycles.to_bits();
+        self.dwords[15] = rotation_amplitude_radians
+            .clamp(-core::f32::consts::PI, core::f32::consts::PI)
+            .to_bits();
+        self.dwords[16] = scale_amplitude.clamp(-0.875, 4.0).to_bits();
+        self.dwords[17] = opacity_amplitude.clamp(-1.0, 1.0).to_bits();
+        self.dwords[18] = translation_amplitude_px[0].clamp(-4096.0, 4096.0).to_bits();
+        self.dwords[19] = translation_amplitude_px[1].clamp(-4096.0, 4096.0).to_bits();
+    }
+
+    pub(crate) fn set_color_animation(
+        &mut self,
+        channels: u8,
+        timing_sine: bool,
+        iteration: u8,
+        duration_seconds: f32,
+        frames: &[(u16, u32)],
+    ) -> bool {
+        if channels == 0
+            || channels & !0x0F != 0
+            || iteration > 2
+            || !(2..=8).contains(&frames.len())
+            || frames[0].0 != 0
+            || frames[frames.len() - 1].0 != 1_000
+            || frames.windows(2).any(|pair| pair[1].0 <= pair[0].0)
+        {
+            return false;
+        }
+        let mut flags = self.dwords[1]
+            | GPGPU_FONT_INSTANCE_FLAG_COLOR_ANIMATION
+            | (u32::from(iteration) << GPGPU_FONT_INSTANCE_ITERATION_SHIFT)
+            | (u32::from(channels) << GPGPU_FONT_INSTANCE_CHANNELS_SHIFT)
+            | ((frames.len() as u32) << GPGPU_FONT_INSTANCE_FRAME_COUNT_SHIFT);
+        if timing_sine {
+            flags |= GPGPU_FONT_INSTANCE_FLAG_TIMING_SINE;
+        }
+        self.dwords[1] = flags;
+        self.dwords[12] = duration_seconds.clamp(0.016, 600.0).to_bits();
+        for (index, &(offset, rgba)) in frames.iter().enumerate() {
+            self.dwords[32 + index * 2] = u32::from(offset);
+            self.dwords[33 + index * 2] = rgba;
+        }
+        true
+    }
+}
+
+/// Persistent VM-backed descriptor storage shared by all font walkers in one
+/// retained page. Its PPGTT range is unique for the allocation lifetime.
+pub(crate) struct GpgpuOwnedFontInstanceState {
+    phys: u64,
+    gpu: u64,
+    bytes: usize,
+    virt: *mut u8,
+    capacity: usize,
+}
+
+unsafe impl Send for GpgpuOwnedFontInstanceState {}
+unsafe impl Sync for GpgpuOwnedFontInstanceState {}
+
+impl GpgpuOwnedFontInstanceState {
+    pub(crate) const fn phys(&self) -> u64 {
+        self.phys
+    }
+
+    pub(crate) const fn gpu(&self) -> u64 {
+        self.gpu
+    }
+
+    pub(crate) const fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    pub(crate) const fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    pub(crate) fn descriptor_gpu(&self, index: usize) -> Option<u64> {
+        (index < self.capacity)
+            .then_some(self.gpu + (index * GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES) as u64)
+    }
+
+    pub(crate) fn write(&self, index: usize, descriptor: &GpgpuFontInstanceDescriptor) -> bool {
+        if index >= self.capacity || self.virt.is_null() {
+            return false;
+        }
+        let offset = index * GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                descriptor.dwords.as_ptr() as *const u8,
+                self.virt.add(offset),
+                GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES,
+            );
+        }
+        super::dma_flush(unsafe { self.virt.add(offset) }, GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES);
+        true
+    }
+}
+
+impl Drop for GpgpuOwnedFontInstanceState {
+    fn drop(&mut self) {
+        crate::dma::dealloc(self.virt, self.bytes);
+        recycle_font_coverage_gpu_va(self.gpu, self.bytes);
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuFontInstanceLayer {
+    pub(crate) mask: GpgpuMask8Surface,
+    pub(crate) mask_rect: GpgpuRect,
+    pub(crate) dst_center: [f32; 2],
+    pub(crate) dispatch_rect: GpgpuRect,
+    pub(crate) descriptor_index: usize,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuFontInstanceBatchResult {
+    pub(crate) ok: bool,
+    pub(crate) submitted: bool,
+    pub(crate) requested_layers: usize,
+    pub(crate) active_walkers: usize,
+    pub(crate) submits: usize,
+}
+
 impl GpgpuMask8Surface {
     pub(crate) fn new(
         phys: u64,
