@@ -261,6 +261,7 @@ fn principal_instance_suffix(principal: Principal) -> String {
         Principal::KernelRender
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuExecution
+        | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
         | Principal::KernelUi4Blitter
         | Principal::HostRuntime => String::new(),

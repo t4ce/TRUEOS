@@ -38,10 +38,10 @@ pub(crate) fn try_parse(
         print_shell_line(io, "lum: prompt exceeds 512 UTF-8 bytes");
         return ParseOutcome::Handled;
     }
-    if !crate::r::fpga_offload::lfm25_row_stream_available() {
+    if !crate::intel::gpgpu::lfm25_q8_project_supported() {
         print_shell_line(
             io,
-            "lum: FPGA FFN function unavailable; flash the admitted BAR2/MSI firmware",
+            "lum: Intel LFM kernel unavailable; requires ADL-S 8086:4680 revision 0x0c and ready GuC/RCS",
         );
         return ParseOutcome::Handled;
     }
@@ -60,7 +60,10 @@ pub(crate) fn try_parse(
 
 #[embassy_executor::task]
 async fn lum_task(target: MatrixTarget, prompt: String) {
-    print_matrix_target_line(&target, "lum: loading sealed tokenizer and LFM2.5 CPU+FPGA session");
+    print_matrix_target_line(
+        &target,
+        "lum: loading sealed tokenizer and LFM2.5 CPU+Intel-IGC session",
+    );
     let started = embassy_time_driver::now();
     let tokenizer = match crate::r::lfm25_tokenizer::load().await {
         Ok(tokenizer) => tokenizer,
@@ -92,7 +95,7 @@ async fn lum_task(target: MatrixTarget, prompt: String) {
         return;
     }
 
-    let module = match crate::lumen::decode::open_hybrid_cpu().await {
+    let module = match crate::lumen::decode::open_intel_igc().await {
         Ok(module) => module,
         Err(error) => {
             print_matrix_target_line(
@@ -106,24 +109,13 @@ async fn lum_task(target: MatrixTarget, prompt: String) {
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "lum: running prompt_tokens={} backend=cpu+truega-ffn completion=msi",
+            "lum: running prompt_tokens={} backend=cpu+intel-igc-q8 completion=guc-rcs",
             prompt_tokens.len(),
         )
         .as_str(),
     );
 
-    let before = crate::r::fpga_offload::stats();
-    let row_completions_before = match crate::r::fpga_offload::lfm25_stream_completion_count() {
-        Ok(count) => count,
-        Err(error) => {
-            print_matrix_target_line(
-                &target,
-                alloc::format!("lum: failed stage=prefill-counters error={error:?}").as_str(),
-            );
-            set_matrix_target_active(&target, false);
-            return;
-        }
-    };
+    let before = crate::intel::gpgpu::lfm25_q8_project_stats();
     let mut next_token = None;
     let mut last_callback = 0u64;
     for (index, &token) in prompt_tokens.iter().enumerate() {
@@ -179,51 +171,41 @@ async fn lum_task(target: MatrixTarget, prompt: String) {
         }
     };
     let first_piece = String::from_utf8_lossy(&first_piece_bytes);
-    let row_completions_after = match crate::r::fpga_offload::lfm25_stream_completion_count() {
-        Ok(count) => count,
-        Err(error) => {
-            print_matrix_target_line(
-                &target,
-                alloc::format!("lum: failed stage=prefill-counters error={error:?}").as_str(),
-            );
-            set_matrix_target_active(&target, false);
-            return;
-        }
-    };
-    let prefill_after = crate::r::fpga_offload::stats();
+    let prefill_after = crate::intel::gpgpu::lfm25_q8_project_stats();
     let callback_count = last_callback;
-    let fpga_row_completions = row_completions_after.wrapping_sub(row_completions_before) as u64;
-    let timeout_recovery_count = prefill_after
-        .timeout_recoveries
-        .saturating_sub(before.timeout_recoveries);
+    let igpu_projections = prefill_after.launches.saturating_sub(before.launches);
+    let igpu_failures = prefill_after.failures.saturating_sub(before.failures);
+    let igpu_submit_ms = prefill_after
+        .total_submit_ms
+        .saturating_sub(before.total_submit_ms);
     let expected_callbacks =
         prompt_tokens.len() as u64 * trueos_fpga_abi::lfm25_decode::OPS_PER_TOKEN as u64;
-    let expected_fpga_rows = prompt_tokens.len() as u64
-        * trueos_fpga_abi::lfm25::MODEL_LAYER_COUNT as u64
-        * crate::r::lfm25_ffn::FPGA_STREAM_ROWS_PER_FFN;
+    let expected_igpu_projections = prompt_tokens.len() as u64
+        * crate::intel::gpgpu::LFM25_Q8_PROJECTIONS_PER_TOKEN;
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "lum: prefill_diag first_token={} first_piece={:?} callbacks={} fpga_rows={} timeout_recovery={}",
+            "lum: prefill_diag first_token={} first_piece={:?} callbacks={} igpu_projections={} igpu_failures={} igpu_submit_ms={}",
             first_token,
             first_piece,
             callback_count,
-            fpga_row_completions,
-            timeout_recovery_count,
+            igpu_projections,
+            igpu_failures,
+            igpu_submit_ms,
         )
         .as_str(),
     );
     if callback_count != expected_callbacks
-        || fpga_row_completions != expected_fpga_rows
-        || timeout_recovery_count != 0
+        || igpu_projections != expected_igpu_projections
+        || igpu_failures != 0
         || (prompt == "hi" && (first_token != 36_309 || !first_piece.starts_with("Hello")))
     {
         print_matrix_target_line(
             &target,
             alloc::format!(
-                "lum: failed stage=prefill-parity expected_callbacks={} expected_fpga_rows={} hi_expected_token=36309",
+                "lum: failed stage=prefill-parity expected_callbacks={} expected_igpu_projections={} hi_expected_token=36309",
                 expected_callbacks,
-                expected_fpga_rows,
+                expected_igpu_projections,
             )
             .as_str(),
         );
@@ -279,27 +261,28 @@ async fn lum_task(target: MatrixTarget, prompt: String) {
         }
     };
     let reply = String::from_utf8_lossy(&reply_bytes);
-    let after = crate::r::fpga_offload::stats();
+    let after = crate::intel::gpgpu::lfm25_q8_project_stats();
     print_matrix_target_line(&target, alloc::format!("lum: {reply}").as_str());
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "lum: done prompt_tokens={} reply_tokens={} stop={} callbacks={} irq_delta={} timeout_recovery_delta={} elapsed_ms={}",
+            "lum: done prompt_tokens={} reply_tokens={} stop={} callbacks={} igpu_projections={} igpu_failures={} igpu_submit_ms={} elapsed_ms={}",
             prompt_tokens.len(),
             generated.len(),
             if stopped { "eot" } else { "limit" },
             last_callback,
-            after.interrupts.saturating_sub(before.interrupts),
+            after.launches.saturating_sub(before.launches),
+            after.failures.saturating_sub(before.failures),
             after
-                .timeout_recoveries
-                .saturating_sub(before.timeout_recoveries),
+                .total_submit_ms
+                .saturating_sub(before.total_submit_ms),
             elapsed_ms_since(started),
         )
         .as_str(),
     );
     print_matrix_target_line(
         &target,
-        "lum: path=quoted-prompt->sealed-bpe->lumen-async-session->cpu-stages+truega-ffn->msi",
+        "lum: path=quoted-prompt->sealed-bpe->lumen-async-session->cpu-state+cpp-q8-project->igc-zebin->guc-rcs",
     );
     set_matrix_target_active(&target, false);
 }

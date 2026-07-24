@@ -97,15 +97,23 @@ pub(crate) async fn open_truega() -> Result<
     Ok(Lfm25Decode::new(backend))
 }
 
-/// Bind the sealed scalar CPU stages and the admitted BAR2/MSI FFN function to
-/// the same fixed 99-operation Lumen module.
+/// Bind the sealed scalar CPU stages and the admitted Intel C++/IGC projection
+/// program to the same fixed 99-operation Lumen module.
+#[cfg(target_os = "trueos")]
+pub(crate) async fn open_intel_igc() -> Result<
+    Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::IntelIgcAotDecodeBackend>,
+    crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError,
+> {
+    let backend = crate::r::lfm25_hybrid_cpu_backend::open_intel_igc_backend().await?;
+    Ok(Lfm25Decode::new(backend))
+}
+
 #[cfg(target_os = "trueos")]
 pub(crate) async fn open_hybrid_cpu() -> Result<
     Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::HybridCpuAotDecodeBackend>,
     crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError,
 > {
-    let backend = crate::r::lfm25_hybrid_cpu_backend::open_hybrid_backend().await?;
-    Ok(Lfm25Decode::new(backend))
+    open_intel_igc().await
 }
 
 impl<Backend> AsyncModule for Lfm25Decode<Backend>

@@ -1,8 +1,9 @@
-//! Hybrid LFM2.5 decode backend.
+//! Fixed LFM2.5 CPU + Intel IGC decode backend.
 //!
 //! The fixed control plane remains the 99-operation Lumen AOT schedule. CPU
-//! kernels execute the stages absent from the admitted firmware, while each
-//! FFN is submitted to the already-proven BAR2/MSI TRUEGA function.
+//! kernels execute state, normalization, attention-reduction, and nonlinear
+//! stages. Every Q8 projection is submitted to the admitted C++/IGC kernel on
+//! the dedicated Intel GuC/RCS lane.
 
 extern crate alloc;
 
@@ -19,7 +20,7 @@ use crate::r::lfm25_decode::{
     AotDecodeBackend, AotDecodeCallback, AotDecodeOutput, AotDecodeRequest, HiddenQ8, HiddenQ30,
     ResidentTensorHandle,
 };
-use crate::r::{lfm25_f32, lfm25_ffn, lfm25_model};
+use crate::r::{lfm25_f32, lfm25_model};
 
 const HIDDEN: usize = lfm25::MODEL_HIDDEN_SIZE as usize;
 const HEADS: usize = lfm25::MODEL_ATTENTION_HEADS as usize;
@@ -28,7 +29,6 @@ const HEAD_DIM: usize = lfm25::MODEL_HEAD_DIMENSION as usize;
 const KV_ELEMENTS: usize = KV_HEADS * HEAD_DIM;
 const ATTENTION_REDUCTION_TILE: usize = 256;
 const MODEL_READ_CHUNK: usize = 256 * 1024;
-const PROJECT_YIELD_ROWS: usize = 128;
 const CPU_CONNECTION_GENERATION: u32 = 0x4350_5531; // "CPU1"
 const CPU_SESSION_EPOCH: u32 = 1;
 
@@ -36,7 +36,7 @@ const CPU_SESSION_EPOCH: u32 = 1;
 pub enum HybridCpuBackendError {
     Model(lfm25_model::Error),
     F32(lfm25_f32::Error),
-    Ffn(lfm25_ffn::Error),
+    Gpu(crate::intel::gpgpu::Lfm25Q8ProjectError),
     Kernel(cpu::Error),
     Tensor,
     TensorDomain,
@@ -60,9 +60,9 @@ impl From<lfm25_f32::Error> for HybridCpuBackendError {
     }
 }
 
-impl From<lfm25_ffn::Error> for HybridCpuBackendError {
-    fn from(error: lfm25_ffn::Error) -> Self {
-        Self::Ffn(error)
+impl From<crate::intel::gpgpu::Lfm25Q8ProjectError> for HybridCpuBackendError {
+    fn from(error: crate::intel::gpgpu::Lfm25Q8ProjectError) -> Self {
+        Self::Gpu(error)
     }
 }
 
@@ -73,10 +73,9 @@ impl From<cpu::Error> for HybridCpuBackendError {
 }
 
 struct CpuQ8Tensor {
-    /// Preserve the F32 result for CPU stages; the Q8 blocks are the exact
-    /// representation submitted when the next operation is the FPGA FFN.
+    /// Preserve the normalized F32 result for CPU stages. Each admitted iGPU
+    /// projection quantizes this exact vector into the fixed Q8_0 input ABI.
     values: Vec<f32>,
-    blocks: Vec<[u8; cpu::Q8_BLOCK_BYTES]>,
 }
 
 enum CpuTensor {
@@ -92,6 +91,7 @@ struct KvCache {
 
 pub struct HybridCpuAotDecodeBackend {
     model: Vec<u8>,
+    gpu_model: crate::intel::gpgpu::Lfm25Q8ModelMapping,
     f32: cpu::F32Sidecar,
     slots: Vec<Option<CpuTensor>>,
     shortconv: Vec<Vec<[f32; 2]>>,
@@ -99,9 +99,13 @@ pub struct HybridCpuAotDecodeBackend {
     callback_sequence: u64,
 }
 
-pub async fn open_hybrid_backend() -> Result<HybridCpuAotDecodeBackend, HybridCpuBackendError> {
-    if !crate::r::fpga_offload::lfm25_row_stream_available() {
-        return Err(HybridCpuBackendError::Ffn(lfm25_ffn::Error::StreamUnavailable));
+pub type IntelIgcAotDecodeBackend = HybridCpuAotDecodeBackend;
+
+pub async fn open_intel_igc_backend() -> Result<IntelIgcAotDecodeBackend, HybridCpuBackendError> {
+    if !crate::intel::gpgpu::lfm25_q8_project_supported() {
+        return Err(HybridCpuBackendError::Gpu(
+            crate::intel::gpgpu::Lfm25Q8ProjectError::UnsupportedTarget,
+        ));
     }
     // This is intentionally loaded before any short-convolution or K/V state
     // is allocated, so a missing or mismatched sidecar cannot partially mutate
@@ -132,6 +136,7 @@ pub async fn open_hybrid_backend() -> Result<HybridCpuAotDecodeBackend, HybridCp
             expected: lfm25_model::NATIVE_IMAGE_SHA256,
         });
     }
+    let gpu_model = crate::intel::gpgpu::bind_lfm25_q8_model(&model)?;
 
     let mut shortconv = Vec::new();
     shortconv
@@ -149,12 +154,17 @@ pub async fn open_hybrid_backend() -> Result<HybridCpuAotDecodeBackend, HybridCp
 
     Ok(HybridCpuAotDecodeBackend {
         model,
+        gpu_model,
         f32,
         slots: Vec::new(),
         shortconv,
         kv,
         callback_sequence: 0,
     })
+}
+
+pub async fn open_hybrid_backend() -> Result<HybridCpuAotDecodeBackend, HybridCpuBackendError> {
+    open_intel_igc_backend().await
 }
 
 impl HybridCpuAotDecodeBackend {
@@ -202,8 +212,7 @@ impl HybridCpuAotDecodeBackend {
         }
         let rows = descriptor.ggml_ne1 as usize;
         let row_bytes = cpu::q8_row_bytes(input.len())?;
-        let matrix = self.tensor(descriptor)?;
-        if matrix.len()
+        if descriptor.native_bytes as usize
             != rows
                 .checked_mul(row_bytes)
                 .ok_or(HybridCpuBackendError::Tensor)?
@@ -211,16 +220,21 @@ impl HybridCpuAotDecodeBackend {
             return Err(HybridCpuBackendError::Tensor);
         }
         let quantized = cpu::quantize_q8(input)?;
-        let mut output = Vec::new();
-        output
-            .try_reserve_exact(rows)
-            .map_err(|_| HybridCpuBackendError::Allocation)?;
-        for (row, bytes) in matrix.chunks_exact(row_bytes).enumerate() {
-            output.push(cpu::q8_row_dot_q8(bytes, &quantized)?);
-            if (row + 1) % PROJECT_YIELD_ROWS == 0 {
-                Timer::after(Duration::from_millis(1)).await;
-            }
-        }
+        let activation = unsafe {
+            core::slice::from_raw_parts(
+                quantized.as_ptr() as *const u8,
+                quantized.len() * cpu::Q8_BLOCK_BYTES,
+            )
+        };
+        let mut output = vec![0.0f32; rows];
+        crate::intel::gpgpu::lfm25_q8_project(
+            self.gpu_model,
+            descriptor.native_offset,
+            descriptor.ggml_ne0,
+            descriptor.ggml_ne1,
+            activation,
+            &mut output,
+        )?;
         Ok(output)
     }
 
@@ -289,8 +303,9 @@ impl HybridCpuAotDecodeBackend {
         if values.len() != HIDDEN {
             return Err(HybridCpuBackendError::Tensor);
         }
-        let blocks = cpu::quantize_q8(&values)?;
-        Ok(HiddenQ8::from_resident(self.allocate(CpuTensor::Q8(CpuQ8Tensor { values, blocks }))?))
+        Ok(HiddenQ8::from_resident(
+            self.allocate(CpuTensor::Q8(CpuQ8Tensor { values }))?,
+        ))
     }
 
     fn release(&mut self, handle: ResidentTensorHandle) -> Result<(), HybridCpuBackendError> {
@@ -523,9 +538,26 @@ impl HybridCpuAotDecodeBackend {
         layer: u8,
         input: HiddenQ8,
     ) -> Result<HiddenQ30, HybridCpuBackendError> {
-        let blocks = self.q8_tensor(input)?.blocks.clone();
-        let output = lfm25_ffn::execute_layer(layer, blocks, |_| {}).await?;
-        let values = cpu::q30_to_f32(&output.output_q30)?;
+        let input_values = self.q8_tensor(input)?.values.clone();
+        let gate = self
+            .project(Self::descriptor(Some(layer), TensorRole::FfnGate)?, &input_values)
+            .await?;
+        let up = self
+            .project(Self::descriptor(Some(layer), TensorRole::FfnUp)?, &input_values)
+            .await?;
+        if gate.len() != up.len() {
+            return Err(HybridCpuBackendError::Tensor);
+        }
+        let mut activated = Vec::new();
+        activated
+            .try_reserve_exact(gate.len())
+            .map_err(|_| HybridCpuBackendError::Allocation)?;
+        for (&gate, &up) in gate.iter().zip(&up) {
+            activated.push(cpu::silu_mul_f32_pinned(gate, up)?);
+        }
+        let values = self
+            .project(Self::descriptor(Some(layer), TensorRole::FfnDown)?, &activated)
+            .await?;
         self.release_q8(input)?;
         self.allocate_q30(values)
     }
