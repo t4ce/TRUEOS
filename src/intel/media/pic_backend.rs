@@ -1574,9 +1574,10 @@ pub(super) fn submit_avc_single_idr_batch(
     if missing_reference_surface_end > backing.output_surface_bytes {
         return None;
     }
-    let mut vcs0_lane = media::try_acquire_vcs0_lane(
+    let mut vcs0_lane = media::acquire_vcs0_lane_bounded(
         media::MediaVcs0JobMode::AVC_DECODE_EXECLISTS,
         vcs0_session_generation,
+        media::MEDIA_VCS0_INTERLEAVE_WAIT_NS,
     )
     .ok()?;
     let mode_transition = vcs0_lane.requires_reactivation();

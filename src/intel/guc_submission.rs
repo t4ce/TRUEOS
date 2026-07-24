@@ -14,6 +14,7 @@ use spin::Mutex;
 
 const INTEL_GUC_ACTION_SCHED_CONTEXT: u32 = 0x1000;
 const INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_SET: u32 = 0x1001;
+const INTEL_GUC_ACTION_HOST2GUC_UPDATE_CONTEXT_POLICIES: u32 = 0x100B;
 const INTEL_GUC_ACTION_REGISTER_CONTEXT: u32 = 0x4502;
 const INTEL_GUC_ACTION_DEREGISTER_CONTEXT: u32 = 0x4503;
 const GUC_CONTEXT_DISABLE: u32 = 0;
@@ -23,6 +24,10 @@ const GUC_RENDER_CLASS: u32 = 0;
 const GUC_VIDEO_CLASS: u32 = 1;
 const GUC_BLITTER_CLASS: u32 = 3;
 const ENGINE_INSTANCE_0_SUBMIT_MASK: u32 = 1;
+const GUC_CONTEXT_POLICIES_KLV_ID_SCHEDULING_PRIORITY: u32 = 0x2003;
+const GUC_KLV_DWORD_LEN: u32 = 1;
+const GUC_CLIENT_PRIORITY_KMD_HIGH: u32 = 0;
+const GUC_CLIENT_PRIORITY_KMD_NORMAL: u32 = 2;
 const MAX_GUC_CONTEXTS: usize = 32;
 
 #[derive(Copy, Clone)]
@@ -88,6 +93,8 @@ pub(crate) enum GucSubmissionError {
     ContextRegistryFull,
     InvalidContext,
     RegisterRejected,
+    PriorityConflict,
+    PolicyEnqueueRejected,
     ScheduleRejected,
     DisableRejected,
     DeregisterRejected,
@@ -100,6 +107,8 @@ impl GucSubmissionError {
             Self::ContextRegistryFull => "context-registry-full",
             Self::InvalidContext => "invalid-context",
             Self::RegisterRejected => "register-rejected",
+            Self::PriorityConflict => "priority-conflict",
+            Self::PolicyEnqueueRejected => "policy-enqueue-rejected",
             Self::ScheduleRejected => "schedule-rejected",
             Self::DisableRejected => "disable-rejected",
             Self::DeregisterRejected => "deregister-rejected",
@@ -130,6 +139,8 @@ pub(crate) struct GucContextStatus {
     pub(crate) token: GucContextToken,
     pub(crate) context_id: u32,
     pub(crate) engine: crate::gpu::physical::EngineClass,
+    pub(crate) priority: crate::gpu::physical::PhysicalContextPriority,
+    pub(crate) policy_enqueued: bool,
     pub(crate) enabled: bool,
     pub(crate) hwlrca_lo: u32,
     pub(crate) hwlrca_hi: u32,
@@ -142,6 +153,8 @@ struct GucContextState {
     enabled: bool,
     generation: u32,
     engine: crate::gpu::physical::EngineClass,
+    priority: crate::gpu::physical::PhysicalContextPriority,
+    policy_enqueued: bool,
     hwlrca_lo: u32,
     hwlrca_hi: u32,
     submissions: u64,
@@ -153,6 +166,8 @@ impl GucContextState {
         enabled: false,
         generation: 0,
         engine: crate::gpu::physical::EngineClass::RenderCompute,
+        priority: crate::gpu::physical::PhysicalContextPriority::KernelNormal,
+        policy_enqueued: false,
         hwlrca_lo: 0,
         hwlrca_hi: 0,
         submissions: 0,
@@ -195,8 +210,9 @@ impl IntelGucScheduler {
         engine: crate::gpu::physical::EngineClass,
         hwlrca_lo: u32,
         hwlrca_hi: u32,
+        priority: crate::gpu::physical::PhysicalContextPriority,
     ) -> Result<GucContextToken, GucSubmissionError> {
-        register_context(dev, engine, hwlrca_lo, hwlrca_hi)
+        register_context(dev, engine, hwlrca_lo, hwlrca_hi, priority)
     }
 
     pub(crate) fn submit(
@@ -235,6 +251,7 @@ pub(crate) fn register_context(
     engine: crate::gpu::physical::EngineClass,
     hwlrca_lo: u32,
     hwlrca_hi: u32,
+    priority: crate::gpu::physical::PhysicalContextPriority,
 ) -> Result<GucContextToken, GucSubmissionError> {
     if !ready() {
         return Err(GucSubmissionError::TransportNotReady);
@@ -255,6 +272,26 @@ pub(crate) fn register_context(
                     && context.hwlrca_hi == hwlrca_hi
             })
     {
+        if context.priority != priority {
+            state.failures = state.failures.saturating_add(1);
+            crate::log_error!(
+                target: "gpgpu";
+                "intel/guc-submit: context-policy conflict=1 engine={} context_id={} current_priority={} requested_priority={} action=reject-priority-mutation\n",
+                engine_abi.name,
+                context_id(slot),
+                guc_priority_name(context.priority),
+                guc_priority_name(priority),
+            );
+            return Err(GucSubmissionError::PriorityConflict);
+        }
+        if context.policy_enqueued {
+            return Ok(context.token(slot));
+        }
+        if !program_context_priority(dev, context_id(slot), engine_abi, priority) {
+            state.failures = state.failures.saturating_add(1);
+            return Err(GucSubmissionError::PolicyEnqueueRejected);
+        }
+        state.contexts[slot].policy_enqueued = true;
         return Ok(context.token(slot));
     }
 
@@ -308,21 +345,30 @@ pub(crate) fn register_context(
         enabled: false,
         generation,
         engine,
+        priority,
+        policy_enqueued: false,
         hwlrca_lo,
         hwlrca_hi,
         submissions: 0,
     };
     state.registrations = state.registrations.saturating_add(1);
     let token = GucContextToken::new(slot, generation);
+    if !program_context_priority(dev, context_id, engine_abi, priority) {
+        state.failures = state.failures.saturating_add(1);
+        return Err(GucSubmissionError::PolicyEnqueueRejected);
+    }
+    state.contexts[slot].policy_enqueued = true;
     crate::log!(
-        "intel/guc-submit: register accepted=1 engine={} context_id={} token=0x{:X} class={} submit_mask=0x{:X} hwlrca=0x{:08X}:0x{:08X} abi=v1 single_lrc=1\n",
+        "intel/guc-submit: register accepted=1 engine={} context_id={} token=0x{:X} class={} submit_mask=0x{:X} hwlrca=0x{:08X}:0x{:08X} abi=v1 single_lrc=1 priority={} priority_abi={} policy_enqueued=1\n",
         engine_abi.name,
         context_id,
         token.raw(),
         engine_abi.class,
         engine_abi.submit_mask,
         hwlrca_hi,
-        hwlrca_lo
+        hwlrca_lo,
+        guc_priority_name(priority),
+        guc_priority_abi(priority),
     );
     Ok(token)
 }
@@ -347,6 +393,10 @@ pub(crate) fn submit_context(
     };
     if !context.registered || context.generation != generation {
         return Err(GucSubmissionError::InvalidContext);
+    }
+    if !context.policy_enqueued {
+        state.failures = state.failures.saturating_add(1);
+        return Err(GucSubmissionError::PolicyEnqueueRejected);
     }
     let engine_abi = guc_engine_abi(context.engine);
     let context_id = (slot + 1) as u32;
@@ -501,12 +551,90 @@ pub(crate) fn context_status() -> Vec<GucContextStatus> {
             token: context.token(slot),
             context_id: (slot + 1) as u32,
             engine: context.engine,
+            priority: context.priority,
+            policy_enqueued: context.policy_enqueued,
             enabled: context.enabled,
             hwlrca_lo: context.hwlrca_lo,
             hwlrca_hi: context.hwlrca_hi,
             submissions: context.submissions,
         })
         .collect()
+}
+
+const fn context_id(slot: usize) -> u32 {
+    (slot + 1) as u32
+}
+
+const fn guc_priority_abi(priority: crate::gpu::physical::PhysicalContextPriority) -> u32 {
+    match priority {
+        crate::gpu::physical::PhysicalContextPriority::KernelHigh => GUC_CLIENT_PRIORITY_KMD_HIGH,
+        crate::gpu::physical::PhysicalContextPriority::KernelNormal => {
+            GUC_CLIENT_PRIORITY_KMD_NORMAL
+        }
+    }
+}
+
+const fn guc_priority_name(
+    priority: crate::gpu::physical::PhysicalContextPriority,
+) -> &'static str {
+    match priority {
+        crate::gpu::physical::PhysicalContextPriority::KernelHigh => "kmd-high",
+        crate::gpu::physical::PhysicalContextPriority::KernelNormal => "kmd-normal",
+    }
+}
+
+const fn context_priority_policy_args(
+    context_id: u32,
+    priority: crate::gpu::physical::PhysicalContextPriority,
+) -> [u32; 3] {
+    [
+        context_id,
+        (GUC_CONTEXT_POLICIES_KLV_ID_SCHEDULING_PRIORITY << 16) | GUC_KLV_DWORD_LEN,
+        guc_priority_abi(priority),
+    ]
+}
+
+const _: () = {
+    use crate::gpu::physical::PhysicalContextPriority::{KernelHigh, KernelNormal};
+
+    let high = context_priority_policy_args(7, KernelHigh);
+    let normal = context_priority_policy_args(7, KernelNormal);
+    assert!(guc_priority_abi(KernelHigh) == 0);
+    assert!(guc_priority_abi(KernelNormal) == 2);
+    assert!(high[0] == 7);
+    assert!(high[1] == 0x2003_0001);
+    assert!(high[2] == GUC_CLIENT_PRIORITY_KMD_HIGH);
+    assert!(normal[0] == 7);
+    assert!(normal[1] == 0x2003_0001);
+    assert!(normal[2] == GUC_CLIENT_PRIORITY_KMD_NORMAL);
+};
+
+fn program_context_priority(
+    dev: crate::intel::Dev,
+    context_id: u32,
+    engine_abi: GucEngineAbi,
+    priority: crate::gpu::physical::PhysicalContextPriority,
+) -> bool {
+    let priority_abi = guc_priority_abi(priority);
+    let policy = crate::intel::guc_ctb::send_hxg_fast_action(
+        dev,
+        INTEL_GUC_ACTION_HOST2GUC_UPDATE_CONTEXT_POLICIES,
+        &context_priority_policy_args(context_id, priority),
+    );
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/guc-submit: context-policy enqueued={} engine={} context_id={} priority={} priority_abi={} action=0x{:04X} klv=0x{:04X} request=hxg-fast h2g_publish_sequence={} error={}\n",
+        policy.accepted as u8,
+        engine_abi.name,
+        context_id,
+        guc_priority_name(priority),
+        priority_abi,
+        INTEL_GUC_ACTION_HOST2GUC_UPDATE_CONTEXT_POLICIES,
+        GUC_CONTEXT_POLICIES_KLV_ID_SCHEDULING_PRIORITY,
+        policy.h2g_publish_sequence,
+        policy.error,
+    );
+    policy.accepted
 }
 
 fn log_schedule_rejected(

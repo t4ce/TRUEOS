@@ -1,11 +1,12 @@
-//! One-shot Gen12 AVC/VDEnc command and surface-upload probe.
+//! Gen12 AVC/VDEnc command, coded-output, and surface-upload executor.
 //!
-//! This is deliberately one gate short of a hardware encoder. It converts one
-//! embedded I420 frame to a linear NV12 source surface, binds the complete
-//! fixed-CQP IDR resource graph, and proves that the GuC-owned VCS0 batch
-//! retires. The coded buffer is not inspected here, so retirement must never be
-//! reported as a successful hardware encode.
+//! Boot proves the fixed-CQP IDR graph with one procedural NV12 frame. The
+//! resident UI4 service then serially reuses the same fixed backing for live
+//! 512x512 NV12 frames. Every submission stores authoritative MFC result
+//! registers and validates its Annex-B access unit before it can be handed to
+//! the network transport.
 
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use spin::Mutex;
@@ -60,8 +61,8 @@ const BSP_ROWSTORE_GPU: u64 = ARENA_GPU + BSP_ROWSTORE_OFFSET as u64;
 
 const TIMEOUT_NS: u64 = 100_000_000;
 const POLL_LIMIT: u32 = 2_000_000;
-const EXPECTED_CODEC_PACKETS: usize = 34;
-const EXPECTED_BATCH_BYTES: usize = 2_320;
+const EXPECTED_CODEC_PACKETS: usize = 32;
+const EXPECTED_BATCH_BYTES: usize = 2_548;
 const EXPECTED_PRIMARY_BATCH_BYTES: usize = 40;
 
 const _: () = {
@@ -85,6 +86,15 @@ const CODEC_BEGIN_MARKER: u32 = 0x4156_4302;
 const CODEC_END_MARKER: u32 = 0x4156_4303;
 const COMPLETE_MARKER: u32 = 0x4156_4304;
 
+// Keep codec-owned status away from the generic media result slots. Each
+// register store writes one dword; eight-byte spacing keeps dumps readable and
+// leaves room for widening individual fields later.
+const RESULT_MFC_FRAME_BYTES_SLOT: u64 = 0x100;
+const RESULT_MFX_ERROR_SLOT: u64 = 0x108;
+const RESULT_MFC_IMAGE_STATUS_SLOT: u64 = 0x110;
+const RESULT_MFC_SLICE_BYTES_SLOT: u64 = 0x118;
+const RESULT_MFC_NUM_SLICES_SLOT: u64 = 0x120;
+
 // Xe_LPM+ VDBOX0 completion/status registers. Keep these as a read-only,
 // timeout-only diagnostic surface; command-stream status stores remain the
 // authority once the hardware encode path is promoted beyond this probe.
@@ -98,6 +108,7 @@ const MFC_IMAGE_STATUS_CONTROL: usize = 0x1C_08B8;
 const MFC_QP_STATUS_COUNT: usize = 0x1C_08BC;
 const MFC_BITSTREAM_BYTECOUNT_SLICE: usize = 0x1C_08D0;
 const MFC_AVC_NUM_SLICES: usize = 0x1C_0954;
+const MI_STORE_REGISTER_MEM_GEN8_PPGTT: u32 = (0x24 << 23) | 2;
 const GEN8_RING_FAULT_REG: usize = 0x0000_4094;
 const GEN8_FAULT_TLB_DATA0: usize = 0x0000_4B10;
 const GEN8_FAULT_TLB_DATA1: usize = 0x0000_4B14;
@@ -141,7 +152,7 @@ const MFX_AVC_IMG_STATE: [u32; 21] = [
     0,
     0,
     0,
-    0x7fff_0000,
+    0xffff_c000,
     0x8000_0000,
     0,
     0,
@@ -160,20 +171,19 @@ const MFX_AVC_SLICE_STATE: [u32; 11] = [
     0x001a_0000,
     0,
     0x0020_0000,
-    0x000b_2000,
+    0x000b_3000,
     0,
     0,
-    0,
+    0x2d00_0000,
     0,
 ];
 
-const VDENC_CONTROL_STATE: [u32; 2] = [0x708b_0000, 0x0000_0002];
-const VDENC_PIPE_MODE_SELECT: [u32; 6] = [0x7080_0004, 0x0120_0002, 0x0005_0f09, 0, 0, 0x0002_0100];
+const VDENC_PIPE_MODE_SELECT: [u32; 6] = [0x7080_0004, 0x0122_00a2, 0x002b_030a, 0x0700_0303, 0, 0];
 const VDENC_SRC_SURFACE_STATE: [u32; 6] = [
     0x7081_0004,
     0,
-    0x07fc_1ff0,
-    0x0070_0ff8,
+    0x07fc_1ff8,
+    0x2070_0ff8,
     0x0000_0200,
     0x0000_0200,
 ];
@@ -181,7 +191,7 @@ const VDENC_REF_SURFACE_STATE: [u32; 6] = [
     0x7082_0004,
     0,
     0x07fc_1ff0,
-    0x0000_0ff8,
+    0x2000_0ff8,
     0x0000_0200,
     0x0000_0200,
 ];
@@ -189,77 +199,115 @@ const VDENC_DS_REF_SURFACE_STATE: [u32; 10] = [
     0x7083_0008,
     0,
     0x01fc_07f0,
-    0x0000_03f8,
+    0x2000_03f8,
     0x0000_0080,
     0x0000_0080,
     0,
-    0,
+    3,
     0,
     0,
 ];
-const VDENC_CMD3: [u32; 23] = [
-    0x708a_0015,
-    0x0501_0000,
-    0x1a1a_0a0a,
+const VDENC_CMD3: [u32; 61] = {
+    let mut words = [0u32; 61];
+    words[0] = 0x7086_003b;
+    words[1] = 0x0101_0101;
+    words[2] = 0x0201_0101;
+    words[3] = 0x0302_0202;
+    words[4] = 0x0404_0303;
+    words[5] = 0x0706_0505;
+    words[6] = 0x0a09_0807;
+    words[7] = 0x110f_0d0c;
+    words[8] = 0x1a17_1513;
+    words[9] = 0x2a25_211e;
+    words[10] = 0x423b_352f;
+    words[11] = 0x0000_534a;
+    words
+};
+const VDENC_IMG_STATE: [u32; 35] = [
+    0x7085_0021,
+    0x0000_0040,
+    0,
+    0x0020_0000,
+    0x708a_0000,
+    0x0001_001f,
+    0x0000_001f,
+    0,
+    2,
+    0x2e01_000c,
+    0,
+    0,
+    0,
+    0,
+    0x0000_001a,
     0,
     0,
     0,
     0,
     0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0x0000_0004,
-    0x0c24_0400,
-    0,
-    0x0018_0000,
-    0x0c0e_2406,
-    0,
-    0,
-    0,
-    0,
-    0x000d_0042,
-];
-const VDENC_AVC_IMG_STATE: [u32; 26] = [
-    0x7085_0018,
-    0x0000_0301,
-    0x7002_8000,
-    0x0020_001f,
-    0,
-    0,
+    0x0004_0c24,
     0,
     0xffff_0000,
-    0x0100_2000,
-    0,
-    0x03e8_0000,
-    0x0bb8_07d0,
-    0x0f00_0000,
-    0x07d0_0000,
-    0xff20_001a,
-    0x0bb8_0002,
-    0x0e10_0004,
-    0x1388_0006,
-    0x1f40_000a,
-    0x2328_0012,
     0,
     0,
-    0x3300_0000,
+    0,
+    0,
+    0x0400_2000,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0x0f00_0a33,
+    0,
+];
+const VDENC_WEIGHTS_OFFSETS_STATE: [u32; 3] = [0x7088_0001, 0x0001_0001, 0x0000_0001];
+const VDENC_WALKER_STATE: [u32; 27] = [
+    0x7087_0019,
+    0,
+    0x0000_0020,
+    0,
+    0,
+    0x0000_01ff,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0x3f40_0000,
+    0,
+    0x003f_3f3f,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
     0,
     0,
     0,
 ];
-const VDENC_AVC_SLICE_STATE: [u32; 4] = [0x708c_0002, 0x0000_000d, 0, 0];
-const VDENC_WEIGHTS_OFFSETS_STATE: [u32; 7] = [0x7088_0005, 0x0001_0001, 0x0001_0001, 0, 0, 0, 0];
-const VDENC_WALKER_STATE: [u32; 3] = [0x7087_0001, 0x1000_0000, 0x0000_0020];
 const VD_PIPELINE_FLUSH: [u32; 2] = [0x7780_0000, 0x0002_001a];
+// Intel's Gen12 AVC path follows VD_PIPELINE_FLUSH with two non-postsync
+// MI_FLUSH_DW commands before sampling MFC status registers. The first also
+// invalidates the video-pipeline cache; the trailing zero in each packet is
+// the same alignment NOOP emitted by the production driver.
+const MI_FLUSH_DW_VIDEO_CACHE_INVALIDATE: [u32; 5] = [0x1300_0082, 0, 0, 0, media::MI_NOOP];
+const MI_FLUSH_DW_NO_POSTSYNC: [u32; 5] = [0x1300_0002, 0, 0, 0, media::MI_NOOP];
 
-const SPS: [u8; 14] = [
-    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x0a, 0xf8, 0x10, 0x02, 0x09, 0x36, 0x02,
+const SPS: [u8; 29] = [
+    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x16, 0x95, 0xc0, 0x80, 0x10, 0x6c, 0x05, 0xa2, 0x00,
+    0x00, 0x03, 0x00, 0x02, 0x00, 0x00, 0x03, 0x00, 0x29, 0x1e, 0x10, 0x08, 0x54,
 ];
 const PPS: [u8; 8] = [0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x38, 0x80];
-const IDR_SLICE_HEADER: [u8; 8] = [0x00, 0x00, 0x00, 0x01, 0x25, 0x88, 0x84, 0x28];
+const IDR_SLICE_HEADER: [u8; 8] = [0x00, 0x00, 0x01, 0x65, 0x88, 0x80, 0x48, 0x00];
+// SPS/PPS use HeaderLengthExcludeFrmSize, matching Intel's production AVC
+// path. MFC_BITSTREAM_BYTECOUNT_FRAME therefore excludes these two inserts,
+// while the emulated slice-header insert remains included.
+const EXCLUDED_HEADER_BYTES: usize = SPS.len() + PPS.len();
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -298,7 +346,6 @@ pub(crate) enum AvcEncodeProbeFailure {
     LaneQuarantined,
     ForcewakeUnavailable,
     BackingAllocation,
-    EmbeddedFrameUnavailable,
     SurfaceConversion,
     BatchBuild,
     ContextBuild,
@@ -306,6 +353,7 @@ pub(crate) enum AvcEncodeProbeFailure {
     SubmitRejected,
     CompletionTimeout,
     MarkerMismatch,
+    CodedOutputInvalid,
     ContextTeardown,
 }
 
@@ -414,14 +462,14 @@ impl AvcEncodeProbeFailure {
             Self::LaneQuarantined => "vcs0-lane-quarantined",
             Self::ForcewakeUnavailable => "vcs0-forcewake-unavailable",
             Self::BackingAllocation => "encode-probe-backing-allocation",
-            Self::EmbeddedFrameUnavailable => "embedded-frame-unavailable",
-            Self::SurfaceConversion => "i420-to-nv12-conversion",
+            Self::SurfaceConversion => "nv12-surface-preparation",
             Self::BatchBuild => "avc-idr-batch-build",
             Self::ContextBuild => "vcs0-context-build",
             Self::RegisterRejected => "guc-register-rejected",
             Self::SubmitRejected => "guc-submit-rejected",
             Self::CompletionTimeout => "completion-timeout",
             Self::MarkerMismatch => "ordered-marker-mismatch",
+            Self::CodedOutputInvalid => "coded-output-invalid",
             Self::ContextTeardown => "guc-context-teardown",
         }
     }
@@ -441,9 +489,18 @@ pub(crate) struct AvcEncodeProbeReport {
     pub(crate) retired: bool,
     pub(crate) context_destroyed: bool,
     pub(crate) bitstream_buffer_bound: bool,
-    pub(crate) source_i420_bytes: usize,
+    pub(crate) coded_output_validated: bool,
+    pub(crate) coded_bytes: usize,
+    pub(crate) coded_fnv1a32: u32,
+    pub(crate) coded_nal_flags: u8,
+    pub(crate) excluded_header_bytes: usize,
+    pub(crate) mfc_bitstream_bytecount_frame: u32,
+    pub(crate) mfx_error: u32,
+    pub(crate) mfc_image_status_control: u32,
+    pub(crate) mfc_bitstream_bytecount_slice: u32,
+    pub(crate) mfc_avc_num_slices: u32,
+    pub(crate) bitstream_head: [u32; 20],
     pub(crate) source_nv12_bytes: usize,
-    pub(crate) source_i420_fnv1a32: u32,
     pub(crate) source_nv12_fnv1a32: u32,
     pub(crate) batch_bytes: usize,
     pub(crate) primary_batch_bytes: usize,
@@ -475,9 +532,18 @@ impl AvcEncodeProbeReport {
         retired: false,
         context_destroyed: false,
         bitstream_buffer_bound: false,
-        source_i420_bytes: 0,
+        coded_output_validated: false,
+        coded_bytes: 0,
+        coded_fnv1a32: 0,
+        coded_nal_flags: 0,
+        excluded_header_bytes: EXCLUDED_HEADER_BYTES,
+        mfc_bitstream_bytecount_frame: 0,
+        mfx_error: 0,
+        mfc_image_status_control: 0,
+        mfc_bitstream_bytecount_slice: 0,
+        mfc_avc_num_slices: 0,
+        bitstream_head: [0; 20],
         source_nv12_bytes: 0,
-        source_i420_fnv1a32: 0,
         source_nv12_fnv1a32: 0,
         batch_bytes: 0,
         primary_batch_bytes: 0,
@@ -508,6 +574,8 @@ unsafe impl Send for ProbeBacking {}
 static STATE: AtomicU8 = AtomicU8::new(AvcEncodeProbeState::NotRun as u8);
 static REPORT: Mutex<AvcEncodeProbeReport> = Mutex::new(AvcEncodeProbeReport::EMPTY);
 static BACKING: Mutex<Option<ProbeBacking>> = Mutex::new(None);
+static CODED_ACCESS_UNIT: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+static SOURCE_OVERRIDE_NV12: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 
 pub(crate) const fn commands_wired() -> bool {
     true
@@ -517,8 +585,37 @@ pub(crate) fn passed() -> bool {
     STATE.load(Ordering::Acquire) == AvcEncodeProbeState::Passed as u8
 }
 
+pub(crate) fn coded_output_validated() -> bool {
+    passed() && REPORT.lock().coded_output_validated
+}
+
+pub(crate) fn take_coded_access_unit() -> Option<Vec<u8>> {
+    CODED_ACCESS_UNIT.lock().take()
+}
+
 pub(crate) fn snapshot() -> AvcEncodeProbeReport {
     *REPORT.lock()
+}
+
+/// Submit another 512x512 linear NV12 IDR through the exact command graph
+/// validated by `run_once`. The dedicated UI4 encoder task is the sole repeat
+/// caller, so the probe's fixed backing remains a serialized hardware executor.
+pub(crate) fn run_nv12_frame(nv12: &[u8]) -> AvcEncodeProbeReport {
+    if nv12.len() != SOURCE_BYTES {
+        return snapshot();
+    }
+    let state = AvcEncodeProbeState::from_raw(STATE.load(Ordering::Acquire));
+    if state == AvcEncodeProbeState::Passed {
+        STATE.store(AvcEncodeProbeState::NotRun as u8, Ordering::Release);
+    } else if state != AvcEncodeProbeState::NotRun {
+        return snapshot();
+    }
+
+    *SOURCE_OVERRIDE_NV12.lock() = Some(nv12.to_vec());
+    *CODED_ACCESS_UNIT.lock() = None;
+    let report = run_once();
+    *SOURCE_OVERRIDE_NV12.lock() = None;
+    report
 }
 
 pub(crate) fn run_once() -> AvcEncodeProbeReport {
@@ -541,8 +638,17 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
         return deferred(AvcEncodeProbeFailure::TransportProbeUnavailable);
     }
 
-    let mut lane = match media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::AVC_ENCODE_GUC, None)
-    {
+    let live_frame = SOURCE_OVERRIDE_NV12.lock().is_some();
+    let lane_result = if live_frame {
+        media::acquire_vcs0_lane_bounded(
+            media::MediaVcs0JobMode::AVC_ENCODE_GUC,
+            None,
+            media::MEDIA_VCS0_INTERLEAVE_WAIT_NS,
+        )
+    } else {
+        media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::AVC_ENCODE_GUC, None)
+    };
+    let mut lane = match lane_result {
         Ok(lane) => lane,
         Err(media::MediaVcs0LaneAcquireError::Busy) => {
             return deferred(AvcEncodeProbeFailure::LaneBusy);
@@ -583,6 +689,9 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
         return fail(report, AvcEncodeProbeFailure::BackingAllocation, started_ns);
     };
     report.backing_ready = true;
+    if lane.requires_reactivation() {
+        media::reset_media_engine(dev, engine, backing.context_virt);
+    }
 
     unsafe {
         core::ptr::write_bytes(backing.ring_virt, 0, RING_BYTES);
@@ -590,19 +699,21 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
         core::ptr::write_bytes(backing.arena_virt, 0, ARENA_BYTES);
     }
 
-    let Some(i420) = trueos_h264_encode_probe::embedded_sequence_frame_i420(0) else {
-        return fail(report, AvcEncodeProbeFailure::EmbeddedFrameUnavailable, started_ns);
-    };
     let source_virt = unsafe { backing.arena_virt.add(SOURCE_OFFSET) };
     let source = unsafe { core::slice::from_raw_parts_mut(source_virt, SOURCE_BYTES) };
-    if !convert_i420_512_to_nv12(i420, source) {
+    let source_override = SOURCE_OVERRIDE_NV12.lock();
+    if let Some(nv12) = source_override.as_deref() {
+        if nv12.len() != source.len() {
+            return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
+        }
+        source.copy_from_slice(nv12);
+    } else if !fill_boot_proof_nv12(source) {
         return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
     }
     report.surface_uploaded = true;
-    report.source_i420_bytes = i420.len();
     report.source_nv12_bytes = source.len();
-    report.source_i420_fnv1a32 = fnv1a32(i420);
     report.source_nv12_fnv1a32 = fnv1a32(source);
+    drop(source_override);
 
     let batch_virt = unsafe { backing.arena_virt.add(BATCH_OFFSET + CODEC_BATCH_OFFSET) };
     let Some((batch_bytes, codec_packets)) = build_idr_batch(batch_virt) else {
@@ -674,6 +785,7 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
         crate::gpu::physical::EngineClass::VideoDecode,
         hwlrca_lo,
         hwlrca_hi,
+        crate::gpu::physical::PhysicalContextPriority::KernelNormal,
     ) {
         Ok(token) => token,
         Err(_) => return fail(report, AvcEncodeProbeFailure::RegisterRejected, started_ns),
@@ -743,6 +855,43 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
         return fail(report, AvcEncodeProbeFailure::MarkerMismatch, started_ns);
     }
 
+    report.mfx_error = media::read_result_dword(result_virt, RESULT_MFX_ERROR_SLOT);
+    report.mfc_image_status_control =
+        media::read_result_dword(result_virt, RESULT_MFC_IMAGE_STATUS_SLOT);
+    report.mfc_bitstream_bytecount_slice =
+        media::read_result_dword(result_virt, RESULT_MFC_SLICE_BYTES_SLOT);
+    report.mfc_avc_num_slices = media::read_result_dword(result_virt, RESULT_MFC_NUM_SLICES_SLOT);
+    report.mfc_bitstream_bytecount_frame =
+        media::read_result_dword(result_virt, RESULT_MFC_FRAME_BYTES_SLOT);
+    let coded_bytes = (report.mfc_bitstream_bytecount_frame as usize)
+        .checked_add(EXCLUDED_HEADER_BYTES)
+        .unwrap_or(BITSTREAM_BYTES.saturating_add(1));
+    let bitstream_virt = unsafe { backing.arena_virt.add(BITSTREAM_OFFSET) };
+    crate::intel::dma_flush(
+        bitstream_virt,
+        coded_bytes.clamp(8 * core::mem::size_of::<u32>(), BITSTREAM_BYTES),
+    );
+    report.bitstream_head = read_dword_head::<20>(bitstream_virt);
+    if coded_bytes == 0 || coded_bytes > BITSTREAM_BYTES {
+        return fail(report, AvcEncodeProbeFailure::CodedOutputInvalid, started_ns);
+    }
+    let coded = unsafe { core::slice::from_raw_parts(bitstream_virt, coded_bytes) };
+    report.coded_bytes = coded_bytes;
+    report.coded_fnv1a32 = fnv1a32(coded);
+    report.coded_nal_flags = annex_b_nal_flags(coded);
+    let parameter_sets_present = report.coded_nal_flags & 0b0011 == 0b0011;
+    let idr_present = report.coded_nal_flags & 0b0100 != 0;
+    let macroblock_payload_present = coded_bytes > EXCLUDED_HEADER_BYTES.saturating_add(64);
+    if report.mfx_error != 0
+        || !parameter_sets_present
+        || !idr_present
+        || !macroblock_payload_present
+    {
+        return fail(report, AvcEncodeProbeFailure::CodedOutputInvalid, started_ns);
+    }
+    *CODED_ACCESS_UNIT.lock() = Some(coded.to_vec());
+    report.coded_output_validated = true;
+
     lane.complete();
     report.state = AvcEncodeProbeState::Passed;
     report.failure = AvcEncodeProbeFailure::None;
@@ -776,19 +925,34 @@ fn build_backing(dev: crate::intel::Dev) -> Option<ProbeBacking> {
     })
 }
 
-fn convert_i420_512_to_nv12(i420: &[u8], nv12: &mut [u8]) -> bool {
+/// Build a legal-range moving-pattern seed without linking a diagnostic file
+/// or a software encoder into the kernel. The boot submission exists only to
+/// validate the same hardware graph used for subscribed UI4 frames.
+fn fill_boot_proof_nv12(nv12: &mut [u8]) -> bool {
     const LUMA_BYTES: usize = 512 * 512;
-    const CHROMA_PLANE_BYTES: usize = 256 * 256;
-    if i420.len() != SOURCE_BYTES || nv12.len() != SOURCE_BYTES {
+    if nv12.len() != SOURCE_BYTES {
         return false;
     }
-    nv12[..LUMA_BYTES].copy_from_slice(&i420[..LUMA_BYTES]);
-    let cb = &i420[LUMA_BYTES..LUMA_BYTES + CHROMA_PLANE_BYTES];
-    let cr = &i420[LUMA_BYTES + CHROMA_PLANE_BYTES..];
-    let uv = &mut nv12[LUMA_BYTES..];
-    for (pair, (&cb, &cr)) in uv.chunks_exact_mut(2).zip(cb.iter().zip(cr.iter())) {
-        pair[0] = cb;
-        pair[1] = cr;
+
+    for y in 0..512usize {
+        let row = &mut nv12[y * 512..(y + 1) * 512];
+        for (x, luma) in row.iter_mut().enumerate() {
+            let ramp = x * 219 / 511;
+            let checker = if ((x / 32) ^ (y / 32)) & 1 == 0 {
+                0
+            } else {
+                12
+            };
+            *luma = (16 + ramp + checker).min(235) as u8;
+        }
+    }
+    for y in 0..256usize {
+        let row = &mut nv12[LUMA_BYTES + y * 512..LUMA_BYTES + (y + 1) * 512];
+        for x in (0..512usize).step_by(2) {
+            let bar = x / 64;
+            row[x] = (96 + bar * 8).min(160) as u8;
+            row[x + 1] = (160usize.saturating_sub(bar * 8)).max(96) as u8;
+        }
     }
     true
 }
@@ -814,7 +978,6 @@ fn build_idr_batch(batch_virt: *mut u8) -> Option<(usize, usize)> {
         return None;
     }
 
-    push_packet(batch, &mut idx, &VDENC_CONTROL_STATE, &mut packet_count)?;
     if !media::emit_mfx_wait(batch, &mut idx) {
         return None;
     }
@@ -842,9 +1005,9 @@ fn build_idr_batch(batch_virt: *mut u8) -> Option<(usize, usize)> {
     let vdenc_pipe_buf = vdenc_pipe_buf_addr_state();
     push_packet(batch, &mut idx, &vdenc_pipe_buf, &mut packet_count)?;
 
-    push_packet(batch, &mut idx, &MFX_AVC_IMG_STATE, &mut packet_count)?;
     push_packet(batch, &mut idx, &VDENC_CMD3, &mut packet_count)?;
-    push_packet(batch, &mut idx, &VDENC_AVC_IMG_STATE, &mut packet_count)?;
+    push_packet(batch, &mut idx, &MFX_AVC_IMG_STATE, &mut packet_count)?;
+    push_packet(batch, &mut idx, &VDENC_IMG_STATE, &mut packet_count)?;
     for matrix_type in 0..4u32 {
         let qm = mfx_qm_state(matrix_type);
         push_packet(batch, &mut idx, &qm, &mut packet_count)?;
@@ -855,17 +1018,49 @@ fn build_idr_batch(batch_virt: *mut u8) -> Option<(usize, usize)> {
     }
 
     push_packet(batch, &mut idx, &MFX_AVC_SLICE_STATE, &mut packet_count)?;
-    push_packet(batch, &mut idx, &VDENC_AVC_SLICE_STATE, &mut packet_count)?;
-    push_pak_insert(batch, &mut idx, &SPS, 112, false, false, 0, false)?;
+    push_pak_insert(batch, &mut idx, &SPS, SPS.len() * 8, false, false, 5, false)?;
     packet_count += 1;
-    push_pak_insert(batch, &mut idx, &PPS, 64, false, false, 0, false)?;
+    push_pak_insert(batch, &mut idx, &PPS, PPS.len() * 8, false, false, 0, false)?;
     packet_count += 1;
-    push_pak_insert(batch, &mut idx, &IDR_SLICE_HEADER, 61, true, true, 4, true)?;
+    push_pak_insert(batch, &mut idx, &IDR_SLICE_HEADER, 53, true, true, 8, true)?;
     packet_count += 1;
 
     push_packet(batch, &mut idx, &VDENC_WEIGHTS_OFFSETS_STATE, &mut packet_count)?;
     push_packet(batch, &mut idx, &VDENC_WALKER_STATE, &mut packet_count)?;
     push_packet(batch, &mut idx, &VD_PIPELINE_FLUSH, &mut packet_count)?;
+    push_words(batch, &mut idx, &MI_FLUSH_DW_VIDEO_CACHE_INVALIDATE)?;
+    push_words(batch, &mut idx, &MI_FLUSH_DW_NO_POSTSYNC)?;
+
+    emit_store_register_mem_ppgtt(
+        batch,
+        &mut idx,
+        MFC_BITSTREAM_BYTECOUNT_FRAME as u32,
+        RESULT_GPU + RESULT_MFC_FRAME_BYTES_SLOT,
+    )?;
+    emit_store_register_mem_ppgtt(
+        batch,
+        &mut idx,
+        MFX_ERROR_FLAG as u32,
+        RESULT_GPU + RESULT_MFX_ERROR_SLOT,
+    )?;
+    emit_store_register_mem_ppgtt(
+        batch,
+        &mut idx,
+        MFC_IMAGE_STATUS_CONTROL as u32,
+        RESULT_GPU + RESULT_MFC_IMAGE_STATUS_SLOT,
+    )?;
+    emit_store_register_mem_ppgtt(
+        batch,
+        &mut idx,
+        MFC_BITSTREAM_BYTECOUNT_SLICE as u32,
+        RESULT_GPU + RESULT_MFC_SLICE_BYTES_SLOT,
+    )?;
+    emit_store_register_mem_ppgtt(
+        batch,
+        &mut idx,
+        MFC_AVC_NUM_SLICES as u32,
+        RESULT_GPU + RESULT_MFC_NUM_SLICES_SLOT,
+    )?;
 
     if !media::emit_store_dword_ppgtt(
         batch,
@@ -877,8 +1072,9 @@ fn build_idr_batch(batch_virt: *mut u8) -> Option<(usize, usize)> {
     }
     // This is a second-level codec batch. Its MI_BATCH_BUFFER_END returns to
     // the primary ring, which writes COMPLETE_MARKER only after the return.
-    // Xe_LPM+ parks on a post-sync MI_FLUSH_DW appended directly after this
-    // AVC pipeline even though the codec output and status registers are done.
+    // Keep the terminal return free of a post-sync MI_FLUSH_DW. The two
+    // non-postsync completion barriers above are sufficient and match Intel's
+    // Gen12 AVC stream.
     if idx.saturating_add(3) > batch.len() {
         return None;
     }
@@ -887,10 +1083,28 @@ fn build_idr_batch(batch_virt: *mut u8) -> Option<(usize, usize)> {
     batch[idx + 2] = media::MI_NOOP;
     idx += 3;
     let batch_bytes = idx * core::mem::size_of::<u32>();
-    if packet_count != EXPECTED_CODEC_PACKETS || batch_bytes != EXPECTED_BATCH_BYTES {
+    if packet_count != EXPECTED_CODEC_PACKETS
+        || batch_bytes != EXPECTED_BATCH_BYTES + 5 * 4 * core::mem::size_of::<u32>()
+    {
         return None;
     }
     Some((batch_bytes, packet_count))
+}
+
+fn emit_store_register_mem_ppgtt(
+    batch: &mut [u32],
+    idx: &mut usize,
+    register: u32,
+    destination: u64,
+) -> Option<()> {
+    let end = idx.checked_add(4)?;
+    let words = batch.get_mut(*idx..end)?;
+    words[0] = MI_STORE_REGISTER_MEM_GEN8_PPGTT;
+    words[1] = register;
+    words[2] = destination as u32;
+    words[3] = (destination >> 32) as u32;
+    *idx = end;
+    Some(())
 }
 
 fn push_packet(
@@ -920,19 +1134,21 @@ fn mfx_pipe_buf_addr_state() -> [u32; 68] {
     let mut words = [0u32; 68];
     words[0] = 0x7002_0042;
     for (dword, gpu, attr_dword, attr) in [
-        (1, RECON_GPU, 3, 1),
-        (4, RECON_GPU, 6, 1),
-        (7, SOURCE_GPU, 9, 1),
-        (10, MFX_STATS_GPU, 12, 1),
-        (13, INTRA_ROWSTORE_GPU, 15, 1),
-        (16, DEBLOCK_ROWSTORE_GPU, 18, 1),
-        (52, MFX_STATS_GPU, 54, 1),
-        (62, DS_GPU, 64, 2),
-        (65, SLICE_SIZE_GPU, 67, 2),
+        (1, RECON_GPU, 3, 6),
+        (4, RECON_GPU, 6, 6),
+        (7, SOURCE_GPU, 9, 6),
+        (10, MFX_STATS_GPU, 12, 6),
+        (52, MFX_STATS_GPU, 54, 6),
+        (62, DS_GPU, 64, 4),
+        (65, SLICE_SIZE_GPU, 67, 12),
     ] {
         set_addr(&mut words, dword, gpu);
         words[attr_dword] = attr;
     }
+    words[13] = 0x0000_8000;
+    words[15] = 0x0000_1000;
+    words[16] = 0x0000_c000;
+    words[18] = 0x0000_1000;
     words
 }
 
@@ -940,7 +1156,7 @@ fn mfx_ind_obj_base_addr_state() -> [u32; 26] {
     let mut words = [0u32; 26];
     words[0] = 0x7003_0018;
     set_addr(&mut words, 21, BITSTREAM_GPU);
-    words[23] = 2;
+    words[23] = 10;
     set_addr(&mut words, 24, BITSTREAM_GPU.saturating_add(BITSTREAM_BYTES as u64));
     words
 }
@@ -948,39 +1164,40 @@ fn mfx_ind_obj_base_addr_state() -> [u32; 26] {
 fn mfx_bsp_buf_base_addr_state() -> [u32; 10] {
     let mut words = [0u32; 10];
     words[0] = 0x7004_0008;
-    set_addr(&mut words, 1, BSP_ROWSTORE_GPU);
-    words[3] = 2;
-    set_addr(&mut words, 4, BSP_ROWSTORE_GPU);
-    words[6] = 2;
+    words[3] = 0x0000_1000;
+    words[4] = 0x0000_4000;
+    words[6] = 0x0000_1000;
     words
 }
 
-fn vdenc_pipe_buf_addr_state() -> [u32; 89] {
-    let mut words = [0u32; 89];
-    words[0] = 0x7084_0057;
-    for (dword, gpu, attr_dword) in [
-        (10, SOURCE_GPU, 12),
-        (16, INTRA_ROWSTORE_GPU, 18),
-        (34, VDENC_STATS_GPU, 36),
-        (49, DS_GPU, 51),
-    ] {
+fn vdenc_pipe_buf_addr_state() -> [u32; 71] {
+    let mut words = [0u32; 71];
+    words[0] = 0x7084_0045;
+    for (dword, gpu, attr_dword) in [(10, SOURCE_GPU, 12), (34, VDENC_STATS_GPU, 36)] {
         set_addr(&mut words, dword, gpu);
-        words[attr_dword] = 2;
+        words[attr_dword] = 6;
     }
+    words[16] = 0x0001_4000;
+    words[18] = 0x0000_1000;
+    words[61] = 0xc0;
     words
 }
 
 fn mfx_qm_state(matrix_type: u32) -> [u32; 18] {
-    let mut words = [0x1010_1010u32; 18];
+    let mut words = [0u32; 18];
     words[0] = 0x7007_0010;
     words[1] = matrix_type & 3;
+    let scaling_words = if matrix_type < 2 { 12 } else { 16 };
+    words[2..2 + scaling_words].fill(0x1010_1010);
     words
 }
 
 fn mfx_fqm_state(matrix_type: u32) -> [u32; 34] {
-    let mut words = [0x0100_0100u32; 34];
+    let mut words = [0u32; 34];
     words[0] = 0x7008_0020;
     words[1] = matrix_type & 3;
+    let scaling_words = if matrix_type < 2 { 24 } else { 32 };
+    words[2..2 + scaling_words].fill(0x1000_1000);
     words
 }
 
@@ -1027,6 +1244,36 @@ fn fnv1a32(bytes: &[u8]) -> u32 {
         hash = hash.wrapping_mul(0x0100_0193);
     }
     hash
+}
+
+fn annex_b_nal_flags(bytes: &[u8]) -> u8 {
+    let mut flags = 0u8;
+    let mut cursor = 0usize;
+    while cursor + 4 <= bytes.len() {
+        let header = if bytes[cursor..].starts_with(&[0, 0, 0, 1]) {
+            cursor.checked_add(4)
+        } else if bytes[cursor..].starts_with(&[0, 0, 1]) {
+            cursor.checked_add(3)
+        } else {
+            None
+        };
+        let Some(header) = header else {
+            cursor += 1;
+            continue;
+        };
+        let Some(nal_header) = bytes.get(header) else {
+            break;
+        };
+        flags |= match nal_header & 0x1f {
+            7 => 1 << 0,
+            8 => 1 << 1,
+            5 => 1 << 2,
+            1 => 1 << 3,
+            _ => 0,
+        };
+        cursor = header + 1;
+    }
+    flags
 }
 
 fn capture_timeout_diagnostics(

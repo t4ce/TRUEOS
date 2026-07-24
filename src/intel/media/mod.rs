@@ -1,4 +1,4 @@
-#[cfg(feature = "trueos_h264_encode_probe")]
+#[cfg(feature = "trueos_h264_encode_stream")]
 pub(crate) mod avc_encode_probe;
 pub(crate) mod engine;
 pub(crate) mod guc_probe;

@@ -1,0 +1,85 @@
+# TRUEOS UI4 hardware H.264 stream
+
+The default `trueos_h264_encode_stream` feature stages a resident,
+subscriber-driven kernel service:
+
+1. At boot, TRUEOS procedurally fills one 512x512 NV12 surface and submits it
+   through Intel Gen12 VDEnc/MFX on VCS0. The service proceeds only after GuC
+   submission, command-stream status writeback, Annex-B structure, and coded
+   output all validate. No diagnostic media file or software encoder is linked
+   into the kernel.
+2. A receiver sends `TME1GET1` to UDP port 9650.
+3. On subscription, a dedicated performance-preferred background worker
+   captures the current logical UI4 D01 composition in memory, aspect-fits it
+   into 512x512, converts straight-alpha RGBA to limited-range BT.601 NV12,
+   and hardware-encodes a fresh IDR access unit on each absolute 10 Hz
+   deadline. This logical capture follows UI4 plane/z order but is not a
+   bit-exact latch of the physical scanout and does not include the hardware
+   cursor.
+4. Each access unit is immediately fragmented into CRC-protected TME1
+   datagrams and unicast to the subscriber. The media socket has an 8 KiB
+   transmit ring, and every datagram carries an internal adapter receipt token.
+   The sequence advances only after the matching adapter acceptance; a
+   confirmed full ring retries that exact packet, while a missing or fatal
+   receipt aborts without an uncertain retransmission. The live high-water
+   mark is one access unit; no framebuffer or encoded payload is written to
+   TRUEOSFS.
+5. After 100 frames (ten seconds), the socket closes and the resident service
+   waits for the next subscriber, which receives a fresh session.
+
+There is no software-codec or filesystem fallback in the kernel path. AVC
+playback and encode share VCS0 with frame-level exclusion: decode keeps its
+session reservation, while the 10 Hz encoder may take a bounded turn between
+decode submissions. A transport-mode change resets and reactivates VCS0 before
+the next complete batch. If a decode reservation is already active while the
+boot hardware proof is waiting, the encoder sleeps and keeps retrying; it does
+not permanently disable the service after a fixed timeout.
+
+`trueos_h264_encode_probe` remains only as a compatibility feature alias for
+older build scripts; the former disk-output probe crate, its software encoder,
+and its 30-frame embedded input file have been removed.
+
+## Ubuntu receiver
+
+Build and run the standalone receiver from the repository root:
+
+```sh
+rustc --edition=2024 -O tools/media_encode_udp_receiver.rs \
+  -o media_encode_udp_receiver
+./media_encode_udp_receiver \
+  --bind 0.0.0.0:9650 \
+  --subscribe-target 192.168.178.94:9650 \
+  --output trueos-ui4.h264 \
+  --ffmpeg-check
+```
+
+The receiver sends the eight-byte subscription token, pins the first valid
+`(source, session_id)` pair, validates every 32-byte TME1 header and payload
+CRC, reorders fragments within bounded memory, writes complete Annex-B access
+units, reports loss/reordering/duplicates, and can invoke FFmpeg for an
+end-to-end decode check. Strict validation is the default: an empty capture,
+an incomplete session, any integrity/loss counter, or a decoder failure makes
+the command fail. Use `--allow-loss` only for diagnostics. Omit
+`--subscribe-target` when LAN broadcast discovery is desired.
+
+The subscription token is discovery/gating rather than authentication: the
+first sender of `TME1GET1` receives that bounded session. Use this service only
+on a trusted LAN or behind network policy that restricts UDP port 9650.
+
+Each TME1 UDP datagram is at most 1200 bytes:
+
+| Offset | Bytes | Field |
+| ---: | ---: | --- |
+| 0 | 4 | ASCII `TME1` |
+| 4 | 1 | version (`1`) |
+| 5 | 1 | start/end/keyframe/session-end flags |
+| 6 | 2 | header bytes (`32`, big-endian) |
+| 8 | 4 | session ID |
+| 12 | 4 | datagram sequence |
+| 16 | 4 | access-unit sequence |
+| 20 | 2 | fragment index |
+| 22 | 2 | fragment count |
+| 24 | 2 | payload bytes |
+| 26 | 2 | reserved |
+| 28 | 4 | payload CRC32 |
+| 32 | <=1168 | Annex-B fragment |

@@ -76,10 +76,25 @@ QEMU_HOST_TCP_PORT_NET_SHELL ?= 14245
 QEMU_HOST_UDP_PORT_32343 ?= 32343
 QEMU_RUN_ENV = ISO_PATH="$(ISO_PATH)" QEMU_BIN="$(QEMU_BIN)" QEMU_MEMORY="$(QEMU_MEMORY)" QEMU_UEFI_FIRMWARE="$(QEMU_UEFI_FIRMWARE)" QEMU_NVME_IMG="$(NVME_IMG)" QEMU_BRIDGE="$(QEMU_BRIDGE)" QEMU_BRIDGE_HELPER="$(QEMU_BRIDGE_HELPER)" QEMU_HDA_AUDIODEV="$(QEMU_HDA_AUDIODEV)" QEMU_HOST_TCP_PORT_3="$(QEMU_HOST_TCP_PORT_3)" QEMU_HOST_TCP_PORT_4="$(QEMU_HOST_TCP_PORT_4)" QEMU_HOST_TCP_PORT_100="$(QEMU_HOST_TCP_PORT_100)" QEMU_HOST_TCP_PORT_80="$(QEMU_HOST_TCP_PORT_80)" QEMU_HOST_TCP_PORT_54321="$(QEMU_HOST_TCP_PORT_54321)" QEMU_HOST_TCP_PORT_32123="$(QEMU_HOST_TCP_PORT_32123)" QEMU_HOST_TCP_PORT_NET_SHELL="$(QEMU_HOST_TCP_PORT_NET_SHELL)" QEMU_HOST_UDP_PORT_32343="$(QEMU_HOST_UDP_PORT_32343)"
 BAREMETAL_LOG_DRAIN := tools/baremetal-log-drain.sh
+BAREMETAL_REBOOT_HELPER := tools/baremetal-reboot-ack.py
 BAREMETAL_LOG_HOST ?= 192.168.178.94
 BAREMETAL_LOG_PORT ?= 1
 BAREMETAL_LOG_DELAY ?= 15
+BAREMETAL_LOG_RETRY_DELAY ?= 1
 BAREMETAL_LOG_DIR ?= bld/baremetal-logs
+BAREMETAL_LOG_SLOTS ?= 3
+BAREMETAL_LOG_WAIT_TIMEOUT ?= 180
+BAREMETAL_BOOT_MARKER ?= [boot] [info] boot: stage=bsp-early
+BAREMETAL_SHELL_HOST ?= $(BAREMETAL_LOG_HOST)
+BAREMETAL_SHELL_PORT ?= 4245
+BAREMETAL_SHELL_COMMAND ?= acpi reboot
+BAREMETAL_SHELL_CONNECT_TIMEOUT ?= 5
+BAREMETAL_SHELL_RESPONSE_TIMEOUT ?= 2
+BAREMETAL_TFTP_READ_TIMEOUT ?= 240
+BAREMETAL_TFTP_VERIFY ?= 1
+BAREMETAL_TFTP_BOOTFILE ?= $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
+BAREMETAL_TFTP_KERNEL ?= $(ISO_DIR)/TRUEOS.elf
+BAREMETAL_REBOOT_RECEIPT ?= $(ISO_DIR)/baremetal-reboot-receipt.json
 EMULATOR_LOG_CAPTURE := tools/emulator-log-capture.sh
 EMULATOR_LOG_DIR ?= bld/emulator-logs
 EMULATOR_LOG_SLOTS ?= 3
@@ -283,9 +298,81 @@ limine:
 	printf 'ok\n' > "$(LIMINE_INSTALL_STAMP)"
 
 baremetal-reboot-log:
-	-fuser -k 7777/udp || true
-	python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('',7777)); exec(\"while True:\n d,a=s.recvfrom(2048)\n if d==b'probe': s.sendto(b'ack',(a[0],7777)); break\")" &
-	@TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" TRUEOS_BAREMETAL_LOG_DELAY="$(BAREMETAL_LOG_DELAY)" TRUEOS_BAREMETAL_LOG_DIR="$(BAREMETAL_LOG_DIR)" "$(BAREMETAL_LOG_DRAIN)" start
+	@set -eu; \
+	case "$(BAREMETAL_TFTP_VERIFY)" in \
+		0|1) ;; \
+		*) echo "error: BAREMETAL_TFTP_VERIFY must be 0 or 1, got '$(BAREMETAL_TFTP_VERIFY)'" >&2; exit 2 ;; \
+	esac; \
+	for required in \
+		"$(ARTIFACT_RUNTIME_ELF)" \
+		"$(ISO_PATH)" \
+		"$(LIMINE_BOOTX64)" \
+		"$(BAREMETAL_TFTP_BOOTFILE)" \
+		"$(BAREMETAL_TFTP_KERNEL)"; do \
+		test -f "$$required" || { echo "error: baremetal deploy input is missing: $$required" >&2; exit 1; }; \
+	done; \
+	runtime_sha=$$(sha256sum "$(ARTIFACT_RUNTIME_ELF)" | cut -d ' ' -f1); \
+	iso_sha=$$(sha256sum "$(ISO_PATH)" | cut -d ' ' -f1); \
+	bootfile_sha=$$(sha256sum "$(LIMINE_BOOTX64)" | cut -d ' ' -f1); \
+	TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" \
+	TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" \
+	TRUEOS_BAREMETAL_LOG_DELAY="$(BAREMETAL_LOG_DELAY)" \
+	TRUEOS_BAREMETAL_LOG_RETRY_DELAY="$(BAREMETAL_LOG_RETRY_DELAY)" \
+	TRUEOS_BAREMETAL_LOG_DIR="$(BAREMETAL_LOG_DIR)" \
+	TRUEOS_BAREMETAL_LOG_SLOTS="$(BAREMETAL_LOG_SLOTS)" \
+	TRUEOS_BAREMETAL_LOG_WAIT_TIMEOUT="$(BAREMETAL_LOG_WAIT_TIMEOUT)" \
+	TRUEOS_BAREMETAL_BOOT_MARKER="$(BAREMETAL_BOOT_MARKER)" \
+	"$(BAREMETAL_LOG_DRAIN)" stop; \
+	rm -f -- "$(BAREMETAL_REBOOT_RECEIPT)"; \
+	if [ "$(BAREMETAL_TFTP_VERIFY)" = "1" ]; then \
+		python3 "$(BAREMETAL_REBOOT_HELPER)" \
+			--shell-host "$(BAREMETAL_SHELL_HOST)" \
+			--shell-port "$(BAREMETAL_SHELL_PORT)" \
+			--command "$(BAREMETAL_SHELL_COMMAND)" \
+			--connect-timeout "$(BAREMETAL_SHELL_CONNECT_TIMEOUT)" \
+			--response-timeout "$(BAREMETAL_SHELL_RESPONSE_TIMEOUT)" \
+			--tftp-timeout "$(BAREMETAL_TFTP_READ_TIMEOUT)" \
+			--repo-root "$(CURDIR)" \
+			--watch "$(BAREMETAL_TFTP_BOOTFILE)=$$bootfile_sha" \
+			--watch "$(BAREMETAL_TFTP_KERNEL)=$$runtime_sha" \
+			--identity "runtime_elf_sha256=$$runtime_sha" \
+			--identity "iso_sha256=$$iso_sha" \
+			--receipt "$(BAREMETAL_REBOOT_RECEIPT)"; \
+	else \
+		echo "baremetal-reboot-log: PXE read verification explicitly disabled (BAREMETAL_TFTP_VERIFY=0)"; \
+		python3 "$(BAREMETAL_REBOOT_HELPER)" \
+			--shell-host "$(BAREMETAL_SHELL_HOST)" \
+			--shell-port "$(BAREMETAL_SHELL_PORT)" \
+			--command "$(BAREMETAL_SHELL_COMMAND)" \
+			--connect-timeout "$(BAREMETAL_SHELL_CONNECT_TIMEOUT)" \
+			--response-timeout "$(BAREMETAL_SHELL_RESPONSE_TIMEOUT)" \
+			--repo-root "$(CURDIR)" \
+			--identity "runtime_elf_sha256=$$runtime_sha" \
+			--identity "iso_sha256=$$iso_sha" \
+			--receipt "$(BAREMETAL_REBOOT_RECEIPT)"; \
+	fi; \
+	TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" \
+	TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" \
+	TRUEOS_BAREMETAL_LOG_DELAY="$(BAREMETAL_LOG_DELAY)" \
+	TRUEOS_BAREMETAL_LOG_RETRY_DELAY="$(BAREMETAL_LOG_RETRY_DELAY)" \
+	TRUEOS_BAREMETAL_LOG_DIR="$(BAREMETAL_LOG_DIR)" \
+	TRUEOS_BAREMETAL_LOG_SLOTS="$(BAREMETAL_LOG_SLOTS)" \
+	TRUEOS_BAREMETAL_LOG_WAIT_TIMEOUT="$(BAREMETAL_LOG_WAIT_TIMEOUT)" \
+	TRUEOS_BAREMETAL_BOOT_MARKER="$(BAREMETAL_BOOT_MARKER)" \
+	TRUEOS_BAREMETAL_EXPECTED_ELF_SHA256="$$runtime_sha" \
+	TRUEOS_BAREMETAL_EXPECTED_ISO_SHA256="$$iso_sha" \
+	TRUEOS_BAREMETAL_REBOOT_RECEIPT="$(BAREMETAL_REBOOT_RECEIPT)" \
+	"$(BAREMETAL_LOG_DRAIN)" start; \
+	TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" \
+	TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" \
+	TRUEOS_BAREMETAL_LOG_DELAY="$(BAREMETAL_LOG_DELAY)" \
+	TRUEOS_BAREMETAL_LOG_RETRY_DELAY="$(BAREMETAL_LOG_RETRY_DELAY)" \
+	TRUEOS_BAREMETAL_LOG_DIR="$(BAREMETAL_LOG_DIR)" \
+	TRUEOS_BAREMETAL_LOG_SLOTS="$(BAREMETAL_LOG_SLOTS)" \
+	TRUEOS_BAREMETAL_LOG_WAIT_TIMEOUT="$(BAREMETAL_LOG_WAIT_TIMEOUT)" \
+	TRUEOS_BAREMETAL_BOOT_MARKER="$(BAREMETAL_BOOT_MARKER)" \
+	"$(BAREMETAL_LOG_DRAIN)" wait; \
+	echo "baremetal-reboot-log: verified runtime_elf_sha256=$$runtime_sha iso_sha256=$$iso_sha receipt=$(BAREMETAL_REBOOT_RECEIPT)"
 
 net-shell-console:
 	@mkdir -p "$(dir $(NET_SHELL_CONSOLE_PID))"
@@ -379,11 +466,11 @@ iso: artifacts images limine
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		-o $(ISO_PATH) $(ISO_BOOT_DIR)
 	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT="$(INTEL_GPU_CPP_AOT)" ARTIFACT_DIR="$(ARTIFACT_DIR)" ISO_BOOT_DIR="$(ISO_BOOT_DIR)" ISO_PATH="$(ISO_PATH)" intel-gpu-verify-packaged-copy
-	@if [ "$(START_BAREMETAL_LOG)" = "1" ]; then \
-		$(MAKE) --no-print-directory baremetal-reboot-log; \
-	else \
-		echo "iso: skipping baremetal log drain (START_BAREMETAL_LOG=$(START_BAREMETAL_LOG))"; \
-	fi
+	@case "$(START_BAREMETAL_LOG)" in \
+		1) $(MAKE) --no-print-directory baremetal-reboot-log ;; \
+		0) echo "iso: skipping baremetal deploy/log verification (START_BAREMETAL_LOG=0)" ;; \
+		*) echo "error: START_BAREMETAL_LOG must be 0 or 1, got '$(START_BAREMETAL_LOG)'" >&2; exit 2 ;; \
+	esac
 	@if [ "$(START_NET_SHELL_CONSOLE)" = "1" ]; then \
 		$(MAKE) --no-print-directory net-shell-console NET_SHELL_CONSOLE_HOST="$(NET_SHELL_CONSOLE_HOST)" NET_SHELL_CONSOLE_PORT="$(NET_SHELL_CONSOLE_PORT)"; \
 	else \

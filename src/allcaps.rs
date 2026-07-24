@@ -28,11 +28,10 @@ pub mod gfx {
 }
 
 pub mod media_encode {
-    pub const REALTIME_HZ: usize = 60;
-    pub const STREAM_RING_SECONDS: usize = 7;
-    pub const STREAM_RING_ACCESS_UNITS: usize = REALTIME_HZ * STREAM_RING_SECONDS;
+    pub const REALTIME_HZ: usize = 10;
     pub const STREAM_MAX_ACCESS_UNIT_BYTES: usize = 400 * 1024;
-    pub const STREAM_RING_BYTES: usize = STREAM_RING_ACCESS_UNITS * STREAM_MAX_ACCESS_UNIT_BYTES;
+    pub const VALIDATION_SESSION_SECONDS: usize = 10;
+    pub const VALIDATION_SESSION_ACCESS_UNITS: usize = REALTIME_HZ * VALIDATION_SESSION_SECONDS;
 }
 
 pub mod stackkeeper {

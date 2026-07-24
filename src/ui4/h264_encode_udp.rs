@@ -1,12 +1,12 @@
-//! Bounded UDP egress for the deferred H.264 encode experiment.
+//! Subscriber-driven, bounded UDP egress for live UI4 H.264 access units.
 //!
 //! This is an encoded-access-unit stream. Intel display SURFLIVE is not part
 //! of the payload or ownership contract; it remains only a scanout-latch
 //! boundary elsewhere in UI4.
 
-use alloc::{collections::VecDeque, vec::Vec};
+use alloc::vec::Vec;
 
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 
 use crate::r::net::{
     VNet,
@@ -25,71 +25,32 @@ const FLAG_KEYFRAME: u8 = 1 << 2;
 const FLAG_SESSION_END: u8 = 1 << 3;
 const UDP_OPEN_TIMEOUT_MS: u64 = 4_000;
 const UDP_RETRY_MS: u64 = 250;
-const UDP_PACKET_PACE_MS: u64 = 1;
+// Keep enough socket-local payload headroom for several MTU-sized fragments.
+// Correctness still comes from checked adapter receipts below; this capacity
+// only absorbs short service-task scheduling jitter.
+const UDP_TX_BUFFER_BYTES: usize = 8 * 1024;
+const UDP_PACKET_PACE_MS: u64 = 4;
+const UDP_SEND_RECEIPT_POLL_MS: u64 = 1;
+const UDP_SEND_RECEIPT_TIMEOUT_MS: u64 = 250;
+// VNet submission is asynchronous. Keep the endpoint alive across at least
+// one adapter service interval so a one-datagram probe is not cancelled by
+// closing its socket immediately after queueing the packet.
+const UDP_CLOSE_LINGER_MS: u64 = 100;
 const UDP_SUBSCRIBER_POLL_MS: u64 = 10;
 const UDP_SUBMIT_RETRY_LIMIT: usize = 64;
 
 #[derive(Debug)]
 struct EncodedAccessUnit {
     sequence: u32,
+    keyframe: bool,
     bytes: Vec<u8>,
 }
 
-struct AccessUnitRing {
-    queue: VecDeque<EncodedAccessUnit>,
-    queued_bytes: usize,
-    high_water_units: usize,
-    high_water_bytes: usize,
-    dropped_units: usize,
-    dropped_bytes: usize,
-}
-
-impl AccessUnitRing {
-    fn new() -> Self {
-        Self {
-            queue: VecDeque::with_capacity(crate::allcaps::media_encode::STREAM_RING_ACCESS_UNITS),
-            queued_bytes: 0,
-            high_water_units: 0,
-            high_water_bytes: 0,
-            dropped_units: 0,
-            dropped_bytes: 0,
-        }
-    }
-
-    fn push(&mut self, access_unit: EncodedAccessUnit) {
-        let bytes = access_unit.bytes.len();
-        if bytes > crate::allcaps::media_encode::STREAM_MAX_ACCESS_UNIT_BYTES {
-            self.dropped_units = self.dropped_units.saturating_add(1);
-            self.dropped_bytes = self.dropped_bytes.saturating_add(bytes);
-            return;
-        }
-
-        while self.queue.len() >= crate::allcaps::media_encode::STREAM_RING_ACCESS_UNITS
-            || self.queued_bytes.saturating_add(bytes)
-                > crate::allcaps::media_encode::STREAM_RING_BYTES
-        {
-            let Some(dropped) = self.pop() else {
-                break;
-            };
-            self.dropped_units = self.dropped_units.saturating_add(1);
-            self.dropped_bytes = self.dropped_bytes.saturating_add(dropped.bytes.len());
-        }
-
-        self.queued_bytes = self.queued_bytes.saturating_add(bytes);
-        self.queue.push_back(access_unit);
-        self.high_water_units = self.high_water_units.max(self.queue.len());
-        self.high_water_bytes = self.high_water_bytes.max(self.queued_bytes);
-    }
-
-    fn pop(&mut self) -> Option<EncodedAccessUnit> {
-        let access_unit = self.queue.pop_front()?;
-        self.queued_bytes = self.queued_bytes.saturating_sub(access_unit.bytes.len());
-        Some(access_unit)
-    }
-
-    fn len(&self) -> usize {
-        self.queue.len()
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CheckedSendReceipt {
+    Accepted,
+    Backpressure,
+    Failed,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -104,62 +65,91 @@ pub(super) struct MediaUdpStreamReport {
     pub(super) high_water_access_units: usize,
     pub(super) high_water_bytes: usize,
     pub(super) submit_retries: usize,
+    pub(super) adapter_backpressure_events: usize,
     pub(super) adapter_send_errors: usize,
     pub(super) network_waits: usize,
     pub(super) subscriber_wait_polls: usize,
     pub(super) peer_addr: [u8; 4],
     pub(super) peer_port: u16,
+    pub(super) elapsed_us: u64,
+    pub(super) late_access_units: usize,
+    pub(super) max_late_us: u64,
 }
 
-/// Broadcast one bounded test stream through the kernel VNet UDP path.
-pub(super) async fn broadcast_annex_b(annex_b: &[u8], session_id: u32) -> MediaUdpStreamReport {
-    let mut ring = AccessUnitRing::new();
-    enqueue_annex_b_access_units(&mut ring, annex_b);
-    let queued_access_units = ring.len();
+/// One boot-lifetime VNet registration shared by every bounded media session.
+///
+/// VNet application queues are intentionally registered for the lifetime of
+/// the kernel, so reopening a VNet for every receiver would permanently grow
+/// the adapter's queue registry. UDP endpoints remain per-session: closing and
+/// rebinding them still requires every new session to send a fresh subscription.
+pub(super) struct MediaUdpTransport {
+    net: VNet,
+    pending_open_waits: usize,
+}
+
+impl MediaUdpTransport {
+    pub(super) async fn open() -> Self {
+        crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
+        let mut pending_open_waits = 0usize;
+        let net = loop {
+            let Some(device_index) = crate::r::net::NetProfile::default().resolve_device_index()
+            else {
+                pending_open_waits = pending_open_waits.saturating_add(1);
+                Timer::after(Duration::from_millis(UDP_RETRY_MS)).await;
+                continue;
+            };
+            let Some(net) = VNet::open_with_event_queue_depth(device_index, 64) else {
+                pending_open_waits = pending_open_waits.saturating_add(1);
+                Timer::after(Duration::from_millis(UDP_RETRY_MS)).await;
+                continue;
+            };
+            break net;
+        };
+        Self {
+            net,
+            pending_open_waits,
+        }
+    }
+}
+
+/// Wait for one receiver, then generate and send an access unit on absolute
+/// 10 Hz deadlines. Generation is synchronous by design: capture and hardware
+/// submission execute on the caller's dedicated background worker, while this
+/// function owns the non-self-referential per-session socket lifetime.
+pub(super) async fn stream_generated_annex_b<F>(
+    transport: &mut MediaUdpTransport,
+    session_id: u32,
+    access_unit_count: usize,
+    target_hz: usize,
+    mut generate: F,
+) -> MediaUdpStreamReport
+where
+    F: FnMut(u32) -> Option<Vec<u8>>,
+{
     let mut report = MediaUdpStreamReport {
         session_id,
-        queued_access_units,
-        dropped_access_units: ring.dropped_units,
-        dropped_bytes: ring.dropped_bytes,
-        high_water_access_units: ring.high_water_units,
-        high_water_bytes: ring.high_water_bytes,
+        network_waits: core::mem::take(&mut transport.pending_open_waits),
         ..MediaUdpStreamReport::default()
     };
-
-    if ring.len() == 0 {
+    if access_unit_count == 0 || target_hz == 0 {
         return report;
     }
 
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: udp-stream staged=1 protocol=tme1 version={} session={} payload=annexb-access-units queued_units={} queued_bytes={} ring_seconds={} ring_units_cap={} ring_bytes_cap={} overflow=drop-oldest transport=udp-subscribe-unicast listen_port={} subscriber_token=TME1GET1 network=waiting\n",
+        "intel/media-encode: udp-live staged=1 protocol=tme1 version={} session={} payload=annexb-access-units target_fps={} target_units={} live_high_water_cap=1 transport=udp-subscribe-unicast listen_port={} subscriber_token=TME1GET1 network=waiting\n",
         VERSION,
         session_id,
-        report.queued_access_units,
-        report.high_water_bytes,
-        crate::allcaps::media_encode::STREAM_RING_SECONDS,
-        crate::allcaps::media_encode::STREAM_RING_ACCESS_UNITS,
-        crate::allcaps::media_encode::STREAM_RING_BYTES,
-        crate::allports::services::MEDIA_ENCODE_PROBE_UDP_PORT,
+        target_hz,
+        access_unit_count,
+        crate::allports::services::MEDIA_ENCODE_UDP_PORT,
     );
 
-    crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
-    let net = loop {
-        let Some(device_index) = crate::r::net::NetProfile::default().resolve_device_index() else {
-            report.network_waits = report.network_waits.saturating_add(1);
-            Timer::after(Duration::from_millis(UDP_RETRY_MS)).await;
-            continue;
-        };
-        let Some(net) = VNet::open_with_event_queue_depth(device_index, 64) else {
-            report.network_waits = report.network_waits.saturating_add(1);
-            Timer::after(Duration::from_millis(UDP_RETRY_MS)).await;
-            continue;
-        };
-        break net;
-    };
+    let net = &transport.net;
     let mut udp = loop {
-        let Some(udp) = VNetUdpEndpoint::bind(
-            &net,
-            crate::allports::services::MEDIA_ENCODE_PROBE_UDP_PORT,
+        let Some(udp) = VNetUdpEndpoint::bind_with_tx_buffer(
+            net,
+            crate::allports::services::MEDIA_ENCODE_UDP_PORT,
+            UDP_TX_BUFFER_BYTES,
             Duration::from_millis(UDP_OPEN_TIMEOUT_MS),
         )
         .await
@@ -181,9 +171,10 @@ pub(super) async fn broadcast_annex_b(annex_b: &[u8], session_id: u32) -> MediaU
             Some(VNetUdpEvent::Closed) => {
                 report.network_waits = report.network_waits.saturating_add(1);
                 udp = loop {
-                    let Some(reopened) = VNetUdpEndpoint::bind(
-                        &net,
-                        crate::allports::services::MEDIA_ENCODE_PROBE_UDP_PORT,
+                    let Some(reopened) = VNetUdpEndpoint::bind_with_tx_buffer(
+                        net,
+                        crate::allports::services::MEDIA_ENCODE_UDP_PORT,
+                        UDP_TX_BUFFER_BYTES,
                         Duration::from_millis(UDP_OPEN_TIMEOUT_MS),
                     )
                     .await
@@ -204,7 +195,7 @@ pub(super) async fn broadcast_annex_b(annex_b: &[u8], session_id: u32) -> MediaU
     report.peer_addr = remote.addr;
     report.peer_port = remote.port;
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: udp-stream subscriber=accepted session={} peer={}.{}.{}.{}:{} wait_polls={} action=drain-ring\n",
+        "intel/media-encode: udp-live subscriber=accepted session={} peer={}.{}.{}.{}:{} wait_polls={} action=capture-encode-send\n",
         session_id,
         remote.addr[0],
         remote.addr[1],
@@ -213,125 +204,202 @@ pub(super) async fn broadcast_annex_b(annex_b: &[u8], session_id: u32) -> MediaU
         remote.port,
         report.subscriber_wait_polls,
     );
-    let final_sequence = ring.queue.back().map(|unit| unit.sequence);
+
+    let period_ticks = (embassy_time::TICK_HZ / target_hz as u64).max(1);
+    let started_ns = crate::chronos::monotonic_nanos();
+    let mut next_deadline = Instant::now();
     let mut datagram_sequence = 0u32;
+    for index in 0..access_unit_count {
+        if index != 0 {
+            next_deadline += Duration::from_ticks(period_ticks);
+            let mut now = Instant::now();
+            if now < next_deadline {
+                Timer::at(next_deadline).await;
+                now = Instant::now();
+            }
+            if now > next_deadline {
+                report.late_access_units = report.late_access_units.saturating_add(1);
+                let late_us = now.saturating_duration_since(next_deadline).as_micros();
+                report.max_late_us = report.max_late_us.max(late_us);
+                // Rebase instead of emitting a catch-up burst.
+                next_deadline = now;
+            }
+        }
 
-    while let Some(access_unit) = ring.pop() {
-        let fragment_count = access_unit.bytes.len().div_ceil(PAYLOAD_BYTES);
-        if fragment_count == 0 || fragment_count > u16::MAX as usize {
+        let sequence = index as u32;
+        let Some(bytes) = generate(sequence) else {
+            report.dropped_access_units = report.dropped_access_units.saturating_add(1);
+            break;
+        };
+        report.queued_access_units = report.queued_access_units.saturating_add(1);
+        report.high_water_access_units = report.high_water_access_units.max(1);
+        report.high_water_bytes = report.high_water_bytes.max(bytes.len());
+        if bytes.len() > crate::allcaps::media_encode::STREAM_MAX_ACCESS_UNIT_BYTES {
+            report.dropped_access_units = report.dropped_access_units.saturating_add(1);
+            report.dropped_bytes = report.dropped_bytes.saturating_add(bytes.len());
+            break;
+        }
+        let Some(keyframe) = annex_b_access_unit_keyframe(bytes.as_slice()) else {
+            report.dropped_access_units = report.dropped_access_units.saturating_add(1);
+            report.dropped_bytes = report.dropped_bytes.saturating_add(bytes.len());
+            break;
+        };
+        let access_unit = EncodedAccessUnit {
+            sequence,
+            keyframe,
+            bytes,
+        };
+        let session_end = index + 1 == access_unit_count;
+        if !send_access_unit(
+            &udp,
+            remote,
+            &access_unit,
+            session_end,
+            &mut datagram_sequence,
+            &mut report,
+        )
+        .await
+        {
             report.dropped_access_units = report.dropped_access_units.saturating_add(1);
             report.dropped_bytes = report.dropped_bytes.saturating_add(access_unit.bytes.len());
-            continue;
+            break;
         }
-
-        let mut complete = true;
-        for (fragment_index, payload) in access_unit.bytes.chunks(PAYLOAD_BYTES).enumerate() {
-            let mut packet = [0u8; DATAGRAM_BYTES];
-            let mut flags = FLAG_KEYFRAME;
-            if fragment_index == 0 {
-                flags |= FLAG_START;
-            }
-            if fragment_index + 1 == fragment_count {
-                flags |= FLAG_END;
-                if Some(access_unit.sequence) == final_sequence {
-                    flags |= FLAG_SESSION_END;
-                }
-            }
-            encode_header(
-                &mut packet[..HEADER_BYTES],
-                flags,
-                session_id,
-                datagram_sequence,
-                access_unit.sequence,
-                fragment_index as u16,
-                fragment_count as u16,
-                payload,
-            );
-            packet[HEADER_BYTES..HEADER_BYTES + payload.len()].copy_from_slice(payload);
-
-            let mut retries = 0usize;
-            loop {
-                if udp
-                    .send_v4(remote, &packet[..HEADER_BYTES + payload.len()])
-                    .is_ok()
-                {
-                    Timer::after(Duration::from_millis(UDP_PACKET_PACE_MS)).await;
-                    let mut adapter_failed = false;
-                    while let Some(event) = net.pop_event() {
-                        match event {
-                            v::vnet::Event::Error { .. } => {
-                                adapter_failed = true;
-                                report.adapter_send_errors =
-                                    report.adapter_send_errors.saturating_add(1);
-                            }
-                            v::vnet::Event::Closed { handle } if handle == udp.handle() => {
-                                adapter_failed = true;
-                                report.adapter_send_errors =
-                                    report.adapter_send_errors.saturating_add(1);
-                            }
-                            _ => {}
-                        }
-                    }
-                    if !adapter_failed {
-                        break;
-                    }
-                }
-                retries = retries.saturating_add(1);
-                report.submit_retries = report.submit_retries.saturating_add(1);
-                if retries >= UDP_SUBMIT_RETRY_LIMIT {
-                    complete = false;
-                    break;
-                }
-                Timer::after(Duration::from_millis(UDP_PACKET_PACE_MS)).await;
-            }
-            if !complete {
-                break;
-            }
-
-            report.sent_datagrams = report.sent_datagrams.saturating_add(1);
-            report.sent_payload_bytes = report.sent_payload_bytes.saturating_add(payload.len());
-            datagram_sequence = datagram_sequence.wrapping_add(1);
-        }
-
-        if complete {
-            report.sent_access_units = report.sent_access_units.saturating_add(1);
-        } else {
-            report.dropped_access_units = report.dropped_access_units.saturating_add(1);
-            report.dropped_bytes = report.dropped_bytes.saturating_add(access_unit.bytes.len());
-        }
+        report.sent_access_units = report.sent_access_units.saturating_add(1);
     }
+    report.elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
 
+    Timer::after(Duration::from_millis(UDP_CLOSE_LINGER_MS)).await;
     udp.close();
     drop(udp);
-    drop(net);
     report
 }
 
-fn enqueue_annex_b_access_units(ring: &mut AccessUnitRing, annex_b: &[u8]) {
-    let mut idr_offsets = Vec::new();
-    let mut cursor = 0usize;
-    while cursor + 5 <= annex_b.len() {
-        if annex_b[cursor..cursor + 4] == [0, 0, 0, 1] {
-            if annex_b[cursor + 4] & 0x1f == 5 {
-                idr_offsets.push(cursor);
-            }
-            cursor += 5;
-        } else {
-            cursor += 1;
-        }
+async fn send_access_unit(
+    udp: &VNetUdpEndpoint<'_>,
+    remote: v::vnet::EndpointV4,
+    access_unit: &EncodedAccessUnit,
+    session_end: bool,
+    datagram_sequence: &mut u32,
+    report: &mut MediaUdpStreamReport,
+) -> bool {
+    let fragment_count = access_unit.bytes.len().div_ceil(PAYLOAD_BYTES);
+    if fragment_count == 0 || fragment_count > u16::MAX as usize {
+        return false;
     }
 
-    for index in 0..idr_offsets.len() {
-        let start = if index == 0 { 0 } else { idr_offsets[index] };
-        let end = idr_offsets.get(index + 1).copied().unwrap_or(annex_b.len());
-        if start >= end {
-            continue;
+    for (fragment_index, payload) in access_unit.bytes.chunks(PAYLOAD_BYTES).enumerate() {
+        let mut packet = [0u8; DATAGRAM_BYTES];
+        let mut flags = if access_unit.keyframe {
+            FLAG_KEYFRAME
+        } else {
+            0
+        };
+        if fragment_index == 0 {
+            flags |= FLAG_START;
         }
-        ring.push(EncodedAccessUnit {
-            sequence: index as u32,
-            bytes: annex_b[start..end].to_vec(),
-        });
+        if fragment_index + 1 == fragment_count {
+            flags |= FLAG_END;
+            if session_end {
+                flags |= FLAG_SESSION_END;
+            }
+        }
+        encode_header(
+            &mut packet[..HEADER_BYTES],
+            flags,
+            report.session_id,
+            *datagram_sequence,
+            access_unit.sequence,
+            fragment_index as u16,
+            fragment_count as u16,
+            payload,
+        );
+        packet[HEADER_BYTES..HEADER_BYTES + payload.len()].copy_from_slice(payload);
+
+        let receipt = *datagram_sequence;
+        let mut retries = 0usize;
+        loop {
+            if udp
+                .send_v4_checked(remote, receipt, &packet[..HEADER_BYTES + payload.len()])
+                .is_err()
+            {
+                retries = retries.saturating_add(1);
+                report.submit_retries = report.submit_retries.saturating_add(1);
+            } else {
+                match wait_for_checked_send_receipt(udp, receipt).await {
+                    Some(CheckedSendReceipt::Accepted) => {
+                        Timer::after(Duration::from_millis(UDP_PACKET_PACE_MS)).await;
+                        break;
+                    }
+                    Some(CheckedSendReceipt::Backpressure) => {
+                        report.adapter_backpressure_events =
+                            report.adapter_backpressure_events.saturating_add(1);
+                        retries = retries.saturating_add(1);
+                        report.submit_retries = report.submit_retries.saturating_add(1);
+                    }
+                    Some(CheckedSendReceipt::Failed) | None => {
+                        // A missing receipt has an unknown disposition. Abort
+                        // instead of risking a duplicate by resubmitting it.
+                        report.adapter_send_errors = report.adapter_send_errors.saturating_add(1);
+                        return false;
+                    }
+                }
+            }
+            if retries >= UDP_SUBMIT_RETRY_LIMIT {
+                return false;
+            }
+            Timer::after(Duration::from_millis(UDP_PACKET_PACE_MS)).await;
+        }
+        report.sent_datagrams = report.sent_datagrams.saturating_add(1);
+        report.sent_payload_bytes = report.sent_payload_bytes.saturating_add(payload.len());
+        *datagram_sequence = datagram_sequence.wrapping_add(1);
     }
+    true
+}
+
+async fn wait_for_checked_send_receipt(
+    udp: &VNetUdpEndpoint<'_>,
+    receipt: u32,
+) -> Option<CheckedSendReceipt> {
+    let deadline = Instant::now() + Duration::from_millis(UDP_SEND_RECEIPT_TIMEOUT_MS);
+    loop {
+        if let Some(result) = udp.poll_checked_send_result(receipt) {
+            return Some(classify_checked_send_result(result));
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        Timer::after(Duration::from_millis(UDP_SEND_RECEIPT_POLL_MS)).await;
+    }
+}
+
+fn classify_checked_send_result(result: Result<(), &'static str>) -> CheckedSendReceipt {
+    match result {
+        Ok(()) => CheckedSendReceipt::Accepted,
+        Err("udp send fail") => CheckedSendReceipt::Backpressure,
+        Err(_) => CheckedSendReceipt::Failed,
+    }
+}
+
+fn annex_b_access_unit_keyframe(annex_b: &[u8]) -> Option<bool> {
+    let mut cursor = 0usize;
+    while cursor + 4 <= annex_b.len() {
+        let start_code_bytes =
+            if cursor + 5 <= annex_b.len() && annex_b[cursor..cursor + 4] == [0, 0, 0, 1] {
+                4
+            } else if annex_b[cursor..cursor + 3] == [0, 0, 1] {
+                3
+            } else {
+                cursor += 1;
+                continue;
+            };
+        match annex_b[cursor + start_code_bytes] & 0x1f {
+            5 => return Some(true),
+            1 => return Some(false),
+            _ => {}
+        }
+        cursor += start_code_bytes + 1;
+    }
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -357,4 +425,19 @@ fn encode_header(
     header[22..24].copy_from_slice(&fragment_count.to_be_bytes());
     header[24..26].copy_from_slice(&(payload.len() as u16).to_be_bytes());
     header[28..32].copy_from_slice(&crc32fast::hash(payload).to_be_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checked_receipt_separates_acceptance_backpressure_and_failure() {
+        assert_eq!(classify_checked_send_result(Ok(())), CheckedSendReceipt::Accepted);
+        assert_eq!(
+            classify_checked_send_result(Err("udp send fail")),
+            CheckedSendReceipt::Backpressure
+        );
+        assert_eq!(classify_checked_send_result(Err("link down")), CheckedSendReceipt::Failed);
+    }
 }

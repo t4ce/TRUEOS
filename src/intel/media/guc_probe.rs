@@ -287,6 +287,7 @@ pub(crate) fn run_once() -> GucVcs0ProbeReport {
         crate::gpu::physical::EngineClass::VideoDecode,
         hwlrca_lo,
         hwlrca_hi,
+        crate::gpu::physical::PhysicalContextPriority::KernelNormal,
     ) {
         Ok(token) => token,
         Err(_) => {

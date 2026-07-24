@@ -6,9 +6,9 @@ use alloc::vec::Vec;
 use spin::Mutex;
 
 use crate::gpu::physical::{
-    PhysicalAdapterInfo, PhysicalContextDescriptor, PhysicalContextHandle, PhysicalGpuDevice,
-    PhysicalGpuError, PhysicalGpuVmHandle, PhysicalSceneAabbCompletion, PhysicalSceneAabbRequest,
-    PhysicalSchedulerStatus, PhysicalSubmission,
+    PhysicalAdapterInfo, PhysicalContextDescriptor, PhysicalContextHandle, PhysicalContextPriority,
+    PhysicalGpuDevice, PhysicalGpuError, PhysicalGpuVmHandle, PhysicalSceneAabbCompletion,
+    PhysicalSceneAabbRequest, PhysicalSchedulerStatus, PhysicalSubmission,
 };
 
 pub(crate) static INTEL_PHYSICAL_GPU: IntelPhysicalGpuDevice = IntelPhysicalGpuDevice;
@@ -178,13 +178,14 @@ impl PhysicalGpuDevice for IntelPhysicalGpuDevice {
     fn register_context(
         &self,
         descriptor: PhysicalContextDescriptor,
+        priority: PhysicalContextPriority,
     ) -> Result<PhysicalContextHandle, PhysicalGpuError> {
         if descriptor.gpuvm_root_phys == 0 {
             return Err(PhysicalGpuError::InvalidGpuVm);
         }
         let dev = crate::intel::claimed_device().ok_or(PhysicalGpuError::NotReady)?;
         crate::intel::guc_submission::INTEL_GUC_SCHEDULER
-            .register(dev, descriptor.engine, descriptor.hwlrca_lo, descriptor.hwlrca_hi)
+            .register(dev, descriptor.engine, descriptor.hwlrca_lo, descriptor.hwlrca_hi, priority)
             .map(|token| PhysicalContextHandle::from_raw(token.raw()))
             .map_err(|_| PhysicalGpuError::RegisterFailed)
     }

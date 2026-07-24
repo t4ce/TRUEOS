@@ -2740,10 +2740,12 @@ fn append_intel_gpu_dump(out: &mut String) {
         for context in contexts {
             writeln!(
                 out,
-                "context id={} token=0x{:016X} engine={:?} enabled={} hwlrca=0x{:08X}:0x{:08X} submissions={}",
+                "context id={} token=0x{:016X} engine={:?} priority={:?} policy_enqueued={} enabled={} hwlrca=0x{:08X}:0x{:08X} submissions={}",
                 context.context_id,
                 context.token.raw(),
                 context.engine,
+                context.priority,
+                yes_no(context.policy_enqueued),
                 yes_no(context.enabled),
                 context.hwlrca_hi,
                 context.hwlrca_lo,

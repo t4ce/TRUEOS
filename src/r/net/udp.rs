@@ -29,8 +29,29 @@ pub struct VNetUdpEndpoint<'a> {
 
 impl<'a> VNetUdpEndpoint<'a> {
     pub async fn bind(net: &'a VNet, port: u16, timeout: EmbassyDuration) -> Option<Self> {
-        let _ = net.submit(vnet::Command::OpenUdp { port });
+        Self::bind_command(net, vnet::Command::OpenUdp { port }, timeout).await
+    }
 
+    pub async fn bind_with_tx_buffer(
+        net: &'a VNet,
+        port: u16,
+        tx_buffer_bytes: usize,
+        timeout: EmbassyDuration,
+    ) -> Option<Self> {
+        let _ = net.open_udp_with_tx_buffer(port, tx_buffer_bytes);
+        Self::wait_for_open(net, timeout).await
+    }
+
+    async fn bind_command(
+        net: &'a VNet,
+        command: vnet::Command,
+        timeout: EmbassyDuration,
+    ) -> Option<Self> {
+        let _ = net.submit(command);
+        Self::wait_for_open(net, timeout).await
+    }
+
+    async fn wait_for_open(net: &'a VNet, timeout: EmbassyDuration) -> Option<Self> {
         let deadline = Instant::now() + timeout;
         loop {
             for _ in 0..64 {
@@ -82,6 +103,24 @@ impl<'a> VNetUdpEndpoint<'a> {
             remote,
             data: vnet::ByteBuf::from_slice_trunc(data),
         })
+    }
+
+    pub fn send_v4_checked(
+        &self,
+        remote: vnet::EndpointV4,
+        receipt: u32,
+        data: &[u8],
+    ) -> Result<(), ()> {
+        if self.closed {
+            return Err(());
+        }
+
+        self.net
+            .send_udp_checked(self.handle, remote, receipt, data)
+    }
+
+    pub fn poll_checked_send_result(&self, receipt: u32) -> Option<Result<(), &'static str>> {
+        self.net.pop_udp_send_result(self.handle, receipt)
     }
 
     pub fn send_v6(&self, remote: vnet::EndpointV6, data: &[u8]) -> Result<(), ()> {

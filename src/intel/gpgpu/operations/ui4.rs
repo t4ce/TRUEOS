@@ -736,7 +736,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     });
     if log_submit_boundary {
         crate::log_info!(target: "ui4";
-            "ui4/guc-video-frame: submit-boundary attempt={} action=guc-submit-accepted serial={} job_slot={} queue_depth={} next=completion-marker\n",
+            "ui4/guc-video-frame: submit-boundary attempt={} action=guc-submit-accepted serial={} job_slot={} queue_depth={} scheduler_priority=kmd-high priority_abi=0 guc_policy_enqueued=1 next=completion-marker\n",
             submit_attempt,
             serial,
             job_slot,

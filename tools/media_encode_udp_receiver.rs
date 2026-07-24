@@ -1,7 +1,7 @@
-//! Bounded Ubuntu/Linux receiver for the TRUEOS media-encode UDP probe.
+//! Bounded Ubuntu/Linux receiver for the TRUEOS UI4 hardware H.264 stream.
 //!
-//! The first probe is one-way after a tiny subscription handshake: this tool
-//! broadcasts `TME1GET1` to `255.255.255.255:9650` until TRUEOS pins the source
+//! Media is one-way after a tiny subscription handshake: this tool sends
+//! `TME1GET1` to `255.255.255.255:9650` until TRUEOS pins the source
 //! endpoint and unicasts encoded H.264 Annex-B access-unit fragments back. The
 //! receiver reassembles complete access units and writes them in sequence to an
 //! `.h264` file. It does not receive decoded video frames.
@@ -34,7 +34,7 @@
 //! ```text
 //! rustc --edition=2024 -O tools/media_encode_udp_receiver.rs \
 //!   -o media_encode_udp_receiver
-//! ./media_encode_udp_receiver --output trueos-probe.h264
+//! ./media_encode_udp_receiver --output trueos-ui4.h264 --ffmpeg-check
 //! ```
 
 use std::collections::BTreeMap;
@@ -59,8 +59,34 @@ const DEFAULT_MAX_INFLIGHT_AUS: usize = 32;
 const DEFAULT_REORDER_MS: u64 = 750;
 const MAX_AU_SEQUENCE_AHEAD: u32 = 4096;
 const SUBSCRIBE_TOKEN: &[u8; 8] = b"TME1GET1";
-const SUBSCRIBE_TARGET: &str = "255.255.255.255:9650";
+const DEFAULT_SUBSCRIBE_TARGET: &str = "255.255.255.255:9650";
 const SUBSCRIBE_INTERVAL: Duration = Duration::from_millis(500);
+const FFPLAY_ARGS: &[&str] = &[
+    "-hide_banner",
+    "-loglevel",
+    "warning",
+    "-fflags",
+    "nobuffer",
+    "-flags",
+    "low_delay",
+    "-f",
+    "h264",
+    "-i",
+    "pipe:0",
+];
+const FFMPEG_CHECK_ARGS: &[&str] = &[
+    "-hide_banner",
+    "-loglevel",
+    "warning",
+    "-xerror",
+    "-f",
+    "h264",
+    "-i",
+    "pipe:0",
+    "-f",
+    "null",
+    "-",
+];
 
 const FLAG_START: u8 = 1 << 0;
 const FLAG_END: u8 = 1 << 1;
@@ -79,12 +105,21 @@ struct Config {
     idle_exit: Option<Duration>,
     decoder: Option<DecoderKind>,
     subscribe: bool,
+    subscribe_target: String,
+    strict: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
 enum DecoderKind {
     Ffplay,
     FfmpegCheck,
+}
+
+fn decoder_spec(kind: DecoderKind) -> (&'static str, &'static [&'static str], &'static str) {
+    match kind {
+        DecoderKind::Ffplay => ("ffplay", FFPLAY_ARGS, "ffplay"),
+        DecoderKind::FfmpegCheck => ("ffmpeg", FFMPEG_CHECK_ARGS, "ffmpeg decode check"),
+    }
 }
 
 impl Config {
@@ -99,6 +134,8 @@ impl Config {
             idle_exit: None,
             decoder: None,
             subscribe: true,
+            subscribe_target: DEFAULT_SUBSCRIBE_TARGET.into(),
+            strict: true,
         };
 
         let mut args = env::args().skip(1);
@@ -142,6 +179,10 @@ impl Config {
                 "--ffplay" => set_decoder(&mut config.decoder, DecoderKind::Ffplay)?,
                 "--ffmpeg-check" => set_decoder(&mut config.decoder, DecoderKind::FfmpegCheck)?,
                 "--no-subscribe" => config.subscribe = false,
+                "--subscribe-target" => {
+                    config.subscribe_target = required_value(&mut args, "--subscribe-target")?
+                }
+                "--allow-loss" => config.strict = false,
                 _ => return Err(format!("unknown argument: {arg}")),
             }
         }
@@ -204,10 +245,12 @@ Usage: {program} [OPTIONS]
   --ffplay                  explicitly pipe completed AUs to ffplay as well as the file
   --ffmpeg-check            explicitly decode completed AUs to ffmpeg's null muxer
   --no-subscribe            receive passively; do not broadcast TME1GET1 requests
+  --subscribe-target ADDR   subscription destination (default {DEFAULT_SUBSCRIBE_TARGET})
+  --allow-loss              return success despite packet/AU integrity counters
   -h, --help                show this help
 
-Wire: until media arrives, the bound socket broadcasts TME1GET1 to UDP port
-{DEFAULT_PORT} every 500 ms. TRUEOS then unicasts TME1 v1 data to that source:
+Wire: until media arrives, the bound socket sends TME1GET1 to the subscription
+target every 500 ms. TRUEOS then unicasts TME1 v1 data to that source:
 32-byte big-endian header, <=1168-byte payload, <=1200-byte datagram. The
 payload is an encoded H.264 Annex-B access unit, not a decoded frame."
     );
@@ -377,6 +420,30 @@ impl Stats {
             self.access_units_dropped,
             self.annex_b_failures,
         );
+    }
+
+    fn validate_strict(&self) -> io::Result<()> {
+        let integrity_failures = self.header_drops
+            + self.crc_failures
+            + self.foreign_drops
+            + self.capacity_drops
+            + self.duplicate_fragments
+            + self.late_or_reordered_datagrams
+            + self.datagram_gap_events
+            + self.datagrams_missing_observed
+            + self.access_units_dropped
+            + self.annex_b_failures;
+        if self.valid_datagrams == 0 || self.access_units_written == 0 || self.output_bytes == 0 {
+            return Err(io::Error::other(
+                "strict validation failed: no complete media session was received",
+            ));
+        }
+        if integrity_failures != 0 {
+            return Err(io::Error::other(format!(
+                "strict validation failed: integrity counters total {integrity_failures}"
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -652,41 +719,7 @@ struct DecoderProcess {
 
 impl DecoderProcess {
     fn spawn(kind: DecoderKind) -> io::Result<Self> {
-        let (program, args, description): (&str, &[&str], &str) = match kind {
-            DecoderKind::Ffplay => (
-                "ffplay",
-                &[
-                    "-hide_banner",
-                    "-loglevel",
-                    "warning",
-                    "-fflags",
-                    "nobuffer",
-                    "-flags",
-                    "low_delay",
-                    "-f",
-                    "h264",
-                    "-i",
-                    "pipe:0",
-                ],
-                "ffplay",
-            ),
-            DecoderKind::FfmpegCheck => (
-                "ffmpeg",
-                &[
-                    "-hide_banner",
-                    "-loglevel",
-                    "warning",
-                    "-f",
-                    "h264",
-                    "-i",
-                    "pipe:0",
-                    "-f",
-                    "null",
-                    "-",
-                ],
-                "ffmpeg decode check",
-            ),
-        };
+        let (program, args, description) = decoder_spec(kind);
 
         let mut child = Command::new(program)
             .args(args)
@@ -710,12 +743,14 @@ impl DecoderProcess {
             .write_all(bytes)
     }
 
-    fn finish(mut self) {
+    fn finish(mut self) -> io::Result<()> {
         drop(self.stdin.take());
-        match self.child.wait() {
-            Ok(status) => eprintln!("{} exited with {status}", self.description),
-            Err(error) => eprintln!("could not wait for {}: {error}", self.description),
+        let status = self.child.wait()?;
+        eprintln!("{} exited with {status}", self.description);
+        if !status.success() {
+            return Err(io::Error::other(format!("{} failed with {status}", self.description)));
         }
+        Ok(())
     }
 }
 
@@ -734,15 +769,8 @@ impl Output {
     fn write_access_unit(&mut self, access_unit: &AccessUnit) -> io::Result<()> {
         for fragment in access_unit.fragments.iter().flatten() {
             self.file.write_all(fragment)?;
-            let decoder_error = self
-                .decoder
-                .as_mut()
-                .and_then(|decoder| decoder.write_fragment(fragment).err());
-            if let Some(error) = decoder_error {
-                eprintln!("decoder pipe failed ({error}); capture will continue to the file");
-                if let Some(decoder) = self.decoder.take() {
-                    decoder.finish();
-                }
+            if let Some(decoder) = self.decoder.as_mut() {
+                decoder.write_fragment(fragment)?;
             }
         }
         self.file.flush()
@@ -751,7 +779,7 @@ impl Output {
     fn finish(mut self) -> io::Result<()> {
         self.file.flush()?;
         if let Some(decoder) = self.decoder.take() {
-            decoder.finish();
+            decoder.finish()?;
         }
         Ok(())
     }
@@ -814,10 +842,13 @@ fn run(config: Config) -> io::Result<()> {
     let mut last_report = started;
     let mut subscription_sent = false;
     let mut last_subscription = started;
+    let mut completed_session = false;
 
     eprintln!(
-        "listening on {local}; output={} max_buffer_bytes={} max_au_bytes={} max_inflight_aus={}",
+        "listening on {local}; output={} subscribe_target={} strict={} max_buffer_bytes={} max_au_bytes={} max_inflight_aus={}",
         config.output.display(),
+        config.subscribe_target,
+        u8::from(config.strict),
         config.max_buffer_bytes,
         config.max_au_bytes,
         config.max_inflight_aus
@@ -829,20 +860,20 @@ fn run(config: Config) -> io::Result<()> {
             && pinned.is_none()
             && (!subscription_sent || now.duration_since(last_subscription) >= SUBSCRIBE_INTERVAL)
         {
-            match socket.send_to(SUBSCRIBE_TOKEN, SUBSCRIBE_TARGET) {
+            match socket.send_to(SUBSCRIBE_TOKEN, &config.subscribe_target) {
                 Ok(length) if length == SUBSCRIBE_TOKEN.len() => {
                     if !subscription_sent {
-                        eprintln!(
-                            "subscription broadcast target={SUBSCRIBE_TARGET} token=TME1GET1"
-                        );
+                        eprintln!("subscription target={} token=TME1GET1", config.subscribe_target);
                     }
                 }
                 Ok(length) => eprintln!(
-                    "short subscription broadcast target={SUBSCRIBE_TARGET} sent={length}/{}",
+                    "short subscription target={} sent={length}/{}",
+                    config.subscribe_target,
                     SUBSCRIBE_TOKEN.len()
                 ),
                 Err(error) => eprintln!(
-                    "subscription broadcast target={SUBSCRIBE_TARGET} failed: {error}; passive receive remains active"
+                    "subscription target={} failed: {error}; passive receive remains active",
+                    config.subscribe_target
                 ),
             }
             subscription_sent = true;
@@ -906,6 +937,7 @@ fn run(config: Config) -> io::Result<()> {
         let now = Instant::now();
         if drain_ready(&mut reassembler, &mut output, &mut stats, now)?.is_some() {
             eprintln!("session-end access unit drained");
+            completed_session = true;
             break;
         }
         if now.duration_since(last_report) >= Duration::from_secs(1) {
@@ -922,6 +954,15 @@ fn run(config: Config) -> io::Result<()> {
 
     output.finish()?;
     stats.report(true);
+    if !completed_session {
+        return Err(io::Error::other(
+            "capture ended before a complete session-end access unit was drained",
+        ));
+    }
+    if config.strict {
+        stats.validate_strict()?;
+        eprintln!("strict validation accepted=1");
+    }
     Ok(())
 }
 
@@ -995,12 +1036,23 @@ mod tests {
             idle_exit: None,
             decoder: None,
             subscribe: false,
+            subscribe_target: DEFAULT_SUBSCRIBE_TARGET.into(),
+            strict: true,
         }
     }
 
     #[test]
     fn crc32_matches_ieee_test_vector() {
         assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
+    }
+
+    #[test]
+    fn ffmpeg_check_is_fail_fast() {
+        let (program, args, _) = decoder_spec(DecoderKind::FfmpegCheck);
+        assert_eq!(program, "ffmpeg");
+        let xerror = args.iter().position(|arg| *arg == "-xerror").unwrap();
+        let input = args.iter().position(|arg| *arg == "-i").unwrap();
+        assert!(xerror < input);
     }
 
     #[test]
@@ -1086,5 +1138,31 @@ mod tests {
         assert_eq!(reassembler.ended(), Some(0));
         assert_eq!(stats.access_units_dropped, 1);
         assert_eq!(reassembler.used_bytes, 0);
+    }
+
+    #[test]
+    fn strict_validation_accepts_only_clean_nonempty_media() {
+        let stats = Stats {
+            datagrams_received: 3,
+            valid_datagrams: 3,
+            access_units_written: 1,
+            output_bytes: 128,
+            ..Stats::default()
+        };
+        assert!(stats.validate_strict().is_ok());
+    }
+
+    #[test]
+    fn strict_validation_rejects_empty_or_damaged_media() {
+        assert!(Stats::default().validate_strict().is_err());
+        let damaged = Stats {
+            datagrams_received: 3,
+            valid_datagrams: 2,
+            crc_failures: 1,
+            access_units_written: 1,
+            output_bytes: 128,
+            ..Stats::default()
+        };
+        assert!(damaged.validate_strict().is_err());
     }
 }

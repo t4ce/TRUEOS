@@ -12,9 +12,9 @@ use alloc::vec::Vec;
 use spin::Mutex;
 
 use super::physical::{
-    PhysicalBufferSlice, PhysicalContextDescriptor, PhysicalContextHandle, PhysicalGpuDevice,
-    PhysicalGpuError, PhysicalGpuVmHandle, PhysicalSceneAabbRequest, PhysicalSchedulerStatus,
-    physical_device,
+    PhysicalBufferSlice, PhysicalContextDescriptor, PhysicalContextHandle, PhysicalContextPriority,
+    PhysicalGpuDevice, PhysicalGpuError, PhysicalGpuVmHandle, PhysicalSceneAabbRequest,
+    PhysicalSchedulerStatus, physical_device,
 };
 
 const PAGE_BYTES: usize = 4096;
@@ -117,7 +117,40 @@ impl KernelClient {
             Self::Ui4Blitter => QueueClass::Copy,
         }
     }
+
+    const fn physical_priority(self) -> PhysicalContextPriority {
+        match self {
+            // This context feeds a visible video frame into UI4.  It must be
+            // able to preempt ordinary persistent GPGPU work instead of
+            // waiting through an entire GuC scheduler rotation.
+            Self::Ui4Compositor => PhysicalContextPriority::KernelHigh,
+            _ => PhysicalContextPriority::KernelNormal,
+        }
+    }
 }
+
+const _: () = {
+    assert!(matches!(
+        KernelClient::Ui4Compositor.physical_priority(),
+        PhysicalContextPriority::KernelHigh
+    ));
+    assert!(matches!(
+        KernelClient::Render.physical_priority(),
+        PhysicalContextPriority::KernelNormal
+    ));
+    assert!(matches!(
+        KernelClient::GpgpuSystem.physical_priority(),
+        PhysicalContextPriority::KernelNormal
+    ));
+    assert!(matches!(
+        KernelClient::GpgpuExecution.physical_priority(),
+        PhysicalContextPriority::KernelNormal
+    ));
+    assert!(matches!(
+        KernelClient::Ui4Blitter.physical_priority(),
+        PhysicalContextPriority::KernelNormal
+    ));
+};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Principal {
@@ -1424,7 +1457,7 @@ pub(crate) fn submit_kernel_context(
         if device.contexts.len() >= device.quota.contexts {
             return Err(VgpuError::QuotaExceeded);
         }
-        let context = physical.register_context(descriptor)?;
+        let context = physical.register_context(descriptor, client.physical_priority())?;
         device.contexts.push(ContextBinding {
             queue: queue_handle,
             descriptor,

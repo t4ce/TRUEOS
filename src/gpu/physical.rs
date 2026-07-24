@@ -12,6 +12,17 @@ pub(crate) enum EngineClass {
     Copy,
 }
 
+/// Physical scheduler priority for one persistent kernel context.
+///
+/// Display-critical work is intentionally a separate class from ordinary
+/// kernel GPU work so a continuously active compute context cannot add a full
+/// scheduler rotation to scanout-facing submissions.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PhysicalContextPriority {
+    KernelHigh,
+    KernelNormal,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PhysicalAdapterInfo {
     pub(crate) name: &'static str,
@@ -169,6 +180,7 @@ pub(crate) trait PhysicalGpuDevice: Sync {
     fn register_context(
         &self,
         descriptor: PhysicalContextDescriptor,
+        priority: PhysicalContextPriority,
     ) -> Result<PhysicalContextHandle, PhysicalGpuError>;
     fn submit_context(
         &self,

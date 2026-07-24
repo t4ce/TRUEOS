@@ -199,7 +199,10 @@ impl VNet {
 
     pub fn submit(&self, cmd: api::Command) -> Result<(), ()> {
         let cmd = to_kernel_cmd(cmd)?;
+        self.submit_kernel(cmd)
+    }
 
+    fn submit_kernel(&self, cmd: NetCommand) -> Result<(), ()> {
         // Under bursty load, the per-owner command queue can be briefly full.
         // Retry a few times to avoid silently dropping critical commands like
         // the first TCP send right after connect.
@@ -212,6 +215,42 @@ impl VNet {
 
         crate::log!("vnet: submit drop owner={}\n", self.owner);
         Err(())
+    }
+
+    pub(super) fn open_udp_with_tx_buffer(
+        &self,
+        port: u16,
+        tx_buffer_bytes: usize,
+    ) -> Result<(), ()> {
+        self.submit_kernel(NetCommand::OpenUdpWithTxBuffer {
+            port,
+            tx_buffer_bytes,
+        })
+    }
+
+    pub(super) fn send_udp_checked(
+        &self,
+        handle: api::NetHandle,
+        remote: api::EndpointV4,
+        receipt: u32,
+        data: &[u8],
+    ) -> Result<(), ()> {
+        self.submit_kernel(NetCommand::SendUdpChecked {
+            handle: NetHandle(handle.0),
+            remote: to_kernel_endpoint(remote),
+            receipt,
+            data: Vec::from(data),
+        })
+    }
+
+    /// Pop the result for one checked UDP command without exposing the
+    /// kernel-only receipt protocol through the public vnet ABI.
+    pub(super) fn pop_udp_send_result(
+        &self,
+        handle: api::NetHandle,
+        receipt: u32,
+    ) -> Option<Result<(), &'static str>> {
+        adapter::pop_checked_udp_send_result(self.owner, NetHandle(handle.0), receipt)
     }
 
     pub fn send_tcp_all(&self, handle: api::NetHandle, data: &[u8]) -> Result<(), ()> {

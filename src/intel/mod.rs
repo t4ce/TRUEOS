@@ -897,7 +897,7 @@ pub(crate) fn run_media_guc_vcs0_probe_once() -> self::media::guc_probe::GucVcs0
     self::media::guc_probe::run_once()
 }
 
-#[cfg(feature = "trueos_h264_encode_probe")]
+#[cfg(feature = "trueos_h264_encode_stream")]
 pub(crate) fn run_media_avc_encode_probe_once()
 -> self::media::avc_encode_probe::AvcEncodeProbeReport {
     self::media::avc_encode_probe::run_once()

@@ -11,9 +11,12 @@ test = false
 bench = false
 
 [features]
-default = ["trueos_rdp", "trueos_lumen", "trueos_h264_encode_probe"]
+default = ["trueos_rdp", "trueos_lumen", "trueos_h264_encode_stream"]
 trueos_rdp = []
-trueos_h264_encode_probe = ["dep:trueos-h264-encode-probe"]
+trueos_h264_encode_stream = []
+# Compatibility alias for older build scripts. The former software/file probe
+# is gone; both feature spellings select the resident hardware UDP service.
+trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
 trueos_lumen = ["dep:lumen"]
 # Select the separately baked C++ for OpenCL copy-rect artifact. The normal
 # Make product/development lane enables this explicitly and remains
@@ -88,7 +91,6 @@ trueos-lsd = { path = "crates/trueos-lsd" }
 trueos-silk = { path = "crates/trueos-silk" }
 trueos-fpga-abi = { path = "crates/trueos-fpga-abi" }
 trueos-draw3d = { path = "crates/trueos-draw3d" }
-trueos-h264-encode-probe = { path = "crates/trueos-h264-encode-probe", optional = true }
 lumen = { path = "vendor/lumen", default-features = false, features = ["truega"], optional = true }
 parry2d = { version = "0.26", default-features = false, features = ["dim2", "f32"] }
 serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }

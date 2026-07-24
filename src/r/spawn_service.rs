@@ -79,7 +79,7 @@ define_started_flags!(
     UI4_FONT_STAMP_SERVICE_STARTED,
     UI4_SLOT4_SERVICE_STARTED,
     UI4_SCREENSHOT_SERVICE_STARTED,
-    UI4_H264_ENCODE_PROBE_STARTED,
+    UI4_H264_ENCODE_STREAM_STARTED,
     UI4_COMPOSITOR_STARTED,
     UI4_WINDOW_BROKER_SNAPSHOT_STARTED,
     UI4_VIDEO_CONVERSION_STARTED,
@@ -592,9 +592,9 @@ fn spawn_ui4_screenshot_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::ui4::ui4_screenshot_service_task())
 }
 
-#[cfg(feature = "trueos_h264_encode_probe")]
-fn spawn_ui4_h264_encode_probe_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::ui4::ui4_h264_encode_probe_task())
+#[cfg(feature = "trueos_h264_encode_stream")]
+fn spawn_ui4_h264_encode_stream_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| crate::ui4::ui4_h264_encode_stream_task())
 }
 
 fn spawn_ui4_compositor_service_task(spawner: Spawner) -> SpawnAttempt {
@@ -1330,7 +1330,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 const TASK_COUNT: usize = 73
     + cfg!(feature = "trueos_rdp") as usize
-    + cfg!(feature = "trueos_h264_encode_probe") as usize;
+    + cfg!(feature = "trueos_h264_encode_stream") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1630,13 +1630,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI4_SCREENSHOT_SERVICE_STARTED,
         spawn_ui4_screenshot_service_task,
     ),
-    #[cfg(feature = "trueos_h264_encode_probe")]
+    #[cfg(feature = "trueos_h264_encode_stream")]
     TaskSpec::enabled_gated(
-        "ui4-h264-encode-probe",
+        "ui4-h264-encode-stream",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         intel_media_engine_gate,
-        &UI4_H264_ENCODE_PROBE_STARTED,
-        spawn_ui4_h264_encode_probe_task,
+        &UI4_H264_ENCODE_STREAM_STARTED,
+        spawn_ui4_h264_encode_stream_task,
     ),
     TaskSpec::enabled_gated(
         "ui4-compositor-service",

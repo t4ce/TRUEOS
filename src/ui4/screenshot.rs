@@ -34,7 +34,7 @@ static CAPTURE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static CAPTURE_REQUESTS: Mutex<VecDeque<CaptureRequest>> = Mutex::new(VecDeque::new());
 static CAPTURE_QUEUE: Mutex<VecDeque<CapturedComposition>> = Mutex::new(VecDeque::new());
 
-enum CaptureError {
+pub(super) enum CaptureError {
     NoScanout,
     DimensionTooLarge,
     InvalidFrameLayout,
@@ -104,6 +104,27 @@ struct CapturedComposition {
     scope: CaptureScope,
     path_override: Option<String>,
     release_interactive_gate: bool,
+}
+
+/// One immutable logical snapshot of D01, composed in the same hardware-plane
+/// order as UI4 presentation. The encoder consumes this in memory; it never
+/// enters the screenshot queue or filesystem worker.
+pub(super) struct StreamScanoutRgba {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) rgba: Vec<u8>,
+}
+
+pub(super) fn capture_stream_scanout_rgba() -> Result<StreamScanoutRgba, CaptureError> {
+    let output = super::OutputId::from_slot(0).ok_or(CaptureError::NoScanout)?;
+    let windows = super::visible_windows_for_output(output);
+    let rects = super::slot4_service::presented_rects();
+    let capture = capture_windows(windows.as_slice(), rects.as_slice())?;
+    Ok(StreamScanoutRgba {
+        width: capture.width,
+        height: capture.height,
+        rgba: capture.rgba,
+    })
 }
 
 /// Arm one composition capture. Calls are bounded so a burst of side-button

@@ -61,6 +61,7 @@ fn submit_tenant_scene_aabb_rcs(
         EngineClass::RenderCompute,
         hwlrca_lo,
         hwlrca_hi,
+        crate::gpu::physical::PhysicalContextPriority::KernelNormal,
     ) {
         Ok(token) => token,
         Err(_) => {

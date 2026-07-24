@@ -11,9 +11,9 @@ mod font_stamp;
 mod frame_pool;
 mod gpgpu_preview_consumer;
 mod gpgpu_svg_probe_consumer;
-#[cfg(feature = "trueos_h264_encode_probe")]
-mod h264_encode_probe;
-#[cfg(feature = "trueos_h264_encode_probe")]
+#[cfg(feature = "trueos_h264_encode_stream")]
+mod h264_encode_stream;
+#[cfg(feature = "trueos_h264_encode_stream")]
 mod h264_encode_udp;
 mod input_broker;
 mod screenshot;
@@ -86,8 +86,8 @@ pub(crate) use gpgpu_svg_probe_consumer::{
     GpgpuSvgProbeConfig, gpgpu_svg_probe_consumer_service_task, gpgpu_svg_probe_status,
     request_gpgpu_svg_probe_start, request_gpgpu_svg_probe_stop,
 };
-#[cfg(feature = "trueos_h264_encode_probe")]
-pub(crate) use h264_encode_probe::ui4_h264_encode_probe_task;
+#[cfg(feature = "trueos_h264_encode_stream")]
+pub(crate) use h264_encode_stream::ui4_h264_encode_stream_task;
 pub(crate) use input_broker::{
     Ui4ButtonPhase, Ui4InputEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent, Ui4VisualRect,
     focused_keyboard_state, software_cursor_visuals, take_owner_input_events,

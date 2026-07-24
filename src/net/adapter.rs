@@ -175,6 +175,9 @@ const MAX_SOCKETS: usize = crate::allcaps::net::MAX_SOCKETS;
 const MAX_DRAIN_PER_LOOP: usize = crate::allcaps::net::MAX_DRAIN_PER_LOOP;
 const TCP_RX_BUF_BYTES: usize = crate::allcaps::net::TCP_RX_BUF_BYTES;
 const TCP_TX_BUF_BYTES: usize = crate::allcaps::net::TCP_TX_BUF_BYTES;
+const UDP_RX_BUF_BYTES: usize = 2 * 1024;
+const UDP_TX_BUF_BYTES_DEFAULT: usize = 2 * 1024;
+const UDP_TX_BUF_BYTES_MAX: usize = 64 * 1024;
 const ICMP_IDENT: u16 = 0x1234;
 const ICMP_VNET_MAX_INFLIGHT: usize = crate::allcaps::net::ICMP_VNET_MAX_INFLIGHT;
 const ICMP_VNET_TIMEOUT_MS: i64 = crate::allcaps::net::ICMP_VNET_TIMEOUT_MS;
@@ -519,6 +522,10 @@ pub enum NetCommand {
     OpenUdp {
         port: u16,
     },
+    OpenUdpWithTxBuffer {
+        port: u16,
+        tx_buffer_bytes: usize,
+    },
     OpenTcpListen {
         port: u16,
     },
@@ -531,6 +538,12 @@ pub enum NetCommand {
     SendUdp {
         handle: NetHandle,
         remote: NetEndpoint,
+        data: Vec<u8>,
+    },
+    SendUdpChecked {
+        handle: NetHandle,
+        remote: NetEndpoint,
+        receipt: u32,
         data: Vec<u8>,
     },
     SendUdpV6 {
@@ -675,6 +688,50 @@ struct AppQueues {
 }
 
 static APP_QUEUES: spin::Mutex<Vec<AppQueues>> = spin::Mutex::new(Vec::new());
+
+#[derive(Clone, Copy)]
+struct CheckedUdpSendResult {
+    owner: &'static str,
+    handle: NetHandle,
+    receipt: u32,
+    result: Result<(), &'static str>,
+}
+
+const CHECKED_UDP_SEND_RESULTS_CAP: usize = 64;
+static CHECKED_UDP_SEND_RESULTS: spin::Mutex<VecDeque<CheckedUdpSendResult>> =
+    spin::Mutex::new(VecDeque::new());
+static CHECKED_UDP_SEND_RESULT_DROPS: AtomicU64 = AtomicU64::new(0);
+
+fn publish_checked_udp_send_result(
+    owner: &'static str,
+    handle: NetHandle,
+    receipt: u32,
+    result: Result<(), &'static str>,
+) {
+    let mut results = CHECKED_UDP_SEND_RESULTS.lock();
+    if results.len() >= CHECKED_UDP_SEND_RESULTS_CAP {
+        let _ = results.pop_front();
+        CHECKED_UDP_SEND_RESULT_DROPS.fetch_add(1, Ordering::Relaxed);
+    }
+    results.push_back(CheckedUdpSendResult {
+        owner,
+        handle,
+        receipt,
+        result,
+    });
+}
+
+pub fn pop_checked_udp_send_result(
+    owner: &'static str,
+    handle: NetHandle,
+    receipt: u32,
+) -> Option<Result<(), &'static str>> {
+    let mut results = CHECKED_UDP_SEND_RESULTS.lock();
+    let index = results.iter().position(|result| {
+        result.owner == owner && result.handle == handle && result.receipt == receipt
+    })?;
+    results.remove(index).map(|result| result.result)
+}
 
 pub fn register_app_queues(
     name: &'static str,
@@ -2254,16 +2311,24 @@ impl NetService {
         Ok(handle)
     }
 
-    fn open_udp(&mut self, owner: &'static str, port: u16) -> Result<NetHandle, &'static str> {
+    fn open_udp(
+        &mut self,
+        owner: &'static str,
+        port: u16,
+        tx_buffer_bytes: usize,
+    ) -> Result<NetHandle, &'static str> {
         self.require_link_up()?;
         if self.records.len() >= MAX_SOCKETS {
             return Err("no sockets available");
         }
+        if tx_buffer_bytes == 0 || tx_buffer_bytes > UDP_TX_BUF_BYTES_MAX {
+            return Err("bad udp tx buffer size");
+        }
 
         let meta_rx = vec![udp::PacketMetadata::EMPTY; 8];
-        let buf_rx = vec![0u8; 2048];
+        let buf_rx = vec![0u8; UDP_RX_BUF_BYTES];
         let meta_tx = vec![udp::PacketMetadata::EMPTY; 8];
-        let buf_tx = vec![0u8; 2048];
+        let buf_tx = vec![0u8; tx_buffer_bytes];
         let rx = udp::PacketBuffer::new(meta_rx, buf_rx);
         let tx = udp::PacketBuffer::new(meta_tx, buf_tx);
         let mut socket = udp::Socket::new(rx, tx);
@@ -3704,7 +3769,26 @@ impl NetService {
                     let _ = push_event(owner, NetEvent::Error { msg });
                 }
             },
-            NetCommand::OpenUdp { port } => match self.open_udp(owner, port) {
+            NetCommand::OpenUdp { port } => {
+                match self.open_udp(owner, port, UDP_TX_BUF_BYTES_DEFAULT) {
+                    Ok(handle) => {
+                        let _ = push_event(
+                            owner,
+                            NetEvent::Opened {
+                                handle,
+                                kind: SocketKind::Udp,
+                            },
+                        );
+                    }
+                    Err(msg) => {
+                        let _ = push_event(owner, NetEvent::Error { msg });
+                    }
+                }
+            }
+            NetCommand::OpenUdpWithTxBuffer {
+                port,
+                tx_buffer_bytes,
+            } => match self.open_udp(owner, port, tx_buffer_bytes) {
                 Ok(handle) => {
                     let _ = push_event(
                         owner,
@@ -3849,6 +3933,38 @@ impl NetService {
                 } else {
                     let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
                 }
+            }
+            NetCommand::SendUdpChecked {
+                handle,
+                remote,
+                receipt,
+                data,
+            } => {
+                let result =
+                    if let Some(result) = self.send_loopback_udp(handle, remote, data.clone()) {
+                        result.map_err(|()| "not udp")
+                    } else if !self.link_up() {
+                        Err("link down")
+                    } else if let Some(rec) = self.find_record(handle) {
+                        if rec.kind != SocketKind::Udp {
+                            Err("not udp")
+                        } else {
+                            let socket_handle = rec.socket;
+                            let endpoint = IpEndpoint::new(
+                                IpAddress::Ipv4(Ipv4Address::from_octets(remote.addr)),
+                                remote.port,
+                            );
+                            let socket = self.sockets.get_mut::<udp::Socket>(socket_handle);
+                            match socket.send_slice(&data, endpoint) {
+                                Ok(()) => Ok(()),
+                                Err(udp::SendError::BufferFull) => Err("udp send fail"),
+                                Err(udp::SendError::Unaddressable) => Err("udp unaddressable"),
+                            }
+                        }
+                    } else {
+                        Err("bad handle")
+                    };
+                publish_checked_udp_send_result(owner, handle, receipt, result);
             }
             NetCommand::SendUdpV6 {
                 handle,

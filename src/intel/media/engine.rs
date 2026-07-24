@@ -249,6 +249,8 @@ pub(super) enum MediaVcs0LaneAcquireError {
     Quarantined,
 }
 
+pub(super) const MEDIA_VCS0_INTERLEAVE_WAIT_NS: u64 = 50_000_000;
+
 /// Exclusive ownership of the generic VCS0 execution state. A timed-out job
 /// consumes this guard with `quarantine`, deliberately preventing a different
 /// mode or transport from touching an engine whose context may still be live.
@@ -332,7 +334,7 @@ impl Drop for MediaVcs0SessionGuard {
     }
 }
 
-pub(crate) fn try_reserve_avc_decode_session()
+pub(super) fn try_reserve_avc_decode_session()
 -> Result<MediaVcs0SessionGuard, MediaVcs0LaneAcquireError> {
     let mut state = MEDIA_VCS0_EXECUTION.lock();
     if state.quarantined.is_some() {
@@ -360,6 +362,13 @@ pub(super) fn try_acquire_vcs0_lane(
     match (state.reservation, session_generation) {
         (Some(reservation), Some(generation))
             if reservation.mode == mode && reservation.generation == generation => {}
+        // The live UI4 encoder is an intentional frame-level peer of an AVC
+        // playback reservation. `active` below still guarantees that the GuC
+        // encode and execlists decode transports never touch VCS0 concurrently.
+        // Other probes/codecs remain excluded for the whole decode session.
+        (Some(reservation), None)
+            if reservation.mode == MediaVcs0JobMode::AVC_DECODE_EXECLISTS
+                && mode == MediaVcs0JobMode::AVC_ENCODE_GUC => {}
         (None, None) => {}
         _ => {
             return Err(MediaVcs0LaneAcquireError::Busy);
@@ -378,6 +387,36 @@ pub(super) fn try_acquire_vcs0_lane(
         completed: false,
         release_on_drop: true,
     })
+}
+
+pub(super) fn acquire_vcs0_lane_bounded(
+    mode: MediaVcs0JobMode,
+    session_generation: Option<u64>,
+    wait_ns: u64,
+) -> Result<MediaVcs0LaneGuard, MediaVcs0LaneAcquireError> {
+    match try_acquire_vcs0_lane(mode, session_generation) {
+        Ok(lane) => return Ok(lane),
+        Err(MediaVcs0LaneAcquireError::Quarantined) => {
+            return Err(MediaVcs0LaneAcquireError::Quarantined);
+        }
+        Err(MediaVcs0LaneAcquireError::Busy) => {}
+    }
+
+    // Keep the normal decode path identical to the original try-acquire fast
+    // path. Reading the global Chronos snapshot can contend with timer
+    // publication, so only pay for a deadline after another VCS0 job was
+    // actually observed.
+    let deadline = crate::chronos::monotonic_nanos().saturating_add(wait_ns);
+    loop {
+        match try_acquire_vcs0_lane(mode, session_generation) {
+            Err(MediaVcs0LaneAcquireError::Busy)
+                if crate::chronos::monotonic_nanos() < deadline =>
+            {
+                core::hint::spin_loop();
+            }
+            result => return result,
+        }
+    }
 }
 
 pub(crate) fn set_output_surface_probes_enabled(enabled: bool) -> bool {
@@ -629,17 +668,21 @@ pub(crate) fn encode_readiness() -> MediaEncodeReadiness {
     // path is migrated, and encoder readiness requires the probe to have
     // passed on this boot. h264_cmd remains a decode recipe; the separate
     // avc_encode_probe module now owns the fixed one-IDR VDEnc/MFX command
-    // graph. Coded-data writeback validation is still a separate gate.
+    // graph and promotes a submission only after command-stream status
+    // writeback and Annex-B coded-data validation.
     let guc_media_context_wired = true;
     let guc_media_transport_probe_passed = super::guc_probe::passed();
-    #[cfg(feature = "trueos_h264_encode_probe")]
+    #[cfg(feature = "trueos_h264_encode_stream")]
     let avc_encode_commands_wired = super::avc_encode_probe::commands_wired();
-    #[cfg(not(feature = "trueos_h264_encode_probe"))]
+    #[cfg(not(feature = "trueos_h264_encode_stream"))]
     let avc_encode_commands_wired = false;
-    #[cfg(feature = "trueos_h264_encode_probe")]
+    #[cfg(feature = "trueos_h264_encode_stream")]
     let avc_encode_probe_passed = super::avc_encode_probe::passed();
-    #[cfg(not(feature = "trueos_h264_encode_probe"))]
+    #[cfg(not(feature = "trueos_h264_encode_stream"))]
     let avc_encode_probe_passed = false;
+    #[cfg(feature = "trueos_h264_encode_stream")]
+    let coded_bitstream_output_wired = super::avc_encode_probe::coded_output_validated();
+    #[cfg(not(feature = "trueos_h264_encode_stream"))]
     let coded_bitstream_output_wired = false;
     let ready = device_claimed
         && vdbox_discovered
