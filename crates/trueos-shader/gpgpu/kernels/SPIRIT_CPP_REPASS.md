@@ -46,7 +46,7 @@ The repass preserves:
 - kernel names and pointer argument order;
 - stable original background IDs `2..10`, new C++ background ID `11`, and
   sprite IDs `0..15`;
-- the version-1, 32-dword Spirit control page;
+- the version-1 layout in dwords 0–31 plus append-only clock dword 32;
 - SIMD16 and 96 bytes of local-ID payload;
 - background 2-BTI / 64-byte cross-thread ABI;
 - sprite 3-BTI / 96-byte cross-thread ABI;
@@ -60,7 +60,7 @@ byte-identical two-root reproduction.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `spirit_vfx_background_rgba8.bin` | 109,064 | `6e1f90a2af800103f95fcca3de25320f0b9b7b73fbf941d7852ec408b1375f19` |
+| `spirit_vfx_background_rgba8.bin` | 109,624 | `4c82592a441b88902491b6d3cf8f99a3524a41178a347928cf5845e0872841f7` |
 | `spirit_vfx_sprite_rgba8.bin` | 656,728 | `2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac` |
 
 The background maps at `0x0D430000`; its larger C++ image requires the sprite
@@ -118,6 +118,8 @@ restores transparent background plus `Original / clean`.
 
 Idle mode selects `Magic time circle + Aura bloom` transiently. TRUEOS prefers
 NTP and falls back to the Limine boot timestamp; its system timezone is UTC.
+The sprite walker retains smooth 60 Hz animation time in dword 4, while only
+the clock background reads quantized wall time from dword 32.
 All live backgrounds share the single `SPIRIT_BACKGROUND_PRESENT_SCALE` value
 `1.171875`, mapping the authored `0.32` reference radius to 96 pixels and
 leaving a 32-pixel margin in the 256-pixel cursor surface.

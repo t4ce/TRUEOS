@@ -116,6 +116,7 @@ struct options {
     bool parity_q8 = false;
     bool parity_q8_packed = false;
     bool parity_native_hi = false;
+    bool parity_packed_hi = false;
     bool parity_igpu_hi = false;
     bool parity_igpu_packed_hi = false;
 };
@@ -236,6 +237,9 @@ options parse_options(int argc, char ** argv) {
         } else if (argument == "--parity-native-hi") {
             result.parity_native_hi = true;
             result.prompt = "hi";
+        } else if (argument == "--parity-packed-hi") {
+            result.parity_packed_hi = true;
+            result.prompt = "hi";
         } else if (argument == "--parity-igpu-hi") {
             result.parity_igpu_hi = true;
             result.prompt = "hi";
@@ -267,6 +271,7 @@ options parse_options(int argc, char ** argv) {
             !result.parity_q8 &&
             !result.parity_q8_packed &&
             !result.parity_native_hi &&
+            !result.parity_packed_hi &&
             !result.parity_igpu_hi &&
             !result.parity_igpu_packed_hi) {
             result.prompt = std::string(argument);
@@ -279,6 +284,7 @@ options parse_options(int argc, char ** argv) {
         static_cast<unsigned>(result.parity_q8) +
         static_cast<unsigned>(result.parity_q8_packed) +
         static_cast<unsigned>(result.parity_native_hi) +
+        static_cast<unsigned>(result.parity_packed_hi) +
         static_cast<unsigned>(result.parity_igpu_hi) +
         static_cast<unsigned>(result.parity_igpu_packed_hi);
     const unsigned execution_modes =
@@ -302,6 +308,7 @@ options parse_options(int argc, char ** argv) {
             "       lfm25-fixed [--threads N] --parity-q8\n"
             "       lfm25-fixed [--threads N] --parity-q8-packed\n"
             "       lfm25-fixed [--threads N] --parity-native-hi\n"
+            "       lfm25-fixed --parity-packed-hi\n"
             "       lfm25-fixed --parity-igpu-hi\n"
             "       lfm25-fixed --parity-igpu-packed-hi");
     }
@@ -440,6 +447,7 @@ int run(const options & arguments) {
     llama_model_params model_params = llama_model_default_params();
     model_params.vocab_only =
         arguments.parity_native_hi ||
+        arguments.parity_packed_hi ||
         arguments.parity_igpu_hi ||
         arguments.parity_igpu_packed_hi ||
         arguments.native ||
@@ -472,6 +480,7 @@ int run(const options & arguments) {
 
     if (
         arguments.parity_native_hi ||
+        arguments.parity_packed_hi ||
         arguments.parity_igpu_hi ||
         arguments.parity_igpu_packed_hi ||
         arguments.native ||
@@ -537,6 +546,7 @@ int run(const options & arguments) {
         }
         const bool parity_custom_hi =
             arguments.parity_native_hi ||
+            arguments.parity_packed_hi ||
             arguments.parity_igpu_hi ||
             arguments.parity_igpu_packed_hi;
         const bool use_igpu =
@@ -547,6 +557,8 @@ int run(const options & arguments) {
         const bool use_packed =
             arguments.igpu_packed ||
             arguments.parity_igpu_packed_hi;
+        const bool use_packed_reference =
+            arguments.parity_packed_hi;
         const auto result = trueos::lfm25::run_native_decode(
             native_path,
             contract_path,
@@ -555,7 +567,9 @@ int run(const options & arguments) {
             parity_custom_hi ? 0 : arguments.max_reply_tokens,
             stop_tokens,
             static_cast<std::uint32_t>(arguments.threads),
-            use_packed
+            use_packed_reference
+                ? trueos::lfm25::native_projection_backend::cpu_packed_reference
+                : use_packed
                 ? trueos::lfm25::native_projection_backend::intel_igc_packed
                 : use_igpu
                     ? trueos::lfm25::native_projection_backend::intel_igc
@@ -578,6 +592,12 @@ int run(const options & arguments) {
             std::fputc('\n', stderr);
             fail("native C++ hi token trace differs from the sealed b10075 oracle");
         }
+        if (parity_custom_hi &&
+            use_packed_reference &&
+            (result.projection_launches != 930 ||
+             result.projection_weight_bytes != 3'765'698'560ULL)) {
+            fail("packed C++ hi projection accounting differs from the fixed graph");
+        }
         std::string reply;
         if (parity_custom_hi) {
             reply =
@@ -591,25 +611,40 @@ int run(const options & arguments) {
         std::fputc('\n', stdout);
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - started);
+        const double projection_gbps =
+            result.projection_nanoseconds == 0
+                ? 0.0
+                : static_cast<double>(result.projection_weight_bytes)
+                    / static_cast<double>(result.projection_nanoseconds);
         if (parity_custom_hi) {
             std::fprintf(
                 stderr,
                 "lfm25-fixed: PASS %s-hi prompt_tokens=10 decisions=10 "
                 "first_reply_token=36309 decoded=Hello threads=%d elapsed_ms=%lld "
                 "projection_device=\"%s\" projection_launches=%llu "
-                "projection_kernel_ms=%.3f\n",
-                use_packed ? "igpu-packed" : use_igpu ? "igpu" : "native",
+                "projection_weight_mb=%.3f projection_kernel_ms=%.3f "
+                "projection_effective_gbps=%.3f\n",
+                use_packed_reference
+                    ? "packed"
+                    : use_packed
+                        ? "igpu-packed"
+                        : use_igpu
+                            ? "igpu"
+                            : "native",
                 arguments.threads,
                 static_cast<long long>(elapsed.count()),
                 result.projection_device.c_str(),
                 static_cast<unsigned long long>(result.projection_launches),
-                static_cast<double>(result.projection_nanoseconds) / 1'000'000.0);
+                static_cast<double>(result.projection_weight_bytes) / 1'000'000.0,
+                static_cast<double>(result.projection_nanoseconds) / 1'000'000.0,
+                projection_gbps);
         } else {
             std::fprintf(
                 stderr,
                 "lfm25-fixed: prompt_tokens=%zu first_token=%u reply_tokens=%zu "
                 "stop=%s threads=%d elapsed_ms=%lld projection_device=\"%s\" "
-                "projection_launches=%llu projection_kernel_ms=%.3f\n",
+                "projection_launches=%llu projection_weight_mb=%.3f "
+                "projection_kernel_ms=%.3f projection_effective_gbps=%.3f\n",
                 prompt_tokens.size(),
                 result.next_tokens.at(prompt_tokens.size() - 1),
                 result.generated_tokens.size(),
@@ -618,20 +653,23 @@ int run(const options & arguments) {
                 static_cast<long long>(elapsed.count()),
                 result.projection_device.c_str(),
                 static_cast<unsigned long long>(result.projection_launches),
-                static_cast<double>(result.projection_nanoseconds) / 1'000'000.0);
+                static_cast<double>(result.projection_weight_bytes) / 1'000'000.0,
+                static_cast<double>(result.projection_nanoseconds) / 1'000'000.0,
+                projection_gbps);
         }
         if (use_igpu) {
             std::fprintf(
                 stderr,
                 "lfm25-fixed: igpu_runtime platform=\"%s\" driver=\"%s\" "
                 "il=\"%s\" weight_layout=%s model_bytes=%zu "
-                "subnormal_scales=%llu program_binary_bytes=%zu "
+                "model_sha256=%s subnormal_scales=%llu program_binary_bytes=%zu "
                 "program_binary_sha256=%s\n",
                 result.projection_platform.c_str(),
                 result.projection_driver.c_str(),
                 result.projection_il.c_str(),
                 result.projection_weight_layout.c_str(),
                 result.projection_model_bytes,
+                result.projection_model_sha256.c_str(),
                 static_cast<unsigned long long>(
                     result.projection_subnormal_scales),
                 result.projection_program_binary_bytes,

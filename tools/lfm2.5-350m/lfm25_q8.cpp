@@ -731,24 +731,29 @@ class native_decoder {
           contract_(read_contract(contract_path)),
           sidecar_(sidecar_path),
           threads_(std::max(1U, threads)) {
-        if (backend == native_projection_backend::intel_igc ||
-            backend == native_projection_backend::intel_igc_packed) {
-            std::vector<packed_q8_tensor_spec> packed_tensors;
-            const bool use_packed =
-                backend == native_projection_backend::intel_igc_packed;
-            if (use_packed) {
-                packed_tensors.reserve(contract_.size());
-                for (const auto & [key, value] : contract_) {
-                    static_cast<void>(key);
-                    if (value.format == 2 && value.rank == 2) {
-                        packed_tensors.push_back({
-                            .offset = value.offset,
-                            .columns = value.columns,
-                            .rows = value.rows,
-                        });
-                    }
+        const bool use_packed =
+            backend == native_projection_backend::cpu_packed_reference ||
+            backend == native_projection_backend::intel_igc_packed;
+        std::vector<packed_q8_tensor_spec> packed_tensors;
+        if (use_packed) {
+            packed_tensors.reserve(contract_.size());
+            for (const auto & [key, value] : contract_) {
+                static_cast<void>(key);
+                if (value.format == 2 && value.rank == 2) {
+                    packed_tensors.push_back({
+                        .offset = value.offset,
+                        .columns = value.columns,
+                        .rows = value.rows,
+                    });
                 }
             }
+        }
+        if (backend == native_projection_backend::cpu_packed_reference) {
+            packed_cpu_ = std::make_unique<packed_q8_model>(
+                pack_q8x16_model(native_.view(), packed_tensors));
+        }
+        if (backend == native_projection_backend::intel_igc ||
+            backend == native_projection_backend::intel_igc_packed) {
             igpu_ = std::make_unique<intel_igc_projector>(
                 igc_spirv,
                 native_.view().data(),
@@ -826,6 +831,32 @@ class native_decoder {
     std::vector<float> project_tensor(
         const descriptor & tensor,
         std::span<const float> input) {
+        if (packed_cpu_) {
+            if (tensor.format != 2 ||
+                tensor.rank != 2 ||
+                tensor.columns != input.size() ||
+                tensor.columns % kQ8Values != 0) {
+                throw std::runtime_error(
+                    "fixed packed CPU Q8 tensor descriptor rejected");
+            }
+            const auto activation = quantize(input);
+            const auto packed_activation = pack_q8x16_activation(
+                std::as_bytes(std::span<const q8_block>(activation)),
+                tensor.columns);
+            ++packed_cpu_launches_;
+            packed_cpu_weight_bytes_ +=
+                static_cast<std::uint64_t>(tensor.rows)
+                * (static_cast<std::uint64_t>(tensor.columns) / kQ8Values)
+                * kQ8Bytes;
+            return project_q8x16_reference(
+                packed_cpu_->bytes,
+                {
+                    .offset = tensor.offset,
+                    .columns = tensor.columns,
+                    .rows = tensor.rows,
+                },
+                packed_activation);
+        }
         if (!igpu_) {
             return project(native_.view(), tensor, input, threads_);
         }
@@ -990,12 +1021,27 @@ class native_decoder {
         return igpu_.get();
     }
 
+    const packed_q8_model * packed_cpu() const {
+        return packed_cpu_.get();
+    }
+
+    std::uint64_t packed_cpu_launches() const {
+        return packed_cpu_launches_;
+    }
+
+    std::uint64_t packed_cpu_weight_bytes() const {
+        return packed_cpu_weight_bytes_;
+    }
+
   private:
     mapped_file native_;
     std::map<std::pair<std::uint8_t, tensor_role>, descriptor> contract_;
     f32_sidecar sidecar_;
     std::uint32_t threads_;
     std::unique_ptr<intel_igc_projector> igpu_;
+    std::unique_ptr<packed_q8_model> packed_cpu_;
+    std::uint64_t packed_cpu_launches_ = 0;
+    std::uint64_t packed_cpu_weight_bytes_ = 0;
     std::uint32_t position_ = 0;
     std::array<std::vector<std::array<float, 2>>, kLayers> shortconv_;
     std::array<kv_cache, kLayers> kv_;
@@ -1211,8 +1257,21 @@ native_decode_result run_native_decode(
         result.projection_model_bytes = igpu->resident_model_bytes();
         result.projection_subnormal_scales =
             igpu->packed_subnormal_scales();
+        result.projection_model_sha256 =
+            igpu->packed_model_sha256();
         result.projection_launches = igpu->launches();
         result.projection_nanoseconds = igpu->kernel_nanoseconds();
+        result.projection_weight_bytes =
+            igpu->projected_weight_bytes();
+    } else if (const auto * packed = decoder.packed_cpu()) {
+        result.projection_device = "CPU packed Q8x16 reference";
+        result.projection_weight_layout = "pair1088-x16-reference";
+        result.projection_model_sha256 = packed->sha256;
+        result.projection_model_bytes = packed->bytes.size();
+        result.projection_subnormal_scales = packed->subnormal_scales;
+        result.projection_launches = decoder.packed_cpu_launches();
+        result.projection_weight_bytes =
+            decoder.packed_cpu_weight_bytes();
     } else {
         result.projection_device = "CPU AVX2/F16C/FMA";
     }

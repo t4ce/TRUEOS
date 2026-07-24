@@ -9,9 +9,12 @@ TRUEOS. It is a GPU replay, not a CPU rewrite:
    `spirit_vfx_background_rgba8.cl` and `spirit_vfx_sprite_rgba8.cl` reference
    sources. Environment-selected C++ SPIR-V exercises the production repass.
 3. Every display tick renders the ten selected procedural backgrounds in
-   stable ID order, 2 through 11. ID 11 is the C++ `MagicTimeCircle`.
+   stable ID order, 2 through 11. ID 11 is the C++ `MagicTimeCircle`; its cell
+   also enables `AuraBloom`, matching Spirit's live Idle pairing.
 4. Each cell uses the kernel's `256x256`, local `16x1` dispatch and exact
-   32-dword control page.
+   33-dword control page. Dword 4 remains smooth 60 Hz animation time for the
+   sprite pass; append-only dword 32 carries clock seconds for
+   `MagicTimeCircle`.
 5. Shader time advances at Spirit's 60 Hz target while Lilly independently
    advances one asset frame every 110 ms, exactly as recorded in
    `tools/Lilly.catalog`.

@@ -582,7 +582,10 @@ const LAB256_BACKGROUND_ALPHA: f32 = 0.0;
 // walker authors the procedural alpha background and the second source-over
 // composites one immutable resident Lilly RGBA frame into the cursor target.
 const SPIRIT_VFX_SIZE: u32 = 256;
-const SPIRIT_VFX_CONTROL_DWORDS: usize = 32;
+// Dwords 0..31 retain the original preview-v1 layout. Dword 32 is an
+// append-only UTC seconds-of-day extension consumed only by MagicTimeCircle;
+// dword 4 remains smooth animation time for the independent sprite walker.
+const SPIRIT_VFX_CONTROL_DWORDS: usize = 33;
 const SPIRIT_VFX_CONTROL_BYTES: usize = SPIRIT_VFX_CONTROL_DWORDS * 4;
 const SPIRIT_VFX_PAGE_BYTES: usize = 4096;
 const SPIRIT_VFX_CONTROL_GPU: u64 = 0x090A_0000;

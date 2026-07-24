@@ -355,13 +355,21 @@ struct intel_igc_projector::implementation {
             layout_name = "native-rowmajor-q8";
         }
 
+        const cl_mem_flags weight_flags =
+            CL_MEM_READ_ONLY |
+            (layout == intel_igc_weight_layout::packed_q8x16_pair
+                ? CL_MEM_COPY_HOST_PTR
+                : CL_MEM_USE_HOST_PTR);
         weights = buffer_owner(clCreateBuffer(
             context.get(),
-            CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
+            weight_flags,
             native_weight_bytes,
             weight_storage,
             &error));
         require(error, "clCreateBuffer(weights)");
+        if (layout == intel_igc_weight_layout::packed_q8x16_pair) {
+            std::vector<std::byte>().swap(packed_model.bytes);
+        }
         activation = buffer_owner(clCreateBuffer(
             context.get(),
             CL_MEM_READ_ONLY,
@@ -489,6 +497,10 @@ struct intel_igc_projector::implementation {
         if (finished >= started) {
             kernel_ns += finished - started;
         }
+        weight_bytes +=
+            static_cast<std::uint64_t>(rows)
+            * (static_cast<std::uint64_t>(columns) / 32U)
+            * 34U;
         ++launch_count;
         return result;
     }
@@ -515,6 +527,7 @@ struct intel_igc_projector::implementation {
     packed_q8_model packed_model;
     std::uint64_t launch_count = 0;
     std::uint64_t kernel_ns = 0;
+    std::uint64_t weight_bytes = 0;
 };
 
 intel_igc_projector::intel_igc_projector(
@@ -573,6 +586,10 @@ std::uint64_t intel_igc_projector::kernel_nanoseconds() const {
     return implementation_->kernel_ns;
 }
 
+std::uint64_t intel_igc_projector::projected_weight_bytes() const {
+    return implementation_->weight_bytes;
+}
+
 const std::string & intel_igc_projector::weight_layout() const {
     return implementation_->layout_name;
 }
@@ -583,6 +600,10 @@ std::size_t intel_igc_projector::resident_model_bytes() const {
 
 std::uint64_t intel_igc_projector::packed_subnormal_scales() const {
     return implementation_->packed_model.subnormal_scales;
+}
+
+const std::string & intel_igc_projector::packed_model_sha256() const {
+    return implementation_->packed_model.sha256;
 }
 
 } // namespace trueos::lfm25

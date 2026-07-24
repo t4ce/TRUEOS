@@ -47,9 +47,11 @@ class intel_igc_projector {
     const std::string & program_binary_sha256() const;
     std::uint64_t launches() const;
     std::uint64_t kernel_nanoseconds() const;
+    std::uint64_t projected_weight_bytes() const;
     const std::string & weight_layout() const;
     std::size_t resident_model_bytes() const;
     std::uint64_t packed_subnormal_scales() const;
+    const std::string & packed_model_sha256() const;
 
   private:
     struct implementation;

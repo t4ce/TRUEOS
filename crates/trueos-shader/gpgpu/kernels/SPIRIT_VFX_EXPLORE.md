@@ -127,13 +127,14 @@ pixel width, with zero disabling the operation.
 
 ## Control page
 
-The GPU reads one 32-dword, versioned control block at PPGTT `0x090A0000`.
+The GPU reads one 33-dword, versioned control block at PPGTT `0x090A0000`.
 It carries selected implemented modes, background parameters and
 colors, transform, sampling, alpha cutoff, sprite parameters and colors,
 resident-source geometry, destination pitch, UI revision, the half-second
-presentation-rate estimate, and final edge-feather width. The existing time
-dword carries animation-frame time for IDs 2 through 10 and exact integer UTC
-seconds-of-day for `Magic time circle` ID 11. Both kernel entry
+presentation-rate estimate, final edge-feather width, and an append-only clock
+extension. Dword 4 always carries smooth animation-frame time for the sprite
+walker and background IDs 2 through 10. Dword 32 carries exact integer UTC
+seconds-of-day for `Magic time circle` ID 11 only. Both kernel entry
 points validate magic/version and their own surface dimensions.
 
 ## Offline selection grids
@@ -150,7 +151,7 @@ GPU; neither carries a CPU or duplicate shader implementation.
 
 | Artifact | Bytes | BTIs | Cross-thread | Per-thread | SHA-256 |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `spirit_vfx_background_rgba8.bin` | 109,064 | 2 | 64 | 96 | `6e1f90a2af800103f95fcca3de25320f0b9b7b73fbf941d7852ec408b1375f19` |
+| `spirit_vfx_background_rgba8.bin` | 109,624 | 2 | 64 | 96 | `4c82592a441b88902491b6d3cf8f99a3524a41178a347928cf5845e0872841f7` |
 | `spirit_vfx_sprite_rgba8.bin` | 656,728 | 3 | 96 | 96 | `2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac` |
 
 Both artifacts use text offset `0x40` within their own Zebin. The clean default

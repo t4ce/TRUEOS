@@ -226,12 +226,13 @@ The next application step reuses Spirit's already-proven cursor-plane
 architecture instead of introducing another presentation path.
 `spirit_vfx_background_rgba8.clcpp` and `spirit_vfx_sprite_rgba8.clcpp` compile
 the retained compositions as exact ABI twins, then enable C++-only templated
-secondary-detail layers. All stable effect IDs, the 32-dword control page,
+secondary-detail layers. All stable effect IDs, the original control layout
+plus append-only clock dword 32,
 binding counts, payload sizes, one/two-walker selection, ordered dependency,
 GuC post-sync release, and `CUR_SURFLIVE` proof remain unchanged.
 
-The C++ background is 109,064 bytes with SHA-256
-`6e1f90a2af800103f95fcca3de25320f0b9b7b73fbf941d7852ec408b1375f19`.
+The C++ background is 109,624 bytes with SHA-256
+`4c82592a441b88902491b6d3cf8f99a3524a41178a347928cf5845e0872841f7`.
 The C++ sprite is 656,728 bytes with SHA-256
 `2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac`.
 Both are exact to `8086:4680` revision `0x0c`, SIMD16, 128 GRFs, and zero

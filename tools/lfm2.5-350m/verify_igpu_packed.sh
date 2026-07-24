@@ -49,7 +49,7 @@ if ! rg -q 'PASS igpu-packed-hi .*projection_launches=930 ' \
     exit 1
 fi
 if ! rg -q \
-    'igpu_runtime .*weight_layout=pair1088-x16-dp4a model_bytes=376701952 subnormal_scales=25994 .*program_binary_bytes=[1-9][0-9]* .*program_binary_sha256=[0-9a-f]{64}' \
+    'igpu_runtime .*weight_layout=pair1088-x16-dp4a model_bytes=376701952 model_sha256=90876f02e0cc224fe23e01c8739dcbb94d7bcc8fbfa3d36204c6267a440f5fd8 subnormal_scales=25994 .*program_binary_bytes=[1-9][0-9]* .*program_binary_sha256=[0-9a-f]{64}' \
     "$temp_dir/parity.stats"; then
     printf 'lfm25-igpu-packed: packed model or NEO binary admission failed\n' >&2
     exit 1

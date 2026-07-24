@@ -24,6 +24,7 @@
 #define VFX_CTRL_POSITION_X_F32    11u
 #define VFX_CTRL_POSITION_Y_F32    12u
 #define VFX_CTRL_DST_PITCH         27u
+#define VFX_CTRL_CLOCK_TIME_F32    32u
 
 static inline float vfx_finite_or(float value, float fallback)
 {
@@ -362,7 +363,10 @@ __kernel void spirit_vfx_background_rgba8(
     float2 point = (uv - center) / max(0.2f, scale);
     float radius = native_sqrt(max(dot(point, point), 1.0e-8f));
     float angle = atan2(point.y, point.x);
-    float time = vfx_finite_or(as_float(control[VFX_CTRL_TIME_F32]), 0.0f);
+    uint background_id = control[VFX_CTRL_BACKGROUND_ID];
+    float time = background_id == 11u
+        ? vfx_finite_or(as_float(control[VFX_CTRL_CLOCK_TIME_F32]), 0.0f)
+        : vfx_finite_or(as_float(control[VFX_CTRL_TIME_F32]), 0.0f);
     float opacity = clamp(
         vfx_finite_or(as_float(control[VFX_CTRL_BG_OPACITY_F32]), 0.0f),
         0.0f,
@@ -378,7 +382,6 @@ __kernel void spirit_vfx_background_rgba8(
 
     float alpha = 0.0f;
     float color_mix = 0.0f;
-    uint background_id = control[VFX_CTRL_BACKGROUND_ID];
     if (background_id == 2u) {
         // preview.html: Energy ring
         float ring_radius = 0.31f + 0.012f * native_sin(time * speed * 2.0f);

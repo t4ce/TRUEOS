@@ -167,12 +167,10 @@ fn spirit_vfx_write_control(
                 .then_some(control.background_mode)
                 .unwrap_or(0),
         );
-        let background_time_seconds = if control.background_mode == 11 {
-            control.clock_seconds_of_day.min(86_399) as f32
-        } else {
-            frame as f32 * (1.0 / 60.0)
-        };
-        core::ptr::write_volatile(dwords.add(4), background_time_seconds.to_bits());
+        // Keep the original smooth animation clock for the sprite walker and
+        // every non-clock background. MagicTimeCircle reads its quantized UTC
+        // clock from the append-only dword 32 instead.
+        core::ptr::write_volatile(dwords.add(4), (frame as f32 * (1.0 / 60.0)).to_bits());
         core::ptr::write_volatile(
             dwords.add(5),
             spirit_vfx_bounded(control.background_opacity, 0.0, 1.0, 0.0).to_bits(),
@@ -240,6 +238,10 @@ fn spirit_vfx_write_control(
         core::ptr::write_volatile(
             dwords.add(31),
             spirit_vfx_bounded(control.edge_fade_pixels, 0.0, 16.0, 12.0).to_bits(),
+        );
+        core::ptr::write_volatile(
+            dwords.add(32),
+            (control.clock_seconds_of_day.min(86_399) as f32).to_bits(),
         );
     }
     super::dma_flush(control_buffer.virt, control_buffer.bytes);

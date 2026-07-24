@@ -9,6 +9,7 @@ namespace trueos::lfm25 {
 
 enum class native_projection_backend {
     cpu_avx2,
+    cpu_packed_reference,
     intel_igc,
     intel_igc_packed,
 };
@@ -21,12 +22,14 @@ struct native_decode_result {
     std::string projection_driver;
     std::string projection_il;
     std::string projection_weight_layout;
+    std::string projection_model_sha256;
     std::string projection_program_binary_sha256;
     std::size_t projection_program_binary_bytes = 0;
     std::size_t projection_model_bytes = 0;
     std::uint64_t projection_subnormal_scales = 0;
     std::uint64_t projection_launches = 0;
     std::uint64_t projection_nanoseconds = 0;
+    std::uint64_t projection_weight_bytes = 0;
     bool stopped = false;
 };
 

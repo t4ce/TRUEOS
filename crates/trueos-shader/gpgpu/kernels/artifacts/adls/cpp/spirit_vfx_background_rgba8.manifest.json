@@ -9,10 +9,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "6e1f90a2af800103f95fcca3de25320f0b9b7b73fbf941d7852ec408b1375f19",
-      "size_bytes": 109064,
+      "sha256": "4c82592a441b88902491b6d3cf8f99a3524a41178a347928cf5845e0872841f7",
+      "size_bytes": 109624,
       "type": "relocatable",
-      "ze_info_section_offset": 106024,
+      "ze_info_section_offset": 106584,
       "ze_info_section_size": 2205
     },
     "kernels": [
@@ -130,13 +130,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 35272,
+          "entry_size": 34912,
           "section_alignment": 0,
           "section_name": ".text.spirit_vfx_background_rgba8",
           "section_offset": 64,
-          "section_size": 35456,
-          "sha256": "9e9ec5872226d202abb1226bdc5f5d7e0a9fe1dc196b796db995c974d485b20c",
-          "symbol_size": 35272,
+          "section_size": 35072,
+          "sha256": "f56bc7ab7e0033a98eca7d9b0a8c19f9792df0efeba8dba04e454f9b8970cce7",
+          "symbol_size": 34912,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -152,10 +152,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 35592,
-      "embedded_section_size": 70356,
-      "sha256": "3e145ee259635f16b03e7356c0d99294f984f84eb0ef3d46e673bf730a15abeb",
-      "size_bytes": 70356
+      "embedded_section_offset": 35208,
+      "embedded_section_size": 71304,
+      "sha256": "0acb9fffa911d63999539ca146c19684cabe14284899886f90a55f77508a70be",
+      "size_bytes": 71304
     }
   },
   "provenance": {
@@ -359,8 +359,8 @@
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_background_rgba8.cl",
-        "sha256": "5e410379349f8ddedf482b9a134e0ebb277bc76544437d3ab291c68ea2b4956b",
-        "size_bytes": 24686
+        "sha256": "e3514e08d27d799bfa14192ade069292a8a78b7248a2b08afcb2eadeb88e4672",
+        "size_bytes": 24830
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_background_rgba8.clcpp",

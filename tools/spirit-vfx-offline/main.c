@@ -81,7 +81,7 @@ extern cl_int clReleaseContext(cl_context);
 
 enum {
     SPIRIT_SIZE = 256,
-    CONTROL_DWORDS = 32,
+    CONTROL_DWORDS = 33,
     LILLY_FRAME_COUNT = 7,
     LILLY_FRAME_PERIOD_MS = 110,
     SPIRIT_TARGET_HZ = 60,
@@ -382,10 +382,12 @@ static const char *mode_name(ReplayMode mode) {
 }
 
 static void fill_control(uint32_t control[CONTROL_DWORDS], uint32_t source_width,
-                         uint32_t source_height, float time_seconds, ReplayMode mode,
+                         uint32_t source_height, float animation_time_seconds,
+                         float clock_time_seconds, ReplayMode mode,
                          const RuntimeControls *runtime) {
     memset(control, 0, CONTROL_DWORDS * sizeof(*control));
-    uint32_t frame = (uint32_t)lroundf(fmaxf(time_seconds, 0.0f) * 60.0f);
+    uint32_t frame =
+        (uint32_t)lroundf(fmaxf(animation_time_seconds, 0.0f) * 60.0f);
     float production_time = (float)frame * (1.0f / 60.0f);
 
     control[0] = 0x53564658U; /* SVFX */
@@ -412,8 +414,17 @@ static void fill_control(uint32_t control[CONTROL_DWORDS], uint32_t source_width
     control[14] = float_bits(3.14159265359f);
     control[15] = float_bits(0.02f);
     control[16] = 0; /* nearest / pixel crisp */
-    control[17] = 0; /* Original / clean */
-    control[22] = pack_control_rgb(0x9A, 0x7C, 0xFF);
+    if (mode == REPLAY_MAGIC_TIME_CIRCLE) {
+        /* Match Spirit Idle: MagicTimeCircle background + AuraBloom sprite. */
+        control[17] = 1;
+        control[18] = float_bits(12.0f);
+        control[19] = float_bits(2.5f);
+        control[20] = float_bits(0.0f);
+        control[21] = float_bits(0.0f);
+    } else {
+        control[17] = 0; /* Original / clean */
+    }
+    control[22] = pack_control_rgb(0x8D, 0x6C, 0xFF);
     control[23] = pack_control_rgb(0x5E, 0xE7, 0xFF);
     control[24] = source_width;
     control[25] = source_height;
@@ -422,7 +433,7 @@ static void fill_control(uint32_t control[CONTROL_DWORDS], uint32_t source_width
     control[28] = 1;
     control[30] = 60;
     control[31] = float_bits(12.0f);
-
+    control[32] = float_bits(fminf(fmaxf(clock_time_seconds, 0.0f), 86399.0f));
 }
 
 static uint8_t unpremultiply(uint8_t value, uint8_t alpha) {
@@ -759,11 +770,10 @@ static void run_panel(cl_command_queue queue, cl_kernel background_kernel,
         size_t cell_pixels = (size_t)SPIRIT_SIZE * SPIRIT_SIZE;
         for (unsigned mode_index = 0; mode_index < REPLAY_MODE_COUNT; ++mode_index) {
             ReplayMode mode = (ReplayMode)(mode_index + REPLAY_FIRST_ID);
-            float mode_time = mode == REPLAY_MAGIC_TIME_CIRCLE
-                ? utc_seconds_of_day()
-                : (float)shader_frame * (1.0f / SPIRIT_TARGET_HZ);
+            float animation_time = (float)shader_frame * (1.0f / SPIRIT_TARGET_HZ);
             uint32_t control[CONTROL_DWORDS];
-            fill_control(control, asset->width, asset->height, mode_time, mode, &runtime);
+            fill_control(control, asset->width, asset->height, animation_time,
+                         utc_seconds_of_day(), mode, &runtime);
             control[2] = shader_frame;
             dispatch_spirit_frame(
                 queue, background_kernel, sprite_kernel, control_buffer,
@@ -860,7 +870,8 @@ int main(int argc, char **argv) {
 
     RuntimeControls runtime = DEFAULT_RUNTIME_CONTROLS;
     uint32_t control[CONTROL_DWORDS];
-    fill_control(control, asset.width, asset.height, time_seconds, REPLAY_ENERGY_RING, &runtime);
+    fill_control(control, asset.width, asset.height, time_seconds, magic_time_seconds,
+                 REPLAY_ENERGY_RING, &runtime);
     size_t source_bytes = (size_t)asset.width * asset.height * 4;
     size_t cursor_bytes = (size_t)SPIRIT_SIZE * SPIRIT_SIZE * sizeof(uint32_t);
     uint32_t *cursor_grid = calloc(REPLAY_MODE_COUNT, cursor_bytes);
@@ -906,10 +917,8 @@ int main(int argc, char **argv) {
         size_t cell_pixels = (size_t)SPIRIT_SIZE * SPIRIT_SIZE;
         for (unsigned mode_index = 0; mode_index < REPLAY_MODE_COUNT; ++mode_index) {
             ReplayMode mode = (ReplayMode)(mode_index + REPLAY_FIRST_ID);
-            float mode_time = mode == REPLAY_MAGIC_TIME_CIRCLE
-                ? magic_time_seconds
-                : time_seconds;
-            fill_control(control, asset.width, asset.height, mode_time, mode, &runtime);
+            fill_control(control, asset.width, asset.height, time_seconds,
+                         magic_time_seconds, mode, &runtime);
             dispatch_spirit_frame(
                 queue, background_kernel, sprite_kernel, control_buffer, source_buffers[0],
                 cursor_buffer, control, cursor_grid + (size_t)mode_index * cell_pixels);

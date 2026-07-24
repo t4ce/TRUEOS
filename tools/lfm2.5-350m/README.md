@@ -82,6 +82,31 @@ byte for byte. The runner reports the selected device, projection count,
 OpenCL event-profiled kernel time, NEO driver version, and the size and SHA-256
 of the host-specific executable returned after the IGC build.
 
+The experimental endgame projection lane is kept separate from that proven
+path:
+
+```sh
+make intel-gpu-bake-lfm25-q8-packed-cpp
+make lfm25-packed-isa-verify
+make lfm25-cpp-verify
+make lfm25-igpu-packed-verify
+```
+
+It repacks all 93 Q8 matrices into pairs of 32-value blocks across sixteen
+rows. Each pair is exactly 1,088 bytes, preserving the 376,701,952-byte image
+and every sealed tensor offset while aligning every 64-byte SIMD16 weight
+vector. The deterministic packed image SHA-256 is
+`90876f02e0cc224fe23e01c8739dcbb94d7bcc8fbfa3d36204c6267a440f5fd8`.
+The no-device C++ gate preserves all 25,994 binary16 subnormal scales
+byte-for-byte, requires exact layer-0 gate/up/down results, and runs the packed
+reference through all 930 projections in the sealed ten-token `hi` trace. The
+ISA gate requires eight real SIMD16 DP4A instructions, no scratch, no SLM, and
+at most one remaining scale-byte gather. The Ubuntu hardware gate feeds only
+the packed SPIR-V to NEO, reports effective model-weight GB/s, and requires
+sealed `hi` plus `hi ai` parity before this layout is eligible for a TRUEOS
+port. Neither `lum` nor the current TrueOS projection artifact selects this
+lane.
+
 The checked-in `lfm25_q8_project.bin` is the separate ADL-S Zebin admitted by
 the TRUEOS artifact contract. Ubuntu does not submit that ADL-S binary to the
 Raptor Lake UHD 770; it uses the identical published SPIR-V and lets the host
