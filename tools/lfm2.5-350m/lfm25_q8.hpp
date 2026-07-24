@@ -2,12 +2,23 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 namespace trueos::lfm25 {
 
+enum class native_projection_backend {
+    cpu_avx2,
+    intel_igc,
+};
+
 struct native_decode_result {
     std::vector<std::uint32_t> next_tokens;
+    std::vector<std::uint32_t> generated_tokens;
+    std::string projection_device;
+    std::uint64_t projection_launches = 0;
+    std::uint64_t projection_nanoseconds = 0;
+    bool stopped = false;
 };
 
 // Verify the independently owned, fixed-shape Intel Q8_0 projection kernel
@@ -25,7 +36,10 @@ native_decode_result run_native_decode(
     const std::filesystem::path & model_contract,
     const std::filesystem::path & f32_sidecar,
     const std::vector<std::uint32_t> & input_tokens,
-    std::uint32_t generated_tokens,
-    std::uint32_t threads);
+    std::uint32_t max_reply_tokens,
+    const std::vector<std::uint32_t> & stop_tokens,
+    std::uint32_t threads,
+    native_projection_backend backend,
+    const std::filesystem::path & igc_spirv);
 
 } // namespace trueos::lfm25

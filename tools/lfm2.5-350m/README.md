@@ -45,26 +45,28 @@ Build and run the fixed userspace C++ lane:
 
 ```sh
 make lfm25-cpp
-./tools/lfm2.5-350m/cpp_prompt.sh "hi ai"
+./tools/lfm2.5-350m/cpp_prompt.sh --native "hi ai"
 make lfm25-cpp-verify
 ```
 
 `lfm25-fixed` is intentionally model-specific rather than a general inference
 frontend. It admits only the pinned 379,217,632-byte GGUF with SHA-256
 `be036a757295e550098b85e13f6af2735d0fa73b41e1156a40c7d8e8e32a5766`,
-uses the fixed TRUEOS chat token envelope, runs CPU-only through the pinned
-llama.cpp b10075 ABI, and performs one-token decode steps with a 32-token reply
-limit. `make lfm25-cpp-verify` is the no-boot parity gate: the complete `hi`
-prompt must contain the ten sealed token IDs and produce greedy token `36309`
-(`Hello`), matching the `lum "hi"` kernel contract.
+uses the fixed TRUEOS chat token envelope, and performs greedy one-token decode
+steps with a 32-token reply limit. `--native` loads only the vocabulary through
+the pinned llama.cpp b10075 ABI; all model math runs in the fixed TRUEOS C++
+implementation over the memory-mapped TRUEGA Q8 image and F32 sidecar. Omitting
+`--native` keeps the pinned llama.cpp graph as a comparison oracle. The native
+lane is deliberately fixed to this model, greedy decoding, a 256-token state
+budget, and at most 32 reply tokens; it is not a generic GGUF runtime.
 
-The same verification target also runs the independently owned
-`lfm25_q8.cpp` Intel AVX2/FMA/F16C projection kernel over the sealed TRUEGA
-native image. The fixed layer-0 gate, up, and down projections must match all
-captured llama.cpp b10075 values within `1e-5`, without invoking libllama for
-the math. This is the first replaceable hot-operation boundary; full decode
-still uses the pinned llama.cpp graph until every remaining fixed operation has
-its own checkpoint gate.
+`make lfm25-cpp-verify` is the no-boot parity gate. It verifies the independent
+Intel AVX2/FMA/F16C gate, up, and down projections exactly against captured
+b10075 values, runs the complete 16-layer native path across all ten sealed
+`hi` prompt decisions, and requires the native greedy `hi ai` reply to equal
+the b10075 oracle: `Hello! How can I help you today?`. The native path includes
+Q8 embeddings and projections, RMS norms, short convolution, RoPE attention
+with F16 KV state, SwiGLU, residuals, and the tied vocabulary projection.
 
 The launchers use Liquid AI's recommended generation defaults: temperature
 `0.1`, top-k `50`, repetition penalty `1.05`, and a 32,768-token context.

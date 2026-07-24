@@ -19,6 +19,7 @@ static CHART_SINE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::n
 static PIXEL_PLASMA_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CPP_DEMO_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static LFM25_Q8_PROJECT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FONT_OUTLINE_MESH_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FONT_OUTLINE_COVERAGE_R8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SCENE_AABB_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);

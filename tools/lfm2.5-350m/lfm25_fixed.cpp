@@ -37,6 +37,12 @@ constexpr std::string_view kModelContractSha256 =
 constexpr std::uintmax_t kHiGoldenBytes = 23'709'296;
 constexpr std::string_view kHiGoldenSha256 =
     "437ddd3bd6bbb94288fe40855b341767e5cb5f803122e84854fb579ad8feb407";
+constexpr std::uintmax_t kF32SidecarBytes = 262'160;
+constexpr std::string_view kF32SidecarSha256 =
+    "a60c0d28e5e0f4830699260fbd9c01153763261a7b132a6b44610d64919609b1";
+constexpr std::uintmax_t kIgcSpirvBytes = 62'288;
+constexpr std::string_view kIgcSpirvSha256 =
+    "66477ba6c412e5e01fafa1ee6cfdfae0ed43056bc3527ab8cd7e702316ea597b";
 constexpr int32_t kVocabulary = 65'536;
 constexpr uint32_t kContext = 1'024;
 constexpr uint32_t kMaxPromptBytes = 512;
@@ -58,6 +64,9 @@ constexpr std::array<llama_token, 5> kAssistantSuffix = {
 };
 constexpr std::array<llama_token, 10> kHiPromptTokens = {
     1, 6, 6'423, 708, 6'928, 7, 708, 6, 64'015, 708,
+};
+constexpr std::array<std::uint32_t, 10> kHiNextTokens = {
+    1, 1, 1, 1, 1'463, 708, 774, 918, 797, 36'309,
 };
 
 struct llama_model_deleter {
@@ -97,8 +106,12 @@ struct options {
     std::string prompt;
     uint32_t max_reply_tokens = kMaxReplyTokens;
     int32_t threads = 1;
+    bool native = false;
+    bool igpu = false;
     bool parity_hi = false;
     bool parity_q8 = false;
+    bool parity_native_hi = false;
+    bool parity_igpu_hi = false;
 };
 
 [[noreturn]] void fail(const std::string & message) {
@@ -212,6 +225,16 @@ options parse_options(int argc, char ** argv) {
             result.prompt = "hi";
         } else if (argument == "--parity-q8") {
             result.parity_q8 = true;
+        } else if (argument == "--parity-native-hi") {
+            result.parity_native_hi = true;
+            result.prompt = "hi";
+        } else if (argument == "--parity-igpu-hi") {
+            result.parity_igpu_hi = true;
+            result.prompt = "hi";
+        } else if (argument == "--native") {
+            result.native = true;
+        } else if (argument == "--igpu") {
+            result.igpu = true;
         } else if (argument == "--max-tokens") {
             if (++index == argc) {
                 fail("--max-tokens needs a value");
@@ -225,20 +248,36 @@ options parse_options(int argc, char ** argv) {
                 parse_u32(argv[index], "thread count", std::max(1u, std::thread::hardware_concurrency())));
         } else if (!argument.empty() && argument.front() == '-') {
             fail("unknown option: " + std::string(argument));
-        } else if (result.prompt.empty() && !result.parity_hi && !result.parity_q8) {
+        } else if (
+            result.prompt.empty() &&
+            !result.parity_hi &&
+            !result.parity_q8 &&
+            !result.parity_native_hi &&
+            !result.parity_igpu_hi) {
             result.prompt = std::string(argument);
         } else {
             fail("expected exactly one prompt");
         }
     }
-    if (result.parity_hi && result.parity_q8) {
+    const unsigned parity_modes =
+        static_cast<unsigned>(result.parity_hi) +
+        static_cast<unsigned>(result.parity_q8) +
+        static_cast<unsigned>(result.parity_native_hi) +
+        static_cast<unsigned>(result.parity_igpu_hi);
+    if (parity_modes > 1 ||
+        ((result.native || result.igpu) && parity_modes != 0) ||
+        (result.native && result.igpu)) {
         fail("choose one parity mode");
     }
     if (result.prompt.empty() && !result.parity_q8) {
         fail(
             "usage: lfm25-fixed [--threads N] [--max-tokens N] PROMPT\n"
+            "       lfm25-fixed --native [--threads N] [--max-tokens N] PROMPT\n"
+            "       lfm25-fixed --igpu [--max-tokens N] PROMPT\n"
             "       lfm25-fixed --parity-hi\n"
-            "       lfm25-fixed [--threads N] --parity-q8");
+            "       lfm25-fixed [--threads N] --parity-q8\n"
+            "       lfm25-fixed [--threads N] --parity-native-hi\n"
+            "       lfm25-fixed --parity-igpu-hi");
     }
     if (result.prompt.size() > kMaxPromptBytes) {
         fail("prompt exceeds the fixed 512-byte TRUEOS shell contract");
@@ -365,6 +404,11 @@ int run(const options & arguments) {
     backend_guard backend(executable_path().parent_path() / "llama-b10075");
 
     llama_model_params model_params = llama_model_default_params();
+    model_params.vocab_only =
+        arguments.parity_native_hi ||
+        arguments.parity_igpu_hi ||
+        arguments.native ||
+        arguments.igpu;
     model_params.n_gpu_layers = 0;
     model_params.use_mmap = true;
     model_params.check_tensors = false; // Complete-file SHA-256 was checked above.
@@ -378,6 +422,142 @@ int run(const options & arguments) {
     const llama_vocab * vocabulary = llama_model_get_vocab(model.get());
     if (vocabulary == nullptr || llama_vocab_n_tokens(vocabulary) != kVocabulary) {
         fail("model vocabulary is not the fixed 65536-token LFM2.5 contract");
+    }
+
+    const std::vector<llama_token> prompt_tokens =
+        encode_user_turn(vocabulary, arguments.prompt);
+    if (prompt_tokens.size() + arguments.max_reply_tokens >= kContext) {
+        fail("tokenized prompt exceeds the fixed userspace context");
+    }
+    if (arguments.prompt == "hi" &&
+        !std::equal(prompt_tokens.begin(), prompt_tokens.end(), kHiPromptTokens.begin(), kHiPromptTokens.end())) {
+        fail("sealed tokenizer parity failed for the fixed hi prompt");
+    }
+
+    if (
+        arguments.parity_native_hi ||
+        arguments.parity_igpu_hi ||
+        arguments.native ||
+        arguments.igpu) {
+        const auto repository_path = tool_path.parent_path().parent_path();
+        const auto native_path = tool_path / "LFM2.5-350M-Q8_0.truega.bin";
+        const auto contract_path =
+            repository_path /
+            "crates/trueos-fpga-abi/truega/artifacts/lfm25_model.contract.bin";
+        const auto sidecar_path = tool_path / "LFM2.5-350M-Q8_0.cpu-f32.bin";
+        const auto igc_spirv_path =
+            repository_path /
+            "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/"
+            "lfm25_q8_project.spv";
+        verify_file(
+            native_path,
+            kNativeImageBytes,
+            kNativeImageSha256,
+            "pinned native image");
+        verify_file(
+            contract_path,
+            kModelContractBytes,
+            kModelContractSha256,
+            "pinned model contract");
+        verify_file(
+            sidecar_path,
+            kF32SidecarBytes,
+            kF32SidecarSha256,
+            "pinned F32 sidecar");
+        if (arguments.parity_igpu_hi || arguments.igpu) {
+            verify_file(
+                igc_spirv_path,
+                kIgcSpirvBytes,
+                kIgcSpirvSha256,
+                "published C++/IGC SPIR-V");
+        }
+
+        std::vector<std::uint32_t> native_tokens;
+        native_tokens.reserve(prompt_tokens.size());
+        for (llama_token token : prompt_tokens) {
+            native_tokens.push_back(static_cast<std::uint32_t>(token));
+        }
+        std::vector<std::uint32_t> stop_tokens;
+        for (llama_token token = 0; token < kVocabulary; ++token) {
+            if (llama_vocab_is_eog(vocabulary, token)) {
+                stop_tokens.push_back(static_cast<std::uint32_t>(token));
+            }
+        }
+        if (stop_tokens.empty()) {
+            fail("sealed vocabulary has no end-of-generation token");
+        }
+        const bool parity_custom_hi =
+            arguments.parity_native_hi || arguments.parity_igpu_hi;
+        const bool use_igpu =
+            arguments.igpu || arguments.parity_igpu_hi;
+        const auto result = trueos::lfm25::run_native_decode(
+            native_path,
+            contract_path,
+            sidecar_path,
+            native_tokens,
+            parity_custom_hi ? 0 : arguments.max_reply_tokens,
+            stop_tokens,
+            static_cast<std::uint32_t>(arguments.threads),
+            use_igpu
+                ? trueos::lfm25::native_projection_backend::intel_igc
+                : trueos::lfm25::native_projection_backend::cpu_avx2,
+            use_igpu ? igc_spirv_path : std::filesystem::path{});
+        if (parity_custom_hi &&
+            !std::equal(
+                result.next_tokens.begin(),
+                result.next_tokens.end(),
+                kHiNextTokens.begin(),
+                kHiNextTokens.end())) {
+            std::fprintf(stderr, "lfm25-fixed: native token trace observed=");
+            for (std::uint32_t token : result.next_tokens) {
+                std::fprintf(stderr, "%u,", token);
+            }
+            std::fputc('\n', stderr);
+            fail("native C++ hi token trace differs from the sealed b10075 oracle");
+        }
+        std::string reply;
+        if (parity_custom_hi) {
+            reply =
+                token_piece(vocabulary, static_cast<llama_token>(result.next_tokens.back()));
+        } else {
+            for (std::uint32_t token : result.generated_tokens) {
+                reply += token_piece(vocabulary, static_cast<llama_token>(token));
+            }
+        }
+        std::fwrite(reply.data(), 1, reply.size(), stdout);
+        std::fputc('\n', stdout);
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started);
+        if (parity_custom_hi) {
+            std::fprintf(
+                stderr,
+                "lfm25-fixed: PASS %s-hi prompt_tokens=10 decisions=10 "
+                "first_reply_token=36309 decoded=Hello threads=%d elapsed_ms=%lld "
+                "projection_device=\"%s\" projection_launches=%llu "
+                "projection_kernel_ms=%.3f\n",
+                use_igpu ? "igpu" : "native",
+                arguments.threads,
+                static_cast<long long>(elapsed.count()),
+                result.projection_device.c_str(),
+                static_cast<unsigned long long>(result.projection_launches),
+                static_cast<double>(result.projection_nanoseconds) / 1'000'000.0);
+        } else {
+            std::fprintf(
+                stderr,
+                "lfm25-fixed: prompt_tokens=%zu first_token=%u reply_tokens=%zu "
+                "stop=%s threads=%d elapsed_ms=%lld projection_device=\"%s\" "
+                "projection_launches=%llu projection_kernel_ms=%.3f\n",
+                prompt_tokens.size(),
+                result.next_tokens.at(prompt_tokens.size() - 1),
+                result.generated_tokens.size(),
+                result.stopped ? "eot" : "limit",
+                arguments.threads,
+                static_cast<long long>(elapsed.count()),
+                result.projection_device.c_str(),
+                static_cast<unsigned long long>(result.projection_launches),
+                static_cast<double>(result.projection_nanoseconds) / 1'000'000.0);
+        }
+        return 0;
     }
 
     llama_context_params context_params = llama_context_default_params();
@@ -397,16 +577,6 @@ int run(const options & arguments) {
     context_ptr context(llama_init_from_model(model.get(), context_params));
     if (!context) {
         fail("failed to allocate the fixed 1024-token CPU context");
-    }
-
-    const std::vector<llama_token> prompt_tokens =
-        encode_user_turn(vocabulary, arguments.prompt);
-    if (prompt_tokens.size() + arguments.max_reply_tokens >= kContext) {
-        fail("tokenized prompt exceeds the fixed userspace context");
-    }
-    if (arguments.prompt == "hi" &&
-        !std::equal(prompt_tokens.begin(), prompt_tokens.end(), kHiPromptTokens.begin(), kHiPromptTokens.end())) {
-        fail("sealed tokenizer parity failed for the fixed hi prompt");
     }
 
     for (llama_token token : prompt_tokens) {

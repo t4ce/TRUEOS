@@ -26,6 +26,7 @@ const SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU: u64 = 0x0D45_0000;
 // demo comfortably outside Spirit's shared instruction-base window.
 const CPP_DEMO_RGBA8_ADLS_GPU: u64 = 0x0D60_0000;
 const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU: u64 = 0x0D70_0000;
+const LFM25_Q8_PROJECT_ADLS_GPU: u64 = 0x0D80_0000;
 const _: () = {
     assert!(
         SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU + SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len() as u64
@@ -38,6 +39,11 @@ const _: () = {
     assert!(
         CPP_DEMO_RGBA8_ADLS_GPU + CPP_DEMO_RGBA8_ADLS_BIN.len() as u64
             <= CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU
+    );
+    assert!(
+        CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU
+            + CPP_AUDIO_VISUALIZER_RGBA8_ADLS_BIN.len() as u64
+            <= LFM25_Q8_PROJECT_ADLS_GPU
     );
 };
 #[cfg(not(feature = "intel_gpu_cpp_aot"))]

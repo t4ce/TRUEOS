@@ -54,6 +54,10 @@ pub(crate) fn cpp_audio_visualizer_rgba8_upload_status() -> Option<UploadedKerne
     *CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD.lock()
 }
 
+pub(crate) fn lfm25_q8_project_upload_status() -> Option<UploadedKernelArtifact> {
+    *LFM25_Q8_PROJECT_UPLOAD.lock()
+}
+
 pub(crate) fn spirit_vfx_background_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *SPIRIT_VFX_BACKGROUND_RGBA8_UPLOAD.lock()
 }
@@ -395,6 +399,28 @@ pub(crate) fn upload_cpp_audio_visualizer_rgba8_kernel() -> Option<UploadedKerne
     Some(upload)
 }
 
+pub(crate) fn upload_lfm25_q8_project_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *LFM25_Q8_PROJECT_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/gpgpu: lfm25-q8-project upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload = upload_artifact(
+        dev,
+        LFM25_Q8_PROJECT_ADLS_ARTIFACT,
+        LFM25_Q8_PROJECT_ADLS_GPU,
+    )?;
+    *LFM25_Q8_PROJECT_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
 pub(crate) fn upload_font_outline_mesh_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *FONT_OUTLINE_MESH_UPLOAD.lock() {
         return Some(upload);
@@ -528,6 +554,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     CHART_SINE_RGBA8_KERNEL_NAME,
     PIXEL_PLASMA_RGBA8_KERNEL_NAME,
     CPP_DEMO_RGBA8_KERNEL_NAME,
+    LFM25_Q8_PROJECT_KERNEL_NAME,
     FONT_OUTLINE_MESH_KERNEL_NAME,
     FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
     SCENE_AABB_KERNEL_NAME,
@@ -689,6 +716,11 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT,
             gpu: CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU,
             upload: &CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD,
+        }),
+        LFM25_Q8_PROJECT_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: LFM25_Q8_PROJECT_ADLS_ARTIFACT,
+            gpu: LFM25_Q8_PROJECT_ADLS_GPU,
+            upload: &LFM25_Q8_PROJECT_UPLOAD,
         }),
         FONT_OUTLINE_MESH_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: FONT_OUTLINE_MESH_ADLS_ARTIFACT,
