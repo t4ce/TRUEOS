@@ -5,10 +5,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "d3c0a0c201a205351c4b45a482e6ed04ef9361a9b4110d46106667ab3ab363ee",
-      "size_bytes": 69208,
+      "sha256": "0019120db77b0e462ce7c626a7ccf68237d7e6753fac662ce3c348c5553f9570",
+      "size_bytes": 72896,
       "type": "relocatable",
-      "ze_info_section_offset": 63064,
+      "ze_info_section_offset": 66752,
       "ze_info_section_size": 5322
     },
     "kernels": [
@@ -292,13 +292,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 15432,
+          "entry_size": 16240,
           "section_alignment": 0,
           "section_name": ".text.font_instance_rgba8",
           "section_offset": 64,
-          "section_size": 15616,
-          "sha256": "ff9506b74b5592abaea93eee13ed446ea03199d7b806b4914ab720056542efaf",
-          "symbol_size": 15432,
+          "section_size": 16384,
+          "sha256": "b9e595330a7ce708a95022ca8fb65b6bf10c2d87622ce2ef5ad374be0b06ef94",
+          "symbol_size": 16240,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -314,10 +314,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 15752,
-      "embedded_section_size": 47240,
-      "sha256": "160a361572c874d351fbce32ebf913c1c35c04836b60a746d6d9d9d7ee8ac68b",
-      "size_bytes": 47240
+      "embedded_section_offset": 16520,
+      "embedded_section_size": 50160,
+      "sha256": "554d45be839750e1b6211f75625ebcdb3b64c43538941f03890067428a91a7c5",
+      "size_bytes": 50160
     }
   },
   "provenance": {
@@ -516,8 +516,8 @@
     "inputs": [
       {
         "path": "crates/trueos-shader/gpgpu/kernels/font_instance_rgba8.clcpp",
-        "sha256": "1988b47df82551d18b655d3925e86c6a454714f7fb85afefb60ee83449c6f763",
-        "size_bytes": 13796
+        "sha256": "89bf2704262aef415d8a72a4c94447533dd80ed327c71095602decd35df86389",
+        "size_bytes": 15245
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/include/trueos_clcpp.hpp",

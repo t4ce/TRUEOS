@@ -57,6 +57,7 @@ pub(crate) enum GpgpuPreviewPreset {
     CppJulia,
     CppSdf,
     CppVoronoi,
+    CppRetroSun,
     CppAudio,
 }
 
@@ -75,6 +76,7 @@ impl GpgpuPreviewPreset {
             Self::CppJulia => "cpp-julia",
             Self::CppSdf => "cpp-sdf",
             Self::CppVoronoi => "cpp-voronoi",
+            Self::CppRetroSun => "cpp-retro-sun",
             Self::CppAudio => "cpp-audio",
         }
     }
@@ -87,6 +89,7 @@ impl GpgpuPreviewPreset {
                 | Self::CppJulia
                 | Self::CppSdf
                 | Self::CppVoronoi
+                | Self::CppRetroSun
                 | Self::CppAudio
         )
     }
@@ -113,6 +116,7 @@ impl GpgpuPreviewPreset {
             | Self::CppJulia
             | Self::CppSdf
             | Self::CppVoronoi
+            | Self::CppRetroSun
             | Self::CppAudio => "slot1-direct",
         }
     }
@@ -1006,6 +1010,7 @@ fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str>
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
         | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio => match gpu_release {
             Some(release) => publish_gpgpu_frame_buffer(lease, release),
             None => Err(FramePoolError::ProducerReleaseRequired),
@@ -1313,7 +1318,8 @@ fn dispatch_preview_kernel(
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi => {
+        | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppRetroSun => {
             let seconds = preview.metrics.elapsed_ms as f32 / 1_000.0;
             let mode = match preview.config.preset {
                 GpgpuPreviewPreset::CppGallery => crate::intel::gpgpu::CPP_DEMO_MODE_GALLERY,
@@ -1321,6 +1327,7 @@ fn dispatch_preview_kernel(
                 GpgpuPreviewPreset::CppJulia => crate::intel::gpgpu::CPP_DEMO_MODE_JULIA,
                 GpgpuPreviewPreset::CppSdf => crate::intel::gpgpu::CPP_DEMO_MODE_SDF,
                 GpgpuPreviewPreset::CppVoronoi => crate::intel::gpgpu::CPP_DEMO_MODE_VORONOI,
+                GpgpuPreviewPreset::CppRetroSun => crate::intel::gpgpu::CPP_DEMO_MODE_RETRO_SUN,
                 _ => crate::intel::gpgpu::CPP_DEMO_MODE_GALLERY,
             };
             let seed = (preview.request_serial as u32)
@@ -1371,6 +1378,7 @@ const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
         | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio => "pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Lab256 => "three-pass+pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
@@ -1392,6 +1400,7 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
         | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio => "guc-cpp-single",
     }
 }
@@ -1409,6 +1418,7 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
         | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio => WindowPlane::Universal(preview_plane_slot(preset) as u8),
         GpgpuPreviewPreset::Lab256 => WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
     }
@@ -1426,6 +1436,7 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
         | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio => "ui4-cpp-resizable-slot1",
         GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => "ui4-overlay",
     }
@@ -1829,6 +1840,7 @@ const fn compute_preview_index(preset: GpgpuPreviewPreset) -> Option<usize> {
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
         | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio => None,
     }
 }
@@ -1841,6 +1853,7 @@ const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
             | GpgpuPreviewPreset::CppJulia
             | GpgpuPreviewPreset::CppSdf
             | GpgpuPreviewPreset::CppVoronoi
+            | GpgpuPreviewPreset::CppRetroSun
             | GpgpuPreviewPreset::CppAudio
     ) {
         return 1;
@@ -1895,6 +1908,7 @@ mod tests {
             GpgpuPreviewPreset::CppJulia,
             GpgpuPreviewPreset::CppSdf,
             GpgpuPreviewPreset::CppVoronoi,
+            GpgpuPreviewPreset::CppRetroSun,
             GpgpuPreviewPreset::CppAudio,
         ];
         for mode in modes {

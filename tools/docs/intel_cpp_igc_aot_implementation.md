@@ -194,12 +194,13 @@ toolchain lock, complete input hashes, exact kernel set, `ocloc validate`,
 sibling/embedded SPIR-V identity, generated contract, and two-root
 reproducibility gates remain required.
 
-One stable SIMD16 entry exposes five scalar-selected Shell2/UI4 modes:
-`gallery`, `aurora`, `julia`, `sdf`, and `voronoi`. The dedicated advertised
-F4 command is `cpp`; `cpp` starts the four-panel gallery, direct mode names
-start full-window workloads, and `cpp status`/`cpp stop` use the existing
-on-demand preview service. The kernel is uploaded once, while time, mode, seed,
-and destination facts are ordinary launch payload values.
+One stable SIMD16 entry exposes six scalar-selected Shell2/UI4 modes:
+`gallery`, `aurora`, `julia`, `sdf`, `voronoi`, and `retro-sun`. The dedicated
+advertised F4 command is `cpp`; `cpp` starts the four-panel gallery, direct mode
+names start full-window workloads, and `cpp status`/`cpp stop` use the existing
+on-demand preview service. Retro Sun remains a standalone composition rather
+than becoming a fifth gallery panel. The kernel is uploaded once, while time,
+mode, seed, and destination facts are ordinary launch payload values.
 
 The runtime uses the same serialized direct-RCS/GuC service lane and exact
 surface-release boundary as the established UI4 compute producers. A dispatch
@@ -212,7 +213,7 @@ The native demo contract is exact to `8086:4680` revision `0x0c`, SIMD16,
 read/write stateful BTI. The Zebin hash is:
 
 ```text
-19f7067fa19ba34a640d1f3d67de3df82d29f484700a274bc4bb31c4b00b7009
+75e5a83b3e74e3b5da59756bc5a804cbb742314389bb60559474586050ce66ac
 ```
 
 `make kernel` and `make iso` now require this complete native Zebin in the

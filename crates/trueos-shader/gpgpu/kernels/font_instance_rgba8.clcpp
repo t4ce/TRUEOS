@@ -24,6 +24,8 @@ inline constexpr uint flag_channels_shift = 8u;
 inline constexpr uint flag_channels_mask = 15u << flag_channels_shift;
 inline constexpr uint flag_frame_count_shift = 16u;
 inline constexpr uint flag_frame_count_mask = 15u << flag_frame_count_shift;
+inline constexpr uint flag_affine_transform = 1u << 20;
+inline constexpr uint flag_motion = 1u << 21;
 
 inline constexpr uint iteration_once = 0u;
 inline constexpr uint iteration_loop = 1u;
@@ -254,6 +256,19 @@ TRUEOS_FONT_INSTANCE_INLINE float sample_mask_bilinear(
     return mix(mix(c00, c10, fx), mix(c01, c11, fx), fy);
 }
 
+TRUEOS_FONT_INSTANCE_INLINE uint sample_mask_nearest(
+    __global const uint *mask_words,
+    uint pitch,
+    uint origin_x,
+    uint origin_y,
+    float2 source_position)
+{
+    const uint x = static_cast<uint>(source_position.x);
+    const uint y = static_cast<uint>(source_position.y);
+    const uint offset = (origin_y + y) * pitch + origin_x + x;
+    return (mask_words[offset >> 2] >> ((offset & 3u) * 8u)) & 0xFFu;
+}
+
 } // namespace trueos::gpgpu::font_instance
 
 using namespace trueos::gpgpu::font_instance;
@@ -289,41 +304,63 @@ __kernel void font_instance_rgba8(
         return;
     }
 
-    const float period = fmax(finite_or(as_float(descriptor[field_motion_period]), 1.0f), 0.001f);
-    const float phase = finite_or(as_float(descriptor[field_motion_phase]), 0.0f);
-    const float wave = native_sin(
-        6.28318530718f * (fmax(finite_or(time_seconds, 0.0f), 0.0f) / period + phase));
-    const float scale = fmax(
-        0.125f,
-        finite_or(as_float(descriptor[field_base_scale]), 1.0f)
-            * (1.0f + finite_or(as_float(descriptor[field_scale_amplitude]), 0.0f) * wave));
-    const float rotation =
-        finite_or(as_float(descriptor[field_base_rotation]), 0.0f)
-        + finite_or(as_float(descriptor[field_rotation_amplitude]), 0.0f) * wave;
-    const float opacity = saturate(
-        finite_or(as_float(descriptor[field_base_opacity]), 1.0f)
-        + finite_or(as_float(descriptor[field_opacity_amplitude]), 0.0f) * wave);
-    const float2 translation = (float2)(
-        finite_or(as_float(descriptor[field_translation_x_amplitude]), 0.0f) * wave,
-        finite_or(as_float(descriptor[field_translation_y_amplitude]), 0.0f)
-            * native_cos(6.28318530718f
-                * (fmax(finite_or(time_seconds, 0.0f), 0.0f) / period + phase)));
+    float scale = fmax(0.125f, finite_or(as_float(descriptor[field_base_scale]), 1.0f));
+    float rotation = finite_or(as_float(descriptor[field_base_rotation]), 0.0f);
+    float opacity = saturate(finite_or(as_float(descriptor[field_base_opacity]), 1.0f));
+    float2 translation = (float2)(0.0f);
+    if ((flags & flag_motion) != 0u) {
+        const float period =
+            fmax(finite_or(as_float(descriptor[field_motion_period]), 1.0f), 0.001f);
+        const float phase = finite_or(as_float(descriptor[field_motion_phase]), 0.0f);
+        const float cycle =
+            fmax(finite_or(time_seconds, 0.0f), 0.0f) / period + phase;
+        const float angle = 6.28318530718f * (cycle - floor(cycle));
+        const float wave = native_sin(angle);
+        scale = fmax(
+            0.125f,
+            scale
+                * (1.0f
+                    + finite_or(as_float(descriptor[field_scale_amplitude]), 0.0f)
+                        * wave));
+        rotation +=
+            finite_or(as_float(descriptor[field_rotation_amplitude]), 0.0f) * wave;
+        opacity = saturate(
+            opacity
+                + finite_or(as_float(descriptor[field_opacity_amplitude]), 0.0f)
+                    * wave);
+        translation = (float2)(
+            finite_or(as_float(descriptor[field_translation_x_amplitude]), 0.0f)
+                * wave,
+            finite_or(as_float(descriptor[field_translation_y_amplitude]), 0.0f)
+                * native_cos(angle));
+    }
 
     const float2 destination = (float2)(
         static_cast<float>(dispatch_x + local_x) + 0.5f,
         static_cast<float>(dispatch_y + local_y) + 0.5f);
     const float2 relative =
         destination - (float2)(dst_center_x, dst_center_y) - translation;
-    const float sine = native_sin(rotation);
-    const float cosine = native_cos(rotation);
-    const float2 unrotated = (float2)(
-        relative.x * cosine + relative.y * sine,
-        -relative.x * sine + relative.y * cosine);
-    const float2 source_local =
-        unrotated / scale
-        + (float2)(
-            static_cast<float>(mask_width) * 0.5f - 0.5f,
-            static_cast<float>(mask_height) * 0.5f - 0.5f);
+    float2 source_local;
+    const bool affine =
+        (flags & (flag_affine_transform | flag_motion)) != 0u;
+    if (affine) {
+        const float sine = native_sin(rotation);
+        const float cosine = native_cos(rotation);
+        const float2 unrotated = (float2)(
+            relative.x * cosine + relative.y * sine,
+            -relative.x * sine + relative.y * cosine);
+        source_local =
+            unrotated / scale
+            + (float2)(
+                static_cast<float>(mask_width) * 0.5f - 0.5f,
+                static_cast<float>(mask_height) * 0.5f - 0.5f);
+    } else {
+        source_local =
+            relative
+            + (float2)(
+                static_cast<float>(mask_width) * 0.5f - 0.5f,
+                static_cast<float>(mask_height) * 0.5f - 0.5f);
+    }
     if (source_local.x < 0.0f
         || source_local.y < 0.0f
         || source_local.x > static_cast<float>(mask_width - 1u)
@@ -340,14 +377,21 @@ __kernel void font_instance_rgba8(
         destination_rgba = source_over(background, destination_rgba, 255u);
     }
 
-    const float coverage = sample_mask_bilinear(
-        mask_words,
-        descriptor[field_mask_pitch],
-        descriptor[field_mask_x],
-        descriptor[field_mask_y],
-        mask_width,
-        mask_height,
-        source_local);
+    const float coverage = affine
+        ? sample_mask_bilinear(
+            mask_words,
+            descriptor[field_mask_pitch],
+            descriptor[field_mask_x],
+            descriptor[field_mask_y],
+            mask_width,
+            mask_height,
+            source_local)
+        : static_cast<float>(sample_mask_nearest(
+            mask_words,
+            descriptor[field_mask_pitch],
+            descriptor[field_mask_x],
+            descriptor[field_mask_y],
+            source_local));
     if (coverage > 0.0f) {
         const uint foreground =
             apply_alpha_scale(sample_color<8u>(descriptor, flags, time_seconds), opacity);

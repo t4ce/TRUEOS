@@ -250,7 +250,8 @@ pub(crate) const CPP_DEMO_MODE_AURORA: u32 = 1;
 pub(crate) const CPP_DEMO_MODE_JULIA: u32 = 2;
 pub(crate) const CPP_DEMO_MODE_SDF: u32 = 3;
 pub(crate) const CPP_DEMO_MODE_VORONOI: u32 = 4;
-pub(crate) const CPP_DEMO_MODE_COUNT: u32 = 5;
+pub(crate) const CPP_DEMO_MODE_RETRO_SUN: u32 = 5;
+pub(crate) const CPP_DEMO_MODE_COUNT: u32 = 6;
 pub(crate) const CPP_DEMO_FLAG_VIGNETTE: u32 = 1 << 0;
 
 #[derive(Copy, Clone, Debug)]

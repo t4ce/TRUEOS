@@ -2,7 +2,7 @@
 
 `cpp_demo_rgba8.clcpp` turns the proven C++ for OpenCL pipeline into a reusable
 TRUEOS application surface. It is one offline-compiled kernel, one stable
-output ABI, one resident upload, and five scalar-selected workloads:
+output ABI, one resident upload, and six scalar-selected workloads:
 
 | Shell2 mode | Kernel mode | Foundation exercised |
 | --- | ---: | --- |
@@ -11,9 +11,11 @@ output ABI, one resident upload, and five scalar-selected workloads:
 | `julia` | 2 | bounded iteration, branching, complex arithmetic |
 | `sdf` | 3 | signed-distance geometry, composition, antialiasing |
 | `voronoi` | 4 | integer hashing, neighbour search, procedural cells |
+| `retro-sun` | 5 | layered synthwave scene, animated cutout bands, reflection, CRT post |
 
 `gallery` is the default and divides one UI4 surface into four panels. The
-other commands give each workload the complete resizable window.
+other commands give each workload the complete resizable window. Retro Sun is
+intentionally standalone and is not added to the gallery.
 The separate `cpp audio` mode uses its own single audiovisual artifact and the
 same resize lifecycle; see
 [`CPP_AUDIO_VISUALIZER.md`](CPP_AUDIO_VISUALIZER.md).
@@ -24,6 +26,7 @@ cpp aurora
 cpp julia
 cpp sdf
 cpp voronoi
+cpp retro-sun
 cpp audio
 cpp list
 cpp status
@@ -33,8 +36,9 @@ cpp stop
 The longer form controls lifetime and publication cadence:
 
 ```text
-cpp start [gallery|aurora|julia|sdf|voronoi|audio] [duration_ms] [cadence_ms] [publish_every]
+cpp start [gallery|aurora|julia|sdf|voronoi|retro-sun|audio] [duration_ms] [cadence_ms] [publish_every]
 cpp start gallery 0 33 1
+cpp start retro-sun 0 33 1
 cpp start audio 0 50 1
 ```
 
@@ -50,7 +54,7 @@ At runtime TRUEOS:
 
 1. admits the artifact only for PCI device `0x4680`, revision `0x0c`;
 2. verifies the embedded Zebin hash and generated ABI contract;
-3. uploads it once at fixed non-overlapping GPU VA `0x0d4d0000`;
+3. uploads it once at fixed non-overlapping GPU VA `0x0d600000`;
 4. writes the scalar launch payload for the selected mode;
 5. submits SIMD16 work through the serialized direct-RCS/GuC service lane;
 6. waits for the exact post-marker before giving UI4 a producer-release token;
@@ -66,8 +70,8 @@ under a potentially late GPU writer.
 The checked artifact is `artifacts/adls/cpp/cpp_demo_rgba8.bin`:
 
 ```text
-Zebin SHA-256: 19f7067fa19ba34a640d1f3d67de3df82d29f484700a274bc4bb31c4b00b7009
-SPIR-V SHA-256: 901141a9dbb1762542e49bac0b75ea675e96e3ed67a07d95810ec28ede28e10f
+Zebin SHA-256: 75e5a83b3e74e3b5da59756bc5a804cbb742314389bb60559474586050ce66ac
+SPIR-V SHA-256: be41fccaaca39e0c1584e5062b5434a17366441bc586b2134135d3664729b3d5
 target:          8086:4680 revision 0x0c
 entry:           cpp_demo_rgba8 at Zebin offset 64
 execution:       SIMD16, 128 GRFs, scratch 0, SLM 0
@@ -126,6 +130,7 @@ cpp status
 cpp julia
 cpp sdf
 cpp voronoi
+cpp retro-sun
 cpp stop
 ```
 

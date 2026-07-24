@@ -2341,26 +2341,48 @@ fn render_compute_page_frame(
             let program = instance_program_for_layer(layer, text_animations);
             let style = program.map_or(GpuFontInstanceStyle::IDENTITY, |program| program.style);
             let motion = program.map_or(GpuFontInstanceMotion::NONE, |program| program.motion);
+            let affine = style.scale_permille != 1_000
+                || style.rotation_centidegrees != 0
+                || motion.is_active();
+            let translation = if affine {
+                viewport_translation_px
+            } else {
+                [
+                    libm::roundf(viewport_translation_px[0]),
+                    libm::roundf(viewport_translation_px[1]),
+                ]
+            };
             let center = [
-                origin[0] as f32
-                    + coverage.full_rect().width as f32 * 0.5
-                    + viewport_translation_px[0],
-                origin[1] as f32
-                    + coverage.full_rect().height as f32 * 0.5
-                    + viewport_translation_px[1],
+                origin[0] as f32 + coverage.full_rect().width as f32 * 0.5 + translation[0],
+                origin[1] as f32 + coverage.full_rect().height as f32 * 0.5 + translation[1],
             ];
-            let base_scale = f32::from(style.scale_permille) / 1_000.0;
-            let max_scale =
-                base_scale * (1.0 + (f32::from(motion.scale_amplitude_permille) / 1_000.0).abs());
-            let width = coverage.full_rect().width as f32;
-            let height = coverage.full_rect().height as f32;
-            let radius = libm::sqrtf(width * width + height * height) * 0.5 * max_scale;
-            let extent_x = radius + (f32::from(motion.translation_x_tenths_px) / 10.0).abs() + 2.0;
-            let extent_y = radius + (f32::from(motion.translation_y_tenths_px) / 10.0).abs() + 2.0;
-            let left = libm::floorf(center[0] - extent_x) as i32;
-            let top = libm::floorf(center[1] - extent_y) as i32;
-            let right = libm::ceilf(center[0] + extent_x) as i32;
-            let bottom = libm::ceilf(center[1] + extent_y) as i32;
+            let (left, top, right, bottom) = if affine {
+                let base_scale = f32::from(style.scale_permille) / 1_000.0;
+                let max_scale = base_scale
+                    * (1.0 + (f32::from(motion.scale_amplitude_permille) / 1_000.0).abs());
+                let width = coverage.full_rect().width as f32;
+                let height = coverage.full_rect().height as f32;
+                let radius = libm::sqrtf(width * width + height * height) * 0.5 * max_scale;
+                let extent_x =
+                    radius + (f32::from(motion.translation_x_tenths_px) / 10.0).abs() + 2.0;
+                let extent_y =
+                    radius + (f32::from(motion.translation_y_tenths_px) / 10.0).abs() + 2.0;
+                (
+                    libm::floorf(center[0] - extent_x) as i32,
+                    libm::floorf(center[1] - extent_y) as i32,
+                    libm::ceilf(center[0] + extent_x) as i32,
+                    libm::ceilf(center[1] + extent_y) as i32,
+                )
+            } else {
+                let left = origin[0].saturating_add(translation[0] as i32);
+                let top = origin[1].saturating_add(translation[1] as i32);
+                (
+                    left,
+                    top,
+                    left.saturating_add(coverage.full_rect().width as i32),
+                    top.saturating_add(coverage.full_rect().height as i32),
+                )
+            };
             Some(crate::intel::gpgpu::GpgpuFontInstanceLayer {
                 mask: coverage.surface(),
                 mask_rect: coverage.full_rect(),

@@ -418,7 +418,7 @@ pub(crate) const FONT_INSTANCE_RGBA8_ADLS_SPV: &[u8] = include_bytes!(
 pub(crate) const FONT_INSTANCE_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () = assert!(matches!(FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
-const _: () = assert!(FONT_INSTANCE_RGBA8_ADLS_BIN.len() == 69_208);
+const _: () = assert!(FONT_INSTANCE_RGBA8_ADLS_BIN.len() == 72_896);
 const _: () = {
     let contract = FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT;
     assert!(contract.target.pci_device_ids.len() == 1);

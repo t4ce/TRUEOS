@@ -10,7 +10,7 @@ gate are recorded in
 [`CPP_FOR_OPENCL_OPT_IN.md`](CPP_FOR_OPENCL_OPT_IN.md).
 
 `cpp_demo_rgba8.clcpp` is the first native C++/IGC application kernel rather
-than an ABI twin. One resident entry exposes five Shell2/UI4 generative modes
+than an ABI twin. One resident entry exposes six Shell2/UI4 generative modes
 through the dedicated `cpp` command. Its workload map, ABI, publication policy,
 and TestRig procedure are recorded in
 [`CPP_DEMO_SUITE.md`](CPP_DEMO_SUITE.md).
@@ -53,7 +53,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `mandel64_worklist_rgba8.cl`: clipped 64x4 Mandelbrot row-band descriptors; each descriptor can either mirror across the real axis or compute an unmirrored viewport
 - `chart_sine_rgba8.cl`: full-frame analytical 2D scope plot with grid, axes, border, anti-aliased sine line, and optional glow; available as the `gpgpu preview start chart` arbitrary-surface UI4 compute node
 - `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; available as the `gpgpu preview start plasma` arbitrary-surface UI4 compute node
-- `cpp_demo_rgba8.clcpp`: one exact-target C++ for OpenCL/IGC application kernel with gallery, aurora, Julia-set, signed-distance, and Voronoi modes; available through the dedicated `cpp` Shell2 command
+- `cpp_demo_rgba8.clcpp`: one exact-target C++ for OpenCL/IGC application kernel with gallery, aurora, Julia-set, signed-distance, Voronoi, and standalone Retro Sun modes; available through the dedicated `cpp` Shell2 command
 - `cpp_audio_visualizer_rgba8.clcpp`: one exact-target C++/IGC audiovisual composition driven by the final 48 kHz stereo HDA-bound mix, a 2048-point mid/side FFT, 64 bands, and 128-point channel waveforms; available through `cpp audio`
 - `lab256_multiphase.cl`: hash-locked 256x256 three-entry experimental artifact retained for the live `gpgpu test lab256` Shell2/UI4 preview through the vGPU/GuC GPGPU lane; it contains a centered grayscale smoke ripple, Gray-Scott pointer trail, compact GPU telemetry, and one half-second CUR_SURFLIVE-rate status dot
 - `spirit_vfx_background_rgba8.clcpp` and `spirit_vfx_sprite_rgba8.clcpp`: TrueOS-Spirit's continuous 60 Hz C++/IGC cursor-plane producer; the default clean-Lilly batch dispatches only the sprite presentation walker, while enabling a procedural background adds the background walker and ordered source-over dependency; the retained `.cl` sources are its reviewed semantic and ABI references
@@ -94,7 +94,7 @@ b36d1c7742003591a5074663d81a4162412618ae425c47d30be6d068ee144a25
 artifact for exact target `8086:4680`, revision `0x0c`. Its SHA-256 is:
 
 ```text
-19f7067fa19ba34a640d1f3d67de3df82d29f484700a274bc4bb31c4b00b7009
+75e5a83b3e74e3b5da59756bc5a804cbb742314389bb60559474586050ce66ac
 ```
 
 `artifacts/adls/cpp/cpp_audio_visualizer_rgba8.bin` is the unconditional

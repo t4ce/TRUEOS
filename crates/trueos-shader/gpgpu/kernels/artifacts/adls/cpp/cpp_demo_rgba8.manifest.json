@@ -5,10 +5,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "19f7067fa19ba34a640d1f3d67de3df82d29f484700a274bc4bb31c4b00b7009",
-      "size_bytes": 116416,
+      "sha256": "75e5a83b3e74e3b5da59756bc5a804cbb742314389bb60559474586050ce66ac",
+      "size_bytes": 157992,
       "type": "relocatable",
-      "ze_info_section_offset": 110672,
+      "ze_info_section_offset": 152248,
       "ze_info_section_size": 4936
     },
     "kernels": [
@@ -276,13 +276,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 35696,
+          "entry_size": 44632,
           "section_alignment": 0,
           "section_name": ".text.cpp_demo_rgba8",
           "section_offset": 64,
-          "section_size": 35840,
-          "sha256": "69d474a739a21172324a29bfd292d043dcae10300948bd0349524f6a6ded70e8",
-          "symbol_size": 35696,
+          "section_size": 44800,
+          "sha256": "f00b87f714781b371775582c6d5b32b6fe78e7364bc2ae019500131ca2bcfd65",
+          "symbol_size": 44632,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -298,10 +298,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 35976,
-      "embedded_section_size": 74620,
-      "sha256": "901141a9dbb1762542e49bac0b75ea675e96e3ed67a07d95810ec28ede28e10f",
-      "size_bytes": 74620
+      "embedded_section_offset": 44936,
+      "embedded_section_size": 107236,
+      "sha256": "be41fccaaca39e0c1584e5062b5434a17366441bc586b2134135d3664729b3d5",
+      "size_bytes": 107236
     }
   },
   "provenance": {
@@ -500,8 +500,8 @@
     "inputs": [
       {
         "path": "crates/trueos-shader/gpgpu/kernels/cpp_demo_rgba8.clcpp",
-        "sha256": "29ffd99402728bdff9fc137b462ae6304a53e762389591384201285978b06fd0",
-        "size_bytes": 12982
+        "sha256": "fa204f2b4da7c0063af5ba1d42cc33f28e8c4c4b9b92082c17d78da5dc2828a9",
+        "size_bytes": 19993
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/include/trueos_clcpp.hpp",

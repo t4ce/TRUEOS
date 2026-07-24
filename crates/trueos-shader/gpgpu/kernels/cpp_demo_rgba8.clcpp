@@ -6,6 +6,7 @@
 // - julia: bounded iterative control flow;
 // - sdf: signed-distance geometry and analytical antialiasing;
 // - voronoi: integer hashing and neighbourhood search.
+// - retro sun: layered synthwave sky, banded sun, ocean, and CRT treatment.
 //
 // The complete compiler stack remains offline. TRUEOS embeds only the audited
 // SPIR-V/Zebin pair and submits it through the existing direct-RCS/GuC path.
@@ -21,7 +22,8 @@ inline constexpr uint mode_aurora = 1u;
 inline constexpr uint mode_julia = 2u;
 inline constexpr uint mode_sdf = 3u;
 inline constexpr uint mode_voronoi = 4u;
-inline constexpr uint mode_count = 5u;
+inline constexpr uint mode_retro_sun = 5u;
+inline constexpr uint mode_count = 6u;
 
 TRUEOS_CPP_DEMO_INLINE float saturate(float value)
 {
@@ -79,6 +81,196 @@ TRUEOS_CPP_DEMO_INLINE float hash_unit(int2 cell, uint seed, uint lane)
     const uint mixed =
         hash_u32(x * 0x9E3779B9u ^ y * 0x85EBCA6Bu ^ seed ^ lane * 0xC2B2AE35u);
     return static_cast<float>(mixed & 0x00FFFFFFu) * (1.0f / 16777216.0f);
+}
+
+TRUEOS_CPP_DEMO_INLINE float value_noise(float2 point, uint seed)
+{
+    const float2 floored = floor(point);
+    const int2 cell = convert_int2_rtn(floored);
+    const float2 fraction = point - floored;
+    const float2 blend = fraction * fraction * (3.0f - 2.0f * fraction);
+    const float lower = mix(
+        hash_unit(cell, seed, 0u),
+        hash_unit(cell + (int2)(1, 0), seed, 0u),
+        blend.x);
+    const float upper = mix(
+        hash_unit(cell + (int2)(0, 1), seed, 0u),
+        hash_unit(cell + (int2)(1, 1), seed, 0u),
+        blend.x);
+    return mix(lower, upper, blend.y);
+}
+
+TRUEOS_CPP_DEMO_INLINE float retro_circle(
+    float2 point,
+    float2 center,
+    float radius,
+    float blur)
+{
+    return 1.0f - smoothstep(
+        radius - blur,
+        radius + blur,
+        vector_length(point - center));
+}
+
+TRUEOS_CPP_DEMO_INLINE float retro_line_band(
+    float value,
+    float center,
+    float half_width,
+    float softness)
+{
+    return 1.0f - smoothstep(
+        half_width,
+        half_width + softness,
+        fabs(value - center));
+}
+
+TRUEOS_CPP_DEMO_INLINE float3 retro_sun_palette(float value)
+{
+    const float3 top = (float3)(1.0f, 0.16f, 0.55f);
+    const float3 middle = (float3)(1.0f, 0.46f, 0.12f);
+    const float3 lower = (float3)(1.0f, 0.92f, 0.20f);
+    const float3 upper_gradient =
+        mix(middle, top, smoothstep(0.35f, 1.0f, value));
+    return mix(
+        lower,
+        upper_gradient,
+        smoothstep(0.0f, 0.85f, value));
+}
+
+TRUEOS_CPP_DEMO_INLINE float3 render_retro_sun(
+    float2 uv,
+    float2 pixel,
+    float2 extent,
+    float time,
+    uint seed)
+{
+    constexpr float pi = 3.14159265359f;
+    const float2 sun_center = (float2)(0.0f, 0.18f);
+
+    // UI4 rows run top-to-bottom; the reference fragment space is bottom-up.
+    float2 point = (float2)(uv.x, -uv.y);
+    const float radius_squared = dot(point, point);
+    point *= 1.0f + radius_squared * 0.055f;
+
+    const float3 sky_top = (float3)(0.07f, 0.00f, 0.18f);
+    const float3 sky_bottom = (float3)(0.01f, 0.00f, 0.05f);
+    float3 color = mix(
+        sky_bottom,
+        sky_top,
+        smoothstep(-0.8f, 0.9f, point.y));
+
+    const float horizon_distance = fabs(point.y + 0.30f);
+    const float horizon = 1.0f - smoothstep(0.03f, 0.44f, horizon_distance);
+    color += (float3)(0.35f, 0.02f, 0.38f) * horizon;
+    color += (float3)(0.06f, 0.00f, 0.20f)
+        * (1.0f - smoothstep(-0.8f, 0.9f, point.y));
+
+    const float sun = retro_circle(point, sun_center, 0.48f, 0.012f);
+    const float sun_y = saturate((point.y - (sun_center.y - 0.48f)) / 0.96f);
+    const float3 sun_color = retro_sun_palette(sun_y);
+
+    float bands = 0.0f;
+    for (uint band = 0u; band < 12u; ++band) {
+        const float band_f = static_cast<float>(band);
+        const float band_y = sun_center.y - 0.34f + band_f * 0.064f;
+        const float wave =
+            native_sin(point.x * 9.0f + time * 1.9f + band_f * 0.85f) * 0.013f;
+        const float thickness = mix(0.010f, 0.030f, band_f / 12.0f);
+        bands += retro_line_band(point.y, band_y + wave, thickness, 0.006f);
+    }
+    const float band_cut = saturate(bands);
+
+    const float surface_noise =
+        value_noise((float2)(point.x * 2.0f, time * 0.35f), seed ^ 0x51A7u);
+    float shimmer = native_sin(
+        (point.y + surface_noise) * 95.0f + time * 4.0f);
+    shimmer = smoothstep(0.58f, 1.0f, shimmer)
+        * smoothstep(-0.30f, 0.55f, point.y);
+    color = mix(
+        color,
+        sun_color + (float3)(0.18f, 0.02f, 0.08f) * shimmer,
+        sun * (1.0f - band_cut * 0.92f));
+
+    const float glow =
+        native_exp(-vector_length(point - sun_center) * 2.6f) * 0.95f;
+    color += (float3)(1.0f, 0.08f, 0.55f) * glow * 0.38f;
+    color += (float3)(1.0f, 0.55f, 0.10f) * glow * 0.17f;
+
+    const float water_mask =
+        1.0f - smoothstep(-0.32f, -0.18f, point.y);
+    const float perspective =
+        1.0f - smoothstep(-1.05f, -0.25f, point.y);
+    const float wave_one = native_sin(
+        point.x * (8.0f + perspective * 38.0f)
+        + time * 2.0f
+        + native_sin(point.y * 12.0f));
+    const float wave_two = native_sin(
+        point.x * (18.0f + perspective * 65.0f)
+        - time * 1.3f
+        + point.y * 26.0f);
+    float water_lines = smoothstep(
+        0.80f,
+        0.98f,
+        wave_one * 0.55f + wave_two * 0.45f);
+    water_lines *= water_mask * smoothstep(-1.05f, -0.15f, point.y);
+    color += (float3)(0.95f, 0.05f, 0.55f)
+        * water_lines
+        * (0.65f + perspective * 0.8f);
+    color += (float3)(0.15f, 0.65f, 1.0f) * water_lines * 0.18f;
+
+    const float reflection_center =
+        native_sin(point.y * 10.0f + time) * 0.025f;
+    const float reflection_width = 1.0f - smoothstep(
+        0.04f,
+        0.58f,
+        fabs(point.x + reflection_center));
+    const float reflection = reflection_width
+        * water_mask
+        * smoothstep(-1.0f, -0.18f, point.y);
+    const float reflection_lines = smoothstep(
+        0.46f,
+        1.0f,
+        native_sin(
+            point.y * 115.0f
+            + time * 5.0f
+            + native_sin(point.x * 15.0f) * 1.5f));
+    color += (float3)(1.0f, 0.22f, 0.55f)
+        * reflection
+        * reflection_lines
+        * 0.42f;
+    color += (float3)(1.0f, 0.78f, 0.18f)
+        * reflection
+        * reflection_lines
+        * 0.16f;
+
+    const float2 star_position =
+        (point + (float2)(2.0f, 1.3f)) * (float2)(70.0f, 45.0f);
+    const int2 star_cell = convert_int2_rtn(floor(star_position));
+    const float star_hash = hash_unit(star_cell, seed ^ 0x57A2u, 0u);
+    float star = star_hash >= 0.995f ? 1.0f : 0.0f;
+    star *= smoothstep(0.05f, 0.75f, point.y);
+    star *= saturate(
+        0.45f + 0.55f * native_sin(time * 2.0f + star_hash * 20.0f));
+    color += (float3)(1.0f, 0.78f, 1.0f) * star;
+
+    const float webgl_frag_y = extent.y - pixel.y;
+    const float scanline =
+        0.88f + 0.12f * native_sin(webgl_frag_y * pi * 1.15f);
+    const float grain = value_noise(
+        pixel * 0.75f + (float2)(time * 24.0f),
+        seed ^ 0xC27Fu) * 0.035f;
+    const float vignette = 1.0f - smoothstep(
+        0.18f,
+        1.42f,
+        vector_length(point * (float2)(0.82f, 0.96f)));
+    color *= scanline;
+    color += (float3)(grain);
+    color *= vignette;
+
+    color = 1.0f - native_exp(-fmax(color, (float3)(0.0f)) * 1.35f);
+    color = native_exp2(
+        native_log2(fmax(color, (float3)(0.0001f))) * 0.82f);
+    return color;
 }
 
 TRUEOS_CPP_DEMO_INLINE float3 render_aurora(float2 uv, float time, uint seed)
@@ -346,9 +538,23 @@ __kernel void cpp_demo_rgba8(
     const float2 uv = (normalized * 2.0f - 1.0f) * (float2)(aspect, 1.0f);
     const uint bounded_mode = demo_mode < mode_count ? demo_mode : mode_gallery;
 
-    float3 color = bounded_mode == mode_gallery
-        ? render_gallery(normalized, time_seconds, seed)
-        : render_selected(bounded_mode, uv, time_seconds, seed);
+    float3 color;
+    if (bounded_mode == mode_gallery) {
+        color = render_gallery(normalized, time_seconds, seed);
+    } else if (bounded_mode == mode_retro_sun) {
+        color = render_retro_sun(
+            uv,
+            (float2)(
+                static_cast<float>(local_x) + 0.5f,
+                static_cast<float>(local_y) + 0.5f),
+            (float2)(
+                static_cast<float>(rect_width),
+                static_cast<float>(rect_height)),
+            time_seconds,
+            seed);
+    } else {
+        color = render_selected(bounded_mode, uv, time_seconds, seed);
+    }
     if ((flags & 1u) != 0u) {
         const float vignette =
             saturate(1.16f - 0.34f * dot(normalized * 2.0f - 1.0f,

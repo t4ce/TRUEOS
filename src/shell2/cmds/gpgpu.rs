@@ -169,6 +169,7 @@ const fn preview_surface_count(preset: crate::ui4::GpgpuPreviewPreset) -> usize 
         | crate::ui4::GpgpuPreviewPreset::CppJulia
         | crate::ui4::GpgpuPreviewPreset::CppSdf
         | crate::ui4::GpgpuPreviewPreset::CppVoronoi
+        | crate::ui4::GpgpuPreviewPreset::CppRetroSun
         | crate::ui4::GpgpuPreviewPreset::CppAudio => 1,
     }
 }

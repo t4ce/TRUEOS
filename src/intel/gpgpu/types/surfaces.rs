@@ -337,6 +337,8 @@ const GPGPU_FONT_INSTANCE_FLAG_TIMING_SINE: u32 = 1 << 3;
 const GPGPU_FONT_INSTANCE_ITERATION_SHIFT: u32 = 4;
 const GPGPU_FONT_INSTANCE_CHANNELS_SHIFT: u32 = 8;
 const GPGPU_FONT_INSTANCE_FRAME_COUNT_SHIFT: u32 = 16;
+const GPGPU_FONT_INSTANCE_FLAG_AFFINE_TRANSFORM: u32 = 1 << 20;
+const GPGPU_FONT_INSTANCE_FLAG_MOTION: u32 = 1 << 21;
 
 /// One immutable-layout font presentation record consumed directly by the
 /// C++/IGC font-instance kernel. The complete record is copied into persistent
@@ -381,11 +383,16 @@ impl GpgpuFontInstanceDescriptor {
     }
 
     pub(crate) fn set_transform(&mut self, scale: f32, rotation_radians: f32, opacity: f32) {
-        self.dwords[7] = scale.clamp(0.125, 8.0).to_bits();
-        self.dwords[8] = rotation_radians
-            .clamp(-core::f32::consts::PI, core::f32::consts::PI)
-            .to_bits();
+        let scale = scale.clamp(0.125, 8.0);
+        let rotation = rotation_radians.clamp(-core::f32::consts::PI, core::f32::consts::PI);
+        self.dwords[7] = scale.to_bits();
+        self.dwords[8] = rotation.to_bits();
         self.dwords[9] = opacity.clamp(0.0, 1.0).to_bits();
+        if (scale - 1.0).abs() > f32::EPSILON || rotation.abs() > f32::EPSILON {
+            self.dwords[1] |= GPGPU_FONT_INSTANCE_FLAG_AFFINE_TRANSFORM;
+        } else {
+            self.dwords[1] &= !GPGPU_FONT_INSTANCE_FLAG_AFFINE_TRANSFORM;
+        }
     }
 
     pub(crate) fn set_background(&mut self, rgba: u32) {
@@ -415,6 +422,16 @@ impl GpgpuFontInstanceDescriptor {
         self.dwords[17] = opacity_amplitude.clamp(-1.0, 1.0).to_bits();
         self.dwords[18] = translation_amplitude_px[0].clamp(-4096.0, 4096.0).to_bits();
         self.dwords[19] = translation_amplitude_px[1].clamp(-4096.0, 4096.0).to_bits();
+        if rotation_amplitude_radians.abs() > f32::EPSILON
+            || scale_amplitude.abs() > f32::EPSILON
+            || opacity_amplitude.abs() > f32::EPSILON
+            || translation_amplitude_px[0].abs() > f32::EPSILON
+            || translation_amplitude_px[1].abs() > f32::EPSILON
+        {
+            self.dwords[1] |= GPGPU_FONT_INSTANCE_FLAG_MOTION;
+        } else {
+            self.dwords[1] &= !GPGPU_FONT_INSTANCE_FLAG_MOTION;
+        }
     }
 
     pub(crate) fn set_color_animation(

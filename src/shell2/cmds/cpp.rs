@@ -12,10 +12,10 @@ const CPP_AUDIO_DEFAULT_DURATION_MS: u64 = 0;
 const CPP_AUDIO_DEFAULT_CADENCE_MS: u64 = 50;
 
 fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "cpp [gallery|aurora|julia|sdf|voronoi|audio]");
+    print_shell_line(io, "cpp [gallery|aurora|julia|sdf|voronoi|retro-sun|audio]");
     print_shell_line(
         io,
-        "cpp start [gallery|aurora|julia|sdf|voronoi|audio] [duration_ms] [cadence_ms] [publish_every]",
+        "cpp start [gallery|aurora|julia|sdf|voronoi|retro-sun|audio] [duration_ms] [cadence_ms] [publish_every]",
     );
     print_shell_line(io, "cpp list");
     print_shell_line(io, "cpp status");
@@ -35,6 +35,12 @@ fn parse_mode(raw: &str) -> Option<crate::ui4::GpgpuPreviewPreset> {
         Some(crate::ui4::GpgpuPreviewPreset::CppSdf)
     } else if raw.eq_ignore_ascii_case("voronoi") {
         Some(crate::ui4::GpgpuPreviewPreset::CppVoronoi)
+    } else if raw.eq_ignore_ascii_case("retro")
+        || raw.eq_ignore_ascii_case("sun")
+        || raw.eq_ignore_ascii_case("retro-sun")
+        || raw.eq_ignore_ascii_case("retrosun")
+    {
+        Some(crate::ui4::GpgpuPreviewPreset::CppRetroSun)
     } else if raw.eq_ignore_ascii_case("audio")
         || raw.eq_ignore_ascii_case("av")
         || raw.eq_ignore_ascii_case("visualizer")
@@ -168,6 +174,7 @@ const fn cpp_mode_label(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str 
         crate::ui4::GpgpuPreviewPreset::CppJulia => "julia",
         crate::ui4::GpgpuPreviewPreset::CppSdf => "sdf",
         crate::ui4::GpgpuPreviewPreset::CppVoronoi => "voronoi",
+        crate::ui4::GpgpuPreviewPreset::CppRetroSun => "retro-sun",
         crate::ui4::GpgpuPreviewPreset::CppAudio => "audio",
         _ => "not-cpp",
     }
@@ -193,6 +200,10 @@ fn print_list(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         "cpp demo: mode=voronoi id=4 explores=integer-hashing/neighbour-search/procedural-cells",
+    );
+    print_shell_line(
+        io,
+        "cpp demo: mode=retro-sun id=5 standalone=1 gallery=0 explores=layered-synthwave/sun-cutout-bands/ocean-reflection/stars/CRT-post",
     );
     print_shell_line(
         io,
@@ -476,4 +487,16 @@ pub(crate) fn try_parse(
     }
 
     ParseOutcome::Handled
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_mode;
+
+    #[test]
+    fn retro_sun_aliases_select_the_standalone_preset() {
+        for alias in ["retro-sun", "retro", "sun", "retrosun"] {
+            assert_eq!(parse_mode(alias), Some(crate::ui4::GpgpuPreviewPreset::CppRetroSun),);
+        }
+    }
 }
