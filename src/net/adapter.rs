@@ -697,8 +697,7 @@ struct CheckedUdpSendResult {
     result: Result<(), &'static str>,
 }
 
-const CHECKED_UDP_SEND_RESULTS_CAP: usize =
-    crate::allcaps::net::CHECKED_UDP_SEND_RESULTS_CAP;
+const CHECKED_UDP_SEND_RESULTS_CAP: usize = crate::allcaps::net::CHECKED_UDP_SEND_RESULTS_CAP;
 static CHECKED_UDP_SEND_RESULTS: spin::Mutex<VecDeque<CheckedUdpSendResult>> =
     spin::Mutex::new(VecDeque::new());
 static CHECKED_UDP_SEND_RESULT_DROPS: AtomicU64 = AtomicU64::new(0);

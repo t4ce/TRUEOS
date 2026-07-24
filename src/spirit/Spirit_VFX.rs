@@ -1014,10 +1014,9 @@ static CONTROL_PANEL: Mutex<Option<SpiritVfxControlPanel>> = Mutex::new(None);
 static CONTROL_PANEL_REVISION: AtomicU64 = AtomicU64::new(1);
 static MOVE_PORTAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 static MOVE_PORTAL_STARTED_MS: AtomicU64 = AtomicU64::new(0);
-static IDLE_SPRITE_SHADER_ACTIVE: AtomicBool = AtomicBool::new(false);
-static IDLE_SPRITE_SHADER_STARTED_MS: AtomicU64 = AtomicU64::new(0);
 
 const IDLE_AURA_HALF_CYCLE_MS: u64 = 1_000;
+const IDLE_VFX_OPACITY_RAMP_MS: u64 = 1_000;
 // The comparison grid's normalized controls are
 // `[-0.3 -> 0 -> -0.3, +1, -1, -1]`. For Aura bloom those positions map to
 // the kernel's `[radius 9 -> 12 -> 9, strength 2.5, pulse 0, brighten 0]`.
@@ -1029,6 +1028,33 @@ const IDLE_AURA_STRENGTH: f32 = 2.5;
 // the stable kernel ABI, but the live Spirit path does not let individual
 // effects or the move transition grow beyond this footprint.
 const SPIRIT_BACKGROUND_PRESENT_SCALE: f32 = 1.2;
+
+#[derive(Copy, Clone)]
+struct IdleVfxState {
+    active: bool,
+    transition_started_ms: u64,
+    transition_from_opacity: f32,
+    sprite_started_ms: u64,
+}
+
+impl IdleVfxState {
+    const INACTIVE: Self = Self {
+        active: false,
+        transition_started_ms: 0,
+        transition_from_opacity: 0.0,
+        sprite_started_ms: 0,
+    };
+
+    fn opacity(self, now_ms: u64) -> f32 {
+        let progress = (now_ms.saturating_sub(self.transition_started_ms) as f32
+            / IDLE_VFX_OPACITY_RAMP_MS as f32)
+            .min(1.0);
+        let target = if self.active { 1.0 } else { 0.0 };
+        self.transition_from_opacity + (target - self.transition_from_opacity) * progress
+    }
+}
+
+static IDLE_VFX_STATE: Mutex<IdleVfxState> = Mutex::new(IdleVfxState::INACTIVE);
 
 pub(crate) fn control_panel_snapshot() -> (u64, SpiritVfxControlPanel) {
     let panel = CONTROL_PANEL
@@ -1102,17 +1128,23 @@ pub(super) fn set_move_portal_transition(active: bool) {
     }
 }
 
-/// Select Aura bloom for the duration of Lilly's idle state without replacing
-/// the persistent VFX panel. The epoch is written only on the inactive-to-active
-/// edge, so the radius loop remains continuous across idle clip boundaries.
-pub(super) fn set_idle_sprite_shader(active: bool) {
-    if IDLE_SPRITE_SHADER_ACTIVE.load(Ordering::Acquire) == active {
+/// Select the idle VFX pair without replacing the persistent VFX panel. The
+/// transition is recorded only on real idle edges, so clip/control boundaries
+/// neither restart Aura bloom nor the Magic circle opacity envelope.
+pub(super) fn set_idle_vfx(active: bool) {
+    let now_ms = Instant::now().as_millis();
+    let mut state = IDLE_VFX_STATE.lock();
+    if state.active == active {
         return;
     }
+    let current_opacity = state.opacity(now_ms);
+    state.active = active;
+    state.transition_started_ms = now_ms;
+    state.transition_from_opacity = current_opacity;
     if active {
-        IDLE_SPRITE_SHADER_STARTED_MS.store(Instant::now().as_millis(), Ordering::Release);
+        state.sprite_started_ms = now_ms;
     }
-    IDLE_SPRITE_SHADER_ACTIVE.store(active, Ordering::Release);
+    drop(state);
     CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel);
 }
 
@@ -1156,6 +1188,8 @@ pub(crate) fn set_edge_fade_pixels(pixels: f32) -> Result<u64, SpiritVfxControlE
 pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     let (revision, panel) = control_panel_snapshot();
     let now = Instant::now();
+    let idle_vfx = *IDLE_VFX_STATE.lock();
+    let idle_opacity = idle_vfx.opacity(now.as_millis());
     let move_portal_active = MOVE_PORTAL_ACTIVE.load(Ordering::Acquire);
     let background = if move_portal_active {
         let elapsed_ms = now
@@ -1166,13 +1200,22 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
         background.speed *= ramp;
         background.intensity = 0.5 + (background.intensity - 0.5) * ramp;
         background
+    } else if idle_opacity > 0.0 {
+        let (_, bg_color_a, bg_color_b) = SpiritVfxBackgroundEffect::MagicCircle.demo_style();
+        SpiritVfxAlphaBackground {
+            effect: SpiritVfxBackgroundEffect::MagicCircle,
+            opacity: idle_opacity,
+            scale: SPIRIT_BACKGROUND_PRESENT_SCALE,
+            speed: 1.0,
+            intensity: 1.0,
+            bg_color_a,
+            bg_color_b,
+        }
     } else {
         panel.alpha_background
     };
-    let sprite_shader = if IDLE_SPRITE_SHADER_ACTIVE.load(Ordering::Acquire) {
-        let elapsed_ms = now
-            .as_millis()
-            .saturating_sub(IDLE_SPRITE_SHADER_STARTED_MS.load(Ordering::Acquire));
+    let sprite_shader = if idle_vfx.active {
+        let elapsed_ms = now.as_millis().saturating_sub(idle_vfx.sprite_started_ms);
         let (fx_color_a, fx_color_b) = SpiritVfxEffect::AuraBloom.demo_colors();
         SpiritVfxSpriteShader {
             effect: SpiritVfxEffect::AuraBloom,

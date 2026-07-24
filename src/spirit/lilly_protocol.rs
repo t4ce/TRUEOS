@@ -500,7 +500,7 @@ fn next_idle_animation(rgba: SpiritRgba8) -> Result<LillyScheduledAnimation, Lil
     let scheduled = strategy
         .get_or_insert_with(|| LillyIdleStrategy::new(now))
         .schedule(now, rgba)?;
-    super::spirit_vfx::set_idle_sprite_shader(true);
+    super::spirit_vfx::set_idle_vfx(true);
     Ok(scheduled)
 }
 
@@ -508,7 +508,7 @@ fn pause_idle_strategy() {
     if let Some(strategy) = IDLE_STRATEGY.lock().as_mut() {
         strategy.active = false;
     }
-    super::spirit_vfx::set_idle_sprite_shader(false);
+    super::spirit_vfx::set_idle_vfx(false);
 }
 
 fn centered_interval_ms(rng: &mut crate::tyche::SoftRng, average_ms: u64, window_ms: u64) -> u64 {

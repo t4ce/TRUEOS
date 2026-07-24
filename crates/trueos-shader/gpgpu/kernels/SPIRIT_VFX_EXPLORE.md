@@ -36,10 +36,14 @@ There is no UI4 publish, framebuffer composition, CPU pixel pass, or synchronous
 issuer spin in this chain.
 
 Lilly's idle sequencer transiently selects `Aura bloom` (Sprite shader ID 1)
-without replacing the persistent control-panel selection. The selection occurs
-once on idle entry and remains continuous across blink, posture, and control
-poll boundaries; the prior panel shader returns at the next non-idle gesture.
-Only normalized grid Param 1 moves, following a two-second
+and the background grid's top-row center `Magic circle` (background ID 3)
+without replacing either persistent control-panel selection. The selection
+occurs once on idle entry and remains continuous across blink, posture, and
+control-poll boundaries. The prior panel sprite returns at the next non-idle
+gesture and the prior background returns after Magic circle's exit fade. Its
+opacity ramps linearly from zero to one over one second on entry and from its
+current value to zero over one second on exit. Only Aura bloom's normalized
+grid Param 1 moves, following a two-second
 `-0.3 -> 0 -> -0.3` loop. The complete normalized grid setting
 `[-0.3..0..-0.3, +1, -1, -1]` maps to the kernel parameters
 `[radius 9..12..9, strength 2.5, pulse 0, brighten 0]` and uses Aura bloom's
