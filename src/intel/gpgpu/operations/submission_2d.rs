@@ -598,12 +598,17 @@ fn submit_glyph_mask_layers_2d(
         return (false, false);
     }
     let submitted = direct_rcs_submit_batch(dev, state);
+    let completion_timeout_ms = if direct_scanout {
+        UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS
+    } else {
+        RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS
+    };
     let observed = if submitted {
         direct_rcs_poll_result_slot_timeout_ms(
             state,
             COPY_RECT_POST_MARKER_SLOT,
             COPY_RECT_POST_MARKER,
-            RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS,
+            completion_timeout_ms,
         )
     } else {
         0
@@ -620,7 +625,7 @@ fn submit_glyph_mask_layers_2d(
                 submitted as u8,
                 direct_rcs_read_result_slot(state, COPY_RECT_PRE_MARKER_SLOT),
                 observed,
-                RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS,
+                completion_timeout_ms,
             );
         }
     }

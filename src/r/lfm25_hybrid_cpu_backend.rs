@@ -7,10 +7,13 @@
 
 extern crate alloc;
 
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU8, Ordering};
 use embassy_time::{Duration, Instant, Timer};
 use sha2::{Digest, Sha256};
+use spin::Mutex;
 
 use trueos_fpga_abi::lfm25::{self, NativeTensorDescriptor, TensorFormat, TensorRole};
 use trueos_fpga_abi::lfm25_decode::{
@@ -34,6 +37,42 @@ const MODEL_READ_CHUNK: usize = 256 * 1024;
 const MODEL_ALIGNMENT: usize = 64;
 const CPU_CONNECTION_GENERATION: u32 = 0x4350_5531; // "CPU1"
 const CPU_SESSION_EPOCH: u32 = 1;
+const RESIDENT_COLD: u8 = 0;
+const RESIDENT_BUILDING: u8 = 1;
+const RESIDENT_READY: u8 = 2;
+const RESIDENT_WAIT_MS: u64 = 10;
+
+struct ResidentBuildClaim {
+    state: &'static AtomicU8,
+    published: bool,
+}
+
+impl ResidentBuildClaim {
+    const fn new(state: &'static AtomicU8) -> Self {
+        Self {
+            state,
+            published: false,
+        }
+    }
+
+    fn publish_ready(mut self) {
+        self.state.store(RESIDENT_READY, Ordering::Release);
+        self.published = true;
+    }
+}
+
+impl Drop for ResidentBuildClaim {
+    fn drop(&mut self) {
+        if !self.published {
+            let _ = self.state.compare_exchange(
+                RESIDENT_BUILDING,
+                RESIDENT_COLD,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum HybridCpuBackendError {
@@ -92,11 +131,25 @@ struct KvCache {
     values: Vec<u16>,
 }
 
-pub struct HybridCpuAotDecodeBackend {
+struct IntelIgcResidentModel {
     model_storage: Vec<u8>,
     model_offset: usize,
     gpu_model: crate::intel::gpgpu::Lfm25Q8ModelMapping,
-    f32: cpu::F32Sidecar,
+}
+
+struct IntelIgcResidentAssets {
+    model: Arc<IntelIgcResidentModel>,
+    f32: Arc<cpu::F32Sidecar>,
+}
+
+static RESIDENT_MODEL_STATE: AtomicU8 = AtomicU8::new(RESIDENT_COLD);
+static RESIDENT_F32_STATE: AtomicU8 = AtomicU8::new(RESIDENT_COLD);
+static RESIDENT_MODEL: Mutex<Option<Arc<IntelIgcResidentModel>>> = Mutex::new(None);
+static RESIDENT_F32: Mutex<Option<Arc<cpu::F32Sidecar>>> = Mutex::new(None);
+static RESIDENT_ASSETS: Mutex<Option<Arc<IntelIgcResidentAssets>>> = Mutex::new(None);
+
+pub struct HybridCpuAotDecodeBackend {
+    assets: Arc<IntelIgcResidentAssets>,
     slots: Vec<Option<CpuTensor>>,
     shortconv: Vec<Vec<[f32; 2]>>,
     kv: Vec<KvCache>,
@@ -105,16 +158,12 @@ pub struct HybridCpuAotDecodeBackend {
 
 pub type IntelIgcAotDecodeBackend = HybridCpuAotDecodeBackend;
 
-pub async fn open_intel_igc_backend() -> Result<IntelIgcAotDecodeBackend, HybridCpuBackendError> {
+async fn load_resident_model() -> Result<IntelIgcResidentModel, HybridCpuBackendError> {
     if !crate::intel::gpgpu::lfm25_q8_packed_project_supported() {
         return Err(HybridCpuBackendError::Gpu(
             crate::intel::gpgpu::Lfm25Q8ProjectError::UnsupportedTarget,
         ));
     }
-    // This is intentionally loaded before any short-convolution or K/V state
-    // is allocated, so a missing or mismatched sidecar cannot partially mutate
-    // a decoder session.
-    let f32 = lfm25_f32::load().await?;
     let image = lfm25_model::open().await?;
     let bytes = usize::try_from(image.len()).map_err(|_| HybridCpuBackendError::Allocation)?;
     let allocation_bytes = bytes
@@ -171,7 +220,118 @@ pub async fn open_intel_igc_backend() -> Result<IntelIgcAotDecodeBackend, Hybrid
         Instant::now().as_millis().saturating_sub(pack_started_ms),
     );
     let gpu_model = crate::intel::gpgpu::bind_lfm25_q8_packed_model(model)?;
+    Ok(IntelIgcResidentModel {
+        model_storage,
+        model_offset,
+        gpu_model,
+    })
+}
 
+async fn resident_model() -> Result<Arc<IntelIgcResidentModel>, HybridCpuBackendError> {
+    loop {
+        if RESIDENT_MODEL_STATE.load(Ordering::Acquire) == RESIDENT_READY {
+            if let Some(model) = RESIDENT_MODEL.lock().clone() {
+                return Ok(model);
+            }
+            RESIDENT_MODEL_STATE.store(RESIDENT_COLD, Ordering::Release);
+        }
+        if RESIDENT_MODEL_STATE
+            .compare_exchange(RESIDENT_COLD, RESIDENT_BUILDING, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let claim = ResidentBuildClaim::new(&RESIDENT_MODEL_STATE);
+            match load_resident_model().await {
+                Ok(model) => {
+                    let model = Arc::new(model);
+                    *RESIDENT_MODEL.lock() = Some(model.clone());
+                    claim.publish_ready();
+                    let _ = publish_resident_assets_if_complete();
+                    return Ok(model);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Timer::after(Duration::from_millis(RESIDENT_WAIT_MS)).await;
+    }
+}
+
+async fn resident_f32() -> Result<Arc<cpu::F32Sidecar>, HybridCpuBackendError> {
+    loop {
+        if RESIDENT_F32_STATE.load(Ordering::Acquire) == RESIDENT_READY {
+            if let Some(f32) = RESIDENT_F32.lock().clone() {
+                return Ok(f32);
+            }
+            RESIDENT_F32_STATE.store(RESIDENT_COLD, Ordering::Release);
+        }
+        if RESIDENT_F32_STATE
+            .compare_exchange(RESIDENT_COLD, RESIDENT_BUILDING, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let claim = ResidentBuildClaim::new(&RESIDENT_F32_STATE);
+            match lfm25_f32::load().await {
+                Ok(f32) => {
+                    let f32 = Arc::new(f32);
+                    *RESIDENT_F32.lock() = Some(f32.clone());
+                    claim.publish_ready();
+                    let _ = publish_resident_assets_if_complete();
+                    return Ok(f32);
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Timer::after(Duration::from_millis(RESIDENT_WAIT_MS)).await;
+    }
+}
+
+fn publish_resident_assets_if_complete() -> Option<Arc<IntelIgcResidentAssets>> {
+    if let Some(assets) = RESIDENT_ASSETS.lock().clone() {
+        return Some(assets);
+    }
+    let model = RESIDENT_MODEL.lock().clone()?;
+    let f32 = RESIDENT_F32.lock().clone()?;
+    let candidate = Arc::new(IntelIgcResidentAssets { model, f32 });
+    let mut assets = RESIDENT_ASSETS.lock();
+    if let Some(existing) = assets.as_ref() {
+        return Some(existing.clone());
+    }
+    *assets = Some(candidate.clone());
+    Some(candidate)
+}
+
+async fn resident_assets() -> Result<Arc<IntelIgcResidentAssets>, HybridCpuBackendError> {
+    if let Some(assets) = RESIDENT_ASSETS.lock().clone() {
+        return Ok(assets);
+    }
+    // The warm fleet prepares these independently. A direct shell open retains
+    // the same fail-closed ordering when autostart has not completed yet.
+    let _ = resident_f32().await?;
+    let _ = resident_model().await?;
+    publish_resident_assets_if_complete().ok_or(HybridCpuBackendError::State)
+}
+
+pub(crate) async fn warm_intel_igc_model() -> Result<(), HybridCpuBackendError> {
+    let _ = resident_model().await?;
+    Ok(())
+}
+
+pub(crate) async fn warm_intel_igc_f32() -> Result<(), HybridCpuBackendError> {
+    let _ = resident_f32().await?;
+    Ok(())
+}
+
+pub(crate) fn intel_igc_resident_assets_ready() -> bool {
+    RESIDENT_ASSETS.lock().is_some()
+}
+
+pub async fn open_intel_igc_backend() -> Result<IntelIgcAotDecodeBackend, HybridCpuBackendError> {
+    if !crate::intel::gpgpu::lfm25_q8_packed_project_supported() {
+        return Err(HybridCpuBackendError::Gpu(
+            crate::intel::gpgpu::Lfm25Q8ProjectError::UnsupportedTarget,
+        ));
+    }
+    // Immutable model/F32 assets remain boot-resident. Every conversation gets
+    // fresh short-convolution, K/V, tensor-slot and callback state.
+    let assets = resident_assets().await?;
     let mut shortconv = Vec::new();
     shortconv
         .try_reserve_exact(trueos_fpga_abi::lfm25_decode::SHORTCONV_STATE_COUNT)
@@ -187,10 +347,7 @@ pub async fn open_intel_igc_backend() -> Result<IntelIgcAotDecodeBackend, Hybrid
     }
 
     Ok(HybridCpuAotDecodeBackend {
-        model_storage,
-        model_offset,
-        gpu_model,
-        f32,
+        assets,
         slots: Vec::new(),
         shortconv,
         kv,
@@ -217,12 +374,16 @@ impl HybridCpuAotDecodeBackend {
 
     fn tensor(&self, descriptor: NativeTensorDescriptor) -> Result<&[u8], HybridCpuBackendError> {
         let model_end = self
+            .assets
+            .model
             .model_offset
             .checked_add(lfm25::PINNED_NATIVE_IMAGE_BYTES as usize)
             .ok_or(HybridCpuBackendError::Tensor)?;
         let model = self
+            .assets
+            .model
             .model_storage
-            .get(self.model_offset..model_end)
+            .get(self.assets.model.model_offset..model_end)
             .ok_or(HybridCpuBackendError::Tensor)?;
         let start = descriptor.native_offset as usize;
         let end = start
@@ -238,7 +399,7 @@ impl HybridCpuAotDecodeBackend {
         if TensorFormat::from_raw(descriptor.format) != Some(TensorFormat::Bf16Le) {
             return Err(HybridCpuBackendError::Tensor);
         }
-        Ok(self.f32.tensor(descriptor.tensor_id)?.to_vec())
+        Ok(self.assets.f32.tensor(descriptor.tensor_id)?.to_vec())
     }
 
     async fn project(
@@ -300,7 +461,7 @@ impl HybridCpuAotDecodeBackend {
         let mut output_slices: Vec<&mut [f32]> =
             outputs.iter_mut().map(Vec::as_mut_slice).collect();
         crate::intel::gpgpu::lfm25_q8_project_batch(
-            self.gpu_model,
+            self.assets.model.gpu_model,
             &specs,
             activation,
             &mut output_slices,

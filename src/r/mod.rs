@@ -18,6 +18,8 @@ pub mod lfm25_ffn;
 pub mod lfm25_hybrid_cpu_backend;
 pub mod lfm25_model;
 pub mod lfm25_tokenizer;
+#[cfg(feature = "trueos_lumen")]
+pub mod lfm25_warm_service;
 pub mod mouse_motion_service;
 pub mod net;
 pub mod pat;

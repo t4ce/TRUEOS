@@ -164,6 +164,36 @@ available as a rollback/debug lane. Linked and packaged product gates require
 the packed binary, and the normal compiler-free artifact gate reruns the
 eight-DP4A ISA proof.
 
+## Resident warm fleet
+
+The central service registry autostarts `lfm25-warm-pool` only after the root
+filesystem, background AP executors, complete CPU topology and the packed Intel
+kernel lane are ready. It runs three sealed preparation roles across at most
+three performance-core executors at AP2 or above:
+
+- tokenizer load, hash verification and vocabulary construction;
+- source-F32 sidecar load, hash verification and tensor-table admission;
+- native Q8 image read, native hash, in-place packed conversion, packed hash
+  and persistent GPU bind.
+
+The BSP only admits the registry entry. AP1 remains reserved for UI/service
+work, and neither BSP nor AP1 is a fallback execution lane. On machines with
+fewer than three eligible performance APs, the roles share those AP executors
+without exceeding the cap.
+
+The packed model allocation, mapping and F32 sidecar are published as one
+immutable boot-lifetime resident asset. The tokenizer is independently
+boot-resident. A conversation allocates only fresh mutable tensor slots,
+short-convolution state, K/V caches and decode-session counters. Consequently,
+closing and reopening a Matrix conversation neither duplicates the 377 MB
+model nor inherits prior recurrent state. An early shell request races safely
+with autostart: the cache has one builder, other callers wait, and no competing
+model copy is admitted.
+
+This fleet improves cold `resident ready` latency and asset lifetime. It does
+not parallelize prompt tokens or alter the 65 dependent submissions per token;
+that remains the responsibility of the ordered resident GPU graph below.
+
 ## Measured port boundary
 
 The first ADL-S target run on the Core i5-14500T reproduced the complete

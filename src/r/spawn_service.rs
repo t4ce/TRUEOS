@@ -41,6 +41,7 @@ define_started_flags!(
     DNS_REQUEST_BROKER_STARTED,
     BLOCKING_JOB_DISPATCHER_STARTED,
     TTSTT_CPU_SERVICE_STARTED,
+    LFM25_WARM_POOL_STARTED,
     SMP_HLT_HISTORY_STARTED,
     CODEC_SERVICE_STARTED,
     QJS_ASYNC_FS_SERVICE_STARTED,
@@ -275,6 +276,26 @@ fn spawn_blocking_service_lanes(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ttstt_cpu_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::ttstt_service::service_task())
+}
+
+#[cfg(feature = "trueos_lumen")]
+fn lfm25_warm_pool_gate() -> bool {
+    crate::workers::all_topology_spawners_registered()
+        && crate::intel::gpgpu::lfm25_q8_packed_project_supported()
+        && crate::workers::background_worker_slots()
+            .iter()
+            .any(|slot| crate::workers::core_kind_for_slot(*slot) == crate::workers::CORE_KIND_PERF)
+}
+
+#[cfg(feature = "trueos_lumen")]
+fn spawn_lfm25_warm_pool(spawner: Spawner) -> SpawnAttempt {
+    let _ = spawner;
+    spawn_bool_result_to_attempt(crate::r::lfm25_warm_service::spawn())
+}
+
+#[cfg(feature = "trueos_lumen")]
+pub(crate) fn retry_lfm25_warm_pool_autostart() {
+    LFM25_WARM_POOL_STARTED.store(false, Ordering::Release);
 }
 
 fn spawn_smp_hlt_history(spawner: Spawner) -> SpawnAttempt {
@@ -1396,6 +1417,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 const TASK_COUNT: usize = 73
+    + cfg!(feature = "trueos_lumen") as usize
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1434,6 +1456,15 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         ttstt_cpu_service_gate,
         &TTSTT_CPU_SERVICE_STARTED,
         spawn_ttstt_cpu_service,
+    ),
+    #[cfg(feature = "trueos_lumen")]
+    TaskSpec::enabled_gated(
+        "lfm25-warm-pool",
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+            | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        lfm25_warm_pool_gate,
+        &LFM25_WARM_POOL_STARTED,
+        spawn_lfm25_warm_pool,
     ),
     TaskSpec::enabled("smp-hlt-history", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history),
     TaskSpec::disabled(
@@ -1805,7 +1836,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TINYAUDIO_SERVICE_STARTED,
         spawn_tinyaudio_service,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "tinyaudio-live-http",
         crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::INTEL_HDA_READY,
         &TINYAUDIO_LIVE_HTTP_STARTED,

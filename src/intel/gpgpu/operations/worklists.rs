@@ -189,19 +189,19 @@ fn submit_fill_rect_worklist(
     desc: GpgpuRectWorklistDescBuffer,
     params: FillRectWorklistRgba8Params,
     direct_scanout: bool,
-) -> bool {
+) -> GpgpuSubmissionOutcome {
     if params.desc_count == 0 || params.desc_count as usize > RECT_WORKLIST_MAX_DESCS {
-        return false;
+        return GpgpuSubmissionOutcome::Unavailable;
     }
     let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
     let Some(dev) = super::claimed_device() else {
-        return false;
+        return GpgpuSubmissionOutcome::Unavailable;
     };
     let Some(upload) = upload_fill_rect_worklist_rgba8_kernel() else {
-        return false;
+        return GpgpuSubmissionOutcome::Unavailable;
     };
     let Some(state) = direct_rcs_state_once(dev) else {
-        return false;
+        return GpgpuSubmissionOutcome::Unavailable;
     };
 
     let forcewake_ok = direct_rcs_forcewake(dev);
@@ -216,7 +216,14 @@ fn submit_fill_rect_worklist(
     let batch_ok = desc_ppgtt_ok
         && direct_rcs_encode_fill_rect_worklist_batch(state, upload, params, dst.bytes, desc.bytes);
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let observed = if submitted {
+    let observed = if submitted && direct_scanout {
+        direct_rcs_poll_result_slot_timeout_ms(
+            state,
+            RECT_WORKLIST_POST_MARKER_SLOT,
+            FILL_RECT_WORKLIST_POST_MARKER,
+            UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
+        )
+    } else if submitted {
         direct_rcs_poll_result_slot(
             state,
             RECT_WORKLIST_POST_MARKER_SLOT,
@@ -225,7 +232,13 @@ fn submit_fill_rect_worklist(
     } else {
         0
     };
-    observed == FILL_RECT_WORKLIST_POST_MARKER
+    if observed == FILL_RECT_WORKLIST_POST_MARKER {
+        GpgpuSubmissionOutcome::Complete
+    } else if submitted {
+        GpgpuSubmissionOutcome::SubmittedIncomplete
+    } else {
+        GpgpuSubmissionOutcome::Unavailable
+    }
 }
 
 fn submit_mandel64_worklist(

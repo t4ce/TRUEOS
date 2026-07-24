@@ -702,7 +702,8 @@ fn submit_fill_rect_worklist_rgba8_probe(force: bool) -> bool {
         desc_count: 2,
     };
     let start_tick = direct_rcs_now_tick();
-    let submitted = submit_fill_rect_worklist(surface, desc, params, false);
+    let submitted =
+        submit_fill_rect_worklist(surface, desc, params, false) == GpgpuSubmissionOutcome::Complete;
     let submit_ms = direct_rcs_elapsed_ms_since(start_tick);
     let pre_marker = direct_rcs_read_result_slot(state, RECT_WORKLIST_PRE_MARKER_SLOT);
     let post_marker = direct_rcs_read_result_slot(state, RECT_WORKLIST_POST_MARKER_SLOT);

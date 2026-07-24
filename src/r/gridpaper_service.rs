@@ -91,7 +91,11 @@ const ERROR_INVALID_ANIMATION: i32 = -5;
 const ERROR_INVALID_INSTANCE: i32 = -6;
 const ERROR_POOL_FULL: i32 = -7;
 
-static GPU_DIRECT_PRESENT_LOGGED: core::sync::atomic::AtomicBool =
+static GPU_COMPUTE_PRESENT_LOGGED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+static LEGACY_RESIDENT_UI4_WARNED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+static GRIDPAPER_COMPUTE_QUARANTINED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
 struct SnapshotStore {
@@ -621,8 +625,8 @@ pub(crate) fn close_owner(owner: u8, instance_id: u32) -> i32 {
 }
 
 /// Detach every Gridpaper presentation owned by a VM while keeping its page,
-/// resident 3D scene, GPU allocations, and last front buffer available for a
-/// same-slot resume.
+/// retained compute inputs, print-only resident resources, GPU allocations,
+/// and last front buffer available for a same-slot resume.
 pub(crate) fn pause_owner_lifecycle(owner: u8) -> usize {
     let mut stores = SNAPSHOTS.lock();
     let mut retained = 0usize;
@@ -635,7 +639,7 @@ pub(crate) fn pause_owner_lifecycle(owner: u8) -> usize {
     if retained != 0 {
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: lifecycle pause owner={} retained_scenes={} action=detach-ui4-preserve-resident-3d\n",
+            "gridpaper: lifecycle pause owner={} retained_scenes={} action=detach-ui4-preserve-compute-inputs+print-resources\n",
             owner,
             retained,
         );
@@ -1057,7 +1061,7 @@ fn initialize_surface(
     let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
     let frame = crate::ui4::create_frame(crate::ui4::FrameSpec {
         output,
-        content: crate::ui4::FrameContent::RenderScene3d,
+        content: crate::ui4::FrameContent::BlueprintScene,
         cadence: crate::ui4::FrameCadence::Streaming,
         buffering: crate::ui4::FrameBuffering::Triple,
         format: crate::ui4::ScanoutFormat::Rgba8888Premultiplied,
@@ -1193,6 +1197,7 @@ fn release_presentation(surface: &mut GridPaperSurface) -> Option<GridPaperPrese
 struct ResidentLayer {
     base_color: [u8; 4],
     text_color_selector: Option<u8>,
+    logical_rects: Vec<SceneRect>,
     mesh: crate::intel::render::ResidentTriangleMesh,
     coverage: Option<crate::intel::gpu_font::GpuFontCoverageMask>,
 }
@@ -1221,6 +1226,15 @@ struct ResidentPage {
 struct Geometry {
     vertices: Vec<[f32; 3]>,
     indices: Vec<u32>,
+    logical_rects: Vec<SceneRect>,
+}
+
+#[derive(Copy, Clone)]
+struct SceneRect {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
 }
 
 impl Geometry {
@@ -1228,6 +1242,7 @@ impl Geometry {
         Self {
             vertices: Vec::new(),
             indices: Vec::new(),
+            logical_rects: Vec::new(),
         }
     }
 
@@ -1246,6 +1261,12 @@ impl Geometry {
         ]);
         self.indices
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        self.logical_rects.push(SceneRect {
+            left,
+            top,
+            right,
+            bottom,
+        });
     }
 
     fn is_empty(&self) -> bool {
@@ -1551,7 +1572,7 @@ fn build_resident_page(
                     Err(reason) => {
                         crate::log_warn!(
                             target: "gridpaper";
-                            "gridpaper: analytical font coverage unavailable instance={} scale={} font={} color={} entries={} reason={} action=resident-triangle-fallback\n",
+                            "gridpaper: analytical font coverage unavailable instance={} scale={} font={} color={} entries={} reason={} action=print-resident-fallback+reject-live-compute-frame\n",
                             instance_id,
                             snapshot.scale_percent,
                             font.registry_name(),
@@ -1568,6 +1589,7 @@ fn build_resident_page(
             layers.push(ResidentLayer {
                 base_color: palette(color, false),
                 text_color_selector: Some(color),
+                logical_rects: Vec::new(),
                 mesh,
                 coverage,
             });
@@ -1605,6 +1627,7 @@ fn push_geometry_layer(
     layers.push(ResidentLayer {
         base_color: color,
         text_color_selector: None,
+        logical_rects: geometry.logical_rects,
         mesh,
         coverage: None,
     });
@@ -1634,6 +1657,37 @@ fn palette(color: u8, background: bool) -> [u8; 4] {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum GridPaperComputeFailure {
+    Unavailable(&'static str),
+    SubmittedIncomplete(&'static str),
+}
+
+impl GridPaperComputeFailure {
+    const fn reason(self) -> &'static str {
+        match self {
+            Self::Unavailable(reason) | Self::SubmittedIncomplete(reason) => reason,
+        }
+    }
+
+    const fn submitted_incomplete(self) -> bool {
+        matches!(self, Self::SubmittedIncomplete(_))
+    }
+}
+
+struct GridPaperFrameResult {
+    changed_pixels: usize,
+    frame_us: u64,
+    geometry_us: u64,
+    geometry_rects: usize,
+    geometry_submits: usize,
+    coverage_us: u64,
+    coverage_submits: usize,
+    coverage_walkers: usize,
+    present_copy_us: u64,
+    release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
+}
+
 fn publish_page(
     surface: &GridPaperSurface,
     page: &ResidentPage,
@@ -1641,7 +1695,19 @@ fn publish_page(
     input_field: CellInputField,
     text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_elapsed_ms: u64,
-) -> Result<crate::intel::render::ResidentSceneFrameResult, ServiceError> {
+) -> Result<GridPaperFrameResult, ServiceError> {
+    use core::sync::atomic::Ordering;
+
+    if GRIDPAPER_COMPUTE_QUARANTINED.load(Ordering::Acquire) {
+        return Err(ServiceError::Render("gridpaper-compute-producer-quarantined"));
+    }
+    if page
+        .layers
+        .iter()
+        .any(|layer| layer.text_color_selector.is_some() && layer.coverage.is_none())
+    {
+        return Err(ServiceError::Render("gridpaper-compute-text-coverage-required"));
+    }
     let presentation = surface
         .presentation
         .ok_or(ServiceError::Window(crate::ui4::WindowBrokerError::SessionClosed))?;
@@ -1657,53 +1723,255 @@ fn publish_page(
         let _ = crate::ui4::cancel_frame_buffer(lease);
         return Err(ServiceError::InvalidFrame);
     }
-    let viewport_translation_px = [
-        page.pan.x * surface.width as f32 / SCENE_WIDTH as f32,
-        page.pan.y * surface.height as f32 / SCENE_HEIGHT as f32,
-    ];
     let cursor_rects =
         selection.and_then(|selection| grid_cursor_rects(surface, page, selection, input_field));
     let final_rects = cursor_rects.as_ref().map_or(&[][..], |rects| &rects[..]);
-    let result = match capture_resident_page_frame(
+    let result = match render_compute_page_frame(
         page,
         text_animations,
         animation_elapsed_ms,
-        viewport_translation_px,
-        surface.width,
-        surface.height,
         final_rects,
-        Some(destination),
+        destination,
     ) {
         Ok(result) => result,
-        Err(reason) => {
-            let _ = crate::ui4::cancel_frame_buffer(lease);
-            return Err(ServiceError::Render(reason));
+        Err(failure) => {
+            if failure.submitted_incomplete() {
+                GRIDPAPER_COMPUTE_QUARANTINED.store(true, Ordering::Release);
+                crate::log_error!(
+                    target: "gridpaper";
+                    "gridpaper: compute producer quarantined instance={} frame={} buffer={} reason={} action=retain-write-lease-no-reuse+disable-gridpaper-compute-until-reboot\n",
+                    surface.instance_id,
+                    lease.frame.raw(),
+                    lease.buffer_index,
+                    failure.reason(),
+                );
+            } else {
+                let _ = crate::ui4::cancel_frame_buffer(lease);
+            }
+            return Err(ServiceError::Render(failure.reason()));
         }
     };
-    if !GPU_DIRECT_PRESENT_LOGGED.swap(true, core::sync::atomic::Ordering::AcqRel) {
+    if !GPU_COMPUTE_PRESENT_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: live frame path=gpu-direct-single-sample-to-ui4-triple size={}x{} pitch={} target_gpu=0x{:X} buffers=3 plane_slot={} cpu_readback={} cpu_frame_copy=0 gpu_frame_copy=0 cursor_overlay=gpgpu-worklist retained_scene=1 coverage_submits={} coverage_walkers={} final_release=pat3-uc+pipe-control-post-sync publish=exact-surface surflive=display-ownership\n",
+            "gridpaper: live frame path=gpgpu-compute-blueprint-scene-to-ui4-triple size={}x{} pitch={} target_gpu=0x{:X} buffers=3 plane_slot={} cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=0 rectangles={} rectangle_submits={} coverage_submits={} coverage_walkers={} cursor_overlay=gpgpu-worklist final_release=compute-pat3-uc+pipe-control-post-sync publish=exact-surface surflive=display-ownership resident3d_ui4=disabled\n",
             destination.width,
             destination.height,
             destination.pitch_bytes,
             destination.gpu,
             UI4_PLANE_SLOT,
-            result.rgba.is_some() as u8,
+            result.geometry_rects,
+            result.geometry_submits,
             result.coverage_submits,
             result.coverage_walkers,
         );
     }
-    let Some(release) = result.release_fence else {
-        let _ = crate::ui4::cancel_frame_buffer(lease);
-        return Err(ServiceError::Render("missing-gridpaper-release-fence"));
-    };
-    if let Err(error) = crate::ui4::publish_gpu_frame_buffer(lease, release) {
+    if let Err(error) = crate::ui4::publish_gpgpu_scene_frame_buffer(lease, result.release) {
         let _ = crate::ui4::cancel_frame_buffer(lease);
         return Err(error.into());
     }
     crate::ui4::publish_window_frame(UI4_OWNER, presentation.window, crate::ui4::DamageRect::FULL)?;
     Ok(result)
+}
+
+fn render_compute_page_frame(
+    page: &ResidentPage,
+    text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    animation_elapsed_ms: u64,
+    final_rects: &[crate::intel::gpgpu::GpgpuSolidRect],
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> Result<GridPaperFrameResult, GridPaperComputeFailure> {
+    use crate::intel::gpgpu::GpgpuSubmissionOutcome;
+
+    let frame_started_ns = crate::chronos::monotonic_nanos();
+    let viewport_translation_px = [
+        page.pan.x * destination.width as f32 / SCENE_WIDTH as f32,
+        page.pan.y * destination.height as f32 / SCENE_HEIGHT as f32,
+    ];
+    let clear = crate::intel::gpgpu::GpgpuSolidRect {
+        rect: crate::intel::gpgpu::GpgpuRect::new(0, 0, destination.width, destination.height),
+        color_rgba: 0,
+    };
+    let clear_result = crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(
+        destination,
+        core::slice::from_ref(&clear),
+    );
+    match clear_result.outcome {
+        GpgpuSubmissionOutcome::Complete => {}
+        GpgpuSubmissionOutcome::SubmittedIncomplete => {
+            return Err(GridPaperComputeFailure::SubmittedIncomplete(
+                "gridpaper-compute-clear-incomplete",
+            ));
+        }
+        GpgpuSubmissionOutcome::Unavailable => {
+            return Err(GridPaperComputeFailure::Unavailable(
+                "gridpaper-compute-clear-unavailable",
+            ));
+        }
+    }
+
+    let mut geometry_rects = 1usize;
+    let mut geometry_submits = clear_result.stats.submits;
+    for layer in &page.layers {
+        if layer.logical_rects.is_empty() {
+            continue;
+        }
+        let color_rgba =
+            u32::from_le_bytes(resident_layer_color(layer, text_animations, animation_elapsed_ms));
+        let rects = layer
+            .logical_rects
+            .iter()
+            .filter_map(|rect| {
+                scene_rect_to_surface(*rect, destination, viewport_translation_px, color_rgba)
+            })
+            .collect::<Vec<_>>();
+        if rects.is_empty() {
+            continue;
+        }
+        let rendered = crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(
+            destination,
+            rects.as_slice(),
+        );
+        match rendered.outcome {
+            GpgpuSubmissionOutcome::Complete => {
+                geometry_rects = geometry_rects.saturating_add(rendered.stats.descs);
+                geometry_submits = geometry_submits.saturating_add(rendered.stats.submits);
+            }
+            GpgpuSubmissionOutcome::SubmittedIncomplete => {
+                return Err(GridPaperComputeFailure::SubmittedIncomplete(
+                    "gridpaper-compute-rectangles-incomplete",
+                ));
+            }
+            GpgpuSubmissionOutcome::Unavailable => {
+                return Err(GridPaperComputeFailure::Unavailable(
+                    "gridpaper-compute-rectangles-unavailable",
+                ));
+            }
+        }
+    }
+    let geometry_finished_ns = crate::chronos::monotonic_nanos();
+
+    let pan_px = [
+        libm::roundf(viewport_translation_px[0]) as i32,
+        libm::roundf(viewport_translation_px[1]) as i32,
+    ];
+    let coverage_layers = page
+        .layers
+        .iter()
+        .filter_map(|layer| {
+            let coverage = layer.coverage.as_ref()?;
+            let origin = coverage.origin_px();
+            Some(crate::intel::gpgpu::GpgpuGlyphMaskLayer {
+                mask: coverage.surface(),
+                mask_rect: coverage.full_rect(),
+                dst_xy: crate::intel::gpgpu::GpgpuPoint::new(
+                    origin[0].saturating_add(pan_px[0]),
+                    origin[1].saturating_add(pan_px[1]),
+                ),
+                color_rgba: u32::from_le_bytes(resident_layer_color(
+                    layer,
+                    text_animations,
+                    animation_elapsed_ms,
+                )),
+            })
+        })
+        .collect::<Vec<_>>();
+    let (coverage_submits, coverage_walkers) = if coverage_layers.is_empty() {
+        (0, 0)
+    } else {
+        let coverage = crate::intel::gpgpu::glyph_mask_layers_rgba8_2d_mode(
+            coverage_layers.as_slice(),
+            destination,
+            true,
+        );
+        if !coverage.ok {
+            return Err(if coverage.submitted {
+                GridPaperComputeFailure::SubmittedIncomplete(
+                    "gridpaper-compute-coverage-incomplete",
+                )
+            } else {
+                GridPaperComputeFailure::Unavailable("gridpaper-compute-coverage-unavailable")
+            });
+        }
+        (coverage.submits, coverage.active_walkers)
+    };
+    let coverage_finished_ns = crate::chronos::monotonic_nanos();
+
+    if !final_rects.is_empty() {
+        let cursor =
+            crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(destination, final_rects);
+        match cursor.outcome {
+            GpgpuSubmissionOutcome::Complete => {}
+            GpgpuSubmissionOutcome::SubmittedIncomplete => {
+                return Err(GridPaperComputeFailure::SubmittedIncomplete(
+                    "gridpaper-compute-cursor-incomplete",
+                ));
+            }
+            GpgpuSubmissionOutcome::Unavailable => {
+                return Err(GridPaperComputeFailure::Unavailable(
+                    "gridpaper-compute-cursor-unavailable",
+                ));
+            }
+        }
+    }
+    let finalizer = crate::intel::gpgpu::release_rgba8_surface_for_scanout(destination);
+    if !finalizer.ok {
+        return Err(if finalizer.submitted {
+            GridPaperComputeFailure::SubmittedIncomplete(
+                "gridpaper-compute-final-release-incomplete",
+            )
+        } else {
+            GridPaperComputeFailure::Unavailable("gridpaper-compute-final-release-unavailable")
+        });
+    }
+    let Some(release) = finalizer.release else {
+        return Err(GridPaperComputeFailure::Unavailable(
+            "gridpaper-compute-final-release-missing",
+        ));
+    };
+    let finished_ns = crate::chronos::monotonic_nanos();
+    Ok(GridPaperFrameResult {
+        changed_pixels: destination.width as usize * destination.height as usize,
+        frame_us: finished_ns.saturating_sub(frame_started_ns) / 1_000,
+        geometry_us: geometry_finished_ns.saturating_sub(frame_started_ns) / 1_000,
+        geometry_rects,
+        geometry_submits,
+        coverage_us: coverage_finished_ns.saturating_sub(geometry_finished_ns) / 1_000,
+        coverage_submits,
+        coverage_walkers,
+        present_copy_us: finished_ns.saturating_sub(coverage_finished_ns) / 1_000,
+        release,
+    })
+}
+
+fn scene_rect_to_surface(
+    rect: SceneRect,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    viewport_translation_px: [f32; 2],
+    color_rgba: u32,
+) -> Option<crate::intel::gpgpu::GpgpuSolidRect> {
+    let scale_x = destination.width as f32 / SCENE_WIDTH as f32;
+    let scale_y = destination.height as f32 / SCENE_HEIGHT as f32;
+    let left = libm::floorf(rect.left * scale_x + viewport_translation_px[0]) as i32;
+    let top = libm::floorf(rect.top * scale_y + viewport_translation_px[1]) as i32;
+    let right = libm::ceilf(rect.right * scale_x + viewport_translation_px[0]) as i32;
+    let bottom = libm::ceilf(rect.bottom * scale_y + viewport_translation_px[1]) as i32;
+    let clipped_left = left.clamp(0, destination.width as i32);
+    let clipped_top = top.clamp(0, destination.height as i32);
+    let clipped_right = right.clamp(0, destination.width as i32);
+    let clipped_bottom = bottom.clamp(0, destination.height as i32);
+    if clipped_right <= clipped_left || clipped_bottom <= clipped_top {
+        return None;
+    }
+    Some(crate::intel::gpgpu::GpgpuSolidRect {
+        rect: crate::intel::gpgpu::GpgpuRect::new(
+            clipped_left,
+            clipped_top,
+            (clipped_right - clipped_left) as u32,
+            (clipped_bottom - clipped_top) as u32,
+        ),
+        color_rgba,
+    })
 }
 
 fn capture_resident_page_frame(
@@ -1713,9 +1981,18 @@ fn capture_resident_page_frame(
     viewport_translation_px: [f32; 2],
     width: u32,
     height: u32,
-    final_rects: &[crate::intel::gpgpu::GpgpuSolidRect],
+    _final_rects: &[crate::intel::gpgpu::GpgpuSolidRect],
     destination: Option<crate::intel::gpgpu::GpgpuRgba8Surface>,
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, &'static str> {
+    if destination.is_some() {
+        if !LEGACY_RESIDENT_UI4_WARNED.swap(true, core::sync::atomic::Ordering::AcqRel) {
+            crate::log_warn!(
+                target: "gridpaper";
+                "gridpaper: legacy resident-3d UI4 presentation disabled action=return-before-render migrate=gpgpu-compute-blueprint-scene producer_release=compute-fence\n",
+            );
+        }
+        return Err("gridpaper-resident-ui4-path-disabled");
+    }
     let triangle_draws = page
         .layers
         .iter()
@@ -1751,16 +2028,7 @@ fn capture_resident_page_frame(
             })
         })
         .collect::<Vec<_>>();
-    let captured = if let Some(destination) = destination {
-        crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_coverage_and_rects_direct_to_surface(
-            &triangle_draws,
-            &coverage_draws,
-            final_rects,
-            Some([0, 0, 0, 0]),
-            destination,
-            false,
-        )
-    } else {
+    let captured =
         crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4_with_coverage(
             &triangle_draws,
             &coverage_draws,
@@ -1768,8 +2036,7 @@ fn capture_resident_page_frame(
             width,
             height,
             false,
-        )
-    };
+        );
     let result = captured?;
     if let Some(error) = result.completion_error() {
         return Err(error);
@@ -2494,7 +2761,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     .count();
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_us={} resolve_us={} coverage_us={} present_copy_us={} font_path=kernel-font-stamp-default/skrifa-gpgpu-r8-or-triangle-fallback persistence=resident-until-next-snapshot pan_transform=sf-viewport frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
+                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} font_path=skrifa-gpgpu-r8-required persistence=retained-until-next-snapshot pan_transform=compute-dst-translation frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0 resident3d_ui4=disabled\n",
                     runtime.surface.instance_id,
                     published.serial,
                     published.generation,
@@ -2503,12 +2770,13 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     published.pan.y,
                     published.layers.len(),
                     coverage_masks,
+                    result.geometry_rects,
+                    result.geometry_submits,
                     result.coverage_submits,
                     result.coverage_walkers,
                     result.changed_pixels,
                     result.frame_us,
                     result.geometry_us,
-                    result.resolve_us,
                     result.coverage_us,
                     result.present_copy_us,
                 );
@@ -2574,17 +2842,18 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                 if runtime.hot_pan_frames <= 8 || runtime.hot_pan_frames.is_multiple_of(120) {
                     crate::log_info!(
                         target: "gridpaper";
-                        "gridpaper: hot-pan-frame instance={} seq={} pan_scene={:.3},{:.3} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_us={} resolve_us={} coverage_us={} present_copy_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport preclip=translated-bypass final_clip=scissor frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
+                        "gridpaper: hot-pan-frame instance={} seq={} pan_scene={:.3},{:.3} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=compute-dst-translation final_clip=compute-surface frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0\n",
                         runtime.surface.instance_id,
                         runtime.hot_pan_frames,
                         page.pan.x,
                         page.pan.y,
+                        result.geometry_rects,
+                        result.geometry_submits,
                         result.coverage_submits,
                         result.coverage_walkers,
                         result.changed_pixels,
                         result.frame_us,
                         result.geometry_us,
-                        result.resolve_us,
                         result.coverage_us,
                         result.present_copy_us,
                     );
@@ -2598,18 +2867,19 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
             {
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: text-animation-frame instance={} seq={} animation_serial={} elapsed_ms={} programs={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_us={} resolve_us={} coverage_us={} present_copy_us={} geometry_uploads=0 resident_mesh_rebuilds=0 frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
+                    "gridpaper: text-animation-frame instance={} seq={} animation_serial={} elapsed_ms={} programs={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} geometry_uploads=0 resident_mesh_rebuilds=0 frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0\n",
                     runtime.surface.instance_id,
                     runtime.animation_frames,
                     runtime.observed_animation_serial,
                     animation_elapsed_ms,
                     runtime.text_animations.iter().flatten().count(),
+                    result.geometry_rects,
+                    result.geometry_submits,
                     result.coverage_submits,
                     result.coverage_walkers,
                     result.changed_pixels,
                     result.frame_us,
                     result.geometry_us,
-                    result.resolve_us,
                     result.coverage_us,
                     result.present_copy_us,
                 );
@@ -2708,7 +2978,7 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
                             .expect("attached GridPaper presentation");
                         crate::log_info!(
                             target: "gridpaper";
-                            "gridpaper: presentation attached pool_slot={} instance={} producer={} session={} window={} frame={} retained_front={} persistent_gpu_scene=1\n",
+                            "gridpaper: presentation attached pool_slot={} instance={} producer={} session={} window={} frame={} retained_front={} persistent_compute_scene=1 resident3d_ui4=disabled\n",
                             pool_slot,
                             runtime_ref.surface.instance_id,
                             presentation.producer,
@@ -2722,7 +2992,7 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
                     Err(error) if last_presentation_error != Some(error) => {
                         crate::log_warn!(
                             target: "gridpaper";
-                            "gridpaper: presentation attach pending pool_slot={} instance={} error={:?} action=retry retained_gpu_scene=1\n",
+                            "gridpaper: presentation attach pending pool_slot={} instance={} error={:?} action=retry retained_compute_scene=1\n",
                             pool_slot,
                             runtime_ref.surface.instance_id,
                             error,
@@ -2778,15 +3048,15 @@ fn spawn_gridpaper_instance_pool() -> usize {
 
 /// Kernel controller for the GridPaper Blueprint worker pool. Each Blueprint
 /// contributes one local document; up to ten owner-local leases retain their
-/// own UI4 frame and scene worker. Only the current single physical RCS render
-/// context is serialized across those workers.
+/// own UI4 frame and scene worker. Compute presentation and print-only resident
+/// capture are serialized across those workers.
 #[embassy_executor::task]
 pub async fn gridpaper_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
     let spawned = spawn_gridpaper_instance_pool();
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: pool initialized workers={} soft_cap={} render_lane=shared-async-serialized\n",
+        "gridpaper: pool initialized workers={} soft_cap={} producer_lane=system-service-compute-retired+shared-async-serialized resident3d_ui4=disabled\n",
         spawned,
         GRIDPAPER_POOL_SOFT_CAP,
     );
