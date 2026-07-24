@@ -7,15 +7,7 @@ use alloc::{vec, vec::Vec};
 const DPI: u32 = 300;
 const A4_WIDTH_TENTH_MM: u32 = crate::r::gridpaper_service::A4_WIDTH_MM * 10;
 const A4_HEIGHT_TENTH_MM: u32 = crate::r::gridpaper_service::A4_HEIGHT_MM * 10;
-const GRID_WIDTH_TENTH_MM: u32 = crate::r::gridpaper_service::GRID_WIDTH_MM * 10;
-const GRID_HEIGHT_TENTH_MM: u32 = crate::r::gridpaper_service::GRID_HEIGHT_MM * 10;
 const RULER_GUTTER_TENTH_MM: u32 = crate::r::gridpaper_service::RULER_GUTTER_MM * 10;
-const SURFACE_LEFT_TENTH_MM: u32 =
-    (A4_WIDTH_TENTH_MM - GRID_WIDTH_TENTH_MM) / 2 - RULER_GUTTER_TENTH_MM;
-const SURFACE_TOP_TENTH_MM: u32 =
-    (A4_HEIGHT_TENTH_MM - GRID_HEIGHT_TENTH_MM) / 2 - RULER_GUTTER_TENTH_MM;
-const SURFACE_WIDTH_TENTH_MM: u32 = GRID_WIDTH_TENTH_MM + RULER_GUTTER_TENTH_MM;
-const SURFACE_HEIGHT_TENTH_MM: u32 = GRID_HEIGHT_TENTH_MM + RULER_GUTTER_TENTH_MM;
 const PAGE_HEADER_BYTES: usize = 1_796;
 const MAX_DOCUMENT_BYTES: usize = 7 * 1024 * 1024;
 
@@ -28,6 +20,7 @@ pub(crate) enum EncodeError {
 }
 
 pub(crate) fn encode_gridpaper_a4(
+    size: crate::r::gridpaper_service::GridSize,
     source_width: u32,
     source_height: u32,
     rgba_premultiplied: &[u8],
@@ -43,12 +36,20 @@ pub(crate) fn encode_gridpaper_a4(
 
     let page_width = tenth_mm_to_pixels(A4_WIDTH_TENTH_MM);
     let page_height = tenth_mm_to_pixels(A4_HEIGHT_TENTH_MM);
-    let surface_left = tenth_mm_to_pixels(SURFACE_LEFT_TENTH_MM);
-    let surface_top = tenth_mm_to_pixels(SURFACE_TOP_TENTH_MM);
+    let grid_width_tenth_mm = size.grid_width_mm() * 10;
+    let grid_height_tenth_mm = size.grid_height_mm() * 10;
+    let surface_left_tenth_mm =
+        (A4_WIDTH_TENTH_MM - grid_width_tenth_mm) / 2 - RULER_GUTTER_TENTH_MM;
+    let surface_top_tenth_mm =
+        (A4_HEIGHT_TENTH_MM - grid_height_tenth_mm) / 2 - RULER_GUTTER_TENTH_MM;
+    let surface_width_tenth_mm = grid_width_tenth_mm + RULER_GUTTER_TENTH_MM;
+    let surface_height_tenth_mm = grid_height_tenth_mm + RULER_GUTTER_TENTH_MM;
+    let surface_left = tenth_mm_to_pixels(surface_left_tenth_mm);
+    let surface_top = tenth_mm_to_pixels(surface_top_tenth_mm);
     let surface_right =
-        tenth_mm_to_pixels(SURFACE_LEFT_TENTH_MM.saturating_add(SURFACE_WIDTH_TENTH_MM));
+        tenth_mm_to_pixels(surface_left_tenth_mm.saturating_add(surface_width_tenth_mm));
     let surface_bottom =
-        tenth_mm_to_pixels(SURFACE_TOP_TENTH_MM.saturating_add(SURFACE_HEIGHT_TENTH_MM));
+        tenth_mm_to_pixels(surface_top_tenth_mm.saturating_add(surface_height_tenth_mm));
     let surface_width = surface_right.saturating_sub(surface_left).max(1);
     let surface_height = surface_bottom.saturating_sub(surface_top).max(1);
 

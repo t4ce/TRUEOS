@@ -1473,15 +1473,31 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let instance_id = (arg1 >> 32) as u32;
-            let scale_percent = arg1 as u32;
-            let rc = crate::r::gridpaper_service::submit_snapshot_for_owner(
-                vm_id,
-                instance_id,
-                arg0,
-                scale_percent,
-                payload,
-            );
+            let rc = if arg1 & crate::r::gridpaper_service::SIZED_SNAPSHOT_VMCALL_MARKER != 0 {
+                let instance_id = ((arg1 >> 32) & 0x7fff_ffff) as u32;
+                let rows = ((arg1 >> 24) & 0xff) as u32;
+                let columns = ((arg1 >> 16) & 0xff) as u32;
+                let scale_percent = (arg1 & 0xffff) as u32;
+                crate::r::gridpaper_service::submit_sized_snapshot_for_owner(
+                    vm_id,
+                    instance_id,
+                    arg0,
+                    scale_percent,
+                    columns,
+                    rows,
+                    payload,
+                )
+            } else {
+                let instance_id = (arg1 >> 32) as u32;
+                let scale_percent = arg1 as u32;
+                crate::r::gridpaper_service::submit_snapshot_for_owner(
+                    vm_id,
+                    instance_id,
+                    arg0,
+                    scale_percent,
+                    payload,
+                )
+            };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

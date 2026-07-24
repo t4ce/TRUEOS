@@ -1787,4 +1787,54 @@ mod tests {
         assert_ne!(WindowOwner::KernelApp(42), WindowOwner::KernelApp(43));
         assert_ne!(WindowOwner::Vm(9), WindowOwner::Vm(10));
     }
+
+    #[test]
+    fn independent_expensive_sessions_fill_four_planes_and_reuse_the_released_slot() {
+        let owner = WindowOwner::GRIDPAPER_SERVICE;
+        let mut broker = WindowBroker::new();
+        let mut sessions = Vec::new();
+        let mut windows = Vec::new();
+
+        for frame in 1..=MAX_EXPENSIVE_WINDOWS as u64 {
+            let session = broker.begin_additional_session(owner).unwrap();
+            let mut request = test_window(owner, session, frame, 0, frame as i32, true);
+            request.plane = WindowPlane::Universal(super::super::RGB_OVERLAY_PLANE_SLOT_2 as u8);
+            let window = broker
+                .create(request, FrameBuffering::Triple)
+                .expect("one independent window per application plane");
+            sessions.push(session);
+            windows.push(window);
+        }
+
+        let assigned = windows
+            .iter()
+            .map(|window| {
+                let (slot, _) = unpack_handle(window.raw()).unwrap();
+                broker.windows[slot].plane.slot()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(assigned, Vec::from([2, 3, 0, 1]));
+
+        let waiting_session = broker.begin_additional_session(owner).unwrap();
+        let mut waiting = test_window(owner, waiting_session, 5, 0, 5, true);
+        waiting.plane = WindowPlane::Universal(super::super::RGB_OVERLAY_PLANE_SLOT_2 as u8);
+        assert_eq!(
+            broker.create(waiting, FrameBuffering::Triple),
+            Err(WindowBrokerError::Capacity)
+        );
+
+        broker
+            .finish_session(owner, sessions[0], false, false, false, false, false, 0)
+            .unwrap();
+        for window in windows.iter().skip(1) {
+            let (slot, _) = unpack_handle(window.raw()).unwrap();
+            assert_ne!(broker.windows[slot].state, WindowState::Closed);
+        }
+
+        let admitted = broker
+            .create(waiting, FrameBuffering::Triple)
+            .expect("released application plane admits the waiting session");
+        let (slot, _) = unpack_handle(admitted.raw()).unwrap();
+        assert_eq!(broker.windows[slot].plane.slot(), 2);
+    }
 }

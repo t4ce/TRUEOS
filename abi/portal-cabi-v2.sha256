@@ -24,4 +24,7 @@
 # The capability-backed mouse-motion, keyboard-control, and gamepad-control
 # calls are strictly additive. They expose mediated high-level programs without
 # changing the existing raw HID or selected-frame input contracts.
-1e791c726322f954fbb43e81ae51a12048a1712c809eec425c4e5abf4ec7d7dd
+# The GridPaper sized-snapshot calls are strictly additive. They carry a
+# bounded logical extent beside the unchanged fixed-capacity page image;
+# existing full-size snapshot symbols and packaged Blueprints are unchanged.
+112c20880b12085b13fda587b7bd368ecb444fe124029ace527688e01f16a410

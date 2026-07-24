@@ -168,6 +168,23 @@ unsafe extern "C" {
         raw_ptr: *const u8,
         raw_len: usize,
     ) -> i32;
+    pub fn trueos_cabi_gridpaper_snapshot_submit_sized(
+        generation: u64,
+        scale_percent: u32,
+        columns: u32,
+        rows: u32,
+        raw_ptr: *const u8,
+        raw_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_gridpaper_snapshot_submit_instance_sized(
+        instance_id: u32,
+        generation: u64,
+        scale_percent: u32,
+        columns: u32,
+        rows: u32,
+        raw_ptr: *const u8,
+        raw_len: usize,
+    ) -> i32;
     pub fn trueos_cabi_gridpaper_text_animations_submit(raw_ptr: *const u8, raw_len: usize) -> i32;
     pub fn trueos_cabi_gridpaper_text_animations_submit_instance(
         instance_id: u32,

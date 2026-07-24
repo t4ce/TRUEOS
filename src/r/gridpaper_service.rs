@@ -17,8 +17,10 @@ use crate::intel::gpu_font::{
     GpuFontFace, GpuFontRgba,
 };
 
-const COLUMNS: usize = 39;
-const ROWS: usize = 55;
+const COLUMN_SOFT_CAP: usize = 39;
+const ROW_SOFT_CAP: usize = 55;
+const COLUMNS: usize = COLUMN_SOFT_CAP;
+const ROWS: usize = ROW_SOFT_CAP;
 const GLYPH_UTF8_CAPACITY: usize = 4;
 const CELL_BYTES: usize = 13;
 const PAGE_BYTES: usize = COLUMNS * ROWS * CELL_BYTES;
@@ -62,10 +64,6 @@ pub(crate) const GRID_HEIGHT_MM: u32 = ROWS as u32 * CELL_EDGE_MM;
 pub(crate) const RULER_GUTTER_MM: u32 = 4;
 const SURFACE_WIDTH_MM: u32 = RULER_GUTTER_MM + GRID_WIDTH_MM;
 const SURFACE_HEIGHT_MM: u32 = RULER_GUTTER_MM + GRID_HEIGHT_MM;
-// The retained scene uses millimetres as its coordinate space. This makes the
-// grid, rulers, and EDID-sized raster share one physical unit directly.
-const SCENE_WIDTH: u32 = SURFACE_WIDTH_MM;
-const SCENE_HEIGHT: u32 = SURFACE_HEIGHT_MM;
 const SMALL_TICK_LENGTH_MM: f32 = 1.25;
 const CENTIMETER_TICK_LENGTH_MM: f32 = 2.5;
 const THREE_CENTIMETER_TICK_LENGTH_MM: f32 = 4.0;
@@ -79,9 +77,7 @@ const INPUT_QUEUE_CAPACITY_PER_INSTANCE: usize = 64;
 const GRID_CURSOR_STROKE_PX: u32 = 3;
 const GRID_CURSOR_RGBA: [u8; 4] = [255, 96, 32, 255];
 const PRINT_REQUEST_CAPACITY: usize = 8;
-const PRINT_CAPTURE_HEIGHT: u32 = 1_440;
-const PRINT_CAPTURE_WIDTH: u32 =
-    (PRINT_CAPTURE_HEIGHT * SURFACE_WIDTH_MM + SURFACE_HEIGHT_MM / 2) / SURFACE_HEIGHT_MM;
+const PRINT_CAPTURE_LONG_EDGE: u32 = 1_440;
 
 const ERROR_INVALID_SNAPSHOT: i32 = -1;
 const ERROR_INVALID_SCALE: i32 = -2;
@@ -90,6 +86,94 @@ const ERROR_TRANSPORT: i32 = -4;
 const ERROR_INVALID_ANIMATION: i32 = -5;
 const ERROR_INVALID_INSTANCE: i32 = -6;
 const ERROR_POOL_FULL: i32 = -7;
+const ERROR_INVALID_GRID_SIZE: i32 = -8;
+pub(crate) const SIZED_SNAPSHOT_VMCALL_MARKER: u64 = 1 << 63;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GridSize {
+    columns: u16,
+    rows: u16,
+}
+
+impl GridSize {
+    pub(crate) const FULL: Self = Self {
+        columns: COLUMNS as u16,
+        rows: ROWS as u16,
+    };
+
+    const fn new(columns: u32, rows: u32) -> Option<Self> {
+        if columns == 0
+            || columns > COLUMN_SOFT_CAP as u32
+            || rows == 0
+            || rows > ROW_SOFT_CAP as u32
+        {
+            None
+        } else {
+            Some(Self {
+                columns: columns as u16,
+                rows: rows as u16,
+            })
+        }
+    }
+
+    const fn columns(self) -> usize {
+        self.columns as usize
+    }
+
+    const fn rows(self) -> usize {
+        self.rows as usize
+    }
+
+    pub(crate) const fn columns_u32(self) -> u32 {
+        self.columns as u32
+    }
+
+    pub(crate) const fn rows_u32(self) -> u32 {
+        self.rows as u32
+    }
+
+    pub(crate) const fn grid_width_mm(self) -> u32 {
+        self.columns_u32() * CELL_EDGE_MM
+    }
+
+    pub(crate) const fn grid_height_mm(self) -> u32 {
+        self.rows_u32() * CELL_EDGE_MM
+    }
+
+    const fn surface_width_mm(self) -> u32 {
+        RULER_GUTTER_MM + self.grid_width_mm()
+    }
+
+    const fn surface_height_mm(self) -> u32 {
+        RULER_GUTTER_MM + self.grid_height_mm()
+    }
+
+    // Retained scenes use millimetres as their coordinate space. This keeps
+    // cells, rulers, EDID sizing, and print placement on one physical unit.
+    const fn scene_width(self) -> u32 {
+        self.surface_width_mm()
+    }
+
+    const fn scene_height(self) -> u32 {
+        self.surface_height_mm()
+    }
+
+    const fn print_capture_extent(self) -> (u32, u32) {
+        let width_mm = self.surface_width_mm();
+        let height_mm = self.surface_height_mm();
+        if width_mm <= height_mm {
+            (
+                (PRINT_CAPTURE_LONG_EDGE * width_mm + height_mm / 2) / height_mm,
+                PRINT_CAPTURE_LONG_EDGE,
+            )
+        } else {
+            (
+                PRINT_CAPTURE_LONG_EDGE,
+                (PRINT_CAPTURE_LONG_EDGE * height_mm + width_mm / 2) / width_mm,
+            )
+        }
+    }
+}
 
 static GPU_COMPUTE_PRESENT_LOGGED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
@@ -108,6 +192,7 @@ struct SnapshotStore {
     lifecycle_paused: bool,
     generation: u64,
     scale_percent: u16,
+    size: GridSize,
     serial: u64,
     text_animations: [Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_serial: u64,
@@ -125,6 +210,7 @@ impl SnapshotStore {
             lifecycle_paused: false,
             generation: 0,
             scale_percent: 100,
+            size: GridSize::FULL,
             serial: 0,
             text_animations: [None; TEXT_ANIMATION_COLOR_SLOTS],
             animation_serial: 0,
@@ -141,6 +227,7 @@ impl SnapshotStore {
         self.lifecycle_paused = false;
         self.generation = 0;
         self.scale_percent = NATIVE_SCALE_PERCENT;
+        self.size = GridSize::FULL;
         self.serial = 0;
         self.text_animations = [None; TEXT_ANIMATION_COLOR_SLOTS];
         self.animation_serial = 0;
@@ -153,6 +240,7 @@ impl SnapshotStore {
         self.producer_connected = false;
         self.lifecycle_paused = false;
         self.generation = 0;
+        self.size = GridSize::FULL;
         self.serial = 0;
         self.text_animations = [None; TEXT_ANIMATION_COLOR_SLOTS];
         self.animation_serial = 0;
@@ -213,6 +301,7 @@ struct OwnedSnapshot {
     owner: u8,
     generation: u64,
     scale_percent: u16,
+    size: GridSize,
     serial: u64,
 }
 
@@ -221,12 +310,14 @@ struct GridPaperPrintRequest {
     owner: u8,
     token: u32,
     generation: u64,
+    size: GridSize,
     raw: Vec<u8>,
 }
 
 struct PrintRenderRequest {
     job_id: u32,
     generation: u64,
+    size: GridSize,
     raw: Vec<u8>,
 }
 
@@ -270,6 +361,7 @@ fn queue_print_request(instance_id: u32, snapshot: &OwnedSnapshot) -> Option<u32
         owner: snapshot.owner,
         token,
         generation: snapshot.generation,
+        size: snapshot.size,
         raw: snapshot.raw.clone(),
     });
     drop(requests);
@@ -285,20 +377,25 @@ pub(crate) fn take_print_request_for_owner(owner: u8, instance_id: u32) -> Optio
     Some((request.token, request.generation))
 }
 
-pub(crate) fn consume_print_request(owner: u8, token: u32) -> Option<(u64, Vec<u8>)> {
+pub(crate) fn consume_print_request(owner: u8, token: u32) -> Option<(u64, GridSize, Vec<u8>)> {
     let mut requests = GRIDPAPER_PRINT_REQUESTS.lock();
     let index = requests
         .iter()
         .position(|request| request.owner == owner && request.token == token)?;
     let request = requests.remove(index)?;
-    Some((request.generation, request.raw))
+    Some((request.generation, request.size, request.raw))
 }
 
 pub(crate) fn valid_print_snapshot(raw: &[u8]) -> bool {
     raw.len() == PAGE_BYTES && validate_page(raw).is_ok()
 }
 
-pub(crate) fn request_print_render(job_id: u32, generation: u64, raw: Vec<u8>) -> bool {
+pub(crate) fn request_print_render(
+    job_id: u32,
+    generation: u64,
+    size: GridSize,
+    raw: Vec<u8>,
+) -> bool {
     if !valid_print_snapshot(&raw) {
         return false;
     }
@@ -309,6 +406,7 @@ pub(crate) fn request_print_render(job_id: u32, generation: u64, raw: Vec<u8>) -
     requests.push_back(PrintRenderRequest {
         job_id,
         generation,
+        size,
         raw,
     });
     true
@@ -366,6 +464,8 @@ fn edit_snapshot_from_keyboard(
     event: crate::r::keyboard::TrueosKeyboardOutputEvent,
 ) -> KeyboardGridOutcome {
     let mut outcome = KeyboardGridOutcome::default();
+    let columns = snapshot.size.columns();
+    let rows = snapshot.size.rows();
     if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT {
         let utf8_len = usize::from(event.utf8_len);
         if utf8_len == 0
@@ -394,12 +494,12 @@ fn edit_snapshot_from_keyboard(
         if *input_field == CellInputField::Primary {
             let linear = selection
                 .row
-                .saturating_mul(COLUMNS)
+                .saturating_mul(columns)
                 .saturating_add(selection.column);
-            let next_linear = linear.saturating_add(1).min(COLUMNS * ROWS - 1);
+            let next_linear = linear.saturating_add(1).min(columns * rows - 1);
             let next = GridCellSelection {
-                column: next_linear % COLUMNS,
-                row: next_linear / COLUMNS,
+                column: next_linear % columns,
+                row: next_linear / columns,
             };
             outcome.selection_changed = next != *selection;
             *selection = next;
@@ -435,7 +535,7 @@ fn edit_snapshot_from_keyboard(
             selection.column = next;
         }
         crate::r::keyboard::KEYBOARD_KEY_ARROW_RIGHT => {
-            let next = selection.column.saturating_add(1).min(COLUMNS - 1);
+            let next = selection.column.saturating_add(1).min(columns - 1);
             outcome.selection_changed = next != selection.column;
             selection.column = next;
         }
@@ -445,7 +545,7 @@ fn edit_snapshot_from_keyboard(
             selection.row = next;
         }
         crate::r::keyboard::KEYBOARD_KEY_ARROW_DOWN | crate::r::keyboard::KEYBOARD_KEY_ENTER => {
-            let next = selection.row.saturating_add(1).min(ROWS - 1);
+            let next = selection.row.saturating_add(1).min(rows - 1);
             outcome.selection_changed = next != selection.row;
             selection.row = next;
         }
@@ -458,8 +558,8 @@ fn edit_snapshot_from_keyboard(
             selection.column = 0;
         }
         crate::r::keyboard::KEYBOARD_KEY_END => {
-            outcome.selection_changed = selection.column != COLUMNS - 1;
-            selection.column = COLUMNS - 1;
+            outcome.selection_changed = selection.column != columns - 1;
+            selection.column = columns - 1;
         }
         crate::r::keyboard::KEYBOARD_KEY_ESCAPE => outcome.clear_selection = true,
         _ => {}
@@ -497,10 +597,10 @@ struct ScenePan {
 impl ScenePan {
     const ZERO: Self = Self { x: 0.0, y: 0.0 };
 
-    fn clamped(self, scale_percent: u16) -> Self {
+    fn clamped(self, scale_percent: u16, size: GridSize) -> Self {
         let scale = f32::from(scale_percent) / 100.0;
-        let min_x = (SCENE_WIDTH as f32 * (1.0 - scale)).min(0.0);
-        let min_y = (SCENE_HEIGHT as f32 * (1.0 - scale)).min(0.0);
+        let min_x = (size.scene_width() as f32 * (1.0 - scale)).min(0.0);
+        let min_y = (size.scene_height() as f32 * (1.0 - scale)).min(0.0);
         Self {
             x: self.x.clamp(min_x, 0.0),
             y: self.y.clamp(min_y, 0.0),
@@ -514,11 +614,12 @@ impl ScenePan {
         raster_width: u32,
         raster_height: u32,
         scale_percent: u16,
+        size: GridSize,
     ) -> bool {
         let previous = *self;
-        self.x += dx as f32 * SCENE_WIDTH as f32 / raster_width.max(1) as f32;
-        self.y += dy as f32 * SCENE_HEIGHT as f32 / raster_height.max(1) as f32;
-        *self = self.clamped(scale_percent);
+        self.x += dx as f32 * size.scene_width() as f32 / raster_width.max(1) as f32;
+        self.y += dy as f32 * size.scene_height() as f32 / raster_height.max(1) as f32;
+        *self = self.clamped(scale_percent, size);
         *self != previous
     }
 }
@@ -537,12 +638,37 @@ pub(crate) fn submit_snapshot_for_owner(
     scale_percent: u32,
     raw: &[u8],
 ) -> i32 {
+    submit_sized_snapshot_for_owner(
+        owner,
+        instance_id,
+        generation,
+        scale_percent,
+        GridSize::FULL.columns_u32(),
+        GridSize::FULL.rows_u32(),
+        raw,
+    )
+}
+
+/// Accept a fixed-capacity snapshot with a smaller logical grid extent. The
+/// backing image and row stride stay homogeneous at the soft caps.
+pub(crate) fn submit_sized_snapshot_for_owner(
+    owner: u8,
+    instance_id: u32,
+    generation: u64,
+    scale_percent: u32,
+    columns: u32,
+    rows: u32,
+    raw: &[u8],
+) -> i32 {
     if raw.len() != PAGE_BYTES || validate_page(raw).is_err() {
         return ERROR_INVALID_SNAPSHOT;
     }
     if !(MIN_SCALE_PERCENT..=MAX_SCALE_PERCENT).contains(&scale_percent) {
         return ERROR_INVALID_SCALE;
     }
+    let Some(size) = GridSize::new(columns, rows) else {
+        return ERROR_INVALID_GRID_SIZE;
+    };
     let instance = match resolve_or_claim_pool_slot(owner, instance_id) {
         Ok(instance) => instance,
         Err(error) => return error,
@@ -555,6 +681,12 @@ pub(crate) fn submit_snapshot_for_owner(
     }
     let next = snapshots.published ^ 1;
     snapshots.buffers[next].copy_from_slice(raw);
+    if snapshots.size != size {
+        snapshots.size = size;
+        // Scene extent is immutable inside one UI4 frame allocation. Wake the
+        // slot worker through the existing lease-epoch teardown/rebuild path.
+        snapshots.lease_epoch = snapshots.lease_epoch.wrapping_add(1).max(1);
+    }
     snapshots.published = next;
     snapshots.owner = Some(owner);
     snapshots.producer_connected = true;
@@ -682,6 +814,7 @@ fn snapshot_after(pool_slot: usize, serial: u64) -> Option<OwnedSnapshot> {
         owner: snapshots.owner?,
         generation: snapshots.generation,
         scale_percent: snapshots.scale_percent,
+        size: snapshots.size,
         serial: snapshots.serial,
     })
 }
@@ -842,6 +975,90 @@ pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_submit_instance(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_submit_sized(
+    generation: u64,
+    scale_percent: u32,
+    columns: u32,
+    rows: u32,
+    raw_ptr: *const u8,
+    raw_len: usize,
+) -> i32 {
+    unsafe {
+        trueos_cabi_gridpaper_snapshot_submit_instance_sized(
+            PRIMARY_INSTANCE_ID,
+            generation,
+            scale_percent,
+            columns,
+            rows,
+            raw_ptr,
+            raw_len,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_submit_instance_sized(
+    instance_id: u32,
+    generation: u64,
+    scale_percent: u32,
+    columns: u32,
+    rows: u32,
+    raw_ptr: *const u8,
+    raw_len: usize,
+) -> i32 {
+    if GridSize::new(columns, rows).is_none() {
+        return ERROR_INVALID_GRID_SIZE;
+    }
+    if !(MIN_SCALE_PERCENT..=MAX_SCALE_PERCENT).contains(&scale_percent) {
+        return ERROR_INVALID_SCALE;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        if raw_ptr.is_null() || raw_len != PAGE_BYTES {
+            return ERROR_INVALID_SNAPSHOT;
+        }
+        // The marker preserves the original B9 vmcall packing for already
+        // packaged producers while fitting the bounded logical extent into
+        // the otherwise-unused high bits.
+        let packed = SIZED_SNAPSHOT_VMCALL_MARKER
+            | (u64::from(instance_id & 0x7fff_ffff) << 32)
+            | (u64::from(rows & 0xff) << 24)
+            | (u64::from(columns & 0xff) << 16)
+            | u64::from(scale_percent & 0xffff);
+        // SAFETY: the ABI caller promises `raw_len` readable bytes.
+        let raw = unsafe { core::slice::from_raw_parts(raw_ptr, raw_len) };
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT,
+            generation,
+            packed,
+            raw,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            data as i64 as i32
+        } else {
+            ERROR_TRANSPORT
+        };
+    }
+    if raw_ptr.is_null() || raw_len != PAGE_BYTES {
+        return ERROR_INVALID_SNAPSHOT;
+    }
+    let Some(owner) = crate::hv::current_guest_execution_context_vm_id() else {
+        return ERROR_NOT_OWNER;
+    };
+    // SAFETY: checked non-null above; the ABI caller promises readable bytes.
+    let raw = unsafe { core::slice::from_raw_parts(raw_ptr, raw_len) };
+    submit_sized_snapshot_for_owner(
+        owner,
+        instance_id,
+        generation,
+        scale_percent,
+        columns,
+        rows,
+        raw,
+    )
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_gridpaper_text_animations_submit(
     raw_ptr: *const u8,
     raw_len: usize,
@@ -943,6 +1160,10 @@ const _: unsafe extern "C" fn(u64, u32, *const u8, usize) -> i32 =
     trueos_cabi_gridpaper_snapshot_submit;
 const _: unsafe extern "C" fn(u32, u64, u32, *const u8, usize) -> i32 =
     trueos_cabi_gridpaper_snapshot_submit_instance;
+const _: unsafe extern "C" fn(u64, u32, u32, u32, *const u8, usize) -> i32 =
+    trueos_cabi_gridpaper_snapshot_submit_sized;
+const _: unsafe extern "C" fn(u32, u64, u32, u32, u32, *const u8, usize) -> i32 =
+    trueos_cabi_gridpaper_snapshot_submit_instance_sized;
 const _: unsafe extern "C" fn(*const u8, usize) -> i32 =
     trueos_cabi_gridpaper_text_animations_submit;
 const _: unsafe extern "C" fn(u32, *const u8, usize) -> i32 =
@@ -990,6 +1211,7 @@ struct GridPaperSurface {
     instance_id: u32,
     frame: crate::ui4::FrameHandle,
     presentation: Option<GridPaperPresentation>,
+    size: GridSize,
     width: u32,
     height: u32,
     extent_source: &'static str,
@@ -1010,16 +1232,18 @@ fn grid_cell_at_local_point(
         return None;
     }
     let scale = f32::from(scale_percent) / 100.0;
-    let scene_x = local_x as f32 * SCENE_WIDTH as f32 / surface.width.max(1) as f32 - pan.x;
-    let scene_y = local_y as f32 * SCENE_HEIGHT as f32 / surface.height.max(1) as f32 - pan.y;
-    let scene_units_per_mm_x = SCENE_WIDTH as f32 / SURFACE_WIDTH_MM as f32;
-    let scene_units_per_mm_y = SCENE_HEIGHT as f32 / SURFACE_HEIGHT_MM as f32;
+    let scene_width = surface.size.scene_width();
+    let scene_height = surface.size.scene_height();
+    let scene_x = local_x as f32 * scene_width as f32 / surface.width.max(1) as f32 - pan.x;
+    let scene_y = local_y as f32 * scene_height as f32 / surface.height.max(1) as f32 - pan.y;
+    let scene_units_per_mm_x = scene_width as f32 / surface.size.surface_width_mm() as f32;
+    let scene_units_per_mm_y = scene_height as f32 / surface.size.surface_height_mm() as f32;
     let grid_left = RULER_GUTTER_MM as f32 * scene_units_per_mm_x * scale;
     let grid_top = RULER_GUTTER_MM as f32 * scene_units_per_mm_y * scale;
     let cell_width = CELL_EDGE_MM as f32 * scene_units_per_mm_x * scale;
     let cell_height = CELL_EDGE_MM as f32 * scene_units_per_mm_y * scale;
-    let grid_right = grid_left + COLUMNS as f32 * cell_width;
-    let grid_bottom = grid_top + ROWS as f32 * cell_height;
+    let grid_right = grid_left + surface.size.columns() as f32 * cell_width;
+    let grid_bottom = grid_top + surface.size.rows() as f32 * cell_height;
     if scene_x < grid_left || scene_y < grid_top || scene_x >= grid_right || scene_y >= grid_bottom
     {
         return None;
@@ -1053,11 +1277,12 @@ impl From<crate::ui4::WindowBrokerError> for ServiceError {
 fn initialize_surface(
     pool_slot: usize,
     instance_id: u32,
+    size: GridSize,
 ) -> Result<GridPaperSurface, ServiceError> {
     let (width, height, extent_source) =
-        crate::intel::physical_extent_pixels(SURFACE_WIDTH_MM, SURFACE_HEIGHT_MM)
+        crate::intel::physical_extent_pixels(size.surface_width_mm(), size.surface_height_mm())
             .map(|(width, height)| (width, height, "edid-physical-mm"))
-            .unwrap_or((SCENE_WIDTH, SCENE_HEIGHT, "logical-fallback"));
+            .unwrap_or((size.scene_width(), size.scene_height(), "logical-fallback"));
     let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
     let frame = crate::ui4::create_frame(crate::ui4::FrameSpec {
         output,
@@ -1074,6 +1299,7 @@ fn initialize_surface(
         instance_id,
         frame,
         presentation: None,
+        size,
         width,
         height,
         extent_source,
@@ -1086,41 +1312,35 @@ struct PoolLeaseState {
     owner: Option<u8>,
     local_instance_id: Option<u32>,
     presentable_owner: Option<u8>,
+    size: GridSize,
 }
 
 fn pool_lease_state(pool_slot: usize) -> PoolLeaseState {
     let mut stores = SNAPSHOTS.lock();
-    // The current direct-present iteration reserves one hardware plane for
-    // GridPaper. Keep every leased scene resident, but attach only the first
-    // live producer; otherwise two exact-release windows on slot 2 would be
-    // rejected rather than silently copied/composited.
-    let mut presentation_slot = None;
-    for (candidate_slot, candidate) in stores.iter_mut().enumerate() {
-        let Some(candidate_owner) = candidate.owner else {
-            continue;
-        };
-        if candidate.lifecycle_paused || !candidate.producer_connected {
-            continue;
-        }
+    // GridPaper does not impose a second window policy. Every live lease may
+    // request presentation; UI4's broker is the sole authority which isolates
+    // non-single-buffer windows across the four ordinary application planes.
+    let snapshots = &mut stores[pool_slot];
+    let owner = snapshots.owner;
+    let presentable_owner = if let Some(candidate_owner) =
+        owner.filter(|_| !snapshots.lifecycle_paused && snapshots.producer_connected)
+    {
         let state = crate::hv::vm_state(candidate_owner);
         if state.running || state.starting {
-            if presentation_slot.is_none() {
-                presentation_slot = Some(candidate_slot);
-            }
+            Some(candidate_owner)
         } else {
-            candidate.producer_connected = false;
+            snapshots.producer_connected = false;
+            None
         }
-    }
-    let snapshots = &stores[pool_slot];
-    let owner = snapshots.owner;
-    let presentable_owner = (presentation_slot == Some(pool_slot))
-        .then_some(owner)
-        .flatten();
+    } else {
+        None
+    };
     PoolLeaseState {
         epoch: snapshots.lease_epoch,
         owner,
         local_instance_id: snapshots.local_instance_id,
         presentable_owner,
+        size: snapshots.size,
     }
 }
 
@@ -1130,9 +1350,11 @@ fn attach_presentation(
     session: crate::ui4::WindowSessionId,
     expose_retained_front: bool,
 ) -> Result<GridPaperPresentation, ServiceError> {
+    let grid_width_mm = surface.size.grid_width_mm();
+    let grid_height_mm = surface.size.grid_height_mm();
     let (grid_width, grid_height) =
-        crate::intel::physical_extent_pixels(GRID_WIDTH_MM, GRID_HEIGHT_MM)
-            .unwrap_or((GRID_WIDTH_MM, GRID_HEIGHT_MM));
+        crate::intel::physical_extent_pixels(grid_width_mm, grid_height_mm)
+            .unwrap_or((grid_width_mm, grid_height_mm));
     let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
     let (scanout_width, scanout_height) =
         crate::intel::active_scanout_dimensions().unwrap_or((surface.width, surface.height));
@@ -1219,11 +1441,13 @@ struct ResidentPage {
     serial: u64,
     generation: u64,
     scale_percent: u16,
+    size: GridSize,
     pan: ScenePan,
     layers: Vec<ResidentLayer>,
 }
 
 struct Geometry {
+    size: GridSize,
     vertices: Vec<[f32; 3]>,
     indices: Vec<u32>,
     logical_rects: Vec<SceneRect>,
@@ -1238,8 +1462,9 @@ struct SceneRect {
 }
 
 impl Geometry {
-    fn new() -> Self {
+    fn new(size: GridSize) -> Self {
         Self {
+            size,
             vertices: Vec::new(),
             indices: Vec::new(),
             logical_rects: Vec::new(),
@@ -1254,10 +1479,10 @@ impl Geometry {
             return;
         };
         self.vertices.extend_from_slice(&[
-            clip_vertex(left, top, z),
-            clip_vertex(left, bottom, z),
-            clip_vertex(right, bottom, z),
-            clip_vertex(right, top, z),
+            clip_vertex(left, top, z, self.size),
+            clip_vertex(left, bottom, z, self.size),
+            clip_vertex(right, bottom, z, self.size),
+            clip_vertex(right, top, z, self.size),
         ]);
         self.indices
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -1274,10 +1499,10 @@ impl Geometry {
     }
 }
 
-fn clip_vertex(x: f32, y: f32, z: f32) -> [f32; 3] {
+fn clip_vertex(x: f32, y: f32, z: f32, size: GridSize) -> [f32; 3] {
     [
-        x * 2.0 / SCENE_WIDTH as f32 - 1.0,
-        1.0 - y * 2.0 / SCENE_HEIGHT as f32,
+        x * 2.0 / size.scene_width() as f32 - 1.0,
+        1.0 - y * 2.0 / size.scene_height() as f32,
         z,
     ]
 }
@@ -1344,31 +1569,34 @@ fn build_resident_page(
     let mut backgrounds: Vec<(u8, Geometry)> = Vec::new();
     let mut decorations: Vec<(u8, Geometry)> = Vec::new();
     let mut texts = Vec::new();
+    let size = snapshot.size;
+    let scene_width = size.scene_width();
+    let scene_height = size.scene_height();
     let scale = f32::from(snapshot.scale_percent) / 100.0;
-    let scene_units_per_mm_x = SCENE_WIDTH as f32 / SURFACE_WIDTH_MM as f32;
-    let scene_units_per_mm_y = SCENE_HEIGHT as f32 / SURFACE_HEIGHT_MM as f32;
+    let scene_units_per_mm_x = scene_width as f32 / size.surface_width_mm() as f32;
+    let scene_units_per_mm_y = scene_height as f32 / size.surface_height_mm() as f32;
     let cell_width = CELL_EDGE_MM as f32 * scene_units_per_mm_x * scale;
     let cell_height = CELL_EDGE_MM as f32 * scene_units_per_mm_y * scale;
-    let grid_width = COLUMNS as f32 * cell_width;
-    let grid_height = ROWS as f32 * cell_height;
-    let pan = pan.clamped(snapshot.scale_percent);
+    let grid_width = size.columns() as f32 * cell_width;
+    let grid_height = size.rows() as f32 * cell_height;
+    let pan = pan.clamped(snapshot.scale_percent, size);
     let grid_left = RULER_GUTTER_MM as f32 * scene_units_per_mm_x * scale;
     let grid_top = RULER_GUTTER_MM as f32 * scene_units_per_mm_y * scale;
     let grid_right = grid_left + grid_width;
     let grid_bottom = grid_top + grid_height;
-    let visible_scene_x = SCENE_WIDTH as f32 / raster_width as f32;
-    let visible_scene_y = SCENE_HEIGHT as f32 / raster_height as f32;
+    let visible_scene_x = scene_width as f32 / raster_width as f32;
+    let visible_scene_y = scene_height as f32 / raster_height as f32;
 
     // Only the grid owns paper. The ruler gutters remain transparent, and
     // there is no unused A4 margin on the right or bottom of the frame.
-    let mut paper = Geometry::new();
+    let mut paper = Geometry::new(size);
     paper.quad(grid_left, grid_top, grid_right, grid_bottom, 0.9);
     push_geometry_layer(&mut layers, paper, palette(COLOR_DEFAULT, true))?;
 
-    for row in 0..ROWS {
+    for row in 0..size.rows() {
         let top = grid_top + row as f32 * cell_height;
         let bottom = top + cell_height;
-        for column in 0..COLUMNS {
+        for column in 0..size.columns() {
             let offset = (row * COLUMNS + column) * CELL_BYTES;
             let cell = &snapshot.raw[offset..offset + CELL_BYTES];
             let primary_len = usize::from(cell[PRIMARY_LENGTH_OFFSET]);
@@ -1380,7 +1608,7 @@ fn build_resident_page(
             let right = left + cell_width;
 
             if background != COLOR_DEFAULT && background != COLOR_TRANSPARENT {
-                geometry_for_color(&mut backgrounds, background).quad(
+                geometry_for_color(&mut backgrounds, background, size).quad(
                     left + visible_scene_x * scale * 0.5,
                     top + visible_scene_y * scale * 0.5,
                     right - visible_scene_x * scale * 0.5,
@@ -1438,7 +1666,7 @@ fn build_resident_page(
             if style & STYLE_UNDERLINE != 0 {
                 let thickness = (font_pixels / 14.0).max(visible_scene_y);
                 let inset = DECORATION_INSET_MM * scene_units_per_mm_x * scale;
-                geometry_for_color(&mut decorations, foreground).quad(
+                geometry_for_color(&mut decorations, foreground, size).quad(
                     left + inset,
                     baseline + thickness,
                     right - inset,
@@ -1450,7 +1678,7 @@ fn build_resident_page(
                 let thickness = (font_pixels / 14.0).max(visible_scene_y);
                 let y = baseline - font_pixels * 0.32;
                 let inset = DECORATION_INSET_MM * scene_units_per_mm_x * scale;
-                geometry_for_color(&mut decorations, foreground).quad(
+                geometry_for_color(&mut decorations, foreground, size).quad(
                     left + inset,
                     y,
                     right - inset,
@@ -1465,21 +1693,21 @@ fn build_resident_page(
         push_geometry_layer(&mut layers, geometry, palette(color, true))?;
     }
 
-    let mut grid = Geometry::new();
+    let mut grid = Geometry::new(size);
     let vertical_line = visible_scene_x * scale;
     let horizontal_line = visible_scene_y * scale;
-    for column in 0..=COLUMNS {
+    for column in 0..=size.columns() {
         let x = grid_left + column as f32 * cell_width;
         grid.quad(x - vertical_line * 0.5, grid_top, x + vertical_line * 0.5, grid_bottom, 0.6);
     }
-    for row in 0..=ROWS {
+    for row in 0..=size.rows() {
         let y = grid_top + row as f32 * cell_height;
         grid.quad(grid_left, y - horizontal_line * 0.5, grid_right, y + horizontal_line * 0.5, 0.6);
     }
     push_geometry_layer(&mut layers, grid, [188, 205, 224, 255])?;
 
-    let mut rulers = Geometry::new();
-    for column in 0..=COLUMNS {
+    let mut rulers = Geometry::new(size);
+    for column in 0..=size.columns() {
         let x = grid_left + column as f32 * cell_width;
         let length = axis_tick_length_mm(column) * scene_units_per_mm_y * scale;
         rulers.quad(
@@ -1490,7 +1718,7 @@ fn build_resident_page(
             0.55,
         );
     }
-    for row in 0..=ROWS {
+    for row in 0..=size.rows() {
         let y = grid_top + row as f32 * cell_height;
         let length = axis_tick_length_mm(row) * scene_units_per_mm_x * scale;
         rulers.quad(
@@ -1548,23 +1776,23 @@ fn build_resident_page(
             let mesh = create_resident_font_centered_scene_mesh_at_raster(
                 &entries,
                 font,
-                SCENE_WIDTH,
-                SCENE_HEIGHT,
+                scene_width,
+                scene_height,
                 raster_width,
                 raster_height,
             )?;
             let coverage = if gpu_font_entries_use_analytical_coverage(
                 &entries,
-                SCENE_WIDTH,
-                SCENE_HEIGHT,
+                scene_width,
+                scene_height,
                 raster_width,
                 raster_height,
             ) {
                 match create_gpu_font_centered_coverage_mask_at_raster(
                     &entries,
                     font,
-                    SCENE_WIDTH,
-                    SCENE_HEIGHT,
+                    scene_width,
+                    scene_height,
                     raster_width,
                     raster_height,
                 ) {
@@ -1600,16 +1828,21 @@ fn build_resident_page(
         serial: snapshot.serial,
         generation: snapshot.generation,
         scale_percent: snapshot.scale_percent,
+        size,
         pan,
         layers,
     })
 }
 
-fn geometry_for_color(layers: &mut Vec<(u8, Geometry)>, color: u8) -> &mut Geometry {
+fn geometry_for_color(
+    layers: &mut Vec<(u8, Geometry)>,
+    color: u8,
+    size: GridSize,
+) -> &mut Geometry {
     if let Some(index) = layers.iter().position(|(candidate, _)| *candidate == color) {
         return &mut layers[index].1;
     }
-    layers.push((color, Geometry::new()));
+    layers.push((color, Geometry::new(size)));
     let last = layers.len() - 1;
     &mut layers[last].1
 }
@@ -1785,8 +2018,8 @@ fn render_compute_page_frame(
 
     let frame_started_ns = crate::chronos::monotonic_nanos();
     let viewport_translation_px = [
-        page.pan.x * destination.width as f32 / SCENE_WIDTH as f32,
-        page.pan.y * destination.height as f32 / SCENE_HEIGHT as f32,
+        page.pan.x * destination.width as f32 / page.size.scene_width() as f32,
+        page.pan.y * destination.height as f32 / page.size.scene_height() as f32,
     ];
     let clear = crate::intel::gpgpu::GpgpuSolidRect {
         rect: crate::intel::gpgpu::GpgpuRect::new(0, 0, destination.width, destination.height),
@@ -1822,7 +2055,13 @@ fn render_compute_page_frame(
             .logical_rects
             .iter()
             .filter_map(|rect| {
-                scene_rect_to_surface(*rect, destination, viewport_translation_px, color_rgba)
+                scene_rect_to_surface(
+                    *rect,
+                    page.size,
+                    destination,
+                    viewport_translation_px,
+                    color_rgba,
+                )
             })
             .collect::<Vec<_>>();
         if rects.is_empty() {
@@ -1946,12 +2185,13 @@ fn render_compute_page_frame(
 
 fn scene_rect_to_surface(
     rect: SceneRect,
+    size: GridSize,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
     viewport_translation_px: [f32; 2],
     color_rgba: u32,
 ) -> Option<crate::intel::gpgpu::GpgpuSolidRect> {
-    let scale_x = destination.width as f32 / SCENE_WIDTH as f32;
-    let scale_y = destination.height as f32 / SCENE_HEIGHT as f32;
+    let scale_x = destination.width as f32 / size.scene_width() as f32;
+    let scale_y = destination.height as f32 / size.scene_height() as f32;
     let left = libm::floorf(rect.left * scale_x + viewport_translation_px[0]) as i32;
     let top = libm::floorf(rect.top * scale_y + viewport_translation_px[1]) as i32;
     let right = libm::ceilf(rect.right * scale_x + viewport_translation_px[0]) as i32;
@@ -2074,19 +2314,22 @@ fn render_print_page(
     text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_elapsed_ms: u64,
 ) -> PrintRenderResult {
+    let size = request.size;
+    let (print_capture_width, print_capture_height) = size.print_capture_extent();
     let snapshot = OwnedSnapshot {
         raw: request.raw,
         owner: 0,
         generation: request.generation,
         scale_percent: 100,
+        size,
         serial: u64::from(request.job_id),
     };
     let result = (|| {
         let page = build_resident_page(
             PRIMARY_INSTANCE_ID,
             &snapshot,
-            PRINT_CAPTURE_WIDTH,
-            PRINT_CAPTURE_HEIGHT,
+            print_capture_width,
+            print_capture_height,
             ScenePan::ZERO,
         )?;
         let captured = capture_resident_page_frame(
@@ -2094,15 +2337,15 @@ fn render_print_page(
             text_animations,
             animation_elapsed_ms,
             [0.0, 0.0],
-            PRINT_CAPTURE_WIDTH,
-            PRINT_CAPTURE_HEIGHT,
+            print_capture_width,
+            print_capture_height,
             &[],
             None,
         )?;
         let rgba_premultiplied = captured.rgba.ok_or("missing-print-frame")?;
         Ok(PrintRasterFrame {
-            width: PRINT_CAPTURE_WIDTH,
-            height: PRINT_CAPTURE_HEIGHT,
+            width: print_capture_width,
+            height: print_capture_height,
             rgba_premultiplied,
         })
     })();
@@ -2135,8 +2378,10 @@ fn grid_cursor_rects(
     input_field: CellInputField,
 ) -> Option<[crate::intel::gpgpu::GpgpuSolidRect; 4]> {
     let scale = f32::from(page.scale_percent) / 100.0;
-    let scene_units_per_mm_x = SCENE_WIDTH as f32 / SURFACE_WIDTH_MM as f32;
-    let scene_units_per_mm_y = SCENE_HEIGHT as f32 / SURFACE_HEIGHT_MM as f32;
+    let scene_width = page.size.scene_width();
+    let scene_height = page.size.scene_height();
+    let scene_units_per_mm_x = scene_width as f32 / page.size.surface_width_mm() as f32;
+    let scene_units_per_mm_y = scene_height as f32 / page.size.surface_height_mm() as f32;
     let cell_width = CELL_EDGE_MM as f32 * scene_units_per_mm_x * scale;
     let cell_height = CELL_EDGE_MM as f32 * scene_units_per_mm_y * scale;
     let mut scene_left = RULER_GUTTER_MM as f32 * scene_units_per_mm_x * scale
@@ -2151,10 +2396,10 @@ fn grid_cursor_rects(
         scene_left += cell_width * 0.5;
         scene_bottom -= cell_height * 0.5;
     }
-    let left = libm::floorf(scene_left * surface.width as f32 / SCENE_WIDTH as f32) as i32;
-    let top = libm::floorf(scene_top * surface.height as f32 / SCENE_HEIGHT as f32) as i32;
-    let right = libm::ceilf(scene_right * surface.width as f32 / SCENE_WIDTH as f32) as i32;
-    let bottom = libm::ceilf(scene_bottom * surface.height as f32 / SCENE_HEIGHT as f32) as i32;
+    let left = libm::floorf(scene_left * surface.width as f32 / scene_width as f32) as i32;
+    let top = libm::floorf(scene_top * surface.height as f32 / scene_height as f32) as i32;
+    let right = libm::ceilf(scene_right * surface.width as f32 / scene_width as f32) as i32;
+    let bottom = libm::ceilf(scene_bottom * surface.height as f32 / scene_height as f32) as i32;
     let clipped_left = left.clamp(0, surface.width as i32) as u32;
     let clipped_top = top.clamp(0, surface.height as i32) as u32;
     let clipped_right = right.clamp(0, surface.width as i32) as u32;
@@ -2384,7 +2629,7 @@ fn attach_runtime_presentation(
     runtime: &mut GridPaperRuntime,
     producer: u8,
 ) -> Result<crate::ui4::WindowSessionId, ServiceError> {
-    let session = crate::ui4::begin_window_session(UI4_OWNER)?;
+    let session = crate::ui4::begin_additional_window_session(UI4_OWNER)?;
     if let Err(error) =
         attach_presentation(&mut runtime.surface, producer, session, runtime.active.is_some())
     {
@@ -2474,13 +2719,20 @@ fn refresh_runtime(runtime: &mut GridPaperRuntime) {
 
     if let Some(snapshot) = snapshot_after(pool_slot, runtime.observed_serial) {
         runtime.observed_serial = snapshot.serial;
-        let clamped_pan = runtime.pan.clamped(snapshot.scale_percent);
+        let clamped_pan = runtime.pan.clamped(snapshot.scale_percent, snapshot.size);
         if clamped_pan != runtime.pan {
             runtime.pan = clamped_pan;
             if let Some(page) = runtime.active.as_mut() {
                 page.pan = runtime.pan;
             }
             runtime.pan_dirty = true;
+        }
+        if runtime.selection.is_some_and(|selection| {
+            selection.column >= snapshot.size.columns() || selection.row >= snapshot.size.rows()
+        }) {
+            runtime.selection = None;
+            runtime.input_field = CellInputField::Primary;
+            runtime.cursor_dirty = true;
         }
         runtime.pending = None;
         runtime.latest_snapshot = Some(snapshot.clone());
@@ -2616,6 +2868,7 @@ fn pan_gridpaper(runtime: &mut GridPaperRuntime, event: crate::ui4::Ui4PanEvent)
                 runtime.surface.width,
                 runtime.surface.height,
                 snapshot.scale_percent,
+                snapshot.size,
             ) {
                 if let Some(page) = runtime.pending.as_mut() {
                     page.pan = runtime.pan;
@@ -2910,6 +3163,7 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
     let mut presentation_session = None;
     let mut last_init_error = None;
     let mut last_presentation_error = None;
+    let mut presentation_retry_after_ms = 0u64;
     loop {
         let lease = pool_lease_state(pool_slot);
         if lease.epoch != observed_lease_epoch {
@@ -2919,6 +3173,7 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
             observed_lease_epoch = lease.epoch;
             last_init_error = None;
             last_presentation_error = None;
+            presentation_retry_after_ms = 0;
         }
 
         let Some(instance_id) = lease.local_instance_id else {
@@ -2927,14 +3182,18 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
         };
 
         if runtime.is_none() {
-            match initialize_surface(pool_slot, instance_id) {
+            match initialize_surface(pool_slot, instance_id, lease.size) {
                 Ok(surface) => {
                     crate::log_info!(
                         target: "gridpaper";
-                        "gridpaper: pool runtime activated pool_slot={} owner={} local_instance={} worker_slot={} ui4={}x{} extent_source={} default_scale={}\n",
+                        "gridpaper: pool runtime activated pool_slot={} owner={} local_instance={} grid={}x{} soft_caps={}x{} worker_slot={} ui4={}x{} extent_source={} default_scale={}\n",
                         pool_slot,
                         lease.owner.unwrap_or(u8::MAX),
                         instance_id,
+                        lease.size.columns(),
+                        lease.size.rows(),
+                        COLUMN_SOFT_CAP,
+                        ROW_SOFT_CAP,
                         crate::percpu::current_slot(),
                         surface.width,
                         surface.height,
@@ -2964,7 +3223,10 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
         let runtime_ref = runtime
             .as_mut()
             .expect("leased GridPaper runtime initialized");
-        if lease.presentable_owner != runtime_ref.presented_owner() {
+        let presentation_now_ms = Instant::now().as_millis();
+        if lease.presentable_owner != runtime_ref.presented_owner()
+            && presentation_now_ms >= presentation_retry_after_ms
+        {
             if let Some(session) = presentation_session.take() {
                 let _ = release_runtime_presentation(runtime_ref, session, false);
             }
@@ -2988,21 +3250,25 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
                             u8::from(runtime_ref.active.is_some()),
                         );
                         last_presentation_error = None;
+                        presentation_retry_after_ms = 0;
                     }
-                    Err(error) if last_presentation_error != Some(error) => {
-                        crate::log_warn!(
-                            target: "gridpaper";
-                            "gridpaper: presentation attach pending pool_slot={} instance={} error={:?} action=retry retained_compute_scene=1\n",
-                            pool_slot,
-                            runtime_ref.surface.instance_id,
-                            error,
-                        );
+                    Err(error) => {
+                        presentation_retry_after_ms = presentation_now_ms.saturating_add(250);
+                        if last_presentation_error != Some(error) {
+                            crate::log_warn!(
+                                target: "gridpaper";
+                                "gridpaper: presentation attach pending pool_slot={} instance={} error={:?} retry_ms=250 retained_compute_scene=1\n",
+                                pool_slot,
+                                runtime_ref.surface.instance_id,
+                                error,
+                            );
+                        }
                         last_presentation_error = Some(error);
                     }
-                    Err(_) => {}
                 }
             } else {
                 last_presentation_error = None;
+                presentation_retry_after_ms = 0;
             }
         }
 
@@ -3124,7 +3390,43 @@ mod tests {
         assert_eq!(ROWS as u32 * CELL_EDGE_MM, 275);
         assert_eq!((GRID_WIDTH_MM, GRID_HEIGHT_MM), (195, 275));
         assert_eq!((SURFACE_WIDTH_MM, SURFACE_HEIGHT_MM), (199, 279));
-        assert_eq!((SCENE_WIDTH, SCENE_HEIGHT), (199, 279));
+        assert_eq!(
+            (
+                GridSize::FULL.scene_width(),
+                GridSize::FULL.scene_height()
+            ),
+            (199, 279)
+        );
+    }
+
+    #[test]
+    fn every_positive_grid_within_the_soft_caps_is_valid() {
+        for columns in 1..=COLUMN_SOFT_CAP as u32 {
+            for rows in 1..=ROW_SOFT_CAP as u32 {
+                assert_eq!(
+                    GridSize::new(columns, rows),
+                    Some(GridSize {
+                        columns: columns as u16,
+                        rows: rows as u16,
+                    })
+                );
+            }
+        }
+        for (columns, rows) in [
+            (0, 1),
+            (1, 0),
+            (0, 0),
+            (COLUMN_SOFT_CAP as u32 + 1, 1),
+            (1, ROW_SOFT_CAP as u32 + 1),
+        ] {
+            assert_eq!(GridSize::new(columns, rows), None);
+        }
+    }
+
+    #[test]
+    fn print_capture_caps_the_long_edge_for_tall_and_wide_grids() {
+        assert_eq!(GridSize::new(1, 55).unwrap().print_capture_extent().1, 1_440);
+        assert_eq!(GridSize::new(39, 1).unwrap().print_capture_extent().0, 1_440);
     }
 
     #[test]
@@ -3138,14 +3440,34 @@ mod tests {
     #[test]
     fn middle_pan_tracks_drag_and_clamps_to_scaled_document() {
         let mut pan = ScenePan::ZERO;
-        assert!(!pan.drag_pixels(100, 100, 853, 1_196, 150));
-        assert!(pan.drag_pixels(-10_000, -10_000, 853, 1_196, 150));
-        assert_eq!(pan.x, -(SCENE_WIDTH as f32 * 0.5));
-        assert_eq!(pan.y, -(SCENE_HEIGHT as f32 * 0.5));
-        assert!(pan.drag_pixels(10_000, 10_000, 853, 1_196, 150));
+        assert!(!pan.drag_pixels(100, 100, 853, 1_196, 150, GridSize::FULL));
+        assert!(pan.drag_pixels(
+            -10_000,
+            -10_000,
+            853,
+            1_196,
+            150,
+            GridSize::FULL
+        ));
+        assert_eq!(
+            pan.x,
+            -(GridSize::FULL.scene_width() as f32 * 0.5)
+        );
+        assert_eq!(
+            pan.y,
+            -(GridSize::FULL.scene_height() as f32 * 0.5)
+        );
+        assert!(pan.drag_pixels(
+            10_000,
+            10_000,
+            853,
+            1_196,
+            150,
+            GridSize::FULL
+        ));
         assert_eq!(pan, ScenePan::ZERO);
 
-        assert!(!pan.drag_pixels(-100, -100, 853, 1_196, 100));
+        assert!(!pan.drag_pixels(-100, -100, 853, 1_196, 100, GridSize::FULL));
         assert_eq!(pan, ScenePan::ZERO);
     }
 
@@ -3166,8 +3488,10 @@ mod tests {
     fn keyboard_primary_advances_while_upper_stays_and_delete_restores_primary_only() {
         let mut snapshot = OwnedSnapshot {
             raw: Vec::from([0u8; PAGE_BYTES]),
+            owner: 0,
             generation: 1,
             scale_percent: 100,
+            size: GridSize::FULL,
             serial: 1,
         };
         let original = GridCellSelection { column: 2, row: 3 };

@@ -61,7 +61,11 @@ impl PrintJobState {
 }
 
 pub(crate) enum PrintDocument {
-    GridPaperA4 { generation: u64, raw: Vec<u8> },
+    GridPaperA4 {
+        generation: u64,
+        size: crate::r::gridpaper_service::GridSize,
+        raw: Vec<u8>,
+    },
 }
 
 pub(crate) struct PrintJob {
@@ -154,7 +158,7 @@ fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
         if !queue.has_job_capacity() {
             return Err(ERROR_QUEUE_FULL);
         }
-        let Some((generation, raw)) =
+        let Some((generation, size, raw)) =
             crate::r::gridpaper_service::consume_print_request(owner, token)
         else {
             return Err(ERROR_NOT_OWNER);
@@ -169,7 +173,11 @@ fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
         queue.pending.push_back(PrintJob {
             id,
             owner,
-            document: PrintDocument::GridPaperA4 { generation, raw },
+            document: PrintDocument::GridPaperA4 {
+                generation,
+                size,
+                raw,
+            },
         });
         id
     };
@@ -185,6 +193,7 @@ pub(crate) fn submit_for_owner(owner: u8, document_kind: u32, subject: u64, raw:
             }
             PrintDocument::GridPaperA4 {
                 generation: subject,
+                size: crate::r::gridpaper_service::GridSize::FULL,
                 raw: raw.to_vec(),
             }
         }
