@@ -145,9 +145,13 @@ fn presentation_is_ready(presentation: KernelGridPresentation) -> bool {
         })
 }
 
-async fn wait_for_ready_presentation(lease: KernelGridLease) -> KernelGridPresentation {
+async fn wait_for_ready_presentation(
+    lease: KernelGridLease,
+    generation: u64,
+) -> KernelGridPresentation {
     loop {
         if let Some(presentation) = crate::r::gridpaper_service::kernel_grid_presentation(lease)
+            && presentation.published_generation == generation
             && presentation_is_ready(presentation)
         {
             return presentation;
@@ -205,6 +209,20 @@ async fn focus_and_click_cell_zero(
     if crate::ui4::selected_frame_for_source(source) != Some(expected) {
         return Err("gridpaper-focus-not-latched");
     }
+    let placement = crate::ui4::window_placement(
+        crate::ui4::WindowOwner::GRIDPAPER_SERVICE,
+        presentation.window,
+    )
+    .map_err(|_| "gridpaper-outline-placement")?;
+    super::lilly_cursor::queue_window_outline(
+        placement.x,
+        placement.y,
+        placement.width,
+        placement.height,
+        screen_width,
+        screen_height,
+    )
+    .map_err(|_| "gridpaper-outline-submit")?;
     Ok(())
 }
 
@@ -321,17 +339,20 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
                 continue;
             }
         };
-        if let Err(error) = crate::r::gridpaper_service::reset_and_show_kernel_grid(lease) {
-            crate::log_warn!(
-                target: "gfx";
-                "trueos-spirit: response dropped turn={} reason=gridpaper-reset error={:?}\n",
-                request.turn,
-                error,
-            );
-            continue;
-        }
+        let generation = match crate::r::gridpaper_service::reset_and_show_kernel_grid(lease) {
+            Ok(generation) => generation,
+            Err(error) => {
+                crate::log_warn!(
+                    target: "gfx";
+                    "trueos-spirit: response dropped turn={} reason=gridpaper-reset error={:?}\n",
+                    request.turn,
+                    error,
+                );
+                continue;
+            }
+        };
 
-        let presentation = wait_for_ready_presentation(lease).await;
+        let presentation = wait_for_ready_presentation(lease, generation).await;
         if let Err(reason) = focus_and_click_cell_zero(presentation).await {
             crate::log_warn!(
                 target: "gfx";

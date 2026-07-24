@@ -231,6 +231,7 @@ pub(crate) struct KernelGridPresentation {
     pub(crate) window: crate::ui4::WindowId,
     pub(crate) cell_zero_x: i32,
     pub(crate) cell_zero_y: i32,
+    pub(crate) published_generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -494,7 +495,7 @@ fn with_kernel_grid_store<R>(
 
 /// Clear the retained document and request a fresh UI4 presentation. The
 /// worker and GPU allocations remain the same when the logical size is stable.
-pub(crate) fn reset_and_show_kernel_grid(lease: KernelGridLease) -> Result<(), KernelGridError> {
+pub(crate) fn reset_and_show_kernel_grid(lease: KernelGridLease) -> Result<u64, KernelGridError> {
     with_kernel_grid_store(lease, |slot, store| {
         let next = store.published ^ 1;
         store.buffers[next].fill(0);
@@ -512,6 +513,7 @@ pub(crate) fn reset_and_show_kernel_grid(lease: KernelGridLease) -> Result<(), K
             store.generation,
             store.serial,
         );
+        store.generation
     })
 }
 
@@ -548,6 +550,13 @@ pub(crate) fn is_spirit_response_grid_window(window: crate::ui4::WindowId) -> bo
             record.owner.client == KernelGridClient::SpiritResponse
                 && record.presentation.window == window
         })
+}
+
+fn mark_kernel_grid_generation_published(pool_slot: usize, generation: u64) {
+    let mut presentations = KERNEL_GRID_PRESENTATIONS.lock();
+    if let Some(record) = presentations[pool_slot].as_mut() {
+        record.presentation.published_generation = generation;
+    }
 }
 
 #[derive(Clone)]
@@ -1765,6 +1774,7 @@ fn attach_presentation(
                 window,
                 cell_zero_x,
                 cell_zero_y,
+                published_generation: 0,
             },
         });
     }
@@ -4591,8 +4601,13 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     result.present_copy_us,
                 );
                 let published_cell_patch_serial = published.cell_patch_serial;
+                let published_generation = published.generation;
                 let retired = runtime.active.replace(published);
                 drop(retired);
+                mark_kernel_grid_generation_published(
+                    runtime.surface.pool_slot,
+                    published_generation,
+                );
                 runtime.animation_dirty = false;
                 runtime.pan_dirty = false;
                 runtime.cursor_dirty = false;

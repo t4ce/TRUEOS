@@ -611,6 +611,14 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
         ok &= direct_rcs_push(batch, &mut cursor, 0);
         walker_index += 1;
+        if walker_index < active_walkers {
+            // MEDIA_STATE_FLUSH terminates the walker but does not provide
+            // the HDC/L3 producer boundary required before replacing its
+            // interface descriptor and surface state. Keep independently
+            // addressed glyph layers ordered just like the proven sprite
+            // worklist path.
+            ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+        }
     }
     ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,
@@ -769,6 +777,14 @@ fn direct_rcs_encode_font_instance_layers_2d_batch(
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
         ok &= direct_rcs_push(batch, &mut cursor, 0);
         walker_index += 1;
+        if walker_index < active_walkers {
+            // Each walker selects a different mask and descriptor while all
+            // walkers blend into the same destination. Alder Lake requires
+            // the full producer drain before the next IDD load; without it,
+            // later walkers can retire successfully while leaving alternate
+            // glyph cells untouched.
+            ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+        }
     }
     ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,

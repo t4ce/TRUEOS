@@ -213,6 +213,57 @@ pub(super) fn queue_primary_click() -> Result<(), MouseControlError> {
     )
 }
 
+/// Enqueue one complete clockwise trace of a brokered UI4 frame. The first
+/// stroke naturally approaches its clipped top-left corner; the four linear
+/// strokes then follow the exact outer pixel boundary and return there. This
+/// is the software-cursor counterpart of Lilly's one-shot boot outline and
+/// never moves Spirit's Intel hardware cursor.
+pub(super) fn queue_window_outline(
+    frame_x: i32,
+    frame_y: i32,
+    frame_width: u32,
+    frame_height: u32,
+    screen_width: u32,
+    screen_height: u32,
+) -> Result<(), MouseControlError> {
+    if frame_width == 0 || frame_height == 0 || screen_width == 0 || screen_height == 0 {
+        return Err(MouseControlError::Invalid);
+    }
+    let cursor = register_once()?;
+    let (left, right) = clipped_axis(frame_x, frame_width, screen_width);
+    let (top, bottom) = clipped_axis(frame_y, frame_height, screen_height);
+    let program = [
+        stroke(left, top, LILLY_INITIAL_APPROACH_MS, MOUSE_CONTROL_EASING_NATURAL, true),
+        stroke(right, top, LILLY_OUTLINE_EDGE_MS, MOUSE_CONTROL_EASING_LINEAR, false),
+        stroke(right, bottom, LILLY_OUTLINE_EDGE_MS, MOUSE_CONTROL_EASING_LINEAR, false),
+        stroke(left, bottom, LILLY_OUTLINE_EDGE_MS, MOUSE_CONTROL_EASING_LINEAR, false),
+        stroke(left, top, LILLY_OUTLINE_EDGE_MS, MOUSE_CONTROL_EASING_LINEAR, false),
+    ];
+    crate::r::mouse_motion_service::submit_program(
+        MouseControlPrincipal::Kernel,
+        cursor.handle,
+        &program,
+    )?;
+    crate::log_info!(
+        target: "gfx";
+        "trueos-spirit: Lilly selected-frame outline queued tag={} handle={} slot={} commands={} outline={}x{}..{}x{} broker_rect={}x{}+{},{} clipped_to_screen={} path=natural-approach+clockwise-linear-once plane=ui4-slot4 hardware_cur_pos=unchanged\n",
+        LILLY_CURSOR_LABEL,
+        cursor.handle,
+        cursor.slot_id,
+        program.len(),
+        left,
+        top,
+        right,
+        bottom,
+        frame_width,
+        frame_height,
+        frame_x,
+        frame_y,
+        (left != frame_x || top != frame_y) as u8,
+    );
+    Ok(())
+}
+
 /// Queue one atomic approach-plus-outline program after Spirit's first real
 /// hardware move. `(spirit_left, spirit_top)` are the exact CUR_POS screen
 /// coordinates, including possible negative cursor-plane coordinates.
