@@ -3,27 +3,29 @@
 The default `trueos_h264_encode_stream` feature stages a resident,
 subscriber-driven kernel service:
 
-1. At boot, TRUEOS procedurally fills one 512x512 NV12 surface and submits it
+1. At boot, TRUEOS procedurally fills one 1920x1088 NV12 surface and submits it
    through Intel Gen12 VDEnc/MFX on VCS0. The service proceeds only after GuC
    submission, command-stream status writeback, Annex-B structure, and coded
    output all validate. No diagnostic media file or software encoder is linked
    into the kernel.
 2. A receiver sends `TME1GET1` to UDP port 9650.
 3. On subscription, a dedicated performance-preferred background worker
-   captures the current logical UI4 D01 composition in memory, aspect-fits it
-   into 512x512, converts straight-alpha RGBA to limited-range BT.601 NV12,
-   and hardware-encodes a fresh IDR access unit on each absolute 10 Hz
-   deadline. This logical capture follows UI4 plane/z order but is not a
-   bit-exact latch of the physical scanout and does not include the hardware
-   cursor.
+   captures the current 2560x1440 logical UI4 D01 composition in memory, takes
+   the fixed 1920x1088 rectangle at top-left `(0,0)`, converts straight-alpha
+   RGBA to limited-range BT.601 NV12, and hardware-encodes a fresh IDR access
+   unit on each absolute 10 Hz deadline. This test-rig baseline intentionally
+   performs no scale, aspect correction, or dynamic crop selection. The
+   logical capture follows UI4 plane/z order but is not a bit-exact latch of
+   the physical scanout and does not include the hardware cursor.
 4. Each access unit is immediately fragmented into CRC-protected TME1
-   datagrams and unicast to the subscriber. The media socket has an 8 KiB
+   datagrams and unicast to the subscriber. The media socket has a 64 KiB
    transmit ring, and every datagram carries an internal adapter receipt token.
    The sequence advances only after the matching adapter acceptance; a
-   confirmed full ring retries that exact packet, while a missing or fatal
-   receipt aborts without an uncertain retransmission. The live high-water
-   mark is one access unit; no framebuffer or encoded payload is written to
-   TRUEOSFS.
+   confirmed full ring retries that exact packet after one millisecond, while
+   a missing or fatal receipt aborts without an uncertain retransmission.
+   Accepted fragments have no artificial inter-packet delay. The live
+   high-water mark is one access unit; no framebuffer or encoded payload is
+   written to TRUEOSFS.
 5. After 100 frames (ten seconds), the socket closes and the resident service
    waits for the next subscriber, which receives a fresh session.
 

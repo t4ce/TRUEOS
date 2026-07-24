@@ -13,8 +13,10 @@ use embassy_time::{Duration, Timer};
 
 const PROBE_START_DELAY_MS: u64 = 15_000;
 const VCS0_PROBE_RETRY_MS: u64 = 50;
-const ENCODE_WIDTH: usize = 512;
-const ENCODE_HEIGHT: usize = 512;
+const TEST_RIG_SCANOUT_WIDTH: u32 = 2560;
+const TEST_RIG_SCANOUT_HEIGHT: u32 = 1440;
+const ENCODE_WIDTH: usize = 1920;
+const ENCODE_HEIGHT: usize = 1088;
 const ENCODE_LUMA_BYTES: usize = ENCODE_WIDTH * ENCODE_HEIGHT;
 const ENCODE_NV12_BYTES: usize = ENCODE_LUMA_BYTES * 3 / 2;
 const CADENCE_TOLERANCE_PERCENT: u64 = 5;
@@ -27,6 +29,13 @@ static STATE: AtomicU8 = AtomicU8::new(H264EncodeStreamState::Waiting as u8);
 static ENCODE_US: AtomicU64 = AtomicU64::new(0);
 static SOURCE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static ENCODED_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+const _: () = {
+    assert!(ENCODE_WIDTH % 16 == 0);
+    assert!(ENCODE_HEIGHT % 16 == 0);
+    assert!(ENCODE_WIDTH <= TEST_RIG_SCANOUT_WIDTH as usize);
+    assert!(ENCODE_HEIGHT <= TEST_RIG_SCANOUT_HEIGHT as usize);
+};
 
 #[derive(Default)]
 struct LiveEncodeStats {
@@ -183,7 +192,10 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
         }
         if avc_probe.state == crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Passed {
             crate::log_info!(target: "intel/media-encode";
-                "intel/media-encode: avc-idr-probe accepted=1 engine=vcs0 codec_mode=avc-encode submission_owner=guc batch_level=second-level-return terminal_fence=primary-batch-return-marker source=procedural-nv12 source_layout=nv12-linear visible=512x512 pitch=512 source_bytes={} source_fnv1a32=0x{:08X} embedded_probe_asset_bytes=0 backing={} surface_uploaded={} batch={} batch_bytes={} primary_batch_bytes={} ring_bytes={} codec_packets={} bitstream_buffer_bound={} registered={} submitted={} retired={} context_destroyed={} serial={} hwlrca=0x{:08X}:0x{:08X} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} coded_output_validated={} frame_bytes_no_excluded_headers={} excluded_header_bytes={} coded_bytes={} coded_fnv1a32=0x{:08X} nal_flags=0b{:04b} mfx_error=0x{:08X} image_status=0x{:08X} slice_bytes={} slices={} bitstream_head={:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X} hardware_encode=1\n",
+                "intel/media-encode: avc-idr-probe accepted=1 engine=vcs0 codec_mode=avc-encode submission_owner=guc batch_level=second-level-return terminal_fence=primary-batch-return-marker source=procedural-nv12 source_layout=nv12-linear visible={}x{} pitch={} source_bytes={} source_fnv1a32=0x{:08X} embedded_probe_asset_bytes=0 backing={} surface_uploaded={} batch={} batch_bytes={} primary_batch_bytes={} ring_bytes={} codec_packets={} bitstream_buffer_bound={} registered={} submitted={} retired={} context_destroyed={} serial={} hwlrca=0x{:08X}:0x{:08X} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} coded_output_validated={} frame_bytes_no_excluded_headers={} excluded_header_bytes={} coded_bytes={} coded_fnv1a32=0x{:08X} nal_flags=0b{:04b} mfx_error=0x{:08X} image_status=0x{:08X} slice_bytes={} slices={} bitstream_head={:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X} hardware_encode=1\n",
+                ENCODE_WIDTH,
+                ENCODE_HEIGHT,
+                ENCODE_WIDTH,
                 avc_probe.source_nv12_bytes,
                 avc_probe.source_nv12_fnv1a32,
                 avc_probe.backing_ready as u8,
@@ -438,7 +450,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             Ordering::Release,
         );
         crate::log_info!(target: "intel/media-encode";
-            "intel/media-encode: udp-live complete accepted={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} scale=aspect-fit-letterbox format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx hardware_encode=1 all_idr=1 protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_fnv1a32=0x{:08X} source_last_fnv1a32=0x{:08X} source_changes={} capture_convert_avg_us={} capture_convert_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} executor=dedicated-background-worker worker_slot={} worker_kind={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
+            "intel/media-encode: udp-live complete accepted={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} crop=top-left crop_origin=0,0 format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx hardware_encode=1 all_idr=1 protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_fnv1a32=0x{:08X} source_last_fnv1a32=0x{:08X} source_changes={} capture_convert_avg_us={} capture_convert_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} executor=dedicated-background-worker worker_slot={} worker_kind={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
             accepted as u8,
             stats.source_width,
             stats.source_height,
@@ -511,7 +523,7 @@ fn capture_and_encode_scanout(sequence: u32, stats: &mut LiveEncodeStats) -> Opt
         }
     };
     let mut nv12 = alloc::vec![0u8; ENCODE_NV12_BYTES];
-    if !rgba_to_nv12_letterboxed(
+    if !rgba_to_nv12_top_left_crop(
         capture.width,
         capture.height,
         capture.rgba.as_slice(),
@@ -576,7 +588,7 @@ fn capture_and_encode_scanout(sequence: u32, stats: &mut LiveEncodeStats) -> Opt
     Some(annex_b)
 }
 
-fn rgba_to_nv12_letterboxed(
+fn rgba_to_nv12_top_left_crop(
     source_width: u32,
     source_height: u32,
     rgba: &[u8],
@@ -584,8 +596,8 @@ fn rgba_to_nv12_letterboxed(
 ) -> bool {
     let source_width_usize = source_width as usize;
     let source_height_usize = source_height as usize;
-    if source_width == 0
-        || source_height == 0
+    if source_width != TEST_RIG_SCANOUT_WIDTH
+        || source_height != TEST_RIG_SCANOUT_HEIGHT
         || source_width_usize
             .checked_mul(source_height_usize)
             .and_then(|pixels| pixels.checked_mul(4))
@@ -595,69 +607,53 @@ fn rgba_to_nv12_letterboxed(
         return false;
     }
 
-    nv12[..ENCODE_LUMA_BYTES].fill(16);
-    nv12[ENCODE_LUMA_BYTES..].fill(128);
-    let (mut active_width, mut active_height) = if u64::from(source_width) * ENCODE_HEIGHT as u64
-        >= u64::from(source_height) * ENCODE_WIDTH as u64
-    {
-        (
-            ENCODE_WIDTH,
-            (ENCODE_WIDTH as u64 * u64::from(source_height) / u64::from(source_width)) as usize,
-        )
-    } else {
-        (
-            (ENCODE_HEIGHT as u64 * u64::from(source_width) / u64::from(source_height)) as usize,
-            ENCODE_HEIGHT,
-        )
-    };
-    active_width = (active_width.max(2) & !1).min(ENCODE_WIDTH);
-    active_height = (active_height.max(2) & !1).min(ENCODE_HEIGHT);
-    let offset_x = ((ENCODE_WIDTH - active_width) / 2) & !1;
-    let offset_y = ((ENCODE_HEIGHT - active_height) / 2) & !1;
+    for y in (0..ENCODE_HEIGHT).step_by(2) {
+        let source_row_0 = y * source_width_usize * 4;
+        let source_row_1 = (y + 1) * source_width_usize * 4;
+        let luma_row_0 = y * ENCODE_WIDTH;
+        let luma_row_1 = (y + 1) * ENCODE_WIDTH;
+        let uv_row = ENCODE_LUMA_BYTES + y / 2 * ENCODE_WIDTH;
+        for x in (0..ENCODE_WIDTH).step_by(2) {
+            let rgba_x = x * 4;
+            let rgb_00 = composited_rgb(&rgba[source_row_0 + rgba_x..]);
+            let rgb_01 = composited_rgb(&rgba[source_row_0 + rgba_x + 4..]);
+            let rgb_10 = composited_rgb(&rgba[source_row_1 + rgba_x..]);
+            let rgb_11 = composited_rgb(&rgba[source_row_1 + rgba_x + 4..]);
 
-    for destination_y in 0..active_height {
-        let source_y = destination_y * source_height_usize / active_height;
-        let luma_row = (offset_y + destination_y) * ENCODE_WIDTH + offset_x;
-        for destination_x in 0..active_width {
-            let source_x = destination_x * source_width_usize / active_width;
-            let (red, green, blue) = composited_rgb(rgba, source_width_usize, source_x, source_y);
-            nv12[luma_row + destination_x] = rgb_to_luma(red, green, blue);
-        }
-    }
+            nv12[luma_row_0 + x] = rgb_to_luma(rgb_00.0, rgb_00.1, rgb_00.2);
+            nv12[luma_row_0 + x + 1] = rgb_to_luma(rgb_01.0, rgb_01.1, rgb_01.2);
+            nv12[luma_row_1 + x] = rgb_to_luma(rgb_10.0, rgb_10.1, rgb_10.2);
+            nv12[luma_row_1 + x + 1] = rgb_to_luma(rgb_11.0, rgb_11.1, rgb_11.2);
 
-    for destination_y in (0..active_height).step_by(2) {
-        let uv_row = ENCODE_LUMA_BYTES + ((offset_y + destination_y) / 2) * ENCODE_WIDTH + offset_x;
-        for destination_x in (0..active_width).step_by(2) {
-            let mut red_sum = 0u32;
-            let mut green_sum = 0u32;
-            let mut blue_sum = 0u32;
-            for y in destination_y..destination_y + 2 {
-                let source_y = y * source_height_usize / active_height;
-                for x in destination_x..destination_x + 2 {
-                    let source_x = x * source_width_usize / active_width;
-                    let (red, green, blue) =
-                        composited_rgb(rgba, source_width_usize, source_x, source_y);
-                    red_sum += u32::from(red);
-                    green_sum += u32::from(green);
-                    blue_sum += u32::from(blue);
-                }
-            }
-            let (u, v) =
-                rgb_to_chroma((red_sum / 4) as u8, (green_sum / 4) as u8, (blue_sum / 4) as u8);
-            nv12[uv_row + destination_x] = u;
-            nv12[uv_row + destination_x + 1] = v;
+            let red = (u32::from(rgb_00.0)
+                + u32::from(rgb_01.0)
+                + u32::from(rgb_10.0)
+                + u32::from(rgb_11.0))
+                / 4;
+            let green = (u32::from(rgb_00.1)
+                + u32::from(rgb_01.1)
+                + u32::from(rgb_10.1)
+                + u32::from(rgb_11.1))
+                / 4;
+            let blue = (u32::from(rgb_00.2)
+                + u32::from(rgb_01.2)
+                + u32::from(rgb_10.2)
+                + u32::from(rgb_11.2))
+                / 4;
+            let (u, v) = rgb_to_chroma(red as u8, green as u8, blue as u8);
+            nv12[uv_row + x] = u;
+            nv12[uv_row + x + 1] = v;
         }
     }
     true
 }
 
-fn composited_rgb(rgba: &[u8], source_width: usize, x: usize, y: usize) -> (u8, u8, u8) {
-    let offset = (y * source_width + x) * 4;
-    let alpha = u32::from(rgba[offset + 3]);
+fn composited_rgb(rgba: &[u8]) -> (u8, u8, u8) {
+    let alpha = u32::from(rgba[3]);
     (
-        ((u32::from(rgba[offset]) * alpha + 127) / 255) as u8,
-        ((u32::from(rgba[offset + 1]) * alpha + 127) / 255) as u8,
-        ((u32::from(rgba[offset + 2]) * alpha + 127) / 255) as u8,
+        ((u32::from(rgba[0]) * alpha + 127) / 255) as u8,
+        ((u32::from(rgba[1]) * alpha + 127) / 255) as u8,
+        ((u32::from(rgba[2]) * alpha + 127) / 255) as u8,
     )
 }
 

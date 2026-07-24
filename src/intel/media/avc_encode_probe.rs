@@ -2,7 +2,7 @@
 //!
 //! Boot proves the fixed-CQP IDR graph with one procedural NV12 frame. The
 //! resident UI4 service then serially reuses the same fixed backing for live
-//! 512x512 NV12 frames. Every submission stores authoritative MFC result
+//! 1920x1088 NV12 frames. Every submission stores authoritative MFC result
 //! registers and validates its Annex-B access unit before it can be handed to
 //! the network transport.
 
@@ -20,7 +20,7 @@ const CONTEXT_GPU: u64 = 0x4101_0000;
 const ARENA_GPU: u64 = 0x4110_0000;
 const RING_BYTES: usize = 16 * 1024;
 const CONTEXT_BYTES: usize = 22 * 4096;
-const ARENA_BYTES: usize = 4 * 1024 * 1024;
+const ARENA_BYTES: usize = 16 * 1024 * 1024;
 
 const BATCH_OFFSET: usize = 0x0000_0000;
 const BATCH_BYTES: usize = 64 * 1024;
@@ -30,19 +30,31 @@ const CODEC_BATCH_BYTES: usize = BATCH_BYTES - CODEC_BATCH_OFFSET;
 const RESULT_OFFSET: usize = 0x0001_0000;
 const RESULT_BYTES: usize = 4096;
 const SOURCE_OFFSET: usize = 0x0002_0000;
-const SOURCE_BYTES: usize = 512 * 512 * 3 / 2;
-const RECON_OFFSET: usize = 0x0008_0000;
+const FRAME_WIDTH: usize = 1920;
+const FRAME_HEIGHT: usize = 1088;
+const FRAME_WIDTH_MBS: usize = FRAME_WIDTH / 16;
+const FRAME_HEIGHT_MBS: usize = FRAME_HEIGHT / 16;
+const FRAME_MACROBLOCKS: usize = FRAME_WIDTH_MBS * FRAME_HEIGHT_MBS;
+const SOURCE_BYTES: usize = FRAME_WIDTH * FRAME_HEIGHT * 3 / 2;
+const RECON_OFFSET: usize = 0x0032_0000;
 const RECON_BYTES: usize = SOURCE_BYTES;
-const DS_OFFSET: usize = 0x000e_0000;
-const DS_BYTES: usize = 128 * 128 * 3 / 2;
-const BITSTREAM_OFFSET: usize = 0x0010_0000;
-const BITSTREAM_BYTES: usize = 2 * 1024 * 1024;
-const MFX_STATS_OFFSET: usize = 0x0030_0000;
-const VDENC_STATS_OFFSET: usize = 0x0031_0000;
-const SLICE_SIZE_OFFSET: usize = 0x0032_0000;
-const INTRA_ROWSTORE_OFFSET: usize = 0x0033_0000;
-const DEBLOCK_ROWSTORE_OFFSET: usize = 0x0034_0000;
-const BSP_ROWSTORE_OFFSET: usize = 0x0035_0000;
+const DS_WIDTH: usize = FRAME_WIDTH / 4;
+const DS_LOGICAL_HEIGHT: usize = FRAME_HEIGHT / 4;
+// Intel's AVC VDEnc path allocates the 4x surface as field-safe Tile-Y
+// geometry even for a progressive frame: ceil(ceil(272 / 16) / 2) * 16,
+// aligned to 32 rows, then doubled.
+const DS_HEIGHT: usize = 320;
+const DS_PITCH: usize = 512;
+const DS_OFFSET: usize = 0x0062_0000;
+const DS_BYTES: usize = DS_PITCH * DS_HEIGHT * 3 / 2;
+const BITSTREAM_OFFSET: usize = 0x0066_0000;
+const BITSTREAM_BYTES: usize = 4 * 1024 * 1024;
+const MFX_STATS_OFFSET: usize = 0x00a6_0000;
+const VDENC_STATS_OFFSET: usize = 0x00a7_0000;
+const SLICE_SIZE_OFFSET: usize = 0x00a8_0000;
+const INTRA_ROWSTORE_OFFSET: usize = 0x00a9_0000;
+const DEBLOCK_ROWSTORE_OFFSET: usize = 0x00aa_0000;
+const BSP_ROWSTORE_OFFSET: usize = 0x00ab_0000;
 const SCRATCH_BYTES: usize = 64 * 1024;
 
 const BATCH_GPU: u64 = ARENA_GPU + BATCH_OFFSET as u64;
@@ -70,6 +82,17 @@ const _: () = {
     assert!(CONTEXT_GPU % crate::intel::WARM_ALIGN as u64 == 0);
     assert!(ARENA_GPU % crate::intel::WARM_ALIGN as u64 == 0);
     assert!(CODEC_BATCH_OFFSET + CODEC_BATCH_BYTES == BATCH_BYTES);
+    assert!(FRAME_WIDTH % 16 == 0);
+    assert!(FRAME_HEIGHT % 16 == 0);
+    assert!(FRAME_WIDTH_MBS == 120);
+    assert!(FRAME_HEIGHT_MBS == 68);
+    assert!(FRAME_MACROBLOCKS == 8_160);
+    assert!(DS_WIDTH % 16 == 0);
+    assert!(DS_LOGICAL_HEIGHT == 272);
+    assert!(DS_HEIGHT >= DS_LOGICAL_HEIGHT);
+    assert!(DS_HEIGHT % 32 == 0);
+    assert!(DS_PITCH >= DS_WIDTH);
+    assert!(DS_PITCH % 64 == 0);
     assert!(EXPECTED_PRIMARY_BATCH_BYTES <= PRIMARY_BATCH_BYTES);
     assert!(BATCH_OFFSET + BATCH_BYTES <= RESULT_OFFSET);
     assert!(RESULT_OFFSET + RESULT_BYTES <= SOURCE_OFFSET);
@@ -120,31 +143,31 @@ const MFX_PIPE_MODE_SELECT: [u32; 5] = [0x7000_0003, 0x0002_22d2, 0, 0, 0];
 const MFX_SURFACE_RECON: [u32; 6] = [
     0x7001_0004,
     0,
-    0x07fc_1ff0,
-    0x4800_0ff8,
-    0x0000_0200,
-    0x0000_0200,
+    0x10fc_77f0,
+    0x4800_3bf8,
+    0x0000_0440,
+    0x0000_0440,
 ];
 const MFX_SURFACE_SOURCE: [u32; 6] = [
     0x7001_0004,
     4,
-    0x07fc_1ff0,
-    0x4800_0ff8,
-    0x0000_0200,
-    0x0000_0200,
+    0x10fc_77f0,
+    0x4800_3bf8,
+    0x0000_0440,
+    0x0000_0440,
 ];
 const MFX_SURFACE_DS: [u32; 6] = [
     0x7001_0004,
     5,
-    0x01fc_07f0,
-    0x4800_03f8,
-    0x0000_0080,
-    0x0000_0080,
+    0x04fc_1df0,
+    0x4800_0ff8,
+    0x0000_0140,
+    0x0000_0140,
 ];
 const MFX_AVC_IMG_STATE: [u32; 21] = [
     0x7100_0013,
-    0x0000_0400,
-    0x001f_001f,
+    0x0000_1fe0,
+    0x0043_0077,
     0x0000_2000,
     0x0000_1514,
     0x0800_008f,
@@ -170,7 +193,7 @@ const MFX_AVC_SLICE_STATE: [u32; 11] = [
     0,
     0x001a_0000,
     0,
-    0x0020_0000,
+    0x0044_0000,
     0x000b_3000,
     0,
     0,
@@ -182,26 +205,26 @@ const VDENC_PIPE_MODE_SELECT: [u32; 6] = [0x7080_0004, 0x0122_00a2, 0x002b_030a,
 const VDENC_SRC_SURFACE_STATE: [u32; 6] = [
     0x7081_0004,
     0,
-    0x07fc_1ff8,
-    0x2070_0ff8,
-    0x0000_0200,
-    0x0000_0200,
+    0x10fc_77f8,
+    0x2070_3bf8,
+    0x0000_0440,
+    0x0000_0440,
 ];
 const VDENC_REF_SURFACE_STATE: [u32; 6] = [
     0x7082_0004,
     0,
-    0x07fc_1ff0,
-    0x2000_0ff8,
-    0x0000_0200,
-    0x0000_0200,
+    0x10fc_77f0,
+    0x2000_3bf8,
+    0x0000_0440,
+    0x0000_0440,
 ];
 const VDENC_DS_REF_SURFACE_STATE: [u32; 10] = [
     0x7083_0008,
     0,
-    0x01fc_07f0,
-    0x2000_03f8,
-    0x0000_0080,
-    0x0000_0080,
+    0x04fc_1df0,
+    0x2000_0ff8,
+    0x0000_0140,
+    0x0000_0140,
     0,
     3,
     0,
@@ -227,10 +250,10 @@ const VDENC_IMG_STATE: [u32; 35] = [
     0x7085_0021,
     0x0000_0040,
     0,
-    0x0020_0000,
+    0x0078_0000,
     0x708a_0000,
-    0x0001_001f,
-    0x0000_001f,
+    0x0001_0043,
+    0x0000_0043,
     0,
     2,
     0x2e01_000c,
@@ -264,10 +287,10 @@ const VDENC_WEIGHTS_OFFSETS_STATE: [u32; 3] = [0x7088_0001, 0x0001_0001, 0x0000_
 const VDENC_WALKER_STATE: [u32; 27] = [
     0x7087_0019,
     0,
-    0x0000_0020,
+    0x0000_0044,
     0,
     0,
-    0x0000_01ff,
+    0x0000_077f,
     0,
     0,
     0,
@@ -298,9 +321,9 @@ const VD_PIPELINE_FLUSH: [u32; 2] = [0x7780_0000, 0x0002_001a];
 const MI_FLUSH_DW_VIDEO_CACHE_INVALIDATE: [u32; 5] = [0x1300_0082, 0, 0, 0, media::MI_NOOP];
 const MI_FLUSH_DW_NO_POSTSYNC: [u32; 5] = [0x1300_0002, 0, 0, 0, media::MI_NOOP];
 
-const SPS: [u8; 29] = [
-    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x16, 0x95, 0xc0, 0x80, 0x10, 0x6c, 0x05, 0xa2, 0x00,
-    0x00, 0x03, 0x00, 0x02, 0x00, 0x00, 0x03, 0x00, 0x29, 0x1e, 0x10, 0x08, 0x54,
+const SPS: [u8; 30] = [
+    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x28, 0x95, 0xc0, 0x78, 0x02, 0x26, 0xc0, 0x5a, 0x20,
+    0x00, 0x00, 0x03, 0x00, 0x20, 0x00, 0x00, 0x03, 0x02, 0x91, 0xe1, 0x00, 0x85, 0x40,
 ];
 const PPS: [u8; 8] = [0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x38, 0x80];
 const IDR_SLICE_HEADER: [u8; 8] = [0x00, 0x00, 0x01, 0x65, 0x88, 0x80, 0x48, 0x00];
@@ -597,7 +620,7 @@ pub(crate) fn snapshot() -> AvcEncodeProbeReport {
     *REPORT.lock()
 }
 
-/// Submit another 512x512 linear NV12 IDR through the exact command graph
+/// Submit another 1920x1088 linear NV12 IDR through the exact command graph
 /// validated by `run_once`. The dedicated UI4 encoder task is the sole repeat
 /// caller, so the probe's fixed backing remains a serialized hardware executor.
 pub(crate) fn run_nv12_frame(nv12: &[u8]) -> AvcEncodeProbeReport {
@@ -929,15 +952,15 @@ fn build_backing(dev: crate::intel::Dev) -> Option<ProbeBacking> {
 /// or a software encoder into the kernel. The boot submission exists only to
 /// validate the same hardware graph used for subscribed UI4 frames.
 fn fill_boot_proof_nv12(nv12: &mut [u8]) -> bool {
-    const LUMA_BYTES: usize = 512 * 512;
+    const LUMA_BYTES: usize = FRAME_WIDTH * FRAME_HEIGHT;
     if nv12.len() != SOURCE_BYTES {
         return false;
     }
 
-    for y in 0..512usize {
-        let row = &mut nv12[y * 512..(y + 1) * 512];
+    for y in 0..FRAME_HEIGHT {
+        let row = &mut nv12[y * FRAME_WIDTH..(y + 1) * FRAME_WIDTH];
         for (x, luma) in row.iter_mut().enumerate() {
-            let ramp = x * 219 / 511;
+            let ramp = x * 219 / (FRAME_WIDTH - 1);
             let checker = if ((x / 32) ^ (y / 32)) & 1 == 0 {
                 0
             } else {
@@ -946,12 +969,12 @@ fn fill_boot_proof_nv12(nv12: &mut [u8]) -> bool {
             *luma = (16 + ramp + checker).min(235) as u8;
         }
     }
-    for y in 0..256usize {
-        let row = &mut nv12[LUMA_BYTES + y * 512..LUMA_BYTES + (y + 1) * 512];
-        for x in (0..512usize).step_by(2) {
+    for y in 0..FRAME_HEIGHT / 2 {
+        let row = &mut nv12[LUMA_BYTES + y * FRAME_WIDTH..LUMA_BYTES + (y + 1) * FRAME_WIDTH];
+        for x in (0..FRAME_WIDTH).step_by(2) {
             let bar = x / 64;
-            row[x] = (96 + bar * 8).min(160) as u8;
-            row[x + 1] = (160usize.saturating_sub(bar * 8)).max(96) as u8;
+            row[x] = (96 + bar % 9 * 8).min(160) as u8;
+            row[x + 1] = (160usize.saturating_sub(bar % 9 * 8)).max(96) as u8;
         }
     }
     true

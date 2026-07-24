@@ -29,7 +29,7 @@ pub mod gfx {
 
 pub mod media_encode {
     pub const REALTIME_HZ: usize = 10;
-    pub const STREAM_MAX_ACCESS_UNIT_BYTES: usize = 400 * 1024;
+    pub const STREAM_MAX_ACCESS_UNIT_BYTES: usize = 4 * 1024 * 1024;
     pub const VALIDATION_SESSION_SECONDS: usize = 10;
     pub const VALIDATION_SESSION_ACCESS_UNITS: usize = REALTIME_HZ * VALIDATION_SESSION_SECONDS;
 }
@@ -71,6 +71,7 @@ pub mod net {
     pub const TCP_TX_BUF_BYTES: usize = 1024 * 1024;
     pub const ICMP_VNET_MAX_INFLIGHT: usize = 32;
     pub const ICMP_VNET_TIMEOUT_MS: i64 = 2000;
+    pub const CHECKED_UDP_SEND_RESULTS_CAP: usize = 256;
     pub const NET_POLL_SLEEP_US: u64 = 100;
     pub const NET_SERVICE_SLEEP_US: u64 = 100;
 

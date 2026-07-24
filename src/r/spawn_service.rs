@@ -763,6 +763,18 @@ fn tga_boot_gate() -> bool {
     crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT >= 1
 }
 
+const TGA_SERVICE_BOOT_ENABLED: bool = false;
+
+const fn tga_task_spec() -> TaskSpec {
+    if TGA_SERVICE_BOOT_ENABLED {
+        TaskSpec::enabled_gated("tga", 0, tga_boot_gate, &TGA_TASK_STARTED, spawn_tga_task)
+    } else {
+        // Keep the lab driver compiled and manually enableable through the
+        // registry, but do not start its PCI/MMIO lifecycle during boot.
+        TaskSpec::disabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task)
+    }
+}
+
 #[inline]
 fn fpga_offload_boot_gate() -> bool {
     crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT >= 2
@@ -1549,7 +1561,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &FTP_SERVER_STARTED,
         spawn_ftp_server,
     ),
-    TaskSpec::enabled_gated("tga", 0, tga_boot_gate, &TGA_TASK_STARTED, spawn_tga_task),
+    tga_task_spec(),
     TaskSpec::enabled_gated(
         "fpga-offload",
         0,
@@ -1836,10 +1848,11 @@ pub fn latest_system_service_snapshot_text() -> String {
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
         crate::log_info!(target: "boot";
-            "spawn-svc: boot-profile pci_tga_fpga_diag={} usb_uas_diag={} tga_fpga_cut={} tga={} offload={} heartbeat={}\n",
+            "spawn-svc: boot-profile pci_tga_fpga_diag={} usb_uas_diag={} tga_fpga_cut={} tga_service={} tga_gate={} offload={} heartbeat={}\n",
             crate::log_os::flags::PCI_TGA_FPGA_DIAG_PROFILE_ENABLED,
             crate::log_os::flags::USB_UAS_DIAG_PROFILE_ENABLED,
             crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT,
+            TGA_SERVICE_BOOT_ENABLED,
             tga_boot_gate(),
             fpga_offload_boot_gate(),
             fpga_offload_heartbeat_boot_gate()

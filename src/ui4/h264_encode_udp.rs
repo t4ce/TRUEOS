@@ -19,6 +19,7 @@ const VERSION: u8 = 1;
 const HEADER_BYTES: usize = 32;
 const DATAGRAM_BYTES: usize = 1200;
 const PAYLOAD_BYTES: usize = DATAGRAM_BYTES - HEADER_BYTES;
+const MAX_FRAGMENT_COUNT: usize = 4096;
 const FLAG_START: u8 = 1 << 0;
 const FLAG_END: u8 = 1 << 1;
 const FLAG_KEYFRAME: u8 = 1 << 2;
@@ -28,9 +29,8 @@ const UDP_RETRY_MS: u64 = 250;
 // Keep enough socket-local payload headroom for several MTU-sized fragments.
 // Correctness still comes from checked adapter receipts below; this capacity
 // only absorbs short service-task scheduling jitter.
-const UDP_TX_BUFFER_BYTES: usize = 8 * 1024;
-const UDP_PACKET_PACE_MS: u64 = 4;
-const UDP_SEND_RECEIPT_POLL_MS: u64 = 1;
+const UDP_TX_BUFFER_BYTES: usize = 64 * 1024;
+const UDP_RETRY_DELAY_MS: u64 = 1;
 const UDP_SEND_RECEIPT_TIMEOUT_MS: u64 = 250;
 // VNet submission is asynchronous. Keep the endpoint alive across at least
 // one adapter service interval so a one-datagram probe is not cancelled by
@@ -283,7 +283,7 @@ async fn send_access_unit(
     report: &mut MediaUdpStreamReport,
 ) -> bool {
     let fragment_count = access_unit.bytes.len().div_ceil(PAYLOAD_BYTES);
-    if fragment_count == 0 || fragment_count > u16::MAX as usize {
+    if fragment_count == 0 || fragment_count > MAX_FRAGMENT_COUNT {
         return false;
     }
 
@@ -327,7 +327,6 @@ async fn send_access_unit(
             } else {
                 match wait_for_checked_send_receipt(udp, receipt).await {
                     Some(CheckedSendReceipt::Accepted) => {
-                        Timer::after(Duration::from_millis(UDP_PACKET_PACE_MS)).await;
                         break;
                     }
                     Some(CheckedSendReceipt::Backpressure) => {
@@ -347,7 +346,7 @@ async fn send_access_unit(
             if retries >= UDP_SUBMIT_RETRY_LIMIT {
                 return false;
             }
-            Timer::after(Duration::from_millis(UDP_PACKET_PACE_MS)).await;
+            Timer::after(Duration::from_millis(UDP_RETRY_DELAY_MS)).await;
         }
         report.sent_datagrams = report.sent_datagrams.saturating_add(1);
         report.sent_payload_bytes = report.sent_payload_bytes.saturating_add(payload.len());
@@ -368,7 +367,10 @@ async fn wait_for_checked_send_receipt(
         if Instant::now() >= deadline {
             return None;
         }
-        Timer::after(Duration::from_millis(UDP_SEND_RECEIPT_POLL_MS)).await;
+        // A zero-duration timer is a cooperative executor yield. It lets the
+        // adapter service consume the checked command without imposing the
+        // kernel's one-millisecond clock tick on every fragment.
+        Timer::after(Duration::from_micros(0)).await;
     }
 }
 
