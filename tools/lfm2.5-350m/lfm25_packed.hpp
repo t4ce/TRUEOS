@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace trueos::lfm25 {
@@ -21,6 +22,7 @@ struct packed_q8_model {
     std::uint64_t block_tiles = 0;
     std::uint64_t quantized_values = 0;
     std::uint64_t subnormal_scales = 0;
+    std::string sha256;
 };
 
 // Repack every admitted Q8 matrix into the two-block, sixteen-row layout used

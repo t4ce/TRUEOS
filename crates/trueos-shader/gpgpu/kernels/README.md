@@ -108,7 +108,7 @@ The two unconditional Spirit C++/IGC artifacts are exact ABI twins of the
 retained OpenCL C binaries:
 
 ```text
-artifacts/adls/cpp/spirit_vfx_background_rgba8.bin  de5f6c0837da5d7d0fc52e2a5a97acbdc652d02caf6d853303128d7c562ee848
+artifacts/adls/cpp/spirit_vfx_background_rgba8.bin  6e1f90a2af800103f95fcca3de25320f0b9b7b73fbf941d7852ec408b1375f19
 artifacts/adls/cpp/spirit_vfx_sprite_rgba8.bin      2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac
 ```
 
@@ -179,9 +179,10 @@ overrides must match:
 The two retained Spirit VFX artifacts are hash-locked ABI references for the
 C++ repass. Background-enabled submissions
 use one ordered two-walker batch; the clean default omits the background
-walker. The background artifact implements the selected nine-mode set:
+walker. The background artifact implements the selected ten-mode set:
 `Energy ring`, `Magic circle`, `Nebula smoke`, `Cyber grid`, `Portal vortex`,
-`Speed lines`, `Bokeh field`, `Water ripples`, and `Pixel burst`. The sprite
+`Speed lines`, `Bokeh field`, `Water ripples`, `Pixel burst`, and the
+C++ `Magic time circle`. The sprite
 artifact implements the complete stable ID 0–15 preview set from
 `Original / clean` through `Dream bloom`. Their legacy ADL-S binary hashes are:
 

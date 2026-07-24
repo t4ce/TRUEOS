@@ -271,18 +271,23 @@ static inline SpiritCppBackgroundLayer vfx_cpp_background_layer(
         const float second_delta = fabs(
             vfx_fract(clock_turn - second_turn + 0.5f) - 0.5f);
 
-        // Large inner HH, smaller middle MM, and a thin outer seconds segment.
+        // Broad HH, smaller MM, and a thin outer seconds segment share the
+        // visible clock face, so Lilly can occlude the center without hiding
+        // the time.
         // Each selector is quantized before any pixel math, so the outer mark
         // advances once per wall-clock second instead of sweeping at 60 Hz.
         const float hour_segment =
-            (1.0f - smoothstep(0.020f, 0.032f, hour_delta))
-            * (1.0f - smoothstep(0.028f, 0.041f, fabs(radius - 0.205f)));
+            (1.0f - smoothstep(0.018f, 0.030f, hour_delta))
+            * smoothstep(0.218f, 0.238f, radius)
+            * (1.0f - smoothstep(0.310f, 0.326f, radius));
         const float minute_segment =
-            (1.0f - smoothstep(0.007f, 0.014f, minute_delta))
-            * (1.0f - smoothstep(0.017f, 0.027f, fabs(radius - 0.282f)));
+            (1.0f - smoothstep(0.006f, 0.012f, minute_delta))
+            * smoothstep(0.250f, 0.268f, radius)
+            * (1.0f - smoothstep(0.315f, 0.327f, radius));
         const float second_segment =
-            (1.0f - smoothstep(0.0035f, 0.0075f, second_delta))
-            * (1.0f - smoothstep(0.011f, 0.019f, fabs(radius - 0.365f)));
+            (1.0f - smoothstep(0.0025f, 0.0055f, second_delta))
+            * smoothstep(0.278f, 0.294f, radius)
+            * (1.0f - smoothstep(0.319f, 0.328f, radius));
 
         detail = hour_segment * 0.78f
             + minute_segment * 0.86f
@@ -291,8 +296,8 @@ static inline SpiritCppBackgroundLayer vfx_cpp_background_layer(
             hour_segment + minute_segment + second_segment;
         color_phase = indicator_sum > 0.0f
             ? vfx_clamp01(
-                (hour_segment * 0.15f
-                    + minute_segment * 0.62f
+                (hour_segment * 0.45f
+                    + minute_segment * 0.75f
                     + second_segment)
                 / indicator_sum)
             : 0.5f;
@@ -429,8 +434,8 @@ __kernel void spirit_vfx_background_rgba8(
             * (1.0f - smoothstep(0.30f, 0.37f, radius));
         alpha = (ring1 + ring2 + spokes * 0.42f
                 + hour_ticks * 0.52f + minute_ticks * 0.38f)
-            * intensity;
-        color_mix = 0.5f + 0.5f * native_sin(angle * 4.0f + radius * 20.0f);
+            * intensity * 0.42f;
+        color_mix = 0.08f;
     } else if (background_id == 4u) {
         // preview.html: Nebula smoke
         float noise = vfx_fbm(

@@ -13,7 +13,7 @@ Zebin images; the running OS contains no Clang, C++ runtime, `llvm-spirv`,
 
 ## What changed visually
 
-The nine stable background IDs retain their original large-form ideas:
+The nine original background IDs retain their large-form ideas:
 
 - energy ring gains counter-rotating beads and a fine inner corona;
 - magic circle gains two rotating rune belts;
@@ -24,6 +24,12 @@ The nine stable background IDs retain their original large-form ideas:
 - bokeh gains crisp specular pins inside soft discs;
 - water ripples gain angular caustic breaks;
 - pixel burst gains smaller counter-phase chips.
+
+Background ID 11, `Magic time circle`, retains the segmented Magic circle
+grammar but turns it into a UTC clock face. Twelve broad hour sectors, sixty
+smaller minute sectors, and one thin outer seconds sector consume integer
+seconds-of-day through the existing time dword. HH, MM, and SS are quantized
+before pixel math, so the seconds sector changes exactly once per second.
 
 The fifteen non-clean sprite effects retain their authored algorithms and
 four-slider controls. C++ templates add restrained secondary filaments grouped
@@ -38,7 +44,8 @@ does not receive the secondary layer.
 The repass preserves:
 
 - kernel names and pointer argument order;
-- stable background IDs `2..10` and sprite IDs `0..15`;
+- stable original background IDs `2..10`, new C++ background ID `11`, and
+  sprite IDs `0..15`;
 - the version-1, 32-dword Spirit control page;
 - SIMD16 and 96 bytes of local-ID payload;
 - background 2-BTI / 64-byte cross-thread ABI;
@@ -53,7 +60,7 @@ byte-identical two-root reproduction.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `spirit_vfx_background_rgba8.bin` | 98,384 | `de5f6c0837da5d7d0fc52e2a5a97acbdc652d02caf6d853303128d7c562ee848` |
+| `spirit_vfx_background_rgba8.bin` | 109,064 | `6e1f90a2af800103f95fcca3de25320f0b9b7b73fbf941d7852ec408b1375f19` |
 | `spirit_vfx_sprite_rgba8.bin` | 656,728 | `2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac` |
 
 The background maps at `0x0D430000`; its larger C++ image requires the sprite
@@ -91,13 +98,14 @@ make -C tools/spirit-sprite-vfx-offline render \
   OUTPUT=bld/spirit-sprite-vfx-grid-cpp.png TIME=2.25
 ```
 
-On the physical TestRig, Shell2 exposes all `9 × 16` combinations without
+On the physical TestRig, Shell2 exposes all `10 × 16` combinations without
 creating a new renderer or ownership path:
 
 ```text
 cpp spirit list
 cpp spirit
 cpp spirit show 3 9
+cpp spirit show 11 1
 cpp spirit show 9 14
 cpp spirit status
 cpp spirit clean
@@ -107,3 +115,9 @@ cpp spirit clean
 `show` atomically publishes the chosen IDs, their authored parameter defaults,
 and their authored palettes into the existing Spirit control panel. `clean`
 restores transparent background plus `Original / clean`.
+
+Idle mode selects `Magic time circle + Aura bloom` transiently. TRUEOS prefers
+NTP and falls back to the Limine boot timestamp; its system timezone is UTC.
+All live backgrounds share the single `SPIRIT_BACKGROUND_PRESENT_SCALE` value
+`1.171875`, mapping the authored `0.32` reference radius to 96 pixels and
+leaving a 32-pixel margin in the 256-pixel cursor surface.

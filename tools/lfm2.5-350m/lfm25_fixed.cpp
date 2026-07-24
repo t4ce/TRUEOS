@@ -43,6 +43,9 @@ constexpr std::string_view kF32SidecarSha256 =
 constexpr std::uintmax_t kIgcSpirvBytes = 62'288;
 constexpr std::string_view kIgcSpirvSha256 =
     "66477ba6c412e5e01fafa1ee6cfdfae0ed43056bc3527ab8cd7e702316ea597b";
+constexpr std::uintmax_t kIgcPackedSpirvBytes = 14'740;
+constexpr std::string_view kIgcPackedSpirvSha256 =
+    "8753fcd446108571dc8cec3dff29ad9b6703b6beb7a8c0a4e81b34aa77d7baeb";
 constexpr int32_t kVocabulary = 65'536;
 constexpr uint32_t kContext = 1'024;
 constexpr uint32_t kMaxPromptBytes = 512;
@@ -108,10 +111,13 @@ struct options {
     int32_t threads = 1;
     bool native = false;
     bool igpu = false;
+    bool igpu_packed = false;
     bool parity_hi = false;
     bool parity_q8 = false;
+    bool parity_q8_packed = false;
     bool parity_native_hi = false;
     bool parity_igpu_hi = false;
+    bool parity_igpu_packed_hi = false;
 };
 
 [[noreturn]] void fail(const std::string & message) {
@@ -225,16 +231,23 @@ options parse_options(int argc, char ** argv) {
             result.prompt = "hi";
         } else if (argument == "--parity-q8") {
             result.parity_q8 = true;
+        } else if (argument == "--parity-q8-packed") {
+            result.parity_q8_packed = true;
         } else if (argument == "--parity-native-hi") {
             result.parity_native_hi = true;
             result.prompt = "hi";
         } else if (argument == "--parity-igpu-hi") {
             result.parity_igpu_hi = true;
             result.prompt = "hi";
+        } else if (argument == "--parity-igpu-packed-hi") {
+            result.parity_igpu_packed_hi = true;
+            result.prompt = "hi";
         } else if (argument == "--native") {
             result.native = true;
         } else if (argument == "--igpu") {
             result.igpu = true;
+        } else if (argument == "--igpu-packed") {
+            result.igpu_packed = true;
         } else if (argument == "--max-tokens") {
             if (++index == argc) {
                 fail("--max-tokens needs a value");
@@ -252,8 +265,10 @@ options parse_options(int argc, char ** argv) {
             result.prompt.empty() &&
             !result.parity_hi &&
             !result.parity_q8 &&
+            !result.parity_q8_packed &&
             !result.parity_native_hi &&
-            !result.parity_igpu_hi) {
+            !result.parity_igpu_hi &&
+            !result.parity_igpu_packed_hi) {
             result.prompt = std::string(argument);
         } else {
             fail("expected exactly one prompt");
@@ -262,22 +277,33 @@ options parse_options(int argc, char ** argv) {
     const unsigned parity_modes =
         static_cast<unsigned>(result.parity_hi) +
         static_cast<unsigned>(result.parity_q8) +
+        static_cast<unsigned>(result.parity_q8_packed) +
         static_cast<unsigned>(result.parity_native_hi) +
-        static_cast<unsigned>(result.parity_igpu_hi);
+        static_cast<unsigned>(result.parity_igpu_hi) +
+        static_cast<unsigned>(result.parity_igpu_packed_hi);
+    const unsigned execution_modes =
+        static_cast<unsigned>(result.native) +
+        static_cast<unsigned>(result.igpu) +
+        static_cast<unsigned>(result.igpu_packed);
     if (parity_modes > 1 ||
-        ((result.native || result.igpu) && parity_modes != 0) ||
-        (result.native && result.igpu)) {
+        (execution_modes != 0 && parity_modes != 0) ||
+        execution_modes > 1) {
         fail("choose one parity mode");
     }
-    if (result.prompt.empty() && !result.parity_q8) {
+    if (result.prompt.empty() &&
+        !result.parity_q8 &&
+        !result.parity_q8_packed) {
         fail(
             "usage: lfm25-fixed [--threads N] [--max-tokens N] PROMPT\n"
             "       lfm25-fixed --native [--threads N] [--max-tokens N] PROMPT\n"
             "       lfm25-fixed --igpu [--max-tokens N] PROMPT\n"
+            "       lfm25-fixed --igpu-packed [--max-tokens N] PROMPT\n"
             "       lfm25-fixed --parity-hi\n"
             "       lfm25-fixed [--threads N] --parity-q8\n"
+            "       lfm25-fixed [--threads N] --parity-q8-packed\n"
             "       lfm25-fixed [--threads N] --parity-native-hi\n"
-            "       lfm25-fixed --parity-igpu-hi");
+            "       lfm25-fixed --parity-igpu-hi\n"
+            "       lfm25-fixed --parity-igpu-packed-hi");
     }
     if (result.prompt.size() > kMaxPromptBytes) {
         fail("prompt exceeds the fixed 512-byte TRUEOS shell contract");
@@ -366,7 +392,7 @@ void decode_one(llama_context * context, llama_token token) {
 int run(const options & arguments) {
     const auto started = std::chrono::steady_clock::now();
     const auto tool_path = executable_path().parent_path().parent_path();
-    if (arguments.parity_q8) {
+    if (arguments.parity_q8 || arguments.parity_q8_packed) {
         const auto repository_path = tool_path.parent_path().parent_path();
         const auto native_path = tool_path / "LFM2.5-350M-Q8_0.truega.bin";
         const auto contract_path =
@@ -390,11 +416,19 @@ int run(const options & arguments) {
             kHiGoldenBytes,
             kHiGoldenSha256,
             "pinned hi golden");
-        trueos::lfm25::verify_q8_kernel(
-            native_path,
-            contract_path,
-            golden_path,
-            static_cast<std::uint32_t>(arguments.threads));
+        if (arguments.parity_q8_packed) {
+            trueos::lfm25::verify_q8_packed_layout(
+                native_path,
+                contract_path,
+                golden_path,
+                static_cast<std::uint32_t>(arguments.threads));
+        } else {
+            trueos::lfm25::verify_q8_kernel(
+                native_path,
+                contract_path,
+                golden_path,
+                static_cast<std::uint32_t>(arguments.threads));
+        }
         return 0;
     }
     const auto model_path = fixed_model_path();
@@ -407,8 +441,10 @@ int run(const options & arguments) {
     model_params.vocab_only =
         arguments.parity_native_hi ||
         arguments.parity_igpu_hi ||
+        arguments.parity_igpu_packed_hi ||
         arguments.native ||
-        arguments.igpu;
+        arguments.igpu ||
+        arguments.igpu_packed;
     model_params.n_gpu_layers = 0;
     model_params.use_mmap = true;
     model_params.check_tensors = false; // Complete-file SHA-256 was checked above.
@@ -437,8 +473,10 @@ int run(const options & arguments) {
     if (
         arguments.parity_native_hi ||
         arguments.parity_igpu_hi ||
+        arguments.parity_igpu_packed_hi ||
         arguments.native ||
-        arguments.igpu) {
+        arguments.igpu ||
+        arguments.igpu_packed) {
         const auto repository_path = tool_path.parent_path().parent_path();
         const auto native_path = tool_path / "LFM2.5-350M-Q8_0.truega.bin";
         const auto contract_path =
@@ -449,6 +487,10 @@ int run(const options & arguments) {
             repository_path /
             "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/"
             "lfm25_q8_project.spv";
+        const auto igc_packed_spirv_path =
+            repository_path /
+            "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/"
+            "lfm25_q8_project_packed.spv";
         verify_file(
             native_path,
             kNativeImageBytes,
@@ -471,6 +513,13 @@ int run(const options & arguments) {
                 kIgcSpirvSha256,
                 "published C++/IGC SPIR-V");
         }
+        if (arguments.parity_igpu_packed_hi || arguments.igpu_packed) {
+            verify_file(
+                igc_packed_spirv_path,
+                kIgcPackedSpirvBytes,
+                kIgcPackedSpirvSha256,
+                "published packed C++/IGC SPIR-V");
+        }
 
         std::vector<std::uint32_t> native_tokens;
         native_tokens.reserve(prompt_tokens.size());
@@ -487,9 +536,17 @@ int run(const options & arguments) {
             fail("sealed vocabulary has no end-of-generation token");
         }
         const bool parity_custom_hi =
-            arguments.parity_native_hi || arguments.parity_igpu_hi;
+            arguments.parity_native_hi ||
+            arguments.parity_igpu_hi ||
+            arguments.parity_igpu_packed_hi;
         const bool use_igpu =
-            arguments.igpu || arguments.parity_igpu_hi;
+            arguments.igpu ||
+            arguments.igpu_packed ||
+            arguments.parity_igpu_hi ||
+            arguments.parity_igpu_packed_hi;
+        const bool use_packed =
+            arguments.igpu_packed ||
+            arguments.parity_igpu_packed_hi;
         const auto result = trueos::lfm25::run_native_decode(
             native_path,
             contract_path,
@@ -498,10 +555,16 @@ int run(const options & arguments) {
             parity_custom_hi ? 0 : arguments.max_reply_tokens,
             stop_tokens,
             static_cast<std::uint32_t>(arguments.threads),
-            use_igpu
-                ? trueos::lfm25::native_projection_backend::intel_igc
-                : trueos::lfm25::native_projection_backend::cpu_avx2,
-            use_igpu ? igc_spirv_path : std::filesystem::path{});
+            use_packed
+                ? trueos::lfm25::native_projection_backend::intel_igc_packed
+                : use_igpu
+                    ? trueos::lfm25::native_projection_backend::intel_igc
+                    : trueos::lfm25::native_projection_backend::cpu_avx2,
+            use_packed
+                ? igc_packed_spirv_path
+                : use_igpu
+                    ? igc_spirv_path
+                    : std::filesystem::path{});
         if (parity_custom_hi &&
             !std::equal(
                 result.next_tokens.begin(),
@@ -535,7 +598,7 @@ int run(const options & arguments) {
                 "first_reply_token=36309 decoded=Hello threads=%d elapsed_ms=%lld "
                 "projection_device=\"%s\" projection_launches=%llu "
                 "projection_kernel_ms=%.3f\n",
-                use_igpu ? "igpu" : "native",
+                use_packed ? "igpu-packed" : use_igpu ? "igpu" : "native",
                 arguments.threads,
                 static_cast<long long>(elapsed.count()),
                 result.projection_device.c_str(),
@@ -561,10 +624,16 @@ int run(const options & arguments) {
             std::fprintf(
                 stderr,
                 "lfm25-fixed: igpu_runtime platform=\"%s\" driver=\"%s\" "
-                "il=\"%s\" program_binary_bytes=%zu program_binary_sha256=%s\n",
+                "il=\"%s\" weight_layout=%s model_bytes=%zu "
+                "subnormal_scales=%llu program_binary_bytes=%zu "
+                "program_binary_sha256=%s\n",
                 result.projection_platform.c_str(),
                 result.projection_driver.c_str(),
                 result.projection_il.c_str(),
+                result.projection_weight_layout.c_str(),
+                result.projection_model_bytes,
+                static_cast<unsigned long long>(
+                    result.projection_subnormal_scales),
                 result.projection_program_binary_bytes,
                 result.projection_program_binary_sha256.c_str());
         }

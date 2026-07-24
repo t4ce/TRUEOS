@@ -1035,7 +1035,10 @@ const IDLE_AURA_STRENGTH: f32 = 2.5;
 // Spirit's 256x256 cursor allocation. The control-page scale dword remains for
 // the stable kernel ABI, but the live Spirit path does not let individual
 // effects or the move transition grow beyond this footprint.
-const SPIRIT_BACKGROUND_PRESENT_SCALE: f32 = 1.2;
+// The authored reference ring sits at normalized radius 0.32. A scale of
+// 1.171875 maps it to radius 96 in the 256px cursor surface, leaving one
+// invariant 32px margin on every side for every live Spirit background.
+const SPIRIT_BACKGROUND_PRESENT_SCALE: f32 = 1.171875;
 
 #[derive(Copy, Clone)]
 struct IdleVfxState {
@@ -1209,8 +1212,7 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
         background.intensity = 0.5 + (background.intensity - 0.5) * ramp;
         background
     } else if idle_opacity > 0.0 {
-        let (_, bg_color_a, bg_color_b) =
-            SpiritVfxBackgroundEffect::MagicTimeCircle.demo_style();
+        let (_, bg_color_a, bg_color_b) = SpiritVfxBackgroundEffect::MagicTimeCircle.demo_style();
         SpiritVfxAlphaBackground {
             effect: SpiritVfxBackgroundEffect::MagicTimeCircle,
             opacity: idle_opacity,

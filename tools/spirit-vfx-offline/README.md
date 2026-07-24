@@ -41,6 +41,15 @@ A static PNG of the same ten-cell grid remains available for comparisons. Its
 make -C tools/spirit-vfx-offline render TIME=2.25
 ```
 
+The executable also accepts an explicit seconds-of-day value after the normal
+animation time, which makes adjacent one-second clock steps directly
+comparable:
+
+```sh
+bld/tools/spirit_vfx_offline --render-grid bld/magic-time-42.png 1.5 36582
+bld/tools/spirit_vfx_offline --render-grid bld/magic-time-43.png 1.5 36583
+```
+
 Set `SPIRIT_VFX_BACKGROUND_SPV` and `SPIRIT_VFX_SPRITE_SPV` to replay the
 published C++ for OpenCL artifacts through `clCreateProgramWithIL` instead of
 compiling the legacy sources. This is the visual-review lane used for the

@@ -18,7 +18,7 @@ namespace trueos::lfm25 {
 namespace {
 
 constexpr cl_uint kIntelVendor = 0x8086;
-constexpr std::size_t kMaximumActivationBytes = 4'896;
+constexpr std::size_t kMaximumActivationBytes = 5'184;
 constexpr std::size_t kMaximumOutputElements = 65'536;
 constexpr std::size_t kLocalSize = 16;
 
@@ -236,9 +236,19 @@ struct intel_igc_projector::implementation {
     implementation(
         const std::filesystem::path & spirv_path,
         const void * native_weights,
-        std::size_t native_weight_bytes) {
+        std::size_t native_weight_bytes,
+        intel_igc_weight_layout requested_layout,
+        std::span<const packed_q8_tensor_spec> packed_tensors)
+        : layout(requested_layout),
+          model_bytes(native_weight_bytes) {
         if (native_weights == nullptr || native_weight_bytes == 0) {
             throw std::runtime_error("empty TRUEGA native weight mapping");
+        }
+        if ((layout == intel_igc_weight_layout::native_q8_0 &&
+             !packed_tensors.empty()) ||
+            (layout == intel_igc_weight_layout::packed_q8x16_pair &&
+             packed_tensors.empty())) {
+            throw std::runtime_error("Intel IGC weight-layout contract rejected");
         }
         const auto [selected_platform, selected_device] = select_intel_gpu();
         platform = selected_platform;
@@ -247,9 +257,15 @@ struct intel_igc_projector::implementation {
         platform_name = platform_string(platform, CL_PLATFORM_NAME);
         driver_version = device_string(device, CL_DRIVER_VERSION);
         il_version = device_string(device, CL_DEVICE_IL_VERSION);
+        extensions = device_string(device, CL_DEVICE_EXTENSIONS);
         if (il_version.find("SPIR-V") == std::string::npos) {
             throw std::runtime_error(
                 "Intel GPU does not advertise SPIR-V ingestion: " + il_version);
+        }
+        if (layout == intel_igc_weight_layout::packed_q8x16_pair &&
+            extensions.find("cl_khr_integer_dot_product") == std::string::npos) {
+            throw std::runtime_error(
+                "Intel GPU does not advertise packed integer dot products");
         }
 
         cl_int error = CL_SUCCESS;
@@ -318,14 +334,32 @@ struct intel_igc_projector::implementation {
             "clGetProgramInfo(binary)");
         program_binary_digest = sha256(program_binary);
 
-        kernel = kernel_owner(clCreateKernel(program.get(), "lfm25_q8_project", &error));
-        require(error, "clCreateKernel(lfm25_q8_project)");
+        const char * kernel_name =
+            layout == intel_igc_weight_layout::packed_q8x16_pair
+                ? "lfm25_q8_project_packed"
+                : "lfm25_q8_project";
+        kernel = kernel_owner(clCreateKernel(program.get(), kernel_name, &error));
+        require(error, "clCreateKernel(fixed LFM25 projection)");
+
+        void * weight_storage = const_cast<void *>(native_weights);
+        if (layout == intel_igc_weight_layout::packed_q8x16_pair) {
+            packed_model = pack_q8x16_model(
+                {
+                    static_cast<const std::byte *>(native_weights),
+                    native_weight_bytes,
+                },
+                packed_tensors);
+            weight_storage = packed_model.bytes.data();
+            layout_name = "pair1088-x16-dp4a";
+        } else {
+            layout_name = "native-rowmajor-q8";
+        }
 
         weights = buffer_owner(clCreateBuffer(
             context.get(),
             CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
             native_weight_bytes,
-            const_cast<void *>(native_weights),
+            weight_storage,
             &error));
         require(error, "clCreateBuffer(weights)");
         activation = buffer_owner(clCreateBuffer(
@@ -365,11 +399,21 @@ struct intel_igc_projector::implementation {
         const std::size_t expected_activation =
             static_cast<std::size_t>(columns) / 32 * 34;
         if (q8_activation.size() != expected_activation ||
-            q8_activation.size() > kMaximumActivationBytes ||
             rows == 0 ||
             rows > kMaximumOutputElements ||
             rows % kLocalSize != 0) {
             throw std::runtime_error("Intel IGC projection shape rejected");
+        }
+        std::vector<std::uint32_t> packed_activation;
+        std::span<const std::byte> activation_payload = q8_activation;
+        if (layout == intel_igc_weight_layout::packed_q8x16_pair) {
+            packed_activation =
+                pack_q8x16_activation(q8_activation, columns);
+            activation_payload =
+                std::as_bytes(std::span<const std::uint32_t>(packed_activation));
+        }
+        if (activation_payload.size() > kMaximumActivationBytes) {
+            throw std::runtime_error("Intel IGC activation allocation exceeded");
         }
         require(
             clEnqueueWriteBuffer(
@@ -377,8 +421,8 @@ struct intel_igc_projector::implementation {
                 activation.get(),
                 CL_TRUE,
                 0,
-                q8_activation.size(),
-                q8_activation.data(),
+                activation_payload.size(),
+                activation_payload.data(),
                 0,
                 nullptr,
                 nullptr),
@@ -455,6 +499,8 @@ struct intel_igc_projector::implementation {
     std::string platform_name;
     std::string driver_version;
     std::string il_version;
+    std::string extensions;
+    std::string layout_name;
     std::string program_binary_digest;
     std::size_t program_binary_size = 0;
     context_owner context;
@@ -464,6 +510,9 @@ struct intel_igc_projector::implementation {
     buffer_owner weights;
     buffer_owner activation;
     buffer_owner output;
+    intel_igc_weight_layout layout = intel_igc_weight_layout::native_q8_0;
+    std::size_t model_bytes = 0;
+    packed_q8_model packed_model;
     std::uint64_t launch_count = 0;
     std::uint64_t kernel_ns = 0;
 };
@@ -471,9 +520,15 @@ struct intel_igc_projector::implementation {
 intel_igc_projector::intel_igc_projector(
     const std::filesystem::path & spirv_path,
     const void * native_weights,
-    std::size_t native_weight_bytes)
+    std::size_t native_weight_bytes,
+    intel_igc_weight_layout layout,
+    std::span<const packed_q8_tensor_spec> packed_tensors)
     : implementation_(std::make_unique<implementation>(
-          spirv_path, native_weights, native_weight_bytes)) {}
+          spirv_path,
+          native_weights,
+          native_weight_bytes,
+          layout,
+          packed_tensors)) {}
 
 intel_igc_projector::~intel_igc_projector() = default;
 
@@ -516,6 +571,18 @@ std::uint64_t intel_igc_projector::launches() const {
 
 std::uint64_t intel_igc_projector::kernel_nanoseconds() const {
     return implementation_->kernel_ns;
+}
+
+const std::string & intel_igc_projector::weight_layout() const {
+    return implementation_->layout_name;
+}
+
+std::size_t intel_igc_projector::resident_model_bytes() const {
+    return implementation_->model_bytes;
+}
+
+std::uint64_t intel_igc_projector::packed_subnormal_scales() const {
+    return implementation_->packed_model.subnormal_scales;
 }
 
 } // namespace trueos::lfm25

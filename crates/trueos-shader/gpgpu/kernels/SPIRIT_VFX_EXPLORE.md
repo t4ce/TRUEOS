@@ -15,10 +15,10 @@ One 60 Hz Embassy issue produces one detached GuC submission. The default is
    inter-walker cache dependency. The sprite pass starts from transparent and
    presents only the current immutable Lilly RGBA frame.
 2. If enabled, `spirit_vfx_background_rgba8` writes every pixel first. It
-   supports the selected nine-mode UI background range under stable IDs 2
+   supports the selected ten-mode UI background range under stable IDs 2
    through 10: `Energy ring`, `Magic circle`, `Nebula smoke`, `Cyber grid`,
    `Portal vortex`, `Speed lines`, `Bokeh field`, `Water ripples`, and `Pixel
-   burst`.
+   burst`, plus C++ ID 11 `Magic time circle`.
    `Cyber grid` contains only its moving grid and `Portal vortex` only its
    spiral arms; neither mode adds expanding circular bands. `Nebula smoke`
    preserves an unaffected inner 60%, then uses a broad linear allocation-edge
@@ -36,11 +36,15 @@ There is no UI4 publish, framebuffer composition, CPU pixel pass, or synchronous
 issuer spin in this chain.
 
 Lilly's idle sequencer transiently selects `Aura bloom` (Sprite shader ID 1)
-and the background grid's top-row center `Magic circle` (background ID 3)
+and `Magic time circle` (background ID 11)
 without replacing either persistent control-panel selection. The selection
 occurs once on idle entry and remains continuous across blink, posture, and
 control-poll boundaries. The prior panel sprite returns at the next non-idle
-gesture and the prior background returns after Magic circle's exit fade. Its
+gesture and the prior background returns after Magic time circle's exit fade.
+The background reads TRUEOS UTC seconds-of-day from the existing control-page
+time dword. It selects one of 12 broad HH sectors, 60 smaller MM sectors, and
+60 thin outer SS sectors; the seconds sector changes only on a wall-clock
+second boundary. Its
 opacity ramps linearly from zero to one over one second on entry and from its
 current value to zero over one second on exit. Only Aura bloom's normalized
 grid Param 1 moves, following a two-second
@@ -49,8 +53,10 @@ grid Param 1 moves, following a two-second
 `[radius 9..12..9, strength 2.5, pulse 0, brighten 0]` and uses Aura bloom's
 authored palette.
 
-All procedural backgrounds use a fixed live presentation scale of `1.2`. This
-applies uniformly to the complete set, including the transient move portal.
+All procedural backgrounds use a fixed live presentation scale of `1.171875`.
+The authored reference radius `0.32` therefore lands at 96 pixels in the
+256-pixel surface, leaving a uniform 32-pixel outer margin. This applies to the
+complete set, including the transient move portal.
 The move transition continues to ramp speed and intensity, but no longer grows
 its spatial footprint.
 
@@ -122,15 +128,17 @@ pixel width, with zero disabling the operation.
 ## Control page
 
 The GPU reads one 32-dword, versioned control block at PPGTT `0x090A0000`.
-It carries frame time, selected implemented modes, background parameters and
+It carries selected implemented modes, background parameters and
 colors, transform, sampling, alpha cutoff, sprite parameters and colors,
 resident-source geometry, destination pitch, UI revision, the half-second
-presentation-rate estimate, and final edge-feather width. Both kernel entry
+presentation-rate estimate, and final edge-feather width. The existing time
+dword carries animation-frame time for IDs 2 through 10 and exact integer UTC
+seconds-of-day for `Magic time circle` ID 11. Both kernel entry
 points validate magic/version and their own surface dimensions.
 
 ## Offline selection grids
 
-`tools/spirit-vfx-offline` renders the retained nine procedural backgrounds.
+`tools/spirit-vfx-offline` renders all ten procedural backgrounds.
 `tools/spirit-sprite-vfx-offline` independently renders the complete 16-mode
 Sprite shader set as a 4x4 grid. Both tools can compile the OpenCL C reference
 or dispatch the published C++ SPIR-V through `clCreateProgramWithIL` on a host
@@ -142,7 +150,7 @@ GPU; neither carries a CPU or duplicate shader implementation.
 
 | Artifact | Bytes | BTIs | Cross-thread | Per-thread | SHA-256 |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `spirit_vfx_background_rgba8.bin` | 98,384 | 2 | 64 | 96 | `de5f6c0837da5d7d0fc52e2a5a97acbdc652d02caf6d853303128d7c562ee848` |
+| `spirit_vfx_background_rgba8.bin` | 109,064 | 2 | 64 | 96 | `6e1f90a2af800103f95fcca3de25320f0b9b7b73fbf941d7852ec408b1375f19` |
 | `spirit_vfx_sprite_rgba8.bin` | 656,728 | 3 | 96 | 96 | `2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac` |
 
 Both artifacts use text offset `0x40` within their own Zebin. The clean default

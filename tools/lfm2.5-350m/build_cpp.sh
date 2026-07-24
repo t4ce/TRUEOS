@@ -72,6 +72,7 @@ cxx=${CXX:-g++}
     -I"$opencl_include" \
     "$script_dir/lfm25_fixed.cpp" \
     "$script_dir/lfm25_q8.cpp" \
+    "$script_dir/lfm25_packed.cpp" \
     "$script_dir/lfm25_igpu.cpp" \
     -Wl,-rpath,'$ORIGIN/llama-b10075' \
     -Wl,-rpath-link,"$runtime_dir" \

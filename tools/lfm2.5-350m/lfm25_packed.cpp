@@ -1,11 +1,15 @@
 #include "lfm25_packed.hpp"
 
+#include <openssl/evp.h>
+
 #include <array>
 #include <cmath>
 #include <cstring>
 #include <immintrin.h>
 #include <limits>
+#include <memory>
 #include <stdexcept>
+#include <string>
 
 namespace trueos::lfm25 {
 namespace {
@@ -74,6 +78,29 @@ std::int32_t signed_dot4(std::uint32_t left, std::uint32_t right) {
         result +=
             static_cast<std::int32_t>(left_value)
             * static_cast<std::int32_t>(right_value);
+    }
+    return result;
+}
+
+std::string sha256(std::span<const std::byte> bytes) {
+    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(
+        EVP_MD_CTX_new(), EVP_MD_CTX_free);
+    if (!context ||
+        EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1 ||
+        EVP_DigestUpdate(context.get(), bytes.data(), bytes.size()) != 1) {
+        throw std::runtime_error("cannot hash packed Q8 model");
+    }
+    std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+    unsigned int digest_bytes = 0;
+    if (EVP_DigestFinal_ex(context.get(), digest.data(), &digest_bytes) != 1 ||
+        digest_bytes != 32) {
+        throw std::runtime_error("cannot finalize packed Q8 model hash");
+    }
+    constexpr char digits[] = "0123456789abcdef";
+    std::string result(digest_bytes * 2, '\0');
+    for (unsigned int index = 0; index < digest_bytes; ++index) {
+        result[index * 2] = digits[digest[index] >> 4];
+        result[index * 2 + 1] = digits[digest[index] & 0x0f];
     }
     return result;
 }
@@ -193,6 +220,7 @@ packed_q8_model pack_q8x16_model(
             static_cast<std::uint64_t>(tensor.rows)
             * tensor.columns;
     }
+    result.sha256 = sha256(result.bytes);
     return result;
 }
 

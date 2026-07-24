@@ -786,6 +786,7 @@ int main(int argc, char **argv) {
     int panel_mode = 1;
     const char *output_path = "bld/spirit-vfx-grid.png";
     float time_seconds = 1.5f;
+    float magic_time_seconds = MAGIC_TIME_STATIC_PREVIEW_SECONDS;
     if (argc > 1 && strcmp(argv[1], "--panel") == 0) {
         if (argc > 2) {
             die("usage: spirit_vfx_offline [--panel]");
@@ -802,11 +803,20 @@ int main(int argc, char **argv) {
             }
         }
         if (argc > 4) {
-            die("usage: spirit_vfx_offline --render-grid [output.png] [time_seconds]");
+            char *end = NULL;
+            magic_time_seconds = strtof(argv[4], &end);
+            if (end == argv[4] || *end != '\0' || !isfinite(magic_time_seconds) ||
+                magic_time_seconds < 0.0f || magic_time_seconds >= 86400.0f) {
+                die("clock time must be seconds-of-day in the range 0..86399");
+            }
+        }
+        if (argc > 5) {
+            die("usage: spirit_vfx_offline --render-grid "
+                "[output.png] [time_seconds] [clock_seconds_of_day]");
         }
     } else if (argc > 1) {
         die("usage: spirit_vfx_offline [--panel] | "
-            "--render-grid [output.png] [time_seconds]");
+            "--render-grid [output.png] [time_seconds] [clock_seconds_of_day]");
     }
 
     LillyAsset asset = extract_lilly_asset();
@@ -897,7 +907,7 @@ int main(int argc, char **argv) {
         for (unsigned mode_index = 0; mode_index < REPLAY_MODE_COUNT; ++mode_index) {
             ReplayMode mode = (ReplayMode)(mode_index + REPLAY_FIRST_ID);
             float mode_time = mode == REPLAY_MAGIC_TIME_CIRCLE
-                ? MAGIC_TIME_STATIC_PREVIEW_SECONDS
+                ? magic_time_seconds
                 : time_seconds;
             fill_control(control, asset.width, asset.height, mode_time, mode, &runtime);
             dispatch_spirit_frame(
@@ -917,8 +927,11 @@ int main(int argc, char **argv) {
         printf("\n");
         printf(
             "  dispatch: ten 256x256 cells, local 16x1, selected GPU programs\n");
-        printf("  time:     %.3f s (frame %u at 60 Hz)\n", time_seconds, control[2]);
-        printf("  clock:    10:09:42 UTC (quantized HH/MM/SS preview)\n");
+        unsigned clock_seconds = (unsigned)magic_time_seconds;
+        printf("  time:     %.3f s (frame %u at 60 Hz)\n", time_seconds,
+               (unsigned)lroundf(time_seconds * 60.0f));
+        printf("  clock:    %02u:%02u:%02u UTC (quantized HH/MM/SS preview)\n",
+               clock_seconds / 3600U, (clock_seconds / 60U) % 60U, clock_seconds % 60U);
         printf("  output:   %s\n", output_path);
     }
 

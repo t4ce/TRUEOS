@@ -230,8 +230,8 @@ secondary-detail layers. All stable effect IDs, the 32-dword control page,
 binding counts, payload sizes, one/two-walker selection, ordered dependency,
 GuC post-sync release, and `CUR_SURFLIVE` proof remain unchanged.
 
-The C++ background is 98,384 bytes with SHA-256
-`de5f6c0837da5d7d0fc52e2a5a97acbdc652d02caf6d853303128d7c562ee848`.
+The C++ background is 109,064 bytes with SHA-256
+`6e1f90a2af800103f95fcca3de25320f0b9b7b73fbf941d7852ec408b1375f19`.
 The C++ sprite is 656,728 bytes with SHA-256
 `2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac`.
 Both are exact to `8086:4680` revision `0x0c`, SIMD16, 128 GRFs, and zero

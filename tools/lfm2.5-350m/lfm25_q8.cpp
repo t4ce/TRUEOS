@@ -1,5 +1,6 @@
 #include "lfm25_q8.hpp"
 #include "lfm25_igpu.hpp"
+#include "lfm25_packed.hpp"
 
 #include <algorithm>
 #include <array>
@@ -49,6 +50,8 @@ constexpr std::size_t kGoldenTargetToken = 9;
 constexpr float kProjectionBound = 1.0e-5F;
 constexpr float kRmsEpsilon = 1.0e-5F;
 constexpr float kRopeFrequencyBase = 1'000'000.0F;
+constexpr std::string_view kPackedImageSha256 =
+    "90876f02e0cc224fe23e01c8739dcbb94d7bcc8fbfa3d36204c6267a440f5fd8";
 constexpr std::array<std::uint8_t, kLayers> kLayerSchedule = {
     0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0,
 };
@@ -728,11 +731,32 @@ class native_decoder {
           contract_(read_contract(contract_path)),
           sidecar_(sidecar_path),
           threads_(std::max(1U, threads)) {
-        if (backend == native_projection_backend::intel_igc) {
+        if (backend == native_projection_backend::intel_igc ||
+            backend == native_projection_backend::intel_igc_packed) {
+            std::vector<packed_q8_tensor_spec> packed_tensors;
+            const bool use_packed =
+                backend == native_projection_backend::intel_igc_packed;
+            if (use_packed) {
+                packed_tensors.reserve(contract_.size());
+                for (const auto & [key, value] : contract_) {
+                    static_cast<void>(key);
+                    if (value.format == 2 && value.rank == 2) {
+                        packed_tensors.push_back({
+                            .offset = value.offset,
+                            .columns = value.columns,
+                            .rows = value.rows,
+                        });
+                    }
+                }
+            }
             igpu_ = std::make_unique<intel_igc_projector>(
                 igc_spirv,
                 native_.view().data(),
-                native_.view().size());
+                native_.view().size(),
+                use_packed
+                    ? intel_igc_weight_layout::packed_q8x16_pair
+                    : intel_igc_weight_layout::native_q8_0,
+                packed_tensors);
         }
         for (std::size_t layer = 0; layer < kLayers; ++layer) {
             if (kLayerSchedule[layer] == 0) {
@@ -1033,6 +1057,107 @@ void verify_q8_kernel(
         threads);
 }
 
+void verify_q8_packed_layout(
+    const std::filesystem::path & native_image,
+    const std::filesystem::path & model_contract,
+    const std::filesystem::path & hi_golden,
+    std::uint32_t threads)
+{
+    const mapped_file native(native_image);
+    const auto contract = read_contract(model_contract);
+    const auto checkpoints = read_target_checkpoints(hi_golden);
+    std::vector<packed_q8_tensor_spec> tensors;
+    tensors.reserve(contract.size());
+    for (const auto & [key, value] : contract) {
+        static_cast<void>(key);
+        if (value.format == 2 && value.rank == 2) {
+            tensors.push_back({
+                .offset = value.offset,
+                .columns = value.columns,
+                .rows = value.rows,
+            });
+        }
+    }
+
+    const packed_q8_model packed =
+        pack_q8x16_model(native.view(), tensors);
+    if (packed.bytes.size() != native.view().size() ||
+        packed.tensor_count != 93 ||
+        packed.block_tiles != 692'224 ||
+        packed.quantized_values != 354'418'688 ||
+        packed.subnormal_scales != 25'994 ||
+        packed.sha256 != kPackedImageSha256) {
+        throw std::runtime_error("fixed packed Q8 model census rejected");
+    }
+
+    const auto verify_projection = [&](
+        tensor_role role,
+        std::string_view name,
+        std::span<const float> input,
+        std::span<const float> expected)
+    {
+        const descriptor & value = tensor(contract, role);
+        const auto activation = quantize(input);
+        const auto native_activation =
+            std::as_bytes(std::span<const q8_block>(activation));
+        const auto packed_activation =
+            pack_q8x16_activation(native_activation, value.columns);
+        const auto observed = project_q8x16_reference(
+            packed.bytes,
+            {
+                .offset = value.offset,
+                .columns = value.columns,
+                .rows = value.rows,
+            },
+            packed_activation);
+        return compare(name, observed, expected);
+    };
+
+    const std::string ffn_input_name = "model.layers.{}.ffn_norm-0";
+    const std::string swiglu_name = "ffn_swiglu-0";
+    const auto & ffn_input =
+        checkpoint(checkpoints, ffn_input_name);
+    const auto & swiglu = checkpoint(checkpoints, swiglu_name);
+    if (ffn_input.size() != kHidden || swiglu.size() != kFfn) {
+        throw std::runtime_error("fixed packed FFN checkpoint shape rejected");
+    }
+    const float up_error = verify_projection(
+        tensor_role::ffn_up,
+        "packed-ffn_up-0",
+        ffn_input,
+        checkpoint(checkpoints, "ffn_up-0"));
+    const float gate_error = verify_projection(
+        tensor_role::ffn_gate,
+        "packed-ffn_gate-0",
+        ffn_input,
+        checkpoint(checkpoints, "ffn_gate-0"));
+    const float down_error = verify_projection(
+        tensor_role::ffn_down,
+        "packed-ffn_out-0",
+        swiglu,
+        checkpoint(checkpoints, "model.layers.{}.ffn_out-0"));
+
+    std::fprintf(
+        stderr,
+        "lfm25-q8-packed: PASS layout=pair1088-x16 "
+        "tensors=%llu block_tiles=%llu quantized_values=%llu "
+        "subnormal_scales=%llu image_bytes=%zu "
+        "image_sha256=%s "
+        "max_abs=%.9g,%.9g,%.9g bound=%.9g threads=%u "
+        "backend=trueos-cpp-packed-reference\n",
+        static_cast<unsigned long long>(packed.tensor_count),
+        static_cast<unsigned long long>(packed.block_tiles),
+        static_cast<unsigned long long>(packed.quantized_values),
+        static_cast<unsigned long long>(packed.subnormal_scales),
+        packed.bytes.size(),
+        packed.sha256.c_str(),
+        gate_error,
+        up_error,
+        down_error,
+        kProjectionBound,
+        threads);
+}
+
 native_decode_result run_native_decode(
     const std::filesystem::path & native_image,
     const std::filesystem::path & model_contract,
@@ -1080,8 +1205,12 @@ native_decode_result run_native_decode(
         result.projection_platform = igpu->platform_name();
         result.projection_driver = igpu->driver_version();
         result.projection_il = igpu->il_version();
+        result.projection_weight_layout = igpu->weight_layout();
         result.projection_program_binary_bytes = igpu->program_binary_bytes();
         result.projection_program_binary_sha256 = igpu->program_binary_sha256();
+        result.projection_model_bytes = igpu->resident_model_bytes();
+        result.projection_subnormal_scales =
+            igpu->packed_subnormal_scales();
         result.projection_launches = igpu->launches();
         result.projection_nanoseconds = igpu->kernel_nanoseconds();
     } else {
