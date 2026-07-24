@@ -31,6 +31,11 @@ class intel_igc_projector {
         std::span<const std::byte> q8_activation);
 
     const std::string & device_name() const;
+    const std::string & platform_name() const;
+    const std::string & driver_version() const;
+    const std::string & il_version() const;
+    std::size_t program_binary_bytes() const;
+    const std::string & program_binary_sha256() const;
     std::uint64_t launches() const;
     std::uint64_t kernel_nanoseconds() const;
 

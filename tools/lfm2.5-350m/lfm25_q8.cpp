@@ -1077,6 +1077,11 @@ native_decode_result run_native_decode(
     }
     if (const auto * igpu = decoder.igpu()) {
         result.projection_device = igpu->device_name();
+        result.projection_platform = igpu->platform_name();
+        result.projection_driver = igpu->driver_version();
+        result.projection_il = igpu->il_version();
+        result.projection_program_binary_bytes = igpu->program_binary_bytes();
+        result.projection_program_binary_sha256 = igpu->program_binary_sha256();
         result.projection_launches = igpu->launches();
         result.projection_nanoseconds = igpu->kernel_nanoseconds();
     } else {

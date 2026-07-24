@@ -16,6 +16,11 @@ struct native_decode_result {
     std::vector<std::uint32_t> next_tokens;
     std::vector<std::uint32_t> generated_tokens;
     std::string projection_device;
+    std::string projection_platform;
+    std::string projection_driver;
+    std::string projection_il;
+    std::string projection_program_binary_sha256;
+    std::size_t projection_program_binary_bytes = 0;
     std::uint64_t projection_launches = 0;
     std::uint64_t projection_nanoseconds = 0;
     bool stopped = false;

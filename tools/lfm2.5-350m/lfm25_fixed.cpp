@@ -557,6 +557,17 @@ int run(const options & arguments) {
                 static_cast<unsigned long long>(result.projection_launches),
                 static_cast<double>(result.projection_nanoseconds) / 1'000'000.0);
         }
+        if (use_igpu) {
+            std::fprintf(
+                stderr,
+                "lfm25-fixed: igpu_runtime platform=\"%s\" driver=\"%s\" "
+                "il=\"%s\" program_binary_bytes=%zu program_binary_sha256=%s\n",
+                result.projection_platform.c_str(),
+                result.projection_driver.c_str(),
+                result.projection_il.c_str(),
+                result.projection_program_binary_bytes,
+                result.projection_program_binary_sha256.c_str());
+        }
         return 0;
     }
 

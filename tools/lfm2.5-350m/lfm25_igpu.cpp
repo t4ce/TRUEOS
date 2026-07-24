@@ -3,9 +3,11 @@
 #include "lfm25_igpu.hpp"
 
 #include <CL/cl.h>
+#include <openssl/evp.h>
 
 #include <array>
 #include <fstream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -113,6 +115,48 @@ std::string device_string(cl_device_id device, cl_device_info parameter) {
     return result;
 }
 
+std::string platform_string(cl_platform_id platform, cl_platform_info parameter) {
+    std::size_t bytes = 0;
+    require(
+        clGetPlatformInfo(platform, parameter, 0, nullptr, &bytes),
+        "clGetPlatformInfo(size)");
+    if (bytes == 0) {
+        return {};
+    }
+    std::string result(bytes, '\0');
+    require(
+        clGetPlatformInfo(
+            platform, parameter, result.size(), result.data(), nullptr),
+        "clGetPlatformInfo(value)");
+    while (!result.empty() && result.back() == '\0') {
+        result.pop_back();
+    }
+    return result;
+}
+
+std::string sha256(std::span<const unsigned char> bytes) {
+    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(
+        EVP_MD_CTX_new(), EVP_MD_CTX_free);
+    if (!context ||
+        EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1 ||
+        EVP_DigestUpdate(context.get(), bytes.data(), bytes.size()) != 1) {
+        throw std::runtime_error("cannot hash Intel IGC program binary");
+    }
+    std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+    unsigned int digest_bytes = 0;
+    if (EVP_DigestFinal_ex(context.get(), digest.data(), &digest_bytes) != 1 ||
+        digest_bytes != 32) {
+        throw std::runtime_error("cannot finalize Intel IGC program binary hash");
+    }
+    constexpr char digits[] = "0123456789abcdef";
+    std::string result(digest_bytes * 2, '\0');
+    for (unsigned int index = 0; index < digest_bytes; ++index) {
+        result[index * 2] = digits[digest[index] >> 4];
+        result[index * 2 + 1] = digits[digest[index] & 0x0f];
+    }
+    return result;
+}
+
 std::pair<cl_platform_id, cl_device_id> select_intel_gpu() {
     cl_uint platform_count = 0;
     require(clGetPlatformIDs(0, nullptr, &platform_count), "clGetPlatformIDs(count)");
@@ -200,7 +244,9 @@ struct intel_igc_projector::implementation {
         platform = selected_platform;
         device = selected_device;
         name = device_string(device, CL_DEVICE_NAME);
-        const std::string il_version = device_string(device, CL_DEVICE_IL_VERSION);
+        platform_name = platform_string(platform, CL_PLATFORM_NAME);
+        driver_version = device_string(device, CL_DRIVER_VERSION);
+        il_version = device_string(device, CL_DEVICE_IL_VERSION);
         if (il_version.find("SPIR-V") == std::string::npos) {
             throw std::runtime_error(
                 "Intel GPU does not advertise SPIR-V ingestion: " + il_version);
@@ -235,6 +281,42 @@ struct intel_igc_projector::implementation {
                 "Intel IGC SPIR-V build failed with OpenCL error " +
                 std::to_string(error) + ": " + build_log(program.get(), device));
         }
+        cl_program_binary_type binary_type = CL_PROGRAM_BINARY_TYPE_NONE;
+        require(
+            clGetProgramBuildInfo(
+                program.get(),
+                device,
+                CL_PROGRAM_BINARY_TYPE,
+                sizeof(binary_type),
+                &binary_type,
+                nullptr),
+            "clGetProgramBuildInfo(binary type)");
+        if (binary_type != CL_PROGRAM_BINARY_TYPE_EXECUTABLE) {
+            throw std::runtime_error(
+                "Intel IGC did not return an executable program binary");
+        }
+        require(
+            clGetProgramInfo(
+                program.get(),
+                CL_PROGRAM_BINARY_SIZES,
+                sizeof(program_binary_size),
+                &program_binary_size,
+                nullptr),
+            "clGetProgramInfo(binary size)");
+        if (program_binary_size == 0) {
+            throw std::runtime_error("Intel IGC returned an empty program binary");
+        }
+        std::vector<unsigned char> program_binary(program_binary_size);
+        unsigned char * binary_pointer = program_binary.data();
+        require(
+            clGetProgramInfo(
+                program.get(),
+                CL_PROGRAM_BINARIES,
+                sizeof(binary_pointer),
+                &binary_pointer,
+                nullptr),
+            "clGetProgramInfo(binary)");
+        program_binary_digest = sha256(program_binary);
 
         kernel = kernel_owner(clCreateKernel(program.get(), "lfm25_q8_project", &error));
         require(error, "clCreateKernel(lfm25_q8_project)");
@@ -370,6 +452,11 @@ struct intel_igc_projector::implementation {
     cl_platform_id platform = nullptr;
     cl_device_id device = nullptr;
     std::string name;
+    std::string platform_name;
+    std::string driver_version;
+    std::string il_version;
+    std::string program_binary_digest;
+    std::size_t program_binary_size = 0;
     context_owner context;
     queue_owner queue;
     program_owner program;
@@ -401,6 +488,26 @@ std::vector<float> intel_igc_projector::project(
 
 const std::string & intel_igc_projector::device_name() const {
     return implementation_->name;
+}
+
+const std::string & intel_igc_projector::platform_name() const {
+    return implementation_->platform_name;
+}
+
+const std::string & intel_igc_projector::driver_version() const {
+    return implementation_->driver_version;
+}
+
+const std::string & intel_igc_projector::il_version() const {
+    return implementation_->il_version;
+}
+
+std::size_t intel_igc_projector::program_binary_bytes() const {
+    return implementation_->program_binary_size;
+}
+
+const std::string & intel_igc_projector::program_binary_sha256() const {
+    return implementation_->program_binary_digest;
 }
 
 std::uint64_t intel_igc_projector::launches() const {
