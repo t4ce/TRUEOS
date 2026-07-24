@@ -1066,6 +1066,7 @@ impl IdleVfxState {
 }
 
 static IDLE_VFX_STATE: Mutex<IdleVfxState> = Mutex::new(IdleVfxState::INACTIVE);
+static WINDOW_BACKGROUND_VFX: Mutex<Option<SpiritVfxBackgroundEffect>> = Mutex::new(None);
 
 pub(crate) fn control_panel_snapshot() -> (u64, SpiritVfxControlPanel) {
     let panel = CONTROL_PANEL
@@ -1159,6 +1160,19 @@ pub(super) fn set_idle_vfx(active: bool) {
     CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel);
 }
 
+/// Override Spirit's hardware-cursor background for the UI4 frame selected by
+/// her tagged software vCursor. Cursor motion and UI4 focus remain entirely on
+/// slot 4; this state changes only the VFX rendered into Spirit's 256px plane.
+pub(super) fn set_window_background_vfx(effect: Option<SpiritVfxBackgroundEffect>) {
+    let mut selected = WINDOW_BACKGROUND_VFX.lock();
+    if *selected == effect {
+        return;
+    }
+    *selected = effect;
+    drop(selected);
+    CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel);
+}
+
 /// Set an absolute Spirit sprite rotation. Any finite number of turns is
 /// accepted and reduced to one signed revolution before the next VFX frame.
 pub(crate) fn set_rotation_degrees(degrees: f32) -> Result<u64, SpiritVfxControlError> {
@@ -1201,6 +1215,7 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     let now = Instant::now();
     let idle_vfx = *IDLE_VFX_STATE.lock();
     let idle_opacity = idle_vfx.opacity(now.as_millis());
+    let window_background = *WINDOW_BACKGROUND_VFX.lock();
     let move_portal_active = MOVE_PORTAL_ACTIVE.load(Ordering::Acquire);
     let background = if move_portal_active {
         let elapsed_ms = now
@@ -1211,6 +1226,8 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
         background.speed *= ramp;
         background.intensity = 0.5 + (background.intensity - 0.5) * ramp;
         background
+    } else if let Some(effect) = window_background {
+        application_background(effect)
     } else if idle_opacity > 0.0 {
         let (_, bg_color_a, bg_color_b) = SpiritVfxBackgroundEffect::MagicTimeCircle.demo_style();
         SpiritVfxAlphaBackground {
@@ -1225,7 +1242,7 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     } else {
         panel.alpha_background
     };
-    let sprite_shader = if idle_vfx.active {
+    let sprite_shader = if window_background.is_none() && idle_vfx.active {
         let elapsed_ms = now.as_millis().saturating_sub(idle_vfx.sprite_started_ms);
         let (fx_color_a, fx_color_b) = SpiritVfxEffect::AuraBloom.demo_colors();
         SpiritVfxSpriteShader {
@@ -1259,6 +1276,22 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
         shader_parameters: sprite_shader.parameters,
         fx_color_a: sprite_shader.fx_color_a.packed_rgb(),
         fx_color_b: sprite_shader.fx_color_b.packed_rgb(),
+    }
+}
+
+fn application_background(effect: SpiritVfxBackgroundEffect) -> SpiritVfxAlphaBackground {
+    if effect == SpiritVfxBackgroundEffect::NebulaSmoke {
+        return SpiritVfxAlphaBackground::NEBULA_SMOKE;
+    }
+    let (scale, bg_color_a, bg_color_b) = effect.demo_style();
+    SpiritVfxAlphaBackground {
+        effect,
+        opacity: 0.82,
+        scale,
+        speed: 1.0,
+        intensity: 1.0,
+        bg_color_a,
+        bg_color_b,
     }
 }
 

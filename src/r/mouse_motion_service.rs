@@ -523,6 +523,16 @@ pub(crate) fn cursor_is_idle(
     Ok(cursor.active.is_none() && cursor.commands.is_empty())
 }
 
+pub(crate) fn cursor_position(
+    principal: MouseControlPrincipal,
+    handle: u64,
+) -> Result<(i32, i32), MouseControlError> {
+    let station = STATION.lock();
+    let index = station.cursor_index(principal, handle)?;
+    let cursor = &station.cursors[index];
+    Ok((cursor.x, cursor.y))
+}
+
 #[embassy_executor::task]
 pub(crate) async fn mouse_motion_service_task() {
     crate::log_info!(target: "input";

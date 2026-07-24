@@ -163,3 +163,85 @@ Shell2 `lum` stay unchanged. The legacy artifact and native binder remain
 available as a rollback/debug lane. Linked and packaged product gates require
 the packed binary, and the normal compiler-free artifact gate reruns the
 eight-DP4A ISA proof.
+
+## Measured port boundary
+
+The first ADL-S target run on the Core i5-14500T reproduced the complete
+`Hello! How can I help you today?` reply with zero GPU failures:
+
+```text
+evaluated tokens:       19
+Q8 projections:         1767
+GuC/RCS submissions:    1235
+GPU timestamp samples:  1235
+GPU timestamp rate:     19.2 MHz
+GPU time:               5742.854 ms
+end-to-end time:        9594 ms
+```
+
+This is 302.255 ms of GPU time and 504.947 ms end to end per evaluated token.
+Against the previous scalar target trace, projection time improved from
+4,543.408 ms/token to 302.255 ms/token, a 15.03x gain. End-to-end completion
+improved by about 9.03x. The one-time native-to-packed conversion plus packed
+SHA-256 seal took 2,786 ms and does not recur in the warm session.
+
+The same packed arithmetic takes 7.75--8.20 ms/token and sustains
+45.9--48.6 GB/s through Ubuntu NEO on UHD 770. TRUEOS currently reaches about
+1.246 GB/s logically. Its stable 4.650 ms GPU interval per GuC/RCS submission,
+versus roughly 84 microseconds per NEO kernel launch, identifies submission
+topology rather than Q8 arithmetic as the next bottleneck. The current result
+is therefore the conservative 10--15x territory; it is not a 10 ms token
+claim.
+
+## Min/max resident-graph ladder
+
+The lower bound is set by the fixed model stream: 376,569,856 logical Q8
+weight bytes per token at the measured 46--49 GB/s is already about 8 ms.
+Reaching the 10 ms neighborhood requires eliminating most of the 65 dependent
+host-visible submissions, not another dot-product rewrite.
+
+### 1. Minimum-risk resident bridges
+
+Add fixed C++/IGC entries for the operations that currently force the CPU to
+wait between projections:
+
+- RMS normalization plus packed-Q8 activation production;
+- short-convolution state update;
+- RoPE, F16 K/V update, causal attention reduction and output quantization;
+- SwiGLU plus packed-Q8 activation production;
+- residual add and final vocabulary argmax.
+
+Keep all intermediate activations, short-convolution state, and the six
+256-position K/V caches in persistent GPU buffers. Compose the walkers in the
+existing RCS encoder so each complete layer retires as one submission. This
+reduces the fixed topology from 65 submissions/token to roughly 17 without
+changing model bytes or numerical order. At the measured fixed interval, the
+first engineering target is 80--150 ms/token.
+
+### 2. Preferred endgame graph
+
+Prebuild one immutable command graph containing embedding fetch, all sixteen
+layer subgraphs, final normalization, tied vocabulary projection, and argmax.
+Patch only token ID, position, state epoch and result fence. One GuC/RCS
+submission then evaluates one generated token; prompt tokens can be queued as
+ordered graph instances because their IDs are already known.
+
+The C++ module remains a small set of fixed-shape math entries. The RCS graph
+provides the required global barriers between them; a monolithic compute
+kernel cannot safely replace those barriers. With one submission/token, the
+measured lower bound is approximately 8 ms of weight traffic plus pointwise,
+attention and one fence interval. A realistic first soft target is
+12--20 ms/token, followed by epilogue fusion toward 10 ms.
+
+### 3. Maximum experimental lane
+
+Only after the one-submission graph is byte-identical should the runtime try:
+
+- fusing norm/quantize and residual/quantize epilogues into adjacent walkers;
+- one prefill batch containing multiple ordered token graphs;
+- GPU-resident argmax-to-next-embedding handoff;
+- FPGA assistance for a single measured state or scheduling primitive.
+
+The FPGA is deliberately outside the critical path until profiling shows a
+specific operation worth offloading. Autoregressive weight bandwidth remains
+the hard limit, so a 1,000x claim is not admitted by this architecture.

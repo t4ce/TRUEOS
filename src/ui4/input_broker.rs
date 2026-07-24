@@ -159,6 +159,13 @@ pub(crate) struct Ui4SoftwareCursorVisual {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Ui4ProgrammaticSelectionError {
+    NotFound,
+    NotReady,
+    OutputUnavailable,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct WindowTarget {
     owner: WindowOwner,
     window: WindowId,
@@ -1082,6 +1089,38 @@ pub(super) fn release_owner(owner: WindowOwner) -> (usize, usize) {
 
 pub(crate) fn software_cursor_visuals() -> Vec<Ui4SoftwareCursorVisual, MAX_CURSOR_ROUTES> {
     INPUT_BROKER.lock().software_cursor_visuals()
+}
+
+/// Select one ready UI4 frame for an existing cursor identity without
+/// synthesizing any mouse button transition. Focus and selection-strip
+/// ownership follow the same broker path as an absorb-select click, while no
+/// Pointer or Button event is delivered to the application.
+pub(crate) fn select_window_for_cursor(
+    source: Ui4CursorSource,
+    owner: WindowOwner,
+    window: WindowId,
+) -> Result<bool, Ui4ProgrammaticSelectionError> {
+    let snapshot = super::window_broker::window_snapshot(owner, window)
+        .ok_or(Ui4ProgrammaticSelectionError::NotFound)?;
+    if snapshot.state != WindowState::Ready || !snapshot.placement.visible {
+        return Err(Ui4ProgrammaticSelectionError::NotReady);
+    }
+    let (screen_width, screen_height) = crate::intel::active_scanout_dimensions()
+        .ok_or(Ui4ProgrammaticSelectionError::OutputUnavailable)?;
+    if screen_width == 0 || screen_height == 0 {
+        return Err(Ui4ProgrammaticSelectionError::OutputUnavailable);
+    }
+    let x =
+        i64::from(snapshot.placement.x).clamp(0, i64::from(screen_width.saturating_sub(1))) as u32;
+    let y =
+        i64::from(snapshot.placement.y).clamp(0, i64::from(screen_height.saturating_sub(1))) as u32;
+    let (combo_id, vcursor) = cursor_hut_metadata(source);
+    let mut broker = INPUT_BROKER.lock();
+    let index = broker.cursor_index(source, x, y);
+    broker.cursors[index].x = x;
+    broker.cursors[index].y = y;
+    broker.cursors[index].visible_after_motion = true;
+    Ok(broker.select_frame(index, Some(WindowTarget { owner, window }), combo_id, vcursor))
 }
 
 pub(super) fn enqueue_window_resize(

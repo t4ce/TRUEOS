@@ -62,7 +62,7 @@ pub(crate) use compositor_service::ui4_compositor_service_task;
 pub(crate) use cursor_frame_inout::{
     CursorFrameKey, GlobalKeyboardDisposition, GlobalKeyboardHookId, Ui4CursorIcon,
     Ui4CursorSource, cursor_icon_for, register_global_keyboard_hook, selected_frame,
-    selection_strip, set_window_cursor_icon, set_window_custom_cursor,
+    selection_strip, set_window_cursor_icon, set_window_custom_cursor, source_selected,
     unregister_global_keyboard_hook,
 };
 pub(crate) use damage::{DamageRect, DamageRegion};
@@ -90,8 +90,8 @@ pub(crate) use gpgpu_svg_probe_consumer::{
 pub(crate) use h264_encode_stream::{ui4_h264_encode_prepare_task, ui4_h264_encode_stream_task};
 pub(crate) use input_broker::{
     Ui4ButtonPhase, Ui4InputEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent, Ui4VisualRect,
-    focused_keyboard_state, software_cursor_visuals, take_owner_input_events,
-    ui4_input_service_task,
+    focused_keyboard_state, select_window_for_cursor, software_cursor_visuals,
+    take_owner_input_events, ui4_input_service_task,
 };
 pub(crate) use screenshot::ui4_screenshot_service_task;
 pub(crate) use slot4_service::ui4_slot4_service_task;
@@ -113,7 +113,8 @@ pub(crate) use window_broker::{
     replace_window_frame, set_window_placement, subscribe_window_broker_snapshots,
     toggle_window_maximized, ui4_window_broker_snapshot_service_task, visible_windows_for_output,
     visible_windows_for_output_with_revision, wait_for_window_composition_change,
-    window_close_transitions_active, window_composition_revision, window_placement,
+    wait_for_window_first_presentation, window_close_transitions_active,
+    window_composition_revision, window_placement,
 };
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

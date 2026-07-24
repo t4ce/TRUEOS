@@ -14,14 +14,8 @@ bench = false
 default = ["trueos_rdp", "trueos_lumen", "trueos_h264_encode_stream"]
 trueos_rdp = []
 trueos_h264_encode_stream = []
-# Compatibility alias for older build scripts. The former software/file probe
-# is gone; both feature spellings select the resident hardware UDP service.
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
 trueos_lumen = ["dep:lumen"]
-# Select the separately baked C++ for OpenCL copy-rect artifact. The normal
-# Make product/development lane enables this explicitly and remains
-# compiler-free; direct Cargo builds retain the OpenCL C selection unless the
-# feature is requested.
 intel_gpu_cpp_aot = []
 
 [dependencies]

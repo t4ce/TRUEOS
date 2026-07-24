@@ -554,6 +554,16 @@ fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
     if spawned_combos == 0 {
         SpawnAttempt::Skipped
     } else {
+        match crate::spirit::spirit_window_selection_task() {
+            Ok(token) => ap1_spawner.spawn(token),
+            Err(error) => {
+                crate::log_warn!(
+                    target: "service";
+                    "trueos-spirit: window selection task spawn failed error={:?} action=retain-render-and-cursor-workers\n",
+                    error,
+                );
+            }
+        }
         SpawnAttempt::Spawned
     }
 }

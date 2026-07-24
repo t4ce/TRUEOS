@@ -24,6 +24,9 @@ pub(crate) mod lilly_protocol;
 #[allow(dead_code)]
 #[path = "Spirit_VFX.rs"]
 pub(crate) mod spirit_vfx;
+mod window_selection;
+
+pub(crate) use window_selection::spirit_window_selection_task;
 
 /// Architectural pipe/fence capacity kept for later activation.
 pub(crate) const SPIRIT_FENCE_COUNT: usize = 4;
