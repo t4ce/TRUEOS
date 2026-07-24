@@ -37,6 +37,7 @@ const UDP_SEND_RECEIPT_TIMEOUT_MS: u64 = 250;
 // closing its socket immediately after queueing the packet.
 const UDP_CLOSE_LINGER_MS: u64 = 100;
 const UDP_SUBSCRIBER_POLL_MS: u64 = 10;
+const PREPARED_FRAME_POLL_MS: u64 = 1;
 const UDP_SUBMIT_RETRY_LIMIT: usize = 64;
 
 #[derive(Debug)]
@@ -112,18 +113,21 @@ impl MediaUdpTransport {
     }
 }
 
-/// Wait for one receiver, then generate and send an access unit on absolute
-/// `target_hz` deadlines. Generation is synchronous by design: capture and hardware
-/// submission execute on the caller's dedicated background worker, while this
-/// function owns the non-self-referential per-session socket lifetime.
-pub(super) async fn stream_generated_annex_b<F>(
+/// Wait for one receiver, start the bounded producer, then encode and send on
+/// absolute `target_hz` deadlines. The first prepared frame is excluded from
+/// cadence timing; subsequent preparation overlaps hardware encode and egress.
+pub(super) async fn stream_generated_annex_b<B, R, F>(
     transport: &mut MediaUdpTransport,
     session_id: u32,
     access_unit_count: usize,
     target_hz: usize,
+    begin_preparation: B,
+    mut prepared: R,
     mut generate: F,
 ) -> MediaUdpStreamReport
 where
+    B: FnOnce(),
+    R: FnMut(u32) -> bool,
     F: FnMut(u32) -> Option<Vec<u8>>,
 {
     let mut report = MediaUdpStreamReport {
@@ -205,6 +209,19 @@ where
         report.subscriber_wait_polls,
     );
 
+    let prefill_started_ns = crate::chronos::monotonic_nanos();
+    begin_preparation();
+    while !prepared(0) {
+        Timer::after(Duration::from_millis(PREPARED_FRAME_POLL_MS)).await;
+    }
+    let prefill_us =
+        crate::chronos::monotonic_nanos().saturating_sub(prefill_started_ns) / 1_000;
+    crate::log_info!(target: "intel/media-encode";
+        "intel/media-encode: udp-live preparation=prefilled session={} sequence=0 prefill_us={} buffering=double action=start-cadence\n",
+        session_id,
+        prefill_us,
+    );
+
     let period_ticks = (embassy_time::TICK_HZ / target_hz as u64).max(1);
     let started_ns = crate::chronos::monotonic_nanos();
     let mut next_deadline = Instant::now();
@@ -212,11 +229,18 @@ where
     for index in 0..access_unit_count {
         if index != 0 {
             next_deadline += Duration::from_ticks(period_ticks);
-            let mut now = Instant::now();
+            let now = Instant::now();
             if now < next_deadline {
                 Timer::at(next_deadline).await;
-                now = Instant::now();
             }
+        }
+
+        let sequence = index as u32;
+        while !prepared(sequence) {
+            Timer::after(Duration::from_millis(PREPARED_FRAME_POLL_MS)).await;
+        }
+        if index != 0 {
+            let now = Instant::now();
             if now > next_deadline {
                 report.late_access_units = report.late_access_units.saturating_add(1);
                 let late_us = now.saturating_duration_since(next_deadline).as_micros();
@@ -226,7 +250,6 @@ where
             }
         }
 
-        let sequence = index as u32;
         let Some(bytes) = generate(sequence) else {
             report.dropped_access_units = report.dropped_access_units.saturating_add(1);
             break;

@@ -87,7 +87,9 @@ pub(crate) use gpgpu_svg_probe_consumer::{
     request_gpgpu_svg_probe_start, request_gpgpu_svg_probe_stop,
 };
 #[cfg(feature = "trueos_h264_encode_stream")]
-pub(crate) use h264_encode_stream::ui4_h264_encode_stream_task;
+pub(crate) use h264_encode_stream::{
+    ui4_h264_encode_prepare_task, ui4_h264_encode_stream_task,
+};
 pub(crate) use input_broker::{
     Ui4ButtonPhase, Ui4InputEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent, Ui4VisualRect,
     focused_keyboard_state, software_cursor_visuals, take_owner_input_events,
