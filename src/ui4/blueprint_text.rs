@@ -22,8 +22,8 @@ use crate::intel::gpgpu::{
 };
 use crate::intel::gpu_font::{
     GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS,
-    ensure_font_face_available, recycle_font_job_readback, render_font_job_readback_once,
-    render_font_scene_readback_once,
+    create_gpu_font_scene_coverage_mask_at_raster, ensure_font_face_available,
+    recycle_font_job_readback, render_font_job_readback_once, render_font_scene_readback_once,
 };
 
 use super::{
@@ -1749,6 +1749,99 @@ fn render_scene_entries_into_surface(
     rgba: u32,
     entries: &[GpuFontJobEntry<'_>],
 ) -> i32 {
+    let (lease, destination) = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.gpu_submission_unretired {
+            return ERROR_BUSY;
+        }
+        let Some(lease) = surface.write_lease else {
+            return ERROR_STATE;
+        };
+        let destination = match gpgpu_rgba_surface(lease) {
+            Ok(destination) => destination,
+            Err(_) => return ERROR_UI4,
+        };
+        (lease, destination)
+    };
+    match render_scene_entries_with_font_instance(
+        entries,
+        font,
+        viewport_width,
+        viewport_height,
+        rgba,
+        destination,
+    ) {
+        Ok(release) => {
+            let mut surfaces = SURFACES.lock();
+            let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+                return ERROR_NOT_FOUND;
+            };
+            if surface.write_lease != Some(lease) {
+                return ERROR_STATE;
+            }
+            surface.pending_gpu_release = Some(release);
+            crate::log_info!(
+                target: "ui4/solara-text";
+                "scene rendered owner={:?} window={} font={} entries={} target={}x{} path=skrifa-r8-to-c++-igc-instance cpu_readback=0 cpu_frame_copy=0\n",
+                owner,
+                window_id,
+                font.registry_name(),
+                entries.len(),
+                viewport_width,
+                viewport_height,
+            );
+            return 0;
+        }
+        Err(FontInstanceSceneError::SubmittedIncomplete(reason)) => {
+            let mut surfaces = SURFACES.lock();
+            if let Some(surface) = surface_mut(&mut surfaces, owner, window_id)
+                && surface.write_lease == Some(lease)
+            {
+                surface.gpu_submission_unretired = true;
+            }
+            crate::log_error!(
+                target: "ui4/solara-text";
+                "scene font-instance quarantined owner={:?} window={} frame={} buffer={} reason={} action=no-cpu-fallback+retain-frame\n",
+                owner,
+                window_id,
+                lease.frame.raw(),
+                lease.buffer_index,
+                reason,
+            );
+            return ERROR_BUSY;
+        }
+        Err(FontInstanceSceneError::Unavailable(reason)) => {
+            // `gpgpu_rgba_surface` marks the buffer GPU-authored before the
+            // dispatch is attempted. Reclassify it only because this branch
+            // proves that no font-instance command was admitted.
+            if mark_frame_buffer_cpu_authored(lease).is_err() {
+                return ERROR_UI4;
+            }
+            let mut surfaces = SURFACES.lock();
+            let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+                return ERROR_NOT_FOUND;
+            };
+            if surface.write_lease != Some(lease) {
+                return ERROR_STATE;
+            }
+            // A prior color group may already have a retired compute release.
+            // CPU fallback becomes the final writer for this frame.
+            surface.pending_gpu_release = None;
+            crate::log_warn!(
+                target: "ui4/solara-text";
+                "scene font-instance unavailable owner={:?} window={} font={} entries={} reason={} action=resident-triangle-readback-fallback\n",
+                owner,
+                window_id,
+                font.registry_name(),
+                entries.len(),
+                reason,
+            );
+        }
+    }
+
     let readback = match render_font_scene_readback_once(
         GpuFontJob {
             entries,
@@ -1811,6 +1904,94 @@ fn render_scene_entries_into_surface(
     };
     recycle_font_job_readback(readback);
     result
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum FontInstanceSceneError {
+    Unavailable(&'static str),
+    SubmittedIncomplete(&'static str),
+}
+
+fn render_scene_entries_with_font_instance(
+    entries: &[GpuFontJobEntry<'_>],
+    font: GpuFontFace,
+    viewport_width: u32,
+    viewport_height: u32,
+    rgba: u32,
+    destination: GpgpuRgba8Surface,
+) -> Result<GpgpuRgba8ReleaseFence, FontInstanceSceneError> {
+    let coverage = create_gpu_font_scene_coverage_mask_at_raster(
+        entries,
+        font,
+        viewport_width,
+        viewport_height,
+        viewport_width,
+        viewport_height,
+    )
+    // The coverage builder owns and quarantines its mask/input pages if its
+    // submission does not retire. It has not referenced `destination` yet, so
+    // Blueprint may safely restore CPU authorship and use the triangle path.
+    .map_err(FontInstanceSceneError::Unavailable)?;
+    let state = crate::intel::gpgpu::allocate_font_instance_state(1)
+        .ok_or(FontInstanceSceneError::Unavailable("font-instance-state-allocation"))?;
+    let mask_rect = coverage.full_rect();
+    let mut descriptor =
+        crate::intel::gpgpu::GpgpuFontInstanceDescriptor::new(coverage.surface(), mask_rect, rgba)
+            .ok_or(FontInstanceSceneError::Unavailable("font-instance-descriptor"))?;
+    descriptor.set_transform(1.0, 0.0, 1.0);
+    if !state.write(0, &descriptor) {
+        return Err(FontInstanceSceneError::Unavailable("font-instance-descriptor-write"));
+    }
+    let origin = coverage.origin_px();
+    let layer = crate::intel::gpgpu::GpgpuFontInstanceLayer {
+        mask: coverage.surface(),
+        mask_rect,
+        dst_center: [
+            origin[0] as f32 + mask_rect.width as f32 * 0.5,
+            origin[1] as f32 + mask_rect.height as f32 * 0.5,
+        ],
+        dispatch_rect: crate::intel::gpgpu::GpgpuRect::new(
+            origin[0],
+            origin[1],
+            mask_rect.width,
+            mask_rect.height,
+        ),
+        descriptor_index: 0,
+    };
+    let rendered = crate::intel::gpgpu::font_instance_layers_rgba8_2d_mode(
+        core::slice::from_ref(&layer),
+        &state,
+        destination,
+        true,
+        0.0,
+    );
+    if !rendered.ok {
+        if rendered.submitted {
+            // The accepted batch may still dereference both allocations.
+            // Keep their physical pages and unique PPGTT aliases pinned with
+            // the quarantined shared context until reboot.
+            core::mem::forget(coverage);
+            core::mem::forget(state);
+            return Err(FontInstanceSceneError::SubmittedIncomplete(
+                "font-instance-retirement-uncertain",
+            ));
+        }
+        return Err(FontInstanceSceneError::Unavailable("font-instance-dispatch"));
+    }
+
+    let finalizer = crate::intel::gpgpu::release_rgba8_surface_for_scanout(destination);
+    if !finalizer.ok {
+        return Err(if finalizer.submitted {
+            FontInstanceSceneError::SubmittedIncomplete(
+                "font-instance-release-retirement-uncertain",
+            )
+        } else {
+            FontInstanceSceneError::Unavailable("font-instance-release")
+        });
+    }
+    finalizer
+        .release
+        .ok_or(FontInstanceSceneError::Unavailable("font-instance-release-missing"))
 }
 
 /// Publish the completed dirty buffer and its window damage.
