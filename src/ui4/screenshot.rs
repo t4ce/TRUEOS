@@ -104,6 +104,7 @@ struct CapturedComposition {
     scope: CaptureScope,
     path_override: Option<String>,
     release_interactive_gate: bool,
+    spirit_overlay_pixels: usize,
 }
 
 /// One immutable logical snapshot of D01, composed in the same hardware-plane
@@ -112,19 +113,75 @@ struct CapturedComposition {
 pub(super) struct StreamScanoutRgba {
     pub(super) width: u32,
     pub(super) height: u32,
-    pub(super) rgba: Vec<u8>,
+    pub(super) rgba_premultiplied: Vec<u8>,
+    pub(super) spirit_overlay_pixels: usize,
 }
 
 pub(super) fn capture_stream_scanout_rgba() -> Result<StreamScanoutRgba, CaptureError> {
     let output = super::OutputId::from_slot(0).ok_or(CaptureError::NoScanout)?;
     let windows = super::visible_windows_for_output(output);
     let rects = super::slot4_service::presented_rects();
-    let capture = capture_windows(windows.as_slice(), rects.as_slice())?;
+    let capture = capture_windows(windows.as_slice(), rects.as_slice(), true)?;
     Ok(StreamScanoutRgba {
         width: capture.width,
         height: capture.height,
-        rgba: capture.rgba,
+        rgba_premultiplied: capture.rgba,
+        spirit_overlay_pixels: capture.spirit_overlay_pixels,
     })
+}
+
+fn blend_stream_spirit_overlay_premultiplied(
+    destination: &mut [u8],
+    width: u32,
+    height: u32,
+) -> usize {
+    let destination_stride = width as usize * 4;
+    crate::spirit::with_stream_overlay_pipe_a(|overlay| {
+        let left = i64::from(overlay.left).max(0);
+        let top = i64::from(overlay.top).max(0);
+        let right = (i64::from(overlay.left) + i64::from(overlay.width)).min(i64::from(width));
+        let bottom = (i64::from(overlay.top) + i64::from(overlay.height)).min(i64::from(height));
+        if right <= left || bottom <= top {
+            return 0;
+        }
+
+        let source_x = left.saturating_sub(i64::from(overlay.left)) as usize;
+        let source_y = top.saturating_sub(i64::from(overlay.top)) as usize;
+        let copy_width = (right - left) as usize;
+        let copy_height = (bottom - top) as usize;
+        let mut blended_pixels = 0usize;
+        for row in 0..copy_height {
+            let source_offset = (source_y + row)
+                .saturating_mul(overlay.pitch_bytes as usize)
+                .saturating_add(source_x.saturating_mul(4));
+            let destination_offset = (top as usize + row)
+                .saturating_mul(destination_stride)
+                .saturating_add(left as usize * 4);
+            let Some(source_row) = overlay
+                .bgra_premultiplied
+                .get(source_offset..source_offset + copy_width * 4)
+            else {
+                return blended_pixels;
+            };
+            let Some(destination_row) =
+                destination.get_mut(destination_offset..destination_offset + copy_width * 4)
+            else {
+                return blended_pixels;
+            };
+            for (source, destination) in source_row
+                .chunks_exact(4)
+                .zip(destination_row.chunks_exact_mut(4))
+            {
+                if source[3] == 0 {
+                    continue;
+                }
+                blend_premultiplied(destination, source[2], source[1], source[0], source[3]);
+                blended_pixels = blended_pixels.saturating_add(1);
+            }
+        }
+        blended_pixels
+    })
+    .unwrap_or(0)
 }
 
 /// Arm one composition capture. Calls are bounded so a burst of side-button
@@ -214,7 +271,7 @@ pub(super) fn capture_compositor_frame(windows: &[WindowSnapshot]) {
         CaptureSelection::Window { .. } => heapless::Vec::new(),
     };
     let result = match request.selection {
-        CaptureSelection::Composition => capture_windows(windows, &rects),
+        CaptureSelection::Composition => capture_windows(windows, &rects, false),
         CaptureSelection::Window { id, plane_slot } => windows
             .iter()
             .copied()
@@ -279,6 +336,7 @@ fn capture_scope_log_fields(selection: CaptureSelection) -> (&'static str, u32, 
 fn capture_windows(
     windows: &[WindowSnapshot],
     rects: &[crate::intel::LiveOverlayRect],
+    stream_capture: bool,
 ) -> Result<CapturedComposition, CaptureError> {
     let (width, height) =
         crate::intel::active_scanout_dimensions().ok_or(CaptureError::NoScanout)?;
@@ -324,11 +382,21 @@ fn capture_windows(
         for rect in rects {
             blend_visual_rect(&mut rgba, stride, width, height, *rect);
         }
-        unpremultiply_rgba(&mut rgba);
-        Ok::<_, CaptureError>(rgba)
+        // The encoder composites premultiplied RGB directly onto black. Keep
+        // that representation for stream capture and reserve the expensive
+        // straight-alpha conversion for exported screenshots.
+        let spirit_overlay_pixels = if stream_capture {
+            blend_stream_spirit_overlay_premultiplied(&mut rgba, width, height)
+        } else {
+            0
+        };
+        if !stream_capture {
+            unpremultiply_rgba(&mut rgba);
+        }
+        Ok::<_, CaptureError>((rgba, spirit_overlay_pixels))
     })();
     release_leases(&leases);
-    let rgba = result?;
+    let (rgba, spirit_overlay_pixels) = result?;
 
     Ok(CapturedComposition {
         sequence: CAPTURE_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1,
@@ -340,6 +408,7 @@ fn capture_windows(
         scope: CaptureScope::Composition,
         path_override: None,
         release_interactive_gate: true,
+        spirit_overlay_pixels,
     })
 }
 
@@ -389,6 +458,7 @@ fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, Capture
         },
         path_override: None,
         release_interactive_gate: true,
+        spirit_overlay_pixels: 0,
     })
 }
 

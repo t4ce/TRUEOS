@@ -11,21 +11,26 @@ subscriber-driven kernel service:
 2. A receiver sends `TME1GET1` to UDP port 9650.
 3. On subscription, two distinct performance-preferred background workers
    enter a bounded producer/consumer pipeline. The producer captures the
-   entire 2560x1440 logical UI4 D01 composition in memory and applies a fixed
-   4:3 center-sampled nearest downscale to a centered 1920x1080 image. Four
-   black rows above and below fill the macroblock-aligned 1920x1088 NV12 encode
-   surface. Conversion uses straight-alpha RGBA and limited-range BT.601. The
-   filter reads one source sample per output pixel to constrain producer cost.
-   Exactly two reusable NV12 slots let preparation of the next frame overlap
-   Gen12 VDEnc/MFX encode and UDP egress of the preceding frame. The consumer
-   emits a fresh IDR access unit on each absolute 20 Hz deadline. The first
-   frame is prepared before cadence measurement begins, and the producer
-   cannot advance more than one frame ahead of the consumer.
+   entire 2560x1440 logical UI4 D01 composition in memory. It then borrows
+   pipe A's currently CUR_SURFLIVE Spirit buffer and actual CUR_POS,
+   blends that 256x256 premultiplied-BGRA sprite without waiting for a newer
+   Spirit frame, and applies a fixed 4:3 center-sampled nearest downscale to a
+   centered 1920x1080 image. Four black rows above and below fill the
+   macroblock-aligned 1920x1088 NV12 encode surface. The stream-only capture
+   remains premultiplied RGBA and converts its already-composited RGB directly
+   against black to limited-range BT.601; ordinary screenshots still export
+   straight-alpha RGBA. The filter reads one source sample per output pixel to
+   constrain producer cost. Exactly two reusable NV12 slots let preparation of
+   the next frame overlap Gen12 VDEnc/MFX encode and UDP egress of the preceding
+   frame. The consumer emits a fresh IDR access unit on each absolute 20 Hz
+   deadline. The first frame is prepared before cadence measurement begins, and
+   the producer cannot advance more than one frame ahead of the consumer.
 
    This fixed test-rig mapping preserves the native 16:9 composition and avoids
    dynamic crop selection. The logical capture follows UI4 plane/z order but is
-   not a bit-exact latch of the physical scanout and does not include the
-   hardware cursor.
+   not a bit-exact latch of the physical scanout. Spirit's dedicated cursor
+   plane is the explicit exception added above; generic hardware mouse cursors
+   remain absent.
 4. Each access unit is immediately fragmented into CRC-protected TME1
    datagrams and unicast to the subscriber. The media socket has a 64 KiB
    transmit ring, and every datagram carries an internal adapter receipt token.

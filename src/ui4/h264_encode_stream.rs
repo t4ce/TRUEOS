@@ -66,6 +66,8 @@ struct LiveEncodeStats {
     encode_max_us: u64,
     coded_bytes: usize,
     coded_max_bytes: usize,
+    spirit_overlay_frames: usize,
+    spirit_overlay_pixels: usize,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -85,6 +87,7 @@ struct PrepareSlot {
     source_height: u32,
     source_fnv1a32: u32,
     capture_convert_us: u64,
+    spirit_overlay_pixels: usize,
     valid: bool,
     nv12: Vec<u8>,
 }
@@ -100,6 +103,7 @@ impl PrepareSlot {
             source_height: 0,
             source_fnv1a32: 0,
             capture_convert_us: 0,
+            spirit_overlay_pixels: 0,
             valid: false,
             nv12: Vec::new(),
         }
@@ -110,6 +114,7 @@ impl PrepareSlot {
         self.source_height = 0;
         self.source_fnv1a32 = 0;
         self.capture_convert_us = 0;
+        self.spirit_overlay_pixels = 0;
         self.valid = false;
     }
 }
@@ -153,6 +158,7 @@ struct PreparedScanout {
     source_height: u32,
     source_fnv1a32: u32,
     capture_convert_us: u64,
+    spirit_overlay_pixels: usize,
     valid: bool,
     nv12: Vec<u8>,
 }
@@ -205,7 +211,7 @@ pub(crate) async fn ui4_h264_encode_prepare_task(assigned_slot: u32) {
         .unwrap_or("unknown");
     PREPARE_WORKER_SLOT.store(worker_slot, Ordering::Release);
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: preparation service online carrier=background-worker assigned_slot={} worker_slot={} worker_kind={} pipeline=rgba-to-nv12 producer buffering=double slots={} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4\n",
+        "intel/media-encode: preparation service online carrier=background-worker assigned_slot={} worker_slot={} worker_kind={} pipeline=rgba-to-nv12 producer buffering=double slots={} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied synchronization=best-effort-no-wait\n",
         assigned_slot,
         worker_slot,
         worker_kind,
@@ -269,14 +275,16 @@ fn prepare_scanout(mut job: PrepareJob) {
     let mut source_width = 0;
     let mut source_height = 0;
     let mut source_fnv1a32 = 0;
+    let mut spirit_overlay_pixels = 0;
     let valid = match super::screenshot::capture_stream_scanout_rgba() {
         Ok(capture) => {
             source_width = capture.width;
             source_height = capture.height;
+            spirit_overlay_pixels = capture.spirit_overlay_pixels;
             if rgba_to_nv12_full_frame_nearest_downscale(
                 capture.width,
                 capture.height,
-                capture.rgba.as_slice(),
+                capture.rgba_premultiplied.as_slice(),
                 job.nv12.as_mut_slice(),
             ) {
                 source_fnv1a32 = fnv1a32(job.nv12.as_slice());
@@ -288,7 +296,7 @@ fn prepare_scanout(mut job: PrepareJob) {
                     job.sequence,
                     capture.width,
                     capture.height,
-                    capture.rgba.len(),
+                    capture.rgba_premultiplied.len(),
                 );
                 false
             }
@@ -320,6 +328,7 @@ fn prepare_scanout(mut job: PrepareJob) {
         slot.source_height = source_height;
         slot.source_fnv1a32 = source_fnv1a32;
         slot.capture_convert_us = capture_convert_us;
+        slot.spirit_overlay_pixels = spirit_overlay_pixels;
         slot.valid = valid;
         slot.nv12 = job.nv12;
         slot.state = PrepareSlotState::Ready;
@@ -386,6 +395,7 @@ fn take_prepared_scanout(session_id: u32, sequence: u32) -> Option<PreparedScano
         source_height: slot.source_height,
         source_fnv1a32: slot.source_fnv1a32,
         capture_convert_us: slot.capture_convert_us,
+        spirit_overlay_pixels: slot.spirit_overlay_pixels,
         valid: slot.valid,
         nv12: core::mem::take(&mut slot.nv12),
     })
@@ -762,7 +772,8 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             && udp_report.late_access_units == 0
             && interval_millifps >= target_millifps.saturating_sub(cadence_tolerance)
             && interval_millifps <= target_millifps.saturating_add(cadence_tolerance)
-            && stats.frames == expected_units;
+            && stats.frames == expected_units
+            && stats.spirit_overlay_frames == expected_units;
         STATE.store(
             if accepted {
                 H264EncodeStreamState::Verified
@@ -772,7 +783,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             Ordering::Release,
         );
         crate::log_info!(target: "intel/media-encode";
-            "intel/media-encode: udp-live complete accepted={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx hardware_encode=1 all_idr=1 protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_fnv1a32=0x{:08X} source_last_fnv1a32=0x{:08X} source_changes={} capture_convert_avg_us={} capture_convert_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=producer-consumer buffering=double prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
+            "intel/media-encode: udp-live complete accepted={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=best-effort-no-wait format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx hardware_encode=1 all_idr=1 protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_fnv1a32=0x{:08X} source_last_fnv1a32=0x{:08X} source_changes={} capture_convert_avg_us={} capture_convert_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=producer-consumer buffering=double prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
             accepted as u8,
             stats.source_width,
             stats.source_height,
@@ -780,6 +791,8 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             ENCODE_HEIGHT,
             ENCODE_WIDTH,
             ACTIVE_HEIGHT,
+            stats.spirit_overlay_frames,
+            stats.spirit_overlay_pixels,
             crate::allcaps::media_encode::REALTIME_HZ,
             interval_millifps,
             udp_report.session_id,
@@ -888,6 +901,12 @@ fn encode_prepared_scanout(
     stats.capture_convert_max_us = stats
         .capture_convert_max_us
         .max(prepared.capture_convert_us);
+    if prepared.spirit_overlay_pixels != 0 {
+        stats.spirit_overlay_frames = stats.spirit_overlay_frames.saturating_add(1);
+        stats.spirit_overlay_pixels = stats
+            .spirit_overlay_pixels
+            .saturating_add(prepared.spirit_overlay_pixels);
+    }
     stats.encode_us = stats.encode_us.saturating_add(encode.elapsed_us);
     stats.encode_max_us = stats.encode_max_us.max(encode.elapsed_us);
     stats.coded_bytes = stats.coded_bytes.saturating_add(annex_b.len());
@@ -901,7 +920,7 @@ fn encode_prepared_scanout(
 fn rgba_to_nv12_full_frame_nearest_downscale(
     source_width: u32,
     source_height: u32,
-    rgba: &[u8],
+    rgba_premultiplied: &[u8],
     nv12: &mut [u8],
 ) -> bool {
     let source_width_usize = source_width as usize;
@@ -911,7 +930,7 @@ fn rgba_to_nv12_full_frame_nearest_downscale(
         || source_width_usize
             .checked_mul(source_height_usize)
             .and_then(|pixels| pixels.checked_mul(4))
-            != Some(rgba.len())
+            != Some(rgba_premultiplied.len())
         || nv12.len() != ENCODE_NV12_BYTES
     {
         return false;
@@ -936,10 +955,10 @@ fn rgba_to_nv12_full_frame_nearest_downscale(
         for x in (0..ENCODE_WIDTH).step_by(2) {
             let source_x_0 = downscaled_source_coordinate(x) * 4;
             let source_x_1 = downscaled_source_coordinate(x + 1) * 4;
-            let rgb_00 = composited_rgb(&rgba[source_row_0 + source_x_0..]);
-            let rgb_01 = composited_rgb(&rgba[source_row_0 + source_x_1..]);
-            let rgb_10 = composited_rgb(&rgba[source_row_1 + source_x_0..]);
-            let rgb_11 = composited_rgb(&rgba[source_row_1 + source_x_1..]);
+            let rgb_00 = premultiplied_rgb(&rgba_premultiplied[source_row_0 + source_x_0..]);
+            let rgb_01 = premultiplied_rgb(&rgba_premultiplied[source_row_0 + source_x_1..]);
+            let rgb_10 = premultiplied_rgb(&rgba_premultiplied[source_row_1 + source_x_0..]);
+            let rgb_11 = premultiplied_rgb(&rgba_premultiplied[source_row_1 + source_x_1..]);
 
             nv12[luma_row_0 + x] = rgb_to_luma(rgb_00.0, rgb_00.1, rgb_00.2);
             nv12[luma_row_0 + x + 1] = rgb_to_luma(rgb_01.0, rgb_01.1, rgb_01.2);
@@ -974,16 +993,8 @@ const fn downscaled_source_coordinate(destination: usize) -> usize {
     (destination * 4 + 2) / 3
 }
 
-fn composited_rgb(rgba: &[u8]) -> (u8, u8, u8) {
-    let alpha = u32::from(rgba[3]);
-    if alpha == 255 {
-        return (rgba[0], rgba[1], rgba[2]);
-    }
-    (
-        ((u32::from(rgba[0]) * alpha + 127) / 255) as u8,
-        ((u32::from(rgba[1]) * alpha + 127) / 255) as u8,
-        ((u32::from(rgba[2]) * alpha + 127) / 255) as u8,
-    )
+fn premultiplied_rgb(rgba: &[u8]) -> (u8, u8, u8) {
+    (rgba[0], rgba[1], rgba[2])
 }
 
 fn rgb_to_luma(red: u8, green: u8, blue: u8) -> u8 {

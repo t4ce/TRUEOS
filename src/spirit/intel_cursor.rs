@@ -528,6 +528,46 @@ pub(super) fn spirit_cursor_rearm_needed(channel: u8) -> Result<bool, SpiritCurs
     Ok(contract_lost)
 }
 
+pub(super) fn with_stream_overlay_pipe_a_surflive<R>(
+    read: impl FnOnce(super::SpiritStreamOverlay<'_>) -> R,
+) -> Option<R> {
+    // The fixed test-rig stream source is D01, currently driven by display
+    // pipe A. Cursor ownership and registers are per-pipe on this platform.
+    const STREAM_PIPE: usize = 0;
+
+    let dev = crate::intel::claimed_device()?;
+    let state = SPIRIT_CURSOR_STATE.lock();
+    let pipe_state = &state.channels[STREAM_PIPE];
+    let regs = cursor_regs(STREAM_PIPE);
+    if crate::intel::mmio_read(dev, regs.ctl) & CURSOR_MODE_MASK == 0 {
+        return None;
+    }
+    let live = crate::intel::mmio_read(dev, regs.surf_live);
+    let surface = pipe_state
+        .surfaces
+        .iter()
+        .flatten()
+        .copied()
+        .find(|surface| {
+            u32::try_from(surface.gpu)
+                .ok()
+                .is_some_and(|gpu| gpu == live)
+        })?;
+
+    let (left, top) = cursor_pos_from_reg(crate::intel::mmio_read(dev, regs.pos));
+    crate::intel::dma_flush(surface.virt, surface.byte_len);
+    let bgra_premultiplied =
+        unsafe { core::slice::from_raw_parts(surface.virt.cast_const(), surface.byte_len) };
+    Some(read(super::SpiritStreamOverlay {
+        left,
+        top,
+        width: surface.width,
+        height: surface.height,
+        pitch_bytes: surface.pitch_bytes,
+        bgra_premultiplied,
+    }))
+}
+
 fn channel_index(channel: u8) -> Result<usize, SpiritCursorError> {
     let index = channel as usize;
     if index < SPIRIT_CHANNEL_COUNT {
@@ -707,6 +747,22 @@ fn cursor_pos_reg_value(x: i32, y: i32) -> u32 {
         value |= CURSOR_POS_Y_SIGN;
     }
     value | (x_magnitude & CURSOR_POS_X_MASK) | ((y_magnitude << 16) & CURSOR_POS_Y_MASK)
+}
+
+fn cursor_pos_from_reg(value: u32) -> (i32, i32) {
+    let x_magnitude = (value & CURSOR_POS_X_MASK) as i32;
+    let y_magnitude = ((value & CURSOR_POS_Y_MASK) >> 16) as i32;
+    let x = if value & CURSOR_POS_X_SIGN != 0 {
+        -x_magnitude
+    } else {
+        x_magnitude
+    };
+    let y = if value & CURSOR_POS_Y_SIGN != 0 {
+        -y_magnitude
+    } else {
+        y_magnitude
+    };
+    (x, y)
 }
 
 fn draw_solid_circle(surface: SpiritCursorSurface, color: u32) {

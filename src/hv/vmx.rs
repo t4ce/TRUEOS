@@ -278,13 +278,15 @@ pub fn reset_guest_extended_state(vm_id: u8) -> Result<(), &'static str> {
     let state = guest_extended_state_ptr(vm_id).ok_or("unsupported VM extended-state owner")?;
     unsafe {
         state.write(EMPTY_EXTENDED_STATE);
-        if crate::cpu::vmx_xsave_mask() == 0 {
-            // FXSAVE64 format: architectural x87 control word and MXCSR
-            // defaults. The remaining zero bytes are clean x87/MMX/XMM state.
-            let bytes = &mut (*state).0;
-            bytes[0..2].copy_from_slice(&0x037Fu16.to_le_bytes());
-            bytes[24..28].copy_from_slice(&0x1F80u32.to_le_bytes());
-        }
+        // Seed the architectural x87 control word and MXCSR defaults in the
+        // legacy region used by both FXSAVE and XSAVE. Standard XRSTOR loads
+        // MXCSR whenever SSE or AVX is requested even when XSTATE_BV is zero,
+        // so an all-zero XSAVE image would incorrectly unmask every SIMD
+        // floating-point exception. The remaining zero state and header
+        // describe clean x87/MMX/XMM/YMM state.
+        let bytes = &mut (*state).0;
+        bytes[0..2].copy_from_slice(&0x037Fu16.to_le_bytes());
+        bytes[24..28].copy_from_slice(&0x1F80u32.to_le_bytes());
     }
     Ok(())
 }
