@@ -18,6 +18,8 @@ const TEST_RIG_SCANOUT_WIDTH: u32 = 2560;
 const TEST_RIG_SCANOUT_HEIGHT: u32 = 1440;
 const ENCODE_WIDTH: usize = 1920;
 const ENCODE_HEIGHT: usize = 1088;
+const ACTIVE_HEIGHT: usize = 1080;
+const ACTIVE_TOP: usize = (ENCODE_HEIGHT - ACTIVE_HEIGHT) / 2;
 const ENCODE_LUMA_BYTES: usize = ENCODE_WIDTH * ENCODE_HEIGHT;
 const ENCODE_NV12_BYTES: usize = ENCODE_LUMA_BYTES * 3 / 2;
 const CADENCE_TOLERANCE_PERCENT: u64 = 5;
@@ -40,6 +42,14 @@ const _: () = {
     assert!(ENCODE_HEIGHT % 16 == 0);
     assert!(ENCODE_WIDTH <= TEST_RIG_SCANOUT_WIDTH as usize);
     assert!(ENCODE_HEIGHT <= TEST_RIG_SCANOUT_HEIGHT as usize);
+    assert!(TEST_RIG_SCANOUT_WIDTH as usize * 3 == ENCODE_WIDTH * 4);
+    assert!(TEST_RIG_SCANOUT_HEIGHT as usize * 3 == ACTIVE_HEIGHT * 4);
+    assert!(ACTIVE_TOP == 4);
+    assert!((ENCODE_HEIGHT - ACTIVE_HEIGHT - ACTIVE_TOP) == 4);
+    assert!(downscaled_source_coordinate(ENCODE_WIDTH - 1) == TEST_RIG_SCANOUT_WIDTH as usize - 1);
+    assert!(
+        downscaled_source_coordinate(ACTIVE_HEIGHT - 1) == TEST_RIG_SCANOUT_HEIGHT as usize - 1
+    );
 };
 
 #[derive(Default)]
@@ -195,13 +205,15 @@ pub(crate) async fn ui4_h264_encode_prepare_task(assigned_slot: u32) {
         .unwrap_or("unknown");
     PREPARE_WORKER_SLOT.store(worker_slot, Ordering::Release);
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: preparation service online carrier=background-worker assigned_slot={} worker_slot={} worker_kind={} pipeline=rgba-to-nv12 producer buffering=double slots={} encode_size={}x{} crop=top-left crop_origin=0,0\n",
+        "intel/media-encode: preparation service online carrier=background-worker assigned_slot={} worker_slot={} worker_kind={} pipeline=rgba-to-nv12 producer buffering=double slots={} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4\n",
         assigned_slot,
         worker_slot,
         worker_kind,
         PREPARE_SLOT_COUNT,
         ENCODE_WIDTH,
         ENCODE_HEIGHT,
+        ENCODE_WIDTH,
+        ACTIVE_HEIGHT,
     );
     if worker_slot != assigned_slot {
         crate::log_error!(target: "intel/media-encode";
@@ -261,7 +273,7 @@ fn prepare_scanout(mut job: PrepareJob) {
         Ok(capture) => {
             source_width = capture.width;
             source_height = capture.height;
-            if rgba_to_nv12_top_left_crop(
+            if rgba_to_nv12_full_frame_nearest_downscale(
                 capture.width,
                 capture.height,
                 capture.rgba.as_slice(),
@@ -271,7 +283,7 @@ fn prepare_scanout(mut job: PrepareJob) {
                 true
             } else {
                 crate::log_error!(target: "intel/media-encode";
-                    "intel/media-encode: live frame rejected session={} sequence={} stage=rgba-to-nv12 source={}x{} rgba_bytes={} filesystem_writes=0 software_fallback=0\n",
+                    "intel/media-encode: live frame rejected session={} sequence={} stage=rgba-to-nv12-full-frame-nearest-downscale source={}x{} rgba_bytes={} filesystem_writes=0 software_fallback=0\n",
                     job.session_id,
                     job.sequence,
                     capture.width,
@@ -760,12 +772,14 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             Ordering::Release,
         );
         crate::log_info!(target: "intel/media-encode";
-            "intel/media-encode: udp-live complete accepted={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} crop=top-left crop_origin=0,0 format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx hardware_encode=1 all_idr=1 protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_fnv1a32=0x{:08X} source_last_fnv1a32=0x{:08X} source_changes={} capture_convert_avg_us={} capture_convert_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=producer-consumer buffering=double prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
+            "intel/media-encode: udp-live complete accepted={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx hardware_encode=1 all_idr=1 protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_fnv1a32=0x{:08X} source_last_fnv1a32=0x{:08X} source_changes={} capture_convert_avg_us={} capture_convert_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=producer-consumer buffering=double prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
             accepted as u8,
             stats.source_width,
             stats.source_height,
             ENCODE_WIDTH,
             ENCODE_HEIGHT,
+            ENCODE_WIDTH,
+            ACTIVE_HEIGHT,
             crate::allcaps::media_encode::REALTIME_HZ,
             interval_millifps,
             udp_report.session_id,
@@ -884,7 +898,7 @@ fn encode_prepared_scanout(
     Some(annex_b)
 }
 
-fn rgba_to_nv12_top_left_crop(
+fn rgba_to_nv12_full_frame_nearest_downscale(
     source_width: u32,
     source_height: u32,
     rgba: &[u8],
@@ -903,18 +917,29 @@ fn rgba_to_nv12_top_left_crop(
         return false;
     }
 
-    for y in (0..ENCODE_HEIGHT).step_by(2) {
-        let source_row_0 = y * source_width_usize * 4;
-        let source_row_1 = (y + 1) * source_width_usize * 4;
-        let luma_row_0 = y * ENCODE_WIDTH;
-        let luma_row_1 = (y + 1) * ENCODE_WIDTH;
-        let uv_row = ENCODE_LUMA_BYTES + y / 2 * ENCODE_WIDTH;
+    nv12[..ACTIVE_TOP * ENCODE_WIDTH].fill(16);
+    nv12[(ACTIVE_TOP + ACTIVE_HEIGHT) * ENCODE_WIDTH..ENCODE_LUMA_BYTES].fill(16);
+    let active_uv_top = ACTIVE_TOP / 2;
+    let active_uv_height = ACTIVE_HEIGHT / 2;
+    nv12[ENCODE_LUMA_BYTES..ENCODE_LUMA_BYTES + active_uv_top * ENCODE_WIDTH].fill(128);
+    nv12[ENCODE_LUMA_BYTES + (active_uv_top + active_uv_height) * ENCODE_WIDTH..].fill(128);
+
+    for active_y in (0..ACTIVE_HEIGHT).step_by(2) {
+        let source_y_0 = downscaled_source_coordinate(active_y);
+        let source_y_1 = downscaled_source_coordinate(active_y + 1);
+        let source_row_0 = source_y_0 * source_width_usize * 4;
+        let source_row_1 = source_y_1 * source_width_usize * 4;
+        let encoded_y = ACTIVE_TOP + active_y;
+        let luma_row_0 = encoded_y * ENCODE_WIDTH;
+        let luma_row_1 = (encoded_y + 1) * ENCODE_WIDTH;
+        let uv_row = ENCODE_LUMA_BYTES + encoded_y / 2 * ENCODE_WIDTH;
         for x in (0..ENCODE_WIDTH).step_by(2) {
-            let rgba_x = x * 4;
-            let rgb_00 = composited_rgb(&rgba[source_row_0 + rgba_x..]);
-            let rgb_01 = composited_rgb(&rgba[source_row_0 + rgba_x + 4..]);
-            let rgb_10 = composited_rgb(&rgba[source_row_1 + rgba_x..]);
-            let rgb_11 = composited_rgb(&rgba[source_row_1 + rgba_x + 4..]);
+            let source_x_0 = downscaled_source_coordinate(x) * 4;
+            let source_x_1 = downscaled_source_coordinate(x + 1) * 4;
+            let rgb_00 = composited_rgb(&rgba[source_row_0 + source_x_0..]);
+            let rgb_01 = composited_rgb(&rgba[source_row_0 + source_x_1..]);
+            let rgb_10 = composited_rgb(&rgba[source_row_1 + source_x_0..]);
+            let rgb_11 = composited_rgb(&rgba[source_row_1 + source_x_1..]);
 
             nv12[luma_row_0 + x] = rgb_to_luma(rgb_00.0, rgb_00.1, rgb_00.2);
             nv12[luma_row_0 + x + 1] = rgb_to_luma(rgb_01.0, rgb_01.1, rgb_01.2);
@@ -944,8 +969,16 @@ fn rgba_to_nv12_top_left_crop(
     true
 }
 
+#[inline(always)]
+const fn downscaled_source_coordinate(destination: usize) -> usize {
+    (destination * 4 + 2) / 3
+}
+
 fn composited_rgb(rgba: &[u8]) -> (u8, u8, u8) {
     let alpha = u32::from(rgba[3]);
+    if alpha == 255 {
+        return (rgba[0], rgba[1], rgba[2]);
+    }
     (
         ((u32::from(rgba[0]) * alpha + 127) / 255) as u8,
         ((u32::from(rgba[1]) * alpha + 127) / 255) as u8,

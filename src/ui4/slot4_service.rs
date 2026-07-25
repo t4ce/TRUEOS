@@ -8,7 +8,7 @@
 use embassy_time::{Duration, Instant, with_timeout};
 use spin::Mutex;
 
-const SLOT4_RECT_CAPACITY: usize = 512;
+const SLOT4_RECT_CAPACITY: usize = 3_072;
 const SOFTWARE_CURSOR_STROKE_PX: u32 = 5;
 const SOFTWARE_CURSOR_LONG_PX: u32 = 27;
 // Nearest odd pixel length to 75% keeps the two arms symmetric around the
@@ -50,7 +50,7 @@ impl Slot4State {
 pub(crate) async fn ui4_slot4_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
     crate::log_info!(target: "ui4/slot4";
-        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+per-cursor-selected-frame-strips+selection-outline+maximize-preview+context-menu/per-cursor-color cursor-set=default+loading+resize-horizontal+resize-vertical+resize-diagonal+app-owned scope=selected-frame/per-source press=default-contract-25-percent hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=changed-pixels/disjoint gpu_submits=0 synthetic-motion=off\n",
+        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+per-cursor-selected-frame-strips+selection-outline+maximize-preview+context-menu/legacy-rightclick+requested-one-shot/per-cursor-color cursor-set=default+loading+resize-horizontal+resize-vertical+resize-diagonal+app-owned scope=selected-frame/per-source press=default-contract-25-percent hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=changed-pixels/disjoint gpu_submits=0 synthetic-motion=off\n",
         super::INTERACTION_CADENCE_HZ,
     );
 
@@ -381,6 +381,10 @@ fn software_cursor_rects() -> Slot4Rects {
         }
     }
 
+    if let Some(menu) = super::context_menu::visual() {
+        push_requested_context_menu(&mut rects, &menu, screen_w, screen_h);
+    }
+
     for visual in &visuals {
         let x = visual.x;
         let y = visual.y;
@@ -412,6 +416,157 @@ fn software_cursor_rects() -> Slot4Rects {
     }
 
     rects
+}
+
+fn push_requested_context_menu(
+    rects: &mut Slot4Rects,
+    menu: &super::context_menu::ContextMenuVisual,
+    screen_w: u32,
+    screen_h: u32,
+) {
+    use crate::graphics::primitives::Rgba8;
+
+    let menu_rect =
+        super::context_menu::menu_rect(menu.anchor, menu.entries.len(), screen_w, screen_h);
+    push_overlay_rect(
+        rects,
+        menu_rect.x,
+        menu_rect.y,
+        menu_rect.width,
+        menu_rect.height,
+        Rgba8::new(22, 25, 33, 245),
+    );
+    push_rect_border(rects, menu_rect, 2, menu.color);
+
+    for (index, entry) in menu.entries.iter().enumerate() {
+        let Some(row) = super::context_menu::entry_rect(menu_rect, index) else {
+            break;
+        };
+        if menu.hovered == Some(index) && entry.enabled {
+            push_overlay_rect(
+                rects,
+                row.x,
+                row.y,
+                row.width,
+                row.height,
+                Rgba8::new(menu.color.r, menu.color.g, menu.color.b, 72),
+            );
+        }
+        if index != 0 {
+            push_overlay_rect(
+                rects,
+                row.x.saturating_add(6),
+                row.y,
+                row.width.saturating_sub(12),
+                1,
+                Rgba8::new(180, 188, 204, 105),
+            );
+        }
+        let text_color = if entry.enabled {
+            Rgba8::new(236, 240, 248, 245)
+        } else {
+            Rgba8::new(125, 132, 146, 210)
+        };
+        push_tiny_menu_text(
+            rects,
+            row.x
+                .saturating_add(super::context_menu::MENU_TEXT_INSET_PX),
+            row.y.saturating_add(7),
+            entry.label.as_str(),
+            text_color,
+        );
+    }
+}
+
+fn push_tiny_menu_text(
+    rects: &mut Slot4Rects,
+    x: u32,
+    y: u32,
+    text: &str,
+    color: crate::graphics::primitives::Rgba8,
+) {
+    const SCALE: u32 = 2;
+    const ADVANCE: u32 = 8;
+
+    for (character_index, ch) in text
+        .chars()
+        .take(super::context_menu::MENU_RENDER_LABEL_CHARS)
+        .enumerate()
+    {
+        let glyph = tiny_menu_glyph(ch);
+        let glyph_x = x.saturating_add((character_index as u32).saturating_mul(ADVANCE));
+        for (row, bits) in glyph.into_iter().enumerate() {
+            let mut column = 0u32;
+            while column < 3 {
+                if bits & (1 << (2 - column)) == 0 {
+                    column += 1;
+                    continue;
+                }
+                let start = column;
+                while column < 3 && bits & (1 << (2 - column)) != 0 {
+                    column += 1;
+                }
+                push_overlay_rect(
+                    rects,
+                    glyph_x.saturating_add(start.saturating_mul(SCALE)),
+                    y.saturating_add((row as u32).saturating_mul(SCALE)),
+                    column.saturating_sub(start).saturating_mul(SCALE),
+                    SCALE,
+                    color,
+                );
+            }
+        }
+    }
+}
+
+fn tiny_menu_glyph(ch: char) -> [u8; 5] {
+    match ch.to_ascii_uppercase() {
+        'A' => [0b111, 0b101, 0b111, 0b101, 0b101],
+        'B' => [0b110, 0b101, 0b110, 0b101, 0b110],
+        'C' => [0b111, 0b100, 0b100, 0b100, 0b111],
+        'D' => [0b110, 0b101, 0b101, 0b101, 0b110],
+        'E' => [0b111, 0b100, 0b110, 0b100, 0b111],
+        'F' => [0b111, 0b100, 0b110, 0b100, 0b100],
+        'G' => [0b111, 0b100, 0b101, 0b101, 0b111],
+        'H' => [0b101, 0b101, 0b111, 0b101, 0b101],
+        'I' => [0b111, 0b010, 0b010, 0b010, 0b111],
+        'J' => [0b001, 0b001, 0b001, 0b101, 0b010],
+        'K' => [0b101, 0b101, 0b110, 0b101, 0b101],
+        'L' => [0b100, 0b100, 0b100, 0b100, 0b111],
+        'M' => [0b101, 0b111, 0b111, 0b101, 0b101],
+        'N' => [0b101, 0b111, 0b111, 0b111, 0b101],
+        'O' => [0b111, 0b101, 0b101, 0b101, 0b111],
+        'P' => [0b111, 0b101, 0b111, 0b100, 0b100],
+        'Q' => [0b111, 0b101, 0b101, 0b111, 0b001],
+        'R' => [0b111, 0b101, 0b111, 0b110, 0b101],
+        'S' => [0b111, 0b100, 0b111, 0b001, 0b111],
+        'T' => [0b111, 0b010, 0b010, 0b010, 0b010],
+        'U' => [0b101, 0b101, 0b101, 0b101, 0b111],
+        'V' => [0b101, 0b101, 0b101, 0b101, 0b010],
+        'W' => [0b101, 0b101, 0b111, 0b111, 0b101],
+        'X' => [0b101, 0b101, 0b010, 0b101, 0b101],
+        'Y' => [0b101, 0b101, 0b010, 0b010, 0b010],
+        'Z' => [0b111, 0b001, 0b010, 0b100, 0b111],
+        '0' => [0b111, 0b101, 0b101, 0b101, 0b111],
+        '1' => [0b010, 0b110, 0b010, 0b010, 0b111],
+        '2' => [0b111, 0b001, 0b111, 0b100, 0b111],
+        '3' => [0b111, 0b001, 0b111, 0b001, 0b111],
+        '4' => [0b101, 0b101, 0b111, 0b001, 0b001],
+        '5' => [0b111, 0b100, 0b111, 0b001, 0b111],
+        '6' => [0b111, 0b100, 0b111, 0b101, 0b111],
+        '7' => [0b111, 0b001, 0b010, 0b010, 0b010],
+        '8' => [0b111, 0b101, 0b111, 0b101, 0b111],
+        '9' => [0b111, 0b101, 0b111, 0b001, 0b111],
+        '-' => [0b000, 0b000, 0b111, 0b000, 0b000],
+        '_' => [0b000, 0b000, 0b000, 0b000, 0b111],
+        '.' => [0b000, 0b000, 0b000, 0b000, 0b010],
+        ':' => [0b000, 0b010, 0b000, 0b010, 0b000],
+        '/' => [0b001, 0b001, 0b010, 0b100, 0b100],
+        '(' => [0b010, 0b100, 0b100, 0b100, 0b010],
+        ')' => [0b010, 0b001, 0b001, 0b001, 0b010],
+        ' ' => [0; 5],
+        _ => [0b111, 0b001, 0b010, 0b000, 0b010],
+    }
 }
 
 /// Draw a centered cross in the interior and deliberately morph it into an

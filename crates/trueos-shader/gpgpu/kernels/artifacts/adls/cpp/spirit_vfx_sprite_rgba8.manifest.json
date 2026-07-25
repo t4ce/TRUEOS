@@ -388,14 +388,9 @@
         "size_bytes": 1334
       },
       {
-        "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.cl",
-        "sha256": "856034e291144f09637bbbd39d35732089fbdaf6e4ded67eba5eea1a8741e508",
-        "size_bytes": 41771
-      },
-      {
         "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.clcpp",
-        "sha256": "3d73f892b83be47e7091a7291e79ae45bbe153a080b439832a2e7cdd8b2701cb",
-        "size_bytes": 409
+        "sha256": "eab3572ae9bf8048b00131cdd6d2af747ed3776be7f267e280f6d9f08a89bf86",
+        "size_bytes": 41719
       }
     ],
     "language": "C++ for OpenCL",

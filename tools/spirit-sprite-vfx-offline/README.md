@@ -1,18 +1,18 @@
-# Spirit Sprite shader OpenCL comparison grid
+# Spirit production Sprite VFX preview
 
 This folder maps the complete `preview.html` **3 · Sprite shader** collection
-through the retained `spirit_vfx_sprite_rgba8.cl` reference or the production
-C++ SPIR-V. It is not a CPU approximation and contains no duplicate shader
-math.
+through the maintained production C++ SPIR-V. It is not a CPU approximation,
+contains no duplicate shader math, and has no legacy OpenCL-C fallback.
 
 The live renderer:
 
 1. extracts all seven frames of Lilly's fixed `idle.crossed.soft_blink` asset
    from `tools/Lilly.7z`;
-2. compiles the production OpenCL source on the host GPU;
+2. loads the checked-in C++ SPIR-V on the host GPU;
 3. dispatches stable Sprite shader IDs 0 through 15 with their exact demo
    defaults and colors;
-4. leaves background ID zero in every control page, so the sprite kernel
+4. uses Spirit's live fixed Lilly scale `0.65` and leaves background ID zero
+   in every control page, so the sprite kernel
    starts from transparent pixels and no procedural-background pass runs;
 5. animates all sixteen premultiplied 256x256 results beside a compact control
    panel in one centered, borderless 1344x1024 ARGB window at Spirit's 60 Hz
@@ -42,14 +42,6 @@ time or output path when comparing temporal modes:
 ```sh
 make -C tools/spirit-sprite-vfx-offline render \
   TIME=0.75 OUTPUT=bld/spirit-sprite-vfx-grid-075.png
-```
-
-The published C++ repass can be replayed directly as SPIR-V on the Intel host
-driver, without recompiling the OpenCL C source:
-
-```sh
-SPIRIT_VFX_SPRITE_SPV=crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.spv \
-make -C tools/spirit-sprite-vfx-offline render
 ```
 
 The dependencies are an OpenCL ICD loader/runtime, `libpng`, `7z`,

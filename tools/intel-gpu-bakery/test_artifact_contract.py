@@ -264,7 +264,7 @@ class ArtifactContractTests(unittest.TestCase):
         serialized = json.dumps(manifest, sort_keys=True)
         self.assertNotIn(str(REPO_ROOT.parent), serialized)
 
-    def test_spirit_cpp_repass_has_two_reviewed_abi_twins(self) -> None:
+    def test_spirit_cpp_sources_are_self_contained_reviewed_abi_twins(self) -> None:
         root = ARTIFACT_ROOT / "cpp"
         expected = {
             "spirit_vfx_background_rgba8": (2, 64),
@@ -284,7 +284,7 @@ class ArtifactContractTests(unittest.TestCase):
                     f"crates/trueos-shader/gpgpu/kernels/{stem}.clcpp",
                     input_paths,
                 )
-                self.assertIn(
+                self.assertNotIn(
                     f"crates/trueos-shader/gpgpu/kernels/{stem}.cl",
                     input_paths,
                 )

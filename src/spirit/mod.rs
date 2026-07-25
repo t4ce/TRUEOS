@@ -17,6 +17,7 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
+mod ai_emotion_adapter;
 mod intel_cursor;
 mod lilly;
 mod lilly_cursor;
@@ -27,6 +28,9 @@ mod response_window;
 pub(crate) mod spirit_vfx;
 mod window_selection;
 
+pub(crate) use ai_emotion_adapter::{
+    LUMEN_AI_EMOTION_ENABLED, LUMEN_SYSTEM_PROMPT, adapt_reply as adapt_lumen_reply,
+};
 #[allow(unused_imports)]
 pub(crate) use lilly_protocol::{LillyEmotion, enqueue_emotion_words, enqueue_emotions};
 pub(crate) use response_window::{enqueue_reasoning_response, spirit_response_window_service_task};
@@ -544,7 +548,6 @@ fn submit_spirit_vfx_frame(
         clock_seconds_of_day: snapshot.clock_seconds_of_day,
         background_phase_override: snapshot.background_phase_override,
         background_opacity: snapshot.opacity,
-        background_scale: snapshot.background_scale,
         background_speed: snapshot.speed,
         background_intensity: snapshot.intensity,
         background_color_a: snapshot.color_a,

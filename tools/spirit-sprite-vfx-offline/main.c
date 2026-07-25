@@ -67,12 +67,6 @@ extern cl_command_queue clCreateCommandQueue(
     cl_device_id,
     cl_command_queue_properties,
     cl_int *);
-extern cl_program clCreateProgramWithSource(
-    cl_context,
-    cl_uint,
-    const char **,
-    const size_t *,
-    cl_int *);
 extern cl_program clCreateProgramWithIL(
     cl_context,
     const void *,
@@ -297,8 +291,9 @@ static const RuntimeControls DEFAULT_RUNTIME_CONTROLS = {
 static const char *const LILLY_ASSET_KEY = "idle.crossed.soft_blink";
 static const char *const LILLY_ASSET_DIRECTORY =
     "Lilly/Idle/Crossed-Arms/idle-1_frames";
-static const char *const SPRITE_SOURCE =
-    "crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.cl";
+static const char *const SPRITE_ARTIFACT =
+    "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/"
+    "spirit_vfx_sprite_rgba8.spv";
 
 static void die(const char *message)
 {
@@ -484,30 +479,19 @@ static cl_platform_id choose_platform(void)
 static cl_program build_program(
     cl_context context,
     cl_device_id device,
-    const char *source_path,
-    const char *spirv_path)
+    const char *artifact_path)
 {
-    size_t source_length = 0;
-    char *source = read_text_file(
-        spirv_path != NULL ? spirv_path : source_path,
-        &source_length);
+    size_t artifact_length = 0;
+    char *artifact = read_text_file(artifact_path, &artifact_length);
     cl_int error = CL_SUCCESS;
-    cl_program program = NULL;
-    if (spirv_path != NULL) {
-        program = clCreateProgramWithIL(
-            context, source, source_length, &error);
-        check_cl(error, "clCreateProgramWithIL");
-    } else {
-        const char *sources[] = {source};
-        program = clCreateProgramWithSource(
-            context, 1, sources, &source_length, &error);
-        check_cl(error, "clCreateProgramWithSource");
-    }
+    cl_program program =
+        clCreateProgramWithIL(context, artifact, artifact_length, &error);
+    check_cl(error, "clCreateProgramWithIL");
     error = clBuildProgram(
         program,
         1,
         &device,
-        spirv_path != NULL ? NULL : "-cl-std=CL1.2",
+        NULL,
         NULL,
         NULL);
     if (error != CL_SUCCESS) {
@@ -528,7 +512,7 @@ static cl_program build_program(
         }
         check_cl(error, "clBuildProgram");
     }
-    free(source);
+    free(artifact);
     return program;
 }
 
@@ -582,7 +566,7 @@ static void fill_control(
     control[2] = frame;
     control[3] = 0;
     control[4] = float_bits((float)frame * (1.0f / 60.0f));
-    control[13] = float_bits(0.5f);
+    control[13] = float_bits(0.65f);
     control[14] = float_bits(3.14159265359f);
     control[15] = float_bits(0.02f);
     control[16] = 0;
@@ -760,7 +744,7 @@ static SpiritPanel create_panel(void)
     size_hints.max_width = PANEL_WIDTH;
     size_hints.max_height = PANEL_HEIGHT;
     XSetWMNormalHints(panel.display, panel.window, &size_hints);
-    XStoreName(panel.display, panel.window, "Spirit Sprite VFX OpenCL Grid");
+    XStoreName(panel.display, panel.window, "Spirit Production Sprite VFX Preview");
     panel.wm_delete = XInternAtom(panel.display, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(panel.display, panel.window, &panel.wm_delete, 1);
 
@@ -1396,9 +1380,8 @@ int main(int argc, char **argv)
     check_cl(error, "clCreateContext");
     cl_command_queue queue = clCreateCommandQueue(context, device, 0, &error);
     check_cl(error, "clCreateCommandQueue");
-    const char *sprite_spirv = getenv("SPIRIT_VFX_SPRITE_SPV");
     cl_program program =
-        build_program(context, device, SPRITE_SOURCE, sprite_spirv);
+        build_program(context, device, SPRITE_ARTIFACT);
     cl_kernel kernel =
         clCreateKernel(program, "spirit_vfx_sprite_rgba8", &error);
     check_cl(error, "clCreateKernel");
@@ -1453,9 +1436,7 @@ int main(int argc, char **argv)
 
     printf("  platform: %s\n", platform_name);
     printf("  device:   %s\n", device_name);
-    printf(
-        "  frontend: %s\n",
-        sprite_spirv != NULL ? "C++ SPIR-V" : "OpenCL C source");
+    printf("  artifact: %s\n", SPRITE_ARTIFACT);
     if (panel_mode) {
         run_panel(
             queue,
@@ -1487,7 +1468,7 @@ int main(int argc, char **argv)
         check_cl(clFinish(queue), "clFinish");
         write_grid(output, cells);
 
-        printf("Spirit Sprite shader comparison grid complete\n");
+        printf("Spirit production Sprite VFX preview complete\n");
         printf(
             "  asset:    %s/frame_01.png (%ux%u RGBA8)\n",
             LILLY_ASSET_DIRECTORY,
@@ -1504,7 +1485,7 @@ int main(int argc, char **argv)
         printf("\n");
         printf(
             "  dispatch: sixteen 256x256 cells, local 16x1, "
-            "selected GPU program\n");
+            "production GPU artifact\n");
         printf("  time:     %.3f s\n", time);
         printf("  output:   %s\n", output);
     }

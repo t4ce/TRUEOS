@@ -141,9 +141,9 @@ points validate magic/version and their own surface dimensions.
 
 `tools/spirit-vfx-offline` renders all ten procedural backgrounds.
 `tools/spirit-sprite-vfx-offline` independently renders the complete 16-mode
-Sprite shader set as a 4x4 grid. Both tools can compile the OpenCL C reference
-or dispatch the published C++ SPIR-V through `clCreateProgramWithIL` on a host
-GPU; neither carries a CPU or duplicate shader implementation.
+Sprite shader set as a 4x4 grid. Both tools dispatch only the published C++
+SPIR-V through `clCreateProgramWithIL` on a host GPU; neither carries a CPU,
+legacy OpenCL-C, or duplicate shader implementation.
 
 ## Baked ADL-S artifacts
 

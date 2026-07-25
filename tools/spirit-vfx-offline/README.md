@@ -1,35 +1,30 @@
-# Spirit VFX offline OpenCL comparison grid
+# Spirit production VFX preview
 
-This userspace program plays the production Spirit VFX shaders without booting
-TRUEOS. It is a GPU replay, not a CPU rewrite:
+This host tool previews the two maintained Spirit C++ for OpenCL artifacts
+without booting TRUEOS. It contains no shader implementation and has no legacy
+OpenCL-C fallback:
 
-1. `7z` extracts all seven frames of the fixed `idle.crossed.soft_blink` asset
-   directly from `tools/Lilly.7z`.
-2. By default, the host OpenCL compiler consumes the retained
-   `spirit_vfx_background_rgba8.cl` and `spirit_vfx_sprite_rgba8.cl` reference
-   sources. Environment-selected C++ SPIR-V exercises the production repass.
-3. Every display tick renders the ten selected procedural backgrounds in
-   stable ID order, 2 through 11. ID 11 is the C++ `MagicTimeCircle`; its cell
-   also enables `AuraBloom`, matching Spirit's live Idle pairing.
-4. Each cell uses the kernel's `256x256`, local `16x1` dispatch and exact
-   33-dword control page. Dword 4 remains smooth 60 Hz animation time for the
-   sprite pass; append-only dword 32 carries clock seconds for
-   `MagicTimeCircle`.
-5. Shader time advances at Spirit's 60 Hz target while Lilly independently
-   advances one asset frame every 110 ms, exactly as recorded in
-   `tools/Lilly.catalog`.
-6. One centered, borderless 1280x512 ARGB window presents the ten
-   premultiplied cursor surfaces in a five-column grid. Escape or the window
-   close action exits the complete grid.
-7. Background opacity is fixed at `1.00` and each effect retains its existing
-   scale. The only runtime values are the HTML-matched `Speed` and `Intensity`
-   controls, shared by all nine cells:
-   - Left/Right decreases/increases Speed by `0.01` in `0.00..4.00`.
-   - Down/Up decreases/increases Intensity by `0.01` in `0.10..2.50`.
-   Both start at `1.00`; each accepted key step is printed to the terminal.
+- background:
+  `artifacts/adls/cpp/spirit_vfx_background_rgba8.spv`
+- sprite:
+  `artifacts/adls/cpp/spirit_vfx_sprite_rgba8.spv`
 
-The tool prefers an Intel GPU platform when one is installed, but it can use
-another conforming GPU OpenCL platform.
+The Intel host OpenCL runtime consumes those checked-in SPIR-V images through
+`clCreateProgramWithIL`. TRUEOS consumes the sibling audited Zebin images
+generated from the same C++ sources. Consequently the preview and bare-metal
+paths share the shader source, mode IDs, argument ABI, and control-page ABI;
+only their submission environments differ.
+
+The panel renders background IDs 2 through 11 in a five-column, two-row grid
+at 60 Hz. Every cell uses the live fixed 256x256 allocation, Lilly scale
+`0.65`, background presentation scale `1.171875`, and global animated
+AuraBloom sprite layer. Opacity remains `1.00` so every background can be
+reviewed. Left/Right adjusts the shared background Speed and Down/Up adjusts
+Intensity, both in `0.01` steps.
+
+Lilly uses all seven frames of `idle.crossed.soft_blink`, extracted directly
+from `tools/Lilly.7z`, and advances every 110 ms independently of shader time.
+Escape or the window close action exits.
 
 From the repository root:
 
@@ -37,33 +32,15 @@ From the repository root:
 make -C tools/spirit-vfx-offline run
 ```
 
-A static PNG of the same ten-cell grid remains available for comparisons. Its
-`MagicTimeCircle` cell is fixed at `10:09:42 UTC` for reproducible review:
+A static PNG of the same production-artifact grid is also available.
+`MagicTimeCircle` is fixed at `10:09:42 UTC` unless an explicit
+seconds-of-day value is supplied:
 
 ```sh
 make -C tools/spirit-vfx-offline render TIME=2.25
-```
-
-The executable also accepts an explicit seconds-of-day value after the normal
-animation time, which makes adjacent one-second clock steps directly
-comparable:
-
-```sh
-bld/tools/spirit_vfx_offline --render-grid bld/magic-time-42.png 1.5 36582
 bld/tools/spirit_vfx_offline --render-grid bld/magic-time-43.png 1.5 36583
 ```
 
-Set `SPIRIT_VFX_BACKGROUND_SPV` and `SPIRIT_VFX_SPRITE_SPV` to replay the
-published C++ for OpenCL artifacts through `clCreateProgramWithIL` instead of
-compiling the legacy sources. This is the visual-review lane used for the
-Spirit C++ repass:
-
-```sh
-SPIRIT_VFX_BACKGROUND_SPV=crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.spv \
-SPIRIT_VFX_SPRITE_SPV=crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.spv \
-make -C tools/spirit-vfx-offline render
-```
-
-The host dependencies are an OpenCL ICD loader/runtime, `libpng`, `7z`, and
-X11/Xrender (Xwayland works). The program carries the small subset of OpenCL
-1.2 declarations it uses, so a separate OpenCL header package is not required.
+The host dependencies are an OpenCL ICD loader/runtime with SPIR-V IL support,
+`libpng`, `7z`, X11, and Xrender. The program carries the small subset of
+OpenCL declarations it needs, so OpenCL development headers are not required.

@@ -2674,8 +2674,12 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
         let released = crate::ui4::release_owner_resources(crate::ui4::WindowOwner::Vm(vm_id));
         if released != crate::ui4::OwnerReleaseSummary::default() {
             hvlogf(format_args!(
-                "hv: vm{} lifecycle: ui4 owner release surfaces={} input_routes={} input_events={}",
-                vm_id, released.surfaces, released.input_routes, released.input_events
+                "hv: vm{} lifecycle: ui4 owner release surfaces={} input_routes={} input_events={} context_menus={}",
+                vm_id,
+                released.surfaces,
+                released.input_routes,
+                released.input_events,
+                released.context_menus,
             ));
         }
     }

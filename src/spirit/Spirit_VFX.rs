@@ -55,9 +55,8 @@ pub(crate) const ALPHA_CUTOFF_CONTROL: SpiritVfxSliderSpec =
 pub(crate) const EDGE_FADE_CONTROL: SpiritVfxSliderSpec =
     slider("Edge feather", 0.0, 16.0, 0.5, 12.0, " px");
 
-pub(crate) const ALPHA_BACKGROUND_CONTROLS: [SpiritVfxSliderSpec; 4] = [
+const ALPHA_BACKGROUND_TRANSITION_CONTROLS: [SpiritVfxSliderSpec; 3] = [
     slider("Opacity", 0.0, 1.0, 0.01, 0.0, ""),
-    slider("Scale", 0.25, 3.0, 0.01, 1.0, "x"),
     slider("Speed", 0.0, 4.0, 0.01, 1.0, "x"),
     slider("Intensity", 0.1, 2.5, 0.01, 1.0, "x"),
 ];
@@ -427,40 +426,40 @@ impl SpiritVfxBackgroundEffect {
         }
     }
 
-    pub(crate) const fn demo_style(self) -> (f32, SpiritVfxRgb8, SpiritVfxRgb8) {
+    pub(crate) const fn demo_colors(self) -> (SpiritVfxRgb8, SpiritVfxRgb8) {
         match self {
             Self::Transparent => {
-                (1.0, SpiritVfxRgb8::rgb(0x6F, 0x4C, 0xFF), SpiritVfxRgb8::rgb(0x4D, 0xE7, 0xFF))
+                (SpiritVfxRgb8::rgb(0x6F, 0x4C, 0xFF), SpiritVfxRgb8::rgb(0x4D, 0xE7, 0xFF))
             }
             Self::EnergyRing => {
-                (1.0, SpiritVfxRgb8::rgb(0xFF, 0x4D, 0xB8), SpiritVfxRgb8::rgb(0x60, 0xED, 0xFF))
+                (SpiritVfxRgb8::rgb(0xFF, 0x4D, 0xB8), SpiritVfxRgb8::rgb(0x60, 0xED, 0xFF))
             }
             Self::MagicCircle => {
-                (1.0, SpiritVfxRgb8::rgb(0x8D, 0x68, 0xFF), SpiritVfxRgb8::rgb(0x6C, 0xF2, 0xFF))
+                (SpiritVfxRgb8::rgb(0x8D, 0x68, 0xFF), SpiritVfxRgb8::rgb(0x6C, 0xF2, 0xFF))
             }
             Self::NebulaSmoke => {
-                (1.1, SpiritVfxRgb8::rgb(0x88, 0x3D, 0xFF), SpiritVfxRgb8::rgb(0x30, 0xC8, 0xFF))
+                (SpiritVfxRgb8::rgb(0x88, 0x3D, 0xFF), SpiritVfxRgb8::rgb(0x30, 0xC8, 0xFF))
             }
             Self::CyberGrid => {
-                (1.1, SpiritVfxRgb8::rgb(0x7F, 0x5D, 0xFF), SpiritVfxRgb8::rgb(0x42, 0xEA, 0xFF))
+                (SpiritVfxRgb8::rgb(0x7F, 0x5D, 0xFF), SpiritVfxRgb8::rgb(0x42, 0xEA, 0xFF))
             }
             Self::PortalVortex => {
-                (1.0, SpiritVfxRgb8::rgb(0xF1, 0x5F, 0xFF), SpiritVfxRgb8::rgb(0x61, 0xEA, 0xFF))
+                (SpiritVfxRgb8::rgb(0xF1, 0x5F, 0xFF), SpiritVfxRgb8::rgb(0x61, 0xEA, 0xFF))
             }
             Self::SpeedLines => {
-                (1.0, SpiritVfxRgb8::rgb(0xFF, 0x4F, 0x8D), SpiritVfxRgb8::rgb(0xFF, 0xE8, 0x6B))
+                (SpiritVfxRgb8::rgb(0xFF, 0x4F, 0x8D), SpiritVfxRgb8::rgb(0xFF, 0xE8, 0x6B))
             }
             Self::BokehField => {
-                (1.0, SpiritVfxRgb8::rgb(0xFF, 0x8E, 0xDC), SpiritVfxRgb8::rgb(0x75, 0xEA, 0xFF))
+                (SpiritVfxRgb8::rgb(0xFF, 0x8E, 0xDC), SpiritVfxRgb8::rgb(0x75, 0xEA, 0xFF))
             }
             Self::WaterRipples => {
-                (1.0, SpiritVfxRgb8::rgb(0x4F, 0x8D, 0xFF), SpiritVfxRgb8::rgb(0x6E, 0xFF, 0xE4))
+                (SpiritVfxRgb8::rgb(0x4F, 0x8D, 0xFF), SpiritVfxRgb8::rgb(0x6E, 0xFF, 0xE4))
             }
             Self::PixelBurst => {
-                (1.0, SpiritVfxRgb8::rgb(0xB0, 0x6C, 0xFF), SpiritVfxRgb8::rgb(0x5D, 0xEE, 0xFF))
+                (SpiritVfxRgb8::rgb(0xB0, 0x6C, 0xFF), SpiritVfxRgb8::rgb(0x5D, 0xEE, 0xFF))
             }
             Self::MagicTimeCircle => {
-                (1.0, SpiritVfxRgb8::rgb(0x8D, 0x68, 0xFF), SpiritVfxRgb8::rgb(0x6C, 0xF2, 0xFF))
+                (SpiritVfxRgb8::rgb(0x8D, 0x68, 0xFF), SpiritVfxRgb8::rgb(0x6C, 0xF2, 0xFF))
             }
         }
     }
@@ -622,7 +621,6 @@ impl Default for SpiritVfxSpriteShader {
 pub(crate) struct SpiritVfxAlphaBackground {
     pub(crate) effect: SpiritVfxBackgroundEffect,
     pub(crate) opacity: f32,
-    pub(crate) scale: f32,
     pub(crate) speed: f32,
     pub(crate) intensity: f32,
     pub(crate) bg_color_a: SpiritVfxRgb8,
@@ -633,7 +631,6 @@ impl SpiritVfxAlphaBackground {
     pub(crate) const NEBULA_SMOKE: Self = Self {
         effect: SpiritVfxBackgroundEffect::NebulaSmoke,
         opacity: 0.58,
-        scale: 1.1,
         speed: 0.45,
         intensity: 1.2,
         bg_color_a: SpiritVfxRgb8::rgb(0x88, 0x3D, 0xFF),
@@ -645,7 +642,6 @@ impl SpiritVfxAlphaBackground {
     const MOVE_PORTAL: Self = Self {
         effect: SpiritVfxBackgroundEffect::PortalVortex,
         opacity: 0.70,
-        scale: 1.0,
         speed: 2.0,
         intensity: 2.0,
         bg_color_a: SpiritVfxRgb8::rgb(0xF1, 0x5F, 0xFF),
@@ -658,7 +654,6 @@ impl Default for SpiritVfxAlphaBackground {
         Self {
             effect: SpiritVfxBackgroundEffect::Transparent,
             opacity: 0.0,
-            scale: 1.0,
             speed: 1.0,
             intensity: 1.0,
             bg_color_a: SpiritVfxRgb8::rgb(0x6F, 0x4C, 0xFF),
@@ -744,7 +739,6 @@ impl SpiritVfxControlPanel {
 
         let background = &mut self.alpha_background;
         background.opacity = bounded(background.opacity, 0.0, 1.0, 0.0);
-        background.scale = bounded(background.scale, 0.25, 3.0, 1.0);
         background.speed = bounded(background.speed, 0.0, 4.0, 1.0);
         background.intensity = bounded(background.intensity, 0.1, 2.5, 1.0);
 
@@ -882,7 +876,7 @@ impl SpiritVfxUiConfig {
                 name: String::from(background.effect.ui_name()),
                 params: [
                     background.opacity,
-                    background.scale,
+                    SPIRIT_BACKGROUND_PRESENT_SCALE,
                     background.speed,
                     background.intensity,
                 ],
@@ -959,7 +953,8 @@ impl SpiritVfxUiConfig {
             alpha_background: SpiritVfxAlphaBackground {
                 effect: background_effect,
                 opacity: self.background.params[0],
-                scale: self.background.params[1],
+                // Keep accepting the version-1 four-dword JSON shape, but
+                // scale is architectural and the incoming slot is ignored.
                 speed: self.background.params[2],
                 intensity: self.background.params[3],
                 bg_color_a: parse_css_color(&self.background.color_a)?,
@@ -1004,7 +999,6 @@ pub(super) struct SpiritVfxGpuSnapshot {
     /// visible. `None` retains the preview-compatible `time * speed` path.
     pub(super) background_phase_override: Option<f32>,
     pub(super) opacity: f32,
-    pub(super) background_scale: f32,
     pub(super) speed: f32,
     pub(super) intensity: f32,
     pub(super) color_a: u32,
@@ -1030,6 +1024,9 @@ const GLOBAL_AURA_HALF_CYCLE_MS: u64 = 1_000;
 const IDLE_VFX_TRANSITION_MS: u64 = 1_000;
 const REASONING_VFX_TRANSITION_MS: u64 = 2_000;
 const REASONING_VFX_FRAME_SECONDS: f32 = 1.0 / 60.0;
+const REASONING_VFX_SPEED_CENTER: f32 = 2.0;
+const REASONING_VFX_SPEED_AMPLITUDE: f32 = 2.0;
+const REASONING_VFX_SPEED_CYCLES: f32 = 4.0;
 // WaterRipples uses phase coefficients 1, 2.2, 4, and 5.1. Twenty PI is their
 // smallest convenient shared period, so wrapping here is visually exact and
 // retains f32 phase precision across arbitrarily long sessions.
@@ -1041,14 +1038,15 @@ const REASONING_VFX_PHASE_PERIOD: f32 = 20.0 * core::f32::consts::PI;
 const GLOBAL_AURA_RADIUS_MIN: f32 = 9.0;
 const GLOBAL_AURA_RADIUS_MAX: f32 = 12.0;
 const GLOBAL_AURA_STRENGTH: f32 = 2.5;
-// Ordinary procedural backgrounds are presented inside the same fixed fraction
-// of Spirit's 256x256 cursor allocation. The reasoning and idle-clock
-// transitions intentionally animate their scale controls; all other effects
-// and the move transition retain this fixed footprint.
+// Every procedural background is presented inside the same fixed fraction of
+// Spirit's 256x256 cursor allocation. Reasoning, idle-clock, and move
+// transitions animate opacity, intensity, and speed only; geometry never
+// approaches or crosses the allocation boundary.
 // The authored reference ring sits at normalized radius 0.32. A scale of
 // 1.171875 maps it to radius 96 in the 256px cursor surface, leaving one
 // invariant 32px margin on every side for every live Spirit background.
-const SPIRIT_BACKGROUND_PRESENT_SCALE: f32 = 1.171875;
+const SPIRIT_BACKGROUND_PRESENT_SCALE: f32 =
+    crate::intel::gpgpu::SPIRIT_VFX_BACKGROUND_PRESENT_SCALE;
 
 #[derive(Copy, Clone)]
 struct SpiritVfxTransition {
@@ -1087,14 +1085,17 @@ impl SpiritVfxTransition {
     }
 
     fn level_at(self, now_ms: u64) -> f32 {
-        let linear = (now_ms.saturating_sub(self.transition_started_ms) as f32
-            / self.duration_ms as f32)
-            .clamp(0.0, 1.0);
+        let linear = self.progress_at(now_ms);
         if linear >= 1.0 {
             return self.transition_to;
         }
         let eased = 0.5 - 0.5 * libm::cosf(core::f32::consts::PI * linear);
         self.transition_from + (self.transition_to - self.transition_from) * eased
+    }
+
+    fn progress_at(self, now_ms: u64) -> f32 {
+        (now_ms.saturating_sub(self.transition_started_ms) as f32 / self.duration_ms as f32)
+            .clamp(0.0, 1.0)
     }
 }
 
@@ -1109,24 +1110,39 @@ impl ReasoningVfxState {
     const INACTIVE: Self = Self {
         transition: SpiritVfxTransition::INACTIVE,
         phase: 0.0,
-        previous_speed: 0.0,
+        previous_speed: REASONING_VFX_SPEED_CENTER,
     };
 
-    fn sample(&mut self, active: bool, now_ms: u64) -> (f32, f32) {
+    fn sample(&mut self, active: bool, now_ms: u64) -> (f32, f32, f32) {
         let level = self
             .transition
             .sample(active, now_ms, REASONING_VFX_TRANSITION_MS);
-        let speed = control_range_at(2, ALPHA_BACKGROUND_CONTROLS[2].max, level);
+        let progress = self.transition.progress_at(now_ms);
+        let speed = (if progress < 1.0 {
+            REASONING_VFX_SPEED_CENTER
+                + REASONING_VFX_SPEED_AMPLITUDE
+                    * libm::sinf(
+                        2.0 * core::f32::consts::PI * REASONING_VFX_SPEED_CYCLES * progress,
+                    )
+        } else {
+            REASONING_VFX_SPEED_CENTER
+        })
+        .clamp(
+            ALPHA_BACKGROUND_TRANSITION_CONTROLS[1].min,
+            ALPHA_BACKGROUND_TRANSITION_CONTROLS[1].max,
+        );
         // Integrate the requested speed rather than multiplying a changing
         // speed by the absolute shader clock. Trapezoidal integration keeps
-        // the cosine edge smooth and matches the renderer's authored 60 Hz
-        // frame-time clock without introducing catch-up jumps.
-        self.phase += 0.5 * (self.previous_speed + speed) * REASONING_VFX_FRAME_SECONDS;
-        if self.phase >= REASONING_VFX_PHASE_PERIOD {
-            self.phase -= REASONING_VFX_PHASE_PERIOD;
+        // each four-cycle transition continuous and matches the renderer's
+        // authored 60 Hz frame-time clock without introducing catch-up jumps.
+        if self.transition.active || level > 0.0 {
+            self.phase += 0.5 * (self.previous_speed + speed) * REASONING_VFX_FRAME_SECONDS;
+            if self.phase >= REASONING_VFX_PHASE_PERIOD {
+                self.phase -= REASONING_VFX_PHASE_PERIOD;
+            }
         }
         self.previous_speed = speed;
-        (level, self.phase)
+        (level, self.phase, speed)
     }
 }
 
@@ -1161,7 +1177,7 @@ pub(crate) fn select_cpp_repass(
     let shader =
         SpiritVfxEffect::from_id(shader_id).ok_or(SpiritVfxControlError::InvalidShaderMode)?;
     let mut panel = control_panel_snapshot().1;
-    let (scale, bg_color_a, bg_color_b) = background.demo_style();
+    let (bg_color_a, bg_color_b) = background.demo_colors();
     panel.alpha_background = SpiritVfxAlphaBackground {
         effect: background,
         opacity: if background == SpiritVfxBackgroundEffect::Transparent {
@@ -1169,7 +1185,6 @@ pub(crate) fn select_cpp_repass(
         } else {
             0.82
         },
-        scale,
         speed: 1.0,
         intensity: 1.0,
         bg_color_a,
@@ -1275,18 +1290,18 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     let now = Instant::now();
     let now_ms = now.as_millis();
     let reasoning_active = crate::r::ai_activity::reasoning_active();
-    let (reasoning_level, reasoning_phase, reasoning_visible) = {
+    let (reasoning_level, reasoning_phase, reasoning_speed, reasoning_visible) = {
         let mut state = REASONING_VFX_STATE.lock();
-        let (level, phase) = state.sample(reasoning_active, now_ms);
-        (level, phase, state.transition.active || level > 0.0)
+        let (level, phase, speed) = state.sample(reasoning_active, now_ms);
+        (level, phase, speed, state.transition.active || level > 0.0)
     };
     let idle_transition = *IDLE_VFX_TRANSITION.lock();
     let idle_level = idle_transition.level_at(now_ms);
     let idle_visible = idle_transition.active || idle_level > 0.0;
     let window_background = *WINDOW_BACKGROUND_VFX.lock();
     let move_portal_active = MOVE_PORTAL_ACTIVE.load(Ordering::Acquire);
-    let (background, transition_scale, background_phase_override) = if reasoning_visible {
-        (reasoning_background(reasoning_level), true, Some(reasoning_phase))
+    let (background, background_phase_override) = if reasoning_visible {
+        (reasoning_background(reasoning_level, reasoning_speed), Some(reasoning_phase))
     } else if move_portal_active {
         let elapsed_ms = now
             .as_millis()
@@ -1295,13 +1310,13 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
         let ramp = move_portal_ramp(elapsed_ms);
         background.speed *= ramp;
         background.intensity = 0.5 + (background.intensity - 0.5) * ramp;
-        (background, false, None)
+        (background, None)
     } else if let Some(effect) = window_background {
-        (application_background(effect), false, None)
+        (application_background(effect), None)
     } else if idle_visible {
-        (idle_clock_background(idle_level), true, None)
+        (idle_clock_background(idle_level), None)
     } else {
-        (panel.alpha_background, false, None)
+        (panel.alpha_background, None)
     };
     let (fx_color_a, fx_color_b) = SpiritVfxEffect::AuraBloom.demo_colors();
     let sprite_shader = SpiritVfxSpriteShader {
@@ -1318,11 +1333,6 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
             .unwrap_or(0),
         background_phase_override,
         opacity: background.opacity,
-        background_scale: if transition_scale {
-            background.scale
-        } else {
-            SPIRIT_BACKGROUND_PRESENT_SCALE
-        },
         speed: background.speed,
         intensity: background.intensity,
         color_a: background.bg_color_a.packed_rgb(),
@@ -1340,47 +1350,46 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     }
 }
 
-fn reasoning_background(level: f32) -> SpiritVfxAlphaBackground {
-    transitioned_background(
+fn reasoning_background(level: f32, speed: f32) -> SpiritVfxAlphaBackground {
+    let mut background = transitioned_background(
         SpiritVfxBackgroundEffect::WaterRipples,
         level,
         [
-            ALPHA_BACKGROUND_CONTROLS[0].max,
-            ALPHA_BACKGROUND_CONTROLS[1].max,
-            ALPHA_BACKGROUND_CONTROLS[2].max,
-            ALPHA_BACKGROUND_CONTROLS[3].max,
+            ALPHA_BACKGROUND_TRANSITION_CONTROLS[0].max,
+            REASONING_VFX_SPEED_CENTER,
+            ALPHA_BACKGROUND_TRANSITION_CONTROLS[2].max,
         ],
-    )
+    );
+    background.speed = speed.clamp(
+        ALPHA_BACKGROUND_TRANSITION_CONTROLS[1].min,
+        ALPHA_BACKGROUND_TRANSITION_CONTROLS[1].max,
+    );
+    background
 }
 
 fn idle_clock_background(level: f32) -> SpiritVfxAlphaBackground {
-    steady_background_controls(transitioned_background(
-        SpiritVfxBackgroundEffect::MagicTimeCircle,
-        level,
-        [1.0, SPIRIT_BACKGROUND_PRESENT_SCALE, 1.0, 1.0],
-    ))
+    transitioned_background(SpiritVfxBackgroundEffect::MagicTimeCircle, level, [1.0, 1.0, 1.0])
 }
 
 fn transitioned_background(
     effect: SpiritVfxBackgroundEffect,
     level: f32,
-    targets: [f32; 4],
+    targets: [f32; 3],
 ) -> SpiritVfxAlphaBackground {
     let level = level.clamp(0.0, 1.0);
-    let (_, bg_color_a, bg_color_b) = effect.demo_style();
+    let (bg_color_a, bg_color_b) = effect.demo_colors();
     SpiritVfxAlphaBackground {
         effect,
         opacity: control_range_at(0, targets[0], level),
-        scale: control_range_at(1, targets[1], level),
-        speed: control_range_at(2, targets[2], level),
-        intensity: control_range_at(3, targets[3], level),
+        speed: control_range_at(1, targets[1], level),
+        intensity: control_range_at(2, targets[2], level),
         bg_color_a,
         bg_color_b,
     }
 }
 
 fn control_range_at(index: usize, target: f32, level: f32) -> f32 {
-    let control = ALPHA_BACKGROUND_CONTROLS[index];
+    let control = ALPHA_BACKGROUND_TRANSITION_CONTROLS[index];
     control.min + (target.clamp(control.min, control.max) - control.min) * level
 }
 
@@ -1388,11 +1397,10 @@ fn application_background(effect: SpiritVfxBackgroundEffect) -> SpiritVfxAlphaBa
     let background = if effect == SpiritVfxBackgroundEffect::NebulaSmoke {
         SpiritVfxAlphaBackground::NEBULA_SMOKE
     } else {
-        let (scale, bg_color_a, bg_color_b) = effect.demo_style();
+        let (bg_color_a, bg_color_b) = effect.demo_colors();
         SpiritVfxAlphaBackground {
             effect,
             opacity: 0.82,
-            scale,
             speed: 1.0,
             intensity: 1.0,
             bg_color_a,
@@ -1402,8 +1410,8 @@ fn application_background(effect: SpiritVfxBackgroundEffect) -> SpiritVfxAlphaBa
     steady_background_controls(background)
 }
 
-/// Idle and cursor-selected application backgrounds remain fully animated
-/// while their independently controlled opacity/scale presentation changes.
+/// Cursor-selected application backgrounds remain fully animated while
+/// opacity changes independently. Background geometry is always fixed.
 /// Preserve authored values above one (for example Nebula intensity 1.2).
 fn steady_background_controls(
     mut background: SpiritVfxAlphaBackground,

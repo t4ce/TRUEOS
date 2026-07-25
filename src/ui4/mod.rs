@@ -5,6 +5,7 @@
 
 pub(crate) mod blueprint_text;
 mod compositor_service;
+mod context_menu;
 mod cursor_frame_inout;
 mod damage;
 mod font_stamp;
@@ -59,6 +60,10 @@ impl InteractionCadence {
 }
 
 pub(crate) use compositor_service::ui4_compositor_service_task;
+pub(crate) use context_menu::{
+    ContextMenuCloseReason, ContextMenuEntry, ContextMenuError, ContextMenuRequest,
+    ContextMenuResult, MAX_CONTEXT_MENU_ENTRIES,
+};
 pub(crate) use cursor_frame_inout::{
     CursorFrameKey, GlobalKeyboardDisposition, GlobalKeyboardHookId, Ui4CursorIcon,
     Ui4CursorSource, cursor_icon_for, register_global_keyboard_hook, selected_frame,
@@ -89,9 +94,9 @@ pub(crate) use gpgpu_svg_probe_consumer::{
 #[cfg(feature = "trueos_h264_encode_stream")]
 pub(crate) use h264_encode_stream::{ui4_h264_encode_prepare_task, ui4_h264_encode_stream_task};
 pub(crate) use input_broker::{
-    Ui4ButtonPhase, Ui4InputEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent, Ui4VisualRect,
-    focused_keyboard_state, select_window_for_cursor, software_cursor_visuals,
-    take_owner_input_events, ui4_input_service_task,
+    Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent,
+    Ui4VisualRect, focused_keyboard_state, select_window_for_cursor, show_context_menu,
+    software_cursor_visuals, take_owner_input_events, ui4_input_service_task,
 };
 pub(crate) use screenshot::ui4_screenshot_service_task;
 pub(crate) use slot4_service::ui4_slot4_service_task;
@@ -122,6 +127,7 @@ pub(crate) struct OwnerReleaseSummary {
     pub(crate) surfaces: usize,
     pub(crate) input_routes: usize,
     pub(crate) input_events: usize,
+    pub(crate) context_menus: usize,
 }
 
 /// Release all UI4 resources belonging to an application owner.
@@ -131,11 +137,13 @@ pub(crate) struct OwnerReleaseSummary {
 pub(crate) fn release_owner_resources(owner: WindowOwner) -> OwnerReleaseSummary {
     let surfaces = blueprint_text::release_owner_resources(owner);
     let (input_routes, input_events) = input_broker::release_owner(owner);
+    let context_menus = context_menu::release_owner(owner);
     cursor_frame_inout::owner_closed(owner);
     OwnerReleaseSummary {
         surfaces,
         input_routes,
         input_events,
+        context_menus,
     }
 }
 

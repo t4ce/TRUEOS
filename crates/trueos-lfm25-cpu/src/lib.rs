@@ -366,6 +366,32 @@ impl Lfm25Tokenizer {
         Ok(tokens)
     }
 
+    /// Exact Liquid chat envelope with one system instruction and one user turn.
+    ///
+    /// Stateful callers feed this only for the first turn. Follow-up turns use
+    /// [`Self::encode_followup_user_turn`] so the system prefix remains resident
+    /// in the existing model state without being replayed.
+    pub fn encode_system_user_turn(&self, system: &str, prompt: &str) -> Result<Vec<u32>, Error> {
+        let mut tokens = Vec::new();
+        tokens
+            .try_reserve_exact(system.len().saturating_add(prompt.len()).saturating_add(18))
+            .map_err(|_| Error::Allocation)?;
+        tokens.push(self.bos);
+        tokens.push(self.im_start);
+        tokens.extend(self.encode("system\n")?);
+        tokens.extend(self.encode(system)?);
+        tokens.push(self.im_end);
+        tokens.extend(self.encode("\n")?);
+        tokens.push(self.im_start);
+        tokens.extend(self.encode("user\n")?);
+        tokens.extend(self.encode(prompt)?);
+        tokens.push(self.im_end);
+        tokens.extend(self.encode("\n")?);
+        tokens.push(self.im_start);
+        tokens.extend(self.encode("assistant\n")?);
+        Ok(tokens)
+    }
+
     /// Exact continuation envelope after the preceding assistant terminator
     /// has been consumed by the same decode session.
     ///

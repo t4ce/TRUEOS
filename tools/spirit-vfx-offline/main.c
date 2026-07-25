@@ -56,8 +56,6 @@ extern cl_context clCreateContext(const cl_context_properties *, cl_uint, const 
                                   cl_int *);
 extern cl_command_queue clCreateCommandQueue(cl_context, cl_device_id,
                                              cl_command_queue_properties, cl_int *);
-extern cl_program clCreateProgramWithSource(cl_context, cl_uint, const char **, const size_t *,
-                                            cl_int *);
 extern cl_program clCreateProgramWithIL(cl_context, const void *, size_t, cl_int *);
 extern cl_int clBuildProgram(cl_program, cl_uint, const cl_device_id *, const char *,
                              void (*)(cl_program, void *), void *);
@@ -109,22 +107,21 @@ typedef enum {
 
 typedef struct {
     const char *name;
-    float scale;
     uint8_t color_a[3];
     uint8_t color_b[3];
 } BackgroundPreset;
 
 static const BackgroundPreset BACKGROUND_PRESETS[REPLAY_MODE_COUNT] = {
-    {"energy-ring", 1.0f, {0xFF, 0x4D, 0xB8}, {0x60, 0xED, 0xFF}},
-    {"magic-circle", 1.0f, {0x8D, 0x68, 0xFF}, {0x6C, 0xF2, 0xFF}},
-    {"nebula-smoke", 1.1f, {0x88, 0x3D, 0xFF}, {0x30, 0xC8, 0xFF}},
-    {"cyber-grid", 1.1f, {0x7F, 0x5D, 0xFF}, {0x42, 0xEA, 0xFF}},
-    {"portal-vortex", 1.0f, {0xF1, 0x5F, 0xFF}, {0x61, 0xEA, 0xFF}},
-    {"speed-lines", 1.0f, {0xFF, 0x4F, 0x8D}, {0xFF, 0xE8, 0x6B}},
-    {"bokeh-field", 1.0f, {0xFF, 0x8E, 0xDC}, {0x75, 0xEA, 0xFF}},
-    {"water-ripples", 1.0f, {0x4F, 0x8D, 0xFF}, {0x6E, 0xFF, 0xE4}},
-    {"pixel-burst", 1.0f, {0xB0, 0x6C, 0xFF}, {0x5D, 0xEE, 0xFF}},
-    {"magic-time-circle", 1.0f, {0x8D, 0x68, 0xFF}, {0x6C, 0xF2, 0xFF}},
+    {"energy-ring", {0xFF, 0x4D, 0xB8}, {0x60, 0xED, 0xFF}},
+    {"magic-circle", {0x8D, 0x68, 0xFF}, {0x6C, 0xF2, 0xFF}},
+    {"nebula-smoke", {0x88, 0x3D, 0xFF}, {0x30, 0xC8, 0xFF}},
+    {"cyber-grid", {0x7F, 0x5D, 0xFF}, {0x42, 0xEA, 0xFF}},
+    {"portal-vortex", {0xF1, 0x5F, 0xFF}, {0x61, 0xEA, 0xFF}},
+    {"speed-lines", {0xFF, 0x4F, 0x8D}, {0xFF, 0xE8, 0x6B}},
+    {"bokeh-field", {0xFF, 0x8E, 0xDC}, {0x75, 0xEA, 0xFF}},
+    {"water-ripples", {0x4F, 0x8D, 0xFF}, {0x6E, 0xFF, 0xE4}},
+    {"pixel-burst", {0xB0, 0x6C, 0xFF}, {0x5D, 0xEE, 0xFF}},
+    {"magic-time-circle", {0x8D, 0x68, 0xFF}, {0x6C, 0xF2, 0xFF}},
 };
 
 typedef struct {
@@ -138,6 +135,11 @@ static const RuntimeControls DEFAULT_RUNTIME_CONTROLS = {
 };
 
 static const float MAGIC_TIME_STATIC_PREVIEW_SECONDS = 10.0f * 3600.0f + 9.0f * 60.0f + 42.0f;
+static const float SPIRIT_BACKGROUND_PRESENT_SCALE = 1.171875f;
+static const float SPIRIT_LILLY_PRESENT_SCALE = 0.65f;
+static const float AURA_RADIUS_MIN = 9.0f;
+static const float AURA_RADIUS_MAX = 12.0f;
+static const float AURA_HALF_CYCLE_SECONDS = 1.0f;
 
 typedef struct {
     uint32_t width;
@@ -148,10 +150,12 @@ typedef struct {
 static const char *const LILLY_ASSET_KEY = "idle.crossed.soft_blink";
 static const char *const LILLY_ASSET_DIRECTORY =
     "Lilly/Idle/Crossed-Arms/idle-1_frames";
-static const char *const BACKGROUND_SOURCE =
-    "crates/trueos-shader/gpgpu/kernels/spirit_vfx_background_rgba8.cl";
-static const char *const SPRITE_SOURCE =
-    "crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.cl";
+static const char *const BACKGROUND_ARTIFACT =
+    "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/"
+    "spirit_vfx_background_rgba8.spv";
+static const char *const SPRITE_ARTIFACT =
+    "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/"
+    "spirit_vfx_sprite_rgba8.spv";
 
 static void die(const char *message) {
     fprintf(stderr, "spirit-vfx-offline: %s\n", message);
@@ -317,32 +321,16 @@ static cl_platform_id choose_platform(void) {
 static cl_program build_program(
     cl_context context,
     cl_device_id device,
-    const char *source_path,
-    const char *spirv_path)
+    const char *artifact_path)
 {
-    size_t source_length = 0;
-    char *source = read_text_file(
-        spirv_path != NULL ? spirv_path : source_path,
-        &source_length);
+    size_t artifact_length = 0;
+    char *artifact = read_text_file(artifact_path, &artifact_length);
     cl_int error = CL_SUCCESS;
-    cl_program program = NULL;
-    if (spirv_path != NULL) {
-        program = clCreateProgramWithIL(context, source, source_length, &error);
-        check_cl(error, "clCreateProgramWithIL");
-    } else {
-        const char *sources[] = {source};
-        const size_t lengths[] = {source_length};
-        program = clCreateProgramWithSource(context, 1, sources, lengths, &error);
-        check_cl(error, "clCreateProgramWithSource");
-    }
+    cl_program program =
+        clCreateProgramWithIL(context, artifact, artifact_length, &error);
+    check_cl(error, "clCreateProgramWithIL");
 
-    error = clBuildProgram(
-        program,
-        1,
-        &device,
-        spirv_path != NULL ? NULL : "-cl-std=CL1.2",
-        NULL,
-        NULL);
+    error = clBuildProgram(program, 1, &device, NULL, NULL, NULL);
     if (error != CL_SUCCESS) {
         size_t log_bytes = 0;
         clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_bytes);
@@ -352,14 +340,23 @@ static cl_program build_program(
             fprintf(
                 stderr,
                 "OpenCL build log for %s:\n%s\n",
-                spirv_path != NULL ? spirv_path : source_path,
+                artifact_path,
                 log);
             free(log);
         }
         check_cl(error, "clBuildProgram");
     }
-    free(source);
+    free(artifact);
     return program;
+}
+
+static float aura_radius(float animation_time_seconds) {
+    float cycle = AURA_HALF_CYCLE_SECONDS * 2.0f;
+    float phase = fmodf(fmaxf(animation_time_seconds, 0.0f), cycle);
+    float ramp = phase <= AURA_HALF_CYCLE_SECONDS
+        ? phase / AURA_HALF_CYCLE_SECONDS
+        : (cycle - phase) / AURA_HALF_CYCLE_SECONDS;
+    return AURA_RADIUS_MIN + (AURA_RADIUS_MAX - AURA_RADIUS_MIN) * ramp;
 }
 
 static uint32_t float_bits(float value) {
@@ -401,7 +398,7 @@ static void fill_control(uint32_t control[CONTROL_DWORDS], uint32_t source_width
     control[3] = mode_id;
     control[4] = float_bits(production_time);
     control[5] = float_bits(1.0f);
-    control[6] = float_bits(preset->scale);
+    control[6] = float_bits(SPIRIT_BACKGROUND_PRESENT_SCALE);
     control[7] = float_bits(runtime->speed);
     control[8] = float_bits(runtime->intensity);
     control[9] =
@@ -410,20 +407,16 @@ static void fill_control(uint32_t control[CONTROL_DWORDS], uint32_t source_width
         pack_control_rgb(preset->color_b[0], preset->color_b[1], preset->color_b[2]);
     control[11] = float_bits(0.0f);
     control[12] = float_bits(0.0f);
-    control[13] = float_bits(0.50f);
+    control[13] = float_bits(SPIRIT_LILLY_PRESENT_SCALE);
     control[14] = float_bits(3.14159265359f);
     control[15] = float_bits(0.02f);
     control[16] = 0; /* nearest / pixel crisp */
-    if (mode == REPLAY_MAGIC_TIME_CIRCLE) {
-        /* Match Spirit Idle: MagicTimeCircle background + AuraBloom sprite. */
-        control[17] = 1;
-        control[18] = float_bits(12.0f);
-        control[19] = float_bits(2.5f);
-        control[20] = float_bits(0.0f);
-        control[21] = float_bits(0.0f);
-    } else {
-        control[17] = 0; /* Original / clean */
-    }
+    /* Live Spirit owns one unconditional AuraBloom sprite layer. */
+    control[17] = 1;
+    control[18] = float_bits(aura_radius(production_time));
+    control[19] = float_bits(2.5f);
+    control[20] = float_bits(0.0f);
+    control[21] = float_bits(0.0f);
     control[22] = pack_control_rgb(0x8D, 0x6C, 0xFF);
     control[23] = pack_control_rgb(0x5E, 0xE7, 0xFF);
     control[24] = source_width;
@@ -589,7 +582,7 @@ static SpiritPanel create_panel(void) {
     size_hints.max_width = PANEL_WIDTH;
     size_hints.max_height = PANEL_HEIGHT;
     XSetWMNormalHints(panel.display, panel.window, &size_hints);
-    XStoreName(panel.display, panel.window, "Spirit VFX OpenCL Comparison Grid");
+    XStoreName(panel.display, panel.window, "Spirit Production VFX Preview");
     panel.wm_delete = XInternAtom(panel.display, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(panel.display, panel.window, &panel.wm_delete, 1);
 
@@ -753,11 +746,12 @@ static void run_panel(cl_command_queue queue, cl_kernel background_kernel,
     printf("Spirit VFX panel running; press ESC to close\n");
     printf("  asset:    %s (%u frames, %u ms/frame, loop)\n", LILLY_ASSET_KEY,
            LILLY_FRAME_COUNT, LILLY_FRAME_PERIOD_MS);
-    printf("  grid:     retained background IDs 2..11, row-major, five columns\n");
+    printf("  grid:     production background IDs 2..11, row-major, five columns\n");
     printf("  cadence:  shader %u Hz; asset %.3f Hz\n", SPIRIT_TARGET_HZ,
            1000.0 / LILLY_FRAME_PERIOD_MS);
     printf("  window:   borderless %ux%u ARGB=%d\n", PANEL_WIDTH, PANEL_HEIGHT, panel.argb);
-    printf("  fixed:    Opacity 1.00; each effect's existing Scale\n");
+    printf("  fixed:    production C++ artifacts; opacity 1.00; background scale %.6f; Lilly scale %.2f; global AuraBloom\n",
+           SPIRIT_BACKGROUND_PRESENT_SCALE, SPIRIT_LILLY_PRESENT_SCALE);
     printf("  keys:     Left/Right = Speed; Down/Up = Intensity; step 0.01\n");
     print_runtime_controls(&runtime);
 
@@ -855,12 +849,10 @@ int main(int argc, char **argv) {
     cl_command_queue queue = clCreateCommandQueue(context, device, 0, &error);
     check_cl(error, "clCreateCommandQueue");
 
-    const char *background_spirv = getenv("SPIRIT_VFX_BACKGROUND_SPV");
-    const char *sprite_spirv = getenv("SPIRIT_VFX_SPRITE_SPV");
     cl_program background_program =
-        build_program(context, device, BACKGROUND_SOURCE, background_spirv);
+        build_program(context, device, BACKGROUND_ARTIFACT);
     cl_program sprite_program =
-        build_program(context, device, SPRITE_SOURCE, sprite_spirv);
+        build_program(context, device, SPRITE_ARTIFACT);
     cl_kernel background_kernel =
         clCreateKernel(background_program, "spirit_vfx_background_rgba8", &error);
     check_cl(error, "clCreateKernel(background)");
@@ -906,10 +898,8 @@ int main(int argc, char **argv) {
 
     printf("  platform: %s\n", platform_name);
     printf("  device:   %s\n", device_name);
-    printf(
-        "  frontend: background=%s sprite=%s\n",
-        background_spirv != NULL ? "C++ SPIR-V" : "OpenCL C source",
-        sprite_spirv != NULL ? "C++ SPIR-V" : "OpenCL C source");
+    printf("  artifact: background=%s\n", BACKGROUND_ARTIFACT);
+    printf("  artifact: sprite=%s\n", SPRITE_ARTIFACT);
     if (panel_mode) {
         run_panel(queue, background_kernel, sprite_kernel, control_buffer, source_buffers,
                   cursor_buffer, cursor_grid, &asset);
@@ -925,7 +915,7 @@ int main(int argc, char **argv) {
         }
         check_cl(clFinish(queue), "clFinish");
         write_grid_png(output_path, cursor_grid);
-        printf("Spirit VFX offline comparison grid complete\n");
+        printf("Spirit production VFX preview complete\n");
         printf("  asset:    %s/frame_01.png (%ux%u RGBA8)\n", LILLY_ASSET_DIRECTORY,
                asset.width, asset.height);
         printf("  grid:     ");
@@ -935,7 +925,7 @@ int main(int argc, char **argv) {
         }
         printf("\n");
         printf(
-            "  dispatch: ten 256x256 cells, local 16x1, selected GPU programs\n");
+            "  dispatch: ten 256x256 cells, local 16x1, production GPU artifacts\n");
         unsigned clock_seconds = (unsigned)magic_time_seconds;
         printf("  time:     %.3f s (frame %u at 60 Hz)\n", time_seconds,
                (unsigned)lroundf(time_seconds * 60.0f));

@@ -6,6 +6,7 @@ LDLIBS += -l:libOpenCL.so.1 -lpng16 -lXrender -lX11 -lm
 REPO_ROOT := ../..
 BUILD_DIR := $(REPO_ROOT)/bld/tools
 PROGRAM := $(BUILD_DIR)/spirit_sprite_vfx_offline
+SPRITE_ARTIFACT := $(REPO_ROOT)/crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.spv
 OUTPUT ?= bld/spirit-sprite-vfx-grid.png
 TIME ?= 2.25
 
@@ -13,7 +14,7 @@ TIME ?= 2.25
 
 all: $(PROGRAM)
 
-$(PROGRAM): main.c
+$(PROGRAM): main.c $(SPRITE_ARTIFACT)
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@ $(LDLIBS)
 

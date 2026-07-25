@@ -18,7 +18,7 @@ use crate::shell2::{
 };
 
 const MAX_PROMPT_BYTES: usize = 512;
-const MAX_REPLY_TOKENS: usize = 32;
+const MAX_REPLY_TOKENS: usize = 48;
 const MAX_QUEUED_PROMPTS: usize = 4;
 
 type LfmModule =
@@ -397,7 +397,12 @@ async fn run_lum_turn(
 ) -> bool {
     let started = embassy_time_driver::now();
     let mut prompt_tokens = if conversation.turns == 0 {
-        match tokenizer.encode_user_turn(&prompt) {
+        let encoded = if crate::spirit::LUMEN_AI_EMOTION_ENABLED {
+            tokenizer.encode_system_user_turn(crate::spirit::LUMEN_SYSTEM_PROMPT, &prompt)
+        } else {
+            tokenizer.encode_user_turn(&prompt)
+        };
+        match encoded {
             Ok(tokens) => tokens,
             Err(error) => {
                 print_matrix_target_line(
@@ -640,7 +645,7 @@ async fn run_lum_turn(
         }
     }
 
-    let reply_bytes = match tokenizer.decode(&generated, true) {
+    let reply_bytes = match tokenizer.decode(&generated, !crate::spirit::LUMEN_AI_EMOTION_ENABLED) {
         Ok(bytes) => bytes,
         Err(error) => {
             print_matrix_target_line(
@@ -650,11 +655,17 @@ async fn run_lum_turn(
             return false;
         }
     };
-    let reply = String::from_utf8_lossy(&reply_bytes);
+    let raw_reply = String::from_utf8_lossy(&reply_bytes);
+    let adapted_reply = if crate::spirit::LUMEN_AI_EMOTION_ENABLED {
+        crate::spirit::adapt_lumen_reply(raw_reply.as_ref())
+    } else {
+        String::from(raw_reply.trim())
+    };
+    let reply = adapted_reply.as_str();
     let after = crate::intel::gpgpu::lfm25_q8_project_stats();
     reasoning.finish();
     let response_turn = conversation.turns.saturating_add(1);
-    crate::spirit::enqueue_reasoning_response(response_turn, reply.as_ref());
+    crate::spirit::enqueue_reasoning_response(response_turn, reply);
     print_matrix_target_line(target, alloc::format!("lum: {reply}").as_str());
     print_matrix_target_line(
         target,

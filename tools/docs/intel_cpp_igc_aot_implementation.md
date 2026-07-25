@@ -225,9 +225,10 @@ comparison lane selects. Detailed commands and TestRig coverage live in
 
 The next application step reuses Spirit's already-proven cursor-plane
 architecture instead of introducing another presentation path.
-`spirit_vfx_background_rgba8.clcpp` and `spirit_vfx_sprite_rgba8.clcpp` compile
-the retained compositions as exact ABI twins, then enable C++-only templated
-secondary-detail layers. All stable effect IDs, the original control layout
+`spirit_vfx_background_rgba8.clcpp` and `spirit_vfx_sprite_rgba8.clcpp` are
+the self-contained, solely maintained Spirit compositions. They use C++
+templated secondary-detail layers while preserving all stable effect IDs, the
+original control layout
 plus append-only clock dword 32,
 binding counts, payload sizes, one/two-walker selection, ordered dependency,
 GuC post-sync release, and `CUR_SURFLIVE` proof remain unchanged.

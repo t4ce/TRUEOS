@@ -78,15 +78,17 @@ pub fn default_printer() -> Option<PrinterSnapshot> {
     PRINTERS
         .lock()
         .iter()
-        .find(|printer| {
-            !printer.secure
-                && (printer.formats.is_empty()
-                    || printer
-                        .formats
-                        .iter()
-                        .any(|format| format.eq_ignore_ascii_case(pwg_raster::MIME_TYPE)))
-        })
+        .find(|printer| supports_gridpaper_print(printer))
         .cloned()
+}
+
+pub(crate) fn supports_gridpaper_print(printer: &PrinterSnapshot) -> bool {
+    !printer.secure
+        && (printer.formats.is_empty()
+            || printer
+                .formats
+                .iter()
+                .any(|format| format.eq_ignore_ascii_case(pwg_raster::MIME_TYPE)))
 }
 
 pub fn snapshot_text() -> String {
@@ -344,10 +346,14 @@ async fn run_print_job(job: PrintJob) {
         }
     };
 
-    let printer = wait_for_default_printer(job.id).await;
+    let (printer_uri, printer_detail) = if let Some(printer_uri) = job.printer_uri {
+        (printer_uri, "selected-ipp-printer")
+    } else {
+        (wait_for_default_printer(job.id).await.uri, "default-ipp-printer")
+    };
     let client = loop {
-        print2d::transition(job.id, PrintJobState::Connecting, "default-ipp-printer");
-        match IppClient::new(printer.uri.as_str()) {
+        print2d::transition(job.id, PrintJobState::Connecting, printer_detail);
+        match IppClient::new(printer_uri.as_str()) {
             Ok(client) => break client,
             Err(error) if error.submission_retryable() => {
                 print2d::transition(job.id, PrintJobState::WaitingForPrinter, "network-not-ready");

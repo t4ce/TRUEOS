@@ -23,10 +23,10 @@ boundary, 50% horizontal-pair walker shape, ABI, and TestRig procedure are in
 [`CPP_AUDIO_VISUALIZER.md`](CPP_AUDIO_VISUALIZER.md).
 
 `spirit_vfx_background_rgba8.clcpp` and
-`spirit_vfx_sprite_rgba8.clcpp` are exact-ABI C++ repasses of Spirit's retained
-9-background and 16-sprite collections. They preserve the established
-two-walker cursor-plane path while adding compile-time-specialized secondary
-detail. The design, visual replay, hashes, and TestRig commands are recorded in
+`spirit_vfx_sprite_rgba8.clcpp` are Spirit's sole maintained 10-background and
+16-sprite shader sources. They preserve the established two-walker cursor-plane
+path and use compile-time-specialized secondary detail. The design, production
+artifact preview, hashes, and TestRig commands are recorded in
 [`SPIRIT_CPP_REPASS.md`](SPIRIT_CPP_REPASS.md).
 
 `copy_rect_rgba8.cl` is the first standalone graphics value target:
@@ -56,7 +56,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `cpp_demo_rgba8.clcpp`: one exact-target C++ for OpenCL/IGC application kernel with gallery, aurora, Julia-set, signed-distance, Voronoi, and standalone Retro Sun modes; available through the dedicated `cpp` Shell2 command
 - `cpp_audio_visualizer_rgba8.clcpp`: one exact-target C++/IGC audiovisual composition driven by the final 48 kHz stereo HDA-bound mix, a 2048-point mid/side FFT, 64 bands, and 128-point channel waveforms; available through `cpp audio`
 - `lab256_multiphase.cl`: hash-locked 256x256 three-entry experimental artifact retained for the live `gpgpu test lab256` Shell2/UI4 preview through the vGPU/GuC GPGPU lane; it contains a centered grayscale smoke ripple, Gray-Scott pointer trail, compact GPU telemetry, and one half-second CUR_SURFLIVE-rate status dot
-- `spirit_vfx_background_rgba8.clcpp` and `spirit_vfx_sprite_rgba8.clcpp`: TrueOS-Spirit's continuous 60 Hz C++/IGC cursor-plane producer; the default clean-Lilly batch dispatches only the sprite presentation walker, while enabling a procedural background adds the background walker and ordered source-over dependency; the retained `.cl` sources are its reviewed semantic and ABI references
+- `spirit_vfx_background_rgba8.clcpp` and `spirit_vfx_sprite_rgba8.clcpp`: TrueOS-Spirit's continuous 60 Hz C++/IGC cursor-plane producer and sole maintained shader source pair; the default clean-Lilly batch dispatches only the sprite presentation walker, while enabling a procedural background adds the background walker and ordered source-over dependency
 - `font_outline_mesh.cl`: allowlisted Skrifa outline consumer used by `gpgpu probe font-tessel`; it audits the packed command stream, flattens quadratic/cubic curves, and emits indexed contour-stroke triangles without CPU geometry math
 - `font_outline_coverage_r8.cl`: production Skrifa-afterpath consumer; it evaluates non-zero winding plus nearest-edge distance in final mask-pixel coordinates and writes reusable fractional R8 coverage with bounded low-ppem optical bias
 

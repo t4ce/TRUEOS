@@ -6,7 +6,11 @@
 
 extern crate alloc;
 
-use alloc::{collections::VecDeque, vec::Vec};
+use alloc::{
+    collections::VecDeque,
+    string::{String, ToString},
+    vec::Vec,
+};
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
@@ -72,6 +76,7 @@ pub(crate) struct PrintJob {
     pub id: u32,
     pub owner: u8,
     pub document: PrintDocument,
+    pub printer_uri: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -126,7 +131,7 @@ fn next_job_id() -> u32 {
     }
 }
 
-fn enqueue(owner: u8, document: PrintDocument) -> Result<u32, i64> {
+fn enqueue(owner: u8, document: PrintDocument, printer_uri: Option<String>) -> Result<u32, i64> {
     let id = next_job_id();
     {
         let mut queue = PRINT_QUEUE.lock();
@@ -143,6 +148,7 @@ fn enqueue(owner: u8, document: PrintDocument) -> Result<u32, i64> {
             id,
             owner,
             document,
+            printer_uri,
         });
     }
     crate::log_os::print2d_job_state(id, PrintJobState::Queued.name(), "accepted");
@@ -178,6 +184,7 @@ fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
                 size,
                 raw,
             },
+            printer_uri: None,
         });
         id
     };
@@ -209,10 +216,31 @@ pub(crate) fn submit_for_owner(owner: u8, document_kind: u32, subject: u64, raw:
         _ => return ERROR_INVALID_DOCUMENT,
     };
 
-    match enqueue(owner, document) {
+    match enqueue(owner, document, None) {
         Ok(id) => i64::from(id),
         Err(error) => error,
     }
+}
+
+pub(crate) fn submit_gridpaper_to_printer(
+    owner: u8,
+    generation: u64,
+    size: crate::r::gridpaper_service::GridSize,
+    raw: Vec<u8>,
+    printer_uri: &str,
+) -> Result<u32, i64> {
+    if printer_uri.is_empty() || !crate::r::gridpaper_service::valid_print_snapshot(&raw) {
+        return Err(ERROR_INVALID_DOCUMENT);
+    }
+    enqueue(
+        owner,
+        PrintDocument::GridPaperA4 {
+            generation,
+            size,
+            raw,
+        },
+        Some(printer_uri.to_string()),
+    )
 }
 
 pub(crate) fn take_next_job() -> Option<PrintJob> {

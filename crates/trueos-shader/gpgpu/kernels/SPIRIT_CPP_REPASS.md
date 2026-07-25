@@ -1,11 +1,9 @@
 # Spirit C++/IGC visual repass
 
-Spirit's C++ repass upgrades the existing visual vocabulary without replacing
-its runtime architecture. The two `.clcpp` entry sources compile the retained
-OpenCL C compositions through Clang C++ for OpenCL, SPIR-V, and Intel IGC.
-`TRUEOS_SPIRIT_CPP_REPASS` enables compile-time-specialized detail layers while
-the existing `.cl` sources remain the semantic baseline and exact ABI
-references.
+Spirit's C++ shaders provide the visual vocabulary without replacing its
+runtime architecture. The two self-contained `.clcpp` sources compile through
+Clang C++ for OpenCL, SPIR-V, and Intel IGC. They are the sole maintained
+Spirit shader sources; there is no parallel OpenCL-C implementation.
 
 The compiler stack is build-time only. TRUEOS embeds the audited SPIR-V and
 Zebin images; the running OS contains no Clang, C++ runtime, `llvm-spirv`,
@@ -53,8 +51,8 @@ The repass preserves:
 - clean one-walker and background-enabled ordered two-walker batches;
 - GuC post-sync producer release and final Intel cursor `CUR_SURFLIVE` proof.
 
-Both generated manifests record `variant=cpp`, an exact match against the
-retained OpenCL C Zebin, exact target `8086:4680` revision `0x0c`, zero
+Both generated manifests record `variant=cpp`, an exact ABI match against the
+frozen bring-up Zebin fixture, exact target `8086:4680` revision `0x0c`, zero
 scratch/SLM, all transitive inputs, the reviewed toolchain lock, and
 byte-identical two-root reproduction.
 
@@ -81,19 +79,13 @@ The first command publishes both artifacts reproducibly. The second is
 compiler-free and audits all four published C++ artifacts and host regression
 tests.
 
-The offline viewers can render both the OpenCL C reference and the published
-C++ SPIR-V on the host GPU:
+The offline viewers load the published C++ SPIR-V on the host GPU. They contain
+no alternate shader implementation or source-compilation fallback:
 
 ```sh
 make -C tools/spirit-vfx-offline render \
-  OUTPUT=bld/spirit-vfx-grid-opencl-c.png TIME=2.25
-
-SPIRIT_VFX_BACKGROUND_SPV=crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.spv \
-SPIRIT_VFX_SPRITE_SPV=crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.spv \
-make -C tools/spirit-vfx-offline render \
   OUTPUT=bld/spirit-vfx-grid-cpp.png TIME=2.25
 
-SPIRIT_VFX_SPRITE_SPV=crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.spv \
 make -C tools/spirit-sprite-vfx-offline render \
   OUTPUT=bld/spirit-sprite-vfx-grid-cpp.png TIME=2.25
 ```

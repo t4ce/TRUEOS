@@ -134,7 +134,14 @@ impl KernelClient {
             // kernel time. Each LFM batch remains bounded to at most three
             // projection walkers, so it cannot turn into a persistent
             // high-priority program.
-            Self::Ui4Compositor | Self::Lfm25 => PhysicalContextPriority::KernelHigh,
+            // GPGPU system submissions are likewise bounded synchronous
+            // kernels. They produce visible retained UI surfaces (Gridpaper
+            // and GPU fonts), so leaving them at normal priority adds one
+            // complete GuC scheduler quantum to every copy/coverage/release
+            // stage while UI4 window motion itself remains crisp.
+            Self::GpgpuSystem | Self::Ui4Compositor | Self::Lfm25 => {
+                PhysicalContextPriority::KernelHigh
+            }
             _ => PhysicalContextPriority::KernelNormal,
         }
     }
@@ -151,7 +158,7 @@ const _: () = {
     ));
     assert!(matches!(
         KernelClient::GpgpuSystem.physical_priority(),
-        PhysicalContextPriority::KernelNormal
+        PhysicalContextPriority::KernelHigh
     ));
     assert!(matches!(
         KernelClient::GpgpuExecution.physical_priority(),

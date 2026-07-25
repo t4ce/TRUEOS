@@ -1521,6 +1521,7 @@ pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), Windo
     broker.mark_composition_changed();
     drop(broker);
     super::cursor_frame_inout::frame_closed(owner, id);
+    super::context_menu::dismiss_window(owner, id);
     Ok(())
 }
 

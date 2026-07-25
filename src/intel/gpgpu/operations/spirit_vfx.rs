@@ -1,5 +1,8 @@
 const SPIRIT_VFX_INITIAL_TRACE_FRAMES: u32 = 30;
 const SPIRIT_VFX_PERIODIC_TRACE_FRAMES: u32 = 60;
+/// One invariant footprint for every Spirit procedural background. Keeping
+/// this at the control-page writer makes scale non-negotiable for all callers.
+pub(crate) const SPIRIT_VFX_BACKGROUND_PRESENT_SCALE: f32 = 1.171875;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct SpiritVfxControl {
@@ -8,7 +11,6 @@ pub(crate) struct SpiritVfxControl {
     pub(crate) clock_seconds_of_day: u32,
     pub(crate) background_phase_override: Option<f32>,
     pub(crate) background_opacity: f32,
-    pub(crate) background_scale: f32,
     pub(crate) background_speed: f32,
     pub(crate) background_intensity: f32,
     pub(crate) background_color_a: u32,
@@ -184,10 +186,7 @@ fn spirit_vfx_write_control(
             dwords.add(5),
             spirit_vfx_bounded(control.background_opacity, 0.0, 1.0, 0.0).to_bits(),
         );
-        core::ptr::write_volatile(
-            dwords.add(6),
-            spirit_vfx_bounded(control.background_scale, 0.25, 3.0, 1.0).to_bits(),
-        );
+        core::ptr::write_volatile(dwords.add(6), SPIRIT_VFX_BACKGROUND_PRESENT_SCALE.to_bits());
         core::ptr::write_volatile(
             dwords.add(7),
             spirit_vfx_bounded(background_speed, 0.0, 4.0, 1.0).to_bits(),

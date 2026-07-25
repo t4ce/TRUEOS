@@ -44,6 +44,11 @@ const TEXT_ANIMATION_COLOR_SLOTS: usize = COLOR_TRANSPARENT as usize;
 const SPIRIT_RAINBOW_SELECTORS: [u8; 6] = [10, 12, 11, 15, 13, 14];
 const SPIRIT_SCALE_MOTION_PERIOD_MS: u32 = 7_000;
 const SPIRIT_SCALE_MOTION_AMPLITUDE_PERMILLE: i16 = 150;
+// A slow seven-second breathing curve does not benefit from submitting sixty
+// complete direct-scanout frames each second. Twenty samples per second are
+// visually continuous here and leave substantially more RCS time for Lumen,
+// UI4, and interactive work.
+const SPIRIT_MOTION_FRAME_PERIOD_MS: u64 = 50;
 const TEXT_ANIMATION_WIRE_VERSION_COLOR_ONLY: u8 = 1;
 const TEXT_ANIMATION_WIRE_VERSION_FONT_INSTANCE: u8 = 2;
 const TEXT_ANIMATION_WIRE_HEADER_BYTES: usize = 4;
@@ -88,6 +93,7 @@ const CELL_PATCH_COVERAGE_BATCH_CAPACITY: usize = 64;
 const GRID_CURSOR_STROKE_PX: u32 = 3;
 const GRID_CURSOR_RGBA: [u8; 4] = [255, 96, 32, 255];
 const PRINT_REQUEST_CAPACITY: usize = 8;
+const PRINTER_MENU_CONTEXT_CAPACITY: usize = 8;
 const PRINT_CAPTURE_LONG_EDGE: u32 = 1_440;
 
 const ERROR_INVALID_SNAPSHOT: i32 = -1;
@@ -648,6 +654,12 @@ struct PrintRenderRequest {
     raw: Vec<u8>,
 }
 
+struct PrinterMenuContext {
+    id: u64,
+    snapshot: OwnedSnapshot,
+    printers: Vec<crate::r::net::printer::PrinterSnapshot>,
+}
+
 pub(crate) struct PrintRasterFrame {
     pub width: u32,
     pub height: u32,
@@ -665,6 +677,9 @@ static GRIDPAPER_PRINT_REQUESTS: Mutex<VecDeque<GridPaperPrintRequest>> =
     Mutex::new(VecDeque::new());
 static PRINT_RENDER_REQUESTS: Mutex<VecDeque<PrintRenderRequest>> = Mutex::new(VecDeque::new());
 static PRINT_RENDER_RESULTS: Mutex<VecDeque<PrintRenderResult>> = Mutex::new(VecDeque::new());
+static NEXT_PRINTER_MENU_CONTEXT: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(1);
+static PRINTER_MENU_CONTEXTS: Mutex<VecDeque<PrinterMenuContext>> = Mutex::new(VecDeque::new());
 
 fn next_print_request_token() -> u32 {
     use core::sync::atomic::Ordering;
@@ -673,6 +688,17 @@ fn next_print_request_token() -> u32 {
         let token = NEXT_PRINT_REQUEST_TOKEN.fetch_add(1, Ordering::Relaxed);
         if token != 0 {
             return token;
+        }
+    }
+}
+
+fn next_printer_menu_context() -> u64 {
+    use core::sync::atomic::Ordering;
+
+    loop {
+        let context = NEXT_PRINTER_MENU_CONTEXT.fetch_add(1, Ordering::Relaxed);
+        if context != 0 {
+            return context;
         }
     }
 }
@@ -3198,12 +3224,10 @@ fn apply_resident_cell_patches(
     // engine remains authoritative for CSS-like dynamic layers, while plain
     // typing avoids mutable descriptor indirection entirely.
     //
-    // Keep each independently addressed mask on one submitted walker. The
-    // scene-level multi-IDD batch can retire its final marker even when an
-    // intermediate descriptor/surface-state transition sampled the wrong mask;
-    // that produced a cursor advance with an empty cell. A single-walker
-    // submission makes retirement exact for each typed glyph and preserves the
-    // retained static base after it succeeds.
+    // Multi-walker indirect payload starts use 256-byte slots, satisfying the
+    // Gen12 64-byte start-address contract. Keep the complete patch set in one
+    // ordered submission instead of paying one GuC scheduling quantum per
+    // typed glyph.
     for chunk in coverage.chunks(CELL_PATCH_COVERAGE_BATCH_CAPACITY) {
         let mut layers = Vec::with_capacity(chunk.len());
         for coverage in chunk {
@@ -3217,26 +3241,22 @@ fn apply_resident_cell_patches(
                 color_rgba: coverage.color_rgba,
             });
         }
-        for layer in &layers {
-            let result = crate::intel::gpgpu::glyph_mask_layers_rgba8_2d_mode(
-                core::slice::from_ref(layer),
-                destination,
-                false,
-            );
-            if !result.ok {
-                return Err(if result.submitted {
-                    GridPaperComputeFailure::SubmittedIncomplete(
-                        "gridpaper-cell-patch-single-walker-incomplete",
-                    )
-                } else {
-                    GridPaperComputeFailure::Unavailable(
-                        "gridpaper-cell-patch-single-walker-unavailable",
-                    )
-                });
-            }
-            stats.coverage_submits = stats.coverage_submits.saturating_add(result.submits);
-            stats.coverage_walkers = stats.coverage_walkers.saturating_add(result.active_walkers);
+        let result = crate::intel::gpgpu::glyph_mask_layers_rgba8_2d_mode(
+            layers.as_slice(),
+            destination,
+            false,
+        );
+        if !result.ok {
+            return Err(if result.submitted {
+                GridPaperComputeFailure::SubmittedIncomplete(
+                    "gridpaper-cell-patch-batch-incomplete",
+                )
+            } else {
+                GridPaperComputeFailure::Unavailable("gridpaper-cell-patch-batch-unavailable")
+            });
         }
+        stats.coverage_submits = stats.coverage_submits.saturating_add(result.submits);
+        stats.coverage_walkers = stats.coverage_walkers.saturating_add(result.active_walkers);
     }
     Ok(stats)
 }
@@ -3918,6 +3938,7 @@ struct GridPaperRuntime {
     animation_dirty: bool,
     last_sampled_text_colors: [Option<[u8; 4]>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_frames: u64,
+    last_animation_frame_ms: u64,
     latest_snapshot: Option<OwnedSnapshot>,
     queued_snapshot: Option<OwnedSnapshot>,
     pending: Option<ResidentPage>,
@@ -3949,6 +3970,7 @@ impl GridPaperRuntime {
             animation_dirty: false,
             last_sampled_text_colors: [None; TEXT_ANIMATION_COLOR_SLOTS],
             animation_frames: 0,
+            last_animation_frame_ms: 0,
             latest_snapshot: None,
             queued_snapshot: None,
             pending: None,
@@ -4194,6 +4216,17 @@ fn refresh_runtime(runtime: &mut GridPaperRuntime) {
         runtime.text_animations = update.programs;
         runtime.animation_started_ms = Instant::now().as_millis();
         runtime.animation_dirty = true;
+        let animation_cadence_ms = if matches!(
+            runtime.presented_producer(),
+            Some(GridPaperProducer::Kernel(KernelGridOwner {
+                client: KernelGridClient::SpiritResponse,
+                ..
+            }))
+        ) {
+            SPIRIT_MOTION_FRAME_PERIOD_MS
+        } else {
+            SERVICE_PERIOD_MS
+        };
         if topology_changed && let Some(snapshot) = runtime.latest_snapshot.as_ref() {
             runtime.pending = None;
             runtime.queued_snapshot = Some(snapshot.clone());
@@ -4206,7 +4239,7 @@ fn refresh_runtime(runtime: &mut GridPaperRuntime) {
             instance_id,
             runtime.observed_animation_serial,
             runtime.text_animations.iter().flatten().count(),
-            SERVICE_PERIOD_MS,
+            animation_cadence_ms,
             topology_changed,
             topology_changed && runtime.latest_snapshot.is_some(),
         );
@@ -4548,6 +4581,168 @@ fn is_gridpaper_print_key(event: crate::r::keyboard::TrueosKeyboardOutputEvent) 
         && event.key_code == crate::r::keyboard::KEYBOARD_KEY_PRINT_SCREEN
 }
 
+fn is_gridpaper_printer_menu_key(event: crate::r::keyboard::TrueosKeyboardOutputEvent) -> bool {
+    event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+        && event.key_code == crate::r::keyboard::KEYBOARD_KEY_F10
+}
+
+fn remove_printer_menu_context(context: u64) -> Option<PrinterMenuContext> {
+    let mut contexts = PRINTER_MENU_CONTEXTS.lock();
+    let index = contexts
+        .iter()
+        .position(|candidate| candidate.id == context)?;
+    contexts.remove(index)
+}
+
+fn complete_gridpaper_printer_menu(result: crate::ui4::ContextMenuResult) {
+    let Some(context) = remove_printer_menu_context(result.context) else {
+        return;
+    };
+    if result.owner != UI4_OWNER {
+        return;
+    }
+    if result.reason != crate::ui4::ContextMenuCloseReason::Selected {
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: printer menu closed context={} window={} reason={:?} action=none\n",
+            result.context,
+            result.window.raw(),
+            result.reason,
+        );
+        return;
+    }
+    let Some(action) = result.selected_action else {
+        crate::log_warn!(
+            target: "gridpaper";
+            "gridpaper: printer menu selection rejected context={} window={} reason={:?} action=none\n",
+            result.context,
+            result.window.raw(),
+            result.reason,
+        );
+        return;
+    };
+    let Some(printer) = usize::try_from(action)
+        .ok()
+        .and_then(|index| context.printers.get(index))
+        .filter(|printer| crate::r::net::printer::supports_gridpaper_print(printer))
+    else {
+        crate::log_warn!(
+            target: "gridpaper";
+            "gridpaper: printer menu selection rejected context={} action={} reason=missing-or-unsupported-printer\n",
+            result.context,
+            action,
+        );
+        return;
+    };
+    let Some(owner) = context.snapshot.producer.blueprint_owner() else {
+        return;
+    };
+    let printer_name = printer.name.clone();
+    let printer_uri = printer.uri.clone();
+    match crate::r::print2d::submit_gridpaper_to_printer(
+        owner,
+        context.snapshot.generation,
+        context.snapshot.size,
+        context.snapshot.raw,
+        printer_uri.as_str(),
+    ) {
+        Ok(job_id) => {
+            crate::log_info!(
+                target: "gridpaper";
+                "gridpaper: printer menu selection accepted context={} action={} printer={} uri={} job={} owner={} trigger=F10\n",
+                result.context,
+                action,
+                printer_name,
+                printer_uri,
+                job_id,
+                owner,
+            );
+        }
+        Err(error) => {
+            crate::log_warn!(
+                target: "gridpaper";
+                "gridpaper: printer menu selection rejected context={} action={} printer={} error={} trigger=F10\n",
+                result.context,
+                action,
+                printer_name,
+                error,
+            );
+        }
+    }
+}
+
+fn show_gridpaper_printer_menu(runtime: &GridPaperRuntime, event: crate::ui4::Ui4KeyboardEvent) {
+    let Some(window) = runtime.presented_window() else {
+        return;
+    };
+    let Some(snapshot) = runtime
+        .latest_snapshot
+        .as_ref()
+        .filter(|snapshot| snapshot.producer.blueprint_owner().is_some())
+        .cloned()
+    else {
+        return;
+    };
+    let mut printers = crate::r::net::printer::snapshot();
+    if printers.len() > crate::ui4::MAX_CONTEXT_MENU_ENTRIES {
+        crate::log_warn!(
+            target: "gridpaper";
+            "gridpaper: printer menu truncated discovered={} capacity={}\n",
+            printers.len(),
+            crate::ui4::MAX_CONTEXT_MENU_ENTRIES,
+        );
+        printers.truncate(crate::ui4::MAX_CONTEXT_MENU_ENTRIES);
+    }
+    let entries = if printers.is_empty() {
+        vec![crate::ui4::ContextMenuEntry::disabled("NO PRINTERS")]
+    } else {
+        printers
+            .iter()
+            .enumerate()
+            .map(|(index, printer)| {
+                if crate::r::net::printer::supports_gridpaper_print(printer) {
+                    crate::ui4::ContextMenuEntry::action(&printer.name, index as u32)
+                } else {
+                    crate::ui4::ContextMenuEntry::disabled(&printer.name)
+                }
+            })
+            .collect()
+    };
+    let context_id = next_printer_menu_context();
+    {
+        let mut contexts = PRINTER_MENU_CONTEXTS.lock();
+        if contexts.len() >= PRINTER_MENU_CONTEXT_CAPACITY {
+            crate::log_warn!(
+                target: "gridpaper";
+                "gridpaper: printer menu request rejected context={} reason=context-capacity capacity={}\n",
+                context_id,
+                PRINTER_MENU_CONTEXT_CAPACITY,
+            );
+            return;
+        }
+        contexts.push_back(PrinterMenuContext {
+            id: context_id,
+            snapshot,
+            printers,
+        });
+    }
+    let request = crate::ui4::ContextMenuRequest {
+        entries,
+        context: context_id,
+        callback: complete_gridpaper_printer_menu,
+    };
+    if let Err(error) = crate::ui4::show_context_menu(event.source, UI4_OWNER, window, request) {
+        remove_printer_menu_context(context_id);
+        crate::log_warn!(
+            target: "gridpaper";
+            "gridpaper: printer menu request rejected context={} window={} error={:?} trigger=F10\n",
+            context_id,
+            window.raw(),
+            error,
+        );
+    }
+}
+
 fn dispatch_gridpaper_input(runtime: &mut GridPaperRuntime, event: crate::ui4::Ui4InputEvent) {
     if runtime.presented_window() != Some(input_event_window(event)) {
         return;
@@ -4569,6 +4764,11 @@ fn dispatch_gridpaper_input(runtime: &mut GridPaperRuntime, event: crate::ui4::U
                     "gridpaper-PrintScreen-queue-full",
                 );
             }
+        }
+        crate::ui4::Ui4InputEvent::Keyboard(event)
+            if is_gridpaper_printer_menu_key(event.event) =>
+        {
+            show_gridpaper_printer_menu(runtime, event);
         }
         crate::ui4::Ui4InputEvent::Keyboard(event) => {
             edit_gridpaper_cell(runtime, event.event, event.combo_id, event.virtual_keyboard);
@@ -4634,7 +4834,16 @@ fn runtime_needs_render(runtime: &GridPaperRuntime, now_ms: u64) -> bool {
         .flatten()
         .any(|program| program.motion.is_active())
     {
-        return true;
+        let spirit_response = matches!(
+            runtime.presented_producer(),
+            Some(GridPaperProducer::Kernel(KernelGridOwner {
+                client: KernelGridClient::SpiritResponse,
+                ..
+            }))
+        );
+        return !spirit_response
+            || now_ms.saturating_sub(runtime.last_animation_frame_ms)
+                >= SPIRIT_MOTION_FRAME_PERIOD_MS;
     }
     let elapsed_ms = now_ms.saturating_sub(runtime.animation_started_ms);
     sampled_text_colors(page, &runtime.text_animations, elapsed_ms)
@@ -4700,6 +4909,14 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     published_generation,
                 );
                 runtime.animation_dirty = false;
+                if runtime
+                    .text_animations
+                    .iter()
+                    .flatten()
+                    .any(|program| program.motion.is_active())
+                {
+                    runtime.last_animation_frame_ms = now_ms;
+                }
                 runtime.pan_dirty = false;
                 runtime.cursor_dirty = false;
                 runtime.presented_cell_patch_serial = published_cell_patch_serial;
@@ -4783,7 +5000,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
             if cell_patch_changed {
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: cell-patch-frame instance={} edit_seq={} retained_cells={} queued_cells={} patch_serial={} ui4_damage={},{}+{}x{} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} frame_us={} font_path=skrifa-r8-identity-mask submission=one-walker-per-glyph static_base_cache=pat0-wb present_cache=pat3-uc action=retain-page-topology+patch-static-vm\n",
+                    "gridpaper: cell-patch-frame instance={} edit_seq={} retained_cells={} queued_cells={} patch_serial={} ui4_damage={},{}+{}x{} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} frame_us={} font_path=skrifa-r8-identity-mask submission=aligned-multi-walker-batch static_base_cache=pat0-wb present_cache=pat3-uc action=retain-page-topology+patch-static-vm\n",
                     runtime.surface.instance_id,
                     runtime.keyboard_edits,
                     page.cell_patches.len(),
@@ -4828,6 +5045,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
             }
             if animation_changed {
                 runtime.animation_frames = runtime.animation_frames.saturating_add(1);
+                runtime.last_animation_frame_ms = now_ms;
             }
             if animation_changed
                 && (runtime.animation_frames <= 8 || runtime.animation_frames.is_multiple_of(120))
@@ -5350,7 +5568,7 @@ mod tests {
     }
 
     #[test]
-    fn print_screen_triggers_print_but_f10_does_not() {
+    fn print_screen_and_f10_have_distinct_print_paths() {
         let mut event = crate::r::keyboard::TrueosKeyboardOutputEvent {
             kind: crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY,
             key_code: crate::r::keyboard::KEYBOARD_KEY_PRINT_SCREEN,
@@ -5360,6 +5578,7 @@ mod tests {
 
         event.key_code = crate::r::keyboard::KEYBOARD_KEY_F10;
         assert!(!is_gridpaper_print_key(event));
+        assert!(is_gridpaper_printer_menu_key(event));
     }
 
     #[test]

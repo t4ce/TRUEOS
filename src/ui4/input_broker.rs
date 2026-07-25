@@ -60,6 +60,7 @@ pub(crate) struct Ui4PointerEvent {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct Ui4KeyboardEvent {
+    pub(crate) source: Ui4CursorSource,
     pub(crate) window: WindowId,
     pub(crate) event: crate::r::keyboard::TrueosKeyboardOutputEvent,
     pub(crate) combo_id: u32,
@@ -232,6 +233,7 @@ struct CursorRoute {
     maximize_preview: Option<Ui4VisualRect>,
     context_menu: Option<(u32, u32)>,
     context_menu_owns_gesture: bool,
+    requested_context_menu_gesture: Option<u64>,
     suppress_context_menu_open: bool,
     selection_anchor: Option<(u32, u32)>,
     absorb_select: bool,
@@ -256,6 +258,7 @@ impl CursorRoute {
             maximize_preview: None,
             context_menu: None,
             context_menu_owns_gesture: false,
+            requested_context_menu_gesture: None,
             suppress_context_menu_open: false,
             selection_anchor: None,
             absorb_select: false,
@@ -277,6 +280,7 @@ impl CursorRoute {
         self.clear_frame_interaction();
         self.context_menu = None;
         self.context_menu_owns_gesture = false;
+        self.requested_context_menu_gesture = None;
         self.suppress_context_menu_open = false;
     }
 
@@ -339,6 +343,7 @@ impl InputBroker {
             .min_by_key(|(_, route)| route.selection_serial)
             .map(|(index, _)| index)
             .unwrap_or(0);
+        super::context_menu::dismiss_for_source(self.cursors[index].source);
         super::cursor_frame_inout::cursor_retired(self.cursors[index].source);
         self.cursors[index] = CursorRoute::new(source, x, y, 0);
         index
@@ -363,6 +368,7 @@ impl InputBroker {
         if !change.changed && !change.focus_changed {
             return false;
         }
+        super::context_menu::dismiss_for_source(source);
         if change.focus_changed {
             for route in &mut self.cursors {
                 // Context menus belong to cursor routes, not to the globally
@@ -446,16 +452,37 @@ impl InputBroker {
         let dy = signed_delta(y, self.cursors[index].y);
         let hit = topmost_window_at(x, y);
 
+        super::context_menu::pointer_moved(source, x, y, width, height);
         if dx != 0 || dy != 0 {
             self.cursors[index].visible_after_motion = true;
         }
         self.cursors[index].maximize_preview = None;
 
+        if pressed != 0
+            && let Some(serial) = super::context_menu::pointer_down(source, x, y, width, height)
+        {
+            self.cursors[index].requested_context_menu_gesture = Some(serial);
+        }
+
+        if let Some(serial) = self.cursors[index].requested_context_menu_gesture {
+            self.cursors[index].x = x;
+            self.cursors[index].y = y;
+            self.cursors[index].buttons_down = event.buttons_down;
+            if buttons_down == 0 {
+                self.cursors[index].requested_context_menu_gesture = None;
+                super::context_menu::pointer_up(source, serial, x, y, width, height);
+                self.cursors[index].absorb_select = false;
+                self.cursors[index].suppress_context_menu_open = false;
+            }
+            return;
+        }
+
         if pressed != 0 {
-            // Menu actions are not wired yet. An inside click belongs to this
-            // cursor's menu and cannot leak through to the frame below. An
-            // outside click dismisses only this cursor's menu; a secondary
-            // click is suppressed from reopening it on the matching release.
+            // Legacy right-click menu actions are not wired yet. An inside
+            // click belongs to this cursor's menu and cannot leak through to
+            // the frame below. An outside click dismisses only this cursor's
+            // menu; a secondary click is suppressed from reopening it on the
+            // matching release.
             self.cursors[index].handle_context_menu_mouse_down(x, y, width, height);
         }
 
@@ -929,6 +956,7 @@ impl InputBroker {
         enqueue_owner_event(
             target.owner,
             Ui4InputEvent::Keyboard(Ui4KeyboardEvent {
+                source: route_source,
                 window: target.window,
                 event,
                 combo_id,
@@ -1071,7 +1099,9 @@ pub(crate) async fn ui4_input_service_task() {
     );
     let mut cadence = super::InteractionCadence::new();
     loop {
-        if INPUT_BROKER.lock().pump() {
+        let cursor_activity = INPUT_BROKER.lock().pump();
+        super::context_menu::dispatch_pending_callbacks();
+        if cursor_activity {
             SLOT4_VISUAL_CHANGE.signal(());
         }
         Timer::at(cadence.next_deadline()).await;
@@ -1103,6 +1133,34 @@ pub(crate) fn focused_keyboard_state(
     INPUT_BROKER
         .lock()
         .focused_keyboard_state(WindowTarget { owner, window })
+}
+
+pub(crate) fn show_context_menu(
+    source: Ui4CursorSource,
+    owner: WindowOwner,
+    window: WindowId,
+    request: super::ContextMenuRequest,
+) -> Result<(), super::ContextMenuError> {
+    super::context_menu::validate_request(&request)?;
+    let (anchor, color) = {
+        let mut broker = INPUT_BROKER.lock();
+        let Some(route) = broker
+            .cursors
+            .iter_mut()
+            .find(|route| route.source == source)
+        else {
+            return Err(super::ContextMenuError::NotFocused);
+        };
+        let selected = super::selected_frame_for_source(source);
+        if selected != Some(super::CursorFrameKey::new(owner, window))
+            || window_snapshot_for_target(WindowTarget { owner, window }).is_none()
+        {
+            return Err(super::ContextMenuError::NotFocused);
+        }
+        route.context_menu = None;
+        ((route.x, route.y), route.color)
+    };
+    super::context_menu::open(source, owner, window, anchor, color, request)
 }
 
 pub(super) fn release_owner(owner: WindowOwner) -> (usize, usize) {
