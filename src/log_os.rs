@@ -354,8 +354,11 @@ pub(crate) fn gridpaper_print_requested(owner: u8, token: u32, generation: u64) 
 }
 
 pub(crate) fn print2d_job_state(job_id: u32, state: &str, detail: &str) {
-    log_with_area_level(
-        flags::LogArea::Net,
+    // Job transitions are sparse lifecycle evidence, not packet-level network
+    // chatter. Keep them visible even when the Net area is raised to Warn so
+    // a render failure cannot look like a silent printer or missing worker.
+    log_with_target_level(
+        "print2d",
         log::Level::Info,
         format_args!("print2d: job={} state={} detail={}\n", job_id, state, detail),
     );

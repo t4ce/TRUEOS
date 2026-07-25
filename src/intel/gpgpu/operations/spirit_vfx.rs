@@ -193,7 +193,7 @@ fn spirit_vfx_write_control(
         );
         core::ptr::write_volatile(
             dwords.add(8),
-            spirit_vfx_bounded(control.background_intensity, 0.1, 2.5, 1.0).to_bits(),
+            spirit_vfx_bounded(control.background_intensity, 0.1, 4.0, 2.0).to_bits(),
         );
         core::ptr::write_volatile(dwords.add(9), control.background_color_a & 0x00FF_FFFF);
         core::ptr::write_volatile(dwords.add(10), control.background_color_b & 0x00FF_FFFF);

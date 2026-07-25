@@ -19,6 +19,7 @@ static CHART_SINE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::n
 static PIXEL_PLASMA_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CPP_DEMO_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static PARTICLE_CRAFT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FONT_INSTANCE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static LFM25_Q8_PROJECT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static LFM25_Q8_PROJECT_PACKED_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
@@ -32,6 +33,9 @@ static LAB256_RUNTIME: Mutex<Option<Lab256Runtime>> = Mutex::new(None);
 static FONT_COVERAGE_GPU_VA_CURSOR: AtomicU64 =
     AtomicU64::new(DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE);
 static FONT_COVERAGE_GPU_VA_FREE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+static PARTICLE_CRAFT_GPU_VA_CURSOR: AtomicU64 =
+    AtomicU64::new(DIRECT_RCS_GPU_VA_PARTICLE_CRAFT_BASE);
+static PARTICLE_CRAFT_GPU_VA_FREE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static EXECUTION_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static LFM25_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);

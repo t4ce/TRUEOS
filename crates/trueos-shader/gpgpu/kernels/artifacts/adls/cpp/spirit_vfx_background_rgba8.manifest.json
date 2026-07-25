@@ -1,18 +1,14 @@
 {
-  "abi_reference": {
-    "path": "crates/trueos-shader/gpgpu/kernels/artifacts/adls/spirit_vfx_background_rgba8.bin",
-    "result": "exact-match",
-    "sha256": "527042d30fdfeaf111d491b9497ad7d6f0fb5c51369da2968a53b85344da752f"
-  },
+  "abi_reference": null,
   "artifact": {
     "elf": {
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "4c82592a441b88902491b6d3cf8f99a3524a41178a347928cf5845e0872841f7",
-      "size_bytes": 109624,
+      "sha256": "2f856f0e338df1eef71b89ed5dd390ceb2fe8323cc9de7cdae2537a63895340e",
+      "size_bytes": 109608,
       "type": "relocatable",
-      "ze_info_section_offset": 106584,
+      "ze_info_section_offset": 106568,
       "ze_info_section_size": 2205
     },
     "kernels": [
@@ -135,7 +131,7 @@
           "section_name": ".text.spirit_vfx_background_rgba8",
           "section_offset": 64,
           "section_size": 35072,
-          "sha256": "f56bc7ab7e0033a98eca7d9b0a8c19f9792df0efeba8dba04e454f9b8970cce7",
+          "sha256": "73da54963687d4ea95e6174bdc16a5bfc0068fbba5141300e9274af93dd3453b",
           "symbol_size": 34912,
           "symbol_value": 0
         },
@@ -153,9 +149,9 @@
     ],
     "spirv": {
       "embedded_section_offset": 35208,
-      "embedded_section_size": 71304,
-      "sha256": "0acb9fffa911d63999539ca146c19684cabe14284899886f90a55f77508a70be",
-      "size_bytes": 71304
+      "embedded_section_size": 71288,
+      "sha256": "57715314ce0baa075ed3a01553f010bb5aaafbcb2fa53ef93c34d34b7eeade9e",
+      "size_bytes": 71288
     }
   },
   "provenance": {
@@ -229,7 +225,7 @@
       "expected_kernels": [
         "spirit_vfx_background_rgba8"
       ],
-      "name": "cpp-legacy-abi-twin-v1"
+      "name": "cpp-native-aot-v1"
     },
     "reproducibility_check": "passed",
     "toolchain": {
@@ -359,7 +355,7 @@
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_background_rgba8.clcpp",
-        "sha256": "66feafcb18484cd984da6869f21c4dbd5f2b19ef6ad36142f4587a3cc698727b",
+        "sha256": "647c06930247653547c223ecff7e252580ca1397da2c0890185da1d30383ebdb",
         "size_bytes": 24731
       }
     ],
@@ -375,5 +371,5 @@
     "revision_max": 12,
     "revision_min": 12
   },
-  "variant": "cpp"
+  "variant": "cpp-native"
 }

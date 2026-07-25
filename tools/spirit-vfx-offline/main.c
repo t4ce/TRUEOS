@@ -131,7 +131,7 @@ typedef struct {
 
 static const RuntimeControls DEFAULT_RUNTIME_CONTROLS = {
     .speed = 1.0f,
-    .intensity = 1.0f,
+    .intensity = 2.0f,
 };
 
 static const float MAGIC_TIME_STATIC_PREVIEW_SECONDS = 10.0f * 3600.0f + 9.0f * 60.0f + 42.0f;
@@ -649,11 +649,11 @@ static int panel_process_events(SpiritPanel *panel, RuntimeControls *runtime) {
                 break;
             case XK_Down:
                 runtime->intensity =
-                    step_runtime_control(runtime->intensity, -0.01f, 0.1f, 2.5f);
+                    step_runtime_control(runtime->intensity, -0.01f, 0.1f, 4.0f);
                 break;
             case XK_Up:
                 runtime->intensity =
-                    step_runtime_control(runtime->intensity, 0.01f, 0.1f, 2.5f);
+                    step_runtime_control(runtime->intensity, 0.01f, 0.1f, 4.0f);
                 break;
             default:
                 changed = 0;

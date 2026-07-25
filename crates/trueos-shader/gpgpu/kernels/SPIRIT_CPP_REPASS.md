@@ -51,14 +51,15 @@ The repass preserves:
 - clean one-walker and background-enabled ordered two-walker batches;
 - GuC post-sync producer release and final Intel cursor `CUR_SURFLIVE` proof.
 
-Both generated manifests record `variant=cpp`, an exact ABI match against the
-frozen bring-up Zebin fixture, exact target `8086:4680` revision `0x0c`, zero
-scratch/SLM, all transitive inputs, the reviewed toolchain lock, and
-byte-identical two-root reproduction.
+Both generated manifests record `variant=cpp-native` under
+`cpp-native-aot-v1`, with no legacy ABI-reference dependency. They retain the
+reviewed exact target `8086:4680` revision `0x0c`, zero scratch/SLM, all
+transitive inputs, the reviewed toolchain lock, the exact expected kernel set,
+and byte-identical two-root reproduction.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `spirit_vfx_background_rgba8.bin` | 109,624 | `4c82592a441b88902491b6d3cf8f99a3524a41178a347928cf5845e0872841f7` |
+| `spirit_vfx_background_rgba8.bin` | 109,608 | `2f856f0e338df1eef71b89ed5dd390ceb2fe8323cc9de7cdae2537a63895340e` |
 | `spirit_vfx_sprite_rgba8.bin` | 656,728 | `2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac` |
 
 The background maps at `0x0D430000`; its larger C++ image requires the sprite

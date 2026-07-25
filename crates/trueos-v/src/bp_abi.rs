@@ -132,6 +132,27 @@ pub struct TrueosUi4SkyboxRenderParams {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4ParticleCraftParamsV1 {
+    pub version: u32,
+    pub flags: u32,
+    pub seed: u32,
+    pub active_count: u32,
+    pub dt_seconds: f32,
+    pub time_seconds: f32,
+    pub emitter_x: f32,
+    pub emitter_y: f32,
+    pub attractor_x: f32,
+    pub attractor_y: f32,
+    pub attraction: f32,
+    pub swirl: f32,
+    pub gravity_x: f32,
+    pub gravity_y: f32,
+    pub drag: f32,
+    pub intensity: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4SpriteQuad {
     pub sprite_id: u32,
     pub c0_x: f32,
@@ -293,6 +314,10 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_scene_skybox_render_rgb565(
         window_id: u32,
         params: *const TrueosUi4SkyboxRenderParams,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_particle_craft_render(
+        window_id: u32,
+        params: *const TrueosUi4ParticleCraftParamsV1,
     ) -> i32;
 
     pub fn trueos_cabi_poll_once();

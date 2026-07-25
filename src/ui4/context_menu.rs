@@ -146,6 +146,7 @@ pub(super) fn open(
 ) -> Result<(), ContextMenuError> {
     validate_request(&request)?;
     let serial = next_menu_serial();
+    let entry_count = request.entries.len();
     let previous = ACTIVE_MENU.lock().replace(ActiveContextMenu {
         serial,
         source,
@@ -162,6 +163,16 @@ pub(super) fn open(
     if let Some(previous) = previous {
         queue_close(previous, None, ContextMenuCloseReason::Replaced);
     }
+    crate::log_info!(target: "ui4";
+        "ui4/context-menu: opened owner={:?} window={} context={} entries={} cursor={}:{}:{} lifetime=one-shot\n",
+        owner,
+        window.raw(),
+        request.context,
+        entry_count,
+        source.controller_id,
+        source.slot_id,
+        source.ep_target,
+    );
     super::input_broker::notify_slot4_visual_change();
     Ok(())
 }

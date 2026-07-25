@@ -934,4 +934,8 @@ impl AotDecodeBackend for HybridCpuAotDecodeBackend {
         };
         Ok(self.callback(operation, output))
     }
+
+    fn finish_prefill_token(&mut self, output: HiddenQ30) -> Result<(), Self::Error> {
+        self.release_q30(output)
+    }
 }

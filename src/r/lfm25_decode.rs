@@ -194,6 +194,14 @@ pub trait AotDecodeBackend {
         &mut self,
         request: AotDecodeRequest,
     ) -> impl Future<Output = Result<AotDecodeCallback, Self::Error>> + '_;
+
+    /// Retire the final layer output of a state-only prompt token.
+    ///
+    /// This is a synchronous backend bookkeeping boundary, not a numerical
+    /// operation or hardware submission. Implementations must release or
+    /// invalidate `output` and prepare their fixed operation cursor for the
+    /// next token without changing the callback sequence.
+    fn finish_prefill_token(&mut self, output: HiddenQ30) -> Result<(), Self::Error>;
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -241,6 +249,12 @@ pub struct DecodeTokenOutput {
     pub callback_sequence: u64,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct DecodePrefillOutput {
+    pub input_position: u32,
+    pub callback_sequence: u64,
+}
+
 /// Host mirror of the ten shortconv states and six KV caches held by FPGA circuits.
 pub struct DecodeSession {
     position: u32,
@@ -273,6 +287,10 @@ impl DecodeSession {
 
     pub const fn is_poisoned(&self) -> bool {
         self.poisoned
+    }
+
+    pub const fn callback_sequence(&self) -> u64 {
+        self.last_callback_sequence
     }
 
     /// Use only after the backend has reset all FPGA recurrent/KV state circuits.
@@ -318,12 +336,103 @@ impl DecodeSession {
         result
     }
 
+    /// Advance all recurrent and KV state for a non-final prompt token without
+    /// evaluating output-only final normalization or the tied vocabulary head.
+    pub async fn prefill_token<Backend: AotDecodeBackend>(
+        &mut self,
+        backend: &mut Backend,
+        input_token: u32,
+    ) -> Result<DecodePrefillOutput, DecodeError<Backend::Error>> {
+        if self.in_flight {
+            return Err(DecodeError::Busy);
+        }
+        if self.poisoned {
+            return Err(DecodeError::StatePoisoned);
+        }
+        if self.position >= lfm25::MODEL_INITIAL_CONTEXT
+            || self.position >= backend.max_context_positions()
+        {
+            return Err(DecodeError::ContextFull);
+        }
+        DecodePlan::require_prefill_capabilities(backend.capabilities())
+            .map_err(DecodeError::MissingCapability)?;
+        let embedding = EmbeddingRowPlan::new(input_token)?;
+
+        self.in_flight = true;
+        self.in_flight_state_mutated = false;
+        let result = self.run_prefill_token(backend, embedding).await;
+        if result.is_err() && self.in_flight_state_mutated {
+            self.poisoned = true;
+        }
+        self.in_flight = false;
+        self.in_flight_state_mutated = false;
+        result
+    }
+
     async fn run_token<Backend: AotDecodeBackend>(
         &mut self,
         backend: &mut Backend,
         embedding: EmbeddingRowPlan,
         head: TiedLmHeadPlan,
     ) -> Result<DecodeTokenOutput, DecodeError<Backend::Error>> {
+        let (input_position, hidden) = self.run_layers(backend, embedding).await?;
+
+        let callback = self
+            .call(backend, AotDecodeRequest::FinalRmsNorm { input: hidden })
+            .await?;
+        let normalized = self.expect_q8(DecodeOpKind::FinalRmsNorm, callback.output)?;
+        let callback = self
+            .call(
+                backend,
+                AotDecodeRequest::TiedLmHeadArgmax {
+                    head,
+                    input: normalized,
+                },
+            )
+            .await?;
+        let (token, score_q30) = match callback.output {
+            AotDecodeOutput::Argmax {
+                token,
+                score_q30,
+                rows,
+            } if token < lfm25::MODEL_VOCABULARY_SIZE && rows == lfm25::MODEL_VOCABULARY_SIZE => {
+                (token, score_q30)
+            }
+            _ => return self.payload_error(DecodeOpKind::TiedLmHeadArgmax),
+        };
+
+        self.require_all_states_at(self.position + 1)?;
+        self.position += 1;
+        Ok(DecodeTokenOutput {
+            token,
+            score_q30,
+            input_position,
+            callback_sequence: self.last_callback_sequence,
+        })
+    }
+
+    async fn run_prefill_token<Backend: AotDecodeBackend>(
+        &mut self,
+        backend: &mut Backend,
+        embedding: EmbeddingRowPlan,
+    ) -> Result<DecodePrefillOutput, DecodeError<Backend::Error>> {
+        let (input_position, hidden) = self.run_layers(backend, embedding).await?;
+        self.require_all_states_at(self.position + 1)?;
+        backend
+            .finish_prefill_token(hidden)
+            .map_err(DecodeError::Backend)?;
+        self.position += 1;
+        Ok(DecodePrefillOutput {
+            input_position,
+            callback_sequence: self.last_callback_sequence,
+        })
+    }
+
+    async fn run_layers<Backend: AotDecodeBackend>(
+        &mut self,
+        backend: &mut Backend,
+        embedding: EmbeddingRowPlan,
+    ) -> Result<(u32, HiddenQ30), DecodeError<Backend::Error>> {
         let input_position = self.position;
         let callback = self
             .call(backend, AotDecodeRequest::TokenEmbedding { row: embedding })
@@ -410,39 +519,7 @@ impl DecodeSession {
                 .await?;
             hidden = self.expect_q30(DecodeOpKind::FfnResidual, callback.output)?;
         }
-
-        let callback = self
-            .call(backend, AotDecodeRequest::FinalRmsNorm { input: hidden })
-            .await?;
-        let normalized = self.expect_q8(DecodeOpKind::FinalRmsNorm, callback.output)?;
-        let callback = self
-            .call(
-                backend,
-                AotDecodeRequest::TiedLmHeadArgmax {
-                    head,
-                    input: normalized,
-                },
-            )
-            .await?;
-        let (token, score_q30) = match callback.output {
-            AotDecodeOutput::Argmax {
-                token,
-                score_q30,
-                rows,
-            } if token < lfm25::MODEL_VOCABULARY_SIZE && rows == lfm25::MODEL_VOCABULARY_SIZE => {
-                (token, score_q30)
-            }
-            _ => return self.payload_error(DecodeOpKind::TiedLmHeadArgmax),
-        };
-
-        self.require_all_states_at(self.position + 1)?;
-        self.position += 1;
-        Ok(DecodeTokenOutput {
-            token,
-            score_q30,
-            input_position,
-            callback_sequence: self.last_callback_sequence,
-        })
+        Ok((input_position, hidden))
     }
 
     async fn call<Backend: AotDecodeBackend>(
@@ -631,6 +708,10 @@ impl AotDecodeBackend for FailClosedBackend {
         &mut self,
         _request: AotDecodeRequest,
     ) -> Result<AotDecodeCallback, Self::Error> {
+        Err(HardwareDecodeUnavailable)
+    }
+
+    fn finish_prefill_token(&mut self, _output: HiddenQ30) -> Result<(), Self::Error> {
         Err(HardwareDecodeUnavailable)
     }
 }

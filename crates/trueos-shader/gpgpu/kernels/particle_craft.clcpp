@@ -1,0 +1,339 @@
+// TRUEOS ParticleCraft: persistent stateful particles for UI4.
+//
+// The first entry advances an array of compact 32-byte particles in place.
+// The second entry gathers that state into a complete 640x400 RGBA8 frame.
+// Both entries are baked into one exact-target C++ for OpenCL/IGC artifact.
+
+#include "include/trueos_clcpp.hpp"
+
+namespace trueos::gpgpu::particle_craft {
+
+#define TRUEOS_PARTICLE_INLINE __attribute__((always_inline)) inline
+
+inline constexpr uint params_version = 1u;
+inline constexpr uint flag_reset = 1u << 0;
+inline constexpr uint flag_attractor = 1u << 1;
+inline constexpr uint flag_orbit = 1u << 2;
+inline constexpr uint known_flags = flag_reset | flag_attractor | flag_orbit;
+inline constexpr uint maximum_particles = 256u;
+inline constexpr uint frame_width = 640u;
+inline constexpr uint frame_height = 400u;
+inline constexpr float tau = 6.28318530718f;
+
+enum ParamWord : uint {
+    param_version = 0u,
+    param_flags = 1u,
+    param_seed = 2u,
+    param_active_count = 3u,
+    param_dt_seconds = 4u,
+    param_time_seconds = 5u,
+    param_emitter_x = 6u,
+    param_emitter_y = 7u,
+    param_attractor_x = 8u,
+    param_attractor_y = 9u,
+    param_attraction = 10u,
+    param_swirl = 11u,
+    param_gravity_x = 12u,
+    param_gravity_y = 13u,
+    param_drag = 14u,
+    param_intensity = 15u,
+};
+
+TRUEOS_PARTICLE_INLINE float saturate(float value)
+{
+    return clamp(value, 0.0f, 1.0f);
+}
+
+TRUEOS_PARTICLE_INLINE uint hash_u32(uint value)
+{
+    value ^= value >> 16u;
+    value *= 0x7FEB352Du;
+    value ^= value >> 15u;
+    value *= 0x846CA68Bu;
+    value ^= value >> 16u;
+    return value;
+}
+
+TRUEOS_PARTICLE_INLINE float hash_unit(uint value)
+{
+    return static_cast<float>(hash_u32(value) & 0x00FFFFFFu)
+        * (1.0f / 16777216.0f);
+}
+
+TRUEOS_PARTICLE_INLINE float safe_float(uint word, float fallback)
+{
+    const float value = as_float(word);
+    return isfinite(value) ? value : fallback;
+}
+
+TRUEOS_PARTICLE_INLINE float2 orbit_attractor(float time_seconds)
+{
+    const float angle = time_seconds * 0.43f;
+    return (float2)(
+        320.0f + native_cos(angle) * 142.0f,
+        198.0f + native_sin(angle * 1.31f) * 88.0f);
+}
+
+TRUEOS_PARTICLE_INLINE void spawn_particle(
+    uint id,
+    uint seed,
+    float time_seconds,
+    float2 emitter,
+    float2 gravity,
+    bool warm,
+    float4 &motion,
+    float4 &visual)
+{
+    const uint epoch = static_cast<uint>(fmax(time_seconds, 0.0f) * 11.0f);
+    const uint base = hash_u32(seed ^ (id * 0x9E3779B9u) ^ epoch);
+    const float spread = hash_unit(base ^ 0xB5297A4Du) - 0.5f;
+    const float lift = hash_unit(base ^ 0x68E31DA4u);
+    const float side = hash_unit(base ^ 0x1B56C4E9u) - 0.5f;
+    const float lifetime = 1.35f + hash_unit(base ^ 0xD1B54A35u) * 2.35f;
+    const float size = 1.45f + hash_unit(base ^ 0x94D049BBu) * 2.85f;
+    const float hue = hash_unit(base ^ 0x369DEA0Fu);
+    const float angle = -1.57079632679f + spread * 1.22f;
+    const float speed = 72.0f + lift * 154.0f;
+    float2 velocity = (float2)(
+        native_cos(angle) * speed + side * 28.0f,
+        native_sin(angle) * speed);
+    float age = warm ? hash_unit(base ^ 0xA24BAED5u) * lifetime * 0.92f : 0.0f;
+    float2 position = emitter
+        + (float2)(spread * 14.0f, (hash_unit(base ^ 0xC2B2AE35u) - 0.5f) * 8.0f);
+
+    if (warm) {
+        position += velocity * age + gravity * (0.5f * age * age);
+        velocity += gravity * age;
+    }
+    motion = (float4)(position.x, position.y, velocity.x, velocity.y);
+    visual = (float4)(age, lifetime, size, hue);
+}
+
+TRUEOS_PARTICLE_INLINE float distance_to_segment_squared(
+    float2 point,
+    float2 start,
+    float2 end)
+{
+    const float2 segment = end - start;
+    const float denominator = fmax(dot(segment, segment), 0.0001f);
+    const float amount = saturate(dot(point - start, segment) / denominator);
+    const float2 delta = point - (start + segment * amount);
+    return dot(delta, delta);
+}
+
+TRUEOS_PARTICLE_INLINE float3 palette(float hue)
+{
+    const float violet_weight = saturate(1.0f - fabs(hue - 0.20f) * 3.6f);
+    const float cyan_weight = saturate(1.0f - fabs(hue - 0.70f) * 3.2f);
+    const float3 violet = (float3)(0.50f, 0.17f, 1.00f);
+    const float3 cyan = (float3)(0.05f, 0.90f, 1.00f);
+    const float3 electric = mix(violet, cyan, cyan_weight);
+    return mix((float3)(0.34f, 0.09f, 0.78f), electric, 0.45f + violet_weight * 0.55f);
+}
+
+TRUEOS_PARTICLE_INLINE uint pack_rgba8(float3 color)
+{
+    color = clamp(color, (float3)(0.0f), (float3)(1.0f));
+    color = native_sqrt(color);
+    const uint red = static_cast<uint>(color.x * 255.0f + 0.5f);
+    const uint green = static_cast<uint>(color.y * 255.0f + 0.5f);
+    const uint blue = static_cast<uint>(color.z * 255.0f + 0.5f);
+    return 0xFF000000u | (blue << 16u) | (green << 8u) | red;
+}
+
+} // namespace trueos::gpgpu::particle_craft
+
+TRUEOS_REQD_SUB_GROUP_SIZE_16
+__kernel void particle_craft_step(
+    __global float4 *particle_state,
+    __global const uint *params)
+{
+    using namespace trueos::gpgpu::particle_craft;
+
+    const uint id = static_cast<uint>(get_global_id(0));
+    const uint count = min(params[param_active_count], maximum_particles);
+    if (id >= count || params[param_version] != params_version) {
+        return;
+    }
+
+    const uint flags = params[param_flags] & known_flags;
+    const uint seed = params[param_seed];
+    const float dt = clamp(safe_float(params[param_dt_seconds], 0.0f), 0.0f, 0.05f);
+    const float time_seconds = fmax(safe_float(params[param_time_seconds], 0.0f), 0.0f);
+    const float2 emitter = (float2)(
+        safe_float(params[param_emitter_x], 320.0f),
+        safe_float(params[param_emitter_y], 294.0f));
+    const float2 gravity = (float2)(
+        safe_float(params[param_gravity_x], 0.0f),
+        safe_float(params[param_gravity_y], 58.0f));
+
+    float4 motion = particle_state[id * 2u];
+    float4 visual = particle_state[id * 2u + 1u];
+    const bool invalid =
+        !all(isfinite(motion)) || !all(isfinite(visual))
+        || visual.y <= 0.0f || visual.x < 0.0f || visual.x >= visual.y
+        || motion.x < -160.0f || motion.x > 800.0f
+        || motion.y < -220.0f || motion.y > 620.0f;
+    if ((flags & flag_reset) != 0u || invalid) {
+        spawn_particle(
+            id,
+            seed,
+            time_seconds,
+            emitter,
+            gravity,
+            (flags & flag_reset) != 0u,
+            motion,
+            visual);
+        particle_state[id * 2u] = motion;
+        particle_state[id * 2u + 1u] = visual;
+        return;
+    }
+
+    float2 position = motion.xy;
+    float2 velocity = motion.zw;
+    float2 acceleration = gravity;
+    if ((flags & (flag_attractor | flag_orbit)) != 0u) {
+        const float2 attractor = (flags & flag_orbit) != 0u
+            ? orbit_attractor(time_seconds)
+            : (float2)(
+                safe_float(params[param_attractor_x], 320.0f),
+                safe_float(params[param_attractor_y], 180.0f));
+        const float2 delta = attractor - position;
+        const float radius_squared = fmax(dot(delta, delta), 144.0f);
+        const float inverse_radius = native_rsqrt(radius_squared);
+        const float attraction =
+            clamp(safe_float(params[param_attraction], 94.0f), -480.0f, 480.0f);
+        const float swirl =
+            clamp(safe_float(params[param_swirl], 72.0f), -480.0f, 480.0f);
+        const float2 direction = delta * inverse_radius;
+        const float falloff = clamp(8400.0f / radius_squared, 0.16f, 2.8f);
+        acceleration += direction * attraction * falloff;
+        acceleration += (float2)(-direction.y, direction.x) * swirl * falloff;
+    }
+
+    const float drag = clamp(safe_float(params[param_drag], 0.42f), 0.0f, 5.0f);
+    velocity += acceleration * dt;
+    velocity *= fmax(0.0f, 1.0f - drag * dt);
+    position += velocity * dt;
+    visual.x += dt;
+
+    if (visual.x >= visual.y
+        || position.x < -160.0f || position.x > 800.0f
+        || position.y < -220.0f || position.y > 620.0f) {
+        spawn_particle(
+            id,
+            seed ^ hash_u32(static_cast<uint>(time_seconds * 997.0f)),
+            time_seconds,
+            emitter,
+            gravity,
+            false,
+            motion,
+            visual);
+    } else {
+        motion = (float4)(position.x, position.y, velocity.x, velocity.y);
+    }
+    particle_state[id * 2u] = motion;
+    particle_state[id * 2u + 1u] = visual;
+}
+
+TRUEOS_REQD_SUB_GROUP_SIZE_16
+__kernel void particle_craft_render_rgba8(
+    __global const float4 *particle_state,
+    __global const uint *params,
+    __global uint *dst_rgba)
+{
+    using namespace trueos::gpgpu::particle_craft;
+
+    const uint x = static_cast<uint>(get_global_id(0));
+    const uint y = static_cast<uint>(get_global_id(1));
+    if (x >= frame_width || y >= frame_height) {
+        return;
+    }
+
+    const float2 point = (float2)(
+        static_cast<float>(x) + 0.5f,
+        static_cast<float>(y) + 0.5f);
+    const float2 normalized = (point - (float2)(320.0f, 200.0f)) / 200.0f;
+    const float radius = native_sqrt(dot(normalized, normalized));
+    const float time_seconds =
+        fmax(safe_float(params[param_time_seconds], 0.0f), 0.0f);
+    const float scan = 0.5f + 0.5f * native_sin(point.y * 0.070f + time_seconds * 0.7f);
+    float3 color = (float3)(0.003f, 0.006f, 0.020f)
+        + (float3)(0.012f, 0.006f, 0.035f) * saturate(1.05f - radius)
+        + (float3)(0.002f, 0.006f, 0.014f) * scan;
+
+    const uint flags = params[param_flags] & known_flags;
+    const float2 emitter = (float2)(
+        safe_float(params[param_emitter_x], 320.0f),
+        safe_float(params[param_emitter_y], 294.0f));
+    const float emitter_distance = native_sqrt(dot(point - emitter, point - emitter));
+    color += (float3)(0.08f, 0.035f, 0.20f)
+        * (1.0f / (1.0f + emitter_distance * emitter_distance * 0.005f));
+
+    if ((flags & (flag_attractor | flag_orbit)) != 0u) {
+        const float2 attractor = (flags & flag_orbit) != 0u
+            ? orbit_attractor(time_seconds)
+            : (float2)(
+                safe_float(params[param_attractor_x], 320.0f),
+                safe_float(params[param_attractor_y], 180.0f));
+        const float attractor_distance =
+            native_sqrt(dot(point - attractor, point - attractor));
+        const float ring = 1.0f
+            - saturate(fabs(attractor_distance - 11.0f) * 0.34f);
+        color += (float3)(0.04f, 0.45f, 0.65f) * ring * 0.16f;
+    }
+
+    const uint count = params[param_version] == params_version
+        ? min(params[param_active_count], maximum_particles)
+        : 0u;
+    const float intensity =
+        clamp(safe_float(params[param_intensity], 1.0f), 0.0f, 4.0f);
+    for (uint id = 0u; id < maximum_particles; ++id) {
+        if (id >= count) {
+            break;
+        }
+        const float4 motion = particle_state[id * 2u];
+        const float4 visual = particle_state[id * 2u + 1u];
+        const float life = saturate(visual.x / fmax(visual.y, 0.001f));
+        const float envelope =
+            saturate(life * 8.0f) * saturate((1.0f - life) * 3.6f);
+        if (envelope <= 0.001f) {
+            continue;
+        }
+
+        const float2 head = motion.xy;
+        const float2 velocity = motion.zw;
+        const float speed = native_sqrt(dot(velocity, velocity));
+        const float tail_scale = clamp(0.035f + speed * 0.00055f, 0.035f, 0.16f);
+        const float2 tail = head - velocity * tail_scale;
+        const float size = clamp(visual.z, 0.7f, 7.0f);
+        const float reach = size * 5.4f + 2.0f;
+        const float2 lower = fmin(head, tail) - reach;
+        const float2 upper = fmax(head, tail) + reach;
+        if (point.x < lower.x || point.y < lower.y
+            || point.x > upper.x || point.y > upper.y) {
+            continue;
+        }
+
+        const float head_distance_squared = dot(point - head, point - head);
+        const float trail_distance_squared =
+            distance_to_segment_squared(point, tail, head);
+        const float core = saturate(1.0f - head_distance_squared / (size * size));
+        const float trail = saturate(
+            1.0f - trail_distance_squared / (size * size * 0.66f));
+        const float glow =
+            1.0f / (1.0f + trail_distance_squared / (size * size * 4.8f));
+        const float energy =
+            (core * core * 1.9f + trail * trail * 0.72f + glow * 0.17f)
+            * envelope * intensity;
+        const float3 particle_color = palette(visual.w);
+        color += particle_color * energy;
+        color += (float3)(0.88f, 0.96f, 1.0f)
+            * core * core * envelope * intensity * 0.88f;
+    }
+
+    color = color / ((float3)(1.0f) + color);
+    dst_rgba[y * frame_width + x] = pack_rgba8(color);
+}
+
+#undef TRUEOS_PARTICLE_INLINE

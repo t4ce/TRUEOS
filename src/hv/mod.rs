@@ -2845,10 +2845,10 @@ async fn vmx_launch_once_with_ept(
 
         if first {
             crate::log!("app-vm-run-queue: vmlaunch begin vm={}\n", vm_id);
-            vmlaunch_once_wrapper(&mut lr);
+            vmlaunch_once_wrapper(vm_id, &mut lr);
             first = false;
         } else {
-            vmresume_once_wrapper(&mut lr);
+            vmresume_once_wrapper(vm_id, &mut lr);
         }
 
         if lr.launch_failed != 0 {
@@ -3555,9 +3555,15 @@ fn setup_vmcs_for_launch(
                 build_guest_cr3_for_vm_with_mode(vm_id, guest_rip, guest_rsp, boot_mode)?;
             let launch_guest_rflags = if let Some(restored) = restored {
                 crate::hv::vmx::set_guest_registers(restored.guest_registers);
+                crate::hv::vmx::restore_guest_extended_state(
+                    vm_id,
+                    restored.guest_extended_state_mask,
+                    &restored.guest_extended_state,
+                )?;
                 restored.guest_rflags
             } else {
                 crate::hv::vmx::reset_guest_registers();
+                crate::hv::vmx::reset_guest_extended_state(vm_id)?;
                 guest_rflags
             };
             vmwrite(VMCS_GUEST_CR0, host_cr0)?;
@@ -3748,9 +3754,15 @@ fn setup_vmcs_for_launch(
     let guest_cr3 = build_guest_cr3_for_vm(vm_id, guest_rip, guest_rsp)?;
     let launch_guest_rflags = if let Some(restored) = restored {
         crate::hv::vmx::set_guest_registers(restored.guest_registers);
+        crate::hv::vmx::restore_guest_extended_state(
+            vm_id,
+            restored.guest_extended_state_mask,
+            &restored.guest_extended_state,
+        )?;
         restored.guest_rflags
     } else {
         crate::hv::vmx::reset_guest_registers();
+        crate::hv::vmx::reset_guest_extended_state(vm_id)?;
         guest_rflags
     };
     vmwrite(VMCS_GUEST_CR0, host_cr0)?;

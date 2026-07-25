@@ -66,7 +66,7 @@ pub(crate) use context_menu::{
 };
 pub(crate) use cursor_frame_inout::{
     CursorFrameKey, GlobalKeyboardDisposition, GlobalKeyboardHookId, Ui4CursorIcon,
-    Ui4CursorSource, cursor_icon_for, register_global_keyboard_hook, selected_frame,
+    Ui4CursorSource, cursor_color, cursor_icon_for, register_global_keyboard_hook, selected_frame,
     selected_frame_for_source, selection_strips, set_window_cursor_icon, set_window_custom_cursor,
     source_selected, unregister_global_keyboard_hook,
 };

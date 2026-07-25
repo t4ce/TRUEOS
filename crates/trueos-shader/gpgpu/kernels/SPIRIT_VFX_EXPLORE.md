@@ -151,7 +151,7 @@ legacy OpenCL-C, or duplicate shader implementation.
 
 | Artifact | Bytes | BTIs | Cross-thread | Per-thread | SHA-256 |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `spirit_vfx_background_rgba8.bin` | 109,624 | 2 | 64 | 96 | `4c82592a441b88902491b6d3cf8f99a3524a41178a347928cf5845e0872841f7` |
+| `spirit_vfx_background_rgba8.bin` | 109,608 | 2 | 64 | 96 | `2f856f0e338df1eef71b89ed5dd390ceb2fe8323cc9de7cdae2537a63895340e` |
 | `spirit_vfx_sprite_rgba8.bin` | 656,728 | 3 | 96 | 96 | `2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac` |
 
 Both artifacts use text offset `0x40` within their own Zebin. The clean default

@@ -140,6 +140,37 @@ impl GpgpuOwnedRgba8Surface {
     pub(crate) const fn surface(&self) -> GpgpuRgba8Surface {
         self.surface
     }
+
+    /// Copy a completed linear RGBA surface into a tightly packed CPU buffer.
+    ///
+    /// GridPaper printing is the cold consumer for this path. Live UI4 frames
+    /// remain GPU-owned and never read back; a print raster is read once only
+    /// after the same compute renderer has produced its final release proof.
+    pub(crate) fn readback_tight_rgba(&self) -> Option<Vec<u8>> {
+        if !self.surface.is_valid() || self.virt.is_null() {
+            return None;
+        }
+        let row_bytes = (self.surface.width as usize)
+            .checked_mul(core::mem::size_of::<u32>())?;
+        let pitch_bytes = self.surface.pitch_bytes as usize;
+        if pitch_bytes < row_bytes {
+            return None;
+        }
+        let output_bytes = row_bytes.checked_mul(self.surface.height as usize)?;
+        super::dma_flush(self.virt, self.surface.bytes);
+        let mut rgba = Vec::with_capacity(output_bytes);
+        for row in 0..self.surface.height as usize {
+            let offset = row.checked_mul(pitch_bytes)?;
+            let end = offset.checked_add(row_bytes)?;
+            if end > self.surface.bytes {
+                return None;
+            }
+            let source =
+                unsafe { core::slice::from_raw_parts(self.virt.add(offset), row_bytes) };
+            rgba.extend_from_slice(source);
+        }
+        Some(rgba)
+    }
 }
 
 impl Drop for GpgpuOwnedRgba8Surface {

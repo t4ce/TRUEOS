@@ -158,7 +158,17 @@ impl DiscoveryState {
     fn materialize(&self) -> Vec<PrinterSnapshot> {
         let mut result = Vec::new();
         for printer in self.printers.values() {
-            if printer.target.is_empty() || printer.port == 0 {
+            // mDNS responses commonly include the printer's HTTP admin,
+            // raw-port 9100, and other service records in the additional
+            // section. TXT/SRV records may therefore create a complete-looking
+            // PartialPrinter without ever being named by an IPP PTR. Only a
+            // service reached through the queried IPP/IPPS hierarchy is a
+            // printable endpoint.
+            if printer.target.is_empty()
+                || printer.port == 0
+                || (!printer.service.contains("_ipp._tcp")
+                    && !printer.service.contains("_ipps._tcp"))
+            {
                 continue;
             }
             let secure =
@@ -695,5 +705,34 @@ mod tests {
         assert!(text.contains("discovery_interval_ms=15000\n"));
         assert!(text.contains("stale_after_ms=45000\n"));
         assert!(text.contains("printer_count=2\n"));
+    }
+
+    #[test]
+    fn materialize_ignores_unsolicited_http_and_raw_socket_records() {
+        let mut state = DiscoveryState::default();
+        state
+            .ipv4
+            .insert(String::from("officejet.local"), [192, 168, 1, 20]);
+        for (key, service, port) in [
+            ("officejet._ipp._tcp.local", "_ipp._tcp.local.", 631),
+            ("officejet._http._tcp.local", "", 80),
+            ("officejet._pdl-datastream._tcp.local", "", 9_100),
+        ] {
+            state.printers.insert(
+                String::from(key),
+                PartialPrinter {
+                    instance: String::from(key),
+                    service: String::from(service),
+                    target: String::from("officejet.local."),
+                    port,
+                    txt: BTreeMap::new(),
+                    last_seen_ms: 1,
+                },
+            );
+        }
+
+        let printers = state.materialize();
+        assert_eq!(printers.len(), 1);
+        assert_eq!(printers[0].uri, "ipp://192.168.1.20:631/ipp/print");
     }
 }

@@ -58,7 +58,7 @@ pub(crate) const EDGE_FADE_CONTROL: SpiritVfxSliderSpec =
 const ALPHA_BACKGROUND_TRANSITION_CONTROLS: [SpiritVfxSliderSpec; 3] = [
     slider("Opacity", 0.0, 1.0, 0.01, 0.0, ""),
     slider("Speed", 0.0, 4.0, 0.01, 1.0, "x"),
-    slider("Intensity", 0.1, 2.5, 0.01, 1.0, "x"),
+    slider("Intensity", 0.1, 4.0, 0.01, 2.0, "x"),
 ];
 
 pub(crate) const PARTICLE_CONTROLS: [SpiritVfxSliderSpec; 4] = [
@@ -632,7 +632,7 @@ impl SpiritVfxAlphaBackground {
         effect: SpiritVfxBackgroundEffect::NebulaSmoke,
         opacity: 0.58,
         speed: 0.45,
-        intensity: 1.2,
+        intensity: 2.0,
         bg_color_a: SpiritVfxRgb8::rgb(0x88, 0x3D, 0xFF),
         bg_color_b: SpiritVfxRgb8::rgb(0x30, 0xC8, 0xFF),
     };
@@ -655,7 +655,7 @@ impl Default for SpiritVfxAlphaBackground {
             effect: SpiritVfxBackgroundEffect::Transparent,
             opacity: 0.0,
             speed: 1.0,
-            intensity: 1.0,
+            intensity: 2.0,
             bg_color_a: SpiritVfxRgb8::rgb(0x6F, 0x4C, 0xFF),
             bg_color_b: SpiritVfxRgb8::rgb(0x4D, 0xE7, 0xFF),
         }
@@ -740,7 +740,7 @@ impl SpiritVfxControlPanel {
         let background = &mut self.alpha_background;
         background.opacity = bounded(background.opacity, 0.0, 1.0, 0.0);
         background.speed = bounded(background.speed, 0.0, 4.0, 1.0);
-        background.intensity = bounded(background.intensity, 0.1, 2.5, 1.0);
+        background.intensity = bounded(background.intensity, 0.1, 4.0, 2.0);
 
         let particles = &mut self.particle_pass;
         particles.amount = bounded(particles.amount, 0.0, 90.0, 28.0);
@@ -1027,6 +1027,8 @@ const REASONING_VFX_FRAME_SECONDS: f32 = 1.0 / 60.0;
 const REASONING_VFX_SPEED_CENTER: f32 = 2.0;
 const REASONING_VFX_SPEED_AMPLITUDE: f32 = 2.0;
 const REASONING_VFX_SPEED_CYCLES: f32 = 4.0;
+const REASONING_VFX_INTENSITY_SPAWN: f32 = 1.0;
+const REASONING_VFX_INTENSITY_TARGET: f32 = 4.0;
 // WaterRipples uses phase coefficients 1, 2.2, 4, and 5.1. Twenty PI is their
 // smallest convenient shared period, so wrapping here is visually exact and
 // retains f32 phase precision across arbitrarily long sessions.
@@ -1186,7 +1188,7 @@ pub(crate) fn select_cpp_repass(
             0.82
         },
         speed: 1.0,
-        intensity: 1.0,
+        intensity: 2.0,
         bg_color_a,
         bg_color_b,
     };
@@ -1351,6 +1353,7 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
 }
 
 fn reasoning_background(level: f32, speed: f32) -> SpiritVfxAlphaBackground {
+    let level = level.clamp(0.0, 1.0);
     let mut background = transitioned_background(
         SpiritVfxBackgroundEffect::WaterRipples,
         level,
@@ -1364,11 +1367,13 @@ fn reasoning_background(level: f32, speed: f32) -> SpiritVfxAlphaBackground {
         ALPHA_BACKGROUND_TRANSITION_CONTROLS[1].min,
         ALPHA_BACKGROUND_TRANSITION_CONTROLS[1].max,
     );
+    background.intensity = REASONING_VFX_INTENSITY_SPAWN
+        + (REASONING_VFX_INTENSITY_TARGET - REASONING_VFX_INTENSITY_SPAWN) * level;
     background
 }
 
 fn idle_clock_background(level: f32) -> SpiritVfxAlphaBackground {
-    transitioned_background(SpiritVfxBackgroundEffect::MagicTimeCircle, level, [1.0, 1.0, 1.0])
+    transitioned_background(SpiritVfxBackgroundEffect::MagicTimeCircle, level, [1.0, 1.0, 2.0])
 }
 
 fn transitioned_background(
@@ -1402,7 +1407,7 @@ fn application_background(effect: SpiritVfxBackgroundEffect) -> SpiritVfxAlphaBa
             effect,
             opacity: 0.82,
             speed: 1.0,
-            intensity: 1.0,
+            intensity: 2.0,
             bg_color_a,
             bg_color_b,
         }
@@ -1412,12 +1417,12 @@ fn application_background(effect: SpiritVfxBackgroundEffect) -> SpiritVfxAlphaBa
 
 /// Cursor-selected application backgrounds remain fully animated while
 /// opacity changes independently. Background geometry is always fixed.
-/// Preserve authored values above one (for example Nebula intensity 1.2).
+/// Preserve authored values above the normal settled intensity.
 fn steady_background_controls(
     mut background: SpiritVfxAlphaBackground,
 ) -> SpiritVfxAlphaBackground {
     background.speed = background.speed.max(1.0);
-    background.intensity = background.intensity.max(1.0);
+    background.intensity = background.intensity.max(2.0);
     background
 }
 

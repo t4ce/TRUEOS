@@ -472,34 +472,54 @@ async fn run_lum_turn(
 
     let before = crate::intel::gpgpu::lfm25_q8_project_stats();
     let mut next_token = None;
-    let callback_start =
-        context_before as u64 * trueos_fpga_abi::lfm25_decode::OPS_PER_TOKEN as u64;
+    let callback_start = module_state.callback_sequence;
     let mut last_callback = callback_start;
     for (index, &token) in prompt_tokens.iter().enumerate() {
         if session_should_stop(target) {
             return false;
         }
-        match ::lumen::async_module::forward(
-            module,
-            crate::lumen::decode::Lfm25DecodeInput::new(token),
-        )
-        .await
-        {
-            Ok(output) => {
-                next_token = Some(output.token);
-                last_callback = output.callback_sequence;
+        if index + 1 == prompt_tokens.len() {
+            match ::lumen::async_module::forward(
+                module,
+                crate::lumen::decode::Lfm25DecodeInput::new(token),
+            )
+            .await
+            {
+                Ok(output) => {
+                    next_token = Some(output.token);
+                    last_callback = output.callback_sequence;
+                }
+                Err(error) => {
+                    print_matrix_target_line(
+                        target,
+                        alloc::format!(
+                            "lum: failed stage=prefill token={}/{} error={error:?}",
+                            index + 1,
+                            prompt_tokens.len(),
+                        )
+                        .as_str(),
+                    );
+                    return false;
+                }
             }
-            Err(error) => {
-                print_matrix_target_line(
-                    target,
-                    alloc::format!(
-                        "lum: failed stage=prefill token={}/{} error={error:?}",
-                        index + 1,
-                        prompt_tokens.len(),
-                    )
-                    .as_str(),
-                );
-                return false;
+        } else {
+            match module
+                .prefill_token(crate::lumen::decode::Lfm25DecodeInput::new(token))
+                .await
+            {
+                Ok(output) => last_callback = output.callback_sequence,
+                Err(error) => {
+                    print_matrix_target_line(
+                        target,
+                        alloc::format!(
+                            "lum: failed stage=prefill token={}/{} error={error:?}",
+                            index + 1,
+                            prompt_tokens.len(),
+                        )
+                        .as_str(),
+                    );
+                    return false;
+                }
             }
         }
         if (index + 1) % 4 == 0 || index + 1 == prompt_tokens.len() {
@@ -551,12 +571,17 @@ async fn run_lum_turn(
     let igpu_gpu_samples = prefill_after
         .gpu_timestamp_samples
         .saturating_sub(before.gpu_timestamp_samples);
-    let expected_callbacks =
-        prompt_tokens.len() as u64 * trueos_fpga_abi::lfm25_decode::OPS_PER_TOKEN as u64;
-    let expected_igpu_projections =
-        prompt_tokens.len() as u64 * crate::intel::gpgpu::LFM25_Q8_PROJECTIONS_PER_TOKEN;
-    let expected_igpu_submissions =
-        prompt_tokens.len() as u64 * crate::intel::gpgpu::LFM25_Q8_SUBMISSIONS_PER_TOKEN;
+    let state_only_tokens = prompt_tokens.len().saturating_sub(1) as u64;
+    let full_tokens = u64::from(!prompt_tokens.is_empty());
+    let expected_callbacks = state_only_tokens
+        * trueos_fpga_abi::lfm25_decode::OPS_PER_PREFILL_TOKEN as u64
+        + full_tokens * trueos_fpga_abi::lfm25_decode::OPS_PER_TOKEN as u64;
+    let expected_igpu_projections = state_only_tokens
+        * crate::intel::gpgpu::LFM25_Q8_PROJECTIONS_PER_PREFILL_TOKEN
+        + full_tokens * crate::intel::gpgpu::LFM25_Q8_PROJECTIONS_PER_TOKEN;
+    let expected_igpu_submissions = state_only_tokens
+        * crate::intel::gpgpu::LFM25_Q8_SUBMISSIONS_PER_PREFILL_TOKEN
+        + full_tokens * crate::intel::gpgpu::LFM25_Q8_SUBMISSIONS_PER_TOKEN;
     print_matrix_target_line(
         target,
         alloc::format!(

@@ -927,6 +927,30 @@ impl InputBroker {
         if !window.interaction.receives_input {
             return;
         }
+        if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+            && matches!(
+                event.key_code,
+                crate::r::keyboard::KEYBOARD_KEY_F10
+                    | crate::r::keyboard::KEYBOARD_KEY_PRINT_SCREEN
+            )
+        {
+            crate::log_info!(target: "ui4";
+                "ui4/input: printer shortcut forwarded named_key={} ring_seq={} device_seq={} controller={} slot={} ep={} owner={:?} window={} cursor={}:{}:{} combo={} virtual_keyboard={}\n",
+                event.key_code,
+                event.seq,
+                event.device_seq,
+                event.controller_id,
+                event.slot_id,
+                event.ep_target,
+                target.owner,
+                target.window.raw(),
+                route_source.controller_id,
+                route_source.slot_id,
+                route_source.ep_target,
+                combo_id,
+                virtual_keyboard,
+            );
+        }
         // Keep the keyboard identity beside the cursor which participated in
         // selecting its frame. An exact HUT combo (including Lilly's paired
         // vCursor/vKeyboard) therefore cannot type into a more recently

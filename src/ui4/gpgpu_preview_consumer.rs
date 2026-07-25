@@ -59,6 +59,7 @@ pub(crate) enum GpgpuPreviewPreset {
     CppVoronoi,
     CppRetroSun,
     CppAudio,
+    CppParticle,
 }
 
 impl GpgpuPreviewPreset {
@@ -78,6 +79,7 @@ impl GpgpuPreviewPreset {
             Self::CppVoronoi => "cpp-voronoi",
             Self::CppRetroSun => "cpp-retro-sun",
             Self::CppAudio => "cpp-audio",
+            Self::CppParticle => "cpp-particle",
         }
     }
 
@@ -91,6 +93,7 @@ impl GpgpuPreviewPreset {
                 | Self::CppVoronoi
                 | Self::CppRetroSun
                 | Self::CppAudio
+                | Self::CppParticle
         )
     }
 
@@ -117,7 +120,8 @@ impl GpgpuPreviewPreset {
             | Self::CppSdf
             | Self::CppVoronoi
             | Self::CppRetroSun
-            | Self::CppAudio => "slot1-direct",
+            | Self::CppAudio
+            | Self::CppParticle => "slot1-direct",
         }
     }
 }
@@ -125,6 +129,10 @@ impl GpgpuPreviewPreset {
 const fn preview_extent(preset: GpgpuPreviewPreset) -> (u32, u32) {
     match preset {
         GpgpuPreviewPreset::Lab256 => (LAB256_PREVIEW_SIZE, LAB256_PREVIEW_SIZE),
+        GpgpuPreviewPreset::CppParticle => (
+            crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_WIDTH,
+            crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_HEIGHT,
+        ),
         _ => (PREVIEW_WIDTH, PREVIEW_HEIGHT),
     }
 }
@@ -338,6 +346,7 @@ struct ActivePreview {
     next_render: Instant,
     static_needs_publish: bool,
     extra_surfaces: Vec<StaticPreviewSurface>,
+    particle_craft: Option<crate::intel::gpgpu::GpgpuOwnedParticleCraftState>,
     metrics: GpgpuPreviewMetrics,
 }
 
@@ -657,6 +666,7 @@ fn initialize_compute_preview_set(
             next_render: now,
             static_needs_publish: true,
             extra_surfaces: Vec::new(),
+            particle_craft: None,
             metrics: GpgpuPreviewMetrics::default(),
         });
     }
@@ -708,7 +718,9 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         // Every C++ demo consumes UI4's maximize/restore extent notification
         // and replaces its double-buffer frame. Other probes retain their
         // proven fixed-size placement behavior.
-        interaction: if desired.config.preset.is_cpp() {
+        interaction: if desired.config.preset.is_cpp()
+            && desired.config.preset != GpgpuPreviewPreset::CppParticle
+        {
             super::WindowInteraction::APPLICATION
         } else {
             super::WindowInteraction::MOVABLE_FRAME
@@ -736,6 +748,7 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         next_render: now,
         static_needs_publish: true,
         extra_surfaces: Vec::new(),
+        particle_craft: None,
         metrics: GpgpuPreviewMetrics::default(),
     })
 }
@@ -836,6 +849,7 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
         next_render: now,
         static_needs_publish: true,
         extra_surfaces: surfaces.iter().copied().skip(1).collect(),
+        particle_craft: None,
         metrics: GpgpuPreviewMetrics::default(),
     })
 }
@@ -1011,7 +1025,8 @@ fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str>
         | GpgpuPreviewPreset::CppSdf
         | GpgpuPreviewPreset::CppVoronoi
         | GpgpuPreviewPreset::CppRetroSun
-        | GpgpuPreviewPreset::CppAudio => match gpu_release {
+        | GpgpuPreviewPreset::CppAudio
+        | GpgpuPreviewPreset::CppParticle => match gpu_release {
             Some(release) => publish_gpgpu_frame_buffer(lease, release),
             None => Err(FramePoolError::ProducerReleaseRequired),
         },
@@ -1218,7 +1233,7 @@ struct PreviewDispatchResult {
 }
 
 fn dispatch_preview_kernel(
-    preview: &ActivePreview,
+    preview: &mut ActivePreview,
     surface: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> PreviewDispatchResult {
     match preview.config.preset {
@@ -1364,6 +1379,48 @@ fn dispatch_preview_kernel(
                 error: "cpp-audio-visualizer-dispatch-failed",
             }
         }
+        GpgpuPreviewPreset::CppParticle => {
+            let seconds = preview.metrics.elapsed_ms as f32 / 1_000.0;
+            let attempted = preview.metrics.attempted;
+            let dt = (preview.config.cadence_ms.min(50) as f32 / 1_000.0).max(0.001);
+            let seed = (preview.request_serial as u32)
+                .rotate_left(11)
+                .wrapping_add(0xC0FF_EE51);
+            let mut params =
+                crate::intel::gpgpu::ParticleCraftParamsV1::arc_forge(seconds, dt, seed);
+            if attempted == 1 {
+                params.flags |= crate::intel::gpgpu::PARTICLE_CRAFT_FLAG_RESET;
+            }
+            let craft = match preview.particle_craft.as_mut() {
+                Some(craft) => craft,
+                None => {
+                    preview.particle_craft =
+                        crate::intel::gpgpu::GpgpuOwnedParticleCraftState::allocate();
+                    let Some(craft) = preview.particle_craft.as_mut() else {
+                        return PreviewDispatchResult {
+                            ok: false,
+                            submitted: false,
+                            iterations: 0,
+                            marker: 0,
+                            submit_ms: 0,
+                            release: None,
+                            error: "particle-craft-state-allocation-failed",
+                        };
+                    };
+                    craft
+                }
+            };
+            let result = crate::intel::gpgpu::particle_craft_rgba8_frame(craft, surface, params);
+            PreviewDispatchResult {
+                ok: result.ok,
+                submitted: result.submitted,
+                iterations: params.active_count,
+                marker: result.marker,
+                submit_ms: result.submit_ms,
+                release: result.release,
+                error: "particle-craft-dispatch-failed",
+            }
+        }
     }
 }
 
@@ -1379,7 +1436,8 @@ const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppSdf
         | GpgpuPreviewPreset::CppVoronoi
         | GpgpuPreviewPreset::CppRetroSun
-        | GpgpuPreviewPreset::CppAudio => "pipe-control+post-marker-exact-surface",
+        | GpgpuPreviewPreset::CppAudio
+        | GpgpuPreviewPreset::CppParticle => "pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Lab256 => "three-pass+pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
             "clflush-mfence-before-publish"
@@ -1402,6 +1460,7 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppVoronoi
         | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio => "guc-cpp-single",
+        GpgpuPreviewPreset::CppParticle => "guc-cpp-stateful-two-pass",
     }
 }
 
@@ -1419,7 +1478,10 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
         | GpgpuPreviewPreset::CppSdf
         | GpgpuPreviewPreset::CppVoronoi
         | GpgpuPreviewPreset::CppRetroSun
-        | GpgpuPreviewPreset::CppAudio => WindowPlane::Universal(preview_plane_slot(preset) as u8),
+        | GpgpuPreviewPreset::CppAudio
+        | GpgpuPreviewPreset::CppParticle => {
+            WindowPlane::Universal(preview_plane_slot(preset) as u8)
+        }
         GpgpuPreviewPreset::Lab256 => WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
     }
 }
@@ -1438,6 +1500,7 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppVoronoi
         | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio => "ui4-cpp-resizable-slot1",
+        GpgpuPreviewPreset::CppParticle => "ui4-cpp-fixed-640x400-slot1",
         GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => "ui4-overlay",
     }
 }
@@ -1508,6 +1571,9 @@ fn drain_preview_input(active: &mut [ActivePreview], retired_frames: &mut Vec<Fr
             continue;
         };
         if event.width == 0 || event.height == 0 {
+            continue;
+        }
+        if preview.config.preset == GpgpuPreviewPreset::CppParticle {
             continue;
         }
         if let Err(reason) = resize_preview(preview, event.width, event.height, retired_frames) {
@@ -1841,7 +1907,8 @@ const fn compute_preview_index(preset: GpgpuPreviewPreset) -> Option<usize> {
         | GpgpuPreviewPreset::CppSdf
         | GpgpuPreviewPreset::CppVoronoi
         | GpgpuPreviewPreset::CppRetroSun
-        | GpgpuPreviewPreset::CppAudio => None,
+        | GpgpuPreviewPreset::CppAudio
+        | GpgpuPreviewPreset::CppParticle => None,
     }
 }
 
@@ -1855,6 +1922,7 @@ const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
             | GpgpuPreviewPreset::CppVoronoi
             | GpgpuPreviewPreset::CppRetroSun
             | GpgpuPreviewPreset::CppAudio
+            | GpgpuPreviewPreset::CppParticle
     ) {
         return 1;
     }
@@ -1917,6 +1985,21 @@ mod tests {
             assert_eq!(mode.buffering_label(), "double");
             assert_eq!(mode.plane_layout_label(), "slot1-direct");
         }
+    }
+
+    #[test]
+    fn particle_craft_keeps_its_fixed_artifact_extent() {
+        let mode = GpgpuPreviewPreset::CppParticle;
+        assert_eq!(
+            preview_extent(mode),
+            (
+                crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_WIDTH,
+                crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_HEIGHT,
+            )
+        );
+        assert_eq!(preview_plane_slot(mode), 1);
+        assert_eq!(mode.buffering_label(), "double");
+        assert_eq!(mode.plane_layout_label(), "slot1-direct");
     }
 
     #[test]

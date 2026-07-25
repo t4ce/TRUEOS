@@ -9,6 +9,7 @@
 //! properties.
 
 use alloc::{string::String, sync::Arc, vec::Vec};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_time::Instant;
 use spin::Mutex;
@@ -503,6 +504,350 @@ impl GpuFontCoverageMask {
         let surface = self.surface();
         crate::intel::gpgpu::GpgpuRect::new(0, 0, surface.width, surface.height)
     }
+}
+
+/// Draw-time presentation for one retained analytical font scene.
+///
+/// The Skrifa outline and R8 coverage mask are not regenerated when this
+/// changes. Only the 256-byte C++ font-instance descriptor is rewritten before
+/// the next restamp.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GpuFontRetainedStyle {
+    pub(crate) foreground: GpuFontRgba,
+    pub(crate) background: GpuFontRgba,
+    pub(crate) scale: f32,
+    pub(crate) rotation_radians: f32,
+    pub(crate) opacity: f32,
+    pub(crate) translation_px: [f32; 2],
+    pub(crate) motion: GpuFontRetainedMotion,
+}
+
+impl GpuFontRetainedStyle {
+    pub(crate) const fn identity(foreground: GpuFontRgba) -> Self {
+        Self {
+            foreground,
+            background: GpuFontRgba::new(0, 0, 0, 0),
+            scale: 1.0,
+            rotation_radians: 0.0,
+            opacity: 1.0,
+            translation_px: [0.0, 0.0],
+            motion: GpuFontRetainedMotion::NONE,
+        }
+    }
+}
+
+/// Bounded trigonometric motion evaluated by the C++ font-instance kernel.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GpuFontRetainedMotion {
+    pub(crate) period_seconds: f32,
+    pub(crate) phase_cycles: f32,
+    pub(crate) rotation_amplitude_radians: f32,
+    pub(crate) scale_amplitude: f32,
+    pub(crate) opacity_amplitude: f32,
+    pub(crate) translation_amplitude_px: [f32; 2],
+}
+
+impl GpuFontRetainedMotion {
+    pub(crate) const NONE: Self = Self {
+        period_seconds: 0.0,
+        phase_cycles: 0.0,
+        rotation_amplitude_radians: 0.0,
+        scale_amplitude: 0.0,
+        opacity_amplitude: 0.0,
+        translation_amplitude_px: [0.0, 0.0],
+    };
+
+    pub(crate) fn is_active(self) -> bool {
+        self.rotation_amplitude_radians.abs() > f32::EPSILON
+            || self.scale_amplitude.abs() > f32::EPSILON
+            || self.opacity_amplitude.abs() > f32::EPSILON
+            || self.translation_amplitude_px[0].abs() > f32::EPSILON
+            || self.translation_amplitude_px[1].abs() > f32::EPSILON
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GpuFontRetainedSceneError {
+    Unavailable(&'static str),
+    SubmittedIncomplete(&'static str),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GpuFontRetainedDrawResult {
+    pub(crate) submits: usize,
+    pub(crate) active_walkers: usize,
+    pub(crate) release: Option<crate::intel::gpgpu::GpgpuRgba8ReleaseFence>,
+}
+
+/// One GPU-VM-resident font scene which may be restamped repeatedly.
+///
+/// The scene owns its analytical R8 mask and C++ instance descriptor pages.
+/// An uncertain instance submission poisons the scene: its allocations are
+/// then deliberately leaked until reboot because hardware may still hold
+/// their GPU virtual addresses.
+pub(crate) struct GpuFontRetainedScene {
+    coverage: Option<GpuFontCoverageMask>,
+    instance_state: Option<crate::intel::gpgpu::GpgpuOwnedFontInstanceState>,
+    quarantined: AtomicBool,
+}
+
+impl GpuFontRetainedScene {
+    fn coverage(&self) -> Result<&GpuFontCoverageMask, GpuFontRetainedSceneError> {
+        if self.quarantined.load(Ordering::Acquire) {
+            return Err(GpuFontRetainedSceneError::Unavailable("font-retained-scene-quarantined"));
+        }
+        self.coverage
+            .as_ref()
+            .ok_or(GpuFontRetainedSceneError::Unavailable("font-retained-scene-released"))
+    }
+
+    pub(crate) fn mask_surface(&self) -> Option<crate::intel::gpgpu::GpgpuMask8Surface> {
+        self.coverage.as_ref().map(GpuFontCoverageMask::surface)
+    }
+
+    pub(crate) fn origin_px(&self) -> Option<[i32; 2]> {
+        self.coverage.as_ref().map(GpuFontCoverageMask::origin_px)
+    }
+
+    pub(crate) fn quarantined(&self) -> bool {
+        self.quarantined.load(Ordering::Acquire)
+    }
+
+    /// Restamp without affine transformation through the stable mask batch.
+    pub(crate) fn restamp_identity(
+        &self,
+        destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+        translation_px: [i32; 2],
+        foreground: GpuFontRgba,
+        direct_scanout: bool,
+    ) -> Result<GpuFontRetainedDrawResult, GpuFontRetainedSceneError> {
+        let coverage = self.coverage()?;
+        let origin = coverage.origin_px();
+        let layer = crate::intel::gpgpu::GpgpuGlyphMaskLayer {
+            mask: coverage.surface(),
+            mask_rect: coverage.full_rect(),
+            dst_xy: crate::intel::gpgpu::GpgpuPoint::new(
+                origin[0].saturating_add(translation_px[0]),
+                origin[1].saturating_add(translation_px[1]),
+            ),
+            color_rgba: gpu_font_rgba_u32(foreground),
+        };
+        let rendered = crate::intel::gpgpu::glyph_mask_layers_rgba8_2d_mode(
+            core::slice::from_ref(&layer),
+            destination,
+            direct_scanout,
+        );
+        if !rendered.ok {
+            if rendered.submitted {
+                self.quarantined.store(true, Ordering::Release);
+                return Err(GpuFontRetainedSceneError::SubmittedIncomplete(
+                    "font-retained-identity-restamp-incomplete",
+                ));
+            }
+            return Err(GpuFontRetainedSceneError::Unavailable(
+                "font-retained-identity-restamp-unavailable",
+            ));
+        }
+        let release = retained_font_scanout_release(destination, direct_scanout)?;
+        Ok(GpuFontRetainedDrawResult {
+            submits: rendered.submits + usize::from(direct_scanout),
+            active_walkers: rendered.active_walkers,
+            release,
+        })
+    }
+
+    /// Restamp through the C++/IGC font-instance kernel.
+    ///
+    /// Layout and mask residency remain unchanged. Style and motion are copied
+    /// into persistent descriptor storage immediately before this draw.
+    pub(crate) fn restamp_instance(
+        &self,
+        destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+        style: GpuFontRetainedStyle,
+        direct_scanout: bool,
+        time_seconds: f32,
+    ) -> Result<GpuFontRetainedDrawResult, GpuFontRetainedSceneError> {
+        if !retained_font_style_valid(style) || !time_seconds.is_finite() {
+            return Err(GpuFontRetainedSceneError::Unavailable("font-retained-style-invalid"));
+        }
+        let coverage = self.coverage()?;
+        let state = self
+            .instance_state
+            .as_ref()
+            .ok_or(GpuFontRetainedSceneError::Unavailable(
+                "font-retained-instance-state-missing",
+            ))?;
+        let mut descriptor = crate::intel::gpgpu::GpgpuFontInstanceDescriptor::new(
+            coverage.surface(),
+            coverage.full_rect(),
+            gpu_font_rgba_u32(style.foreground),
+        )
+        .ok_or(GpuFontRetainedSceneError::Unavailable("font-retained-instance-descriptor"))?;
+        descriptor.set_transform(style.scale, style.rotation_radians, style.opacity);
+        descriptor.set_background(gpu_font_rgba_u32(style.background));
+        if style.motion.is_active() {
+            descriptor.set_motion(
+                style.motion.period_seconds,
+                style.motion.phase_cycles,
+                style.motion.rotation_amplitude_radians,
+                style.motion.scale_amplitude,
+                style.motion.opacity_amplitude,
+                style.motion.translation_amplitude_px,
+            );
+        }
+        if !state.write(0, &descriptor) {
+            return Err(GpuFontRetainedSceneError::Unavailable(
+                "font-retained-instance-descriptor-write",
+            ));
+        }
+        let origin = coverage.origin_px();
+        let mask_rect = coverage.full_rect();
+        let center = [
+            origin[0] as f32 + mask_rect.width as f32 * 0.5 + style.translation_px[0],
+            origin[1] as f32 + mask_rect.height as f32 * 0.5 + style.translation_px[1],
+        ];
+        let layer = crate::intel::gpgpu::GpgpuFontInstanceLayer {
+            mask: coverage.surface(),
+            mask_rect,
+            dst_center: center,
+            dispatch_rect: retained_font_dispatch_rect(origin, mask_rect, style),
+            descriptor_index: 0,
+        };
+        let rendered = crate::intel::gpgpu::font_instance_layers_rgba8_2d_mode(
+            core::slice::from_ref(&layer),
+            state,
+            destination,
+            direct_scanout,
+            time_seconds,
+        );
+        if !rendered.ok {
+            if rendered.submitted {
+                self.quarantined.store(true, Ordering::Release);
+                return Err(GpuFontRetainedSceneError::SubmittedIncomplete(
+                    "font-retained-instance-restamp-incomplete",
+                ));
+            }
+            return Err(GpuFontRetainedSceneError::Unavailable(
+                "font-retained-instance-restamp-unavailable",
+            ));
+        }
+        let release = retained_font_scanout_release(destination, direct_scanout)?;
+        Ok(GpuFontRetainedDrawResult {
+            submits: rendered.submits + usize::from(direct_scanout),
+            active_walkers: rendered.active_walkers,
+            release,
+        })
+    }
+}
+
+impl Drop for GpuFontRetainedScene {
+    fn drop(&mut self) {
+        if !self.quarantined.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(coverage) = self.coverage.take() {
+            core::mem::forget(coverage);
+        }
+        if let Some(state) = self.instance_state.take() {
+            core::mem::forget(state);
+        }
+    }
+}
+
+fn gpu_font_rgba_u32(rgba: GpuFontRgba) -> u32 {
+    u32::from_le_bytes([rgba.r, rgba.g, rgba.b, rgba.a])
+}
+
+fn retained_font_style_valid(style: GpuFontRetainedStyle) -> bool {
+    let values = [
+        style.scale,
+        style.rotation_radians,
+        style.opacity,
+        style.translation_px[0],
+        style.translation_px[1],
+        style.motion.period_seconds,
+        style.motion.phase_cycles,
+        style.motion.rotation_amplitude_radians,
+        style.motion.scale_amplitude,
+        style.motion.opacity_amplitude,
+        style.motion.translation_amplitude_px[0],
+        style.motion.translation_amplitude_px[1],
+    ];
+    values.iter().all(|value| value.is_finite())
+        && style.scale > 0.0
+        && (0.0..=1.0).contains(&style.opacity)
+        && (!style.motion.is_active() || style.motion.period_seconds > 0.0)
+}
+
+fn retained_font_dispatch_rect(
+    origin: [i32; 2],
+    mask_rect: crate::intel::gpgpu::GpgpuRect,
+    style: GpuFontRetainedStyle,
+) -> crate::intel::gpgpu::GpgpuRect {
+    let center = [
+        origin[0] as f32 + mask_rect.width as f32 * 0.5 + style.translation_px[0],
+        origin[1] as f32 + mask_rect.height as f32 * 0.5 + style.translation_px[1],
+    ];
+    let affine = (style.scale - 1.0).abs() > f32::EPSILON
+        || style.rotation_radians.abs() > f32::EPSILON
+        || style.motion.is_active()
+        || (style.translation_px[0] - libm::roundf(style.translation_px[0])).abs() > f32::EPSILON
+        || (style.translation_px[1] - libm::roundf(style.translation_px[1])).abs() > f32::EPSILON;
+    if !affine {
+        let left = origin[0].saturating_add(style.translation_px[0] as i32);
+        let top = origin[1].saturating_add(style.translation_px[1] as i32);
+        return crate::intel::gpgpu::GpgpuRect::new(left, top, mask_rect.width, mask_rect.height);
+    }
+    // Match the exact clamps applied while encoding the persistent C++
+    // descriptor. Otherwise an absurd but finite caller value can inflate the
+    // CPU-side dispatch rectangle even though the GPU will never observe it.
+    let base_scale = style.scale.clamp(0.125, 8.0);
+    let scale_amplitude = style.motion.scale_amplitude.clamp(-0.875, 4.0);
+    let max_scale = base_scale * (1.0 + scale_amplitude.abs());
+    let width = mask_rect.width as f32;
+    let height = mask_rect.height as f32;
+    let radius = libm::sqrtf(width * width + height * height) * 0.5 * max_scale;
+    let extent_x = radius
+        + style.motion.translation_amplitude_px[0]
+            .clamp(-4096.0, 4096.0)
+            .abs()
+        + 2.0;
+    let extent_y = radius
+        + style.motion.translation_amplitude_px[1]
+            .clamp(-4096.0, 4096.0)
+            .abs()
+        + 2.0;
+    let left = libm::floorf(center[0] - extent_x) as i32;
+    let top = libm::floorf(center[1] - extent_y) as i32;
+    let right = libm::ceilf(center[0] + extent_x) as i32;
+    let bottom = libm::ceilf(center[1] + extent_y) as i32;
+    crate::intel::gpgpu::GpgpuRect::new(
+        left,
+        top,
+        right.saturating_sub(left) as u32,
+        bottom.saturating_sub(top) as u32,
+    )
+}
+
+fn retained_font_scanout_release(
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    direct_scanout: bool,
+) -> Result<Option<crate::intel::gpgpu::GpgpuRgba8ReleaseFence>, GpuFontRetainedSceneError> {
+    if !direct_scanout {
+        return Ok(None);
+    }
+    let finalizer = crate::intel::gpgpu::release_rgba8_surface_for_scanout(destination);
+    if !finalizer.ok {
+        return Err(if finalizer.submitted {
+            GpuFontRetainedSceneError::SubmittedIncomplete("font-retained-release-incomplete")
+        } else {
+            GpuFontRetainedSceneError::Unavailable("font-retained-release-unavailable")
+        });
+    }
+    finalizer
+        .release
+        .map(Some)
+        .ok_or(GpuFontRetainedSceneError::Unavailable("font-retained-release-missing"))
 }
 
 struct PreparedGpuFontCoverageEntry {
@@ -3028,6 +3373,73 @@ pub(crate) fn create_gpu_font_scene_coverage_mask_at_raster(
         raster_height,
         GpuFontJobPositioning::Origin,
     )
+}
+
+/// Retain an origin-positioned analytical scene for repeated GPU restamping.
+pub(crate) fn retain_gpu_font_scene_at_raster(
+    entries: &[GpuFontJobEntry<'_>],
+    font: GpuFontFace,
+    viewport_width: u32,
+    viewport_height: u32,
+    raster_width: u32,
+    raster_height: u32,
+) -> Result<GpuFontRetainedScene, &'static str> {
+    retain_gpu_font_scene_at_raster_with_positioning(
+        entries,
+        font,
+        viewport_width,
+        viewport_height,
+        raster_width,
+        raster_height,
+        GpuFontJobPositioning::Origin,
+    )
+}
+
+/// Retain a visual-bounds-centered analytical scene for stamp-like consumers.
+pub(crate) fn retain_gpu_font_centered_scene_at_raster(
+    entries: &[GpuFontJobEntry<'_>],
+    font: GpuFontFace,
+    viewport_width: u32,
+    viewport_height: u32,
+    raster_width: u32,
+    raster_height: u32,
+) -> Result<GpuFontRetainedScene, &'static str> {
+    retain_gpu_font_scene_at_raster_with_positioning(
+        entries,
+        font,
+        viewport_width,
+        viewport_height,
+        raster_width,
+        raster_height,
+        GpuFontJobPositioning::VisualBoundsCenter,
+    )
+}
+
+fn retain_gpu_font_scene_at_raster_with_positioning(
+    entries: &[GpuFontJobEntry<'_>],
+    font: GpuFontFace,
+    viewport_width: u32,
+    viewport_height: u32,
+    raster_width: u32,
+    raster_height: u32,
+    positioning: GpuFontJobPositioning,
+) -> Result<GpuFontRetainedScene, &'static str> {
+    let coverage = create_gpu_font_coverage_mask_at_raster(
+        entries,
+        font,
+        viewport_width,
+        viewport_height,
+        raster_width,
+        raster_height,
+        positioning,
+    )?;
+    let instance_state = crate::intel::gpgpu::allocate_font_instance_state(1)
+        .ok_or("font-retained-instance-state-allocation")?;
+    Ok(GpuFontRetainedScene {
+        coverage: Some(coverage),
+        instance_state: Some(instance_state),
+        quarantined: AtomicBool::new(false),
+    })
 }
 
 fn create_gpu_font_coverage_mask_at_raster(

@@ -125,12 +125,16 @@ static LFM25_Q8_LAST_ROWS: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) const LFM25_Q8_PROJECTIONS_PER_TOKEN: u64 = 93;
 pub(crate) const LFM25_Q8_SUBMISSIONS_PER_TOKEN: u64 = 65;
+pub(crate) const LFM25_Q8_PROJECTIONS_PER_PREFILL_TOKEN: u64 = LFM25_Q8_PROJECTIONS_PER_TOKEN - 1;
+pub(crate) const LFM25_Q8_SUBMISSIONS_PER_PREFILL_TOKEN: u64 = LFM25_Q8_SUBMISSIONS_PER_TOKEN - 1;
 const _: () = {
     let shortconv = trueos_fpga_abi::lfm25_decode::SHORTCONV_STATE_COUNT as u64;
     let attention = trueos_fpga_abi::lfm25_decode::KV_CACHE_COUNT as u64;
     let layers = trueos_fpga_abi::lfm25::MODEL_LAYER_COUNT as u64;
     assert!(shortconv * 2 + attention * 4 + layers * 3 + 1 == LFM25_Q8_PROJECTIONS_PER_TOKEN);
     assert!(shortconv * 2 + attention * 2 + layers * 2 + 1 == LFM25_Q8_SUBMISSIONS_PER_TOKEN);
+    assert!(shortconv * 2 + attention * 4 + layers * 3 == LFM25_Q8_PROJECTIONS_PER_PREFILL_TOKEN);
+    assert!(shortconv * 2 + attention * 2 + layers * 2 == LFM25_Q8_SUBMISSIONS_PER_PREFILL_TOKEN);
 };
 
 pub(crate) fn lfm25_q8_project_supported() -> bool {

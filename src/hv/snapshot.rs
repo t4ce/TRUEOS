@@ -6,14 +6,17 @@ use crate::hv::memory::*;
 pub const VM_SNAPSHOT_MAGIC: u32 = 0x3153_4D56; // "VMS1"
 pub const VM_SNAPSHOT_VERSION_LEGACY: u32 = 1;
 pub const VM_SNAPSHOT_VERSION_SPARSE: u32 = 2;
-pub const VM_SNAPSHOT_VERSION: u32 = 3;
+pub const VM_SNAPSHOT_VERSION_GPRS: u32 = 3;
+pub const VM_SNAPSHOT_VERSION: u32 = 4;
 const VM_SNAPSHOT_LEGACY_HEADER_BYTES: usize = 8 + 10 * core::mem::size_of::<u64>();
+const VM_SNAPSHOT_GPRS_HEADER_BYTES: usize = 216;
 pub const GUEST_SNAPSHOT_PAGE_COUNT: usize = 6 + GUEST_LOW_PT_COUNT + GUEST_HIGH_IMAGE_PT_COUNT;
 pub const GUEST_SNAPSHOT_PAGE_BITMAP_BYTES: usize = GUEST_SNAPSHOT_PAGE_COUNT.div_ceil(8);
-// Versions 2 and 3 store this fixed bitmap immediately after the header,
+// Versions 2 through 4 store this fixed bitmap immediately after the header,
 // followed by only the 4 KiB page-table pages whose bits are set. Version 3
-// additionally preserves the live guest GPR/RFLAGS continuation state.
-// Version 1 has no bitmap and stores every table page.
+// adds the live guest GPR/RFLAGS continuation state, and version 4 adds the
+// VM-owned x87/SSE/YMM state. Version 1 has no bitmap and stores every table
+// page.
 
 pub fn snapshot_path(vm_id: u8) -> String {
     format!("vm/vm{}.snapshot", vm_id)
@@ -36,9 +39,11 @@ pub struct VmSnapshotHeader {
     pub guest_page_bytes: u64,
     pub guest_registers: crate::hv::vmx::GuestRegisters,
     pub guest_rflags: u64,
+    pub guest_extended_state_mask: u64,
+    pub guest_extended_state: [u8; crate::hv::vmx::VMX_EXTENDED_STATE_BYTES],
 }
 
-const _: [(); 216] = [(); core::mem::size_of::<VmSnapshotHeader>()];
+const _: [(); 1056] = [(); core::mem::size_of::<VmSnapshotHeader>()];
 
 #[derive(Copy, Clone, Debug)]
 pub enum SaveError {
@@ -71,6 +76,10 @@ pub fn capture_snapshot_meta(vm_id: u8, lr: crate::hv::vmx::LaunchResult) {
         m.guest_registers = crate::hv::vmx::guest_registers();
         m.guest_rflags = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RFLAGS)
             .unwrap_or(crate::hv::vmx::RFLAGS_RESERVED_BIT1);
+        if let Ok((mask, state)) = crate::hv::vmx::guest_extended_state_snapshot(vm_id) {
+            m.guest_extended_state_mask = mask;
+            m.guest_extended_state = state;
+        }
         m.exit_reason = lr.exit_reason;
         m.exit_qualification = lr.exit_qualification;
         m.exit_guest_rip = lr.guest_rip;
@@ -101,6 +110,8 @@ pub fn snapshot_bytes(vm_id: u8) -> Result<Vec<u8>, SaveError> {
         guest_page_bytes: PAGE_SIZE_4K as u64,
         guest_registers: meta.guest_registers,
         guest_rflags: meta.guest_rflags,
+        guest_extended_state_mask: meta.guest_extended_state_mask,
+        guest_extended_state: meta.guest_extended_state,
     };
     let guest_stack = guest_stack_slice_for_vm(vm_id).ok_or(SaveError::NoSnapshot)?;
 
@@ -156,10 +167,10 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
             .try_into()
             .map_err(|_| RestoreError::BadSnapshot)?,
     );
-    let header_len = if version == VM_SNAPSHOT_VERSION {
-        core::mem::size_of::<VmSnapshotHeader>()
-    } else {
-        VM_SNAPSHOT_LEGACY_HEADER_BYTES
+    let header_len = match version {
+        VM_SNAPSHOT_VERSION => core::mem::size_of::<VmSnapshotHeader>(),
+        VM_SNAPSHOT_VERSION_GPRS => VM_SNAPSHOT_GPRS_HEADER_BYTES,
+        _ => VM_SNAPSHOT_LEGACY_HEADER_BYTES,
     };
     let header = parse_snapshot_header(bytes.get(..header_len).ok_or(RestoreError::BadSnapshot)?)?;
     let sparse_pages = header.version >= VM_SNAPSHOT_VERSION_SPARSE;
@@ -218,12 +229,29 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
     }
 
     let guest_cr3 = guest_cr3_pa_for_vm(vm_id).map_err(|_| RestoreError::BadSnapshot)?;
+    let (guest_extended_state_mask, guest_extended_state) = if header.version == VM_SNAPSHOT_VERSION
+    {
+        crate::hv::vmx::restore_guest_extended_state(
+            vm_id,
+            header.guest_extended_state_mask,
+            &header.guest_extended_state,
+        )
+        .map_err(|_| RestoreError::BadSnapshot)?;
+        (header.guest_extended_state_mask, header.guest_extended_state)
+    } else {
+        crate::hv::vmx::reset_guest_extended_state(vm_id).map_err(|_| RestoreError::BadSnapshot)?;
+        crate::hv::vmx::guest_extended_state_snapshot(vm_id)
+            .map_err(|_| RestoreError::BadSnapshot)?
+    };
+
     let restored = VmSnapshotMeta {
         guest_cr3,
         guest_rip: header.guest_rip,
         guest_rsp: header.guest_rsp,
         guest_registers: header.guest_registers,
         guest_rflags: header.guest_rflags,
+        guest_extended_state_mask,
+        guest_extended_state,
         code_base: header.code_base,
         code_len: header.code_len,
         exit_reason: header.exit_reason,
@@ -261,7 +289,7 @@ fn parse_snapshot_header(bytes: &[u8]) -> Result<VmSnapshotHeader, RestoreError>
     let guest_page_bytes = take_u64(bytes, &mut off)?;
     let mut guest_registers = crate::hv::vmx::GuestRegisters::default();
     let mut guest_rflags = crate::hv::vmx::RFLAGS_RESERVED_BIT1;
-    if version == VM_SNAPSHOT_VERSION {
+    if version >= VM_SNAPSHOT_VERSION_GPRS {
         guest_registers.rax = take_u64(bytes, &mut off)?;
         guest_registers.rbx = take_u64(bytes, &mut off)?;
         guest_registers.rcx = take_u64(bytes, &mut off)?;
@@ -279,10 +307,19 @@ fn parse_snapshot_header(bytes: &[u8]) -> Result<VmSnapshotHeader, RestoreError>
         guest_registers.r15 = take_u64(bytes, &mut off)?;
         guest_rflags = take_u64(bytes, &mut off)?;
     }
+    let mut guest_extended_state_mask = crate::cpu::vmx_xsave_mask();
+    let mut guest_extended_state = [0u8; crate::hv::vmx::VMX_EXTENDED_STATE_BYTES];
+    if version == VM_SNAPSHOT_VERSION {
+        guest_extended_state_mask = take_u64(bytes, &mut off)?;
+        guest_extended_state = take_bytes(bytes, &mut off)?;
+    }
     if magic != VM_SNAPSHOT_MAGIC
         || !matches!(
             version,
-            VM_SNAPSHOT_VERSION_LEGACY | VM_SNAPSHOT_VERSION_SPARSE | VM_SNAPSHOT_VERSION
+            VM_SNAPSHOT_VERSION_LEGACY
+                | VM_SNAPSHOT_VERSION_SPARSE
+                | VM_SNAPSHOT_VERSION_GPRS
+                | VM_SNAPSHOT_VERSION
         )
     {
         return Err(RestoreError::BadSnapshot);
@@ -302,6 +339,8 @@ fn parse_snapshot_header(bytes: &[u8]) -> Result<VmSnapshotHeader, RestoreError>
         guest_page_bytes,
         guest_registers,
         guest_rflags,
+        guest_extended_state_mask,
+        guest_extended_state,
     })
 }
 
@@ -325,6 +364,17 @@ fn take_u64(bytes: &[u8], off: &mut usize) -> Result<u64, RestoreError> {
         .map_err(|_| RestoreError::BadSnapshot)?;
     *off = end;
     Ok(u64::from_le_bytes(raw))
+}
+
+fn take_bytes<const N: usize>(bytes: &[u8], off: &mut usize) -> Result<[u8; N], RestoreError> {
+    let end = off.checked_add(N).ok_or(RestoreError::BadSnapshot)?;
+    let raw = bytes
+        .get(*off..end)
+        .ok_or(RestoreError::BadSnapshot)?
+        .try_into()
+        .map_err(|_| RestoreError::BadSnapshot)?;
+    *off = end;
+    Ok(raw)
 }
 
 fn push_bytes(out: &mut Vec<u8>, bytes: &[u8]) {

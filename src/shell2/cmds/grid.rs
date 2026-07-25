@@ -1,13 +1,46 @@
-use embassy_executor::Spawner;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use embassy_executor::{Spawner, task};
 
 use super::super::shell2_cmd::ParseOutcome;
-use super::super::{ShellBackend2, print_shell_line};
+use super::super::{
+    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_system_line,
+    print_shell_line, submit_online_to_target,
+};
 
+const GRID_APP: &str = "gridpaper";
+const GRID_ARCHIVE: &str = "gridpaper.bp";
 const GRID_COLUMN_SOFT_CAP: usize = 39;
 const GRID_ROW_SOFT_CAP: usize = 55;
 
+#[task(pool_size = 2)]
+async fn launch_grid(spawner: Spawner, target: MatrixTarget, app_args: Vec<String>) {
+    match super::run::submit_archive_name_to_target_prefer_trueosfs_async(
+        target.clone(),
+        GRID_ARCHIVE,
+        app_args.clone(),
+    )
+    .await
+    {
+        Ok(_) => {}
+        Err(error) if error == "archive not found" => {
+            let mut online_args = Vec::with_capacity(app_args.len().saturating_add(1));
+            online_args.push(String::from(GRID_APP));
+            online_args.extend(app_args);
+            if submit_online_to_target(&spawner, target.clone(), online_args).is_err() {
+                print_matrix_target_system_line(&target, "grid: online launch task unavailable");
+            }
+        }
+        Err(error) => print_matrix_target_system_line(
+            &target,
+            alloc::format!("grid: could not launch {GRID_ARCHIVE}: {error}").as_str(),
+        ),
+    }
+}
+
 pub(crate) fn try_parse(
-    _spawner: &Spawner,
+    spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
@@ -16,27 +49,19 @@ pub(crate) fn try_parse(
         print_shell_line(io, "grid: usage `grid [COLUMNSxROWS]`; bounds are 1x1 through 39x55");
         return ParseOutcome::Handled;
     }
-    let (columns, rows) = if trimmed.is_empty() {
-        (GRID_COLUMN_SOFT_CAP, GRID_ROW_SOFT_CAP)
+    let app_args = if trimmed.is_empty() {
+        Vec::new()
     } else if parse_grid_size(trimmed).is_some() {
-        parse_grid_size(trimmed).expect("validated Gridpaper extent")
+        alloc::vec![String::from(trimmed)]
     } else {
         print_shell_line(io, "grid: expected one COLUMNSxROWS size within 1x1 and 39x55");
         return ParseOutcome::Handled;
     };
 
-    match crate::r::gridpaper_service::request_shell_grid(columns as u32, rows as u32) {
-        Ok(_) => print_shell_line(
-            io,
-            alloc::format!(
-                "grid: kernel Gridpaper requested {columns}x{rows} (no Blueprint container)"
-            )
-            .as_str(),
-        ),
-        Err(error) => print_shell_line(
-            io,
-            alloc::format!("grid: kernel Gridpaper request failed: {error:?}").as_str(),
-        ),
+    let target = matrix_target_for_backend(io);
+    match launch_grid(*spawner, target, app_args) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => print_shell_line(io, "grid: launch task unavailable"),
     }
     ParseOutcome::Handled
 }

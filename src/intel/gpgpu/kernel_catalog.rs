@@ -64,6 +64,14 @@ pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/cpp_audio_visualizer_rgba8.clcpp");
 pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_SOURCE_PATH: &str =
     "crates/trueos-shader/gpgpu/kernels/cpp_audio_visualizer_rgba8.clcpp";
+pub(crate) const PARTICLE_CRAFT_KERNEL_NAME: &str = "particle_craft";
+pub(crate) const PARTICLE_CRAFT_STEP_KERNEL_NAME: &str = "particle_craft_step";
+pub(crate) const PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME: &str =
+    "particle_craft_render_rgba8";
+pub(crate) const PARTICLE_CRAFT_OPENCL_SOURCE: &str =
+    include_str!("../../../crates/trueos-shader/gpgpu/kernels/particle_craft.clcpp");
+pub(crate) const PARTICLE_CRAFT_SOURCE_PATH: &str =
+    "crates/trueos-shader/gpgpu/kernels/particle_craft.clcpp";
 pub(crate) const FONT_INSTANCE_RGBA8_KERNEL_NAME: &str = "font_instance_rgba8";
 pub(crate) const FONT_INSTANCE_RGBA8_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/font_instance_rgba8.clcpp");
@@ -126,6 +134,9 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some(PIXEL_PLASMA_RGBA8_OPENCL_SOURCE),
         CPP_DEMO_RGBA8_KERNEL_NAME => Some(CPP_DEMO_RGBA8_OPENCL_SOURCE),
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(CPP_AUDIO_VISUALIZER_RGBA8_OPENCL_SOURCE),
+        PARTICLE_CRAFT_KERNEL_NAME
+        | PARTICLE_CRAFT_STEP_KERNEL_NAME
+        | PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME => Some(PARTICLE_CRAFT_OPENCL_SOURCE),
         FONT_INSTANCE_RGBA8_KERNEL_NAME => Some(FONT_INSTANCE_RGBA8_OPENCL_SOURCE),
         LFM25_Q8_PROJECT_KERNEL_NAME => Some(LFM25_Q8_PROJECT_OPENCL_SOURCE),
         LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => Some(LFM25_Q8_PROJECT_PACKED_OPENCL_SOURCE),
@@ -176,6 +187,9 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/pixel_plasma_rgba8.cl"),
         CPP_DEMO_RGBA8_KERNEL_NAME => Some(CPP_DEMO_RGBA8_SOURCE_PATH),
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(CPP_AUDIO_VISUALIZER_RGBA8_SOURCE_PATH),
+        PARTICLE_CRAFT_KERNEL_NAME
+        | PARTICLE_CRAFT_STEP_KERNEL_NAME
+        | PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME => Some(PARTICLE_CRAFT_SOURCE_PATH),
         FONT_INSTANCE_RGBA8_KERNEL_NAME => Some(FONT_INSTANCE_RGBA8_SOURCE_PATH),
         LFM25_Q8_PROJECT_KERNEL_NAME => Some(LFM25_Q8_PROJECT_SOURCE_PATH),
         LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => Some(LFM25_Q8_PROJECT_PACKED_SOURCE_PATH),
@@ -407,6 +421,52 @@ const _: () = {
     assert!(contract.payload_args.len() == 8);
 };
 include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/particle_craft.contract.rs"
+);
+pub(crate) const PARTICLE_CRAFT_ADLS_BIN: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/particle_craft.bin"
+);
+pub(crate) const PARTICLE_CRAFT_ADLS_SPV: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/particle_craft.spv"
+);
+pub(crate) const PARTICLE_CRAFT_ADLS_BIN_SHA256: [u8; 32] =
+    PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
+const _: () = assert!(matches!(PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
+const _: () =
+    assert!(matches!(PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
+const _: () = assert!(PARTICLE_CRAFT_ADLS_BIN.len() == 93_200);
+const _: () = assert!(PARTICLE_CRAFT_ADLS_SPV.len() == 67_596);
+const _: () = {
+    let step = PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT;
+    let render = PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT;
+    assert!(step.target.pci_device_ids.len() == 1);
+    assert!(step.target.pci_device_ids[0] == 0x4680);
+    assert!(step.target.revision_min == 0x0C && step.target.revision_max == 0x0C);
+    assert!(render.target.pci_device_ids.len() == 1);
+    assert!(render.target.pci_device_ids[0] == 0x4680);
+    assert!(render.target.revision_min == 0x0C && render.target.revision_max == 0x0C);
+    let mut digest_byte = 0;
+    while digest_byte < 32 {
+        assert!(step.zebin_sha256[digest_byte] == render.zebin_sha256[digest_byte]);
+        assert!(step.spv_sha256[digest_byte] == render.spv_sha256[digest_byte]);
+        digest_byte += 1;
+    }
+    assert!(step.simd_width == 16 && render.simd_width == 16);
+    assert!(step.grf_count == 128 && render.grf_count == 128);
+    assert!(step.scratch_bytes == 0 && render.scratch_bytes == 0);
+    assert!(step.slm_bytes == 0 && render.slm_bytes == 0);
+    assert!(step.cross_thread_data_bytes == 64);
+    assert!(render.cross_thread_data_bytes == 96);
+    assert!(step.per_thread_data_bytes == 96 && render.per_thread_data_bytes == 96);
+    assert!(step.bindings.len() == 2 && render.bindings.len() == 3);
+    assert!(step.payload_args.len() == 2 && render.payload_args.len() == 3);
+    assert!(step.payload_args[0].offset_bytes == 48);
+    assert!(step.payload_args[1].offset_bytes == 56);
+    assert!(render.payload_args[0].offset_bytes == 48);
+    assert!(render.payload_args[1].offset_bytes == 56);
+    assert!(render.payload_args[2].offset_bytes == 64);
+};
+include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/font_instance_rgba8.contract.rs"
 );
 pub(crate) const FONT_INSTANCE_RGBA8_ADLS_BIN: &[u8] = include_bytes!(
@@ -558,7 +618,7 @@ pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     SPIRIT_VFX_SPRITE_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-const _: () = assert!(SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len() == 109_624);
+const _: () = assert!(SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len() == 109_608);
 const _: () = assert!(SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN.len() == 656_728);
 const _: () = {
     let background = SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_CPP_ABI_CONTRACT;

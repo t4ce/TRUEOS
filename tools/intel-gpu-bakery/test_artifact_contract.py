@@ -214,6 +214,7 @@ class ArtifactContractTests(unittest.TestCase):
                 "font_instance_rgba8.manifest.json",
                 "lfm25_q8_project.manifest.json",
                 "lfm25_q8_project_packed.manifest.json",
+                "particle_craft.manifest.json",
                 "spirit_vfx_background_rgba8.manifest.json",
                 "spirit_vfx_sprite_rgba8.manifest.json",
             ],
@@ -264,7 +265,28 @@ class ArtifactContractTests(unittest.TestCase):
         serialized = json.dumps(manifest, sort_keys=True)
         self.assertNotIn(str(REPO_ROOT.parent), serialized)
 
-    def test_spirit_cpp_sources_are_self_contained_reviewed_abi_twins(self) -> None:
+    def test_particle_craft_is_one_exact_two_entry_artifact(self) -> None:
+        analysis = analyze_zebin(
+            ARTIFACT_ROOT / "cpp" / "particle_craft.bin",
+            ARTIFACT_ROOT / "cpp" / "particle_craft.spv",
+        )
+        kernels = {kernel["kernel_name"]: kernel for kernel in analysis["kernels"]}
+        self.assertEqual(
+            set(kernels),
+            {"particle_craft_step", "particle_craft_render_rgba8"},
+        )
+        self.assertEqual(kernels["particle_craft_step"]["simd_width"], 16)
+        self.assertEqual(kernels["particle_craft_step"]["cross_thread_data_bytes"], 64)
+        self.assertEqual(
+            kernels["particle_craft_render_rgba8"]["cross_thread_data_bytes"],
+            96,
+        )
+        self.assertTrue(
+            all(kernel["scratch_bytes"] == 0 for kernel in kernels.values())
+        )
+        self.assertTrue(all(kernel["slm_bytes"] == 0 for kernel in kernels.values()))
+
+    def test_spirit_cpp_sources_are_self_contained_native_artifacts(self) -> None:
         root = ARTIFACT_ROOT / "cpp"
         expected = {
             "spirit_vfx_background_rgba8": (2, 64),
@@ -275,8 +297,15 @@ class ArtifactContractTests(unittest.TestCase):
                 manifest = json.loads(
                     (root / f"{stem}.manifest.json").read_text(encoding="utf-8")
                 )
-                self.assertEqual(manifest["variant"], "cpp")
-                self.assertEqual(manifest["abi_reference"]["result"], "exact-match")
+                self.assertEqual(manifest["variant"], "cpp-native")
+                self.assertIsNone(manifest["abi_reference"])
+                self.assertEqual(
+                    manifest["provenance"]["publication_policy"],
+                    {
+                        "name": "cpp-native-aot-v1",
+                        "expected_kernels": [stem],
+                    },
+                )
                 input_paths = {
                     record["path"] for record in manifest["source"]["inputs"]
                 }

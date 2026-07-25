@@ -439,6 +439,18 @@ pub fn apply_report(
                     let codepoint = key_code_default_codepoint(key_code)
                         .map(|ch| ch as u32)
                         .unwrap_or(0);
+                    if matches!(key_code, KEYBOARD_KEY_F10 | KEYBOARD_KEY_PRINT_SCREEN) {
+                        crate::log_info!(
+                            target: "input";
+                            "keyboard: printer shortcut received hid_usage=0x{:02X} named_key={} controller={} slot={} ep={} device_seq={}\n",
+                            key,
+                            key_code,
+                            controller_id,
+                            slot_id,
+                            ep_target,
+                            device_seq,
+                        );
+                    }
                     push_output_key(
                         controller_id,
                         slot_id,

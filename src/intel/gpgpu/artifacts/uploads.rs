@@ -54,6 +54,10 @@ pub(crate) fn cpp_audio_visualizer_rgba8_upload_status() -> Option<UploadedKerne
     *CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD.lock()
 }
 
+pub(crate) fn particle_craft_upload_status() -> Option<UploadedKernelArtifact> {
+    *PARTICLE_CRAFT_UPLOAD.lock()
+}
+
 pub(crate) fn font_instance_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *FONT_INSTANCE_RGBA8_UPLOAD.lock()
 }
@@ -429,6 +433,28 @@ pub(crate) fn upload_cpp_audio_visualizer_rgba8_kernel() -> Option<UploadedKerne
     Some(upload)
 }
 
+pub(crate) fn upload_particle_craft_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *PARTICLE_CRAFT_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/gpgpu: particle-craft upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload = upload_artifact(
+        dev,
+        PARTICLE_CRAFT_ADLS_ARTIFACT,
+        PARTICLE_CRAFT_ADLS_GPU,
+    )?;
+    *PARTICLE_CRAFT_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
 pub(crate) fn upload_lfm25_q8_project_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *LFM25_Q8_PROJECT_UPLOAD.lock() {
         return Some(upload);
@@ -606,6 +632,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     CHART_SINE_RGBA8_KERNEL_NAME,
     PIXEL_PLASMA_RGBA8_KERNEL_NAME,
     CPP_DEMO_RGBA8_KERNEL_NAME,
+    PARTICLE_CRAFT_KERNEL_NAME,
     FONT_INSTANCE_RGBA8_KERNEL_NAME,
     LFM25_Q8_PROJECT_KERNEL_NAME,
     LFM25_Q8_PROJECT_PACKED_KERNEL_NAME,
@@ -775,6 +802,11 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT,
             gpu: CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU,
             upload: &CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD,
+        }),
+        PARTICLE_CRAFT_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: PARTICLE_CRAFT_ADLS_ARTIFACT,
+            gpu: PARTICLE_CRAFT_ADLS_GPU,
+            upload: &PARTICLE_CRAFT_UPLOAD,
         }),
         LFM25_Q8_PROJECT_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: LFM25_Q8_PROJECT_ADLS_ARTIFACT,

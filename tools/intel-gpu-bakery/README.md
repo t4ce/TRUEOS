@@ -127,7 +127,21 @@ The PCM boundary, snapshot layout, half-width walker, UI4 resize lifecycle,
 and TestRig procedure are documented in
 `crates/trueos-shader/gpgpu/kernels/CPP_AUDIO_VISUALIZER.md`.
 
-## Spirit C++ ABI-twin suite
+## Stateful ParticleCraft publication
+
+ParticleCraft publishes two entries in one reproducible exact-target artifact:
+
+```sh
+tools/intel-gpu-bakery/bake_adls_cpp_particle_craft.sh
+# or
+make intel-gpu-bake-particle-craft-cpp
+```
+
+The generated `particle_craft.contract.rs` records independent step and render
+entry contracts while both refer to the same Zebin/SPIR-V digests. Runtime
+consumes the bytes only; the C++ toolchain remains a build-time dependency.
+
+## Spirit native C++ suite
 
 Spirit publishes both of its existing kernel ABIs through C++ for OpenCL:
 
@@ -137,10 +151,10 @@ tools/intel-gpu-bakery/bake_adls_cpp_spirit.sh
 make intel-gpu-bake-spirit-cpp
 ```
 
-The paired bake compiles twice, checks the reviewed toolchain lock, and
-requires exact ABI equality against the retained OpenCL C background and
-sprite Zebins before publishing. The runtime selects both C++ images
-unconditionally; the legacy images remain build-time comparison references.
+The paired bake compiles twice, checks the reviewed toolchain lock, validates
+the exact expected kernel set, and publishes both artifacts under the
+standalone `cpp-native-aot-v1` policy. The runtime selects both C++ images
+unconditionally; no retained OpenCL C artifact participates in publication.
 `make kernel` and `make iso` require both complete Spirit C++ Zebins in the
 linked and packaged ELF alongside the native C++ demo.
 

@@ -201,6 +201,14 @@ pub struct HvSyntheticHostState {
 }
 
 const VMX_SCRATCH_SLOTS: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
+const VMX_GUEST_SLOTS: usize = crate::allcaps::hv::VM_ID_LIMIT;
+pub const VMX_EXTENDED_STATE_BYTES: usize = 832;
+
+#[derive(Copy, Clone)]
+#[repr(C, align(64))]
+struct VmxExtendedState([u8; VMX_EXTENDED_STATE_BYTES]);
+
+const EMPTY_EXTENDED_STATE: VmxExtendedState = VmxExtendedState([0; VMX_EXTENDED_STATE_BYTES]);
 
 const EMPTY_LAUNCH_RESULT: LaunchResult = LaunchResult {
     entered: 0,
@@ -234,6 +242,12 @@ static mut VMX_WRAPPER_RESULTS: [LaunchResult; VMX_SCRATCH_SLOTS] =
     [EMPTY_LAUNCH_RESULT; VMX_SCRATCH_SLOTS];
 static mut VMX_GUEST_REGS_BY_SLOT: [GuestRegisters; VMX_SCRATCH_SLOTS] =
     [EMPTY_GUEST_REGISTERS; VMX_SCRATCH_SLOTS];
+// Host state belongs to the AP currently executing the VMX wrapper. Guest
+// state belongs to the VM and therefore survives a yield or lane migration.
+static mut VMX_HOST_EXTENDED_STATE_BY_SLOT: [VmxExtendedState; VMX_SCRATCH_SLOTS] =
+    [EMPTY_EXTENDED_STATE; VMX_SCRATCH_SLOTS];
+static mut VMX_GUEST_EXTENDED_STATE_BY_VM: [VmxExtendedState; VMX_GUEST_SLOTS] =
+    [EMPTY_EXTENDED_STATE; VMX_GUEST_SLOTS];
 
 fn current_scratch_slot() -> usize {
     let slot = crate::percpu::current_slot();
@@ -246,6 +260,55 @@ fn wrapper_result_ptr() -> *mut LaunchResult {
 
 fn guest_regs_ptr() -> *mut GuestRegisters {
     unsafe { core::ptr::addr_of_mut!(VMX_GUEST_REGS_BY_SLOT[current_scratch_slot()]) }
+}
+
+fn host_extended_state_ptr() -> *mut VmxExtendedState {
+    unsafe { core::ptr::addr_of_mut!(VMX_HOST_EXTENDED_STATE_BY_SLOT[current_scratch_slot()]) }
+}
+
+fn guest_extended_state_ptr(vm_id: u8) -> Option<*mut VmxExtendedState> {
+    let index = usize::from(vm_id);
+    if index >= VMX_GUEST_SLOTS {
+        return None;
+    }
+    Some(unsafe { core::ptr::addr_of_mut!(VMX_GUEST_EXTENDED_STATE_BY_VM[index]) })
+}
+
+pub fn reset_guest_extended_state(vm_id: u8) -> Result<(), &'static str> {
+    let state = guest_extended_state_ptr(vm_id).ok_or("unsupported VM extended-state owner")?;
+    unsafe {
+        state.write(EMPTY_EXTENDED_STATE);
+        if crate::cpu::vmx_xsave_mask() == 0 {
+            // FXSAVE64 format: architectural x87 control word and MXCSR
+            // defaults. The remaining zero bytes are clean x87/MMX/XMM state.
+            let bytes = &mut (*state).0;
+            bytes[0..2].copy_from_slice(&0x037Fu16.to_le_bytes());
+            bytes[24..28].copy_from_slice(&0x1F80u32.to_le_bytes());
+        }
+    }
+    Ok(())
+}
+
+pub fn guest_extended_state_snapshot(
+    vm_id: u8,
+) -> Result<(u64, [u8; VMX_EXTENDED_STATE_BYTES]), &'static str> {
+    let state = guest_extended_state_ptr(vm_id).ok_or("unsupported VM extended-state owner")?;
+    Ok((crate::cpu::vmx_xsave_mask(), unsafe { (*state).0 }))
+}
+
+pub fn restore_guest_extended_state(
+    vm_id: u8,
+    saved_mask: u64,
+    bytes: &[u8; VMX_EXTENDED_STATE_BYTES],
+) -> Result<(), &'static str> {
+    if saved_mask != crate::cpu::vmx_xsave_mask() {
+        return Err("snapshot extended-state mask is incompatible with this CPU");
+    }
+    let state = guest_extended_state_ptr(vm_id).ok_or("unsupported VM extended-state owner")?;
+    unsafe {
+        (*state).0.copy_from_slice(bytes);
+    }
+    Ok(())
 }
 
 pub fn reset_guest_registers() {
@@ -556,10 +619,14 @@ pub fn synthesize_host_gdt_tss() -> HvSyntheticHostState {
     }
 }
 
-pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
+pub fn vmlaunch_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
     unsafe {
         let result_ptr = wrapper_result_ptr();
         let guest_regs_ptr = guest_regs_ptr();
+        let host_extended_state_ptr = host_extended_state_ptr();
+        let guest_extended_state_ptr =
+            guest_extended_state_ptr(vm_id).expect("unsupported VM extended-state owner");
+        let extended_state_mask = crate::cpu::vmx_xsave_mask();
         result_ptr.write(EMPTY_LAUNCH_RESULT);
         core::arch::asm!(
             "push rbx",
@@ -570,13 +637,43 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
             "push r15",
             "push {guest_regs_base}",
             "push {result_base}",
+            "push {host_extended_state_base}",
+            "push {guest_extended_state_base}",
+            "push {extended_state_mask}",
             "mov rax, rsp",
             "mov rcx, {host_rsp_field}",
             "vmwrite rcx, rax",
             "lea rax, [rip + 2f]",
             "mov rcx, {host_rip_field}",
             "vmwrite rcx, rax",
-            "mov r10, {guest_regs_base}",
+
+            // VMX deliberately does not switch x87/SSE/AVX state. Save the
+            // current AP host immediately before entry, then install the
+            // VM-owned state after all host Rust code has finished.
+            "mov r10, [rsp + 16]",
+            "mov rax, [rsp]",
+            "test rax, rax",
+            "jz 5f",
+            "mov rdx, rax",
+            "shr rdx, 32",
+            "xsave64 [r10]",
+            "jmp 6f",
+            "5:",
+            "fxsave64 [r10]",
+            "6:",
+            "mov r10, [rsp + 8]",
+            "mov rax, [rsp]",
+            "test rax, rax",
+            "jz 7f",
+            "mov rdx, rax",
+            "shr rdx, 32",
+            "xrstor64 [r10]",
+            "jmp 8f",
+            "7:",
+            "fxrstor64 [r10]",
+            "8:",
+
+            "mov r10, [rsp + 32]",
             "mov rax, [r10 + {guest_rax_off}]",
             "mov rbx, [r10 + {guest_rbx_off}]",
             "mov rcx, [r10 + {guest_rcx_off}]",
@@ -595,22 +692,34 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
 
             "vmlaunch",
             "setna al",
-            "mov r11, [rsp]",
+            "mov r11, [rsp + 24]",
             "mov byte ptr [r11 + {launch_failed_off}], al",
             "cmp al, 0",
             "je 4f",
             "mov rcx, {vm_instr_err_field}",
             "vmread rax, rcx",
             "mov [r11 + {instr_err_off}], rax",
-            "jmp 3f",
-
             "4:",
+
+            // A failed VM-entry does not visit the VM-exit label, so restore
+            // the AP host state here before returning to Rust.
+            "mov r10, [rsp + 16]",
+            "mov rax, [rsp]",
+            "test rax, rax",
+            "jz 9f",
+            "mov rdx, rax",
+            "shr rdx, 32",
+            "xrstor64 [r10]",
+            "jmp 20f",
+            "9:",
+            "fxrstor64 [r10]",
+            "20:",
             "jmp 3f",
 
             "2:",
             "push r10",
             "push r11",
-            "mov r10, [rsp + 24]",
+            "mov r10, [rsp + 48]",
             "mov [r10 + {guest_rax_off}], rax",
             "mov [r10 + {guest_rbx_off}], rbx",
             "mov [r10 + {guest_rcx_off}], rcx",
@@ -628,8 +737,35 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
             "mov [r10 + {guest_r13_off}], r13",
             "mov [r10 + {guest_r14_off}], r14",
             "mov [r10 + {guest_r15_off}], r15",
+
+            // This is the first stateful work after VM exit. Preserve the
+            // guest before any compiler-generated host SIMD can run, then
+            // restore the AP host state saved immediately before entry.
+            "mov r10, [rsp + 24]",
+            "mov rax, [rsp + 16]",
+            "test rax, rax",
+            "jz 21f",
+            "mov rdx, rax",
+            "shr rdx, 32",
+            "xsave64 [r10]",
+            "jmp 12f",
+            "21:",
+            "fxsave64 [r10]",
+            "12:",
+            "mov r10, [rsp + 32]",
+            "mov rax, [rsp + 16]",
+            "test rax, rax",
+            "jz 13f",
+            "mov rdx, rax",
+            "shr rdx, 32",
+            "xrstor64 [r10]",
+            "jmp 14f",
+            "13:",
+            "fxrstor64 [r10]",
+            "14:",
+
             "add rsp, 16",
-            "mov r11, [rsp]",
+            "mov r11, [rsp + 24]",
             "mov byte ptr [r11 + {entered_off}], 1",
             "mov rcx, {exit_reason_field}",
             "vmread rax, rcx",
@@ -642,7 +778,7 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
             "mov [r11 + {guest_rip_off}], rax",
             "3:",
             "cld",
-            "add rsp, 16",
+            "add rsp, 40",
             "pop r15",
             "pop r14",
             "pop r13",
@@ -657,6 +793,9 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
             guest_rip_field = const VMCS_VMEXIT_GUEST_RIP,
             guest_regs_base = in(reg) guest_regs_ptr,
             result_base = in(reg) result_ptr,
+            host_extended_state_base = in(reg) host_extended_state_ptr,
+            guest_extended_state_base = in(reg) guest_extended_state_ptr,
+            extended_state_mask = in(reg) extended_state_mask,
             entered_off = const core::mem::offset_of!(LaunchResult, entered),
             launch_failed_off = const core::mem::offset_of!(LaunchResult, launch_failed),
             exit_reason_off = const core::mem::offset_of!(LaunchResult, exit_reason),
@@ -688,10 +827,14 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
     }
 }
 
-pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
+pub fn vmresume_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
     unsafe {
         let result_ptr = wrapper_result_ptr();
         let guest_regs_ptr = guest_regs_ptr();
+        let host_extended_state_ptr = host_extended_state_ptr();
+        let guest_extended_state_ptr =
+            guest_extended_state_ptr(vm_id).expect("unsupported VM extended-state owner");
+        let extended_state_mask = crate::cpu::vmx_xsave_mask();
         result_ptr.write(EMPTY_LAUNCH_RESULT);
         core::arch::asm!(
             "push rbx",
@@ -702,13 +845,42 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
             "push r15",
             "push {guest_regs_base}",
             "push {result_base}",
+            "push {host_extended_state_base}",
+            "push {guest_extended_state_base}",
+            "push {extended_state_mask}",
             "mov rax, rsp",
             "mov rcx, {host_rsp_field}",
             "vmwrite rcx, rax",
             "lea rax, [rip + 2f]",
             "mov rcx, {host_rip_field}",
             "vmwrite rcx, rax",
-            "mov r10, {guest_regs_base}",
+
+            // The VM may resume on a different reserved AP. The host save is
+            // per CPU slot while the installed state remains VM-owned.
+            "mov r10, [rsp + 16]",
+            "mov rax, [rsp]",
+            "test rax, rax",
+            "jz 5f",
+            "mov rdx, rax",
+            "shr rdx, 32",
+            "xsave64 [r10]",
+            "jmp 6f",
+            "5:",
+            "fxsave64 [r10]",
+            "6:",
+            "mov r10, [rsp + 8]",
+            "mov rax, [rsp]",
+            "test rax, rax",
+            "jz 7f",
+            "mov rdx, rax",
+            "shr rdx, 32",
+            "xrstor64 [r10]",
+            "jmp 8f",
+            "7:",
+            "fxrstor64 [r10]",
+            "8:",
+
+            "mov r10, [rsp + 32]",
             "mov rax, [r10 + {guest_rax_off}]",
             "mov rbx, [r10 + {guest_rbx_off}]",
             "mov rcx, [r10 + {guest_rcx_off}]",
@@ -727,22 +899,33 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
 
             "vmresume",
             "setna al",
-            "mov r11, [rsp]",
+            "mov r11, [rsp + 24]",
             "mov byte ptr [r11 + {launch_failed_off}], al",
             "cmp al, 0",
             "je 4f",
             "mov rcx, {vm_instr_err_field}",
             "vmread rax, rcx",
             "mov [r11 + {instr_err_off}], rax",
-            "jmp 3f",
-
             "4:",
+
+            // VMRESUME failure does not execute the VM-exit label.
+            "mov r10, [rsp + 16]",
+            "mov rax, [rsp]",
+            "test rax, rax",
+            "jz 9f",
+            "mov rdx, rax",
+            "shr rdx, 32",
+            "xrstor64 [r10]",
+            "jmp 20f",
+            "9:",
+            "fxrstor64 [r10]",
+            "20:",
             "jmp 3f",
 
             "2:",
             "push r10",
             "push r11",
-            "mov r10, [rsp + 24]",
+            "mov r10, [rsp + 48]",
             "mov [r10 + {guest_rax_off}], rax",
             "mov [r10 + {guest_rbx_off}], rbx",
             "mov [r10 + {guest_rcx_off}], rcx",
@@ -760,8 +943,32 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
             "mov [r10 + {guest_r13_off}], r13",
             "mov [r10 + {guest_r14_off}], r14",
             "mov [r10 + {guest_r15_off}], r15",
+
+            "mov r10, [rsp + 24]",
+            "mov rax, [rsp + 16]",
+            "test rax, rax",
+            "jz 21f",
+            "mov rdx, rax",
+            "shr rdx, 32",
+            "xsave64 [r10]",
+            "jmp 12f",
+            "21:",
+            "fxsave64 [r10]",
+            "12:",
+            "mov r10, [rsp + 32]",
+            "mov rax, [rsp + 16]",
+            "test rax, rax",
+            "jz 13f",
+            "mov rdx, rax",
+            "shr rdx, 32",
+            "xrstor64 [r10]",
+            "jmp 14f",
+            "13:",
+            "fxrstor64 [r10]",
+            "14:",
+
             "add rsp, 16",
-            "mov r11, [rsp]",
+            "mov r11, [rsp + 24]",
             "mov byte ptr [r11 + {entered_off}], 1",
             "mov rcx, {exit_reason_field}",
             "vmread rax, rcx",
@@ -774,7 +981,7 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
             "mov [r11 + {guest_rip_off}], rax",
             "3:",
             "cld",
-            "add rsp, 16",
+            "add rsp, 40",
             "pop r15",
             "pop r14",
             "pop r13",
@@ -789,6 +996,9 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
             guest_rip_field = const VMCS_VMEXIT_GUEST_RIP,
             guest_regs_base = in(reg) guest_regs_ptr,
             result_base = in(reg) result_ptr,
+            host_extended_state_base = in(reg) host_extended_state_ptr,
+            guest_extended_state_base = in(reg) guest_extended_state_ptr,
+            extended_state_mask = in(reg) extended_state_mask,
             entered_off = const core::mem::offset_of!(LaunchResult, entered),
             launch_failed_off = const core::mem::offset_of!(LaunchResult, launch_failed),
             exit_reason_off = const core::mem::offset_of!(LaunchResult, exit_reason),

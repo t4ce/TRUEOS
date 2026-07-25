@@ -22,6 +22,13 @@ onset, bass, and particle ideas into one resizable UI4 surface. Its audio
 boundary, 50% horizontal-pair walker shape, ABI, and TestRig procedure are in
 [`CPP_AUDIO_VISUALIZER.md`](CPP_AUDIO_VISUALIZER.md).
 
+`particle_craft.clcpp` is the stateful two-pass ParticleCraft engine behind
+`cpp particle` and the Blueprint particle app. Its step entry updates 32-byte
+particle records in place; its race-free pixel-gather entry shades the complete
+640x400 Arc Forge frame. The persistent lifetime, 64-byte Blueprint ABI,
+phase barrier, quarantine rule, and TestRig commands are in
+[`PARTICLE_CRAFT.md`](PARTICLE_CRAFT.md).
+
 `spirit_vfx_background_rgba8.clcpp` and
 `spirit_vfx_sprite_rgba8.clcpp` are Spirit's sole maintained 10-background and
 16-sprite shader sources. They preserve the established two-walker cursor-plane
@@ -55,6 +62,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; available as the `gpgpu preview start plasma` arbitrary-surface UI4 compute node
 - `cpp_demo_rgba8.clcpp`: one exact-target C++ for OpenCL/IGC application kernel with gallery, aurora, Julia-set, signed-distance, Voronoi, and standalone Retro Sun modes; available through the dedicated `cpp` Shell2 command
 - `cpp_audio_visualizer_rgba8.clcpp`: one exact-target C++/IGC audiovisual composition driven by the final 48 kHz stereo HDA-bound mix, a 2048-point mid/side FFT, 64 bands, and 128-point channel waveforms; available through `cpp audio`
+- `particle_craft.clcpp`: one exact-target C++/IGC artifact with persistent particle-state and full-frame render entries; available through `cpp particle` and `Frame::render_particle_craft`
 - `lab256_multiphase.cl`: hash-locked 256x256 three-entry experimental artifact retained for the live `gpgpu test lab256` Shell2/UI4 preview through the vGPU/GuC GPGPU lane; it contains a centered grayscale smoke ripple, Gray-Scott pointer trail, compact GPU telemetry, and one half-second CUR_SURFLIVE-rate status dot
 - `spirit_vfx_background_rgba8.clcpp` and `spirit_vfx_sprite_rgba8.clcpp`: TrueOS-Spirit's continuous 60 Hz C++/IGC cursor-plane producer and sole maintained shader source pair; the default clean-Lilly batch dispatches only the sprite presentation walker, while enabling a procedural background adds the background walker and ordered source-over dependency
 - `font_outline_mesh.cl`: allowlisted Skrifa outline consumer used by `gpgpu probe font-tessel`; it audits the packed command stream, flattens quadratic/cubic curves, and emits indexed contour-stroke triangles without CPU geometry math
@@ -104,11 +112,18 @@ single-kernel audiovisual artifact for that same exact target. Its SHA-256 is:
 951e0cb30b42a755812b00eb0c3871f52c765ee74295dc3cb48b84f8361c1b19
 ```
 
-The two unconditional Spirit C++/IGC artifacts are exact ABI twins of the
-retained OpenCL C binaries:
+`artifacts/adls/cpp/particle_craft.bin` is the two-entry stateful particle
+artifact for that exact target. Its SHA-256 is:
 
 ```text
-artifacts/adls/cpp/spirit_vfx_background_rgba8.bin  4c82592a441b88902491b6d3cf8f99a3524a41178a347928cf5845e0872841f7
+bbe6f1e7c95c83271a29dc89c85d375ba05fb51565c1e754e2488e4885907b67
+```
+
+The two unconditional Spirit C++/IGC artifacts are standalone, solely
+maintained native C++ publications:
+
+```text
+artifacts/adls/cpp/spirit_vfx_background_rgba8.bin  2f856f0e338df1eef71b89ed5dd390ceb2fe8323cc9de7cdae2537a63895340e
 artifacts/adls/cpp/spirit_vfx_sprite_rgba8.bin      2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac
 ```
 

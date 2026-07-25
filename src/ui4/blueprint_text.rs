@@ -12,18 +12,21 @@ use spin::Mutex;
 use crate::intel::gpgpu::{
     ALPHA_BLEND_WORKLIST_FLAG_COPY, ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER,
     ALPHA_BLEND_WORKLIST_FLAG_TINT_ALPHA, ALPHA_BLEND_WORKLIST_FLAG_TINT_RGB,
-    GpgpuAlphaBlendWorklistDesc, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence, GpgpuRgba8Surface,
-    GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER,
-    SkyboxSampleRgb565Params, Ui4CompositorCompletion, Ui4CompositorSubmission,
-    Ui4CompositorSubmitError, Ui4SpriteSceneCompletion, alpha_blend_worklist_max_descs,
+    GpgpuAlphaBlendWorklistDesc, GpgpuOwnedParticleCraftState, GpgpuRgb565Surface,
+    GpgpuRgba8ReleaseFence, GpgpuRgba8Surface, GpgpuSpriteQuadWorklistDesc,
+    GpgpuSpriteQuadWorklistRun, PARTICLE_CRAFT_FRAME_HEIGHT, PARTICLE_CRAFT_FRAME_WIDTH,
+    ParticleCraftParamsV1, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, SkyboxSampleRgb565Params,
+    Ui4CompositorCompletion, Ui4CompositorSubmission, Ui4CompositorSubmitError,
+    Ui4SpriteSceneCompletion, alpha_blend_worklist_max_descs, particle_craft_rgba8_frame,
     poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
     queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
     skybox_sample_rgb565_to_rgba8, sprite_quad_worklist_max_descs,
 };
 use crate::intel::gpu_font::{
-    GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS,
-    create_gpu_font_scene_coverage_mask_at_raster, ensure_font_face_available,
+    GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontRetainedSceneError, GpuFontRetainedStyle,
+    GpuFontRgba, GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS, ensure_font_face_available,
     recycle_font_job_readback, render_font_job_readback_once, render_font_scene_readback_once,
+    retain_gpu_font_scene_at_raster,
 };
 
 use super::{
@@ -217,6 +220,31 @@ pub struct TrueosUi4SkyboxRenderParams {
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4SkyboxRenderParams>() == 15 * 4);
 
+/// Versioned, pointer-free ParticleCraft control block. GPU addresses and
+/// persistent state ownership remain entirely inside the kernel.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4ParticleCraftParamsV1 {
+    pub version: u32,
+    pub flags: u32,
+    pub seed: u32,
+    pub active_count: u32,
+    pub dt_seconds: f32,
+    pub time_seconds: f32,
+    pub emitter_x: f32,
+    pub emitter_y: f32,
+    pub attractor_x: f32,
+    pub attractor_y: f32,
+    pub attraction: f32,
+    pub swirl: f32,
+    pub gravity_x: f32,
+    pub gravity_y: f32,
+    pub drag: f32,
+    pub intensity: f32,
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4ParticleCraftParamsV1>() == 16 * 4);
+
 /// One ordered, straight-alpha RGBA sprite operation. Sprite id zero selects
 /// the frame-owned one-pixel white source and therefore represents a solid
 /// rectangle when every UV is zero.
@@ -257,6 +285,7 @@ struct BlueprintSceneSurface {
     write_lease: Option<FrameWriteLease>,
     pending_gpu_release: Option<GpgpuRgba8ReleaseFence>,
     gpu_submission_unretired: bool,
+    particle_craft: Option<GpgpuOwnedParticleCraftState>,
     placement: WindowPlacement,
     skybox: Option<OwnedRgb565Surface>,
     skybox_upload: Option<Rgb565Upload>,
@@ -540,6 +569,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
                 write_lease: None,
                 pending_gpu_release: None,
                 gpu_submission_unretired: false,
+                particle_craft: None,
                 placement,
                 skybox: None,
                 skybox_upload: None,
@@ -567,6 +597,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         write_lease: None,
         pending_gpu_release: None,
         gpu_submission_unretired: false,
+        particle_craft: None,
         placement,
         skybox: None,
         skybox_upload: None,
@@ -1538,6 +1569,125 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_skybox_render_rgb565(
     }
 }
 
+/// Advance and render one full ParticleCraft frame into the active UI4 lease.
+///
+/// The per-window state allocation persists across frames. The call is
+/// synchronous through the final GPU marker; after an accepted timeout both
+/// the destination and state are quarantined and CPU fallback is forbidden.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_particle_craft_render(
+    window_id: u32,
+    params: *const TrueosUi4ParticleCraftParamsV1,
+) -> i32 {
+    if params.is_null() {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let payload = unsafe {
+            core::slice::from_raw_parts(
+                params.cast::<u8>(),
+                core::mem::size_of::<TrueosUi4ParticleCraftParamsV1>(),
+            )
+        };
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_PARTICLE_CRAFT_RENDER,
+            window_id as u64,
+            0,
+            payload,
+        );
+    }
+    let wire = unsafe { *params };
+    let params = ParticleCraftParamsV1 {
+        version: wire.version,
+        flags: wire.flags,
+        seed: wire.seed,
+        active_count: wire.active_count,
+        dt_seconds: wire.dt_seconds,
+        time_seconds: wire.time_seconds,
+        emitter_x: wire.emitter_x,
+        emitter_y: wire.emitter_y,
+        attractor_x: wire.attractor_x,
+        attractor_y: wire.attractor_y,
+        attraction: wire.attraction,
+        swirl: wire.swirl,
+        gravity_x: wire.gravity_x,
+        gravity_y: wire.gravity_y,
+        drag: wire.drag,
+        intensity: wire.intensity,
+    };
+    if !params.is_valid() {
+        return ERROR_INVALID;
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let (lease, mut craft) = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.width != PARTICLE_CRAFT_FRAME_WIDTH
+            || surface.height != PARTICLE_CRAFT_FRAME_HEIGHT
+            || surface.cadence != FrameCadence::Streaming
+        {
+            return ERROR_INVALID;
+        }
+        if surface.gpu_submission_unretired {
+            return ERROR_BUSY;
+        }
+        let Some(lease) = surface.write_lease else {
+            return ERROR_STATE;
+        };
+        let craft = match surface.particle_craft.take() {
+            Some(craft) => craft,
+            None => match GpgpuOwnedParticleCraftState::allocate() {
+                Some(craft) => craft,
+                None => return ERROR_UI4,
+            },
+        };
+        (lease, craft)
+    };
+    let Ok(destination) = gpgpu_rgba_surface(lease) else {
+        let mut surfaces = SURFACES.lock();
+        if let Some(surface) = surface_mut(&mut surfaces, owner, window_id) {
+            surface.particle_craft = Some(craft);
+        }
+        return ERROR_UI4;
+    };
+    let rendered = particle_craft_rgba8_frame(&mut craft, destination, params);
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    if surface.write_lease != Some(lease) {
+        surface.particle_craft = Some(craft);
+        return ERROR_STATE;
+    }
+    surface.particle_craft = Some(craft);
+    if rendered.ok {
+        let Some(release) = rendered.release else {
+            return ERROR_UI4;
+        };
+        surface.pending_gpu_release = Some(release);
+        return 0;
+    }
+    if rendered.submitted {
+        surface.gpu_submission_unretired = true;
+        crate::log_error!(target: "ui4/blueprint-frame";
+            "ParticleCraft producer quarantined owner={:?} window={} frame={} buffer={} marker=0x{:08X} submit_ms={} reason=accepted-submission-not-retired action=no-cpu-fallback+retain-state+retain-ring\n",
+            owner,
+            window_id,
+            lease.frame.raw(),
+            lease.buffer_index,
+            rendered.marker,
+            rendered.submit_ms,
+        );
+        ERROR_BUSY
+    } else {
+        let _ = mark_frame_buffer_cpu_authored(lease);
+        ERROR_UI4
+    }
+}
+
 /// Render one positioned text-row job through the kernel font service and
 /// blend its coverage into the currently acquired UI4 frame.
 pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_rows(
@@ -1920,7 +2070,7 @@ fn render_scene_entries_with_font_instance(
     rgba: u32,
     destination: GpgpuRgba8Surface,
 ) -> Result<GpgpuRgba8ReleaseFence, FontInstanceSceneError> {
-    let coverage = create_gpu_font_scene_coverage_mask_at_raster(
+    let scene = retain_gpu_font_scene_at_raster(
         entries,
         font,
         viewport_width,
@@ -1932,66 +2082,21 @@ fn render_scene_entries_with_font_instance(
     // submission does not retire. It has not referenced `destination` yet, so
     // Blueprint may safely restore CPU authorship and use the triangle path.
     .map_err(FontInstanceSceneError::Unavailable)?;
-    let state = crate::intel::gpgpu::allocate_font_instance_state(1)
-        .ok_or(FontInstanceSceneError::Unavailable("font-instance-state-allocation"))?;
-    let mask_rect = coverage.full_rect();
-    let mut descriptor =
-        crate::intel::gpgpu::GpgpuFontInstanceDescriptor::new(coverage.surface(), mask_rect, rgba)
-            .ok_or(FontInstanceSceneError::Unavailable("font-instance-descriptor"))?;
-    descriptor.set_transform(1.0, 0.0, 1.0);
-    if !state.write(0, &descriptor) {
-        return Err(FontInstanceSceneError::Unavailable("font-instance-descriptor-write"));
-    }
-    let origin = coverage.origin_px();
-    let layer = crate::intel::gpgpu::GpgpuFontInstanceLayer {
-        mask: coverage.surface(),
-        mask_rect,
-        dst_center: [
-            origin[0] as f32 + mask_rect.width as f32 * 0.5,
-            origin[1] as f32 + mask_rect.height as f32 * 0.5,
-        ],
-        dispatch_rect: crate::intel::gpgpu::GpgpuRect::new(
-            origin[0],
-            origin[1],
-            mask_rect.width,
-            mask_rect.height,
-        ),
-        descriptor_index: 0,
-    };
-    let rendered = crate::intel::gpgpu::font_instance_layers_rgba8_2d_mode(
-        core::slice::from_ref(&layer),
-        &state,
-        destination,
-        true,
-        0.0,
-    );
-    if !rendered.ok {
-        if rendered.submitted {
-            // The accepted batch may still dereference both allocations.
-            // Keep their physical pages and unique PPGTT aliases pinned with
-            // the quarantined shared context until reboot.
-            core::mem::forget(coverage);
-            core::mem::forget(state);
-            return Err(FontInstanceSceneError::SubmittedIncomplete(
-                "font-instance-retirement-uncertain",
-            ));
-        }
-        return Err(FontInstanceSceneError::Unavailable("font-instance-dispatch"));
-    }
-
-    let finalizer = crate::intel::gpgpu::release_rgba8_surface_for_scanout(destination);
-    if !finalizer.ok {
-        return Err(if finalizer.submitted {
-            FontInstanceSceneError::SubmittedIncomplete(
-                "font-instance-release-retirement-uncertain",
-            )
-        } else {
-            FontInstanceSceneError::Unavailable("font-instance-release")
-        });
-    }
-    finalizer
+    let [red, green, blue, alpha] = rgba.to_le_bytes();
+    let style = GpuFontRetainedStyle::identity(GpuFontRgba::new(red, green, blue, alpha));
+    let rendered = scene
+        .restamp_instance(destination, style, true, 0.0)
+        .map_err(|error| match error {
+            GpuFontRetainedSceneError::Unavailable(reason) => {
+                FontInstanceSceneError::Unavailable(reason)
+            }
+            GpuFontRetainedSceneError::SubmittedIncomplete(reason) => {
+                FontInstanceSceneError::SubmittedIncomplete(reason)
+            }
+        })?;
+    rendered
         .release
-        .ok_or(FontInstanceSceneError::Unavailable("font-instance-release-missing"))
+        .ok_or(FontInstanceSceneError::Unavailable("font-retained-release-missing"))
 }
 
 /// Publish the completed dirty buffer and its window damage.

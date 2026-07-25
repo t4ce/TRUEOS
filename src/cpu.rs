@@ -395,6 +395,21 @@ pub fn simd_status() -> SimdStatus {
     }
 }
 
+/// Return the extended-state components enabled uniformly by TRUEOS.
+///
+/// A zero mask means that the CPU uses the legacy FXSAVE boundary.  When AVX
+/// state is enabled, every initialized CPU uses the same x87/SSE/YMM XCR0
+/// contract, so VM-owned state may follow a VM to another reserved lane.
+pub(crate) fn vmx_xsave_mask() -> u64 {
+    const XCR0_X87_SSE_YMM: u64 = (1 << 0) | (1 << 1) | (1 << 2);
+
+    if XSAVE_AVX_ENABLED.load(Ordering::Acquire) {
+        XCR0_X87_SSE_YMM
+    } else {
+        0
+    }
+}
+
 fn probe_xsave_avx_state() -> SimdReason {
     let Some(features) = CpuId::new().get_feature_info() else {
         return SimdReason::MissingXsave;

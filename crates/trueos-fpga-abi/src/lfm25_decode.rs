@@ -11,6 +11,11 @@ pub const PINNED_LLAMA_CPP_COMMIT: &str = "76f46ad29d61fd8c1401e8221842934bf62a6
 pub const PINNED_LFM2_SOURCE: &str = "src/models/lfm2.cpp";
 pub const OPS_PER_LAYER: usize = 6;
 pub const OPS_PER_TOKEN: usize = 1 + lfm25::MODEL_LAYER_COUNT * OPS_PER_LAYER + 2;
+/// Operations required to advance recurrent/KV state for a non-final prompt token.
+///
+/// Final RMS normalization and the tied vocabulary head do not feed any later
+/// token state, so prefill may stop after the final layer residual.
+pub const OPS_PER_PREFILL_TOKEN: usize = OPS_PER_TOKEN - 2;
 pub const SHORTCONV_STATE_COUNT: usize = 10;
 pub const KV_CACHE_COUNT: usize = 6;
 pub const Q8_ROW_BYTES: u32 =
@@ -106,6 +111,20 @@ impl DecodePlan {
     pub fn require_capabilities(available: DecodeCapabilities) -> Result<(), MissingCapability> {
         let mut plan = Self::new();
         while let Some(operation) = plan.next() {
+            if !available.contains(operation.kind.capability()) {
+                return Err(MissingCapability {
+                    operation: operation.kind,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Require only the circuits used by a state-only non-final prompt token.
+    pub fn require_prefill_capabilities(
+        available: DecodeCapabilities,
+    ) -> Result<(), MissingCapability> {
+        for operation in Self::new().take(OPS_PER_PREFILL_TOKEN) {
             if !available.contains(operation.kind.capability()) {
                 return Err(MissingCapability {
                     operation: operation.kind,
@@ -435,6 +454,13 @@ mod tests {
         }
         assert_eq!(count, 99);
         assert_eq!(stateful, lfm25::MODEL_LAYER_COUNT);
+        assert_eq!(OPS_PER_PREFILL_TOKEN, 97);
+        assert_eq!(
+            DecodePlan::new()
+                .nth(OPS_PER_PREFILL_TOKEN - 1)
+                .map(|operation| operation.kind),
+            Some(DecodeOpKind::FfnResidual)
+        );
     }
 
     #[test]
@@ -498,6 +524,19 @@ mod tests {
             })
         );
         assert_eq!(DecodePlan::require_capabilities(DecodeCapabilities::ALL), Ok(()));
+
+        let no_output_only = DecodeCapabilities::from_bits(
+            DecodeCapabilities::ALL.bits()
+                & !DecodeOpKind::FinalRmsNorm.capability().bits()
+                & !DecodeOpKind::TiedLmHeadArgmax.capability().bits(),
+        );
+        assert_eq!(DecodePlan::require_prefill_capabilities(no_output_only), Ok(()));
+        assert_eq!(
+            DecodePlan::require_capabilities(no_output_only),
+            Err(MissingCapability {
+                operation: DecodeOpKind::FinalRmsNorm,
+            })
+        );
     }
 
     #[test]

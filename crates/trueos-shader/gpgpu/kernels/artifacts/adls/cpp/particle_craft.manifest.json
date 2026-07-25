@@ -5,13 +5,147 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac",
-      "size_bytes": 656728,
+      "sha256": "bbe6f1e7c95c83271a29dc89c85d375ba05fb51565c1e754e2488e4885907b67",
+      "size_bytes": 93200,
       "type": "relocatable",
-      "ze_info_section_offset": 653112,
-      "ze_info_section_size": 2787
+      "ze_info_section_offset": 87312,
+      "ze_info_section_size": 4938
     },
     "kernels": [
+      {
+        "bindings": [
+          {
+            "arg_index": 0,
+            "bti": 0
+          },
+          {
+            "arg_index": 1,
+            "bti": 1
+          }
+        ],
+        "cross_thread_data_bytes": 64,
+        "execution_env": {
+          "eu_thread_count": 7,
+          "grf_count": 128,
+          "has_no_stateless_write": true,
+          "simd_size": 16,
+          "subgroup_independent_forward_progress": true
+        },
+        "grf_count": 128,
+        "implicit_payload_args": [
+          {
+            "arg_type": "global_id_offset",
+            "offset": 0,
+            "size": 12
+          },
+          {
+            "arg_type": "local_size",
+            "offset": 12,
+            "size": 12
+          },
+          {
+            "arg_type": "enqueued_local_size",
+            "offset": 32,
+            "size": 12
+          }
+        ],
+        "kernel_name": "particle_craft_step",
+        "payload_args": [
+          {
+            "access": "readwrite",
+            "address_mode": "stateful",
+            "address_space": "global",
+            "arg_index": 0,
+            "kind": "by_pointer",
+            "offset_bytes": 48,
+            "representations": [
+              {
+                "access": "readwrite",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              }
+            ],
+            "size_bytes": 8
+          },
+          {
+            "access": "readonly",
+            "address_mode": "stateless",
+            "address_space": "global",
+            "arg_index": 1,
+            "kind": "by_pointer",
+            "offset_bytes": 56,
+            "representations": [
+              {
+                "access": "readonly",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              },
+              {
+                "access": "readonly",
+                "address_mode": "stateless",
+                "address_space": "global",
+                "offset_bytes": 56,
+                "size_bytes": 8
+              }
+            ],
+            "size_bytes": 8
+          }
+        ],
+        "per_thread_data_bytes": 96,
+        "per_thread_payload_args": [
+          {
+            "arg_type": "local_id",
+            "offset": 0,
+            "size": 96
+          }
+        ],
+        "scratch_bytes": 0,
+        "simd_width": 16,
+        "slm_bytes": 0,
+        "source_arg_info": [
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 0,
+            "name": "particle_state",
+            "type_name": "float4*;8",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 1,
+            "name": "params",
+            "type_name": "uint*;8",
+            "type_qualifiers": "const"
+          }
+        ],
+        "text": {
+          "entry_offset": 64,
+          "entry_size": 10504,
+          "section_alignment": 0,
+          "section_name": ".text.particle_craft_step",
+          "section_offset": 64,
+          "section_size": 10688,
+          "sha256": "a7b34065a6f3295ec768c707c1a3567e1f9ad4da7b683be220b22ec7839191de",
+          "symbol_size": 10504,
+          "symbol_value": 0
+        },
+        "user_attributes": {
+          "intel_reqd_sub_group_size": 16,
+          "intel_reqd_workgroup_walk_order": [
+            0,
+            1,
+            2
+          ]
+        },
+        "ze_info_major": 1,
+        "ze_info_minor": 64
+      },
       {
         "bindings": [
           {
@@ -53,7 +187,7 @@
             "size": 12
           }
         ],
-        "kernel_name": "spirit_vfx_sprite_rgba8",
+        "kernel_name": "particle_craft_render_rgba8",
         "payload_args": [
           {
             "access": "readonly",
@@ -133,15 +267,15 @@
             "access_qualifier": "NONE",
             "address_qualifier": "__global",
             "index": 0,
-            "name": "src_rgba",
-            "type_name": "uint*;8",
+            "name": "particle_state",
+            "type_name": "float4*;8",
             "type_qualifiers": "const"
           },
           {
             "access_qualifier": "NONE",
             "address_qualifier": "__global",
             "index": 1,
-            "name": "control",
+            "name": "params",
             "type_name": "uint*;8",
             "type_qualifiers": "const"
           },
@@ -149,20 +283,20 @@
             "access_qualifier": "NONE",
             "address_qualifier": "__global",
             "index": 2,
-            "name": "dst_bgra",
+            "name": "dst_rgba",
             "type_name": "uint*;8",
             "type_qualifiers": "NONE"
           }
         ],
         "text": {
-          "entry_offset": 64,
-          "entry_size": 501616,
+          "entry_offset": 10752,
+          "entry_size": 8592,
           "section_alignment": 0,
-          "section_name": ".text.spirit_vfx_sprite_rgba8",
-          "section_offset": 64,
-          "section_size": 501760,
-          "sha256": "d8959faf97791f34dc869b4c8832bc71a3434cc4ef29c675d5c79bd05a686f94",
-          "symbol_size": 501616,
+          "section_name": ".text.particle_craft_render_rgba8",
+          "section_offset": 10752,
+          "section_size": 8768,
+          "sha256": "7c0ff47bf89fcdb98b6c085678b3effabd71e5f5464d194a49f10f199d8f5a45",
+          "symbol_size": 8592,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -178,10 +312,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 501896,
-      "embedded_section_size": 151144,
-      "sha256": "c0226908a1e9ba110cddfbec99586772b0d5d936d3033e1783544c709b19f38a",
-      "size_bytes": 151144
+      "embedded_section_offset": 19640,
+      "embedded_section_size": 67596,
+      "sha256": "89cc0fcb69cf7e26729432846b18bf2b6e2006a28571bea69430cfbb8e7027ed",
+      "size_bytes": 67596
     }
   },
   "provenance": {
@@ -205,33 +339,33 @@
         "-fno-rtti",
         "-MMD",
         "-MF",
-        "$OUT_DIR/spirit_vfx_sprite_rgba8.d",
+        "$OUT_DIR/particle_craft.d",
         "-MT",
-        "spirit_vfx_sprite_rgba8.bc",
+        "particle_craft.bc",
         "-emit-llvm",
         "-c",
-        "spirit_vfx_sprite_rgba8.clcpp",
+        "particle_craft.clcpp",
         "-o",
-        "$OUT_DIR/spirit_vfx_sprite_rgba8.bc"
+        "$OUT_DIR/particle_craft.bc"
       ],
       [
         "$LLVM_SPIRV",
         "--preserve-ocl-kernel-arg-type-metadata-through-string",
-        "$OUT_DIR/spirit_vfx_sprite_rgba8.bc",
+        "$OUT_DIR/particle_craft.bc",
         "-o",
-        "$OUT_DIR/spirit_vfx_sprite_rgba8.spv"
+        "$OUT_DIR/particle_craft.spv"
       ],
       [
         "$OCLOC",
         "compile",
         "-file",
-        "$OUT_DIR/spirit_vfx_sprite_rgba8.spv",
+        "$OUT_DIR/particle_craft.spv",
         "-spirv_input",
         "-device",
         "0x4680",
         "-64",
         "-output",
-        "spirit_vfx_sprite_rgba8",
+        "particle_craft",
         "-out_dir",
         "$OUT_DIR",
         "-output_no_suffix",
@@ -241,7 +375,7 @@
         "$OCLOC",
         "validate",
         "-file",
-        "$OUT_DIR/spirit_vfx_sprite_rgba8.bin"
+        "$OUT_DIR/particle_craft.bin"
       ]
     ],
     "frontend": {
@@ -253,7 +387,8 @@
     },
     "publication_policy": {
       "expected_kernels": [
-        "spirit_vfx_sprite_rgba8"
+        "particle_craft_render_rgba8",
+        "particle_craft_step"
       ],
       "name": "cpp-native-aot-v1"
     },
@@ -373,7 +508,8 @@
     }
   },
   "rust_symbols": {
-    "spirit_vfx_sprite_rgba8": "SPIRIT_VFX_SPRITE_RGBA8_ADLS_CPP_ABI_CONTRACT"
+    "particle_craft_render_rgba8": "PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT",
+    "particle_craft_step": "PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT"
   },
   "schema_version": 2,
   "source": {
@@ -384,13 +520,13 @@
         "size_bytes": 1334
       },
       {
-        "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.clcpp",
-        "sha256": "eab3572ae9bf8048b00131cdd6d2af747ed3776be7f267e280f6d9f08a89bf86",
-        "size_bytes": 41719
+        "path": "crates/trueos-shader/gpgpu/kernels/particle_craft.clcpp",
+        "sha256": "9f184d0bd5610b4a1c0ed264d3ba75cd27b779bee7195dc624b31fd9df9440e3",
+        "size_bytes": 12732
       }
     ],
     "language": "C++ for OpenCL",
-    "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.clcpp"
+    "path": "crates/trueos-shader/gpgpu/kernels/particle_craft.clcpp"
   },
   "target": {
     "label": "adls",

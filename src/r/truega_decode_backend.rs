@@ -14,8 +14,8 @@ use core::future::Future;
 
 use trueos_fpga_abi::lfm25;
 use trueos_fpga_abi::lfm25_decode::{
-    DecodeCapabilities, DecodeOpKind, DecodePlan, EmbeddingRowPlan, LayerStateSlot, OPS_PER_TOKEN,
-    TiedLmHeadPlan,
+    DecodeCapabilities, DecodeOpKind, DecodePlan, EmbeddingRowPlan, LayerStateSlot,
+    OPS_PER_PREFILL_TOKEN, OPS_PER_TOKEN, TiedLmHeadPlan,
 };
 use trueos_fpga_abi::lfm25_decode_feed::{
     FeedCapability, FeedMode, FeedRequest, capability_is_exact,
@@ -252,6 +252,9 @@ pub enum TruegaDecodeBackendError<TransportError, DataPlaneError> {
     },
     CallbackSequenceOverflow,
     PositionOverflow,
+    PrefillBoundary {
+        ordinal: u8,
+    },
     InternalPlan,
 }
 
@@ -786,6 +789,30 @@ where
             callback_sequence: self.callback_sequence,
             output,
         })
+    }
+
+    fn finish_prefill_token(&mut self, output: HiddenQ30) -> Result<(), Self::Error> {
+        if self.poisoned {
+            return Err(TruegaDecodeBackendError::Poisoned);
+        }
+        if self.next_ordinal as usize != OPS_PER_PREFILL_TOKEN {
+            return Err(TruegaDecodeBackendError::PrefillBoundary {
+                ordinal: self.next_ordinal,
+            });
+        }
+        let domain = Transport::domain(
+            self.session
+                .as_ref()
+                .ok_or(TruegaDecodeBackendError::InternalPlan)?,
+        );
+        let _ = Self::resident_slot(output.resident(), domain)?;
+        let position = self
+            .position
+            .checked_add(1)
+            .ok_or(TruegaDecodeBackendError::PositionOverflow)?;
+        self.next_ordinal = 0;
+        self.position = position;
+        Ok(())
     }
 }
 

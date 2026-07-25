@@ -10,7 +10,9 @@ use core::future::Future;
 
 use ::lumen::async_module::AsyncModule;
 
-use crate::r::lfm25_decode::{AotDecodeBackend, DecodeError, DecodeSession, DecodeTokenOutput};
+use crate::r::lfm25_decode::{
+    AotDecodeBackend, DecodeError, DecodePrefillOutput, DecodeSession, DecodeTokenOutput,
+};
 
 /// One immutable token request accepted by [`Lfm25Decode`].
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -40,6 +42,7 @@ pub(crate) enum Lfm25DecodeError<BackendError> {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Lfm25DecodeState {
     pub position: u32,
+    pub callback_sequence: u64,
     pub poisoned: bool,
 }
 
@@ -66,6 +69,7 @@ impl<Backend> Lfm25Decode<Backend> {
         let session = self.session.try_borrow().ok()?;
         Some(Lfm25DecodeState {
             position: session.position(),
+            callback_sequence: session.callback_sequence(),
             poisoned: session.is_poisoned(),
         })
     }
@@ -78,6 +82,28 @@ impl<Backend> Lfm25Decode<Backend> {
     /// Initialization/control access; unavailable while `self` is shared by a future.
     pub(crate) fn backend_mut(&mut self) -> &mut Backend {
         self.backend.get_mut()
+    }
+
+    /// Advance a non-final prompt token without computing output logits.
+    pub(crate) async fn prefill_token(
+        &self,
+        input: Lfm25DecodeInput,
+    ) -> Result<DecodePrefillOutput, Lfm25DecodeError<Backend::Error>>
+    where
+        Backend: AotDecodeBackend,
+    {
+        let mut session = self
+            .session
+            .try_borrow_mut()
+            .map_err(|_| Lfm25DecodeError::InFlight)?;
+        let mut backend = self
+            .backend
+            .try_borrow_mut()
+            .map_err(|_| Lfm25DecodeError::InFlight)?;
+        session
+            .prefill_token(&mut *backend, input.token())
+            .await
+            .map_err(Lfm25DecodeError::Decode)
     }
 
     pub(crate) fn into_parts(self) -> (DecodeSession, Backend) {
@@ -166,6 +192,7 @@ mod tests {
     struct FakeAotBackend {
         callback_sequence: u64,
         storage_slot: u16,
+        prefill_finishes: usize,
         observed: Vec<DecodeOpKind>,
     }
 
@@ -229,6 +256,11 @@ mod tests {
                 output,
             })
         }
+
+        fn finish_prefill_token(&mut self, _output: HiddenQ30) -> Result<(), Self::Error> {
+            self.prefill_finishes += 1;
+            Ok(())
+        }
     }
 
     fn ready<F: Future>(future: F) -> F::Output {
@@ -258,6 +290,7 @@ mod tests {
             module.try_state(),
             Some(Lfm25DecodeState {
                 position: 1,
+                callback_sequence: 99,
                 poisoned: false,
             })
         );
@@ -274,6 +307,34 @@ mod tests {
         let expected: Vec<_> = DecodePlan::new().map(|step| step.kind).collect();
         assert_eq!(&backend.observed[..99], expected.as_slice());
         assert_eq!(&backend.observed[99..], expected.as_slice());
+    }
+
+    #[test]
+    fn non_final_prefill_skips_output_ops_and_preserves_next_full_decode() {
+        let module = Lfm25Decode::new(FakeAotBackend::default());
+        let prefill = ready(module.prefill_token(Lfm25DecodeInput::new(1))).unwrap();
+        assert_eq!((prefill.input_position, prefill.callback_sequence), (0, 97));
+        assert_eq!(
+            module.try_state(),
+            Some(Lfm25DecodeState {
+                position: 1,
+                callback_sequence: 97,
+                poisoned: false,
+            })
+        );
+
+        let output =
+            ready(::lumen::async_module::forward(&module, Lfm25DecodeInput::new(2))).unwrap();
+        assert_eq!((output.token, output.input_position), (7, 1));
+        assert_eq!(output.callback_sequence, 196);
+
+        let (session, backend) = module.into_parts();
+        assert_eq!(session.position(), 2);
+        assert_eq!(backend.prefill_finishes, 1);
+        let expected: Vec<_> = DecodePlan::new().map(|step| step.kind).collect();
+        assert_eq!(backend.observed.len(), 196);
+        assert_eq!(&backend.observed[..97], &expected[..97]);
+        assert_eq!(&backend.observed[97..], expected.as_slice());
     }
 
     #[test]

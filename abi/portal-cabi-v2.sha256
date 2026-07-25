@@ -21,10 +21,13 @@
 # likewise additive and selects built-in defaults per frame or cursor source.
 # The pointer-event take call additively exposes only broker-routed events for
 # the selected frame; it does not alter older consumers of the raw HID ABI.
+# ParticleCraft render is likewise strictly additive. It accepts one versioned,
+# pointer-free 64-byte control block; retained state and GPU addresses stay
+# kernel-owned and existing UI4 producers retain their prior frame lifecycle.
 # The capability-backed mouse-motion, keyboard-control, and gamepad-control
 # calls are strictly additive. They expose mediated high-level programs without
 # changing the existing raw HID or selected-frame input contracts.
 # The GridPaper sized-snapshot calls are strictly additive. They carry a
 # bounded logical extent beside the unchanged fixed-capacity page image;
 # existing full-size snapshot symbols and packaged Blueprints are unchanged.
-112c20880b12085b13fda587b7bd368ecb444fe124029ace527688e01f16a410
+ff56f979660d1df1becdf50f4c5b67e00f4e40586b00525711bfbcf99f42eff0

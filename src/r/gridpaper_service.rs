@@ -1,10 +1,10 @@
 //! Embassy consumer for GridPaper's fixed snapshot format.
 //!
-//! Blueprint producers own their snapshot publication cadence; trusted kernel
-//! clients lease the same resident workers through a narrow control plane.
-//! This service owns the accepted working copy, UI4 editing/focus state, GPU
-//! allocations, and presentation lifetime. No UI4 handles or generic drawing
-//! operations cross the Blueprint ABI.
+//! Blueprint producers own their snapshot publication cadence. Spirit's one
+//! retained response document uses the same resident workers through a narrow
+//! kernel control plane. This service owns the accepted working copy, UI4
+//! editing/focus state, GPU allocations, and presentation lifetime. No UI4
+//! handles or generic drawing operations cross the Blueprint ABI.
 
 use alloc::{collections::VecDeque, string::String, vec, vec::Vec};
 
@@ -90,8 +90,17 @@ const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const INPUT_QUEUE_CAPACITY_PER_INSTANCE: usize = COLUMNS * ROWS * 2;
 const CELL_PATCH_BUILD_BUDGET_PER_TICK: usize = 16;
 const CELL_PATCH_COVERAGE_BATCH_CAPACITY: usize = 64;
+// The off-screen static base has a shorter retirement deadline than a live
+// scanout surface. Submit full-page identity masks separately so one slow
+// aggregate layer cannot turn a healthy sequence into a false batch timeout.
+const STATIC_BASE_COVERAGE_BATCH_CAPACITY: usize = 1;
+// The new C++ instance kernel currently reaches its pre-dispatch marker on
+// bare metal but not its completion marker. Keep GridPaper on the proven
+// identity-mask compositor until that kernel has an isolated completion proof;
+// a transform feature must never suppress the document's first visible frame.
+const GRIDPAPER_FONT_INSTANCE_TRANSFORMS_ENABLED: bool = false;
 const GRID_CURSOR_STROKE_PX: u32 = 3;
-const GRID_CURSOR_RGBA: [u8; 4] = [255, 96, 32, 255];
+const GRID_CURSOR_STATE_CAPACITY: usize = 32;
 const PRINT_REQUEST_CAPACITY: usize = 8;
 const PRINTER_MENU_CONTEXT_CAPACITY: usize = 8;
 const PRINT_CAPTURE_LONG_EDGE: u32 = 1_440;
@@ -194,9 +203,9 @@ impl GridSize {
 
 static GPU_COMPUTE_PRESENT_LOGGED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
-static LEGACY_RESIDENT_UI4_WARNED: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
 static GRIDPAPER_COMPUTE_QUARANTINED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+static GRIDPAPER_FONT_INSTANCE_FALLBACK_LOGGED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 static OUTLINELESS_CELL_PATCH_WARNINGS: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(0);
@@ -205,7 +214,6 @@ static NEXT_KERNEL_GRID_TOKEN: core::sync::atomic::AtomicU32 =
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum KernelGridClient {
-    Shell2,
     SpiritResponse,
 }
 
@@ -418,20 +426,14 @@ fn find_kernel_pool_slot(
         .position(|store| store.kernel_owner == Some(owner))
 }
 
-fn request_kernel_grid(
-    client: KernelGridClient,
-    columns: u32,
-    rows: u32,
-) -> Result<KernelGridLease, KernelGridError> {
+fn request_spirit_grid(columns: u32, rows: u32) -> Result<KernelGridLease, KernelGridError> {
     let size = GridSize::new(columns, rows).ok_or(KernelGridError::InvalidSize)?;
     let mut stores = SNAPSHOTS.lock();
-    if client == KernelGridClient::SpiritResponse
-        && let Some((slot, store)) = stores.iter_mut().enumerate().find(|(_, store)| {
-            store
-                .kernel_owner
-                .is_some_and(|owner| owner.client == KernelGridClient::SpiritResponse)
-        })
-    {
+    if let Some((slot, store)) = stores.iter_mut().enumerate().find(|(_, store)| {
+        store
+            .kernel_owner
+            .is_some_and(|owner| owner.client == KernelGridClient::SpiritResponse)
+    }) {
         let owner = store
             .kernel_owner
             .expect("matched Spirit Gridpaper kernel owner");
@@ -443,7 +445,7 @@ fn request_kernel_grid(
             target: "gridpaper";
             "gridpaper: kernel lease reused slot={} client={:?} token={} grid={}x{} residency=retained\n",
             slot,
-            client,
+            owner.client,
             owner.token,
             size.columns(),
             size.rows(),
@@ -458,30 +460,21 @@ fn request_kernel_grid(
         return Err(KernelGridError::PoolFull);
     };
     let owner = KernelGridOwner {
-        client,
+        client: KernelGridClient::SpiritResponse,
         token: next_kernel_grid_token(),
     };
-    stores[slot].claim_kernel(owner, size, client == KernelGridClient::Shell2);
+    stores[slot].claim_kernel(owner, size, false);
     crate::log_info!(
         target: "gridpaper";
         "gridpaper: kernel lease claimed slot={} client={:?} token={} grid={}x{} soft_cap={}\n",
         slot,
-        client,
+        owner.client,
         owner.token,
         size.columns(),
         size.rows(),
         GRIDPAPER_POOL_SOFT_CAP,
     );
     Ok(KernelGridLease { owner })
-}
-
-/// Open a user-requested Gridpaper document directly in the resident kernel
-/// service. No Blueprint guest or virtual container participates.
-pub(crate) fn request_shell_grid(
-    columns: u32,
-    rows: u32,
-) -> Result<KernelGridLease, KernelGridError> {
-    request_kernel_grid(KernelGridClient::Shell2, columns, rows)
 }
 
 /// Obtain Spirit's one stable Gridpaper document. Repeated calls return the
@@ -491,7 +484,7 @@ pub(crate) fn request_spirit_response_grid(
     columns: u32,
     rows: u32,
 ) -> Result<KernelGridLease, KernelGridError> {
-    request_kernel_grid(KernelGridClient::SpiritResponse, columns, rows)
+    request_spirit_grid(columns, rows)
 }
 
 fn with_kernel_grid_store<R>(
@@ -535,9 +528,9 @@ pub(crate) fn reset_and_show_kernel_grid(lease: KernelGridLease) -> Result<u64, 
     })
 }
 
-/// Enable Spirit's retained rainbow text presentation after the complete reply
-/// has been typed. Palette color stays fixed per cell; the C++ font-instance
-/// kernel evaluates only the gentle phase-shifted scale oscillator.
+/// Request Spirit's retained rainbow text presentation after the complete
+/// reply has been typed. Palette color stays fixed per cell; motion remains an
+/// identity fallback until the C++ font-instance kernel is completion-proven.
 pub(crate) fn enable_spirit_response_rainbow_motion(
     lease: KernelGridLease,
 ) -> Result<u64, KernelGridError> {
@@ -566,7 +559,7 @@ pub(crate) fn enable_spirit_response_rainbow_motion(
         store.animation_serial = store.animation_serial.wrapping_add(1).max(1);
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: Spirit rainbow motion enabled slot={} token={} serial={} selectors={:?} scale=0.85..1.15 period_ms={} phase=palette-staggered evaluator=c++-igc-gpu\n",
+            "gridpaper: Spirit rainbow motion requested slot={} token={} serial={} selectors={:?} scale=0.85..1.15 period_ms={} phase=palette-staggered evaluator=glyph-mask-compat affine_motion=identity\n",
             slot,
             lease.owner.token,
             store.animation_serial,
@@ -817,6 +810,22 @@ fn edit_snapshot_from_keyboard(
     input_field: &mut CellInputField,
     event: crate::r::keyboard::TrueosKeyboardOutputEvent,
 ) -> KeyboardGridOutcome {
+    edit_snapshot_from_keyboard_with_foreground(
+        snapshot,
+        selection,
+        input_field,
+        event,
+        COLOR_DEFAULT,
+    )
+}
+
+fn edit_snapshot_from_keyboard_with_foreground(
+    snapshot: &mut OwnedSnapshot,
+    selection: &mut GridCellSelection,
+    input_field: &mut CellInputField,
+    event: crate::r::keyboard::TrueosKeyboardOutputEvent,
+    default_foreground: u8,
+) -> KeyboardGridOutcome {
     let mut outcome = KeyboardGridOutcome::default();
     let columns = snapshot.size.columns();
     let rows = snapshot.size.rows();
@@ -841,7 +850,7 @@ fn edit_snapshot_from_keyboard(
         let edited_cell = *selection;
         write_cell_glyph(cell, *input_field, &event.utf8[..utf8_len]);
         if cell[FOREGROUND_OFFSET] == COLOR_TRANSPARENT {
-            cell[FOREGROUND_OFFSET] = COLOR_DEFAULT;
+            cell[FOREGROUND_OFFSET] = default_foreground;
         }
         outcome.content_changed = true;
         outcome.edited_cell = Some(edited_cell);
@@ -959,6 +968,12 @@ fn clear_selected_cell(
     clear_cell_glyph(cell, input_field);
     if input_field == CellInputField::Primary {
         clear_cell_glyph(cell, CellInputField::Upper);
+    }
+    if cell[PRIMARY_LENGTH_OFFSET] == 0 && cell[UPPER_LENGTH_OFFSET] == 0 {
+        // Color is authorship-like state only while a cell has content. Once
+        // both fields are empty, let the next cursor establish its own
+        // default foreground instead of inheriting the previous editor.
+        cell[FOREGROUND_OFFSET] = COLOR_TRANSPARENT;
     }
     outcome.content_changed = true;
     outcome.edited_cell = Some(selection);
@@ -2840,7 +2855,9 @@ fn push_geometry_layer(
 
 fn palette(color: u8, background: bool) -> [u8; 4] {
     match color {
-        0 if background => [250, 252, 255, 255],
+        // Default paper is true opaque white on screen and in the shared
+        // print scene. Explicit per-cell backgrounds still layer above it.
+        0 if background => [255, 255, 255, 255],
         0 | 1 => [20, 25, 32, 255],
         2 => [190, 45, 55, 255],
         3 => [36, 138, 72, 255],
@@ -2859,6 +2876,25 @@ fn palette(color: u8, background: bool) -> [u8; 4] {
         16 => [255, 255, 255, 255],
         _ => [0, 0, 0, 0],
     }
+}
+
+fn ui4_cursor_rgba(source: crate::ui4::Ui4CursorSource) -> [u8; 4] {
+    let color = crate::ui4::cursor_color(source);
+    [color.r, color.g, color.b, color.a]
+}
+
+fn grid_foreground_for_cursor(source: crate::ui4::Ui4CursorSource) -> u8 {
+    let cursor = ui4_cursor_rgba(source);
+    (1..COLOR_TRANSPARENT)
+        .min_by_key(|selector| {
+            let candidate = palette(*selector, false);
+            let channel_delta = |index: usize| {
+                let delta = i32::from(cursor[index]) - i32::from(candidate[index]);
+                delta * delta
+            };
+            channel_delta(0) + channel_delta(1) + channel_delta(2)
+        })
+        .unwrap_or(COLOR_DEFAULT)
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -2896,8 +2932,7 @@ struct GridPaperFrameResult {
 fn publish_page(
     surface: &GridPaperSurface,
     page: &ResidentPage,
-    selection: Option<GridCellSelection>,
-    input_field: CellInputField,
+    cursor_inputs: &[GridCursorInputState],
     damage: crate::ui4::DamageRect,
     text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_serial: u64,
@@ -2930,15 +2965,38 @@ fn publish_page(
         let _ = crate::ui4::cancel_frame_buffer(lease);
         return Err(ServiceError::InvalidFrame);
     }
-    let cursor_rects =
-        selection.and_then(|selection| grid_cursor_rects(surface, page, selection, input_field));
-    let final_rects = cursor_rects.as_ref().map_or(&[][..], |rects| &rects[..]);
+    let mut final_rects = Vec::with_capacity(cursor_inputs.len().saturating_mul(4));
+    for (cursor_index, cursor) in cursor_inputs.iter().enumerate() {
+        let Some(selection) = cursor.selection else {
+            continue;
+        };
+        let same_outline = |candidate: &&GridCursorInputState| {
+            candidate.selection == Some(selection) && candidate.input_field == cursor.input_field
+        };
+        let ring_index = cursor_inputs[..cursor_index]
+            .iter()
+            .filter(same_outline)
+            .count();
+        let ring_count = cursor_inputs.iter().filter(same_outline).count();
+        let color_rgba = u32::from_le_bytes(ui4_cursor_rgba(cursor.source));
+        if let Some(rects) = grid_cursor_rects(
+            surface,
+            page,
+            selection,
+            cursor.input_field,
+            color_rgba,
+            ring_index,
+            ring_count,
+        ) {
+            final_rects.extend(rects);
+        }
+    }
     let result = match render_compute_page_frame(
         page,
         text_animations,
         animation_serial,
         animation_elapsed_ms,
-        final_rects,
+        final_rects.as_slice(),
         destination,
     ) {
         Ok(result) => result,
@@ -3325,6 +3383,28 @@ fn lower_resident_font_instance_layer(
     })
 }
 
+fn lower_resident_identity_mask_layer(
+    layer: &ResidentLayer,
+    viewport_translation_px: [f32; 2],
+    color_rgba: u32,
+) -> Option<crate::intel::gpgpu::GpgpuGlyphMaskLayer> {
+    let coverage = layer.coverage.as_ref()?;
+    let origin = coverage.origin_px();
+    let translation = [
+        libm::roundf(viewport_translation_px[0]) as i32,
+        libm::roundf(viewport_translation_px[1]) as i32,
+    ];
+    Some(crate::intel::gpgpu::GpgpuGlyphMaskLayer {
+        mask: coverage.surface(),
+        mask_rect: coverage.full_rect(),
+        dst_xy: crate::intel::gpgpu::GpgpuPoint::new(
+            origin[0].saturating_add(translation[0]),
+            origin[1].saturating_add(translation[1]),
+        ),
+        color_rgba,
+    })
+}
+
 fn rebuild_static_font_base(
     page: &ResidentPage,
     text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
@@ -3412,34 +3492,31 @@ fn rebuild_static_font_base(
         .iter()
         .filter(|layer| instance_program_for_layer(layer, text_animations).is_none())
         .filter_map(|layer| {
-            lower_resident_font_instance_layer(layer, text_animations, viewport_translation_px)
+            lower_resident_identity_mask_layer(
+                layer,
+                viewport_translation_px,
+                u32::from_le_bytes(layer.base_color),
+            )
         })
         .collect::<Vec<_>>();
-    if !static_layers.is_empty() {
-        let descriptor_state = page
-            .font_instance_state
-            .as_ref()
-            .ok_or(GridPaperComputeFailure::Unavailable("gridpaper-font-instance-state-missing"))?;
-        let coverage = crate::intel::gpgpu::font_instance_layers_rgba8_2d_mode(
-            static_layers.as_slice(),
-            descriptor_state,
-            destination,
-            false,
-            0.0,
-        );
+    for chunk in static_layers.chunks(STATIC_BASE_COVERAGE_BATCH_CAPACITY) {
+        let coverage =
+            crate::intel::gpgpu::glyph_mask_layers_rgba8_2d_mode(chunk, destination, false);
         if !coverage.ok {
             return Err(if coverage.submitted {
                 GridPaperComputeFailure::SubmittedIncomplete(
-                    "gridpaper-static-base-font-instance-incomplete",
+                    "gridpaper-static-base-identity-mask-incomplete",
                 )
             } else {
                 GridPaperComputeFailure::Unavailable(
-                    "gridpaper-static-base-font-instance-unavailable",
+                    "gridpaper-static-base-identity-mask-unavailable",
                 )
             });
         }
-        stats.coverage_submits = coverage.submits;
-        stats.coverage_walkers = coverage.active_walkers;
+        stats.coverage_submits = stats.coverage_submits.saturating_add(coverage.submits);
+        stats.coverage_walkers = stats
+            .coverage_walkers
+            .saturating_add(coverage.active_walkers);
     }
     let patch_stats = apply_resident_cell_patches(page, 0, destination, viewport_translation_px)?;
     stats.geometry_rects = stats
@@ -3474,8 +3551,10 @@ fn render_compute_page_frame(
         page.pan.x * destination.width as f32 / page.size.scene_width() as f32,
         page.pan.y * destination.height as f32 / page.size.scene_height() as f32,
     ];
-    update_font_instance_descriptors(page, text_animations, animation_serial)
-        .map_err(GridPaperComputeFailure::Unavailable)?;
+    if GRIDPAPER_FONT_INSTANCE_TRANSFORMS_ENABLED {
+        update_font_instance_descriptors(page, text_animations, animation_serial)
+            .map_err(GridPaperComputeFailure::Unavailable)?;
+    }
     let static_base_rebuilt = page
         .static_base_animation_serial
         .load(core::sync::atomic::Ordering::Acquire)
@@ -3533,37 +3612,91 @@ fn render_compute_page_frame(
     let geometry_submits = base_stats.geometry_submits.saturating_add(1);
     let geometry_finished_ns = crate::chronos::monotonic_nanos();
 
-    let coverage_layers = page
-        .layers
-        .iter()
-        .filter(|layer| instance_program_for_layer(layer, text_animations).is_some())
-        .filter_map(|layer| {
-            lower_resident_font_instance_layer(layer, text_animations, viewport_translation_px)
-        })
-        .collect::<Vec<_>>();
-    let (dynamic_coverage_submits, dynamic_coverage_walkers) = if coverage_layers.is_empty() {
-        (0, 0)
-    } else {
-        let descriptor_state = page
-            .font_instance_state
-            .as_ref()
-            .ok_or(GridPaperComputeFailure::Unavailable("gridpaper-font-instance-state-missing"))?;
-        let coverage = crate::intel::gpgpu::font_instance_layers_rgba8_2d_mode(
-            coverage_layers.as_slice(),
-            descriptor_state,
-            destination,
-            true,
-            animation_elapsed_ms as f32 / 1_000.0,
-        );
-        if !coverage.ok {
-            return Err(if coverage.submitted {
-                GridPaperComputeFailure::SubmittedIncomplete("gridpaper-font-instance-incomplete")
+    let (dynamic_coverage_submits, dynamic_coverage_walkers) =
+        if GRIDPAPER_FONT_INSTANCE_TRANSFORMS_ENABLED {
+            let coverage_layers = page
+                .layers
+                .iter()
+                .filter(|layer| instance_program_for_layer(layer, text_animations).is_some())
+                .filter_map(|layer| {
+                    lower_resident_font_instance_layer(
+                        layer,
+                        text_animations,
+                        viewport_translation_px,
+                    )
+                })
+                .collect::<Vec<_>>();
+            if coverage_layers.is_empty() {
+                (0, 0)
             } else {
-                GridPaperComputeFailure::Unavailable("gridpaper-font-instance-unavailable")
-            });
-        }
-        (coverage.submits, coverage.active_walkers)
-    };
+                let descriptor_state = page.font_instance_state.as_ref().ok_or(
+                    GridPaperComputeFailure::Unavailable("gridpaper-font-instance-state-missing"),
+                )?;
+                let coverage = crate::intel::gpgpu::font_instance_layers_rgba8_2d_mode(
+                    coverage_layers.as_slice(),
+                    descriptor_state,
+                    destination,
+                    true,
+                    animation_elapsed_ms as f32 / 1_000.0,
+                );
+                if !coverage.ok {
+                    return Err(if coverage.submitted {
+                        GridPaperComputeFailure::SubmittedIncomplete(
+                            "gridpaper-font-instance-incomplete",
+                        )
+                    } else {
+                        GridPaperComputeFailure::Unavailable("gridpaper-font-instance-unavailable")
+                    });
+                }
+                (coverage.submits, coverage.active_walkers)
+            }
+        } else {
+            if !GRIDPAPER_FONT_INSTANCE_FALLBACK_LOGGED
+                .swap(true, core::sync::atomic::Ordering::AcqRel)
+            {
+                crate::log_warn!(
+                    target: "gridpaper";
+                    "gridpaper: font-instance transforms isolated reason=baremetal-completion-marker-timeout renderer=glyph-mask-compat color_animation=enabled affine_motion=identity action=preserve-visible-first-frame\n",
+                );
+            }
+            let coverage_layers = page
+                .layers
+                .iter()
+                .filter(|layer| instance_program_for_layer(layer, text_animations).is_some())
+                .filter_map(|layer| {
+                    lower_resident_identity_mask_layer(
+                        layer,
+                        viewport_translation_px,
+                        u32::from_le_bytes(resident_layer_color(
+                            layer,
+                            text_animations,
+                            animation_elapsed_ms,
+                        )),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if coverage_layers.is_empty() {
+                (0, 0)
+            } else {
+                let coverage = crate::intel::gpgpu::glyph_mask_layers_rgba8_2d_mode(
+                    coverage_layers.as_slice(),
+                    destination,
+                    true,
+                );
+                if !coverage.ok {
+                    return Err(if coverage.submitted {
+                        GridPaperComputeFailure::SubmittedIncomplete(
+                            "gridpaper-dynamic-identity-mask-incomplete",
+                        )
+                    } else {
+                        GridPaperComputeFailure::Unavailable(
+                            "gridpaper-dynamic-identity-mask-unavailable",
+                        )
+                    });
+                }
+                (coverage.submits, coverage.active_walkers)
+            }
+        };
     let coverage_submits = base_stats
         .coverage_submits
         .saturating_add(dynamic_coverage_submits);
@@ -3651,82 +3784,6 @@ fn scene_rect_to_surface(
     })
 }
 
-fn capture_resident_page_frame(
-    page: &ResidentPage,
-    text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
-    animation_elapsed_ms: u64,
-    viewport_translation_px: [f32; 2],
-    width: u32,
-    height: u32,
-    _final_rects: &[crate::intel::gpgpu::GpgpuSolidRect],
-    destination: Option<crate::intel::gpgpu::GpgpuRgba8Surface>,
-) -> Result<crate::intel::render::ResidentSceneFrameResult, &'static str> {
-    if destination.is_some() {
-        if !LEGACY_RESIDENT_UI4_WARNED.swap(true, core::sync::atomic::Ordering::AcqRel) {
-            crate::log_warn!(
-                target: "gridpaper";
-                "gridpaper: legacy resident-3d UI4 presentation disabled action=return-before-render migrate=gpgpu-compute-blueprint-scene producer_release=compute-fence\n",
-            );
-        }
-        return Err("gridpaper-resident-ui4-path-disabled");
-    }
-    let triangle_draws = page
-        .layers
-        .iter()
-        .filter(|layer| layer.coverage.is_none())
-        .map(|layer| crate::intel::render::ResidentSceneDraw {
-            mesh: &layer.mesh,
-            rgba: resident_layer_color(layer, text_animations, animation_elapsed_ms),
-            viewport_translation_px,
-        })
-        .collect::<Vec<_>>();
-    let pan_px = [
-        libm::roundf(viewport_translation_px[0]) as i32,
-        libm::roundf(viewport_translation_px[1]) as i32,
-    ];
-    let coverage_draws = page
-        .layers
-        .iter()
-        .filter_map(|layer| {
-            let coverage = layer.coverage.as_ref()?;
-            let origin = coverage.origin_px();
-            Some(crate::intel::render::ResidentSceneCoverageDraw {
-                mask: coverage.surface(),
-                mask_rect: coverage.full_rect(),
-                dst_xy: crate::intel::gpgpu::GpgpuPoint::new(
-                    origin[0].saturating_add(pan_px[0]),
-                    origin[1].saturating_add(pan_px[1]),
-                ),
-                color_rgba: u32::from_le_bytes(resident_layer_color(
-                    layer,
-                    text_animations,
-                    animation_elapsed_ms,
-                )),
-            })
-        })
-        .collect::<Vec<_>>();
-    let captured =
-        crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4_with_coverage(
-            &triangle_draws,
-            &coverage_draws,
-            Some([0, 0, 0, 0]),
-            width,
-            height,
-            false,
-        );
-    let result = captured?;
-    if let Some(error) = result.completion_error() {
-        return Err(error);
-    }
-    if result.completed_draws != result.requested_draws {
-        return Err("resident-scene-draw-count-incomplete");
-    }
-    if destination.is_none() && result.rgba.is_none() {
-        return Err("resident-scene-readback-missing");
-    }
-    Ok(result)
-}
-
 fn resident_layer_color(
     layer: &ResidentLayer,
     text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
@@ -3759,17 +3816,24 @@ fn render_print_page(
     text_animations: &[Option<GpuFontInstanceProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_elapsed_ms: u64,
 ) -> PrintRenderResult {
+    use core::sync::atomic::Ordering;
+
+    let job_id = request.job_id;
+    let generation = request.generation;
     let size = request.size;
     let (print_capture_width, print_capture_height) = size.print_capture_extent();
     let snapshot = OwnedSnapshot {
         raw: request.raw,
         producer: GridPaperProducer::Blueprint(0),
-        generation: request.generation,
+        generation,
         scale_percent: 100,
         size,
-        serial: u64::from(request.job_id),
+        serial: u64::from(job_id),
     };
     let result = (|| {
+        if GRIDPAPER_COMPUTE_QUARANTINED.load(Ordering::Acquire) {
+            return Err("gridpaper-compute-producer-quarantined");
+        }
         let page = build_resident_page(
             PRIMARY_INSTANCE_ID,
             &snapshot,
@@ -3778,27 +3842,81 @@ fn render_print_page(
             print_capture_height,
             ScenePan::ZERO,
         )?;
-        let captured = capture_resident_page_frame(
-            &page,
-            text_animations,
-            animation_elapsed_ms,
-            [0.0, 0.0],
+        if page
+            .layers
+            .iter()
+            .any(|layer| layer.text_color_selector.is_some() && layer.coverage.is_none())
+        {
+            return Err("gridpaper-compute-text-coverage-required");
+        }
+        let destination = crate::intel::gpgpu::allocate_font_instance_rgba8_surface(
             print_capture_width,
             print_capture_height,
+        )
+        .ok_or("gridpaper-print-raster-allocation")?;
+        let rendered = render_compute_page_frame(
+            &page,
+            text_animations,
+            generation.max(1),
+            animation_elapsed_ms,
             &[],
-            None,
-        )?;
-        let rgba_premultiplied = captured.rgba.ok_or("missing-print-frame")?;
+            destination.surface(),
+        )
+        .map_err(|failure| {
+            if failure.submitted_incomplete() {
+                GRIDPAPER_COMPUTE_QUARANTINED.store(true, Ordering::Release);
+                crate::log_error!(
+                    target: "gridpaper";
+                    "gridpaper: print compute producer quarantined job={} generation={} extent={}x{} reason={} action=reject-future-gridpaper-compute-until-reboot\n",
+                    job_id,
+                    generation,
+                    print_capture_width,
+                    print_capture_height,
+                    failure.reason(),
+                );
+            }
+            failure.reason()
+        })?;
+        let rgba_premultiplied = destination
+            .readback_tight_rgba()
+            .ok_or("gridpaper-print-raster-readback")?;
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: print raster ready job={} generation={} grid={}x{} extent={}x{} rgba_bytes={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} frame_us={} font_path=skrifa-r8-identity-mask renderer=gpgpu-compute-blueprint-scene readback=one-shot-after-release next=pwg-raster\n",
+            job_id,
+            generation,
+            size.columns(),
+            size.rows(),
+            print_capture_width,
+            print_capture_height,
+            rgba_premultiplied.len(),
+            rendered.geometry_rects,
+            rendered.geometry_submits,
+            rendered.coverage_submits,
+            rendered.coverage_walkers,
+            rendered.static_base_rebuilt,
+            rendered.frame_us,
+        );
         Ok(PrintRasterFrame {
             width: print_capture_width,
             height: print_capture_height,
             rgba_premultiplied,
         })
     })();
-    PrintRenderResult {
-        job_id: request.job_id,
-        result,
+    if let Err(reason) = &result {
+        crate::log_warn!(
+            target: "gridpaper";
+            "gridpaper: print raster failed job={} generation={} grid={}x{} extent={}x{} reason={} renderer=gpgpu-compute-blueprint-scene next=print2d-failed\n",
+            job_id,
+            generation,
+            size.columns(),
+            size.rows(),
+            print_capture_width,
+            print_capture_height,
+            reason,
+        );
     }
+    PrintRenderResult { job_id, result }
 }
 
 fn sampled_text_colors(
@@ -3822,6 +3940,9 @@ fn grid_cursor_rects(
     page: &ResidentPage,
     selection: GridCellSelection,
     input_field: CellInputField,
+    color_rgba: u32,
+    ring_index: usize,
+    ring_count: usize,
 ) -> Option<[crate::intel::gpgpu::GpgpuSolidRect; 4]> {
     let metrics =
         GridSceneMetrics::new(page.size, page.scale_percent, surface.width, surface.height);
@@ -3840,19 +3961,36 @@ fn grid_cursor_rects(
     let top = libm::floorf(scene_top * surface.height as f32 / scene_height as f32) as i32;
     let right = libm::ceilf(scene_right * surface.width as f32 / scene_width as f32) as i32;
     let bottom = libm::ceilf(scene_bottom * surface.height as f32 / scene_height as f32) as i32;
-    let clipped_left = left.clamp(0, surface.width as i32) as u32;
-    let clipped_top = top.clamp(0, surface.height as i32) as u32;
-    let clipped_right = right.clamp(0, surface.width as i32) as u32;
-    let clipped_bottom = bottom.clamp(0, surface.height as i32) as u32;
+    let mut clipped_left = left.clamp(0, surface.width as i32) as u32;
+    let mut clipped_top = top.clamp(0, surface.height as i32) as u32;
+    let mut clipped_right = right.clamp(0, surface.width as i32) as u32;
+    let mut clipped_bottom = bottom.clamp(0, surface.height as i32) as u32;
     if clipped_left >= clipped_right || clipped_top >= clipped_bottom {
         return None;
     }
+    let available_width = clipped_right - clipped_left;
+    let available_height = clipped_bottom - clipped_top;
+    // Shared-cell selections become nested color bands. Adapt the stroke to
+    // the number of owners so the common two/three-cursor case remains fully
+    // visible rather than allowing the last submitted outline to hide all
+    // earlier cursor colors.
+    let ring_count = u32::try_from(ring_count.max(1)).unwrap_or(u32::MAX);
     let stroke = GRID_CURSOR_STROKE_PX
-        .min(clipped_right - clipped_left)
-        .min(clipped_bottom - clipped_top);
+        .min(available_width / ring_count.saturating_mul(2).max(1))
+        .min(available_height / ring_count.saturating_mul(2).max(1))
+        .max(1);
+    let inset = u32::try_from(ring_index)
+        .unwrap_or(u32::MAX)
+        .saturating_mul(stroke);
+    clipped_left = clipped_left.saturating_add(inset);
+    clipped_top = clipped_top.saturating_add(inset);
+    clipped_right = clipped_right.saturating_sub(inset);
+    clipped_bottom = clipped_bottom.saturating_sub(inset);
+    if clipped_left >= clipped_right || clipped_top >= clipped_bottom {
+        return None;
+    }
     let width = clipped_right - clipped_left;
     let height = clipped_bottom - clipped_top;
-    let color_rgba = u32::from_le_bytes(GRID_CURSOR_RGBA);
     let solid = |rect| crate::intel::gpgpu::GpgpuSolidRect { rect, color_rgba };
     Some([
         solid(crate::intel::gpgpu::GpgpuRect::new(
@@ -3929,6 +4067,23 @@ fn union_grid_cell_damage(
         .reduce(crate::ui4::DamageRect::union)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GridCursorInputState {
+    source: crate::ui4::Ui4CursorSource,
+    selection: Option<GridCellSelection>,
+    input_field: CellInputField,
+}
+
+impl GridCursorInputState {
+    const fn new(source: crate::ui4::Ui4CursorSource) -> Self {
+        Self {
+            source,
+            selection: None,
+            input_field: CellInputField::Primary,
+        }
+    }
+}
+
 struct GridPaperRuntime {
     surface: GridPaperSurface,
     observed_serial: u64,
@@ -3948,12 +4103,11 @@ struct GridPaperRuntime {
     hot_pan_frames: u64,
     active_pan_source: Option<crate::ui4::Ui4CursorSource>,
     pending_pan_pixels: (i32, i32),
-    selection: Option<GridCellSelection>,
-    input_field: CellInputField,
+    cursor_inputs: Vec<GridCursorInputState>,
+    cursor_damage_cells: Vec<GridCellSelection>,
     cursor_dirty: bool,
     dirty_cells: VecDeque<GridCellSelection>,
     presented_cell_patch_serial: u64,
-    presented_selection: Option<GridCellSelection>,
     keyboard_edits: u64,
     last_build_error: Option<&'static str>,
     last_render_error: Option<ServiceError>,
@@ -3980,12 +4134,11 @@ impl GridPaperRuntime {
             hot_pan_frames: 0,
             active_pan_source: None,
             pending_pan_pixels: (0, 0),
-            selection: None,
-            input_field: CellInputField::Primary,
+            cursor_inputs: Vec::new(),
+            cursor_damage_cells: Vec::new(),
             cursor_dirty: false,
             dirty_cells: VecDeque::new(),
             presented_cell_patch_serial: 0,
-            presented_selection: None,
             keyboard_edits: 0,
             last_build_error: None,
             last_render_error: None,
@@ -4005,13 +4158,17 @@ impl GridPaperRuntime {
     }
 
     fn reset_detached_input(&mut self) {
-        if self.selection.take().is_some() {
+        if self
+            .cursor_inputs
+            .iter()
+            .any(|cursor| cursor.selection.is_some())
+        {
             self.cursor_dirty = true;
         }
-        self.input_field = CellInputField::Primary;
+        self.cursor_inputs.clear();
+        self.cursor_damage_cells.clear();
         self.active_pan_source = None;
         self.pending_pan_pixels = (0, 0);
-        self.presented_selection = None;
     }
 }
 
@@ -4234,7 +4391,7 @@ fn refresh_runtime(runtime: &mut GridPaperRuntime) {
         }
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: font-instance-table activated pool_slot={} instance={} serial={} programs={} cadence_ms={} clock=monotonic-elapsed evaluator=c++-igc-gpu descriptor_updates=changed-table-only topology_changed={} topology_rebuild={} geometry_uploads=0\n",
+            "gridpaper: font-instance-table activated pool_slot={} instance={} serial={} programs={} cadence_ms={} clock=monotonic-elapsed evaluator=glyph-mask-compat color_animation=enabled affine_motion=identity topology_changed={} topology_rebuild={} geometry_uploads=0\n",
             pool_slot,
             instance_id,
             runtime.observed_animation_serial,
@@ -4256,11 +4413,20 @@ fn refresh_runtime(runtime: &mut GridPaperRuntime) {
             }
             runtime.pan_dirty = true;
         }
-        if runtime.selection.is_some_and(|selection| {
-            selection.column >= snapshot.size.columns() || selection.row >= snapshot.size.rows()
-        }) {
-            runtime.selection = None;
-            runtime.input_field = CellInputField::Primary;
+        let mut invalid_cursor_selections = Vec::new();
+        for cursor in &mut runtime.cursor_inputs {
+            if cursor.selection.is_some_and(|selection| {
+                selection.column >= snapshot.size.columns() || selection.row >= snapshot.size.rows()
+            }) {
+                invalid_cursor_selections.extend(cursor.selection);
+                cursor.selection = None;
+                cursor.input_field = CellInputField::Primary;
+            }
+        }
+        if !invalid_cursor_selections.is_empty() {
+            for selection in invalid_cursor_selections {
+                queue_cursor_damage(runtime, Some(selection));
+            }
             runtime.cursor_dirty = true;
         }
         runtime.pending = None;
@@ -4270,7 +4436,82 @@ fn refresh_runtime(runtime: &mut GridPaperRuntime) {
     }
 }
 
-fn select_gridpaper_cell(runtime: &mut GridPaperRuntime, local_x: i32, local_y: i32) {
+fn queue_cursor_damage(runtime: &mut GridPaperRuntime, selection: Option<GridCellSelection>) {
+    let Some(selection) = selection else {
+        return;
+    };
+    if !runtime.cursor_damage_cells.contains(&selection) {
+        runtime.cursor_damage_cells.push(selection);
+    }
+}
+
+fn grid_cursor_input_index(
+    runtime: &mut GridPaperRuntime,
+    source: crate::ui4::Ui4CursorSource,
+) -> Option<usize> {
+    if let Some(index) = runtime
+        .cursor_inputs
+        .iter()
+        .position(|cursor| cursor.source == source)
+    {
+        return Some(index);
+    }
+    if runtime.cursor_inputs.len() >= GRID_CURSOR_STATE_CAPACITY {
+        crate::log_warn!(
+            target: "gridpaper";
+            "gridpaper: cursor input state rejected instance={} controller={} slot={} ep={} capacity={} action=retain-existing-cursors\n",
+            runtime.surface.instance_id,
+            source.controller_id,
+            source.slot_id,
+            source.ep_target,
+            GRID_CURSOR_STATE_CAPACITY,
+        );
+        return None;
+    }
+    runtime
+        .cursor_inputs
+        .push(GridCursorInputState::new(source));
+    Some(runtime.cursor_inputs.len() - 1)
+}
+
+fn remove_grid_cursor_input(runtime: &mut GridPaperRuntime, source: crate::ui4::Ui4CursorSource) {
+    let Some(index) = runtime
+        .cursor_inputs
+        .iter()
+        .position(|cursor| cursor.source == source)
+    else {
+        return;
+    };
+    let previous = runtime.cursor_inputs[index].selection;
+    runtime.cursor_inputs.remove(index);
+    queue_cursor_damage(runtime, previous);
+    runtime.cursor_dirty |= previous.is_some();
+}
+
+fn prune_grid_cursor_inputs(runtime: &mut GridPaperRuntime) {
+    let Some(window) = runtime.presented_window() else {
+        return;
+    };
+    let frame = crate::ui4::CursorFrameKey::new(UI4_OWNER, window);
+    let mut index = 0usize;
+    while index < runtime.cursor_inputs.len() {
+        let cursor = runtime.cursor_inputs[index];
+        if crate::ui4::selected_frame_for_source(cursor.source) == Some(frame) {
+            index += 1;
+            continue;
+        }
+        runtime.cursor_inputs.remove(index);
+        queue_cursor_damage(runtime, cursor.selection);
+        runtime.cursor_dirty |= cursor.selection.is_some();
+    }
+}
+
+fn select_gridpaper_cell(
+    runtime: &mut GridPaperRuntime,
+    source: crate::ui4::Ui4CursorSource,
+    local_x: i32,
+    local_y: i32,
+) {
     let scale_percent = runtime
         .active
         .as_ref()
@@ -4285,16 +4526,23 @@ fn select_gridpaper_cell(runtime: &mut GridPaperRuntime, local_x: i32, local_y: 
     let next = scale_percent.and_then(|scale_percent| {
         grid_cell_at_local_point(&runtime.surface, local_x, local_y, scale_percent, runtime.pan)
     });
-    if next == runtime.selection {
+    let Some(cursor_index) = grid_cursor_input_index(runtime, source) else {
+        return;
+    };
+    let previous = runtime.cursor_inputs[cursor_index].selection;
+    if next == previous {
         return;
     }
-    runtime.selection = next;
-    runtime.input_field = CellInputField::Primary;
+    runtime.cursor_inputs[cursor_index].selection = next;
+    runtime.cursor_inputs[cursor_index].input_field = CellInputField::Primary;
+    queue_cursor_damage(runtime, previous);
+    queue_cursor_damage(runtime, next);
     runtime.cursor_dirty = true;
-    if let Some(selected) = runtime.selection {
+    if let Some(selected) = next {
+        let color = ui4_cursor_rgba(source);
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: cell selected instance={} column={} row={} local={},{} scale={} pan_scene={:.3},{:.3} input=ui4-primary-click\n",
+            "gridpaper: cell selected instance={} column={} row={} local={},{} scale={} pan_scene={:.3},{:.3} controller={} slot={} ep={} cursor_rgba={:02X}{:02X}{:02X}{:02X} active_cursors={} input=ui4-primary-click\n",
             runtime.surface.instance_id,
             selected.column,
             selected.row,
@@ -4303,14 +4551,26 @@ fn select_gridpaper_cell(runtime: &mut GridPaperRuntime, local_x: i32, local_y: 
             scale_percent.unwrap_or(0),
             runtime.pan.x,
             runtime.pan.y,
+            source.controller_id,
+            source.slot_id,
+            source.ep_target,
+            color[0],
+            color[1],
+            color[2],
+            color[3],
+            runtime.cursor_inputs.len(),
         );
     } else {
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: cell selection cleared instance={} local={},{} input=ui4-primary-click-outside-grid\n",
+            "gridpaper: cell selection cleared instance={} local={},{} controller={} slot={} ep={} active_cursors={} input=ui4-primary-click-outside-grid\n",
             runtime.surface.instance_id,
             local_x,
             local_y,
+            source.controller_id,
+            source.slot_id,
+            source.ep_target,
+            runtime.cursor_inputs.len(),
         );
     }
 }
@@ -4327,19 +4587,30 @@ fn queue_dirty_cell(dirty_cells: &mut VecDeque<GridCellSelection>, selection: Gr
 
 fn edit_gridpaper_cell(
     runtime: &mut GridPaperRuntime,
+    source: crate::ui4::Ui4CursorSource,
     event: crate::r::keyboard::TrueosKeyboardOutputEvent,
     combo_id: u32,
     virtual_keyboard: bool,
 ) {
-    let Some(mut selected) = runtime.selection else {
+    let Some(cursor_index) = grid_cursor_input_index(runtime, source) else {
         return;
     };
+    let Some(mut selected) = runtime.cursor_inputs[cursor_index].selection else {
+        return;
+    };
+    let mut input_field = runtime.cursor_inputs[cursor_index].input_field;
+    let default_foreground = grid_foreground_for_cursor(source);
     let (outcome, edited_state) = {
         let Some(snapshot) = runtime.latest_snapshot.as_mut() else {
             return;
         };
-        let outcome =
-            edit_snapshot_from_keyboard(snapshot, &mut selected, &mut runtime.input_field, event);
+        let outcome = edit_snapshot_from_keyboard_with_foreground(
+            snapshot,
+            &mut selected,
+            &mut input_field,
+            event,
+            default_foreground,
+        );
         if let Some(edited) = outcome.edited_cell
             && matches!(
                 snapshot.producer,
@@ -4375,7 +4646,7 @@ fn edit_gridpaper_cell(
             runtime.surface.instance_id,
             selected.column,
             selected.row,
-            runtime.input_field.name(),
+            input_field.name(),
         );
     }
     if outcome.input_field_changed {
@@ -4385,15 +4656,22 @@ fn edit_gridpaper_cell(
             runtime.surface.instance_id,
             selected.column,
             selected.row,
-            runtime.input_field.name(),
+            input_field.name(),
         );
     }
+    let previous_selection = runtime.cursor_inputs[cursor_index].selection;
     if outcome.clear_selection {
-        runtime.selection = None;
-        runtime.input_field = CellInputField::Primary;
+        runtime.cursor_inputs[cursor_index].selection = None;
+        runtime.cursor_inputs[cursor_index].input_field = CellInputField::Primary;
+        queue_cursor_damage(runtime, previous_selection);
         runtime.cursor_dirty = true;
     } else {
-        runtime.selection = Some(selected);
+        runtime.cursor_inputs[cursor_index].selection = Some(selected);
+        runtime.cursor_inputs[cursor_index].input_field = input_field;
+        if outcome.selection_changed || outcome.input_field_changed {
+            queue_cursor_damage(runtime, previous_selection);
+            queue_cursor_damage(runtime, Some(selected));
+        }
         runtime.cursor_dirty |= outcome.selection_changed || outcome.input_field_changed;
     }
     if !outcome.content_changed {
@@ -4442,14 +4720,14 @@ fn edit_gridpaper_cell(
     if runtime.keyboard_edits <= 64 || runtime.keyboard_edits.is_multiple_of(120) || !cell_patch {
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: cell edited instance={} edit_seq={} ring_seq={} device_seq={} column={} row={} field={} primary_utf8_bytes={} upper_utf8_bytes={} key_kind={} codepoint={} controller={} slot={} ep={} combo={} virtual_keyboard={} input=ui4-keyboard action={} animated_or_transformed={} queued_cells={} log_policy=first-64+each-120+fallback\n",
+            "gridpaper: cell edited instance={} edit_seq={} ring_seq={} device_seq={} column={} row={} field={} primary_utf8_bytes={} upper_utf8_bytes={} key_kind={} codepoint={} controller={} slot={} ep={} combo={} virtual_keyboard={} cursor_foreground={} input=ui4-keyboard action={} animated_or_transformed={} queued_cells={} log_policy=first-64+each-120+fallback\n",
             runtime.surface.instance_id,
             runtime.keyboard_edits,
             event.seq,
             event.device_seq,
             edited.column,
             edited.row,
-            runtime.input_field.name(),
+            input_field.name(),
             primary_len,
             upper_len,
             event.kind,
@@ -4459,6 +4737,7 @@ fn edit_gridpaper_cell(
             event.ep_target,
             combo_id,
             virtual_keyboard,
+            default_foreground,
             action,
             animated_or_transformed,
             runtime.dirty_cells.len(),
@@ -4683,7 +4962,10 @@ fn show_gridpaper_printer_menu(runtime: &GridPaperRuntime, event: crate::ui4::Ui
     else {
         return;
     };
-    let mut printers = crate::r::net::printer::snapshot();
+    let mut printers = crate::r::net::printer::snapshot()
+        .into_iter()
+        .filter(crate::r::net::printer::supports_gridpaper_print)
+        .collect::<Vec<_>>();
     if printers.len() > crate::ui4::MAX_CONTEXT_MENU_ENTRIES {
         crate::log_warn!(
             target: "gridpaper";
@@ -4700,11 +4982,7 @@ fn show_gridpaper_printer_menu(runtime: &GridPaperRuntime, event: crate::ui4::Ui
             .iter()
             .enumerate()
             .map(|(index, printer)| {
-                if crate::r::net::printer::supports_gridpaper_print(printer) {
-                    crate::ui4::ContextMenuEntry::action(&printer.name, index as u32)
-                } else {
-                    crate::ui4::ContextMenuEntry::disabled(&printer.name)
-                }
+                crate::ui4::ContextMenuEntry::action(&printer.name, index as u32)
             })
             .collect()
     };
@@ -4752,7 +5030,7 @@ fn dispatch_gridpaper_input(runtime: &mut GridPaperRuntime, event: crate::ui4::U
             if event.phase == crate::ui4::Ui4ButtonPhase::Down
                 && event.changed_buttons & PRIMARY_BUTTON_MASK != 0 =>
         {
-            select_gridpaper_cell(runtime, event.local_x, event.local_y);
+            select_gridpaper_cell(runtime, event.source, event.local_x, event.local_y);
         }
         crate::ui4::Ui4InputEvent::Keyboard(event) if is_gridpaper_print_key(event.event) => {
             if let Some(snapshot) = runtime.latest_snapshot.as_ref()
@@ -4771,10 +5049,19 @@ fn dispatch_gridpaper_input(runtime: &mut GridPaperRuntime, event: crate::ui4::U
             show_gridpaper_printer_menu(runtime, event);
         }
         crate::ui4::Ui4InputEvent::Keyboard(event) => {
-            edit_gridpaper_cell(runtime, event.event, event.combo_id, event.virtual_keyboard);
+            edit_gridpaper_cell(
+                runtime,
+                event.source,
+                event.event,
+                event.combo_id,
+                event.virtual_keyboard,
+            );
         }
         crate::ui4::Ui4InputEvent::Pan(event) => {
             pan_gridpaper(runtime, event);
+        }
+        crate::ui4::Ui4InputEvent::Focus(event) if !event.focused => {
+            remove_grid_cursor_input(runtime, event.source);
         }
         _ => {}
     }
@@ -4828,11 +5115,12 @@ fn runtime_needs_render(runtime: &GridPaperRuntime, now_ms: u64) -> bool {
     if runtime.pan_dirty || runtime.cursor_dirty || runtime.animation_dirty {
         return true;
     }
-    if runtime
-        .text_animations
-        .iter()
-        .flatten()
-        .any(|program| program.motion.is_active())
+    if GRIDPAPER_FONT_INSTANCE_TRANSFORMS_ENABLED
+        && runtime
+            .text_animations
+            .iter()
+            .flatten()
+            .any(|program| program.motion.is_active())
     {
         let spirit_response = matches!(
             runtime.presented_producer(),
@@ -4859,8 +5147,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
         match publish_page(
             &runtime.surface,
             candidate,
-            runtime.selection,
-            runtime.input_field,
+            runtime.cursor_inputs.as_slice(),
             crate::ui4::DamageRect::FULL,
             &runtime.text_animations,
             runtime.observed_animation_serial,
@@ -4880,7 +5167,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     .count();
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} font_path=skrifa-r8-to-c++-igc-instance persistence=coverage+descriptors+static-rgba-base-retained-until-next-snapshot static_base_cache=pat0-wb present_cache=pat3-uc pan_transform=font-instance-center frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=1 resident3d_ui4=disabled\n",
+                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} font_path=skrifa-r8-to-glyph-mask-compat persistence=coverage+static-rgba-base-retained-until-next-snapshot static_base_cache=pat0-wb present_cache=pat3-uc affine_motion=identity frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=1 resident3d_ui4=disabled\n",
                     runtime.surface.instance_id,
                     published.serial,
                     published.generation,
@@ -4909,18 +5196,19 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     published_generation,
                 );
                 runtime.animation_dirty = false;
-                if runtime
-                    .text_animations
-                    .iter()
-                    .flatten()
-                    .any(|program| program.motion.is_active())
+                if GRIDPAPER_FONT_INSTANCE_TRANSFORMS_ENABLED
+                    && runtime
+                        .text_animations
+                        .iter()
+                        .flatten()
+                        .any(|program| program.motion.is_active())
                 {
                     runtime.last_animation_frame_ms = now_ms;
                 }
                 runtime.pan_dirty = false;
                 runtime.cursor_dirty = false;
+                runtime.cursor_damage_cells.clear();
                 runtime.presented_cell_patch_serial = published_cell_patch_serial;
-                runtime.presented_selection = runtime.selection;
                 published_page_this_tick = true;
                 runtime.last_render_error = None;
             }
@@ -4949,11 +5237,12 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
         return;
     };
     let sampled = sampled_text_colors(page, &runtime.text_animations, animation_elapsed_ms);
-    let gpu_motion_active = runtime
-        .text_animations
-        .iter()
-        .flatten()
-        .any(|program| program.motion.is_active());
+    let gpu_motion_active = GRIDPAPER_FONT_INSTANCE_TRANSFORMS_ENABLED
+        && runtime
+            .text_animations
+            .iter()
+            .flatten()
+            .any(|program| program.motion.is_active());
     let animation_changed =
         runtime.animation_dirty || sampled != runtime.last_sampled_text_colors || gpu_motion_active;
     let hot_pan_frame = runtime.pan_dirty;
@@ -4975,18 +5264,14 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
             .iter()
             .filter(|patch| patch.serial > runtime.presented_cell_patch_serial)
             .map(|patch| patch.selection);
-        let cursor_cells = runtime
-            .presented_selection
-            .into_iter()
-            .chain(runtime.selection);
+        let cursor_cells = runtime.cursor_damage_cells.iter().copied();
         union_grid_cell_damage(&runtime.surface, page, patch_cells.chain(cursor_cells))
             .unwrap_or(crate::ui4::DamageRect::FULL)
     };
     match publish_page(
         &runtime.surface,
         page,
-        runtime.selection,
-        runtime.input_field,
+        runtime.cursor_inputs.as_slice(),
         damage,
         &runtime.text_animations,
         runtime.observed_animation_serial,
@@ -4997,6 +5282,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
             runtime.animation_dirty = false;
             runtime.pan_dirty = false;
             runtime.cursor_dirty = false;
+            runtime.cursor_damage_cells.clear();
             if cell_patch_changed {
                 crate::log_info!(
                     target: "gridpaper";
@@ -5019,7 +5305,6 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                 );
             }
             runtime.presented_cell_patch_serial = page.cell_patch_serial;
-            runtime.presented_selection = runtime.selection;
             if hot_pan_frame {
                 runtime.hot_pan_frames = runtime.hot_pan_frames.saturating_add(1);
                 if runtime.hot_pan_frames <= 8 || runtime.hot_pan_frames.is_multiple_of(120) {
@@ -5209,6 +5494,7 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
         for event in take_routed_input_events(pool_slot) {
             dispatch_gridpaper_input(runtime_ref, event);
         }
+        prune_grid_cursor_inputs(runtime_ref);
         build_dirty_cell_patches(runtime_ref);
         build_queued_page(runtime_ref);
 
@@ -5247,9 +5533,10 @@ fn spawn_gridpaper_instance_pool() -> usize {
 }
 
 /// Kernel controller for the Gridpaper worker pool. Blueprint documents and
-/// trusted kernel clients share up to ten isolated leases, each retaining its
-/// own UI4 frame and scene worker. Compute presentation and print-only resident
-/// capture are serialized across those workers.
+/// Spirit's single retained response document share up to ten isolated worker
+/// slots, each retaining its own UI4 frame and scene worker. Compute
+/// presentation and print-resolution compatibility rendering are serialized
+/// across them.
 #[embassy_executor::task]
 pub async fn gridpaper_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
@@ -5328,6 +5615,11 @@ mod tests {
     }
 
     #[test]
+    fn default_gridpaper_background_is_opaque_white() {
+        assert_eq!(palette(COLOR_DEFAULT, true), [255, 255, 255, 255]);
+    }
+
+    #[test]
     fn every_positive_grid_within_the_soft_caps_is_valid() {
         for columns in 1..=COLUMN_SOFT_CAP as u32 {
             for rows in 1..=ROW_SOFT_CAP as u32 {
@@ -5353,6 +5645,7 @@ mod tests {
 
     #[test]
     fn print_capture_caps_the_long_edge_for_tall_and_wide_grids() {
+        assert_eq!(GridSize::FULL.print_capture_extent(), (1_027, 1_440));
         assert_eq!(GridSize::new(1, 55).unwrap().print_capture_extent().1, 1_440);
         assert_eq!(GridSize::new(39, 1).unwrap().print_capture_extent().0, 1_440);
     }
@@ -5464,6 +5757,91 @@ mod tests {
         let cell = &snapshot.raw[offset..offset + CELL_BYTES];
         assert_eq!(cell[PRIMARY_LENGTH_OFFSET], 1);
         assert_eq!(cell[UPPER_LENGTH_OFFSET], 0);
+    }
+
+    #[test]
+    fn blank_cell_uses_the_editing_cursor_foreground_and_releases_it_when_cleared() {
+        let mut snapshot = OwnedSnapshot {
+            raw: Vec::from([0u8; PAGE_BYTES]),
+            producer: GridPaperProducer::Blueprint(0),
+            generation: 1,
+            scale_percent: 100,
+            size: GridSize::new(19, 13).unwrap(),
+            serial: 1,
+        };
+        let target = GridCellSelection { column: 2, row: 3 };
+        let offset = (target.row * COLUMNS + target.column) * CELL_BYTES;
+        let mut selection = target;
+        let mut input_field = CellInputField::Primary;
+        let mut text = crate::r::keyboard::TrueosKeyboardOutputEvent::default();
+        text.kind = crate::r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT;
+        text.utf8_len = 1;
+        text.codepoint = 'x' as u32;
+        text.utf8[0] = b'x';
+
+        let first = edit_snapshot_from_keyboard_with_foreground(
+            &mut snapshot,
+            &mut selection,
+            &mut input_field,
+            text,
+            13,
+        );
+        assert!(first.content_changed);
+        assert_eq!(snapshot.raw[offset + FOREGROUND_OFFSET], 13);
+
+        selection = target;
+        let mut delete = crate::r::keyboard::TrueosKeyboardOutputEvent::default();
+        delete.kind = crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY;
+        delete.key_code = crate::r::keyboard::KEYBOARD_KEY_DELETE;
+        let cleared = edit_snapshot_from_keyboard_with_foreground(
+            &mut snapshot,
+            &mut selection,
+            &mut input_field,
+            delete,
+            13,
+        );
+        assert!(cleared.content_changed);
+        assert_eq!(snapshot.raw[offset + FOREGROUND_OFFSET], COLOR_TRANSPARENT);
+
+        let second = edit_snapshot_from_keyboard_with_foreground(
+            &mut snapshot,
+            &mut selection,
+            &mut input_field,
+            text,
+            4,
+        );
+        assert!(second.content_changed);
+        assert_eq!(snapshot.raw[offset + FOREGROUND_OFFSET], 4);
+    }
+
+    #[test]
+    fn cursor_selection_and_tab_field_are_independent_per_source() {
+        let first_source = crate::ui4::Ui4CursorSource {
+            controller_id: 1,
+            slot_id: 2,
+            ep_target: 3,
+            hid_kind: 1,
+        };
+        let second_source = crate::ui4::Ui4CursorSource {
+            controller_id: 1,
+            slot_id: 4,
+            ep_target: 5,
+            hid_kind: 1,
+        };
+        let first_cell = GridCellSelection { column: 2, row: 3 };
+        let second_cell = GridCellSelection { column: 7, row: 11 };
+        let mut cursors = [
+            GridCursorInputState::new(first_source),
+            GridCursorInputState::new(second_source),
+        ];
+        cursors[0].selection = Some(first_cell);
+        cursors[0].input_field = CellInputField::Upper;
+        cursors[1].selection = Some(second_cell);
+
+        assert_eq!(cursors[0].selection, Some(first_cell));
+        assert_eq!(cursors[0].input_field, CellInputField::Upper);
+        assert_eq!(cursors[1].selection, Some(second_cell));
+        assert_eq!(cursors[1].input_field, CellInputField::Primary);
     }
 
     #[test]
