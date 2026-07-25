@@ -18,6 +18,7 @@ use crate::{
         kmod::hub::{Hub, HubDevice, HubInfo, HubOp, PortChangeInfo},
         ty::{DeviceInfoOp, DeviceOp, EventHandlerOp, ProbedDeviceInfoOp},
     },
+    diag::{XhciDirectRequest, XhciDirectResponse},
 };
 
 pub trait CoreOp: Send + 'static {
@@ -34,6 +35,11 @@ pub trait CoreOp: Send + 'static {
     fn create_event_handler(&mut self) -> Box<dyn EventHandlerOp>;
 
     fn kernel(&self) -> &Kernel;
+
+    fn xhci_direct<'a>(
+        &'a mut self,
+        request: XhciDirectRequest,
+    ) -> BoxFuture<'a, Result<XhciDirectResponse, USBError>>;
 }
 
 pub struct Core {
@@ -203,6 +209,13 @@ impl BackendOp for Core {
             hub.backend.request_port_reset(port_id).await
         }
         .boxed()
+    }
+
+    fn xhci_direct<'a>(
+        &'a mut self,
+        request: XhciDirectRequest,
+    ) -> BoxFuture<'a, Result<XhciDirectResponse, USBError>> {
+        self.backend.xhci_direct(request)
     }
 
     fn create_event_handler(&mut self) -> Box<dyn EventHandlerOp> {

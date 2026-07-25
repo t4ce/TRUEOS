@@ -10,6 +10,7 @@ mod dev_gears;
 #[path = "../../tools/usb3-extracted/hid/mod.rs"]
 pub mod hid;
 mod lib;
+mod lab;
 mod skhynix;
 
 pub use self::hid::midi;
@@ -21,12 +22,16 @@ static USB_PORT_CHANGE_SEQ: core::sync::atomic::AtomicU32 = core::sync::atomic::
 
 #[embassy_executor::task]
 pub async fn usb_controller_service_task() {
-    let Some((mmio, kernel, root_hub_policy)) = lib::known_xhci_host_inputs() else {
+    let Some((mmio, mmio_len, kernel, root_hub_policy)) = lib::known_xhci_host_inputs() else {
         return;
     };
-    let mut host =
-        crabusb::USBHost::new_xhci_with_root_hub_init_policy(mmio, kernel, root_hub_policy)
-            .expect("crabusb xhci host");
+    let mut host = crabusb::USBHost::new_xhci_with_root_hub_init_policy_and_mmio_len(
+        mmio,
+        mmio_len,
+        kernel,
+        root_hub_policy,
+    )
+    .expect("crabusb xhci host");
     host.init().await.expect("crabusb xhci init");
 
     let event_handler = host.create_event_handler();

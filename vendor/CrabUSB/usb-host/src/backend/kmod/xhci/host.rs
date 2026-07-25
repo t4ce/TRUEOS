@@ -30,6 +30,10 @@ use crate::{
         kmod::{hub::HubOp, kcore::CoreOp, xhci::reg::SlotBell},
         ty::{DeviceOp, Event, EventHandlerOp},
     },
+    diag::{
+        XhciControllerSnapshot, XhciDirectRequest, XhciDirectResponse, XhciPortSnapshot,
+        XhciProtocolSnapshot, XhciWriteResult,
+    },
     err::Result,
     osal::{Kernel, SpinWhile},
     queue::Finished,
@@ -40,6 +44,7 @@ static EVENT_DRAIN_TRACE: TraceSampler = TraceSampler::new();
 
 pub struct Xhci {
     pub(crate) reg: Arc<RwLock<XhciRegisters>>,
+    mmio_len: usize,
     pub(crate) kernel: Kernel,
     pub(crate) cmd: CommandRing,
     dev_ctx: Option<DeviceContextList>,
@@ -84,6 +89,13 @@ impl CoreOp for Xhci {
     fn kernel(&self) -> &Kernel {
         &self.kernel
     }
+
+    fn xhci_direct<'a>(
+        &'a mut self,
+        request: XhciDirectRequest,
+    ) -> BoxFuture<'a, Result<XhciDirectResponse>> {
+        async move { self._xhci_direct(request) }.boxed()
+    }
 }
 
 impl Xhci {
@@ -97,6 +109,20 @@ impl Xhci {
 
     pub fn new_with_root_hub_init_policy(
         mmio: Mmio,
+        kernel: &'static dyn KernelOp,
+        root_hub_init_policy: XhciRootHubInitPolicy,
+    ) -> Result<Self> {
+        Self::new_with_root_hub_init_policy_and_mmio_len(
+            mmio,
+            0,
+            kernel,
+            root_hub_init_policy,
+        )
+    }
+
+    pub fn new_with_root_hub_init_policy_and_mmio_len(
+        mmio: Mmio,
+        mmio_len: usize,
         kernel: &'static dyn KernelOp,
         root_hub_init_policy: XhciRootHubInitPolicy,
     ) -> Result<Self> {
@@ -141,6 +167,7 @@ impl Xhci {
 
         Ok(Xhci {
             reg: reg_shared,
+            mmio_len,
             kernel,
             cmd,
             dev_ctx: None,
@@ -156,6 +183,189 @@ impl Xhci {
             event_ring_info,
             scratchpad_buf_arr: None,
         })
+    }
+
+    fn validate_direct_offset(&self, offset: usize) -> Result<()> {
+        if self.mmio_len == 0 {
+            return Err(USBError::Other(anyhow::anyhow!(
+                "xHCI direct MMIO unavailable: aperture length was not supplied"
+            )));
+        }
+        if !offset.is_multiple_of(core::mem::size_of::<u32>()) {
+            return Err(USBError::Other(anyhow::anyhow!(
+                "xHCI direct MMIO offset {offset:#x} is not u32 aligned"
+            )));
+        }
+        let end = offset
+            .checked_add(core::mem::size_of::<u32>())
+            .ok_or_else(|| USBError::Other(anyhow::anyhow!("xHCI direct MMIO offset overflow")))?;
+        if end > self.mmio_len {
+            return Err(USBError::Other(anyhow::anyhow!(
+                "xHCI direct MMIO offset {offset:#x} exceeds aperture {:#x}",
+                self.mmio_len
+            )));
+        }
+        Ok(())
+    }
+
+    #[inline]
+    unsafe fn read_direct32(base: usize, offset: usize) -> u32 {
+        unsafe { core::ptr::read_volatile((base + offset) as *const u32) }
+    }
+
+    #[inline]
+    unsafe fn read_direct64(base: usize, offset: usize) -> u64 {
+        let lo = unsafe { Self::read_direct32(base, offset) } as u64;
+        let hi = unsafe { Self::read_direct32(base, offset + 4) } as u64;
+        lo | (hi << 32)
+    }
+
+    fn direct_snapshot(&self) -> Result<XhciControllerSnapshot> {
+        if self.mmio_len == 0 {
+            return Err(USBError::Other(anyhow::anyhow!(
+                "xHCI snapshot unavailable: aperture length was not supplied"
+            )));
+        }
+
+        let mut protocols = Vec::new();
+        for capability in self.extended_capabilities() {
+            if let ExtendedCapability::XhciSupportedProtocol(protocol) = capability {
+                let header = protocol.header.read_volatile();
+                protocols.push(XhciProtocolSnapshot {
+                    major: header.major_revision(),
+                    minor: header.minor_revision(),
+                    name: header.name_string(),
+                    port_offset: header.compatible_port_offset(),
+                    port_count: header.compatible_port_count(),
+                    slot_type: header.protocol_slot_type(),
+                    psi_count: header.protocol_speed_id_count(),
+                });
+            }
+        }
+
+        let regs = self.reg.read();
+        let base = regs.mmio_base;
+        let read32 = |offset: usize| -> Result<u32> {
+            self.validate_direct_offset(offset)?;
+            Ok(unsafe { Self::read_direct32(base, offset) })
+        };
+        let read64 = |offset: usize| -> Result<u64> {
+            self.validate_direct_offset(offset)?;
+            self.validate_direct_offset(offset + 4)?;
+            Ok(unsafe { Self::read_direct64(base, offset) })
+        };
+
+        let cap0 = read32(0x00)?;
+        let caplength = (cap0 & 0xff) as u8;
+        let hciversion = (cap0 >> 16) as u16;
+        let hcsparams1 = read32(0x04)?;
+        let hcsparams2 = read32(0x08)?;
+        let hcsparams3 = read32(0x0c)?;
+        let hccparams1 = read32(0x10)?;
+        let dboff = read32(0x14)? & !0x3;
+        let rtsoff = read32(0x18)? & !0x1f;
+        let hccparams2 = read32(0x1c)?;
+        let op = usize::from(caplength);
+        let runtime = rtsoff as usize;
+
+        let mut ports = Vec::new();
+        let max_ports = ((hcsparams1 >> 24) & 0xff) as usize;
+        for index in 0..max_ports {
+            let offset = op + 0x400 + index * 0x10;
+            ports.push(XhciPortSnapshot {
+                port_id: (index + 1) as u8,
+                portsc: read32(offset)?,
+                portpmsc: read32(offset + 0x04)?,
+                portli: read32(offset + 0x08)?,
+                porthlpmc: read32(offset + 0x0c)?,
+            });
+        }
+
+        Ok(XhciControllerSnapshot {
+            mmio_len: self.mmio_len,
+            caplength,
+            hciversion,
+            hcsparams1,
+            hcsparams2,
+            hcsparams3,
+            hccparams1,
+            hccparams2,
+            dboff,
+            rtsoff,
+            usbcmd: read32(op)?,
+            usbsts: read32(op + 0x04)?,
+            pagesize: read32(op + 0x08)?,
+            dnctrl: read32(op + 0x14)?,
+            crcr: read64(op + 0x18)?,
+            dcbaap: read64(op + 0x30)?,
+            config: read32(op + 0x38)?,
+            mfindex: read32(runtime)?,
+            iman: read32(runtime + 0x20)?,
+            imod: read32(runtime + 0x24)?,
+            erstsz: read32(runtime + 0x28)?,
+            erstba: read64(runtime + 0x30)?,
+            erdp: read64(runtime + 0x38)?,
+            protocols,
+            ports,
+        })
+    }
+
+    pub(crate) fn _xhci_direct(&mut self, request: XhciDirectRequest) -> Result<XhciDirectResponse> {
+        if matches!(request, XhciDirectRequest::Snapshot) {
+            return self.direct_snapshot().map(XhciDirectResponse::Snapshot);
+        }
+
+        let offset = match request {
+            XhciDirectRequest::Read32 { offset }
+            | XhciDirectRequest::Write32 { offset, .. }
+            | XhciDirectRequest::ReadModifyWrite32 { offset, .. } => offset,
+            XhciDirectRequest::Snapshot => unreachable!(),
+        };
+        self.validate_direct_offset(offset)?;
+
+        let regs = self.reg.write();
+        let base = regs.mmio_base;
+        let before = unsafe { Self::read_direct32(base, offset) };
+        match request {
+            XhciDirectRequest::Read32 { .. } => {
+                Ok(XhciDirectResponse::Read32 {
+                    offset,
+                    value: before,
+                })
+            }
+            XhciDirectRequest::Write32 { value, .. } => {
+                unsafe {
+                    core::ptr::write_volatile((base + offset) as *mut u32, value);
+                }
+                mb();
+                let after = unsafe { Self::read_direct32(base, offset) };
+                Ok(XhciDirectResponse::Write32(XhciWriteResult {
+                    offset,
+                    before,
+                    requested: value,
+                    after,
+                }))
+            }
+            XhciDirectRequest::ReadModifyWrite32 {
+                clear_mask,
+                set_mask,
+                ..
+            } => {
+                let requested = (before & !clear_mask) | set_mask;
+                unsafe {
+                    core::ptr::write_volatile((base + offset) as *mut u32, requested);
+                }
+                mb();
+                let after = unsafe { Self::read_direct32(base, offset) };
+                Ok(XhciDirectResponse::Write32(XhciWriteResult {
+                    offset,
+                    before,
+                    requested,
+                    after,
+                }))
+            }
+            XhciDirectRequest::Snapshot => unreachable!(),
+        }
     }
 
     async fn _init(&mut self) -> Result {

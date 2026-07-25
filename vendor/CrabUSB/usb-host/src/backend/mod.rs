@@ -6,6 +6,8 @@ use futures::future::{BoxFuture, LocalBoxFuture};
 use usb_if::err::USBError;
 
 use crate::backend::ty::{DeviceInfoOp, DeviceOp, ProbedDeviceInfoOp};
+#[cfg(kmod)]
+use crate::diag::{XhciDirectRequest, XhciDirectResponse};
 
 #[cfg(umod)]
 pub mod umod;
@@ -51,4 +53,10 @@ pub(crate) trait BackendOp: Send + Any + 'static {
         &'a mut self,
         port_id: u8,
     ) -> BoxFuture<'a, Result<(), USBError>>;
+
+    #[cfg(kmod)]
+    fn xhci_direct<'a>(
+        &'a mut self,
+        request: XhciDirectRequest,
+    ) -> BoxFuture<'a, Result<XhciDirectResponse, USBError>>;
 }

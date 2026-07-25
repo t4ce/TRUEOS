@@ -101,7 +101,12 @@ impl crabusb::KernelOp for TrueosCrabKernel {
 }
 
 pub fn known_xhci_host_inputs()
--> Option<(crabusb::Mmio, &'static dyn crabusb::KernelOp, crabusb::XhciRootHubInitPolicy)> {
+-> Option<(
+    crabusb::Mmio,
+    usize,
+    &'static dyn crabusb::KernelOp,
+    crabusb::XhciRootHubInitPolicy,
+)> {
     let dev = known_xhci_device()?;
     let root_hub_policy = if is_qemu_xhci_device(dev.vendor_id, dev.device_id) {
         crate::log!(
@@ -130,7 +135,7 @@ pub fn known_xhci_host_inputs()
         .unwrap_or(0x10000)
         .max(0x1000) as usize;
     let mmio = crate::pci::mmio::map_mmio_region_exact(phys, size).ok()?;
-    Some((mmio, &TRUEOS_CRAB_KERNEL, root_hub_policy))
+    Some((mmio, size, &TRUEOS_CRAB_KERNEL, root_hub_policy))
 }
 
 fn known_xhci_device() -> Option<crate::pci::PciDevice> {

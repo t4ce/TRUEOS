@@ -14,6 +14,7 @@ pub use usb_if;
 mod _macros;
 
 pub(crate) mod backend;
+pub mod diag;
 pub mod device;
 pub mod err;
 mod host;

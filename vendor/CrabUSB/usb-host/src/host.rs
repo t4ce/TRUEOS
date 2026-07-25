@@ -3,6 +3,8 @@ use alloc::vec::Vec;
 
 use crate::backend::BackendOp;
 use crate::backend::ty::*;
+#[cfg(kmod)]
+use crate::diag::{XhciDirectRequest, XhciDirectResponse};
 use crate::err::Result;
 
 #[cfg(kmod)]
@@ -47,6 +49,14 @@ impl USBHost {
     #[cfg(kmod)]
     pub async fn request_root_port_reset(&mut self, port_id: u8) -> Result<()> {
         self.backend.request_root_port_reset(port_id).await
+    }
+
+    /// Execute one register-level xHCI diagnostic operation through the live
+    /// backend owner.  Callers are responsible for controller quiescence and
+    /// for applying any policy around mutating requests.
+    #[cfg(kmod)]
+    pub async fn xhci_direct(&mut self, request: XhciDirectRequest) -> Result<XhciDirectResponse> {
+        self.backend.xhci_direct(request).await
     }
 
     pub async fn open_device(&mut self, dev: &DeviceInfo) -> Result<Device> {

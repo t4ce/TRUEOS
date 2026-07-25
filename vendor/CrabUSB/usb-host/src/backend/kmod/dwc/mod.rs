@@ -23,6 +23,7 @@ use crate::backend::{
 };
 use crate::osal::Kernel;
 use crate::{DeviceAddressInfo, KernelOp, Mmio};
+use crate::diag::{XhciDirectRequest, XhciDirectResponse};
 use reg::GUSB2PHYCFG;
 use {
     event::EventBuffer,
@@ -714,6 +715,13 @@ impl CoreOp for Dwc {
 
     fn kernel(&self) -> &Kernel {
         self.xhci.kernel()
+    }
+
+    fn xhci_direct<'a>(
+        &'a mut self,
+        request: XhciDirectRequest,
+    ) -> BoxFuture<'a, Result<XhciDirectResponse>> {
+        self.xhci.xhci_direct(request)
     }
 }
 

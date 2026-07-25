@@ -10,15 +10,13 @@ pub(crate) mod flags {
     pub(crate) use log_os_core::{LogArea, LogLevelPolicy, LogLevelSet};
     use spin::Once;
 
-    /// Active hardware hunt. Generic PCI, TGA, and `r::fpga_offload` module
-    /// paths currently route through the Global area; TGA lifecycle and PCI
-    /// MCFG inventory also use Boot records guarded by `BOOT_INFO_LOGS`.
-    pub(crate) const PCI_TGA_FPGA_DIAG_PROFILE_ENABLED: bool = true;
+    /// Preserved PCI/TGA/FPGA hunt. The exact pre-USB configuration is kept in
+    /// `log_os.gpgpu_diag_profile.txt` beside this source file.
+    pub(crate) const PCI_TGA_FPGA_DIAG_PROFILE_ENABLED: bool = false;
 
-    /// Preserved USB/UAS hunt profile. Reactivate it with this single switch;
-    /// it restores Global+USB Trace, the CrabUSB/UAS detail flag, and the
-    /// unsampled USB device logs used during the X31 investigation.
-    pub(crate) const USB_UAS_DIAG_PROFILE_ENABLED: bool = false;
+    /// Active USB/xHCI/UAS hunt. This opens the CrabUSB controller and TrueOS
+    /// glue through Trace and enables the unsampled device/UAS diagnostics.
+    pub(crate) const USB_UAS_DIAG_PROFILE_ENABLED: bool = true;
 
     // Keep failures, lifecycle summaries, and lowest-level trace records while
     // deliberately leaving Debug out of the focused PCI/TGA/FPGA capture.
