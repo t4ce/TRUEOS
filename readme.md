@@ -122,7 +122,7 @@ sudo apt install graphviz npm git gh make rustup autoconf automake mtools nasm x
 ```
 cargo install fmt cargo-outdated cargo-edit --locked
 rustup component add clippy
-rustup toolchain install nightly --profile minimal --component rust-src,- - rustfmt,rust-analyzer,llvm-tools-preview
+rustup toolchain install nightly-2026-07-10 --profile minimal --component rust-src --component rustfmt --component rust-analyzer --component clippy --component llvm-tools-preview
 cargo install cargo-edit --locked
 cargo install cargo-depgraph
 
@@ -132,7 +132,7 @@ cargo install cargo-depgraph
 > We were able to build, with a MAC Laptop aswell.
 ```
 xcode-select --install
-rustup toolchain install nightly
+rustup toolchain install nightly-2026-07-10
 brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
 ```
 

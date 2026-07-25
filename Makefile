@@ -167,7 +167,7 @@ empty-libs:
 	ar crs $(KERNEL_EMPTY_LIB_DIR)/libgcc_s.a
 
 kernel: empty-libs $(INTEL_GPU_PREBUILD_VERIFY)
-	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_EFFECTIVE_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
+	cargo build $(CARGO_GFX_FLAGS) $(CARGO_EFFECTIVE_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
 	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT="$(INTEL_GPU_CPP_AOT)" INTEL_GPU_LINKED_ELF="$(KERNEL_BIN)" intel-gpu-verify-linked-copy
 
 kernel-cpp-aot:
