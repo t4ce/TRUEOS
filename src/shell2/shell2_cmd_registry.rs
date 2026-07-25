@@ -54,6 +54,7 @@ const TOOL_JSON_TXT: &str = r#"{"type":"object","properties":{"file":{"type":"st
 const TOOL_JSON_TTS: &str = r#"{"type":"object","properties":{"text":{"type":"string","description":"Text to synthesize and play through the kernel HDA lane."},"voice":{"type":"string","description":"Kokoro voice name; defaults to af_heart."},"speed":{"type":"number","minimum":0.25,"maximum":4.0,"description":"Speech speed multiplier."}},"required":["text"],"additionalProperties":false}"#;
 const TOOL_JSON_STT: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path to a mono/stereo signed-16-bit PCM WAV file."},"language":{"type":"string","description":"Whisper language code or auto."},"translate":{"type":"boolean","description":"Translate recognized speech to English."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_VID: &str = r#"{"type":"object","properties":{"source":{"type":"string","enum":["fs","on","online"],"description":"Read an Annex-B asset from TRUEOSFS, or download the fixed online AVC1 MP4 asset."},"path":{"type":"string","description":"Optional TRUEOSFS Annex-B path when source=fs; defaults to x31_head_movie.annexb.h264."},"loop":{"type":"boolean","description":"Repeat playback while retaining the same UI4 Frame and window lifetime."}},"required":["source"],"additionalProperties":false}"#;
+const TOOL_JSON_XHCI: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","journal","stage","read","read64","write","write64","rmw"],"description":"xHCI laboratory operation."},"stage":{"type":"integer","minimum":1,"maximum":5,"description":"Cumulative diagnostic stage."},"port":{"type":"integer","minimum":1,"maximum":255,"description":"Physical root port for mutating stages."},"offset":{"type":"string","description":"BAR-relative register offset, decimal or 0x-prefixed."},"value":{"type":"string","description":"Raw register value, decimal or 0x-prefixed."},"clear_mask":{"type":"string","description":"Raw RMW clear mask."},"set_mask":{"type":"string","description":"Raw RMW set mask."},"arm":{"type":"boolean","description":"Explicitly arm a mutating operation."},"live":{"type":"boolean","description":"Acknowledge disruption of a physically connected target."},"fused":{"type":"boolean","description":"Explicitly permit targeting the fused LED port."},"depth":{"type":"integer","minimum":1,"maximum":3,"description":"Stage-five transition-tree depth."}},"required":["command"],"additionalProperties":false}"#;
 
 fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
@@ -202,6 +203,10 @@ fn dispatch_stt(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
 
 fn dispatch_vid(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::vid::try_parse(spawner, io, rest)
+}
+
+fn dispatch_xhci(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::xhci::try_parse(spawner, io, rest)
 }
 
 const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
@@ -464,6 +469,17 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_txt,
         tool_description: Some("Open a file in the txt Blueprint terminal editor."),
         tool_parameters_json: Some(TOOL_JSON_TXT),
+    },
+    BuiltinShell2CmdEntry {
+        name: "xhci",
+        mode: "cmd",
+        color: Some(STATUS_GRAY_RGB),
+        advertised: true,
+        handler: dispatch_xhci,
+        tool_description: Some(
+            "Run the quarantined live-owner xHCI register laboratory and transition-tree probes.",
+        ),
+        tool_parameters_json: Some(TOOL_JSON_XHCI),
     },
     BuiltinShell2CmdEntry {
         name: "tts",

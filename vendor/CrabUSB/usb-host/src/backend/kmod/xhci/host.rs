@@ -32,7 +32,7 @@ use crate::{
     },
     diag::{
         XhciControllerSnapshot, XhciDirectRequest, XhciDirectResponse, XhciPortSnapshot,
-        XhciProtocolSnapshot, XhciWriteResult,
+        XhciProtocolSnapshot, XhciWrite64Result, XhciWriteResult,
     },
     err::Result,
     osal::{Kernel, SpinWhile},
@@ -112,12 +112,7 @@ impl Xhci {
         kernel: &'static dyn KernelOp,
         root_hub_init_policy: XhciRootHubInitPolicy,
     ) -> Result<Self> {
-        Self::new_with_root_hub_init_policy_and_mmio_len(
-            mmio,
-            0,
-            kernel,
-            root_hub_init_policy,
-        )
+        Self::new_with_root_hub_init_policy_and_mmio_len(mmio, 0, kernel, root_hub_init_policy)
     }
 
     pub fn new_with_root_hub_init_policy_and_mmio_len(
@@ -166,14 +161,14 @@ impl Xhci {
         let ports = root_hub.waker();
 
         Ok(Xhci {
-            reg: reg_shared,
+            reg: reg_shared.clone(),
             mmio_len,
             kernel,
             cmd,
             dev_ctx: None,
             transfer_result_handler: transfer_result_handler.clone(),
             event_handler: Some(EventHandler::new(
-                reg,
+                reg_shared.clone(),
                 cmd_finished,
                 event_ring,
                 transfer_result_handler,
@@ -206,6 +201,16 @@ impl Xhci {
             )));
         }
         Ok(())
+    }
+
+    fn validate_direct_offset64(&self, offset: usize) -> Result<()> {
+        if !offset.is_multiple_of(core::mem::size_of::<u64>()) {
+            return Err(USBError::Other(anyhow::anyhow!(
+                "xHCI direct MMIO offset {offset:#x} is not u64 aligned"
+            )));
+        }
+        self.validate_direct_offset(offset)?;
+        self.validate_direct_offset(offset + core::mem::size_of::<u32>())
     }
 
     #[inline]
@@ -310,29 +315,40 @@ impl Xhci {
         })
     }
 
-    pub(crate) fn _xhci_direct(&mut self, request: XhciDirectRequest) -> Result<XhciDirectResponse> {
+    pub(crate) fn _xhci_direct(
+        &mut self,
+        request: XhciDirectRequest,
+    ) -> Result<XhciDirectResponse> {
         if matches!(request, XhciDirectRequest::Snapshot) {
             return self.direct_snapshot().map(XhciDirectResponse::Snapshot);
         }
 
         let offset = match request {
             XhciDirectRequest::Read32 { offset }
+            | XhciDirectRequest::Read64 { offset }
             | XhciDirectRequest::Write32 { offset, .. }
+            | XhciDirectRequest::Write64 { offset, .. }
             | XhciDirectRequest::ReadModifyWrite32 { offset, .. } => offset,
             XhciDirectRequest::Snapshot => unreachable!(),
         };
-        self.validate_direct_offset(offset)?;
+        if matches!(request, XhciDirectRequest::Read64 { .. } | XhciDirectRequest::Write64 { .. }) {
+            self.validate_direct_offset64(offset)?;
+        } else {
+            self.validate_direct_offset(offset)?;
+        }
 
         let regs = self.reg.write();
         let base = regs.mmio_base;
         let before = unsafe { Self::read_direct32(base, offset) };
         match request {
-            XhciDirectRequest::Read32 { .. } => {
-                Ok(XhciDirectResponse::Read32 {
-                    offset,
-                    value: before,
-                })
-            }
+            XhciDirectRequest::Read32 { .. } => Ok(XhciDirectResponse::Read32 {
+                offset,
+                value: before,
+            }),
+            XhciDirectRequest::Read64 { .. } => Ok(XhciDirectResponse::Read64 {
+                offset,
+                value: unsafe { Self::read_direct64(base, offset) },
+            }),
             XhciDirectRequest::Write32 { value, .. } => {
                 unsafe {
                     core::ptr::write_volatile((base + offset) as *mut u32, value);
@@ -340,6 +356,20 @@ impl Xhci {
                 mb();
                 let after = unsafe { Self::read_direct32(base, offset) };
                 Ok(XhciDirectResponse::Write32(XhciWriteResult {
+                    offset,
+                    before,
+                    requested: value,
+                    after,
+                }))
+            }
+            XhciDirectRequest::Write64 { value, .. } => {
+                let before = unsafe { Self::read_direct64(base, offset) };
+                unsafe {
+                    core::ptr::write_volatile((base + offset) as *mut u64, value);
+                }
+                mb();
+                let after = unsafe { Self::read_direct64(base, offset) };
+                Ok(XhciDirectResponse::Write64(XhciWrite64Result {
                     offset,
                     before,
                     requested: value,
@@ -771,7 +801,7 @@ impl Xhci {
 }
 
 pub struct EventHandler {
-    reg: UnsafeCell<XhciRegisters>,
+    reg: Arc<RwLock<XhciRegisters>>,
     cmd_finished: Finished<CommandCompletion>,
     event_ring: UnsafeCell<EventRing>,
     transfer_result_handler: TransferResultHandler,
@@ -783,14 +813,14 @@ unsafe impl Sync for EventHandler {}
 
 impl EventHandler {
     fn new(
-        reg: XhciRegisters,
+        reg: Arc<RwLock<XhciRegisters>>,
         cmd_finished: Finished<CommandCompletion>,
         event_ring: EventRing,
         transfer_result_handler: TransferResultHandler,
         ports: PortChangeWaker,
     ) -> Self {
         Self {
-            reg: UnsafeCell::new(reg),
+            reg,
             cmd_finished,
             event_ring: UnsafeCell::new(event_ring),
             transfer_result_handler,
@@ -803,15 +833,11 @@ impl EventHandler {
         unsafe { &mut *self.event_ring.get() }
     }
 
-    #[allow(clippy::mut_from_ref)]
-    fn reg(&self) -> &mut XhciRegisters {
-        unsafe { &mut *self.reg.get() }
-    }
-
     fn update_erdp(&self, clear_ehb: bool) {
         let erdp = self.event_ring().erdp();
         let segment_index = self.event_ring().segment_index();
-        self.reg()
+        self.reg
+            .write()
             .interrupter_register_set
             .interrupter_mut(0)
             .erdp
@@ -936,7 +962,7 @@ impl EventHandler {
 impl EventHandlerOp for EventHandler {
     fn handle_event(&self) -> Event {
         let mut res = Event::Nothing;
-        let sts = self.reg().operational.usbsts.read_volatile();
+        let sts = self.reg.read().operational.usbsts.read_volatile();
         let has_event_interrupt = sts.event_interrupt();
         let has_pending_event = self.event_ring().has_pending_event();
 
@@ -945,17 +971,20 @@ impl EventHandlerOp for EventHandler {
         }
 
         if has_event_interrupt {
-            self.reg().operational.usbsts.update_volatile(|r| {
+            self.reg.write().operational.usbsts.update_volatile(|r| {
                 r.clear_event_interrupt();
             });
         }
 
         // 【关键】GIC 中断模式下，需要手动清除 IMAN.IP
         // 参考: Linux xhci_irq() in xhci-ring.c:3054-3059
-        let mut irq = self.reg().interrupter_register_set.interrupter_mut(0);
-        irq.iman.update_volatile(|r| {
-            r.clear_interrupt_pending();
-        });
+        {
+            let mut reg = self.reg.write();
+            let mut irq = reg.interrupter_register_set.interrupter_mut(0);
+            irq.iman.update_volatile(|r| {
+                r.clear_interrupt_pending();
+            });
+        }
 
         res = self.clean_event_ring();
         self.update_erdp(true);

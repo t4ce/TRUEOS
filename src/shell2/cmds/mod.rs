@@ -34,6 +34,7 @@ pub(crate) mod txt;
 pub(crate) mod update;
 pub(crate) mod vgpu;
 pub(crate) mod vid;
+pub(crate) mod xhci;
 
 pub(crate) fn command_registry_json() -> AllocString {
     super::shell2_cmd_registry::command_registry_json()

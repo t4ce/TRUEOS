@@ -101,12 +101,7 @@ impl crabusb::KernelOp for TrueosCrabKernel {
 }
 
 pub fn known_xhci_host_inputs()
--> Option<(
-    crabusb::Mmio,
-    usize,
-    &'static dyn crabusb::KernelOp,
-    crabusb::XhciRootHubInitPolicy,
-)> {
+-> Option<(crabusb::Mmio, usize, &'static dyn crabusb::KernelOp, crabusb::XhciRootHubInitPolicy)> {
     let dev = known_xhci_device()?;
     let root_hub_policy = if is_qemu_xhci_device(dev.vendor_id, dev.device_id) {
         crate::log!(
@@ -330,9 +325,44 @@ pub struct TlbUsbSnapshot {
 }
 
 pub fn tlb_usb_snapshot() -> TlbUsbSnapshot {
+    let topology = super::lab::latest_snapshot()
+        .map(|snapshot| {
+            snapshot
+                .ports
+                .iter()
+                .map(|port| TlbUsbTopologyNode {
+                    kind: TlbUsbTopologyNodeKind::RootPort,
+                    controller_index: 0,
+                    root_port_id: port.port_id,
+                    port_id: port.port_id,
+                    depth: 0,
+                    slot_id: None,
+                    parent_slot_id: None,
+                    speed: xhci_port_speed_name(port.portsc),
+                    vendor_id: None,
+                    product_id: None,
+                    class: None,
+                    subclass: None,
+                    protocol: None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     TlbUsbSnapshot {
         controllers: pci_usb_controllers(),
+        topology,
         ..TlbUsbSnapshot::default()
+    }
+}
+
+fn xhci_port_speed_name(portsc: u32) -> &'static str {
+    match (portsc >> 10) & 0x0f {
+        1 => "full",
+        2 => "low",
+        3 => "high",
+        4 => "super",
+        5 => "super+",
+        _ => "unknown",
     }
 }
 
@@ -394,6 +424,36 @@ pub struct XhciMmioDiag {
     pub ports: Vec<XhciPortDiag>,
 }
 
-pub fn controller_mmio_diag(_controller_index: usize) -> Option<XhciMmioDiag> {
-    None
+pub fn controller_mmio_diag(controller_index: usize) -> Option<XhciMmioDiag> {
+    if controller_index != 0 {
+        return None;
+    }
+    let snapshot = super::lab::latest_snapshot()?;
+    Some(XhciMmioDiag {
+        caplen: snapshot.caplength,
+        hcsparams1: snapshot.hcsparams1,
+        hccparams1: snapshot.hccparams1,
+        dboff: snapshot.dboff,
+        rtsoff: snapshot.rtsoff,
+        usbcmd: snapshot.usbcmd,
+        usbsts: snapshot.usbsts,
+        crcr: snapshot.crcr,
+        dcbaap: snapshot.dcbaap,
+        config: snapshot.config,
+        iman: snapshot.iman,
+        imod: snapshot.imod,
+        erstsz: snapshot.erstsz,
+        erstba: snapshot.erstba,
+        erdp: snapshot.erdp,
+        ports: snapshot
+            .ports
+            .iter()
+            .map(|port| XhciPortDiag {
+                port_id: port.port_id,
+                portsc: port.portsc,
+                portpmsc: port.portpmsc,
+                portli: port.portli,
+            })
+            .collect(),
+    })
 }

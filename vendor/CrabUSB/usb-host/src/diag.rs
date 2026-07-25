@@ -65,9 +65,16 @@ pub enum XhciDirectRequest {
     Read32 {
         offset: usize,
     },
+    Read64 {
+        offset: usize,
+    },
     Write32 {
         offset: usize,
         value: u32,
+    },
+    Write64 {
+        offset: usize,
+        value: u64,
     },
     ReadModifyWrite32 {
         offset: usize,
@@ -85,13 +92,21 @@ pub struct XhciWriteResult {
     pub after: u32,
 }
 
+/// Result of one direct 64-bit register mutation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct XhciWrite64Result {
+    pub offset: usize,
+    pub before: u64,
+    pub requested: u64,
+    pub after: u64,
+}
+
 /// Result returned by [`XhciDirectRequest`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum XhciDirectResponse {
     Snapshot(XhciControllerSnapshot),
-    Read32 {
-        offset: usize,
-        value: u32,
-    },
+    Read32 { offset: usize, value: u32 },
+    Read64 { offset: usize, value: u64 },
     Write32(XhciWriteResult),
+    Write64(XhciWrite64Result),
 }

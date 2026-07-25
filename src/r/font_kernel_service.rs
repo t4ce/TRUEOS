@@ -127,6 +127,15 @@ impl PendingRetainScene {
         self.ticket
     }
 
+    /// Take a completed retained scene without blocking the caller.
+    ///
+    /// VM-facing UI4 producers use this to turn the Embassy completion into a
+    /// cooperative submit/poll boundary: the guest yields while the worker
+    /// owns outline preparation and GPU coverage creation.
+    pub(crate) fn try_take(&mut self) -> Option<Result<GpuFontRetainedScene, FontKernelError>> {
+        self.reply.try_take()
+    }
+
     pub(crate) async fn wait(self) -> Result<GpuFontRetainedScene, FontKernelError> {
         self.reply.wait().await
     }

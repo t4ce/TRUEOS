@@ -9,8 +9,8 @@ mod descriptor;
 mod dev_gears;
 #[path = "../../tools/usb3-extracted/hid/mod.rs"]
 pub mod hid;
+pub(crate) mod lab;
 mod lib;
-mod lab;
 mod skhynix;
 
 pub use self::hid::midi;
@@ -39,6 +39,9 @@ pub async fn usb_controller_service_task() {
         unsafe { embassy_executor::Spawner::for_current_executor().await };
     spawner.spawn(usb_event_pump_task(event_handler).expect("crabusb event pump token"));
     crate::log!("crabusb: event pump started\n");
+    if let Err(reason) = lab::refresh_snapshot(&mut host).await {
+        crate::log!("crabusb: initial xhci wisdom snapshot failed reason={}\n", reason);
+    }
     spawner
         .spawn(dev_gears::usb_device_pool_worker_task().expect("crabusb device pool worker token"));
     crate::log!("crabusb: device pool worker started\n");
@@ -50,8 +53,21 @@ pub async fn usb_controller_service_task() {
 
     let mut observed_port_change_seq =
         USB_PORT_CHANGE_SEQ.load(core::sync::atomic::Ordering::Acquire);
+    let mut snapshot_ticks = 0u8;
     loop {
+        while lab::service_one(&mut host).await {}
         embassy_time::Timer::after(embassy_time::Duration::from_millis(25)).await;
+        snapshot_ticks = snapshot_ticks.saturating_add(1);
+        if snapshot_ticks >= 10 {
+            snapshot_ticks = 0;
+            if let Err(reason) = lab::refresh_snapshot(&mut host).await {
+                crate::log_trace!(
+                    target: "usb";
+                    "crabusb: periodic xhci wisdom snapshot failed reason={}\n",
+                    reason
+                );
+            }
+        }
         let next_port_change_seq = USB_PORT_CHANGE_SEQ.load(core::sync::atomic::Ordering::Acquire);
         if next_port_change_seq == observed_port_change_seq {
             continue;

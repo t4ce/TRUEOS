@@ -21,9 +21,9 @@ use crate::backend::{
     kmod::{hub::HubOp, kcore::CoreOp, xhci::Xhci},
     ty::{DeviceOp, EventHandlerOp},
 };
+use crate::diag::{XhciDirectRequest, XhciDirectResponse};
 use crate::osal::Kernel;
 use crate::{DeviceAddressInfo, KernelOp, Mmio};
-use crate::diag::{XhciDirectRequest, XhciDirectResponse};
 use reg::GUSB2PHYCFG;
 use {
     event::EventBuffer,

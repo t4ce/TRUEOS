@@ -12,20 +12,25 @@ use spin::Mutex;
 use crate::intel::gpgpu::{
     ALPHA_BLEND_WORKLIST_FLAG_COPY, ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER,
     ALPHA_BLEND_WORKLIST_FLAG_TINT_ALPHA, ALPHA_BLEND_WORKLIST_FLAG_TINT_RGB,
-    GpgpuAlphaBlendWorklistDesc, GpgpuOwnedParticleCraftState, GpgpuRgb565Surface,
-    GpgpuRgba8ReleaseFence, GpgpuRgba8Surface, GpgpuSpriteQuadWorklistDesc,
-    GpgpuSpriteQuadWorklistRun, ParticleCraftParamsV1, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER,
-    SkyboxSampleRgb565Params, Ui4CompositorCompletion, Ui4CompositorSubmission,
-    Ui4CompositorSubmitError, Ui4SpriteSceneCompletion, alpha_blend_worklist_max_descs,
-    particle_craft_rgba8_frame, poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
+    GpgpuAlphaBlendWorklistDesc, GpgpuGlyphMaskLayer, GpgpuOwnedParticleCraftState, GpgpuPoint,
+    GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence, GpgpuRgba8Surface,
+    GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun, ParticleCraftParamsV1,
+    SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, SkyboxSampleRgb565Params, Ui4CompositorCompletion,
+    Ui4CompositorSubmission, Ui4CompositorSubmitError, Ui4SpriteSceneCompletion,
+    alpha_blend_worklist_max_descs, glyph_mask_layers_rgba8_2d_mode, particle_craft_rgba8_frame,
+    poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
     queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
-    skybox_sample_rgb565_to_rgba8, sprite_quad_worklist_max_descs,
+    release_rgba8_surface_for_scanout, skybox_sample_rgb565_to_rgba8,
+    sprite_quad_worklist_max_descs,
 };
 use crate::intel::gpu_font::{
-    GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontRetainedSceneError, GpuFontRetainedStyle,
-    GpuFontRgba, GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS, ensure_font_face_available,
-    recycle_font_job_readback, render_font_job_readback_once, render_font_scene_readback_once,
-    retain_gpu_font_scene_at_raster,
+    GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontRetainedScene, GpuFontTextRequest,
+    MAX_DYNAMIC_TEXT_CHARS, ensure_font_face_available, recycle_font_job_readback,
+    render_font_job_readback_once,
+};
+use crate::r::font_kernel_service::{
+    FontKernelError, PendingRetainScene, RetainSceneRequest, RetainedFontPositioning,
+    RetainedFontRun, submit_retain_scene,
 };
 
 use super::{
@@ -49,6 +54,7 @@ const MAX_TEXT_ROW_BYTES: usize = 1_024;
 const MAX_NATIVE_FONT_SIZES: usize = 32;
 const MAX_PENDING_POINTER_EVENTS: usize = 256;
 const MAX_PENDING_PAN_EVENTS: usize = 256;
+const RETAINED_TEXT_MASK_BATCH_CAPACITY: usize = 64;
 const TEXT_ROWS_WIRE_HEADER_BYTES: usize = 16;
 const TEXT_ROW_WIRE_HEADER_BYTES: usize = 12;
 const TEXT_SCENE_WIRE_HEADER_BYTES: usize = 16;
@@ -296,6 +302,64 @@ struct BlueprintSceneSurface {
     pending_pointer_events: VecDeque<TrueosUi4PointerEvent>,
     pending_pan_events: VecDeque<TrueosUi4PanEvent>,
     pending_resize_events: VecDeque<TrueosUi4ResizeEvent>,
+    retained_text_layers: Vec<BlueprintRetainedTextLayer>,
+    retained_text_cursor: usize,
+    retained_text_rendered: bool,
+}
+
+struct BlueprintRetainedTextLayer {
+    description: BlueprintRetainedTextDescription,
+    color_rgba: u32,
+    translation_px: [i32; 2],
+    state: BlueprintRetainedTextState,
+}
+
+struct BlueprintRetainedTextDescription {
+    font: GpuFontFace,
+    viewport_width: u32,
+    viewport_height: u32,
+    runs: Vec<RetainedFontRun>,
+}
+
+enum BlueprintRetainedTextState {
+    Pending(PendingRetainScene),
+    Ready(GpuFontRetainedScene),
+}
+
+impl BlueprintRetainedTextDescription {
+    /// Return the integral draw-time translation when `next` is the same
+    /// retained glyph scene moved as one unit.
+    fn translation_to(&self, next: &Self) -> Option<[i32; 2]> {
+        if self.font != next.font
+            || self.viewport_width != next.viewport_width
+            || self.viewport_height != next.viewport_height
+            || self.runs.len() != next.runs.len()
+        {
+            return None;
+        }
+        let (base, moved) = self.runs.first().zip(next.runs.first())?;
+        let delta = [
+            moved.position[0] - base.position[0],
+            moved.position[1] - base.position[1],
+        ];
+        if !delta.iter().all(|value| value.is_finite()) {
+            return None;
+        }
+        let integral = [libm::roundf(delta[0]) as i32, libm::roundf(delta[1]) as i32];
+        if (delta[0] - integral[0] as f32).abs() > 0.01
+            || (delta[1] - integral[1] as f32).abs() > 0.01
+        {
+            return None;
+        }
+        let same_scene = self.runs.iter().zip(next.runs.iter()).all(|(old, new)| {
+            old.text == new.text
+                && old.font_pixels.to_bits() == new.font_pixels.to_bits()
+                && old.slant.to_bits() == new.slant.to_bits()
+                && ((new.position[0] - old.position[0]) - delta[0]).abs() <= 0.01
+                && ((new.position[1] - old.position[1]) - delta[1]).abs() <= 0.01
+        });
+        same_scene.then_some(integral)
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -580,6 +644,9 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
                 pending_pointer_events: VecDeque::new(),
                 pending_pan_events: VecDeque::new(),
                 pending_resize_events: VecDeque::new(),
+                retained_text_layers: Vec::new(),
+                retained_text_cursor: 0,
+                retained_text_rendered: false,
             },
             BlueprintSurfaceRelease::Animated,
         );
@@ -608,6 +675,9 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         pending_pointer_events: VecDeque::new(),
         pending_pan_events: VecDeque::new(),
         pending_resize_events: VecDeque::new(),
+        retained_text_layers: Vec::new(),
+        retained_text_cursor: 0,
+        retained_text_rendered: false,
     });
     let (cadence_name, buffer_count) = match cadence {
         FrameCadence::Dirty => ("dirty", 2),
@@ -735,6 +805,8 @@ pub(crate) fn begin_blueprint_frame(
     surface.pending_gpu_release = None;
     surface.sprite_clear_rgba = (!cpu_clear).then_some(clear_rgba);
     surface.sprite_scene_upload = None;
+    surface.retained_text_cursor = 0;
+    surface.retained_text_rendered = false;
     surface.write_lease = Some(lease);
     0
 }
@@ -1192,6 +1264,9 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         surface.width = width;
         surface.height = height;
         surface.placement = placement;
+        surface.retained_text_layers.clear();
+        surface.retained_text_cursor = 0;
+        surface.retained_text_rendered = false;
         previous
     };
 
@@ -1819,10 +1894,6 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
     let Some(font) = GpuFontFace::from_id(font_id) else {
         return ERROR_FONT;
     };
-    if let Err(reason) = ensure_font_face_available(font) {
-        crate::log_warn!(target: "ui4/solara-text"; "font unavailable owner={:?} window={} font={} reason={}\n", owner, window_id, font.registry_name(), reason);
-        return ERROR_FONT;
-    }
     if rows.is_null() || row_count == 0 || row_count > MAX_TEXT_ROWS {
         return ERROR_INVALID;
     }
@@ -1840,9 +1911,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
     }
 
     let input = unsafe { core::slice::from_raw_parts(rows, row_count) };
-    let mut strings = Vec::<String>::with_capacity(row_count);
-    let mut positions = Vec::<[f32; 2]>::with_capacity(row_count);
-    let mut font_pixels = Vec::<f32>::with_capacity(row_count);
+    let mut runs = Vec::<RetainedFontRun>::with_capacity(row_count);
     for row in input {
         if row.text_ptr.is_null()
             || row.text_len == 0
@@ -1862,239 +1931,275 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
         if text.chars().count() > MAX_DYNAMIC_TEXT_CHARS {
             return ERROR_INVALID;
         }
-        strings.push(String::from(text));
-        positions.push([row.x, row.y]);
-        font_pixels.push(row.font_pixels);
-    }
-    let entries: Vec<_> = strings
-        .iter()
-        .zip(positions.iter())
-        .zip(font_pixels.iter())
-        .map(|((text, position), font_pixels)| GpuFontJobEntry {
-            text: GpuFontTextRequest::SingleLine(text.as_str()),
-            position: *position,
-            font_pixels: *font_pixels,
+        runs.push(RetainedFontRun {
+            text: String::from(text),
+            position: [row.x, row.y],
+            font_pixels: row.font_pixels,
             slant: 0.0,
-        })
-        .collect();
-    render_scene_entries_into_surface(
+        });
+    }
+    retain_scene_entries_for_surface(
         owner,
         window_id,
         font,
         viewport_width,
         viewport_height,
         rgba,
-        entries.as_slice(),
+        runs,
     )
 }
 
-fn render_scene_entries_into_surface(
+fn retain_scene_entries_for_surface(
     owner: WindowOwner,
     window_id: u32,
     font: GpuFontFace,
     viewport_width: u32,
     viewport_height: u32,
     rgba: u32,
-    entries: &[GpuFontJobEntry<'_>],
+    runs: Vec<RetainedFontRun>,
 ) -> i32 {
-    let (lease, destination) = {
-        let mut surfaces = SURFACES.lock();
-        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-            return ERROR_NOT_FOUND;
-        };
-        if surface.gpu_submission_unretired {
-            return ERROR_BUSY;
-        }
-        let Some(lease) = surface.write_lease else {
-            return ERROR_STATE;
-        };
-        let destination = match gpgpu_rgba_surface(lease) {
-            Ok(destination) => destination,
-            Err(_) => return ERROR_UI4,
-        };
-        (lease, destination)
-    };
-    match render_scene_entries_with_font_instance(
-        entries,
+    let description = BlueprintRetainedTextDescription {
         font,
         viewport_width,
         viewport_height,
-        rgba,
-        destination,
-    ) {
-        Ok(release) => {
-            let mut surfaces = SURFACES.lock();
-            let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-                return ERROR_NOT_FOUND;
-            };
-            if surface.write_lease != Some(lease) {
-                return ERROR_STATE;
+        runs,
+    };
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    if surface.write_lease.is_none() {
+        return ERROR_STATE;
+    }
+    if surface.gpu_submission_unretired {
+        return ERROR_BUSY;
+    }
+
+    let layer_index = surface.retained_text_cursor;
+    let translation = surface
+        .retained_text_layers
+        .get(layer_index)
+        .and_then(|layer| layer.description.translation_to(&description));
+
+    if translation.is_none() {
+        let request = RetainSceneRequest {
+            runs: description.runs.clone(),
+            font,
+            viewport_width,
+            viewport_height,
+            raster_width: viewport_width,
+            raster_height: viewport_height,
+            positioning: RetainedFontPositioning::SceneOrigin,
+        };
+        let pending = match submit_retain_scene(request) {
+            Ok(pending) => pending,
+            Err(FontKernelError::QueueFull) => return ERROR_BUSY,
+            Err(error) => {
+                log_font_kernel_error(owner, window_id, font, description.runs.len(), error);
+                return ERROR_FONT;
             }
-            surface.pending_gpu_release = Some(release);
-            crate::log_info!(
-                target: "ui4/solara-text";
-                "scene rendered owner={:?} window={} font={} entries={} target={}x{} path=skrifa-r8-to-c++-igc-instance cpu_readback=0 cpu_frame_copy=0\n",
-                owner,
-                window_id,
-                font.registry_name(),
-                entries.len(),
-                viewport_width,
-                viewport_height,
-            );
-            return 0;
+        };
+        let replacement = BlueprintRetainedTextLayer {
+            description,
+            color_rgba: rgba,
+            translation_px: [0, 0],
+            state: BlueprintRetainedTextState::Pending(pending),
+        };
+        if layer_index < surface.retained_text_layers.len() {
+            surface.retained_text_layers[layer_index] = replacement;
+        } else {
+            surface.retained_text_layers.push(replacement);
         }
-        Err(FontInstanceSceneError::SubmittedIncomplete(reason)) => {
-            let mut surfaces = SURFACES.lock();
-            if let Some(surface) = surface_mut(&mut surfaces, owner, window_id)
-                && surface.write_lease == Some(lease)
-            {
-                surface.gpu_submission_unretired = true;
+    } else if let Some(layer) = surface.retained_text_layers.get_mut(layer_index) {
+        layer.color_rgba = rgba;
+        layer.translation_px = translation.unwrap_or([0, 0]);
+    }
+
+    let layer = &mut surface.retained_text_layers[layer_index];
+    let completion = match &mut layer.state {
+        BlueprintRetainedTextState::Pending(pending) => pending.try_take(),
+        BlueprintRetainedTextState::Ready(_) => None,
+    };
+    if let Some(completion) = completion {
+        match completion {
+            Ok(scene) => {
+                let ticket = match &layer.state {
+                    BlueprintRetainedTextState::Pending(pending) => pending.ticket().raw(),
+                    BlueprintRetainedTextState::Ready(_) => 0,
+                };
+                layer.state = BlueprintRetainedTextState::Ready(scene);
+                crate::log_info!(
+                    target: "ui4/solara-text";
+                    "FontKernel retained owner={:?} window={} layer={} ticket={} font={} runs={} target={}x{} storage=gpu-vm-r8\n",
+                    owner,
+                    window_id,
+                    layer_index,
+                    ticket,
+                    font.registry_name(),
+                    layer.description.runs.len(),
+                    viewport_width,
+                    viewport_height,
+                );
             }
+            Err(error) => {
+                log_font_kernel_error(owner, window_id, font, layer.description.runs.len(), error);
+                surface.retained_text_layers.remove(layer_index);
+                return ERROR_FONT;
+            }
+        }
+    }
+    if matches!(&layer.state, BlueprintRetainedTextState::Pending(_)) {
+        return ERROR_BUSY;
+    }
+    surface.retained_text_cursor = surface.retained_text_cursor.saturating_add(1);
+    0
+}
+
+fn log_font_kernel_error(
+    owner: WindowOwner,
+    window_id: u32,
+    font: GpuFontFace,
+    runs: usize,
+    error: FontKernelError,
+) {
+    let (class, reason) = match error {
+        FontKernelError::QueueFull => ("queue-full", "font-kernel-queue"),
+        FontKernelError::InvalidRequest(reason) => ("invalid", reason),
+        FontKernelError::Unavailable(reason) => ("unavailable", reason),
+        FontKernelError::SubmittedIncomplete(reason) => ("submitted-incomplete", reason),
+    };
+    crate::log_warn!(
+        target: "ui4/solara-text";
+        "FontKernel retain failed owner={:?} window={} font={} runs={} class={} reason={}\n",
+        owner,
+        window_id,
+        font.registry_name(),
+        runs,
+        class,
+        reason,
+    );
+}
+
+fn render_retained_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    if surface.retained_text_rendered || surface.retained_text_cursor == 0 {
+        return 0;
+    }
+    if surface.gpu_submission_unretired {
+        return ERROR_BUSY;
+    }
+    let Some(lease) = surface.write_lease else {
+        return ERROR_STATE;
+    };
+    let destination = match gpgpu_rgba_surface(lease) {
+        Ok(destination) => destination,
+        Err(_) => return ERROR_UI4,
+    };
+    let mut masks = Vec::with_capacity(surface.retained_text_cursor);
+    for layer in surface
+        .retained_text_layers
+        .iter()
+        .take(surface.retained_text_cursor)
+    {
+        let BlueprintRetainedTextState::Ready(scene) = &layer.state else {
+            if mark_frame_buffer_cpu_authored(lease).is_err() {
+                return ERROR_UI4;
+            }
+            return ERROR_BUSY;
+        };
+        let Some(mask) = scene.mask_surface() else {
+            if mark_frame_buffer_cpu_authored(lease).is_err() {
+                return ERROR_UI4;
+            }
+            return ERROR_FONT;
+        };
+        let Some(origin) = scene.origin_px() else {
+            if mark_frame_buffer_cpu_authored(lease).is_err() {
+                return ERROR_UI4;
+            }
+            return ERROR_FONT;
+        };
+        masks.push(GpgpuGlyphMaskLayer {
+            mask,
+            mask_rect: GpgpuRect::new(0, 0, mask.width, mask.height),
+            dst_xy: GpgpuPoint::new(
+                origin[0].saturating_add(layer.translation_px[0]),
+                origin[1].saturating_add(layer.translation_px[1]),
+            ),
+            color_rgba: layer.color_rgba,
+        });
+    }
+
+    let mut submitted = false;
+    let mut submits = 0usize;
+    let mut active_walkers = 0usize;
+    for chunk in masks.chunks(RETAINED_TEXT_MASK_BATCH_CAPACITY) {
+        let rendered = glyph_mask_layers_rgba8_2d_mode(chunk, destination, false);
+        submitted |= rendered.submitted;
+        submits = submits.saturating_add(rendered.submits);
+        active_walkers = active_walkers.saturating_add(rendered.active_walkers);
+        if !rendered.ok {
+            if submitted {
+                surface.gpu_submission_unretired = true;
+                crate::log_error!(
+                    target: "ui4/solara-text";
+                    "FontKernel retained batch quarantined owner={:?} window={} frame={} buffer={} layers={} action=retain-frame+resident-masks\n",
+                    owner,
+                    window_id,
+                    lease.frame.raw(),
+                    lease.buffer_index,
+                    masks.len(),
+                );
+                return ERROR_BUSY;
+            }
+            if mark_frame_buffer_cpu_authored(lease).is_err() {
+                return ERROR_UI4;
+            }
+            return ERROR_FONT;
+        }
+    }
+
+    let finalizer = release_rgba8_surface_for_scanout(destination);
+    if !finalizer.ok {
+        if submitted || finalizer.submitted {
+            surface.gpu_submission_unretired = true;
             crate::log_error!(
                 target: "ui4/solara-text";
-                "scene font-instance quarantined owner={:?} window={} frame={} buffer={} reason={} action=no-cpu-fallback+retain-frame\n",
+                "FontKernel retained release quarantined owner={:?} window={} frame={} buffer={} layers={} action=retain-frame+resident-masks\n",
                 owner,
                 window_id,
                 lease.frame.raw(),
                 lease.buffer_index,
-                reason,
+                masks.len(),
             );
             return ERROR_BUSY;
         }
-        Err(FontInstanceSceneError::Unavailable(reason)) => {
-            // `gpgpu_rgba_surface` marks the buffer GPU-authored before the
-            // dispatch is attempted. Reclassify it only because this branch
-            // proves that no font-instance command was admitted.
-            if mark_frame_buffer_cpu_authored(lease).is_err() {
-                return ERROR_UI4;
-            }
-            let mut surfaces = SURFACES.lock();
-            let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-                return ERROR_NOT_FOUND;
-            };
-            if surface.write_lease != Some(lease) {
-                return ERROR_STATE;
-            }
-            // A prior color group may already have a retired compute release.
-            // CPU fallback becomes the final writer for this frame.
-            surface.pending_gpu_release = None;
-            crate::log_warn!(
-                target: "ui4/solara-text";
-                "scene font-instance unavailable owner={:?} window={} font={} entries={} reason={} action=resident-triangle-readback-fallback\n",
-                owner,
-                window_id,
-                font.registry_name(),
-                entries.len(),
-                reason,
-            );
+        if mark_frame_buffer_cpu_authored(lease).is_err() {
+            return ERROR_UI4;
         }
+        return ERROR_FONT;
     }
-
-    let readback = match render_font_scene_readback_once(
-        GpuFontJob {
-            entries,
-            font,
-            native_scale: 1,
-        },
-        viewport_width,
-        viewport_height,
-    ) {
-        Ok(readback) => readback,
-        Err("font-mesh-staging-capacity") if entries.len() > 1 => {
-            let middle = entries.len() / 2;
-            crate::log_info!(target: "ui4/solara-text"; "scene split owner={:?} window={} entries={} left={} right={} reason=bounded-transient-staging\n", owner, window_id, entries.len(), middle, entries.len() - middle);
-            let left = render_scene_entries_into_surface(
-                owner,
-                window_id,
-                font,
-                viewport_width,
-                viewport_height,
-                rgba,
-                &entries[..middle],
-            );
-            if left != 0 {
-                return left;
-            }
-            return render_scene_entries_into_surface(
-                owner,
-                window_id,
-                font,
-                viewport_width,
-                viewport_height,
-                rgba,
-                &entries[middle..],
-            );
-        }
-        Err(reason) => {
-            crate::log_warn!(target: "ui4/solara-text"; "scene render rejected owner={:?} window={} entries={} reason={}\n", owner, window_id, entries.len(), reason);
-            return ERROR_FONT;
-        }
+    let Some(release) = finalizer.release else {
+        surface.gpu_submission_unretired = true;
+        return ERROR_BUSY;
     };
-
-    let result = {
-        let mut surfaces = SURFACES.lock();
-        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-            recycle_font_job_readback(readback);
-            return ERROR_NOT_FOUND;
-        };
-        let Some(lease) = surface.write_lease else {
-            recycle_font_job_readback(readback);
-            return ERROR_STATE;
-        };
-        match writable_rgba_view(lease) {
-            Ok(view) => {
-                write_font_opaque_mask(view, &readback, 0, 0, rgba);
-                crate::intel::dma_flush(view.virt, view.byte_len);
-                0
-            }
-            Err(_) => ERROR_UI4,
-        }
-    };
-    recycle_font_job_readback(readback);
-    result
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum FontInstanceSceneError {
-    Unavailable(&'static str),
-    SubmittedIncomplete(&'static str),
-}
-
-fn render_scene_entries_with_font_instance(
-    entries: &[GpuFontJobEntry<'_>],
-    font: GpuFontFace,
-    viewport_width: u32,
-    viewport_height: u32,
-    rgba: u32,
-    destination: GpgpuRgba8Surface,
-) -> Result<GpgpuRgba8ReleaseFence, FontInstanceSceneError> {
-    let scene = retain_gpu_font_scene_at_raster(
-        entries,
-        font,
-        viewport_width,
-        viewport_height,
-        viewport_width,
-        viewport_height,
-    )
-    // The coverage builder owns and quarantines its mask/input pages if its
-    // submission does not retire. It has not referenced `destination` yet, so
-    // Blueprint may safely restore CPU authorship and use the triangle path.
-    .map_err(FontInstanceSceneError::Unavailable)?;
-    let [red, green, blue, alpha] = rgba.to_le_bytes();
-    let style = GpuFontRetainedStyle::identity(GpuFontRgba::new(red, green, blue, alpha));
-    let rendered = scene
-        .restamp_instance(destination, style, true, 0.0)
-        .map_err(|error| match error {
-            GpuFontRetainedSceneError::Unavailable(reason) => {
-                FontInstanceSceneError::Unavailable(reason)
-            }
-            GpuFontRetainedSceneError::SubmittedIncomplete(reason) => {
-                FontInstanceSceneError::SubmittedIncomplete(reason)
-            }
-        })?;
-    rendered
-        .release
-        .ok_or(FontInstanceSceneError::Unavailable("font-retained-release-missing"))
+    surface.pending_gpu_release = Some(release);
+    surface.retained_text_rendered = true;
+    crate::log_info!(
+        target: "ui4/solara-text";
+        "FontKernel retained scene stamped owner={:?} window={} layers={} batches={} walkers={} target={}x{} path=resident-r8-batch cpu_readback=0 cpu_frame_copy=0\n",
+        owner,
+        window_id,
+        masks.len(),
+        submits,
+        active_walkers,
+        surface.width,
+        surface.height,
+    );
+    0
 }
 
 /// Publish the completed dirty buffer and its window damage.
@@ -2121,6 +2226,10 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     };
     if damage_width == 0 || damage_height == 0 {
         return ERROR_INVALID;
+    }
+    let retained_text = render_retained_text_for_surface(owner, window_id);
+    if retained_text != 0 {
+        return retained_text;
     }
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
@@ -2182,6 +2291,11 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
         }
         crate::log_info!(target: "ui4/blueprint-frame"; "immutable refresh committed owner={:?} window={} old_frame={} frame={} extent={}x{} action=broker-swap-after-complete-publish old_release=surflive\n", owner, window_id, previous.raw(), replacement.raw(), surface.width, surface.height);
     }
+    surface
+        .retained_text_layers
+        .truncate(surface.retained_text_cursor);
+    surface.retained_text_cursor = 0;
+    surface.retained_text_rendered = false;
     0
 }
 
@@ -2436,12 +2550,21 @@ unsafe fn guest_text_scene(
         payload.extend_from_slice(&(row.text_len as u32).to_le_bytes());
         payload.extend_from_slice(text);
     }
-    guest_status(
-        trueos_vm::vmcall::OP_BP_UI4_SOLARA_TEXT_SCENE,
-        window_id as u64,
-        font_id as u64,
-        payload.as_slice(),
-    )
+    loop {
+        let result = guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SOLARA_TEXT_SCENE,
+            window_id as u64,
+            font_id as u64,
+            payload.as_slice(),
+        );
+        if result != ERROR_BUSY {
+            return result;
+        }
+        // The host has transferred owned strings to the Embassy FontKernel
+        // service. Yield the AP instead of spinning until its retained R8
+        // scene is signaled back to the UI4 surface.
+        trueos_vm::vmcall::yield_now();
+    }
 }
 
 fn guest_status(op: u32, arg0: u64, arg1: u64, payload: &[u8]) -> i32 {
@@ -3793,58 +3916,50 @@ fn blend_font_coverage(
     }
 }
 
-/// Write a kernel font-scene mask into a UI4 frame as opaque pixels.
-///
-/// The transient font target still supplies the glyph mask, but none of its
-/// coverage alpha crosses into the UI4 frame. This deliberately trades edge
-/// antialiasing for an unambiguous opaque-pixel presentation path. Solara and
-/// small kernel-owned proof surfaces share this helper; the legacy text-row
-/// ABI keeps using `blend_font_coverage` and retains alpha-capable behavior.
-pub(crate) fn write_font_opaque_mask(
-    destination: super::FrameRgbaView,
-    source: &crate::intel::render::FontRenderTargetReadback,
-    dst_x: i32,
-    dst_y: i32,
-    rgba: u32,
-) {
-    let [red, green, blue, _] = rgba.to_le_bytes();
-    let destination_len = (destination.pitch as usize)
-        .saturating_mul(destination.height as usize)
-        .min(destination.byte_len);
-    // SAFETY: the caller holds the unique UI4 write lease for this view.
-    let destination_pixels =
-        unsafe { core::slice::from_raw_parts_mut(destination.virt, destination_len) };
-    let source_pitch = source.width as usize * 4;
-
-    for source_y in 0..source.height as usize {
-        let target_y = dst_y.saturating_add(source_y as i32);
-        if target_y < 0 || target_y >= destination.height as i32 {
-            continue;
-        }
-        for source_x in 0..source.width as usize {
-            let target_x = dst_x.saturating_add(source_x as i32);
-            if target_x < 0 || target_x >= destination.width as i32 {
-                continue;
-            }
-            let source_offset = source_y * source_pitch + source_x * 4;
-            if source.pixels[source_offset + 3] == 0 {
-                continue;
-            }
-            let target_offset =
-                target_y as usize * destination.pitch as usize + target_x as usize * 4;
-            if target_offset + 4 > destination_pixels.len() {
-                continue;
-            }
-            destination_pixels[target_offset..target_offset + 4].copy_from_slice(&[
-                red,
-                green,
-                blue,
-                u8::MAX,
-            ]);
-        }
-    }
-}
-
 const fn mul_div_255(left: u8, right: u8) -> u8 {
     ((left as u16 * right as u16 + 127) / 255) as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn retained_description(y: f32) -> BlueprintRetainedTextDescription {
+        BlueprintRetainedTextDescription {
+            font: GpuFontFace::Inconsolata,
+            viewport_width: 960,
+            viewport_height: 720,
+            runs: alloc::vec![
+                RetainedFontRun {
+                    text: String::from("first"),
+                    position: [12.0, y],
+                    font_pixels: 14.0,
+                    slant: 0.0,
+                },
+                RetainedFontRun {
+                    text: String::from("second"),
+                    position: [12.0, y + 18.0],
+                    font_pixels: 14.0,
+                    slant: 0.0,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn retained_text_reuses_integral_scene_translation() {
+        assert_eq!(
+            retained_description(40.0).translation_to(&retained_description(-24.0)),
+            Some([0, -64]),
+        );
+    }
+
+    #[test]
+    fn retained_text_rejects_content_and_subpixel_changes() {
+        let base = retained_description(40.0);
+        let mut changed = retained_description(40.0);
+        changed.runs[1].text = String::from("different");
+        assert_eq!(base.translation_to(&changed), None);
+        assert_eq!(base.translation_to(&retained_description(40.5)), None,);
+    }
 }

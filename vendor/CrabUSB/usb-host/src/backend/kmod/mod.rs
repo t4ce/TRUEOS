@@ -51,11 +51,9 @@ impl USBHost {
         kernel: &'static dyn KernelOp,
         policy: XhciRootHubInitPolicy,
     ) -> Result<USBHost> {
-        Ok(USBHost::new(
-            Xhci::new_with_root_hub_init_policy_and_mmio_len(
-                mmio, mmio_len, kernel, policy,
-            )?,
-        ))
+        Ok(USBHost::new(Xhci::new_with_root_hub_init_policy_and_mmio_len(
+            mmio, mmio_len, kernel, policy,
+        )?))
     }
 
     pub fn new_dwc(params: DwcNewParams<'_, impl CruOp>) -> Result<USBHost> {

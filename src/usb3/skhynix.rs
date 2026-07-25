@@ -77,6 +77,10 @@ struct UasTarget {
 }
 
 pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevice) {
+    // Initial configuration and SCSI discovery use the same endpoints as the
+    // registered block device. Keep quarantine from cutting across this
+    // one-time ownership handoff.
+    let _lab_io = super::lab::begin_uas_io_when_available().await;
     if let Some(config) = pooled.device.configurations().first() {
         crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=config-raw len={} bytes={:02x?}\n",
@@ -1714,6 +1718,7 @@ impl crate::disc::block::BlockDevice for SkhynixUasBlockDevice {
         blocks: usize,
     ) -> crate::disc::block::BoxFuture<'a, crate::disc::block::Result<Vec<u8>>> {
         Box::pin(async move {
+            let _lab_io = super::lab::begin_uas_io_when_available().await;
             let bytes = self.validate_span(lba, blocks)?;
             let mut out = vec![0u8; bytes];
             self.read_blocks_inner(lba, blocks, &mut out).await?;
@@ -1727,7 +1732,10 @@ impl crate::disc::block::BlockDevice for SkhynixUasBlockDevice {
         blocks: usize,
         dst: &'a mut [u8],
     ) -> crate::disc::block::BoxFuture<'a, crate::disc::block::Result<()>> {
-        Box::pin(async move { self.read_blocks_inner(lba, blocks, dst).await })
+        Box::pin(async move {
+            let _lab_io = super::lab::begin_uas_io_when_available().await;
+            self.read_blocks_inner(lba, blocks, dst).await
+        })
     }
 
     fn write_blocks<'a>(
@@ -1735,13 +1743,19 @@ impl crate::disc::block::BlockDevice for SkhynixUasBlockDevice {
         lba: u64,
         buf: &'a [u8],
     ) -> crate::disc::block::BoxFuture<'a, crate::disc::block::Result<()>> {
-        Box::pin(async move { self.write_blocks_inner(lba, buf).await })
+        Box::pin(async move {
+            let _lab_io = super::lab::begin_uas_io_when_available().await;
+            self.write_blocks_inner(lba, buf).await
+        })
     }
 
     fn flush<'a>(
         &'a mut self,
     ) -> crate::disc::block::BoxFuture<'a, crate::disc::block::Result<()>> {
-        Box::pin(async move { self.flush_inner().await })
+        Box::pin(async move {
+            let _lab_io = super::lab::begin_uas_io_when_available().await;
+            self.flush_inner().await
+        })
     }
 
     fn dma_alignment_bytes(&self) -> u32 {
