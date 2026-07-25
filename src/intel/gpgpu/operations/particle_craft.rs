@@ -12,6 +12,7 @@ const PARTICLE_CRAFT_STATE_BYTES: usize = PARTICLE_CRAFT_MAX_PARTICLES as usize 
 const PARTICLE_CRAFT_PARAMS_BYTES: usize = 4096;
 const PARTICLE_CRAFT_ALLOCATION_BYTES: usize =
     PARTICLE_CRAFT_STATE_BYTES + PARTICLE_CRAFT_PARAMS_BYTES;
+const PARTICLE_CRAFT_RENDER_CONTROL_WORDS: usize = 3;
 
 /// Stable host-side form of the public 64-byte ParticleCraft v1 control block.
 #[derive(Copy, Clone, Debug)]
@@ -210,12 +211,23 @@ impl GpgpuOwnedParticleCraftState {
         self.quarantined = true;
     }
 
-    fn write_params(&mut self, params: ParticleCraftParamsV1) {
+    fn write_params(&mut self, params: ParticleCraftParamsV1, dst: GpgpuRgba8Surface) {
         unsafe {
             core::ptr::copy_nonoverlapping(
                 &params as *const ParticleCraftParamsV1 as *const u8,
                 self.virt.add(PARTICLE_CRAFT_STATE_BYTES),
                 core::mem::size_of::<ParticleCraftParamsV1>(),
+            );
+            let render_controls = [
+                dst.width,
+                dst.height,
+                dst.pitch_bytes / core::mem::size_of::<u32>() as u32,
+            ];
+            core::ptr::copy_nonoverlapping(
+                render_controls.as_ptr().cast::<u8>(),
+                self.virt
+                    .add(PARTICLE_CRAFT_STATE_BYTES + core::mem::size_of::<ParticleCraftParamsV1>()),
+                PARTICLE_CRAFT_RENDER_CONTROL_WORDS * core::mem::size_of::<u32>(),
             );
         }
         super::dma_flush(
@@ -249,15 +261,13 @@ pub(crate) fn particle_craft_rgba8_frame(
 ) -> GpgpuRgba8KernelResult {
     if !params.is_valid()
         || !dst.is_valid()
-        || dst.width != PARTICLE_CRAFT_FRAME_WIDTH
-        || dst.height != PARTICLE_CRAFT_FRAME_HEIGHT
-        || dst.pitch_bytes != PARTICLE_CRAFT_FRAME_WIDTH * 4
+        || !dst.pitch_bytes.is_multiple_of(core::mem::size_of::<u32>() as u32)
         || dst.storage_order != GpgpuRgba8StorageOrder::Rgba
     {
         return GpgpuRgba8KernelResult::default();
     }
 
-    state.write_params(params);
+    state.write_params(params, dst);
     let start_tick = direct_rcs_now_tick();
     let outcome = submit_particle_craft_rgba8(state, dst, params.active_count);
     let ok = outcome.observed == PARTICLE_CRAFT_POST_MARKER;

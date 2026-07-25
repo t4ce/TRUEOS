@@ -401,6 +401,18 @@ pub(crate) struct PrimarySurfaceBgra8Snapshot {
     pub(crate) pixels: Vec<u8>,
 }
 
+/// Borrowed view of the immutable UI4 slot-0 base currently latched by pipe A.
+///
+/// This is intentionally the fixed D01 test-rig contract: after the one-time
+/// XRGB-to-RGBA handoff, the original primary allocation remains the opaque
+/// full-output logo/background and the broker places no windows on slot 0.
+pub(crate) struct Ui4StreamSlot0View<'a> {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch_bytes: u32,
+    pub(crate) rgba_premultiplied: &'a [u8],
+}
+
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct LiveOverlayRect {
     pub(crate) x: u32,
@@ -697,6 +709,51 @@ fn active_primary_surface() -> Option<PrimarySurface> {
         }
     }
     PRIMARY_SURFACES.iter().find_map(|owner| *owner.lock())
+}
+
+pub(crate) fn with_ui4_stream_pipe_a_slot0_surflive<R>(
+    read: impl FnOnce(Ui4StreamSlot0View<'_>) -> R,
+) -> Option<R> {
+    const STREAM_PIPE: usize = 0;
+
+    let dev = crate::intel::claimed_device()?;
+    let pipe = PIPES[STREAM_PIPE];
+    if !ui4_rgba8_plane_stack_ready(pipe) {
+        return None;
+    }
+    let owner = primary_surface_owner(pipe).lock();
+    let surface = (*owner)?;
+    let plane = pipe.plane(crate::ui4::PRIMARY_PLANE_SLOT);
+    let ctl = crate::intel::mmio_read(dev, plane.ctl());
+    let expected_live = u32::try_from(surface.gpu).ok()?;
+    let expected_stride = plane_stride_reg_value(surface.pitch_bytes)?;
+    if ctl & PLANE_CTL_ENABLE == 0
+        || ctl & PLANE_CTL_FORMAT_MASK_SKL != PLANE_CTL_FORMAT_XRGB_8888
+        || ctl & PLANE_CTL_TILED_MASK != PLANE_CTL_TILED_LINEAR
+        || ctl & PLANE_CTL_ORDER_RGBX == 0
+        || crate::intel::mmio_read(dev, plane.surf_live()) != expected_live
+        || crate::intel::mmio_read(dev, plane.stride()) != expected_stride
+        || crate::intel::mmio_read(dev, plane.base() + UNI_PLANE_POS_OFF)
+            != plane_pos_reg_value(0, 0)
+        || crate::intel::mmio_read(dev, plane.base() + UNI_PLANE_SIZE_OFF)
+            != plane_size_reg_value(surface.width, surface.height)
+        || crate::intel::mmio_read(dev, plane.base() + UNI_PLANE_OFFSET_OFF) != 0
+        || crate::intel::mmio_read(dev, plane.base() + UNI_PLANE_CUS_CTL_OFF) != 0
+    {
+        return None;
+    }
+    let visible_bytes = (surface.pitch_bytes as usize).checked_mul(surface.height as usize)?;
+    if surface.virt.is_null() || visible_bytes > surface.byte_len {
+        return None;
+    }
+    let rgba_premultiplied =
+        unsafe { core::slice::from_raw_parts(surface.virt.cast_const(), visible_bytes) };
+    Some(read(Ui4StreamSlot0View {
+        width: surface.width,
+        height: surface.height,
+        pitch_bytes: surface.pitch_bytes,
+        rgba_premultiplied,
+    }))
 }
 
 fn primary_surface_gpu_for_pipe(pipe: PipeInfo) -> Option<u64> {

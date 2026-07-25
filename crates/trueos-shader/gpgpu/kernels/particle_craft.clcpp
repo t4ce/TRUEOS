@@ -1,7 +1,9 @@
 // TRUEOS ParticleCraft: persistent stateful particles for UI4.
 //
 // The first entry advances an array of compact 32-byte particles in place.
-// The second entry gathers that state into a complete 640x400 RGBA8 frame.
+// The second entry gathers that state at a fixed 640x400 logical resolution
+// and covers the complete destination extent. This keeps fullscreen cost
+// bounded while allowing UI4 maximize/restore frame replacement.
 // Both entries are baked into one exact-target C++ for OpenCL/IGC artifact.
 
 #include "include/trueos_clcpp.hpp"
@@ -37,6 +39,11 @@ enum ParamWord : uint {
     param_gravity_y = 13u,
     param_drag = 14u,
     param_intensity = 15u,
+    // Host-owned render controls follow the stable public 64-byte parameter
+    // block in the private 4 KiB control page.
+    param_destination_width = 16u,
+    param_destination_height = 17u,
+    param_destination_pitch_pixels = 18u,
 };
 
 TRUEOS_PARTICLE_INLINE float saturate(float value)
@@ -249,6 +256,13 @@ __kernel void particle_craft_render_rgba8(
     if (x >= frame_width || y >= frame_height) {
         return;
     }
+    const uint destination_width = params[param_destination_width];
+    const uint destination_height = params[param_destination_height];
+    const uint destination_pitch_pixels = params[param_destination_pitch_pixels];
+    if (destination_width == 0u || destination_height == 0u
+        || destination_pitch_pixels < destination_width) {
+        return;
+    }
 
     const float2 point = (float2)(
         static_cast<float>(x) + 0.5f,
@@ -333,7 +347,21 @@ __kernel void particle_craft_render_rgba8(
     }
 
     color = color / ((float3)(1.0f) + color);
-    dst_rgba[y * frame_width + x] = pack_rgba8(color);
+    const uint packed = pack_rgba8(color);
+    const uint destination_left = x * destination_width / frame_width;
+    const uint destination_right = (x + 1u) * destination_width / frame_width;
+    const uint destination_top = y * destination_height / frame_height;
+    const uint destination_bottom = (y + 1u) * destination_height / frame_height;
+    for (uint destination_y = destination_top;
+         destination_y < destination_bottom;
+         ++destination_y) {
+        const uint row = destination_y * destination_pitch_pixels;
+        for (uint destination_x = destination_left;
+             destination_x < destination_right;
+             ++destination_x) {
+            dst_rgba[row + destination_x] = packed;
+        }
+    }
 }
 
 #undef TRUEOS_PARTICLE_INLINE

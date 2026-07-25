@@ -99,11 +99,12 @@ struct CapturedComposition {
     monotonic_ms: u64,
     width: u32,
     height: u32,
-    /// Straight-alpha RGBA8, ready for PNG encoding.
+    /// Straight-alpha RGBA8 for file captures; premultiplied RGBA8 for streams.
     rgba: Vec<u8>,
     scope: CaptureScope,
     path_override: Option<String>,
     release_interactive_gate: bool,
+    slot0_scanout_pixels: usize,
     spirit_overlay_pixels: usize,
 }
 
@@ -114,6 +115,7 @@ pub(super) struct StreamScanoutRgba {
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) rgba_premultiplied: Vec<u8>,
+    pub(super) slot0_scanout_pixels: usize,
     pub(super) spirit_overlay_pixels: usize,
 }
 
@@ -126,8 +128,45 @@ pub(super) fn capture_stream_scanout_rgba() -> Result<StreamScanoutRgba, Capture
         width: capture.width,
         height: capture.height,
         rgba_premultiplied: capture.rgba,
+        slot0_scanout_pixels: capture.slot0_scanout_pixels,
         spirit_overlay_pixels: capture.spirit_overlay_pixels,
     })
+}
+
+fn copy_stream_pipe_a_slot0_premultiplied(
+    destination: &mut [u8],
+    width: u32,
+    height: u32,
+) -> usize {
+    let Some(row_bytes) = (width as usize).checked_mul(4) else {
+        return 0;
+    };
+    crate::intel::with_ui4_stream_pipe_a_slot0_surflive(|slot0| {
+        if slot0.width != width
+            || slot0.height != height
+            || (slot0.pitch_bytes as usize) < row_bytes
+        {
+            return 0;
+        }
+        for row in 0..height as usize {
+            let source_offset = row.saturating_mul(slot0.pitch_bytes as usize);
+            let destination_offset = row.saturating_mul(row_bytes);
+            let Some(source_row) = slot0
+                .rgba_premultiplied
+                .get(source_offset..source_offset + row_bytes)
+            else {
+                return 0;
+            };
+            let Some(destination_row) =
+                destination.get_mut(destination_offset..destination_offset + row_bytes)
+            else {
+                return 0;
+            };
+            destination_row.copy_from_slice(source_row);
+        }
+        (width as usize).saturating_mul(height as usize)
+    })
+    .unwrap_or(0)
 }
 
 fn blend_stream_spirit_overlay_premultiplied(
@@ -373,6 +412,14 @@ fn capture_windows(
             .map(published_rgba_view)
             .collect::<Result<Vec<FrameRgbaView>, _>>()?;
         let mut rgba = alloc::vec![0u8; byte_len];
+        // D01's original pipe-A primary is the immutable opaque background.
+        // The fixed test rig has no broker windows on slot 0; a changed
+        // SURFLIVE therefore rejects this copy in the display accessor.
+        let slot0_scanout_pixels = if stream_capture {
+            copy_stream_pipe_a_slot0_premultiplied(&mut rgba, width, height)
+        } else {
+            0
+        };
         for (window, view) in ordered_windows.iter().zip(views.iter()) {
             crate::intel::dma_flush(view.virt, view.byte_len);
             let pixels =
@@ -393,10 +440,10 @@ fn capture_windows(
         if !stream_capture {
             unpremultiply_rgba(&mut rgba);
         }
-        Ok::<_, CaptureError>((rgba, spirit_overlay_pixels))
+        Ok::<_, CaptureError>((rgba, slot0_scanout_pixels, spirit_overlay_pixels))
     })();
     release_leases(&leases);
-    let (rgba, spirit_overlay_pixels) = result?;
+    let (rgba, slot0_scanout_pixels, spirit_overlay_pixels) = result?;
 
     Ok(CapturedComposition {
         sequence: CAPTURE_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1,
@@ -408,6 +455,7 @@ fn capture_windows(
         scope: CaptureScope::Composition,
         path_override: None,
         release_interactive_gate: true,
+        slot0_scanout_pixels,
         spirit_overlay_pixels,
     })
 }
@@ -458,6 +506,7 @@ fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, Capture
         },
         path_override: None,
         release_interactive_gate: true,
+        slot0_scanout_pixels: 0,
         spirit_overlay_pixels: 0,
     })
 }

@@ -160,7 +160,7 @@ fn start(
                     artifact_name(preset),
                     artifact_hash(preset),
                     kernel_name(preset),
-                    if particle { "fixed-640x400" } else { "dynamic-frame" },
+                    "dynamic-frame",
                     if audio {
                         " pcm=post-mix/pre-hda-s16le-stereo-48k fft=2048-mid-side bands=64 walker=horizontal-pairs/50pct"
                     } else if particle {
@@ -225,7 +225,7 @@ fn print_list(io: &'static dyn ShellBackend2) {
     );
     print_shell_line(
         io,
-        "cpp demo: mode=particle preset=arc-forge explores=persistent-state/two-pass-dependency/soft-cores+velocity-tails+pointer-attraction particles=128 extent=640x400",
+        "cpp demo: mode=particle preset=arc-forge explores=persistent-state/two-pass-dependency/soft-cores+velocity-tails+pointer-attraction particles=128 native_extent=640x400 resizable=1",
     );
     print_shell_line(
         io,
@@ -281,7 +281,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
             upload.is_some_and(|artifact| artifact.verified) as u8,
             upload.map(|artifact| artifact.gpu).unwrap_or(0),
             artifact_hash(status.config.preset),
-            if particle { "fixed-640x400" } else { "dynamic-frame" },
+            "dynamic-frame",
             audio_status.enabled as u8,
             audio_status.sequence,
             audio_status.captured_frames,

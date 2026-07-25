@@ -718,9 +718,7 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         // Every C++ demo consumes UI4's maximize/restore extent notification
         // and replaces its double-buffer frame. Other probes retain their
         // proven fixed-size placement behavior.
-        interaction: if desired.config.preset.is_cpp()
-            && desired.config.preset != GpgpuPreviewPreset::CppParticle
-        {
+        interaction: if desired.config.preset.is_cpp() {
             super::WindowInteraction::APPLICATION
         } else {
             super::WindowInteraction::MOVABLE_FRAME
@@ -1499,8 +1497,8 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppSdf
         | GpgpuPreviewPreset::CppVoronoi
         | GpgpuPreviewPreset::CppRetroSun
-        | GpgpuPreviewPreset::CppAudio => "ui4-cpp-resizable-slot1",
-        GpgpuPreviewPreset::CppParticle => "ui4-cpp-fixed-640x400-slot1",
+        | GpgpuPreviewPreset::CppAudio
+        | GpgpuPreviewPreset::CppParticle => "ui4-cpp-resizable-slot1",
         GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => "ui4-overlay",
     }
 }
@@ -1571,9 +1569,6 @@ fn drain_preview_input(active: &mut [ActivePreview], retired_frames: &mut Vec<Fr
             continue;
         };
         if event.width == 0 || event.height == 0 {
-            continue;
-        }
-        if preview.config.preset == GpgpuPreviewPreset::CppParticle {
             continue;
         }
         if let Err(reason) = resize_preview(preview, event.width, event.height, retired_frames) {
@@ -1988,7 +1983,7 @@ mod tests {
     }
 
     #[test]
-    fn particle_craft_keeps_its_fixed_artifact_extent() {
+    fn particle_craft_starts_native_and_uses_the_resizable_cpp_plane() {
         let mode = GpgpuPreviewPreset::CppParticle;
         assert_eq!(
             preview_extent(mode),

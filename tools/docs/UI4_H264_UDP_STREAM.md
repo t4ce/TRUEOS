@@ -11,8 +11,13 @@ subscriber-driven kernel service:
 2. A receiver sends `TME1GET1` to UDP port 9650.
 3. On subscription, two distinct performance-preferred background workers
    enter a bounded producer/consumer pipeline. The producer captures the
-   entire 2560x1440 logical UI4 D01 composition in memory. It then borrows
-   pipe A's currently CUR_SURFLIVE Spirit buffer and actual CUR_POS,
+   entire 2560x1440 UI4 D01 composition in memory. It first borrows the
+   original immutable pipe-A plane-0 surface only when PLANE_SURFLIVE still
+   matches the expected full-output RGBA primary, and copies it as the opaque
+   background. The fixed test-rig contract is that the UI4 broker places no
+   windows on slot 0. The producer then blends the logical higher-plane windows
+   and slot-4 service rectangles, borrows pipe A's currently CUR_SURFLIVE
+   Spirit buffer and actual CUR_POS,
    blends that 256x256 premultiplied-BGRA sprite without waiting for a newer
    Spirit frame, and applies a fixed 4:3 center-sampled nearest downscale to a
    centered 1920x1080 image. Four black rows above and below fill the
@@ -27,19 +32,21 @@ subscriber-driven kernel service:
    the producer cannot advance more than one frame ahead of the consumer.
 
    This fixed test-rig mapping preserves the native 16:9 composition and avoids
-   dynamic crop selection. The logical capture follows UI4 plane/z order but is
-   not a bit-exact latch of the physical scanout. Spirit's dedicated cursor
-   plane is the explicit exception added above; generic hardware mouse cursors
-   remain absent.
+   dynamic crop selection. The capture follows UI4 plane/z order but is not a
+   bit-exact latch of the physical scanout. The immutable slot-0 base and
+   Spirit's dedicated cursor plane are explicit physical-plane inputs; generic
+   hardware mouse cursors remain absent.
 4. Each access unit is immediately fragmented into CRC-protected TME1
    datagrams and unicast to the subscriber. The media socket has a 64 KiB
    transmit ring, and every datagram carries an internal adapter receipt token.
-   The sequence advances only after the matching adapter acceptance; a
-   confirmed full ring retries that exact packet after one millisecond, while
-   a missing or fatal receipt aborts without an uncertain retransmission.
-   Accepted fragments have no artificial inter-packet delay. The live
-   high-water mark is one access unit; no framebuffer or encoded payload is
-   written to TRUEOSFS.
+   Up to 32 fragments (38,400 bytes) are submitted as one bounded window before
+   their receipts are drained, allowing one network-service turn to admit the
+   complete ordinary access unit. The sequence advances only after each
+   matching adapter acceptance; a confirmed full ring retries that exact
+   packet after one millisecond, while a missing or fatal receipt aborts
+   without an uncertain retransmission. Accepted fragments have no artificial
+   inter-packet delay. The live high-water mark is one access unit; no
+   framebuffer or encoded payload is written to TRUEOSFS.
 5. After 200 frames (ten seconds), the socket closes and the resident service
    waits for the next subscriber, which receives a fresh session.
 

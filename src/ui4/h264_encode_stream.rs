@@ -66,6 +66,8 @@ struct LiveEncodeStats {
     encode_max_us: u64,
     coded_bytes: usize,
     coded_max_bytes: usize,
+    slot0_scanout_frames: usize,
+    slot0_scanout_pixels: usize,
     spirit_overlay_frames: usize,
     spirit_overlay_pixels: usize,
 }
@@ -87,6 +89,7 @@ struct PrepareSlot {
     source_height: u32,
     source_fnv1a32: u32,
     capture_convert_us: u64,
+    slot0_scanout_pixels: usize,
     spirit_overlay_pixels: usize,
     valid: bool,
     nv12: Vec<u8>,
@@ -103,6 +106,7 @@ impl PrepareSlot {
             source_height: 0,
             source_fnv1a32: 0,
             capture_convert_us: 0,
+            slot0_scanout_pixels: 0,
             spirit_overlay_pixels: 0,
             valid: false,
             nv12: Vec::new(),
@@ -114,6 +118,7 @@ impl PrepareSlot {
         self.source_height = 0;
         self.source_fnv1a32 = 0;
         self.capture_convert_us = 0;
+        self.slot0_scanout_pixels = 0;
         self.spirit_overlay_pixels = 0;
         self.valid = false;
     }
@@ -158,6 +163,7 @@ struct PreparedScanout {
     source_height: u32,
     source_fnv1a32: u32,
     capture_convert_us: u64,
+    slot0_scanout_pixels: usize,
     spirit_overlay_pixels: usize,
     valid: bool,
     nv12: Vec<u8>,
@@ -211,7 +217,7 @@ pub(crate) async fn ui4_h264_encode_prepare_task(assigned_slot: u32) {
         .unwrap_or("unknown");
     PREPARE_WORKER_SLOT.store(worker_slot, Ordering::Release);
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: preparation service online carrier=background-worker assigned_slot={} worker_slot={} worker_kind={} pipeline=rgba-to-nv12 producer buffering=double slots={} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied synchronization=best-effort-no-wait\n",
+        "intel/media-encode: preparation service online carrier=background-worker assigned_slot={} worker_slot={} worker_kind={} pipeline=rgba-to-nv12 producer buffering=double slots={} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied synchronization=best-effort-no-wait\n",
         assigned_slot,
         worker_slot,
         worker_kind,
@@ -275,11 +281,13 @@ fn prepare_scanout(mut job: PrepareJob) {
     let mut source_width = 0;
     let mut source_height = 0;
     let mut source_fnv1a32 = 0;
+    let mut slot0_scanout_pixels = 0;
     let mut spirit_overlay_pixels = 0;
     let valid = match super::screenshot::capture_stream_scanout_rgba() {
         Ok(capture) => {
             source_width = capture.width;
             source_height = capture.height;
+            slot0_scanout_pixels = capture.slot0_scanout_pixels;
             spirit_overlay_pixels = capture.spirit_overlay_pixels;
             if rgba_to_nv12_full_frame_nearest_downscale(
                 capture.width,
@@ -328,6 +336,7 @@ fn prepare_scanout(mut job: PrepareJob) {
         slot.source_height = source_height;
         slot.source_fnv1a32 = source_fnv1a32;
         slot.capture_convert_us = capture_convert_us;
+        slot.slot0_scanout_pixels = slot0_scanout_pixels;
         slot.spirit_overlay_pixels = spirit_overlay_pixels;
         slot.valid = valid;
         slot.nv12 = job.nv12;
@@ -395,6 +404,7 @@ fn take_prepared_scanout(session_id: u32, sequence: u32) -> Option<PreparedScano
         source_height: slot.source_height,
         source_fnv1a32: slot.source_fnv1a32,
         capture_convert_us: slot.capture_convert_us,
+        slot0_scanout_pixels: slot.slot0_scanout_pixels,
         spirit_overlay_pixels: slot.spirit_overlay_pixels,
         valid: slot.valid,
         nv12: core::mem::take(&mut slot.nv12),
@@ -773,6 +783,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             && interval_millifps >= target_millifps.saturating_sub(cadence_tolerance)
             && interval_millifps <= target_millifps.saturating_add(cadence_tolerance)
             && stats.frames == expected_units
+            && stats.slot0_scanout_frames == expected_units
             && stats.spirit_overlay_frames == expected_units;
         STATE.store(
             if accepted {
@@ -783,7 +794,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             Ordering::Release,
         );
         crate::log_info!(target: "intel/media-encode";
-            "intel/media-encode: udp-live complete accepted={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=best-effort-no-wait format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx hardware_encode=1 all_idr=1 protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_fnv1a32=0x{:08X} source_last_fnv1a32=0x{:08X} source_changes={} capture_convert_avg_us={} capture_convert_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=producer-consumer buffering=double prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
+            "intel/media-encode: udp-live complete accepted={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none slot0_scanout_frames={} slot0_scanout_pixels={} spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=best-effort-no-wait format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx hardware_encode=1 all_idr=1 protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_fnv1a32=0x{:08X} source_last_fnv1a32=0x{:08X} source_changes={} capture_convert_avg_us={} capture_convert_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=producer-consumer buffering=double prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
             accepted as u8,
             stats.source_width,
             stats.source_height,
@@ -791,6 +802,8 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             ENCODE_HEIGHT,
             ENCODE_WIDTH,
             ACTIVE_HEIGHT,
+            stats.slot0_scanout_frames,
+            stats.slot0_scanout_pixels,
             stats.spirit_overlay_frames,
             stats.spirit_overlay_pixels,
             crate::allcaps::media_encode::REALTIME_HZ,
@@ -901,6 +914,12 @@ fn encode_prepared_scanout(
     stats.capture_convert_max_us = stats
         .capture_convert_max_us
         .max(prepared.capture_convert_us);
+    if prepared.slot0_scanout_pixels != 0 {
+        stats.slot0_scanout_frames = stats.slot0_scanout_frames.saturating_add(1);
+        stats.slot0_scanout_pixels = stats
+            .slot0_scanout_pixels
+            .saturating_add(prepared.slot0_scanout_pixels);
+    }
     if prepared.spirit_overlay_pixels != 0 {
         stats.spirit_overlay_frames = stats.spirit_overlay_frames.saturating_add(1);
         stats.spirit_overlay_pixels = stats

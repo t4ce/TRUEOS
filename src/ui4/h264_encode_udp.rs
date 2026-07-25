@@ -39,12 +39,25 @@ const UDP_CLOSE_LINGER_MS: u64 = 100;
 const UDP_SUBSCRIBER_POLL_MS: u64 = 10;
 const PREPARED_FRAME_POLL_MS: u64 = 1;
 const UDP_SUBMIT_RETRY_LIMIT: usize = 64;
+// One 32-fragment window occupies at most 38,400 bytes of the 64 KiB socket
+// TX ring. Submit the window before awaiting its receipts so the network
+// service can drain commands in one scheduler turn instead of one turn per
+// fragment.
+const UDP_RECEIPT_WINDOW_FRAGMENTS: usize = 32;
 
 #[derive(Debug)]
 struct EncodedAccessUnit {
     sequence: u32,
     keyframe: bool,
     bytes: Vec<u8>,
+}
+
+struct PendingDatagram {
+    receipt: u32,
+    packet: [u8; DATAGRAM_BYTES],
+    packet_bytes: usize,
+    payload_bytes: usize,
+    retries: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -309,53 +322,82 @@ async fn send_access_unit(
         return false;
     }
 
-    for (fragment_index, payload) in access_unit.bytes.chunks(PAYLOAD_BYTES).enumerate() {
-        let mut packet = [0u8; DATAGRAM_BYTES];
-        let mut flags = if access_unit.keyframe {
-            FLAG_KEYFRAME
-        } else {
-            0
-        };
-        if fragment_index == 0 {
-            flags |= FLAG_START;
+    for window_start in (0..fragment_count).step_by(UDP_RECEIPT_WINDOW_FRAGMENTS) {
+        let window_end =
+            fragment_count.min(window_start.saturating_add(UDP_RECEIPT_WINDOW_FRAGMENTS));
+        let mut pending = Vec::with_capacity(window_end.saturating_sub(window_start));
+        for fragment_index in window_start..window_end {
+            let payload_start = fragment_index.saturating_mul(PAYLOAD_BYTES);
+            let payload_end = access_unit
+                .bytes
+                .len()
+                .min(payload_start.saturating_add(PAYLOAD_BYTES));
+            let payload = &access_unit.bytes[payload_start..payload_end];
+            let mut packet = [0u8; DATAGRAM_BYTES];
+            let mut flags = if access_unit.keyframe {
+                FLAG_KEYFRAME
+            } else {
+                0
+            };
+            if fragment_index == 0 {
+                flags |= FLAG_START;
+            }
+            if fragment_index + 1 == fragment_count {
+                flags |= FLAG_END;
+                if session_end {
+                    flags |= FLAG_SESSION_END;
+                }
+            }
+            let receipt =
+                datagram_sequence.wrapping_add(fragment_index as u32 - window_start as u32);
+            encode_header(
+                &mut packet[..HEADER_BYTES],
+                flags,
+                report.session_id,
+                receipt,
+                access_unit.sequence,
+                fragment_index as u16,
+                fragment_count as u16,
+                payload,
+            );
+            packet[HEADER_BYTES..HEADER_BYTES + payload.len()].copy_from_slice(payload);
+            pending.push(PendingDatagram {
+                receipt,
+                packet,
+                packet_bytes: HEADER_BYTES + payload.len(),
+                payload_bytes: payload.len(),
+                retries: 0,
+            });
         }
-        if fragment_index + 1 == fragment_count {
-            flags |= FLAG_END;
-            if session_end {
-                flags |= FLAG_SESSION_END;
+
+        for datagram in &mut pending {
+            if !submit_checked_datagram(udp, remote, datagram, report).await {
+                return false;
             }
         }
-        encode_header(
-            &mut packet[..HEADER_BYTES],
-            flags,
-            report.session_id,
-            *datagram_sequence,
-            access_unit.sequence,
-            fragment_index as u16,
-            fragment_count as u16,
-            payload,
-        );
-        packet[HEADER_BYTES..HEADER_BYTES + payload.len()].copy_from_slice(payload);
-
-        let receipt = *datagram_sequence;
-        let mut retries = 0usize;
-        loop {
-            if udp
-                .send_v4_checked(remote, receipt, &packet[..HEADER_BYTES + payload.len()])
-                .is_err()
-            {
-                retries = retries.saturating_add(1);
-                report.submit_retries = report.submit_retries.saturating_add(1);
-            } else {
-                match wait_for_checked_send_receipt(udp, receipt).await {
+        for datagram in &mut pending {
+            loop {
+                match wait_for_checked_send_receipt(udp, datagram.receipt).await {
                     Some(CheckedSendReceipt::Accepted) => {
+                        report.sent_datagrams = report.sent_datagrams.saturating_add(1);
+                        report.sent_payload_bytes = report
+                            .sent_payload_bytes
+                            .saturating_add(datagram.payload_bytes);
+                        *datagram_sequence = datagram_sequence.wrapping_add(1);
                         break;
                     }
                     Some(CheckedSendReceipt::Backpressure) => {
                         report.adapter_backpressure_events =
                             report.adapter_backpressure_events.saturating_add(1);
-                        retries = retries.saturating_add(1);
+                        datagram.retries = datagram.retries.saturating_add(1);
                         report.submit_retries = report.submit_retries.saturating_add(1);
+                        if datagram.retries >= UDP_SUBMIT_RETRY_LIMIT {
+                            return false;
+                        }
+                        Timer::after(Duration::from_millis(UDP_RETRY_DELAY_MS)).await;
+                        if !submit_checked_datagram(udp, remote, datagram, report).await {
+                            return false;
+                        }
                     }
                     Some(CheckedSendReceipt::Failed) | None => {
                         // A missing receipt has an unknown disposition. Abort
@@ -365,16 +407,31 @@ async fn send_access_unit(
                     }
                 }
             }
-            if retries >= UDP_SUBMIT_RETRY_LIMIT {
-                return false;
-            }
-            Timer::after(Duration::from_millis(UDP_RETRY_DELAY_MS)).await;
         }
-        report.sent_datagrams = report.sent_datagrams.saturating_add(1);
-        report.sent_payload_bytes = report.sent_payload_bytes.saturating_add(payload.len());
-        *datagram_sequence = datagram_sequence.wrapping_add(1);
     }
     true
+}
+
+async fn submit_checked_datagram(
+    udp: &VNetUdpEndpoint<'_>,
+    remote: v::vnet::EndpointV4,
+    datagram: &mut PendingDatagram,
+    report: &mut MediaUdpStreamReport,
+) -> bool {
+    loop {
+        if udp
+            .send_v4_checked(remote, datagram.receipt, &datagram.packet[..datagram.packet_bytes])
+            .is_ok()
+        {
+            return true;
+        }
+        datagram.retries = datagram.retries.saturating_add(1);
+        report.submit_retries = report.submit_retries.saturating_add(1);
+        if datagram.retries >= UDP_SUBMIT_RETRY_LIMIT {
+            return false;
+        }
+        Timer::after(Duration::from_millis(UDP_RETRY_DELAY_MS)).await;
+    }
 }
 
 async fn wait_for_checked_send_receipt(

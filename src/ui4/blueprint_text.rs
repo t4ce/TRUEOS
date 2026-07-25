@@ -1574,6 +1574,8 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_skybox_render_rgb565(
 /// The per-window state allocation persists across frames. The call is
 /// synchronous through the final GPU marker; after an accepted timeout both
 /// the destination and state are quarantined and CPU fallback is forbidden.
+/// Rendering keeps a fixed 640x400 logical workload and covers the current
+/// frame extent, including a maximized replacement frame.
 pub unsafe extern "C" fn trueos_cabi_ui4_scene_particle_craft_render(
     window_id: u32,
     params: *const TrueosUi4ParticleCraftParamsV1,
@@ -1625,10 +1627,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_particle_craft_render(
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
             return ERROR_NOT_FOUND;
         };
-        if surface.width != PARTICLE_CRAFT_FRAME_WIDTH
-            || surface.height != PARTICLE_CRAFT_FRAME_HEIGHT
-            || surface.cadence != FrameCadence::Streaming
-        {
+        if surface.cadence != FrameCadence::Streaming {
             return ERROR_INVALID;
         }
         if surface.gpu_submission_unretired {
