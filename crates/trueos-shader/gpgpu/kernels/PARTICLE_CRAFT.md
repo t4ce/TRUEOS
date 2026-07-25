@@ -40,7 +40,7 @@ C++ are bake-time dependencies only.
 The checked artifact targets `8086:4680`, revision `0x0c`, and has SHA-256:
 
 ```text
-bbe6f1e7c95c83271a29dc89c85d375ba05fb51565c1e754e2488e4885907b67
+5eb94c55868d5dc611eac23930b9e568d8ab3e9dac00b1659688616367600f21
 ```
 
 Bake and verify:

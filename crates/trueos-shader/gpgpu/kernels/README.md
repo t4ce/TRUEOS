@@ -116,7 +116,7 @@ single-kernel audiovisual artifact for that same exact target. Its SHA-256 is:
 artifact for that exact target. Its SHA-256 is:
 
 ```text
-bbe6f1e7c95c83271a29dc89c85d375ba05fb51565c1e754e2488e4885907b67
+5eb94c55868d5dc611eac23930b9e568d8ab3e9dac00b1659688616367600f21
 ```
 
 The two unconditional Spirit C++/IGC artifacts are standalone, solely

@@ -39,9 +39,10 @@ subscriber-driven kernel service:
 4. Each access unit is immediately fragmented into CRC-protected TME1
    datagrams and unicast to the subscriber. The media socket has a 64 KiB
    transmit ring, and every datagram carries an internal adapter receipt token.
-   Up to 32 fragments (38,400 bytes) are submitted as one bounded window before
-   their receipts are drained, allowing one network-service turn to admit the
-   complete ordinary access unit. The sequence advances only after each
+   Up to eight fragments (9,600 bytes) are submitted as one bounded window
+   before their receipts are drained. This exactly matches the socket's eight
+   TX packet-metadata entries, allowing one network-service turn to admit each
+   window without a metadata-ring retry. The sequence advances only after each
    matching adapter acceptance; a confirmed full ring retries that exact
    packet after one millisecond, while a missing or fatal receipt aborts
    without an uncertain retransmission. Accepted fragments have no artificial

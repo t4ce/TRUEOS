@@ -13,6 +13,11 @@ const PARTICLE_CRAFT_PARAMS_BYTES: usize = 4096;
 const PARTICLE_CRAFT_ALLOCATION_BYTES: usize =
     PARTICLE_CRAFT_STATE_BYTES + PARTICLE_CRAFT_PARAMS_BYTES;
 const PARTICLE_CRAFT_RENDER_CONTROL_WORDS: usize = 3;
+const _: () = assert!(
+    core::mem::size_of::<ParticleCraftParamsV1>()
+        + PARTICLE_CRAFT_RENDER_CONTROL_WORDS * core::mem::size_of::<u32>()
+        <= PARTICLE_CRAFT_PARAMS_BYTES
+);
 
 /// Stable host-side form of the public 64-byte ParticleCraft v1 control block.
 #[derive(Copy, Clone, Debug)]

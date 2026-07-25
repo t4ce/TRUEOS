@@ -39,11 +39,10 @@ const UDP_CLOSE_LINGER_MS: u64 = 100;
 const UDP_SUBSCRIBER_POLL_MS: u64 = 10;
 const PREPARED_FRAME_POLL_MS: u64 = 1;
 const UDP_SUBMIT_RETRY_LIMIT: usize = 64;
-// One 32-fragment window occupies at most 38,400 bytes of the 64 KiB socket
-// TX ring. Submit the window before awaiting its receipts so the network
-// service can drain commands in one scheduler turn instead of one turn per
-// fragment.
-const UDP_RECEIPT_WINDOW_FRAGMENTS: usize = 32;
+// The adapter's UDP socket allocates eight TX packet-metadata entries. Match
+// that exact capacity: one eight-fragment window occupies at most 9,600 bytes
+// of the 64 KiB byte ring and can be admitted in one network-service turn.
+const UDP_RECEIPT_WINDOW_FRAGMENTS: usize = 8;
 
 #[derive(Debug)]
 struct EncodedAccessUnit {
