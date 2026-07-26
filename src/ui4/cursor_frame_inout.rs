@@ -515,8 +515,6 @@ fn signal_visual_change() {
 }
 
 pub(crate) fn cursor_color(source: Ui4CursorSource) -> crate::graphics::primitives::Rgba8 {
-    use crate::graphics::primitives::Rgba8;
-
     // A virtual device may deliberately carry a bespoke presentation color.
     // Otherwise the VLayer InputCombo owns the stable visual identity shared
     // by all independently clocked devices in that collection.
