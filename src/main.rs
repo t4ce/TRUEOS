@@ -145,7 +145,6 @@ pub extern "C" fn kmain() -> ! {
     }
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
-    limine::prime_bootloader_caches();
 
     if !phys::try_install_heap_arena_candidates(allocators::install_heap_arena) {
         crate::log!("heap: failed to reserve/install any heap arena\n");
@@ -176,6 +175,7 @@ pub extern "C" fn kmain() -> ! {
     percpu::init_bsp();
     microcode::init_from_limine_bsp();
     dma::init_from_limine();
+    limine::prime_bootloader_caches();
     pci::enumerate_impl();
     log_os::set_emulator_uart_logging(intel::is_emulator_environment());
     intel::init_once();

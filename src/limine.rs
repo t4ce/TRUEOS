@@ -183,19 +183,34 @@ pub fn prime_bootloader_caches() {
 pub fn boot_timestamp_secs() -> Option<u64> {
     let cached = BOOT_TIMESTAMP_SECS_CACHE.load(Ordering::Acquire);
     if cached != UNSET_U64 {
-        return Some(cached);
+        return (cached != 0).then_some(cached);
     }
     cache_boot_timestamp_secs()
 }
 
 fn cache_boot_timestamp_secs() -> Option<u64> {
-    let resp = DATE_AT_BOOT_REQUEST.response()?;
-    let secs = u64::try_from(resp.timestamp).ok()?;
-    if secs == 0 {
-        return None;
+    let cached = BOOT_TIMESTAMP_SECS_CACHE.load(Ordering::Acquire);
+    if cached != UNSET_U64 {
+        return (cached != 0).then_some(cached);
     }
-    BOOT_TIMESTAMP_SECS_CACHE.store(secs, Ordering::Release);
-    Some(secs)
+
+    let (secs, source) = match crate::efi::runtime_services_unix_time() {
+        crate::efi::RuntimeUnixTime::Value(secs) => (Some(secs), "uefi-runtime"),
+        crate::efi::RuntimeUnixTime::Invalid => (None, "uefi-runtime-invalid"),
+        crate::efi::RuntimeUnixTime::Unavailable => {
+            let secs = DATE_AT_BOOT_REQUEST
+                .response()
+                .and_then(|resp| u64::try_from(resp.timestamp).ok())
+                .filter(|secs| *secs != 0);
+            (secs, "limine-date-at-boot")
+        }
+    };
+
+    BOOT_TIMESTAMP_SECS_CACHE.store(secs.unwrap_or(0), Ordering::Release);
+    if crate::log_os::flags::BOOT_INFO_LOGS {
+        crate::log!("time: boot_wall_clock_source={} unix={}\n", source, secs.unwrap_or(0));
+    }
+    secs
 }
 
 pub fn bootloader_performance() -> Option<&'static BootloaderPerformanceResponse> {

@@ -7,9 +7,11 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 pub mod acpi;
 pub mod smbios;
+mod time;
 // pub mod acpi_uefi;  asdasd
 
 const EFI_SYSTEM_TABLE_SIGNATURE: u64 = 0x5453_5953_2049_4249; // "IBI SYST"
+const EFI_RUNTIME_SERVICES_SIGNATURE: u64 = 0x5652_4553_544e_5552; // "RUNTSERV"
 
 static EFI_RESET_BOOT_LOGGED: AtomicBool = AtomicBool::new(false);
 
@@ -405,6 +407,69 @@ pub struct EfiRuntimeServices {
     pub set_variable: usize,
     pub get_next_high_mono_count: usize,
     pub reset_system: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RuntimeUnixTime {
+    Value(u64),
+    Unavailable,
+    Invalid,
+}
+
+/// Read and normalize the UEFI wall clock once while the BSP is coming up.
+///
+/// Runtime-service pointers are physical in the Limine handoff used by
+/// TrueOS, just like the existing ResetSystem path below. Convert the
+/// GetTime entry through the HHDM before invoking it with the EFI ABI.
+pub(crate) fn runtime_services_unix_time() -> RuntimeUnixTime {
+    let Some(st) = system_table() else {
+        return RuntimeUnixTime::Unavailable;
+    };
+    if st.runtime_services == 0 {
+        return RuntimeUnixTime::Unavailable;
+    }
+
+    let Ok(rt_ptr) = mmio::map_limine_struct::<EfiRuntimeServices>(st.runtime_services as u64)
+    else {
+        return RuntimeUnixTime::Unavailable;
+    };
+    let rt = unsafe { rt_ptr.as_ref() };
+    if rt.hdr.signature != EFI_RUNTIME_SERVICES_SIGNATURE
+        || (rt.hdr.header_size as usize) < core::mem::size_of::<EfiRuntimeServices>()
+        || rt.get_time == 0
+    {
+        return RuntimeUnixTime::Unavailable;
+    }
+
+    let Some(get_time_phys) = limine::try_as_phys_addr(rt.get_time as u64) else {
+        return RuntimeUnixTime::Unavailable;
+    };
+    let Some(get_time_virt) = limine::hhdm_offset()
+        .and_then(|hhdm| hhdm.checked_add(get_time_phys))
+        .and_then(|addr| usize::try_from(addr).ok())
+    else {
+        return RuntimeUnixTime::Unavailable;
+    };
+
+    type GetTime = unsafe extern "efiapi" fn(*mut time::EfiTime, *mut core::ffi::c_void) -> usize;
+    let get_time: GetTime = unsafe { core::mem::transmute(get_time_virt) };
+    let mut firmware_time = time::EfiTime::default();
+    let status = unsafe { get_time(&mut firmware_time, core::ptr::null_mut()) };
+    if status != 0 {
+        return RuntimeUnixTime::Unavailable;
+    }
+
+    let Some(timestamp) = time::unix_seconds(&firmware_time) else {
+        return RuntimeUnixTime::Invalid;
+    };
+    let Ok(timestamp) = u64::try_from(timestamp) else {
+        return RuntimeUnixTime::Invalid;
+    };
+    if timestamp == 0 {
+        return RuntimeUnixTime::Invalid;
+    }
+
+    RuntimeUnixTime::Value(timestamp)
 }
 
 #[repr(usize)]

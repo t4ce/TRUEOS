@@ -260,6 +260,18 @@ pub mod env {
         &CONTEXTS[context_slot()]
     }
 
+    /// Returns the VM-owned process context when execution has crossed from a
+    /// Hull into a host service lane.
+    ///
+    /// Hull RW/BSS is private to the guest, so the launch-context stack pushed
+    /// there is not the same `CONTEXTS` storage observed by a Tokio carrier.
+    /// The carrier retains its VM identity through `KernelTaskDomain`, making
+    /// the host `BLUEPRINT_PROCESS_CONTEXTS` table the authoritative
+    /// cross-realm fallback.
+    fn process_vm_id() -> Option<u8> {
+        crate::hv::current_guest_execution_context_vm_id()
+    }
+
     pub(crate) fn with_launch_context_console_and_fs_root<R>(
         args: Vec<String>,
         vars: BTreeMap<String, String>,
@@ -291,26 +303,53 @@ pub mod env {
     }
 
     pub fn arg_count() -> usize {
-        let stack = context_stack().lock();
-        stack.last().map(|ctx| ctx.args.len()).unwrap_or(0)
+        let local = {
+            let stack = context_stack().lock();
+            stack.last().map(|ctx| ctx.args.len())
+        };
+        local
+            .or_else(|| process_vm_id().and_then(crate::hv::blueprint_process_arg_count))
+            .unwrap_or(0)
     }
 
     pub fn arg(index: usize) -> Option<String> {
-        let stack = context_stack().lock();
-        stack.last().and_then(|ctx| ctx.args.get(index)).cloned()
+        let local = {
+            let stack = context_stack().lock();
+            stack.last().map(|ctx| ctx.args.get(index).cloned())
+        };
+        match local {
+            Some(arg) => arg,
+            None => {
+                process_vm_id().and_then(|vm_id| crate::hv::blueprint_process_arg(vm_id, index))
+            }
+        }
     }
 
     pub fn var(key: &str) -> Option<String> {
-        let stack = context_stack().lock();
-        stack
-            .last()
-            .and_then(|ctx| ctx.vars.get(key).cloned())
-            .or_else(|| crate::locale::env_var(key).map(String::from))
+        let local = {
+            let stack = context_stack().lock();
+            stack.last().map(|ctx| ctx.vars.get(key).cloned())
+        };
+        match local {
+            Some(value) => value,
+            None => {
+                process_vm_id().and_then(|vm_id| crate::hv::blueprint_process_env_var(vm_id, key))
+            }
+        }
+        .or_else(|| crate::locale::env_var(key).map(String::from))
     }
 
     pub(crate) fn current_app_fs_root() -> Option<String> {
-        let stack = context_stack().lock();
-        stack.last().and_then(|ctx| ctx.app_fs_root.clone())
+        let local = {
+            let stack = context_stack().lock();
+            stack.last().map(|ctx| ctx.app_fs_root.clone())
+        };
+        match local {
+            Some(root) => root,
+            None => process_vm_id().and_then(|vm_id| {
+                crate::hv::blueprint_process_env_var(vm_id, "TRUEOS_APP_FS_ROOT")
+            }),
+        }
     }
 
     pub(crate) unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {
@@ -359,11 +398,7 @@ pub mod env {
     }
 
     pub(crate) fn resolve_fs_path(path: &str, allow_empty: bool) -> Option<String> {
-        let stack = context_stack().lock();
-        let app_fs_root = stack.last().and_then(|ctx| ctx.app_fs_root.clone());
-        drop(stack);
-
-        let Some(root) = app_fs_root else {
+        let Some(root) = current_app_fs_root() else {
             return Some(String::from(path));
         };
 
