@@ -415,7 +415,12 @@ fn submit_font_outline_coverage_r8_2d(
     let Some(dispatch) = fill_rect_2d_dispatch(params.rect_width, params.rect_height) else {
         return GpgpuDispatchRetirement::NotSubmitted;
     };
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    // Font coverage is requested by asynchronous kernel/UI services. Never
+    // spin a cooperative executor while another direct-RCS producer owns the
+    // lane; the caller can preserve its resident fallback and retry later.
+    let Some(_guard) = DIRECT_RCS_SUBMIT_LOCK.try_lock() else {
+        return GpgpuDispatchRetirement::NotSubmitted;
+    };
     let Some(dev) = super::claimed_device() else {
         return GpgpuDispatchRetirement::NotSubmitted;
     };
@@ -645,7 +650,11 @@ fn submit_font_instance_layers_2d(
     {
         return (false, false);
     }
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    // Retained font restamps are opportunistic producers. Contention is an
+    // admission failure, not permission to monopolize a cooperative worker.
+    let Some(_guard) = DIRECT_RCS_SUBMIT_LOCK.try_lock() else {
+        return (false, false);
+    };
     let Some(dev) = super::claimed_device() else {
         return (false, false);
     };

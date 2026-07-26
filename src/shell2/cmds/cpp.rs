@@ -509,9 +509,11 @@ fn print_font_service_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "cpp font status: online={} queued={} retain_submitted={} retain_completed={} stamp_submitted={} stamp_completed={} failed={} ownership=gpu-vm-r8+gpu-vm-rgba8 completion=ticket-signal",
+            "cpp font status: online={} queued={} active_ticket={} active_stage={} retain_submitted={} retain_completed={} stamp_submitted={} stamp_completed={} failed={} ownership=gpu-vm-r8+gpu-vm-rgba8 completion=ticket-signal",
             status.online as u8,
             status.queued,
+            status.active_ticket.map(|ticket| ticket.raw()).unwrap_or(0),
+            status.active_stage,
             status.submitted_retain,
             status.completed_retain,
             status.submitted_stamp,

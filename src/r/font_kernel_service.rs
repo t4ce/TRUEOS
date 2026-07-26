@@ -14,7 +14,8 @@ use spin::Mutex;
 use crate::intel::gpu_font::{
     GpuFontFace, GpuFontJobEntry, GpuFontRetainedScene, GpuFontRetainedSceneError,
     GpuFontRetainedStyle, GpuFontRgba, GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS,
-    retain_gpu_font_centered_scene_at_raster, retain_gpu_font_scene_at_raster,
+    ensure_font_face_available, retain_gpu_font_centered_scene_at_raster,
+    retain_gpu_font_scene_at_raster,
 };
 
 const FONT_KERNEL_QUEUE_CAPACITY: usize = 32;
@@ -160,6 +161,8 @@ impl PendingFontStamp {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct FontKernelServiceStatus {
     pub(crate) online: bool,
+    pub(crate) active_ticket: Option<FontKernelTicket>,
+    pub(crate) active_stage: &'static str,
     pub(crate) submitted_retain: u64,
     pub(crate) submitted_stamp: u64,
     pub(crate) completed_retain: u64,
@@ -172,6 +175,8 @@ impl FontKernelServiceStatus {
     const fn new() -> Self {
         Self {
             online: false,
+            active_ticket: None,
+            active_stage: "idle",
             submitted_retain: 0,
             submitted_stamp: 0,
             completed_retain: 0,
@@ -293,9 +298,19 @@ fn validate_retain_request(request: &RetainSceneRequest) -> Result<(), FontKerne
     Ok(())
 }
 
+fn set_active_stage(ticket: FontKernelTicket, stage: &'static str) {
+    let mut status = STATUS.lock();
+    status.active_ticket = Some(ticket);
+    status.active_stage = stage;
+}
+
 fn process_retain_scene(
+    ticket: FontKernelTicket,
     request: RetainSceneRequest,
 ) -> Result<GpuFontRetainedScene, FontKernelError> {
+    set_active_stage(ticket, "font-warm");
+    ensure_font_face_available(request.font).map_err(FontKernelError::Unavailable)?;
+    set_active_stage(ticket, "coverage");
     let entries = request
         .runs
         .iter()
@@ -333,26 +348,14 @@ fn process_stamp(
 ) -> Result<FontStampedBuffer, FontKernelError> {
     let width = request.scene.raster_width;
     let height = request.scene.raster_height;
-    let scene = process_retain_scene(request.scene)?;
+    let scene = process_retain_scene(ticket, request.scene)?;
+    set_active_stage(ticket, "output-allocate");
     let storage = crate::intel::gpgpu::allocate_font_instance_rgba8_surface(width, height)
         .ok_or(FontKernelError::Unavailable("font-stamp-output-allocation"))?;
     let surface = storage.surface();
-    let clear = crate::intel::gpgpu::GpgpuSolidRect {
-        rect: surface.bounds(),
-        color_rgba: 0,
-    };
-    let cleared =
-        crate::intel::gpgpu::fill_solid_rects_rgba8_result(surface, core::slice::from_ref(&clear));
-    match cleared.outcome {
-        crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete => {}
-        crate::intel::gpgpu::GpgpuSubmissionOutcome::Unavailable => {
-            return Err(FontKernelError::Unavailable("font-stamp-clear"));
-        }
-        crate::intel::gpgpu::GpgpuSubmissionOutcome::SubmittedIncomplete => {
-            core::mem::forget(storage);
-            return Err(FontKernelError::SubmittedIncomplete("font-stamp-clear-incomplete"));
-        }
-    }
+    // The owned RGBA allocation is zeroed and DMA-flushed before return.
+    // Dispatching another GPU clear here only adds direct-RCS contention.
+    set_active_stage(ticket, "instance");
     let rendered = match scene.restamp_instance(
         surface,
         GpuFontRetainedStyle::identity(request.foreground),
@@ -370,15 +373,12 @@ fn process_stamp(
     Ok(FontStampedBuffer {
         ticket,
         storage,
-        submits: cleared.stats.submits.saturating_add(rendered.submits),
-        active_walkers: cleared
-            .stats
-            .walkers
-            .saturating_add(rendered.active_walkers),
+        submits: rendered.submits,
+        active_walkers: rendered.active_walkers,
     })
 }
 
-fn complete_status(retain: bool, succeeded: bool) {
+fn complete_status(ticket: FontKernelTicket, retain: bool, succeeded: bool) {
     let mut status = STATUS.lock();
     if succeeded {
         if retain {
@@ -389,6 +389,24 @@ fn complete_status(retain: bool, succeeded: bool) {
     } else {
         status.failed = status.failed.saturating_add(1);
     }
+    if status.active_ticket == Some(ticket) {
+        status.active_ticket = None;
+        status.active_stage = "idle";
+    }
+}
+
+fn log_failure(ticket: FontKernelTicket, operation: &'static str, error: &FontKernelError) {
+    let stage = STATUS.lock().active_stage;
+    let queued = REQUESTS.lock().len();
+    crate::log_warn!(
+        target: "global";
+        "font-kernel-service: {} failed ticket={} stage={} reason={:?} queued={} action=signal-caller+keep-service-online\n",
+        operation,
+        ticket.raw(),
+        stage,
+        error,
+        queued,
+    );
 }
 
 #[embassy_executor::task]
@@ -407,8 +425,12 @@ pub(crate) async fn font_kernel_service_task() {
                     request,
                     reply,
                 } => {
-                    let result = process_retain_scene(request);
-                    complete_status(true, result.is_ok());
+                    set_active_stage(ticket, "dispatch");
+                    let result = process_retain_scene(ticket, request);
+                    if let Err(error) = &result {
+                        log_failure(ticket, "retain", error);
+                    }
+                    complete_status(ticket, true, result.is_ok());
                     crate::log_info!(
                         target: "render";
                         "font-kernel-service: retain complete ticket={} ok={} queued={}\n",
@@ -423,8 +445,12 @@ pub(crate) async fn font_kernel_service_task() {
                     request,
                     reply,
                 } => {
+                    set_active_stage(ticket, "dispatch");
                     let result = process_stamp(ticket, request);
-                    complete_status(false, result.is_ok());
+                    if let Err(error) = &result {
+                        log_failure(ticket, "stamp", error);
+                    }
+                    complete_status(ticket, false, result.is_ok());
                     crate::log_info!(
                         target: "render";
                         "font-kernel-service: stamp complete ticket={} ok={} queued={}\n",

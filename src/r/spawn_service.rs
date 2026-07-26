@@ -823,7 +823,11 @@ fn user_input_writer_gate() -> bool {
 }
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::usb2::usb_controller_service_task())
+    // The controller task owns the xHCI event pump that completes every USB
+    // transfer. Keep it on the cooperative BSP executor with the filesystem
+    // broker: background AP executors also host genuinely blocking Tokio
+    // service-lane jobs, and one of those must never starve USB completions.
+    spawn_local(spawner, |_spawner| crate::usb2::usb_controller_service_task())
 }
 
 fn spawn_user_input_record_writer(spawner: Spawner) -> SpawnAttempt {
@@ -1573,7 +1577,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled(
         "usb-controller-tasks",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        0,
         &USB_CONTROLLER_TASKS_STARTED,
         spawn_usb_controller_tasks,
     ),

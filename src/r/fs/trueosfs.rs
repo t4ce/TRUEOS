@@ -54,6 +54,7 @@ pub struct TrueosFsPlacement {
 
 struct RootMount {
     disk_id: block::DiscId,
+    placement: TrueosFsPlacement,
     seq: u32,
     index: Option<Box<TrueosFsIndex>>,
     building_index: bool,
@@ -135,7 +136,7 @@ fn request_mount_existing_visible_roots() {
 /// Eagerly build the in-memory index for `disk` right after mounting, so later
 /// callers (e.g. vhttps-cache) don't pay the log-replay cost on their first access.
 async fn warm_index_async(disk: block::DeviceHandle) {
-    let placement = match locate_async(disk).await {
+    let placement = match placement_for_io_async(disk).await {
         Ok(Some(p)) => p,
         _ => return,
     };
@@ -609,7 +610,7 @@ pub async fn mount_root_async(
         return Err(block::Error::InvalidParam);
     }
 
-    let Some(_placement) = locate_async(disk).await? else {
+    let Some(placement) = locate_async(disk).await? else {
         return Ok(None);
     };
 
@@ -622,7 +623,7 @@ pub async fn mount_root_async(
         }
     }
 
-    register_root_mount(disk, false);
+    register_root_mount(disk, placement, false);
     Ok(Some(disk_id))
 }
 
@@ -639,16 +640,20 @@ pub async fn remount_root_async(
         return Err(block::Error::InvalidParam);
     }
 
-    let Some(_placement) = locate_async(disk).await? else {
+    let Some(placement) = locate_async(disk).await? else {
         unregister_root_mount(disk.id());
         return Ok(None);
     };
 
-    register_root_mount(disk, true);
+    register_root_mount(disk, placement, true);
     Ok(Some(disk.id()))
 }
 
-fn register_root_mount(disk: block::DeviceHandle, replace_existing: bool) {
+fn register_root_mount(
+    disk: block::DeviceHandle,
+    placement: TrueosFsPlacement,
+    replace_existing: bool,
+) {
     let disk_id = disk.id();
     let seq = ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
     let cache_gen = if replace_existing {
@@ -669,6 +674,7 @@ fn register_root_mount(disk: block::DeviceHandle, replace_existing: bool) {
                 return;
             } else {
                 existing.seq = seq;
+                existing.placement = placement;
                 existing.index = None;
                 existing.building_index = false;
                 existing.writes_since_checkpoint = 0;
@@ -678,6 +684,7 @@ fn register_root_mount(disk: block::DeviceHandle, replace_existing: bool) {
             roots.push(RootMount {
                 building_index: false,
                 disk_id,
+                placement,
                 seq,
                 index: None,
                 writes_since_checkpoint: 0,
@@ -719,6 +726,23 @@ fn root_cache_gen(disk_id: block::DiscId) -> u32 {
         .find(|m| m.disk_id == disk_id)
         .map(|m| m.cache_gen)
         .unwrap_or(0)
+}
+
+fn root_placement(disk_id: block::DiscId) -> Option<TrueosFsPlacement> {
+    let roots = ROOTS.lock();
+    roots
+        .iter()
+        .find(|m| m.disk_id == disk_id)
+        .map(|m| m.placement)
+}
+
+async fn placement_for_io_async(
+    disk: block::DeviceHandle,
+) -> Result<Option<TrueosFsPlacement>, block::Error> {
+    if let Some(placement) = root_placement(disk.id()) {
+        return Ok(Some(placement));
+    }
+    locate_async(disk).await
 }
 
 fn bump_root_cache_gen(disk_id: block::DiscId) {
@@ -1006,7 +1030,7 @@ pub async fn file_in_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
     };
 
@@ -1092,7 +1116,7 @@ pub async fn file_write_begin_async(
         return Err(block::Error::InvalidParam);
     }
     crate::log!("trueosfs: file-write-begin stage=locate disk={}\n", disk.id().raw());
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         crate::log!(
             "trueosfs: file-write-begin failed stage=locate disk={} err=no-placement\n",
             disk.id().raw()
@@ -1281,7 +1305,7 @@ pub async fn file_out_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
 
@@ -1327,7 +1351,7 @@ pub async fn file_out_if_index_ready_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
 
@@ -1394,7 +1418,7 @@ pub async fn file_info_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
 
@@ -1424,7 +1448,7 @@ pub async fn file_read_open_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
 
@@ -1478,7 +1502,7 @@ pub async fn file_read_range_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
 
@@ -1521,7 +1545,7 @@ pub async fn file_delete_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
     };
 
@@ -1673,7 +1697,7 @@ pub async fn dir_rename_async(
         return Ok(false);
     }
 
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
     };
     ensure_index_async(disk, &placement).await?;
@@ -1716,7 +1740,7 @@ pub async fn file_exists_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
     };
 
@@ -1748,7 +1772,7 @@ pub async fn list_dir_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
 
@@ -1859,7 +1883,7 @@ pub async fn dir_has_children_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
     };
 
@@ -2111,7 +2135,7 @@ pub async fn json_all_async(
         return Err(block::Error::InvalidParam);
     }
 
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
 
@@ -2260,7 +2284,7 @@ pub async fn file_append_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
     };
 
@@ -2373,7 +2397,7 @@ pub(super) async fn index_path_snapshot_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
 
@@ -2406,7 +2430,7 @@ pub async fn raw_log_scan_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
 
@@ -2747,6 +2771,7 @@ pub async fn format_blank_force_async(handle: block::DeviceHandle) -> Result<(),
 
     format_blank_at_async(handle, 0).await?;
     if handle.info().user_visible {
+        unregister_root_mount(handle.id());
         request_mount_root(handle);
     }
     Ok(())
