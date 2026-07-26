@@ -47,6 +47,14 @@ pub enum MapError {
     FrameAllocationFailed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IdentityMapFlags {
+    pub writable: bool,
+    pub executable: bool,
+    pub write_through: bool,
+    pub no_cache: bool,
+}
+
 /// Map an address that may be a physical address or an HHDM address.
 ///
 /// This follows the kernel-side contract:
@@ -98,6 +106,65 @@ pub fn map_mmio_region(phys_base: u64, size: usize) -> Result<NonNull<u8>, MapEr
 /// Map exactly the requested size (no default window expansion).
 pub fn map_mmio_region_exact(phys_base: u64, size: usize) -> Result<NonNull<u8>, MapError> {
     map_mmio_region_custom(phys_base, size)
+}
+
+/// Identity-map a physical range for firmware that is still operating in
+/// UEFI's flat physical-addressing mode.
+pub fn map_identity_region(
+    phys_base: u64,
+    size: usize,
+    mapping: IdentityMapFlags,
+) -> Result<(), MapError> {
+    if phys_base == 0 || size == 0 {
+        return Err(MapError::InvalidArgs);
+    }
+
+    let hhdm = limine::hhdm_offset().ok_or(MapError::NoHhdm)?;
+    let phys_start = phys_base & !(PAGE_SIZE - 1);
+    let offset = phys_base - phys_start;
+    let span = (size as u64)
+        .checked_add(offset)
+        .ok_or(MapError::InvalidArgs)?;
+    let total = align_up(span, PAGE_SIZE);
+    let end = phys_start
+        .checked_add(total)
+        .ok_or(MapError::InvalidArgs)?;
+
+    let mut flags = PageTableFlags::PRESENT;
+    if mapping.writable {
+        flags |= PageTableFlags::WRITABLE;
+    }
+    if !mapping.executable {
+        flags |= PageTableFlags::NO_EXECUTE;
+    }
+    if mapping.write_through {
+        flags |= PageTableFlags::WRITE_THROUGH;
+    }
+    if mapping.no_cache {
+        flags |= PageTableFlags::NO_CACHE;
+    }
+
+    let table_flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+    let _guard = PAGING_LOCK.lock();
+    let mut mapper = unsafe { active_mapper(VirtAddr::new(hhdm))? };
+    let mut allocator = PageTableAllocator;
+
+    for phys_addr in (phys_start..end).step_by(PAGE_SIZE as usize) {
+        let page: Page<Size4KiB> = Page::containing_address(VirtAddr::new(phys_addr));
+        let frame = PhysFrame::containing_address(PhysAddr::new(phys_addr));
+
+        unsafe {
+            match mapper.map_to_with_table_flags(page, frame, flags, table_flags, &mut allocator) {
+                Ok(flush) => flush.flush(),
+                Err(MapToError::PageAlreadyMapped(_)) | Err(MapToError::ParentEntryHugePage) => {}
+                Err(MapToError::FrameAllocationFailed) => {
+                    return Err(MapError::FrameAllocationFailed);
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn map_mmio_region_custom(phys_base: u64, map_size: usize) -> Result<NonNull<u8>, MapError> {

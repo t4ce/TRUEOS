@@ -8,6 +8,8 @@ pub type BootloaderPerformanceResponse = request::BootloaderPerformanceResponse;
 pub type BootloaderPerformanceRequest = request::BootloaderPerformanceRequest;
 pub type EfiSystemTableResponse = request::EfiResponse;
 pub type EfiSystemTableRequest = request::EfiRequest;
+pub type EfiMemmapResponse = request::EfiMemmapResponse;
+pub type EfiMemmapRequest = request::EfiMemmapRequest;
 pub type SmbiosResponse = request::SmbiosResponse;
 pub type SmbiosRequest = request::SmbiosRequest;
 
@@ -70,6 +72,10 @@ pub static RSDP_REQUEST: request::RsdpRequest = request::RsdpRequest::new();
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 pub static EFI_SYSTEM_TABLE_REQUEST: EfiSystemTableRequest = EfiSystemTableRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+pub static EFI_MEMMAP_REQUEST: EfiMemmapRequest = EfiMemmapRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -219,6 +225,10 @@ pub fn bootloader_performance() -> Option<&'static BootloaderPerformanceResponse
 
 pub fn efi_system_table_response() -> Option<&'static EfiSystemTableResponse> {
     EFI_SYSTEM_TABLE_REQUEST.response()
+}
+
+pub fn efi_memmap_response() -> Option<&'static EfiMemmapResponse> {
+    EFI_MEMMAP_REQUEST.response()
 }
 
 pub fn rsdp_address() -> Option<u64> {

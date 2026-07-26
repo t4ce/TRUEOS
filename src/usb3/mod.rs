@@ -1,16 +1,27 @@
-// Auxiliary USB modules live outside the core USB3 source directory. Keep their
-// module identities stable for the input and diagnostic compatibility surfaces.
-#[path = "../../tools/usb3-extracted/api.rs"]
+// USB3 implementation modules live outside the kernel source tree. Keep their
+// module identities stable so this remains a source-only extraction with no
+// runtime or public-path changes.
+#[allow(dead_code)]
+#[path = "../../tools/usb3_extracted/api.rs"]
 mod api;
-#[path = "../../tools/usb3-extracted/class.rs"]
+#[allow(dead_code)]
+#[path = "../../tools/usb3_extracted/class.rs"]
 pub mod class;
-#[path = "../../tools/usb3-extracted/descriptor.rs"]
+#[allow(dead_code)]
+#[path = "../../tools/usb3_extracted/descriptor.rs"]
 mod descriptor;
+#[allow(dead_code)]
+#[path = "../../tools/usb3_extracted/dev_gears.rs"]
 mod dev_gears;
-#[path = "../../tools/usb3-extracted/hid/mod.rs"]
+#[allow(dead_code)]
+#[path = "../../tools/usb3_extracted/hid/mod.rs"]
 pub mod hid;
+#[path = "../../tools/usb3_extracted/lab.rs"]
 pub(crate) mod lab;
+#[allow(dead_code)]
+#[path = "../../tools/usb3_extracted/lib.rs"]
 mod lib;
+#[path = "../../tools/usb3_extracted/skhynix.rs"]
 mod skhynix;
 
 pub use self::hid::midi;

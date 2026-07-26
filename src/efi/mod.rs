@@ -12,6 +12,17 @@ mod time;
 
 const EFI_SYSTEM_TABLE_SIGNATURE: u64 = 0x5453_5953_2049_4249; // "IBI SYST"
 const EFI_RUNTIME_SERVICES_SIGNATURE: u64 = 0x5652_4553_544e_5552; // "RUNTSERV"
+const EFI_MEMORY_RUNTIME: u64 = 1 << 63;
+const EFI_MEMORY_UC: u64 = 0x0000_0001;
+const EFI_MEMORY_WC: u64 = 0x0000_0002;
+const EFI_MEMORY_WT: u64 = 0x0000_0004;
+const EFI_MEMORY_WB: u64 = 0x0000_0008;
+const EFI_MEMORY_WP: u64 = 0x0000_1000;
+const EFI_MEMORY_XP: u64 = 0x0000_4000;
+const EFI_MEMORY_RO: u64 = 0x0002_0000;
+const EFI_RUNTIME_SERVICES_CODE: u32 = 5;
+const EFI_MEMORY_DESCRIPTOR_MIN_SIZE: usize = 40;
+const EFI_PAGE_SIZE: u64 = 4096;
 
 static EFI_RESET_BOOT_LOGGED: AtomicBool = AtomicBool::new(false);
 
@@ -416,12 +427,86 @@ pub(crate) enum RuntimeUnixTime {
     Invalid,
 }
 
+fn read_efi_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(bytes.get(offset..offset + 4)?.try_into().ok()?))
+}
+
+fn read_efi_u64(bytes: &[u8], offset: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(bytes.get(offset..offset + 8)?.try_into().ok()?))
+}
+
+fn map_efi_runtime_identity() -> bool {
+    let Some(response) = limine::efi_memmap_response() else {
+        return false;
+    };
+    let Ok(descriptor_size) = usize::try_from(response.desc_size) else {
+        return false;
+    };
+    if descriptor_size < EFI_MEMORY_DESCRIPTOR_MIN_SIZE {
+        return false;
+    }
+
+    let bytes = response.memmap();
+    if bytes.is_empty() || !bytes.len().is_multiple_of(descriptor_size) {
+        return false;
+    }
+
+    let mut runtime_descriptors = 0usize;
+    for descriptor in bytes.chunks_exact(descriptor_size) {
+        let Some(memory_type) = read_efi_u32(descriptor, 0) else {
+            return false;
+        };
+        let Some(physical_start) = read_efi_u64(descriptor, 8) else {
+            return false;
+        };
+        let Some(page_count) = read_efi_u64(descriptor, 24) else {
+            return false;
+        };
+        let Some(attributes) = read_efi_u64(descriptor, 32) else {
+            return false;
+        };
+        if attributes & EFI_MEMORY_RUNTIME == 0 || page_count == 0 {
+            continue;
+        }
+
+        let Some(byte_len) = page_count.checked_mul(EFI_PAGE_SIZE) else {
+            return false;
+        };
+        let Ok(byte_len) = usize::try_from(byte_len) else {
+            return false;
+        };
+
+        let write_back = attributes & EFI_MEMORY_WB != 0;
+        let write_through = !write_back && attributes & EFI_MEMORY_WT != 0;
+        let uncached = !write_back
+            && !write_through
+            && attributes & (EFI_MEMORY_UC | EFI_MEMORY_WC) != 0;
+        let mapping = mmio::IdentityMapFlags {
+            writable: attributes & (EFI_MEMORY_RO | EFI_MEMORY_WP) == 0,
+            executable: memory_type == EFI_RUNTIME_SERVICES_CODE
+                && attributes & EFI_MEMORY_XP == 0,
+            write_through,
+            no_cache: uncached,
+        };
+        if mmio::map_identity_region(physical_start, byte_len, mapping).is_err() {
+            return false;
+        }
+        runtime_descriptors += 1;
+    }
+
+    runtime_descriptors != 0
+}
+
 /// Read and normalize the UEFI wall clock once while the BSP is coming up.
 ///
-/// Runtime-service pointers are physical in the Limine handoff used by
-/// TrueOS, just like the existing ResetSystem path below. Convert the
-/// GetTime entry through the HHDM before invoking it with the EFI ABI.
+/// Runtime-service pointers are physical until an OS installs a UEFI virtual
+/// address map. TrueOS stays in physical mode, so the EFI runtime ranges must
+/// be identity-mapped before invoking GetTime with the EFI ABI.
 pub(crate) fn runtime_services_unix_time() -> RuntimeUnixTime {
+    if !map_efi_runtime_identity() {
+        return RuntimeUnixTime::Unavailable;
+    }
+
     let Some(st) = system_table() else {
         return RuntimeUnixTime::Unavailable;
     };
@@ -444,15 +529,12 @@ pub(crate) fn runtime_services_unix_time() -> RuntimeUnixTime {
     let Some(get_time_phys) = limine::try_as_phys_addr(rt.get_time as u64) else {
         return RuntimeUnixTime::Unavailable;
     };
-    let Some(get_time_virt) = limine::hhdm_offset()
-        .and_then(|hhdm| hhdm.checked_add(get_time_phys))
-        .and_then(|addr| usize::try_from(addr).ok())
-    else {
+    let Ok(get_time_phys) = usize::try_from(get_time_phys) else {
         return RuntimeUnixTime::Unavailable;
     };
 
     type GetTime = unsafe extern "efiapi" fn(*mut time::EfiTime, *mut core::ffi::c_void) -> usize;
-    let get_time: GetTime = unsafe { core::mem::transmute(get_time_virt) };
+    let get_time: GetTime = unsafe { core::mem::transmute(get_time_phys) };
     let mut firmware_time = time::EfiTime::default();
     let status = unsafe { get_time(&mut firmware_time, core::ptr::null_mut()) };
     if status != 0 {
