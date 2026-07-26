@@ -222,7 +222,7 @@ std::map<std::string, std::vector<float>> read_target_checkpoints(
     const std::filesystem::path & path) {
     const auto storage = read_file(path);
     const std::span<const std::byte> bytes(storage);
-    if (!magic_is(bytes, 0, std::string_view("TGALDE2\0", 8)) ||
+    if (!magic_is(bytes, 0, std::string_view("LFMADE2\0", 8)) ||
         u32(bytes, 8) != 2 ||
         u32(bytes, 12) != kGoldenHeaderBytes ||
         u32(bytes, 16) != kGoldenTokens ||

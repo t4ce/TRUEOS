@@ -1,7 +1,7 @@
 //! Fail-closed TRUEOSFS loader for the LFM2.5 source-F32 sidecar.
 //!
-//! The fixed FPGA-native image intentionally retains its original BF16
-//! representation for these tensors. Hybrid decoding requires the original
+//! The fixed native image intentionally retains its original BF16 representation
+//! for these tensors. Hybrid decoding requires the original
 //! GGUF F32 bits, sealed separately and bound to the GGUF, native image, and
 //! generated tensor table.
 

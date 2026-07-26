@@ -7,7 +7,7 @@ LFM2.5-350M model, with a fixed CPU lane and an Intel NEO/IGC iGPU lane.
 
 - Model: `LFM2.5-350M-Q8_0.gguf`
 - TRUEOS tokenizer: `LFM2.5-350M-Q8_0.tokenizer.bin` (generated)
-- TRUEGA native weights: `LFM2.5-350M-Q8_0.native.bin` (generated)
+- TRUEOS native weights: `LFM2.5-350M-Q8_0.native.bin` (sealed)
 - Hybrid CPU F32 sidecar: `LFM2.5-350M-Q8_0.cpu-f32.bin` (generated)
 - Upstream: `LiquidAI/LFM2.5-350M-GGUF`
 - Upstream revision: `bb7ee58b243e4cede04187e323e760b04f8a0091`
@@ -56,7 +56,7 @@ frontend. It admits only the pinned 379,217,632-byte GGUF with SHA-256
 uses the fixed TRUEOS chat token envelope, and performs greedy one-token decode
 steps with a 32-token reply limit. `--native` loads only the vocabulary through
 the pinned llama.cpp b10075 ABI; all model math runs in the fixed TRUEOS C++
-implementation over the memory-mapped TRUEGA Q8 image and F32 sidecar. Omitting
+implementation over the memory-mapped native Q8 image and F32 sidecar. Omitting
 `--native` keeps the pinned llama.cpp graph as a comparison oracle. The native
 lane is deliberately fixed to this model, greedy decoding, a 256-token state
 budget, and at most 32 reply tokens; it is not a generic GGUF runtime.
@@ -128,20 +128,22 @@ knowledge-intensive work or programming.
 
 ## Restore the ignored binaries
 
-The large model and runtime are intentionally ignored by Git. To fetch and
-verify the same pinned artifacts again:
+The large model, runtime, native image, and tokenizer are intentionally ignored
+by Git. To fetch and verify the pinned GGUF and llama.cpp runtime again:
 
 ```sh
 ./tools/lfm2.5-350m/download.sh
 ```
 
-## Build the FPGA-native image
+Restore the sealed native image and tokenizer from the Lumen artifact backup
+into this directory. Their admitted identities are:
 
-From the repository root, seal the pinned GGUF into the deterministic TRUEGA model image:
+- native image: `376701952` bytes,
+  SHA-256 `051c60856786de2ac7089109354259fa29fcd57e83d585efc86afa0fb605bb86`
+- tokenizer: `1497463` bytes,
+  SHA-256 `dd6454b22f295c43358b06cdd0ef511e35ac739bf06aa70eccf9a758580d7a35`
 
-```sh
-./crates/trueos-fpga-abi/truega/tools/build_lfm25_image.sh
-```
+## Build the CPU sidecar
 
 Generate the software-only F32 sidecar separately:
 
@@ -154,19 +156,15 @@ Install `LFM2.5-350M-Q8_0.native.bin`,
 `LFM2.5-350M-Q8_0.cpu-f32.bin` under
 `trueosfs:/models/lfm2.5/`. The sidecar contains the original little-endian
 F32 bits for the 55 generated normalization and short-convolution tensors and
-is sealed to the pinned GGUF, native image, and generated tensor table. These
-are offline conversions only; neither command invokes Gowin, PCIe, JTAG, or
-flashing.
+is sealed to the pinned GGUF, native image, and generated tensor table.
 
-## Capture the layer-0 FFN golden vectors
+## Fixed parity fixtures
 
-After building the native image, capture and verify the fixed BOS-token layer-0 FFN
-checkpoint with:
+The model contract and ten-token `hi` trace live in `artifacts/`. They are
+software-only fixtures captured from the exact official llama.cpp `b10075`
+commit and are consumed by `make lfm25-cpp-verify`.
 
-```sh
-./crates/trueos-fpga-abi/truega/tools/capture_lfm25_ffn_golden.sh
-```
-
-The trace source is rebuilt from the exact official llama.cpp `b10075` commit. The command
-publishes only the small sealed golden artifact and HDL vectors under `truega/artifacts`;
-the ignored GGUF, runtime, and native weight image remain in this directory.
+- model contract: `3744` bytes,
+  SHA-256 `f347fe8202756c6fbeb97b824c9c04f62738620a77ab0e2f8bb258c1554bcd68`
+- decode trace: `23709296` bytes,
+  SHA-256 `9255171b9a7311a94ca9f767ccf8e1c9301660c61df8c84fe7bd216d2e02da3a`

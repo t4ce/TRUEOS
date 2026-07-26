@@ -1,7 +1,7 @@
 //! Sealed LFM2.5-350M model contract shared by the host packer and TRUEOS.
 //!
 //! GGUF is deliberately absent from this ABI. Ubuntu converts the pinned model into a
-//! flat native tensor image; TRUEOS and future RTL consume only this fixed seal/table.
+//! flat native tensor image; TRUEOS consumes only this fixed seal/table.
 
 use core::mem::{align_of, size_of};
 

@@ -1,7 +1,7 @@
 // Fixed LFM2.5-350M Q8_0 projection for the TRUEOS C++/IGC lane.
 //
 // This is deliberately not a generic quantized-matrix framework. The admitted
-// shapes are exactly the Q8 matrices in the sealed LFM2.5-350M TRUEGA image:
+// shapes are exactly the Q8 matrices in the sealed LFM2.5-350M native image:
 // 1024-wide operator/attention/FFN-up/vocabulary projections and the
 // 4608-wide FFN-down projection. Both weights and activations use the GGML
 // Q8_0 block layout (binary16 scale followed by 32 signed bytes).

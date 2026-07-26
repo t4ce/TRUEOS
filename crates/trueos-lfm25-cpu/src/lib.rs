@@ -3,7 +3,7 @@
 //! Scalar, deterministic LFM2.5 CPU kernels for TRUEOS's hybrid decoder.
 //!
 //! This crate deliberately owns numerical primitives only. Model I/O, token
-//! scheduling, FPGA submission, and cache ownership remain in TRUEOS.
+//! scheduling, Intel GPU submission, and cache ownership remain in TRUEOS.
 
 extern crate alloc;
 
@@ -206,7 +206,7 @@ impl F32Sidecar {
 ///
 /// The companion host binary extracts this from the pinned GGUF. TRUEOS loads
 /// the resulting artifact beside the native tensor image, so tokenization
-/// remains ordinary CPU code and never becomes FPGA or kernel compiler state.
+/// remains ordinary CPU code and never becomes GPU or kernel compiler state.
 pub struct Lfm25Tokenizer {
     pieces: Vec<Vec<u8>>,
     token_types: Vec<u8>,
@@ -1418,13 +1418,12 @@ fn pinned_avx2_expf(value: f32) -> Result<f32, Error> {
     }
 }
 
-/// Evaluate the model's exact f32 `SiLU(gate) * up` from FPGA Q30
+/// Evaluate the model's exact f32 `SiLU(gate) * up` from fixed Q30
 /// projections and return Q30 for the downstream quantizer.
 ///
-/// The persisted TRUEGA row streamer rejects values outside the narrow
-/// polynomial domain sealed by its original layer-0 fixture. Its gate and up
-/// projections are nevertheless complete at that terminal point, so only
-/// this activation needs CPU recovery.
+/// This closes values outside the narrow polynomial domain of the original
+/// layer-0 fixture. The gate and up projections are complete at that terminal
+/// point, so only this activation needs CPU recovery.
 pub fn silu_mul_q30(gate_q30: i64, up_q30: i64) -> Result<i64, Error> {
     const SCALE: f32 = (1u64 << 30) as f32;
     let gate = gate_q30 as f32 / SCALE;
@@ -1537,7 +1536,7 @@ mod tests {
     }
 
     #[test]
-    fn silu_q30_covers_values_outside_the_sealed_fpga_polynomial_domain() {
+    fn silu_q30_covers_values_outside_the_sealed_polynomial_domain() {
         const ONE_Q30: i64 = 1i64 << 30;
         assert_eq!(silu_mul_q30(0, 3 * ONE_Q30), Ok(0));
 

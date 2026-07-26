@@ -49,7 +49,7 @@ void verify_q8_packed_layout(
     const std::filesystem::path & hi_golden,
     std::uint32_t threads);
 
-// Run a complete fixed-model decode sequence from the sealed TRUEGA native
+// Run a complete fixed-model decode sequence from the sealed LFM native
 // image. Tokenization stays outside this math boundary.
 native_decode_result run_native_decode(
     const std::filesystem::path & native_image,

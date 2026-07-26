@@ -1,8 +1,8 @@
 //! Fixed TRUEOSFS boundary for the sealed LFM2.5-350M native image.
 //!
 //! This module deliberately exposes range reads, not a GGUF parser or a whole-file
-//! allocation. FPGA model-loading and diagnostic functions can share the exact path,
-//! length, hash, and pinned file record.
+//! allocation. CPU and Intel GPU decoding share the exact path, length, hash,
+//! and pinned file record.
 
 extern crate alloc;
 

@@ -24,7 +24,7 @@
 namespace {
 
 // This is intentionally not a generic GGUF runner. These values are the
-// admitted LFM2.5-350M-Q8_0 contract shared with TRUEOS and TRUEGA.
+// admitted LFM2.5-350M-Q8_0 contract shared with TRUEOS.
 constexpr std::uintmax_t kModelBytes = 379'217'632;
 constexpr std::string_view kModelSha256 =
     "be036a757295e550098b85e13f6af2735d0fa73b41e1156a40c7d8e8e32a5766";
@@ -33,10 +33,10 @@ constexpr std::string_view kNativeImageSha256 =
     "051c60856786de2ac7089109354259fa29fcd57e83d585efc86afa0fb605bb86";
 constexpr std::uintmax_t kModelContractBytes = 3'744;
 constexpr std::string_view kModelContractSha256 =
-    "6b9f15fddf6a0198b77d0e339bd7978a38881f772520a43290bbea818fabc1c4";
+    "f347fe8202756c6fbeb97b824c9c04f62738620a77ab0e2f8bb258c1554bcd68";
 constexpr std::uintmax_t kHiGoldenBytes = 23'709'296;
 constexpr std::string_view kHiGoldenSha256 =
-    "437ddd3bd6bbb94288fe40855b341767e5cb5f803122e84854fb579ad8feb407";
+    "9255171b9a7311a94ca9f767ccf8e1c9301660c61df8c84fe7bd216d2e02da3a";
 constexpr std::uintmax_t kF32SidecarBytes = 262'160;
 constexpr std::string_view kF32SidecarSha256 =
     "a60c0d28e5e0f4830699260fbd9c01153763261a7b132a6b44610d64919609b1";
@@ -400,14 +400,9 @@ int run(const options & arguments) {
     const auto started = std::chrono::steady_clock::now();
     const auto tool_path = executable_path().parent_path().parent_path();
     if (arguments.parity_q8 || arguments.parity_q8_packed) {
-        const auto repository_path = tool_path.parent_path().parent_path();
         const auto native_path = tool_path / "LFM2.5-350M-Q8_0.native.bin";
-        const auto contract_path =
-            repository_path /
-            "crates/trueos-fpga-abi/truega/artifacts/lfm25_model.contract.bin";
-        const auto golden_path =
-            repository_path /
-            "crates/trueos-fpga-abi/truega/artifacts/lfm25_hi_decode.golden.bin";
+        const auto contract_path = tool_path / "artifacts/lfm25_model.contract.bin";
+        const auto golden_path = tool_path / "artifacts/lfm25_hi_decode.golden.bin";
         verify_file(
             native_path,
             kNativeImageBytes,
@@ -488,9 +483,7 @@ int run(const options & arguments) {
         arguments.igpu_packed) {
         const auto repository_path = tool_path.parent_path().parent_path();
         const auto native_path = tool_path / "LFM2.5-350M-Q8_0.native.bin";
-        const auto contract_path =
-            repository_path /
-            "crates/trueos-fpga-abi/truega/artifacts/lfm25_model.contract.bin";
+        const auto contract_path = tool_path / "artifacts/lfm25_model.contract.bin";
         const auto sidecar_path = tool_path / "LFM2.5-350M-Q8_0.cpu-f32.bin";
         const auto igc_spirv_path =
             repository_path /

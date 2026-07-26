@@ -71,7 +71,7 @@ impl<Backend> Lfm25Decode<Backend> {
         })
     }
 
-    /// Call only after `backend_mut()` has reset every hardware state circuit.
+    /// Call only after `backend_mut()` has reset all recurrent and KV state.
     pub(crate) fn acknowledge_hardware_state_reset(&mut self) {
         self.session.get_mut().acknowledge_hardware_state_reset();
     }

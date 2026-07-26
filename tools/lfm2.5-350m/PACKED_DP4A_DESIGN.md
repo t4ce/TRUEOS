@@ -15,8 +15,7 @@ The model contract is fixed:
 - 93 Q8 tensors and 55 non-Q8 tensors
 - context 256 for the first resident graph
 
-No generic tensor planner, framework, FPGA path, or alternate model layout is
-admitted.
+No generic tensor planner, framework, or alternate model layout is admitted.
 
 ## Weight ABI
 
@@ -263,15 +262,14 @@ measured lower bound is approximately 8 ms of weight traffic plus pointwise,
 attention and one fence interval. A realistic first soft target is
 12--20 ms/token, followed by epilogue fusion toward 10 ms.
 
-### 3. Maximum experimental lane
+### 3. Later optimization lane
 
 Only after the one-submission graph is byte-identical should the runtime try:
 
 - fusing norm/quantize and residual/quantize epilogues into adjacent walkers;
 - one prefill batch containing multiple ordered token graphs;
 - GPU-resident argmax-to-next-embedding handoff;
-- FPGA assistance for a single measured state or scheduling primitive.
+- measured CPU/GPU scheduling improvements that preserve the fixed graph.
 
-The FPGA is deliberately outside the critical path until profiling shows a
-specific operation worth offloading. Autoregressive weight bandwidth remains
-the hard limit, so a 1,000x claim is not admitted by this architecture.
+Autoregressive weight bandwidth remains the hard limit, so a 1,000x claim is
+not admitted by this architecture.

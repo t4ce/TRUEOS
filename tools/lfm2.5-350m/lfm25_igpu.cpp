@@ -242,7 +242,7 @@ struct intel_igc_projector::implementation {
         : layout(requested_layout),
           model_bytes(native_weight_bytes) {
         if (native_weights == nullptr || native_weight_bytes == 0) {
-            throw std::runtime_error("empty TRUEGA native weight mapping");
+            throw std::runtime_error("empty LFM native weight mapping");
         }
         if ((layout == intel_igc_weight_layout::native_q8_0 &&
              !packed_tensors.empty()) ||

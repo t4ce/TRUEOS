@@ -1,9 +1,9 @@
-//! Processorless, single-worker LFM2.5 decode control plane.
+//! Single-lane LFM2.5 decode control plane.
 //!
 //! Numerical work is represented only as fixed AOT requests. A backend submission
-//! future may resolve only after the FPGA MSI wakes `fpga-offload` and that worker
-//! invokes the registered Rust completion callback. The scheduler awaits each callback
-//! before issuing the next request, so there is no pool or second device scheduler.
+//! future resolves after its CPU stage or Intel GPU submission invokes the completion
+//! callback. The scheduler awaits each callback before issuing the next request, so
+//! there is no pool or second device scheduler.
 
 use core::future::Future;
 
@@ -53,8 +53,8 @@ impl ResidentTensorHandle {
     }
 }
 
-/// Opaque FPGA-resident Q30[1024]. Rust can route this handle between fixed
-/// operations, but there is no host slice and therefore no numerical fallback.
+/// Opaque backend-resident Q30[1024]. Rust routes this handle between fixed
+/// operations without exposing backend storage to the scheduler.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct HiddenQ30(ResidentTensorHandle);
 
@@ -68,7 +68,7 @@ impl HiddenQ30 {
     }
 }
 
-/// Opaque FPGA-resident GGML Q8_0[1024] (exactly 32 native blocks).
+/// Opaque backend-resident GGML Q8_0[1024] (exactly 32 native blocks).
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct HiddenQ8(ResidentTensorHandle);
 
@@ -82,7 +82,7 @@ impl HiddenQ8 {
     }
 }
 
-/// Fixed commands understood by an AOT TRUEGA decode firmware.
+/// Fixed commands understood by the admitted AOT decode backend.
 pub enum AotDecodeRequest {
     TokenEmbedding {
         row: EmbeddingRowPlan,
@@ -124,7 +124,7 @@ pub enum AotDecodeRequest {
     FinalRmsNorm {
         input: HiddenQ30,
     },
-    /// The FPGA consumes all 65,536 tied embedding rows and retains the argmax.
+    /// The backend consumes all 65,536 tied embedding rows and retains the argmax.
     TiedLmHeadArgmax {
         head: TiedLmHeadPlan,
         input: HiddenQ8,
@@ -158,7 +158,7 @@ pub enum AotDecodeOutput {
     StatefulHiddenQ30 {
         output: HiddenQ30,
         state: LayerStateSlot,
-        /// Position committed by the FPGA state circuit.
+        /// Position committed by the backend state machine.
         position: u32,
     },
     Argmax {
@@ -176,10 +176,10 @@ pub struct AotDecodeCallback {
     pub output: AotDecodeOutput,
 }
 
-/// Adapter boundary for generated TRUEGA operations.
+/// Adapter boundary for fixed decode operations.
 ///
-/// `submit` registers the callback before ringing the device doorbell. Its future must
-/// stay pending until the ISR wakes the single worker and the worker invokes that callback.
+/// `submit` registers the callback before dispatch. Its future stays pending until
+/// the single execution lane invokes that callback.
 pub trait AotDecodeBackend {
     type Error;
 
@@ -255,7 +255,7 @@ pub struct DecodePrefillOutput {
     pub callback_sequence: u64,
 }
 
-/// Host mirror of the ten shortconv states and six KV caches held by FPGA circuits.
+/// Session mirror of the ten shortconv states and six KV caches held by the backend.
 pub struct DecodeSession {
     position: u32,
     shortconv_next: [u32; 10],
@@ -293,7 +293,7 @@ impl DecodeSession {
         self.last_callback_sequence
     }
 
-    /// Use only after the backend has reset all FPGA recurrent/KV state circuits.
+    /// Use only after the backend has reset all recurrent and KV state.
     pub fn acknowledge_hardware_state_reset(&mut self) {
         self.position = 0;
         self.shortconv_next = [0; 10];
