@@ -18,7 +18,8 @@ use super::{
     WindowSessionId, acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame,
     create_window, destroy_frame, finish_window_session, finish_window_session_with_request,
     gpgpu_rgba_surface, publish_frame_buffer, publish_gpgpu_frame_buffer, publish_window_frame,
-    publish_window_frames, replace_window_frame, take_owner_input_events, writable_rgba_view,
+    publish_window_frames, replace_window_frame, take_owner_input_events, window_placement,
+    writable_rgba_view,
 };
 
 const PREVIEW_OWNER: WindowOwner = WindowOwner::GPGPU_PREVIEW;
@@ -30,6 +31,7 @@ const PREVIEW_GRID_GAP: u32 = 16;
 const PREVIEW_Z: i32 = 30;
 const IDLE_POLL_MS: u64 = 20;
 const COMMAND_POLL_MAX_MS: u64 = 10;
+const RESIZE_RETRY_MS: u64 = 250;
 const STATIC30_FRAME_COUNT: usize = 30;
 const STATIC30_PLANE_COUNT: usize = 3;
 const STATIC30_COLUMNS: u32 = 6;
@@ -210,6 +212,8 @@ pub(crate) struct GpgpuPreviewStatus {
     pub(crate) config: GpgpuPreviewConfig,
     pub(crate) frame: Option<FrameHandle>,
     pub(crate) window: Option<WindowId>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
     pub(crate) metrics: GpgpuPreviewMetrics,
     pub(crate) members: [GpgpuPreviewMemberStatus; 3],
     pub(crate) last_error: &'static str,
@@ -271,6 +275,8 @@ impl GpgpuPreviewStatus {
             config: GpgpuPreviewConfig::DEFAULT,
             frame: None,
             window: None,
+            width: 0,
+            height: 0,
             metrics: GpgpuPreviewMetrics {
                 attempted: 0,
                 submitted: 0,
@@ -342,6 +348,9 @@ struct ActivePreview {
     window: WindowId,
     width: u32,
     height: u32,
+    resize_retry_width: u32,
+    resize_retry_height: u32,
+    resize_retry_at: Instant,
     started: Instant,
     next_render: Instant,
     static_needs_publish: bool,
@@ -442,6 +451,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
     loop {
         retire_frames(&mut retired_frames);
         drain_preview_input(&mut active, &mut retired_frames);
+        reconcile_preview_extents(&mut active, &mut retired_frames);
 
         let desired = PREVIEW_CONTROL.lock().desired;
         if desired.serial != applied_serial {
@@ -662,6 +672,9 @@ fn initialize_compute_preview_set(
             window,
             width: PREVIEW_WIDTH,
             height: PREVIEW_HEIGHT,
+            resize_retry_width: 0,
+            resize_retry_height: 0,
+            resize_retry_at: now,
             started: now,
             next_render: now,
             static_needs_publish: true,
@@ -742,6 +755,9 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         window,
         width,
         height,
+        resize_retry_width: 0,
+        resize_retry_height: 0,
+        resize_retry_at: now,
         started: now,
         next_render: now,
         static_needs_publish: true,
@@ -843,6 +859,9 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
             .saturating_sub(24)
             .min(STATIC30_MAX_HEIGHT)
             .max(1),
+        resize_retry_width: 0,
+        resize_retry_height: 0,
+        resize_retry_at: now,
         started: now,
         next_render: now,
         static_needs_publish: true,
@@ -1571,15 +1590,76 @@ fn drain_preview_input(active: &mut [ActivePreview], retired_frames: &mut Vec<Fr
         if event.width == 0 || event.height == 0 {
             continue;
         }
-        if let Err(reason) = resize_preview(preview, event.width, event.height, retired_frames) {
+        try_resize_preview(preview, event.width, event.height, retired_frames, "input-event");
+    }
+}
+
+/// Resize notifications are intentionally only a wakeup hint. The broker's
+/// geometry is authoritative, so a dropped event or a transient allocation
+/// failure cannot leave a maximized C++ preview permanently backed by its
+/// original 640x400 frame.
+fn reconcile_preview_extents(active: &mut [ActivePreview], retired_frames: &mut Vec<FrameHandle>) {
+    for preview in active {
+        if !preview.config.preset.is_cpp() {
+            continue;
+        }
+        let Ok(placement) = window_placement(PREVIEW_OWNER, preview.window) else {
+            continue;
+        };
+        if placement.width == 0
+            || placement.height == 0
+            || (placement.width == preview.width && placement.height == preview.height)
+        {
+            continue;
+        }
+        try_resize_preview(
+            preview,
+            placement.width,
+            placement.height,
+            retired_frames,
+            "broker-reconcile",
+        );
+    }
+}
+
+fn try_resize_preview(
+    preview: &mut ActivePreview,
+    width: u32,
+    height: u32,
+    retired_frames: &mut Vec<FrameHandle>,
+    source: &'static str,
+) {
+    if width == preview.width && height == preview.height {
+        return;
+    }
+    let now = Instant::now();
+    if width == preview.resize_retry_width
+        && height == preview.resize_retry_height
+        && now < preview.resize_retry_at
+    {
+        return;
+    }
+    match resize_preview(preview, width, height, retired_frames) {
+        Ok(()) => {
+            preview.resize_retry_width = 0;
+            preview.resize_retry_height = 0;
+            preview.resize_retry_at = now;
+            set_active_error(preview.request_serial, "none");
+        }
+        Err(reason) => {
+            preview.resize_retry_width = width;
+            preview.resize_retry_height = height;
+            preview.resize_retry_at = now + Duration::from_millis(RESIZE_RETRY_MS);
             set_active_error(preview.request_serial, reason);
             crate::log_warn!(
                 target: "ui4";
-                "ui4 gpgpu-preview resize rejected request={} window={} extent={}x{} reason={}\n",
+                "ui4 gpgpu-preview resize rejected request={} window={} extent={}x{} source={} retry_ms={} reason={}\n",
                 preview.request_serial,
                 preview.window.raw(),
-                event.width,
-                event.height,
+                width,
+                height,
+                source,
+                RESIZE_RETRY_MS,
                 reason,
             );
         }
@@ -1594,7 +1674,7 @@ fn resize_preview(
 ) -> Result<(), &'static str> {
     let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
     let replacement =
-        create_preview_frame(output, width, height).map_err(|_| "resize-frame-create-failed")?;
+        create_preview_frame(output, width, height).map_err(preview_frame_create_error_label)?;
     if replace_window_frame(PREVIEW_OWNER, preview.window, replacement).is_err() {
         let _ = destroy_frame(replacement);
         return Err("resize-window-replace-failed");
@@ -1750,6 +1830,8 @@ fn mark_starting(desired: DesiredPreview) {
     control.status.config = desired.config;
     control.status.frame = None;
     control.status.window = None;
+    control.status.width = 0;
+    control.status.height = 0;
     control.status.metrics = GpgpuPreviewMetrics::default();
     control.status.members = INACTIVE_PREVIEW_MEMBERS;
     control.status.last_error = "none";
@@ -1761,6 +1843,8 @@ fn mark_faulted(desired: DesiredPreview, reason: &'static str) {
     control.status.applied_serial = desired.serial;
     control.status.frame = None;
     control.status.window = None;
+    control.status.width = 0;
+    control.status.height = 0;
     control.status.members = INACTIVE_PREVIEW_MEMBERS;
     control.status.last_error = reason;
 }
@@ -1771,6 +1855,8 @@ fn mark_idle(serial: u64, reason: &'static str) {
     control.status.applied_serial = serial;
     control.status.frame = None;
     control.status.window = None;
+    control.status.width = 0;
+    control.status.height = 0;
     clear_preview_member_handles(&mut control.status.members);
     control.status.last_error = reason;
 }
@@ -1790,6 +1876,8 @@ fn mark_duration_complete(
     control.status.applied_serial = serial;
     control.status.frame = None;
     control.status.window = None;
+    control.status.width = 0;
+    control.status.height = 0;
     control.status.metrics = metrics;
     control.status.members = members;
     control.status.last_error = "duration-complete";
@@ -1811,6 +1899,8 @@ fn mark_runtime_fault(
     control.status.applied_serial = serial;
     control.status.frame = None;
     control.status.window = None;
+    control.status.width = 0;
+    control.status.height = 0;
     control.status.metrics = metrics;
     control.status.members = members;
     control.status.last_error = reason;
@@ -1831,6 +1921,8 @@ fn publish_active_status(
     control.status.phase = phase;
     control.status.frame = Some(first.frame);
     control.status.window = Some(first.window);
+    control.status.width = first.width;
+    control.status.height = first.height;
     control.status.metrics = aggregate_preview_metrics(previews);
     control.status.members = preview_member_statuses(previews);
     if control.status.last_error == "none" || last_error != "none" {

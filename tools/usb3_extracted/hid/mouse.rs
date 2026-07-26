@@ -92,16 +92,33 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
     }
 
     let buttons = data[0];
-    let dx = i8::from_le_bytes([data[1]]);
-    let dy = i8::from_le_bytes([data[2]]);
-    let wheel = data.get(3).copied().map(|value| value as i8).unwrap_or(0);
+    let dx = i32::from(i8::from_le_bytes([data[1]]));
+    let dy = i32::from(i8::from_le_bytes([data[2]]));
+    let wheel = i32::from(data.get(3).copied().map(|value| value as i8).unwrap_or(0));
     let has_wheel = data.len() >= 4;
+    handle_decoded_report(runtime, buttons, dx, dy, wheel, has_wheel, now_ms);
+}
+
+pub(crate) fn handle_decoded_report(
+    runtime: &mut HidRuntime,
+    buttons: u8,
+    dx: i32,
+    dy: i32,
+    wheel: i32,
+    has_wheel: bool,
+    now_ms: u32,
+) {
+    let legacy_dx = saturating_i8(dx);
+    let legacy_dy = saturating_i8(dy);
+    let legacy_wheel = saturating_i8(wheel);
     let prev_buttons = runtime.mouse_buttons_down;
     runtime.mouse_buttons_down = u32::from(buttons);
 
     if dx != 0 || dy != 0 {
-        runtime.mouse_x = clamp01(runtime.mouse_x + (dx as f64) * super::HID_MOUSE_NORM_PER_DELTA);
-        runtime.mouse_y = clamp01(runtime.mouse_y + (dy as f64) * super::HID_MOUSE_NORM_PER_DELTA);
+        runtime.mouse_x =
+            clamp01(runtime.mouse_x + f64::from(dx) * super::HID_MOUSE_NORM_PER_DELTA);
+        runtime.mouse_y =
+            clamp01(runtime.mouse_y + f64::from(dy) * super::HID_MOUSE_NORM_PER_DELTA);
     }
 
     runtime.mouse_ring.push(TrueosHidMouseSample {
@@ -109,9 +126,9 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         seq: runtime.seq as u32,
         slot_id: runtime.slot_id,
         buttons,
-        dx,
-        dy,
-        wheel,
+        dx: legacy_dx,
+        dy: legacy_dy,
+        wheel: legacy_wheel,
         flags: 1 << 0,
     });
 
@@ -149,7 +166,7 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         reserved0: 0,
         reserved1: 0,
         buttons_down: runtime.mouse_buttons_down,
-        wheel: wheel as i16,
+        wheel: saturating_i16(wheel),
         reserved2: 0,
         x: runtime.mouse_x,
         y: runtime.mouse_y,
@@ -158,17 +175,17 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
     super::input::push_event(super::input::InputEvent::Mouse(super::input::MouseEvent {
         slot_id: runtime.slot_id,
         buttons,
-        dx,
-        dy,
-        wheel,
+        dx: legacy_dx,
+        dy: legacy_dy,
+        wheel: legacy_wheel,
         has_wheel,
     }));
     super::input::qjs_mouse_offer(super::input::MouseEvent {
         slot_id: runtime.slot_id,
         buttons,
-        dx,
-        dy,
-        wheel,
+        dx: legacy_dx,
+        dy: legacy_dy,
+        wheel: legacy_wheel,
         has_wheel,
     });
     sync_runtime_cursor_snapshot(runtime);
@@ -183,4 +200,14 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         "human",
         false,
     );
+}
+
+#[inline]
+fn saturating_i8(value: i32) -> i8 {
+    value.clamp(i32::from(i8::MIN), i32::from(i8::MAX)) as i8
+}
+
+#[inline]
+fn saturating_i16(value: i32) -> i16 {
+    value.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
 }

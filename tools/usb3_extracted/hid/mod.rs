@@ -12,6 +12,7 @@ pub mod leds;
 pub mod mediacontrol;
 pub mod midi;
 pub mod mouse;
+mod mouse_report;
 pub mod tablet;
 pub(crate) use crate::log_os::flags::HID_DEBUG_REPORT_LOGS;
 pub use v::vinput::TrueosHidCursorEvent;
@@ -469,6 +470,24 @@ pub(crate) fn handle_mouse_boot_report(
         runtime_mut_or_insert(&mut runtimes, controller_id, slot_id, ep_target, HID_KIND_MOUSE);
     runtime.seq = runtime.seq.wrapping_add(1);
     mouse::handle_report(runtime, data, now_ms);
+}
+
+pub(crate) fn handle_mouse_report_values(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    buttons: u8,
+    dx: i32,
+    dy: i32,
+    wheel: i32,
+    has_wheel: bool,
+) {
+    let now_ms = now_ms_u32();
+    let mut runtimes = HID_RUNTIMES.lock();
+    let runtime =
+        runtime_mut_or_insert(&mut runtimes, controller_id, slot_id, ep_target, HID_KIND_MOUSE);
+    runtime.seq = runtime.seq.wrapping_add(1);
+    mouse::handle_decoded_report(runtime, buttons, dx, dy, wheel, has_wheel, now_ms);
 }
 
 pub(crate) fn inject_usb3_mouse_relative_event(

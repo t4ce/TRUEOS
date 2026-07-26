@@ -169,7 +169,7 @@ fn start(
                     artifact_name(preset),
                     artifact_hash(preset),
                     kernel_name(preset),
-                    "dynamic-frame",
+                    "dynamic-frame/reconciled",
                     detail,
                 )
                 .as_str(),
@@ -288,7 +288,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "cpp status: active={} online={} phase={} request={} applied={} mode={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} marker=0x{:08X} submit_ms={} artifact={} resident={} verified={} gpu=0x{:X} zebin_sha256={} runtime_compiler=0 maximize={} pcm_tap={} pcm_sequence={} pcm_frames={} signal={} rms={:.4} peak={:.4} low={:.3} mid={:.3} high={:.3} beat={:.3} error={}{}",
+            "cpp status: active={} online={} phase={} request={} applied={} mode={} frame={} window={} extent={}x{} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} marker=0x{:08X} submit_ms={} artifact={} resident={} verified={} gpu=0x{:X} zebin_sha256={} runtime_compiler=0 maximize={} pcm_tap={} pcm_sequence={} pcm_frames={} signal={} rms={:.4} peak={:.4} low={:.3} mid={:.3} high={:.3} beat={:.3} error={}{}",
             active_cpp as u8,
             status.online as u8,
             status.phase.label(),
@@ -301,6 +301,8 @@ fn print_status(io: &'static dyn ShellBackend2) {
             },
             status.frame.map(|frame| frame.raw()).unwrap_or(0),
             status.window.map(|window| window.raw()).unwrap_or(0),
+            status.width,
+            status.height,
             status.metrics.attempted,
             status.metrics.submitted,
             status.metrics.completed,
@@ -316,7 +318,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
             upload.is_some_and(|artifact| artifact.verified) as u8,
             upload.map(|artifact| artifact.gpu).unwrap_or(0),
             artifact_hash(status.config.preset),
-            "dynamic-frame",
+            "dynamic-frame/reconciled",
             audio_status.enabled as u8,
             audio_status.sequence,
             audio_status.captured_frames,

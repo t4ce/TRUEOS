@@ -37,6 +37,7 @@ enum GenericPointerKind {
 struct GenericPointerInfo {
     kind: GenericPointerKind,
     has_report_id: bool,
+    mouse_report_layout: Option<super::mouse_report::MouseReportLayout>,
 }
 
 impl HidBootKind {
@@ -103,6 +104,7 @@ struct HidBootTarget {
     kind: HidBootKind,
     generic_pointer: bool,
     strip_report_id: bool,
+    mouse_report_layout: Option<super::mouse_report::MouseReportLayout>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -194,11 +196,13 @@ fn classify_generic_pointer_report(report_desc: &[u8]) -> Option<GenericPointerI
         Some(GenericPointerInfo {
             kind: GenericPointerKind::Tablet,
             has_report_id,
+            mouse_report_layout: None,
         })
     } else if saw_mouse {
         Some(GenericPointerInfo {
             kind: GenericPointerKind::Mouse,
             has_report_id,
+            mouse_report_layout: None,
         })
     } else {
         None
@@ -245,7 +249,15 @@ async fn read_generic_pointer_info(
         .await
         .ok()?
         .min(report_desc.len());
-    classify_generic_pointer_report(&report_desc[..report_read_len])
+    let report_desc = &report_desc[..report_read_len];
+    let mut info = classify_generic_pointer_report(report_desc)?;
+    if matches!(info.kind, GenericPointerKind::Mouse) {
+        info.mouse_report_layout = super::mouse_report::parse_mouse_report_layout(report_desc);
+        if let Some(layout) = info.mouse_report_layout {
+            info.has_report_id = layout.report_id().is_some();
+        }
+    }
+    Some(info)
 }
 
 fn pick_hid_boot_targets(
@@ -305,6 +317,7 @@ fn pick_hid_boot_targets(
                     kind,
                     generic_pointer,
                     strip_report_id: false,
+                    mouse_report_layout: None,
                 };
 
                 if matches!(kind, HidBootKind::Tablet) {
@@ -428,18 +441,18 @@ async fn hid_boot_stream_task(
 
     if matches!(target.kind, HidBootKind::Mouse | HidBootKind::Keyboard) && !target.generic_pointer
     {
-        // Boot-mouse protocol only guarantees buttons 1-3.  Keep keyboards in
-        // their small, predictable boot format, but ask mice for report
-        // protocol so HID button usages 4+ (side/back/forward buttons) survive
-        // into the UI4 input ring.  Conventional boot mice use the same
-        // buttons/dx/dy/wheel prefix in report protocol.
-        let protocol = if matches!(target.kind, HidBootKind::Mouse) {
-            selected_protocol = "report";
-            1
-        } else {
-            selected_protocol = "boot";
-            0
-        };
+        // Use report protocol only when its descriptor produced a concrete
+        // mouse layout, retaining extra buttons and non-boot axis widths. If
+        // descriptor discovery failed, boot protocol is the safe fixed-layout
+        // fallback for a boot-capable mouse.
+        let protocol =
+            if matches!(target.kind, HidBootKind::Mouse) && target.mouse_report_layout.is_some() {
+                selected_protocol = "report";
+                1
+            } else {
+                selected_protocol = "boot";
+                0
+            };
         match interface
             .device()
             .control_out(
@@ -636,17 +649,38 @@ async fn hid_boot_stream_task(
                         sample,
                     ),
                     HidBootKind::Mouse => {
-                        let mouse_sample = if target.strip_report_id && sample.len() > 1 {
-                            &sample[1..]
+                        if let Some(layout) = target.mouse_report_layout {
+                            let Some(decoded) = layout.decode(sample) else {
+                                // A different report ID on a composite HID
+                                // interface is not a mouse packet.
+                                continue;
+                            };
+                            super::handle_mouse_report_values(
+                                controller_id,
+                                slot_id,
+                                ep_target,
+                                decoded.buttons,
+                                decoded.dx,
+                                decoded.dy,
+                                decoded.wheel,
+                                layout.wheel_bit_offset().is_some(),
+                            );
                         } else {
-                            sample
-                        };
-                        super::handle_mouse_boot_report(
-                            controller_id,
-                            slot_id,
-                            ep_target,
-                            mouse_sample,
-                        );
+                            let mouse_sample = if target.strip_report_id
+                                && (selected_protocol != "boot" || !hid_protocol_ok)
+                                && sample.len() > 1
+                            {
+                                &sample[1..]
+                            } else {
+                                sample
+                            };
+                            super::handle_mouse_boot_report(
+                                controller_id,
+                                slot_id,
+                                ep_target,
+                                mouse_sample,
+                            );
+                        }
                     }
                     HidBootKind::Tablet => {
                         super::handle_tablet_boot_report(controller_id, slot_id, ep_target, sample);
@@ -776,6 +810,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                     let has_report_id = inferred.map(|info| info.has_report_id).unwrap_or(false);
                     target.kind = HidBootKind::Mouse;
                     target.strip_report_id = has_report_id;
+                    target.mouse_report_layout = inferred.and_then(|info| info.mouse_report_layout);
                     target.report_len =
                         usize::from(target.in_max_packet_size.max(if has_report_id {
                             5
@@ -821,6 +856,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                 read_generic_pointer_info(device_owner, target.interface_number).await
             {
                 target.strip_report_id = info.has_report_id;
+                target.mouse_report_layout = info.mouse_report_layout;
                 if info.has_report_id {
                     target.report_len = usize::from(target.in_max_packet_size.max(5));
                 }
@@ -832,6 +868,22 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                     info.has_report_id,
                 );
             }
+        }
+
+        if let Some(layout) = target.mouse_report_layout {
+            let (x_bits, y_bits) = layout.axis_bits();
+            crate::log_info!(target: "usb";
+                "crabusb: hid {:04X}:{:04X} mouse report-layout if#{} report_id={:?} x=bit{}/{} y=bit{}/{} wheel={:?}\n",
+                vendor_id,
+                product_id,
+                target.interface_number,
+                layout.report_id(),
+                layout.x_bit_offset(),
+                x_bits,
+                layout.y_bit_offset(),
+                y_bits,
+                layout.wheel_bit_offset(),
+            );
         }
 
         let active_stream = ActiveHidStream {
