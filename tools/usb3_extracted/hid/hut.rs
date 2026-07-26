@@ -210,8 +210,7 @@ pub struct TrueosHidHutCombo {
     pub combo_id: u32,
     pub source_kind: u8,
     pub source_tag_len: u8,
-    pub color_id: u8,
-    pub flags: u8,
+    pub reserved0: u16,
     pub source_tag: [u8; HID_HUT_SOURCE_TAG_MAX],
     pub mouse_controller_id: u32,
     pub mouse_slot_id: u32,
@@ -222,9 +221,6 @@ pub struct TrueosHidHutCombo {
     pub tablet_controller_id: u32,
     pub tablet_slot_id: u32,
     pub tablet_ep_target: u32,
-    pub gamepad_controller_id: u32,
-    pub gamepad_slot_id: u32,
-    pub gamepad_ep_target: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -1165,8 +1161,7 @@ pub fn read_combos_snapshot(out: &mut [TrueosHidHutCombo]) -> usize {
             combo_id: combo.combo_id,
             source_kind: combo.source_kind as u8,
             source_tag_len: 0,
-            color_id: combo.color_id,
-            flags: combo.flags,
+            reserved0: 0,
             source_tag: [0; HID_HUT_SOURCE_TAG_MAX],
             mouse_controller_id: combo.mouse_controller_id,
             mouse_slot_id: combo.mouse_slot_id,
@@ -1177,9 +1172,6 @@ pub fn read_combos_snapshot(out: &mut [TrueosHidHutCombo]) -> usize {
             tablet_controller_id: combo.tablet_controller_id,
             tablet_slot_id: combo.tablet_slot_id,
             tablet_ep_target: combo.tablet_ep_target,
-            gamepad_controller_id: combo.gamepad_controller_id,
-            gamepad_slot_id: combo.gamepad_slot_id,
-            gamepad_ep_target: combo.gamepad_ep_target,
         };
         next.source_tag_len = copy_source_tag(&mut next.source_tag, &combo.source_tag);
         out[wrote] = next;

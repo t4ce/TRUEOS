@@ -25,8 +25,8 @@ fn input_combo_source_kind(value: u8) -> crate::usb2::hid::hut::HidSourceKind {
 
 fn input_combo_info(
     combo: &crate::usb2::hid::hut::HidCombo,
-) -> v::vinput::TrueosHidHutCombo {
-    let mut out = v::vinput::TrueosHidHutCombo {
+) -> v::vinput::TrueosInputComboInfoV1 {
+    let mut out = v::vinput::TrueosInputComboInfoV1 {
         combo_id: combo.combo_id,
         source_kind: combo.source_kind as u8,
         color_id: combo.color_id,
@@ -43,7 +43,7 @@ fn input_combo_info(
         gamepad_controller_id: combo.gamepad_controller_id,
         gamepad_slot_id: combo.gamepad_slot_id,
         gamepad_ep_target: combo.gamepad_ep_target,
-        ..v::vinput::TrueosHidHutCombo::default()
+        ..v::vinput::TrueosInputComboInfoV1::default()
     };
     let source_tag = combo.source_tag.as_bytes();
     let source_tag_len = core::cmp::min(source_tag.len(), out.source_tag.len());
@@ -840,7 +840,7 @@ pub unsafe extern "C" fn trueos_cabi_input_combo_request(
     requested_color: i32,
     label_ptr: *const u8,
     label_len: usize,
-    out_combo: *mut v::vinput::TrueosHidHutCombo,
+    out_combo: *mut v::vinput::TrueosInputComboInfoV1,
 ) -> i32 {
     if out_combo.is_null() {
         return -1;

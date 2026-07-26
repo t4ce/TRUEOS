@@ -8,8 +8,8 @@ pub use crate::vcabi::{
     GamepadControlCommand, GamepadControlDeviceInfo, GamepadControlSnapshot,
     KeyboardControlCommand, KeyboardControlDeviceInfo, MouseMotionCommand, MouseMotionCursorInfo,
     TrueosHidCursorEvent, TrueosHidHutCombo, TrueosHidHutKeyboardState, TrueosHidHutMouseState,
-    TrueosHidHutTabletState, TrueosHidKeyboardSample, TrueosHidMouseSample, TrueosHidTabletSample,
-    TrueosMouseState, TrueosTabletEvent,
+    TrueosHidHutTabletState, TrueosHidKeyboardSample, TrueosHidMouseSample,
+    TrueosHidTabletSample, TrueosInputComboInfoV1, TrueosMouseState, TrueosTabletEvent,
 };
 
 pub const MOUSE_MOTION_OPCODE_TELEPORT: u8 = 1;
@@ -453,7 +453,7 @@ impl Drop for VGamepad {
 /// into one combo after allocation.
 #[derive(Clone, Debug)]
 pub struct InputCombo {
-    info: TrueosHidHutCombo,
+    info: TrueosInputComboInfoV1,
 }
 
 impl InputCombo {
@@ -465,7 +465,7 @@ impl InputCombo {
         if label.is_empty() {
             return Err(-1);
         }
-        let mut info = TrueosHidHutCombo::default();
+        let mut info = TrueosInputComboInfoV1::default();
         let requested_color = color
             .map(|value| i32::from(value as u8))
             .unwrap_or(INPUT_COMBO_COLOR_AUTO);
@@ -493,12 +493,12 @@ impl InputCombo {
         InputComboColor::from_index(self.info.color_id)
     }
 
-    pub const fn info(&self) -> TrueosHidHutCombo {
+    pub const fn info(&self) -> TrueosInputComboInfoV1 {
         self.info
     }
 
     pub fn refresh(&mut self) -> Result<(), i32> {
-        let Some(info) = hid_hut_combos()
+        let Some(info) = input_combos()
             .into_iter()
             .find(|combo| combo.combo_id == self.info.combo_id)
         else {
@@ -585,6 +585,16 @@ impl InputCombo {
 #[inline]
 fn combo_bind_result(rc: i32) -> Result<(), i32> {
     if rc == 0 { Ok(()) } else { Err(rc) }
+}
+
+pub fn input_combos() -> Vec<TrueosInputComboInfoV1> {
+    let count = unsafe { vcabi::trueos_cabi_input_combo_read(core::ptr::null_mut(), 0) };
+    let mut out = vec![TrueosInputComboInfoV1::default(); count as usize];
+    if count != 0 {
+        let got = unsafe { vcabi::trueos_cabi_input_combo_read(out.as_mut_ptr(), count) };
+        out.truncate(got as usize);
+    }
+    out
 }
 
 #[inline]
