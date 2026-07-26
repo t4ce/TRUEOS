@@ -1,8 +1,10 @@
 pub(crate) const PARTICLE_CRAFT_FRAME_WIDTH: u32 = 640;
 pub(crate) const PARTICLE_CRAFT_FRAME_HEIGHT: u32 = 400;
-/// Private render-quality lever. The artifact accepts 1, 2, or 4 without
-/// changing the public Blueprint ABI or the 640x400 destination surface.
+/// Private destination-relative render-quality lever. The artifact accepts
+/// 1, 2, or 4 without changing the public Blueprint ABI.
 pub(crate) const PARTICLE_CRAFT_RENDER_DIVISOR: u32 = 2;
+/// Native-window sample extent retained for diagnostics and shell startup
+/// output. Maximized samples are derived from the live destination instead.
 pub(crate) const PARTICLE_CRAFT_SAMPLE_WIDTH: u32 =
     PARTICLE_CRAFT_FRAME_WIDTH / PARTICLE_CRAFT_RENDER_DIVISOR;
 pub(crate) const PARTICLE_CRAFT_SAMPLE_HEIGHT: u32 =
@@ -30,6 +32,16 @@ const _: () = assert!(
         + PARTICLE_CRAFT_RENDER_CONTROL_WORDS * core::mem::size_of::<u32>()
         <= PARTICLE_CRAFT_PARAMS_BYTES
 );
+
+pub(crate) const fn particle_craft_sample_extent(
+    destination_width: u32,
+    destination_height: u32,
+) -> (u32, u32) {
+    (
+        destination_width.div_ceil(PARTICLE_CRAFT_RENDER_DIVISOR),
+        destination_height.div_ceil(PARTICLE_CRAFT_RENDER_DIVISOR),
+    )
+}
 
 /// Stable host-side form of the public 64-byte ParticleCraft v1 control block.
 #[derive(Copy, Clone, Debug)]
@@ -147,9 +159,7 @@ fn recycle_particle_craft_gpu_va(gpu: u64, bytes: usize) {
     let Some(end) = gpu.checked_add(bytes) else {
         return;
     };
-    if gpu < DIRECT_RCS_GPU_VA_PARTICLE_CRAFT_BASE
-        || end > DIRECT_RCS_GPU_VA_PARTICLE_CRAFT_LIMIT
-    {
+    if gpu < DIRECT_RCS_GPU_VA_PARTICLE_CRAFT_BASE || end > DIRECT_RCS_GPU_VA_PARTICLE_CRAFT_LIMIT {
         return;
     }
     let mut free = PARTICLE_CRAFT_GPU_VA_FREE.lock();
@@ -243,8 +253,9 @@ impl GpgpuOwnedParticleCraftState {
             ];
             core::ptr::copy_nonoverlapping(
                 render_controls.as_ptr().cast::<u8>(),
-                self.virt
-                    .add(PARTICLE_CRAFT_STATE_BYTES + core::mem::size_of::<ParticleCraftParamsV1>()),
+                self.virt.add(
+                    PARTICLE_CRAFT_STATE_BYTES + core::mem::size_of::<ParticleCraftParamsV1>(),
+                ),
                 PARTICLE_CRAFT_RENDER_CONTROL_WORDS * core::mem::size_of::<u32>(),
             );
         }
@@ -279,7 +290,9 @@ pub(crate) fn particle_craft_rgba8_frame(
 ) -> GpgpuRgba8KernelResult {
     if !params.is_valid()
         || !dst.is_valid()
-        || !dst.pitch_bytes.is_multiple_of(core::mem::size_of::<u32>() as u32)
+        || !dst
+            .pitch_bytes
+            .is_multiple_of(core::mem::size_of::<u32>() as u32)
         || dst.storage_order != GpgpuRgba8StorageOrder::Rgba
     {
         return GpgpuRgba8KernelResult::default();

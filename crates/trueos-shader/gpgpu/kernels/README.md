@@ -25,9 +25,10 @@ boundary, 50% horizontal-pair walker shape, ABI, and TestRig procedure are in
 `particle_craft.clcpp` is the stateful two-pass ParticleCraft engine behind
 `cpp particle` and the Blueprint particle app. Its step entry updates 32-byte
 particle records in place; its race-free pixel-gather entry shades the complete
-640x400 Arc Forge frame from an adjustable 1x/2x/4x private sampling grid. The
-persistent lifetime, 64-byte Blueprint ABI, phase barrier, quarantine rule,
-and TestRig commands are in
+Arc Forge destination from an adjustable 1x/2x/4x destination-relative
+sampling grid, mapped into a stable 640x400 simulation space. The persistent
+lifetime, 64-byte Blueprint ABI, phase barrier, quarantine rule, and TestRig
+commands are in
 [`PARTICLE_CRAFT.md`](PARTICLE_CRAFT.md).
 
 `spirit_vfx_background_rgba8.clcpp` and

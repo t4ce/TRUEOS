@@ -7,11 +7,13 @@ each UI4 instance.
 
 ## Arc Forge
 
-The initial preset renders 128 cyan/violet/hot-white particles at a native
-640x400 logical extent. It currently shades 320x200 samples and expands each
-sample across a 2x2 destination region, retaining the complete frame and
-particle state while reducing the dominant gather from 32,768,000 to
-8,192,000 candidate tests per frame.
+The initial preset renders 128 cyan/violet/hot-white particles in a stable
+640x400 simulation coordinate system. The render walker shades half of the
+live destination resolution on each axis and expands each sample across a 2x2
+destination region. The native 640x400 window therefore shades 320x200 samples
+(8,192,000 candidate tests), while a 2560x1440 maximized frame shades
+1280x720 samples (117,964,800 candidate tests) instead of enlarging the
+windowed lattice.
 Particles have soft cores, velocity-aligned tails, bloom, and bounded
 attractor/swirl physics over a procedural dark field. The Blueprint particle
 app follows live UI4 pointer input for two seconds after each event, then
@@ -37,9 +39,9 @@ destination, and retained allocation; there is no CPU fallback after submit.
 The private tail of the control page carries the current destination extent,
 pitch, and a render divisor accepting 1, 2, or 4. The checked host default is
 2; changing `PARTICLE_CRAFT_RENDER_DIVISOR` adjusts gather work without an ABI
-revision or artifact rebake. The bounded gather expands each sample over its
-corresponding destination region, so maximize/restore covers the replacement
-frame without multiplying particle tests by output resolution.
+revision or artifact rebake. Sample coordinates are mapped back into the
+stable simulation space, so maximize/restore changes render detail without
+changing particle physics.
 
 Blueprints pass only `ParticleCraftParamsV1`, a versioned 64-byte pointer-free
 control block. GPU addresses never cross the ABI. IGC, Clang, LLVM-SPIRV, and
@@ -48,7 +50,7 @@ C++ are bake-time dependencies only.
 The checked artifact targets `8086:4680`, revision `0x0c`, and has SHA-256:
 
 ```text
-522c638d80e0cad720a796c554da7ab0b46ac4a389538e927a2b48394246e65b
+1f271988ceedf731a5dca41a436a452b0ca5e70e50b4685d0bfae8abf3c0c711
 ```
 
 Bake and verify:

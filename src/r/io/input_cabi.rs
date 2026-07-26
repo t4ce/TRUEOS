@@ -14,6 +14,44 @@ use crate::r::mouse_motion_service::{
     submit_json,
 };
 
+fn input_combo_source_kind(value: u8) -> crate::usb2::hid::hut::HidSourceKind {
+    match value {
+        1 => crate::usb2::hid::hut::HidSourceKind::Human,
+        2 => crate::usb2::hid::hut::HidSourceKind::Ai,
+        3 => crate::usb2::hid::hut::HidSourceKind::Remote,
+        _ => crate::usb2::hid::hut::HidSourceKind::Unknown,
+    }
+}
+
+fn input_combo_info(
+    combo: &crate::usb2::hid::hut::HidCombo,
+) -> v::vinput::TrueosHidHutCombo {
+    let mut out = v::vinput::TrueosHidHutCombo {
+        combo_id: combo.combo_id,
+        source_kind: combo.source_kind as u8,
+        color_id: combo.color_id,
+        flags: combo.flags,
+        mouse_controller_id: combo.mouse_controller_id,
+        mouse_slot_id: combo.mouse_slot_id,
+        mouse_ep_target: combo.mouse_ep_target,
+        keyboard_controller_id: combo.keyboard_controller_id,
+        keyboard_slot_id: combo.keyboard_slot_id,
+        keyboard_ep_target: combo.keyboard_ep_target,
+        tablet_controller_id: combo.tablet_controller_id,
+        tablet_slot_id: combo.tablet_slot_id,
+        tablet_ep_target: combo.tablet_ep_target,
+        gamepad_controller_id: combo.gamepad_controller_id,
+        gamepad_slot_id: combo.gamepad_slot_id,
+        gamepad_ep_target: combo.gamepad_ep_target,
+        ..v::vinput::TrueosHidHutCombo::default()
+    };
+    let source_tag = combo.source_tag.as_bytes();
+    let source_tag_len = core::cmp::min(source_tag.len(), out.source_tag.len());
+    out.source_tag[..source_tag_len].copy_from_slice(&source_tag[..source_tag_len]);
+    out.source_tag_len = source_tag_len as u8;
+    out
+}
+
 unsafe fn input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i32 {
     if out_buttons_down.is_null() || cursor_id == 0 {
         return -1;
@@ -793,5 +831,134 @@ pub unsafe extern "C" fn trueos_cabi_gamepad_control_snapshot(
             0
         }
         Err(error) => error.code(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_input_combo_request(
+    source_kind: u8,
+    requested_color: i32,
+    label_ptr: *const u8,
+    label_len: usize,
+    out_combo: *mut v::vinput::TrueosHidHutCombo,
+) -> i32 {
+    if out_combo.is_null() {
+        return -1;
+    }
+    let label = match unsafe { checked_utf8(label_ptr, label_len) } {
+        Ok(label) if !label.is_empty() => label,
+        _ => return -1,
+    };
+    let color = if requested_color == v::vinput::INPUT_COMBO_COLOR_AUTO {
+        None
+    } else if (0..i32::from(v::vinput::InputComboColor::COUNT)).contains(&requested_color) {
+        Some(requested_color as u8)
+    } else {
+        return -1;
+    };
+    let Some(combo) = crate::usb2::hid::hut::request_combo(
+        input_combo_source_kind(source_kind),
+        label,
+        color,
+    ) else {
+        return -4;
+    };
+    unsafe {
+        *out_combo = input_combo_info(&combo);
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_input_combo_set_color(combo_id: u32, color_id: u8) -> i32 {
+    if crate::usb2::hid::hut::set_combo_color(combo_id, color_id) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_input_combo_bind_mouse(
+    combo_id: u32,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+) -> i32 {
+    if crate::usb2::hid::hut::bind_combo_mouse(
+        combo_id,
+        controller_id,
+        slot_id,
+        ep_target,
+    ) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_input_combo_bind_keyboard(
+    combo_id: u32,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+) -> i32 {
+    if crate::usb2::hid::hut::bind_combo_keyboard(
+        combo_id,
+        controller_id,
+        slot_id,
+        ep_target,
+    ) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_input_combo_bind_tablet(
+    combo_id: u32,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+) -> i32 {
+    if crate::usb2::hid::hut::bind_combo_tablet(
+        combo_id,
+        controller_id,
+        slot_id,
+        ep_target,
+    ) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_input_combo_bind_gamepad(
+    combo_id: u32,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+) -> i32 {
+    if crate::usb2::hid::hut::bind_combo_gamepad(
+        combo_id,
+        controller_id,
+        slot_id,
+        ep_target,
+    ) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_input_combo_remove(combo_id: u32) -> i32 {
+    if crate::usb2::hid::hut::remove_combo(combo_id) {
+        0
+    } else {
+        -3
     }
 }

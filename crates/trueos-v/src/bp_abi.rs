@@ -722,6 +722,39 @@ unsafe extern "C" {
         handle: u64,
         out_snapshot: *mut GamepadControlSnapshot,
     ) -> i32;
+    pub fn trueos_cabi_input_combo_request(
+        source_kind: u8,
+        requested_color: i32,
+        label_ptr: *const u8,
+        label_len: usize,
+        out_combo: *mut TrueosHidHutCombo,
+    ) -> i32;
+    pub fn trueos_cabi_input_combo_set_color(combo_id: u32, color_id: u8) -> i32;
+    pub fn trueos_cabi_input_combo_bind_mouse(
+        combo_id: u32,
+        controller_id: u32,
+        slot_id: u32,
+        ep_target: u32,
+    ) -> i32;
+    pub fn trueos_cabi_input_combo_bind_keyboard(
+        combo_id: u32,
+        controller_id: u32,
+        slot_id: u32,
+        ep_target: u32,
+    ) -> i32;
+    pub fn trueos_cabi_input_combo_bind_tablet(
+        combo_id: u32,
+        controller_id: u32,
+        slot_id: u32,
+        ep_target: u32,
+    ) -> i32;
+    pub fn trueos_cabi_input_combo_bind_gamepad(
+        combo_id: u32,
+        controller_id: u32,
+        slot_id: u32,
+        ep_target: u32,
+    ) -> i32;
+    pub fn trueos_cabi_input_combo_remove(combo_id: u32) -> i32;
     pub fn trueos_cabi_hid_keyboard_read(
         controller_id: u32,
         slot_id: u32,
@@ -765,6 +798,12 @@ unsafe extern "C" {
         ep_target: u32,
     ) -> i32;
     pub fn trueos_cabi_hid_hut_bind_combo_tablet(
+        combo_id: u32,
+        controller_id: u32,
+        slot_id: u32,
+        ep_target: u32,
+    ) -> i32;
+    pub fn trueos_cabi_hid_hut_bind_combo_gamepad(
         combo_id: u32,
         controller_id: u32,
         slot_id: u32,
@@ -1107,7 +1146,8 @@ pub struct TrueosHidHutCombo {
     pub combo_id: u32,
     pub source_kind: u8,
     pub source_tag_len: u8,
-    pub reserved0: u16,
+    pub color_id: u8,
+    pub flags: u8,
     pub source_tag: [u8; 32],
     pub mouse_controller_id: u32,
     pub mouse_slot_id: u32,
@@ -1118,4 +1158,7 @@ pub struct TrueosHidHutCombo {
     pub tablet_controller_id: u32,
     pub tablet_slot_id: u32,
     pub tablet_ep_target: u32,
+    pub gamepad_controller_id: u32,
+    pub gamepad_slot_id: u32,
+    pub gamepad_ep_target: u32,
 }

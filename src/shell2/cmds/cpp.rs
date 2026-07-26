@@ -149,7 +149,10 @@ fn start(
             " pcm=post-mix/pre-hda-s16le-stereo-48k fft=2048-mid-side bands=64 walker=horizontal-pairs/50pct",
         )
     } else if particle {
-        particle_work_detail()
+        particle_work_detail(
+            crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_WIDTH,
+            crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_HEIGHT,
+        )
     } else {
         String::new()
     };
@@ -237,33 +240,40 @@ fn print_list(io: &'static dyn ShellBackend2) {
     );
 }
 
-fn particle_candidate_tests() -> u64 {
-    u64::from(crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_WIDTH)
-        * u64::from(crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_HEIGHT)
+fn particle_candidate_tests(sample_width: u32, sample_height: u32) -> u64 {
+    u64::from(sample_width)
+        * u64::from(sample_height)
         * u64::from(crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES)
 }
 
-fn particle_work_detail() -> String {
+fn particle_work_detail(destination_width: u32, destination_height: u32) -> String {
+    let (sample_width, sample_height) =
+        crate::intel::gpgpu::particle_craft_sample_extent(destination_width, destination_height);
     alloc::format!(
-        " preset=arc-forge particles={} state=8KiB params=v1/64B passes=step+pixel-gather samples={}x{} render_divisor={} candidate_tests={}",
+        " preset=arc-forge particles={} state=8KiB params=v1/64B passes=step+pixel-gather destination={}x{} samples={}x{} render_divisor={} sample_policy=half-destination candidate_tests={}",
         crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES,
-        crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_WIDTH,
-        crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_HEIGHT,
+        destination_width,
+        destination_height,
+        sample_width,
+        sample_height,
         crate::intel::gpgpu::PARTICLE_CRAFT_RENDER_DIVISOR,
-        particle_candidate_tests(),
+        particle_candidate_tests(sample_width, sample_height),
     )
 }
 
 fn particle_list_detail() -> String {
     alloc::format!(
-        "cpp demo: mode=particle preset=arc-forge explores=persistent-state/two-pass-dependency/soft-cores+velocity-tails+pointer-attraction particles={} native_extent={}x{} samples={}x{} render_divisor={} candidate_tests={} resizable=1",
+        "cpp demo: mode=particle preset=arc-forge explores=persistent-state/two-pass-dependency/soft-cores+velocity-tails+pointer-attraction particles={} native_extent={}x{} native_samples={}x{} render_divisor={} sample_policy=half-live-destination native_candidate_tests={} resizable=1",
         crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES,
         crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_WIDTH,
         crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_HEIGHT,
         crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_WIDTH,
         crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_HEIGHT,
         crate::intel::gpgpu::PARTICLE_CRAFT_RENDER_DIVISOR,
-        particle_candidate_tests(),
+        particle_candidate_tests(
+            crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_WIDTH,
+            crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_HEIGHT,
+        ),
     )
 }
 
@@ -281,7 +291,17 @@ fn print_status(io: &'static dyn ShellBackend2) {
     };
     let audio_status = crate::aud::audio_visualizer::status();
     let particle_detail = if particle {
-        particle_work_detail()
+        let destination_width = if status.width == 0 {
+            crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_WIDTH
+        } else {
+            status.width
+        };
+        let destination_height = if status.height == 0 {
+            crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_HEIGHT
+        } else {
+            status.height
+        };
+        particle_work_detail(destination_width, destination_height)
     } else {
         String::new()
     };

@@ -2,9 +2,9 @@
 //
 // The first entry advances an array of compact 32-byte particles in place.
 // The second entry gathers that state over a host-selected fraction of the
-// fixed 640x400 logical resolution and covers the complete destination extent.
-// This keeps fullscreen cost bounded while allowing UI4 maximize/restore frame
-// replacement and a cheap quality/work adjustment without changing the ABI.
+// live destination resolution, while mapping every sample back into the stable
+// 640x400 simulation coordinate system. UI4 maximize therefore raises actual
+// render detail instead of enlarging the original window's sample blocks.
 // Both entries are baked into one exact-target C++ for OpenCL/IGC artifact.
 
 #include "include/trueos_clcpp.hpp"
@@ -262,9 +262,6 @@ __kernel void particle_craft_render_rgba8(
 
     const uint x = static_cast<uint>(get_global_id(0));
     const uint y = static_cast<uint>(get_global_id(1));
-    if (x >= frame_width || y >= frame_height) {
-        return;
-    }
     const uint destination_width = params[param_destination_width];
     const uint destination_height = params[param_destination_height];
     const uint destination_pitch_pixels = params[param_destination_pitch_pixels];
@@ -276,17 +273,33 @@ __kernel void particle_craft_render_rgba8(
             && render_divisor != 4u)) {
         return;
     }
-    const uint sample_width = frame_width / render_divisor;
-    const uint sample_height = frame_height / render_divisor;
+    const uint sample_width =
+        (destination_width + render_divisor - 1u) / render_divisor;
+    const uint sample_height =
+        (destination_height + render_divisor - 1u) / render_divisor;
     if (x >= sample_width || y >= sample_height) {
         return;
     }
 
-    const uint logical_x = x * render_divisor;
-    const uint logical_y = y * render_divisor;
+    const uint destination_left = x * render_divisor;
+    const uint destination_right =
+        min(destination_left + render_divisor, destination_width);
+    const uint destination_top = y * render_divisor;
+    const uint destination_bottom =
+        min(destination_top + render_divisor, destination_height);
+    const float destination_center_x =
+        (static_cast<float>(destination_left)
+            + static_cast<float>(destination_right)) * 0.5f;
+    const float destination_center_y =
+        (static_cast<float>(destination_top)
+            + static_cast<float>(destination_bottom)) * 0.5f;
     const float2 point = (float2)(
-        static_cast<float>(logical_x) + static_cast<float>(render_divisor) * 0.5f,
-        static_cast<float>(logical_y) + static_cast<float>(render_divisor) * 0.5f);
+        destination_center_x
+            * (static_cast<float>(frame_width)
+                / static_cast<float>(destination_width)),
+        destination_center_y
+            * (static_cast<float>(frame_height)
+                / static_cast<float>(destination_height)));
     const float2 normalized = (point - (float2)(320.0f, 200.0f)) / 200.0f;
     const float radius = native_sqrt(dot(normalized, normalized));
     const float time_seconds =
@@ -374,12 +387,6 @@ __kernel void particle_craft_render_rgba8(
 
     color = color / ((float3)(1.0f) + color);
     const uint packed = pack_rgba8(color);
-    const uint destination_left = logical_x * destination_width / frame_width;
-    const uint destination_right =
-        (logical_x + render_divisor) * destination_width / frame_width;
-    const uint destination_top = logical_y * destination_height / frame_height;
-    const uint destination_bottom =
-        (logical_y + render_divisor) * destination_height / frame_height;
     for (uint destination_y = destination_top;
          destination_y < destination_bottom;
          ++destination_y) {

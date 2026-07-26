@@ -34,6 +34,110 @@ pub const GAMEPAD_CONTROL_OPCODE_WAIT: u8 = 3;
 pub const GAMEPAD_CONTROL_EASING_LINEAR: u8 = 0;
 pub const GAMEPAD_CONTROL_EASING_NATURAL: u8 = 1;
 pub const GAMEPAD_CONTROL_FLAG_CLEAR_QUEUE: u8 = 1 << 0;
+pub const INPUT_COMBO_COLOR_AUTO: i32 = -1;
+pub const INPUT_COMBO_FLAG_AUTO_ASSIGNED: u8 = 1 << 0;
+
+/// Origin of an input collection. This describes the persona producing input,
+/// independently of whether each member device is physical or virtual.
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum InputComboSourceKind {
+    #[default]
+    Unknown = 0,
+    Human = 1,
+    Ai = 2,
+    Remote = 3,
+}
+
+/// Stable visual identity assigned to an [`InputCombo`].
+///
+/// The values are palette slots rather than packed pixels, so every VLayer
+/// consumer resolves the same identity into the representation it needs.
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum InputComboColor {
+    #[default]
+    Coral = 0,
+    Azure = 1,
+    Mint = 2,
+    Amber = 3,
+    Violet = 4,
+    Orange = 5,
+    Cyan = 6,
+    Lavender = 7,
+    Lime = 8,
+    Pink = 9,
+    Cobalt = 10,
+    Green = 11,
+    Yellow = 12,
+    Purple = 13,
+    Rose = 14,
+    Ice = 15,
+}
+
+impl InputComboColor {
+    pub const COUNT: u8 = 16;
+
+    pub const fn from_index(index: u8) -> Self {
+        match index % Self::COUNT {
+            0 => Self::Coral,
+            1 => Self::Azure,
+            2 => Self::Mint,
+            3 => Self::Amber,
+            4 => Self::Violet,
+            5 => Self::Orange,
+            6 => Self::Cyan,
+            7 => Self::Lavender,
+            8 => Self::Lime,
+            9 => Self::Pink,
+            10 => Self::Cobalt,
+            11 => Self::Green,
+            12 => Self::Yellow,
+            13 => Self::Purple,
+            14 => Self::Rose,
+            _ => Self::Ice,
+        }
+    }
+
+    pub const fn rgba(self) -> [u8; 4] {
+        match self {
+            Self::Coral => [255, 64, 64, 255],
+            Self::Azure => [32, 168, 255, 255],
+            Self::Mint => [32, 224, 128, 255],
+            Self::Amber => [255, 190, 32, 255],
+            Self::Violet => [220, 80, 255, 255],
+            Self::Orange => [255, 112, 32, 255],
+            Self::Cyan => [32, 224, 224, 255],
+            Self::Lavender => [152, 112, 255, 255],
+            Self::Lime => [192, 240, 48, 255],
+            Self::Pink => [255, 64, 176, 255],
+            Self::Cobalt => [64, 112, 255, 255],
+            Self::Green => [48, 192, 96, 255],
+            Self::Yellow => [255, 224, 64, 255],
+            Self::Purple => [176, 80, 224, 255],
+            Self::Rose => [255, 128, 160, 255],
+            Self::Ice => [96, 224, 255, 255],
+        }
+    }
+}
+
+/// Address of one independently clocked input device.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct InputEndpoint {
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+}
+
+impl InputEndpoint {
+    pub const fn new(controller_id: u32, slot_id: u32, ep_target: u32) -> Self {
+        Self {
+            controller_id,
+            slot_id,
+            ep_target,
+        }
+    }
+}
 
 /// Capability-backed virtual cursor. Motion is accepted and clocked by the
 /// kernel mouse-motion service; this object cannot inject a HID event directly.
@@ -61,6 +165,10 @@ impl VCursor {
 
     pub const fn slot_id(&self) -> u32 {
         self.info.slot_id
+    }
+
+    pub const fn input_endpoint(&self) -> InputEndpoint {
+        InputEndpoint::new(0, self.info.slot_id, 0)
     }
 
     pub fn submit(&self, command: MouseMotionCommand) -> Result<(), i32> {
@@ -154,6 +262,10 @@ impl VKeyboard {
 
     pub const fn slot_id(&self) -> u32 {
         self.info.slot_id
+    }
+
+    pub const fn input_endpoint(&self) -> InputEndpoint {
+        InputEndpoint::new(0, self.info.slot_id, 0)
     }
 
     pub fn submit(&self, command: KeyboardControlCommand) -> Result<(), i32> {
@@ -259,6 +371,10 @@ impl VGamepad {
         self.info.slot_id
     }
 
+    pub const fn input_endpoint(&self) -> InputEndpoint {
+        InputEndpoint::new(0, self.info.slot_id, 0)
+    }
+
     pub fn submit(&self, command: GamepadControlCommand) -> Result<(), i32> {
         if !self.open {
             return Err(-3);
@@ -326,6 +442,149 @@ impl Drop for VGamepad {
     fn drop(&mut self) {
         let _ = self.close_inner();
     }
+}
+
+/// VLayer identity for a collection of independently operating input devices.
+///
+/// A combo may contain at most one device of each supported class. Binding a
+/// member never changes how that device is clocked or owned; it only gives UI
+/// and routing services a shared persona, color, and keyboard/cursor relation.
+/// RDP can therefore request its virtual devices independently and bind them
+/// into one combo after allocation.
+#[derive(Clone, Debug)]
+pub struct InputCombo {
+    info: TrueosHidHutCombo,
+}
+
+impl InputCombo {
+    pub fn request(
+        label: &str,
+        source_kind: InputComboSourceKind,
+        color: Option<InputComboColor>,
+    ) -> Result<Self, i32> {
+        if label.is_empty() {
+            return Err(-1);
+        }
+        let mut info = TrueosHidHutCombo::default();
+        let requested_color = color
+            .map(|value| i32::from(value as u8))
+            .unwrap_or(INPUT_COMBO_COLOR_AUTO);
+        let rc = unsafe {
+            vcabi::trueos_cabi_input_combo_request(
+                source_kind as u8,
+                requested_color,
+                label.as_ptr(),
+                label.len(),
+                &mut info,
+            )
+        };
+        if rc == 0 {
+            Ok(Self { info })
+        } else {
+            Err(rc)
+        }
+    }
+
+    pub const fn id(&self) -> u32 {
+        self.info.combo_id
+    }
+
+    pub const fn color(&self) -> InputComboColor {
+        InputComboColor::from_index(self.info.color_id)
+    }
+
+    pub const fn info(&self) -> TrueosHidHutCombo {
+        self.info
+    }
+
+    pub fn refresh(&mut self) -> Result<(), i32> {
+        let Some(info) = hid_hut_combos()
+            .into_iter()
+            .find(|combo| combo.combo_id == self.info.combo_id)
+        else {
+            return Err(-3);
+        };
+        self.info = info;
+        Ok(())
+    }
+
+    pub fn set_color(&mut self, color: InputComboColor) -> Result<(), i32> {
+        let rc = unsafe {
+            vcabi::trueos_cabi_input_combo_set_color(self.info.combo_id, color as u8)
+        };
+        if rc != 0 {
+            return Err(rc);
+        }
+        self.info.color_id = color as u8;
+        Ok(())
+    }
+
+    pub fn bind_mouse_endpoint(&self, endpoint: InputEndpoint) -> Result<(), i32> {
+        combo_bind_result(unsafe {
+            vcabi::trueos_cabi_input_combo_bind_mouse(
+                self.info.combo_id,
+                endpoint.controller_id,
+                endpoint.slot_id,
+                endpoint.ep_target,
+            )
+        })
+    }
+
+    pub fn bind_keyboard_endpoint(&self, endpoint: InputEndpoint) -> Result<(), i32> {
+        combo_bind_result(unsafe {
+            vcabi::trueos_cabi_input_combo_bind_keyboard(
+                self.info.combo_id,
+                endpoint.controller_id,
+                endpoint.slot_id,
+                endpoint.ep_target,
+            )
+        })
+    }
+
+    pub fn bind_tablet_endpoint(&self, endpoint: InputEndpoint) -> Result<(), i32> {
+        combo_bind_result(unsafe {
+            vcabi::trueos_cabi_input_combo_bind_tablet(
+                self.info.combo_id,
+                endpoint.controller_id,
+                endpoint.slot_id,
+                endpoint.ep_target,
+            )
+        })
+    }
+
+    pub fn bind_gamepad_endpoint(&self, endpoint: InputEndpoint) -> Result<(), i32> {
+        combo_bind_result(unsafe {
+            vcabi::trueos_cabi_input_combo_bind_gamepad(
+                self.info.combo_id,
+                endpoint.controller_id,
+                endpoint.slot_id,
+                endpoint.ep_target,
+            )
+        })
+    }
+
+    pub fn bind_cursor(&self, cursor: &VCursor) -> Result<(), i32> {
+        self.bind_mouse_endpoint(cursor.input_endpoint())
+    }
+
+    pub fn bind_keyboard(&self, keyboard: &VKeyboard) -> Result<(), i32> {
+        self.bind_keyboard_endpoint(keyboard.input_endpoint())
+    }
+
+    pub fn bind_gamepad(&self, gamepad: &VGamepad) -> Result<(), i32> {
+        self.bind_gamepad_endpoint(gamepad.input_endpoint())
+    }
+
+    /// Remove the collection identity. Member devices remain alive and
+    /// independent; only their shared routing/color association is removed.
+    pub fn remove(self) -> Result<(), i32> {
+        combo_bind_result(unsafe { vcabi::trueos_cabi_input_combo_remove(self.info.combo_id) })
+    }
+}
+
+#[inline]
+fn combo_bind_result(rc: i32) -> Result<(), i32> {
+    if rc == 0 { Ok(()) } else { Err(rc) }
 }
 
 #[inline]
@@ -545,6 +804,24 @@ pub fn hid_hut_bind_combo_tablet(
 ) -> Result<(), i32> {
     let rc = unsafe {
         vcabi::trueos_cabi_hid_hut_bind_combo_tablet(combo_id, controller_id, slot_id, ep_target)
+    };
+    if rc == 0 { Ok(()) } else { Err(rc) }
+}
+
+#[inline]
+pub fn hid_hut_bind_combo_gamepad(
+    combo_id: u32,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+) -> Result<(), i32> {
+    let rc = unsafe {
+        vcabi::trueos_cabi_hid_hut_bind_combo_gamepad(
+            combo_id,
+            controller_id,
+            slot_id,
+            ep_target,
+        )
     };
     if rc == 0 { Ok(()) } else { Err(rc) }
 }

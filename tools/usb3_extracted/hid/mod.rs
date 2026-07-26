@@ -576,6 +576,7 @@ fn cabi_hut_source_kind(value: u8) -> hut::HidSourceKind {
     match value {
         1 => hut::HidSourceKind::Human,
         2 => hut::HidSourceKind::Ai,
+        3 => hut::HidSourceKind::Remote,
         _ => hut::HidSourceKind::Unknown,
     }
 }
@@ -807,6 +808,20 @@ pub extern "C" fn trueos_cabi_hid_hut_bind_combo_tablet(
     ep_target: u32,
 ) -> i32 {
     if hut::bind_combo_tablet(combo_id, controller_id, slot_id, ep_target) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_hid_hut_bind_combo_gamepad(
+    combo_id: u32,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+) -> i32 {
+    if hut::bind_combo_gamepad(combo_id, controller_id, slot_id, ep_target) {
         0
     } else {
         -1

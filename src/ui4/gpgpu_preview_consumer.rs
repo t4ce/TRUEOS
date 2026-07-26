@@ -2087,6 +2087,8 @@ mod tests {
         assert_eq!(preview_plane_slot(mode), 1);
         assert_eq!(mode.buffering_label(), "double");
         assert_eq!(mode.plane_layout_label(), "slot1-direct");
+        assert_eq!(crate::intel::gpgpu::particle_craft_sample_extent(640, 400), (320, 200));
+        assert_eq!(crate::intel::gpgpu::particle_craft_sample_extent(2560, 1440), (1280, 720));
     }
 
     #[test]

@@ -38,8 +38,7 @@ fn direct_rcs_write_particle_binding_table(
     offset: usize,
     surfaces: &[usize],
 ) -> bool {
-    if offset.saturating_add(surfaces.len() * core::mem::size_of::<u32>())
-        > DIRECT_RCS_BATCH_BYTES
+    if offset.saturating_add(surfaces.len() * core::mem::size_of::<u32>()) > DIRECT_RCS_BATCH_BYTES
     {
         return false;
     }
@@ -159,7 +158,8 @@ fn direct_rcs_encode_particle_craft_batch(
     } else {
         (1u32 << step_lanes) - 1
     };
-    let render_groups_x = PARTICLE_CRAFT_SAMPLE_WIDTH.div_ceil(16);
+    let (sample_width, sample_height) = particle_craft_sample_extent(dst.width, dst.height);
+    let render_groups_x = sample_width.div_ceil(16);
 
     let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
     let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
@@ -203,11 +203,7 @@ fn direct_rcs_encode_particle_craft_batch(
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, PARTICLE_CRAFT_IDD_BYTES as u32);
-    ok &= direct_rcs_push(
-        batch,
-        &mut cursor,
-        PARTICLE_CRAFT_STEP_IDD_OFFSET_BYTES as u32,
-    );
+    ok &= direct_rcs_push(batch, &mut cursor, PARTICLE_CRAFT_STEP_IDD_OFFSET_BYTES as u32);
     ok &= direct_rcs_push_store_marker(
         batch,
         &mut cursor,
@@ -232,18 +228,14 @@ fn direct_rcs_encode_particle_craft_batch(
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, PARTICLE_CRAFT_IDD_BYTES as u32);
-    ok &= direct_rcs_push(
-        batch,
-        &mut cursor,
-        PARTICLE_CRAFT_RENDER_IDD_OFFSET_BYTES as u32,
-    );
+    ok &= direct_rcs_push(batch, &mut cursor, PARTICLE_CRAFT_RENDER_IDD_OFFSET_BYTES as u32);
     ok &= direct_rcs_push_gpgpu_walker_2d(
         batch,
         &mut cursor,
         PARTICLE_CRAFT_RENDER_PAYLOAD_OFFSET_BYTES,
         PARTICLE_CRAFT_RENDER_INDIRECT_BYTES,
         render_groups_x,
-        PARTICLE_CRAFT_SAMPLE_HEIGHT,
+        sample_height,
         GPGPU_WALKER_SIMD16_MASK,
     );
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
@@ -288,10 +280,9 @@ fn submit_particle_craft_rgba8(
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
     let craft_ok = kernel_ok
         && direct_rcs_map_ppgtt_kernel(state, craft.state_gpu(), craft.state_phys(), craft.bytes());
-    let dst_ok =
-        craft_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
-    let batch_ok = dst_ok
-        && direct_rcs_encode_particle_craft_batch(state, upload, craft, dst, active_count);
+    let dst_ok = craft_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
+    let batch_ok =
+        dst_ok && direct_rcs_encode_particle_craft_batch(state, upload, craft, dst, active_count);
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
     let observed = if submitted {
         direct_rcs_poll_result_slot_timeout_ms(
@@ -307,6 +298,7 @@ fn submit_particle_craft_rgba8(
         quarantine_direct_rcs_context("particle-craft-marker-timeout");
     }
     if observed != PARTICLE_CRAFT_POST_MARKER {
+        let (sample_width, sample_height) = particle_craft_sample_extent(dst.width, dst.height);
         crate::log_error!(
             target: "gpgpu";
             "intel/gpgpu: ParticleCraft failed forcewake={} mapped={} ppgtt={} kernel={} craft={} dst={} batch={} submitted={} observed=0x{:08X} want=0x{:08X} particles={} samples={}x{} render_divisor={} artifact={} state_gpu=0x{:X} dst_gpu=0x{:X}\n",
@@ -321,8 +313,8 @@ fn submit_particle_craft_rgba8(
             observed,
             PARTICLE_CRAFT_POST_MARKER,
             active_count,
-            PARTICLE_CRAFT_SAMPLE_WIDTH,
-            PARTICLE_CRAFT_SAMPLE_HEIGHT,
+            sample_width,
+            sample_height,
             PARTICLE_CRAFT_RENDER_DIVISOR,
             PARTICLE_CRAFT_ADLS_ARTIFACT.name,
             craft.state_gpu(),

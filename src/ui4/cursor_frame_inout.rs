@@ -517,35 +517,35 @@ fn signal_visual_change() {
 pub(crate) fn cursor_color(source: Ui4CursorSource) -> crate::graphics::primitives::Rgba8 {
     use crate::graphics::primitives::Rgba8;
 
+    // A virtual device may deliberately carry a bespoke presentation color.
+    // Otherwise the VLayer InputCombo owns the stable visual identity shared
+    // by all independently clocked devices in that collection.
     if source.hid_kind == crate::r::cursor::HID_KIND_VIRTUAL_CURSOR
         && let Some(color) = crate::r::mouse_motion_service::cursor_visual_color(source.slot_id)
     {
         return color;
     }
+    if let Some(color_id) = crate::usb2::hid::hut::combo_color_for_cursor(
+        source.controller_id,
+        source.slot_id,
+        source.ep_target,
+        source.hid_kind == crate::r::cursor::HID_KIND_TABLET,
+    ) {
+        return input_combo_color_rgba(color_id);
+    }
 
-    const COLORS: [Rgba8; 16] = [
-        Rgba8::new(255, 64, 64, 255),
-        Rgba8::new(32, 168, 255, 255),
-        Rgba8::new(32, 224, 128, 255),
-        Rgba8::new(255, 190, 32, 255),
-        Rgba8::new(220, 80, 255, 255),
-        Rgba8::new(255, 112, 32, 255),
-        Rgba8::new(32, 224, 224, 255),
-        Rgba8::new(152, 112, 255, 255),
-        Rgba8::new(192, 240, 48, 255),
-        Rgba8::new(255, 64, 176, 255),
-        Rgba8::new(64, 112, 255, 255),
-        Rgba8::new(48, 192, 96, 255),
-        Rgba8::new(255, 224, 64, 255),
-        Rgba8::new(176, 80, 224, 255),
-        Rgba8::new(255, 128, 160, 255),
-        Rgba8::new(96, 224, 255, 255),
-    ];
     let hash = source.controller_id.wrapping_mul(0x9E37_79B9)
         ^ source.slot_id.rotate_left(11)
         ^ source.ep_target.rotate_left(19)
         ^ u32::from(source.hid_kind);
-    COLORS[(hash as usize) % COLORS.len()]
+    input_combo_color_rgba(
+        (hash % u32::from(v::vinput::InputComboColor::COUNT)) as u8,
+    )
+}
+
+fn input_combo_color_rgba(color_id: u8) -> crate::graphics::primitives::Rgba8 {
+    let [r, g, b, a] = v::vinput::InputComboColor::from_index(color_id).rgba();
+    crate::graphics::primitives::Rgba8::new(r, g, b, a)
 }
 
 #[allow(dead_code)]
