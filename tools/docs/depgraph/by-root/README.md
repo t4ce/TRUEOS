@@ -54,7 +54,6 @@ Each SVG expands one direct dependency of the TRUEOS root. Blue note nodes are i
 | tiny-skia-path<br>0.11.4 | [`tiny-skia-path-v0.11.4.svg`](tiny-skia-path-v0.11.4.svg) | 3 | 1 | 2 |
 | tinyaudio<br>2.0.0<br>/vendor/tinyaudio | [`tinyaudio-v2.0.0.svg`](tinyaudio-v2.0.0.svg) | 1 | 0 | 0 |
 | tower<br>0.5.3<br>/vendor/tower-0.5.3 | [`tower-v0.5.3.svg`](tower-v0.5.3.svg) | 4 | 0 | 1 |
-| trueos-c4<br>0.1.0<br>/crates/trueos-c4 | [`trueos-c4-v0.1.0.svg`](trueos-c4-v0.1.0.svg) | 1 | 0 | 0 |
 | trueos-esp<br>0.1.0<br>/crates/trueos-esp | [`trueos-esp-v0.1.0.svg`](trueos-esp-v0.1.0.svg) | 1 | 0 | 3 |
 | trueos-fs<br>0.0.1<br>/crates/trueos-fs | [`trueos-fs-v0.0.1.svg`](trueos-fs-v0.0.1.svg) | 1 | 0 | 0 |
 | trueos-io<br>0.1.0<br>/crates/trueos-io | [`trueos-io-v0.1.0.svg`](trueos-io-v0.1.0.svg) | 1 | 4 | 1 |
@@ -72,5 +71,5 @@ Each SVG expands one direct dependency of the TRUEOS root. Blue note nodes are i
 | zune-core<br>0.5.1<br>/vendor/zune-core-0.5.1 | [`zune-core-v0.5.1.svg`](zune-core-v0.5.1.svg) | 1 | 1 | 0 |
 | zune-jpeg<br>0.5.15<br>/vendor/zune-jpeg-0.5.15 | [`zune-jpeg-v0.5.15.svg`](zune-jpeg-v0.5.15.svg) | 1 | 0 | 1 |
 
-Total direct TRUEOS roots: 65
-Total owned nodes excluding TRUEOS root: 249
+Total direct TRUEOS roots: 64
+Total owned nodes excluding TRUEOS root: 248
