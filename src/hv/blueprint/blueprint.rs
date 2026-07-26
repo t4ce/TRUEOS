@@ -1541,7 +1541,7 @@ unsafe extern "C" fn portal_rust_alloc(size: usize, align: usize) -> *mut u8 {
     {
         let vm_for_stats = vm_id.unwrap_or(0);
         let stats = crate::allocators::hv_guest_heap_stats(vm_for_stats);
-        crate::hv::hvlogf(format_args!(
+        crate::hv::hvtracef(format_args!(
             "portal: rust alloc seq={} vm={:?} size={} align={} ptr=0x{:016X} free_bytes={} largest_free={} free_blocks={} guest_heap=[0x{:016X}..0x{:016X})",
             trace_index,
             vm_id,

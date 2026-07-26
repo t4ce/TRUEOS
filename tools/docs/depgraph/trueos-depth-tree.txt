@@ -519,7 +519,6 @@
 2sync_wrapper v1.0.2
 2tower-layer v0.3.3 (/home/t4ce/REPOS/TRUEOS/vendor/tower-layer-0.3.3)
 2tower-service v0.3.3 (/home/t4ce/REPOS/TRUEOS/vendor/tower-service-0.3.3)
-1trueos-c4 v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-c4)
 1trueos-esp v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-esp)
 2embassy-time v0.5.1 (/home/t4ce/REPOS/TRUEOS/crates/trueos-executor/embassy-time) (*)
 2heapless v0.9.3 (*)

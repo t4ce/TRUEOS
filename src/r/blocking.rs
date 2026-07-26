@@ -341,26 +341,33 @@ fn pick_service_lane_slot(
     None
 }
 
-fn submit_service_lane_request(entry: BlockingJobEntry) -> Result<u64, BlockingJobEntry> {
+fn submit_service_lane_request(
+    entry: BlockingJobEntry,
+    log_rejection: bool,
+) -> Result<u64, BlockingJobEntry> {
     if queued_blocking_jobs() >= BLOCKING_JOB_QUEUE_CAP {
-        crate::log_error!(
-            target: "service";
-            "blocking-job: out of service-lane queue cap={} vm={:?} purpose={}\n",
-            BLOCKING_JOB_QUEUE_CAP,
-            entry.vm_id,
-            entry.purpose
-        );
+        if log_rejection {
+            crate::log_error!(
+                target: "service";
+                "blocking-job: out of service-lane queue cap={} vm={:?} purpose={}\n",
+                BLOCKING_JOB_QUEUE_CAP,
+                entry.vm_id,
+                entry.purpose
+            );
+        }
         return Err(entry);
     }
 
     let Some((slot, lease, tokio_lease)) = pick_service_lane_slot(entry.vm_id, entry.purpose)
     else {
-        crate::log_error!(
-            target: "service";
-            "blocking-job: no service lane available vm={:?} purpose={}\n",
-            entry.vm_id,
-            entry.purpose
-        );
+        if log_rejection {
+            crate::log_error!(
+                target: "service";
+                "blocking-job: no service lane available vm={:?} purpose={}\n",
+                entry.vm_id,
+                entry.purpose
+            );
+        }
         return Err(entry);
     };
 
@@ -442,6 +449,15 @@ fn enqueue_blocking_job(
     purpose: &'static str,
     call: BlockingJobCall,
 ) -> Result<u64, BlockingJobCall> {
+    enqueue_blocking_job_with_rejection_policy(vm_id, purpose, call, true)
+}
+
+fn enqueue_blocking_job_with_rejection_policy(
+    vm_id: Option<u8>,
+    purpose: &'static str,
+    call: BlockingJobCall,
+    log_rejection: bool,
+) -> Result<u64, BlockingJobCall> {
     let id = NEXT_BLOCKING_JOB_ID.fetch_add(1, Ordering::AcqRel);
     let policy_tag = if vm_id.is_some() {
         BLOCKING_JOB_TAG_VMX
@@ -455,7 +471,7 @@ fn enqueue_blocking_job(
         policy_tag,
         call,
     };
-    submit_service_lane_request(entry).map_err(|entry| entry.call)
+    submit_service_lane_request(entry, log_rejection).map_err(|entry| entry.call)
 }
 
 pub fn spawn_blocking_job_with_purpose(job: BlockingJobFn, purpose: &'static str) -> i32 {
@@ -463,6 +479,21 @@ pub fn spawn_blocking_job_with_purpose(job: BlockingJobFn, purpose: &'static str
         Ok(_) => 0,
         Err(_) => -2,
     }
+}
+
+/// Submit host work while preserving ownership when no leased service lane is
+/// currently available. Kernel service controllers use this to park and retry
+/// instead of dropping an accepted request.
+pub fn try_spawn_blocking_job_with_purpose(
+    job: BlockingJobFn,
+    purpose: &'static str,
+) -> Result<(), BlockingJobFn> {
+    enqueue_blocking_job_with_rejection_policy(None, purpose, BlockingJobCall::Host(job), false)
+        .map(|_| ())
+        .map_err(|call| match call {
+            BlockingJobCall::Host(job) => job,
+            BlockingJobCall::GuestRaw { .. } => unreachable!(),
+        })
 }
 
 pub unsafe fn submit_guest_service_lane_job_from_raw(

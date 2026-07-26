@@ -181,7 +181,7 @@ fn submit<T>(
         requests.len()
     };
 
-    crate::log_info!(target: "filesystem";
+    crate::log_trace!(target: "filesystem";
         "trueosfs-request-broker: submitted id={} op={} caller_cpu={} queue_depth={}\n",
         id,
         operation,
@@ -362,7 +362,7 @@ pub fn exists(
 
 async fn process_request(request: Request) {
     let (request_id, operation) = request.metadata();
-    crate::log_info!(target: "filesystem";
+    crate::log_trace!(target: "filesystem";
         "trueosfs-request-broker: begin id={} op={} realm=bsp\n",
         request_id,
         operation,
@@ -608,7 +608,7 @@ fn finish<T>(id: u64, operation: &'static str, completion: Completion<T>, result
             operation,
         );
     } else {
-        crate::log_info!(target: "filesystem";
+        crate::log_trace!(target: "filesystem";
             "trueosfs-request-broker: done id={} op={} status={}\n",
             id,
             operation,

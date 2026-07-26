@@ -573,8 +573,6 @@ ConWhite 	FF_FF_FF
   ![tinyaudio v2.0.0.svg](tools/depgraph/by-root/tinyaudio-v2.0.0.svg)
 - `tools/depgraph/by-root/tower-v0.5.3.svg`  
   ![tower v0.5.3.svg](tools/depgraph/by-root/tower-v0.5.3.svg)
-- `tools/depgraph/by-root/trueos-c4-v0.1.0.svg`  
-  ![trueos c4 v0.1.0.svg](tools/depgraph/by-root/trueos-c4-v0.1.0.svg)
 - `tools/depgraph/by-root/trueos-esp-v0.1.0.svg`  
   ![trueos esp v0.1.0.svg](tools/depgraph/by-root/trueos-esp-v0.1.0.svg)
 - `tools/depgraph/by-root/trueos-fs-v0.0.1.svg`  

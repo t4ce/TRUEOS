@@ -29,7 +29,6 @@ const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path. Non-.7z files compress to a sibling .7z archive; .7z archives extract beside the archive."}},"required":["path"],"additionalProperties":false}"#;
-const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_CPP: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["start","list","status","stop","spirit"],"description":"Launch, inspect, or stop the C++/IGC demo suite, or select Spirit's C++ repass."},"mode":{"type":"string","enum":["gallery","aurora","julia","sdf","voronoi","retro-sun","audio"],"description":"C++ for OpenCL workload to display; retro-sun is a standalone synthwave scene and audio is the live post-mix PCM visualizer."},"duration_ms":{"type":"integer","minimum":0,"description":"Demo lifetime in milliseconds; zero runs until stopped."},"cadence_ms":{"type":"integer","minimum":1,"maximum":60000,"description":"Target GPU launch cadence in milliseconds."},"publish_every":{"type":"integer","minimum":1,"maximum":1024,"description":"Publish every Nth retired GPU frame."},"background_id":{"type":"integer","enum":[0,2,3,4,5,6,7,8,9,10,11],"description":"Spirit background ID when action is spirit; 11 is the UTC MagicTimeCircle."},"shader_id":{"type":"integer","minimum":0,"maximum":15,"description":"Spirit sprite shader ID when action is spirit."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc","log"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format or optional disk id for action=log."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw TRUEOSFS log records to print for action=log."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_FNT: &str = r#"{"type":"object","properties":{"text":{"type":"string","description":"UTF-8 text to render."},"size":{"type":"integer","minimum":1,"maximum":100,"description":"Percentage of the centered aspect-fit scanout size."},"font":{"type":"integer","minimum":1,"maximum":2,"description":"GPU font face id."},"color":{"type":"string","description":"RGBA color encoded as RRGGBBAA."}},"required":["text"],"additionalProperties":false}"#;
@@ -130,10 +129,6 @@ fn dispatch_update(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str
     super::cmds::update::try_parse(spawner, io, &mut args)
 }
 
-fn dispatch_c4(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::c4::try_parse(io, rest)
-}
-
 fn dispatch_cpp(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::cpp::try_parse(spawner, io, &mut args)
@@ -224,15 +219,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_acpi,
         tool_description: Some("Run ACPI power actions."),
         tool_parameters_json: Some(TOOL_JSON_ACPI),
-    },
-    BuiltinShell2CmdEntry {
-        name: "c4",
-        mode: "cmd",
-        color: Some(STATUS_ORANGE_RGB),
-        advertised: true,
-        handler: dispatch_c4,
-        tool_description: Some("Compile C4 source to Rust and TC4O, then run the TC4O VM object."),
-        tool_parameters_json: Some(TOOL_JSON_C4),
     },
     BuiltinShell2CmdEntry {
         name: "cpp",
@@ -411,7 +397,9 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_GRAY_RGB),
         advertised: true,
         handler: dispatch_lum,
-        tool_description: Some("Reply to one quoted sentence with the CPU + Intel C++/IGC LFM2.5 assistant."),
+        tool_description: Some(
+            "Reply to one quoted sentence with the CPU + Intel C++/IGC LFM2.5 assistant.",
+        ),
         tool_parameters_json: Some(TOOL_JSON_LUM),
     },
     BuiltinShell2CmdEntry {
@@ -593,9 +581,9 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "qjs",
-        "ssh", "txt", "grid", "tts", "stt", "fnt", "cpp", "gpgpu", "vgpu", "vid", "cry", "acpi",
-        "tlb", "smp", "etc",
+        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "qjs", "ssh",
+        "txt", "grid", "tts", "stt", "fnt", "cpp", "gpgpu", "vgpu", "vid", "cry", "acpi", "tlb",
+        "smp", "etc",
     ];
 
     let mut out = AllocString::new();

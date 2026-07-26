@@ -724,6 +724,10 @@ pub fn hvlogf(args: core::fmt::Arguments<'_>) {
     hvlog_at(log::Level::Info, args);
 }
 
+pub fn hvtracef(args: core::fmt::Arguments<'_>) {
+    hvlog_at(log::Level::Trace, args);
+}
+
 pub fn hvwarnf(args: core::fmt::Arguments<'_>) {
     hvlog_at(log::Level::Warn, args);
 }

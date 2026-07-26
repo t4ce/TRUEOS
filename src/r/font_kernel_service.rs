@@ -5,10 +5,11 @@
 //! same retained representation temporarily, composites it into a new
 //! GPU-visible RGBA buffer, and returns that owned buffer asynchronously.
 
-use alloc::{collections::VecDeque, string::String, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, collections::VecDeque, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use embassy_sync::signal::Signal;
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 use crate::intel::gpu_font::{
@@ -20,9 +21,11 @@ use crate::intel::gpu_font::{
 
 const FONT_KERNEL_QUEUE_CAPACITY: usize = 32;
 const FONT_KERNEL_MAX_RUNS: usize = 64;
+const FONT_KERNEL_LANE_RETRY_MS: u64 = 2;
 
 static NEXT_TICKET: AtomicU64 = AtomicU64::new(1);
 static ONLINE: AtomicBool = AtomicBool::new(false);
+static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static WORK_AVAILABLE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static REQUESTS: Mutex<VecDeque<QueuedFontRequest>> = Mutex::new(VecDeque::new());
 static STATUS: Mutex<FontKernelServiceStatus> = Mutex::new(FontKernelServiceStatus::new());
@@ -168,6 +171,7 @@ pub(crate) struct FontKernelServiceStatus {
     pub(crate) completed_retain: u64,
     pub(crate) completed_stamp: u64,
     pub(crate) failed: u64,
+    pub(crate) lane_retries: u64,
     pub(crate) queued: usize,
 }
 
@@ -182,6 +186,7 @@ impl FontKernelServiceStatus {
             completed_retain: 0,
             completed_stamp: 0,
             failed: 0,
+            lane_retries: 0,
             queued: 0,
         }
     }
@@ -202,6 +207,14 @@ enum QueuedFontRequest {
             Signal<crate::wait::EmbassySpinRawMutex, Result<FontStampedBuffer, FontKernelError>>,
         >,
     },
+}
+
+impl QueuedFontRequest {
+    const fn ticket(&self) -> FontKernelTicket {
+        match self {
+            Self::Retain { ticket, .. } | Self::Stamp { ticket, .. } => *ticket,
+        }
+    }
 }
 
 pub(crate) fn status() -> FontKernelServiceStatus {
@@ -409,60 +422,103 @@ fn log_failure(ticket: FontKernelTicket, operation: &'static str, error: &FontKe
     );
 }
 
+fn process_queued_request(request: QueuedFontRequest) {
+    match request {
+        QueuedFontRequest::Retain {
+            ticket,
+            request,
+            reply,
+        } => {
+            set_active_stage(ticket, "dispatch");
+            let result = process_retain_scene(ticket, request);
+            if let Err(error) = &result {
+                log_failure(ticket, "retain", error);
+            }
+            complete_status(ticket, true, result.is_ok());
+            crate::log_info!(
+                target: "render";
+                "font-kernel-service: retain complete ticket={} ok={} queued={}\n",
+                ticket.raw(),
+                result.is_ok() as u8,
+                REQUESTS.lock().len(),
+            );
+            reply.signal(result);
+        }
+        QueuedFontRequest::Stamp {
+            ticket,
+            request,
+            reply,
+        } => {
+            set_active_stage(ticket, "dispatch");
+            let result = process_stamp(ticket, request);
+            if let Err(error) = &result {
+                log_failure(ticket, "stamp", error);
+            }
+            complete_status(ticket, false, result.is_ok());
+            crate::log_info!(
+                target: "render";
+                "font-kernel-service: stamp complete ticket={} ok={} queued={}\n",
+                ticket.raw(),
+                result.is_ok() as u8,
+                REQUESTS.lock().len(),
+            );
+            reply.signal(result);
+        }
+    }
+    IN_FLIGHT.store(false, Ordering::Release);
+    WORK_AVAILABLE.signal(());
+}
+
+fn dispatch_to_service_lane(request: QueuedFontRequest) -> Result<(), QueuedFontRequest> {
+    let shared_request = Arc::new(Mutex::new(Some(request)));
+    let worker_request = Arc::clone(&shared_request);
+    let job = Box::new(move || {
+        if let Some(request) = worker_request.lock().take() {
+            process_queued_request(request);
+        }
+    });
+    match crate::r::blocking::try_spawn_blocking_job_with_purpose(job, "font-kernel-service") {
+        Ok(()) => Ok(()),
+        Err(job) => {
+            drop(job);
+            Err(shared_request
+                .lock()
+                .take()
+                .expect("rejected font service-lane job retained its request"))
+        }
+    }
+}
+
 #[embassy_executor::task]
 pub(crate) async fn font_kernel_service_task() {
     ONLINE.store(true, Ordering::Release);
     crate::log_info!(
         target: "render";
-        "font-kernel-service: online paths=retain-scene+async-stamp queue_capacity={} retained_storage=gpu-vm-r8 stamp_output=gpu-vm-rgba8 completion=signal\n",
+        "font-kernel-service: online paths=retain-scene+async-stamp controller=bsp worker=leased-blocking-service-lane queue_capacity={} retained_storage=gpu-vm-r8 stamp_output=gpu-vm-rgba8 completion=signal\n",
         FONT_KERNEL_QUEUE_CAPACITY,
     );
     loop {
-        while let Some(request) = REQUESTS.lock().pop_front() {
-            match request {
-                QueuedFontRequest::Retain {
-                    ticket,
-                    request,
-                    reply,
-                } => {
-                    set_active_stage(ticket, "dispatch");
-                    let result = process_retain_scene(ticket, request);
-                    if let Err(error) = &result {
-                        log_failure(ticket, "retain", error);
-                    }
-                    complete_status(ticket, true, result.is_ok());
-                    crate::log_info!(
-                        target: "render";
-                        "font-kernel-service: retain complete ticket={} ok={} queued={}\n",
-                        ticket.raw(),
-                        result.is_ok() as u8,
-                        REQUESTS.lock().len(),
-                    );
-                    reply.signal(result);
-                }
-                QueuedFontRequest::Stamp {
-                    ticket,
-                    request,
-                    reply,
-                } => {
-                    set_active_stage(ticket, "dispatch");
-                    let result = process_stamp(ticket, request);
-                    if let Err(error) = &result {
-                        log_failure(ticket, "stamp", error);
-                    }
-                    complete_status(ticket, false, result.is_ok());
-                    crate::log_info!(
-                        target: "render";
-                        "font-kernel-service: stamp complete ticket={} ok={} queued={}\n",
-                        ticket.raw(),
-                        result.is_ok() as u8,
-                        REQUESTS.lock().len(),
-                    );
-                    reply.signal(result);
-                }
-            }
+        if IN_FLIGHT.load(Ordering::Acquire) {
+            WORK_AVAILABLE.wait().await;
+            continue;
         }
-        WORK_AVAILABLE.wait().await;
+        let Some(request) = REQUESTS.lock().pop_front() else {
+            WORK_AVAILABLE.wait().await;
+            continue;
+        };
+        let ticket = request.ticket();
+        set_active_stage(ticket, "lane-admission");
+        IN_FLIGHT.store(true, Ordering::Release);
+        if let Err(request) = dispatch_to_service_lane(request) {
+            IN_FLIGHT.store(false, Ordering::Release);
+            REQUESTS.lock().push_front(request);
+            {
+                let mut status = STATUS.lock();
+                status.active_stage = "lane-wait";
+                status.lane_retries = status.lane_retries.saturating_add(1);
+            }
+            Timer::after(EmbassyDuration::from_millis(FONT_KERNEL_LANE_RETRY_MS)).await;
+        }
     }
 }
 

@@ -632,8 +632,7 @@ fn sanitize_final_frame_identity(source: &str) -> String {
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(source)
-        .trim_end_matches(".bp")
-        .trim_end_matches(".vm");
+        .trim_end_matches(".bp");
     let mut identity = String::new();
     let mut separator = false;
     for ch in leaf.chars() {

@@ -29,10 +29,7 @@ fn preferred_slot_for_archive(archive: &str) -> String {
         return String::from("h_w");
     }
 
-    let stem = archive
-        .trim()
-        .trim_end_matches(".bp")
-        .trim_end_matches(".vm");
+    let stem = archive.trim().trim_end_matches(".bp");
     let mut words = stem
         .split(|ch: char| !ch.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty());
@@ -64,10 +61,7 @@ fn preferred_slot_for_archive(archive: &str) -> String {
 }
 
 fn app_label_for_archive(archive: &str) -> &str {
-    archive
-        .trim()
-        .trim_end_matches(".bp")
-        .trim_end_matches(".vm")
+    archive.trim().trim_end_matches(".bp")
 }
 
 fn reserve_target_for_archive(target: &MatrixTarget, archive: &str) -> MatrixTarget {
@@ -223,7 +217,7 @@ async fn root_archive_updated(
 }
 
 fn is_runnable_root_artifact(name: &str) -> bool {
-    matches_glob(name, "*.bp") || matches_glob(name, "*.vm")
+    matches_glob(name, "*.bp")
 }
 
 async fn trueosfs_module_by_archive_name(
@@ -399,7 +393,7 @@ fn print_archive_table(target: &MatrixTarget, width: usize, archives: &[ArchiveE
 pub(crate) async fn print_app_archive_table(target: &MatrixTarget, width: usize) {
     match archive_entries().await {
         Ok(archives) if archives.is_empty() => {
-            print_matrix_target_system_line(target, "apps: no .bp or .vm modules available");
+            print_matrix_target_system_line(target, "apps: no .bp modules available");
         }
         Ok(archives) => print_archive_table(target, width, archives.as_slice()),
         Err(err) => {
@@ -464,11 +458,6 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
     );
     if matrix_target_interrupted(&target) {
         log("apps: interrupted before launch");
-        return;
-    }
-
-    if request.module_bytes.starts_with(b"TC4O") || request.archive.ends_with(".vm") {
-        execute_tc4o(request.module_bytes.as_slice(), &log);
         return;
     }
 
@@ -966,48 +955,6 @@ fn readiness_friendly_label(flag: u32, fallback: &'static str) -> &'static str {
         crate::r::readiness::RAYON_READY => "RAYON_READY",
         crate::r::readiness::TRUEOSFS_INDEX_READY => "FILESYSTEM_INDEX_RDY",
         _ => fallback,
-    }
-}
-
-fn execute_tc4o(module_bytes: &[u8], log: &dyn Fn(&str)) {
-    match trueos_c4::run_vm_object(module_bytes, 100_000) {
-        Ok(report) => {
-            log(format!(
-                "apps: TC4O ok code={} symbols={} stack={} steps={}",
-                report.code_len, report.symbol_count, report.stack_bytes, report.steps
-            )
-            .as_str());
-            for local in report.locals.iter() {
-                log(format!("apps: local {}", format_tc4o_local(local)).as_str());
-            }
-        }
-        Err(err) => {
-            log(format!("apps: TC4O failed: {:?}", err).as_str());
-        }
-    }
-}
-
-fn format_tc4o_local(local: &trueos_c4::VmLocalReport) -> String {
-    match &local.value {
-        trueos_c4::VmValue::Int(value) => format!("{}={}", local.name, value),
-        trueos_c4::VmValue::Bool(value) => format!("{}={}", local.name, value),
-        trueos_c4::VmValue::FloatBits(value) => format!("{}=f64bits:0x{:016x}", local.name, value),
-        trueos_c4::VmValue::Bytes(bytes) => {
-            let mut out = format!("{}=[", local.name);
-            for (idx, chunk) in bytes.chunks(4).enumerate() {
-                if idx != 0 {
-                    out.push_str(", ");
-                }
-                if chunk.len() == 4 {
-                    let value = i32::from_le_bytes(chunk.try_into().unwrap());
-                    out.push_str(format!("{}", value).as_str());
-                } else {
-                    out.push('?');
-                }
-            }
-            out.push(']');
-            out
-        }
     }
 }
 

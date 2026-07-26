@@ -173,7 +173,7 @@ fn http_log_target_preview(prefix: &str, target: &str) {
 }
 
 fn http_is_runnable_root_artifact(path: &str) -> bool {
-    !path.contains('/') && (path.ends_with(".bp") || path.ends_with(".vm"))
+    !path.contains('/') && path.ends_with(".bp")
 }
 
 fn http_root_artifact_timestamp_path(name: &str) -> String {
