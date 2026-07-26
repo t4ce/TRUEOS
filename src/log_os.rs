@@ -10,17 +10,16 @@ pub(crate) mod flags {
     pub(crate) use log_os_core::{LogArea, LogLevelPolicy, LogLevelSet};
     use spin::Once;
 
-    /// Preserved PCI/TGA/FPGA hunt. The exact pre-USB configuration is kept in
-    /// `log_os.gpgpu_diag_profile.txt` beside this source file.
-    pub(crate) const PCI_TGA_FPGA_DIAG_PROFILE_ENABLED: bool = false;
+    /// Focused diagnostics for the retained TGA PCI/hotplug/RPC seam.
+    pub(crate) const TGA_RPC_DIAG_PROFILE_ENABLED: bool = false;
 
     /// Active USB/xHCI/UAS hunt. This opens the CrabUSB controller and TrueOS
     /// glue through Trace and enables the unsampled device/UAS diagnostics.
     pub(crate) const USB_UAS_DIAG_PROFILE_ENABLED: bool = true;
 
     // Keep failures, lifecycle summaries, and lowest-level trace records while
-    // deliberately leaving Debug out of the focused PCI/TGA/FPGA capture.
-    const PCI_TGA_FPGA_DIAG_LEVELS: LogLevelSet = LogLevelSet::ERROR
+    // deliberately leaving Debug out of the focused TGA RPC capture.
+    const TGA_RPC_DIAG_LEVELS: LogLevelSet = LogLevelSet::ERROR
         .union(LogLevelSet::WARN)
         .union(LogLevelSet::INFO)
         .union(LogLevelSet::TRACE);
@@ -28,12 +27,12 @@ pub(crate) mod flags {
     pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
         // Preserve the original USB hunt's full Global side, including Debug.
         LogLevelPolicy::up(LevelFilter::Trace)
-    } else if PCI_TGA_FPGA_DIAG_PROFILE_ENABLED {
-        LogLevelPolicy::only(PCI_TGA_FPGA_DIAG_LEVELS)
+    } else if TGA_RPC_DIAG_PROFILE_ENABLED {
+        LogLevelPolicy::only(TGA_RPC_DIAG_LEVELS)
     } else {
         LogLevelPolicy::up(LevelFilter::Info)
     };
-    pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = if PCI_TGA_FPGA_DIAG_PROFILE_ENABLED {
+    pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = if TGA_RPC_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LevelFilter::Info)
     } else {
         LogLevelPolicy::up(LevelFilter::Warn)
@@ -72,7 +71,7 @@ pub(crate) mod flags {
     pub(crate) const NET_LOG_DHCP6_SAMPLES: usize = 8;
     pub(crate) const VNET_EXERCISE_LOGS: bool = false;
     pub(crate) const R8125_VERBOSE_LOGS: bool = false;
-    pub(crate) const BOOT_INFO_LOGS: bool = PCI_TGA_FPGA_DIAG_PROFILE_ENABLED;
+    pub(crate) const BOOT_INFO_LOGS: bool = TGA_RPC_DIAG_PROFILE_ENABLED;
     pub(crate) const HV_LOGS: bool = true;
     pub(crate) const PORTAL_LOGS: bool = true;
     pub(crate) const HTML_SHACK_VERBOSE: bool = false;

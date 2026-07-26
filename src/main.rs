@@ -41,8 +41,6 @@ mod iso9660;
 mod limine;
 mod locale;
 mod log_os;
-#[cfg(feature = "trueos_lumen")]
-mod lumen;
 mod microcode;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod mio_compat;
@@ -242,8 +240,6 @@ pub extern "C" fn kmain() -> ! {
         if simd.avx2_fma_ready { "yes" } else { "no" },
         simd.avx2_fma_reason.as_str()
     );
-    #[cfg(feature = "trueos_lumen")]
-    lumen::log_backend_once();
     let sse42 = crate::r::pat::sse42_available();
     crate::log_info!(
         target: "boot";

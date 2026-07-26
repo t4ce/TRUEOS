@@ -14,6 +14,11 @@ use spin::Mutex;
 use crate::r::static_map::FixedKeyMap;
 
 pub(crate) static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
+// `environ` is a data import, not a function. Keep an addressable `char **`
+// cell whose value points at a permanently empty, null-terminated vector.
+static mut TRUEOS_EMPTY_ENVIRON: [*mut c_char; 1] = [ptr::null_mut()];
+pub(crate) static mut TRUEOS_ENVIRON: *mut *mut c_char =
+    core::ptr::addr_of_mut!(TRUEOS_EMPTY_ENVIRON) as *mut *mut c_char;
 static C_ALLOCATIONS: Mutex<FixedKeyMap<usize, AllocationRecord, C_ALLOCATION_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
 static PTHREAD_KEYS: Mutex<FixedKeyMap<usize, usize, PTHREAD_KEY_CAPACITY>> =
@@ -82,6 +87,7 @@ const TRUEOS_O_RDWR: c_int = 2;
 const TRUEOS_O_CREAT: c_int = 0o100;
 const TRUEOS_O_TRUNC: c_int = 0o1000;
 const TRUEOS_O_NONBLOCK: c_int = 0o4000;
+const TRUEOS_AT_FDCWD: c_int = -100;
 const TRUEOS_F_GETFD: c_int = 1;
 const TRUEOS_F_SETFD: c_int = 2;
 const TRUEOS_F_GETFL: c_int = 3;
@@ -2933,6 +2939,20 @@ pub unsafe extern "C" fn open64(path: *const c_char, flags: c_int, mode: c_int) 
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn openat(
+    dirfd: c_int,
+    path: *const c_char,
+    flags: c_int,
+    _mode: c_int,
+) -> c_int {
+    if dirfd != TRUEOS_AT_FDCWD {
+        TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+        return -1;
+    }
+    unsafe { open(path, flags, 0) }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn close(fd: c_int) -> c_int {
     if (0..=2).contains(&fd) {
         return 0;
@@ -3463,6 +3483,12 @@ pub unsafe extern "C" fn opendir(_path: *const c_char) -> *mut TrueosDir {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn fdopendir(_fd: c_int) -> *mut TrueosDir {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    ptr::null_mut()
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn closedir(_dir: *mut TrueosDir) -> c_int {
     TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
     -1
@@ -3495,9 +3521,88 @@ pub unsafe extern "C" fn mkdir(path: *const c_char, _mode: c_int) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn unlink(_path: *const c_char) -> c_int {
-    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
-    -1
+pub unsafe extern "C" fn unlink(path: *const c_char) -> c_int {
+    if path.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    let Some(path) = abi_cstr_to_string(path, 4096) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let rc = unsafe { crate::r::io::cabi::trueos_cabi_fs_remove(path.as_ptr(), path.len()) };
+    if rc != 0 {
+        TRUEOS_ERRNO.store(fs_rc_to_errno(rc), Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
+    if dirfd != TRUEOS_AT_FDCWD || flags != 0 {
+        TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+        return -1;
+    }
+    unsafe { unlink(path) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rename(old_path: *const c_char, new_path: *const c_char) -> c_int {
+    if old_path.is_null() || new_path.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    let Some(old_path) = abi_cstr_to_string(old_path, 4096) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let Some(new_path) = abi_cstr_to_string(new_path, 4096) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let Some(old_resolved) = crate::r::io::env::resolve_fs_path(old_path.as_str(), false) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let Some(new_resolved) = crate::r::io::env::resolve_fs_path(new_path.as_str(), false) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let Ok(old_resolved) = crate::r::path::FsPath::parse(old_resolved.as_str(), false) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let Ok(new_resolved) = crate::r::path::FsPath::parse(new_resolved.as_str(), false) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let old_resolved = old_resolved.to_relative_string();
+    let new_resolved = new_resolved.to_relative_string();
+
+    let bytes = match read_file_from_cabi(old_path.as_str()) {
+        Ok(bytes) => bytes,
+        Err(errno) => {
+            TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+            return -1;
+        }
+    };
+    if old_resolved == new_resolved {
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        return 0;
+    }
+    if let Err(errno) = write_file_to_cabi(new_path.as_str(), bytes.as_slice()) {
+        TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+        return -1;
+    }
+
+    // TRUEOSFS currently exposes copy + best-effort delete as its file-rename
+    // primitive. Once the destination is committed, match that contract and
+    // do not turn a cleanup failure into a false report that no rename occurred.
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_fs_remove(old_path.as_ptr(), old_path.len()) };
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -3552,6 +3657,27 @@ pub unsafe extern "C" fn mmap64(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mmap(
+    addr: *mut c_void,
+    len: usize,
+    prot: c_int,
+    flags: c_int,
+    fd: c_int,
+    offset: c_long,
+) -> *mut c_void {
+    // On the x86_64 TRUEOS ABI, `off_t`, `c_long`, and mmap64's i64 offset
+    // occupy the same register-width argument. Keep a typed wrapper rather
+    // than relying on an unverified resolver alias.
+    unsafe { mmap64(addr, len, prot, flags, fd, offset as i64) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mprotect(_addr: *mut c_void, _len: usize, _prot: c_int) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mremap(
     _old_address: *mut c_void,
     _old_size: usize,
@@ -3590,6 +3716,12 @@ pub unsafe extern "C" fn dlclose(_handle: *mut c_void) -> c_int {
 pub unsafe extern "C" fn dlerror() -> *const c_char {
     static DLERROR: &[u8] = b"dynamic loading unavailable\0";
     DLERROR.as_ptr().cast::<c_char>()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dladdr(_address: *const c_void, _info: *mut c_void) -> c_int {
+    // A zero return is the documented "no matching shared object" result.
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -3783,6 +3915,16 @@ pub unsafe extern "C" fn signal(_signum: c_int, handler: usize) -> usize {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn sigaction(
+    _signum: c_int,
+    _action: *const c_void,
+    _old_action: *mut c_void,
+) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn waitpid(_pid: c_int, _status: *mut c_int, _options: c_int) -> c_int {
     TRUEOS_ERRNO.store(TRUEOS_ECHILD, Ordering::Relaxed);
     -1
@@ -3819,6 +3961,48 @@ pub unsafe extern "C" fn setpgid(_pid: c_int, _pgid: c_int) -> c_int {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn chdir(_path: *const c_char) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn chroot(_path: *const c_char) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dup2(_old_fd: c_int, _new_fd: c_int) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fork() -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn execvp(_file: *const c_char, _argv: *const *const c_char) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn linkat(
+    _old_dirfd: c_int,
+    _old_path: *const c_char,
+    _new_dirfd: c_int,
+    _new_path: *const c_char,
+    _flags: c_int,
+) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_key_create(key: *mut u32, _destructor: *const c_void) -> c_int {
     if key.is_null() {
         return TRUEOS_EINVAL;
@@ -3847,6 +4031,19 @@ pub unsafe extern "C" fn pthread_key_delete(key: u32) -> c_int {
     let slot = pthread_tls_slot(key);
     let _ = PTHREAD_TLS_VALUES.lock().remove(slot);
     0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_kill(thread: usize, signal: c_int) -> c_int {
+    // pthread APIs return the error number directly rather than through errno.
+    if signal != 0 {
+        return TRUEOS_ENOSYS;
+    }
+    if thread == pthread_current_id() || PTHREAD_THREADS.lock().get(thread).is_some() {
+        0
+    } else {
+        TRUEOS_ESRCH
+    }
 }
 
 #[unsafe(no_mangle)]

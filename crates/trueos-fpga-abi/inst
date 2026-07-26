@@ -1,1 +1,0 @@
-sudo env HOME=/home/t4ce /home/t4ce/REPOS/TRUEOS/crates/trueos-fpga-abi/truega/tools/flash_sram.sh

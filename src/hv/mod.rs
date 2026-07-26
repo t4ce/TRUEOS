@@ -1433,6 +1433,26 @@ fn prepare_blueprint_launch_on_lane(
         return Err(AllocString::from("only ELF REL blueprints are supported for app-vm launch"));
     }
 
+    let asset_stats = {
+        let app_fs_root = crate::hv::blueprint::app_fs_root_for_archive(
+            pending.archive.as_str(),
+            pending.module_bytes.as_slice(),
+        );
+        let result = crate::hv::blueprint::materialize_embedded_assets(
+            unpacked_bytes.as_slice(),
+            app_fs_root.as_str(),
+        )
+        .map_err(|err| alloc::format!("app-vm asset materialization failed: {}", err));
+        drop(app_fs_root);
+        result?
+    };
+    if let Some(stats) = asset_stats {
+        log(format_args!(
+            "apps: embedded assets materialized entries={} bytes={}",
+            stats.entries, stats.bytes
+        ));
+    }
+
     let imports = crate::hv::blueprint::elf_imports(unpacked_bytes.as_slice()).unwrap_or_default();
     let profile = estimate_blueprint_memory_profile(
         pending.archive.as_str(),

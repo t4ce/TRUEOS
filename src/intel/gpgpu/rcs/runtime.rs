@@ -45,15 +45,6 @@ const EXECUTION_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     map_general_auxiliary: false,
 };
 
-const LFM25_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
-    ring: LFM25_RCS_GPU_VA_RING_BASE,
-    context: LFM25_RCS_GPU_VA_CONTEXT_BASE,
-    batch: LFM25_RCS_GPU_VA_BATCH_BASE,
-    result: LFM25_RCS_GPU_VA_RESULT_BASE,
-    job_slots: 1,
-    map_general_auxiliary: false,
-};
-
 const UI4_COMPOSITOR_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     ring: UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE,
     context: UI4_COMPOSITOR_RCS_GPU_VA_CONTEXT_BASE,
@@ -172,24 +163,6 @@ fn execution_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
     }
 
     let state = allocate_direct_rcs_state(EXECUTION_RCS_GPU_VA)?;
-    *state_slot = Some(state);
-    Some(state)
-}
-
-fn lfm25_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
-    if lfm25_rcs_context_is_quarantined() {
-        return None;
-    }
-
-    let mut state_slot = LFM25_RCS_STATE.lock();
-    if lfm25_rcs_context_is_quarantined() {
-        return None;
-    }
-    if let Some(state) = *state_slot {
-        return Some(state);
-    }
-
-    let state = allocate_direct_rcs_state(LFM25_RCS_GPU_VA)?;
     *state_slot = Some(state);
     Some(state)
 }

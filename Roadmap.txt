@@ -1,0 +1,14 @@
+TrueOS Renovatio
+(first usable secure release that has 2fa end to end with 0 known backdoors or entries + hardened mode and security tool OS integration)
+
+TrueOS Horizon
+(real engine generated game with shaders and 3d stuff runs)
+
+TrueOS Eden
+(full eth integration and zkproves as flex on top for bps)
+
+TrueOS Bastet
+(a fun edition after all the hard work, that is dedicated to Cats)
+
+TrueOS One
+(the first to be considered an actual Desktop OS release with wide hardware support across multiple platforms)

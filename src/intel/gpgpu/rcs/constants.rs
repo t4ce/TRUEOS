@@ -28,8 +28,6 @@ const FONT_INSTANCE_RGBA8_ADLS_GPU: u64 = 0x0D50_0000;
 const CPP_DEMO_RGBA8_ADLS_GPU: u64 = 0x0D60_0000;
 const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU: u64 = 0x0D70_0000;
 const PARTICLE_CRAFT_ADLS_GPU: u64 = 0x0D78_0000;
-const LFM25_Q8_PROJECT_ADLS_GPU: u64 = 0x0D80_0000;
-const LFM25_Q8_PROJECT_PACKED_ADLS_GPU: u64 = 0x0D82_0000;
 const _: () = {
     assert!(
         SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU + SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len() as u64
@@ -50,19 +48,6 @@ const _: () = {
     assert!(
         CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU + CPP_AUDIO_VISUALIZER_RGBA8_ADLS_BIN.len() as u64
             <= PARTICLE_CRAFT_ADLS_GPU
-    );
-    assert!(
-        PARTICLE_CRAFT_ADLS_GPU + PARTICLE_CRAFT_ADLS_BIN.len() as u64
-            <= LFM25_Q8_PROJECT_ADLS_GPU
-    );
-    assert!(
-        LFM25_Q8_PROJECT_ADLS_GPU + ((LFM25_Q8_PROJECT_ADLS_BIN.len() as u64 + 4095) & !4095)
-            <= LFM25_Q8_PROJECT_PACKED_ADLS_GPU
-    );
-    assert!(
-        LFM25_Q8_PROJECT_PACKED_ADLS_GPU
-            + ((LFM25_Q8_PROJECT_PACKED_ADLS_BIN.len() as u64 + 4095) & !4095)
-            <= LFM25_Q8_MODEL_MAPPING_GPU_BASE
     );
 };
 #[cfg(not(feature = "intel_gpu_cpp_aot"))]
@@ -96,9 +81,6 @@ const PARTICLE_CRAFT_RENDER_RGBA8_TEXT_OFFSET_BYTES: u64 =
     PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const FONT_INSTANCE_RGBA8_TEXT_OFFSET_BYTES: u64 =
     FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
-const LFM25_Q8_PROJECT_TEXT_OFFSET_BYTES: u64 = LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.entry_offset;
-const LFM25_Q8_PROJECT_PACKED_TEXT_OFFSET_BYTES: u64 =
-    LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const FONT_OUTLINE_MESH_TEXT_OFFSET_BYTES: u64 = 0x40;
 const SCENE_AABB_TEXT_OFFSET_BYTES: u64 = 0x40;
 const LAB256_STEP_TEXT_OFFSET_BYTES: u64 = 0x0040;
@@ -504,83 +486,6 @@ const PARTICLE_CRAFT_POST_MARKER_SLOT: usize = 46;
 const PARTICLE_CRAFT_PRE_MARKER: u32 = 0xC0DE_C701;
 const PARTICLE_CRAFT_POST_MARKER: u32 = 0xC0DE_C702;
 const PARTICLE_CRAFT_COMPLETION_TIMEOUT_MS: u64 = 1_000;
-const LFM25_Q8_COMMAND_BYTES: usize = 4096;
-const LFM25_Q8_STATE_BASE_OFFSET_BYTES: usize = 0x7000;
-const LFM25_Q8_STATE_STRIDE_BYTES: usize = 0x400;
-const LFM25_Q8_IDD_RELATIVE_OFFSET_BYTES: usize = 0;
-const LFM25_Q8_BINDING_TABLE_RELATIVE_OFFSET_BYTES: usize = 0x40;
-const LFM25_Q8_WEIGHTS_SURFACE_STATE_RELATIVE_OFFSET_BYTES: usize = 0x80;
-const LFM25_Q8_ACTIVATION_SURFACE_STATE_RELATIVE_OFFSET_BYTES: usize = 0xC0;
-const LFM25_Q8_OUTPUT_SURFACE_STATE_RELATIVE_OFFSET_BYTES: usize = 0x100;
-const LFM25_Q8_PAYLOAD_RELATIVE_OFFSET_BYTES: usize = 0x200;
-const LFM25_Q8_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
-const LFM25_Q8_CROSS_THREAD_BYTES: usize =
-    LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes as usize;
-const LFM25_Q8_PER_THREAD_BYTES: usize =
-    LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes as usize;
-const LFM25_Q8_INDIRECT_BYTES: usize = LFM25_Q8_CROSS_THREAD_BYTES + LFM25_Q8_PER_THREAD_BYTES;
-const _: () = {
-    assert!(
-        LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes
-            == LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes
-    );
-    assert!(
-        LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes
-            == LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes
-    );
-};
-const LFM25_Q8_PRE_MARKER_SLOT: usize = 45;
-const LFM25_Q8_POST_MARKER_SLOT: usize = 44;
-const LFM25_Q8_GPU_START_TIMESTAMP_SLOT: usize = 46;
-const LFM25_Q8_GPU_END_TIMESTAMP_SLOT: usize = 48;
-const LFM25_Q8_PRE_MARKER: u32 = 0xC0DE_B001;
-const LFM25_Q8_POST_MARKER: u32 = 0xC0DE_B002;
-const LFM25_Q8_COMPLETION_TIMEOUT_MS: u64 = 2_500;
-pub(crate) const LFM25_Q8_MAX_BATCH_PROJECTIONS: usize = 3;
-const LFM25_Q8_ACTIVATION_ALLOC_BYTES: usize = 8 * 1024;
-const LFM25_Q8_OUTPUT_ALLOC_BYTES: usize = 65_536 * core::mem::size_of::<f32>();
-const LFM25_Q8_MODEL_MAPPING_GPU_BASE: u64 = 0x1000_0000;
-const LFM25_Q8_ACTIVATION_GPU: u64 = 0x2700_0000;
-const LFM25_Q8_OUTPUT_GPU: u64 = 0x2701_0000;
-const _: () = {
-    assert!(
-        LFM25_Q8_IDD_RELATIVE_OFFSET_BYTES + LFM25_Q8_IDD_BYTES
-            <= LFM25_Q8_BINDING_TABLE_RELATIVE_OFFSET_BYTES
-    );
-    assert!(
-        LFM25_Q8_OUTPUT_SURFACE_STATE_RELATIVE_OFFSET_BYTES
-            + COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>()
-            <= LFM25_Q8_PAYLOAD_RELATIVE_OFFSET_BYTES
-    );
-    assert!(
-        LFM25_Q8_PAYLOAD_RELATIVE_OFFSET_BYTES + LFM25_Q8_INDIRECT_BYTES
-            <= LFM25_Q8_STATE_STRIDE_BYTES
-    );
-    assert!(
-        LFM25_Q8_STATE_BASE_OFFSET_BYTES
-            + LFM25_Q8_MAX_BATCH_PROJECTIONS * LFM25_Q8_STATE_STRIDE_BYTES
-            <= DIRECT_RCS_BATCH_BYTES
-    );
-    assert!(LFM25_Q8_GPU_START_TIMESTAMP_SLOT.is_multiple_of(2));
-    assert!(LFM25_Q8_GPU_END_TIMESTAMP_SLOT.is_multiple_of(2));
-    assert!(
-        (LFM25_Q8_GPU_END_TIMESTAMP_SLOT + 2) * core::mem::size_of::<u32>()
-            <= DIRECT_RCS_RESULT_BYTES
-    );
-    assert!(LFM25_Q8_COMMAND_BYTES <= LFM25_Q8_STATE_BASE_OFFSET_BYTES);
-    assert!(LFM25_Q8_MODEL_MAPPING_GPU_BASE.is_multiple_of(4096));
-    assert!(LFM25_Q8_ACTIVATION_GPU.is_multiple_of(4096));
-    assert!(LFM25_Q8_OUTPUT_GPU.is_multiple_of(4096));
-    assert!(
-        LFM25_Q8_MODEL_MAPPING_GPU_BASE
-            + trueos_fpga_abi::lfm25::PINNED_NATIVE_IMAGE_BYTES as u64
-            + 4095
-            <= LFM25_Q8_ACTIVATION_GPU
-    );
-    assert!(
-        LFM25_Q8_OUTPUT_GPU + LFM25_Q8_OUTPUT_ALLOC_BYTES as u64 <= DIRECT_RCS_PPGTT_LIMIT_BYTES
-    );
-};
 
 // A UI4 compute producer may be queued behind the compositor on RCS0. In
 // particular, the first use of each primary swap buffer seeds and composes a
@@ -911,10 +816,6 @@ const EXECUTION_RCS_GPU_VA_RESULT_BASE: u64 = 0x0804_0000;
 const EXECUTION_RCS_GPU_VA_BATCH_BASE: u64 = 0x0810_0000;
 // LFM owns a persistent compute context and PPGTT. The native model mapping is
 // intentionally absent from every display/system-service address space.
-const LFM25_RCS_GPU_VA_RING_BASE: u64 = 0x0820_0000;
-const LFM25_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x0821_0000;
-const LFM25_RCS_GPU_VA_RESULT_BASE: u64 = 0x0824_0000;
-const LFM25_RCS_GPU_VA_BATCH_BASE: u64 = 0x0830_0000;
 const SCENE_AABB_RCS_GPU_VA_RING_BASE: u64 = 0x01F0_0000;
 const SCENE_AABB_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x01F1_0000;
 const SCENE_AABB_RCS_GPU_VA_RESULT_BASE: u64 = 0x01F4_0000;

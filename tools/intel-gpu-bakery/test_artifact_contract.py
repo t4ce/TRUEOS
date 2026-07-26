@@ -212,8 +212,6 @@ class ArtifactContractTests(unittest.TestCase):
                 "cpp_audio_visualizer_rgba8.manifest.json",
                 "cpp_demo_rgba8.manifest.json",
                 "font_instance_rgba8.manifest.json",
-                "lfm25_q8_project.manifest.json",
-                "lfm25_q8_project_packed.manifest.json",
                 "particle_craft.manifest.json",
                 "spirit_vfx_background_rgba8.manifest.json",
                 "spirit_vfx_sprite_rgba8.manifest.json",

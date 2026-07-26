@@ -13,8 +13,6 @@ pub(crate) mod grid;
 pub(crate) mod hyper;
 pub(crate) mod install;
 pub(crate) mod lsd;
-#[cfg(feature = "trueos_lumen")]
-pub(crate) mod lumen;
 pub(crate) mod mv;
 pub(crate) mod net;
 pub(crate) mod qjs;

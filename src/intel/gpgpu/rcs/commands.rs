@@ -256,7 +256,6 @@ fn direct_rcs_push_sba_size(
 enum DirectRcsLane {
     SystemService,
     Execution,
-    Lfm25,
 }
 
 impl DirectRcsLane {
@@ -264,7 +263,6 @@ impl DirectRcsLane {
         match self {
             Self::SystemService => "system-service",
             Self::Execution => "execution",
-            Self::Lfm25 => "lfm25",
         }
     }
 }
@@ -275,10 +273,6 @@ fn direct_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
 
 fn execution_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
     direct_rcs_submit_batch_on_lane(dev, state, DirectRcsLane::Execution)
-}
-
-fn lfm25_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
-    direct_rcs_submit_batch_on_lane(dev, state, DirectRcsLane::Lfm25)
 }
 
 fn direct_rcs_submit_batch_on_lane(
@@ -296,11 +290,6 @@ fn direct_rcs_submit_batch_on_lane(
             &EXECUTION_RCS_CONTEXT_QUARANTINED,
             &EXECUTION_RCS_SUBMIT_RUNTIME,
             crate::gpu::vgpu::KernelClient::GpgpuExecution,
-        ),
-        DirectRcsLane::Lfm25 => (
-            &LFM25_RCS_CONTEXT_QUARANTINED,
-            &LFM25_RCS_SUBMIT_RUNTIME,
-            crate::gpu::vgpu::KernelClient::Lfm25,
         ),
     };
     if quarantined.load(Ordering::Acquire) {
@@ -326,23 +315,14 @@ fn execution_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&EXECUTION_RCS_CONTEXT_QUARANTINED)
 }
 
-fn lfm25_rcs_context_is_quarantined() -> bool {
-    !direct_rcs_state_reuse_permitted(&LFM25_RCS_CONTEXT_QUARANTINED)
-}
-
 fn quarantine_execution_rcs_context(reason: &'static str) {
     quarantine_direct_rcs_lane(DirectRcsLane::Execution, reason);
-}
-
-fn quarantine_lfm25_rcs_context(reason: &'static str) {
-    quarantine_direct_rcs_lane(DirectRcsLane::Lfm25, reason);
 }
 
 fn quarantine_direct_rcs_lane(lane: DirectRcsLane, reason: &'static str) {
     let quarantined = match lane {
         DirectRcsLane::SystemService => &DIRECT_RCS_CONTEXT_QUARANTINED,
         DirectRcsLane::Execution => &EXECUTION_RCS_CONTEXT_QUARANTINED,
-        DirectRcsLane::Lfm25 => &LFM25_RCS_CONTEXT_QUARANTINED,
     };
     if quarantined
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -429,15 +409,10 @@ fn complete_execution_rcs_submission(completed: bool) {
     complete_direct_rcs_submission_on_lane(DirectRcsLane::Execution, completed);
 }
 
-fn complete_lfm25_rcs_submission(completed: bool) {
-    complete_direct_rcs_submission_on_lane(DirectRcsLane::Lfm25, completed);
-}
-
 fn complete_direct_rcs_submission_on_lane(lane: DirectRcsLane, completed: bool) {
     let runtime = match lane {
         DirectRcsLane::SystemService => &DIRECT_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Execution => &EXECUTION_RCS_SUBMIT_RUNTIME,
-        DirectRcsLane::Lfm25 => &LFM25_RCS_SUBMIT_RUNTIME,
     };
     let submission = runtime.lock().pending.take();
     if let Some(submission) = submission {
@@ -522,21 +497,6 @@ fn execution_rcs_poll_result_slot_timeout_ms(
     )
 }
 
-fn lfm25_rcs_poll_result_slot_timeout_ms(
-    state: DirectRcsState,
-    slot: usize,
-    expected: u32,
-    timeout_ms: u64,
-) -> u32 {
-    direct_rcs_poll_result_slot_timeout_ms_on_lane(
-        state,
-        slot,
-        expected,
-        timeout_ms,
-        DirectRcsLane::Lfm25,
-    )
-}
-
 fn direct_rcs_poll_result_slot_timeout_ms_on_lane(
     state: DirectRcsState,
     slot: usize,
@@ -549,7 +509,6 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane(
     let probe_logged = match lane {
         DirectRcsLane::SystemService => &DIRECT_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Execution => &EXECUTION_RCS_TIMEOUT_POLL_PROBE_LOGGED,
-        DirectRcsLane::Lfm25 => &LFM25_RCS_TIMEOUT_POLL_PROBE_LOGGED,
     };
     let log_probe = probe_logged
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)

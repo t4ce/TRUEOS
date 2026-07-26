@@ -43,7 +43,6 @@ define_started_flags!(
     FONT_WARM_POOL_STARTED,
     FONT_KERNEL_SERVICE_STARTED,
     TTSTT_CPU_SERVICE_STARTED,
-    LFM25_WARM_POOL_STARTED,
     SMP_HLT_HISTORY_STARTED,
     CODEC_SERVICE_STARTED,
     QJS_ASYNC_FS_SERVICE_STARTED,
@@ -71,8 +70,8 @@ define_started_flags!(
     PRINTER_SPOOLER_STARTED,
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
-    FPGA_OFFLOAD_SERVICE_STARTED,
-    FPGA_OFFLOAD_HEARTBEAT_STARTED,
+    TGA_RPC_SERVICE_STARTED,
+    TGA_RPC_HEARTBEAT_STARTED,
     GPU_COMPLETION_REAPER_STARTED,
     TRUEOS_SPIRIT_STARTED,
     SPIRIT_RESPONSE_WINDOW_STARTED,
@@ -301,26 +300,6 @@ fn spawn_ttstt_cpu_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::ttstt_service::service_task())
 }
 
-#[cfg(feature = "trueos_lumen")]
-fn lfm25_warm_pool_gate() -> bool {
-    crate::workers::all_topology_spawners_registered()
-        && crate::intel::gpgpu::lfm25_q8_packed_project_supported()
-        && crate::workers::background_worker_slots()
-            .iter()
-            .any(|slot| crate::workers::core_kind_for_slot(*slot) == crate::workers::CORE_KIND_PERF)
-}
-
-#[cfg(feature = "trueos_lumen")]
-fn spawn_lfm25_warm_pool(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    spawn_bool_result_to_attempt(crate::r::lfm25_warm_service::spawn())
-}
-
-#[cfg(feature = "trueos_lumen")]
-pub(crate) fn retry_lfm25_warm_pool_autostart() {
-    LFM25_WARM_POOL_STARTED.store(false, Ordering::Release);
-}
-
 fn spawn_smp_hlt_history(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::smp::hlt_history_sampler_task())
 }
@@ -544,12 +523,12 @@ fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tga::tga_task())
 }
 
-fn spawn_fpga_offload_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::fpga_offload::fpga_offload_service_task())
+fn spawn_tga_rpc_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::tga_rpc::service_task())
 }
 
-fn spawn_fpga_offload_heartbeat(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::fpga_offload::fpga_offload_heartbeat_task())
+fn spawn_tga_rpc_heartbeat(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::tga_rpc::heartbeat_task())
 }
 
 fn spawn_gpu_completion_reaper(spawner: Spawner) -> SpawnAttempt {
@@ -865,29 +844,21 @@ fn user_input_writer_gate() -> bool {
 
 #[inline]
 fn tga_boot_gate() -> bool {
-    crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT >= 1
+    crate::allcaps::probes::TGA_RPC_BOOT_CUT >= 1
 }
-
-const TGA_SERVICE_BOOT_ENABLED: bool = false;
 
 const fn tga_task_spec() -> TaskSpec {
-    if TGA_SERVICE_BOOT_ENABLED {
-        TaskSpec::enabled_gated("tga", 0, tga_boot_gate, &TGA_TASK_STARTED, spawn_tga_task)
-    } else {
-        // Keep the lab driver compiled and manually enableable through the
-        // registry, but do not start its PCI/MMIO lifecycle during boot.
-        TaskSpec::disabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task)
-    }
+    TaskSpec::enabled_gated("tga", 0, tga_boot_gate, &TGA_TASK_STARTED, spawn_tga_task)
 }
 
 #[inline]
-fn fpga_offload_boot_gate() -> bool {
-    crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT >= 2
+fn tga_rpc_boot_gate() -> bool {
+    crate::allcaps::probes::TGA_RPC_BOOT_CUT >= 2
 }
 
 #[inline]
-fn fpga_offload_heartbeat_boot_gate() -> bool {
-    crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT >= 3
+fn tga_rpc_heartbeat_boot_gate() -> bool {
+    crate::allcaps::probes::TGA_RPC_BOOT_CUT >= 3
 }
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
@@ -1446,7 +1417,6 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 const TASK_COUNT: usize = 76
-    + cfg!(feature = "trueos_lumen") as usize
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1500,15 +1470,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         ttstt_cpu_service_gate,
         &TTSTT_CPU_SERVICE_STARTED,
         spawn_ttstt_cpu_service,
-    ),
-    #[cfg(feature = "trueos_lumen")]
-    TaskSpec::enabled_gated(
-        "lfm25-warm-pool",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
-            | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        lfm25_warm_pool_gate,
-        &LFM25_WARM_POOL_STARTED,
-        spawn_lfm25_warm_pool,
     ),
     TaskSpec::enabled("smp-hlt-history", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history),
     TaskSpec::disabled(
@@ -1693,18 +1654,18 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     tga_task_spec(),
     TaskSpec::enabled_gated(
-        "fpga-offload",
+        "tga-rpc",
         0,
-        fpga_offload_boot_gate,
-        &FPGA_OFFLOAD_SERVICE_STARTED,
-        spawn_fpga_offload_service,
+        tga_rpc_boot_gate,
+        &TGA_RPC_SERVICE_STARTED,
+        spawn_tga_rpc_service,
     ),
     TaskSpec::enabled_gated(
-        "fpga-offload-heartbeat",
+        "tga-rpc-heartbeat",
         0,
-        fpga_offload_heartbeat_boot_gate,
-        &FPGA_OFFLOAD_HEARTBEAT_STARTED,
-        spawn_fpga_offload_heartbeat,
+        tga_rpc_heartbeat_boot_gate,
+        &TGA_RPC_HEARTBEAT_STARTED,
+        spawn_tga_rpc_heartbeat,
     ),
     TaskSpec::enabled_gated(
         "gpu-completion-reaper",
@@ -1988,14 +1949,13 @@ pub fn latest_system_service_snapshot_text() -> String {
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
         crate::log_info!(target: "boot";
-            "spawn-svc: boot-profile pci_tga_fpga_diag={} usb_uas_diag={} tga_fpga_cut={} tga_service={} tga_gate={} offload={} heartbeat={}\n",
-            crate::log_os::flags::PCI_TGA_FPGA_DIAG_PROFILE_ENABLED,
+            "spawn-svc: boot-profile pci_tga_fpga_diag={} usb_uas_diag={} tga_rpc_cut={} tga_gate={} offload={} heartbeat={}\n",
+            crate::log_os::flags::TGA_RPC_DIAG_PROFILE_ENABLED,
             crate::log_os::flags::USB_UAS_DIAG_PROFILE_ENABLED,
-            crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT,
-            TGA_SERVICE_BOOT_ENABLED,
+            crate::allcaps::probes::TGA_RPC_BOOT_CUT,
             tga_boot_gate(),
-            fpga_offload_boot_gate(),
-            fpga_offload_heartbeat_boot_gate()
+            tga_rpc_boot_gate(),
+            tga_rpc_heartbeat_boot_gate()
         );
         let mut next_snapshot_ms = 0u64;
         loop {

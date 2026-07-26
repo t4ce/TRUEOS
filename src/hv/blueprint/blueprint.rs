@@ -1,4 +1,4 @@
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::alloc::Layout;
@@ -34,6 +34,9 @@ const R_X86_64_GOTPCRELX: u32 = 41;
 const R_X86_64_REX_GOTPCRELX: u32 = 42;
 const IMPORT_THUNK_ALIGN: usize = 16;
 const IMPORT_THUNK_SIZE: usize = 16;
+const EMBEDDED_ASSET_SECTION: &str = ".trueos.assets";
+const ASSET_HEADER_LEN: usize = 12;
+const ASSET_ENTRY_HEADER_LEN: usize = 4 + 8 + 32;
 
 pub(crate) struct BlueprintModule<'a> {
     pub(crate) version: u16,
@@ -52,6 +55,18 @@ impl BlueprintModule<'_> {
 pub(crate) struct ElfImport<'a> {
     pub(crate) name: &'a str,
     pub(crate) resolved_addr: Option<usize>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EmbeddedAssetStats {
+    pub(crate) entries: usize,
+    pub(crate) bytes: usize,
+}
+
+#[derive(Copy, Clone)]
+struct EmbeddedAssetEntry<'a> {
+    path: &'a str,
+    data: &'a [u8],
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -473,6 +488,14 @@ unsafe extern "C" fn portal_unwind_backtrace(
 
 unsafe extern "C" fn portal_unwind_get_ip(_context: *mut c_void) -> usize {
     0
+}
+
+unsafe extern "C" fn portal_unwind_get_cfa(_context: *mut c_void) -> usize {
+    0
+}
+
+unsafe extern "C" fn portal_unwind_find_enclosing_function(_pc: *mut c_void) -> *mut c_void {
+    core::ptr::null_mut()
 }
 
 unsafe extern "C" fn portal_unwind_raise_exception(
@@ -1278,6 +1301,10 @@ fn resolve_known_import(name: &str) -> Option<usize> {
             Some(crate::stackkeeper::trueos_cabi_wls_current_slot as *const () as usize)
         }
         "_Unwind_Backtrace" => Some(portal_unwind_backtrace as *const () as usize),
+        "_Unwind_FindEnclosingFunction" => {
+            Some(portal_unwind_find_enclosing_function as *const () as usize)
+        }
+        "_Unwind_GetCFA" => Some(portal_unwind_get_cfa as *const () as usize),
         "_Unwind_GetIP" => Some(portal_unwind_get_ip as *const () as usize),
         "_Unwind_RaiseException" => Some(portal_unwind_raise_exception as *const () as usize),
         "__rust_alloc"
@@ -1776,6 +1803,284 @@ pub(crate) fn unpack_blueprint(module: &BlueprintModule<'_>) -> Result<Vec<u8>, 
             .map_err(|_| "7z payload decode failed"),
         _ => Err("unsupported blueprint payload flags"),
     }
+}
+
+fn embedded_asset_archive(bytes: &[u8]) -> Result<Option<&[u8]>, String> {
+    let file = parse_elf(bytes).map_err(String::from)?;
+    let mut archive = None;
+
+    for section in file.sections() {
+        let name = section
+            .name()
+            .map_err(|_| String::from("ELF section name is not UTF-8"))?;
+        if name != EMBEDDED_ASSET_SECTION {
+            continue;
+        }
+        if archive.is_some() {
+            return Err(String::from("duplicate .trueos.assets section"));
+        }
+        if section_is_alloc(section.flags()) {
+            return Err(String::from(".trueos.assets must not be allocatable"));
+        }
+        if section_type(&file, section.index())? != SHT_PROGBITS {
+            return Err(String::from(".trueos.assets must be PROGBITS"));
+        }
+        let section_size = usize::try_from(section.size())
+            .map_err(|_| String::from(".trueos.assets size is out of range"))?;
+        let data = section
+            .data()
+            .map_err(|_| String::from(".trueos.assets section is truncated"))?;
+        if data.len() != section_size {
+            return Err(String::from(".trueos.assets section size mismatch"));
+        }
+        if data.is_empty() {
+            return Err(String::from(".trueos.assets archive is empty"));
+        }
+        if data.len() > crate::allcaps::blueprint::ASSET_ARCHIVE_CAP_BYTES {
+            return Err(alloc::format!(
+                ".trueos.assets archive exceeds cap size={} cap={}",
+                data.len(),
+                crate::allcaps::blueprint::ASSET_ARCHIVE_CAP_BYTES
+            ));
+        }
+        archive = Some(data);
+    }
+
+    Ok(archive)
+}
+
+fn take_asset_slice<'a>(
+    bytes: &'a [u8],
+    cursor: &mut usize,
+    len: usize,
+) -> Result<&'a [u8], &'static str> {
+    let end = cursor
+        .checked_add(len)
+        .ok_or("embedded asset offset overflow")?;
+    let slice = bytes
+        .get(*cursor..end)
+        .ok_or("embedded asset payload truncated")?;
+    *cursor = end;
+    Ok(slice)
+}
+
+fn validate_embedded_asset_path(path: &str) -> Result<(), &'static str> {
+    if path.is_empty() {
+        return Err("embedded asset path is empty");
+    }
+    if path.len() > crate::allcaps::blueprint::ASSET_PATH_BYTES_CAP {
+        return Err("embedded asset path exceeds length cap");
+    }
+    if path.trim() != path {
+        return Err("embedded asset path has leading or trailing whitespace");
+    }
+    if path.starts_with('/') || path.contains('\\') {
+        return Err("embedded asset path is not a portable relative path");
+    }
+    if path
+        .as_bytes()
+        .iter()
+        .any(|byte| *byte < b' ' || *byte == 0x7f)
+    {
+        return Err("embedded asset path contains a control character");
+    }
+
+    for component in path.split('/') {
+        if component.is_empty() || component == "." || component == ".." {
+            return Err("embedded asset path contains a non-normal component");
+        }
+        if component.len() > crate::allcaps::blueprint::ASSET_PATH_COMPONENT_BYTES_CAP {
+            return Err("embedded asset path component exceeds length cap");
+        }
+    }
+    Ok(())
+}
+
+fn parse_embedded_asset_table(
+    decoded: &[u8],
+) -> Result<(Vec<EmbeddedAssetEntry<'_>>, usize), String> {
+    if decoded.len() > crate::allcaps::blueprint::ASSET_DECODE_CAP_BYTES {
+        return Err(String::from("embedded asset table exceeds decoded size cap"));
+    }
+    if decoded.len() < ASSET_HEADER_LEN {
+        return Err(String::from("embedded asset table header is truncated"));
+    }
+    if decoded.get(0..4) != Some(b"TRAS") {
+        return Err(String::from("bad embedded asset table magic"));
+    }
+    if le_u16(decoded, 4) != Some(1) {
+        return Err(String::from("unsupported embedded asset table version"));
+    }
+    if le_u16(decoded, 6) != Some(0) {
+        return Err(String::from("unsupported embedded asset table flags"));
+    }
+
+    let count = le_u32(decoded, 8)
+        .ok_or_else(|| String::from("embedded asset table header is truncated"))?
+        as usize;
+    if count > crate::allcaps::blueprint::ASSET_ENTRY_COUNT_CAP {
+        return Err(alloc::format!(
+            "embedded asset count exceeds cap count={} cap={}",
+            count,
+            crate::allcaps::blueprint::ASSET_ENTRY_COUNT_CAP
+        ));
+    }
+
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(count)
+        .map_err(|_| String::from("embedded asset entry allocation failed"))?;
+    let mut seen_paths = BTreeSet::new();
+    let mut cursor = ASSET_HEADER_LEN;
+    let mut total_data_len = 0usize;
+
+    for index in 0..count {
+        let header = take_asset_slice(decoded, &mut cursor, ASSET_ENTRY_HEADER_LEN)
+            .map_err(|err| alloc::format!("embedded asset entry {}: {}", index, err))?;
+        let path_len = le_u32(header, 0)
+            .ok_or_else(|| alloc::format!("embedded asset entry {} header truncated", index))?
+            as usize;
+        let data_len_u64 = le_u64(header, 4)
+            .ok_or_else(|| alloc::format!("embedded asset entry {} header truncated", index))?;
+        if path_len == 0 || path_len > crate::allcaps::blueprint::ASSET_PATH_BYTES_CAP {
+            return Err(alloc::format!(
+                "embedded asset entry {} path length is out of range",
+                index
+            ));
+        }
+        if data_len_u64 > crate::allcaps::blueprint::ASSET_FILE_CAP_BYTES as u64 {
+            return Err(alloc::format!("embedded asset entry {} file exceeds size cap", index));
+        }
+        let data_len = usize::try_from(data_len_u64)
+            .map_err(|_| alloc::format!("embedded asset entry {} size is out of range", index))?;
+        let expected_hash = &header[12..44];
+        let path_bytes = take_asset_slice(decoded, &mut cursor, path_len)
+            .map_err(|err| alloc::format!("embedded asset entry {} path: {}", index, err))?;
+        let path = core::str::from_utf8(path_bytes)
+            .map_err(|_| alloc::format!("embedded asset entry {} path is not UTF-8", index))?;
+        validate_embedded_asset_path(path)
+            .map_err(|err| alloc::format!("embedded asset entry {}: {}", index, err))?;
+        if !seen_paths.insert(String::from(path)) {
+            return Err(alloc::format!("embedded asset entry {} duplicates path {}", index, path));
+        }
+
+        let data = take_asset_slice(decoded, &mut cursor, data_len)
+            .map_err(|err| alloc::format!("embedded asset entry {} data: {}", index, err))?;
+        let digest = Sha256::digest(data);
+        if digest.as_slice() != expected_hash {
+            return Err(alloc::format!(
+                "embedded asset entry {} hash mismatch path={}",
+                index,
+                path
+            ));
+        }
+        total_data_len = total_data_len
+            .checked_add(data_len)
+            .ok_or_else(|| String::from("embedded asset total size overflow"))?;
+        if total_data_len > crate::allcaps::blueprint::ASSET_DECODE_CAP_BYTES {
+            return Err(String::from("embedded asset data exceeds total size cap"));
+        }
+        entries.push(EmbeddedAssetEntry { path, data });
+    }
+
+    if cursor != decoded.len() {
+        return Err(alloc::format!(
+            "embedded asset table has trailing bytes count={}",
+            decoded.len() - cursor
+        ));
+    }
+    for path in &seen_paths {
+        for (offset, byte) in path.as_bytes().iter().copied().enumerate() {
+            if byte == b'/' && seen_paths.contains(&path[..offset]) {
+                return Err(alloc::format!(
+                    "embedded asset path conflicts with parent file path={}",
+                    path
+                ));
+            }
+        }
+    }
+
+    Ok((entries, total_data_len))
+}
+
+fn joined_asset_path(root: &str, relative: &str) -> String {
+    let mut path = String::with_capacity(root.len() + 1 + relative.len());
+    path.push_str(root);
+    if !path.ends_with('/') {
+        path.push('/');
+    }
+    path.push_str(relative);
+    path
+}
+
+pub(crate) fn materialize_embedded_assets(
+    unpacked: &[u8],
+    app_fs_root: &str,
+) -> Result<Option<EmbeddedAssetStats>, String> {
+    let Some(archive) = embedded_asset_archive(unpacked)? else {
+        return Ok(None);
+    };
+    let decoded = crate::z7::extract_single_file_to_vec_bounded(
+        archive,
+        crate::allcaps::blueprint::ASSET_DECODE_CAP_BYTES,
+        crate::allcaps::blueprint::ASSET_7Z_DICTIONARY_CAP_BYTES,
+    )
+    .map_err(|err| alloc::format!("embedded asset 7z decode failed: {:?}", err))?;
+    let (entries, total_data_len) = parse_embedded_asset_table(decoded.as_slice())?;
+
+    crate::r::io::kfs::create_dir_all(app_fs_root).map_err(|err| {
+        alloc::format!("embedded asset root create failed path={} err={:?}", app_fs_root, err)
+    })?;
+
+    let mut created_parents = BTreeSet::new();
+    for entry in &entries {
+        if let Some((relative_parent, _)) = entry.path.rsplit_once('/')
+            && created_parents.insert(relative_parent)
+        {
+            let parent = joined_asset_path(app_fs_root, relative_parent);
+            crate::r::io::kfs::create_dir_all(parent.as_str()).map_err(|err| {
+                alloc::format!(
+                    "embedded asset directory create failed path={} err={:?}",
+                    parent,
+                    err
+                )
+            })?;
+        }
+
+        let path = joined_asset_path(app_fs_root, entry.path);
+        let handle = crate::r::io::kfs::write_file_begin(path.as_str(), entry.data.len() as u64)
+            .map_err(|err| {
+                alloc::format!("embedded asset write begin failed path={} err={:?}", path, err)
+            })?;
+        for chunk in entry
+            .data
+            .chunks(crate::allcaps::blueprint::ASSET_WRITE_CHUNK_BYTES)
+        {
+            if let Err(err) = crate::r::io::kfs::write_file_chunk(handle, chunk) {
+                let abort = crate::r::io::kfs::write_file_abort(handle);
+                return Err(alloc::format!(
+                    "embedded asset write chunk failed path={} err={:?} abort={:?}",
+                    path,
+                    err,
+                    abort
+                ));
+            }
+        }
+        if let Err(err) = crate::r::io::kfs::write_file_finish(handle) {
+            let abort = crate::r::io::kfs::write_file_abort(handle);
+            return Err(alloc::format!(
+                "embedded asset write finish failed path={} err={:?} abort={:?}",
+                path,
+                err,
+                abort
+            ));
+        }
+    }
+
+    Ok(Some(EmbeddedAssetStats {
+        entries: entries.len(),
+        bytes: total_data_len,
+    }))
 }
 
 pub(crate) fn invoke_host_rel(

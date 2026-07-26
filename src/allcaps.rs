@@ -13,14 +13,22 @@ pub mod probes {
     pub const INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS: bool = false;
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
 
-    /// Stage the three TRUEGA boot services when isolating compatibility faults.
+    /// Stage the three small TGA compatibility services.
     /// 0 keeps all three asleep, 1 admits the TGA PCI task, 2 also admits the
-    /// FPGA offload worker, and 3 additionally starts its heartbeat client.
-    pub const TGA_FPGA_BOOT_DIAGNOSTIC_CUT: u8 = 3;
+    /// RPC worker, and 3 additionally starts its heartbeat client.
+    pub const TGA_RPC_BOOT_CUT: u8 = 3;
 }
 
 pub mod blueprint {
     pub const PORTAL_IMAGE_CAP_BYTES: usize = 128 * 1024 * 1024;
+    pub const ASSET_ARCHIVE_CAP_BYTES: usize = 1024 * 1024 * 1024;
+    pub const ASSET_DECODE_CAP_BYTES: usize = 2 * 1024 * 1024 * 1024;
+    pub const ASSET_7Z_DICTIONARY_CAP_BYTES: usize = 256 * 1024 * 1024;
+    pub const ASSET_FILE_CAP_BYTES: usize = 512 * 1024 * 1024;
+    pub const ASSET_ENTRY_COUNT_CAP: usize = 65_536;
+    pub const ASSET_PATH_BYTES_CAP: usize = 4096;
+    pub const ASSET_PATH_COMPONENT_BYTES_CAP: usize = 255;
+    pub const ASSET_WRITE_CHUNK_BYTES: usize = 256 * 1024;
 }
 
 pub mod gfx {

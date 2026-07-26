@@ -17,6 +17,9 @@ pub enum SevenZError {
 const LZMA2_DICT_PROP_1_MIB: u8 = 16;
 
 const SIG_LEN: usize = 32;
+const ARCHIVE_HEADER_DECODE_CAP_BYTES: usize = 64 * 1024 * 1024;
+const ARCHIVE_HEADER_DICTIONARY_CAP_BYTES: usize = 64 * 1024 * 1024;
+const ARCHIVE_METADATA_ITEM_CAP: usize = 65_536;
 
 const K_END: u8 = 0x00;
 const K_HEADER: u8 = 0x01;
@@ -328,6 +331,9 @@ fn parse_method(method_id: &[u8], properties: &[u8]) -> Result<Method, SevenZErr
 }
 
 fn read_bits(reader: &mut Cursor<'_>, size: usize) -> Result<Vec<bool>, SevenZError> {
+    if size > ARCHIVE_METADATA_ITEM_CAP {
+        return Err(SevenZError::Unsupported);
+    }
     let mut out = Vec::with_capacity(size);
     let mut mask = 0u8;
     let mut cache = 0u8;
@@ -343,6 +349,9 @@ fn read_bits(reader: &mut Cursor<'_>, size: usize) -> Result<Vec<bool>, SevenZEr
 }
 
 fn read_all_or_bits(reader: &mut Cursor<'_>, size: usize) -> Result<Vec<bool>, SevenZError> {
+    if size > ARCHIVE_METADATA_ITEM_CAP {
+        return Err(SevenZError::Unsupported);
+    }
     if reader.read_u8()? != 0 {
         return Ok(vec![true; size]);
     }
@@ -390,8 +399,7 @@ fn read_encoded_header(payload: &[u8], encoded_header: &[u8]) -> Result<Vec<u8>,
         .get(packed_start..packed_end)
         .ok_or(SevenZError::BadOffset)?;
     let folder = &folders[0];
-
-    extract_archive_shape_to_vec(&ArchiveShape {
+    let archive = ArchiveShape {
         name: String::new(),
         packed_stream,
         method: folder.method,
@@ -402,7 +410,20 @@ fn read_encoded_header(payload: &[u8], encoded_header: &[u8]) -> Result<Vec<u8>,
         substream_size: usize::try_from(folder.unpacked_size)
             .map_err(|_| SevenZError::BadOffset)?,
         substream_crc: folder.unpack_crc,
-    })
+    };
+    if archive.folder_unpacked_size > ARCHIVE_HEADER_DECODE_CAP_BYTES {
+        return Err(SevenZError::Unsupported);
+    }
+    match archive.method {
+        Method::Copy => {}
+        Method::Lzma { dict_size, .. } | Method::Lzma2 { dict_size }
+            if dict_size as usize > ARCHIVE_HEADER_DICTIONARY_CAP_BYTES =>
+        {
+            return Err(SevenZError::Unsupported);
+        }
+        Method::Lzma { .. } | Method::Lzma2 { .. } => {}
+    }
+    decode_folder_to_vec_bounded(&archive)
 }
 
 fn read_next_header(payload: &[u8]) -> Result<Vec<u8>, SevenZError> {
@@ -423,6 +444,9 @@ fn read_next_header(payload: &[u8]) -> Result<Vec<u8>, SevenZError> {
         usize::try_from(le_u64_at(payload, 12)?).map_err(|_| SevenZError::BadOffset)?;
     let next_header_size =
         usize::try_from(le_u64_at(payload, 20)?).map_err(|_| SevenZError::BadOffset)?;
+    if next_header_size > ARCHIVE_HEADER_DECODE_CAP_BYTES {
+        return Err(SevenZError::Unsupported);
+    }
     let next_header_crc = le_u32_at(payload, 28)?;
 
     let start = SIG_LEN
@@ -487,6 +511,9 @@ fn parse_folder(reader: &mut Cursor<'_>) -> Result<FolderInfo, SevenZError> {
 fn parse_pack_info(reader: &mut Cursor<'_>) -> Result<(u64, Vec<u64>), SevenZError> {
     let pack_pos = reader.read_variable_u64()?;
     let num_pack_streams = reader.read_len()?;
+    if num_pack_streams > ARCHIVE_METADATA_ITEM_CAP {
+        return Err(SevenZError::Unsupported);
+    }
 
     let mut pack_sizes = None;
     loop {
@@ -520,6 +547,9 @@ fn parse_unpack_info(reader: &mut Cursor<'_>) -> Result<Vec<FolderInfo>, SevenZE
         return Err(SevenZError::BadHeader);
     }
     let num_folders = reader.read_len()?;
+    if num_folders > ARCHIVE_METADATA_ITEM_CAP {
+        return Err(SevenZError::Unsupported);
+    }
     if reader.read_u8()? != 0 {
         return Err(SevenZError::Unsupported);
     }
@@ -562,9 +592,17 @@ fn parse_sub_streams_info(
     if nid == K_NUM_UNPACK_STREAM {
         for folder in folders.iter_mut() {
             folder.num_unpack_sub_streams = reader.read_len()?;
-            if folder.num_unpack_sub_streams == 0 {
+            if folder.num_unpack_sub_streams == 0
+                || folder.num_unpack_sub_streams > ARCHIVE_METADATA_ITEM_CAP
+            {
                 return Err(SevenZError::BadHeader);
             }
+        }
+        let total_substreams = folders
+            .iter()
+            .try_fold(0usize, |total, folder| total.checked_add(folder.num_unpack_sub_streams));
+        if total_substreams.is_none_or(|total| total > ARCHIVE_METADATA_ITEM_CAP) {
+            return Err(SevenZError::Unsupported);
         }
         nid = reader.read_u8()?;
     }
@@ -591,16 +629,17 @@ fn parse_sub_streams_info(
     }
 
     if nid == K_CRC {
-        let num_digests = folders
-            .iter()
-            .map(|folder| {
-                if folder.num_unpack_sub_streams == 1 && folder.unpack_crc.is_some() {
-                    0
-                } else {
-                    folder.num_unpack_sub_streams
-                }
-            })
-            .sum();
+        let num_digests = folders.iter().try_fold(0usize, |total, folder| {
+            let count = if folder.num_unpack_sub_streams == 1 && folder.unpack_crc.is_some() {
+                0
+            } else {
+                folder.num_unpack_sub_streams
+            };
+            total.checked_add(count)
+        });
+        let num_digests = num_digests
+            .filter(|count| *count <= ARCHIVE_METADATA_ITEM_CAP)
+            .ok_or(SevenZError::Unsupported)?;
         let defined = read_all_or_bits(reader, num_digests)?;
         let mut digest_idx = 0usize;
         for folder in folders.iter_mut() {
@@ -670,6 +709,9 @@ fn finalize_sub_streams(folders: &mut [FolderInfo]) -> Result<(), SevenZError> {
 }
 
 fn parse_utf16_names(body: &mut Cursor<'_>, num_files: usize) -> Result<Vec<String>, SevenZError> {
+    if num_files > ARCHIVE_METADATA_ITEM_CAP {
+        return Err(SevenZError::Unsupported);
+    }
     if body.read_u8()? != 0 {
         return Err(SevenZError::Unsupported);
     }
@@ -693,6 +735,9 @@ fn parse_utf16_names(body: &mut Cursor<'_>, num_files: usize) -> Result<Vec<Stri
 
 fn parse_files_info(reader: &mut Cursor<'_>) -> Result<FilesInfo, SevenZError> {
     let num_files = reader.read_len()?;
+    if num_files > ARCHIVE_METADATA_ITEM_CAP {
+        return Err(SevenZError::Unsupported);
+    }
 
     let mut names = Vec::new();
     let mut empty_streams = vec![false; num_files];
@@ -844,6 +889,13 @@ fn parse_archive(payload: &[u8]) -> Result<Vec<ArchiveShape<'_>>, SevenZError> {
 
     let mut stream_map = Vec::new();
     for (folder_index, folder) in folders.iter().enumerate() {
+        if stream_map
+            .len()
+            .checked_add(folder.num_unpack_sub_streams)
+            .is_none_or(|len| len > ARCHIVE_METADATA_ITEM_CAP)
+        {
+            return Err(SevenZError::Unsupported);
+        }
         let mut offset = 0u64;
         for substream_index in 0..folder.num_unpack_sub_streams {
             let size = *folder
@@ -954,6 +1006,116 @@ pub fn lzma_decompress_to_vec(
 pub fn extract_single_file_to_vec(payload: &[u8]) -> Result<Vec<u8>, SevenZError> {
     let archive = parse_single_file_archive(payload)?;
     extract_archive_shape_to_vec(&archive)
+}
+
+/// Extract a strict single-stream archive while bounding both decoder memory
+/// inputs and decoded output. This is intended for large, untrusted embedded
+/// payloads where trusting the 7z header sizes could exhaust the kernel heap.
+pub fn extract_single_file_to_vec_bounded(
+    payload: &[u8],
+    max_unpacked_size: usize,
+    max_dictionary_size: usize,
+) -> Result<Vec<u8>, SevenZError> {
+    let archive = parse_single_file_archive(payload)?;
+    if archive.folder_unpacked_size > max_unpacked_size
+        || archive.substream_size > max_unpacked_size
+        || archive.substream_offset != 0
+        || archive.substream_size != archive.folder_unpacked_size
+    {
+        return Err(SevenZError::Unsupported);
+    }
+    match archive.method {
+        Method::Copy => {}
+        Method::Lzma { dict_size, .. } | Method::Lzma2 { dict_size }
+            if dict_size as usize > max_dictionary_size =>
+        {
+            return Err(SevenZError::Unsupported);
+        }
+        Method::Lzma { .. } | Method::Lzma2 { .. } => {}
+    }
+
+    let out = decode_folder_to_vec_bounded(&archive)?;
+    if let Some(expected_crc) = archive.substream_crc
+        && crc32fast::hash(out.as_slice()) != expected_crc
+    {
+        return Err(SevenZError::BadCrc);
+    }
+    Ok(out)
+}
+
+fn bounded_output_vec(expected_size: usize) -> Result<Vec<u8>, SevenZError> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(expected_size)
+        .map_err(|_| SevenZError::DecodeFailed)?;
+    Ok(out)
+}
+
+fn extend_bounded(
+    out: &mut Vec<u8>,
+    bytes: &[u8],
+    expected_size: usize,
+) -> Result<(), SevenZError> {
+    let next_len = out
+        .len()
+        .checked_add(bytes.len())
+        .ok_or(SevenZError::DecodeFailed)?;
+    if next_len > expected_size {
+        return Err(SevenZError::DecodeFailed);
+    }
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn decode_folder_to_vec_bounded(archive: &ArchiveShape<'_>) -> Result<Vec<u8>, SevenZError> {
+    let expected_size = archive.folder_unpacked_size;
+    let mut out = bounded_output_vec(expected_size)?;
+
+    match archive.method {
+        Method::Copy => {
+            extend_bounded(&mut out, archive.packed_stream, expected_size)?;
+        }
+        Method::Lzma { props, dict_size } => {
+            let mut reader = lzma_rust2::LzmaReader::new_with_props(
+                archive.packed_stream,
+                expected_size as u64,
+                props,
+                dict_size,
+                None,
+            )
+            .map_err(|_| SevenZError::DecodeFailed)?;
+            let mut buf = [0u8; 8192];
+            loop {
+                let got = lzma_rust2::Read::read(&mut reader, &mut buf)
+                    .map_err(|_| SevenZError::DecodeFailed)?;
+                if got == 0 {
+                    break;
+                }
+                extend_bounded(&mut out, &buf[..got], expected_size)?;
+            }
+        }
+        Method::Lzma2 { dict_size } => {
+            let mut reader = lzma_rust2::Lzma2Reader::new(archive.packed_stream, dict_size, None);
+            let mut buf = [0u8; 8192];
+            loop {
+                let got = lzma_rust2::Read::read(&mut reader, &mut buf)
+                    .map_err(|_| SevenZError::DecodeFailed)?;
+                if got == 0 {
+                    break;
+                }
+                extend_bounded(&mut out, &buf[..got], expected_size)?;
+            }
+        }
+    }
+
+    if out.len() != expected_size {
+        return Err(SevenZError::DecodeFailed);
+    }
+    if let Some(expected_crc) = archive.folder_crc
+        && crc32fast::hash(out.as_slice()) != expected_crc
+    {
+        return Err(SevenZError::BadCrc);
+    }
+    Ok(out)
 }
 
 fn decode_folder_to_vec(archive: &ArchiveShape<'_>) -> Result<Vec<u8>, SevenZError> {

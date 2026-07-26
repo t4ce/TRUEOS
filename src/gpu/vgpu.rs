@@ -77,8 +77,6 @@ pub(crate) enum KernelClient {
     /// Independent compute lane for continuously executing GPU programs. Its
     /// context may remain in flight without blocking system-service compute.
     GpgpuExecution,
-    /// Fixed-model compute lane with its own persistent PPGTT and GuC context.
-    Lfm25,
     /// Persistent UI4 composition queue.  This is deliberately a separate
     /// virtual device/principal from general kernel GPGPU: UI4 may leave one
     /// frame in flight while video conversion, fonts, and application compute
@@ -96,7 +94,6 @@ impl KernelClient {
             Self::Render => "kernel-render",
             Self::GpgpuSystem => "kernel-gpgpu-system",
             Self::GpgpuExecution => "kernel-gpgpu-execution",
-            Self::Lfm25 => "kernel-lfm25",
             Self::Ui4Compositor => "kernel-ui4-compositor",
             Self::Ui4Blitter => "kernel-ui4-blitter",
         }
@@ -107,7 +104,6 @@ impl KernelClient {
             Self::Render => Principal::KernelRender,
             Self::GpgpuSystem => Principal::KernelGpgpuSystem,
             Self::GpgpuExecution => Principal::KernelGpgpuExecution,
-            Self::Lfm25 => Principal::KernelLfm25,
             Self::Ui4Compositor => Principal::KernelUi4Compositor,
             Self::Ui4Blitter => Principal::KernelUi4Blitter,
         }
@@ -116,7 +112,7 @@ impl KernelClient {
     const fn queue_class(self) -> QueueClass {
         match self {
             Self::Render => QueueClass::Render,
-            Self::GpgpuSystem | Self::GpgpuExecution | Self::Lfm25 => QueueClass::Compute,
+            Self::GpgpuSystem | Self::GpgpuExecution => QueueClass::Compute,
             Self::Ui4Compositor => QueueClass::Compute,
             Self::Ui4Blitter => QueueClass::Copy,
         }
@@ -128,18 +124,12 @@ impl KernelClient {
             // able to preempt ordinary persistent GPGPU work instead of
             // waiting through an entire GuC scheduler rotation.
             //
-            // LFM submissions are likewise bounded interactive batches. A
-            // normal-priority context added one repeatable scheduler quantum
-            // to every model projection on ADL-S, overwhelming the actual
-            // kernel time. Each LFM batch remains bounded to at most three
-            // projection walkers, so it cannot turn into a persistent
-            // high-priority program.
             // GPGPU system submissions are likewise bounded synchronous
             // kernels. They produce visible retained UI surfaces (Gridpaper
             // and GPU fonts), so leaving them at normal priority adds one
             // complete GuC scheduler quantum to every copy/coverage/release
             // stage while UI4 window motion itself remains crisp.
-            Self::GpgpuSystem | Self::Ui4Compositor | Self::Lfm25 => {
+            Self::GpgpuSystem | Self::Ui4Compositor => {
                 PhysicalContextPriority::KernelHigh
             }
             _ => PhysicalContextPriority::KernelNormal,
@@ -164,7 +154,6 @@ const _: () = {
         KernelClient::GpgpuExecution.physical_priority(),
         PhysicalContextPriority::KernelNormal
     ));
-    assert!(matches!(KernelClient::Lfm25.physical_priority(), PhysicalContextPriority::KernelHigh));
     assert!(matches!(
         KernelClient::Ui4Blitter.physical_priority(),
         PhysicalContextPriority::KernelNormal
@@ -176,7 +165,6 @@ pub(crate) enum Principal {
     KernelRender,
     KernelGpgpuSystem,
     KernelGpgpuExecution,
-    KernelLfm25,
     KernelUi4Compositor,
     KernelUi4Blitter,
     HostRuntime,
@@ -190,7 +178,6 @@ impl Principal {
             Self::KernelRender => "kernel-render",
             Self::KernelGpgpuSystem => "kernel-gpgpu-system",
             Self::KernelGpgpuExecution => "kernel-gpgpu-execution",
-            Self::KernelLfm25 => "kernel-lfm25",
             Self::KernelUi4Compositor => "kernel-ui4-compositor",
             Self::KernelUi4Blitter => "kernel-ui4-blitter",
             Self::HostRuntime => "host-runtime",
@@ -1782,7 +1769,6 @@ fn allowed_capabilities(
         Principal::KernelRender
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuExecution
-        | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
         | Principal::KernelUi4Blitter => caps
             .union(Capabilities::PRESENT)
@@ -1796,7 +1782,6 @@ const fn quota_for(principal: Principal) -> Quota {
         Principal::KernelRender
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuExecution
-        | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
         | Principal::KernelUi4Blitter => Quota::KERNEL,
         Principal::HostRuntime => Quota::HOST,
