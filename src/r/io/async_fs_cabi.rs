@@ -216,7 +216,15 @@ pub(crate) fn start_stat(owner: u32, path: String) -> i32 {
 }
 
 pub(crate) fn start_list_dir(owner: u32, path: String) -> i32 {
-    start(owner, RequestKind::ListDir { path })
+    let path_for_log = path.clone();
+    let id = start(owner, RequestKind::ListDir { path });
+    crate::log_info!(target: "filesystem";
+        "blueprint-async-fs: submitted id={} op=list-dir owner={} path={}\n",
+        id,
+        owner,
+        path_for_log
+    );
+    id
 }
 
 pub(crate) fn start_remove(owner: u32, path: String) -> i32 {
@@ -361,14 +369,36 @@ async fn process(request: &Request) -> OperationState {
             }
         }
         RequestKind::ListDir { path } => {
-            match crate::r::fs::trueosfs::list_dir_async(disk, path.as_str()).await {
+            crate::log_info!(target: "filesystem";
+                "blueprint-async-fs: begin id={} op=list-dir owner={} path={}\n",
+                request.id,
+                request.owner,
+                path
+            );
+            let state = match crate::r::fs::trueosfs::list_dir_async(disk, path.as_str()).await {
                 Ok(Some(listing)) if listing.len() as u64 > ASYNC_FS_MAX_RESULT_BYTES => {
                     OperationState::Failed(FS_ERR_TOO_LARGE)
                 }
                 Ok(Some(listing)) => OperationState::Read(listing.into_bytes()),
                 Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
                 Err(error) => OperationState::Failed(map_block_error(error)),
+            };
+            match &state {
+                OperationState::Read(bytes) => crate::log_info!(target: "filesystem";
+                    "blueprint-async-fs: done id={} op=list-dir owner={} status=ok bytes={}\n",
+                    request.id,
+                    request.owner,
+                    bytes.len()
+                ),
+                OperationState::Failed(code) => crate::log_info!(target: "filesystem";
+                    "blueprint-async-fs: done id={} op=list-dir owner={} status=error code={}\n",
+                    request.id,
+                    request.owner,
+                    code
+                ),
+                _ => {}
             }
+            state
         }
         RequestKind::Remove { path } => {
             match crate::r::fs::trueosfs::file_delete_async(disk, path.as_str()).await {

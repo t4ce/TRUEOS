@@ -44,6 +44,7 @@ static NEXT_FILE_FD: AtomicI32 = AtomicI32::new(3);
 
 const PTHREAD_SYNC_TRACE_LIMIT: usize = 48;
 const PTHREAD_CREATE_TRACE_LIMIT: usize = 16;
+const PTHREAD_MUTEX_SPIN_TRACE_START: usize = 1 << 24;
 const C_ALLOCATION_CAPACITY: usize = 65536;
 const PTHREAD_KEY_CAPACITY: usize = 128;
 const PTHREAD_TLS_VALUE_CAPACITY: usize = 512;
@@ -678,32 +679,33 @@ fn pthread_mutex_lock_key(key: usize) -> c_int {
     let Some(state) = pthread_mutex_storage(key) else {
         return TRUEOS_EINVAL;
     };
-    pthread_mutex_lock_state(unsafe { state.as_ref() }, owner)
+    pthread_mutex_lock_state(unsafe { state.as_ref() }, owner, Some(key))
 }
 
-fn pthread_mutex_lock_state(state: &PthreadMutexStorage, owner: usize) -> c_int {
+fn pthread_mutex_lock_state(
+    state: &PthreadMutexStorage,
+    owner: usize,
+    diagnostic_key: Option<usize>,
+) -> c_int {
+    let mut spins = 0usize;
     loop {
         let held_by = state.owner.load(Ordering::Acquire);
         if held_by == owner {
-            return match state.kind.load(Ordering::Relaxed) {
+            match state.kind.load(Ordering::Relaxed) {
                 TRUEOS_PTHREAD_MUTEX_RECURSIVE => {
                     let depth = state.depth.load(Ordering::Relaxed);
-                    if depth == usize::MAX {
+                    return if depth == usize::MAX {
                         TRUEOS_EAGAIN
                     } else {
                         state.depth.store(depth + 1, Ordering::Relaxed);
                         0
-                    }
+                    };
                 }
-                TRUEOS_PTHREAD_MUTEX_ERRORCHECK => TRUEOS_EDEADLK,
-                TRUEOS_PTHREAD_MUTEX_NORMAL => {
-                    core::hint::spin_loop();
-                    continue;
-                }
-                _ => TRUEOS_EINVAL,
-            };
-        }
-        if held_by == 0
+                TRUEOS_PTHREAD_MUTEX_ERRORCHECK => return TRUEOS_EDEADLK,
+                TRUEOS_PTHREAD_MUTEX_NORMAL => {}
+                _ => return TRUEOS_EINVAL,
+            }
+        } else if held_by == 0
             && state
                 .owner
                 .compare_exchange(0, owner, Ordering::Acquire, Ordering::Relaxed)
@@ -711,6 +713,23 @@ fn pthread_mutex_lock_state(state: &PthreadMutexStorage, owner: usize) -> c_int 
         {
             state.depth.store(1, Ordering::Relaxed);
             return 0;
+        }
+
+        spins = spins.saturating_add(1);
+        if spins >= PTHREAD_MUTEX_SPIN_TRACE_START
+            && spins.is_power_of_two()
+            && let Some(key) = diagnostic_key
+        {
+            crate::log_warn!(target: "pthread";
+                "pthread-realm: mutex contention key=0x{:x} waiter={} held_by={} depth={} kind={} spins={} cpu={}\n",
+                key,
+                owner,
+                held_by,
+                state.depth.load(Ordering::Relaxed),
+                state.kind.load(Ordering::Relaxed),
+                spins,
+                crate::percpu::current_slot()
+            );
         }
         core::hint::spin_loop();
     }
@@ -779,8 +798,8 @@ mod pthread_mutex_tests {
     #[test]
     fn recursive_mutex_tracks_depth_until_final_unlock() {
         let state = mutex_state(TRUEOS_PTHREAD_MUTEX_RECURSIVE);
-        assert_eq!(pthread_mutex_lock_state(&state, 7), 0);
-        assert_eq!(pthread_mutex_lock_state(&state, 7), 0);
+        assert_eq!(pthread_mutex_lock_state(&state, 7, None), 0);
+        assert_eq!(pthread_mutex_lock_state(&state, 7, None), 0);
         assert_eq!(state.owner.load(Ordering::Relaxed), 7);
         assert_eq!(state.depth.load(Ordering::Relaxed), 2);
 
@@ -803,15 +822,15 @@ mod pthread_mutex_tests {
     #[test]
     fn errorcheck_mutex_reports_same_owner_deadlock() {
         let state = mutex_state(TRUEOS_PTHREAD_MUTEX_ERRORCHECK);
-        assert_eq!(pthread_mutex_lock_state(&state, 11), 0);
-        assert_eq!(pthread_mutex_lock_state(&state, 11), TRUEOS_EDEADLK);
+        assert_eq!(pthread_mutex_lock_state(&state, 11, None), 0);
+        assert_eq!(pthread_mutex_lock_state(&state, 11, None), TRUEOS_EDEADLK);
         assert_eq!(pthread_mutex_trylock_state(&state, 11), TRUEOS_EBUSY);
     }
 
     #[test]
     fn mutex_rejects_unlock_by_non_owner() {
         let state = mutex_state(TRUEOS_PTHREAD_MUTEX_RECURSIVE);
-        assert_eq!(pthread_mutex_lock_state(&state, 13), 0);
+        assert_eq!(pthread_mutex_lock_state(&state, 13, None), 0);
         assert_eq!(pthread_mutex_unlock_state(&state, 17), TRUEOS_EPERM);
         assert_eq!(state.owner.load(Ordering::Relaxed), 13);
         assert_eq!(state.depth.load(Ordering::Relaxed), 1);
