@@ -13,9 +13,13 @@ pub(crate) mod flags {
     /// Focused diagnostics for the retained TGA PCI/hotplug/RPC seam.
     pub(crate) const TGA_RPC_DIAG_PROFILE_ENABLED: bool = false;
 
-    /// Active USB/xHCI/UAS hunt. This opens the CrabUSB controller and TrueOS
-    /// glue through Trace and enables the unsampled device/UAS diagnostics.
-    pub(crate) const USB_UAS_DIAG_PROFILE_ENABLED: bool = true;
+    /// Full forensic USB profile. The exact switch settings are preserved in
+    /// `log_os.usb_full_diag_profile.txt` beside this source file.
+    pub(crate) const USB_UAS_DIAG_PROFILE_ENABLED: bool = false;
+
+    /// Operational USB profile: retain topology/state edges, handoffs, health
+    /// checkpoints, and failures at Info without per-TRB/per-transfer Trace.
+    pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = true;
 
     // Keep failures, lifecycle summaries, and lowest-level trace records while
     // deliberately leaving Debug out of the focused TGA RPC capture.
@@ -41,6 +45,8 @@ pub(crate) mod flags {
     pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LevelFilter::Trace)
+    } else if USB_RUNTIME_DIAG_PROFILE_ENABLED {
+        LogLevelPolicy::up(LevelFilter::Info)
     } else {
         LogLevelPolicy::up(LevelFilter::Warn)
     };

@@ -27,25 +27,46 @@ pub async fn usb_controller_service_task() {
     let Some((mmio, mmio_len, kernel, root_hub_policy)) = lib::known_xhci_host_inputs() else {
         return;
     };
-    let mut host = crabusb::USBHost::new_xhci_with_root_hub_init_policy_and_mmio_len(
+    let mut host = match crabusb::USBHost::new_xhci_with_root_hub_init_policy_and_mmio_len(
         mmio,
         mmio_len,
         kernel,
         root_hub_policy,
-    )
-    .expect("crabusb xhci host");
-    host.init().await.expect("crabusb xhci init");
+    ) {
+        Ok(host) => host,
+        Err(err) => {
+            crate::log!("crabusb: controller construction failed error={:?}\n", err);
+            return;
+        }
+    };
+    if let Err(err) = host.init().await {
+        crate::log!("crabusb: controller init failed error={:?}\n", err);
+        return;
+    }
 
     let event_handler = host.create_event_handler();
     let spawner: embassy_executor::Spawner =
         unsafe { embassy_executor::Spawner::for_current_executor().await };
-    spawner.spawn(usb_event_pump_task(event_handler).expect("crabusb event pump token"));
+    let event_pump_token = match usb_event_pump_task(event_handler) {
+        Ok(token) => token,
+        Err(err) => {
+            crate::log!("crabusb: event pump task allocation failed error={:?}\n", err);
+            return;
+        }
+    };
+    spawner.spawn(event_pump_token);
     crate::log!("crabusb: event pump started\n");
     if let Err(reason) = lab::refresh_snapshot(&mut host).await {
         crate::log!("crabusb: initial xhci wisdom snapshot failed reason={}\n", reason);
     }
-    spawner
-        .spawn(dev_gears::usb_device_pool_worker_task().expect("crabusb device pool worker token"));
+    let device_pool_token = match dev_gears::usb_device_pool_worker_task() {
+        Ok(token) => token,
+        Err(err) => {
+            crate::log!("crabusb: device pool worker task allocation failed error={:?}\n", err);
+            return;
+        }
+    };
+    spawner.spawn(device_pool_token);
     crate::log!("crabusb: device pool worker started\n");
 
     let Some(news) = probe_devices_with_log(&mut host, "initial").await else {
@@ -86,10 +107,8 @@ pub async fn usb_controller_service_task() {
                 continue;
             }
         };
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(
-            HOT_RESCAN_DEBOUNCE_MS,
-        ))
-        .await;
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(HOT_RESCAN_DEBOUNCE_MS))
+            .await;
         crate::log!(
             "crabusb: probe_devices trigger=port-change seq={} quarantine=active\n",
             observed_port_change_seq
@@ -182,7 +201,19 @@ async fn open_and_handoff_devices(
                     continue;
                 }
 
-                let device = host.open_device(&info).await.expect("crabusb open device");
+                let device = match host.open_device(&info).await {
+                    Ok(device) => device,
+                    Err(err) => {
+                        crate::log!(
+                            "crabusb: normal device open failed id={} vid={:04x} pid={:04x} error={:?}\n",
+                            info.id(),
+                            vendor_id,
+                            product_id,
+                            err
+                        );
+                        continue;
+                    }
+                };
                 let id = device.slot_id() as usize;
                 match dev_gears::handoff_opened_device(device) {
                     Ok(pool_len) => {

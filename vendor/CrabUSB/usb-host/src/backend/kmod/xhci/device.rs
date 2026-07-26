@@ -678,8 +678,8 @@ impl Device {
                         if binterval == 0 {
                             1
                         } else {
-                            // 计算 floor(log2(bInterval))
-                            let log2_binterval = 31 - (binterval as u32).leading_zeros() as u8 - 1;
+                            // bInterval is known non-zero in this branch.
+                            let log2_binterval = binterval.ilog2() as u8;
                             let interval = (log2_binterval + 3).clamp(1, 16);
                             debug!(
                                 "ISO endpoint FS/LS: bInterval={} -> log2={} -> XHCI interval={}",
@@ -708,8 +708,8 @@ impl Device {
                         if binterval == 0 {
                             1
                         } else {
-                            // 计算 floor(log2(bInterval))
-                            let log2_binterval = 31 - (binterval as u32).leading_zeros() as u8 - 1;
+                            // bInterval is known non-zero in this branch.
+                            let log2_binterval = binterval.ilog2() as u8;
                             let interval = (log2_binterval + 3).clamp(1, 16);
                             debug!(
                                 "INT endpoint FS/LS: bInterval={} -> log2={} -> XHCI interval={}",

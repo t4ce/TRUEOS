@@ -862,7 +862,7 @@ fn tga_rpc_heartbeat_boot_gate() -> bool {
 }
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::usb2::usb_controller_service_task())
+    spawn_on_worker(spawner, |_worker_spawner| crate::usb2::usb_controller_service_task())
 }
 
 fn spawn_user_input_record_writer(spawner: Spawner) -> SpawnAttempt {
@@ -1618,7 +1618,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled(
         "usb-controller-tasks",
-        0,
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &USB_CONTROLLER_TASKS_STARTED,
         spawn_usb_controller_tasks,
     ),

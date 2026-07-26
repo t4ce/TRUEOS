@@ -244,7 +244,7 @@ impl XhciRootHub {
     async fn _changed_ports(&mut self) -> Result<Vec<PortChangeInfo>, USBError> {
         self.log_status("root-hub-changed-ports-begin");
         self.fail_if_halted("root-hub-changed-ports-begin")?;
-        self.consume_port_change_edges();
+        self.consume_port_change_edges()?;
         self.handle_uninit().await?;
         self.log_status("root-hub-after-uninit");
         self.fail_if_halted("root-hub-after-uninit")?;
@@ -299,7 +299,7 @@ impl XhciRootHub {
         Ok(())
     }
 
-    fn consume_port_change_edges(&mut self) {
+    fn consume_port_change_edges(&mut self) -> Result<(), USBError> {
         let changed = self
             .ports()
             .iter()
@@ -312,9 +312,34 @@ impl XhciRootHub {
                 continue;
             }
             let idx = usize::from(port_id - 1);
+            let prior_state = self.ports()[idx].state;
+            let portsc = self.reg.port_register_set.read_volatile_at(idx).portsc;
+            let connected = portsc.current_connect_status();
+            let enabled = portsc.port_enabled_disabled();
+            let connection_changed = portsc.connect_status_change();
+            self.write_portsc_action(idx, port_id, "ack-change-edge", 0, Self::PORT_CHANGE_MASK)?;
+
+            // A reset-completion event can sit in the controller event ring
+            // while the freshly discovered device is already being addressed.
+            // If that port is still connected/enabled and CSC is clear, the
+            // edge is stale bookkeeping; re-probing it would assign a second
+            // slot to a device that CrabUSB already owns.
+            if matches!(prior_state, PortState::Probed)
+                && connected
+                && enabled
+                && !connection_changed
+            {
+                info!(
+                    "xhci: root port {} edge consumed state=probed-retained reason=stable-no-csc",
+                    port_id
+                );
+                continue;
+            }
+
             self.ports_mut()[idx].state = PortState::Uninit;
             info!("xhci: root port {} edge consumed state=uninit", port_id);
         }
+        Ok(())
     }
 
     fn write_portsc_action(

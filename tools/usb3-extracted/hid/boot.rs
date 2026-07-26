@@ -573,6 +573,7 @@ async fn hid_boot_stream_task(
         usize::from(target.in_max_packet_size.max(target.report_len as u16)),
     ));
     let mut timeout_logs = 0u32;
+    let mut first_report_pending = true;
 
     loop {
         match with_timeout_or_none(
@@ -606,6 +607,17 @@ async fn hid_boot_stream_task(
                     }
 
                     let sample = &report[..read.min(report.len())];
+                    if first_report_pending {
+                        first_report_pending = false;
+                        crate::log_info!(target: "usb";
+                            "crabusb: hid {} {:04X}:{:04X} first-report ep=0x{:02X} bytes={:02X?}\n",
+                            target.kind.as_str(),
+                            vendor_id,
+                            product_id,
+                            target.in_endpoint,
+                            sample
+                        );
+                    }
                     match target.kind {
                         HidBootKind::Keyboard => super::handle_keyboard_boot_report(
                             controller_id,
@@ -716,7 +728,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
     };
     let mut device = Some(device);
     let mut started_any = false;
-    let mut descriptors_pending = log_descriptors;
+    let descriptors_pending = log_descriptors;
 
     for mut target in targets {
         if should_skip_qemu_generic_tablet_probe(vendor_id, product_id, target.kind) {
@@ -751,8 +763,10 @@ pub(crate) async fn maybe_start_hid_boot_streams(
         }
 
         if target.generic_pointer {
-            let inferred =
-                read_generic_pointer_info(device.as_mut()?, target.interface_number).await;
+            let Some(device_owner) = device.as_mut() else {
+                break;
+            };
+            let inferred = read_generic_pointer_info(device_owner, target.interface_number).await;
             match inferred.map(|info| info.kind) {
                 Some(GenericPointerKind::Mouse) => {
                     let has_report_id = inferred.map(|info| info.has_report_id).unwrap_or(false);
@@ -796,8 +810,11 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             // unlike the boot packet we used before.  Discover that before
             // handing the interface to the stream task so button 4/5 do not
             // get shifted into the button byte.
+            let Some(device_owner) = device.as_mut() else {
+                break;
+            };
             if let Some(info) =
-                read_generic_pointer_info(device.as_mut()?, target.interface_number).await
+                read_generic_pointer_info(device_owner, target.interface_number).await
             {
                 target.strip_report_id = info.has_report_id;
                 if info.has_report_id {
@@ -863,7 +880,6 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                 )
                 .await;
             }
-            descriptors_pending = false;
         }
 
         match hid_boot_stream_task(device, controller_id, target, active_stream) {

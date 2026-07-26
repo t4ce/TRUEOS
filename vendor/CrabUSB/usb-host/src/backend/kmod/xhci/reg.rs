@@ -72,9 +72,8 @@ impl XhciRegisters {
         let address = self.mmio_base + caplength + 0x400 + index * 0x10;
         let before = unsafe { core::ptr::read_volatile(address as *const u32) };
         let neutral = (before & Self::PORTSC_RO_MASK) | (before & Self::PORTSC_RWS_MASK);
-        let requested = neutral
-            | set_bits
-            | (before & acknowledge_changes & Self::PORTSC_CHANGE_MASK);
+        let requested =
+            neutral | set_bits | (before & acknowledge_changes & Self::PORTSC_CHANGE_MASK);
         unsafe {
             core::ptr::write_volatile(address as *mut u32, requested);
         }
