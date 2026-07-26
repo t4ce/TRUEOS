@@ -11,8 +11,9 @@ test = false
 bench = false
 
 [features]
-default = ["trueos_rdp", "trueos_h264_encode_stream"]
+default = ["trueos_rdp", "trueos_lumen", "trueos_h264_encode_stream"]
 trueos_rdp = []
+trueos_lumen = []
 trueos_h264_encode_stream = []
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
 intel_gpu_cpp_aot = []
@@ -74,6 +75,8 @@ smoltcp = { version = "0.13", default-features = false, features = ["alloc", "pr
 dma-api = { version = "=0.7.3", default-features = false }
 crab-usb = { path = "vendor/CrabUSB/usb-host", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
+trueos-lfm25-model = { path = "crates/trueos-lfm25-model" }
+trueos-lfm25-cpu = { path = "crates/trueos-lfm25-cpu" }
 trueos-fs = { path = "crates/trueos-fs" }
 trueos-c4 = { path = "crates/trueos-c4" }
 v = { path = "crates/trueos-v" }

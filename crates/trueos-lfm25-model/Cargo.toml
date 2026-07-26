@@ -1,0 +1,11 @@
+[package]
+name = "trueos-lfm25-model"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []

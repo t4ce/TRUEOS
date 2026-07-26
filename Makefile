@@ -108,6 +108,8 @@ INTEL_GPU_CPP_DEMO_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/cpp_demo_rgba8.bin
 INTEL_GPU_CPP_AUDIO_VISUALIZER_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/cpp_audio_visualizer_rgba8.bin
 INTEL_GPU_CPP_PARTICLE_CRAFT_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/particle_craft.bin
 INTEL_GPU_CPP_FONT_INSTANCE_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/font_instance_rgba8.bin
+INTEL_GPU_CPP_LFM25_Q8_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/lfm25_q8_project.bin
+INTEL_GPU_CPP_LFM25_Q8_PACKED_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/lfm25_q8_project_packed.bin
 INTEL_GPU_CPP_SPIRIT_BACKGROUND_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/spirit_vfx_background_rgba8.bin
 INTEL_GPU_CPP_SPIRIT_SPRITE_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/spirit_vfx_sprite_rgba8.bin
 INTEL_GPU_LEGACY_COPY_BIN := crates/trueos-shader/gpgpu/kernels/artifacts/adls/copy_rect_rgba8.bin
@@ -150,7 +152,7 @@ LEGACY_OPENCL_C_ISO_PATH := bld/trueos-legacy-opencl-c.iso
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel kernel-cpp-aot kernel-legacy-opencl-c cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine testrig-physical-reset-log baremetal-reboot-log iso iso-cpp-aot iso-legacy-opencl-c provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: images empty-libs kernel kernel-cpp-aot kernel-legacy-opencl-c cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-verify lfm25-igpu-packed-verify intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine testrig-physical-reset-log baremetal-reboot-log iso iso-cpp-aot iso-legacy-opencl-c provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -189,6 +191,12 @@ intel-gpu-bake-particle-craft-cpp:
 intel-gpu-bake-font-instance-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_font_instance.sh"
 
+intel-gpu-bake-lfm25-q8-cpp:
+	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_lfm25_q8.sh"
+
+intel-gpu-bake-lfm25-q8-packed-cpp:
+	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_lfm25_q8_packed.sh"
+
 intel-gpu-bake-spirit-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_spirit.sh"
 
@@ -198,6 +206,8 @@ intel-gpu-bake-cpp-artifacts:
 	$(MAKE) --no-print-directory intel-gpu-bake-audio-visualizer-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-particle-craft-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-font-instance-cpp
+	$(MAKE) --no-print-directory intel-gpu-bake-lfm25-q8-cpp
+	$(MAKE) --no-print-directory intel-gpu-bake-lfm25-q8-packed-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-spirit-cpp
 
 intel-gpu-refresh-cpp-artifacts: intel-gpu-bake-cpp-artifacts
@@ -216,7 +226,22 @@ aarch64-kernel-test:
 
 aarch64-kernels: aarch64-kernel-copy aarch64-kernel-verify
 
-intel-gpu-verify-cpp-artifacts:
+lfm25-cpp:
+	./tools/lfm2.5-350m/build_cpp.sh
+
+lfm25-cpp-verify:
+	./tools/lfm2.5-350m/verify_cpp.sh
+
+lfm25-packed-isa-verify:
+	python3 ./tools/lfm2.5-350m/verify_packed_isa.py
+
+lfm25-igpu-verify:
+	./tools/lfm2.5-350m/verify_igpu.sh
+
+lfm25-igpu-packed-verify:
+	./tools/lfm2.5-350m/verify_igpu_packed.sh
+
+intel-gpu-verify-cpp-artifacts: lfm25-packed-isa-verify
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify.py" --artifact-dir "$(INTEL_GPU_CPP_ARTIFACT_DIR)"
 	$(INTEL_GPU_BAKERY_PYTHON) -B -m unittest discover -s "$(INTEL_GPU_BAKERY_DIR)" -p 'test_*.py'
 
@@ -230,13 +255,13 @@ intel-gpu-verify-copy-cpp-hardware-log:
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_probe_log.py" "$(INTEL_GPU_CPP_PROBE_LOG)"
 
 intel-gpu-verify-linked-copy:
-	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_linked.py" --elf "$(INTEL_GPU_LINKED_ELF)" --selected-bin "$(INTEL_GPU_SELECTED_COPY_BIN)" --forbidden-bin "$(INTEL_GPU_FORBIDDEN_COPY_BIN)" --required-bin "$(INTEL_GPU_CPP_DEMO_BIN)" --required-bin "$(INTEL_GPU_CPP_AUDIO_VISUALIZER_BIN)" --required-bin "$(INTEL_GPU_CPP_PARTICLE_CRAFT_BIN)" --required-bin "$(INTEL_GPU_CPP_FONT_INSTANCE_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_BACKGROUND_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_SPRITE_BIN)"
+	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_linked.py" --elf "$(INTEL_GPU_LINKED_ELF)" --selected-bin "$(INTEL_GPU_SELECTED_COPY_BIN)" --forbidden-bin "$(INTEL_GPU_FORBIDDEN_COPY_BIN)" --required-bin "$(INTEL_GPU_CPP_DEMO_BIN)" --required-bin "$(INTEL_GPU_CPP_AUDIO_VISUALIZER_BIN)" --required-bin "$(INTEL_GPU_CPP_PARTICLE_CRAFT_BIN)" --required-bin "$(INTEL_GPU_CPP_FONT_INSTANCE_BIN)" --required-bin "$(INTEL_GPU_CPP_LFM25_Q8_BIN)" --required-bin "$(INTEL_GPU_CPP_LFM25_Q8_PACKED_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_BACKGROUND_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_SPRITE_BIN)"
 
 intel-gpu-verify-linked-copy-cpp:
 	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT=1 INTEL_GPU_LINKED_ELF="$(INTEL_GPU_LINKED_ELF)" intel-gpu-verify-linked-copy
 
 intel-gpu-verify-packaged-copy:
-	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_packaged.py" --runtime-elf "$(ARTIFACT_RUNTIME_ELF)" --staged-elf "$(ISO_BOOT_DIR)/TRUEOS.elf" --iso "$(ISO_PATH)" --selected-bin "$(INTEL_GPU_SELECTED_COPY_BIN)" --forbidden-bin "$(INTEL_GPU_FORBIDDEN_COPY_BIN)" --required-bin "$(INTEL_GPU_CPP_DEMO_BIN)" --required-bin "$(INTEL_GPU_CPP_AUDIO_VISUALIZER_BIN)" --required-bin "$(INTEL_GPU_CPP_PARTICLE_CRAFT_BIN)" --required-bin "$(INTEL_GPU_CPP_FONT_INSTANCE_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_BACKGROUND_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_SPRITE_BIN)"
+	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_packaged.py" --runtime-elf "$(ARTIFACT_RUNTIME_ELF)" --staged-elf "$(ISO_BOOT_DIR)/TRUEOS.elf" --iso "$(ISO_PATH)" --selected-bin "$(INTEL_GPU_SELECTED_COPY_BIN)" --forbidden-bin "$(INTEL_GPU_FORBIDDEN_COPY_BIN)" --required-bin "$(INTEL_GPU_CPP_DEMO_BIN)" --required-bin "$(INTEL_GPU_CPP_AUDIO_VISUALIZER_BIN)" --required-bin "$(INTEL_GPU_CPP_PARTICLE_CRAFT_BIN)" --required-bin "$(INTEL_GPU_CPP_FONT_INSTANCE_BIN)" --required-bin "$(INTEL_GPU_CPP_LFM25_Q8_BIN)" --required-bin "$(INTEL_GPU_CPP_LFM25_Q8_PACKED_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_BACKGROUND_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_SPRITE_BIN)"
 
 intel-gpu-verify-packaged-copy-cpp:
 	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT=1 ARTIFACT_DIR="$(ARTIFACT_DIR)" ISO_BOOT_DIR="$(ISO_BOOT_DIR)" ISO_PATH="$(ISO_PATH)" intel-gpu-verify-packaged-copy

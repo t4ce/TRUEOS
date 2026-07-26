@@ -1191,6 +1191,8 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
         .is_some()
     {
         let (freed_id, vm_ids) = matrix::free_slot(submitted);
+        #[cfg(feature = "trueos_lumen")]
+        cmds::lumen::notify_matrix_slot_closed(freed_id.as_str());
         for vm_id in vm_ids {
             match crate::hv::stop(vm_id) {
                 Ok(true) => matrix::record_line_in_default(
@@ -1631,6 +1633,8 @@ fn handle_control_c(
     let active_slot = matrix::active_slot_id(output_mask);
     matrix::record_line_in_slot(&active_slot, "^C");
     let (_, vm_id) = matrix::request_slot_interrupt(&active_slot);
+    #[cfg(feature = "trueos_lumen")]
+    cmds::lumen::notify_matrix_slot_interrupted(active_slot.as_str());
     if let Some(vm_id) = vm_id {
         match crate::hv::stop(vm_id) {
             Ok(true) => {

@@ -62,6 +62,14 @@ pub(crate) fn font_instance_rgba8_upload_status() -> Option<UploadedKernelArtifa
     *FONT_INSTANCE_RGBA8_UPLOAD.lock()
 }
 
+pub(crate) fn lfm25_q8_project_upload_status() -> Option<UploadedKernelArtifact> {
+    *LFM25_Q8_PROJECT_UPLOAD.lock()
+}
+
+pub(crate) fn lfm25_q8_project_packed_upload_status() -> Option<UploadedKernelArtifact> {
+    *LFM25_Q8_PROJECT_PACKED_UPLOAD.lock()
+}
+
 pub(crate) fn spirit_vfx_background_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *SPIRIT_VFX_BACKGROUND_RGBA8_UPLOAD.lock()
 }
@@ -447,6 +455,50 @@ pub(crate) fn upload_particle_craft_kernel() -> Option<UploadedKernelArtifact> {
     Some(upload)
 }
 
+pub(crate) fn upload_lfm25_q8_project_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *LFM25_Q8_PROJECT_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/gpgpu: lfm25-q8-project upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload = upload_artifact(
+        dev,
+        LFM25_Q8_PROJECT_ADLS_ARTIFACT,
+        LFM25_Q8_PROJECT_ADLS_GPU,
+    )?;
+    *LFM25_Q8_PROJECT_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
+pub(crate) fn upload_lfm25_q8_project_packed_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *LFM25_Q8_PROJECT_PACKED_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/gpgpu: lfm25-q8-project-packed upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload = upload_artifact(
+        dev,
+        LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT,
+        LFM25_Q8_PROJECT_PACKED_ADLS_GPU,
+    )?;
+    *LFM25_Q8_PROJECT_PACKED_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
 pub(crate) fn upload_font_outline_mesh_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *FONT_OUTLINE_MESH_UPLOAD.lock() {
         return Some(upload);
@@ -582,6 +634,8 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     CPP_DEMO_RGBA8_KERNEL_NAME,
     PARTICLE_CRAFT_KERNEL_NAME,
     FONT_INSTANCE_RGBA8_KERNEL_NAME,
+    LFM25_Q8_PROJECT_KERNEL_NAME,
+    LFM25_Q8_PROJECT_PACKED_KERNEL_NAME,
     FONT_OUTLINE_MESH_KERNEL_NAME,
     FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
     SCENE_AABB_KERNEL_NAME,
@@ -753,6 +807,16 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: PARTICLE_CRAFT_ADLS_ARTIFACT,
             gpu: PARTICLE_CRAFT_ADLS_GPU,
             upload: &PARTICLE_CRAFT_UPLOAD,
+        }),
+        LFM25_Q8_PROJECT_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: LFM25_Q8_PROJECT_ADLS_ARTIFACT,
+            gpu: LFM25_Q8_PROJECT_ADLS_GPU,
+            upload: &LFM25_Q8_PROJECT_UPLOAD,
+        }),
+        LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT,
+            gpu: LFM25_Q8_PROJECT_PACKED_ADLS_GPU,
+            upload: &LFM25_Q8_PROJECT_PACKED_UPLOAD,
         }),
         FONT_OUTLINE_MESH_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: FONT_OUTLINE_MESH_ADLS_ARTIFACT,

@@ -8,8 +8,6 @@ pub type BootloaderPerformanceResponse = request::BootloaderPerformanceResponse;
 pub type BootloaderPerformanceRequest = request::BootloaderPerformanceRequest;
 pub type EfiSystemTableResponse = request::EfiResponse;
 pub type EfiSystemTableRequest = request::EfiRequest;
-pub type EfiMemmapResponse = request::EfiMemmapResponse;
-pub type EfiMemmapRequest = request::EfiMemmapRequest;
 pub type SmbiosResponse = request::SmbiosResponse;
 pub type SmbiosRequest = request::SmbiosRequest;
 
@@ -72,10 +70,6 @@ pub static RSDP_REQUEST: request::RsdpRequest = request::RsdpRequest::new();
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 pub static EFI_SYSTEM_TABLE_REQUEST: EfiSystemTableRequest = EfiSystemTableRequest::new();
-
-#[used]
-#[unsafe(link_section = ".limine_requests")]
-pub static EFI_MEMMAP_REQUEST: EfiMemmapRequest = EfiMemmapRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -200,21 +194,17 @@ fn cache_boot_timestamp_secs() -> Option<u64> {
         return (cached != 0).then_some(cached);
     }
 
-    let (secs, source) = match crate::efi::runtime_services_unix_time() {
-        crate::efi::RuntimeUnixTime::Value(secs) => (Some(secs), "uefi-runtime"),
-        crate::efi::RuntimeUnixTime::Invalid => (None, "uefi-runtime-invalid"),
-        crate::efi::RuntimeUnixTime::Unavailable => {
-            let secs = DATE_AT_BOOT_REQUEST
-                .response()
-                .and_then(|resp| u64::try_from(resp.timestamp).ok())
-                .filter(|secs| *secs != 0);
-            (secs, "limine-date-at-boot")
-        }
-    };
+    let secs = DATE_AT_BOOT_REQUEST
+        .response()
+        .and_then(|resp| u64::try_from(resp.timestamp).ok())
+        .filter(|secs| *secs != 0);
 
     BOOT_TIMESTAMP_SECS_CACHE.store(secs.unwrap_or(0), Ordering::Release);
     if crate::log_os::flags::BOOT_INFO_LOGS {
-        crate::log!("time: boot_wall_clock_source={} unix={}\n", source, secs.unwrap_or(0));
+        crate::log!(
+            "time: boot_wall_clock_source=limine-date-at-boot unix={}\n",
+            secs.unwrap_or(0)
+        );
     }
     secs
 }
@@ -225,10 +215,6 @@ pub fn bootloader_performance() -> Option<&'static BootloaderPerformanceResponse
 
 pub fn efi_system_table_response() -> Option<&'static EfiSystemTableResponse> {
     EFI_SYSTEM_TABLE_REQUEST.response()
-}
-
-pub fn efi_memmap_response() -> Option<&'static EfiMemmapResponse> {
-    EFI_MEMMAP_REQUEST.response()
 }
 
 pub fn rsdp_address() -> Option<u64> {

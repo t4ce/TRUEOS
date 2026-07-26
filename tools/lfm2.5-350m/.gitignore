@@ -1,0 +1,4 @@
+LFM2.5-350M-Q8_0.gguf
+LFM2.5-350M-Q8_0.aot.bin
+LFM2.5-350M-Q8_0.tokenizer.bin
+runtime/
