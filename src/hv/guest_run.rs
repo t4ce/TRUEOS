@@ -456,6 +456,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         crate::hv::blueprint::invoke_host_rel(
             unpacked,
             module.entry,
+            module.flags,
             process_args,
             process_env,
             None,
@@ -478,7 +479,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
             log("run: guest blueprint returned");
         }
         Err(err) => {
-            log(alloc::format!("run: guest REL load failed: {}", err).as_str());
+            log(alloc::format!("run: guest REL invoke failed: {}", err).as_str());
         }
     }
 

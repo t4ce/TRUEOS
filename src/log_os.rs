@@ -7,12 +7,8 @@ pub(crate) mod flags {
     use core::sync::atomic::AtomicBool;
 
     use log::{Level, LevelFilter};
-    pub(crate) use log_os_core::{LogArea, LogLevelPolicy, LogLevelSet};
+    pub(crate) use log_os_core::{LogArea, LogLevelPolicy};
     use spin::Once;
-
-    /// Restored pre-USB GPGPU/TGA diagnostic profile. This is the current name
-    /// for the PCI/TGA/FPGA profile preserved in `log_os.gpgpu_diag_profile.txt`.
-    pub(crate) const TGA_RPC_DIAG_PROFILE_ENABLED: bool = true;
 
     /// Full forensic USB profile. The exact switch settings are preserved in
     /// `log_os.usb_full_diag_profile.txt` beside this source file.
@@ -22,26 +18,13 @@ pub(crate) mod flags {
     /// now so the normal USB area returns to Warn-only logging.
     pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = false;
 
-    // Keep failures, lifecycle summaries, and lowest-level trace records while
-    // deliberately leaving Debug out of the focused TGA RPC capture.
-    const TGA_RPC_DIAG_LEVELS: LogLevelSet = LogLevelSet::ERROR
-        .union(LogLevelSet::WARN)
-        .union(LogLevelSet::INFO)
-        .union(LogLevelSet::TRACE);
-
     pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
         // Preserve the original USB hunt's full Global side, including Debug.
         LogLevelPolicy::up(LevelFilter::Trace)
-    } else if TGA_RPC_DIAG_PROFILE_ENABLED {
-        LogLevelPolicy::only(TGA_RPC_DIAG_LEVELS)
     } else {
         LogLevelPolicy::up(LevelFilter::Info)
     };
-    pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = if TGA_RPC_DIAG_PROFILE_ENABLED {
-        LogLevelPolicy::up(LevelFilter::Info)
-    } else {
-        LogLevelPolicy::up(LevelFilter::Warn)
-    };
+    pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const SERVICE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
@@ -78,7 +61,7 @@ pub(crate) mod flags {
     pub(crate) const NET_LOG_DHCP6_SAMPLES: usize = 8;
     pub(crate) const VNET_EXERCISE_LOGS: bool = false;
     pub(crate) const R8125_VERBOSE_LOGS: bool = false;
-    pub(crate) const BOOT_INFO_LOGS: bool = TGA_RPC_DIAG_PROFILE_ENABLED;
+    pub(crate) const BOOT_INFO_LOGS: bool = false;
     pub(crate) const HV_LOGS: bool = true;
     pub(crate) const PORTAL_LOGS: bool = true;
     pub(crate) const HTML_SHACK_VERBOSE: bool = false;
@@ -93,8 +76,6 @@ pub(crate) mod flags {
     pub(crate) const STORAGE_TRACE_LOGS: bool = false;
     pub(crate) const NVME_VERBOSE: bool = false;
     pub(crate) static BGRT_LOG_ONCE: Once<()> = Once::new();
-    pub(crate) static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
-    pub(crate) static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
     pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(USB_UAS_DIAG_PROFILE_ENABLED);
 
     pub(crate) const fn area_log_policy(area: LogArea) -> LogLevelPolicy {

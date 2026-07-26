@@ -17,6 +17,7 @@ const BLUEPRINT_PAYLOAD_MASK: u16 = 0x00FF;
 const BLUEPRINT_PAYLOAD_RAW: u16 = 1;
 const BLUEPRINT_PAYLOAD_7Z: u16 = 2;
 pub(crate) const BLUEPRINT_CAP_REPLICATABLE: u16 = 1 << 8;
+pub(crate) const BLUEPRINT_CAP_ARGV_ENTRY_V1: u16 = 1 << 9;
 const ELF64_HEADER_LEN: usize = 64;
 const ELF64_RELA_LEN: usize = 24;
 const SHT_PROGBITS: u32 = 1;
@@ -2086,6 +2087,7 @@ pub(crate) fn materialize_embedded_assets(
 pub(crate) fn invoke_host_rel(
     unpacked: &[u8],
     entry_hint: u64,
+    entry_flags: u16,
     process_args: Vec<String>,
     process_env: BTreeMap<String, String>,
     console_target: Option<crate::shell2::MatrixTarget>,
@@ -2098,8 +2100,9 @@ pub(crate) fn invoke_host_rel(
     let entry_section_base = image.section_bases.get(entry_section).copied().unwrap_or(0);
     let vm_for_stats = portal_guest_alloc_vm_id().unwrap_or(0);
     let stats = crate::allocators::hv_guest_heap_stats(vm_for_stats);
+    let argv_entry_v1 = entry_flags & BLUEPRINT_CAP_ARGV_ENTRY_V1 != 0;
     crate::hv::hvlogf(format_args!(
-        "hv: rel image loaded vm={} base=0x{:016X} used_len=0x{:X} main=0x{:016X} entry_hint=sec:{}+0x{:X} entry_section_base=0x{:016X} free_bytes={} largest_free={} free_blocks={}",
+        "hv: rel image loaded vm={} base=0x{:016X} used_len=0x{:X} main=0x{:016X} entry_hint=sec:{}+0x{:X} entry_section_base=0x{:016X} entry_abi={} free_bytes={} largest_free={} free_blocks={}",
         vm_for_stats,
         image.base as usize,
         image.used_len,
@@ -2107,32 +2110,50 @@ pub(crate) fn invoke_host_rel(
         entry_section,
         entry_hint_offset(entry_hint),
         entry_section_base,
+        if argv_entry_v1 { "argv-v1" } else { "legacy" },
         stats.free_bytes,
         stats.largest_free_block,
         stats.free_blocks,
     ));
     set_rel_image_exec_policy(image.base as u64, image.used_len, true)?;
     let (_arg_storage, argv) = build_argv(process_args.as_slice());
-    let main_fn: extern "C" fn(usize, *const *const c_char) =
-        unsafe { core::mem::transmute(main_addr) };
-    crate::r::io::env::with_launch_context_console_and_fs_root(
-        process_args,
-        process_env,
-        console_target,
-        app_fs_root,
-        || {
-            main_fn(
-                argv.len(),
-                if argv.is_empty() {
-                    core::ptr::null()
-                } else {
-                    argv.as_ptr()
-                },
-            );
-        },
-    );
+    let entry_status = if argv_entry_v1 {
+        let main_fn: extern "C" fn(usize, *const *const c_char) -> i32 =
+            unsafe { core::mem::transmute(main_addr) };
+        Some(crate::r::io::env::with_launch_context_console_and_fs_root(
+            process_args,
+            process_env,
+            console_target,
+            app_fs_root,
+            || {
+                main_fn(
+                    argv.len(),
+                    if argv.is_empty() {
+                        core::ptr::null()
+                    } else {
+                        argv.as_ptr()
+                    },
+                )
+            },
+        ))
+    } else {
+        let main_fn: extern "C" fn() = unsafe { core::mem::transmute(main_addr) };
+        crate::r::io::env::with_launch_context_console_and_fs_root(
+            process_args,
+            process_env,
+            console_target,
+            app_fs_root,
+            || main_fn(),
+        );
+        None
+    };
     set_rel_image_exec_policy(image.base as u64, image.used_len, false)?;
     drop(image);
+    if let Some(status) = entry_status
+        && status != 0
+    {
+        return Err(alloc::format!("Blueprint argv-v1 entry returned status {}", status));
+    }
     Ok(())
 }
 

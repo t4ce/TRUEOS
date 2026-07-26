@@ -12,15 +12,6 @@ pub mod probes {
     pub const MIO_BOOT_PROBE: bool = false;
     pub const INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS: bool = false;
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
-
-    /// Keep the retained TGA PCI seam dormant until its claim/liveness path is
-    /// reliable enough to re-enable deliberately.
-    pub const TGA_PCI_CLAIM_ENABLED: bool = false;
-
-    /// Stage the three small TGA compatibility services.
-    /// 0 keeps all three asleep, 1 admits the TGA PCI task, 2 also admits the
-    /// RPC worker, and 3 additionally starts its heartbeat client.
-    pub const TGA_RPC_BOOT_CUT: u8 = 0;
 }
 
 pub mod blueprint {

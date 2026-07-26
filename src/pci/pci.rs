@@ -39,21 +39,15 @@ const PCI_MSI_MULTIPLE_MESSAGE_ENABLE: u16 = 0b111 << 1;
 const PCI_MSI_64_BIT_CAPABLE: u16 = 1 << 7;
 const PCI_EXP_DEVCAP: u16 = 0x04;
 const PCI_EXP_DEVCTL: u16 = 0x08;
-const PCI_EXP_LNKCTL: u16 = 0x10;
-const PCI_EXP_LNKSTA: u16 = 0x12;
 const PCI_EXP_DEVCAP_FLR: u32 = 1 << 28;
 const PCI_EXP_DEVCTL_BCR_FLR: u16 = 1 << 15;
-const PCI_EXP_LNKCTL_LINK_DISABLE: u16 = 1 << 4;
-const PCI_EXP_LNKCTL_RETRAIN_LINK: u16 = 1 << 5;
 
-// PCI-to-PCI Bridge class/subclass
+// PCI-to-PCI bridge class/subclass and Type 1 header registers used by the
+// generic hotplug BAR allocator.
 const PCI_CLASS_BRIDGE: u8 = 0x06;
 const PCI_SUBCLASS_PCI_TO_PCI: u8 = 0x04;
-
-// Bridge window registers (Type 1 header)
 const PCI_BRIDGE_BUS_NUMBERS: u16 = 0x18;
 const PCI_BRIDGE_MEM_BASE_LIMIT: u16 = 0x20;
-
 const MAX_BRIDGE_ALLOCS: usize = 32;
 
 static LEGACY_CFG_LOCK: Mutex<()> = Mutex::new(());
@@ -69,23 +63,6 @@ struct BridgeAlloc {
 }
 
 static BRIDGE_ALLOCS: Mutex<Vec<BridgeAlloc, MAX_BRIDGE_ALLOCS>> = Mutex::new(Vec::new());
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct DownstreamLinkRecovery {
-    pub bridge_bus: u8,
-    pub bridge_slot: u8,
-    pub bridge_function: u8,
-    pub link_status_before: u16,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum DownstreamLinkRecoveryError {
-    ParentBridgeNotFound,
-    SharedHierarchy { secondary: u8, subordinate: u8 },
-    DownstreamDevicePresent { bus: u8, slot: u8, function: u8 },
-    PcieCapabilityNotFound,
-    BridgeConfigUnavailable,
-}
 
 pub mod class {
     pub const NETWORK: u8 = 0x02;
@@ -531,8 +508,7 @@ pub fn enable_mem_space_only(bus: u8, slot: u8, function: u8) {
 /// Program one edge-triggered, fixed-delivery MSI.
 ///
 /// The destination is intentionally restricted to an 8-bit APIC ID. Systems that
-/// need wider x2APIC destinations require interrupt remapping, which is outside this
-/// endpoint's small inline-BAR transport contract.
+/// need wider x2APIC destinations require interrupt remapping.
 ///
 /// PCI_COMMAND_BUS_MASTER is required even though this transport does not implement
 /// DMA: an MSI is a device-originated Memory Write TLP, and PCIe suppresses it while
@@ -850,7 +826,7 @@ fn bridge_mem_window(bus: u8, slot: u8, function: u8) -> Option<(u64, u64)> {
     let base_reg = (v & 0xFFFF) as u16;
     let limit_reg = (v >> 16) as u16;
 
-    // 1MiB granularity. Base is bits [15:4] << 16. Limit is bits [15:4] << 16 plus 0xFFFFF.
+    // The bridge memory window uses 1 MiB granularity.
     let base = ((base_reg as u64) & 0xFFF0u64) << 16;
     let limit_incl = (((limit_reg as u64) & 0xFFF0u64) << 16) | 0xFFFFFu64;
     if limit_incl < base {
@@ -866,114 +842,27 @@ fn parent_bridge_for_bus(target_bus: u8) -> Option<(u8, u8, u8)> {
             if dev.class != PCI_CLASS_BRIDGE || dev.subclass != PCI_SUBCLASS_PCI_TO_PCI {
                 continue;
             }
-            let (_p, sec, sub) = bridge_bus_numbers(dev.bus, dev.slot, dev.function);
-            if sec == 0 {
+            let (_primary, secondary, subordinate) =
+                bridge_bus_numbers(dev.bus, dev.slot, dev.function);
+            if secondary == 0 {
                 continue;
             }
 
-            let score = if sec == target_bus {
+            let score = if secondary == target_bus {
                 0u16
-            } else if sec <= target_bus && target_bus <= sub {
-                1u16 + (target_bus as u16).saturating_sub(sec as u16)
+            } else if secondary <= target_bus && target_bus <= subordinate {
+                1u16 + (target_bus as u16).saturating_sub(secondary as u16)
             } else {
                 continue;
             };
 
             match best {
-                Some((_b, best_score)) if score >= best_score => {}
+                Some((_bridge, best_score)) if score >= best_score => {}
                 _ => best = Some(((dev.bus, dev.slot, dev.function), score)),
             }
         }
     });
     best.map(|(bdf, _)| bdf)
-}
-
-/// Restart one dedicated downstream PCIe link after a known endpoint disappears.
-///
-/// This is deliberately narrower than generic hotplug support. The target bus must be
-/// the bridge's complete secondary hierarchy and must currently contain no enumerated
-/// device. That prevents a live SRAM reload of our FPGA from resetting an unrelated
-/// endpoint which happens to sit behind the same bridge.
-pub fn recover_dedicated_downstream_link(
-    target_bus: u8,
-    target_slot: u8,
-    target_function: u8,
-) -> Result<DownstreamLinkRecovery, DownstreamLinkRecoveryError> {
-    let Some((bridge_bus, bridge_slot, bridge_function)) = parent_bridge_for_bus(target_bus) else {
-        return Err(DownstreamLinkRecoveryError::ParentBridgeNotFound);
-    };
-
-    let (_primary, secondary, subordinate) =
-        bridge_bus_numbers(bridge_bus, bridge_slot, bridge_function);
-    if secondary != target_bus || subordinate != target_bus {
-        return Err(DownstreamLinkRecoveryError::SharedHierarchy {
-            secondary,
-            subordinate,
-        });
-    }
-
-    let mut occupied = None;
-    with_devices(|devices| {
-        occupied = devices
-            .iter()
-            .find(|device| device.bus == target_bus)
-            .map(|device| (device.bus, device.slot, device.function));
-    });
-    if let Some((bus, slot, function)) = occupied {
-        return Err(DownstreamLinkRecoveryError::DownstreamDevicePresent {
-            bus,
-            slot,
-            function,
-        });
-    }
-
-    // Refuse to disturb the bridge if the endpoint already returned between the
-    // enumeration pass above and this operation.
-    if config_read_u16(target_bus, target_slot, target_function, 0x00) != u16::MAX {
-        return Err(DownstreamLinkRecoveryError::DownstreamDevicePresent {
-            bus: target_bus,
-            slot: target_slot,
-            function: target_function,
-        });
-    }
-
-    let Some(pcie_cap) =
-        find_capability_bdf(bridge_bus, bridge_slot, bridge_function, PCI_CAP_ID_PCI_EXPRESS)
-    else {
-        return Err(DownstreamLinkRecoveryError::PcieCapabilityNotFound);
-    };
-    let link_control =
-        config_read_u16(bridge_bus, bridge_slot, bridge_function, pcie_cap + PCI_EXP_LNKCTL);
-    let link_status_before =
-        config_read_u16(bridge_bus, bridge_slot, bridge_function, pcie_cap + PCI_EXP_LNKSTA);
-    if link_control == u16::MAX || link_status_before == u16::MAX {
-        return Err(DownstreamLinkRecoveryError::BridgeConfigUnavailable);
-    }
-
-    // Force the root/downstream port out of its stale LTSSM state, give Link Disable
-    // time to take effect, then let it train against the already-configured FPGA.
-    config_write_u16(
-        bridge_bus,
-        bridge_slot,
-        bridge_function,
-        pcie_cap + PCI_EXP_LNKCTL,
-        link_control | PCI_EXP_LNKCTL_LINK_DISABLE,
-    );
-    let _ = crate::wait::spin_until_timeout_no_exec(20, || false);
-    config_write_u16(
-        bridge_bus,
-        bridge_slot,
-        bridge_function,
-        pcie_cap + PCI_EXP_LNKCTL,
-        (link_control & !PCI_EXP_LNKCTL_LINK_DISABLE) | PCI_EXP_LNKCTL_RETRAIN_LINK,
-    );
-
-    Ok(DownstreamLinkRecovery {
-        bridge_bus,
-        bridge_slot,
-        bridge_function,
-        link_status_before,
-    })
 }
 
 fn alloc_from_bridge_window(
@@ -991,27 +880,31 @@ fn alloc_from_bridge_window(
 
     let mut lock = BRIDGE_ALLOCS.lock();
     let mut idx: Option<usize> = None;
-    for (i, a) in lock.iter().enumerate() {
-        if a.bus == bridge_bus && a.slot == bridge_slot && a.function == bridge_function {
+    for (i, allocation) in lock.iter().enumerate() {
+        if allocation.bus == bridge_bus
+            && allocation.slot == bridge_slot
+            && allocation.function == bridge_function
+        {
             idx = Some(i);
             break;
         }
     }
 
     let (base, mut next_top, limit_excl) = if let Some(i) = idx {
-        let a = lock[i];
-        let base = a.base.min(window_base);
-        let limit_excl = a.limit_excl.max(window_limit_excl);
-        let next_top = a.next_top.min(limit_excl);
-        (base, next_top, limit_excl)
+        let allocation = lock[i];
+        (
+            allocation.base.min(window_base),
+            allocation
+                .next_top
+                .min(allocation.limit_excl.max(window_limit_excl)),
+            allocation.limit_excl.max(window_limit_excl),
+        )
     } else {
         (window_base, window_limit_excl, window_limit_excl)
     };
 
-    // Allocate from the top of the window downward.
-    // Heuristic: firmware typically allocates from base upward for devices present at boot.
-    // Using a top-down allocator reduces the chance of colliding with existing BARs without
-    // probing other devices.
+    // Allocate from the top downward because firmware commonly places boot-time
+    // BARs from the bottom upward.
     next_top = next_top.min(limit_excl);
     if next_top <= base {
         return None;
@@ -1025,7 +918,7 @@ fn alloc_from_bridge_window(
         return None;
     }
 
-    let new = BridgeAlloc {
+    let allocation = BridgeAlloc {
         bus: bridge_bus,
         slot: bridge_slot,
         function: bridge_function,
@@ -1035,32 +928,36 @@ fn alloc_from_bridge_window(
     };
 
     if let Some(i) = idx {
-        lock[i] = new;
+        lock[i] = allocation;
     } else {
-        let _ = lock.push(new);
+        lock.push(allocation).ok()?;
     }
 
     Some(start)
 }
 
-/// Allocate an MMIO base for a newly discovered device on `target_bus`.
+/// Allocate a non-prefetchable MMIO address for a newly discovered PCI device.
 ///
-/// Strategy:
-/// - Prefer allocating from the parent PCIe bridge's non-prefetchable Memory Window.
-/// - Fall back to the kernel's fixed "known-safe" MMIO32 allocator.
-///
-/// This is intentionally simple and is currently intended for our own endpoint(s).
+/// Prefer the parent bridge's memory window, then fall back to the global
+/// below-4-GiB allocator. This is shared infrastructure used by hotplug drivers.
 pub fn alloc_hotplug_mmio_base(target_bus: u8, size: u64, align: u64) -> Option<u64> {
-    if let Some((b_bus, b_slot, b_fun)) = parent_bridge_for_bus(target_bus)
-        && let Some((base, limit_excl)) = bridge_mem_window(b_bus, b_slot, b_fun)
-        && let Some(addr) =
-            alloc_from_bridge_window(b_bus, b_slot, b_fun, base, limit_excl, size, align)
+    if let Some((bridge_bus, bridge_slot, bridge_function)) = parent_bridge_for_bus(target_bus)
+        && let Some((base, limit_excl)) =
+            bridge_mem_window(bridge_bus, bridge_slot, bridge_function)
+        && let Some(address) = alloc_from_bridge_window(
+            bridge_bus,
+            bridge_slot,
+            bridge_function,
+            base,
+            limit_excl,
+            size,
+            align,
+        )
     {
-        return Some(addr);
+        return Some(address);
     }
 
-    // Fallback: fixed allocator (below 4GiB).
-    crate::pci::bar_alloc::alloc_mmio32(size, align).map(|x| x as u64)
+    crate::pci::bar_alloc::alloc_mmio32(size, align).map(u64::from)
 }
 
 #[inline(always)]

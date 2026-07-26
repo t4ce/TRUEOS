@@ -9,11 +9,11 @@ from collections import defaultdict
 from pathlib import Path
 
 
-TREE_PATH = Path("tools/depgraph/trueos-depth-tree.txt")
-FULL_DOT_PATH = Path("tools/depgraph/trueos-depth-tree.dot")
-FULL_SVG_PATH = Path("tools/depgraph/trueos-depth-tree.svg")
-OUT_DIR = Path("tools/depgraph/by-root")
-HTML_INDEX_PATH = Path("tools/depgraph/index.html")
+TREE_PATH = Path("tools/docs/depgraph/trueos-depth-tree.txt")
+FULL_DOT_PATH = Path("tools/docs/depgraph/trueos-depth-tree.dot")
+FULL_SVG_PATH = Path("tools/docs/depgraph/trueos-depth-tree.svg")
+OUT_DIR = Path("tools/docs/depgraph/by-root")
+HTML_INDEX_PATH = Path("tools/docs/depgraph/index.html")
 REPO_ROOT = "/home/t4ce/REPOS/TRUEOS"
 NODE_MARGIN = "0.13,0.10"
 INNER_BUBBLE_PADDING = 8

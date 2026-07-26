@@ -566,7 +566,6 @@
 2cc v1.2.65
 3find-msvc-tools v0.1.9
 3shlex v2.0.1
-1trueos-silk v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-silk)
 1trueos-vm v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-vm)
 2v v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-v) (*)
 1unicode-segmentation v1.13.3

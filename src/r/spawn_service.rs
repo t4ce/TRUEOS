@@ -69,9 +69,6 @@ define_started_flags!(
     PRINTER_DISCOVERY_STARTED,
     PRINTER_SPOOLER_STARTED,
     FTP_SERVER_STARTED,
-    TGA_TASK_STARTED,
-    TGA_RPC_SERVICE_STARTED,
-    TGA_RPC_HEARTBEAT_STARTED,
     GPU_COMPLETION_REAPER_STARTED,
     TRUEOS_SPIRIT_STARTED,
     SPIRIT_RESPONSE_WINDOW_STARTED,
@@ -104,7 +101,6 @@ define_started_flags!(
     FACTORY_RAM_PROBE_STARTED,
     NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
-    SILK_SERVICE_STARTED,
     ATOMIC_BOMB_STARTED,
     SURFER_PARSE_POOL_STARTED,
     I226_DIAGNOSTIC_DISPLAY_STARTED,
@@ -482,10 +478,6 @@ fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::log_os::logtotcp::logtotcp_task())
 }
 
-fn spawn_silk_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::r::silk_service::silk_service_task())
-}
-
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
@@ -517,18 +509,6 @@ fn spawn_midi_piano_udp(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::ftp::ftp_server_task())
-}
-
-fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tga::tga_task())
-}
-
-fn spawn_tga_rpc_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::tga_rpc::service_task())
-}
-
-fn spawn_tga_rpc_heartbeat(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::tga_rpc::heartbeat_task())
 }
 
 fn spawn_gpu_completion_reaper(spawner: Spawner) -> SpawnAttempt {
@@ -840,25 +820,6 @@ fn asset_shack_gate() -> bool {
 #[inline]
 fn user_input_writer_gate() -> bool {
     crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
-}
-
-#[inline]
-fn tga_boot_gate() -> bool {
-    crate::allcaps::probes::TGA_RPC_BOOT_CUT >= 1
-}
-
-const fn tga_task_spec() -> TaskSpec {
-    TaskSpec::enabled_gated("tga", 0, tga_boot_gate, &TGA_TASK_STARTED, spawn_tga_task)
-}
-
-#[inline]
-fn tga_rpc_boot_gate() -> bool {
-    crate::allcaps::probes::TGA_RPC_BOOT_CUT >= 2
-}
-
-#[inline]
-fn tga_rpc_heartbeat_boot_gate() -> bool {
-    crate::allcaps::probes::TGA_RPC_BOOT_CUT >= 3
 }
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
@@ -1416,7 +1377,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 76
+const TASK_COUNT: usize = 72
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1597,12 +1558,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UNIX_FD_PROBE_STARTED,
         spawn_unix_fd_probe,
     ),
-    TaskSpec::disabled(
-        "silk-service",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        &SILK_SERVICE_STARTED,
-        spawn_silk_service,
-    ),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
     TaskSpec::disabled(
         "bp-autostart",
@@ -1651,21 +1606,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         NET_ANY_CONFIGURED_AND_ROOT_READY,
         &FTP_SERVER_STARTED,
         spawn_ftp_server,
-    ),
-    tga_task_spec(),
-    TaskSpec::enabled_gated(
-        "tga-rpc",
-        0,
-        tga_rpc_boot_gate,
-        &TGA_RPC_SERVICE_STARTED,
-        spawn_tga_rpc_service,
-    ),
-    TaskSpec::enabled_gated(
-        "tga-rpc-heartbeat",
-        0,
-        tga_rpc_heartbeat_boot_gate,
-        &TGA_RPC_HEARTBEAT_STARTED,
-        spawn_tga_rpc_heartbeat,
     ),
     TaskSpec::enabled_gated(
         "gpu-completion-reaper",
@@ -1949,13 +1889,8 @@ pub fn latest_system_service_snapshot_text() -> String {
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
         crate::log_info!(target: "boot";
-            "spawn-svc: boot-profile pci_tga_fpga_diag={} usb_uas_diag={} tga_rpc_cut={} tga_gate={} offload={} heartbeat={}\n",
-            crate::log_os::flags::TGA_RPC_DIAG_PROFILE_ENABLED,
-            crate::log_os::flags::USB_UAS_DIAG_PROFILE_ENABLED,
-            crate::allcaps::probes::TGA_RPC_BOOT_CUT,
-            tga_boot_gate(),
-            tga_rpc_boot_gate(),
-            tga_rpc_heartbeat_boot_gate()
+            "spawn-svc: boot-profile usb_uas_diag={}\n",
+            crate::log_os::flags::USB_UAS_DIAG_PROFILE_ENABLED
         );
         let mut next_snapshot_ms = 0u64;
         loop {

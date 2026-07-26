@@ -64,7 +64,6 @@ mod spirit;
 mod stackkeeper;
 mod std_abi_shim;
 mod surfer;
-mod tga;
 mod turbo;
 #[allow(non_snake_case)]
 mod tyche;
@@ -209,7 +208,6 @@ pub extern "C" fn kmain() -> ! {
     let _ = cpu::register_current_worker_spawner(spawner);
     // Worker spawners for APs are registered in `cpu::ap_start` once each AP brings up its executor.
 
-    tga::init_once();
     net::init();
     #[cfg(target_os = "trueos")]
     aud::alsa_trueos_backend::install();
@@ -218,18 +216,6 @@ pub extern "C" fn kmain() -> ! {
         mio_probe::log_boot_probe();
     } else {
         mio_probe::assume_ready_when_probe_disabled();
-    }
-    match pci::nic_fpga_dma::init_default_once() {
-        Ok(region) => {
-            crate::log_info!(
-                target: "boot";
-                "dma_nic_fpga: region phys=0x{:X} virt=0x{:X} size=0x{:X}\n",
-                region.phys_base,
-                region.virt_base,
-                region.size
-            );
-        }
-        Err(e) => crate::log_warn!(target: "boot"; "dma_nic_fpga: init failed: {:?}\n", e),
     }
     let simd = cpu::simd_status();
     crate::log_info!(

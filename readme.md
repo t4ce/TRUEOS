@@ -589,8 +589,6 @@ ConWhite 	FF_FF_FF
   ![trueos math v0.1.0.svg](tools/depgraph/by-root/trueos-math-v0.1.0.svg)
 - `tools/depgraph/by-root/trueos-qjs-v0.1.0.svg`  
   ![trueos qjs v0.1.0.svg](tools/depgraph/by-root/trueos-qjs-v0.1.0.svg)
-- `tools/depgraph/by-root/trueos-silk-v0.1.0.svg`  
-  ![trueos silk v0.1.0.svg](tools/depgraph/by-root/trueos-silk-v0.1.0.svg)
 - `tools/depgraph/by-root/trueos-vm-v0.1.0.svg`  
   ![trueos vm v0.1.0.svg](tools/depgraph/by-root/trueos-vm-v0.1.0.svg)
 - `tools/depgraph/by-root/unicode-segmentation-v1.13.3.svg`  

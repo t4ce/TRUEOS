@@ -1,6 +1,6 @@
 # TRUEOS dependency graph split by root dependency
 
-Source: `tools/depgraph/trueos-depth-tree.txt`
+Source: `tools/docs/depgraph/trueos-depth-tree.txt`
 
 Each SVG expands one direct dependency of the TRUEOS root. Blue note nodes are incoming cross-image edges; yellow note nodes are outgoing cross-image edges.
 
@@ -62,7 +62,6 @@ Each SVG expands one direct dependency of the TRUEOS root. Blue note nodes are i
 | trueos-lsd<br>1.1.5<br>/crates/trueos-lsd | [`trueos-lsd-v1.1.5.svg`](trueos-lsd-v1.1.5.svg) | 1 | 0 | 2 |
 | trueos-math<br>0.1.0<br>/crates/trueos-math | [`trueos-math-v0.1.0.svg`](trueos-math-v0.1.0.svg) | 1 | 1 | 1 |
 | trueos-qjs<br>0.1.0<br>/crates/trueos-qjs | [`trueos-qjs-v0.1.0.svg`](trueos-qjs-v0.1.0.svg) | 11 | 1 | 13 |
-| trueos-silk<br>0.1.0<br>/crates/trueos-silk | [`trueos-silk-v0.1.0.svg`](trueos-silk-v0.1.0.svg) | 1 | 0 | 0 |
 | trueos-vm<br>0.1.0<br>/crates/trueos-vm | [`trueos-vm-v0.1.0.svg`](trueos-vm-v0.1.0.svg) | 1 | 0 | 1 |
 | unicode-segmentation<br>1.13.3 | [`unicode-segmentation-v1.13.3.svg`](unicode-segmentation-v1.13.3.svg) | 1 | 1 | 0 |
 | usvg<br>0.45.1<br>/vendor/usvg-0.45.1 | [`usvg-v0.45.1.svg`](usvg-v0.45.1.svg) | 1 | 1 | 4 |
@@ -73,5 +72,5 @@ Each SVG expands one direct dependency of the TRUEOS root. Blue note nodes are i
 | zune-core<br>0.5.1<br>/vendor/zune-core-0.5.1 | [`zune-core-v0.5.1.svg`](zune-core-v0.5.1.svg) | 1 | 1 | 0 |
 | zune-jpeg<br>0.5.15<br>/vendor/zune-jpeg-0.5.15 | [`zune-jpeg-v0.5.15.svg`](zune-jpeg-v0.5.15.svg) | 1 | 0 | 1 |
 
-Total direct TRUEOS roots: 66
-Total owned nodes excluding TRUEOS root: 250
+Total direct TRUEOS roots: 65
+Total owned nodes excluding TRUEOS root: 249

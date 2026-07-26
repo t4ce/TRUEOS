@@ -190,7 +190,10 @@ pub fn boot_timestamp_secs() -> Option<u64> {
 
 fn cache_boot_timestamp_secs() -> Option<u64> {
     let resp = DATE_AT_BOOT_REQUEST.response()?;
-    let secs = resp.timestamp as u64;
+    let secs = u64::try_from(resp.timestamp).ok()?;
+    if secs == 0 {
+        return None;
+    }
     BOOT_TIMESTAMP_SECS_CACHE.store(secs, Ordering::Release);
     Some(secs)
 }

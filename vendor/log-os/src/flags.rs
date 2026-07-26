@@ -204,7 +204,7 @@ pub const fn threshold_down_set(filter: LevelFilter) -> LogLevelSet {
 pub fn target_log_area(target: &str) -> LogArea {
     match target {
         "global" | "ui4" => LogArea::Global,
-        "boot" | "cpu" | "tokio" | "rapl" | "tga" => LogArea::Boot,
+        "boot" | "cpu" | "tokio" | "rapl" => LogArea::Boot,
         "service" | "spawn-svc" | "http" => LogArea::Service,
         "net" | "dns" | "dhcp" | "tls" | "icmp" => LogArea::Net,
         "usb" | "crabusb" | "crab-usb" => LogArea::Usb,
