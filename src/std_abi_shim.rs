@@ -1840,7 +1840,7 @@ pub unsafe extern "C" fn sys_halt() -> ! {
         // otherwise shell2 is merely revealed with its input still attached
         // to a guest that is spinning here.
         let _ = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_RETURN_TO_CLI, 0, 0);
-        trueos_vm::vmcall::preserve();
+        trueos_vm::vmcall::shutdown(b"blueprint process exit");
     }
     loop {
         core::hint::spin_loop();

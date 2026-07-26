@@ -154,6 +154,11 @@ async fn trueosfs_archives() -> Result<Vec<ArchiveEntry>, &'static str> {
     let apps_listing = crate::r::fs::trueosfs::list_dir_async(disk, "apps")
         .await
         .map_err(|_| "app root listing failed")?;
+    let local_compile_listing =
+        crate::r::fs::trueosfs::list_dir_async(disk, "apps/common/localcompile")
+            .await
+            .ok()
+            .flatten();
     let root_listing = root_listing.ok_or("root is not TRUEOSFS")?;
 
     let mut out = Vec::new();
@@ -195,6 +200,27 @@ async fn trueosfs_archives() -> Result<Vec<ArchiveEntry>, &'static str> {
                 updated: None,
             });
         }
+    }
+
+    // The native compiler publishes launchable results to the one explicit
+    // `/common/localcompile` handoff directory. Keep all other common files
+    // out of the app namespace.
+    for name in local_compile_listing
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|name| is_runnable_root_artifact(name))
+    {
+        if out.iter().any(|entry| entry.archive == name) {
+            continue;
+        }
+        out.push(ArchiveEntry {
+            archive: String::from(name),
+            source: ArchiveSource::Trueosfs {
+                path: alloc::format!("apps/common/localcompile/{}", name),
+            },
+            updated: None,
+        });
     }
     out.sort_by(|a, b| a.archive.cmp(&b.archive));
     Ok(out)
@@ -361,6 +387,7 @@ async fn archive_entries() -> Result<Vec<ArchiveEntry>, &'static str> {
 
 fn source_label(source: &ArchiveSource) -> &'static str {
     match source {
+        ArchiveSource::Trueosfs { path } if path.starts_with("apps/common/") => "TRUEOSFS common",
         ArchiveSource::Trueosfs { path } if path.starts_with("apps/") => "TRUEOSFS app",
         ArchiveSource::Trueosfs { .. } => "TRUEOSFS root",
         ArchiveSource::EmbeddedModule { .. } => "boot embedded",

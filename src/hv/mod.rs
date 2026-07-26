@@ -2780,6 +2780,11 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     {
         hvlogf(format_args!("hv: vm{} lifecycle: exit reason={}", vm_id, reason));
     }
+    hvlogf(format_args!(
+        "hv: vm{} lifecycle: state cleanup begin retain_for_resume={}",
+        vm_id,
+        vm.pause_latched.load(Ordering::Acquire) as u8
+    ));
     clear_blueprint_pending_launch(vm_id);
     if vm.pause_latched.load(Ordering::Acquire) {
         hvlogf(format_args!(
@@ -2791,6 +2796,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         let _ = take_blueprint_launch(vm_id);
         clear_blueprint_process_context(vm_id);
     }
+    hvlogf(format_args!("hv: vm{} lifecycle: state cleanup complete", vm_id));
     vm.starting.store(false, Ordering::Release);
     vm.stop_req.store(false, Ordering::Release);
     vm.preserve_req.store(false, Ordering::Release);
