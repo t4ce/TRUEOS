@@ -183,7 +183,11 @@ fn direct_rcs_encode_particle_craft_batch(
         PARTICLE_CRAFT_BIN_PAYLOAD_OFFSET_BYTES,
         PARTICLE_CRAFT_BIN_CROSS_THREAD_BYTES,
         PARTICLE_CRAFT_BIN_INDIRECT_BYTES,
-        &[craft.state_gpu(), craft.params_gpu(), craft.tile_masks_gpu()],
+        &[
+            craft.state_gpu(),
+            craft.params_gpu(),
+            craft.tile_masks_gpu(),
+        ],
     ) || !direct_rcs_write_particle_payload(
         state,
         PARTICLE_CRAFT_RENDER_PAYLOAD_OFFSET_BYTES,

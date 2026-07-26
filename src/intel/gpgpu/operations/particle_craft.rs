@@ -36,15 +36,17 @@ pub(crate) const PARTICLE_CRAFT_TILE_MASK_BYTES: usize = PARTICLE_CRAFT_MAX_TILE
     * core::mem::size_of::<u32>();
 const PARTICLE_CRAFT_TILE_MASK_ALLOCATION_BYTES: usize =
     PARTICLE_CRAFT_TILE_MASK_BYTES.next_multiple_of(4096);
-const PARTICLE_CRAFT_ALLOCATION_BYTES: usize =
-    PARTICLE_CRAFT_STATE_BYTES
-        + PARTICLE_CRAFT_PARAMS_BYTES
-        + PARTICLE_CRAFT_TILE_MASK_ALLOCATION_BYTES;
+const PARTICLE_CRAFT_ALLOCATION_BYTES: usize = PARTICLE_CRAFT_STATE_BYTES
+    + PARTICLE_CRAFT_PARAMS_BYTES
+    + PARTICLE_CRAFT_TILE_MASK_ALLOCATION_BYTES;
 const PARTICLE_CRAFT_RENDER_CONTROL_WORDS: usize = 4;
 const _: () = assert!(
     matches!(PARTICLE_CRAFT_RENDER_DIVISOR, 1 | 2 | 4)
         && PARTICLE_CRAFT_FRAME_WIDTH.is_multiple_of(PARTICLE_CRAFT_RENDER_DIVISOR)
         && PARTICLE_CRAFT_FRAME_HEIGHT.is_multiple_of(PARTICLE_CRAFT_RENDER_DIVISOR)
+        && PARTICLE_CRAFT_MAX_PARTICLES.is_multiple_of(u32::BITS)
+        && PARTICLE_CRAFT_TILE_MASK_WORDS == 8
+        && PARTICLE_CRAFT_ALLOCATION_BYTES.is_multiple_of(4096)
 );
 const _: () = assert!(
     core::mem::size_of::<ParticleCraftParamsV1>()
@@ -85,8 +87,7 @@ pub(crate) const fn particle_craft_bin_candidate_tests(
 const fn particle_craft_tile_mask_fits(destination_width: u32, destination_height: u32) -> bool {
     let (tile_columns, tile_rows) =
         particle_craft_tile_extent(destination_width, destination_height);
-    tile_columns <= PARTICLE_CRAFT_MAX_TILE_COLUMNS
-        && tile_rows <= PARTICLE_CRAFT_MAX_TILE_ROWS
+    tile_columns <= PARTICLE_CRAFT_MAX_TILE_COLUMNS && tile_rows <= PARTICLE_CRAFT_MAX_TILE_ROWS
 }
 
 /// Keep the ordinary 640x400 window unchanged. Once the logical window is
@@ -353,9 +354,9 @@ impl GpgpuOwnedParticleCraftState {
 #[cfg(test)]
 mod tests {
     use super::{
+        PARTICLE_CRAFT_DEFAULT_PARTICLES, PARTICLE_CRAFT_TILE_MASK_BYTES,
         particle_craft_backing_extent, particle_craft_bin_candidate_tests,
         particle_craft_render_divisor, particle_craft_sample_extent, particle_craft_tile_extent,
-        PARTICLE_CRAFT_DEFAULT_PARTICLES, PARTICLE_CRAFT_TILE_MASK_BYTES,
     };
 
     #[test]

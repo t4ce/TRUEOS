@@ -22,11 +22,12 @@ onset, bass, and particle ideas into one resizable UI4 surface. Its audio
 boundary, 50% horizontal-pair walker shape, ABI, and TestRig procedure are in
 [`CPP_AUDIO_VISUALIZER.md`](CPP_AUDIO_VISUALIZER.md).
 
-`particle_craft.clcpp` is the stateful two-pass ParticleCraft engine behind
+`particle_craft.clcpp` is the stateful three-pass ParticleCraft engine behind
 `cpp particle` and the Blueprint particle app. Its step entry updates 32-byte
-particle records in place; its race-free pixel-gather entry shades the complete
-Arc Forge backing surface from an adjustable 1x/2x/4x destination-relative
-sampling grid, mapped into a stable 640x400 simulation space. Maximized
+particle records in place; its deterministic tile entry produces 256-bit
+candidate masks; and its race-free pixel-gather entry shades the complete Arc
+Forge backing surface from an adjustable 1x/2x/4x destination-relative sampling
+grid, mapped into a stable 640x400 simulation space. Maximized
 ParticleCraft windows use a half-scanout backing and the Intel direct-plane
 scaler for full logical coverage. The persistent lifetime, 64-byte Blueprint
 ABI, phase barrier, quarantine rule, and TestRig commands are in
@@ -115,11 +116,11 @@ single-kernel audiovisual artifact for that same exact target. Its SHA-256 is:
 951e0cb30b42a755812b00eb0c3871f52c765ee74295dc3cb48b84f8361c1b19
 ```
 
-`artifacts/adls/cpp/particle_craft.bin` is the two-entry stateful particle
+`artifacts/adls/cpp/particle_craft.bin` is the three-entry stateful particle
 artifact for that exact target. Its SHA-256 is:
 
 ```text
-1f271988ceedf731a5dca41a436a452b0ca5e70e50b4685d0bfae8abf3c0c711
+cc9cd45afedc335be1ae6086f29d6276795113bae899f915162e53ad522b256a
 ```
 
 The two unconditional Spirit C++/IGC artifacts are standalone, solely

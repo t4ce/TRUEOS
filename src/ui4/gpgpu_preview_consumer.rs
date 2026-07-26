@@ -1477,7 +1477,7 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppVoronoi
         | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio => "guc-cpp-single",
-        GpgpuPreviewPreset::CppParticle => "guc-cpp-stateful-two-pass",
+        GpgpuPreviewPreset::CppParticle => "guc-cpp-stateful-three-pass",
     }
 }
 

@@ -129,7 +129,7 @@ and TestRig procedure are documented in
 
 ## Stateful ParticleCraft publication
 
-ParticleCraft publishes two entries in one reproducible exact-target artifact:
+ParticleCraft publishes three entries in one reproducible exact-target artifact:
 
 ```sh
 tools/intel-gpu-bakery/bake_adls_cpp_particle_craft.sh
@@ -137,9 +137,10 @@ tools/intel-gpu-bakery/bake_adls_cpp_particle_craft.sh
 make intel-gpu-bake-particle-craft-cpp
 ```
 
-The generated `particle_craft.contract.rs` records independent step and render
-entry contracts while both refer to the same Zebin/SPIR-V digests. Runtime
-consumes the bytes only; the C++ toolchain remains a build-time dependency.
+The generated `particle_craft.contract.rs` records independent step, tile-bin,
+and render entry contracts while all three refer to the same Zebin/SPIR-V
+digests. Runtime consumes the bytes only; the C++ toolchain remains a build-time
+dependency.
 
 ## Spirit native C++ suite
 
