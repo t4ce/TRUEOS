@@ -1,11 +1,13 @@
 // TRUEOS ParticleCraft: persistent stateful particles for UI4.
 //
 // The first entry advances an array of compact 32-byte particles in place.
-// The second entry gathers that state over a host-selected fraction of the
-// live destination resolution, while mapping every sample back into the stable
-// 640x400 simulation coordinate system. UI4 maximize therefore raises actual
-// render detail instead of enlarging the original window's sample blocks.
-// Both entries are baked into one exact-target C++ for OpenCL/IGC artifact.
+// The second entry builds one deterministic particle mask per 32x32 sample
+// tile. The third entry gathers only those tile-local candidates over a
+// host-selected fraction of the live destination resolution, while mapping
+// every sample back into the stable 640x400 simulation coordinate system.
+// UI4 maximize therefore raises actual render detail without multiplying every
+// sample by the complete particle count. All three entries are baked into one
+// exact-target C++ for OpenCL/IGC artifact.
 
 #include "include/trueos_clcpp.hpp"
 
@@ -21,6 +23,9 @@ inline constexpr uint known_flags = flag_reset | flag_attractor | flag_orbit;
 inline constexpr uint maximum_particles = 256u;
 inline constexpr uint frame_width = 640u;
 inline constexpr uint frame_height = 400u;
+inline constexpr uint tile_sample_width = 32u;
+inline constexpr uint tile_sample_height = 32u;
+inline constexpr uint tile_mask_words = maximum_particles / 32u;
 inline constexpr float tau = 6.28318530718f;
 
 enum ParamWord : uint {
@@ -61,6 +66,28 @@ TRUEOS_PARTICLE_INLINE uint hash_u32(uint value)
     value *= 0x846CA68Bu;
     value ^= value >> 16u;
     return value;
+}
+
+TRUEOS_PARTICLE_INLINE uint lowest_set_bit_index(uint value)
+{
+    uint bit = 0u;
+    if ((value & 0x0000FFFFu) == 0u) {
+        value >>= 16u;
+        bit += 16u;
+    }
+    if ((value & 0x000000FFu) == 0u) {
+        value >>= 8u;
+        bit += 8u;
+    }
+    if ((value & 0x0000000Fu) == 0u) {
+        value >>= 4u;
+        bit += 4u;
+    }
+    if ((value & 0x00000003u) == 0u) {
+        value >>= 2u;
+        bit += 2u;
+    }
+    return bit + ((value & 0x00000001u) == 0u ? 1u : 0u);
 }
 
 TRUEOS_PARTICLE_INLINE float hash_unit(uint value)
@@ -253,9 +280,108 @@ __kernel void particle_craft_step(
 }
 
 TRUEOS_REQD_SUB_GROUP_SIZE_16
+__kernel void particle_craft_bin_tiles(
+    __global const float4 *particle_state,
+    __global const uint *params,
+    __global uint *tile_masks)
+{
+    using namespace trueos::gpgpu::particle_craft;
+
+    const uint tile_x = static_cast<uint>(get_global_id(0));
+    const uint tile_y = static_cast<uint>(get_global_id(1));
+    const uint destination_width = params[param_destination_width];
+    const uint destination_height = params[param_destination_height];
+    const uint destination_pitch_pixels = params[param_destination_pitch_pixels];
+    const uint render_divisor = params[param_render_divisor];
+    if (destination_width == 0u || destination_height == 0u
+        || destination_pitch_pixels < destination_width
+        || (render_divisor != 1u
+            && render_divisor != 2u
+            && render_divisor != 4u)) {
+        return;
+    }
+
+    const uint sample_width =
+        (destination_width + render_divisor - 1u) / render_divisor;
+    const uint sample_height =
+        (destination_height + render_divisor - 1u) / render_divisor;
+    const uint tile_columns =
+        (sample_width + tile_sample_width - 1u) / tile_sample_width;
+    const uint tile_rows =
+        (sample_height + tile_sample_height - 1u) / tile_sample_height;
+    if (tile_x >= tile_columns || tile_y >= tile_rows) {
+        return;
+    }
+
+    const uint sample_left = tile_x * tile_sample_width;
+    const uint sample_right = min(sample_left + tile_sample_width, sample_width);
+    const uint sample_top = tile_y * tile_sample_height;
+    const uint sample_bottom = min(sample_top + tile_sample_height, sample_height);
+    const uint destination_left = sample_left * render_divisor;
+    const uint destination_right =
+        min(sample_right * render_divisor, destination_width);
+    const uint destination_top = sample_top * render_divisor;
+    const uint destination_bottom =
+        min(sample_bottom * render_divisor, destination_height);
+    const float2 lower = (float2)(
+        static_cast<float>(destination_left)
+            * (static_cast<float>(frame_width)
+                / static_cast<float>(destination_width)),
+        static_cast<float>(destination_top)
+            * (static_cast<float>(frame_height)
+                / static_cast<float>(destination_height)));
+    const float2 upper = (float2)(
+        static_cast<float>(destination_right)
+            * (static_cast<float>(frame_width)
+                / static_cast<float>(destination_width)),
+        static_cast<float>(destination_bottom)
+            * (static_cast<float>(frame_height)
+                / static_cast<float>(destination_height)));
+
+    const uint count = params[param_version] == params_version
+        ? min(params[param_active_count], maximum_particles)
+        : 0u;
+    const uint mask_base =
+        (tile_y * tile_columns + tile_x) * tile_mask_words;
+    for (uint word = 0u; word < tile_mask_words; ++word) {
+        uint mask = 0u;
+        const uint first = word << 5u;
+        const uint end = min(first + 32u, count);
+        for (uint id = first; id < end; ++id) {
+            const float4 motion = particle_state[id * 2u];
+            const float4 visual = particle_state[id * 2u + 1u];
+            const float life = saturate(visual.x / fmax(visual.y, 0.001f));
+            const float envelope =
+                saturate(life * 8.0f) * saturate((1.0f - life) * 3.6f);
+            if (envelope <= 0.001f) {
+                continue;
+            }
+
+            const float2 head = motion.xy;
+            const float2 velocity = motion.zw;
+            const float speed = native_sqrt(dot(velocity, velocity));
+            const float tail_scale =
+                clamp(0.035f + speed * 0.00055f, 0.035f, 0.16f);
+            const float2 tail = head - velocity * tail_scale;
+            const float size = clamp(visual.z, 0.7f, 7.0f);
+            const float reach = size * 5.4f + 2.0f;
+            const float2 particle_lower = fmin(head, tail) - reach;
+            const float2 particle_upper = fmax(head, tail) + reach;
+            if (particle_upper.x < lower.x || particle_upper.y < lower.y
+                || particle_lower.x > upper.x || particle_lower.y > upper.y) {
+                continue;
+            }
+            mask |= 1u << (id & 31u);
+        }
+        tile_masks[mask_base + word] = mask;
+    }
+}
+
+TRUEOS_REQD_SUB_GROUP_SIZE_16
 __kernel void particle_craft_render_rgba8(
     __global const float4 *particle_state,
     __global const uint *params,
+    __global const uint *tile_masks,
     __global uint *dst_rgba)
 {
     using namespace trueos::gpgpu::particle_craft;
@@ -335,54 +461,68 @@ __kernel void particle_craft_render_rgba8(
         : 0u;
     const float intensity =
         clamp(safe_float(params[param_intensity], 1.0f), 0.0f, 4.0f);
-    for (uint id = 0u; id < maximum_particles; ++id) {
-        if (id >= count) {
-            break;
-        }
-        const float4 motion = particle_state[id * 2u];
-        const float4 visual = particle_state[id * 2u + 1u];
-        const float life = saturate(visual.x / fmax(visual.y, 0.001f));
-        const float envelope =
-            saturate(life * 8.0f) * saturate((1.0f - life) * 3.6f);
-        if (envelope <= 0.001f) {
-            continue;
-        }
+    const uint tile_columns =
+        (sample_width + tile_sample_width - 1u) / tile_sample_width;
+    const uint mask_base =
+        ((y / tile_sample_height) * tile_columns
+            + (x / tile_sample_width)) * tile_mask_words;
+    for (uint word = 0u; word < tile_mask_words; ++word) {
+        uint candidates = tile_masks[mask_base + word];
+        while (candidates != 0u) {
+            const uint bit = lowest_set_bit_index(candidates);
+            candidates &= candidates - 1u;
+            const uint id = (word << 5u) + bit;
+            if (id >= count) {
+                continue;
+            }
 
-        const float2 head = motion.xy;
-        const float2 velocity = motion.zw;
-        const float speed = native_sqrt(dot(velocity, velocity));
-        const float tail_scale = clamp(0.035f + speed * 0.00055f, 0.035f, 0.16f);
-        const float2 tail = head - velocity * tail_scale;
-        const float size = clamp(visual.z, 0.7f, 7.0f);
-        const float halo_radius = size * 5.4f;
-        const float trail_halo_radius = size * 3.2f;
-        const float reach = halo_radius + 2.0f;
-        const float2 lower = fmin(head, tail) - reach;
-        const float2 upper = fmax(head, tail) + reach;
-        if (point.x < lower.x || point.y < lower.y
-            || point.x > upper.x || point.y > upper.y) {
-            continue;
-        }
+            const float4 motion = particle_state[id * 2u];
+            const float4 visual = particle_state[id * 2u + 1u];
+            const float life = saturate(visual.x / fmax(visual.y, 0.001f));
+            const float envelope =
+                saturate(life * 8.0f) * saturate((1.0f - life) * 3.6f);
+            if (envelope <= 0.001f) {
+                continue;
+            }
 
-        const float head_distance_squared = dot(point - head, point - head);
-        const float trail_distance_squared =
-            distance_to_segment_squared(point, tail, head);
-        const float core = soft_round_mask(head_distance_squared, size);
-        const float trail = soft_round_mask(trail_distance_squared, size * 0.82f);
-        const float head_glow =
-            soft_round_mask(head_distance_squared, halo_radius)
-            / (1.0f + head_distance_squared / (size * size * 4.8f));
-        const float trail_glow =
-            soft_round_mask(trail_distance_squared, trail_halo_radius)
-            / (1.0f + trail_distance_squared / (size * size * 3.2f));
-        const float glow = fmax(head_glow, trail_glow * 0.72f);
-        const float energy =
-            (core * core * 1.9f + trail * trail * 0.72f + glow * 0.17f)
-            * envelope * intensity;
-        const float3 particle_color = palette(visual.w);
-        color += particle_color * energy;
-        color += (float3)(0.88f, 0.96f, 1.0f)
-            * core * core * envelope * intensity * 0.88f;
+            const float2 head = motion.xy;
+            const float2 velocity = motion.zw;
+            const float speed = native_sqrt(dot(velocity, velocity));
+            const float tail_scale =
+                clamp(0.035f + speed * 0.00055f, 0.035f, 0.16f);
+            const float2 tail = head - velocity * tail_scale;
+            const float size = clamp(visual.z, 0.7f, 7.0f);
+            const float halo_radius = size * 5.4f;
+            const float trail_halo_radius = size * 3.2f;
+            const float reach = halo_radius + 2.0f;
+            const float2 lower = fmin(head, tail) - reach;
+            const float2 upper = fmax(head, tail) + reach;
+            if (point.x < lower.x || point.y < lower.y
+                || point.x > upper.x || point.y > upper.y) {
+                continue;
+            }
+
+            const float head_distance_squared = dot(point - head, point - head);
+            const float trail_distance_squared =
+                distance_to_segment_squared(point, tail, head);
+            const float core = soft_round_mask(head_distance_squared, size);
+            const float trail =
+                soft_round_mask(trail_distance_squared, size * 0.82f);
+            const float head_glow =
+                soft_round_mask(head_distance_squared, halo_radius)
+                / (1.0f + head_distance_squared / (size * size * 4.8f));
+            const float trail_glow =
+                soft_round_mask(trail_distance_squared, trail_halo_radius)
+                / (1.0f + trail_distance_squared / (size * size * 3.2f));
+            const float glow = fmax(head_glow, trail_glow * 0.72f);
+            const float energy =
+                (core * core * 1.9f + trail * trail * 0.72f + glow * 0.17f)
+                * envelope * intensity;
+            const float3 particle_color = palette(visual.w);
+            color += particle_color * energy;
+            color += (float3)(0.88f, 0.96f, 1.0f)
+                * core * core * envelope * intensity * 0.88f;
+        }
     }
 
     color = color / ((float3)(1.0f) + color);

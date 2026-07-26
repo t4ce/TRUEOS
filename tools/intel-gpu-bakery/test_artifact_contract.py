@@ -265,7 +265,7 @@ class ArtifactContractTests(unittest.TestCase):
         serialized = json.dumps(manifest, sort_keys=True)
         self.assertNotIn(str(REPO_ROOT.parent), serialized)
 
-    def test_particle_craft_is_one_exact_two_entry_artifact(self) -> None:
+    def test_particle_craft_is_one_exact_three_entry_artifact(self) -> None:
         analysis = analyze_zebin(
             ARTIFACT_ROOT / "cpp" / "particle_craft.bin",
             ARTIFACT_ROOT / "cpp" / "particle_craft.spv",
@@ -273,10 +273,18 @@ class ArtifactContractTests(unittest.TestCase):
         kernels = {kernel["kernel_name"]: kernel for kernel in analysis["kernels"]}
         self.assertEqual(
             set(kernels),
-            {"particle_craft_step", "particle_craft_render_rgba8"},
+            {
+                "particle_craft_step",
+                "particle_craft_bin_tiles",
+                "particle_craft_render_rgba8",
+            },
         )
         self.assertEqual(kernels["particle_craft_step"]["simd_width"], 16)
         self.assertEqual(kernels["particle_craft_step"]["cross_thread_data_bytes"], 64)
+        self.assertEqual(
+            kernels["particle_craft_bin_tiles"]["cross_thread_data_bytes"],
+            96,
+        )
         self.assertEqual(
             kernels["particle_craft_render_rgba8"]["cross_thread_data_bytes"],
             96,

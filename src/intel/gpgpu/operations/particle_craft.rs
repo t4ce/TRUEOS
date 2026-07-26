@@ -12,6 +12,10 @@ pub(crate) const PARTICLE_CRAFT_SAMPLE_HEIGHT: u32 =
     PARTICLE_CRAFT_FRAME_HEIGHT / PARTICLE_CRAFT_RENDER_DIVISOR;
 pub(crate) const PARTICLE_CRAFT_DEFAULT_PARTICLES: u32 = 128;
 pub(crate) const PARTICLE_CRAFT_MAX_PARTICLES: u32 = 256;
+pub(crate) const PARTICLE_CRAFT_TILE_SAMPLE_WIDTH: u32 = 32;
+pub(crate) const PARTICLE_CRAFT_TILE_SAMPLE_HEIGHT: u32 = 32;
+pub(crate) const PARTICLE_CRAFT_TILE_MASK_WORDS: u32 =
+    PARTICLE_CRAFT_MAX_PARTICLES.div_ceil(u32::BITS);
 pub(crate) const PARTICLE_CRAFT_PARAMS_VERSION: u32 = 1;
 pub(crate) const PARTICLE_CRAFT_FLAG_RESET: u32 = 1 << 0;
 pub(crate) const PARTICLE_CRAFT_FLAG_ATTRACTOR: u32 = 1 << 1;
@@ -20,8 +24,22 @@ pub(crate) const PARTICLE_CRAFT_KNOWN_FLAGS: u32 =
     PARTICLE_CRAFT_FLAG_RESET | PARTICLE_CRAFT_FLAG_ATTRACTOR | PARTICLE_CRAFT_FLAG_ORBIT;
 const PARTICLE_CRAFT_STATE_BYTES: usize = PARTICLE_CRAFT_MAX_PARTICLES as usize * 32;
 const PARTICLE_CRAFT_PARAMS_BYTES: usize = 4096;
+const PARTICLE_CRAFT_MAX_SAMPLE_WIDTH: u32 = 2_560;
+const PARTICLE_CRAFT_MAX_SAMPLE_HEIGHT: u32 = 1_440;
+const PARTICLE_CRAFT_MAX_TILE_COLUMNS: u32 =
+    PARTICLE_CRAFT_MAX_SAMPLE_WIDTH.div_ceil(PARTICLE_CRAFT_TILE_SAMPLE_WIDTH);
+const PARTICLE_CRAFT_MAX_TILE_ROWS: u32 =
+    PARTICLE_CRAFT_MAX_SAMPLE_HEIGHT.div_ceil(PARTICLE_CRAFT_TILE_SAMPLE_HEIGHT);
+pub(crate) const PARTICLE_CRAFT_TILE_MASK_BYTES: usize = PARTICLE_CRAFT_MAX_TILE_COLUMNS as usize
+    * PARTICLE_CRAFT_MAX_TILE_ROWS as usize
+    * PARTICLE_CRAFT_TILE_MASK_WORDS as usize
+    * core::mem::size_of::<u32>();
+const PARTICLE_CRAFT_TILE_MASK_ALLOCATION_BYTES: usize =
+    PARTICLE_CRAFT_TILE_MASK_BYTES.next_multiple_of(4096);
 const PARTICLE_CRAFT_ALLOCATION_BYTES: usize =
-    PARTICLE_CRAFT_STATE_BYTES + PARTICLE_CRAFT_PARAMS_BYTES;
+    PARTICLE_CRAFT_STATE_BYTES
+        + PARTICLE_CRAFT_PARAMS_BYTES
+        + PARTICLE_CRAFT_TILE_MASK_ALLOCATION_BYTES;
 const PARTICLE_CRAFT_RENDER_CONTROL_WORDS: usize = 4;
 const _: () = assert!(
     matches!(PARTICLE_CRAFT_RENDER_DIVISOR, 1 | 2 | 4)
@@ -40,6 +58,35 @@ pub(crate) const fn particle_craft_sample_extent(
 ) -> (u32, u32) {
     let render_divisor = particle_craft_render_divisor(destination_width, destination_height);
     (destination_width.div_ceil(render_divisor), destination_height.div_ceil(render_divisor))
+}
+
+pub(crate) const fn particle_craft_tile_extent(
+    destination_width: u32,
+    destination_height: u32,
+) -> (u32, u32) {
+    let (sample_width, sample_height) =
+        particle_craft_sample_extent(destination_width, destination_height);
+    (
+        sample_width.div_ceil(PARTICLE_CRAFT_TILE_SAMPLE_WIDTH),
+        sample_height.div_ceil(PARTICLE_CRAFT_TILE_SAMPLE_HEIGHT),
+    )
+}
+
+pub(crate) const fn particle_craft_bin_candidate_tests(
+    destination_width: u32,
+    destination_height: u32,
+    active_count: u32,
+) -> u64 {
+    let (tile_columns, tile_rows) =
+        particle_craft_tile_extent(destination_width, destination_height);
+    tile_columns as u64 * tile_rows as u64 * active_count as u64
+}
+
+const fn particle_craft_tile_mask_fits(destination_width: u32, destination_height: u32) -> bool {
+    let (tile_columns, tile_rows) =
+        particle_craft_tile_extent(destination_width, destination_height);
+    tile_columns <= PARTICLE_CRAFT_MAX_TILE_COLUMNS
+        && tile_rows <= PARTICLE_CRAFT_MAX_TILE_ROWS
 }
 
 /// Keep the ordinary 640x400 window unchanged. Once the logical window is
@@ -259,6 +306,14 @@ impl GpgpuOwnedParticleCraftState {
         self.gpu + PARTICLE_CRAFT_STATE_BYTES as u64
     }
 
+    pub(crate) const fn tile_masks_phys(&self) -> u64 {
+        self.phys + (PARTICLE_CRAFT_STATE_BYTES + PARTICLE_CRAFT_PARAMS_BYTES) as u64
+    }
+
+    pub(crate) const fn tile_masks_gpu(&self) -> u64 {
+        self.gpu + (PARTICLE_CRAFT_STATE_BYTES + PARTICLE_CRAFT_PARAMS_BYTES) as u64
+    }
+
     pub(crate) const fn bytes(&self) -> usize {
         self.bytes
     }
@@ -298,7 +353,9 @@ impl GpgpuOwnedParticleCraftState {
 #[cfg(test)]
 mod tests {
     use super::{
-        particle_craft_backing_extent, particle_craft_render_divisor, particle_craft_sample_extent,
+        particle_craft_backing_extent, particle_craft_bin_candidate_tests,
+        particle_craft_render_divisor, particle_craft_sample_extent, particle_craft_tile_extent,
+        PARTICLE_CRAFT_DEFAULT_PARTICLES, PARTICLE_CRAFT_TILE_MASK_BYTES,
     };
 
     #[test]
@@ -306,6 +363,11 @@ mod tests {
         assert_eq!(particle_craft_backing_extent(640, 400), (640, 400));
         assert_eq!(particle_craft_render_divisor(640, 400), 2);
         assert_eq!(particle_craft_sample_extent(640, 400), (320, 200));
+        assert_eq!(particle_craft_tile_extent(640, 400), (10, 7));
+        assert_eq!(
+            particle_craft_bin_candidate_tests(640, 400, PARTICLE_CRAFT_DEFAULT_PARTICLES),
+            8_960,
+        );
     }
 
     #[test]
@@ -314,6 +376,16 @@ mod tests {
         assert_eq!(backing, (1280, 720));
         assert_eq!(particle_craft_render_divisor(backing.0, backing.1), 1);
         assert_eq!(particle_craft_sample_extent(backing.0, backing.1), backing);
+        assert_eq!(particle_craft_tile_extent(backing.0, backing.1), (40, 23));
+        assert_eq!(
+            particle_craft_bin_candidate_tests(
+                backing.0,
+                backing.1,
+                PARTICLE_CRAFT_DEFAULT_PARTICLES,
+            ),
+            117_760,
+        );
+        assert_eq!(PARTICLE_CRAFT_TILE_MASK_BYTES, 115_200);
     }
 }
 
@@ -341,6 +413,7 @@ pub(crate) fn particle_craft_rgba8_frame(
 ) -> GpgpuRgba8KernelResult {
     if !params.is_valid()
         || !dst.is_valid()
+        || !particle_craft_tile_mask_fits(dst.width, dst.height)
         || !dst
             .pitch_bytes
             .is_multiple_of(core::mem::size_of::<u32>() as u32)

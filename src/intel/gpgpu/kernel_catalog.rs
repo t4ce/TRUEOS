@@ -66,6 +66,7 @@ pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_SOURCE_PATH: &str =
     "crates/trueos-shader/gpgpu/kernels/cpp_audio_visualizer_rgba8.clcpp";
 pub(crate) const PARTICLE_CRAFT_KERNEL_NAME: &str = "particle_craft";
 pub(crate) const PARTICLE_CRAFT_STEP_KERNEL_NAME: &str = "particle_craft_step";
+pub(crate) const PARTICLE_CRAFT_BIN_TILES_KERNEL_NAME: &str = "particle_craft_bin_tiles";
 pub(crate) const PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME: &str =
     "particle_craft_render_rgba8";
 pub(crate) const PARTICLE_CRAFT_OPENCL_SOURCE: &str =
@@ -136,6 +137,7 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(CPP_AUDIO_VISUALIZER_RGBA8_OPENCL_SOURCE),
         PARTICLE_CRAFT_KERNEL_NAME
         | PARTICLE_CRAFT_STEP_KERNEL_NAME
+        | PARTICLE_CRAFT_BIN_TILES_KERNEL_NAME
         | PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME => Some(PARTICLE_CRAFT_OPENCL_SOURCE),
         FONT_INSTANCE_RGBA8_KERNEL_NAME => Some(FONT_INSTANCE_RGBA8_OPENCL_SOURCE),
         LFM25_Q8_PROJECT_KERNEL_NAME => Some(LFM25_Q8_PROJECT_OPENCL_SOURCE),
@@ -189,6 +191,7 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(CPP_AUDIO_VISUALIZER_RGBA8_SOURCE_PATH),
         PARTICLE_CRAFT_KERNEL_NAME
         | PARTICLE_CRAFT_STEP_KERNEL_NAME
+        | PARTICLE_CRAFT_BIN_TILES_KERNEL_NAME
         | PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME => Some(PARTICLE_CRAFT_SOURCE_PATH),
         FONT_INSTANCE_RGBA8_KERNEL_NAME => Some(FONT_INSTANCE_RGBA8_SOURCE_PATH),
         LFM25_Q8_PROJECT_KERNEL_NAME => Some(LFM25_Q8_PROJECT_SOURCE_PATH),
@@ -433,38 +436,59 @@ pub(crate) const PARTICLE_CRAFT_ADLS_BIN_SHA256: [u8; 32] =
     PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () = assert!(matches!(PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
 const _: () =
+    assert!(matches!(PARTICLE_CRAFT_BIN_TILES_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
+const _: () =
     assert!(matches!(PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
-const _: () = assert!(PARTICLE_CRAFT_ADLS_BIN.len() == 104_856);
-const _: () = assert!(PARTICLE_CRAFT_ADLS_SPV.len() == 74_584);
+const _: () = assert!(PARTICLE_CRAFT_ADLS_BIN.len() == 157_536);
+const _: () = assert!(PARTICLE_CRAFT_ADLS_SPV.len() == 91_764);
 const _: () = {
     let step = PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT;
+    let bin = PARTICLE_CRAFT_BIN_TILES_ADLS_CPP_ABI_CONTRACT;
     let render = PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT;
     assert!(step.target.pci_device_ids.len() == 1);
     assert!(step.target.pci_device_ids[0] == 0x4680);
     assert!(step.target.revision_min == 0x0C && step.target.revision_max == 0x0C);
+    assert!(bin.target.pci_device_ids.len() == 1);
+    assert!(bin.target.pci_device_ids[0] == 0x4680);
+    assert!(bin.target.revision_min == 0x0C && bin.target.revision_max == 0x0C);
     assert!(render.target.pci_device_ids.len() == 1);
     assert!(render.target.pci_device_ids[0] == 0x4680);
     assert!(render.target.revision_min == 0x0C && render.target.revision_max == 0x0C);
     let mut digest_byte = 0;
     while digest_byte < 32 {
+        assert!(step.zebin_sha256[digest_byte] == bin.zebin_sha256[digest_byte]);
         assert!(step.zebin_sha256[digest_byte] == render.zebin_sha256[digest_byte]);
+        assert!(step.spv_sha256[digest_byte] == bin.spv_sha256[digest_byte]);
         assert!(step.spv_sha256[digest_byte] == render.spv_sha256[digest_byte]);
         digest_byte += 1;
     }
-    assert!(step.simd_width == 16 && render.simd_width == 16);
-    assert!(step.grf_count == 128 && render.grf_count == 128);
-    assert!(step.scratch_bytes == 0 && render.scratch_bytes == 0);
-    assert!(step.slm_bytes == 0 && render.slm_bytes == 0);
+    assert!(step.simd_width == 16 && bin.simd_width == 16 && render.simd_width == 16);
+    assert!(step.grf_count == 128 && bin.grf_count == 128 && render.grf_count == 128);
+    assert!(step.scratch_bytes == 0 && bin.scratch_bytes == 0 && render.scratch_bytes == 0);
+    assert!(step.slm_bytes == 0 && bin.slm_bytes == 0 && render.slm_bytes == 0);
     assert!(step.cross_thread_data_bytes == 64);
+    assert!(bin.cross_thread_data_bytes == 96);
     assert!(render.cross_thread_data_bytes == 96);
-    assert!(step.per_thread_data_bytes == 96 && render.per_thread_data_bytes == 96);
-    assert!(step.bindings.len() == 2 && render.bindings.len() == 3);
-    assert!(step.payload_args.len() == 2 && render.payload_args.len() == 3);
+    assert!(
+        step.per_thread_data_bytes == 96
+            && bin.per_thread_data_bytes == 96
+            && render.per_thread_data_bytes == 96
+    );
+    assert!(step.bindings.len() == 2 && bin.bindings.len() == 3 && render.bindings.len() == 4);
+    assert!(
+        step.payload_args.len() == 2
+            && bin.payload_args.len() == 3
+            && render.payload_args.len() == 4
+    );
     assert!(step.payload_args[0].offset_bytes == 48);
     assert!(step.payload_args[1].offset_bytes == 56);
+    assert!(bin.payload_args[0].offset_bytes == 48);
+    assert!(bin.payload_args[1].offset_bytes == 56);
+    assert!(bin.payload_args[2].offset_bytes == 64);
     assert!(render.payload_args[0].offset_bytes == 48);
     assert!(render.payload_args[1].offset_bytes == 56);
     assert!(render.payload_args[2].offset_bytes == 64);
+    assert!(render.payload_args[3].offset_bytes == 72);
 };
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/font_instance_rgba8.contract.rs"

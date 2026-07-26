@@ -240,7 +240,7 @@ fn print_list(io: &'static dyn ShellBackend2) {
     );
 }
 
-fn particle_candidate_tests(sample_width: u32, sample_height: u32) -> u64 {
+fn particle_naive_candidate_tests(sample_width: u32, sample_height: u32) -> u64 {
     u64::from(sample_width)
         * u64::from(sample_height)
         * u64::from(crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES)
@@ -251,30 +251,48 @@ fn particle_work_detail(destination_width: u32, destination_height: u32) -> Stri
         crate::intel::gpgpu::particle_craft_sample_extent(destination_width, destination_height);
     let render_divisor =
         crate::intel::gpgpu::particle_craft_render_divisor(destination_width, destination_height);
+    let (tile_columns, tile_rows) =
+        crate::intel::gpgpu::particle_craft_tile_extent(destination_width, destination_height);
     alloc::format!(
-        " preset=arc-forge particles={} state=8KiB params=v1/64B passes=step+pixel-gather backing={}x{} samples={}x{} render_divisor={} presentation=dynamic-1:1-or-direct-plane-2x candidate_tests={}",
+        " preset=arc-forge particles={} state=8KiB bins={}B params=v1/64B passes=step+tile-bin+pixel-gather backing={}x{} samples={}x{} tiles={}x{} tile={}x{} mask={}b render_divisor={} presentation=dynamic-1:1-or-direct-plane-2x naive_tests={} bin_tests={} gather=tile-mask",
         crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES,
+        crate::intel::gpgpu::PARTICLE_CRAFT_TILE_MASK_BYTES,
         destination_width,
         destination_height,
         sample_width,
         sample_height,
+        tile_columns,
+        tile_rows,
+        crate::intel::gpgpu::PARTICLE_CRAFT_TILE_SAMPLE_WIDTH,
+        crate::intel::gpgpu::PARTICLE_CRAFT_TILE_SAMPLE_HEIGHT,
+        crate::intel::gpgpu::PARTICLE_CRAFT_TILE_MASK_WORDS * u32::BITS,
         render_divisor,
-        particle_candidate_tests(sample_width, sample_height),
+        particle_naive_candidate_tests(sample_width, sample_height),
+        crate::intel::gpgpu::particle_craft_bin_candidate_tests(
+            destination_width,
+            destination_height,
+            crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES,
+        ),
     )
 }
 
 fn particle_list_detail() -> String {
     alloc::format!(
-        "cpp demo: mode=particle preset=arc-forge explores=persistent-state/two-pass-dependency/soft-cores+velocity-tails+pointer-attraction particles={} native_extent={}x{} native_samples={}x{} render_divisor={} maximize=half-scanout-backing/direct-plane-2x native_candidate_tests={} resizable=1",
+        "cpp demo: mode=particle preset=arc-forge explores=persistent-state/three-pass-dependency/tile-binned-gather/soft-cores+velocity-tails+pointer-attraction particles={} native_extent={}x{} native_samples={}x{} render_divisor={} maximize=half-scanout-backing/direct-plane-2x native_naive_tests={} native_bin_tests={} resizable=1",
         crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES,
         crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_WIDTH,
         crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_HEIGHT,
         crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_WIDTH,
         crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_HEIGHT,
         crate::intel::gpgpu::PARTICLE_CRAFT_RENDER_DIVISOR,
-        particle_candidate_tests(
+        particle_naive_candidate_tests(
             crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_WIDTH,
             crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_HEIGHT,
+        ),
+        crate::intel::gpgpu::particle_craft_bin_candidate_tests(
+            crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_WIDTH,
+            crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_HEIGHT,
+            crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES,
         ),
     )
 }
@@ -370,7 +388,7 @@ fn artifact_name(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str {
 
 fn kernel_name(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str {
     if preset == crate::ui4::GpgpuPreviewPreset::CppParticle {
-        "particle_craft_step+particle_craft_render_rgba8"
+        "particle_craft_step+particle_craft_bin_tiles+particle_craft_render_rgba8"
     } else {
         artifact_name(preset)
     }
@@ -739,7 +757,7 @@ pub(crate) fn try_parse(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_mode, particle_candidate_tests};
+    use super::{parse_mode, particle_naive_candidate_tests};
 
     #[test]
     fn retro_sun_aliases_select_the_standalone_preset() {
@@ -757,6 +775,6 @@ mod tests {
 
     #[test]
     fn particle_default_reports_the_reduced_candidate_work() {
-        assert_eq!(particle_candidate_tests(320, 200), 8_192_000);
+        assert_eq!(particle_naive_candidate_tests(320, 200), 8_192_000);
     }
 }

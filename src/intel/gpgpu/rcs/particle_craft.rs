@@ -74,6 +74,7 @@ fn direct_rcs_encode_particle_craft_batch(
     }
 
     let step_grfs = PARTICLE_CRAFT_STEP_CROSS_THREAD_BYTES.div_ceil(32) as u32;
+    let bin_grfs = PARTICLE_CRAFT_BIN_CROSS_THREAD_BYTES.div_ceil(32) as u32;
     let render_grfs = PARTICLE_CRAFT_RENDER_CROSS_THREAD_BYTES.div_ceil(32) as u32;
     if !direct_rcs_write_interface_descriptor_at(
         state,
@@ -84,10 +85,17 @@ fn direct_rcs_encode_particle_craft_batch(
         step_grfs,
     ) || !direct_rcs_write_interface_descriptor_at(
         state,
+        PARTICLE_CRAFT_BIN_IDD_OFFSET_BYTES,
+        PARTICLE_CRAFT_BIN_BINDING_TABLE_OFFSET_BYTES,
+        PARTICLE_CRAFT_BIN_TILES_TEXT_OFFSET_BYTES,
+        3,
+        bin_grfs,
+    ) || !direct_rcs_write_interface_descriptor_at(
+        state,
         PARTICLE_CRAFT_RENDER_IDD_OFFSET_BYTES,
         PARTICLE_CRAFT_RENDER_BINDING_TABLE_OFFSET_BYTES,
         PARTICLE_CRAFT_RENDER_RGBA8_TEXT_OFFSET_BYTES,
-        3,
+        4,
         render_grfs,
     ) {
         return false;
@@ -101,10 +109,19 @@ fn direct_rcs_encode_particle_craft_batch(
         ],
     ) || !direct_rcs_write_particle_binding_table(
         state,
+        PARTICLE_CRAFT_BIN_BINDING_TABLE_OFFSET_BYTES,
+        &[
+            PARTICLE_CRAFT_BIN_STATE_SURFACE_OFFSET_BYTES,
+            PARTICLE_CRAFT_BIN_PARAMS_SURFACE_OFFSET_BYTES,
+            PARTICLE_CRAFT_BIN_MASKS_SURFACE_OFFSET_BYTES,
+        ],
+    ) || !direct_rcs_write_particle_binding_table(
+        state,
         PARTICLE_CRAFT_RENDER_BINDING_TABLE_OFFSET_BYTES,
         &[
             PARTICLE_CRAFT_RENDER_STATE_SURFACE_OFFSET_BYTES,
             PARTICLE_CRAFT_RENDER_PARAMS_SURFACE_OFFSET_BYTES,
+            PARTICLE_CRAFT_RENDER_MASKS_SURFACE_OFFSET_BYTES,
             PARTICLE_CRAFT_RENDER_DST_SURFACE_OFFSET_BYTES,
         ],
     ) {
@@ -122,6 +139,21 @@ fn direct_rcs_encode_particle_craft_batch(
         PARTICLE_CRAFT_PARAMS_BYTES,
     ) || !direct_rcs_write_buffer_surface_state(
         state,
+        PARTICLE_CRAFT_BIN_STATE_SURFACE_OFFSET_BYTES,
+        craft.state_gpu(),
+        PARTICLE_CRAFT_STATE_BYTES,
+    ) || !direct_rcs_write_buffer_surface_state(
+        state,
+        PARTICLE_CRAFT_BIN_PARAMS_SURFACE_OFFSET_BYTES,
+        craft.params_gpu(),
+        PARTICLE_CRAFT_PARAMS_BYTES,
+    ) || !direct_rcs_write_buffer_surface_state(
+        state,
+        PARTICLE_CRAFT_BIN_MASKS_SURFACE_OFFSET_BYTES,
+        craft.tile_masks_gpu(),
+        PARTICLE_CRAFT_TILE_MASK_BYTES,
+    ) || !direct_rcs_write_buffer_surface_state(
+        state,
         PARTICLE_CRAFT_RENDER_STATE_SURFACE_OFFSET_BYTES,
         craft.state_gpu(),
         PARTICLE_CRAFT_STATE_BYTES,
@@ -130,6 +162,11 @@ fn direct_rcs_encode_particle_craft_batch(
         PARTICLE_CRAFT_RENDER_PARAMS_SURFACE_OFFSET_BYTES,
         craft.params_gpu(),
         PARTICLE_CRAFT_PARAMS_BYTES,
+    ) || !direct_rcs_write_buffer_surface_state(
+        state,
+        PARTICLE_CRAFT_RENDER_MASKS_SURFACE_OFFSET_BYTES,
+        craft.tile_masks_gpu(),
+        PARTICLE_CRAFT_TILE_MASK_BYTES,
     ) || !direct_rcs_write_buffer_surface_state(
         state,
         PARTICLE_CRAFT_RENDER_DST_SURFACE_OFFSET_BYTES,
@@ -143,10 +180,21 @@ fn direct_rcs_encode_particle_craft_batch(
         &[craft.state_gpu(), craft.params_gpu()],
     ) || !direct_rcs_write_particle_payload(
         state,
+        PARTICLE_CRAFT_BIN_PAYLOAD_OFFSET_BYTES,
+        PARTICLE_CRAFT_BIN_CROSS_THREAD_BYTES,
+        PARTICLE_CRAFT_BIN_INDIRECT_BYTES,
+        &[craft.state_gpu(), craft.params_gpu(), craft.tile_masks_gpu()],
+    ) || !direct_rcs_write_particle_payload(
+        state,
         PARTICLE_CRAFT_RENDER_PAYLOAD_OFFSET_BYTES,
         PARTICLE_CRAFT_RENDER_CROSS_THREAD_BYTES,
         PARTICLE_CRAFT_RENDER_INDIRECT_BYTES,
-        &[craft.state_gpu(), craft.params_gpu(), dst.gpu],
+        &[
+            craft.state_gpu(),
+            craft.params_gpu(),
+            craft.tile_masks_gpu(),
+            dst.gpu,
+        ],
     ) {
         return false;
     }
@@ -159,6 +207,14 @@ fn direct_rcs_encode_particle_craft_batch(
         (1u32 << step_lanes) - 1
     };
     let (sample_width, sample_height) = particle_craft_sample_extent(dst.width, dst.height);
+    let (tile_columns, tile_rows) = particle_craft_tile_extent(dst.width, dst.height);
+    let bin_groups_x = tile_columns.div_ceil(16);
+    let bin_lanes = ((tile_columns - 1) % 16) + 1;
+    let bin_right_mask = if bin_lanes == 16 {
+        GPGPU_WALKER_SIMD16_MASK
+    } else {
+        (1u32 << bin_lanes) - 1
+    };
     let render_groups_x = sample_width.div_ceil(16);
 
     let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
@@ -220,8 +276,27 @@ fn direct_rcs_encode_particle_craft_batch(
         step_right_mask,
     );
 
-    // The state walker writes particle records which the pixel-gather walker
+    // The state walker writes particle records which the tile binner
     // immediately consumes. Flush and invalidate at this explicit phase edge.
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, PARTICLE_CRAFT_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, PARTICLE_CRAFT_BIN_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push_gpgpu_walker_2d(
+        batch,
+        &mut cursor,
+        PARTICLE_CRAFT_BIN_PAYLOAD_OFFSET_BYTES,
+        PARTICLE_CRAFT_BIN_INDIRECT_BYTES,
+        bin_groups_x,
+        tile_rows,
+        bin_right_mask,
+    );
+
+    // The binner owns disjoint tile masks; make those writes visible before
+    // the full-frame gather reads its tile-local candidate set.
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
@@ -299,10 +374,11 @@ fn submit_particle_craft_rgba8(
     }
     if observed != PARTICLE_CRAFT_POST_MARKER {
         let (sample_width, sample_height) = particle_craft_sample_extent(dst.width, dst.height);
+        let (tile_columns, tile_rows) = particle_craft_tile_extent(dst.width, dst.height);
         let render_divisor = particle_craft_render_divisor(dst.width, dst.height);
         crate::log_error!(
             target: "gpgpu";
-            "intel/gpgpu: ParticleCraft failed forcewake={} mapped={} ppgtt={} kernel={} craft={} dst={} batch={} submitted={} observed=0x{:08X} want=0x{:08X} particles={} samples={}x{} render_divisor={} artifact={} state_gpu=0x{:X} dst_gpu=0x{:X}\n",
+            "intel/gpgpu: ParticleCraft failed forcewake={} mapped={} ppgtt={} kernel={} craft={} dst={} batch={} submitted={} observed=0x{:08X} want=0x{:08X} particles={} samples={}x{} tiles={}x{} tile={}x{} bin_tests={} render_divisor={} artifact={} state_gpu=0x{:X} dst_gpu=0x{:X}\n",
             forcewake_ok as u8,
             mapped_ok as u8,
             ppgtt_ok as u8,
@@ -316,6 +392,11 @@ fn submit_particle_craft_rgba8(
             active_count,
             sample_width,
             sample_height,
+            tile_columns,
+            tile_rows,
+            PARTICLE_CRAFT_TILE_SAMPLE_WIDTH,
+            PARTICLE_CRAFT_TILE_SAMPLE_HEIGHT,
+            particle_craft_bin_candidate_tests(dst.width, dst.height, active_count),
             render_divisor,
             PARTICLE_CRAFT_ADLS_ARTIFACT.name,
             craft.state_gpu(),
