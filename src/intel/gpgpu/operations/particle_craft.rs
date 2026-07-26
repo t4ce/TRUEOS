@@ -1,10 +1,11 @@
 pub(crate) const PARTICLE_CRAFT_FRAME_WIDTH: u32 = 640;
 pub(crate) const PARTICLE_CRAFT_FRAME_HEIGHT: u32 = 400;
-/// Private destination-relative render-quality lever. The artifact accepts
-/// 1, 2, or 4 without changing the public Blueprint ABI.
+/// Native-window render-quality lever. A maximized craft instead renders every
+/// pixel of its half-scanout backing surface before the display plane scales it
+/// to the logical window extent.
 pub(crate) const PARTICLE_CRAFT_RENDER_DIVISOR: u32 = 2;
 /// Native-window sample extent retained for diagnostics and shell startup
-/// output. Maximized samples are derived from the live destination instead.
+/// output. A maximized craft shades its half-scanout backing at divisor 1.
 pub(crate) const PARTICLE_CRAFT_SAMPLE_WIDTH: u32 =
     PARTICLE_CRAFT_FRAME_WIDTH / PARTICLE_CRAFT_RENDER_DIVISOR;
 pub(crate) const PARTICLE_CRAFT_SAMPLE_HEIGHT: u32 =
@@ -37,10 +38,38 @@ pub(crate) const fn particle_craft_sample_extent(
     destination_width: u32,
     destination_height: u32,
 ) -> (u32, u32) {
-    (
-        destination_width.div_ceil(PARTICLE_CRAFT_RENDER_DIVISOR),
-        destination_height.div_ceil(PARTICLE_CRAFT_RENDER_DIVISOR),
-    )
+    let render_divisor = particle_craft_render_divisor(destination_width, destination_height);
+    (destination_width.div_ceil(render_divisor), destination_height.div_ceil(render_divisor))
+}
+
+/// Keep the ordinary 640x400 window unchanged. Once the logical window is
+/// large enough to contain a half-resolution backing without reducing either
+/// native dimension, allocate half of the live placement and let UI4's direct
+/// plane scaler perform the final 2x presentation.
+pub(crate) const fn particle_craft_backing_extent(
+    logical_width: u32,
+    logical_height: u32,
+) -> (u32, u32) {
+    let half_width = logical_width.div_ceil(2);
+    let half_height = logical_height.div_ceil(2);
+    if half_width >= PARTICLE_CRAFT_FRAME_WIDTH && half_height >= PARTICLE_CRAFT_FRAME_HEIGHT {
+        (half_width, half_height)
+    } else {
+        (logical_width, logical_height)
+    }
+}
+
+pub(crate) const fn particle_craft_render_divisor(
+    destination_width: u32,
+    destination_height: u32,
+) -> u32 {
+    if destination_width > PARTICLE_CRAFT_FRAME_WIDTH
+        || destination_height > PARTICLE_CRAFT_FRAME_HEIGHT
+    {
+        1
+    } else {
+        PARTICLE_CRAFT_RENDER_DIVISOR
+    }
 }
 
 /// Stable host-side form of the public 64-byte ParticleCraft v1 control block.
@@ -249,7 +278,7 @@ impl GpgpuOwnedParticleCraftState {
                 dst.width,
                 dst.height,
                 dst.pitch_bytes / core::mem::size_of::<u32>() as u32,
-                PARTICLE_CRAFT_RENDER_DIVISOR,
+                particle_craft_render_divisor(dst.width, dst.height),
             ];
             core::ptr::copy_nonoverlapping(
                 render_controls.as_ptr().cast::<u8>(),
@@ -263,6 +292,28 @@ impl GpgpuOwnedParticleCraftState {
             unsafe { self.virt.add(PARTICLE_CRAFT_STATE_BYTES) },
             PARTICLE_CRAFT_PARAMS_BYTES,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        particle_craft_backing_extent, particle_craft_render_divisor, particle_craft_sample_extent,
+    };
+
+    #[test]
+    fn particle_craft_keeps_native_backing_and_half_samples() {
+        assert_eq!(particle_craft_backing_extent(640, 400), (640, 400));
+        assert_eq!(particle_craft_render_divisor(640, 400), 2);
+        assert_eq!(particle_craft_sample_extent(640, 400), (320, 200));
+    }
+
+    #[test]
+    fn particle_craft_uses_half_scanout_backing_at_1440p() {
+        let backing = particle_craft_backing_extent(2560, 1440);
+        assert_eq!(backing, (1280, 720));
+        assert_eq!(particle_craft_render_divisor(backing.0, backing.1), 1);
+        assert_eq!(particle_craft_sample_extent(backing.0, backing.1), backing);
     }
 }
 

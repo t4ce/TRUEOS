@@ -1022,6 +1022,9 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
         return false;
     };
     let exact_size = placement.width == view.width && placement.height == view.height;
+    let scaler_safe_maximize = window.maximized
+        && window.interaction.resize_on_maximize
+        && half_scale_backing_matches(placement.width, placement.height, view.width, view.height);
     let scaler_safe_close = window.state == super::WindowState::Closing
         && placement.width >= 8
         && placement.height >= 8
@@ -1031,7 +1034,7 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
         && u64::from(view.height) < u64::from(placement.height).saturating_mul(3);
     placement.x >= 0
         && placement.y >= 0
-        && (exact_size || scaler_safe_close)
+        && (exact_size || scaler_safe_maximize || scaler_safe_close)
         && (placement.x as u32)
             .checked_add(placement.width)
             .is_some_and(|right| right <= output_width)
@@ -1041,14 +1044,15 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
 }
 
 /// A resize-capable producer may need several service turns to replace its
-/// complete Frame ring after maximize. Preserve the old allocation exactly:
-/// center it inside the new logical window without scaling or copying. Once
-/// the replacement extent matches, the ordinary full-output placement wins.
+/// complete Frame ring after maximize. A deliberate half-resolution backing
+/// is scaled to the logical extent by the direct display plane. Any other old
+/// allocation remains centered at 1:1 until the replacement arrives.
 fn presentation_placement(window: WindowSnapshot, view: FrameRgbaView) -> WindowPlacement {
     let placement = window.placement;
     if !window.maximized
         || !window.interaction.resize_on_maximize
         || (placement.width == view.width && placement.height == view.height)
+        || half_scale_backing_matches(placement.width, placement.height, view.width, view.height)
         || view.width > placement.width
         || view.height > placement.height
     {
@@ -1065,6 +1069,18 @@ fn presentation_placement(window: WindowSnapshot, view: FrameRgbaView) -> Window
         height: view.height,
         ..placement
     }
+}
+
+const fn half_scale_backing_matches(
+    logical_width: u32,
+    logical_height: u32,
+    backing_width: u32,
+    backing_height: u32,
+) -> bool {
+    logical_width > backing_width
+        && logical_height > backing_height
+        && logical_width.div_ceil(2) == backing_width
+        && logical_height.div_ceil(2) == backing_height
 }
 
 const fn overlay_async_reason(slot: usize) -> &'static str {
@@ -1382,6 +1398,14 @@ fn release_leases(leases: &[FrameReadLease]) {
 #[cfg(test)]
 mod damage_tests {
     use super::*;
+
+    #[test]
+    fn maximized_half_resolution_backing_is_an_explicit_two_x_scale() {
+        assert!(half_scale_backing_matches(2560, 1440, 1280, 720));
+        assert!(half_scale_backing_matches(2559, 1439, 1280, 720));
+        assert!(!half_scale_backing_matches(2560, 1440, 640, 400));
+        assert!(!half_scale_backing_matches(2560, 1440, 2560, 1440));
+    }
 
     #[test]
     fn producer_damage_scales_outward() {

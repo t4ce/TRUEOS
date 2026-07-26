@@ -10133,12 +10133,14 @@ fn overlay_plane_geometry(
 }
 
 const DIRECT_PLANE_SCALER_MIN_DIMENSION: u32 = 8;
+/// Bound ordinary direct-plane enlargement to 2x. The phase path already
+/// handles factors below 1.0; close transitions retain their existing
+/// just-under-3x downscale ceiling.
+const DIRECT_PLANE_SCALER_MIN_FACTOR: u32 = 0x8000;
 const DIRECT_PLANE_SCALER_MAX_FACTOR: u32 = 0x2_FFFF;
 
 fn direct_plane_scaler_factor(source: u32, destination: u32) -> Option<u32> {
-    if source < DIRECT_PLANE_SCALER_MIN_DIMENSION
-        || destination < DIRECT_PLANE_SCALER_MIN_DIMENSION
-        || destination > source
+    if source < DIRECT_PLANE_SCALER_MIN_DIMENSION || destination < DIRECT_PLANE_SCALER_MIN_DIMENSION
     {
         return None;
     }
@@ -10146,9 +10148,9 @@ fn direct_plane_scaler_factor(source: u32, destination: u32) -> Option<u32> {
     let factor = numerator
         .saturating_add(u64::from(destination).saturating_sub(1))
         .checked_div(u64::from(destination))?;
-    u32::try_from(factor)
-        .ok()
-        .filter(|factor| *factor <= DIRECT_PLANE_SCALER_MAX_FACTOR)
+    u32::try_from(factor).ok().filter(|factor| {
+        (DIRECT_PLANE_SCALER_MIN_FACTOR..=DIRECT_PLANE_SCALER_MAX_FACTOR).contains(factor)
+    })
 }
 
 fn direct_plane_scaler_phase(factor: u32) -> u32 {
@@ -10383,7 +10385,7 @@ fn stage_ui4_direct_overlay_flip(
         && !UI4_DIRECT_PLANE_SCALER_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_info!(target: "ui4";
-            "ui4/direct-present: hardware-shrink active slot={} producer_frame={} source={}x{} destination={}x{}@{},{} source_buffer_mutation=none scaler_commit=surflive+scaler-readback\n",
+            "ui4/direct-present: hardware-scale active slot={} producer_frame={} source={}x{} destination={}x{}@{},{} source_buffer_mutation=none scaler_commit=surflive+scaler-readback\n",
             surface.plane_slot,
             surface.producer_frame,
             surface.width,
@@ -10505,4 +10507,21 @@ fn decode_xy_x(v: u32) -> u32 {
 #[inline]
 fn decode_xy_y(v: u32) -> u32 {
     (v >> 16) & 0xFFFF
+}
+
+#[cfg(test)]
+mod direct_plane_scaler_tests {
+    use super::direct_plane_scaler_factor;
+
+    #[test]
+    fn accepts_two_x_upscale_and_bounded_close_downscale() {
+        assert_eq!(direct_plane_scaler_factor(1280, 2560), Some(0x8000));
+        assert_eq!(direct_plane_scaler_factor(2560, 1280), Some(0x2_0000));
+    }
+
+    #[test]
+    fn rejects_scaling_outside_the_bounded_factor_range() {
+        assert_eq!(direct_plane_scaler_factor(640, 2560), None);
+        assert_eq!(direct_plane_scaler_factor(2560, 800), None);
+    }
 }

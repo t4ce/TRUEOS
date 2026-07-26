@@ -1,7 +1,7 @@
 //! Extracted USB HID support retained through the compatibility module path.
 
-use heapless::{String, Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
+use heapless::{String, Vec};
 use spin::Mutex;
 
 const MAX_HID_HUT_MICE: usize = 32;
@@ -14,14 +14,8 @@ pub const INPUT_COMBO_FLAG_AUTO_ASSIGNED: u8 = v::vinput::INPUT_COMBO_FLAG_AUTO_
 const AUTO_COMBO_ID_BASE: u32 = 0x4943_0000;
 static NEXT_AUTO_COMBO_ID: AtomicU32 = AtomicU32::new(1);
 
-#[repr(u8)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum HidSourceKind {
-    Unknown = 0,
-    Human = 1,
-    Ai = 2,
-    Remote = 3,
-}
+pub use v::vinput::InputComboSourceKind;
+pub type HidSourceKind = InputComboSourceKind;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HidMouseState {
@@ -70,7 +64,7 @@ pub struct HidKeyboardState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HidCombo {
+pub struct InputCombo {
     pub combo_id: u32,
     pub source_kind: HidSourceKind,
     pub source_tag: String<HID_SOURCE_TAG_MAX>,
@@ -204,31 +198,12 @@ impl Default for TrueosHidHutKeyboardState {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
-pub struct TrueosHidHutCombo {
-    pub combo_id: u32,
-    pub source_kind: u8,
-    pub source_tag_len: u8,
-    pub reserved0: u16,
-    pub source_tag: [u8; HID_HUT_SOURCE_TAG_MAX],
-    pub mouse_controller_id: u32,
-    pub mouse_slot_id: u32,
-    pub mouse_ep_target: u32,
-    pub keyboard_controller_id: u32,
-    pub keyboard_slot_id: u32,
-    pub keyboard_ep_target: u32,
-    pub tablet_controller_id: u32,
-    pub tablet_slot_id: u32,
-    pub tablet_ep_target: u32,
-}
-
 #[derive(Clone, Debug)]
 struct HidHutState {
     mice: Vec<HidMouseState, MAX_HID_HUT_MICE>,
     tablets: Vec<HidTabletState, MAX_HID_HUT_TABLETS>,
     keyboards: Vec<HidKeyboardState, MAX_HID_HUT_KEYBOARDS>,
-    combos: Vec<HidCombo, MAX_HID_HUT_COMBOS>,
+    combos: Vec<InputCombo, MAX_HID_HUT_COMBOS>,
 }
 
 impl HidHutState {
@@ -286,7 +261,7 @@ impl ComboEndpoint {
     }
 }
 
-fn combo_endpoint(combo: &HidCombo, kind: ComboDeviceKind) -> ComboEndpoint {
+fn combo_endpoint(combo: &InputCombo, kind: ComboDeviceKind) -> ComboEndpoint {
     match kind {
         ComboDeviceKind::Mouse => ComboEndpoint::new(
             combo.mouse_controller_id,
@@ -311,7 +286,7 @@ fn combo_endpoint(combo: &HidCombo, kind: ComboDeviceKind) -> ComboEndpoint {
     }
 }
 
-fn set_combo_endpoint(combo: &mut HidCombo, kind: ComboDeviceKind, endpoint: ComboEndpoint) {
+fn set_combo_endpoint(combo: &mut InputCombo, kind: ComboDeviceKind, endpoint: ComboEndpoint) {
     match kind {
         ComboDeviceKind::Mouse => {
             combo.mouse_controller_id = endpoint.controller_id;
@@ -348,7 +323,7 @@ fn endpoint_matches(left: ComboEndpoint, right: ComboEndpoint) -> bool {
         && left.ep_target == right.ep_target
 }
 
-fn combo_contains_usb_slot(combo: &HidCombo, controller_id: u32, slot_id: u32) -> bool {
+fn combo_contains_usb_slot(combo: &InputCombo, controller_id: u32, slot_id: u32) -> bool {
     [
         ComboDeviceKind::Mouse,
         ComboDeviceKind::Keyboard,
@@ -366,11 +341,7 @@ fn combo_contains_usb_slot(combo: &HidCombo, controller_id: u32, slot_id: u32) -
 
 fn next_combo_color(state: &HidHutState) -> u8 {
     for color_id in 0..v::vinput::InputComboColor::COUNT {
-        if !state
-            .combos
-            .iter()
-            .any(|combo| combo.color_id == color_id)
-        {
+        if !state.combos.iter().any(|combo| combo.color_id == color_id) {
             return color_id;
         }
     }
@@ -381,12 +352,7 @@ fn next_combo_id(state: &HidHutState) -> Option<u32> {
     for _ in 0..(MAX_HID_HUT_COMBOS * 2) {
         let sequence = NEXT_AUTO_COMBO_ID.fetch_add(1, Ordering::AcqRel).max(1);
         let combo_id = AUTO_COMBO_ID_BASE | (sequence & 0x0000_FFFF);
-        if combo_id != 0
-            && !state
-                .combos
-                .iter()
-                .any(|combo| combo.combo_id == combo_id)
-        {
+        if combo_id != 0 && !state.combos.iter().any(|combo| combo.combo_id == combo_id) {
             return Some(combo_id);
         }
     }
@@ -399,8 +365,8 @@ fn empty_combo(
     source_tag: &str,
     color_id: u8,
     flags: u8,
-) -> HidCombo {
-    HidCombo {
+) -> InputCombo {
+    InputCombo {
         combo_id,
         source_kind,
         source_tag: normalized_tag(source_tag),
@@ -434,6 +400,7 @@ fn bind_device_in_state(
     else {
         return false;
     };
+    let displaced_endpoint = combo_endpoint(&state.combos[target_index], kind);
 
     // A device belongs to at most one collection. This makes manual re-pairing
     // deterministic and prevents one keyboard from routing to two cursors.
@@ -447,6 +414,17 @@ fn bind_device_in_state(
     let source_tag = state.combos[target_index].source_tag.clone();
     match kind {
         ComboDeviceKind::Mouse => {
+            if !endpoint_is_empty(displaced_endpoint)
+                && !endpoint_matches(displaced_endpoint, endpoint)
+                && let Some(mouse) = state.mice.iter_mut().find(|mouse| {
+                    mouse.controller_id == displaced_endpoint.controller_id
+                        && mouse.slot_id == displaced_endpoint.slot_id
+                        && mouse.ep_target == displaced_endpoint.ep_target
+                })
+                && mouse.combo_id == combo_id
+            {
+                mouse.combo_id = 0;
+            }
             if let Some(mouse) = state.mice.iter_mut().find(|mouse| {
                 mouse.controller_id == endpoint.controller_id
                     && mouse.slot_id == endpoint.slot_id
@@ -458,6 +436,17 @@ fn bind_device_in_state(
             }
         }
         ComboDeviceKind::Keyboard => {
+            if !endpoint_is_empty(displaced_endpoint)
+                && !endpoint_matches(displaced_endpoint, endpoint)
+                && let Some(keyboard) = state.keyboards.iter_mut().find(|keyboard| {
+                    keyboard.controller_id == displaced_endpoint.controller_id
+                        && keyboard.slot_id == displaced_endpoint.slot_id
+                        && keyboard.ep_target == displaced_endpoint.ep_target
+                })
+                && keyboard.combo_id == combo_id
+            {
+                keyboard.combo_id = 0;
+            }
             if let Some(keyboard) = state.keyboards.iter_mut().find(|keyboard| {
                 keyboard.controller_id == endpoint.controller_id
                     && keyboard.slot_id == endpoint.slot_id
@@ -469,6 +458,17 @@ fn bind_device_in_state(
             }
         }
         ComboDeviceKind::Tablet => {
+            if !endpoint_is_empty(displaced_endpoint)
+                && !endpoint_matches(displaced_endpoint, endpoint)
+                && let Some(tablet) = state.tablets.iter_mut().find(|tablet| {
+                    tablet.controller_id == displaced_endpoint.controller_id
+                        && tablet.slot_id == displaced_endpoint.slot_id
+                        && tablet.ep_target == displaced_endpoint.ep_target
+                })
+                && tablet.combo_id == combo_id
+            {
+                tablet.combo_id = 0;
+            }
             if let Some(tablet) = state.tablets.iter_mut().find(|tablet| {
                 tablet.controller_id == endpoint.controller_id
                     && tablet.slot_id == endpoint.slot_id
@@ -840,7 +840,7 @@ pub fn request_combo(
     source_kind: HidSourceKind,
     source_tag: &str,
     requested_color: Option<u8>,
-) -> Option<HidCombo> {
+) -> Option<InputCombo> {
     let mut guard = HID_HUT.lock();
     let combo_id = next_combo_id(&guard)?;
     let color_id = requested_color
@@ -911,12 +911,7 @@ pub fn bind_combo_tablet(combo_id: u32, controller_id: u32, slot_id: u32, ep_tar
     )
 }
 
-pub fn bind_combo_gamepad(
-    combo_id: u32,
-    controller_id: u32,
-    slot_id: u32,
-    ep_target: u32,
-) -> bool {
+pub fn bind_combo_gamepad(combo_id: u32, controller_id: u32, slot_id: u32, ep_target: u32) -> bool {
     if combo_id == 0 || slot_id == 0 {
         return false;
     }
@@ -1060,7 +1055,7 @@ pub fn keyboards_snapshot() -> Vec<HidKeyboardState, MAX_HID_HUT_KEYBOARDS> {
     HID_HUT.lock().keyboards.clone()
 }
 
-pub fn combos_snapshot() -> Vec<HidCombo, MAX_HID_HUT_COMBOS> {
+pub fn combos_snapshot() -> Vec<InputCombo, MAX_HID_HUT_COMBOS> {
     HID_HUT.lock().combos.clone()
 }
 
@@ -1153,29 +1148,97 @@ pub fn read_keyboards_snapshot(out: &mut [TrueosHidHutKeyboardState]) -> usize {
     wrote
 }
 
-pub fn read_combos_snapshot(out: &mut [TrueosHidHutCombo]) -> usize {
-    let snapshot = combos_snapshot();
-    let mut wrote = 0usize;
-    for combo in snapshot.iter().take(out.len()) {
-        let mut next = TrueosHidHutCombo {
-            combo_id: combo.combo_id,
-            source_kind: combo.source_kind as u8,
-            source_tag_len: 0,
-            reserved0: 0,
-            source_tag: [0; HID_HUT_SOURCE_TAG_MAX],
-            mouse_controller_id: combo.mouse_controller_id,
-            mouse_slot_id: combo.mouse_slot_id,
-            mouse_ep_target: combo.mouse_ep_target,
-            keyboard_controller_id: combo.keyboard_controller_id,
-            keyboard_slot_id: combo.keyboard_slot_id,
-            keyboard_ep_target: combo.keyboard_ep_target,
-            tablet_controller_id: combo.tablet_controller_id,
-            tablet_slot_id: combo.tablet_slot_id,
-            tablet_ep_target: combo.tablet_ep_target,
-        };
-        next.source_tag_len = copy_source_tag(&mut next.source_tag, &combo.source_tag);
-        out[wrote] = next;
-        wrote += 1;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn endpoint(controller_id: u32, slot_id: u32, ep_target: u32) -> ComboEndpoint {
+        ComboEndpoint::new(controller_id, slot_id, ep_target)
     }
-    wrote
+
+    #[test]
+    fn auto_pairing_uses_discovery_order_for_independent_devices() {
+        let mut state = HidHutState::new();
+        let mouse_a = endpoint(1, 10, 2);
+        let mouse_b = endpoint(1, 11, 2);
+        let keyboard_a = endpoint(1, 20, 3);
+        let keyboard_b = endpoint(1, 21, 3);
+
+        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, mouse_a);
+        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, mouse_b);
+        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Keyboard, keyboard_a);
+        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Keyboard, keyboard_b);
+
+        assert_eq!(state.combos.len(), 2);
+        assert!(endpoint_matches(
+            combo_endpoint(&state.combos[0], ComboDeviceKind::Mouse),
+            mouse_a,
+        ));
+        assert!(endpoint_matches(
+            combo_endpoint(&state.combos[0], ComboDeviceKind::Keyboard),
+            keyboard_a,
+        ));
+        assert!(endpoint_matches(
+            combo_endpoint(&state.combos[1], ComboDeviceKind::Mouse),
+            mouse_b,
+        ));
+        assert!(endpoint_matches(
+            combo_endpoint(&state.combos[1], ComboDeviceKind::Keyboard),
+            keyboard_b,
+        ));
+        assert_ne!(state.combos[0].color_id, state.combos[1].color_id);
+    }
+
+    #[test]
+    fn auto_pairing_prefers_members_from_the_same_usb_slot() {
+        let mut state = HidHutState::new();
+        let mouse_a = endpoint(1, 10, 2);
+        let mouse_b = endpoint(1, 11, 2);
+        let keyboard_b = endpoint(1, 11, 3);
+
+        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, mouse_a);
+        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, mouse_b);
+        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Keyboard, keyboard_b);
+
+        assert!(endpoint_is_empty(combo_endpoint(&state.combos[0], ComboDeviceKind::Keyboard,)));
+        assert!(endpoint_matches(
+            combo_endpoint(&state.combos[1], ComboDeviceKind::Keyboard),
+            keyboard_b,
+        ));
+    }
+
+    #[test]
+    fn manual_rebinding_keeps_each_device_in_one_combo() {
+        let mut state = HidHutState::new();
+        let mouse_a = endpoint(1, 10, 2);
+        let mouse_b = endpoint(1, 11, 2);
+        let first_id = 100;
+        let second_id = 200;
+        assert!(
+            state
+                .combos
+                .push(empty_combo(first_id, HidSourceKind::Human, "first", 0, 0,))
+                .is_ok()
+        );
+        assert!(
+            state
+                .combos
+                .push(empty_combo(second_id, HidSourceKind::Human, "second", 1, 0,))
+                .is_ok()
+        );
+
+        assert!(bind_device_in_state(&mut state, first_id, ComboDeviceKind::Mouse, mouse_a,));
+        assert!(bind_device_in_state(&mut state, second_id, ComboDeviceKind::Mouse, mouse_a,));
+        assert!(endpoint_is_empty(combo_endpoint(&state.combos[0], ComboDeviceKind::Mouse,)));
+        assert!(endpoint_matches(
+            combo_endpoint(&state.combos[1], ComboDeviceKind::Mouse),
+            mouse_a,
+        ));
+
+        assert!(bind_device_in_state(&mut state, second_id, ComboDeviceKind::Mouse, mouse_b,));
+        assert!(endpoint_matches(
+            combo_endpoint(&state.combos[1], ComboDeviceKind::Mouse),
+            mouse_b,
+        ));
+    }
 }

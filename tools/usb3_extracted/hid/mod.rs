@@ -571,28 +571,6 @@ pub(crate) fn remove_hid_slot(controller_id: u32, slot_id: u32) {
     );
 }
 
-#[inline]
-fn cabi_hut_source_kind(value: u8) -> hut::HidSourceKind {
-    match value {
-        1 => hut::HidSourceKind::Human,
-        2 => hut::HidSourceKind::Ai,
-        3 => hut::HidSourceKind::Remote,
-        _ => hut::HidSourceKind::Unknown,
-    }
-}
-
-#[inline]
-fn cabi_utf8<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
-    if len == 0 {
-        return Some("");
-    }
-    if ptr.is_null() {
-        return None;
-    }
-    let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
-    core::str::from_utf8(bytes).ok()
-}
-
 fn mouse_ring_read(
     controller_id: u32,
     slot_id: u32,
@@ -756,79 +734,6 @@ pub unsafe extern "C" fn trueos_cabi_hid_tablet_read(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_hid_hut_upsert_combo(
-    combo_id: u32,
-    source_kind: u8,
-    source_tag_ptr: *const u8,
-    source_tag_len: usize,
-) -> i32 {
-    let Some(source_tag) = cabi_utf8(source_tag_ptr, source_tag_len) else {
-        return -1;
-    };
-    if hut::upsert_combo(combo_id, cabi_hut_source_kind(source_kind), source_tag) {
-        0
-    } else {
-        -1
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_hid_hut_bind_combo_mouse(
-    combo_id: u32,
-    controller_id: u32,
-    slot_id: u32,
-    ep_target: u32,
-) -> i32 {
-    if hut::bind_combo_mouse(combo_id, controller_id, slot_id, ep_target) {
-        0
-    } else {
-        -1
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_hid_hut_bind_combo_keyboard(
-    combo_id: u32,
-    controller_id: u32,
-    slot_id: u32,
-    ep_target: u32,
-) -> i32 {
-    if hut::bind_combo_keyboard(combo_id, controller_id, slot_id, ep_target) {
-        0
-    } else {
-        -1
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_hid_hut_bind_combo_tablet(
-    combo_id: u32,
-    controller_id: u32,
-    slot_id: u32,
-    ep_target: u32,
-) -> i32 {
-    if hut::bind_combo_tablet(combo_id, controller_id, slot_id, ep_target) {
-        0
-    } else {
-        -1
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_hid_hut_bind_combo_gamepad(
-    combo_id: u32,
-    controller_id: u32,
-    slot_id: u32,
-    ep_target: u32,
-) -> i32 {
-    if hut::bind_combo_gamepad(combo_id, controller_id, slot_id, ep_target) {
-        0
-    } else {
-        -1
-    }
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_hid_hut_read_mice(
     out: *mut hut::TrueosHidHutMouseState,
     out_cap: u32,
@@ -871,19 +776,4 @@ pub unsafe extern "C" fn trueos_cabi_hid_hut_read_keyboards(
     }
     let out_slice = core::slice::from_raw_parts_mut(out, out_cap as usize);
     hut::read_keyboards_snapshot(out_slice) as u32
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_hid_hut_read_combos(
-    out: *mut hut::TrueosHidHutCombo,
-    out_cap: u32,
-) -> u32 {
-    if out_cap == 0 {
-        return hut::combos_snapshot().len() as u32;
-    }
-    if out.is_null() {
-        return 0;
-    }
-    let out_slice = core::slice::from_raw_parts_mut(out, out_cap as usize);
-    hut::read_combos_snapshot(out_slice) as u32
 }

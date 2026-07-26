@@ -7,9 +7,9 @@ use crate::vcabi;
 pub use crate::vcabi::{
     GamepadControlCommand, GamepadControlDeviceInfo, GamepadControlSnapshot,
     KeyboardControlCommand, KeyboardControlDeviceInfo, MouseMotionCommand, MouseMotionCursorInfo,
-    TrueosHidCursorEvent, TrueosHidHutCombo, TrueosHidHutKeyboardState, TrueosHidHutMouseState,
-    TrueosHidHutTabletState, TrueosHidKeyboardSample, TrueosHidMouseSample,
-    TrueosHidTabletSample, TrueosInputComboInfoV1, TrueosMouseState, TrueosTabletEvent,
+    TrueosHidCursorEvent, TrueosHidHutKeyboardState, TrueosHidHutMouseState,
+    TrueosHidHutTabletState, TrueosHidKeyboardSample, TrueosHidMouseSample, TrueosHidTabletSample,
+    TrueosInputCombo, TrueosMouseState, TrueosTabletEvent,
 };
 
 pub const MOUSE_MOTION_OPCODE_TELEPORT: u8 = 1;
@@ -47,6 +47,17 @@ pub enum InputComboSourceKind {
     Human = 1,
     Ai = 2,
     Remote = 3,
+}
+
+impl InputComboSourceKind {
+    pub const fn from_code(value: u8) -> Self {
+        match value {
+            1 => Self::Human,
+            2 => Self::Ai,
+            3 => Self::Remote,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 /// Stable visual identity assigned to an [`InputCombo`].
@@ -453,7 +464,7 @@ impl Drop for VGamepad {
 /// into one combo after allocation.
 #[derive(Clone, Debug)]
 pub struct InputCombo {
-    info: TrueosInputComboInfoV1,
+    info: TrueosInputCombo,
 }
 
 impl InputCombo {
@@ -465,7 +476,7 @@ impl InputCombo {
         if label.is_empty() {
             return Err(-1);
         }
-        let mut info = TrueosInputComboInfoV1::default();
+        let mut info = TrueosInputCombo::default();
         let requested_color = color
             .map(|value| i32::from(value as u8))
             .unwrap_or(INPUT_COMBO_COLOR_AUTO);
@@ -478,11 +489,7 @@ impl InputCombo {
                 &mut info,
             )
         };
-        if rc == 0 {
-            Ok(Self { info })
-        } else {
-            Err(rc)
-        }
+        if rc == 0 { Ok(Self { info }) } else { Err(rc) }
     }
 
     pub const fn id(&self) -> u32 {
@@ -493,7 +500,7 @@ impl InputCombo {
         InputComboColor::from_index(self.info.color_id)
     }
 
-    pub const fn info(&self) -> TrueosInputComboInfoV1 {
+    pub const fn info(&self) -> TrueosInputCombo {
         self.info
     }
 
@@ -509,9 +516,8 @@ impl InputCombo {
     }
 
     pub fn set_color(&mut self, color: InputComboColor) -> Result<(), i32> {
-        let rc = unsafe {
-            vcabi::trueos_cabi_input_combo_set_color(self.info.combo_id, color as u8)
-        };
+        let rc =
+            unsafe { vcabi::trueos_cabi_input_combo_set_color(self.info.combo_id, color as u8) };
         if rc != 0 {
             return Err(rc);
         }
@@ -587,9 +593,9 @@ fn combo_bind_result(rc: i32) -> Result<(), i32> {
     if rc == 0 { Ok(()) } else { Err(rc) }
 }
 
-pub fn input_combos() -> Vec<TrueosInputComboInfoV1> {
+pub fn input_combos() -> Vec<TrueosInputCombo> {
     let count = unsafe { vcabi::trueos_cabi_input_combo_read(core::ptr::null_mut(), 0) };
-    let mut out = vec![TrueosInputComboInfoV1::default(); count as usize];
+    let mut out = vec![TrueosInputCombo::default(); count as usize];
     if count != 0 {
         let got = unsafe { vcabi::trueos_cabi_input_combo_read(out.as_mut_ptr(), count) };
         out.truncate(got as usize);
@@ -767,76 +773,6 @@ pub fn hid_tablet_read(
 }
 
 #[inline]
-pub fn hid_hut_upsert_combo(combo_id: u32, source_kind: u8, source_tag: &str) -> Result<(), i32> {
-    let rc = unsafe {
-        vcabi::trueos_cabi_hid_hut_upsert_combo(
-            combo_id,
-            source_kind,
-            source_tag.as_ptr(),
-            source_tag.len(),
-        )
-    };
-    if rc == 0 { Ok(()) } else { Err(rc) }
-}
-
-#[inline]
-pub fn hid_hut_bind_combo_mouse(
-    combo_id: u32,
-    controller_id: u32,
-    slot_id: u32,
-    ep_target: u32,
-) -> Result<(), i32> {
-    let rc = unsafe {
-        vcabi::trueos_cabi_hid_hut_bind_combo_mouse(combo_id, controller_id, slot_id, ep_target)
-    };
-    if rc == 0 { Ok(()) } else { Err(rc) }
-}
-
-#[inline]
-pub fn hid_hut_bind_combo_keyboard(
-    combo_id: u32,
-    controller_id: u32,
-    slot_id: u32,
-    ep_target: u32,
-) -> Result<(), i32> {
-    let rc = unsafe {
-        vcabi::trueos_cabi_hid_hut_bind_combo_keyboard(combo_id, controller_id, slot_id, ep_target)
-    };
-    if rc == 0 { Ok(()) } else { Err(rc) }
-}
-
-#[inline]
-pub fn hid_hut_bind_combo_tablet(
-    combo_id: u32,
-    controller_id: u32,
-    slot_id: u32,
-    ep_target: u32,
-) -> Result<(), i32> {
-    let rc = unsafe {
-        vcabi::trueos_cabi_hid_hut_bind_combo_tablet(combo_id, controller_id, slot_id, ep_target)
-    };
-    if rc == 0 { Ok(()) } else { Err(rc) }
-}
-
-#[inline]
-pub fn hid_hut_bind_combo_gamepad(
-    combo_id: u32,
-    controller_id: u32,
-    slot_id: u32,
-    ep_target: u32,
-) -> Result<(), i32> {
-    let rc = unsafe {
-        vcabi::trueos_cabi_hid_hut_bind_combo_gamepad(
-            combo_id,
-            controller_id,
-            slot_id,
-            ep_target,
-        )
-    };
-    if rc == 0 { Ok(()) } else { Err(rc) }
-}
-
-#[inline]
 pub fn hid_hut_mice() -> Vec<TrueosHidHutMouseState> {
     let count = unsafe { vcabi::trueos_cabi_hid_hut_read_mice(core::ptr::null_mut(), 0) };
     let mut out = vec![TrueosHidHutMouseState::default(); count as usize];
@@ -864,17 +800,6 @@ pub fn hid_hut_keyboards() -> Vec<TrueosHidHutKeyboardState> {
     let mut out = vec![TrueosHidHutKeyboardState::default(); count as usize];
     if count != 0 {
         let got = unsafe { vcabi::trueos_cabi_hid_hut_read_keyboards(out.as_mut_ptr(), count) };
-        out.truncate(got as usize);
-    }
-    out
-}
-
-#[inline]
-pub fn hid_hut_combos() -> Vec<TrueosHidHutCombo> {
-    let count = unsafe { vcabi::trueos_cabi_hid_hut_read_combos(core::ptr::null_mut(), 0) };
-    let mut out = vec![TrueosHidHutCombo::default(); count as usize];
-    if count != 0 {
-        let got = unsafe { vcabi::trueos_cabi_hid_hut_read_combos(out.as_mut_ptr(), count) };
         out.truncate(got as usize);
     }
     out
@@ -912,4 +837,22 @@ pub fn write_keyboard_key(
         return Err(rc);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InputComboColor;
+
+    #[test]
+    fn input_combo_palette_indices_and_rgba_values_are_stable() {
+        let mut seen = [[0u8; 4]; InputComboColor::COUNT as usize];
+        for index in 0..InputComboColor::COUNT {
+            let color = InputComboColor::from_index(index);
+            assert_eq!(color as u8, index);
+            let rgba = color.rgba();
+            assert_eq!(rgba[3], 255);
+            assert!(!seen[..index as usize].contains(&rgba));
+            seen[index as usize] = rgba;
+        }
+    }
 }

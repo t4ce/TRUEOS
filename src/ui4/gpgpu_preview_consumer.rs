@@ -1606,9 +1606,11 @@ fn reconcile_preview_extents(active: &mut [ActivePreview], retired_frames: &mut 
         let Ok(placement) = window_placement(PREVIEW_OWNER, preview.window) else {
             continue;
         };
+        let (backing_width, backing_height) =
+            preview_backing_extent(preview.config.preset, placement.width, placement.height);
         if placement.width == 0
             || placement.height == 0
-            || (placement.width == preview.width && placement.height == preview.height)
+            || (backing_width == preview.width && backing_height == preview.height)
         {
             continue;
         }
@@ -1629,7 +1631,9 @@ fn try_resize_preview(
     retired_frames: &mut Vec<FrameHandle>,
     source: &'static str,
 ) {
-    if width == preview.width && height == preview.height {
+    let (backing_width, backing_height) =
+        preview_backing_extent(preview.config.preset, width, height);
+    if backing_width == preview.width && backing_height == preview.height {
         return;
     }
     let now = Instant::now();
@@ -1668,34 +1672,55 @@ fn try_resize_preview(
 
 fn resize_preview(
     preview: &mut ActivePreview,
-    width: u32,
-    height: u32,
+    logical_width: u32,
+    logical_height: u32,
     retired_frames: &mut Vec<FrameHandle>,
 ) -> Result<(), &'static str> {
     let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
-    let replacement =
-        create_preview_frame(output, width, height).map_err(preview_frame_create_error_label)?;
+    let (backing_width, backing_height) =
+        preview_backing_extent(preview.config.preset, logical_width, logical_height);
+    let replacement = create_preview_frame(output, backing_width, backing_height)
+        .map_err(preview_frame_create_error_label)?;
     if replace_window_frame(PREVIEW_OWNER, preview.window, replacement).is_err() {
         let _ = destroy_frame(replacement);
         return Err("resize-window-replace-failed");
     }
     let previous = preview.frame;
     preview.frame = replacement;
-    preview.width = width;
-    preview.height = height;
+    preview.width = backing_width;
+    preview.height = backing_height;
     preview.next_render = Instant::now();
     preview.static_needs_publish = true;
     retired_frames.push(previous);
     crate::log_info!(
         target: "ui4";
-        "ui4 gpgpu-preview resize applied request={} window={} frame={} extent={}x{} plane_mutation=none\n",
+        "ui4 gpgpu-preview resize applied request={} window={} frame={} logical_extent={}x{} backing_extent={}x{} presentation={} plane_mutation=scaler-only\n",
         preview.request_serial,
         preview.window.raw(),
         replacement.raw(),
-        width,
-        height,
+        logical_width,
+        logical_height,
+        backing_width,
+        backing_height,
+        if (backing_width, backing_height) == (logical_width, logical_height) {
+            "1:1"
+        } else {
+            "direct-plane-2x"
+        },
     );
     Ok(())
+}
+
+fn preview_backing_extent(
+    preset: GpgpuPreviewPreset,
+    logical_width: u32,
+    logical_height: u32,
+) -> (u32, u32) {
+    if preset == GpgpuPreviewPreset::CppParticle {
+        crate::intel::gpgpu::particle_craft_backing_extent(logical_width, logical_height)
+    } else {
+        (logical_width, logical_height)
+    }
 }
 
 fn stop_active_previews(
@@ -2088,7 +2113,15 @@ mod tests {
         assert_eq!(mode.buffering_label(), "double");
         assert_eq!(mode.plane_layout_label(), "slot1-direct");
         assert_eq!(crate::intel::gpgpu::particle_craft_sample_extent(640, 400), (320, 200));
-        assert_eq!(crate::intel::gpgpu::particle_craft_sample_extent(2560, 1440), (1280, 720));
+        let maximized_backing = super::preview_backing_extent(mode, 2560, 1440);
+        assert_eq!(maximized_backing, (1280, 720));
+        assert_eq!(
+            crate::intel::gpgpu::particle_craft_sample_extent(
+                maximized_backing.0,
+                maximized_backing.1,
+            ),
+            maximized_backing,
+        );
     }
 
     #[test]

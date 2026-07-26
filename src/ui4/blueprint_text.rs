@@ -1199,7 +1199,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
-    let (cadence, window) = {
+    let (cadence, window, particle_craft) = {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
             return ERROR_NOT_FOUND;
@@ -1207,7 +1207,12 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         if surface.write_lease.is_some() {
             return ERROR_STATE;
         }
-        (surface.cadence, surface.window)
+        (surface.cadence, surface.window, surface.particle_craft.is_some())
+    };
+    let (backing_width, backing_height) = if particle_craft {
+        crate::intel::gpgpu::particle_craft_backing_extent(width, height)
+    } else {
+        (width, height)
     };
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     let replacement = match create_frame(FrameSpec {
@@ -1220,18 +1225,39 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
             FrameCadence::Streaming => super::FrameBuffering::Triple,
         },
         format: ScanoutFormat::Rgba8888Premultiplied,
-        width,
-        height,
+        width: backing_width,
+        height: backing_height,
         base_color: Some(PremultipliedRgba8::TRANSPARENT),
     }) {
         Ok(frame) => frame,
-        Err(_) => return ERROR_UI4,
+        Err(error) => {
+            crate::log_error!(
+                target: "ui4/blueprint-frame";
+                "frame resize allocation failed owner={:?} window={} logical_extent={}x{} backing_extent={}x{} buffering={:?} error={:?}\n",
+                owner,
+                window_id,
+                width,
+                height,
+                backing_width,
+                backing_height,
+                cadence,
+                error,
+            );
+            return ERROR_UI4;
+        }
     };
 
     let live_placement = match window_placement(owner, window) {
         Ok(placement) => placement,
-        Err(_) => {
+        Err(error) => {
             let _ = destroy_frame(replacement);
+            crate::log_error!(
+                target: "ui4/blueprint-frame";
+                "frame resize placement lookup failed owner={:?} window={} error={:?}\n",
+                owner,
+                window_id,
+                error,
+            );
             return ERROR_UI4;
         }
     };
@@ -1246,8 +1272,16 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
             return ERROR_STATE;
         }
         let previous = surface.frame;
-        if replace_window_frame(owner, surface.window, replacement).is_err() {
+        if let Err(error) = replace_window_frame(owner, surface.window, replacement) {
             let _ = destroy_frame(replacement);
+            crate::log_error!(
+                target: "ui4/blueprint-frame";
+                "frame resize broker swap failed owner={:?} window={} replacement_frame={} error={:?}\n",
+                owner,
+                window_id,
+                replacement.raw(),
+                error,
+            );
             return ERROR_UI4;
         }
         let placement = WindowPlacement {
@@ -1255,14 +1289,23 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
             height,
             ..live_placement
         };
-        if set_window_placement(owner, surface.window, placement).is_err() {
+        if let Err(error) = set_window_placement(owner, surface.window, placement) {
             let _ = replace_window_frame(owner, surface.window, previous);
             let _ = destroy_frame(replacement);
+            crate::log_error!(
+                target: "ui4/blueprint-frame";
+                "frame resize placement commit failed owner={:?} window={} logical_extent={}x{} error={:?}\n",
+                owner,
+                window_id,
+                width,
+                height,
+                error,
+            );
             return ERROR_UI4;
         }
         surface.frame = replacement;
-        surface.width = width;
-        surface.height = height;
+        surface.width = backing_width;
+        surface.height = backing_height;
         surface.placement = placement;
         surface.retained_text_layers.clear();
         surface.retained_text_cursor = 0;
@@ -1275,7 +1318,22 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
             RETIRED_FRAMES.lock().push(previous);
         }
     }
-    crate::log_info!(target: "ui4/blueprint-frame"; "frame resize owner={:?} window={} extent={}x{} frame={}\n", owner, window_id, width, height, replacement.raw());
+    crate::log_info!(
+        target: "ui4/blueprint-frame";
+        "frame resize owner={:?} window={} logical_extent={}x{} backing_extent={}x{} presentation={} frame={}\n",
+        owner,
+        window_id,
+        width,
+        height,
+        backing_width,
+        backing_height,
+        if (backing_width, backing_height) == (width, height) {
+            "1:1"
+        } else {
+            "direct-plane-2x"
+        },
+        replacement.raw(),
+    );
     0
 }
 

@@ -27,7 +27,12 @@
 # The capability-backed mouse-motion, keyboard-control, and gamepad-control
 # calls are strictly additive. They expose mediated high-level programs without
 # changing the existing raw HID or selected-frame input contracts.
+# VLayer InputCombo is the canonical high-level collection contract. The old
+# narrowly named HUT combo snapshot is intentionally aligned to the complete
+# TrueosInputCombo record so mouse, keyboard, tablet, and gamepad endpoints
+# share identity/color metadata without a parallel versioned record or duplicate
+# public hid_hut_*combo facade.
 # The GridPaper sized-snapshot calls are strictly additive. They carry a
 # bounded logical extent beside the unchanged fixed-capacity page image;
 # existing full-size snapshot symbols and packaged Blueprints are unchanged.
-ff56f979660d1df1becdf50f4c5b67e00f4e40586b00525711bfbcf99f42eff0
+0150a5c9169acdc31c34e6e64297cad4dc955ea608e53789bbdf2efc2736c348

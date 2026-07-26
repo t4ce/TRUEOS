@@ -249,21 +249,23 @@ fn particle_candidate_tests(sample_width: u32, sample_height: u32) -> u64 {
 fn particle_work_detail(destination_width: u32, destination_height: u32) -> String {
     let (sample_width, sample_height) =
         crate::intel::gpgpu::particle_craft_sample_extent(destination_width, destination_height);
+    let render_divisor =
+        crate::intel::gpgpu::particle_craft_render_divisor(destination_width, destination_height);
     alloc::format!(
-        " preset=arc-forge particles={} state=8KiB params=v1/64B passes=step+pixel-gather destination={}x{} samples={}x{} render_divisor={} sample_policy=half-destination candidate_tests={}",
+        " preset=arc-forge particles={} state=8KiB params=v1/64B passes=step+pixel-gather backing={}x{} samples={}x{} render_divisor={} presentation=dynamic-1:1-or-direct-plane-2x candidate_tests={}",
         crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES,
         destination_width,
         destination_height,
         sample_width,
         sample_height,
-        crate::intel::gpgpu::PARTICLE_CRAFT_RENDER_DIVISOR,
+        render_divisor,
         particle_candidate_tests(sample_width, sample_height),
     )
 }
 
 fn particle_list_detail() -> String {
     alloc::format!(
-        "cpp demo: mode=particle preset=arc-forge explores=persistent-state/two-pass-dependency/soft-cores+velocity-tails+pointer-attraction particles={} native_extent={}x{} native_samples={}x{} render_divisor={} sample_policy=half-live-destination native_candidate_tests={} resizable=1",
+        "cpp demo: mode=particle preset=arc-forge explores=persistent-state/two-pass-dependency/soft-cores+velocity-tails+pointer-attraction particles={} native_extent={}x{} native_samples={}x{} render_divisor={} maximize=half-scanout-backing/direct-plane-2x native_candidate_tests={} resizable=1",
         crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES,
         crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_WIDTH,
         crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_HEIGHT,
@@ -755,6 +757,6 @@ mod tests {
 
     #[test]
     fn particle_default_reports_the_reduced_candidate_work() {
-        assert_eq!(particle_candidate_tests(), 8_192_000);
+        assert_eq!(particle_candidate_tests(320, 200), 8_192_000);
     }
 }

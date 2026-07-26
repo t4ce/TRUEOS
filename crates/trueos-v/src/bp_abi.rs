@@ -727,7 +727,7 @@ unsafe extern "C" {
         requested_color: i32,
         label_ptr: *const u8,
         label_len: usize,
-        out_combo: *mut TrueosInputComboInfoV1,
+        out_combo: *mut TrueosInputCombo,
     ) -> i32;
     pub fn trueos_cabi_input_combo_set_color(combo_id: u32, color_id: u8) -> i32;
     pub fn trueos_cabi_input_combo_bind_mouse(
@@ -755,10 +755,7 @@ unsafe extern "C" {
         ep_target: u32,
     ) -> i32;
     pub fn trueos_cabi_input_combo_remove(combo_id: u32) -> i32;
-    pub fn trueos_cabi_input_combo_read(
-        out: *mut TrueosInputComboInfoV1,
-        out_cap: u32,
-    ) -> u32;
+    pub fn trueos_cabi_input_combo_read(out: *mut TrueosInputCombo, out_cap: u32) -> u32;
     pub fn trueos_cabi_hid_keyboard_read(
         controller_id: u32,
         slot_id: u32,
@@ -783,36 +780,6 @@ unsafe extern "C" {
         out_cap: u32,
         out_dropped: *mut u32,
     ) -> u32;
-    pub fn trueos_cabi_hid_hut_upsert_combo(
-        combo_id: u32,
-        source_kind: u8,
-        source_tag_ptr: *const u8,
-        source_tag_len: usize,
-    ) -> i32;
-    pub fn trueos_cabi_hid_hut_bind_combo_mouse(
-        combo_id: u32,
-        controller_id: u32,
-        slot_id: u32,
-        ep_target: u32,
-    ) -> i32;
-    pub fn trueos_cabi_hid_hut_bind_combo_keyboard(
-        combo_id: u32,
-        controller_id: u32,
-        slot_id: u32,
-        ep_target: u32,
-    ) -> i32;
-    pub fn trueos_cabi_hid_hut_bind_combo_tablet(
-        combo_id: u32,
-        controller_id: u32,
-        slot_id: u32,
-        ep_target: u32,
-    ) -> i32;
-    pub fn trueos_cabi_hid_hut_bind_combo_gamepad(
-        combo_id: u32,
-        controller_id: u32,
-        slot_id: u32,
-        ep_target: u32,
-    ) -> i32;
     pub fn trueos_cabi_hid_hut_read_mice(out: *mut TrueosHidHutMouseState, out_cap: u32) -> u32;
     pub fn trueos_cabi_hid_hut_read_tablets(out: *mut TrueosHidHutTabletState, out_cap: u32)
     -> u32;
@@ -820,7 +787,6 @@ unsafe extern "C" {
         out: *mut TrueosHidHutKeyboardState,
         out_cap: u32,
     ) -> u32;
-    pub fn trueos_cabi_hid_hut_read_combos(out: *mut TrueosHidHutCombo, out_cap: u32) -> u32;
     pub fn trueos_cabi_input_write_keyboard_text(
         slot_id: u32,
         text_ptr: *const u8,
@@ -1146,26 +1112,7 @@ pub struct TrueosHidHutKeyboardState {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
-pub struct TrueosHidHutCombo {
-    pub combo_id: u32,
-    pub source_kind: u8,
-    pub source_tag_len: u8,
-    pub reserved0: u16,
-    pub source_tag: [u8; 32],
-    pub mouse_controller_id: u32,
-    pub mouse_slot_id: u32,
-    pub mouse_ep_target: u32,
-    pub keyboard_controller_id: u32,
-    pub keyboard_slot_id: u32,
-    pub keyboard_ep_target: u32,
-    pub tablet_controller_id: u32,
-    pub tablet_slot_id: u32,
-    pub tablet_ep_target: u32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
-pub struct TrueosInputComboInfoV1 {
+pub struct TrueosInputCombo {
     pub combo_id: u32,
     pub source_kind: u8,
     pub source_tag_len: u8,
@@ -1185,3 +1132,5 @@ pub struct TrueosInputComboInfoV1 {
     pub gamepad_slot_id: u32,
     pub gamepad_ep_target: u32,
 }
+
+const _: () = assert!(core::mem::size_of::<TrueosInputCombo>() == 88);

@@ -15,18 +15,11 @@ use crate::r::mouse_motion_service::{
 };
 
 fn input_combo_source_kind(value: u8) -> crate::usb2::hid::hut::HidSourceKind {
-    match value {
-        1 => crate::usb2::hid::hut::HidSourceKind::Human,
-        2 => crate::usb2::hid::hut::HidSourceKind::Ai,
-        3 => crate::usb2::hid::hut::HidSourceKind::Remote,
-        _ => crate::usb2::hid::hut::HidSourceKind::Unknown,
-    }
+    crate::usb2::hid::hut::HidSourceKind::from_code(value)
 }
 
-fn input_combo_info(
-    combo: &crate::usb2::hid::hut::HidCombo,
-) -> v::vinput::TrueosInputComboInfoV1 {
-    let mut out = v::vinput::TrueosInputComboInfoV1 {
+fn input_combo_info(combo: &crate::usb2::hid::hut::InputCombo) -> v::vinput::TrueosInputCombo {
+    let mut out = v::vinput::TrueosInputCombo {
         combo_id: combo.combo_id,
         source_kind: combo.source_kind as u8,
         color_id: combo.color_id,
@@ -43,7 +36,7 @@ fn input_combo_info(
         gamepad_controller_id: combo.gamepad_controller_id,
         gamepad_slot_id: combo.gamepad_slot_id,
         gamepad_ep_target: combo.gamepad_ep_target,
-        ..v::vinput::TrueosInputComboInfoV1::default()
+        ..v::vinput::TrueosInputCombo::default()
     };
     let source_tag = combo.source_tag.as_bytes();
     let source_tag_len = core::cmp::min(source_tag.len(), out.source_tag.len());
@@ -840,7 +833,7 @@ pub unsafe extern "C" fn trueos_cabi_input_combo_request(
     requested_color: i32,
     label_ptr: *const u8,
     label_len: usize,
-    out_combo: *mut v::vinput::TrueosInputComboInfoV1,
+    out_combo: *mut v::vinput::TrueosInputCombo,
 ) -> i32 {
     if out_combo.is_null() {
         return -1;
@@ -856,11 +849,9 @@ pub unsafe extern "C" fn trueos_cabi_input_combo_request(
     } else {
         return -1;
     };
-    let Some(combo) = crate::usb2::hid::hut::request_combo(
-        input_combo_source_kind(source_kind),
-        label,
-        color,
-    ) else {
+    let Some(combo) =
+        crate::usb2::hid::hut::request_combo(input_combo_source_kind(source_kind), label, color)
+    else {
         return -4;
     };
     unsafe {
@@ -885,12 +876,7 @@ pub extern "C" fn trueos_cabi_input_combo_bind_mouse(
     slot_id: u32,
     ep_target: u32,
 ) -> i32 {
-    if crate::usb2::hid::hut::bind_combo_mouse(
-        combo_id,
-        controller_id,
-        slot_id,
-        ep_target,
-    ) {
+    if crate::usb2::hid::hut::bind_combo_mouse(combo_id, controller_id, slot_id, ep_target) {
         0
     } else {
         -1
@@ -904,12 +890,7 @@ pub extern "C" fn trueos_cabi_input_combo_bind_keyboard(
     slot_id: u32,
     ep_target: u32,
 ) -> i32 {
-    if crate::usb2::hid::hut::bind_combo_keyboard(
-        combo_id,
-        controller_id,
-        slot_id,
-        ep_target,
-    ) {
+    if crate::usb2::hid::hut::bind_combo_keyboard(combo_id, controller_id, slot_id, ep_target) {
         0
     } else {
         -1
@@ -923,12 +904,7 @@ pub extern "C" fn trueos_cabi_input_combo_bind_tablet(
     slot_id: u32,
     ep_target: u32,
 ) -> i32 {
-    if crate::usb2::hid::hut::bind_combo_tablet(
-        combo_id,
-        controller_id,
-        slot_id,
-        ep_target,
-    ) {
+    if crate::usb2::hid::hut::bind_combo_tablet(combo_id, controller_id, slot_id, ep_target) {
         0
     } else {
         -1
@@ -942,12 +918,7 @@ pub extern "C" fn trueos_cabi_input_combo_bind_gamepad(
     slot_id: u32,
     ep_target: u32,
 ) -> i32 {
-    if crate::usb2::hid::hut::bind_combo_gamepad(
-        combo_id,
-        controller_id,
-        slot_id,
-        ep_target,
-    ) {
+    if crate::usb2::hid::hut::bind_combo_gamepad(combo_id, controller_id, slot_id, ep_target) {
         0
     } else {
         -1
@@ -961,4 +932,24 @@ pub extern "C" fn trueos_cabi_input_combo_remove(combo_id: u32) -> i32 {
     } else {
         -3
     }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_input_combo_read(
+    out: *mut v::vinput::TrueosInputCombo,
+    out_cap: u32,
+) -> u32 {
+    let snapshot = crate::usb2::hid::hut::combos_snapshot();
+    if out_cap == 0 {
+        return snapshot.len() as u32;
+    }
+    if out.is_null() {
+        return 0;
+    }
+    let wrote = core::cmp::min(snapshot.len(), out_cap as usize);
+    let out = unsafe { core::slice::from_raw_parts_mut(out, wrote) };
+    for (target, combo) in out.iter_mut().zip(snapshot.iter()) {
+        *target = input_combo_info(combo);
+    }
+    wrote as u32
 }

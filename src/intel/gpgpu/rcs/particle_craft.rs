@@ -299,6 +299,7 @@ fn submit_particle_craft_rgba8(
     }
     if observed != PARTICLE_CRAFT_POST_MARKER {
         let (sample_width, sample_height) = particle_craft_sample_extent(dst.width, dst.height);
+        let render_divisor = particle_craft_render_divisor(dst.width, dst.height);
         crate::log_error!(
             target: "gpgpu";
             "intel/gpgpu: ParticleCraft failed forcewake={} mapped={} ppgtt={} kernel={} craft={} dst={} batch={} submitted={} observed=0x{:08X} want=0x{:08X} particles={} samples={}x{} render_divisor={} artifact={} state_gpu=0x{:X} dst_gpu=0x{:X}\n",
@@ -315,7 +316,7 @@ fn submit_particle_craft_rgba8(
             active_count,
             sample_width,
             sample_height,
-            PARTICLE_CRAFT_RENDER_DIVISOR,
+            render_divisor,
             PARTICLE_CRAFT_ADLS_ARTIFACT.name,
             craft.state_gpu(),
             dst.gpu,

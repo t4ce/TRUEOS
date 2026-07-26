@@ -536,9 +536,7 @@ pub(crate) fn cursor_color(source: Ui4CursorSource) -> crate::graphics::primitiv
         ^ source.slot_id.rotate_left(11)
         ^ source.ep_target.rotate_left(19)
         ^ u32::from(source.hid_kind);
-    input_combo_color_rgba(
-        (hash % u32::from(v::vinput::InputComboColor::COUNT)) as u8,
-    )
+    input_combo_color_rgba((hash % u32::from(v::vinput::InputComboColor::COUNT)) as u8)
 }
 
 fn input_combo_color_rgba(color_id: u8) -> crate::graphics::primitives::Rgba8 {
