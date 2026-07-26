@@ -1597,7 +1597,7 @@ fn drain_preview_input(active: &mut [ActivePreview], retired_frames: &mut Vec<Fr
 /// Resize notifications are intentionally only a wakeup hint. The broker's
 /// geometry is authoritative, so a dropped event or a transient allocation
 /// failure cannot leave a maximized C++ preview permanently backed by its
-/// original 640x400 frame.
+/// original 640x400 frame or repeatedly request an already-live scaled backing.
 fn reconcile_preview_extents(active: &mut [ActivePreview], retired_frames: &mut Vec<FrameHandle>) {
     for preview in active {
         if !preview.config.preset.is_cpp() {
@@ -1657,7 +1657,7 @@ fn try_resize_preview(
             set_active_error(preview.request_serial, reason);
             crate::log_warn!(
                 target: "ui4";
-                "ui4 gpgpu-preview resize rejected request={} window={} extent={}x{} source={} retry_ms={} reason={}\n",
+                "ui4 gpgpu-preview resize rejected request={} window={} logical_extent={}x{} source={} retry_ms={} reason={}\n",
                 preview.request_serial,
                 preview.window.raw(),
                 width,

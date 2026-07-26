@@ -13,8 +13,8 @@ sampling lattice and expands each sample across a 2x2 destination region
 (8,192,000 candidate tests). A 2560x1440 maximized window allocates a true
 1280x720 half-scanout backing, shades all 1280x720 backing pixels
 (117,964,800 candidate tests), and uses the Intel direct-plane scaler for the
-final exact 2x presentation. This keeps the double-buffer C++ ring near 7.4 MiB
-and the triple-buffer Blueprint ring near 11.1 MiB instead of allocating full
+final exact 2x presentation. This keeps the double-buffer C++ ring near 7.0 MiB
+and the triple-buffer Blueprint ring near 10.5 MiB instead of allocating full
 scanout-sized rings.
 Particles have soft cores, velocity-aligned tails, bloom, and bounded
 attractor/swirl physics over a procedural dark field. The Blueprint particle
