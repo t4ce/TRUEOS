@@ -72,6 +72,11 @@ pub struct XhciRootHub {
 unsafe impl Send for XhciRootHub {}
 
 impl XhciRootHub {
+    const PORT_PED: u32 = 1 << 1;
+    const PORT_PR: u32 = 1 << 4;
+    const PORT_PP: u32 = 1 << 9;
+    const PORT_CHANGE_MASK: u32 = 0x7f << 17;
+
     fn ports(&self) -> &[Port] {
         unsafe { &*self.ports.get() }
     }
@@ -167,9 +172,7 @@ impl XhciRootHub {
 
         let before = self.reg.port_register_set.read_volatile_at(idx).portsc;
         if !before.port_power() {
-            self.reg.port_register_set.update_volatile_at(idx, |reg| {
-                reg.portsc.set_port_power();
-            });
+            self.write_portsc_action(idx, port_id, "power-on", Self::PORT_PP, 0)?;
             self.log_port_status("root-hub-port-reset-request-after-power", port_id);
             self.log_portsc("root-hub-port-reset-request-after-power", port_id);
             self.fail_if_halted("root-hub-port-reset-request-after-power")?;
@@ -179,9 +182,7 @@ impl XhciRootHub {
 
         let before_ped = self.reg.port_register_set.read_volatile_at(idx).portsc;
         if before_ped.port_enabled_disabled() {
-            self.reg.port_register_set.update_volatile_at(idx, |reg| {
-                reg.portsc.set_0_port_enabled_disabled();
-            });
+            self.write_portsc_action(idx, port_id, "disable", Self::PORT_PED, 0)?;
             self.log_port_status("root-hub-port-reset-request-after-clear-ped", port_id);
             self.log_portsc("root-hub-port-reset-request-after-clear-ped", port_id);
             self.fail_if_halted("root-hub-port-reset-request-after-clear-ped")?;
@@ -189,9 +190,8 @@ impl XhciRootHub {
             info!("xhci: root port {} PED already clear; skipping PED write", port_id);
         }
 
-        self.reg.port_register_set.update_volatile_at(idx, |reg| {
-            reg.portsc.set_port_reset();
-        });
+        self.write_portsc_action(idx, port_id, "ack-before-reset", 0, Self::PORT_CHANGE_MASK)?;
+        self.write_portsc_action(idx, port_id, "reset", Self::PORT_PR, 0)?;
         self.ports_mut()[idx].state = PortState::Uninit;
         self.log_port_status("root-hub-port-reset-request-after-set-reset", port_id);
         self.log_portsc("root-hub-port-reset-request-after-set-reset", port_id);
@@ -244,6 +244,7 @@ impl XhciRootHub {
     async fn _changed_ports(&mut self) -> Result<Vec<PortChangeInfo>, USBError> {
         self.log_status("root-hub-changed-ports-begin");
         self.fail_if_halted("root-hub-changed-ports-begin")?;
+        self.consume_port_change_edges();
         self.handle_uninit().await?;
         self.log_status("root-hub-after-uninit");
         self.fail_if_halted("root-hub-after-uninit")?;
@@ -273,6 +274,16 @@ impl XhciRootHub {
                 continue;
             }
 
+            if port.current_connect_status() && !port.port_enabled_disabled() {
+                info!(
+                    "xhci: root port {} transition connected-disabled -> reset-request speed={:?}",
+                    id,
+                    Speed::from_xhci_portsc(port.port_speed())
+                );
+                self.request_root_port_reset(id)?;
+                continue;
+            }
+
             debug!(
                 "Port {} reset complete, enable={}, connect={}",
                 id,
@@ -285,6 +296,49 @@ impl XhciRootHub {
             self.ports_mut()[i].state = PortState::Reseted;
         }
 
+        Ok(())
+    }
+
+    fn consume_port_change_edges(&mut self) {
+        let changed = self
+            .ports()
+            .iter()
+            .filter(|port| port.changed.swap(false, Ordering::AcqRel))
+            .map(|port| port.port_id)
+            .collect::<Vec<_>>();
+        for port_id in changed {
+            if self.root_port_ignored_by_physics(port_id) {
+                info!("xhci: root port {} change observed but quarantined by physics", port_id);
+                continue;
+            }
+            let idx = usize::from(port_id - 1);
+            self.ports_mut()[idx].state = PortState::Uninit;
+            info!("xhci: root port {} edge consumed state=uninit", port_id);
+        }
+    }
+
+    fn write_portsc_action(
+        &mut self,
+        idx: usize,
+        port_id: u8,
+        action: &'static str,
+        set_bits: u32,
+        acknowledge_changes: u32,
+    ) -> Result<(), USBError> {
+        let (before, requested, after) = self
+            .reg
+            .write_portsc_neutral(idx, set_bits, acknowledge_changes)
+            .ok_or_else(|| {
+                USBError::Other(anyhow::anyhow!(
+                    "root port write out of range port={} ports={}",
+                    port_id,
+                    self.reg.port_register_set.len()
+                ))
+            })?;
+        info!(
+            "xhci: root port {} action={} before=0x{:08X} requested=0x{:08X} after=0x{:08X}",
+            port_id, action, before, requested, after
+        );
         Ok(())
     }
 

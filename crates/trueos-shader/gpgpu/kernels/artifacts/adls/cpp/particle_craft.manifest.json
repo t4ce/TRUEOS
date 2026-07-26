@@ -5,10 +5,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "5eb94c55868d5dc611eac23930b9e568d8ab3e9dac00b1659688616367600f21",
-      "size_bytes": 97824,
+      "sha256": "7c82478fa58aea2a74fa3f1f259276bc9caae1ce271aa60ed9a4ac3b24c32778",
+      "size_bytes": 100152,
       "type": "relocatable",
-      "ze_info_section_offset": 91936,
+      "ze_info_section_offset": 94264,
       "ze_info_section_size": 4938
     },
     "kernels": [
@@ -131,7 +131,7 @@
           "section_name": ".text.particle_craft_step",
           "section_offset": 64,
           "section_size": 10688,
-          "sha256": "0683d54a43a587240d9815883b4c9fe0b57ca67f310156d5d74887c9c833dc9f",
+          "sha256": "848015db0d21a29e9c73ac80131751e4c94cb8c48b6f1837ea760e187a8bdbfc",
           "symbol_size": 10504,
           "symbol_value": 0
         },
@@ -290,13 +290,13 @@
         ],
         "text": {
           "entry_offset": 10752,
-          "entry_size": 9880,
+          "entry_size": 10816,
           "section_alignment": 0,
           "section_name": ".text.particle_craft_render_rgba8",
           "section_offset": 10752,
-          "section_size": 10048,
-          "sha256": "8cbc39cd8f0769d10281e87afefea3717ed11111b7181a7b2da0dc97a747ec54",
-          "symbol_size": 9880,
+          "section_size": 10944,
+          "sha256": "adf89977e366ce067fe105b2860ba271c9afb34d007e5888b6c2f8e15e2b6270",
+          "symbol_size": 10816,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -312,10 +312,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 20920,
-      "embedded_section_size": 70940,
-      "sha256": "069fc35f6a60ff9664a71ddd8d34ccf3695d1d26936261b63c7e03db8156d032",
-      "size_bytes": 70940
+      "embedded_section_offset": 21816,
+      "embedded_section_size": 72372,
+      "sha256": "5cd9493ea59e7c3361a3d0cdcd2473a9f91f286ac1957d1ecd25648bafe6474e",
+      "size_bytes": 72372
     }
   },
   "provenance": {
@@ -521,8 +521,8 @@
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/particle_craft.clcpp",
-        "sha256": "b1bc39bd36767a3be7e8ae8b36199fdbb80ccd02d65eef412edf861bf66addfe",
-        "size_bytes": 14151
+        "sha256": "65dd3fb52944b470d6bc2e8f3e0ca26e3cd9107b907b8f6986c4ee702c2d7fcd",
+        "size_bytes": 14898
       }
     ],
     "language": "C++ for OpenCL",

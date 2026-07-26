@@ -1,5 +1,12 @@
 pub(crate) const PARTICLE_CRAFT_FRAME_WIDTH: u32 = 640;
 pub(crate) const PARTICLE_CRAFT_FRAME_HEIGHT: u32 = 400;
+/// Private render-quality lever. The artifact accepts 1, 2, or 4 without
+/// changing the public Blueprint ABI or the 640x400 destination surface.
+pub(crate) const PARTICLE_CRAFT_RENDER_DIVISOR: u32 = 2;
+pub(crate) const PARTICLE_CRAFT_SAMPLE_WIDTH: u32 =
+    PARTICLE_CRAFT_FRAME_WIDTH / PARTICLE_CRAFT_RENDER_DIVISOR;
+pub(crate) const PARTICLE_CRAFT_SAMPLE_HEIGHT: u32 =
+    PARTICLE_CRAFT_FRAME_HEIGHT / PARTICLE_CRAFT_RENDER_DIVISOR;
 pub(crate) const PARTICLE_CRAFT_DEFAULT_PARTICLES: u32 = 128;
 pub(crate) const PARTICLE_CRAFT_MAX_PARTICLES: u32 = 256;
 pub(crate) const PARTICLE_CRAFT_PARAMS_VERSION: u32 = 1;
@@ -12,7 +19,12 @@ const PARTICLE_CRAFT_STATE_BYTES: usize = PARTICLE_CRAFT_MAX_PARTICLES as usize 
 const PARTICLE_CRAFT_PARAMS_BYTES: usize = 4096;
 const PARTICLE_CRAFT_ALLOCATION_BYTES: usize =
     PARTICLE_CRAFT_STATE_BYTES + PARTICLE_CRAFT_PARAMS_BYTES;
-const PARTICLE_CRAFT_RENDER_CONTROL_WORDS: usize = 3;
+const PARTICLE_CRAFT_RENDER_CONTROL_WORDS: usize = 4;
+const _: () = assert!(
+    matches!(PARTICLE_CRAFT_RENDER_DIVISOR, 1 | 2 | 4)
+        && PARTICLE_CRAFT_FRAME_WIDTH.is_multiple_of(PARTICLE_CRAFT_RENDER_DIVISOR)
+        && PARTICLE_CRAFT_FRAME_HEIGHT.is_multiple_of(PARTICLE_CRAFT_RENDER_DIVISOR)
+);
 const _: () = assert!(
     core::mem::size_of::<ParticleCraftParamsV1>()
         + PARTICLE_CRAFT_RENDER_CONTROL_WORDS * core::mem::size_of::<u32>()
@@ -227,6 +239,7 @@ impl GpgpuOwnedParticleCraftState {
                 dst.width,
                 dst.height,
                 dst.pitch_bytes / core::mem::size_of::<u32>() as u32,
+                PARTICLE_CRAFT_RENDER_DIVISOR,
             ];
             core::ptr::copy_nonoverlapping(
                 render_controls.as_ptr().cast::<u8>(),

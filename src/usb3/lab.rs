@@ -203,16 +203,16 @@ pub(crate) async fn begin_uas_io_when_available() -> UasIoGuard {
     }
 }
 
-struct QuarantineGuard;
+pub(crate) struct ControllerQuarantineGuard;
 
-impl Drop for QuarantineGuard {
+impl Drop for ControllerQuarantineGuard {
     fn drop(&mut self) {
         QUARANTINE_ACTIVE.store(false, Ordering::Release);
         QUARANTINE_REQUESTED.store(false, Ordering::Release);
     }
 }
 
-async fn enter_quarantine() -> Result<QuarantineGuard, String> {
+pub(crate) async fn enter_controller_quarantine() -> Result<ControllerQuarantineGuard, String> {
     if QUARANTINE_REQUESTED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -224,7 +224,7 @@ async fn enter_quarantine() -> Result<QuarantineGuard, String> {
         let inflight = UAS_IO_INFLIGHT.load(Ordering::Acquire);
         if inflight == 0 {
             QUARANTINE_ACTIVE.store(true, Ordering::Release);
-            return Ok(QuarantineGuard);
+            return Ok(ControllerQuarantineGuard);
         }
         if Instant::now() >= deadline {
             QUARANTINE_REQUESTED.store(false, Ordering::Release);
@@ -277,7 +277,7 @@ async fn execute(host: &mut crabusb::USBHost, run_id: u64, command: LabCommand) 
                 allow_live_device,
             } => {
                 require_armed(armed)?;
-                let _quarantine = enter_quarantine().await?;
+                let _quarantine = enter_controller_quarantine().await?;
                 reject_fused_raw_offset(host, offset, include_fused).await?;
                 reject_live_raw_offset(host, offset, allow_live_device).await?;
                 write32(host, &mut report, offset, value, "raw-write").await
@@ -290,7 +290,7 @@ async fn execute(host: &mut crabusb::USBHost, run_id: u64, command: LabCommand) 
                 allow_live_device,
             } => {
                 require_armed(armed)?;
-                let _quarantine = enter_quarantine().await?;
+                let _quarantine = enter_controller_quarantine().await?;
                 reject_fused_raw_offset(host, offset, include_fused).await?;
                 reject_live_raw_offset(host, offset, allow_live_device).await?;
                 write64(host, &mut report, offset, value, "raw-write64").await
@@ -304,7 +304,7 @@ async fn execute(host: &mut crabusb::USBHost, run_id: u64, command: LabCommand) 
                 allow_live_device,
             } => {
                 require_armed(armed)?;
-                let _quarantine = enter_quarantine().await?;
+                let _quarantine = enter_controller_quarantine().await?;
                 reject_fused_raw_offset(host, offset, include_fused).await?;
                 reject_live_raw_offset(host, offset, allow_live_device).await?;
                 rmw32(host, &mut report, offset, clear_mask, set_mask, "raw-rmw").await
@@ -376,14 +376,14 @@ async fn run_stage(
     match stage {
         1 => stage_census(host, report).await,
         2 => {
-            let _quarantine = enter_quarantine().await?;
+            let _quarantine = enter_controller_quarantine().await?;
             stage_stability(host, report).await
         }
         3..=5 => {
             require_armed(armed)?;
             let port = port.ok_or_else(|| format!("stage {stage} requires a target port"))?;
             reject_fused_port(port, include_fused)?;
-            let _quarantine = enter_quarantine().await?;
+            let _quarantine = enter_controller_quarantine().await?;
             if stage >= 4 {
                 reject_live_port(host, port, allow_live_device).await?;
             }

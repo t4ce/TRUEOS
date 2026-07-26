@@ -4,6 +4,7 @@ use core::{
     ptr::NonNull,
 };
 
+use mbarrier::mb;
 use xhci::accessor::Mapper;
 
 use super::SlotId;
@@ -37,6 +38,10 @@ impl Clone for XhciRegisters {
 }
 
 impl XhciRegisters {
+    const PORTSC_RO_MASK: u32 = (1 << 0) | (1 << 3) | (0x0f << 10) | (1 << 30);
+    const PORTSC_RWS_MASK: u32 = (0x0f << 5) | (1 << 9) | (0x03 << 14) | (0x07 << 25);
+    const PORTSC_CHANGE_MASK: u32 = 0x7f << 17;
+
     pub fn new(mmio_base: NonNull<u8>) -> Self {
         let mmio_base = mmio_base.as_ptr() as usize;
         let mapper = MemMapper {};
@@ -47,6 +52,35 @@ impl XhciRegisters {
     fn new_reg(&self) -> Registers {
         let mapper = MemMapper {};
         unsafe { Registers::new(self.mmio_base, mapper) }
+    }
+
+    /// Write PORTSC without replaying read-one-to-clear or read-one-to-set
+    /// fields from the value sampled before the write.
+    ///
+    /// `set_bits` is reserved for deliberate actions such as PP/PR/WPR.
+    /// `acknowledge_changes` selects only currently asserted RW1C bits.
+    pub fn write_portsc_neutral(
+        &mut self,
+        index: usize,
+        set_bits: u32,
+        acknowledge_changes: u32,
+    ) -> Option<(u32, u32, u32)> {
+        if index >= self.port_register_set.len() {
+            return None;
+        }
+        let caplength = usize::from(self.capability.caplength.read_volatile().get());
+        let address = self.mmio_base + caplength + 0x400 + index * 0x10;
+        let before = unsafe { core::ptr::read_volatile(address as *const u32) };
+        let neutral = (before & Self::PORTSC_RO_MASK) | (before & Self::PORTSC_RWS_MASK);
+        let requested = neutral
+            | set_bits
+            | (before & acknowledge_changes & Self::PORTSC_CHANGE_MASK);
+        unsafe {
+            core::ptr::write_volatile(address as *mut u32, requested);
+        }
+        mb();
+        let after = unsafe { core::ptr::read_volatile(address as *const u32) };
+        Some((before, requested, after))
     }
 
     pub fn disable_irq_guard(&mut self) -> DisableIrqGuard {

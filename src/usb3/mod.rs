@@ -18,6 +18,8 @@ pub use self::lib::*;
 pub use crab_usb as crabusb;
 
 const CRABUSB_CONTROLLER_ID: u32 = 3;
+const HOT_RESCAN_DEBOUNCE_MS: u64 = 100;
+const HOT_RESCAN_HANDOFF_SETTLE_MS: u64 = 500;
 static USB_PORT_CHANGE_SEQ: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 #[embassy_executor::task]
@@ -73,18 +75,43 @@ pub async fn usb_controller_service_task() {
             continue;
         }
         observed_port_change_seq = next_port_change_seq;
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(100)).await;
+        let quarantine = match lab::enter_controller_quarantine().await {
+            Ok(guard) => guard,
+            Err(reason) => {
+                crate::log!(
+                    "crabusb: probe_devices trigger=port-change seq={} quarantine-error={}\n",
+                    observed_port_change_seq,
+                    reason
+                );
+                continue;
+            }
+        };
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(
+            HOT_RESCAN_DEBOUNCE_MS,
+        ))
+        .await;
         crate::log!(
-            "crabusb: probe_devices trigger=port-change seq={}\n",
+            "crabusb: probe_devices trigger=port-change seq={} quarantine=active\n",
             observed_port_change_seq
         );
         let Some(news) = probe_devices_with_log(&mut host, "rescan").await else {
+            drop(quarantine);
             continue;
         };
         if news.is_empty() {
+            drop(quarantine);
             continue;
         }
         open_and_handoff_devices(&mut host, news, &spawner).await;
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(
+            HOT_RESCAN_HANDOFF_SETTLE_MS,
+        ))
+        .await;
+        drop(quarantine);
+        crate::log!(
+            "crabusb: probe_devices trigger=port-change seq={} quarantine=released\n",
+            observed_port_change_seq
+        );
     }
 }
 

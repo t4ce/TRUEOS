@@ -25,8 +25,9 @@ boundary, 50% horizontal-pair walker shape, ABI, and TestRig procedure are in
 `particle_craft.clcpp` is the stateful two-pass ParticleCraft engine behind
 `cpp particle` and the Blueprint particle app. Its step entry updates 32-byte
 particle records in place; its race-free pixel-gather entry shades the complete
-640x400 Arc Forge frame. The persistent lifetime, 64-byte Blueprint ABI,
-phase barrier, quarantine rule, and TestRig commands are in
+640x400 Arc Forge frame from an adjustable 1x/2x/4x private sampling grid. The
+persistent lifetime, 64-byte Blueprint ABI, phase barrier, quarantine rule,
+and TestRig commands are in
 [`PARTICLE_CRAFT.md`](PARTICLE_CRAFT.md).
 
 `spirit_vfx_background_rgba8.clcpp` and
@@ -116,7 +117,7 @@ single-kernel audiovisual artifact for that same exact target. Its SHA-256 is:
 artifact for that exact target. Its SHA-256 is:
 
 ```text
-5eb94c55868d5dc611eac23930b9e568d8ab3e9dac00b1659688616367600f21
+7c82478fa58aea2a74fa3f1f259276bc9caae1ce271aa60ed9a4ac3b24c32778
 ```
 
 The two unconditional Spirit C++/IGC artifacts are standalone, solely

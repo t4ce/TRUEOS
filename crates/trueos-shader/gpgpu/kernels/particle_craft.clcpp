@@ -1,9 +1,10 @@
 // TRUEOS ParticleCraft: persistent stateful particles for UI4.
 //
 // The first entry advances an array of compact 32-byte particles in place.
-// The second entry gathers that state at a fixed 640x400 logical resolution
-// and covers the complete destination extent. This keeps fullscreen cost
-// bounded while allowing UI4 maximize/restore frame replacement.
+// The second entry gathers that state over a host-selected fraction of the
+// fixed 640x400 logical resolution and covers the complete destination extent.
+// This keeps fullscreen cost bounded while allowing UI4 maximize/restore frame
+// replacement and a cheap quality/work adjustment without changing the ABI.
 // Both entries are baked into one exact-target C++ for OpenCL/IGC artifact.
 
 #include "include/trueos_clcpp.hpp"
@@ -44,6 +45,7 @@ enum ParamWord : uint {
     param_destination_width = 16u,
     param_destination_height = 17u,
     param_destination_pitch_pixels = 18u,
+    param_render_divisor = 19u,
 };
 
 TRUEOS_PARTICLE_INLINE float saturate(float value)
@@ -259,14 +261,25 @@ __kernel void particle_craft_render_rgba8(
     const uint destination_width = params[param_destination_width];
     const uint destination_height = params[param_destination_height];
     const uint destination_pitch_pixels = params[param_destination_pitch_pixels];
+    const uint render_divisor = params[param_render_divisor];
     if (destination_width == 0u || destination_height == 0u
-        || destination_pitch_pixels < destination_width) {
+        || destination_pitch_pixels < destination_width
+        || (render_divisor != 1u
+            && render_divisor != 2u
+            && render_divisor != 4u)) {
+        return;
+    }
+    const uint sample_width = frame_width / render_divisor;
+    const uint sample_height = frame_height / render_divisor;
+    if (x >= sample_width || y >= sample_height) {
         return;
     }
 
+    const uint logical_x = x * render_divisor;
+    const uint logical_y = y * render_divisor;
     const float2 point = (float2)(
-        static_cast<float>(x) + 0.5f,
-        static_cast<float>(y) + 0.5f);
+        static_cast<float>(logical_x) + static_cast<float>(render_divisor) * 0.5f,
+        static_cast<float>(logical_y) + static_cast<float>(render_divisor) * 0.5f);
     const float2 normalized = (point - (float2)(320.0f, 200.0f)) / 200.0f;
     const float radius = native_sqrt(dot(normalized, normalized));
     const float time_seconds =
@@ -348,10 +361,12 @@ __kernel void particle_craft_render_rgba8(
 
     color = color / ((float3)(1.0f) + color);
     const uint packed = pack_rgba8(color);
-    const uint destination_left = x * destination_width / frame_width;
-    const uint destination_right = (x + 1u) * destination_width / frame_width;
-    const uint destination_top = y * destination_height / frame_height;
-    const uint destination_bottom = (y + 1u) * destination_height / frame_height;
+    const uint destination_left = logical_x * destination_width / frame_width;
+    const uint destination_right =
+        (logical_x + render_divisor) * destination_width / frame_width;
+    const uint destination_top = logical_y * destination_height / frame_height;
+    const uint destination_bottom =
+        (logical_y + render_divisor) * destination_height / frame_height;
     for (uint destination_y = destination_top;
          destination_y < destination_bottom;
          ++destination_y) {

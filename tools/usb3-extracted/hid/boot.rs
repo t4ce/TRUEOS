@@ -206,11 +206,9 @@ fn classify_generic_pointer_report(report_desc: &[u8]) -> Option<GenericPointerI
 }
 
 async fn read_generic_pointer_info(
-    host: &mut USBHost,
-    dev_info: &crab_usb::DeviceInfo,
+    device: &mut crab_usb::Device,
     interface_number: u8,
 ) -> Option<GenericPointerInfo> {
-    let mut device = host.open_device(dev_info).await.ok()?;
     let mut hid_desc = [0u8; 9];
     let read_len = device
         .control_in(
@@ -701,6 +699,22 @@ pub(crate) async fn maybe_start_hid_boot_streams(
         targets.len()
     );
 
+    // CrabUSB devices have single-owner semantics. Open exactly once, use the
+    // same control endpoint for optional report-descriptor classification, and
+    // then transfer that owner to the selected interrupt-stream task.
+    let device = match host.open_device(dev_info).await {
+        Ok(device) => device,
+        Err(err) => {
+            crate::log_info!(target: "usb";
+                "crabusb: hid {:04X}:{:04X} open failed before target selection: {:?}\n",
+                vendor_id,
+                product_id,
+                err
+            );
+            return false;
+        }
+    };
+    let mut device = Some(device);
     let mut started_any = false;
     let mut descriptors_pending = log_descriptors;
 
@@ -737,7 +751,8 @@ pub(crate) async fn maybe_start_hid_boot_streams(
         }
 
         if target.generic_pointer {
-            let inferred = read_generic_pointer_info(host, dev_info, target.interface_number).await;
+            let inferred =
+                read_generic_pointer_info(device.as_mut()?, target.interface_number).await;
             match inferred.map(|info| info.kind) {
                 Some(GenericPointerKind::Mouse) => {
                     let has_report_id = inferred.map(|info| info.has_report_id).unwrap_or(false);
@@ -782,7 +797,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             // handing the interface to the stream task so button 4/5 do not
             // get shifted into the button byte.
             if let Some(info) =
-                read_generic_pointer_info(host, dev_info, target.interface_number).await
+                read_generic_pointer_info(device.as_mut()?, target.interface_number).await
             {
                 target.strip_report_id = info.has_report_id;
                 if info.has_report_id {
@@ -821,21 +836,17 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             target.in_max_packet_size,
             target.protocol
         );
-        let device = match host.open_device(dev_info).await {
-            Ok(device) => device,
-            Err(err) => {
-                let _ = unregister_active_hid_stream(active_stream);
-                crate::log_info!(target: "usb";
-                    "crabusb: hid {} {:04X}:{:04X} open failed: {:?}\n",
-                    target.kind.as_str(),
-                    vendor_id,
-                    product_id,
-                    err
-                );
-                continue;
-            }
+        let Some(mut device) = device.take() else {
+            let _ = unregister_active_hid_stream(active_stream);
+            crate::log_info!(target: "usb";
+                "crabusb: hid {:04X}:{:04X} additional target deferred reason=single-device-owner if#{} ep=0x{:02X}\n",
+                vendor_id,
+                product_id,
+                target.interface_number,
+                target.in_endpoint
+            );
+            break;
         };
-        let mut device = device;
 
         if descriptors_pending {
             if should_skip_descriptor_logging(vendor_id, product_id, target.kind) {
@@ -886,6 +897,10 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                 );
             }
         }
+        // A CrabUSB Device is intentionally a single owner. Composite HID
+        // fan-out needs one task that owns all claimed interfaces; until that
+        // exists, never attempt a second open or panic the controller service.
+        break;
     }
 
     started_any

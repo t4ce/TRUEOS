@@ -159,7 +159,7 @@ fn direct_rcs_encode_particle_craft_batch(
     } else {
         (1u32 << step_lanes) - 1
     };
-    let render_groups_x = PARTICLE_CRAFT_FRAME_WIDTH.div_ceil(16);
+    let render_groups_x = PARTICLE_CRAFT_SAMPLE_WIDTH.div_ceil(16);
 
     let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
     let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
@@ -243,7 +243,7 @@ fn direct_rcs_encode_particle_craft_batch(
         PARTICLE_CRAFT_RENDER_PAYLOAD_OFFSET_BYTES,
         PARTICLE_CRAFT_RENDER_INDIRECT_BYTES,
         render_groups_x,
-        PARTICLE_CRAFT_FRAME_HEIGHT,
+        PARTICLE_CRAFT_SAMPLE_HEIGHT,
         GPGPU_WALKER_SIMD16_MASK,
     );
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
@@ -309,7 +309,7 @@ fn submit_particle_craft_rgba8(
     if observed != PARTICLE_CRAFT_POST_MARKER {
         crate::log_error!(
             target: "gpgpu";
-            "intel/gpgpu: ParticleCraft failed forcewake={} mapped={} ppgtt={} kernel={} craft={} dst={} batch={} submitted={} observed=0x{:08X} want=0x{:08X} particles={} artifact={} state_gpu=0x{:X} dst_gpu=0x{:X}\n",
+            "intel/gpgpu: ParticleCraft failed forcewake={} mapped={} ppgtt={} kernel={} craft={} dst={} batch={} submitted={} observed=0x{:08X} want=0x{:08X} particles={} samples={}x{} render_divisor={} artifact={} state_gpu=0x{:X} dst_gpu=0x{:X}\n",
             forcewake_ok as u8,
             mapped_ok as u8,
             ppgtt_ok as u8,
@@ -321,6 +321,9 @@ fn submit_particle_craft_rgba8(
             observed,
             PARTICLE_CRAFT_POST_MARKER,
             active_count,
+            PARTICLE_CRAFT_SAMPLE_WIDTH,
+            PARTICLE_CRAFT_SAMPLE_HEIGHT,
+            PARTICLE_CRAFT_RENDER_DIVISOR,
             PARTICLE_CRAFT_ADLS_ARTIFACT.name,
             craft.state_gpu(),
             dst.gpu,

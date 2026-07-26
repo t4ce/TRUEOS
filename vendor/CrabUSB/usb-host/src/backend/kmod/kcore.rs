@@ -1,9 +1,6 @@
 use alloc::{boxed::Box, collections::btree_map::BTreeMap, vec::Vec};
 
-use futures::{
-    FutureExt,
-    future::{BoxFuture, LocalBoxFuture},
-};
+use futures::{FutureExt, future::BoxFuture};
 use id_arena::{Arena, Id};
 use usb_if::{
     descriptor::{ConfigurationDescriptor, DeviceDescriptor},
@@ -183,11 +180,14 @@ impl BackendOp for Core {
     fn open_device<'a>(
         &'a mut self,
         dev: &'a dyn crate::backend::ty::DeviceInfoOp,
-    ) -> LocalBoxFuture<'a, Result<Box<dyn DeviceOp>, USBError>> {
+    ) -> futures::future::LocalBoxFuture<'a, Result<Box<dyn DeviceOp>, USBError>> {
         async {
-            let device = self.inited_devices.remove(&dev.id()).unwrap_or_else(|| {
-                panic!("Device id {} not found in inited_devices", dev.id());
-            });
+            let device = self.inited_devices.remove(&dev.id()).ok_or_else(|| {
+                USBError::Other(anyhow::anyhow!(
+                    "device id {} is no longer available (already opened or removed)",
+                    dev.id()
+                ))
+            })?;
 
             Ok(device)
         }

@@ -624,6 +624,9 @@ fn bring_online(device: &PciDevice) -> Option<Tga> {
 }
 
 pub fn try_init() -> bool {
+    if !crate::allcaps::probes::TGA_PCI_CLAIM_ENABLED {
+        return false;
+    }
     if is_online() {
         return true;
     }

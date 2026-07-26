@@ -144,6 +144,15 @@ fn start(
         cadence_ms,
         publish_every,
     };
+    let detail = if audio {
+        String::from(
+            " pcm=post-mix/pre-hda-s16le-stereo-48k fft=2048-mid-side bands=64 walker=horizontal-pairs/50pct",
+        )
+    } else if particle {
+        particle_work_detail()
+    } else {
+        String::new()
+    };
     match crate::ui4::request_gpgpu_preview_start(config) {
         Ok(serial) => {
             let status = crate::ui4::gpgpu_preview_status();
@@ -161,13 +170,7 @@ fn start(
                     artifact_hash(preset),
                     kernel_name(preset),
                     "dynamic-frame",
-                    if audio {
-                        " pcm=post-mix/pre-hda-s16le-stereo-48k fft=2048-mid-side bands=64 walker=horizontal-pairs/50pct"
-                    } else if particle {
-                        " preset=arc-forge particles=128 state=8KiB params=v1/64B passes=step+pixel-gather"
-                    } else {
-                        ""
-                    },
+                    detail,
                 )
                 .as_str(),
             );
@@ -223,10 +226,7 @@ fn print_list(io: &'static dyn ShellBackend2) {
         io,
         "cpp demo: mode=audio explores=one-composed-instrument/waveform+phase+64-band-spectrum+bass-bloom+beat-rings+particles pcm=exact-pre-hda-tee fft=2048-mid-side walker=50pct",
     );
-    print_shell_line(
-        io,
-        "cpp demo: mode=particle preset=arc-forge explores=persistent-state/two-pass-dependency/soft-cores+velocity-tails+pointer-attraction particles=128 native_extent=640x400 resizable=1",
-    );
+    print_shell_line(io, particle_list_detail().as_str());
     print_shell_line(
         io,
         "cpp suite: sources=cpp_demo_rgba8.clcpp+cpp_audio_visualizer_rgba8.clcpp+particle_craft.clcpp frontend=cpp-for-opencl backend=intel-igc-aot build_time_only=1 exact_target=8086:4680-r0C",
@@ -235,6 +235,36 @@ fn print_list(io: &'static dyn ShellBackend2) {
         io,
         "cpp spirit: two native C++ artifacts drive the live Spirit cursor-plane path; use \"cpp spirit list\"",
     );
+}
+
+fn particle_candidate_tests() -> u64 {
+    u64::from(crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_WIDTH)
+        * u64::from(crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_HEIGHT)
+        * u64::from(crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES)
+}
+
+fn particle_work_detail() -> String {
+    alloc::format!(
+        " preset=arc-forge particles={} state=8KiB params=v1/64B passes=step+pixel-gather samples={}x{} render_divisor={} candidate_tests={}",
+        crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES,
+        crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_WIDTH,
+        crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_HEIGHT,
+        crate::intel::gpgpu::PARTICLE_CRAFT_RENDER_DIVISOR,
+        particle_candidate_tests(),
+    )
+}
+
+fn particle_list_detail() -> String {
+    alloc::format!(
+        "cpp demo: mode=particle preset=arc-forge explores=persistent-state/two-pass-dependency/soft-cores+velocity-tails+pointer-attraction particles={} native_extent={}x{} samples={}x{} render_divisor={} candidate_tests={} resizable=1",
+        crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES,
+        crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_WIDTH,
+        crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_HEIGHT,
+        crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_WIDTH,
+        crate::intel::gpgpu::PARTICLE_CRAFT_SAMPLE_HEIGHT,
+        crate::intel::gpgpu::PARTICLE_CRAFT_RENDER_DIVISOR,
+        particle_candidate_tests(),
+    )
 }
 
 fn print_status(io: &'static dyn ShellBackend2) {
@@ -250,10 +280,15 @@ fn print_status(io: &'static dyn ShellBackend2) {
         crate::intel::gpgpu::cpp_demo_rgba8_upload_status()
     };
     let audio_status = crate::aud::audio_visualizer::status();
+    let particle_detail = if particle {
+        particle_work_detail()
+    } else {
+        String::new()
+    };
     print_shell_line(
         io,
         alloc::format!(
-            "cpp status: active={} online={} phase={} request={} applied={} mode={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} marker=0x{:08X} submit_ms={} artifact={} resident={} verified={} gpu=0x{:X} zebin_sha256={} runtime_compiler=0 maximize={} pcm_tap={} pcm_sequence={} pcm_frames={} signal={} rms={:.4} peak={:.4} low={:.3} mid={:.3} high={:.3} beat={:.3} error={}",
+            "cpp status: active={} online={} phase={} request={} applied={} mode={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} marker=0x{:08X} submit_ms={} artifact={} resident={} verified={} gpu=0x{:X} zebin_sha256={} runtime_compiler=0 maximize={} pcm_tap={} pcm_sequence={} pcm_frames={} signal={} rms={:.4} peak={:.4} low={:.3} mid={:.3} high={:.3} beat={:.3} error={}{}",
             active_cpp as u8,
             status.online as u8,
             status.phase.label(),
@@ -293,6 +328,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
             audio_status.high,
             audio_status.beat,
             status.last_error,
+            particle_detail,
         )
         .as_str(),
     );
@@ -676,7 +712,7 @@ pub(crate) fn try_parse(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_mode;
+    use super::{parse_mode, particle_candidate_tests};
 
     #[test]
     fn retro_sun_aliases_select_the_standalone_preset() {
@@ -690,5 +726,10 @@ mod tests {
         for alias in ["particle", "particles", "particle-craft", "arc-forge"] {
             assert_eq!(parse_mode(alias), Some(crate::ui4::GpgpuPreviewPreset::CppParticle),);
         }
+    }
+
+    #[test]
+    fn particle_default_reports_the_reduced_candidate_work() {
+        assert_eq!(particle_candidate_tests(), 8_192_000);
     }
 }
