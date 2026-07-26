@@ -10,16 +10,17 @@ pub(crate) mod flags {
     pub(crate) use log_os_core::{LogArea, LogLevelPolicy, LogLevelSet};
     use spin::Once;
 
-    /// Focused diagnostics for the retained TGA PCI/hotplug/RPC seam.
-    pub(crate) const TGA_RPC_DIAG_PROFILE_ENABLED: bool = false;
+    /// Restored pre-USB GPGPU/TGA diagnostic profile. This is the current name
+    /// for the PCI/TGA/FPGA profile preserved in `log_os.gpgpu_diag_profile.txt`.
+    pub(crate) const TGA_RPC_DIAG_PROFILE_ENABLED: bool = true;
 
     /// Full forensic USB profile. The exact switch settings are preserved in
     /// `log_os.usb_full_diag_profile.txt` beside this source file.
     pub(crate) const USB_UAS_DIAG_PROFILE_ENABLED: bool = false;
 
-    /// Operational USB profile: retain topology/state edges, handoffs, health
-    /// checkpoints, and failures at Info without per-TRB/per-transfer Trace.
-    pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = true;
+    /// Operational USB profile retained for future controller work, but closed
+    /// now so the normal USB area returns to Warn-only logging.
+    pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = false;
 
     // Keep failures, lifecycle summaries, and lowest-level trace records while
     // deliberately leaving Debug out of the focused TGA RPC capture.
