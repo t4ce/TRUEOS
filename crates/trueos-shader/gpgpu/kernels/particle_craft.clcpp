@@ -130,6 +130,13 @@ TRUEOS_PARTICLE_INLINE float distance_to_segment_squared(
     return dot(delta, delta);
 }
 
+TRUEOS_PARTICLE_INLINE float soft_round_mask(float distance_squared, float radius)
+{
+    const float radius_squared = fmax(radius * radius, 0.0001f);
+    const float fade = saturate(1.0f - distance_squared / radius_squared);
+    return fade * fade * (3.0f - 2.0f * fade);
+}
+
 TRUEOS_PARTICLE_INLINE float3 palette(float hue)
 {
     const float violet_weight = saturate(1.0f - fabs(hue - 0.20f) * 3.6f);
@@ -334,7 +341,9 @@ __kernel void particle_craft_render_rgba8(
         const float tail_scale = clamp(0.035f + speed * 0.00055f, 0.035f, 0.16f);
         const float2 tail = head - velocity * tail_scale;
         const float size = clamp(visual.z, 0.7f, 7.0f);
-        const float reach = size * 5.4f + 2.0f;
+        const float halo_radius = size * 5.4f;
+        const float trail_halo_radius = size * 3.2f;
+        const float reach = halo_radius + 2.0f;
         const float2 lower = fmin(head, tail) - reach;
         const float2 upper = fmax(head, tail) + reach;
         if (point.x < lower.x || point.y < lower.y
@@ -345,11 +354,15 @@ __kernel void particle_craft_render_rgba8(
         const float head_distance_squared = dot(point - head, point - head);
         const float trail_distance_squared =
             distance_to_segment_squared(point, tail, head);
-        const float core = saturate(1.0f - head_distance_squared / (size * size));
-        const float trail = saturate(
-            1.0f - trail_distance_squared / (size * size * 0.66f));
-        const float glow =
-            1.0f / (1.0f + trail_distance_squared / (size * size * 4.8f));
+        const float core = soft_round_mask(head_distance_squared, size);
+        const float trail = soft_round_mask(trail_distance_squared, size * 0.82f);
+        const float head_glow =
+            soft_round_mask(head_distance_squared, halo_radius)
+            / (1.0f + head_distance_squared / (size * size * 4.8f));
+        const float trail_glow =
+            soft_round_mask(trail_distance_squared, trail_halo_radius)
+            / (1.0f + trail_distance_squared / (size * size * 3.2f));
+        const float glow = fmax(head_glow, trail_glow * 0.72f);
         const float energy =
             (core * core * 1.9f + trail * trail * 0.72f + glow * 0.17f)
             * envelope * intensity;

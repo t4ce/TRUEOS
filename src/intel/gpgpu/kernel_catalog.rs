@@ -434,8 +434,8 @@ pub(crate) const PARTICLE_CRAFT_ADLS_BIN_SHA256: [u8; 32] =
 const _: () = assert!(matches!(PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
 const _: () =
     assert!(matches!(PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
-const _: () = assert!(PARTICLE_CRAFT_ADLS_BIN.len() == 100_152);
-const _: () = assert!(PARTICLE_CRAFT_ADLS_SPV.len() == 72_372);
+const _: () = assert!(PARTICLE_CRAFT_ADLS_BIN.len() == 104_824);
+const _: () = assert!(PARTICLE_CRAFT_ADLS_SPV.len() == 74_996);
 const _: () = {
     let step = PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT;
     let render = PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT;

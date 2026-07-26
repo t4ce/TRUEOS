@@ -16,6 +16,9 @@ Particles have soft cores, velocity-aligned tails, bloom, and bounded
 attractor/swirl physics over a procedural dark field. The Blueprint particle
 app follows live UI4 pointer input for two seconds after each event, then
 returns to the scripted orbit used by `cpp particle`.
+The broad-phase particle bounds affect work rejection only. Separate smooth
+round masks drive the head sphere and tail capsule to zero before those bounds,
+preventing rectangular glow cutoffs during spawn and fade.
 
 ## Artifact and ABI
 
@@ -45,7 +48,7 @@ C++ are bake-time dependencies only.
 The checked artifact targets `8086:4680`, revision `0x0c`, and has SHA-256:
 
 ```text
-7c82478fa58aea2a74fa3f1f259276bc9caae1ce271aa60ed9a4ac3b24c32778
+522c638d80e0cad720a796c554da7ab0b46ac4a389538e927a2b48394246e65b
 ```
 
 Bake and verify:
