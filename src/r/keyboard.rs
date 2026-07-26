@@ -5,8 +5,10 @@ const MAX_KEYBOARD_SNAPSHOTS: usize = 32;
 const MAX_KEYBOARD_OUTPUT_EVENTS: usize = 256;
 const KEYBOARD_OUTPUT_FLAG_PRESS: u32 = 1 << 0;
 pub const KEYBOARD_OUTPUT_FLAG_SYNTHETIC: u32 = 1 << 1;
+pub const KEYBOARD_OUTPUT_FLAG_DEVICE_LOST: u32 = 1 << 31;
 pub const KEYBOARD_OUTPUT_KIND_TEXT: u8 = 1;
 pub const KEYBOARD_OUTPUT_KIND_KEY: u8 = 2;
+pub const KEYBOARD_OUTPUT_KIND_DEVICE_LOST: u8 = 3;
 const KEYBOARD_CTRL_MOD_MASK: u8 = (1 << 0) | (1 << 4);
 
 pub const KEYBOARD_KEY_BACKSPACE: u16 = 1;
@@ -191,6 +193,46 @@ pub fn remove_snapshots(controller_id: u32, slot_id: u32) -> bool {
         }
     }
     removed
+}
+
+pub fn signal_device_lost(controller_id: u32, slot_id: u32) -> usize {
+    let removed = {
+        let mut snapshots = KEYBOARD_SNAPSHOTS.lock();
+        let mut removed = Vec::<KeyboardSnapshot, MAX_KEYBOARD_SNAPSHOTS>::new();
+        let mut index = 0usize;
+        while index < snapshots.len() {
+            if snapshots[index].controller_id == controller_id
+                && snapshots[index].slot_id == slot_id
+            {
+                let _ = removed.push(snapshots.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        removed
+    };
+
+    let t_ms = uptime_ms_u32();
+    for snapshot in removed.iter().copied() {
+        push_output_event(TrueosKeyboardOutputEvent {
+            t_ms,
+            seq: 0,
+            device_seq: 0,
+            controller_id,
+            slot_id,
+            ep_target: snapshot.ep_target,
+            modifiers: 0,
+            kind: KEYBOARD_OUTPUT_KIND_DEVICE_LOST,
+            utf8_len: 0,
+            reserved0: 0,
+            key_code: 0,
+            reserved1: 0,
+            codepoint: 0,
+            utf8: [0; 4],
+            flags: KEYBOARD_OUTPUT_FLAG_DEVICE_LOST,
+        });
+    }
+    removed.len()
 }
 
 pub fn keyboard_count() -> u32 {

@@ -22,6 +22,7 @@ const HID_KIND_MOUSE: u8 = crate::r::cursor::HID_KIND_MOUSE;
 const HID_KIND_TABLET: u8 = crate::r::cursor::HID_KIND_TABLET;
 const HID_KIND_VIRTUAL_CURSOR: u8 = crate::r::cursor::HID_KIND_VIRTUAL_CURSOR;
 const CURSOR_EVENT_RING_CAP: usize = crate::allcaps::input::HID_CURSOR_EVENT_RING_CAP;
+pub const HID_CURSOR_EVENT_FLAG_DEVICE_LOST: u32 = 1 << 31;
 
 const ZERO_CURSOR_EVENT: TrueosHidCursorEvent = TrueosHidCursorEvent {
     t_ms: 0,
@@ -499,11 +500,56 @@ pub(crate) fn handle_tablet_boot_report(
 
 pub(crate) fn remove_hid_slot(controller_id: u32, slot_id: u32) {
     let mut runtimes = HID_RUNTIMES.lock();
+    let runtime_count = runtimes
+        .iter()
+        .filter(|runtime| runtime.controller_id == controller_id && runtime.slot_id == slot_id)
+        .count();
+    let cursor_runtime_count = runtimes
+        .iter()
+        .filter(|runtime| {
+            runtime.controller_id == controller_id
+                && runtime.slot_id == slot_id
+                && runtime.hid_kind != HID_KIND_KEYBOARD
+        })
+        .count();
     runtimes
         .retain(|runtime| !(runtime.controller_id == controller_id && runtime.slot_id == slot_id));
-    let _ = self::hut::remove_slot(controller_id, slot_id);
-    let _ = crate::r::cursor::remove_snapshots(controller_id, slot_id);
-    let _ = crate::r::keyboard::remove_snapshots(controller_id, slot_id);
+    drop(runtimes);
+
+    if cursor_runtime_count != 0 {
+        push_cursor_event(TrueosHidCursorEvent {
+            t_ms: now_ms_u32(),
+            seq: 0,
+            controller_id,
+            slot_id,
+            ep_target: 0,
+            hid_kind: 0,
+            reserved0: 0,
+            reserved1: 0,
+            buttons_down: 0,
+            wheel: 0,
+            reserved2: 0,
+            x: 0.0,
+            y: 0.0,
+            flags: HID_CURSOR_EVENT_FLAG_DEVICE_LOST,
+        });
+    }
+
+    let legacy_events = self::input::remove_slot(slot_id);
+    let hut_removed = self::hut::remove_slot(controller_id, slot_id);
+    let cursors_removed = crate::r::cursor::remove_snapshots(controller_id, slot_id);
+    let keyboard_loss_signals = crate::r::keyboard::signal_device_lost(controller_id, slot_id);
+    crate::log_info!(target: "usb";
+        "crabusb: hid device-lost signal ctrl={} slot={} runtimes={} cursor_signals={} keyboard_signals={} legacy_events={} cursors={} hut={}\n",
+        controller_id,
+        slot_id,
+        runtime_count,
+        usize::from(cursor_runtime_count != 0),
+        keyboard_loss_signals,
+        legacy_events,
+        cursors_removed,
+        hut_removed
+    );
 }
 
 #[inline]

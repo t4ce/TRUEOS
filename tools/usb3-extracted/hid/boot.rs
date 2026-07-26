@@ -342,25 +342,40 @@ fn unregister_active_hid_stream(stream: ActiveHidStream) -> bool {
     if let Some(idx) = streams.iter().position(|active| *active == stream) {
         streams.remove(idx);
     }
-    !streams
-        .iter()
-        .any(|active| active.controller_id == stream.controller_id)
+    !streams.iter().any(|active| {
+        active.controller_id == stream.controller_id && active.stable_id == stream.stable_id
+    })
 }
 
-async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::Output> {
+async fn await_with_periodic_heartbeat<F, H>(
+    fut: F,
+    timeout_ms: u64,
+    mut on_timeout: H,
+) -> F::Output
+where
+    F: Future,
+    H: FnMut(u32),
+{
     let mut fut = core::pin::pin!(fut);
-    let mut timeout = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(timeout_ms)));
-
-    core::future::poll_fn(|cx| {
-        if let Poll::Ready(out) = fut.as_mut().poll(cx) {
-            return Poll::Ready(Some(out));
+    let mut timeout_count = 0u32;
+    loop {
+        let mut timeout = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(timeout_ms)));
+        let result = core::future::poll_fn(|cx| {
+            if let Poll::Ready(out) = fut.as_mut().poll(cx) {
+                return Poll::Ready(Some(out));
+            }
+            if timeout.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(None);
+            }
+            Poll::Pending
+        })
+        .await;
+        if let Some(out) = result {
+            return out;
         }
-        if timeout.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(None);
-        }
-        Poll::Pending
-    })
-    .await
+        timeout_count = timeout_count.wrapping_add(1);
+        on_timeout(timeout_count);
+    }
 }
 
 #[embassy_executor::task(pool_size = 8)]
@@ -572,20 +587,15 @@ async fn hid_boot_stream_task(
         0u8,
         usize::from(target.in_max_packet_size.max(target.report_len as u16)),
     ));
-    let mut timeout_logs = 0u32;
     let mut first_report_pending = true;
 
     loop {
-        match with_timeout_or_none(
+        let result = await_with_periodic_heartbeat(
             interrupt_in.submit_and_wait(report.as_mut_slice()),
             HID_INTERRUPT_TIMEOUT_MS,
-        )
-        .await
-        {
-            None => {
-                timeout_logs = timeout_logs.wrapping_add(1);
+            |timeout_count| {
                 if crate::log_os::flags::USB_LOG_ALL.load(core::sync::atomic::Ordering::Relaxed)
-                    && (timeout_logs <= 8 || timeout_logs.is_multiple_of(32))
+                    && (timeout_count <= 8 || timeout_count.is_multiple_of(32))
                 {
                     crate::log_info!(target: "usb";
                         "crabusb: hid {} {:04X}:{:04X} interrupt timeout ep=0x{:02X} count={}\n",
@@ -593,81 +603,75 @@ async fn hid_boot_stream_task(
                         vendor_id,
                         product_id,
                         target.in_endpoint,
-                        timeout_logs
+                        timeout_count
                     );
                 }
-                continue;
-            }
-            Some(result) => match result {
-                Ok(read) => {
-                    timeout_logs = 0;
-                    if read == 0 {
-                        Timer::after(EmbassyDuration::from_millis(1)).await;
-                        continue;
-                    }
-
-                    let sample = &report[..read.min(report.len())];
-                    if first_report_pending {
-                        first_report_pending = false;
-                        crate::log_info!(target: "usb";
-                            "crabusb: hid {} {:04X}:{:04X} first-report ep=0x{:02X} bytes={:02X?}\n",
-                            target.kind.as_str(),
-                            vendor_id,
-                            product_id,
-                            target.in_endpoint,
-                            sample
-                        );
-                    }
-                    match target.kind {
-                        HidBootKind::Keyboard => super::handle_keyboard_boot_report(
-                            controller_id,
-                            slot_id,
-                            ep_target,
-                            sample,
-                        ),
-                        HidBootKind::Mouse => {
-                            let mouse_sample = if target.strip_report_id && sample.len() > 1 {
-                                &sample[1..]
-                            } else {
-                                sample
-                            };
-                            super::handle_mouse_boot_report(
-                                controller_id,
-                                slot_id,
-                                ep_target,
-                                mouse_sample,
-                            );
-                        }
-                        HidBootKind::Tablet => {
-                            super::handle_tablet_boot_report(
-                                controller_id,
-                                slot_id,
-                                ep_target,
-                                sample,
-                            );
-                        }
-                        HidBootKind::EyeTracker => {
-                            super::eyetracker::handle_packet(
-                                vendor_id,
-                                product_id,
-                                target.in_endpoint,
-                                sample,
-                            );
-                        }
-                    }
+            },
+        )
+        .await;
+        match result {
+            Ok(read) => {
+                if read == 0 {
+                    Timer::after(EmbassyDuration::from_millis(1)).await;
+                    continue;
                 }
-                Err(err) => {
+
+                let sample = &report[..read.min(report.len())];
+                if first_report_pending {
+                    first_report_pending = false;
                     crate::log_info!(target: "usb";
-                        "crabusb: hid {} {:04X}:{:04X} stream stop ep=0x{:02X} err={:?}\n",
+                        "crabusb: hid {} {:04X}:{:04X} first-report ep=0x{:02X} bytes={:02X?}\n",
                         target.kind.as_str(),
                         vendor_id,
                         product_id,
                         target.in_endpoint,
-                        err
+                        sample
                     );
-                    break;
                 }
-            },
+                match target.kind {
+                    HidBootKind::Keyboard => super::handle_keyboard_boot_report(
+                        controller_id,
+                        slot_id,
+                        ep_target,
+                        sample,
+                    ),
+                    HidBootKind::Mouse => {
+                        let mouse_sample = if target.strip_report_id && sample.len() > 1 {
+                            &sample[1..]
+                        } else {
+                            sample
+                        };
+                        super::handle_mouse_boot_report(
+                            controller_id,
+                            slot_id,
+                            ep_target,
+                            mouse_sample,
+                        );
+                    }
+                    HidBootKind::Tablet => {
+                        super::handle_tablet_boot_report(controller_id, slot_id, ep_target, sample);
+                    }
+                    HidBootKind::EyeTracker => {
+                        super::eyetracker::handle_packet(
+                            vendor_id,
+                            product_id,
+                            target.in_endpoint,
+                            sample,
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                crate::log_info!(target: "usb";
+                    "crabusb: hid {} {:04X}:{:04X} stream stop ep=0x{:02X} err={:?}\n",
+                    target.kind.as_str(),
+                    vendor_id,
+                    product_id,
+                    target.in_endpoint,
+                    err
+                );
+                break;
+            }
         }
     }
 

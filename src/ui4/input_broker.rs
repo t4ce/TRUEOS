@@ -422,7 +422,46 @@ impl InputBroker {
         released
     }
 
+    fn retire_hid_slot(&mut self, controller_id: u32, slot_id: u32) -> (usize, usize) {
+        let mut retired_routes = 0usize;
+        let mut index = 0usize;
+        while index < self.cursors.len() {
+            if self.cursors[index].source.controller_id == controller_id
+                && self.cursors[index].source.slot_id == slot_id
+            {
+                let route = self.cursors.remove(index);
+                super::context_menu::dismiss_for_source(route.source);
+                super::cursor_frame_inout::cursor_retired(route.source);
+                retired_routes = retired_routes.saturating_add(1);
+            } else {
+                index += 1;
+            }
+        }
+
+        let mut retired_keyboards = 0usize;
+        for route in &mut self.cursors {
+            if route.keyboard_source.is_some_and(|source| {
+                source.controller_id == controller_id && source.slot_id == slot_id
+            }) {
+                route.keyboard_source = None;
+                retired_keyboards = retired_keyboards.saturating_add(1);
+            }
+        }
+        (retired_routes, retired_keyboards)
+    }
+
     fn process_cursor(&mut self, event: crate::usb2::hid::TrueosHidCursorEvent) {
+        if event.flags & crate::usb2::hid::HID_CURSOR_EVENT_FLAG_DEVICE_LOST != 0 {
+            let (routes, keyboards) = self.retire_hid_slot(event.controller_id, event.slot_id);
+            crate::log_info!(target: "ui4";
+                "ui4/input: hid device-lost consumed controller={} slot={} cursor_routes={} keyboard_routes={}\n",
+                event.controller_id,
+                event.slot_id,
+                routes,
+                keyboards
+            );
+            return;
+        }
         let Some((width, height)) = crate::intel::active_scanout_dimensions() else {
             return;
         };
@@ -831,7 +870,39 @@ impl InputBroker {
         }
     }
 
+    fn retire_keyboard_source(
+        &mut self,
+        controller_id: u32,
+        slot_id: u32,
+        ep_target: u32,
+    ) -> usize {
+        let mut retired = 0usize;
+        for route in &mut self.cursors {
+            if route.keyboard_source.is_some_and(|source| {
+                source.controller_id == controller_id
+                    && source.slot_id == slot_id
+                    && source.ep_target == ep_target
+            }) {
+                route.keyboard_source = None;
+                retired = retired.saturating_add(1);
+            }
+        }
+        retired
+    }
+
     fn process_keyboard(&mut self, event: crate::r::keyboard::TrueosKeyboardOutputEvent) {
+        if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_DEVICE_LOST {
+            let routes =
+                self.retire_keyboard_source(event.controller_id, event.slot_id, event.ep_target);
+            crate::log_info!(target: "ui4";
+                "ui4/input: keyboard device-lost consumed controller={} slot={} ep={} routes={}\n",
+                event.controller_id,
+                event.slot_id,
+                event.ep_target,
+                routes
+            );
+            return;
+        }
         if !super::cursor_frame_inout::global_keyboard_passes(&event) {
             return;
         }

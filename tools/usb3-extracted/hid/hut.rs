@@ -643,6 +643,27 @@ pub fn remove_slot(controller_id: u32, slot_id: u32) -> bool {
         }
     }
 
+    for combo in guard.combos.iter_mut() {
+        if combo.mouse_controller_id == controller_id && combo.mouse_slot_id == slot_id {
+            combo.mouse_controller_id = 0;
+            combo.mouse_slot_id = 0;
+            combo.mouse_ep_target = 0;
+            removed = true;
+        }
+        if combo.keyboard_controller_id == controller_id && combo.keyboard_slot_id == slot_id {
+            combo.keyboard_controller_id = 0;
+            combo.keyboard_slot_id = 0;
+            combo.keyboard_ep_target = 0;
+            removed = true;
+        }
+        if combo.tablet_controller_id == controller_id && combo.tablet_slot_id == slot_id {
+            combo.tablet_controller_id = 0;
+            combo.tablet_slot_id = 0;
+            combo.tablet_ep_target = 0;
+            removed = true;
+        }
+    }
+
     removed
 }
 

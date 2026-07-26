@@ -174,6 +174,65 @@ pub fn push_event(evt: InputEvent) {
     }
 }
 
+#[inline]
+fn event_slot_id(event: &InputEvent) -> u32 {
+    match event {
+        InputEvent::Keyboard(event) => event.slot_id,
+        InputEvent::Mouse(event) => event.slot_id,
+        InputEvent::Tablet(event) => event.slot_id,
+    }
+}
+
+pub(crate) fn remove_slot(slot_id: u32) -> usize {
+    let mut removed = 0usize;
+    {
+        let mut queue = INPUT_QUEUE.lock();
+        let mut index = 0usize;
+        while index < queue.len() {
+            if event_slot_id(&queue[index]) == slot_id {
+                let _ = queue.remove(index);
+                removed = removed.saturating_add(1);
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    {
+        let mut mouse = MOUSE_ACCUM.lock();
+        if mouse.slot_id == slot_id {
+            mouse.slot_id = 0;
+            mouse.dx = 0;
+            mouse.dy = 0;
+            mouse.wheel = 0;
+            mouse.buttons = 0;
+        }
+    }
+
+    {
+        let mut pipe = QJS_MOUSE_PIPE.lock();
+        let mut index = 0usize;
+        while index < pipe.queued.len() {
+            if pipe.queued[index].slot_id == slot_id {
+                let _ = pipe.queued.remove(index);
+                removed = removed.saturating_add(1);
+            } else {
+                index += 1;
+            }
+        }
+        if pipe.slot_id == slot_id {
+            pipe.slot_id = 0;
+            pipe.dx = 0;
+            pipe.dy = 0;
+            pipe.wheel = 0;
+            pipe.buttons = 0;
+            pipe.last_buttons_seen = 0;
+            pipe.last_sent_buttons = 0;
+        }
+    }
+    removed
+}
+
 pub fn pop_mouse_event() -> Option<MouseEvent> {
     let mut q = INPUT_QUEUE.lock();
     let mut idx = 0usize;
