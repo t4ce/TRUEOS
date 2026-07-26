@@ -192,6 +192,15 @@ const NET_SERVICE_SLEEP_US: u64 = crate::allcaps::net::NET_SERVICE_SLEEP_US;
 const DHCP6_EAGER_DNS: bool = true;
 
 const DHCP_DNS_MAX: usize = crate::allcaps::net::DNS_SERVER_MAX;
+const DHCP_OPTION_TZ_POSIX: u8 = 100;
+const DHCP_OPTION_TZ_DATABASE: u8 = 101;
+const DHCP_PARAMETER_REQUEST_LIST: &[u8] = &[
+    1, // subnet mask
+    3, // router
+    6, // DNS servers
+    DHCP_OPTION_TZ_POSIX,
+    DHCP_OPTION_TZ_DATABASE,
+];
 const RA_DNS6_MAX: usize = crate::allcaps::net::DNS_SERVER_MAX;
 const DHCP6_DNS6_MAX: usize = crate::allcaps::net::DNS_SERVER_MAX;
 pub const MAX_NET_DEVICES: usize = crate::allcaps::net::MAX_NET_DEVICES;
@@ -1764,7 +1773,9 @@ impl NetService {
 
         let dhcp6_udp = sockets.add(dhcp6_udp_socket);
 
-        let dhcp_socket = dhcpv4::Socket::new();
+        let mut dhcp_socket = dhcpv4::Socket::new();
+        dhcp_socket.set_parameter_request_list(DHCP_PARAMETER_REQUEST_LIST);
+        dhcp_socket.set_receive_packet_buffer(Box::leak(vec![0u8; 2 * 1024].into_boxed_slice()));
         // let current_hostname = get_hostname();
         // dhcp_socket.set_outgoing_options(&[DhcpOption {
         //     kind: 12,
@@ -4404,6 +4415,37 @@ impl NetService {
         match dhcp_event {
             None => {}
             Some(dhcpv4::Event::Configured(config)) => {
+                if self.device_index == crate::net::primary_device_index()
+                    && let Some(packet) = config.packet
+                {
+                    let mut posix_timezone = None;
+                    let mut database_timezone = None;
+                    for option in packet.options() {
+                        let destination = match option.kind {
+                            DHCP_OPTION_TZ_POSIX => &mut posix_timezone,
+                            DHCP_OPTION_TZ_DATABASE => &mut database_timezone,
+                            _ => continue,
+                        };
+                        *destination = core::str::from_utf8(option.data).ok();
+                    }
+
+                    if let Some(timezone) = database_timezone.or(posix_timezone) {
+                        if crate::locale::set_timezone_from_network(timezone) {
+                            crate::log_info!(target: "net";
+                                "net: dhcp timezone dev={} value={}\n",
+                                self.device_index,
+                                crate::locale::current_timezone_name()
+                            );
+                        } else {
+                            crate::log_info!(target: "net";
+                                "net: dhcp timezone dev={} unsupported={}\n",
+                                self.device_index,
+                                timezone
+                            );
+                        }
+                    }
+                }
+
                 let ip = config.address.address();
                 let ip_o = ip.octets();
                 let prefix_len = config.address.prefix_len();

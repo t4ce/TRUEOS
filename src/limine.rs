@@ -6,6 +6,7 @@ pub type MpResponse = request::MpResponse;
 pub type MpCpu = limine::mp::MpInfo;
 pub type BootloaderPerformanceResponse = request::BootloaderPerformanceResponse;
 pub type BootloaderPerformanceRequest = request::BootloaderPerformanceRequest;
+pub type ExecutableCmdlineRequest = request::ExecutableCmdlineRequest;
 pub type EfiSystemTableResponse = request::EfiResponse;
 pub type EfiSystemTableRequest = request::EfiRequest;
 pub type SmbiosResponse = request::SmbiosResponse;
@@ -44,6 +45,10 @@ pub static EXECUTABLE_ADDRESS_REQUEST: request::ExecutableAddressRequest =
 #[unsafe(link_section = ".limine_requests")]
 pub static EXECUTABLE_FILE_REQUEST: request::ExecutableFileRequest =
     request::ExecutableFileRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+pub static EXECUTABLE_CMDLINE_REQUEST: ExecutableCmdlineRequest = ExecutableCmdlineRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -140,6 +145,10 @@ pub fn module_bytes_by_path_suffix(expected_suffix: &[u8]) -> Option<&'static [u
 pub fn kernel_file_bytes() -> Option<&'static [u8]> {
     let resp = EXECUTABLE_FILE_REQUEST.response()?;
     bytes_from_limine_file(resp.executable_file())
+}
+
+pub fn executable_cmdline() -> Option<&'static str> {
+    Some(EXECUTABLE_CMDLINE_REQUEST.response()?.cmdline())
 }
 
 pub fn install_kernel_bytes() -> Option<&'static [u8]> {

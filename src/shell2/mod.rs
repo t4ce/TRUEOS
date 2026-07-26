@@ -560,14 +560,15 @@ impl<'a> AlignedWriter<'a> {
 }
 
 fn clock_bucket_and_text() -> (u64, HString<5>) {
-    let secs = crate::time::unix_time_seconds().unwrap_or_else(crate::time::uptime_seconds);
-    let mins_total = secs / 60;
-    let mins_day = mins_total % (24 * 60);
+    let utc_secs =
+        crate::chronos::best_effort_unix_time_seconds().unwrap_or_else(crate::time::uptime_seconds);
+    let local_secs = crate::locale::local_unix_time_seconds(utc_secs);
+    let mins_day = (local_secs / 60) % (24 * 60);
     let hh = mins_day / 60;
     let mm = mins_day % 60;
     let mut text: HString<5> = HString::new();
     let _ = write!(text, "{:02}:{:02}", hh, mm);
-    (mins_total, text)
+    (utc_secs / 60, text)
 }
 
 pub(crate) fn print_shell_line(io: &dyn ShellIo2, text: &str) {
