@@ -34,7 +34,7 @@ pub(crate) const FONT_CLIP_FIELD_VERTICES: usize = 6 * 3 * 3;
 const EMBEDDED_FONTS: [EmbeddedFontSpec; 1] = [EmbeddedFontSpec {
     name: "font",
     file_name: "L_10646.TTF",
-    bytes: include_bytes!("../../tools/L_10646.TTF"),
+    bytes: include_bytes!("../../tools/fnt/L_10646.TTF"),
 }];
 const TRUEOSFS_FONTS: [TrueosFsFontSpec; 2] = [
     TrueosFsFontSpec {

@@ -398,7 +398,7 @@ the rest of the scene.
 Observed on 2026-07-15:
 
 The TCP protocol exposes only caller-supplied vertices, edges, and faces. To put `TRUE OS` into the
-garden without using the shell, the client had to open `tools/L_10646.TTF`—the same file embedded by
+garden without using the shell, the client had to open `tools/fnt/L_10646.TTF`—the same file embedded by
 the kernel—rasterize it locally, convert merged glyph-mask runs into shallow cuboids, and upload the
 result through `put mesh`. The result did use the normal persistent draw3d scene path and rendered
 successfully as an eleventh resident mesh, but font selection and geometry generation happened
