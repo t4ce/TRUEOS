@@ -19,7 +19,7 @@ pub(crate) enum AppsPromptMode {
     Dl,
     Peer,
     Pause,
-    Save,
+    Preserve,
     Load,
     Stop,
     Status,
@@ -32,8 +32,8 @@ impl AppsPromptMode {
             Self::Online => Self::Dl,
             Self::Dl => Self::Peer,
             Self::Peer => Self::Pause,
-            Self::Pause => Self::Save,
-            Self::Save => Self::Load,
+            Self::Pause => Self::Preserve,
+            Self::Preserve => Self::Load,
             Self::Load => Self::Stop,
             Self::Stop => Self::Status,
             Self::Status => Self::Start,
@@ -47,7 +47,7 @@ impl AppsPromptMode {
             Self::Dl => "dl",
             Self::Peer => "peer",
             Self::Pause => "pause",
-            Self::Save => "save",
+            Self::Preserve => "preserve",
             Self::Load => "load",
             Self::Stop => "stop",
             Self::Status => "status",
@@ -507,22 +507,20 @@ fn stop_selected_or_all(io: &'static dyn ShellBackend2, id: Option<u8>, label: &
     }
 }
 
-fn preserve_vm(io: &'static dyn ShellBackend2, vm_id: u8, label: &str) {
+fn preserve_vm(io: &'static dyn ShellBackend2, vm_id: u8) {
     match crate::hv::request_preserve(vm_id) {
-        Ok(true) => line(io, alloc::format!("apps: vm{} {} requested", vm_id, label).as_str()),
-        Ok(false) => match crate::hv::save_snapshot(vm_id) {
-            Ok(bytes) => {
-                line(io, alloc::format!("apps: vm{} saved {} bytes", vm_id, bytes).as_str())
-            }
-            Err(err) => line(io, alloc::format!("apps: save failed: {:?}", err).as_str()),
-        },
-        Err(err) => line(io, alloc::format!("apps: save failed: {:?}", err).as_str()),
+        Ok(true) => line(io, alloc::format!("apps: vm{} preserve requested", vm_id).as_str()),
+        Ok(false) => line(
+            io,
+            alloc::format!("apps: vm{} is not running; preserve must precede stop", vm_id).as_str(),
+        ),
+        Err(err) => line(io, alloc::format!("apps: preserve failed: {:?}", err).as_str()),
     }
 }
 
-fn preserve_selected_or_all(io: &'static dyn ShellBackend2, id: Option<u8>, label: &str) {
+fn preserve_selected_or_all(io: &'static dyn ShellBackend2, id: Option<u8>) {
     if let Some(vm_id) = id {
-        preserve_vm(io, vm_id, label);
+        preserve_vm(io, vm_id);
         return;
     }
     let active = active_vm_ids();
@@ -531,7 +529,7 @@ fn preserve_selected_or_all(io: &'static dyn ShellBackend2, id: Option<u8>, labe
         return;
     }
     for vm_id in active {
-        preserve_vm(io, vm_id, label);
+        preserve_vm(io, vm_id);
     }
 }
 
@@ -714,7 +712,9 @@ pub(crate) fn submit(
         Some("peer") => (AppsPromptMode::Peer, parts.map(String::from).collect()),
         Some("pause") => (AppsPromptMode::Pause, parts.map(String::from).collect()),
         Some("unpause") => (AppsPromptMode::Pause, parts.map(String::from).collect()),
-        Some("save") => (AppsPromptMode::Save, parts.map(String::from).collect()),
+        Some("preserve") => (AppsPromptMode::Preserve, parts.map(String::from).collect()),
+        // Compatibility spelling for the former F2 Apps mode.
+        Some("save") => (AppsPromptMode::Preserve, parts.map(String::from).collect()),
         Some("load") => (AppsPromptMode::Load, parts.map(String::from).collect()),
         Some("stop") => (AppsPromptMode::Stop, parts.map(String::from).collect()),
         Some("status") => (AppsPromptMode::Status, parts.map(String::from).collect()),
@@ -745,8 +745,8 @@ pub(crate) fn submit(
                 schedule_load_vm(spawner, io, vm_id);
             }
         }
-        AppsPromptMode::Save => {
-            preserve_selected_or_all(io, parse_id(rest.first().map(String::as_str)), "save")
+        AppsPromptMode::Preserve => {
+            preserve_selected_or_all(io, parse_id(rest.first().map(String::as_str)))
         }
         AppsPromptMode::Stop => {
             stop_selected_or_all(io, parse_id(rest.first().map(String::as_str)), "stop")

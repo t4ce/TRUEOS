@@ -28,8 +28,8 @@ pub extern "C" fn trueos_vm_guest_run() {
     if unsafe { trueos_hv_guest_blueprint_launch_active() } {
         let _ = unsafe { trueos_hv_guest_blueprint_run() };
         // A shell-launched Blueprint app has one invocation lifecycle. Its TUI
-        // borrows the outer shell view; after it returns, stop the hull instead
-        // of silently replacing shell2 with the VM minishell.
+        // borrows the outer shell view; after it returns, preserve and stop the
+        // hull instead of silently replacing shell2 with the VM minishell.
         crate::vmcall::preserve();
         loop {
             core::hint::spin_loop();

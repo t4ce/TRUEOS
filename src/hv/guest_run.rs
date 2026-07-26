@@ -17,6 +17,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
+use core::mem::ManuallyDrop;
 
 use embassy_executor::raw::Executor as RawExecutor;
 use trueos_vm::vmcall;
@@ -81,8 +82,8 @@ fn container_shell_prompt() {
 fn container_shell_help() {
     attached_write_line("commands: host home env smp help stop pause preserve");
     attached_write_line("  stop     stop without writing a checkpoint");
-    attached_write_line("  pause    replicatable checkpoint; resume by vmid from F2 pause");
-    attached_write_line("  preserve raw checkpoint-and-stop without a lifecycle latch");
+    attached_write_line("  pause    preserve-pause; resume by vmid from F2 pause");
+    attached_write_line("  preserve preserve-stop; checkpoint first, then tear down");
 }
 
 fn container_shell_read_line(line: &mut Vec<u8>) {
@@ -334,6 +335,12 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     let Some(state) = crate::hv::take_blueprint_launch(vm_id) else {
         return false;
     };
+    // The Hull's private RW image contains a shallow copy of the host-owned
+    // launch state. Taking that copy is required to consume the guest-visible
+    // launch slot, but dropping it would free the same guest-heap buffers that
+    // host teardown still owns. Keep this guest view borrowed-by-convention;
+    // the host removes and drops the authoritative state after VM exit.
+    let state = ManuallyDrop::new(state);
 
     let log = |line: &str| crate::hv::hvlogf(format_args!("{}", line));
     let warn = |line: &str| crate::hv::hvwarnf(format_args!("{}", line));

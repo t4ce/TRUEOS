@@ -404,7 +404,7 @@ impl<'a> AlignedWriter<'a> {
             AppsPromptMode::Dl,
             AppsPromptMode::Peer,
             AppsPromptMode::Pause,
-            AppsPromptMode::Save,
+            AppsPromptMode::Preserve,
             AppsPromptMode::Load,
             AppsPromptMode::Stop,
             AppsPromptMode::Status,

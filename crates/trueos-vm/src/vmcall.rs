@@ -367,3 +367,16 @@ pub fn preserve() {
         core::arch::asm!("vmcall", options(nostack, preserves_flags));
     }
 }
+
+/// Stop a completed Blueprint hull without creating a preserve snapshot.
+///
+/// The host consumes this VMCALL without resuming the guest. The fallback loop
+/// is therefore only reachable if a host implementation incorrectly resumes a
+/// terminal shutdown request.
+#[inline(never)]
+pub fn shutdown(reason: &[u8]) -> ! {
+    let _ = call_with_payload(OP_BP_SHUTDOWN, 0, 0, reason, &mut []);
+    loop {
+        core::hint::spin_loop();
+    }
+}

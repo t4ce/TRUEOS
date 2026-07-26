@@ -104,6 +104,10 @@ impl LaneLease {
         self.armed = false;
     }
 
+    pub(crate) fn release_now(&mut self) {
+        self.release();
+    }
+
     pub fn set_vm_owner(&mut self, vm_id: u8) {
         if !self.armed {
             return;

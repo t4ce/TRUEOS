@@ -488,19 +488,29 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
     };
     match op {
         OP_PRESERVE => {
-            write_response(vm_id, seq, STATUS_OK, 0, 0);
-            DispatchOutcome::Preserve
+            match crate::hv::prepare_preserve_mode(vm_id, crate::hv::PreserveMode::Stop) {
+                Ok(true) => {
+                    write_response(vm_id, seq, STATUS_OK, 0, 0);
+                    DispatchOutcome::Preserve
+                }
+                Ok(false) | Err(_) => {
+                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                    DispatchOutcome::Resume
+                }
+            }
         }
-        OP_LIFECYCLE_PAUSE => match crate::hv::request_replicatable_pause(vm_id) {
-            Ok(true) => {
-                write_response(vm_id, seq, STATUS_OK, 0, 0);
-                DispatchOutcome::Preserve
+        OP_LIFECYCLE_PAUSE => {
+            match crate::hv::prepare_preserve_mode(vm_id, crate::hv::PreserveMode::Pause) {
+                Ok(true) => {
+                    write_response(vm_id, seq, STATUS_OK, 0, 0);
+                    DispatchOutcome::Preserve
+                }
+                Ok(false) | Err(_) => {
+                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                    DispatchOutcome::Resume
+                }
             }
-            Ok(false) | Err(_) => {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                DispatchOutcome::Resume
-            }
-        },
+        }
         OP_PING => {
             write_response(vm_id, seq, STATUS_OK, 0xCAFE_BABE, 0);
             DispatchOutcome::Resume
@@ -2095,6 +2105,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 core::str::from_utf8(data).unwrap_or("non-utf8-shutdown-reason")
             };
             crate::hv::blueprint_console_set_exit_reason(vm_id, reason);
+            crate::hv::mark_blueprint_clean_exit(vm_id);
             write_response(vm_id, seq, STATUS_OK, data.len() as u64, 0);
             DispatchOutcome::Stop
         }
