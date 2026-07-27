@@ -24,7 +24,7 @@ boundary, 50% horizontal-pair walker shape, ABI, and TestRig procedure are in
 
 `particle_craft.clcpp` is the stateful three-pass ParticleCraft engine behind
 `cpp particle` and the Blueprint particle app. Its step entry updates 32-byte
-particle records in place; its deterministic tile entry produces 1024-bit
+particle records in place; its deterministic tile entry produces 256-bit
 candidate masks; and its race-free pixel-gather entry shades the complete Arc
 Forge backing surface from an adjustable 1x/2x/4x destination-relative sampling
 grid, mapped into a stable 640x400 simulation space. Maximized
@@ -120,7 +120,7 @@ single-kernel audiovisual artifact for that same exact target. Its SHA-256 is:
 artifact for that exact target. Its SHA-256 is:
 
 ```text
-a3bcb2a4f041e1fb82a0571c5dcc49959061229105112ecc223211ca83c2f491
+cc9cd45afedc335be1ae6086f29d6276795113bae899f915162e53ad522b256a
 ```
 
 The two unconditional Spirit C++/IGC artifacts are standalone, solely
