@@ -437,8 +437,8 @@ const _: () = assert!(matches!(PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT.validat
 const _: () = assert!(matches!(PARTICLE_CRAFT_BIN_TILES_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
 const _: () =
     assert!(matches!(PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
-const _: () = assert!(PARTICLE_CRAFT_ADLS_BIN.len() == 157_536);
-const _: () = assert!(PARTICLE_CRAFT_ADLS_SPV.len() == 91_764);
+const _: () = assert!(PARTICLE_CRAFT_ADLS_BIN.len() == 157_488);
+const _: () = assert!(PARTICLE_CRAFT_ADLS_SPV.len() == 91_652);
 const _: () = {
     let step = PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT;
     let bin = PARTICLE_CRAFT_BIN_TILES_ADLS_CPP_ABI_CONTRACT;

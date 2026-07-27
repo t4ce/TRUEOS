@@ -254,8 +254,9 @@ fn particle_work_detail(destination_width: u32, destination_height: u32) -> Stri
     let (tile_columns, tile_rows) =
         crate::intel::gpgpu::particle_craft_tile_extent(destination_width, destination_height);
     alloc::format!(
-        " preset=arc-forge particles={} state=8KiB bins={}B params=v1/64B passes=step+tile-bin+pixel-gather backing={}x{} samples={}x{} tiles={}x{} tile={}x{} mask={}b render_divisor={} presentation=dynamic-1:1-or-direct-plane-2x naive_tests={} bin_tests={} gather=tile-mask",
+        " preset=arc-forge particles={} state={}KiB bins={}B params=v1/64B passes=step+tile-bin+pixel-gather backing={}x{} samples={}x{} tiles={}x{} tile={}x{} mask={}b render_divisor={} presentation=dynamic-1:1-or-direct-plane-2x naive_tests={} bin_tests={} gather=tile-mask",
         crate::intel::gpgpu::PARTICLE_CRAFT_DEFAULT_PARTICLES,
+        crate::intel::gpgpu::PARTICLE_CRAFT_STATE_BYTES / 1024,
         crate::intel::gpgpu::PARTICLE_CRAFT_TILE_MASK_BYTES,
         destination_width,
         destination_height,
@@ -775,6 +776,6 @@ mod tests {
 
     #[test]
     fn particle_default_reports_the_reduced_candidate_work() {
-        assert_eq!(particle_naive_candidate_tests(320, 200), 8_192_000);
+        assert_eq!(particle_naive_candidate_tests(320, 200), 65_536_000);
     }
 }

@@ -10,8 +10,8 @@ pub(crate) const PARTICLE_CRAFT_SAMPLE_WIDTH: u32 =
     PARTICLE_CRAFT_FRAME_WIDTH / PARTICLE_CRAFT_RENDER_DIVISOR;
 pub(crate) const PARTICLE_CRAFT_SAMPLE_HEIGHT: u32 =
     PARTICLE_CRAFT_FRAME_HEIGHT / PARTICLE_CRAFT_RENDER_DIVISOR;
-pub(crate) const PARTICLE_CRAFT_DEFAULT_PARTICLES: u32 = 128;
-pub(crate) const PARTICLE_CRAFT_MAX_PARTICLES: u32 = 256;
+pub(crate) const PARTICLE_CRAFT_DEFAULT_PARTICLES: u32 = 1024;
+pub(crate) const PARTICLE_CRAFT_MAX_PARTICLES: u32 = 1024;
 pub(crate) const PARTICLE_CRAFT_TILE_SAMPLE_WIDTH: u32 = 32;
 pub(crate) const PARTICLE_CRAFT_TILE_SAMPLE_HEIGHT: u32 = 32;
 pub(crate) const PARTICLE_CRAFT_TILE_MASK_WORDS: u32 =
@@ -22,7 +22,7 @@ pub(crate) const PARTICLE_CRAFT_FLAG_ATTRACTOR: u32 = 1 << 1;
 pub(crate) const PARTICLE_CRAFT_FLAG_ORBIT: u32 = 1 << 2;
 pub(crate) const PARTICLE_CRAFT_KNOWN_FLAGS: u32 =
     PARTICLE_CRAFT_FLAG_RESET | PARTICLE_CRAFT_FLAG_ATTRACTOR | PARTICLE_CRAFT_FLAG_ORBIT;
-const PARTICLE_CRAFT_STATE_BYTES: usize = PARTICLE_CRAFT_MAX_PARTICLES as usize * 32;
+pub(crate) const PARTICLE_CRAFT_STATE_BYTES: usize = PARTICLE_CRAFT_MAX_PARTICLES as usize * 32;
 const PARTICLE_CRAFT_PARAMS_BYTES: usize = 4096;
 const PARTICLE_CRAFT_MAX_SAMPLE_WIDTH: u32 = 2_560;
 const PARTICLE_CRAFT_MAX_SAMPLE_HEIGHT: u32 = 1_440;
@@ -45,7 +45,9 @@ const _: () = assert!(
         && PARTICLE_CRAFT_FRAME_WIDTH.is_multiple_of(PARTICLE_CRAFT_RENDER_DIVISOR)
         && PARTICLE_CRAFT_FRAME_HEIGHT.is_multiple_of(PARTICLE_CRAFT_RENDER_DIVISOR)
         && PARTICLE_CRAFT_MAX_PARTICLES.is_multiple_of(u32::BITS)
-        && PARTICLE_CRAFT_TILE_MASK_WORDS == 8
+        && PARTICLE_CRAFT_TILE_MASK_WORDS == 32
+        && PARTICLE_CRAFT_STATE_BYTES.is_multiple_of(4096)
+        && (PARTICLE_CRAFT_STATE_BYTES + PARTICLE_CRAFT_PARAMS_BYTES).is_multiple_of(4096)
         && PARTICLE_CRAFT_ALLOCATION_BYTES.is_multiple_of(4096)
 );
 const _: () = assert!(
@@ -367,7 +369,7 @@ mod tests {
         assert_eq!(particle_craft_tile_extent(640, 400), (10, 7));
         assert_eq!(
             particle_craft_bin_candidate_tests(640, 400, PARTICLE_CRAFT_DEFAULT_PARTICLES),
-            8_960,
+            71_680,
         );
     }
 
@@ -384,9 +386,9 @@ mod tests {
                 backing.1,
                 PARTICLE_CRAFT_DEFAULT_PARTICLES,
             ),
-            117_760,
+            942_080,
         );
-        assert_eq!(PARTICLE_CRAFT_TILE_MASK_BYTES, 115_200);
+        assert_eq!(PARTICLE_CRAFT_TILE_MASK_BYTES, 460_800);
     }
 }
 
