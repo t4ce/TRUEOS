@@ -11,8 +11,7 @@ unsafe extern "C" {
 
 pub use v::qjs_abi::{
     TrueosHidCursorEvent, TrueosHidKeyboardSample, TrueosMouseState, trueos_cabi_alloc,
-    trueos_cabi_boot_timestamp_secs, trueos_cabi_browser_asset_ref_push,
-    trueos_cabi_browser_asset_refs_begin, trueos_cabi_calloc, trueos_cabi_free,
+    trueos_cabi_boot_timestamp_secs, trueos_cabi_calloc, trueos_cabi_free,
     trueos_cabi_fs_read_file, trueos_cabi_fs_remove, trueos_cabi_fs_write_abort,
     trueos_cabi_fs_write_begin, trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish,
     trueos_cabi_hid_keyboard_read, trueos_cabi_input_cursor_buttons, trueos_cabi_input_cursor_pos,

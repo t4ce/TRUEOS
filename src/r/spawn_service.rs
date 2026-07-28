@@ -92,7 +92,6 @@ define_started_flags!(
     RAPLE_SERVICE_STARTED,
     THERMAL_SERVICE_STARTED,
     HTML_SHACK_SERVICE_STARTED,
-    ASSET_SHACK_SERVICE_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
     USER_INPUT_RECORD_WRITER_STARTED,
     TRUEOSFS_RW_PROBE_STARTED,
@@ -102,7 +101,6 @@ define_started_flags!(
     NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
     ATOMIC_BOMB_STARTED,
-    SURFER_PARSE_POOL_STARTED,
     I226_DIAGNOSTIC_DISPLAY_STARTED,
     TINYAUDIO_SERVICE_STARTED,
     TINYAUDIO_LIVE_HTTP_STARTED,
@@ -743,14 +741,6 @@ fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
     spawn_bool_result_to_attempt(crate::surfer::spawn_html_fetch_service(spawner))
 }
 
-fn asset_fetch_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_bool_result_to_attempt(crate::surfer::spawn_asset_fetch_service(spawner))
-}
-
-fn spawn_truesurfer_parse_pool(spawner: Spawner) -> SpawnAttempt {
-    spawn_bool_result_to_attempt(crate::surfer::spawn_truesurfer_parse_pool(spawner))
-}
-
 fn spawn_tinyaudio_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::aud::esynth::tinyaudio_service_task())
 }
@@ -811,11 +801,6 @@ fn ttstt_cpu_service_gate() -> bool {
     crate::r::readiness::is_set(
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
     )
-}
-
-#[inline]
-fn asset_shack_gate() -> bool {
-    crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
 }
 
 #[inline]
@@ -1213,12 +1198,6 @@ async fn bp_autostart_task(spawner: Spawner) {
             ),
         }
     }
-
-    //let html = crate::surfer::html_shack::Html::new(
-    //    "inline://trueos/input.html",
-    //    include_str!("../../crates/trueos-qjs/src/html/input.html"),
-    //);
-    //let _ = crate::surfer::html_shack::enqueue_ready_html_for_browser(html).await;
 }
 
 fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
@@ -1400,7 +1379,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 72
+const TASK_COUNT: usize = 70
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1789,19 +1768,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         html_shack_gate,
         &HTML_SHACK_SERVICE_STARTED,
         html_fetch_service,
-    ),
-    TaskSpec::enabled_gated(
-        "asset_shack_service",
-        crate::r::readiness::NET_V4_CONFIGURED,
-        asset_shack_gate,
-        &ASSET_SHACK_SERVICE_STARTED,
-        asset_fetch_service,
-    ),
-    TaskSpec::enabled(
-        "truesurfer-parse-pool",
-        0,
-        &SURFER_PARSE_POOL_STARTED,
-        spawn_truesurfer_parse_pool,
     ),
     TaskSpec::enabled(
         "tinyaudio_service",

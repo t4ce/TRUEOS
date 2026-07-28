@@ -260,10 +260,6 @@ pub fn pick_background_spawners_with_slots(limit: usize) -> Vec<(u32, u8, Worker
     selected
 }
 
-pub fn pick_perf_background_spawner() -> Option<WorkerSpawner> {
-    pick_perf_background_spawner_with_slot().map(|(_, _, spawner)| spawner)
-}
-
 pub fn pick_perf_background_spawner_with_slot() -> Option<(u32, u8, WorkerSpawner)> {
     pick_background_spawner_with_filter(|slot| core_kind_for_slot(slot) == CORE_KIND_PERF)
 }

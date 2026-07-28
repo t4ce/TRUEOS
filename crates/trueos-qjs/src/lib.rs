@@ -17,13 +17,6 @@ pub mod async_fs;
 pub mod trueos_module_loader;
 
 #[cfg(feature = "trueos")]
-#[path = "truesurfer/truesurfer_qjs_vm_task.rs"]
-pub mod truesurfer_qjs_vm_task;
-
-#[cfg(feature = "trueos")]
-pub use truesurfer_qjs_vm_task as browser_task;
-
-#[cfg(feature = "trueos")]
 pub mod timers;
 
 #[cfg(feature = "trueos")]

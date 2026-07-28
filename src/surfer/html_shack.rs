@@ -30,7 +30,6 @@ const HTML_FETCH_MAX_BYTES: usize = 4 * 1024 * 1024;
 const HTML_FETCH_MAX_REDIRECTS: usize = 3;
 const HTML_PREVIEW_FRONT_LINES: usize = 5;
 const HTML_PREVIEW_LINE_CHARS: usize = 160;
-const HTML_SHACK_BROWSER_HANDOFF_ENABLE: bool = true;
 const HTML_SHACK_PREVIEW_ENABLE: bool = false;
 static HTML_FETCH_IDLE_LOGS: AtomicU32 = AtomicU32::new(0);
 static HTML_FETCH_WORKER_SEQ: AtomicU32 = AtomicU32::new(0);
@@ -388,41 +387,6 @@ async fn fetch_bytes_via_pool_method(
         }
         Timer::after(EmbassyDuration::from_millis(25)).await;
     }
-}
-
-async fn store_ready_html(html: Html) -> usize {
-    let (ready_len, _) = enqueue_ready_html_for_browser(html).await;
-    ready_len
-}
-
-pub async fn enqueue_ready_html_for_browser(html: Html) -> (usize, bool) {
-    let ready_len = with_html_shack(|shack| shack.put_ready_html(html.clone()));
-    let handed_off = if HTML_SHACK_BROWSER_HANDOFF_ENABLE {
-        handoff_html_to_truesurfer(html).await
-    } else {
-        crate::log!("html_shack: browser_handoff disabled url={}\n", html.url);
-        false
-    };
-    (ready_len, handed_off)
-}
-
-pub async fn handoff_html_to_truesurfer(html: Html) -> bool {
-    let url = html.url.clone();
-    let Some(ticket) = crate::surfer::queue_html_parse(html.html, Some(url.clone())).await else {
-        crate::log!(
-            "html_shack: browser_handoff skipped url={} reason=parse_pool_unavailable\n",
-            url
-        );
-        return false;
-    };
-
-    crate::log!(
-        "html_shack: browser_handoff url={} browser={} ok={}\n",
-        url,
-        ticket.browser_instance_id,
-        if ticket.queued { 1 } else { 0 }
-    );
-    ticket.queued
 }
 
 fn normalize_file_reference(path: &str) -> String {
@@ -1545,14 +1509,7 @@ async fn handle_html_fetch_request(
     if let Some(callback) = request.auto_handoff_callback.as_mut() {
         callback(html.clone());
     }
-    let ready_len = if delegated_handoff {
-        // A mode-specific callback owns the consumer launch. Preserve the
-        // fetched document for inspection, but do not also feed the legacy
-        // in-kernel TrueSurfer path.
-        with_html_shack(|shack| shack.put_ready_html(html))
-    } else {
-        store_ready_html(html).await
-    };
+    let ready_len = with_html_shack(|shack| shack.put_ready_html(html));
     crate::log!(
         "html_shack: fetched worker={} url={} bytes={} ready={} transport=hyper-vnet delegated={}\n",
         worker_id,
