@@ -232,6 +232,22 @@ impl GamepadControlStation {
         Ok(())
     }
 
+    fn release_principal(&mut self, principal: GamepadControlPrincipal) -> usize {
+        let mut released = 0;
+        while let Some(handle) = self
+            .gamepads
+            .iter()
+            .find(|gamepad| gamepad.principal == principal)
+            .map(|gamepad| gamepad.capability.handle)
+        {
+            if self.release(principal, handle).is_err() {
+                break;
+            }
+            released += 1;
+        }
+        released
+    }
+
     fn submit(
         &mut self,
         principal: GamepadControlPrincipal,
@@ -372,6 +388,10 @@ pub(crate) fn release_gamepad(
     handle: u64,
 ) -> Result<(), GamepadControlError> {
     STATION.lock().release(principal, handle)
+}
+
+pub(crate) fn release_principal(principal: GamepadControlPrincipal) -> usize {
+    STATION.lock().release_principal(principal)
 }
 
 pub(crate) fn submit_command(

@@ -202,13 +202,16 @@ impl VNet {
         self.submit_kernel(cmd)
     }
 
-    fn submit_kernel(&self, cmd: NetCommand) -> Result<(), ()> {
+    fn submit_kernel(&self, mut cmd: NetCommand) -> Result<(), ()> {
         // Under bursty load, the per-owner command queue can be briefly full.
         // Retry a few times to avoid silently dropping critical commands like
-        // the first TCP send right after connect.
+        // the first TCP send right after connect. A failed enqueue returns the
+        // original command so payload-bearing commands can be retried without
+        // cloning their Vec.
         for _ in 0..8 {
-            if self.cmds.push(cmd.clone()).is_ok() {
-                return Ok(());
+            match self.cmds.try_push(cmd) {
+                Ok(()) => return Ok(()),
+                Err(returned) => cmd = returned,
             }
             core::hint::spin_loop();
         }

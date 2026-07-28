@@ -366,15 +366,10 @@ impl InputBroker {
             return false;
         }
         super::context_menu::dismiss_for_source(source);
-        if change.focus_changed {
-            for route in &mut self.cursors {
-                // Context menus belong to cursor routes, not to the globally
-                // focused frame. The cursor performing the selection dismisses
-                // its own menu in `process_cursor`; other cursors keep theirs.
-                route.clear_frame_interaction();
-                route.absorb_select |= route.buttons_down != 0;
-            }
-        } else {
+        if change.changed {
+            // Pointer capture belongs to the selecting cursor. A different
+            // cursor changing the singular keyboard focus must not cancel an
+            // already selected frame's independent pointer gesture.
             self.cursors[cursor_index].clear_frame_interaction();
         }
         if change.focus_changed {
@@ -403,7 +398,10 @@ impl InputBroker {
                 );
             }
         }
-        true
+        // Only a change to this cursor's own frame association is an
+        // absorb-select. Merely restoring global keyboard focus to a frame
+        // already owned by this cursor must leave its next drag gesture live.
+        change.changed
     }
 
     fn release_owner(&mut self, owner: WindowOwner) -> usize {
@@ -542,7 +540,7 @@ impl InputBroker {
             if self.select_frame(index, next, combo_id, vcursor) {
                 self.cursors[index].absorb_select = true;
             } else {
-                let selected = super::selected_frame();
+                let selected = super::selected_frame_for_source(source);
                 self.cursors[index].capture = hit
                     .filter(|window| {
                         selected == Some(WindowTarget::from(*window).cursor_frame_key())
@@ -600,7 +598,9 @@ impl InputBroker {
             self.cursors[index].secondary_dragged = false;
         }
 
-        let selected = super::selected_frame();
+        // Pointer routing and capture follow this cursor's selected frame.
+        // Global selection remains the singular keyboard/application focus.
+        let selected = super::selected_frame_for_source(source);
         let target = self.cursors[index]
             .capture
             .and_then(window_snapshot_for_target)
@@ -1171,7 +1171,7 @@ static SLOT4_VISUAL_CHANGE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signa
 #[embassy_executor::task]
 pub(crate) async fn ui4_input_service_task() {
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings pump_hz={} pump_clock=absolute-fractional selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/selected-frame-only maximize=interaction-capability-gated outline=primary-button/selected-frame-only owner_events=selected-frame-only screenshot=parked\n",
+        "ui4/input: service online source=hid-sequence-rings pump_hz={} pump_clock=absolute-fractional selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/per-cursor-selected-frame-only maximize=interaction-capability-gated outline=primary-button/selected-frame-only owner_events=selected-frame-only screenshot=parked\n",
         super::INTERACTION_CADENCE_HZ,
     );
     let mut cadence = super::InteractionCadence::new();

@@ -15,11 +15,11 @@ use embassy_time::{Duration, Instant, Timer};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
 
+use trueos_lfm25_cpu as cpu;
 use trueos_lfm25_model::lfm25::{self, NativeTensorDescriptor, TensorFormat, TensorRole};
 use trueos_lfm25_model::lfm25_decode::{
     DecodeCapabilities, DecodeOpKind, EmbeddingRowPlan, LayerStateSlot,
 };
-use trueos_lfm25_cpu as cpu;
 
 use crate::r::lfm25_decode::{
     AotDecodeBackend, AotDecodeCallback, AotDecodeOutput, AotDecodeRequest, HiddenQ8, HiddenQ30,

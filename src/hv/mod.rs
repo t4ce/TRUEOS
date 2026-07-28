@@ -2860,10 +2860,16 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         let cursors = crate::r::mouse_motion_service::release_principal(
             crate::r::mouse_motion_service::MouseControlPrincipal::Vm(vm_id),
         );
-        if cursors != 0 {
+        let keyboards = crate::r::keyboard_control_service::release_principal(
+            crate::r::keyboard_control_service::KeyboardControlPrincipal::Vm(vm_id),
+        );
+        let gamepads = crate::r::gamepad_control_service::release_principal(
+            crate::r::gamepad_control_service::GamepadControlPrincipal::Vm(vm_id),
+        );
+        if cursors != 0 || keyboards != 0 || gamepads != 0 {
             hvlogf(format_args!(
-                "hv: vm{} lifecycle: mouse-control cleanup cursors={}",
-                vm_id, cursors,
+                "hv: vm{} lifecycle: virtual-input cleanup cursors={} keyboards={} gamepads={}",
+                vm_id, cursors, keyboards, gamepads,
             ));
         }
     }

@@ -208,6 +208,22 @@ impl KeyboardControlStation {
         Ok(())
     }
 
+    fn release_principal(&mut self, principal: KeyboardControlPrincipal) -> usize {
+        let mut released = 0;
+        while let Some(handle) = self
+            .keyboards
+            .iter()
+            .find(|keyboard| keyboard.principal == principal)
+            .map(|keyboard| keyboard.capability.handle)
+        {
+            if self.release(principal, handle).is_err() {
+                break;
+            }
+            released += 1;
+        }
+        released
+    }
+
     fn submit(
         &mut self,
         principal: KeyboardControlPrincipal,
@@ -365,6 +381,10 @@ pub(crate) fn release_keyboard(
     handle: u64,
 ) -> Result<(), KeyboardControlError> {
     STATION.lock().release(principal, handle)
+}
+
+pub(crate) fn release_principal(principal: KeyboardControlPrincipal) -> usize {
+    STATION.lock().release_principal(principal)
 }
 
 pub(crate) fn submit_command(

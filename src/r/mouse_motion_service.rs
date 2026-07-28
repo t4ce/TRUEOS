@@ -238,8 +238,7 @@ impl MouseControlStation {
         if cursor.buttons_down != 0 {
             emit_cursor(cursor.capability.slot_id, cursor.x, cursor.y, 0, 0, 0);
         }
-        let _ = crate::r::cursor::remove_snapshots(0, cursor.capability.slot_id);
-        let _ = crate::usb2::hid::hut::remove_slot(0, cursor.capability.slot_id);
+        crate::usb2::hid::retire_virtual_cursor(cursor.capability.slot_id);
         crate::log_info!(target: "input";
             "mouse-control: cursor released handle={} slot={} principal={:?} label={}\n",
             cursor.capability.handle,

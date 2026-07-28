@@ -662,10 +662,16 @@ impl<T> NetQueue<T> {
     }
 
     pub fn push(&self, item: T) -> Result<(), ()> {
+        self.try_push(item).map_err(|_| ())
+    }
+
+    /// Enqueue one item, returning ownership to the caller when the queue is
+    /// full so retry paths do not have to clone payload-bearing commands.
+    pub fn try_push(&self, item: T) -> Result<(), T> {
         let mut guard = self.inner.lock();
         if guard.len() >= self.capacity {
             self.dropped.fetch_add(1, Ordering::Relaxed);
-            return Err(());
+            return Err(item);
         }
         guard.push_back(item);
         Ok(())

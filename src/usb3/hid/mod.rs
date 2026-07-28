@@ -293,6 +293,40 @@ pub(crate) fn inject_virtual_cursor_event(
     );
 }
 
+/// Retire one mediated virtual cursor through the same lifecycle stream UI4
+/// consumes for physical HID removal, then remove its snapshot and HUT state.
+///
+/// Virtual cursors do not own a `HidRuntime`, so `remove_hid_slot` cannot
+/// discover them and synthesize this event on their behalf.
+pub(crate) fn retire_virtual_cursor(slot_id: u32) {
+    push_cursor_event(TrueosHidCursorEvent {
+        t_ms: now_ms_u32(),
+        seq: 0,
+        controller_id: 0,
+        slot_id,
+        ep_target: 0,
+        hid_kind: HID_KIND_VIRTUAL_CURSOR,
+        reserved0: 0,
+        reserved1: 0,
+        buttons_down: 0,
+        wheel: 0,
+        reserved2: 0,
+        x: 0.0,
+        y: 0.0,
+        flags: HID_CURSOR_EVENT_FLAG_DEVICE_LOST,
+    });
+    let legacy_events = self::input::remove_slot(slot_id);
+    let hut_removed = self::hut::remove_slot(0, slot_id);
+    let cursors_removed = crate::r::cursor::remove_snapshots(0, slot_id);
+    crate::log_info!(target: "input";
+        "virtual-cursor: device-lost signal controller=0 slot={} legacy_events={} cursors={} hut={}\n",
+        slot_id,
+        legacy_events,
+        cursors_removed,
+        hut_removed,
+    );
+}
+
 #[inline]
 pub(crate) const fn hid_udp_slot_id(udp_device_id: u16) -> u32 {
     HID_UDP_SLOT_BASE | (udp_device_id as u32)
