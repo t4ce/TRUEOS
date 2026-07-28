@@ -132,7 +132,9 @@ pub(crate) enum GpgpuArtifactImplicitArgKind {
     EnqueuedLocalSize,
     /// IGC's byte offset for a stateful buffer argument. TRUEOS binds every
     /// admitted surface at offset zero and starts each indirect payload zeroed.
-    BufferOffset { arg_index: u16 },
+    BufferOffset {
+        arg_index: u16,
+    },
     /// IGC's stateless private-memory base. Scratch is forbidden for the
     /// current direct-RCS profile, so the admitted value is always zero.
     PrivateBaseStateless,
@@ -293,10 +295,7 @@ impl GpgpuKernelAbiContract {
                         let payload = self.payload_args[payload_index];
                         if payload.arg_index == arg_index
                             && matches!(payload.kind, GpgpuArtifactArgKind::ByPointer)
-                            && matches!(
-                                payload.address_mode,
-                                GpgpuArtifactAddressMode::Stateful
-                            )
+                            && matches!(payload.address_mode, GpgpuArtifactAddressMode::Stateful)
                         {
                             pointer_found = true;
                             break;
@@ -317,8 +316,10 @@ impl GpgpuKernelAbiContract {
                     (None, 8, 0)
                 }
             };
-            if expected_offset.is_some_and(|offset| arg.offset_bytes != offset)
-                || arg.size_bytes != expected_size
+            if match expected_offset {
+                Some(offset) => arg.offset_bytes != offset,
+                None => false,
+            } || arg.size_bytes != expected_size
                 || arg.offset_bytes % arg.size_bytes != 0
                 || implicit_kinds & kind_bit != 0
             {

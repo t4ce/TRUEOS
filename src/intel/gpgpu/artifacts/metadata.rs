@@ -29,13 +29,36 @@ impl GpgpuKernelArtifact {
         }
     }
 
-    const fn legacy_adls(
+    const fn contracted(
         name: &'static str,
         bin: &'static [u8],
         spv: &'static [u8],
-        bin_sha256: [u8; 32],
+        contract: &'static GpgpuKernelAbiContract,
     ) -> Self {
-        Self::new(name, GPGPU_ADLS_4680_TARGET, bin, spv, bin_sha256, None)
+        Self::new(
+            name,
+            contract.target,
+            bin,
+            spv,
+            contract.zebin_sha256,
+            Some(contract),
+        )
+    }
+
+    const fn multi_entry(
+        name: &'static str,
+        bin: &'static [u8],
+        spv: &'static [u8],
+        first_entry: &'static GpgpuKernelAbiContract,
+    ) -> Self {
+        Self::new(
+            name,
+            first_entry.target,
+            bin,
+            spv,
+            first_entry.zebin_sha256,
+            None,
+        )
     }
 }
 
@@ -58,149 +81,132 @@ pub(crate) struct UploadedKernelArtifact {
 unsafe impl Send for UploadedKernelArtifact {}
 unsafe impl Sync for UploadedKernelArtifact {}
 
-#[cfg(not(feature = "intel_gpu_cpp_aot"))]
 pub(crate) const COPY_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         COPY_RECT_RGBA8_KERNEL_NAME,
         COPY_RECT_RGBA8_ADLS_BIN,
         COPY_RECT_RGBA8_ADLS_SPV,
-        COPY_RECT_RGBA8_ADLS_BIN_SHA256,
+        &COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
-#[cfg(feature = "intel_gpu_cpp_aot")]
-pub(crate) const COPY_RECT_RGBA8_CPP_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::new(
-    COPY_RECT_RGBA8_KERNEL_NAME,
-    COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.target,
-    COPY_RECT_RGBA8_CPP_ADLS_BIN,
-    COPY_RECT_RGBA8_CPP_ADLS_SPV,
-    COPY_RECT_RGBA8_CPP_ADLS_BIN_SHA256,
-    Some(&COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT),
-);
-
-#[cfg(feature = "intel_gpu_cpp_aot")]
-pub(crate) const COPY_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    COPY_RECT_RGBA8_CPP_ADLS_ARTIFACT;
-
 pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         RESOLVE_TILE64_MSAA4_RGBA8_KERNEL_NAME,
         RESOLVE_TILE64_MSAA4_RGBA8_ADLS_BIN,
         RESOLVE_TILE64_MSAA4_RGBA8_ADLS_SPV,
-        RESOLVE_TILE64_MSAA4_RGBA8_ADLS_BIN_SHA256,
+        &RESOLVE_TILE64_MSAA4_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const FILL_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         FILL_RECT_RGBA8_KERNEL_NAME,
         FILL_RECT_RGBA8_ADLS_BIN,
         FILL_RECT_RGBA8_ADLS_SPV,
-        FILL_RECT_RGBA8_ADLS_BIN_SHA256,
+        &FILL_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const FILL_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME,
         FILL_RECT_WORKLIST_RGBA8_ADLS_BIN,
         FILL_RECT_WORKLIST_RGBA8_ADLS_SPV,
-        FILL_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256,
+        &FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,
         GRADIENT_RECT_WORKLIST_RGBA8_ADLS_BIN,
         GRADIENT_RECT_WORKLIST_RGBA8_ADLS_SPV,
-        GRADIENT_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256,
+        &GRADIENT_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME,
         ALPHA_BLEND_WORKLIST_RGBA8_ADLS_BIN,
         ALPHA_BLEND_WORKLIST_RGBA8_ADLS_SPV,
-        ALPHA_BLEND_WORKLIST_RGBA8_ADLS_BIN_SHA256,
+        &ALPHA_BLEND_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const GLYPH_MASK_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         GLYPH_MASK_RGBA8_KERNEL_NAME,
         GLYPH_MASK_RGBA8_ADLS_BIN,
         GLYPH_MASK_RGBA8_ADLS_SPV,
-        GLYPH_MASK_RGBA8_ADLS_BIN_SHA256,
+        &GLYPH_MASK_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         UI4_NV12_YTILE_TO_PRIMARY_XRGB_KERNEL_NAME,
         UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_BIN,
         UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_SPV,
-        UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_BIN_SHA256,
+        &UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME,
         UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN,
         UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_SPV,
-        UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN_SHA256,
+        &UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::new(
+    GpgpuKernelArtifact::contracted(
         UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME,
-        UI4_RGBA8_TO_NV12_LINEAR_ADLS_LEGACY_ABI_CONTRACT.target,
         UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN,
         UI4_RGBA8_TO_NV12_LINEAR_ADLS_SPV,
-        UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN_SHA256,
-        Some(&UI4_RGBA8_TO_NV12_LINEAR_ADLS_LEGACY_ABI_CONTRACT),
+        &UI4_RGBA8_TO_NV12_LINEAR_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,
         SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN,
         SPRITE_QUAD_WORKLIST_RGBA8_ADLS_SPV,
-        SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN_SHA256,
+        &SPRITE_QUAD_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
         UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN,
         UI4_COMPOSE_LAYERS_RGBA8_ADLS_SPV,
-        UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN_SHA256,
+        &UI4_COMPOSE_LAYERS_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
         MANDEL64_WORKLIST_RGBA8_ADLS_BIN,
         MANDEL64_WORKLIST_RGBA8_ADLS_SPV,
-        MANDEL64_WORKLIST_RGBA8_ADLS_BIN_SHA256,
+        &MANDEL64_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
         SKYBOX_SAMPLE_RGB565_ADLS_BIN,
         SKYBOX_SAMPLE_RGB565_ADLS_SPV,
-        SKYBOX_SAMPLE_RGB565_ADLS_BIN_SHA256,
+        &SKYBOX_SAMPLE_RGB565_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const CHART_SINE_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         CHART_SINE_RGBA8_KERNEL_NAME,
         CHART_SINE_RGBA8_ADLS_BIN,
         CHART_SINE_RGBA8_ADLS_SPV,
-        CHART_SINE_RGBA8_ADLS_BIN_SHA256,
+        &CHART_SINE_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         PIXEL_PLASMA_RGBA8_KERNEL_NAME,
         PIXEL_PLASMA_RGBA8_ADLS_BIN,
         PIXEL_PLASMA_RGBA8_ADLS_SPV,
-        PIXEL_PLASMA_RGBA8_ADLS_BIN_SHA256,
+        &PIXEL_PLASMA_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const CPP_DEMO_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::new(
@@ -262,35 +268,28 @@ pub(crate) const LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT: GpgpuKernelArtifact =
         Some(&LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT),
     );
 
-pub(crate) const FONT_OUTLINE_MESH_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
-        FONT_OUTLINE_MESH_KERNEL_NAME,
-        FONT_OUTLINE_MESH_ADLS_BIN,
-        FONT_OUTLINE_MESH_ADLS_SPV,
-        FONT_OUTLINE_MESH_ADLS_BIN_SHA256,
-    );
-
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::contracted(
         FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
         FONT_OUTLINE_COVERAGE_R8_ADLS_BIN,
         FONT_OUTLINE_COVERAGE_R8_ADLS_SPV,
-        FONT_OUTLINE_COVERAGE_R8_ADLS_BIN_SHA256,
+        &FONT_OUTLINE_COVERAGE_R8_ADLS_CPP_ABI_CONTRACT,
     );
 
-pub(crate) const SCENE_AABB_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::legacy_adls(
-    SCENE_AABB_KERNEL_NAME,
-    SCENE_AABB_ADLS_BIN,
-    SCENE_AABB_ADLS_SPV,
-    SCENE_AABB_ADLS_BIN_SHA256,
-);
+pub(crate) const SCENE_AABB_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact::contracted(
+        SCENE_AABB_KERNEL_NAME,
+        SCENE_AABB_ADLS_BIN,
+        SCENE_AABB_ADLS_SPV,
+        &SCENE_AABB_ADLS_CPP_ABI_CONTRACT,
+    );
 
 pub(crate) const LAB256_MULTIPHASE_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::multi_entry(
         LAB256_MULTIPHASE_KERNEL_NAME,
         LAB256_MULTIPHASE_ADLS_BIN,
         LAB256_MULTIPHASE_ADLS_SPV,
-        LAB256_MULTIPHASE_ADLS_BIN_SHA256,
+        &LAB256_STEP_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =

@@ -222,7 +222,7 @@ const FILL_RECT_ARGS: &[KernelCallArg<'_>] = &[
 ];
 const FILL_RECT_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::FILL_RECT_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/fill_rect_rgba8.cl",
+    source_path: "src/intel/gpgpu/kernels/fill_rect_rgba8.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,
@@ -244,7 +244,7 @@ const FILL_RECT_WORKLIST_ARGS: &[KernelCallArg<'_>] = &[
 ];
 const FILL_RECT_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/fill_rect_worklist_rgba8.cl",
+    source_path: "src/intel/gpgpu/kernels/fill_rect_worklist_rgba8.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,
@@ -260,7 +260,7 @@ const FILL_RECT_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
 const GRADIENT_RECT_WORKLIST_ARGS: &[KernelCallArg<'_>] = FILL_RECT_WORKLIST_ARGS;
 const GRADIENT_RECT_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/gradient_rect_worklist_rgba8.cl",
+    source_path: "src/intel/gpgpu/kernels/gradient_rect_worklist_rgba8.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,
@@ -284,7 +284,7 @@ const ALPHA_BLEND_WORKLIST_ARGS: &[KernelCallArg<'_>] = &[
 ];
 const ALPHA_BLEND_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/alpha_blend_worklist_rgba8.cl",
+    source_path: "src/intel/gpgpu/kernels/alpha_blend_worklist_rgba8.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,
@@ -312,7 +312,7 @@ const GLYPH_MASK_ARGS: &[KernelCallArg<'_>] = &[
 ];
 const GLYPH_MASK_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::GLYPH_MASK_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/glyph_mask_rgba8.cl",
+    source_path: "src/intel/gpgpu/kernels/glyph_mask_rgba8.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,
@@ -340,7 +340,7 @@ const SPRITE_QUAD_ARGS: &[KernelCallArg<'_>] = &[
 ];
 const SPRITE_QUAD_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/sprite_quad_worklist_rgba8.cl",
+    source_path: "src/intel/gpgpu/kernels/sprite_quad_worklist_rgba8.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,
@@ -370,7 +370,7 @@ const UI4_COMPOSE_LAYERS_ARGS: &[KernelCallArg<'_>] = &[
 ];
 const UI4_COMPOSE_LAYERS_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/ui4_compose_layers_rgba8.cl",
+    source_path: "src/intel/gpgpu/kernels/ui4_compose_layers_rgba8.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,
@@ -386,7 +386,7 @@ const UI4_COMPOSE_LAYERS_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
 const MANDEL64_ARGS: &[KernelCallArg<'_>] = FILL_RECT_WORKLIST_ARGS;
 const MANDEL64_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/mandel64_worklist_rgba8.cl",
+    source_path: "src/intel/gpgpu/kernels/mandel64_worklist_rgba8.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,
@@ -430,7 +430,7 @@ const SKYBOX_ARGS: &[KernelCallArg<'_>] = &[
 ];
 const SKYBOX_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/skybox_sample_rgb565.cl",
+    source_path: "src/intel/gpgpu/kernels/skybox_sample_rgb565.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,
@@ -466,7 +466,7 @@ const CHART_ARGS: &[KernelCallArg<'_>] = &[
 ];
 const CHART_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::CHART_SINE_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/chart_sine_rgba8.cl",
+    source_path: "src/intel/gpgpu/kernels/chart_sine_rgba8.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,
@@ -498,7 +498,7 @@ const PIXEL_PLASMA_ARGS: &[KernelCallArg<'_>] = &[
 ];
 const PIXEL_PLASMA_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::PIXEL_PLASMA_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/pixel_plasma_rgba8.cl",
+    source_path: "src/intel/gpgpu/kernels/pixel_plasma_rgba8.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,
@@ -620,7 +620,7 @@ const FONT_OUTLINE_MESH_ARGS: &[KernelCallArg<'_>] = &[
 ];
 const FONT_OUTLINE_MESH_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::FONT_OUTLINE_MESH_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/font_outline_mesh.cl",
+    source_path: "src/intel/gpgpu/kernels/font_outline_mesh.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,
@@ -649,7 +649,7 @@ const FONT_OUTLINE_COVERAGE_R8_ARGS: &[KernelCallArg<'_>] = &[
 ];
 const FONT_OUTLINE_COVERAGE_R8_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/font_outline_coverage_r8.cl",
+    source_path: "src/intel/gpgpu/kernels/font_outline_coverage_r8.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,

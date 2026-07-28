@@ -112,47 +112,21 @@ INTEL_GPU_CPP_LFM25_Q8_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/lfm25_q8_project.bin
 INTEL_GPU_CPP_LFM25_Q8_PACKED_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/lfm25_q8_project_packed.bin
 INTEL_GPU_CPP_SPIRIT_BACKGROUND_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/spirit_vfx_background_rgba8.bin
 INTEL_GPU_CPP_SPIRIT_SPRITE_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/spirit_vfx_sprite_rgba8.bin
-INTEL_GPU_LEGACY_COPY_BIN := crates/trueos-shader/gpgpu/kernels/artifacts/adls/copy_rect_rgba8.bin
 INTEL_GPU_BAKERY_PYTHON ?= python3
 INTEL_GPU_LINKED_ELF ?= $(KERNEL_BIN)
 INTEL_GPU_CPP_PROBE_LOG ?=
-# The product/development Make lane now selects the checked C++ for OpenCL
-# artifact by default. Direct Cargo invocations retain Cargo.toml's legacy
-# default. Set INTEL_GPU_CPP_AOT=0 for an explicit OpenCL C comparison build.
-INTEL_GPU_CPP_AOT ?= 1
 AARCH64_KERNEL_BAKERY_DIR := tools/aarch64-kernel-bakery
 AARCH64_KERNEL_ARTIFACT_DIR ?= bld/aarch64-kernel-artifacts
 AARCH64_KERNEL_PYTHON ?= python3
 AARCH64_KERNEL_CLANG ?= clang
-ifneq ($(INTEL_GPU_CPP_AOT),0)
-ifneq ($(INTEL_GPU_CPP_AOT),1)
-$(error INTEL_GPU_CPP_AOT must be 0 or 1, got '$(INTEL_GPU_CPP_AOT)')
-endif
-endif
-ifeq ($(INTEL_GPU_CPP_AOT),1)
-INTEL_GPU_CPP_AOT_CARGO_FLAGS := --features intel_gpu_cpp_aot
 INTEL_GPU_ARTIFACT_FRONTEND := cpp-for-opencl
 INTEL_GPU_SELECTED_COPY_BIN := $(INTEL_GPU_CPP_COPY_BIN)
-INTEL_GPU_FORBIDDEN_COPY_BIN := $(INTEL_GPU_LEGACY_COPY_BIN)
 INTEL_GPU_PREBUILD_VERIFY := intel-gpu-verify-cpp-artifacts
-else
-INTEL_GPU_CPP_AOT_CARGO_FLAGS :=
-INTEL_GPU_ARTIFACT_FRONTEND := opencl-c
-INTEL_GPU_SELECTED_COPY_BIN := $(INTEL_GPU_LEGACY_COPY_BIN)
-INTEL_GPU_FORBIDDEN_COPY_BIN := $(INTEL_GPU_CPP_COPY_BIN)
-# The native C++ demo is independent of the copy-frontend comparison and is
-# embedded in both product lanes, so its compiler-free publication audit is
-# always a pre-build gate.
-INTEL_GPU_PREBUILD_VERIFY := intel-gpu-verify-cpp-artifacts
-endif
-CARGO_EFFECTIVE_FLAGS = $(strip $(CARGO_BUILD_FLAGS) $(INTEL_GPU_CPP_AOT_CARGO_FLAGS))
-LEGACY_OPENCL_C_ARTIFACT_DIR := bld/artifacts/$(BUILD_MODE)-$(ARTIFACT_BUILD_ID)-legacy-opencl-c
-LEGACY_OPENCL_C_ISO_BOOT_DIR := bld/iso-bootroot-legacy-opencl-c
-LEGACY_OPENCL_C_ISO_PATH := bld/trueos-legacy-opencl-c.iso
+CARGO_EFFECTIVE_FLAGS = $(strip $(CARGO_BUILD_FLAGS))
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel kernel-cpp-aot kernel-legacy-opencl-c cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-verify lfm25-igpu-packed-verify intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine testrig-physical-reset-log baremetal-reboot-log iso iso-cpp-aot iso-legacy-opencl-c provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: images empty-libs kernel kernel-cpp-aot cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-verify lfm25-igpu-packed-verify intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine testrig-physical-reset-log baremetal-reboot-log iso iso-cpp-aot provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -168,13 +142,9 @@ empty-libs:
 
 kernel: empty-libs $(INTEL_GPU_PREBUILD_VERIFY)
 	cargo build $(CARGO_GFX_FLAGS) $(CARGO_EFFECTIVE_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
-	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT="$(INTEL_GPU_CPP_AOT)" INTEL_GPU_LINKED_ELF="$(KERNEL_BIN)" intel-gpu-verify-linked-copy
+	$(MAKE) --no-print-directory INTEL_GPU_LINKED_ELF="$(KERNEL_BIN)" intel-gpu-verify-linked-copy
 
-kernel-cpp-aot:
-	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT=1 kernel
-
-kernel-legacy-opencl-c:
-	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT=0 kernel
+kernel-cpp-aot: kernel
 
 intel-gpu-bake-copy-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_copy_rect.sh"
@@ -255,16 +225,16 @@ intel-gpu-verify-copy-cpp-hardware-log:
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_probe_log.py" "$(INTEL_GPU_CPP_PROBE_LOG)"
 
 intel-gpu-verify-linked-copy:
-	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_linked.py" --elf "$(INTEL_GPU_LINKED_ELF)" --selected-bin "$(INTEL_GPU_SELECTED_COPY_BIN)" --forbidden-bin "$(INTEL_GPU_FORBIDDEN_COPY_BIN)" --required-bin "$(INTEL_GPU_CPP_DEMO_BIN)" --required-bin "$(INTEL_GPU_CPP_AUDIO_VISUALIZER_BIN)" --required-bin "$(INTEL_GPU_CPP_PARTICLE_CRAFT_BIN)" --required-bin "$(INTEL_GPU_CPP_FONT_INSTANCE_BIN)" --required-bin "$(INTEL_GPU_CPP_LFM25_Q8_BIN)" --required-bin "$(INTEL_GPU_CPP_LFM25_Q8_PACKED_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_BACKGROUND_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_SPRITE_BIN)"
+	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_linked.py" --elf "$(INTEL_GPU_LINKED_ELF)" --selected-bin "$(INTEL_GPU_SELECTED_COPY_BIN)" --required-bin "$(INTEL_GPU_CPP_DEMO_BIN)" --required-bin "$(INTEL_GPU_CPP_AUDIO_VISUALIZER_BIN)" --required-bin "$(INTEL_GPU_CPP_PARTICLE_CRAFT_BIN)" --required-bin "$(INTEL_GPU_CPP_FONT_INSTANCE_BIN)" --required-bin "$(INTEL_GPU_CPP_LFM25_Q8_BIN)" --required-bin "$(INTEL_GPU_CPP_LFM25_Q8_PACKED_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_BACKGROUND_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_SPRITE_BIN)"
 
 intel-gpu-verify-linked-copy-cpp:
-	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT=1 INTEL_GPU_LINKED_ELF="$(INTEL_GPU_LINKED_ELF)" intel-gpu-verify-linked-copy
+	$(MAKE) --no-print-directory INTEL_GPU_LINKED_ELF="$(INTEL_GPU_LINKED_ELF)" intel-gpu-verify-linked-copy
 
 intel-gpu-verify-packaged-copy:
-	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_packaged.py" --runtime-elf "$(ARTIFACT_RUNTIME_ELF)" --staged-elf "$(ISO_BOOT_DIR)/TRUEOS.elf" --iso "$(ISO_PATH)" --selected-bin "$(INTEL_GPU_SELECTED_COPY_BIN)" --forbidden-bin "$(INTEL_GPU_FORBIDDEN_COPY_BIN)" --required-bin "$(INTEL_GPU_CPP_DEMO_BIN)" --required-bin "$(INTEL_GPU_CPP_AUDIO_VISUALIZER_BIN)" --required-bin "$(INTEL_GPU_CPP_PARTICLE_CRAFT_BIN)" --required-bin "$(INTEL_GPU_CPP_FONT_INSTANCE_BIN)" --required-bin "$(INTEL_GPU_CPP_LFM25_Q8_BIN)" --required-bin "$(INTEL_GPU_CPP_LFM25_Q8_PACKED_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_BACKGROUND_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_SPRITE_BIN)"
+	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_packaged.py" --runtime-elf "$(ARTIFACT_RUNTIME_ELF)" --staged-elf "$(ISO_BOOT_DIR)/TRUEOS.elf" --iso "$(ISO_PATH)" --selected-bin "$(INTEL_GPU_SELECTED_COPY_BIN)" --required-bin "$(INTEL_GPU_CPP_DEMO_BIN)" --required-bin "$(INTEL_GPU_CPP_AUDIO_VISUALIZER_BIN)" --required-bin "$(INTEL_GPU_CPP_PARTICLE_CRAFT_BIN)" --required-bin "$(INTEL_GPU_CPP_FONT_INSTANCE_BIN)" --required-bin "$(INTEL_GPU_CPP_LFM25_Q8_BIN)" --required-bin "$(INTEL_GPU_CPP_LFM25_Q8_PACKED_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_BACKGROUND_BIN)" --required-bin "$(INTEL_GPU_CPP_SPIRIT_SPRITE_BIN)"
 
 intel-gpu-verify-packaged-copy-cpp:
-	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT=1 ARTIFACT_DIR="$(ARTIFACT_DIR)" ISO_BOOT_DIR="$(ISO_BOOT_DIR)" ISO_PATH="$(ISO_PATH)" intel-gpu-verify-packaged-copy
+	$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" ISO_BOOT_DIR="$(ISO_BOOT_DIR)" ISO_PATH="$(ISO_PATH)" intel-gpu-verify-packaged-copy
 
 artifacts: kernel
 	mkdir -p $(ARTIFACT_DIR)
@@ -279,7 +249,7 @@ artifacts: kernel
 		printf "commit=%s\n" "$$commit"; \
 		printf "timestamp_utc=%s\n" "$$ts"; \
 		printf "cargo_build_flags=%s\n" "$(CARGO_EFFECTIVE_FLAGS)"; \
-		printf "intel_gpu_cpp_aot=%s\n" "$(INTEL_GPU_CPP_AOT)"; \
+		printf "intel_gpu_cpp_aot=always\n"; \
 		printf "intel_gpu_artifact_frontend=%s\n" "$(INTEL_GPU_ARTIFACT_FRONTEND)"; \
 		printf "intel_gpu_copy_artifact=%s\n" "$(INTEL_GPU_SELECTED_COPY_BIN)"; \
 		printf "runtime_elf=%s\n" "$(ARTIFACT_RUNTIME_ELF)"; \
@@ -490,7 +460,7 @@ iso: artifacts images limine
 		-e $(ISO_EFI_IMG) -no-emul-boot \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		-o $(ISO_PATH) $(ISO_BOOT_DIR)
-	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT="$(INTEL_GPU_CPP_AOT)" ARTIFACT_DIR="$(ARTIFACT_DIR)" ISO_BOOT_DIR="$(ISO_BOOT_DIR)" ISO_PATH="$(ISO_PATH)" intel-gpu-verify-packaged-copy
+	$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" ISO_BOOT_DIR="$(ISO_BOOT_DIR)" ISO_PATH="$(ISO_PATH)" intel-gpu-verify-packaged-copy
 	@case "$(START_BAREMETAL_LOG)" in \
 		1) $(MAKE) --no-print-directory testrig-physical-reset-log ;; \
 		0) echo "iso: skipping baremetal deploy/log verification (START_BAREMETAL_LOG=0)" ;; \
@@ -499,10 +469,7 @@ iso: artifacts images limine
 
 iso-cpp-aot:
 	@echo "iso-cpp-aot: C++ AOT is the normal Make default; building $(ISO_PATH)"
-	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT=1 iso
-
-iso-legacy-opencl-c:
-	$(MAKE) --no-print-directory INTEL_GPU_CPP_AOT=0 ARTIFACT_DIR="$(LEGACY_OPENCL_C_ARTIFACT_DIR)" ISO_BOOT_DIR="$(LEGACY_OPENCL_C_ISO_BOOT_DIR)" ISO_PATH="$(LEGACY_OPENCL_C_ISO_PATH)" iso
+	$(MAKE) --no-print-directory iso
 
 provenance-git-clean:
 	@if [ "$(PROVENANCE_CLEAN_FLAG)" = "--require-clean" ]; then \

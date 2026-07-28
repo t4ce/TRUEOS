@@ -517,9 +517,6 @@ fn digest_hex(digest: &[u8; 32]) -> String {
 mod runtime_admission_tests {
     use super::*;
 
-    #[cfg(not(feature = "intel_gpu_cpp_aot"))]
-    const SELECTED_ADLS_REVISION: u8 = 0;
-    #[cfg(feature = "intel_gpu_cpp_aot")]
     const SELECTED_ADLS_REVISION: u8 = 0x0C;
 
     fn artifact_without_contract(target: GpgpuKernelTarget) -> GpgpuKernelArtifact {
@@ -602,7 +599,6 @@ mod runtime_admission_tests {
         );
     }
 
-    #[cfg(feature = "intel_gpu_cpp_aot")]
     #[test]
     fn cpp_admission_rejects_adjacent_adls_revisions() {
         for revision_id in [0x0B, 0x0D] {
@@ -713,7 +709,6 @@ mod runtime_admission_tests {
         ));
     }
 
-    #[cfg(feature = "intel_gpu_cpp_aot")]
     #[test]
     fn admission_rejects_invalid_contract_and_contract_identity_mismatches() {
         let artifact = COPY_RECT_RGBA8_ADLS_ARTIFACT;

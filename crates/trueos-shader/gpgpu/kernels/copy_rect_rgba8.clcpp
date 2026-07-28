@@ -1,9 +1,7 @@
-// C++ for OpenCL opt-in twin of copy_rect_rgba8.cl.
+// Canonical C++ for OpenCL copy kernel.
 //
-// This source is selected only by the explicit C++ bakery and the
-// `intel_gpu_cpp_aot` Cargo feature; the OpenCL C twin remains the default.
-// It preserves the existing kernel symbol, argument order/types, SIMD16
-// requirement, and pixel behavior.
+// It preserves the original kernel symbol, argument order/types, SIMD16
+// requirement, and pixel behavior without a second frontend or fallback.
 
 #include "include/trueos_clcpp.hpp"
 

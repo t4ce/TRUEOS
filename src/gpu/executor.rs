@@ -231,10 +231,10 @@ pub(crate) fn submit_kernel_context(
         Ok(point) => {
             let submission = KernelSubmission { client, point };
             if kernel_client_uses_render_compute(client) {
-            let owner = executor
-                .render_compute_owner
-                .as_mut()
-                .expect("render/compute admission reserves one owner");
+                let owner = executor
+                    .render_compute_owner
+                    .as_mut()
+                    .expect("render/compute admission reserves one owner");
                 debug_assert_eq!(owner.client, client);
                 owner.submissions = owner.submissions.saturating_add(1);
             }
@@ -268,24 +268,22 @@ pub(crate) fn complete_kernel_submission(
 
     let wakers = {
         let mut executor = EXECUTOR.lock();
+        let was_inflight = executor
+            .inflight
+            .iter()
+            .any(|entry| entry.submission == submission);
         executor
             .inflight
             .retain(|entry| entry.submission != submission);
-        if kernel_client_uses_render_compute(submission.client) {
-            let was_inflight = executor
-                .inflight
-                .iter()
-                .any(|entry| entry.submission == submission);
-            if was_inflight
-                && let Some(owner) = executor.render_compute_owner.as_mut()
-                && owner.client == submission.client
-            {
-                owner.submissions = owner.submissions.saturating_sub(1);
-                if owner.submissions == 0 {
-                    executor.render_compute_yield_client =
-                        owner.contended.then_some(owner.client);
-                    executor.render_compute_owner = None;
-                }
+        if was_inflight
+            && kernel_client_uses_render_compute(submission.client)
+            && let Some(owner) = executor.render_compute_owner.as_mut()
+            && owner.client == submission.client
+        {
+            owner.submissions = owner.submissions.saturating_sub(1);
+            if owner.submissions == 0 {
+                executor.render_compute_yield_client = owner.contended.then_some(owner.client);
+                executor.render_compute_owner = None;
             }
         }
         if completed {
