@@ -322,13 +322,16 @@ async fn h264_reserve_vcs0_decode_session()
     }
 }
 
-/// Load an Annex-B asset from the published TRUEOSFS primary root and run it
+/// Load an H.264 asset from the published TRUEOSFS primary root and run it
 /// through the VDBOX decoder and native UI4 double-Frame path.
+///
+/// Raw Annex-B streams pass through unchanged. ISO BMFF/MP4 assets reuse the
+/// online path's avc1/avc3 demuxer and join the same Annex-B decoder ingress.
 pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
     path: &str,
 ) -> Result<H264PlaybackReport, &'static str> {
     crate::log_info!(target: "ui4";
-        "shell2/vid: stage=trueosfs-entry source=trueosfs-root-annexb asset={} next=media-engine-check\n",
+        "shell2/vid: stage=trueosfs-entry source=trueosfs-h264-auto asset={} next=media-engine-check\n",
         path,
     );
     if !crate::intel::has_media_decode_engine() {
@@ -359,11 +362,11 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
     if file_bytes == 0 || file_bytes > H264_TRUEOSFS_VIDEO_MAX_BYTES {
         return Err("TRUEOSFS video size outside playback limit");
     }
-    let mut annexb = Vec::new();
-    annexb
+    let mut asset = Vec::new();
+    asset
         .try_reserve_exact(file_bytes)
         .map_err(|_| "TRUEOSFS video asset allocation failed")?;
-    annexb.resize(file_bytes, 0);
+    asset.resize(file_bytes, 0);
     let mut done = 0usize;
     while done < file_bytes {
         let end = done
@@ -372,7 +375,7 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
         let read = crate::r::fs::trueosfs::file_read_handle_range_async(
             file,
             done as u64,
-            &mut annexb[done..end],
+            &mut asset[done..end],
         )
         .await
         .map_err(|_| "TRUEOSFS video range read failed")?
@@ -395,6 +398,15 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
         return Err("host heap free list corrupt after TRUEOSFS video load");
     }
 
+    let (annexb, decode_source, container) = h264_prepare_trueosfs_asset(asset)?;
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=trueosfs-format-selected asset={} container={} codec=avc annexb_bytes={} decode_source={} next=vdbox-decode\n",
+        path,
+        container,
+        annexb.len(),
+        decode_source,
+    );
+
     let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
     let vcs0_session = h264_reserve_vcs0_decode_session().await?;
     let vcs0_session_generation = vcs0_session.generation();
@@ -406,7 +418,7 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
         crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
     let report = h264_i_p_playback_probe_annexb_bytes(
         annexb,
-        "trueosfs-root-annexb",
+        decode_source,
         path,
         options,
         vcs0_session_generation,
@@ -608,10 +620,14 @@ struct Mp4SampleRef {
     offset: usize,
     size: usize,
     keyframe: bool,
+    decode_time: u64,
+    duration: u32,
+    composition_offset: i64,
 }
 
 struct Mp4AvcTrackInfo {
     track_id: u32,
+    timescale: u32,
     length_size: usize,
     sps: Vec<Vec<u8>>,
     pps: Vec<Vec<u8>>,
@@ -619,6 +635,7 @@ struct Mp4AvcTrackInfo {
 
 struct Mp4AvcTrack {
     track_id: u32,
+    timescale: u32,
     length_size: usize,
     sps: Vec<Vec<u8>>,
     pps: Vec<Vec<u8>>,
@@ -629,8 +646,22 @@ struct Mp4Tfhd {
     track_id: u32,
     flags: u32,
     base_data_offset: Option<u64>,
+    default_sample_duration: Option<u32>,
     default_sample_size: Option<usize>,
     default_sample_flags: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct H264SampleTiming {
+    dts: u64,
+    pts: i64,
+    duration: u32,
+    timescale: u32,
+}
+
+struct H264DemuxedAvc {
+    annexb: Vec<u8>,
+    timing: Vec<H264SampleTiming>,
 }
 
 fn mp4_read_u16(data: &[u8], offset: usize) -> Option<u16> {
@@ -778,12 +809,12 @@ fn mp4_parse_stsd_avc1(
         if entry.typ == *b"avc1" || entry.typ == *b"avc3" {
             let child_start = entry.payload_start.saturating_add(78);
             let avcc = mp4_find_child(data, child_start, entry.end, *b"avcC")
-                .ok_or("mp4 avc1 missing avcC")?;
+                .ok_or("mp4 AVC sample entry missing avcC")?;
             return mp4_parse_avcc(data, avcc.payload_start, avcc.end);
         }
         cursor = entry.end;
     }
-    Err("mp4 stsd has no avc1 entry")
+    Err("mp4 stsd has no avc1/avc3 entry")
 }
 
 fn mp4_parse_tkhd_track_id(data: &[u8], tkhd: Mp4Box) -> Result<u32, &'static str> {
@@ -1278,7 +1309,45 @@ fn mp4_avc1_to_annexb(data: &[u8]) -> Result<Vec<u8>, &'static str> {
         }
     }
 
-    Err(first_classic_err.unwrap_or("mp4 has no avc1 video track"))
+    Err(first_classic_err.unwrap_or("mp4 has no avc1/avc3 video track"))
+}
+
+fn h264_has_annexb_start_code(data: &[u8]) -> bool {
+    let Some(one_offset) = data.iter().position(|byte| *byte != 0) else {
+        return false;
+    };
+    if one_offset < 2 || data[one_offset] != 1 {
+        return false;
+    }
+    let Some(nal_header) = data.get(one_offset + 1).copied() else {
+        return false;
+    };
+    nal_header & 0x80 == 0 && nal_header & 0x1f != 0
+}
+
+fn h264_is_mp4_container(data: &[u8]) -> bool {
+    data.get(4..8) == Some(b"ftyp".as_slice())
+        || mp4_find_child(data, 0, data.len(), *b"moov").is_some()
+}
+
+fn h264_prepare_trueosfs_asset(
+    asset: Vec<u8>,
+) -> Result<(Vec<u8>, &'static str, &'static str), &'static str> {
+    // Test ISO BMFF first: an MP4 mdat can naturally contain Annex-B-looking
+    // byte sequences even though its AVC samples are length-prefixed.
+    if h264_is_mp4_container(asset.as_slice()) {
+        let annexb = mp4_avc1_to_annexb(asset.as_slice())?;
+        if annexb.is_empty() || annexb.len() > H264_TRUEOSFS_VIDEO_MAX_BYTES {
+            return Err("demuxed TRUEOSFS H.264 size outside playback limit");
+        }
+        return Ok((annexb, "trueosfs-mp4-avc", "mp4"));
+    }
+
+    if h264_has_annexb_start_code(asset.as_slice()) {
+        return Ok((asset, "trueosfs-root-annexb", "annexb"));
+    }
+
+    Err("unsupported TRUEOSFS video format (expected H.264 Annex-B or AVC MP4)")
 }
 
 #[derive(Copy, Clone, Debug)]

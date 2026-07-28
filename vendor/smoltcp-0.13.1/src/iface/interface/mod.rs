@@ -78,6 +78,19 @@ pub enum PollResult {
     SocketStateChanged,
 }
 
+/// Error returned by [`Interface::dispatch_udp_payload`].
+#[cfg(feature = "socket-udp")]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum UdpDispatchError {
+    /// The device cannot currently provide a transmit token.
+    Exhausted,
+    /// No usable source address or route exists for the destination.
+    Unaddressable,
+    /// Neighbor discovery is in progress and the payload should be retried.
+    NeighborPending,
+}
+
 /// Result returned by [`Interface::poll_ingress_single`].
 ///
 /// This contains information on whether a packet was processed or not,
@@ -358,6 +371,54 @@ impl Interface {
     /// found. For IPv6, the selection is based on RFC6724.
     pub fn get_source_address(&self, dst_addr: &IpAddress) -> Option<IpAddress> {
         self.inner.get_source_address(dst_addr)
+    }
+
+    /// Dispatch one UDP payload directly through the interface without first
+    /// copying it into a UDP socket's transmit byte ring.
+    ///
+    /// Routing, neighbor discovery, checksums, IP framing, and link framing are
+    /// identical to socket egress. The payload only needs to remain borrowed
+    /// until this function returns.
+    #[cfg(feature = "socket-udp")]
+    pub fn dispatch_udp_payload<D: Device + ?Sized>(
+        &mut self,
+        timestamp: Instant,
+        device: &mut D,
+        local_port: u16,
+        remote: IpEndpoint,
+        payload: &[u8],
+    ) -> Result<(), UdpDispatchError> {
+        if local_port == 0 || remote.port == 0 || remote.addr.is_unspecified() {
+            return Err(UdpDispatchError::Unaddressable);
+        }
+
+        self.inner.now = timestamp;
+        let source_addr = self
+            .inner
+            .get_source_address(&remote.addr)
+            .ok_or(UdpDispatchError::Unaddressable)?;
+        let udp_repr = UdpRepr {
+            src_port: local_port,
+            dst_port: remote.port,
+        };
+        let ip_repr = IpRepr::new(
+            source_addr,
+            remote.addr,
+            IpProtocol::Udp,
+            udp_repr.header_len() + payload.len(),
+            64,
+        );
+        let tx_token = device
+            .transmit(timestamp)
+            .ok_or(UdpDispatchError::Exhausted)?;
+        let packet = Packet::new(ip_repr, IpPayload::Udp(udp_repr, payload));
+
+        self.inner
+            .dispatch_ip(tx_token, PacketMeta::default(), packet, &mut self.fragmenter)
+            .map_err(|error| match error {
+                DispatchError::NoRoute => UdpDispatchError::Unaddressable,
+                DispatchError::NeighborPending => UdpDispatchError::NeighborPending,
+            })
     }
 
     /// Get an IPv4 source address based on a destination address. This function tries
@@ -849,8 +910,6 @@ impl InterfaceInner {
             IpAddress::Ipv6(addr) => Some(self.get_source_address_ipv6(addr).into()),
         }
     }
-
-
 
     #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
     fn check_hardware_addr(addr: &HardwareAddress) {

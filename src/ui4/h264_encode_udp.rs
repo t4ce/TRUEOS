@@ -4,12 +4,12 @@
 //! of the payload or ownership contract; it remains only a scanout-latch
 //! boundary elsewhere in UI4.
 
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
 
 use embassy_time::{Duration, Instant, Timer};
 
 use crate::r::net::{
-    VNet,
+    SharedNetPayload, VNet,
     udp::{VNetUdpEndpoint, VNetUdpEvent, VNetUdpPacket},
 };
 
@@ -53,8 +53,7 @@ struct EncodedAccessUnit {
 
 struct PendingDatagram {
     receipt: u32,
-    packet: [u8; DATAGRAM_BYTES],
-    packet_bytes: usize,
+    packet: SharedNetPayload,
     payload_bytes: usize,
     retries: usize,
 }
@@ -332,7 +331,10 @@ async fn send_access_unit(
                 .len()
                 .min(payload_start.saturating_add(PAYLOAD_BYTES));
             let payload = &access_unit.bytes[payload_start..payload_end];
-            let mut packet = [0u8; DATAGRAM_BYTES];
+            let mut packet = Arc::new([0u8; DATAGRAM_BYTES]);
+            let Some(packet_bytes) = Arc::get_mut(&mut packet) else {
+                return false;
+            };
             let mut flags = if access_unit.keyframe {
                 FLAG_KEYFRAME
             } else {
@@ -350,7 +352,7 @@ async fn send_access_unit(
             let receipt =
                 datagram_sequence.wrapping_add(fragment_index as u32 - window_start as u32);
             encode_header(
-                &mut packet[..HEADER_BYTES],
+                &mut packet_bytes[..HEADER_BYTES],
                 flags,
                 report.session_id,
                 receipt,
@@ -359,11 +361,14 @@ async fn send_access_unit(
                 fragment_count as u16,
                 payload,
             );
-            packet[HEADER_BYTES..HEADER_BYTES + payload.len()].copy_from_slice(payload);
+            packet_bytes[HEADER_BYTES..HEADER_BYTES + payload.len()].copy_from_slice(payload);
+            let packet_len = HEADER_BYTES + payload.len();
+            let Some(packet) = SharedNetPayload::from_arc_prefix(packet, packet_len) else {
+                return false;
+            };
             pending.push(PendingDatagram {
                 receipt,
                 packet,
-                packet_bytes: HEADER_BYTES + payload.len(),
                 payload_bytes: payload.len(),
                 retries: 0,
             });
@@ -419,7 +424,7 @@ async fn submit_checked_datagram(
 ) -> bool {
     loop {
         if udp
-            .send_v4_checked(remote, datagram.receipt, &datagram.packet[..datagram.packet_bytes])
+            .send_v4_checked(remote, datagram.receipt, &datagram.packet)
             .is_ok()
         {
             return true;

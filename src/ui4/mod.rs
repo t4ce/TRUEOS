@@ -8,7 +8,6 @@ mod compositor_service;
 mod context_menu;
 mod cursor_frame_inout;
 mod damage;
-mod font_stamp;
 mod frame_pool;
 mod gpgpu_preview_consumer;
 mod gpgpu_svg_probe_consumer;
@@ -71,15 +70,14 @@ pub(crate) use cursor_frame_inout::{
     source_selected, unregister_global_keyboard_hook,
 };
 pub(crate) use damage::{DamageRect, DamageRegion};
-pub(crate) use font_stamp::{present_font_stamp, ui4_font_stamp_service_task};
 pub(crate) use frame_pool::{
     FrameGpuRelease, FramePoolError, FrameReadLease, FrameRgbaView, FrameWriteLease,
     acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer, create_frame,
     destroy_frame, frame_buffer_ownership_probe, frame_snapshot, gpgpu_rgba_surface,
     mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_frame_buffer,
-    publish_gpgpu_scene_frame_buffer, publish_gpgpu_video_frame_buffer,
-    publish_gpu_font_frame_buffer, publish_gpu_frame_buffer, published_rgba_view,
-    release_published_frame, retain_published_frame, wait_frame_buffer_release, writable_rgba_view,
+    publish_gpgpu_scene_frame_buffer, publish_gpgpu_video_frame_buffer, publish_gpu_frame_buffer,
+    published_rgba_view, release_published_frame, retain_published_frame,
+    wait_frame_buffer_release, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_DURATION_MS,

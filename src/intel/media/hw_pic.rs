@@ -1,7 +1,7 @@
 extern crate alloc;
 
 use alloc::{collections::VecDeque, vec::Vec};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 
 use spin::Mutex;
 
@@ -16,8 +16,10 @@ static OUTPUTS: Mutex<VecDeque<HwPicOutput>> = Mutex::new(VecDeque::new());
 static WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static OUTPUT_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static AVC_DPB: Mutex<AvcDpbState> = Mutex::new(AvcDpbState::new());
+static AVC_PRESENTATION_HOLDS: AtomicU16 = AtomicU16::new(0);
 
-const AVC_DPB_RETAINED_REFS: usize = 3;
+const AVC_DPB_RETAINED_REFS: usize = 8;
+const AVC_INVALID_SURFACE_SLOT: u8 = u8::MAX;
 
 macro_rules! hw_pic_info {
     ($($arg:tt)*) => {
@@ -110,6 +112,7 @@ pub(crate) struct HwPicOutput {
     pub gpu_addr: u64,
     pub phys_addr: u64,
     pub virt_addr: usize,
+    pub surface_slot: u8,
     pub error_code: i32,
     pub timing: HwPicTiming,
 }
@@ -141,17 +144,23 @@ struct AvcDpbEntry {
 #[derive(Copy, Clone, Debug)]
 struct AvcDpbState {
     entries: [Option<AvcDpbEntry>; AVC_DPB_RETAINED_REFS],
+    prev_ref_pic_order_cnt_msb: i32,
+    prev_ref_pic_order_cnt_lsb: i32,
 }
 
 impl AvcDpbState {
     const fn new() -> Self {
         Self {
             entries: [None; AVC_DPB_RETAINED_REFS],
+            prev_ref_pic_order_cnt_msb: 0,
+            prev_ref_pic_order_cnt_lsb: 0,
         }
     }
 
     fn reset(&mut self) {
         self.entries = [None; AVC_DPB_RETAINED_REFS];
+        self.prev_ref_pic_order_cnt_msb = 0;
+        self.prev_ref_pic_order_cnt_lsb = 0;
     }
 
     fn live_count(&self) -> usize {
@@ -171,23 +180,45 @@ impl AvcDpbState {
             .any(|entry| entry.slot == slot)
     }
 
-    fn newest_refs(&self) -> [Option<AvcDpbEntry>; AVC_DPB_RETAINED_REFS] {
-        let mut refs = self.entries;
-        let mut i = 0usize;
-        while i < refs.len() {
-            let mut j = i + 1;
-            while j < refs.len() {
-                if avc_dpb_entry_newer(refs[j], refs[i]) {
-                    refs.swap(i, j);
-                }
-                j += 1;
-            }
-            i += 1;
+    fn resolve_picture_order(
+        &mut self,
+        plan: &mut crate::intel::xelp_media_avc_decode_recipe::AvcLongFormatIdrPlan,
+    ) -> Result<(), i32> {
+        if plan.picture.pic_order_cnt_type != 0 {
+            return Ok(());
         }
-        refs
+        let max_lsb = 1i32
+            .checked_shl(u32::from(
+                plan.picture.log2_max_pic_order_cnt_lsb_minus4,
+            ) + 4)
+            .ok_or(-35)?;
+        let lsb = i32::from(plan.picture.pic_order_cnt_lsb);
+        let msb = if plan.picture.idr_pic {
+            0
+        } else if lsb < self.prev_ref_pic_order_cnt_lsb
+            && self.prev_ref_pic_order_cnt_lsb - lsb >= max_lsb / 2
+        {
+            self.prev_ref_pic_order_cnt_msb.saturating_add(max_lsb)
+        } else if lsb > self.prev_ref_pic_order_cnt_lsb
+            && lsb - self.prev_ref_pic_order_cnt_lsb > max_lsb / 2
+        {
+            self.prev_ref_pic_order_cnt_msb.saturating_sub(max_lsb)
+        } else {
+            self.prev_ref_pic_order_cnt_msb
+        };
+        plan.picture.top_field_order_cnt = msb.saturating_add(lsb);
+        plan.picture.bottom_field_order_cnt = plan
+            .picture
+            .top_field_order_cnt
+            .saturating_add(plan.picture.delta_pic_order_cnt_bottom);
+        if plan.picture.reference_pic {
+            self.prev_ref_pic_order_cnt_msb = msb;
+            self.prev_ref_pic_order_cnt_lsb = lsb;
+        }
+        Ok(())
     }
 
-    fn insert_decoded_ref(&mut self, entry: AvcDpbEntry) {
+    fn insert_decoded_ref(&mut self, entry: AvcDpbEntry, max_refs: usize) {
         for existing in &mut self.entries {
             if existing
                 .map(|old| old.frame_store_id == entry.frame_store_id)
@@ -197,7 +228,10 @@ impl AvcDpbState {
                 return;
             }
         }
-        if let Some(empty) = self.entries.iter_mut().find(|slot| slot.is_none()) {
+        if self.live_count() < max_refs.min(self.entries.len()) {
+            let Some(empty) = self.entries.iter_mut().find(|slot| slot.is_none()) else {
+                return;
+            };
             *empty = Some(entry);
             return;
         }
@@ -208,14 +242,6 @@ impl AvcDpbState {
             }
         }
         self.entries[oldest_idx] = Some(entry);
-    }
-}
-
-fn avc_dpb_entry_newer(lhs: Option<AvcDpbEntry>, rhs: Option<AvcDpbEntry>) -> bool {
-    match (lhs, rhs) {
-        (Some(lhs), Some(rhs)) => lhs.frame_num > rhs.frame_num,
-        (Some(_), None) => true,
-        _ => false,
     }
 }
 
@@ -425,8 +451,23 @@ fn failed_output(job: &HwPicJob, code: i32) -> HwPicOutput {
         gpu_addr: 0,
         phys_addr: 0,
         virt_addr: 0,
+        surface_slot: AVC_INVALID_SURFACE_SLOT,
         error_code: code,
         timing: HwPicTiming::default(),
+    }
+}
+
+pub(crate) fn hold_h264_output_surface(output: &HwPicOutput) -> bool {
+    if output.codec != HwPicCodec::H264 || output.surface_slot >= 16 {
+        return false;
+    }
+    AVC_PRESENTATION_HOLDS.fetch_or(1u16 << output.surface_slot, Ordering::AcqRel);
+    true
+}
+
+pub(crate) fn release_h264_output_surface(output: &HwPicOutput) {
+    if output.codec == HwPicCodec::H264 && output.surface_slot < 16 {
+        AVC_PRESENTATION_HOLDS.fetch_and(!(1u16 << output.surface_slot), Ordering::AcqRel);
     }
 }
 
@@ -483,6 +524,7 @@ fn avc_prepare_reference_state(
     plan: &mut crate::intel::xelp_media_avc_decode_recipe::AvcLongFormatIdrPlan,
     layout: AvcDpbProbeLayout,
     output_gpu_addr: u64,
+    scratch_gpu_addr: u64,
 ) -> Result<
     (
         usize,
@@ -496,33 +538,42 @@ fn avc_prepare_reference_state(
         AvcGpuResourceRange, AvcReferenceFrameBinding, AvcReferenceState, AvcSliceClass,
     };
 
-    if layout.slot_count < 4 {
+    if layout.slot_count < AVC_DPB_RETAINED_REFS + 1 {
         return Err(-29);
     }
 
     let mut dpb = AVC_DPB.lock();
-    if plan.slice.class == AvcSliceClass::I {
+    if plan.picture.idr_pic {
         dpb.reset();
     }
+    dpb.resolve_picture_order(plan)?;
 
-    let active_l0 = if plan.slice.class == AvcSliceClass::P {
+    let active_l0 = if matches!(plan.slice.class, AvcSliceClass::P | AvcSliceClass::B) {
         usize::from(plan.slice.num_ref_idx_l0_active_minus1) + 1
     } else {
         0
     };
-    let newest_refs = dpb.newest_refs();
+    let active_l1 = if plan.slice.class == AvcSliceClass::B {
+        usize::from(plan.slice.num_ref_idx_l1_active_minus1) + 1
+    } else {
+        0
+    };
     let live_count = dpb.live_count();
-    if active_l0 > live_count {
+    if active_l0 > live_count
+        || active_l1 > live_count
+        || usize::from(plan.picture.max_num_ref_frames) > AVC_DPB_RETAINED_REFS
+    {
         return Err(-30);
     }
 
-    let current_slot = if plan.slice.class == AvcSliceClass::I {
+    let presentation_holds = AVC_PRESENTATION_HOLDS.load(Ordering::Acquire);
+    let current_slot = if plan.picture.idr_pic && presentation_holds == 0 {
         0
     } else {
         let mut free = None;
         let mut slot = 0usize;
         while slot < layout.slot_count.min(16) {
-            if !dpb.contains_slot(slot) {
+            if !dpb.contains_slot(slot) && presentation_holds & (1u16 << slot) == 0 {
                 free = Some(slot);
                 break;
             }
@@ -552,19 +603,70 @@ fn avc_prepare_reference_state(
                 top_field_order_cnt: entry.top_field_order_cnt,
                 bottom_field_order_cnt: entry.bottom_field_order_cnt,
                 surface_gpu_addr,
-                dmv_gpu_addr: 0,
+                dmv_gpu_addr: avc_dmv_slot_gpu_addr(*plan, scratch_gpu_addr, entry.slot),
             });
         }
     }
 
+    let max_frame_num = 1i32
+        .checked_shl(u32::from(plan.picture.log2_max_frame_num_minus4) + 4)
+        .ok_or(-35)?;
+    let mut ordered: Vec<AvcDpbEntry> = dpb.entries.iter().flatten().copied().collect();
+    if plan.slice.class == AvcSliceClass::P {
+        ordered.sort_by(|lhs, rhs| {
+            let lhs_wrap = if lhs.frame_num > plan.picture.frame_num {
+                i32::from(lhs.frame_num).saturating_sub(max_frame_num)
+            } else {
+                i32::from(lhs.frame_num)
+            };
+            let rhs_wrap = if rhs.frame_num > plan.picture.frame_num {
+                i32::from(rhs.frame_num).saturating_sub(max_frame_num)
+            } else {
+                i32::from(rhs.frame_num)
+            };
+            rhs_wrap.cmp(&lhs_wrap)
+        });
+    } else if plan.slice.class == AvcSliceClass::B {
+        let current_poc = plan.picture.top_field_order_cnt;
+        ordered.sort_by(|lhs, rhs| {
+            let lhs_poc = lhs.top_field_order_cnt;
+            let rhs_poc = rhs.top_field_order_cnt;
+            match (lhs_poc < current_poc, rhs_poc < current_poc) {
+                (true, true) => rhs_poc.cmp(&lhs_poc),
+                (false, false) => lhs_poc.cmp(&rhs_poc),
+                (true, false) => core::cmp::Ordering::Less,
+                (false, true) => core::cmp::Ordering::Greater,
+            }
+        });
+    }
     let mut l0 = [0u8; 16];
     let mut idx = 0usize;
     while idx < active_l0 {
-        let Some(entry) = newest_refs[idx] else {
-            return Err(-32);
-        };
+        let entry = *ordered.get(idx).ok_or(-32)?;
         l0[idx] = entry.frame_store_id;
         idx += 1;
+    }
+    let mut l1 = [0u8; 16];
+    if plan.slice.class == AvcSliceClass::B {
+        let current_poc = plan.picture.top_field_order_cnt;
+        ordered.sort_by(|lhs, rhs| {
+            let lhs_poc = lhs.top_field_order_cnt;
+            let rhs_poc = rhs.top_field_order_cnt;
+            match (lhs_poc > current_poc, rhs_poc > current_poc) {
+                (true, true) => lhs_poc.cmp(&rhs_poc),
+                (false, false) => rhs_poc.cmp(&lhs_poc),
+                (true, false) => core::cmp::Ordering::Less,
+                (false, true) => core::cmp::Ordering::Greater,
+            }
+        });
+        idx = 0;
+        while idx < active_l1 {
+            l1[idx] = ordered.get(idx).ok_or(-32)?.frame_store_id;
+            idx += 1;
+        }
+        if active_l1 > 1 && active_l0 == active_l1 && l0[..active_l0] == l1[..active_l1] {
+            l1.swap(0, 1);
+        }
     }
 
     plan.resources.reference_surface_count = live_count;
@@ -575,6 +677,8 @@ fn avc_prepare_reference_state(
             ref_count: live_count,
             l0,
             l0_count: active_l0,
+            l1,
+            l1_count: active_l1,
         },
         reference_surfaces,
         live_count,
@@ -585,20 +689,54 @@ fn avc_commit_decoded_reference(
     plan: crate::intel::xelp_media_avc_decode_recipe::AvcLongFormatIdrPlan,
     current_slot: usize,
 ) {
-    if !plan.picture.reference_pic {
+    if !plan.picture.reference_pic || plan.picture.max_num_ref_frames == 0 {
         return;
     }
-    AVC_DPB.lock().insert_decoded_ref(AvcDpbEntry {
-        slot: current_slot,
-        frame_store_id: current_slot as u8,
-        frame_num: plan.picture.frame_num,
-        top_field_order_cnt: plan.picture.top_field_order_cnt,
-        bottom_field_order_cnt: plan.picture.bottom_field_order_cnt,
-    });
+    AVC_DPB.lock().insert_decoded_ref(
+        AvcDpbEntry {
+            slot: current_slot,
+            frame_store_id: current_slot as u8,
+            frame_num: plan.picture.frame_num,
+            top_field_order_cnt: plan.picture.top_field_order_cnt,
+            bottom_field_order_cnt: plan.picture.bottom_field_order_cnt,
+        },
+        usize::from(plan.picture.max_num_ref_frames),
+    );
+}
+
+fn avc_dmv_region_offset(
+    plan: crate::intel::xelp_media_avc_decode_recipe::AvcLongFormatIdrPlan,
+) -> usize {
+    use crate::intel::xelp_media_avc_decode_recipe::MFX_GENERAL_STATE_ALIGNMENT;
+    let align = MFX_GENERAL_STATE_ALIGNMENT as usize;
+    align_up_usize(plan.resources.rowstore.intra, align)
+        .saturating_add(align_up_usize(
+            plan.resources.rowstore.deblocking_filter,
+            align,
+        ))
+        .saturating_add(align_up_usize(plan.resources.rowstore.bsd_mpc, align))
+        .saturating_add(align_up_usize(plan.resources.rowstore.mpr, align))
+}
+
+fn avc_dmv_slot_gpu_addr(
+    plan: crate::intel::xelp_media_avc_decode_recipe::AvcLongFormatIdrPlan,
+    scratch_gpu_addr: u64,
+    slot: usize,
+) -> u64 {
+    use crate::intel::xelp_media_avc_decode_recipe::MFX_GENERAL_STATE_ALIGNMENT;
+    let stride = align_up_usize(
+        plan.resources.dmv_write_buffer_bytes,
+        MFX_GENERAL_STATE_ALIGNMENT as usize,
+    );
+    scratch_gpu_addr
+        .saturating_add(avc_dmv_region_offset(plan) as u64)
+        .saturating_add(slot.saturating_mul(stride) as u64)
 }
 
 fn avc_scratch_bindings(
     plan: crate::intel::xelp_media_avc_decode_recipe::AvcLongFormatIdrPlan,
+    current_slot: usize,
+    dmv_slot_count: usize,
     dest_gpu_addr: u64,
     dest_bytes: usize,
     missing_reference_gpu_addr: u64,
@@ -636,18 +774,23 @@ fn avc_scratch_bindings(
         bytes: plan.resources.rowstore.mpr,
     };
     next += align_up_usize(mpr.bytes, align) as u64;
+    let dmv_stride = align_up_usize(plan.resources.dmv_write_buffer_bytes, align);
+    let dmv_region = next;
     let dmv_write = AvcGpuResourceRange {
-        gpu_addr: next,
+        gpu_addr: dmv_region.saturating_add(
+            current_slot.saturating_mul(dmv_stride) as u64,
+        ),
         bytes: plan.resources.dmv_write_buffer_bytes,
     };
-    next += align_up_usize(dmv_write.bytes, align) as u64;
     let dmv_reference = AvcGpuResourceRange {
-        gpu_addr: next,
+        gpu_addr: dmv_region,
         bytes: plan.resources.dmv_reference_buffer_bytes,
     };
-    let required_end = dmv_reference
-        .gpu_addr
-        .saturating_add(dmv_reference.bytes as u64);
+    let required_end = dmv_region.saturating_add(
+        dmv_slot_count
+            .min(16)
+            .saturating_mul(dmv_stride) as u64,
+    );
     let (dmv_write, dmv_reference) = if required_end <= scratch_end {
         (dmv_write, dmv_reference)
     } else {
@@ -803,11 +946,16 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         dpb_layout.first_reference_gpu_addr
     );
     let (current_slot, references, reference_surfaces, live_refs) =
-        match avc_prepare_reference_state(&mut plan, dpb_layout, windows.output_surface_gpu_addr) {
+        match avc_prepare_reference_state(
+            &mut plan,
+            dpb_layout,
+            windows.output_surface_gpu_addr,
+            windows.avc_scratch_gpu_addr,
+        ) {
             Ok(prepared) => prepared,
             Err(code) => {
                 hw_pic_info!(
-                    "intel/hw_pic-stage: id={} stage=avc-dpb-prepare accepted=0 code={} class={:?} frame_num={} poc={}/{} active_l0={} live_refs={}\n",
+                    "intel/hw_pic-stage: id={} stage=avc-dpb-prepare accepted=0 code={} class={:?} frame_num={} poc={}/{} active_l0={} active_l1={} live_refs={}\n",
                     job.id,
                     code,
                     plan.slice.class,
@@ -815,6 +963,7 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
                     plan.picture.top_field_order_cnt,
                     plan.picture.bottom_field_order_cnt,
                     plan.slice.num_ref_idx_l0_active_minus1.saturating_add(1),
+                    plan.slice.num_ref_idx_l1_active_minus1.saturating_add(1),
                     AVC_DPB.lock().live_count()
                 );
                 return failed_output(&job, code);
@@ -842,7 +991,7 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         return failed_output(&job, -27);
     }
     hw_pic_info!(
-        "intel/hw_pic-stage: id={} stage=avc-dpb-prepare accepted=1 class={:?} frame_num={} poc={}/{} current_slot={} output_offset=0x{:X} output_gpu=0x{:X} live_refs={} active_l0={} l0=[{}, {}, {}] ref_frames={}\n",
+        "intel/hw_pic-stage: id={} stage=avc-dpb-prepare accepted=1 class={:?} frame_num={} poc={}/{} current_slot={} output_offset=0x{:X} output_gpu=0x{:X} live_refs={} active_l0={} l0=[{}, {}, {}] active_l1={} l1=[{}, {}, {}] ref_frames={}\n",
         job.id,
         plan.slice.class,
         plan.picture.frame_num,
@@ -856,6 +1005,10 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         references.l0[0],
         references.l0[1],
         references.l0[2],
+        references.l1_count,
+        references.l1[0],
+        references.l1[1],
+        references.l1[2],
         plan.resources.reference_surface_count
     );
     let avc_scratch_required = align_up_usize(
@@ -874,11 +1027,13 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         plan.resources.rowstore.mpr,
         crate::intel::xelp_media_avc_decode_recipe::MFX_GENERAL_STATE_ALIGNMENT as usize,
     ))
-    .saturating_add(align_up_usize(
-        plan.resources.dmv_write_buffer_bytes,
-        crate::intel::xelp_media_avc_decode_recipe::MFX_GENERAL_STATE_ALIGNMENT as usize,
-    ))
-    .saturating_add(plan.resources.dmv_reference_buffer_bytes);
+    .saturating_add(
+        align_up_usize(
+            plan.resources.dmv_write_buffer_bytes,
+            crate::intel::xelp_media_avc_decode_recipe::MFX_GENERAL_STATE_ALIGNMENT as usize,
+        )
+        .saturating_mul(dpb_layout.slot_count.min(16)),
+    );
     if avc_scratch_required > backing.avc_scratch_bytes {
         hw_pic_info!(
             "intel/hw_pic-stage: id={} stage=avc-scratch accepted=0 code=-23 required=0x{:X} capacity=0x{:X}\n",
@@ -922,6 +1077,8 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
 
     let bindings = avc_scratch_bindings(
         plan,
+        current_slot,
+        dpb_layout.slot_count,
         output_gpu_addr,
         plan.resources.dest_surface.byte_len,
         output_gpu_addr,
@@ -947,6 +1104,9 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
     let command_addr = |offset: usize| {
         u64::from(command_dword(offset)) | (u64::from(command_dword(offset + 1)) << 32)
     };
+    let slice_state_offset = stream.slice_state_offset;
+    let bsd_object_offset =
+        slice_state_offset + crate::intel::xelp_media_avc_decode_recipe::MFX_AVC_SLICE_STATE_DWORD_COUNT;
 
     hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=avc-command-stream accepted=1 submit_ready=1 commands={} dwords={} headers pipe=0x{:08X} surface=0x{:08X} pipebuf=0x{:08X} indobj=0x{:08X} bsp=0x{:08X} dpb=0x{:08X} picid=0x{:08X} img=0x{:08X} qm0=0x{:08X} direct=0x{:08X} refidx=0x{:08X} slice=0x{:08X} bsd=0x{:08X}\n",
@@ -1010,12 +1170,12 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
             .unwrap_or(0),
         stream
             .dwords
-            .get(AVC_CMD_OFFSET_AVC_SLICE_STATE)
+            .get(slice_state_offset)
             .copied()
             .unwrap_or(0),
         stream
             .dwords
-            .get(AVC_CMD_OFFSET_AVC_BSD_OBJECT)
+            .get(bsd_object_offset)
             .copied()
             .unwrap_or(0)
     );
@@ -1029,11 +1189,11 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         command_addr(AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE + 1),
         command_dword(AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE + 3),
         command_addr(AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE + 4),
-        command_dword(AVC_CMD_OFFSET_AVC_BSD_OBJECT + 1),
-        command_dword(AVC_CMD_OFFSET_AVC_BSD_OBJECT + 2),
-        command_dword(AVC_CMD_OFFSET_AVC_BSD_OBJECT + 3),
-        command_dword(AVC_CMD_OFFSET_AVC_BSD_OBJECT + 4),
-        command_dword(AVC_CMD_OFFSET_AVC_BSD_OBJECT + 5),
+        command_dword(bsd_object_offset + 1),
+        command_dword(bsd_object_offset + 2),
+        command_dword(bsd_object_offset + 3),
+        command_dword(bsd_object_offset + 4),
+        command_dword(bsd_object_offset + 5),
         command_dword(AVC_CMD_OFFSET_SURFACE_STATE + 2),
         command_dword(AVC_CMD_OFFSET_SURFACE_STATE + 3),
         command_dword(AVC_CMD_OFFSET_SURFACE_STATE + 4),
@@ -1352,6 +1512,7 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         gpu_addr: output_gpu_addr,
         phys_addr: output_phys_addr,
         virt_addr: output_virt_addr as usize,
+        surface_slot: current_slot as u8,
         error_code: output_error,
         timing: HwPicTiming {
             backend_mode_transition: avc.mode_transition,
@@ -1650,6 +1811,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         gpu_addr: windows.output_surface_gpu_addr,
         phys_addr: backing.output_surface_phys,
         virt_addr: backing.output_surface_virt as usize,
+        surface_slot: AVC_INVALID_SURFACE_SLOT,
         error_code: if output_ready { 0 } else { -13 },
         timing: HwPicTiming::default(),
     }

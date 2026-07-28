@@ -1,17 +1,28 @@
-use alloc::string::String;
+use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::fmt::Write;
 use core::str::SplitWhitespace;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use embassy_executor::Spawner;
+use spin::Mutex;
 
 use super::super::{ShellBackend2, print_shell_line};
+use crate::intel::gpu_font::{GpuFontFace, GpuFontRgba};
+use crate::r::font_kernel_service::{
+    FONT_STAMP_MAX_EXTENT, FONT_STAMP_MAX_GLYPHS, FontStampFit, FontStampLayer, FontStampRequest,
+    FontStampedBuffer, RetainSceneRequest, RetainedFontPositioning, RetainedFontRun,
+};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const CPP_DEMO_DEFAULT_DURATION_MS: u64 = 30_000;
 const CPP_AUDIO_DEFAULT_DURATION_MS: u64 = 0;
 const CPP_AUDIO_DEFAULT_CADENCE_MS: u64 = 50;
-static CPP_FONT_PROBE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+const CPP_FONT_OUTPUT_CAPACITY: usize = 8;
+const CPP_FONT_DEFAULT_PIXELS: f32 = 36.0;
+const CPP_FONT_DEFAULT_LINE_HEIGHT: f32 = 1.25;
+const CPP_FONT_DEFAULT_RGBA: GpuFontRgba = GpuFontRgba::new(80, 225, 255, 255);
+static CPP_FONT_OUTPUTS: Mutex<VecDeque<FontStampedBuffer>> = Mutex::new(VecDeque::new());
+static CPP_FONT_OUTPUT_RESERVATIONS: AtomicUsize = AtomicUsize::new(0);
 
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "cpp [gallery|aurora|julia|sdf|voronoi|retro-sun|audio|particle]");
@@ -22,7 +33,11 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "cpp list");
     print_shell_line(io, "cpp status");
     print_shell_line(io, "cpp stop");
-    print_shell_line(io, "cpp font [stamp|status]");
+    print_shell_line(
+        io,
+        "cpp font stamp \"text\" [size=36] [font=auto|1|2|3] [color=RRGGBBAA] [x=0] [y=0] [line=1.25] [slant=-1..1] [canvas=WIDTHxHEIGHT] [-- \"overlay\" ...]",
+    );
+    print_shell_line(io, "cpp font [status|release <ticket|all>]");
     print_shell_line(io, "cpp spirit [status|list|clean]");
     print_shell_line(io, "cpp spirit show <background_id> <shader_id>");
 }
@@ -548,12 +563,25 @@ fn spirit(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
 
 fn print_font_service_status(io: &'static dyn ShellBackend2) {
     let status = crate::r::font_kernel_service::status();
+    let (outputs, output_bytes) = {
+        let outputs = CPP_FONT_OUTPUTS.lock();
+        (
+            outputs.len(),
+            outputs
+                .iter()
+                .fold(0usize, |total, output| total.saturating_add(output.surface().bytes)),
+        )
+    };
     print_shell_line(
         io,
         alloc::format!(
-            "cpp font status: online={} queued={} active_ticket={} active_stage={} active_consumer={}:{} lane_waiters={} lane_peak={} lane_admissions={} lane_contentions={} lane_wait_ms={} lane_wait_max_ms={} lane_paths=retain:{},stamp:{},grid-page:{},grid-patch:{},grid-present:{},grid-print:{} lane_retries={} gpu_retries={} retain_submitted={} retain_completed={} stamp_submitted={} stamp_completed={} failed={} carrier=bsp-controller+leased-blocking-lane font_lane=fair-fifo-multi-consumer ownership=gpu-vm-r8+gpu-vm-rgba8 completion=ticket-signal",
+            "cpp font status: online={} queued={} outputs={} output_reservations={} output_bytes={} output_capacity={} active_ticket={} active_stage={} active_consumer={}:{} lane_waiters={} lane_peak={} lane_admissions={} lane_contentions={} lane_wait_ms={} lane_wait_max_ms={} lane_paths=retain:{},stamp:{},grid-page:{},grid-patch:{},grid-present:{},grid-print:{} lane_retries={} gpu_retries={} retain_submitted={} retain_completed={} stamp_submitted={} stamp_completed={} failed={} caps=rgba8-{}px/uhd-pixels+{}glyphs carrier=bsp-controller+leased-blocking-lane font_lane=fair-fifo-multi-consumer ownership=gpu-vm-r8+gpu-vm-rgba8 completion=ticket-signal",
             status.online as u8,
             status.queued,
+            outputs,
+            CPP_FONT_OUTPUT_RESERVATIONS.load(Ordering::Acquire),
+            output_bytes,
+            CPP_FONT_OUTPUT_CAPACITY,
             status.active_ticket.map(|ticket| ticket.raw()).unwrap_or(0),
             status.active_stage,
             status
@@ -583,45 +611,346 @@ fn print_font_service_status(io: &'static dyn ShellBackend2) {
             status.submitted_stamp,
             status.completed_stamp,
             status.failed,
+            FONT_STAMP_MAX_EXTENT,
+            FONT_STAMP_MAX_GLYPHS,
         )
         .as_str(),
     );
 }
 
-fn queue_font_service_stamp(spawner: &Spawner, io: &'static dyn ShellBackend2) {
-    if CPP_FONT_PROBE_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        print_shell_line(io, "cpp font stamp: queued=0 reason=probe-in-flight");
-        return;
+fn reserve_font_output() -> bool {
+    let mut reserved = CPP_FONT_OUTPUT_RESERVATIONS.load(Ordering::Acquire);
+    loop {
+        if reserved >= CPP_FONT_OUTPUT_CAPACITY {
+            return false;
+        }
+        match CPP_FONT_OUTPUT_RESERVATIONS.compare_exchange_weak(
+            reserved,
+            reserved + 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(observed) => reserved = observed,
+        }
     }
+}
+
+fn release_font_output_reservation(count: usize) {
+    if count != 0 {
+        CPP_FONT_OUTPUT_RESERVATIONS.fetch_sub(count, Ordering::AcqRel);
+    }
+}
+
+/// Transfer one completed shell stamp to an in-kernel consumer.
+///
+/// The returned allocation remains valid until that consumer drops it. This is
+/// the programmatic counterpart to the stable handle printed by the command.
+pub(crate) fn take_font_stamp_output(handle: u64) -> Option<FontStampedBuffer> {
+    let mut outputs = CPP_FONT_OUTPUTS.lock();
+    let index = outputs
+        .iter()
+        .position(|output| output.ticket().raw() == handle)?;
+    let output = outputs.remove(index)?;
+    drop(outputs);
+    release_font_output_reservation(1);
+    Some(output)
+}
+
+#[derive(Debug)]
+struct ParsedFontStamp {
+    request: FontStampRequest,
+    glyphs: usize,
+    rows: usize,
+}
+
+fn tokenize_font_stamp(input: &str) -> Result<Vec<String>, &'static str> {
+    let mut tokens = Vec::new();
+    let mut chars = input.chars().peekable();
+    while chars.peek().is_some() {
+        while chars.peek().is_some_and(|ch| ch.is_whitespace()) {
+            chars.next();
+        }
+        let Some(first) = chars.next() else {
+            break;
+        };
+        let mut token = String::new();
+        if first == '"' {
+            let mut closed = false;
+            while let Some(ch) = chars.next() {
+                match ch {
+                    '"' => {
+                        closed = true;
+                        break;
+                    }
+                    '\\' => {
+                        let escaped = chars.next().ok_or("unfinished-escape")?;
+                        match escaped {
+                            '"' | '\\' => token.push(escaped),
+                            'n' => token.push('\n'),
+                            'r' => token.push('\r'),
+                            't' => token.push('\t'),
+                            'u' => {
+                                if chars.next() != Some('{') {
+                                    return Err("unicode-escape-open-brace");
+                                }
+                                let mut value = 0u32;
+                                let mut digits = 0usize;
+                                loop {
+                                    let scalar = chars.next().ok_or("unfinished-unicode-escape")?;
+                                    if scalar == '}' {
+                                        break;
+                                    }
+                                    let digit = scalar.to_digit(16).ok_or("unicode-escape-hex")?;
+                                    digits = digits.saturating_add(1);
+                                    if digits > 6 {
+                                        return Err("unicode-escape-too-long");
+                                    }
+                                    value = value
+                                        .checked_mul(16)
+                                        .and_then(|value| value.checked_add(digit))
+                                        .ok_or("unicode-escape-range")?;
+                                }
+                                if digits == 0 {
+                                    return Err("unicode-escape-empty");
+                                }
+                                token.push(
+                                    char::from_u32(value).ok_or("unicode-escape-invalid-scalar")?,
+                                );
+                            }
+                            _ => return Err("unsupported-escape"),
+                        }
+                    }
+                    ch => token.push(ch),
+                }
+            }
+            if !closed {
+                return Err("missing-closing-quote");
+            }
+            if chars.peek().is_some_and(|ch| !ch.is_whitespace()) {
+                return Err("quoted-token-must-end-at-whitespace");
+            }
+        } else {
+            token.push(first);
+            while chars.peek().is_some_and(|ch| !ch.is_whitespace()) {
+                token.push(chars.next().expect("peeked font token character"));
+            }
+        }
+        tokens.push(token);
+    }
+    Ok(tokens)
+}
+
+fn parse_stamp_rgba(encoded: &str) -> Result<GpuFontRgba, &'static str> {
+    let encoded = encoded
+        .strip_prefix('#')
+        .or_else(|| encoded.strip_prefix("0x"))
+        .unwrap_or(encoded);
+    if encoded.len() != 8 || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("color-expected-RRGGBBAA");
+    }
+    u32::from_str_radix(encoded, 16)
+        .map(GpuFontRgba::from_rgba_u32)
+        .map_err(|_| "color-invalid")
+}
+
+fn parse_stamp_canvas(encoded: &str) -> Result<(u32, u32), &'static str> {
+    let (width, height) = encoded
+        .split_once(['x', 'X'])
+        .ok_or("canvas-expected-WIDTHxHEIGHT")?;
+    let width = width.parse::<u32>().map_err(|_| "canvas-width-invalid")?;
+    let height = height.parse::<u32>().map_err(|_| "canvas-height-invalid")?;
+    if width == 0
+        || height == 0
+        || width > FONT_STAMP_MAX_EXTENT
+        || height > FONT_STAMP_MAX_EXTENT
+        || u64::from(width) * u64::from(height)
+            > crate::r::font_kernel_service::FONT_STAMP_MAX_PIXELS
+    {
+        return Err("canvas-over-4k-softcap");
+    }
+    Ok((width, height))
+}
+
+fn font_prefers_noto(text: &str) -> bool {
+    text.chars().any(|ch| {
+        matches!(
+            ch as u32,
+            0x2E80..=0xA4CF
+                | 0xF900..=0xFAFF
+                | 0xFE30..=0xFE4F
+                | 0xFF00..=0xFFEF
+                | 0x20000..=0x2FA1F
+        )
+    })
+}
+
+fn parse_font_stamp(input: &str) -> Result<ParsedFontStamp, &'static str> {
+    let tokens = tokenize_font_stamp(input)?;
+    if tokens.is_empty() {
+        return Err("text-must-be-quoted");
+    }
+    let mut layers: Vec<(Vec<RetainedFontRun>, GpuFontFace, GpuFontRgba)> = Vec::new();
+    let mut cursor = 0usize;
+    let mut canvas = None;
+    let mut glyphs = 0usize;
+    let mut rows = 0usize;
+    while cursor < tokens.len() {
+        if tokens[cursor] == "--" || tokens[cursor].contains('=') {
+            return Err("overlay-text-missing");
+        }
+        let text = &tokens[cursor];
+        cursor += 1;
+        let mut font = None;
+        let mut font_pixels = CPP_FONT_DEFAULT_PIXELS;
+        let mut foreground = CPP_FONT_DEFAULT_RGBA;
+        let mut x = 0.0f32;
+        let mut y = 0.0f32;
+        let mut line_height = CPP_FONT_DEFAULT_LINE_HEIGHT;
+        let mut slant = 0.0f32;
+        while cursor < tokens.len() && tokens[cursor] != "--" {
+            let option = &tokens[cursor];
+            cursor += 1;
+            let (key, value) = option.split_once('=').ok_or("option-expected-key=value")?;
+            match key {
+                "font" => {
+                    if value.eq_ignore_ascii_case("auto") {
+                        font = None;
+                    } else {
+                        let id = value.parse::<u32>().map_err(|_| "font-id-invalid")?;
+                        font = Some(GpuFontFace::from_id(id).ok_or("font-id-out-of-range-1-to-3")?);
+                    }
+                }
+                "size" => {
+                    font_pixels = value.parse::<f32>().map_err(|_| "size-invalid")?;
+                    if !font_pixels.is_finite() || !(4.0..=2048.0).contains(&font_pixels) {
+                        return Err("size-out-of-range-4-to-2048");
+                    }
+                }
+                "color" => foreground = parse_stamp_rgba(value)?,
+                "x" => x = value.parse::<f32>().map_err(|_| "x-invalid")?,
+                "y" => y = value.parse::<f32>().map_err(|_| "y-invalid")?,
+                "line" => {
+                    line_height = value.parse::<f32>().map_err(|_| "line-invalid")?;
+                    if !line_height.is_finite() || !(0.5..=4.0).contains(&line_height) {
+                        return Err("line-out-of-range-0.5-to-4");
+                    }
+                }
+                "slant" => {
+                    slant = value.parse::<f32>().map_err(|_| "slant-invalid")?;
+                    if !slant.is_finite() || !(-1.0..=1.0).contains(&slant) {
+                        return Err("slant-out-of-range-minus1-to-1");
+                    }
+                }
+                "canvas" => {
+                    let parsed = parse_stamp_canvas(value)?;
+                    if canvas.is_some_and(|current| current != parsed) {
+                        return Err("canvas-conflict");
+                    }
+                    canvas = Some(parsed);
+                }
+                _ => return Err("unknown-stamp-option"),
+            }
+        }
+        if !x.is_finite() || !y.is_finite() {
+            return Err("position-invalid");
+        }
+        let layer_glyphs = text.chars().filter(|ch| *ch != '\n' && *ch != '\r').count();
+        glyphs = glyphs
+            .checked_add(layer_glyphs)
+            .ok_or("glyph-softcap-4096")?;
+        if layer_glyphs == 0 || glyphs > FONT_STAMP_MAX_GLYPHS {
+            return Err("glyph-softcap-4096");
+        }
+        let font = font.unwrap_or_else(|| {
+            if font_prefers_noto(text) {
+                GpuFontFace::NotoSansSc
+            } else {
+                GpuFontFace::Default
+            }
+        });
+        let mut runs = Vec::new();
+        for (row, line) in text.split(['\n', '\r']).enumerate() {
+            rows = rows.saturating_add(1);
+            if line.is_empty() {
+                continue;
+            }
+            runs.push(RetainedFontRun {
+                text: String::from(line),
+                position: [x, y + row as f32 * font_pixels * line_height],
+                font_pixels,
+                slant,
+            });
+        }
+        if runs.is_empty() {
+            return Err("font-coverage-empty");
+        }
+        if let Some((previous_runs, previous_font, previous_foreground)) = layers.last_mut()
+            && *previous_font == font
+            && *previous_foreground == foreground
+        {
+            previous_runs.extend(runs);
+        } else {
+            layers.push((runs, font, foreground));
+        }
+        if cursor < tokens.len() {
+            cursor += 1;
+            if cursor == tokens.len() {
+                return Err("overlay-text-missing");
+            }
+        }
+    }
+    let (width, height, fit) = canvas
+        .map(|(width, height)| (width, height, FontStampFit::Canvas))
+        .unwrap_or((3840, 2160, FontStampFit::Tight));
+    let layers = layers
+        .into_iter()
+        .map(|(runs, font, foreground)| FontStampLayer {
+            scene: RetainSceneRequest {
+                runs,
+                font,
+                viewport_width: width,
+                viewport_height: height,
+                raster_width: width,
+                raster_height: height,
+                positioning: RetainedFontPositioning::SceneOrigin,
+            },
+            foreground,
+        })
+        .collect();
+    Ok(ParsedFontStamp {
+        request: FontStampRequest { layers, fit },
+        glyphs,
+        rows,
+    })
+}
+
+fn queue_font_service_stamp(spawner: &Spawner, io: &'static dyn ShellBackend2, input: &str) {
     if !crate::r::font_kernel_service::status().online {
-        CPP_FONT_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         print_shell_line(io, "cpp font stamp: queued=0 reason=font-service-offline");
         return;
     }
-    let request = crate::r::font_kernel_service::FontStampRequest {
-        scene: crate::r::font_kernel_service::RetainSceneRequest {
-            runs: alloc::vec![crate::r::font_kernel_service::RetainedFontRun {
-                text: String::from("TRUEOS retained GPU font"),
-                position: [18.0, 58.0],
-                font_pixels: 36.0,
-                slant: 0.0,
-            }],
-            font: crate::intel::gpu_font::GpuFontFace::Default,
-            viewport_width: 512,
-            viewport_height: 96,
-            raster_width: 512,
-            raster_height: 96,
-            positioning: crate::r::font_kernel_service::RetainedFontPositioning::SceneOrigin,
-        },
-        foreground: crate::intel::gpu_font::GpuFontRgba::new(80, 225, 255, 255),
+    let parsed = match parse_font_stamp(input) {
+        Ok(parsed) => parsed,
+        Err(reason) => {
+            print_shell_line(
+                io,
+                alloc::format!("cpp font stamp: queued=0 reason={reason}").as_str(),
+            );
+            usage(io);
+            return;
+        }
     };
-    let pending = match crate::r::font_kernel_service::submit_stamp(request) {
+    let layers = parsed.request.layers.len();
+    let fit = parsed.request.fit;
+    if !reserve_font_output() {
+        print_shell_line(io, "cpp font stamp: queued=0 reason=output-capacity");
+        return;
+    }
+    let pending = match crate::r::font_kernel_service::submit_stamp(parsed.request) {
         Ok(pending) => pending,
         Err(error) => {
-            CPP_FONT_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+            release_font_output_reservation(1);
             print_shell_line(
                 io,
                 alloc::format!("cpp font stamp: queued=0 reason={error:?}").as_str(),
@@ -630,27 +959,34 @@ fn queue_font_service_stamp(spawner: &Spawner, io: &'static dyn ShellBackend2) {
         }
     };
     let ticket = pending.ticket().raw();
-    match cpp_font_stamp_probe_task(io, pending) {
+    match cpp_font_stamp_task(io, pending) {
         Ok(task) => {
             spawner.spawn(task);
             print_shell_line(
                 io,
                 alloc::format!(
-                    "cpp font stamp: queued=1 ticket={} text=\"TRUEOS retained GPU font\" raster=512x96 path=skrifa->gpu-vm-r8->cpp-igc->guc-rcs->gpu-vm-rgba8",
+                    "cpp font stamp: queued=1 ticket={} layers={} rows={} glyphs={} fit={} output=async-owned-rgba8 path=skrifa->gpu-vm-r8->cpp-igc->guc-rcs->gpu-vm-rgba8",
                     ticket,
+                    layers,
+                    parsed.rows,
+                    parsed.glyphs,
+                    match fit {
+                        FontStampFit::Canvas => "canvas",
+                        FontStampFit::Tight => "tight",
+                    },
                 )
                 .as_str(),
             );
         }
         Err(_) => {
-            CPP_FONT_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-            print_shell_line(io, "cpp font stamp: queued=0 reason=probe-task-unavailable");
+            release_font_output_reservation(1);
+            print_shell_line(io, "cpp font stamp: queued=0 reason=completion-task-capacity");
         }
     }
 }
 
-#[embassy_executor::task]
-async fn cpp_font_stamp_probe_task(
+#[embassy_executor::task(pool_size = 32)]
+async fn cpp_font_stamp_task(
     io: &'static dyn ShellBackend2,
     pending: crate::r::font_kernel_service::PendingFontStamp,
 ) {
@@ -658,78 +994,105 @@ async fn cpp_font_stamp_probe_task(
     match pending.wait().await {
         Ok(buffer) => {
             let surface = buffer.surface();
-            match buffer.readback_tight_rgba() {
-                Some(bytes) => {
-                    let mut checksum = 0xcbf29ce484222325u64;
-                    let mut covered_pixels = 0usize;
-                    for pixel in bytes.chunks_exact(4) {
-                        for &byte in pixel {
-                            checksum ^= u64::from(byte);
-                            checksum = checksum.wrapping_mul(0x100000001b3);
-                        }
-                        covered_pixels += usize::from(pixel[3] != 0);
-                    }
-                    print_shell_line(
-                        io,
-                        alloc::format!(
-                            "cpp font stamp complete: ticket={} ok={} gpu=0x{:X} extent={}x{} pitch={} submits={} walkers={} covered_pixels={} checksum=fnv1a64:{:016x} runtime_compiler=0",
-                            ticket,
-                            (covered_pixels != 0) as u8,
-                            surface.gpu,
-                            surface.width,
-                            surface.height,
-                            surface.pitch_bytes,
-                            buffer.submits(),
-                            buffer.active_walkers(),
-                            covered_pixels,
-                            checksum,
-                        )
-                        .as_str(),
-                    );
-                }
-                None => print_shell_line(
-                    io,
-                    alloc::format!(
-                        "cpp font stamp complete: ticket={} ok=0 reason=readback-unavailable",
-                        ticket,
-                    )
-                    .as_str(),
-                ),
-            }
-        }
-        Err(error) => print_shell_line(
-            io,
-            alloc::format!("cpp font stamp complete: ticket={} ok=0 reason={error:?}", ticket,)
+            let origin = buffer.origin_px();
+            let glyphs = buffer.glyphs();
+            let submits = buffer.submits();
+            let walkers = buffer.active_walkers();
+            let retained = {
+                let mut outputs = CPP_FONT_OUTPUTS.lock();
+                outputs.push_back(buffer);
+                outputs.len()
+            };
+            print_shell_line(
+                io,
+                alloc::format!(
+                    "cpp font stamp complete: ticket={} ok=1 handle={} gpu=0x{:X} extent={}x{} pitch={} logical_origin={},{} glyphs={} submits={} walkers={} retained_outputs={} rgba=premultiplied-rgba8 alpha=coverage-multiplied source_over=1 cpu_readback=0 runtime_compiler=0",
+                    ticket,
+                    ticket,
+                    surface.gpu,
+                    surface.width,
+                    surface.height,
+                    surface.pitch_bytes,
+                    origin[0],
+                    origin[1],
+                    glyphs,
+                    submits,
+                    walkers,
+                    retained,
+                )
                 .as_str(),
-        ),
+            );
+        }
+        Err(error) => {
+            release_font_output_reservation(1);
+            print_shell_line(
+                io,
+                alloc::format!("cpp font stamp complete: ticket={} ok=0 reason={error:?}", ticket,)
+                    .as_str(),
+            );
+        }
     }
-    CPP_FONT_PROBE_IN_FLIGHT.store(false, Ordering::Release);
 }
 
-fn font_service(spawner: &Spawner, io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    match args.next() {
-        None => queue_font_service_stamp(spawner, io),
-        Some(command) if command.eq_ignore_ascii_case("stamp") => {
-            if expect_no_more(io, args) {
-                queue_font_service_stamp(spawner, io);
-            }
+fn release_font_output(io: &'static dyn ShellBackend2, target: &str) {
+    if target.eq_ignore_ascii_case("all") {
+        let mut outputs = CPP_FONT_OUTPUTS.lock();
+        let released = outputs.len();
+        outputs.clear();
+        drop(outputs);
+        release_font_output_reservation(released);
+        print_shell_line(
+            io,
+            alloc::format!("cpp font release: released={} target=all", released).as_str(),
+        );
+        return;
+    }
+    let Ok(ticket) = target.parse::<u64>() else {
+        print_shell_line(io, "cpp font release: released=0 reason=ticket-invalid");
+        return;
+    };
+    let Some(output) = take_font_stamp_output(ticket) else {
+        print_shell_line(io, "cpp font release: released=0 reason=handle-not-found");
+        return;
+    };
+    drop(output);
+    print_shell_line(io, alloc::format!("cpp font release: released=1 handle={ticket}").as_str());
+}
+
+fn font_service(spawner: &Spawner, io: &'static dyn ShellBackend2, input: &str) {
+    let input = input.trim();
+    let (command, rest) = input
+        .split_once(char::is_whitespace)
+        .map(|(command, rest)| (command, rest.trim_start()))
+        .unwrap_or((input, ""));
+    if command.eq_ignore_ascii_case("stamp") {
+        queue_font_service_stamp(spawner, io, rest);
+    } else if command.eq_ignore_ascii_case("status") {
+        if rest.is_empty() {
+            print_font_service_status(io);
+        } else {
+            usage(io);
         }
-        Some(command) if command.eq_ignore_ascii_case("status") => {
-            if expect_no_more(io, args) {
-                print_font_service_status(io);
-            }
+    } else if command.eq_ignore_ascii_case("release") {
+        let mut args = rest.split_whitespace();
+        match (args.next(), args.next()) {
+            (Some(target), None) => release_font_output(io, target),
+            _ => usage(io),
         }
-        Some(_) => usage(io),
+    } else {
+        usage(io);
     }
 }
 
 pub(crate) fn try_parse(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
-    args: &mut SplitWhitespace<'_>,
+    input: &str,
 ) -> ParseOutcome {
+    let input = input.trim();
+    let mut args = input.split_whitespace();
     let Some(command) = args.next() else {
-        start(io, crate::ui4::GpgpuPreviewPreset::CppGallery, args);
+        start(io, crate::ui4::GpgpuPreviewPreset::CppGallery, &mut args);
         return ParseOutcome::Handled;
     };
 
@@ -741,17 +1104,17 @@ pub(crate) fn try_parse(
             }
             None => crate::ui4::GpgpuPreviewPreset::CppGallery,
         };
-        start(io, preset, args);
+        start(io, preset, &mut args);
     } else if command.eq_ignore_ascii_case("list") {
-        if expect_no_more(io, args) {
+        if expect_no_more(io, &mut args) {
             print_list(io);
         }
     } else if command.eq_ignore_ascii_case("status") {
-        if expect_no_more(io, args) {
+        if expect_no_more(io, &mut args) {
             print_status(io);
         }
     } else if command.eq_ignore_ascii_case("stop") {
-        if expect_no_more(io, args) {
+        if expect_no_more(io, &mut args) {
             let status = crate::ui4::gpgpu_preview_status();
             if status.desired_running && is_cpp_preset(status.config.preset) {
                 let serial = crate::ui4::request_gpgpu_preview_stop();
@@ -764,11 +1127,12 @@ pub(crate) fn try_parse(
             }
         }
     } else if command.eq_ignore_ascii_case("font") {
-        font_service(spawner, io, args);
+        let font_input = input[command.len()..].trim_start();
+        font_service(spawner, io, font_input);
     } else if command.eq_ignore_ascii_case("spirit") {
-        spirit(io, args);
+        spirit(io, &mut args);
     } else if let Some(preset) = parse_mode(command) {
-        start(io, preset, args);
+        start(io, preset, &mut args);
     } else {
         usage(io);
     }
@@ -778,7 +1142,7 @@ pub(crate) fn try_parse(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_mode, particle_naive_candidate_tests};
+    use super::{FontStampFit, parse_font_stamp, parse_mode, particle_naive_candidate_tests};
 
     #[test]
     fn retro_sun_aliases_select_the_standalone_preset() {
@@ -797,5 +1161,34 @@ mod tests {
     #[test]
     fn particle_default_reports_the_reduced_candidate_work() {
         assert_eq!(particle_naive_candidate_tests(320, 200), 8_192_000);
+    }
+
+    #[test]
+    fn font_stamp_parses_multiline_unicode_and_overlay_layers() {
+        let parsed = parse_font_stamp(
+            "\"Hello\\n中国\" size=42 color=FF0000CC -- \"overlay\" x=12 y=-4 font=3",
+        )
+        .expect("valid layered font stamp");
+
+        assert_eq!(parsed.request.fit, FontStampFit::Tight);
+        assert_eq!(parsed.request.layers.len(), 2);
+        assert_eq!(parsed.request.layers[0].scene.runs.len(), 2);
+        assert_eq!(parsed.request.layers[0].scene.font.id(), 2);
+        assert_eq!(parsed.request.layers[1].scene.font.id(), 3);
+        assert_eq!(parsed.rows, 3);
+    }
+
+    #[test]
+    fn font_stamp_canvas_and_glyph_softcaps_are_enforced() {
+        let parsed =
+            parse_font_stamp("\"canvas\" canvas=3840x2160").expect("valid UHD canvas stamp");
+        assert_eq!(parsed.request.fit, FontStampFit::Canvas);
+
+        let oversized = alloc::format!("\"{}\"", "x".repeat(4097));
+        assert_eq!(parse_font_stamp(oversized.as_str()).unwrap_err(), "glyph-softcap-4096");
+        assert_eq!(
+            parse_font_stamp("\"x\" canvas=4096x4096").unwrap_err(),
+            "canvas-over-4k-softcap"
+        );
     }
 }

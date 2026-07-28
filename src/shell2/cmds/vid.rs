@@ -222,7 +222,7 @@ pub(crate) fn try_parse(
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "vid: usage `vid fs [path] [loop]` | `vid on [loop]` (`online` also accepted)",
+        "vid: usage `vid fs [path] [loop]` | `vid on [loop]`; fs accepts AVC MP4 or H.264 Annex-B",
     );
 }
 

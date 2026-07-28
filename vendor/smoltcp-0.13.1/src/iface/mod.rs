@@ -23,6 +23,8 @@ pub use self::interface::multicast::MulticastError;
 pub use self::interface::{
     Config, Interface, InterfaceInner as Context, PollIngressSingleResult, PollResult,
 };
+#[cfg(feature = "socket-udp")]
+pub use self::interface::UdpDispatchError;
 
 pub use self::route::{Route, RouteTableFull, Routes};
 #[cfg(feature = "proto-ipv6-slaac")]

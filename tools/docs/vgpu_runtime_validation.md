@@ -105,14 +105,15 @@ and the literal text `hello`. Expected:
 rendered=1 timeline=1 submitted=<n>-><n+1> completed=<n+1> error=none
 ```
 
-The rendered stamp should also be visibly correct. For a direct behavior check,
-run the unchanged public command immediately afterwards:
+For a direct behavior check of the production buffer path, run:
 
 ```text
-fnt "hello"
+cpp font stamp "hello"
 ```
 
-Its result should contain `stamped=1` and `completed=1`.
+Its asynchronous result should contain `cpp font stamp complete`, `ok=1`, and
+an owned RGBA8 `handle`. Release it after inspection with
+`cpp font release <handle>`.
 
 ## What `vgpu status` proves
 

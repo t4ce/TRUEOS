@@ -134,6 +134,26 @@ impl NetDevice for ActiveDevice {
         }
     }
 
+    fn transmit_with(&mut self, len: usize, fill: &mut dyn FnMut(&mut [u8])) -> Result<(), ()> {
+        match self {
+            ActiveDevice::Virtio(dev) => dev.transmit_with(len, fill),
+            //  ActiveDevice::E1000(dev) => dev.transmit_with(len, fill),
+            ActiveDevice::I226(dev) => dev.transmit_with(len, fill),
+            ActiveDevice::Rtl8169(dev) => dev.transmit_with(len, fill),
+            ActiveDevice::R8125(dev) => dev.transmit_with(len, fill),
+        }
+    }
+
+    fn transmit_ready(&mut self) -> bool {
+        match self {
+            ActiveDevice::Virtio(dev) => dev.transmit_ready(),
+            //  ActiveDevice::E1000(dev) => dev.transmit_ready(),
+            ActiveDevice::I226(dev) => dev.transmit_ready(),
+            ActiveDevice::Rtl8169(dev) => dev.transmit_ready(),
+            ActiveDevice::R8125(dev) => dev.transmit_ready(),
+        }
+    }
+
     fn link_state(&self) -> crate::net::device::LinkState {
         match self {
             ActiveDevice::Virtio(dev) => dev.link_state(),
@@ -466,6 +486,18 @@ pub fn transmit_batch_at(index: usize, packets: impl Iterator<Item = alloc::vec:
             crate::log_warn!(target: "net"; "net: tx-batch dev={} ok={} err={}\n", index, ok_count, err_count);
         }
     });
+}
+
+pub fn transmit_ready_at(index: usize) -> bool {
+    with_device_at(index, |dev| dev.transmit_ready()).unwrap_or(false)
+}
+
+pub fn transmit_with_at(
+    index: usize,
+    len: usize,
+    fill: &mut dyn FnMut(&mut [u8]),
+) -> Result<(), ()> {
+    with_device_at(index, |dev| dev.transmit_with(len, fill)).unwrap_or(Err(()))
 }
 
 pub fn mac_address_at(index: usize) -> Option<[u8; 6]> {

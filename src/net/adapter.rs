@@ -1,9 +1,14 @@
-use alloc::{boxed::Box, collections::VecDeque, vec, vec::Vec};
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use alloc::{boxed::Box, collections::VecDeque, sync::Arc, vec, vec::Vec};
+use core::{
+    fmt,
+    sync::atomic::{AtomicU32, AtomicU64, Ordering},
+};
 
 use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use smoltcp::iface::{Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet};
+use smoltcp::iface::{
+    Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, UdpDispatchError,
+};
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, PacketMeta, RxToken, TxToken};
 use smoltcp::socket::{dhcpv4, icmp, raw, tcp, udp};
@@ -519,6 +524,41 @@ pub struct NetEndpointV6 {
     pub port: u16,
 }
 
+/// One immutable payload allocation shared by a command producer and the
+/// asynchronous network service.
+///
+/// Keeping the valid prefix separate from the allocation capacity lets
+/// fixed-size packet builders hand their storage to the network path without
+/// copying it into a second `Vec`.
+#[derive(Clone)]
+pub struct SharedNetPayload {
+    storage: Arc<[u8]>,
+    len: usize,
+}
+
+impl SharedNetPayload {
+    pub fn from_arc_prefix<const N: usize>(storage: Arc<[u8; N]>, len: usize) -> Option<Self> {
+        if len > N {
+            return None;
+        }
+        let storage: Arc<[u8]> = storage;
+        Some(Self { storage, len })
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.storage[..self.len]
+    }
+}
+
+impl fmt::Debug for SharedNetPayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SharedNetPayload")
+            .field("len", &self.len)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum NetCommand {
     OpenTun {
@@ -553,7 +593,7 @@ pub enum NetCommand {
         handle: NetHandle,
         remote: NetEndpoint,
         receipt: u32,
-        data: Vec<u8>,
+        data: SharedNetPayload,
     },
     SendUdpV6 {
         handle: NetHandle,
@@ -809,6 +849,15 @@ struct AdapterDeviceAt<'a> {
     index: usize,
     rx_buffer: &'a mut VecDeque<Vec<u8>>,
     tx_buffer: &'a mut VecDeque<Vec<u8>>,
+}
+
+fn adapter_device_capabilities() -> DeviceCapabilities {
+    let mut caps = DeviceCapabilities::default();
+    caps.max_transmission_unit = 1500;
+    // Let smoltcp decide burst handling without an artificial small cap.
+    caps.max_burst_size = None;
+    caps.medium = Medium::Ethernet;
+    caps
 }
 
 impl<'a> Device for AdapterDeviceAt<'a> {
@@ -1137,12 +1186,43 @@ impl<'a> Device for AdapterDeviceAt<'a> {
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
-        let mut caps = DeviceCapabilities::default();
-        caps.max_transmission_unit = 1500;
-        // Let smoltcp decide burst handling without an artificial small cap.
-        caps.max_burst_size = None;
-        caps.medium = Medium::Ethernet;
-        caps
+        adapter_device_capabilities()
+    }
+}
+
+/// A smoltcp device used only by checked UDP egress. Its TX token emits the
+/// complete Ethernet frame directly into storage supplied by the NIC driver.
+struct DirectAdapterDeviceAt<'a> {
+    index: usize,
+    transmit_result: &'a mut Option<Result<(), ()>>,
+}
+
+impl Device for DirectAdapterDeviceAt<'_> {
+    type RxToken<'a>
+        = AdapterRxToken
+    where
+        Self: 'a;
+    type TxToken<'a>
+        = DirectAdapterTxTokenAt<'a>
+    where
+        Self: 'a;
+
+    fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+        None
+    }
+
+    fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
+        if !crate::net::transmit_ready_at(self.index) {
+            return None;
+        }
+        Some(DirectAdapterTxTokenAt {
+            index: self.index,
+            transmit_result: self.transmit_result,
+        })
+    }
+
+    fn capabilities(&self) -> DeviceCapabilities {
+        adapter_device_capabilities()
     }
 }
 
@@ -1175,6 +1255,56 @@ impl RxToken for AdapterRxToken {
 struct AdapterTxTokenAt<'a> {
     index: usize,
     tx_buffer: &'a mut VecDeque<Vec<u8>>,
+}
+
+struct DirectAdapterTxTokenAt<'a> {
+    index: usize,
+    transmit_result: &'a mut Option<Result<(), ()>>,
+}
+
+impl TxToken for DirectAdapterTxTokenAt<'_> {
+    fn consume<R, F>(self, len: usize, f: F) -> R
+    where
+        F: FnOnce(&mut [u8]) -> R,
+    {
+        let mut emit = Some(f);
+        let mut output = None;
+        let mut fill = |tx_buffer: &mut [u8]| {
+            let emit = emit
+                .take()
+                .expect("TX fill callback invoked more than once");
+            output = Some(emit(tx_buffer));
+        };
+        let result = crate::net::transmit_with_at(self.index, len, &mut fill);
+        drop(fill);
+
+        // A readiness check and descriptor submission are synchronous, so this
+        // is only an error fallback. smoltcp's TxToken contract still requires
+        // the emission closure to be evaluated exactly once.
+        if output.is_none() {
+            let mut discard = crate::net::ring::alloc_packet_buf(len);
+            let emit = emit.take().expect("TX fill callback missing");
+            output = Some(emit(&mut discard));
+            crate::net::ring::recycle_packet_buf(discard);
+        }
+
+        let new_total = NET_TX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+        let _ = NET_TX_FRAMES_AT
+            .get(self.index)
+            .map(|counter| counter.fetch_add(1, Ordering::Relaxed) + 1);
+        if (new_total & NET_FRAME_LOG_MASK) == 0 {
+            crate::log_info!(target: "net";
+                "net: tx frames={} dropped={}\n",
+                new_total,
+                NET_TX_DROPPED.load(Ordering::Relaxed)
+            );
+        }
+
+        *self.transmit_result = Some(result);
+        output.expect("TX fill callback produced no result")
+    }
+
+    fn set_meta(&mut self, _meta: PacketMeta) {}
 }
 
 impl<'a> TxToken for AdapterTxTokenAt<'a> {
@@ -2676,7 +2806,7 @@ impl NetService {
         &mut self,
         handle: NetHandle,
         remote: NetEndpoint,
-        data: Vec<u8>,
+        data: &[u8],
     ) -> Option<Result<(), ()>> {
         if !is_ipv4_loopback(remote.addr) {
             return None;
@@ -2728,7 +2858,7 @@ impl NetService {
                         addr: [127, 0, 0, 1],
                         port: source_port,
                     },
-                    data,
+                    data: Vec::from(data),
                 },
             );
         }
@@ -3918,7 +4048,7 @@ impl NetService {
                 remote,
                 data,
             } => {
-                if let Some(result) = self.send_loopback_udp(handle, remote, data.clone()) {
+                if let Some(result) = self.send_loopback_udp(handle, remote, &data) {
                     if result.is_err() {
                         let _ = push_event(owner, NetEvent::Error { msg: "not udp" });
                     }
@@ -3957,30 +4087,52 @@ impl NetService {
                 receipt,
                 data,
             } => {
-                let result =
-                    if let Some(result) = self.send_loopback_udp(handle, remote, data.clone()) {
-                        result.map_err(|()| "not udp")
-                    } else if !self.link_up() {
-                        Err("link down")
-                    } else if let Some(rec) = self.find_record(handle) {
-                        if rec.kind != SocketKind::Udp {
-                            Err("not udp")
-                        } else {
-                            let socket_handle = rec.socket;
-                            let endpoint = IpEndpoint::new(
-                                IpAddress::Ipv4(Ipv4Address::from_octets(remote.addr)),
-                                remote.port,
-                            );
-                            let socket = self.sockets.get_mut::<udp::Socket>(socket_handle);
-                            match socket.send_slice(&data, endpoint) {
-                                Ok(()) => Ok(()),
-                                Err(udp::SendError::BufferFull) => Err("udp send fail"),
-                                Err(udp::SendError::Unaddressable) => Err("udp unaddressable"),
-                            }
-                        }
+                let result = if let Some(result) =
+                    self.send_loopback_udp(handle, remote, data.as_slice())
+                {
+                    result.map_err(|()| "not udp")
+                } else if !self.link_up() {
+                    Err("link down")
+                } else if let Some(rec) = self.find_record(handle) {
+                    if rec.kind != SocketKind::Udp {
+                        Err("not udp")
                     } else {
-                        Err("bad handle")
-                    };
+                        let socket_handle = rec.socket;
+                        let local_port = self
+                            .sockets
+                            .get_mut::<udp::Socket>(socket_handle)
+                            .endpoint()
+                            .port;
+                        let endpoint = IpEndpoint::new(
+                            IpAddress::Ipv4(Ipv4Address::from_octets(remote.addr)),
+                            remote.port,
+                        );
+                        let mut transmit_result = None;
+                        let dispatch_result = {
+                            let mut device = DirectAdapterDeviceAt {
+                                index: self.device_index,
+                                transmit_result: &mut transmit_result,
+                            };
+                            self.iface.dispatch_udp_payload(
+                                now(),
+                                &mut device,
+                                local_port,
+                                endpoint,
+                                data.as_slice(),
+                            )
+                        };
+                        match (dispatch_result, transmit_result) {
+                            (Ok(()), Some(Ok(()))) => Ok(()),
+                            (Ok(()), _) | (Err(UdpDispatchError::Exhausted), _) => {
+                                Err("udp send fail")
+                            }
+                            (Err(UdpDispatchError::NeighborPending), _) => Err("udp send fail"),
+                            (Err(UdpDispatchError::Unaddressable), _) => Err("udp unaddressable"),
+                        }
+                    }
+                } else {
+                    Err("bad handle")
+                };
                 publish_checked_udp_send_result(owner, handle, receipt, result);
             }
             NetCommand::SendUdpV6 {

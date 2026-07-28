@@ -4,7 +4,6 @@ pub(crate) mod acpi;
 pub(crate) mod cpp;
 pub(crate) mod cry;
 pub(crate) mod disc;
-pub(crate) mod fnt;
 pub(crate) mod format;
 pub(crate) mod fslog;
 pub(crate) mod gpgpu;

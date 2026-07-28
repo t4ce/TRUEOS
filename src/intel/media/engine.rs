@@ -56,14 +56,14 @@ pub(super) const RING_EXECLIST_CONTROL: usize = 0x550;
 pub(super) const GEN12_RING_FAULT_REG: usize = 0x0000_CEC4;
 
 const MEDIA_ENGINE_GPU_ADDR_BASE: u64 = 0x0900_0000;
-const MEDIA_ENGINE_GPU_ADDR_STRIDE: u64 = 0x0200_0000;
+const MEDIA_ENGINE_GPU_ADDR_STRIDE: u64 = 0x0400_0000;
 const MEDIA_DEFAULT_RING_BYTES: usize = 16 * 1024;
 const MEDIA_DEFAULT_CONTEXT_BYTES: usize = 22 * 4096;
 const MEDIA_DEFAULT_BATCH_BYTES: usize = 32 * 1024;
 const MEDIA_DEFAULT_RESULT_BYTES: usize = 4 * 4096;
 const MEDIA_DEFAULT_BITSTREAM_BYTES: usize = 8 * 1024 * 1024;
-const MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES: usize = 16 * 1024 * 1024;
-const MEDIA_DEFAULT_AVC_SCRATCH_BYTES: usize = 4 * 1024 * 1024;
+const MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES: usize = 32 * 1024 * 1024;
+const MEDIA_DEFAULT_AVC_SCRATCH_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const MEDIA_SUBMIT_POLL_ITERS: usize = 100_000;
 
 const MI_STORE_DWORD_IMM_GEN4: u32 = (0x20 << 23) | 2;
@@ -948,7 +948,7 @@ fn engine_window(slot: usize) -> MediaGpuWindowLayout {
         result_gpu_addr: base + 0x0010_0000,
         bitstream_gpu_addr: base + 0x0020_0000,
         output_surface_gpu_addr: base + 0x00A0_0000,
-        avc_scratch_gpu_addr: base + 0x01A0_0000,
+        avc_scratch_gpu_addr: base + 0x02A0_0000,
     }
 }
 

@@ -914,7 +914,10 @@ const DIRECT_RCS_GPU_VA_FONT_OUTLINE_MESH_BASE: u64 = 0x008F_0000;
 
 const DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE: u64 = 0x0440_0000;
 const DIRECT_RCS_FONT_COVERAGE_OPS_WINDOW_BYTES: usize = 4 * 1024 * 1024;
-const DIRECT_RCS_FONT_COVERAGE_MASK_MAX_BYTES: usize = 16 * 1024 * 1024;
+// One tight or canvas stamp may reach the service's UHD/4K RGBA8 soft cap.
+// The primary font VA range has room for one such allocation plus masks; the
+// secondary range is exactly 32 MiB.
+const DIRECT_RCS_FONT_COVERAGE_MASK_MAX_BYTES: usize = 32 * 1024 * 1024;
 // Persistent masks must not alias one another in the direct-RCS PPGTT.  The
 // first implementation remapped every simultaneously-live color layer at one
 // fixed VA; cached translations could then read or write a different layer's

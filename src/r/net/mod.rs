@@ -30,6 +30,8 @@ use crate::net::adapter::{
     self, NetCommand, NetEndpoint, NetEndpointV6, NetEvent, NetHandle, NetQueue, SocketKind,
 };
 
+pub(crate) use crate::net::adapter::SharedNetPayload;
+
 pub type Queue<T> = adapter::NetQueue<T>;
 
 static VNET_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -236,13 +238,13 @@ impl VNet {
         handle: api::NetHandle,
         remote: api::EndpointV4,
         receipt: u32,
-        data: &[u8],
+        data: &SharedNetPayload,
     ) -> Result<(), ()> {
         self.submit_kernel(NetCommand::SendUdpChecked {
             handle: NetHandle(handle.0),
             remote: to_kernel_endpoint(remote),
             receipt,
-            data: Vec::from(data),
+            data: data.clone(),
         })
     }
 

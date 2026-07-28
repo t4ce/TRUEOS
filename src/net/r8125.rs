@@ -1565,9 +1565,37 @@ impl R8125Adapter {
         self.reclaim_tx();
     }
 
-    fn transmit_hw(&mut self, frame: &[u8]) -> Result<(), ()> {
-        if frame.is_empty() {
+    fn transmit_ready_hw(&mut self) -> bool {
+        if self.dbg_tx_quarantined {
+            return false;
+        }
+
+        let phy = unsafe { self.mmio.read_u8(REG_PHYSTAT) };
+        if !Self::phy_link_up(phy) {
+            return false;
+        }
+
+        self.reclaim_tx();
+        if (self.tx_tail + 1) % TX_DESC_COUNT == self.tx_head {
+            self.kick_tx_engine();
+            self.reclaim_tx();
+            if (self.tx_tail + 1) % TX_DESC_COUNT == self.tx_head {
+                return false;
+            }
+        }
+
+        let current = unsafe { read_volatile(self.tx_desc.add(self.tx_tail)) };
+        let opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(current.opts1)) };
+        (opts1 & DESC_OWN) == 0
+    }
+
+    fn transmit_hw_with(&mut self, len: usize, fill: &mut dyn FnMut(&mut [u8])) -> Result<(), ()> {
+        if len == 0 {
+            fill(&mut []);
             return Ok(());
+        }
+        if len > TX_BUF_SIZE {
+            return Err(());
         }
 
         if self.dbg_tx_quarantined {
@@ -1593,7 +1621,6 @@ impl R8125Adapter {
         // Don't rely on RX polling cadence to free TX descriptors.
         self.reclaim_tx();
 
-        let len = min(frame.len(), TX_BUF_SIZE);
         let next_tail = (self.tx_tail + 1) % TX_DESC_COUNT;
         if next_tail == self.tx_head {
             self.dbg_tx_ring_full = self.dbg_tx_ring_full.saturating_add(1);
@@ -1665,9 +1692,8 @@ impl R8125Adapter {
             }
         }
 
-        unsafe {
-            core::ptr::copy_nonoverlapping(frame.as_ptr(), self.tx_bufs[idx].virt(), len);
-        }
+        let tx_buffer = unsafe { core::slice::from_raw_parts_mut(self.tx_bufs[idx].virt(), len) };
+        fill(tx_buffer);
 
         Self::maybe_clflush(self.tx_bufs[idx].virt() as *const u8, len, EXP_R8125_CLFLUSH_TX_BUF);
 
@@ -1760,6 +1786,14 @@ impl R8125Adapter {
         }
         Ok(())
     }
+
+    fn transmit_hw(&mut self, frame: &[u8]) -> Result<(), ()> {
+        let len = min(frame.len(), TX_BUF_SIZE);
+        let mut fill = |tx_buffer: &mut [u8]| {
+            tx_buffer.copy_from_slice(&frame[..len]);
+        };
+        self.transmit_hw_with(len, &mut fill)
+    }
 }
 
 impl VendorAdapter for R8125Adapter {
@@ -1777,6 +1811,14 @@ impl VendorAdapter for R8125Adapter {
 
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         self.transmit_hw(frame)
+    }
+
+    fn transmit_with(&mut self, len: usize, fill: &mut dyn FnMut(&mut [u8])) -> Result<(), ()> {
+        self.transmit_hw_with(len, fill)
+    }
+
+    fn transmit_ready(&mut self) -> bool {
+        self.transmit_ready_hw()
     }
 
     fn link_state(&self) -> LinkState {

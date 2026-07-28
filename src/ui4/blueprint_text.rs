@@ -29,9 +29,9 @@ use crate::intel::gpu_font::{
     render_font_job_readback_once,
 };
 use crate::r::font_kernel_service::{
-    FontKernelError, FontKernelRetainedScene, FontStampRequest, FontStampedBuffer,
-    PendingFontStamp, PendingRetainScene, RetainSceneRequest, RetainedFontPositioning,
-    RetainedFontRun, submit_retain_scene, submit_stamp,
+    FontKernelError, FontKernelRetainedScene, FontStampFit, FontStampLayer, FontStampRequest,
+    FontStampedBuffer, PendingFontStamp, PendingRetainScene, RetainSceneRequest,
+    RetainedFontPositioning, RetainedFontRun, submit_retain_scene, submit_stamp,
 };
 
 use super::{
@@ -2165,16 +2165,19 @@ fn stamp_scene_entries_for_surface(
     if !reusable {
         let [r, g, b, a] = rgba.to_le_bytes();
         let request = FontStampRequest {
-            scene: RetainSceneRequest {
-                runs: description.runs.clone(),
-                font,
-                viewport_width,
-                viewport_height,
-                raster_width: viewport_width,
-                raster_height: viewport_height,
-                positioning: RetainedFontPositioning::SceneOrigin,
-            },
-            foreground: GpuFontRgba::new(r, g, b, a),
+            layers: alloc::vec![FontStampLayer {
+                scene: RetainSceneRequest {
+                    runs: description.runs.clone(),
+                    font,
+                    viewport_width,
+                    viewport_height,
+                    raster_width: viewport_width,
+                    raster_height: viewport_height,
+                    positioning: RetainedFontPositioning::SceneOrigin,
+                },
+                foreground: GpuFontRgba::new(r, g, b, a),
+            }],
+            fit: FontStampFit::Canvas,
         };
         let pending = match submit_stamp(request) {
             Ok(pending) => pending,

@@ -254,7 +254,9 @@ pub(crate) struct AvcPictureParams {
     pub frame_mbs_only: bool,
     pub mb_adaptive_frame_field: bool,
     pub field_pic: bool,
+    pub idr_pic: bool,
     pub reference_pic: bool,
+    pub max_num_ref_frames: u8,
     pub num_ref_idx_l0_active_minus1: u8,
     pub num_ref_idx_l1_active_minus1: u8,
     pub pic_init_qp_minus26: i8,
@@ -268,6 +270,8 @@ pub(crate) struct AvcPictureParams {
     pub pic_order_present: bool,
     pub slice_group_map_type: u8,
     pub pic_order_cnt_type: u8,
+    pub pic_order_cnt_lsb: u16,
+    pub delta_pic_order_cnt_bottom: i32,
     pub top_field_order_cnt: i32,
     pub bottom_field_order_cnt: i32,
     pub deblocking_filter_control_present: bool,
@@ -391,6 +395,7 @@ pub(crate) struct AvcLongFormatIdrPacketParams {
 pub(crate) struct AvcLongFormatIdrCommandStream {
     pub dwords: Vec<u32>,
     pub command_count: usize,
+    pub slice_state_offset: usize,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -686,6 +691,8 @@ pub(crate) struct AvcReferenceState {
     pub ref_count: usize,
     pub l0: [u8; 16],
     pub l0_count: usize,
+    pub l1: [u8; 16],
+    pub l1_count: usize,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -781,6 +788,7 @@ pub(crate) fn build_long_format_single_idr_command_stream(
     let stream = AvcLongFormatIdrCommandStream {
         dwords,
         command_count: AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_COUNT,
+        slice_state_offset: AVC_CMD_OFFSET_AVC_SLICE_STATE,
     };
     if !validate_long_format_single_idr_command_stream_shape(&stream) {
         return Err(AvcCommandStreamBlocker::CommandShapeMismatch);
@@ -821,15 +829,34 @@ pub(crate) fn build_long_format_single_i_or_p_command_stream(
         resources.dmv_write_buffer,
         resources.dmv_reference_buffer,
     );
-    let ref_idx = encode_mfx_avc_ref_idx_state(if plan.slice.class == AvcSliceClass::P {
+    let ref_idx_l0 = encode_mfx_avc_ref_idx_state(if matches!(
+        plan.slice.class,
+        AvcSliceClass::P | AvcSliceClass::B
+    ) {
         mfx_avc_ref_idx_state_params_l0(references)
     } else {
         mfx_avc_ref_idx_state_params_dummy_l0()
     });
+    let ref_idx_l1 = if plan.slice.class == AvcSliceClass::B {
+        Some(encode_mfx_avc_ref_idx_state(
+            mfx_avc_ref_idx_state_params_l1(references),
+        ))
+    } else {
+        None
+    };
+    let extra_ref_idx_dwords = if ref_idx_l1.is_some() {
+        MFX_AVC_REF_IDX_STATE_DWORD_COUNT
+    } else {
+        0
+    };
+    let slice_state_offset = AVC_CMD_OFFSET_AVC_SLICE_STATE + extra_ref_idx_dwords;
     let slice_pair_dwords = (MFX_AVC_SLICE_STATE_DWORD_COUNT + MFD_AVC_BSD_OBJECT_DWORD_COUNT)
         .saturating_mul(plan.slice_count.saturating_sub(1));
-    let mut dwords =
-        Vec::with_capacity(AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_DWORDS + slice_pair_dwords);
+    let mut dwords = Vec::with_capacity(
+        AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_DWORDS
+            + extra_ref_idx_dwords
+            + slice_pair_dwords,
+    );
     dwords.extend_from_slice(&[MI_FORCE_WAKEUP_DW0, MI_FORCE_WAKEUP_MFX_WELL_DW1]);
     dwords.push(MFX_WAIT_SYNC_DW0);
     dwords.extend_from_slice(&pipe_mode.dwords);
@@ -845,7 +872,10 @@ pub(crate) fn build_long_format_single_i_or_p_command_stream(
         dwords.extend_from_slice(&encode_mfx_qm_state(qm).dwords);
     }
     dwords.extend_from_slice(&directmode.dwords);
-    dwords.extend_from_slice(&ref_idx.dwords);
+    dwords.extend_from_slice(&ref_idx_l0.dwords);
+    if let Some(ref_idx_l1) = ref_idx_l1 {
+        dwords.extend_from_slice(&ref_idx_l1.dwords);
+    }
     for idx in 0..plan.slice_count {
         let slice = plan.slices[idx];
         let is_last_slice = idx + 1 == plan.slice_count;
@@ -866,7 +896,9 @@ pub(crate) fn build_long_format_single_i_or_p_command_stream(
     let stream = AvcLongFormatIdrCommandStream {
         dwords,
         command_count: AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_COUNT
+            + usize::from(plan.slice.class == AvcSliceClass::B)
             + plan.slice_count.saturating_sub(1).saturating_mul(2),
+        slice_state_offset,
     };
     if !validate_long_format_single_i_or_p_command_stream_shape(&stream) {
         return Err(AvcCommandStreamBlocker::CommandShapeMismatch);
@@ -892,22 +924,28 @@ fn validate_long_format_command_stream_shape(
 ) -> bool {
     let slice_pair_dwords = MFX_AVC_SLICE_STATE_DWORD_COUNT + MFD_AVC_BSD_OBJECT_DWORD_COUNT;
     if stream.dwords.len()
-        < AVC_CMD_OFFSET_AVC_SLICE_STATE + slice_pair_dwords + MI_FLUSH_DW_DWORD_COUNT
+        < stream.slice_state_offset + slice_pair_dwords + MI_FLUSH_DW_DWORD_COUNT
     {
         return false;
     }
     let slice_region_dwords = stream
         .dwords
         .len()
-        .saturating_sub(AVC_CMD_OFFSET_AVC_SLICE_STATE)
+        .saturating_sub(stream.slice_state_offset)
         .saturating_sub(MI_FLUSH_DW_DWORD_COUNT);
     if slice_region_dwords == 0 || slice_region_dwords % slice_pair_dwords != 0 {
         return false;
     }
     let slice_count = slice_region_dwords / slice_pair_dwords;
-    let expected_command_count =
-        AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_COUNT + slice_count.saturating_sub(1).saturating_mul(2);
-    let flush_offset = AVC_CMD_OFFSET_AVC_SLICE_STATE + slice_region_dwords;
+    let has_l1 = stream.slice_state_offset
+        == AVC_CMD_OFFSET_AVC_SLICE_STATE + MFX_AVC_REF_IDX_STATE_DWORD_COUNT;
+    if stream.slice_state_offset != AVC_CMD_OFFSET_AVC_SLICE_STATE && !has_l1 {
+        return false;
+    }
+    let expected_command_count = AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_COUNT
+        + usize::from(has_l1)
+        + slice_count.saturating_sub(1).saturating_mul(2);
+    let flush_offset = stream.slice_state_offset + slice_region_dwords;
     stream.command_count == expected_command_count
         && validate_long_format_single_idr_command_blocks()
         && stream.dwords[AVC_CMD_OFFSET_FORCE_WAKEUP] == MI_FORCE_WAKEUP_DW0
@@ -949,6 +987,9 @@ fn validate_long_format_command_stream_shape(
             == MFX_MEMORY_ADDRESS_ATTRIBUTES_UC
         && stream.dwords[AVC_CMD_OFFSET_AVC_REF_IDX_STATE] == MFX_AVC_REF_IDX_STATE_DW0
         && stream.dwords[AVC_CMD_OFFSET_AVC_REF_IDX_STATE + 1] <= 1
+        && (!has_l1
+            || (stream.dwords[AVC_CMD_OFFSET_AVC_SLICE_STATE] == MFX_AVC_REF_IDX_STATE_DW0
+                && stream.dwords[AVC_CMD_OFFSET_AVC_SLICE_STATE + 1] == 1))
         && (allow_ref_idx_entries
             || (stream.dwords[AVC_CMD_OFFSET_AVC_REF_IDX_STATE + 2] == 0
                 && stream.dwords[AVC_CMD_OFFSET_AVC_REF_IDX_STATE + 3] == 0
@@ -969,7 +1010,7 @@ fn validate_long_format_slice_command_region(
     let slice_pair_dwords = MFX_AVC_SLICE_STATE_DWORD_COUNT + MFD_AVC_BSD_OBJECT_DWORD_COUNT;
     let mut idx = 0usize;
     while idx < slice_count {
-        let offset = AVC_CMD_OFFSET_AVC_SLICE_STATE + idx * slice_pair_dwords;
+        let offset = stream.slice_state_offset + idx * slice_pair_dwords;
         if stream.dwords.get(offset).copied().unwrap_or(0) != MFX_AVC_SLICE_STATE_DW0
             || stream
                 .dwords
@@ -1079,7 +1120,9 @@ pub(crate) fn parse_annexb_single_i_or_p_plan(
             7 => sps = Some(parse_sps(payload)?),
             8 => pps = Some(parse_pps(payload)?),
             1 | 5 => slice_nals.push((nal, nal_type, nal_ref_idc, payload)),
-            6 | 9 => {}
+            // SEI, AUD, end-of-sequence, end-of-stream, and filler-data NALs
+            // do not alter the VDBOX picture/slice parameter set.
+            6 | 9 | 10 | 11 | 12 => {}
             _ => return Err(AvcAnnexBPlanError::UnsupportedNal),
         }
     }
@@ -1124,9 +1167,11 @@ pub(crate) fn parse_annexb_single_i_or_p_plan(
         frame_mbs_only: sps.frame_mbs_only,
         mb_adaptive_frame_field: sps.mb_adaptive_frame_field,
         field_pic: false,
+        idr_pic: parsed_slices.iter().any(|(_, nal_type, _, _)| *nal_type == 5),
         reference_pic: parsed_slices
             .iter()
             .any(|(_, _, nal_ref_idc, _)| *nal_ref_idc != 0),
+        max_num_ref_frames: sps.max_num_ref_frames,
         num_ref_idx_l0_active_minus1: first_slice.num_ref_idx_l0_active_minus1,
         num_ref_idx_l1_active_minus1: first_slice.num_ref_idx_l1_active_minus1,
         pic_init_qp_minus26: pps.pic_init_qp_minus26,
@@ -1140,6 +1185,8 @@ pub(crate) fn parse_annexb_single_i_or_p_plan(
         pic_order_present: pps.pic_order_present,
         slice_group_map_type: pps.slice_group_map_type,
         pic_order_cnt_type: sps.pic_order_cnt_type,
+        pic_order_cnt_lsb: first_slice.pic_order_cnt_lsb,
+        delta_pic_order_cnt_bottom: first_slice.delta_pic_order_cnt_bottom,
         top_field_order_cnt: first_slice.top_field_order_cnt,
         bottom_field_order_cnt: first_slice.bottom_field_order_cnt,
         deblocking_filter_control_present: pps.deblocking_filter_control_present,
@@ -1199,7 +1246,7 @@ pub(crate) fn parse_annexb_single_i_or_p_plan(
             slice_alpha_c0_offset_div2: slice.slice_alpha_c0_offset_div2,
             slice_beta_offset_div2: slice.slice_beta_offset_div2,
             slice_qp_delta: slice.slice_qp_delta,
-            direct_spatial_mv_pred: false,
+            direct_spatial_mv_pred: slice.direct_spatial_mv_pred,
             num_ref_idx_l0_active_minus1: slice.num_ref_idx_l0_active_minus1,
             num_ref_idx_l1_active_minus1: slice.num_ref_idx_l1_active_minus1,
             top_field_order_cnt: slice.top_field_order_cnt,
@@ -1362,15 +1409,24 @@ pub(crate) fn validate_long_format_single_i_or_p(
         ));
     }
     let mut has_p_slice = false;
+    let mut has_b_slice = false;
     for idx in 0..plan.slice_count {
-        if !matches!(plan.slices[idx].class, AvcSliceClass::I | AvcSliceClass::P) {
+        if !matches!(
+            plan.slices[idx].class,
+            AvcSliceClass::I | AvcSliceClass::P | AvcSliceClass::B
+        ) || plan.slices[idx].class != plan.slice.class
+        {
             return Err(AvcCommandStreamBlocker::Milestone(
                 AvcMilestoneBlocker::UnsupportedSliceClass,
             ));
         }
         has_p_slice |= plan.slices[idx].class == AvcSliceClass::P;
+        has_b_slice |= plan.slices[idx].class == AvcSliceClass::B;
     }
     if has_p_slice && plan.picture.weighted_pred {
+        return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::WeightedPrediction));
+    }
+    if has_b_slice && plan.picture.weighted_bipred_idc == 1 {
         return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::WeightedPrediction));
     }
     if plan.picture.num_slice_groups_minus1 != 0 {
@@ -1388,7 +1444,7 @@ pub(crate) fn validate_long_format_single_i_or_p(
     }
     for slice_idx in 0..plan.slice_count {
         let slice = plan.slices[slice_idx];
-        if slice.class == AvcSliceClass::P {
+        if matches!(slice.class, AvcSliceClass::P | AvcSliceClass::B) {
             let active_l0 = usize::from(slice.num_ref_idx_l0_active_minus1) + 1;
             if active_l0 == 0 || active_l0 > references.l0_count || references.l0_count > 16 {
                 return Err(AvcCommandStreamBlocker::Milestone(
@@ -1407,11 +1463,40 @@ pub(crate) fn validate_long_format_single_i_or_p(
                 }
                 idx += 1;
             }
-        } else if references.l0_count != 0 {
+            if slice.class == AvcSliceClass::B {
+                let active_l1 = usize::from(slice.num_ref_idx_l1_active_minus1) + 1;
+                if active_l1 == 0 || active_l1 > references.l1_count || references.l1_count > 16 {
+                    return Err(AvcCommandStreamBlocker::Milestone(
+                        AvcMilestoneBlocker::ReferencesPresent,
+                    ));
+                }
+                let mut idx = 0;
+                while idx < active_l1 {
+                    let frame_store_id = references.l1[idx] as usize;
+                    if frame_store_id >= references.refs.len()
+                        || references.refs[frame_store_id].is_none()
+                    {
+                        return Err(AvcCommandStreamBlocker::Milestone(
+                            AvcMilestoneBlocker::ReferencesPresent,
+                        ));
+                    }
+                    idx += 1;
+                }
+            } else if references.l1_count != 0 {
+                return Err(AvcCommandStreamBlocker::Milestone(
+                    AvcMilestoneBlocker::ReferencesPresent,
+                ));
+            }
+        } else if references.l0_count != 0 || references.l1_count != 0 {
             return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::ReferencesPresent));
         }
     }
-    if plan.slice.class != AvcSliceClass::P && references.l0_count != 0 {
+    if !matches!(plan.slice.class, AvcSliceClass::P | AvcSliceClass::B)
+        && references.l0_count != 0
+    {
+        return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::ReferencesPresent));
+    }
+    if plan.slice.class != AvcSliceClass::B && references.l1_count != 0 {
         return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::ReferencesPresent));
     }
     if references.ref_count > 16 || plan.resources.reference_surface_count > 16 {
@@ -2054,12 +2139,16 @@ pub(crate) const fn mfx_avc_img_state_params_for_idr(
         entropy_coding: picture.entropy_coding_mode,
         chroma_format_idc: avc_chroma_format_idc(picture.chroma_format),
         initial_qp_value: picture.pic_init_qp_minus26,
-        active_ref_l0: if matches!(plan.slice.class, AvcSliceClass::P) {
+        active_ref_l0: if matches!(plan.slice.class, AvcSliceClass::P | AvcSliceClass::B) {
             picture.num_ref_idx_l0_active_minus1.saturating_add(1)
         } else {
             0
         },
-        active_ref_l1: 0,
+        active_ref_l1: if matches!(plan.slice.class, AvcSliceClass::B) {
+            picture.num_ref_idx_l1_active_minus1.saturating_add(1)
+        } else {
+            0
+        },
         reference_frames: plan.resources.reference_surface_count as u8,
         pic_order_present: picture.pic_order_present,
         delta_pic_order_always_zero: picture.delta_pic_order_always_zero,
@@ -2249,6 +2338,26 @@ pub(crate) const fn mfx_avc_ref_idx_state_params_l0(
     }
 }
 
+pub(crate) const fn mfx_avc_ref_idx_state_params_l1(
+    references: AvcReferenceState,
+) -> MfxAvcRefIdxStateParams {
+    let mut reference_list_entry = [0u32; 8];
+    let mut idx = 0usize;
+    while idx < 32 {
+        let entry = if idx < references.l1_count && idx < 16 {
+            ((references.l1[idx] as u32) & 0x0f) << 1
+        } else {
+            0x80
+        };
+        reference_list_entry[idx / 4] |= entry << ((idx % 4) * 8);
+        idx += 1;
+    }
+    MfxAvcRefIdxStateParams {
+        ref_pic_list_select: 1,
+        reference_list_entry,
+    }
+}
+
 pub(crate) const fn encode_mfx_avc_ref_idx_state(
     params: MfxAvcRefIdxStateParams,
 ) -> MfxAvcRefIdxStateDwords {
@@ -2283,21 +2392,49 @@ pub(crate) const fn mfx_avc_slice_state_params_for_slice(
     let slice_qp = (26 + picture.pic_init_qp_minus26 as i32 + slice.slice_qp_delta as i32) as u8;
     MfxAvcSliceStateParams {
         slice_type: avc_mfx_slice_type(slice.class),
-        log2_weight_denom_luma: 0,
-        log2_weight_denom_chroma: 0,
-        number_of_ref_pictures_l0: if matches!(slice.class, AvcSliceClass::P) {
+        log2_weight_denom_luma: if matches!(slice.class, AvcSliceClass::B)
+            && picture.weighted_bipred_idc != 1
+        {
+            5
+        } else {
+            0
+        },
+        log2_weight_denom_chroma: if matches!(slice.class, AvcSliceClass::B)
+            && picture.weighted_bipred_idc != 1
+        {
+            5
+        } else {
+            0
+        },
+        number_of_ref_pictures_l0: if matches!(slice.class, AvcSliceClass::P | AvcSliceClass::B) {
             slice.num_ref_idx_l0_active_minus1.saturating_add(1)
         } else {
             0
         },
-        number_of_ref_pictures_l1: 0,
+        number_of_ref_pictures_l1: if matches!(slice.class, AvcSliceClass::B) {
+            slice.num_ref_idx_l1_active_minus1.saturating_add(1)
+        } else {
+            0
+        },
         slice_alpha_c0_offset_div2: slice.slice_alpha_c0_offset_div2,
         slice_beta_offset_div2: slice.slice_beta_offset_div2,
         slice_quantization_parameter: slice_qp,
         cabac_init_idc: 0,
         disable_deblocking_filter_indicator: slice.disable_deblocking_filter_idc,
-        direct_prediction_type: 0,
-        weighted_prediction_indicator: 0,
+        direct_prediction_type: if matches!(slice.class, AvcSliceClass::B)
+            && slice.direct_spatial_mv_pred
+        {
+            1
+        } else {
+            0
+        },
+        weighted_prediction_indicator: if matches!(slice.class, AvcSliceClass::B) {
+            picture.weighted_bipred_idc
+        } else if matches!(slice.class, AvcSliceClass::P) && picture.weighted_pred {
+            1
+        } else {
+            0
+        },
         slice_start_mb_num: first_mb,
         slice_horizontal_position: first_mb % width_in_mbs,
         slice_vertical_position: first_mb / width_in_mbs,
@@ -2472,6 +2609,7 @@ struct ParsedSps {
     visible_width: u32,
     visible_height: u32,
     log2_max_frame_num_minus4: u8,
+    max_num_ref_frames: u8,
     pic_order_cnt_type: u8,
     log2_max_pic_order_cnt_lsb_minus4: u8,
     delta_pic_order_always_zero: bool,
@@ -2508,6 +2646,7 @@ struct ParsedSlice {
     frame_num: u16,
     num_ref_idx_l0_active_minus1: u8,
     num_ref_idx_l1_active_minus1: u8,
+    direct_spatial_mv_pred: bool,
     ref_pic_list_modification: bool,
     adaptive_ref_pic_marking: bool,
     first_mb_bit_offset_from_payload: u32,
@@ -2515,6 +2654,8 @@ struct ParsedSlice {
     slice_alpha_c0_offset_div2: i8,
     slice_beta_offset_div2: i8,
     slice_qp_delta: i8,
+    pic_order_cnt_lsb: u16,
+    delta_pic_order_cnt_bottom: i32,
     top_field_order_cnt: i32,
     bottom_field_order_cnt: i32,
 }
@@ -2573,7 +2714,11 @@ fn parse_sps(payload: &[u8]) -> Result<ParsedSps, AvcAnnexBPlanError> {
     } else if pic_order_cnt_type > 2 {
         return Err(AvcAnnexBPlanError::UnsupportedSps);
     }
-    let _max_num_ref_frames = br.read_ue()?;
+    let max_num_ref_frames =
+        checked_u8(br.read_ue()?, AvcAnnexBPlanError::UnsupportedSps)?;
+    if max_num_ref_frames > 16 {
+        return Err(AvcAnnexBPlanError::UnsupportedSps);
+    }
     let _gaps_in_frame_num_value_allowed = br.read_bool()?;
     let pic_width_in_mbs_minus1 = checked_u16(br.read_ue()?, AvcAnnexBPlanError::UnsupportedSps)?;
     let pic_height_in_map_units_minus1 =
@@ -2624,6 +2769,7 @@ fn parse_sps(payload: &[u8]) -> Result<ParsedSps, AvcAnnexBPlanError> {
         visible_width: coded_width - crop_x,
         visible_height: coded_height - crop_y,
         log2_max_frame_num_minus4,
+        max_num_ref_frames,
         pic_order_cnt_type,
         log2_max_pic_order_cnt_lsb_minus4,
         delta_pic_order_always_zero,
@@ -2709,7 +2855,10 @@ fn parse_avc_slice(
     let first_mb_in_slice = br.read_ue()?;
     let raw_slice_type = br.read_ue()?;
     let class = avc_slice_class_from_raw(raw_slice_type);
-    if !matches!(class, AvcSliceClass::I | AvcSliceClass::P) {
+    if !matches!(
+        class,
+        AvcSliceClass::I | AvcSliceClass::P | AvcSliceClass::B
+    ) {
         return Err(AvcAnnexBPlanError::UnsupportedSlice);
     }
     let _pic_parameter_set_id = br.read_ue()?;
@@ -2722,15 +2871,17 @@ fn parse_avc_slice(
     }
     let mut top_field_order_cnt = 0i32;
     let mut bottom_field_order_cnt = 0i32;
+    let mut pic_order_cnt_lsb = 0u16;
+    let mut delta_pic_order_cnt_bottom = 0i32;
     if sps.pic_order_cnt_type == 0 {
-        let pic_order_cnt_lsb =
-            br.read_bits(usize::from(sps.log2_max_pic_order_cnt_lsb_minus4) + 4)? as i32;
-        let mut delta_pic_order_cnt_bottom = 0i32;
+        pic_order_cnt_lsb =
+            br.read_bits(usize::from(sps.log2_max_pic_order_cnt_lsb_minus4) + 4)? as u16;
         if pps.pic_order_present {
             delta_pic_order_cnt_bottom = br.read_se()?;
         }
-        top_field_order_cnt = pic_order_cnt_lsb;
-        bottom_field_order_cnt = pic_order_cnt_lsb + delta_pic_order_cnt_bottom;
+        top_field_order_cnt = i32::from(pic_order_cnt_lsb);
+        bottom_field_order_cnt =
+            i32::from(pic_order_cnt_lsb).saturating_add(delta_pic_order_cnt_bottom);
     } else if sps.pic_order_cnt_type == 1 && !sps.delta_pic_order_always_zero {
         let _delta_pic_order_cnt_0 = br.read_se()?;
         if pps.pic_order_present {
@@ -2748,6 +2899,11 @@ fn parse_avc_slice(
     if pps.redundant_pic_cnt_present {
         let _redundant_pic_cnt = br.read_ue()?;
     }
+    let direct_spatial_mv_pred = if class == AvcSliceClass::B {
+        br.read_bool()?
+    } else {
+        false
+    };
     let mut num_ref_idx_l0_active_minus1 = pps.num_ref_idx_l0_default_active_minus1;
     let mut num_ref_idx_l1_active_minus1 = pps.num_ref_idx_l1_default_active_minus1;
     if matches!(class, AvcSliceClass::P | AvcSliceClass::Sp | AvcSliceClass::B) {
@@ -2763,7 +2919,13 @@ fn parse_avc_slice(
     }
     let mut ref_pic_list_modification = false;
     if !matches!(class, AvcSliceClass::I | AvcSliceClass::Si) {
-        ref_pic_list_modification = br.read_bool()?;
+        let list0_modified = br.read_bool()?;
+        let list1_modified = if class == AvcSliceClass::B {
+            br.read_bool()?
+        } else {
+            false
+        };
+        ref_pic_list_modification = list0_modified || list1_modified;
         if ref_pic_list_modification {
             return Err(AvcAnnexBPlanError::UnsupportedSlice);
         }
@@ -2812,6 +2974,7 @@ fn parse_avc_slice(
         frame_num,
         num_ref_idx_l0_active_minus1,
         num_ref_idx_l1_active_minus1,
+        direct_spatial_mv_pred,
         ref_pic_list_modification,
         adaptive_ref_pic_marking,
         first_mb_bit_offset_from_payload: first_mb_ebsp_bit_offset_from_payload as u32,
@@ -2819,6 +2982,8 @@ fn parse_avc_slice(
         slice_alpha_c0_offset_div2,
         slice_beta_offset_div2,
         slice_qp_delta,
+        pic_order_cnt_lsb,
+        delta_pic_order_cnt_bottom,
         top_field_order_cnt,
         bottom_field_order_cnt,
     })

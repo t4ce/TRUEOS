@@ -1,7 +1,7 @@
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet;
 
-use crate::r::net::VNet;
+use crate::r::net::{SharedNetPayload, VNet};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum VNetUdpPacket {
@@ -109,7 +109,7 @@ impl<'a> VNetUdpEndpoint<'a> {
         &self,
         remote: vnet::EndpointV4,
         receipt: u32,
-        data: &[u8],
+        data: &SharedNetPayload,
     ) -> Result<(), ()> {
         if self.closed {
             return Err(());

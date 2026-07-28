@@ -2,8 +2,11 @@
 //!
 //! `RetainScene` yields GPU-VM-resident Skrifa coverage that a caller may
 //! restamp repeatedly. `Stamp` is the one-shot path: the worker creates the
-//! same retained representation temporarily, composites it into a new
-//! GPU-visible RGBA buffer, and returns that owned buffer asynchronously.
+//! same retained representation temporarily, composites ordered font/color
+//! layers into a new GPU-visible premultiplied RGBA8 buffer, and returns that
+//! owned buffer asynchronously. Stamp callers may preserve a canvas or request
+//! an exact coverage-union crop; both obey the UHD/4K pixel and 4096-glyph
+//! soft caps.
 //! Gridpaper page, cell-patch, presentation, and print work use the same fair
 //! hardware admission lane while retaining independent runtime state.
 
@@ -24,6 +27,10 @@ use crate::intel::gpu_font::{
 
 const FONT_KERNEL_QUEUE_CAPACITY: usize = 32;
 const FONT_KERNEL_MAX_RUNS: usize = 64;
+const FONT_KERNEL_MAX_STAMP_LAYERS: usize = 64;
+pub(crate) const FONT_STAMP_MAX_EXTENT: u32 = 4096;
+pub(crate) const FONT_STAMP_MAX_PIXELS: u64 = 3840 * 2160;
+pub(crate) const FONT_STAMP_MAX_GLYPHS: usize = 4096;
 const FONT_KERNEL_LANE_RETRY_MS: u64 = 2;
 const FONT_KERNEL_GPU_RETRY_MS: u64 = 2;
 const FONT_KERNEL_GPU_WAITERS: usize = 32;
@@ -220,9 +227,23 @@ pub(crate) struct RetainSceneRequest {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct FontStampRequest {
+pub(crate) struct FontStampLayer {
     pub(crate) scene: RetainSceneRequest,
     pub(crate) foreground: GpuFontRgba,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FontStampFit {
+    /// Preserve the caller's complete raster, including transparent space.
+    Canvas,
+    /// Crop the returned allocation to the union of all generated coverage.
+    Tight,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FontStampRequest {
+    pub(crate) layers: Vec<FontStampLayer>,
+    pub(crate) fit: FontStampFit,
 }
 
 /// One logical retained scene backed by bounded analytical coverage masks.
@@ -251,6 +272,8 @@ impl FontKernelRetainedScene {
 pub(crate) struct FontStampedBuffer {
     ticket: FontKernelTicket,
     storage: crate::intel::gpgpu::GpgpuOwnedRgba8Surface,
+    origin_px: [i32; 2],
+    glyphs: usize,
     submits: usize,
     active_walkers: usize,
 }
@@ -262,6 +285,15 @@ impl FontStampedBuffer {
 
     pub(crate) const fn surface(&self) -> crate::intel::gpgpu::GpgpuRgba8Surface {
         self.storage.surface()
+    }
+
+    /// Logical scene coordinate represented by output pixel (0, 0).
+    pub(crate) const fn origin_px(&self) -> [i32; 2] {
+        self.origin_px
+    }
+
+    pub(crate) const fn glyphs(&self) -> usize {
+        self.glyphs
     }
 
     pub(crate) const fn submits(&self) -> usize {
@@ -456,7 +488,7 @@ pub(crate) fn submit_retain_scene(
 }
 
 pub(crate) fn submit_stamp(request: FontStampRequest) -> Result<PendingFontStamp, FontKernelError> {
-    validate_retain_request(&request.scene)?;
+    validate_stamp_request(&request)?;
     let ticket = next_ticket();
     let reply = Arc::new(Signal::new());
     {
@@ -488,7 +520,14 @@ fn next_ticket() -> FontKernelTicket {
 }
 
 fn validate_retain_request(request: &RetainSceneRequest) -> Result<(), FontKernelError> {
-    if request.runs.is_empty() || request.runs.len() > FONT_KERNEL_MAX_RUNS {
+    validate_scene_request(request, FONT_KERNEL_MAX_RUNS)
+}
+
+fn validate_scene_request(
+    request: &RetainSceneRequest,
+    max_runs: usize,
+) -> Result<(), FontKernelError> {
+    if request.runs.is_empty() || request.runs.len() > max_runs {
         return Err(FontKernelError::InvalidRequest("font-service-run-count"));
     }
     if request.viewport_width == 0
@@ -500,7 +539,12 @@ fn validate_retain_request(request: &RetainSceneRequest) -> Result<(), FontKerne
     }
     for run in &request.runs {
         let chars = run.text.chars().count();
-        if chars == 0 || chars > MAX_DYNAMIC_TEXT_CHARS {
+        let max_chars = if request.positioning == RetainedFontPositioning::SceneOrigin {
+            FONT_STAMP_MAX_GLYPHS
+        } else {
+            MAX_DYNAMIC_TEXT_CHARS
+        };
+        if chars == 0 || chars > max_chars {
             return Err(FontKernelError::InvalidRequest("font-service-text-length"));
         }
         if run.text.chars().any(char::is_control)
@@ -512,6 +556,48 @@ fn validate_retain_request(request: &RetainSceneRequest) -> Result<(), FontKerne
             || run.slant.abs() > 1.0
         {
             return Err(FontKernelError::InvalidRequest("font-service-run"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_stamp_request(request: &FontStampRequest) -> Result<(), FontKernelError> {
+    if request.layers.is_empty() || request.layers.len() > FONT_KERNEL_MAX_STAMP_LAYERS {
+        return Err(FontKernelError::InvalidRequest("font-stamp-layer-count"));
+    }
+    let first = &request.layers[0].scene;
+    if first.raster_width > FONT_STAMP_MAX_EXTENT
+        || first.raster_height > FONT_STAMP_MAX_EXTENT
+        || u64::from(first.raster_width) * u64::from(first.raster_height) > FONT_STAMP_MAX_PIXELS
+    {
+        return Err(FontKernelError::InvalidRequest("font-stamp-extent-softcap"));
+    }
+    let mut glyphs = 0usize;
+    let mut runs = 0usize;
+    for layer in &request.layers {
+        validate_scene_request(&layer.scene, FONT_STAMP_MAX_GLYPHS)?;
+        if layer.scene.viewport_width != first.viewport_width
+            || layer.scene.viewport_height != first.viewport_height
+            || layer.scene.raster_width != first.raster_width
+            || layer.scene.raster_height != first.raster_height
+            || layer.scene.raster_width > FONT_STAMP_MAX_EXTENT
+            || layer.scene.raster_height > FONT_STAMP_MAX_EXTENT
+        {
+            return Err(FontKernelError::InvalidRequest("font-stamp-layer-extent"));
+        }
+        runs = runs
+            .checked_add(layer.scene.runs.len())
+            .ok_or(FontKernelError::InvalidRequest("font-stamp-run-softcap"))?;
+        if runs > FONT_STAMP_MAX_GLYPHS {
+            return Err(FontKernelError::InvalidRequest("font-stamp-run-softcap"));
+        }
+        for run in &layer.scene.runs {
+            glyphs = glyphs
+                .checked_add(run.text.chars().count())
+                .ok_or(FontKernelError::InvalidRequest("font-stamp-glyph-softcap"))?;
+            if glyphs > FONT_STAMP_MAX_GLYPHS {
+                return Err(FontKernelError::InvalidRequest("font-stamp-glyph-softcap"));
+            }
         }
     }
     Ok(())
@@ -651,21 +737,18 @@ fn process_retain_scene_runs(
     result.map_err(FontKernelError::Unavailable)
 }
 
-fn stamp_scene_runs(
+fn collect_stamp_scenes(
     ticket: FontKernelTicket,
-    request: &FontStampRequest,
+    layer: &FontStampLayer,
     runs: &[RetainedFontRun],
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
-) -> Result<(usize, usize), FontKernelError> {
-    let scene = match process_retain_scene_runs(ticket, &request.scene, runs) {
+    scenes: &mut Vec<(GpuFontRetainedScene, GpuFontRgba)>,
+) -> Result<(), FontKernelError> {
+    let scene = match process_retain_scene_runs(ticket, &layer.scene, runs) {
         Ok(scene) => scene,
         Err(FontKernelError::Unavailable("font-coverage-workload"))
             if runs.len() > 1
-                && request.scene.positioning == RetainedFontPositioning::SceneOrigin =>
+                && layer.scene.positioning == RetainedFontPositioning::SceneOrigin =>
         {
-            // A static stamp does not need one union mask. Split only after
-            // analytical admission rejects the aggregate, then composite the
-            // bounded masks into the same transparent RGBA allocation.
             let midpoint = runs.len() / 2;
             if ticket.raw()
                 > LAST_STAMP_PARTITION_LOG_TICKET.fetch_max(ticket.raw(), Ordering::Relaxed)
@@ -679,52 +762,120 @@ fn stamp_scene_runs(
                     runs.len().saturating_sub(midpoint),
                 );
             }
-            let first = stamp_scene_runs(ticket, request, &runs[..midpoint], destination)?;
-            let second = stamp_scene_runs(ticket, request, &runs[midpoint..], destination)?;
-            return Ok((first.0.saturating_add(second.0), first.1.saturating_add(second.1)));
+            collect_stamp_scenes(ticket, layer, &runs[..midpoint], scenes)?;
+            return collect_stamp_scenes(ticket, layer, &runs[midpoint..], scenes);
         }
         Err(error) => return Err(error),
     };
-    set_active_stage(ticket, "instance");
-    let rendered = scene.restamp_instance(
-        destination,
-        GpuFontRetainedStyle::identity(request.foreground),
-        false,
-        0.0,
-    )?;
-    Ok((rendered.submits, rendered.active_walkers))
+    scenes.push((scene, layer.foreground));
+    Ok(())
+}
+
+fn tight_stamp_bounds(
+    scenes: &[(GpuFontRetainedScene, GpuFontRgba)],
+) -> Result<([i32; 2], u32, u32), FontKernelError> {
+    let mut union: Option<(i64, i64, i64, i64)> = None;
+    for (scene, _) in scenes {
+        let origin = scene
+            .origin_px()
+            .ok_or(FontKernelError::Unavailable("font-stamp-mask-origin"))?;
+        let mask = scene
+            .mask_surface()
+            .ok_or(FontKernelError::Unavailable("font-stamp-mask-surface"))?;
+        let bounds = (
+            i64::from(origin[0]),
+            i64::from(origin[1]),
+            i64::from(origin[0]) + i64::from(mask.width),
+            i64::from(origin[1]) + i64::from(mask.height),
+        );
+        union = Some(match union {
+            Some(current) => (
+                current.0.min(bounds.0),
+                current.1.min(bounds.1),
+                current.2.max(bounds.2),
+                current.3.max(bounds.3),
+            ),
+            None => bounds,
+        });
+    }
+    let (left, top, right, bottom) =
+        union.ok_or(FontKernelError::Unavailable("font-stamp-empty"))?;
+    let width = u32::try_from(right - left)
+        .map_err(|_| FontKernelError::InvalidRequest("font-stamp-extent-softcap"))?;
+    let height = u32::try_from(bottom - top)
+        .map_err(|_| FontKernelError::InvalidRequest("font-stamp-extent-softcap"))?;
+    if width == 0
+        || height == 0
+        || width > FONT_STAMP_MAX_EXTENT
+        || height > FONT_STAMP_MAX_EXTENT
+        || u64::from(width) * u64::from(height) > FONT_STAMP_MAX_PIXELS
+    {
+        return Err(FontKernelError::InvalidRequest("font-stamp-extent-softcap"));
+    }
+    let origin = [
+        i32::try_from(left)
+            .map_err(|_| FontKernelError::InvalidRequest("font-stamp-origin-range"))?,
+        i32::try_from(top)
+            .map_err(|_| FontKernelError::InvalidRequest("font-stamp-origin-range"))?,
+    ];
+    Ok((origin, width, height))
 }
 
 fn process_stamp(
     ticket: FontKernelTicket,
     request: &FontStampRequest,
 ) -> Result<FontStampedBuffer, FontKernelError> {
-    let width = request.scene.raster_width;
-    let height = request.scene.raster_height;
+    let mut scenes = Vec::new();
+    let mut glyphs = 0usize;
+    for layer in &request.layers {
+        glyphs = layer
+            .scene
+            .runs
+            .iter()
+            .fold(glyphs, |total, run| total.saturating_add(run.text.chars().count()));
+        let glyph_runs = expand_origin_runs(ticket, &layer.scene)?;
+        collect_stamp_scenes(ticket, layer, glyph_runs.as_slice(), &mut scenes)?;
+    }
+    let (origin_px, width, height) = match request.fit {
+        FontStampFit::Canvas => {
+            let scene = &request.layers[0].scene;
+            ([0, 0], scene.raster_width, scene.raster_height)
+        }
+        FontStampFit::Tight => tight_stamp_bounds(scenes.as_slice())?,
+    };
     set_active_stage(ticket, "output-allocate");
     let storage = crate::intel::gpgpu::allocate_font_instance_rgba8_surface(width, height)
         .ok_or(FontKernelError::Unavailable("font-stamp-output-allocation"))?;
     let surface = storage.surface();
     // The owned RGBA allocation is zeroed and DMA-flushed before return.
     // Dispatching another GPU clear here only adds direct-RCS contention.
-    let glyph_runs = match expand_origin_runs(ticket, &request.scene) {
-        Ok(runs) => runs,
-        Err(error) => return Err(error),
-    };
-    let rendered = match stamp_scene_runs(ticket, request, glyph_runs.as_slice(), surface) {
-        Ok(rendered) => rendered,
-        Err(error) => {
-            if matches!(error, FontKernelError::SubmittedIncomplete(_)) {
-                core::mem::forget(storage);
+    let translation = [-origin_px[0] as f32, -origin_px[1] as f32];
+    let mut submits = 0usize;
+    let mut active_walkers = 0usize;
+    for (scene, foreground) in scenes {
+        set_active_stage(ticket, "instance");
+        let mut style = GpuFontRetainedStyle::identity(foreground);
+        style.translation_px = translation;
+        let rendered = match scene.restamp_instance(surface, style, false, 0.0) {
+            Ok(rendered) => rendered,
+            Err(error) => {
+                let error = FontKernelError::from(error);
+                if matches!(error, FontKernelError::SubmittedIncomplete(_)) {
+                    core::mem::forget(storage);
+                }
+                return Err(error);
             }
-            return Err(error.into());
-        }
-    };
+        };
+        submits = submits.saturating_add(rendered.submits);
+        active_walkers = active_walkers.saturating_add(rendered.active_walkers);
+    }
     Ok(FontStampedBuffer {
         ticket,
         storage,
-        submits: rendered.0,
-        active_walkers: rendered.1,
+        origin_px,
+        glyphs,
+        submits,
+        active_walkers,
     })
 }
 
@@ -972,6 +1123,34 @@ mod tests {
         assert_eq!(
             validate_retain_request(&invalid_extent),
             Err(FontKernelError::InvalidRequest("font-service-empty-extent"))
+        );
+    }
+
+    #[test]
+    fn stamp_contract_accepts_layers_and_enforces_glyph_and_4k_caps() {
+        let mut stamp = FontStampRequest {
+            layers: alloc::vec![FontStampLayer {
+                scene: request(),
+                foreground: GpuFontRgba::new(255, 255, 255, 255),
+            }],
+            fit: FontStampFit::Tight,
+        };
+        assert_eq!(validate_stamp_request(&stamp), Ok(()));
+
+        stamp.layers[0].scene.runs[0].text = "x".repeat(FONT_STAMP_MAX_GLYPHS + 1);
+        assert_eq!(
+            validate_stamp_request(&stamp),
+            Err(FontKernelError::InvalidRequest("font-service-text-length"))
+        );
+
+        stamp.layers[0].scene.runs[0].text = String::from("x");
+        stamp.layers[0].scene.raster_width = FONT_STAMP_MAX_EXTENT;
+        stamp.layers[0].scene.viewport_width = FONT_STAMP_MAX_EXTENT;
+        stamp.layers[0].scene.raster_height = FONT_STAMP_MAX_EXTENT;
+        stamp.layers[0].scene.viewport_height = FONT_STAMP_MAX_EXTENT;
+        assert_eq!(
+            validate_stamp_request(&stamp),
+            Err(FontKernelError::InvalidRequest("font-stamp-extent-softcap"))
         );
     }
 
