@@ -75,9 +75,9 @@ pub(crate) use frame_pool::{
     acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer, create_frame,
     destroy_frame, frame_buffer_ownership_probe, frame_snapshot, gpgpu_rgba_surface,
     mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_frame_buffer,
-    publish_gpgpu_scene_frame_buffer, publish_gpgpu_video_frame_buffer, publish_gpu_frame_buffer,
-    published_rgba_view, release_published_frame, retain_published_frame,
-    wait_frame_buffer_release, writable_rgba_view,
+    publish_gpgpu_scene_frame_buffer, publish_gpgpu_video_frame_buffer,
+    publish_gpu_font_frame_buffer, publish_gpu_frame_buffer, published_rgba_view,
+    release_published_frame, retain_published_frame, wait_frame_buffer_release, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_DURATION_MS,

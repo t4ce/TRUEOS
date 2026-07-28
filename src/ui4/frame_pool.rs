@@ -589,6 +589,37 @@ pub(crate) fn publish_gpgpu_frame_buffer(
     publish_checked_frame(frame, lease)
 }
 
+/// Publish one immutable font scene written directly into its UI4 allocation.
+///
+/// The font worker retains the frame write lease indirectly through its
+/// caller, writes the premultiplied RGBA8 canvas in place, and returns a
+/// release proof bound to this exact surface. No staging allocation, CPU
+/// readback, or frame copy crosses this boundary.
+pub(crate) fn publish_gpu_font_frame_buffer(
+    lease: FrameWriteLease,
+    release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
+) -> Result<PublishedFrame, FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    let index = lease.buffer_index as usize;
+    if frame.plan.content != FrameContent::FontScene2d
+        || frame.plan.cadence != super::FrameCadence::Immutable
+        || frame.plan.buffering != super::FrameBuffering::Single
+        || frame.plan.format != ScanoutFormat::Rgba8888Premultiplied
+        || !frame.gpu_authored[index]
+    {
+        return Err(FramePoolError::ProducerReleaseRequired);
+    }
+    let surface = frame.surfaces[index].ok_or(FramePoolError::InvalidLease)?;
+    let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
+    if !release.matches(access.phys, access.byte_len) {
+        return Err(FramePoolError::InvalidLease);
+    }
+    frame.gpu_release[index] = Some(FrameGpuRelease::Compute(release));
+    publish_checked_frame(frame, lease)
+}
+
 /// Publish one decoder-converted RGBA allocation. GuC completion proves the
 /// native NV12 source is no longer read; only this exact streaming Frame
 /// surface and its compute release cross the broker boundary. Four allocations

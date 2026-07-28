@@ -278,6 +278,20 @@ pub(crate) fn upload_ui4_nv12_tile64_to_rgba8_frame_kernel() -> Option<UploadedK
     Some(upload)
 }
 
+pub(crate) fn upload_ui4_rgba8_to_nv12_linear_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *UI4_RGBA8_TO_NV12_LINEAR_UPLOAD.lock() {
+        return Some(upload);
+    }
+    let dev = super::claimed_device()?;
+    let upload = upload_artifact(
+        dev,
+        UI4_RGBA8_TO_NV12_LINEAR_ADLS_ARTIFACT,
+        UI4_RGBA8_TO_NV12_LINEAR_ADLS_GPU,
+    )?;
+    *UI4_RGBA8_TO_NV12_LINEAR_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
 pub(crate) fn upload_sprite_quad_worklist_rgba8_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *SPRITE_QUAD_WORKLIST_RGBA8_UPLOAD.lock() {
         return Some(upload);

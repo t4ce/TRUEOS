@@ -58,6 +58,21 @@ pub(crate) struct Ui4Nv12Tile64ToRgba8FrameParams {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct Ui4Rgba8ToNv12LinearParams {
+    pub(crate) src_gpu: u64,
+    pub(crate) dst_gpu: u64,
+    pub(crate) src_pitch_bytes: u32,
+    pub(crate) src_width: u32,
+    pub(crate) src_height: u32,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) dst_width: u32,
+    pub(crate) dst_height: u32,
+    pub(crate) active_top: u32,
+    pub(crate) active_height: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct Mandel64WorklistRgba8Desc {
     pub(crate) src_xy: u32,
     pub(crate) dst_xy: u32,

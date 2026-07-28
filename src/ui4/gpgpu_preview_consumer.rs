@@ -6,7 +6,7 @@
 //! C++/IGC demos reuse the same exact-surface publication lifecycle on slot 1.
 //! Display pipe programming remains exclusively compositor-owned.
 
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 
 use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
@@ -17,9 +17,9 @@ use super::{
     WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
     WindowSessionId, acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame,
     create_window, destroy_frame, finish_window_session, finish_window_session_with_request,
-    gpgpu_rgba_surface, publish_frame_buffer, publish_gpgpu_frame_buffer, publish_window_frame,
-    publish_window_frames, replace_window_frame, take_owner_input_events, window_placement,
-    writable_rgba_view,
+    gpgpu_rgba_surface, publish_frame_buffer, publish_gpgpu_frame_buffer,
+    publish_gpu_font_frame_buffer, publish_window_frame, publish_window_frames,
+    replace_window_frame, take_owner_input_events, window_placement, writable_rgba_view,
 };
 
 const PREVIEW_OWNER: WindowOwner = WindowOwner::GPGPU_PREVIEW;
@@ -536,7 +536,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
             duration_expired |= preview.config.duration_ms != 0
                 && preview.metrics.elapsed_ms >= preview.config.duration_ms;
             if !duration_expired && preview_needs_render(preview) && now >= preview.next_render {
-                match render_preview_frame(preview) {
+                match render_preview_frame(preview).await {
                     Ok(()) => {
                         schedule_next_render(preview);
                     }
@@ -797,7 +797,7 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
         let y = (index_u32 / STATIC30_COLUMNS)
             .saturating_mul(cell_height)
             .saturating_add(inset);
-        let frame = match create_static30_frame(output, width, height) {
+        let frame = match create_static30_frame(output, width, height, index as u8) {
             Ok(frame) => frame,
             Err(_) => {
                 abandon_static30_initialization(session, &frames);
@@ -943,24 +943,32 @@ fn create_static30_frame(
     output: OutputId,
     width: u32,
     height: u32,
+    scheme: u8,
 ) -> Result<FrameHandle, FramePoolError> {
+    let seed = u16::from(scheme);
     create_frame(FrameSpec {
         output,
-        content: FrameContent::Image,
-        // Every test card is written and published exactly once. A single
-        // buffer is the honest contract and keeps the 30-frame probe small.
+        content: FrameContent::FontScene2d,
+        // Every Lorem Ipsum canvas is stamped and published exactly once. A
+        // single buffer keeps the full lease/release contract honest while
+        // avoiding redundant storage across the 30-window probe.
         cadence: FrameCadence::Immutable,
         buffering: super::FrameBuffering::Single,
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
-        base_color: Some(PremultipliedRgba8::from_straight_rgba(0, 0, 0, u8::MAX)),
+        base_color: Some(PremultipliedRgba8::from_straight_rgba(
+            (10 + seed * 7 % 28) as u8,
+            (14 + seed * 11 % 32) as u8,
+            (28 + seed * 13 % 44) as u8,
+            u8::MAX,
+        )),
     })
 }
 
-fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str> {
+async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str> {
     if preview.config.preset == GpgpuPreviewPreset::Static30 {
-        return render_static30_frames(preview);
+        return render_static30_frames(preview).await;
     }
     preview.metrics.attempted = preview.metrics.attempted.saturating_add(1);
     let publish_this_frame =
@@ -1101,7 +1109,7 @@ fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str>
     Ok(())
 }
 
-fn render_static30_frames(preview: &mut ActivePreview) -> Result<(), &'static str> {
+async fn render_static30_frames(preview: &mut ActivePreview) -> Result<(), &'static str> {
     let mut surfaces = Vec::with_capacity(STATIC30_FRAME_COUNT);
     surfaces.push(StaticPreviewSurface {
         frame: preview.frame,
@@ -1110,6 +1118,10 @@ fn render_static30_frames(preview: &mut ActivePreview) -> Result<(), &'static st
     });
     surfaces.extend(preview.extra_surfaces.iter().copied());
 
+    let mut glyphs = 0usize;
+    let mut kernel_submits = 0usize;
+    let mut active_walkers = 0usize;
+    let mut last_release = 0u64;
     for surface in &surfaces {
         preview.metrics.attempted = preview.metrics.attempted.saturating_add(1);
         let lease = match acquire_frame_buffer(surface.frame) {
@@ -1124,15 +1136,50 @@ fn render_static30_frames(preview: &mut ActivePreview) -> Result<(), &'static st
                 return Err("static30-frame-acquire-failed");
             }
         };
-        if let Err(reason) = fill_static_preview_frame(lease, surface.scheme) {
+        let destination = match gpgpu_rgba_surface(lease) {
+            Ok(destination) => destination,
+            Err(_) => {
+                let _ = cancel_frame_buffer(lease);
+                preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+                return Err("static30-font-surface-unavailable");
+            }
+        };
+        let request =
+            static30_font_stamp_request(destination.width, destination.height, surface.scheme);
+        let pending = match crate::r::font_kernel_service::submit_frame_stamp(request, destination)
+        {
+            Ok(pending) => pending,
+            Err(_) => {
+                let _ = cancel_frame_buffer(lease);
+                preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+                return Err("static30-font-submit-failed");
+            }
+        };
+        let stamped = match pending.wait().await {
+            Ok(stamped) => stamped,
+            Err(crate::r::font_kernel_service::FontKernelError::SubmittedIncomplete(_)) => {
+                // The accepted producer may still target this exact surface.
+                // Preserve the write lease so neither UI4 nor a future
+                // producer can recycle it underneath a late GPU write.
+                preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+                return Err("static30-font-submit-incomplete");
+            }
+            Err(_) => {
+                let _ = cancel_frame_buffer(lease);
+                preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+                return Err("static30-font-stamp-failed");
+            }
+        };
+        preview.metrics.submitted = preview.metrics.submitted.saturating_add(1);
+        preview.metrics.completed = preview.metrics.completed.saturating_add(1);
+        glyphs = glyphs.saturating_add(stamped.glyphs());
+        kernel_submits = kernel_submits.saturating_add(stamped.submits());
+        active_walkers = active_walkers.saturating_add(stamped.active_walkers());
+        last_release = stamped.release().sequence();
+        if publish_gpu_font_frame_buffer(lease, stamped.release()).is_err() {
             let _ = cancel_frame_buffer(lease);
             preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-            return Err(reason);
-        }
-        preview.metrics.completed = preview.metrics.completed.saturating_add(1);
-        if publish_frame_buffer(lease).is_err() {
-            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-            return Err("static30-frame-publish-failed");
+            return Err("static30-font-frame-publish-failed");
         }
     }
 
@@ -1152,12 +1199,74 @@ fn render_static30_frames(preview: &mut ActivePreview) -> Result<(), &'static st
     preview.static_needs_publish = false;
     crate::log_info!(
         target: "ui4";
-        "ui4 gpgpu-preview static30 published request={} frames={} windows={} slots=1+2+3 per_slot=10 submitted=0 marker=0 producer=cpu cadence=immutable/single publish_passes=1\n",
+        "ui4 gpgpu-preview static30 published request={} frames={} windows={} slots=1+2+3 per_slot=10 glyphs={} font_jobs={} kernel_submits={} active_walkers={} release_sequence={} producer=font-kernel-service path=skrifa->gpu-vm-r8->cpp-font-instance->ui4-frame cadence=immutable/single publish_passes=1 cpu_readback=0 cpu_frame_copy=0\n",
         preview.request_serial,
         preview.metrics.published,
         preview_surface_count(preview),
+        glyphs,
+        preview.metrics.submitted,
+        kernel_submits,
+        active_walkers,
+        last_release,
     );
     Ok(())
+}
+
+fn static30_font_stamp_request(
+    width: u32,
+    height: u32,
+    scheme: u8,
+) -> crate::r::font_kernel_service::FontStampRequest {
+    use crate::r::font_kernel_service::{
+        FontStampFit, FontStampLayer, FontStampRequest, RetainSceneRequest,
+        RetainedFontPositioning, RetainedFontRun,
+    };
+
+    let horizontal_padding = 10.0f32;
+    let vertical_padding = 8.0f32;
+    let width_fit = (width.saturating_sub(20) as f32 / 9.0).max(8.0);
+    let height_fit = (height.saturating_sub(16) as f32 / 5.4).max(8.0);
+    let font_pixels = width_fit.min(height_fit).clamp(8.0, 26.0);
+    let baseline = vertical_padding + font_pixels;
+    let line_advance = font_pixels * 1.22;
+    let scene = |runs| RetainSceneRequest {
+        runs,
+        font: crate::intel::gpu_font::GpuFontFace::Default,
+        viewport_width: width,
+        viewport_height: height,
+        raster_width: width,
+        raster_height: height,
+        positioning: RetainedFontPositioning::SceneOrigin,
+    };
+    let run = |text: &'static str, row: usize| RetainedFontRun {
+        text: String::from(text),
+        position: [horizontal_padding, baseline + row as f32 * line_advance],
+        font_pixels,
+        slant: if scheme.is_multiple_of(3) { 0.08 } else { 0.0 },
+    };
+    let seed = u16::from(scheme);
+    FontStampRequest {
+        layers: alloc::vec![
+            FontStampLayer {
+                scene: scene(alloc::vec![run("Lorem ipsum", 0)]),
+                foreground: crate::intel::gpu_font::GpuFontRgba::new(
+                    (112 + seed * 37 % 143) as u8,
+                    (144 + seed * 53 % 111) as u8,
+                    (176 + seed * 29 % 79) as u8,
+                    u8::MAX,
+                ),
+            },
+            FontStampLayer {
+                scene: scene(alloc::vec![
+                    run("dolor sit amet,", 1),
+                    run("consectetur", 2),
+                    run("adipiscing elit.", 3),
+                ]),
+                foreground: crate::intel::gpu_font::GpuFontRgba::new(238, 244, 255, u8::MAX,),
+            },
+        ],
+        fit: FontStampFit::Canvas,
+    }
 }
 
 /// Paint one unmistakable CPU-authored frame. This path deliberately does not
@@ -1456,9 +1565,8 @@ const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Lab256 => "three-pass+pipe-control+post-marker-exact-surface",
-        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
-            "clflush-mfence-before-publish"
-        }
+        GpgpuPreviewPreset::Static => "clflush-mfence-before-publish",
+        GpgpuPreviewPreset::Static30 => "font-instance+pipe-control+post-marker-exact-surface",
     }
 }
 
@@ -1466,7 +1574,8 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
         GpgpuPreviewPreset::All => "guc-compute-trio",
         GpgpuPreviewPreset::Lab256 => "guc-lab256-three-pass",
-        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => "cpu-static",
+        GpgpuPreviewPreset::Static => "cpu-static",
+        GpgpuPreviewPreset::Static30 => "font-kernel-service-cpp",
         GpgpuPreviewPreset::Mandelbrot | GpgpuPreviewPreset::Chart | GpgpuPreviewPreset::Plasma => {
             "guc-compute-single"
         }
@@ -1518,7 +1627,8 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "ui4-cpp-resizable-slot1",
-        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => "ui4-overlay",
+        GpgpuPreviewPreset::Static => "ui4-overlay",
+        GpgpuPreviewPreset::Static30 => "ui4-font-scene-slots1+2+3",
     }
 }
 
@@ -2069,7 +2179,7 @@ mod tests {
     use super::{
         FramePlanError, FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig,
         GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH, preview_extent,
-        preview_frame_create_error_label, preview_plane_slot,
+        preview_frame_create_error_label, preview_plane_slot, static30_font_stamp_request,
     };
 
     #[test]
@@ -2077,6 +2187,28 @@ mod tests {
         assert_eq!(
             preview_extent(GpgpuPreviewPreset::Lab256),
             (LAB256_PREVIEW_SIZE, LAB256_PREVIEW_SIZE)
+        );
+    }
+
+    #[test]
+    fn static30_builds_bounded_lorem_canvas_layers() {
+        let request = static30_font_stamp_request(320, 180, 7);
+        assert_eq!(request.fit, crate::r::font_kernel_service::FontStampFit::Canvas);
+        assert_eq!(request.layers.len(), 2);
+        assert!(request.layers.iter().all(|layer| {
+            layer.scene.raster_width == 320
+                && layer.scene.raster_height == 180
+                && layer.scene.viewport_width == 320
+                && layer.scene.viewport_height == 180
+        }));
+        assert_eq!(
+            request
+                .layers
+                .iter()
+                .flat_map(|layer| layer.scene.runs.iter())
+                .map(|run| run.text.chars().count())
+                .sum::<usize>(),
+            53
         );
     }
 

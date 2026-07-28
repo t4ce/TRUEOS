@@ -247,6 +247,64 @@ impl GpgpuNv12Tile64Surface {
     }
 }
 
+/// Linear NV12 storage shared by the UI4 RCS converter and VDEnc input path.
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuNv12LinearSurface {
+    pub(crate) phys: u64,
+    pub(crate) gpu: u64,
+    pub(crate) bytes: usize,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch_bytes: u32,
+    pub(crate) uv_offset: u32,
+}
+
+impl GpgpuNv12LinearSurface {
+    pub(crate) fn new(
+        phys: u64,
+        gpu: u64,
+        bytes: usize,
+        width: u32,
+        height: u32,
+        pitch_bytes: u32,
+    ) -> Option<Self> {
+        let uv_offset = pitch_bytes.checked_mul(height)?;
+        let surface = Self {
+            phys,
+            gpu,
+            bytes,
+            width,
+            height,
+            pitch_bytes,
+            uv_offset,
+        };
+        surface.is_valid().then_some(surface)
+    }
+
+    pub(crate) fn is_valid(self) -> bool {
+        if self.phys == 0
+            || self.gpu == 0
+            || !self.phys.is_multiple_of(4096)
+            || !self.gpu.is_multiple_of(4096)
+            || self.width == 0
+            || self.height == 0
+            || !self.width.is_multiple_of(2)
+            || !self.height.is_multiple_of(2)
+            || self.pitch_bytes < self.width
+        {
+            return false;
+        }
+        let Some(required) = u64::from(self.pitch_bytes)
+            .checked_mul(u64::from(self.height))
+            .and_then(|luma| luma.checked_add(luma / 2))
+        else {
+            return false;
+        };
+        self.uv_offset == self.pitch_bytes.saturating_mul(self.height)
+            && required <= self.bytes as u64
+    }
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuRgb565Surface {
     pub(crate) phys: u64,

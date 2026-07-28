@@ -3,10 +3,10 @@
 //! `RetainScene` yields GPU-VM-resident Skrifa coverage that a caller may
 //! restamp repeatedly. `Stamp` is the one-shot path: the worker creates the
 //! same retained representation temporarily, composites ordered font/color
-//! layers into a new GPU-visible premultiplied RGBA8 buffer, and returns that
-//! owned buffer asynchronously. Stamp callers may preserve a canvas or request
-//! an exact coverage-union crop; both obey the UHD/4K pixel and 4096-glyph
-//! soft caps.
+//! layers into either a new GPU-visible premultiplied RGBA8 buffer or a leased
+//! UI4 frame, and returns the owned buffer or exact producer-release proof
+//! asynchronously. Stamp callers may preserve a canvas or request an exact
+//! coverage-union crop; both obey the UHD/4K pixel and 4096-glyph soft caps.
 //! Gridpaper page, cell-patch, presentation, and print work use the same fair
 //! hardware admission lane while retaining independent runtime state.
 
@@ -278,6 +278,34 @@ pub(crate) struct FontStampedBuffer {
     active_walkers: usize,
 }
 
+/// Completion metadata for a stamp written directly into a caller-owned UI4
+/// frame. The release is bound to that exact allocation and is the only token
+/// accepted by the frame pool for GPU-authored publication.
+pub(crate) struct FontFrameStamp {
+    glyphs: usize,
+    submits: usize,
+    active_walkers: usize,
+    release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
+}
+
+impl FontFrameStamp {
+    pub(crate) const fn glyphs(&self) -> usize {
+        self.glyphs
+    }
+
+    pub(crate) const fn submits(&self) -> usize {
+        self.submits
+    }
+
+    pub(crate) const fn active_walkers(&self) -> usize {
+        self.active_walkers
+    }
+
+    pub(crate) const fn release(&self) -> crate::intel::gpgpu::GpgpuRgba8ReleaseFence {
+        self.release
+    }
+}
+
 impl FontStampedBuffer {
     pub(crate) const fn ticket(&self) -> FontKernelTicket {
         self.ticket
@@ -339,6 +367,16 @@ pub(crate) struct PendingFontStamp {
     ticket: FontKernelTicket,
     reply:
         Arc<Signal<crate::wait::EmbassySpinRawMutex, Result<FontStampedBuffer, FontKernelError>>>,
+}
+
+pub(crate) struct PendingFontFrameStamp {
+    reply: Arc<Signal<crate::wait::EmbassySpinRawMutex, Result<FontFrameStamp, FontKernelError>>>,
+}
+
+impl PendingFontFrameStamp {
+    pub(crate) async fn wait(self) -> Result<FontFrameStamp, FontKernelError> {
+        self.reply.wait().await
+    }
 }
 
 impl PendingFontStamp {
@@ -437,19 +475,28 @@ enum QueuedFontRequest {
             Signal<crate::wait::EmbassySpinRawMutex, Result<FontStampedBuffer, FontKernelError>>,
         >,
     },
+    FrameStamp {
+        ticket: FontKernelTicket,
+        request: FontStampRequest,
+        destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+        reply:
+            Arc<Signal<crate::wait::EmbassySpinRawMutex, Result<FontFrameStamp, FontKernelError>>>,
+    },
 }
 
 impl QueuedFontRequest {
     const fn ticket(&self) -> FontKernelTicket {
         match self {
-            Self::Retain { ticket, .. } | Self::Stamp { ticket, .. } => *ticket,
+            Self::Retain { ticket, .. }
+            | Self::Stamp { ticket, .. }
+            | Self::FrameStamp { ticket, .. } => *ticket,
         }
     }
 
     const fn consumer(&self) -> FontKernelConsumer {
         let path = match self {
             Self::Retain { .. } => FontKernelConsumerPath::RetainScene,
-            Self::Stamp { .. } => FontKernelConsumerPath::Stamp,
+            Self::Stamp { .. } | Self::FrameStamp { .. } => FontKernelConsumerPath::Stamp,
         };
         FontKernelConsumer::new(path, self.ticket().raw())
     }
@@ -508,6 +555,46 @@ pub(crate) fn submit_stamp(request: FontStampRequest) -> Result<PendingFontStamp
     }
     WORK_AVAILABLE.signal(());
     Ok(PendingFontStamp { ticket, reply })
+}
+
+/// Queue a stamp directly into one caller-owned RGBA8 surface.
+///
+/// Only canvas-fit requests are admitted because the destination extent and
+/// ownership are fixed before submission. The caller must retain its write
+/// lease until the returned exact-surface release is published or discarded.
+pub(crate) fn submit_frame_stamp(
+    request: FontStampRequest,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> Result<PendingFontFrameStamp, FontKernelError> {
+    validate_stamp_request(&request)?;
+    let scene = &request.layers[0].scene;
+    if request.fit != FontStampFit::Canvas
+        || !destination.is_valid()
+        || destination.width != scene.raster_width
+        || destination.height != scene.raster_height
+    {
+        return Err(FontKernelError::InvalidRequest("font-frame-stamp-destination"));
+    }
+    let ticket = next_ticket();
+    let reply = Arc::new(Signal::new());
+    {
+        let mut queue = REQUESTS.lock();
+        if queue.len() >= FONT_KERNEL_QUEUE_CAPACITY {
+            return Err(FontKernelError::QueueFull);
+        }
+        queue.push_back(QueuedFontRequest::FrameStamp {
+            ticket,
+            request,
+            destination,
+            reply: Arc::clone(&reply),
+        });
+    }
+    {
+        let mut status = STATUS.lock();
+        status.submitted_stamp = status.submitted_stamp.saturating_add(1);
+    }
+    WORK_AVAILABLE.signal(());
+    Ok(PendingFontFrameStamp { reply })
 }
 
 fn next_ticket() -> FontKernelTicket {
@@ -821,10 +908,10 @@ fn tight_stamp_bounds(
     Ok((origin, width, height))
 }
 
-fn process_stamp(
+fn prepare_stamp_scenes(
     ticket: FontKernelTicket,
     request: &FontStampRequest,
-) -> Result<FontStampedBuffer, FontKernelError> {
+) -> Result<(Vec<(GpuFontRetainedScene, GpuFontRgba)>, usize), FontKernelError> {
     let mut scenes = Vec::new();
     let mut glyphs = 0usize;
     for layer in &request.layers {
@@ -836,6 +923,14 @@ fn process_stamp(
         let glyph_runs = expand_origin_runs(ticket, &layer.scene)?;
         collect_stamp_scenes(ticket, layer, glyph_runs.as_slice(), &mut scenes)?;
     }
+    Ok((scenes, glyphs))
+}
+
+fn process_stamp(
+    ticket: FontKernelTicket,
+    request: &FontStampRequest,
+) -> Result<FontStampedBuffer, FontKernelError> {
+    let (scenes, glyphs) = prepare_stamp_scenes(ticket, request)?;
     let (origin_px, width, height) = match request.fit {
         FontStampFit::Canvas => {
             let scene = &request.layers[0].scene;
@@ -876,6 +971,40 @@ fn process_stamp(
         glyphs,
         submits,
         active_walkers,
+    })
+}
+
+fn process_frame_stamp(
+    ticket: FontKernelTicket,
+    request: &FontStampRequest,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> Result<FontFrameStamp, FontKernelError> {
+    let (scenes, glyphs) = prepare_stamp_scenes(ticket, request)?;
+    let scene_count = scenes.len();
+    let mut submits = 0usize;
+    let mut active_walkers = 0usize;
+    let mut release = None;
+    for (index, (scene, foreground)) in scenes.into_iter().enumerate() {
+        set_active_stage(ticket, "frame-instance");
+        let rendered = scene.restamp_instance(
+            destination,
+            GpuFontRetainedStyle::identity(foreground),
+            index + 1 == scene_count,
+            0.0,
+        )?;
+        submits = submits.saturating_add(rendered.submits);
+        active_walkers = active_walkers.saturating_add(rendered.active_walkers);
+        if rendered.release.is_some() {
+            release = rendered.release;
+        }
+    }
+    let release =
+        release.ok_or(FontKernelError::Unavailable("font-frame-stamp-release-missing"))?;
+    Ok(FontFrameStamp {
+        glyphs,
+        submits,
+        active_walkers,
+        release,
     })
 }
 
@@ -1016,6 +1145,30 @@ fn process_queued_request(request: QueuedFontRequest) {
             );
             reply.signal(result);
         }
+        QueuedFontRequest::FrameStamp {
+            ticket,
+            request,
+            destination,
+            reply,
+        } => {
+            set_active_stage(ticket, "dispatch");
+            let result = process_frame_stamp(ticket, &request, destination);
+            // A destination stamp is not replayed: an earlier ordered layer
+            // may already have retired into the leased frame, so retrying the
+            // whole source-over sequence would composite it twice.
+            if let Err(error) = &result {
+                log_failure(ticket, "frame-stamp", error);
+            }
+            complete_status(ticket, false, result.is_ok());
+            crate::log_info!(
+                target: "render";
+                "font-kernel-service: frame-stamp complete ticket={} ok={} queued={}\n",
+                ticket.raw(),
+                result.is_ok() as u8,
+                REQUESTS.lock().len(),
+            );
+            reply.signal(result);
+        }
     }
     IN_FLIGHT.store(false, Ordering::Release);
     WORK_AVAILABLE.signal(());
@@ -1050,7 +1203,7 @@ pub(crate) async fn font_kernel_service_task() {
     ONLINE.store(true, Ordering::Release);
     crate::log_info!(
         target: "render";
-        "font-kernel-service: online paths=retain-scene+async-stamp+grid-page+grid-cell-patch+grid-present+grid-print controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-multi-consumer queue_capacity={} retained_storage=gpu-vm-r8 stamp_output=gpu-vm-rgba8 completion=signal\n",
+        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp+grid-page+grid-cell-patch+grid-present+grid-print controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-multi-consumer queue_capacity={} retained_storage=gpu-vm-r8 stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
         FONT_KERNEL_QUEUE_CAPACITY,
     );
     loop {

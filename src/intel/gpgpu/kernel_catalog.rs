@@ -37,6 +37,10 @@ pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME: &str =
     "ui4_nv12_tile64_to_rgba8_frame";
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_OPENCL_SOURCE: &str =
     include_str!("kernels/ui4_nv12_tile64_to_rgba8_frame.cl");
+pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME: &str =
+    "ui4_rgba8_to_nv12_linear";
+pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_OPENCL_SOURCE: &str =
+    include_str!("kernels/ui4_rgba8_to_nv12_linear.cl");
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME: &str = "sprite_quad_worklist_rgba8";
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/sprite_quad_worklist_rgba8.cl");
@@ -126,6 +130,7 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME => {
             Some(UI4_NV12_TILE64_TO_RGBA8_FRAME_OPENCL_SOURCE)
         }
+        UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME => Some(UI4_RGBA8_TO_NV12_LINEAR_OPENCL_SOURCE),
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => Some(SPRITE_QUAD_WORKLIST_RGBA8_OPENCL_SOURCE),
         UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME => Some(UI4_COMPOSE_LAYERS_RGBA8_OPENCL_SOURCE),
         MANDEL64_WORKLIST_RGBA8_KERNEL_NAME => Some(MANDEL64_WORKLIST_RGBA8_OPENCL_SOURCE),
@@ -173,6 +178,9 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         }
         UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/ui4_nv12_tile64_to_rgba8_frame.cl")
+        }
+        UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME => {
+            Some("src/intel/gpgpu/kernels/ui4_rgba8_to_nv12_linear.cl")
         }
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/sprite_quad_worklist_rgba8.cl")
@@ -336,6 +344,10 @@ pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/ui4_nv12_tile64_to_rgba8_frame.bin");
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/ui4_nv12_tile64_to_rgba8_frame.spv");
+pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/ui4_rgba8_to_nv12_linear.bin");
+pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/ui4_rgba8_to_nv12_linear.spv");
 
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/sprite_quad_worklist_rgba8.bin");
@@ -705,6 +717,10 @@ pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_BIN_SHA256: [u8; 32] = [
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN_SHA256: [u8; 32] = [
     0xF3, 0x3F, 0x0F, 0x2F, 0x53, 0x1A, 0xA4, 0xDF, 0x74, 0xB9, 0x32, 0xFD, 0x51, 0x9D, 0x5C, 0x09,
     0x6F, 0x95, 0x76, 0xB9, 0x4C, 0x09, 0xCF, 0x1E, 0x20, 0xB7, 0x42, 0x15, 0x10, 0x92, 0xE0, 0xB5,
+];
+pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN_SHA256: [u8; 32] = [
+    0x94, 0xB0, 0xBC, 0x25, 0xE5, 0xCE, 0xD9, 0x02, 0xA1, 0x6E, 0x71, 0x38, 0xEE, 0xCE, 0x88, 0xA4,
+    0xC3, 0x74, 0x0E, 0xC6, 0x23, 0xB7, 0xE7, 0x30, 0x4B, 0xBD, 0xE8, 0x14, 0xCC, 0xD3, 0x85, 0xC6,
 ];
 
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [

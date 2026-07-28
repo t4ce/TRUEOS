@@ -17,6 +17,7 @@ const FONT_OUTLINE_COVERAGE_R8_ADLS_GPU: u64 = 0x0D3D_0000;
 const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_GPU: u64 = 0x0D3F_0000;
 const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_GPU: u64 = 0x0D40_0000;
 const SCENE_AABB_ADLS_GPU: u64 = 0x0D41_0000;
+const UI4_RGBA8_TO_NV12_LINEAR_ADLS_GPU: u64 = 0x0D41_8000;
 const LAB256_MULTIPHASE_ADLS_GPU: u64 = 0x0D42_0000;
 const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU: u64 = 0x0D43_0000;
 // The C++ background is larger than its OpenCL C ABI reference. Give both
@@ -73,6 +74,7 @@ const RESOLVE_TILE64_MSAA4_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FONT_OUTLINE_COVERAGE_R8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const UI4_NV12_YTILE_TO_PRIMARY_XRGB_TEXT_OFFSET_BYTES: u64 = 0x40;
 const UI4_NV12_TILE64_TO_RGBA8_FRAME_TEXT_OFFSET_BYTES: u64 = 0x40;
+const UI4_RGBA8_TO_NV12_LINEAR_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FILL_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FILL_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const ALPHA_BLEND_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
@@ -247,6 +249,14 @@ const UI4_NV12_PRIMARY_CROSS_THREAD_BYTES: usize = UI4_NV12_PRIMARY_CROSS_THREAD
 const UI4_NV12_PRIMARY_PER_THREAD_BYTES: usize = 96;
 const UI4_NV12_PRIMARY_INDIRECT_BYTES: usize =
     UI4_NV12_PRIMARY_CROSS_THREAD_BYTES + UI4_NV12_PRIMARY_PER_THREAD_BYTES;
+const _: () = assert!(
+    SCENE_AABB_ADLS_GPU + SCENE_AABB_ADLS_BIN.len() as u64
+        <= UI4_RGBA8_TO_NV12_LINEAR_ADLS_GPU
+);
+const _: () = assert!(
+    UI4_RGBA8_TO_NV12_LINEAR_ADLS_GPU + UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN.len() as u64
+        <= LAB256_MULTIPHASE_ADLS_GPU
+);
 
 // GridPaper can retain 17 independently colored layers for each of its three
 // font faces (51 total). Keep enough room to submit the complete scene once.
@@ -1004,8 +1014,10 @@ pub(crate) const UI4_COMPOSITOR_RCS_JOB_SLOTS: usize = 2;
 // following frame never retargets PTEs which an earlier batch can still read.
 // Each 16 MiB window matches the media output backing; the two-slot range stays
 // disjoint from both persistent font resources and UI4 RGBA VAs.
-const UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE: u64 = 0x1000_0000;
+pub(crate) const UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE: u64 = 0x1000_0000;
 const UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const UI4_STREAM_NV12_DESTINATION_GPU: u64 =
+    UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE + UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES as u64;
 const _: () = assert!(UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE.is_multiple_of(4096));
 const _: () = assert!(
     UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE
