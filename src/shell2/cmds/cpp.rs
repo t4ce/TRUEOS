@@ -551,12 +551,33 @@ fn print_font_service_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "cpp font status: online={} queued={} active_ticket={} active_stage={} lane_retries={} retain_submitted={} retain_completed={} stamp_submitted={} stamp_completed={} failed={} carrier=bsp-controller+leased-blocking-lane ownership=gpu-vm-r8+gpu-vm-rgba8 completion=ticket-signal",
+            "cpp font status: online={} queued={} active_ticket={} active_stage={} active_consumer={}:{} lane_waiters={} lane_peak={} lane_admissions={} lane_contentions={} lane_wait_ms={} lane_wait_max_ms={} lane_paths=retain:{},stamp:{},grid-page:{},grid-patch:{},grid-present:{},grid-print:{} lane_retries={} gpu_retries={} retain_submitted={} retain_completed={} stamp_submitted={} stamp_completed={} failed={} carrier=bsp-controller+leased-blocking-lane font_lane=fair-fifo-multi-consumer ownership=gpu-vm-r8+gpu-vm-rgba8 completion=ticket-signal",
             status.online as u8,
             status.queued,
             status.active_ticket.map(|ticket| ticket.raw()).unwrap_or(0),
             status.active_stage,
+            status
+                .active_consumer
+                .map(|consumer| consumer.path.name())
+                .unwrap_or("none"),
+            status
+                .active_consumer
+                .map(|consumer| consumer.id)
+                .unwrap_or(0),
+            status.lane_waiters,
+            status.lane_peak_waiters,
+            status.lane_admissions,
+            status.lane_contentions,
+            status.lane_wait_ms,
+            status.lane_wait_max_ms,
+            status.retain_lane_admissions,
+            status.stamp_lane_admissions,
+            status.grid_page_lane_admissions,
+            status.grid_patch_lane_admissions,
+            status.grid_present_lane_admissions,
+            status.grid_print_lane_admissions,
             status.lane_retries,
+            status.gpu_retries,
             status.submitted_retain,
             status.completed_retain,
             status.submitted_stamp,

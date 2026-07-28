@@ -8,7 +8,6 @@
 
 use alloc::{collections::VecDeque, string::String, vec, vec::Vec};
 
-use embassy_sync::mutex::Mutex as AsyncMutex;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
@@ -2595,14 +2594,6 @@ fn build_resident_page(
     {
         for entries in partition_font_entries(&entries, partition_count, scene_width, scene_height)
         {
-            let mesh = create_resident_font_centered_scene_mesh_at_raster(
-                &entries,
-                font,
-                scene_width,
-                scene_height,
-                raster_width,
-                raster_height,
-            )?;
             let coverage = if gpu_font_entries_use_analytical_coverage(
                 &entries,
                 scene_width,
@@ -2618,11 +2609,11 @@ fn build_resident_page(
                     raster_width,
                     raster_height,
                 ) {
-                    Ok(coverage) => Some(coverage),
+                    Ok(coverage) => coverage,
                     Err(reason) => {
                         crate::log_warn!(
                             target: "gridpaper";
-                            "gridpaper: analytical font coverage unavailable instance={} scale={} font={} color={} entries={} reason={} action=print-resident-fallback+reject-live-compute-frame\n",
+                            "gridpaper: analytical font coverage unavailable instance={} scale={} font={} color={} entries={} reason={} action=retry-complete-page\n",
                             instance_id,
                             snapshot.scale_percent,
                             font.registry_name(),
@@ -2630,18 +2621,26 @@ fn build_resident_page(
                             entries.len(),
                             reason,
                         );
-                        None
+                        return Err(reason);
                     }
                 }
             } else {
-                None
+                return Err("font-coverage-ineligible");
             };
+            let mesh = create_resident_font_centered_scene_mesh_at_raster(
+                &entries,
+                font,
+                scene_width,
+                scene_height,
+                raster_width,
+                raster_height,
+            )?;
             layers.push(ResidentLayer {
                 base_color: palette(color, false),
                 text_color_selector: Some(color),
                 logical_rects: Vec::new(),
                 mesh,
-                coverage,
+                coverage: Some(coverage),
                 font_instance_descriptor: None,
             });
         }
@@ -4238,7 +4237,6 @@ impl InputRoute {
 
 static INPUT_ROUTES: Mutex<[InputRoute; GRIDPAPER_POOL_SOFT_CAP]> =
     Mutex::new([const { InputRoute::new() }; GRIDPAPER_POOL_SOFT_CAP]);
-static GPU_RENDER_LANE: AsyncMutex<crate::wait::EmbassySpinRawMutex, ()> = AsyncMutex::new(());
 
 fn set_input_route(pool_slot: usize, window: Option<crate::ui4::WindowId>) {
     let mut routes = INPUT_ROUTES.lock();
@@ -4784,6 +4782,19 @@ fn build_dirty_cell_patches(runtime: &mut GridPaperRuntime) {
                     break;
                 }
             }
+            Err(error) if retryable_font_coverage_error(error) => {
+                runtime.dirty_cells.push_front(selection);
+                crate::log_warn!(
+                    target: "gridpaper";
+                    "gridpaper: cell patch deferred instance={} column={} row={} reason={} queued_cells={} action=retain-dirty-cell+retry-on-font-lane\n",
+                    runtime.surface.instance_id,
+                    selection.column,
+                    selection.row,
+                    error,
+                    runtime.dirty_cells.len(),
+                );
+                break;
+            }
             Err(error) => {
                 crate::log_warn!(
                     target: "gridpaper";
@@ -4801,6 +4812,10 @@ fn build_dirty_cell_patches(runtime: &mut GridPaperRuntime) {
             }
         }
     }
+}
+
+fn retryable_font_coverage_error(error: &str) -> bool {
+    error == "font-coverage-dispatch"
 }
 
 fn pan_gridpaper(runtime: &mut GridPaperRuntime, event: crate::ui4::Ui4PanEvent) {
@@ -5138,12 +5153,40 @@ fn runtime_needs_render(runtime: &GridPaperRuntime, now_ms: u64) -> bool {
         != runtime.last_sampled_text_colors
 }
 
+fn runtime_needs_font_lane(runtime: &GridPaperRuntime, now_ms: u64) -> bool {
+    !runtime.dirty_cells.is_empty()
+        || runtime.queued_snapshot.is_some()
+        || runtime_needs_render(runtime, now_ms)
+}
+
+fn runtime_font_consumer(
+    runtime: &GridPaperRuntime,
+) -> crate::r::font_kernel_service::FontKernelConsumer {
+    use crate::r::font_kernel_service::{FontKernelConsumer, FontKernelConsumerPath};
+
+    let path = if !runtime.dirty_cells.is_empty() {
+        FontKernelConsumerPath::GridCellPatch
+    } else if runtime.queued_snapshot.is_some() {
+        FontKernelConsumerPath::GridPage
+    } else {
+        FontKernelConsumerPath::GridPresent
+    };
+    let id = ((runtime.surface.pool_slot as u64) << 32) | u64::from(runtime.surface.instance_id);
+    FontKernelConsumer::new(path, id)
+}
+
+fn incomplete_pending_page_error(error: ServiceError) -> bool {
+    matches!(error, ServiceError::Render("gridpaper-compute-text-coverage-required"))
+}
+
 fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
     let animation_elapsed_ms = now_ms.saturating_sub(runtime.animation_started_ms);
     let mut published_page_this_tick = false;
     if runtime.surface.presentation.is_some()
         && let Some(candidate) = runtime.pending.as_ref()
     {
+        let candidate_serial = candidate.serial;
+        let candidate_generation = candidate.generation;
         match publish_page(
             &runtime.surface,
             candidate,
@@ -5212,18 +5255,30 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                 published_page_this_tick = true;
                 runtime.last_render_error = None;
             }
-            Err(error) if runtime.last_render_error != Some(error) => {
-                crate::log_warn!(
-                    target: "gridpaper";
-                    "gridpaper: frame pending instance={} serial={} generation={} error={:?} action=retain-front-and-retry\n",
-                    runtime.surface.instance_id,
-                    candidate.serial,
-                    candidate.generation,
-                    error,
-                );
-                runtime.last_render_error = Some(error);
+            Err(error) => {
+                let incomplete = incomplete_pending_page_error(error);
+                if incomplete {
+                    runtime.pending = None;
+                    runtime.queued_snapshot = runtime.latest_snapshot.clone();
+                    runtime.last_build_error = None;
+                }
+                if runtime.last_render_error != Some(error) {
+                    crate::log_warn!(
+                        target: "gridpaper";
+                        "gridpaper: frame pending instance={} serial={} generation={} error={:?} action={}\n",
+                        runtime.surface.instance_id,
+                        candidate_serial,
+                        candidate_generation,
+                        error,
+                        if incomplete {
+                            "discard-incomplete-page+rebuild-latest-snapshot"
+                        } else {
+                            "retain-front-and-retry"
+                        },
+                    );
+                    runtime.last_render_error = Some(error);
+                }
             }
-            Err(_) => {}
         }
     }
 
@@ -5495,14 +5550,17 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
             dispatch_gridpaper_input(runtime_ref, event);
         }
         prune_grid_cursor_inputs(runtime_ref);
-        build_dirty_cell_patches(runtime_ref);
-        build_queued_page(runtime_ref);
-
         let now_ms = Instant::now().as_millis();
-        if runtime_needs_render(runtime_ref, now_ms) {
-            let _render_lane = GPU_RENDER_LANE.lock().await;
+        if runtime_needs_font_lane(runtime_ref, now_ms) {
+            let consumer = runtime_font_consumer(runtime_ref);
+            let _font_lane = crate::r::font_kernel_service::acquire_gpu_lane(consumer).await;
             if pool_lease_state(pool_slot).epoch == observed_lease_epoch {
-                publish_runtime(runtime_ref, Instant::now().as_millis());
+                build_dirty_cell_patches(runtime_ref);
+                build_queued_page(runtime_ref);
+                let publish_now_ms = Instant::now().as_millis();
+                if runtime_needs_render(runtime_ref, publish_now_ms) {
+                    publish_runtime(runtime_ref, publish_now_ms);
+                }
             }
         }
 
@@ -5535,8 +5593,8 @@ fn spawn_gridpaper_instance_pool() -> usize {
 /// Kernel controller for the Gridpaper worker pool. Blueprint documents and
 /// Spirit's single retained response document share up to ten isolated worker
 /// slots, each retaining its own UI4 frame and scene worker. Compute
-/// presentation and print-resolution compatibility rendering are serialized
-/// across them.
+/// presentation and print-resolution compatibility rendering enter the same
+/// fair GPU-font lane as retained-scene and one-shot stamp consumers.
 #[embassy_executor::task]
 pub async fn gridpaper_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
@@ -5565,7 +5623,11 @@ pub async fn gridpaper_service_task() {
                 .find(|snapshot| snapshot.owner.is_some())
                 .map(|snapshot| snapshot.text_animations)
                 .unwrap_or([None; TEXT_ANIMATION_COLOR_SLOTS]);
-            let _render_lane = GPU_RENDER_LANE.lock().await;
+            let consumer = crate::r::font_kernel_service::FontKernelConsumer::new(
+                crate::r::font_kernel_service::FontKernelConsumerPath::GridPrint,
+                u64::from(request.job_id),
+            );
+            let _font_lane = crate::r::font_kernel_service::acquire_gpu_lane(consumer).await;
             let result = render_print_page(request, &animations, Instant::now().as_millis());
             PRINT_RENDER_RESULTS.lock().push_back(result);
         }
@@ -5957,6 +6019,16 @@ mod tests {
         event.key_code = crate::r::keyboard::KEYBOARD_KEY_F10;
         assert!(!is_gridpaper_print_key(event));
         assert!(is_gridpaper_printer_menu_key(event));
+    }
+
+    #[test]
+    fn transient_coverage_busy_and_incomplete_pages_have_recovery_paths() {
+        assert!(retryable_font_coverage_error("font-coverage-dispatch"));
+        assert!(!retryable_font_coverage_error("outline-empty"));
+        assert!(incomplete_pending_page_error(ServiceError::Render(
+            "gridpaper-compute-text-coverage-required"
+        )));
+        assert!(!incomplete_pending_page_error(ServiceError::InvalidFrame));
     }
 
     #[test]

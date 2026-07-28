@@ -1,15 +1,18 @@
-//! Two-path kernel font service.
+//! Shared multi-consumer GPU-font service.
 //!
 //! `RetainScene` yields GPU-VM-resident Skrifa coverage that a caller may
 //! restamp repeatedly. `Stamp` is the one-shot path: the worker creates the
 //! same retained representation temporarily, composites it into a new
 //! GPU-visible RGBA buffer, and returns that owned buffer asynchronously.
+//! Gridpaper page, cell-patch, presentation, and print work use the same fair
+//! hardware admission lane while retaining independent runtime state.
 
 use alloc::{boxed::Box, collections::VecDeque, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use embassy_sync::semaphore::{FairSemaphore, Semaphore, SemaphoreReleaser};
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 use crate::intel::gpu_font::{
@@ -22,6 +25,7 @@ use crate::intel::gpu_font::{
 const FONT_KERNEL_QUEUE_CAPACITY: usize = 32;
 const FONT_KERNEL_MAX_RUNS: usize = 64;
 const FONT_KERNEL_LANE_RETRY_MS: u64 = 2;
+const FONT_KERNEL_GPU_WAITERS: usize = 32;
 
 static NEXT_TICKET: AtomicU64 = AtomicU64::new(1);
 static ONLINE: AtomicBool = AtomicBool::new(false);
@@ -29,6 +33,8 @@ static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static WORK_AVAILABLE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static REQUESTS: Mutex<VecDeque<QueuedFontRequest>> = Mutex::new(VecDeque::new());
 static STATUS: Mutex<FontKernelServiceStatus> = Mutex::new(FontKernelServiceStatus::new());
+static GPU_LANE: FairSemaphore<crate::wait::EmbassySpinRawMutex, FONT_KERNEL_GPU_WAITERS> =
+    FairSemaphore::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FontKernelTicket(u64);
@@ -36,6 +42,132 @@ pub(crate) struct FontKernelTicket(u64);
 impl FontKernelTicket {
     pub(crate) const fn raw(self) -> u64 {
         self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FontKernelConsumerPath {
+    RetainScene,
+    Stamp,
+    GridPage,
+    GridCellPatch,
+    GridPresent,
+    GridPrint,
+}
+
+impl FontKernelConsumerPath {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::RetainScene => "retain-scene",
+            Self::Stamp => "stamp",
+            Self::GridPage => "grid-page",
+            Self::GridCellPatch => "grid-cell-patch",
+            Self::GridPresent => "grid-present",
+            Self::GridPrint => "grid-print",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FontKernelConsumer {
+    pub(crate) path: FontKernelConsumerPath,
+    pub(crate) id: u64,
+}
+
+impl FontKernelConsumer {
+    pub(crate) const fn new(path: FontKernelConsumerPath, id: u64) -> Self {
+        Self { path, id }
+    }
+}
+
+type FontKernelGpuSemaphore =
+    FairSemaphore<crate::wait::EmbassySpinRawMutex, FONT_KERNEL_GPU_WAITERS>;
+
+/// Exclusive, FIFO admission to GPU font coverage and presentation work.
+///
+/// The hardware path remains deliberately single-submit, but every font
+/// producer enters through this multi-waiter boundary. Dropping the lease
+/// hands the lane to the oldest waiter.
+pub(crate) struct FontKernelGpuLease {
+    permit: Option<SemaphoreReleaser<'static, FontKernelGpuSemaphore>>,
+    consumer: FontKernelConsumer,
+}
+
+impl Drop for FontKernelGpuLease {
+    fn drop(&mut self) {
+        {
+            let mut status = STATUS.lock();
+            if status.active_consumer == Some(self.consumer) {
+                status.active_consumer = None;
+            }
+        }
+        drop(self.permit.take());
+    }
+}
+
+pub(crate) async fn acquire_gpu_lane(consumer: FontKernelConsumer) -> FontKernelGpuLease {
+    let wait_started_ms = Instant::now().as_millis();
+    let permit = if let Some(permit) = GPU_LANE.try_acquire(1) {
+        permit
+    } else {
+        {
+            let mut status = STATUS.lock();
+            status.lane_contentions = status.lane_contentions.saturating_add(1);
+            status.lane_waiters = status.lane_waiters.saturating_add(1);
+            status.lane_peak_waiters = status.lane_peak_waiters.max(status.lane_waiters);
+        }
+        let permit = loop {
+            match GPU_LANE.acquire(1).await {
+                Ok(permit) => break permit,
+                Err(_) => {
+                    // Capacity is deliberately larger than every resident
+                    // Gridpaper worker plus the retained/stamp controller.
+                    // Still recover if that invariant is temporarily exceeded.
+                    Timer::after(EmbassyDuration::from_millis(FONT_KERNEL_LANE_RETRY_MS)).await;
+                }
+            }
+        };
+        {
+            let mut status = STATUS.lock();
+            status.lane_waiters = status.lane_waiters.saturating_sub(1);
+        }
+        permit
+    };
+    {
+        let waited_ms = Instant::now().as_millis().saturating_sub(wait_started_ms);
+        let mut status = STATUS.lock();
+        status.active_consumer = Some(consumer);
+        status.lane_admissions = status.lane_admissions.saturating_add(1);
+        status.lane_wait_ms = status.lane_wait_ms.saturating_add(waited_ms);
+        status.lane_wait_max_ms = status.lane_wait_max_ms.max(waited_ms);
+        match consumer.path {
+            FontKernelConsumerPath::RetainScene => {
+                status.retain_lane_admissions = status.retain_lane_admissions.saturating_add(1);
+            }
+            FontKernelConsumerPath::Stamp => {
+                status.stamp_lane_admissions = status.stamp_lane_admissions.saturating_add(1);
+            }
+            FontKernelConsumerPath::GridPage => {
+                status.grid_page_lane_admissions =
+                    status.grid_page_lane_admissions.saturating_add(1);
+            }
+            FontKernelConsumerPath::GridCellPatch => {
+                status.grid_patch_lane_admissions =
+                    status.grid_patch_lane_admissions.saturating_add(1);
+            }
+            FontKernelConsumerPath::GridPresent => {
+                status.grid_present_lane_admissions =
+                    status.grid_present_lane_admissions.saturating_add(1);
+            }
+            FontKernelConsumerPath::GridPrint => {
+                status.grid_print_lane_admissions =
+                    status.grid_print_lane_admissions.saturating_add(1);
+            }
+        }
+    }
+    FontKernelGpuLease {
+        permit: Some(permit),
+        consumer,
     }
 }
 
@@ -166,12 +298,26 @@ pub(crate) struct FontKernelServiceStatus {
     pub(crate) online: bool,
     pub(crate) active_ticket: Option<FontKernelTicket>,
     pub(crate) active_stage: &'static str,
+    pub(crate) active_consumer: Option<FontKernelConsumer>,
     pub(crate) submitted_retain: u64,
     pub(crate) submitted_stamp: u64,
     pub(crate) completed_retain: u64,
     pub(crate) completed_stamp: u64,
     pub(crate) failed: u64,
     pub(crate) lane_retries: u64,
+    pub(crate) gpu_retries: u64,
+    pub(crate) lane_waiters: usize,
+    pub(crate) lane_peak_waiters: usize,
+    pub(crate) lane_admissions: u64,
+    pub(crate) lane_contentions: u64,
+    pub(crate) lane_wait_ms: u64,
+    pub(crate) lane_wait_max_ms: u64,
+    pub(crate) retain_lane_admissions: u64,
+    pub(crate) stamp_lane_admissions: u64,
+    pub(crate) grid_page_lane_admissions: u64,
+    pub(crate) grid_patch_lane_admissions: u64,
+    pub(crate) grid_present_lane_admissions: u64,
+    pub(crate) grid_print_lane_admissions: u64,
     pub(crate) queued: usize,
 }
 
@@ -181,12 +327,26 @@ impl FontKernelServiceStatus {
             online: false,
             active_ticket: None,
             active_stage: "idle",
+            active_consumer: None,
             submitted_retain: 0,
             submitted_stamp: 0,
             completed_retain: 0,
             completed_stamp: 0,
             failed: 0,
             lane_retries: 0,
+            gpu_retries: 0,
+            lane_waiters: 0,
+            lane_peak_waiters: 0,
+            lane_admissions: 0,
+            lane_contentions: 0,
+            lane_wait_ms: 0,
+            lane_wait_max_ms: 0,
+            retain_lane_admissions: 0,
+            stamp_lane_admissions: 0,
+            grid_page_lane_admissions: 0,
+            grid_patch_lane_admissions: 0,
+            grid_present_lane_admissions: 0,
+            grid_print_lane_admissions: 0,
             queued: 0,
         }
     }
@@ -214,6 +374,14 @@ impl QueuedFontRequest {
         match self {
             Self::Retain { ticket, .. } | Self::Stamp { ticket, .. } => *ticket,
         }
+    }
+
+    const fn consumer(&self) -> FontKernelConsumer {
+        let path = match self {
+            Self::Retain { .. } => FontKernelConsumerPath::RetainScene,
+            Self::Stamp { .. } => FontKernelConsumerPath::Stamp,
+        };
+        FontKernelConsumer::new(path, self.ticket().raw())
     }
 }
 
@@ -319,7 +487,7 @@ fn set_active_stage(ticket: FontKernelTicket, stage: &'static str) {
 
 fn process_retain_scene(
     ticket: FontKernelTicket,
-    request: RetainSceneRequest,
+    request: &RetainSceneRequest,
 ) -> Result<GpuFontRetainedScene, FontKernelError> {
     set_active_stage(ticket, "font-warm");
     ensure_font_face_available(request.font).map_err(FontKernelError::Unavailable)?;
@@ -357,11 +525,11 @@ fn process_retain_scene(
 
 fn process_stamp(
     ticket: FontKernelTicket,
-    request: FontStampRequest,
+    request: &FontStampRequest,
 ) -> Result<FontStampedBuffer, FontKernelError> {
     let width = request.scene.raster_width;
     let height = request.scene.raster_height;
-    let scene = process_retain_scene(ticket, request.scene)?;
+    let scene = process_retain_scene(ticket, &request.scene)?;
     set_active_stage(ticket, "output-allocate");
     let storage = crate::intel::gpgpu::allocate_font_instance_rgba8_surface(width, height)
         .ok_or(FontKernelError::Unavailable("font-stamp-output-allocation"))?;
@@ -422,6 +590,40 @@ fn log_failure(ticket: FontKernelTicket, operation: &'static str, error: &FontKe
     );
 }
 
+fn retryable_gpu_error(error: &FontKernelError) -> bool {
+    matches!(
+        error,
+        FontKernelError::Unavailable(
+            "font-coverage-dispatch"
+                | "font-retained-identity-restamp-unavailable"
+                | "font-retained-instance-restamp-unavailable"
+        )
+    )
+}
+
+fn record_gpu_retry(ticket: FontKernelTicket, operation: &'static str, error: &FontKernelError) {
+    let retry = {
+        let mut status = STATUS.lock();
+        status.gpu_retries = status.gpu_retries.saturating_add(1);
+        if status.active_ticket == Some(ticket) {
+            status.active_ticket = None;
+            status.active_stage = "idle";
+        }
+        status.gpu_retries
+    };
+    if retry <= 8 || retry.is_multiple_of(120) {
+        crate::log_info!(
+            target: "render";
+            "font-kernel-service: {} deferred ticket={} reason={:?} gpu_retry={} queued={} action=requeue-ticket+yield-font-lane\n",
+            operation,
+            ticket.raw(),
+            error,
+            retry,
+            REQUESTS.lock().len().saturating_add(1),
+        );
+    }
+}
+
 fn process_queued_request(request: QueuedFontRequest) {
     match request {
         QueuedFontRequest::Retain {
@@ -430,7 +632,20 @@ fn process_queued_request(request: QueuedFontRequest) {
             reply,
         } => {
             set_active_stage(ticket, "dispatch");
-            let result = process_retain_scene(ticket, request);
+            let result = process_retain_scene(ticket, &request);
+            if let Err(error) = &result
+                && retryable_gpu_error(error)
+            {
+                record_gpu_retry(ticket, "retain", error);
+                REQUESTS.lock().push_back(QueuedFontRequest::Retain {
+                    ticket,
+                    request,
+                    reply,
+                });
+                IN_FLIGHT.store(false, Ordering::Release);
+                WORK_AVAILABLE.signal(());
+                return;
+            }
             if let Err(error) = &result {
                 log_failure(ticket, "retain", error);
             }
@@ -450,7 +665,20 @@ fn process_queued_request(request: QueuedFontRequest) {
             reply,
         } => {
             set_active_stage(ticket, "dispatch");
-            let result = process_stamp(ticket, request);
+            let result = process_stamp(ticket, &request);
+            if let Err(error) = &result
+                && retryable_gpu_error(error)
+            {
+                record_gpu_retry(ticket, "stamp", error);
+                REQUESTS.lock().push_back(QueuedFontRequest::Stamp {
+                    ticket,
+                    request,
+                    reply,
+                });
+                IN_FLIGHT.store(false, Ordering::Release);
+                WORK_AVAILABLE.signal(());
+                return;
+            }
             if let Err(error) = &result {
                 log_failure(ticket, "stamp", error);
             }
@@ -469,10 +697,14 @@ fn process_queued_request(request: QueuedFontRequest) {
     WORK_AVAILABLE.signal(());
 }
 
-fn dispatch_to_service_lane(request: QueuedFontRequest) -> Result<(), QueuedFontRequest> {
+fn dispatch_to_service_lane(
+    request: QueuedFontRequest,
+    gpu_lane: FontKernelGpuLease,
+) -> Result<(), QueuedFontRequest> {
     let shared_request = Arc::new(Mutex::new(Some(request)));
     let worker_request = Arc::clone(&shared_request);
     let job = Box::new(move || {
+        let _gpu_lane = gpu_lane;
         if let Some(request) = worker_request.lock().take() {
             process_queued_request(request);
         }
@@ -494,7 +726,7 @@ pub(crate) async fn font_kernel_service_task() {
     ONLINE.store(true, Ordering::Release);
     crate::log_info!(
         target: "render";
-        "font-kernel-service: online paths=retain-scene+async-stamp controller=bsp worker=leased-blocking-service-lane queue_capacity={} retained_storage=gpu-vm-r8 stamp_output=gpu-vm-rgba8 completion=signal\n",
+        "font-kernel-service: online paths=retain-scene+async-stamp+grid-page+grid-cell-patch+grid-present+grid-print controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-multi-consumer queue_capacity={} retained_storage=gpu-vm-r8 stamp_output=gpu-vm-rgba8 completion=signal\n",
         FONT_KERNEL_QUEUE_CAPACITY,
     );
     loop {
@@ -508,8 +740,10 @@ pub(crate) async fn font_kernel_service_task() {
         };
         let ticket = request.ticket();
         set_active_stage(ticket, "lane-admission");
+        let consumer = request.consumer();
+        let gpu_lane = acquire_gpu_lane(consumer).await;
         IN_FLIGHT.store(true, Ordering::Release);
-        if let Err(request) = dispatch_to_service_lane(request) {
+        if let Err(request) = dispatch_to_service_lane(request, gpu_lane) {
             IN_FLIGHT.store(false, Ordering::Release);
             REQUESTS.lock().push_front(request);
             {
@@ -563,5 +797,30 @@ mod tests {
             validate_retain_request(&invalid_extent),
             Err(FontKernelError::InvalidRequest("font-service-empty-extent"))
         );
+    }
+
+    #[test]
+    fn transient_gpu_dispatch_failures_are_retried() {
+        assert!(retryable_gpu_error(&FontKernelError::Unavailable("font-coverage-dispatch")));
+        assert!(retryable_gpu_error(&FontKernelError::Unavailable(
+            "font-retained-instance-restamp-unavailable"
+        )));
+        assert!(!retryable_gpu_error(&FontKernelError::Unavailable(
+            "font-stamp-output-allocation"
+        )));
+        assert!(!retryable_gpu_error(&FontKernelError::SubmittedIncomplete(
+            "font-retained-instance-submit-incomplete"
+        )));
+    }
+
+    #[test]
+    fn consumer_paths_keep_independent_identity() {
+        let blueprint = FontKernelConsumer::new(FontKernelConsumerPath::GridPage, 1);
+        let spirit = FontKernelConsumer::new(FontKernelConsumerPath::GridPage, 2);
+        let stamp = FontKernelConsumer::new(FontKernelConsumerPath::Stamp, 1);
+        assert_ne!(blueprint, spirit);
+        assert_ne!(blueprint, stamp);
+        assert_eq!(blueprint.path.name(), "grid-page");
+        assert_eq!(stamp.path.name(), "stamp");
     }
 }
