@@ -317,7 +317,6 @@ struct CppAudioVisualizerRgba8Params {
 }
 
 #[derive(Copy, Clone, Debug)]
-#[derive(Copy, Clone, Debug)]
 struct FontOutlineCoverageR8Params {
     ops_gpu: u64,
     mask_gpu: u64,

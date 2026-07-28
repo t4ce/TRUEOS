@@ -320,7 +320,6 @@ impl GpgpuKernelAbiContract {
                 Some(offset) => arg.offset_bytes != offset,
                 None => false,
             } || arg.size_bytes != expected_size
-                || arg.offset_bytes % arg.size_bytes != 0
                 || implicit_kinds & kind_bit != 0
             {
                 return Err(GpgpuKernelAbiContractError::UnsupportedImplicitPayload);

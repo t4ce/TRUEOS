@@ -249,7 +249,7 @@ artifacts: kernel
 		printf "commit=%s\n" "$$commit"; \
 		printf "timestamp_utc=%s\n" "$$ts"; \
 		printf "cargo_build_flags=%s\n" "$(CARGO_EFFECTIVE_FLAGS)"; \
-		printf "intel_gpu_cpp_aot=always\n"; \
+		printf "intel_gpu_kernel_architecture=cpp-for-opencl\n"; \
 		printf "intel_gpu_artifact_frontend=%s\n" "$(INTEL_GPU_ARTIFACT_FRONTEND)"; \
 		printf "intel_gpu_copy_artifact=%s\n" "$(INTEL_GPU_SELECTED_COPY_BIN)"; \
 		printf "runtime_elf=%s\n" "$(ARTIFACT_RUNTIME_ELF)"; \

@@ -26,7 +26,7 @@ def _expected_summary(artifact_source: str) -> str:
         "gpgpu probe copy-rect: "
         "ok=1 reboot_required=0 "
         "frontend=cpp-for-opencl "
-        "feature=intel_gpu_cpp_aot feature_enabled=1 "
+        "feature=cpp-for-opencl-built-in feature_enabled=1 "
         f"artifact=copy_rect_rgba8 artifact_source={artifact_source} "
         "target=adls verified=1 "
         "device=00:02.0-0x4680-r0C "
@@ -245,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         "copy-rect TestRig transcript verified: "
         "device=00:02.0-0x4680-r0C "
-        "frontend=cpp-for-opencl feature=intel_gpu_cpp_aot "
+        "frontend=cpp-for-opencl feature=cpp-for-opencl-built-in "
         f"artifact_source={verification.artifact_source} "
         f"zebin_sha256={CANONICAL_ZEBIN_SHA256} "
         f"cases=4/4 retire_ms=[{retire_csv}]"

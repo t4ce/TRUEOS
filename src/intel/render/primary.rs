@@ -1955,104 +1955,6 @@ fn submit_resident_font_mesh_inner(
     result
 }
 
-pub(crate) fn submit_gpu_font_outline_mesh_once(
-    mesh: crate::intel::gpgpu::GpgpuFontOutlineMesh,
-) -> Result<RenderJokerResult, &'static str> {
-    const SUBMIT_NAME: &str = "font-outline-gpu-mesh-3d";
-
-    if PRIMARY_PROBE_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err("in-flight");
-    }
-    let result = (|| {
-        let Some(dev) = crate::intel::claimed_device() else {
-            return Err("no-device");
-        };
-        let warm = warm_once(dev);
-        let target_pitch = FONT_PROOF_TARGET_SIZE * core::mem::size_of::<u32>();
-        let target_bytes = target_pitch * FONT_PROOF_TARGET_SIZE;
-        if warm.streamout_len < target_bytes || warm.streamout_virt.is_null() {
-            return Err("warm-scratch");
-        }
-        if !forcewake_render_acquire(warm) {
-            return Err("forcewake");
-        }
-        if !ensure_smoke_buffers_mapped(dev, warm) {
-            return Err("render-map");
-        }
-
-        unsafe {
-            let scratch_pixels = core::slice::from_raw_parts_mut(
-                warm.streamout_virt as *mut u32,
-                FONT_PROOF_TARGET_SIZE * FONT_PROOF_TARGET_SIZE,
-            );
-            scratch_pixels.fill(0xDEAD_BEEF);
-        }
-        crate::intel::dma_flush(warm.streamout_virt, target_bytes);
-
-        let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-        intel_render_focus_log!(
-            "gpu-font-chain begin seq={} submit={} producer=gpgpu consumer=3d vertices={} indices={} storage_phys=0x{:X} cpu_geometry_copy=0 target={}x{}\n",
-            probe_seq,
-            SUBMIT_NAME,
-            mesh.vertex_count,
-            mesh.index_count,
-            mesh.storage_phys,
-            FONT_PROOF_TARGET_SIZE,
-            FONT_PROOF_TARGET_SIZE,
-        );
-        let completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
-            dev,
-            warm,
-            GPU_VA_STREAMOUT_BASE,
-            target_pitch,
-            FONT_PROOF_TARGET_SIZE,
-            FONT_PROOF_TARGET_SIZE,
-            TriangleBlendProbeMode::MesaZeroedState,
-            None,
-            &[],
-            None,
-            Some(mesh),
-            None,
-            None,
-            "skrifa-gpgpu-full-text-outline-stroke",
-            SUBMIT_NAME,
-            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
-            BackendProbeMode::MesaLike,
-            PostDrawSyncVariant::HeavyAll,
-            TriangleBatchMode::Draw,
-            StreamoutProofExperiment::PositionSlot1,
-            [0.0, 0.0],
-            None,
-        );
-        let frontier = latest_render_frontier_summary();
-        intel_render_focus_log!(
-            "gpu-font-chain end seq={} submit={} completed={} vs={} clip={} ps={} cpu_geometry_copy=0\n",
-            probe_seq,
-            SUBMIT_NAME,
-            completed as u8,
-            frontier.vs_counter as u8,
-            frontier.clip_counter as u8,
-            frontier.ps_observed as u8,
-        );
-        Ok(RenderJokerResult {
-            variant: "gpgpu-full-text-outline-stroke-indexed",
-            submit_name: SUBMIT_NAME,
-            target: "scratch",
-            completed,
-            vs_counter: frontier.vs_counter,
-            ps_state_marker: frontier.ps_state_marker,
-            raster_packet: frontier.raster_packet,
-            clip_counter: frontier.clip_counter,
-            ps_observed: frontier.ps_observed,
-        })
-    })();
-    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-    result
-}
-
 pub(crate) struct RenderOaControlResult {
     pub(crate) action: &'static str,
     pub(crate) oactx: u32,
@@ -4764,7 +4666,6 @@ fn submit_render_custom_triangle_probe_locked_at_extent(
         None,
         vertices,
         indices,
-        None,
         resident_mesh,
         draw_rgba,
         geometry_label,
@@ -7768,7 +7669,6 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     depth_config: Option<TriangleDepthConfig>,
     vertices: &[[f32; 3]],
     indices: Option<&[u32]>,
-    gpu_mesh: Option<crate::intel::gpgpu::GpgpuFontOutlineMesh>,
     resident_mesh: Option<&ResidentFontMesh>,
     draw_rgba: Option<[u8; 4]>,
     geometry_label: &'static str,
@@ -7786,19 +7686,6 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             None
         } else {
             prepare_triangle_draw_resources_for_resident_font_mesh(
-                warm,
-                dst_gpu_addr,
-                pitch,
-                rect_w,
-                rect_h,
-                mesh,
-            )
-        }
-    } else if let Some(mesh) = gpu_mesh {
-        if batch_mode.vf_synthesized_vue() {
-            None
-        } else {
-            prepare_triangle_draw_resources_for_gpu_font_mesh(
                 warm,
                 dst_gpu_addr,
                 pitch,
@@ -7910,8 +7797,6 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     let sf_viewport_transform = !batch_mode.screen_space_raster();
     let coverage_contract = if resident_mesh.is_some() {
         "kernel-font-service-resident-indexed-clip-space"
-    } else if gpu_mesh.is_some() {
-        "gpgpu-generated-full-text-outline-stroke-clip-space"
     } else if sf_viewport_transform {
         "font-lyon-clip-field-viewport-transform"
     } else {
@@ -7919,7 +7804,6 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     };
     let unique_vertex_count = resident_mesh
         .map(|mesh| mesh.vertex_count as usize)
-        .or_else(|| gpu_mesh.map(|mesh| mesh.vertex_count as usize))
         .unwrap_or(vertices.len());
     if let Some(mesh) = resident_mesh {
         intel_render_focus_log!(
@@ -7933,23 +7817,6 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             mesh.vertex_gpu_addr,
             mesh.index_gpu_addr,
             mesh.storage_bytes,
-            draw.target_w,
-            draw.target_h,
-            coverage_contract,
-        );
-    } else if let Some(mesh) = gpu_mesh {
-        intel_render_focus_log!(
-            "{} fragment-candidate-shape accepted=1 geometry={} producer=gpgpu topology=trilist indexed=1 unique_vertices={} draw_vertices={} triangles={} sf_viewport_transform={} bounds=[{:.2},{:.2}..{:.2},{:.2}] target={}x{} coverage_contract={} cpu_vertex_readback=0 does_not_prove=raster_samples_or_ps\n",
-            submit_name,
-            geometry_label,
-            mesh.vertex_count,
-            draw.vertex_count,
-            draw.vertex_count / 3,
-            sf_viewport_transform as u8,
-            mesh.min_x,
-            mesh.min_y,
-            mesh.max_x,
-            mesh.max_y,
             draw.target_w,
             draw.target_h,
             coverage_contract,
@@ -8270,8 +8137,6 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             delta.ps_depth,
             if resident_mesh.is_some() {
                 "kernel-font-service-resident-indexed"
-            } else if gpu_mesh.is_some() {
-                "gpgpu-generated-indexed-stroke"
             } else {
                 "font-path-fill-triangle"
             },

@@ -161,7 +161,6 @@ const _: () = assert!(GPU_VA_DRAW3D_UI4_FRAME_LIMIT == 0x4000_0000);
 const _: () = assert!(WARM_STREAMOUT_BYTES as u64 <= GPU_VA_DRAW3D_UI4_FRAME_STRIDE);
 // Keep the imported 64 KiB compute mesh outside the 14.0625 MiB 1440p scene
 // target at 0x0088_0000..0x0169_0000 and below the batch at 0x0180_0000.
-const GPU_VA_COMPUTE_FONT_MESH_BASE: u64 = 0x0170_0000;
 const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
 // Long-lived render resources share one collision-free VA allocator. Fonts
 // were its first client; Spirit's decoded visual assets use the same lifetime

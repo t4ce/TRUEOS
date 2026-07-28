@@ -283,17 +283,12 @@ fn direct_rcs_map_state(dev: super::Dev, state: DirectRcsState) -> bool {
             && super::map_ggtt(dev, state.batch_phys, batch_alloc_bytes, state.gpu_va.batch)
             && super::map_ggtt(dev, state.result_phys, result_alloc_bytes, state.gpu_va.result);
     let auxiliary_mapped = !state.gpu_va.map_general_auxiliary
-        || (super::map_ggtt(
+        || super::map_ggtt(
             dev,
             state.clear_test_phys,
             CLEAR_RECT_TEST_BYTES,
             DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-        ) && super::map_ggtt(
-            dev,
-            state.font_outline_mesh_out_phys,
-            FONT_OUTLINE_MESH_OUT_ALLOC_BYTES,
-            DIRECT_RCS_GPU_VA_FONT_OUTLINE_MESH_BASE,
-        ));
+        );
     let mapped = core_mapped && auxiliary_mapped;
     if mapped {
         super::ggtt_invalidate(dev);

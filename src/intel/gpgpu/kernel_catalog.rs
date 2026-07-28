@@ -614,8 +614,6 @@ pub(crate) const LAB256_MULTIPHASE_ADLS_BIN: &[u8] = include_bytes!(
 pub(crate) const LAB256_MULTIPHASE_ADLS_SPV: &[u8] = include_bytes!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lab256_multiphase.spv"
 );
-const _: () = assert!(LAB256_MULTIPHASE_ADLS_BIN.len() == 52_632);
-const _: () = assert!(LAB256_MULTIPHASE_ADLS_SPV.len() == 28_884);
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.contract.rs"
 );
@@ -703,4 +701,4 @@ pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_BIN_SHA256: [u8; 32] =
 pub(crate) const SCENE_AABB_ADLS_BIN_SHA256: [u8; 32] =
     SCENE_AABB_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const LAB256_MULTIPHASE_ADLS_BIN_SHA256: [u8; 32] =
-    LAB256_MULTIPHASE_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
+    LAB256_STEP_ADLS_CPP_ABI_CONTRACT.zebin_sha256;

@@ -16,7 +16,7 @@ SCRIPT = Path(__file__).with_name("verify_probe_log.py")
 HASH = "b36d1c7742003591a5074663d81a4162412618ae425c47d30be6d068ee144a25"
 SUMMARY = (
     "gpgpu probe copy-rect: ok=1 reboot_required=0 "
-    "frontend=cpp-for-opencl feature=intel_gpu_cpp_aot feature_enabled=1 "
+    "frontend=cpp-for-opencl feature=cpp-for-opencl-built-in feature_enabled=1 "
     "artifact=copy_rect_rgba8 artifact_source=embedded target=adls verified=1 "
     "device=00:02.0-0x4680-r0C "
     f"hash={HASH} cases=4/4 retired=4 passed=4 "
@@ -117,7 +117,7 @@ class ProbeLogVerifierTests(unittest.TestCase):
             ("ok=1", "ok=0"),
             ("reboot_required=0", "reboot_required=1"),
             ("frontend=cpp-for-opencl", "frontend=opencl-c"),
-            ("feature=intel_gpu_cpp_aot", "feature=other"),
+            ("feature=cpp-for-opencl-built-in", "feature=other"),
             ("feature_enabled=1", "feature_enabled=0"),
             ("artifact_source=embedded", "artifact_source=other"),
             ("target=adls", "target=other"),

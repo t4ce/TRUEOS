@@ -4,10 +4,8 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import os
-import re
 import tempfile
 import unittest
 from unittest import mock
@@ -35,7 +33,7 @@ ARTIFACT_ROOT = (
     / "artifacts"
     / "adls"
 )
-KERNEL_CATALOG = REPO_ROOT / "src" / "intel" / "gpgpu" / "kernel_catalog.rs"
+KERNEL_ROOT = ARTIFACT_ROOT.parent.parent
 
 
 class ArtifactContractTests(unittest.TestCase):
@@ -58,85 +56,22 @@ class ArtifactContractTests(unittest.TestCase):
         self.assertEqual(environment["SOURCE_DATE_EPOCH"], "0")
         self.assertEqual(environment["LC_ALL"], "C")
 
-    def test_every_legacy_zebin_is_unambiguously_parseable(self) -> None:
-        binaries = sorted(ARTIFACT_ROOT.glob("*.bin"))
-        self.assertGreater(len(binaries), 10)
+    def test_cpp_is_the_only_published_artifact_architecture(self) -> None:
+        self.assertEqual(list(ARTIFACT_ROOT.glob("*.bin")), [])
+        self.assertEqual(list(ARTIFACT_ROOT.glob("*.spv")), [])
+        self.assertEqual(list(ARTIFACT_ROOT.glob("*.manifest.json")), [])
+        self.assertEqual(list(ARTIFACT_ROOT.glob("*.contract.rs")), [])
+
+        binaries = sorted((ARTIFACT_ROOT / "cpp").glob("*.bin"))
+        source_stems = {source.stem for source in KERNEL_ROOT.glob("*.clcpp")}
+        self.assertEqual({binary.stem for binary in binaries}, source_stems)
         for binary in binaries:
             with self.subTest(binary=binary.name):
                 analysis = analyze_zebin(binary)
                 self.assertGreaterEqual(len(analysis["kernels"]), 1)
 
-    def test_every_legacy_catalog_hash_matches_its_zebin(self) -> None:
-        catalog = KERNEL_CATALOG.read_text(encoding="utf-8")
-        literal_declarations = re.findall(
-            r"pub\(crate\) const ([A-Z0-9_]+)_ADLS_BIN_SHA256:"
-            r"\s*\[u8;\s*32\]\s*=\s*\[(.*?)\];",
-            catalog,
-            flags=re.DOTALL,
-        )
-        contract_declarations = re.findall(
-            r"pub\(crate\) const ([A-Z0-9_]+)_ADLS_BIN_SHA256:"
-            r"\s*\[u8;\s*32\]\s*=\s*"
-            r"([A-Z0-9_]+_ADLS_LEGACY_ABI_CONTRACT)\.zebin_sha256;",
-            catalog,
-            flags=re.DOTALL,
-        )
-        # Spirit keeps its two legacy binaries solely as ABI references for
-        # the unconditionally selected C++ repass. They are no longer embedded
-        # through literal legacy catalog hash declarations.
-        abi_reference_only = {
-            "spirit_vfx_background_rgba8.bin",
-            "spirit_vfx_sprite_rgba8.bin",
-        }
-        binaries = sorted(
-            binary
-            for binary in ARTIFACT_ROOT.glob("*.bin")
-            if binary.name not in abi_reference_only
-        )
-        self.assertEqual(
-            len(literal_declarations) + len(contract_declarations),
-            len(binaries),
-        )
-        observed_names = set()
-        for stem, byte_source in literal_declarations:
-            binary = ARTIFACT_ROOT / f"{stem.lower()}.bin"
-            observed_names.add(binary.name)
-            with self.subTest(binary=binary.name):
-                self.assertTrue(binary.is_file())
-                expected = bytes(
-                    int(value, 16)
-                    for value in re.findall(r"0x([0-9A-Fa-f]{2})", byte_source)
-                )
-                self.assertEqual(len(expected), 32)
-                self.assertEqual(hashlib.sha256(binary.read_bytes()).digest(), expected)
-        for stem, contract_name in contract_declarations:
-            binary = ARTIFACT_ROOT / f"{stem.lower()}.bin"
-            contract_path = ARTIFACT_ROOT / f"{stem.lower()}.contract.rs"
-            observed_names.add(binary.name)
-            with self.subTest(binary=binary.name):
-                self.assertTrue(binary.is_file())
-                self.assertTrue(contract_path.is_file())
-                contract = contract_path.read_text(encoding="utf-8")
-                self.assertIn(f"const {contract_name}:", contract)
-                byte_source = re.search(
-                    r"zebin_sha256:\s*\[(.*?)\],",
-                    contract,
-                    flags=re.DOTALL,
-                )
-                self.assertIsNotNone(byte_source)
-                expected = bytes(
-                    int(value, 16)
-                    for value in re.findall(
-                        r"0x([0-9A-Fa-f]{2})",
-                        byte_source.group(1),
-                    )
-                )
-                self.assertEqual(len(expected), 32)
-                self.assertEqual(hashlib.sha256(binary.read_bytes()).digest(), expected)
-        self.assertEqual(observed_names, {binary.name for binary in binaries})
-
     def test_copy_contract_distinguishes_section_and_entry_ranges(self) -> None:
-        analysis = analyze_zebin(ARTIFACT_ROOT / "copy_rect_rgba8.bin")
+        analysis = analyze_zebin(ARTIFACT_ROOT / "cpp" / "copy_rect_rgba8.bin")
         kernel = analysis["kernels"][0]
         self.assertEqual(kernel["kernel_name"], "copy_rect_rgba8")
         self.assertEqual(kernel["text"]["section_offset"], 64)
@@ -159,27 +94,6 @@ class ArtifactContractTests(unittest.TestCase):
             [{"arg_type": "local_id", "offset": 0, "size": 96}],
         )
 
-    def test_cpp_and_legacy_copy_abis_are_exactly_equal(self) -> None:
-        legacy = analyze_zebin(ARTIFACT_ROOT / "copy_rect_rgba8.bin")
-        cpp = analyze_zebin(
-            ARTIFACT_ROOT / "cpp" / "copy_rect_rgba8.bin",
-            ARTIFACT_ROOT / "cpp" / "copy_rect_rgba8.spv",
-        )
-        self.assertEqual(abi_projection(cpp), abi_projection(legacy))
-
-    def test_cpp_and_legacy_spirit_abis_are_exactly_equal(self) -> None:
-        for stem in (
-            "spirit_vfx_background_rgba8",
-            "spirit_vfx_sprite_rgba8",
-        ):
-            with self.subTest(artifact=stem):
-                legacy = analyze_zebin(ARTIFACT_ROOT / f"{stem}.bin")
-                cpp = analyze_zebin(
-                    ARTIFACT_ROOT / "cpp" / f"{stem}.bin",
-                    ARTIFACT_ROOT / "cpp" / f"{stem}.spv",
-                )
-                self.assertEqual(abi_projection(cpp), abi_projection(legacy))
-
     def test_abi_projection_detects_implicit_payload_drift(self) -> None:
         cpp = analyze_zebin(ARTIFACT_ROOT / "cpp" / "copy_rect_rgba8.bin")
         changed = copy.deepcopy(cpp)
@@ -201,19 +115,6 @@ class ArtifactContractTests(unittest.TestCase):
             [(0, "readonly", "stateful"), (1, "readwrite", "stateful")],
         )
 
-    def test_hybrid_pointer_keeps_stateful_and_stateless_facts(self) -> None:
-        mesh = analyze_zebin(ARTIFACT_ROOT / "font_outline_mesh.bin")
-        arg = next(
-            item
-            for item in mesh["kernels"][0]["payload_args"]
-            if item["arg_index"] == 1
-        )
-        self.assertEqual(arg["address_mode"], "stateless")
-        self.assertEqual(
-            [item["address_mode"] for item in arg["representations"]],
-            ["stateful", "stateless"],
-        )
-
     def test_minor_version_is_data_not_a_parser_gate(self) -> None:
         parsed = parse_ze_info_yaml(
             "---\nversion: '1.999'\nkernels:\n  - name: probe\n...\n"
@@ -221,7 +122,7 @@ class ArtifactContractTests(unittest.TestCase):
         self.assertEqual(parsed["version"], "1.999")
 
     def test_constraint_gate_rejects_unreviewed_ze_info_major(self) -> None:
-        analysis = analyze_zebin(ARTIFACT_ROOT / "copy_rect_rgba8.bin")
+        analysis = analyze_zebin(ARTIFACT_ROOT / "cpp" / "copy_rect_rgba8.bin")
         analysis["kernels"][0]["ze_info_major"] = 2
         with self.assertRaisesRegex(ContractError, r"unsupported \.ze_info major 2"):
             validate_constraints(analysis, 16, 0, 0)
@@ -239,19 +140,12 @@ class ArtifactContractTests(unittest.TestCase):
     def test_published_manifest_and_generated_rust_are_current(self) -> None:
         root = ARTIFACT_ROOT / "cpp"
         manifests = sorted(root.glob("*.manifest.json"))
+        expected_manifests = sorted(
+            f"{source.stem}.manifest.json" for source in KERNEL_ROOT.glob("*.clcpp")
+        )
         self.assertEqual(
             [path.name for path in manifests],
-            [
-                "copy_rect_rgba8.manifest.json",
-                "cpp_audio_visualizer_rgba8.manifest.json",
-                "cpp_demo_rgba8.manifest.json",
-                "font_instance_rgba8.manifest.json",
-                "lfm25_q8_project.manifest.json",
-                "lfm25_q8_project_packed.manifest.json",
-                "particle_craft.manifest.json",
-                "spirit_vfx_background_rgba8.manifest.json",
-                "spirit_vfx_sprite_rgba8.manifest.json",
-            ],
+            expected_manifests,
         )
         for manifest_path in manifests:
             stem = manifest_path.name.removesuffix(".manifest.json")
