@@ -1,9 +1,5 @@
 {
-  "abi_reference": {
-    "path": "crates/trueos-shader/gpgpu/kernels/artifacts/adls/ui4_compose_layers_rgba8.bin",
-    "result": "exact-match",
-    "sha256": "fe3dc7df1b4b8b50313cce32f4aab0a5deda1a22956883109d9ff0d6f7828b14"
-  },
+  "abi_reference": null,
   "artifact": {
     "elf": {
       "class": 64,
@@ -429,7 +425,7 @@
       "expected_kernels": [
         "ui4_compose_layers_rgba8"
       ],
-      "name": "cpp-legacy-abi-twin-v1"
+      "name": "cpp-native-aot-v1"
     },
     "reproducibility_check": "passed",
     "toolchain": {
@@ -570,5 +566,5 @@
     "revision_max": 12,
     "revision_min": 12
   },
-  "variant": "cpp"
+  "variant": "cpp-native"
 }
