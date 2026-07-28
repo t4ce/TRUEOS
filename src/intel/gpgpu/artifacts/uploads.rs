@@ -237,26 +237,9 @@ pub(crate) fn upload_font_instance_rgba8_kernel() -> Option<UploadedKernelArtifa
         return None;
     };
 
-    let upload = upload_artifact(
-        dev,
-        FONT_INSTANCE_RGBA8_ADLS_ARTIFACT,
-        FONT_INSTANCE_RGBA8_ADLS_GPU,
-    )?;
+    let upload =
+        upload_artifact(dev, FONT_INSTANCE_RGBA8_ADLS_ARTIFACT, FONT_INSTANCE_RGBA8_ADLS_GPU)?;
     *FONT_INSTANCE_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_ui4_nv12_ytile_to_primary_xrgb_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *UI4_NV12_YTILE_TO_PRIMARY_XRGB_UPLOAD.lock() {
-        return Some(upload);
-    }
-    let dev = super::claimed_device()?;
-    let upload = upload_artifact(
-        dev,
-        UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_ARTIFACT,
-        UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_GPU,
-    )?;
-    *UI4_NV12_YTILE_TO_PRIMARY_XRGB_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
@@ -456,11 +439,7 @@ pub(crate) fn upload_particle_craft_kernel() -> Option<UploadedKernelArtifact> {
         return None;
     };
 
-    let upload = upload_artifact(
-        dev,
-        PARTICLE_CRAFT_ADLS_ARTIFACT,
-        PARTICLE_CRAFT_ADLS_GPU,
-    )?;
+    let upload = upload_artifact(dev, PARTICLE_CRAFT_ADLS_ARTIFACT, PARTICLE_CRAFT_ADLS_GPU)?;
     *PARTICLE_CRAFT_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
@@ -478,11 +457,7 @@ pub(crate) fn upload_lfm25_q8_project_kernel() -> Option<UploadedKernelArtifact>
         return None;
     };
 
-    let upload = upload_artifact(
-        dev,
-        LFM25_Q8_PROJECT_ADLS_ARTIFACT,
-        LFM25_Q8_PROJECT_ADLS_GPU,
-    )?;
+    let upload = upload_artifact(dev, LFM25_Q8_PROJECT_ADLS_ARTIFACT, LFM25_Q8_PROJECT_ADLS_GPU)?;
     *LFM25_Q8_PROJECT_UPLOAD.lock() = Some(upload);
     Some(upload)
 }

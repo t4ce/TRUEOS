@@ -42,7 +42,7 @@ compiler and ABI boundary.
 - 2D primitives: copy, fill, gradient, alpha blend, glyph mask, sprite quad,
   Mandelbrot worklists, chart, plasma, skybox sampling, scene AABB, and MSAA
   resolve.
-- UI4/video: layer composition, Tile64/Y-tile NV12 conversion, and RGBA8 to
+- UI4/video: layer composition, Tile64 NV12 conversion, and RGBA8 to
   linear NV12.
 - Font production: analytical Skrifa-outline coverage to persistent R8 masks.
   The former diagnostic outline-mesh kernel and its render-import probe were

@@ -8,7 +8,8 @@ pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_KERNEL_NAME: &str = "resolve_tile64_
 pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/resolve_tile64_msaa4_rgba8.clcpp");
 pub(crate) const FILL_RECT_RGBA8_KERNEL_NAME: &str = "fill_rect_rgba8";
-pub(crate) const FILL_RECT_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/fill_rect_rgba8.clcpp");
+pub(crate) const FILL_RECT_RGBA8_OPENCL_SOURCE: &str =
+    include_str!("kernels/fill_rect_rgba8.clcpp");
 pub(crate) const FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME: &str = "fill_rect_worklist_rgba8";
 pub(crate) const FILL_RECT_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/fill_rect_worklist_rgba8.clcpp");
@@ -19,17 +20,13 @@ pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME: &str = "alpha_blend_wor
 pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/alpha_blend_worklist_rgba8.clcpp");
 pub(crate) const GLYPH_MASK_RGBA8_KERNEL_NAME: &str = "glyph_mask_rgba8";
-pub(crate) const GLYPH_MASK_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/glyph_mask_rgba8.clcpp");
-pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_KERNEL_NAME: &str =
-    "ui4_nv12_ytile_to_primary_xrgb";
-pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_OPENCL_SOURCE: &str =
-    include_str!("kernels/ui4_nv12_ytile_to_primary_xrgb.clcpp");
+pub(crate) const GLYPH_MASK_RGBA8_OPENCL_SOURCE: &str =
+    include_str!("kernels/glyph_mask_rgba8.clcpp");
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME: &str =
     "ui4_nv12_tile64_to_rgba8_frame";
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_OPENCL_SOURCE: &str =
     include_str!("kernels/ui4_nv12_tile64_to_rgba8_frame.clcpp");
-pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME: &str =
-    "ui4_rgba8_to_nv12_linear";
+pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME: &str = "ui4_rgba8_to_nv12_linear";
 pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_OPENCL_SOURCE: &str =
     include_str!("kernels/ui4_rgba8_to_nv12_linear.clcpp");
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME: &str = "sprite_quad_worklist_rgba8";
@@ -45,7 +42,8 @@ pub(crate) const SKYBOX_SAMPLE_RGB565_KERNEL_NAME: &str = "skybox_sample_rgb565"
 pub(crate) const SKYBOX_SAMPLE_RGB565_OPENCL_SOURCE: &str =
     include_str!("kernels/skybox_sample_rgb565.clcpp");
 pub(crate) const CHART_SINE_RGBA8_KERNEL_NAME: &str = "chart_sine_rgba8";
-pub(crate) const CHART_SINE_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/chart_sine_rgba8.clcpp");
+pub(crate) const CHART_SINE_RGBA8_OPENCL_SOURCE: &str =
+    include_str!("kernels/chart_sine_rgba8.clcpp");
 pub(crate) const PIXEL_PLASMA_RGBA8_KERNEL_NAME: &str = "pixel_plasma_rgba8";
 pub(crate) const PIXEL_PLASMA_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/pixel_plasma_rgba8.clcpp");
@@ -112,9 +110,6 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         }
         ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME => Some(ALPHA_BLEND_WORKLIST_RGBA8_OPENCL_SOURCE),
         GLYPH_MASK_RGBA8_KERNEL_NAME => Some(GLYPH_MASK_RGBA8_OPENCL_SOURCE),
-        UI4_NV12_YTILE_TO_PRIMARY_XRGB_KERNEL_NAME => {
-            Some(UI4_NV12_YTILE_TO_PRIMARY_XRGB_OPENCL_SOURCE)
-        }
         UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME => {
             Some(UI4_NV12_TILE64_TO_RGBA8_FRAME_OPENCL_SOURCE)
         }
@@ -160,9 +155,6 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
             Some("src/intel/gpgpu/kernels/alpha_blend_worklist_rgba8.clcpp")
         }
         GLYPH_MASK_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/glyph_mask_rgba8.clcpp"),
-        UI4_NV12_YTILE_TO_PRIMARY_XRGB_KERNEL_NAME => {
-            Some("src/intel/gpgpu/kernels/ui4_nv12_ytile_to_primary_xrgb.clcpp")
-        }
         UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/ui4_nv12_tile64_to_rgba8_frame.clcpp")
         }
@@ -178,7 +170,9 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         MANDEL64_WORKLIST_RGBA8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/mandel64_worklist_rgba8.clcpp")
         }
-        SKYBOX_SAMPLE_RGB565_KERNEL_NAME => Some("src/intel/gpgpu/kernels/skybox_sample_rgb565.clcpp"),
+        SKYBOX_SAMPLE_RGB565_KERNEL_NAME => {
+            Some("src/intel/gpgpu/kernels/skybox_sample_rgb565.clcpp")
+        }
         CHART_SINE_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/chart_sine_rgba8.clcpp"),
         PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/pixel_plasma_rgba8.clcpp"),
         CPP_DEMO_RGBA8_KERNEL_NAME => Some(CPP_DEMO_RGBA8_SOURCE_PATH),
@@ -220,7 +214,6 @@ include!("kernels/artifacts/adls/cpp/skybox_sample_rgb565.contract.rs");
 include!("kernels/artifacts/adls/cpp/sprite_quad_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.contract.rs");
-include!("kernels/artifacts/adls/cpp/ui4_nv12_ytile_to_primary_xrgb.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_rgba8_to_nv12_linear.contract.rs");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/copy_rect_rgba8.bin");
@@ -326,10 +319,6 @@ pub(crate) const GLYPH_MASK_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/glyph_mask_rgba8.bin");
 pub(crate) const GLYPH_MASK_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/glyph_mask_rgba8.spv");
-pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/ui4_nv12_ytile_to_primary_xrgb.bin");
-pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/ui4_nv12_ytile_to_primary_xrgb.spv");
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.bin");
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_SPV: &[u8] =
@@ -677,8 +666,6 @@ pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     ALPHA_BLEND_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const GLYPH_MASK_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     GLYPH_MASK_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_BIN_SHA256: [u8; 32] =
-    UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN_SHA256: [u8; 32] =
     UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN_SHA256: [u8; 32] =

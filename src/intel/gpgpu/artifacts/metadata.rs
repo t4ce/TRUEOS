@@ -35,14 +35,7 @@ impl GpgpuKernelArtifact {
         spv: &'static [u8],
         contract: &'static GpgpuKernelAbiContract,
     ) -> Self {
-        Self::new(
-            name,
-            contract.target,
-            bin,
-            spv,
-            contract.zebin_sha256,
-            Some(contract),
-        )
+        Self::new(name, contract.target, bin, spv, contract.zebin_sha256, Some(contract))
     }
 
     const fn multi_entry(
@@ -51,14 +44,7 @@ impl GpgpuKernelArtifact {
         spv: &'static [u8],
         first_entry: &'static GpgpuKernelAbiContract,
     ) -> Self {
-        Self::new(
-            name,
-            first_entry.target,
-            bin,
-            spv,
-            first_entry.zebin_sha256,
-            None,
-        )
+        Self::new(name, first_entry.target, bin, spv, first_entry.zebin_sha256, None)
     }
 }
 
@@ -135,14 +121,6 @@ pub(crate) const GLYPH_MASK_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         GLYPH_MASK_RGBA8_ADLS_BIN,
         GLYPH_MASK_RGBA8_ADLS_SPV,
         &GLYPH_MASK_RGBA8_ADLS_CPP_ABI_CONTRACT,
-    );
-
-pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::contracted(
-        UI4_NV12_YTILE_TO_PRIMARY_XRGB_KERNEL_NAME,
-        UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_BIN,
-        UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_SPV,
-        &UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_ARTIFACT: GpgpuKernelArtifact =
@@ -228,35 +206,32 @@ pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         Some(&CPP_AUDIO_VISUALIZER_RGBA8_ADLS_CPP_ABI_CONTRACT),
     );
 
-pub(crate) const PARTICLE_CRAFT_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::new(
-        PARTICLE_CRAFT_KERNEL_NAME,
-        PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT.target,
-        PARTICLE_CRAFT_ADLS_BIN,
-        PARTICLE_CRAFT_ADLS_SPV,
-        PARTICLE_CRAFT_ADLS_BIN_SHA256,
-        None,
-    );
+pub(crate) const PARTICLE_CRAFT_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::new(
+    PARTICLE_CRAFT_KERNEL_NAME,
+    PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT.target,
+    PARTICLE_CRAFT_ADLS_BIN,
+    PARTICLE_CRAFT_ADLS_SPV,
+    PARTICLE_CRAFT_ADLS_BIN_SHA256,
+    None,
+);
 
-pub(crate) const FONT_INSTANCE_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::new(
-        FONT_INSTANCE_RGBA8_KERNEL_NAME,
-        FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.target,
-        FONT_INSTANCE_RGBA8_ADLS_BIN,
-        FONT_INSTANCE_RGBA8_ADLS_SPV,
-        FONT_INSTANCE_RGBA8_ADLS_BIN_SHA256,
-        Some(&FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT),
-    );
+pub(crate) const FONT_INSTANCE_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::new(
+    FONT_INSTANCE_RGBA8_KERNEL_NAME,
+    FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.target,
+    FONT_INSTANCE_RGBA8_ADLS_BIN,
+    FONT_INSTANCE_RGBA8_ADLS_SPV,
+    FONT_INSTANCE_RGBA8_ADLS_BIN_SHA256,
+    Some(&FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT),
+);
 
-pub(crate) const LFM25_Q8_PROJECT_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::new(
-        LFM25_Q8_PROJECT_KERNEL_NAME,
-        LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.target,
-        LFM25_Q8_PROJECT_ADLS_BIN,
-        LFM25_Q8_PROJECT_ADLS_SPV,
-        LFM25_Q8_PROJECT_ADLS_BIN_SHA256,
-        Some(&LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT),
-    );
+pub(crate) const LFM25_Q8_PROJECT_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::new(
+    LFM25_Q8_PROJECT_KERNEL_NAME,
+    LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.target,
+    LFM25_Q8_PROJECT_ADLS_BIN,
+    LFM25_Q8_PROJECT_ADLS_SPV,
+    LFM25_Q8_PROJECT_ADLS_BIN_SHA256,
+    Some(&LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT),
+);
 
 pub(crate) const LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::new(
@@ -276,13 +251,12 @@ pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         &FONT_OUTLINE_COVERAGE_R8_ADLS_CPP_ABI_CONTRACT,
     );
 
-pub(crate) const SCENE_AABB_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::contracted(
-        SCENE_AABB_KERNEL_NAME,
-        SCENE_AABB_ADLS_BIN,
-        SCENE_AABB_ADLS_SPV,
-        &SCENE_AABB_ADLS_CPP_ABI_CONTRACT,
-    );
+pub(crate) const SCENE_AABB_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::contracted(
+    SCENE_AABB_KERNEL_NAME,
+    SCENE_AABB_ADLS_BIN,
+    SCENE_AABB_ADLS_SPV,
+    &SCENE_AABB_ADLS_CPP_ABI_CONTRACT,
+);
 
 pub(crate) const LAB256_MULTIPHASE_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::multi_entry(

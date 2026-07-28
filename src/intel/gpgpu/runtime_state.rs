@@ -7,8 +7,6 @@ static GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>
 
 static ALPHA_BLEND_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static GLYPH_MASK_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static UI4_NV12_YTILE_TO_PRIMARY_XRGB_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
-    Mutex::new(None);
 static UI4_NV12_TILE64_TO_RGBA8_FRAME_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
     Mutex::new(None);
 static UI4_RGBA8_TO_NV12_LINEAR_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
