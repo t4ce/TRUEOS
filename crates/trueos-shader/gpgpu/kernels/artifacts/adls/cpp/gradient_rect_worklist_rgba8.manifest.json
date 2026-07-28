@@ -1,0 +1,424 @@
+{
+  "abi_reference": {
+    "path": "crates/trueos-shader/gpgpu/kernels/artifacts/adls/gradient_rect_worklist_rgba8.bin",
+    "result": "exact-match",
+    "sha256": "c03aeefc4d2023d5ee703c5dbbb31ebc2093b104be00db2bc78d29c530f42737"
+  },
+  "artifact": {
+    "elf": {
+      "class": 64,
+      "endianness": "little",
+      "machine": 205,
+      "sha256": "976e42acf3646c3d7602f0b7362cf510ee97f1e61a2e0caed623f4fa140693ae",
+      "size_bytes": 18896,
+      "type": "relocatable",
+      "ze_info_section_offset": 14880,
+      "ze_info_section_size": 3172
+    },
+    "kernels": [
+      {
+        "bindings": [
+          {
+            "arg_index": 0,
+            "bti": 0
+          },
+          {
+            "arg_index": 1,
+            "bti": 1
+          }
+        ],
+        "cross_thread_data_bytes": 96,
+        "execution_env": {
+          "eu_thread_count": 7,
+          "grf_count": 128,
+          "has_no_stateless_write": true,
+          "simd_size": 16,
+          "subgroup_independent_forward_progress": true
+        },
+        "grf_count": 128,
+        "implicit_payload_args": [
+          {
+            "arg_type": "global_id_offset",
+            "offset": 0,
+            "size": 12
+          },
+          {
+            "arg_type": "local_size",
+            "offset": 12,
+            "size": 12
+          },
+          {
+            "arg_type": "enqueued_local_size",
+            "offset": 32,
+            "size": 12
+          },
+          {
+            "arg_index": 1,
+            "arg_type": "buffer_offset",
+            "offset": 76,
+            "size": 4
+          }
+        ],
+        "kernel_name": "gradient_rect_worklist_rgba8",
+        "payload_args": [
+          {
+            "access": "readwrite",
+            "address_mode": "stateful",
+            "address_space": "global",
+            "arg_index": 0,
+            "kind": "by_pointer",
+            "offset_bytes": 48,
+            "representations": [
+              {
+                "access": "readwrite",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              }
+            ],
+            "size_bytes": 8
+          },
+          {
+            "access": "readonly",
+            "address_mode": "stateful",
+            "address_space": "global",
+            "arg_index": 1,
+            "kind": "by_pointer",
+            "offset_bytes": 56,
+            "representations": [
+              {
+                "access": "readonly",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              }
+            ],
+            "size_bytes": 8
+          },
+          {
+            "access": "none",
+            "address_mode": "none",
+            "address_space": "private",
+            "arg_index": 2,
+            "kind": "by_value",
+            "offset_bytes": 64,
+            "size_bytes": 4
+          },
+          {
+            "access": "none",
+            "address_mode": "none",
+            "address_space": "private",
+            "arg_index": 3,
+            "kind": "by_value",
+            "offset_bytes": 68,
+            "size_bytes": 4
+          },
+          {
+            "access": "none",
+            "address_mode": "none",
+            "address_space": "private",
+            "arg_index": 4,
+            "kind": "by_value",
+            "offset_bytes": 72,
+            "size_bytes": 4
+          }
+        ],
+        "per_thread_data_bytes": 96,
+        "per_thread_payload_args": [
+          {
+            "arg_type": "local_id",
+            "offset": 0,
+            "size": 96
+          }
+        ],
+        "scratch_bytes": 0,
+        "simd_width": 16,
+        "slm_bytes": 0,
+        "source_arg_info": [
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 0,
+            "name": "dst_rgba",
+            "type_name": "uint*;8",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 1,
+            "name": "descs",
+            "type_name": "uint*;8",
+            "type_qualifiers": "const"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__private",
+            "index": 2,
+            "name": "dst_pitch_bytes",
+            "type_name": "uint;4",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__private",
+            "index": 3,
+            "name": "desc_base",
+            "type_name": "uint;4",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__private",
+            "index": 4,
+            "name": "desc_count",
+            "type_name": "uint;4",
+            "type_qualifiers": "NONE"
+          }
+        ],
+        "text": {
+          "entry_offset": 64,
+          "entry_size": 2512,
+          "section_alignment": 0,
+          "section_name": ".text.gradient_rect_worklist_rgba8",
+          "section_offset": 64,
+          "section_size": 2688,
+          "sha256": "3ca2f8da864496e9369a5ea2e6411ba6c27cc36aaad5162673412b27c15be548",
+          "symbol_size": 2512,
+          "symbol_value": 0
+        },
+        "user_attributes": {
+          "intel_reqd_sub_group_size": 16,
+          "intel_reqd_workgroup_walk_order": [
+            0,
+            1,
+            2
+          ]
+        },
+        "ze_info_major": 1,
+        "ze_info_minor": 64
+      }
+    ],
+    "spirv": {
+      "embedded_section_offset": 2824,
+      "embedded_section_size": 11980,
+      "sha256": "0057f3a576c83904ac34287a7378334148ee50f3b6e24a402144967a81969982",
+      "size_bytes": 11980
+    }
+  },
+  "provenance": {
+    "backend": {
+      "description": "Intel IGC through ocloc -spirv_input"
+    },
+    "commands": [
+      [
+        "$CLANG",
+        "--target=spir64",
+        "-x",
+        "clcpp",
+        "-cl-std=CLC++",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wdate-time",
+        "-cl-kernel-arg-info",
+        "-fno-discard-value-names",
+        "-fno-exceptions",
+        "-fno-rtti",
+        "-MMD",
+        "-MF",
+        "$OUT_DIR/gradient_rect_worklist_rgba8.d",
+        "-MT",
+        "gradient_rect_worklist_rgba8.bc",
+        "-emit-llvm",
+        "-c",
+        "gradient_rect_worklist_rgba8.clcpp",
+        "-o",
+        "$OUT_DIR/gradient_rect_worklist_rgba8.bc"
+      ],
+      [
+        "$LLVM_SPIRV",
+        "--preserve-ocl-kernel-arg-type-metadata-through-string",
+        "$OUT_DIR/gradient_rect_worklist_rgba8.bc",
+        "-o",
+        "$OUT_DIR/gradient_rect_worklist_rgba8.spv"
+      ],
+      [
+        "$OCLOC",
+        "compile",
+        "-file",
+        "$OUT_DIR/gradient_rect_worklist_rgba8.spv",
+        "-spirv_input",
+        "-device",
+        "0x4680",
+        "-64",
+        "-output",
+        "gradient_rect_worklist_rgba8",
+        "-out_dir",
+        "$OUT_DIR",
+        "-output_no_suffix",
+        "-gen_file"
+      ],
+      [
+        "$OCLOC",
+        "validate",
+        "-file",
+        "$OUT_DIR/gradient_rect_worklist_rgba8.bin"
+      ]
+    ],
+    "frontend": {
+      "description": "Clang C++ for OpenCL -> LLVM bitcode -> llvm-spirv"
+    },
+    "profile": {
+      "path": "tools/intel-gpu-bakery/profiles/adls-4680-r0c-cpp.json",
+      "sha256": "66835e5d4fd37f63d767e7e11314ae0cd728eeb7a18abac6fbc90851346816b6"
+    },
+    "publication_policy": {
+      "expected_kernels": [
+        "gradient_rect_worklist_rgba8"
+      ],
+      "name": "cpp-legacy-abi-twin-v1"
+    },
+    "reproducibility_check": "passed",
+    "toolchain": {
+      "compiler_libraries": [
+        {
+          "aliases": [
+            "igc2/NOTICES.txt"
+          ],
+          "name": "igc2/NOTICES.txt",
+          "resolved_name": "NOTICES.txt",
+          "sha256": "3c9d5dffed3faf89159e3cc714c5512dee5e9c554faf57a5b00823f4356e2cf9",
+          "size_bytes": 29813
+        },
+        {
+          "aliases": [
+            "libiga64.so",
+            "libiga64.so.2",
+            "libiga64.so.2.30.0+0"
+          ],
+          "name": "libiga64.so",
+          "resolved_name": "libiga64.so.2.30.0+0",
+          "sha256": "995a0a884635f646571baec65e0875c834ec9d8578695ea7745b2a8db67b95e5",
+          "size_bytes": 3622752
+        },
+        {
+          "aliases": [
+            "libigc.so",
+            "libigc.so.2",
+            "libigc.so.2.30.0+0"
+          ],
+          "name": "libigc.so",
+          "resolved_name": "libigc.so.2.30.0+0",
+          "sha256": "364b5fc477bbd0e0feb3251dce0f0bb1302f95d12f696e5e56d942a27f03e6b0",
+          "size_bytes": 92251800
+        },
+        {
+          "aliases": [
+            "libigdfcl.so",
+            "libigdfcl.so.2",
+            "libigdfcl.so.2.30.0+0"
+          ],
+          "name": "libigdfcl.so",
+          "resolved_name": "libigdfcl.so.2.30.0+0",
+          "sha256": "73c884854e8524831cb847a2f1beef5e5de9845498213c5c6592c2e4fdc0222d",
+          "size_bytes": 2246232
+        },
+        {
+          "aliases": [
+            "libocloc.so"
+          ],
+          "name": "libocloc.so",
+          "resolved_name": "libocloc.so",
+          "sha256": "d1e9ac0a406b123cc78a42e926e99faa30f74656bdfeb41e351225c108a8b177",
+          "size_bytes": 2456288
+        },
+        {
+          "aliases": [
+            "libopencl-clang.so.16"
+          ],
+          "name": "libopencl-clang.so.16",
+          "resolved_name": "libopencl-clang.so.16",
+          "sha256": "efceb7dc85e7f002e782a6189d79ad2d76221a982b39277fbe4fb60356d81b4c",
+          "size_bytes": 114866240
+        }
+      ],
+      "frontend": "clang-clcpp",
+      "profile_sha256": "66835e5d4fd37f63d767e7e11314ae0cd728eeb7a18abac6fbc90851346816b6",
+      "schema_version": 1,
+      "tools": {
+        "clang": {
+          "dynamic_compiler_libraries": [
+            {
+              "resolved_name": "libLLVM.so.21.1",
+              "sha256": "12dca1fc2d9f5d4ff35315fc2aa3a97b615b41ec6a71d3ce545efb62c075d902",
+              "size_bytes": 138567144,
+              "soname": "libLLVM.so.21.1"
+            },
+            {
+              "resolved_name": "libclang-cpp.so.21.1",
+              "sha256": "ff79833fd7e7707f3c715e9518f9edcec7371800ec22062c81d155fec3ad0daa",
+              "size_bytes": 60307904,
+              "soname": "libclang-cpp.so.21.1"
+            }
+          ],
+          "executable_sha256": "412bbe8c60571a1eb06f48fde89635033621caeb01a9b4ee76d46711bae8e932",
+          "resource_tree": {
+            "file_count": 405,
+            "size_bytes": 65550014,
+            "tree_sha256": "79459e49c99a7dff653b1d1c3a3b331afc282aac5d5ce62668f6e964973d6b91"
+          },
+          "version": "Ubuntu clang version 21.1.8 (6ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix"
+        },
+        "llvm_spirv": {
+          "dynamic_compiler_libraries": [],
+          "executable_sha256": "b4eb2c129fcad0fa301d3624be3cd298daca6bbdc83b83b251e62217a6be49c4",
+          "version": "LLVM (http://llvm.org/):\n  LLVM version 21.0.0git\n  Optimized build with assertions."
+        },
+        "ocloc": {
+          "dynamic_compiler_libraries": [
+            {
+              "resolved_name": "libocloc.so",
+              "sha256": "d1e9ac0a406b123cc78a42e926e99faa30f74656bdfeb41e351225c108a8b177",
+              "size_bytes": 2456288,
+              "soname": "libocloc.so"
+            }
+          ],
+          "executable_sha256": "a32b2551706458e01a855e14e974674a38102ec83b42586931b2b09f78cbb384",
+          "version": "25.31.034666"
+        }
+      }
+    },
+    "toolchain_lock": {
+      "path": "tools/intel-gpu-bakery/toolchains/adls-cpp-proof.lock.json",
+      "sha256": "27ad3211d327aeba76fd7fa913ba603f23782b06a4b00c25af4ae72eba85c0e6"
+    }
+  },
+  "rust_symbols": {
+    "gradient_rect_worklist_rgba8": "GRADIENT_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT"
+  },
+  "schema_version": 2,
+  "source": {
+    "inputs": [
+      {
+        "path": "crates/trueos-shader/gpgpu/kernels/gradient_rect_worklist_rgba8.clcpp",
+        "sha256": "250faf27e38348045a56cc78d4c88f29619574dd50256a5590bd67314ba5975e",
+        "size_bytes": 2771
+      }
+    ],
+    "language": "C++ for OpenCL",
+    "path": "crates/trueos-shader/gpgpu/kernels/gradient_rect_worklist_rgba8.clcpp"
+  },
+  "target": {
+    "label": "adls",
+    "ocloc_device": "0x4680",
+    "pci_device_ids": [
+      18048
+    ],
+    "revision_max": 12,
+    "revision_min": 12
+  },
+  "variant": "cpp"
+}

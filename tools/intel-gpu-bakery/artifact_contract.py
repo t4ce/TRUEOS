@@ -725,6 +725,16 @@ def abi_projection(analysis: dict[str, Any]) -> dict[str, Any]:
 
     kernel_projections = []
     for kernel in analysis["kernels"]:
+        # IGC may make an already-zero stateful surface offset explicit when
+        # consuming C++ SPIR-V. TRUEOS clears the entire indirect payload and
+        # binds every admitted surface at offset zero, so presence/absence of
+        # this record is ABI-equivalent. The generated contract still retains
+        # and validates the record for the published artifact.
+        programmed_implicit = [
+            arg
+            for arg in kernel["implicit_payload_args"]
+            if arg["arg_type"] != "buffer_offset"
+        ]
         kernel_projections.append(
             {
                 "kernel_name": kernel["kernel_name"],
@@ -738,7 +748,7 @@ def abi_projection(analysis: dict[str, Any]) -> dict[str, Any]:
                 "per_thread_data_bytes": kernel["per_thread_data_bytes"],
                 "bindings": kernel["bindings"],
                 "payload_args": kernel["payload_args"],
-                "implicit_payload_args": kernel["implicit_payload_args"],
+                "implicit_payload_args": programmed_implicit,
                 "per_thread_payload_args": kernel["per_thread_payload_args"],
                 "source_arg_info": kernel["source_arg_info"],
                 "user_attributes": kernel["user_attributes"],
