@@ -1,6 +1,6 @@
 use x86_64::registers::model_specific::Msr;
 
-use crate::hv::hvlogf;
+use crate::hv::{hvlogf, hvtracef};
 
 // MSR indices
 pub const IA32_FEATURE_CONTROL: u32 = 0x3A;
@@ -545,7 +545,7 @@ pub fn log_vmexit_interrupt_info(label: &str) {
         ""
     };
 
-    hvlogf(format_args!(
+    hvtracef(format_args!(
         "hv: vm{} reporting: {} vmexit intr vector={} name={} type={}({}) err_valid={} err=0x{:X} intr_info=0x{:08X}",
         crate::hv::current_vm_id().unwrap_or(0),
         label,
@@ -561,7 +561,7 @@ pub fn log_vmexit_interrupt_info(label: &str) {
     let guest_rsp = vmread(VMCS_GUEST_RSP).unwrap_or(0);
     let guest_linear = vmread(VMCS_GUEST_LINEAR_ADDRESS).unwrap_or(0);
     let guest_physical = vmread(VMCS_GUEST_PHYSICAL_ADDRESS).unwrap_or(0);
-    hvlogf(format_args!(
+    hvtracef(format_args!(
         "hv: vm{} reporting: {} vmexit addr guest_linear=0x{:016X} guest_physical=0x{:016X} guest_rsp=0x{:016X}",
         crate::hv::current_vm_id().unwrap_or(0),
         label,

@@ -44,7 +44,7 @@ use super::{
     focused_keyboard_state, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored,
     publish_frame_buffer, publish_gpgpu_scene_frame_buffer, publish_window_frame,
     replace_window_frame, set_window_cursor_icon, set_window_custom_cursor, set_window_placement,
-    take_owner_input_events, window_placement, writable_rgba_view,
+    take_owner_input_events, take_window_first_presentation, window_placement, writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -926,6 +926,68 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_pan_event_take(
     // SAFETY: the non-null output points to one writable ABI event.
     unsafe { out.write(event) };
     0
+}
+
+/// Take this window's first physical-presentation event.
+///
+/// Zero means the compositor observed the first frame at SURFLIVE and this
+/// call consumed the event. One means it has not arrived yet or was already
+/// consumed. Negative values are ordinary UI4 errors.
+pub extern "C" fn trueos_cabi_ui4_scene_first_presentation_take(window_id: u32) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE,
+            window_id as u64,
+            0,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface.window
+    };
+    match take_window_first_presentation(owner, window) {
+        Ok(true) => 0,
+        Ok(false) => 1,
+        Err(_) => ERROR_UI4,
+    }
+}
+
+/// Return the cursor/UI4 output extent packed as `width << 32 | height`.
+///
+/// Zero means that no usable output geometry is available.
+pub extern "C" fn trueos_cabi_ui4_scene_output_dimensions() -> u64 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, dimensions) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS,
+            0,
+            0,
+            &[],
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            dimensions
+        } else {
+            0
+        };
+    }
+    let (width, height) = crate::r::io::input_cabi::input_cursor_viewport_dimensions_px();
+    let Ok(width) = u32::try_from(width) else {
+        return 0;
+    };
+    let Ok(height) = u32::try_from(height) else {
+        return 0;
+    };
+    if width == 0 || height == 0 {
+        return 0;
+    }
+    pack_u32_pair(width, height)
 }
 
 /// Take the next maximize/restore extent notification for this Blueprint

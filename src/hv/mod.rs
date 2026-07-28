@@ -1487,8 +1487,8 @@ fn estimate_blueprint_memory_profile(
             ),
             BlueprintMemoryClass::ServerRuntime => (
                 512,
-                round_pow2_mib(base_live_mib.saturating_mul(96).saturating_add(512)).max(1024),
-                2048,
+                round_pow2_mib(base_live_mib.saturating_mul(96).saturating_add(1024)).max(4096),
+                4096,
                 16,
                 64,
                 128,
@@ -1570,6 +1570,32 @@ fn prepare_blueprint_launch_on_lane(
         return Err(AllocString::from("only ELF REL blueprints are supported for app-vm launch"));
     }
 
+    let imports = crate::hv::blueprint::elf_imports(unpacked_bytes.as_slice()).unwrap_or_default();
+    let profile = estimate_blueprint_memory_profile(
+        pending.archive.as_str(),
+        &module,
+        unpacked_bytes.as_slice(),
+        imports.as_slice(),
+    );
+    let console_surface = pending.console_surface;
+    log(format_args!("apps: console surface {:?}", console_surface));
+    log_blueprint_memory_profile_info(profile);
+
+    // Reserve the guest's large contiguous arenas before decoding and copying
+    // embedded assets into the host filesystem. Toolchain Blueprints carry
+    // hundreds of MiB of assets, and materializing those first can fragment the
+    // PMM enough that even the profile's lower-bound arena becomes unavailable.
+    if !crate::allocators::prepare_hv_guest_heap_for_vm(
+        vm_id,
+        profile.heap_recommended_mib.saturating_mul(MIB),
+        profile.heap_lower_mib.saturating_mul(MIB),
+    ) {
+        return Err(AllocString::from("app-vm heap profile allocation failed"));
+    }
+    if memory::prepare_guest_stack_mb_for_vm(vm_id, profile.stack_recommended_mib).is_err() {
+        return Err(AllocString::from("app-vm stack profile allocation failed"));
+    }
+
     let asset_stats = {
         let app_fs_root = crate::hv::blueprint::app_fs_root_for_archive(
             pending.archive.as_str(),
@@ -1589,29 +1615,8 @@ fn prepare_blueprint_launch_on_lane(
             stats.entries, stats.bytes
         ));
     }
-
-    let imports = crate::hv::blueprint::elf_imports(unpacked_bytes.as_slice()).unwrap_or_default();
-    let profile = estimate_blueprint_memory_profile(
-        pending.archive.as_str(),
-        &module,
-        unpacked_bytes.as_slice(),
-        imports.as_slice(),
-    );
-    let console_surface = pending.console_surface;
-    log(format_args!("apps: console surface {:?}", console_surface));
-    log_blueprint_memory_profile_info(profile);
     drop(host_alloc_guard);
 
-    if !crate::allocators::prepare_hv_guest_heap_for_vm(
-        vm_id,
-        profile.heap_recommended_mib.saturating_mul(MIB),
-        profile.heap_lower_mib.saturating_mul(MIB),
-    ) {
-        return Err(AllocString::from("app-vm heap profile allocation failed"));
-    }
-    if memory::prepare_guest_stack_mb_for_vm(vm_id, profile.stack_recommended_mib).is_err() {
-        return Err(AllocString::from("app-vm stack profile allocation failed"));
-    }
     if !memory::arm_guest_rel_exec_for_vm(vm_id) {
         return Err(AllocString::from("app-vm REL execute policy unavailable"));
     }
@@ -2850,6 +2855,15 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
                 released.input_routes,
                 released.input_events,
                 released.context_menus,
+            ));
+        }
+        let cursors = crate::r::mouse_motion_service::release_principal(
+            crate::r::mouse_motion_service::MouseControlPrincipal::Vm(vm_id),
+        );
+        if cursors != 0 {
+            hvlogf(format_args!(
+                "hv: vm{} lifecycle: mouse-control cleanup cursors={}",
+                vm_id, cursors,
             ));
         }
     }

@@ -400,6 +400,7 @@ struct WindowRecord {
     revision: u64,
     publish_serial: u64,
     first_presentation_emitted: bool,
+    first_presentation_taken: bool,
     damage: Option<DamageRegion>,
     restore_placement: Option<WindowPlacement>,
     close_transition: Option<WindowCloseTransition>,
@@ -1038,6 +1039,7 @@ impl WindowRecord {
             revision: 1,
             publish_serial: 0,
             first_presentation_emitted: false,
+            first_presentation_taken: false,
             damage: None,
             restore_placement: None,
             close_transition: None,
@@ -1649,6 +1651,25 @@ pub(crate) async fn wait_for_window_first_presentation() -> WindowSnapshot {
         }
         WINDOW_FIRST_PRESENTATION_READY.wait().await;
     }
+}
+
+/// Take this window's owner-visible first-presentation event.
+///
+/// The compositor latches the event only after the first composed frame has
+/// crossed SURFLIVE. This per-window latch is independent of the global Spirit
+/// notification queue, so an application observing its own event cannot steal
+/// another kernel consumer's notification.
+pub(crate) fn take_window_first_presentation(
+    owner: WindowOwner,
+    id: WindowId,
+) -> Result<bool, WindowBrokerError> {
+    let mut broker = WINDOW_BROKER.lock();
+    let window = broker.checked_window_mut(owner, id)?;
+    if !window.first_presentation_emitted || window.first_presentation_taken {
+        return Ok(false);
+    }
+    window.first_presentation_taken = true;
+    Ok(true)
 }
 
 fn close_transition_placement(

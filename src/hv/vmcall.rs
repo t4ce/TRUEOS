@@ -133,6 +133,8 @@ pub const OP_BP_KEYBOARD_CONTROL_SUBMIT: u32 = 0xF1; // arg0 handle,payload Keyb
 pub const OP_BP_KEYBOARD_CONTROL_SUBMIT_TEXT: u32 = 0xF2; // arg0 handle,arg1 interval:flags,payload UTF-8 -> count/rc
 pub const OP_BP_KEYBOARD_CONTROL_SUBMIT_JSON: u32 = 0xF3; // arg0 handle,payload JSON -> command count/rc
 pub const OP_BP_KEYBOARD_CONTROL_IDLE: u32 = 0xF4; // arg0 handle -> bool/rc
+pub const OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE: u32 = 0xF5; // arg0 window -> first SURFLIVE event/empty/rc
+pub const OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS: u32 = 0xF6; // -> packed output width:height
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1427,6 +1429,18 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE => {
+            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_first_presentation_take(
+                arg0 as u32,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS => {
+            let dimensions = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_output_dimensions();
+            write_response(vm_id, seq, STATUS_OK, dimensions, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_SET_CUSTOM_CURSOR => {

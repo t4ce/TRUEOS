@@ -241,6 +241,8 @@ unsafe extern "C" {
         window_id: u32,
         out: *mut TrueosUi4ResizeEvent,
     ) -> i32;
+    pub fn trueos_cabi_ui4_scene_first_presentation_take(window_id: u32) -> i32;
+    pub fn trueos_cabi_ui4_scene_output_dimensions() -> u64;
     pub fn trueos_cabi_ui4_scene_keyboard_state(
         window_id: u32,
         out: *mut TrueosUi4KeyboardState,

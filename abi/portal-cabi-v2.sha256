@@ -16,6 +16,12 @@
 # The UI4 resize-event take call is also strictly additive. It grants new
 # Blueprints the existing resize-on-maximize notification while older v2
 # artifacts continue to retain their fixed backing extent.
+# The UI4 first-presentation take call is strictly additive. It exposes a
+# per-window one-shot SURFLIVE acknowledgment without consuming the existing
+# kernel-wide Spirit notification queue or changing older frame lifecycles.
+# The UI4 output-dimensions query is strictly additive and read-only. It lets
+# new Blueprints place scene frames relative to the same live pixel extent used
+# by UI4 and mediated cursors; older v2 artifacts retain fixed coordinates.
 # The UI4 custom-cursor declaration is strictly additive and lets a Blueprint
 # suppress the default cursor over its selected frame. The cursor-icon call is
 # likewise additive and selects built-in defaults per frame or cursor source.
@@ -35,4 +41,4 @@
 # The GridPaper sized-snapshot calls are strictly additive. They carry a
 # bounded logical extent beside the unchanged fixed-capacity page image;
 # existing full-size snapshot symbols and packaged Blueprints are unchanged.
-0150a5c9169acdc31c34e6e64297cad4dc955ea608e53789bbdf2efc2736c348
+aac7a874814645877aad19037c1e709a319ae49977660c572cd09e7bbfa8804a

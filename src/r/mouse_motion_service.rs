@@ -250,6 +250,22 @@ impl MouseControlStation {
         Ok(())
     }
 
+    fn release_principal(&mut self, principal: MouseControlPrincipal) -> usize {
+        let mut released = 0;
+        while let Some(handle) = self
+            .cursors
+            .iter()
+            .find(|cursor| cursor.principal == principal)
+            .map(|cursor| cursor.capability.handle)
+        {
+            if self.release(principal, handle).is_err() {
+                break;
+            }
+            released += 1;
+        }
+        released
+    }
+
     fn submit(
         &mut self,
         principal: MouseControlPrincipal,
@@ -455,6 +471,10 @@ pub(crate) fn release_cursor(
     handle: u64,
 ) -> Result<(), MouseControlError> {
     STATION.lock().release(principal, handle)
+}
+
+pub(crate) fn release_principal(principal: MouseControlPrincipal) -> usize {
+    STATION.lock().release_principal(principal)
 }
 
 pub(crate) fn submit_command(

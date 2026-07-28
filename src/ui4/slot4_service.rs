@@ -226,27 +226,11 @@ fn software_cursor_rects() -> Slot4Rects {
     }
 
     for visual in &visuals {
-        let Some(preview) = visual.maximize_preview else {
-            continue;
-        };
-        let hint = Rgba8::new(visual.color.r, visual.color.g, visual.color.b, 210);
-        push_rect_border(&mut rects, preview, 3, hint);
-        let marker_width = preview.width.min(192);
-        push_overlay_rect(
-            &mut rects,
-            preview
-                .x
-                .saturating_add(preview.width.saturating_sub(marker_width) / 2),
-            preview.y,
-            marker_width,
-            7.min(preview.height),
-            Rgba8::new(visual.color.r, visual.color.g, visual.color.b, 235),
-        );
-    }
-
-    for visual in &visuals {
         if let Some(selection) = visual.selection {
-            push_rect_border(&mut rects, selection, 1, visual.color);
+            push_selection_outline(&mut rects, selection, visual.color);
+        }
+        if let Some(maximize_preview) = visual.maximize_preview {
+            push_selection_outline(&mut rects, maximize_preview, visual.color);
         }
     }
 
@@ -281,33 +265,7 @@ fn software_cursor_rects() -> Slot4Rects {
     }
 
     for visual in &visuals {
-        let x = visual.x;
-        let y = visual.y;
-        let color = visual.color;
-        match visual.icon {
-            super::Ui4CursorIcon::Default => push_software_cursor(
-                &mut rects,
-                x,
-                y,
-                screen_w,
-                screen_h,
-                color,
-                visual.buttons_down != 0,
-            ),
-            super::Ui4CursorIcon::Loading => {
-                push_loading_cursor(&mut rects, x, y, screen_w, screen_h, color)
-            }
-            super::Ui4CursorIcon::ResizeHorizontal => {
-                push_resize_horizontal_cursor(&mut rects, x, y, screen_w, screen_h, color)
-            }
-            super::Ui4CursorIcon::ResizeVertical => {
-                push_resize_vertical_cursor(&mut rects, x, y, screen_w, screen_h, color)
-            }
-            super::Ui4CursorIcon::ResizeDiagonal => {
-                push_resize_diagonal_cursor(&mut rects, x, y, screen_w, screen_h, color)
-            }
-            super::Ui4CursorIcon::AppOwned => {}
-        }
+        push_software_crosshair(&mut rects, visual.x, visual.y, screen_w, screen_h, visual.color);
     }
 
     rects
@@ -468,23 +426,15 @@ fn tiny_menu_glyph(ch: char) -> [u8; 5] {
 /// inward-facing T at every display edge. Each component is clamped separately
 /// so the top/left saturation effect is mirrored at the bottom/right, while no
 /// cursor rectangle or its damage can extend beyond the scanout.
-fn push_software_cursor(
+fn push_software_crosshair(
     rects: &mut Slot4Rects,
     x: u32,
     y: u32,
     screen_w: u32,
     screen_h: u32,
     color: crate::graphics::primitives::Rgba8,
-    pressed: bool,
 ) {
-    use crate::graphics::primitives::Rgba8;
-
-    let long = if pressed {
-        SOFTWARE_CURSOR_PRESSED_LONG_PX
-    } else {
-        SOFTWARE_CURSOR_LONG_PX
-    };
-    let long_before = long / 2;
+    let long_before = SOFTWARE_CURSOR_LONG_PX / 2;
 
     push_cursor_rect(
         rects,
@@ -493,7 +443,7 @@ fn push_software_cursor(
         2,
         long_before,
         SOFTWARE_CURSOR_STROKE_PX,
-        long,
+        SOFTWARE_CURSOR_LONG_PX,
         screen_w,
         screen_h,
         color,
@@ -504,189 +454,12 @@ fn push_software_cursor(
         y,
         long_before,
         2,
-        long,
+        SOFTWARE_CURSOR_LONG_PX,
         SOFTWARE_CURSOR_STROKE_PX,
         screen_w,
         screen_h,
         color,
     );
-    push_cursor_rect(
-        rects,
-        x,
-        y,
-        4,
-        4,
-        SOFTWARE_CURSOR_HALO_PX,
-        SOFTWARE_CURSOR_HALO_PX,
-        screen_w,
-        screen_h,
-        Rgba8::new(255, 255, 255, 240),
-    );
-    push_cursor_rect(
-        rects,
-        x,
-        y,
-        2,
-        2,
-        SOFTWARE_CURSOR_STROKE_PX,
-        SOFTWARE_CURSOR_STROKE_PX,
-        screen_w,
-        screen_h,
-        color,
-    );
-}
-
-fn push_loading_cursor(
-    rects: &mut Slot4Rects,
-    x: u32,
-    y: u32,
-    screen_w: u32,
-    screen_h: u32,
-    color: crate::graphics::primitives::Rgba8,
-) {
-    use crate::graphics::primitives::Rgba8;
-
-    push_cursor_offset_rect(rects, x, y, -8, -10, 17, 3, screen_w, screen_h, color);
-    push_cursor_offset_rect(rects, x, y, -8, 8, 17, 3, screen_w, screen_h, color);
-    for (offset_x, offset_y) in [
-        (-6, -7),
-        (4, -7),
-        (-4, -5),
-        (2, -5),
-        (-2, -3),
-        (0, -3),
-        (-2, 1),
-        (0, 1),
-        (-4, 3),
-        (2, 3),
-        (-6, 5),
-        (4, 5),
-    ] {
-        push_cursor_offset_rect(rects, x, y, offset_x, offset_y, 3, 3, screen_w, screen_h, color);
-    }
-    push_cursor_offset_rect(
-        rects,
-        x,
-        y,
-        -1,
-        -1,
-        3,
-        3,
-        screen_w,
-        screen_h,
-        Rgba8::new(255, 255, 255, 240),
-    );
-}
-
-fn push_resize_horizontal_cursor(
-    rects: &mut Slot4Rects,
-    x: u32,
-    y: u32,
-    screen_w: u32,
-    screen_h: u32,
-    color: crate::graphics::primitives::Rgba8,
-) {
-    use crate::graphics::primitives::Rgba8;
-
-    push_cursor_offset_rect(rects, x, y, -13, -2, 27, 5, screen_w, screen_h, color);
-    push_cursor_offset_rect(rects, x, y, -13, -6, 5, 13, screen_w, screen_h, color);
-    push_cursor_offset_rect(rects, x, y, 9, -6, 5, 13, screen_w, screen_h, color);
-    push_cursor_offset_rect(
-        rects,
-        x,
-        y,
-        -1,
-        -1,
-        3,
-        3,
-        screen_w,
-        screen_h,
-        Rgba8::new(255, 255, 255, 240),
-    );
-}
-
-fn push_resize_vertical_cursor(
-    rects: &mut Slot4Rects,
-    x: u32,
-    y: u32,
-    screen_w: u32,
-    screen_h: u32,
-    color: crate::graphics::primitives::Rgba8,
-) {
-    use crate::graphics::primitives::Rgba8;
-
-    push_cursor_offset_rect(rects, x, y, -2, -13, 5, 27, screen_w, screen_h, color);
-    push_cursor_offset_rect(rects, x, y, -6, -13, 13, 5, screen_w, screen_h, color);
-    push_cursor_offset_rect(rects, x, y, -6, 9, 13, 5, screen_w, screen_h, color);
-    push_cursor_offset_rect(
-        rects,
-        x,
-        y,
-        -1,
-        -1,
-        3,
-        3,
-        screen_w,
-        screen_h,
-        Rgba8::new(255, 255, 255, 240),
-    );
-}
-
-fn push_resize_diagonal_cursor(
-    rects: &mut Slot4Rects,
-    x: u32,
-    y: u32,
-    screen_w: u32,
-    screen_h: u32,
-    color: crate::graphics::primitives::Rgba8,
-) {
-    use crate::graphics::primitives::Rgba8;
-
-    for offset in [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10] {
-        push_cursor_offset_rect(rects, x, y, offset, offset, 3, 3, screen_w, screen_h, color);
-    }
-    for (offset_x, offset_y) in [(-10, -6), (-6, -10), (10, 6), (6, 10)] {
-        push_cursor_offset_rect(rects, x, y, offset_x, offset_y, 3, 3, screen_w, screen_h, color);
-    }
-    push_cursor_offset_rect(
-        rects,
-        x,
-        y,
-        -1,
-        -1,
-        3,
-        3,
-        screen_w,
-        screen_h,
-        Rgba8::new(255, 255, 255, 240),
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-fn push_cursor_offset_rect(
-    rects: &mut Slot4Rects,
-    center_x: u32,
-    center_y: u32,
-    offset_x: i32,
-    offset_y: i32,
-    width: u32,
-    height: u32,
-    screen_w: u32,
-    screen_h: u32,
-    color: crate::graphics::primitives::Rgba8,
-) {
-    let width = width.min(screen_w);
-    let height = height.min(screen_h);
-    if width == 0 || height == 0 {
-        return;
-    }
-    let x = i64::from(center_x)
-        .saturating_add(i64::from(offset_x))
-        .clamp(0, i64::from(screen_w - width)) as u32;
-    let y = i64::from(center_y)
-        .saturating_add(i64::from(offset_y))
-        .clamp(0, i64::from(screen_h - height)) as u32;
-    push_overlay_rect(rects, x, y, width, height, color);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -716,21 +489,12 @@ fn push_cursor_rect(
     push_overlay_rect(rects, x, y, width, height, color);
 }
 
-fn overlay_rect_signature(rects: &[crate::intel::LiveOverlayRect]) -> u64 {
-    let mut hash = 0xCBF2_9CE4_8422_2325u64;
-    for rect in rects {
-        for value in [
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            u32::from_le_bytes([rect.color.r, rect.color.g, rect.color.b, rect.color.a]),
-        ] {
-            hash ^= u64::from(value);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
-        }
-    }
-    hash ^ rects.len() as u64
+fn push_selection_outline(
+    rects: &mut Slot4Rects,
+    rect: super::Ui4VisualRect,
+    color: crate::graphics::primitives::Rgba8,
+) {
+    push_rect_border(rects, rect, 1, color);
 }
 
 fn push_rect_border(
@@ -802,16 +566,15 @@ mod tests {
     const TEST_SCREEN_W: u32 = 100;
     const TEST_SCREEN_H: u32 = 80;
 
-    fn test_cursor_rects(x: u32, y: u32, pressed: bool) -> Slot4Rects {
+    fn test_cursor_rects(x: u32, y: u32) -> Slot4Rects {
         let mut rects = Slot4Rects::new();
-        push_software_cursor(
+        push_software_crosshair(
             &mut rects,
             x,
             y,
             TEST_SCREEN_W,
             TEST_SCREEN_H,
             Rgba8::new(255, 0, 0, 255),
-            pressed,
         );
         rects
     }
@@ -837,14 +600,14 @@ mod tests {
 
     #[test]
     fn software_cursor_shape_is_mirrored_at_opposite_edges() {
-        let left = test_cursor_rects(0, TEST_SCREEN_H / 2, false);
-        let right = test_cursor_rects(TEST_SCREEN_W - 1, TEST_SCREEN_H / 2, false);
-        let top = test_cursor_rects(TEST_SCREEN_W / 2, 0, false);
-        let bottom = test_cursor_rects(TEST_SCREEN_W / 2, TEST_SCREEN_H - 1, false);
+        let left = test_cursor_rects(0, TEST_SCREEN_H / 2);
+        let right = test_cursor_rects(TEST_SCREEN_W - 1, TEST_SCREEN_H / 2);
+        let top = test_cursor_rects(TEST_SCREEN_W / 2, 0);
+        let bottom = test_cursor_rects(TEST_SCREEN_W / 2, TEST_SCREEN_H - 1);
 
-        assert_eq!(left.len(), 4);
+        assert_eq!(left.len(), 2);
         assert_eq!(right.len(), left.len());
-        assert_eq!(top.len(), 4);
+        assert_eq!(top.len(), 2);
         assert_eq!(bottom.len(), top.len());
         for (left, right) in left.iter().zip(&right) {
             assert_eq!(right.x, TEST_SCREEN_W - left.x - left.width);
@@ -862,17 +625,16 @@ mod tests {
 
     #[test]
     fn software_cursor_remains_centered_away_from_edges() {
-        let rects = test_cursor_rects(50, 40, false);
+        let rects = test_cursor_rects(50, 40);
         let expected = [
             (48, 27, SOFTWARE_CURSOR_STROKE_PX, SOFTWARE_CURSOR_LONG_PX),
             (37, 38, SOFTWARE_CURSOR_LONG_PX, SOFTWARE_CURSOR_STROKE_PX),
-            (46, 36, SOFTWARE_CURSOR_HALO_PX, SOFTWARE_CURSOR_HALO_PX),
-            (48, 38, SOFTWARE_CURSOR_STROKE_PX, SOFTWARE_CURSOR_STROKE_PX),
         ];
 
         assert_eq!(rects.len(), expected.len());
         for (rect, (x, y, width, height)) in rects.iter().zip(expected) {
             assert_eq!((rect.x, rect.y, rect.width, rect.height), (x, y, width, height));
+            assert_eq!(rect.color, Rgba8::new(255, 0, 0, 255));
         }
     }
 
@@ -884,8 +646,8 @@ mod tests {
             (0, TEST_SCREEN_H - 1),
             (TEST_SCREEN_W - 1, TEST_SCREEN_H - 1),
         ] {
-            let rects = test_cursor_rects(x, y, false);
-            assert_eq!(rects.len(), 4);
+            let rects = test_cursor_rects(x, y);
+            assert_eq!(rects.len(), 2);
             for rect in rects {
                 assert!(rect.x.saturating_add(rect.width) <= TEST_SCREEN_W);
                 assert!(rect.y.saturating_add(rect.height) <= TEST_SCREEN_H);
@@ -894,45 +656,9 @@ mod tests {
     }
 
     #[test]
-    fn pressed_cursor_shortens_only_the_long_axes() {
-        let released = test_cursor_rects(50, 40, false);
-        let pressed = test_cursor_rects(50, 40, true);
-        assert_eq!(pressed.len(), released.len());
-        assert_eq!(
-            (pressed[0].x, pressed[0].y, pressed[0].width, pressed[0].height),
-            (48, 30, SOFTWARE_CURSOR_STROKE_PX, SOFTWARE_CURSOR_PRESSED_LONG_PX)
-        );
-        assert_eq!(
-            (pressed[1].x, pressed[1].y, pressed[1].width, pressed[1].height),
-            (40, 38, SOFTWARE_CURSOR_PRESSED_LONG_PX, SOFTWARE_CURSOR_STROKE_PX)
-        );
-        for index in 2..released.len() {
-            assert!(overlay_rect_eq(&released[index], &pressed[index]));
-        }
-    }
-
-    #[test]
-    fn press_damage_is_only_the_four_removed_caps() {
-        let released = test_cursor_rects(50, 40, false);
-        let pressed = test_cursor_rects(50, 40, true);
-        let damage = changed_rect_damage(&released, &pressed);
-        let expected = [
-            crate::intel::CompositionDamageRect::new(48, 27, 5, 3),
-            crate::intel::CompositionDamageRect::new(48, 51, 5, 3),
-            crate::intel::CompositionDamageRect::new(37, 38, 3, 5),
-            crate::intel::CompositionDamageRect::new(61, 38, 3, 5),
-        ];
-        assert_eq!(damage.len(), expected.len());
-        for rect in expected {
-            assert!(damage.rects().contains(&rect));
-        }
-        assert_eq!(changed_rect_damage(&pressed, &released), damage);
-    }
-
-    #[test]
-    fn border_rectangles_partition_the_outline_without_overlap() {
+    fn selection_outline_is_one_pixel_and_non_overlapping() {
         let mut rects = Slot4Rects::new();
-        push_rect_border(
+        push_selection_outline(
             &mut rects,
             super::super::Ui4VisualRect {
                 x: 10,
@@ -940,15 +666,14 @@ mod tests {
                 width: 30,
                 height: 20,
             },
-            3,
             Rgba8::new(255, 0, 0, 255),
         );
 
         let expected = [
-            (10, 20, 30, 3),
-            (10, 37, 30, 3),
-            (10, 23, 3, 14),
-            (37, 23, 3, 14),
+            (10, 20, 30, 1),
+            (10, 39, 30, 1),
+            (10, 21, 1, 18),
+            (39, 21, 1, 18),
         ];
         assert_eq!(rects.len(), expected.len());
         for (rect, expected) in rects.iter().zip(expected) {
