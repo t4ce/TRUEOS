@@ -79,7 +79,6 @@ const LFM25_Q8_PROJECT_CROSS_THREAD_BYTES: u32 =
     gpgpu::LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
 const LFM25_Q8_PROJECT_PACKED_CROSS_THREAD_BYTES: u32 =
     gpgpu::LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
-const FONT_OUTLINE_MESH_CROSS_THREAD_BYTES: u32 = 128;
 const FONT_OUTLINE_COVERAGE_R8_CROSS_THREAD_BYTES: u32 = 128;
 const GENERIC_PER_THREAD_BYTES: u32 = 96;
 
@@ -605,34 +604,6 @@ const LFM25_Q8_PROJECT_PACKED_CONTRACT: GpuKernelContract<'_> = GpuKernelContrac
     consumers: &["lfm2.5 fixed packed Q8x16 DP4A reasoning projection"],
 };
 
-const FONT_OUTLINE_MESH_ARGS: &[KernelCallArg<'_>] = &[
-    ro_buf!(0, "outline_ops", "__global const uint*", 0, 12),
-    rw_buf!(1, "output", "__global uint*", 1, 14),
-    u32_arg!(2, "op_count", 16),
-    u32_arg!(3, "stage", 17),
-    u32_arg!(4, "subdivisions", 18),
-    u32_arg!(5, "max_vertices", 19),
-    u32_arg!(6, "max_indices", 20),
-    f32_arg!(7, "scale", 21),
-    f32_arg!(8, "origin_x", 22),
-    f32_arg!(9, "origin_y", 23),
-    f32_arg!(10, "stroke_half_width", 24),
-];
-const FONT_OUTLINE_MESH_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
-    name: gpgpu::FONT_OUTLINE_MESH_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/font_outline_mesh.clcpp",
-    producer: IGC,
-    target: ADLS,
-    entry_text_offset_bytes: TEXT_OFFSET,
-    cross_thread_bytes: FONT_OUTLINE_MESH_CROSS_THREAD_BYTES,
-    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
-    binding_count: 2,
-    args: FONT_OUTLINE_MESH_ARGS,
-    descriptor_layouts: NO_DESCS,
-    launch: KernelLaunchContract::nd_range_1d(),
-    consumers: &["intel::gpgpu::font_outline_diagnostic"],
-};
-
 const FONT_OUTLINE_COVERAGE_R8_ARGS: &[KernelCallArg<'_>] = &[
     ro_buf!(0, "outline_ops", "__global const uint*", 0, 12),
     rw_buf!(1, "mask_u8", "__global uchar*", 1, 14),
@@ -794,14 +765,6 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         upload: gpgpu::upload_lfm25_q8_project_packed_kernel,
         status: gpgpu::lfm25_q8_project_packed_upload_status,
         role: KnownKernelRole::Lfm25Q8,
-    },
-    KnownAotKernel {
-        name: gpgpu::FONT_OUTLINE_MESH_KERNEL_NAME,
-        artifact: &gpgpu::FONT_OUTLINE_MESH_ADLS_ARTIFACT,
-        contract: &FONT_OUTLINE_MESH_CONTRACT,
-        upload: gpgpu::upload_font_outline_mesh_kernel,
-        status: gpgpu::font_outline_mesh_upload_status,
-        role: KnownKernelRole::Font,
     },
     KnownAotKernel {
         name: gpgpu::FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,

@@ -78,10 +78,6 @@ pub(crate) fn spirit_vfx_sprite_rgba8_upload_status() -> Option<UploadedKernelAr
     *SPIRIT_VFX_SPRITE_RGBA8_UPLOAD.lock()
 }
 
-pub(crate) fn font_outline_mesh_upload_status() -> Option<UploadedKernelArtifact> {
-    *FONT_OUTLINE_MESH_UPLOAD.lock()
-}
-
 pub(crate) fn font_outline_coverage_r8_upload_status() -> Option<UploadedKernelArtifact> {
     *FONT_OUTLINE_COVERAGE_R8_UPLOAD.lock()
 }
@@ -513,24 +509,6 @@ pub(crate) fn upload_lfm25_q8_project_packed_kernel() -> Option<UploadedKernelAr
     Some(upload)
 }
 
-pub(crate) fn upload_font_outline_mesh_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *FONT_OUTLINE_MESH_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_warn!(
-            target: "gpgpu";
-            "intel/gpgpu: font-outline-mesh upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(dev, FONT_OUTLINE_MESH_ADLS_ARTIFACT, FONT_OUTLINE_MESH_ADLS_GPU)?;
-    *FONT_OUTLINE_MESH_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
 pub(crate) fn upload_font_outline_coverage_r8_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *FONT_OUTLINE_COVERAGE_R8_UPLOAD.lock() {
         return Some(upload);
@@ -650,7 +628,6 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     FONT_INSTANCE_RGBA8_KERNEL_NAME,
     LFM25_Q8_PROJECT_KERNEL_NAME,
     LFM25_Q8_PROJECT_PACKED_KERNEL_NAME,
-    FONT_OUTLINE_MESH_KERNEL_NAME,
     FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
     SCENE_AABB_KERNEL_NAME,
     LAB256_MULTIPHASE_KERNEL_NAME,
@@ -831,11 +808,6 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT,
             gpu: LFM25_Q8_PROJECT_PACKED_ADLS_GPU,
             upload: &LFM25_Q8_PROJECT_PACKED_UPLOAD,
-        }),
-        FONT_OUTLINE_MESH_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: FONT_OUTLINE_MESH_ADLS_ARTIFACT,
-            gpu: FONT_OUTLINE_MESH_ADLS_GPU,
-            upload: &FONT_OUTLINE_MESH_UPLOAD,
         }),
         FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT,

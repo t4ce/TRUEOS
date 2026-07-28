@@ -10,8 +10,6 @@ struct DirectRcsState {
     result_virt: *mut u8,
     clear_test_phys: u64,
     clear_test_virt: *mut u8,
-    font_outline_mesh_out_phys: u64,
-    font_outline_mesh_out_virt: *mut u8,
     ppgtt_phys: u64,
     ppgtt_virt: *mut u8,
     gpu_va: DirectRcsGpuVa,
@@ -223,8 +221,6 @@ fn allocate_direct_rcs_state(gpu_va: DirectRcsGpuVa) -> Option<DirectRcsState> {
     let (result_phys, result_virt) = crate::dma::alloc(result_alloc_bytes, super::WARM_ALIGN)?;
     let (clear_test_phys, clear_test_virt) =
         crate::dma::alloc(CLEAR_RECT_TEST_BYTES, super::WARM_ALIGN)?;
-    let (font_outline_mesh_out_phys, font_outline_mesh_out_virt) =
-        crate::dma::alloc(FONT_OUTLINE_MESH_OUT_ALLOC_BYTES, super::WARM_ALIGN)?;
     let (ppgtt_phys, ppgtt_virt) = crate::dma::alloc(DIRECT_RCS_PPGTT_BYTES, super::WARM_ALIGN)?;
 
     unsafe {
@@ -233,7 +229,6 @@ fn allocate_direct_rcs_state(gpu_va: DirectRcsGpuVa) -> Option<DirectRcsState> {
         core::ptr::write_bytes(batch_virt, 0, batch_alloc_bytes);
         core::ptr::write_bytes(result_virt, 0, result_alloc_bytes);
         core::ptr::write_bytes(clear_test_virt, 0, CLEAR_RECT_TEST_BYTES);
-        core::ptr::write_bytes(font_outline_mesh_out_virt, 0, FONT_OUTLINE_MESH_OUT_ALLOC_BYTES);
         core::ptr::write_bytes(ppgtt_virt, 0, DIRECT_RCS_PPGTT_BYTES);
     }
 
@@ -248,8 +243,6 @@ fn allocate_direct_rcs_state(gpu_va: DirectRcsGpuVa) -> Option<DirectRcsState> {
         result_virt,
         clear_test_phys,
         clear_test_virt,
-        font_outline_mesh_out_phys,
-        font_outline_mesh_out_virt,
         ppgtt_phys,
         ppgtt_virt,
         gpu_va,

@@ -24,7 +24,6 @@ static PARTICLE_CRAFT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new
 static FONT_INSTANCE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static LFM25_Q8_PROJECT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static LFM25_Q8_PROJECT_PACKED_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static FONT_OUTLINE_MESH_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FONT_OUTLINE_COVERAGE_R8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SCENE_AABB_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static LAB256_MULTIPHASE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);

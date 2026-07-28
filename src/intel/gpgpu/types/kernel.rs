@@ -317,20 +317,6 @@ struct CppAudioVisualizerRgba8Params {
 }
 
 #[derive(Copy, Clone, Debug)]
-struct FontOutlineMeshParams {
-    src_gpu: u64,
-    dst_gpu: u64,
-    op_count: u32,
-    stage: u32,
-    subdivisions: u32,
-    max_vertices: u32,
-    max_indices: u32,
-    scale: f32,
-    origin_x: f32,
-    origin_y: f32,
-    stroke_half_width: f32,
-}
-
 #[derive(Copy, Clone, Debug)]
 struct FontOutlineCoverageR8Params {
     ops_gpu: u64,
@@ -345,61 +331,6 @@ struct FontOutlineCoverageR8Params {
     rect_width: u32,
     rect_height: u32,
     optical_bias_px: f32,
-}
-
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuFontOutlineMesh {
-    pub(crate) storage_phys: u64,
-    pub(crate) storage_bytes: usize,
-    pub(crate) vertex_offset_bytes: u32,
-    pub(crate) vertex_count: u32,
-    pub(crate) vertex_stride: u32,
-    pub(crate) index_offset_bytes: u32,
-    pub(crate) index_count: u32,
-    pub(crate) min_x: f32,
-    pub(crate) min_y: f32,
-    pub(crate) max_x: f32,
-    pub(crate) max_y: f32,
-}
-
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuFontOutlineProbeResult {
-    pub(crate) available: bool,
-    pub(crate) forcewake_ok: bool,
-    pub(crate) mapped_ok: bool,
-    pub(crate) ppgtt_ok: bool,
-    pub(crate) kernel_ppgtt_ok: bool,
-    pub(crate) src_ppgtt_ok: bool,
-    pub(crate) dst_ppgtt_ok: bool,
-    pub(crate) batch_ok: bool,
-    pub(crate) submitted: bool,
-    pub(crate) retired: bool,
-    pub(crate) kernel_done: bool,
-    pub(crate) ok: bool,
-    pub(crate) retire_ms: u64,
-    pub(crate) op_count: u32,
-    pub(crate) move_count: u32,
-    pub(crate) line_count: u32,
-    pub(crate) quad_count: u32,
-    pub(crate) cubic_count: u32,
-    pub(crate) close_count: u32,
-    pub(crate) vertices: u32,
-    pub(crate) segments: u32,
-    pub(crate) indices: u32,
-    pub(crate) generated_mesh: Option<GpgpuFontOutlineMesh>,
-    pub(crate) checksum: u32,
-    pub(crate) expected_checksum: u32,
-    pub(crate) invalid: u32,
-    pub(crate) truncated: bool,
-    pub(crate) indices_in_range: bool,
-    pub(crate) min_x: f32,
-    pub(crate) min_y: f32,
-    pub(crate) max_x: f32,
-    pub(crate) max_y: f32,
-    pub(crate) pre_marker: u32,
-    pub(crate) post_marker: u32,
-    pub(crate) report_marker: u32,
-    pub(crate) done_marker: u32,
 }
 
 #[repr(C)]
