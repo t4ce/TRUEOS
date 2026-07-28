@@ -1,4 +1,5 @@
 // SceneDB positional AABB query for TRUEOS Xe-LP vVideoMem.
+// Canonical source language: C++ for OpenCL.
 //
 // All pointer arguments name pages in the submitting tenant's PPGTT.  The
 // output contract intentionally mirrors pulsar_scenedb's scalar reference:

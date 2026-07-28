@@ -130,6 +130,12 @@ pub(crate) enum GpgpuArtifactImplicitArgKind {
     GlobalIdOffset,
     LocalSize,
     EnqueuedLocalSize,
+    /// IGC's byte offset for a stateful buffer argument. TRUEOS binds every
+    /// admitted surface at offset zero and starts each indirect payload zeroed.
+    BufferOffset { arg_index: u16 },
+    /// IGC's stateless private-memory base. Scratch is forbidden for the
+    /// current direct-RCS profile, so the admitted value is always zero.
+    PrivateBaseStateless,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -256,24 +262,64 @@ impl GpgpuKernelAbiContract {
             return Err(GpgpuKernelAbiContractError::UnsupportedPerThreadData);
         }
 
-        // The current direct-RCS payload writer programs exactly these three
-        // implicit cross-thread records.  Offsets are part of the executable
-        // ABI, not descriptive metadata: reject additions or layout changes
-        // until the encoder grows the corresponding capability.
-        if self.implicit_payload_args.len() != 3 {
+        // The direct-RCS payload writer actively programs these three dispatch
+        // records. IGC may additionally publish zero-valued stateful buffer
+        // offsets and a zero private-memory base; every payload writer clears
+        // the complete indirect block before setting explicit values.
+        if self.implicit_payload_args.len() < 3 {
             return Err(GpgpuKernelAbiContractError::UnsupportedImplicitPayload);
         }
         let mut implicit_kinds = 0u8;
+        let mut buffer_offset_args = 0u64;
+        let mut private_base_seen = false;
         let mut index = 0;
         while index < self.implicit_payload_args.len() {
             let arg = self.implicit_payload_args[index];
             let (expected_offset, expected_size, kind_bit) = match arg.kind {
-                GpgpuArtifactImplicitArgKind::GlobalIdOffset => (0, 12, 1),
-                GpgpuArtifactImplicitArgKind::LocalSize => (12, 12, 2),
-                GpgpuArtifactImplicitArgKind::EnqueuedLocalSize => (32, 12, 4),
+                GpgpuArtifactImplicitArgKind::GlobalIdOffset => (Some(0), 12, 1),
+                GpgpuArtifactImplicitArgKind::LocalSize => (Some(12), 12, 2),
+                GpgpuArtifactImplicitArgKind::EnqueuedLocalSize => (Some(32), 12, 4),
+                GpgpuArtifactImplicitArgKind::BufferOffset { arg_index } => {
+                    if arg_index >= 64 {
+                        return Err(GpgpuKernelAbiContractError::UnsupportedImplicitPayload);
+                    }
+                    let bit = 1u64 << arg_index;
+                    if buffer_offset_args & bit != 0 {
+                        return Err(GpgpuKernelAbiContractError::UnsupportedImplicitPayload);
+                    }
+                    let mut pointer_found = false;
+                    let mut payload_index = 0;
+                    while payload_index < self.payload_args.len() {
+                        let payload = self.payload_args[payload_index];
+                        if payload.arg_index == arg_index
+                            && matches!(payload.kind, GpgpuArtifactArgKind::ByPointer)
+                            && matches!(
+                                payload.address_mode,
+                                GpgpuArtifactAddressMode::Stateful
+                            )
+                        {
+                            pointer_found = true;
+                            break;
+                        }
+                        payload_index += 1;
+                    }
+                    if !pointer_found {
+                        return Err(GpgpuKernelAbiContractError::UnsupportedImplicitPayload);
+                    }
+                    buffer_offset_args |= bit;
+                    (None, 4, 0)
+                }
+                GpgpuArtifactImplicitArgKind::PrivateBaseStateless => {
+                    if private_base_seen || self.scratch_bytes != 0 {
+                        return Err(GpgpuKernelAbiContractError::UnsupportedImplicitPayload);
+                    }
+                    private_base_seen = true;
+                    (None, 8, 0)
+                }
             };
-            if arg.offset_bytes != expected_offset
+            if expected_offset.is_some_and(|offset| arg.offset_bytes != offset)
                 || arg.size_bytes != expected_size
+                || arg.offset_bytes % arg.size_bytes != 0
                 || implicit_kinds & kind_bit != 0
             {
                 return Err(GpgpuKernelAbiContractError::UnsupportedImplicitPayload);

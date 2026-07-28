@@ -12,11 +12,12 @@ use spin::Mutex;
 use crate::intel::gpgpu::{
     ALPHA_BLEND_WORKLIST_FLAG_COPY, ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER,
     ALPHA_BLEND_WORKLIST_FLAG_TINT_ALPHA, ALPHA_BLEND_WORKLIST_FLAG_TINT_RGB,
-    GpgpuAlphaBlendWorklistDesc, GpgpuGlyphMaskLayer, GpgpuOwnedParticleCraftState, GpgpuPoint,
-    GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence, GpgpuRgba8Surface,
-    GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun, ParticleCraftParamsV1,
-    SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, SkyboxSampleRgb565Params, Ui4CompositorCompletion,
-    Ui4CompositorSubmission, Ui4CompositorSubmitError, Ui4SpriteSceneCompletion,
+    GpgpuAlphaBlendWorklistDesc, GpgpuGlyphMaskLayer, GpgpuOwnedParticleCraftState,
+    GpgpuOwnedRgba8Surface, GpgpuPoint, GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence,
+    GpgpuRgba8Surface, GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun,
+    ParticleCraftParamsV1, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, SkyboxSampleRgb565Params,
+    Ui4CompositorCompletion, Ui4CompositorSubmission, Ui4CompositorSubmitError,
+    Ui4SpriteSceneCompletion, allocate_font_instance_rgba8_surface_cleared,
     alpha_blend_worklist_max_descs, glyph_mask_layers_rgba8_2d_mode, particle_craft_rgba8_frame,
     poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
     queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
@@ -87,6 +88,11 @@ const ERROR_UI4: i32 = -6;
 pub(crate) const ERROR_BUSY: i32 = -7;
 const GUEST_TEXT_SCENE_BUSY_POLL_MS: u64 = 2;
 const TEXT_SCENE_FONT_ID_STAMP_ONCE: u32 = 1 << 31;
+const TEXT_SCENE_FONT_ID_BACKBUFFER: u32 = 1 << 30;
+const TEXT_SCENE_FONT_ID_FLAGS: u32 = TEXT_SCENE_FONT_ID_STAMP_ONCE | TEXT_SCENE_FONT_ID_BACKBUFFER;
+const TEXT_BACKBUFFER_SPRITE_ID: u32 = u32::MAX;
+const TEXT_BACKBUFFER_MAX_EXTENT: u32 = 4_096;
+const TEXT_BACKBUFFER_MAX_GLYPHS: usize = 4_096;
 const CLOSE_PERSIST_FINAL_FRAME: u32 = 1 << 0;
 const CLOSE_VALID_FLAGS: u32 = CLOSE_PERSIST_FINAL_FRAME;
 
@@ -308,6 +314,8 @@ struct BlueprintSceneSurface {
     retained_text_layers: Vec<BlueprintRetainedTextLayer>,
     retained_text_cursor: usize,
     retained_text_rendered: bool,
+    retained_text_backbuffer_extent: Option<(u32, u32)>,
+    retained_text_backbuffer: Option<GpgpuOwnedRgba8Surface>,
     stamped_text_layers: Vec<BlueprintStampedTextLayer>,
     stamped_text_cursor: usize,
     stamped_text_pending: Option<PendingFontFrameStamp>,
@@ -673,6 +681,8 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
                 retained_text_layers: Vec::new(),
                 retained_text_cursor: 0,
                 retained_text_rendered: false,
+                retained_text_backbuffer_extent: None,
+                retained_text_backbuffer: None,
                 stamped_text_layers: Vec::new(),
                 stamped_text_cursor: 0,
                 stamped_text_pending: None,
@@ -708,6 +718,8 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         retained_text_layers: Vec::new(),
         retained_text_cursor: 0,
         retained_text_rendered: false,
+        retained_text_backbuffer_extent: None,
+        retained_text_backbuffer: None,
         stamped_text_layers: Vec::new(),
         stamped_text_cursor: 0,
         stamped_text_pending: None,
@@ -1409,6 +1421,8 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         surface.retained_text_layers.clear();
         surface.retained_text_cursor = 0;
         surface.retained_text_rendered = false;
+        surface.retained_text_backbuffer_extent = None;
+        surface.retained_text_backbuffer = None;
         surface.stamped_text_layers.clear();
         surface.stamped_text_cursor = 0;
         surface.stamped_text_pending = None;
@@ -2053,7 +2067,11 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
         return ERROR_CONTEXT;
     };
     let stamp_once = font_id & TEXT_SCENE_FONT_ID_STAMP_ONCE != 0;
-    let Some(font) = GpuFontFace::from_id(font_id & !TEXT_SCENE_FONT_ID_STAMP_ONCE) else {
+    let backbuffer = font_id & TEXT_SCENE_FONT_ID_BACKBUFFER != 0;
+    if stamp_once && backbuffer {
+        return ERROR_INVALID;
+    }
+    let Some(font) = GpuFontFace::from_id(font_id & !TEXT_SCENE_FONT_ID_FLAGS) else {
         return ERROR_FONT;
     };
     if rows.is_null() || row_count == 0 || row_count > MAX_TEXT_ROWS {
@@ -2064,7 +2082,11 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
             return ERROR_NOT_FOUND;
         };
-        if surface.width != viewport_width || surface.height != viewport_height {
+        let frame_target = surface.width == viewport_width && surface.height == viewport_height;
+        let valid_backbuffer = backbuffer
+            && viewport_width <= TEXT_BACKBUFFER_MAX_EXTENT
+            && viewport_height <= TEXT_BACKBUFFER_MAX_EXTENT;
+        if !frame_target && !valid_backbuffer {
             return ERROR_INVALID;
         }
         if surface.write_lease.is_none() {
@@ -2119,6 +2141,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
             viewport_height,
             rgba,
             runs,
+            backbuffer,
         )
     }
 }
@@ -2174,6 +2197,7 @@ fn retain_scene_entries_for_surface(
     viewport_height: u32,
     rgba: u32,
     runs: Vec<RetainedFontRun>,
+    backbuffer: bool,
 ) -> i32 {
     let description = BlueprintRetainedTextDescription {
         font,
@@ -2190,6 +2214,30 @@ fn retain_scene_entries_for_surface(
     }
     if surface.gpu_submission_unretired {
         return ERROR_BUSY;
+    }
+    if backbuffer {
+        let extent = (viewport_width, viewport_height);
+        let glyphs = surface
+            .retained_text_layers
+            .iter()
+            .take(surface.retained_text_cursor)
+            .flat_map(|layer| layer.description.runs.iter())
+            .chain(description.runs.iter())
+            .fold(0usize, |total, run| total.saturating_add(run.text.chars().count()));
+        if glyphs > TEXT_BACKBUFFER_MAX_GLYPHS {
+            return ERROR_INVALID;
+        }
+        if surface.retained_text_cursor == 0 {
+            surface.retained_text_backbuffer_extent = Some(extent);
+            surface.retained_text_backbuffer = None;
+        } else if surface.retained_text_backbuffer_extent != Some(extent) {
+            return ERROR_INVALID;
+        }
+    } else if surface.retained_text_cursor == 0 {
+        surface.retained_text_backbuffer_extent = None;
+        surface.retained_text_backbuffer = None;
+    } else if surface.retained_text_backbuffer_extent.is_some() {
+        return ERROR_STATE;
     }
 
     let layer_index = surface.retained_text_cursor;
@@ -2320,6 +2368,9 @@ fn render_retained_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
     };
+    if surface.retained_text_backbuffer_extent.is_some() {
+        return 0;
+    }
     if surface.retained_text_rendered || surface.retained_text_cursor == 0 {
         return 0;
     }
@@ -2436,6 +2487,110 @@ fn render_retained_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
         surface.width,
         surface.height,
     );
+    0
+}
+
+/// Materialize the retained document masks once into a persistent RGBA8 source.
+///
+/// The resulting allocation belongs to the Blueprint frame rather than one
+/// UI4 back-buffer lease. Later pans therefore sample another source rectangle
+/// without re-entering FontKernel or rebuilding the DOM text scene.
+fn render_retained_text_backbuffer_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    let Some((width, height)) = surface.retained_text_backbuffer_extent else {
+        return 0;
+    };
+    if surface.retained_text_backbuffer.is_some() {
+        return 0;
+    }
+    if surface.retained_text_cursor == 0 || surface.write_lease.is_none() {
+        return ERROR_STATE;
+    }
+    if surface.gpu_submission_unretired {
+        return ERROR_BUSY;
+    }
+
+    let mut masks = Vec::with_capacity(surface.retained_text_cursor);
+    for layer in surface
+        .retained_text_layers
+        .iter()
+        .take(surface.retained_text_cursor)
+    {
+        let BlueprintRetainedTextState::Ready(scene) = &layer.state else {
+            return ERROR_BUSY;
+        };
+        for retained_mask in scene.masks() {
+            let Some((mask, origin)) = retained_mask else {
+                return ERROR_FONT;
+            };
+            masks.push(GpgpuGlyphMaskLayer {
+                mask,
+                mask_rect: GpgpuRect::new(0, 0, mask.width, mask.height),
+                dst_xy: GpgpuPoint::new(origin[0], origin[1]),
+                color_rgba: layer.color_rgba,
+            });
+        }
+    }
+    if masks.is_empty() {
+        return ERROR_FONT;
+    }
+
+    let Some(clear_rgba) = surface.sprite_clear_rgba else {
+        return ERROR_STATE;
+    };
+    let [r, g, b, a] = clear_rgba.to_le_bytes();
+    let premultiplied_clear =
+        u32::from_le_bytes(PremultipliedRgba8::from_straight_rgba(r, g, b, a).to_native_bytes());
+    let Some(storage) =
+        allocate_font_instance_rgba8_surface_cleared(width, height, premultiplied_clear)
+    else {
+        return ERROR_UI4;
+    };
+    let destination = storage.surface();
+    surface.retained_text_backbuffer = Some(storage);
+
+    let mut submits = 0usize;
+    let mut active_walkers = 0usize;
+    for chunk in masks.chunks(RETAINED_TEXT_MASK_BATCH_CAPACITY) {
+        let rendered = glyph_mask_layers_rgba8_2d_mode(chunk, destination, false);
+        submits = submits.saturating_add(rendered.submits);
+        active_walkers = active_walkers.saturating_add(rendered.active_walkers);
+        if !rendered.ok {
+            if rendered.submitted {
+                surface.gpu_submission_unretired = true;
+                crate::log_error!(
+                    target: "ui4/solara-text";
+                    "FontKernel document backbuffer quarantined owner={:?} window={} layers={} target={}x{} action=retain-rgba+resident-masks\n",
+                    owner,
+                    window_id,
+                    masks.len(),
+                    width,
+                    height,
+                );
+                return ERROR_UI4;
+            }
+            surface.retained_text_backbuffer = None;
+            return ERROR_FONT;
+        }
+    }
+
+    surface.retained_text_rendered = true;
+    crate::log_info!(
+        target: "ui4/solara-text";
+        "FontKernel document backbuffer ready owner={:?} window={} layers={} batches={} walkers={} target={}x{} storage=gpu-vm-rgba8 path=resident-r8-batch cpu_readback=0 cpu_frame_copy=0\n",
+        owner,
+        window_id,
+        masks.len(),
+        submits,
+        active_walkers,
+        width,
+        height,
+    );
+    surface.retained_text_layers.clear();
+    surface.retained_text_cursor = 0;
     0
 }
 
@@ -2961,7 +3116,7 @@ pub(crate) fn begin_sprite_rgba8_upload(
     let Some(packed_len) = expected_rgba8_len(width, height) else {
         return ERROR_INVALID;
     };
-    if sprite_id == 0 || packed_len == 0 {
+    if sprite_id == 0 || sprite_id == TEXT_BACKBUFFER_SPRITE_ID || packed_len == 0 {
         return ERROR_INVALID;
     }
     let Some(row_bytes) = (width as usize).checked_mul(core::mem::size_of::<u32>()) else {
@@ -3501,6 +3656,11 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         }
     }
 
+    let backbuffer = render_retained_text_backbuffer_for_surface(owner, window_id);
+    if backbuffer != 0 {
+        return backbuffer;
+    }
+
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
@@ -3528,6 +3688,22 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         return ERROR_UI4;
     };
 
+    let full_frame_copy = match upload.quads.as_slice() {
+        [quad] if quad.sprite_id == TEXT_BACKBUFFER_SPRITE_ID => {
+            let Some(source) = surface.retained_text_backbuffer.as_ref() else {
+                return ERROR_NOT_FOUND;
+            };
+            matches!(
+                alpha_rect_descriptor(*quad, source.surface(), destination),
+                AlphaRectConversion::Exact(descriptor)
+                    if descriptor.dst_xy == 0
+                        && descriptor.size
+                            == surface.width | (surface.height << 16)
+                        && descriptor.flags == ALPHA_BLEND_WORKLIST_FLAG_COPY
+            )
+        }
+        _ => false,
+    };
     let retry_quads = upload.quads.clone();
     let clear = TrueosUi4SpriteQuad {
         sprite_id: 0,
@@ -3543,14 +3719,21 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         ..TrueosUi4SpriteQuad::default()
     };
     let mut prepared = Vec::with_capacity(upload.quads.len().saturating_add(1));
-    prepared.push(PreparedOp::Quad {
-        sprite_id: 0,
-        source: solid.surface,
-        descriptor: gpgpu_sprite_quad_descriptor(clear),
-    });
+    if !full_frame_copy {
+        prepared.push(PreparedOp::Quad {
+            sprite_id: 0,
+            source: solid.surface,
+            descriptor: gpgpu_sprite_quad_descriptor(clear),
+        });
+    }
     for quad in upload.quads {
         let source = if quad.sprite_id == 0 {
             solid.surface
+        } else if quad.sprite_id == TEXT_BACKBUFFER_SPRITE_ID {
+            let Some(source) = surface.retained_text_backbuffer.as_ref() else {
+                return ERROR_NOT_FOUND;
+            };
+            source.surface()
         } else {
             let Some((_, source)) = surface
                 .sprites
@@ -3744,7 +3927,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                             batch_count,
                             "ui4-compositor-retirement-failed",
                         );
-                        return ERROR_BUSY;
+                        return ERROR_UI4;
                     }
                 }
             } else {
@@ -3777,7 +3960,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                             batch_count,
                             "ui4-compositor-retirement-failed",
                         );
-                        return ERROR_BUSY;
+                        return ERROR_UI4;
                     }
                 }
             };
@@ -3796,7 +3979,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                     batch_count,
                     "accepted-submission-not-retired",
                 );
-                return ERROR_BUSY;
+                return ERROR_UI4;
             }
             core::hint::spin_loop();
         }

@@ -1,4 +1,5 @@
 // TRUEOS Gen12/Alder Lake procedural pixel-shader bring-up kernel.
+// Canonical source language: C++ for OpenCL.
 //
 // Contract:
 // - Palette arguments use TRUEOS AABBGGRR u32 packing.

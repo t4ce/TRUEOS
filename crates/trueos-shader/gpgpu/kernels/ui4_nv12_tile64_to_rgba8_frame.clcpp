@@ -1,4 +1,5 @@
 // TRUEOS UI4 native-video Frame producer for Alder Lake S.
+// Canonical source language: C++ for OpenCL.
 //
 // One SIMD16 dispatch converts a decoder-owned media Y-tiled NV12 picture directly
 // into one exact UI4-owned, linear premultiplied RGBA8 Frame buffer. Pixels

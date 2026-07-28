@@ -1,4 +1,5 @@
 // TRUEOS Lab256 multi-phase compute exploration for Intel Xe-LP / ADL-S.
+// Canonical source language: C++ for OpenCL.
 //
 // This is intentionally a fixed 256x256 capability, not a general image API.
 // One IGC zebin contains three entry points which the host dispatches in order:

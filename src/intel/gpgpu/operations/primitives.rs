@@ -190,6 +190,17 @@ pub(crate) fn allocate_font_instance_rgba8_surface(
     width: u32,
     height: u32,
 ) -> Option<GpgpuOwnedRgba8Surface> {
+    allocate_font_instance_rgba8_surface_cleared(width, height, 0)
+}
+
+/// Allocate a persistent font RGBA surface with every pixel initialized to one
+/// premultiplied native RGBA value. This folds an offscreen canvas background
+/// into allocation initialization instead of spending another RCS submission.
+pub(crate) fn allocate_font_instance_rgba8_surface_cleared(
+    width: u32,
+    height: u32,
+    clear_rgba: u32,
+) -> Option<GpgpuOwnedRgba8Surface> {
     if width == 0 || height == 0 {
         return None;
     }
@@ -205,8 +216,10 @@ pub(crate) fn allocate_font_instance_rgba8_surface(
         crate::dma::dealloc(virt, bytes);
         return None;
     };
-    unsafe {
-        core::ptr::write_bytes(virt, 0, bytes);
+    let clear = clear_rgba.to_le_bytes();
+    let allocation = unsafe { core::slice::from_raw_parts_mut(virt, bytes) };
+    for pixel in allocation.chunks_exact_mut(core::mem::size_of::<u32>()) {
+        pixel.copy_from_slice(&clear);
     }
     super::dma_flush(virt, bytes);
     let Some(surface) = GpgpuRgba8Surface::new(phys, gpu, bytes, width, height, pitch_bytes) else {

@@ -1,21 +1,11 @@
 // TRUEOS Gen12/Alder Lake GPGPU skybox sampler.
+// Canonical source language: C++ for OpenCL.
 //
 // Contract:
 // - Source is an equirectangular RGB565 skybox, one ushort per pixel.
 // - Destination is a linear TRUEOS RGBA8 buffer packed as AABBGGRR in u32.
 // - One SIMD16 work item covers up to 16 adjacent output pixels.
 // - A single 2D walker covers the whole target rect.
-
-static inline uint rgba_from_rgb565(ushort pixel)
-{
-    uint r5 = ((uint)pixel >> 11) & 31u;
-    uint g6 = ((uint)pixel >> 5) & 63u;
-    uint b5 = (uint)pixel & 31u;
-    uint r = (r5 << 3) | (r5 >> 2);
-    uint g = (g6 << 2) | (g6 >> 4);
-    uint b = (b5 << 3) | (b5 >> 2);
-    return 0xFF000000u | (b << 16) | (g << 8) | r;
-}
 
 static inline float abs_f32(float value)
 {

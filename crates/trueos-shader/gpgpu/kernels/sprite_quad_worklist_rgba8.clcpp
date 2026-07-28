@@ -1,4 +1,5 @@
 // TRUEOS Gen12/Alder Lake sprite-quad worklist kernel.
+// Canonical source language: C++ for OpenCL.
 //
 // Contract:
 // - Source and destination are linear RGBA8 buffers packed as AABBGGRR in a u32.

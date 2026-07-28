@@ -1,4 +1,5 @@
 // TRUEOS UI4 single-dispatch layer compositor for Gen12/Alder Lake.
+// Canonical source language: C++ for OpenCL.
 //
 // Contract:
 // - Base and destination are linear XRGB8888/RGBA8 surfaces.

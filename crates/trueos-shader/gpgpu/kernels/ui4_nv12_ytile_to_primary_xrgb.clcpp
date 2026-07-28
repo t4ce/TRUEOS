@@ -1,4 +1,5 @@
 // TRUEOS UI4 native video compositor for Alder Lake S.
+// Canonical source language: C++ for OpenCL.
 //
 // One dispatch rebuilds the primary back buffer from the immutable XRGB base
 // and one decoder-owned Tile64 NV12 picture.  There is deliberately no

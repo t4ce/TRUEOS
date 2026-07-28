@@ -1,4 +1,5 @@
 // Staged vector-font compute bring-up.
+// Canonical source language: C++ for OpenCL.
 //
 // The CPU uploads size-independent Skrifa outline records once. Stage 1 checks
 // the ABI, stage 2 flattens curves into point storage, and stage 3 emits an
@@ -23,112 +24,80 @@
 #define RESULT_MAGIC 0xF07ECA00u
 #define RESULT_DONE 0xC001D00Du
 
-inline float2 map_font_point(float2 p, float scale, float2 origin) {
-    // The render viewport already has a negative Y scale. Preserve the font's
-    // Y-up coordinates here so ascenders remain above the baseline on screen.
-    return (float2)(origin.x + p.x * scale, origin.y + p.y * scale);
-}
+// Keep private state in the kernel body. Passing private pointers through
+// helper functions makes current IGC emit a callable-symbol program plus a
+// constant-base payload that the direct-RCS ABI intentionally does not expose.
+#define INCLUDE_BOUNDS(point_value) do { \
+    float2 bounds_point_ = (point_value); \
+    if (have_bounds == 0u) { \
+        bounds_lo = bounds_point_; \
+        bounds_hi = bounds_point_; \
+        have_bounds = 1u; \
+    } else { \
+        bounds_lo = fmin(bounds_lo, bounds_point_); \
+        bounds_hi = fmax(bounds_hi, bounds_point_); \
+    } \
+} while (0)
 
-inline void include_bounds(float2 p, float2 *lo, float2 *hi, uint *have_bounds) {
-    if (*have_bounds == 0u) {
-        *lo = p;
-        *hi = p;
-        *have_bounds = 1u;
-    } else {
-        *lo = fmin(*lo, p);
-        *hi = fmax(*hi, p);
-    }
-}
+#define EMIT_FLAT_POINT(point_value) do { \
+    float2 flat_point_ = (point_value); \
+    if (vertex_count >= max_vertices) { \
+        truncated = 1u; \
+    } else { \
+        uint flat_word_ = VERTEX_DWORD_OFFSET + vertex_count * 2u; \
+        output[flat_word_] = as_uint(flat_point_.x); \
+        output[flat_word_ + 1u] = as_uint(flat_point_.y); \
+        vertex_count += 1u; \
+    } \
+} while (0)
 
-inline uint emit_flat_point(
-    __global uint *output,
-    float2 p,
-    uint *vertex_count,
-    uint max_vertices,
-    uint *truncated
-) {
-    if (*vertex_count >= max_vertices) {
-        *truncated = 1u;
-        return 0u;
-    }
-    uint word = VERTEX_DWORD_OFFSET + *vertex_count * 2u;
-    output[word] = as_uint(p.x);
-    output[word + 1u] = as_uint(p.y);
-    *vertex_count += 1u;
-    return 1u;
-}
+#define EMIT_STROKE_SEGMENT(a_value, b_value) do { \
+    float2 stroke_a_ = (a_value); \
+    float2 stroke_b_ = (b_value); \
+    float2 stroke_delta_ = stroke_b_ - stroke_a_; \
+    float stroke_length2_ = dot(stroke_delta_, stroke_delta_); \
+    if (stroke_length2_ > 0.000001f) { \
+        if (vertex_count + 4u > max_vertices || index_count + 6u > max_indices) { \
+            truncated = 1u; \
+        } else { \
+            float stroke_inv_length_ = native_rsqrt(stroke_length2_); \
+            float2 stroke_normal_ = (float2)(-stroke_delta_.y, stroke_delta_.x) \
+                * (stroke_half_width * stroke_inv_length_); \
+            float2 stroke_q0_ = stroke_a_ + stroke_normal_; \
+            float2 stroke_q1_ = stroke_a_ - stroke_normal_; \
+            float2 stroke_q2_ = stroke_b_ + stroke_normal_; \
+            float2 stroke_q3_ = stroke_b_ - stroke_normal_; \
+            uint stroke_base_ = vertex_count; \
+            uint stroke_vertex_word_ = VERTEX_DWORD_OFFSET + stroke_base_ * 2u; \
+            output[stroke_vertex_word_ + 0u] = as_uint(stroke_q0_.x); \
+            output[stroke_vertex_word_ + 1u] = as_uint(stroke_q0_.y); \
+            output[stroke_vertex_word_ + 2u] = as_uint(stroke_q1_.x); \
+            output[stroke_vertex_word_ + 3u] = as_uint(stroke_q1_.y); \
+            output[stroke_vertex_word_ + 4u] = as_uint(stroke_q2_.x); \
+            output[stroke_vertex_word_ + 5u] = as_uint(stroke_q2_.y); \
+            output[stroke_vertex_word_ + 6u] = as_uint(stroke_q3_.x); \
+            output[stroke_vertex_word_ + 7u] = as_uint(stroke_q3_.y); \
+            uint stroke_index_word_ = INDEX_DWORD_OFFSET + index_count; \
+            output[stroke_index_word_ + 0u] = stroke_base_ + 0u; \
+            output[stroke_index_word_ + 1u] = stroke_base_ + 1u; \
+            output[stroke_index_word_ + 2u] = stroke_base_ + 2u; \
+            output[stroke_index_word_ + 3u] = stroke_base_ + 2u; \
+            output[stroke_index_word_ + 4u] = stroke_base_ + 1u; \
+            output[stroke_index_word_ + 5u] = stroke_base_ + 3u; \
+            vertex_count += 4u; \
+            index_count += 6u; \
+        } \
+    } \
+} while (0)
 
-inline uint emit_stroke_segment(
-    __global uint *output,
-    float2 a,
-    float2 b,
-    float half_width,
-    uint *vertex_count,
-    uint *index_count,
-    uint max_vertices,
-    uint max_indices,
-    uint *truncated
-) {
-    float2 delta = b - a;
-    float length2 = dot(delta, delta);
-    if (!(length2 > 0.000001f)) {
-        return 0u;
-    }
-    if (*vertex_count + 4u > max_vertices || *index_count + 6u > max_indices) {
-        *truncated = 1u;
-        return 0u;
-    }
-    float inv_length = native_rsqrt(length2);
-    float2 normal = (float2)(-delta.y, delta.x) * (half_width * inv_length);
-    float2 q0 = a + normal;
-    float2 q1 = a - normal;
-    float2 q2 = b + normal;
-    float2 q3 = b - normal;
-    uint base = *vertex_count;
-    uint vertex_word = VERTEX_DWORD_OFFSET + base * 2u;
-    output[vertex_word + 0u] = as_uint(q0.x);
-    output[vertex_word + 1u] = as_uint(q0.y);
-    output[vertex_word + 2u] = as_uint(q1.x);
-    output[vertex_word + 3u] = as_uint(q1.y);
-    output[vertex_word + 4u] = as_uint(q2.x);
-    output[vertex_word + 5u] = as_uint(q2.y);
-    output[vertex_word + 6u] = as_uint(q3.x);
-    output[vertex_word + 7u] = as_uint(q3.y);
-    uint index_word = INDEX_DWORD_OFFSET + *index_count;
-    output[index_word + 0u] = base + 0u;
-    output[index_word + 1u] = base + 1u;
-    output[index_word + 2u] = base + 2u;
-    output[index_word + 3u] = base + 2u;
-    output[index_word + 4u] = base + 1u;
-    output[index_word + 5u] = base + 3u;
-    *vertex_count += 4u;
-    *index_count += 6u;
-    return 1u;
-}
-
-inline void emit_segment(
-    __global uint *output,
-    uint stage,
-    float2 a,
-    float2 b,
-    float half_width,
-    uint *vertex_count,
-    uint *index_count,
-    uint max_vertices,
-    uint max_indices,
-    uint *segment_count,
-    uint *truncated
-) {
-    *segment_count += 1u;
-    if (stage == STAGE_FLATTEN) {
-        emit_flat_point(output, b, vertex_count, max_vertices, truncated);
-    } else if (stage == STAGE_STROKE_MESH) {
-        emit_stroke_segment(
-            output, a, b, half_width, vertex_count, index_count,
-            max_vertices, max_indices, truncated
-        );
-    }
-}
+#define EMIT_SEGMENT(a_value, b_value) do { \
+    segment_count += 1u; \
+    if (stage == STAGE_FLATTEN) { \
+        EMIT_FLAT_POINT(b_value); \
+    } else if (stage == STAGE_STROKE_MESH) { \
+        EMIT_STROKE_SEGMENT(a_value, b_value); \
+    } \
+} while (0)
 
 __attribute__((intel_reqd_sub_group_size(16)))
 __kernel void font_outline_mesh(
@@ -221,25 +190,23 @@ __kernel void font_outline_mesh(
             continue;
         }
 
-        float2 p0 = map_font_point(raw0, scale, origin);
-        float2 p1 = map_font_point(raw1, scale, origin);
-        float2 p2 = map_font_point(raw2, scale, origin);
+        // The render viewport already has a negative Y scale. Preserve the
+        // font's Y-up coordinates so ascenders remain above the baseline.
+        float2 p0 = origin + raw0 * scale;
+        float2 p1 = origin + raw1 * scale;
+        float2 p2 = origin + raw2 * scale;
 
         if (kind == OP_MOVE) {
             current = p0;
             contour_start = p0;
             have_current = 1u;
-            include_bounds(current, &bounds_lo, &bounds_hi, &have_bounds);
+            INCLUDE_BOUNDS(current);
             if (stage == STAGE_FLATTEN) {
-                emit_flat_point(output, current, &vertex_count, max_vertices, &truncated);
+                EMIT_FLAT_POINT(current);
             }
         } else if (kind == OP_LINE && have_current != 0u) {
-            include_bounds(p0, &bounds_lo, &bounds_hi, &have_bounds);
-            emit_segment(
-                output, stage, current, p0, stroke_half_width,
-                &vertex_count, &index_count, max_vertices, max_indices,
-                &segment_count, &truncated
-            );
+            INCLUDE_BOUNDS(p0);
+            EMIT_SEGMENT(current, p0);
             current = p0;
         } else if (kind == OP_QUAD && have_current != 0u) {
             float2 start = current;
@@ -247,12 +214,8 @@ __kernel void font_outline_mesh(
                 float t = (float)step / (float)subdivisions;
                 float one = 1.0f - t;
                 float2 point = one * one * start + 2.0f * one * t * p0 + t * t * p1;
-                include_bounds(point, &bounds_lo, &bounds_hi, &have_bounds);
-                emit_segment(
-                    output, stage, current, point, stroke_half_width,
-                    &vertex_count, &index_count, max_vertices, max_indices,
-                    &segment_count, &truncated
-                );
+                INCLUDE_BOUNDS(point);
+                EMIT_SEGMENT(current, point);
                 current = point;
             }
         } else if (kind == OP_CUBIC && have_current != 0u) {
@@ -264,20 +227,12 @@ __kernel void font_outline_mesh(
                     + 3.0f * one * one * t * p0
                     + 3.0f * one * t * t * p1
                     + t * t * t * p2;
-                include_bounds(point, &bounds_lo, &bounds_hi, &have_bounds);
-                emit_segment(
-                    output, stage, current, point, stroke_half_width,
-                    &vertex_count, &index_count, max_vertices, max_indices,
-                    &segment_count, &truncated
-                );
+                INCLUDE_BOUNDS(point);
+                EMIT_SEGMENT(current, point);
                 current = point;
             }
         } else if (kind == OP_CLOSE && have_current != 0u) {
-            emit_segment(
-                output, stage, current, contour_start, stroke_half_width,
-                &vertex_count, &index_count, max_vertices, max_indices,
-                &segment_count, &truncated
-            );
+            EMIT_SEGMENT(current, contour_start);
             current = contour_start;
             have_current = 0u;
         } else if (kind != OP_CLOSE) {

@@ -25,6 +25,7 @@ const RESPONSE_QUEUE_CAPACITY: usize = 4;
 const SPIRIT_GRID_COLUMNS: u32 = 39 / 2;
 const SPIRIT_GRID_ROWS: u32 = 55 / 4;
 const SPIRIT_GRID_CELL_CAPACITY: usize = SPIRIT_GRID_COLUMNS as usize * SPIRIT_GRID_ROWS as usize;
+const SPIRIT_GRID_SCALE_PERCENT: u16 = 150;
 const RESPONSE_SERVICE_POLL_MS: u64 = 16;
 const RESPONSE_READ_MS: u64 = 30_000;
 const INPUT_BROKER_SETTLE_MS: u64 = 32;
@@ -335,16 +336,18 @@ async fn request_spirit_grid() -> KernelGridLease {
         match crate::r::gridpaper_service::request_spirit_response_grid(
             SPIRIT_GRID_COLUMNS,
             SPIRIT_GRID_ROWS,
+            SPIRIT_GRID_SCALE_PERCENT,
         ) {
             Ok(lease) => return lease,
             Err(error) => {
                 if last_error != Some(error) {
                     crate::log_warn!(
                         target: "gfx";
-                        "trueos-spirit: response Gridpaper lease waiting error={:?} grid={}x{} retry_ms=250\n",
+                        "trueos-spirit: response Gridpaper lease waiting error={:?} grid={}x{} scale={} retry_ms=250\n",
                         error,
                         SPIRIT_GRID_COLUMNS,
                         SPIRIT_GRID_ROWS,
+                        SPIRIT_GRID_SCALE_PERCENT,
                     );
                     last_error = Some(error);
                 }
@@ -394,12 +397,13 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
     let keyboard = request_spirit_keyboard().await;
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: response Gridpaper service online assigned_slot={} current_slot={} grid={}x{} cells={} ownership=kernel-dedicated cursor=Spirit/Lilly keyboard_slot={} input=cell-zero-click+paired-vkeyboard wrap=whitespace-before-word style=rainbow-palette+cpp-scale-0.85..1.15 hide_after_ms={} residency=warm-hidden no-blueprint-vm=1\n",
+        "trueos-spirit: response Gridpaper service online assigned_slot={} current_slot={} grid={}x{} cells={} scale={} ownership=kernel-dedicated cursor=Spirit/Lilly keyboard_slot={} input=cell-zero-click+paired-vkeyboard wrap=whitespace-before-word style=rainbow-palette+cpp-scale-0.85..1.15 hide_after_ms={} residency=warm-hidden no-blueprint-vm=1\n",
         expected_slot,
         crate::percpu::current_slot(),
         SPIRIT_GRID_COLUMNS,
         SPIRIT_GRID_ROWS,
         SPIRIT_GRID_CELL_CAPACITY,
+        SPIRIT_GRID_SCALE_PERCENT,
         keyboard.slot_id,
         RESPONSE_READ_MS,
     );

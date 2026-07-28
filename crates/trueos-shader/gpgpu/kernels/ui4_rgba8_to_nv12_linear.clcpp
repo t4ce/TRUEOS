@@ -1,4 +1,5 @@
 // TRUEOS UI4 RDP encoder input conversion for Alder Lake S.
+// Canonical source language: C++ for OpenCL.
 //
 // One SIMD16 work-item produces one 2x2 NV12 macro-pixel from the logical
 // premultiplied RGBA8 scanout.  The fixed 4:3 nearest-neighbour mapping matches

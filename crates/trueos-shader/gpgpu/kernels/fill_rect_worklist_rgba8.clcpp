@@ -1,4 +1,5 @@
 // TRUEOS Gen12/Alder Lake GPGPU evo kernel.
+// Canonical source language: C++ for OpenCL.
 //
 // Contract:
 // - Destination is a linear RGBA8 buffer packed as AABBGGRR in a u32.

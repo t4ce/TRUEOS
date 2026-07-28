@@ -1,4 +1,5 @@
 // TRUEOS Gen12/Alder Lake 2D chart bring-up kernel.
+// Canonical source language: C++ for OpenCL.
 //
 // Contract:
 // - Destination is a linear TRUEOS RGBA8 buffer packed as AABBGGRR in u32.
@@ -118,8 +119,8 @@ __kernel void chart_sine_rgba8(
     }
 
     if ((flags & CHART_FLAG_BORDER) != 0u
-        && ((x == plot_left || x == plot_right) && y >= plot_top && y <= plot_bottom
-            || (y == plot_top || y == plot_bottom) && x >= plot_left && x <= plot_right)) {
+        && (((x == plot_left || x == plot_right) && y >= plot_top && y <= plot_bottom)
+            || ((y == plot_top || y == plot_bottom) && x >= plot_left && x <= plot_right))) {
         color = major_grid_rgba | 0xFF000000u;
     }
 

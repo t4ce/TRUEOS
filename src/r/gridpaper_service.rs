@@ -253,6 +253,7 @@ pub(crate) struct KernelGridPresentation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum KernelGridError {
     InvalidSize,
+    InvalidScale,
     PoolFull,
     LeaseLost,
 }
@@ -318,7 +319,13 @@ impl SnapshotStore {
         self.animation_serial = 0;
     }
 
-    fn claim_kernel(&mut self, owner: KernelGridOwner, size: GridSize, visible: bool) {
+    fn claim_kernel(
+        &mut self,
+        owner: KernelGridOwner,
+        size: GridSize,
+        scale_percent: u16,
+        visible: bool,
+    ) {
         let lease_epoch = self.lease_epoch.wrapping_add(1).max(1);
         self.buffers = [[0; PAGE_BYTES]; 2];
         self.published = 0;
@@ -329,7 +336,7 @@ impl SnapshotStore {
         self.producer_connected = true;
         self.lifecycle_paused = !visible;
         self.generation = 1;
-        self.scale_percent = NATIVE_SCALE_PERCENT;
+        self.scale_percent = scale_percent;
         self.size = size;
         self.serial = 1;
         self.text_animations = [None; TEXT_ANIMATION_COLOR_SLOTS];
@@ -425,8 +432,15 @@ fn find_kernel_pool_slot(
         .position(|store| store.kernel_owner == Some(owner))
 }
 
-fn request_spirit_grid(columns: u32, rows: u32) -> Result<KernelGridLease, KernelGridError> {
+fn request_spirit_grid(
+    columns: u32,
+    rows: u32,
+    scale_percent: u16,
+) -> Result<KernelGridLease, KernelGridError> {
     let size = GridSize::new(columns, rows).ok_or(KernelGridError::InvalidSize)?;
+    if !(MIN_SCALE_PERCENT..=MAX_SCALE_PERCENT).contains(&u32::from(scale_percent)) {
+        return Err(KernelGridError::InvalidScale);
+    }
     let mut stores = SNAPSHOTS.lock();
     if let Some((slot, store)) = stores.iter_mut().enumerate().find(|(_, store)| {
         store
@@ -440,14 +454,16 @@ fn request_spirit_grid(columns: u32, rows: u32) -> Result<KernelGridLease, Kerne
             store.size = size;
             store.lease_epoch = store.lease_epoch.wrapping_add(1).max(1);
         }
+        store.scale_percent = scale_percent;
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: kernel lease reused slot={} client={:?} token={} grid={}x{} residency=retained\n",
+            "gridpaper: kernel lease reused slot={} client={:?} token={} grid={}x{} scale={} residency=retained\n",
             slot,
             owner.client,
             owner.token,
             size.columns(),
             size.rows(),
+            scale_percent,
         );
         return Ok(KernelGridLease { owner });
     }
@@ -462,15 +478,16 @@ fn request_spirit_grid(columns: u32, rows: u32) -> Result<KernelGridLease, Kerne
         client: KernelGridClient::SpiritResponse,
         token: next_kernel_grid_token(),
     };
-    stores[slot].claim_kernel(owner, size, false);
+    stores[slot].claim_kernel(owner, size, scale_percent, false);
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: kernel lease claimed slot={} client={:?} token={} grid={}x{} soft_cap={}\n",
+        "gridpaper: kernel lease claimed slot={} client={:?} token={} grid={}x{} scale={} soft_cap={}\n",
         slot,
         owner.client,
         owner.token,
         size.columns(),
         size.rows(),
+        scale_percent,
         GRIDPAPER_POOL_SOFT_CAP,
     );
     Ok(KernelGridLease { owner })
@@ -482,8 +499,9 @@ fn request_spirit_grid(columns: u32, rows: u32) -> Result<KernelGridLease, Kerne
 pub(crate) fn request_spirit_response_grid(
     columns: u32,
     rows: u32,
+    scale_percent: u16,
 ) -> Result<KernelGridLease, KernelGridError> {
-    request_spirit_grid(columns, rows)
+    request_spirit_grid(columns, rows, scale_percent)
 }
 
 fn with_kernel_grid_store<R>(
@@ -1783,6 +1801,7 @@ struct PoolLeaseState {
     local_instance_id: Option<u32>,
     presentable_producer: Option<GridPaperProducer>,
     size: GridSize,
+    scale_percent: u16,
 }
 
 fn pool_lease_state(pool_slot: usize) -> PoolLeaseState {
@@ -1815,6 +1834,7 @@ fn pool_lease_state(pool_slot: usize) -> PoolLeaseState {
         local_instance_id: snapshots.local_instance_id,
         presentable_producer,
         size: snapshots.size,
+        scale_percent: snapshots.scale_percent,
     }
 }
 
@@ -1823,6 +1843,7 @@ fn attach_presentation(
     producer: GridPaperProducer,
     session: crate::ui4::WindowSessionId,
     expose_retained_front: bool,
+    scale_percent: u16,
 ) -> Result<GridPaperPresentation, ServiceError> {
     let grid_width_mm = surface.size.grid_width_mm();
     let grid_height_mm = surface.size.grid_height_mm();
@@ -1883,14 +1904,17 @@ fn attach_presentation(
     };
     surface.presentation = Some(presentation);
     if let GridPaperProducer::Kernel(owner) = producer {
+        let metrics =
+            GridSceneMetrics::new(surface.size, scale_percent, surface.width, surface.height);
+        let cell_zero = metrics.cell_rect(GridCellSelection { column: 0, row: 0 });
         let cell_zero_x = x as i32
             + libm::roundf(
-                (RULER_GUTTER_MM as f32 + CELL_EDGE_MM as f32 * 0.5) * surface.width as f32
+                (cell_zero.left + cell_zero.right) * 0.5 * surface.width as f32
                     / surface.size.scene_width().max(1) as f32,
             ) as i32;
         let cell_zero_y = y as i32
             + libm::roundf(
-                (RULER_GUTTER_MM as f32 + CELL_EDGE_MM as f32 * 0.5) * surface.height as f32
+                (cell_zero.top + cell_zero.bottom) * 0.5 * surface.height as f32
                     / surface.size.scene_height().max(1) as f32,
             ) as i32;
         KERNEL_GRID_PRESENTATIONS.lock()[surface.pool_slot] = Some(KernelGridPresentationRecord {
@@ -4279,6 +4303,7 @@ fn take_routed_input_events(pool_slot: usize) -> VecDeque<crate::ui4::Ui4InputEv
 fn attach_runtime_presentation(
     runtime: &mut GridPaperRuntime,
     producer: GridPaperProducer,
+    scale_percent: u16,
 ) -> Result<crate::ui4::WindowSessionId, ServiceError> {
     let session = crate::ui4::begin_additional_window_session(UI4_OWNER)?;
     let snapshot_is_current =
@@ -4287,9 +4312,13 @@ fn attach_runtime_presentation(
         && runtime.pending.is_none()
         && runtime.queued_snapshot.is_none()
         && snapshot_is_current;
-    if let Err(error) =
-        attach_presentation(&mut runtime.surface, producer, session, expose_retained_front)
-    {
+    if let Err(error) = attach_presentation(
+        &mut runtime.surface,
+        producer,
+        session,
+        expose_retained_front,
+        scale_percent,
+    ) {
         let _ = crate::ui4::finish_window_session(UI4_OWNER, session);
         runtime.surface.presentation = None;
         return Err(error);
@@ -5459,7 +5488,7 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
                 Ok(surface) => {
                     crate::log_info!(
                         target: "gridpaper";
-                        "gridpaper: pool runtime activated pool_slot={} producer={:?} local_instance={} grid={}x{} soft_caps={}x{} worker_slot={} ui4={}x{} extent_source={} default_scale={}\n",
+                        "gridpaper: pool runtime activated pool_slot={} producer={:?} local_instance={} grid={}x{} soft_caps={}x{} worker_slot={} ui4={}x{} extent_source={} configured_scale={}\n",
                         pool_slot,
                         lease.producer,
                         instance_id,
@@ -5471,7 +5500,7 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
                         surface.width,
                         surface.height,
                         surface.extent_source,
-                        NATIVE_SCALE_PERCENT,
+                        lease.scale_percent,
                     );
                     runtime = Some(GridPaperRuntime::new(surface));
                     last_init_error = None;
@@ -5504,7 +5533,7 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
                 let _ = release_runtime_presentation(runtime_ref, session, false);
             }
             if let Some(producer) = lease.presentable_producer {
-                match attach_runtime_presentation(runtime_ref, producer) {
+                match attach_runtime_presentation(runtime_ref, producer, lease.scale_percent) {
                     Ok(session) => {
                         presentation_session = Some(session);
                         let presentation = runtime_ref
@@ -5660,6 +5689,23 @@ mod tests {
     #[test]
     fn sole_blueprint_instance_keeps_native_font_preference() {
         assert_eq!(font_preferences(PRIMARY_INSTANCE_ID)[0], GpuFontFace::Default);
+    }
+
+    #[test]
+    fn kernel_grid_claim_preserves_requested_scale() {
+        let owner = KernelGridOwner {
+            client: KernelGridClient::SpiritResponse,
+            token: 1,
+        };
+        let size = GridSize::new(19, 13).expect("Spirit response grid size is valid");
+        let mut store = SnapshotStore::new();
+
+        store.claim_kernel(owner, size, 150, false);
+
+        assert_eq!(store.kernel_owner, Some(owner));
+        assert_eq!(store.size, size);
+        assert_eq!(store.scale_percent, 150);
+        assert!(store.lifecycle_paused);
     }
 
     #[test]

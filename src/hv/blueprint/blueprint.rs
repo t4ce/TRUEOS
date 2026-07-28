@@ -475,6 +475,18 @@ unsafe extern "C" fn portal_rust_alloc_error_handler(size: usize, align: usize) 
 
 fn portal_no_alloc_shim_is_unstable_v2() {}
 
+fn is_core_panic_bounds_check_import(name: &str) -> bool {
+    name.starts_with("_R") && name.ends_with("_4core9panicking18panic_bounds_check")
+}
+
+fn portal_core_panic_bounds_check(index: usize, len: usize) -> ! {
+    crate::hv::hverrorf(format_args!(
+        "portal: generated Blueprint bounds check failed index={} len={}",
+        index, len
+    ));
+    unsafe { crate::std_abi_shim::sys_halt() }
+}
+
 type PortalUnwindReasonCode = u32;
 type PortalUnwindTraceFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> PortalUnwindReasonCode;
 
@@ -1222,6 +1234,9 @@ pub(crate) fn elf_imports<'a>(bytes: &'a [u8]) -> Result<Vec<ElfImport<'a>>, &'s
 }
 
 fn resolve_known_import(name: &str) -> Option<usize> {
+    if is_core_panic_bounds_check_import(name) {
+        return Some(portal_core_panic_bounds_check as *const () as usize);
+    }
     if name.ends_with("___rustc26___rust_alloc_error_handler") {
         return Some(portal_rust_alloc_error_handler as *const () as usize);
     }

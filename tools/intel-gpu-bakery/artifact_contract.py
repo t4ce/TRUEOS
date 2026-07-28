@@ -891,7 +891,20 @@ def render_rust_contracts(manifest: dict[str, Any]) -> str:
                 "enqueued_local_size": (
                     "GpgpuArtifactImplicitArgKind::EnqueuedLocalSize"
                 ),
+                "private_base_stateless": (
+                    "GpgpuArtifactImplicitArgKind::PrivateBaseStateless"
+                ),
             }.get(arg["arg_type"])
+            if arg["arg_type"] == "buffer_offset":
+                arg_index = arg.get("arg_index")
+                if not isinstance(arg_index, int):
+                    raise ContractError(
+                        f"kernel {kernel_name!r}: buffer_offset lacks arg_index"
+                    )
+                kind = (
+                    "GpgpuArtifactImplicitArgKind::BufferOffset { "
+                    f"arg_index: {arg_index} }}"
+                )
             if kind is None:
                 raise ContractError(
                     f"kernel {kernel_name!r}: unsupported direct-RCS implicit "

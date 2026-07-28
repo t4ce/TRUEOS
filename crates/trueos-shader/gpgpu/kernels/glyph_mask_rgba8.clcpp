@@ -1,4 +1,5 @@
 // TRUEOS Gen12/Alder Lake GPGPU kernel seed.
+// Canonical source language: C++ for OpenCL.
 //
 // Contract:
 // - Mask source is linear 8-bit coverage.
@@ -64,4 +65,3 @@ __kernel void glyph_mask_rgba8(
 
     dst_rgba[dst_index] = (out_a << 24) | (out_b << 16) | (out_g << 8) | out_r;
 }
-
