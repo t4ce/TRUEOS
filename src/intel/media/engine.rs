@@ -62,7 +62,7 @@ const MEDIA_DEFAULT_CONTEXT_BYTES: usize = 22 * 4096;
 const MEDIA_DEFAULT_BATCH_BYTES: usize = 32 * 1024;
 const MEDIA_DEFAULT_RESULT_BYTES: usize = 4 * 4096;
 const MEDIA_DEFAULT_BITSTREAM_BYTES: usize = 8 * 1024 * 1024;
-const MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES: usize = 32 * 1024 * 1024;
+const MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES: usize = 40 * 1024 * 1024;
 const MEDIA_DEFAULT_AVC_SCRATCH_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const MEDIA_SUBMIT_POLL_ITERS: usize = 100_000;
 
@@ -948,7 +948,7 @@ fn engine_window(slot: usize) -> MediaGpuWindowLayout {
         result_gpu_addr: base + 0x0010_0000,
         bitstream_gpu_addr: base + 0x0020_0000,
         output_surface_gpu_addr: base + 0x00A0_0000,
-        avc_scratch_gpu_addr: base + 0x02A0_0000,
+        avc_scratch_gpu_addr: base + 0x0320_0000,
     }
 }
 

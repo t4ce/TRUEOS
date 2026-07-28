@@ -398,7 +398,7 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
         return Err("host heap free list corrupt after TRUEOSFS video load");
     }
 
-    let (annexb, decode_source, container) = h264_prepare_trueosfs_asset(asset)?;
+    let (annexb, sample_timing, decode_source, container) = h264_prepare_trueosfs_asset(asset)?;
     crate::log_info!(target: "ui4";
         "shell2/vid: stage=trueosfs-format-selected asset={} container={} codec=avc annexb_bytes={} decode_source={} next=vdbox-decode\n",
         path,
@@ -418,6 +418,7 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
         crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
     let report = h264_i_p_playback_probe_annexb_bytes(
         annexb,
+        sample_timing,
         decode_source,
         path,
         options,
@@ -476,12 +477,12 @@ async fn run_media_url_playback(
         return Err("media decode engine unavailable");
     }
     let mp4_bytes = h264_fetch_media_url_bytes(url, log_scope).await?;
-    let annexb = mp4_avc1_to_annexb(mp4_bytes.as_slice())?;
+    let demuxed = mp4_avc1_to_annexb(mp4_bytes.as_slice())?;
     crate::log!(
         "intel/hw_vid: {} demux accepted=1 container=mp4 codec=avc1 mp4_bytes={} annexb_bytes={} url={}\n",
         log_scope,
         mp4_bytes.len(),
-        annexb.len(),
+        demuxed.annexb.len(),
         url
     );
 
@@ -494,7 +495,8 @@ async fn run_media_url_playback(
     let old_noreset_lite =
         crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
     let report = h264_i_p_playback_probe_annexb_bytes(
-        annexb,
+        demuxed.annexb,
+        demuxed.timing,
         "media-url-mp4-avc1",
         playback_path,
         options,
@@ -649,6 +651,13 @@ struct Mp4Tfhd {
     default_sample_duration: Option<u32>,
     default_sample_size: Option<usize>,
     default_sample_flags: Option<u32>,
+}
+
+#[derive(Clone, Copy)]
+struct Mp4TrexDefaults {
+    duration: u32,
+    size: usize,
+    flags: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -840,6 +849,20 @@ fn mp4_parse_avc_track_info(
     if mp4_fourcc(data, hdlr.payload_start + 8) != Some(*b"vide") {
         return Ok(None);
     }
+    let mdhd = mp4_find_child(data, mdia.payload_start, mdia.end, *b"mdhd")
+        .ok_or("mp4 video track missing mdhd")?;
+    let mdhd_version = *data
+        .get(mdhd.payload_start)
+        .ok_or("mp4 mdhd missing version")?;
+    let timescale_offset = if mdhd_version == 1 {
+        mdhd.payload_start + 20
+    } else {
+        mdhd.payload_start + 12
+    };
+    let timescale = mp4_read_u32(data, timescale_offset).ok_or("mp4 mdhd missing timescale")?;
+    if timescale == 0 {
+        return Err("mp4 mdhd has zero timescale");
+    }
     let tkhd = mp4_find_child(data, trak.payload_start, trak.end, *b"tkhd")
         .ok_or("mp4 video track missing tkhd")?;
     let minf = mp4_find_child(data, mdia.payload_start, mdia.end, *b"minf")
@@ -851,6 +874,7 @@ fn mp4_parse_avc_track_info(
     let (length_size, sps, pps) = mp4_parse_stsd_avc1(data, stsd)?;
     Ok(Some(Mp4AvcTrackInfo {
         track_id: mp4_parse_tkhd_track_id(data, tkhd)?,
+        timescale,
         length_size,
         sps,
         pps,
@@ -935,15 +959,78 @@ fn mp4_parse_stss(
     Ok(keyframes)
 }
 
+fn mp4_parse_stts(
+    data: &[u8],
+    stts: Mp4Box,
+    sample_count: usize,
+) -> Result<Vec<u32>, &'static str> {
+    let entry_count =
+        mp4_read_u32(data, stts.payload_start + 4).ok_or("mp4 stts missing count")? as usize;
+    let mut durations = Vec::with_capacity(sample_count);
+    let mut cursor = stts.payload_start + 8;
+    for _ in 0..entry_count {
+        let count = mp4_read_u32(data, cursor).ok_or("mp4 stts truncated count")? as usize;
+        let delta = mp4_read_u32(data, cursor + 4).ok_or("mp4 stts truncated delta")?;
+        if delta == 0 || durations.len().saturating_add(count) > sample_count {
+            return Err("mp4 stts invalid run");
+        }
+        durations.resize(durations.len() + count, delta);
+        cursor = cursor.saturating_add(8);
+    }
+    if durations.len() != sample_count {
+        return Err("mp4 stts sample count mismatch");
+    }
+    Ok(durations)
+}
+
+fn mp4_parse_ctts(
+    data: &[u8],
+    ctts: Option<Mp4Box>,
+    sample_count: usize,
+) -> Result<Vec<i64>, &'static str> {
+    let Some(ctts) = ctts else {
+        return Ok(alloc::vec![0; sample_count]);
+    };
+    let version = *data.get(ctts.payload_start).ok_or("mp4 ctts too short")?;
+    if version > 1 {
+        return Err("mp4 unsupported ctts version");
+    }
+    let entry_count =
+        mp4_read_u32(data, ctts.payload_start + 4).ok_or("mp4 ctts missing count")? as usize;
+    let mut offsets = Vec::with_capacity(sample_count);
+    let mut cursor = ctts.payload_start + 8;
+    for _ in 0..entry_count {
+        let count = mp4_read_u32(data, cursor).ok_or("mp4 ctts truncated count")? as usize;
+        let raw = mp4_read_u32(data, cursor + 4).ok_or("mp4 ctts truncated offset")?;
+        let offset = if version == 1 {
+            i64::from(i32::from_be_bytes(raw.to_be_bytes()))
+        } else {
+            i64::from(raw)
+        };
+        if offsets.len().saturating_add(count) > sample_count {
+            return Err("mp4 ctts invalid run");
+        }
+        offsets.resize(offsets.len() + count, offset);
+        cursor = cursor.saturating_add(8);
+    }
+    if offsets.len() != sample_count {
+        return Err("mp4 ctts sample count mismatch");
+    }
+    Ok(offsets)
+}
+
 fn mp4_build_samples(
     sample_sizes: &[usize],
     stsc: &[Mp4StscEntry],
     chunk_offsets: &[u64],
     keyframes: &[bool],
+    durations: &[u32],
+    composition_offsets: &[i64],
     data_len: usize,
 ) -> Result<Vec<Mp4SampleRef>, &'static str> {
     let mut samples = Vec::with_capacity(sample_sizes.len());
     let mut sample_index = 0usize;
+    let mut decode_time = 0u64;
     let mut stsc_index = 0usize;
     for chunk_index0 in 0..chunk_offsets.len() {
         let chunk_number = (chunk_index0 + 1) as u32;
@@ -967,7 +1054,15 @@ fn mp4_build_samples(
                 offset,
                 size,
                 keyframe: keyframes.get(sample_index).copied().unwrap_or(false),
+                decode_time,
+                duration: *durations
+                    .get(sample_index)
+                    .ok_or("mp4 stts missing sample")?,
+                composition_offset: *composition_offsets
+                    .get(sample_index)
+                    .ok_or("mp4 ctts missing sample")?,
             });
+            decode_time = decode_time.saturating_add(u64::from(durations[sample_index]));
             offset = end;
             sample_index += 1;
         }
@@ -996,6 +1091,14 @@ fn mp4_parse_avc_track(data: &[u8], trak: Mp4Box) -> Result<Option<Mp4AvcTrack>,
         .or_else(|| mp4_find_child(data, stbl.payload_start, stbl.end, *b"co64"))
         .ok_or("mp4 video track missing chunk offsets")?;
     let sample_sizes = mp4_parse_stsz(data, stsz)?;
+    let stts = mp4_find_child(data, stbl.payload_start, stbl.end, *b"stts")
+        .ok_or("mp4 video track missing stts")?;
+    let durations = mp4_parse_stts(data, stts, sample_sizes.len())?;
+    let composition_offsets = mp4_parse_ctts(
+        data,
+        mp4_find_child(data, stbl.payload_start, stbl.end, *b"ctts"),
+        sample_sizes.len(),
+    )?;
     let stsc = mp4_parse_stsc(data, stsc_box)?;
     let chunk_offsets = mp4_parse_chunk_offsets(data, offset_box)?;
     let keyframes = mp4_parse_stss(
@@ -1008,10 +1111,13 @@ fn mp4_parse_avc_track(data: &[u8], trak: Mp4Box) -> Result<Option<Mp4AvcTrack>,
         stsc.as_slice(),
         chunk_offsets.as_slice(),
         keyframes.as_slice(),
+        durations.as_slice(),
+        composition_offsets.as_slice(),
         data.len(),
     )?;
     Ok(Some(Mp4AvcTrack {
         track_id: info.track_id,
+        timescale: info.timescale,
         length_size: info.length_size,
         sps: info.sps,
         pps: info.pps,
@@ -1034,9 +1140,13 @@ fn mp4_parse_tfhd(data: &[u8], tfhd: Mp4Box) -> Result<Mp4Tfhd, &'static str> {
     if flags & 0x000002 != 0 {
         cursor = cursor.saturating_add(4);
     }
-    if flags & 0x000008 != 0 {
+    let default_sample_duration = if flags & 0x000008 != 0 {
+        let value = mp4_read_u32(data, cursor).ok_or("mp4 tfhd missing default sample duration")?;
         cursor = cursor.saturating_add(4);
-    }
+        Some(value)
+    } else {
+        None
+    };
     let default_sample_size = if flags & 0x000010 != 0 {
         let value =
             mp4_read_u32(data, cursor).ok_or("mp4 tfhd missing default sample size")? as usize;
@@ -1054,9 +1164,24 @@ fn mp4_parse_tfhd(data: &[u8], tfhd: Mp4Box) -> Result<Mp4Tfhd, &'static str> {
         track_id,
         flags,
         base_data_offset,
+        default_sample_duration,
         default_sample_size,
         default_sample_flags,
     })
+}
+
+fn mp4_parse_trex_defaults(data: &[u8], moov: Mp4Box, track_id: u32) -> Option<Mp4TrexDefaults> {
+    let mvex = mp4_find_child(data, moov.payload_start, moov.end, *b"mvex")?;
+    for trex in mp4_collect_children(data, mvex.payload_start, mvex.end, *b"trex") {
+        if mp4_read_u32(data, trex.payload_start + 4) == Some(track_id) {
+            return Some(Mp4TrexDefaults {
+                duration: mp4_read_u32(data, trex.payload_start + 12)?,
+                size: mp4_read_u32(data, trex.payload_start + 16)? as usize,
+                flags: mp4_read_u32(data, trex.payload_start + 20)?,
+            });
+        }
+    }
+    None
 }
 
 fn mp4_sample_flags_keyframe(flags: u32) -> bool {
@@ -1069,9 +1194,11 @@ fn mp4_parse_trun_samples(
     trun: Mp4Box,
     tfhd: &Mp4Tfhd,
     fallback_data_offset: usize,
+    decode_time: &mut u64,
 ) -> Result<Vec<Mp4SampleRef>, &'static str> {
-    let flags =
-        mp4_read_u32(data, trun.payload_start).ok_or("mp4 trun missing flags")? & 0x00ff_ffff;
+    let version_flags = mp4_read_u32(data, trun.payload_start).ok_or("mp4 trun missing flags")?;
+    let version = (version_flags >> 24) as u8;
+    let flags = version_flags & 0x00ff_ffff;
     let sample_count =
         mp4_read_u32(data, trun.payload_start + 4).ok_or("mp4 trun missing sample count")? as usize;
     let mut cursor = trun.payload_start + 8;
@@ -1105,9 +1232,14 @@ fn mp4_parse_trun_samples(
         usize::try_from(data_offset).map_err(|_| "mp4 trun negative data offset")?;
     let mut samples = Vec::with_capacity(sample_count);
     for index in 0..sample_count {
-        if has_duration {
+        let duration = if has_duration {
+            let value = mp4_read_u32(data, cursor).ok_or("mp4 trun missing sample duration")?;
             cursor = cursor.saturating_add(4);
-        }
+            value
+        } else {
+            tfhd.default_sample_duration
+                .ok_or("mp4 trun missing default sample duration")?
+        };
         let size = if has_size {
             let value = mp4_read_u32(data, cursor).ok_or("mp4 trun missing sample size")? as usize;
             cursor = cursor.saturating_add(4);
@@ -1127,9 +1259,17 @@ fn mp4_parse_trun_samples(
         } else {
             tfhd.default_sample_flags.unwrap_or(0)
         };
-        if has_composition_time {
+        let composition_offset = if has_composition_time {
+            let raw = mp4_read_u32(data, cursor).ok_or("mp4 trun missing composition time")?;
             cursor = cursor.saturating_add(4);
-        }
+            if version == 1 {
+                i64::from(i32::from_be_bytes(raw.to_be_bytes()))
+            } else {
+                i64::from(raw)
+            }
+        } else {
+            0
+        };
         let sample_end = sample_offset
             .checked_add(size)
             .ok_or("mp4 trun sample offset overflow")?;
@@ -1140,10 +1280,25 @@ fn mp4_parse_trun_samples(
             offset: sample_offset,
             size,
             keyframe: mp4_sample_flags_keyframe(sample_flags),
+            decode_time: *decode_time,
+            duration,
+            composition_offset,
         });
+        *decode_time = (*decode_time).saturating_add(u64::from(duration));
         sample_offset = sample_end;
     }
     Ok(samples)
+}
+
+fn mp4_parse_tfdt(data: &[u8], tfdt: Mp4Box) -> Result<u64, &'static str> {
+    let version = *data.get(tfdt.payload_start).ok_or("mp4 tfdt too short")?;
+    if version == 1 {
+        mp4_read_u64(data, tfdt.payload_start + 4).ok_or("mp4 tfdt missing decode time")
+    } else {
+        mp4_read_u32(data, tfdt.payload_start + 4)
+            .map(u64::from)
+            .ok_or("mp4 tfdt missing decode time")
+    }
 }
 
 fn mp4_find_following_mdat(data: &[u8], cursor: usize) -> Option<Mp4Box> {
@@ -1161,6 +1316,7 @@ fn mp4_find_following_mdat(data: &[u8], cursor: usize) -> Option<Mp4Box> {
 fn mp4_parse_fragmented_samples(
     data: &[u8],
     track_id: u32,
+    trex: Option<Mp4TrexDefaults>,
 ) -> Result<Vec<Mp4SampleRef>, &'static str> {
     let mut samples = Vec::new();
     let mut cursor = 0usize;
@@ -1181,10 +1337,28 @@ fn mp4_parse_fragmented_samples(
             else {
                 continue;
             };
-            let tfhd = mp4_parse_tfhd(data, tfhd_box)?;
+            let mut tfhd = mp4_parse_tfhd(data, tfhd_box)?;
             if tfhd.track_id != track_id {
                 continue;
             }
+            if let Some(trex) = trex {
+                tfhd.default_sample_duration = tfhd.default_sample_duration.or(Some(trex.duration));
+                tfhd.default_sample_size = tfhd.default_sample_size.or(Some(trex.size));
+                tfhd.default_sample_flags = tfhd.default_sample_flags.or(Some(trex.flags));
+            }
+            let mut decode_time = mp4_find_child(data, traf.payload_start, traf.end, *b"tfdt")
+                .map(|tfdt| mp4_parse_tfdt(data, tfdt))
+                .transpose()?
+                .unwrap_or_else(|| {
+                    samples
+                        .last()
+                        .map(|sample: &Mp4SampleRef| {
+                            sample
+                                .decode_time
+                                .saturating_add(u64::from(sample.duration))
+                        })
+                        .unwrap_or(0)
+                });
             let truns = mp4_collect_children(data, traf.payload_start, traf.end, *b"trun");
             for trun in truns {
                 samples.extend(mp4_parse_trun_samples(
@@ -1193,6 +1367,7 @@ fn mp4_parse_fragmented_samples(
                     trun,
                     &tfhd,
                     fallback_data_offset,
+                    &mut decode_time,
                 )?);
             }
         }
@@ -1210,7 +1385,7 @@ fn mp4_emit_annexb_nal(out: &mut Vec<u8>, nal: &[u8]) {
 }
 
 fn mp4_emit_annexb_aud(out: &mut Vec<u8>) {
-    // primary_pic_type=7 keeps the marker generic for mixed I/P streams.
+    // primary_pic_type=7 keeps the marker generic for mixed I/P/B streams.
     out.extend_from_slice(&[0, 0, 0, 1, 0x09, 0xF0]);
 }
 
@@ -1218,8 +1393,9 @@ fn mp4_emit_track_annexb(
     data: &[u8],
     track: &Mp4AvcTrack,
     mode: &str,
-) -> Result<Vec<u8>, &'static str> {
+) -> Result<H264DemuxedAvc, &'static str> {
     let mut out = Vec::with_capacity(data.len().min(128 * 1024 * 1024));
+    let mut timing = Vec::with_capacity(track.samples.len());
     for sps in track.sps.as_slice() {
         mp4_emit_annexb_nal(&mut out, sps.as_slice());
     }
@@ -1260,6 +1436,14 @@ fn mp4_emit_track_annexb(
             cursor = nal_end;
         }
         samples_emitted += 1;
+        timing.push(H264SampleTiming {
+            dts: sample.decode_time,
+            pts: i64::try_from(sample.decode_time)
+                .unwrap_or(i64::MAX)
+                .saturating_add(sample.composition_offset),
+            duration: sample.duration,
+            timescale: track.timescale,
+        });
     }
     if out.is_empty() || samples_emitted == 0 {
         return Err("mp4 avc track produced no annexb");
@@ -1275,10 +1459,13 @@ fn mp4_emit_track_annexb(
         out.len(),
         mp4_fourcc_name(mp4_fourcc(data, 4).unwrap_or(*b"????")).as_str()
     );
-    Ok(out)
+    Ok(H264DemuxedAvc {
+        annexb: out,
+        timing,
+    })
 }
 
-fn mp4_avc1_to_annexb(data: &[u8]) -> Result<Vec<u8>, &'static str> {
+fn mp4_avc1_to_annexb(data: &[u8]) -> Result<H264DemuxedAvc, &'static str> {
     let moov = mp4_find_child(data, 0, data.len(), *b"moov").ok_or("mp4 missing moov")?;
     let traks = mp4_collect_children(data, moov.payload_start, moov.end, *b"trak");
     let mut first_classic_err = None;
@@ -1297,9 +1484,14 @@ fn mp4_avc1_to_annexb(data: &[u8]) -> Result<Vec<u8>, &'static str> {
             let Some(info) = mp4_parse_avc_track_info(data, trak)? else {
                 continue;
             };
-            let samples = mp4_parse_fragmented_samples(data, info.track_id)?;
+            let samples = mp4_parse_fragmented_samples(
+                data,
+                info.track_id,
+                mp4_parse_trex_defaults(data, moov, info.track_id),
+            )?;
             let track = Mp4AvcTrack {
                 track_id: info.track_id,
+                timescale: info.timescale,
                 length_size: info.length_size,
                 sps: info.sps,
                 pps: info.pps,
@@ -1332,19 +1524,19 @@ fn h264_is_mp4_container(data: &[u8]) -> bool {
 
 fn h264_prepare_trueosfs_asset(
     asset: Vec<u8>,
-) -> Result<(Vec<u8>, &'static str, &'static str), &'static str> {
+) -> Result<(Vec<u8>, Vec<H264SampleTiming>, &'static str, &'static str), &'static str> {
     // Test ISO BMFF first: an MP4 mdat can naturally contain Annex-B-looking
     // byte sequences even though its AVC samples are length-prefixed.
     if h264_is_mp4_container(asset.as_slice()) {
-        let annexb = mp4_avc1_to_annexb(asset.as_slice())?;
-        if annexb.is_empty() || annexb.len() > H264_TRUEOSFS_VIDEO_MAX_BYTES {
+        let demuxed = mp4_avc1_to_annexb(asset.as_slice())?;
+        if demuxed.annexb.is_empty() || demuxed.annexb.len() > H264_TRUEOSFS_VIDEO_MAX_BYTES {
             return Err("demuxed TRUEOSFS H.264 size outside playback limit");
         }
-        return Ok((annexb, "trueosfs-mp4-avc", "mp4"));
+        return Ok((demuxed.annexb, demuxed.timing, "trueosfs-mp4-avc", "mp4"));
     }
 
     if h264_has_annexb_start_code(asset.as_slice()) {
-        return Ok((asset, "trueosfs-root-annexb", "annexb"));
+        return Ok((asset, Vec::new(), "trueosfs-root-annexb", "annexb"));
     }
 
     Err("unsupported TRUEOSFS video format (expected H.264 Annex-B or AVC MP4)")
@@ -1371,6 +1563,7 @@ struct H264AccessUnit {
     data: Vec<u8>,
     sps: Vec<u8>,
     pps: Vec<u8>,
+    timing: Option<H264SampleTiming>,
 }
 
 struct H264AccessUnitBuilder {
@@ -1420,6 +1613,7 @@ impl H264AccessUnitBuilder {
             data: self.data,
             sps: sps.to_vec(),
             pps: pps.to_vec(),
+            timing: None,
         }
     }
 }
@@ -1588,6 +1782,7 @@ async fn h264_wait_until_next_frame(
 
 async fn h264_i_p_playback_probe_annexb_bytes(
     bytes: Vec<u8>,
+    sample_timing: Vec<H264SampleTiming>,
     source: &'static str,
     path: &str,
     mode: H264PlaybackOptions,
@@ -1603,6 +1798,7 @@ async fn h264_i_p_playback_probe_annexb_bytes(
     h264_i_p_playback_probe_with_reader(
         reader,
         stream_bytes,
+        sample_timing,
         source,
         path,
         mode,
@@ -1614,6 +1810,7 @@ async fn h264_i_p_playback_probe_annexb_bytes(
 async fn h264_i_p_playback_probe_with_reader(
     mut reader: H264NalReader,
     stream_bytes: u64,
+    sample_timing: Vec<H264SampleTiming>,
     source: &'static str,
     path: &str,
     mode: H264PlaybackOptions,
@@ -1622,6 +1819,7 @@ async fn h264_i_p_playback_probe_with_reader(
     let mut nal_count = 0usize;
     let mut idr_seen = 0usize;
     let mut p_seen = 0usize;
+    let mut b_seen = 0usize;
     let mut attempted = 0usize;
     let mut retired = 0usize;
     let mut first_failure_frame = 0usize;
@@ -1646,7 +1844,7 @@ async fn h264_i_p_playback_probe_with_reader(
     );
 
     crate::log!(
-        "intel/hw_vid: h264-playback start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source={} path={} mode=memory-annexb presentation=ui4-rgba-stream rgba_buffers={} diagnostics={} noreset_lite={} stop=eos\n",
+        "intel/hw_vid: h264-playback start bytes={} fps={} frame_ms={} frame_ticks={} subset=progressive-i-p-b source={} path={} mode=memory-annexb presentation=pts-ordered-ui4-rgba-stream rgba_buffers={} diagnostics={} noreset_lite={} stop=eos\n",
         stream_bytes,
         mode.fps(),
         mode.frame_ms(),
@@ -1709,6 +1907,19 @@ async fn h264_i_p_playback_probe_with_reader(
     ) {
         access_units.push(unit);
     }
+    if !sample_timing.is_empty() && sample_timing.len() == access_units.len() {
+        for (unit, timing) in access_units.iter_mut().zip(sample_timing.iter().copied()) {
+            unit.timing = Some(timing);
+        }
+    } else if !sample_timing.is_empty() {
+        crate::log_error!(
+            "intel/hw_vid: mp4-timing rejected=1 reason=sample-access-unit-count-mismatch samples={} access_units={} action=reject-stream\n",
+            sample_timing.len(),
+            access_units.len(),
+        );
+        skipped_unsupported_frames = skipped_unsupported_frames.saturating_add(access_units.len());
+        access_units.clear();
+    }
 
     crate::log!(
         "intel/hw_vid: h264-access-units nals={} vcl_nals={} access_units={} missing_headers={} stopped_at=0x{:X}\n",
@@ -1726,11 +1937,59 @@ async fn h264_i_p_playback_probe_with_reader(
     }
     let playback_start = EmbassyInstant::now();
     let mut next_frame_deadline = playback_start;
-    for unit in access_units {
+    let access_unit_count = access_units.len();
+    let mut presentation_indices: Vec<usize> = (0..access_unit_count).collect();
+    presentation_indices.sort_by(|lhs, rhs| {
+        let lhs_timing = access_units[*lhs].timing;
+        let rhs_timing = access_units[*rhs].timing;
+        match (lhs_timing, rhs_timing) {
+            (Some(lhs_timing), Some(rhs_timing)) => lhs_timing
+                .pts
+                .cmp(&rhs_timing.pts)
+                .then(lhs_timing.dts.cmp(&rhs_timing.dts))
+                .then(lhs.cmp(rhs)),
+            _ => lhs.cmp(rhs),
+        }
+    });
+    let base_pts = presentation_indices
+        .first()
+        .and_then(|index| access_units[*index].timing)
+        .map(|timing| timing.pts)
+        .unwrap_or(0);
+    let mut presentation_rank = alloc::vec![0usize; access_unit_count];
+    for (rank, decode_index) in presentation_indices.iter().copied().enumerate() {
+        presentation_rank[decode_index] = rank;
+    }
+    let reordered_samples = presentation_indices
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(rank, decode_index)| *rank != *decode_index)
+        .count();
+    let timed_samples = access_units
+        .iter()
+        .filter(|unit| unit.timing.is_some())
+        .count();
+    let timing_timescale = access_units
+        .iter()
+        .find_map(|unit| unit.timing)
+        .map(|timing| timing.timescale)
+        .unwrap_or(0);
+    crate::log!(
+        "intel/hw_vid: h264-presentation-order samples={} timed={} reordered={} base_pts={} timescale={} decode_order=dts presentation_order=pts\n",
+        access_unit_count,
+        timed_samples,
+        reordered_samples,
+        base_pts,
+        timing_timescale
+    );
+    let mut presentation_slots = alloc::vec![H264PresentationSlot::Waiting; access_unit_count];
+    let mut next_presentation_rank = 0usize;
+
+    for (decode_index, unit) in access_units.into_iter().enumerate() {
+        let rank = presentation_rank[decode_index];
         if unit.nal_type == 5 {
             idr_seen += 1;
-        } else {
-            p_seen += 1;
         }
         let indexed_frame = indexed_frames.len();
         if unit.nal_type == 5 {
@@ -1740,7 +1999,7 @@ async fn h264_i_p_playback_probe_with_reader(
         frame.extend_from_slice(unit.sps.as_slice());
         frame.extend_from_slice(unit.pps.as_slice());
         frame.extend_from_slice(unit.data.as_slice());
-        let detail = super::h264_cmd::parse_annexb_single_i_or_p_debug(frame.as_slice())
+        let detail = super::h264_cmd::parse_annexb_single_picture_debug(frame.as_slice())
             .map_err(|err| {
                 crate::log!(
                     "intel/hw_vid: h264-frame-index detail-parse-failed source_frame={} stream_idr={} nal={} offset=0x{:X} bytes=0x{:X} slices={} nals={} err={:?}\n",
@@ -1756,6 +2015,11 @@ async fn h264_i_p_playback_probe_with_reader(
                 err
             })
             .ok();
+        match detail.as_ref().map(|detail| detail.class) {
+            Some(super::h264_cmd::AvcSliceClass::P) => p_seen += 1,
+            Some(super::h264_cmd::AvcSliceClass::B) => b_seen += 1,
+            _ => {}
+        }
         let decodable = detail.is_some();
         indexed_frames.push(H264IndexedFrame {
             stream_offset: unit.stream_offset,
@@ -1771,52 +2035,98 @@ async fn h264_i_p_playback_probe_with_reader(
 
         if !decodable {
             skipped_unsupported_frames = skipped_unsupported_frames.saturating_add(1);
-            h264_wait_until_next_frame(
+            presentation_slots[rank] = H264PresentationSlot::Skipped(unit.timing);
+        } else {
+            attempted += 1;
+            let decode_start = EmbassyInstant::now();
+            match h264_decode_wait_frame(
+                "dts",
+                attempted,
+                idr_seen,
+                &frame,
+                mode.diagnostics(),
+                vcs0_session_generation,
+                Some(&mut playback_timing),
+            )
+            .await
+            {
+                Ok(output) => {
+                    retired = retired.saturating_add(1);
+                    if crate::intel::hw_pic::hold_h264_output_surface(&output) {
+                        presentation_slots[rank] =
+                            H264PresentationSlot::Ready(H264PendingPresentation {
+                                output,
+                                playback_frame: attempted,
+                                stream_idr_index: idr_seen,
+                                timing: unit.timing,
+                            });
+                    } else {
+                        presentation_slots[rank] = H264PresentationSlot::Skipped(unit.timing);
+                        if first_failure_frame == 0 {
+                            first_failure_frame = attempted;
+                            first_failure_error = H264_UI4_PRESENT_ERROR;
+                        }
+                    }
+                }
+                Err(error) => {
+                    presentation_slots[rank] = H264PresentationSlot::Skipped(unit.timing);
+                    if first_failure_frame == 0 {
+                        first_failure_frame = attempted;
+                        first_failure_error = error;
+                    }
+                }
+            }
+            playback_timing.record_decode_ticks(
+                EmbassyInstant::now()
+                    .saturating_duration_since(decode_start)
+                    .as_ticks(),
+            );
+        }
+
+        while next_presentation_rank < presentation_slots.len() {
+            let slot = presentation_slots[next_presentation_rank];
+            let timing = match slot {
+                H264PresentationSlot::Waiting => break,
+                H264PresentationSlot::Skipped(timing) => timing,
+                H264PresentationSlot::Ready(pending) => pending.timing,
+            };
+            h264_wait_for_presentation_time(
+                playback_start,
+                timing,
+                base_pts,
                 &mut next_frame_deadline,
                 frame_period,
                 &mut playback_timing,
             )
             .await;
-            continue;
+            if let H264PresentationSlot::Ready(pending) = slot {
+                let present_start = EmbassyInstant::now();
+                let queued = h264_queue_probe_output(
+                    "pts",
+                    pending.playback_frame,
+                    pending.stream_idr_index,
+                    &pending.output,
+                )
+                .await;
+                let _ = crate::ui4::wait_decoded_nv12_conversion_idle().await;
+                crate::intel::hw_pic::release_h264_output_surface(&pending.output);
+                playback_timing.record_present_ticks(
+                    EmbassyInstant::now()
+                        .saturating_duration_since(present_start)
+                        .as_ticks(),
+                );
+                if !queued && first_failure_frame == 0 {
+                    first_failure_frame = pending.playback_frame;
+                    first_failure_error = if pending.output.error_code != 0 {
+                        pending.output.error_code
+                    } else {
+                        H264_UI4_PRESENT_ERROR
+                    };
+                }
+            }
+            presentation_slots[next_presentation_rank] = H264PresentationSlot::Waiting;
+            next_presentation_rank = next_presentation_rank.saturating_add(1);
         }
-
-        if unit.nal_type == 5 && attempted != 0 {
-            let drained = crate::ui4::wait_decoded_nv12_conversion_idle().await;
-            crate::log_info!(target: "intel-media";
-                "intel/hw_vid: conversion-idr-boundary drained=1 generation={} before_frame={} queued={} completed={} published={} source_slot_reuse=avc-idr-slot0\n",
-                drained.generation,
-                attempted.saturating_add(1),
-                drained.queued,
-                drained.completed,
-                drained.published,
-            );
-        }
-        attempted += 1;
-        let decode_start = EmbassyInstant::now();
-        let outcome = h264_submit_wait_ui4_frame(
-            "forward",
-            attempted,
-            idr_seen,
-            &frame,
-            mode.diagnostics(),
-            vcs0_session_generation,
-            Some(&mut playback_timing),
-        )
-        .await;
-        if outcome.retired {
-            retired = retired.saturating_add(1);
-        }
-        if !outcome.presentation_queued && first_failure_frame == 0 {
-            first_failure_frame = attempted;
-            first_failure_error = outcome.error_code;
-        }
-        playback_timing.record_decode_ticks(
-            EmbassyInstant::now()
-                .saturating_duration_since(decode_start)
-                .as_ticks(),
-        );
-        h264_wait_until_next_frame(&mut next_frame_deadline, frame_period, &mut playback_timing)
-            .await;
     }
 
     let conversion_report = crate::ui4::wait_decoded_nv12_conversion_idle().await;
@@ -1937,10 +2247,11 @@ async fn h264_i_p_playback_probe_with_reader(
     );
 
     crate::log!(
-        "intel/hw_vid: h264-playback done nals={} idr_seen={} p_seen={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} indexed_frames={} missing_headers={} stopped_at=0x{:X} target_fps={} target_frame_ms={} elapsed_ms={} effective_fps_x100={} waited_frames={} late_frames={} total_wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_queue_us={} avg_process_us={} mode_transitions={} engine_resets={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} max_poll_us={} avg_post_us={} avg_handoff_us={} max_handoff_us={} conversion_queued={} conversion_completed={} conversion_handoff_wait_events={} conversion_rgba_buffer_wait_events={} conversion_rcs_submit_wait_events={} conversion_max_outstanding={} avg_conversion_us={} max_conversion_us={} avg_poll_iters={} reason={}\n",
+        "intel/hw_vid: h264-playback done nals={} idr_seen={} p_seen={} b_seen={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} indexed_frames={} missing_headers={} stopped_at=0x{:X} target_fps={} target_frame_ms={} elapsed_ms={} effective_fps_x100={} waited_frames={} late_frames={} total_wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_queue_us={} avg_process_us={} mode_transitions={} engine_resets={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} max_poll_us={} avg_post_us={} avg_handoff_us={} max_handoff_us={} conversion_queued={} conversion_completed={} conversion_handoff_wait_events={} conversion_rgba_buffer_wait_events={} conversion_rcs_submit_wait_events={} conversion_max_outstanding={} avg_conversion_us={} max_conversion_us={} avg_poll_iters={} reason={}\n",
         nal_count,
         idr_seen,
         p_seen,
+        b_seen,
         playback_report.attempted,
         playback_report.retired,
         playback_report.presented,
@@ -1991,24 +2302,55 @@ async fn h264_i_p_playback_probe_with_reader(
     playback_report
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct H264FrameOutcome {
-    retired: bool,
-    presentation_queued: bool,
-    error_code: i32,
+#[derive(Copy, Clone)]
+struct H264PendingPresentation {
+    output: super::hw_pic::HwPicOutput,
+    playback_frame: usize,
+    stream_idr_index: usize,
+    timing: Option<H264SampleTiming>,
 }
 
-impl H264FrameOutcome {
-    const fn failed(error_code: i32) -> Self {
-        Self {
-            retired: false,
-            presentation_queued: false,
-            error_code,
-        }
+#[derive(Copy, Clone)]
+enum H264PresentationSlot {
+    Waiting,
+    Skipped(Option<H264SampleTiming>),
+    Ready(H264PendingPresentation),
+}
+
+async fn h264_wait_for_presentation_time(
+    playback_start: EmbassyInstant,
+    timing: Option<H264SampleTiming>,
+    base_pts: i64,
+    next_fixed_deadline: &mut EmbassyInstant,
+    frame_period: EmbassyDuration,
+    playback_timing: &mut H264PlaybackTiming,
+) {
+    let Some(timing) = timing else {
+        h264_wait_until_next_frame(next_fixed_deadline, frame_period, playback_timing).await;
+        return;
+    };
+    let pts_from_start = timing.pts.saturating_sub(base_pts).max(0) as u64;
+    let target_ticks = (u128::from(pts_from_start))
+        .saturating_mul(u128::from(embassy_time_driver::TICK_HZ))
+        / u128::from(timing.timescale.max(1));
+    let deadline = playback_start + EmbassyDuration::from_ticks(target_ticks as u64);
+    let now = EmbassyInstant::now();
+    if now < deadline {
+        let wait_start = now.as_ticks();
+        Timer::at(deadline).await;
+        playback_timing.waited_frames = playback_timing.waited_frames.saturating_add(1);
+        playback_timing.total_wait_ticks = playback_timing
+            .total_wait_ticks
+            .saturating_add(EmbassyInstant::now().as_ticks().saturating_sub(wait_start));
+    } else {
+        playback_timing.late_frames = playback_timing.late_frames.saturating_add(1);
+        playback_timing.max_late_ticks = playback_timing
+            .max_late_ticks
+            .max(now.saturating_duration_since(deadline).as_ticks());
     }
 }
 
-async fn h264_submit_wait_ui4_frame(
+async fn h264_decode_wait_frame(
     phase: &'static str,
     playback_frame: usize,
     stream_idr_index: usize,
@@ -2016,7 +2358,7 @@ async fn h264_submit_wait_ui4_frame(
     diagnostics: bool,
     vcs0_session_generation: u64,
     mut timing: Option<&mut H264PlaybackTiming>,
-) -> H264FrameOutcome {
+) -> Result<super::hw_pic::HwPicOutput, i32> {
     if diagnostics {
         let before = crate::intel::hw_pic_snapshot();
         crate::log!(
@@ -2045,7 +2387,7 @@ async fn h264_submit_wait_ui4_frame(
                 stream_idr_index,
                 err
             );
-            return H264FrameOutcome::failed(err);
+            return Err(err);
         }
     };
 
@@ -2062,26 +2404,15 @@ async fn h264_submit_wait_ui4_frame(
             after.outputs,
             after.service_started as u8
         );
-        return H264FrameOutcome::failed(H264_FRAME_TIMEOUT_ERROR);
+        return Err(H264_FRAME_TIMEOUT_ERROR);
     };
 
     if let Some(timing) = timing.as_deref_mut() {
         timing.record_hw_pic_timing(output.timing);
     }
-    let present_start = EmbassyInstant::now();
-    let presentation_queued =
-        h264_queue_probe_output(phase, playback_frame, stream_idr_index, &output).await;
-    if let Some(timing) = timing.as_deref_mut() {
-        timing.record_present_ticks(
-            EmbassyInstant::now()
-                .saturating_duration_since(present_start)
-                .as_ticks(),
-        );
-    }
-
     if diagnostics {
         crate::log!(
-            "intel/hw_vid: h264-frame output phase={} playback_frame={} stream_idr={} id={} codec={:?} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} destination=ui4-rgba-stream rgba_buffers={} err={}\n",
+            "intel/hw_vid: h264-frame output phase={} playback_frame={} stream_idr={} id={} codec={:?} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} surface_slot={} stored=deferred-pts destination=ui4-rgba-stream rgba_buffers={} err={}\n",
             phase,
             playback_frame,
             stream_idr_index,
@@ -2098,25 +2429,21 @@ async fn h264_submit_wait_ui4_frame(
             output.byte_len,
             output.gpu_addr,
             output.phys_addr,
-            presentation_queued as u8,
+            output.surface_slot,
             crate::ui4::VIDEO_RGBA_BUFFER_COUNT,
             output.error_code
         );
     }
-    let retired = matches!(
+    if matches!(
         output.status,
         super::hw_pic::HwPicStatus::Ready | super::hw_pic::HwPicStatus::Streamed
-    );
-    H264FrameOutcome {
-        retired,
-        presentation_queued,
-        error_code: if presentation_queued {
-            0
-        } else if output.error_code != 0 {
-            output.error_code
-        } else {
-            H264_UI4_PRESENT_ERROR
-        },
+    ) && output.error_code == 0
+    {
+        Ok(output)
+    } else if output.error_code != 0 {
+        Err(output.error_code)
+    } else {
+        Err(H264_UI4_PRESENT_ERROR)
     }
 }
 

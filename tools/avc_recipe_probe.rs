@@ -1,6 +1,6 @@
 extern crate alloc;
 
-#[path = "../src/intel/xelp_media_avc_decode_recipe.rs"]
+#[path = "../src/intel/media/h264_cmd.rs"]
 mod xelp_media_avc_decode_recipe;
 
 use xelp_media_avc_decode_recipe::*;
@@ -27,50 +27,73 @@ fn addr_hi(dwords: &[u32], offset: usize) -> u32 {
 
 fn main() {
     let bytes = include_bytes!("vid/x31_head_movie_first_frame.h264");
-    let plan = parse_annexb_single_idr_plan(bytes).expect("parse x31 first frame");
-    validate_long_format_single_idr(plan).expect("validate x31 first frame plan");
+    let plan =
+        parse_annexb_single_idr_plan(bytes).expect("parse x31 first frame");
+    validate_long_format_single_idr(plan)
+        .expect("validate x31 first frame plan");
 
     let base = 0x1_0000_0000u64;
     let bitstream_base = base + 0x0100_0000;
     let bitstream_window_bytes = 8 * 1024 * 1024;
     let bitstream_upper_bound = bitstream_base + bitstream_window_bytes as u64;
-    let missing_reference =
-        base + avc_missing_reference_surface_offset(plan.resources.dest_surface.byte_len) as u64;
+    let missing_reference = base
+        + avc_missing_reference_surface_offset(
+            plan.resources.dest_surface.byte_len,
+        ) as u64;
     let scratch = base + 0x0200_0000;
     let align = MFX_GENERAL_STATE_ALIGNMENT as usize;
     let intra = scratch;
     let deblock = intra + align_up(plan.resources.rowstore.intra, align) as u64;
-    let bsd_mpc = deblock + align_up(plan.resources.rowstore.deblocking_filter, align) as u64;
+    let bsd_mpc = deblock
+        + align_up(plan.resources.rowstore.deblocking_filter, align) as u64;
     let mpr = bsd_mpc + align_up(plan.resources.rowstore.bsd_mpc, align) as u64;
     let dmv_write = mpr + align_up(plan.resources.rowstore.mpr, align) as u64;
-    let dmv_reference =
-        dmv_write + align_up(plan.resources.dmv_write_buffer_bytes, align) as u64;
+    let dmv_reference = dmv_write
+        + align_up(plan.resources.dmv_write_buffer_bytes, align) as u64;
     let bindings = AvcPacketResourceBindings {
         dest_surface: range(base, plan.resources.dest_surface.byte_len),
         missing_reference_surface: range(
             missing_reference,
             plan.resources.dest_surface.byte_len,
         ),
+        reference_surfaces: [range(
+            missing_reference,
+            plan.resources.dest_surface.byte_len,
+        ); 16],
         bitstream: range(bitstream_base, bitstream_window_bytes),
         intra_rowstore: range(intra, plan.resources.rowstore.intra),
-        deblocking_filter_rowstore: range(deblock, plan.resources.rowstore.deblocking_filter),
+        deblocking_filter_rowstore: range(
+            deblock,
+            plan.resources.rowstore.deblocking_filter,
+        ),
         bsd_mpc_rowstore: range(bsd_mpc, plan.resources.rowstore.bsd_mpc),
         mpr_rowstore: range(mpr, plan.resources.rowstore.mpr),
-        dmv_write_buffer: range(dmv_write, plan.resources.dmv_write_buffer_bytes),
+        dmv_write_buffer: range(
+            dmv_write,
+            plan.resources.dmv_write_buffer_bytes,
+        ),
         dmv_reference_buffer: range(
             dmv_reference,
             plan.resources.dmv_reference_buffer_bytes,
         ),
     };
-    let stream =
-        build_long_format_single_idr_command_stream(plan, bindings).expect("build command stream");
+    let stream = build_long_format_single_idr_command_stream(plan, bindings)
+        .expect("build command stream");
     assert!(validate_long_format_single_idr_command_stream_shape(&stream));
     assert!(validate_long_format_single_idr_command_blocks());
     assert_eq!(plan.picture.pic_width_in_mbs(), 120);
     assert_eq!(plan.picture.pic_height_in_mbs(), 68);
-    assert!(plan.picture.macroblock_count() <= MFX_AVC_IMG_FRAME_SIZE_MAX as usize);
-    assert!(u32::from(plan.picture.pic_width_in_mbs_minus1) <= MFX_AVC_IMG_DIMENSION_MAX);
-    assert!(u32::from(plan.picture.pic_height_in_mbs_minus1) <= MFX_AVC_IMG_DIMENSION_MAX);
+    assert!(
+        plan.picture.macroblock_count() <= MFX_AVC_IMG_FRAME_SIZE_MAX as usize
+    );
+    assert!(
+        u32::from(plan.picture.pic_width_in_mbs_minus1)
+            <= MFX_AVC_IMG_DIMENSION_MAX
+    );
+    assert!(
+        u32::from(plan.picture.pic_height_in_mbs_minus1)
+            <= MFX_AVC_IMG_DIMENSION_MAX
+    );
     assert_eq!(plan.picture.coded_width(), 1920);
     assert_eq!(plan.picture.coded_height(), 1088);
     assert_eq!(plan.resources.dest_surface.pitch_bytes, 2048);
@@ -83,11 +106,15 @@ fn main() {
     assert_eq!(plan.slice.slice_data_bit_offset_from_payload, 26);
     assert_eq!(
         plan.slice.first_mb_byte_offset,
-        avc_long_format_first_mb_byte_offset(plan.slice.slice_data_bit_offset_from_payload)
+        avc_long_format_first_mb_byte_offset(
+            plan.slice.slice_data_bit_offset_from_payload
+        )
     );
     assert_eq!(
         plan.slice.slice_data_bit_offset,
-        avc_long_format_first_mb_bit_offset(plan.slice.slice_data_bit_offset_from_payload)
+        avc_long_format_first_mb_bit_offset(
+            plan.slice.slice_data_bit_offset_from_payload
+        )
     );
     assert!(plan.slice.first_mb_byte_offset >= 1);
     let slice_record = avc_long_format_slice_record(plan.slice);
@@ -196,7 +223,10 @@ fn main() {
     );
     for ref_idx in 0..16 {
         let ref_offset = AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 19 + ref_idx * 2;
-        assert_eq!(addr_lo(&stream.dwords, ref_offset), missing_reference as u32);
+        assert_eq!(
+            addr_lo(&stream.dwords, ref_offset),
+            missing_reference as u32
+        );
         assert_eq!(
             addr_hi(&stream.dwords, ref_offset),
             (missing_reference >> 32) as u32
@@ -253,7 +283,9 @@ fn main() {
     for poc_idx in 0..34 {
         let expected = match poc_idx {
             MFX_AVC_DMV_DEST_TOP => plan.picture.top_field_order_cnt as u32,
-            MFX_AVC_DMV_DEST_BOTTOM => plan.picture.bottom_field_order_cnt as u32,
+            MFX_AVC_DMV_DEST_BOTTOM => {
+                plan.picture.bottom_field_order_cnt as u32
+            }
             _ => 0,
         };
         assert_eq!(
@@ -273,12 +305,10 @@ fn main() {
         stream.dwords[AVC_CMD_OFFSET_AVC_IMG_STATE + 5],
         MFX_AVC_IMG_STATE_DW5_DEFAULT
     );
+    assert_eq!(stream.dwords[AVC_CMD_OFFSET_AVC_IMG_STATE + 1], 120 * 68);
     assert_eq!(
-        stream.dwords[AVC_CMD_OFFSET_AVC_IMG_STATE + 1],
-        120 * 68
-    );
-    assert_eq!(
-        stream.dwords[AVC_CMD_OFFSET_AVC_IMG_STATE + 1] & !MFX_AVC_IMG_FRAME_SIZE_MAX,
+        stream.dwords[AVC_CMD_OFFSET_AVC_IMG_STATE + 1]
+            & !MFX_AVC_IMG_FRAME_SIZE_MAX,
         0
     );
     assert_eq!(
@@ -288,13 +318,15 @@ fn main() {
     let img_dw3_expected = ((plan.picture.weighted_bipred_idc as u32) << 10)
         | (bit(plan.picture.weighted_pred) << 12)
         | (((plan.picture.chroma_qp_index_offset as i32 as u32) & 0x1f) << 16)
-        | (((plan.picture.second_chroma_qp_index_offset as i32 as u32) & 0x1f) << 24);
+        | (((plan.picture.second_chroma_qp_index_offset as i32 as u32) & 0x1f)
+            << 24);
     assert_eq!(
         stream.dwords[AVC_CMD_OFFSET_AVC_IMG_STATE + 3],
         img_dw3_expected
     );
     let img_dw4_expected = bit(plan.picture.field_pic)
-        | (bit(plan.picture.mb_adaptive_frame_field && !plan.picture.field_pic) << 1)
+        | (bit(plan.picture.mb_adaptive_frame_field && !plan.picture.field_pic)
+            << 1)
         | (bit(plan.picture.frame_mbs_only) << 2)
         | (bit(plan.picture.transform_8x8) << 3)
         | (bit(plan.picture.direct_8x8_inference) << 4)
@@ -306,9 +338,8 @@ fn main() {
         stream.dwords[AVC_CMD_OFFSET_AVC_IMG_STATE + 4],
         img_dw4_expected
     );
-    let img_dw13_expected = ((plan.picture.pic_init_qp_minus26 as i32 as u32) & 0xff)
-        | (((u32::from(plan.picture.num_ref_idx_l0_active_minus1) + 1) & 0x3f) << 8)
-        | (((u32::from(plan.picture.num_ref_idx_l1_active_minus1) + 1) & 0x3f) << 16);
+    let img_dw13_expected =
+        (plan.picture.pic_init_qp_minus26 as i32 as u32) & 0xff;
     assert_eq!(
         stream.dwords[AVC_CMD_OFFSET_AVC_IMG_STATE + 13],
         img_dw13_expected
@@ -321,7 +352,8 @@ fn main() {
         | (((plan.picture.num_slice_groups_minus1 as u32) & 0x07) << 12)
         | (bit(plan.picture.deblocking_filter_control_present) << 15)
         | (((plan.picture.log2_max_frame_num_minus4 as u32) & 0xff) << 16)
-        | (((plan.picture.log2_max_pic_order_cnt_lsb_minus4 as u32) & 0xff) << 24);
+        | (((plan.picture.log2_max_pic_order_cnt_lsb_minus4 as u32) & 0xff)
+            << 24);
     assert_eq!(
         stream.dwords[AVC_CMD_OFFSET_AVC_IMG_STATE + 14],
         img_dw14_expected
