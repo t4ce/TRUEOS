@@ -1,9 +1,5 @@
 {
-  "abi_reference": {
-    "path": "crates/trueos-shader/gpgpu/kernels/artifacts/adls/scene_aabb.bin",
-    "result": "exact-match",
-    "sha256": "b41ba8000a682aac201bb0498851d2160d9faffe4a12091db28e1155b60f3f2d"
-  },
+  "abi_reference": null,
   "artifact": {
     "elf": {
       "class": 64,
@@ -548,7 +544,7 @@
       "expected_kernels": [
         "scene_aabb"
       ],
-      "name": "cpp-legacy-abi-twin-v1"
+      "name": "cpp-native-aot-v1"
     },
     "reproducibility_check": "passed",
     "toolchain": {
@@ -689,5 +685,5 @@
     "revision_max": 12,
     "revision_min": 12
   },
-  "variant": "cpp"
+  "variant": "cpp-native"
 }

@@ -1,9 +1,5 @@
 {
-  "abi_reference": {
-    "path": "crates/trueos-shader/gpgpu/kernels/artifacts/adls/fill_rect_rgba8.bin",
-    "result": "exact-match",
-    "sha256": "ab519a0e4e4731e58ff65d75bf92934cd731a08823b04028620e86549f4506f4"
-  },
+  "abi_reference": null,
   "artifact": {
     "elf": {
       "class": 64,
@@ -295,7 +291,7 @@
       "expected_kernels": [
         "fill_rect_rgba8"
       ],
-      "name": "cpp-legacy-abi-twin-v1"
+      "name": "cpp-native-aot-v1"
     },
     "reproducibility_check": "passed",
     "toolchain": {
@@ -436,5 +432,5 @@
     "revision_max": 12,
     "revision_min": 12
   },
-  "variant": "cpp"
+  "variant": "cpp-native"
 }

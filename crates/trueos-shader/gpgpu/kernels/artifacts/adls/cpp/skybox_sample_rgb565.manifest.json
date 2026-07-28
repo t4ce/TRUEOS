@@ -1,9 +1,5 @@
 {
-  "abi_reference": {
-    "path": "crates/trueos-shader/gpgpu/kernels/artifacts/adls/skybox_sample_rgb565.bin",
-    "result": "exact-match",
-    "sha256": "c0ba26b31c54ed16c8323e3de654aa908ab4bcdccfc8bbd5f1052f1bf7757638"
-  },
+  "abi_reference": null,
   "artifact": {
     "elf": {
       "class": 64,
@@ -586,7 +582,7 @@
       "expected_kernels": [
         "skybox_sample_rgb565"
       ],
-      "name": "cpp-legacy-abi-twin-v1"
+      "name": "cpp-native-aot-v1"
     },
     "reproducibility_check": "passed",
     "toolchain": {
@@ -727,5 +723,5 @@
     "revision_max": 12,
     "revision_min": 12
   },
-  "variant": "cpp"
+  "variant": "cpp-native"
 }

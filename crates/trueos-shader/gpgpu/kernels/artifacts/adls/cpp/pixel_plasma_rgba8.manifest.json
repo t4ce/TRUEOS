@@ -1,9 +1,5 @@
 {
-  "abi_reference": {
-    "path": "crates/trueos-shader/gpgpu/kernels/artifacts/adls/pixel_plasma_rgba8.bin",
-    "result": "exact-match",
-    "sha256": "42fb1dd0568bb244c44f87d146e036a72df60cb811715c370ec959de6d3af893"
-  },
+  "abi_reference": null,
   "artifact": {
     "elf": {
       "class": 64,
@@ -431,7 +427,7 @@
       "expected_kernels": [
         "pixel_plasma_rgba8"
       ],
-      "name": "cpp-legacy-abi-twin-v1"
+      "name": "cpp-native-aot-v1"
     },
     "reproducibility_check": "passed",
     "toolchain": {
@@ -572,5 +568,5 @@
     "revision_max": 12,
     "revision_min": 12
   },
-  "variant": "cpp"
+  "variant": "cpp-native"
 }

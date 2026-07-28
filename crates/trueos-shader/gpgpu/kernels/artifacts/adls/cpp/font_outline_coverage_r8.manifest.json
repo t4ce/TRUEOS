@@ -1,9 +1,5 @@
 {
-  "abi_reference": {
-    "path": "crates/trueos-shader/gpgpu/kernels/artifacts/adls/font_outline_coverage_r8.bin",
-    "result": "exact-match",
-    "sha256": "a4f0dddc7f2a9d9d67e5e71459d54da2e4a7ade8cd1af8c27283a884f221b836"
-  },
+  "abi_reference": null,
   "artifact": {
     "elf": {
       "class": 64,
@@ -398,7 +394,7 @@
       "expected_kernels": [
         "font_outline_coverage_r8"
       ],
-      "name": "cpp-legacy-abi-twin-v1"
+      "name": "cpp-native-aot-v1"
     },
     "reproducibility_check": "passed",
     "toolchain": {
@@ -539,5 +535,5 @@
     "revision_max": 12,
     "revision_min": 12
   },
-  "variant": "cpp"
+  "variant": "cpp-native"
 }

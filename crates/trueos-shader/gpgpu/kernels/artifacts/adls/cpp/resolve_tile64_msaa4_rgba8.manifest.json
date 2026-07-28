@@ -1,9 +1,5 @@
 {
-  "abi_reference": {
-    "path": "crates/trueos-shader/gpgpu/kernels/artifacts/adls/resolve_tile64_msaa4_rgba8.bin",
-    "result": "exact-match",
-    "sha256": "89faf114ba351dfe8c5af899660026d466f11ddf86f1e28c0f1898ca9b5bd7df"
-  },
+  "abi_reference": null,
   "artifact": {
     "elf": {
       "class": 64,
@@ -359,7 +355,7 @@
       "expected_kernels": [
         "resolve_tile64_msaa4_rgba8"
       ],
-      "name": "cpp-legacy-abi-twin-v1"
+      "name": "cpp-native-aot-v1"
     },
     "reproducibility_check": "passed",
     "toolchain": {
@@ -500,5 +496,5 @@
     "revision_max": 12,
     "revision_min": 12
   },
-  "variant": "cpp"
+  "variant": "cpp-native"
 }

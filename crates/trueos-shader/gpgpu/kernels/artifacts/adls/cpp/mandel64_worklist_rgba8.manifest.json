@@ -1,9 +1,5 @@
 {
-  "abi_reference": {
-    "path": "crates/trueos-shader/gpgpu/kernels/artifacts/adls/mandel64_worklist_rgba8.bin",
-    "result": "exact-match",
-    "sha256": "8b1746984f74156ccdbeb9431df9d25061285655067de8ebd5283b08de00d91f"
-  },
+  "abi_reference": null,
   "artifact": {
     "elf": {
       "class": 64,
@@ -278,7 +274,7 @@
       "expected_kernels": [
         "mandel64_worklist_rgba8"
       ],
-      "name": "cpp-legacy-abi-twin-v1"
+      "name": "cpp-native-aot-v1"
     },
     "reproducibility_check": "passed",
     "toolchain": {
@@ -419,5 +415,5 @@
     "revision_max": 12,
     "revision_min": 12
   },
-  "variant": "cpp"
+  "variant": "cpp-native"
 }

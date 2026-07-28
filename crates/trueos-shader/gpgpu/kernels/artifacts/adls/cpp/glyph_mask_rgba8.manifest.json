@@ -1,9 +1,5 @@
 {
-  "abi_reference": {
-    "path": "crates/trueos-shader/gpgpu/kernels/artifacts/adls/glyph_mask_rgba8.bin",
-    "result": "exact-match",
-    "sha256": "908df07d62b069f31a046d2902dff9a0fa33e49a1c253b74a4e7cc18df66d378"
-  },
+  "abi_reference": null,
   "artifact": {
     "elf": {
       "class": 64,
@@ -382,7 +378,7 @@
       "expected_kernels": [
         "glyph_mask_rgba8"
       ],
-      "name": "cpp-legacy-abi-twin-v1"
+      "name": "cpp-native-aot-v1"
     },
     "reproducibility_check": "passed",
     "toolchain": {
@@ -523,5 +519,5 @@
     "revision_max": 12,
     "revision_min": 12
   },
-  "variant": "cpp"
+  "variant": "cpp-native"
 }
