@@ -15,6 +15,7 @@ pub const VM_NET_OP_TCP_READ: u32 = 0x11;
 pub enum VmNetStatus {
     Ok = 0,
     BadArg = 1,
+    Interrupted = 2,
 }
 
 #[repr(C)]
@@ -148,7 +149,7 @@ pub fn tcp_write(vm_id: u8, bytes: &[u8]) -> Result<usize, VmNetStatus> {
         return Err(VmNetStatus::BadArg);
     };
 
-    let mut ctx = ctx_lock.lock();
+    let mut ctx = crate::hv::sync::lock(vm_id, ctx_lock).map_err(|_| VmNetStatus::Interrupted)?;
     ctx.vm_id = vm_id;
     push_console_bytes(&mut ctx, bytes);
     let seq = record_request(
@@ -183,7 +184,7 @@ pub fn tcp_read(vm_id: u8, out: &mut [u8]) -> Result<usize, VmNetStatus> {
         }
     }
 
-    let mut ctx = ctx_lock.lock();
+    let mut ctx = crate::hv::sync::lock(vm_id, ctx_lock).map_err(|_| VmNetStatus::Interrupted)?;
     ctx.vm_id = vm_id;
     let seq =
         record_request(&mut ctx, VM_NET_OP_TCP_READ, out.len().min(u32::MAX as usize) as u64, 0, 0);

@@ -10,6 +10,7 @@ pub mod memory;
 pub mod security;
 pub mod snapshot;
 pub mod store;
+pub mod sync;
 pub mod vmcall;
 pub mod vmx;
 pub mod vnet;
@@ -46,7 +47,6 @@ const MIB: usize = 1024 * 1024;
 const HV_LOG_LINE: usize = crate::allcaps::hv::LOG_LINE_BYTES;
 pub const TRUEOS_VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
 const TRUEOS_VM_CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
-const VMX_PREEMPTION_QUANTUM_MS: u64 = 16;
 const GUEST_FS_BASE_RESET: u64 = 0;
 
 struct TrueosVmId {
@@ -473,6 +473,17 @@ fn current_vm_id_for_log() -> u8 {
 #[inline]
 fn vm_slot(vm_id: u8) -> Option<&'static TrueosVmId> {
     trueos_vm_ids.get(vm_id as usize)
+}
+
+#[inline]
+pub(crate) fn lifecycle_request_pending(vm_id: u8) -> bool {
+    vm_slot(vm_id)
+        .map(|vm| {
+            vm.stop_req.load(Ordering::Acquire)
+                || vm.preserve_req.load(Ordering::Acquire)
+                || vm.preserve_exit.load(Ordering::Acquire)
+        })
+        .unwrap_or(true)
 }
 
 pub fn first_free_vm_id() -> Option<u8> {
@@ -2882,10 +2893,14 @@ async fn vmx_launch_once_with_ept(
     let preemption_timer_enabled =
         setup_vmcs_for_launch(vm_id, eptp, lineage_record, boot_mode_for_vm(vm_id))?;
     let preemption_timer_ticks = preemption_timer_enabled.then(|| {
-        let (ticks, rate_shift) = vmx_preemption_timer_ticks(VMX_PREEMPTION_QUANTUM_MS);
+        let (ticks, rate_shift) =
+            vmx_preemption_timer_ticks(crate::allcaps::hv::VMX_LIFECYCLE_PREEMPTION_QUANTUM_MS);
         hvlogf(format_args!(
             "hv: vm{} reporting: vmx preemption timer quantum_ms={} rate_shift={} ticks={}",
-            vm_id, VMX_PREEMPTION_QUANTUM_MS, rate_shift, ticks
+            vm_id,
+            crate::allcaps::hv::VMX_LIFECYCLE_PREEMPTION_QUANTUM_MS,
+            rate_shift,
+            ticks
         ));
         ticks
     });

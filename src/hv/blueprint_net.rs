@@ -10,18 +10,22 @@ struct HostBlueprintNetSession {
 
 static SESSION: Mutex<Option<HostBlueprintNetSession>> = Mutex::new(None);
 
-fn pump_host_net() {
+fn pump_host_net(vm_id: u8) -> Result<(), ()> {
     for _ in 0..8 {
+        if crate::hv::lifecycle_request_pending(vm_id) {
+            return Err(());
+        }
         crate::time::poll();
         crate::runtime::poll_local_executor();
         core::hint::spin_loop();
     }
+    Ok(())
 }
 
-pub(crate) fn open_primary() -> Option<u32> {
-    pump_host_net();
+pub(crate) fn open_primary(vm_id: u8) -> Option<u32> {
+    pump_host_net(vm_id).ok()?;
     let net = VNet::open_primary()?;
-    let mut session = SESSION.lock();
+    let mut session = crate::hv::sync::lock(vm_id, &SESSION).ok()?;
     let next_id = session
         .as_ref()
         .map(|session| session.id.wrapping_add(1).max(1))
@@ -30,7 +34,7 @@ pub(crate) fn open_primary() -> Option<u32> {
     Some(next_id)
 }
 
-pub(crate) fn submit(session_id: u32, command_bytes: &[u8]) -> Result<(), ()> {
+pub(crate) fn submit(vm_id: u8, session_id: u32, command_bytes: &[u8]) -> Result<(), ()> {
     let command = crate::blueprint_net_wire::decode_command(command_bytes).map_err(|_| ())?;
     match command {
         api::Command::OpenTcpConnect { remote } => {
@@ -46,7 +50,7 @@ pub(crate) fn submit(session_id: u32, command_bytes: &[u8]) -> Result<(), ()> {
     }
 
     let result = {
-        let mut guard = SESSION.lock();
+        let mut guard = crate::hv::sync::lock(vm_id, &SESSION).map_err(|_| ())?;
         let Some(session) = guard.as_mut() else {
             return Err(());
         };
@@ -55,13 +59,13 @@ pub(crate) fn submit(session_id: u32, command_bytes: &[u8]) -> Result<(), ()> {
         }
         session.net.submit(command)
     };
-    pump_host_net();
+    pump_host_net(vm_id)?;
     result
 }
 
-pub(crate) fn poll_event(session_id: u32, out: &mut [u8]) -> Result<Option<usize>, ()> {
-    pump_host_net();
-    let mut session = SESSION.lock();
+pub(crate) fn poll_event(vm_id: u8, session_id: u32, out: &mut [u8]) -> Result<Option<usize>, ()> {
+    pump_host_net(vm_id)?;
+    let mut session = crate::hv::sync::lock(vm_id, &SESSION).map_err(|_| ())?;
     let Some(session) = session.as_mut() else {
         return Err(());
     };

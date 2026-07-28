@@ -49,6 +49,7 @@ pub mod hv {
 
     pub const VM_ID_LIMIT: usize = 32;
     pub const VM_CPU_SLOT_LIMIT: usize = 256;
+    pub const VMX_LIFECYCLE_PREEMPTION_QUANTUM_MS: u64 = 16;
 
     pub const GUEST_STACK_MIN_MIB: usize = 8;
     pub const GUEST_STACK_DEFAULT_MIB: usize = 64;

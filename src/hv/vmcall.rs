@@ -1846,7 +1846,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         OP_BP_NET_OPEN => {
-            match crate::hv::blueprint_net::open_primary() {
+            match crate::hv::blueprint_net::open_primary(vm_id) {
                 Some(session_id) => write_response(vm_id, seq, STATUS_OK, session_id as u64, 0),
                 None => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
@@ -1860,7 +1860,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let bytes = unsafe { &(&(*p).payload)[..n] };
-            match crate::hv::blueprint_net::submit(arg0 as u32, bytes) {
+            match crate::hv::blueprint_net::submit(vm_id, arg0 as u32, bytes) {
                 Ok(()) => write_response(vm_id, seq, STATUS_OK, 0, 0),
                 Err(()) => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
@@ -1873,7 +1873,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
-            match crate::hv::blueprint_net::poll_event(arg0 as u32, out) {
+            match crate::hv::blueprint_net::poll_event(vm_id, arg0 as u32, out) {
                 Ok(Some(len)) => write_response(vm_id, seq, STATUS_OK, 1, len as u32),
                 Ok(None) => write_response(vm_id, seq, STATUS_OK, 0, 0),
                 Err(()) => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
