@@ -1,4 +1,4 @@
-//! Extracted USB HID support retained through the compatibility module path.
+//! HID eye-tracker support.
 
 use core::cmp::min;
 

@@ -1,4 +1,4 @@
-//! Extracted from the live USB3 source directory; retained through an explicit module path.
+//! Shared USB interface and endpoint helpers.
 
 use crab_usb::{
     Device, Endpoint,

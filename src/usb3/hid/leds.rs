@@ -1,4 +1,4 @@
-//! Extracted USB HID support retained through the compatibility module path.
+//! HID LED controller support.
 
 extern crate alloc;
 

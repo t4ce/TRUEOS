@@ -1,4 +1,4 @@
-//! Extracted USB HID support retained through the compatibility module path.
+//! USB HID support.
 
 extern crate alloc;
 use alloc::vec::Vec;

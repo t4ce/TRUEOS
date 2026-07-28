@@ -1,4 +1,4 @@
-//! Extracted USB HID support retained through the compatibility module path.
+//! HID mouse reports.
 
 use super::{
     HidRuntime, TrueosHidCursorEvent, clamp01, push_cursor_event, sync_runtime_cursor_snapshot,

@@ -1,27 +1,10 @@
-// USB3 implementation modules live outside the kernel source tree. Keep their
-// module identities stable so this remains a source-only extraction with no
-// runtime or public-path changes.
-#[allow(dead_code)]
-#[path = "../../tools/usb3_extracted/api.rs"]
 mod api;
-#[allow(dead_code)]
-#[path = "../../tools/usb3_extracted/class.rs"]
 pub mod class;
-#[allow(dead_code)]
-#[path = "../../tools/usb3_extracted/descriptor.rs"]
 mod descriptor;
-#[allow(dead_code)]
-#[path = "../../tools/usb3_extracted/dev_gears.rs"]
 mod dev_gears;
-#[allow(dead_code)]
-#[path = "../../tools/usb3_extracted/hid/mod.rs"]
 pub mod hid;
-#[path = "../../tools/usb3_extracted/lab.rs"]
 pub(crate) mod lab;
-#[allow(dead_code)]
-#[path = "../../tools/usb3_extracted/lib.rs"]
 mod lib;
-#[path = "../../tools/usb3_extracted/skhynix.rs"]
 mod skhynix;
 
 pub use self::hid::midi;

@@ -1,4 +1,4 @@
-//! Extracted USB HID support retained through the compatibility module path.
+//! HID keyboard reports.
 
 use super::{HID_DEBUG_REPORT_LOGS, HidRuntime};
 

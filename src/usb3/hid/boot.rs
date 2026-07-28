@@ -1,4 +1,4 @@
-//! Extracted USB HID support retained through the compatibility module path.
+//! HID boot and generic pointer streaming.
 
 extern crate alloc;
 

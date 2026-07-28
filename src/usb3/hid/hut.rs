@@ -1,4 +1,4 @@
-//! Extracted USB HID support retained through the compatibility module path.
+//! HID Usage Tables input state and input-combo management.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use heapless::{String, Vec};

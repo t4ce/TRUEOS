@@ -1,4 +1,4 @@
-//! Extracted USB HID support retained through the compatibility module path.
+//! HID tablet reports.
 
 use super::{
     HID_DEBUG_REPORT_LOGS, HidRuntime, TrueosHidCursorEvent, clamp01, push_cursor_event,

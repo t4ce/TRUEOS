@@ -1,4 +1,4 @@
-//! Extracted from the live USB3 module; retained as a reference implementation.
+//! Legacy direct-xHCI bulk-only transport retained for later reintegration.
 
 use super::xhci::{self, Trb, TrbRing, XhciContext, hi, lo, trb_type};
 use core::ptr::{write_bytes, write_volatile};

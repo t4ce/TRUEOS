@@ -1,4 +1,4 @@
-//! Extracted from the live USB3 module; retained as a reference implementation.
+//! Legacy direct-xHCI class requests retained for later reintegration.
 
 use super::super::control;
 use super::super::syscall::{control_in_sync, control_out_sync};
