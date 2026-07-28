@@ -8171,6 +8171,10 @@ enum Ui4AsyncCompositionTarget {
     },
     Overlay {
         surface: OverlaySurface,
+        /// Empty application planes stay parked at zero hardware opacity.
+        /// This prevents a retiring direct surface from becoming visible if
+        /// plane alpha updates before the transparent SURF latch.
+        constant_alpha: u8,
     },
     DirectOverlay {
         surface: Ui4DirectOverlaySurface,
@@ -8219,6 +8223,7 @@ static UI4_DIRECT_QUEUE_LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static UI4_DIRECT_SCANOUT_LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static UI4_DIRECT_PLANE_ALPHA_LOGGED: AtomicBool = AtomicBool::new(false);
 static UI4_DIRECT_PLANE_SCALER_LOGGED: AtomicBool = AtomicBool::new(false);
+static UI4_EMPTY_OVERLAY_CPU_PARK_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone)]
 struct Ui4DirectScanoutProof {
@@ -8232,6 +8237,14 @@ const UI4_DIRECT_SCANOUT_PROOF_EMPTY: Ui4DirectScanoutProof = Ui4DirectScanoutPr
 };
 static UI4_DIRECT_SCANOUT_PROOFS: Mutex<[Ui4DirectScanoutProof; 5]> =
     Mutex::new([UI4_DIRECT_SCANOUT_PROOF_EMPTY; 5]);
+
+const fn overlay_composition_constant_alpha(tile_count: usize, all_tiles_transparent: bool) -> u8 {
+    if tile_count == 0 || all_tiles_transparent {
+        0
+    } else {
+        u8::MAX
+    }
+}
 
 pub(crate) fn ui4_direct_scanout_ready_for_frame(producer_frame: u64) -> Option<u64> {
     (producer_frame != 0)
@@ -8328,8 +8341,52 @@ pub(crate) fn queue_ui4_overlay_composition(
         effective.add_region(change);
         (effective, !pool.content_initialized[surface.buffer_index])
     };
+    if tiles.is_empty() {
+        // Teardown must remain available after an application has quarantined
+        // direct RCS. Park a known-transparent display-owned surface using a
+        // one-shot CPU clear, then latch it at hardware alpha zero. Publishing
+        // full damage also forces the other swap surface to be cleared before
+        // it can be reused by a later application.
+        let full = CompositionDamageRegion::from_rect(CompositionDamageRect::new(
+            0,
+            0,
+            surface.width,
+            surface.height,
+        ));
+        if !destination_fresh_transparent {
+            fill_overlay_rect(surface, 0, 0, surface.width, surface.height, 0);
+            if !dma_flush_overlay_region(surface, full) {
+                return Err(Ui4AsyncCompositionError::Failed);
+            }
+        }
+        mark_overlay_surface_content_initialized(surface);
+        if !UI4_EMPTY_OVERLAY_CPU_PARK_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::log_info!(target: "ui4";
+                "ui4/empty-plane-park: backend=cpu-transparent-clear plane_slot={} surface={}x{} fresh={} hardware_opacity=0 rcs_dependency=none damage=full log=once\n",
+                plane_slot,
+                surface.width,
+                surface.height,
+                destination_fresh_transparent as u8,
+            );
+        }
+        return Ok(Ui4AsyncComposition {
+            work: None,
+            target: Ui4AsyncCompositionTarget::Overlay {
+                surface,
+                constant_alpha: 0,
+            },
+            proof: None,
+            change: full,
+            effective: full,
+            tile_count: 0,
+            queued_ns: crate::chronos::monotonic_nanos(),
+            reason,
+        });
+    }
     let proof =
         prepare_ui4_composition_proof(tiles, effective, surface.width, surface.height, false);
+    let constant_alpha =
+        overlay_composition_constant_alpha(tiles.len(), tiles.iter().all(|tile| tile.opacity == 0));
     let content_change = if sparse_static_painter && destination_fresh_transparent {
         let mut painted = CompositionDamageRegion::EMPTY;
         for tile in tiles {
@@ -8360,7 +8417,10 @@ pub(crate) fn queue_ui4_overlay_composition(
             mark_overlay_surface_content_initialized(surface);
             Ok(Ui4AsyncComposition {
                 work: Some(Ui4AsyncCompositionWork::GucRcs(gpu)),
-                target: Ui4AsyncCompositionTarget::Overlay { surface },
+                target: Ui4AsyncCompositionTarget::Overlay {
+                    surface,
+                    constant_alpha,
+                },
                 proof,
                 // A pristine destination was already transparent outside the
                 // static rectangles. Only those painted rectangles become
@@ -8479,7 +8539,10 @@ pub(crate) fn queue_ui4_static_overlay_composition_bcs0(
     mark_overlay_surface_content_initialized(surface);
     Ok(Ui4AsyncComposition {
         work: Some(Ui4AsyncCompositionWork::GucBcs(blit)),
-        target: Ui4AsyncCompositionTarget::Overlay { surface },
+        target: Ui4AsyncCompositionTarget::Overlay {
+            surface,
+            constant_alpha: u8::MAX,
+        },
         proof: None,
         change: painted,
         effective: painted,
@@ -8559,7 +8622,13 @@ pub(crate) fn queue_ui4_static_overlay_composition_cpu(
 
     Ok(Ui4AsyncComposition {
         work: None,
-        target: Ui4AsyncCompositionTarget::Overlay { surface },
+        target: Ui4AsyncCompositionTarget::Overlay {
+            surface,
+            constant_alpha: overlay_composition_constant_alpha(
+                tiles.len(),
+                tiles.iter().all(|tile| tile.opacity == 0),
+            ),
+        },
         proof: None,
         change: if destination_fresh_transparent {
             painted
@@ -8890,7 +8959,7 @@ fn verify_ui4_composition_proof(composition: Ui4AsyncComposition) {
                 surface.pitch_bytes as usize,
                 surface.byte_len,
             ),
-            Ui4AsyncCompositionTarget::Overlay { surface } => (
+            Ui4AsyncCompositionTarget::Overlay { surface, .. } => (
                 "overlay",
                 surface.plane_slot,
                 surface.buffer_index,
@@ -8963,9 +9032,10 @@ pub(crate) fn stage_ui4_composition_flip(composition: Ui4AsyncComposition) -> bo
                 true,
             )
         }
-        Ui4AsyncCompositionTarget::Overlay { surface } => {
-            stage_overlay_plane_surface_flip(dev, surface, composition.reason)
-        }
+        Ui4AsyncCompositionTarget::Overlay {
+            surface,
+            constant_alpha,
+        } => stage_overlay_plane_surface_flip(dev, surface, constant_alpha, composition.reason),
         Ui4AsyncCompositionTarget::DirectOverlay { surface } => {
             stage_ui4_direct_overlay_flip(dev, surface, composition.reason)
         }
@@ -8977,7 +9047,7 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
         Ui4AsyncCompositionTarget::Primary { surface, .. } => {
             mark_primary_composition_surface_front(surface, composition.change)
         }
-        Ui4AsyncCompositionTarget::Overlay { surface } => {
+        Ui4AsyncCompositionTarget::Overlay { surface, .. } => {
             mark_overlay_composition_surface_front(surface, composition.change)
         }
         Ui4AsyncCompositionTarget::DirectOverlay { .. } => {}
@@ -9057,7 +9127,7 @@ pub(crate) fn ui4_composition_flip_is_live(composition: Ui4AsyncComposition) -> 
         Ui4AsyncCompositionTarget::Primary { surface, .. } => {
             (surface.pipe.primary_plane().base(), u32::try_from(surface.gpu).ok())
         }
-        Ui4AsyncCompositionTarget::Overlay { surface } => {
+        Ui4AsyncCompositionTarget::Overlay { surface, .. } => {
             (overlay_plane_base(surface.pipe, surface.plane_slot), u32::try_from(surface.gpu).ok())
         }
         Ui4AsyncCompositionTarget::DirectOverlay { surface } => {
@@ -10314,6 +10384,7 @@ fn flip_overlay_plane_surface(
 fn stage_overlay_plane_surface_flip(
     dev: crate::intel::Dev,
     surface: OverlaySurface,
+    constant_alpha: u8,
     reason: &str,
 ) -> bool {
     if overlay_plane_surface_flip_guard(dev, surface, 0, 0, UI4_RGBA8_OVERLAY_CONTRACT).is_err() {
@@ -10332,7 +10403,7 @@ fn stage_overlay_plane_surface_flip(
         plane_base,
         surface_reg,
         Some(geometry),
-        Some(u8::MAX),
+        Some(constant_alpha),
         Some(PlaneScalerFlip {
             pipe_slot: surface.pipe.slot,
             plane_slot: surface.plane_slot,
@@ -10511,7 +10582,7 @@ fn decode_xy_y(v: u32) -> u32 {
 
 #[cfg(test)]
 mod direct_plane_scaler_tests {
-    use super::direct_plane_scaler_factor;
+    use super::{direct_plane_scaler_factor, overlay_composition_constant_alpha};
 
     #[test]
     fn accepts_two_x_upscale_and_bounded_close_downscale() {
@@ -10523,5 +10594,13 @@ mod direct_plane_scaler_tests {
     fn rejects_scaling_outside_the_bounded_factor_range() {
         assert_eq!(direct_plane_scaler_factor(640, 2560), None);
         assert_eq!(direct_plane_scaler_factor(2560, 800), None);
+    }
+
+    #[test]
+    fn empty_overlay_composition_parks_plane_at_zero_alpha() {
+        assert_eq!(overlay_composition_constant_alpha(0, true), 0);
+        assert_eq!(overlay_composition_constant_alpha(1, true), 0);
+        assert_eq!(overlay_composition_constant_alpha(1, false), u8::MAX);
+        assert_eq!(overlay_composition_constant_alpha(4, false), u8::MAX);
     }
 }

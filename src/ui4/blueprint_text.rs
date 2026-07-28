@@ -10,27 +10,28 @@ use alloc::{collections::VecDeque, string::String, vec::Vec};
 use spin::Mutex;
 
 use crate::intel::gpgpu::{
-    ALPHA_BLEND_WORKLIST_FLAG_COPY, ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER,
-    ALPHA_BLEND_WORKLIST_FLAG_TINT_ALPHA, ALPHA_BLEND_WORKLIST_FLAG_TINT_RGB,
-    GpgpuAlphaBlendWorklistDesc, GpgpuGlyphMaskLayer, GpgpuOwnedParticleCraftState, GpgpuPoint,
-    GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence, GpgpuRgba8Surface,
-    GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun, ParticleCraftParamsV1,
-    SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, SkyboxSampleRgb565Params, Ui4CompositorCompletion,
-    Ui4CompositorSubmission, Ui4CompositorSubmitError, Ui4SpriteSceneCompletion,
-    alpha_blend_worklist_max_descs, glyph_mask_layers_rgba8_2d_mode, particle_craft_rgba8_frame,
-    poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
-    queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
-    release_rgba8_surface_for_scanout, skybox_sample_rgb565_to_rgba8,
-    sprite_quad_worklist_max_descs,
+    ALPHA_BLEND_WORKLIST_FLAG_COPY, ALPHA_BLEND_WORKLIST_FLAG_PREMUL_SRC,
+    ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER, ALPHA_BLEND_WORKLIST_FLAG_TINT_ALPHA,
+    ALPHA_BLEND_WORKLIST_FLAG_TINT_RGB, GpgpuAlphaBlendWorklistDesc, GpgpuGlyphMaskLayer,
+    GpgpuOwnedParticleCraftState, GpgpuPoint, GpgpuRect, GpgpuRgb565Surface,
+    GpgpuRgba8ReleaseFence, GpgpuRgba8Surface, GpgpuSpriteQuadWorklistDesc,
+    GpgpuSpriteQuadWorklistRun, ParticleCraftParamsV1, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER,
+    SkyboxSampleRgb565Params, Ui4CompositorCompletion, Ui4CompositorSubmission,
+    Ui4CompositorSubmitError, Ui4SpriteSceneCompletion, alpha_blend_worklist_max_descs,
+    glyph_mask_layers_rgba8_2d_mode, particle_craft_rgba8_frame, poll_ui4_blueprint_sprite_scene,
+    poll_ui4_compositor_submission, queue_ui4_blueprint_alpha_rects,
+    queue_ui4_blueprint_sprite_scene, release_rgba8_surface_for_scanout,
+    skybox_sample_rgb565_to_rgba8, sprite_quad_worklist_max_descs,
 };
 use crate::intel::gpu_font::{
-    GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontRetainedScene, GpuFontTextRequest,
+    GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontRgba, GpuFontTextRequest,
     MAX_DYNAMIC_TEXT_CHARS, ensure_font_face_available, recycle_font_job_readback,
     render_font_job_readback_once,
 };
 use crate::r::font_kernel_service::{
-    FontKernelError, PendingRetainScene, RetainSceneRequest, RetainedFontPositioning,
-    RetainedFontRun, submit_retain_scene,
+    FontKernelError, FontKernelRetainedScene, FontStampRequest, FontStampedBuffer,
+    PendingFontStamp, PendingRetainScene, RetainSceneRequest, RetainedFontPositioning,
+    RetainedFontRun, submit_retain_scene, submit_stamp,
 };
 
 use super::{
@@ -83,7 +84,9 @@ const ERROR_NOT_FOUND: i32 = -3;
 const ERROR_STATE: i32 = -4;
 const ERROR_FONT: i32 = -5;
 const ERROR_UI4: i32 = -6;
-const ERROR_BUSY: i32 = -7;
+pub(crate) const ERROR_BUSY: i32 = -7;
+const GUEST_TEXT_SCENE_BUSY_POLL_MS: u64 = 2;
+const TEXT_SCENE_FONT_ID_STAMP_ONCE: u32 = 1 << 31;
 const CLOSE_PERSIST_FINAL_FRAME: u32 = 1 << 0;
 const CLOSE_VALID_FLAGS: u32 = CLOSE_PERSIST_FINAL_FRAME;
 
@@ -305,6 +308,10 @@ struct BlueprintSceneSurface {
     retained_text_layers: Vec<BlueprintRetainedTextLayer>,
     retained_text_cursor: usize,
     retained_text_rendered: bool,
+    stamped_text_layers: Vec<BlueprintStampedTextLayer>,
+    stamped_text_cursor: usize,
+    stamped_text_composite_cursor: usize,
+    stamped_text_rendered: bool,
 }
 
 struct BlueprintRetainedTextLayer {
@@ -323,10 +330,35 @@ struct BlueprintRetainedTextDescription {
 
 enum BlueprintRetainedTextState {
     Pending(PendingRetainScene),
-    Ready(GpuFontRetainedScene),
+    Ready(FontKernelRetainedScene),
+}
+
+struct BlueprintStampedTextLayer {
+    description: BlueprintRetainedTextDescription,
+    color_rgba: u32,
+    state: BlueprintStampedTextState,
+}
+
+enum BlueprintStampedTextState {
+    Pending(PendingFontStamp),
+    Ready(FontStampedBuffer),
 }
 
 impl BlueprintRetainedTextDescription {
+    fn same_scene(&self, next: &Self) -> bool {
+        self.font == next.font
+            && self.viewport_width == next.viewport_width
+            && self.viewport_height == next.viewport_height
+            && self.runs.len() == next.runs.len()
+            && self.runs.iter().zip(next.runs.iter()).all(|(old, new)| {
+                old.text == new.text
+                    && old.position[0].to_bits() == new.position[0].to_bits()
+                    && old.position[1].to_bits() == new.position[1].to_bits()
+                    && old.font_pixels.to_bits() == new.font_pixels.to_bits()
+                    && old.slant.to_bits() == new.slant.to_bits()
+            })
+    }
+
     /// Return the integral draw-time translation when `next` is the same
     /// retained glyph scene moved as one unit.
     fn translation_to(&self, next: &Self) -> Option<[i32; 2]> {
@@ -647,6 +679,10 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
                 retained_text_layers: Vec::new(),
                 retained_text_cursor: 0,
                 retained_text_rendered: false,
+                stamped_text_layers: Vec::new(),
+                stamped_text_cursor: 0,
+                stamped_text_composite_cursor: 0,
+                stamped_text_rendered: false,
             },
             BlueprintSurfaceRelease::Animated,
         );
@@ -678,6 +714,10 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         retained_text_layers: Vec::new(),
         retained_text_cursor: 0,
         retained_text_rendered: false,
+        stamped_text_layers: Vec::new(),
+        stamped_text_cursor: 0,
+        stamped_text_composite_cursor: 0,
+        stamped_text_rendered: false,
     });
     let (cadence_name, buffer_count) = match cadence {
         FrameCadence::Dirty => ("dirty", 2),
@@ -807,6 +847,9 @@ pub(crate) fn begin_blueprint_frame(
     surface.sprite_scene_upload = None;
     surface.retained_text_cursor = 0;
     surface.retained_text_rendered = false;
+    surface.stamped_text_cursor = 0;
+    surface.stamped_text_composite_cursor = 0;
+    surface.stamped_text_rendered = false;
     surface.write_lease = Some(lease);
     0
 }
@@ -1310,6 +1353,10 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         surface.retained_text_layers.clear();
         surface.retained_text_cursor = 0;
         surface.retained_text_rendered = false;
+        surface.stamped_text_layers.clear();
+        surface.stamped_text_cursor = 0;
+        surface.stamped_text_composite_cursor = 0;
+        surface.stamped_text_rendered = false;
         previous
     };
 
@@ -1949,7 +1996,8 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
-    let Some(font) = GpuFontFace::from_id(font_id) else {
+    let stamp_once = font_id & TEXT_SCENE_FONT_ID_STAMP_ONCE != 0;
+    let Some(font) = GpuFontFace::from_id(font_id & !TEXT_SCENE_FONT_ID_STAMP_ONCE) else {
         return ERROR_FONT;
     };
     if rows.is_null() || row_count == 0 || row_count > MAX_TEXT_ROWS {
@@ -1996,15 +2044,149 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
             slant: 0.0,
         });
     }
-    retain_scene_entries_for_surface(
-        owner,
-        window_id,
+    if stamp_once {
+        stamp_scene_entries_for_surface(
+            owner,
+            window_id,
+            font,
+            viewport_width,
+            viewport_height,
+            rgba,
+            runs,
+        )
+    } else {
+        retain_scene_entries_for_surface(
+            owner,
+            window_id,
+            font,
+            viewport_width,
+            viewport_height,
+            rgba,
+            runs,
+        )
+    }
+}
+
+fn stamp_scene_entries_for_surface(
+    owner: WindowOwner,
+    window_id: u32,
+    font: GpuFontFace,
+    viewport_width: u32,
+    viewport_height: u32,
+    rgba: u32,
+    runs: Vec<RetainedFontRun>,
+) -> i32 {
+    let description = BlueprintRetainedTextDescription {
         font,
         viewport_width,
         viewport_height,
-        rgba,
         runs,
-    )
+    };
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    if surface.write_lease.is_none() {
+        return ERROR_STATE;
+    }
+    if surface.gpu_submission_unretired {
+        return ERROR_BUSY;
+    }
+
+    let layer_index = surface.stamped_text_cursor;
+    let reusable = surface
+        .stamped_text_layers
+        .get(layer_index)
+        .is_some_and(|layer| {
+            layer.color_rgba == rgba && layer.description.same_scene(&description)
+        });
+    if !reusable {
+        let [r, g, b, a] = rgba.to_le_bytes();
+        let request = FontStampRequest {
+            scene: RetainSceneRequest {
+                runs: description.runs.clone(),
+                font,
+                viewport_width,
+                viewport_height,
+                raster_width: viewport_width,
+                raster_height: viewport_height,
+                positioning: RetainedFontPositioning::SceneOrigin,
+            },
+            foreground: GpuFontRgba::new(r, g, b, a),
+        };
+        let pending = match submit_stamp(request) {
+            Ok(pending) => pending,
+            Err(FontKernelError::QueueFull) => return ERROR_BUSY,
+            Err(error) => {
+                log_font_kernel_error(
+                    "stamp",
+                    owner,
+                    window_id,
+                    font,
+                    description.runs.len(),
+                    error,
+                );
+                return ERROR_FONT;
+            }
+        };
+        let replacement = BlueprintStampedTextLayer {
+            description,
+            color_rgba: rgba,
+            state: BlueprintStampedTextState::Pending(pending),
+        };
+        if layer_index < surface.stamped_text_layers.len() {
+            surface.stamped_text_layers[layer_index] = replacement;
+        } else {
+            surface.stamped_text_layers.push(replacement);
+        }
+    }
+
+    let layer = &mut surface.stamped_text_layers[layer_index];
+    let completion = match &mut layer.state {
+        BlueprintStampedTextState::Pending(pending) => pending.try_take(),
+        BlueprintStampedTextState::Ready(_) => None,
+    };
+    if let Some(completion) = completion {
+        match completion {
+            Ok(buffer) => {
+                let ticket = buffer.ticket().raw();
+                let submits = buffer.submits();
+                let walkers = buffer.active_walkers();
+                layer.state = BlueprintStampedTextState::Ready(buffer);
+                crate::log_info!(
+                    target: "ui4/solara-text";
+                    "FontKernel stamp ready owner={:?} window={} layer={} ticket={} font={} runs={} target={}x{} submits={} walkers={} storage=gpu-vm-rgba8\n",
+                    owner,
+                    window_id,
+                    layer_index,
+                    ticket,
+                    font.registry_name(),
+                    layer.description.runs.len(),
+                    viewport_width,
+                    viewport_height,
+                    submits,
+                    walkers,
+                );
+            }
+            Err(error) => {
+                log_font_kernel_error(
+                    "stamp",
+                    owner,
+                    window_id,
+                    font,
+                    layer.description.runs.len(),
+                    error,
+                );
+                surface.stamped_text_layers.remove(layer_index);
+                return ERROR_FONT;
+            }
+        }
+    }
+    if matches!(&layer.state, BlueprintStampedTextState::Pending(_)) {
+        return ERROR_BUSY;
+    }
+    surface.stamped_text_cursor = surface.stamped_text_cursor.saturating_add(1);
+    0
 }
 
 fn retain_scene_entries_for_surface(
@@ -2053,7 +2235,14 @@ fn retain_scene_entries_for_surface(
             Ok(pending) => pending,
             Err(FontKernelError::QueueFull) => return ERROR_BUSY,
             Err(error) => {
-                log_font_kernel_error(owner, window_id, font, description.runs.len(), error);
+                log_font_kernel_error(
+                    "retain",
+                    owner,
+                    window_id,
+                    font,
+                    description.runs.len(),
+                    error,
+                );
                 return ERROR_FONT;
             }
         };
@@ -2085,22 +2274,31 @@ fn retain_scene_entries_for_surface(
                     BlueprintRetainedTextState::Pending(pending) => pending.ticket().raw(),
                     BlueprintRetainedTextState::Ready(_) => 0,
                 };
+                let mask_count = scene.mask_count();
                 layer.state = BlueprintRetainedTextState::Ready(scene);
                 crate::log_info!(
                     target: "ui4/solara-text";
-                    "FontKernel retained owner={:?} window={} layer={} ticket={} font={} runs={} target={}x{} storage=gpu-vm-r8\n",
+                    "FontKernel retained owner={:?} window={} layer={} ticket={} font={} runs={} masks={} target={}x{} storage=gpu-vm-r8-layers\n",
                     owner,
                     window_id,
                     layer_index,
                     ticket,
                     font.registry_name(),
                     layer.description.runs.len(),
+                    mask_count,
                     viewport_width,
                     viewport_height,
                 );
             }
             Err(error) => {
-                log_font_kernel_error(owner, window_id, font, layer.description.runs.len(), error);
+                log_font_kernel_error(
+                    "retain",
+                    owner,
+                    window_id,
+                    font,
+                    layer.description.runs.len(),
+                    error,
+                );
                 surface.retained_text_layers.remove(layer_index);
                 return ERROR_FONT;
             }
@@ -2114,6 +2312,7 @@ fn retain_scene_entries_for_surface(
 }
 
 fn log_font_kernel_error(
+    operation: &'static str,
     owner: WindowOwner,
     window_id: u32,
     font: GpuFontFace,
@@ -2128,7 +2327,8 @@ fn log_font_kernel_error(
     };
     crate::log_warn!(
         target: "ui4/solara-text";
-        "FontKernel retain failed owner={:?} window={} font={} runs={} class={} reason={}\n",
+        "FontKernel {} failed owner={:?} window={} font={} runs={} class={} reason={}\n",
+        operation,
         owner,
         window_id,
         font.registry_name(),
@@ -2168,27 +2368,29 @@ fn render_retained_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
             }
             return ERROR_BUSY;
         };
-        let Some(mask) = scene.mask_surface() else {
+        for retained_mask in scene.masks() {
+            let Some((mask, origin)) = retained_mask else {
+                if mark_frame_buffer_cpu_authored(lease).is_err() {
+                    return ERROR_UI4;
+                }
+                return ERROR_FONT;
+            };
+            masks.push(GpgpuGlyphMaskLayer {
+                mask,
+                mask_rect: GpgpuRect::new(0, 0, mask.width, mask.height),
+                dst_xy: GpgpuPoint::new(
+                    origin[0].saturating_add(layer.translation_px[0]),
+                    origin[1].saturating_add(layer.translation_px[1]),
+                ),
+                color_rgba: layer.color_rgba,
+            });
+        }
+        if scene.mask_count() == 0 {
             if mark_frame_buffer_cpu_authored(lease).is_err() {
                 return ERROR_UI4;
             }
             return ERROR_FONT;
-        };
-        let Some(origin) = scene.origin_px() else {
-            if mark_frame_buffer_cpu_authored(lease).is_err() {
-                return ERROR_UI4;
-            }
-            return ERROR_FONT;
-        };
-        masks.push(GpgpuGlyphMaskLayer {
-            mask,
-            mask_rect: GpgpuRect::new(0, 0, mask.width, mask.height),
-            dst_xy: GpgpuPoint::new(
-                origin[0].saturating_add(layer.translation_px[0]),
-                origin[1].saturating_add(layer.translation_px[1]),
-            ),
-            color_rgba: layer.color_rgba,
-        });
+        }
     }
 
     let mut submitted = false;
@@ -2260,6 +2462,160 @@ fn render_retained_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
     0
 }
 
+fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    if surface.stamped_text_rendered || surface.stamped_text_cursor == 0 {
+        return 0;
+    }
+    if surface.gpu_submission_unretired {
+        return ERROR_BUSY;
+    }
+    let Some(lease) = surface.write_lease else {
+        return ERROR_STATE;
+    };
+    let destination = match gpgpu_rgba_surface(lease) {
+        Ok(destination) => destination,
+        Err(_) => return ERROR_UI4,
+    };
+    let mut sources = Vec::with_capacity(surface.stamped_text_cursor);
+    let mut font_submits = 0usize;
+    let mut font_walkers = 0usize;
+    for layer in surface
+        .stamped_text_layers
+        .iter()
+        .take(surface.stamped_text_cursor)
+    {
+        let BlueprintStampedTextState::Ready(buffer) = &layer.state else {
+            return ERROR_BUSY;
+        };
+        let source = buffer.surface();
+        if source.width != destination.width || source.height != destination.height {
+            return ERROR_FONT;
+        }
+        font_submits = font_submits.saturating_add(buffer.submits());
+        font_walkers = font_walkers.saturating_add(buffer.active_walkers());
+        sources.push(source);
+    }
+
+    let descriptor = GpgpuAlphaBlendWorklistDesc {
+        src_xy: 0,
+        dst_xy: 0,
+        size: destination.width | (destination.height << 16),
+        flags: ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER | ALPHA_BLEND_WORKLIST_FLAG_PREMUL_SRC,
+        color_rgba: u32::MAX,
+    };
+    let batch_count = sources.len();
+    let mut final_release = None;
+    for (batch_index, source) in sources
+        .iter()
+        .copied()
+        .enumerate()
+        .skip(surface.stamped_text_composite_cursor)
+    {
+        let submission = match queue_blueprint_alpha_batch(
+            source,
+            destination,
+            core::slice::from_ref(&descriptor),
+        ) {
+            Ok(submission) => submission,
+            Err(Ui4CompositorSubmitError::Busy)
+            | Err(Ui4CompositorSubmitError::SubmissionRejected) => {
+                crate::log_warn!(target: "ui4/solara-text";
+                    "FontKernel stamp composite deferred owner={:?} window={} frame={} buffer={} layer={}/{} reason=ui4-compositor-admission-timeout hardware_accepted=0 action=retain-stamps+resume-layer\n",
+                    owner,
+                    window_id,
+                    lease.frame.raw(),
+                    lease.buffer_index,
+                    batch_index.saturating_add(1),
+                    batch_count,
+                );
+                return ERROR_BUSY;
+            }
+            Err(Ui4CompositorSubmitError::Unavailable) => return ERROR_UI4,
+            Err(Ui4CompositorSubmitError::InvalidWorklist) => return ERROR_FONT,
+        };
+
+        let final_batch = batch_index.saturating_add(1) == batch_count;
+        let retire_started = crate::chronos::monotonic_nanos();
+        loop {
+            let completed = if final_batch {
+                match poll_ui4_blueprint_sprite_scene(submission, destination) {
+                    Ui4SpriteSceneCompletion::Pending => false,
+                    Ui4SpriteSceneCompletion::Complete { stats, release } => {
+                        if stats.descs != 1 || stats.submits != 1 {
+                            return ERROR_UI4;
+                        }
+                        final_release = Some(release);
+                        true
+                    }
+                    Ui4SpriteSceneCompletion::Failed => {
+                        surface.gpu_submission_unretired = true;
+                        return ERROR_BUSY;
+                    }
+                }
+            } else {
+                match poll_ui4_compositor_submission(submission) {
+                    Ui4CompositorCompletion::Pending => false,
+                    Ui4CompositorCompletion::Complete(stats) => {
+                        if stats.descs != 1 || stats.submits != 1 {
+                            return ERROR_UI4;
+                        }
+                        true
+                    }
+                    Ui4CompositorCompletion::Failed
+                    | Ui4CompositorCompletion::InvalidSubmission => {
+                        surface.gpu_submission_unretired = true;
+                        return ERROR_BUSY;
+                    }
+                }
+            };
+            if completed {
+                surface.stamped_text_composite_cursor = batch_index.saturating_add(1);
+                break;
+            }
+            if crate::chronos::monotonic_nanos().saturating_sub(retire_started)
+                >= UI4_SPRITE_BATCH_TIMEOUT_NS
+            {
+                surface.gpu_submission_unretired = true;
+                crate::log_error!(
+                    target: "ui4/solara-text";
+                    "FontKernel stamp composite quarantined owner={:?} window={} frame={} buffer={} layer={}/{} reason=accepted-submission-not-retired action=retain-frame+stamp-source\n",
+                    owner,
+                    window_id,
+                    lease.frame.raw(),
+                    lease.buffer_index,
+                    batch_index.saturating_add(1),
+                    batch_count,
+                );
+                return ERROR_BUSY;
+            }
+            core::hint::spin_loop();
+        }
+    }
+
+    let Some(release) = final_release else {
+        return ERROR_UI4;
+    };
+    surface.pending_gpu_release = Some(release);
+    surface.stamped_text_rendered = true;
+    crate::log_info!(
+        target: "ui4/solara-text";
+        "FontKernel stamp composited owner={:?} window={} layers={} font_submits={} font_walkers={} compositor_submits={} target={}x{} path=gpu-vm-rgba8->guc-rcs->ui4 cpu_readback=0 cpu_frame_copy=0\n",
+        owner,
+        window_id,
+        batch_count,
+        font_submits,
+        font_walkers,
+        batch_count,
+        surface.width,
+        surface.height,
+    );
+    0
+}
+
 /// Publish the completed dirty buffer and its window damage.
 pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     window_id: u32,
@@ -2289,6 +2645,10 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     if retained_text != 0 {
         return retained_text;
     }
+    let stamped_text = render_stamped_text_for_surface(owner, window_id);
+    if stamped_text != 0 {
+        return stamped_text;
+    }
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
@@ -2314,7 +2674,18 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
         Some(release) => publish_gpgpu_scene_frame_buffer(lease, release),
         None => publish_frame_buffer(lease),
     };
-    if publish.is_err() {
+    if let Err(error) = publish {
+        crate::log_warn!(
+            target: "ui4/blueprint-frame";
+            "frame publish handoff rejected owner={:?} window={} frame={} buffer={} cadence={:?} gpu_release={} error={:?} action=retain-write-lease\n",
+            owner,
+            window_id,
+            lease.frame.raw(),
+            lease.buffer_index,
+            surface.cadence,
+            u8::from(release.is_some()),
+            error,
+        );
         surface.write_lease = Some(lease);
         surface.pending_gpu_release = release;
         return ERROR_UI4;
@@ -2354,6 +2725,10 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
         .truncate(surface.retained_text_cursor);
     surface.retained_text_cursor = 0;
     surface.retained_text_rendered = false;
+    surface.stamped_text_layers.clear();
+    surface.stamped_text_cursor = 0;
+    surface.stamped_text_composite_cursor = 0;
+    surface.stamped_text_rendered = false;
     0
 }
 
@@ -2619,9 +2994,9 @@ unsafe fn guest_text_scene(
             return result;
         }
         // The host has transferred owned strings to the Embassy FontKernel
-        // service. Yield the AP instead of spinning until its retained R8
-        // scene is signaled back to the UI4 surface.
-        trueos_vm::vmcall::yield_now();
+        // service. Pace the synchronous ABI poll so a pending GPU ticket
+        // cannot turn into a VM-exit and serial-log storm.
+        trueos_vm::vmcall::sleep_ms(GUEST_TEXT_SCENE_BUSY_POLL_MS);
     }
 }
 

@@ -462,6 +462,32 @@ unsafe fn checked_utf8<'a>(ptr: *const u8, len: usize) -> Result<&'a str, i32> {
     core::str::from_utf8(unsafe { core::slice::from_raw_parts(ptr, len) }).map_err(|_| -1)
 }
 
+fn guest_control_call(op: u32, arg0: u64, arg1: u64, request: &[u8]) -> i32 {
+    let (status, data) = trueos_vm::vmcall::call_with_payload(op, arg0, arg1, request, &mut []);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        data as i64 as i32
+    } else {
+        -1
+    }
+}
+
+unsafe fn guest_control_request<T>(op: u32, request: &[u8], out: *mut T) -> i32 {
+    let out_bytes =
+        unsafe { core::slice::from_raw_parts_mut(out.cast::<u8>(), core::mem::size_of::<T>()) };
+    let (status, data) = trueos_vm::vmcall::call_with_payload(op, 0, 0, request, out_bytes);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        data as i64 as i32
+    } else {
+        -1
+    }
+}
+
+fn record_bytes<T>(value: &T) -> &[u8] {
+    unsafe {
+        core::slice::from_raw_parts((value as *const T).cast::<u8>(), core::mem::size_of::<T>())
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_input_cursor_pos(
     cursor_id: u32,
@@ -583,6 +609,15 @@ pub unsafe extern "C" fn trueos_cabi_mouse_motion_cursor_request(
         Ok(label) => label,
         Err(error) => return error,
     };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe {
+            guest_control_request(
+                trueos_vm::vmcall::OP_BP_MOUSE_MOTION_CURSOR_REQUEST,
+                label.as_bytes(),
+                out_cursor,
+            )
+        };
+    }
     match request_cursor(mouse_motion_principal(), label, None) {
         Ok(cursor) => {
             unsafe {
@@ -600,6 +635,14 @@ pub unsafe extern "C" fn trueos_cabi_mouse_motion_cursor_request(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_mouse_motion_cursor_release(handle: u64) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_control_call(
+            trueos_vm::vmcall::OP_BP_MOUSE_MOTION_CURSOR_RELEASE,
+            handle,
+            0,
+            &[],
+        );
+    }
     release_cursor(mouse_motion_principal(), handle)
         .map(|()| 0)
         .unwrap_or_else(|error| error.code())
@@ -612,6 +655,14 @@ pub unsafe extern "C" fn trueos_cabi_mouse_motion_submit(
 ) -> i32 {
     if command.is_null() {
         return -1;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_control_call(
+            trueos_vm::vmcall::OP_BP_MOUSE_MOTION_SUBMIT,
+            handle,
+            0,
+            record_bytes(unsafe { &*command }),
+        );
     }
     submit_command(mouse_motion_principal(), handle, unsafe { *command }.into())
         .map(|()| 0)
@@ -628,6 +679,14 @@ pub unsafe extern "C" fn trueos_cabi_mouse_motion_submit_json(
         return -1;
     }
     let bytes = unsafe { core::slice::from_raw_parts(json_ptr, json_len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_control_call(
+            trueos_vm::vmcall::OP_BP_MOUSE_MOTION_SUBMIT_JSON,
+            handle,
+            0,
+            bytes,
+        );
+    }
     submit_json(mouse_motion_principal(), handle, bytes)
         .map(|count| count.min(i32::MAX as usize) as i32)
         .unwrap_or_else(|error| error.code())
@@ -635,6 +694,14 @@ pub unsafe extern "C" fn trueos_cabi_mouse_motion_submit_json(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_mouse_motion_cursor_idle(handle: u64) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_control_call(
+            trueos_vm::vmcall::OP_BP_MOUSE_MOTION_CURSOR_IDLE,
+            handle,
+            0,
+            &[],
+        );
+    }
     crate::r::mouse_motion_service::cursor_is_idle(mouse_motion_principal(), handle)
         .map(i32::from)
         .unwrap_or_else(|error| error.code())
@@ -653,6 +720,15 @@ pub unsafe extern "C" fn trueos_cabi_keyboard_control_request(
         Ok(label) => label,
         Err(error) => return error,
     };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe {
+            guest_control_request(
+                trueos_vm::vmcall::OP_BP_KEYBOARD_CONTROL_REQUEST,
+                label.as_bytes(),
+                out_keyboard,
+            )
+        };
+    }
     match request_keyboard(keyboard_control_principal(), label) {
         Ok(keyboard) => {
             unsafe {
@@ -670,6 +746,14 @@ pub unsafe extern "C" fn trueos_cabi_keyboard_control_request(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_keyboard_control_release(handle: u64) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_control_call(
+            trueos_vm::vmcall::OP_BP_KEYBOARD_CONTROL_RELEASE,
+            handle,
+            0,
+            &[],
+        );
+    }
     release_keyboard(keyboard_control_principal(), handle)
         .map(|()| 0)
         .unwrap_or_else(|error| error.code())
@@ -682,6 +766,14 @@ pub unsafe extern "C" fn trueos_cabi_keyboard_control_submit(
 ) -> i32 {
     if command.is_null() {
         return -1;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_control_call(
+            trueos_vm::vmcall::OP_BP_KEYBOARD_CONTROL_SUBMIT,
+            handle,
+            0,
+            record_bytes(unsafe { &*command }),
+        );
     }
     submit_keyboard_command(keyboard_control_principal(), handle, unsafe { *command }.into())
         .map(|()| 0)
@@ -700,6 +792,14 @@ pub unsafe extern "C" fn trueos_cabi_keyboard_control_submit_text(
         Ok(text) => text,
         Err(error) => return error,
     };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_control_call(
+            trueos_vm::vmcall::OP_BP_KEYBOARD_CONTROL_SUBMIT_TEXT,
+            handle,
+            ((interval_ms as u64) << 32) | u64::from(flags),
+            text.as_bytes(),
+        );
+    }
     submit_keyboard_text(keyboard_control_principal(), handle, text, interval_ms, flags & 1 != 0)
         .map(|count| count.min(i32::MAX as usize) as i32)
         .unwrap_or_else(|error| error.code())
@@ -715,6 +815,14 @@ pub unsafe extern "C" fn trueos_cabi_keyboard_control_submit_json(
         return -1;
     }
     let bytes = unsafe { core::slice::from_raw_parts(json_ptr, json_len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_control_call(
+            trueos_vm::vmcall::OP_BP_KEYBOARD_CONTROL_SUBMIT_JSON,
+            handle,
+            0,
+            bytes,
+        );
+    }
     submit_keyboard_json(keyboard_control_principal(), handle, bytes)
         .map(|count| count.min(i32::MAX as usize) as i32)
         .unwrap_or_else(|error| error.code())
@@ -722,6 +830,9 @@ pub unsafe extern "C" fn trueos_cabi_keyboard_control_submit_json(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_keyboard_control_idle(handle: u64) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_control_call(trueos_vm::vmcall::OP_BP_KEYBOARD_CONTROL_IDLE, handle, 0, &[]);
+    }
     keyboard_is_idle(keyboard_control_principal(), handle)
         .map(i32::from)
         .unwrap_or_else(|error| error.code())

@@ -276,7 +276,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand expensive=double+triple/one-per-slot/soft-cap-4 mixed_slot=local-winner/no-repair static_single=shared-slot-composition slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
+        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand expensive=double+triple/one-per-slot/soft-cap-4 mixed_slot=local-winner/placement-old+new-repair static_single=shared-slot-composition slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
         CLOSE_TRANSITION_PERIOD_MS,
         PENDING_POLL_PERIOD_MS,
     );
@@ -606,11 +606,13 @@ fn build_plane_plan(
                 );
             }
             Some(previous) if previous.placement != current.placement => {
-                // Moving a same-slot frame is intentionally local. Do not
-                // reconstruct the pixels exposed at its old location; a later
-                // publication on this slot may repair them opportunistically.
-                add_placement_damage(
+                // Every swap surface can still contain the frame at its old
+                // placement. Clear the exposed old bounds as well as drawing
+                // the new bounds; close animations do not publish another
+                // producer frame which could repair those pixels later.
+                add_placement_change_damage(
                     &mut plan.damage,
+                    previous.placement,
                     current.placement,
                     output_width,
                     output_height,
@@ -938,7 +940,7 @@ fn queue_async_plane(
             Err(crate::intel::Ui4AsyncCompositionError::Unavailable) => {
                 if !STATIC_SINGLE_CPU_BASELINE_LOGGED.swap(true, Ordering::AcqRel) {
                     crate::log_warn!(target: "ui4";
-                        "ui4/static-painter-fallback: backend=cpu-sparse-copy reason=non-pristine-or-bcs-unavailable buffering=single plane_isolation=slot-local guc_jobs=0 shader_dispatches=0 damage=current-only flip=ui4-batched log=once\n"
+                        "ui4/static-painter-fallback: backend=cpu-sparse-copy reason=non-pristine-or-bcs-unavailable buffering=single plane_isolation=slot-local guc_jobs=0 shader_dispatches=0 damage=old+new-placement flip=ui4-batched log=once\n"
                     );
                 }
                 crate::intel::queue_ui4_static_overlay_composition_cpu(
@@ -1303,6 +1305,17 @@ fn add_placement_damage(
     }
 }
 
+fn add_placement_change_damage(
+    region: &mut crate::intel::CompositionDamageRegion,
+    previous: WindowPlacement,
+    current: WindowPlacement,
+    output_width: u32,
+    output_height: u32,
+) {
+    add_placement_damage(region, previous, output_width, output_height);
+    add_placement_damage(region, current, output_width, output_height);
+}
+
 fn add_mapped_window_damage(
     output: &mut crate::intel::CompositionDamageRegion,
     local: super::DamageRegion,
@@ -1405,6 +1418,30 @@ mod damage_tests {
         assert!(half_scale_backing_matches(2559, 1439, 1280, 720));
         assert!(!half_scale_backing_matches(2560, 1440, 640, 400));
         assert!(!half_scale_backing_matches(2560, 1440, 2560, 1440));
+    }
+
+    #[test]
+    fn placement_change_damages_exposed_old_bounds() {
+        let previous = WindowPlacement {
+            x: 100,
+            y: 80,
+            width: 320,
+            height: 200,
+            z: 0,
+            opacity: u8::MAX,
+            visible: true,
+        };
+        let current = WindowPlacement {
+            x: 180,
+            y: 130,
+            width: 160,
+            height: 100,
+            opacity: 96,
+            ..previous
+        };
+        let mut damage = crate::intel::CompositionDamageRegion::EMPTY;
+        add_placement_change_damage(&mut damage, previous, current, 1920, 1080);
+        assert_eq!(damage.rects(), &[crate::intel::CompositionDamageRect::new(100, 80, 320, 200)]);
     }
 
     #[test]

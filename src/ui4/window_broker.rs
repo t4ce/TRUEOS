@@ -877,6 +877,27 @@ impl WindowBroker {
             let elapsed_ms = now_ms.saturating_sub(transition.started_ms);
             let completed_ms = transition.delay_ms.saturating_add(transition.duration_ms);
             if elapsed_ms >= completed_ms {
+                // Do not remove a closing window until an explicit zero-alpha
+                // sample has crossed the compositor's SURFLIVE boundary.
+                // Otherwise a delayed close tick can jump directly from the
+                // last non-zero direct-plane sample to the transparent parking
+                // surface, leaving the old producer surface vulnerable to an
+                // opacity re-arm during that final handoff.
+                let terminal = close_transition_placement(
+                    transition.initial,
+                    transition.duration_ms,
+                    transition.duration_ms,
+                    transition.shrink_per_mille,
+                );
+                if window.placement.opacity != 0 || window.damage.is_some() {
+                    if window.placement != terminal {
+                        window.placement = terminal;
+                        window.damage = Some(DamageRegion::FULL);
+                        window.revision = next_serial(window.revision);
+                        composition_changed = true;
+                    }
+                    continue;
+                }
                 window.close_transition = None;
                 window.state = WindowState::Closed;
                 window.damage = None;
@@ -1787,6 +1808,44 @@ mod tests {
         assert_eq!(WindowOwner::Vm(9).name(), "blueprint-vm");
         assert_ne!(WindowOwner::KernelApp(42), WindowOwner::KernelApp(43));
         assert_ne!(WindowOwner::Vm(9), WindowOwner::Vm(10));
+    }
+
+    #[test]
+    fn close_waits_for_an_acknowledged_zero_alpha_sample() {
+        let owner = WindowOwner::GPGPU_PREVIEW;
+        let mut broker = WindowBroker::new();
+        let session = broker.begin_additional_session(owner).unwrap();
+        let window = broker
+            .create(test_window(owner, session, 7, 0, 0, true), FrameBuffering::Triple)
+            .unwrap();
+        let (slot, _) = unpack_handle(window.raw()).unwrap();
+        let frame = broker.windows[slot].frame;
+        broker.windows[slot].state = WindowState::Closing;
+        broker.windows[slot].damage = None;
+        broker.windows[slot].close_transition = Some(WindowCloseTransition {
+            lease: FrameReadLease {
+                frame,
+                buffer_index: 0,
+            },
+            initial: broker.windows[slot].placement,
+            started_ms: 1_000,
+            delay_ms: 0,
+            duration_ms: 200,
+            shrink_per_mille: DIRECT_PLANE_CLOSE_SHRINK_PER_MILLE,
+            retire_frame: true,
+        });
+
+        let retirements = broker.advance_close_transitions(1_200);
+        assert!(retirements.is_empty());
+        assert_eq!(broker.windows[slot].state, WindowState::Closing);
+        assert_eq!(broker.windows[slot].placement.opacity, 0);
+        assert_eq!(broker.windows[slot].damage, Some(DamageRegion::FULL));
+
+        assert!(broker.acknowledge(window, 0));
+        let retirements = broker.advance_close_transitions(1_216);
+        assert_eq!(retirements.len(), 1);
+        assert_eq!(broker.windows[slot].state, WindowState::Closed);
+        assert!(broker.windows[slot].close_transition.is_none());
     }
 
     #[test]

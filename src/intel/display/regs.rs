@@ -114,7 +114,9 @@ pub(in crate::intel) const PLANE_CUS_VPHASE_0: u32 = 0 << 12;
 pub(in crate::intel) const PLANE_CUS_VPHASE_0_25: u32 = 1 << 12;
 pub(in crate::intel) const PLANE_CUS_VPHASE_0_5: u32 = 2 << 12;
 pub(in crate::intel) const PLANE_WM_ENABLE: u32 = 1 << 31;
-pub(in crate::intel) const PLANE_WM_LEVEL0_BOOT_SAFE: u32 = PLANE_WM_ENABLE | (2 << 14) | 160;
+// At 2560-wide RGBA8, the linear-plane fetch model consumes 21 512-byte
+// blocks per scanline. Eight scanlines therefore require 168 blocks.
+pub(in crate::intel) const PLANE_WM_LEVEL0_BOOT_SAFE: u32 = PLANE_WM_ENABLE | (2 << 14) | 168;
 // Pipe-local DBUF policy for the five universal planes exposed by display
 // version 13: primary plus four sprites. UI4 converts decoded video into its
 // normal RGBA frame contract, so every slot is independently usable as a

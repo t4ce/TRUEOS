@@ -1,9 +1,9 @@
 //! Independent UI4 interaction-plane service.
 //!
-//! Slot 4 contains only software cursors, selection/maximize outlines, and the
-//! tiny context menu. It deliberately does not participate in application-
-//! plane composition or its atomic SURF batch. Cursor input is coalesced to
-//! the display cadence and only the old/new visual rectangles are rewritten.
+//! Slot 4 contains fixed-shape colored crosshairs, one-pixel selection and
+//! maximize outlines, selected-frame strips, and context menus. It deliberately
+//! does not participate in application-plane composition or its atomic SURF
+//! batch. Cursor input is coalesced to the display cadence.
 
 use embassy_time::{Duration, Instant, with_timeout};
 use spin::Mutex;
@@ -11,10 +11,6 @@ use spin::Mutex;
 const SLOT4_RECT_CAPACITY: usize = 3_072;
 const SOFTWARE_CURSOR_STROKE_PX: u32 = 5;
 const SOFTWARE_CURSOR_LONG_PX: u32 = 27;
-// Nearest odd pixel length to 75% keeps the two arms symmetric around the
-// unchanged five-pixel stroke while making a press visibly contract the cross.
-const SOFTWARE_CURSOR_PRESSED_LONG_PX: u32 = 21;
-const SOFTWARE_CURSOR_HALO_PX: u32 = 9;
 
 type Slot4Rects = heapless::Vec<crate::intel::LiveOverlayRect, SLOT4_RECT_CAPACITY>;
 
@@ -22,8 +18,6 @@ static PRESENTED_RECTS: Mutex<Slot4Rects> = Mutex::new(Slot4Rects::new());
 
 struct Slot4State {
     previous_rects: Slot4Rects,
-    signature: u64,
-    initialized: bool,
     consecutive_present_failures: u64,
     pending: Option<PendingSlot4Present>,
 }
@@ -31,15 +25,12 @@ struct Slot4State {
 struct PendingSlot4Present {
     flip: crate::intel::Ui4LiveOverlayFlip,
     rects: Slot4Rects,
-    signature: u64,
 }
 
 impl Slot4State {
     const fn new() -> Self {
         Self {
             previous_rects: Slot4Rects::new(),
-            signature: 0,
-            initialized: false,
             consecutive_present_failures: 0,
             pending: None,
         }
@@ -50,7 +41,7 @@ impl Slot4State {
 pub(crate) async fn ui4_slot4_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
     crate::log_info!(target: "ui4/slot4";
-        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+per-cursor-selected-frame-strips+selection-outline+maximize-preview+context-menu/legacy-rightclick+requested-one-shot/per-cursor-color cursor-set=default+loading+resize-horizontal+resize-vertical+resize-diagonal+app-owned scope=selected-frame/per-source press=default-contract-25-percent hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=changed-pixels/disjoint gpu_submits=0 synthetic-motion=off\n",
+        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=static-color-crosshairs+selected-frame-strips+selection-outline-1px+maximize-outline-1px+context-menu hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=ordered-linear-diff gpu_submits=0 synthetic-motion=off\n",
         super::INTERACTION_CADENCE_HZ,
     );
 
@@ -67,7 +58,7 @@ pub(crate) async fn ui4_slot4_service_task() {
                     state.pending = Some(pending);
                 }
                 crate::intel::Ui4LiveOverlayFlipPoll::Complete => {
-                    commit_presented_slot4(&mut state, pending.rects, pending.signature);
+                    commit_presented_slot4(&mut state, pending.rects);
                     state.consecutive_present_failures = 0;
                 }
                 crate::intel::Ui4LiveOverlayFlipPoll::Failed => {
@@ -127,13 +118,8 @@ fn queue_slot4(
     state: &mut Slot4State,
     rects: &Slot4Rects,
 ) -> Result<Option<PendingSlot4Present>, ()> {
-    let signature = overlay_rect_signature(rects);
-    if state.initialized && signature == state.signature {
-        return Ok(None);
-    }
     let damage = changed_rect_damage(&state.previous_rects, rects);
     if damage.is_empty() {
-        commit_presented_slot4(state, rects.clone(), signature);
         return Ok(None);
     }
     let flip = crate::intel::queue_ui4_live_overlay_rects_on_slot_damage_region(
@@ -146,14 +132,11 @@ fn queue_slot4(
     Ok(Some(PendingSlot4Present {
         flip,
         rects: rects.clone(),
-        signature,
     }))
 }
 
-fn commit_presented_slot4(state: &mut Slot4State, rects: Slot4Rects, signature: u64) {
+fn commit_presented_slot4(state: &mut Slot4State, rects: Slot4Rects) {
     state.previous_rects = rects.clone();
-    state.signature = signature;
-    state.initialized = true;
     *PRESENTED_RECTS.lock() = rects;
 }
 
@@ -176,56 +159,21 @@ fn changed_rect_damage(
     current: &[crate::intel::LiveOverlayRect],
 ) -> crate::intel::CompositionDamageRegion {
     let mut damage = crate::intel::CompositionDamageRegion::EMPTY;
-    let mut previous_matched = [false; SLOT4_RECT_CAPACITY];
-    let mut current_matched = [false; SLOT4_RECT_CAPACITY];
 
-    // Identical retained rectangles change no pixels at all.
-    for (previous_index, previous_rect) in previous.iter().enumerate() {
-        if let Some((current_index, _)) =
-            current.iter().enumerate().find(|(index, current_rect)| {
-                !current_matched[*index] && overlay_rect_eq(previous_rect, current_rect)
-            })
-        {
-            previous_matched[previous_index] = true;
-            current_matched[current_index] = true;
+    // The slot builder has stable ordering. Compare matching positions in one
+    // linear pass; a changed entry contributes its old and new bounds.
+    let common = previous.len().min(current.len());
+    for index in 0..common {
+        if !overlay_rect_eq(&previous[index], &current[index]) {
+            add_overlay_rect_damage(&mut damage, &previous[index]);
+            add_overlay_rect_damage(&mut damage, &current[index]);
         }
     }
-
-    // A press/release replaces each long crosshair rectangle with a same-color
-    // contained rectangle. Damage only the removed/added caps, not its retained
-    // center pixels. The containment form also preserves the edge-clamped T.
-    for (previous_index, previous_rect) in previous.iter().enumerate() {
-        if previous_matched[previous_index] {
-            continue;
-        }
-        if let Some((current_index, current_rect)) =
-            current.iter().enumerate().find(|(index, current_rect)| {
-                !current_matched[*index]
-                    && previous_rect.color == current_rect.color
-                    && overlay_rect_axis_contraction(previous_rect, current_rect)
-                    && (overlay_rect_contains(previous_rect, current_rect)
-                        || overlay_rect_contains(current_rect, previous_rect))
-            })
-        {
-            previous_matched[previous_index] = true;
-            current_matched[current_index] = true;
-            if overlay_rect_contains(previous_rect, current_rect) {
-                add_rect_subtraction(&mut damage, previous_rect, current_rect);
-            } else {
-                add_rect_subtraction(&mut damage, current_rect, previous_rect);
-            }
-        }
+    for rect in &previous[common..] {
+        add_overlay_rect_damage(&mut damage, rect);
     }
-
-    for (index, rect) in previous.iter().enumerate() {
-        if !previous_matched[index] {
-            add_overlay_rect_damage(&mut damage, rect);
-        }
-    }
-    for (index, rect) in current.iter().enumerate() {
-        if !current_matched[index] {
-            add_overlay_rect_damage(&mut damage, rect);
-        }
+    for rect in &current[common..] {
+        add_overlay_rect_damage(&mut damage, rect);
     }
     damage
 }
@@ -239,59 +187,6 @@ fn overlay_rect_eq(
         && left.width == right.width
         && left.height == right.height
         && left.color == right.color
-}
-
-fn overlay_rect_axis_contraction(
-    left: &crate::intel::LiveOverlayRect,
-    right: &crate::intel::LiveOverlayRect,
-) -> bool {
-    (left.width == right.width && left.height != right.height)
-        || (left.height == right.height && left.width != right.width)
-}
-
-fn overlay_rect_contains(
-    outer: &crate::intel::LiveOverlayRect,
-    inner: &crate::intel::LiveOverlayRect,
-) -> bool {
-    outer.x <= inner.x
-        && outer.y <= inner.y
-        && outer.x.saturating_add(outer.width) >= inner.x.saturating_add(inner.width)
-        && outer.y.saturating_add(outer.height) >= inner.y.saturating_add(inner.height)
-}
-
-fn add_rect_subtraction(
-    damage: &mut crate::intel::CompositionDamageRegion,
-    outer: &crate::intel::LiveOverlayRect,
-    inner: &crate::intel::LiveOverlayRect,
-) {
-    let outer_right = outer.x.saturating_add(outer.width);
-    let outer_bottom = outer.y.saturating_add(outer.height);
-    let inner_right = inner.x.saturating_add(inner.width);
-    let inner_bottom = inner.y.saturating_add(inner.height);
-    damage.add(crate::intel::CompositionDamageRect::new(
-        outer.x,
-        outer.y,
-        outer.width,
-        inner.y.saturating_sub(outer.y),
-    ));
-    damage.add(crate::intel::CompositionDamageRect::new(
-        outer.x,
-        inner_bottom,
-        outer.width,
-        outer_bottom.saturating_sub(inner_bottom),
-    ));
-    damage.add(crate::intel::CompositionDamageRect::new(
-        outer.x,
-        inner.y,
-        inner.x.saturating_sub(outer.x),
-        inner.height,
-    ));
-    damage.add(crate::intel::CompositionDamageRect::new(
-        inner_right,
-        inner.y,
-        outer_right.saturating_sub(inner_right),
-        inner.height,
-    ));
 }
 
 fn add_overlay_rect_damage(
@@ -845,22 +740,42 @@ fn push_rect_border(
     color: crate::graphics::primitives::Rgba8,
 ) {
     let thickness = thickness.min(rect.width).min(rect.height);
-    push_overlay_rect(rects, rect.x, rect.y, rect.width, thickness, color);
+    if thickness == 0 {
+        return;
+    }
+
+    // Partition the border instead of overlapping its four corners. Damage
+    // regions conservatively union overlapping rectangles into their bounding
+    // box; overlapping border pieces would therefore turn a thin outline into
+    // full-rectangle damage on every resize or selection movement.
+    let top_height = thickness;
+    let bottom_height = thickness.min(rect.height.saturating_sub(top_height));
+    let middle_y = rect.y.saturating_add(top_height);
+    let middle_height = rect
+        .height
+        .saturating_sub(top_height)
+        .saturating_sub(bottom_height);
+    let left_width = thickness;
+    let right_width = thickness.min(rect.width.saturating_sub(left_width));
+
+    push_overlay_rect(rects, rect.x, rect.y, rect.width, top_height, color);
     push_overlay_rect(
         rects,
         rect.x,
-        rect.y.saturating_add(rect.height.saturating_sub(thickness)),
+        rect.y
+            .saturating_add(rect.height.saturating_sub(bottom_height)),
         rect.width,
-        thickness,
+        bottom_height,
         color,
     );
-    push_overlay_rect(rects, rect.x, rect.y, thickness, rect.height, color);
+    push_overlay_rect(rects, rect.x, middle_y, left_width, middle_height, color);
     push_overlay_rect(
         rects,
-        rect.x.saturating_add(rect.width.saturating_sub(thickness)),
-        rect.y,
-        thickness,
-        rect.height,
+        rect.x
+            .saturating_add(rect.width.saturating_sub(right_width)),
+        middle_y,
+        right_width,
+        middle_height,
         color,
     );
 }
@@ -1012,5 +927,67 @@ mod tests {
             assert!(damage.rects().contains(&rect));
         }
         assert_eq!(changed_rect_damage(&pressed, &released), damage);
+    }
+
+    #[test]
+    fn border_rectangles_partition_the_outline_without_overlap() {
+        let mut rects = Slot4Rects::new();
+        push_rect_border(
+            &mut rects,
+            super::super::Ui4VisualRect {
+                x: 10,
+                y: 20,
+                width: 30,
+                height: 20,
+            },
+            3,
+            Rgba8::new(255, 0, 0, 255),
+        );
+
+        let expected = [
+            (10, 20, 30, 3),
+            (10, 37, 30, 3),
+            (10, 23, 3, 14),
+            (37, 23, 3, 14),
+        ];
+        assert_eq!(rects.len(), expected.len());
+        for (rect, expected) in rects.iter().zip(expected) {
+            assert_eq!((rect.x, rect.y, rect.width, rect.height), expected);
+        }
+        for left in 0..rects.len() {
+            for right in left + 1..rects.len() {
+                let left = &rects[left];
+                let right = &rects[right];
+                let left_right = left.x.saturating_add(left.width);
+                let left_bottom = left.y.saturating_add(left.height);
+                let right_right = right.x.saturating_add(right.width);
+                let right_bottom = right.y.saturating_add(right.height);
+                assert!(
+                    left_right <= right.x
+                        || right_right <= left.x
+                        || left_bottom <= right.y
+                        || right_bottom <= left.y
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn one_pixel_high_border_is_not_emitted_four_times() {
+        let mut rects = Slot4Rects::new();
+        push_rect_border(
+            &mut rects,
+            super::super::Ui4VisualRect {
+                x: 4,
+                y: 7,
+                width: 23,
+                height: 1,
+            },
+            1,
+            Rgba8::new(255, 0, 0, 255),
+        );
+
+        assert_eq!(rects.len(), 1);
+        assert_eq!((rects[0].x, rects[0].y, rects[0].width, rects[0].height), (4, 7, 23, 1));
     }
 }

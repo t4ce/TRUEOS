@@ -413,9 +413,12 @@ pub mod env {
             } else {
                 Some(alloc::format!("{}/{}", root.trim_matches('/'), app_rel))
             }
-        } else if rel == "common" {
+        } else if rel == "common" || rel == "apps/common" {
             Some(String::from("apps/common"))
-        } else if let Some(shared_rel) = rel.strip_prefix("common/") {
+        } else if let Some(shared_rel) = rel
+            .strip_prefix("common/")
+            .or_else(|| rel.strip_prefix("apps/common/"))
+        {
             if shared_rel.is_empty() {
                 Some(String::from("apps/common"))
             } else {

@@ -402,7 +402,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
                     state.archive.as_str(),
                     state.module_bytes.as_slice(),
                 ),
-                crate::hv::blueprint::app_fs_common_for_archive(state.archive.as_str()),
+                crate::hv::blueprint::app_fs_common_root(),
             )
         })
     else {

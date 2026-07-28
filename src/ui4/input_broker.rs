@@ -150,12 +150,9 @@ pub(crate) struct Ui4VisualRect {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4SoftwareCursorVisual {
-    pub(crate) source: Ui4CursorSource,
     pub(crate) x: u32,
     pub(crate) y: u32,
     pub(crate) color: crate::graphics::primitives::Rgba8,
-    pub(crate) buttons_down: u32,
-    pub(crate) icon: super::Ui4CursorIcon,
     pub(crate) context_menu: Option<(u32, u32)>,
     pub(crate) selection: Option<Ui4VisualRect>,
     pub(crate) maximize_preview: Option<Ui4VisualRect>,
@@ -1151,25 +1148,10 @@ impl InputBroker {
             if !route.visible_after_motion {
                 continue;
             }
-            let icon = topmost_window_at(route.x, route.y)
-                .filter(|window| {
-                    super::selected_frame_for_source(route.source)
-                        == Some(WindowTarget::from(*window).cursor_frame_key())
-                })
-                .map(|window| {
-                    super::cursor_icon_for(
-                        WindowTarget::from(window).cursor_frame_key(),
-                        route.source,
-                    )
-                })
-                .unwrap_or(super::Ui4CursorIcon::Default);
             let _ = visuals.push(Ui4SoftwareCursorVisual {
-                source: route.source,
                 x: route.x,
                 y: route.y,
                 color: route.color,
-                buttons_down: route.buttons_down,
-                icon,
                 context_menu: route.context_menu,
                 maximize_preview: route.maximize_preview,
                 selection: route.selection_anchor.and_then(|anchor| {
@@ -1475,7 +1457,8 @@ fn normalized_to_pixel(value: f64, extent: u32) -> u32 {
     if extent == 0 {
         return 0;
     }
-    ((value.clamp(0.0, 1.0) * f64::from(extent)) as u32).min(extent - 1)
+    let last_pixel = extent - 1;
+    (value.clamp(0.0, 1.0) * f64::from(last_pixel)) as u32
 }
 
 fn signed_delta(next: u32, previous: u32) -> i32 {

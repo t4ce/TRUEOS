@@ -18,18 +18,22 @@ use spin::Mutex;
 use crate::intel::gpu_font::{
     GpuFontFace, GpuFontJobEntry, GpuFontRetainedScene, GpuFontRetainedSceneError,
     GpuFontRetainedStyle, GpuFontRgba, GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS,
-    ensure_font_face_available, retain_gpu_font_centered_scene_at_raster,
+    ensure_font_face_available, font_face_supports_text, retain_gpu_font_centered_scene_at_raster,
     retain_gpu_font_scene_at_raster,
 };
 
 const FONT_KERNEL_QUEUE_CAPACITY: usize = 32;
 const FONT_KERNEL_MAX_RUNS: usize = 64;
 const FONT_KERNEL_LANE_RETRY_MS: u64 = 2;
+const FONT_KERNEL_GPU_RETRY_MS: u64 = 2;
 const FONT_KERNEL_GPU_WAITERS: usize = 32;
 
 static NEXT_TICKET: AtomicU64 = AtomicU64::new(1);
 static ONLINE: AtomicBool = AtomicBool::new(false);
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static GPU_RETRY_DELAY_PENDING: AtomicBool = AtomicBool::new(false);
+static LAST_RETAIN_PARTITION_LOG_TICKET: AtomicU64 = AtomicU64::new(0);
+static LAST_STAMP_PARTITION_LOG_TICKET: AtomicU64 = AtomicU64::new(0);
 static WORK_AVAILABLE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static REQUESTS: Mutex<VecDeque<QueuedFontRequest>> = Mutex::new(VecDeque::new());
 static STATUS: Mutex<FontKernelServiceStatus> = Mutex::new(FontKernelServiceStatus::new());
@@ -221,6 +225,28 @@ pub(crate) struct FontStampRequest {
     pub(crate) foreground: GpuFontRgba,
 }
 
+/// One logical retained scene backed by bounded analytical coverage masks.
+///
+/// Gridpaper uses the same low-level model: keep independently admitted R8
+/// masks resident, then composite them together as one draw-time layer batch.
+pub(crate) struct FontKernelRetainedScene {
+    masks: Vec<GpuFontRetainedScene>,
+}
+
+impl FontKernelRetainedScene {
+    pub(crate) fn masks(
+        &self,
+    ) -> impl Iterator<Item = Option<(crate::intel::gpgpu::GpgpuMask8Surface, [i32; 2])>> + '_ {
+        self.masks
+            .iter()
+            .map(|mask| Some((mask.mask_surface()?, mask.origin_px()?)))
+    }
+
+    pub(crate) const fn mask_count(&self) -> usize {
+        self.masks.len()
+    }
+}
+
 /// GPU-visible RGBA output from one asynchronous stamp request.
 pub(crate) struct FontStampedBuffer {
     ticket: FontKernelTicket,
@@ -254,7 +280,7 @@ impl FontStampedBuffer {
 pub(crate) struct PendingRetainScene {
     ticket: FontKernelTicket,
     reply: Arc<
-        Signal<crate::wait::EmbassySpinRawMutex, Result<GpuFontRetainedScene, FontKernelError>>,
+        Signal<crate::wait::EmbassySpinRawMutex, Result<FontKernelRetainedScene, FontKernelError>>,
     >,
 }
 
@@ -268,11 +294,11 @@ impl PendingRetainScene {
     /// VM-facing UI4 producers use this to turn the Embassy completion into a
     /// cooperative submit/poll boundary: the guest yields while the worker
     /// owns outline preparation and GPU coverage creation.
-    pub(crate) fn try_take(&mut self) -> Option<Result<GpuFontRetainedScene, FontKernelError>> {
+    pub(crate) fn try_take(&mut self) -> Option<Result<FontKernelRetainedScene, FontKernelError>> {
         self.reply.try_take()
     }
 
-    pub(crate) async fn wait(self) -> Result<GpuFontRetainedScene, FontKernelError> {
+    pub(crate) async fn wait(self) -> Result<FontKernelRetainedScene, FontKernelError> {
         self.reply.wait().await
     }
 }
@@ -286,6 +312,15 @@ pub(crate) struct PendingFontStamp {
 impl PendingFontStamp {
     pub(crate) const fn ticket(&self) -> FontKernelTicket {
         self.ticket
+    }
+
+    /// Take a completed one-shot stamp without blocking the caller.
+    ///
+    /// UI4 owns the returned RGBA allocation until its compositor submission
+    /// has retired, so Blueprint VM calls can cooperatively submit and poll
+    /// without copying the raster through guest or CPU memory.
+    pub(crate) fn try_take(&mut self) -> Option<Result<FontStampedBuffer, FontKernelError>> {
+        self.reply.try_take()
     }
 
     pub(crate) async fn wait(self) -> Result<FontStampedBuffer, FontKernelError> {
@@ -357,7 +392,10 @@ enum QueuedFontRequest {
         ticket: FontKernelTicket,
         request: RetainSceneRequest,
         reply: Arc<
-            Signal<crate::wait::EmbassySpinRawMutex, Result<GpuFontRetainedScene, FontKernelError>>,
+            Signal<
+                crate::wait::EmbassySpinRawMutex,
+                Result<FontKernelRetainedScene, FontKernelError>,
+            >,
         >,
     },
     Stamp {
@@ -488,12 +526,102 @@ fn set_active_stage(ticket: FontKernelTicket, stage: &'static str) {
 fn process_retain_scene(
     ticket: FontKernelTicket,
     request: &RetainSceneRequest,
+) -> Result<FontKernelRetainedScene, FontKernelError> {
+    let glyph_runs = expand_origin_runs(ticket, request)?;
+    let mut masks = Vec::new();
+    process_retain_scene_partition(ticket, request, glyph_runs.as_slice(), &mut masks)?;
+    Ok(FontKernelRetainedScene { masks })
+}
+
+fn expand_origin_runs(
+    ticket: FontKernelTicket,
+    request: &RetainSceneRequest,
+) -> Result<Vec<RetainedFontRun>, FontKernelError> {
+    if request.positioning != RetainedFontPositioning::SceneOrigin {
+        return Ok(request.runs.clone());
+    }
+
+    set_active_stage(ticket, "font-layout");
+    ensure_font_face_available(request.font).map_err(FontKernelError::Unavailable)?;
+    let mut glyph_runs = Vec::new();
+    for run in &request.runs {
+        let mut pen_x = 0.0f32;
+        for ch in run.text.chars() {
+            let mut glyph = String::new();
+            glyph.push(ch);
+            let advance = crate::graphics::font::text_advance_width(
+                request.font.registry_name(),
+                glyph.as_str(),
+                run.font_pixels,
+            )
+            .map_err(FontKernelError::Unavailable)?;
+            if !ch.is_whitespace() && font_face_supports_text(request.font, glyph.as_str()) {
+                glyph_runs.push(RetainedFontRun {
+                    text: glyph,
+                    position: [run.position[0] + pen_x, run.position[1]],
+                    font_pixels: run.font_pixels,
+                    slant: run.slant,
+                });
+            }
+            pen_x += advance;
+        }
+    }
+    if glyph_runs.is_empty() {
+        return Err(FontKernelError::Unavailable("font-coverage-empty"));
+    }
+    crate::log_info!(
+        target: "global";
+        "font-kernel-service: bounded glyph layout ticket={} source_runs={} glyph_entries={} positioning=scene-origin policy=per-glyph-analytical-coverage\n",
+        ticket.raw(),
+        request.runs.len(),
+        glyph_runs.len(),
+    );
+    Ok(glyph_runs)
+}
+
+fn process_retain_scene_partition(
+    ticket: FontKernelTicket,
+    request: &RetainSceneRequest,
+    runs: &[RetainedFontRun],
+    masks: &mut Vec<GpuFontRetainedScene>,
+) -> Result<(), FontKernelError> {
+    match process_retain_scene_runs(ticket, request, runs) {
+        Ok(mask) => {
+            masks.push(mask);
+            Ok(())
+        }
+        Err(FontKernelError::Unavailable("font-coverage-workload"))
+            if runs.len() > 1 && request.positioning == RetainedFontPositioning::SceneOrigin =>
+        {
+            let midpoint = runs.len() / 2;
+            if ticket.raw()
+                > LAST_RETAIN_PARTITION_LOG_TICKET.fetch_max(ticket.raw(), Ordering::Relaxed)
+            {
+                crate::log_info!(
+                    target: "global";
+                    "font-kernel-service: retain partition ticket={} runs={} split={}+{} reason=font-coverage-workload storage=gpu-vm-r8-layers\n",
+                    ticket.raw(),
+                    runs.len(),
+                    midpoint,
+                    runs.len().saturating_sub(midpoint),
+                );
+            }
+            process_retain_scene_partition(ticket, request, &runs[..midpoint], masks)?;
+            process_retain_scene_partition(ticket, request, &runs[midpoint..], masks)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn process_retain_scene_runs(
+    ticket: FontKernelTicket,
+    request: &RetainSceneRequest,
+    runs: &[RetainedFontRun],
 ) -> Result<GpuFontRetainedScene, FontKernelError> {
     set_active_stage(ticket, "font-warm");
     ensure_font_face_available(request.font).map_err(FontKernelError::Unavailable)?;
     set_active_stage(ticket, "coverage");
-    let entries = request
-        .runs
+    let entries = runs
         .iter()
         .map(|run| GpuFontJobEntry {
             text: GpuFontTextRequest::SingleLine(run.text.as_str()),
@@ -523,29 +651,70 @@ fn process_retain_scene(
     result.map_err(FontKernelError::Unavailable)
 }
 
+fn stamp_scene_runs(
+    ticket: FontKernelTicket,
+    request: &FontStampRequest,
+    runs: &[RetainedFontRun],
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> Result<(usize, usize), FontKernelError> {
+    let scene = match process_retain_scene_runs(ticket, &request.scene, runs) {
+        Ok(scene) => scene,
+        Err(FontKernelError::Unavailable("font-coverage-workload"))
+            if runs.len() > 1
+                && request.scene.positioning == RetainedFontPositioning::SceneOrigin =>
+        {
+            // A static stamp does not need one union mask. Split only after
+            // analytical admission rejects the aggregate, then composite the
+            // bounded masks into the same transparent RGBA allocation.
+            let midpoint = runs.len() / 2;
+            if ticket.raw()
+                > LAST_STAMP_PARTITION_LOG_TICKET.fetch_max(ticket.raw(), Ordering::Relaxed)
+            {
+                crate::log_info!(
+                    target: "global";
+                    "font-kernel-service: stamp partition ticket={} runs={} split={}+{} reason=font-coverage-workload destination=gpu-vm-rgba8\n",
+                    ticket.raw(),
+                    runs.len(),
+                    midpoint,
+                    runs.len().saturating_sub(midpoint),
+                );
+            }
+            let first = stamp_scene_runs(ticket, request, &runs[..midpoint], destination)?;
+            let second = stamp_scene_runs(ticket, request, &runs[midpoint..], destination)?;
+            return Ok((first.0.saturating_add(second.0), first.1.saturating_add(second.1)));
+        }
+        Err(error) => return Err(error),
+    };
+    set_active_stage(ticket, "instance");
+    let rendered = scene.restamp_instance(
+        destination,
+        GpuFontRetainedStyle::identity(request.foreground),
+        false,
+        0.0,
+    )?;
+    Ok((rendered.submits, rendered.active_walkers))
+}
+
 fn process_stamp(
     ticket: FontKernelTicket,
     request: &FontStampRequest,
 ) -> Result<FontStampedBuffer, FontKernelError> {
     let width = request.scene.raster_width;
     let height = request.scene.raster_height;
-    let scene = process_retain_scene(ticket, &request.scene)?;
     set_active_stage(ticket, "output-allocate");
     let storage = crate::intel::gpgpu::allocate_font_instance_rgba8_surface(width, height)
         .ok_or(FontKernelError::Unavailable("font-stamp-output-allocation"))?;
     let surface = storage.surface();
     // The owned RGBA allocation is zeroed and DMA-flushed before return.
     // Dispatching another GPU clear here only adds direct-RCS contention.
-    set_active_stage(ticket, "instance");
-    let rendered = match scene.restamp_instance(
-        surface,
-        GpuFontRetainedStyle::identity(request.foreground),
-        false,
-        0.0,
-    ) {
+    let glyph_runs = match expand_origin_runs(ticket, &request.scene) {
+        Ok(runs) => runs,
+        Err(error) => return Err(error),
+    };
+    let rendered = match stamp_scene_runs(ticket, request, glyph_runs.as_slice(), surface) {
         Ok(rendered) => rendered,
         Err(error) => {
-            if matches!(error, GpuFontRetainedSceneError::SubmittedIncomplete(_)) {
+            if matches!(error, FontKernelError::SubmittedIncomplete(_)) {
                 core::mem::forget(storage);
             }
             return Err(error.into());
@@ -554,8 +723,8 @@ fn process_stamp(
     Ok(FontStampedBuffer {
         ticket,
         storage,
-        submits: rendered.submits,
-        active_walkers: rendered.active_walkers,
+        submits: rendered.0,
+        active_walkers: rendered.1,
     })
 }
 
@@ -591,14 +760,15 @@ fn log_failure(ticket: FontKernelTicket, operation: &'static str, error: &FontKe
 }
 
 fn retryable_gpu_error(error: &FontKernelError) -> bool {
-    matches!(
-        error,
-        FontKernelError::Unavailable(
-            "font-coverage-dispatch"
-                | "font-retained-identity-restamp-unavailable"
-                | "font-retained-instance-restamp-unavailable"
+    !crate::intel::gpgpu::direct_rcs_context_is_quarantined()
+        && matches!(
+            error,
+            FontKernelError::Unavailable(
+                "font-coverage-dispatch"
+                    | "font-retained-identity-restamp-unavailable"
+                    | "font-retained-instance-restamp-unavailable"
+            )
         )
-    )
 }
 
 fn record_gpu_retry(ticket: FontKernelTicket, operation: &'static str, error: &FontKernelError) {
@@ -614,12 +784,13 @@ fn record_gpu_retry(ticket: FontKernelTicket, operation: &'static str, error: &F
     if retry <= 8 || retry.is_multiple_of(120) {
         crate::log_info!(
             target: "render";
-            "font-kernel-service: {} deferred ticket={} reason={:?} gpu_retry={} queued={} action=requeue-ticket+yield-font-lane\n",
+            "font-kernel-service: {} deferred ticket={} reason={:?} gpu_retry={} queued={} retry_ms={} action=requeue-ticket+pace-font-lane\n",
             operation,
             ticket.raw(),
             error,
             retry,
             REQUESTS.lock().len().saturating_add(1),
+            FONT_KERNEL_GPU_RETRY_MS,
         );
     }
 }
@@ -637,6 +808,7 @@ fn process_queued_request(request: QueuedFontRequest) {
                 && retryable_gpu_error(error)
             {
                 record_gpu_retry(ticket, "retain", error);
+                GPU_RETRY_DELAY_PENDING.store(true, Ordering::Release);
                 REQUESTS.lock().push_back(QueuedFontRequest::Retain {
                     ticket,
                     request,
@@ -670,6 +842,7 @@ fn process_queued_request(request: QueuedFontRequest) {
                 && retryable_gpu_error(error)
             {
                 record_gpu_retry(ticket, "stamp", error);
+                GPU_RETRY_DELAY_PENDING.store(true, Ordering::Release);
                 REQUESTS.lock().push_back(QueuedFontRequest::Stamp {
                     ticket,
                     request,
@@ -730,6 +903,9 @@ pub(crate) async fn font_kernel_service_task() {
         FONT_KERNEL_QUEUE_CAPACITY,
     );
     loop {
+        if GPU_RETRY_DELAY_PENDING.swap(false, Ordering::AcqRel) {
+            Timer::after(EmbassyDuration::from_millis(FONT_KERNEL_GPU_RETRY_MS)).await;
+        }
         if IN_FLIGHT.load(Ordering::Acquire) {
             WORK_AVAILABLE.wait().await;
             continue;

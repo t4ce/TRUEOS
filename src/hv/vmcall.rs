@@ -15,12 +15,20 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 const BLUEPRINT_AUDIO_LOG_SAMPLE_EVERY: u32 = 1_000;
+const BLUEPRINT_TEXT_SCENE_BUSY_LOG_SAMPLE_EVERY: u32 = 1_000;
 
 static BLUEPRINT_AUDIO_WRITE_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
 static BLUEPRINT_AUDIO_POLL_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
+static BLUEPRINT_TEXT_SCENE_BUSY_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
 
 fn sampled_log(counter: &AtomicU32) -> bool {
     counter.fetch_add(1, Ordering::Relaxed) % BLUEPRINT_AUDIO_LOG_SAMPLE_EVERY == 0
+}
+
+fn sampled_text_scene_busy_log() -> bool {
+    BLUEPRINT_TEXT_SCENE_BUSY_LOG_SEQ.fetch_add(1, Ordering::Relaxed)
+        % BLUEPRINT_TEXT_SCENE_BUSY_LOG_SAMPLE_EVERY
+        == 0
 }
 
 // ── op codes (u32, written by guest before vmcall) ──────────────────────────
@@ -114,6 +122,17 @@ pub const OP_BP_UI4_SCENE_SET_CUSTOM_CURSOR: u32 = 0xE6; // arg0 window,arg1 ena
 pub const OP_BP_UI4_SCENE_SET_CURSOR_ICON: u32 = 0xE7; // arg0 window,arg1 icon,optional cursor-source payload -> rc
 pub const OP_BP_UI4_SCENE_POINTER_EVENT_TAKE: u32 = 0xE8; // arg0 window -> rc + PointerEvent payload
 pub const OP_BP_UI4_SCENE_PARTICLE_CRAFT_RENDER: u32 = 0xE9; // arg0 window,payload ParticleCraftParamsV1 -> rc
+pub const OP_BP_MOUSE_MOTION_CURSOR_REQUEST: u32 = 0xEA; // payload label -> rc + MouseMotionCursorInfo
+pub const OP_BP_MOUSE_MOTION_CURSOR_RELEASE: u32 = 0xEB; // arg0 handle -> rc
+pub const OP_BP_MOUSE_MOTION_SUBMIT: u32 = 0xEC; // arg0 handle,payload MouseMotionCommand -> rc
+pub const OP_BP_MOUSE_MOTION_SUBMIT_JSON: u32 = 0xED; // arg0 handle,payload JSON -> command count/rc
+pub const OP_BP_MOUSE_MOTION_CURSOR_IDLE: u32 = 0xEE; // arg0 handle -> bool/rc
+pub const OP_BP_KEYBOARD_CONTROL_REQUEST: u32 = 0xEF; // payload label -> rc + KeyboardControlDeviceInfo
+pub const OP_BP_KEYBOARD_CONTROL_RELEASE: u32 = 0xF0; // arg0 handle -> rc
+pub const OP_BP_KEYBOARD_CONTROL_SUBMIT: u32 = 0xF1; // arg0 handle,payload KeyboardControlCommand -> rc
+pub const OP_BP_KEYBOARD_CONTROL_SUBMIT_TEXT: u32 = 0xF2; // arg0 handle,arg1 interval:flags,payload UTF-8 -> count/rc
+pub const OP_BP_KEYBOARD_CONTROL_SUBMIT_JSON: u32 = 0xF3; // arg0 handle,payload JSON -> command count/rc
+pub const OP_BP_KEYBOARD_CONTROL_IDLE: u32 = 0xF4; // arg0 handle -> bool/rc
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1088,7 +1107,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     rows.len(),
                 )
             };
-            if rc != 0 {
+            if rc == crate::ui4::blueprint_text::ERROR_BUSY {
+                if sampled_text_scene_busy_log() {
+                    crate::log_info!(target: "ui4/solara-text"; "scene vmcall pending vm={} window={} rows={} rc={} sample_every={}\n", vm_id, arg0 as u32, row_count, rc, BLUEPRINT_TEXT_SCENE_BUSY_LOG_SAMPLE_EVERY);
+                }
+            } else if rc != 0 {
                 crate::log_warn!(target: "ui4/solara-text"; "scene vmcall failed vm={} window={} rows={} rc={}\n", vm_id, arg0 as u32, row_count, rc);
             }
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
@@ -1644,6 +1667,157 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_PLATFORM_WAKE_ALL => {
             let count = crate::wait::platform_wake_all_for_vm(vm_id, arg0);
             write_response(vm_id, seq, STATUS_OK, count as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MOUSE_MOTION_CURSOR_REQUEST => {
+            let rc = request_payload(vm_id, req_len)
+                .and_then(|payload| core::str::from_utf8(payload).ok())
+                .filter(|label| !label.is_empty())
+                .map(|label| {
+                    let mut cursor = v::vinput::MouseMotionCursorInfo::default();
+                    let rc = unsafe {
+                        crate::r::io::cabi::trueos_cabi_mouse_motion_cursor_request(
+                            label.as_ptr(),
+                            label.len(),
+                            &mut cursor,
+                        )
+                    };
+                    (rc, cursor)
+                });
+            match rc {
+                Some((0, cursor)) => write_record_response(vm_id, seq, 0, &cursor),
+                Some((rc, _)) => {
+                    write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+                }
+                None => write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_MOUSE_MOTION_CURSOR_RELEASE => {
+            let rc = crate::r::io::cabi::trueos_cabi_mouse_motion_cursor_release(arg0);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MOUSE_MOTION_SUBMIT => {
+            let command = request_payload(vm_id, req_len)
+                .filter(|payload| {
+                    payload.len() == core::mem::size_of::<v::vinput::MouseMotionCommand>()
+                })
+                .map(|payload| unsafe {
+                    core::ptr::read_unaligned(
+                        payload.as_ptr().cast::<v::vinput::MouseMotionCommand>(),
+                    )
+                });
+            let rc = command
+                .map(|command| unsafe {
+                    crate::r::io::cabi::trueos_cabi_mouse_motion_submit(arg0, &command)
+                })
+                .unwrap_or(-1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MOUSE_MOTION_SUBMIT_JSON => {
+            let rc = request_payload(vm_id, req_len)
+                .filter(|payload| !payload.is_empty())
+                .map(|payload| unsafe {
+                    crate::r::io::cabi::trueos_cabi_mouse_motion_submit_json(
+                        arg0,
+                        payload.as_ptr(),
+                        payload.len(),
+                    )
+                })
+                .unwrap_or(-1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MOUSE_MOTION_CURSOR_IDLE => {
+            let rc = crate::r::io::cabi::trueos_cabi_mouse_motion_cursor_idle(arg0);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_KEYBOARD_CONTROL_REQUEST => {
+            let rc = request_payload(vm_id, req_len)
+                .and_then(|payload| core::str::from_utf8(payload).ok())
+                .filter(|label| !label.is_empty())
+                .map(|label| {
+                    let mut keyboard = v::vinput::KeyboardControlDeviceInfo::default();
+                    let rc = unsafe {
+                        crate::r::io::cabi::trueos_cabi_keyboard_control_request(
+                            label.as_ptr(),
+                            label.len(),
+                            &mut keyboard,
+                        )
+                    };
+                    (rc, keyboard)
+                });
+            match rc {
+                Some((0, keyboard)) => write_record_response(vm_id, seq, 0, &keyboard),
+                Some((rc, _)) => {
+                    write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+                }
+                None => write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_KEYBOARD_CONTROL_RELEASE => {
+            let rc = crate::r::io::cabi::trueos_cabi_keyboard_control_release(arg0);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_KEYBOARD_CONTROL_SUBMIT => {
+            let command = request_payload(vm_id, req_len)
+                .filter(|payload| {
+                    payload.len() == core::mem::size_of::<v::vinput::KeyboardControlCommand>()
+                })
+                .map(|payload| unsafe {
+                    core::ptr::read_unaligned(
+                        payload.as_ptr().cast::<v::vinput::KeyboardControlCommand>(),
+                    )
+                });
+            let rc = command
+                .map(|command| unsafe {
+                    crate::r::io::cabi::trueos_cabi_keyboard_control_submit(arg0, &command)
+                })
+                .unwrap_or(-1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_KEYBOARD_CONTROL_SUBMIT_TEXT => {
+            let interval_ms = (arg1 >> 32) as u32;
+            let flags = arg1 as u32;
+            let rc = request_payload(vm_id, req_len)
+                .and_then(|payload| core::str::from_utf8(payload).ok())
+                .filter(|text| !text.is_empty())
+                .map(|text| unsafe {
+                    crate::r::io::cabi::trueos_cabi_keyboard_control_submit_text(
+                        arg0,
+                        text.as_ptr(),
+                        text.len(),
+                        interval_ms,
+                        flags,
+                    )
+                })
+                .unwrap_or(-1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_KEYBOARD_CONTROL_SUBMIT_JSON => {
+            let rc = request_payload(vm_id, req_len)
+                .filter(|payload| !payload.is_empty())
+                .map(|payload| unsafe {
+                    crate::r::io::cabi::trueos_cabi_keyboard_control_submit_json(
+                        arg0,
+                        payload.as_ptr(),
+                        payload.len(),
+                    )
+                })
+                .unwrap_or(-1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_KEYBOARD_CONTROL_IDLE => {
+            let rc = crate::r::io::cabi::trueos_cabi_keyboard_control_idle(arg0);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_INPUT_CURSOR_POS => {

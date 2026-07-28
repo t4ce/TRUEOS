@@ -318,7 +318,7 @@ fn direct_rcs_state_reuse_permitted(quarantined: &AtomicBool) -> bool {
     !quarantined.load(Ordering::Acquire)
 }
 
-fn direct_rcs_context_is_quarantined() -> bool {
+pub(crate) fn direct_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&DIRECT_RCS_CONTEXT_QUARANTINED)
 }
 
