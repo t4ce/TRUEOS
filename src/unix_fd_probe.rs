@@ -143,42 +143,6 @@ fn log_api_check(stage: &str, ok: bool, started_cycles: u64) -> bool {
     ok
 }
 
-fn log_api_rc_zero(stage: &str, rc: i32) -> bool {
-    if rc == 0 {
-        crate::log!("unix-api-probe: success {} rc={} errno={}\n", stage, rc, errno());
-        true
-    } else {
-        crate::log!("unix-api-probe: failed {} rc={} errno={}\n", stage, rc, errno());
-        false
-    }
-}
-
-fn log_api_rc_nonnegative(stage: &str, rc: i32) -> bool {
-    if rc >= 0 {
-        crate::log!("unix-api-probe: success {} rc={} errno={}\n", stage, rc, errno());
-        true
-    } else {
-        crate::log!("unix-api-probe: failed {} rc={} errno={}\n", stage, rc, errno());
-        false
-    }
-}
-
-fn log_api_io(stage: &str, got: isize, expected: usize) -> bool {
-    if got == expected as isize {
-        crate::log!("unix-api-probe: success {} bytes={} expected={}\n", stage, got, expected);
-        true
-    } else {
-        crate::log!(
-            "unix-api-probe: failed {} bytes={} expected={} errno={}\n",
-            stage,
-            got,
-            expected,
-            errno()
-        );
-        false
-    }
-}
-
 fn unix_api_fds_valid(stage: &str, fds: [i32; 2]) -> bool {
     let valid = fds[0] >= 0 && fds[1] >= 0;
     crate::log!(
@@ -785,6 +749,15 @@ async fn run_once() -> bool {
 #[embassy_executor::task]
 pub async fn unix_fd_probe_task() {
     Timer::after(EmbassyDuration::from_secs(15)).await;
+
+    crate::log!("unix-fd-probe: kernel deferred one-shot start delay_secs=15\n");
+    let fd_ok = run_once().await;
+    if fd_ok {
+        crate::log!("unix-fd-probe: result=ok\n");
+    } else {
+        crate::log!("unix-fd-probe: result=failed stage=one_or_more_posix_fd_stages\n");
+    }
+
     crate::log!("unix-api-probe: kernel deferred one-shot start delay_secs=15\n");
     let api_ok = run_unix_api_probe_once();
     if api_ok {

@@ -1008,6 +1008,24 @@ fn spawn_unix_fd_probe(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::unix_fd_probe::unix_fd_probe_task())
 }
 
+const fn unix_fd_probe_task_spec() -> TaskSpec {
+    if crate::allcaps::probes::UNIX_FD_PROBE {
+        TaskSpec::enabled(
+            "unix-fd-probe",
+            crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
+            &UNIX_FD_PROBE_STARTED,
+            spawn_unix_fd_probe,
+        )
+    } else {
+        TaskSpec::disabled(
+            "unix-fd-probe",
+            crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
+            &UNIX_FD_PROBE_STARTED,
+            spawn_unix_fd_probe,
+        )
+    }
+}
+
 fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
     match crate::shell2::spawn_app_vm_run_queue(spawner) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -1557,12 +1575,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TRUEOSFS_RW_PROBE_STARTED,
         spawn_trueosfs_rw_probe,
     ),
-    TaskSpec::disabled(
-        "unix-fd-probe",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
-        &UNIX_FD_PROBE_STARTED,
-        spawn_unix_fd_probe,
-    ),
+    unix_fd_probe_task_spec(),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
     TaskSpec::disabled(
         "bp-autostart",

@@ -10,6 +10,7 @@ pub mod boot {
 
 pub mod probes {
     pub const MIO_BOOT_PROBE: bool = false;
+    pub const UNIX_FD_PROBE: bool = false;
     pub const INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS: bool = false;
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
 }
