@@ -37,6 +37,10 @@ fn usage(io: &'static dyn ShellBackend2) {
         io,
         "cpp font stamp \"text\" [size=36] [font=auto|1|2|3] [color=RRGGBBAA] [x=0] [y=0] [line=1.25] [slant=-1..1] [canvas=WIDTHxHEIGHT] [-- \"overlay\" ...]",
     );
+    print_shell_line(
+        io,
+        "cpp font present \"text\" [size=36] [font=auto|1|2|3] [color=RRGGBBAA] [x=24] [y=24] [line=1.25] [slant=-1..1] [canvas=640x160] [-- \"overlay\" ...]",
+    );
     print_shell_line(io, "cpp font [status|release <ticket|all>]");
     print_shell_line(io, "cpp spirit [status|list|clean]");
     print_shell_line(io, "cpp spirit show <background_id> <shader_id>");
@@ -211,6 +215,7 @@ const fn cpp_mode_label(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str 
         crate::ui4::GpgpuPreviewPreset::CppRetroSun => "retro-sun",
         crate::ui4::GpgpuPreviewPreset::CppAudio => "audio",
         crate::ui4::GpgpuPreviewPreset::CppParticle => "particle",
+        crate::ui4::GpgpuPreviewPreset::CppFont => "font",
         _ => "not-cpp",
     }
 }
@@ -317,7 +322,10 @@ fn print_status(io: &'static dyn ShellBackend2) {
     let active_cpp = status.desired_running && is_cpp_preset(status.config.preset);
     let audio = status.config.preset == crate::ui4::GpgpuPreviewPreset::CppAudio;
     let particle = status.config.preset == crate::ui4::GpgpuPreviewPreset::CppParticle;
-    let upload = if audio {
+    let font = status.config.preset == crate::ui4::GpgpuPreviewPreset::CppFont;
+    let upload = if font {
+        crate::intel::gpgpu::font_instance_rgba8_upload_status()
+    } else if audio {
         crate::intel::gpgpu::cpp_audio_visualizer_rgba8_upload_status()
     } else if particle {
         crate::intel::gpgpu::particle_craft_upload_status()
@@ -373,7 +381,11 @@ fn print_status(io: &'static dyn ShellBackend2) {
             upload.is_some_and(|artifact| artifact.verified) as u8,
             upload.map(|artifact| artifact.gpu).unwrap_or(0),
             artifact_hash(status.config.preset),
-            "dynamic-frame/reconciled",
+            if font {
+                "movable-fixed-canvas"
+            } else {
+                "dynamic-frame/reconciled"
+            },
             audio_status.enabled as u8,
             audio_status.sequence,
             audio_status.captured_frames,
@@ -392,7 +404,9 @@ fn print_status(io: &'static dyn ShellBackend2) {
 }
 
 fn artifact_name(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str {
-    if preset == crate::ui4::GpgpuPreviewPreset::CppAudio {
+    if preset == crate::ui4::GpgpuPreviewPreset::CppFont {
+        crate::intel::gpgpu::FONT_INSTANCE_RGBA8_ADLS_ARTIFACT.name
+    } else if preset == crate::ui4::GpgpuPreviewPreset::CppAudio {
         crate::intel::gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT.name
     } else if preset == crate::ui4::GpgpuPreviewPreset::CppParticle {
         crate::intel::gpgpu::PARTICLE_CRAFT_ADLS_ARTIFACT.name
@@ -410,7 +424,9 @@ fn kernel_name(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str {
 }
 
 fn artifact_hash(preset: crate::ui4::GpgpuPreviewPreset) -> String {
-    if preset == crate::ui4::GpgpuPreviewPreset::CppAudio {
+    if preset == crate::ui4::GpgpuPreviewPreset::CppFont {
+        format_hash(crate::intel::gpgpu::FONT_INSTANCE_RGBA8_ADLS_ARTIFACT.bin_sha256)
+    } else if preset == crate::ui4::GpgpuPreviewPreset::CppAudio {
         format_hash(crate::intel::gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT.bin_sha256)
     } else if preset == crate::ui4::GpgpuPreviewPreset::CppParticle {
         format_hash(crate::intel::gpgpu::PARTICLE_CRAFT_ADLS_ARTIFACT.bin_sha256)
@@ -785,7 +801,7 @@ fn font_prefers_noto(text: &str) -> bool {
     })
 }
 
-fn parse_font_stamp(input: &str) -> Result<ParsedFontStamp, &'static str> {
+fn parse_font_stamp(input: &str, present: bool) -> Result<ParsedFontStamp, &'static str> {
     let tokens = tokenize_font_stamp(input)?;
     if tokens.is_empty() {
         return Err("text-must-be-quoted");
@@ -804,8 +820,8 @@ fn parse_font_stamp(input: &str) -> Result<ParsedFontStamp, &'static str> {
         let mut font = None;
         let mut font_pixels = CPP_FONT_DEFAULT_PIXELS;
         let mut foreground = CPP_FONT_DEFAULT_RGBA;
-        let mut x = 0.0f32;
-        let mut y = 0.0f32;
+        let mut x = if present { 24.0 } else { 0.0 };
+        let mut y = if present { 24.0 } else { 0.0 };
         let mut line_height = CPP_FONT_DEFAULT_LINE_HEIGHT;
         let mut slant = 0.0f32;
         while cursor < tokens.len() && tokens[cursor] != "--" {
@@ -902,7 +918,13 @@ fn parse_font_stamp(input: &str) -> Result<ParsedFontStamp, &'static str> {
     }
     let (width, height, fit) = canvas
         .map(|(width, height)| (width, height, FontStampFit::Canvas))
-        .unwrap_or((3840, 2160, FontStampFit::Tight));
+        .unwrap_or_else(|| {
+            if present {
+                (640, 160, FontStampFit::Canvas)
+            } else {
+                (3840, 2160, FontStampFit::Tight)
+            }
+        });
     let layers = layers
         .into_iter()
         .map(|(runs, font, foreground)| FontStampLayer {
@@ -930,7 +952,7 @@ fn queue_font_service_stamp(spawner: &Spawner, io: &'static dyn ShellBackend2, i
         print_shell_line(io, "cpp font stamp: queued=0 reason=font-service-offline");
         return;
     }
-    let parsed = match parse_font_stamp(input) {
+    let parsed = match parse_font_stamp(input, false) {
         Ok(parsed) => parsed,
         Err(reason) => {
             print_shell_line(
@@ -982,6 +1004,41 @@ fn queue_font_service_stamp(spawner: &Spawner, io: &'static dyn ShellBackend2, i
             release_font_output_reservation(1);
             print_shell_line(io, "cpp font stamp: queued=0 reason=completion-task-capacity");
         }
+    }
+}
+
+fn queue_font_service_present(io: &'static dyn ShellBackend2, input: &str) {
+    if !crate::r::font_kernel_service::status().online {
+        print_shell_line(io, "cpp font present: queued=0 reason=font-service-offline");
+        return;
+    }
+    let parsed = match parse_font_stamp(input, true) {
+        Ok(parsed) => parsed,
+        Err(reason) => {
+            print_shell_line(
+                io,
+                alloc::format!("cpp font present: queued=0 reason={reason}").as_str(),
+            );
+            usage(io);
+            return;
+        }
+    };
+    let layers = parsed.request.layers.len();
+    let extent = parsed.request.layers[0].scene.raster_width;
+    let height = parsed.request.layers[0].scene.raster_height;
+    match crate::ui4::request_cpp_font_preview_start(parsed.request) {
+        Ok(serial) => print_shell_line(
+            io,
+            alloc::format!(
+                "cpp font present: queued=1 request={} layers={} rows={} glyphs={} extent={}x{} output=ui4-font-scene path=skrifa->gpu-vm-r8->cpp-igc->guc-rcs->ui4-rgba8 stop=\"cpp stop\"",
+                serial, layers, parsed.rows, parsed.glyphs, extent, height,
+            )
+            .as_str(),
+        ),
+        Err(reason) => print_shell_line(
+            io,
+            alloc::format!("cpp font present: queued=0 reason={reason}").as_str(),
+        ),
     }
 }
 
@@ -1067,6 +1124,8 @@ fn font_service(spawner: &Spawner, io: &'static dyn ShellBackend2, input: &str) 
         .unwrap_or((input, ""));
     if command.eq_ignore_ascii_case("stamp") {
         queue_font_service_stamp(spawner, io, rest);
+    } else if command.eq_ignore_ascii_case("present") {
+        queue_font_service_present(io, rest);
     } else if command.eq_ignore_ascii_case("status") {
         if rest.is_empty() {
             print_font_service_status(io);
@@ -1167,6 +1226,7 @@ mod tests {
     fn font_stamp_parses_multiline_unicode_and_overlay_layers() {
         let parsed = parse_font_stamp(
             "\"Hello\\n中国\" size=42 color=FF0000CC -- \"overlay\" x=12 y=-4 font=3",
+            false,
         )
         .expect("valid layered font stamp");
 
@@ -1181,14 +1241,23 @@ mod tests {
     #[test]
     fn font_stamp_canvas_and_glyph_softcaps_are_enforced() {
         let parsed =
-            parse_font_stamp("\"canvas\" canvas=3840x2160").expect("valid UHD canvas stamp");
+            parse_font_stamp("\"canvas\" canvas=3840x2160", false).expect("valid UHD canvas stamp");
         assert_eq!(parsed.request.fit, FontStampFit::Canvas);
 
         let oversized = alloc::format!("\"{}\"", "x".repeat(4097));
-        assert_eq!(parse_font_stamp(oversized.as_str()).unwrap_err(), "glyph-softcap-4096");
+        assert_eq!(parse_font_stamp(oversized.as_str(), false).unwrap_err(), "glyph-softcap-4096");
         assert_eq!(
-            parse_font_stamp("\"x\" canvas=4096x4096").unwrap_err(),
+            parse_font_stamp("\"x\" canvas=4096x4096", false).unwrap_err(),
             "canvas-over-4k-softcap"
         );
+    }
+
+    #[test]
+    fn font_present_defaults_to_a_visible_canvas() {
+        let parsed = parse_font_stamp("\"HI\"", true).expect("valid font presentation");
+        assert_eq!(parsed.request.fit, FontStampFit::Canvas);
+        let scene = &parsed.request.layers[0].scene;
+        assert_eq!((scene.raster_width, scene.raster_height), (640, 160));
+        assert_eq!(scene.runs[0].position, [24.0, 24.0]);
     }
 }

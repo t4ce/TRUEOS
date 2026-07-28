@@ -62,14 +62,14 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `glyph_mask_rgba8.cl`: 8-bit coverage mask blended with packed RGBA8 color
 - `sprite_quad_worklist_rgba8.cl`: arbitrary sprite-quad descriptors sampled from RGBA8 or XRGB source surfaces and copied or source-over blended into RGBA8/XRGB destinations
 - `mandel64_worklist_rgba8.cl`: clipped 64x4 Mandelbrot row-band descriptors; each descriptor can either mirror across the real axis or compute an unmirrored viewport
-- `chart_sine_rgba8.cl`: full-frame analytical 2D scope plot with grid, axes, border, anti-aliased sine line, and optional glow; available as the `gpgpu preview start chart` arbitrary-surface UI4 compute node
-- `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; available as the `gpgpu preview start plasma` arbitrary-surface UI4 compute node
+- `chart_sine_rgba8.cl`: full-frame analytical 2D scope plot with grid, axes, border, anti-aliased sine line, and optional glow; retained as an internal arbitrary-surface UI4 compute node
+- `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; retained as an internal arbitrary-surface UI4 compute node
 - `cpp_demo_rgba8.clcpp`: one exact-target C++ for OpenCL/IGC application kernel with gallery, aurora, Julia-set, signed-distance, Voronoi, and standalone Retro Sun modes; available through the dedicated `cpp` Shell2 command
 - `cpp_audio_visualizer_rgba8.clcpp`: one exact-target C++/IGC audiovisual composition driven by the final 48 kHz stereo HDA-bound mix, a 2048-point mid/side FFT, 64 bands, and 128-point channel waveforms; available through `cpp audio`
 - `particle_craft.clcpp`: one exact-target C++/IGC artifact with persistent particle-state and full-frame render entries; available through `cpp particle` and `Frame::render_particle_craft`
-- `lab256_multiphase.cl`: hash-locked 256x256 three-entry experimental artifact retained for the live `gpgpu test lab256` Shell2/UI4 preview through the vGPU/GuC GPGPU lane; it contains a centered grayscale smoke ripple, Gray-Scott pointer trail, compact GPU telemetry, and one half-second CUR_SURFLIVE-rate status dot
+- `lab256_multiphase.cl`: hash-locked 256x256 three-entry archived experiment retained for internal vGPU/GuC validation; its former Shell2 route is removed
 - `spirit_vfx_background_rgba8.clcpp` and `spirit_vfx_sprite_rgba8.clcpp`: TrueOS-Spirit's continuous 60 Hz C++/IGC cursor-plane producer and sole maintained shader source pair; the default clean-Lilly batch dispatches only the sprite presentation walker, while enabling a procedural background adds the background walker and ordered source-over dependency
-- `font_outline_mesh.cl`: allowlisted Skrifa outline consumer used by `gpgpu probe font-tessel`; it audits the packed command stream, flattens quadratic/cubic curves, and emits indexed contour-stroke triangles without CPU geometry math
+- `font_outline_mesh.cl`: allowlisted archived Skrifa outline diagnostic; its former Shell2 tessellation probe is removed
 - `font_outline_coverage_r8.cl`: production Skrifa-afterpath consumer; it evaluates non-zero winding plus nearest-edge distance in final mask-pixel coordinates and writes reusable fractional R8 coverage with bounded low-ppem optical bias
 
 The rect and sprite worklist kernels share a descriptor-driven shape:
@@ -94,6 +94,12 @@ converts a decoder-owned Tile64 NV12 source into the complete, exact UI4 RGBA8
 lease (opaque black outside the selected native viewport); it neither reads a
 display backbuffer nor programs a plane. The Alder Lake S artifact SHA-256 is
 `f33f0f2f531aa4df74b932fd519d5c096f9576b94c09cf1e20b742151092e0b5`.
+
+`ui4_rgba8_to_nv12_linear.cl` is the reverse SIMD16 RDP preparation path. One
+work-item converts a 2x2 macro-pixel from the persistent logical RGBA8 capture
+into the centered 1920x1088 linear NV12 VDEnc input without CPU pixel math.
+The scratch-free two-binding Alder Lake S artifact SHA-256 is
+`30ea396fb6b92387c8154126873ba00a6d3a7ad813167453704c5c8f493025ac`.
 
 `artifacts/adls/cpp/copy_rect_rgba8.bin` is the Make-default C++ for OpenCL
 Alder Lake S build produced with Intel `ocloc`/IGC. Its SHA-256 is:

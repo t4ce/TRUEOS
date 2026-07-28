@@ -68,9 +68,16 @@ class ArtifactContractTests(unittest.TestCase):
 
     def test_every_legacy_catalog_hash_matches_its_zebin(self) -> None:
         catalog = KERNEL_CATALOG.read_text(encoding="utf-8")
-        declarations = re.findall(
+        literal_declarations = re.findall(
             r"pub\(crate\) const ([A-Z0-9_]+)_ADLS_BIN_SHA256:"
             r"\s*\[u8;\s*32\]\s*=\s*\[(.*?)\];",
+            catalog,
+            flags=re.DOTALL,
+        )
+        contract_declarations = re.findall(
+            r"pub\(crate\) const ([A-Z0-9_]+)_ADLS_BIN_SHA256:"
+            r"\s*\[u8;\s*32\]\s*=\s*"
+            r"([A-Z0-9_]+_ADLS_LEGACY_ABI_CONTRACT)\.zebin_sha256;",
             catalog,
             flags=re.DOTALL,
         )
@@ -86,9 +93,12 @@ class ArtifactContractTests(unittest.TestCase):
             for binary in ARTIFACT_ROOT.glob("*.bin")
             if binary.name not in abi_reference_only
         )
-        self.assertEqual(len(declarations), len(binaries))
+        self.assertEqual(
+            len(literal_declarations) + len(contract_declarations),
+            len(binaries),
+        )
         observed_names = set()
-        for stem, byte_source in declarations:
+        for stem, byte_source in literal_declarations:
             binary = ARTIFACT_ROOT / f"{stem.lower()}.bin"
             observed_names.add(binary.name)
             with self.subTest(binary=binary.name):
@@ -96,6 +106,30 @@ class ArtifactContractTests(unittest.TestCase):
                 expected = bytes(
                     int(value, 16)
                     for value in re.findall(r"0x([0-9A-Fa-f]{2})", byte_source)
+                )
+                self.assertEqual(len(expected), 32)
+                self.assertEqual(hashlib.sha256(binary.read_bytes()).digest(), expected)
+        for stem, contract_name in contract_declarations:
+            binary = ARTIFACT_ROOT / f"{stem.lower()}.bin"
+            contract_path = ARTIFACT_ROOT / f"{stem.lower()}.contract.rs"
+            observed_names.add(binary.name)
+            with self.subTest(binary=binary.name):
+                self.assertTrue(binary.is_file())
+                self.assertTrue(contract_path.is_file())
+                contract = contract_path.read_text(encoding="utf-8")
+                self.assertIn(f"const {contract_name}:", contract)
+                byte_source = re.search(
+                    r"zebin_sha256:\s*\[(.*?)\],",
+                    contract,
+                    flags=re.DOTALL,
+                )
+                self.assertIsNotNone(byte_source)
+                expected = bytes(
+                    int(value, 16)
+                    for value in re.findall(
+                        r"0x([0-9A-Fa-f]{2})",
+                        byte_source.group(1),
+                    )
                 )
                 self.assertEqual(len(expected), 32)
                 self.assertEqual(hashlib.sha256(binary.read_bytes()).digest(), expected)

@@ -18,8 +18,8 @@ inline uint ui4_downscaled_source_coordinate(uint destination)
 
 __attribute__((intel_reqd_sub_group_size(16)))
 __kernel void ui4_rgba8_to_nv12_linear(
-    __global const uchar *src_rgba,
-    __global uchar *dst_nv12,
+    __global const uint *src_rgba_words,
+    __global uint *dst_nv12_words,
     uint src_pitch_bytes,
     uint src_width,
     uint src_height,
@@ -29,6 +29,8 @@ __kernel void ui4_rgba8_to_nv12_linear(
     uint active_top,
     uint active_height)
 {
+    __global const uchar *src_rgba = (__global const uchar *)src_rgba_words;
+    __global uchar *dst_nv12 = (__global uchar *)dst_nv12_words;
     uint dst_x = get_global_id(0) * 2u;
     uint dst_y = get_global_id(1) * 2u;
     if (dst_x >= dst_width || dst_y >= dst_height) {

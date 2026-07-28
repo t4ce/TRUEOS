@@ -1697,8 +1697,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI4_VIDEO_CONVERSION_STARTED,
         spawn_ui4_video_conversion_service_task,
     ),
-    // Online only exposes the Shell2 control endpoint. No compute work or UI4
-    // frame is created until `gpgpu preview start ...` is requested.
+    // Online only exposes the shared C++ presentation controller. No compute
+    // work or UI4 frame is created until a `cpp` demo or font presentation is
+    // requested.
     TaskSpec::enabled_gated(
         "gpgpu-ui4-preview-consumer-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,

@@ -650,9 +650,12 @@ pub(crate) fn publish_gpgpu_video_frame_buffer(
     publish_checked_frame(frame, lease)
 }
 
-/// Publish one triple-buffered Blueprint scene shaded directly by a compute
-/// kernel. The release binds the completed shader write to this exact Frame
-/// allocation; display ownership still ends only at SURFLIVE.
+/// Publish one Blueprint scene written directly by a compute producer.
+///
+/// Blueprint cadence selects its ring size: immutable scenes use one buffer,
+/// dirty scenes use two, and streaming scenes use three. The release binds the
+/// completed write to this exact allocation in every case; display ownership
+/// still ends only at SURFLIVE.
 pub(crate) fn publish_gpgpu_scene_frame_buffer(
     lease: FrameWriteLease,
     release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
@@ -662,7 +665,7 @@ pub(crate) fn publish_gpgpu_scene_frame_buffer(
     checked_lease(frame, lease)?;
     let index = lease.buffer_index as usize;
     if frame.plan.content != FrameContent::BlueprintScene
-        || frame.plan.buffering != super::FrameBuffering::Triple
+        || !blueprint_compute_release_plan(frame.plan.cadence, frame.plan.buffering)
         || !frame.gpu_authored[index]
     {
         return Err(FramePoolError::ProducerReleaseRequired);
@@ -675,6 +678,37 @@ pub(crate) fn publish_gpgpu_scene_frame_buffer(
     frame.gpu_release[index] = Some(FrameGpuRelease::Compute(release));
     publish_checked_frame(frame, lease)
 }
+
+const fn blueprint_compute_release_plan(
+    cadence: super::FrameCadence,
+    buffering: super::FrameBuffering,
+) -> bool {
+    matches!(
+        (cadence, buffering),
+        (super::FrameCadence::Immutable, super::FrameBuffering::Single)
+            | (super::FrameCadence::Dirty, super::FrameBuffering::Double)
+            | (super::FrameCadence::Streaming, super::FrameBuffering::Triple)
+    )
+}
+
+const _: () = {
+    assert!(blueprint_compute_release_plan(
+        super::FrameCadence::Immutable,
+        super::FrameBuffering::Single,
+    ));
+    assert!(blueprint_compute_release_plan(
+        super::FrameCadence::Dirty,
+        super::FrameBuffering::Double,
+    ));
+    assert!(blueprint_compute_release_plan(
+        super::FrameCadence::Streaming,
+        super::FrameBuffering::Triple,
+    ));
+    assert!(!blueprint_compute_release_plan(
+        super::FrameCadence::Immutable,
+        super::FrameBuffering::Triple,
+    ));
+};
 
 fn publish_checked_frame(
     frame: &mut FrameRecord,

@@ -146,11 +146,13 @@ pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_ARTIFACT: GpgpuKernelArtifa
     );
 
 pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::legacy_adls(
+    GpgpuKernelArtifact::new(
         UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME,
+        UI4_RGBA8_TO_NV12_LINEAR_ADLS_LEGACY_ABI_CONTRACT.target,
         UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN,
         UI4_RGBA8_TO_NV12_LINEAR_ADLS_SPV,
         UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN_SHA256,
+        Some(&UI4_RGBA8_TO_NV12_LINEAR_ADLS_LEGACY_ABI_CONTRACT),
     );
 
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =

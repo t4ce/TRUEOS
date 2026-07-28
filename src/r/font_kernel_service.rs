@@ -374,6 +374,14 @@ pub(crate) struct PendingFontFrameStamp {
 }
 
 impl PendingFontFrameStamp {
+    /// Take a completed direct-frame stamp without blocking the caller.
+    ///
+    /// Blueprint publishers use this as a cooperative submit/poll boundary
+    /// while retaining the exact UI4 write lease targeted by the worker.
+    pub(crate) fn try_take(&mut self) -> Option<Result<FontFrameStamp, FontKernelError>> {
+        self.reply.try_take()
+    }
+
     pub(crate) async fn wait(self) -> Result<FontFrameStamp, FontKernelError> {
         self.reply.wait().await
     }

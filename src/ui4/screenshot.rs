@@ -111,25 +111,74 @@ struct CapturedComposition {
 /// One immutable logical snapshot of D01, composed in the same hardware-plane
 /// order as UI4 presentation. The encoder consumes this in memory; it never
 /// enters the screenshot queue or filesystem worker.
-pub(super) struct StreamScanoutRgba {
+pub(super) struct StreamScanoutCapture {
     pub(super) width: u32,
     pub(super) height: u32,
-    pub(super) rgba_premultiplied: Vec<u8>,
     pub(super) slot0_scanout_pixels: usize,
     pub(super) spirit_overlay_pixels: usize,
 }
 
-pub(super) fn capture_stream_scanout_rgba() -> Result<StreamScanoutRgba, CaptureError> {
+pub(super) fn capture_stream_scanout_rgba_into(
+    rgba_premultiplied: &mut [u8],
+) -> Result<StreamScanoutCapture, CaptureError> {
     let output = super::OutputId::from_slot(0).ok_or(CaptureError::NoScanout)?;
-    let windows = super::visible_windows_for_output(output);
+    let (width, height) =
+        crate::intel::active_scanout_dimensions().ok_or(CaptureError::NoScanout)?;
+    let stride = usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+        .ok_or(CaptureError::DimensionTooLarge)?;
+    let byte_len = stride
+        .checked_mul(usize::try_from(height).map_err(|_| CaptureError::DimensionTooLarge)?)
+        .ok_or(CaptureError::DimensionTooLarge)?;
+    if rgba_premultiplied.len() != byte_len {
+        return Err(CaptureError::InvalidFrameLayout);
+    }
+    rgba_premultiplied.fill(0);
+
+    let mut windows = super::visible_windows_for_output(output);
+    windows.sort_unstable_by_key(|window| (window.plane.slot(), window.placement.z, window.id));
     let rects = super::slot4_service::presented_rects();
-    let capture = capture_windows(windows.as_slice(), rects.as_slice(), true)?;
-    Ok(StreamScanoutRgba {
-        width: capture.width,
-        height: capture.height,
-        rgba_premultiplied: capture.rgba,
-        slot0_scanout_pixels: capture.slot0_scanout_pixels,
-        spirit_overlay_pixels: capture.spirit_overlay_pixels,
+
+    let mut leases = Vec::with_capacity(windows.len());
+    for window in &windows {
+        match acquire_published_frame(window.frame) {
+            Ok(lease) => leases.push(lease),
+            Err(error) => {
+                release_leases(&leases);
+                return Err(error.into());
+            }
+        }
+    }
+    let result = (|| {
+        let views = leases
+            .iter()
+            .copied()
+            .map(published_rgba_view)
+            .collect::<Result<Vec<FrameRgbaView>, _>>()?;
+        let slot0_scanout_pixels =
+            copy_stream_pipe_a_slot0_premultiplied(rgba_premultiplied, width, height);
+        for (window, view) in windows.iter().zip(views.iter()) {
+            crate::intel::dma_flush(view.virt, view.byte_len);
+            let pixels =
+                unsafe { core::slice::from_raw_parts(view.virt.cast_const(), view.byte_len) };
+            blend_window(rgba_premultiplied, stride, width, height, *window, *view, pixels);
+        }
+        for rect in rects {
+            blend_visual_rect(rgba_premultiplied, stride, width, height, rect);
+        }
+        let spirit_overlay_pixels =
+            blend_stream_spirit_overlay_premultiplied(rgba_premultiplied, width, height);
+        Ok::<_, CaptureError>((slot0_scanout_pixels, spirit_overlay_pixels))
+    })();
+    release_leases(&leases);
+    let (slot0_scanout_pixels, spirit_overlay_pixels) = result?;
+
+    Ok(StreamScanoutCapture {
+        width,
+        height,
+        slot0_scanout_pixels,
+        spirit_overlay_pixels,
     })
 }
 

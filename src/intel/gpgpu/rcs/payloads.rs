@@ -183,12 +183,12 @@ fn direct_rcs_write_ui4_rgba8_to_nv12_payload_at(
     payload_offset: usize,
     params: Ui4Rgba8ToNv12LinearParams,
 ) -> bool {
-    if payload_offset + UI4_NV12_PRIMARY_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+    if payload_offset + UI4_RGBA8_TO_NV12_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
     unsafe {
         let payload = state.batch_virt.add(payload_offset);
-        core::ptr::write_bytes(payload, 0, UI4_NV12_PRIMARY_INDIRECT_BYTES);
+        core::ptr::write_bytes(payload, 0, UI4_RGBA8_TO_NV12_INDIRECT_BYTES);
         let dwords = payload as *mut u32;
         core::ptr::write_volatile(dwords.add(3), 16);
         core::ptr::write_volatile(dwords.add(4), 1);
@@ -208,10 +208,7 @@ fn direct_rcs_write_ui4_rgba8_to_nv12_payload_at(
         core::ptr::write_volatile(dwords.add(21), params.dst_height);
         core::ptr::write_volatile(dwords.add(22), params.active_top);
         core::ptr::write_volatile(dwords.add(23), params.active_height);
-        // IGC emits zero buffer offsets at bytes 96 and 100. The payload was
-        // zeroed above, binding both stateful buffers at their exact bases.
-
-        let local_ids = payload.add(UI4_NV12_PRIMARY_CROSS_THREAD_BYTES) as *mut u16;
+        let local_ids = payload.add(UI4_RGBA8_TO_NV12_CROSS_THREAD_BYTES) as *mut u16;
         for lane in 0..16usize {
             core::ptr::write_volatile(local_ids.add(lane), lane as u16);
             core::ptr::write_volatile(local_ids.add(16 + lane), 0);

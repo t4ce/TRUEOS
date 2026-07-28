@@ -112,7 +112,7 @@ fn direct_rcs_encode_ui4_rgba8_to_nv12_linear_batch(
 ) -> bool {
     if params.dst_width == 0
         || params.dst_height == 0
-        || UI4_NV12_PRIMARY_PAYLOAD_OFFSET_BYTES + UI4_NV12_PRIMARY_INDIRECT_BYTES
+        || UI4_NV12_PRIMARY_PAYLOAD_OFFSET_BYTES + UI4_RGBA8_TO_NV12_INDIRECT_BYTES
             > DIRECT_RCS_BATCH_BYTES
     {
         return false;
@@ -127,7 +127,7 @@ fn direct_rcs_encode_ui4_rgba8_to_nv12_linear_batch(
         UI4_NV12_PRIMARY_BINDING_TABLE_OFFSET_BYTES,
         UI4_RGBA8_TO_NV12_LINEAR_TEXT_OFFSET_BYTES,
         2,
-        UI4_NV12_PRIMARY_CROSS_THREAD_GRFS,
+        UI4_RGBA8_TO_NV12_CROSS_THREAD_GRFS,
     ) || !direct_rcs_write_copy_rect_surface_states_at(
         state,
         UI4_NV12_PRIMARY_BINDING_TABLE_OFFSET_BYTES,
@@ -176,7 +176,7 @@ fn direct_rcs_encode_ui4_rgba8_to_nv12_linear_batch(
         batch,
         &mut cursor,
         UI4_NV12_PRIMARY_PAYLOAD_OFFSET_BYTES,
-        UI4_NV12_PRIMARY_INDIRECT_BYTES,
+        UI4_RGBA8_TO_NV12_INDIRECT_BYTES,
         params.dst_width.div_ceil(32),
         params.dst_height.div_ceil(2),
         GPGPU_WALKER_SIMD16_MASK,

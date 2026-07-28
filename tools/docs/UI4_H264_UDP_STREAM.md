@@ -19,17 +19,19 @@ subscriber-driven kernel service:
    and slot-4 service rectangles, borrows pipe A's currently CUR_SURFLIVE
    Spirit buffer and actual CUR_POS,
    blends that 256x256 premultiplied-BGRA sprite without waiting for a newer
-   Spirit frame, and applies a fixed 4:3 center-sampled nearest downscale to a
-   centered 1920x1080 image. Four black rows above and below fill the
-   macroblock-aligned 1920x1088 NV12 encode surface. The stream-only capture
-   remains premultiplied RGBA and converts its already-composited RGB directly
-   against black to limited-range BT.601; ordinary screenshots still export
-   straight-alpha RGBA. The filter reads one source sample per output pixel to
-   constrain producer cost. Exactly two reusable NV12 slots let preparation of
-   the next frame overlap Gen12 VDEnc/MFX encode and UDP egress of the preceding
-   frame. The consumer emits a fresh IDR access unit on each absolute 20 Hz
-   deadline. The first frame is prepared before cadence measurement begins, and
-   the producer cannot advance more than one frame ahead of the consumer.
+   Spirit frame. The completed premultiplied RGBA composition already resides
+   in a persistent DMA buffer. A scratch-free SIMD16 GuC/RCS kernel then applies
+   the fixed 4:3 center-sampled nearest downscale and limited-range BT.601
+   conversion directly into a persistent linear NV12 DMA buffer. Four black
+   rows above and below fill the macroblock-aligned 1920x1088 encoder surface.
+   Ordinary screenshots still export straight-alpha RGBA; no CPU loop performs
+   the stream's per-pixel colorspace conversion. Exactly two reusable RGBA/NV12
+   buffer pairs let preparation of the next frame overlap Gen12 VDEnc/MFX
+   encode and UDP egress of the preceding frame. RCS completion is observed
+   asynchronously at one-millisecond intervals. The consumer emits a fresh IDR
+   access unit on each absolute 20 Hz deadline. The first frame is prepared
+   before cadence measurement begins, and the producer cannot advance more
+   than one frame ahead of the consumer.
 
    This fixed test-rig mapping preserves the native 16:9 composition and avoids
    dynamic crop selection. The capture follows UI4 plane/z order but is not a
