@@ -407,6 +407,7 @@ impl<'a> AlignedWriter<'a> {
             AppsPromptMode::Preserve,
             AppsPromptMode::Load,
             AppsPromptMode::Stop,
+            AppsPromptMode::Kick,
             AppsPromptMode::Status,
         ]
         .iter()

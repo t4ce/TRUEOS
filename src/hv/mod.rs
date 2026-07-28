@@ -2,6 +2,7 @@ pub mod app_crash;
 pub mod blueprint;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod blueprint_net;
+pub mod control_kick;
 pub mod guest_run;
 pub mod guest_work;
 pub mod hv_remote_restore_service;
@@ -59,6 +60,7 @@ struct TrueosVmId {
     replicatable: AtomicBool,
     pause_latched: AtomicBool,
     pause_store_seq: AtomicU64,
+    run_generation: AtomicU64,
     restore_inflight: AtomicBool,
     marker_seen: AtomicBool,
 }
@@ -75,6 +77,7 @@ impl TrueosVmId {
             replicatable: AtomicBool::new(false),
             pause_latched: AtomicBool::new(false),
             pause_store_seq: AtomicU64::new(0),
+            run_generation: AtomicU64::new(0),
             restore_inflight: AtomicBool::new(false),
             marker_seen: AtomicBool::new(false),
         }
@@ -93,10 +96,11 @@ static GUEST_KERNEL_GS_BASE_BY_VM: [AtomicU64; TRUEOS_VM_ID_LIMIT] =
     [const { AtomicU64::new(0) }; TRUEOS_VM_ID_LIMIT];
 static VMX_ROOT_ACTIVE_BY_CPU: [AtomicBool; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { AtomicBool::new(false) }; TRUEOS_VM_CPU_SLOT_LIMIT];
+static VMX_EXTERNAL_INTERRUPT_EXITING_BY_CPU: [AtomicBool; TRUEOS_VM_CPU_SLOT_LIMIT] =
+    [const { AtomicBool::new(false) }; TRUEOS_VM_CPU_SLOT_LIMIT];
 static VMXON_PA_BY_CPU: [AtomicU64; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { AtomicU64::new(0) }; TRUEOS_VM_CPU_SLOT_LIMIT];
 static VMX_CORE_CONTRACT_SUMMARY_LOGGED: AtomicBool = AtomicBool::new(false);
-static HV_CONTROL_NUDGE_SEQ: AtomicU64 = AtomicU64::new(1);
 static VM_BOOT_MODES: [Mutex<VmBootMode>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(VmBootMode::Hull) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_PENDING_LAUNCH_STATES: [Mutex<Option<BlueprintPendingLaunchState>>;
@@ -272,26 +276,95 @@ pub fn enter_vmx_root_for_current_cpu_contract() -> Result<(), &'static str> {
     Ok(())
 }
 
-fn hv_control_nudge_ap(arg: u64) -> u64 {
-    let vm_id = arg as u8;
-    let Some(vm) = vm_slot(vm_id) else {
-        return 0;
-    };
-    let current = current_vm_id();
-    let has_request = vm.stop_req.load(Ordering::Acquire)
-        || vm.preserve_req.load(Ordering::Acquire)
-        || vm.preserve_exit.load(Ordering::Acquire);
-    let on_vm_lane = current == Some(vm_id);
-    ((on_vm_lane as u64) << 1) | has_request as u64
+fn vm_owner_cpu_slot(vm_id: u8) -> Option<u32> {
+    let tagged = vm_id.checked_add(1)?;
+    CURRENT_VM_ID_BY_CPU
+        .iter()
+        .position(|owner| owner.load(Ordering::Acquire) == tagged)
+        .and_then(|slot| u32::try_from(slot).ok())
 }
 
-fn nudge_vm_control(vm_id: u8, reason: &'static str) {
-    let seq = HV_CONTROL_NUDGE_SEQ.fetch_add(1, Ordering::Relaxed);
-    let report = crate::smp::submit_to_all_online_aps(hv_control_nudge_ap, vm_id as u64);
-    hvlogf(format_args!(
-        "hv: vm{} lifecycle: {} nudge soft-smp seq={} smp_seq={} targeted={} submitted={} busy={}",
-        vm_id, reason, seq, report.seq, report.targeted_aps, report.submitted_aps, report.busy_aps
-    ));
+fn nudge_vm_control(
+    vm_id: u8,
+    action: crate::hv::control_kick::LifecycleKickAction,
+    reason: &'static str,
+) -> bool {
+    let Some(vm) = vm_slot(vm_id) else {
+        return false;
+    };
+    let Some(cpu_slot) = vm_owner_cpu_slot(vm_id) else {
+        hvlogf(format_args!(
+            "hv: vm{} lifecycle: {} kick deferred owner=none timer_fallback=1",
+            vm_id, reason
+        ));
+        return false;
+    };
+    if !VMX_EXTERNAL_INTERRUPT_EXITING_BY_CPU
+        .get(cpu_slot as usize)
+        .map(|enabled| enabled.load(Ordering::Acquire))
+        .unwrap_or(false)
+    {
+        hvlogf(format_args!(
+            "hv: vm{} lifecycle: {} kick deferred slot={} extint_exit=0 timer_fallback=1",
+            vm_id, reason, cpu_slot
+        ));
+        return false;
+    }
+
+    let generation = vm.run_generation.load(Ordering::Acquire);
+    match crate::hv::control_kick::publish_and_send(cpu_slot, vm_id as usize, generation, action) {
+        Ok(sequence) => {
+            hvlogf(format_args!(
+                "hv: vm{} lifecycle: {} kick targeted slot={} generation={} seq={}",
+                vm_id, reason, cpu_slot, generation, sequence
+            ));
+            true
+        }
+        Err(error) => {
+            hvwarnf(format_args!(
+                "hv: vm{} lifecycle: {} kick failed slot={} generation={} error={:?} timer_fallback=1",
+                vm_id, reason, cpu_slot, generation, error
+            ));
+            false
+        }
+    }
+}
+
+fn handle_external_interrupt_vmexit(vm_id: u8) -> Result<(), &'static str> {
+    let info =
+        crate::hv::vmx::read_vmexit_interruption_info().ok_or("external interrupt info missing")?;
+    if !info.is_external_interrupt() {
+        return Err("external interrupt exit carried non-external interruption info");
+    }
+
+    let vector = info.vector();
+    if crate::hv::control_kick::mark_vmexit_delivery(vector) {
+        if let Some(kick) = crate::hv::control_kick::pending_for_current_cpu() {
+            let expected_generation = vm_slot(vm_id)
+                .map(|vm| vm.run_generation.load(Ordering::Acquire))
+                .unwrap_or(0);
+            let valid = kick.vm_id == vm_id as usize && kick.generation == expected_generation;
+            let _ = crate::hv::control_kick::consume_for_current_cpu(kick.sequence);
+            if valid {
+                hvlogf(format_args!(
+                    "hv: vm{} lifecycle: kick consumed vector=0x{:02X} action={:?} generation={} seq={}",
+                    vm_id, vector, kick.action, kick.generation, kick.sequence
+                ));
+            } else {
+                hvwarnf(format_args!(
+                    "hv: vm{} lifecycle: stale kick ignored vector=0x{:02X} kick_vm={} generation={}/{} seq={}",
+                    vm_id, vector, kick.vm_id, kick.generation, expected_generation, kick.sequence
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    if crate::remote_work_wake::replay_vmexit_interrupt_through_host(vector) {
+        return Ok(());
+    }
+
+    Err("external interrupt vector dispatch unavailable")
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -998,6 +1071,14 @@ fn start_with_mode(
         target.core_kind_name(),
         memory::active_guest_stack_mb_for_vm(vm_id)
     );
+    let generation = vm
+        .run_generation
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1);
+    hvlogf(format_args!(
+        "hv: vm{} lifecycle: generation={} assigned slot={}",
+        vm_id, generation, target.slot
+    ));
     target.lease.set_vm_owner(vm_id);
 
     match vm_task(vm_id, target.lease) {
@@ -1042,12 +1123,22 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
         clear_blueprint_lifecycle_capability(vm_id);
         vm.stop_req.store(true, Ordering::Release);
         hvlogf(format_args!("hv: vm{} lifecycle: stop requested", vm_id));
-        nudge_vm_control(vm_id, "stop");
+        nudge_vm_control(vm_id, crate::hv::control_kick::LifecycleKickAction::Stop, "stop");
         Ok(true)
     } else {
         hvwarnf(format_args!("hv: vm{} lifecycle: stop ignored (not running)", vm_id));
         Ok(false)
     }
+}
+
+pub fn kick(vm_id: u8) -> Result<bool, StopError> {
+    let Some(vm) = vm_slot(vm_id) else {
+        return Err(StopError::UnsupportedVmId);
+    };
+    if !vm.running.load(Ordering::Acquire) {
+        return Ok(false);
+    }
+    Ok(nudge_vm_control(vm_id, crate::hv::control_kick::LifecycleKickAction::Nudge, "manual"))
 }
 
 pub fn request_replicatable_pause(vm_id: u8) -> Result<bool, StopError> {
@@ -1079,7 +1170,11 @@ pub fn request_preserve_mode(vm_id: u8, mode: PreserveMode) -> Result<bool, Stop
 
     vm.preserve_req.store(true, Ordering::Release);
     hvlogf(format_args!("hv: vm{} lifecycle: preserve requested mode={:?}", vm_id, mode));
-    nudge_vm_control(vm_id, "preserve");
+    let action = match mode {
+        PreserveMode::Stop => crate::hv::control_kick::LifecycleKickAction::PreserveStop,
+        PreserveMode::Pause => crate::hv::control_kick::LifecycleKickAction::PreservePause,
+    };
+    nudge_vm_control(vm_id, action, "preserve");
     Ok(true)
 }
 
@@ -3109,6 +3204,13 @@ async fn vmx_launch_once_with_ept(
         }
 
         match reason {
+            VMEXIT_REASON_EXTERNAL_INTERRUPT => {
+                // External-interrupt exiting is paired with acknowledge-on-exit.
+                // The dedicated lifecycle vector is consumed here; every
+                // other vector is replayed through the normal host IDT before
+                // guest re-entry so its existing handler retains EOI ownership.
+                handle_external_interrupt_vmexit(vm_id)?;
+            }
             VMEXIT_REASON_VMCALL => {
                 let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len")?;
                 vmwrite(VMCS_GUEST_RIP, lr.guest_rip + len)?;
@@ -3382,6 +3484,11 @@ fn setup_vmcs_for_launch(
     lineage_record: LineageRecord,
     boot_mode: VmBootMode,
 ) -> Result<bool, &'static str> {
+    let current_cpu_slot = crate::percpu::current_slot();
+    if let Some(slot) = VMX_EXTERNAL_INTERRUPT_EXITING_BY_CPU.get(current_cpu_slot) {
+        slot.store(false, Ordering::Release);
+    }
+
     let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
     let true_ctls = ((basic >> 55) & 1) != 0;
     let pin_msr = if true_ctls {
@@ -3405,7 +3512,10 @@ fn setup_vmcs_for_launch(
         0x484
     };
 
-    let pin = crate::hv::vmx::adjust_vmx_ctrl(pin_msr, PIN_BASED_VMX_PREEMPTION_TIMER);
+    let requested_pin = crate::hv::vmx::adjust_vmx_ctrl(
+        pin_msr,
+        PIN_BASED_VMX_PREEMPTION_TIMER | PIN_BASED_EXTERNAL_INTERRUPT_EXITING,
+    );
     let proc = crate::hv::vmx::adjust_vmx_ctrl(
         proc_msr,
         PROC_BASED_HLT_EXITING
@@ -3417,7 +3527,26 @@ fn setup_vmcs_for_launch(
         crate::hv::vmx::IA32_VMX_PROCBASED_CTLS2,
         PROC2_BASED_ENABLE_EPT | PROC2_BASED_ENABLE_VMFUNC,
     );
-    let exit = crate::hv::vmx::adjust_vmx_ctrl(exit_msr, EXIT_CTL_HOST_ADDR_SPACE_SIZE);
+    let requested_exit = crate::hv::vmx::adjust_vmx_ctrl(
+        exit_msr,
+        EXIT_CTL_HOST_ADDR_SPACE_SIZE | EXIT_CTL_ACKNOWLEDGE_INTERRUPT_ON_EXIT,
+    );
+    let external_interrupt_exiting_enabled = (requested_pin & PIN_BASED_EXTERNAL_INTERRUPT_EXITING)
+        != 0
+        && (requested_exit & EXIT_CTL_ACKNOWLEDGE_INTERRUPT_ON_EXIT) != 0;
+    let (pin, exit) = if external_interrupt_exiting_enabled {
+        (requested_pin, requested_exit)
+    } else {
+        let fallback_pin = crate::hv::vmx::adjust_vmx_ctrl(pin_msr, PIN_BASED_VMX_PREEMPTION_TIMER);
+        let fallback_exit =
+            crate::hv::vmx::adjust_vmx_ctrl(exit_msr, EXIT_CTL_HOST_ADDR_SPACE_SIZE);
+        if (fallback_pin & PIN_BASED_EXTERNAL_INTERRUPT_EXITING) != 0
+            || (fallback_exit & EXIT_CTL_ACKNOWLEDGE_INTERRUPT_ON_EXIT) != 0
+        {
+            return Err("external-interrupt VM-exit controls cannot be paired");
+        }
+        (fallback_pin, fallback_exit)
+    };
     let entry = crate::hv::vmx::adjust_vmx_ctrl(entry_msr, ENTRY_CTL_IA32E_MODE_GUEST);
     hvlogf(format_args!(
         "hv: vm{}-{} reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X}",
@@ -3453,6 +3582,13 @@ fn setup_vmcs_for_launch(
             lineage_record.level
         ));
     }
+    if !external_interrupt_exiting_enabled {
+        hvwarnf(format_args!(
+            "hv: vm{}-{} reporting: vmcs ctrl unsupported: external-interrupt exiting/acknowledge pair unavailable; targeted lifecycle kick disabled",
+            current_vm_id_for_log(),
+            lineage_record.level
+        ));
+    }
     if (proc2 & PROC2_BASED_ENABLE_EPT) == 0 {
         hvwarnf(format_args!(
             "hv: vm{}-{} reporting: vmcs ctrl unsupported: secondary bit ENABLE_EPT not available",
@@ -3477,6 +3613,9 @@ fn setup_vmcs_for_launch(
         let eptp_list_pa = memory::init_eptp_list(eptp)?;
         vmwrite(VMCS_CTRL_VMFUNC_CONTROLS, VMFUNC_EPTP_SWITCHING)?;
         vmwrite(VMCS_CTRL_EPTP_LIST_ADDR, eptp_list_pa)?;
+    }
+    if let Some(slot) = VMX_EXTERNAL_INTERRUPT_EXITING_BY_CPU.get(current_cpu_slot) {
+        slot.store(external_interrupt_exiting_enabled, Ordering::Release);
     }
 
     let (host_cr3, _) = Cr3::read();

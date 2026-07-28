@@ -22,6 +22,7 @@ pub(crate) enum AppsPromptMode {
     Preserve,
     Load,
     Stop,
+    Kick,
     Status,
 }
 
@@ -35,7 +36,8 @@ impl AppsPromptMode {
             Self::Pause => Self::Preserve,
             Self::Preserve => Self::Load,
             Self::Load => Self::Stop,
-            Self::Stop => Self::Status,
+            Self::Stop => Self::Kick,
+            Self::Kick => Self::Status,
             Self::Status => Self::Start,
         }
     }
@@ -50,6 +52,7 @@ impl AppsPromptMode {
             Self::Preserve => "preserve",
             Self::Load => "load",
             Self::Stop => "stop",
+            Self::Kick => "kick",
             Self::Status => "status",
         }
     }
@@ -507,6 +510,20 @@ fn stop_selected_or_all(io: &'static dyn ShellBackend2, id: Option<u8>, label: &
     }
 }
 
+fn kick_vm(io: &'static dyn ShellBackend2, id: Option<u8>) {
+    let Some(vm_id) = id else {
+        line(io, "apps: kick expects a vmid");
+        return;
+    };
+    match crate::hv::kick(vm_id) {
+        Ok(true) => line(io, alloc::format!("apps: vm{} kick sent", vm_id).as_str()),
+        Ok(false) => {
+            line(io, alloc::format!("apps: vm{} is not running or has no owner", vm_id).as_str())
+        }
+        Err(err) => line(io, alloc::format!("apps: kick failed: {:?}", err).as_str()),
+    }
+}
+
 fn preserve_vm(io: &'static dyn ShellBackend2, vm_id: u8) {
     match crate::hv::request_preserve(vm_id) {
         Ok(true) => line(io, alloc::format!("apps: vm{} preserve requested", vm_id).as_str()),
@@ -717,6 +734,7 @@ pub(crate) fn submit(
         Some("save") => (AppsPromptMode::Preserve, parts.map(String::from).collect()),
         Some("load") => (AppsPromptMode::Load, parts.map(String::from).collect()),
         Some("stop") => (AppsPromptMode::Stop, parts.map(String::from).collect()),
+        Some("kick") => (AppsPromptMode::Kick, parts.map(String::from).collect()),
         Some("status") => (AppsPromptMode::Status, parts.map(String::from).collect()),
         Some(other) => {
             let mut rest = Vec::new();
@@ -751,6 +769,7 @@ pub(crate) fn submit(
         AppsPromptMode::Stop => {
             stop_selected_or_all(io, parse_id(rest.first().map(String::as_str)), "stop")
         }
+        AppsPromptMode::Kick => kick_vm(io, parse_id(rest.first().map(String::as_str))),
         AppsPromptMode::Status => print_status(io),
     }
 }

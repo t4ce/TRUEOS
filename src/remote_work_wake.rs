@@ -1,4 +1,4 @@
-use core::arch::x86_64::__cpuid;
+use core::arch::{asm, x86_64::__cpuid};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use x86_64::registers::model_specific::Msr;
@@ -17,6 +17,7 @@ const MSR_IA32_APIC_BASE: u32 = 0x0000_001B;
 const MSR_IA32_X2APIC_EOI: u32 = 0x0000_080B;
 const MSR_IA32_X2APIC_SIVR: u32 = 0x0000_080F;
 const MSR_IA32_X2APIC_ICR: u32 = 0x0000_0830;
+const MSR_IA32_X2APIC_SELF_IPI: u32 = 0x0000_083F;
 const APIC_BASE_ENABLE: u64 = 1 << 11;
 const APIC_BASE_X2APIC_ENABLE: u64 = 1 << 10;
 const X2APIC_SIVR_SOFTWARE_ENABLE: u64 = 1 << 8;
@@ -58,16 +59,7 @@ pub(crate) fn wake_cpu_for_remote_work(cpu_slot: u32) -> bool {
         return true;
     }
 
-    let Some(lapic_id) = crate::percpu::cpu_slots()
-        .iter()
-        .find(|slot| slot.slot == cpu_slot)
-        .map(|slot| slot.lapic_id)
-    else {
-        REMOTE_WORK_WAKE_FAILED.fetch_add(1, Ordering::AcqRel);
-        return false;
-    };
-
-    if send_remote_work_x2apic_wake(lapic_id) {
+    if send_fixed_x2apic_ipi(cpu_slot, REMOTE_WORK_WAKE_VECTOR) {
         REMOTE_WORK_WAKE_SENT.fetch_add(1, Ordering::AcqRel);
         true
     } else {
@@ -86,14 +78,48 @@ pub extern "Rust" fn trueos_embassy_pender(context: *mut ()) {
     let _ = wake_cpu_for_remote_work(cpu_slot as u32);
 }
 
-fn send_remote_work_x2apic_wake(lapic_id: u32) -> bool {
+/// Send a fixed-delivery x2APIC interrupt to one resolved CPU slot.
+///
+/// Callers own the vector-specific publication protocol. In particular, any
+/// mailbox payload observed by the target must be committed before this call.
+pub(crate) fn send_fixed_x2apic_ipi(cpu_slot: u32, vector: u8) -> bool {
     if !local_x2apic_enabled() {
         return false;
     }
 
-    let icr = ((lapic_id as u64) << 32) | REMOTE_WORK_WAKE_VECTOR as u64;
+    let Some(lapic_id) = crate::percpu::cpu_slots()
+        .iter()
+        .find(|slot| slot.slot == cpu_slot)
+        .map(|slot| slot.lapic_id)
+    else {
+        return false;
+    };
+
+    let icr = ((lapic_id as u64) << 32) | u64::from(vector);
     unsafe {
         Msr::new(MSR_IA32_X2APIC_ICR).write(icr);
+    }
+    true
+}
+
+/// Replay an external interrupt acknowledged by VM-exit through the host IDT.
+///
+/// VM-exit ACK has already moved the interrupt into the local APIC in-service
+/// state, so acknowledge it before issuing a self-IPI carrying the same vector.
+/// The short interrupt-enabled halt lets the ordinary host handler run, then
+/// restores the VM loop's interrupt-disabled root context before returning.
+pub(crate) fn replay_vmexit_interrupt_through_host(vector: u8) -> bool {
+    if vector == AP_SPURIOUS_VECTOR {
+        return true;
+    }
+    if vector == crate::hv::control_kick::LIFECYCLE_KICK_VECTOR || !local_x2apic_enabled() {
+        return false;
+    }
+
+    local_eoi();
+    unsafe {
+        Msr::new(MSR_IA32_X2APIC_SELF_IPI).write(u64::from(vector));
+        asm!("sti", "hlt", "cli");
     }
     true
 }

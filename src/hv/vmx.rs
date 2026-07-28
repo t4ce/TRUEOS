@@ -135,6 +135,7 @@ pub const VMCS_VM_INSTRUCTION_ERROR: u64 = 0x4400;
 pub const VMCS_VMEXIT_GUEST_RIP: u64 = 0x681E;
 
 pub const PROC_BASED_HLT_EXITING: u64 = 1 << 7;
+pub const PIN_BASED_EXTERNAL_INTERRUPT_EXITING: u64 = 1 << 0;
 pub const PIN_BASED_VMX_PREEMPTION_TIMER: u64 = 1 << 6;
 pub const PROC_BASED_PAUSE_EXITING: u64 = 1 << 30;
 pub const PROC_BASED_ACTIVATE_SECONDARY: u64 = 1 << 31;
@@ -143,13 +144,65 @@ pub const PROC_BASED_USE_TSC_OFFSETTING: u64 = 1 << 3;
 pub const PROC2_BASED_ENABLE_VMFUNC: u64 = 1 << 13;
 pub const VMFUNC_EPTP_SWITCHING: u64 = 1 << 0;
 pub const EXIT_CTL_HOST_ADDR_SPACE_SIZE: u64 = 1 << 9;
+pub const EXIT_CTL_ACKNOWLEDGE_INTERRUPT_ON_EXIT: u64 = 1 << 15;
 pub const ENTRY_CTL_IA32E_MODE_GUEST: u64 = 1 << 9;
 pub const RFLAGS_RESERVED_BIT1: u64 = 1 << 1;
 pub const RFLAGS_IF: u64 = 1 << 9;
 pub const EXCEPTION_BITMAP_ALL: u64 = 0xFFFF_FFFF;
+pub const VMEXIT_REASON_EXTERNAL_INTERRUPT: u64 = 0x01;
 pub const VMEXIT_REASON_VMCALL: u64 = 0x12;
 pub const VMEXIT_REASON_PAUSE: u64 = 0x28;
 pub const VMEXIT_REASON_VMX_PREEMPTION_TIMER: u64 = 0x34;
+
+const VMEXIT_INTERRUPTION_INFO_VALID: u32 = 1 << 31;
+const VMEXIT_INTERRUPTION_INFO_ERROR_CODE_VALID: u32 = 1 << 11;
+const VMEXIT_INTERRUPTION_INFO_NMI_UNBLOCKING: u32 = 1 << 12;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct VmExitInterruptionInfo {
+    raw: u32,
+}
+
+impl VmExitInterruptionInfo {
+    #[inline]
+    pub const fn from_raw(raw: u32) -> Option<Self> {
+        if (raw & VMEXIT_INTERRUPTION_INFO_VALID) != 0 {
+            Some(Self { raw })
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u32 {
+        self.raw
+    }
+
+    #[inline]
+    pub const fn vector(self) -> u8 {
+        (self.raw & 0xFF) as u8
+    }
+
+    #[inline]
+    pub const fn interruption_type(self) -> u8 {
+        ((self.raw >> 8) & 0x7) as u8
+    }
+
+    #[inline]
+    pub const fn error_code_valid(self) -> bool {
+        (self.raw & VMEXIT_INTERRUPTION_INFO_ERROR_CODE_VALID) != 0
+    }
+
+    #[inline]
+    pub const fn nmi_unblocking_due_to_iret(self) -> bool {
+        (self.raw & VMEXIT_INTERRUPTION_INFO_NMI_UNBLOCKING) != 0
+    }
+
+    #[inline]
+    pub const fn is_external_interrupt(self) -> bool {
+        self.interruption_type() == 0
+    }
+}
 
 pub const HV_GDT_SEL_CODE: u16 = 0x08;
 pub const HV_GDT_SEL_DATA: u16 = 0x10;
@@ -468,19 +521,19 @@ pub fn decode_exception_vector(vector: u8) -> &'static str {
     }
 }
 
+#[inline]
+pub fn read_vmexit_interruption_info() -> Option<VmExitInterruptionInfo> {
+    VmExitInterruptionInfo::from_raw(vmread(VMCS_VMEXIT_INTERRUPTION_INFO)? as u32)
+}
+
 pub fn log_vmexit_interrupt_info(label: &str) {
-    let Some(info) = vmread(VMCS_VMEXIT_INTERRUPTION_INFO) else {
+    let Some(info) = read_vmexit_interruption_info() else {
         return;
     };
 
-    let valid = ((info >> 31) & 1) != 0;
-    if !valid {
-        return;
-    }
-
-    let vector = (info & 0xFF) as u8;
-    let kind = (info >> 8) & 0x7;
-    let err_valid = ((info >> 11) & 1) != 0;
+    let vector = info.vector();
+    let kind = info.interruption_type() as u64;
+    let err_valid = info.error_code_valid();
     let err = if err_valid {
         vmread(VMCS_VMEXIT_INTERRUPTION_ERROR_CODE).unwrap_or(0)
     } else {
@@ -502,7 +555,7 @@ pub fn log_vmexit_interrupt_info(label: &str) {
         decode_vmexit_int_type(kind),
         err_valid as u8,
         err,
-        info as u32
+        info.raw()
     ));
 
     let guest_rsp = vmread(VMCS_GUEST_RSP).unwrap_or(0);
