@@ -13,9 +13,8 @@ exec "${python_bin}" -B "${tool_dir}/bake.py" \
   --source "${trueos_root}/crates/trueos-shader/gpgpu/kernels/copy_rect_rgba8.clcpp" \
   --artifact-name copy_rect_rgba8 \
   --profile "${tool_dir}/profiles/adls-4680-r0c-cpp.json" \
-  --variant cpp \
+  --variant cpp-native \
   --publish-dir "${trueos_root}/crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp" \
-  --abi-reference-bin "${trueos_root}/crates/trueos-shader/gpgpu/kernels/artifacts/adls/copy_rect_rgba8.bin" \
   --expect-kernel copy_rect_rgba8 \
   --rust-symbol copy_rect_rgba8=COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT \
   --repro-check \

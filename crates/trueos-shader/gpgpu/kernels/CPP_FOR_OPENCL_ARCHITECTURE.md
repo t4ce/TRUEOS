@@ -1,25 +1,14 @@
-# C++ for OpenCL production selection: `copy_rect_rgba8`
+# C++ for OpenCL architecture
 
 ## Status and identity
 
-`copy_rect_rgba8.clcpp` is the source-side twin selected by the normal Make
-product/development lane. The OpenCL C source and checked-in artifacts remain
-an explicit comparison and fallback lane. Direct Cargo builds retain Cargo's
-legacy default unless `intel_gpu_cpp_aot` is requested. The C++ artifact is
-admitted only on the physical TestRig identity `00:02.0`, `8086:4680`,
-revision `0x0c`; the legacy artifact's revision policy is unchanged.
+C++ for OpenCL is the only maintained Intel GPGPU source and artifact
+architecture. Sources use `.clcpp`; generated artifacts live exclusively in
+`artifacts/adls/cpp/`. Cargo and Make do not expose an alternate frontend or a
+fallback selection.
 
-The stable side-by-side identity is:
-
-| Layer | Retained OpenCL C fallback | Make-default C++ selection |
-| --- | --- | --- |
-| source | `copy_rect_rgba8.cl` | `copy_rect_rgba8.clcpp` |
-| kernel entry | `copy_rect_rgba8` | `copy_rect_rgba8` |
-| ADL-S artifacts | `artifacts/adls/copy_rect_rgba8.{spv,bin}` | `artifacts/adls/cpp/copy_rect_rgba8.{spv,bin}` |
-
-Keeping the exported entry name and placing only the artifact pair in a
-separate directory lets the Rust catalog choose the implementation at compile
-time without changing any RCS payload or dispatch code.
+The published artifacts are admitted only on the physical TestRig identity
+`00:02.0`, `8086:4680`, revision `0x0c`.
 
 `include/trueos_clcpp.hpp` is deliberately freestanding. It uses only OpenCL
 device types, `constexpr`, `static_assert`, and an inline template. It does not
@@ -100,7 +89,7 @@ restored the complete type, qualifier, and read-only information. Adding
 `--spirv-preserve-auxdata` was tested and is unnecessary; it only enlarged the
 embedded SPIR-V for this kernel.
 
-## ADL-S comparison
+## ADL-S ABI
 
 The probe used:
 
@@ -132,12 +121,10 @@ canonicalize the frontend invocation—for example, run Clang from the source
 directory and pass `copy_rect_rgba8.clcpp` as a basename—or use and verify a
 stable compiler prefix map.
 
-The C++ source was compiled with the commands above. The legacy `.cl` source
-was freshly compiled by the same `ocloc` installation, and both Zebins were
-validated and inspected with `readelf`. The resulting `.ze_info` contracts
-matched exactly:
+The C++ source is validated and inspected through the generated `.ze_info`
+contract:
 
-| Contract field | C and C++ result |
+| Contract field | Published result |
 | --- | --- |
 | entry and text section | `copy_rect_rgba8`, `.text.copy_rect_rgba8` |
 | text offset / symbol size | `0x40` / `712` bytes |
@@ -153,18 +140,6 @@ matched exactly:
 `ocloc validate` decoded both as valid single-kernel binaries with two binding
 table entries and 96-byte cross-thread and per-thread payloads.
 
-The retained checked-in OpenCL C Zebin has `.ze_info` version `1.70`; this
-local IGC emitted version `1.64`. Apart from that schema-version line, the
-checked-in C contract and the C++ contract were identical. This is a
-toolchain-version pinning concern, not an ABI difference.
-
-IGA disassembly also showed that the checked-in C artifact and the C++ artifact
-have the same Gen12 instruction stream through the end-of-thread send. The
-first 632 bytes are byte-for-byte identical. Only eight bytes in two immediate
-values after EOT differ; they are in the compiler bookkeeping/padding tail.
-The complete `.text` hashes therefore differ even though the executable
-instruction prefix is identical.
-
 The local validator emitted two non-fatal tool-version warnings:
 
 - `.note.intelgt.metrics` is not handled by that validator build
@@ -172,22 +147,12 @@ The local validator emitted two non-fatal tool-version warnings:
 
 It still reported the binary as valid and decoded all contract fields above.
 
-## Hardware conformance and retained fallback
+## Hardware conformance
 
-The normal Make lane now selects the C++ artifact so the ordinary
-`bld/trueos.iso` development workflow exercises the intended path. This is not
-permission to delete or overwrite the retained OpenCL C artifact. Wider
-promotion still requires:
-
-1. generated-manifest validation of every field in the table above;
-2. an ADL-S hardware copy test covering even and odd widths, non-zero
-   source/destination origins, different pitches, and guard pixels;
-3. equality of the destination against the existing C artifact for those
-   cases;
-4. a pinned Clang, `llvm-spirv`, IGC, and `ocloc` provenance record.
-
-The C source remains available through `INTEL_GPU_CPP_AOT=0` until that
-hardware comparison passes on `8086:4680` revision `0x0c`.
+The physical copy proof covers even and odd widths, non-zero
+source/destination origins, different pitches, and guard pixels. Publication
+also requires manifest validation and pinned Clang, `llvm-spirv`, IGC, and
+`ocloc` provenance.
 
 The complete physical transcript is checked on the host with:
 

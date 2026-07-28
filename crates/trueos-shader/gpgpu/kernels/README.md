@@ -1,273 +1,84 @@
-# Intel GPGPU Kernels
+# Intel GPGPU kernels
 
-This directory holds the small OpenCL C and C++ for OpenCL kernels baked into
-embedded Gen12/Alder Lake artifacts for TRUEOS.
+TRUEOS has one maintained Intel kernel architecture: C++ for OpenCL, compiled
+offline to SPIR-V and then Intel Zebin for Alder Lake S.
 
-`copy_rect_rgba8.clcpp` is the first C++ for OpenCL source selected by the
-normal Make product/development lane. Its side-by-side artifact identity,
-exact offline frontend flags, ADL-S ABI comparison, and hardware conformance
-gate are recorded in
-[`CPP_FOR_OPENCL_OPT_IN.md`](CPP_FOR_OPENCL_OPT_IN.md).
+## Architecture
 
-`cpp_demo_rgba8.clcpp` is the first native C++/IGC application kernel rather
-than an ABI twin. One resident entry exposes six Shell2/UI4 generative modes
-through the dedicated `cpp` command. Its workload map, ABI, publication policy,
-and TestRig procedure are recorded in
-[`CPP_DEMO_SUITE.md`](CPP_DEMO_SUITE.md).
-
-`cpp_audio_visualizer_rgba8.clcpp` is the single-kernel live audiovisual
-instrument behind `cpp audio`. It consumes a compact FFT/PCM snapshot from an
-allocation-free pre-HDA tee and composes waveform, phase, spectrum, prism,
-onset, bass, and particle ideas into one resizable UI4 surface. Its audio
-boundary, 50% horizontal-pair walker shape, ABI, and TestRig procedure are in
-[`CPP_AUDIO_VISUALIZER.md`](CPP_AUDIO_VISUALIZER.md).
-
-`particle_craft.clcpp` is the stateful three-pass ParticleCraft engine behind
-`cpp particle` and the Blueprint particle app. Its step entry updates 32-byte
-particle records in place; its deterministic tile entry produces 256-bit
-candidate masks; and its race-free pixel-gather entry shades the complete Arc
-Forge backing surface from an adjustable 1x/2x/4x destination-relative sampling
-grid, mapped into a stable 640x400 simulation space. Maximized
-ParticleCraft windows use a half-scanout backing and the Intel direct-plane
-scaler for full logical coverage. The persistent lifetime, 64-byte Blueprint
-ABI, phase barrier, quarantine rule, and TestRig commands are in
-[`PARTICLE_CRAFT.md`](PARTICLE_CRAFT.md).
-
-`spirit_vfx_background_rgba8.clcpp` and
-`spirit_vfx_sprite_rgba8.clcpp` are Spirit's sole maintained 10-background and
-16-sprite shader sources. They preserve the established two-walker cursor-plane
-path and use compile-time-specialized secondary detail. The design, production
-artifact preview, hashes, and TestRig commands are recorded in
-[`SPIRIT_CPP_REPASS.md`](SPIRIT_CPP_REPASS.md).
-
-`copy_rect_rgba8.cl` is the first standalone graphics value target:
-
-- source: linear RGBA8
-- destination: linear RGBA8
-- no scaling
-- no format conversion
-- no blending
-- rectangular copy only
-- one SIMD16 walker/subgroup copies up to 32 pixels, two adjacent pixels per lane/work-item
-
-The CPU side owns resource lifetime, bounds/scissor clipping, GPU address/state
-binding, parameter packing, and walker submission.
-
-The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
-
-- `fill_rect_rgba8.cl`: parameterized RGBA8 fill
-- `fill_rect_worklist_rgba8.cl`: descriptor worklist RGBA8 fills; one walker consumes the descriptor slice serially
-- `gradient_rect_worklist_rgba8.cl`: descriptor worklist procedural RGBA8 gradients; each descriptor writes one horizontal or vertical rect from two endpoint colors
-- `alpha_blend_worklist_rgba8.cl`: descriptor worklist RGBA8 composites; source/destination rects are unscaled and batched like the fill worklist
-- `glyph_mask_rgba8.cl`: 8-bit coverage mask blended with packed RGBA8 color
-- `sprite_quad_worklist_rgba8.cl`: arbitrary sprite-quad descriptors sampled from RGBA8 or XRGB source surfaces and copied or source-over blended into RGBA8/XRGB destinations
-- `mandel64_worklist_rgba8.cl`: clipped 64x4 Mandelbrot row-band descriptors; each descriptor can either mirror across the real axis or compute an unmirrored viewport
-- `chart_sine_rgba8.cl`: full-frame analytical 2D scope plot with grid, axes, border, anti-aliased sine line, and optional glow; retained as an internal arbitrary-surface UI4 compute node
-- `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; retained as an internal arbitrary-surface UI4 compute node
-- `cpp_demo_rgba8.clcpp`: one exact-target C++ for OpenCL/IGC application kernel with gallery, aurora, Julia-set, signed-distance, Voronoi, and standalone Retro Sun modes; available through the dedicated `cpp` Shell2 command
-- `cpp_audio_visualizer_rgba8.clcpp`: one exact-target C++/IGC audiovisual composition driven by the final 48 kHz stereo HDA-bound mix, a 2048-point mid/side FFT, 64 bands, and 128-point channel waveforms; available through `cpp audio`
-- `particle_craft.clcpp`: one exact-target C++/IGC artifact with persistent particle-state and full-frame render entries; available through `cpp particle` and `Frame::render_particle_craft`
-- `lab256_multiphase.cl`: hash-locked 256x256 three-entry archived experiment retained for internal vGPU/GuC validation; its former Shell2 route is removed
-- `spirit_vfx_background_rgba8.clcpp` and `spirit_vfx_sprite_rgba8.clcpp`: TrueOS-Spirit's continuous 60 Hz C++/IGC cursor-plane producer and sole maintained shader source pair; the default clean-Lilly batch dispatches only the sprite presentation walker, while enabling a procedural background adds the background walker and ordered source-over dependency
-- `font_outline_mesh.cl`: allowlisted archived Skrifa outline diagnostic; its former Shell2 tessellation probe is removed
-- `font_outline_coverage_r8.cl`: production Skrifa-afterpath consumer; it evaluates non-zero winding plus nearest-edge distance in final mask-pixel coordinates and writes reusable fractional R8 coverage with bounded low-ppem optical bias
-
-The rect and sprite worklist kernels share a descriptor-driven shape:
-
-- the CPU owns clipping, surface binding, descriptor allocation, and descriptor
-  chunking
-- one walker receives a descriptor slice through `desc_base` and `desc_count`
-- the current bring-up kernel shape has work-item 0 walk the slice serially so
-  multi-descriptor probes prove the CPU/GPGPU ABI before lane sharding returns
-- `fill_rect_worklist_rgba8.cl` descriptors are `{ dst_xy, size, color_rgba }`
-- `gradient_rect_worklist_rgba8.cl` descriptors are `{ dst_xy, size, color0_rgba, color1_rgba, flags }`, with `flags bit0` selecting vertical instead of horizontal
-- `alpha_blend_worklist_rgba8.cl` descriptors are `{ src_xy, dst_xy, size, flags, color_rgba }`, with flags for direct copy, source-over, RGB tint, alpha tint, and premultiplied source
-- `sprite_quad_worklist_rgba8.cl` descriptors are four `x/y/u/v` float corners plus `{ color_rgba, flags }`; flags select clear, source-over, premultiplied source RGB, and XRGB source/destination conversion
-- packed coordinates use 16-bit lanes; destination coordinates are signed
-
-These are intended to replace the old single-rect stage-1 fill/alpha path for
-batched UI chrome/overlay subsets while keeping the smaller kernels available
-for targeted bring-up.
-
-`ui4_nv12_tile64_to_rgba8_frame.cl` is the SIMD16 video Frame producer. It
-converts a decoder-owned Tile64 NV12 source into the complete, exact UI4 RGBA8
-lease (opaque black outside the selected native viewport); it neither reads a
-display backbuffer nor programs a plane. The Alder Lake S artifact SHA-256 is
-`f33f0f2f531aa4df74b932fd519d5c096f9576b94c09cf1e20b742151092e0b5`.
-
-`ui4_rgba8_to_nv12_linear.cl` is the reverse SIMD16 RDP preparation path. One
-work-item converts a 2x2 macro-pixel from the persistent logical RGBA8 capture
-into the centered 1920x1088 linear NV12 VDEnc input without CPU pixel math.
-The scratch-free two-binding Alder Lake S artifact SHA-256 is
-`30ea396fb6b92387c8154126873ba00a6d3a7ad813167453704c5c8f493025ac`.
-
-`artifacts/adls/cpp/copy_rect_rgba8.bin` is the Make-default C++ for OpenCL
-Alder Lake S build produced with Intel `ocloc`/IGC. Its SHA-256 is:
+Every source in this directory is a `.clcpp` file. Every checked-in GPU
+artifact is published below `artifacts/adls/cpp/` as one four-file set:
 
 ```text
-b36d1c7742003591a5074663d81a4162412618ae425c47d30be6d068ee144a25
+kernel.clcpp
+  -> kernel.spv
+  -> kernel.bin
+  -> kernel.manifest.json
+  -> kernel.contract.rs
 ```
 
-`artifacts/adls/cpp/cpp_demo_rgba8.bin` is the unconditional C++/IGC demo
-artifact for exact target `8086:4680`, revision `0x0c`. Its SHA-256 is:
+The runtime embeds the Zebin and SPIR-V and consumes the generated Rust ABI
+contract. It never compiles a kernel. There is no OpenCL-C source lane, legacy
+artifact directory, Cargo feature switch, or runtime fallback.
+
+The canonical frontend is:
 
 ```text
-75e5a83b3e74e3b5da59756bc5a804cbb742314389bb60559474586050ce66ac
+Clang C++ for OpenCL
+  -> spir64 LLVM bitcode
+  -> llvm-spirv OpenCL Kernel SPIR-V
+  -> ocloc/IGC Intel Zebin
 ```
 
-`artifacts/adls/cpp/cpp_audio_visualizer_rgba8.bin` is the unconditional
-single-kernel audiovisual artifact for that same exact target. Its SHA-256 is:
+The pinned ADL-S profile requires device `8086:4680`, revision `0x0c`, SIMD16,
+and zero scratch/SLM. The bakery records the complete source/header graph,
+toolchain identity, two-root reproducibility result, ELF/`.ze_info` ABI, and
+SPIR-V identity before publication.
 
-```text
-951e0cb30b42a755812b00eb0c3871f52c765ee74295dc3cb48b84f8361c1b19
-```
+See [CPP_FOR_OPENCL_ARCHITECTURE.md](CPP_FOR_OPENCL_ARCHITECTURE.md) for the
+compiler and ABI boundary.
 
-`artifacts/adls/cpp/particle_craft.bin` is the three-entry stateful particle
-artifact for that exact target. Its SHA-256 is:
+## Maintained kernel groups
 
-```text
-cc9cd45afedc335be1ae6086f29d6276795113bae899f915162e53ad522b256a
-```
+- 2D primitives: copy, fill, gradient, alpha blend, glyph mask, sprite quad,
+  Mandelbrot worklists, chart, plasma, skybox sampling, scene AABB, and MSAA
+  resolve.
+- UI4/video: layer composition, Tile64/Y-tile NV12 conversion, and RGBA8 to
+  linear NV12.
+- Font production: analytical Skrifa-outline coverage to persistent R8 masks.
+  The former diagnostic outline-mesh kernel and its render-import probe were
+  removed.
+- Applications: C++ demo suite, live audio visualizer, ParticleCraft, and
+  Spirit background/sprite shaders.
+- Internal validation: the three-entry `lab256_multiphase` artifact.
+- Inference: the two LFM2.5 Q8 projection kernels.
 
-The two unconditional Spirit C++/IGC artifacts are standalone, solely
-maintained native C++ publications:
+Focused design notes remain beside their sources:
 
-```text
-artifacts/adls/cpp/spirit_vfx_background_rgba8.bin  2f856f0e338df1eef71b89ed5dd390ceb2fe8323cc9de7cdae2537a63895340e
-artifacts/adls/cpp/spirit_vfx_sprite_rgba8.bin      2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac
-```
+- [CPP_DEMO_SUITE.md](CPP_DEMO_SUITE.md)
+- [CPP_AUDIO_VISUALIZER.md](CPP_AUDIO_VISUALIZER.md)
+- [PARTICLE_CRAFT.md](PARTICLE_CRAFT.md)
+- [SPIRIT_CPP_REPASS.md](SPIRIT_CPP_REPASS.md)
+- [LAB256_MULTIPHASE_EXPLORE.md](LAB256_MULTIPHASE_EXPLORE.md)
 
-`artifacts/adls/copy_rect_rgba8.bin` is the retained legacy OpenCL C
-comparison/fallback. Its SHA-256 is:
+## Bake and verify
 
-```text
-10866024aaffae96f92cfc25a5fb188ca421994789afbc4dba3ddc290bd583ab
-```
-
-`artifacts/adls/fill_rect_worklist_rgba8.bin` is the descriptor fill evo build.
-Its SHA-256 is:
-
-```text
-5e28e1a39c3b154ea6d7bc55fbbc99cfdca340eaf7a521b06bc7529b7a1c532b
-```
-
-`artifacts/adls/gradient_rect_worklist_rgba8.bin` is the descriptor gradient
-evo build for UI chrome bands and procedural strips. Its SHA-256 is:
-
-```text
-d3e6d5ec26c2b789d43d3308cf740977ce52f5b4df2325a27c92a687796d9149
-```
-
-`artifacts/adls/alpha_blend_worklist_rgba8.bin` is the descriptor composite
-evo build. Its SHA-256 is:
-
-```text
-74e2f00828973323f4bebb4b9c513ef249fc15080fddbd39a1b8a9e412b646a7
-```
-
-`artifacts/adls/sprite_quad_worklist_rgba8.bin` is the arbitrary sprite
-quad worklist build. Its SHA-256 is:
-
-```text
-8dfc6217ff6346fe2660079fc905ed5e48187af48b0c90c5e0d5e56a80ef3437
-```
-
-`artifacts/adls/mandel64_worklist_rgba8.bin` is the descriptor Mandelbrot
-tile worklist build with clipped 64x4 row-band descriptors, mirrored half-scanout,
-optional full-height viewport work, 32-bit Q12 arithmetic, and
-descriptor-controlled iteration cap plus grayscale scale. Its SHA-256 is:
-
-```text
-8b1746984f74156ccdbeb9431df9d25061285655067de8ebd5283b08de00d91f
-```
-
-`artifacts/adls/chart_sine_rgba8.bin` is the allowlisted analytical chart build.
-Runtime filesystem overrides for this kernel are accepted only when their SHA-256
-matches this embedded value:
-
-```text
-79eb20bc337e172a8ccddcdc6654eea992e89fb5fb67b2f32caad1c1afa1c0e4
-```
-
-`artifacts/adls/pixel_plasma_rgba8.bin` is the allowlisted procedural pixel
-build. Its analytical field is intentionally buffer-free for bring-up; a later
-FluidX3D field consumer can replace that scalar source while retaining the
-palette, scanout, contract, and cadence path. It writes native premultiplied
-ARGB8888 into a caller-owned composition surface. A UI4 frame producer can
-publish that surface without a CPU format conversion or direct display-plane ownership. Runtime
-overrides must match:
-
-```text
-42fb1dd0568bb244c44f87d146e036a72df60cb811715c370ec959de6d3af893
-```
-
-The two retained Spirit VFX artifacts are hash-locked ABI references for the
-C++ repass. Background-enabled submissions
-use one ordered two-walker batch; the clean default omits the background
-walker. The background artifact implements the selected ten-mode set:
-`Energy ring`, `Magic circle`, `Nebula smoke`, `Cyber grid`, `Portal vortex`,
-`Speed lines`, `Bokeh field`, `Water ripples`, `Pixel burst`, and the
-C++ `Magic time circle`. The sprite
-artifact implements the complete stable ID 0–15 preview set from
-`Original / clean` through `Dream bloom`. Their legacy ADL-S binary hashes are:
-
-```text
-spirit_vfx_background_rgba8.bin  527042d30fdfeaf111d491b9497ad7d6f0fb5c51369da2968a53b85344da752f
-spirit_vfx_sprite_rgba8.bin      f1264ac062d5645c8d4da55e1585ee22c56cfb7a341d28407d3b934e97821ddc
-```
-
-The exact control-page, UI JSON, artifact, and display-release contracts are
-recorded in [`SPIRIT_VFX_EXPLORE.md`](SPIRIT_VFX_EXPLORE.md).
-
-`artifacts/adls/font_outline_mesh.bin` is the allowlisted first font-geometry
-compute build. Its input records are eight dwords: opcode, up to six IEEE-754
-font-unit coordinates, and a reserved zero. The shell command exposes three
-incremental hardware proofs:
-
-- `audit`: validates opcodes, contour sequencing, finite coordinates, reserved
-  fields, and the CPU/GPU FNV-1a checksum over the full `True OS §` stream
-- `flatten`: expands every contour in the full `True OS §` stream into
-  fixed-subdivision points entirely in compute
-- `mesh`: emits four vertices and six indices per flattened segment for all
-  glyph contours and checks every generated index before reporting success
-
-The mesh stage is intentionally full-text outline-stroke geometry. It proves the
-GPU-resident indexed-buffer shape and chains that same physical allocation into
-the 3D raster pipeline, but does not claim hole-aware glyph fill yet. During
-bring-up the CPU reads only the fixed report and index range to produce proof
-logs; the generated geometry itself is not converted or used for CPU
-tessellation. Runtime overrides must match:
-
-```text
-bf78e5d6870f2303b707d30320d8daa15554085a75d47a48b51fb932f4fa3d25
-```
-
-`artifacts/adls/font_outline_coverage_r8.bin` is the production analytical
-font build used by the shared kernel font service, persisted GridPaper layers,
-and the Draw3D TCP waiting scene. The CPU positions warmed Skrifa commands but
-does not fill-tessellate them. Compute preserves contour orientation, applies
-non-zero winding for holes, locally subdivides quadratic and cubic curves, and
-encodes `clamp(0.5 + bias - signed_distance, 0, 1)` into R8. Every live mask
-owns a distinct direct-RCS virtual range and passes a cold output audit before
-`glyph_mask_rgba8.cl` supplies animated color source-over after scene resolve.
-Runtime overrides must match:
-
-```text
-a4f0dddc7f2a9d9d67e5e71459d54da2e4a7ade8cd1af8c27283a884f221b836
-```
-
-Regenerate one or more ADL-S artifacts with the Intel IGC/`ocloc` toolchain:
+Refresh every checked-in artifact with the pinned host toolchain:
 
 ```sh
-gpgpu/bake_adls_artifacts.sh alpha_blend_worklist_rgba8 sprite_quad_worklist_rgba8
+make intel-gpu-bake-cpp-artifacts
 ```
 
-With no arguments, the script rebuilds every kernel source that has a matching
-`artifacts/adls/*.bin` output:
+The compatibility entry point performs the same complete bake:
 
 ```sh
-gpgpu/bake_adls_artifacts.sh
+crates/trueos-shader/gpgpu/bake_adls_artifacts.sh
 ```
 
-The script accepts `OCLOC=/path/to/ocloc` for a system toolchain. If `OCLOC` is
-not set, it uses the local extracted toolchain under `bld/intel-tools/root`.
+Ordinary builds are compiler-free. Verify every artifact, manifest, generated
+contract, source mapping, and bakery regression test with:
+
+```sh
+make intel-gpu-verify-cpp-artifacts
+```
+
+`make kernel` and `make iso` always select this architecture.

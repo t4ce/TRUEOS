@@ -126,7 +126,7 @@ CARGO_EFFECTIVE_FLAGS = $(strip $(CARGO_BUILD_FLAGS))
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel kernel-cpp-aot cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-verify lfm25-igpu-packed-verify intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine testrig-physical-reset-log baremetal-reboot-log iso iso-cpp-aot provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: images empty-libs kernel kernel-cpp-aot cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-verify lfm25-igpu-packed-verify intel-gpu-bake-migrated-cpp intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine testrig-physical-reset-log baremetal-reboot-log iso iso-cpp-aot provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -145,6 +145,9 @@ kernel: empty-libs $(INTEL_GPU_PREBUILD_VERIFY)
 	$(MAKE) --no-print-directory INTEL_GPU_LINKED_ELF="$(KERNEL_BIN)" intel-gpu-verify-linked-copy
 
 kernel-cpp-aot: kernel
+
+intel-gpu-bake-migrated-cpp:
+	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_migrated.sh"
 
 intel-gpu-bake-copy-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_copy_rect.sh"
@@ -171,6 +174,7 @@ intel-gpu-bake-spirit-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_spirit.sh"
 
 intel-gpu-bake-cpp-artifacts:
+	$(MAKE) --no-print-directory intel-gpu-bake-migrated-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-copy-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-cpp-demo
 	$(MAKE) --no-print-directory intel-gpu-bake-audio-visualizer-cpp
