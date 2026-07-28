@@ -38,10 +38,10 @@ pub mod media_encode {
     pub const VALIDATION_SESSION_ACCESS_UNITS: usize = REALTIME_HZ * VALIDATION_SESSION_SECONDS;
 }
 
-pub mod stackkeeper {
-    pub const TOKIO_LANE_COUNT: usize = 16;
-    pub const TOKIO_LANE_SCRATCH_BYTES: usize = 16 * 1024;
-    pub const TOKIO_TLS_CPU_TRACK_COUNT: usize = 64;
+pub mod wls {
+    pub const WORKER_SLOT_COUNT: usize = 16;
+    pub const CPU_TRACK_COUNT: usize = 64;
+    pub const TLS_SLOT_COUNT: usize = 4096;
 }
 
 pub mod hv {

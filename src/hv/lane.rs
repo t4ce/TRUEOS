@@ -67,6 +67,7 @@ pub struct LaneTarget {
 pub struct LaneLease {
     slot: u32,
     role: LaneRole,
+    wls_identity: Option<crate::wls::WorkerIdentityLease>,
     armed: bool,
 }
 
@@ -92,6 +93,7 @@ impl LaneLease {
         if !self.armed {
             return;
         }
+        drop(self.wls_identity.take());
         if let Some(owner) = LANE_OWNER.get(self.slot as usize) {
             if owner
                 .compare_exchange(self.role.code(), LANE_FREE, Ordering::AcqRel, Ordering::Acquire)
@@ -106,6 +108,13 @@ impl LaneLease {
 
     pub(crate) fn release_now(&mut self) {
         self.release();
+    }
+
+    pub(crate) fn enter_wls(&self) -> crate::wls::WorkerIdentityGuard {
+        self.wls_identity
+            .as_ref()
+            .expect("Tokio blocking lane missing WLS identity")
+            .enter()
     }
 
     pub fn set_vm_owner(&mut self, vm_id: u8) {
@@ -205,9 +214,28 @@ fn try_lease(slot: u32, role: LaneRole) -> Option<LaneLease> {
     owner
         .compare_exchange(LANE_FREE, role.code(), Ordering::AcqRel, Ordering::Acquire)
         .ok()?;
+
+    let wls_identity = if role == LaneRole::TokioBlocking {
+        match crate::wls::try_lease_worker_identity(slot) {
+            Some(identity) => Some(identity),
+            None => {
+                let _ = owner.compare_exchange(
+                    role.code(),
+                    LANE_FREE,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+                return None;
+            }
+        }
+    } else {
+        None
+    };
+
     Some(LaneLease {
         slot,
         role,
+        wls_identity,
         armed: true,
     })
 }

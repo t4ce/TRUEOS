@@ -62,8 +62,6 @@ mod runtime;
 mod shell2;
 mod smp;
 mod spirit;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-mod stackkeeper;
 mod std_abi_shim;
 mod surfer;
 mod turbo;
@@ -79,6 +77,8 @@ pub(crate) mod usb3;
 mod user_input_record;
 mod virtio_gpu_logo;
 mod wait;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod wls;
 mod workers;
 mod x2apic;
 mod z7;

@@ -45,7 +45,6 @@ pub struct BlockingJobEntry {
 struct ServiceLaneRequest {
     entry: BlockingJobEntry,
     lease: crate::hv::lane::LaneLease,
-    tokio_lease: crate::stackkeeper::TokioLaneLease,
     enqueued_ms: u64,
     lane_depth_at_enqueue: usize,
 }
@@ -183,7 +182,6 @@ async fn service_lane_worker_task(slot: u32, core_kind: u8) {
         let ServiceLaneRequest {
             entry,
             mut lease,
-            tokio_lease,
             enqueued_ms,
             lane_depth_at_enqueue,
         } = request;
@@ -208,10 +206,9 @@ async fn service_lane_worker_task(slot: u32, core_kind: u8) {
         } else {
             lease.clear_vm_owner();
         }
-        let tokio_guard = crate::stackkeeper::enter_tokio_lane(tokio_lease, purpose);
+        let wls_guard = lease.enter_wls();
         run_blocking_job_entry(entry);
-        drop(tokio_guard);
-        crate::stackkeeper::release_tokio_lane(tokio_lease);
+        drop(wls_guard);
         lease.clear_vm_owner();
     }
 }
@@ -307,10 +304,7 @@ fn pop_service_lane_request(slot: u32) -> Option<ServiceLaneRequest> {
         .and_then(|queue| queue.lock().pop_front())
 }
 
-fn pick_service_lane_slot(
-    vm_id: Option<u8>,
-    purpose: &'static str,
-) -> Option<(u32, crate::hv::lane::LaneLease, crate::stackkeeper::TokioLaneLease)> {
+fn pick_service_lane_slot() -> Option<(u32, crate::hv::lane::LaneLease)> {
     start_service_lanes();
     let slots = crate::workers::background_worker_slots();
     if slots.is_empty() {
@@ -326,16 +320,7 @@ fn pick_service_lane_slot(
             .unwrap_or(false)
             && let Some(lease) = crate::hv::lane::try_lease_tokio_blocking_lane_for_slot(slot)
         {
-            let core_kind = crate::workers::core_kind_for_slot(slot);
-            let tokio_lease = if let Some(vm_id) = vm_id {
-                crate::stackkeeper::try_acquire_tokio_lane_for_vm(slot, core_kind, vm_id, purpose)
-            } else {
-                crate::stackkeeper::try_acquire_tokio_lane(slot, core_kind, purpose)
-            };
-
-            if let Some(tokio_lease) = tokio_lease {
-                return Some((slot, lease, tokio_lease));
-            }
+            return Some((slot, lease));
         }
     }
     None
@@ -358,8 +343,7 @@ fn submit_service_lane_request(
         return Err(entry);
     }
 
-    let Some((slot, lease, tokio_lease)) = pick_service_lane_slot(entry.vm_id, entry.purpose)
-    else {
+    let Some((slot, lease)) = pick_service_lane_slot() else {
         if log_rejection {
             crate::log_error!(
                 target: "service";
@@ -385,7 +369,6 @@ fn submit_service_lane_request(
         queue.push_back(ServiceLaneRequest {
             entry,
             lease,
-            tokio_lease,
             enqueued_ms,
             lane_depth_at_enqueue,
         });

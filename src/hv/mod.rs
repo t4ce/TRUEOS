@@ -47,6 +47,7 @@ const HV_LOG_LINE: usize = crate::allcaps::hv::LOG_LINE_BYTES;
 pub const TRUEOS_VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
 const TRUEOS_VM_CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 const VMX_PREEMPTION_QUANTUM_MS: u64 = 16;
+const GUEST_FS_BASE_RESET: u64 = 0;
 
 struct TrueosVmId {
     running: AtomicBool,
@@ -664,17 +665,7 @@ pub(crate) fn current_guest_execution_context_vm_id() -> Option<u8> {
         return Some(vm_id);
     }
 
-    let snapshot = crate::stackkeeper::current_vm_hull_snapshot()?;
-    if snapshot.role != crate::stackkeeper::VM_HULL_RECORD_ROLE_VM_HULL {
-        return None;
-    }
-
-    let vm_id = snapshot.lane_id as usize;
-    if vm_id < crate::allcaps::hv::VM_ID_LIMIT {
-        Some(vm_id as u8)
-    } else {
-        None
-    }
+    None
 }
 
 pub(crate) fn with_guest_broker_context<R>(vm_id: u8, f: impl FnOnce() -> R) -> R {
@@ -2200,14 +2191,12 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
             _ => blueprint_control_shell_line(vm_id, "env: unavailable"),
         },
         "smp" => {
-            let record = crate::stackkeeper::vm_hull_record(vm_id);
             let state = vm_state(vm_id);
             blueprint_control_shell_line(
                 vm_id,
                 alloc::format!(
-                    "smp: vm={} vthread={} running={} starting={} async_jobs=not-wired",
+                    "smp: vm={} running={} starting={} async_jobs=not-wired",
                     vm_id,
-                    record.vtid(),
                     state.running as u8,
                     state.starting as u8,
                 )
@@ -2669,9 +2658,8 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         ));
     }
     hvlogf(format_args!(
-        "hv: vm{} reporting: vm-hull fs_base=0x{:016X}",
-        vm_id,
-        crate::stackkeeper::vm_hull_fs_base(vm_id)
+        "hv: vm{} reporting: initial guest fs_base=0x{:016X}",
+        vm_id, GUEST_FS_BASE_RESET
     ));
     crate::log!(
         "app-vm-run-queue: vm launch enter vm={} mode={:?} stack_mib={}\n",
@@ -3543,7 +3531,7 @@ fn setup_vmcs_for_launch(
             ));
             let fs_base = unsafe { Msr::new(crate::hv::vmx::IA32_FS_BASE).read() };
             let gs_base = unsafe { Msr::new(crate::hv::vmx::IA32_GS_BASE).read() };
-            let guest_fs_base = crate::stackkeeper::vm_hull_fs_base(vm_id);
+            let guest_fs_base = GUEST_FS_BASE_RESET;
             let sysenter_cs = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_CS).read() };
             let sysenter_esp = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_ESP).read() };
             let sysenter_eip = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_EIP).read() };
@@ -3741,7 +3729,7 @@ fn setup_vmcs_for_launch(
     };
     let fs_base = unsafe { Msr::new(crate::hv::vmx::IA32_FS_BASE).read() };
     let gs_base = unsafe { Msr::new(crate::hv::vmx::IA32_GS_BASE).read() };
-    let guest_fs_base = crate::stackkeeper::vm_hull_fs_base(vm_id);
+    let guest_fs_base = GUEST_FS_BASE_RESET;
     let sysenter_cs = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_CS).read() };
     let sysenter_esp = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_ESP).read() };
     let sysenter_eip = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_EIP).read() };

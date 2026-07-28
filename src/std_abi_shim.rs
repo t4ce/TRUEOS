@@ -52,7 +52,7 @@ const PTHREAD_THREAD_CAPACITY: usize = 64;
 // Guest Hull BSS and host-carrier BSS intentionally have independent thread
 // counters. Tag carrier-issued opaque pthread handles inside the u32 range so
 // equal local sequence numbers can never become the same mutex owner.
-const PTHREAD_THREAD_CARRIER_TAG: usize = crate::stackkeeper::BLUEPRINT_THREAD_CARRIER_TAG as usize;
+const PTHREAD_THREAD_CARRIER_TAG: usize = crate::wls::BLUEPRINT_THREAD_CARRIER_TAG as usize;
 const PTHREAD_THREAD_SEQUENCE_MASK: usize = PTHREAD_THREAD_CARRIER_TAG - 1;
 const OPEN_FILE_CAPACITY: usize = 64;
 const FD_FLAG_CAPACITY: usize = 256;
@@ -548,20 +548,18 @@ fn pthread_current_id() -> usize {
     }
 
     if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
-        if let Some(thread_id) = crate::stackkeeper::current_blueprint_thread_id() {
+        if let Some(thread_id) = crate::wls::current_blueprint_thread_id() {
             return 0x4_0000_0000usize
                 .saturating_add((vm_id as usize) << 32)
                 .saturating_add(thread_id as usize);
         }
-        let worker_id = crate::stackkeeper::current_tokio_worker_id().unwrap_or(0);
+        let worker_id = crate::wls::current_worker_id().unwrap_or(0);
         return 0x3_0000usize
-            .saturating_add((vm_id as usize).saturating_mul(crate::stackkeeper::TOKIO_LANE_COUNT))
+            .saturating_add((vm_id as usize).saturating_mul(crate::wls::WORKER_SLOT_COUNT))
             .saturating_add(worker_id);
     }
 
-    if crate::stackkeeper::tokio_blocking_backing_enabled()
-        && let Some(worker_id) = crate::stackkeeper::current_tokio_worker_id()
-    {
+    if let Some(worker_id) = crate::wls::current_worker_id() {
         return 0x1_0000usize.saturating_add(worker_id);
     }
     crate::percpu::current_slot().saturating_add(1)
@@ -4395,7 +4393,7 @@ pub unsafe extern "C" fn pthread_create(
     let job = Box::new(move || {
         let start: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
             unsafe { core::mem::transmute(start) };
-        let result = crate::stackkeeper::with_current_blueprint_thread_id(thread_id, || {
+        let result = crate::wls::with_current_blueprint_thread_id(thread_id, || {
             (unsafe { start(arg as *mut c_void) }) as usize
         });
         let _ = completion.complete(result);

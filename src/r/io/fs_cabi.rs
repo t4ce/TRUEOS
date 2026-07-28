@@ -82,8 +82,27 @@ fn emit_guest_log_line(source: &str, level: log::Level, message: &str) {
     );
 }
 
-fn emit_plain_stream_line(_stream: ConsoleStream, line: &str) {
-    crate::log_os::log(format_args!("{}\n", line));
+fn plain_stream_level(stream: ConsoleStream, line: &str) -> log::Level {
+    if stream != ConsoleStream::Err {
+        return log::Level::Info;
+    }
+
+    let line = line.trim_start();
+    if line.starts_with("error[") || line.starts_with("error:") {
+        log::Level::Error
+    } else if line.starts_with("warning[") || line.starts_with("warning:") {
+        log::Level::Warn
+    } else {
+        log::Level::Info
+    }
+}
+
+fn emit_plain_stream_line(stream: ConsoleStream, line: &str) {
+    crate::log_os::log_with_area_level(
+        crate::log_os::flags::LogArea::Global,
+        plain_stream_level(stream, line),
+        format_args!("{}\n", line),
+    );
 }
 
 fn emit_console_stream_line(stream: ConsoleStream, line: &str) {
