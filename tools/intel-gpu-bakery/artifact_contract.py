@@ -1152,17 +1152,12 @@ def verify_manifest(
                 f"{manifest_path}: toolchain provenance does not match reviewed lock"
             )
     if toolchain.get("frontend") == "clang-clcpp":
-        if cpp_variant not in ("cpp", "cpp-native"):
+        if cpp_variant != "cpp-native":
             raise ContractError(
                 f"{manifest_path}: clang-clcpp publication has an unreviewed variant"
             )
         policy = provenance.get("publication_policy")
-        expected_policy = (
-            "cpp-legacy-abi-twin-v1"
-            if cpp_variant == "cpp"
-            else "cpp-native-aot-v1"
-        )
-        if not isinstance(policy, dict) or policy.get("name") != expected_policy:
+        if not isinstance(policy, dict) or policy.get("name") != "cpp-native-aot-v1":
             raise ContractError(
                 f"{manifest_path}: {cpp_variant} publication policy is missing"
             )
@@ -1178,12 +1173,7 @@ def verify_manifest(
             raise ContractError(
                 f"{manifest_path}: expected kernel set is missing or stale"
             )
-        if cpp_variant == "cpp":
-            if not isinstance(reference, dict) or reference.get("result") != "exact-match":
-                raise ContractError(
-                    f"{manifest_path}: cpp ABI twin lacks an exact ABI reference"
-                )
-        elif reference is not None:
+        if reference is not None:
             raise ContractError(
                 f"{manifest_path}: cpp-native artifact has an unexpected ABI reference"
             )

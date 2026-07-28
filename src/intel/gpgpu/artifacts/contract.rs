@@ -796,8 +796,7 @@ mod tests {
 
     include!("../kernels/artifacts/adls/cpp/copy_rect_rgba8.contract.rs");
 
-    const COPY_RECT_ZEBIN: &[u8] = include_bytes!("../kernels/artifacts/adls/copy_rect_rgba8.bin");
-    const COPY_RECT_CPP_ZEBIN: &[u8] =
+    const COPY_RECT_ZEBIN: &[u8] =
         include_bytes!("../kernels/artifacts/adls/cpp/copy_rect_rgba8.bin");
     const HASH: [u8; 32] = [0xA5; 32];
     const PAYLOAD_ARGS: &[GpgpuArtifactPayloadArg] = &[
@@ -979,10 +978,7 @@ mod tests {
     fn generated_cpp_contract_is_runtime_admissible() {
         assert_eq!(COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(()));
         assert_eq!(
-            validate_kernel_contract_elf(
-                COPY_RECT_CPP_ZEBIN,
-                &COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT,
-            ),
+            validate_kernel_contract_elf(COPY_RECT_ZEBIN, &COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT,),
             Ok(())
         );
         assert!(

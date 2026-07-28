@@ -56,14 +56,13 @@ def main(argv: list[str] | None = None) -> int:
         description=(
             "Extract /TRUEOS.elf from an ISO, prove byte identity with the "
             "stripped runtime/staging ELF, then prove the requested artifact "
-            "is selected and the alternate artifact is absent."
+            "and every required artifact is present."
         )
     )
     parser.add_argument("--runtime-elf", required=True, type=_existing_file)
     parser.add_argument("--staged-elf", required=True, type=_existing_file)
     parser.add_argument("--iso", required=True, type=_existing_file)
     parser.add_argument("--selected-bin", required=True, type=_existing_file)
-    parser.add_argument("--forbidden-bin", required=True, type=_existing_file)
     parser.add_argument(
         "--required-bin",
         action="append",
@@ -107,8 +106,8 @@ def main(argv: list[str] | None = None) -> int:
         iso_sha256 = _require_identical(
             args.runtime_elf, extracted, "ISO-extracted ELF"
         )
-        selected_sha256, selected_count, forbidden_sha256 = verify_linked_image(
-            extracted, args.selected_bin, args.forbidden_bin
+        selected_sha256, selected_count = verify_linked_image(
+            extracted, args.selected_bin
         )
         required = verify_required_artifacts(extracted, args.required_bin)
         required_text = ",".join(
@@ -119,7 +118,6 @@ def main(argv: list[str] | None = None) -> int:
         f"packaged artifact verified: iso={args.iso} member=/TRUEOS.elf "
         f"runtime_sha256={staged_sha256} iso_member_sha256={iso_sha256} "
         f"selected_sha256={selected_sha256} selected_occurrences={selected_count} "
-        f"forbidden_sha256={forbidden_sha256} forbidden_occurrences=0 "
         f"required={required_text or 'none'}"
     )
     return 0

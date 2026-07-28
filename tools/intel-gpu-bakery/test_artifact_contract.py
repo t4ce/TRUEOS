@@ -362,7 +362,9 @@ class ArtifactContractTests(unittest.TestCase):
         original = json.loads(manifest_path.read_text(encoding="utf-8"))
         mutations = {
             "source inputs": lambda value: value["source"].update(inputs=[]),
-            "ABI reference": lambda value: value.update(abi_reference=None),
+            "unexpected ABI reference": lambda value: value.update(
+                abi_reference={"result": "exact-match"}
+            ),
             "reproducibility": lambda value: value["provenance"].update(
                 reproducibility_check="not-requested"
             ),
@@ -372,6 +374,9 @@ class ArtifactContractTests(unittest.TestCase):
             "expected kernels": lambda value: value["provenance"][
                 "publication_policy"
             ].update(expected_kernels=[]),
+            "policy": lambda value: value["provenance"][
+                "publication_policy"
+            ].update(name="unreviewed"),
         }
         with tempfile.TemporaryDirectory() as directory:
             for label, mutate in mutations.items():

@@ -36,29 +36,18 @@ def _occurrences(image: mmap.mmap, needle: bytes) -> int:
         offset = found + 1
 
 
-def verify_linked_image(
-    elf: Path, selected_bin: Path, forbidden_bin: Path
-) -> tuple[str, int, str]:
+def verify_linked_image(elf: Path, selected_bin: Path) -> tuple[str, int]:
     selected = selected_bin.read_bytes()
-    forbidden = forbidden_bin.read_bytes()
-    if not selected or not forbidden:
-        raise LinkedArtifactError("selected and forbidden artifacts must be non-empty")
-    if selected == forbidden:
-        raise LinkedArtifactError("selected and forbidden artifacts are identical")
+    if not selected:
+        raise LinkedArtifactError("selected artifact must be non-empty")
 
     with elf.open("rb") as image_file:
         with mmap.mmap(image_file.fileno(), 0, access=mmap.ACCESS_READ) as image:
             selected_count = _occurrences(image, selected)
-            forbidden_count = _occurrences(image, forbidden)
 
     if selected_count == 0:
         raise LinkedArtifactError(f"{elf}: selected artifact is absent ({selected_bin})")
-    if forbidden_count != 0:
-        raise LinkedArtifactError(
-            f"{elf}: forbidden fallback occurs {forbidden_count} time(s) "
-            f"({forbidden_bin})"
-        )
-    return _sha256(selected), selected_count, _sha256(forbidden)
+    return _sha256(selected), selected_count
 
 
 def verify_required_artifacts(
@@ -85,13 +74,12 @@ def verify_required_artifacts(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Require a linked TRUEOS ELF to contain the selected Intel Zebin "
-            "and no byte-identical copy of the forbidden fallback Zebin."
+            "Require a linked TRUEOS ELF to contain the selected and required "
+            "Intel Zebins."
         )
     )
     parser.add_argument("--elf", required=True, type=_existing_file)
     parser.add_argument("--selected-bin", required=True, type=_existing_file)
-    parser.add_argument("--forbidden-bin", required=True, type=_existing_file)
     parser.add_argument(
         "--required-bin",
         action="append",
@@ -101,9 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    selected_sha256, selected_count, forbidden_sha256 = verify_linked_image(
-        args.elf, args.selected_bin, args.forbidden_bin
-    )
+    selected_sha256, selected_count = verify_linked_image(args.elf, args.selected_bin)
     required = verify_required_artifacts(args.elf, args.required_bin)
     required_text = ",".join(
         f"{path.name}:{digest}:{count}" for path, digest, count in required
@@ -112,7 +98,6 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"linked artifact verified: elf={args.elf} "
         f"selected_sha256={selected_sha256} selected_occurrences={selected_count} "
-        f"forbidden_sha256={forbidden_sha256} forbidden_occurrences=0 "
         f"required={required_text or 'none'}"
     )
     return 0

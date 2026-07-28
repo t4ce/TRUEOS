@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in TRUEOS OpenCL/C++ for OpenCL -> Intel Zebin bakery."""
+"""TRUEOS C++ for OpenCL -> Intel Zebin artifact bakery."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from artifact_contract import (
     analyze_zebin,
     atomic_write,
     build_manifest,
-    compare_abi,
     input_records,
     render_rust_contracts,
     repo_relative,
@@ -31,7 +30,7 @@ from artifact_contract import (
 
 TOOL_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TOOL_DIR.parent.parent
-DEFAULT_PROFILE = TOOL_DIR / "profiles" / "adls.json"
+DEFAULT_PROFILE = TOOL_DIR / "profiles" / "adls-4680-r0c-cpp.json"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -45,8 +44,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--artifact-name")
     parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE)
-    parser.add_argument("--variant")
-    parser.add_argument("--frontend", choices=("auto", "clang-clcpp", "ocloc-cl"), default="auto")
+    parser.add_argument("--variant", choices=("cpp-native",), default="cpp-native")
     parser.add_argument("--publish-dir", type=Path)
     parser.add_argument(
         "--build-root",
@@ -63,7 +61,6 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         help="Repeat for directories containing libocloc/libigc",
     )
-    parser.add_argument("--abi-reference-bin", type=Path)
     parser.add_argument("--expect-kernel", action="append", default=[])
     parser.add_argument(
         "--rust-symbol",
@@ -581,87 +578,57 @@ def _cpp_commands(
 
 def _build_once(
     *,
-    frontend: str,
     source: Path,
     artifact_name: str,
     out_dir: Path,
     build_root: Path,
     profile: dict[str, Any],
-    clang: Path | None,
-    llvm_spirv: Path | None,
+    clang: Path,
+    llvm_spirv: Path,
     ocloc: Path,
     environment: dict[str, str],
 ) -> dict[str, Any]:
     _safe_clean(out_dir, build_root)
     commands: list[list[str]] = []
-    inputs = [source]
-    bitcode: Path | None = None
-    if frontend == "clang-clcpp":
-        assert clang is not None and llvm_spirv is not None
-        (
-            clang_command,
-            translator_command,
-            ocloc_command,
-            bitcode,
-            spirv,
-            binary,
-            depfile,
-        ) = _cpp_commands(
-            source=source,
-            out_dir=out_dir,
-            artifact_name=artifact_name,
-            clang=clang,
-            llvm_spirv=llvm_spirv,
-            ocloc=ocloc,
-            profile=profile,
-        )
-        # Source basename + source-directory cwd is a reproducibility invariant:
-        # Clang embeds the spelling of this filename in LLVM/SPIR-V.
-        _run(
-            clang_command,
-            cwd=source.parent,
-            environment=environment,
-            description="C++ for OpenCL -> LLVM bitcode",
-        )
-        inputs = _parse_depfile(depfile, source.parent)
-        _run(
-            translator_command,
-            cwd=out_dir,
-            environment=environment,
-            description="LLVM bitcode -> OpenCL SPIR-V",
-        )
-        _run(
-            ocloc_command,
-            cwd=out_dir,
-            environment=environment,
-            description="OpenCL SPIR-V -> Intel Zebin",
-        )
-        commands.extend([clang_command, translator_command, ocloc_command])
-    else:
-        spirv = out_dir / f"{artifact_name}.spv"
-        binary = out_dir / f"{artifact_name}.bin"
-        ocloc_command = [
-            str(ocloc),
-            "compile",
-            "-file",
-            str(source),
-            "-device",
-            str(profile["device"]),
-            "-64",
-            "-output",
-            artifact_name,
-            "-out_dir",
-            str(out_dir),
-            "-output_no_suffix",
-            "-gen_file",
-        ]
-        _run(
-            ocloc_command,
-            cwd=out_dir,
-            environment=environment,
-            description="OpenCL C -> SPIR-V + Intel Zebin",
-        )
-        commands.append(ocloc_command)
+    (
+        clang_command,
+        translator_command,
+        ocloc_command,
+        bitcode,
+        spirv,
+        binary,
+        depfile,
+    ) = _cpp_commands(
+        source=source,
+        out_dir=out_dir,
+        artifact_name=artifact_name,
+        clang=clang,
+        llvm_spirv=llvm_spirv,
+        ocloc=ocloc,
+        profile=profile,
+    )
+    # Source basename + source-directory cwd is a reproducibility invariant:
+    # Clang embeds the spelling of this filename in LLVM/SPIR-V.
+    _run(
+        clang_command,
+        cwd=source.parent,
+        environment=environment,
+        description="C++ for OpenCL -> LLVM bitcode",
+    )
+    inputs = _parse_depfile(depfile, source.parent)
+    _run(
+        translator_command,
+        cwd=out_dir,
+        environment=environment,
+        description="LLVM bitcode -> OpenCL SPIR-V",
+    )
+    _run(
+        ocloc_command,
+        cwd=out_dir,
+        environment=environment,
+        description="OpenCL SPIR-V -> Intel Zebin",
+    )
+    commands.extend([clang_command, translator_command, ocloc_command])
 
     validate_command = [str(ocloc), "validate", "-file", str(binary)]
     _run(
@@ -712,20 +679,10 @@ def main(argv: list[str] | None = None) -> int:
     if not artifact_name or "/" in artifact_name:
         raise ContractError(f"invalid artifact name {artifact_name!r}")
 
-    frontend = args.frontend
-    if frontend == "auto":
-        frontend = "clang-clcpp" if source.suffix == ".clcpp" else "ocloc-cl"
-    if frontend == "clang-clcpp" and source.suffix != ".clcpp":
-        raise ContractError("clang-clcpp frontend requires a .clcpp source")
-    if frontend == "ocloc-cl" and source.suffix != ".cl":
-        raise ContractError("ocloc-cl frontend requires a .cl source")
-    variant = args.variant or ("cpp" if frontend == "clang-clcpp" else "legacy")
-    if frontend == "clang-clcpp" and args.publish_dir:
-        if variant not in ("cpp", "cpp-native"):
-            raise ContractError(
-                "published clang-clcpp artifacts must use the reviewed cpp "
-                "ABI-twin or cpp-native variant"
-            )
+    if source.suffix != ".clcpp":
+        raise ContractError("the C++ for OpenCL bakery requires a .clcpp source")
+    variant = args.variant
+    if args.publish_dir:
         missing_gates = []
         if not args.toolchain_lock:
             missing_gates.append("--toolchain-lock")
@@ -739,25 +696,13 @@ def main(argv: list[str] | None = None) -> int:
                 + " and ".join(missing_gates)
                 + "; prepare a reviewed lock without --publish-dir first"
             )
-        if variant == "cpp" and not args.abi_reference_bin:
-            raise ContractError(
-                "publishing the cpp ABI-twin variant requires --abi-reference-bin"
-            )
-        if variant == "cpp-native" and args.abi_reference_bin:
-            raise ContractError(
-                "cpp-native is a new-kernel publication policy and must not "
-                "claim a legacy ABI reference"
-            )
 
     ocloc_candidates = [
         REPO_ROOT / "bld/intel-tools/root/usr/bin/ocloc-26.05.1",
     ]
     ocloc = _tool(args.ocloc, "OCLOC", "ocloc", ocloc_candidates)
-    clang: Path | None = None
-    llvm_spirv: Path | None = None
-    if frontend == "clang-clcpp":
-        clang = _tool(args.clang, "CLANG", "clang", [])
-        llvm_spirv = _tool(args.llvm_spirv, "LLVM_SPIRV", "llvm-spirv", [])
+    clang = _tool(args.clang, "CLANG", "clang", [])
+    llvm_spirv = _tool(args.llvm_spirv, "LLVM_SPIRV", "llvm-spirv", [])
 
     library_paths = _ocloc_library_paths(ocloc, args.ocloc_library_path)
     environment = _environment(library_paths)
@@ -765,7 +710,7 @@ def main(argv: list[str] | None = None) -> int:
     run_root = build_root / profile["label"] / variant / artifact_name
     run_root.mkdir(parents=True, exist_ok=True)
     fingerprint = _toolchain_fingerprint(
-        frontend=frontend,
+        frontend="clang-clcpp",
         clang=clang,
         llvm_spirv=llvm_spirv,
         ocloc=ocloc,
@@ -784,7 +729,6 @@ def main(argv: list[str] | None = None) -> int:
         }
 
     run_a = _build_once(
-        frontend=frontend,
         source=source,
         artifact_name=artifact_name,
         out_dir=run_root / "run-a",
@@ -797,7 +741,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.repro_check:
         run_b = _build_once(
-            frontend=frontend,
             source=source,
             artifact_name=artifact_name,
             out_dir=run_root / "different-root" / "run-b",
@@ -808,9 +751,7 @@ def main(argv: list[str] | None = None) -> int:
             ocloc=ocloc,
             environment=environment,
         )
-        compare_names = ("spirv", "binary")
-        if frontend == "clang-clcpp":
-            compare_names = ("bitcode", *compare_names)
+        compare_names = ("bitcode", "spirv", "binary")
         for name in compare_names:
             first = run_a[name]
             second = run_b[name]
@@ -834,18 +775,6 @@ def main(argv: list[str] | None = None) -> int:
         raise ContractError(
             f"kernel set mismatch: expected={sorted(args.expect_kernel)} actual={actual_names}"
         )
-
-    abi_reference = None
-    if args.abi_reference_bin:
-        reference_path = args.abi_reference_bin.expanduser().resolve()
-        reference = analyze_zebin(reference_path)
-        compare_abi(analysis, reference, reference_path)
-        abi_reference = {
-            "path": repo_relative(reference_path, REPO_ROOT),
-            "sha256": sha256_file(reference_path),
-            "result": "exact-match",
-        }
-        print(f"ABI reference: exact match with {reference_path}")
 
     source_inputs = input_records(run_a["inputs"], REPO_ROOT)
     source_record_path = repo_relative(source, REPO_ROOT)
@@ -871,7 +800,7 @@ def main(argv: list[str] | None = None) -> int:
         analysis=analysis,
         source={
             "path": source_record_path,
-            "language": "C++ for OpenCL" if frontend == "clang-clcpp" else "OpenCL C",
+            "language": "C++ for OpenCL",
             "inputs": source_inputs,
         },
         target={
@@ -887,13 +816,9 @@ def main(argv: list[str] | None = None) -> int:
         variant=variant,
         provenance={
             "frontend": {
-                "description": (
-                    "Clang C++ for OpenCL -> LLVM bitcode -> llvm-spirv"
-                    if frontend == "clang-clcpp"
-                    else "ocloc OpenCL C frontend"
-                )
+                "description": "Clang C++ for OpenCL -> LLVM bitcode -> llvm-spirv"
             },
-            "backend": {"description": "Intel IGC through ocloc -spirv_input" if frontend == "clang-clcpp" else "Intel IGC through ocloc"},
+            "backend": {"description": "Intel IGC through ocloc -spirv_input"},
             "commands": normalized_commands,
             "toolchain": fingerprint,
             "toolchain_lock": toolchain_lock_record,
@@ -902,20 +827,12 @@ def main(argv: list[str] | None = None) -> int:
                 "sha256": sha256_file(profile_path),
             },
             "reproducibility_check": "passed" if args.repro_check else "not-requested",
-            "publication_policy": (
-                {
-                    "name": (
-                        "cpp-legacy-abi-twin-v1"
-                        if variant == "cpp"
-                        else "cpp-native-aot-v1"
-                    ),
-                    "expected_kernels": sorted(args.expect_kernel),
-                }
-                if variant in ("cpp", "cpp-native")
-                else None
-            ),
+            "publication_policy": {
+                "name": "cpp-native-aot-v1",
+                "expected_kernels": sorted(args.expect_kernel),
+            },
         },
-        abi_reference=abi_reference,
+        abi_reference=None,
         rust_symbols=_rust_symbol_map(args.rust_symbol),
     )
     manifest_path = run_a["binary"].with_suffix(".manifest.json")

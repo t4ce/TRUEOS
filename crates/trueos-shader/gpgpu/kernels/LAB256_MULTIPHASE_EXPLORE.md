@@ -6,7 +6,7 @@
 
 ## Outcome
 
-`lab256_multiphase.cl` proves that the local Intel IGC path can produce one
+`lab256_multiphase.clcpp` proves that the local Intel IGC path can produce one
 ADL-S zebin containing three independently dispatchable kernels for a fixed
 256x256 Shell2 artifact:
 
@@ -65,15 +65,10 @@ repository bake script and an available `ocloc` reporting driver version
 `25.31.034666`.
 
 ```text
-artifact: artifacts/adls/lab256_multiphase.bin
-size:     52,632 bytes
-sha256:   6f51ff134f9f1fa22cc213d24818a67d7593bc98241ce92ecda98e50c29296d2
-
-spir-v:   artifacts/adls/lab256_multiphase.spv
-sha256:   3fd24b10f10eae4b058b4bcfa483f7da5229805f802bdbd49efab00db59ad87b
-
-source sha256:
-b87e9c7a2d9cf0bae49f96baa3d2f1df46870449640fe689a151a3e20a3c6221
+artifact: artifacts/adls/cpp/lab256_multiphase.bin
+spir-v:   artifacts/adls/cpp/lab256_multiphase.spv
+manifest: artifacts/adls/cpp/lab256_multiphase.manifest.json
+contract: artifacts/adls/cpp/lab256_multiphase.contract.rs
 ```
 
 `ocloc validate` reports the binary as valid and finds exactly three kernels.
