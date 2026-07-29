@@ -334,6 +334,17 @@ pub(crate) fn gen12_gt_state_snapshot() -> Option<self::gt_state::Gen12GtStateSn
         .map(self::gt_state::read)
 }
 
+pub(crate) fn begin_lumen_gt_boost() -> Option<self::gt_state::Gen12LumenGtBoost> {
+    let dev = claimed_device()?;
+    if !device_uses_gen12_integrated_pat(dev.device_id)
+        || !gen12_lumen_mocs_ready()
+        || !forcewake(dev)
+    {
+        return None;
+    }
+    self::gt_state::begin_lumen_gt_boost(dev)
+}
+
 fn log_gen12_lumen_mocs_init(dev: Dev, report: self::gt_state::Gen12LumenMocsInitReport) {
     crate::log_info!(
         target: "gpgpu";

@@ -695,13 +695,19 @@ async fn run_lum_turn(
         crate::r::ai_activity::AiActivitySource::Lumen,
         turn,
     );
+    let lumen_gt_boost = crate::intel::begin_lumen_gt_boost();
     print_matrix_target_line(
         target,
         alloc::format!(
-            "lum: running turn={} prompt_tokens={} context_before={} backend=cpu+intel-igc-q8 completion=guc-rcs",
+            "lum: running turn={} prompt_tokens={} context_before={} backend=cpu+intel-igc-q8 completion=guc-rcs gt_boost={}",
             turn,
             prompt_tokens.len(),
             context_before,
+            if lumen_gt_boost.is_some() {
+                "rp0-turn-scoped"
+            } else {
+                "firmware-default"
+            },
         )
         .as_str(),
     );

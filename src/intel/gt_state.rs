@@ -4,6 +4,8 @@
 // upper half and uses one entry from that range; display/compositor clients
 // retain their firmware-supplied lower-half entries unchanged.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 const GEN12_GLOBAL_MOCS_BASE: usize = 0x4000;
 const GEN12_GLOBAL_MOCS_ENTRIES: usize = 64;
 const GEN12_LNCFCMOCS_BASE: usize = 0xB020;
@@ -23,7 +25,11 @@ const GEN10_FREQ_INFO_REC: usize = 0x145EF0;
 const GEN12_CAGF_MASK: u32 = 0x1FF;
 const GEN12_CAGF_SHIFT: u32 = 11;
 const GEN9_SW_REQ_UNSLICE_RATIO_SHIFT: u32 = 23;
+const GEN9_SW_REQ_UNSLICE_RATIO_MASK: u32 =
+    GEN12_CAGF_MASK << GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
+const GEN12_RP0_CAP_MASK: u32 = 0xFF;
 const GEN12_GT0_PERF_LIMIT_REASONS_MASK: u32 = 0x0DE3;
+static GEN12_LUMEN_GT_BOOST_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 const fn expected_mocs_control_table() -> [u32; GEN12_GLOBAL_MOCS_ENTRIES] {
     let mut table = [GEN12_MOCS_DEFAULT_CONTROL; GEN12_GLOBAL_MOCS_ENTRIES];
@@ -158,6 +164,59 @@ pub(crate) struct Gen12GtStateSnapshot {
     pub(crate) throttle_reasons: u32,
     pub(crate) rpstat1_raw: u32,
     pub(crate) rpnswreq_raw: u32,
+}
+
+/// Turn-scoped ownership of the Gen9+ unslice frequency request.
+///
+/// Lumen restores the exact request bits it observed on entry. If another
+/// owner changes the request while the turn is active, drop deliberately
+/// leaves that newer request untouched.
+#[must_use = "keep the guard alive for the complete Lumen inference turn"]
+pub(crate) struct Gen12LumenGtBoost {
+    dev: super::Dev,
+    previous_request: u32,
+    previous_ratio: u32,
+    boost_ratio: u32,
+    active: bool,
+}
+
+impl Drop for Gen12LumenGtBoost {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let observed = super::mmio_read(self.dev, GEN12_RPNSWREQ);
+        let observed_ratio =
+            (observed & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
+        let restored = observed_ratio == self.boost_ratio;
+        let final_request = if restored {
+            (observed & !GEN9_SW_REQ_UNSLICE_RATIO_MASK)
+                | (self.previous_request & GEN9_SW_REQ_UNSLICE_RATIO_MASK)
+        } else {
+            observed
+        };
+        if restored {
+            super::mmio_write(self.dev, GEN12_RPNSWREQ, final_request);
+            core::sync::atomic::compiler_fence(Ordering::SeqCst);
+        }
+        let final_ratio = (super::mmio_read(self.dev, GEN12_RPNSWREQ)
+            & GEN9_SW_REQ_UNSLICE_RATIO_MASK)
+            >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/lumen-gt-boost: stage=end restored={} previous_ratio={} previous_mhz={} boost_ratio={} boost_mhz={} observed_ratio={} final_ratio={} final_mhz={} ownership=turn-scoped conflict_policy=preserve-newer-request\n",
+            restored as u8,
+            self.previous_ratio,
+            ratio_to_mhz(self.previous_ratio),
+            self.boost_ratio,
+            ratio_to_mhz(self.boost_ratio),
+            observed_ratio,
+            final_ratio,
+            ratio_to_mhz(final_ratio),
+        );
+        self.active = false;
+        GEN12_LUMEN_GT_BOOST_ACTIVE.store(false, Ordering::Release);
+    }
 }
 
 fn gt_state_registers_available(dev: super::Dev) -> bool {
@@ -316,6 +375,71 @@ pub(super) fn init_lumen_mocs(dev: super::Dev) -> Gen12LumenMocsInitReport {
 pub(crate) const fn ratio_to_mhz(ratio: u32) -> u32 {
     // Gen9+ hardware opcodes are in 16.67 MHz units.
     (ratio.saturating_mul(50).saturating_add(1)) / 3
+}
+
+const fn rp_cap_50mhz_to_request_ratio(cap: u32) -> u32 {
+    cap.saturating_mul(3)
+}
+
+const _: () = {
+    assert!(rp_cap_50mhz_to_request_ratio(31) == 93);
+    assert!(ratio_to_mhz(rp_cap_50mhz_to_request_ratio(31)) == 1_550);
+};
+
+pub(super) fn begin_lumen_gt_boost(dev: super::Dev) -> Option<Gen12LumenGtBoost> {
+    if !gt_state_registers_available(dev)
+        || GEN12_LUMEN_GT_BOOST_ACTIVE
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
+        return None;
+    }
+
+    let previous_request = super::mmio_read(dev, GEN12_RPNSWREQ);
+    let previous_ratio =
+        (previous_request & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
+    let state_cap = super::mmio_read(dev, GEN12_RP_STATE_CAP);
+    let rp0_ratio = rp_cap_50mhz_to_request_ratio(state_cap & GEN12_RP0_CAP_MASK);
+    if rp0_ratio == 0 || rp0_ratio > GEN12_CAGF_MASK {
+        GEN12_LUMEN_GT_BOOST_ACTIVE.store(false, Ordering::Release);
+        return None;
+    }
+    let boost_ratio = core::cmp::max(previous_ratio, rp0_ratio);
+    let boost_request = (previous_request & !GEN9_SW_REQ_UNSLICE_RATIO_MASK)
+        | (boost_ratio << GEN9_SW_REQ_UNSLICE_RATIO_SHIFT);
+    super::mmio_write(dev, GEN12_RPNSWREQ, boost_request);
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+    let observed_request = super::mmio_read(dev, GEN12_RPNSWREQ);
+    let observed_ratio =
+        (observed_request & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
+    if observed_ratio != boost_ratio {
+        GEN12_LUMEN_GT_BOOST_ACTIVE.store(false, Ordering::Release);
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/lumen-gt-boost: stage=begin accepted=0 previous_ratio={} requested_ratio={} observed_ratio={} ownership=turn-scoped action=continue-at-firmware-frequency\n",
+            previous_ratio,
+            boost_ratio,
+            observed_ratio,
+        );
+        return None;
+    }
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/lumen-gt-boost: stage=begin accepted=1 previous_ratio={} previous_mhz={} requested_ratio={} requested_mhz={} actual_ratio={} actual_mhz={} rp0_policy=turn-scoped restore=on-drop\n",
+        previous_ratio,
+        ratio_to_mhz(previous_ratio),
+        boost_ratio,
+        ratio_to_mhz(boost_ratio),
+        actual_ratio(dev),
+        ratio_to_mhz(actual_ratio(dev)),
+    );
+    Some(Gen12LumenGtBoost {
+        dev,
+        previous_request,
+        previous_ratio,
+        boost_ratio,
+        active: true,
+    })
 }
 
 pub(super) fn actual_ratio(dev: super::Dev) -> u32 {
