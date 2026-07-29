@@ -23,6 +23,7 @@ const FORCEWAKE_ACK_VEBOX3: usize = 0x0D7C;
 const FORCEWAKE_KERNEL: u32 = 1 << 0;
 
 const GEN11_VCS0_RING_BASE: usize = 0x1C0000;
+const GEN11_VCS2_RING_BASE: usize = 0x1D0000;
 
 pub(super) const RING_TAIL: usize = 0x30;
 pub(super) const RING_HEAD: usize = 0x34;
@@ -904,17 +905,48 @@ fn current_topology() -> MediaTopology {
         },
         default_workload: MediaWorkloadKind::DecodeFrame,
     };
+    let decode2 = MediaEngineDescriptor {
+        id: MediaEngineId {
+            class: MediaEngineClass::VideoDecode,
+            instance: 2,
+        },
+        name: "vcs2",
+        ring_base: GEN11_VCS2_RING_BASE,
+        provisioning: MediaProvisioning::Kickoff,
+        capabilities: MediaCapabilities {
+            decode: true,
+            enhance: false,
+            huc_assist: false,
+            sfc: true,
+            sfc_programmed: false,
+            relative_mmio_lrc: true,
+        },
+        default_workload: MediaWorkloadKind::DecodeFrame,
+    };
+    let physical_mask = crate::intel::claimed_device()
+        .map(crate::intel::media_vdbox_mask)
+        .unwrap_or(0);
+    let mut engines = [MediaEngineDescriptor::unused(); MAX_MEDIA_ENGINES];
+    let mut active_engine_count = 0usize;
+    for candidate in [decode0, decode2] {
+        if physical_mask & (1 << candidate.id.instance) != 0 {
+            engines[active_engine_count] = candidate;
+            active_engine_count += 1;
+        }
+    }
+    let default_decode = if physical_mask & (1 << decode2.id.instance) != 0 {
+        Some(decode2.id)
+    } else if physical_mask & (1 << decode0.id.instance) != 0 {
+        Some(decode0.id)
+    } else {
+        None
+    };
     MediaTopology {
-        sku_name: "xelp-media-probe",
-        active_engine_count: 1,
-        planned_engine_count: 1,
-        engines: [
-            decode0,
-            MediaEngineDescriptor::unused(),
-            MediaEngineDescriptor::unused(),
-            MediaEngineDescriptor::unused(),
-        ],
-        default_decode: Some(decode0.id),
+        sku_name: "xelp-adls-fuse-discovered",
+        active_engine_count,
+        planned_engine_count: 2,
+        engines,
+        default_decode,
         default_enhance: None,
     }
 }
@@ -953,7 +985,29 @@ fn engine_window(slot: usize) -> MediaGpuWindowLayout {
 }
 
 pub(super) fn default_decode_engine_and_window() -> (MediaEngineDescriptor, MediaGpuWindowLayout) {
-    (current_topology().engines[0], engine_window(0))
+    let topology = current_topology();
+    let index = topology
+        .default_decode
+        .and_then(|id| {
+            topology
+                .engines
+                .iter()
+                .take(topology.active_engine_count)
+                .position(|engine| engine.id == id)
+        })
+        .unwrap_or(0);
+    (topology.engines[index], engine_window(index))
+}
+
+pub(super) fn default_encode_engine_and_window() -> (MediaEngineDescriptor, MediaGpuWindowLayout) {
+    let topology = current_topology();
+    let index = topology
+        .engines
+        .iter()
+        .take(topology.active_engine_count)
+        .position(|engine| engine.id.instance == 0)
+        .unwrap_or(0);
+    (topology.engines[index], engine_window(index))
 }
 
 fn preferred_transport() -> MediaSubmissionTransport {

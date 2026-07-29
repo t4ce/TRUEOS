@@ -23,7 +23,7 @@ const CONTEXT_REGISTRATION_FLAG_KMD: u32 = 1;
 const GUC_RENDER_CLASS: u32 = 0;
 const GUC_VIDEO_CLASS: u32 = 1;
 const GUC_BLITTER_CLASS: u32 = 3;
-const ENGINE_INSTANCE_0_SUBMIT_MASK: u32 = 1;
+const ENGINE_LOGICAL_INSTANCE_0_SUBMIT_MASK: u32 = 1;
 const GUC_CONTEXT_POLICIES_KLV_ID_SCHEDULING_PRIORITY: u32 = 0x2003;
 const GUC_KLV_DWORD_LEN: u32 = 1;
 const GUC_CLIENT_PRIORITY_KMD_HIGH: u32 = 0;
@@ -37,23 +37,30 @@ struct GucEngineAbi {
     name: &'static str,
 }
 
-const fn guc_engine_abi(engine: crate::gpu::physical::EngineClass) -> GucEngineAbi {
-    match engine {
-        crate::gpu::physical::EngineClass::RenderCompute => GucEngineAbi {
+fn guc_engine_abi(
+    dev: crate::intel::Dev,
+    engine: crate::gpu::physical::PhysicalEngineId,
+) -> Option<GucEngineAbi> {
+    match (engine.class, engine.instance) {
+        (crate::gpu::physical::EngineClass::RenderCompute, 0) => Some(GucEngineAbi {
             class: GUC_RENDER_CLASS,
-            submit_mask: ENGINE_INSTANCE_0_SUBMIT_MASK,
+            submit_mask: ENGINE_LOGICAL_INSTANCE_0_SUBMIT_MASK,
             name: "rcs0",
-        },
-        crate::gpu::physical::EngineClass::VideoDecode => GucEngineAbi {
-            class: GUC_VIDEO_CLASS,
-            submit_mask: ENGINE_INSTANCE_0_SUBMIT_MASK,
-            name: "vcs0",
-        },
-        crate::gpu::physical::EngineClass::Copy => GucEngineAbi {
+        }),
+        (crate::gpu::physical::EngineClass::VideoDecode, physical @ (0 | 2)) => {
+            let logical = crate::intel::media_vdbox_logical_instance(dev, physical)?;
+            Some(GucEngineAbi {
+                class: GUC_VIDEO_CLASS,
+                submit_mask: 1u32.checked_shl(u32::from(logical))?,
+                name: if physical == 0 { "vcs0" } else { "vcs2" },
+            })
+        }
+        (crate::gpu::physical::EngineClass::Copy, 0) => Some(GucEngineAbi {
             class: GUC_BLITTER_CLASS,
-            submit_mask: ENGINE_INSTANCE_0_SUBMIT_MASK,
+            submit_mask: ENGINE_LOGICAL_INSTANCE_0_SUBMIT_MASK,
             name: "bcs0",
-        },
+        }),
+        _ => None,
     }
 }
 
@@ -138,7 +145,7 @@ pub(crate) struct GucSchedulerStatus {
 pub(crate) struct GucContextStatus {
     pub(crate) token: GucContextToken,
     pub(crate) context_id: u32,
-    pub(crate) engine: crate::gpu::physical::EngineClass,
+    pub(crate) engine: crate::gpu::physical::PhysicalEngineId,
     pub(crate) priority: crate::gpu::physical::PhysicalContextPriority,
     pub(crate) policy_enqueued: bool,
     pub(crate) enabled: bool,
@@ -152,7 +159,7 @@ struct GucContextState {
     registered: bool,
     enabled: bool,
     generation: u32,
-    engine: crate::gpu::physical::EngineClass,
+    engine: crate::gpu::physical::PhysicalEngineId,
     priority: crate::gpu::physical::PhysicalContextPriority,
     policy_enqueued: bool,
     hwlrca_lo: u32,
@@ -165,7 +172,7 @@ impl GucContextState {
         registered: false,
         enabled: false,
         generation: 0,
-        engine: crate::gpu::physical::EngineClass::RenderCompute,
+        engine: crate::gpu::physical::PhysicalEngineId::RCS0,
         priority: crate::gpu::physical::PhysicalContextPriority::KernelNormal,
         policy_enqueued: false,
         hwlrca_lo: 0,
@@ -207,7 +214,7 @@ impl IntelGucScheduler {
     pub(crate) fn register(
         &self,
         dev: crate::intel::Dev,
-        engine: crate::gpu::physical::EngineClass,
+        engine: crate::gpu::physical::PhysicalEngineId,
         hwlrca_lo: u32,
         hwlrca_hi: u32,
         priority: crate::gpu::physical::PhysicalContextPriority,
@@ -248,7 +255,7 @@ pub(crate) fn ready() -> bool {
 /// Re-registering the same live HWLRCA is idempotent.
 pub(crate) fn register_context(
     dev: crate::intel::Dev,
-    engine: crate::gpu::physical::EngineClass,
+    engine: crate::gpu::physical::PhysicalEngineId,
     hwlrca_lo: u32,
     hwlrca_hi: u32,
     priority: crate::gpu::physical::PhysicalContextPriority,
@@ -257,7 +264,7 @@ pub(crate) fn register_context(
         return Err(GucSubmissionError::TransportNotReady);
     }
 
-    let engine_abi = guc_engine_abi(engine);
+    let engine_abi = guc_engine_abi(dev, engine).ok_or(GucSubmissionError::InvalidContext)?;
     let mut state = CONTEXTS.lock();
     if let Some((slot, context)) =
         state
@@ -398,7 +405,8 @@ pub(crate) fn submit_context(
         state.failures = state.failures.saturating_add(1);
         return Err(GucSubmissionError::PolicyEnqueueRejected);
     }
-    let engine_abi = guc_engine_abi(context.engine);
+    let engine_abi =
+        guc_engine_abi(dev, context.engine).ok_or(GucSubmissionError::InvalidContext)?;
     let context_id = (slot + 1) as u32;
     let (action, args): (u32, &[u32]) = if context.enabled {
         (INTEL_GUC_ACTION_SCHED_CONTEXT, core::slice::from_ref(&context_id))
@@ -479,7 +487,8 @@ pub(crate) fn destroy_context(
     if !context.registered || context.generation != generation {
         return Err(GucSubmissionError::InvalidContext);
     }
-    let engine_abi = guc_engine_abi(context.engine);
+    let engine_abi =
+        guc_engine_abi(dev, context.engine).ok_or(GucSubmissionError::InvalidContext)?;
     let context_id = (slot + 1) as u32;
     if context.enabled {
         let disabled = crate::intel::guc_ctb::send_hxg_fast_action(

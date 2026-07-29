@@ -690,7 +690,7 @@ fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
     let Some(dev) = crate::intel::claimed_device() else {
         return deferred(AvcEncodeProbeFailure::DeviceUnavailable);
     };
-    let (engine, _) = media::default_decode_engine_and_window();
+    let (engine, _) = media::default_encode_engine_and_window();
     if engine.id.instance != 0 || !engine.capabilities.decode {
         return deferred(AvcEncodeProbeFailure::Vcs0Unavailable);
     }
@@ -867,7 +867,7 @@ fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
     report.hwlrca_hi = hwlrca_hi;
     let token = match crate::intel::guc_submission::INTEL_GUC_SCHEDULER.register(
         dev,
-        crate::gpu::physical::EngineClass::VideoDecode,
+        crate::gpu::physical::PhysicalEngineId::VCS0,
         hwlrca_lo,
         hwlrca_hi,
         crate::gpu::physical::PhysicalContextPriority::KernelNormal,

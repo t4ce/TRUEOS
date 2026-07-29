@@ -58,7 +58,7 @@ fn submit_tenant_scene_aabb_rcs(
     core::sync::atomic::fence(Ordering::SeqCst);
     let token = match crate::intel::guc_submission::INTEL_GUC_SCHEDULER.register(
         dev,
-        EngineClass::RenderCompute,
+        crate::gpu::physical::PhysicalEngineId::RCS0,
         hwlrca_lo,
         hwlrca_hi,
         crate::gpu::physical::PhysicalContextPriority::KernelNormal,

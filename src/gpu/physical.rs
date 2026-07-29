@@ -12,6 +12,40 @@ pub(crate) enum EngineClass {
     Copy,
 }
 
+/// One physical engine, including its hardware instance within the class.
+///
+/// Keeping the instance in the transport-independent contract prevents two
+/// contexts aimed at different VDBOXes from collapsing onto the GuC class
+/// default. Integrated Xe-LP platforms commonly expose their second VDBOX as
+/// physical instance 2 rather than instance 1.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PhysicalEngineId {
+    pub(crate) class: EngineClass,
+    pub(crate) instance: u8,
+}
+
+impl PhysicalEngineId {
+    pub(crate) const RCS0: Self = Self {
+        class: EngineClass::RenderCompute,
+        instance: 0,
+    };
+    pub(crate) const VCS0: Self = Self {
+        class: EngineClass::VideoDecode,
+        instance: 0,
+    };
+    pub(crate) const BCS0: Self = Self {
+        class: EngineClass::Copy,
+        instance: 0,
+    };
+
+    pub(crate) const fn video(instance: u8) -> Self {
+        Self {
+            class: EngineClass::VideoDecode,
+            instance,
+        }
+    }
+}
+
 /// Physical scheduler priority for one persistent kernel context.
 ///
 /// Display-critical work is intentionally a separate class from ordinary
@@ -64,7 +98,7 @@ impl PhysicalContextHandle {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PhysicalContextDescriptor {
-    pub(crate) engine: EngineClass,
+    pub(crate) engine: PhysicalEngineId,
     pub(crate) hwlrca_lo: u32,
     pub(crate) hwlrca_hi: u32,
     pub(crate) gpuvm_root_phys: u64,

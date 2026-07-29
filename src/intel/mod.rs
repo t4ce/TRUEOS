@@ -105,6 +105,8 @@ const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const PCI_DEVICE_ALDER_LAKE_S_GT1: u16 = 0x4680;
 const PCI_DEVICE_ALDER_LAKE_N_N100_UHD: u16 = 0x46D1;
 const PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770: u16 = 0xA780;
+const GEN11_GT_VEBOX_VDBOX_DISABLE: usize = 0x9140;
+const GEN12_S_GT_PLATFORM_VDBOX_MASK: u8 = (1 << 0) | (1 << 2);
 static INIT: AtomicBool = AtomicBool::new(false);
 static GEN12_INTEGRATED_PAT_READY: AtomicBool = AtomicBool::new(false);
 static DISPLAY_GGTT_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -163,6 +165,17 @@ pub fn init_once() {
     let forcewake_ready = device_uses_gen12_integrated_pat(dev.device_id) && forcewake(dev);
     let pat_ready = forcewake_ready && init_gen12_integrated_pat(dev);
     GEN12_INTEGRATED_PAT_READY.store(pat_ready, Ordering::Release);
+    let media_fuse = media_vdbox_fuse_raw(dev);
+    let media_platform_mask = media_platform_vdbox_mask(dev.device_id);
+    let media_enabled_mask = media_vdbox_mask(dev);
+    crate::log!(
+        "intel/media-topology: device=0x{:04X} fuse_reg=0x{:X} fuse_raw=0x{:08X} semantics=disable platform_vdbox_mask=0x{:X} enabled_vdbox_mask=0x{:X} physical_instances=vcs0+vcs2 logical_map=0->0,1->2\n",
+        dev.device_id,
+        GEN11_GT_VEBOX_VDBOX_DISABLE,
+        media_fuse,
+        media_platform_mask,
+        media_enabled_mask,
+    );
     crate::log!(
         "intel/cache-policy: accepted={} platform={} device=0x{:04X} forcewake={} ppgtt_default=pat0-wb ppgtt_scanout=pat3-uc ggtt=system-memory-address-only pat=[wb,wc,wt,uc,wb,wb,wb,wb]\n",
         pat_ready as u8,
@@ -314,6 +327,38 @@ fn guc_boot_enabled_for_device(device_id: u16) -> bool {
 
 fn media_decode_enabled_for_device(device_id: u16) -> bool {
     !matches!(device_id, PCI_DEVICE_ALDER_LAKE_N_N100_UHD)
+}
+
+const fn media_platform_vdbox_mask(device_id: u16) -> u8 {
+    match device_id {
+        PCI_DEVICE_ALDER_LAKE_S_GT1 | PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770 => {
+            GEN12_S_GT_PLATFORM_VDBOX_MASK
+        }
+        PCI_DEVICE_ALDER_LAKE_N_N100_UHD => 0,
+        _ => 1,
+    }
+}
+
+pub(crate) fn media_vdbox_fuse_raw(dev: Dev) -> u32 {
+    mmio_read(dev, GEN11_GT_VEBOX_VDBOX_DISABLE)
+}
+
+/// Physical VDBOX instances enabled by both the platform table and fuses.
+///
+/// Alder/Raptor Lake use the pre-12.55 disable semantics: a set fuse bit
+/// removes the corresponding physical engine. ADL-S exposes VCS0 and VCS2;
+/// VCS1 is intentionally not a platform engine.
+pub(crate) fn media_vdbox_mask(dev: Dev) -> u8 {
+    let platform = media_platform_vdbox_mask(dev.device_id);
+    (!media_vdbox_fuse_raw(dev) as u8) & platform
+}
+
+pub(crate) fn media_vdbox_logical_instance(dev: Dev, physical_instance: u8) -> Option<u8> {
+    let mask = media_vdbox_mask(dev);
+    if physical_instance >= 8 || mask & (1 << physical_instance) == 0 {
+        return None;
+    }
+    Some((mask & ((1 << physical_instance) - 1)).count_ones() as u8)
 }
 
 pub fn active_scanout_dimensions() -> Option<(u32, u32)> {

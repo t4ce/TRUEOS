@@ -349,7 +349,7 @@ pub(crate) fn submit_guc_bcs0_fast_copy_probe_now() -> GucBcs0FastCopyProbe {
 
     let (hwlrca_lo, hwlrca_hi) = guc_blt_context_descriptor(DIRECT_BLT_GPU_VA_CONTEXT_BASE);
     let descriptor = crate::gpu::physical::PhysicalContextDescriptor {
-        engine: crate::gpu::physical::EngineClass::Copy,
+        engine: crate::gpu::physical::PhysicalEngineId::BCS0,
         hwlrca_lo,
         hwlrca_hi,
         gpuvm_root_phys: state.ppgtt_phys,
@@ -527,7 +527,7 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
 
     let (hwlrca_lo, hwlrca_hi) = guc_blt_context_descriptor(DIRECT_BLT_GPU_VA_CONTEXT_BASE);
     let descriptor = crate::gpu::physical::PhysicalContextDescriptor {
-        engine: crate::gpu::physical::EngineClass::Copy,
+        engine: crate::gpu::physical::PhysicalEngineId::BCS0,
         hwlrca_lo,
         hwlrca_hi,
         gpuvm_root_phys: state.ppgtt_phys,

@@ -75,18 +75,23 @@ const GUC_VIDEO_CLASS: usize = 1;
 const GUC_BLITTER_CLASS: usize = 3;
 const GUC_RCS0_INSTANCE: usize = 0;
 const GUC_VCS0_INSTANCE: usize = 0;
+const GUC_VCS2_INSTANCE: usize = 2;
 const GUC_BCS0_INSTANCE: usize = 0;
 const GUC_RCS0_LOGICAL_MASK: u32 = 1;
-const GUC_VCS0_LOGICAL_MASK: u32 = 1;
 const GUC_BCS0_LOGICAL_MASK: u32 = 1;
 const GUC_RCS0_MMIO_BASE: u32 = 0x2000;
 const GUC_VCS0_MMIO_BASE: u32 = 0x1C0000;
+const GUC_VCS2_MMIO_BASE: u32 = 0x1D0000;
 const GUC_BCS0_MMIO_BASE: u32 = 0x22000;
 const GUC_RCS0_REGSET_COUNT: usize = 3 + 12 + 32 + 7;
 const GUC_VCS0_REGSET_COUNT: usize = 3 + 12 + 32 + 7;
+const GUC_VCS2_REGSET_COUNT: usize = GUC_VCS0_REGSET_COUNT;
 const GUC_BCS0_REGSET_COUNT: usize = 3 + 12 + 32 + 7;
 const GUC_ENGINE_REGSET_COUNT: usize =
-    GUC_RCS0_REGSET_COUNT + GUC_VCS0_REGSET_COUNT + GUC_BCS0_REGSET_COUNT;
+    GUC_RCS0_REGSET_COUNT
+        + GUC_VCS0_REGSET_COUNT
+        + GUC_VCS2_REGSET_COUNT
+        + GUC_BCS0_REGSET_COUNT;
 const GUC_REGSET_MASKED: u32 = 1;
 const GUC_REGSET_NEEDS_STEERING: u32 = 1 << 1;
 const GUC_RCS_GOLDEN_CONTEXT_BYTES: usize = 14 * 4096;
@@ -185,7 +190,7 @@ const _: () = assert!(core::mem::size_of::<GucGtSystemInfo>() == 640);
 const _: () = assert!(core::mem::size_of::<GucAds>() == 4_828);
 const _: () = assert!(core::mem::size_of::<GucEngineUsage>() == 16_384);
 const _: () = assert!(core::mem::size_of::<GucMmioReg>() == 16);
-const _: () = assert!(core::mem::size_of::<GucAdsBlobHeader>() == 24_540);
+const _: () = assert!(core::mem::size_of::<GucAdsBlobHeader>() == 25_404);
 
 pub(crate) fn ready() -> bool {
     READY.load(Ordering::Acquire)
@@ -440,6 +445,7 @@ fn build_ads(dev: crate::intel::Dev, ads: crate::intel::Buf) {
     let regset_off = core::mem::offset_of!(GucAdsBlobHeader, regset);
     let golden_off = guc_ads_golden_context_offset().unwrap_or(regset_off);
     let priv_off = guc_ads_private_data_offset().unwrap_or(golden_off);
+    let vdbox_mask = u32::from(crate::intel::media_vdbox_mask(dev));
     crate::intel::wr32(
         buf,
         p + core::mem::offset_of!(GucPolicies, dpc_promote_time),
@@ -465,8 +471,14 @@ fn build_ads(dev: crate::intel::Dev, ads: crate::intel::Buf) {
     }
     buf[map + GUC_RENDER_CLASS * GUC_MAX_INSTANCES_PER_CLASS + GUC_RCS0_INSTANCE] =
         GUC_RCS0_INSTANCE as u8;
-    buf[map + GUC_VIDEO_CLASS * GUC_MAX_INSTANCES_PER_CLASS + GUC_VCS0_INSTANCE] =
-        GUC_VCS0_INSTANCE as u8;
+    let mut logical_vdbox = 0usize;
+    for physical in [GUC_VCS0_INSTANCE, GUC_VCS2_INSTANCE] {
+        if vdbox_mask & (1 << physical) != 0 {
+            buf[map + GUC_VIDEO_CLASS * GUC_MAX_INSTANCES_PER_CLASS + logical_vdbox] =
+                physical as u8;
+            logical_vdbox += 1;
+        }
+    }
     buf[map + GUC_BLITTER_CLASS * GUC_MAX_INSTANCES_PER_CLASS + GUC_BCS0_INSTANCE] =
         GUC_BCS0_INSTANCE as u8;
     crate::intel::wr32(
@@ -477,7 +489,7 @@ fn build_ads(dev: crate::intel::Dev, ads: crate::intel::Buf) {
     crate::intel::wr32(
         buf,
         s + core::mem::offset_of!(GucGtSystemInfo, _masks) + GUC_VIDEO_CLASS * 4,
-        GUC_VCS0_LOGICAL_MASK,
+        vdbox_mask,
     );
     crate::intel::wr32(
         buf,
@@ -530,6 +542,17 @@ fn build_ads(dev: crate::intel::Dev, ads: crate::intel::Buf) {
     crate::intel::wr32(buf, vcs_reg_state, (ads.gpu + vcs_regset_off as u64) as u32);
     crate::intel::wr32(buf, vcs_reg_state + 4, GUC_VCS0_REGSET_COUNT as u32);
     build_engine_regset(buf, vcs_regset_off, GUC_VCS0_MMIO_BASE);
+    let vcs2_regset_off =
+        vcs_regset_off + GUC_VCS0_REGSET_COUNT * core::mem::size_of::<GucMmioReg>();
+    if vdbox_mask & (1 << GUC_VCS2_INSTANCE) != 0 {
+        let vcs2_reg_state = a
+            + core::mem::offset_of!(GucAds, reg_state_list)
+            + (GUC_VIDEO_CLASS * GUC_MAX_INSTANCES_PER_CLASS + GUC_VCS2_INSTANCE)
+                * core::mem::size_of::<GucMmioRegSet>();
+        crate::intel::wr32(buf, vcs2_reg_state, (ads.gpu + vcs2_regset_off as u64) as u32);
+        crate::intel::wr32(buf, vcs2_reg_state + 4, GUC_VCS2_REGSET_COUNT as u32);
+        build_engine_regset(buf, vcs2_regset_off, GUC_VCS2_MMIO_BASE);
+    }
     crate::intel::wr32(
         buf,
         a + core::mem::offset_of!(GucAds, _golden) + GUC_RENDER_CLASS * 4,
@@ -569,15 +592,17 @@ fn build_ads(dev: crate::intel::Dev, ads: crate::intel::Buf) {
     );
     crate::intel::dma_flush(ads.virt, ads.len);
     crate::log!(
-        "intel/guc: ads scheduler_map rcs0_class={} rcs0_mask=0x{:X} rcs0_regset={} rcs0_golden_gpu=0x{:X} rcs0_golden_bytes=0x{:X} vcs0_class={} vcs0_mask=0x{:X} vcs0_regset={} vcs0_golden_gpu=0x{:X} vcs0_golden_bytes=0x{:X} bcs0_class={} bcs0_mask=0x{:X} bcs0_regset={} bcs0_golden_gpu=0x{:X} bcs0_golden_bytes=0x{:X} autonomous_engine_reset=0\n",
+        "intel/guc: ads scheduler_map rcs0_class={} rcs0_mask=0x{:X} rcs0_regset={} rcs0_golden_gpu=0x{:X} rcs0_golden_bytes=0x{:X} video_class={} video_physical_mask=0x{:X} video_logical_count={} video_mapping=0->0,1->2 vcs0_regset={} vcs2_regset={} vcs_golden_gpu=0x{:X} vcs_golden_bytes=0x{:X} bcs0_class={} bcs0_mask=0x{:X} bcs0_regset={} bcs0_golden_gpu=0x{:X} bcs0_golden_bytes=0x{:X} autonomous_engine_reset=0\n",
         GUC_RENDER_CLASS,
         GUC_RCS0_LOGICAL_MASK,
         GUC_RCS0_REGSET_COUNT,
         ads.gpu + golden_off as u64,
         GUC_RCS_GOLDEN_CONTEXT_BYTES,
         GUC_VIDEO_CLASS,
-        GUC_VCS0_LOGICAL_MASK,
+        vdbox_mask,
+        logical_vdbox,
         GUC_VCS0_REGSET_COUNT,
+        GUC_VCS2_REGSET_COUNT,
         ads.gpu + vcs_golden_off as u64,
         GUC_VCS_GOLDEN_CONTEXT_BYTES,
         GUC_BLITTER_CLASS,

@@ -69,7 +69,7 @@ fn submit_warm_render_batch(
     crate::intel::ggtt_invalidate(dev);
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     let descriptor = crate::gpu::physical::PhysicalContextDescriptor {
-        engine: crate::gpu::physical::EngineClass::RenderCompute,
+        engine: crate::gpu::physical::PhysicalEngineId::RCS0,
         hwlrca_lo: context_desc_lo,
         hwlrca_hi: context_desc_hi,
         gpuvm_root_phys: pml4_phys,
