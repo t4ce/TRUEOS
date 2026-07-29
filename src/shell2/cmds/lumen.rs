@@ -277,6 +277,57 @@ enum PromptPoll {
     Cancel,
 }
 
+fn update_spirit_response_prefix(
+    stream: &mut Option<crate::spirit::ReasoningResponseStream>,
+    tokenizer: &trueos_lfm25_cpu::Lfm25Tokenizer,
+    generated: &[u32],
+) {
+    let Some(active) = stream.as_ref() else {
+        return;
+    };
+    let bytes = match tokenizer.decode(generated, true) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let turn = active.turn();
+            let _ = stream.take();
+            crate::log_warn!(
+                target: "gfx";
+                "lfm25: response stream disabled turn={} reason=detokenize error={:?} action=completed-fallback\n",
+                turn,
+                error,
+            );
+            return;
+        }
+    };
+    match core::str::from_utf8(&bytes) {
+        Ok(prefix) if active.update(prefix) => {}
+        Ok(_) => {
+            let turn = active.turn();
+            let _ = stream.take();
+            crate::log_warn!(
+                target: "gfx";
+                "lfm25: response stream disabled turn={} reason=ingress-closed action=completed-fallback\n",
+                turn,
+            );
+        }
+        Err(error) if error.error_len().is_none() => {
+            // A vocabulary piece may end inside one UTF-8 scalar. The next
+            // cumulative snapshot can complete it without exposing U+FFFD.
+        }
+        Err(error) => {
+            let turn = active.turn();
+            let _ = stream.take();
+            crate::log_warn!(
+                target: "gfx";
+                "lfm25: response stream disabled turn={} reason=invalid-utf8 valid_up_to={} error_len={:?} action=completed-fallback\n",
+                turn,
+                error.valid_up_to(),
+                error.error_len(),
+            );
+        }
+    }
+}
+
 static LUM_CONTROL: Once<Mutex<LumControl>> = Once::new();
 static LUM_WORK_AVAILABLE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 
@@ -892,6 +943,13 @@ async fn run_lum_turn(
         return false;
     }
 
+    // Tool/control spans currently require the completed adapter below. Keep
+    // that path sealed until the adapter itself becomes streaming-aware.
+    let mut response_stream = if crate::spirit::LUMEN_AI_EMOTION_ENABLED {
+        None
+    } else {
+        crate::spirit::begin_reasoning_response(turn)
+    };
     let mut generated = alloc::vec::Vec::new();
     let mut stopped = false;
     for index in 0..MAX_REPLY_TOKENS {
@@ -906,6 +964,7 @@ async fn run_lum_turn(
             break;
         }
         generated.push(token);
+        update_spirit_response_prefix(&mut response_stream, tokenizer, generated.as_slice());
         if index + 1 == MAX_REPLY_TOKENS {
             break;
         }
@@ -968,12 +1027,21 @@ async fn run_lum_turn(
     telemetry.log_cpu_done(crate::r::lfm25_hybrid_cpu_backend::lfm25_hybrid_cpu_perf_snapshot());
     reasoning.finish();
     let response_turn = conversation.turns.saturating_add(1);
-    crate::spirit::enqueue_reasoning_response(response_turn, reply);
+    let live_ingress_finished = response_stream
+        .take()
+        .is_some_and(|stream| stream.finish(reply));
+    let spirit_ingress = if live_ingress_finished {
+        "live-finished"
+    } else if crate::spirit::enqueue_reasoning_response(response_turn, reply) {
+        "completed-fallback"
+    } else {
+        "dropped"
+    };
     print_matrix_target_line(target, alloc::format!("lum: {reply}").as_str());
     print_matrix_target_line(
         target,
         alloc::format!(
-            "lum: done turn={} prompt_tokens={} reply_tokens={} stop={} callbacks={} igpu_projections={} igpu_submissions={} igpu_failures={} igpu_submit_ms={} elapsed_ms={}",
+            "lum: done turn={} prompt_tokens={} reply_tokens={} stop={} callbacks={} igpu_projections={} igpu_submissions={} igpu_failures={} igpu_submit_ms={} elapsed_ms={} spirit_ingress={}",
             conversation.turns + 1,
             prompt_tokens.len(),
             generated.len(),
@@ -986,6 +1054,7 @@ async fn run_lum_turn(
                 .total_submit_ms
                 .saturating_sub(before.total_submit_ms),
             elapsed_ms_since(started),
+            spirit_ingress,
         )
         .as_str(),
     );

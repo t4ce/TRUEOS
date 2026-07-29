@@ -38,6 +38,7 @@ const RESPONSE_SERVICE_POLL_MS: u64 = 16;
 const RESPONSE_READ_MS: u64 = 30_000;
 const INPUT_BROKER_SETTLE_MS: u64 = 32;
 const CURSOR_SETTLE_GRACE_MS: u64 = 250;
+const GRID_PRESENTATION_READY_TIMEOUT_MS: u64 = 5_000;
 const GRID_TEXT_ACCEPT_TIMEOUT_MS: u64 = 5_000;
 const KEYBOARD_STROKE_MS: u32 = 48;
 const KEYBOARD_CHUNK_SCALARS: usize = 64;
@@ -96,7 +97,9 @@ impl ReasoningResponseStream {
         update_response_prefix(self.id, text_prefix)
     }
 
-    /// Publish the final display-safe text and close the stream.
+    /// Seal the final display-safe text into Spirit's ingress and close the
+    /// producer. A true result means ingress accepted the final snapshot;
+    /// asynchronous Gridpaper/keyboard delivery is reported by the presenter.
     pub(crate) fn finish(mut self, text: &str) -> bool {
         let accepted = finish_response(self.id, text);
         self.closed = true;
@@ -117,10 +120,19 @@ impl Drop for ReasoningResponseStream {
 }
 
 fn next_response_id() -> u64 {
-    RESPONSE_STREAM_SEQUENCE
-        .fetch_add(1, Ordering::AcqRel)
-        .wrapping_add(1)
-        .max(1)
+    let mut current = RESPONSE_STREAM_SEQUENCE.load(Ordering::Acquire);
+    loop {
+        let next = current.wrapping_add(1).max(1);
+        match RESPONSE_STREAM_SEQUENCE.compare_exchange_weak(
+            current,
+            next,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return next,
+            Err(observed) => current = observed,
+        }
+    }
 }
 
 fn push_response_request(request: ResponseRequest) -> Result<(Option<(u64, u64)>, usize), ()> {
@@ -139,7 +151,12 @@ fn push_response_request(request: ResponseRequest) -> Result<(Option<(u64, u64)>
     Ok((dropped, queue.len()))
 }
 
-fn log_replaced_response(dropped: Option<(u64, u64)>, newest_id: u64, newest_turn: u64, queued: usize) {
+fn log_replaced_response(
+    dropped: Option<(u64, u64)>,
+    newest_id: u64,
+    newest_turn: u64,
+    queued: usize,
+) {
     if let Some((dropped_id, dropped_turn)) = dropped {
         crate::log_warn!(
             target: "gfx";
@@ -403,20 +420,31 @@ fn sanitize_response_inner(text: &str, empty_fallback: bool) -> String {
     wrapped
 }
 
-/// Only commit words which have a following separator while generation is
-/// live. This keeps word-aware wrapping monotonic when a token extends the
-/// current word; the final snapshot flushes the remaining word.
+/// Only commit words whose following word has started while generation is
+/// live. The tokenizer may still remove a trailing ASCII space when the next
+/// token is punctuation, so the word immediately before trailing whitespace
+/// is not append-safe yet. Reserving the final row also keeps later overflow
+/// ellipsis from rewriting text which Lilly has already typed.
 fn sanitize_stream_snapshot(text: &str, finished: bool) -> String {
     if finished {
         return sanitize_response(text);
     }
-    let stable_end = text
+
+    let search_end = text.trim_end_matches(char::is_whitespace).len();
+    let stable_end = text[..search_end]
         .char_indices()
         .filter(|(_, ch)| ch.is_whitespace())
         .map(|(offset, ch)| offset + ch.len_utf8())
         .next_back()
         .unwrap_or(0);
-    sanitize_response_inner(&text[..stable_end], false)
+    let mut formatted = sanitize_response_inner(&text[..stable_end], false);
+    let live_rows = (SPIRIT_GRID_ROWS as usize).saturating_sub(1);
+    if live_rows == 0 {
+        formatted.clear();
+    } else if let Some((offset, _)) = formatted.match_indices('\n').nth(live_rows - 1) {
+        formatted.truncate(offset);
+    }
+    formatted
 }
 
 fn claim_latest_response() -> Option<ClaimedResponse> {
@@ -506,13 +534,21 @@ fn presentation_is_ready(presentation: KernelGridPresentation) -> bool {
 async fn wait_for_ready_presentation(
     lease: KernelGridLease,
     generation: u64,
-) -> KernelGridPresentation {
+    response_id: u64,
+) -> Result<KernelGridPresentation, &'static str> {
+    let deadline = Instant::now() + Duration::from_millis(GRID_PRESENTATION_READY_TIMEOUT_MS);
     loop {
+        if !response_stream_is_live(response_id) {
+            return Err("response-aborted");
+        }
         if let Some(presentation) = crate::r::gridpaper_service::kernel_grid_presentation(lease)
             && presentation.published_generation == generation
             && presentation_is_ready(presentation)
         {
-            return presentation;
+            return Ok(presentation);
+        }
+        if Instant::now() >= deadline {
+            return Err("gridpaper-ready-timeout");
         }
         Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await;
     }
@@ -520,6 +556,7 @@ async fn wait_for_ready_presentation(
 
 async fn focus_and_click_cell_zero(
     presentation: KernelGridPresentation,
+    response_id: u64,
 ) -> Result<(), &'static str> {
     let (screen_width, screen_height) =
         crate::intel::active_scanout_dimensions().ok_or("no-active-scanout")?;
@@ -533,6 +570,9 @@ async fn focus_and_click_cell_zero(
     let deadline = Instant::now()
         + Duration::from_millis(u64::from(approach_ms).saturating_add(CURSOR_SETTLE_GRACE_MS));
     loop {
+        if !response_stream_is_live(response_id) {
+            return Err("response-aborted");
+        }
         match super::lilly_cursor::window_approach_complete() {
             Ok(true) => break,
             Ok(false) if Instant::now() < deadline => {
@@ -544,6 +584,9 @@ async fn focus_and_click_cell_zero(
     }
 
     Timer::after(Duration::from_millis(INPUT_BROKER_SETTLE_MS)).await;
+    if !response_stream_is_live(response_id) {
+        return Err("response-aborted");
+    }
     let source = super::lilly_cursor::selection_source().map_err(|_| "lilly-cursor-source")?;
     crate::ui4::select_window_for_cursor(
         source,
@@ -552,10 +595,17 @@ async fn focus_and_click_cell_zero(
     )
     .map_err(|_| "gridpaper-focus")?;
     super::lilly_cursor::queue_primary_click().map_err(|_| "gridpaper-cell-zero-click")?;
+    let click_deadline = Instant::now() + Duration::from_millis(CURSOR_SETTLE_GRACE_MS);
     loop {
+        if !response_stream_is_live(response_id) {
+            return Err("response-aborted");
+        }
         match super::lilly_cursor::window_approach_complete() {
             Ok(true) => break,
-            Ok(false) => Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await,
+            Ok(false) if Instant::now() < click_deadline => {
+                Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await;
+            }
+            Ok(false) => return Err("gridpaper-click-timeout"),
             Err(_) => return Err("gridpaper-click-status"),
         }
     }
@@ -732,13 +782,27 @@ async fn present_claimed_response(
         }
     };
 
-    let presentation = wait_for_ready_presentation(lease, generation).await;
+    let presentation = match wait_for_ready_presentation(lease, generation, request.id).await {
+        Ok(presentation) => presentation,
+        Err(reason) => {
+            crate::log_warn!(
+                target: "gfx";
+                "trueos-spirit: response dropped id={} turn={} reason={}\n",
+                request.id,
+                request.turn,
+                reason,
+            );
+            cancel_response_keyboard(keyboard);
+            let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+            return false;
+        }
+    };
     if !response_stream_is_live(request.id) {
         cancel_response_keyboard(keyboard);
         let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
         return false;
     }
-    if let Err(reason) = focus_and_click_cell_zero(presentation).await {
+    if let Err(reason) = focus_and_click_cell_zero(presentation, request.id).await {
         crate::log_warn!(
             target: "gfx";
             "trueos-spirit: response dropped id={} turn={} window={} reason={}\n",
@@ -752,8 +816,7 @@ async fn present_claimed_response(
         return false;
     }
 
-    let Some(accepted_base) =
-        crate::r::gridpaper_service::kernel_grid_accepted_text_cells(lease)
+    let Some(accepted_base) = crate::r::gridpaper_service::kernel_grid_accepted_text_cells(lease)
     else {
         crate::log_warn!(
             target: "gfx";
@@ -971,5 +1034,33 @@ mod tests {
     fn response_moves_a_word_to_the_next_row_before_splitting_it() {
         let output = sanitize_response("1234567890123456 abc next");
         assert_eq!(output, "1234567890123456\nabc next");
+    }
+
+    #[test]
+    fn live_response_commits_append_safe_words_and_flushes_the_final_tail() {
+        assert_eq!(sanitize_stream_snapshot("Hello", false), "");
+        assert_eq!(sanitize_stream_snapshot("Hello ", false), "");
+        assert_eq!(sanitize_stream_snapshot("Hello wor", false), "Hello");
+        assert_eq!(sanitize_stream_snapshot("Hello world ", false), "Hello");
+        assert_eq!(sanitize_stream_snapshot("Hello world a", false), "Hello world");
+        assert_eq!(sanitize_stream_snapshot("Hello world", true), "Hello world");
+    }
+
+    #[test]
+    fn live_response_prefix_remains_monotonic_across_cleanup_and_wrap() {
+        let before_cleanup = sanitize_stream_snapshot("aaaaaaaaaa bbbbbbbb ", false);
+        let after_cleanup = sanitize_stream_snapshot("aaaaaaaaaa bbbbbbbb, c", false);
+        assert_eq!(before_cleanup, "aaaaaaaaaa");
+        assert_eq!(after_cleanup, "aaaaaaaaaa\nbbbbbbbb,");
+        assert!(after_cleanup.starts_with(before_cleanup.as_str()));
+    }
+
+    #[test]
+    fn live_response_reserves_the_final_row_for_append_safe_truncation() {
+        let input = alloc::format!("{}tail", "abcdefghij ".repeat(30));
+        let live = sanitize_stream_snapshot(input.as_str(), false);
+        let finished = sanitize_stream_snapshot(input.as_str(), true);
+        assert!(live.lines().count() <= SPIRIT_GRID_ROWS.saturating_sub(1) as usize);
+        assert!(finished.starts_with(live.as_str()));
     }
 }
