@@ -45,7 +45,8 @@ use super::{
     focused_keyboard_state, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored,
     publish_frame_buffer, publish_gpgpu_scene_frame_buffer, publish_window_frame,
     replace_window_frame, set_window_cursor_icon, set_window_custom_cursor, set_window_placement,
-    take_owner_input_events, take_window_first_presentation, window_placement, writable_rgba_view,
+    take_owner_input_events, take_window_first_presentation, window_input_routes, window_placement,
+    writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -56,6 +57,7 @@ const MAX_TEXT_ROW_BYTES: usize = 1_024;
 const MAX_NATIVE_FONT_SIZES: usize = 32;
 const MAX_PENDING_POINTER_EVENTS: usize = 256;
 const MAX_PENDING_PAN_EVENTS: usize = 256;
+const MAX_INPUT_ROUTES: usize = 32;
 const RETAINED_TEXT_MASK_BATCH_CAPACITY: usize = 64;
 const TEXT_ROWS_WIRE_HEADER_BYTES: usize = 16;
 const TEXT_ROW_WIRE_HEADER_BYTES: usize = 12;
@@ -211,6 +213,38 @@ pub struct TrueosUi4KeyboardState {
 }
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4KeyboardState>() == 16 * 4);
+
+pub const UI4_INPUT_ROUTE_SELECTED_FOR_WINDOW: u32 = 1 << 0;
+pub const UI4_INPUT_ROUTE_APP_FOCUS: u32 = 1 << 1;
+pub const UI4_INPUT_ROUTE_VCURSOR: u32 = 1 << 2;
+pub const UI4_INPUT_ROUTE_KEYBOARD_PRESENT: u32 = 1 << 3;
+
+/// One cursor/combo route known to UI4, including the held keyboard state
+/// paired by HUT when present. A Blueprint can retain route identity after a
+/// player joins and detect that exact player's selection leaving its window.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4InputRouteState {
+    pub cursor_controller_id: u32,
+    pub cursor_slot_id: u32,
+    pub cursor_ep_target: u32,
+    pub cursor_hid_kind: u32,
+    pub combo_id: u32,
+    pub color_rgba: u32,
+    pub flags: u32,
+    pub keyboard_controller_id: u32,
+    pub keyboard_slot_id: u32,
+    pub keyboard_ep_target: u32,
+    pub keyboard_modifiers: u8,
+    pub keyboard_source_kind: u8,
+    pub virtual_keyboard: u8,
+    pub reserved0: u8,
+    pub keys: [u8; 6],
+    pub ascii: [u8; 6],
+    pub key_down_bits: [u32; 8],
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4InputRouteState>() == 88);
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
