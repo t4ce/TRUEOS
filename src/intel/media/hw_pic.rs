@@ -447,7 +447,7 @@ async fn hw_pic_service_inner() {
         let queue_wait_us =
             hw_pic_ticks_to_micros(hw_pic_now_ticks().saturating_sub(job.submitted_tick));
         let process_start = hw_pic_now_ticks();
-        let mut output = process_job(job);
+        let mut output = process_job(job).await;
         output.timing.queue_wait_us = queue_wait_us;
         output.timing.process_us =
             hw_pic_ticks_to_micros(hw_pic_now_ticks().saturating_sub(process_start));
@@ -489,10 +489,10 @@ async fn hw_pic_service_inner() {
     }
 }
 
-fn process_job(job: HwPicJob) -> HwPicOutput {
+async fn process_job(job: HwPicJob) -> HwPicOutput {
     match job.codec {
         HwPicCodec::Jpeg => process_jpeg_job(job),
-        HwPicCodec::H264 => process_h264_job(job),
+        HwPicCodec::H264 => process_h264_job(job).await,
     }
 }
 
@@ -539,7 +539,13 @@ pub(crate) fn hold_h264_output_surface(output: &HwPicOutput) -> bool {
 
 pub(crate) fn release_h264_output_surface(output: &HwPicOutput) {
     if output.codec == HwPicCodec::H264 && output.surface_slot < 16 {
-        AVC_PRESENTATION_HOLDS.fetch_and(!(1u16 << output.surface_slot), Ordering::AcqRel);
+        release_h264_output_surface_slot(output.surface_slot);
+    }
+}
+
+pub(crate) fn release_h264_output_surface_slot(surface_slot: u8) {
+    if surface_slot < 16 {
+        AVC_PRESENTATION_HOLDS.fetch_and(!(1u16 << surface_slot), Ordering::AcqRel);
     }
 }
 
@@ -922,7 +928,7 @@ fn avc_scratch_bindings(
     }
 }
 
-fn process_h264_job(job: HwPicJob) -> HwPicOutput {
+async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
     use crate::intel::xelp_media_avc_decode_recipe::{
         AVC_CMD_OFFSET_AVC_DIRECTMODE_STATE, AVC_CMD_OFFSET_AVC_DPB_STATE,
         AVC_CMD_OFFSET_AVC_IMG_STATE, AVC_CMD_OFFSET_AVC_PICID_STATE,
@@ -1395,7 +1401,9 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         missing_ref_offset,
         job.id,
         job.vcs0_session_generation,
-    ) else {
+    )
+    .await
+    else {
         log_stage(job.id, "submit", false, "media-avc-single-picture-batch-failed", -24);
         return failed_output(&job, -24);
     };

@@ -29,9 +29,8 @@ const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path. Non-.7z files compress to a sibling .7z archive; .7z archives extract beside the archive."}},"required":["path"],"additionalProperties":false}"#;
-const TOOL_JSON_CPP: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["start","list","status","stop","font","spirit"],"description":"Launch, inspect, or stop the C++/IGC suite, stamp/present font RGBA, or select Spirit's C++ repass."},"mode":{"type":"string","enum":["gallery","aurora","julia","sdf","voronoi","retro-sun","audio","particle"],"description":"C++ for OpenCL workload to display."},"font_action":{"type":"string","enum":["stamp","present","status","release"],"description":"Create an owned async RGBA stamp or present it directly through UI4."},"text":{"type":"string","maxLength":4096,"description":"UTF-8 text for action=font; newlines create rows."},"font":{"type":"integer","minimum":1,"maximum":3,"description":"Optional GPU font face for action=font."},"size":{"type":"number","minimum":4,"maximum":2048,"description":"Font pixel size for action=font."},"color":{"type":"string","description":"Font RGBA color encoded as RRGGBBAA."},"canvas":{"type":"string","description":"Optional WIDTHxHEIGHT RGBA8 canvas at or below the UHD/4K soft cap."},"duration_ms":{"type":"integer","minimum":0,"description":"Demo lifetime in milliseconds; zero runs until stopped."},"cadence_ms":{"type":"integer","minimum":1,"maximum":60000,"description":"Target GPU launch cadence in milliseconds."},"publish_every":{"type":"integer","minimum":1,"maximum":1024,"description":"Publish every Nth retired GPU frame."},"background_id":{"type":"integer","enum":[0,2,3,4,5,6,7,8,9,10,11],"description":"Spirit background ID when action is spirit; 11 is the UTC MagicTimeCircle."},"shader_id":{"type":"integer","minimum":0,"maximum":15,"description":"Spirit sprite shader ID when action is spirit."}},"required":[],"additionalProperties":false}"#;
+const TOOL_JSON_CPP: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["start","list","status","stop","font","spirit","svg"],"description":"Launch, inspect, or stop the C++/IGC suite, stamp/present font RGBA, select Spirit's C++ repass, or control the SVG experiment."},"mode":{"type":"string","enum":["gallery","aurora","julia","sdf","voronoi","retro-sun","audio","particle"],"description":"C++ for OpenCL workload to display."},"font_action":{"type":"string","enum":["stamp","present","status","release"],"description":"Create an owned async RGBA stamp or present it directly through UI4."},"text":{"type":"string","maxLength":4096,"description":"UTF-8 text for action=font; newlines create rows."},"font":{"type":"integer","minimum":1,"maximum":3,"description":"Optional GPU font face for action=font."},"size":{"type":"number","minimum":4,"maximum":2048,"description":"Font pixel size for action=font."},"color":{"type":"string","description":"Font RGBA color encoded as RRGGBBAA."},"canvas":{"type":"string","description":"Optional WIDTHxHEIGHT RGBA8 canvas at or below the UHD/4K soft cap."},"duration_ms":{"type":"integer","minimum":0,"description":"Demo lifetime in milliseconds; zero runs until stopped."},"cadence_ms":{"type":"integer","minimum":1,"maximum":60000,"description":"Target GPU launch cadence in milliseconds."},"publish_every":{"type":"integer","minimum":1,"maximum":1024,"description":"Publish every Nth retired GPU frame."},"background_id":{"type":"integer","enum":[0,2,3,4,5,6,7,8,9,10,11],"description":"Spirit background ID when action is spirit; 11 is the UTC MagicTimeCircle."},"shader_id":{"type":"integer","minimum":0,"maximum":15,"description":"Spirit sprite shader ID when action is spirit."},"svg_action":{"type":"string","enum":["start","status","stop"],"description":"SVG-experiment lifecycle action when action=svg."},"svg_demo":{"type":"string","enum":["basic","curves","holes"],"description":"Byte-embedded SVG outline experiment selected when action=svg."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc","log"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format or optional disk id for action=log."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw TRUEOSFS log records to print for action=log."}},"required":["action"],"additionalProperties":false}"#;
-const TOOL_JSON_GPGPU: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["svg"],"description":"Retained SVG outline probe."},"action":{"type":"string","enum":["start","status","stop"],"description":"SVG-probe lifecycle action."},"demo":{"type":"string","enum":["basic","curves","holes"],"description":"Byte-embedded SVG outline demo selected for the UI4 end-to-end probe."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_GRID: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_VGPU: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","test"],"description":"Inspect the vGPU broker or run a runtime test."},"test":{"type":"string","enum":["broker","abi","guc","compute","font","all"],"description":"Runtime test selected when command=test."}},"required":["command"],"additionalProperties":false}"#;
 const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
@@ -145,11 +144,6 @@ fn dispatch_fslog(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pa
     super::cmds::fslog::try_parse(io, rest)
 }
 
-fn dispatch_gpgpu(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::gpgpu::try_parse(spawner, io, &mut args)
-}
-
 fn dispatch_grid(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::grid::try_parse(spawner, io, rest)
 }
@@ -221,7 +215,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         advertised: true,
         handler: dispatch_cpp,
         tool_description: Some(
-            "Launch the C++/IGC demos, request retained asynchronous RGBA8 font stamps, or select Spirit's 9x16 visual suite.",
+            "Launch the C++/IGC demos, run the SVG experiment, request retained asynchronous RGBA8 font stamps, or select Spirit's 9x16 visual suite.",
         ),
         tool_parameters_json: Some(TOOL_JSON_CPP),
     },
@@ -253,17 +247,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_fslog,
         tool_description: None,
         tool_parameters_json: None,
-    },
-    BuiltinShell2CmdEntry {
-        name: "gpgpu",
-        mode: "cmd",
-        color: Some(STATUS_GRAY_RGB),
-        advertised: true,
-        handler: dispatch_gpgpu,
-        tool_description: Some(
-            "Control the retained SVG-outline UI4 probe; C++ previews and font presentation live under cpp.",
-        ),
-        tool_parameters_json: Some(TOOL_JSON_GPGPU),
     },
     BuiltinShell2CmdEntry {
         name: "grid",
@@ -568,8 +551,7 @@ pub(crate) fn try_dispatch(
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
         "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "qjs", "ssh",
-        "txt", "grid", "tts", "stt", "cpp", "gpgpu", "vgpu", "vid", "cry", "acpi", "tlb", "smp",
-        "etc",
+        "txt", "grid", "tts", "stt", "cpp", "vgpu", "vid", "cry", "acpi", "tlb", "smp", "etc",
     ];
 
     let mut out = AllocString::new();
@@ -618,7 +600,7 @@ fn push_rm_mv_status_token(out: &mut AllocString) {
 fn push_status_command_name(out: &mut AllocString, entry: &BuiltinShell2CmdEntry) {
     let label = status_command_label(entry);
 
-    if entry.name == "gpgpu" || entry.name == "cpp" {
+    if entry.name == "cpp" {
         push_static_rainbow_token(out, label);
     } else if let Some(color) = entry.color {
         let styled = alloc::format!("{}", super::term_style::paint(label).bold().color(color));

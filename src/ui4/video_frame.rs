@@ -31,8 +31,9 @@ const VIDEO_PLANE_SLOT: usize = super::ALPHA_OVERLAY_PLANE_SLOT;
 const VIDEO_RGBA_BUFFERING: FrameBuffering = FrameBuffering::Quad;
 pub(crate) const VIDEO_RGBA_BUFFER_COUNT: usize = VIDEO_RGBA_BUFFERING.count();
 /// Two ordered conversions may occupy the immutable RCS job slots at once.
-/// The current AVC path retains three references in four slots; the playback
-/// loop additionally drains this queue before every later IDR reuses slot 0.
+/// Each request carries a decoder-surface pin until its exact RCS source read
+/// retires, so IDR and non-reference output slots cannot be reused underneath
+/// either conversion lane.
 const VIDEO_CONVERSION_OUTSTANDING_CAP: usize = crate::intel::gpgpu::UI4_COMPOSITOR_RCS_JOB_SLOTS;
 const _: () = assert!(VIDEO_RGBA_BUFFER_COUNT >= VIDEO_CONVERSION_OUTSTANDING_CAP + 2);
 const VIDEO_CONVERSION_ERROR_LOG_INTERVAL_TICKS: u64 = embassy_time::TICK_HZ * 10;
@@ -43,6 +44,10 @@ const VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKETS: usize = 128;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedNv12Source {
     pub(crate) decode_sequence: u64,
+    /// Decoder DPB slot pinned by the playback owner. The conversion worker
+    /// releases it only after the RCS read has retired (or before submission
+    /// if preparation rejects the source).
+    pub(crate) decoder_surface_slot: u8,
     pub(crate) gpu: u64,
     pub(crate) phys: u64,
     pub(crate) virt: usize,
@@ -810,7 +815,7 @@ pub(crate) fn begin_decoded_nv12_conversion_batch() -> bool {
     if reset {
         crate::log_info!(
             target: "ui4";
-            "ui4 video-conversion batch generation={} worker=independent-rcs ordered=1 outstanding_cap={} no_drop=1 idr_drain=1 worker_online={}\n",
+            "ui4 video-conversion batch generation={} worker=independent-rcs ordered=1 outstanding_cap={} no_drop=1 decoder_surface_release=rcs-completion worker_online={}\n",
             state.generation,
             VIDEO_CONVERSION_OUTSTANDING_CAP,
             state.online as u8,
@@ -960,6 +965,11 @@ pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32, lane: u8
         };
         let started = Instant::now();
         let mut outcome = convert_publish_decoded_nv12_stream_frame(request).await;
+        // convert_publish returns only before GPU admission or after the
+        // accepted RCS read has retired. Transfer the decoder-surface lifetime
+        // to this worker so playback can overlap VDBOX with conversion without
+        // permitting the DPB slot to be overwritten under an in-flight read.
+        crate::intel::hw_pic::release_h264_output_surface_slot(request.source.decoder_surface_slot);
         let _ordered = wait_decoded_video_conversion_turn(request).await;
         let finished = Instant::now();
         let elapsed_ticks = finished.saturating_duration_since(started).as_ticks();
@@ -1328,9 +1338,12 @@ async fn convert_publish_decoded_nv12_stream_frame(
             layout.source_y,
         ) {
             Ok(submission) => break submission,
-            Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
+            Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy)
+            | Err(crate::intel::gpgpu::Ui4CompositorSubmitError::SubmissionRejected) => {
                 // The dedicated Frame lease and decoder picture remain pinned
-                // until this GuC runtime accepts their exact handoff.
+                // until this GuC runtime accepts their exact handoff. GuC
+                // admission rejection is transient just like a full local
+                // queue; other UI4 producers follow the same retry contract.
                 let (report, worker_online) = {
                     let mut state = VIDEO_CONVERSION_STATE.lock();
                     if !rcs_submit_wait_counted {
@@ -1710,6 +1723,7 @@ fn native_viewport_layout(
 
 fn valid_source(source: DecodedNv12Source) -> bool {
     source.decode_sequence != 0
+        && source.decoder_surface_slot < 16
         && source.gpu != 0
         && source.phys != 0
         && source.virt != 0

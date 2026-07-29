@@ -10,6 +10,9 @@ use super::xelp_media2_ngin::{
 };
 use core::sync::atomic::{AtomicBool, Ordering};
 
+const AVC_COMPLETION_POLL_DELAY_MS: u64 = 1;
+const AVC_COMPLETION_POLL_TIMEOUT_MS: u64 = 100;
+
 static AVC_NORESET_LITE_ENABLED: AtomicBool = AtomicBool::new(false);
 static AVC_NORESET_LITE_RESET_DONE: AtomicBool = AtomicBool::new(false);
 static AVC_NORESET_LITE_STATIC_CLEAR_DONE: AtomicBool = AtomicBool::new(false);
@@ -1541,7 +1544,7 @@ fn build_avc_single_idr_batch_skeleton(
     Some((idx + 3).saturating_mul(core::mem::size_of::<u32>()))
 }
 
-pub(super) fn submit_avc_single_idr_batch(
+pub(super) async fn submit_avc_single_idr_batch(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
     windows: MediaGpuWindowLayout,
@@ -1763,10 +1766,15 @@ pub(super) fn submit_avc_single_idr_batch(
     super::mmio_write(dev, engine.ring_base + media::RING_EXECLIST_CONTROL, media::EL_CTRL_LOAD);
 
     let poll_start = media_backend_now_ticks();
+    let poll_timeout_ticks = ((AVC_COMPLETION_POLL_TIMEOUT_MS as u128)
+        .saturating_mul(embassy_time_driver::TICK_HZ.max(1) as u128)
+        .saturating_add(999)
+        / 1_000) as u64;
+    let poll_deadline = poll_start.saturating_add(poll_timeout_ticks.max(1));
     let mut retired = false;
     let mut poll_iters = 0usize;
     let mut complete_value = 0u32;
-    while poll_iters < media::MEDIA_SUBMIT_POLL_ITERS {
+    loop {
         super::dma_flush(
             unsafe {
                 backing
@@ -1777,23 +1785,36 @@ pub(super) fn submit_avc_single_idr_batch(
         );
         complete_value =
             media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_COMPLETE_SLOT);
+        poll_iters = poll_iters.saturating_add(1);
         if complete_value == complete_marker {
             retired = true;
             break;
         }
-        core::hint::spin_loop();
-        poll_iters += 1;
+        if media_backend_now_ticks() >= poll_deadline {
+            break;
+        }
+        embassy_time::Timer::after_millis(AVC_COMPLETION_POLL_DELAY_MS).await;
     }
     let poll_us = media_backend_elapsed_us(poll_start);
 
     let post_start = media_backend_now_ticks();
-    super::dma_flush(output_surface_virt, output_surface_bytes);
+    let output_surface_probes_enabled = media::output_surface_probes_enabled();
+    // Normal video playback hands this VDBOX-retired allocation directly to
+    // RCS without a CPU pixel read. The terminal MI_FLUSH_DW above releases
+    // media writes before its completion marker, and the RCS dispatch
+    // prologue invalidates its PAT0/WB read-side caches. Walking the complete
+    // 4 MiB surface with CLFLUSH here adds no visibility to that GPU-to-GPU
+    // contract. Keep the expensive CPU invalidation only for diagnostics,
+    // where the probes below really do sample the decoded pixels.
+    if output_surface_probes_enabled {
+        super::dma_flush(output_surface_virt, output_surface_bytes);
+    }
     super::dma_flush(backing.result_virt, backing.result_bytes);
-    let output_surface = unsafe {
-        core::slice::from_raw_parts(output_surface_virt as *const u8, output_surface_bytes)
-    };
     let (output_surface_detail, output_surface_signature, output_surface_nonzero_samples) =
-        if media::output_surface_probes_enabled() {
+        if output_surface_probes_enabled {
+            let output_surface = unsafe {
+                core::slice::from_raw_parts(output_surface_virt as *const u8, output_surface_bytes)
+            };
             let output_surface_probe = media::probe_tiled_nv12_output_surface(
                 output_surface,
                 u16::try_from(coded_width).unwrap_or(u16::MAX),

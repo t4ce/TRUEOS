@@ -114,19 +114,10 @@ struct InflightKernelSubmission {
     submission: KernelSubmission,
 }
 
-#[derive(Copy, Clone)]
-struct RenderComputeOwner {
-    client: KernelClient,
-    submissions: usize,
-    contended: bool,
-}
-
 struct ExecutorState {
     admitting: Vec<KernelClient>,
     inflight: Vec<InflightKernelSubmission>,
     waiters: Vec<FenceWaiter>,
-    render_compute_owner: Option<RenderComputeOwner>,
-    render_compute_yield_client: Option<KernelClient>,
     submissions: u64,
     completions: u64,
     failures: u64,
@@ -138,8 +129,6 @@ impl ExecutorState {
             admitting: Vec::new(),
             inflight: Vec::new(),
             waiters: Vec::new(),
-            render_compute_owner: None,
-            render_compute_yield_client: None,
             submissions: 0,
             completions: 0,
             failures: 0,
@@ -170,20 +159,15 @@ const fn kernel_client_inflight_limit(client: KernelClient) -> usize {
     }
 }
 
-const fn kernel_client_uses_render_compute(client: KernelClient) -> bool {
-    !matches!(client, KernelClient::Ui4Blitter)
-}
-
 /// Admit one already-encoded kernel context. Each client remains an ordered
 /// software lane; only clients with independently owned job slots may have
 /// more than one exact timeline point outstanding.
 ///
-/// ADL-S cannot safely preempt one of these persistent GPGPU LRCs in the
-/// middle of a detached walker and immediately run a different PPGTT. The
-/// displaced marker and the replacement context can both remain unobserved.
-/// Keep one physical render/compute context owner until its exact marker has
-/// retired. This still preserves each client's persistent ring and permits
-/// UI4's two immutable slots to queue on the same LRC.
+/// Render/compute clients deliberately retain distinct persistent HWLRCAs,
+/// PPGTT roots, GuC registrations, priorities, and exact completion markers.
+/// Do not serialize those clients in software: GuC owns physical scheduling
+/// and context switching, while this executor limits only each client's own
+/// immutable submission storage.
 pub(crate) fn submit_kernel_context(
     client: KernelClient,
     descriptor: PhysicalContextDescriptor,
@@ -200,27 +184,6 @@ pub(crate) fn submit_kernel_context(
         {
             return Err(VgpuError::Busy);
         }
-        if kernel_client_uses_render_compute(client) {
-            match executor.render_compute_owner.as_mut() {
-                Some(owner) if owner.client != client => {
-                    owner.contended = true;
-                    return Err(VgpuError::Busy);
-                }
-                Some(_) => {}
-                None => {
-                    if executor.render_compute_yield_client == Some(client) {
-                        executor.render_compute_yield_client = None;
-                        return Err(VgpuError::Busy);
-                    }
-                    executor.render_compute_yield_client = None;
-                    executor.render_compute_owner = Some(RenderComputeOwner {
-                        client,
-                        submissions: 0,
-                        contended: false,
-                    });
-                }
-            }
-        }
         executor.admitting.push(client);
     }
 
@@ -230,14 +193,6 @@ pub(crate) fn submit_kernel_context(
     match submitted {
         Ok(point) => {
             let submission = KernelSubmission { client, point };
-            if kernel_client_uses_render_compute(client) {
-                let owner = executor
-                    .render_compute_owner
-                    .as_mut()
-                    .expect("render/compute admission reserves one owner");
-                debug_assert_eq!(owner.client, client);
-                owner.submissions = owner.submissions.saturating_add(1);
-            }
             executor
                 .inflight
                 .push(InflightKernelSubmission { submission });
@@ -245,13 +200,6 @@ pub(crate) fn submit_kernel_context(
             Ok(submission)
         }
         Err(error) => {
-            if kernel_client_uses_render_compute(client)
-                && executor
-                    .render_compute_owner
-                    .is_some_and(|owner| owner.client == client && owner.submissions == 0)
-            {
-                executor.render_compute_owner = None;
-            }
             executor.failures = executor.failures.saturating_add(1);
             Err(error)
         }
@@ -268,24 +216,9 @@ pub(crate) fn complete_kernel_submission(
 
     let wakers = {
         let mut executor = EXECUTOR.lock();
-        let was_inflight = executor
-            .inflight
-            .iter()
-            .any(|entry| entry.submission == submission);
         executor
             .inflight
             .retain(|entry| entry.submission != submission);
-        if was_inflight
-            && kernel_client_uses_render_compute(submission.client)
-            && let Some(owner) = executor.render_compute_owner.as_mut()
-            && owner.client == submission.client
-        {
-            owner.submissions = owner.submissions.saturating_sub(1);
-            if owner.submissions == 0 {
-                executor.render_compute_yield_client = owner.contended.then_some(owner.client);
-                executor.render_compute_owner = None;
-            }
-        }
         if completed {
             executor.completions = executor.completions.saturating_add(1);
         } else {

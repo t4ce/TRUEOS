@@ -1938,34 +1938,51 @@ async fn h264_i_p_playback_probe_with_reader(
     let playback_start = EmbassyInstant::now();
     let mut next_frame_deadline = playback_start;
     let access_unit_count = access_units.len();
-    let mut presentation_indices: Vec<usize> = (0..access_unit_count).collect();
-    presentation_indices.sort_by(|lhs, rhs| {
-        let lhs_timing = access_units[*lhs].timing;
-        let rhs_timing = access_units[*rhs].timing;
-        match (lhs_timing, rhs_timing) {
-            (Some(lhs_timing), Some(rhs_timing)) => lhs_timing
-                .pts
-                .cmp(&rhs_timing.pts)
-                .then(lhs_timing.dts.cmp(&rhs_timing.dts))
-                .then(lhs.cmp(rhs)),
-            _ => lhs.cmp(rhs),
-        }
+    let presentation_reordering_required = access_units.windows(2).any(|pair| {
+        matches!(
+            (pair[0].timing, pair[1].timing),
+            (Some(previous), Some(next))
+                if (next.pts, next.dts) < (previous.pts, previous.dts)
+        )
     });
-    let base_pts = presentation_indices
+    let mut presentation_rank = Vec::new();
+    let mut base_pts = access_units
         .first()
-        .and_then(|index| access_units[*index].timing)
+        .and_then(|unit| unit.timing)
         .map(|timing| timing.pts)
         .unwrap_or(0);
-    let mut presentation_rank = alloc::vec![0usize; access_unit_count];
-    for (rank, decode_index) in presentation_indices.iter().copied().enumerate() {
-        presentation_rank[decode_index] = rank;
-    }
-    let reordered_samples = presentation_indices
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(|(rank, decode_index)| *rank != *decode_index)
-        .count();
+    let reordered_samples = if presentation_reordering_required {
+        let mut presentation_indices: Vec<usize> = (0..access_unit_count).collect();
+        presentation_indices.sort_by(|lhs, rhs| {
+            let lhs_timing = access_units[*lhs].timing;
+            let rhs_timing = access_units[*rhs].timing;
+            match (lhs_timing, rhs_timing) {
+                (Some(lhs_timing), Some(rhs_timing)) => lhs_timing
+                    .pts
+                    .cmp(&rhs_timing.pts)
+                    .then(lhs_timing.dts.cmp(&rhs_timing.dts))
+                    .then(lhs.cmp(rhs)),
+                _ => lhs.cmp(rhs),
+            }
+        });
+        base_pts = presentation_indices
+            .first()
+            .and_then(|index| access_units[*index].timing)
+            .map(|timing| timing.pts)
+            .unwrap_or(0);
+        presentation_rank.resize(access_unit_count, 0);
+        for (rank, decode_index) in presentation_indices.iter().copied().enumerate() {
+            presentation_rank[decode_index] = rank;
+        }
+        presentation_indices
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(rank, decode_index)| *rank != *decode_index)
+            .count()
+    } else {
+        0
+    };
     let timed_samples = access_units
         .iter()
         .filter(|unit| unit.timing.is_some())
@@ -1976,18 +1993,31 @@ async fn h264_i_p_playback_probe_with_reader(
         .map(|timing| timing.timescale)
         .unwrap_or(0);
     crate::log!(
-        "intel/hw_vid: h264-presentation-order samples={} timed={} reordered={} base_pts={} timescale={} decode_order=dts presentation_order=pts\n",
+        "intel/hw_vid: h264-presentation-order samples={} timed={} reordered={} reorder_path={} base_pts={} timescale={} decode_order=dts presentation_order=pts surface_release=rcs-completion\n",
         access_unit_count,
         timed_samples,
         reordered_samples,
+        if presentation_reordering_required {
+            "deferred-pts"
+        } else {
+            "identity-fast"
+        },
         base_pts,
         timing_timescale
     );
-    let mut presentation_slots = alloc::vec![H264PresentationSlot::Waiting; access_unit_count];
+    let mut presentation_slots = if presentation_reordering_required {
+        alloc::vec![H264PresentationSlot::Waiting; access_unit_count]
+    } else {
+        Vec::new()
+    };
     let mut next_presentation_rank = 0usize;
 
     for (decode_index, unit) in access_units.into_iter().enumerate() {
-        let rank = presentation_rank[decode_index];
+        let rank = if presentation_reordering_required {
+            presentation_rank[decode_index]
+        } else {
+            0
+        };
         if unit.nal_type == 5 {
             idr_seen += 1;
         }
@@ -2033,13 +2063,13 @@ async fn h264_i_p_playback_probe_with_reader(
             h264_log_frame_index(&indexed_frames[indexed_frame], indexed_frame);
         }
 
-        if !decodable {
+        let presentation_slot = if !decodable {
             skipped_unsupported_frames = skipped_unsupported_frames.saturating_add(1);
-            presentation_slots[rank] = H264PresentationSlot::Skipped(unit.timing);
+            H264PresentationSlot::Skipped(unit.timing)
         } else {
             attempted += 1;
             let decode_start = EmbassyInstant::now();
-            match h264_decode_wait_frame(
+            let slot = match h264_decode_wait_frame(
                 "dts",
                 attempted,
                 idr_seen,
@@ -2053,75 +2083,74 @@ async fn h264_i_p_playback_probe_with_reader(
                 Ok(output) => {
                     retired = retired.saturating_add(1);
                     if crate::intel::hw_pic::hold_h264_output_surface(&output) {
-                        presentation_slots[rank] =
-                            H264PresentationSlot::Ready(H264PendingPresentation {
-                                output,
-                                playback_frame: attempted,
-                                stream_idr_index: idr_seen,
-                                timing: unit.timing,
-                            });
+                        H264PresentationSlot::Ready(H264PendingPresentation {
+                            output,
+                            playback_frame: attempted,
+                            stream_idr_index: idr_seen,
+                            timing: unit.timing,
+                        })
                     } else {
-                        presentation_slots[rank] = H264PresentationSlot::Skipped(unit.timing);
                         if first_failure_frame == 0 {
                             first_failure_frame = attempted;
                             first_failure_error = H264_UI4_PRESENT_ERROR;
                         }
+                        H264PresentationSlot::Skipped(unit.timing)
                     }
                 }
                 Err(error) => {
-                    presentation_slots[rank] = H264PresentationSlot::Skipped(unit.timing);
                     if first_failure_frame == 0 {
                         first_failure_frame = attempted;
                         first_failure_error = error;
                     }
+                    H264PresentationSlot::Skipped(unit.timing)
                 }
-            }
+            };
             playback_timing.record_decode_ticks(
                 EmbassyInstant::now()
                     .saturating_duration_since(decode_start)
                     .as_ticks(),
             );
-        }
+            slot
+        };
 
-        while next_presentation_rank < presentation_slots.len() {
-            let slot = presentation_slots[next_presentation_rank];
-            let timing = match slot {
-                H264PresentationSlot::Waiting => break,
-                H264PresentationSlot::Skipped(timing) => timing,
-                H264PresentationSlot::Ready(pending) => pending.timing,
-            };
-            h264_wait_for_presentation_time(
+        if !presentation_reordering_required {
+            if let Some((failed_frame, error)) = h264_present_slot(
+                presentation_slot,
                 playback_start,
-                timing,
                 base_pts,
                 &mut next_frame_deadline,
                 frame_period,
                 &mut playback_timing,
             )
-            .await;
-            if let H264PresentationSlot::Ready(pending) = slot {
-                let present_start = EmbassyInstant::now();
-                let queued = h264_queue_probe_output(
-                    "pts",
-                    pending.playback_frame,
-                    pending.stream_idr_index,
-                    &pending.output,
-                )
-                .await;
-                let _ = crate::ui4::wait_decoded_nv12_conversion_idle().await;
-                crate::intel::hw_pic::release_h264_output_surface(&pending.output);
-                playback_timing.record_present_ticks(
-                    EmbassyInstant::now()
-                        .saturating_duration_since(present_start)
-                        .as_ticks(),
-                );
-                if !queued && first_failure_frame == 0 {
-                    first_failure_frame = pending.playback_frame;
-                    first_failure_error = if pending.output.error_code != 0 {
-                        pending.output.error_code
-                    } else {
-                        H264_UI4_PRESENT_ERROR
-                    };
+            .await
+            {
+                if first_failure_frame == 0 {
+                    first_failure_frame = failed_frame;
+                    first_failure_error = error;
+                }
+            }
+            continue;
+        }
+
+        presentation_slots[rank] = presentation_slot;
+        while next_presentation_rank < presentation_slots.len() {
+            let slot = presentation_slots[next_presentation_rank];
+            if matches!(slot, H264PresentationSlot::Waiting) {
+                break;
+            }
+            if let Some((failed_frame, error)) = h264_present_slot(
+                slot,
+                playback_start,
+                base_pts,
+                &mut next_frame_deadline,
+                frame_period,
+                &mut playback_timing,
+            )
+            .await
+            {
+                if first_failure_frame == 0 {
+                    first_failure_frame = failed_frame;
+                    first_failure_error = error;
                 }
             }
             presentation_slots[next_presentation_rank] = H264PresentationSlot::Waiting;
@@ -2317,6 +2346,61 @@ enum H264PresentationSlot {
     Ready(H264PendingPresentation),
 }
 
+async fn h264_present_slot(
+    slot: H264PresentationSlot,
+    playback_start: EmbassyInstant,
+    base_pts: i64,
+    next_fixed_deadline: &mut EmbassyInstant,
+    frame_period: EmbassyDuration,
+    playback_timing: &mut H264PlaybackTiming,
+) -> Option<(usize, i32)> {
+    let timing = match slot {
+        H264PresentationSlot::Waiting => return None,
+        H264PresentationSlot::Skipped(timing) => timing,
+        H264PresentationSlot::Ready(pending) => pending.timing,
+    };
+    h264_wait_for_presentation_time(
+        playback_start,
+        timing,
+        base_pts,
+        next_fixed_deadline,
+        frame_period,
+        playback_timing,
+    )
+    .await;
+    let H264PresentationSlot::Ready(pending) = slot else {
+        return None;
+    };
+    let present_start = EmbassyInstant::now();
+    let queued = h264_queue_probe_output(
+        "pts",
+        pending.playback_frame,
+        pending.stream_idr_index,
+        &pending.output,
+    )
+    .await;
+    playback_timing.record_present_ticks(
+        EmbassyInstant::now()
+            .saturating_duration_since(present_start)
+            .as_ticks(),
+    );
+    if queued {
+        // The conversion worker now owns the decoder-surface pin and releases
+        // it only after its RCS source read has retired.
+        None
+    } else {
+        crate::intel::hw_pic::release_h264_output_surface(&pending.output);
+        Some((
+            pending.playback_frame,
+            if pending.output.error_code != 0 {
+                pending.output.error_code
+            } else {
+                H264_UI4_PRESENT_ERROR
+            },
+        ))
+    }
+}
+
 async fn h264_wait_for_presentation_time(
     playback_start: EmbassyInstant,
     timing: Option<H264SampleTiming>,
@@ -2485,6 +2569,7 @@ async fn h264_queue_probe_output(
     {
         let source = crate::ui4::DecodedNv12Source {
             decode_sequence: u64::from(output.id),
+            decoder_surface_slot: output.surface_slot,
             gpu: output.gpu_addr,
             phys: output.phys_addr,
             virt: output.virt_addr,

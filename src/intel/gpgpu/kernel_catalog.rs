@@ -323,8 +323,14 @@ pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.bin");
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.spv");
+const UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN_BYTES: usize =
+    include_bytes!("kernels/artifacts/adls/cpp/ui4_rgba8_to_nv12_linear.bin").len();
+#[used]
+#[unsafe(link_section = ".gpgpu_artifacts")]
+static UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN_STORAGE: [u8; UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN_BYTES] =
+    *include_bytes!("kernels/artifacts/adls/cpp/ui4_rgba8_to_nv12_linear.bin");
 pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/ui4_rgba8_to_nv12_linear.bin");
+    &UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN_STORAGE;
 pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/ui4_rgba8_to_nv12_linear.spv");
 

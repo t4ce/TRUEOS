@@ -25,6 +25,12 @@ SECTIONS
   .rodata : AT(ADDR(.rodata) - KERNEL_OFFSET) {
     __rodata_start = .;
     . = ALIGN(0x1000);
+    /*
+     * Dormant GPU experiments remain part of the build artifact even when no
+     * production submission path references them. This makes "parked" mean
+     * available for explicit experiments, not silently removed by --gc-sections.
+     */
+    KEEP(*(.gpgpu_artifacts))
     *(.rodata*)
     . = ALIGN(0x1000);
     __rodata_end = .;
