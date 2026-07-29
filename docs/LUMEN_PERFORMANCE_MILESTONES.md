@@ -6,10 +6,10 @@ milestones. Each milestone ends with the same three bare-metal validations, so
 the nine runs remain comparable from the first diagnostic build through the
 final optimized build.
 
-The physical campaign target is Intel Alder Lake-S GT1 / UHD Graphics 770,
-PCI `8086:4680` at `00:02.0`. The checked-in C++/IGC artifacts additionally
-pin revision `0x0c`; the boot and runtime artifact-admission records must
-confirm that revision before a run is accepted.
+The exact physical campaign target is Intel Alder Lake-S GT1 / UHD Graphics
+770 at `00:02.0`, PCI vendor/device `8086:4680`, revision `0x0c`. The
+checked-in C++/IGC artifacts pin the same device and revision; the boot and
+runtime artifact-admission records must confirm both before a run is accepted.
 
 The performance work must preserve the fixed model, tokenizer, greedy decode
 schedule, packed-model hash, and exact `hi` response. A faster result is not
@@ -143,14 +143,17 @@ The immutable evidence copies are:
   `6efb19b691037f3c7a63fd0b36d9798fa2438836b586e0771ba12e78087f7b08`;
 - `bld/baremetal-logs/lumen-m2-validation3.log`, SHA-256
   `036f3b09bdd41c5453921c706e7799361976d5b572e4f2fe3232b4b8be1baba7`.
+- `bld/baremetal-logs/lumen-m2-runs4-6.log`, the non-rotating three-run
+  aggregate used by the strict replay below, SHA-256
+  `00ed16c766e89ddff525d76e77b970d8d15688eea7f2e9f9f110015d7ecf6439`.
 
-Strictly replay the final three-run archive with:
+Strictly replay the three-run aggregate with:
 
 ```sh
 python3 -B tools/lfm25_baremetal_report.py \
   --expect-runs 3 \
   --require-rcs-probe \
-  bld/baremetal-logs/lumen-m2-validation3.log
+  bld/baremetal-logs/lumen-m2-runs4-6.log
 ```
 
 ## Milestone 3 — GPU data path
@@ -192,10 +195,14 @@ Reset values therefore left that index undefined by TRUEOS. The M3 build now:
   order;
 - completes both tables while render/GT forcewake is retained and before GuC
   firmware, transport, and golden contexts are initialized;
-- requires PAT and MOCS readback acceptance before the integrated cache
-  contract is exposed as ready;
-- checks index 4 after initialization, after GuC bring-up, and after the first
-  retired LFM submission; and
+- tracks PAT readback readiness separately from the complete PPGTT
+  cache-policy contract;
+- checks the complete PAT and MOCS tables after initialization, after GuC
+  bring-up, at turn admission, after the first retired LFM submission, and at
+  turn completion;
+- revokes the combined contract on any mismatch before further PPGTT mapping
+  or GuC submission, while preserving PAT-only display GGTT service if only
+  MOCS is lost; and
 - samples actual GT ratios immediately before submission and after completion
   observation for the same first-and-power-of-two signature samples already
   used by the RCS phase probe.
@@ -205,19 +212,48 @@ control `0x00000005` with L3CC `0x0030`; the packed L3CC register containing
 entries 4 and 5 is therefore `0x00100030`. The implementation and ordering are
 pinned to Linux commit `fc02acf6ac0ccde0c805c2daa9148683cdd01ba8`:
 
-- [Gen12 MOCS table](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_mocs.c#L342-L368)
-  and [table-selection/readback rules](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_mocs.c#L454-L492);
+- [Gen12 MOCS entry definitions](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_mocs.c#L165-L178),
+  [ADL-S table selection](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_mocs.c#L342-L368),
+  and [table size/readback rules](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_mocs.c#L454-L492);
 - [global-before-L3CC programming order](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_mocs.c#L666-L684);
-- [MOCS register definitions](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_gt_regs.h#L298-L299);
-  and
-- [Gen12 frequency register definitions](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_gt_regs.h#L772-L816).
+- [global MOCS](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_gt_regs.h#L298-L299)
+  and [LNCFCMOCS register definitions](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_gt_regs.h#L958-L963);
+- [requested-frequency register](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_gt_regs.h#L772-L816),
+  [Gen12 actual-frequency register](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_gt_regs.h#L1553-L1557),
+  and [throttle-reason register and mask](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/i915_reg.h#L602-L611);
+- [actual-frequency/RC6 and ratio decoding](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_rps.c#L2081-L2199),
+  [capability decoding](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_rps.c#L1110-L1204),
+  and [ratio-to-MHz conversion](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_rps.c#L1657-L1688);
+- [MCHBAR RP0/RPe/RPn capability registers](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/include/drm/intel/mchbar_regs.h#L224-L236).
+
+PAT readiness and complete PPGTT cache-policy readiness are intentionally
+separate. The display GGTT path retains its PAT-readback gate and its
+address-plus-present system-memory PTE format. A new sparse PPGTT, however,
+fails closed unless both the PAT table and the complete global-MOCS/L3CC
+readback are accepted. This prevents a PPGTT leaf from selecting a known PAT
+entry while its surface-state MOCS index still inherits unknown firmware or
+reset policy. The gate sits under persistent direct-RCS/UI4 mappings, sparse
+GPUVM mappings, BLT PPGTT mappings, and the common GuC scheduler admission
+path, so an already-created context cannot bypass a later revocation.
 
 This experiment intentionally does not force RP0, add an RPS owner, or change
-SLPC. The earlier `gpu_hz=19200000` field is the render timestamp clock, not
-the GT execution frequency. The new `turn-gt-state` record reports actual,
-requested, and capability frequencies separately so Runs 7–9 can establish
-whether cache policy alone closes the transport gap and whether a later
-frequency-control experiment is justified.
+SLPC. The `gpu_hz=19200000` field in the command-stream phase record is the
+19.2 MHz render timestamp clock used to convert 36-bit RCS timestamps; it is
+not GT core frequency. The separate schema-1 `turn-gt-state` record has an
+`available` bit and samples `GEN12_RPSTAT1` with host CPU MMIO immediately
+before submission and in the exact matched-marker branch, before diagnostic
+logging or executor completion bookkeeping. It reports
+`start_active`, `end_active`, `start_zero`, `end_zero`, ratio sums, active
+average MHz, and per-signature buckets. Zero-ratio samples identify a boundary
+at which `RPSTAT1` reported no active ratio, which is consistent with RC6 but
+is not a direct RC-state measurement. These are submission-boundary samples,
+not command-stream timestamps and not measurements taken inside a walker.
+
+The record's final snapshot separately reports actual and requested
+ratio/MHz, RP0/RPe/RPn capability MHz, throttle reasons, and raw `RPSTAT1` and
+`RPNSWREQ` values. This lets Runs 7–9 establish whether cache policy alone
+closes the transport gap and whether a later frequency-control experiment is
+justified without conflating timestamp-clock and GT-core units.
 
 On the fresh Run 7 boot, require these cache-policy checkpoints:
 
@@ -229,13 +265,53 @@ On the fresh Run 7 boot, require these cache-policy checkpoints:
 The `before_global` and `before_l3cc_pair` fields are part of the result: reset
 or firmware values different from the expected values prove that M3 changed
 the effective policy; already-correct values mean this particular mutation
-cannot explain a speed change. Validate Runs 7–9 strictly with:
+cannot explain a speed change.
+
+The focused profile routes the early claim and cache checkpoints through
+GPGPU/Info while leaving the noisy general graphics area at Warn. It also
+persists boot-init and post-GuC outcomes and emits one schema-1
+`turn-admission` record after each turn. That record carries the exact BDF,
+vendor/device/revision, boot `before_*` and `after_*` values, first-retire
+status, turn-start and turn-end PAT/MOCS state, and GuC firmware/submission
+readiness. Therefore a TCP capture can validate the boot policy even if its
+connection began after the early boot lines or the finite log ring rotated
+them out.
+
+### Run 7 first physical check
+
+Use one freshly deployed M3 build and a physical reset, then verify this
+sequence before continuing to warm Runs 8 and 9:
+
+1. Boot admission names `00:02.0`, vendor/device `8086:4680`, and revision
+   `0x0c`.
+2. `intel/cache-policy` has `accepted=1`, `pat=1`, and `mocs=1`.
+3. The `boot-init` and `post-guc` MOCS checkpoints are accepted; boot-init
+   has the exact index-4 values above, and its `before_*` fields are preserved
+   as evidence.
+4. Run exactly `lum "hi"` as the first fresh turn after reboot.
+5. Require `checkpoint=first-lfm-retire accepted=1` with global
+   `0x00000005` and L3CC pair `0x00100030`.
+6. Require the canonical 10 prompt tokens, 9 reply tokens, EOT response and
+   response hash, zero projection failures, a valid schema-1
+   `turn-rcs-probe`, and a schema-1 `turn-gt-state` with `available=1` and at
+   least one boundary sample. Its active-plus-zero counts must equal
+   `samples` independently at both start and end. Also require schema-1
+   `turn-admission` with the exact target identity, all boot/post-GuC/
+   first-retire/turn-boundary cache gates accepted, index-4 values
+   `0x00000005` and `0x00100030`, and GuC firmware/submission readiness.
+7. Preserve the complete boot-through-turn log. If any admission, cache
+   checkpoint, parity, or telemetry gate fails, stop the set rather than
+   treating Runs 8 and 9 as comparable warm runs.
+
+Run 7 is diagnostic evidence, not by itself a performance conclusion. After
+all three physical runs, validate Runs 7–9 strictly with:
 
 ```sh
 python3 -B tools/lfm25_baremetal_report.py \
   --expect-runs 3 \
   --require-rcs-probe \
   --require-gt-state \
+  --require-m3-admission \
   bld/baremetal-logs/LatestOfThree.logs
 ```
 

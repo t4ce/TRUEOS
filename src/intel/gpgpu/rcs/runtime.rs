@@ -297,6 +297,9 @@ fn direct_rcs_map_state(dev: super::Dev, state: DirectRcsState) -> bool {
 }
 
 fn direct_rcs_init_ppgtt(state: DirectRcsState) -> bool {
+    if !super::gen12_integrated_cache_policy_ready() {
+        return false;
+    }
     let pml4_off = 0usize;
     let pdp_off = 4096usize;
     let pd_off = 8192usize;
@@ -442,6 +445,13 @@ fn direct_rcs_map_ppgtt_region(
     len: usize,
     entry_flags: u64,
 ) -> bool {
+    // This is the common leaf mapper for persistent and one-shot PPGTTs,
+    // including UI4's already-initialized context.  Keep the fail-closed
+    // policy below every caller so PAT0/WB mappings cannot bypass a revoked
+    // PAT+MOCS contract.
+    if !super::gen12_integrated_cache_policy_ready() {
+        return false;
+    }
     if len == 0 || !gpu.is_multiple_of(4096) || !phys.is_multiple_of(4096) {
         return false;
     }

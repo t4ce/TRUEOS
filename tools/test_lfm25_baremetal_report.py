@@ -110,7 +110,12 @@ def cpu_record(*, projection_calls: int = 1_226, turn: int = 1) -> str:
     )
 
 
-def rcs_probe_record(*, turn: int = 1, phase_delta: int = 0) -> str:
+def rcs_probe_record(
+    *,
+    turn: int = 1,
+    phase_delta: int = 0,
+    zero_samples: bool = False,
+) -> str:
     sample_counts = {
         "shortconv-in": (4, 3),
         "hidden": (3, 2),
@@ -120,6 +125,11 @@ def rcs_probe_record(*, turn: int = 1, phase_delta: int = 0) -> str:
         "vocabulary": (1, 1),
         "unknown": (0, 0),
     }
+    if zero_samples:
+        sample_counts = {
+            label: (0, 0)
+            for label in sample_counts
+        }
     aggregate_samples = 0
     aggregate_valid = 0
     aggregate_phases = [0] * 6
@@ -170,7 +180,7 @@ def rcs_probe_record(*, turn: int = 1, phase_delta: int = 0) -> str:
     )
 
 
-def gt_state_record(*, turn: int = 1) -> str:
+def gt_state_record(*, turn: int = 1, zero_samples: bool = False) -> str:
     bucket_values = {
         "shortconv-in": (4, 3, 4, 99, 144),
         "hidden": (3, 3, 2, 90, 64),
@@ -180,6 +190,11 @@ def gt_state_record(*, turn: int = 1) -> str:
         "vocabulary": (1, 1, 1, 32, 37),
         "unknown": (0, 0, 0, 0, 0),
     }
+    if zero_samples:
+        bucket_values = {
+            label: (0, 0, 0, 0, 0)
+            for label in bucket_values
+        }
     samples = sum(values[0] for values in bucket_values.values())
     start_active = sum(values[1] for values in bucket_values.values())
     end_active = sum(values[2] for values in bucket_values.values())
@@ -214,6 +229,31 @@ def gt_state_record(*, turn: int = 1) -> str:
         "observation=cpu-mmio-pre-submit+post-observe "
         "register=gen12-rpstat1 "
         f"bucket_schema={GT_STATE_BUCKET_SCHEMA} buckets={buckets}"
+    )
+
+
+def admission_record(*, turn: int = 1) -> str:
+    return (
+        "[global] [info] lfm25: turn-admission "
+        f"stage=done scope=turn turn={turn} schema=1 available=1 "
+        "bdf=00:02.0 vendor=0x8086 device=0x4680 revision=0x0C "
+        "boot_seen=1 boot_forcewake=1 boot_pat=1 boot_mocs=1 "
+        "boot_before_global=0x00000000 "
+        "boot_before_l3cc_pair=0x00000000 "
+        "boot_after_global=0x00000005 "
+        "boot_after_l3cc_pair=0x00100030 "
+        "post_guc_seen=1 post_guc_cache=1 "
+        "first_retire_seen=1 first_retire_cache=1 "
+        "start_pat_available=1 start_pat=1 "
+        "start_mocs_available=1 start_mocs=1 start_cache=1 "
+        "end_pat_available=1 end_pat=1 "
+        "end_mocs_available=1 end_mocs=1 end_cache=1 "
+        "end_global=0x00000005 end_l3cc_pair=0x00100030 "
+        "guc_boot=1 guc_firmware=1 guc_submission=1 "
+        "checkpoints="
+        "boot-init+post-guc+turn-start+first-lfm-retire+turn-end "
+        "expected_target=8086:4680:0C "
+        "expected_global=0x00000005 expected_l3cc_pair=0x00100030"
     )
 
 
@@ -610,6 +650,26 @@ class Lfm25BaremetalReportTests(unittest.TestCase):
                 10,
             )
 
+    def test_strict_rcs_probe_rejects_zero_samples_and_valid(self) -> None:
+        capture = parse_log_text(
+            canonical_hi_log()
+            + rcs_probe_record(zero_samples=True)
+            + "\n"
+        ).turns[0]
+        default = validate_turn(capture)
+        self.assertTrue(default.passed, default.issues)
+
+        strict = validate_turn(capture, require_rcs_probe=True)
+        self.assertFalse(strict.passed)
+        self.assertIn(
+            "turn-rcs-probe samples=0, expected positive",
+            strict.issues,
+        )
+        self.assertIn(
+            "turn-rcs-probe valid=0, expected positive",
+            strict.issues,
+        )
+
     def test_parses_binds_and_reports_schema_one_gt_state(self) -> None:
         text = (
             canonical_hi_log()
@@ -673,6 +733,110 @@ class Lfm25BaremetalReportTests(unittest.TestCase):
             self.assertEqual(gt_state["rpstat1_raw"], 0x00011800)
             self.assertEqual(gt_state["buckets"][5]["signature"], "vocabulary")
             self.assertEqual(gt_state["buckets"][5]["end_ratio_sum"], 37)
+
+    def test_strict_gt_state_rejects_zero_samples(self) -> None:
+        capture = parse_log_text(
+            canonical_hi_log()
+            + gt_state_record(zero_samples=True)
+            + "\n"
+        ).turns[0]
+        default = validate_turn(capture)
+        self.assertTrue(default.passed, default.issues)
+
+        strict = validate_turn(capture, require_gt_state=True)
+        self.assertFalse(strict.passed)
+        self.assertIn(
+            "turn-gt-state samples=0, expected positive",
+            strict.issues,
+        )
+
+    def test_parses_binds_validates_and_reports_m3_admission(self) -> None:
+        text = canonical_hi_log() + admission_record() + "\n"
+        capture = parse_log_text(text, "admission.log").turns[0]
+        self.assertIsNotNone(capture.admission)
+        self.assertEqual(capture.admission.fields["turn"], "1")
+        self.assertEqual(capture.admission.fields["bdf"], "00:02.0")
+        result = validate_turn(capture, require_m3_admission=True)
+        self.assertTrue(result.passed, result.issues)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "admission.log"
+            path.write_text(text, encoding="utf-8")
+            report = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--require-m3-admission",
+                    str(path),
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(
+                report.returncode,
+                0,
+                report.stdout + report.stderr,
+            )
+            self.assertIn("admission line=", report.stdout)
+            self.assertIn("bdf=00:02.0", report.stdout)
+            self.assertIn("end_global=0x5", report.stdout)
+
+            json_report = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--json",
+                    "--require-m3-admission",
+                    str(path),
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(
+                json_report.returncode,
+                0,
+                json_report.stdout + json_report.stderr,
+            )
+            document = json.loads(json_report.stdout)
+            admission = document["runs"][0]["admission"]
+            self.assertEqual(admission["schema"], 1)
+            self.assertEqual(admission["bdf"], "00:02.0")
+            self.assertEqual(admission["device"], 0x4680)
+            self.assertEqual(admission["boot_after_global"], 0x5)
+            self.assertEqual(admission["end_l3cc_pair"], 0x00100030)
+            self.assertEqual(
+                admission["checkpoints"],
+                "boot-init+post-guc+turn-start+first-lfm-retire+turn-end",
+            )
+
+    def test_admission_turn_binding_and_duplicates_are_rejected(self) -> None:
+        wrong = parse_log_text(
+            canonical_hi_log() + admission_record(turn=2) + "\n"
+        ).turns[0]
+        self.assertIsNone(wrong.admission)
+        self.assertTrue(
+            any(
+                "admission turn does not match" in issue
+                for issue in wrong.parse_issues
+            )
+        )
+
+        duplicate = parse_log_text(
+            canonical_hi_log()
+            + admission_record()
+            + "\n"
+            + admission_record()
+            + "\n"
+        ).turns[0]
+        self.assertIsNotNone(duplicate.admission)
+        self.assertTrue(
+            any(
+                "duplicate admission record" in issue
+                for issue in duplicate.parse_issues
+            )
+        )
 
     def test_gt_state_rejects_contract_counts_ratios_caps_and_hex(self) -> None:
         gt_state = gt_state_record()
@@ -1187,6 +1351,117 @@ class Lfm25BaremetalReportTests(unittest.TestCase):
             )
             self.assertEqual(help_report.returncode, 0, help_report.stderr)
             self.assertIn("--require-gt-state", help_report.stdout)
+
+    def test_cli_can_require_valid_m3_admission(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            missing = root / "missing.log"
+            missing.write_text(canonical_hi_log(), encoding="utf-8")
+            valid = root / "valid.log"
+            valid.write_text(
+                canonical_hi_log()
+                + rcs_probe_record()
+                + "\n"
+                + gt_state_record()
+                + "\n"
+                + admission_record()
+                + "\n",
+                encoding="utf-8",
+            )
+            invalid = root / "invalid.log"
+            invalid_admission = admission_record()
+            invalid_admission = invalid_admission.replace(
+                "device=0x4680",
+                "device=0x1234",
+            )
+            invalid_admission = invalid_admission.replace(
+                "end_global=0x00000005",
+                "end_global=0x00000004",
+            )
+            invalid_admission = invalid_admission.replace(
+                "post_guc_cache=1",
+                "post_guc_cache=0",
+            )
+            invalid.write_text(
+                canonical_hi_log() + invalid_admission + "\n",
+                encoding="utf-8",
+            )
+
+            required_missing = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--require-m3-admission",
+                    "--expect-runs",
+                    "1",
+                    str(missing),
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(required_missing.returncode, 1)
+            self.assertIn(
+                "missing turn-admission record",
+                required_missing.stdout,
+            )
+
+            required_invalid = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--require-m3-admission",
+                    "--expect-runs",
+                    "1",
+                    str(invalid),
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(required_invalid.returncode, 1)
+            self.assertIn(
+                "M3 admission device=0x1234, expected 0x4680",
+                required_invalid.stdout,
+            )
+            self.assertIn(
+                "M3 admission end_global=0x4, expected 0x5",
+                required_invalid.stdout,
+            )
+            self.assertIn(
+                "M3 admission post_guc_cache=0, expected 1",
+                required_invalid.stdout,
+            )
+
+            required_valid = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--require-rcs-probe",
+                    "--require-gt-state",
+                    "--require-m3-admission",
+                    "--expect-runs",
+                    "1",
+                    str(valid),
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(
+                required_valid.returncode,
+                0,
+                required_valid.stdout + required_valid.stderr,
+            )
+
+            help_report = subprocess.run(
+                [sys.executable, str(SCRIPT), "--help"],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(help_report.returncode, 0, help_report.stderr)
+            self.assertIn("--require-m3-admission", help_report.stdout)
 
     def test_cli_failed_completed_turn_is_nonzero(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

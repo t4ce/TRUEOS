@@ -67,6 +67,55 @@ GEN12_CAGF_SHIFT = 11
 GEN12_CAGF_MASK = 0x1FF
 GEN9_SW_REQ_UNSLICE_RATIO_SHIFT = 23
 GEN12_GT0_PERF_LIMIT_REASONS_MASK = 0x0DE3
+M3_ADMISSION_BDF = "00:02.0"
+M3_ADMISSION_VENDOR = 0x8086
+M3_ADMISSION_DEVICE = 0x4680
+M3_ADMISSION_REVISION = 0x0C
+M3_ADMISSION_GLOBAL = 0x00000005
+M3_ADMISSION_L3CC_PAIR = 0x00100030
+M3_ADMISSION_CHECKPOINTS = (
+    "boot-init+post-guc+turn-start+first-lfm-retire+turn-end"
+)
+M3_ADMISSION_EXPECTED_TARGET = "8086:4680:0C"
+M3_ADMISSION_BOOLEAN_FIELDS = (
+    "available",
+    "boot_seen",
+    "boot_forcewake",
+    "boot_pat",
+    "boot_mocs",
+    "post_guc_seen",
+    "post_guc_cache",
+    "first_retire_seen",
+    "first_retire_cache",
+    "start_pat_available",
+    "start_pat",
+    "start_mocs_available",
+    "start_mocs",
+    "start_cache",
+    "end_pat_available",
+    "end_pat",
+    "end_mocs_available",
+    "end_mocs",
+    "end_cache",
+    "guc_boot",
+    "guc_firmware",
+    "guc_submission",
+)
+M3_ADMISSION_INTEGER_FIELDS = (
+    "schema",
+    "vendor",
+    "device",
+    "revision",
+    *M3_ADMISSION_BOOLEAN_FIELDS,
+    "boot_before_global",
+    "boot_before_l3cc_pair",
+    "boot_after_global",
+    "boot_after_l3cc_pair",
+    "end_global",
+    "end_l3cc_pair",
+    "expected_global",
+    "expected_l3cc_pair",
+)
 
 FIELD_RE = re.compile(
     r"(?<!\S)([A-Za-z_][A-Za-z0-9_]*)=(\"(?:[^\"\\]|\\.)*\"|\S+)"
@@ -144,6 +193,7 @@ class TurnCapture:
     cpu: Record | None = None
     rcs_probe: Record | None = None
     gt_state: Record | None = None
+    admission: Record | None = None
     resident: ResidentContext | None = None
     pack: PackContext | None = None
     signatures: dict[str, Record] = field(default_factory=dict)
@@ -528,6 +578,38 @@ def parse_log_text(text: str, source: str = "<memory>") -> ParsedLog:
                 )
                 continue
             last_done.gt_state = Record(
+                source=source,
+                line_number=line_number,
+                fields=fields,
+            )
+            continue
+
+        if payload.startswith("lfm25: turn-admission "):
+            fields = parse_fields(payload)
+            if last_done is None:
+                continue
+            if fields.get("stage") != "done":
+                last_done.parse_issues.append(
+                    f"admission stage is not done at line {line_number}"
+                )
+                continue
+            declared = fields.get("turn")
+            done_turn = (
+                last_done.done.fields.get("turn")
+                if last_done.done is not None
+                else None
+            )
+            if declared != done_turn:
+                last_done.parse_issues.append(
+                    "admission turn does not match preceding done record"
+                )
+                continue
+            if last_done.admission is not None:
+                last_done.parse_issues.append(
+                    f"duplicate admission record at line {line_number}"
+                )
+                continue
+            last_done.admission = Record(
                 source=source,
                 line_number=line_number,
                 fields=fields,
@@ -1233,6 +1315,72 @@ def validate_gt_state(capture: TurnCapture, issues: list[str]) -> None:
                     )
 
 
+def validate_m3_admission(capture: TurnCapture, issues: list[str]) -> None:
+    record = capture.admission
+    if record is None:
+        return
+
+    schema = require_int(record, "schema", "M3 admission", issues)
+    if schema is not None and schema != 1:
+        issues.append(f"M3 admission schema={schema}, expected 1")
+    if record.fields.get("scope") != "turn":
+        issues.append(
+            "M3 admission "
+            f"scope={record.fields.get('scope')!r}, expected 'turn'"
+        )
+
+    for field_name, expected in (
+        ("bdf", M3_ADMISSION_BDF),
+        ("checkpoints", M3_ADMISSION_CHECKPOINTS),
+        ("expected_target", M3_ADMISSION_EXPECTED_TARGET),
+    ):
+        observed = record.fields.get(field_name)
+        if observed != expected:
+            issues.append(
+                f"M3 admission {field_name}={observed!r}, "
+                f"expected {expected!r}"
+            )
+
+    values = {
+        key: require_int(record, key, "M3 admission", issues)
+        for key in M3_ADMISSION_INTEGER_FIELDS
+        if key != "schema"
+    }
+    for field_name in M3_ADMISSION_BOOLEAN_FIELDS:
+        observed = values[field_name]
+        if observed is not None and observed != 1:
+            issues.append(
+                f"M3 admission {field_name}={observed}, expected 1"
+            )
+
+    for field_name in ("boot_before_global", "boot_before_l3cc_pair"):
+        observed = values[field_name]
+        if observed is not None and observed < 0:
+            issues.append(
+                f"M3 admission {field_name}={observed}, "
+                "expected non-negative"
+            )
+
+    exact_integer_fields = {
+        "vendor": M3_ADMISSION_VENDOR,
+        "device": M3_ADMISSION_DEVICE,
+        "revision": M3_ADMISSION_REVISION,
+        "boot_after_global": M3_ADMISSION_GLOBAL,
+        "boot_after_l3cc_pair": M3_ADMISSION_L3CC_PAIR,
+        "end_global": M3_ADMISSION_GLOBAL,
+        "end_l3cc_pair": M3_ADMISSION_L3CC_PAIR,
+        "expected_global": M3_ADMISSION_GLOBAL,
+        "expected_l3cc_pair": M3_ADMISSION_L3CC_PAIR,
+    }
+    for field_name, expected in exact_integer_fields.items():
+        observed = values[field_name]
+        if observed is not None and observed != expected:
+            issues.append(
+                f"M3 admission {field_name}={fmt_hex(observed)}, "
+                f"expected {fmt_hex(expected)}"
+            )
+
+
 def calculate_metrics(capture: TurnCapture) -> TurnMetrics:
     done = capture.done
     prefill = capture.prefill
@@ -1307,6 +1455,7 @@ def validate_turn(
     require_detail: bool = False,
     require_rcs_probe: bool = False,
     require_gt_state: bool = False,
+    require_m3_admission: bool = False,
 ) -> TurnResult:
     issues = list(capture.parse_issues)
     if capture.done is None:
@@ -1328,6 +1477,17 @@ def validate_turn(
         issues.append("missing turn-cpu detail record")
     if require_rcs_probe and capture.rcs_probe is None:
         issues.append("missing turn-rcs-probe record")
+    if require_rcs_probe and capture.rcs_probe is not None:
+        samples = parse_int(capture.rcs_probe, "samples")
+        valid = parse_int(capture.rcs_probe, "valid")
+        if samples is not None and samples <= 0:
+            issues.append(
+                f"turn-rcs-probe samples={samples}, expected positive"
+            )
+        if valid is not None and valid <= 0:
+            issues.append(
+                f"turn-rcs-probe valid={valid}, expected positive"
+            )
     if require_gt_state and capture.gt_state is None:
         issues.append("missing turn-gt-state record")
     if require_gt_state and capture.gt_state is not None:
@@ -1336,6 +1496,13 @@ def validate_turn(
             issues.append(
                 f"turn-gt-state available={available}, expected 1"
             )
+        samples = parse_int(capture.gt_state, "samples")
+        if samples is not None and samples <= 0:
+            issues.append(
+                f"turn-gt-state samples={samples}, expected positive"
+            )
+    if require_m3_admission and capture.admission is None:
+        issues.append("missing turn-admission record")
 
     records = [
         (stage, record)
@@ -1428,6 +1595,7 @@ def validate_turn(
     validate_signatures(capture, issues)
     validate_rcs_probe(capture, issues)
     validate_gt_state(capture, issues)
+    validate_m3_admission(capture, issues)
 
     if capture.cpu is not None:
         cpu_values = {
@@ -1487,6 +1655,7 @@ def validate_campaign_results(
     *,
     require_rcs_probe: bool = False,
     require_gt_state: bool = False,
+    require_m3_admission: bool = False,
 ) -> list[TurnResult]:
     """Select fresh sessions and apply the ``hi, hi, sky`` contract."""
 
@@ -1578,6 +1747,7 @@ def validate_campaign_results(
             require_detail=True,
             require_rcs_probe=require_rcs_probe,
             require_gt_state=require_gt_state,
+            require_m3_admission=require_m3_admission,
         )
         issues = list(detailed.issues)
         done = capture.done
@@ -1752,6 +1922,24 @@ def gt_state_dict(record: Record | None) -> dict[str, object] | None:
     }
 
 
+def m3_admission_dict(record: Record | None) -> dict[str, object] | None:
+    if record is None:
+        return None
+    return {
+        "line": record.line_number,
+        "stage": record.fields.get("stage"),
+        "scope": record.fields.get("scope"),
+        "turn": parse_int(record, "turn"),
+        "bdf": record.fields.get("bdf"),
+        **{
+            field_name: parse_int(record, field_name)
+            for field_name in M3_ADMISSION_INTEGER_FIELDS
+        },
+        "checkpoints": record.fields.get("checkpoints"),
+        "expected_target": record.fields.get("expected_target"),
+    }
+
+
 def result_dict(result: TurnResult, run_number: int) -> dict[str, object]:
     capture = result.capture
     done = capture.done
@@ -1802,6 +1990,7 @@ def result_dict(result: TurnResult, run_number: int) -> dict[str, object]:
         ),
         "rcs_probe": rcs_probe_dict(capture.rcs_probe),
         "gt_state": gt_state_dict(capture.gt_state),
+        "admission": m3_admission_dict(capture.admission),
         "expected": (
             {
                 "callbacks": expected.callbacks,
@@ -2027,6 +2216,47 @@ def print_text_report(
                         f"end_ratio_sum={bucket.end_ratio_sum}"
                     )
 
+        if capture.admission is not None:
+            admission = capture.admission
+            print(
+                "  admission "
+                f"line={admission.line_number} "
+                f"schema={admission.fields.get('schema', '-')} "
+                f"bdf={admission.fields.get('bdf', '-')} "
+                f"vendor={fmt_hex(parse_int(admission, 'vendor'))} "
+                f"device={fmt_hex(parse_int(admission, 'device'))} "
+                f"revision={fmt_hex(parse_int(admission, 'revision'))} "
+                f"checkpoints={admission.fields.get('checkpoints', '-')} "
+                f"expected_target="
+                f"{admission.fields.get('expected_target', '-')}"
+            )
+            print(
+                "  admission_evidence "
+                + " ".join(
+                    f"{field_name}="
+                    f"{fmt_int(parse_int(admission, field_name))}"
+                    for field_name in M3_ADMISSION_BOOLEAN_FIELDS
+                )
+            )
+            print(
+                "  admission_cache "
+                f"boot_before_global="
+                f"{fmt_hex(parse_int(admission, 'boot_before_global'))} "
+                f"boot_before_l3cc_pair="
+                f"{fmt_hex(parse_int(admission, 'boot_before_l3cc_pair'))} "
+                f"boot_after_global="
+                f"{fmt_hex(parse_int(admission, 'boot_after_global'))} "
+                f"boot_after_l3cc_pair="
+                f"{fmt_hex(parse_int(admission, 'boot_after_l3cc_pair'))} "
+                f"end_global={fmt_hex(parse_int(admission, 'end_global'))} "
+                f"end_l3cc_pair="
+                f"{fmt_hex(parse_int(admission, 'end_l3cc_pair'))} "
+                f"expected_global="
+                f"{fmt_hex(parse_int(admission, 'expected_global'))} "
+                f"expected_l3cc_pair="
+                f"{fmt_hex(parse_int(admission, 'expected_l3cc_pair'))}"
+            )
+
         if capture.signatures:
             print("  signatures")
             for label in SIGNATURE_LOGICAL_BYTES:
@@ -2120,6 +2350,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--require-m3-admission",
+        action="store_true",
+        help=(
+            "fail completed turns that do not include valid schema-1 "
+            "turn-admission evidence for the M3 target and cache policy"
+        ),
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="write a machine-readable report instead of the text report",
@@ -2149,6 +2387,7 @@ def run(argv: Sequence[str] | None = None) -> int:
             capture,
             require_rcs_probe=args.require_rcs_probe,
             require_gt_state=args.require_gt_state,
+            require_m3_admission=args.require_m3_admission,
         )
         for capture in captures
     ]
@@ -2157,6 +2396,7 @@ def run(argv: Sequence[str] | None = None) -> int:
             results,
             require_rcs_probe=args.require_rcs_probe,
             require_gt_state=args.require_gt_state,
+            require_m3_admission=args.require_m3_admission,
         )
     completed = sum(capture.has_done for capture in captures)
     campaign_selected = sum(

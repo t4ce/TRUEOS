@@ -110,6 +110,35 @@ pub struct TrueosUi4KeyboardState {
     pub key_down_bits: [u32; 8],
 }
 
+pub const UI4_INPUT_ROUTE_SELECTED_FOR_WINDOW: u32 = 1 << 0;
+pub const UI4_INPUT_ROUTE_APP_FOCUS: u32 = 1 << 1;
+pub const UI4_INPUT_ROUTE_VCURSOR: u32 = 1 << 2;
+pub const UI4_INPUT_ROUTE_KEYBOARD_PRESENT: u32 = 1 << 3;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4InputRouteState {
+    pub cursor_controller_id: u32,
+    pub cursor_slot_id: u32,
+    pub cursor_ep_target: u32,
+    pub cursor_hid_kind: u32,
+    pub combo_id: u32,
+    pub color_rgba: u32,
+    pub flags: u32,
+    pub keyboard_controller_id: u32,
+    pub keyboard_slot_id: u32,
+    pub keyboard_ep_target: u32,
+    pub keyboard_modifiers: u8,
+    pub keyboard_source_kind: u8,
+    pub virtual_keyboard: u8,
+    pub reserved0: u8,
+    pub keys: [u8; 6],
+    pub ascii: [u8; 6],
+    pub key_down_bits: [u32; 8],
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4InputRouteState>() == 88);
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4SkyboxRenderParams {
@@ -247,6 +276,11 @@ unsafe extern "C" {
         window_id: u32,
         out: *mut TrueosUi4KeyboardState,
     ) -> i32;
+    pub fn trueos_cabi_ui4_scene_input_routes(
+        window_id: u32,
+        out: *mut TrueosUi4InputRouteState,
+        out_cap: u32,
+    ) -> isize;
     pub fn trueos_cabi_ui4_solara_text_rows(
         window_id: u32,
         font_id: u32,

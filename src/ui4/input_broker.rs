@@ -158,6 +158,17 @@ pub(crate) struct Ui4SoftwareCursorVisual {
     pub(crate) maximize_preview: Option<Ui4VisualRect>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct Ui4WindowInputRoute {
+    pub(crate) source: Ui4CursorSource,
+    pub(crate) combo_id: u32,
+    pub(crate) color: crate::graphics::primitives::Rgba8,
+    pub(crate) vcursor: bool,
+    pub(crate) selected_for_window: bool,
+    pub(crate) app_focus: bool,
+    pub(crate) keyboard: Option<crate::usb2::hid::hut::HidKeyboardState>,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Ui4ProgrammaticSelectionError {
     NotFound,
@@ -1086,6 +1097,50 @@ impl InputBroker {
             })
     }
 
+    fn window_input_routes(
+        &self,
+        target: WindowTarget,
+    ) -> Vec<Ui4WindowInputRoute, MAX_CURSOR_ROUTES> {
+        if window_snapshot_for_target(target).is_none() {
+            return Vec::new();
+        }
+        let keyboards = crate::usb2::hid::hut::keyboards_snapshot();
+        let app_focus = super::selected_frame() == Some(target.cursor_frame_key());
+        self.cursors
+            .iter()
+            .filter_map(|route| {
+                let (combo_id, vcursor) = cursor_hut_metadata(route.source);
+                let keyboard = if combo_id != 0 {
+                    keyboards
+                        .iter()
+                        .find(|keyboard| keyboard.combo_id == combo_id)
+                        .cloned()
+                } else {
+                    route.keyboard_source.and_then(|source| {
+                        keyboards
+                            .iter()
+                            .find(|keyboard| {
+                                keyboard.controller_id == source.controller_id
+                                    && keyboard.slot_id == source.slot_id
+                                    && keyboard.ep_target == source.ep_target
+                            })
+                            .cloned()
+                    })
+                };
+                Some(Ui4WindowInputRoute {
+                    source: route.source,
+                    combo_id,
+                    color: route.color,
+                    vcursor,
+                    selected_for_window: super::selected_frame_for_source(route.source)
+                        == Some(target.cursor_frame_key()),
+                    app_focus,
+                    keyboard,
+                })
+            })
+            .collect()
+    }
+
     fn pump(&mut self) -> bool {
         let mut cursor_activity = false;
         let mut cursor_events = [crate::usb2::hid::TrueosHidCursorEvent::default(); CURSOR_BATCH];
@@ -1210,6 +1265,15 @@ pub(crate) fn focused_keyboard_state(
     INPUT_BROKER
         .lock()
         .focused_keyboard_state(WindowTarget { owner, window })
+}
+
+pub(crate) fn window_input_routes(
+    owner: WindowOwner,
+    window: WindowId,
+) -> Vec<Ui4WindowInputRoute, MAX_CURSOR_ROUTES> {
+    INPUT_BROKER
+        .lock()
+        .window_input_routes(WindowTarget { owner, window })
 }
 
 pub(crate) fn show_context_menu(

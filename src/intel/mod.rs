@@ -111,11 +111,16 @@ const GEN12_S_GT_PLATFORM_VDBOX_MASK: u8 = (1 << 0) | (1 << 2);
 static INIT: AtomicBool = AtomicBool::new(false);
 static GEN12_INTEGRATED_PAT_READY: AtomicBool = AtomicBool::new(false);
 static GEN12_INTEGRATED_CACHE_POLICY_READY: AtomicBool = AtomicBool::new(false);
+static GEN12_POST_GUC_CACHE_POLICY_SEEN: AtomicBool = AtomicBool::new(false);
+static GEN12_POST_GUC_CACHE_POLICY_ACCEPTED: AtomicBool = AtomicBool::new(false);
+static GEN12_FIRST_LFM_RETIRE_CACHE_POLICY_SEEN: AtomicBool = AtomicBool::new(false);
+static GEN12_FIRST_LFM_RETIRE_CACHE_POLICY_ACCEPTED: AtomicBool = AtomicBool::new(false);
 static DISPLAY_GGTT_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
 // The display device is selected exactly once during boot and never mutates.
 // Keep readers lock-free so interrupt-adjacent display/media paths cannot
 // deadlock an executor by re-entering a spin mutex held by the interrupted CPU.
 static CLAIMED_DEVICE: Once<Dev> = Once::new();
+static GEN12_CACHE_POLICY_BOOT_REPORT: Once<Gen12CachePolicyBootReport> = Once::new();
 
 #[derive(Copy, Clone)]
 pub(crate) struct Dev {
@@ -129,6 +134,55 @@ pub(crate) struct Dev {
 }
 unsafe impl Send for Dev {}
 unsafe impl Sync for Dev {}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+struct Gen12PatReadback {
+    available: bool,
+    accepted: bool,
+    observed: [u32; GEN12_PAT_INDEX_COUNT],
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+struct Gen12CachePolicyBootReport {
+    seen: bool,
+    forcewake_ready: bool,
+    pat_accepted: bool,
+    mocs: self::gt_state::Gen12MocsInitReport,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Gen12LumenAdmissionSnapshot {
+    pub(crate) available: bool,
+    pub(crate) bus: u8,
+    pub(crate) slot: u8,
+    pub(crate) function: u8,
+    pub(crate) vendor_id: u16,
+    pub(crate) device_id: u16,
+    pub(crate) revision_id: u8,
+    pub(crate) boot_seen: bool,
+    pub(crate) boot_forcewake_ready: bool,
+    pub(crate) boot_pat_accepted: bool,
+    pub(crate) boot_mocs_accepted: bool,
+    pub(crate) boot_before_global_index4: u32,
+    pub(crate) boot_before_l3cc_pair2: u32,
+    pub(crate) boot_after_global_index4: u32,
+    pub(crate) boot_after_l3cc_pair2: u32,
+    pub(crate) post_guc_seen: bool,
+    pub(crate) post_guc_accepted: bool,
+    pub(crate) first_lfm_retire_seen: bool,
+    pub(crate) first_lfm_retire_accepted: bool,
+    pub(crate) current_pat_available: bool,
+    pub(crate) current_pat_accepted: bool,
+    pub(crate) current_mocs_available: bool,
+    pub(crate) current_mocs_accepted: bool,
+    pub(crate) current_mocs_global_index4: u32,
+    pub(crate) current_mocs_l3cc_pair2: u32,
+    pub(crate) cache_policy_ready: bool,
+    pub(crate) guc_boot_enabled: bool,
+    pub(crate) guc_firmware_ready: bool,
+    pub(crate) guc_submission_ready: bool,
+}
+
 #[derive(Copy, Clone)]
 pub(crate) struct Buf {
     pub(crate) phys: u64,
@@ -151,7 +205,8 @@ pub fn init_once() {
         return;
     };
     let guc_boot = guc_boot_enabled_for_device(dev.device_id);
-    crate::log!(
+    crate::log_info!(
+        target: "gpgpu";
         "intel: claimed {:02X}:{:02X}.{} device=0x{:04X} name={} rev=0x{:02X} mmio_len=0x{:X} guc_boot={} media_decode={}\n",
         dev.bus,
         dev.slot,
@@ -174,8 +229,13 @@ pub fn init_once() {
     // PPGTT consumers need the complete cache contract: a valid PAT selector
     // is insufficient while the surface-state MOCS index is undefined.
     GEN12_INTEGRATED_PAT_READY.store(pat_ready, Ordering::Release);
-    GEN12_INTEGRATED_CACHE_POLICY_READY
-        .store(pat_ready && mocs_report.accepted, Ordering::Release);
+    GEN12_INTEGRATED_CACHE_POLICY_READY.store(pat_ready && mocs_report.accepted, Ordering::Release);
+    GEN12_CACHE_POLICY_BOOT_REPORT.call_once(|| Gen12CachePolicyBootReport {
+        seen: true,
+        forcewake_ready,
+        pat_accepted: pat_ready,
+        mocs: mocs_report,
+    });
     let media_fuse = media_vdbox_fuse_raw(dev);
     let media_platform_mask = media_platform_vdbox_mask(dev.device_id);
     let media_enabled_mask = media_vdbox_mask(dev);
@@ -187,7 +247,8 @@ pub fn init_once() {
         media_platform_mask,
         media_enabled_mask,
     );
-    crate::log!(
+    crate::log_info!(
+        target: "gpgpu";
         "intel/cache-policy: accepted={} platform={} device=0x{:04X} forcewake={} pat={} mocs={} ppgtt_default=pat0-wb ppgtt_scanout=pat3-uc ggtt=system-memory-address-only pat_table=[wb,wc,wt,uc,wb,wb,wb,wb] mocs_table=gen12-upstream-64 l3cc_table=gen12-upstream-32\n",
         (pat_ready && mocs_report.accepted) as u8,
         display_device_name(dev.device_id),
@@ -196,7 +257,8 @@ pub fn init_once() {
         pat_ready as u8,
         mocs_report.accepted as u8,
     );
-    crate::log!(
+    crate::log_info!(
+        target: "gpgpu";
         "intel/cache-policy-mocs: checkpoint=boot-init accepted={} device=0x{:04X} entries=global:64,l3cc:32 index=4 before_global=0x{:08X} before_l3cc_pair=0x{:08X} after_global=0x{:08X} after_l3cc_pair=0x{:08X} expected_global=0x00000005 expected_l3cc_pair=0x00100030 order=global-before-l3cc-before-guc\n",
         mocs_report.accepted as u8,
         dev.device_id,
@@ -339,24 +401,99 @@ pub(crate) fn gen12_gt_state_snapshot() -> Option<self::gt_state::Gen12GtStateSn
         .map(self::gt_state::read_gen12_gt_state)
 }
 
-fn log_gen12_mocs_checkpoint_for_dev(dev: Dev, checkpoint: &str) {
-    let readback = self::gt_state::read_gen12_mocs(dev);
-    crate::log!(
-        "intel/cache-policy-mocs: checkpoint={} accepted={} device=0x{:04X} available={} index=4 global=0x{:08X} l3cc_pair=0x{:08X} expected_global=0x00000005 expected_l3cc_pair=0x00100030\n",
+fn log_gen12_mocs_checkpoint_for_dev(dev: Dev, checkpoint: &str) -> bool {
+    let pat = read_gen12_integrated_pat(dev);
+    let mocs = self::gt_state::read_gen12_mocs(dev);
+    let accepted = pat.accepted && mocs.accepted;
+    if !pat.accepted {
+        GEN12_INTEGRATED_PAT_READY.store(false, Ordering::Release);
+    }
+    if !accepted {
+        GEN12_INTEGRATED_CACHE_POLICY_READY.store(false, Ordering::Release);
+    }
+    match checkpoint {
+        "post-guc" => {
+            GEN12_POST_GUC_CACHE_POLICY_ACCEPTED.store(accepted, Ordering::Release);
+            GEN12_POST_GUC_CACHE_POLICY_SEEN.store(true, Ordering::Release);
+        }
+        "first-lfm-retire" => {
+            GEN12_FIRST_LFM_RETIRE_CACHE_POLICY_ACCEPTED.store(accepted, Ordering::Release);
+            GEN12_FIRST_LFM_RETIRE_CACHE_POLICY_SEEN.store(true, Ordering::Release);
+        }
+        _ => {}
+    }
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/cache-policy-mocs: checkpoint={} accepted={} device=0x{:04X} pat_available={} pat_accepted={} mocs_available={} index=4 global=0x{:08X} l3cc_pair=0x{:08X} expected_pat=[3,1,2,0,3,3,3,3] expected_global=0x00000005 expected_l3cc_pair=0x00100030\n",
         checkpoint,
-        readback.accepted as u8,
+        accepted as u8,
         dev.device_id,
-        readback.available as u8,
-        readback.global_index4,
-        readback.l3cc_pair2,
+        pat.available as u8,
+        pat.accepted as u8,
+        mocs.available as u8,
+        mocs.global_index4,
+        mocs.l3cc_pair2,
     );
+    accepted
 }
 
-pub(crate) fn log_gen12_mocs_checkpoint(checkpoint: &str) {
+pub(crate) fn log_gen12_mocs_checkpoint(checkpoint: &str) -> bool {
     if let Some(dev) =
         claimed_device().filter(|dev| device_uses_gen12_integrated_pat(dev.device_id))
     {
-        log_gen12_mocs_checkpoint_for_dev(dev, checkpoint);
+        return log_gen12_mocs_checkpoint_for_dev(dev, checkpoint);
+    }
+    false
+}
+
+pub(crate) fn gen12_lumen_admission_snapshot() -> Gen12LumenAdmissionSnapshot {
+    let Some(dev) = claimed_device().filter(|dev| device_uses_gen12_integrated_pat(dev.device_id))
+    else {
+        return Gen12LumenAdmissionSnapshot::default();
+    };
+    let pat = read_gen12_integrated_pat(dev);
+    let mocs = self::gt_state::read_gen12_mocs(dev);
+    if !pat.accepted {
+        GEN12_INTEGRATED_PAT_READY.store(false, Ordering::Release);
+    }
+    if !pat.accepted || !mocs.accepted {
+        GEN12_INTEGRATED_CACHE_POLICY_READY.store(false, Ordering::Release);
+    }
+    let boot = GEN12_CACHE_POLICY_BOOT_REPORT
+        .get()
+        .copied()
+        .unwrap_or_default();
+    Gen12LumenAdmissionSnapshot {
+        available: true,
+        bus: dev.bus,
+        slot: dev.slot,
+        function: dev.function,
+        vendor_id: INTEL_VENDOR_ID,
+        device_id: dev.device_id,
+        revision_id: dev.revision_id,
+        boot_seen: boot.seen,
+        boot_forcewake_ready: boot.forcewake_ready,
+        boot_pat_accepted: boot.pat_accepted,
+        boot_mocs_accepted: boot.mocs.accepted,
+        boot_before_global_index4: boot.mocs.before_global_index4,
+        boot_before_l3cc_pair2: boot.mocs.before_l3cc_pair2,
+        boot_after_global_index4: boot.mocs.after.global_index4,
+        boot_after_l3cc_pair2: boot.mocs.after.l3cc_pair2,
+        post_guc_seen: GEN12_POST_GUC_CACHE_POLICY_SEEN.load(Ordering::Acquire),
+        post_guc_accepted: GEN12_POST_GUC_CACHE_POLICY_ACCEPTED.load(Ordering::Acquire),
+        first_lfm_retire_seen: GEN12_FIRST_LFM_RETIRE_CACHE_POLICY_SEEN.load(Ordering::Acquire),
+        first_lfm_retire_accepted: GEN12_FIRST_LFM_RETIRE_CACHE_POLICY_ACCEPTED
+            .load(Ordering::Acquire),
+        current_pat_available: pat.available,
+        current_pat_accepted: pat.accepted,
+        current_mocs_available: mocs.available,
+        current_mocs_accepted: mocs.accepted,
+        current_mocs_global_index4: mocs.global_index4,
+        current_mocs_l3cc_pair2: mocs.l3cc_pair2,
+        cache_policy_ready: gen12_integrated_cache_policy_ready(),
+        guc_boot_enabled: guc_boot_enabled_for_device(dev.device_id),
+        guc_firmware_ready: guc_ready(),
+        guc_submission_ready: guc_submission_ready(),
     }
 }
 
@@ -1151,9 +1288,35 @@ fn device_uses_gen12_integrated_pat(device_id: u16) -> bool {
     )
 }
 
+fn read_gen12_integrated_pat(dev: Dev) -> Gen12PatReadback {
+    if !device_uses_gen12_integrated_pat(dev.device_id) {
+        return Gen12PatReadback::default();
+    }
+    if GEN12_PAT_INDEX_BASE
+        .checked_add(GEN12_PAT_INDEX_COUNT * GEN12_PAT_INDEX_STRIDE)
+        .is_none_or(|end| end > dev.mmio_len)
+    {
+        return Gen12PatReadback::default();
+    }
+
+    let mut observed = [0u32; GEN12_PAT_INDEX_COUNT];
+    let mut accepted = true;
+    for (index, expected) in GEN12_INTEGRATED_PAT.iter().copied().enumerate() {
+        let value = mmio_read(dev, GEN12_PAT_INDEX_BASE + index * GEN12_PAT_INDEX_STRIDE);
+        observed[index] = value;
+        accepted &= value & GEN12_PAT_VALUE_MASK == expected;
+    }
+    Gen12PatReadback {
+        available: true,
+        accepted,
+        observed,
+    }
+}
+
 fn init_gen12_integrated_pat(dev: Dev) -> bool {
     if !device_uses_gen12_integrated_pat(dev.device_id) {
-        crate::log!(
+        crate::log_info!(
+            target: "gpgpu";
             "intel/cache-policy: accepted=0 device=0x{:04X} reason=unsupported-pat-register-layout\n",
             dev.device_id,
         );
@@ -1163,14 +1326,14 @@ fn init_gen12_integrated_pat(dev: Dev) -> bool {
         .checked_add(GEN12_PAT_INDEX_COUNT * GEN12_PAT_INDEX_STRIDE)
         .is_none_or(|end| end > dev.mmio_len)
     {
-        crate::log!(
+        crate::log_info!(
+            target: "gpgpu";
             "intel/cache-policy: accepted=0 device=0x{:04X} reason=pat-registers-outside-mmio mmio_len=0x{:X}\n",
             dev.device_id,
             dev.mmio_len,
         );
         return false;
     }
-
     for (index, value) in GEN12_INTEGRATED_PAT.iter().copied().enumerate() {
         mmio_write(dev, GEN12_PAT_INDEX_BASE + index * GEN12_PAT_INDEX_STRIDE, value);
     }
@@ -1179,28 +1342,23 @@ fn init_gen12_integrated_pat(dev: Dev) -> bool {
     // view of the old global policy.
     ggtt_invalidate(dev);
 
-    let mut observed = [0u32; GEN12_PAT_INDEX_COUNT];
-    let mut accepted = true;
-    for (index, expected) in GEN12_INTEGRATED_PAT.iter().copied().enumerate() {
-        let value = mmio_read(dev, GEN12_PAT_INDEX_BASE + index * GEN12_PAT_INDEX_STRIDE);
-        observed[index] = value;
-        accepted &= value & GEN12_PAT_VALUE_MASK == expected;
-    }
-    if !accepted {
-        crate::log!(
+    let readback = read_gen12_integrated_pat(dev);
+    if !readback.accepted {
+        crate::log_info!(
+            target: "gpgpu";
             "intel/cache-policy: accepted=0 device=0x{:04X} reason=pat-readback-mismatch observed=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
             dev.device_id,
-            observed[0],
-            observed[1],
-            observed[2],
-            observed[3],
-            observed[4],
-            observed[5],
-            observed[6],
-            observed[7],
+            readback.observed[0],
+            readback.observed[1],
+            readback.observed[2],
+            readback.observed[3],
+            readback.observed[4],
+            readback.observed[5],
+            readback.observed[6],
+            readback.observed[7],
         );
     }
-    accepted
+    readback.accepted
 }
 
 fn map_ggtt_pages(dev: Dev, phys: u64, len: usize, gpu: u64) -> bool {
@@ -1307,7 +1465,8 @@ pub(crate) fn gen12_integrated_pat_ready() -> bool {
 /// PPGTT consumers select both a PAT entry and a surface-state MOCS index.
 /// Keep them fail-closed until both hardware tables have exact readback.
 pub(crate) fn gen12_integrated_cache_policy_ready() -> bool {
-    GEN12_INTEGRATED_CACHE_POLICY_READY.load(Ordering::Acquire)
+    GEN12_INTEGRATED_PAT_READY.load(Ordering::Acquire)
+        && GEN12_INTEGRATED_CACHE_POLICY_READY.load(Ordering::Acquire)
 }
 
 /// Remove a display-owned GGTT range after its plane has been proven idle.

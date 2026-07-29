@@ -136,6 +136,7 @@ pub const OP_BP_KEYBOARD_CONTROL_IDLE: u32 = 0xF4; // arg0 handle -> bool/rc
 pub const OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE: u32 = 0xF5; // arg0 window -> first SURFLIVE event/empty/rc
 pub const OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS: u32 = 0xF6; // -> packed output width:height
 pub const OP_BP_USB_SNAPSHOT_READ: u32 = 0xF7; // arg0 offset, arg1 cap -> USB inventory snapshot
+pub const OP_BP_UI4_SCENE_INPUT_ROUTES: u32 = 0xF8; // arg0 window,arg1 cap -> selected combo/keyboard routes
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -370,6 +371,30 @@ fn write_record_response<T: Copy>(vm_id: u8, seq: u32, data: u64, value: &T) {
             (*page).payload.as_mut_ptr(),
             len,
         );
+    }
+    write_response(vm_id, seq, STATUS_OK, data, len as u32);
+}
+
+fn write_record_slice_response<T: Copy>(vm_id: u8, seq: u32, data: u64, values: &[T]) {
+    let Some(len) = core::mem::size_of::<T>().checked_mul(values.len()) else {
+        write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+        return;
+    };
+    if len > PAYLOAD_CAP {
+        write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+        return;
+    }
+    let Some(page) = host_ptr(vm_id) else {
+        return;
+    };
+    if len != 0 {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                values.as_ptr().cast::<u8>(),
+                (*page).payload.as_mut_ptr(),
+                len,
+            );
+        }
     }
     write_response(vm_id, seq, STATUS_OK, data, len as u32);
 }
@@ -1515,6 +1540,26 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_record_response(vm_id, seq, 0, &state);
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_INPUT_ROUTES => {
+            const MAX_ROUTES: usize = 32;
+            let cap = (arg1 as usize).min(MAX_ROUTES);
+            let mut routes =
+                [crate::ui4::blueprint_text::TrueosUi4InputRouteState::default(); MAX_ROUTES];
+            let count = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_input_routes(
+                    arg0 as u32,
+                    routes.as_mut_ptr(),
+                    cap as u32,
+                )
+            };
+            if count < 0 {
+                write_response(vm_id, seq, STATUS_OK, (count as i64) as u64, 0);
+            } else {
+                let copied = (count as usize).min(cap);
+                write_record_slice_response(vm_id, seq, count as u64, &routes[..copied]);
             }
             DispatchOutcome::Resume
         }

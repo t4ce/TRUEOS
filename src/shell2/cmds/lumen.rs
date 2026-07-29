@@ -58,6 +58,7 @@ struct LumTurnTelemetry {
     igpu_before: crate::intel::gpgpu::Lfm25Q8ProjectStats,
     igpu_signatures_before: crate::intel::gpgpu::Lfm25Q8SubmissionSignatureSnapshot,
     igpu_phase_probe_before: crate::intel::gpgpu::Lfm25Q8PhaseProbeSnapshot,
+    admission_start: crate::intel::Gen12LumenAdmissionSnapshot,
     cpu_before: crate::r::lfm25_hybrid_cpu_backend::Lfm25HybridCpuPerfStats,
 }
 
@@ -241,6 +242,46 @@ impl LumTurnTelemetry {
             state.rpstat1_raw,
             state.rpnswreq_raw,
             gt_buckets,
+        );
+        let admission_end = crate::intel::gen12_lumen_admission_snapshot();
+        crate::log_info!(
+            target: "global";
+            "lfm25: turn-admission stage=done scope=turn turn={} schema=1 available={} bdf={:02X}:{:02X}.{} vendor=0x{:04X} device=0x{:04X} revision=0x{:02X} boot_seen={} boot_forcewake={} boot_pat={} boot_mocs={} boot_before_global=0x{:08X} boot_before_l3cc_pair=0x{:08X} boot_after_global=0x{:08X} boot_after_l3cc_pair=0x{:08X} post_guc_seen={} post_guc_cache={} first_retire_seen={} first_retire_cache={} start_pat_available={} start_pat={} start_mocs_available={} start_mocs={} start_cache={} end_pat_available={} end_pat={} end_mocs_available={} end_mocs={} end_cache={} end_global=0x{:08X} end_l3cc_pair=0x{:08X} guc_boot={} guc_firmware={} guc_submission={} checkpoints=boot-init+post-guc+turn-start+first-lfm-retire+turn-end expected_target=8086:4680:0C expected_global=0x00000005 expected_l3cc_pair=0x00100030\n",
+            self.turn,
+            admission_end.available as u8,
+            admission_end.bus,
+            admission_end.slot,
+            admission_end.function,
+            admission_end.vendor_id,
+            admission_end.device_id,
+            admission_end.revision_id,
+            admission_end.boot_seen as u8,
+            admission_end.boot_forcewake_ready as u8,
+            admission_end.boot_pat_accepted as u8,
+            admission_end.boot_mocs_accepted as u8,
+            admission_end.boot_before_global_index4,
+            admission_end.boot_before_l3cc_pair2,
+            admission_end.boot_after_global_index4,
+            admission_end.boot_after_l3cc_pair2,
+            admission_end.post_guc_seen as u8,
+            admission_end.post_guc_accepted as u8,
+            admission_end.first_lfm_retire_seen as u8,
+            admission_end.first_lfm_retire_accepted as u8,
+            self.admission_start.current_pat_available as u8,
+            self.admission_start.current_pat_accepted as u8,
+            self.admission_start.current_mocs_available as u8,
+            self.admission_start.current_mocs_accepted as u8,
+            self.admission_start.cache_policy_ready as u8,
+            admission_end.current_pat_available as u8,
+            admission_end.current_pat_accepted as u8,
+            admission_end.current_mocs_available as u8,
+            admission_end.current_mocs_accepted as u8,
+            admission_end.cache_policy_ready as u8,
+            admission_end.current_mocs_global_index4,
+            admission_end.current_mocs_l3cc_pair2,
+            admission_end.guc_boot_enabled as u8,
+            admission_end.guc_firmware_ready as u8,
+            admission_end.guc_submission_ready as u8,
         );
     }
 
@@ -631,6 +672,11 @@ async fn run_lum_turn(
     prompt: String,
     conversation: &mut ConversationState,
 ) -> bool {
+    let admission_start = if crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED {
+        crate::intel::gen12_lumen_admission_snapshot()
+    } else {
+        crate::intel::Gen12LumenAdmissionSnapshot::default()
+    };
     let started = embassy_time_driver::now();
     let mut prompt_tokens = if conversation.turns == 0 {
         let encoded = if crate::spirit::LUMEN_AI_EMOTION_ENABLED {
@@ -726,6 +772,7 @@ async fn run_lum_turn(
         igpu_before: before,
         igpu_signatures_before,
         igpu_phase_probe_before,
+        admission_start,
         cpu_before,
     };
     telemetry.log_progress("start", callback_start, before, 0, "pending", 0, "-");

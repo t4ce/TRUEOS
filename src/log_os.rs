@@ -22,10 +22,12 @@ pub(crate) mod flags {
     ///
     /// Global/Info carries the cold model pack/seal and sampled RCS phase
     /// records. This switch also controls the phase sampler itself and admits
-    /// reasoning/service-lane lifecycle plus LFM2.5 C++/IGC runtime/submission
-    /// timing without enabling noisy render, storage, network, or per-dispatch
-    /// trace traffic that would perturb the measurements. Setting it to false
-    /// compile-folds Lumen submissions back to the legacy unsampled path.
+    /// targeted Alder Lake cache-policy/GuC admission evidence through GPGPU,
+    /// plus reasoning/service-lane lifecycle and LFM2.5 C++/IGC
+    /// runtime/submission timing, without enabling noisy render, storage,
+    /// network, or per-dispatch trace traffic that would perturb the
+    /// measurements. Setting it to false compile-folds Lumen submissions back
+    /// to the legacy unsampled path.
     pub(crate) const LUMEN_PERF_DIAG_PROFILE_ENABLED: bool = true;
 
     pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {

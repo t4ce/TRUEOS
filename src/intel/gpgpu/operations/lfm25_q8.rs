@@ -10,6 +10,7 @@ pub(crate) enum Lfm25Q8ProjectError {
     EncodeFailed,
     SubmitFailed,
     CompletionTimeout,
+    CachePolicyLost,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -851,6 +852,19 @@ pub(crate) fn lfm25_q8_project_batch(
     let elapsed_ms = direct_rcs_elapsed_ms_since(started);
     match result {
         Ok(timings) => {
+            // The first completed submission is the last checkpoint before
+            // its output becomes visible to the CPU/model.  If GuC or a
+            // context transition replaced either table, reject this result
+            // and permanently quarantine the LFM lane for this boot.
+            if LFM25_Q8_SUBMISSIONS.load(Ordering::Relaxed) == 0
+                && !super::log_gen12_mocs_checkpoint("first-lfm-retire")
+            {
+                quarantine_lfm25_rcs_context("cache-policy-readback-lost");
+                runtime.ready = false;
+                LFM25_Q8_READY.store(false, Ordering::Release);
+                LFM25_Q8_FAILURES.fetch_add(1, Ordering::Relaxed);
+                return Err(Lfm25Q8ProjectError::CachePolicyLost);
+            }
             for (params, output) in params.iter().zip(outputs.iter_mut()) {
                 let offset = (params.output_gpu - runtime.output.gpu) as usize;
                 let source = unsafe { runtime.output.virt.add(offset) };
@@ -897,9 +911,6 @@ pub(crate) fn lfm25_q8_project_batch(
                 LFM25_Q8_GPU_TIMESTAMP_HZ.store(timings.gpu_timestamp_hz, Ordering::Relaxed);
             }
             LFM25_Q8_LAST_ROWS.store(specs.last().unwrap().rows, Ordering::Relaxed);
-            if submissions == 1 {
-                super::log_gen12_mocs_checkpoint("first-lfm-retire");
-            }
             if submissions == 1 || submissions.is_power_of_two() {
                 crate::log_info!(
                     target: "gpgpu";
@@ -1164,13 +1175,16 @@ fn submit_lfm25_q8_project(
         return Err(Lfm25Q8ProjectError::EncodeFailed);
     }
     let encode_us = direct_rcs_elapsed_us_since(encode_started);
-    let gpu_host_pre_submit = if phase_probe_sampled {
-        direct_rcs_read_render_timestamp(dev)
+    let gt_start_ratio = if phase_probe_sampled {
+        super::gen12_actual_gt_ratio(dev)
     } else {
         0
     };
-    let gt_start_ratio = if phase_probe_sampled {
-        super::gen12_actual_gt_ratio(dev)
+    // Keep the diagnostic MMIO read outside the legacy RCS phase interval:
+    // queue_to_batch starts at the render timestamp captured immediately
+    // after this sample.
+    let gpu_host_pre_submit = if phase_probe_sampled {
+        direct_rcs_read_render_timestamp(dev)
     } else {
         0
     };
@@ -1180,7 +1194,7 @@ fn submit_lfm25_q8_project(
     }
     let admission_us = direct_rcs_elapsed_us_since(admission_started);
     let completion_started = direct_rcs_now_tick();
-    let (observed, gpu_host_observe) = if phase_probe_sampled {
+    let completion_observation = if phase_probe_sampled {
         lfm25_rcs_poll_result_slot_timeout_ms_with_timestamp(
             dev,
             state,
@@ -1189,24 +1203,25 @@ fn submit_lfm25_q8_project(
             LFM25_Q8_COMPLETION_TIMEOUT_MS,
         )
     } else {
-        (
-            lfm25_rcs_poll_result_slot_timeout_ms(
+        DirectRcsMarkerObservation {
+            observed: lfm25_rcs_poll_result_slot_timeout_ms(
                 state,
                 LFM25_Q8_POST_MARKER_SLOT,
                 LFM25_Q8_POST_MARKER,
                 LFM25_Q8_COMPLETION_TIMEOUT_MS,
             ),
-            0,
-        )
+            ..DirectRcsMarkerObservation::default()
+        }
     };
-    if observed != LFM25_Q8_POST_MARKER {
+    if completion_observation.observed != LFM25_Q8_POST_MARKER {
         return Err(Lfm25Q8ProjectError::CompletionTimeout);
     }
-    let gt_end_ratio = if phase_probe_sampled {
-        super::gen12_actual_gt_ratio(dev)
-    } else {
-        0
-    };
+    debug_assert!(
+        !phase_probe_sampled || completion_observation.matched_cpu_tick >= completion_started
+    );
+    // Keep the legacy completion interval identical for sampled and
+    // unsampled submissions. The marker-matched ratio read is diagnostic
+    // overhead inside this interval; it is never mistaken for GT execution.
     let completion_us = direct_rcs_elapsed_us_since(completion_started);
     let gpu_start = direct_rcs_read_result_qword(state, LFM25_Q8_GPU_START_TIMESTAMP_SLOT);
     let gpu_end = direct_rcs_read_result_qword(state, LFM25_Q8_GPU_END_TIMESTAMP_SLOT);
@@ -1219,10 +1234,10 @@ fn submit_lfm25_q8_project(
             gpu_host_pre_submit,
             gpu_start,
             gpu_end,
-            gpu_host_observe,
+            completion_observation.gpu_host_observe_timestamp,
             u64::from(gpu_timestamp_hz),
             gt_start_ratio,
-            gt_end_ratio,
+            completion_observation.actual_gt_ratio,
         )
     } else {
         Lfm25Q8PhaseProbeSample::default()

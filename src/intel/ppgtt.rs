@@ -147,6 +147,12 @@ pub(crate) fn build_sparse_ppgtt_for_ranges(ranges: &[PpgttRange]) -> Option<Spa
 }
 
 fn map_range(ppgtt: &mut SparsePpgtt, range: PpgttRange, pat_index: u8) -> Option<()> {
+    // Existing GPUVMs outlive individual jobs. Recheck the global PAT+MOCS
+    // contract below every public mapping path so a revoked policy cannot be
+    // bypassed by reusing a previously constructed PPGTT.
+    if !crate::intel::gen12_integrated_cache_policy_ready() {
+        return None;
+    }
     if range.bytes == 0 {
         return Some(());
     }
