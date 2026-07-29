@@ -19,6 +19,8 @@ use crate::r::net::{NetProfile, Queue};
 
 static CABI_NET_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 static HTTPS_FETCH_TLS_SEQ: AtomicU32 = AtomicU32::new(1);
+const HTTPS_EVENT_DRAIN_MAX: usize = 512;
+const HTTPS_IDLE_SLEEP_MS: u64 = 100;
 static CABI_NET_FETCH_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMap::new());
 static CABI_NET_FETCH_BYTES_RESULTS: Mutex<BTreeMap<u32, CabiNetFetchBytesResult>> =
     Mutex::new(BTreeMap::new());
@@ -368,7 +370,9 @@ async fn request_https_bytes(
     let mut response = Vec::new();
 
     loop {
-        for ev in events.drain(64) {
+        let drained = events.drain(HTTPS_EVENT_DRAIN_MAX);
+        let drained_any = !drained.is_empty();
+        for ev in drained {
             match ev {
                 TlsEvent::Opened { handle } => tls_handle = Some(handle),
                 TlsEvent::Connected { handle } => {
@@ -456,7 +460,11 @@ async fn request_https_bytes(
             }
             return Err(String::from("timeout"));
         }
-        Timer::after(EmbassyDuration::from_millis(10)).await;
+        if drained_any {
+            Timer::after(EmbassyDuration::from_micros(0)).await;
+        } else {
+            Timer::after(EmbassyDuration::from_millis(HTTPS_IDLE_SLEEP_MS)).await;
+        }
     }
 }
 

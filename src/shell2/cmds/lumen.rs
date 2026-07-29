@@ -3,6 +3,7 @@ extern crate alloc;
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt::Write as _;
 
 use embassy_executor::Spawner;
 use embassy_sync::signal::Signal;
@@ -56,6 +57,7 @@ struct LumTurnTelemetry {
     callback_start: u64,
     igpu_before: crate::intel::gpgpu::Lfm25Q8ProjectStats,
     igpu_signatures_before: crate::intel::gpgpu::Lfm25Q8SubmissionSignatureSnapshot,
+    igpu_phase_probe_before: crate::intel::gpgpu::Lfm25Q8PhaseProbeSnapshot,
     cpu_before: crate::r::lfm25_hybrid_cpu_backend::Lfm25HybridCpuPerfStats,
 }
 
@@ -146,6 +148,55 @@ impl LumTurnTelemetry {
                 stats.gpu_extrema_valid as u8,
             );
         }
+    }
+
+    fn log_rcs_phase_probe(
+        &self,
+        igpu_now: crate::intel::gpgpu::Lfm25Q8PhaseProbeSnapshot,
+        gpu_timestamp_hz: u32,
+    ) {
+        let delta = igpu_now.delta_since(self.igpu_phase_probe_before);
+        let mut aggregate = crate::intel::gpgpu::Lfm25Q8PhaseProbeStats::default();
+        let mut buckets = String::new();
+        for (index, signature) in crate::intel::gpgpu::LFM25_Q8_SUBMISSION_SIGNATURES
+            .into_iter()
+            .enumerate()
+        {
+            let stats = delta.bucket(signature);
+            aggregate.accumulate(stats);
+            if index != 0 {
+                buckets.push('|');
+            }
+            let _ = core::write!(
+                &mut buckets,
+                "{}:{}:{}:{}:{}:{}:{}:{}:{}",
+                signature.label(),
+                stats.samples,
+                stats.valid_samples,
+                stats.queue_to_batch_us,
+                stats.preamble_us,
+                stats.walkers_us,
+                stats.epilogue_us,
+                stats.release_to_observe_us,
+                stats.queue_to_observe_us,
+            );
+        }
+        crate::log_info!(
+            target: "global";
+            "lfm25: turn-rcs-probe stage=done scope=turn turn={} schema=1 samples={} valid={} invalid={} phase_us=queue_to_batch:{},preamble:{},walkers:{},epilogue:{},release_to_observe:{},queue_to_observe:{} gpu_hz={} policy=first+power-of-two-per-signature clock=rcs-36bit bucket_schema=signature:samples:valid:queue_to_batch_us:preamble_us:walkers_us:epilogue_us:release_to_observe_us:queue_to_observe_us buckets={}\n",
+            self.turn,
+            aggregate.samples,
+            aggregate.valid_samples,
+            aggregate.samples.saturating_sub(aggregate.valid_samples),
+            aggregate.queue_to_batch_us,
+            aggregate.preamble_us,
+            aggregate.walkers_us,
+            aggregate.epilogue_us,
+            aggregate.release_to_observe_us,
+            aggregate.queue_to_observe_us,
+            gpu_timestamp_hz,
+            buckets,
+        );
     }
 
     fn log_cpu_done(&self, cpu_now: crate::r::lfm25_hybrid_cpu_backend::Lfm25HybridCpuPerfStats) {
@@ -605,6 +656,11 @@ async fn run_lum_turn(
     let callback_start = module_state.callback_sequence;
     let mut last_callback = callback_start;
     let igpu_signatures_before = crate::intel::gpgpu::lfm25_q8_submission_signature_snapshot();
+    let igpu_phase_probe_before = if crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED {
+        crate::intel::gpgpu::lfm25_q8_phase_probe_snapshot()
+    } else {
+        crate::intel::gpgpu::Lfm25Q8PhaseProbeSnapshot::default()
+    };
     let cpu_before = crate::r::lfm25_hybrid_cpu_backend::lfm25_hybrid_cpu_perf_snapshot();
     let telemetry = LumTurnTelemetry {
         turn,
@@ -614,6 +670,7 @@ async fn run_lum_turn(
         callback_start,
         igpu_before: before,
         igpu_signatures_before,
+        igpu_phase_probe_before,
         cpu_before,
     };
     telemetry.log_progress("start", callback_start, before, 0, "pending", 0, "-");
@@ -841,6 +898,12 @@ async fn run_lum_turn(
     );
     telemetry
         .log_submission_signatures(crate::intel::gpgpu::lfm25_q8_submission_signature_snapshot());
+    if crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED {
+        telemetry.log_rcs_phase_probe(
+            crate::intel::gpgpu::lfm25_q8_phase_probe_snapshot(),
+            after.gpu_timestamp_hz,
+        );
+    }
     telemetry.log_cpu_done(crate::r::lfm25_hybrid_cpu_backend::lfm25_hybrid_cpu_perf_snapshot());
     reasoning.finish();
     let response_turn = conversation.turns.saturating_add(1);

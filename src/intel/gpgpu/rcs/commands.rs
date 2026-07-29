@@ -537,6 +537,23 @@ fn lfm25_rcs_poll_result_slot_timeout_ms(
     )
 }
 
+fn lfm25_rcs_poll_result_slot_timeout_ms_with_timestamp(
+    dev: super::Dev,
+    state: DirectRcsState,
+    slot: usize,
+    expected: u32,
+    timeout_ms: u64,
+) -> (u32, u64) {
+    direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
+        state,
+        slot,
+        expected,
+        timeout_ms,
+        DirectRcsLane::Lfm25,
+        Some(dev),
+    )
+}
+
 fn direct_rcs_poll_result_slot_timeout_ms_on_lane(
     state: DirectRcsState,
     slot: usize,
@@ -544,6 +561,20 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane(
     timeout_ms: u64,
     lane: DirectRcsLane,
 ) -> u32 {
+    direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
+        state, slot, expected, timeout_ms, lane, None,
+    )
+    .0
+}
+
+fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
+    state: DirectRcsState,
+    slot: usize,
+    expected: u32,
+    timeout_ms: u64,
+    lane: DirectRcsLane,
+    observe_timestamp_dev: Option<super::Dev>,
+) -> (u32, u64) {
     let started = direct_rcs_now_tick();
     let deadline = started.saturating_add(direct_rcs_ticks_from_ms(timeout_ms));
     let probe_logged = match lane {
@@ -567,14 +598,17 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane(
         );
     }
     let mut iterations = 0usize;
-    let observed = loop {
+    let (observed, gpu_host_observe_timestamp) = loop {
         iterations = iterations.saturating_add(1);
         let observed = direct_rcs_read_result_slot(state, slot);
         if observed == expected {
-            break observed;
+            let timestamp = observe_timestamp_dev
+                .map(direct_rcs_read_render_timestamp)
+                .unwrap_or(0);
+            break (observed, timestamp);
         }
         if direct_rcs_now_tick() >= deadline {
-            break observed;
+            break (observed, 0);
         }
         for _ in 0..DIRECT_RCS_TIMEOUT_POLL_PAUSE_ITERS {
             core::hint::spin_loop();
@@ -598,7 +632,7 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane(
         quarantine_direct_rcs_lane(lane, "completion-marker-timeout-reboot-required");
     }
     complete_direct_rcs_submission_on_lane(lane, completed);
-    observed
+    (observed, gpu_host_observe_timestamp)
 }
 
 fn direct_rcs_poll_result_slot_elapsed(

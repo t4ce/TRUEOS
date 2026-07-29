@@ -44,6 +44,20 @@ SIGNATURE_LOGICAL_BYTES = {
     "unknown": 0,
 }
 
+RCS_PROBE_PHASES = (
+    "queue_to_batch",
+    "preamble",
+    "walkers",
+    "epilogue",
+    "release_to_observe",
+    "queue_to_observe",
+)
+RCS_PROBE_COMPONENT_PHASES = RCS_PROBE_PHASES[:-1]
+RCS_PROBE_BUCKET_SCHEMA = (
+    "signature:samples:valid:queue_to_batch_us:preamble_us:walkers_us:"
+    "epilogue_us:release_to_observe_us:queue_to_observe_us"
+)
+
 FIELD_RE = re.compile(
     r"(?<!\S)([A-Za-z_][A-Za-z0-9_]*)=(\"(?:[^\"\\]|\\.)*\"|\S+)"
 )
@@ -78,8 +92,14 @@ CANONICAL_REPLIES = (
         sha256=(
             "79953eee1910284066aebc0a0147a1359c9b6ca6778ac98fc43f1eec05e5b3ce"
         ),
+        first_token=1_098,
     ),
 )
+
+CAMPAIGN_IDENTITY_SEQUENCE = ("hi", "hi", "sky")
+CANONICAL_REPLY_BY_NAME = {
+    reply.name: reply for reply in CANONICAL_REPLIES
+}
 
 
 @dataclass(frozen=True)
@@ -112,6 +132,7 @@ class TurnCapture:
     prefill: Record | None = None
     done: Record | None = None
     cpu: Record | None = None
+    rcs_probe: Record | None = None
     resident: ResidentContext | None = None
     pack: PackContext | None = None
     signatures: dict[str, Record] = field(default_factory=dict)
@@ -158,6 +179,14 @@ class ExpectedCounts:
 
 
 @dataclass(frozen=True)
+class RcsProbeBucket:
+    signature: str
+    samples: int
+    valid: int
+    phase_us: Mapping[str, int]
+
+
+@dataclass(frozen=True)
 class TurnMetrics:
     elapsed_ms: int | None
     prefill_ms: int | None
@@ -188,6 +217,9 @@ class TurnResult:
     canonical: CanonicalReply | None
     expected: ExpectedCounts | None
     metrics: TurnMetrics
+    campaign_disposition: str | None = None
+    campaign_ordinal: int | None = None
+    campaign_notes: tuple[str, ...] = ()
 
     @property
     def passed(self) -> bool:
@@ -238,6 +270,55 @@ def parse_phase_us(record: Record | None) -> dict[str, int] | None:
             return None
     required = {"encode", "admission", "completion", "gpu"}
     return phases if required <= phases.keys() else None
+
+
+def parse_rcs_probe_phase_us(record: Record | None) -> dict[str, int] | None:
+    if record is None:
+        return None
+    encoded = record.fields.get("phase_us")
+    if encoded is None:
+        return None
+    phases: dict[str, int] = {}
+    for item in encoded.split(","):
+        name, separator, value = item.partition(":")
+        if not separator or name in phases:
+            return None
+        try:
+            phases[name] = int(value, 0)
+        except ValueError:
+            return None
+    return phases if set(phases) == set(RCS_PROBE_PHASES) else None
+
+
+def parse_rcs_probe_buckets(
+    record: Record | None,
+) -> dict[str, RcsProbeBucket] | None:
+    if record is None:
+        return None
+    encoded = record.fields.get("buckets")
+    if encoded is None:
+        return None
+    buckets: dict[str, RcsProbeBucket] = {}
+    if not encoded:
+        return buckets
+    for item in encoded.split("|"):
+        parts = item.split(":")
+        if len(parts) != 9:
+            return None
+        signature = parts[0]
+        if not signature or signature in buckets:
+            return None
+        try:
+            values = [int(value, 0) for value in parts[1:]]
+        except ValueError:
+            return None
+        buckets[signature] = RcsProbeBucket(
+            signature=signature,
+            samples=values[0],
+            valid=values[1],
+            phase_us=dict(zip(RCS_PROBE_PHASES, values[2:])),
+        )
+    return buckets
 
 
 def parse_log_text(text: str, source: str = "<memory>") -> ParsedLog:
@@ -309,6 +390,38 @@ def parse_log_text(text: str, source: str = "<memory>") -> ParsedLog:
                 )
                 continue
             last_done.cpu = Record(
+                source=source,
+                line_number=line_number,
+                fields=fields,
+            )
+            continue
+
+        if payload.startswith("lfm25: turn-rcs-probe "):
+            fields = parse_fields(payload)
+            if last_done is None:
+                continue
+            if fields.get("stage") != "done":
+                last_done.parse_issues.append(
+                    f"RCS probe stage is not done at line {line_number}"
+                )
+                continue
+            declared = fields.get("turn")
+            done_turn = (
+                last_done.done.fields.get("turn")
+                if last_done.done is not None
+                else None
+            )
+            if declared != done_turn:
+                last_done.parse_issues.append(
+                    "RCS probe turn does not match preceding done record"
+                )
+                continue
+            if last_done.rcs_probe is not None:
+                last_done.parse_issues.append(
+                    f"duplicate RCS probe record at line {line_number}"
+                )
+                continue
+            last_done.rcs_probe = Record(
                 source=source,
                 line_number=line_number,
                 fields=fields,
@@ -582,6 +695,159 @@ def validate_signatures(capture: TurnCapture, issues: list[str]) -> None:
             )
 
 
+def validate_rcs_probe(capture: TurnCapture, issues: list[str]) -> None:
+    record = capture.rcs_probe
+    if record is None:
+        return
+
+    schema = require_int(record, "schema", "RCS probe", issues)
+    if schema is not None and schema != 1:
+        issues.append(f"RCS probe schema={schema}, expected 1")
+    if record.fields.get("scope") != "turn":
+        issues.append(
+            f"RCS probe scope={record.fields.get('scope')!r}, expected 'turn'"
+        )
+    if record.fields.get("bucket_schema") != RCS_PROBE_BUCKET_SCHEMA:
+        issues.append("RCS probe has missing or unexpected bucket_schema")
+    if record.fields.get("policy") != "first+power-of-two-per-signature":
+        issues.append(
+            f"RCS probe policy={record.fields.get('policy')!r}, expected "
+            "'first+power-of-two-per-signature'"
+        )
+    if record.fields.get("clock") != "rcs-36bit":
+        issues.append(
+            f"RCS probe clock={record.fields.get('clock')!r}, "
+            "expected 'rcs-36bit'"
+        )
+
+    aggregate: dict[str, int | None] = {
+        key: require_int(record, key, "RCS probe", issues)
+        for key in ("samples", "valid", "invalid", "gpu_hz")
+    }
+    for key, value in aggregate.items():
+        if value is not None and value < 0:
+            issues.append(f"RCS probe {key}={value}, expected non-negative")
+
+    samples = aggregate["samples"]
+    valid = aggregate["valid"]
+    invalid = aggregate["invalid"]
+    if samples is not None and valid is not None:
+        if valid > samples:
+            issues.append(
+                f"RCS probe valid={valid}, exceeds samples={samples}"
+            )
+        if (
+            invalid is not None
+            and valid <= samples
+            and invalid != samples - valid
+        ):
+            issues.append(
+                f"RCS probe invalid={invalid}, expected samples-valid="
+                f"{samples - valid}"
+            )
+    gpu_hz = aggregate["gpu_hz"]
+    if samples and gpu_hz is not None and gpu_hz <= 0:
+        issues.append(
+            f"RCS probe gpu_hz={gpu_hz}, expected a positive clock"
+        )
+
+    phases = parse_rcs_probe_phase_us(record)
+    if phases is None:
+        issues.append("RCS probe has missing or invalid phase_us")
+    else:
+        for name, value in phases.items():
+            if value < 0:
+                issues.append(
+                    f"RCS probe phase {name}={value}, expected non-negative"
+                )
+        if valid is not None and valid >= 0:
+            component_sum = sum(
+                phases[name] for name in RCS_PROBE_COMPONENT_PHASES
+            )
+            observed = phases["queue_to_observe"]
+            tolerance = 2 * valid
+            if abs(component_sum - observed) > tolerance:
+                issues.append(
+                    "RCS probe aggregate component sum="
+                    f"{component_sum}, queue_to_observe={observed}, "
+                    f"rounding tolerance={tolerance}"
+                )
+
+    buckets = parse_rcs_probe_buckets(record)
+    if buckets is None:
+        issues.append("RCS probe has missing or invalid buckets")
+        return
+
+    labels = set(buckets)
+    expected_labels = set(SIGNATURE_LOGICAL_BYTES)
+    missing = sorted(expected_labels - labels)
+    extra = sorted(labels - expected_labels)
+    if missing:
+        issues.append("RCS probe buckets missing: " + ",".join(missing))
+    if extra:
+        issues.append("unexpected RCS probe buckets: " + ",".join(extra))
+
+    bucket_samples = 0
+    bucket_valid = 0
+    bucket_phases = {name: 0 for name in RCS_PROBE_PHASES}
+    for label, bucket in buckets.items():
+        if bucket.samples < 0:
+            issues.append(
+                f"RCS probe bucket {label} samples={bucket.samples}, "
+                "expected non-negative"
+            )
+        if bucket.valid < 0:
+            issues.append(
+                f"RCS probe bucket {label} valid={bucket.valid}, "
+                "expected non-negative"
+            )
+        if bucket.valid > bucket.samples:
+            issues.append(
+                f"RCS probe bucket {label} valid={bucket.valid}, "
+                f"exceeds samples={bucket.samples}"
+            )
+        for name, value in bucket.phase_us.items():
+            if value < 0:
+                issues.append(
+                    f"RCS probe bucket {label} phase {name}={value}, "
+                    "expected non-negative"
+                )
+            bucket_phases[name] += value
+        if bucket.valid >= 0:
+            component_sum = sum(
+                bucket.phase_us[name] for name in RCS_PROBE_COMPONENT_PHASES
+            )
+            observed = bucket.phase_us["queue_to_observe"]
+            tolerance = 2 * bucket.valid
+            if abs(component_sum - observed) > tolerance:
+                issues.append(
+                    f"RCS probe bucket {label} component sum={component_sum}, "
+                    f"queue_to_observe={observed}, "
+                    f"rounding tolerance={tolerance}"
+                )
+        bucket_samples += bucket.samples
+        bucket_valid += bucket.valid
+
+    for name, observed in (
+        ("samples", bucket_samples),
+        ("valid", bucket_valid),
+    ):
+        expected = aggregate[name]
+        if expected is not None and observed != expected:
+            issues.append(
+                f"RCS probe bucket {name} sum={observed}, "
+                f"aggregate={expected}"
+            )
+    if phases is not None:
+        for name, observed in bucket_phases.items():
+            expected = phases[name]
+            if observed != expected:
+                issues.append(
+                    f"RCS probe bucket {name} sum={observed}, "
+                    f"aggregate={expected}"
+                )
+
+
 def calculate_metrics(capture: TurnCapture) -> TurnMetrics:
     done = capture.done
     prefill = capture.prefill
@@ -654,6 +920,7 @@ def validate_turn(
     capture: TurnCapture,
     *,
     require_detail: bool = False,
+    require_rcs_probe: bool = False,
 ) -> TurnResult:
     issues = list(capture.parse_issues)
     if capture.done is None:
@@ -673,6 +940,8 @@ def validate_turn(
         issues.append("missing turn-signature detail records")
     if require_detail and capture.cpu is None:
         issues.append("missing turn-cpu detail record")
+    if require_rcs_probe and capture.rcs_probe is None:
+        issues.append("missing turn-rcs-probe record")
 
     records = [
         (stage, record)
@@ -763,6 +1032,7 @@ def validate_turn(
                 )
 
     validate_signatures(capture, issues)
+    validate_rcs_probe(capture, issues)
 
     if capture.cpu is not None:
         cpu_values = {
@@ -817,6 +1087,148 @@ def validate_turn(
     )
 
 
+def validate_campaign_results(
+    results: Sequence[TurnResult],
+    *,
+    require_rcs_probe: bool = False,
+) -> list[TurnResult]:
+    """Select fresh sessions and apply the ``hi, hi, sky`` contract."""
+
+    validated: list[TurnResult] = []
+    resident_boundaries: set[tuple[str, int]] = set()
+    campaign_ordinal = 0
+
+    for result in results:
+        capture = result.capture
+        if not capture.has_done:
+            validated.append(result)
+            continue
+
+        exclusion_reasons: list[str] = []
+        for stage, record in (
+            ("start", capture.start),
+            ("prefill", capture.prefill),
+            ("done", capture.done),
+        ):
+            if record is None:
+                continue
+            turn = parse_int(record, "turn")
+            if turn != 1:
+                exclusion_reasons.append(
+                    f"{stage} turn={turn}, expected fresh turn=1"
+                )
+            context_before = parse_int(record, "context_before")
+            if context_before != 0:
+                exclusion_reasons.append(
+                    f"{stage} context_before={context_before}, expected 0"
+                )
+
+        if capture.resident is None:
+            exclusion_reasons.append(
+                "no associated resident boundary"
+            )
+        else:
+            resident_key = (
+                capture.resident.source,
+                capture.resident.line_number,
+            )
+            if resident_key in resident_boundaries:
+                exclusion_reasons.append(
+                    "resident boundary already belongs to an earlier turn: "
+                    f"{capture.resident.source}:{capture.resident.line_number}"
+                )
+            resident_boundaries.add(resident_key)
+            first_record = next(
+                (
+                    record
+                    for record in (capture.start, capture.prefill, capture.done)
+                    if record is not None
+                ),
+                None,
+            )
+            if (
+                first_record is not None
+                and (
+                    capture.resident.source != first_record.source
+                    or capture.resident.line_number >= first_record.line_number
+                )
+            ):
+                exclusion_reasons.append(
+                    "associated resident boundary is not before the turn"
+                )
+
+        if exclusion_reasons:
+            validated.append(
+                TurnResult(
+                    capture=capture,
+                    issues=result.issues,
+                    canonical=result.canonical,
+                    expected=result.expected,
+                    metrics=result.metrics,
+                    campaign_disposition="excluded",
+                    campaign_notes=tuple(dict.fromkeys(exclusion_reasons)),
+                )
+            )
+            continue
+
+        campaign_ordinal += 1
+        run_number = campaign_ordinal
+        identity_name = CAMPAIGN_IDENTITY_SEQUENCE[
+            (campaign_ordinal - 1) % len(CAMPAIGN_IDENTITY_SEQUENCE)
+        ]
+        identity = CANONICAL_REPLY_BY_NAME[identity_name]
+        detailed = validate_turn(
+            capture,
+            require_detail=True,
+            require_rcs_probe=require_rcs_probe,
+        )
+        issues = list(detailed.issues)
+        done = capture.done
+        if done is not None:
+            observed = {
+                "prompt_tokens": parse_int(done, "prompt_tokens"),
+                "reply_tokens": parse_int(done, "reply_tokens"),
+                "stop": done.fields.get("stop"),
+                "first_token": parse_int(done, "first_token"),
+                "raw_reply_sha256": done.fields.get("raw_reply_sha256"),
+            }
+            expected = {
+                "prompt_tokens": identity.prompt_tokens,
+                "reply_tokens": identity.reply_tokens,
+                "stop": identity.stop,
+                "first_token": identity.first_token,
+                "raw_reply_sha256": identity.sha256,
+            }
+            for field_name, expected_value in expected.items():
+                observed_value = observed[field_name]
+                matches = (
+                    isinstance(observed_value, str)
+                    and isinstance(expected_value, str)
+                    and observed_value.lower() == expected_value.lower()
+                ) or observed_value == expected_value
+                if not matches:
+                    issues.append(
+                        f"campaign run {run_number} identity={identity.name} "
+                        f"{field_name}={observed_value!r}, "
+                        f"expected {expected_value!r}"
+                    )
+
+        validated.append(
+            TurnResult(
+                capture=capture,
+                issues=tuple(dict.fromkeys(issues)),
+                canonical=detailed.canonical,
+                expected=detailed.expected,
+                metrics=detailed.metrics,
+                campaign_disposition="selected",
+                campaign_ordinal=campaign_ordinal,
+                campaign_notes=(f"expected identity={identity.name}",),
+            )
+        )
+
+    return validated
+
+
 def fmt_int(value: int | None) -> str:
     return "-" if value is None else str(value)
 
@@ -859,6 +1271,38 @@ def context_dict(capture: TurnCapture) -> dict[str, object] | None:
     return result
 
 
+def rcs_probe_dict(record: Record | None) -> dict[str, object] | None:
+    if record is None:
+        return None
+    buckets = parse_rcs_probe_buckets(record)
+    return {
+        "line": record.line_number,
+        "schema": parse_int(record, "schema"),
+        "samples": parse_int(record, "samples"),
+        "valid": parse_int(record, "valid"),
+        "invalid": parse_int(record, "invalid"),
+        "phase_us": parse_rcs_probe_phase_us(record),
+        "gpu_hz": parse_int(record, "gpu_hz"),
+        "policy": record.fields.get("policy"),
+        "clock": record.fields.get("clock"),
+        "bucket_schema": record.fields.get("bucket_schema"),
+        "buckets": (
+            [
+                {
+                    "signature": bucket.signature,
+                    "samples": bucket.samples,
+                    "valid": bucket.valid,
+                    "invalid": bucket.samples - bucket.valid,
+                    "phase_us": dict(bucket.phase_us),
+                }
+                for bucket in buckets.values()
+            ]
+            if buckets is not None
+            else None
+        ),
+    }
+
+
 def result_dict(result: TurnResult, run_number: int) -> dict[str, object]:
     capture = result.capture
     done = capture.done
@@ -885,12 +1329,19 @@ def result_dict(result: TurnResult, run_number: int) -> dict[str, object]:
         "turn": capture.declared_turn,
         "line_span": capture.line_span,
         "status": (
-            "pass"
+            "excluded"
+            if result.campaign_disposition == "excluded"
+            else "pass"
             if result.passed
             else "fail"
             if capture.has_done
             else "incomplete"
         ),
+        "campaign": {
+            "disposition": result.campaign_disposition,
+            "run": result.campaign_ordinal,
+            "notes": list(result.campaign_notes),
+        },
         "canonical": result.canonical.name if result.canonical else None,
         "issues": list(result.issues),
         "context": context_dict(capture),
@@ -900,6 +1351,7 @@ def result_dict(result: TurnResult, run_number: int) -> dict[str, object]:
             if capture.cpu is not None
             else None
         ),
+        "rcs_probe": rcs_probe_dict(capture.rcs_probe),
         "expected": (
             {
                 "callbacks": expected.callbacks,
@@ -920,6 +1372,8 @@ def result_dict(result: TurnResult, run_number: int) -> dict[str, object]:
 def print_text_report(
     parsed_logs: Sequence[ParsedLog],
     results: Sequence[TurnResult],
+    *,
+    campaign_mode: bool = False,
 ) -> None:
     print("LFM2.5 bare-metal inference report")
     for parsed in parsed_logs:
@@ -933,18 +1387,31 @@ def print_text_report(
     for run_number, result in enumerate(results, start=1):
         capture = result.capture
         status = (
-            "PASS"
+            "EXCLUDED"
+            if result.campaign_disposition == "excluded"
+            else "PASS"
             if result.passed
             else "FAIL"
             if capture.has_done
             else "INCOMPLETE"
         )
         canonical = result.canonical.name if result.canonical else "-"
+        campaign_run = (
+            str(result.campaign_ordinal)
+            if result.campaign_ordinal is not None
+            else "-"
+        )
+        campaign_label = (
+            f" campaign_run={campaign_run}" if campaign_mode else ""
+        )
         print(
             f"\nrun={run_number} status={status} source={capture.source} "
             f"source_run={capture.source_ordinal} turn={capture.declared_turn} "
             f"lines={capture.line_span} canonical={canonical}"
+            f"{campaign_label}"
         )
+        for note in result.campaign_notes:
+            print(f"  campaign: {result.campaign_disposition}: {note}")
 
         pack = capture.pack
         resident = capture.resident
@@ -1020,6 +1487,47 @@ def print_text_report(
         else:
             print("  cpu not captured")
 
+        if capture.rcs_probe is not None:
+            probe = capture.rcs_probe
+            phases = parse_rcs_probe_phase_us(probe)
+            print(
+                "  rcs_probe "
+                f"line={probe.line_number} "
+                f"schema={probe.fields.get('schema', '-')} "
+                f"samples={probe.fields.get('samples', '-')} "
+                f"valid={probe.fields.get('valid', '-')} "
+                f"invalid={probe.fields.get('invalid', '-')} "
+                f"queue_to_batch_us="
+                f"{fmt_int(phases.get('queue_to_batch') if phases else None)} "
+                f"preamble_us="
+                f"{fmt_int(phases.get('preamble') if phases else None)} "
+                f"walkers_us="
+                f"{fmt_int(phases.get('walkers') if phases else None)} "
+                f"epilogue_us="
+                f"{fmt_int(phases.get('epilogue') if phases else None)} "
+                f"release_to_observe_us="
+                f"{fmt_int(phases.get('release_to_observe') if phases else None)} "
+                f"queue_to_observe_us="
+                f"{fmt_int(phases.get('queue_to_observe') if phases else None)}"
+            )
+            buckets = parse_rcs_probe_buckets(probe)
+            if buckets is not None:
+                print("  rcs_probe_buckets")
+                for label in SIGNATURE_LOGICAL_BYTES:
+                    bucket = buckets.get(label)
+                    if bucket is None:
+                        continue
+                    print(
+                        f"    {label:<13} "
+                        f"samples={bucket.samples} valid={bucket.valid} "
+                        f"q2b_us={bucket.phase_us['queue_to_batch']} "
+                        f"pre_us={bucket.phase_us['preamble']} "
+                        f"walk_us={bucket.phase_us['walkers']} "
+                        f"epi_us={bucket.phase_us['epilogue']} "
+                        f"release_us={bucket.phase_us['release_to_observe']} "
+                        f"q2o_us={bucket.phase_us['queue_to_observe']}"
+                    )
+
         if capture.signatures:
             print("  signatures")
             for label in SIGNATURE_LOGICAL_BYTES:
@@ -1041,14 +1549,37 @@ def print_text_report(
             print(f"  issue: {issue}")
 
     completed = sum(result.capture.has_done for result in results)
-    passed = sum(result.passed for result in results)
-    failed = sum(
-        result.capture.has_done and not result.passed for result in results
-    )
+    if campaign_mode:
+        selected = sum(
+            result.campaign_disposition == "selected" for result in results
+        )
+        excluded = sum(
+            result.campaign_disposition == "excluded" for result in results
+        )
+        passed = sum(
+            result.campaign_disposition == "selected" and result.passed
+            for result in results
+        )
+        failed = sum(
+            result.campaign_disposition == "selected" and not result.passed
+            for result in results
+        )
+    else:
+        selected = 0
+        excluded = 0
+        passed = sum(result.passed for result in results)
+        failed = sum(
+            result.capture.has_done and not result.passed for result in results
+        )
     incomplete = len(results) - completed
+    campaign_suffix = (
+        f" campaign_selected={selected} excluded={excluded}"
+        if campaign_mode
+        else ""
+    )
     print(
         f"\nsummary runs={len(results)} completed={completed} passed={passed} "
-        f"failed={failed} incomplete={incomplete}"
+        f"failed={failed} incomplete={incomplete}{campaign_suffix}"
     )
 
 
@@ -1068,7 +1599,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--expect-runs",
         type=int,
         metavar="N",
-        help="fail unless exactly N completed turns are present (use 9 for the campaign)",
+        help=(
+            "require exactly N completed fresh-session campaign runs in the "
+            "repeating hi,hi,sky sequence (use 9 for the full campaign)"
+        ),
+    )
+    parser.add_argument(
+        "--require-rcs-probe",
+        action="store_true",
+        help=(
+            "fail completed turns that do not include schema-1 "
+            "turn-rcs-probe telemetry"
+        ),
     )
     parser.add_argument(
         "--json",
@@ -1096,19 +1638,39 @@ def run(argv: Sequence[str] | None = None) -> int:
         capture for parsed in parsed_logs for capture in parsed.turns
     ]
     results = [
-        validate_turn(capture, require_detail=args.expect_runs is not None)
+        validate_turn(
+            capture,
+            require_rcs_probe=args.require_rcs_probe,
+        )
         for capture in captures
     ]
+    if args.expect_runs is not None:
+        results = validate_campaign_results(
+            results,
+            require_rcs_probe=args.require_rcs_probe,
+        )
     completed = sum(capture.has_done for capture in captures)
-    failed_completed = any(
-        result.capture.has_done and not result.passed for result in results
+    campaign_selected = sum(
+        result.campaign_disposition == "selected" for result in results
     )
+    campaign_excluded = sum(
+        result.campaign_disposition == "excluded" for result in results
+    )
+    if args.expect_runs is not None:
+        failed_completed = any(
+            result.campaign_disposition == "selected" and not result.passed
+            for result in results
+        )
+    else:
+        failed_completed = any(
+            result.capture.has_done and not result.passed for result in results
+        )
     requirement_issues: list[str] = []
     if args.require_turns and completed == 0:
         requirement_issues.append("no completed turn telemetry found")
-    if args.expect_runs is not None and completed != args.expect_runs:
+    if args.expect_runs is not None and campaign_selected != args.expect_runs:
         requirement_issues.append(
-            f"completed runs={completed}, expected {args.expect_runs}"
+            f"campaign runs={campaign_selected}, expected {args.expect_runs}"
         )
 
     if args.json:
@@ -1122,6 +1684,11 @@ def run(argv: Sequence[str] | None = None) -> int:
                 "effective_logical_gbps": (
                     "fixed logical weight bytes per signature divided by "
                     "that signature's GPU timestamp total"
+                ),
+                "rcs_probe_phase_rounding": (
+                    "the sum of five independently rounded component totals "
+                    "may differ from queue_to_observe_us by at most 2 us per "
+                    "valid sample"
                 ),
             },
             "sources": [
@@ -1140,18 +1707,41 @@ def run(argv: Sequence[str] | None = None) -> int:
             "summary": {
                 "runs": len(results),
                 "completed": completed,
-                "passed": sum(result.passed for result in results),
+                "passed": sum(
+                    (
+                        result.campaign_disposition == "selected"
+                        if args.expect_runs is not None
+                        else result.capture.has_done
+                    )
+                    and result.passed
+                    for result in results
+                ),
                 "failed": sum(
-                    result.capture.has_done and not result.passed
+                    (
+                        result.campaign_disposition == "selected"
+                        if args.expect_runs is not None
+                        else result.capture.has_done
+                    )
+                    and not result.passed
                     for result in results
                 ),
                 "incomplete": len(results) - completed,
+                "campaign_selected": (
+                    campaign_selected if args.expect_runs is not None else None
+                ),
+                "campaign_excluded": (
+                    campaign_excluded if args.expect_runs is not None else None
+                ),
                 "requirement_issues": requirement_issues,
             },
         }
         print(json.dumps(document, indent=2, sort_keys=True))
     else:
-        print_text_report(parsed_logs, results)
+        print_text_report(
+            parsed_logs,
+            results,
+            campaign_mode=args.expect_runs is not None,
+        )
         for issue in requirement_issues:
             print(f"requirement failure: {issue}", file=sys.stderr)
 

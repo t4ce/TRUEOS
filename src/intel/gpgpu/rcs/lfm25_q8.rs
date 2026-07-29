@@ -1,3 +1,49 @@
+const LFM25_Q8_LEGACY_BASE_COMMAND_DWORDS: usize = 94;
+const LFM25_Q8_COMMAND_DWORDS_PER_PROJECTION: usize = 21;
+const LFM25_Q8_PHASE_PROBE_EXTRA_COMMAND_DWORDS: usize = 12;
+
+const fn lfm25_q8_result_end_slot(phase_probe_sampled: bool) -> usize {
+    if phase_probe_sampled {
+        LFM25_Q8_GPU_POST_RELEASE_TIMESTAMP_SLOT + 2
+    } else {
+        LFM25_Q8_GPU_END_TIMESTAMP_SLOT + 2
+    }
+}
+
+const fn lfm25_q8_encoded_command_dwords(
+    projection_count: usize,
+    phase_probe_sampled: bool,
+) -> usize {
+    LFM25_Q8_LEGACY_BASE_COMMAND_DWORDS
+        + projection_count * LFM25_Q8_COMMAND_DWORDS_PER_PROJECTION
+        + if phase_probe_sampled {
+            LFM25_Q8_PHASE_PROBE_EXTRA_COMMAND_DWORDS
+        } else {
+            0
+        }
+}
+
+const _: () = {
+    // Keep the unsampled batch byte-for-byte on the legacy command-length and
+    // result-flush extent. The sampled variant adds two six-DWord timestamps.
+    assert!(lfm25_q8_result_end_slot(false) == LFM25_Q8_GPU_END_TIMESTAMP_SLOT + 2);
+    assert!(
+        (lfm25_q8_result_end_slot(false) - LFM25_Q8_POST_MARKER_SLOT) * core::mem::size_of::<u32>()
+            == 24
+    );
+    assert!(
+        (lfm25_q8_result_end_slot(true) - LFM25_Q8_POST_MARKER_SLOT) * core::mem::size_of::<u32>()
+            == 40
+    );
+    assert!(lfm25_q8_encoded_command_dwords(LFM25_Q8_MAX_BATCH_PROJECTIONS, false) == 157);
+    assert!(lfm25_q8_encoded_command_dwords(LFM25_Q8_MAX_BATCH_PROJECTIONS, true) == 169);
+    assert!(
+        lfm25_q8_encoded_command_dwords(LFM25_Q8_MAX_BATCH_PROJECTIONS, true)
+            * core::mem::size_of::<u32>()
+            <= LFM25_Q8_COMMAND_BYTES
+    );
+};
+
 fn direct_rcs_write_lfm25_q8_payload(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
@@ -132,6 +178,7 @@ fn direct_rcs_encode_lfm25_q8_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
     params: &[Lfm25Q8ProjectParams],
+    phase_probe_sampled: bool,
 ) -> bool {
     if params.is_empty()
         || params.len() > LFM25_Q8_MAX_BATCH_PROJECTIONS
@@ -164,15 +211,16 @@ fn direct_rcs_encode_lfm25_q8_batch(
         );
 
         // The post-sync command writes a QWord at slot 44. Slot 45 is also the
-        // pre-marker. Clear that pair and both ordered timestamp samples.
+        // pre-marker. Clear that pair and the ordered timestamp samples. The
+        // two diagnostic samples are touched only for a selected submission.
+        let result_end_slot = lfm25_q8_result_end_slot(phase_probe_sampled);
         let marker = state
             .result_virt
             .add(LFM25_Q8_POST_MARKER_SLOT * core::mem::size_of::<u32>());
         core::ptr::write_bytes(
             marker,
             0,
-            (LFM25_Q8_GPU_END_TIMESTAMP_SLOT + 2 - LFM25_Q8_POST_MARKER_SLOT)
-                * core::mem::size_of::<u32>(),
+            (result_end_slot - LFM25_Q8_POST_MARKER_SLOT) * core::mem::size_of::<u32>(),
         );
     }
 
@@ -186,6 +234,17 @@ fn direct_rcs_encode_lfm25_q8_batch(
     let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
     let mut cursor = 0usize;
     let mut ok = true;
+    if phase_probe_sampled {
+        // First command in the sampled batch. Host pre-submit and this sample
+        // share the render timestamp domain, so their interval includes GuC
+        // queue/admission plus dispatch latency without a clock conversion.
+        ok &= direct_rcs_push_pipe_control_timestamp_at(
+            batch,
+            &mut cursor,
+            state.gpu_va.result,
+            LFM25_Q8_GPU_BATCH_ENTER_TIMESTAMP_SLOT,
+        );
+    }
     ok &= direct_rcs_push_pipe_control_full(
         batch,
         &mut cursor,
@@ -259,7 +318,17 @@ fn direct_rcs_encode_lfm25_q8_batch(
         state.gpu_va.result,
         LFM25_Q8_GPU_END_TIMESTAMP_SLOT,
     );
+    // Preserve the production release fence exactly. A sampled submission
+    // timestamps its retirement before the existing completion marker.
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    if phase_probe_sampled {
+        ok &= direct_rcs_push_pipe_control_timestamp_at(
+            batch,
+            &mut cursor,
+            state.gpu_va.result,
+            LFM25_Q8_GPU_POST_RELEASE_TIMESTAMP_SLOT,
+        );
+    }
     ok &= direct_rcs_push_pipe_control_post_sync_marker_at(
         batch,
         &mut cursor,
@@ -272,16 +341,17 @@ fn direct_rcs_encode_lfm25_q8_batch(
     if !ok {
         return false;
     }
+    debug_assert_eq!(cursor, lfm25_q8_encoded_command_dwords(params.len(), phase_probe_sampled));
 
     super::dma_flush(state.batch_virt, cursor * core::mem::size_of::<u32>());
     unsafe {
         super::dma_flush(state.batch_virt.add(LFM25_Q8_STATE_BASE_OFFSET_BYTES), state_bytes);
+        let result_end_slot = lfm25_q8_result_end_slot(phase_probe_sampled);
         super::dma_flush(
             state
                 .result_virt
                 .add(LFM25_Q8_POST_MARKER_SLOT * core::mem::size_of::<u32>()),
-            (LFM25_Q8_GPU_END_TIMESTAMP_SLOT + 2 - LFM25_Q8_POST_MARKER_SLOT)
-                * core::mem::size_of::<u32>(),
+            (result_end_slot - LFM25_Q8_POST_MARKER_SLOT) * core::mem::size_of::<u32>(),
         );
     }
     true

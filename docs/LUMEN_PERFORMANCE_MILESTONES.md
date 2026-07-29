@@ -27,6 +27,45 @@ Remove only directly proven redundant work while adding this instrumentation.
 Milestone 1 is complete when Runs 1–3 pass and the resulting log can be reduced
 to one comparison report without reading Matrix-only output.
 
+### Captured Milestone 1 baseline
+
+Runs 1–3 passed on source commit
+`57370d5f6ee23620f5a25a07f84037ee519ec7fa`. The report selects only fresh
+`turn=1 context_before=0` sessions; later conversational turns remain available
+as context-stress evidence but are excluded from the campaign count.
+
+| Run | Prompt | Asset state | Turn ms | Prefill ms | Reply ms | Reply tok/s | GPU us | Completion - GPU us | CPU attention us |
+| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | `hi` | cold open, 16,521 ms | 9,094 | 4,501 | 4,593 | 1.96 | 5,314,157 | 3,138,843 | 315,000 |
+| 2 | `hi` | cold open, 16,614 ms | 9,113 | 4,543 | 4,570 | 1.97 | 5,365,177 | 3,094,823 | 309,000 |
+| 3 | sky | boot-resident assets | 21,367 | 9,635 | 11,732 | 1.88 | 12,159,127 | 7,227,873 | 1,230,000 |
+
+The two canonical `hi` turns differ by only 19 ms, or 0.21% end to end.
+Across all three selected runs the completion interval outside the timestamped
+matrix walkers costs 2.52–2.60 ms per submission and about one third of turn
+wall time. Per-signature GPU throughput is likewise stable at only about
+0.80–1.53 logical GB/s, despite the same packed artifact reaching roughly
+46–49 GB/s through the Linux/NEO hardware oracle.
+
+The immutable evidence copies are:
+
+- `bld/baremetal-logs/lumen-m1-validation1.log`, SHA-256
+  `4f3ee1117ac720c8efbd5e1b62b295ac1c1601777e2c81f7f1da30e72f8a03b4`;
+- `bld/baremetal-logs/lumen-m1-validation2.log`, SHA-256
+  `112c6596520530dfeb39bec774690beb4d6266ed42c14d6388df3e6b0cff5867`;
+- `bld/baremetal-logs/lumen-m1-validation3.log`, SHA-256
+  `6047cd68abcbf07c6b99951be79941de06d1fff47117d5d1e97689cc04e64936`.
+
+The first and third archives are non-overlapping campaign inputs: the third is
+a rolling capture that already contains Run 2. Recheck the baseline with:
+
+```sh
+python3 -B tools/lfm25_baremetal_report.py \
+  --expect-runs 3 \
+  bld/baremetal-logs/lumen-m1-validation1.log \
+  bld/baremetal-logs/lumen-m1-validation3.log
+```
+
 ## Milestone 2 — host and submission hot path
 
 Use Runs 1–3 to remove the largest measured costs around the kernel:
@@ -44,6 +83,23 @@ Use Runs 1–3 to remove the largest measured costs around the kernel:
 Milestone 2 is complete when Runs 4–6 pass, exact outputs remain unchanged, and
 the report demonstrates an end-to-end gain over the corresponding Milestone 1
 runs.
+
+The Milestone 2 diagnostic build keeps
+`LUMEN_PERF_DIAG_PROFILE_ENABLED=true` in `src/log_os.rs`. That single profile
+switch admits the focused Service/GPGPU records and controls the RCS phase
+sampler itself; setting it to `false` compile-folds submissions back to the
+legacy unsampled command path. While enabled, the sampler instruments only the
+first and power-of-two successful submission for each fixed matrix signature
+and emits one schema-1 `turn-rcs-probe` record after every completed turn.
+
+Require that record when checking Runs 4–6:
+
+```sh
+python3 -B tools/lfm25_baremetal_report.py \
+  --expect-runs 3 \
+  --require-rcs-probe \
+  bld/baremetal-logs/LatestOfThree.logs
+```
 
 ## Milestone 3 — GPU data path
 

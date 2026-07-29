@@ -164,6 +164,80 @@ impl Lfm25Q8SubmissionSignatureSnapshot {
     }
 }
 
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Lfm25Q8PhaseProbeStats {
+    pub(crate) samples: u64,
+    pub(crate) valid_samples: u64,
+    pub(crate) queue_to_batch_us: u64,
+    pub(crate) preamble_us: u64,
+    pub(crate) walkers_us: u64,
+    pub(crate) epilogue_us: u64,
+    pub(crate) release_to_observe_us: u64,
+    pub(crate) queue_to_observe_us: u64,
+}
+
+impl Lfm25Q8PhaseProbeStats {
+    fn delta_since(self, before: Self) -> Self {
+        Self {
+            samples: self.samples.saturating_sub(before.samples),
+            valid_samples: self.valid_samples.saturating_sub(before.valid_samples),
+            queue_to_batch_us: self
+                .queue_to_batch_us
+                .saturating_sub(before.queue_to_batch_us),
+            preamble_us: self.preamble_us.saturating_sub(before.preamble_us),
+            walkers_us: self.walkers_us.saturating_sub(before.walkers_us),
+            epilogue_us: self.epilogue_us.saturating_sub(before.epilogue_us),
+            release_to_observe_us: self
+                .release_to_observe_us
+                .saturating_sub(before.release_to_observe_us),
+            queue_to_observe_us: self
+                .queue_to_observe_us
+                .saturating_sub(before.queue_to_observe_us),
+        }
+    }
+
+    pub(crate) fn accumulate(&mut self, other: Self) {
+        self.samples = self.samples.saturating_add(other.samples);
+        self.valid_samples = self.valid_samples.saturating_add(other.valid_samples);
+        self.queue_to_batch_us = self
+            .queue_to_batch_us
+            .saturating_add(other.queue_to_batch_us);
+        self.preamble_us = self.preamble_us.saturating_add(other.preamble_us);
+        self.walkers_us = self.walkers_us.saturating_add(other.walkers_us);
+        self.epilogue_us = self.epilogue_us.saturating_add(other.epilogue_us);
+        self.release_to_observe_us = self
+            .release_to_observe_us
+            .saturating_add(other.release_to_observe_us);
+        self.queue_to_observe_us = self
+            .queue_to_observe_us
+            .saturating_add(other.queue_to_observe_us);
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Lfm25Q8PhaseProbeSnapshot {
+    buckets: [Lfm25Q8PhaseProbeStats; LFM25_Q8_SUBMISSION_SIGNATURE_COUNT],
+}
+
+impl Lfm25Q8PhaseProbeSnapshot {
+    pub(crate) const fn bucket(
+        &self,
+        signature: Lfm25Q8SubmissionSignature,
+    ) -> Lfm25Q8PhaseProbeStats {
+        self.buckets[signature.index()]
+    }
+
+    pub(crate) fn delta_since(self, before: Self) -> Self {
+        let mut buckets = [Lfm25Q8PhaseProbeStats::default(); LFM25_Q8_SUBMISSION_SIGNATURE_COUNT];
+        let mut index = 0;
+        while index < LFM25_Q8_SUBMISSION_SIGNATURE_COUNT {
+            buckets[index] = self.buckets[index].delta_since(before.buckets[index]);
+            index += 1;
+        }
+        Self { buckets }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Lfm25Q8ProjectSpec {
     pub(crate) weight_offset: u32,
@@ -235,6 +309,18 @@ struct Lfm25Q8ProjectParams {
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+struct Lfm25Q8PhaseProbeSample {
+    sampled: bool,
+    valid: bool,
+    queue_to_batch_us: u64,
+    preamble_us: u64,
+    walkers_us: u64,
+    epilogue_us: u64,
+    release_to_observe_us: u64,
+    queue_to_observe_us: u64,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 struct Lfm25Q8SubmitTimings {
     encode_us: u64,
     admission_us: u64,
@@ -242,6 +328,7 @@ struct Lfm25Q8SubmitTimings {
     gpu_us: u64,
     gpu_timestamp_valid: bool,
     gpu_timestamp_hz: u32,
+    phase_probe: Lfm25Q8PhaseProbeSample,
 }
 
 struct Lfm25Q8SubmissionSignatureCounters {
@@ -257,6 +344,67 @@ struct Lfm25Q8SubmissionSignatureCounters {
     completion_max_us: AtomicU64,
     gpu_min_us: AtomicU64,
     gpu_max_us: AtomicU64,
+}
+
+struct Lfm25Q8PhaseProbeCounters {
+    samples: AtomicU64,
+    valid_samples: AtomicU64,
+    queue_to_batch_us: AtomicU64,
+    preamble_us: AtomicU64,
+    walkers_us: AtomicU64,
+    epilogue_us: AtomicU64,
+    release_to_observe_us: AtomicU64,
+    queue_to_observe_us: AtomicU64,
+}
+
+impl Lfm25Q8PhaseProbeCounters {
+    const fn new() -> Self {
+        Self {
+            samples: AtomicU64::new(0),
+            valid_samples: AtomicU64::new(0),
+            queue_to_batch_us: AtomicU64::new(0),
+            preamble_us: AtomicU64::new(0),
+            walkers_us: AtomicU64::new(0),
+            epilogue_us: AtomicU64::new(0),
+            release_to_observe_us: AtomicU64::new(0),
+            queue_to_observe_us: AtomicU64::new(0),
+        }
+    }
+
+    fn snapshot(&self) -> Lfm25Q8PhaseProbeStats {
+        Lfm25Q8PhaseProbeStats {
+            samples: self.samples.load(Ordering::Relaxed),
+            valid_samples: self.valid_samples.load(Ordering::Relaxed),
+            queue_to_batch_us: self.queue_to_batch_us.load(Ordering::Relaxed),
+            preamble_us: self.preamble_us.load(Ordering::Relaxed),
+            walkers_us: self.walkers_us.load(Ordering::Relaxed),
+            epilogue_us: self.epilogue_us.load(Ordering::Relaxed),
+            release_to_observe_us: self.release_to_observe_us.load(Ordering::Relaxed),
+            queue_to_observe_us: self.queue_to_observe_us.load(Ordering::Relaxed),
+        }
+    }
+
+    fn record(&self, sample: Lfm25Q8PhaseProbeSample) {
+        if !sample.sampled {
+            return;
+        }
+        if sample.valid {
+            self.queue_to_batch_us
+                .fetch_add(sample.queue_to_batch_us, Ordering::Relaxed);
+            self.preamble_us
+                .fetch_add(sample.preamble_us, Ordering::Relaxed);
+            self.walkers_us
+                .fetch_add(sample.walkers_us, Ordering::Relaxed);
+            self.epilogue_us
+                .fetch_add(sample.epilogue_us, Ordering::Relaxed);
+            self.release_to_observe_us
+                .fetch_add(sample.release_to_observe_us, Ordering::Relaxed);
+            self.queue_to_observe_us
+                .fetch_add(sample.queue_to_observe_us, Ordering::Relaxed);
+            self.valid_samples.fetch_add(1, Ordering::Relaxed);
+        }
+        self.samples.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 impl Lfm25Q8SubmissionSignatureCounters {
@@ -347,6 +495,9 @@ static LFM25_Q8_LAST_ROWS: AtomicU32 = AtomicU32::new(0);
 static LFM25_Q8_SUBMISSION_SIGNATURE_STATS: [Lfm25Q8SubmissionSignatureCounters;
     LFM25_Q8_SUBMISSION_SIGNATURE_COUNT] =
     [const { Lfm25Q8SubmissionSignatureCounters::new() }; LFM25_Q8_SUBMISSION_SIGNATURE_COUNT];
+static LFM25_Q8_PHASE_PROBE_STATS: [Lfm25Q8PhaseProbeCounters;
+    LFM25_Q8_SUBMISSION_SIGNATURE_COUNT] =
+    [const { Lfm25Q8PhaseProbeCounters::new() }; LFM25_Q8_SUBMISSION_SIGNATURE_COUNT];
 
 pub(crate) const LFM25_Q8_PROJECTIONS_PER_TOKEN: u64 = 93;
 pub(crate) const LFM25_Q8_SUBMISSIONS_PER_TOKEN: u64 = 65;
@@ -421,6 +572,16 @@ pub(crate) fn lfm25_q8_submission_signature_snapshot() -> Lfm25Q8SubmissionSigna
         index += 1;
     }
     Lfm25Q8SubmissionSignatureSnapshot { buckets }
+}
+
+pub(crate) fn lfm25_q8_phase_probe_snapshot() -> Lfm25Q8PhaseProbeSnapshot {
+    let mut buckets = [Lfm25Q8PhaseProbeStats::default(); LFM25_Q8_SUBMISSION_SIGNATURE_COUNT];
+    let mut index = 0;
+    while index < LFM25_Q8_SUBMISSION_SIGNATURE_COUNT {
+        buckets[index] = LFM25_Q8_PHASE_PROBE_STATS[index].snapshot();
+        index += 1;
+    }
+    Lfm25Q8PhaseProbeSnapshot { buckets }
 }
 
 pub(crate) fn bind_lfm25_q8_model(
@@ -622,8 +783,21 @@ pub(crate) fn lfm25_q8_project_batch(
             .ok_or(Lfm25Q8ProjectError::InvalidShape)?;
     }
 
+    let signature = lfm25_q8_submission_signature(specs);
+    // `_guard` serializes this ordinal read through the successful counter
+    // publication below, so two completed submissions cannot claim one sample
+    // ordinal. A rejected submission deliberately retries the same ordinal.
+    // Keep the profile gate in this hot path so disabling it compile-folds the
+    // complete sampler, including the ordinal load, back to the legacy path.
+    let phase_probe_ordinal = if crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED {
+        lfm25_q8_phase_probe_next_ordinal(signature)
+    } else {
+        0
+    };
+    let phase_probe_sampled = crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED
+        && lfm25_q8_phase_probe_sample_ordinal(phase_probe_ordinal);
     let started = direct_rcs_now_tick();
-    let result = submit_lfm25_q8_project(runtime, model, &params);
+    let result = submit_lfm25_q8_project(runtime, model, &params, phase_probe_sampled);
     let elapsed_ms = direct_rcs_elapsed_ms_since(started);
     match result {
         Ok(timings) => {
@@ -640,12 +814,23 @@ pub(crate) fn lfm25_q8_project_batch(
                 }
             }
             let projection_count = specs.len() as u64;
-            let signature = lfm25_q8_submission_signature(specs);
+            debug_assert!(
+                !crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED
+                    || phase_probe_ordinal
+                        == LFM25_Q8_SUBMISSION_SIGNATURE_STATS[signature.index()]
+                            .submissions
+                            .load(Ordering::Relaxed)
+                            .checked_add(1)
+                            .expect("LFM submission ordinal overflow")
+            );
             LFM25_Q8_SUBMISSION_SIGNATURE_STATS[signature.index()].record(
                 projection_count,
                 elapsed_ms,
                 timings,
             );
+            if crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED {
+                LFM25_Q8_PHASE_PROBE_STATS[signature.index()].record(timings.phase_probe);
+            }
             let launches = LFM25_Q8_LAUNCHES
                 .fetch_add(projection_count, Ordering::Relaxed)
                 .saturating_add(projection_count);
@@ -726,6 +911,32 @@ const fn lfm25_q8_submission_signature(specs: &[Lfm25Q8ProjectSpec]) -> Lfm25Q8S
     }
 }
 
+const fn lfm25_q8_phase_probe_sample_ordinal(ordinal: u64) -> bool {
+    ordinal != 0 && ordinal.is_power_of_two()
+}
+
+const fn lfm25_q8_phase_probe_samples_through(submissions: u64) -> u64 {
+    let mut samples = 0u64;
+    let mut ordinal = 1u64;
+    while ordinal <= submissions {
+        samples += 1;
+        if ordinal > u64::MAX / 2 {
+            break;
+        }
+        ordinal *= 2;
+    }
+    samples
+}
+
+fn lfm25_q8_phase_probe_next_ordinal(signature: Lfm25Q8SubmissionSignature) -> u64 {
+    let completed = LFM25_Q8_SUBMISSION_SIGNATURE_STATS[signature.index()]
+        .submissions
+        .load(Ordering::Relaxed);
+    completed
+        .checked_add(1)
+        .expect("LFM submission ordinal overflow")
+}
+
 const _: () = {
     const fn spec(columns: u32, rows: u32) -> Lfm25Q8ProjectSpec {
         Lfm25Q8ProjectSpec {
@@ -765,6 +976,25 @@ const _: () = {
             as u8
             == Lfm25Q8SubmissionSignature::Unknown as u8
     );
+    assert!(!lfm25_q8_phase_probe_sample_ordinal(0));
+    assert!(lfm25_q8_phase_probe_sample_ordinal(1));
+    assert!(lfm25_q8_phase_probe_sample_ordinal(2));
+    assert!(!lfm25_q8_phase_probe_sample_ordinal(3));
+    assert!(lfm25_q8_phase_probe_sample_ordinal(4));
+    assert!(!lfm25_q8_phase_probe_sample_ordinal(5));
+    assert!(lfm25_q8_phase_probe_samples_through(0) == 0);
+    assert!(lfm25_q8_phase_probe_samples_through(10) == 4);
+    assert!(lfm25_q8_phase_probe_samples_through(114) == 7);
+    assert!(lfm25_q8_phase_probe_samples_through(190) == 8);
+    assert!(lfm25_q8_phase_probe_samples_through(304) == 9);
+    let canonical_hi_samples = lfm25_q8_phase_probe_samples_through(190)
+        + lfm25_q8_phase_probe_samples_through(304)
+        + lfm25_q8_phase_probe_samples_through(114)
+        + lfm25_q8_phase_probe_samples_through(304)
+        + lfm25_q8_phase_probe_samples_through(304)
+        + lfm25_q8_phase_probe_samples_through(10);
+    assert!(canonical_hi_samples == 46);
+    assert!(canonical_hi_samples * 100 < 1_226 * 4);
 };
 
 fn ensure_lfm25_q8_runtime(slot: &mut Option<Lfm25Q8Runtime>) -> Result<(), Lfm25Q8ProjectError> {
@@ -864,6 +1094,7 @@ fn submit_lfm25_q8_project(
     runtime: &Lfm25Q8Runtime,
     model: Lfm25Q8ModelMapping,
     params: &[Lfm25Q8ProjectParams],
+    phase_probe_sampled: bool,
 ) -> Result<Lfm25Q8SubmitTimings, Lfm25Q8ProjectError> {
     let dev = super::claimed_device().ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
     let upload = upload_lfm25_q8_layout_kernel(model.layout)
@@ -876,22 +1107,40 @@ fn submit_lfm25_q8_project(
     if !direct_rcs_forcewake(dev) {
         return Err(Lfm25Q8ProjectError::RuntimeUnavailable);
     }
-    if !direct_rcs_encode_lfm25_q8_batch(state, upload, params) {
+    if !direct_rcs_encode_lfm25_q8_batch(state, upload, params, phase_probe_sampled) {
         return Err(Lfm25Q8ProjectError::EncodeFailed);
     }
     let encode_us = direct_rcs_elapsed_us_since(encode_started);
+    let gpu_host_pre_submit = if phase_probe_sampled {
+        direct_rcs_read_render_timestamp(dev)
+    } else {
+        0
+    };
     let admission_started = direct_rcs_now_tick();
     if !lfm25_rcs_submit_batch(dev, state) {
         return Err(Lfm25Q8ProjectError::SubmitFailed);
     }
     let admission_us = direct_rcs_elapsed_us_since(admission_started);
     let completion_started = direct_rcs_now_tick();
-    let observed = lfm25_rcs_poll_result_slot_timeout_ms(
-        state,
-        LFM25_Q8_POST_MARKER_SLOT,
-        LFM25_Q8_POST_MARKER,
-        LFM25_Q8_COMPLETION_TIMEOUT_MS,
-    );
+    let (observed, gpu_host_observe) = if phase_probe_sampled {
+        lfm25_rcs_poll_result_slot_timeout_ms_with_timestamp(
+            dev,
+            state,
+            LFM25_Q8_POST_MARKER_SLOT,
+            LFM25_Q8_POST_MARKER,
+            LFM25_Q8_COMPLETION_TIMEOUT_MS,
+        )
+    } else {
+        (
+            lfm25_rcs_poll_result_slot_timeout_ms(
+                state,
+                LFM25_Q8_POST_MARKER_SLOT,
+                LFM25_Q8_POST_MARKER,
+                LFM25_Q8_COMPLETION_TIMEOUT_MS,
+            ),
+            0,
+        )
+    };
     if observed != LFM25_Q8_POST_MARKER {
         return Err(Lfm25Q8ProjectError::CompletionTimeout);
     }
@@ -901,6 +1150,24 @@ fn submit_lfm25_q8_project(
     let gpu_timestamp_hz = direct_rcs_timestamp_frequency_hz(dev);
     let gpu_interval =
         direct_rcs_timestamp_interval_us(gpu_start, gpu_end, u64::from(gpu_timestamp_hz));
+    let phase_probe = if phase_probe_sampled {
+        lfm25_q8_read_phase_probe_sample(
+            state,
+            gpu_host_pre_submit,
+            gpu_start,
+            gpu_end,
+            gpu_host_observe,
+            u64::from(gpu_timestamp_hz),
+        )
+    } else {
+        Lfm25Q8PhaseProbeSample::default()
+    };
+    debug_assert!(
+        !phase_probe.valid
+            || gpu_interval
+                .map(|(_, gpu_us)| gpu_us == phase_probe.walkers_us)
+                .unwrap_or(false)
+    );
     Ok(Lfm25Q8SubmitTimings {
         encode_us,
         admission_us,
@@ -908,7 +1175,60 @@ fn submit_lfm25_q8_project(
         gpu_us: gpu_interval.map(|(_, us)| us).unwrap_or(0),
         gpu_timestamp_valid: gpu_interval.is_some(),
         gpu_timestamp_hz,
+        phase_probe,
     })
+}
+
+fn lfm25_q8_read_phase_probe_sample(
+    state: DirectRcsState,
+    gpu_host_pre_submit: u64,
+    gpu_start: u64,
+    gpu_end: u64,
+    gpu_host_observe: u64,
+    gpu_timestamp_hz: u64,
+) -> Lfm25Q8PhaseProbeSample {
+    let mut sample = Lfm25Q8PhaseProbeSample {
+        sampled: true,
+        ..Lfm25Q8PhaseProbeSample::default()
+    };
+    let gpu_batch_enter =
+        direct_rcs_read_result_qword(state, LFM25_Q8_GPU_BATCH_ENTER_TIMESTAMP_SLOT);
+    let gpu_post_release =
+        direct_rcs_read_result_qword(state, LFM25_Q8_GPU_POST_RELEASE_TIMESTAMP_SLOT);
+    let queue_to_batch =
+        direct_rcs_timestamp_interval_us(gpu_host_pre_submit, gpu_batch_enter, gpu_timestamp_hz);
+    let preamble = direct_rcs_timestamp_interval_us(gpu_batch_enter, gpu_start, gpu_timestamp_hz);
+    let walkers = direct_rcs_timestamp_interval_us(gpu_start, gpu_end, gpu_timestamp_hz);
+    let epilogue = direct_rcs_timestamp_interval_us(gpu_end, gpu_post_release, gpu_timestamp_hz);
+    let release_to_observe =
+        direct_rcs_timestamp_interval_us(gpu_post_release, gpu_host_observe, gpu_timestamp_hz);
+    let queue_to_observe =
+        direct_rcs_timestamp_interval_us(gpu_host_pre_submit, gpu_host_observe, gpu_timestamp_hz);
+    if let (
+        Some((queue_to_batch_ticks, queue_to_batch_us)),
+        Some((preamble_ticks, preamble_us)),
+        Some((walkers_ticks, walkers_us)),
+        Some((epilogue_ticks, epilogue_us)),
+        Some((release_to_observe_ticks, release_to_observe_us)),
+        Some((queue_to_observe_ticks, queue_to_observe_us)),
+    ) = (queue_to_batch, preamble, walkers, epilogue, release_to_observe, queue_to_observe)
+    {
+        let phase_sum_ticks = queue_to_batch_ticks
+            .saturating_add(preamble_ticks)
+            .saturating_add(walkers_ticks)
+            .saturating_add(epilogue_ticks)
+            .saturating_add(release_to_observe_ticks);
+        if phase_sum_ticks == queue_to_observe_ticks {
+            sample.valid = true;
+            sample.queue_to_batch_us = queue_to_batch_us;
+            sample.preamble_us = preamble_us;
+            sample.walkers_us = walkers_us;
+            sample.epilogue_us = epilogue_us;
+            sample.release_to_observe_us = release_to_observe_us;
+            sample.queue_to_observe_us = queue_to_observe_us;
+        }
+    }
+    sample
 }
 
 const fn lfm25_q8_admitted_shape(columns: u32, rows: u32) -> bool {

@@ -16,6 +16,8 @@ use crate::r::net::{Queue, VNet};
 
 static TLS_APP_QUEUES: Mutex<Vec<TlsAppQueues>> = Mutex::new(Vec::new());
 static TLS_CONN_SEQ: AtomicU32 = AtomicU32::new(1);
+const TLS_PRODUCTIVE_PASS_SOFT_CAP: usize = 32;
+const TLS_SERVICE_SLEEP_MS: u64 = 8;
 
 #[derive(Clone, Copy, Debug)]
 pub struct TlsTimeouts {
@@ -263,15 +265,19 @@ fn maybe_notify_connected(conn: &mut TlsConn) {
     }
 }
 
-fn tls_socket_tick_once() {
+fn tls_socket_tick_once() -> bool {
     if !crate::r::readiness::is_set(crate::r::readiness::NET_ANY_CONFIGURED) {
-        return;
+        return false;
     }
 
+    let mut did_work = false;
     let mut conns = TLS_CONNS.lock();
 
     // Handle TLS-level commands from apps.
     let batches = drain_tls_commands();
+    if !batches.is_empty() {
+        did_work = true;
+    }
     for (owner, cmds) in batches {
         for cmd in cmds {
             match cmd {
@@ -429,6 +435,7 @@ fn tls_socket_tick_once() {
         }
 
         if remove {
+            did_work = true;
             conns.swap_remove(idx);
         } else {
             idx += 1;
@@ -445,6 +452,7 @@ fn tls_socket_tick_once() {
             let Some(ev) = conns[idx].net.pop_event() else {
                 break;
             };
+            did_work = true;
             match ev {
                 vnet::Event::Opened { handle, kind } => {
                     if kind == vnet::SocketKind::Tcp {
@@ -529,6 +537,8 @@ fn tls_socket_tick_once() {
             idx += 1;
         }
     }
+
+    did_work
 }
 
 #[task]
@@ -544,9 +554,20 @@ pub async fn tls_socket_service_task() {
         );
         crate::r::readiness::set(crate::r::readiness::TLS_SOCKET_SERVICE_READY);
 
+        let mut productive_passes = 0usize;
         loop {
-            tls_socket_tick_once();
-            Timer::after(EmbassyDuration::from_millis(5)).await;
+            if tls_socket_tick_once() {
+                productive_passes = productive_passes.saturating_add(1);
+                if productive_passes < TLS_PRODUCTIVE_PASS_SOFT_CAP {
+                    Timer::after(EmbassyDuration::from_micros(0)).await;
+                    continue;
+                }
+            }
+
+            // Sleep when the backlog is exhausted, or after the productive
+            // pass soft cap so another executor workload gets a fair window.
+            productive_passes = 0;
+            Timer::after(EmbassyDuration::from_millis(TLS_SERVICE_SLEEP_MS)).await;
         }
     }
     .await;

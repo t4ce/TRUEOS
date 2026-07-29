@@ -872,35 +872,34 @@ impl HybridCpuAotDecodeBackend {
         scores
             .try_reserve_exact(positions)
             .map_err(|_| HybridCpuBackendError::Allocation)?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(positions)
+            .map_err(|_| HybridCpuBackendError::Allocation)?;
+        let mut query_values = [0.0f32; HEAD_DIM];
+        let mut key_values = [0.0f32; HEAD_DIM];
         for query_head in 0..HEADS {
             scores.clear();
             let query_start = query_head * HEAD_DIM;
-            let query_values = &query[query_start..query_start + HEAD_DIM];
-            let query_values: Vec<f32> = query_values
-                .iter()
-                .map(|&value| cpu::f16_cache_bits(value).map(cpu::f16_cache_f32))
-                .collect::<Result<_, _>>()?;
+            for dimension in 0..HEAD_DIM {
+                query_values[dimension] =
+                    cpu::f16_cache_f32(cpu::f16_cache_bits(query[query_start + dimension])?);
+            }
             let kv_head = cpu::gqa_kv_head(query_head, HEADS, KV_HEADS)?;
             for cache_position in 0..positions {
                 let key_start = cache_position * KV_ELEMENTS + kv_head * HEAD_DIM;
-                let key_values = &self.kv[slot].keys[key_start..key_start + HEAD_DIM];
-                let key_values: Vec<f32> = key_values
-                    .iter()
-                    .map(|&key| cpu::f16_cache_f32(key))
-                    .collect();
+                for dimension in 0..HEAD_DIM {
+                    key_values[dimension] =
+                        cpu::f16_cache_f32(self.kv[slot].keys[key_start + dimension]);
+                }
                 let dot = cpu::f32_dot_pinned(&query_values, &key_values)?;
                 scores.push(dot * scale);
             }
             cpu::softmax_in_place(&mut scores)?;
             let output_start = query_head * HEAD_DIM;
-            let weights = scores
-                .iter()
-                .map(|&weight| cpu::f16_cache_bits(weight).map(cpu::f16_cache_f32))
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut values = Vec::new();
-            values
-                .try_reserve_exact(positions)
-                .map_err(|_| HybridCpuBackendError::Allocation)?;
+            for weight in &mut scores {
+                *weight = cpu::f16_cache_f32(cpu::f16_cache_bits(*weight)?);
+            }
             for dimension in 0..HEAD_DIM {
                 values.clear();
                 for cache_position in 0..positions {
@@ -908,7 +907,7 @@ impl HybridCpuAotDecodeBackend {
                     values.push(cpu::f16_cache_f32(self.kv[slot].values[value_index]));
                 }
                 context[output_start + dimension] =
-                    cpu::f32_dot_pinned_padded(&values, &weights, padded_positions)?;
+                    cpu::f32_dot_pinned_padded(&values, &scores, padded_positions)?;
             }
         }
         let output_descriptor = Self::descriptor(Some(layer), TensorRole::AttentionOutput)?;
@@ -924,12 +923,32 @@ impl HybridCpuAotDecodeBackend {
         residual: HiddenQ30,
         branch: HiddenQ30,
     ) -> Result<HiddenQ30, HybridCpuBackendError> {
-        let residual_values = self.q30_values(residual)?.to_vec();
-        let branch_values = self.q30_values(branch)?.to_vec();
-        let output = cpu::add(&residual_values, &branch_values)?;
-        self.release_q30(residual)?;
-        self.release_q30(branch)?;
-        self.allocate_q30(output)
+        let residual_index = self.handle_index(residual.resident())?;
+        let branch_index = self.handle_index(branch.resident())?;
+        if residual_index == branch_index {
+            return Err(HybridCpuBackendError::Tensor);
+        }
+        let (residual_slot, branch_slot) = if residual_index < branch_index {
+            let (lower, upper) = self.slots.split_at_mut(branch_index);
+            (&mut lower[residual_index], &mut upper[0])
+        } else {
+            let (lower, upper) = self.slots.split_at_mut(residual_index);
+            (&mut upper[0], &mut lower[branch_index])
+        };
+        let Some(CpuTensor::Q30(residual_values)) = residual_slot.as_mut() else {
+            return Err(HybridCpuBackendError::Tensor);
+        };
+        let Some(CpuTensor::Q30(branch_values)) = branch_slot.as_ref() else {
+            return Err(HybridCpuBackendError::Tensor);
+        };
+        if residual_values.len() != HIDDEN || branch_values.len() != HIDDEN {
+            return Err(HybridCpuBackendError::Tensor);
+        }
+        for index in 0..HIDDEN {
+            residual_values[index] = residual_values[index] + branch_values[index];
+        }
+        *branch_slot = None;
+        Ok(residual)
     }
 
     async fn ffn(
