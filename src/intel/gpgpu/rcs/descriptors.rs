@@ -412,7 +412,10 @@ fn direct_rcs_write_clear_rect_surface_state(
             core::ptr::write_volatile(surface.add(index), 0);
         }
         core::ptr::write_volatile(surface, surface_dword0);
-        core::ptr::write_volatile(surface.add(1), RENDER_MOCS << 24);
+        core::ptr::write_volatile(
+            surface.add(1),
+            direct_rcs_encode_mocs_index(RENDER_MOCS_INDEX) << 24,
+        );
         core::ptr::write_volatile(surface.add(2), surface_dword2);
         core::ptr::write_volatile(surface.add(3), surface_dword3);
         core::ptr::write_volatile(surface.add(8), dst_gpu as u32);

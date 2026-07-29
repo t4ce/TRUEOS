@@ -1,10 +1,11 @@
 //! Spirit chat output through one retained kernel Gridpaper document.
 //!
-//! Completed reasoning text enters a small bounded queue. This service reveals
-//! Spirit's dedicated Gridpaper lease, flies Lilly's software cursor to cell
-//! zero, clicks it, and types through her paired virtual keyboard. Hiding the
-//! UI4 session after the reading interval retains the Gridpaper GPU scene and
-//! document allocation for the next response.
+//! Reasoning text enters a small bounded queue either as one completed reply
+//! or as a coalesced live prefix. This service reveals Spirit's dedicated
+//! Gridpaper lease, flies Lilly's software cursor to cell zero, clicks it, and
+//! types through her paired virtual keyboard while inference continues.
+//! Hiding the UI4 session after the reading interval retains the Gridpaper GPU
+//! scene and document allocation for the next response.
 
 use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -16,8 +17,8 @@ use spin::Mutex;
 use crate::r::{
     gridpaper_service::{KernelGridLease, KernelGridPresentation},
     keyboard_control_service::{
-        KeyboardControlDevice, KeyboardControlPrincipal, keyboard_is_idle, request_keyboard,
-        submit_text,
+        KeyboardControlDevice, KeyboardControlPrincipal, cancel_program, keyboard_is_idle,
+        request_keyboard, submit_text,
     },
 };
 
@@ -45,41 +46,251 @@ const SPIRIT_KEYBOARD_LABEL: &str = "Spirit/Lilly chat";
 static RESPONSE_QUEUE: Mutex<VecDeque<ResponseRequest>> = Mutex::new(VecDeque::new());
 static RESPONSE_WAKE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static SPIRIT_TEXT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static RESPONSE_STREAM_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct ResponseRequest {
+    id: u64,
     turn: u64,
     text: String,
     enqueued_ms: u64,
+    revision: u64,
+    finished: bool,
+    aborted: bool,
+    claimed: bool,
+    streaming: bool,
+}
+
+#[derive(Copy, Clone)]
+struct ClaimedResponse {
+    id: u64,
+    turn: u64,
+    enqueued_ms: u64,
+    streaming: bool,
+}
+
+struct ResponseSnapshot {
+    text: String,
+    revision: u64,
+    finished: bool,
+    aborted: bool,
+}
+
+/// Owned producer handle for one live reasoning response.
+///
+/// Prefix updates only copy into bounded Spirit-owned state and signal the
+/// presenter; they never await the cursor, Gridpaper, or virtual keyboard.
+/// Dropping an unfinished handle aborts the partial presentation.
+#[must_use = "finish the response stream or let Drop abort it"]
+pub(crate) struct ReasoningResponseStream {
+    id: u64,
+    turn: u64,
+    closed: bool,
+}
+
+impl ReasoningResponseStream {
+    /// Replace the latest complete text prefix for this response.
+    ///
+    /// Coalescing snapshots instead of queueing token events bounds ingress
+    /// even when inference outruns the emulated keyboard.
+    pub(crate) fn update(&self, text_prefix: &str) -> bool {
+        update_response_prefix(self.id, text_prefix)
+    }
+
+    /// Publish the final display-safe text and close the stream.
+    pub(crate) fn finish(mut self, text: &str) -> bool {
+        let accepted = finish_response(self.id, text);
+        self.closed = true;
+        accepted
+    }
+
+    pub(crate) const fn turn(&self) -> u64 {
+        self.turn
+    }
+}
+
+impl Drop for ReasoningResponseStream {
+    fn drop(&mut self) {
+        if !self.closed {
+            abort_response(self.id);
+        }
+    }
+}
+
+fn next_response_id() -> u64 {
+    RESPONSE_STREAM_SEQUENCE
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1)
+        .max(1)
+}
+
+fn push_response_request(request: ResponseRequest) -> Result<(Option<(u64, u64)>, usize), ()> {
+    let mut queue = RESPONSE_QUEUE.lock();
+    let dropped = if queue.len() >= RESPONSE_QUEUE_CAPACITY {
+        let Some(index) = queue.iter().position(|request| !request.claimed) else {
+            return Err(());
+        };
+        queue
+            .remove(index)
+            .map(|request| (request.id, request.turn))
+    } else {
+        None
+    };
+    queue.push_back(request);
+    Ok((dropped, queue.len()))
+}
+
+fn log_replaced_response(dropped: Option<(u64, u64)>, newest_id: u64, newest_turn: u64, queued: usize) {
+    if let Some((dropped_id, dropped_turn)) = dropped {
+        crate::log_warn!(
+            target: "gfx";
+            "trueos-spirit: response ingress replaced unseen_id={} unseen_turn={} newest_id={} newest_turn={} queue={} action=prefer-latest\n",
+            dropped_id,
+            dropped_turn,
+            newest_id,
+            newest_turn,
+            queued,
+        );
+    }
+}
+
+/// Start one live local-model response in Spirit's bounded presentation
+/// ingress. The presenter may begin revealing and focusing its retained window
+/// before the first stable word is available.
+pub(crate) fn begin_reasoning_response(turn: u64) -> Option<ReasoningResponseStream> {
+    let id = next_response_id();
+    let request = ResponseRequest {
+        id,
+        turn,
+        text: String::new(),
+        enqueued_ms: Instant::now().as_millis(),
+        revision: 1,
+        finished: false,
+        aborted: false,
+        claimed: false,
+        streaming: true,
+    };
+    let (dropped, queued) = match push_response_request(request) {
+        Ok(result) => result,
+        Err(()) => {
+            crate::log_warn!(
+                target: "gfx";
+                "trueos-spirit: response stream rejected id={} turn={} queue={} reason=all-records-claimed action=completed-fallback\n",
+                id,
+                turn,
+                RESPONSE_QUEUE_CAPACITY,
+            );
+            return None;
+        }
+    };
+    log_replaced_response(dropped, id, turn, queued);
+    RESPONSE_WAKE.signal(());
+    crate::log_info!(
+        target: "gfx";
+        "trueos-spirit: response stream begin id={} turn={} queue={} ingress=coalesced-prefix\n",
+        id,
+        turn,
+        queued,
+    );
+    Some(ReasoningResponseStream {
+        id,
+        turn,
+        closed: false,
+    })
+}
+
+fn update_response_prefix(id: u64, text_prefix: &str) -> bool {
+    let accepted = {
+        let mut queue = RESPONSE_QUEUE.lock();
+        let Some(request) = queue.iter_mut().find(|request| request.id == id) else {
+            return false;
+        };
+        if request.finished || request.aborted {
+            return false;
+        }
+        if request.text == text_prefix {
+            return true;
+        }
+        request.text.clear();
+        request.text.push_str(text_prefix);
+        request.revision = request.revision.wrapping_add(1).max(1);
+        true
+    };
+    if accepted {
+        RESPONSE_WAKE.signal(());
+    }
+    accepted
+}
+
+fn finish_response(id: u64, text: &str) -> bool {
+    let accepted = {
+        let mut queue = RESPONSE_QUEUE.lock();
+        let Some(request) = queue.iter_mut().find(|request| request.id == id) else {
+            return false;
+        };
+        if request.finished || request.aborted {
+            return false;
+        }
+        request.text.clear();
+        request.text.push_str(text);
+        request.finished = true;
+        request.revision = request.revision.wrapping_add(1).max(1);
+        true
+    };
+    if accepted {
+        RESPONSE_WAKE.signal(());
+    }
+    accepted
+}
+
+fn abort_response(id: u64) {
+    let aborted = {
+        let mut queue = RESPONSE_QUEUE.lock();
+        let Some(index) = queue.iter().position(|request| request.id == id) else {
+            return;
+        };
+        if queue[index].claimed {
+            queue[index].aborted = true;
+            queue[index].revision = queue[index].revision.wrapping_add(1).max(1);
+            Some((queue[index].turn, true))
+        } else {
+            queue.remove(index).map(|request| (request.turn, false))
+        }
+    };
+    if let Some((turn, claimed)) = aborted {
+        RESPONSE_WAKE.signal(());
+        crate::log_warn!(
+            target: "gfx";
+            "trueos-spirit: response stream abort id={} turn={} claimed={} action={}\n",
+            id,
+            turn,
+            claimed as u8,
+            if claimed { "cancel-active" } else { "drop-unseen" },
+        );
+    }
 }
 
 /// Copy one completed local-model reply into Spirit's bounded presentation
 /// ingress. Oldest unseen replies yield to the newest if inference outruns the
 /// one user-facing Gridpaper document.
 pub(crate) fn enqueue_reasoning_response(turn: u64, text: &str) -> bool {
-    let text = sanitize_response(text);
-    let mut queue = RESPONSE_QUEUE.lock();
-    let dropped = if queue.len() == RESPONSE_QUEUE_CAPACITY {
-        queue.pop_front().map(|request| request.turn)
-    } else {
-        None
-    };
-    queue.push_back(ResponseRequest {
+    let id = next_response_id();
+    let request = ResponseRequest {
+        id,
         turn,
-        text,
+        text: sanitize_response(text),
         enqueued_ms: Instant::now().as_millis(),
-    });
-    let queued = queue.len();
-    drop(queue);
+        revision: 1,
+        finished: true,
+        aborted: false,
+        claimed: false,
+        streaming: false,
+    };
+    let (dropped, queued) = match push_response_request(request) {
+        Ok(result) => result,
+        Err(()) => return false,
+    };
+    log_replaced_response(dropped, id, turn, queued);
     RESPONSE_WAKE.signal(());
-    if let Some(dropped) = dropped {
-        crate::log_warn!(
-            target: "gfx";
-            "trueos-spirit: response ingress replaced oldest_turn={} newest_turn={} queue={} action=prefer-latest\n",
-            dropped,
-            turn,
-            queued,
-        );
-    }
     true
 }
 
@@ -92,6 +303,10 @@ pub(super) fn enqueue_package_text(text: &str) -> bool {
 }
 
 fn sanitize_response(text: &str) -> String {
+    sanitize_response_inner(text, true)
+}
+
+fn sanitize_response_inner(text: &str, empty_fallback: bool) -> String {
     let mut words = Vec::new();
     for source in text.split_whitespace() {
         let word = source
@@ -102,10 +317,13 @@ fn sanitize_response(text: &str) -> String {
             words.push(word);
         }
     }
-    if words.is_empty() {
+    if words.is_empty() && empty_fallback {
         words.push("(no".chars().collect());
         words.push("text".chars().collect());
         words.push("response)".chars().collect());
+    }
+    if words.is_empty() {
+        return String::new();
     }
 
     let mut lines = alloc::vec![Vec::new()];
@@ -185,12 +403,89 @@ fn sanitize_response(text: &str) -> String {
     wrapped
 }
 
-fn take_latest_response() -> Option<ResponseRequest> {
+/// Only commit words which have a following separator while generation is
+/// live. This keeps word-aware wrapping monotonic when a token extends the
+/// current word; the final snapshot flushes the remaining word.
+fn sanitize_stream_snapshot(text: &str, finished: bool) -> String {
+    if finished {
+        return sanitize_response(text);
+    }
+    let stable_end = text
+        .char_indices()
+        .filter(|(_, ch)| ch.is_whitespace())
+        .map(|(offset, ch)| offset + ch.len_utf8())
+        .next_back()
+        .unwrap_or(0);
+    sanitize_response_inner(&text[..stable_end], false)
+}
+
+fn claim_latest_response() -> Option<ClaimedResponse> {
     let mut queue = RESPONSE_QUEUE.lock();
-    let latest = queue.pop_back();
-    queue.clear();
-    let _ = RESPONSE_WAKE.try_take();
-    latest
+    queue.retain(|request| request.claimed || !request.aborted);
+    let latest_id = queue
+        .iter()
+        .rfind(|request| !request.claimed)
+        .map(|request| request.id)?;
+    queue.retain(|request| request.claimed || request.id == latest_id);
+    let request = queue.iter_mut().find(|request| request.id == latest_id)?;
+    request.claimed = true;
+    Some(ClaimedResponse {
+        id: request.id,
+        turn: request.turn,
+        enqueued_ms: request.enqueued_ms,
+        streaming: request.streaming,
+    })
+}
+
+fn response_snapshot(id: u64, last_revision: u64) -> Option<ResponseSnapshot> {
+    let queue = RESPONSE_QUEUE.lock();
+    let request = queue.iter().find(|request| request.id == id)?;
+    if request.revision == last_revision {
+        return None;
+    }
+    Some(ResponseSnapshot {
+        text: request.text.clone(),
+        revision: request.revision,
+        finished: request.finished,
+        aborted: request.aborted,
+    })
+}
+
+fn response_stream_is_live(id: u64) -> bool {
+    RESPONSE_QUEUE
+        .lock()
+        .iter()
+        .find(|request| request.id == id)
+        .is_some_and(|request| !request.aborted)
+}
+
+fn retire_response(id: u64) {
+    let mut queue = RESPONSE_QUEUE.lock();
+    if let Some(index) = queue.iter().position(|request| request.id == id) {
+        let _ = queue.remove(index);
+    }
+}
+
+fn response_queue_has_pending() -> bool {
+    RESPONSE_QUEUE
+        .lock()
+        .iter()
+        .any(|request| !request.claimed && !request.aborted)
+}
+
+async fn wait_for_pending_response(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if response_queue_has_pending() {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let _ = with_timeout(remaining, RESPONSE_WAKE.wait()).await;
+    }
 }
 
 fn presentation_is_ready(presentation: KernelGridPresentation) -> bool {
@@ -289,8 +584,19 @@ async fn focus_and_click_cell_zero(
     Ok(())
 }
 
-async fn wait_for_keyboard_idle(keyboard: KeyboardControlDevice) -> Result<(), &'static str> {
+fn cancel_response_keyboard(keyboard: KeyboardControlDevice) {
+    let _ = cancel_program(KeyboardControlPrincipal::Kernel, keyboard.handle);
+}
+
+async fn wait_for_keyboard_idle(
+    keyboard: KeyboardControlDevice,
+    response_id: u64,
+) -> Result<(), &'static str> {
     loop {
+        if !response_stream_is_live(response_id) {
+            cancel_response_keyboard(keyboard);
+            return Err("response-aborted");
+        }
         match keyboard_is_idle(KeyboardControlPrincipal::Kernel, keyboard.handle) {
             Ok(true) => return Ok(()),
             Ok(false) => Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await,
@@ -299,31 +605,38 @@ async fn wait_for_keyboard_idle(keyboard: KeyboardControlDevice) -> Result<(), &
     }
 }
 
-async fn type_response(keyboard: KeyboardControlDevice, text: &str) -> Result<usize, &'static str> {
+async fn type_response(
+    keyboard: KeyboardControlDevice,
+    response_id: u64,
+    text: &str,
+    clear_queue: bool,
+) -> Result<usize, &'static str> {
     let scalars = text.chars().collect::<Vec<_>>();
     let mut typed = 0usize;
     for (chunk_index, chunk) in scalars.chunks(KEYBOARD_CHUNK_SCALARS).enumerate() {
-        wait_for_keyboard_idle(keyboard).await?;
+        wait_for_keyboard_idle(keyboard, response_id).await?;
         let text = chunk.iter().collect::<String>();
         submit_text(
             KeyboardControlPrincipal::Kernel,
             keyboard.handle,
             text.as_str(),
             KEYBOARD_STROKE_MS,
-            chunk_index == 0,
+            clear_queue && chunk_index == 0,
         )
         .map_err(|_| "lilly-keyboard-submit")?;
         typed = typed.saturating_add(chunk.iter().filter(|ch| !matches!(ch, '\n' | '\r')).count());
     }
-    wait_for_keyboard_idle(keyboard).await?;
+    wait_for_keyboard_idle(keyboard, response_id).await?;
     Ok(typed)
 }
 
 async fn wait_for_grid_text_acceptance(
     lease: KernelGridLease,
-    expected_cells: usize,
+    accepted_base: u64,
+    typed_cells: usize,
 ) -> Result<(), &'static str> {
-    let expected_cells = u64::try_from(expected_cells).map_err(|_| "gridpaper-text-count-range")?;
+    let typed_cells = u64::try_from(typed_cells).map_err(|_| "gridpaper-text-count-range")?;
+    let expected_cells = accepted_base.saturating_add(typed_cells);
     let deadline = Instant::now() + Duration::from_millis(GRID_TEXT_ACCEPT_TIMEOUT_MS);
     loop {
         match crate::r::gridpaper_service::kernel_grid_accepted_text_cells(lease) {

@@ -209,27 +209,28 @@ fn direct_rcs_push_state_base_address(
     dynamic_state_base: u64,
     instruction_base: u64,
 ) -> bool {
-    direct_rcs_push_state_base_address_with_mocs(
+    direct_rcs_push_state_base_address_with_mocs_index(
         batch,
         cursor,
         indirect_object_base,
         dynamic_state_base,
         instruction_base,
-        RENDER_MOCS,
+        RENDER_MOCS_INDEX,
     )
 }
 
-fn direct_rcs_push_state_base_address_with_mocs(
+fn direct_rcs_push_state_base_address_with_mocs_index(
     batch: &mut [u32],
     cursor: &mut usize,
     indirect_object_base: u64,
     dynamic_state_base: u64,
     instruction_base: u64,
-    mocs: u32,
+    mocs_index: u32,
 ) -> bool {
-    if mocs > RENDER_MOCS_INDEX_MASK {
+    if mocs_index > RENDER_MOCS_TABLE_INDEX_MASK {
         return false;
     }
+    let mocs = direct_rcs_encode_mocs_index(mocs_index);
     direct_rcs_push(batch, cursor, STATE_BASE_ADDRESS_CMD)
         && direct_rcs_push_sba_address(batch, cursor, true, mocs, indirect_object_base)
         && direct_rcs_push(batch, cursor, mocs << 16)
@@ -251,10 +252,13 @@ fn direct_rcs_push_sba_address(
     batch: &mut [u32],
     cursor: &mut usize,
     enable: bool,
-    mocs: u32,
+    mocs_command_value: u32,
     address: u64,
 ) -> bool {
-    let low = ((address as u32) & 0xFFFF_F000) | (mocs << 4) | u32::from(enable);
+    debug_assert!(mocs_command_value <= RENDER_MOCS_COMMAND_VALUE_MASK);
+    debug_assert_eq!(mocs_command_value & 1, 0);
+    let low =
+        ((address as u32) & 0xFFFF_F000) | (mocs_command_value << 4) | u32::from(enable);
     direct_rcs_push(batch, cursor, low) && direct_rcs_push(batch, cursor, (address >> 32) as u32)
 }
 

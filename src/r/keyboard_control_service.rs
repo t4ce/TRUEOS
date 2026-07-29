@@ -287,6 +287,21 @@ impl KeyboardControlStation {
         Ok(())
     }
 
+    fn cancel_program(
+        &mut self,
+        principal: KeyboardControlPrincipal,
+        handle: u64,
+    ) -> Result<(), KeyboardControlError> {
+        let index = self.index(principal, handle)?;
+        let keyboard = &mut self.keyboards[index];
+        keyboard.commands.clear();
+        keyboard.active = None;
+        keyboard.modifiers = 0;
+        keyboard.keys = [0; 6];
+        emit_report(keyboard);
+        Ok(())
+    }
+
     fn tick(&mut self, now_ms: u64) {
         for keyboard in &mut self.keyboards {
             if let Some(active) = keyboard.active {
@@ -521,6 +536,13 @@ pub(crate) fn keyboard_is_idle(
     let index = station.index(principal, handle)?;
     let keyboard = &station.keyboards[index];
     Ok(keyboard.active.is_none() && keyboard.commands.is_empty())
+}
+
+pub(crate) fn cancel_program(
+    principal: KeyboardControlPrincipal,
+    handle: u64,
+) -> Result<(), KeyboardControlError> {
+    STATION.lock().cancel_program(principal, handle)
 }
 
 #[embassy_executor::task]

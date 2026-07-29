@@ -170,13 +170,28 @@ const GEN8_CTX_VALID: u32 = 1 << 0;
 const GEN8_CTX_PRIVILEGE: u32 = 1 << 8;
 
 const GEN8_CTX_ADDRESSING_MODE_SHIFT: u32 = 3;
-const RENDER_MOCS: u32 = 4;
-const LFM25_RENDER_MOCS: u32 = super::GEN12_LUMEN_MOCS_INDEX;
-const RENDER_MOCS_INDEX_MASK: u32 = 0x7F;
+const RENDER_MOCS_INDEX: u32 = 4;
+const LFM25_RENDER_MOCS_INDEX: u32 = super::GEN12_LUMEN_MOCS_INDEX;
+const RENDER_MOCS_TABLE_INDEX_MASK: u32 = 0x3F;
+const RENDER_MOCS_COMMAND_VALUE_MASK: u32 = 0x7F;
+
+// Gen12 command fields expose a reserved bit followed by the six-bit MOCS
+// table index. Command builders conventionally represent that field as
+// `table_index << 1`, keeping the reserved bit clear.
+const fn direct_rcs_encode_mocs_index(index: u32) -> u32 {
+    index << 1
+}
+
 const _: () = {
-    assert!(RENDER_MOCS <= RENDER_MOCS_INDEX_MASK);
-    assert!(LFM25_RENDER_MOCS <= RENDER_MOCS_INDEX_MASK);
-    assert!(LFM25_RENDER_MOCS >= 32);
+    assert!(RENDER_MOCS_INDEX <= RENDER_MOCS_TABLE_INDEX_MASK);
+    assert!(LFM25_RENDER_MOCS_INDEX <= RENDER_MOCS_TABLE_INDEX_MASK);
+    assert!(LFM25_RENDER_MOCS_INDEX >= 32);
+    assert!(direct_rcs_encode_mocs_index(RENDER_MOCS_INDEX) == 8);
+    assert!(direct_rcs_encode_mocs_index(LFM25_RENDER_MOCS_INDEX) == 98);
+    assert!(
+        direct_rcs_encode_mocs_index(LFM25_RENDER_MOCS_INDEX)
+            <= RENDER_MOCS_COMMAND_VALUE_MASK
+    );
 };
 const PIPE_CONTROL_CMD: u32 = 4 | (2 << 24) | (3 << 27) | (3 << 29);
 const STATE_BASE_ADDRESS_CMD: u32 = 20 | (1 << 16) | (1 << 24) | (3 << 29);

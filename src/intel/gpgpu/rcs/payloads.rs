@@ -94,27 +94,31 @@ fn direct_rcs_write_buffer_surface_state(
     gpu: u64,
     target_bytes: usize,
 ) -> bool {
-    direct_rcs_write_buffer_surface_state_with_mocs(
+    direct_rcs_write_buffer_surface_state_with_mocs_index(
         state,
         surface_offset,
         gpu,
         target_bytes,
-        RENDER_MOCS,
+        RENDER_MOCS_INDEX,
     )
 }
 
-fn direct_rcs_write_buffer_surface_state_with_mocs(
+fn direct_rcs_write_buffer_surface_state_with_mocs_index(
     state: DirectRcsState,
     surface_offset: usize,
     gpu: u64,
     target_bytes: usize,
-    mocs: u32,
+    mocs_index: u32,
 ) -> bool {
     let surface_bytes = COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>();
     let surface_end = surface_offset + surface_bytes;
-    if surface_end > DIRECT_RCS_BATCH_BYTES || target_bytes == 0 || mocs > RENDER_MOCS_INDEX_MASK {
+    if surface_end > DIRECT_RCS_BATCH_BYTES
+        || target_bytes == 0
+        || mocs_index > RENDER_MOCS_TABLE_INDEX_MASK
+    {
         return false;
     }
+    let mocs = direct_rcs_encode_mocs_index(mocs_index);
 
     let extent = target_bytes.saturating_sub(1);
     let surface_width_minus1 = (extent & 0x7F) as u32;

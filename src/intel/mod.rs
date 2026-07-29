@@ -188,7 +188,7 @@ pub fn init_once() {
         media_enabled_mask,
     );
     crate::log!(
-        "intel/cache-policy: accepted={} platform={} device=0x{:04X} forcewake={} pat={} lumen_mocs={} lumen_mocs_index={} lumen_mocs_ownership=upper-half ppgtt_default=pat0-wb ppgtt_scanout=pat3-uc ggtt=system-memory-address-only pat_table=[wb,wc,wt,uc,wb,wb,wb,wb] readiness_scope=pat-global+mocs-lumen-only\n",
+        "intel/cache-policy: accepted={} platform={} device=0x{:04X} forcewake={} pat={} lumen_mocs={} lumen_mocs_index={} lumen_mocs_command_value={} lumen_mocs_ownership=upper-half ppgtt_default=pat0-wb ppgtt_scanout=pat3-uc ggtt=system-memory-address-only pat_table=[wb,wc,wt,uc,wb,wb,wb,wb] readiness_scope=pat-global+mocs-lumen-only\n",
         pat_ready as u8,
         display_device_name(dev.device_id),
         dev.device_id,
@@ -196,6 +196,7 @@ pub fn init_once() {
         pat_ready as u8,
         lumen_mocs.accepted as u8,
         self::gt_state::GEN12_LUMEN_MOCS_INDEX,
+        self::gt_state::GEN12_LUMEN_MOCS_INDEX << 1,
     );
     if guc_boot {
         let _ = init_required_guc_transport(dev);
@@ -336,7 +337,7 @@ pub(crate) fn gen12_gt_state_snapshot() -> Option<self::gt_state::Gen12GtStateSn
 fn log_gen12_lumen_mocs_init(dev: Dev, report: self::gt_state::Gen12LumenMocsInitReport) {
     crate::log_info!(
         target: "gpgpu";
-        "intel/lumen-mocs: checkpoint=boot-init available={} accepted={} device=0x{:04X} ownership=upper-half owned_indices=32..63 owned_l3cc_registers=16..31 resident_indices=0..31 residents_preserved={} resident_fingerprint_before=global:0x{:016X},l3cc:0x{:016X} resident_fingerprint_after=global:0x{:016X},l3cc:0x{:016X} compositor_index4_before=global:0x{:08X},l3cc_pair:0x{:08X} compositor_index4_after=global:0x{:08X},l3cc_pair:0x{:08X} lumen_index={} before=global:0x{:08X},l3cc_pair:0x{:08X} after=global:0x{:08X},l3cc_pair:0x{:08X} expected=global:0x00000005,l3cc:0x0030 owned_mismatches=global:{},l3cc:{} writes=global:32,l3cc:16 readiness_scope=lumen-only shared_rcs_gate=0\n",
+        "intel/lumen-mocs: checkpoint=boot-init available={} accepted={} device=0x{:04X} ownership=upper-half owned_indices=32..63 owned_l3cc_registers=16..31 resident_indices=0..31 residents_preserved={} resident_fingerprint_before=global:0x{:016X},l3cc:0x{:016X} resident_fingerprint_after=global:0x{:016X},l3cc:0x{:016X} compositor_index4_before=global:0x{:08X},l3cc_pair:0x{:08X} compositor_index4_after=global:0x{:08X},l3cc_pair:0x{:08X} lumen_index={} lumen_command_value={} before=global:0x{:08X},l3cc_pair:0x{:08X} after=global:0x{:08X},l3cc_pair:0x{:08X} expected=global:0x00000005,l3cc:0x0030 owned_mismatches=global:{},l3cc:{} writes=global:32,l3cc:16 readiness_scope=lumen-only shared_rcs_gate=0\n",
         report.available as u8,
         report.accepted as u8,
         dev.device_id,
@@ -350,6 +351,7 @@ fn log_gen12_lumen_mocs_init(dev: Dev, report: self::gt_state::Gen12LumenMocsIni
         report.after.global_index4,
         report.after.l3cc_pair2,
         self::gt_state::GEN12_LUMEN_MOCS_INDEX,
+        self::gt_state::GEN12_LUMEN_MOCS_INDEX << 1,
         report.before.global_lumen_index,
         report.before.l3cc_lumen_pair,
         report.after.global_lumen_index,
@@ -381,7 +383,7 @@ fn validate_gen12_lumen_mocs_for_dev(dev: Dev, checkpoint: &str) -> bool {
     }
     crate::log_info!(
         target: "gpgpu";
-        "intel/lumen-mocs: checkpoint={} available={} accepted={} device=0x{:04X} ownership=upper-half residents_preserved={} resident_fingerprint=global:0x{:016X},l3cc:0x{:016X} lumen_index={} observed=global:0x{:08X},l3cc_pair:0x{:08X} expected=global:0x00000005,l3cc:0x0030 owned_mismatches=global:{},l3cc:{} readiness_scope=lumen-only shared_rcs_gate=0\n",
+        "intel/lumen-mocs: checkpoint={} available={} accepted={} device=0x{:04X} ownership=upper-half residents_preserved={} resident_fingerprint=global:0x{:016X},l3cc:0x{:016X} lumen_index={} lumen_command_value={} observed=global:0x{:08X},l3cc_pair:0x{:08X} expected=global:0x00000005,l3cc:0x0030 owned_mismatches=global:{},l3cc:{} readiness_scope=lumen-only shared_rcs_gate=0\n",
         checkpoint,
         readback.available as u8,
         accepted as u8,
@@ -390,6 +392,7 @@ fn validate_gen12_lumen_mocs_for_dev(dev: Dev, checkpoint: &str) -> bool {
         readback.resident_global_fingerprint,
         readback.resident_l3cc_fingerprint,
         self::gt_state::GEN12_LUMEN_MOCS_INDEX,
+        self::gt_state::GEN12_LUMEN_MOCS_INDEX << 1,
         readback.global_lumen_index,
         readback.l3cc_lumen_pair,
         readback.lumen_global_mismatches,

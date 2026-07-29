@@ -140,24 +140,24 @@ fn direct_rcs_write_lfm25_q8_dispatch_state(
         core::ptr::write_volatile(binding.add(1), activation_surface_offset as u32);
         core::ptr::write_volatile(binding.add(2), output_surface_offset as u32);
     }
-    direct_rcs_write_buffer_surface_state_with_mocs(
+    direct_rcs_write_buffer_surface_state_with_mocs_index(
         state,
         weights_surface_offset,
         params.weights_gpu,
         params.model_bytes,
-        LFM25_RENDER_MOCS,
-    ) && direct_rcs_write_buffer_surface_state_with_mocs(
+        LFM25_RENDER_MOCS_INDEX,
+    ) && direct_rcs_write_buffer_surface_state_with_mocs_index(
         state,
         activation_surface_offset,
         params.activation_gpu,
         params.activation_bytes,
-        LFM25_RENDER_MOCS,
-    ) && direct_rcs_write_buffer_surface_state_with_mocs(
+        LFM25_RENDER_MOCS_INDEX,
+    ) && direct_rcs_write_buffer_surface_state_with_mocs_index(
         state,
         output_surface_offset,
         params.output_gpu,
         params.output_bytes,
-        LFM25_RENDER_MOCS,
+        LFM25_RENDER_MOCS_INDEX,
     ) && direct_rcs_write_lfm25_q8_payload(state, upload, params, payload_offset)
 }
 
@@ -263,13 +263,13 @@ fn direct_rcs_encode_lfm25_q8_batch(
         (1 << 9) | (1 << 11),
         PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
     );
-    ok &= direct_rcs_push_state_base_address_with_mocs(
+    ok &= direct_rcs_push_state_base_address_with_mocs_index(
         batch,
         &mut cursor,
         state.gpu_va.batch,
         state.gpu_va.batch,
         upload.gpu,
-        LFM25_RENDER_MOCS,
+        LFM25_RENDER_MOCS_INDEX,
     );
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
     ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
