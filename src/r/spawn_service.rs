@@ -242,6 +242,27 @@ fn spawn_on_worker<S: Send>(
 }
 
 #[inline]
+fn spawn_on_eff_worker<S: Send>(
+    spawner: Spawner,
+    task: impl FnOnce(crate::workers::WorkerSpawner) -> Result<SpawnToken<S>, SpawnError>,
+) -> SpawnAttempt {
+    let worker = crate::workers::pick_eff_background_spawner_with_slot()
+        .or_else(crate::workers::pick_background_spawner_with_slot);
+    let Some((_slot, _kind, worker_spawner)) = worker else {
+        let _ = spawner;
+        return SpawnAttempt::Skipped;
+    };
+    let _ = spawner;
+    match task(worker_spawner) {
+        Ok(token) => {
+            worker_spawner.spawn(token);
+            SpawnAttempt::Spawned
+        }
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+#[inline]
 fn spawn_bool_result_to_attempt(result: Result<bool, SpawnError>) -> SpawnAttempt {
     match result {
         Ok(true) => SpawnAttempt::Spawned,
@@ -453,7 +474,9 @@ fn spawn_net_cache_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::net::tls_socket::tls_socket_service_task())
+    spawn_on_eff_worker(spawner, |_worker_spawner| {
+        crate::net::tls_socket::tls_socket_service_task()
+    })
 }
 
 fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
@@ -780,7 +803,8 @@ fn spawn_thermal_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_bool_result_to_attempt(crate::surfer::spawn_html_fetch_service(spawner))
+    let _ = spawner;
+    spawn_bool_result_to_attempt(crate::surfer::spawn_html_fetch_service())
 }
 
 fn spawn_tinyaudio_service(spawner: Spawner) -> SpawnAttempt {
@@ -1526,7 +1550,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled(
         "tls-socket-service",
-        crate::r::readiness::NET_ANY_CONFIGURED,
+        crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &TLS_SOCKET_SERVICE_STARTED,
         spawn_tls_socket_service,
     ),
@@ -1806,7 +1830,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("thermal-service", 0, &THERMAL_SERVICE_STARTED, spawn_thermal_service),
     TaskSpec::enabled_gated(
         "html_fetch_service",
-        crate::r::readiness::NET_V4_CONFIGURED,
+        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         html_shack_gate,
         &HTML_SHACK_SERVICE_STARTED,
         html_fetch_service,

@@ -904,7 +904,7 @@ pub(crate) const DIRECT_RCS_PPGTT_LIMIT_BYTES: u64 =
 const DIRECT_RCS_LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
 const DIRECT_RCS_BATCH_START_DWORDS: usize = 4;
 // GuC registrations require stable HWLRCAs. Keep the GPGPU context window
-// distinct from render/font's 0x0080_0000 window instead of remapping another
+// distinct from render-graphics' 0x0080_0000 window instead of remapping another
 // allocation underneath the same registered context.
 const DIRECT_RCS_GPU_VA_RING_BASE: u64 = 0x01B0_0000;
 const DIRECT_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x01B1_0000;

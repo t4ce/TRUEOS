@@ -101,13 +101,6 @@ impl ShellMode2 {
             Self::Cmd => Self::Apps,
         }
     }
-
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Apps => "apps",
-            Self::Cmd => "cmd",
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -286,7 +279,7 @@ impl<'a> AlignedWriter<'a> {
         }
     }
 
-    fn mode_status(&self, output_mask: u8, mode: ShellMode2, running_go2_phase: usize) {
+    fn mode_status(&self, output_mask: u8, running_go2_phase: usize) {
         if active_terminal_hotkey_mode(output_mask) {
             return;
         }
@@ -298,18 +291,8 @@ impl<'a> AlignedWriter<'a> {
         }
         if active_matrix_slot_is_vmx(output_mask) {
             self.vmx_status();
-        } else {
-            self.right_text(STATUS_ROW, self.main_mode_text(mode).as_str());
         }
         self.io.raw_write_str(ecma48::RESET);
-    }
-
-    fn main_mode_text(&self, mode: ShellMode2) -> AllocString {
-        let mut text = AllocString::new();
-        self.push_mode_choice(&mut text, ShellMode2::Apps, mode == ShellMode2::Apps);
-        self.push_plain(&mut text, " - ");
-        self.push_mode_choice(&mut text, ShellMode2::Cmd, mode == ShellMode2::Cmd);
-        text
     }
 
     fn banner_right_text(&self, output_mask: u8, mode: ShellMode2) -> AllocString {
@@ -333,10 +316,6 @@ impl<'a> AlignedWriter<'a> {
             self.push_plain(&mut text, self.mode_commands_text(mode).as_str());
         }
         text
-    }
-
-    fn push_mode_choice(&self, out: &mut AllocString, mode: ShellMode2, selected: bool) {
-        self.push_mode_token(out, mode.label(), selected);
     }
 
     fn mode_commands_text(&self, mode: ShellMode2) -> AllocString {
@@ -366,17 +345,6 @@ impl<'a> AlignedWriter<'a> {
     fn push_function_key_label(&self, out: &mut AllocString, text: &str) {
         let styled = alloc::format!("{}", term_style::paint(text).color(FUNCTION_KEY_RGB));
         out.push_str(styled.as_str());
-    }
-
-    fn push_mode_token(&self, out: &mut AllocString, text: &str, selected: bool) {
-        if selected {
-            let styled =
-                alloc::format!("{}", term_style::paint(text).bold().color(STATUS_SELECTED_RGB));
-            out.push_str(styled.as_str());
-        } else {
-            let styled = alloc::format!("{}", term_style::paint(text).bold());
-            out.push_str(styled.as_str());
-        }
     }
 
     fn slot_status_text(&self, output_mask: u8, _running_go2_phase: usize) -> AllocString {
@@ -987,7 +955,7 @@ pub(crate) fn repaint_backend_screen(io: &'static dyn ShellBackend2) {
     let mode = ShellMode2::Cmd;
 
     out.banner(output_mask, mode, time_text.as_str());
-    out.mode_status(output_mask, mode, 0);
+    out.mode_status(output_mask, 0);
     out.set_scroll_region(slot_content_top_row(output_mask));
 
     let transcript = current_transcript_for_task(io);
@@ -1168,7 +1136,7 @@ fn redraw_active_view(
     out.clear_screen_home();
     out.reset_scroll_region();
     out.banner(output_mask, mode, minute_text);
-    out.mode_status(output_mask, mode, running_go2_phase);
+    out.mode_status(output_mask, running_go2_phase);
     out.set_scroll_region(slot_content_top_row(output_mask));
     let transcript = current_transcript_for_task(io);
     render_active_slot_content(out, output_mask, &transcript);
@@ -1258,7 +1226,7 @@ async fn run_plain_section_status(
         Timer::after(EmbassyDuration::from_millis(SECTION_RAINBOW_FRAME_MS)).await;
     }
 
-    out.mode_status(output_mask, mode, running_go2_phase);
+    out.mode_status(output_mask, running_go2_phase);
 }
 
 fn handle_submit(
@@ -1359,7 +1327,7 @@ fn apply_mode_toggle(
     minute_text: &str,
 ) {
     out.banner(output_mask, mode, minute_text);
-    out.mode_status(output_mask, mode, running_go2_phase);
+    out.mode_status(output_mask, running_go2_phase);
     render_prompt_line(out, output_mask, line);
 }
 
@@ -1384,7 +1352,7 @@ fn apply_matrix_operator_and_refresh(
     *mode = ShellMode2::Cmd;
     configure_output_view(out, output_mask);
     out.banner(output_mask, *mode, minute_text);
-    out.mode_status(output_mask, *mode, running_go2_phase);
+    out.mode_status(output_mask, running_go2_phase);
     let transcript = current_transcript_for_task(io);
     render_active_slot_content(out, output_mask, &transcript);
     transcript
@@ -1528,7 +1496,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     out.banner(output_mask, mode, time_text.as_str());
     let mut command_sessions: alloc::vec::Vec<CommandSession> = alloc::vec::Vec::new();
     let running_go2_phase = 0usize;
-    out.mode_status(output_mask, mode, running_go2_phase);
+    out.mode_status(output_mask, running_go2_phase);
 
     out.set_scroll_region(slot_content_top_row(output_mask));
     out.prompt(output_mask);
@@ -1575,7 +1543,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 out.io.raw_write_str(ecma48::RESET);
                 let (_, header_time_text) = clock_bucket_and_text();
                 out.banner(output_mask, mode, header_time_text.as_str());
-                out.mode_status(output_mask, mode, running_go2_phase);
+                out.mode_status(output_mask, running_go2_phase);
                 out.io.raw_write_str(ecma48::RESTORE_CURSOR);
                 last_chrome_state = chrome_state;
             }
@@ -1928,7 +1896,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             mode = ShellMode2::Cmd;
                             configure_output_view(&out, output_mask);
                             out.banner(output_mask, mode, minute_text.as_str());
-                            out.mode_status(output_mask, mode, running_go2_phase);
+                            out.mode_status(output_mask, running_go2_phase);
                             transcript = current_transcript_for_task(io);
                             render_active_slot_content(&out, output_mask, &transcript);
                             last_chrome_state = current_chrome_state(output_mask, mode);
@@ -1944,7 +1912,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     set_line_width_for_output(output_mask, width);
                                     configure_output_view(&out, output_mask);
                                     out.banner(output_mask, mode, minute_text.as_str());
-                                    out.mode_status(output_mask, mode, running_go2_phase);
+                                    out.mode_status(output_mask, running_go2_phase);
                                     transcript = current_transcript_for_task(io);
                                     render_active_slot_content(&out, output_mask, &transcript);
                                     last_chrome_state = current_chrome_state(output_mask, mode);

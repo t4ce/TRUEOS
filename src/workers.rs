@@ -264,6 +264,16 @@ pub fn pick_perf_background_spawner_with_slot() -> Option<(u32, u8, WorkerSpawne
     pick_background_spawner_with_filter(|slot| core_kind_for_slot(slot) == CORE_KIND_PERF)
 }
 
+/// Pick an AP2+ efficiency-core worker.
+///
+/// This is a strict core-profile selector: it does not fall back to the BSP,
+/// AP1, or a performance core. Callers may explicitly add an AP-only fallback
+/// with `pick_background_spawner_with_slot` when running on machines without
+/// profile-identified E-cores.
+pub fn pick_eff_background_spawner_with_slot() -> Option<(u32, u8, WorkerSpawner)> {
+    pick_background_spawner_with_filter(|slot| core_kind_for_slot(slot) == CORE_KIND_EFF)
+}
+
 fn pick_background_spawner_with_filter<F>(accept_slot: F) -> Option<(u32, u8, WorkerSpawner)>
 where
     F: Fn(u32) -> bool,

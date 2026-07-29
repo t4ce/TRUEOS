@@ -31,7 +31,9 @@ const SHA256_HEX_LEN: usize = 64;
 const ONLINE_HEADERS: &[&str; 6] = &["id", "app", "sha", "id", "app", "sha"];
 
 async fn fetch_url_bytes(url: String, max_bytes: usize) -> Result<Vec<u8>, String> {
-    crate::r::net::https::get_bytes_shared(url.as_str(), ONLINE_FETCH_TIMEOUT_MS, max_bytes).await
+    crate::surfer::html_shack::fetch_bytes_via_pool(url, ONLINE_FETCH_TIMEOUT_MS as u64, max_bytes)
+        .await
+        .map(|fetch| fetch.bytes)
 }
 
 async fn fetch_online_apps_html() -> Result<Vec<u8>, String> {

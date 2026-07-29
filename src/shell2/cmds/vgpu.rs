@@ -6,7 +6,7 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "vgpu status");
-    print_shell_line(io, "vgpu test broker|abi|guc|compute|blit|font|all");
+    print_shell_line(io, "vgpu test broker|abi|guc|compute|blit|all");
 }
 
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -20,15 +20,13 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
                 test if test.eq_ignore_ascii_case("guc") => test_guc(io),
                 test if test.eq_ignore_ascii_case("compute") => test_compute(io),
                 test if test.eq_ignore_ascii_case("blit") => test_blit(io),
-                test if test.eq_ignore_ascii_case("font") => test_font(io),
                 test if test.eq_ignore_ascii_case("all") => {
                     let broker = test_broker(io);
                     let abi = test_abi(io);
                     let guc = test_guc(io);
                     let compute = test_compute(io);
                     let blit = test_blit(io);
-                    let font = test_font(io);
-                    broker && abi && guc && compute && blit && font
+                    broker && abi && guc && compute && blit
                 }
                 _ => {
                     usage(io);
@@ -100,7 +98,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
             .as_str(),
         );
     }
-    print_kernel_timeline(io, "render/font", KernelClient::Render);
+    print_kernel_timeline(io, "render-graphics", KernelClient::Render);
     print_kernel_timeline(io, "gpgpu-system", KernelClient::GpgpuSystem);
     print_kernel_timeline(io, "gpgpu-execution", KernelClient::GpgpuExecution);
     print_kernel_timeline(io, "ui4-compositor", KernelClient::Ui4Compositor);
@@ -273,46 +271,4 @@ fn test_blit(io: &'static dyn ShellBackend2) -> bool {
         .as_str(),
     );
     probe.passed() && timeline
-}
-
-fn test_font(io: &'static dyn ShellBackend2) -> bool {
-    use crate::intel::gpu_font::{GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontTextRequest};
-
-    let before = vgpu::kernel_timeline(KernelClient::Render).unwrap_or_default();
-    let entry = GpuFontJobEntry {
-        text: GpuFontTextRequest::SingleLine("hello"),
-        position: [0.0, 0.0],
-        font_pixels: crate::graphics::font::FONT_TESSEL_BASE_PX,
-        slant: 0.0,
-    };
-    let entries = [entry];
-    let render = crate::intel::gpu_font::render_font_job_readback_once(GpuFontJob {
-        entries: &entries,
-        font: GpuFontFace::Default,
-        native_scale: 1,
-    });
-    let after = vgpu::kernel_timeline(KernelClient::Render).unwrap_or_default();
-    let (rendered, error) = match render {
-        Ok(readback) => {
-            let rendered = readback.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0);
-            crate::intel::gpu_font::recycle_font_job_readback(readback);
-            (rendered, "none")
-        }
-        Err(error) => (false, error),
-    };
-    let timeline = after.submitted > before.submitted && after.completed == after.submitted;
-    print_shell_line(
-        io,
-        format!(
-            "vgpu font: text=hello mode=offscreen-readback/no-primary-stamp rendered={} timeline={} submitted={}->{} completed={} error={}",
-            rendered as u8,
-            timeline as u8,
-            before.submitted,
-            after.submitted,
-            after.completed,
-            error,
-        )
-        .as_str(),
-    );
-    rendered && timeline
 }
