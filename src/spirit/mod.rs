@@ -33,7 +33,10 @@ pub(crate) use ai_emotion_adapter::{
 };
 #[allow(unused_imports)]
 pub(crate) use lilly_protocol::{LillyEmotion, enqueue_emotion_words, enqueue_emotions};
-pub(crate) use response_window::{enqueue_reasoning_response, spirit_response_window_service_task};
+pub(crate) use response_window::{
+    ReasoningResponseStream, begin_reasoning_response, enqueue_reasoning_response,
+    spirit_response_window_service_task,
+};
 pub(crate) use window_selection::spirit_window_selection_task;
 
 /// Architectural pipe/fence capacity kept for later activation.

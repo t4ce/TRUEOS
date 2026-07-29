@@ -713,13 +713,198 @@ async fn request_spirit_keyboard() -> KeyboardControlDevice {
     }
 }
 
+async fn present_claimed_response(
+    lease: KernelGridLease,
+    keyboard: KeyboardControlDevice,
+    request: ClaimedResponse,
+) -> bool {
+    let generation = match crate::r::gridpaper_service::reset_and_show_kernel_grid(lease) {
+        Ok(generation) => generation,
+        Err(error) => {
+            crate::log_warn!(
+                target: "gfx";
+                "trueos-spirit: response dropped id={} turn={} reason=gridpaper-reset error={:?}\n",
+                request.id,
+                request.turn,
+                error,
+            );
+            return false;
+        }
+    };
+
+    let presentation = wait_for_ready_presentation(lease, generation).await;
+    if !response_stream_is_live(request.id) {
+        cancel_response_keyboard(keyboard);
+        let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+        return false;
+    }
+    if let Err(reason) = focus_and_click_cell_zero(presentation).await {
+        crate::log_warn!(
+            target: "gfx";
+            "trueos-spirit: response dropped id={} turn={} window={} reason={}\n",
+            request.id,
+            request.turn,
+            presentation.window.raw(),
+            reason,
+        );
+        cancel_response_keyboard(keyboard);
+        let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+        return false;
+    }
+
+    let Some(accepted_base) =
+        crate::r::gridpaper_service::kernel_grid_accepted_text_cells(lease)
+    else {
+        crate::log_warn!(
+            target: "gfx";
+            "trueos-spirit: response dropped id={} turn={} window={} reason=gridpaper-accept-counter-missing\n",
+            request.id,
+            request.turn,
+            presentation.window.raw(),
+        );
+        let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+        return false;
+    };
+
+    let mut emitted = String::new();
+    let mut last_revision = 0u64;
+    let mut observed_revisions = 0u64;
+    let mut typed = 0usize;
+    let mut first_commit_ms = None;
+    loop {
+        let Some(snapshot) = response_snapshot(request.id, last_revision) else {
+            if !response_stream_is_live(request.id) {
+                cancel_response_keyboard(keyboard);
+                crate::log_warn!(
+                    target: "gfx";
+                    "trueos-spirit: response typing stopped id={} turn={} window={} reason=response-lost\n",
+                    request.id,
+                    request.turn,
+                    presentation.window.raw(),
+                );
+                let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+                return false;
+            }
+            RESPONSE_WAKE.wait().await;
+            continue;
+        };
+        last_revision = snapshot.revision;
+        observed_revisions = observed_revisions.saturating_add(1);
+        if snapshot.aborted {
+            cancel_response_keyboard(keyboard);
+            crate::log_warn!(
+                target: "gfx";
+                "trueos-spirit: response typing stopped id={} turn={} window={} cells={} reason=response-aborted\n",
+                request.id,
+                request.turn,
+                presentation.window.raw(),
+                typed,
+            );
+            let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+            return false;
+        }
+
+        let formatted = sanitize_stream_snapshot(snapshot.text.as_str(), snapshot.finished);
+        let Some(delta) = formatted.strip_prefix(emitted.as_str()) else {
+            cancel_response_keyboard(keyboard);
+            crate::log_warn!(
+                target: "gfx";
+                "trueos-spirit: response typing stopped id={} turn={} window={} revision={} reason=non-monotonic-formatted-prefix emitted_bytes={} next_bytes={} action=completed-fallback-if-producer-open\n",
+                request.id,
+                request.turn,
+                presentation.window.raw(),
+                snapshot.revision,
+                emitted.len(),
+                formatted.len(),
+            );
+            let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+            return false;
+        };
+        if !delta.is_empty() {
+            if first_commit_ms.is_none() {
+                let latency_ms = Instant::now()
+                    .as_millis()
+                    .saturating_sub(request.enqueued_ms);
+                first_commit_ms = Some(latency_ms);
+                crate::log_info!(
+                    target: "gfx";
+                    "trueos-spirit: response stream first-commit id={} turn={} window={} latency_ms={} scalars={} revision={} path=coalesced-prefix->paired-vkeyboard\n",
+                    request.id,
+                    request.turn,
+                    presentation.window.raw(),
+                    latency_ms,
+                    delta.chars().count(),
+                    snapshot.revision,
+                );
+            }
+            match type_response(keyboard, request.id, delta, typed == 0).await {
+                Ok(chunk_typed) => {
+                    typed = typed.saturating_add(chunk_typed);
+                    emitted = formatted;
+                }
+                Err(reason) => {
+                    crate::log_warn!(
+                        target: "gfx";
+                        "trueos-spirit: response typing stopped id={} turn={} window={} cells={} reason={}\n",
+                        request.id,
+                        request.turn,
+                        presentation.window.raw(),
+                        typed,
+                        reason,
+                    );
+                    let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+                    return false;
+                }
+            }
+        } else {
+            emitted = formatted;
+        }
+
+        if !snapshot.finished {
+            continue;
+        }
+        let accepted = wait_for_grid_text_acceptance(lease, accepted_base, typed).await;
+        match accepted.and_then(|()| {
+            crate::r::gridpaper_service::enable_spirit_response_rainbow_motion(lease)
+                .map_err(|_| "gridpaper-motion-enable")
+        }) {
+            Ok(animation_serial) => crate::log_info!(
+                target: "gfx";
+                "trueos-spirit: response typed id={} turn={} window={} cells={} streaming={} revisions={} first_commit_ms={} latency_ms={} path=paired-vkeyboard->ui4->gridpaper-cell-patches wrap=whitespace-before-word palette=rainbow animation_serial={} animation=cpp-scale-sine-0.85..1.15 gpu-scene=resident read_ms={}\n",
+                request.id,
+                request.turn,
+                presentation.window.raw(),
+                typed,
+                request.streaming as u8,
+                observed_revisions,
+                first_commit_ms.unwrap_or(0),
+                Instant::now().as_millis().saturating_sub(request.enqueued_ms),
+                animation_serial,
+                RESPONSE_READ_MS,
+            ),
+            Err(reason) => crate::log_warn!(
+                target: "gfx";
+                "trueos-spirit: response typed without motion id={} turn={} window={} cells={} streaming={} revisions={} reason={} retained_static_rainbow=1\n",
+                request.id,
+                request.turn,
+                presentation.window.raw(),
+                typed,
+                request.streaming as u8,
+                observed_revisions,
+                reason,
+            ),
+        }
+        return true;
+    }
+}
+
 #[embassy_executor::task]
 pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
     let lease = request_spirit_grid().await;
     let keyboard = request_spirit_keyboard().await;
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: response Gridpaper service online assigned_slot={} current_slot={} frame_grid={}x{} response_grid={}x{} cells={} scale={} ownership=kernel-dedicated cursor=Spirit/Lilly keyboard_slot={} input=cell-zero-click+paired-vkeyboard wrap=whitespace-before-word style=rainbow-palette+cpp-scale-0.85..1.15 hide_after_ms={} residency=warm-hidden no-blueprint-vm=1\n",
+        "trueos-spirit: response Gridpaper service online assigned_slot={} current_slot={} frame_grid={}x{} response_grid={}x{} cells={} scale={} ownership=kernel-dedicated cursor=Spirit/Lilly keyboard_slot={} input=cell-zero-click+paired-vkeyboard ingress=completed+coalesced-live-prefix wrap=whitespace-before-word style=rainbow-palette+cpp-scale-0.85..1.15 hide_after_ms={} residency=warm-hidden no-blueprint-vm=1\n",
         expected_slot,
         crate::percpu::current_slot(),
         SPIRIT_FRAME_COLUMNS,
@@ -733,86 +918,28 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
     );
 
     loop {
-        let request = match take_latest_response() {
+        let request = match claim_latest_response() {
             Some(request) => request,
             None => {
                 RESPONSE_WAKE.wait().await;
                 continue;
             }
         };
-        let generation = match crate::r::gridpaper_service::reset_and_show_kernel_grid(lease) {
-            Ok(generation) => generation,
-            Err(error) => {
-                crate::log_warn!(
-                    target: "gfx";
-                    "trueos-spirit: response dropped turn={} reason=gridpaper-reset error={:?}\n",
-                    request.turn,
-                    error,
-                );
-                continue;
-            }
-        };
-
-        let presentation = wait_for_ready_presentation(lease, generation).await;
-        if let Err(reason) = focus_and_click_cell_zero(presentation).await {
-            crate::log_warn!(
-                target: "gfx";
-                "trueos-spirit: response dropped turn={} window={} reason={}\n",
-                request.turn,
-                presentation.window.raw(),
-                reason,
-            );
-            let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+        let completed = present_claimed_response(lease, keyboard, request).await;
+        retire_response(request.id);
+        if !completed {
             continue;
         }
-        match type_response(keyboard, request.text.as_str()).await {
-            Ok(typed) => {
-                let accepted = wait_for_grid_text_acceptance(lease, typed).await;
-                match accepted.and_then(|()| {
-                    crate::r::gridpaper_service::enable_spirit_response_rainbow_motion(lease)
-                        .map_err(|_| "gridpaper-motion-enable")
-                }) {
-                    Ok(animation_serial) => crate::log_info!(
-                        target: "gfx";
-                        "trueos-spirit: response typed turn={} window={} cells={} latency_ms={} path=paired-vkeyboard->ui4->gridpaper-cell-patches wrap=whitespace-before-word palette=rainbow animation_serial={} animation=cpp-scale-sine-0.85..1.15 gpu-scene=resident read_ms={}\n",
-                        request.turn,
-                        presentation.window.raw(),
-                        typed,
-                        Instant::now().as_millis().saturating_sub(request.enqueued_ms),
-                        animation_serial,
-                        RESPONSE_READ_MS,
-                    ),
-                    Err(reason) => crate::log_warn!(
-                        target: "gfx";
-                        "trueos-spirit: response typed without motion turn={} window={} cells={} reason={} retained_static_rainbow=1\n",
-                        request.turn,
-                        presentation.window.raw(),
-                        typed,
-                        reason,
-                    ),
-                }
-            }
-            Err(reason) => crate::log_warn!(
-                target: "gfx";
-                "trueos-spirit: response typing stopped turn={} window={} reason={}\n",
-                request.turn,
-                presentation.window.raw(),
-                reason,
-            ),
-        }
 
-        if RESPONSE_QUEUE.lock().is_empty() {
-            let _ =
-                with_timeout(Duration::from_millis(RESPONSE_READ_MS), RESPONSE_WAKE.wait()).await;
-        }
-        if RESPONSE_QUEUE.lock().is_empty() {
+        if !wait_for_pending_response(Duration::from_millis(RESPONSE_READ_MS)).await {
             // TODO(chat): replace this fixed reading timeout with an explicit
             // conversation/window lifecycle once chat history and dismissal
             // semantics are decided.
             if let Err(error) = crate::r::gridpaper_service::hide_kernel_grid(lease) {
                 crate::log_warn!(
                     target: "gfx";
-                    "trueos-spirit: response hide deferred turn={} error={:?}\n",
+                    "trueos-spirit: response hide deferred id={} turn={} error={:?}\n",
+                    request.id,
                     request.turn,
                     error,
                 );
