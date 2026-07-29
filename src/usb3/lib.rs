@@ -328,7 +328,7 @@ pub struct TlbUsbSnapshot {
 }
 
 pub fn tlb_usb_snapshot() -> TlbUsbSnapshot {
-    let mut topology = super::lab::latest_snapshot()
+    let mut topology: Vec<TlbUsbTopologyNode> = super::lab::latest_snapshot()
         .map(|snapshot| {
             snapshot
                 .ports
