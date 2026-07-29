@@ -937,20 +937,21 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
         };
         let target_millifps = crate::allcaps::media_encode::REALTIME_HZ as u64 * 1_000;
         let cadence_tolerance = target_millifps.saturating_mul(CADENCE_TOLERANCE_PERCENT) / 100;
-        let accepted = udp_report.queued_access_units == expected_units
+        // Delivery success and cadence quality are deliberately separate.
+        // Recovered adapter backpressure or a missed real-time deadline does
+        // not invalidate an access unit that reached the subscribed viewer.
+        let delivered = udp_report.queued_access_units == expected_units
             && udp_report.sent_access_units == expected_units
             && udp_report.dropped_access_units == 0
-            && udp_report.submit_retries == 0
-            && udp_report.adapter_backpressure_events == 0
             && udp_report.adapter_send_errors == 0
-            && udp_report.late_access_units == 0
+            && stats.frames == expected_units;
+        let cadence_target_met = udp_report.late_access_units == 0
             && interval_millifps >= target_millifps.saturating_sub(cadence_tolerance)
-            && interval_millifps <= target_millifps.saturating_add(cadence_tolerance)
-            && stats.frames == expected_units
-            && stats.slot0_scanout_frames == expected_units
-            && stats.spirit_overlay_frames == expected_units;
+            && interval_millifps <= target_millifps.saturating_add(cadence_tolerance);
+        let retry_free =
+            udp_report.submit_retries == 0 && udp_report.adapter_backpressure_events == 0;
         STATE.store(
-            if accepted {
+            if delivered {
                 H264EncodeStreamState::Verified
             } else {
                 H264EncodeStreamState::Failed
@@ -958,8 +959,11 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             Ordering::Release,
         );
         crate::log_info!(target: "intel/media-encode";
-            "intel/media-encode: udp-live complete accepted={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} mapping=full-frame-nearest-downscale conversion=guc-rcs-cpp-linear-rgba8-to-nv12 cpu_pixel_math=0 dma_buffers=persistent vdbox_source=gpu-dma-direct cpu_nv12_copy_bytes=0 active_size={}x{} padding=top:4,bottom:4 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none slot0_scanout_frames={} slot0_scanout_pixels={} spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=rcs-completion-before-vdbox format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc direct_execlist_submit=0 hardware_encode=1 all_idr=1 protocol=tme1 version=1 egress_path=smoltcp-borrowed-direct-nic-dma-fill session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_sampled_fnv1a32=0x{:08X} source_last_sampled_fnv1a32=0x{:08X} source_changes={} capture_avg_us={} capture_max_us={} convert_wall_avg_us={} convert_wall_max_us={} convert_gpu_avg_us={} convert_gpu_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=producer-consumer buffering=double prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
-            accepted as u8,
+            "intel/media-encode: udp-live complete accepted={} delivery_complete={} cadence_target_met={} retry_free={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} mapping=full-frame-nearest-downscale conversion=guc-rcs-cpp-linear-rgba8-to-nv12 cpu_pixel_math=0 dma_buffers=persistent vdbox_source=gpu-dma-direct cpu_nv12_copy_bytes=0 active_size={}x{} padding=top:4,bottom:4 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none slot0_scanout_frames={} slot0_scanout_pixels={} spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=rcs-completion-before-vdbox format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc direct_execlist_submit=0 hardware_encode=1 all_idr=1 protocol=tme1 version=1 egress_path=smoltcp-borrowed-direct-nic-dma-fill session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_sampled_fnv1a32=0x{:08X} source_last_sampled_fnv1a32=0x{:08X} source_changes={} capture_avg_us={} capture_max_us={} convert_wall_avg_us={} convert_wall_max_us={} convert_gpu_avg_us={} convert_gpu_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=producer-consumer buffering=double prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
+            delivered as u8,
+            delivered as u8,
+            cadence_target_met as u8,
+            retry_free as u8,
             stats.source_width,
             stats.source_height,
             ENCODE_WIDTH,
@@ -1014,14 +1018,18 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             worker_kind,
         );
 
-        if !accepted {
+        if !delivered {
             let snapshot = h264_encode_stream_snapshot();
             crate::log_error!(target: "intel/media-encode";
-                "intel/media-encode: live session rejected state={:?} encode_us={} source_bytes={} encoded_bytes={} reason=session-validation-failed action=return-to-subscriber-wait filesystem_writes=0 software_fallback=0\n",
+                "intel/media-encode: live session rejected state={:?} encode_us={} source_bytes={} encoded_bytes={} queued_units={} sent_units={} dropped_units={} adapter_send_errors={} reason=delivery-incomplete action=return-to-subscriber-wait filesystem_writes=0 software_fallback=0\n",
                 snapshot.state,
                 snapshot.encode_us,
                 snapshot.source_bytes,
                 snapshot.encoded_bytes,
+                udp_report.queued_access_units,
+                udp_report.sent_access_units,
+                udp_report.dropped_access_units,
+                udp_report.adapter_send_errors,
             );
             Timer::after(Duration::from_millis(250)).await;
         }

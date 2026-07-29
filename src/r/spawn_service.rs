@@ -53,6 +53,7 @@ define_started_flags!(
     NET_POLL_STARTED,
     NET_SERVICE_STARTED,
     NET_CACHE_SERVICE_STARTED,
+    NET_THROUGHPUT_BENCH_STARTED,
     TLS_SOCKET_SERVICE_STARTED,
     NTP_SYNC_STARTED,
     SNTP_SERVICE_STARTED,
@@ -423,6 +424,24 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
     } else {
         SpawnAttempt::Skipped
     }
+}
+
+fn spawn_net_throughput_bench(spawner: Spawner) -> SpawnAttempt {
+    if !crate::allcaps::net::THROUGHPUT_BENCH_AUTOSTART {
+        return SpawnAttempt::Skipped;
+    }
+
+    let rx = match crate::r::net::throughput_bench::throughput_rx_task() {
+        Ok(token) => token,
+        Err(err) => return SpawnAttempt::Failed(err),
+    };
+    let tx = match crate::r::net::throughput_bench::throughput_tx_task() {
+        Ok(token) => token,
+        Err(err) => return SpawnAttempt::Failed(err),
+    };
+    spawner.spawn(rx);
+    spawner.spawn(tx);
+    SpawnAttempt::Spawned
 }
 
 fn spawn_i226_diagnostic_display(spawner: Spawner) -> SpawnAttempt {
@@ -1374,7 +1393,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 69
+const TASK_COUNT: usize = 70
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1471,6 +1490,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("net-poll-tasks", 0, &NET_POLL_STARTED, spawn_net_poll_tasks),
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),
     TaskSpec::enabled("net-cache-service", 0, &NET_CACHE_SERVICE_STARTED, spawn_net_cache_service),
+    TaskSpec::enabled(
+        "net-throughput-bench",
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        &NET_THROUGHPUT_BENCH_STARTED,
+        spawn_net_throughput_bench,
+    ),
     TaskSpec::enabled(
         "tls-socket-service",
         crate::r::readiness::NET_ANY_CONFIGURED,

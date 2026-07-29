@@ -50,6 +50,8 @@ pub mod services {
     pub const MIDI_PIANO_UDP_PORT: u16 = 9_696;
     /// Subscriber-driven UI4 H.264 access-unit stream for the Linux receiver.
     pub const MEDIA_ENCODE_UDP_PORT: u16 = 9_650;
+    /// Development-only paired TCP throughput peer on the local asset host.
+    pub const NET_THROUGHPUT_BENCH_TCP_PORT: u16 = 9_651;
     pub const HTTP_TRUEOSFS_TCP_PORT: u16 = well_known::HTTP;
     pub const LOCALCODER_WEB_TCP_PORT: u16 = 81;
     pub const TINYAUDIO_LIVE_HTTP_TCP_PORT: u16 = 82;
@@ -78,6 +80,7 @@ pub mod esp {
 }
 
 pub mod local_assets {
+    pub const HOST_IPV4: [u8; 4] = [192, 168, 178, 111];
     pub const HTTP_HOST: &str = "192.168.178.111";
     pub const HTTP_PORT: u16 = super::esp::HTTP_UPLOAD_PORT;
     pub const HTTP_BASE_URL: &str = "http://192.168.178.111:8080";

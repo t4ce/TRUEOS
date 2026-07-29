@@ -2,7 +2,7 @@
 
 extern crate alloc;
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use core::fmt::Write;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -306,6 +306,254 @@ pub fn pci_snapshot_read_host(offset: usize, out: &mut [u8]) -> usize {
     n
 }
 
+pub fn usb_snapshot_text_host() -> String {
+    let snapshot = crate::usb2::tlb_usb_snapshot();
+    let mut out = String::new();
+    let _ = writeln!(out, "trueos usb snapshot v1");
+    let _ = writeln!(
+        out,
+        "summary\t{}\t{}\t{}",
+        snapshot.devices.len(),
+        snapshot
+            .probe_device_count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| String::from("-")),
+        snapshot.probe_error.unwrap_or("-")
+    );
+
+    for controller in &snapshot.controllers {
+        let runtime = crate::usb2::crabusb_runtime_diag(controller.index);
+        let _ = writeln!(
+            out,
+            "controller\t{}\t{:02X}:{:02X}.{}\t{:04X}\t{:04X}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            controller.index,
+            controller.bus,
+            controller.slot,
+            controller.function,
+            controller.vendor_id,
+            controller.device_id,
+            controller.controller_phase,
+            controller.root_hub_lifecycle,
+            u8::from(controller.event_ready),
+            u8::from(controller.root_port_change_seen),
+            controller.empty_probe_streak,
+            runtime.last_probe_state,
+            runtime.last_probe_device_count,
+        );
+
+        if let Some(mmio) = crate::usb2::controller_mmio_diag(controller.index) {
+            for port in mmio.ports {
+                let speed = usb_port_speed_name(port.portsc);
+                let link_state = usb_port_link_state_name(port.portsc);
+                let _ = writeln!(
+                    out,
+                    "port\t{}\t{}\t{}\t{}\t{}\t{}\t0x{:08X}\t0x{:08X}\t0x{:08X}",
+                    controller.index,
+                    port.port_id,
+                    u8::from((port.portsc & 1) != 0),
+                    u8::from((port.portsc & 2) != 0),
+                    speed,
+                    link_state,
+                    port.portsc,
+                    port.portpmsc,
+                    port.portli,
+                );
+            }
+        }
+    }
+
+    for device in &snapshot.devices {
+        let parent = device
+            .parent_hub_slot_id
+            .map(|slot| slot.to_string())
+            .unwrap_or_else(|| String::from("-"));
+        let path = join_usb_path(&device.path);
+        let _ = writeln!(
+            out,
+            "device\t{:08X}\t0\t{}\t{}\t{}\t0x{:05X}\t{}\t{:04X}\t{:04X}\t{:02X}\t{:02X}\t{:02X}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            device.stable_id,
+            device.slot_id,
+            device.root_port_id,
+            device.port_id,
+            device.route_string,
+            device.speed,
+            device.vendor_id,
+            device.product_id,
+            device.class,
+            device.subclass,
+            device.protocol,
+            device.num_configurations,
+            device.max_packet_size_0,
+            parent,
+            sanitize_usb_field(device.manufacturer.as_deref().unwrap_or("")),
+            sanitize_usb_field(device.product.as_deref().unwrap_or("")),
+            sanitize_usb_field(device.serial.as_deref().unwrap_or("")),
+            path,
+        );
+        for configuration in &device.configurations {
+            let _ = writeln!(
+                out,
+                "config\t{:08X}\t{}\t0x{:02X}\t{}",
+                device.stable_id,
+                configuration.configuration_value,
+                configuration.attributes,
+                configuration.max_power,
+            );
+            for interface in &configuration.interfaces {
+                let _ = writeln!(
+                    out,
+                    "interface\t{:08X}\t{}\t{}\t{}\t{:02X}\t{:02X}\t{:02X}",
+                    device.stable_id,
+                    configuration.configuration_value,
+                    interface.interface_number,
+                    interface.alternate_setting,
+                    interface.class,
+                    interface.subclass,
+                    interface.protocol,
+                );
+                for endpoint in &interface.endpoints {
+                    let _ = writeln!(
+                        out,
+                        "endpoint\t{:08X}\t{}\t{}\t{}\t0x{:02X}\t{}\t{}\t{}",
+                        device.stable_id,
+                        configuration.configuration_value,
+                        interface.interface_number,
+                        interface.alternate_setting,
+                        endpoint.address,
+                        endpoint.transfer_type,
+                        endpoint.max_packet_size,
+                        endpoint.interval,
+                    );
+                }
+            }
+        }
+        for hop in &device.hub_path {
+            let _ = writeln!(
+                out,
+                "hop\t{:08X}\t{}\t{}\t{}\t{}",
+                device.stable_id, hop.slot_id, hop.port_id, hop.hub_depth, hop.speed,
+            );
+        }
+    }
+
+    for node in &snapshot.topology {
+        let kind = match node.kind {
+            crate::usb2::TlbUsbTopologyNodeKind::RootPort => "root",
+            crate::usb2::TlbUsbTopologyNodeKind::Hub => "hub",
+            crate::usb2::TlbUsbTopologyNodeKind::Device => "device",
+        };
+        let _ = writeln!(
+            out,
+            "topology\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            kind,
+            node.controller_index,
+            node.root_port_id,
+            node.port_id,
+            node.depth,
+            optional_usb_u8(node.slot_id),
+            optional_usb_u8(node.parent_slot_id),
+            node.speed,
+            optional_usb_u16_hex(node.vendor_id),
+            optional_usb_u16_hex(node.product_id),
+            optional_usb_u8_hex(node.class),
+            optional_usb_u8_hex(node.subclass),
+            optional_usb_u8_hex(node.protocol),
+        );
+    }
+
+    out
+}
+
+pub fn usb_snapshot_len_host() -> usize {
+    usb_snapshot_text_host().len()
+}
+
+pub fn usb_snapshot_read_host(offset: usize, out: &mut [u8]) -> usize {
+    if out.is_empty() {
+        return 0;
+    }
+    let text = usb_snapshot_text_host();
+    let bytes = text.as_bytes();
+    if offset >= bytes.len() {
+        return 0;
+    }
+    let n = core::cmp::min(out.len(), bytes.len() - offset);
+    out[..n].copy_from_slice(&bytes[offset..offset + n]);
+    n
+}
+
+fn sanitize_usb_field(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if matches!(ch, '\t' | '\r' | '\n') {
+                ' '
+            } else {
+                ch
+            }
+        })
+        .collect()
+}
+
+fn join_usb_path(path: &[u8]) -> String {
+    let mut out = String::new();
+    for (index, port) in path.iter().enumerate() {
+        if index != 0 {
+            out.push('.');
+        }
+        let _ = write!(out, "{port}");
+    }
+    out
+}
+
+fn optional_usb_u8(value: Option<u8>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| String::from("-"))
+}
+
+fn optional_usb_u8_hex(value: Option<u8>) -> String {
+    value
+        .map(|value| alloc::format!("{value:02X}"))
+        .unwrap_or_else(|| String::from("-"))
+}
+
+fn optional_usb_u16_hex(value: Option<u16>) -> String {
+    value
+        .map(|value| alloc::format!("{value:04X}"))
+        .unwrap_or_else(|| String::from("-"))
+}
+
+fn usb_port_speed_name(portsc: u32) -> &'static str {
+    match (portsc >> 10) & 0x0f {
+        1 => "full",
+        2 => "low",
+        3 => "high",
+        4 => "super",
+        5 => "super+",
+        _ => "unknown",
+    }
+}
+
+fn usb_port_link_state_name(portsc: u32) -> &'static str {
+    match (portsc >> 5) & 0x0f {
+        0 => "u0",
+        1 => "u1",
+        2 => "u2",
+        3 => "u3",
+        4 => "disabled",
+        5 => "rx-detect",
+        6 => "inactive",
+        7 => "polling",
+        8 => "recovery",
+        9 => "hot-reset",
+        10 => "compliance",
+        11 => "test",
+        15 => "resume",
+        _ => "reserved",
+    }
+}
+
 pub unsafe extern "C" fn trueos_vlayer_rapl_snapshot_read(
     offset: usize,
     out_ptr: *mut u8,
@@ -345,6 +593,21 @@ pub unsafe extern "C" fn trueos_vlayer_pci_snapshot_read(
         trueos_vm::vmcall::OP_BP_PCI_SNAPSHOT_READ,
         pci_snapshot_len_host,
         pci_snapshot_read_host,
+        offset,
+        out_ptr,
+        out_cap,
+    )
+}
+
+pub unsafe extern "C" fn trueos_vlayer_usb_snapshot_read(
+    offset: usize,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    vlayer_read_runtime(
+        trueos_vm::vmcall::OP_BP_USB_SNAPSHOT_READ,
+        usb_snapshot_len_host,
+        usb_snapshot_read_host,
         offset,
         out_ptr,
         out_cap,

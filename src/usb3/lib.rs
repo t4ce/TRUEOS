@@ -3,6 +3,9 @@ use alloc::vec::Vec;
 use core::{alloc::Layout, num::NonZeroUsize, ptr::NonNull, time::Duration};
 
 use crab_usb as crabusb;
+use spin::Mutex;
+
+static OBSERVED_USB_DEVICES: Mutex<Vec<TlbUsbDevice>> = Mutex::new(Vec::new());
 
 struct TrueosCrabKernel;
 
@@ -325,7 +328,7 @@ pub struct TlbUsbSnapshot {
 }
 
 pub fn tlb_usb_snapshot() -> TlbUsbSnapshot {
-    let topology = super::lab::latest_snapshot()
+    let mut topology = super::lab::latest_snapshot()
         .map(|snapshot| {
             snapshot
                 .ports
@@ -348,10 +351,170 @@ pub fn tlb_usb_snapshot() -> TlbUsbSnapshot {
                 .collect()
         })
         .unwrap_or_default();
+    let devices = OBSERVED_USB_DEVICES.lock().clone();
+    topology.extend(devices.iter().map(|device| TlbUsbTopologyNode {
+        kind: if device.class == 0x09 {
+            TlbUsbTopologyNodeKind::Hub
+        } else {
+            TlbUsbTopologyNodeKind::Device
+        },
+        controller_index: 0,
+        root_port_id: device.root_port_id,
+        port_id: device.port_id,
+        depth: device.path.len().try_into().unwrap_or(u8::MAX),
+        slot_id: Some(device.slot_id),
+        parent_slot_id: device.parent_hub_slot_id,
+        speed: device.speed,
+        vendor_id: Some(device.vendor_id),
+        product_id: Some(device.product_id),
+        class: Some(device.class),
+        subclass: Some(device.subclass),
+        protocol: Some(device.protocol),
+    }));
     TlbUsbSnapshot {
         controllers: pci_usb_controllers(),
+        probe_device_count: Some(devices.len()),
+        devices,
         topology,
         ..TlbUsbSnapshot::default()
+    }
+}
+
+pub fn observe_probed_devices(label: &str, devices: &[crabusb::ProbedDevice]) {
+    let inferred_root_port = super::lab::latest_snapshot().and_then(|snapshot| {
+        let mut connected = snapshot
+            .ports
+            .iter()
+            .filter(|port| (port.portsc & 1) != 0)
+            .map(|port| port.port_id);
+        let first = connected.next()?;
+        connected.next().is_none().then_some(first)
+    });
+
+    let mut observed = OBSERVED_USB_DEVICES.lock();
+    if label == "initial" {
+        observed.clear();
+    }
+    for probed in devices {
+        let next = tlb_device_from_probed(probed, inferred_root_port);
+        if let Some(existing) = observed
+            .iter_mut()
+            .find(|device| device.stable_id == next.stable_id)
+        {
+            *existing = next;
+        } else {
+            observed.push(next);
+        }
+    }
+}
+
+fn tlb_device_from_probed(
+    probed: &crabusb::ProbedDevice,
+    inferred_root_port: Option<u8>,
+) -> TlbUsbDevice {
+    let descriptor = probed.descriptor();
+    let configurations = probed
+        .configurations()
+        .iter()
+        .map(|configuration| TlbUsbConfiguration {
+            configuration_value: configuration.configuration_value,
+            attributes: configuration.attributes,
+            max_power: configuration.max_power,
+            interfaces: configuration
+                .interfaces
+                .iter()
+                .flat_map(|interface| interface.alt_settings.iter())
+                .map(|interface| TlbUsbInterface {
+                    interface_number: interface.interface_number,
+                    alternate_setting: interface.alternate_setting,
+                    class: interface.class,
+                    subclass: interface.subclass,
+                    protocol: interface.protocol,
+                    endpoints: interface
+                        .endpoints
+                        .iter()
+                        .map(|endpoint| TlbUsbEndpoint {
+                            address: endpoint.address,
+                            transfer_type: match endpoint.transfer_type {
+                                crabusb::usb_if::descriptor::EndpointType::Control => "control",
+                                crabusb::usb_if::descriptor::EndpointType::Isochronous => {
+                                    "isochronous"
+                                }
+                                crabusb::usb_if::descriptor::EndpointType::Bulk => "bulk",
+                                crabusb::usb_if::descriptor::EndpointType::Interrupt => "interrupt",
+                            },
+                            max_packet_size: endpoint.max_packet_size,
+                            interval: endpoint.interval,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+        .collect();
+    let slot_id = probed.id().try_into().unwrap_or(u8::MAX);
+    let root_port_id = inferred_root_port.unwrap_or(0);
+    TlbUsbDevice {
+        stable_id: stable_usb_id(
+            slot_id,
+            descriptor.vendor_id,
+            descriptor.product_id,
+            descriptor.device_version,
+        ),
+        slot_id,
+        root_port_id,
+        port_id: root_port_id,
+        route_string: 0,
+        speed: "unknown",
+        vendor_id: descriptor.vendor_id,
+        product_id: descriptor.product_id,
+        class: descriptor.class,
+        subclass: descriptor.subclass,
+        protocol: descriptor.protocol,
+        num_configurations: descriptor.num_configurations,
+        max_packet_size_0: descriptor.max_packet_size_0,
+        product: Some(alloc::format!(
+            "{} {:04X}:{:04X}",
+            usb_device_kind(descriptor.class),
+            descriptor.vendor_id,
+            descriptor.product_id
+        )),
+        path: inferred_root_port.into_iter().collect(),
+        configurations,
+        ..TlbUsbDevice::default()
+    }
+}
+
+fn stable_usb_id(slot_id: u8, vendor_id: u16, product_id: u16, device_version: u16) -> u32 {
+    let mut hash = 0x811c_9dc5u32;
+    for byte in [
+        slot_id,
+        vendor_id as u8,
+        (vendor_id >> 8) as u8,
+        product_id as u8,
+        (product_id >> 8) as u8,
+        device_version as u8,
+        (device_version >> 8) as u8,
+    ] {
+        hash = (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+fn usb_device_kind(class: u8) -> &'static str {
+    match class {
+        0x00 => "USB device",
+        0x01 => "USB audio",
+        0x02 | 0x0a => "USB communications",
+        0x03 => "USB HID",
+        0x06 => "USB imaging",
+        0x07 => "USB printer",
+        0x08 => "USB mass storage",
+        0x09 => "USB hub",
+        0x0b => "USB smart card",
+        0x0e => "USB video",
+        0xe0 => "USB wireless",
+        0xff => "USB vendor device",
+        _ => "USB device",
     }
 }
 
@@ -367,15 +530,38 @@ fn xhci_port_speed_name(portsc: u32) -> &'static str {
 }
 
 pub fn crabusb_observed_device_summaries(
-    _controller_index: usize,
+    controller_index: usize,
 ) -> Result<Vec<UsbDeviceSummary>, &'static str> {
-    Ok(Vec::new())
+    if controller_index != 0 {
+        return Ok(Vec::new());
+    }
+    Ok(OBSERVED_USB_DEVICES
+        .lock()
+        .iter()
+        .map(|device| UsbDeviceSummary {
+            root_port_id: device.root_port_id,
+            port: device.port_id,
+            slot_id: device.slot_id,
+            route_string: device.route_string,
+            vid: Some(device.vendor_id),
+            pid: Some(device.product_id),
+            class: Some(device.class),
+            subclass: Some(device.subclass),
+            protocol: Some(device.protocol),
+            kind: usb_device_kind(device.class),
+            product: device.product.clone(),
+            stable_id: device.stable_id,
+        })
+        .collect())
 }
 
 pub fn crabusb_observed_devices(
-    _controller_index: usize,
+    controller_index: usize,
 ) -> Result<Vec<TlbUsbDevice>, &'static str> {
-    Ok(Vec::new())
+    if controller_index != 0 {
+        return Ok(Vec::new());
+    }
+    Ok(OBSERVED_USB_DEVICES.lock().clone())
 }
 
 #[derive(Clone, Debug, Default)]

@@ -82,6 +82,12 @@ pub mod net {
     pub const NET_POLL_SLEEP_US: u64 = 100;
     pub const NET_SERVICE_SLEEP_US: u64 = 100;
 
+    pub const THROUGHPUT_BENCH_AUTOSTART: bool = true;
+    pub const THROUGHPUT_BENCH_START_DELAY_MS: u64 = 15_000;
+    pub const THROUGHPUT_BENCH_DURATION_MS: u64 = 30_000;
+    pub const THROUGHPUT_BENCH_CONNECT_TIMEOUT_MS: u64 = 10_000;
+    pub const THROUGHPUT_BENCH_TX_INFLIGHT_BYTES: usize = 4 * 1024 * 1024;
+
     pub const DNS_SERVER_MAX: usize = 4;
     pub const IPV6_RS_RETRY_MS: i64 = 5_000;
     pub const MAX_NET_DEVICES: usize = 8;

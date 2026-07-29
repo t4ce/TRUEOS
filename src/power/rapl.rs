@@ -14,8 +14,7 @@ const MSR_PP0_ENERGY_STATUS: u32 = 0x639;
 const MSR_PP1_ENERGY_STATUS: u32 = 0x641;
 const MSR_PLATFORM_ENERGY_STATUS: u32 = 0x64D;
 const RAPL_SERVICE_SAMPLE_PERIOD_MS: u64 = 100;
-const RAPL_TRUEOSFS_PERSIST_PERIOD_MS: u64 = 10_000;
-const RAPL_TRUEOSFS_PATH: &str = "rapl.txt";
+pub const RAPL_TRUEOSFS_PATH: &str = "rapl.txt";
 pub const RAPL_HISTORY_MAX_BYTES: usize = 5 * 1024 * 1024;
 const RAPL_HISTORY_TRIM_BYTES: usize = 1024 * 1024;
 const RAPL_HISTORY_HEADER: &[u8] = b"# trueos rapl history v1\n# ms,dt_ms,update,valid,pkg_j,pp0_j,pp1_j,dram_j,psys_j,pkg_w,pp0_w,pp1_w,dram_w,psys_w\n";
@@ -321,20 +320,12 @@ pub async fn raple_service() {
 
     crate::log_info!(
         target: "boot";
-        "rapl: service online sample_ms={} persist_ms={} path={}\n",
-        RAPL_SERVICE_SAMPLE_PERIOD_MS,
-        RAPL_TRUEOSFS_PERSIST_PERIOD_MS,
-        RAPL_TRUEOSFS_PATH
+        "rapl: service online sample_ms={} history=memory-only manual_store=\"rapl store\"\n",
+        RAPL_SERVICE_SAMPLE_PERIOD_MS
     );
-    let mut next_persist_ms = service_now_ms().saturating_add(RAPL_TRUEOSFS_PERSIST_PERIOD_MS);
     loop {
         let snapshot = refresh_snapshot_once();
         append_snapshot_to_history(snapshot);
-        let now_ms = snapshot.last_update_ms;
-        if now_ms >= next_persist_ms {
-            persist_history_to_trueosfs().await;
-            next_persist_ms = now_ms.saturating_add(RAPL_TRUEOSFS_PERSIST_PERIOD_MS);
-        }
         Timer::after(EmbassyDuration::from_millis(RAPL_SERVICE_SAMPLE_PERIOD_MS)).await;
     }
 }
@@ -386,33 +377,28 @@ fn read_sample(domain: RaplDomain, msr: u32, units: RaplUnits) -> RaplSample {
     }
 }
 
-async fn persist_history_to_trueosfs() {
+pub async fn store_history_to_trueosfs() -> Result<usize, RaplStoreError> {
     if !crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
-        return;
+        return Err(RaplStoreError::RootNotMounted);
     }
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        return;
+        return Err(RaplStoreError::RootUnavailable);
     };
 
     let history = history_bytes_snapshot();
     match crate::r::fs::trueosfs::file_in_async(disk, RAPL_TRUEOSFS_PATH, &history).await {
-        Ok(true) => {}
-        Ok(false) => {
-            crate::log_info!(
-                target: "rapl";
-                "rapl: persist skipped path={} reason=no-space-or-fs\n",
-                RAPL_TRUEOSFS_PATH
-            );
-        }
-        Err(err) => {
-            crate::log_info!(
-                target: "rapl";
-                "rapl: persist failed path={} err={:?}\n",
-                RAPL_TRUEOSFS_PATH,
-                err
-            );
-        }
+        Ok(true) => Ok(history.len()),
+        Ok(false) => Err(RaplStoreError::NoSpaceOrFs),
+        Err(err) => Err(RaplStoreError::Io(err)),
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum RaplStoreError {
+    RootNotMounted,
+    RootUnavailable,
+    NoSpaceOrFs,
+    Io(crate::disc::block::Error),
 }
 
 fn append_snapshot_to_history(snapshot: RaplSnapshot) {

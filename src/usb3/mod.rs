@@ -154,6 +154,7 @@ async fn probe_devices_with_log(
     if label == "initial" || !news.is_empty() {
         crate::log!("crabusb: probe_devices label={} count={}\n", label, news.len());
     }
+    lib::observe_probed_devices(label, &news);
     Some(news)
 }
 

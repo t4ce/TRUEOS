@@ -15,6 +15,7 @@ pub mod pwg_raster;
 pub mod smtp_cabi;
 pub mod socket_cabi;
 pub mod srv;
+pub mod throughput_bench;
 pub mod trueos_peer;
 pub mod udp;
 pub mod vlayer;
@@ -290,6 +291,27 @@ impl VNet {
                 Some(api::Event::TcpData {
                     handle: api::NetHandle(handle.0),
                     data: api::ByteBuf::from_slice_trunc(first),
+                })
+            }
+
+            // The public ABI carries a u16 count, while one adapter flush may
+            // accept more than u16::MAX bytes. Preserve the full count as an
+            // ordered series of events instead of silently truncating it.
+            NetEvent::TcpSent { handle, len } => {
+                let first = len.min(u16::MAX as usize) as u16;
+                let mut remaining = len.saturating_sub(first as usize);
+                let mut pending = self.pending.lock();
+                while remaining != 0 {
+                    let part = remaining.min(u16::MAX as usize) as u16;
+                    pending.push_back(api::Event::TcpSent {
+                        handle: api::NetHandle(handle.0),
+                        len: part,
+                    });
+                    remaining -= part as usize;
+                }
+                Some(api::Event::TcpSent {
+                    handle: api::NetHandle(handle.0),
+                    len: first,
                 })
             }
 

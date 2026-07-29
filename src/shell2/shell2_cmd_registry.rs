@@ -40,6 +40,7 @@ const TOOL_JSON_LUM: &str = r#"{"type":"object","properties":{"prompt":{"type":"
 const TOOL_JSON_MV: &str = r#"{"type":"object","properties":{"src":{"type":"string","description":"Source TRUEOSFS path."},"dst":{"type":"string","description":"Destination TRUEOSFS path."},"regex":{"type":"string","description":"Optional -regx pattern. When set, src and dst are directories."}},"required":["src","dst"],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_QJS: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
+const TOOL_JSON_RAPL: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["store"],"description":"Store the current in-memory RAPL history in TRUEOSFS."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_RM: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file or directory path."},"regex":{"type":"string","description":"Optional -regx pattern to match children under path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
 const TOOL_JSON_SHA: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to hash with SHA-256."}},"required":["path"],"additionalProperties":false}"#;
@@ -160,6 +161,10 @@ fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
 
 fn dispatch_qjs(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::qjs::try_parse(spawner, io, rest)
+}
+
+fn dispatch_rapl(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::rapl::try_parse(spawner, io, rest)
 }
 
 fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -391,6 +396,15 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_QJS),
     },
     BuiltinShell2CmdEntry {
+        name: "rapl",
+        mode: "cmd",
+        color: Some(STATUS_GRAY_RGB),
+        advertised: true,
+        handler: dispatch_rapl,
+        tool_description: Some("Store the current in-memory RAPL history in TRUEOSFS."),
+        tool_parameters_json: Some(TOOL_JSON_RAPL),
+    },
+    BuiltinShell2CmdEntry {
         name: "tlb",
         mode: "cmd",
         color: Some(STATUS_GRAY_RGB),
@@ -551,7 +565,8 @@ pub(crate) fn try_dispatch(
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
         "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "qjs", "ssh",
-        "txt", "grid", "tts", "stt", "cpp", "vgpu", "vid", "cry", "acpi", "tlb", "smp", "etc",
+        "txt", "grid", "tts", "stt", "cpp", "vgpu", "vid", "cry", "acpi", "rapl", "tlb", "smp",
+        "etc",
     ];
 
     let mut out = AllocString::new();
