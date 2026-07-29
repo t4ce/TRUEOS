@@ -897,6 +897,9 @@ pub(crate) fn lfm25_q8_project_batch(
                 LFM25_Q8_GPU_TIMESTAMP_HZ.store(timings.gpu_timestamp_hz, Ordering::Relaxed);
             }
             LFM25_Q8_LAST_ROWS.store(specs.last().unwrap().rows, Ordering::Relaxed);
+            if submissions == 1 && crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED {
+                super::log_gen12_mocs_readback("first-lfm-retire");
+            }
             if submissions == 1 || submissions.is_power_of_two() {
                 crate::log_info!(
                     target: "gpgpu";

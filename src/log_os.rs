@@ -20,14 +20,14 @@ pub(crate) mod flags {
 
     /// Focused Lumen inference performance profile.
     ///
-    /// Global/Info carries the cold model pack/seal, sampled RCS phases, and
-    /// sparse read-only GT frequency observations. This switch also controls
-    /// the phase sampler itself and admits reasoning/service-lane lifecycle
-    /// plus LFM2.5 C++/IGC runtime/submission timing without enabling noisy
-    /// render, storage, network, or per-dispatch trace traffic that would
-    /// perturb the measurements. It never authorizes GT policy writes. Setting
-    /// it to false compile-folds Lumen submissions back to the legacy
-    /// unsampled path.
+    /// Global/Info carries the cold model pack/seal, sampled RCS phases, sparse
+    /// read-only GT frequency observations, and read-only MOCS checkpoints.
+    /// This switch also controls the phase sampler itself and admits
+    /// reasoning/service-lane lifecycle plus LFM2.5 C++/IGC runtime/submission
+    /// timing without enabling noisy render, storage, network, or per-dispatch
+    /// trace traffic that would perturb the measurements. It never authorizes
+    /// GT policy writes. Setting it to false compile-folds Lumen submissions
+    /// back to the legacy unsampled path.
     pub(crate) const LUMEN_PERF_DIAG_PROFILE_ENABLED: bool = true;
 
     pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {

@@ -166,6 +166,9 @@ pub fn init_once() {
     let forcewake_ready = device_uses_gen12_integrated_pat(dev.device_id) && forcewake(dev);
     let pat_ready = forcewake_ready && init_gen12_integrated_pat(dev);
     GEN12_INTEGRATED_PAT_READY.store(pat_ready, Ordering::Release);
+    if forcewake_ready && crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED {
+        log_gen12_mocs_readback_for_dev(dev, "pre-guc");
+    }
     let media_fuse = media_vdbox_fuse_raw(dev);
     let media_platform_mask = media_platform_vdbox_mask(dev.device_id);
     let media_enabled_mask = media_vdbox_mask(dev);
@@ -186,6 +189,9 @@ pub fn init_once() {
     );
     if guc_boot {
         let _ = init_required_guc_transport(dev);
+        if forcewake_ready && crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED {
+            log_gen12_mocs_readback_for_dev(dev, "post-guc");
+        }
     } else {
         crate::log!(
             "intel/uc-fw: firmware bring-up skipped device=0x{:04X} name={} reason=unsupported-device-policy\n",
@@ -315,6 +321,39 @@ pub(crate) fn gen12_gt_state_snapshot() -> Option<self::gt_state::Gen12GtStateSn
     claimed_device()
         .filter(|dev| device_uses_gen12_integrated_pat(dev.device_id))
         .map(self::gt_state::read)
+}
+
+fn log_gen12_mocs_readback_for_dev(dev: Dev, checkpoint: &str) {
+    if !device_uses_gen12_integrated_pat(dev.device_id) {
+        return;
+    }
+    let readback = self::gt_state::read_mocs(dev);
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/cache-policy-mocs: checkpoint={} mode=read-only available={} matches_expected={} device=0x{:04X} global_mismatches={} l3cc_mismatches={} index4_global=0x{:08X} index4_l3cc_pair=0x{:08X} expected_global=0x00000005 expected_l3cc_pair=0x00100030 first_global=index:{},observed:0x{:08X},expected:0x{:08X} first_l3cc=register:{},observed:0x{:08X},expected:0x{:08X} fingerprint=global:0x{:016X},l3cc:0x{:016X} writes=0 readiness_gates=0\n",
+        checkpoint,
+        readback.available as u8,
+        readback.accepted as u8,
+        dev.device_id,
+        readback.global_mismatches,
+        readback.l3cc_mismatches,
+        readback.global_index4,
+        readback.l3cc_pair2,
+        readback.first_global_index,
+        readback.first_global_observed,
+        readback.first_global_expected,
+        readback.first_l3cc_register,
+        readback.first_l3cc_observed,
+        readback.first_l3cc_expected,
+        readback.global_fingerprint,
+        readback.l3cc_fingerprint,
+    );
+}
+
+pub(crate) fn log_gen12_mocs_readback(checkpoint: &str) {
+    if let Some(dev) = claimed_device() {
+        log_gen12_mocs_readback_for_dev(dev, checkpoint);
+    }
 }
 
 pub(crate) fn guc_boot_enabled() -> bool {
