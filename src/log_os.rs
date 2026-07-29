@@ -21,7 +21,7 @@ pub(crate) mod flags {
     /// Focused Lumen inference performance profile.
     ///
     /// Global/Info already carries the cold model pack/seal measurement. This
-    /// switch additionally admits the sparse reasoning lifecycle and LFM2.5
+    /// switch additionally admits reasoning/service-lane lifecycle and LFM2.5
     /// C++/IGC runtime/submission timing records without enabling noisy render,
     /// storage, network, or per-dispatch trace traffic that would perturb the
     /// measurements.

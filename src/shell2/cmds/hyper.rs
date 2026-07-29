@@ -15,7 +15,9 @@ use super::tlb_helper::print_table;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const HYPER_DOWNLOAD_TIMEOUT_MS: u64 = 90_000;
-const HYPER_DOWNLOAD_MAX_BYTES: usize = 128 * 1024 * 1024;
+// Hyper downloads are bounded by allocation and filesystem capacity rather
+// than an artificial response-size ceiling.
+const HYPER_DOWNLOAD_MAX_BYTES: usize = usize::MAX;
 
 const HYPER_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const HYPER_MENU_ROWS: [[&str; 2]; 3] = [
@@ -87,12 +89,13 @@ async fn write_file(path: &str, bytes: &[u8]) -> Result<(), String> {
 }
 
 async fn fetch_download_bytes(url: String) -> Result<Vec<u8>, String> {
-    crate::r::net::https::get_bytes_shared(
-        url.as_str(),
-        HYPER_DOWNLOAD_TIMEOUT_MS as u32,
+    crate::surfer::html_shack::fetch_bytes_via_pool(
+        url,
+        HYPER_DOWNLOAD_TIMEOUT_MS,
         HYPER_DOWNLOAD_MAX_BYTES,
     )
     .await
+    .map(|fetch| fetch.bytes)
 }
 
 fn submit_download(spawner: &Spawner, io: &'static dyn ShellBackend2, url: String, path: String) {
