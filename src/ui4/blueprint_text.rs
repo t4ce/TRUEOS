@@ -1112,6 +1112,79 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_keyboard_state(
     0
 }
 
+/// Read all UI4 cursor/combo routes and their paired held-key state.
+///
+/// The returned count is the total route count. At most `out_cap` records are
+/// written. Records remain visible when their cursor selects another frame so
+/// a joined local player can be reported as missing focus without exposing
+/// another window's identity.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_input_routes(
+    window_id: u32,
+    out: *mut TrueosUi4InputRouteState,
+    out_cap: u32,
+) -> isize {
+    if out_cap != 0 && out.is_null() {
+        return ERROR_INVALID as isize;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_input_routes(window_id, out, out_cap) };
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT as isize;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND as isize;
+        };
+        surface.window
+    };
+    route_owner_input_events(owner);
+    let routes = window_input_routes(owner, window);
+    for (index, route) in routes.iter().take(out_cap as usize).enumerate() {
+        let mut flags = 0;
+        if route.selected_for_window {
+            flags |= UI4_INPUT_ROUTE_SELECTED_FOR_WINDOW;
+        }
+        if route.app_focus {
+            flags |= UI4_INPUT_ROUTE_APP_FOCUS;
+        }
+        if route.vcursor {
+            flags |= UI4_INPUT_ROUTE_VCURSOR;
+        }
+        let mut state = TrueosUi4InputRouteState {
+            cursor_controller_id: route.source.controller_id,
+            cursor_slot_id: route.source.slot_id,
+            cursor_ep_target: route.source.ep_target,
+            cursor_hid_kind: u32::from(route.source.hid_kind),
+            combo_id: route.combo_id,
+            color_rgba: u32::from_le_bytes([
+                route.color.r,
+                route.color.g,
+                route.color.b,
+                route.color.a,
+            ]),
+            flags,
+            ..TrueosUi4InputRouteState::default()
+        };
+        if let Some(keyboard) = route.keyboard.as_ref() {
+            state.flags |= UI4_INPUT_ROUTE_KEYBOARD_PRESENT;
+            state.keyboard_controller_id = keyboard.controller_id;
+            state.keyboard_slot_id = keyboard.slot_id;
+            state.keyboard_ep_target = keyboard.ep_target;
+            state.keyboard_modifiers = keyboard.modifiers;
+            state.keyboard_source_kind = keyboard.source_kind as u8;
+            state.virtual_keyboard = u8::from(keyboard.virtual_device);
+            state.keys = keyboard.keys;
+            state.ascii = keyboard.ascii;
+            state.key_down_bits = keyboard.key_down_bits;
+        }
+        // SAFETY: the caller promised out_cap writable records.
+        unsafe { out.add(index).write(state) };
+    }
+    routes.len() as isize
+}
+
 /// Drain one VM owner's broker queue once and preserve every pointer, pan, and
 /// resize event for its exact surface. Keyboard held state remains in the input
 /// broker; draining its cooked events here prevents an interactive Blueprint
@@ -3010,6 +3083,43 @@ unsafe fn guest_keyboard_state(window_id: u32, out: *mut TrueosUi4KeyboardState)
     let state = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
     unsafe { out.write(state) };
     0
+}
+
+unsafe fn guest_input_routes(
+    window_id: u32,
+    out: *mut TrueosUi4InputRouteState,
+    out_cap: u32,
+) -> isize {
+    let response_cap = (out_cap as usize).min(MAX_INPUT_ROUTES);
+    let mut response =
+        alloc::vec![0u8; response_cap * core::mem::size_of::<TrueosUi4InputRouteState>()];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_UI4_SCENE_INPUT_ROUTES,
+        window_id as u64,
+        response_cap as u64,
+        &[],
+        response.as_mut_slice(),
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4 as isize;
+    }
+    let result = data as i64;
+    if result < 0 {
+        return result as isize;
+    }
+    let copied = (result as usize).min(response_cap);
+    if copied != 0 {
+        // SAFETY: out_cap covers response_cap records and the vmcall copied
+        // exactly the initialized response bytes for `copied` records.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                response.as_ptr(),
+                out.cast::<u8>(),
+                copied * core::mem::size_of::<TrueosUi4InputRouteState>(),
+            );
+        }
+    }
+    result as isize
 }
 
 unsafe fn guest_text_rows(
