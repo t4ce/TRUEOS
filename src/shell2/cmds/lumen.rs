@@ -158,6 +158,7 @@ impl LumTurnTelemetry {
         let delta = igpu_now.delta_since(self.igpu_phase_probe_before);
         let mut aggregate = crate::intel::gpgpu::Lfm25Q8PhaseProbeStats::default();
         let mut buckets = String::new();
+        let mut gt_buckets = String::new();
         for (index, signature) in crate::intel::gpgpu::LFM25_Q8_SUBMISSION_SIGNATURES
             .into_iter()
             .enumerate()
@@ -166,6 +167,7 @@ impl LumTurnTelemetry {
             aggregate.accumulate(stats);
             if index != 0 {
                 buckets.push('|');
+                gt_buckets.push('|');
             }
             let _ = core::write!(
                 &mut buckets,
@@ -179,6 +181,16 @@ impl LumTurnTelemetry {
                 stats.epilogue_us,
                 stats.release_to_observe_us,
                 stats.queue_to_observe_us,
+            );
+            let _ = core::write!(
+                &mut gt_buckets,
+                "{}:{}:{}:{}:{}:{}",
+                signature.label(),
+                stats.samples,
+                stats.gt_start_active_samples,
+                stats.gt_end_active_samples,
+                stats.gt_start_ratio_sum,
+                stats.gt_end_ratio_sum,
             );
         }
         crate::log_info!(
@@ -197,6 +209,39 @@ impl LumTurnTelemetry {
             gpu_timestamp_hz,
             buckets,
         );
+        let start_avg_mhz = active_ratio_average_mhz(
+            aggregate.gt_start_ratio_sum,
+            aggregate.gt_start_active_samples,
+        );
+        let end_avg_mhz =
+            active_ratio_average_mhz(aggregate.gt_end_ratio_sum, aggregate.gt_end_active_samples);
+        let state = crate::intel::gen12_gt_state_snapshot().unwrap_or_default();
+        crate::log_info!(
+            target: "global";
+            "lfm25: turn-gt-state stage=done scope=turn turn={} schema=1 available={} samples={} start_active={} end_active={} start_zero={} end_zero={} start_ratio_sum={} end_ratio_sum={} active_avg_mhz=start:{},end:{} final_actual_ratio={} final_actual_mhz={} requested_ratio={} requested_mhz={} rp0_mhz={} rpe_mhz={} rpn_mhz={} throttle_reasons=0x{:X} rpstat1_raw=0x{:08X} rpnswreq_raw=0x{:08X} sampling=first+power-of-two-per-signature observation=cpu-mmio-pre-submit+post-observe register=gen12-rpstat1 bucket_schema=signature:samples:start_active:end_active:start_ratio_sum:end_ratio_sum buckets={}\n",
+            self.turn,
+            state.available as u8,
+            aggregate.samples,
+            aggregate.gt_start_active_samples,
+            aggregate.gt_end_active_samples,
+            aggregate.samples.saturating_sub(aggregate.gt_start_active_samples),
+            aggregate.samples.saturating_sub(aggregate.gt_end_active_samples),
+            aggregate.gt_start_ratio_sum,
+            aggregate.gt_end_ratio_sum,
+            start_avg_mhz,
+            end_avg_mhz,
+            state.actual_ratio,
+            state.actual_mhz,
+            state.requested_ratio,
+            state.requested_mhz,
+            state.rp0_mhz,
+            state.rpe_mhz,
+            state.rpn_mhz,
+            state.throttle_reasons,
+            state.rpstat1_raw,
+            state.rpnswreq_raw,
+            gt_buckets,
+        );
     }
 
     fn log_cpu_done(&self, cpu_now: crate::r::lfm25_hybrid_cpu_backend::Lfm25HybridCpuPerfStats) {
@@ -214,6 +259,16 @@ impl LumTurnTelemetry {
             delta.projection_batch_us,
         );
     }
+}
+
+fn active_ratio_average_mhz(ratio_sum: u64, active_samples: u64) -> u64 {
+    if active_samples == 0 {
+        return 0;
+    }
+    ratio_sum
+        .saturating_mul(50)
+        .saturating_add(active_samples.saturating_mul(3) / 2)
+        / active_samples.saturating_mul(3)
 }
 
 enum PromptPoll {

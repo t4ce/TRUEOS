@@ -8,6 +8,7 @@ pub(crate) mod format;
 pub(crate) mod gpgpu;
 mod gpu_device;
 pub(crate) mod gpu_font;
+mod gt_state;
 mod guc;
 pub(crate) mod guc_ctb;
 pub(crate) mod guc_submission;
@@ -109,6 +110,7 @@ const GEN11_GT_VEBOX_VDBOX_DISABLE: usize = 0x9140;
 const GEN12_S_GT_PLATFORM_VDBOX_MASK: u8 = (1 << 0) | (1 << 2);
 static INIT: AtomicBool = AtomicBool::new(false);
 static GEN12_INTEGRATED_PAT_READY: AtomicBool = AtomicBool::new(false);
+static GEN12_INTEGRATED_CACHE_POLICY_READY: AtomicBool = AtomicBool::new(false);
 static DISPLAY_GGTT_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
 // The display device is selected exactly once during boot and never mutates.
 // Keep readers lock-free so interrupt-adjacent display/media paths cannot
@@ -163,8 +165,17 @@ pub fn init_once() {
     );
     CLAIMED_DEVICE.call_once(|| dev);
     let forcewake_ready = device_uses_gen12_integrated_pat(dev.device_id) && forcewake(dev);
+    let mocs_report = if forcewake_ready {
+        self::gt_state::init_gen12_mocs(dev)
+    } else {
+        self::gt_state::Gen12MocsInitReport::default()
+    };
     let pat_ready = forcewake_ready && init_gen12_integrated_pat(dev);
+    // PPGTT consumers need the complete cache contract: a valid PAT selector
+    // is insufficient while the surface-state MOCS index is undefined.
     GEN12_INTEGRATED_PAT_READY.store(pat_ready, Ordering::Release);
+    GEN12_INTEGRATED_CACHE_POLICY_READY
+        .store(pat_ready && mocs_report.accepted, Ordering::Release);
     let media_fuse = media_vdbox_fuse_raw(dev);
     let media_platform_mask = media_platform_vdbox_mask(dev.device_id);
     let media_enabled_mask = media_vdbox_mask(dev);
@@ -177,14 +188,26 @@ pub fn init_once() {
         media_enabled_mask,
     );
     crate::log!(
-        "intel/cache-policy: accepted={} platform={} device=0x{:04X} forcewake={} ppgtt_default=pat0-wb ppgtt_scanout=pat3-uc ggtt=system-memory-address-only pat=[wb,wc,wt,uc,wb,wb,wb,wb]\n",
-        pat_ready as u8,
+        "intel/cache-policy: accepted={} platform={} device=0x{:04X} forcewake={} pat={} mocs={} ppgtt_default=pat0-wb ppgtt_scanout=pat3-uc ggtt=system-memory-address-only pat_table=[wb,wc,wt,uc,wb,wb,wb,wb] mocs_table=gen12-upstream-64 l3cc_table=gen12-upstream-32\n",
+        (pat_ready && mocs_report.accepted) as u8,
         display_device_name(dev.device_id),
         dev.device_id,
         forcewake_ready as u8,
+        pat_ready as u8,
+        mocs_report.accepted as u8,
+    );
+    crate::log!(
+        "intel/cache-policy-mocs: checkpoint=boot-init accepted={} device=0x{:04X} entries=global:64,l3cc:32 index=4 before_global=0x{:08X} before_l3cc_pair=0x{:08X} after_global=0x{:08X} after_l3cc_pair=0x{:08X} expected_global=0x00000005 expected_l3cc_pair=0x00100030 order=global-before-l3cc-before-guc\n",
+        mocs_report.accepted as u8,
+        dev.device_id,
+        mocs_report.before_global_index4,
+        mocs_report.before_l3cc_pair2,
+        mocs_report.after.global_index4,
+        mocs_report.after.l3cc_pair2,
     );
     if guc_boot {
         let _ = init_required_guc_transport(dev);
+        log_gen12_mocs_checkpoint_for_dev(dev, "post-guc");
     } else {
         crate::log!(
             "intel/uc-fw: firmware bring-up skipped device=0x{:04X} name={} reason=unsupported-device-policy\n",
@@ -304,6 +327,37 @@ pub(crate) fn is_emulator_environment() -> bool {
 
 pub(crate) fn claimed_device() -> Option<Dev> {
     CLAIMED_DEVICE.get().copied()
+}
+
+pub(crate) fn gen12_actual_gt_ratio(dev: Dev) -> u32 {
+    self::gt_state::actual_gt_ratio(dev)
+}
+
+pub(crate) fn gen12_gt_state_snapshot() -> Option<self::gt_state::Gen12GtStateSnapshot> {
+    claimed_device()
+        .filter(|dev| device_uses_gen12_integrated_pat(dev.device_id))
+        .map(self::gt_state::read_gen12_gt_state)
+}
+
+fn log_gen12_mocs_checkpoint_for_dev(dev: Dev, checkpoint: &str) {
+    let readback = self::gt_state::read_gen12_mocs(dev);
+    crate::log!(
+        "intel/cache-policy-mocs: checkpoint={} accepted={} device=0x{:04X} available={} index=4 global=0x{:08X} l3cc_pair=0x{:08X} expected_global=0x00000005 expected_l3cc_pair=0x00100030\n",
+        checkpoint,
+        readback.accepted as u8,
+        dev.device_id,
+        readback.available as u8,
+        readback.global_index4,
+        readback.l3cc_pair2,
+    );
+}
+
+pub(crate) fn log_gen12_mocs_checkpoint(checkpoint: &str) {
+    if let Some(dev) =
+        claimed_device().filter(|dev| device_uses_gen12_integrated_pat(dev.device_id))
+    {
+        log_gen12_mocs_checkpoint_for_dev(dev, checkpoint);
+    }
 }
 
 pub(crate) fn guc_boot_enabled() -> bool {
@@ -1248,6 +1302,12 @@ pub(crate) fn map_display_scanout_ggtt(dev: Dev, phys: u64, len: usize, gpu: u64
 
 pub(crate) fn gen12_integrated_pat_ready() -> bool {
     GEN12_INTEGRATED_PAT_READY.load(Ordering::Acquire)
+}
+
+/// PPGTT consumers select both a PAT entry and a surface-state MOCS index.
+/// Keep them fail-closed until both hardware tables have exact readback.
+pub(crate) fn gen12_integrated_cache_policy_ready() -> bool {
+    GEN12_INTEGRATED_CACHE_POLICY_READY.load(Ordering::Acquire)
 }
 
 /// Remove a display-owned GGTT range after its plane has been proven idle.

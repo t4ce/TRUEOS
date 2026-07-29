@@ -71,7 +71,7 @@ impl SparsePpgtt {
         // Do not create a Gen12 PPGTT whose PAT meanings are inherited from
         // firmware. Ordinary resources use PAT0/WB while direct-scanout
         // render targets deliberately use PAT3/UC.
-        if !crate::intel::gen12_integrated_pat_ready() {
+        if !crate::intel::gen12_integrated_cache_policy_ready() {
             return None;
         }
         let pml4 = alloc_table_page()?;

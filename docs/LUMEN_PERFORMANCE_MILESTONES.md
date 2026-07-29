@@ -6,6 +6,11 @@ milestones. Each milestone ends with the same three bare-metal validations, so
 the nine runs remain comparable from the first diagnostic build through the
 final optimized build.
 
+The physical campaign target is Intel Alder Lake-S GT1 / UHD Graphics 770,
+PCI `8086:4680` at `00:02.0`. The checked-in C++/IGC artifacts additionally
+pin revision `0x0c`; the boot and runtime artifact-admission records must
+confirm that revision before a run is accepted.
+
 The performance work must preserve the fixed model, tokenizer, greedy decode
 schedule, packed-model hash, and exact `hi` response. A faster result is not
 accepted if projection parity, token parity, completion-marker integrity, or
@@ -101,6 +106,53 @@ python3 -B tools/lfm25_baremetal_report.py \
   bld/baremetal-logs/LatestOfThree.logs
 ```
 
+### Captured Milestone 2 results
+
+Runs 4–6 passed with exact token and response parity. Compared with the
+selected Milestone 1 baseline turns:
+
+| Campaign runs | Prompt | Turn ms (M1 → M2) | Turn gain | Prefill ms (M1 → M2) | Reply ms (M1 → M2) | Reply tok/s (M1 → M2) | CPU attention us (M1 → M2) |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 → 4 | `hi` | 9,094 → 8,754 | 340 ms (3.739%) | 4,501 → 4,394 | 4,593 → 4,360 | 1.96 → 2.06 | 315,000 → 59,000 |
+| 2 → 5 | `hi` | 9,113 → 8,772 | 341 ms (3.742%) | 4,543 → 4,396 | 4,570 → 4,376 | 1.97 → 2.06 | 309,000 → 54,000 |
+| 3 → 6 | sky | 21,367 → 20,044 | 1,323 ms (6.192%) | 9,635 → 9,260 | 11,732 → 10,784 | 1.88 → 2.04 | 1,230,000 → 246,000 |
+
+Across the three turns, elapsed time fell from 39,574 to 37,570 ms: a
+2,004 ms, 5.064% gain. Prefill fell 629 ms (3.367%), reply fell 1,375 ms
+(6.581%), and aggregate reply throughput rose from 1.914 to 2.049 tok/s
+(7.044%). CPU attention time fell from 1,854,000 to 359,000 us, an 80.636%
+reduction. In contrast, GPU timestamp time fell only 132,847 us (0.582%) and
+completion time outside the timestamped walkers fell 358,153 us (2.661%).
+The end-to-end gain is therefore primarily host-side, while the GPU data path
+remains the Milestone 3 target.
+
+The required schema-1 RCS probes contain 58/58 valid samples and zero invalid
+samples. Their aggregate 590,820 us queue-to-observe interval comprises
+481,178 us of walkers (81.442%), 108,016 us queue-to-batch (18.282%), and
+1,655 us of preamble, epilogue, and release-to-observe phases (0.280%;
+independently rounded phase totals). Vocabulary accounts for 281,124 us, or
+58.424% of sampled walker time. These figures identify phase and signature
+dominance; they must not be extrapolated to every submission because the
+sampler records only the first and power-of-two successes per signature.
+
+The immutable evidence copies are:
+
+- `bld/baremetal-logs/lumen-m2-validation1.log`, SHA-256
+  `6486474777dcd9cd5207466140993a6c0f7922f10089163d0a0db2cfdcda80db`;
+- `bld/baremetal-logs/lumen-m2-validation2.log`, SHA-256
+  `6efb19b691037f3c7a63fd0b36d9798fa2438836b586e0771ba12e78087f7b08`;
+- `bld/baremetal-logs/lumen-m2-validation3.log`, SHA-256
+  `036f3b09bdd41c5453921c706e7799361976d5b572e4f2fe3232b4b8be1baba7`.
+
+Strictly replay the final three-run archive with:
+
+```sh
+python3 -B tools/lfm25_baremetal_report.py \
+  --expect-runs 3 \
+  --require-rcs-probe \
+  bld/baremetal-logs/lumen-m2-validation3.log
+```
+
 ## Milestone 3 — GPU data path
 
 Use the per-signature evidence from Runs 4–6 to optimize the actual dominant
@@ -126,6 +178,66 @@ Candidate work is deliberately evidence-gated:
 Milestone 3 is complete when Runs 7–9 pass, all local parity/ISA gates pass,
 and the final audit demonstrates repeatable end-to-end gains without Lumen or
 shared-RCS regressions.
+
+### Implemented Milestone 3 intervention
+
+The first evidence-gated GPU intervention restores the cache-policy
+initialization that TRUEOS was missing. Before this build, TRUEOS programmed
+the Gen12 PAT table but never initialized `GLOBAL_MOCS` or `LNCFCMOCS`, even
+though every LFM surface and state-base-address entry selects MOCS index 4.
+Reset values therefore left that index undefined by TRUEOS. The M3 build now:
+
+- writes and reads back the complete 64-entry Gen12 global MOCS table;
+- writes and reads back all 32 packed L3CC registers, in global-before-L3CC
+  order;
+- completes both tables while render/GT forcewake is retained and before GuC
+  firmware, transport, and golden contexts are initialized;
+- requires PAT and MOCS readback acceptance before the integrated cache
+  contract is exposed as ready;
+- checks index 4 after initialization, after GuC bring-up, and after the first
+  retired LFM submission; and
+- samples actual GT ratios immediately before submission and after completion
+  observation for the same first-and-power-of-two signature samples already
+  used by the RCS phase probe.
+
+For this exact ADL-S device, upstream i915 defines MOCS index 4 as global
+control `0x00000005` with L3CC `0x0030`; the packed L3CC register containing
+entries 4 and 5 is therefore `0x00100030`. The implementation and ordering are
+pinned to Linux commit `fc02acf6ac0ccde0c805c2daa9148683cdd01ba8`:
+
+- [Gen12 MOCS table](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_mocs.c#L342-L368)
+  and [table-selection/readback rules](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_mocs.c#L454-L492);
+- [global-before-L3CC programming order](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_mocs.c#L666-L684);
+- [MOCS register definitions](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_gt_regs.h#L298-L299);
+  and
+- [Gen12 frequency register definitions](https://github.com/torvalds/linux/blob/fc02acf6ac0ccde0c805c2daa9148683cdd01ba8/drivers/gpu/drm/i915/gt/intel_gt_regs.h#L772-L816).
+
+This experiment intentionally does not force RP0, add an RPS owner, or change
+SLPC. The earlier `gpu_hz=19200000` field is the render timestamp clock, not
+the GT execution frequency. The new `turn-gt-state` record reports actual,
+requested, and capability frequencies separately so Runs 7–9 can establish
+whether cache policy alone closes the transport gap and whether a later
+frequency-control experiment is justified.
+
+On the fresh Run 7 boot, require these cache-policy checkpoints:
+
+- `checkpoint=boot-init accepted=1`, with
+  `after_global=0x00000005` and `after_l3cc_pair=0x00100030`;
+- `checkpoint=post-guc accepted=1`; and
+- `checkpoint=first-lfm-retire accepted=1`.
+
+The `before_global` and `before_l3cc_pair` fields are part of the result: reset
+or firmware values different from the expected values prove that M3 changed
+the effective policy; already-correct values mean this particular mutation
+cannot explain a speed change. Validate Runs 7–9 strictly with:
+
+```sh
+python3 -B tools/lfm25_baremetal_report.py \
+  --expect-runs 3 \
+  --require-rcs-probe \
+  --require-gt-state \
+  bld/baremetal-logs/LatestOfThree.logs
+```
 
 ## The nine bare-metal runs
 
