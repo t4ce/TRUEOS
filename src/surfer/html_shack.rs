@@ -1397,6 +1397,7 @@ async fn fetch_html_body_for_navigation(
 }
 
 async fn handle_byte_fetch_request(worker_id: u32, request: ByteFetchRequest) {
+    let started_at = Instant::now();
     let result = with_timeout_or_none(
         fetch_http_body_hyper(
             request.url.as_str(),
@@ -1407,34 +1408,40 @@ async fn handle_byte_fetch_request(worker_id: u32, request: ByteFetchRequest) {
         request.timeout_ms,
     )
     .await;
+    let elapsed_ms = Instant::now()
+        .saturating_duration_since(started_at)
+        .as_millis();
 
     let result = match result {
         Some(Ok((url, bytes))) => {
             crate::log!(
-                "html_shack: byte_fetch ready worker={} id={} url={} bytes={} transport=hyper-vnet\n",
+                "html_shack: byte_fetch ready worker={} id={} url={} bytes={} elapsed_ms={} transport=hyper-vnet\n",
                 worker_id,
                 request.id,
                 url,
-                bytes.len()
+                bytes.len(),
+                elapsed_ms
             );
             Ok(ByteFetch { url, bytes })
         }
         Some(Err(err)) => {
             crate::log!(
-                "html_shack: byte_fetch failed worker={} id={} url={} reason={}\n",
+                "html_shack: byte_fetch failed worker={} id={} url={} reason={} elapsed_ms={}\n",
                 worker_id,
                 request.id,
                 request.url,
-                err.reason()
+                err.reason(),
+                elapsed_ms
             );
             Err(String::from(err.reason()))
         }
         None => {
             crate::log!(
-                "html_shack: byte_fetch failed worker={} id={} url={} reason=timeout\n",
+                "html_shack: byte_fetch failed worker={} id={} url={} reason=timeout elapsed_ms={}\n",
                 worker_id,
                 request.id,
-                request.url
+                request.url,
+                elapsed_ms
             );
             Err(String::from("timed out"))
         }
@@ -1467,6 +1474,7 @@ async fn handle_html_fetch_request(
         return;
     }
 
+    let started_at = Instant::now();
     let result = with_timeout_or_none(
         fetch_html_body_for_navigation(
             fetch_url.as_str(),
@@ -1476,12 +1484,16 @@ async fn handle_html_fetch_request(
         HTML_FETCH_BODY_TIMEOUT_MS,
     )
     .await;
+    let elapsed_ms = Instant::now()
+        .saturating_duration_since(started_at)
+        .as_millis();
 
     let Some(result) = result else {
         crate::log!(
-            "html_shack: fetch failed worker={} url={} reason=timeout\n",
+            "html_shack: fetch failed worker={} url={} reason=timeout elapsed_ms={}\n",
             worker_id,
-            fetch_url
+            fetch_url,
+            elapsed_ms
         );
         return;
     };
@@ -1490,10 +1502,11 @@ async fn handle_html_fetch_request(
         Ok(ok) => ok,
         Err(err) => {
             crate::log!(
-                "html_shack: fetch failed worker={} url={} reason={}\n",
+                "html_shack: fetch failed worker={} url={} reason={} elapsed_ms={}\n",
                 worker_id,
                 fetch_url,
-                err.reason()
+                err.reason(),
+                elapsed_ms
             );
             return;
         }
@@ -1511,11 +1524,12 @@ async fn handle_html_fetch_request(
     }
     let ready_len = with_html_shack(|shack| shack.put_ready_html(html));
     crate::log!(
-        "html_shack: fetched worker={} url={} bytes={} ready={} transport=hyper-vnet delegated={}\n",
+        "html_shack: fetched worker={} url={} bytes={} ready={} elapsed_ms={} transport=hyper-vnet delegated={}\n",
         worker_id,
         source_url,
         bytes.len(),
         ready_len,
+        elapsed_ms,
         if delegated_handoff { 1 } else { 0 }
     );
 }
@@ -1525,10 +1539,15 @@ pub async fn html_fetch_worker_task() {
     let worker_id = HTML_FETCH_WORKER_SEQ
         .fetch_add(1, Ordering::AcqRel)
         .saturating_add(1);
+    let profile = crate::cpu::CpuProfile::current();
     crate::log!(
-        "html_shack: fetch worker started worker={} max_parallel={} executor=local transport=hyper-vnet latest_wins=1\n",
+        "html_shack: fetch worker started worker={} max_parallel={} cpu_slot={} core_kind={} placement=ecore-preferred-ap transport=hyper-vnet latest_wins=1\n",
         worker_id,
-        HTML_FETCH_WORKERS
+        HTML_FETCH_WORKERS,
+        profile.map(|profile| profile.slot()).unwrap_or(u32::MAX),
+        profile
+            .map(|profile| profile.core_kind_name())
+            .unwrap_or("unknown")
     );
 
     loop {

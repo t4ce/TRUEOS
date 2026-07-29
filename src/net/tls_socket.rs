@@ -534,7 +534,14 @@ fn tls_socket_tick_once() {
 #[task]
 pub async fn tls_socket_service_task() {
     async move {
-        crate::log_info!(target: "net"; "tls-socket: service running\n");
+        let profile = crate::cpu::CpuProfile::current();
+        crate::log_info!(target: "net";
+            "tls-socket: service running cpu_slot={} core_kind={} placement=ecore-preferred-ap\n",
+            profile.map(|profile| profile.slot()).unwrap_or(u32::MAX),
+            profile
+                .map(|profile| profile.core_kind_name())
+                .unwrap_or("unknown")
+        );
         crate::r::readiness::set(crate::r::readiness::TLS_SOCKET_SERVICE_READY);
 
         loop {

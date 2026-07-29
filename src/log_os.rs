@@ -18,6 +18,15 @@ pub(crate) mod flags {
     /// now so the normal USB area returns to Warn-only logging.
     pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = false;
 
+    /// Focused Lumen inference performance profile.
+    ///
+    /// Global/Info already carries the cold model pack/seal measurement. This
+    /// switch additionally admits the sparse reasoning lifecycle and LFM2.5
+    /// C++/IGC runtime/submission timing records without enabling noisy render,
+    /// storage, network, or per-dispatch trace traffic that would perturb the
+    /// measurements.
+    pub(crate) const LUMEN_PERF_DIAG_PROFILE_ENABLED: bool = true;
+
     pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
         // Preserve the original USB hunt's full Global side, including Debug.
         LogLevelPolicy::up(LevelFilter::Trace)
@@ -25,7 +34,11 @@ pub(crate) mod flags {
         LogLevelPolicy::up(LevelFilter::Info)
     };
     pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
-    pub(crate) const SERVICE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const SERVICE_LOG_LEVEL: LogLevelPolicy = if LUMEN_PERF_DIAG_PROFILE_ENABLED {
+        LogLevelPolicy::up(LevelFilter::Info)
+    } else {
+        LogLevelPolicy::up(LevelFilter::Warn)
+    };
     pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LevelFilter::Trace)
@@ -36,7 +49,11 @@ pub(crate) mod flags {
     };
     pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
-    pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = if LUMEN_PERF_DIAG_PROFILE_ENABLED {
+        LogLevelPolicy::up(LevelFilter::Info)
+    } else {
+        LogLevelPolicy::up(LevelFilter::Warn)
+    };
     pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
