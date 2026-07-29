@@ -315,6 +315,72 @@ python3 -B tools/lfm25_baremetal_report.py \
   bld/baremetal-logs/LatestOfThree.logs
 ```
 
+### Captured Milestone 3 results
+
+Runs 7–9 passed the strict target-admission, cache-policy, RCS-probe,
+GT-state, token, response, and work-count gates. The exact canonical responses
+were preserved with zero projection failures.
+
+| Campaign runs | Prompt | Turn ms (M2 → M3) | Turn gain | Prefill ms (M2 → M3) | Reply ms (M2 → M3) | Reply tok/s (M2 → M3) | GPU us (M2 → M3) |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4 → 7 | `hi` | 8,754 → 1,210 | 7,544 ms (86.178%) | 4,394 → 603 | 4,360 → 607 | 2.06 → 14.83 | 5,320,916 → 541,499 |
+| 5 → 8 | `hi` | 8,772 → 1,224 | 7,548 ms (86.047%) | 4,396 → 616 | 4,376 → 608 | 2.06 → 14.80 | 5,322,694 → 543,684 |
+| 6 → 9 | sky | 20,044 → 2,843 | 17,201 ms (85.816%) | 9,260 → 1,283 | 10,784 → 1,560 | 2.04 → 14.10 | 12,062,004 → 1,227,172 |
+
+Across the three turns, elapsed time fell from 37,570 to 5,277 ms: a
+32,293 ms, 85.954% reduction and 7.120x speedup. Prefill fell from 18,050 to
+2,502 ms (86.139%; 7.214x), reply fell from 19,520 to 2,775 ms (85.784%;
+7.034x), and aggregate reply throughput rose from 2.049 to 14.414 tok/s.
+Relative to the original Milestone 1 baseline, aggregate elapsed time fell
+from 39,574 to 5,277 ms (86.665%; 7.499x).
+
+The gain is in the GPU path rather than a new host-side shortcut. GPU
+timestamp time fell from 22,705,614 to 2,312,355 us (89.816%; 9.819x).
+Completion time fell from 35,809,000 to 3,552,000 us (90.081%; 10.081x),
+and its interval outside the timestamped walkers fell from 13,103,386 to
+1,239,645 us (90.540%; 10.570x). CPU attention time was effectively flat at
+359,000 versus 374,000 us. The two M3 `hi` turns reproduced within 1.2% end
+to end and 0.5% in GPU time.
+
+The fresh boot proves that M3 changed the effective hardware policy:
+MOCS index 4 started at global `0x00000032` and packed L3CC pair
+`0x0010001F`, then read back as the required `0x00000005` and
+`0x00100030`. Those values remained accepted after GuC, at first LFM retire,
+and at every turn boundary. This is direct evidence that the previous
+firmware/reset state, rather than the packed Q8 arithmetic, caused most of the
+TRUEOS-versus-oracle transport gap.
+
+All 58 GT boundary samples were active at ratio 12 (200 MHz), with no
+zero-ratio sample and no throttle reason. RP0/RPe/RPn capabilities reported
+1,550/700/300 MHz. Because these are pre-submit and post-observe samples, they
+do not establish the in-walker frequency and do not by themselves justify
+forcing RP0. The sampled RCS queue-to-observe interval fell from 590,820 to
+66,318 us (88.775%); sampled walker time fell from 481,178 to 51,442 us
+(89.309%).
+
+The remaining GPU work is now led by `ffn-gate-up` at 1,021,286 us, or
+44.166% of aggregate M3 GPU time, followed by `ffn-down` at 24.673%.
+Per-signature effective logical throughput is approximately 9.24–13.43 GB/s,
+still below the 46–49 GB/s Linux/NEO oracle, so further work should first add
+in-walker frequency evidence and test repeated walkers before changing RPS,
+SLPC, arithmetic order, or the sealed packed ABI. Separately, the one fresh
+resident open took 46,486 ms; that cold-start outlier is outside turn timing
+and remains a distinct startup-performance investigation.
+
+The immutable three-run evidence copy is
+`bld/baremetal-logs/lumen-m3-runs7-9.log`, SHA-256
+`fcd03221d9e87d34c0802e9f14f088166c205c1bd16db697880a90704b9f5b29`.
+Strictly replay it with:
+
+```sh
+python3 -B tools/lfm25_baremetal_report.py \
+  --expect-runs 3 \
+  --require-rcs-probe \
+  --require-gt-state \
+  --require-m3-admission \
+  bld/baremetal-logs/lumen-m3-runs7-9.log
+```
+
 ## The nine bare-metal runs
 
 Deploy exactly one build at the start of each milestone validation set. Do not
