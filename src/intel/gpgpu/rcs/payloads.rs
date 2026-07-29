@@ -618,4 +618,3 @@ fn direct_rcs_write_font_outline_coverage_r8_payload_at(
     }
     true
 }
-

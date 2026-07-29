@@ -3848,7 +3848,6 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         }
         _ => false,
     };
-    let retry_quads = upload.quads.clone();
     let clear = TrueosUi4SpriteQuad {
         sprite_id: 0,
         c0_x: 0.0,
@@ -3888,7 +3887,12 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
             };
             source.surface
         };
-        let conversion = if quad.sprite_id == 0 {
+        // Physical XeLP has proven the general sprite-quad source-over path,
+        // while the older compact alpha-rectangle source-over kernel can
+        // accept a submission without retiring its marker. Keep opaque 1:1
+        // copies eligible for the compact path, but route every blended sprite
+        // through the newer ordered quad worklist.
+        let conversion = if quad.sprite_id == 0 || quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0 {
             AlphaRectConversion::Unsupported
         } else {
             alpha_rect_descriptor(quad, source, destination)
@@ -3996,12 +4000,27 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
             Ok(submission) => submission,
             Err(Ui4CompositorSubmitError::Busy)
             | Err(Ui4CompositorSubmitError::SubmissionRejected) => {
-                surface.sprite_scene_upload = Some(SpriteSceneUpload {
-                    expected: retry_quads.len(),
-                    quads: retry_quads.clone(),
-                });
+                // No hardware accepted this batch. Discard the write lease so
+                // the one-call Blueprint ABI can report a skipped frame and
+                // acquire normally on the next tick. Retaining this upload
+                // required a finish-only retry operation which the ABI does
+                // not expose and left clients wedged in an active frame.
+                surface.sprite_scene_upload = None;
+                surface.sprite_clear_rgba = None;
+                surface.pending_gpu_release = None;
+                let cancelled = surface.write_lease.take();
+                if let Some(cancelled) = cancelled {
+                    let replacement = (cancelled.frame != surface.frame).then_some(cancelled.frame);
+                    let _ = cancel_frame_buffer(cancelled);
+                    if let Some(replacement) = replacement
+                        && let Err(error) = destroy_frame(replacement)
+                        && error == FramePoolError::Busy
+                    {
+                        RETIRED_FRAMES.lock().push(replacement);
+                    }
+                }
                 crate::log_warn!(target: "ui4/blueprint-frame";
-                    "sprite scene deferred owner={:?} window={} frame={} buffer={} batch={}/{} descriptors={} backend={} reason=ui4-compositor-admission-timeout hardware_accepted=0 action=retain-upload+retry-finish\n",
+                    "sprite scene skipped owner={:?} window={} frame={} buffer={} batch={}/{} descriptors={} backend={} reason=ui4-compositor-admission-timeout hardware_accepted=0 action=cancel-unsubmitted-frame+continue\n",
                     owner,
                     window_id,
                     lease.frame.raw(),
