@@ -209,20 +209,41 @@ fn direct_rcs_push_state_base_address(
     dynamic_state_base: u64,
     instruction_base: u64,
 ) -> bool {
+    direct_rcs_push_state_base_address_with_mocs(
+        batch,
+        cursor,
+        indirect_object_base,
+        dynamic_state_base,
+        instruction_base,
+        RENDER_MOCS,
+    )
+}
+
+fn direct_rcs_push_state_base_address_with_mocs(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    indirect_object_base: u64,
+    dynamic_state_base: u64,
+    instruction_base: u64,
+    mocs: u32,
+) -> bool {
+    if mocs > RENDER_MOCS_INDEX_MASK {
+        return false;
+    }
     direct_rcs_push(batch, cursor, STATE_BASE_ADDRESS_CMD)
-        && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, indirect_object_base)
-        && direct_rcs_push(batch, cursor, RENDER_MOCS << 16)
-        && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, dynamic_state_base)
-        && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, dynamic_state_base)
-        && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, indirect_object_base)
-        && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, instruction_base)
+        && direct_rcs_push_sba_address(batch, cursor, true, mocs, indirect_object_base)
+        && direct_rcs_push(batch, cursor, mocs << 16)
+        && direct_rcs_push_sba_address(batch, cursor, true, mocs, dynamic_state_base)
+        && direct_rcs_push_sba_address(batch, cursor, true, mocs, dynamic_state_base)
+        && direct_rcs_push_sba_address(batch, cursor, true, mocs, indirect_object_base)
+        && direct_rcs_push_sba_address(batch, cursor, true, mocs, instruction_base)
         && direct_rcs_push_sba_size(batch, cursor, true, 0xFFFF_F000)
         && direct_rcs_push_sba_size(batch, cursor, true, 0xFFFF_F000)
         && direct_rcs_push_sba_size(batch, cursor, true, 0xFFFF_F000)
         && direct_rcs_push_sba_size(batch, cursor, true, 0xFFFF_F000)
-        && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, 0)
+        && direct_rcs_push_sba_address(batch, cursor, true, mocs, 0)
         && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, 0)
+        && direct_rcs_push_sba_address(batch, cursor, true, mocs, 0)
         && direct_rcs_push(batch, cursor, 0)
 }
 
@@ -278,6 +299,10 @@ fn execution_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
 }
 
 fn lfm25_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
+    if !super::gen12_lumen_mocs_ready() {
+        quarantine_lfm25_rcs_context("lumen-mocs-not-ready");
+        return false;
+    }
     direct_rcs_submit_batch_on_lane(dev, state, DirectRcsLane::Lfm25)
 }
 

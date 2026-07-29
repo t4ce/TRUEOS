@@ -5,6 +5,7 @@ pub(crate) enum Lfm25Q8ProjectError {
     NonContiguousModel,
     InvalidShape,
     Allocation,
+    CachePolicyUnavailable,
     RuntimeUnavailable,
     MappingFailed,
     EncodeFailed,
@@ -578,6 +579,7 @@ fn lfm25_q8_layout_supported(layout: Lfm25Q8WeightLayout) -> bool {
     lfm25_q8_artifact(layout)
         .target_policy
         .supports(dev.device_id, dev.revision_id)
+        && super::gen12_lumen_mocs_ready()
         && !lfm25_rcs_context_is_quarantined()
 }
 
@@ -851,6 +853,15 @@ pub(crate) fn lfm25_q8_project_batch(
     let elapsed_ms = direct_rcs_elapsed_ms_since(started);
     match result {
         Ok(timings) => {
+            if LFM25_Q8_SUBMISSIONS.load(Ordering::Relaxed) == 0
+                && !super::validate_gen12_lumen_mocs("first-lfm-retire")
+            {
+                runtime.ready = false;
+                LFM25_Q8_READY.store(false, Ordering::Release);
+                quarantine_lfm25_rcs_context("lumen-mocs-lost-after-first-retire");
+                LFM25_Q8_FAILURES.fetch_add(1, Ordering::Relaxed);
+                return Err(Lfm25Q8ProjectError::CachePolicyUnavailable);
+            }
             for (params, output) in params.iter().zip(outputs.iter_mut()) {
                 let offset = (params.output_gpu - runtime.output.gpu) as usize;
                 let source = unsafe { runtime.output.virt.add(offset) };
@@ -897,9 +908,6 @@ pub(crate) fn lfm25_q8_project_batch(
                 LFM25_Q8_GPU_TIMESTAMP_HZ.store(timings.gpu_timestamp_hz, Ordering::Relaxed);
             }
             LFM25_Q8_LAST_ROWS.store(specs.last().unwrap().rows, Ordering::Relaxed);
-            if submissions == 1 && crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED {
-                super::log_gen12_mocs_readback("first-lfm-retire");
-            }
             if submissions == 1 || submissions.is_power_of_two() {
                 crate::log_info!(
                     target: "gpgpu";
@@ -1051,6 +1059,9 @@ const _: () = {
 };
 
 fn ensure_lfm25_q8_runtime(slot: &mut Option<Lfm25Q8Runtime>) -> Result<(), Lfm25Q8ProjectError> {
+    if !super::gen12_lumen_mocs_ready() {
+        return Err(Lfm25Q8ProjectError::CachePolicyUnavailable);
+    }
     if slot.is_some() {
         return Ok(());
     }
@@ -1088,6 +1099,11 @@ fn prepare_lfm25_q8_runtime(
     runtime: &mut Lfm25Q8Runtime,
     model: Lfm25Q8ModelMapping,
 ) -> Result<(), Lfm25Q8ProjectError> {
+    if !super::gen12_lumen_mocs_ready() {
+        runtime.ready = false;
+        LFM25_Q8_READY.store(false, Ordering::Release);
+        return Err(Lfm25Q8ProjectError::CachePolicyUnavailable);
+    }
     if runtime.ready && runtime.bound_model == Some(model) {
         return Ok(());
     }
@@ -1149,6 +1165,9 @@ fn submit_lfm25_q8_project(
     params: &[Lfm25Q8ProjectParams],
     phase_probe_sampled: bool,
 ) -> Result<Lfm25Q8SubmitTimings, Lfm25Q8ProjectError> {
+    if !super::gen12_lumen_mocs_ready() {
+        return Err(Lfm25Q8ProjectError::CachePolicyUnavailable);
+    }
     let dev = super::claimed_device().ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
     let upload = upload_lfm25_q8_layout_kernel(model.layout)
         .ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;

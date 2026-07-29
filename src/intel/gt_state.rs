@@ -1,15 +1,19 @@
-// Read-only Gen12 GT cache-policy and frequency-state diagnostics.
+// Gen12 GT cache-policy ownership and frequency-state diagnostics.
 //
-// Keep this module observational: Lumen diagnostics may sample these registers,
-// but must not program shared GT cache, power, or frequency policy. The display
-// compositor and inference workloads use the same integrated GT.
+// Firmware owns the lower half of the shared MOCS table. Lumen owns only the
+// upper half and uses one entry from that range; display/compositor clients
+// retain their firmware-supplied lower-half entries unchanged.
 
 const GEN12_GLOBAL_MOCS_BASE: usize = 0x4000;
 const GEN12_GLOBAL_MOCS_ENTRIES: usize = 64;
 const GEN12_LNCFCMOCS_BASE: usize = 0xB020;
 const GEN12_LNCFCMOCS_REGISTERS: usize = GEN12_GLOBAL_MOCS_ENTRIES / 2;
+const GEN12_LUMEN_MOCS_FIRST_INDEX: usize = GEN12_GLOBAL_MOCS_ENTRIES / 2;
+const GEN12_LUMEN_L3CC_FIRST_REGISTER: usize = GEN12_LNCFCMOCS_REGISTERS / 2;
+pub(super) const GEN12_LUMEN_MOCS_INDEX: u32 = 49;
 const GEN12_MOCS_DEFAULT_CONTROL: u32 = 0x0037;
 const GEN12_MOCS_DEFAULT_L3CC: u16 = 0x0030;
+const FNV1A_OFFSET_BASIS: u64 = 0xCBF2_9CE4_8422_2325;
 
 const GEN12_RPNSWREQ: usize = 0xA008;
 const GEN12_GT0_PERF_LIMIT_REASONS: usize = 0x1381A8;
@@ -89,10 +93,8 @@ const fn expected_mocs_l3cc_table() -> [u16; GEN12_GLOBAL_MOCS_ENTRIES] {
     table
 }
 
-const GEN12_EXPECTED_MOCS_CONTROL: [u32; GEN12_GLOBAL_MOCS_ENTRIES] =
-    expected_mocs_control_table();
-const GEN12_EXPECTED_MOCS_L3CC: [u16; GEN12_GLOBAL_MOCS_ENTRIES] =
-    expected_mocs_l3cc_table();
+const GEN12_EXPECTED_MOCS_CONTROL: [u32; GEN12_GLOBAL_MOCS_ENTRIES] = expected_mocs_control_table();
+const GEN12_EXPECTED_MOCS_L3CC: [u16; GEN12_GLOBAL_MOCS_ENTRIES] = expected_mocs_l3cc_table();
 
 const fn expected_packed_l3cc(register: usize) -> u32 {
     GEN12_EXPECTED_MOCS_L3CC[register * 2] as u32
@@ -102,14 +104,20 @@ const fn expected_packed_l3cc(register: usize) -> u32 {
 const _: () = {
     assert!(GEN12_EXPECTED_MOCS_CONTROL[4] == 0x0005);
     assert!(expected_packed_l3cc(2) == 0x0010_0030);
+    assert!(GEN12_EXPECTED_MOCS_CONTROL[GEN12_LUMEN_MOCS_INDEX as usize] == 0x0005);
+    assert!(GEN12_EXPECTED_MOCS_L3CC[GEN12_LUMEN_MOCS_INDEX as usize] == 0x0030);
+    assert!(GEN12_LUMEN_MOCS_INDEX as usize >= GEN12_LUMEN_MOCS_FIRST_INDEX);
 };
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct Gen12MocsReadback {
     pub(super) available: bool,
     pub(super) accepted: bool,
+    pub(super) lumen_half_accepted: bool,
     pub(super) global_mismatches: u32,
     pub(super) l3cc_mismatches: u32,
+    pub(super) lumen_global_mismatches: u32,
+    pub(super) lumen_l3cc_mismatches: u32,
     pub(super) first_global_index: u32,
     pub(super) first_global_observed: u32,
     pub(super) first_global_expected: u32,
@@ -118,8 +126,23 @@ pub(super) struct Gen12MocsReadback {
     pub(super) first_l3cc_expected: u32,
     pub(super) global_index4: u32,
     pub(super) l3cc_pair2: u32,
+    pub(super) global_lumen_index: u32,
+    pub(super) l3cc_lumen_pair: u32,
     pub(super) global_fingerprint: u64,
     pub(super) l3cc_fingerprint: u64,
+    pub(super) resident_global_fingerprint: u64,
+    pub(super) resident_l3cc_fingerprint: u64,
+    pub(super) lumen_global_fingerprint: u64,
+    pub(super) lumen_l3cc_fingerprint: u64,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct Gen12LumenMocsInitReport {
+    pub(super) available: bool,
+    pub(super) accepted: bool,
+    pub(super) residents_preserved: bool,
+    pub(super) before: Gen12MocsReadback,
+    pub(super) after: Gen12MocsReadback,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -177,8 +200,12 @@ pub(super) fn read_mocs(dev: super::Dev) -> Gen12MocsReadback {
 
     let mut readback = Gen12MocsReadback {
         available: true,
-        global_fingerprint: 0xCBF2_9CE4_8422_2325,
-        l3cc_fingerprint: 0xCBF2_9CE4_8422_2325,
+        global_fingerprint: FNV1A_OFFSET_BASIS,
+        l3cc_fingerprint: FNV1A_OFFSET_BASIS,
+        resident_global_fingerprint: FNV1A_OFFSET_BASIS,
+        resident_l3cc_fingerprint: FNV1A_OFFSET_BASIS,
+        lumen_global_fingerprint: FNV1A_OFFSET_BASIS,
+        lumen_l3cc_fingerprint: FNV1A_OFFSET_BASIS,
         ..Gen12MocsReadback::default()
     };
     let mut index = 0usize;
@@ -186,6 +213,13 @@ pub(super) fn read_mocs(dev: super::Dev) -> Gen12MocsReadback {
         let observed = super::mmio_read(dev, GEN12_GLOBAL_MOCS_BASE + index * 4);
         let expected = GEN12_EXPECTED_MOCS_CONTROL[index];
         readback.global_fingerprint = fingerprint_u32(readback.global_fingerprint, observed);
+        if index < GEN12_LUMEN_MOCS_FIRST_INDEX {
+            readback.resident_global_fingerprint =
+                fingerprint_u32(readback.resident_global_fingerprint, observed);
+        } else {
+            readback.lumen_global_fingerprint =
+                fingerprint_u32(readback.lumen_global_fingerprint, observed);
+        }
         if observed != expected {
             if readback.global_mismatches == 0 {
                 readback.first_global_index = index as u32;
@@ -193,9 +227,16 @@ pub(super) fn read_mocs(dev: super::Dev) -> Gen12MocsReadback {
                 readback.first_global_expected = expected;
             }
             readback.global_mismatches = readback.global_mismatches.saturating_add(1);
+            if index >= GEN12_LUMEN_MOCS_FIRST_INDEX {
+                readback.lumen_global_mismatches =
+                    readback.lumen_global_mismatches.saturating_add(1);
+            }
         }
         if index == 4 {
             readback.global_index4 = observed;
+        }
+        if index == GEN12_LUMEN_MOCS_INDEX as usize {
+            readback.global_lumen_index = observed;
         }
         index += 1;
     }
@@ -205,6 +246,13 @@ pub(super) fn read_mocs(dev: super::Dev) -> Gen12MocsReadback {
         let observed = super::mmio_read(dev, GEN12_LNCFCMOCS_BASE + register * 4);
         let expected = expected_packed_l3cc(register);
         readback.l3cc_fingerprint = fingerprint_u32(readback.l3cc_fingerprint, observed);
+        if register < GEN12_LUMEN_L3CC_FIRST_REGISTER {
+            readback.resident_l3cc_fingerprint =
+                fingerprint_u32(readback.resident_l3cc_fingerprint, observed);
+        } else {
+            readback.lumen_l3cc_fingerprint =
+                fingerprint_u32(readback.lumen_l3cc_fingerprint, observed);
+        }
         if observed != expected {
             if readback.l3cc_mismatches == 0 {
                 readback.first_l3cc_register = register as u32;
@@ -212,14 +260,57 @@ pub(super) fn read_mocs(dev: super::Dev) -> Gen12MocsReadback {
                 readback.first_l3cc_expected = expected;
             }
             readback.l3cc_mismatches = readback.l3cc_mismatches.saturating_add(1);
+            if register >= GEN12_LUMEN_L3CC_FIRST_REGISTER {
+                readback.lumen_l3cc_mismatches = readback.lumen_l3cc_mismatches.saturating_add(1);
+            }
         }
         if register == 2 {
             readback.l3cc_pair2 = observed;
         }
+        if register == GEN12_LUMEN_MOCS_INDEX as usize / 2 {
+            readback.l3cc_lumen_pair = observed;
+        }
         register += 1;
     }
     readback.accepted = readback.global_mismatches == 0 && readback.l3cc_mismatches == 0;
+    readback.lumen_half_accepted =
+        readback.lumen_global_mismatches == 0 && readback.lumen_l3cc_mismatches == 0;
     readback
+}
+
+pub(super) fn init_lumen_mocs(dev: super::Dev) -> Gen12LumenMocsInitReport {
+    let before = read_mocs(dev);
+    if !before.available {
+        return Gen12LumenMocsInitReport::default();
+    }
+
+    let mut index = GEN12_LUMEN_MOCS_FIRST_INDEX;
+    while index < GEN12_GLOBAL_MOCS_ENTRIES {
+        super::mmio_write(
+            dev,
+            GEN12_GLOBAL_MOCS_BASE + index * 4,
+            GEN12_EXPECTED_MOCS_CONTROL[index],
+        );
+        index += 1;
+    }
+    let mut register = GEN12_LUMEN_L3CC_FIRST_REGISTER;
+    while register < GEN12_LNCFCMOCS_REGISTERS {
+        super::mmio_write(dev, GEN12_LNCFCMOCS_BASE + register * 4, expected_packed_l3cc(register));
+        register += 1;
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+
+    let after = read_mocs(dev);
+    let residents_preserved = after.available
+        && before.resident_global_fingerprint == after.resident_global_fingerprint
+        && before.resident_l3cc_fingerprint == after.resident_l3cc_fingerprint;
+    Gen12LumenMocsInitReport {
+        available: after.available,
+        accepted: residents_preserved && after.lumen_half_accepted,
+        residents_preserved,
+        before,
+        after,
+    }
 }
 
 pub(crate) const fn ratio_to_mhz(ratio: u32) -> u32 {

@@ -175,12 +175,12 @@ fn execution_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
 }
 
 fn lfm25_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
-    if lfm25_rcs_context_is_quarantined() {
+    if !super::gen12_lumen_mocs_ready() || lfm25_rcs_context_is_quarantined() {
         return None;
     }
 
     let mut state_slot = LFM25_RCS_STATE.lock();
-    if lfm25_rcs_context_is_quarantined() {
+    if !super::gen12_lumen_mocs_ready() || lfm25_rcs_context_is_quarantined() {
         return None;
     }
     if let Some(state) = *state_slot {

@@ -171,6 +171,13 @@ const GEN8_CTX_PRIVILEGE: u32 = 1 << 8;
 
 const GEN8_CTX_ADDRESSING_MODE_SHIFT: u32 = 3;
 const RENDER_MOCS: u32 = 4;
+const LFM25_RENDER_MOCS: u32 = super::GEN12_LUMEN_MOCS_INDEX;
+const RENDER_MOCS_INDEX_MASK: u32 = 0x7F;
+const _: () = {
+    assert!(RENDER_MOCS <= RENDER_MOCS_INDEX_MASK);
+    assert!(LFM25_RENDER_MOCS <= RENDER_MOCS_INDEX_MASK);
+    assert!(LFM25_RENDER_MOCS >= 32);
+};
 const PIPE_CONTROL_CMD: u32 = 4 | (2 << 24) | (3 << 27) | (3 << 29);
 const STATE_BASE_ADDRESS_CMD: u32 = 20 | (1 << 16) | (1 << 24) | (3 << 29);
 const PIPE_CONTROL_DC_FLUSH_ENABLE: u32 = 1 << 5;

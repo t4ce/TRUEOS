@@ -94,9 +94,25 @@ fn direct_rcs_write_buffer_surface_state(
     gpu: u64,
     target_bytes: usize,
 ) -> bool {
+    direct_rcs_write_buffer_surface_state_with_mocs(
+        state,
+        surface_offset,
+        gpu,
+        target_bytes,
+        RENDER_MOCS,
+    )
+}
+
+fn direct_rcs_write_buffer_surface_state_with_mocs(
+    state: DirectRcsState,
+    surface_offset: usize,
+    gpu: u64,
+    target_bytes: usize,
+    mocs: u32,
+) -> bool {
     let surface_bytes = COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>();
     let surface_end = surface_offset + surface_bytes;
-    if surface_end > DIRECT_RCS_BATCH_BYTES || target_bytes == 0 {
+    if surface_end > DIRECT_RCS_BATCH_BYTES || target_bytes == 0 || mocs > RENDER_MOCS_INDEX_MASK {
         return false;
     }
 
@@ -114,7 +130,7 @@ fn direct_rcs_write_buffer_surface_state(
             core::ptr::write_volatile(surface.add(index), 0);
         }
         core::ptr::write_volatile(surface, surface_dword0);
-        core::ptr::write_volatile(surface.add(1), RENDER_MOCS << 24);
+        core::ptr::write_volatile(surface.add(1), mocs << 24);
         core::ptr::write_volatile(surface.add(2), surface_dword2);
         core::ptr::write_volatile(surface.add(3), surface_dword3);
         core::ptr::write_volatile(surface.add(8), gpu as u32);
@@ -618,4 +634,3 @@ fn direct_rcs_write_font_outline_coverage_r8_payload_at(
     }
     true
 }
-
