@@ -179,6 +179,17 @@ pub fn background_worker_slots() -> Vec<u32> {
     out
 }
 
+/// Report whether a strict AP2+ performance-core worker is registered without
+/// advancing the round-robin selector used by actual task placement.
+pub fn has_perf_background_worker_slot() -> bool {
+    let map = CORE_SPAWNERS.lock();
+    let kinds = CORE_KINDS.lock();
+    map.keys().any(|slot| {
+        *slot >= FIRST_BACKGROUND_SLOT
+            && kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN) == CORE_KIND_PERF
+    })
+}
+
 pub fn registered_core_spawner_count() -> usize {
     CORE_SPAWNERS.lock().len()
 }

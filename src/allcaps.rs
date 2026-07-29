@@ -31,6 +31,16 @@ pub mod gfx {
     pub const SCREENSHOT_CAPTURE_ENABLED: bool = false;
 }
 
+pub mod lumen {
+    /// Current single-model intensive-test profile. Disable this one switch
+    /// when boot-resident inference assets are no longer the desired policy.
+    pub const BOOT_RESIDENT_WARM_ENABLED: bool = true;
+
+    /// Let the compositor enter its steady service loop before model I/O and
+    /// in-place Q8 packing begin on a background performance core.
+    pub const BOOT_RESIDENT_WARM_SETTLE_MS: u64 = 2_000;
+}
+
 pub mod media_encode {
     // Experimental live-stream cadence soft cap. The fixed AVC SPS VUI timing
     // in `intel/media/avc_encode_probe.rs` must advertise the same rate.

@@ -282,10 +282,15 @@ pub(crate) async fn ui4_compositor_service_task() {
     );
 
     let mut consecutive_failures = 0u32;
+    let mut readiness_published = false;
     loop {
         let result = advance_async_composition(&mut runtime);
         match result {
             Ok(()) => {
+                if !readiness_published {
+                    crate::r::readiness::set(crate::r::readiness::UI4_COMPOSITOR_READY);
+                    readiness_published = true;
+                }
                 if consecutive_failures != 0 {
                     crate::log_info!(
                         target: "ui4";

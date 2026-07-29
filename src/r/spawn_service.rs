@@ -43,6 +43,7 @@ define_started_flags!(
     FONT_WARM_POOL_STARTED,
     FONT_KERNEL_SERVICE_STARTED,
     TTSTT_CPU_SERVICE_STARTED,
+    LUMEN_BOOT_WARM_STARTED,
     SMP_HLT_HISTORY_STARTED,
     CODEC_SERVICE_STARTED,
     QJS_ASYNC_FS_SERVICE_STARTED,
@@ -314,6 +315,28 @@ pub(crate) fn retry_font_warm_pool_autostart() {
 
 fn spawn_ttstt_cpu_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::ttstt_service::service_task())
+}
+
+#[cfg(feature = "trueos_lumen")]
+fn spawn_lumen_boot_warm(spawner: Spawner) -> SpawnAttempt {
+    let _ = spawner;
+    let Some((worker_slot, core_kind, worker_spawner)) =
+        crate::workers::pick_perf_background_spawner_with_slot()
+    else {
+        return SpawnAttempt::Skipped;
+    };
+    let token = match crate::r::lfm25_boot_warm::service_task(worker_slot) {
+        Ok(token) => token,
+        Err(error) => return SpawnAttempt::Failed(error),
+    };
+    worker_spawner.spawn(token);
+    crate::log_info!(
+        target: "service";
+        "lfm25: boot-warm stage=scheduled executor=background-ap{} core_kind={} core=perf policy_switch=allcaps::lumen::BOOT_RESIDENT_WARM_ENABLED\n",
+        worker_slot,
+        core_kind,
+    );
+    SpawnAttempt::Spawned
 }
 
 fn spawn_smp_hlt_history(spawner: Spawner) -> SpawnAttempt {
@@ -867,6 +890,15 @@ fn ttstt_cpu_service_gate() -> bool {
     crate::r::readiness::is_set(
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
     )
+}
+
+#[cfg(feature = "trueos_lumen")]
+fn lumen_boot_warm_gate() -> bool {
+    crate::intel::guc_submission_ready()
+        && crate::intel::gen12_integrated_pat_ready()
+        && crate::gpu::physical::physical_device().is_some_and(|device| device.ready())
+        && crate::intel::gpgpu::lfm25_q8_packed_project_supported()
+        && crate::workers::has_perf_background_worker_slot()
 }
 
 #[inline]
@@ -1447,7 +1479,8 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 const TASK_COUNT: usize = 70
     + cfg!(feature = "trueos_rdp") as usize
-    + cfg!(feature = "trueos_h264_encode_stream") as usize;
+    + cfg!(feature = "trueos_h264_encode_stream") as usize
+    + cfg!(feature = "trueos_lumen") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1759,6 +1792,18 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         ui4_compositor_gate,
         &UI4_COMPOSITOR_STARTED,
         spawn_ui4_compositor_service_task,
+    ),
+    #[cfg(feature = "trueos_lumen")]
+    TaskSpec::configured_gated(
+        crate::allcaps::lumen::BOOT_RESIDENT_WARM_ENABLED,
+        "lumen-boot-warm",
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+            | crate::r::readiness::TRUEOSFS_INDEX_READY
+            | crate::r::readiness::BACKGROUND_AP_WORKER_READY
+            | crate::r::readiness::UI4_COMPOSITOR_READY,
+        lumen_boot_warm_gate,
+        &LUMEN_BOOT_WARM_STARTED,
+        spawn_lumen_boot_warm,
     ),
     TaskSpec::enabled_gated(
         "ui4-window-broker-snapshot",

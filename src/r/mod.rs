@@ -13,6 +13,8 @@ pub mod io;
 pub mod kernel_task_domain;
 pub mod keyboard;
 pub mod keyboard_control_service;
+#[cfg(feature = "trueos_lumen")]
+pub mod lfm25_boot_warm;
 pub mod lfm25_decode;
 pub mod lfm25_f32;
 pub mod lfm25_hybrid_cpu_backend;
