@@ -14,7 +14,7 @@ pub(crate) const UI_SURFACE_GPU_BASE: u64 = 0x1200_0000;
 // arena below render's persistent-font range at 0x2000_0000 and well inside
 // the direct-RCS 1 GiB PPGTT. Packing actual aligned allocation sizes avoids
 // the former 32 MiB-per-handle VA waste and makes room for normal UI4 growth.
-const UI_SURFACE_GPU_LIMIT: u64 = 0x2000_0000;
+pub(crate) const UI_SURFACE_GPU_LIMIT: u64 = 0x2000_0000;
 const UI_SURFACE_MAX_BYTES: u64 = 0x0200_0000;
 const UI_SURFACE_BYTES_PER_PIXEL: u32 = 4;
 

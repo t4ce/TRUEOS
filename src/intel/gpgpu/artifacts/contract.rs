@@ -264,11 +264,14 @@ impl GpgpuKernelAbiContract {
             return Err(GpgpuKernelAbiContractError::UnsupportedPerThreadData);
         }
 
-        // The direct-RCS payload writer actively programs these three dispatch
-        // records. IGC may additionally publish zero-valued stateful buffer
-        // offsets and a zero private-memory base; every payload writer clears
-        // the complete indirect block before setting explicit values.
-        if self.implicit_payload_args.len() < 3 {
+        // Every direct-RCS payload writer programs the global-ID offset and
+        // local size. IGC elides the enqueued-local-size record when a kernel
+        // never consumes it (the one-dimensional rectangle worklists are the
+        // canonical example), so admit that record when present instead of
+        // requiring it. IGC may additionally publish zero-valued stateful
+        // buffer offsets and a zero private-memory base; every payload writer
+        // clears the complete indirect block before setting explicit values.
+        if self.implicit_payload_args.len() < 2 {
             return Err(GpgpuKernelAbiContractError::UnsupportedImplicitPayload);
         }
         let mut implicit_kinds = 0u8;
@@ -344,7 +347,8 @@ impl GpgpuKernelAbiContract {
             }
             index += 1;
         }
-        if implicit_kinds != 7 {
+        const REQUIRED_DISPATCH_KINDS: u8 = 1 | 2;
+        if implicit_kinds & REQUIRED_DISPATCH_KINDS != REQUIRED_DISPATCH_KINDS {
             return Err(GpgpuKernelAbiContractError::UnsupportedImplicitPayload);
         }
 
@@ -795,6 +799,7 @@ mod tests {
     use super::*;
 
     include!("../kernels/artifacts/adls/cpp/copy_rect_rgba8.contract.rs");
+    include!("../kernels/artifacts/adls/cpp/fill_rect_worklist_rgba8.contract.rs");
 
     const COPY_RECT_ZEBIN: &[u8] =
         include_bytes!("../kernels/artifacts/adls/cpp/copy_rect_rgba8.bin");
@@ -1010,6 +1015,20 @@ mod tests {
             !COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
                 .target
                 .supports(0xA780, 0x0C)
+        );
+    }
+
+    #[test]
+    fn generated_worklist_contract_without_enqueued_local_size_is_admissible() {
+        assert_eq!(
+            FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(),
+            Ok(())
+        );
+        assert_eq!(
+            FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT
+                .implicit_payload_args
+                .len(),
+            2
         );
     }
 }

@@ -19,17 +19,25 @@ subscriber-driven kernel service:
    and slot-4 service rectangles, borrows pipe A's currently CUR_SURFLIVE
    Spirit buffer and actual CUR_POS,
    blends that 256x256 premultiplied-BGRA sprite without waiting for a newer
-   Spirit frame, and applies a fixed 4:3 center-sampled nearest downscale to a
-   centered 1920x1080 image. Four black rows above and below fill the
-   macroblock-aligned 1920x1088 NV12 encode surface. The stream-only capture
-   remains premultiplied RGBA and converts its already-composited RGB directly
-   against black to limited-range BT.601; ordinary screenshots still export
-   straight-alpha RGBA. The filter reads one source sample per output pixel to
-   constrain producer cost. Exactly two reusable NV12 slots let preparation of
-   the next frame overlap Gen12 VDEnc/MFX encode and UDP egress of the preceding
-   frame. The consumer emits a fresh IDR access unit on each absolute 20 Hz
-   deadline. The first frame is prepared before cadence measurement begins, and
-   the producer cannot advance more than one frame ahead of the consumer.
+   Spirit frame. The composition is written directly into one of two persistent
+   DMA-backed premultiplied-RGBA surfaces. A C++ for OpenCL kernel then runs
+   through the isolated UI4 GuC/RCS context, applies the fixed 4:3
+   center-sampled nearest downscale, converts directly to limited-range BT.601
+   NV12, and fills four black rows above and below the centered 1920x1080 image
+   in the macroblock-aligned 1920x1088 surface. Ordinary screenshots still
+   export straight-alpha RGBA.
+
+   RCS completion is observed before the same persistent NV12 allocation is
+   mapped directly as the VDBOX source. The encoder performs no full-frame
+   NV12 CPU copy, and bounded change telemetry samples at most 4,096 bytes
+   rather than hashing the complete frame. The RDP destination VA is disjoint
+   from both decoder source aliases and the complete UI-surface arena, so local
+   playback conversion and RDP conversion cannot remap one another's PPGTT
+   pages. Exactly two reusable RGBA/NV12 slot pairs let preparation of the next
+   frame overlap Gen12 VDEnc/MFX encode and UDP egress of the preceding frame.
+   The consumer emits a fresh IDR access unit on each absolute 40 Hz deadline.
+   The first frame is prepared before cadence measurement begins, and the
+   producer cannot advance more than one frame ahead of the consumer.
 
    This fixed test-rig mapping preserves the native 16:9 composition and avoids
    dynamic crop selection. The capture follows UI4 plane/z order but is not a
@@ -48,12 +56,12 @@ subscriber-driven kernel service:
    without an uncertain retransmission. Accepted fragments have no artificial
    inter-packet delay. The live high-water mark is one access unit; no
    framebuffer or encoded payload is written to TRUEOSFS.
-5. After 200 frames (ten seconds), the socket closes and the resident service
+5. After 400 frames (ten seconds), the socket closes and the resident service
    waits for the next subscriber, which receives a fresh session.
 
 There is no software-codec or filesystem fallback in the kernel path. AVC
 playback and encode share VCS0 with frame-level exclusion: decode keeps its
-session reservation, while the 20 Hz encoder may take a bounded turn between
+session reservation, while the 40 Hz encoder may take a bounded turn between
 decode submissions. A transport-mode change resets and reactivates VCS0 before
 the next complete batch. If a decode reservation is already active while the
 boot hardware proof is waiting, the encoder sleeps and keeps retrying; it does

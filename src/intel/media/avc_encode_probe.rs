@@ -56,6 +56,14 @@ const INTRA_ROWSTORE_OFFSET: usize = 0x00a9_0000;
 const DEBLOCK_ROWSTORE_OFFSET: usize = 0x00aa_0000;
 const BSP_ROWSTORE_OFFSET: usize = 0x00ab_0000;
 const SCRATCH_BYTES: usize = 64 * 1024;
+const ARENA_WORK_RANGES: [(usize, usize); 6] = [
+    (BATCH_OFFSET, BATCH_BYTES),
+    (RESULT_OFFSET, RESULT_BYTES),
+    (RECON_OFFSET, RECON_BYTES),
+    (DS_OFFSET, DS_BYTES),
+    (BITSTREAM_OFFSET, BITSTREAM_BYTES),
+    (MFX_STATS_OFFSET, BSP_ROWSTORE_OFFSET + SCRATCH_BYTES - MFX_STATS_OFFSET),
+];
 
 const BATCH_GPU: u64 = ARENA_GPU + BATCH_OFFSET as u64;
 const CODEC_BATCH_GPU: u64 = BATCH_GPU + CODEC_BATCH_OFFSET as u64;
@@ -321,11 +329,14 @@ const VD_PIPELINE_FLUSH: [u32; 2] = [0x7780_0000, 0x0002_001a];
 const MI_FLUSH_DW_VIDEO_CACHE_INVALIDATE: [u32; 5] = [0x1300_0082, 0, 0, 0, media::MI_NOOP];
 const MI_FLUSH_DW_NO_POSTSYNC: [u32; 5] = [0x1300_0002, 0, 0, 0, media::MI_NOOP];
 
-// VUI timing is fixed at 20 fps: time_scale / (2 * num_units_in_tick) = 40 / 2.
+// VUI timing matches the 40 fps live-stream cadence soft cap:
+// time_scale / (2 * num_units_in_tick) = 80 / 2.
+const SPS_VUI_FRAME_RATE_HZ: usize = 40;
 const SPS: [u8; 29] = [
     0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x28, 0x95, 0xc0, 0x78, 0x02, 0x26, 0xc0, 0x5a, 0x20,
-    0x00, 0x00, 0x03, 0x00, 0x20, 0x00, 0x00, 0x05, 0x11, 0xe1, 0x00, 0x85, 0x40,
+    0x00, 0x00, 0x03, 0x00, 0x20, 0x00, 0x00, 0x0a, 0x11, 0xe1, 0x00, 0x85, 0x40,
 ];
+const _: () = assert!(SPS_VUI_FRAME_RATE_HZ == crate::allcaps::media_encode::REALTIME_HZ);
 const PPS: [u8; 8] = [0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x38, 0x80];
 const IDR_SLICE_HEADER: [u8; 8] = [0x00, 0x00, 0x01, 0x65, 0x88, 0x80, 0x48, 0x00];
 // SPS/PPS use HeaderLengthExcludeFrmSize, matching Intel's production AVC
@@ -589,17 +600,43 @@ impl AvcEncodeProbeReport {
 struct ProbeBacking {
     ring_virt: *mut u8,
     context_virt: *mut u8,
+    arena_phys: u64,
     arena_virt: *mut u8,
     ppgtt: crate::intel::ppgtt::SparsePpgtt,
 }
 
 unsafe impl Send for ProbeBacking {}
 
+#[derive(Copy, Clone)]
+pub(crate) struct AvcNv12DmaSurface {
+    phys: u64,
+    virt: *mut u8,
+    bytes: usize,
+}
+
+unsafe impl Send for AvcNv12DmaSurface {}
+unsafe impl Sync for AvcNv12DmaSurface {}
+
+impl AvcNv12DmaSurface {
+    pub(crate) fn new(phys: u64, virt: *mut u8, bytes: usize) -> Option<Self> {
+        (phys != 0
+            && !virt.is_null()
+            && phys.is_multiple_of(crate::intel::WARM_ALIGN as u64)
+            && bytes == SOURCE_BYTES)
+            .then_some(Self { phys, virt, bytes })
+    }
+}
+
+#[derive(Copy, Clone)]
+enum AvcFrameSource {
+    BootProof,
+    Dma(AvcNv12DmaSurface),
+}
+
 static STATE: AtomicU8 = AtomicU8::new(AvcEncodeProbeState::NotRun as u8);
 static REPORT: Mutex<AvcEncodeProbeReport> = Mutex::new(AvcEncodeProbeReport::EMPTY);
 static BACKING: Mutex<Option<ProbeBacking>> = Mutex::new(None);
 static CODED_ACCESS_UNIT: Mutex<Option<Vec<u8>>> = Mutex::new(None);
-static SOURCE_OVERRIDE_NV12: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 
 pub(crate) const fn commands_wired() -> bool {
     true
@@ -621,13 +658,14 @@ pub(crate) fn snapshot() -> AvcEncodeProbeReport {
     *REPORT.lock()
 }
 
-/// Submit another 1920x1088 linear NV12 IDR through the exact command graph
-/// validated by `run_once`. The dedicated UI4 encoder task is the sole repeat
-/// caller, so the probe's fixed backing remains a serialized hardware executor.
-pub(crate) fn run_nv12_frame(nv12: &[u8]) -> AvcEncodeProbeReport {
-    if nv12.len() != SOURCE_BYTES {
-        return snapshot();
-    }
+/// Submit a GPU-produced linear NV12 surface directly as the VDBOX source.
+/// The caller retains the DMA allocation until this synchronous submission
+/// retires. No CPU-side full-frame copy is performed.
+pub(crate) fn run_nv12_dma_frame(surface: AvcNv12DmaSurface) -> AvcEncodeProbeReport {
+    run_live_frame(AvcFrameSource::Dma(surface))
+}
+
+fn run_live_frame(source: AvcFrameSource) -> AvcEncodeProbeReport {
     let state = AvcEncodeProbeState::from_raw(STATE.load(Ordering::Acquire));
     if state == AvcEncodeProbeState::Passed {
         STATE.store(AvcEncodeProbeState::NotRun as u8, Ordering::Release);
@@ -635,14 +673,15 @@ pub(crate) fn run_nv12_frame(nv12: &[u8]) -> AvcEncodeProbeReport {
         return snapshot();
     }
 
-    *SOURCE_OVERRIDE_NV12.lock() = Some(nv12.to_vec());
     *CODED_ACCESS_UNIT.lock() = None;
-    let report = run_once();
-    *SOURCE_OVERRIDE_NV12.lock() = None;
-    report
+    run_with_source(source)
 }
 
 pub(crate) fn run_once() -> AvcEncodeProbeReport {
+    run_with_source(AvcFrameSource::BootProof)
+}
+
+fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
     let current = AvcEncodeProbeState::from_raw(STATE.load(Ordering::Acquire));
     if current != AvcEncodeProbeState::NotRun {
         return snapshot();
@@ -662,7 +701,7 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
         return deferred(AvcEncodeProbeFailure::TransportProbeUnavailable);
     }
 
-    let live_frame = SOURCE_OVERRIDE_NV12.lock().is_some();
+    let live_frame = !matches!(source_kind, AvcFrameSource::BootProof);
     let lane_result = if live_frame {
         media::acquire_vcs0_lane_bounded(
             media::MediaVcs0JobMode::AVC_ENCODE_GUC,
@@ -709,7 +748,7 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
     if backing_slot.is_none() {
         *backing_slot = build_backing(dev);
     }
-    let Some(backing) = backing_slot.as_ref() else {
+    let Some(backing) = backing_slot.as_mut() else {
         return fail(report, AvcEncodeProbeFailure::BackingAllocation, started_ns);
     };
     report.backing_ready = true;
@@ -720,24 +759,43 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
     unsafe {
         core::ptr::write_bytes(backing.ring_virt, 0, RING_BYTES);
         core::ptr::write_bytes(backing.context_virt, 0, CONTEXT_BYTES);
-        core::ptr::write_bytes(backing.arena_virt, 0, ARENA_BYTES);
     }
+    clear_arena_work_ranges(backing.arena_virt);
 
+    let arena_source_phys = backing.arena_phys.saturating_add(SOURCE_OFFSET as u64);
     let source_virt = unsafe { backing.arena_virt.add(SOURCE_OFFSET) };
     let source = unsafe { core::slice::from_raw_parts_mut(source_virt, SOURCE_BYTES) };
-    let source_override = SOURCE_OVERRIDE_NV12.lock();
-    if let Some(nv12) = source_override.as_deref() {
-        if nv12.len() != source.len() {
-            return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
+    let (source_phys, source_hash) = match source_kind {
+        AvcFrameSource::BootProof => {
+            if !fill_boot_proof_nv12(source) {
+                return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
+            }
+            (arena_source_phys, fnv1a32(source))
         }
-        source.copy_from_slice(nv12);
-    } else if !fill_boot_proof_nv12(source) {
+        AvcFrameSource::Dma(surface) => {
+            if surface.bytes != SOURCE_BYTES {
+                return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
+            }
+            crate::intel::dma_flush(surface.virt, surface.bytes);
+            let bytes =
+                unsafe { core::slice::from_raw_parts(surface.virt.cast_const(), surface.bytes) };
+            (surface.phys, fnv1a32_sampled(bytes))
+        }
+    };
+    if backing
+        .ppgtt
+        .map_range(crate::intel::ppgtt::PpgttRange {
+            gpu: SOURCE_GPU,
+            phys: source_phys,
+            bytes: SOURCE_BYTES,
+        })
+        .is_none()
+    {
         return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
     }
     report.surface_uploaded = true;
-    report.source_nv12_bytes = source.len();
-    report.source_nv12_fnv1a32 = fnv1a32(source);
-    drop(source_override);
+    report.source_nv12_bytes = SOURCE_BYTES;
+    report.source_nv12_fnv1a32 = source_hash;
 
     let batch_virt = unsafe { backing.arena_virt.add(BATCH_OFFSET + CODEC_BATCH_OFFSET) };
     let Some((batch_bytes, codec_packets)) = build_idr_batch(batch_virt) else {
@@ -795,7 +853,10 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
     }
     report.context_ready = true;
 
-    crate::intel::dma_flush(backing.arena_virt, ARENA_BYTES);
+    flush_arena_work_ranges(backing.arena_virt);
+    if !matches!(source_kind, AvcFrameSource::Dma(_)) {
+        crate::intel::dma_flush(source_virt, SOURCE_BYTES);
+    }
     crate::intel::dma_flush(backing.ring_virt, ring_tail_bytes);
     crate::intel::dma_flush(backing.context_virt, CONTEXT_BYTES);
     crate::intel::ggtt_invalidate(dev);
@@ -944,9 +1005,25 @@ fn build_backing(dev: crate::intel::Dev) -> Option<ProbeBacking> {
     Some(ProbeBacking {
         ring_virt,
         context_virt,
+        arena_phys,
         arena_virt,
         ppgtt,
     })
+}
+
+fn clear_arena_work_ranges(arena_virt: *mut u8) {
+    for (offset, bytes) in ARENA_WORK_RANGES {
+        unsafe {
+            core::ptr::write_bytes(arena_virt.add(offset), 0, bytes);
+        }
+    }
+}
+
+fn flush_arena_work_ranges(arena_virt: *mut u8) {
+    for (offset, bytes) in ARENA_WORK_RANGES {
+        let region = unsafe { arena_virt.add(offset) };
+        crate::intel::dma_flush(region, bytes);
+    }
 }
 
 /// Build a legal-range moving-pattern seed without linking a diagnostic file
@@ -1265,6 +1342,20 @@ fn fnv1a32(bytes: &[u8]) -> u32 {
     let mut hash = 0x811c_9dc5u32;
     for byte in bytes {
         hash ^= *byte as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// A bounded change detector for GPU-produced frame telemetry. Sampling keeps
+/// validation from turning the eliminated full-frame CPU copy into a disguised
+/// full-frame CPU readback.
+fn fnv1a32_sampled(bytes: &[u8]) -> u32 {
+    const MAX_SAMPLES: usize = 4096;
+    let stride = bytes.len().div_ceil(MAX_SAMPLES).max(1);
+    let mut hash = 0x811c_9dc5u32 ^ bytes.len() as u32;
+    for byte in bytes.iter().step_by(stride) {
+        hash ^= u32::from(*byte);
         hash = hash.wrapping_mul(0x0100_0193);
     }
     hash
