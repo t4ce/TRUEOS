@@ -159,13 +159,17 @@ const server = net.createServer({ allowHalfOpen: false }, (socket) => {
   let handshake = Buffer.alloc(0);
   const onHandshakeData = (data) => {
     handshake = Buffer.concat([handshake, data]);
-    if (handshake.length > 512) {
+    const newline = handshake.indexOf(0x0a);
+    if (newline < 0) {
+      if (handshake.length > 512) {
+        socket.destroy(new Error("benchmark handshake too large"));
+      }
+      return;
+    }
+    if (newline >= 512) {
       socket.destroy(new Error("benchmark handshake too large"));
       return;
     }
-
-    const newline = handshake.indexOf(0x0a);
-    if (newline < 0) return;
 
     socket.off("data", onHandshakeData);
     const line = handshake.subarray(0, newline).toString("ascii").trim();

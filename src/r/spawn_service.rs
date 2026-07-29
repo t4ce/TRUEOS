@@ -653,6 +653,27 @@ fn spawn_ui4_h264_encode_stream_task(spawner: Spawner) -> SpawnAttempt {
         return SpawnAttempt::Skipped;
     };
     let prepare_kind = crate::workers::core_kind_for_slot(prepare_slot);
+    let egress_slot = background_slots
+        .iter()
+        .copied()
+        .find(|slot| {
+            *slot != encode_slot
+                && *slot != prepare_slot
+                && crate::workers::core_kind_for_slot(*slot) == crate::workers::CORE_KIND_PERF
+        })
+        .or_else(|| {
+            background_slots
+                .iter()
+                .copied()
+                .find(|slot| *slot != encode_slot && *slot != prepare_slot)
+        });
+    let Some(egress_slot) = egress_slot else {
+        return SpawnAttempt::Skipped;
+    };
+    let Some(egress_spawner) = crate::workers::spawner_for_slot(egress_slot) else {
+        return SpawnAttempt::Skipped;
+    };
+    let egress_kind = crate::workers::core_kind_for_slot(egress_slot);
 
     let prepare_token = match crate::ui4::ui4_h264_encode_prepare_task(prepare_slot) {
         Ok(token) => token,
@@ -662,14 +683,21 @@ fn spawn_ui4_h264_encode_stream_task(spawner: Spawner) -> SpawnAttempt {
         Ok(token) => token,
         Err(error) => return SpawnAttempt::Failed(error),
     };
+    let egress_token = match crate::ui4::ui4_h264_encode_udp_egress_task(egress_slot) {
+        Ok(token) => token,
+        Err(error) => return SpawnAttempt::Failed(error),
+    };
     prepare_spawner.spawn(prepare_token);
     encode_spawner.spawn(encode_token);
+    egress_spawner.spawn(egress_token);
     crate::log_info!(target: "service";
-        "ui4 h264 stream pair assigned encode_slot={} encode_kind={} prepare_slot={} prepare_kind={} distinct_workers=1 buffering=double\n",
+        "ui4 h264 stream pipeline assigned encode_slot={} encode_kind={} prepare_slot={} prepare_kind={} egress_slot={} egress_kind={} distinct_workers=3 preparation_buffering=double encoded_au_queue=bounded\n",
         encode_slot,
         encode_kind,
         prepare_slot,
         prepare_kind,
+        egress_slot,
+        egress_kind,
     );
     SpawnAttempt::Spawned
 }

@@ -13,7 +13,7 @@ use super::{
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AppsPromptMode {
+enum AppsCommand {
     Start,
     Online,
     Dl,
@@ -26,23 +26,8 @@ pub(crate) enum AppsPromptMode {
     Status,
 }
 
-impl AppsPromptMode {
-    pub(crate) const fn next(self) -> Self {
-        match self {
-            Self::Start => Self::Online,
-            Self::Online => Self::Dl,
-            Self::Dl => Self::Peer,
-            Self::Peer => Self::Pause,
-            Self::Pause => Self::Preserve,
-            Self::Preserve => Self::Load,
-            Self::Load => Self::Stop,
-            Self::Stop => Self::Kick,
-            Self::Kick => Self::Status,
-            Self::Status => Self::Start,
-        }
-    }
-
-    pub(crate) const fn label(self) -> &'static str {
+impl AppsCommand {
+    const fn label(self) -> &'static str {
         match self {
             Self::Start => "start",
             Self::Online => "online",
@@ -56,6 +41,30 @@ impl AppsPromptMode {
             Self::Status => "status",
         }
     }
+}
+
+const APP_COMMANDS: [AppsCommand; 10] = [
+    AppsCommand::Start,
+    AppsCommand::Online,
+    AppsCommand::Dl,
+    AppsCommand::Peer,
+    AppsCommand::Pause,
+    AppsCommand::Preserve,
+    AppsCommand::Load,
+    AppsCommand::Stop,
+    AppsCommand::Kick,
+    AppsCommand::Status,
+];
+
+pub(crate) fn command_names_text() -> String {
+    let mut out = String::new();
+    for command in APP_COMMANDS {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(command.label());
+    }
+    out
 }
 
 fn line(io: &'static dyn ShellBackend2, text: &str) {
@@ -673,7 +682,7 @@ async fn start_app_task(
     id: Option<usize>,
     app_args: Vec<String>,
 ) {
-    // F2 is executing on the BSP executor. Discovery, hash verification, and
+    // Apps commands execute on the BSP executor. Discovery, hash verification, and
     // module loading must stay async all the way to the Blueprint run queue;
     // never route this task through synchronous kfs or spawn_and_wait_local.
     match id {
@@ -713,46 +722,36 @@ fn start_app(
     }
 }
 
-pub(crate) fn submit(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    mode: AppsPromptMode,
-    submitted: &str,
-) {
+pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitted: &str) {
     let mut parts = submitted.split_whitespace();
-    let first = parts.next();
-    let (action, rest): (AppsPromptMode, Vec<String>) = match first {
-        None => (mode, Vec::new()),
-        Some("start") => (AppsPromptMode::Start, parts.map(String::from).collect()),
-        Some("online") => (AppsPromptMode::Online, parts.map(String::from).collect()),
-        Some("dl") => (AppsPromptMode::Dl, parts.map(String::from).collect()),
-        Some("peer") => (AppsPromptMode::Peer, parts.map(String::from).collect()),
-        Some("pause") => (AppsPromptMode::Pause, parts.map(String::from).collect()),
-        Some("unpause") => (AppsPromptMode::Pause, parts.map(String::from).collect()),
-        Some("preserve") => (AppsPromptMode::Preserve, parts.map(String::from).collect()),
-        // Compatibility spelling for the former F2 Apps mode.
-        Some("save") => (AppsPromptMode::Preserve, parts.map(String::from).collect()),
-        Some("load") => (AppsPromptMode::Load, parts.map(String::from).collect()),
-        Some("stop") => (AppsPromptMode::Stop, parts.map(String::from).collect()),
-        Some("kick") => (AppsPromptMode::Kick, parts.map(String::from).collect()),
-        Some("status") => (AppsPromptMode::Status, parts.map(String::from).collect()),
-        Some(other) => {
-            let mut rest = Vec::new();
-            rest.push(String::from(other));
-            rest.extend(parts.map(String::from));
-            (mode, rest)
+    let action = match parts.next() {
+        Some("start") => AppsCommand::Start,
+        Some("online") => AppsCommand::Online,
+        Some("dl") => AppsCommand::Dl,
+        Some("peer") => AppsCommand::Peer,
+        Some("pause" | "unpause") => AppsCommand::Pause,
+        Some("preserve" | "save") => AppsCommand::Preserve,
+        Some("load") => AppsCommand::Load,
+        Some("stop") => AppsCommand::Stop,
+        Some("kick") => AppsCommand::Kick,
+        Some("status") => AppsCommand::Status,
+        Some(_) | None => {
+            line(
+                io,
+                "apps: expected start, online, dl, peer, pause, preserve, load, stop, kick, or status",
+            );
+            return;
         }
     };
+    let rest = parts.map(String::from).collect::<Vec<_>>();
 
     match action {
-        AppsPromptMode::Start => start_app(spawner, io, rest.into_iter()),
-        AppsPromptMode::Online => online_app(spawner, io, rest),
-        AppsPromptMode::Dl => {
-            super::shell2_dl::submit_download(spawner, io, rest.join(" ").as_str())
-        }
-        AppsPromptMode::Peer => peer_app(spawner, io, rest),
-        AppsPromptMode::Pause => pause_mode(spawner, io, rest.as_slice()),
-        AppsPromptMode::Load => {
+        AppsCommand::Start => start_app(spawner, io, rest.into_iter()),
+        AppsCommand::Online => online_app(spawner, io, rest),
+        AppsCommand::Dl => super::shell2_dl::submit_download(spawner, io, rest.join(" ").as_str()),
+        AppsCommand::Peer => peer_app(spawner, io, rest),
+        AppsCommand::Pause => pause_mode(spawner, io, rest.as_slice()),
+        AppsCommand::Load => {
             let mut args = rest.iter();
             let first = args.next().map(String::as_str);
             if let Some(endpoint) = first.filter(|s| s.contains("://")) {
@@ -763,13 +762,13 @@ pub(crate) fn submit(
                 schedule_load_vm(spawner, io, vm_id);
             }
         }
-        AppsPromptMode::Preserve => {
+        AppsCommand::Preserve => {
             preserve_selected_or_all(io, parse_id(rest.first().map(String::as_str)))
         }
-        AppsPromptMode::Stop => {
+        AppsCommand::Stop => {
             stop_selected_or_all(io, parse_id(rest.first().map(String::as_str)), "stop")
         }
-        AppsPromptMode::Kick => kick_vm(io, parse_id(rest.first().map(String::as_str))),
-        AppsPromptMode::Status => print_status(io),
+        AppsCommand::Kick => kick_vm(io, parse_id(rest.first().map(String::as_str))),
+        AppsCommand::Status => print_status(io),
     }
 }

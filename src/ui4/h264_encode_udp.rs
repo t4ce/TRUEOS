@@ -4,9 +4,11 @@
 //! of the payload or ownership contract; it remains only a scanout-latch
 //! boundary elsewhere in UI4.
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{collections::VecDeque, sync::Arc, vec::Vec};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_time::{Duration, Instant, Timer};
+use spin::Mutex;
 
 use crate::r::net::{
     SharedNetPayload, VNet,
@@ -39,6 +41,8 @@ const UDP_CLOSE_LINGER_MS: u64 = 100;
 const UDP_SUBSCRIBER_POLL_MS: u64 = 10;
 const PREPARED_FRAME_POLL_MS: u64 = 1;
 const UDP_SUBMIT_RETRY_LIMIT: usize = 64;
+const ENCODED_ACCESS_UNIT_QUEUE_CAP: usize = 4;
+const EGRESS_QUEUE_POLL_MS: u64 = 1;
 // The adapter's UDP socket allocates eight TX packet-metadata entries. Match
 // that exact capacity: one eight-fragment window occupies at most 9,600 bytes
 // of the 64 KiB byte ring and can be admitted in one network-service turn.
@@ -50,6 +54,85 @@ struct EncodedAccessUnit {
     keyframe: bool,
     bytes: Vec<u8>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EgressSessionPhase {
+    Idle,
+    Requested,
+    WaitingSubscriber,
+    Ready,
+    ProducerDone,
+    Aborted,
+    Complete,
+}
+
+#[derive(Clone, Copy)]
+struct EgressSessionRequest {
+    session_id: u32,
+    access_unit_count: usize,
+    target_hz: usize,
+}
+
+struct EgressPipeline {
+    phase: EgressSessionPhase,
+    request: Option<EgressSessionRequest>,
+    session_id: u32,
+    queue: VecDeque<EncodedAccessUnit>,
+    queued_bytes: usize,
+    queued_access_units: usize,
+    high_water_access_units: usize,
+    high_water_bytes: usize,
+    producer_queue_wait_events: usize,
+    producer_queue_wait_us: u64,
+    producer_dropped_access_units: usize,
+    producer_dropped_bytes: usize,
+    producer_finished: bool,
+    cadence_started_ns: u64,
+    report: Option<MediaUdpStreamReport>,
+}
+
+impl EgressPipeline {
+    const fn new() -> Self {
+        Self {
+            phase: EgressSessionPhase::Idle,
+            request: None,
+            session_id: 0,
+            queue: VecDeque::new(),
+            queued_bytes: 0,
+            queued_access_units: 0,
+            high_water_access_units: 0,
+            high_water_bytes: 0,
+            producer_queue_wait_events: 0,
+            producer_queue_wait_us: 0,
+            producer_dropped_access_units: 0,
+            producer_dropped_bytes: 0,
+            producer_finished: false,
+            cadence_started_ns: 0,
+            report: None,
+        }
+    }
+
+    fn reset_for_request(&mut self, request: EgressSessionRequest) {
+        self.phase = EgressSessionPhase::Requested;
+        self.request = Some(request);
+        self.session_id = request.session_id;
+        self.queue.clear();
+        self.queued_bytes = 0;
+        self.queued_access_units = 0;
+        self.high_water_access_units = 0;
+        self.high_water_bytes = 0;
+        self.producer_queue_wait_events = 0;
+        self.producer_queue_wait_us = 0;
+        self.producer_dropped_access_units = 0;
+        self.producer_dropped_bytes = 0;
+        self.producer_finished = false;
+        self.cadence_started_ns = 0;
+        self.report = None;
+    }
+}
+
+static EGRESS_PIPELINE: Mutex<EgressPipeline> = Mutex::new(EgressPipeline::new());
+static EGRESS_WORKER_SLOT: AtomicU32 = AtomicU32::new(u32::MAX);
 
 struct PendingDatagram {
     receipt: u32,
@@ -86,6 +169,8 @@ pub(super) struct MediaUdpStreamReport {
     pub(super) elapsed_us: u64,
     pub(super) late_access_units: usize,
     pub(super) max_late_us: u64,
+    pub(super) producer_queue_wait_events: usize,
+    pub(super) producer_queue_wait_us: u64,
 }
 
 /// One boot-lifetime VNet registration shared by every bounded media session.
@@ -124,11 +209,201 @@ impl MediaUdpTransport {
     }
 }
 
-/// Wait for one receiver, start the bounded producer, then encode and send on
-/// absolute `target_hz` deadlines. The first prepared frame is excluded from
-/// cadence timing; subsequent preparation overlaps hardware encode and egress.
+pub(super) const fn encoded_access_unit_queue_cap() -> usize {
+    ENCODED_ACCESS_UNIT_QUEUE_CAP
+}
+
+pub(super) fn egress_worker_slot() -> u32 {
+    EGRESS_WORKER_SLOT.load(Ordering::Acquire)
+}
+
+fn request_egress_session(request: EgressSessionRequest) -> bool {
+    let mut pipeline = EGRESS_PIPELINE.lock();
+    if pipeline.phase != EgressSessionPhase::Idle {
+        return false;
+    }
+    pipeline.reset_for_request(request);
+    true
+}
+
+fn take_egress_session_request() -> Option<EgressSessionRequest> {
+    let mut pipeline = EGRESS_PIPELINE.lock();
+    if pipeline.phase != EgressSessionPhase::Requested {
+        return None;
+    }
+    let request = pipeline.request.take()?;
+    pipeline.phase = EgressSessionPhase::WaitingSubscriber;
+    Some(request)
+}
+
+fn mark_egress_session_ready(session_id: u32) -> bool {
+    let mut pipeline = EGRESS_PIPELINE.lock();
+    if pipeline.session_id != session_id || pipeline.phase != EgressSessionPhase::WaitingSubscriber
+    {
+        return false;
+    }
+    pipeline.phase = EgressSessionPhase::Ready;
+    true
+}
+
+fn egress_session_ready(session_id: u32) -> bool {
+    let pipeline = EGRESS_PIPELINE.lock();
+    pipeline.session_id == session_id && pipeline.phase == EgressSessionPhase::Ready
+}
+
+async fn enqueue_access_unit(session_id: u32, access_unit: EncodedAccessUnit) -> bool {
+    let mut access_unit = Some(access_unit);
+    let wait_started_ns = crate::chronos::monotonic_nanos();
+    let mut waited = false;
+    loop {
+        {
+            let mut pipeline = EGRESS_PIPELINE.lock();
+            if pipeline.session_id != session_id || pipeline.phase != EgressSessionPhase::Ready {
+                let dropped_bytes = access_unit
+                    .as_ref()
+                    .map(|unit| unit.bytes.len())
+                    .unwrap_or(0);
+                pipeline.producer_dropped_access_units =
+                    pipeline.producer_dropped_access_units.saturating_add(1);
+                pipeline.producer_dropped_bytes = pipeline
+                    .producer_dropped_bytes
+                    .saturating_add(dropped_bytes);
+                return false;
+            }
+            if pipeline.phase == EgressSessionPhase::Ready
+                && pipeline.queue.len() < ENCODED_ACCESS_UNIT_QUEUE_CAP
+            {
+                let access_unit = access_unit.take().expect("egress access unit retained");
+                let access_unit_bytes = access_unit.bytes.len();
+                pipeline.queue.push_back(access_unit);
+                pipeline.queued_bytes = pipeline.queued_bytes.saturating_add(access_unit_bytes);
+                pipeline.queued_access_units = pipeline.queued_access_units.saturating_add(1);
+                pipeline.high_water_access_units =
+                    pipeline.high_water_access_units.max(pipeline.queue.len());
+                pipeline.high_water_bytes = pipeline.high_water_bytes.max(pipeline.queued_bytes);
+                if waited {
+                    pipeline.producer_queue_wait_events =
+                        pipeline.producer_queue_wait_events.saturating_add(1);
+                    pipeline.producer_queue_wait_us =
+                        pipeline.producer_queue_wait_us.saturating_add(
+                            crate::chronos::monotonic_nanos().saturating_sub(wait_started_ns)
+                                / 1_000,
+                        );
+                }
+                return true;
+            }
+        }
+        waited = true;
+        Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+    }
+}
+
+fn finish_egress_producer(session_id: u32, dropped_access_units: usize, dropped_bytes: usize) {
+    let mut pipeline = EGRESS_PIPELINE.lock();
+    if pipeline.session_id != session_id {
+        return;
+    }
+    pipeline.producer_dropped_access_units = pipeline
+        .producer_dropped_access_units
+        .saturating_add(dropped_access_units);
+    pipeline.producer_dropped_bytes = pipeline
+        .producer_dropped_bytes
+        .saturating_add(dropped_bytes);
+    pipeline.producer_finished = true;
+    if pipeline.phase == EgressSessionPhase::Ready {
+        pipeline.phase = EgressSessionPhase::ProducerDone;
+    }
+}
+
+fn mark_egress_cadence_started(session_id: u32, started_ns: u64) {
+    let mut pipeline = EGRESS_PIPELINE.lock();
+    if pipeline.session_id == session_id && pipeline.phase == EgressSessionPhase::Ready {
+        pipeline.cadence_started_ns = started_ns;
+    }
+}
+
+fn egress_producer_finished(session_id: u32) -> bool {
+    let pipeline = EGRESS_PIPELINE.lock();
+    pipeline.session_id == session_id && pipeline.producer_finished
+}
+
+fn egress_elapsed_us(session_id: u32) -> u64 {
+    let pipeline = EGRESS_PIPELINE.lock();
+    if pipeline.session_id != session_id || pipeline.cadence_started_ns == 0 {
+        return 0;
+    }
+    crate::chronos::monotonic_nanos().saturating_sub(pipeline.cadence_started_ns) / 1_000
+}
+
+fn take_next_egress_access_unit(session_id: u32) -> Option<Option<EncodedAccessUnit>> {
+    let mut pipeline = EGRESS_PIPELINE.lock();
+    if pipeline.session_id != session_id {
+        return Some(None);
+    }
+    if let Some(access_unit) = pipeline.queue.pop_front() {
+        pipeline.queued_bytes = pipeline
+            .queued_bytes
+            .saturating_sub(access_unit.bytes.len());
+        return Some(Some(access_unit));
+    }
+    if matches!(pipeline.phase, EgressSessionPhase::ProducerDone | EgressSessionPhase::Aborted) {
+        return Some(None);
+    }
+    None
+}
+
+fn abort_egress_session(session_id: u32) {
+    let mut pipeline = EGRESS_PIPELINE.lock();
+    if pipeline.session_id != session_id {
+        return;
+    }
+    while let Some(access_unit) = pipeline.queue.pop_front() {
+        pipeline.producer_dropped_access_units =
+            pipeline.producer_dropped_access_units.saturating_add(1);
+        pipeline.producer_dropped_bytes = pipeline
+            .producer_dropped_bytes
+            .saturating_add(access_unit.bytes.len());
+    }
+    pipeline.queued_bytes = 0;
+    pipeline.phase = EgressSessionPhase::Aborted;
+}
+
+fn complete_egress_session(session_id: u32, mut report: MediaUdpStreamReport) {
+    let mut pipeline = EGRESS_PIPELINE.lock();
+    if pipeline.session_id != session_id {
+        return;
+    }
+    report.queued_access_units = pipeline.queued_access_units;
+    report.high_water_access_units = pipeline.high_water_access_units;
+    report.high_water_bytes = pipeline.high_water_bytes;
+    report.producer_queue_wait_events = pipeline.producer_queue_wait_events;
+    report.producer_queue_wait_us = pipeline.producer_queue_wait_us;
+    report.dropped_access_units = report
+        .dropped_access_units
+        .saturating_add(pipeline.producer_dropped_access_units);
+    report.dropped_bytes = report
+        .dropped_bytes
+        .saturating_add(pipeline.producer_dropped_bytes);
+    pipeline.queue.clear();
+    pipeline.report = Some(report);
+    pipeline.phase = EgressSessionPhase::Complete;
+}
+
+fn take_egress_report(session_id: u32) -> Option<MediaUdpStreamReport> {
+    let mut pipeline = EGRESS_PIPELINE.lock();
+    if pipeline.session_id != session_id || pipeline.phase != EgressSessionPhase::Complete {
+        return None;
+    }
+    let report = pipeline.report.take()?;
+    pipeline.phase = EgressSessionPhase::Idle;
+    pipeline.session_id = 0;
+    Some(report)
+}
+
+/// Encode on absolute `target_hz` deadlines and publish complete Annex-B
+/// access units into the bounded queue owned by the independent UDP worker.
+/// The first prepared frame is excluded from cadence timing.
 pub(super) async fn stream_generated_annex_b<B, R, F>(
-    transport: &mut MediaUdpTransport,
     session_id: u32,
     access_unit_count: usize,
     target_hz: usize,
@@ -141,21 +416,168 @@ where
     R: FnMut(u32) -> bool,
     F: FnMut(u32) -> Option<Vec<u8>>,
 {
-    let mut report = MediaUdpStreamReport {
+    if access_unit_count == 0 || target_hz == 0 {
+        return MediaUdpStreamReport {
+            session_id,
+            ..MediaUdpStreamReport::default()
+        };
+    }
+
+    let request = EgressSessionRequest {
         session_id,
+        access_unit_count,
+        target_hz,
+    };
+    while !request_egress_session(request) {
+        Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+    }
+    loop {
+        if egress_session_ready(session_id) {
+            break;
+        }
+        if let Some(report) = take_egress_report(session_id) {
+            return report;
+        }
+        Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+    }
+
+    let prefill_started_ns = crate::chronos::monotonic_nanos();
+    begin_preparation();
+    while !prepared(0) {
+        Timer::after(Duration::from_millis(PREPARED_FRAME_POLL_MS)).await;
+    }
+    let prefill_us = crate::chronos::monotonic_nanos().saturating_sub(prefill_started_ns) / 1_000;
+    crate::log_info!(target: "intel/media-encode";
+        "intel/media-encode: udp-live preparation=prefilled session={} sequence=0 prefill_us={} buffering=double action=start-cadence\n",
+        session_id,
+        prefill_us,
+    );
+
+    let period_ticks = (embassy_time::TICK_HZ / target_hz as u64).max(1);
+    let started_ns = crate::chronos::monotonic_nanos();
+    mark_egress_cadence_started(session_id, started_ns);
+    let mut next_deadline = Instant::now();
+    let mut late_access_units = 0usize;
+    let mut max_late_us = 0u64;
+    let mut producer_dropped_access_units = 0usize;
+    let mut producer_dropped_bytes = 0usize;
+    for index in 0..access_unit_count {
+        if index != 0 {
+            next_deadline += Duration::from_ticks(period_ticks);
+            let now = Instant::now();
+            if now < next_deadline {
+                Timer::at(next_deadline).await;
+            }
+        }
+
+        let sequence = index as u32;
+        while !prepared(sequence) {
+            Timer::after(Duration::from_millis(PREPARED_FRAME_POLL_MS)).await;
+        }
+        if index != 0 {
+            let now = Instant::now();
+            if now > next_deadline {
+                late_access_units = late_access_units.saturating_add(1);
+                let late_us = now.saturating_duration_since(next_deadline).as_micros();
+                max_late_us = max_late_us.max(late_us);
+                // Rebase instead of emitting a catch-up burst.
+                next_deadline = now;
+            }
+        }
+
+        let Some(bytes) = generate(sequence) else {
+            producer_dropped_access_units = producer_dropped_access_units.saturating_add(1);
+            break;
+        };
+        if bytes.len() > crate::allcaps::media_encode::STREAM_MAX_ACCESS_UNIT_BYTES {
+            producer_dropped_access_units = producer_dropped_access_units.saturating_add(1);
+            producer_dropped_bytes = producer_dropped_bytes.saturating_add(bytes.len());
+            break;
+        }
+        let Some(keyframe) = annex_b_access_unit_keyframe(bytes.as_slice()) else {
+            producer_dropped_access_units = producer_dropped_access_units.saturating_add(1);
+            producer_dropped_bytes = producer_dropped_bytes.saturating_add(bytes.len());
+            break;
+        };
+        let access_unit = EncodedAccessUnit {
+            sequence,
+            keyframe,
+            bytes,
+        };
+        if !enqueue_access_unit(session_id, access_unit).await {
+            break;
+        }
+    }
+    finish_egress_producer(session_id, producer_dropped_access_units, producer_dropped_bytes);
+    let mut report = loop {
+        if let Some(report) = take_egress_report(session_id) {
+            break report;
+        }
+        Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+    };
+    if report.elapsed_us == 0 {
+        report.elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
+    }
+    report.late_access_units = late_access_units;
+    report.max_late_us = max_late_us;
+    report
+}
+
+#[embassy_executor::task(pool_size = 1)]
+pub(crate) async fn ui4_h264_encode_udp_egress_task(assigned_slot: u32) {
+    let worker = crate::cpu::CpuProfile::current();
+    let worker_slot = worker.map(|profile| profile.slot()).unwrap_or(u32::MAX);
+    let worker_kind = worker
+        .map(|profile| profile.core_kind_name())
+        .unwrap_or("unknown");
+    EGRESS_WORKER_SLOT.store(worker_slot, Ordering::Release);
+    crate::log_info!(target: "intel/media-encode";
+        "intel/media-encode: udp-egress service online carrier=background-worker assigned_slot={} worker_slot={} worker_kind={} queue_cap={} ownership=fragment+checked-send-receipts ordering=session-sequence backpressure=bounded-wait-no-drop\n",
+        assigned_slot,
+        worker_slot,
+        worker_kind,
+        ENCODED_ACCESS_UNIT_QUEUE_CAP,
+    );
+    if worker_slot != assigned_slot {
+        crate::log_error!(target: "intel/media-encode";
+            "intel/media-encode: udp-egress service rejected assigned_slot={} actual_slot={} reason=executor-residency-mismatch action=park\n",
+            assigned_slot,
+            worker_slot,
+        );
+        loop {
+            Timer::after(Duration::from_secs(3_600)).await;
+        }
+    }
+
+    let mut transport = MediaUdpTransport::open().await;
+    loop {
+        let request = loop {
+            if let Some(request) = take_egress_session_request() {
+                break request;
+            }
+            Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+        };
+        let report = run_egress_session(&mut transport, request).await;
+        complete_egress_session(request.session_id, report);
+    }
+}
+
+async fn run_egress_session(
+    transport: &mut MediaUdpTransport,
+    request: EgressSessionRequest,
+) -> MediaUdpStreamReport {
+    let mut report = MediaUdpStreamReport {
+        session_id: request.session_id,
         network_waits: core::mem::take(&mut transport.pending_open_waits),
         ..MediaUdpStreamReport::default()
     };
-    if access_unit_count == 0 || target_hz == 0 {
-        return report;
-    }
-
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: udp-live staged=1 protocol=tme1 version={} session={} payload=annexb-access-units target_fps={} target_units={} live_high_water_cap=1 transport=udp-subscribe-unicast listen_port={} subscriber_token=TME1GET1 network=waiting\n",
+        "intel/media-encode: udp-live staged=1 protocol=tme1 version={} session={} payload=annexb-access-units target_fps={} target_units={} live_high_water_cap={} pipeline=encode-producer+independent-egress-consumer transport=udp-subscribe-unicast listen_port={} subscriber_token=TME1GET1 network=waiting\n",
         VERSION,
-        session_id,
-        target_hz,
-        access_unit_count,
+        request.session_id,
+        request.target_hz,
+        request.access_unit_count,
+        ENCODED_ACCESS_UNIT_QUEUE_CAP,
         crate::allports::services::MEDIA_ENCODE_UDP_PORT,
     );
 
@@ -175,7 +597,6 @@ where
         };
         break udp;
     };
-
     let remote = loop {
         match udp.poll_event() {
             Some(VNetUdpEvent::Packet(VNetUdpPacket::V4 { from, data }))
@@ -210,8 +631,8 @@ where
     report.peer_addr = remote.addr;
     report.peer_port = remote.port;
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: udp-live subscriber=accepted session={} peer={}.{}.{}.{}:{} wait_polls={} action=capture-encode-send\n",
-        session_id,
+        "intel/media-encode: udp-live subscriber=accepted session={} peer={}.{}.{}.{}:{} wait_polls={} action=signal-encoder-and-drain-bounded-au-queue\n",
+        request.session_id,
         remote.addr[0],
         remote.addr[1],
         remote.addr[2],
@@ -219,70 +640,22 @@ where
         remote.port,
         report.subscriber_wait_polls,
     );
-
-    let prefill_started_ns = crate::chronos::monotonic_nanos();
-    begin_preparation();
-    while !prepared(0) {
-        Timer::after(Duration::from_millis(PREPARED_FRAME_POLL_MS)).await;
+    if !mark_egress_session_ready(request.session_id) {
+        abort_egress_session(request.session_id);
+        udp.close();
+        return report;
     }
-    let prefill_us = crate::chronos::monotonic_nanos().saturating_sub(prefill_started_ns) / 1_000;
-    crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: udp-live preparation=prefilled session={} sequence=0 prefill_us={} buffering=double action=start-cadence\n",
-        session_id,
-        prefill_us,
-    );
 
-    let period_ticks = (embassy_time::TICK_HZ / target_hz as u64).max(1);
-    let started_ns = crate::chronos::monotonic_nanos();
-    let mut next_deadline = Instant::now();
     let mut datagram_sequence = 0u32;
-    for index in 0..access_unit_count {
-        if index != 0 {
-            next_deadline += Duration::from_ticks(period_ticks);
-            let now = Instant::now();
-            if now < next_deadline {
-                Timer::at(next_deadline).await;
-            }
-        }
-
-        let sequence = index as u32;
-        while !prepared(sequence) {
-            Timer::after(Duration::from_millis(PREPARED_FRAME_POLL_MS)).await;
-        }
-        if index != 0 {
-            let now = Instant::now();
-            if now > next_deadline {
-                report.late_access_units = report.late_access_units.saturating_add(1);
-                let late_us = now.saturating_duration_since(next_deadline).as_micros();
-                report.max_late_us = report.max_late_us.max(late_us);
-                // Rebase instead of emitting a catch-up burst.
-                next_deadline = now;
-            }
-        }
-
-        let Some(bytes) = generate(sequence) else {
-            report.dropped_access_units = report.dropped_access_units.saturating_add(1);
+    loop {
+        let Some(next) = take_next_egress_access_unit(request.session_id) else {
+            Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+            continue;
+        };
+        let Some(access_unit) = next else {
             break;
         };
-        report.queued_access_units = report.queued_access_units.saturating_add(1);
-        report.high_water_access_units = report.high_water_access_units.max(1);
-        report.high_water_bytes = report.high_water_bytes.max(bytes.len());
-        if bytes.len() > crate::allcaps::media_encode::STREAM_MAX_ACCESS_UNIT_BYTES {
-            report.dropped_access_units = report.dropped_access_units.saturating_add(1);
-            report.dropped_bytes = report.dropped_bytes.saturating_add(bytes.len());
-            break;
-        }
-        let Some(keyframe) = annex_b_access_unit_keyframe(bytes.as_slice()) else {
-            report.dropped_access_units = report.dropped_access_units.saturating_add(1);
-            report.dropped_bytes = report.dropped_bytes.saturating_add(bytes.len());
-            break;
-        };
-        let access_unit = EncodedAccessUnit {
-            sequence,
-            keyframe,
-            bytes,
-        };
-        let session_end = index + 1 == access_unit_count;
+        let session_end = access_unit.sequence as usize + 1 == request.access_unit_count;
         if !send_access_unit(
             &udp,
             remote,
@@ -295,12 +668,16 @@ where
         {
             report.dropped_access_units = report.dropped_access_units.saturating_add(1);
             report.dropped_bytes = report.dropped_bytes.saturating_add(access_unit.bytes.len());
+            abort_egress_session(request.session_id);
             break;
         }
         report.sent_access_units = report.sent_access_units.saturating_add(1);
     }
-    report.elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
 
+    while !egress_producer_finished(request.session_id) {
+        Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+    }
+    report.elapsed_us = egress_elapsed_us(request.session_id);
     Timer::after(Duration::from_millis(UDP_CLOSE_LINGER_MS)).await;
     udp.close();
     drop(udp);

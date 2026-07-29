@@ -82,7 +82,7 @@ pub mod net {
     pub const NET_POLL_SLEEP_US: u64 = 100;
     pub const NET_SERVICE_SLEEP_US: u64 = 100;
 
-    pub const THROUGHPUT_BENCH_AUTOSTART: bool = true;
+    pub const THROUGHPUT_BENCH_AUTOSTART: bool = false;
     pub const THROUGHPUT_BENCH_START_DELAY_MS: u64 = 15_000;
     pub const THROUGHPUT_BENCH_DURATION_MS: u64 = 30_000;
     pub const THROUGHPUT_BENCH_CONNECT_TIMEOUT_MS: u64 = 10_000;
