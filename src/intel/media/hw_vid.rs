@@ -10,8 +10,8 @@ const H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
 const H264_ONLINE_MEDIA_FETCH_MAX_BYTES: usize = 160 * 1024 * 1024;
 const H264_TRUEOSFS_VIDEO_MAX_BYTES: usize = 160 * 1024 * 1024;
 const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 64 * 1024;
-const H264_VCS0_SESSION_WAIT_MS: u64 = 5_000;
-const H264_VCS0_SESSION_RETRY_MS: u64 = 1;
+const H264_MEDIA_SESSION_WAIT_MS: u64 = 5_000;
+const H264_MEDIA_SESSION_RETRY_MS: u64 = 1;
 const H264_FRAME_TIMEOUT_ERROR: i32 = -33;
 const H264_UI4_PRESENT_ERROR: i32 = -34;
 pub(crate) const UI4_FRAMED_VIDEO_FS_DEFAULT_PATH: &str = "x31_head_movie.annexb.h264";
@@ -291,8 +291,8 @@ impl H264PlaybackTiming {
     }
 }
 
-async fn h264_reserve_vcs0_decode_session()
--> Result<crate::intel::xelp_media2_ngin::MediaVcs0SessionGuard, &'static str> {
+async fn h264_reserve_decode_session()
+-> Result<crate::intel::xelp_media2_ngin::MediaSessionGuard, &'static str> {
     let started = EmbassyInstant::now();
     let mut attempts = 0usize;
     loop {
@@ -300,23 +300,24 @@ async fn h264_reserve_vcs0_decode_session()
         match crate::intel::xelp_media2_ngin::try_reserve_avc_decode_session() {
             Ok(session) => {
                 crate::log_info!(target: "intel-media";
-                    "intel/hw_vid: vcs0-session reserved=1 generation={} codec_mode=avc-decode submission_owner=execlists scope=playback waited_ms={} attempts={}\n",
+                    "intel/hw_vid: media-session reserved=1 engine={} generation={} codec_mode=avc-decode submission_owner=guc direct_execlist_submit=0 scope=playback waited_ms={} attempts={}\n",
+                    session.engine_name(),
                     session.generation(),
                     started.elapsed().as_millis(),
                     attempts,
                 );
                 return Ok(session);
             }
-            Err(crate::intel::xelp_media2_ngin::MediaVcs0LaneAcquireError::Busy)
-                if started.elapsed().as_millis() < H264_VCS0_SESSION_WAIT_MS =>
+            Err(crate::intel::xelp_media2_ngin::MediaLaneAcquireError::Busy)
+                if started.elapsed().as_millis() < H264_MEDIA_SESSION_WAIT_MS =>
             {
-                Timer::after_millis(H264_VCS0_SESSION_RETRY_MS).await;
+                Timer::after_millis(H264_MEDIA_SESSION_RETRY_MS).await;
             }
-            Err(crate::intel::xelp_media2_ngin::MediaVcs0LaneAcquireError::Busy) => {
-                return Err("VCS0 playback session reservation timed out");
+            Err(crate::intel::xelp_media2_ngin::MediaLaneAcquireError::Busy) => {
+                return Err("media playback session reservation timed out");
             }
-            Err(crate::intel::xelp_media2_ngin::MediaVcs0LaneAcquireError::Quarantined) => {
-                return Err("VCS0 playback session is quarantined");
+            Err(crate::intel::xelp_media2_ngin::MediaLaneAcquireError::Quarantined) => {
+                return Err("media playback session is quarantined");
             }
         }
     }
@@ -408,8 +409,9 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
     );
 
     let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
-    let vcs0_session = h264_reserve_vcs0_decode_session().await?;
-    let vcs0_session_generation = vcs0_session.generation();
+    let media_session = h264_reserve_decode_session().await?;
+    let media_session_generation = media_session.generation();
+    let decode_engine_name = media_session.engine_name();
     let old_hw_pic_logging =
         crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
     let old_surface_probes =
@@ -422,16 +424,17 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
         decode_source,
         path,
         options,
-        vcs0_session_generation,
+        media_session_generation,
     )
     .await;
     crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
     crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
     crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
-    drop(vcs0_session);
+    drop(media_session);
     crate::log_info!(target: "intel-media";
-        "intel/hw_vid: vcs0-session reserved=0 generation={} codec_mode=avc-decode submission_owner=execlists scope=playback attempted={} retired={} presented={} release=stream-complete\n",
-        vcs0_session_generation,
+        "intel/hw_vid: media-session reserved=0 engine={} generation={} codec_mode=avc-decode submission_owner=guc direct_execlist_submit=0 scope=playback attempted={} retired={} presented={} release=stream-complete\n",
+        decode_engine_name,
+        media_session_generation,
         report.attempted,
         report.retired,
         report.presented,
@@ -486,8 +489,9 @@ async fn run_media_url_playback(
         url
     );
 
-    let vcs0_session = h264_reserve_vcs0_decode_session().await?;
-    let vcs0_session_generation = vcs0_session.generation();
+    let media_session = h264_reserve_decode_session().await?;
+    let media_session_generation = media_session.generation();
+    let decode_engine_name = media_session.engine_name();
     let old_hw_pic_logging =
         crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
     let old_surface_probes =
@@ -500,16 +504,17 @@ async fn run_media_url_playback(
         "media-url-mp4-avc1",
         playback_path,
         options,
-        vcs0_session_generation,
+        media_session_generation,
     )
     .await;
     crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
     crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
     crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
-    drop(vcs0_session);
+    drop(media_session);
     crate::log_info!(target: "intel-media";
-        "intel/hw_vid: vcs0-session reserved=0 generation={} codec_mode=avc-decode submission_owner=execlists scope=playback attempted={} retired={} presented={} release=stream-complete\n",
-        vcs0_session_generation,
+        "intel/hw_vid: media-session reserved=0 engine={} generation={} codec_mode=avc-decode submission_owner=guc direct_execlist_submit=0 scope=playback attempted={} retired={} presented={} release=stream-complete\n",
+        decode_engine_name,
+        media_session_generation,
         report.attempted,
         report.retired,
         report.presented,
@@ -1786,7 +1791,7 @@ async fn h264_i_p_playback_probe_annexb_bytes(
     source: &'static str,
     path: &str,
     mode: H264PlaybackOptions,
-    vcs0_session_generation: u64,
+    media_session_generation: u64,
 ) -> H264PlaybackReport {
     let stream_bytes = bytes.len() as u64;
     let reader = H264NalReader::Memory(H264MemoryNalReader::new(bytes, source));
@@ -1802,7 +1807,7 @@ async fn h264_i_p_playback_probe_annexb_bytes(
         source,
         path,
         mode,
-        vcs0_session_generation,
+        media_session_generation,
     )
     .await
 }
@@ -1814,7 +1819,7 @@ async fn h264_i_p_playback_probe_with_reader(
     source: &'static str,
     path: &str,
     mode: H264PlaybackOptions,
-    vcs0_session_generation: u64,
+    media_session_generation: u64,
 ) -> H264PlaybackReport {
     let mut nal_count = 0usize;
     let mut idr_seen = 0usize;
@@ -2075,7 +2080,7 @@ async fn h264_i_p_playback_probe_with_reader(
                 idr_seen,
                 &frame,
                 mode.diagnostics(),
-                vcs0_session_generation,
+                media_session_generation,
                 Some(&mut playback_timing),
             )
             .await
@@ -2440,7 +2445,7 @@ async fn h264_decode_wait_frame(
     stream_idr_index: usize,
     encoded: &[u8],
     diagnostics: bool,
-    vcs0_session_generation: u64,
+    media_session_generation: u64,
     mut timing: Option<&mut H264PlaybackTiming>,
 ) -> Result<super::hw_pic::HwPicOutput, i32> {
     if diagnostics {
@@ -2458,9 +2463,9 @@ async fn h264_decode_wait_frame(
         );
     }
 
-    let id = match crate::intel::hw_pic_submit_h264_in_vcs0_session(
+    let id = match crate::intel::hw_pic_submit_h264_in_media_session(
         encoded,
-        vcs0_session_generation,
+        media_session_generation,
     ) {
         Ok(id) => id,
         Err(err) => {

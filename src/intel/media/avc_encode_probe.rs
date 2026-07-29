@@ -703,20 +703,21 @@ fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
 
     let live_frame = !matches!(source_kind, AvcFrameSource::BootProof);
     let lane_result = if live_frame {
-        media::acquire_vcs0_lane_bounded(
-            media::MediaVcs0JobMode::AVC_ENCODE_GUC,
+        media::acquire_media_lane_bounded(
+            engine,
+            media::MediaJobMode::AVC_ENCODE_GUC,
             None,
-            media::MEDIA_VCS0_INTERLEAVE_WAIT_NS,
+            media::MEDIA_INTERLEAVE_WAIT_NS,
         )
     } else {
-        media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::AVC_ENCODE_GUC, None)
+        media::try_acquire_media_lane(engine, media::MediaJobMode::AVC_ENCODE_GUC, None)
     };
     let mut lane = match lane_result {
         Ok(lane) => lane,
-        Err(media::MediaVcs0LaneAcquireError::Busy) => {
+        Err(media::MediaLaneAcquireError::Busy) => {
             return deferred(AvcEncodeProbeFailure::LaneBusy);
         }
-        Err(media::MediaVcs0LaneAcquireError::Quarantined) => {
+        Err(media::MediaLaneAcquireError::Quarantined) => {
             return deferred(AvcEncodeProbeFailure::LaneQuarantined);
         }
     };
@@ -1511,7 +1512,7 @@ fn fail(
 }
 
 fn quarantine(
-    lane: media::MediaVcs0LaneGuard,
+    lane: media::MediaLaneGuard,
     mut report: AvcEncodeProbeReport,
     failure: AvcEncodeProbeFailure,
     started_ns: u64,

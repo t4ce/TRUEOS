@@ -183,15 +183,19 @@ pub(crate) fn run_once() -> GucVcs0ProbeReport {
     }
 
     let mut lane =
-        match media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::TRANSPORT_PROBE_GUC, None) {
+        match media::try_acquire_media_lane(
+            engine,
+            media::MediaJobMode::TRANSPORT_PROBE_GUC,
+            None,
+        ) {
             Ok(lane) => lane,
-            Err(media::MediaVcs0LaneAcquireError::Busy) => {
+            Err(media::MediaLaneAcquireError::Busy) => {
                 if STATE.load(Ordering::Acquire) != GucVcs0ProbeState::NotRun as u8 {
                     return snapshot();
                 }
                 return deferred(GucVcs0ProbeFailure::LaneBusy);
             }
-            Err(media::MediaVcs0LaneAcquireError::Quarantined) => {
+            Err(media::MediaLaneAcquireError::Quarantined) => {
                 if STATE.load(Ordering::Acquire) != GucVcs0ProbeState::NotRun as u8 {
                     return snapshot();
                 }
@@ -467,7 +471,7 @@ fn fail(
 }
 
 fn quarantine(
-    lane: media::MediaVcs0LaneGuard,
+    lane: media::MediaLaneGuard,
     mut report: GucVcs0ProbeReport,
     failure: GucVcs0ProbeFailure,
     started_ns: u64,

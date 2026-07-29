@@ -128,7 +128,7 @@ struct HwPicJob {
     id: u32,
     codec: HwPicCodec,
     submitted_tick: u64,
-    vcs0_session_generation: Option<u64>,
+    media_session_generation: Option<u64>,
     encoded: Vec<u8>,
 }
 
@@ -335,10 +335,10 @@ fn hw_pic_ticks_to_micros(ticks: u64) -> u64 {
     ((ticks as u128).saturating_mul(1_000_000) / hz as u128) as u64
 }
 
-fn submit_encoded_with_vcs0_session(
+fn submit_encoded_with_media_session(
     codec: HwPicCodec,
     encoded: &[u8],
-    vcs0_session_generation: Option<u64>,
+    media_session_generation: Option<u64>,
 ) -> Result<u32, i32> {
     if encoded.is_empty() {
         return Err(-3);
@@ -353,7 +353,7 @@ fn submit_encoded_with_vcs0_session(
         id,
         codec,
         submitted_tick: hw_pic_now_ticks(),
-        vcs0_session_generation,
+        media_session_generation,
         encoded: encoded.to_vec(),
     });
     drop(pending);
@@ -363,18 +363,18 @@ fn submit_encoded_with_vcs0_session(
 }
 
 fn submit_encoded(codec: HwPicCodec, encoded: &[u8]) -> Result<u32, i32> {
-    submit_encoded_with_vcs0_session(codec, encoded, None)
+    submit_encoded_with_media_session(codec, encoded, None)
 }
 
 pub(crate) fn submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
     submit_encoded(HwPicCodec::Jpeg, encoded)
 }
 
-pub(crate) fn submit_h264_in_vcs0_session(
+pub(crate) fn submit_h264_in_media_session(
     encoded: &[u8],
-    vcs0_session_generation: u64,
+    media_session_generation: u64,
 ) -> Result<u32, i32> {
-    submit_encoded_with_vcs0_session(HwPicCodec::H264, encoded, Some(vcs0_session_generation))
+    submit_encoded_with_media_session(HwPicCodec::H264, encoded, Some(media_session_generation))
 }
 
 pub(crate) fn set_detailed_logging_enabled(enabled: bool) -> bool {
@@ -1400,7 +1400,7 @@ async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         output_slot_offset,
         missing_ref_offset,
         job.id,
-        job.vcs0_session_generation,
+        job.media_session_generation,
     )
     .await
     else {
@@ -1409,9 +1409,13 @@ async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
     };
 
     hw_pic_info!(
-        "intel/hw_pic-stage: id={} stage=submit accepted=1 codec=h264 engine={} retired={} detail={} polls={} mode_transition={} engine_reset={} reset_us={} zero_clear_us={} zero_us={} scratch_zero_us={} output_clear_us={} missing_clear_us={} scratch_flush_us={} build_ctx_us={} poll_us={} post_us={} coded={}x{} pitch=0x{:X} surface_bytes=0x{:X} command_dwords={} batch_bytes=0x{:X} ring_bytes=0x{:X}\n",
+        "intel/hw_pic-stage: id={} stage=submit accepted=1 codec=h264 engine={} submission_owner={} direct_execlist_submit={} guc_serial={} guc_context_destroyed={} retired={} detail={} polls={} mode_transition={} engine_reset={} reset_us={} zero_clear_us={} zero_us={} scratch_zero_us={} output_clear_us={} missing_clear_us={} scratch_flush_us={} build_ctx_us={} poll_us={} post_us={} coded={}x{} pitch=0x{:X} surface_bytes=0x{:X} command_dwords={} batch_bytes=0x{:X} ring_bytes=0x{:X}\n",
         job.id,
         avc.engine_name,
+        avc.submission_owner,
+        avc.direct_execlist_submit as u8,
+        avc.guc_serial,
+        avc.guc_context_destroyed as u8,
         avc.retired as u8,
         avc.output_surface_detail as u8,
         avc.poll_iters,

@@ -343,23 +343,45 @@ pub(crate) fn media_vdbox_fuse_raw(dev: Dev) -> u32 {
     mmio_read(dev, GEN11_GT_VEBOX_VDBOX_DISABLE)
 }
 
+const fn media_vdbox_mask_from_fuse(device_id: u16, fuse_raw: u32) -> u8 {
+    (!fuse_raw as u8) & media_platform_vdbox_mask(device_id)
+}
+
 /// Physical VDBOX instances enabled by both the platform table and fuses.
 ///
 /// Alder/Raptor Lake use the pre-12.55 disable semantics: a set fuse bit
 /// removes the corresponding physical engine. ADL-S exposes VCS0 and VCS2;
 /// VCS1 is intentionally not a platform engine.
 pub(crate) fn media_vdbox_mask(dev: Dev) -> u8 {
-    let platform = media_platform_vdbox_mask(dev.device_id);
-    (!media_vdbox_fuse_raw(dev) as u8) & platform
+    media_vdbox_mask_from_fuse(dev.device_id, media_vdbox_fuse_raw(dev))
 }
 
-pub(crate) fn media_vdbox_logical_instance(dev: Dev, physical_instance: u8) -> Option<u8> {
-    let mask = media_vdbox_mask(dev);
+const fn media_vdbox_logical_instance_in_mask(mask: u8, physical_instance: u8) -> Option<u8> {
     if physical_instance >= 8 || mask & (1 << physical_instance) == 0 {
         return None;
     }
     Some((mask & ((1 << physical_instance) - 1)).count_ones() as u8)
 }
+
+pub(crate) fn media_vdbox_logical_instance(dev: Dev, physical_instance: u8) -> Option<u8> {
+    media_vdbox_logical_instance_in_mask(media_vdbox_mask(dev), physical_instance)
+}
+
+const _: () = {
+    assert!(media_vdbox_mask_from_fuse(PCI_DEVICE_ALDER_LAKE_S_GT1, 0) == 0b0101);
+    assert!(
+        media_vdbox_mask_from_fuse(PCI_DEVICE_ALDER_LAKE_S_GT1, 1 << 2) == 0b0001
+    );
+    assert!(matches!(
+        media_vdbox_logical_instance_in_mask(0b0101, 0),
+        Some(0)
+    ));
+    assert!(matches!(
+        media_vdbox_logical_instance_in_mask(0b0101, 2),
+        Some(1)
+    ));
+    assert!(media_vdbox_logical_instance_in_mask(0b0001, 2).is_none());
+};
 
 pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
@@ -964,11 +986,11 @@ pub(crate) fn hw_pic_submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
     self::hw_pic::submit_jpeg(encoded)
 }
 
-pub(crate) fn hw_pic_submit_h264_in_vcs0_session(
+pub(crate) fn hw_pic_submit_h264_in_media_session(
     encoded: &[u8],
-    vcs0_session_generation: u64,
+    media_session_generation: u64,
 ) -> Result<u32, i32> {
-    self::hw_pic::submit_h264_in_vcs0_session(encoded, vcs0_session_generation)
+    self::hw_pic::submit_h264_in_media_session(encoded, media_session_generation)
 }
 
 pub(crate) async fn hw_pic_wait_output_for_id(

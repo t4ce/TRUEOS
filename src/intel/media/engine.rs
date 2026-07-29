@@ -152,7 +152,7 @@ static MEDIA_BACKING: Mutex<Option<MediaBitstreamBacking>> = Mutex::new(None);
 static MEDIA_PPGTT: Mutex<Option<crate::intel::ppgtt::SparsePpgtt>> = Mutex::new(None);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(super) enum MediaVcs0CodecMode {
+pub(super) enum MediaCodecMode {
     TransportProbe,
     AvcDecode,
     JpegDecode,
@@ -160,73 +160,72 @@ pub(super) enum MediaVcs0CodecMode {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(super) enum MediaVcs0SubmissionOwner {
+pub(super) enum MediaSubmissionOwner {
     Execlists,
     Guc,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(super) enum MediaVcs0BatchLevel {
+pub(super) enum MediaBatchLevel {
     FirstLevel,
     SecondLevelReturn,
 }
 
-/// Complete execution contract selected before a VCS0 job mutates context or
-/// engine state. Codec mode, scheduler owner, and completion topology are kept
-/// together so encode/decode paths cannot accidentally inherit one another's
-/// submission assumptions.
+/// Complete execution contract selected before a media job mutates context or
+/// engine state. The engine is supplied separately so VCS0 and VCS2 retain
+/// independent ownership, quarantine, and last-completed state.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(super) struct MediaVcs0JobMode {
-    pub(super) codec: MediaVcs0CodecMode,
-    pub(super) owner: MediaVcs0SubmissionOwner,
-    pub(super) batch_level: MediaVcs0BatchLevel,
+pub(super) struct MediaJobMode {
+    pub(super) codec: MediaCodecMode,
+    pub(super) owner: MediaSubmissionOwner,
+    pub(super) batch_level: MediaBatchLevel,
 }
 
-impl MediaVcs0JobMode {
+impl MediaJobMode {
     pub(super) const TRANSPORT_PROBE_GUC: Self = Self {
-        codec: MediaVcs0CodecMode::TransportProbe,
-        owner: MediaVcs0SubmissionOwner::Guc,
-        batch_level: MediaVcs0BatchLevel::FirstLevel,
+        codec: MediaCodecMode::TransportProbe,
+        owner: MediaSubmissionOwner::Guc,
+        batch_level: MediaBatchLevel::FirstLevel,
     };
-    pub(super) const AVC_DECODE_EXECLISTS: Self = Self {
-        codec: MediaVcs0CodecMode::AvcDecode,
-        owner: MediaVcs0SubmissionOwner::Execlists,
-        batch_level: MediaVcs0BatchLevel::FirstLevel,
+    pub(super) const AVC_DECODE_GUC: Self = Self {
+        codec: MediaCodecMode::AvcDecode,
+        owner: MediaSubmissionOwner::Guc,
+        batch_level: MediaBatchLevel::FirstLevel,
     };
     pub(super) const JPEG_DECODE_EXECLISTS: Self = Self {
-        codec: MediaVcs0CodecMode::JpegDecode,
-        owner: MediaVcs0SubmissionOwner::Execlists,
-        batch_level: MediaVcs0BatchLevel::FirstLevel,
+        codec: MediaCodecMode::JpegDecode,
+        owner: MediaSubmissionOwner::Execlists,
+        batch_level: MediaBatchLevel::FirstLevel,
     };
     pub(super) const AVC_ENCODE_GUC: Self = Self {
-        codec: MediaVcs0CodecMode::AvcEncode,
-        owner: MediaVcs0SubmissionOwner::Guc,
-        batch_level: MediaVcs0BatchLevel::SecondLevelReturn,
+        codec: MediaCodecMode::AvcEncode,
+        owner: MediaSubmissionOwner::Guc,
+        batch_level: MediaBatchLevel::SecondLevelReturn,
     };
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct MediaVcs0ActiveJob {
-    mode: MediaVcs0JobMode,
+struct MediaActiveJob {
+    mode: MediaJobMode,
     generation: u64,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct MediaVcs0SessionReservation {
-    mode: MediaVcs0JobMode,
+struct MediaSessionReservation {
+    mode: MediaJobMode,
     generation: u64,
 }
 
 #[derive(Copy, Clone)]
-struct MediaVcs0ExecutionState {
-    active: Option<MediaVcs0ActiveJob>,
-    reservation: Option<MediaVcs0SessionReservation>,
-    quarantined: Option<MediaVcs0JobMode>,
-    last_completed: Option<MediaVcs0JobMode>,
+struct MediaExecutionState {
+    active: Option<MediaActiveJob>,
+    reservation: Option<MediaSessionReservation>,
+    quarantined: Option<MediaJobMode>,
+    last_completed: Option<MediaJobMode>,
     next_generation: u64,
 }
 
-impl MediaVcs0ExecutionState {
+impl MediaExecutionState {
     const EMPTY: Self = Self {
         active: None,
         reservation: None,
@@ -241,32 +240,31 @@ impl MediaVcs0ExecutionState {
     }
 }
 
-static MEDIA_VCS0_EXECUTION: Mutex<MediaVcs0ExecutionState> =
-    Mutex::new(MediaVcs0ExecutionState::EMPTY);
+static MEDIA_ENGINE_EXECUTION: Mutex<[MediaExecutionState; MAX_MEDIA_ENGINES]> =
+    Mutex::new([MediaExecutionState::EMPTY; MAX_MEDIA_ENGINES]);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(super) enum MediaVcs0LaneAcquireError {
+pub(super) enum MediaLaneAcquireError {
     Busy,
     Quarantined,
 }
 
-pub(super) const MEDIA_VCS0_INTERLEAVE_WAIT_NS: u64 = 50_000_000;
+pub(super) const MEDIA_INTERLEAVE_WAIT_NS: u64 = 50_000_000;
 
-/// Exclusive ownership of the generic VCS0 execution state. A timed-out job
-/// consumes this guard with `quarantine`, deliberately preventing a different
-/// mode or transport from touching an engine whose context may still be live.
-pub(super) struct MediaVcs0LaneGuard {
-    mode: MediaVcs0JobMode,
+pub(super) struct MediaLaneGuard {
+    engine_instance: usize,
+    mode: MediaJobMode,
     generation: u64,
     requires_reactivation: bool,
     completed: bool,
     release_on_drop: bool,
 }
 
-impl MediaVcs0LaneGuard {
+impl MediaLaneGuard {
     pub(super) fn quarantine(mut self) {
-        let mut state = MEDIA_VCS0_EXECUTION.lock();
-        let active = MediaVcs0ActiveJob {
+        let mut states = MEDIA_ENGINE_EXECUTION.lock();
+        let state = &mut states[self.engine_instance];
+        let active = MediaActiveJob {
             mode: self.mode,
             generation: self.generation,
         };
@@ -276,7 +274,7 @@ impl MediaVcs0LaneGuard {
         self.release_on_drop = false;
     }
 
-    pub(super) const fn mode(&self) -> MediaVcs0JobMode {
+    pub(super) const fn mode(&self) -> MediaJobMode {
         self.mode
     }
 
@@ -284,19 +282,17 @@ impl MediaVcs0LaneGuard {
         self.requires_reactivation
     }
 
-    /// Mark this job as the last known-good VCS0 mode. Callers do this only
-    /// after the completion marker has retired and any GuC context has been
-    /// destroyed. Merely dropping an acquired lane never proves completion.
     pub(super) fn complete(&mut self) {
         self.completed = true;
     }
 }
 
-impl Drop for MediaVcs0LaneGuard {
+impl Drop for MediaLaneGuard {
     fn drop(&mut self) {
         if self.release_on_drop {
-            let mut state = MEDIA_VCS0_EXECUTION.lock();
-            let active = MediaVcs0ActiveJob {
+            let mut states = MEDIA_ENGINE_EXECUTION.lock();
+            let state = &mut states[self.engine_instance];
+            let active = MediaActiveJob {
                 mode: self.mode,
                 generation: self.generation,
             };
@@ -312,23 +308,25 @@ impl Drop for MediaVcs0LaneGuard {
     }
 }
 
-/// Stream-level ownership above individual VCS0 jobs. Matching jobs may enter
-/// the lane while this guard lives, but jobs with another codec or submission
-/// owner are deferred. This prevents a boot probe from fitting into the small
-/// gap between dependent AVC frames.
-pub(crate) struct MediaVcs0SessionGuard {
-    reservation: MediaVcs0SessionReservation,
+pub(crate) struct MediaSessionGuard {
+    engine: MediaEngineDescriptor,
+    reservation: MediaSessionReservation,
 }
 
-impl MediaVcs0SessionGuard {
+impl MediaSessionGuard {
     pub(crate) const fn generation(&self) -> u64 {
         self.reservation.generation
     }
+
+    pub(crate) const fn engine_name(&self) -> &'static str {
+        self.engine.name
+    }
 }
 
-impl Drop for MediaVcs0SessionGuard {
+impl Drop for MediaSessionGuard {
     fn drop(&mut self) {
-        let mut state = MEDIA_VCS0_EXECUTION.lock();
+        let mut states = MEDIA_ENGINE_EXECUTION.lock();
+        let state = &mut states[self.engine.id.instance as usize];
         if state.reservation == Some(self.reservation) {
             state.reservation = None;
         }
@@ -336,52 +334,62 @@ impl Drop for MediaVcs0SessionGuard {
 }
 
 pub(super) fn try_reserve_avc_decode_session()
--> Result<MediaVcs0SessionGuard, MediaVcs0LaneAcquireError> {
-    let mut state = MEDIA_VCS0_EXECUTION.lock();
+-> Result<MediaSessionGuard, MediaLaneAcquireError> {
+    let (engine, _) = default_decode_engine_and_window();
+    let mut states = MEDIA_ENGINE_EXECUTION.lock();
+    let Some(state) = states.get_mut(engine.id.instance as usize) else {
+        return Err(MediaLaneAcquireError::Quarantined);
+    };
     if state.quarantined.is_some() {
-        return Err(MediaVcs0LaneAcquireError::Quarantined);
+        return Err(MediaLaneAcquireError::Quarantined);
     }
     if state.reservation.is_some() || state.active.is_some() {
-        return Err(MediaVcs0LaneAcquireError::Busy);
+        return Err(MediaLaneAcquireError::Busy);
     }
-    let reservation = MediaVcs0SessionReservation {
-        mode: MediaVcs0JobMode::AVC_DECODE_EXECLISTS,
+    let reservation = MediaSessionReservation {
+        mode: MediaJobMode::AVC_DECODE_GUC,
         generation: state.allocate_generation(),
     };
     state.reservation = Some(reservation);
-    Ok(MediaVcs0SessionGuard { reservation })
+    Ok(MediaSessionGuard {
+        engine,
+        reservation,
+    })
 }
 
-pub(super) fn try_acquire_vcs0_lane(
-    mode: MediaVcs0JobMode,
+pub(super) fn try_acquire_media_lane(
+    engine: MediaEngineDescriptor,
+    mode: MediaJobMode,
     session_generation: Option<u64>,
-) -> Result<MediaVcs0LaneGuard, MediaVcs0LaneAcquireError> {
-    let mut state = MEDIA_VCS0_EXECUTION.lock();
+) -> Result<MediaLaneGuard, MediaLaneAcquireError> {
+    let engine_instance = engine.id.instance as usize;
+    let mut states = MEDIA_ENGINE_EXECUTION.lock();
+    let Some(state) = states.get_mut(engine_instance) else {
+        return Err(MediaLaneAcquireError::Quarantined);
+    };
     if state.quarantined.is_some() {
-        return Err(MediaVcs0LaneAcquireError::Quarantined);
+        return Err(MediaLaneAcquireError::Quarantined);
     }
     match (state.reservation, session_generation) {
         (Some(reservation), Some(generation))
             if reservation.mode == mode && reservation.generation == generation => {}
-        // The live UI4 encoder is an intentional frame-level peer of an AVC
-        // playback reservation. `active` below still guarantees that the GuC
-        // encode and execlists decode transports never touch VCS0 concurrently.
-        // Other probes/codecs remain excluded for the whole decode session.
+        // On a one-VDBOX fallback SKU, live encode may take bounded frame turns
+        // inside the playback reservation. Two-VDBOX platforms never enter
+        // this branch because encode and decode own different state slots.
         (Some(reservation), None)
-            if reservation.mode == MediaVcs0JobMode::AVC_DECODE_EXECLISTS
-                && mode == MediaVcs0JobMode::AVC_ENCODE_GUC => {}
+            if reservation.mode == MediaJobMode::AVC_DECODE_GUC
+                && mode == MediaJobMode::AVC_ENCODE_GUC => {}
         (None, None) => {}
-        _ => {
-            return Err(MediaVcs0LaneAcquireError::Busy);
-        }
+        _ => return Err(MediaLaneAcquireError::Busy),
     }
     if state.active.is_some() {
-        return Err(MediaVcs0LaneAcquireError::Busy);
+        return Err(MediaLaneAcquireError::Busy);
     }
     let generation = state.allocate_generation();
     let requires_reactivation = state.last_completed != Some(mode);
-    state.active = Some(MediaVcs0ActiveJob { mode, generation });
-    Ok(MediaVcs0LaneGuard {
+    state.active = Some(MediaActiveJob { mode, generation });
+    Ok(MediaLaneGuard {
+        engine_instance,
         mode,
         generation,
         requires_reactivation,
@@ -390,27 +398,24 @@ pub(super) fn try_acquire_vcs0_lane(
     })
 }
 
-pub(super) fn acquire_vcs0_lane_bounded(
-    mode: MediaVcs0JobMode,
+pub(super) fn acquire_media_lane_bounded(
+    engine: MediaEngineDescriptor,
+    mode: MediaJobMode,
     session_generation: Option<u64>,
     wait_ns: u64,
-) -> Result<MediaVcs0LaneGuard, MediaVcs0LaneAcquireError> {
-    match try_acquire_vcs0_lane(mode, session_generation) {
+) -> Result<MediaLaneGuard, MediaLaneAcquireError> {
+    match try_acquire_media_lane(engine, mode, session_generation) {
         Ok(lane) => return Ok(lane),
-        Err(MediaVcs0LaneAcquireError::Quarantined) => {
-            return Err(MediaVcs0LaneAcquireError::Quarantined);
+        Err(MediaLaneAcquireError::Quarantined) => {
+            return Err(MediaLaneAcquireError::Quarantined);
         }
-        Err(MediaVcs0LaneAcquireError::Busy) => {}
+        Err(MediaLaneAcquireError::Busy) => {}
     }
 
-    // Keep the normal decode path identical to the original try-acquire fast
-    // path. Reading the global Chronos snapshot can contend with timer
-    // publication, so only pay for a deadline after another VCS0 job was
-    // actually observed.
     let deadline = crate::chronos::monotonic_nanos().saturating_add(wait_ns);
     loop {
-        match try_acquire_vcs0_lane(mode, session_generation) {
-            Err(MediaVcs0LaneAcquireError::Busy)
+        match try_acquire_media_lane(engine, mode, session_generation) {
+            Err(MediaLaneAcquireError::Busy)
                 if crate::chronos::monotonic_nanos() < deadline =>
             {
                 core::hint::spin_loop();
@@ -443,12 +448,14 @@ pub(crate) enum MediaProvisioning {
 pub(crate) enum MediaWorkloadKind {
     DecodeBitstream,
     DecodeFrame,
+    EncodeFrame,
     SessionSnapshot,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MediaSubmissionTransport {
     Execlists,
+    Guc,
     Disabled,
 }
 
@@ -664,13 +671,10 @@ pub(crate) fn encode_readiness() -> MediaEncodeReadiness {
         .any(|engine| engine.capabilities.decode);
     let guc_transport_ready = crate::intel::guc_submission_ready();
 
-    // VCS0 now has a dedicated GuC class, isolated LRC, and retirement-marker
-    // probe. Actual decoding still prefers Execlists until that production
-    // path is migrated, and encoder readiness requires the probe to have
-    // passed on this boot. h264_cmd remains a decode recipe; the separate
-    // avc_encode_probe module now owns the fixed one-IDR VDEnc/MFX command
-    // graph and promotes a submission only after command-stream status
-    // writeback and Annex-B coded-data validation.
+    // The live AVC consumers are GuC-owned: encode targets VCS0 and playback
+    // decode selects the second fuse-discovered VDBOX (VCS2 on ADL-S). The
+    // transport probe still validates VCS0 before encoder admission; playback
+    // independently validates VCS2 through its first real completion marker.
     let guc_media_context_wired = true;
     let guc_media_transport_probe_passed = super::guc_probe::passed();
     #[cfg(feature = "trueos_h264_encode_stream")]
@@ -953,19 +957,33 @@ fn current_topology() -> MediaTopology {
 
 fn current_api_shape(transport: MediaSubmissionTransport) -> MediaApiShape {
     let mut api = MediaApiShape::empty();
-    api.route_count = 2;
+    api.route_count = 4;
     api.routes[0] = MediaApiRoute {
+        name: "media.avc.playback.decode",
+        workload: MediaWorkloadKind::DecodeFrame,
+        preferred_engine_class: Some(MediaEngineClass::VideoDecode),
+        transport,
+        summary: "submit playback H.264 decode through its GuC-owned VDBOX",
+    };
+    api.routes[1] = MediaApiRoute {
+        name: "media.avc.rdp.encode",
+        workload: MediaWorkloadKind::EncodeFrame,
+        preferred_engine_class: Some(MediaEngineClass::VideoDecode),
+        transport,
+        summary: "submit RDP H.264 encode through its GuC-owned VDBOX",
+    };
+    api.routes[2] = MediaApiRoute {
         name: "media.jpeg.submit",
         workload: MediaWorkloadKind::DecodeBitstream,
         preferred_engine_class: Some(MediaEngineClass::VideoDecode),
-        transport,
-        summary: "submit one boot-logo JPEG through the VCS media path",
+        transport: MediaSubmissionTransport::Execlists,
+        summary: "legacy boot-logo JPEG path outside live AVC scenarios",
     };
-    api.routes[1] = MediaApiRoute {
+    api.routes[3] = MediaApiRoute {
         name: "media.observe.snapshot",
         workload: MediaWorkloadKind::SessionSnapshot,
         preferred_engine_class: None,
-        transport,
+        transport: MediaSubmissionTransport::Disabled,
         summary: "snapshot forcewake and live VCS registers",
     };
     api
@@ -1011,7 +1029,7 @@ pub(super) fn default_encode_engine_and_window() -> (MediaEngineDescriptor, Medi
 }
 
 fn preferred_transport() -> MediaSubmissionTransport {
-    MediaSubmissionTransport::Execlists
+    MediaSubmissionTransport::Guc
 }
 
 fn snapshot_forcewake(dev: crate::intel::Dev) -> MediaForcewakeSnapshot {
@@ -1091,7 +1109,7 @@ fn rebuild_kickoff_state(stage: MediaKickoffStage) -> Option<MediaKickoffState> 
     for (idx, desc) in topology
         .engines
         .iter()
-        .take(topology.planned_engine_count)
+        .take(topology.active_engine_count)
         .copied()
         .enumerate()
     {
@@ -1099,7 +1117,7 @@ fn rebuild_kickoff_state(stage: MediaKickoffStage) -> Option<MediaKickoffState> 
     }
     Some(MediaKickoffState {
         topology,
-        runtime_count: topology.planned_engine_count,
+        runtime_count: topology.active_engine_count,
         runtimes,
         wake: snapshot_forcewake(dev),
         api: current_api_shape(transport),
@@ -2621,7 +2639,7 @@ pub(super) fn build_ring_batch_start_words(
     result_gpu_addr: u64,
     prelaunch_marker: u32,
     batch_gpu_addr: u64,
-    _mode: MediaVcs0JobMode,
+    _mode: MediaJobMode,
 ) -> Option<usize> {
     let ring_dwords = 10;
     let ring_job_bytes = ring_dwords * core::mem::size_of::<u32>();
@@ -2653,9 +2671,9 @@ pub(super) fn build_primary_second_level_return_words(
     result_gpu_addr: u64,
     second_level_gpu_addr: u64,
     return_marker: u32,
-    mode: MediaVcs0JobMode,
+    mode: MediaJobMode,
 ) -> Option<usize> {
-    if mode.batch_level != MediaVcs0BatchLevel::SecondLevelReturn
+    if mode.batch_level != MediaBatchLevel::SecondLevelReturn
         || primary_virt.is_null()
         || primary_bytes < 40
     {
@@ -2978,7 +2996,7 @@ pub(super) fn wake_media_engine_for_guc(
 }
 
 const GDRST: usize = 0x0000_941C;
-const GRDOM_MEDIA_VCS0: u32 = 1 << 5;
+const GRDOM_MEDIA_VCS0_SHIFT: u32 = 5;
 const MODE_IDLE: u32 = 1 << 9;
 const GEN12_HWSP_CSB_WRITE_OFFSET: usize = 0xBC;
 const GEN12_CSB_RESET_VALUE: u32 = 11;
@@ -3011,6 +3029,12 @@ pub(super) fn reset_media_engine(
     _context_virt: *mut u8,
 ) {
     let ring_base = engine.ring_base;
+    let reset_domain = 1u32
+        .checked_shl(GRDOM_MEDIA_VCS0_SHIFT + u32::from(engine.id.instance))
+        .unwrap_or(0);
+    if reset_domain == 0 {
+        return;
+    }
     for _ in 0..200_000u32 {
         let el = super::mmio_read(dev, ring_base + RING_EXECLIST_STATUS_LO);
         if (el >> 30) == 0 {
@@ -3025,9 +3049,9 @@ pub(super) fn reset_media_engine(
         }
         core::hint::spin_loop();
     }
-    super::mmio_write(dev, GDRST, GRDOM_MEDIA_VCS0);
+    super::mmio_write(dev, GDRST, reset_domain);
     for _ in 0..500_000u32 {
-        if super::mmio_read(dev, GDRST) & GRDOM_MEDIA_VCS0 == 0 {
+        if super::mmio_read(dev, GDRST) & reset_domain == 0 {
             break;
         }
         core::hint::spin_loop();

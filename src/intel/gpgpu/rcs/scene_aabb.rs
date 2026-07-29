@@ -3,7 +3,7 @@ fn submit_tenant_scene_aabb_rcs(
     request: crate::gpu::physical::PhysicalSceneAabbRequest,
 ) -> Result<crate::gpu::physical::PhysicalSceneAabbCompletion, crate::gpu::physical::PhysicalGpuError>
 {
-    use crate::gpu::physical::{EngineClass, PhysicalGpuError};
+    use crate::gpu::physical::PhysicalGpuError;
 
     if SCENE_AABB_QUARANTINED.load(Ordering::Acquire) {
         return Err(PhysicalGpuError::SubmitFailed);

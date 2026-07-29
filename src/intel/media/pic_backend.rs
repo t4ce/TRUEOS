@@ -184,6 +184,10 @@ pub(super) struct MediaJpegSmokeSubmitProof {
 #[derive(Copy, Clone, Debug)]
 pub(super) struct MediaAvcSubmitProof {
     pub engine_name: &'static str,
+    pub submission_owner: &'static str,
+    pub direct_execlist_submit: bool,
+    pub guc_serial: u64,
+    pub guc_context_destroyed: bool,
     pub batch_gpu_addr: u64,
     pub result_gpu_addr: u64,
     pub bitstream_gpu_addr: u64,
@@ -1558,7 +1562,7 @@ pub(super) async fn submit_avc_single_idr_batch(
     output_surface_offset_bytes: usize,
     missing_reference_surface_offset_bytes: usize,
     submit_token: u32,
-    vcs0_session_generation: Option<u64>,
+    media_session_generation: Option<u64>,
 ) -> Option<MediaAvcSubmitProof> {
     if bitstream_bytes == 0
         || bitstream_bytes > backing.bitstream_bytes
@@ -1577,13 +1581,14 @@ pub(super) async fn submit_avc_single_idr_batch(
     if missing_reference_surface_end > backing.output_surface_bytes {
         return None;
     }
-    let mut vcs0_lane = media::acquire_vcs0_lane_bounded(
-        media::MediaVcs0JobMode::AVC_DECODE_EXECLISTS,
-        vcs0_session_generation,
-        media::MEDIA_VCS0_INTERLEAVE_WAIT_NS,
+    let mut media_lane = media::acquire_media_lane_bounded(
+        engine,
+        media::MediaJobMode::AVC_DECODE_GUC,
+        media_session_generation,
+        media::MEDIA_INTERLEAVE_WAIT_NS,
     )
     .ok()?;
-    let mode_transition = vcs0_lane.requires_reactivation();
+    let mode_transition = media_lane.requires_reactivation();
     let output_surface_gpu_addr = windows
         .output_surface_gpu_addr
         .saturating_add(output_surface_offset_bytes as u64);
@@ -1698,12 +1703,11 @@ pub(super) async fn submit_avc_single_idr_batch(
         windows.result_gpu_addr,
         ring_prelaunch_marker,
         windows.batch_gpu_addr,
-        vcs0_lane.mode(),
+        media_lane.mode(),
     )?;
     let ring_ctl = media::ring_ctl_value_for_size(backing.ring_bytes)?;
     let ring_start = ring_gpu_addr as u32;
     let pphwsp_gpu = (context_gpu_addr & !0xFFF) as u32;
-    let ctx_ctl_after = media::media_ctx_control_value(false);
     if !media::init_gen12_video_context_image(
         context_virt,
         backing.context_bytes,
@@ -1719,51 +1723,54 @@ pub(super) async fn submit_avc_single_idr_batch(
         return None;
     }
 
-    {
-        let mode_bits = media::GFX_RUN_LIST_ENABLE | media::GEN11_GFX_DISABLE_LEGACY_MODE;
-        super::mmio_write(
-            dev,
-            engine.ring_base + media::RING_MODE_GEN7,
-            mode_bits | (mode_bits << 16),
-        );
-    }
-    media::seed_media_ring_live_state(
-        dev,
-        engine.ring_base,
-        pphwsp_gpu,
-        ring_start,
-        ring_ctl,
-        ring_tail_bytes as u32,
-    );
-    media::init_csb_pointers(dev, engine.ring_base, context_virt);
-
     super::dma_flush(backing.batch_virt, batch_tail_bytes);
     super::dma_flush(ring_virt, ring_tail_bytes);
     super::dma_flush(context_virt, backing.context_bytes);
     super::dma_flush(backing.result_virt, backing.result_bytes);
-
-    {
-        super::mmio_write(dev, engine.ring_base + media::RING_CONTEXT_CONTROL, ctx_ctl_after);
-        super::mmio_write(dev, engine.ring_base + media::RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
-        super::mmio_write(
-            dev,
-            engine.ring_base + media::RING_MI_MODE,
-            media::masked_bit_disable(media::STOP_RING),
-        );
-        super::mmio_write(dev, engine.ring_base + media::RING_HWS_PGA, pphwsp_gpu);
-    }
+    crate::intel::ggtt_invalidate(dev);
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     let build_ctx_us = media_backend_elapsed_us(build_ctx_start);
 
-    let submit_counter = submit_token.wrapping_add(1) & 0x3F;
-    let (ctx_desc_lo, ctx_desc_hi) = media::build_media_execlist_context_descriptor(
-        context_gpu_addr,
-        engine,
-        submit_counter,
-        true,
-    );
-    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-    media::execlist_submit_port_push(dev, engine.ring_base, ctx_desc_lo, ctx_desc_hi, 0, 0);
-    super::mmio_write(dev, engine.ring_base + media::RING_EXECLIST_CONTROL, media::EL_CTRL_LOAD);
+    let (hwlrca_lo, hwlrca_hi) = media::build_media_guc_context_descriptor(context_gpu_addr);
+    let guc_engine =
+        crate::gpu::physical::PhysicalEngineId::video(engine.id.instance);
+    let guc_token = match crate::intel::guc_submission::INTEL_GUC_SCHEDULER.register(
+        dev,
+        guc_engine,
+        hwlrca_lo,
+        hwlrca_hi,
+        crate::gpu::physical::PhysicalContextPriority::KernelNormal,
+    ) {
+        Ok(token) => token,
+        Err(error) => {
+            crate::log_error!(target: "intel-media";
+                "intel/hw_pic-submit: accepted=0 codec=h264 engine={} submission_owner=guc direct_execlist_submit=0 stage=register reason={}\n",
+                engine.name,
+                error.name(),
+            );
+            return None;
+        }
+    };
+    let guc_submission = match crate::intel::guc_submission::INTEL_GUC_SCHEDULER
+        .submit(dev, guc_token)
+    {
+        Ok(submission) => submission,
+        Err(error) => {
+            let destroyed = crate::intel::guc_submission::INTEL_GUC_SCHEDULER
+                .destroy(dev, guc_token)
+                .is_ok();
+            crate::log_error!(target: "intel-media";
+                "intel/hw_pic-submit: accepted=0 codec=h264 engine={} submission_owner=guc direct_execlist_submit=0 stage=submit reason={} context_destroyed={}\n",
+                engine.name,
+                error.name(),
+                destroyed as u8,
+            );
+            if !destroyed {
+                media_lane.quarantine();
+            }
+            return None;
+        }
+    };
 
     let poll_start = media_backend_now_ticks();
     let poll_timeout_ticks = ((AVC_COMPLETION_POLL_TIMEOUT_MS as u128)
@@ -1773,8 +1780,7 @@ pub(super) async fn submit_avc_single_idr_batch(
     let poll_deadline = poll_start.saturating_add(poll_timeout_ticks.max(1));
     let mut retired = false;
     let mut poll_iters = 0usize;
-    let mut complete_value = 0u32;
-    loop {
+    let complete_value = loop {
         super::dma_flush(
             unsafe {
                 backing
@@ -1783,19 +1789,40 @@ pub(super) async fn submit_avc_single_idr_batch(
             },
             8,
         );
-        complete_value =
+        let value =
             media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_COMPLETE_SLOT);
         poll_iters = poll_iters.saturating_add(1);
-        if complete_value == complete_marker {
+        if value == complete_marker {
             retired = true;
-            break;
+            break value;
         }
         if media_backend_now_ticks() >= poll_deadline {
-            break;
+            break value;
         }
         embassy_time::Timer::after_millis(AVC_COMPLETION_POLL_DELAY_MS).await;
-    }
+    };
     let poll_us = media_backend_elapsed_us(poll_start);
+    if !retired {
+        crate::log_error!(target: "intel-media";
+            "intel/hw_pic-submit: accepted=0 codec=h264 engine={} submission_owner=guc direct_execlist_submit=0 stage=completion reason=timeout guc_serial={} action=quarantine-engine-context\n",
+            engine.name,
+            guc_submission.serial,
+        );
+        media_lane.quarantine();
+        return None;
+    }
+    let guc_context_destroyed = crate::intel::guc_submission::INTEL_GUC_SCHEDULER
+        .destroy(dev, guc_token)
+        .is_ok();
+    if !guc_context_destroyed {
+        crate::log_error!(target: "intel-media";
+            "intel/hw_pic-submit: accepted=0 codec=h264 engine={} submission_owner=guc direct_execlist_submit=0 stage=teardown reason=context-destroy-rejected guc_serial={} action=quarantine-engine-context\n",
+            engine.name,
+            guc_submission.serial,
+        );
+        media_lane.quarantine();
+        return None;
+    }
 
     let post_start = media_backend_now_ticks();
     let output_surface_probes_enabled = media::output_surface_probes_enabled();
@@ -1923,6 +1950,10 @@ pub(super) async fn submit_avc_single_idr_batch(
 
     let proof = MediaAvcSubmitProof {
         engine_name: engine.name,
+        submission_owner: "guc",
+        direct_execlist_submit: false,
+        guc_serial: guc_submission.serial,
+        guc_context_destroyed,
         batch_gpu_addr: windows.batch_gpu_addr,
         result_gpu_addr: windows.result_gpu_addr,
         bitstream_gpu_addr: windows.bitstream_gpu_addr,
@@ -1994,7 +2025,7 @@ pub(super) async fn submit_avc_single_idr_batch(
         output_surface_nonzero_samples,
     };
     if retired {
-        vcs0_lane.complete();
+        media_lane.complete();
     }
     Some(proof)
 }
@@ -2010,8 +2041,12 @@ pub(super) fn submit_jpeg_smoke_batch(
     if bitstream_bytes == 0 || bitstream_bytes > backing.bitstream_bytes {
         return None;
     }
-    let mut vcs0_lane =
-        media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::JPEG_DECODE_EXECLISTS, None).ok()?;
+    let mut vcs0_lane = media::try_acquire_media_lane(
+        engine,
+        media::MediaJobMode::JPEG_DECODE_EXECLISTS,
+        None,
+    )
+    .ok()?;
 
     let ring_virt = backing.ring_virt;
     let context_virt = backing.context_virt;
