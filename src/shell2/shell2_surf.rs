@@ -26,26 +26,6 @@ pub(crate) enum SurfPromptPrefix {
     Html,
 }
 
-impl SurfPromptPrefix {
-    pub(crate) const fn next(self) -> Self {
-        match self {
-            Self::Https => Self::Http,
-            Self::Http => Self::File,
-            Self::File => Self::Html,
-            Self::Html => Self::Https,
-        }
-    }
-
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Http => "http://",
-            Self::Https => "https://",
-            Self::File => "file://",
-            Self::Html => "html://",
-        }
-    }
-}
-
 pub(crate) enum SurfSubmit {
     Url(String),
     File(String),

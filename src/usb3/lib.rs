@@ -290,6 +290,8 @@ pub struct TlbUsbDevice {
     pub class: u8,
     pub subclass: u8,
     pub protocol: u8,
+    pub usb_version: u16,
+    pub device_version: u16,
     pub num_configurations: u8,
     pub max_packet_size_0: u8,
     pub manufacturer: Option<String>,
@@ -470,14 +472,10 @@ fn tlb_device_from_probed(
         class: descriptor.class,
         subclass: descriptor.subclass,
         protocol: descriptor.protocol,
+        usb_version: descriptor.usb_version,
+        device_version: descriptor.device_version,
         num_configurations: descriptor.num_configurations,
         max_packet_size_0: descriptor.max_packet_size_0,
-        product: Some(alloc::format!(
-            "{} {:04X}:{:04X}",
-            usb_device_kind(descriptor.class),
-            descriptor.vendor_id,
-            descriptor.product_id
-        )),
         path: inferred_root_port.into_iter().collect(),
         configurations,
         ..TlbUsbDevice::default()

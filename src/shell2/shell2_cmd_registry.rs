@@ -46,6 +46,7 @@ const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"i
 const TOOL_JSON_SHA: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to hash with SHA-256."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SSH: &str = r#"{"type":"object","properties":{"endpoint":{"type":"string","description":"SSH target in [user@]host[:port] form. Port 22 is used when omitted."}},"required":["endpoint"],"additionalProperties":false}"#;
+const TOOL_JSON_SURF: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["https","http","file","html"],"description":"Surf input type."},"input":{"type":"string","description":"Host, URL, TRUEOSFS path, or inline HTML selected by subcommand."}},"required":["subcommand","input"],"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","smbios","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
 const TOOL_JSON_TXT: &str = r#"{"type":"object","properties":{"file":{"type":"string","description":"Optional file path to open in the Blueprint terminal editor."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_TTS: &str = r#"{"type":"object","properties":{"text":{"type":"string","description":"Text to synthesize and play through the kernel HDA lane."},"voice":{"type":"string","description":"Kokoro voice name; defaults to af_heart."},"speed":{"type":"number","minimum":0.25,"maximum":4.0,"description":"Speech speed multiplier."}},"required":["text"],"additionalProperties":false}"#;
@@ -121,6 +122,10 @@ fn dispatch_smp(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
 
 fn dispatch_ssh(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::ssh::try_parse(spawner, io, rest)
+}
+
+fn dispatch_surf(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::surf::try_parse(spawner, io, rest)
 }
 
 fn dispatch_update(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -288,6 +293,17 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_hyper,
         tool_description: Some("Inspect the kernel Hyper HTTP/HTTPS transport surface."),
         tool_parameters_json: Some(TOOL_JSON_HYPER),
+    },
+    BuiltinShell2CmdEntry {
+        name: "surf",
+        mode: "cmd",
+        color: Some(STATUS_PINK_RGB),
+        advertised: true,
+        handler: dispatch_surf,
+        tool_description: Some(
+            "Render an HTTPS, HTTP, TRUEOSFS, or inline HTML source through Solara.",
+        ),
+        tool_parameters_json: Some(TOOL_JSON_SURF),
     },
     BuiltinShell2CmdEntry {
         name: "lsd",
@@ -564,9 +580,9 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "qjs", "ssh",
-        "txt", "grid", "tts", "stt", "cpp", "vgpu", "vid", "cry", "acpi", "rapl", "tlb", "smp",
-        "etc",
+        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "surf", "net", "qjs",
+        "ssh", "txt", "grid", "tts", "stt", "cpp", "vgpu", "vid", "cry", "acpi", "rapl", "tlb",
+        "smp", "etc",
     ];
 
     let mut out = AllocString::new();

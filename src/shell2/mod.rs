@@ -28,7 +28,6 @@ pub(crate) use crate::shell2::backends::{
 };
 pub(crate) use interface::{ShellBackend2, ShellIo2, TerminalHandoffOwner};
 use shell2_apps::AppsPromptMode;
-use shell2_surf::SurfPromptPrefix;
 
 const MAX_LINE: usize = 1024;
 const BANNER_ROW: usize = 1;
@@ -93,7 +92,6 @@ pub(crate) struct MatrixTarget {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ShellMode2 {
-    Surf,
     Apps,
     Cmd,
 }
@@ -101,7 +99,6 @@ enum ShellMode2 {
 impl ShellMode2 {
     const fn function_key(self) -> &'static str {
         match self {
-            Self::Surf => "F1",
             Self::Apps => "F2",
             Self::Cmd => "F3",
         }
@@ -109,7 +106,6 @@ impl ShellMode2 {
 
     const fn label(self) -> &'static str {
         match self {
-            Self::Surf => "surf",
             Self::Apps => "apps",
             Self::Cmd => "cmd",
         }
@@ -182,7 +178,6 @@ struct ChromeState {
     terminal_hotkey: bool,
     mode: ShellMode2,
     apps_mode: AppsPromptMode,
-    surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<AllocString>,
 }
 
@@ -304,7 +299,6 @@ impl<'a> AlignedWriter<'a> {
         output_mask: u8,
         mode: ShellMode2,
         apps_mode: AppsPromptMode,
-        surf_prefix: SurfPromptPrefix,
         cmd_status_text: Option<&str>,
         running_go2_phase: usize,
     ) {
@@ -319,8 +313,6 @@ impl<'a> AlignedWriter<'a> {
         }
         if active_matrix_slot_is_vmx(output_mask) {
             self.vmx_status();
-        } else if mode == ShellMode2::Surf {
-            self.surf_status(surf_prefix);
         } else if mode == ShellMode2::Apps {
             self.apps_status(apps_mode);
         } else if mode == ShellMode2::Cmd {
@@ -331,8 +323,6 @@ impl<'a> AlignedWriter<'a> {
 
     fn main_mode_text(&self, mode: ShellMode2) -> AllocString {
         let mut text = AllocString::new();
-        self.push_mode_choice(&mut text, ShellMode2::Surf, mode == ShellMode2::Surf);
-        self.push_plain(&mut text, " - ");
         self.push_mode_choice(&mut text, ShellMode2::Apps, mode == ShellMode2::Apps);
         self.push_plain(&mut text, " - ");
         self.push_mode_choice(&mut text, ShellMode2::Cmd, mode == ShellMode2::Cmd);
@@ -366,34 +356,6 @@ impl<'a> AlignedWriter<'a> {
         self.push_function_key_label(out, alloc::format!("[{}]", mode.function_key()).as_str());
         self.push_plain(out, " ");
         self.push_mode_token(out, mode.label(), selected);
-    }
-
-    fn surf_status(&self, surf_prefix: SurfPromptPrefix) {
-        let mut text = AllocString::new();
-        self.push_ai_token(
-            &mut text,
-            SurfPromptPrefix::Https.label(),
-            surf_prefix == SurfPromptPrefix::Https,
-        );
-        self.push_plain(&mut text, " - ");
-        self.push_ai_token(
-            &mut text,
-            SurfPromptPrefix::Http.label(),
-            surf_prefix == SurfPromptPrefix::Http,
-        );
-        self.push_plain(&mut text, " - ");
-        self.push_ai_token(
-            &mut text,
-            SurfPromptPrefix::File.label(),
-            surf_prefix == SurfPromptPrefix::File,
-        );
-        self.push_plain(&mut text, " - ");
-        self.push_ai_token(
-            &mut text,
-            SurfPromptPrefix::Html.label(),
-            surf_prefix == SurfPromptPrefix::Html,
-        );
-        self.right_text(STATUS_ROW, text.as_str());
     }
 
     fn apps_status(&self, apps_mode: AppsPromptMode) {
@@ -680,7 +642,6 @@ fn current_chrome_state(
     output_mask: u8,
     mode: ShellMode2,
     apps_mode: AppsPromptMode,
-    surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
 ) -> ChromeState {
     ChromeState {
@@ -692,7 +653,6 @@ fn current_chrome_state(
         terminal_hotkey: active_terminal_hotkey_mode(output_mask),
         mode,
         apps_mode,
-        surf_prefix,
         cmd_status_text: cmd_status_text.map(AllocString::from),
     }
 }
@@ -765,7 +725,7 @@ fn active_slot_label_visible_width(output_mask: u8) -> usize {
 }
 
 fn main_mode_visible_width(_output_mask: u8) -> usize {
-    let modes = [ShellMode2::Surf, ShellMode2::Apps, ShellMode2::Cmd];
+    let modes = [ShellMode2::Apps, ShellMode2::Cmd];
     let mut width = 0usize;
     for (idx, mode) in modes.iter().copied().enumerate() {
         if idx != 0 {
@@ -1110,10 +1070,9 @@ pub(crate) fn repaint_backend_screen(io: &'static dyn ShellBackend2) {
     let (_, time_text) = clock_bucket_and_text();
     let mode = ShellMode2::Cmd;
     let apps_mode = AppsPromptMode::Start;
-    let surf_prefix = SurfPromptPrefix::Https;
 
     out.banner(output_mask, mode, time_text.as_str());
-    out.mode_status(output_mask, mode, apps_mode, surf_prefix, None, 0);
+    out.mode_status(output_mask, mode, apps_mode, None, 0);
     out.set_scroll_region(slot_content_top_row(output_mask));
 
     let transcript = current_transcript_for_task(io);
@@ -1288,7 +1247,6 @@ fn redraw_active_view(
     output_mask: u8,
     mode: ShellMode2,
     apps_mode: AppsPromptMode,
-    surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
     running_go2_phase: usize,
     minute_text: &str,
@@ -1297,7 +1255,7 @@ fn redraw_active_view(
     out.clear_screen_home();
     out.reset_scroll_region();
     out.banner(output_mask, mode, minute_text);
-    out.mode_status(output_mask, mode, apps_mode, surf_prefix, cmd_status_text, running_go2_phase);
+    out.mode_status(output_mask, mode, apps_mode, cmd_status_text, running_go2_phase);
     out.set_scroll_region(slot_content_top_row(output_mask));
     let transcript = current_transcript_for_task(io);
     render_active_slot_content(out, output_mask, &transcript);
@@ -1311,7 +1269,6 @@ fn apply_vmx_hotkey_command(
     output_mask: u8,
     mode: ShellMode2,
     apps_mode: AppsPromptMode,
-    surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
     running_go2_phase: usize,
     minute_text: &str,
@@ -1330,7 +1287,6 @@ fn apply_vmx_hotkey_command(
         output_mask,
         mode,
         apps_mode,
-        surf_prefix,
         cmd_status_text,
         running_go2_phase,
         minute_text,
@@ -1384,7 +1340,6 @@ async fn run_plain_section_status(
     output_mask: u8,
     mode: ShellMode2,
     apps_mode: AppsPromptMode,
-    surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
     running_go2_phase: usize,
 ) {
@@ -1403,7 +1358,7 @@ async fn run_plain_section_status(
         Timer::after(EmbassyDuration::from_millis(SECTION_RAINBOW_FRAME_MS)).await;
     }
 
-    out.mode_status(output_mask, mode, apps_mode, surf_prefix, cmd_status_text, running_go2_phase);
+    out.mode_status(output_mask, mode, apps_mode, cmd_status_text, running_go2_phase);
 }
 
 fn handle_submit(
@@ -1411,7 +1366,6 @@ fn handle_submit(
     io: &'static dyn ShellBackend2,
     mode: ShellMode2,
     apps_mode: AppsPromptMode,
-    surf_prefix: SurfPromptPrefix,
     submitted: &str,
 ) -> HandleSubmitResult {
     match mode {
@@ -1422,22 +1376,6 @@ fn handle_submit(
             shell2_cmd::ParseOutcome::StartSession(kind) => HandleSubmitResult::StartSession(kind),
             _ => HandleSubmitResult::None,
         },
-        ShellMode2::Surf => {
-            if let Some(parsed) = shell2_surf::try_parse_with_prefix(submitted, surf_prefix) {
-                match parsed {
-                    shell2_surf::SurfSubmit::Html(html) => {
-                        shell2_surf::load_inline_html(spawner, io, html);
-                    }
-                    shell2_surf::SurfSubmit::File(file_ref) => {
-                        shell2_surf::load_file_reference(spawner, io, file_ref.as_str());
-                    }
-                    shell2_surf::SurfSubmit::Url(url) => {
-                        shell2_surf::prepare_call_with_url(spawner, io, url.as_str());
-                    }
-                }
-            }
-            HandleSubmitResult::None
-        }
         ShellMode2::Apps => {
             shell2_apps::submit(spawner, io, apps_mode, submitted);
             HandleSubmitResult::None
@@ -1515,7 +1453,6 @@ fn handle_command_session_input(
 
 fn mode_from_function_key(index: u16) -> Option<ShellMode2> {
     match index {
-        1 => Some(ShellMode2::Surf),
         2 => Some(ShellMode2::Apps),
         3 => Some(ShellMode2::Cmd),
         _ => None,
@@ -1527,14 +1464,13 @@ fn apply_mode_toggle(
     output_mask: u8,
     mode: ShellMode2,
     apps_mode: AppsPromptMode,
-    surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
     running_go2_phase: usize,
     line: &HString<MAX_LINE>,
     minute_text: &str,
 ) {
     out.banner(output_mask, mode, minute_text);
-    out.mode_status(output_mask, mode, apps_mode, surf_prefix, cmd_status_text, running_go2_phase);
+    out.mode_status(output_mask, mode, apps_mode, cmd_status_text, running_go2_phase);
     render_prompt_line(out, output_mask, line);
 }
 
@@ -1552,7 +1488,6 @@ fn apply_matrix_operator_and_refresh(
     output_mask: u8,
     mode: &mut ShellMode2,
     apps_mode: AppsPromptMode,
-    surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
     running_go2_phase: usize,
     minute_text: &str,
@@ -1562,7 +1497,7 @@ fn apply_matrix_operator_and_refresh(
     *mode = ShellMode2::Cmd;
     configure_output_view(out, output_mask);
     out.banner(output_mask, *mode, minute_text);
-    out.mode_status(output_mask, *mode, apps_mode, surf_prefix, cmd_status_text, running_go2_phase);
+    out.mode_status(output_mask, *mode, apps_mode, cmd_status_text, running_go2_phase);
     let transcript = current_transcript_for_task(io);
     render_active_slot_content(out, output_mask, &transcript);
     transcript
@@ -1703,20 +1638,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     out.reset_scroll_region();
     let (mut last_minute_bucket, time_text) = clock_bucket_and_text();
     let mut mode = ShellMode2::Cmd;
-    let mut surf_prefix = SurfPromptPrefix::Https;
     out.banner(output_mask, mode, time_text.as_str());
     let mut apps_mode = AppsPromptMode::Start;
     let mut cmd_status_text: Option<AllocString> = None;
     let mut command_sessions: alloc::vec::Vec<CommandSession> = alloc::vec::Vec::new();
     let running_go2_phase = 0usize;
-    out.mode_status(
-        output_mask,
-        mode,
-        apps_mode,
-        surf_prefix,
-        cmd_status_text.as_deref(),
-        running_go2_phase,
-    );
+    out.mode_status(output_mask, mode, apps_mode, cmd_status_text.as_deref(), running_go2_phase);
 
     out.set_scroll_region(slot_content_top_row(output_mask));
     out.prompt(output_mask);
@@ -1732,7 +1659,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut input_bytes_since_yield = 0usize;
     let mut terminal_size_query_idle_ticks = TERMINAL_SIZE_QUERY_IDLE_TICKS;
     let mut last_chrome_state =
-        current_chrome_state(output_mask, mode, apps_mode, surf_prefix, cmd_status_text.as_deref());
+        current_chrome_state(output_mask, mode, apps_mode, cmd_status_text.as_deref());
     if (output_mask & (OUTPUT_LOCAL_MASK | OUTPUT_NET_TCP_MASK)) == 0 {
         out.io.raw_write_str(TERMINAL_SIZE_QUERY);
     }
@@ -1758,13 +1685,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
             last_matrix_revision = matrix_revision;
             configure_output_view(&out, output_mask);
             let next_transcript = current_transcript_for_task(io);
-            let chrome_state = current_chrome_state(
-                output_mask,
-                mode,
-                apps_mode,
-                surf_prefix,
-                cmd_status_text.as_deref(),
-            );
+            let chrome_state =
+                current_chrome_state(output_mask, mode, apps_mode, cmd_status_text.as_deref());
             if chrome_state != last_chrome_state {
                 out.io.raw_write_str(ecma48::SAVE_CURSOR);
                 out.io.raw_write_str(ecma48::RESET);
@@ -1774,7 +1696,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     output_mask,
                     mode,
                     apps_mode,
-                    surf_prefix,
                     cmd_status_text.as_deref(),
                     running_go2_phase,
                 );
@@ -1817,7 +1738,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         output_mask,
                         mode,
                         apps_mode,
-                        surf_prefix,
                         cmd_status_text.as_deref(),
                         running_go2_phase,
                         minute_text.as_str(),
@@ -1826,7 +1746,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         output_mask,
                         mode,
                         apps_mode,
-                        surf_prefix,
                         cmd_status_text.as_deref(),
                     );
                     last_matrix_revision = matrix::visible_revision(output_mask);
@@ -1838,18 +1757,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 text_decode.reset();
                 live_history_cursor = None;
                 cmd_status_text = None;
-                mode = ShellMode2::Surf;
-                apply_mode_toggle(
-                    &out,
-                    output_mask,
-                    mode,
-                    apps_mode,
-                    surf_prefix,
-                    cmd_status_text.as_deref(),
-                    running_go2_phase,
-                    &line,
-                    minute_text.as_str(),
-                );
                 continue;
             }
             if b == LOCAL_UNMAPPED_KEY_BYTE {
@@ -1935,7 +1842,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     output_mask,
                                     mode,
                                     apps_mode,
-                                    surf_prefix,
                                     cmd_status_text.as_deref(),
                                     running_go2_phase,
                                     &line,
@@ -1954,7 +1860,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     output_mask,
                                     mode,
                                     apps_mode,
-                                    surf_prefix,
                                     cmd_status_text.as_deref(),
                                     running_go2_phase,
                                     minute_text.as_str(),
@@ -1964,7 +1869,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     output_mask,
                                     mode,
                                     apps_mode,
-                                    surf_prefix,
                                     cmd_status_text.as_deref(),
                                 );
                                 last_matrix_revision = matrix::visible_revision(output_mask);
@@ -1980,7 +1884,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 EscState::Ss3 => {
                     if !active_matrix_slot_is_vmx(output_mask) {
                         let next_mode = match b {
-                            b'P' => Some(ShellMode2::Surf),
                             b'Q' => Some(ShellMode2::Apps),
                             b'R' => Some(ShellMode2::Cmd),
                             _ => None,
@@ -1992,7 +1895,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 output_mask,
                                 mode,
                                 apps_mode,
-                                surf_prefix,
                                 cmd_status_text.as_deref(),
                                 running_go2_phase,
                                 &line,
@@ -2018,19 +1920,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         continue;
                     }
                     match mode {
-                        ShellMode2::Surf => {
-                            cmd_status_text = None;
-                            surf_prefix = surf_prefix.next();
-                            out.mode_status(
-                                output_mask,
-                                mode,
-                                apps_mode,
-                                surf_prefix,
-                                cmd_status_text.as_deref(),
-                                running_go2_phase,
-                            );
-                            render_prompt_line(&out, output_mask, &line);
-                        }
                         ShellMode2::Apps => {
                             cmd_status_text = None;
                             apps_mode = apps_mode.next();
@@ -2038,7 +1927,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 output_mask,
                                 mode,
                                 apps_mode,
-                                surf_prefix,
                                 cmd_status_text.as_deref(),
                                 running_go2_phase,
                             );
@@ -2051,7 +1939,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     output_mask,
                                     mode,
                                     apps_mode,
-                                    surf_prefix,
                                     cmd_status_text.as_deref(),
                                     running_go2_phase,
                                 );
@@ -2103,7 +1990,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             output_mask,
                             &mut mode,
                             apps_mode,
-                            surf_prefix,
                             cmd_status_text.as_deref(),
                             running_go2_phase,
                             minute_text.as_str(),
@@ -2113,7 +1999,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             output_mask,
                             mode,
                             apps_mode,
-                            surf_prefix,
                             cmd_status_text.as_deref(),
                         );
                     } else if let Some(vm_id) = active_matrix_vm_input_id(output_mask) {
@@ -2126,7 +2011,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     output_mask,
                                     mode,
                                     apps_mode,
-                                    surf_prefix,
                                     cmd_status_text.as_deref(),
                                     running_go2_phase,
                                     minute_text.as_str(),
@@ -2158,7 +2042,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     output_mask,
                                     mode,
                                     apps_mode,
-                                    surf_prefix,
                                     cmd_status_text.as_deref(),
                                     running_go2_phase,
                                     minute_text.as_str(),
@@ -2257,7 +2140,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 output_mask,
                                 mode,
                                 apps_mode,
-                                surf_prefix,
                                 cmd_status_text.as_deref(),
                                 running_go2_phase,
                             );
@@ -2267,7 +2149,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 output_mask,
                                 mode,
                                 apps_mode,
-                                surf_prefix,
                                 cmd_status_text.as_deref(),
                             );
                         } else {
@@ -2276,14 +2157,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 transcript = current_transcript_for_task(io);
                                 render_active_slot_content(&out, output_mask, &transcript);
                             }
-                            let submit_result = handle_submit(
-                                &spawner,
-                                io,
-                                mode,
-                                apps_mode,
-                                surf_prefix,
-                                submitted,
-                            );
+                            let submit_result =
+                                handle_submit(&spawner, io, mode, apps_mode, submitted);
                             match submit_result {
                                 HandleSubmitResult::SetLineWidth(width) => {
                                     set_line_width_for_output(output_mask, width);
@@ -2293,7 +2168,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                         output_mask,
                                         mode,
                                         apps_mode,
-                                        surf_prefix,
                                         cmd_status_text.as_deref(),
                                         running_go2_phase,
                                     );
@@ -2303,7 +2177,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                         output_mask,
                                         mode,
                                         apps_mode,
-                                        surf_prefix,
                                         cmd_status_text.as_deref(),
                                     );
                                 }

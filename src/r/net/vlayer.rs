@@ -370,7 +370,7 @@ pub fn usb_snapshot_text_host() -> String {
         let path = join_usb_path(&device.path);
         let _ = writeln!(
             out,
-            "device\t{:08X}\t0\t{}\t{}\t{}\t0x{:05X}\t{}\t{:04X}\t{:04X}\t{:02X}\t{:02X}\t{:02X}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "device\t{:08X}\t0\t{}\t{}\t{}\t0x{:05X}\t{}\t{:04X}\t{:04X}\t{:02X}\t{:02X}\t{:02X}\t{:04X}\t{:04X}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             device.stable_id,
             device.slot_id,
             device.root_port_id,
@@ -382,6 +382,8 @@ pub fn usb_snapshot_text_host() -> String {
             device.class,
             device.subclass,
             device.protocol,
+            device.usb_version,
+            device.device_version,
             device.num_configurations,
             device.max_packet_size_0,
             parent,
