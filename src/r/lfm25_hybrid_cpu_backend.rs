@@ -10,7 +10,7 @@ extern crate alloc;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use embassy_time::{Duration, Instant, Timer};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
@@ -112,6 +112,144 @@ impl From<cpu::Error> for HybridCpuBackendError {
     fn from(error: cpu::Error) -> Self {
         Self::Kernel(error)
     }
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Lfm25HybridCpuPerfStats {
+    pub(crate) attention_calls: u64,
+    pub(crate) attention_positions: u64,
+    pub(crate) attention_us: u64,
+    pub(crate) projection_calls: u64,
+    pub(crate) projection_prepare_us: u64,
+    pub(crate) projection_quantize_us: u64,
+    pub(crate) projection_batch_us: u64,
+}
+
+impl Lfm25HybridCpuPerfStats {
+    pub(crate) const fn delta_since(self, before: Self) -> Self {
+        Self {
+            attention_calls: self.attention_calls.saturating_sub(before.attention_calls),
+            attention_positions: self
+                .attention_positions
+                .saturating_sub(before.attention_positions),
+            attention_us: self.attention_us.saturating_sub(before.attention_us),
+            projection_calls: self
+                .projection_calls
+                .saturating_sub(before.projection_calls),
+            projection_prepare_us: self
+                .projection_prepare_us
+                .saturating_sub(before.projection_prepare_us),
+            projection_quantize_us: self
+                .projection_quantize_us
+                .saturating_sub(before.projection_quantize_us),
+            projection_batch_us: self
+                .projection_batch_us
+                .saturating_sub(before.projection_batch_us),
+        }
+    }
+}
+
+const _: () = {
+    let before = Lfm25HybridCpuPerfStats {
+        attention_calls: 5,
+        attention_positions: 20,
+        attention_us: 30,
+        projection_calls: 40,
+        projection_prepare_us: 50,
+        projection_quantize_us: 60,
+        projection_batch_us: 70,
+    };
+    let after = Lfm25HybridCpuPerfStats {
+        attention_calls: 8,
+        attention_positions: 27,
+        attention_us: 41,
+        projection_calls: 53,
+        projection_prepare_us: 67,
+        projection_quantize_us: 79,
+        projection_batch_us: 93,
+    };
+    let delta = after.delta_since(before);
+    assert!(delta.attention_calls == 3);
+    assert!(delta.attention_positions == 7);
+    assert!(delta.attention_us == 11);
+    assert!(delta.projection_calls == 13);
+    assert!(delta.projection_prepare_us == 17);
+    assert!(delta.projection_quantize_us == 19);
+    assert!(delta.projection_batch_us == 23);
+};
+
+struct Lfm25HybridCpuPerfCounters {
+    attention_calls: AtomicU64,
+    attention_positions: AtomicU64,
+    attention_ticks: AtomicU64,
+    projection_calls: AtomicU64,
+    projection_prepare_ticks: AtomicU64,
+    projection_quantize_ticks: AtomicU64,
+    projection_batch_ticks: AtomicU64,
+}
+
+impl Lfm25HybridCpuPerfCounters {
+    const fn new() -> Self {
+        Self {
+            attention_calls: AtomicU64::new(0),
+            attention_positions: AtomicU64::new(0),
+            attention_ticks: AtomicU64::new(0),
+            projection_calls: AtomicU64::new(0),
+            projection_prepare_ticks: AtomicU64::new(0),
+            projection_quantize_ticks: AtomicU64::new(0),
+            projection_batch_ticks: AtomicU64::new(0),
+        }
+    }
+
+    fn snapshot(&self) -> Lfm25HybridCpuPerfStats {
+        Lfm25HybridCpuPerfStats {
+            attention_calls: self.attention_calls.load(Ordering::Relaxed),
+            attention_positions: self.attention_positions.load(Ordering::Relaxed),
+            attention_us: ticks_to_us(self.attention_ticks.load(Ordering::Relaxed)),
+            projection_calls: self.projection_calls.load(Ordering::Relaxed),
+            projection_prepare_us: ticks_to_us(
+                self.projection_prepare_ticks.load(Ordering::Relaxed),
+            ),
+            projection_quantize_us: ticks_to_us(
+                self.projection_quantize_ticks.load(Ordering::Relaxed),
+            ),
+            projection_batch_us: ticks_to_us(self.projection_batch_ticks.load(Ordering::Relaxed)),
+        }
+    }
+
+    fn record_attention(&self, positions: usize, elapsed_ticks: u64) {
+        self.attention_positions
+            .fetch_add(positions as u64, Ordering::Relaxed);
+        self.attention_ticks
+            .fetch_add(elapsed_ticks, Ordering::Relaxed);
+        self.attention_calls.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_projection(&self, prepare_ticks: u64, quantize_ticks: u64, batch_ticks: u64) {
+        self.projection_prepare_ticks
+            .fetch_add(prepare_ticks, Ordering::Relaxed);
+        self.projection_quantize_ticks
+            .fetch_add(quantize_ticks, Ordering::Relaxed);
+        self.projection_batch_ticks
+            .fetch_add(batch_ticks, Ordering::Relaxed);
+        self.projection_calls.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+static LFM25_HYBRID_CPU_PERF: Lfm25HybridCpuPerfCounters = Lfm25HybridCpuPerfCounters::new();
+
+fn elapsed_ticks_since(start_tick: u64) -> u64 {
+    embassy_time_driver::now().saturating_sub(start_tick)
+}
+
+fn ticks_to_us(ticks: u64) -> u64 {
+    let elapsed_us =
+        (ticks as u128).saturating_mul(1_000_000) / embassy_time_driver::TICK_HZ.max(1) as u128;
+    core::cmp::min(elapsed_us, u64::MAX as u128) as u64
+}
+
+pub(crate) fn lfm25_hybrid_cpu_perf_snapshot() -> Lfm25HybridCpuPerfStats {
+    LFM25_HYBRID_CPU_PERF.snapshot()
 }
 
 struct CpuQ8Tensor {
@@ -418,6 +556,7 @@ impl HybridCpuAotDecodeBackend {
         descriptors: &[NativeTensorDescriptor],
         input: &[f32],
     ) -> Result<Vec<Vec<f32>>, HybridCpuBackendError> {
+        let prepare_started = embassy_time_driver::now();
         if descriptors.is_empty()
             || descriptors.len() > crate::intel::gpgpu::LFM25_Q8_MAX_BATCH_PROJECTIONS
         {
@@ -450,8 +589,12 @@ impl HybridCpuAotDecodeBackend {
             });
             outputs.push(vec![0.0f32; rows]);
         }
+        let mut prepare_ticks = elapsed_ticks_since(prepare_started);
 
+        let quantize_started = embassy_time_driver::now();
         let quantized = cpu::quantize_q8(input)?;
+        let quantize_ticks = elapsed_ticks_since(quantize_started);
+        let finish_prepare_started = embassy_time_driver::now();
         let activation = unsafe {
             core::slice::from_raw_parts(
                 quantized.as_ptr() as *const u8,
@@ -460,12 +603,19 @@ impl HybridCpuAotDecodeBackend {
         };
         let mut output_slices: Vec<&mut [f32]> =
             outputs.iter_mut().map(Vec::as_mut_slice).collect();
-        crate::intel::gpgpu::lfm25_q8_project_batch(
+        prepare_ticks = prepare_ticks.saturating_add(elapsed_ticks_since(finish_prepare_started));
+        let batch_started = embassy_time_driver::now();
+        let batch_result = crate::intel::gpgpu::lfm25_q8_project_batch(
             self.assets.model.gpu_model,
             &specs,
             activation,
             &mut output_slices,
-        )?;
+        );
+        let batch_ticks = elapsed_ticks_since(batch_started);
+        if batch_result.is_ok() {
+            LFM25_HYBRID_CPU_PERF.record_projection(prepare_ticks, quantize_ticks, batch_ticks);
+        }
+        batch_result?;
         Ok(outputs)
     }
 
@@ -666,10 +816,9 @@ impl HybridCpuAotDecodeBackend {
             Self::descriptor(Some(layer), TensorRole::Key)?,
             Self::descriptor(Some(layer), TensorRole::Value)?,
         ];
-        let mut projections = self
-            .project_many(&descriptors, &input_values)
-            .await?
-            .into_iter();
+        let projections = self.project_many(&descriptors, &input_values).await?;
+        let attention_cpu_started = embassy_time_driver::now();
+        let mut projections = projections.into_iter();
         let mut query = projections.next().ok_or(HybridCpuBackendError::Tensor)?;
         let mut key = projections.next().ok_or(HybridCpuBackendError::Tensor)?;
         let value = projections.next().ok_or(HybridCpuBackendError::Tensor)?;
@@ -762,9 +911,10 @@ impl HybridCpuAotDecodeBackend {
                     cpu::f32_dot_pinned_padded(&values, &weights, padded_positions)?;
             }
         }
-        let output = self
-            .project(Self::descriptor(Some(layer), TensorRole::AttentionOutput)?, &context)
-            .await?;
+        let output_descriptor = Self::descriptor(Some(layer), TensorRole::AttentionOutput)?;
+        LFM25_HYBRID_CPU_PERF
+            .record_attention(positions, elapsed_ticks_since(attention_cpu_started));
+        let output = self.project(output_descriptor, &context).await?;
         self.release_q8(input)?;
         self.allocate_q30(output)
     }

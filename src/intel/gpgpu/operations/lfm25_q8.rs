@@ -29,6 +29,141 @@ pub(crate) struct Lfm25Q8ProjectStats {
     pub(crate) last_rows: u32,
 }
 
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Lfm25Q8SubmissionSignature {
+    ShortconvInput = 0,
+    Hidden = 1,
+    AttentionQkv = 2,
+    FfnGateUp = 3,
+    FfnDown = 4,
+    Vocabulary = 5,
+    Unknown = 6,
+}
+
+impl Lfm25Q8SubmissionSignature {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::ShortconvInput => "shortconv-in",
+            Self::Hidden => "hidden",
+            Self::AttentionQkv => "attention-qkv",
+            Self::FfnGateUp => "ffn-gate-up",
+            Self::FfnDown => "ffn-down",
+            Self::Vocabulary => "vocabulary",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    const fn index(self) -> usize {
+        self as usize
+    }
+}
+
+pub(crate) const LFM25_Q8_SUBMISSION_SIGNATURES: [Lfm25Q8SubmissionSignature; 7] = [
+    Lfm25Q8SubmissionSignature::ShortconvInput,
+    Lfm25Q8SubmissionSignature::Hidden,
+    Lfm25Q8SubmissionSignature::AttentionQkv,
+    Lfm25Q8SubmissionSignature::FfnGateUp,
+    Lfm25Q8SubmissionSignature::FfnDown,
+    Lfm25Q8SubmissionSignature::Vocabulary,
+    Lfm25Q8SubmissionSignature::Unknown,
+];
+const LFM25_Q8_SUBMISSION_SIGNATURE_COUNT: usize = LFM25_Q8_SUBMISSION_SIGNATURES.len();
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Lfm25Q8SubmissionSignatureStats {
+    pub(crate) submissions: u64,
+    pub(crate) projections: u64,
+    pub(crate) submit_ms: u64,
+    pub(crate) completion_us: u64,
+    pub(crate) gpu_us: u64,
+    pub(crate) gpu_samples: u64,
+    pub(crate) submit_min_ms: u64,
+    pub(crate) submit_max_ms: u64,
+    pub(crate) completion_min_us: u64,
+    pub(crate) completion_max_us: u64,
+    pub(crate) gpu_min_us: u64,
+    pub(crate) gpu_max_us: u64,
+    /// Exact extrema are derivable from two cumulative snapshots only while
+    /// the earlier snapshot has no samples for the relevant signature.
+    pub(crate) submission_extrema_valid: bool,
+    pub(crate) gpu_extrema_valid: bool,
+}
+
+impl Lfm25Q8SubmissionSignatureStats {
+    fn delta_since(self, before: Self) -> Self {
+        let submissions = self.submissions.saturating_sub(before.submissions);
+        let gpu_samples = self.gpu_samples.saturating_sub(before.gpu_samples);
+        let submission_extrema_valid = submissions != 0 && before.submissions == 0;
+        let gpu_extrema_valid = gpu_samples != 0 && before.gpu_samples == 0;
+        Self {
+            submissions,
+            projections: self.projections.saturating_sub(before.projections),
+            submit_ms: self.submit_ms.saturating_sub(before.submit_ms),
+            completion_us: self.completion_us.saturating_sub(before.completion_us),
+            gpu_us: self.gpu_us.saturating_sub(before.gpu_us),
+            gpu_samples,
+            submit_min_ms: if submission_extrema_valid {
+                self.submit_min_ms
+            } else {
+                0
+            },
+            submit_max_ms: if submission_extrema_valid {
+                self.submit_max_ms
+            } else {
+                0
+            },
+            completion_min_us: if submission_extrema_valid {
+                self.completion_min_us
+            } else {
+                0
+            },
+            completion_max_us: if submission_extrema_valid {
+                self.completion_max_us
+            } else {
+                0
+            },
+            gpu_min_us: if gpu_extrema_valid {
+                self.gpu_min_us
+            } else {
+                0
+            },
+            gpu_max_us: if gpu_extrema_valid {
+                self.gpu_max_us
+            } else {
+                0
+            },
+            submission_extrema_valid,
+            gpu_extrema_valid,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Lfm25Q8SubmissionSignatureSnapshot {
+    buckets: [Lfm25Q8SubmissionSignatureStats; LFM25_Q8_SUBMISSION_SIGNATURE_COUNT],
+}
+
+impl Lfm25Q8SubmissionSignatureSnapshot {
+    pub(crate) const fn bucket(
+        &self,
+        signature: Lfm25Q8SubmissionSignature,
+    ) -> Lfm25Q8SubmissionSignatureStats {
+        self.buckets[signature.index()]
+    }
+
+    pub(crate) fn delta_since(self, before: Self) -> Self {
+        let mut buckets =
+            [Lfm25Q8SubmissionSignatureStats::default(); LFM25_Q8_SUBMISSION_SIGNATURE_COUNT];
+        let mut index = 0;
+        while index < LFM25_Q8_SUBMISSION_SIGNATURE_COUNT {
+            buckets[index] = self.buckets[index].delta_since(before.buckets[index]);
+            index += 1;
+        }
+        Self { buckets }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Lfm25Q8ProjectSpec {
     pub(crate) weight_offset: u32,
@@ -109,6 +244,93 @@ struct Lfm25Q8SubmitTimings {
     gpu_timestamp_hz: u32,
 }
 
+struct Lfm25Q8SubmissionSignatureCounters {
+    submissions: AtomicU64,
+    projections: AtomicU64,
+    submit_ms: AtomicU64,
+    completion_us: AtomicU64,
+    gpu_us: AtomicU64,
+    gpu_samples: AtomicU64,
+    submit_min_ms: AtomicU64,
+    submit_max_ms: AtomicU64,
+    completion_min_us: AtomicU64,
+    completion_max_us: AtomicU64,
+    gpu_min_us: AtomicU64,
+    gpu_max_us: AtomicU64,
+}
+
+impl Lfm25Q8SubmissionSignatureCounters {
+    const fn new() -> Self {
+        Self {
+            submissions: AtomicU64::new(0),
+            projections: AtomicU64::new(0),
+            submit_ms: AtomicU64::new(0),
+            completion_us: AtomicU64::new(0),
+            gpu_us: AtomicU64::new(0),
+            gpu_samples: AtomicU64::new(0),
+            submit_min_ms: AtomicU64::new(u64::MAX),
+            submit_max_ms: AtomicU64::new(0),
+            completion_min_us: AtomicU64::new(u64::MAX),
+            completion_max_us: AtomicU64::new(0),
+            gpu_min_us: AtomicU64::new(u64::MAX),
+            gpu_max_us: AtomicU64::new(0),
+        }
+    }
+
+    fn snapshot(&self) -> Lfm25Q8SubmissionSignatureStats {
+        let submissions = self.submissions.load(Ordering::Relaxed);
+        let gpu_samples = self.gpu_samples.load(Ordering::Relaxed);
+        Lfm25Q8SubmissionSignatureStats {
+            submissions,
+            projections: self.projections.load(Ordering::Relaxed),
+            submit_ms: self.submit_ms.load(Ordering::Relaxed),
+            completion_us: self.completion_us.load(Ordering::Relaxed),
+            gpu_us: self.gpu_us.load(Ordering::Relaxed),
+            gpu_samples,
+            submit_min_ms: if submissions == 0 {
+                0
+            } else {
+                self.submit_min_ms.load(Ordering::Relaxed)
+            },
+            submit_max_ms: self.submit_max_ms.load(Ordering::Relaxed),
+            completion_min_us: if submissions == 0 {
+                0
+            } else {
+                self.completion_min_us.load(Ordering::Relaxed)
+            },
+            completion_max_us: self.completion_max_us.load(Ordering::Relaxed),
+            gpu_min_us: if gpu_samples == 0 {
+                0
+            } else {
+                self.gpu_min_us.load(Ordering::Relaxed)
+            },
+            gpu_max_us: self.gpu_max_us.load(Ordering::Relaxed),
+            submission_extrema_valid: submissions != 0,
+            gpu_extrema_valid: gpu_samples != 0,
+        }
+    }
+
+    fn record(&self, projections: u64, submit_ms: u64, timings: Lfm25Q8SubmitTimings) {
+        self.projections.fetch_add(projections, Ordering::Relaxed);
+        self.submit_ms.fetch_add(submit_ms, Ordering::Relaxed);
+        self.completion_us
+            .fetch_add(timings.completion_us, Ordering::Relaxed);
+        self.submit_min_ms.fetch_min(submit_ms, Ordering::Relaxed);
+        self.submit_max_ms.fetch_max(submit_ms, Ordering::Relaxed);
+        self.completion_min_us
+            .fetch_min(timings.completion_us, Ordering::Relaxed);
+        self.completion_max_us
+            .fetch_max(timings.completion_us, Ordering::Relaxed);
+        if timings.gpu_timestamp_valid {
+            self.gpu_us.fetch_add(timings.gpu_us, Ordering::Relaxed);
+            self.gpu_min_us.fetch_min(timings.gpu_us, Ordering::Relaxed);
+            self.gpu_max_us.fetch_max(timings.gpu_us, Ordering::Relaxed);
+            self.gpu_samples.fetch_add(1, Ordering::Relaxed);
+        }
+        self.submissions.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 static LFM25_Q8_RUNTIME: Mutex<Option<Lfm25Q8Runtime>> = Mutex::new(None);
 static LFM25_Q8_READY: AtomicBool = AtomicBool::new(false);
 static LFM25_Q8_LAUNCHES: AtomicU64 = AtomicU64::new(0);
@@ -122,6 +344,9 @@ static LFM25_Q8_TOTAL_GPU_US: AtomicU64 = AtomicU64::new(0);
 static LFM25_Q8_GPU_TIMESTAMP_SAMPLES: AtomicU64 = AtomicU64::new(0);
 static LFM25_Q8_GPU_TIMESTAMP_HZ: AtomicU32 = AtomicU32::new(0);
 static LFM25_Q8_LAST_ROWS: AtomicU32 = AtomicU32::new(0);
+static LFM25_Q8_SUBMISSION_SIGNATURE_STATS: [Lfm25Q8SubmissionSignatureCounters;
+    LFM25_Q8_SUBMISSION_SIGNATURE_COUNT] =
+    [const { Lfm25Q8SubmissionSignatureCounters::new() }; LFM25_Q8_SUBMISSION_SIGNATURE_COUNT];
 
 pub(crate) const LFM25_Q8_PROJECTIONS_PER_TOKEN: u64 = 93;
 pub(crate) const LFM25_Q8_SUBMISSIONS_PER_TOKEN: u64 = 65;
@@ -162,9 +387,7 @@ const fn lfm25_q8_artifact(layout: Lfm25Q8WeightLayout) -> GpgpuKernelArtifact {
     }
 }
 
-fn upload_lfm25_q8_layout_kernel(
-    layout: Lfm25Q8WeightLayout,
-) -> Option<UploadedKernelArtifact> {
+fn upload_lfm25_q8_layout_kernel(layout: Lfm25Q8WeightLayout) -> Option<UploadedKernelArtifact> {
     match layout {
         Lfm25Q8WeightLayout::NativeQ8 => upload_lfm25_q8_project_kernel(),
         Lfm25Q8WeightLayout::PackedQ8x16Pair => upload_lfm25_q8_project_packed_kernel(),
@@ -189,6 +412,17 @@ pub(crate) fn lfm25_q8_project_stats() -> Lfm25Q8ProjectStats {
     }
 }
 
+pub(crate) fn lfm25_q8_submission_signature_snapshot() -> Lfm25Q8SubmissionSignatureSnapshot {
+    let mut buckets =
+        [Lfm25Q8SubmissionSignatureStats::default(); LFM25_Q8_SUBMISSION_SIGNATURE_COUNT];
+    let mut index = 0;
+    while index < LFM25_Q8_SUBMISSION_SIGNATURE_COUNT {
+        buckets[index] = LFM25_Q8_SUBMISSION_SIGNATURE_STATS[index].snapshot();
+        index += 1;
+    }
+    Lfm25Q8SubmissionSignatureSnapshot { buckets }
+}
+
 pub(crate) fn bind_lfm25_q8_model(
     model: &[u8],
 ) -> Result<Lfm25Q8ModelMapping, Lfm25Q8ProjectError> {
@@ -208,7 +442,8 @@ fn bind_lfm25_q8_model_layout(
     if !lfm25_q8_layout_supported(layout) {
         return Err(Lfm25Q8ProjectError::UnsupportedTarget);
     }
-    if model.len() != trueos_lfm25_model::lfm25::PINNED_NATIVE_IMAGE_BYTES as usize || model.is_empty()
+    if model.len() != trueos_lfm25_model::lfm25::PINNED_NATIVE_IMAGE_BYTES as usize
+        || model.is_empty()
     {
         return Err(Lfm25Q8ProjectError::InvalidModel);
     }
@@ -347,8 +582,9 @@ pub(crate) fn lfm25_q8_project_batch(
     let runtime = runtime_slot.as_mut().unwrap();
     prepare_lfm25_q8_runtime(runtime, model)?;
 
-    let activation_destination =
-        unsafe { core::slice::from_raw_parts_mut(runtime.activation.virt, activation_payload_bytes) };
+    let activation_destination = unsafe {
+        core::slice::from_raw_parts_mut(runtime.activation.virt, activation_payload_bytes)
+    };
     match model.layout {
         Lfm25Q8WeightLayout::NativeQ8 => activation_destination.copy_from_slice(activation),
         Lfm25Q8WeightLayout::PackedQ8x16Pair => {
@@ -404,6 +640,12 @@ pub(crate) fn lfm25_q8_project_batch(
                 }
             }
             let projection_count = specs.len() as u64;
+            let signature = lfm25_q8_submission_signature(specs);
+            LFM25_Q8_SUBMISSION_SIGNATURE_STATS[signature.index()].record(
+                projection_count,
+                elapsed_ms,
+                timings,
+            );
             let launches = LFM25_Q8_LAUNCHES
                 .fetch_add(projection_count, Ordering::Relaxed)
                 .saturating_add(projection_count);
@@ -449,6 +691,81 @@ pub(crate) fn lfm25_q8_project_batch(
         }
     }
 }
+
+const fn lfm25_q8_submission_signature(specs: &[Lfm25Q8ProjectSpec]) -> Lfm25Q8SubmissionSignature {
+    match specs {
+        [spec] if spec.columns == 1_024 && spec.rows == 3_072 => {
+            Lfm25Q8SubmissionSignature::ShortconvInput
+        }
+        [spec] if spec.columns == 1_024 && spec.rows == 1_024 => Lfm25Q8SubmissionSignature::Hidden,
+        [query, key, value]
+            if query.columns == 1_024
+                && query.rows == 1_024
+                && key.columns == 1_024
+                && key.rows == 512
+                && value.columns == 1_024
+                && value.rows == 512 =>
+        {
+            Lfm25Q8SubmissionSignature::AttentionQkv
+        }
+        [gate, up]
+            if gate.columns == 1_024
+                && gate.rows == 4_608
+                && up.columns == 1_024
+                && up.rows == 4_608 =>
+        {
+            Lfm25Q8SubmissionSignature::FfnGateUp
+        }
+        [spec] if spec.columns == 4_608 && spec.rows == 1_024 => {
+            Lfm25Q8SubmissionSignature::FfnDown
+        }
+        [spec] if spec.columns == 1_024 && spec.rows == 65_536 => {
+            Lfm25Q8SubmissionSignature::Vocabulary
+        }
+        _ => Lfm25Q8SubmissionSignature::Unknown,
+    }
+}
+
+const _: () = {
+    const fn spec(columns: u32, rows: u32) -> Lfm25Q8ProjectSpec {
+        Lfm25Q8ProjectSpec {
+            weight_offset: 0,
+            columns,
+            rows,
+        }
+    }
+
+    assert!(
+        lfm25_q8_submission_signature(&[spec(1_024, 3_072)]) as u8
+            == Lfm25Q8SubmissionSignature::ShortconvInput as u8
+    );
+    assert!(
+        lfm25_q8_submission_signature(&[spec(1_024, 1_024)]) as u8
+            == Lfm25Q8SubmissionSignature::Hidden as u8
+    );
+    assert!(
+        lfm25_q8_submission_signature(&[spec(1_024, 1_024), spec(1_024, 512), spec(1_024, 512),])
+            as u8
+            == Lfm25Q8SubmissionSignature::AttentionQkv as u8
+    );
+    assert!(
+        lfm25_q8_submission_signature(&[spec(1_024, 4_608), spec(1_024, 4_608)]) as u8
+            == Lfm25Q8SubmissionSignature::FfnGateUp as u8
+    );
+    assert!(
+        lfm25_q8_submission_signature(&[spec(4_608, 1_024)]) as u8
+            == Lfm25Q8SubmissionSignature::FfnDown as u8
+    );
+    assert!(
+        lfm25_q8_submission_signature(&[spec(1_024, 65_536)]) as u8
+            == Lfm25Q8SubmissionSignature::Vocabulary as u8
+    );
+    assert!(
+        lfm25_q8_submission_signature(&[spec(1_024, 512), spec(1_024, 1_024), spec(1_024, 512),])
+            as u8
+            == Lfm25Q8SubmissionSignature::Unknown as u8
+    );
+};
 
 fn ensure_lfm25_q8_runtime(slot: &mut Option<Lfm25Q8Runtime>) -> Result<(), Lfm25Q8ProjectError> {
     if slot.is_some() {

@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 
 use embassy_executor::Spawner;
 use embassy_sync::signal::Signal;
+use sha2::{Digest, Sha256};
 use spin::{Mutex, Once};
 
 use crate::shell2::shell2_cmd::ParseOutcome;
@@ -45,6 +46,123 @@ impl LumControl {
 struct ConversationState {
     turns: u64,
     pending_reply_tail: Vec<u32>,
+}
+
+struct LumTurnTelemetry {
+    turn: u64,
+    started: u64,
+    prompt_tokens: usize,
+    context_before: usize,
+    callback_start: u64,
+    igpu_before: crate::intel::gpgpu::Lfm25Q8ProjectStats,
+    igpu_signatures_before: crate::intel::gpgpu::Lfm25Q8SubmissionSignatureSnapshot,
+    cpu_before: crate::r::lfm25_hybrid_cpu_backend::Lfm25HybridCpuPerfStats,
+}
+
+impl LumTurnTelemetry {
+    fn log_progress(
+        &self,
+        stage: &'static str,
+        callback_now: u64,
+        igpu_now: crate::intel::gpgpu::Lfm25Q8ProjectStats,
+        reply_tokens: usize,
+        stop: &'static str,
+        first_token: u32,
+        raw_reply_sha256: &str,
+    ) {
+        crate::log_info!(
+            target: "global";
+            "lfm25: turn stage={} scope=turn turn={} elapsed_ms={} prompt_tokens={} reply_tokens={} stop={} context_before={} callbacks={} igpu_projections={} igpu_submissions={} igpu_failures={} igpu_submit_ms={} phase_us=encode:{},admission:{},completion:{},gpu:{} gpu_samples={} gpu_hz={} last_rows={} first_token={} raw_reply_sha256={}\n",
+            stage,
+            self.turn,
+            elapsed_ms_since(self.started),
+            self.prompt_tokens,
+            reply_tokens,
+            stop,
+            self.context_before,
+            callback_now.saturating_sub(self.callback_start),
+            igpu_now.launches.saturating_sub(self.igpu_before.launches),
+            igpu_now
+                .submissions
+                .saturating_sub(self.igpu_before.submissions),
+            igpu_now.failures.saturating_sub(self.igpu_before.failures),
+            igpu_now
+                .total_submit_ms
+                .saturating_sub(self.igpu_before.total_submit_ms),
+            igpu_now
+                .total_encode_us
+                .saturating_sub(self.igpu_before.total_encode_us),
+            igpu_now
+                .total_admission_us
+                .saturating_sub(self.igpu_before.total_admission_us),
+            igpu_now
+                .total_completion_us
+                .saturating_sub(self.igpu_before.total_completion_us),
+            igpu_now
+                .total_gpu_us
+                .saturating_sub(self.igpu_before.total_gpu_us),
+            igpu_now
+                .gpu_timestamp_samples
+                .saturating_sub(self.igpu_before.gpu_timestamp_samples),
+            igpu_now.gpu_timestamp_hz,
+            igpu_now.last_rows,
+            first_token,
+            raw_reply_sha256,
+        );
+    }
+
+    fn log_submission_signatures(
+        &self,
+        igpu_now: crate::intel::gpgpu::Lfm25Q8SubmissionSignatureSnapshot,
+    ) {
+        let delta = igpu_now.delta_since(self.igpu_signatures_before);
+        for signature in crate::intel::gpgpu::LFM25_Q8_SUBMISSION_SIGNATURES {
+            let stats = delta.bucket(signature);
+            let completion_avg_us = stats
+                .completion_us
+                .checked_div(stats.submissions)
+                .unwrap_or(0);
+            let gpu_avg_us = stats.gpu_us.checked_div(stats.gpu_samples).unwrap_or(0);
+            crate::log_info!(
+                target: "global";
+                "lfm25: turn-signature stage=done scope=turn turn={} signature={} submissions={} projections={} submit_ms={} completion_us={} gpu_us={} gpu_samples={} avg_us=completion:{},gpu:{} range_submit_ms={}:{} range_completion_us={}:{} range_gpu_us={}:{} extrema_valid=submission:{},gpu:{}\n",
+                self.turn,
+                signature.label(),
+                stats.submissions,
+                stats.projections,
+                stats.submit_ms,
+                stats.completion_us,
+                stats.gpu_us,
+                stats.gpu_samples,
+                completion_avg_us,
+                gpu_avg_us,
+                stats.submit_min_ms,
+                stats.submit_max_ms,
+                stats.completion_min_us,
+                stats.completion_max_us,
+                stats.gpu_min_us,
+                stats.gpu_max_us,
+                stats.submission_extrema_valid as u8,
+                stats.gpu_extrema_valid as u8,
+            );
+        }
+    }
+
+    fn log_cpu_done(&self, cpu_now: crate::r::lfm25_hybrid_cpu_backend::Lfm25HybridCpuPerfStats) {
+        let delta = cpu_now.delta_since(self.cpu_before);
+        crate::log_info!(
+            target: "global";
+            "lfm25: turn-cpu stage=done scope=turn turn={} attention_calls={} attention_positions={} attention_us={} projection_calls={} projection_prepare_us={} projection_quantize_us={} projection_batch_us={}\n",
+            self.turn,
+            delta.attention_calls,
+            delta.attention_positions,
+            delta.attention_us,
+            delta.projection_calls,
+            delta.projection_prepare_us,
+            delta.projection_quantize_us,
+            delta.projection_batch_us,
+        );
+    }
 }
 
 enum PromptPoll {
@@ -293,6 +411,7 @@ async fn lum_task(target: MatrixTarget, expected_worker_slot: u32) {
         )
         .as_str(),
     );
+    let resident_open_started = embassy_time_driver::now();
     let tokenizer = match crate::r::lfm25_tokenizer::load().await {
         Ok(tokenizer) => tokenizer,
         Err(error) => {
@@ -304,10 +423,12 @@ async fn lum_task(target: MatrixTarget, expected_worker_slot: u32) {
             return;
         }
     };
+    let tokenizer_open_ms = elapsed_ms_since(resident_open_started);
     if session_should_stop(&target) {
         release_lum_session(&target);
         return;
     }
+    let model_open_started = embassy_time_driver::now();
     let module = match crate::lumen::decode::open_intel_igc().await {
         Ok(module) => module,
         Err(error) => {
@@ -319,6 +440,15 @@ async fn lum_task(target: MatrixTarget, expected_worker_slot: u32) {
             return;
         }
     };
+    crate::log_info!(
+        target: "global";
+        "lfm25: resident stage=ready scope=session open_ms={} tokenizer_open_ms={} model_open_ms={} executor_slot={} core_kind={} backend=cpu+intel-igc-q8 completion=guc-rcs\n",
+        elapsed_ms_since(resident_open_started),
+        tokenizer_open_ms,
+        elapsed_ms_since(model_open_started),
+        execution_slot,
+        crate::workers::core_kind_for_slot(execution_slot),
+    );
     set_matrix_target_active(&target, false);
     if session_should_stop(&target) {
         release_lum_session(&target);
@@ -474,6 +604,19 @@ async fn run_lum_turn(
     let mut next_token = None;
     let callback_start = module_state.callback_sequence;
     let mut last_callback = callback_start;
+    let igpu_signatures_before = crate::intel::gpgpu::lfm25_q8_submission_signature_snapshot();
+    let cpu_before = crate::r::lfm25_hybrid_cpu_backend::lfm25_hybrid_cpu_perf_snapshot();
+    let telemetry = LumTurnTelemetry {
+        turn,
+        started,
+        prompt_tokens: prompt_tokens.len(),
+        context_before,
+        callback_start,
+        igpu_before: before,
+        igpu_signatures_before,
+        cpu_before,
+    };
+    telemetry.log_progress("start", callback_start, before, 0, "pending", 0, "-");
     for (index, &token) in prompt_tokens.iter().enumerate() {
         if session_should_stop(target) {
             return false;
@@ -569,6 +712,7 @@ async fn run_lum_turn(
     let igpu_gpu_samples = prefill_after
         .gpu_timestamp_samples
         .saturating_sub(before.gpu_timestamp_samples);
+    telemetry.log_progress("prefill", last_callback, prefill_after, 0, "pending", first_token, "-");
     let state_only_tokens = prompt_tokens.len().saturating_sub(1) as u64;
     let full_tokens = u64::from(!prompt_tokens.is_empty());
     let expected_callbacks = state_only_tokens
@@ -676,6 +820,8 @@ async fn run_lum_turn(
             return false;
         }
     };
+    let raw_reply_digest: [u8; 32] = Sha256::digest(&reply_bytes).into();
+    let raw_reply_sha256 = sha256_hex(&raw_reply_digest);
     let raw_reply = String::from_utf8_lossy(&reply_bytes);
     let adapted_reply = if crate::spirit::LUMEN_AI_EMOTION_ENABLED {
         crate::spirit::adapt_lumen_reply(raw_reply.as_ref())
@@ -684,6 +830,18 @@ async fn run_lum_turn(
     };
     let reply = adapted_reply.as_str();
     let after = crate::intel::gpgpu::lfm25_q8_project_stats();
+    telemetry.log_progress(
+        "done",
+        last_callback,
+        after,
+        generated.len(),
+        if stopped { "eot" } else { "limit" },
+        first_token,
+        raw_reply_sha256.as_str(),
+    );
+    telemetry
+        .log_submission_signatures(crate::intel::gpgpu::lfm25_q8_submission_signature_snapshot());
+    telemetry.log_cpu_done(crate::r::lfm25_hybrid_cpu_backend::lfm25_hybrid_cpu_perf_snapshot());
     reasoning.finish();
     let response_turn = conversation.turns.saturating_add(1);
     crate::spirit::enqueue_reasoning_response(response_turn, reply);
@@ -786,6 +944,16 @@ fn elapsed_ms_since(start_tick: u64) -> u64 {
         .saturating_sub(start_tick)
         .saturating_mul(1_000)
         / embassy_time_driver::TICK_HZ
+}
+
+fn sha256_hex(digest: &[u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(64);
+    for byte in digest {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0F) as usize] as char);
+    }
+    output
 }
 
 #[cfg(test)]
