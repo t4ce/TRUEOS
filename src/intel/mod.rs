@@ -8,6 +8,7 @@ pub(crate) mod format;
 pub(crate) mod gpgpu;
 mod gpu_device;
 pub(crate) mod gpu_font;
+mod gt_state;
 mod guc;
 pub(crate) mod guc_ctb;
 pub(crate) mod guc_submission;
@@ -304,6 +305,16 @@ pub(crate) fn is_emulator_environment() -> bool {
 
 pub(crate) fn claimed_device() -> Option<Dev> {
     CLAIMED_DEVICE.get().copied()
+}
+
+pub(crate) fn gen12_actual_gt_ratio(dev: Dev) -> u32 {
+    self::gt_state::actual_ratio(dev)
+}
+
+pub(crate) fn gen12_gt_state_snapshot() -> Option<self::gt_state::Gen12GtStateSnapshot> {
+    claimed_device()
+        .filter(|dev| device_uses_gen12_integrated_pat(dev.device_id))
+        .map(self::gt_state::read)
 }
 
 pub(crate) fn guc_boot_enabled() -> bool {
