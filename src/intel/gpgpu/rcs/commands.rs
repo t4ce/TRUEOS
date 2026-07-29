@@ -286,10 +286,6 @@ fn direct_rcs_submit_batch_on_lane(
     state: DirectRcsState,
     lane: DirectRcsLane,
 ) -> bool {
-    if !super::gen12_integrated_cache_policy_ready() {
-        quarantine_direct_rcs_lane(lane, "cache-policy-not-ready");
-        return false;
-    }
     let (quarantined, runtime, client) = match lane {
         DirectRcsLane::SystemService => (
             &DIRECT_RCS_CONTEXT_QUARANTINED,
@@ -368,12 +364,6 @@ fn direct_rcs_submit_batch_with_runtime(
     client: crate::gpu::vgpu::KernelClient,
     allow_queued: bool,
 ) -> Option<crate::gpu::executor::KernelSubmission> {
-    // Lowest common RCS submit path, including UI4's persistent queue. Reject
-    // before mutating the ring tail or LRC image if a PAT/MOCS checkpoint has
-    // revoked the integrated cache contract.
-    if !super::gen12_integrated_cache_policy_ready() {
-        return None;
-    }
     if !allow_queued && runtime.pending.is_some() {
         return None;
     }
@@ -547,21 +537,13 @@ fn lfm25_rcs_poll_result_slot_timeout_ms(
     )
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-struct DirectRcsMarkerObservation {
-    observed: u32,
-    gpu_host_observe_timestamp: u64,
-    actual_gt_ratio: u32,
-    matched_cpu_tick: u64,
-}
-
 fn lfm25_rcs_poll_result_slot_timeout_ms_with_timestamp(
     dev: super::Dev,
     state: DirectRcsState,
     slot: usize,
     expected: u32,
     timeout_ms: u64,
-) -> DirectRcsMarkerObservation {
+) -> (u32, u64) {
     direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
         state,
         slot,
@@ -582,7 +564,7 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane(
     direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
         state, slot, expected, timeout_ms, lane, None,
     )
-    .observed
+    .0
 }
 
 fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
@@ -592,7 +574,7 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
     timeout_ms: u64,
     lane: DirectRcsLane,
     observe_timestamp_dev: Option<super::Dev>,
-) -> DirectRcsMarkerObservation {
+) -> (u32, u64) {
     let started = direct_rcs_now_tick();
     let deadline = started.saturating_add(direct_rcs_ticks_from_ms(timeout_ms));
     let probe_logged = match lane {
@@ -616,23 +598,17 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
         );
     }
     let mut iterations = 0usize;
-    let (observed, gpu_host_observe_timestamp, gt_ratio, completion_tick) = loop {
+    let (observed, gpu_host_observe_timestamp) = loop {
         iterations = iterations.saturating_add(1);
         let observed = direct_rcs_read_result_slot(state, slot);
         if observed == expected {
-            // Capture the CPU completion boundary before logging or executor
-            // bookkeeping, then sample both GPU clocks while the matched
-            // marker observation is still the current event.
-            let completion_tick = direct_rcs_now_tick();
-            let (timestamp, ratio) = observe_timestamp_dev
-                .map(|dev| {
-                    (direct_rcs_read_render_timestamp(dev), super::gen12_actual_gt_ratio(dev))
-                })
-                .unwrap_or((0, 0));
-            break (observed, timestamp, ratio, completion_tick);
+            let timestamp = observe_timestamp_dev
+                .map(direct_rcs_read_render_timestamp)
+                .unwrap_or(0);
+            break (observed, timestamp);
         }
         if direct_rcs_now_tick() >= deadline {
-            break (observed, 0, 0, 0);
+            break (observed, 0);
         }
         for _ in 0..DIRECT_RCS_TIMEOUT_POLL_PAUSE_ITERS {
             core::hint::spin_loop();
@@ -656,12 +632,7 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
         quarantine_direct_rcs_lane(lane, "completion-marker-timeout-reboot-required");
     }
     complete_direct_rcs_submission_on_lane(lane, completed);
-    DirectRcsMarkerObservation {
-        observed,
-        gpu_host_observe_timestamp,
-        actual_gt_ratio: gt_ratio,
-        matched_cpu_tick: completion_tick,
-    }
+    (observed, gpu_host_observe_timestamp)
 }
 
 fn direct_rcs_poll_result_slot_elapsed(
@@ -817,11 +788,7 @@ fn direct_rcs_elapsed_ms_since(start_tick: u64) -> u64 {
 }
 
 fn direct_rcs_elapsed_us_since(start_tick: u64) -> u64 {
-    direct_rcs_elapsed_us_between(start_tick, direct_rcs_now_tick())
-}
-
-fn direct_rcs_elapsed_us_between(start_tick: u64, end_tick: u64) -> u64 {
-    let elapsed = end_tick.saturating_sub(start_tick);
+    let elapsed = direct_rcs_now_tick().saturating_sub(start_tick);
     let hz = embassy_time_driver::TICK_HZ;
     if hz == 0 {
         0

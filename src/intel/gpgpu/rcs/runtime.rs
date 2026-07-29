@@ -297,9 +297,6 @@ fn direct_rcs_map_state(dev: super::Dev, state: DirectRcsState) -> bool {
 }
 
 fn direct_rcs_init_ppgtt(state: DirectRcsState) -> bool {
-    if !super::gen12_integrated_cache_policy_ready() {
-        return false;
-    }
     let pml4_off = 0usize;
     let pdp_off = 4096usize;
     let pd_off = 8192usize;
@@ -375,7 +372,7 @@ fn direct_rcs_map_ppgtt_destination(
 /// display engine. PAT3/UC is the same producer-side cache contract used by
 /// Draw3D direct targets; ordinary kernels and resources remain PAT0/WB.
 fn direct_rcs_map_ppgtt_scanout(state: DirectRcsState, gpu: u64, phys: u64, len: usize) -> bool {
-    if !super::gen12_integrated_cache_policy_ready() {
+    if !super::gen12_integrated_pat_ready() {
         return false;
     }
     let pte_present_rw_pat3_uc = direct_rcs_ppgtt_pte_flags() | GEN8_PAGE_PWT | GEN8_PAGE_PCD;
@@ -445,13 +442,6 @@ fn direct_rcs_map_ppgtt_region(
     len: usize,
     entry_flags: u64,
 ) -> bool {
-    // This is the common leaf mapper for persistent and one-shot PPGTTs,
-    // including UI4's already-initialized context.  Keep the fail-closed
-    // policy below every caller so PAT0/WB mappings cannot bypass a revoked
-    // PAT+MOCS contract.
-    if !super::gen12_integrated_cache_policy_ready() {
-        return false;
-    }
     if len == 0 || !gpu.is_multiple_of(4096) || !phys.is_multiple_of(4096) {
         return false;
     }

@@ -45,8 +45,7 @@ use super::{
     focused_keyboard_state, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored,
     publish_frame_buffer, publish_gpgpu_scene_frame_buffer, publish_window_frame,
     replace_window_frame, set_window_cursor_icon, set_window_custom_cursor, set_window_placement,
-    take_owner_input_events, take_window_first_presentation, window_input_routes, window_placement,
-    writable_rgba_view,
+    take_owner_input_events, take_window_first_presentation, window_placement, writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -57,7 +56,6 @@ const MAX_TEXT_ROW_BYTES: usize = 1_024;
 const MAX_NATIVE_FONT_SIZES: usize = 32;
 const MAX_PENDING_POINTER_EVENTS: usize = 256;
 const MAX_PENDING_PAN_EVENTS: usize = 256;
-const MAX_INPUT_ROUTES: usize = 32;
 const RETAINED_TEXT_MASK_BATCH_CAPACITY: usize = 64;
 const TEXT_ROWS_WIRE_HEADER_BYTES: usize = 16;
 const TEXT_ROW_WIRE_HEADER_BYTES: usize = 12;
@@ -213,38 +211,6 @@ pub struct TrueosUi4KeyboardState {
 }
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4KeyboardState>() == 16 * 4);
-
-pub const UI4_INPUT_ROUTE_SELECTED_FOR_WINDOW: u32 = 1 << 0;
-pub const UI4_INPUT_ROUTE_APP_FOCUS: u32 = 1 << 1;
-pub const UI4_INPUT_ROUTE_VCURSOR: u32 = 1 << 2;
-pub const UI4_INPUT_ROUTE_KEYBOARD_PRESENT: u32 = 1 << 3;
-
-/// One cursor/combo route known to UI4, including the held keyboard state
-/// paired by HUT when present. A Blueprint can retain route identity after a
-/// player joins and detect that exact player's selection leaving its window.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
-pub struct TrueosUi4InputRouteState {
-    pub cursor_controller_id: u32,
-    pub cursor_slot_id: u32,
-    pub cursor_ep_target: u32,
-    pub cursor_hid_kind: u32,
-    pub combo_id: u32,
-    pub color_rgba: u32,
-    pub flags: u32,
-    pub keyboard_controller_id: u32,
-    pub keyboard_slot_id: u32,
-    pub keyboard_ep_target: u32,
-    pub keyboard_modifiers: u8,
-    pub keyboard_source_kind: u8,
-    pub virtual_keyboard: u8,
-    pub reserved0: u8,
-    pub keys: [u8; 6],
-    pub ascii: [u8; 6],
-    pub key_down_bits: [u32; 8],
-}
-
-const _: () = assert!(core::mem::size_of::<TrueosUi4InputRouteState>() == 88);
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -1110,79 +1076,6 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_keyboard_state(
     // SAFETY: the non-null output points to one writable ABI state record.
     unsafe { out.write(state) };
     0
-}
-
-/// Read all UI4 cursor/combo routes and their paired held-key state.
-///
-/// The returned count is the total route count. At most `out_cap` records are
-/// written. Records remain visible when their cursor selects another frame so
-/// a joined local player can be reported as missing focus without exposing
-/// another window's identity.
-pub unsafe extern "C" fn trueos_cabi_ui4_scene_input_routes(
-    window_id: u32,
-    out: *mut TrueosUi4InputRouteState,
-    out_cap: u32,
-) -> isize {
-    if out_cap != 0 && out.is_null() {
-        return ERROR_INVALID as isize;
-    }
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_input_routes(window_id, out, out_cap) };
-    }
-    let Some(owner) = blueprint_owner() else {
-        return ERROR_CONTEXT as isize;
-    };
-    let window = {
-        let mut surfaces = SURFACES.lock();
-        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-            return ERROR_NOT_FOUND as isize;
-        };
-        surface.window
-    };
-    route_owner_input_events(owner);
-    let routes = window_input_routes(owner, window);
-    for (index, route) in routes.iter().take(out_cap as usize).enumerate() {
-        let mut flags = 0;
-        if route.selected_for_window {
-            flags |= UI4_INPUT_ROUTE_SELECTED_FOR_WINDOW;
-        }
-        if route.app_focus {
-            flags |= UI4_INPUT_ROUTE_APP_FOCUS;
-        }
-        if route.vcursor {
-            flags |= UI4_INPUT_ROUTE_VCURSOR;
-        }
-        let mut state = TrueosUi4InputRouteState {
-            cursor_controller_id: route.source.controller_id,
-            cursor_slot_id: route.source.slot_id,
-            cursor_ep_target: route.source.ep_target,
-            cursor_hid_kind: u32::from(route.source.hid_kind),
-            combo_id: route.combo_id,
-            color_rgba: u32::from_le_bytes([
-                route.color.r,
-                route.color.g,
-                route.color.b,
-                route.color.a,
-            ]),
-            flags,
-            ..TrueosUi4InputRouteState::default()
-        };
-        if let Some(keyboard) = route.keyboard.as_ref() {
-            state.flags |= UI4_INPUT_ROUTE_KEYBOARD_PRESENT;
-            state.keyboard_controller_id = keyboard.controller_id;
-            state.keyboard_slot_id = keyboard.slot_id;
-            state.keyboard_ep_target = keyboard.ep_target;
-            state.keyboard_modifiers = keyboard.modifiers;
-            state.keyboard_source_kind = keyboard.source_kind as u8;
-            state.virtual_keyboard = u8::from(keyboard.virtual_device);
-            state.keys = keyboard.keys;
-            state.ascii = keyboard.ascii;
-            state.key_down_bits = keyboard.key_down_bits;
-        }
-        // SAFETY: the caller promised out_cap writable records.
-        unsafe { out.add(index).write(state) };
-    }
-    routes.len() as isize
 }
 
 /// Drain one VM owner's broker queue once and preserve every pointer, pan, and
@@ -3085,43 +2978,6 @@ unsafe fn guest_keyboard_state(window_id: u32, out: *mut TrueosUi4KeyboardState)
     0
 }
 
-unsafe fn guest_input_routes(
-    window_id: u32,
-    out: *mut TrueosUi4InputRouteState,
-    out_cap: u32,
-) -> isize {
-    let response_cap = (out_cap as usize).min(MAX_INPUT_ROUTES);
-    let mut response =
-        alloc::vec![0u8; response_cap * core::mem::size_of::<TrueosUi4InputRouteState>()];
-    let (status, data) = trueos_vm::vmcall::call_with_payload(
-        trueos_vm::vmcall::OP_BP_UI4_SCENE_INPUT_ROUTES,
-        window_id as u64,
-        response_cap as u64,
-        &[],
-        response.as_mut_slice(),
-    );
-    if status != trueos_vm::vmcall::STATUS_OK {
-        return ERROR_UI4 as isize;
-    }
-    let result = data as i64;
-    if result < 0 {
-        return result as isize;
-    }
-    let copied = (result as usize).min(response_cap);
-    if copied != 0 {
-        // SAFETY: out_cap covers response_cap records and the vmcall copied
-        // exactly the initialized response bytes for `copied` records.
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                response.as_ptr(),
-                out.cast::<u8>(),
-                copied * core::mem::size_of::<TrueosUi4InputRouteState>(),
-            );
-        }
-    }
-    result as isize
-}
-
 unsafe fn guest_text_rows(
     window_id: u32,
     font_id: u32,
@@ -3848,6 +3704,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         }
         _ => false,
     };
+    let retry_quads = upload.quads.clone();
     let clear = TrueosUi4SpriteQuad {
         sprite_id: 0,
         c0_x: 0.0,
@@ -3887,12 +3744,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
             };
             source.surface
         };
-        // Physical XeLP has proven the general sprite-quad source-over path,
-        // while the older compact alpha-rectangle source-over kernel can
-        // accept a submission without retiring its marker. Keep opaque 1:1
-        // copies eligible for the compact path, but route every blended sprite
-        // through the newer ordered quad worklist.
-        let conversion = if quad.sprite_id == 0 || quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0 {
+        let conversion = if quad.sprite_id == 0 {
             AlphaRectConversion::Unsupported
         } else {
             alpha_rect_descriptor(quad, source, destination)
@@ -4000,27 +3852,12 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
             Ok(submission) => submission,
             Err(Ui4CompositorSubmitError::Busy)
             | Err(Ui4CompositorSubmitError::SubmissionRejected) => {
-                // No hardware accepted this batch. Discard the write lease so
-                // the one-call Blueprint ABI can report a skipped frame and
-                // acquire normally on the next tick. Retaining this upload
-                // required a finish-only retry operation which the ABI does
-                // not expose and left clients wedged in an active frame.
-                surface.sprite_scene_upload = None;
-                surface.sprite_clear_rgba = None;
-                surface.pending_gpu_release = None;
-                let cancelled = surface.write_lease.take();
-                if let Some(cancelled) = cancelled {
-                    let replacement = (cancelled.frame != surface.frame).then_some(cancelled.frame);
-                    let _ = cancel_frame_buffer(cancelled);
-                    if let Some(replacement) = replacement
-                        && let Err(error) = destroy_frame(replacement)
-                        && error == FramePoolError::Busy
-                    {
-                        RETIRED_FRAMES.lock().push(replacement);
-                    }
-                }
+                surface.sprite_scene_upload = Some(SpriteSceneUpload {
+                    expected: retry_quads.len(),
+                    quads: retry_quads.clone(),
+                });
                 crate::log_warn!(target: "ui4/blueprint-frame";
-                    "sprite scene skipped owner={:?} window={} frame={} buffer={} batch={}/{} descriptors={} backend={} reason=ui4-compositor-admission-timeout hardware_accepted=0 action=cancel-unsubmitted-frame+continue\n",
+                    "sprite scene deferred owner={:?} window={} frame={} buffer={} batch={}/{} descriptors={} backend={} reason=ui4-compositor-admission-timeout hardware_accepted=0 action=retain-upload+retry-finish\n",
                     owner,
                     window_id,
                     lease.frame.raw(),

@@ -57,65 +57,6 @@ RCS_PROBE_BUCKET_SCHEMA = (
     "signature:samples:valid:queue_to_batch_us:preamble_us:walkers_us:"
     "epilogue_us:release_to_observe_us:queue_to_observe_us"
 )
-GT_STATE_BUCKET_SCHEMA = (
-    "signature:samples:start_active:end_active:start_ratio_sum:end_ratio_sum"
-)
-GT_STATE_SAMPLING = "first+power-of-two-per-signature"
-GT_STATE_OBSERVATION = "cpu-mmio-pre-submit+post-observe"
-GT_STATE_REGISTER = "gen12-rpstat1"
-GEN12_CAGF_SHIFT = 11
-GEN12_CAGF_MASK = 0x1FF
-GEN9_SW_REQ_UNSLICE_RATIO_SHIFT = 23
-GEN12_GT0_PERF_LIMIT_REASONS_MASK = 0x0DE3
-M3_ADMISSION_BDF = "00:02.0"
-M3_ADMISSION_VENDOR = 0x8086
-M3_ADMISSION_DEVICE = 0x4680
-M3_ADMISSION_REVISION = 0x0C
-M3_ADMISSION_GLOBAL = 0x00000005
-M3_ADMISSION_L3CC_PAIR = 0x00100030
-M3_ADMISSION_CHECKPOINTS = (
-    "boot-init+post-guc+turn-start+first-lfm-retire+turn-end"
-)
-M3_ADMISSION_EXPECTED_TARGET = "8086:4680:0C"
-M3_ADMISSION_BOOLEAN_FIELDS = (
-    "available",
-    "boot_seen",
-    "boot_forcewake",
-    "boot_pat",
-    "boot_mocs",
-    "post_guc_seen",
-    "post_guc_cache",
-    "first_retire_seen",
-    "first_retire_cache",
-    "start_pat_available",
-    "start_pat",
-    "start_mocs_available",
-    "start_mocs",
-    "start_cache",
-    "end_pat_available",
-    "end_pat",
-    "end_mocs_available",
-    "end_mocs",
-    "end_cache",
-    "guc_boot",
-    "guc_firmware",
-    "guc_submission",
-)
-M3_ADMISSION_INTEGER_FIELDS = (
-    "schema",
-    "vendor",
-    "device",
-    "revision",
-    *M3_ADMISSION_BOOLEAN_FIELDS,
-    "boot_before_global",
-    "boot_before_l3cc_pair",
-    "boot_after_global",
-    "boot_after_l3cc_pair",
-    "end_global",
-    "end_l3cc_pair",
-    "expected_global",
-    "expected_l3cc_pair",
-)
 
 FIELD_RE = re.compile(
     r"(?<!\S)([A-Za-z_][A-Za-z0-9_]*)=(\"(?:[^\"\\]|\\.)*\"|\S+)"
@@ -192,8 +133,6 @@ class TurnCapture:
     done: Record | None = None
     cpu: Record | None = None
     rcs_probe: Record | None = None
-    gt_state: Record | None = None
-    admission: Record | None = None
     resident: ResidentContext | None = None
     pack: PackContext | None = None
     signatures: dict[str, Record] = field(default_factory=dict)
@@ -245,16 +184,6 @@ class RcsProbeBucket:
     samples: int
     valid: int
     phase_us: Mapping[str, int]
-
-
-@dataclass(frozen=True)
-class GtStateBucket:
-    signature: str
-    samples: int
-    start_active: int
-    end_active: int
-    start_ratio_sum: int
-    end_ratio_sum: int
 
 
 @dataclass(frozen=True)
@@ -392,59 +321,6 @@ def parse_rcs_probe_buckets(
     return buckets
 
 
-def parse_gt_state_active_avg_mhz(
-    record: Record | None,
-) -> dict[str, int] | None:
-    if record is None:
-        return None
-    encoded = record.fields.get("active_avg_mhz")
-    if encoded is None:
-        return None
-    averages: dict[str, int] = {}
-    for item in encoded.split(","):
-        name, separator, value = item.partition(":")
-        if not separator or name in averages:
-            return None
-        try:
-            averages[name] = int(value, 0)
-        except ValueError:
-            return None
-    return averages if set(averages) == {"start", "end"} else None
-
-
-def parse_gt_state_buckets(
-    record: Record | None,
-) -> dict[str, GtStateBucket] | None:
-    if record is None:
-        return None
-    encoded = record.fields.get("buckets")
-    if encoded is None:
-        return None
-    buckets: dict[str, GtStateBucket] = {}
-    if not encoded:
-        return buckets
-    for item in encoded.split("|"):
-        parts = item.split(":")
-        if len(parts) != 6:
-            return None
-        signature = parts[0]
-        if not signature or signature in buckets:
-            return None
-        try:
-            values = [int(value, 0) for value in parts[1:]]
-        except ValueError:
-            return None
-        buckets[signature] = GtStateBucket(
-            signature=signature,
-            samples=values[0],
-            start_active=values[1],
-            end_active=values[2],
-            start_ratio_sum=values[3],
-            end_ratio_sum=values[4],
-        )
-    return buckets
-
-
 def parse_log_text(text: str, source: str = "<memory>") -> ParsedLog:
     """Parse all Lumen turn records in *text* in their stream order."""
 
@@ -546,70 +422,6 @@ def parse_log_text(text: str, source: str = "<memory>") -> ParsedLog:
                 )
                 continue
             last_done.rcs_probe = Record(
-                source=source,
-                line_number=line_number,
-                fields=fields,
-            )
-            continue
-
-        if payload.startswith("lfm25: turn-gt-state "):
-            fields = parse_fields(payload)
-            if last_done is None:
-                continue
-            if fields.get("stage") != "done":
-                last_done.parse_issues.append(
-                    f"GT state stage is not done at line {line_number}"
-                )
-                continue
-            declared = fields.get("turn")
-            done_turn = (
-                last_done.done.fields.get("turn")
-                if last_done.done is not None
-                else None
-            )
-            if declared != done_turn:
-                last_done.parse_issues.append(
-                    "GT state turn does not match preceding done record"
-                )
-                continue
-            if last_done.gt_state is not None:
-                last_done.parse_issues.append(
-                    f"duplicate GT state record at line {line_number}"
-                )
-                continue
-            last_done.gt_state = Record(
-                source=source,
-                line_number=line_number,
-                fields=fields,
-            )
-            continue
-
-        if payload.startswith("lfm25: turn-admission "):
-            fields = parse_fields(payload)
-            if last_done is None:
-                continue
-            if fields.get("stage") != "done":
-                last_done.parse_issues.append(
-                    f"admission stage is not done at line {line_number}"
-                )
-                continue
-            declared = fields.get("turn")
-            done_turn = (
-                last_done.done.fields.get("turn")
-                if last_done.done is not None
-                else None
-            )
-            if declared != done_turn:
-                last_done.parse_issues.append(
-                    "admission turn does not match preceding done record"
-                )
-                continue
-            if last_done.admission is not None:
-                last_done.parse_issues.append(
-                    f"duplicate admission record at line {line_number}"
-                )
-                continue
-            last_done.admission = Record(
                 source=source,
                 line_number=line_number,
                 fields=fields,
@@ -1036,351 +848,6 @@ def validate_rcs_probe(capture: TurnCapture, issues: list[str]) -> None:
                 )
 
 
-def ratio_to_nearest_mhz(ratio: int) -> int:
-    """Match the Gen9+ 16.67 MHz ratio conversion used by the kernel."""
-
-    return (ratio * 50 + 1) // 3
-
-
-def active_ratio_average_mhz(ratio_sum: int, active: int) -> int:
-    """Match Lumen's nearest-MHz average, including the zero-sample case."""
-
-    if active == 0:
-        return 0
-    denominator = active * 3
-    return (ratio_sum * 50 + denominator // 2) // denominator
-
-
-def validate_gt_state(capture: TurnCapture, issues: list[str]) -> None:
-    record = capture.gt_state
-    if record is None:
-        return
-
-    schema = require_int(record, "schema", "GT state", issues)
-    if schema is not None and schema != 1:
-        issues.append(f"GT state schema={schema}, expected 1")
-    if record.fields.get("scope") != "turn":
-        issues.append(
-            f"GT state scope={record.fields.get('scope')!r}, expected 'turn'"
-        )
-    for field_name, expected in (
-        ("sampling", GT_STATE_SAMPLING),
-        ("observation", GT_STATE_OBSERVATION),
-        ("register", GT_STATE_REGISTER),
-        ("bucket_schema", GT_STATE_BUCKET_SCHEMA),
-    ):
-        observed = record.fields.get(field_name)
-        if observed != expected:
-            issues.append(
-                f"GT state {field_name}={observed!r}, expected {expected!r}"
-            )
-
-    integer_fields = (
-        "available",
-        "samples",
-        "start_active",
-        "end_active",
-        "start_zero",
-        "end_zero",
-        "start_ratio_sum",
-        "end_ratio_sum",
-        "final_actual_ratio",
-        "final_actual_mhz",
-        "requested_ratio",
-        "requested_mhz",
-        "rp0_mhz",
-        "rpe_mhz",
-        "rpn_mhz",
-        "throttle_reasons",
-        "rpstat1_raw",
-        "rpnswreq_raw",
-    )
-    aggregate = {
-        key: require_int(record, key, "GT state", issues)
-        for key in integer_fields
-    }
-    for key, value in aggregate.items():
-        if value is not None and value < 0:
-            issues.append(f"GT state {key}={value}, expected non-negative")
-    available = aggregate["available"]
-    if available is not None and available not in (0, 1):
-        issues.append(
-            f"GT state available={available}, expected 0 or 1"
-        )
-
-    samples = aggregate["samples"]
-    averages = parse_gt_state_active_avg_mhz(record)
-    if averages is None:
-        issues.append("GT state has missing or invalid active_avg_mhz")
-    else:
-        for endpoint, value in averages.items():
-            if value < 0:
-                issues.append(
-                    f"GT state {endpoint} active_avg_mhz={value}, "
-                    "expected non-negative"
-                )
-
-    for endpoint in ("start", "end"):
-        active = aggregate[f"{endpoint}_active"]
-        zero = aggregate[f"{endpoint}_zero"]
-        ratio_sum = aggregate[f"{endpoint}_ratio_sum"]
-        if (
-            samples is not None
-            and samples >= 0
-            and active is not None
-            and active >= 0
-        ):
-            if active > samples:
-                issues.append(
-                    f"GT state {endpoint}_active={active}, "
-                    f"exceeds samples={samples}"
-                )
-            elif zero is not None and zero != samples - active:
-                issues.append(
-                    f"GT state {endpoint}_zero={zero}, expected "
-                    f"samples-active={samples - active}"
-                )
-        if active is not None and active >= 0 and ratio_sum is not None:
-            if (active == 0) != (ratio_sum == 0):
-                issues.append(
-                    f"GT state {endpoint}_active={active} and "
-                    f"{endpoint}_ratio_sum={ratio_sum} violate the "
-                    "zero iff inactive contract"
-                )
-            if ratio_sum >= 0 and averages is not None:
-                expected_average = active_ratio_average_mhz(
-                    ratio_sum,
-                    active,
-                )
-                observed_average = averages[endpoint]
-                if observed_average != expected_average:
-                    issues.append(
-                        f"GT state {endpoint} active_avg_mhz="
-                        f"{observed_average}, expected {expected_average}"
-                    )
-
-    for prefix, ratio_key, mhz_key in (
-        ("final actual", "final_actual_ratio", "final_actual_mhz"),
-        ("requested", "requested_ratio", "requested_mhz"),
-    ):
-        ratio = aggregate[ratio_key]
-        mhz = aggregate[mhz_key]
-        if ratio is not None and ratio >= 0 and mhz is not None:
-            if ratio > GEN12_CAGF_MASK:
-                issues.append(
-                    f"GT state {prefix} ratio={ratio}, "
-                    f"exceeds Gen12 field maximum={GEN12_CAGF_MASK}"
-                )
-            expected_mhz = ratio_to_nearest_mhz(ratio)
-            if mhz != expected_mhz:
-                issues.append(
-                    f"GT state {prefix} MHz={mhz}, "
-                    f"expected ratio conversion={expected_mhz}"
-                )
-
-    for prefix, ratio_key, raw_key, shift in (
-        (
-            "final actual",
-            "final_actual_ratio",
-            "rpstat1_raw",
-            GEN12_CAGF_SHIFT,
-        ),
-        (
-            "requested",
-            "requested_ratio",
-            "rpnswreq_raw",
-            GEN9_SW_REQ_UNSLICE_RATIO_SHIFT,
-        ),
-    ):
-        ratio = aggregate[ratio_key]
-        raw = aggregate[raw_key]
-        if ratio is not None and ratio >= 0 and raw is not None and raw >= 0:
-            decoded = (raw >> shift) & GEN12_CAGF_MASK
-            if ratio != decoded:
-                issues.append(
-                    f"GT state {prefix} ratio={ratio}, "
-                    f"raw {raw_key} decodes to {decoded}"
-                )
-
-    throttle_reasons = aggregate["throttle_reasons"]
-    if (
-        throttle_reasons is not None
-        and throttle_reasons >= 0
-        and throttle_reasons & ~GEN12_GT0_PERF_LIMIT_REASONS_MASK
-    ):
-        issues.append(
-            f"GT state throttle_reasons=0x{throttle_reasons:X}, "
-            "contains bits outside the Gen12 GT0 reason mask"
-        )
-
-    rp0 = aggregate["rp0_mhz"]
-    rpe = aggregate["rpe_mhz"]
-    rpn = aggregate["rpn_mhz"]
-    caps = (rpn, rpe, rp0)
-    if all(value is not None and value >= 0 for value in caps):
-        assert rpn is not None and rpe is not None and rp0 is not None
-        if not all(value > 0 for value in caps):
-            issues.append(
-                f"GT state fused frequencies RPn={rpn}, RPe={rpe}, "
-                f"RP0={rp0}, expected all nonzero"
-            )
-        if not rpn <= rpe <= rp0:
-            issues.append(
-                f"GT state fused frequencies RPn={rpn}, RPe={rpe}, "
-                f"RP0={rp0}, expected RPn<=RPe<=RP0"
-            )
-        if any(value % 50 != 0 for value in caps):
-            issues.append(
-                f"GT state fused frequencies RPn={rpn}, RPe={rpe}, "
-                f"RP0={rp0}, expected 50 MHz steps"
-            )
-
-    buckets = parse_gt_state_buckets(record)
-    if buckets is None:
-        issues.append("GT state has missing or invalid buckets")
-        return
-
-    labels = set(buckets)
-    expected_labels = set(SIGNATURE_LOGICAL_BYTES)
-    missing = sorted(expected_labels - labels)
-    extra = sorted(labels - expected_labels)
-    if missing:
-        issues.append("GT state buckets missing: " + ",".join(missing))
-    if extra:
-        issues.append("unexpected GT state buckets: " + ",".join(extra))
-
-    bucket_totals = {
-        "samples": 0,
-        "start_active": 0,
-        "end_active": 0,
-        "start_ratio_sum": 0,
-        "end_ratio_sum": 0,
-    }
-    for label, bucket in buckets.items():
-        values = {
-            "samples": bucket.samples,
-            "start_active": bucket.start_active,
-            "end_active": bucket.end_active,
-            "start_ratio_sum": bucket.start_ratio_sum,
-            "end_ratio_sum": bucket.end_ratio_sum,
-        }
-        for key, value in values.items():
-            if value < 0:
-                issues.append(
-                    f"GT state bucket {label} {key}={value}, "
-                    "expected non-negative"
-                )
-            bucket_totals[key] += value
-        for endpoint in ("start", "end"):
-            active = values[f"{endpoint}_active"]
-            ratio_sum = values[f"{endpoint}_ratio_sum"]
-            if active > bucket.samples:
-                issues.append(
-                    f"GT state bucket {label} {endpoint}_active={active}, "
-                    f"exceeds samples={bucket.samples}"
-                )
-            if active >= 0 and (active == 0) != (ratio_sum == 0):
-                issues.append(
-                    f"GT state bucket {label} {endpoint}_active={active} "
-                    f"and {endpoint}_ratio_sum={ratio_sum} violate the "
-                    "zero iff inactive contract"
-                )
-
-    for key, observed in bucket_totals.items():
-        expected = aggregate[key]
-        if expected is not None and observed != expected:
-            issues.append(
-                f"GT state bucket {key} sum={observed}, aggregate={expected}"
-            )
-
-    rcs_buckets = parse_rcs_probe_buckets(capture.rcs_probe)
-    if capture.rcs_probe is not None:
-        rcs_samples = parse_int(capture.rcs_probe, "samples")
-        if (
-            samples is not None
-            and rcs_samples is not None
-            and samples != rcs_samples
-        ):
-            issues.append(
-                f"GT state samples={samples}, RCS probe samples={rcs_samples}"
-            )
-        if rcs_buckets is not None:
-            for label in labels & set(rcs_buckets):
-                gt_samples = buckets[label].samples
-                rcs_samples = rcs_buckets[label].samples
-                if gt_samples != rcs_samples:
-                    issues.append(
-                        f"GT state bucket {label} samples={gt_samples}, "
-                        f"RCS probe has {rcs_samples}"
-                    )
-
-
-def validate_m3_admission(capture: TurnCapture, issues: list[str]) -> None:
-    record = capture.admission
-    if record is None:
-        return
-
-    schema = require_int(record, "schema", "M3 admission", issues)
-    if schema is not None and schema != 1:
-        issues.append(f"M3 admission schema={schema}, expected 1")
-    if record.fields.get("scope") != "turn":
-        issues.append(
-            "M3 admission "
-            f"scope={record.fields.get('scope')!r}, expected 'turn'"
-        )
-
-    for field_name, expected in (
-        ("bdf", M3_ADMISSION_BDF),
-        ("checkpoints", M3_ADMISSION_CHECKPOINTS),
-        ("expected_target", M3_ADMISSION_EXPECTED_TARGET),
-    ):
-        observed = record.fields.get(field_name)
-        if observed != expected:
-            issues.append(
-                f"M3 admission {field_name}={observed!r}, "
-                f"expected {expected!r}"
-            )
-
-    values = {
-        key: require_int(record, key, "M3 admission", issues)
-        for key in M3_ADMISSION_INTEGER_FIELDS
-        if key != "schema"
-    }
-    for field_name in M3_ADMISSION_BOOLEAN_FIELDS:
-        observed = values[field_name]
-        if observed is not None and observed != 1:
-            issues.append(
-                f"M3 admission {field_name}={observed}, expected 1"
-            )
-
-    for field_name in ("boot_before_global", "boot_before_l3cc_pair"):
-        observed = values[field_name]
-        if observed is not None and observed < 0:
-            issues.append(
-                f"M3 admission {field_name}={observed}, "
-                "expected non-negative"
-            )
-
-    exact_integer_fields = {
-        "vendor": M3_ADMISSION_VENDOR,
-        "device": M3_ADMISSION_DEVICE,
-        "revision": M3_ADMISSION_REVISION,
-        "boot_after_global": M3_ADMISSION_GLOBAL,
-        "boot_after_l3cc_pair": M3_ADMISSION_L3CC_PAIR,
-        "end_global": M3_ADMISSION_GLOBAL,
-        "end_l3cc_pair": M3_ADMISSION_L3CC_PAIR,
-        "expected_global": M3_ADMISSION_GLOBAL,
-        "expected_l3cc_pair": M3_ADMISSION_L3CC_PAIR,
-    }
-    for field_name, expected in exact_integer_fields.items():
-        observed = values[field_name]
-        if observed is not None and observed != expected:
-            issues.append(
-                f"M3 admission {field_name}={fmt_hex(observed)}, "
-                f"expected {fmt_hex(expected)}"
-            )
-
-
 def calculate_metrics(capture: TurnCapture) -> TurnMetrics:
     done = capture.done
     prefill = capture.prefill
@@ -1454,8 +921,6 @@ def validate_turn(
     *,
     require_detail: bool = False,
     require_rcs_probe: bool = False,
-    require_gt_state: bool = False,
-    require_m3_admission: bool = False,
 ) -> TurnResult:
     issues = list(capture.parse_issues)
     if capture.done is None:
@@ -1477,32 +942,6 @@ def validate_turn(
         issues.append("missing turn-cpu detail record")
     if require_rcs_probe and capture.rcs_probe is None:
         issues.append("missing turn-rcs-probe record")
-    if require_rcs_probe and capture.rcs_probe is not None:
-        samples = parse_int(capture.rcs_probe, "samples")
-        valid = parse_int(capture.rcs_probe, "valid")
-        if samples is not None and samples <= 0:
-            issues.append(
-                f"turn-rcs-probe samples={samples}, expected positive"
-            )
-        if valid is not None and valid <= 0:
-            issues.append(
-                f"turn-rcs-probe valid={valid}, expected positive"
-            )
-    if require_gt_state and capture.gt_state is None:
-        issues.append("missing turn-gt-state record")
-    if require_gt_state and capture.gt_state is not None:
-        available = parse_int(capture.gt_state, "available")
-        if available != 1:
-            issues.append(
-                f"turn-gt-state available={available}, expected 1"
-            )
-        samples = parse_int(capture.gt_state, "samples")
-        if samples is not None and samples <= 0:
-            issues.append(
-                f"turn-gt-state samples={samples}, expected positive"
-            )
-    if require_m3_admission and capture.admission is None:
-        issues.append("missing turn-admission record")
 
     records = [
         (stage, record)
@@ -1594,8 +1033,6 @@ def validate_turn(
 
     validate_signatures(capture, issues)
     validate_rcs_probe(capture, issues)
-    validate_gt_state(capture, issues)
-    validate_m3_admission(capture, issues)
 
     if capture.cpu is not None:
         cpu_values = {
@@ -1654,8 +1091,6 @@ def validate_campaign_results(
     results: Sequence[TurnResult],
     *,
     require_rcs_probe: bool = False,
-    require_gt_state: bool = False,
-    require_m3_admission: bool = False,
 ) -> list[TurnResult]:
     """Select fresh sessions and apply the ``hi, hi, sky`` contract."""
 
@@ -1746,8 +1181,6 @@ def validate_campaign_results(
             capture,
             require_detail=True,
             require_rcs_probe=require_rcs_probe,
-            require_gt_state=require_gt_state,
-            require_m3_admission=require_m3_admission,
         )
         issues = list(detailed.issues)
         done = capture.done
@@ -1802,10 +1235,6 @@ def fmt_int(value: int | None) -> str:
 
 def fmt_float(value: float | None, digits: int = 2) -> str:
     return "-" if value is None else f"{value:.{digits}f}"
-
-
-def fmt_hex(value: int | None) -> str:
-    return "-" if value is None else f"0x{value:X}"
 
 
 def signature_gbps(record: Record) -> float | None:
@@ -1874,72 +1303,6 @@ def rcs_probe_dict(record: Record | None) -> dict[str, object] | None:
     }
 
 
-def gt_state_dict(record: Record | None) -> dict[str, object] | None:
-    if record is None:
-        return None
-    buckets = parse_gt_state_buckets(record)
-    return {
-        "line": record.line_number,
-        "schema": parse_int(record, "schema"),
-        "available": parse_int(record, "available"),
-        "samples": parse_int(record, "samples"),
-        "start_active": parse_int(record, "start_active"),
-        "end_active": parse_int(record, "end_active"),
-        "start_zero": parse_int(record, "start_zero"),
-        "end_zero": parse_int(record, "end_zero"),
-        "start_ratio_sum": parse_int(record, "start_ratio_sum"),
-        "end_ratio_sum": parse_int(record, "end_ratio_sum"),
-        "active_avg_mhz": parse_gt_state_active_avg_mhz(record),
-        "final_actual_ratio": parse_int(record, "final_actual_ratio"),
-        "final_actual_mhz": parse_int(record, "final_actual_mhz"),
-        "requested_ratio": parse_int(record, "requested_ratio"),
-        "requested_mhz": parse_int(record, "requested_mhz"),
-        "rp0_mhz": parse_int(record, "rp0_mhz"),
-        "rpe_mhz": parse_int(record, "rpe_mhz"),
-        "rpn_mhz": parse_int(record, "rpn_mhz"),
-        "throttle_reasons": parse_int(record, "throttle_reasons"),
-        "rpstat1_raw": parse_int(record, "rpstat1_raw"),
-        "rpnswreq_raw": parse_int(record, "rpnswreq_raw"),
-        "sampling": record.fields.get("sampling"),
-        "observation": record.fields.get("observation"),
-        "register": record.fields.get("register"),
-        "bucket_schema": record.fields.get("bucket_schema"),
-        "buckets": (
-            [
-                {
-                    "signature": bucket.signature,
-                    "samples": bucket.samples,
-                    "start_active": bucket.start_active,
-                    "end_active": bucket.end_active,
-                    "start_ratio_sum": bucket.start_ratio_sum,
-                    "end_ratio_sum": bucket.end_ratio_sum,
-                }
-                for bucket in buckets.values()
-            ]
-            if buckets is not None
-            else None
-        ),
-    }
-
-
-def m3_admission_dict(record: Record | None) -> dict[str, object] | None:
-    if record is None:
-        return None
-    return {
-        "line": record.line_number,
-        "stage": record.fields.get("stage"),
-        "scope": record.fields.get("scope"),
-        "turn": parse_int(record, "turn"),
-        "bdf": record.fields.get("bdf"),
-        **{
-            field_name: parse_int(record, field_name)
-            for field_name in M3_ADMISSION_INTEGER_FIELDS
-        },
-        "checkpoints": record.fields.get("checkpoints"),
-        "expected_target": record.fields.get("expected_target"),
-    }
-
-
 def result_dict(result: TurnResult, run_number: int) -> dict[str, object]:
     capture = result.capture
     done = capture.done
@@ -1989,8 +1352,6 @@ def result_dict(result: TurnResult, run_number: int) -> dict[str, object]:
             else None
         ),
         "rcs_probe": rcs_probe_dict(capture.rcs_probe),
-        "gt_state": gt_state_dict(capture.gt_state),
-        "admission": m3_admission_dict(capture.admission),
         "expected": (
             {
                 "callbacks": expected.callbacks,
@@ -2167,96 +1528,6 @@ def print_text_report(
                         f"q2o_us={bucket.phase_us['queue_to_observe']}"
                     )
 
-        if capture.gt_state is not None:
-            gt_state = capture.gt_state
-            averages = parse_gt_state_active_avg_mhz(gt_state)
-            print(
-                "  gt_state "
-                f"line={gt_state.line_number} "
-                f"schema={gt_state.fields.get('schema', '-')} "
-                f"available={gt_state.fields.get('available', '-')} "
-                f"samples={gt_state.fields.get('samples', '-')} "
-                f"start_active={gt_state.fields.get('start_active', '-')} "
-                f"start_zero={gt_state.fields.get('start_zero', '-')} "
-                f"start_avg_mhz="
-                f"{fmt_int(averages.get('start') if averages else None)} "
-                f"end_active={gt_state.fields.get('end_active', '-')} "
-                f"end_zero={gt_state.fields.get('end_zero', '-')} "
-                f"end_avg_mhz="
-                f"{fmt_int(averages.get('end') if averages else None)} "
-                f"final_actual_ratio="
-                f"{gt_state.fields.get('final_actual_ratio', '-')} "
-                f"final_actual_mhz="
-                f"{gt_state.fields.get('final_actual_mhz', '-')} "
-                f"requested_ratio="
-                f"{gt_state.fields.get('requested_ratio', '-')} "
-                f"requested_mhz="
-                f"{gt_state.fields.get('requested_mhz', '-')} "
-                f"rp0_mhz={gt_state.fields.get('rp0_mhz', '-')} "
-                f"rpe_mhz={gt_state.fields.get('rpe_mhz', '-')} "
-                f"rpn_mhz={gt_state.fields.get('rpn_mhz', '-')} "
-                f"throttle_reasons="
-                f"{fmt_hex(parse_int(gt_state, 'throttle_reasons'))} "
-                f"rpstat1_raw={fmt_hex(parse_int(gt_state, 'rpstat1_raw'))} "
-                f"rpnswreq_raw={fmt_hex(parse_int(gt_state, 'rpnswreq_raw'))}"
-            )
-            buckets = parse_gt_state_buckets(gt_state)
-            if buckets is not None:
-                print("  gt_state_buckets")
-                for label in SIGNATURE_LOGICAL_BYTES:
-                    bucket = buckets.get(label)
-                    if bucket is None:
-                        continue
-                    print(
-                        f"    {label:<13} "
-                        f"samples={bucket.samples} "
-                        f"start_active={bucket.start_active} "
-                        f"end_active={bucket.end_active} "
-                        f"start_ratio_sum={bucket.start_ratio_sum} "
-                        f"end_ratio_sum={bucket.end_ratio_sum}"
-                    )
-
-        if capture.admission is not None:
-            admission = capture.admission
-            print(
-                "  admission "
-                f"line={admission.line_number} "
-                f"schema={admission.fields.get('schema', '-')} "
-                f"bdf={admission.fields.get('bdf', '-')} "
-                f"vendor={fmt_hex(parse_int(admission, 'vendor'))} "
-                f"device={fmt_hex(parse_int(admission, 'device'))} "
-                f"revision={fmt_hex(parse_int(admission, 'revision'))} "
-                f"checkpoints={admission.fields.get('checkpoints', '-')} "
-                f"expected_target="
-                f"{admission.fields.get('expected_target', '-')}"
-            )
-            print(
-                "  admission_evidence "
-                + " ".join(
-                    f"{field_name}="
-                    f"{fmt_int(parse_int(admission, field_name))}"
-                    for field_name in M3_ADMISSION_BOOLEAN_FIELDS
-                )
-            )
-            print(
-                "  admission_cache "
-                f"boot_before_global="
-                f"{fmt_hex(parse_int(admission, 'boot_before_global'))} "
-                f"boot_before_l3cc_pair="
-                f"{fmt_hex(parse_int(admission, 'boot_before_l3cc_pair'))} "
-                f"boot_after_global="
-                f"{fmt_hex(parse_int(admission, 'boot_after_global'))} "
-                f"boot_after_l3cc_pair="
-                f"{fmt_hex(parse_int(admission, 'boot_after_l3cc_pair'))} "
-                f"end_global={fmt_hex(parse_int(admission, 'end_global'))} "
-                f"end_l3cc_pair="
-                f"{fmt_hex(parse_int(admission, 'end_l3cc_pair'))} "
-                f"expected_global="
-                f"{fmt_hex(parse_int(admission, 'expected_global'))} "
-                f"expected_l3cc_pair="
-                f"{fmt_hex(parse_int(admission, 'expected_l3cc_pair'))}"
-            )
-
         if capture.signatures:
             print("  signatures")
             for label in SIGNATURE_LOGICAL_BYTES:
@@ -2342,22 +1613,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--require-gt-state",
-        action="store_true",
-        help=(
-            "fail completed turns that do not include schema-1 "
-            "turn-gt-state telemetry"
-        ),
-    )
-    parser.add_argument(
-        "--require-m3-admission",
-        action="store_true",
-        help=(
-            "fail completed turns that do not include valid schema-1 "
-            "turn-admission evidence for the M3 target and cache policy"
-        ),
-    )
-    parser.add_argument(
         "--json",
         action="store_true",
         help="write a machine-readable report instead of the text report",
@@ -2386,8 +1641,6 @@ def run(argv: Sequence[str] | None = None) -> int:
         validate_turn(
             capture,
             require_rcs_probe=args.require_rcs_probe,
-            require_gt_state=args.require_gt_state,
-            require_m3_admission=args.require_m3_admission,
         )
         for capture in captures
     ]
@@ -2395,8 +1648,6 @@ def run(argv: Sequence[str] | None = None) -> int:
         results = validate_campaign_results(
             results,
             require_rcs_probe=args.require_rcs_probe,
-            require_gt_state=args.require_gt_state,
-            require_m3_admission=args.require_m3_admission,
         )
     completed = sum(capture.has_done for capture in captures)
     campaign_selected = sum(

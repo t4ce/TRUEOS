@@ -822,9 +822,6 @@ fn direct_blt_map_state(dev: super::Dev, state: DirectBltState) -> bool {
 }
 
 fn direct_blt_init_ppgtt(state: DirectBltState) -> bool {
-    if !super::gen12_integrated_cache_policy_ready() {
-        return false;
-    }
     let pml4_off = 0usize;
     let pdp_off = 4096usize;
     let pd_off = 8192usize;
@@ -894,9 +891,6 @@ fn direct_blt_map_ppgtt_region(
     len: usize,
     entry_flags: u64,
 ) -> bool {
-    if !super::gen12_integrated_cache_policy_ready() {
-        return false;
-    }
     let pt_off = 12288usize;
     for page in 0..len.div_ceil(4096) {
         let va_page = (gpu >> 12) + page as u64;

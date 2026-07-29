@@ -248,9 +248,7 @@ impl IntelGucScheduler {
 }
 
 pub(crate) fn ready() -> bool {
-    crate::intel::guc::ready()
-        && crate::intel::guc_ctb::enabled()
-        && crate::intel::gen12_integrated_cache_policy_ready()
+    crate::intel::guc::ready() && crate::intel::guc_ctb::enabled()
 }
 
 /// Register one stable HWLRCA with GuC and return its physical context token.

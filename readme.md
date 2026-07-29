@@ -441,7 +441,7 @@ go2 = ⢈ ⡈ ⡐ ⡠ ⣀ ⢄ ⢂ ⢁ ⡁
 ConPink 	FF_55_FF 
 ConBlue 	08_18_30
 ConWhite 	FF_FF_FF
-hyper https://raw.githubusercontent.com/pciutils/pciids/master/pci.ids trueos/pci/pci.ids
+
 
 **bold**
 *italic*

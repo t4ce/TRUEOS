@@ -10,7 +10,6 @@ pub(crate) enum Lfm25Q8ProjectError {
     EncodeFailed,
     SubmitFailed,
     CompletionTimeout,
-    CachePolicyLost,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -175,10 +174,6 @@ pub(crate) struct Lfm25Q8PhaseProbeStats {
     pub(crate) epilogue_us: u64,
     pub(crate) release_to_observe_us: u64,
     pub(crate) queue_to_observe_us: u64,
-    pub(crate) gt_start_active_samples: u64,
-    pub(crate) gt_end_active_samples: u64,
-    pub(crate) gt_start_ratio_sum: u64,
-    pub(crate) gt_end_ratio_sum: u64,
 }
 
 impl Lfm25Q8PhaseProbeStats {
@@ -198,18 +193,6 @@ impl Lfm25Q8PhaseProbeStats {
             queue_to_observe_us: self
                 .queue_to_observe_us
                 .saturating_sub(before.queue_to_observe_us),
-            gt_start_active_samples: self
-                .gt_start_active_samples
-                .saturating_sub(before.gt_start_active_samples),
-            gt_end_active_samples: self
-                .gt_end_active_samples
-                .saturating_sub(before.gt_end_active_samples),
-            gt_start_ratio_sum: self
-                .gt_start_ratio_sum
-                .saturating_sub(before.gt_start_ratio_sum),
-            gt_end_ratio_sum: self
-                .gt_end_ratio_sum
-                .saturating_sub(before.gt_end_ratio_sum),
         }
     }
 
@@ -228,16 +211,6 @@ impl Lfm25Q8PhaseProbeStats {
         self.queue_to_observe_us = self
             .queue_to_observe_us
             .saturating_add(other.queue_to_observe_us);
-        self.gt_start_active_samples = self
-            .gt_start_active_samples
-            .saturating_add(other.gt_start_active_samples);
-        self.gt_end_active_samples = self
-            .gt_end_active_samples
-            .saturating_add(other.gt_end_active_samples);
-        self.gt_start_ratio_sum = self
-            .gt_start_ratio_sum
-            .saturating_add(other.gt_start_ratio_sum);
-        self.gt_end_ratio_sum = self.gt_end_ratio_sum.saturating_add(other.gt_end_ratio_sum);
     }
 }
 
@@ -345,8 +318,6 @@ struct Lfm25Q8PhaseProbeSample {
     epilogue_us: u64,
     release_to_observe_us: u64,
     queue_to_observe_us: u64,
-    gt_start_ratio: u32,
-    gt_end_ratio: u32,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -384,10 +355,6 @@ struct Lfm25Q8PhaseProbeCounters {
     epilogue_us: AtomicU64,
     release_to_observe_us: AtomicU64,
     queue_to_observe_us: AtomicU64,
-    gt_start_active_samples: AtomicU64,
-    gt_end_active_samples: AtomicU64,
-    gt_start_ratio_sum: AtomicU64,
-    gt_end_ratio_sum: AtomicU64,
 }
 
 impl Lfm25Q8PhaseProbeCounters {
@@ -401,10 +368,6 @@ impl Lfm25Q8PhaseProbeCounters {
             epilogue_us: AtomicU64::new(0),
             release_to_observe_us: AtomicU64::new(0),
             queue_to_observe_us: AtomicU64::new(0),
-            gt_start_active_samples: AtomicU64::new(0),
-            gt_end_active_samples: AtomicU64::new(0),
-            gt_start_ratio_sum: AtomicU64::new(0),
-            gt_end_ratio_sum: AtomicU64::new(0),
         }
     }
 
@@ -418,26 +381,12 @@ impl Lfm25Q8PhaseProbeCounters {
             epilogue_us: self.epilogue_us.load(Ordering::Relaxed),
             release_to_observe_us: self.release_to_observe_us.load(Ordering::Relaxed),
             queue_to_observe_us: self.queue_to_observe_us.load(Ordering::Relaxed),
-            gt_start_active_samples: self.gt_start_active_samples.load(Ordering::Relaxed),
-            gt_end_active_samples: self.gt_end_active_samples.load(Ordering::Relaxed),
-            gt_start_ratio_sum: self.gt_start_ratio_sum.load(Ordering::Relaxed),
-            gt_end_ratio_sum: self.gt_end_ratio_sum.load(Ordering::Relaxed),
         }
     }
 
     fn record(&self, sample: Lfm25Q8PhaseProbeSample) {
         if !sample.sampled {
             return;
-        }
-        if sample.gt_start_ratio != 0 {
-            self.gt_start_active_samples.fetch_add(1, Ordering::Relaxed);
-            self.gt_start_ratio_sum
-                .fetch_add(u64::from(sample.gt_start_ratio), Ordering::Relaxed);
-        }
-        if sample.gt_end_ratio != 0 {
-            self.gt_end_active_samples.fetch_add(1, Ordering::Relaxed);
-            self.gt_end_ratio_sum
-                .fetch_add(u64::from(sample.gt_end_ratio), Ordering::Relaxed);
         }
         if sample.valid {
             self.queue_to_batch_us
@@ -852,19 +801,6 @@ pub(crate) fn lfm25_q8_project_batch(
     let elapsed_ms = direct_rcs_elapsed_ms_since(started);
     match result {
         Ok(timings) => {
-            // The first completed submission is the last checkpoint before
-            // its output becomes visible to the CPU/model.  If GuC or a
-            // context transition replaced either table, reject this result
-            // and permanently quarantine the LFM lane for this boot.
-            if LFM25_Q8_SUBMISSIONS.load(Ordering::Relaxed) == 0
-                && !super::log_gen12_mocs_checkpoint("first-lfm-retire")
-            {
-                quarantine_lfm25_rcs_context("cache-policy-readback-lost");
-                runtime.ready = false;
-                LFM25_Q8_READY.store(false, Ordering::Release);
-                LFM25_Q8_FAILURES.fetch_add(1, Ordering::Relaxed);
-                return Err(Lfm25Q8ProjectError::CachePolicyLost);
-            }
             for (params, output) in params.iter().zip(outputs.iter_mut()) {
                 let offset = (params.output_gpu - runtime.output.gpu) as usize;
                 let source = unsafe { runtime.output.virt.add(offset) };
@@ -1175,14 +1111,6 @@ fn submit_lfm25_q8_project(
         return Err(Lfm25Q8ProjectError::EncodeFailed);
     }
     let encode_us = direct_rcs_elapsed_us_since(encode_started);
-    let gt_start_ratio = if phase_probe_sampled {
-        super::gen12_actual_gt_ratio(dev)
-    } else {
-        0
-    };
-    // Keep the diagnostic MMIO read outside the legacy RCS phase interval:
-    // queue_to_batch starts at the render timestamp captured immediately
-    // after this sample.
     let gpu_host_pre_submit = if phase_probe_sampled {
         direct_rcs_read_render_timestamp(dev)
     } else {
@@ -1194,7 +1122,7 @@ fn submit_lfm25_q8_project(
     }
     let admission_us = direct_rcs_elapsed_us_since(admission_started);
     let completion_started = direct_rcs_now_tick();
-    let completion_observation = if phase_probe_sampled {
+    let (observed, gpu_host_observe) = if phase_probe_sampled {
         lfm25_rcs_poll_result_slot_timeout_ms_with_timestamp(
             dev,
             state,
@@ -1203,25 +1131,19 @@ fn submit_lfm25_q8_project(
             LFM25_Q8_COMPLETION_TIMEOUT_MS,
         )
     } else {
-        DirectRcsMarkerObservation {
-            observed: lfm25_rcs_poll_result_slot_timeout_ms(
+        (
+            lfm25_rcs_poll_result_slot_timeout_ms(
                 state,
                 LFM25_Q8_POST_MARKER_SLOT,
                 LFM25_Q8_POST_MARKER,
                 LFM25_Q8_COMPLETION_TIMEOUT_MS,
             ),
-            ..DirectRcsMarkerObservation::default()
-        }
+            0,
+        )
     };
-    if completion_observation.observed != LFM25_Q8_POST_MARKER {
+    if observed != LFM25_Q8_POST_MARKER {
         return Err(Lfm25Q8ProjectError::CompletionTimeout);
     }
-    debug_assert!(
-        !phase_probe_sampled || completion_observation.matched_cpu_tick >= completion_started
-    );
-    // Keep the legacy completion interval identical for sampled and
-    // unsampled submissions. The marker-matched ratio read is diagnostic
-    // overhead inside this interval; it is never mistaken for GT execution.
     let completion_us = direct_rcs_elapsed_us_since(completion_started);
     let gpu_start = direct_rcs_read_result_qword(state, LFM25_Q8_GPU_START_TIMESTAMP_SLOT);
     let gpu_end = direct_rcs_read_result_qword(state, LFM25_Q8_GPU_END_TIMESTAMP_SLOT);
@@ -1234,10 +1156,8 @@ fn submit_lfm25_q8_project(
             gpu_host_pre_submit,
             gpu_start,
             gpu_end,
-            completion_observation.gpu_host_observe_timestamp,
+            gpu_host_observe,
             u64::from(gpu_timestamp_hz),
-            gt_start_ratio,
-            completion_observation.actual_gt_ratio,
         )
     } else {
         Lfm25Q8PhaseProbeSample::default()
@@ -1266,13 +1186,9 @@ fn lfm25_q8_read_phase_probe_sample(
     gpu_end: u64,
     gpu_host_observe: u64,
     gpu_timestamp_hz: u64,
-    gt_start_ratio: u32,
-    gt_end_ratio: u32,
 ) -> Lfm25Q8PhaseProbeSample {
     let mut sample = Lfm25Q8PhaseProbeSample {
         sampled: true,
-        gt_start_ratio,
-        gt_end_ratio,
         ..Lfm25Q8PhaseProbeSample::default()
     };
     let gpu_batch_enter =

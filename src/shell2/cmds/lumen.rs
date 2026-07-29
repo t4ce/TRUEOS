@@ -58,7 +58,6 @@ struct LumTurnTelemetry {
     igpu_before: crate::intel::gpgpu::Lfm25Q8ProjectStats,
     igpu_signatures_before: crate::intel::gpgpu::Lfm25Q8SubmissionSignatureSnapshot,
     igpu_phase_probe_before: crate::intel::gpgpu::Lfm25Q8PhaseProbeSnapshot,
-    admission_start: crate::intel::Gen12LumenAdmissionSnapshot,
     cpu_before: crate::r::lfm25_hybrid_cpu_backend::Lfm25HybridCpuPerfStats,
 }
 
@@ -159,7 +158,6 @@ impl LumTurnTelemetry {
         let delta = igpu_now.delta_since(self.igpu_phase_probe_before);
         let mut aggregate = crate::intel::gpgpu::Lfm25Q8PhaseProbeStats::default();
         let mut buckets = String::new();
-        let mut gt_buckets = String::new();
         for (index, signature) in crate::intel::gpgpu::LFM25_Q8_SUBMISSION_SIGNATURES
             .into_iter()
             .enumerate()
@@ -168,7 +166,6 @@ impl LumTurnTelemetry {
             aggregate.accumulate(stats);
             if index != 0 {
                 buckets.push('|');
-                gt_buckets.push('|');
             }
             let _ = core::write!(
                 &mut buckets,
@@ -182,16 +179,6 @@ impl LumTurnTelemetry {
                 stats.epilogue_us,
                 stats.release_to_observe_us,
                 stats.queue_to_observe_us,
-            );
-            let _ = core::write!(
-                &mut gt_buckets,
-                "{}:{}:{}:{}:{}:{}",
-                signature.label(),
-                stats.samples,
-                stats.gt_start_active_samples,
-                stats.gt_end_active_samples,
-                stats.gt_start_ratio_sum,
-                stats.gt_end_ratio_sum,
             );
         }
         crate::log_info!(
@@ -210,79 +197,6 @@ impl LumTurnTelemetry {
             gpu_timestamp_hz,
             buckets,
         );
-        let start_avg_mhz = active_ratio_average_mhz(
-            aggregate.gt_start_ratio_sum,
-            aggregate.gt_start_active_samples,
-        );
-        let end_avg_mhz =
-            active_ratio_average_mhz(aggregate.gt_end_ratio_sum, aggregate.gt_end_active_samples);
-        let state = crate::intel::gen12_gt_state_snapshot().unwrap_or_default();
-        crate::log_info!(
-            target: "global";
-            "lfm25: turn-gt-state stage=done scope=turn turn={} schema=1 available={} samples={} start_active={} end_active={} start_zero={} end_zero={} start_ratio_sum={} end_ratio_sum={} active_avg_mhz=start:{},end:{} final_actual_ratio={} final_actual_mhz={} requested_ratio={} requested_mhz={} rp0_mhz={} rpe_mhz={} rpn_mhz={} throttle_reasons=0x{:X} rpstat1_raw=0x{:08X} rpnswreq_raw=0x{:08X} sampling=first+power-of-two-per-signature observation=cpu-mmio-pre-submit+post-observe register=gen12-rpstat1 bucket_schema=signature:samples:start_active:end_active:start_ratio_sum:end_ratio_sum buckets={}\n",
-            self.turn,
-            state.available as u8,
-            aggregate.samples,
-            aggregate.gt_start_active_samples,
-            aggregate.gt_end_active_samples,
-            aggregate.samples.saturating_sub(aggregate.gt_start_active_samples),
-            aggregate.samples.saturating_sub(aggregate.gt_end_active_samples),
-            aggregate.gt_start_ratio_sum,
-            aggregate.gt_end_ratio_sum,
-            start_avg_mhz,
-            end_avg_mhz,
-            state.actual_ratio,
-            state.actual_mhz,
-            state.requested_ratio,
-            state.requested_mhz,
-            state.rp0_mhz,
-            state.rpe_mhz,
-            state.rpn_mhz,
-            state.throttle_reasons,
-            state.rpstat1_raw,
-            state.rpnswreq_raw,
-            gt_buckets,
-        );
-        let admission_end = crate::intel::gen12_lumen_admission_snapshot();
-        crate::log_info!(
-            target: "global";
-            "lfm25: turn-admission stage=done scope=turn turn={} schema=1 available={} bdf={:02X}:{:02X}.{} vendor=0x{:04X} device=0x{:04X} revision=0x{:02X} boot_seen={} boot_forcewake={} boot_pat={} boot_mocs={} boot_before_global=0x{:08X} boot_before_l3cc_pair=0x{:08X} boot_after_global=0x{:08X} boot_after_l3cc_pair=0x{:08X} post_guc_seen={} post_guc_cache={} first_retire_seen={} first_retire_cache={} start_pat_available={} start_pat={} start_mocs_available={} start_mocs={} start_cache={} end_pat_available={} end_pat={} end_mocs_available={} end_mocs={} end_cache={} end_global=0x{:08X} end_l3cc_pair=0x{:08X} guc_boot={} guc_firmware={} guc_submission={} checkpoints=boot-init+post-guc+turn-start+first-lfm-retire+turn-end expected_target=8086:4680:0C expected_global=0x00000005 expected_l3cc_pair=0x00100030\n",
-            self.turn,
-            admission_end.available as u8,
-            admission_end.bus,
-            admission_end.slot,
-            admission_end.function,
-            admission_end.vendor_id,
-            admission_end.device_id,
-            admission_end.revision_id,
-            admission_end.boot_seen as u8,
-            admission_end.boot_forcewake_ready as u8,
-            admission_end.boot_pat_accepted as u8,
-            admission_end.boot_mocs_accepted as u8,
-            admission_end.boot_before_global_index4,
-            admission_end.boot_before_l3cc_pair2,
-            admission_end.boot_after_global_index4,
-            admission_end.boot_after_l3cc_pair2,
-            admission_end.post_guc_seen as u8,
-            admission_end.post_guc_accepted as u8,
-            admission_end.first_lfm_retire_seen as u8,
-            admission_end.first_lfm_retire_accepted as u8,
-            self.admission_start.current_pat_available as u8,
-            self.admission_start.current_pat_accepted as u8,
-            self.admission_start.current_mocs_available as u8,
-            self.admission_start.current_mocs_accepted as u8,
-            self.admission_start.cache_policy_ready as u8,
-            admission_end.current_pat_available as u8,
-            admission_end.current_pat_accepted as u8,
-            admission_end.current_mocs_available as u8,
-            admission_end.current_mocs_accepted as u8,
-            admission_end.cache_policy_ready as u8,
-            admission_end.current_mocs_global_index4,
-            admission_end.current_mocs_l3cc_pair2,
-            admission_end.guc_boot_enabled as u8,
-            admission_end.guc_firmware_ready as u8,
-            admission_end.guc_submission_ready as u8,
-        );
     }
 
     fn log_cpu_done(&self, cpu_now: crate::r::lfm25_hybrid_cpu_backend::Lfm25HybridCpuPerfStats) {
@@ -300,16 +214,6 @@ impl LumTurnTelemetry {
             delta.projection_batch_us,
         );
     }
-}
-
-fn active_ratio_average_mhz(ratio_sum: u64, active_samples: u64) -> u64 {
-    if active_samples == 0 {
-        return 0;
-    }
-    ratio_sum
-        .saturating_mul(50)
-        .saturating_add(active_samples.saturating_mul(3) / 2)
-        / active_samples.saturating_mul(3)
 }
 
 enum PromptPoll {
@@ -672,11 +576,6 @@ async fn run_lum_turn(
     prompt: String,
     conversation: &mut ConversationState,
 ) -> bool {
-    let admission_start = if crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED {
-        crate::intel::gen12_lumen_admission_snapshot()
-    } else {
-        crate::intel::Gen12LumenAdmissionSnapshot::default()
-    };
     let started = embassy_time_driver::now();
     let mut prompt_tokens = if conversation.turns == 0 {
         let encoded = if crate::spirit::LUMEN_AI_EMOTION_ENABLED {
@@ -772,7 +671,6 @@ async fn run_lum_turn(
         igpu_before: before,
         igpu_signatures_before,
         igpu_phase_probe_before,
-        admission_start,
         cpu_before,
     };
     telemetry.log_progress("start", callback_start, before, 0, "pending", 0, "-");

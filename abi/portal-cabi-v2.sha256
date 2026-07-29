@@ -22,9 +22,6 @@
 # The UI4 output-dimensions query is strictly additive and read-only. It lets
 # new Blueprints place scene frames relative to the same live pixel extent used
 # by UI4 and mediated cursors; older v2 artifacts retain fixed coordinates.
-# The UI4 input-routes snapshot is strictly additive and window-scoped. It
-# exposes per-cursor selection, combo identity/color, and the already-sanitized
-# paired held-key state without changing the singular legacy keyboard query.
 # The UI4 custom-cursor declaration is strictly additive and lets a Blueprint
 # suppress the default cursor over its selected frame. The cursor-icon call is
 # likewise additive and selects built-in defaults per frame or cursor source.
@@ -44,4 +41,4 @@
 # The GridPaper sized-snapshot calls are strictly additive. They carry a
 # bounded logical extent beside the unchanged fixed-capacity page image;
 # existing full-size snapshot symbols and packaged Blueprints are unchanged.
-c16ae4906b72837c0cd97a7775c8756e32388d14d0e9caa16f6da1e1e555fdc8
+aac7a874814645877aad19037c1e709a319ae49977660c572cd09e7bbfa8804a
