@@ -432,7 +432,7 @@ pub(crate) fn submit_context(
         state.contexts[slot].submissions = state.contexts[slot].submissions.saturating_add(1);
         state.serial = state.serial.wrapping_add(1).max(1);
         let serial = state.serial;
-        crate::log_info!(
+        crate::log_trace!(
             target: "gpgpu";
             "intel/guc-submit: schedule enqueued=1 engine={} context_id={} token=0x{:X} serial={} action=0x{:04X} hxg=fast-request completion_event=sched-context-mode-done submission_owner=guc\n",
             engine_abi.name,
@@ -630,19 +630,33 @@ fn program_context_priority(
         INTEL_GUC_ACTION_HOST2GUC_UPDATE_CONTEXT_POLICIES,
         &context_priority_policy_args(context_id, priority),
     );
-    crate::log_info!(
-        target: "gpgpu";
-        "intel/guc-submit: context-policy enqueued={} engine={} context_id={} priority={} priority_abi={} action=0x{:04X} klv=0x{:04X} request=hxg-fast h2g_publish_sequence={} error={}\n",
-        policy.accepted as u8,
-        engine_abi.name,
-        context_id,
-        guc_priority_name(priority),
-        priority_abi,
-        INTEL_GUC_ACTION_HOST2GUC_UPDATE_CONTEXT_POLICIES,
-        GUC_CONTEXT_POLICIES_KLV_ID_SCHEDULING_PRIORITY,
-        policy.h2g_publish_sequence,
-        policy.error,
-    );
+    if policy.accepted {
+        crate::log_trace!(
+            target: "gpgpu";
+            "intel/guc-submit: context-policy enqueued=1 engine={} context_id={} priority={} priority_abi={} action=0x{:04X} klv=0x{:04X} request=hxg-fast h2g_publish_sequence={} error={}\n",
+            engine_abi.name,
+            context_id,
+            guc_priority_name(priority),
+            priority_abi,
+            INTEL_GUC_ACTION_HOST2GUC_UPDATE_CONTEXT_POLICIES,
+            GUC_CONTEXT_POLICIES_KLV_ID_SCHEDULING_PRIORITY,
+            policy.h2g_publish_sequence,
+            policy.error,
+        );
+    } else {
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/guc-submit: context-policy enqueued=0 engine={} context_id={} priority={} priority_abi={} action=0x{:04X} klv=0x{:04X} request=hxg-fast h2g_publish_sequence={} error={}\n",
+            engine_abi.name,
+            context_id,
+            guc_priority_name(priority),
+            priority_abi,
+            INTEL_GUC_ACTION_HOST2GUC_UPDATE_CONTEXT_POLICIES,
+            GUC_CONTEXT_POLICIES_KLV_ID_SCHEDULING_PRIORITY,
+            policy.h2g_publish_sequence,
+            policy.error,
+        );
+    }
     policy.accepted
 }
 

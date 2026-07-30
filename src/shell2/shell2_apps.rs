@@ -19,6 +19,7 @@ enum AppsCommand {
     Dl,
     Peer,
     Pause,
+    Snapshot,
     Preserve,
     Load,
     Stop,
@@ -34,6 +35,7 @@ impl AppsCommand {
             Self::Dl => "dl",
             Self::Peer => "peer",
             Self::Pause => "pause",
+            Self::Snapshot => "snapshot",
             Self::Preserve => "preserve",
             Self::Load => "load",
             Self::Stop => "stop",
@@ -43,12 +45,13 @@ impl AppsCommand {
     }
 }
 
-const APP_COMMANDS: [AppsCommand; 10] = [
+const APP_COMMANDS: [AppsCommand; 11] = [
     AppsCommand::Start,
     AppsCommand::Online,
     AppsCommand::Dl,
     AppsCommand::Peer,
     AppsCommand::Pause,
+    AppsCommand::Snapshot,
     AppsCommand::Preserve,
     AppsCommand::Load,
     AppsCommand::Stop,
@@ -71,7 +74,7 @@ fn line(io: &'static dyn ShellBackend2, text: &str) {
     print_shell_line(io, text);
 }
 
-fn vm_state_label(state: crate::hv::HvVmState, stored: bool) -> &'static str {
+fn vm_state_label(state: crate::hv::HvVmState) -> &'static str {
     if !state.supported {
         "unsupported"
     } else if state.restore_inflight {
@@ -90,10 +93,10 @@ fn vm_state_label(state: crate::hv::HvVmState, stored: bool) -> &'static str {
         "running"
     } else if state.starting {
         "starting"
-    } else if state.pause_latched && stored {
-        "paused"
+    } else if state.pause_latched && state.pause_snapshot_ready {
+        "snapshotted"
     } else if state.pause_latched {
-        "latch-pending"
+        "paused"
     } else {
         "offline"
     }
@@ -160,7 +163,7 @@ pub(crate) fn print_status(io: &'static dyn ShellBackend2) {
         let row = [
             vm_id_text.as_str(),
             blueprint.as_str(),
-            vm_state_label(state, stored),
+            vm_state_label(state),
             store,
         ];
         table.emit_row(&row, |text| print_shell_line(io, text));
@@ -186,9 +189,9 @@ fn replicatable_state_label(state: crate::hv::HvVmState, stored: bool) -> &'stat
     } else if state.starting {
         "starting"
     } else if state.pause_latched && stored {
-        "paused"
+        "snapshotted"
     } else if state.pause_latched {
-        "latch-pending"
+        "paused"
     } else {
         "offline"
     }
@@ -222,7 +225,7 @@ fn print_replicatable_vms(io: &'static dyn ShellBackend2) {
     if !found {
         line(io, "apps: no running or paused replicatable Blueprints");
     } else {
-        line(io, "apps: enter a vmid to toggle pause/resume");
+        line(io, "apps: enter a vmid to toggle pause/resume; use snapshot <vmid> to commit");
     }
 }
 
@@ -704,11 +707,14 @@ fn toggle_replicatable_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_
     }
 
     if state.pause_latched {
-        if !state.pause_snapshot_ready {
-            line(io, alloc::format!("apps: vm{} pause is still latching", vm_id).as_str());
-            return;
+        match crate::hv::start(vm_id, spawner, io, None) {
+            Ok(()) => {
+                line(io, alloc::format!("apps: vm{} direct resume scheduled", vm_id).as_str())
+            }
+            Err(err) => {
+                line(io, alloc::format!("apps: vm{} resume failed: {:?}", vm_id, err).as_str())
+            }
         }
-        schedule_load_vm(spawner, io, vm_id);
         return;
     }
 
@@ -727,6 +733,50 @@ fn pause_mode(spawner: &Spawner, io: &'static dyn ShellBackend2, args: &[String]
         return;
     };
     toggle_replicatable_vm(spawner, io, vm_id);
+}
+
+fn snapshot_mode(io: &'static dyn ShellBackend2, args: &[String]) {
+    let Some(id) = args.first() else {
+        line(io, "apps: snapshot expects a running replicatable vmid");
+        print_replicatable_vms(io);
+        return;
+    };
+    let Ok(vm_id) = id.parse::<u8>() else {
+        line(io, "apps: snapshot expects a running replicatable vmid");
+        print_replicatable_vms(io);
+        return;
+    };
+    let state = crate::hv::vm_state(vm_id);
+    if !state.supported {
+        line(io, alloc::format!("apps: unsupported vmid {}", vm_id).as_str());
+    } else if !state.replicatable {
+        line(io, alloc::format!("apps: vm{} is not tagged replicatable", vm_id).as_str());
+    } else if !(state.running || state.starting) {
+        line(
+            io,
+            alloc::format!(
+                "apps: vm{} must be running; snapshot uses the Blueprint Ready boundary",
+                vm_id
+            )
+            .as_str(),
+        );
+    } else {
+        match crate::hv::request_replicatable_snapshot(vm_id) {
+            Ok(true) => line(
+                io,
+                alloc::format!(
+                    "apps: vm{} snapshot PreparePause requested; durable snapshot id={}",
+                    vm_id,
+                    vm_id
+                )
+                .as_str(),
+            ),
+            Ok(false) => {
+                line(io, alloc::format!("apps: vm{} is not available for snapshot", vm_id).as_str())
+            }
+            Err(err) => line(io, alloc::format!("apps: snapshot failed: {:?}", err).as_str()),
+        }
+    }
 }
 
 fn load_remote(io: &'static dyn ShellBackend2, endpoint: &str, vm_id: u8) {
@@ -851,6 +901,7 @@ pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitte
         Some("dl") => AppsCommand::Dl,
         Some("peer") => AppsCommand::Peer,
         Some("pause" | "unpause") => AppsCommand::Pause,
+        Some("snapshot" | "snap") => AppsCommand::Snapshot,
         Some("preserve" | "save") => AppsCommand::Preserve,
         Some("load") => AppsCommand::Load,
         Some("stop") => AppsCommand::Stop,
@@ -859,7 +910,7 @@ pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitte
         Some(_) | None => {
             line(
                 io,
-                "apps: expected start, online, dl, peer, pause, preserve, load, stop, kick, or status",
+                "apps: expected start, online, dl, peer, pause, snapshot, preserve, load, stop, kick, or status",
             );
             return;
         }
@@ -881,6 +932,7 @@ pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitte
         }
         AppsCommand::Peer => peer_app(spawner, io, rest),
         AppsCommand::Pause => pause_mode(spawner, io, rest.as_slice()),
+        AppsCommand::Snapshot => snapshot_mode(io, rest.as_slice()),
         AppsCommand::Load => {
             let mut args = rest.iter();
             let first = args.next().map(String::as_str);

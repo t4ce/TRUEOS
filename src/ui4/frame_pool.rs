@@ -589,12 +589,14 @@ pub(crate) fn publish_gpgpu_frame_buffer(
     publish_checked_frame(frame, lease)
 }
 
-/// Publish one immutable font scene written directly into its UI4 allocation.
+/// Publish one font scene written directly into its exact UI4 allocation.
 ///
 /// The font worker retains the frame write lease indirectly through its
 /// caller, writes the premultiplied RGBA8 canvas in place, and returns a
 /// release proof bound to this exact surface. No staging allocation, CPU
-/// readback, or frame copy crosses this boundary.
+/// readback, or frame copy crosses this boundary. One-shot presenters use an
+/// immutable/single frame; bounded live probes may reuse dirty/double back
+/// buffers after explicitly clearing the acquired destination.
 pub(crate) fn publish_gpu_font_frame_buffer(
     lease: FrameWriteLease,
     release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
@@ -603,9 +605,13 @@ pub(crate) fn publish_gpu_font_frame_buffer(
     let frame = pool.checked_mut(lease.frame)?;
     checked_lease(frame, lease)?;
     let index = lease.buffer_index as usize;
+    let valid_lifecycle = matches!(
+        (frame.plan.cadence, frame.plan.buffering),
+        (super::FrameCadence::Immutable, super::FrameBuffering::Single)
+            | (super::FrameCadence::Dirty, super::FrameBuffering::Double)
+    );
     if frame.plan.content != FrameContent::FontScene2d
-        || frame.plan.cadence != super::FrameCadence::Immutable
-        || frame.plan.buffering != super::FrameBuffering::Single
+        || !valid_lifecycle
         || frame.plan.format != ScanoutFormat::Rgba8888Premultiplied
         || !frame.gpu_authored[index]
     {

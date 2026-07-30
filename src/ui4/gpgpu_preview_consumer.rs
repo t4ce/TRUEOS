@@ -568,7 +568,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                                 preview.config.preset.label(),
                                 preview.frame.raw(),
                                 preview.window.raw(),
-                                preview_plane_slot(preview.config.preset),
+                                active_preview_plane_slot(preview),
                                 preview.width,
                                 preview.height,
                                 preview_consumer_label(preview.config.preset),
@@ -767,9 +767,7 @@ fn abandon_compute_preview_initialization(session: WindowSessionId, previews: &[
     }
 }
 
-fn initialize_cpp_font_go_set(
-    desired: DesiredPreview,
-) -> Result<Vec<ActivePreview>, &'static str> {
+fn initialize_cpp_font_go_set(desired: DesiredPreview) -> Result<Vec<ActivePreview>, &'static str> {
     let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
     let session =
         begin_window_session(PREVIEW_OWNER).map_err(|_| "font-go-session-create-failed")?;
@@ -783,6 +781,8 @@ fn initialize_cpp_font_go_set(
     }
     let mut previews = Vec::with_capacity(CPP_FONT_GO_WINDOWS);
     for index in 0..CPP_FONT_GO_WINDOWS {
+        let (x, y, tile_width, tile_height, plane_slot) =
+            cpp_font_go_tile(output_width, output_height, index);
         let frame = match create_cpp_font_go_frame(output, width, height, index as u8) {
             Ok(frame) => frame,
             Err(_) => {
@@ -790,9 +790,6 @@ fn initialize_cpp_font_go_set(
                 return Err("font-go-frame-create-failed");
             }
         };
-        let column = index as u32 % 2;
-        let row = index as u32 / 2;
-        let plane_slot = index % 3 + 1;
         let window = match create_window(WindowCreate {
             owner: PREVIEW_OWNER,
             session,
@@ -800,10 +797,10 @@ fn initialize_cpp_font_go_set(
             output,
             plane: WindowPlane::Universal(plane_slot as u8),
             placement: WindowPlacement {
-                x: column.saturating_mul(width) as i32,
-                y: row.saturating_mul(height) as i32,
-                width,
-                height,
+                x: x as i32,
+                y: y as i32,
+                width: tile_width,
+                height: tile_height,
                 z: PREVIEW_Z.saturating_add(index as i32),
                 opacity: u8::MAX,
                 visible: true,
@@ -848,6 +845,18 @@ fn initialize_cpp_font_go_set(
         });
     }
     Ok(previews)
+}
+
+fn cpp_font_go_tile(
+    output_width: u32,
+    output_height: u32,
+    index: usize,
+) -> (u32, u32, u32, u32, usize) {
+    let width = output_width / 2;
+    let height = output_height / 2;
+    let column = index as u32 % 2;
+    let row = index as u32 / 2;
+    (column.saturating_mul(width), row.saturating_mul(height), width, height, index % 3 + 1)
 }
 
 fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static str> {
@@ -1330,9 +1339,10 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
             Some(release) => publish_gpgpu_frame_buffer(lease, release),
             None => Err(FramePoolError::ProducerReleaseRequired),
         },
-        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 | GpgpuPreviewPreset::CppFont => {
-            publish_frame_buffer(lease)
-        }
+        GpgpuPreviewPreset::Static
+        | GpgpuPreviewPreset::Static30
+        | GpgpuPreviewPreset::CppFont
+        | GpgpuPreviewPreset::CppFontGo => publish_frame_buffer(lease),
     };
     let published = match publish_result {
         Ok(published) => published,
@@ -1467,6 +1477,273 @@ async fn render_cpp_font_frame(preview: &mut ActivePreview) -> Result<(), &'stat
         stamped.release().sequence(),
     );
     Ok(())
+}
+
+async fn render_cpp_font_go_frame(preview: &mut ActivePreview) -> Result<(), &'static str> {
+    use crate::intel::gpgpu::{GpgpuSolidRect, GpgpuSubmissionOutcome};
+    use crate::r::font_kernel_service::{
+        FontKernelConsumer, FontKernelConsumerPath, FontKernelError,
+    };
+
+    let quadrant = preview.font_go_quadrant.ok_or("font-go-quadrant-missing")?;
+    let stage = (preview.metrics.elapsed_ms / CPP_FONT_GO_STAGE_MS).min(5) as u8;
+    preview.metrics.attempted = preview.metrics.attempted.saturating_add(1);
+    let sequence = preview.metrics.attempted;
+    let lease = match acquire_frame_buffer(preview.frame) {
+        Ok(lease) => lease,
+        Err(FramePoolError::Busy) => {
+            preview.metrics.dropped_busy = preview.metrics.dropped_busy.saturating_add(1);
+            return Ok(());
+        }
+        Err(_) => {
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            return Err("font-go-frame-acquire-failed");
+        }
+    };
+    let destination = match gpgpu_rgba_surface(lease) {
+        Ok(destination) => destination,
+        Err(_) => {
+            let _ = cancel_frame_buffer(lease);
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            return Err("font-go-surface-unavailable");
+        }
+    };
+
+    // A dirty font frame is reused. Clear its exact back buffer on the same
+    // fair direct-RCS lane before source-over glyph stamping, so prior samples
+    // never ghost into a later variation and no CPU frame write is introduced.
+    let clear_rgba =
+        u32::from_le_bytes(cpp_font_go_background(quadrant, sequence).to_native_bytes());
+    let clear = GpgpuSolidRect {
+        rect: destination.bounds(),
+        color_rgba: clear_rgba,
+    };
+    let clear_result = {
+        let _lane = crate::r::font_kernel_service::acquire_gpu_lane(FontKernelConsumer::new(
+            FontKernelConsumerPath::Stamp,
+            preview
+                .request_serial
+                .rotate_left(8)
+                .wrapping_add(u64::from(quadrant)),
+        ))
+        .await;
+        crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(
+            destination,
+            core::slice::from_ref(&clear),
+        )
+    };
+    match clear_result.outcome {
+        GpgpuSubmissionOutcome::Complete => {}
+        GpgpuSubmissionOutcome::SubmittedIncomplete => {
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            return Err("font-go-clear-submit-incomplete");
+        }
+        GpgpuSubmissionOutcome::Unavailable => {
+            let _ = cancel_frame_buffer(lease);
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            return Err("font-go-clear-unavailable");
+        }
+    }
+
+    let (request, requested_glyphs, layers, runs) =
+        cpp_font_go_stamp_request(preview.width, preview.height, quadrant, stage, sequence);
+    let pending = match crate::r::font_kernel_service::submit_frame_stamp(request, destination) {
+        Ok(pending) => pending,
+        Err(FontKernelError::QueueFull) => {
+            let _ = cancel_frame_buffer(lease);
+            preview.metrics.dropped_busy = preview.metrics.dropped_busy.saturating_add(1);
+            return Ok(());
+        }
+        Err(_) => {
+            let _ = cancel_frame_buffer(lease);
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            return Err("font-go-submit-failed");
+        }
+    };
+    let stamped = match pending.wait().await {
+        Ok(stamped) => stamped,
+        Err(FontKernelError::SubmittedIncomplete(_)) => {
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            return Err("font-go-submit-incomplete");
+        }
+        Err(_) => {
+            let _ = cancel_frame_buffer(lease);
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            return Err("font-go-stamp-failed");
+        }
+    };
+    preview.metrics.submitted = preview.metrics.submitted.saturating_add(1);
+    preview.metrics.completed = preview.metrics.completed.saturating_add(1);
+    if publish_gpu_font_frame_buffer(lease, stamped.release()).is_err() {
+        preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+        return Err("font-go-frame-publish-failed");
+    }
+    if publish_window_frame(PREVIEW_OWNER, preview.window, DamageRect::FULL).is_err() {
+        preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+        return Err("font-go-window-publish-failed");
+    }
+    preview.metrics.published = preview.metrics.published.saturating_add(1);
+    preview.metrics.last_iterations = stamped.glyphs() as u32;
+    preview.metrics.last_marker = stamped.release().sequence() as u32;
+    if preview.font_go_stage != stage {
+        preview.font_go_stage = stage;
+        crate::log_info!(
+            target: "ui4";
+            "ui4 cpp-font-go ramp request={} quadrant={} stage={}/5 elapsed_ms={} extent={}x{} cadence_ms={} requested_glyphs={} rendered_glyphs={} layers={} runs={} clear_submits={} font_submits={} walkers={} release={} path=gpu-clear->skrifa->gpu-vm-r8->cpp-igc->guc-rcs->ui4-font-scene cpu_readback=0 cpu_frame_copy=0\n",
+            preview.request_serial,
+            quadrant,
+            stage,
+            preview.metrics.elapsed_ms,
+            preview.width,
+            preview.height,
+            preview.config.cadence_ms,
+            requested_glyphs,
+            stamped.glyphs(),
+            layers,
+            runs,
+            clear_result.stats.submits,
+            stamped.submits(),
+            stamped.active_walkers(),
+            stamped.release().sequence(),
+        );
+    }
+    Ok(())
+}
+
+fn cpp_font_go_background(quadrant: u8, sequence: u64) -> PremultipliedRgba8 {
+    let pulse = (sequence as u8).wrapping_mul(3) % 18;
+    match quadrant % 4 {
+        0 => PremultipliedRgba8::from_straight_rgba(8, 18 + pulse, 38, u8::MAX),
+        1 => PremultipliedRgba8::from_straight_rgba(28, 8, 34 + pulse, u8::MAX),
+        2 => PremultipliedRgba8::from_straight_rgba(7, 30 + pulse, 25, u8::MAX),
+        _ => PremultipliedRgba8::from_straight_rgba(34 + pulse, 18, 7, u8::MAX),
+    }
+}
+
+fn cpp_font_go_stamp_request(
+    width: u32,
+    height: u32,
+    quadrant: u8,
+    stage: u8,
+    sequence: u64,
+) -> (crate::r::font_kernel_service::FontStampRequest, usize, usize, usize) {
+    use crate::r::font_kernel_service::{
+        FontStampFit, FontStampLayer, FontStampRequest, RetainSceneRequest,
+        RetainedFontPositioning, RetainedFontRun,
+    };
+
+    const GLYPH_TARGETS: [usize; 6] = [192, 320, 512, 768, 1_024, 1_408];
+    const LAYER_COUNTS: [usize; 6] = [3, 4, 6, 8, 10, 12];
+    const RUNS_PER_LAYER: [usize; 6] = [2, 3, 4, 4, 5, 5];
+    let stage_index = usize::from(stage.min(5));
+    let glyph_target = GLYPH_TARGETS[stage_index];
+    let layer_count = LAYER_COUNTS[stage_index];
+    let runs_per_layer = RUNS_PER_LAYER[stage_index];
+    let total_runs = layer_count.saturating_mul(runs_per_layer);
+    let mut remaining_glyphs = glyph_target;
+    let mut remaining_runs = total_runs;
+    let mut global_run = 0usize;
+    let mut layers = Vec::with_capacity(layer_count);
+    let usable_y = height.saturating_sub(72).max(1);
+    let usable_x = width.saturating_sub(360).max(1);
+
+    for layer_index in 0..layer_count {
+        let font = match (layer_index + usize::from(quadrant) + sequence as usize) % 3 {
+            0 => crate::intel::gpu_font::GpuFontFace::Default,
+            1 => crate::intel::gpu_font::GpuFontFace::NotoSansSc,
+            _ => crate::intel::gpu_font::GpuFontFace::Inconsolata,
+        };
+        let color_seed = (layer_index as u16)
+            .wrapping_mul(37)
+            .wrapping_add(u16::from(quadrant) * 53)
+            .wrapping_add(sequence as u16 * 7);
+        let foreground = crate::intel::gpu_font::GpuFontRgba::new(
+            (96 + color_seed % 160) as u8,
+            (112 + color_seed.wrapping_mul(3) % 144) as u8,
+            (128 + color_seed.wrapping_mul(5) % 128) as u8,
+            (176 + color_seed % 80) as u8,
+        );
+        let mut runs = Vec::with_capacity(runs_per_layer);
+        for run_index in 0..runs_per_layer {
+            let run_glyphs = remaining_glyphs.div_ceil(remaining_runs);
+            let seed = sequence
+                .wrapping_mul(131)
+                .wrapping_add(global_run as u64 * 29)
+                .wrapping_add(u64::from(quadrant) * 997);
+            let header = if global_run == 0 {
+                Some(alloc::format!(
+                    "CPP FONT GO  Q{}  STAGE {}  {} GLYPHS  ",
+                    quadrant + 1,
+                    stage,
+                    glyph_target,
+                ))
+            } else {
+                None
+            };
+            let text = cpp_font_go_text(run_glyphs, seed, header);
+            let position_seed = global_run as u32 * 71
+                + layer_index as u32 * 43
+                + run_index as u32 * 19
+                + sequence as u32 * 11;
+            let large = global_run.is_multiple_of(7);
+            let font_pixels = if large {
+                58.0 + f32::from(stage) * 8.0 + f32::from(quadrant) * 3.0
+            } else {
+                18.0 + (position_seed % (26 + u32::from(stage) * 5)) as f32
+            };
+            runs.push(RetainedFontRun {
+                text,
+                position: [
+                    18.0 + (position_seed % usable_x) as f32,
+                    42.0 + (global_run as u32)
+                        .saturating_mul(usable_y)
+                        .checked_div(total_runs as u32)
+                        .unwrap_or(0) as f32,
+                ],
+                font_pixels,
+                slant: ((position_seed % 9) as f32 - 4.0) / 5.0,
+            });
+            remaining_glyphs = remaining_glyphs.saturating_sub(run_glyphs);
+            remaining_runs = remaining_runs.saturating_sub(1);
+            global_run = global_run.saturating_add(1);
+        }
+        layers.push(FontStampLayer {
+            scene: RetainSceneRequest {
+                runs,
+                font,
+                viewport_width: width,
+                viewport_height: height,
+                raster_width: width,
+                raster_height: height,
+                positioning: RetainedFontPositioning::SceneOrigin,
+            },
+            foreground,
+        });
+    }
+
+    (
+        FontStampRequest {
+            layers,
+            fit: FontStampFit::Canvas,
+        },
+        glyph_target,
+        layer_count,
+        total_runs,
+    )
+}
+
+fn cpp_font_go_text(length: usize, seed: u64, header: Option<String>) -> String {
+    const SAMPLE: &[u8] = b"Lorem ipsum FONT kernel retained stamp Alpha beta 0123456789 ";
+    let mut text = header.unwrap_or_else(|| String::with_capacity(length));
+    if text.len() > length {
+        text.truncate(length);
+        return text;
+    }
+    while text.len() < length {
+        let index = (seed as usize).wrapping_add(text.len()) % SAMPLE.len();
+        text.push(SAMPLE[index] as char);
+    }
+    text
 }
 
 async fn render_static30_frames(preview: &mut ActivePreview) -> Result<(), &'static str> {
@@ -1732,17 +2009,18 @@ fn dispatch_preview_kernel(
             release: None,
             error: "compute-trio-entered-single-dispatch",
         },
-        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 | GpgpuPreviewPreset::CppFont => {
-            PreviewDispatchResult {
-                ok: false,
-                submitted: false,
-                iterations: 0,
-                marker: 0,
-                submit_ms: 0,
-                release: None,
-                error: "static-preset-entered-gpu-dispatch",
-            }
-        }
+        GpgpuPreviewPreset::Static
+        | GpgpuPreviewPreset::Static30
+        | GpgpuPreviewPreset::CppFont
+        | GpgpuPreviewPreset::CppFontGo => PreviewDispatchResult {
+            ok: false,
+            submitted: false,
+            iterations: 0,
+            marker: 0,
+            submit_ms: 0,
+            release: None,
+            error: "static-preset-entered-gpu-dispatch",
+        },
         GpgpuPreviewPreset::Mandelbrot => {
             let iterations = 32 + ((preview.metrics.attempted - 1) % 97) as u32;
             match crate::intel::gpgpu::mandel64_worklist_surface_full(surface, iterations) {
@@ -1929,7 +2207,9 @@ const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
         GpgpuPreviewPreset::Lab256 => "three-pass+pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Static => "clflush-mfence-before-publish",
         GpgpuPreviewPreset::Static30 => "font-instance+pipe-control+post-marker-exact-surface",
-        GpgpuPreviewPreset::CppFont => "font-instance+pipe-control+post-marker-exact-surface",
+        GpgpuPreviewPreset::CppFont | GpgpuPreviewPreset::CppFontGo => {
+            "font-instance+pipe-control+post-marker-exact-surface"
+        }
     }
 }
 
@@ -1950,7 +2230,7 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio => "guc-cpp-single",
         GpgpuPreviewPreset::CppParticle => "guc-cpp-stateful-three-pass",
-        GpgpuPreviewPreset::CppFont => "font-kernel-service-cpp",
+        GpgpuPreviewPreset::CppFont | GpgpuPreviewPreset::CppFontGo => "font-kernel-service-cpp",
     }
 }
 
@@ -1970,7 +2250,8 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
         | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle
-        | GpgpuPreviewPreset::CppFont => WindowPlane::Universal(preview_plane_slot(preset) as u8),
+        | GpgpuPreviewPreset::CppFont
+        | GpgpuPreviewPreset::CppFontGo => WindowPlane::Universal(preview_plane_slot(preset) as u8),
         GpgpuPreviewPreset::Lab256 => WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
     }
 }
@@ -1991,6 +2272,7 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "ui4-cpp-resizable-slot1",
         GpgpuPreviewPreset::CppFont => "ui4-font-scene-slot1",
+        GpgpuPreviewPreset::CppFontGo => "ui4-font-scene-2x2",
         GpgpuPreviewPreset::Static => "ui4-overlay",
         GpgpuPreviewPreset::Static30 => "ui4-font-scene-slots1+2+3",
     }
@@ -2261,7 +2543,7 @@ fn stop_active_previews(
             preview.config.preset.label(),
             preview.frame.raw(),
             preview.window.raw(),
-            preview_plane_slot(preview.config.preset),
+            active_preview_plane_slot(&preview),
             preview.metrics.attempted,
             preview.metrics.completed,
             preview.metrics.published,
@@ -2290,7 +2572,7 @@ fn previews_support_direct_close(previews: &[ActivePreview]) -> bool {
         if !preview.extra_surfaces.is_empty() {
             return false;
         }
-        let slot = preview_plane_slot(preview.config.preset);
+        let slot = active_preview_plane_slot(preview);
         if !(1..=3).contains(&slot) {
             return false;
         }
@@ -2497,7 +2779,8 @@ const fn compute_preview_index(preset: GpgpuPreviewPreset) -> Option<usize> {
         | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle
-        | GpgpuPreviewPreset::CppFont => None,
+        | GpgpuPreviewPreset::CppFont
+        | GpgpuPreviewPreset::CppFontGo => None,
     }
 }
 
@@ -2519,6 +2802,13 @@ const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
         Some(index) => index + 1,
         None => super::ALPHA_OVERLAY_PLANE_SLOT,
     }
+}
+
+fn active_preview_plane_slot(preview: &ActivePreview) -> usize {
+    preview.font_go_quadrant.map_or_else(
+        || preview_plane_slot(preview.config.preset),
+        |quadrant| usize::from(quadrant) % 3 + 1,
+    )
 }
 
 fn next_preview_group_poll_ms(previews: &[ActivePreview]) -> u64 {
@@ -2545,7 +2835,8 @@ const fn next_serial(serial: u64) -> u64 {
 mod tests {
     use super::{
         FramePlanError, FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig,
-        GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH, preview_extent,
+        GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH,
+        cpp_font_go_stamp_request, cpp_font_go_tile, preview_extent,
         preview_frame_create_error_label, preview_plane_slot, static30_font_stamp_request,
     };
 
@@ -2577,6 +2868,50 @@ mod tests {
                 .sum::<usize>(),
             53
         );
+    }
+
+    #[test]
+    fn cpp_font_go_tiles_1440p_into_four_equal_frames() {
+        assert_eq!(cpp_font_go_tile(2560, 1440, 0), (0, 0, 1280, 720, 1));
+        assert_eq!(cpp_font_go_tile(2560, 1440, 1), (1280, 0, 1280, 720, 2));
+        assert_eq!(cpp_font_go_tile(2560, 1440, 2), (0, 720, 1280, 720, 3));
+        assert_eq!(cpp_font_go_tile(2560, 1440, 3), (1280, 720, 1280, 720, 1));
+    }
+
+    #[test]
+    fn cpp_font_go_ramp_stays_bounded_and_increases_work() {
+        let expected_glyphs = [192usize, 320, 512, 768, 1_024, 1_408];
+        let expected_layers = [3usize, 4, 6, 8, 10, 12];
+        let mut previous_runs = 0usize;
+        for stage in 0..6u8 {
+            let (request, glyphs, layers, runs) =
+                cpp_font_go_stamp_request(1280, 720, 2, stage, 17);
+            assert_eq!(request.fit, crate::r::font_kernel_service::FontStampFit::Canvas);
+            assert_eq!(glyphs, expected_glyphs[stage as usize]);
+            assert_eq!(layers, expected_layers[stage as usize]);
+            assert_eq!(request.layers.len(), layers);
+            assert!(runs >= previous_runs);
+            assert!(glyphs <= crate::r::font_kernel_service::FONT_STAMP_MAX_GLYPHS);
+            assert_eq!(
+                request
+                    .layers
+                    .iter()
+                    .flat_map(|layer| layer.scene.runs.iter())
+                    .map(|run| run.text.chars().count())
+                    .sum::<usize>(),
+                glyphs
+            );
+            assert!(request.layers.iter().all(|layer| {
+                layer.scene.raster_width == 1280
+                    && layer.scene.raster_height == 720
+                    && layer
+                        .scene
+                        .runs
+                        .iter()
+                        .all(|run| run.slant.abs() <= 1.0 && run.font_pixels > 0.0)
+            }));
+            previous_runs = runs;
+        }
     }
 
     #[test]

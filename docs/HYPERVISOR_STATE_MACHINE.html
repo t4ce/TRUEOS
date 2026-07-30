@@ -530,7 +530,7 @@
                 <rect width="174" height="55" rx="10"/>
                 <circle class="status-led" cx="157" cy="17" r="3"/>
                 <text class="name" x="13" y="21">F2 Apps / Shell2</text>
-                <text class="detail" x="13" y="39">launch · pause · resume · stop</text>
+                <text class="detail" x="13" y="39">pause · snapshot · load · stop</text>
               </g>
               <g class="component" data-component="admission" tabindex="0" transform="translate(58 207)">
                 <rect width="174" height="55" rx="10"/>
@@ -597,8 +597,10 @@
               <path class="edge" data-edge="starting-running" d="M670 261 H718"/>
               <path class="edge" data-edge="running-prepare" d="M774 291 V337"/>
               <path class="edge" data-edge="prepare-ready" d="M718 372 H670"/>
+              <path class="edge" data-edge="ready-paused" d="M614 402 C614 432 548 432 519 468"/>
               <path class="edge" data-edge="ready-snapshotting" d="M558 372 H510"/>
               <path class="edge" data-edge="snapshotting-paused" d="M454 402 V448"/>
+              <path class="edge" data-edge="paused-running" d="M463 453 C463 315 687 316 746 291"/>
               <path class="edge" data-edge="paused-restoring" d="M510 483 H558"/>
               <path class="edge" data-edge="restoring-running" d="M614 448 V399 C614 316 755 326 774 291"/>
               <path class="edge optional" data-edge="prepare-running" d="M718 355 C672 320 690 288 718 276"/>
@@ -615,10 +617,12 @@
               <text class="edge-label" data-edge-label="empty-installed" x="359" y="252">install</text>
               <text class="edge-label" data-edge-label="installed-starting" x="517" y="252">launch</text>
               <text class="edge-label" data-edge-label="starting-running" x="675" y="252">enter</text>
-              <text class="edge-label" data-edge-label="running-prepare" x="785" y="317">pause</text>
+              <text class="edge-label" data-edge-label="running-prepare" x="785" y="317">pause / snapshot</text>
               <text class="edge-label" data-edge-label="prepare-ready" x="681" y="363">Ready()</text>
+              <text class="edge-label" data-edge-label="ready-paused" x="552" y="426">retain</text>
               <text class="edge-label" data-edge-label="ready-snapshotting" x="516" y="363">freeze</text>
               <text class="edge-label" data-edge-label="snapshotting-paused" x="465" y="431">commit</text>
+              <text class="edge-label" data-edge-label="paused-running" x="597" y="315">direct resume</text>
               <text class="edge-label" data-edge-label="paused-restoring" x="519" y="474">resume</text>
               <text class="edge-label" data-edge-label="prepare-running" x="678" y="311">timeout</text>
               <text class="edge-label" data-edge-label="running-snapshotting" x="566" y="299">preserve</text>
@@ -792,6 +796,7 @@
             <div class="section-label"><span>Guided scenario</span><b>auto</b></div>
             <select class="select" id="scenario" aria-label="Choose guided scenario">
               <option value="pause">Cooperative pause → resume</option>
+              <option value="snapshot">Cooperative snapshot → direct resume</option>
               <option value="preserve">Raw preserve → restore</option>
               <option value="timeout">PreparePause timeout</option>
               <option value="shutdown">Clean app shutdown</option>
@@ -805,6 +810,7 @@
               <button class="btn primary wide" data-action="install" type="button">01 · Install Blueprint</button>
               <button class="btn" data-action="launch" type="button">Launch</button>
               <button class="btn" data-action="pause" type="button">Request pause</button>
+              <button class="btn" data-action="snapshot" type="button">Snapshot VMID</button>
               <button class="btn" data-action="ready" type="button">App: Ready</button>
               <button class="btn" data-action="timeout" type="button">Expire deadline</button>
               <button class="btn" data-action="resume" type="button">Resume</button>
@@ -875,12 +881,12 @@
             <div class="panel-title"><h2>Pause boundary</h2><span>what is state vs. capability</span></div>
           </div>
           <div class="doc-content">
-            <h3>Snapshot logic; rebind reality.</h3>
-            <p>A safe checkpoint contains the app’s logical in-VM state. Numeric handles to host resources are never portable state. Release them before <code>Ready</code>, then recreate them after that exact call returns on Resume.</p>
+            <h3>Retain locally; snapshot deliberately; rebind reality.</h3>
+            <p>A cooperative <code>pause</code> retains the quiesced VM in memory without writing the checkpoint store. <code>snapshot &lt;vmid&gt;</code> uses the same <code>PreparePause → Ready</code> boundary and then commits snapshot v3 under that VM ID. Numeric handles to host resources are never portable state; release them before <code>Ready</code>, then recreate them after that exact call returns on Resume.</p>
             <table class="resource-table">
               <thead><tr><th>Resource</th><th>At Ready</th><th>After Resume</th></tr></thead>
               <tbody>
-                <tr><td>Heap, stack, GPRs, RIP/RSP</td><td><span class="policy keep">snapshot</span></td><td>Continue after boundary</td></tr>
+                <tr><td>Heap, stack, GPRs, RIP/RSP</td><td><span class="policy keep">retain / snapshot</span></td><td>Continue after boundary</td></tr>
                 <tr><td>Mutable app files</td><td><span class="policy out">external</span></td><td>Same root; no copy</td></tr>
                 <tr><td>TCP/UDP sockets</td><td><span class="policy drop">release</span></td><td>Bind/reconnect; lease port</td></tr>
                 <tr><td>UI4, GPU, audio, device</td><td><span class="policy drop">release</span></td><td>Recreate for VM owner</td></tr>
@@ -889,7 +895,7 @@
               </tbody>
             </table>
             <div class="fs-callout" style="margin-top:18px">
-              <strong>Current boundary:</strong> snapshot v3 resumes the same VM slot exactly. Cross-slot and cross-host clone/restore remain disabled because guest-writable heap pointers and allocator mappings are not yet relocatable.
+              <strong>Current boundary:</strong> <code>pause &lt;vmid&gt;</code> resumes the retained same-slot VM directly; <code>load &lt;vmid&gt;</code> restores the last committed snapshot. Peer offers include committed snapshots only. Cross-slot and cross-host clone/restore remain disabled because guest-writable heap pointers and allocator mappings are not yet relocatable.
             </div>
           </div>
           <div class="source-strip">
@@ -962,8 +968,8 @@
         },
         paused: {
           name: "Paused", chip: "lifecycle latched", progress: 2,
-          summary: "Execution is stopped, the snapshot is committed, and launch/process context is retained for same-slot resume.",
-          tip: "Pause differs from raw preserve: it retains the Blueprint lifecycle latch, instance identity, process context, and selected managed service state.",
+          summary: "Execution is stopped and the live VM, launch context, and process context are retained for direct same-slot resume.",
+          tip: "A plain pause does not serialize the VM. A snapshot reaches this same retained state after also committing snapshot v3 under the VM ID.",
           source: "src/hv/mod.rs: PreserveMode::Pause"
         },
         restoring: {
@@ -987,11 +993,11 @@
       };
 
       const componentInfo = {
-        f2: ["Orchestrator", "F2 Apps / Shell2", "The user-facing control plane lists capable instances and issues launch, pause, resume, preserve and stop requests. It never assumes VM0.", "src/hv/mod.rs · src/shell2"],
+        f2: ["Orchestrator", "F2 Apps / Shell2", "The user-facing control plane lists capable instances and issues launch, pause, direct resume, snapshot, load, preserve and stop requests. It never assumes VM0.", "src/hv/mod.rs · src/shell2"],
         admission: ["Host component", "Artifact admission", "Parses TRBP, decompresses the Blueprint, requires ELF REL, inspects imports, validates ABI shape, selects a memory profile, and materializes packaged assets.", "src/hv/blueprint · src/shell2/cmds/run.rs"],
-        lifecycle: ["Host component", "Lifecycle controller", "Tracks Running → PreparePause → Ready → Arming with operation IDs and a 15-second deadline. Stale acknowledgements cannot affect later operations.", "src/hv/mod.rs"],
+        lifecycle: ["Host component", "Lifecycle controller", "Tracks Running → PreparePause → Ready and selects retained-pause or durable-snapshot disposition by reason. Operation IDs and a 15-second deadline reject stale acknowledgements.", "src/hv/mod.rs"],
         scheduler: ["Host component", "VMX lane scheduler", "Assigns a reserved AP execution lane and maintains per-slot VMXON/VMCS backing. Targeted lifecycle kicks force an observable VM exit.", "src/hv/guest_work.rs · src/hv/control_kick.rs"],
-        store: ["Host component", "Checkpoint store", "Stores independent snapshot streams per VM slot. A paused second slot does not overwrite the first slot’s checkpoint index.", "src/hv/store.rs"],
+        store: ["Host component", "Checkpoint store", "Stores independent snapshot streams per VM slot. Plain pause never writes it; snapshot, raw preserve, and accepted peer fetches create committed entries.", "src/hv/store.rs"],
         trueosfs: ["Host component", "TRUEOSFS service", "Performs storage work away from the Blueprint lane. App calls poll lightweight operation state and retrieve bounded results.", "crates/trueos-v/src/vfs_async.rs"],
         cleanup: ["Host component", "Owner cleanup", "Releases host capabilities by VM principal during terminal teardown. Pause may retain explicitly managed state, but handles still follow their lifecycle policy.", "src/hv/mod.rs: teardown"],
         identity: ["Host component", "Identity authority", "Mints UUIDv4 instance and lineage IDs. Same-instance Resume increments generation; a future clone needs a fresh instance with retained lineage.", "src/hv/mod.rs: BlueprintInstanceIdentity"],
@@ -1014,6 +1020,7 @@
         replicatable: false,
         snapshot: false,
         pauseLatched: false,
+        prepareReason: "pause",
         rawSnapshot: false,
         busy: false,
         scenarioRunning: false,
@@ -1025,7 +1032,7 @@
         empty: ["install"],
         installed: ["launch"],
         starting: ["fault"],
-        running: ["pause", "preserve", "shutdown", "stop", "fault"],
+        running: ["pause", "snapshot", "preserve", "shutdown", "stop", "fault"],
         prepare: ["ready", "timeout", "stop", "fault"],
         ready: ["fault"],
         snapshotting: ["fault"],
@@ -1098,7 +1105,10 @@
         $$(".edge-label").forEach(label => label.classList.toggle("active", label.dataset.edgeLabel === model.edge));
 
         const allowed = new Set(actionsForState[model.state] || []);
-        if (model.state === "running" && !model.replicatable) allowed.delete("pause");
+        if (model.state === "running" && !model.replicatable) {
+          allowed.delete("pause");
+          allowed.delete("snapshot");
+        }
         if (model.state === "stopped" && !model.rawSnapshot && !model.snapshot) allowed.delete("restore");
         $$("[data-action]").forEach(button => {
           button.disabled = model.busy || !allowed.has(button.dataset.action);
@@ -1128,7 +1138,7 @@
           admission: ["starting"].includes(model.state),
           lifecycle: ["prepare", "ready", "snapshotting", "paused", "restoring"].includes(model.state),
           scheduler: ["starting", "running", "prepare", "ready", "snapshotting", "restoring"].includes(model.state),
-          store: model.snapshot || ["snapshotting", "paused", "restoring"].includes(model.state),
+          store: model.snapshot || ["snapshotting", "restoring"].includes(model.state),
           trueosfs: hasVm || model.state === "installed",
           cleanup: ["stopped", "failed"].includes(model.state),
           identity: hasVm
@@ -1167,29 +1177,37 @@
             transition("running", "starting-running", "VM entry committed; mediated capabilities available");
             break;
           case "pause":
+            model.prepareReason = "pause";
             transition("prepare", "running-prepare", "PreparePause operation=41 reason=Pause deadline=+15000ms");
+            break;
+          case "snapshot":
+            model.prepareReason = "snapshot";
+            transition("prepare", "running-prepare", `PreparePause operation=41 reason=Replicate durable_id=${model.vmId}`);
             break;
           case "ready":
             transition("ready", "prepare-ready", "Ready operation=41 checkpoint_version=3; capabilities released");
             await setBusy(true);
             model.busy = false;
-            transition("snapshotting", "ready-snapshotting", "VM stopped at exact Ready boundary; snapshot encoding");
-            await setBusy(true);
-            model.busy = false;
-            model.snapshot = true;
             model.pauseLatched = true;
-            transition("paused", "snapshotting-paused", "snapshot v3 committed; Blueprint context retained");
+            if (model.prepareReason === "snapshot") {
+              transition("snapshotting", "ready-snapshotting", "VM stopped at exact Ready boundary; snapshot encoding");
+              await setBusy(true);
+              model.busy = false;
+              model.snapshot = true;
+              transition("paused", "snapshotting-paused", `snapshot v3 committed as VM ID ${model.vmId}; live context retained`);
+            } else {
+              transition("paused", "ready-paused", "VM stopped at exact Ready boundary; live state retained without store write");
+            }
             break;
           case "timeout":
             transition("running", "prepare-running", "PreparePause operation=41 expired; VM left running");
             break;
           case "resume":
-            transition("restoring", "paused-restoring", "restore armed for same VM slot 03");
             await setBusy(true);
             model.busy = false;
             model.generation += 1;
             model.pauseLatched = false;
-            transition("running", "restoring-running", `Resume returned after Ready; generation=${model.generation}; rebind capabilities`);
+            transition("running", "paused-running", `retained VM resumed directly after Ready; generation=${model.generation}; rebind capabilities`);
             break;
           case "preserve":
             model.pauseLatched = false;
@@ -1235,6 +1253,7 @@
         model.replicatable = false;
         model.snapshot = false;
         model.pauseLatched = false;
+        model.prepareReason = "pause";
         model.rawSnapshot = false;
         model.busy = false;
         model.instanceKind = "default";
@@ -1253,6 +1272,7 @@
         const scenario = $("#scenario").value;
         const sequences = {
           pause: ["install", "launch", "pause", "ready", "resume"],
+          snapshot: ["install", "launch", "snapshot", "ready", "resume"],
           preserve: ["install", "launch", "preserve", "restore"],
           timeout: ["install", "launch", "pause", "timeout"],
           shutdown: ["install", "launch", "shutdown"],

@@ -44,7 +44,7 @@ pub const OP_LIFECYCLE_PAUSE: u32 = 0x09; // legacy request; begins PreparePause
 pub const OP_BP_REL_IMAGE_EXEC_ENABLE: u32 = 0x0A; // trusted loader: arg0 GVA,arg1 bytes
 pub const OP_BP_REL_IMAGE_EXEC_DISABLE: u32 = 0x0B; // trusted loader: exact active range
 pub const OP_BP_LIFECYCLE_POLL: u32 = 0x0C; // response operation + deadline/reason when PreparePause is pending
-pub const OP_BP_LIFECYCLE_READY: u32 = 0x0D; // arg0 operation,arg1 checkpoint version -> preserve at exact boundary
+pub const OP_BP_LIFECYCLE_READY: u32 = 0x0D; // arg0 operation,arg1 checkpoint version -> pause/snapshot at exact boundary
 pub const OP_BP_LIFECYCLE_IDENTITY: u32 = 0x0E; // response generation/flags + instance/lineage UUID bytes
 pub const OP_BP_RAPL_SNAPSHOT_READ: u32 = 0x91; // arg0 offset, arg1 cap -> latest RAPL snapshot text
 pub const OP_BP_RAPL_HISTORY_READ: u32 = 0x92; // arg0 offset, arg1 cap -> capped RAPL history text
@@ -284,6 +284,7 @@ pub struct CommPage {
 pub enum DispatchOutcome {
     Resume,
     Stop,
+    Pause,
     Preserve,
     Yield,
     SleepMs(u64),
@@ -603,15 +604,20 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             DispatchOutcome::Resume
         }
-        OP_BP_LIFECYCLE_READY => {
-            if crate::hv::acknowledge_blueprint_ready(vm_id, arg0, arg1) {
+        OP_BP_LIFECYCLE_READY => match crate::hv::acknowledge_blueprint_ready(vm_id, arg0, arg1) {
+            Some(crate::hv::BlueprintReadyDisposition::Pause) => {
+                write_response(vm_id, seq, STATUS_OK, arg0, 0);
+                DispatchOutcome::Pause
+            }
+            Some(crate::hv::BlueprintReadyDisposition::Snapshot) => {
                 write_response(vm_id, seq, STATUS_OK, arg0, 0);
                 DispatchOutcome::Preserve
-            } else {
+            }
+            None => {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 DispatchOutcome::Resume
             }
-        }
+        },
         OP_BP_LIFECYCLE_IDENTITY => {
             #[repr(C)]
             #[derive(Copy, Clone)]

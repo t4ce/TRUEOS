@@ -567,6 +567,17 @@ pub enum BlueprintPauseReason {
     Migrate = 3,
 }
 
+/// Host action to take after a Blueprint reaches its exact Ready boundary.
+///
+/// A pause retains the quiesced VM directly in memory. Snapshot-capable
+/// lifecycle reasons additionally serialize that retained state into the
+/// durable per-VM store.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BlueprintReadyDisposition {
+    Pause,
+    Snapshot,
+}
+
 impl BlueprintPauseReason {
     const fn from_raw(raw: u8) -> Self {
         match raw {
@@ -697,9 +708,9 @@ pub(crate) fn acknowledge_blueprint_ready(
     vm_id: u8,
     operation: u64,
     checkpoint_version: u64,
-) -> bool {
+) -> Option<BlueprintReadyDisposition> {
     let Some(vm) = vm_slot(vm_id) else {
-        return false;
+        return None;
     };
     expire_prepare_pause(vm_id, vm);
     if operation == 0
@@ -714,21 +725,28 @@ pub(crate) fn acknowledge_blueprint_ready(
             )
             .is_err()
     {
-        return false;
+        return None;
     }
+    let reason = BlueprintPauseReason::from_raw(vm.lifecycle_reason.load(Ordering::Acquire));
+    let disposition = match reason {
+        BlueprintPauseReason::Pause => BlueprintReadyDisposition::Pause,
+        BlueprintPauseReason::Replicate | BlueprintPauseReason::Migrate => {
+            BlueprintReadyDisposition::Snapshot
+        }
+    };
     vm.lifecycle_checkpoint_version
         .store(checkpoint_version, Ordering::Release);
     match prepare_preserve_mode(vm_id, PreserveMode::Pause) {
         Ok(true) => {
             hvlogf(format_args!(
-                "hv: vm{} lifecycle: Ready operation={} checkpoint_version={}",
-                vm_id, operation, checkpoint_version
+                "hv: vm{} lifecycle: Ready operation={} checkpoint_version={} reason={:?} disposition={:?}",
+                vm_id, operation, checkpoint_version, reason, disposition
             ));
-            true
+            Some(disposition)
         }
         Ok(false) | Err(_) => {
             reset_prepare_pause(vm);
-            false
+            None
         }
     }
 }
@@ -1288,12 +1306,29 @@ fn start_with_mode(
     }
 
     let is_blueprint_start = pending_blueprint.is_some();
+    if is_blueprint_start && vm.pause_latched.load(Ordering::Acquire) {
+        hvwarnf(format_args!(
+            "hv: vm{} lifecycle: fresh blueprint start rejected while pause is retained",
+            vm_id
+        ));
+        vm.starting.store(false, Ordering::Release);
+        return Err(StartError::AlreadyRunning);
+    }
     if is_blueprint_start {
         memory::clear_restore_meta_for_vm(vm_id);
         hvlogf(format_args!(
             "hv: vm{} lifecycle: fresh blueprint start disarmed restore metadata",
             vm_id
         ));
+    }
+
+    if vm.pause_latched.load(Ordering::Acquire) && memory::active_restore_meta(vm_id).is_none() {
+        hvwarnf(format_args!(
+            "hv: vm{} lifecycle: retained pause has no active restore metadata",
+            vm_id
+        ));
+        vm.starting.store(false, Ordering::Release);
+        return Err(StartError::GuestMemoryUnavailable);
     }
 
     if memory::active_restore_meta(vm_id).is_none() {
@@ -1450,6 +1485,10 @@ pub fn kick(vm_id: u8) -> Result<bool, StopError> {
 
 pub fn request_replicatable_pause(vm_id: u8) -> Result<bool, StopError> {
     request_blueprint_prepare_pause(vm_id, BlueprintPauseReason::Pause)
+}
+
+pub fn request_replicatable_snapshot(vm_id: u8) -> Result<bool, StopError> {
+    request_blueprint_prepare_pause(vm_id, BlueprintPauseReason::Replicate)
 }
 
 pub fn request_blueprint_prepare_pause(
@@ -3192,6 +3231,11 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
             let preserve_exit = vmexit_is_preserve(vm_id, lr);
             if preserve_exit {
                 snapshot_on_preserve_exit(vm_id);
+            } else if vm.pause_latched.load(Ordering::Acquire) {
+                hvlogf(format_args!(
+                    "hv: vm{} lifecycle: retained in-memory pause reached at rip=0x{:016X}",
+                    vm_id, lr.guest_rip
+                ));
             } else if !clean_exit && let Some(state) = blueprint_launch_snapshot(vm_id).as_ref() {
                 pending_crash = Some(crate::hv::app_crash::prepare(
                     vm_id,
@@ -3648,6 +3692,13 @@ async fn vmx_launch_once_with_ept(
                 match crate::hv::vmcall::dispatch(vm_id) {
                     crate::hv::vmcall::DispatchOutcome::Resume => {}
                     crate::hv::vmcall::DispatchOutcome::Stop => break,
+                    crate::hv::vmcall::DispatchOutcome::Pause => {
+                        hvlogf(format_args!(
+                            "hv: vm{} reporting: cooperative pause retained at rip=0x{:016X}",
+                            vm_id, lr.guest_rip
+                        ));
+                        break;
+                    }
                     crate::hv::vmcall::DispatchOutcome::Preserve => {
                         preserve_requested = true;
                         if let Some(vm) = vm {
