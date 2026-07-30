@@ -40,7 +40,7 @@ const STATIC30_MAX_WIDTH: u32 = 320;
 const STATIC30_MAX_HEIGHT: u32 = 180;
 const CPP_FONT_GO_WINDOWS: usize = 4;
 const CPP_FONT_GO_DURATION_MS: u64 = 60_000;
-const CPP_FONT_GO_CADENCE_MS: u64 = 1_000;
+const CPP_FONT_GO_CADENCE_MS: u64 = 2_000;
 const CPP_FONT_GO_STAGE_MS: u64 = 10_000;
 
 pub(crate) const GPGPU_PREVIEW_DEFAULT_DURATION_MS: u64 = 5_000;
@@ -140,7 +140,7 @@ impl GpgpuPreviewPreset {
             | Self::CppAudio
             | Self::CppParticle
             | Self::CppFont => "slot1-direct",
-            Self::CppFontGo => "slots1+2+3/2x2-composed",
+            Self::CppFontGo => "slots0+1+2+3-direct/2x2",
         }
     }
 }
@@ -417,6 +417,7 @@ pub(crate) fn request_cpp_font_preview_start(
         policy: PreviewRunPolicy::SHELL,
     };
     control.status.desired_running = true;
+    control.status.phase = GpgpuPreviewPhase::Starting;
     control.status.request_serial = serial;
     control.status.config = config;
     control.status.width = width;
@@ -476,6 +477,7 @@ fn request_gpgpu_preview_start_with_policy(
         policy,
     };
     control.status.desired_running = true;
+    control.status.phase = GpgpuPreviewPhase::Starting;
     control.status.request_serial = serial;
     control.status.config = config;
     control.status.last_error = "none";
@@ -1632,9 +1634,9 @@ fn cpp_font_go_stamp_request(
         RetainedFontPositioning, RetainedFontRun,
     };
 
-    const GLYPH_TARGETS: [usize; 6] = [192, 320, 512, 768, 1_024, 1_408];
-    const LAYER_COUNTS: [usize; 6] = [3, 4, 6, 8, 10, 12];
-    const RUNS_PER_LAYER: [usize; 6] = [2, 3, 4, 4, 5, 5];
+    const GLYPH_TARGETS: [usize; 6] = [48, 96, 192, 384, 768, 1_408];
+    const LAYER_COUNTS: [usize; 6] = [2, 3, 4, 6, 8, 12];
+    const RUNS_PER_LAYER: [usize; 6] = [2, 2, 3, 4, 5, 5];
     let stage_index = usize::from(stage.min(5));
     let glyph_target = GLYPH_TARGETS[stage_index];
     let layer_count = LAYER_COUNTS[stage_index];
@@ -2272,7 +2274,7 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "ui4-cpp-resizable-slot1",
         GpgpuPreviewPreset::CppFont => "ui4-font-scene-slot1",
-        GpgpuPreviewPreset::CppFontGo => "ui4-font-scene-2x2",
+        GpgpuPreviewPreset::CppFontGo => "ui4-font-scene-2x2-direct",
         GpgpuPreviewPreset::Static => "ui4-overlay",
         GpgpuPreviewPreset::Static30 => "ui4-font-scene-slots1+2+3",
     }
@@ -2805,10 +2807,9 @@ const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
 }
 
 fn active_preview_plane_slot(preview: &ActivePreview) -> usize {
-    preview.font_go_quadrant.map_or_else(
-        || preview_plane_slot(preview.config.preset),
-        |quadrant| usize::from(quadrant) % 3 + 1,
-    )
+    super::window_broker::window_snapshot(PREVIEW_OWNER, preview.window)
+        .map(|window| window.plane.slot())
+        .unwrap_or_else(|| preview_plane_slot(preview.config.preset))
 }
 
 fn next_preview_group_poll_ms(previews: &[ActivePreview]) -> u64 {
@@ -2880,8 +2881,8 @@ mod tests {
 
     #[test]
     fn cpp_font_go_ramp_stays_bounded_and_increases_work() {
-        let expected_glyphs = [192usize, 320, 512, 768, 1_024, 1_408];
-        let expected_layers = [3usize, 4, 6, 8, 10, 12];
+        let expected_glyphs = [48usize, 96, 192, 384, 768, 1_408];
+        let expected_layers = [2usize, 3, 4, 6, 8, 12];
         let mut previous_runs = 0usize;
         for stage in 0..6u8 {
             let (request, glyphs, layers, runs) =

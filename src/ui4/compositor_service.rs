@@ -1013,14 +1013,22 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
         }
         FrameGpuRelease::Compute(_) => {
             window.plane.slot() < super::INTERACTION_OVERLAY_PLANE_SLOT
-                && matches!(
-                    (snapshot.plan.content, snapshot.plan.buffering),
-                    (FrameContent::Image, super::FrameBuffering::Double)
-                        | (FrameContent::BlueprintScene, super::FrameBuffering::Triple)
-                        | (FrameContent::Video, super::FrameBuffering::Quad)
-                )
+                && compute_release_direct_lifecycle(snapshot.plan.content, snapshot.plan.buffering)
         }
     })
+}
+
+const fn compute_release_direct_lifecycle(
+    content: FrameContent,
+    buffering: super::FrameBuffering,
+) -> bool {
+    matches!(
+        (content, buffering),
+        (FrameContent::Image, super::FrameBuffering::Double)
+            | (FrameContent::FontScene2d, super::FrameBuffering::Double)
+            | (FrameContent::BlueprintScene, super::FrameBuffering::Triple)
+            | (FrameContent::Video, super::FrameBuffering::Quad)
+    )
 }
 
 fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool {
@@ -1423,6 +1431,18 @@ mod damage_tests {
         assert!(half_scale_backing_matches(2559, 1439, 1280, 720));
         assert!(!half_scale_backing_matches(2560, 1440, 640, 400));
         assert!(!half_scale_backing_matches(2560, 1440, 2560, 1440));
+    }
+
+    #[test]
+    fn dirty_double_font_frames_are_direct_presentable() {
+        assert!(compute_release_direct_lifecycle(
+            FrameContent::FontScene2d,
+            super::super::FrameBuffering::Double,
+        ));
+        assert!(!compute_release_direct_lifecycle(
+            FrameContent::FontScene2d,
+            super::super::FrameBuffering::Single,
+        ));
     }
 
     #[test]

@@ -1204,7 +1204,7 @@ fn queue_font_service_go(io: &'static dyn ShellBackend2) {
             print_shell_line(
                 io,
                 alloc::format!(
-                    "cpp font go: queued=1 request={} windows=4 layout=2x2 scanout={}x{} frame_extent={}x{} duration_ms=60000 cadence_ms=1000 ramp=medium-to-1408-glyphs-per-frame variations=font+size+slant+color+alpha+position+layers output=ui4-font-scene path=gpu-clear->skrifa->gpu-vm-r8->cpp-igc->guc-rcs->ui4-rgba8 stop=\"cpp stop\"",
+                    "cpp font go: queued=1 request={} windows=4 layout=2x2 scanout={}x{} frame_extent={}x{} duration_ms=60000 cadence_ms=2000 ramp=48-to-1408-glyphs-per-frame variations=font+size+slant+color+alpha+position+layers output=ui4-direct-font-scene path=gpu-clear->skrifa->gpu-vm-r8->cpp-igc->guc-rcs->ui4-rgba8 stop=\"cpp stop\"",
                     serial,
                     scanout_width,
                     scanout_height,
