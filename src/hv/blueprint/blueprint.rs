@@ -1638,6 +1638,7 @@ pub(crate) fn build_process_args(archive: &str, app_args: &[String]) -> Vec<Stri
 pub(crate) fn build_process_env(
     archive: &str,
     app_fs_root: Option<&str>,
+    identity: Option<&crate::hv::BlueprintInstanceIdentity>,
 ) -> BTreeMap<String, String> {
     let mut vars = BTreeMap::new();
     let app_home = app_fs_root
@@ -1738,6 +1739,24 @@ pub(crate) fn build_process_env(
     if let Some(root) = app_fs_root {
         vars.insert(String::from("TRUEOS_APP_FS_ROOT"), String::from(root));
     }
+    if let Some(identity) = identity {
+        vars.insert(
+            String::from("TRUEOS_APP_INSTANCE"),
+            crate::hv::format_blueprint_uuid(&identity.instance),
+        );
+        vars.insert(
+            String::from("TRUEOS_APP_LINEAGE"),
+            crate::hv::format_blueprint_uuid(&identity.lineage),
+        );
+        vars.insert(
+            String::from("TRUEOS_APP_GENERATION"),
+            alloc::format!("{}", identity.generation),
+        );
+        vars.insert(
+            String::from("TRUEOS_APP_IS_CLONE"),
+            String::from(if identity.clone { "1" } else { "0" }),
+        );
+    }
     let app_common = app_fs_common_root();
     vars.insert(String::from("TRUEOS_APP_FS_COMMON"), app_common.clone());
     vars.insert(String::from("TRUEOS_APP_COMMON"), String::from("/common"));
@@ -1780,6 +1799,10 @@ fn safe_archive_stem(archive: &str) -> String {
 
 pub(crate) fn app_fs_root_for_archive(archive: &str, _module_bytes: &[u8]) -> String {
     alloc::format!("apps/{}", safe_archive_stem(archive))
+}
+
+pub(crate) fn app_fs_root_for_instance(archive: &str, instance_guid: &str) -> String {
+    alloc::format!("apps/{}/{}", safe_archive_stem(archive), instance_guid.trim_matches('/'))
 }
 
 pub(crate) fn app_fs_common_root() -> String {

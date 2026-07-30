@@ -56,6 +56,7 @@ mod portio;
 mod power;
 mod r;
 mod ram_probe;
+mod ram_usage;
 mod release_count;
 mod remote_work_wake;
 mod runtime;

@@ -847,7 +847,10 @@ async fn run_lum_turn(
             return false;
         }
     };
-    let first_piece_bytes = match tokenizer.decode(&[first_token], true) {
+    let first_piece_bytes = match tokenizer.decode(
+        &[first_token],
+        !crate::spirit::LUMEN_AI_EMOTION_ENABLED,
+    ) {
         Ok(piece) => piece,
         Err(error) => {
             print_matrix_target_line(
@@ -1000,10 +1003,12 @@ async fn run_lum_turn(
     let raw_reply_digest: [u8; 32] = Sha256::digest(&reply_bytes).into();
     let raw_reply_sha256 = sha256_hex(&raw_reply_digest);
     let raw_reply = String::from_utf8_lossy(&reply_bytes);
-    let adapted_reply = if crate::spirit::LUMEN_AI_EMOTION_ENABLED {
-        crate::spirit::adapt_lumen_reply(raw_reply.as_ref())
+    let (adapted_reply, spirit_tool_only) = if crate::spirit::LUMEN_AI_EMOTION_ENABLED {
+        let adapted = crate::spirit::adapt_lumen_reply(raw_reply.as_ref());
+        let spirit_tool_only = adapted.is_spirit_tool_only();
+        (adapted.into_text(), spirit_tool_only)
     } else {
-        String::from(raw_reply.trim())
+        (String::from(raw_reply.trim()), false)
     };
     let reply = adapted_reply.as_str();
     let after = crate::intel::gpgpu::lfm25_q8_project_stats();
@@ -1027,17 +1032,24 @@ async fn run_lum_turn(
     telemetry.log_cpu_done(crate::r::lfm25_hybrid_cpu_backend::lfm25_hybrid_cpu_perf_snapshot());
     reasoning.finish();
     let response_turn = conversation.turns.saturating_add(1);
-    let live_ingress_finished = response_stream
-        .take()
-        .is_some_and(|stream| stream.finish(reply));
-    let spirit_ingress = if live_ingress_finished {
+    let live_ingress_finished = !spirit_tool_only
+        && response_stream
+            .take()
+            .is_some_and(|stream| stream.finish(reply));
+    let spirit_ingress = if spirit_tool_only {
+        "spirit-tool-only"
+    } else if live_ingress_finished {
         "live-finished"
     } else if crate::spirit::enqueue_reasoning_response(response_turn, reply) {
         "completed-fallback"
     } else {
         "dropped"
     };
-    print_matrix_target_line(target, alloc::format!("lum: {reply}").as_str());
+    if spirit_tool_only {
+        print_matrix_target_line(target, "lum: tool objective handed to Spirit");
+    } else {
+        print_matrix_target_line(target, alloc::format!("lum: {reply}").as_str());
+    }
     print_matrix_target_line(
         target,
         alloc::format!(

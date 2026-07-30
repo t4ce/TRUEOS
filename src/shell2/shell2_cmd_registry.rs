@@ -40,6 +40,7 @@ const TOOL_JSON_LUM: &str = r#"{"type":"object","properties":{"prompt":{"type":"
 const TOOL_JSON_MV: &str = r#"{"type":"object","properties":{"src":{"type":"string","description":"Source TRUEOSFS path."},"dst":{"type":"string","description":"Destination TRUEOSFS path."},"regex":{"type":"string","description":"Optional -regx pattern. When set, src and dst are directories."}},"required":["src","dst"],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_QJS: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
+const TOOL_JSON_RAM: &str = r#"{"type":"object","properties":{"scope":{"type":"string","description":"Optional pmm, host, or numeric VM id. Omit to list all configured RAM scopes."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_RAPL: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["store"],"description":"Store the current in-memory RAPL history in TRUEOSFS."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_RM: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file or directory path."},"regex":{"type":"string","description":"Optional -regx pattern to match children under path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
@@ -166,6 +167,11 @@ fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
 
 fn dispatch_qjs(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::qjs::try_parse(spawner, io, rest)
+}
+
+fn dispatch_ram(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let mut args = rest.split_whitespace();
+    super::cmds::ram::try_parse(io, &mut args)
 }
 
 fn dispatch_rapl(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -501,6 +507,15 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_SET),
     },
     BuiltinShell2CmdEntry {
+        name: "ram",
+        mode: "cmd",
+        color: Some(STATUS_GRAY_RGB),
+        advertised: true,
+        handler: dispatch_ram,
+        tool_description: Some("Inspect current and recent physical and heap RAM use."),
+        tool_parameters_json: Some(TOOL_JSON_RAM),
+    },
+    BuiltinShell2CmdEntry {
         name: "smp",
         mode: "cmd",
         color: Some(STATUS_GRAY_RGB),
@@ -582,7 +597,7 @@ pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
         "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "surf", "net", "qjs",
         "ssh", "txt", "grid", "tts", "stt", "cpp", "vgpu", "vid", "cry", "acpi", "rapl", "tlb",
-        "smp", "etc",
+        "ram", "smp", "etc",
     ];
 
     let mut out = AllocString::new();

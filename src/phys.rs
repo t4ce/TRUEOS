@@ -40,9 +40,18 @@ struct PhysRegion {
 
 struct PmmState {
     regions: Vec<PhysRegion, MAX_PMM_REGIONS>,
+    initial_bytes: u64,
 }
 
 static PMM: Mutex<Option<PmmState>> = Mutex::new(None);
+
+#[derive(Copy, Clone, Debug)]
+pub struct PmmStats {
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+    pub largest_free_region: u64,
+    pub free_regions: usize,
+}
 
 pub fn register_heap(virt_base: usize, phys_base: usize, length: usize) {
     HEAP_VIRT_BASE.store(virt_base as u64, Ordering::SeqCst);
@@ -228,6 +237,26 @@ pub fn free_phys_range(start: u64, size: usize) -> bool {
     state.release(start, size_u64)
 }
 
+/// Return a best-effort snapshot of the physical-memory manager.
+///
+/// `total_bytes` is the usable memory admitted when the PMM was initialized;
+/// `free_bytes` and the fragmentation fields reflect the current free list.
+pub fn pmm_stats() -> Option<PmmStats> {
+    let guard = PMM.lock();
+    let state = guard.as_ref()?;
+    Some(PmmStats {
+        total_bytes: state.initial_bytes,
+        free_bytes: state.total_bytes(),
+        largest_free_region: state
+            .regions
+            .iter()
+            .map(|region| region.end.saturating_sub(region.start))
+            .max()
+            .unwrap_or(0),
+        free_regions: state.region_count(),
+    })
+}
+
 /// Translate a physical address into a higher-half direct map (if present).
 #[inline(always)]
 pub fn phys_to_virt(phys: usize) -> usize {
@@ -286,6 +315,7 @@ impl PmmState {
     fn new() -> Self {
         Self {
             regions: Vec::new(),
+            initial_bytes: 0,
         }
     }
 
@@ -298,6 +328,7 @@ impl PmmState {
         let slice = self.regions.as_mut_slice();
         slice.sort_by_key(|a| a.start);
         self.merge_regions();
+        self.initial_bytes = self.total_bytes();
     }
 
     fn merge_regions(&mut self) {

@@ -12,6 +12,25 @@ pub struct TrueosCabiHeapStats {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrueosLifecyclePreparePause {
+    pub operation: u64,
+    pub deadline_ms: u64,
+    pub reason: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrueosLifecycleIdentity {
+    pub instance: [u8; 16],
+    pub lineage: [u8; 16],
+    pub generation: u64,
+    pub flags: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4SolaraFontSize {
     pub native_scale: u32,
@@ -855,6 +874,9 @@ unsafe extern "C" {
         out_ptr: *mut u8,
         out_cap: usize,
     ) -> isize;
+    pub fn trueos_cabi_lifecycle_poll(out: *mut TrueosLifecyclePreparePause) -> i32;
+    pub fn trueos_cabi_lifecycle_ready(operation: u64, checkpoint_version: u64) -> i32;
+    pub fn trueos_cabi_lifecycle_identity(out: *mut TrueosLifecycleIdentity) -> i32;
     pub fn trueos_cabi_shell2_print_line(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell_attached_write(data_ptr: *const u8, data_len: usize) -> usize;

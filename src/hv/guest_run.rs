@@ -166,7 +166,7 @@ fn container_shell_command(raw: &str) -> bool {
         }
         "pause" => {
             attached_write_line(
-                "vmx-shell: requesting replicatable pause; resume it from F2 pause by vmid",
+                "vmx-shell: requesting Blueprint PreparePause; checkpoint waits for Blueprint Ready",
             );
             let (status, _) = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_LIFECYCLE_PAUSE, 0, 0);
             if status != trueos_vm::vmcall::STATUS_OK {
@@ -174,7 +174,7 @@ fn container_shell_command(raw: &str) -> bool {
                     "vmx-shell: replicatable pause unavailable; use preserve for a raw checkpoint",
                 );
             } else {
-                attached_write_line("vmx-shell: resumed after replicatable pause");
+                attached_write_line("vmx-shell: PreparePause requested");
             }
         }
         "preserve" => {
@@ -397,13 +397,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     crate::hv::hvlogf(format_args!("run: guest app fs path alloc begin vm={}", vm_id));
     let Some((app_fs_root, app_fs_common)) =
         crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
-            (
-                crate::hv::blueprint::app_fs_root_for_archive(
-                    state.archive.as_str(),
-                    state.module_bytes.as_slice(),
-                ),
-                crate::hv::blueprint::app_fs_common_root(),
-            )
+            (state.app_fs_root.clone(), crate::hv::blueprint::app_fs_common_root())
         })
     else {
         log("run: guest app fs paths failed: guest heap domain unavailable");
@@ -459,6 +453,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         let process_env = crate::hv::blueprint::build_process_env(
             state.archive.as_str(),
             Some(app_fs_root.as_str()),
+            Some(&state.identity),
         );
         crate::hv::blueprint::invoke_host_rel(
             unpacked,

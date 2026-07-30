@@ -78,6 +78,8 @@ fn vm_state_label(state: crate::hv::HvVmState) -> &'static str {
         "load-pending"
     } else if state.stop_requested {
         "stop-pending"
+    } else if state.prepare_pause_pending {
+        "prepare-pause"
     } else if state.preserve_requested || state.preserve_exit {
         "save-pending"
     } else if state.running {
@@ -132,6 +134,10 @@ pub(crate) fn print_status(io: &'static dyn ShellBackend2) {
 fn replicatable_state_label(state: crate::hv::HvVmState, stored: bool) -> &'static str {
     if state.restore_inflight {
         "resuming"
+    } else if state.prepare_pause_pending {
+        "prepare-pause"
+    } else if state.lifecycle_ready && (state.running || state.starting) {
+        "ready"
     } else if state.pause_latched && (state.running || state.starting) {
         "pause-pending"
     } else if state.running {
@@ -393,6 +399,15 @@ async fn peer_app_task(
         return;
     };
 
+    if !crate::hv::cross_principal_snapshot_restore_supported() {
+        print_matrix_target_line(
+            &target,
+            "apps: peer snapshot resume is safety-gated until guest-writable backing relocation is implemented",
+        );
+        set_matrix_target_active(&target, false);
+        return;
+    }
+
     let local_vm_id = args
         .get(2)
         .and_then(|arg| arg.parse::<u8>().ok())
@@ -627,7 +642,14 @@ fn toggle_replicatable_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_
 
     if state.running || state.starting {
         match crate::hv::request_replicatable_pause(vm_id) {
-            Ok(true) => line(io, alloc::format!("apps: vm{} pause requested", vm_id).as_str()),
+            Ok(true) => line(
+                io,
+                alloc::format!(
+                    "apps: vm{} PreparePause requested; waiting for Blueprint Ready",
+                    vm_id
+                )
+                .as_str(),
+            ),
             Ok(false) => {
                 line(io, alloc::format!("apps: vm{} is not available for pause", vm_id).as_str())
             }

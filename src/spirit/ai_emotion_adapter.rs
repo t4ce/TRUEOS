@@ -19,7 +19,7 @@ const TOOL_NAME: &str = "play_emotion";
 ///
 /// When false, Lumen receives no emotion tool schema and its replies never
 /// enter this adapter.
-pub(crate) const LUMEN_AI_EMOTION_ENABLED: bool = false;
+pub(crate) const LUMEN_AI_EMOTION_ENABLED: bool = true;
 
 /// Compact first-turn instruction for the pinned LFM2.5 tool-call format.
 ///
@@ -41,11 +41,45 @@ pub(crate) enum AiEmotionAdapterError {
     UnknownIdea,
 }
 
-/// Consume an optional model-emitted emotion call and return display-safe text.
+/// Display-safe result of adapting one Lumen reply.
+///
+/// `spirit_owned_tool` remains separate from `text`: a valid tool-only reply
+/// is a complete Spirit objective, not an empty natural-language response.
+pub(crate) struct AdaptedLumenReply {
+    text: String,
+    spirit_owned_tool: bool,
+}
+
+impl AdaptedLumenReply {
+    fn text(text: String) -> Self {
+        Self {
+            text,
+            spirit_owned_tool: false,
+        }
+    }
+
+    fn spirit_tool(text: String) -> Self {
+        Self {
+            text,
+            spirit_owned_tool: true,
+        }
+    }
+
+    pub(crate) fn is_spirit_tool_only(&self) -> bool {
+        self.spirit_owned_tool && self.text.is_empty()
+    }
+
+    pub(crate) fn into_text(self) -> String {
+        self.text
+    }
+}
+
+/// Consume an optional model-emitted emotion call and return its presentation
+/// route together with display-safe text.
 ///
 /// This is deliberately fire-and-forget. Playing an emotion does not need a
 /// second inference pass or a verbose tool-result message in the context.
-pub(crate) fn adapt_reply(raw: &str) -> String {
+pub(crate) fn adapt_reply(raw: &str) -> AdaptedLumenReply {
     let Some(start) = raw.find(TOOL_CALL_START) else {
         if let Some(end) = raw.find(TOOL_CALL_END) {
             return rejected_reply(
@@ -55,7 +89,7 @@ pub(crate) fn adapt_reply(raw: &str) -> String {
                 AiEmotionAdapterError::MalformedCall,
             );
         }
-        return String::from(raw.trim());
+        return AdaptedLumenReply::text(String::from(raw.trim()));
     };
     let payload_start = start + TOOL_CALL_START.len();
     let Some(relative_end) = raw[payload_start..].find(TOOL_CALL_END) else {
@@ -79,7 +113,7 @@ pub(crate) fn adapt_reply(raw: &str) -> String {
                 emotion.as_word(),
                 ring_len,
             );
-            text
+            AdaptedLumenReply::spirit_tool(text)
         }
         Err(error) => {
             crate::log_warn!(
@@ -88,7 +122,7 @@ pub(crate) fn adapt_reply(raw: &str) -> String {
                 emotion.as_word(),
                 error,
             );
-            text
+            AdaptedLumenReply::spirit_tool(text)
         }
     }
 }
@@ -98,13 +132,13 @@ fn rejected_reply(
     span_start: usize,
     span_end: usize,
     error: AiEmotionAdapterError,
-) -> String {
+) -> AdaptedLumenReply {
     crate::log_warn!(
         target: "gfx";
         "trueos-spirit: ai emotion rejected error={:?} action=strip-control+keep-text\n",
         error,
     );
-    remove_control_span(raw, span_start, span_end)
+    AdaptedLumenReply::text(remove_control_span(raw, span_start, span_end))
 }
 
 fn parse_call(payload: &str) -> Option<LillyEmotion> {
@@ -178,7 +212,7 @@ fn remove_control_span(raw: &str, start: usize, end: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{LillyEmotion, parse_call, remove_control_span};
+    use super::{AdaptedLumenReply, LillyEmotion, parse_call, remove_control_span};
 
     #[test]
     fn parses_liquid_pythonic_and_minimal_json_calls() {
@@ -201,5 +235,11 @@ mod tests {
     fn removes_control_without_joining_visible_words() {
         let raw = "Hello <control> there.";
         assert_eq!(remove_control_span(raw, 6, 15), "Hello there.");
+    }
+
+    #[test]
+    fn treats_a_valid_tool_only_result_as_a_spirit_objective() {
+        let reply = AdaptedLumenReply::spirit_tool(String::new());
+        assert!(reply.is_spirit_tool_only());
     }
 }

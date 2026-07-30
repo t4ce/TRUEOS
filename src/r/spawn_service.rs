@@ -45,6 +45,7 @@ define_started_flags!(
     TTSTT_CPU_SERVICE_STARTED,
     LUMEN_BOOT_WARM_STARTED,
     SMP_HLT_HISTORY_STARTED,
+    RAM_USAGE_HISTORY_STARTED,
     CODEC_SERVICE_STARTED,
     QJS_ASYNC_FS_SERVICE_STARTED,
     TRUEOSFS_MOUNT_SERVICE_STARTED,
@@ -341,6 +342,10 @@ fn spawn_lumen_boot_warm(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_smp_hlt_history(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::smp::hlt_history_sampler_task())
+}
+
+fn spawn_ram_usage_history(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::ram_usage::history_sampler_task())
 }
 
 fn spawn_codec_service(spawner: Spawner) -> SpawnAttempt {
@@ -1477,7 +1482,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 70
+const TASK_COUNT: usize = 71
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
@@ -1534,6 +1539,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_ttstt_cpu_service,
     ),
     TaskSpec::enabled("smp-hlt-history", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history),
+    TaskSpec::enabled("ram-usage-history", 0, &RAM_USAGE_HISTORY_STARTED, spawn_ram_usage_history),
     TaskSpec::disabled(
         "executor-realm-migration-smoke",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,

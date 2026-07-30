@@ -1588,6 +1588,97 @@ pub unsafe extern "C" fn trueos_cabi_blueprint_exit_reason(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_lifecycle_poll(
+    out: *mut v::bp_abi::TrueosLifecyclePreparePause,
+) -> i32 {
+    if out.is_null() || crate::hv::current_hull_guest_context_vm_id().is_none() {
+        return -1;
+    }
+    let mut payload = [0u8; 16];
+    let (status, operation) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_LIFECYCLE_POLL,
+        0,
+        0,
+        &[],
+        &mut payload,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return -1;
+    }
+    if operation == 0 {
+        unsafe {
+            out.write(v::bp_abi::TrueosLifecyclePreparePause::default());
+        }
+        return 0;
+    }
+    let deadline_ms = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+    let reason = u32::from_le_bytes(payload[8..12].try_into().unwrap_or([0; 4]));
+    unsafe {
+        out.write(v::bp_abi::TrueosLifecyclePreparePause {
+            operation,
+            deadline_ms,
+            reason,
+            reserved: 0,
+        });
+    }
+    1
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_lifecycle_ready(operation: u64, checkpoint_version: u64) -> i32 {
+    if operation == 0 || crate::hv::current_hull_guest_context_vm_id().is_none() {
+        return -1;
+    }
+    // A successful call does not return until this VM instance is resumed:
+    // the host snapshots at the VMCALL boundary after writing the response.
+    let (status, _) = trueos_vm::vmcall::call(
+        trueos_vm::vmcall::OP_BP_LIFECYCLE_READY,
+        operation,
+        checkpoint_version,
+    );
+    if status == trueos_vm::vmcall::STATUS_OK {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_lifecycle_identity(
+    out: *mut v::bp_abi::TrueosLifecycleIdentity,
+) -> i32 {
+    if out.is_null() || crate::hv::current_hull_guest_context_vm_id().is_none() {
+        return -1;
+    }
+    let mut payload = [0u8; 40];
+    let (status, generation) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_LIFECYCLE_IDENTITY,
+        0,
+        0,
+        &[],
+        &mut payload,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return -1;
+    }
+    let mut instance = [0u8; 16];
+    instance.copy_from_slice(&payload[..16]);
+    let mut lineage = [0u8; 16];
+    lineage.copy_from_slice(&payload[16..32]);
+    let flags = u32::from_le_bytes(payload[32..36].try_into().unwrap_or([0; 4]));
+    unsafe {
+        out.write(v::bp_abi::TrueosLifecycleIdentity {
+            instance,
+            lineage,
+            generation,
+            flags,
+            reserved: 0,
+        });
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_blueprint_shutdown(
     data_ptr: *const u8,
     data_len: usize,

@@ -15,6 +15,7 @@ pub(crate) mod lumen;
 pub(crate) mod mv;
 pub(crate) mod net;
 pub(crate) mod qjs;
+pub(crate) mod ram;
 pub(crate) mod rapl;
 pub(crate) mod rm;
 pub(crate) mod run;

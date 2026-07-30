@@ -40,9 +40,12 @@ pub const OP_SLEEP_MS: u32 = 0x05; // cooperative host sleep before resume
 pub const OP_RAND_BYTES: u32 = 0x06; // arg0 requested bytes, response payload is random bytes
 pub const OP_BP_CPU_COUNT: u32 = 0x07; // response is app-visible CPU/service lane count
 pub const OP_MONOTONIC_NANOS: u32 = 0x08; // response_data = host monotonic nanos
-pub const OP_LIFECYCLE_PAUSE: u32 = 0x09; // tagged Blueprint pause + snapshot + stop
+pub const OP_LIFECYCLE_PAUSE: u32 = 0x09; // legacy request; begins PreparePause only
 pub const OP_BP_REL_IMAGE_EXEC_ENABLE: u32 = 0x0A; // trusted loader: arg0 GVA,arg1 bytes
 pub const OP_BP_REL_IMAGE_EXEC_DISABLE: u32 = 0x0B; // trusted loader: exact active range
+pub const OP_BP_LIFECYCLE_POLL: u32 = 0x0C; // response operation + deadline/reason when PreparePause is pending
+pub const OP_BP_LIFECYCLE_READY: u32 = 0x0D; // arg0 operation,arg1 checkpoint version -> preserve at exact boundary
+pub const OP_BP_LIFECYCLE_IDENTITY: u32 = 0x0E; // response generation/flags + instance/lineage UUID bytes
 pub const OP_BP_RAPL_SNAPSHOT_READ: u32 = 0x91; // arg0 offset, arg1 cap -> latest RAPL snapshot text
 pub const OP_BP_RAPL_HISTORY_READ: u32 = 0x92; // arg0 offset, arg1 cap -> capped RAPL history text
 pub const OP_BP_PCI_SNAPSHOT_READ: u32 = 0x93; // arg0 offset, arg1 cap -> latest PCI snapshot text
@@ -547,16 +550,72 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
         }
         OP_LIFECYCLE_PAUSE => {
-            match crate::hv::prepare_preserve_mode(vm_id, crate::hv::PreserveMode::Pause) {
+            match crate::hv::request_blueprint_prepare_pause(
+                vm_id,
+                crate::hv::BlueprintPauseReason::Pause,
+            ) {
                 Ok(true) => {
                     write_response(vm_id, seq, STATUS_OK, 0, 0);
-                    DispatchOutcome::Preserve
+                    DispatchOutcome::Resume
                 }
                 Ok(false) | Err(_) => {
                     write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                     DispatchOutcome::Resume
                 }
             }
+        }
+        OP_BP_LIFECYCLE_POLL => {
+            #[repr(C)]
+            #[derive(Copy, Clone)]
+            struct PrepareWire {
+                deadline_ms: u64,
+                reason: u32,
+                reserved: u32,
+            }
+
+            if let Some(prepare) = crate::hv::blueprint_prepare_pause(vm_id) {
+                let wire = PrepareWire {
+                    deadline_ms: prepare.deadline_ms,
+                    reason: prepare.reason as u32,
+                    reserved: 0,
+                };
+                write_record_response(vm_id, seq, prepare.operation, &wire);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, 0, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_LIFECYCLE_READY => {
+            if crate::hv::acknowledge_blueprint_ready(vm_id, arg0, arg1) {
+                write_response(vm_id, seq, STATUS_OK, arg0, 0);
+                DispatchOutcome::Preserve
+            } else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                DispatchOutcome::Resume
+            }
+        }
+        OP_BP_LIFECYCLE_IDENTITY => {
+            #[repr(C)]
+            #[derive(Copy, Clone)]
+            struct IdentityWire {
+                instance: [u8; 16],
+                lineage: [u8; 16],
+                flags: u32,
+                reserved: u32,
+            }
+
+            if let Some(identity) = crate::hv::blueprint_instance_identity(vm_id) {
+                let wire = IdentityWire {
+                    instance: identity.instance,
+                    lineage: identity.lineage,
+                    flags: u32::from(identity.clone),
+                    reserved: 0,
+                };
+                write_record_response(vm_id, seq, identity.generation, &wire);
+            } else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            }
+            DispatchOutcome::Resume
         }
         OP_PING => {
             write_response(vm_id, seq, STATUS_OK, 0xCAFE_BABE, 0);
