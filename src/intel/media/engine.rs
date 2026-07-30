@@ -333,8 +333,7 @@ impl Drop for MediaSessionGuard {
     }
 }
 
-pub(super) fn try_reserve_avc_decode_session()
--> Result<MediaSessionGuard, MediaLaneAcquireError> {
+pub(super) fn try_reserve_avc_decode_session() -> Result<MediaSessionGuard, MediaLaneAcquireError> {
     let (engine, _) = default_decode_engine_and_window();
     let mut states = MEDIA_ENGINE_EXECUTION.lock();
     let Some(state) = states.get_mut(engine.id.instance as usize) else {
@@ -415,9 +414,7 @@ pub(super) fn acquire_media_lane_bounded(
     let deadline = crate::chronos::monotonic_nanos().saturating_add(wait_ns);
     loop {
         match try_acquire_media_lane(engine, mode, session_generation) {
-            Err(MediaLaneAcquireError::Busy)
-                if crate::chronos::monotonic_nanos() < deadline =>
-            {
+            Err(MediaLaneAcquireError::Busy) if crate::chronos::monotonic_nanos() < deadline => {
                 core::hint::spin_loop();
             }
             result => return result,

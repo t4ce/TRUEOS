@@ -41,6 +41,9 @@ const RESIDENT_COLD: u8 = 0;
 const RESIDENT_BUILDING: u8 = 1;
 const RESIDENT_READY: u8 = 2;
 const RESIDENT_WAIT_MS: u64 = 10;
+const SESSION_IMAGE_MAGIC: [u8; 8] = *b"LUMQ8S1\0";
+const SESSION_IMAGE_VERSION: u32 = 1;
+const SESSION_IMAGE_HEADER_BYTES: usize = 40;
 
 struct ResidentBuildClaim {
     state: &'static AtomicU8,
@@ -83,6 +86,7 @@ pub enum HybridCpuBackendError {
     Tensor,
     TensorDomain,
     State,
+    SessionImage,
     Allocation,
     ModelHash {
         observed: [u8; 32],
@@ -248,6 +252,33 @@ fn ticks_to_us(ticks: u64) -> u64 {
     core::cmp::min(elapsed_us, u64::MAX as u128) as u64
 }
 
+fn image_u16(image: &[u8], offset: usize) -> Result<u16, HybridCpuBackendError> {
+    let bytes = image
+        .get(offset..offset.saturating_add(2))
+        .ok_or(HybridCpuBackendError::SessionImage)?
+        .try_into()
+        .map_err(|_| HybridCpuBackendError::SessionImage)?;
+    Ok(u16::from_le_bytes(bytes))
+}
+
+fn image_u32(image: &[u8], offset: usize) -> Result<u32, HybridCpuBackendError> {
+    let bytes = image
+        .get(offset..offset.saturating_add(4))
+        .ok_or(HybridCpuBackendError::SessionImage)?
+        .try_into()
+        .map_err(|_| HybridCpuBackendError::SessionImage)?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn image_u64(image: &[u8], offset: usize) -> Result<u64, HybridCpuBackendError> {
+    let bytes = image
+        .get(offset..offset.saturating_add(8))
+        .ok_or(HybridCpuBackendError::SessionImage)?
+        .try_into()
+        .map_err(|_| HybridCpuBackendError::SessionImage)?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
 pub(crate) fn lfm25_hybrid_cpu_perf_snapshot() -> Lfm25HybridCpuPerfStats {
     LFM25_HYBRID_CPU_PERF.snapshot()
 }
@@ -295,6 +326,12 @@ pub struct HybridCpuAotDecodeBackend {
 }
 
 pub type IntelIgcAotDecodeBackend = HybridCpuAotDecodeBackend;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Lfm25BackendCheckpoint {
+    pub(crate) position: u32,
+    pub(crate) callback_sequence: u64,
+}
 
 async fn load_resident_model() -> Result<IntelIgcResidentModel, HybridCpuBackendError> {
     if !crate::intel::gpgpu::lfm25_q8_packed_project_supported() {
@@ -498,6 +535,172 @@ pub async fn open_hybrid_backend() -> Result<HybridCpuAotDecodeBackend, HybridCp
 }
 
 impl HybridCpuAotDecodeBackend {
+    /// Serialize only mutable logical inference state.
+    ///
+    /// Immutable model/F32 assets, transient tensor slots, GPU mappings and
+    /// GuC/RCS ownership deliberately remain kernel capabilities and are
+    /// reacquired when this image is restored.
+    pub(crate) fn checkpoint_state(
+        &self,
+        position: u32,
+        callback_sequence: u64,
+    ) -> Result<Vec<u8>, HybridCpuBackendError> {
+        let positions =
+            usize::try_from(position).map_err(|_| HybridCpuBackendError::SessionImage)?;
+        if position > lfm25::MODEL_INITIAL_CONTEXT
+            || callback_sequence != self.callback_sequence
+            || self.shortconv.len() != trueos_lfm25_model::lfm25_decode::SHORTCONV_STATE_COUNT
+            || self.kv.len() != trueos_lfm25_model::lfm25_decode::KV_CACHE_COUNT
+            || self.slots.iter().any(Option::is_some)
+        {
+            return Err(HybridCpuBackendError::SessionImage);
+        }
+        let expected_kv_values = positions
+            .checked_mul(KV_ELEMENTS)
+            .ok_or(HybridCpuBackendError::SessionImage)?;
+        if self.shortconv.iter().any(|state| state.len() != HIDDEN)
+            || self.kv.iter().any(|cache| {
+                cache.keys.len() != expected_kv_values || cache.values.len() != expected_kv_values
+            })
+        {
+            return Err(HybridCpuBackendError::SessionImage);
+        }
+        let shortconv_bytes = self
+            .shortconv
+            .len()
+            .checked_mul(HIDDEN)
+            .and_then(|values| values.checked_mul(2))
+            .and_then(|values| values.checked_mul(core::mem::size_of::<f32>()))
+            .ok_or(HybridCpuBackendError::SessionImage)?;
+        let kv_bytes = self
+            .kv
+            .len()
+            .checked_mul(expected_kv_values)
+            .and_then(|values| values.checked_mul(2))
+            .and_then(|values| values.checked_mul(core::mem::size_of::<u16>()))
+            .ok_or(HybridCpuBackendError::SessionImage)?;
+        let total = SESSION_IMAGE_HEADER_BYTES
+            .checked_add(shortconv_bytes)
+            .and_then(|bytes| bytes.checked_add(kv_bytes))
+            .ok_or(HybridCpuBackendError::SessionImage)?;
+        let mut image = Vec::new();
+        image
+            .try_reserve_exact(total)
+            .map_err(|_| HybridCpuBackendError::Allocation)?;
+        image.extend_from_slice(&SESSION_IMAGE_MAGIC);
+        image.extend_from_slice(&SESSION_IMAGE_VERSION.to_le_bytes());
+        image.extend_from_slice(&position.to_le_bytes());
+        image.extend_from_slice(&callback_sequence.to_le_bytes());
+        image.extend_from_slice(&(self.shortconv.len() as u32).to_le_bytes());
+        image.extend_from_slice(&(HIDDEN as u32).to_le_bytes());
+        image.extend_from_slice(&(self.kv.len() as u32).to_le_bytes());
+        image.extend_from_slice(&(KV_ELEMENTS as u32).to_le_bytes());
+        for state in &self.shortconv {
+            for channel in state {
+                image.extend_from_slice(&channel[0].to_bits().to_le_bytes());
+                image.extend_from_slice(&channel[1].to_bits().to_le_bytes());
+            }
+        }
+        for cache in &self.kv {
+            for value in &cache.keys {
+                image.extend_from_slice(&value.to_le_bytes());
+            }
+            for value in &cache.values {
+                image.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        if image.len() != total {
+            return Err(HybridCpuBackendError::SessionImage);
+        }
+        Ok(image)
+    }
+
+    /// Replace fresh mutable state with one validated portable session image.
+    pub(crate) fn restore_state(
+        &mut self,
+        image: &[u8],
+    ) -> Result<Lfm25BackendCheckpoint, HybridCpuBackendError> {
+        if image.len() < SESSION_IMAGE_HEADER_BYTES
+            || image.get(..8) != Some(SESSION_IMAGE_MAGIC.as_slice())
+        {
+            return Err(HybridCpuBackendError::SessionImage);
+        }
+        let version = image_u32(image, 8)?;
+        let position = image_u32(image, 12)?;
+        let callback_sequence = image_u64(image, 16)?;
+        let shortconv_count = image_u32(image, 24)? as usize;
+        let hidden = image_u32(image, 28)? as usize;
+        let kv_count = image_u32(image, 32)? as usize;
+        let kv_elements = image_u32(image, 36)? as usize;
+        if version != SESSION_IMAGE_VERSION
+            || position > lfm25::MODEL_INITIAL_CONTEXT
+            || shortconv_count != trueos_lfm25_model::lfm25_decode::SHORTCONV_STATE_COUNT
+            || hidden != HIDDEN
+            || kv_count != trueos_lfm25_model::lfm25_decode::KV_CACHE_COUNT
+            || kv_elements != KV_ELEMENTS
+        {
+            return Err(HybridCpuBackendError::SessionImage);
+        }
+        let positions = position as usize;
+        let expected_kv_values = positions
+            .checked_mul(KV_ELEMENTS)
+            .ok_or(HybridCpuBackendError::SessionImage)?;
+        let shortconv_bytes = shortconv_count
+            .checked_mul(HIDDEN)
+            .and_then(|values| values.checked_mul(2 * core::mem::size_of::<f32>()))
+            .ok_or(HybridCpuBackendError::SessionImage)?;
+        let kv_bytes = kv_count
+            .checked_mul(expected_kv_values)
+            .and_then(|values| values.checked_mul(2 * core::mem::size_of::<u16>()))
+            .ok_or(HybridCpuBackendError::SessionImage)?;
+        let expected = SESSION_IMAGE_HEADER_BYTES
+            .checked_add(shortconv_bytes)
+            .and_then(|bytes| bytes.checked_add(kv_bytes))
+            .ok_or(HybridCpuBackendError::SessionImage)?;
+        if image.len() != expected {
+            return Err(HybridCpuBackendError::SessionImage);
+        }
+
+        let mut cursor = SESSION_IMAGE_HEADER_BYTES;
+        for state in &mut self.shortconv {
+            for channel in state {
+                channel[0] = f32::from_bits(image_u32(image, cursor)?);
+                cursor += 4;
+                channel[1] = f32::from_bits(image_u32(image, cursor)?);
+                cursor += 4;
+            }
+        }
+        for cache in &mut self.kv {
+            cache.keys.clear();
+            cache.values.clear();
+            cache
+                .keys
+                .try_reserve_exact(expected_kv_values)
+                .map_err(|_| HybridCpuBackendError::Allocation)?;
+            cache
+                .values
+                .try_reserve_exact(expected_kv_values)
+                .map_err(|_| HybridCpuBackendError::Allocation)?;
+            for _ in 0..expected_kv_values {
+                cache.keys.push(image_u16(image, cursor)?);
+                cursor += 2;
+            }
+            for _ in 0..expected_kv_values {
+                cache.values.push(image_u16(image, cursor)?);
+                cursor += 2;
+            }
+        }
+        if cursor != image.len() {
+            return Err(HybridCpuBackendError::SessionImage);
+        }
+        self.slots.clear();
+        self.callback_sequence = callback_sequence;
+        Ok(Lfm25BackendCheckpoint {
+            position,
+            callback_sequence,
+        })
+    }
+
     fn descriptor(
         layer: Option<u8>,
         role: TensorRole,

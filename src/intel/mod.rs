@@ -485,17 +485,9 @@ pub(crate) fn media_vdbox_logical_instance(dev: Dev, physical_instance: u8) -> O
 
 const _: () = {
     assert!(media_vdbox_mask_from_fuse(PCI_DEVICE_ALDER_LAKE_S_GT1, 0) == 0b0101);
-    assert!(
-        media_vdbox_mask_from_fuse(PCI_DEVICE_ALDER_LAKE_S_GT1, 1 << 2) == 0b0001
-    );
-    assert!(matches!(
-        media_vdbox_logical_instance_in_mask(0b0101, 0),
-        Some(0)
-    ));
-    assert!(matches!(
-        media_vdbox_logical_instance_in_mask(0b0101, 2),
-        Some(1)
-    ));
+    assert!(media_vdbox_mask_from_fuse(PCI_DEVICE_ALDER_LAKE_S_GT1, 1 << 2) == 0b0001);
+    assert!(matches!(media_vdbox_logical_instance_in_mask(0b0101, 0), Some(0)));
+    assert!(matches!(media_vdbox_logical_instance_in_mask(0b0101, 2), Some(1)));
     assert!(media_vdbox_logical_instance_in_mask(0b0001, 2).is_none());
 };
 

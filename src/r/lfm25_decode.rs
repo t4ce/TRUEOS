@@ -293,6 +293,27 @@ impl DecodeSession {
         self.last_callback_sequence
     }
 
+    /// Rebuild the scheduler mirror for a backend checkpoint captured between
+    /// tokens. The backend image owns the actual recurrent and KV contents;
+    /// every logical state cursor must therefore resume at the same position.
+    pub(crate) fn from_checkpoint(position: u32, callback_sequence: u64) -> Option<Self> {
+        if position > lfm25::MODEL_INITIAL_CONTEXT {
+            return None;
+        }
+        Some(Self {
+            position,
+            shortconv_next: [position; 10],
+            kv_next: [position; 6],
+            last_callback_sequence: callback_sequence,
+            // The first restored callback re-establishes the backend tensor
+            // domain. No transient tensor handle is checkpointed.
+            tensor_domain: None,
+            in_flight: false,
+            in_flight_state_mutated: false,
+            poisoned: false,
+        })
+    }
+
     /// Use only after the backend has reset all recurrent and KV state.
     pub fn acknowledge_hardware_state_reset(&mut self) {
         self.position = 0;

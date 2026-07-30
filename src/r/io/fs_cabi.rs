@@ -591,50 +591,11 @@ pub(crate) fn fs_write_abort_host(handle: u32) -> i32 {
 }
 
 pub(crate) fn fs_create_dir_all_host(path: &str) -> i32 {
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
-        log_fs_cabi_path_fail(
-            "create_dir_all",
-            path,
-            None,
-            "reason=raw-path-too-large",
-            FS_ERR_TOO_LARGE,
-        );
-        return FS_ERR_TOO_LARGE;
-    }
-    let raw = path;
-    let Some(path) = super::env::resolve_fs_path(path, true) else {
-        log_fs_cabi_path_fail(
-            "create_dir_all",
-            raw,
-            None,
-            "reason=resolve-failed",
-            FS_ERR_BAD_PATH,
-        );
-        return FS_ERR_BAD_PATH;
-    };
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
-        log_fs_cabi_path_fail(
-            "create_dir_all",
-            raw,
-            Some(path.as_str()),
-            "reason=resolved-path-too-large",
-            FS_ERR_TOO_LARGE,
-        );
-        return FS_ERR_TOO_LARGE;
-    }
-    match super::kfs::create_dir_all(path.as_str()) {
-        Ok(()) => {
-            if path.starts_with("apps/") {
-                crate::log!("fs-cabi: create_dir_all ok resolved={}\n", path.as_str());
-            }
-            0
-        }
-        Err(e) => {
-            let rc = fs_error_to_code(e);
-            log_fs_cabi_path_fail("create_dir_all", raw, Some(path.as_str()), "", rc);
-            rc
-        }
-    }
+    crate::log_error!(target: "filesystem";
+        "fs-cabi: gotcha! synchronous create_dir_all host surface called path={} action=noop migrate=async-fs\n",
+        path,
+    );
+    0
 }
 
 pub(crate) fn fs_exists_host(path: &str) -> i32 {
@@ -1098,16 +1059,6 @@ pub unsafe extern "C" fn trueos_cabi_fs_create_dir_all(
     let Ok(path) = core::str::from_utf8(path_bytes) else {
         return FS_ERR_BAD_UTF8;
     };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let path = match guest_resolved_fs_path(path, true) {
-            Ok(path) => path,
-            Err(rc) => return rc,
-        };
-        return guest_fs_simple_path_op(
-            trueos_vm::vmcall::OP_BP_FS_CREATE_DIR_ALL,
-            path.as_bytes(),
-        );
-    }
     fs_create_dir_all_host(path)
 }
 

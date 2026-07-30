@@ -141,6 +141,17 @@ pub const OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS: u32 = 0xF6; // -> packed output wid
 pub const OP_BP_USB_SNAPSHOT_READ: u32 = 0xF7; // arg0 offset, arg1 cap -> USB inventory snapshot
 pub const OP_BP_UI4_SCENE_INPUT_ROUTES: u32 = 0xF8; // arg0 window,arg1 cap -> selected combo/keyboard routes
 pub const OP_BP_GRIDPAPER_SNAPSHOT_CHECKPOINT: u32 = 0xF9; // arg0 instance -> page image + release
+pub const OP_BP_LUMEN_TEMPLATE_OPEN: u32 = 0x100;
+pub const OP_BP_LUMEN_PROMPT_SUBMIT: u32 = 0x101;
+pub const OP_BP_LUMEN_STATUS: u32 = 0x102;
+pub const OP_BP_LUMEN_REPLY_READ: u32 = 0x103;
+pub const OP_BP_LUMEN_CHECKPOINT_REQUEST: u32 = 0x104;
+pub const OP_BP_LUMEN_CHECKPOINT_READ: u32 = 0x105;
+pub const OP_BP_LUMEN_RESTORE_BEGIN: u32 = 0x106;
+pub const OP_BP_LUMEN_RESTORE_WRITE: u32 = 0x107;
+pub const OP_BP_LUMEN_RESTORE_COMMIT: u32 = 0x108;
+pub const OP_BP_LUMEN_CLOSE: u32 = 0x109;
+pub const OP_BP_SPIRIT_EMOTION_PLAY: u32 = 0x10A;
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -161,7 +172,6 @@ pub const OP_BP_FS_WRITE_BEGIN: u32 = 0x2E; // arg0 total len, payload path -> r
 pub const OP_BP_FS_WRITE_CHUNK: u32 = 0x2F; // arg0 handle, payload chunk -> rc
 pub const OP_BP_FS_WRITE_FINISH: u32 = 0x30; // arg0 handle -> rc
 pub const OP_BP_FS_WRITE_ABORT: u32 = 0x31; // arg0 handle -> rc
-pub const OP_BP_FS_CREATE_DIR_ALL: u32 = 0x32; // payload path -> rc
 pub const OP_BP_FS_EXISTS: u32 = 0x33; // payload path -> 0/1/rc
 pub const OP_BP_FS_REMOVE: u32 = 0x34; // payload path -> rc
 pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_data[63:32], optional payload kind:u32 len:u64
@@ -616,6 +626,115 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
             }
+            DispatchOutcome::Resume
+        }
+        OP_BP_LUMEN_TEMPLATE_OPEN => {
+            let rc = request_payload(vm_id, req_len)
+                .map(|system| crate::r::lumen_service::template_open(vm_id, system))
+                .unwrap_or(-3);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_LUMEN_PROMPT_SUBMIT => {
+            let rc = request_payload(vm_id, req_len)
+                .and_then(|payload| {
+                    let tail_len = u32::from_le_bytes(payload.get(..4)?.try_into().ok()?) as usize;
+                    if tail_len > 2 {
+                        return None;
+                    }
+                    let tail_end = 4usize.checked_add(tail_len.checked_mul(4)?)?;
+                    let tail_bytes = payload.get(4..tail_end)?;
+                    let mut tail = [0u32; 2];
+                    for (index, chunk) in tail_bytes.chunks_exact(4).enumerate() {
+                        tail[index] = u32::from_le_bytes(chunk.try_into().ok()?);
+                    }
+                    let prompt = payload.get(tail_end..)?;
+                    Some(crate::r::lumen_service::prompt_submit(
+                        vm_id,
+                        arg0,
+                        &tail[..tail_len],
+                        prompt,
+                    ))
+                })
+                .unwrap_or(-3);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_LUMEN_STATUS => {
+            if let Some(status) = crate::r::lumen_service::status(vm_id) {
+                write_record_response(vm_id, seq, 0, &status);
+            } else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_LUMEN_REPLY_READ => {
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let cap = (arg0 as usize).min(PAYLOAD_CAP);
+            let rc = unsafe {
+                crate::r::lumen_service::reply_read(vm_id, &mut (&mut (*page).payload)[..cap])
+            };
+            let len = usize::try_from(rc).unwrap_or(0).min(cap);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_LUMEN_CHECKPOINT_REQUEST => {
+            let rc = crate::r::lumen_service::checkpoint_request(vm_id);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_LUMEN_CHECKPOINT_READ => {
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let cap = (arg1 as usize).min(PAYLOAD_CAP);
+            let rc = unsafe {
+                crate::r::lumen_service::checkpoint_read(
+                    vm_id,
+                    arg0 as usize,
+                    &mut (&mut (*page).payload)[..cap],
+                )
+            };
+            let len = usize::try_from(rc).unwrap_or(0).min(cap);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_LUMEN_RESTORE_BEGIN => {
+            let rc = crate::r::lumen_service::restore_begin(vm_id, arg0 as usize);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_LUMEN_RESTORE_WRITE => {
+            let rc = request_payload(vm_id, req_len)
+                .map(|data| crate::r::lumen_service::restore_write(vm_id, arg0 as usize, data))
+                .unwrap_or(-3);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_LUMEN_RESTORE_COMMIT => {
+            let rc = crate::r::lumen_service::restore_commit(vm_id);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_LUMEN_CLOSE => {
+            let rc = crate::r::lumen_service::close(vm_id);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SPIRIT_EMOTION_PLAY => {
+            let rc = request_payload(vm_id, req_len)
+                .and_then(|idea| core::str::from_utf8(idea).ok())
+                .map(|idea| {
+                    crate::spirit::enqueue_emotion_words(&[idea])
+                        .map(|_| 0)
+                        .unwrap_or(-5)
+                })
+                .unwrap_or(-3);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_PING => {
@@ -2884,27 +3003,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_FS_WRITE_ABORT => {
             let rc = crate::r::io::cabi::fs_write_abort_host(arg0 as u32);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_FS_CREATE_DIR_ALL => {
-            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
-            let Some(p) = host_ptr(vm_id) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let path_bytes = unsafe { &(&(*p).payload)[..n] };
-            let Ok(path) = core::str::from_utf8(path_bytes) else {
-                write_response(
-                    vm_id,
-                    seq,
-                    STATUS_OK,
-                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
-                    0,
-                );
-                return DispatchOutcome::Resume;
-            };
-            let rc = crate::r::io::cabi::fs_create_dir_all_host(path);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

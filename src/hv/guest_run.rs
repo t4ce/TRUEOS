@@ -187,32 +187,34 @@ fn container_shell_command(raw: &str) -> bool {
     true
 }
 
-fn create_blueprint_dir_all(path: &str) -> Result<(), alloc::string::String> {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        if path.len() > trueos_vm::vmcall::PAYLOAD_CAP {
-            return Err(alloc::format!("TooLarge(len={})", path.len()));
-        }
+fn create_blueprint_dir_all_async(path: &str) -> Result<(), alloc::string::String> {
+    let operation = unsafe {
+        crate::r::io::async_fs_cabi::trueos_cabi_async_fs_create_dir_all_start(
+            path.as_ptr(),
+            path.len(),
+        )
+    };
+    if operation <= 0 {
+        return Err(alloc::format!("AsyncStartRc({})", operation));
+    }
+    let operation = operation as u32;
 
-        let mut out = [0u8; 1];
-        let (status, rc) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_FS_CREATE_DIR_ALL,
-            0,
-            0,
-            path.as_bytes(),
-            &mut out,
-        );
-        if status != trueos_vm::vmcall::STATUS_OK {
-            return Err(alloc::format!("VmcallStatus({})", status));
+    loop {
+        match crate::r::io::async_fs_cabi::trueos_cabi_async_fs_status(operation) {
+            0 => core::hint::spin_loop(),
+            1 => {
+                let discard = crate::r::io::async_fs_cabi::trueos_cabi_async_fs_discard(operation);
+                return if discard == 0 {
+                    Ok(())
+                } else {
+                    Err(alloc::format!("AsyncDiscardRc({})", discard))
+                };
+            }
+            rc => {
+                let _ = crate::r::io::async_fs_cabi::trueos_cabi_async_fs_discard(operation);
+                return Err(alloc::format!("AsyncStatusRc({})", rc));
+            }
         }
-
-        let rc = (rc as i64) as i32;
-        if rc == 0 {
-            Ok(())
-        } else {
-            Err(alloc::format!("CabiRc({})", rc))
-        }
-    } else {
-        crate::r::io::kfs::create_dir_all(path).map_err(|err| alloc::format!("{:?}", err))
     }
 }
 
@@ -409,7 +411,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         app_fs_common.as_str()
     ));
 
-    match create_blueprint_dir_all(app_fs_root.as_str()) {
+    match create_blueprint_dir_all_async(app_fs_root.as_str()) {
         Ok(()) => {
             log(alloc::format!("run: guest app fs root ready path={}", app_fs_root.as_str())
                 .as_str())
@@ -422,7 +424,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         .as_str()),
     }
 
-    match create_blueprint_dir_all(app_fs_common.as_str()) {
+    match create_blueprint_dir_all_async(app_fs_common.as_str()) {
         Ok(()) => {
             log(alloc::format!("run: guest app fs common ready path={}", app_fs_common.as_str())
                 .as_str())

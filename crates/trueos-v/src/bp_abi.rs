@@ -30,6 +30,30 @@ pub struct TrueosLifecycleIdentity {
     pub reserved: u32,
 }
 
+pub const LUMEN_PHASE_IDLE: u32 = 0;
+pub const LUMEN_PHASE_OPENING: u32 = 1;
+pub const LUMEN_PHASE_READY: u32 = 2;
+pub const LUMEN_PHASE_RUNNING: u32 = 3;
+pub const LUMEN_PHASE_REPLY_READY: u32 = 4;
+pub const LUMEN_PHASE_CHECKPOINTING: u32 = 5;
+pub const LUMEN_PHASE_CHECKPOINT_READY: u32 = 6;
+pub const LUMEN_PHASE_RESTORE_UPLOAD: u32 = 7;
+pub const LUMEN_PHASE_RESTORING: u32 = 8;
+pub const LUMEN_PHASE_ERROR: u32 = 9;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrueosLumenStatus {
+    pub phase: u32,
+    pub error: i32,
+    pub position: u32,
+    pub reply_len: u32,
+    pub checkpoint_len: u64,
+    pub reply_tail: [u32; 2],
+    pub reply_tail_len: u32,
+    pub reserved: u32,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4SolaraFontSize {
@@ -224,6 +248,32 @@ pub struct TrueosUi4SpriteQuad {
 }
 
 unsafe extern "C" {
+    pub fn trueos_cabi_lumen_template_open(system_ptr: *const u8, system_len: usize) -> i32;
+    pub fn trueos_cabi_lumen_prompt_submit(
+        turn: u64,
+        tail_ptr: *const u32,
+        tail_len: usize,
+        prompt_ptr: *const u8,
+        prompt_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_lumen_status(out: *mut TrueosLumenStatus) -> i32;
+    pub fn trueos_cabi_lumen_reply_read(out_ptr: *mut u8, out_cap: usize) -> isize;
+    pub fn trueos_cabi_lumen_checkpoint_request() -> i32;
+    pub fn trueos_cabi_lumen_checkpoint_read(
+        offset: usize,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
+    pub fn trueos_cabi_lumen_restore_begin(total_len: usize) -> i32;
+    pub fn trueos_cabi_lumen_restore_write(
+        offset: usize,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_lumen_restore_commit() -> i32;
+    pub fn trueos_cabi_lumen_close() -> i32;
+    pub fn trueos_cabi_spirit_emotion_play(idea_ptr: *const u8, idea_len: usize) -> i32;
+
     pub fn trueos_cabi_gridpaper_snapshot_submit(
         generation: u64,
         scale_percent: u32,

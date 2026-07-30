@@ -5,6 +5,9 @@
 //! scalar CPU state stages and the admitted Intel C++/IGC projection program;
 //! no runtime graph is interpreted.
 
+extern crate alloc;
+
+use alloc::vec::Vec;
 use core::cell::RefCell;
 
 use crate::r::lfm25_decode::{
@@ -57,6 +60,13 @@ impl<Backend> Lfm25Decode<Backend> {
     pub(crate) const fn new(backend: Backend) -> Self {
         Self {
             session: RefCell::new(DecodeSession::new()),
+            backend: RefCell::new(backend),
+        }
+    }
+
+    pub(crate) const fn from_parts(session: DecodeSession, backend: Backend) -> Self {
+        Self {
+            session: RefCell::new(session),
             backend: RefCell::new(backend),
         }
     }
@@ -139,6 +149,31 @@ pub(crate) async fn open_intel_igc() -> Result<
 > {
     let backend = crate::r::lfm25_hybrid_cpu_backend::open_intel_igc_backend().await?;
     Ok(Lfm25Decode::new(backend))
+}
+
+#[cfg(target_os = "trueos")]
+pub(crate) fn checkpoint_intel_igc(
+    module: Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::IntelIgcAotDecodeBackend>,
+) -> Result<Vec<u8>, crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError> {
+    let (session, backend) = module.into_parts();
+    if session.is_poisoned() {
+        return Err(crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError::SessionImage);
+    }
+    backend.checkpoint_state(session.position(), session.callback_sequence())
+}
+
+#[cfg(target_os = "trueos")]
+pub(crate) async fn restore_intel_igc(
+    image: &[u8],
+) -> Result<
+    Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::IntelIgcAotDecodeBackend>,
+    crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError,
+> {
+    let mut backend = crate::r::lfm25_hybrid_cpu_backend::open_intel_igc_backend().await?;
+    let checkpoint = backend.restore_state(image)?;
+    let session = DecodeSession::from_checkpoint(checkpoint.position, checkpoint.callback_sequence)
+        .ok_or(crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError::SessionImage)?;
+    Ok(Lfm25Decode::from_parts(session, backend))
 }
 
 #[cfg(target_os = "trueos")]

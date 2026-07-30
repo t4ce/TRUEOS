@@ -1732,8 +1732,7 @@ pub(super) async fn submit_avc_single_idr_batch(
     let build_ctx_us = media_backend_elapsed_us(build_ctx_start);
 
     let (hwlrca_lo, hwlrca_hi) = media::build_media_guc_context_descriptor(context_gpu_addr);
-    let guc_engine =
-        crate::gpu::physical::PhysicalEngineId::video(engine.id.instance);
+    let guc_engine = crate::gpu::physical::PhysicalEngineId::video(engine.id.instance);
     let guc_token = match crate::intel::guc_submission::INTEL_GUC_SCHEDULER.register(
         dev,
         guc_engine,
@@ -2041,12 +2040,9 @@ pub(super) fn submit_jpeg_smoke_batch(
     if bitstream_bytes == 0 || bitstream_bytes > backing.bitstream_bytes {
         return None;
     }
-    let mut vcs0_lane = media::try_acquire_media_lane(
-        engine,
-        media::MediaJobMode::JPEG_DECODE_EXECLISTS,
-        None,
-    )
-    .ok()?;
+    let mut vcs0_lane =
+        media::try_acquire_media_lane(engine, media::MediaJobMode::JPEG_DECODE_EXECLISTS, None)
+            .ok()?;
 
     let ring_virt = backing.ring_virt;
     let context_virt = backing.context_virt;

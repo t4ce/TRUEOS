@@ -93,7 +93,8 @@ impl F32Sidecar {
             || artifact_u32(artifact, 20)? as usize != F32_SIDECAR_ENTRY_BYTES
             || artifact_u32(artifact, 24)? as usize != F32_SIDECAR_ELEMENT_COUNT
             || artifact_u32(artifact, 28)? as usize != F32_SIDECAR_PAYLOAD_OFFSET
-            || artifact.get(32..64) != Some(trueos_lfm25_model::lfm25::PINNED_GGUF_SHA256.as_slice())
+            || artifact.get(32..64)
+                != Some(trueos_lfm25_model::lfm25::PINNED_GGUF_SHA256.as_slice())
             || artifact.get(64..96)
                 != Some(trueos_lfm25_model::lfm25::PINNED_NATIVE_IMAGE_SHA256.as_slice())
             || artifact.get(96..128)
@@ -366,15 +367,15 @@ impl Lfm25Tokenizer {
         Ok(tokens)
     }
 
-    /// Exact Liquid chat envelope with one system instruction and one user turn.
+    /// Exact resident prefix containing BOS and one complete system message.
     ///
-    /// Stateful callers feed this only for the first turn. Follow-up turns use
-    /// [`Self::encode_followup_user_turn`] so the system prefix remains resident
-    /// in the existing model state without being replayed.
-    pub fn encode_system_user_turn(&self, system: &str, prompt: &str) -> Result<Vec<u32>, Error> {
+    /// A replicatable Lumen template prefills this once, checkpoints the model
+    /// state, and supplies the first user turn only after the template resumes
+    /// as a private instance.
+    pub fn encode_system_prefix(&self, system: &str) -> Result<Vec<u32>, Error> {
         let mut tokens = Vec::new();
         tokens
-            .try_reserve_exact(system.len().saturating_add(prompt.len()).saturating_add(18))
+            .try_reserve_exact(system.len().saturating_add(9))
             .map_err(|_| Error::Allocation)?;
         tokens.push(self.bos);
         tokens.push(self.im_start);
@@ -382,6 +383,15 @@ impl Lfm25Tokenizer {
         tokens.extend(self.encode(system)?);
         tokens.push(self.im_end);
         tokens.extend(self.encode("\n")?);
+        Ok(tokens)
+    }
+
+    /// First user envelope appended to a resident [`Self::encode_system_prefix`].
+    pub fn encode_user_after_system_prefix(&self, prompt: &str) -> Result<Vec<u32>, Error> {
+        let mut tokens = Vec::new();
+        tokens
+            .try_reserve_exact(prompt.len().saturating_add(9))
+            .map_err(|_| Error::Allocation)?;
         tokens.push(self.im_start);
         tokens.extend(self.encode("user\n")?);
         tokens.extend(self.encode(prompt)?);
@@ -389,6 +399,21 @@ impl Lfm25Tokenizer {
         tokens.extend(self.encode("\n")?);
         tokens.push(self.im_start);
         tokens.extend(self.encode("assistant\n")?);
+        Ok(tokens)
+    }
+
+    /// Exact Liquid chat envelope with one system instruction and one user turn.
+    ///
+    /// Stateful callers feed this only for the first turn. Follow-up turns use
+    /// [`Self::encode_followup_user_turn`] so the system prefix remains resident
+    /// in the existing model state without being replayed.
+    pub fn encode_system_user_turn(&self, system: &str, prompt: &str) -> Result<Vec<u32>, Error> {
+        let mut tokens = self.encode_system_prefix(system)?;
+        let user = self.encode_user_after_system_prefix(prompt)?;
+        tokens
+            .try_reserve_exact(user.len())
+            .map_err(|_| Error::Allocation)?;
+        tokens.extend(user);
         Ok(tokens)
     }
 

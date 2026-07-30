@@ -183,11 +183,8 @@ pub(crate) fn run_once() -> GucVcs0ProbeReport {
     }
 
     let mut lane =
-        match media::try_acquire_media_lane(
-            engine,
-            media::MediaJobMode::TRANSPORT_PROBE_GUC,
-            None,
-        ) {
+        match media::try_acquire_media_lane(engine, media::MediaJobMode::TRANSPORT_PROBE_GUC, None)
+        {
             Ok(lane) => lane,
             Err(media::MediaLaneAcquireError::Busy) => {
                 if STATE.load(Ordering::Acquire) != GucVcs0ProbeState::NotRun as u8 {

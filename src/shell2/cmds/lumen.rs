@@ -847,19 +847,17 @@ async fn run_lum_turn(
             return false;
         }
     };
-    let first_piece_bytes = match tokenizer.decode(
-        &[first_token],
-        !crate::spirit::LUMEN_AI_EMOTION_ENABLED,
-    ) {
-        Ok(piece) => piece,
-        Err(error) => {
-            print_matrix_target_line(
-                target,
-                alloc::format!("lum: failed stage=prefill-detokenize error={error:?}").as_str(),
-            );
-            return false;
-        }
-    };
+    let first_piece_bytes =
+        match tokenizer.decode(&[first_token], !crate::spirit::LUMEN_AI_EMOTION_ENABLED) {
+            Ok(piece) => piece,
+            Err(error) => {
+                print_matrix_target_line(
+                    target,
+                    alloc::format!("lum: failed stage=prefill-detokenize error={error:?}").as_str(),
+                );
+                return false;
+            }
+        };
     let first_piece = String::from_utf8_lossy(&first_piece_bytes);
     let prefill_after = crate::intel::gpgpu::lfm25_q8_project_stats();
     let callback_count = last_callback.saturating_sub(callback_start);

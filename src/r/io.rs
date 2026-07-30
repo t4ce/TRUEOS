@@ -129,6 +129,10 @@ pub mod kfs {
 
     #[inline]
     pub fn create_dir_all(path: &str) -> Result<()> {
+        crate::log_warn!(target: "filesystem";
+            "kfs: synchronous create_dir_all compatibility path used path={} action=continue migrate=async-fs\n",
+            path,
+        );
         let disk = root_disk()?;
         let name = normalize_rel(path, true)?;
         if name.is_empty() {
