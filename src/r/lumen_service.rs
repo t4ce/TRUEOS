@@ -17,7 +17,11 @@ use crate::lumen::decode::{Lfm25DecodeInput, checkpoint_intel_igc, restore_intel
 const MAX_SYSTEM_BYTES: usize = 8 * 1024;
 const MAX_PROMPT_BYTES: usize = 4 * 1024;
 const MAX_REPLY_TOKENS: usize = 48;
-const MAX_SESSION_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+// A mature 16K-token session is roughly 192 MiB (KV dominates), while the
+// prefilled tool/personality template is only a small fraction of that. Keep
+// the transport ceiling large enough for the model's full context instead of
+// making the prototype silently stop being migratable after ~2.6K tokens.
+const MAX_SESSION_IMAGE_BYTES: usize = 256 * 1024 * 1024;
 const WORKER_POLL_MS: u64 = 5;
 const TASK_POOL_SIZE: usize = 4;
 
@@ -360,7 +364,7 @@ async fn lumen_blueprint_worker(owner: u8) {
         }
     };
 
-    let mut module = match initial {
+    let module = match initial {
         LumenRequest::TemplateOpen(system) => {
             let module = match crate::lumen::decode::open_intel_igc().await {
                 Ok(module) => module,

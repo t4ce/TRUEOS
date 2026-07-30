@@ -43,7 +43,7 @@ const RESIDENT_READY: u8 = 2;
 const RESIDENT_WAIT_MS: u64 = 10;
 const SESSION_IMAGE_MAGIC: [u8; 8] = *b"LUMQ8S1\0";
 const SESSION_IMAGE_VERSION: u32 = 1;
-const SESSION_IMAGE_HEADER_BYTES: usize = 40;
+const SESSION_IMAGE_HEADER_BYTES: usize = 72;
 
 struct ResidentBuildClaim {
     state: &'static AtomicU8,
@@ -595,6 +595,7 @@ impl HybridCpuAotDecodeBackend {
         image.extend_from_slice(&(HIDDEN as u32).to_le_bytes());
         image.extend_from_slice(&(self.kv.len() as u32).to_le_bytes());
         image.extend_from_slice(&(KV_ELEMENTS as u32).to_le_bytes());
+        image.extend_from_slice(&cpu::PACKED_Q8X16_IMAGE_SHA256);
         for state in &self.shortconv {
             for channel in state {
                 image.extend_from_slice(&channel[0].to_bits().to_le_bytes());
@@ -632,12 +633,16 @@ impl HybridCpuAotDecodeBackend {
         let hidden = image_u32(image, 28)? as usize;
         let kv_count = image_u32(image, 32)? as usize;
         let kv_elements = image_u32(image, 36)? as usize;
+        let packed_model_sha256 = image
+            .get(40..72)
+            .ok_or(HybridCpuBackendError::SessionImage)?;
         if version != SESSION_IMAGE_VERSION
             || position > lfm25::MODEL_INITIAL_CONTEXT
             || shortconv_count != trueos_lfm25_model::lfm25_decode::SHORTCONV_STATE_COUNT
             || hidden != HIDDEN
             || kv_count != trueos_lfm25_model::lfm25_decode::KV_CACHE_COUNT
             || kv_elements != KV_ELEMENTS
+            || packed_model_sha256 != cpu::PACKED_Q8X16_IMAGE_SHA256
         {
             return Err(HybridCpuBackendError::SessionImage);
         }

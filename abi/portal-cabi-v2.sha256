@@ -51,4 +51,8 @@
 # The lifecycle poll, Ready boundary, and identity calls are strictly additive.
 # Old artifacts remain non-participants; tagged production artifacts can now
 # quiesce before the host freezes them and observe identity after Resume.
-2ddc51f75f84603aee0ebe8339e8b4ac97db94593f69a64668f7e002fcb787c0
+# The Lumen session calls are strictly additive. They transfer prompts, replies,
+# and a pointer-free mutable inference checkpoint while immutable model/GPU
+# resources remain kernel capabilities. Spirit emotion playback is likewise an
+# additive, idea-only capability used by the Blueprint-owned tool adapter.
+9f5e7bc00b4aadc942489ff17cacb2d297cd98f3c25461be25d3e9bf4453f200
