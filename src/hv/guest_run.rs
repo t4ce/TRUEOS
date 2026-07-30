@@ -188,22 +188,50 @@ fn container_shell_command(raw: &str) -> bool {
 }
 
 fn create_blueprint_dir_all_async(path: &str) -> Result<(), alloc::string::String> {
-    let operation = unsafe {
-        crate::r::io::async_fs_cabi::trueos_cabi_async_fs_create_dir_all_start(
-            path.as_ptr(),
-            path.len(),
-        )
-    };
+    // Bootstrap runs before the Blueprint environment stack exists. Calling
+    // the generic async filesystem CABI here would resolve `path` through that
+    // environment first, which can make Hull guest code touch the host-owned
+    // environment map. The launch state already contains the resolved app
+    // root, so submit it directly through the asynchronous VM-call protocol.
+    if path.is_empty() || path.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+        return Err(alloc::format!("BadPath(len={})", path.len()));
+    }
+    let (status, operation) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_ASYNC_FS_CREATE_DIR_ALL_START,
+        0,
+        0,
+        path.as_bytes(),
+        &mut [],
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return Err(alloc::format!("AsyncStartStatus({})", status));
+    }
+    let operation = (operation as i64) as i32;
     if operation <= 0 {
         return Err(alloc::format!("AsyncStartRc({})", operation));
     }
     let operation = operation as u32;
 
     loop {
-        match crate::r::io::async_fs_cabi::trueos_cabi_async_fs_status(operation) {
-            0 => core::hint::spin_loop(),
+        let (status, value) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_ASYNC_FS_STATUS, operation as u64, 0);
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return Err(alloc::format!("AsyncStatusTransport({})", status));
+        }
+        match (value as i64) as i32 {
+            0 => {
+                let _ = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_YIELD, 0, 0);
+            }
             1 => {
-                let discard = crate::r::io::async_fs_cabi::trueos_cabi_async_fs_discard(operation);
+                let (status, discard) = trueos_vm::vmcall::call(
+                    trueos_vm::vmcall::OP_BP_ASYNC_FS_DISCARD,
+                    operation as u64,
+                    0,
+                );
+                if status != trueos_vm::vmcall::STATUS_OK {
+                    return Err(alloc::format!("AsyncDiscardStatus({})", status));
+                }
+                let discard = (discard as i64) as i32;
                 return if discard == 0 {
                     Ok(())
                 } else {
@@ -211,7 +239,11 @@ fn create_blueprint_dir_all_async(path: &str) -> Result<(), alloc::string::Strin
                 };
             }
             rc => {
-                let _ = crate::r::io::async_fs_cabi::trueos_cabi_async_fs_discard(operation);
+                let _ = trueos_vm::vmcall::call(
+                    trueos_vm::vmcall::OP_BP_ASYNC_FS_DISCARD,
+                    operation as u64,
+                    0,
+                );
                 return Err(alloc::format!("AsyncStatusRc({})", rc));
             }
         }
