@@ -8,7 +8,7 @@ use spin::Once;
 
 use super::TranscriptEntry;
 
-pub(crate) const MATRIX_SLOT_ID_MAX: usize = 3;
+pub(crate) const MATRIX_SLOT_ID_MAX: usize = 5;
 const DEFAULT_MATRIX_SLOT_LINE_CAP: usize = 512;
 pub(crate) const DEFAULT_MATRIX_SLOT_LINE_WIDTH: usize = 180;
 const LIVE_USER_INPUT_CAP: usize = 10;
@@ -279,11 +279,11 @@ fn push_base36(out: &mut MatrixSlotId, value: u8) -> bool {
 
 fn fallback_slot_candidate(stem: &MatrixSlotId, attempt: u16) -> MatrixSlotId {
     let mut out = MatrixSlotId::new();
-    let mut stem_chars = stem.chars().filter(|ch| ch.is_ascii_alphanumeric());
-    if let Some(ch) = stem_chars.next() {
-        let _ = out.push(ch);
-    }
-    if let Some(ch) = stem_chars.next() {
+    for ch in stem
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .take(MATRIX_SLOT_ID_MAX.saturating_sub(1))
+    {
         let _ = out.push(ch);
     }
     if out.is_empty() {
@@ -297,14 +297,17 @@ fn fallback_slot_candidate(stem: &MatrixSlotId, attempt: u16) -> MatrixSlotId {
     out
 }
 
-fn broad_slot_candidate(attempt: u16) -> MatrixSlotId {
+fn broad_slot_candidate(mut attempt: u16) -> MatrixSlotId {
+    let mut encoded = [0u8; MATRIX_SLOT_ID_MAX];
+    for digit in encoded.iter_mut().rev() {
+        *digit = (attempt % 36) as u8;
+        attempt /= 36;
+    }
+
     let mut out = MatrixSlotId::new();
-    let first = ((attempt / (36 * 36)) % 26) as u8;
-    let second = ((attempt / 36) % 36) as u8;
-    let third = (attempt % 36) as u8;
-    let _ = out.push((b'a' + first) as char);
-    let _ = push_base36(&mut out, second);
-    let _ = push_base36(&mut out, third);
+    for digit in encoded {
+        let _ = push_base36(&mut out, digit);
+    }
     out
 }
 
@@ -911,10 +914,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn app_slot_fallback_keeps_two_letter_stem_and_base36_suffix() {
+    fn slot_ids_accept_five_characters_and_truncate_at_the_soft_cap() {
+        assert_eq!(normalize_slot_id("§12345§").as_str(), "12345");
+        assert_eq!(normalize_slot_id("123456").as_str(), "12345");
+    }
+
+    #[test]
+    fn app_slot_fallback_keeps_up_to_four_stem_characters_and_a_suffix() {
         let stem = normalize_slot_id("cry");
-        assert_eq!(fallback_slot_candidate(&stem, 1).as_str(), "cr1");
-        assert_eq!(fallback_slot_candidate(&stem, 2).as_str(), "cr2");
-        assert_eq!(fallback_slot_candidate(&stem, 10).as_str(), "cra");
+        assert_eq!(fallback_slot_candidate(&stem, 1).as_str(), "cry1");
+        assert_eq!(fallback_slot_candidate(&stem, 2).as_str(), "cry2");
+        assert_eq!(fallback_slot_candidate(&stem, 10).as_str(), "crya");
+
+        let long_stem = normalize_slot_id("hello");
+        assert_eq!(fallback_slot_candidate(&long_stem, 1).as_str(), "hell1");
+    }
+
+    #[test]
+    fn broad_slot_candidates_fill_the_configured_width() {
+        assert_eq!(broad_slot_candidate(0).as_str(), "00000");
+        assert_eq!(broad_slot_candidate(35).as_str(), "0000z");
+        assert_eq!(broad_slot_candidate(36).as_str(), "00010");
     }
 }

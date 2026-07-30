@@ -44,7 +44,11 @@
 # The GridPaper sized-snapshot calls are strictly additive. They carry a
 # bounded logical extent beside the unchanged fixed-capacity page image;
 # existing full-size snapshot symbols and packaged Blueprints are unchanged.
+# The GridPaper snapshot-checkpoint calls are strictly additive. They let a
+# replicatable producer atomically capture kernel-mediated cell edits and
+# release its disposable UI4/GPU projection; older producers keep their prior
+# behavior.
 # The lifecycle poll, Ready boundary, and identity calls are strictly additive.
 # Old artifacts remain non-participants; tagged production artifacts can now
 # quiesce before the host freezes them and observe identity after Resume.
-5ed5bba3bb1ccaf3073220ec39de5bab866b250c9cc291a03b444c64933b904d
+2ddc51f75f84603aee0ebe8339e8b4ac97db94593f69a64668f7e002fcb787c0

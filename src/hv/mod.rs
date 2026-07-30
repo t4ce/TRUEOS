@@ -451,6 +451,7 @@ struct BlueprintPendingLaunchState {
     archive: AllocString,
     module_bytes: AllocVec<u8>,
     app_args: AllocVec<AllocString>,
+    instance: BlueprintInstanceRequest,
     console_target: Option<MatrixTarget>,
     console_surface: BlueprintConsoleSurface,
 }
@@ -463,6 +464,32 @@ pub struct BlueprintLaunchState {
     pub app_args: AllocVec<AllocString>,
     pub app_fs_root: AllocString,
     pub identity: BlueprintInstanceIdentity,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BlueprintInstanceRequest {
+    pub name: Option<AllocString>,
+    pub peer: Option<AllocString>,
+}
+
+impl BlueprintInstanceRequest {
+    pub fn named(name: impl Into<AllocString>) -> Self {
+        Self {
+            name: Some(name.into()),
+            peer: None,
+        }
+    }
+
+    pub fn from_peer(name: impl Into<AllocString>, peer: impl Into<AllocString>) -> Self {
+        Self {
+            name: Some(name.into()),
+            peer: Some(peer.into()),
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.name.is_none() && self.peer.is_none()
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -563,6 +590,8 @@ pub struct BlueprintInstanceIdentity {
     pub lineage: [u8; 16],
     pub generation: u64,
     pub clone: bool,
+    pub name: Option<AllocString>,
+    pub peer: Option<AllocString>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -747,13 +776,18 @@ pub(crate) fn format_blueprint_uuid(bytes: &[u8; 16]) -> AllocString {
     )
 }
 
-fn assign_fresh_blueprint_identity(vm_id: u8) -> Option<BlueprintInstanceIdentity> {
+fn assign_fresh_blueprint_identity(
+    vm_id: u8,
+    request: &BlueprintInstanceRequest,
+) -> Option<BlueprintInstanceIdentity> {
     let uuid = new_blueprint_uuid();
     let identity = BlueprintInstanceIdentity {
         instance: uuid,
         lineage: uuid,
         generation: 1,
         clone: false,
+        name: request.name.clone(),
+        peer: request.peer.clone(),
     };
     *BLUEPRINT_INSTANCE_IDENTITIES.get(vm_id as usize)?.lock() = Some(identity.clone());
     Some(identity)
@@ -867,6 +901,57 @@ pub fn app_vm_archive(vm_id: u8) -> Option<AllocString> {
                 .lock()
                 .clone()
         })
+}
+
+pub fn app_vm_display_label(vm_id: u8) -> Option<AllocString> {
+    let archive = app_vm_archive(vm_id)?;
+    let identity = blueprint_instance_identity(vm_id);
+    match identity {
+        Some(identity) if identity.peer.is_some() || identity.name.is_some() => {
+            let name = identity.name.as_deref().unwrap_or("unnamed");
+            if let Some(peer) = identity.peer.as_deref() {
+                Some(alloc::format!("{} [peer:{} / {}]", archive, peer, name))
+            } else {
+                Some(alloc::format!("{} [{}]", archive, name))
+            }
+        }
+        _ => Some(archive),
+    }
+}
+
+pub fn default_app_instance_vm(archive: &str) -> Option<u8> {
+    for vm_id in 0..TRUEOS_VM_ID_LIMIT {
+        let vm_id = vm_id as u8;
+        let vm = vm_slot(vm_id)?;
+        if !vm.running.load(Ordering::Acquire)
+            && !vm.starting.load(Ordering::Acquire)
+            && !vm.pause_latched.load(Ordering::Acquire)
+        {
+            continue;
+        }
+        let running_default = BLUEPRINT_LAUNCH_STATES
+            .get(vm_id as usize)
+            .is_some_and(|slot| {
+                let state = slot.lock();
+                state.as_ref().is_some_and(|state| {
+                    state.archive.eq_ignore_ascii_case(archive)
+                        && state.identity.name.is_none()
+                        && state.identity.peer.is_none()
+                })
+            });
+        let pending_default = BLUEPRINT_PENDING_LAUNCH_STATES
+            .get(vm_id as usize)
+            .is_some_and(|slot| {
+                let pending = slot.lock();
+                pending.as_ref().is_some_and(|pending| {
+                    pending.archive.eq_ignore_ascii_case(archive) && pending.instance.is_default()
+                })
+            });
+        if running_default || pending_default {
+            return Some(vm_id);
+        }
+    }
+    None
 }
 
 fn set_blueprint_lifecycle_capability(vm_id: u8, archive: &str, replicatable: bool) {
@@ -1123,6 +1208,7 @@ pub fn start_blueprint_app_vm(
     archive: AllocString,
     module_bytes: AllocVec<u8>,
     app_args: AllocVec<AllocString>,
+    instance: BlueprintInstanceRequest,
     console_target: Option<MatrixTarget>,
     console_surface: BlueprintConsoleSurface,
 ) -> Result<(), StartError> {
@@ -1136,6 +1222,7 @@ pub fn start_blueprint_app_vm(
             archive,
             module_bytes,
             app_args,
+            instance,
             console_target,
             console_surface,
         }),
@@ -1888,13 +1975,22 @@ fn prepare_blueprint_launch_on_lane(
         return Err(AllocString::from("app-vm stack profile allocation failed"));
     }
 
-    let identity = assign_fresh_blueprint_identity(vm_id)
+    let identity = assign_fresh_blueprint_identity(vm_id, &pending.instance)
         .ok_or_else(|| AllocString::from("app-vm instance identity unavailable"))?;
     let instance_guid = format_blueprint_uuid(&identity.instance);
-    let app_fs_root = crate::hv::blueprint::app_fs_root_for_instance(
-        pending.archive.as_str(),
-        instance_guid.as_str(),
-    );
+    let app_fs_root = if pending.instance.is_default() {
+        crate::hv::blueprint::app_fs_root_for_archive(
+            pending.archive.as_str(),
+            pending.module_bytes.as_slice(),
+        )
+    } else {
+        crate::hv::blueprint::app_fs_root_for_named_instance(
+            pending.archive.as_str(),
+            pending.instance.name.as_deref().unwrap_or("unnamed"),
+            pending.instance.peer.as_deref(),
+            instance_guid.as_str(),
+        )
+    };
     let asset_stats = {
         let result = crate::hv::blueprint::materialize_embedded_assets(
             unpacked_bytes.as_slice(),
@@ -2957,7 +3053,7 @@ impl LineageRecord {
     }
 }
 
-#[task(pool_size = 32)]
+#[task(pool_size = 64)]
 async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     let Some(vm) = vm_slot(vm_id) else {
         return;
@@ -3139,6 +3235,13 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     }
 
     if !vm.pause_latched.load(Ordering::Acquire) {
+        let gridpaper_released = crate::r::gridpaper_service::release_owner_lifecycle(vm_id);
+        if gridpaper_released != 0 {
+            hvlogf(format_args!(
+                "hv: vm{} lifecycle: gridpaper cleanup released={}",
+                vm_id, gridpaper_released
+            ));
+        }
         let _ = crate::shell2::qjs_workbench::close(vm_id);
         let released = crate::ui4::release_owner_resources(crate::ui4::WindowOwner::Vm(vm_id));
         if released != crate::ui4::OwnerReleaseSummary::default() {

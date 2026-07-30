@@ -64,6 +64,16 @@ fn app_label_for_archive(archive: &str) -> &str {
     archive.trim().trim_end_matches(".bp")
 }
 
+fn app_label_for_instance(archive: &str, instance: &crate::hv::BlueprintInstanceRequest) -> String {
+    match (instance.peer.as_deref(), instance.name.as_deref()) {
+        (Some(peer), Some(name)) => {
+            alloc::format!("{} [peer:{} / {}]", app_label_for_archive(archive), peer, name)
+        }
+        (_, Some(name)) => alloc::format!("{} [{}]", app_label_for_archive(archive), name),
+        _ => String::from(app_label_for_archive(archive)),
+    }
+}
+
 fn reserve_target_for_archive(target: &MatrixTarget, archive: &str) -> MatrixTarget {
     let preferred = preferred_slot_for_archive(archive);
     reserve_matrix_target_for_vm_slot_selected(target.output_mask, preferred.as_str())
@@ -74,6 +84,7 @@ struct AppVmLaunchRequest {
     archive: String,
     module_bytes: Vec<u8>,
     app_args: Vec<String>,
+    instance: crate::hv::BlueprintInstanceRequest,
     target: MatrixTarget,
     preflight_complete: bool,
 }
@@ -439,6 +450,7 @@ fn enqueue_blueprint_request(
     source: &'static str,
     module_bytes: Vec<u8>,
     app_args: Vec<String>,
+    instance: crate::hv::BlueprintInstanceRequest,
     preflight_complete: bool,
 ) {
     crate::log!(
@@ -453,6 +465,7 @@ fn enqueue_blueprint_request(
         archive,
         module_bytes,
         app_args,
+        instance,
         target,
         preflight_complete,
     });
@@ -917,6 +930,18 @@ fn start_blueprint_launch(
     plan: BlueprintLaunchPlan,
     log: &dyn Fn(&str),
 ) {
+    if request.instance.is_default()
+        && let Some(existing_vm) = crate::hv::default_app_instance_vm(request.archive.as_str())
+    {
+        log(alloc::format!(
+            "apps: {} already has default instance vm{}; use `start new {} <name>`",
+            request.archive,
+            existing_vm,
+            app_label_for_archive(request.archive.as_str())
+        )
+        .as_str());
+        return;
+    }
     let Some(vm_id) = crate::hv::first_free_vm_id() else {
         log("apps: no free app-vm ids");
         return;
@@ -929,6 +954,7 @@ fn start_blueprint_launch(
         request.archive.clone(),
         request.module_bytes.clone(),
         request.app_args.clone(),
+        request.instance.clone(),
         Some(request.target.clone()),
         plan.console_surface,
     ) {
@@ -1007,6 +1033,22 @@ pub(crate) fn enqueue_blueprint_bytes(
     module_bytes: Vec<u8>,
     app_args: Vec<String>,
 ) -> Result<(), String> {
+    enqueue_blueprint_bytes_with_instance(
+        target,
+        archive,
+        module_bytes,
+        app_args,
+        crate::hv::BlueprintInstanceRequest::default(),
+    )
+}
+
+pub(crate) fn enqueue_blueprint_bytes_with_instance(
+    target: MatrixTarget,
+    archive: String,
+    module_bytes: Vec<u8>,
+    app_args: Vec<String>,
+    instance: crate::hv::BlueprintInstanceRequest,
+) -> Result<(), String> {
     let required_readiness = crate::hv::blueprint::prebind_required_readiness(
         module_bytes.as_slice(),
     )
@@ -1028,10 +1070,11 @@ pub(crate) fn enqueue_blueprint_bytes(
     }
 
     let target = reserve_target_for_archive(&target, archive.as_str());
-    set_matrix_target_app_label(&target, app_label_for_archive(archive.as_str()));
-    let line = alloc::format!("apps: queued {}", archive.as_str());
+    let app_label = app_label_for_instance(archive.as_str(), &instance);
+    set_matrix_target_app_label(&target, app_label.as_str());
+    let line = alloc::format!("apps: queued {}", app_label);
     log_run_target_line(&target, line.as_str());
-    enqueue_blueprint_request(target, archive, "direct", module_bytes, app_args, false);
+    enqueue_blueprint_request(target, archive, "direct", module_bytes, app_args, instance, false);
     Ok(())
 }
 
@@ -1051,6 +1094,7 @@ async fn submit_module_bytes_to_target_async(
     archive_name: &str,
     module_bytes: Vec<u8>,
     app_args: Vec<String>,
+    instance: crate::hv::BlueprintInstanceRequest,
     source: &'static str,
 ) -> Result<&'static str, String> {
     preflight_archive_name_to_target_async(&target, archive_name, module_bytes.as_slice()).await?;
@@ -1075,8 +1119,9 @@ async fn submit_module_bytes_to_target_async(
     }
     crate::allocators::with_host_alloc_domain(|| {
         let target = reserve_target_for_archive(&target, archive_name);
-        set_matrix_target_app_label(&target, app_label_for_archive(archive_name));
-        let line = alloc::format!("apps: queued {}", archive_name);
+        let app_label = app_label_for_instance(archive_name, &instance);
+        set_matrix_target_app_label(&target, app_label.as_str());
+        let line = alloc::format!("apps: queued {}", app_label);
         log_run_target_line(&target, line.as_str());
         enqueue_blueprint_request(
             target,
@@ -1084,6 +1129,7 @@ async fn submit_module_bytes_to_target_async(
             source,
             module_bytes,
             app_args,
+            instance,
             true,
         );
     });
@@ -1104,6 +1150,7 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
                 archive_name,
                 module_bytes,
                 app_args,
+                crate::hv::BlueprintInstanceRequest::default(),
                 source,
             )
             .await;
@@ -1116,6 +1163,7 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
             archive_name,
             module_bytes,
             app_args,
+            crate::hv::BlueprintInstanceRequest::default(),
             "boot embedded",
         )
         .await;
@@ -1135,6 +1183,7 @@ pub(crate) async fn submit_archive_name_to_target_prefer_embedded_async(
             archive_name,
             module_bytes,
             app_args,
+            crate::hv::BlueprintInstanceRequest::default(),
             "boot embedded",
         )
         .await;
@@ -1149,6 +1198,7 @@ pub(crate) async fn submit_archive_name_to_target_prefer_embedded_async(
                 archive_name,
                 module_bytes,
                 app_args,
+                crate::hv::BlueprintInstanceRequest::default(),
                 source,
             )
             .await;
@@ -1162,6 +1212,7 @@ async fn submit_archive_entry(
     target: MatrixTarget,
     entry: &ArchiveEntry,
     app_args: Vec<String>,
+    instance: crate::hv::BlueprintInstanceRequest,
 ) -> bool {
     let (module_bytes, source) = match &entry.source {
         ArchiveSource::Trueosfs { path } => {
@@ -1226,6 +1277,7 @@ async fn submit_archive_entry(
         entry.archive.as_str(),
         module_bytes,
         app_args,
+        instance,
         source,
     )
     .await
@@ -1247,6 +1299,38 @@ pub(crate) async fn submit_archive_id(
     id: usize,
     app_args: Vec<String>,
 ) -> bool {
+    let selector = id.to_string();
+    submit_archive_selector(
+        target,
+        width,
+        selector.as_str(),
+        app_args,
+        crate::hv::BlueprintInstanceRequest::default(),
+    )
+    .await
+}
+
+fn archive_match_key(value: &str) -> &str {
+    let leaf = value.trim().rsplit('/').next().unwrap_or(value);
+    let suffix_at = leaf.len().saturating_sub(3);
+    if leaf.is_char_boundary(suffix_at)
+        && leaf
+            .get(suffix_at..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".bp"))
+    {
+        &leaf[..suffix_at]
+    } else {
+        leaf
+    }
+}
+
+pub(crate) async fn submit_archive_selector(
+    target: MatrixTarget,
+    width: usize,
+    selector: &str,
+    app_args: Vec<String>,
+    instance: crate::hv::BlueprintInstanceRequest,
+) -> bool {
     let archives = match archive_entries().await {
         Ok(archives) => archives,
         Err(err) => {
@@ -1254,10 +1338,21 @@ pub(crate) async fn submit_archive_id(
             return false;
         }
     };
-    let Some(archive) = id.checked_sub(1).and_then(|idx| archives.get(idx)) else {
-        print_matrix_target_system_line(&target, "apps: unknown app id");
+    let archive = selector
+        .parse::<usize>()
+        .ok()
+        .and_then(|id| id.checked_sub(1))
+        .and_then(|idx| archives.get(idx))
+        .or_else(|| {
+            let requested = archive_match_key(selector);
+            archives.iter().find(|entry| {
+                archive_match_key(entry.archive.as_str()).eq_ignore_ascii_case(requested)
+            })
+        });
+    let Some(archive) = archive else {
+        print_matrix_target_system_line(&target, "apps: unknown app id or name");
         print_archive_table(&target, width, archives.as_slice());
         return false;
     };
-    submit_archive_entry(target, archive, app_args).await
+    submit_archive_entry(target, archive, app_args, instance).await
 }

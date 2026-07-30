@@ -1756,6 +1756,12 @@ pub(crate) fn build_process_env(
             String::from("TRUEOS_APP_IS_CLONE"),
             String::from(if identity.clone { "1" } else { "0" }),
         );
+        if let Some(name) = identity.name.as_deref() {
+            vars.insert(String::from("TRUEOS_APP_INSTANCE_NAME"), String::from(name));
+        }
+        if let Some(peer) = identity.peer.as_deref() {
+            vars.insert(String::from("TRUEOS_APP_PEER_ORIGIN"), String::from(peer));
+        }
     }
     let app_common = app_fs_common_root();
     vars.insert(String::from("TRUEOS_APP_FS_COMMON"), app_common.clone());
@@ -1801,8 +1807,49 @@ pub(crate) fn app_fs_root_for_archive(archive: &str, _module_bytes: &[u8]) -> St
     alloc::format!("apps/{}", safe_archive_stem(archive))
 }
 
-pub(crate) fn app_fs_root_for_instance(archive: &str, instance_guid: &str) -> String {
-    alloc::format!("apps/{}/{}", safe_archive_stem(archive), instance_guid.trim_matches('/'))
+fn safe_instance_component(value: &str, fallback: &str) -> String {
+    const MAX_COMPONENT_CHARS: usize = 48;
+    let mut out = String::new();
+    for ch in value.trim().chars() {
+        if out.len() >= MAX_COMPONENT_CHARS {
+            break;
+        }
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+            out.push(ch.to_ascii_lowercase());
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    while out.starts_with('.') || out.starts_with('_') {
+        out.remove(0);
+    }
+    while out.ends_with('.') || out.ends_with('_') {
+        out.pop();
+    }
+    if out.is_empty() {
+        String::from(fallback)
+    } else {
+        out
+    }
+}
+
+pub(crate) fn app_fs_root_for_named_instance(
+    archive: &str,
+    name: &str,
+    peer: Option<&str>,
+    instance_guid: &str,
+) -> String {
+    let name = safe_instance_component(name, "unnamed");
+    let instance = match peer {
+        Some(peer) => alloc::format!(
+            "peer-{}--{}--{}",
+            safe_instance_component(peer, "unknown"),
+            name,
+            instance_guid.trim_matches('/')
+        ),
+        None => alloc::format!("{}--{}", name, instance_guid.trim_matches('/')),
+    };
+    alloc::format!("apps/{}/{}", safe_archive_stem(archive), instance)
 }
 
 pub(crate) fn app_fs_common_root() -> String {

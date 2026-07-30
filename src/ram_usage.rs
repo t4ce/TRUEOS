@@ -13,11 +13,11 @@ const PMM_DOMAIN: usize = 0;
 const HOST_DOMAIN: usize = 1;
 const VM_DOMAIN_BASE: usize = 2;
 const DOMAIN_COUNT: usize = VM_DOMAIN_BASE + crate::allcaps::hv::VM_ID_LIMIT;
-const _: () = assert!(DOMAIN_COUNT <= 64);
+const _: () = assert!(DOMAIN_COUNT <= 128);
 
 struct UsageHistory {
     used_bytes: [[u64; DOMAIN_COUNT]; HISTORY_LEN],
-    active_domains: [u64; HISTORY_LEN],
+    active_domains: [u128; HISTORY_LEN],
     next: usize,
     len: usize,
     sample_count: u64,
@@ -34,7 +34,7 @@ impl UsageHistory {
         }
     }
 
-    fn push(&mut self, used_bytes: [u64; DOMAIN_COUNT], active_domains: u64) {
+    fn push(&mut self, used_bytes: [u64; DOMAIN_COUNT], active_domains: u128) {
         self.used_bytes[self.next] = used_bytes;
         self.active_domains[self.next] = active_domains;
         self.next = (self.next + 1) % HISTORY_LEN;
@@ -58,15 +58,15 @@ pub fn use_percent(used: u64, total: u64) -> u8 {
 }
 
 #[inline]
-fn activate(active: &mut u64, domain: usize) {
-    if domain < 64 {
-        *active |= 1u64 << domain;
+fn activate(active: &mut u128, domain: usize) {
+    if domain < 128 {
+        *active |= 1u128 << domain;
     }
 }
 
 pub fn sample_once() {
     let mut used_bytes = [0u64; DOMAIN_COUNT];
-    let mut active_domains = 0u64;
+    let mut active_domains = 0u128;
 
     if let Some(stats) = crate::phys::pmm_stats() {
         let used = stats.total_bytes.saturating_sub(stats.free_bytes);
@@ -114,7 +114,7 @@ fn history_text_for_domain(domain: usize) -> String {
     let mut maximum = 0u64;
     for offset in 0..history.len {
         let idx = (oldest + offset) % HISTORY_LEN;
-        if history.active_domains[idx] & (1u64 << domain) != 0 {
+        if history.active_domains[idx] & (1u128 << domain) != 0 {
             minimum = minimum.min(history.used_bytes[idx][domain]);
             maximum = maximum.max(history.used_bytes[idx][domain]);
         }
@@ -122,7 +122,7 @@ fn history_text_for_domain(domain: usize) -> String {
     let range = maximum.saturating_sub(minimum);
     for offset in 0..history.len {
         let idx = (oldest + offset) % HISTORY_LEN;
-        if history.active_domains[idx] & (1u64 << domain) == 0 {
+        if history.active_domains[idx] & (1u128 << domain) == 0 {
             out.push('·');
         } else {
             let level = if range == 0 {

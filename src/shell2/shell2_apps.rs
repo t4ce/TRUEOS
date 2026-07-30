@@ -71,7 +71,7 @@ fn line(io: &'static dyn ShellBackend2, text: &str) {
     print_shell_line(io, text);
 }
 
-fn vm_state_label(state: crate::hv::HvVmState) -> &'static str {
+fn vm_state_label(state: crate::hv::HvVmState, stored: bool) -> &'static str {
     if !state.supported {
         "unsupported"
     } else if state.restore_inflight {
@@ -82,13 +82,38 @@ fn vm_state_label(state: crate::hv::HvVmState) -> &'static str {
         "prepare-pause"
     } else if state.preserve_requested || state.preserve_exit {
         "save-pending"
+    } else if state.lifecycle_ready && (state.running || state.starting) {
+        "ready"
+    } else if state.pause_latched && (state.running || state.starting) {
+        "pause-pending"
     } else if state.running {
         "running"
     } else if state.starting {
         "starting"
+    } else if state.pause_latched && stored {
+        "paused"
+    } else if state.pause_latched {
+        "latch-pending"
     } else {
         "offline"
     }
+}
+
+const STATUS_EMPTY_SLOT_TAIL: usize = 4;
+
+fn vm_slot_has_status(state: crate::hv::HvVmState, stored: bool, blueprint_assigned: bool) -> bool {
+    blueprint_assigned
+        || stored
+        || state.running
+        || state.starting
+        || state.stop_requested
+        || state.preserve_requested
+        || state.preserve_exit
+        || state.replicatable
+        || state.pause_latched
+        || state.prepare_pause_pending
+        || state.lifecycle_ready
+        || state.restore_inflight
 }
 
 fn active_vm_ids() -> Vec<u8> {
@@ -105,27 +130,43 @@ pub(crate) fn print_status(io: &'static dyn ShellBackend2) {
     const HEADERS: &[&str; 4] = &["vmid", "blueprint", "state", "store"];
     let table = TlbTable::with_width(HEADERS, line_width_for_backend(io).saturating_sub(2))
         .with_max_col_widths(&[4, 0, 16, 8]);
-    table.emit_header(|text| print_shell_line(io, text));
+    let mut highest_assigned = None;
     for idx in 0..crate::hv::TRUEOS_VM_ID_LIMIT {
+        let vm_id = idx as u8;
+        let state = crate::hv::vm_state(vm_id);
+        let stored = crate::hv::store::has_committed_vm(vm_id);
+        let blueprint_assigned = crate::hv::app_vm_display_label(vm_id).is_some();
+        if vm_slot_has_status(state, stored, blueprint_assigned) {
+            highest_assigned = Some(idx);
+        }
+    }
+    let visible_slots = highest_assigned
+        .map_or(STATUS_EMPTY_SLOT_TAIL, |idx| {
+            idx.saturating_add(1).saturating_add(STATUS_EMPTY_SLOT_TAIL)
+        })
+        .min(crate::hv::TRUEOS_VM_ID_LIMIT);
+
+    table.emit_header(|text| print_shell_line(io, text));
+    for idx in 0..visible_slots {
         let vm_id = idx as u8;
         let state = crate::hv::vm_state(vm_id);
         if !state.supported {
             continue;
         }
         let vm_id_text = alloc::format!("{}", vm_id);
-        let blueprint = crate::hv::app_vm_archive(vm_id).unwrap_or_else(|| String::from("-"));
-        let store = if crate::hv::store::has_committed_vm(vm_id) {
-            "saved"
-        } else {
-            "-"
-        };
+        let blueprint = crate::hv::app_vm_display_label(vm_id).unwrap_or_else(|| String::from("-"));
+        let stored = crate::hv::store::has_committed_vm(vm_id);
+        let store = if stored { "saved" } else { "-" };
         let row = [
             vm_id_text.as_str(),
             blueprint.as_str(),
-            vm_state_label(state),
+            vm_state_label(state, stored),
             store,
         ];
         table.emit_row(&row, |text| print_shell_line(io, text));
+    }
+    if visible_slots < crate::hv::TRUEOS_VM_ID_LIMIT {
+        table.emit_row(&["...", "...", "...", "..."], |text| print_shell_line(io, text));
     }
     table.emit_footer(|text| print_shell_line(io, text));
     print_hv_status(io);
@@ -168,7 +209,7 @@ fn print_replicatable_vms(io: &'static dyn ShellBackend2) {
         found = true;
         let stored = state.pause_snapshot_ready;
         let vm_id_text = alloc::format!("{}", vm_id);
-        let blueprint = crate::hv::app_vm_archive(vm_id).unwrap_or_else(|| String::from("-"));
+        let blueprint = crate::hv::app_vm_display_label(vm_id).unwrap_or_else(|| String::from("-"));
         let row = [
             vm_id_text.as_str(),
             blueprint.as_str(),
@@ -269,7 +310,11 @@ fn print_hv_status(io: &'static dyn ShellBackend2) {
 }
 
 fn online_app(spawner: &Spawner, io: &'static dyn ShellBackend2, args: Vec<String>) {
-    super::shell2_dl::submit_online(spawner, io, args.join(" ").as_str());
+    let target = matrix_target_for_backend(io);
+    let width = line_width_for_backend(io);
+    if super::shell2_dl::submit_online_to_target(spawner, target, width, args).is_err() {
+        line(io, "apps: online task unavailable");
+    }
 }
 
 pub(crate) fn submit_online(spawner: &Spawner, io: &'static dyn ShellBackend2, submitted: &str) {
@@ -701,41 +746,47 @@ fn load_remote(io: &'static dyn ShellBackend2, endpoint: &str, vm_id: u8) {
 async fn start_app_task(
     target: MatrixTarget,
     width: usize,
-    id: Option<usize>,
+    selector: Option<String>,
     app_args: Vec<String>,
+    instance: crate::hv::BlueprintInstanceRequest,
 ) {
     // Apps commands execute on the BSP executor. Discovery, hash verification, and
     // module loading must stay async all the way to the Blueprint run queue;
     // never route this task through synchronous kfs or spawn_and_wait_local.
-    match id {
-        Some(id) => {
-            let _ = run::submit_archive_id(target.clone(), width, id, app_args).await;
+    match selector {
+        Some(selector) => {
+            let _ = run::submit_archive_selector(
+                target.clone(),
+                width,
+                selector.as_str(),
+                app_args,
+                instance,
+            )
+            .await;
         }
         None => run::print_app_archive_table(&target, width).await,
     }
     set_matrix_target_active(&target, false);
 }
 
-fn start_app(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    mut args: impl Iterator<Item = String>,
-) {
-    let id = match args.next() {
-        Some(id_text) => match id_text.parse::<usize>() {
-            Ok(id) => Some(id),
-            Err(_) => {
-                line(io, "apps: start expects an app id");
-                None
-            }
-        },
-        None => None,
+fn start_app(spawner: &Spawner, io: &'static dyn ShellBackend2, mut args: Vec<String>) {
+    let instance = if args.first().is_some_and(|arg| arg == "new") {
+        args.remove(0);
+        if args.len() < 2 {
+            line(io, "apps: usage `start new <app-id-or-name> <instance-name> [app args...]`");
+            return;
+        }
+        let name = args.remove(1);
+        crate::hv::BlueprintInstanceRequest::named(name)
+    } else {
+        crate::hv::BlueprintInstanceRequest::default()
     };
-    let app_args = args.collect::<Vec<_>>();
+    let selector = (!args.is_empty()).then(|| args.remove(0));
+    let app_args = args;
     let target = matrix_target_for_backend(io);
     let width = line_width_for_backend(io);
     set_matrix_target_active(&target, true);
-    match start_app_task(target.clone(), width, id, app_args) {
+    match start_app_task(target.clone(), width, selector, app_args, instance) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             set_matrix_target_active(&target, false);
@@ -744,9 +795,57 @@ fn start_app(
     }
 }
 
+fn tokenize_app_command(input: &str) -> Result<Vec<String>, &'static str> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for ch in input.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote == Some('"') {
+            escaped = true;
+            continue;
+        }
+        if let Some(active_quote) = quote {
+            if ch == active_quote {
+                quote = None;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+        if matches!(ch, '"' | '\'') {
+            quote = Some(ch);
+        } else if ch.is_whitespace() {
+            if !current.is_empty() {
+                tokens.push(core::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if escaped || quote.is_some() {
+        return Err("unterminated quoted app argument");
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    Ok(tokens)
+}
+
 pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitted: &str) {
-    let mut parts = submitted.split_whitespace();
-    let action = match parts.next() {
+    let mut tokens = match tokenize_app_command(submitted) {
+        Ok(tokens) => tokens.into_iter(),
+        Err(error) => {
+            line(io, alloc::format!("apps: {}", error).as_str());
+            return;
+        }
+    };
+    let action = match tokens.next().as_deref() {
         Some("start") => AppsCommand::Start,
         Some("online") => AppsCommand::Online,
         Some("dl") => AppsCommand::Dl,
@@ -765,12 +864,21 @@ pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitte
             return;
         }
     };
-    let rest = parts.map(String::from).collect::<Vec<_>>();
+    let rest = tokens.collect::<Vec<_>>();
 
     match action {
-        AppsCommand::Start => start_app(spawner, io, rest.into_iter()),
+        AppsCommand::Start => start_app(spawner, io, rest),
         AppsCommand::Online => online_app(spawner, io, rest),
-        AppsCommand::Dl => super::shell2_dl::submit_download(spawner, io, rest.join(" ").as_str()),
+        AppsCommand::Dl => {
+            if rest.first().is_some_and(|arg| arg == "new") {
+                line(
+                    io,
+                    "apps: `dl` installs only; use `dl <app>`, then `start new <app> <instance-name>`",
+                );
+            } else {
+                super::shell2_dl::submit_download_args(spawner, io, rest);
+            }
+        }
         AppsCommand::Peer => peer_app(spawner, io, rest),
         AppsCommand::Pause => pause_mode(spawner, io, rest.as_slice()),
         AppsCommand::Load => {

@@ -13,7 +13,10 @@ const WLS_HOST_WORKER_BASE: usize = 0;
 const WLS_BLUEPRINT_RUNTIME_BASE: usize = WLS_HOST_WORKER_BASE + WORKER_SLOT_COUNT;
 const WLS_BLUEPRINT_WORKER_BASE: usize =
     WLS_BLUEPRINT_RUNTIME_BASE + crate::allcaps::hv::VM_ID_LIMIT;
-const WLS_BLUEPRINT_THREAD_SLOTS_PER_VM: usize = 64;
+// Keep the complete 64-VM WLS layout within the 4096 slots baked into the
+// TRUEOS std/Tokio ports. Runtime and worker identities remain unique per VM;
+// Blueprint-created and carrier-created threads each retain 20 distinct slots.
+const WLS_BLUEPRINT_THREAD_SLOTS_PER_VM: usize = 40;
 const WLS_BLUEPRINT_THREAD_SLOTS_PER_REALM: usize = WLS_BLUEPRINT_THREAD_SLOTS_PER_VM / 2;
 const WLS_BLUEPRINT_THREAD_BASE: usize =
     WLS_BLUEPRINT_WORKER_BASE + crate::allcaps::hv::VM_ID_LIMIT * WORKER_SLOT_COUNT;
@@ -35,9 +38,12 @@ static WORKER_GENERATION: [AtomicU32; WORKER_SLOT_COUNT] =
 static CURRENT_WORKER_TOKEN_BY_CPU: [AtomicU64; CPU_TRACK_COUNT] =
     [const { AtomicU64::new(0) }; CPU_TRACK_COUNT];
 static LOGGED_WORKER_POOL_BUSY: AtomicBool = AtomicBool::new(false);
-static LOGGED_BLUEPRINT_RUNTIME_WLS_SLOT: [AtomicBool; 32] = [const { AtomicBool::new(false) }; 32];
-static LOGGED_BLUEPRINT_WORKER_WLS_SLOT: [AtomicBool; 32] = [const { AtomicBool::new(false) }; 32];
-static LOGGED_BLUEPRINT_THREAD_WLS_SLOT: [AtomicBool; 32] = [const { AtomicBool::new(false) }; 32];
+static LOGGED_BLUEPRINT_RUNTIME_WLS_SLOT: [AtomicBool; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { AtomicBool::new(false) }; crate::allcaps::hv::VM_ID_LIMIT];
+static LOGGED_BLUEPRINT_WORKER_WLS_SLOT: [AtomicBool; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { AtomicBool::new(false) }; crate::allcaps::hv::VM_ID_LIMIT];
+static LOGGED_BLUEPRINT_THREAD_WLS_SLOT: [AtomicBool; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { AtomicBool::new(false) }; crate::allcaps::hv::VM_ID_LIMIT];
 static LOGGED_HOST_WLS_FALLBACK: AtomicBool = AtomicBool::new(false);
 static CURRENT_BLUEPRINT_THREAD_ID_BY_CPU: [AtomicU32; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
     [const { AtomicU32::new(NO_BLUEPRINT_THREAD_ID) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];

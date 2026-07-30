@@ -366,7 +366,20 @@ async fn online_run_task(target: MatrixTarget, width: usize, mut args: Vec<Strin
         return;
     }
 
-    let selector = args.remove(0);
+    let instance = if args.first().is_some_and(|arg| arg == "new") {
+        args.remove(0);
+        if args.len() < 2 {
+            log("apps: usage `online new <app-id-or-name> <instance-name> [app args...]`");
+            set_matrix_target_active(&target, false);
+            return;
+        }
+        let selector = args.remove(0);
+        let name = args.remove(0);
+        (selector, crate::hv::BlueprintInstanceRequest::named(name))
+    } else {
+        (args.remove(0), crate::hv::BlueprintInstanceRequest::default())
+    };
+    let (selector, instance) = instance;
     let app_args = args;
     let apps = match online_apps().await {
         Ok(apps) => apps,
@@ -390,11 +403,12 @@ async fn online_run_task(target: MatrixTarget, width: usize, mut args: Vec<Strin
                 set_matrix_target_active(&target, false);
                 return;
             }
-            let _ = run::enqueue_blueprint_bytes(
+            let _ = run::enqueue_blueprint_bytes_with_instance(
                 target.clone(),
                 app.archive_name.clone(),
                 module_bytes,
                 app_args,
+                instance,
             );
         }
         Err(err) => log(alloc::format!("apps: online fetch failed: {}", err).as_str()),
@@ -486,10 +500,18 @@ pub(crate) fn submit_online(spawner: &Spawner, io: &'static dyn ShellBackend2, s
 }
 
 pub(crate) fn submit_download(spawner: &Spawner, io: &'static dyn ShellBackend2, submitted: &str) {
+    submit_download_args(spawner, io, submitted.split_whitespace().map(String::from).collect());
+}
+
+pub(crate) fn submit_download_args(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    args: Vec<String>,
+) {
     let target = matrix_target_for_backend(io);
     let width = line_width_for_backend(io);
     set_matrix_target_active(&target, true);
-    let selector = submitted.split_whitespace().next().map(String::from);
+    let selector = args.into_iter().next();
     match download_task(target.clone(), width, selector) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {

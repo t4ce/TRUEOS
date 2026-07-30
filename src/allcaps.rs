@@ -59,7 +59,7 @@ pub mod wls {
 pub mod hv {
     pub const LOG_LINE_BYTES: usize = 200;
 
-    pub const VM_ID_LIMIT: usize = 32;
+    pub const VM_ID_LIMIT: usize = 64;
     pub const VM_CPU_SLOT_LIMIT: usize = 256;
     pub const VMX_LIFECYCLE_PREEMPTION_QUANTUM_MS: u64 = 16;
 

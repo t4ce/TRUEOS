@@ -237,6 +237,12 @@ unsafe extern "C" {
         raw_ptr: *const u8,
         raw_len: usize,
     ) -> i32;
+    pub fn trueos_cabi_gridpaper_snapshot_checkpoint(out_ptr: *mut u8, out_len: usize) -> i32;
+    pub fn trueos_cabi_gridpaper_snapshot_checkpoint_instance(
+        instance_id: u32,
+        out_ptr: *mut u8,
+        out_len: usize,
+    ) -> i32;
     pub fn trueos_cabi_gridpaper_snapshot_submit_sized(
         generation: u64,
         scale_percent: u32,

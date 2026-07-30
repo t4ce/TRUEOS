@@ -140,6 +140,7 @@ pub const OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE: u32 = 0xF5; // arg0 window ->
 pub const OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS: u32 = 0xF6; // -> packed output width:height
 pub const OP_BP_USB_SNAPSHOT_READ: u32 = 0xF7; // arg0 offset, arg1 cap -> USB inventory snapshot
 pub const OP_BP_UI4_SCENE_INPUT_ROUTES: u32 = 0xF8; // arg0 window,arg1 cap -> selected combo/keyboard routes
+pub const OP_BP_GRIDPAPER_SNAPSHOT_CHECKPOINT: u32 = 0xF9; // arg0 instance -> page image + release
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1692,6 +1693,23 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GRIDPAPER_SNAPSHOT_CHECKPOINT => {
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let out =
+                unsafe { &mut (&mut (*page).payload)[..crate::r::gridpaper_service::PAGE_BYTES] };
+            let rc =
+                crate::r::gridpaper_service::checkpoint_snapshot_for_owner(vm_id, arg0 as u32, out);
+            let len = if rc == 0 {
+                crate::r::gridpaper_service::PAGE_BYTES as u32
+            } else {
+                0
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, len);
             DispatchOutcome::Resume
         }
         OP_BP_GRIDPAPER_TEXT_ANIMATIONS_SUBMIT => {

@@ -23,7 +23,7 @@ const COLUMNS: usize = COLUMN_SOFT_CAP;
 const ROWS: usize = ROW_SOFT_CAP;
 const GLYPH_UTF8_CAPACITY: usize = 4;
 const CELL_BYTES: usize = 13;
-const PAGE_BYTES: usize = COLUMNS * ROWS * CELL_BYTES;
+pub(crate) const PAGE_BYTES: usize = COLUMNS * ROWS * CELL_BYTES;
 const PRIMARY_LENGTH_OFFSET: usize = 0;
 const UPPER_LENGTH_OFFSET: usize = 1;
 const FOREGROUND_OFFSET: usize = 2;
@@ -1137,6 +1137,47 @@ pub(crate) fn submit_text_animations_for_owner(owner: u8, instance_id: u32, raw:
     0
 }
 
+/// Checkpoint the latest app data and atomically release its kernel projection.
+///
+/// UI4 cell edits and this operation serialize through `SnapshotStore`: an
+/// edit is either included in `out`, or observes the released lease and cannot
+/// become post-checkpoint app state.
+pub(crate) fn checkpoint_snapshot_for_owner(owner: u8, instance_id: u32, out: &mut [u8]) -> i32 {
+    if out.len() != PAGE_BYTES {
+        return ERROR_INVALID_SNAPSHOT;
+    }
+    if !valid_local_instance(instance_id) {
+        return ERROR_INVALID_INSTANCE;
+    }
+    let mut stores = SNAPSHOTS.lock();
+    let Some(instance) = find_pool_slot(&stores, owner, instance_id) else {
+        return ERROR_NOT_OWNER;
+    };
+    let snapshot = &mut stores[instance];
+    if snapshot.owner != Some(owner) {
+        return ERROR_NOT_OWNER;
+    }
+    out.copy_from_slice(&snapshot.buffers[snapshot.published]);
+    snapshot.release();
+    drop(stores);
+
+    GRIDPAPER_PRINT_REQUESTS
+        .lock()
+        .retain(|request| request.owner != owner || request.instance_id != instance_id);
+    PRINTER_MENU_CONTEXTS
+        .lock()
+        .retain(|context| context.snapshot.producer.blueprint_owner() != Some(owner));
+    crate::log_info!(
+        target: "gridpaper";
+        "gridpaper: checkpoint captured and pool lease released slot={} owner={} local_instance={} bytes={} action=destroy-ui4+gpu-scene+frame\n",
+        instance,
+        owner,
+        instance_id,
+        out.len(),
+    );
+    0
+}
+
 /// Relinquish producer authority and return its kernel pool slot. Lifecycle
 /// pause is the separate operation that retains a scene for resume.
 pub(crate) fn close_owner(owner: u8, instance_id: u32) -> i32 {
@@ -1147,22 +1188,65 @@ pub(crate) fn close_owner(owner: u8, instance_id: u32) -> i32 {
     };
     let mut stores = SNAPSHOTS.lock();
     let snapshots = &mut stores[instance];
-    match snapshots.owner {
+    let result = match snapshots.owner {
         Some(active) if active == owner => {
             snapshots.release();
-            crate::log_info!(
-                target: "gridpaper";
-                "gridpaper: pool lease released slot={} owner={} local_instance={} soft_cap={}\n",
-                instance,
-                owner,
-                instance_id,
-                GRIDPAPER_POOL_SOFT_CAP,
-            );
             0
         }
         Some(_) => ERROR_NOT_OWNER,
         None => 0,
+    };
+    drop(stores);
+    if result == 0 {
+        GRIDPAPER_PRINT_REQUESTS
+            .lock()
+            .retain(|request| request.owner != owner || request.instance_id != instance_id);
+        PRINTER_MENU_CONTEXTS
+            .lock()
+            .retain(|context| context.snapshot.producer.blueprint_owner() != Some(owner));
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: pool lease released slot={} owner={} local_instance={} soft_cap={}\n",
+            instance,
+            owner,
+            instance_id,
+            GRIDPAPER_POOL_SOFT_CAP,
+        );
     }
+    result
+}
+
+/// Release every Gridpaper lease owned by a VM.
+///
+/// This is the host-side fallback for stop/crash paths where Blueprint code
+/// cannot cooperatively call `gridpaper::close`.
+pub(crate) fn release_owner_lifecycle(owner: u8) -> usize {
+    let mut stores = SNAPSHOTS.lock();
+    let mut released = 0usize;
+    for snapshot in stores.iter_mut() {
+        if snapshot.owner == Some(owner) {
+            snapshot.release();
+            released = released.saturating_add(1);
+        }
+    }
+    drop(stores);
+
+    GRIDPAPER_PRINT_REQUESTS
+        .lock()
+        .retain(|request| request.owner != owner);
+    PRINTER_MENU_CONTEXTS
+        .lock()
+        .retain(|context| context.snapshot.producer.blueprint_owner() != Some(owner));
+
+    if released != 0 {
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: lifecycle release owner={} released_scenes={} action=destroy-ui4+gpu-scene+frame\n",
+            owner,
+            released,
+        );
+    }
+    released
 }
 
 /// Detach every Gridpaper presentation owned by a VM while keeping its page,
@@ -1466,6 +1550,46 @@ pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_submit_instance(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_checkpoint(
+    out_ptr: *mut u8,
+    out_len: usize,
+) -> i32 {
+    unsafe {
+        trueos_cabi_gridpaper_snapshot_checkpoint_instance(PRIMARY_INSTANCE_ID, out_ptr, out_len)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_checkpoint_instance(
+    instance_id: u32,
+    out_ptr: *mut u8,
+    out_len: usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len != PAGE_BYTES {
+        return ERROR_INVALID_SNAPSHOT;
+    }
+    // SAFETY: checked non-null above; the ABI caller promises writable bytes.
+    let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_GRIDPAPER_SNAPSHOT_CHECKPOINT,
+            u64::from(instance_id),
+            0,
+            &[],
+            out,
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            data as i64 as i32
+        } else {
+            ERROR_TRANSPORT
+        };
+    }
+    crate::hv::current_guest_execution_context_vm_id()
+        .map(|owner| checkpoint_snapshot_for_owner(owner, instance_id, out))
+        .unwrap_or(ERROR_NOT_OWNER)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_submit_sized(
     generation: u64,
     scale_percent: u32,
@@ -1649,6 +1773,9 @@ pub extern "C" fn trueos_cabi_gridpaper_print_request_take_instance(instance_id:
 // its pointer/length registers reinterpreted again.
 const _: unsafe extern "C" fn(u64, u32, *const u8, usize) -> i32 =
     trueos_cabi_gridpaper_snapshot_submit;
+const _: unsafe extern "C" fn(*mut u8, usize) -> i32 = trueos_cabi_gridpaper_snapshot_checkpoint;
+const _: unsafe extern "C" fn(u32, *mut u8, usize) -> i32 =
+    trueos_cabi_gridpaper_snapshot_checkpoint_instance;
 const _: unsafe extern "C" fn(u32, u64, u32, *const u8, usize) -> i32 =
     trueos_cabi_gridpaper_snapshot_submit_instance;
 const _: unsafe extern "C" fn(u64, u32, u32, u32, *const u8, usize) -> i32 =
@@ -4719,6 +4846,7 @@ fn edit_gridpaper_cell(
         .latest_snapshot
         .as_ref()
         .expect("GridPaper edited snapshot remains resident");
+    mirror_blueprint_cell_edit(runtime.surface.pool_slot, snapshot, edited);
     let active_matches = runtime.active.as_ref().is_some_and(|page| {
         page.serial == snapshot.serial
             && page.generation == snapshot.generation
@@ -4770,6 +4898,29 @@ fn edit_gridpaper_cell(
             runtime.dirty_cells.len(),
         );
     }
+}
+
+fn mirror_blueprint_cell_edit(
+    pool_slot: usize,
+    snapshot: &OwnedSnapshot,
+    selection: GridCellSelection,
+) {
+    let GridPaperProducer::Blueprint(owner) = snapshot.producer else {
+        return;
+    };
+    let offset = (selection.row * COLUMNS + selection.column) * CELL_BYTES;
+    let end = offset + CELL_BYTES;
+    let mut stores = SNAPSHOTS.lock();
+    let Some(store) = stores.get_mut(pool_slot) else {
+        return;
+    };
+    if store.owner != Some(owner)
+        || store.serial != snapshot.serial
+        || store.generation != snapshot.generation
+    {
+        return;
+    }
+    store.buffers[store.published][offset..end].copy_from_slice(&snapshot.raw[offset..end]);
 }
 
 fn build_dirty_cell_patches(runtime: &mut GridPaperRuntime) {
