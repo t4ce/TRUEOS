@@ -198,6 +198,20 @@ pub fn linef(args: fmt::Arguments<'_>) -> usize {
 }
 
 #[inline]
+pub fn progress_line(text: &str) -> usize {
+    let mut frame = String::with_capacity(text.len().saturating_add(1));
+    frame.push('\r');
+    frame.push_str(text);
+    attached_write(frame.as_bytes())
+}
+
+#[inline]
+pub fn progress_linef(args: fmt::Arguments<'_>) -> usize {
+    let text = alloc::format!("{}", args);
+    progress_line(text.as_str())
+}
+
+#[inline]
 pub fn styled_linef(args: fmt::Arguments<'_>, fg: Rgb, bold: bool) -> usize {
     let text = alloc::format!("{}", args);
     let styled = if bold {

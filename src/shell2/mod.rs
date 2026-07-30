@@ -64,6 +64,7 @@ static NET_TCP_TERMINAL_ROWS: AtomicUsize =
 #[derive(Clone)]
 pub(crate) struct TranscriptEntry {
     pub(crate) text: AllocString,
+    pub(crate) transient: bool,
 }
 
 #[derive(Clone)]
@@ -865,6 +866,14 @@ fn enqueue_transcript_line(io: &dyn ShellIo2, text: &str) {
 pub(crate) fn print_matrix_target_line(target: &MatrixTarget, line: &str) {
     let _ =
         matrix::record_line_in_live_slot(&target.slot_id, target.slot_lifetime_generation, line);
+}
+
+pub(crate) fn print_matrix_target_progress_line(target: &MatrixTarget, line: &str) {
+    let _ = matrix::record_transient_line_in_live_slot(
+        &target.slot_id,
+        target.slot_lifetime_generation,
+        line,
+    );
 }
 
 pub(crate) fn print_matrix_target_system_line(target: &MatrixTarget, line: &str) {

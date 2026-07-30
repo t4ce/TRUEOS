@@ -202,6 +202,17 @@ fn push_line(slot: &mut MatrixSlot, text: &str) {
     }
     slot.lines.push_back(TranscriptEntry {
         text: AllocString::from(text),
+        transient: false,
+    });
+}
+
+fn push_transient_line(slot: &mut MatrixSlot, text: &str) {
+    if slot.lines.len() >= DEFAULT_MATRIX_SLOT_LINE_CAP {
+        let _ = slot.lines.pop_front();
+    }
+    slot.lines.push_back(TranscriptEntry {
+        text: AllocString::from(text),
+        transient: true,
     });
 }
 
@@ -594,7 +605,36 @@ pub(crate) fn record_line_in_live_slot(
     if guard.slots[idx].lifetime_generation != lifetime_generation {
         return false;
     }
+    for line in guard.slots[idx].lines.iter_mut() {
+        line.transient = false;
+    }
     push_line(&mut guard.slots[idx], text);
+    bump_slot_revision(&mut guard, idx);
+    true
+}
+
+pub(crate) fn record_transient_line_in_live_slot(
+    slot_id: &MatrixSlotId,
+    lifetime_generation: u64,
+    text: &str,
+) -> bool {
+    let mut guard = state().lock();
+    let Some(idx) = guard.slots.iter().position(|slot| slot.id == *slot_id) else {
+        return false;
+    };
+    if guard.slots[idx].lifetime_generation != lifetime_generation {
+        return false;
+    }
+    if let Some(line) = guard.slots[idx]
+        .lines
+        .iter_mut()
+        .find(|line| line.transient)
+    {
+        line.text.clear();
+        line.text.push_str(text);
+    } else {
+        push_transient_line(&mut guard.slots[idx], text);
+    }
     bump_slot_revision(&mut guard, idx);
     true
 }

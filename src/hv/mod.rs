@@ -2611,6 +2611,17 @@ fn blueprint_console_text_lines(vm_id: u8, target: Option<&MatrixTarget>, data: 
     if data.is_empty() {
         return;
     }
+    if let Some(progress) = data.strip_prefix(b"\r")
+        && !progress.is_empty()
+        && !progress.contains(&b'\r')
+        && !progress.contains(&b'\n')
+        && let Ok(progress) = core::str::from_utf8(progress)
+    {
+        if let Some(target) = target {
+            crate::shell2::print_matrix_target_progress_line(target, progress);
+        }
+        return;
+    }
     let Some(slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) else {
         return;
     };
