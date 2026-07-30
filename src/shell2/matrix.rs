@@ -605,9 +605,7 @@ pub(crate) fn record_line_in_live_slot(
     if guard.slots[idx].lifetime_generation != lifetime_generation {
         return false;
     }
-    for line in guard.slots[idx].lines.iter_mut() {
-        line.transient = false;
-    }
+    guard.slots[idx].lines.retain(|line| !line.transient);
     push_line(&mut guard.slots[idx], text);
     bump_slot_revision(&mut guard, idx);
     true
@@ -975,5 +973,18 @@ mod tests {
         assert_eq!(broad_slot_candidate(0).as_str(), "00000");
         assert_eq!(broad_slot_candidate(35).as_str(), "0000z");
         assert_eq!(broad_slot_candidate(36).as_str(), "00010");
+    }
+
+    #[test]
+    fn permanent_output_dismisses_the_transient_progress_row() {
+        let slot_id = slot_id_from_name("trnst");
+        let generation = slot_lifetime_generation(&slot_id);
+
+        assert!(record_line_in_live_slot(&slot_id, generation, "before"));
+        assert!(record_transient_line_in_live_slot(&slot_id, generation, "busy"));
+        assert_eq!(slot_transcript_text(&slot_id), "before\nbusy");
+
+        assert!(record_line_in_live_slot(&slot_id, generation, "after"));
+        assert_eq!(slot_transcript_text(&slot_id), "before\nafter");
     }
 }
