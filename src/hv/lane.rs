@@ -193,8 +193,7 @@ fn collect_candidates(profile: LaneProfile) -> Vec<LaneCandidate> {
 fn collect_ap2_candidates() -> Vec<LaneCandidate> {
     let mut pool = Vec::new();
     for slot in crate::workers::background_slot_range() {
-        if slot < AP2_FIRST_CARRIER_SLOT
-            || !crate::workers::is_general_background_worker_slot(slot)
+        if slot < AP2_FIRST_CARRIER_SLOT || !crate::workers::is_general_background_worker_slot(slot)
         {
             continue;
         }

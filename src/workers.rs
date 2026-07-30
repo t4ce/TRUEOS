@@ -262,9 +262,7 @@ pub fn app_visible_parallelism() -> usize {
     CORE_SPAWNERS
         .lock()
         .keys()
-        .filter(|slot| {
-            **slot >= first_app_slot && !is_last_ap_service_slot(**slot)
-        })
+        .filter(|slot| **slot >= first_app_slot && !is_last_ap_service_slot(**slot))
         .count()
         .max(1)
 }
@@ -342,9 +340,7 @@ where
     let kinds = CORE_KINDS.lock();
     let perf_count = map
         .iter()
-        .filter(|(slot, _)| {
-            is_general_background_worker_slot(**slot) && accept_slot(**slot)
-        })
+        .filter(|(slot, _)| is_general_background_worker_slot(**slot) && accept_slot(**slot))
         .filter(|(slot, _)| kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN) == CORE_KIND_PERF)
         .count();
 
@@ -369,9 +365,7 @@ where
 
     let eligible_count = map
         .keys()
-        .filter(|slot| {
-            is_general_background_worker_slot(**slot) && accept_slot(**slot)
-        })
+        .filter(|slot| is_general_background_worker_slot(**slot) && accept_slot(**slot))
         .count();
     if eligible_count == 0 {
         return None;

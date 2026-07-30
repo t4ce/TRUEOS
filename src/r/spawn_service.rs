@@ -691,8 +691,7 @@ fn spawn_ui4_screenshot_service_task(spawner: Spawner) -> SpawnAttempt {
 #[cfg(feature = "trueos_h264_encode_stream")]
 fn spawn_ui4_h264_encode_stream_task(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
-    let Some((lastap_slot, lastap_kind, lastap_spawner)) =
-        crate::workers::last_ap_service_worker()
+    let Some((lastap_slot, lastap_kind, lastap_spawner)) = crate::workers::last_ap_service_worker()
     else {
         return SpawnAttempt::Skipped;
     };
