@@ -15,6 +15,13 @@ pub(crate) fn prebind_import_readiness(name: &str) -> u32 {
         mask |= crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
     }
 
+    if name.starts_with("trueos_cabi_archive_") {
+        // Archive jobs run on the background worker pool and complete only
+        // after their TRUEOSFS destination writes have committed.
+        mask |= crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+            | crate::r::readiness::BACKGROUND_AP_WORKER_READY;
+    }
+
     if name.starts_with("trueos_cabi_net_fetch_") {
         mask |= crate::r::readiness::NET_ANY_CONFIGURED
             | crate::r::readiness::NET_SOCKET_READY

@@ -350,16 +350,29 @@ fn spawn_ram_usage_history(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_codec_service(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
-    let Some(ap1_spawner) = crate::workers::ap1_ui_core_spawner() else {
+    if !crate::workers::all_topology_spawners_registered() {
         return SpawnAttempt::Skipped;
-    };
+    }
+    let worker_spawners = crate::workers::pick_background_spawners_with_slots(3);
+    if worker_spawners.is_empty() {
+        return SpawnAttempt::Skipped;
+    }
 
     let mut spawned = 0usize;
-    for worker_id in 0..3 {
-        match crate::r::codec::codec_worker_task(worker_id) {
+    for (worker_id, (worker_slot, core_kind, worker_spawner)) in
+        worker_spawners.into_iter().enumerate()
+    {
+        match crate::r::codec::codec_worker_task(worker_id, worker_slot, core_kind) {
             Ok(token) => {
-                ap1_spawner.spawn(token);
+                worker_spawner.spawn(token);
                 spawned = spawned.saturating_add(1);
+                crate::log_info!(
+                    target: "service";
+                    "codec: worker={} scheduled worker_slot={} core_kind={} policy=background-pcore-preferred\n",
+                    worker_id,
+                    worker_slot,
+                    core_kind
+                );
             }
             Err(err) if spawned == 0 => return SpawnAttempt::Failed(err),
             Err(err) => {

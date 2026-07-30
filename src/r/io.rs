@@ -4,7 +4,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-fn runtime_context_key() -> u32 {
+pub(crate) fn runtime_context_key() -> u32 {
     if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
         return 0x8000_0000 | vm_id as u32;
     }

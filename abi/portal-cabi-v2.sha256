@@ -55,4 +55,10 @@
 # and a pointer-free mutable inference checkpoint while immutable model/GPU
 # resources remain kernel capabilities. Spirit emotion playback is likewise an
 # additive, idea-only capability used by the Blueprint-owned tool adapter.
-9f5e7bc00b4aadc942489ff17cacb2d297cd98f3c25461be25d3e9bf4453f200
+# Spirit response presentation is strictly additive. It accepts only the
+# Blueprint adapter's display-safe text after tool-control spans are handled;
+# existing Lumen and non-Lumen Blueprints do not import it and remain unchanged.
+# The archive operation calls are strictly additive. They expose owner-scoped,
+# bounded, asynchronous TRUEOSFS path operations; older Blueprints do not
+# import them, and no existing filesystem or codec contract changes.
+a567cf2a3fd91068b164077a3e56c73cf41019491e67a62e58969731b1bf8804

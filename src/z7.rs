@@ -236,9 +236,7 @@ pub fn compress_single_file_to_vec(name: &str, bytes: &[u8]) -> Result<Vec<u8>, 
 /// Entries are sorted by their UTF-8 archive path. The archive carries no
 /// timestamps or host attributes, and each file gets its own LZMA2 folder so
 /// the same names and bytes always produce the same output.
-pub fn compress_files_to_vec(
-    entries: &[SevenZSourceEntry<'_>],
-) -> Result<Vec<u8>, SevenZError> {
+pub fn compress_files_to_vec(entries: &[SevenZSourceEntry<'_>]) -> Result<Vec<u8>, SevenZError> {
     if entries.is_empty() || entries.len() > ARCHIVE_METADATA_ITEM_CAP {
         return Err(SevenZError::Unsupported);
     }
@@ -267,9 +265,10 @@ pub fn compress_files_to_vec(
 
     let header = build_multi_file_header(packed_entries.as_slice());
     let next_header_crc = crc32fast::hash(header.as_slice());
-    let next_header_offset = packed_entries.iter().try_fold(0u64, |total, entry| {
-        total.checked_add(entry.packed.len() as u64)
-    }).ok_or(SevenZError::BadOffset)?;
+    let next_header_offset = packed_entries
+        .iter()
+        .try_fold(0u64, |total, entry| total.checked_add(entry.packed.len() as u64))
+        .ok_or(SevenZError::BadOffset)?;
     let next_header_size = header.len() as u64;
 
     let mut start_header = Vec::with_capacity(20);
@@ -281,9 +280,7 @@ pub fn compress_files_to_vec(
     let mut out = Vec::new();
     out.try_reserve(
         SIG_LEN
-            .checked_add(
-                usize::try_from(next_header_offset).map_err(|_| SevenZError::BadOffset)?,
-            )
+            .checked_add(usize::try_from(next_header_offset).map_err(|_| SevenZError::BadOffset)?)
             .and_then(|len| len.checked_add(header.len()))
             .ok_or(SevenZError::BadOffset)?,
     )
@@ -1322,6 +1319,69 @@ pub fn extract_all_to_vec(payload: &[u8]) -> Result<Vec<SevenZEntry>, SevenZErro
     Ok(out)
 }
 
+/// Extract every regular-file stream while enforcing archive-wide resource caps.
+///
+/// The limits are checked from metadata before allocating decoder output. Each
+/// folder decoder is still hard-bounded to its advertised output size, so a
+/// malformed stream cannot grow a result beyond the validated total.
+pub fn extract_all_to_vec_bounded(
+    payload: &[u8],
+    max_entries: usize,
+    max_entry_unpacked_size: usize,
+    max_total_unpacked_size: usize,
+    max_dictionary_size: usize,
+) -> Result<Vec<SevenZEntry>, SevenZError> {
+    let archives = parse_archive(payload)?;
+    if archives.is_empty() || archives.len() > max_entries {
+        return Err(SevenZError::Unsupported);
+    }
+
+    let mut total = 0usize;
+    for archive in &archives {
+        if archive.substream_size > max_entry_unpacked_size
+            || archive.folder_unpacked_size > max_total_unpacked_size
+        {
+            return Err(SevenZError::Unsupported);
+        }
+        match archive.method {
+            Method::Copy => {}
+            Method::Lzma { dict_size, .. } | Method::Lzma2 { dict_size }
+                if dict_size as usize > max_dictionary_size =>
+            {
+                return Err(SevenZError::Unsupported);
+            }
+            Method::Lzma { .. } | Method::Lzma2 { .. } => {}
+        }
+        total = total
+            .checked_add(archive.substream_size)
+            .ok_or(SevenZError::Unsupported)?;
+        if total > max_total_unpacked_size {
+            return Err(SevenZError::Unsupported);
+        }
+    }
+
+    let mut out = Vec::new();
+    out.try_reserve_exact(archives.len())
+        .map_err(|_| SevenZError::DecodeFailed)?;
+    let mut cached_ptr: *const u8 = core::ptr::null();
+    let mut cached_len = 0usize;
+    let mut cached_folder = Vec::new();
+
+    for archive in &archives {
+        if archive.packed_stream.as_ptr() != cached_ptr || archive.packed_stream.len() != cached_len
+        {
+            cached_folder = decode_folder_to_vec_bounded(archive)?;
+            cached_ptr = archive.packed_stream.as_ptr();
+            cached_len = archive.packed_stream.len();
+        }
+        out.push(SevenZEntry {
+            name: archive.name.clone(),
+            bytes: extract_archive_substream_to_vec(archive, cached_folder.as_slice())?,
+        });
+    }
+    Ok(out)
+}
+
 pub fn list_entries(payload: &[u8]) -> Result<Vec<SevenZEntryInfo>, SevenZError> {
     let archives = parse_archive(payload)?;
     let mut out = Vec::with_capacity(archives.len());
@@ -1347,4 +1407,80 @@ pub fn extract_file_to_vec(payload: &[u8], wanted_name: &str) -> Result<Vec<u8>,
     }
 
     Err(SevenZError::BadHeader)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        SevenZError, SevenZSourceEntry, compress_files_to_vec, extract_all_to_vec_bounded,
+    };
+
+    #[test]
+    fn multi_file_archive_is_deterministic_and_sorted() {
+        let first = [
+            SevenZSourceEntry {
+                name: "src/z.rs",
+                bytes: b"zed",
+            },
+            SevenZSourceEntry {
+                name: "Cargo.toml",
+                bytes: b"[package]\n",
+            },
+            SevenZSourceEntry {
+                name: "src/a.rs",
+                bytes: b"aye",
+            },
+            SevenZSourceEntry {
+                name: "empty",
+                bytes: b"",
+            },
+        ];
+        let second = [first[2], first[0], first[3], first[1]];
+
+        let archive = compress_files_to_vec(&first).expect("pack files");
+        assert_eq!(archive, compress_files_to_vec(&second).expect("pack reordered files"));
+
+        let entries =
+            extract_all_to_vec_bounded(archive.as_slice(), 8, 1024, 4096, 2 * 1024 * 1024)
+                .expect("extract files");
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<alloc::vec::Vec<_>>(),
+            ["Cargo.toml", "empty", "src/a.rs", "src/z.rs"]
+        );
+        assert_eq!(entries[0].bytes, b"[package]\n");
+        assert_eq!(entries[1].bytes, b"");
+        assert_eq!(entries[2].bytes, b"aye");
+        assert_eq!(entries[3].bytes, b"zed");
+    }
+
+    #[test]
+    fn bounded_multi_extract_rejects_entry_and_total_caps() {
+        let inputs = [
+            SevenZSourceEntry {
+                name: "a",
+                bytes: b"1234",
+            },
+            SevenZSourceEntry {
+                name: "b",
+                bytes: b"5678",
+            },
+        ];
+        let archive = compress_files_to_vec(&inputs).expect("pack files");
+
+        assert_eq!(
+            extract_all_to_vec_bounded(archive.as_slice(), 1, 8, 8, 2 * 1024 * 1024).err(),
+            Some(SevenZError::Unsupported)
+        );
+        assert_eq!(
+            extract_all_to_vec_bounded(archive.as_slice(), 2, 3, 8, 2 * 1024 * 1024).err(),
+            Some(SevenZError::Unsupported)
+        );
+        assert_eq!(
+            extract_all_to_vec_bounded(archive.as_slice(), 2, 8, 7, 2 * 1024 * 1024).err(),
+            Some(SevenZError::Unsupported)
+        );
+    }
 }

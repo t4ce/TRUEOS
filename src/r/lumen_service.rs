@@ -541,6 +541,7 @@ async fn run_prompt(
         crate::r::ai_activity::AiActivitySource::Lumen,
         turn.saturating_add(1),
     );
+    let _lumen_gt_boost = crate::intel::begin_lumen_gt_boost();
     let mut prompt_tokens = if turn == 0 {
         tokenizer
             .encode_user_after_system_prefix(prompt)

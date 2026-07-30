@@ -2721,6 +2721,92 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, len as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_ARCHIVE_PACK_START | OP_BP_ARCHIVE_UNPACK_START => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let split = arg0 as usize;
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            if split == 0 || split >= n {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PARAM as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            }
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let (first_bytes, second_bytes) = bytes.split_at(split);
+            let (Ok(first), Ok(second)) =
+                (core::str::from_utf8(first_bytes), core::str::from_utf8(second_bytes))
+            else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let (Some(first), Some(second)) = (
+                crate::r::io::env::resolve_fs_path(first, false),
+                crate::r::io::env::resolve_fs_path(second, false),
+            ) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = if op == OP_BP_ARCHIVE_PACK_START {
+                crate::r::archive_cabi::start_pack(owner, first, second)
+            } else {
+                crate::r::archive_cabi::start_unpack(owner, first, second)
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ARCHIVE_STATUS => {
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = crate::r::archive_cabi::status(owner, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ARCHIVE_REPORT => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            match crate::r::archive_cabi::report(owner, arg0 as u32) {
+                Ok(report) => {
+                    let out = unsafe { &mut (&mut (*p).payload)[..24] };
+                    out[0..8].copy_from_slice(&report.input_bytes.to_le_bytes());
+                    out[8..16].copy_from_slice(&report.output_bytes.to_le_bytes());
+                    out[16..20].copy_from_slice(&report.file_count.to_le_bytes());
+                    out[20..24].fill(0);
+                    write_response(vm_id, seq, STATUS_OK, 0, 24);
+                }
+                Err(rc) => {
+                    write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+                }
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_ARCHIVE_DISCARD => {
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = crate::r::archive_cabi::discard(owner, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_ASYNC_FS_READ_START | OP_BP_ASYNC_FS_REMOVE_START => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
