@@ -132,6 +132,71 @@ fn build_single_file_header(
     header
 }
 
+#[derive(Clone, Copy)]
+pub struct SevenZSourceEntry<'a> {
+    pub name: &'a str,
+    pub bytes: &'a [u8],
+}
+
+struct PackedSourceEntry<'a> {
+    source: SevenZSourceEntry<'a>,
+    packed: Vec<u8>,
+    crc: u32,
+}
+
+fn build_multi_file_header(entries: &[PackedSourceEntry<'_>]) -> Vec<u8> {
+    let mut header = Vec::new();
+    header.push(K_HEADER);
+    header.push(K_MAIN_STREAMS_INFO);
+
+    header.push(K_PACK_INFO);
+    push_variable_u64(&mut header, 0);
+    push_variable_u64(&mut header, entries.len() as u64);
+    header.push(K_SIZE);
+    for entry in entries {
+        push_variable_u64(&mut header, entry.packed.len() as u64);
+    }
+    header.push(K_END);
+
+    header.push(K_UNPACK_INFO);
+    header.push(K_FOLDER);
+    push_variable_u64(&mut header, entries.len() as u64);
+    header.push(0);
+    for _ in entries {
+        push_variable_u64(&mut header, 1);
+        header.push(0x21);
+        header.push(METHOD_LZMA2[0]);
+        push_variable_u64(&mut header, 1);
+        header.push(LZMA2_DICT_PROP_1_MIB);
+    }
+    header.push(K_CODERS_UNPACK_SIZE);
+    for entry in entries {
+        push_variable_u64(&mut header, entry.source.bytes.len() as u64);
+    }
+    header.push(K_CRC);
+    header.push(1);
+    for entry in entries {
+        header.extend_from_slice(&entry.crc.to_le_bytes());
+    }
+    header.push(K_END);
+    header.push(K_END);
+
+    header.push(K_FILES_INFO);
+    push_variable_u64(&mut header, entries.len() as u64);
+    let mut names = Vec::new();
+    names.push(0);
+    for entry in entries {
+        for unit in entry.source.name.encode_utf16() {
+            names.extend_from_slice(&unit.to_le_bytes());
+        }
+        names.extend_from_slice(&0u16.to_le_bytes());
+    }
+    push_property(&mut header, K_NAME, names.as_slice());
+    header.push(K_END);
+    header.push(K_END);
+    header
+}
+
 fn lzma2_compress_to_vec(bytes: &[u8]) -> Result<Vec<u8>, SevenZError> {
     let mut options = lzma_rust2::Lzma2Options::with_preset(1);
     options.lzma_options.dict_size = 1 << 20;
@@ -162,6 +227,74 @@ pub fn compress_single_file_to_vec(name: &str, bytes: &[u8]) -> Result<Vec<u8>, 
     out.extend_from_slice(&start_header_crc.to_le_bytes());
     out.extend_from_slice(start_header.as_slice());
     out.extend_from_slice(packed.as_slice());
+    out.extend_from_slice(header.as_slice());
+    Ok(out)
+}
+
+/// Compress multiple regular files into a deterministic 7z archive.
+///
+/// Entries are sorted by their UTF-8 archive path. The archive carries no
+/// timestamps or host attributes, and each file gets its own LZMA2 folder so
+/// the same names and bytes always produce the same output.
+pub fn compress_files_to_vec(
+    entries: &[SevenZSourceEntry<'_>],
+) -> Result<Vec<u8>, SevenZError> {
+    if entries.is_empty() || entries.len() > ARCHIVE_METADATA_ITEM_CAP {
+        return Err(SevenZError::Unsupported);
+    }
+
+    let mut sorted = entries.to_vec();
+    sorted.sort_by(|left, right| left.name.cmp(right.name));
+    let mut previous = None;
+    for entry in &sorted {
+        if entry.name.is_empty()
+            || entry.name.as_bytes().contains(&0)
+            || previous == Some(entry.name)
+        {
+            return Err(SevenZError::BadHeader);
+        }
+        previous = Some(entry.name);
+    }
+
+    let mut packed_entries = Vec::with_capacity(sorted.len());
+    for source in sorted {
+        packed_entries.push(PackedSourceEntry {
+            source,
+            packed: lzma2_compress_to_vec(source.bytes)?,
+            crc: crc32fast::hash(source.bytes),
+        });
+    }
+
+    let header = build_multi_file_header(packed_entries.as_slice());
+    let next_header_crc = crc32fast::hash(header.as_slice());
+    let next_header_offset = packed_entries.iter().try_fold(0u64, |total, entry| {
+        total.checked_add(entry.packed.len() as u64)
+    }).ok_or(SevenZError::BadOffset)?;
+    let next_header_size = header.len() as u64;
+
+    let mut start_header = Vec::with_capacity(20);
+    start_header.extend_from_slice(&next_header_offset.to_le_bytes());
+    start_header.extend_from_slice(&next_header_size.to_le_bytes());
+    start_header.extend_from_slice(&next_header_crc.to_le_bytes());
+    let start_header_crc = crc32fast::hash(start_header.as_slice());
+
+    let mut out = Vec::new();
+    out.try_reserve(
+        SIG_LEN
+            .checked_add(
+                usize::try_from(next_header_offset).map_err(|_| SevenZError::BadOffset)?,
+            )
+            .and_then(|len| len.checked_add(header.len()))
+            .ok_or(SevenZError::BadOffset)?,
+    )
+    .map_err(|_| SevenZError::DecodeFailed)?;
+    out.extend_from_slice(b"7z\xBC\xAF'\x1C");
+    out.extend_from_slice(&[0, 4]);
+    out.extend_from_slice(&start_header_crc.to_le_bytes());
+    out.extend_from_slice(start_header.as_slice());
+    for entry in packed_entries {
+        out.extend_from_slice(entry.packed.as_slice());
+    }
     out.extend_from_slice(header.as_slice());
     Ok(out)
 }

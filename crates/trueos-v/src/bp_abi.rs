@@ -11,6 +11,19 @@ pub struct TrueosCabiHeapStats {
     pub source: u32,
 }
 
+/// Completion report for a kernel-owned asynchronous archive operation.
+///
+/// The operation is complete only after the destination archive or extracted
+/// files have been committed to TRUEOSFS.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrueosArchiveReport {
+    pub input_bytes: u64,
+    pub output_bytes: u64,
+    pub file_count: u32,
+    pub reserved: u32,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct TrueosLifecyclePreparePause {
@@ -273,6 +286,11 @@ unsafe extern "C" {
     pub fn trueos_cabi_lumen_restore_commit() -> i32;
     pub fn trueos_cabi_lumen_close() -> i32;
     pub fn trueos_cabi_spirit_emotion_play(idea_ptr: *const u8, idea_len: usize) -> i32;
+    pub fn trueos_cabi_spirit_response_present(
+        turn: u64,
+        text_ptr: *const u8,
+        text_len: usize,
+    ) -> i32;
 
     pub fn trueos_cabi_gridpaper_snapshot_submit(
         generation: u64,
@@ -488,6 +506,21 @@ unsafe extern "C" {
         out_cap: usize,
     ) -> isize;
     pub fn trueos_cabi_async_fs_discard(id: u32) -> i32;
+    pub fn trueos_cabi_archive_pack_start(
+        source_ptr: *const u8,
+        source_len: usize,
+        archive_ptr: *const u8,
+        archive_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_archive_unpack_start(
+        archive_ptr: *const u8,
+        archive_len: usize,
+        destination_ptr: *const u8,
+        destination_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_archive_status(id: u32) -> i32;
+    pub fn trueos_cabi_archive_report(id: u32, out: *mut TrueosArchiveReport) -> i32;
+    pub fn trueos_cabi_archive_discard(id: u32) -> i32;
 
     pub fn trueos_cabi_gfx_texture_dimensions(
         tex_id: u32,

@@ -16,6 +16,7 @@ use crate::lumen::decode::{Lfm25DecodeInput, checkpoint_intel_igc, restore_intel
 
 const MAX_SYSTEM_BYTES: usize = 8 * 1024;
 const MAX_PROMPT_BYTES: usize = 4 * 1024;
+const MAX_SPIRIT_RESPONSE_BYTES: usize = 4 * 1024;
 const MAX_REPLY_TOKENS: usize = 48;
 // A mature 16K-token session is roughly 192 MiB (KV dominates), while the
 // prefilled tool/personality template is only a small fraction of that. Keep
@@ -341,6 +342,31 @@ pub(crate) fn close(owner: u8) -> i32 {
     0
 }
 
+pub(crate) fn spirit_response_present(owner: u8, turn: u64, text: &[u8]) -> i32 {
+    if turn == 0 || text.is_empty() || text.len() > MAX_SPIRIT_RESPONSE_BYTES {
+        return ERROR_BAD_INPUT;
+    }
+    let Some(slot) = slot(owner) else {
+        return ERROR_BAD_OWNER;
+    };
+    let state = slot.lock();
+    if !state.worker_active || state.phase != v::bp_abi::LUMEN_PHASE_READY {
+        return ERROR_BAD_STATE;
+    }
+    drop(state);
+    let Ok(text) = core::str::from_utf8(text) else {
+        return ERROR_BAD_INPUT;
+    };
+    if text.trim().is_empty() {
+        return ERROR_BAD_INPUT;
+    }
+    if crate::spirit::enqueue_reasoning_response(turn, text) {
+        0
+    } else {
+        ERROR_UNAVAILABLE
+    }
+}
+
 #[embassy_executor::task(pool_size = TASK_POOL_SIZE)]
 async fn lumen_blueprint_worker(owner: u8) {
     let initial = slot(owner).and_then(|slot| slot.lock().request.take());
@@ -511,6 +537,10 @@ async fn run_prompt(
     tail: &[u32],
     prompt: &str,
 ) -> Result<PromptReply, ()> {
+    let reasoning = crate::r::ai_activity::begin_reasoning(
+        crate::r::ai_activity::AiActivitySource::Lumen,
+        turn.saturating_add(1),
+    );
     let mut prompt_tokens = if turn == 0 {
         tokenizer
             .encode_user_after_system_prefix(prompt)
@@ -579,11 +609,13 @@ async fn run_prompt(
         result_tail[1] = tokenizer.im_end_id();
         2
     };
-    Ok(PromptReply {
+    let reply = PromptReply {
         text,
         tail: result_tail,
         tail_len,
-    })
+    };
+    reasoning.finish();
+    Ok(reply)
 }
 
 fn current_direct_owner() -> Option<u8> {
@@ -879,4 +911,33 @@ pub unsafe extern "C" fn trueos_cabi_spirit_emotion_play(
     crate::spirit::enqueue_emotion_words(&[idea])
         .map(|_| 0)
         .unwrap_or(ERROR_UNAVAILABLE)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_spirit_response_present(
+    turn: u64,
+    text_ptr: *const u8,
+    text_len: usize,
+) -> i32 {
+    if text_ptr.is_null() || text_len == 0 || text_len > MAX_SPIRIT_RESPONSE_BYTES {
+        return ERROR_BAD_INPUT;
+    }
+    let text = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SPIRIT_RESPONSE_PRESENT,
+            turn,
+            0,
+            text,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            data as i64 as i32
+        } else {
+            ERROR_TRANSPORT
+        };
+    }
+    current_direct_owner()
+        .map(|owner| spirit_response_present(owner, turn, text))
+        .unwrap_or(ERROR_BAD_OWNER)
 }

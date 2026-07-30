@@ -39,6 +39,7 @@ pub mod legacy_fs_abi;
 pub mod qjs_abi;
 pub mod sync;
 pub mod vaudio;
+pub mod varchive;
 pub mod vcabi;
 pub mod vclock;
 pub mod vfetch;

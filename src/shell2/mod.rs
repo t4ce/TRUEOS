@@ -651,10 +651,6 @@ pub(crate) fn matrix_target_for_backend(io: &'static dyn ShellBackend2) -> Matri
     }
 }
 
-pub(crate) fn matrix_target_slot_name(target: &MatrixTarget) -> &str {
-    target.slot_id.as_str()
-}
-
 pub(crate) fn matrix_target_routes_to(target: &MatrixTarget, output_mask: u8) -> bool {
     (target.output_mask & output_mask) != 0
 }
@@ -784,11 +780,6 @@ pub(crate) fn matrix_targets_same_live_slot(left: &MatrixTarget, right: &MatrixT
 
 pub(crate) fn matrix_targets_same_slot_lifetime(left: &MatrixTarget, right: &MatrixTarget) -> bool {
     left.slot_id == right.slot_id && left.slot_lifetime_generation == right.slot_lifetime_generation
-}
-
-pub(crate) fn matrix_target_lifetime_is_live(target: &MatrixTarget) -> bool {
-    matrix::live_slot_interrupt_generation(&target.slot_id, target.slot_lifetime_generation)
-        .is_some()
 }
 
 pub(crate) fn bind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
@@ -1044,8 +1035,6 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
         .is_some()
     {
         let (freed_id, vm_ids) = matrix::free_slot(submitted);
-        #[cfg(feature = "trueos_lumen")]
-        cmds::lumen::notify_matrix_slot_closed(freed_id.as_str());
         for vm_id in vm_ids {
             match crate::hv::stop(vm_id) {
                 Ok(true) => matrix::record_line_in_default(
@@ -1434,8 +1423,6 @@ fn handle_control_c(
     let active_slot = matrix::active_slot_id(output_mask);
     matrix::record_line_in_slot(&active_slot, "^C");
     let (_, vm_id) = matrix::request_slot_interrupt(&active_slot);
-    #[cfg(feature = "trueos_lumen")]
-    cmds::lumen::notify_matrix_slot_interrupted(active_slot.as_str());
     if let Some(vm_id) = vm_id {
         match crate::hv::stop(vm_id) {
             Ok(true) => {

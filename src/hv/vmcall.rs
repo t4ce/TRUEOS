@@ -141,6 +141,11 @@ pub const OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS: u32 = 0xF6; // -> packed output wid
 pub const OP_BP_USB_SNAPSHOT_READ: u32 = 0xF7; // arg0 offset, arg1 cap -> USB inventory snapshot
 pub const OP_BP_UI4_SCENE_INPUT_ROUTES: u32 = 0xF8; // arg0 window,arg1 cap -> selected combo/keyboard routes
 pub const OP_BP_GRIDPAPER_SNAPSHOT_CHECKPOINT: u32 = 0xF9; // arg0 instance -> page image + release
+pub const OP_BP_ARCHIVE_PACK_START: u32 = 0xFA; // arg0 source len,payload source+archive paths -> operation id/rc
+pub const OP_BP_ARCHIVE_UNPACK_START: u32 = 0xFB; // arg0 archive len,payload archive+destination paths -> operation id/rc
+pub const OP_BP_ARCHIVE_STATUS: u32 = 0xFC; // arg0 operation id -> pending/ready/rc
+pub const OP_BP_ARCHIVE_REPORT: u32 = 0xFD; // arg0 operation id -> completion report payload/rc
+pub const OP_BP_ARCHIVE_DISCARD: u32 = 0xFE; // arg0 operation id -> rc
 pub const OP_BP_LUMEN_TEMPLATE_OPEN: u32 = 0x100;
 pub const OP_BP_LUMEN_PROMPT_SUBMIT: u32 = 0x101;
 pub const OP_BP_LUMEN_STATUS: u32 = 0x102;
@@ -152,6 +157,7 @@ pub const OP_BP_LUMEN_RESTORE_WRITE: u32 = 0x107;
 pub const OP_BP_LUMEN_RESTORE_COMMIT: u32 = 0x108;
 pub const OP_BP_LUMEN_CLOSE: u32 = 0x109;
 pub const OP_BP_SPIRIT_EMOTION_PLAY: u32 = 0x10A;
+pub const OP_BP_SPIRIT_RESPONSE_PRESENT: u32 = 0x10B;
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -733,6 +739,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         .map(|_| 0)
                         .unwrap_or(-5)
                 })
+                .unwrap_or(-3);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SPIRIT_RESPONSE_PRESENT => {
+            let rc = request_payload(vm_id, req_len)
+                .map(|text| crate::r::lumen_service::spirit_response_present(vm_id, arg0, text))
                 .unwrap_or(-3);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
