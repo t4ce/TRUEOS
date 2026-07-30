@@ -146,6 +146,7 @@ pub const OP_BP_ARCHIVE_UNPACK_START: u32 = 0xFB; // arg0 archive len,payload ar
 pub const OP_BP_ARCHIVE_STATUS: u32 = 0xFC; // arg0 operation id -> pending/ready/rc
 pub const OP_BP_ARCHIVE_REPORT: u32 = 0xFD; // arg0 operation id -> completion report payload/rc
 pub const OP_BP_ARCHIVE_DISCARD: u32 = 0xFE; // arg0 operation id -> rc
+pub const OP_BP_UI4_FONT_CANVAS: u32 = 0xFF; // arg0 window,arg1 font,payload colored rows -> rc
 pub const OP_BP_LUMEN_TEMPLATE_OPEN: u32 = 0x100;
 pub const OP_BP_LUMEN_PROMPT_SUBMIT: u32 = 0x101;
 pub const OP_BP_LUMEN_STATUS: u32 = 0x102;
@@ -1334,6 +1335,92 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else if rc != 0 {
                 crate::log_warn!(target: "ui4/solara-text"; "scene vmcall failed vm={} window={} rows={} rc={}\n", vm_id, arg0 as u32, row_count, rc);
             }
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_FONT_CANVAS => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(header) = payload.get(..12) else {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            };
+            let canvas_width = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+            let canvas_height = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+            let row_count =
+                u32::from_le_bytes([header[8], header[9], header[10], header[11]]) as usize;
+            if row_count == 0 || row_count > 256 {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let mut offset = 12usize;
+            let mut rows = alloc::vec::Vec::with_capacity(row_count);
+            for _ in 0..row_count {
+                let Some(row_header) = payload.get(offset..offset.saturating_add(20)) else {
+                    write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                    return DispatchOutcome::Resume;
+                };
+                let x = f32::from_bits(u32::from_le_bytes([
+                    row_header[0],
+                    row_header[1],
+                    row_header[2],
+                    row_header[3],
+                ]));
+                let y = f32::from_bits(u32::from_le_bytes([
+                    row_header[4],
+                    row_header[5],
+                    row_header[6],
+                    row_header[7],
+                ]));
+                let font_pixels = f32::from_bits(u32::from_le_bytes([
+                    row_header[8],
+                    row_header[9],
+                    row_header[10],
+                    row_header[11],
+                ]));
+                let color_rgba = u32::from_le_bytes([
+                    row_header[12],
+                    row_header[13],
+                    row_header[14],
+                    row_header[15],
+                ]);
+                let text_len = u32::from_le_bytes([
+                    row_header[16],
+                    row_header[17],
+                    row_header[18],
+                    row_header[19],
+                ]) as usize;
+                offset = offset.saturating_add(20);
+                let Some(text) = payload.get(offset..offset.saturating_add(text_len)) else {
+                    write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                    return DispatchOutcome::Resume;
+                };
+                rows.push(crate::ui4::blueprint_text::TrueosUi4FontCanvasRow {
+                    text_ptr: text.as_ptr(),
+                    text_len,
+                    x,
+                    y,
+                    font_pixels,
+                    color_rgba,
+                });
+                offset = offset.saturating_add(text_len);
+            }
+            if offset != payload.len() {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let rc = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_font_canvas(
+                    arg0 as u32,
+                    arg1 as u32,
+                    canvas_width,
+                    canvas_height,
+                    rows.as_ptr(),
+                    rows.len(),
+                )
+            };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

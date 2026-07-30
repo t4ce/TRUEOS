@@ -61,4 +61,7 @@
 # The archive operation calls are strictly additive. They expose owner-scoped,
 # bounded, asynchronous TRUEOSFS path operations; older Blueprints do not
 # import them, and no existing filesystem or codec contract changes.
-a567cf2a3fd91068b164077a3e56c73cf41019491e67a62e58969731b1bf8804
+# The UI4 font-canvas call is strictly additive. It accepts bounded colored
+# rows and builds one window-retained premultiplied RGBA8 canvas without
+# changing the legacy text-scene or frame-publish contracts.
+bada45f5c5c2eedb65cb2e0d945da311f600da3c756d3abace599d571f5ab4c4

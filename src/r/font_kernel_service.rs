@@ -8,7 +8,10 @@
 //! asynchronously. Stamp callers may preserve a canvas or request an exact
 //! coverage-union crop; both obey the UHD/4K pixel and 4096-glyph soft caps.
 //! Gridpaper page, cell-patch, presentation, and print work use the same fair
-//! hardware admission lane while retaining independent runtime state.
+//! hardware admission lane while retaining independent runtime state. Spirit
+//! VFX and Blueprint sprite composition also hold that lane from submission
+//! through marker retirement, preventing detached direct-RCS work from
+//! overlapping a font job and poisoning the shared execution context.
 
 use alloc::{boxed::Box, collections::VecDeque, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -64,6 +67,8 @@ pub(crate) enum FontKernelConsumerPath {
     GridCellPatch,
     GridPresent,
     GridPrint,
+    SpiritVfx,
+    BlueprintCompositor,
 }
 
 impl FontKernelConsumerPath {
@@ -75,6 +80,8 @@ impl FontKernelConsumerPath {
             Self::GridCellPatch => "grid-cell-patch",
             Self::GridPresent => "grid-present",
             Self::GridPrint => "grid-print",
+            Self::SpiritVfx => "spirit-vfx",
+            Self::BlueprintCompositor => "blueprint-compositor",
         }
     }
 }
@@ -94,11 +101,10 @@ impl FontKernelConsumer {
 type FontKernelGpuSemaphore =
     FairSemaphore<crate::wait::EmbassySpinRawMutex, FONT_KERNEL_GPU_WAITERS>;
 
-/// Exclusive, FIFO admission to GPU font coverage and presentation work.
+/// Exclusive, FIFO admission to direct-RCS font and composition work.
 ///
-/// The hardware path remains deliberately single-submit, but every font
-/// producer enters through this multi-waiter boundary. Dropping the lease
-/// hands the lane to the oldest waiter.
+/// The hardware path remains deliberately single-submit. Dropping the lease
+/// hands the lane to the oldest asynchronous waiter.
 pub(crate) struct FontKernelGpuLease {
     permit: Option<SemaphoreReleaser<'static, FontKernelGpuSemaphore>>,
     consumer: FontKernelConsumer,
@@ -144,41 +150,60 @@ pub(crate) async fn acquire_gpu_lane(consumer: FontKernelConsumer) -> FontKernel
         }
         permit
     };
-    {
-        let waited_ms = Instant::now().as_millis().saturating_sub(wait_started_ms);
-        let mut status = STATUS.lock();
-        status.active_consumer = Some(consumer);
-        status.lane_admissions = status.lane_admissions.saturating_add(1);
-        status.lane_wait_ms = status.lane_wait_ms.saturating_add(waited_ms);
-        status.lane_wait_max_ms = status.lane_wait_max_ms.max(waited_ms);
-        match consumer.path {
-            FontKernelConsumerPath::RetainScene => {
-                status.retain_lane_admissions = status.retain_lane_admissions.saturating_add(1);
-            }
-            FontKernelConsumerPath::Stamp => {
-                status.stamp_lane_admissions = status.stamp_lane_admissions.saturating_add(1);
-            }
-            FontKernelConsumerPath::GridPage => {
-                status.grid_page_lane_admissions =
-                    status.grid_page_lane_admissions.saturating_add(1);
-            }
-            FontKernelConsumerPath::GridCellPatch => {
-                status.grid_patch_lane_admissions =
-                    status.grid_patch_lane_admissions.saturating_add(1);
-            }
-            FontKernelConsumerPath::GridPresent => {
-                status.grid_present_lane_admissions =
-                    status.grid_present_lane_admissions.saturating_add(1);
-            }
-            FontKernelConsumerPath::GridPrint => {
-                status.grid_print_lane_admissions =
-                    status.grid_print_lane_admissions.saturating_add(1);
-            }
-        }
-    }
+    record_gpu_lane_admission(consumer, Instant::now().as_millis().saturating_sub(wait_started_ms));
     FontKernelGpuLease {
         permit: Some(permit),
         consumer,
+    }
+}
+
+/// Non-blocking admission for synchronous VM-call producers. The returned
+/// lease must cover submission and marker retirement, exactly like the async
+/// lane, so a detached Spirit walker cannot overlap a Blueprint compositor or
+/// FontKernel stamp.
+pub(crate) fn try_acquire_gpu_lane(consumer: FontKernelConsumer) -> Option<FontKernelGpuLease> {
+    let permit = GPU_LANE.try_acquire(1)?;
+    record_gpu_lane_admission(consumer, 0);
+    Some(FontKernelGpuLease {
+        permit: Some(permit),
+        consumer,
+    })
+}
+
+fn record_gpu_lane_admission(consumer: FontKernelConsumer, waited_ms: u64) {
+    let mut status = STATUS.lock();
+    status.active_consumer = Some(consumer);
+    status.lane_admissions = status.lane_admissions.saturating_add(1);
+    status.lane_wait_ms = status.lane_wait_ms.saturating_add(waited_ms);
+    status.lane_wait_max_ms = status.lane_wait_max_ms.max(waited_ms);
+    match consumer.path {
+        FontKernelConsumerPath::RetainScene => {
+            status.retain_lane_admissions = status.retain_lane_admissions.saturating_add(1);
+        }
+        FontKernelConsumerPath::Stamp => {
+            status.stamp_lane_admissions = status.stamp_lane_admissions.saturating_add(1);
+        }
+        FontKernelConsumerPath::GridPage => {
+            status.grid_page_lane_admissions = status.grid_page_lane_admissions.saturating_add(1);
+        }
+        FontKernelConsumerPath::GridCellPatch => {
+            status.grid_patch_lane_admissions = status.grid_patch_lane_admissions.saturating_add(1);
+        }
+        FontKernelConsumerPath::GridPresent => {
+            status.grid_present_lane_admissions =
+                status.grid_present_lane_admissions.saturating_add(1);
+        }
+        FontKernelConsumerPath::GridPrint => {
+            status.grid_print_lane_admissions = status.grid_print_lane_admissions.saturating_add(1);
+        }
+        FontKernelConsumerPath::SpiritVfx => {
+            status.spirit_vfx_lane_admissions = status.spirit_vfx_lane_admissions.saturating_add(1);
+        }
+        FontKernelConsumerPath::BlueprintCompositor => {
+            status.blueprint_compositor_lane_admissions = status
+                .blueprint_compositor_lane_admissions
+                .saturating_add(1);
+        }
     }
 }
 
@@ -431,6 +456,8 @@ pub(crate) struct FontKernelServiceStatus {
     pub(crate) grid_patch_lane_admissions: u64,
     pub(crate) grid_present_lane_admissions: u64,
     pub(crate) grid_print_lane_admissions: u64,
+    pub(crate) spirit_vfx_lane_admissions: u64,
+    pub(crate) blueprint_compositor_lane_admissions: u64,
     pub(crate) queued: usize,
 }
 
@@ -460,6 +487,8 @@ impl FontKernelServiceStatus {
             grid_patch_lane_admissions: 0,
             grid_present_lane_admissions: 0,
             grid_print_lane_admissions: 0,
+            spirit_vfx_lane_admissions: 0,
+            blueprint_compositor_lane_admissions: 0,
             queued: 0,
         }
     }
@@ -1334,9 +1363,14 @@ mod tests {
         let blueprint = FontKernelConsumer::new(FontKernelConsumerPath::GridPage, 1);
         let spirit = FontKernelConsumer::new(FontKernelConsumerPath::GridPage, 2);
         let stamp = FontKernelConsumer::new(FontKernelConsumerPath::Stamp, 1);
+        let spirit_vfx = FontKernelConsumer::new(FontKernelConsumerPath::SpiritVfx, 1);
+        let compositor = FontKernelConsumer::new(FontKernelConsumerPath::BlueprintCompositor, 1);
         assert_ne!(blueprint, spirit);
         assert_ne!(blueprint, stamp);
+        assert_ne!(spirit_vfx, compositor);
         assert_eq!(blueprint.path.name(), "grid-page");
         assert_eq!(stamp.path.name(), "stamp");
+        assert_eq!(spirit_vfx.path.name(), "spirit-vfx");
+        assert_eq!(compositor.path.name(), "blueprint-compositor");
     }
 }

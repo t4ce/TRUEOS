@@ -185,13 +185,16 @@ fn next_job_id() -> u64 {
     NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-fn next_operation_id() -> u32 {
-    loop {
-        let id = NEXT_OPERATION_ID.fetch_add(1, Ordering::Relaxed);
-        if id != 0 {
-            return id;
+fn next_operation_id(operations: &[OperationRecord]) -> Result<u32, CodecError> {
+    for _ in 0..=OPERATION_CAP {
+        // The C ABI returns start results as i32, so keep successful handles
+        // strictly positive even after the atomic sequence crosses bit 31.
+        let id = NEXT_OPERATION_ID.fetch_add(1, Ordering::Relaxed) & i32::MAX as u32;
+        if id != 0 && operations.iter().all(|operation| operation.id != id) {
+            return Ok(id);
         }
     }
+    Err(CodecError::QueueFull)
 }
 
 fn push_completed(job: CodecCompletedJob) {
@@ -224,7 +227,7 @@ fn enqueue_operation(
     if operations.len() >= OPERATION_CAP {
         return Err(CodecError::QueueFull);
     }
-    let id = next_operation_id();
+    let id = next_operation_id(operations.as_slice())?;
     operations.push(OperationRecord {
         owner,
         id,

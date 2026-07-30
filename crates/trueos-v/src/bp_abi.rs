@@ -94,6 +94,17 @@ pub struct TrueosUi4SolaraSceneTextRow {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct TrueosUi4FontCanvasRow {
+    pub text_ptr: *const u8,
+    pub text_len: usize,
+    pub x: f32,
+    pub y: f32,
+    pub font_pixels: f32,
+    pub color_rgba: u32,
+}
+
+#[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4PanEvent {
     pub controller_id: u32,
@@ -391,6 +402,14 @@ unsafe extern "C" {
         viewport_height: u32,
         rgba: u32,
         rows: *const TrueosUi4SolaraSceneTextRow,
+        row_count: usize,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_font_canvas(
+        window_id: u32,
+        font_id: u32,
+        canvas_width: u32,
+        canvas_height: u32,
+        rows: *const TrueosUi4FontCanvasRow,
         row_count: usize,
     ) -> i32;
     pub fn trueos_cabi_ui4_solara_frame_publish(

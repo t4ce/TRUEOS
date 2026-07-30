@@ -25,10 +25,13 @@ static CPP_FONT_OUTPUTS: Mutex<VecDeque<FontStampedBuffer>> = Mutex::new(VecDequ
 static CPP_FONT_OUTPUT_RESERVATIONS: AtomicUsize = AtomicUsize::new(0);
 
 fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "cpp [gallery|aurora|julia|sdf|voronoi|retro-sun|audio|particle]");
     print_shell_line(
         io,
-        "cpp start [gallery|aurora|julia|sdf|voronoi|retro-sun|audio|particle] [duration_ms] [cadence_ms] [publish_every]",
+        "cpp [gallery|aurora|julia|sdf|voronoi|retro-sun|audio|particle|static30]",
+    );
+    print_shell_line(
+        io,
+        "cpp start [gallery|aurora|julia|sdf|voronoi|retro-sun|audio|particle|static30] [duration_ms] [cadence_ms] [publish_every]",
     );
     print_shell_line(io, "cpp list");
     print_shell_line(io, "cpp status");
@@ -77,13 +80,15 @@ fn parse_mode(raw: &str) -> Option<crate::ui4::GpgpuPreviewPreset> {
         || raw.eq_ignore_ascii_case("particle-craft")
     {
         Some(crate::ui4::GpgpuPreviewPreset::CppParticle)
+    } else if raw.eq_ignore_ascii_case("static30") {
+        Some(crate::ui4::GpgpuPreviewPreset::Static30)
     } else {
         None
     }
 }
 
 const fn is_cpp_preset(preset: crate::ui4::GpgpuPreviewPreset) -> bool {
-    preset.is_cpp()
+    preset.is_cpp() || matches!(preset, crate::ui4::GpgpuPreviewPreset::Static30)
 }
 
 fn parse_svg_demo(raw: &str) -> Option<crate::intel::gpgpu::SvgOutlineProbeDemo> {
@@ -235,6 +240,7 @@ fn start(
 ) {
     let audio = preset == crate::ui4::GpgpuPreviewPreset::CppAudio;
     let particle = preset == crate::ui4::GpgpuPreviewPreset::CppParticle;
+    let static30 = preset == crate::ui4::GpgpuPreviewPreset::Static30;
     let default_duration_ms = if audio {
         CPP_AUDIO_DEFAULT_DURATION_MS
     } else {
@@ -265,7 +271,11 @@ fn start(
         cadence_ms,
         publish_every,
     };
-    let detail = if audio {
+    let detail = if static30 {
+        String::from(
+            " windows=30 layout=6x5 plane_slots=1+2+3/10-each buffering=immutable-single publish_passes=1",
+        )
+    } else if audio {
         String::from(
             " pcm=post-mix/pre-hda-s16le-stereo-48k fft=2048-mid-side bands=64 walker=horizontal-pairs/50pct",
         )
@@ -283,7 +293,7 @@ fn start(
             print_shell_line(
                 io,
                 alloc::format!(
-                    "cpp start: queued=1 request={} mode={} service_online={} duration_ms={} cadence_ms={} publish_every={} frontend=cpp-for-opencl backend=intel-igc-aot runtime_compiler=0 artifact={} zebin_sha256={} target=8086:4680-r0C kernel={} simd=16 ui4_window=1 buffering=double plane=slot1-direct maximize={}{} stop=\"cpp stop\"",
+                    "cpp start: queued=1 request={} mode={} service_online={} duration_ms={} cadence_ms={} publish_every={} frontend=cpp-for-opencl backend=intel-igc-aot runtime_compiler=0 artifact={} zebin_sha256={} target=8086:4680-r0C kernel={} simd=16 ui4_windows={} buffering={} plane={} maximize={}{} stop=\"cpp stop\"",
                     serial,
                     cpp_mode_label(preset),
                     status.online as u8,
@@ -293,7 +303,18 @@ fn start(
                     artifact_name(preset),
                     artifact_hash(preset),
                     kernel_name(preset),
-                    "dynamic-frame/reconciled",
+                    if static30 { 30 } else { 1 },
+                    if static30 { "single" } else { "double" },
+                    if static30 {
+                        "slots1+2+3/10-each"
+                    } else {
+                        "slot1-direct"
+                    },
+                    if static30 {
+                        "movable-fixed-canvas"
+                    } else {
+                        "dynamic-frame/reconciled"
+                    },
                     detail,
                 )
                 .as_str(),
@@ -318,6 +339,7 @@ const fn cpp_mode_label(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str 
         crate::ui4::GpgpuPreviewPreset::CppAudio => "audio",
         crate::ui4::GpgpuPreviewPreset::CppParticle => "particle",
         crate::ui4::GpgpuPreviewPreset::CppFont => "font",
+        crate::ui4::GpgpuPreviewPreset::Static30 => "static30",
         _ => "not-cpp",
     }
 }
@@ -352,6 +374,10 @@ fn print_list(io: &'static dyn ShellBackend2) {
         "cpp demo: mode=audio explores=one-composed-instrument/waveform+phase+64-band-spectrum+bass-bloom+beat-rings+particles pcm=exact-pre-hda-tee fft=2048-mid-side walker=50pct",
     );
     print_shell_line(io, particle_list_detail().as_str());
+    print_shell_line(
+        io,
+        "cpp demo: mode=static30 explores=font-kernel-service/30-retained-ui4-windows/three-plane-slots/immutable-single-publish path=skrifa->gpu-vm-r8->cpp-font-instance->ui4-frame",
+    );
     print_shell_line(
         io,
         "cpp suite: sources=cpp_demo_rgba8.clcpp+cpp_audio_visualizer_rgba8.clcpp+particle_craft.clcpp frontend=cpp-for-opencl backend=intel-igc-aot build_time_only=1 exact_target=8086:4680-r0C",
@@ -424,7 +450,10 @@ fn print_status(io: &'static dyn ShellBackend2) {
     let active_cpp = status.desired_running && is_cpp_preset(status.config.preset);
     let audio = status.config.preset == crate::ui4::GpgpuPreviewPreset::CppAudio;
     let particle = status.config.preset == crate::ui4::GpgpuPreviewPreset::CppParticle;
-    let font = status.config.preset == crate::ui4::GpgpuPreviewPreset::CppFont;
+    let font = matches!(
+        status.config.preset,
+        crate::ui4::GpgpuPreviewPreset::CppFont | crate::ui4::GpgpuPreviewPreset::Static30
+    );
     let upload = if font {
         crate::intel::gpgpu::font_instance_rgba8_upload_status()
     } else if audio {
@@ -506,7 +535,10 @@ fn print_status(io: &'static dyn ShellBackend2) {
 }
 
 fn artifact_name(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str {
-    if preset == crate::ui4::GpgpuPreviewPreset::CppFont {
+    if matches!(
+        preset,
+        crate::ui4::GpgpuPreviewPreset::CppFont | crate::ui4::GpgpuPreviewPreset::Static30
+    ) {
         crate::intel::gpgpu::FONT_INSTANCE_RGBA8_ADLS_ARTIFACT.name
     } else if preset == crate::ui4::GpgpuPreviewPreset::CppAudio {
         crate::intel::gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT.name
@@ -526,7 +558,10 @@ fn kernel_name(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str {
 }
 
 fn artifact_hash(preset: crate::ui4::GpgpuPreviewPreset) -> String {
-    if preset == crate::ui4::GpgpuPreviewPreset::CppFont {
+    if matches!(
+        preset,
+        crate::ui4::GpgpuPreviewPreset::CppFont | crate::ui4::GpgpuPreviewPreset::Static30
+    ) {
         format_hash(crate::intel::gpgpu::FONT_INSTANCE_RGBA8_ADLS_ARTIFACT.bin_sha256)
     } else if preset == crate::ui4::GpgpuPreviewPreset::CppAudio {
         format_hash(crate::intel::gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT.bin_sha256)
@@ -693,7 +728,7 @@ fn print_font_service_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "cpp font status: online={} queued={} outputs={} output_reservations={} output_bytes={} output_capacity={} active_ticket={} active_stage={} active_consumer={}:{} lane_waiters={} lane_peak={} lane_admissions={} lane_contentions={} lane_wait_ms={} lane_wait_max_ms={} lane_paths=retain:{},stamp:{},grid-page:{},grid-patch:{},grid-present:{},grid-print:{} lane_retries={} gpu_retries={} retain_submitted={} retain_completed={} stamp_submitted={} stamp_completed={} failed={} caps=rgba8-{}px/uhd-pixels+{}glyphs carrier=bsp-controller+leased-blocking-lane font_lane=fair-fifo-multi-consumer ownership=gpu-vm-r8+gpu-vm-rgba8 completion=ticket-signal",
+            "cpp font status: online={} queued={} outputs={} output_reservations={} output_bytes={} output_capacity={} active_ticket={} active_stage={} active_consumer={}:{} lane_waiters={} lane_peak={} lane_admissions={} lane_contentions={} lane_wait_ms={} lane_wait_max_ms={} lane_paths=retain:{},stamp:{},grid-page:{},grid-patch:{},grid-present:{},grid-print:{},spirit-vfx:{},blueprint-compositor:{} lane_retries={} gpu_retries={} retain_submitted={} retain_completed={} stamp_submitted={} stamp_completed={} failed={} caps=rgba8-{}px/uhd-pixels+{}glyphs carrier=bsp-controller+leased-blocking-lane gpu_lane=fair-fifo-direct-rcs ownership=gpu-vm-r8+gpu-vm-rgba8 completion=ticket-signal",
             status.online as u8,
             status.queued,
             outputs,
@@ -722,6 +757,8 @@ fn print_font_service_status(io: &'static dyn ShellBackend2) {
             status.grid_patch_lane_admissions,
             status.grid_present_lane_admissions,
             status.grid_print_lane_admissions,
+            status.spirit_vfx_lane_admissions,
+            status.blueprint_compositor_lane_admissions,
             status.lane_retries,
             status.gpu_retries,
             status.submitted_retain,
@@ -1321,6 +1358,15 @@ mod tests {
         for alias in ["particle", "particles", "particle-craft", "arc-forge"] {
             assert_eq!(parse_mode(alias), Some(crate::ui4::GpgpuPreviewPreset::CppParticle),);
         }
+    }
+
+    #[test]
+    fn static30_selects_the_font_kernel_window_grid_preset() {
+        for spelling in ["static30", "STATIC30", "Static30"] {
+            assert_eq!(parse_mode(spelling), Some(crate::ui4::GpgpuPreviewPreset::Static30),);
+        }
+        assert!(super::is_cpp_preset(crate::ui4::GpgpuPreviewPreset::Static30));
+        assert_eq!(super::cpp_mode_label(crate::ui4::GpgpuPreviewPreset::Static30), "static30",);
     }
 
     #[test]

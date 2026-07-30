@@ -7,6 +7,7 @@
 //! coherent UI4 frame lifecycle.
 
 use alloc::{collections::VecDeque, string::String, vec::Vec};
+use embassy_time::Instant;
 use spin::Mutex;
 
 use crate::intel::gpgpu::{
@@ -15,14 +16,14 @@ use crate::intel::gpgpu::{
     GpgpuAlphaBlendWorklistDesc, GpgpuGlyphMaskLayer, GpgpuOwnedParticleCraftState,
     GpgpuOwnedRgba8Surface, GpgpuPoint, GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence,
     GpgpuRgba8Surface, GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun,
-    ParticleCraftParamsV1, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, SkyboxSampleRgb565Params,
-    Ui4CompositorCompletion, Ui4CompositorSubmission, Ui4CompositorSubmitError,
-    Ui4SpriteSceneCompletion, allocate_font_instance_rgba8_surface_cleared,
-    alpha_blend_worklist_max_descs, glyph_mask_layers_rgba8_2d_mode, particle_craft_rgba8_frame,
-    poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
-    queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
-    release_rgba8_surface_for_scanout, skybox_sample_rgb565_to_rgba8,
-    sprite_quad_worklist_max_descs,
+    ParticleCraftParamsV1, SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
+    SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, SkyboxSampleRgb565Params, Ui4CompositorCompletion,
+    Ui4CompositorSubmission, Ui4CompositorSubmitError, Ui4SpriteSceneCompletion,
+    allocate_font_instance_rgba8_surface_cleared, alpha_blend_worklist_max_descs,
+    glyph_mask_layers_rgba8_2d_mode, particle_craft_rgba8_frame, poll_ui4_blueprint_sprite_scene,
+    poll_ui4_compositor_submission, queue_ui4_blueprint_alpha_rects,
+    queue_ui4_blueprint_sprite_scene, release_rgba8_surface_for_scanout,
+    skybox_sample_rgb565_to_rgba8, sprite_quad_worklist_max_descs,
 };
 use crate::intel::gpu_font::{
     GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontRgba, GpuFontTextRequest,
@@ -30,9 +31,10 @@ use crate::intel::gpu_font::{
     render_font_job_readback_once,
 };
 use crate::r::font_kernel_service::{
-    FontKernelError, FontKernelRetainedScene, FontStampFit, FontStampLayer, FontStampRequest,
-    PendingFontFrameStamp, PendingRetainScene, RetainSceneRequest, RetainedFontPositioning,
-    RetainedFontRun, submit_frame_stamp, submit_retain_scene,
+    FontKernelConsumer, FontKernelConsumerPath, FontKernelError, FontKernelRetainedScene,
+    FontStampFit, FontStampLayer, FontStampRequest, FontStampedBuffer, PendingFontFrameStamp,
+    PendingFontStamp, PendingRetainScene, RetainSceneRequest, RetainedFontPositioning,
+    RetainedFontRun, submit_frame_stamp, submit_retain_scene, submit_stamp, try_acquire_gpu_lane,
 };
 
 use super::{
@@ -53,6 +55,9 @@ const MAX_SURFACES: usize = 32;
 const MAX_FRAME_WIDTH: u32 = 2_560;
 const MAX_FRAME_HEIGHT: u32 = 1_440;
 const MAX_TEXT_ROWS: usize = 64;
+const MAX_FONT_CANVAS_ROWS: usize = 256;
+const MAX_FONT_CANVAS_RUNS_PER_LAYER: usize = 64;
+const MAX_FONT_CANVAS_INTERNAL_LAYERS: usize = 64;
 const MAX_TEXT_ROW_BYTES: usize = 1_024;
 const MAX_NATIVE_FONT_SIZES: usize = 32;
 const MAX_PENDING_POINTER_EVENTS: usize = 256;
@@ -63,6 +68,8 @@ const TEXT_ROWS_WIRE_HEADER_BYTES: usize = 16;
 const TEXT_ROW_WIRE_HEADER_BYTES: usize = 12;
 const TEXT_SCENE_WIRE_HEADER_BYTES: usize = 16;
 const TEXT_SCENE_ROW_WIRE_HEADER_BYTES: usize = 16;
+const FONT_CANVAS_WIRE_HEADER_BYTES: usize = 12;
+const FONT_CANVAS_ROW_WIRE_HEADER_BYTES: usize = 20;
 const UI4_SCENE_SOURCE_GPU: u64 = 0x3000_0000;
 const UI4_SCENE_SOURCE_MAX_BYTES: usize = 128 * 1024 * 1024;
 const UI4_SCENE_SPRITE_GPU: u64 = UI4_SCENE_SOURCE_GPU + UI4_SCENE_SOURCE_MAX_BYTES as u64;
@@ -70,6 +77,7 @@ const UI4_SCENE_SPRITE_MAX_BYTES: usize = 128 * 1024 * 1024;
 const UI4_SCENE_SOLID_SOURCE_BYTES: usize = 4096;
 const MAX_SPRITE_QUADS: usize = 8_192;
 const UI4_SPRITE_BATCH_TIMEOUT_NS: u64 = 1_000_000_000;
+const DIRECT_RCS_LANE_WAIT_NS: u64 = 1_100_000_000;
 const SPRITE_QUAD_FLAG_SRC_OVER: u32 = 1 << 0;
 const SPRITE_QUAD_VALID_FLAGS: u32 = SPRITE_QUAD_FLAG_SRC_OVER;
 const _: () = {
@@ -122,6 +130,22 @@ pub struct TrueosUi4SolaraSceneTextRow {
     pub x: f32,
     pub y: f32,
     pub font_pixels: f32,
+}
+
+/// One colored row in a persistent, transparent RGBA8 font canvas.
+///
+/// The consumer submits all rows together. FontKernel may group equal colors
+/// internally, but the only externally visible result is one owned RGBA8
+/// surface retained with the UI4 window.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct TrueosUi4FontCanvasRow {
+    pub text_ptr: *const u8,
+    pub text_len: usize,
+    pub x: f32,
+    pub y: f32,
+    pub font_pixels: f32,
+    pub color_rgba: u32,
 }
 
 #[repr(C)]
@@ -350,6 +374,7 @@ struct BlueprintSceneSurface {
     retained_text_rendered: bool,
     retained_text_backbuffer_extent: Option<(u32, u32)>,
     retained_text_backbuffer: Option<GpgpuOwnedRgba8Surface>,
+    font_canvas: Option<BlueprintFontCanvas>,
     stamped_text_layers: Vec<BlueprintStampedTextLayer>,
     stamped_text_cursor: usize,
     stamped_text_pending: Option<PendingFontFrameStamp>,
@@ -378,6 +403,45 @@ enum BlueprintRetainedTextState {
 struct BlueprintStampedTextLayer {
     description: BlueprintRetainedTextDescription,
     color_rgba: u32,
+}
+
+#[derive(Clone)]
+struct BlueprintFontCanvasRow {
+    text: String,
+    position: [f32; 2],
+    font_pixels: f32,
+    color_rgba: u32,
+}
+
+#[derive(Clone)]
+struct BlueprintFontCanvasDescription {
+    font: GpuFontFace,
+    width: u32,
+    height: u32,
+    rows: Vec<BlueprintFontCanvasRow>,
+}
+
+struct BlueprintFontCanvas {
+    description: BlueprintFontCanvasDescription,
+    pending: Option<PendingFontStamp>,
+    ready: Option<FontStampedBuffer>,
+    submitted_ms: u64,
+}
+
+impl BlueprintFontCanvasDescription {
+    fn same_canvas(&self, next: &Self) -> bool {
+        self.font == next.font
+            && self.width == next.width
+            && self.height == next.height
+            && self.rows.len() == next.rows.len()
+            && self.rows.iter().zip(next.rows.iter()).all(|(old, new)| {
+                old.text == new.text
+                    && old.position[0].to_bits() == new.position[0].to_bits()
+                    && old.position[1].to_bits() == new.position[1].to_bits()
+                    && old.font_pixels.to_bits() == new.font_pixels.to_bits()
+                    && old.color_rgba == new.color_rgba
+            })
+    }
 }
 
 impl BlueprintRetainedTextDescription {
@@ -717,6 +781,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
                 retained_text_rendered: false,
                 retained_text_backbuffer_extent: None,
                 retained_text_backbuffer: None,
+                font_canvas: None,
                 stamped_text_layers: Vec::new(),
                 stamped_text_cursor: 0,
                 stamped_text_pending: None,
@@ -754,6 +819,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         retained_text_rendered: false,
         retained_text_backbuffer_extent: None,
         retained_text_backbuffer: None,
+        font_canvas: None,
         stamped_text_layers: Vec::new(),
         stamped_text_cursor: 0,
         stamped_text_pending: None,
@@ -1530,6 +1596,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         surface.retained_text_rendered = false;
         surface.retained_text_backbuffer_extent = None;
         surface.retained_text_backbuffer = None;
+        surface.font_canvas = None;
         surface.stamped_text_layers.clear();
         surface.stamped_text_cursor = 0;
         surface.stamped_text_pending = None;
@@ -2250,6 +2317,260 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
             runs,
             backbuffer,
         )
+    }
+}
+
+/// Build or replace one persistent transparent RGBA8 font canvas.
+///
+/// Unlike the legacy retained-text scene, this operation does not acquire a
+/// UI4 frame lease. FontKernel owns the asynchronous stamp until one complete
+/// RGBA8 allocation is ready, so a Blueprint can safely wait without wedging
+/// presentation. Equal-color rows are grouped only inside the kernel request;
+/// the retained consumer object is always one canvas.
+pub unsafe extern "C" fn trueos_cabi_ui4_font_canvas(
+    window_id: u32,
+    font_id: u32,
+    canvas_width: u32,
+    canvas_height: u32,
+    rows: *const TrueosUi4FontCanvasRow,
+    row_count: usize,
+) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe {
+            guest_font_canvas(window_id, font_id, canvas_width, canvas_height, rows, row_count)
+        };
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let Some(font) = GpuFontFace::from_id(font_id) else {
+        return ERROR_FONT;
+    };
+    if rows.is_null()
+        || row_count == 0
+        || row_count > MAX_FONT_CANVAS_ROWS
+        || canvas_width == 0
+        || canvas_height == 0
+        || canvas_width > TEXT_BACKBUFFER_MAX_EXTENT
+        || canvas_height > TEXT_BACKBUFFER_MAX_EXTENT
+    {
+        return ERROR_INVALID;
+    }
+
+    let input = unsafe { core::slice::from_raw_parts(rows, row_count) };
+    let mut owned_rows = Vec::with_capacity(row_count);
+    let mut glyphs = 0usize;
+    for row in input {
+        if row.text_ptr.is_null()
+            || row.text_len == 0
+            || row.text_len > MAX_TEXT_ROW_BYTES
+            || !row.x.is_finite()
+            || !row.y.is_finite()
+            || !row.font_pixels.is_finite()
+            || row.font_pixels <= 0.0
+            || row.font_pixels > 256.0
+        {
+            return ERROR_INVALID;
+        }
+        let bytes = unsafe { core::slice::from_raw_parts(row.text_ptr, row.text_len) };
+        let Ok(text) = core::str::from_utf8(bytes) else {
+            return ERROR_INVALID;
+        };
+        glyphs = glyphs.saturating_add(text.chars().count());
+        if glyphs > TEXT_BACKBUFFER_MAX_GLYPHS {
+            return ERROR_INVALID;
+        }
+        owned_rows.push(BlueprintFontCanvasRow {
+            text: String::from(text),
+            position: [row.x, row.y],
+            font_pixels: row.font_pixels,
+            color_rgba: row.color_rgba,
+        });
+    }
+    let description = BlueprintFontCanvasDescription {
+        font,
+        width: canvas_width,
+        height: canvas_height,
+        rows: owned_rows,
+    };
+    if font_canvas_internal_layer_count(&description.rows) > MAX_FONT_CANVAS_INTERNAL_LAYERS {
+        return ERROR_INVALID;
+    }
+    retain_font_canvas_for_surface(owner, window_id, description)
+}
+
+fn font_canvas_internal_layer_count(rows: &[BlueprintFontCanvasRow]) -> usize {
+    let mut groups = Vec::<(u32, usize)>::new();
+    for row in rows {
+        if let Some((_, count)) = groups.iter_mut().find(|(color_rgba, count)| {
+            *color_rgba == row.color_rgba && *count < MAX_FONT_CANVAS_RUNS_PER_LAYER
+        }) {
+            *count += 1;
+        } else {
+            groups.push((row.color_rgba, 1));
+        }
+    }
+    groups.len()
+}
+
+fn font_canvas_request(description: &BlueprintFontCanvasDescription) -> FontStampRequest {
+    let mut groups = Vec::<(u32, Vec<RetainedFontRun>)>::new();
+    for row in &description.rows {
+        let group_index = match groups.iter_mut().position(|(color_rgba, runs)| {
+            *color_rgba == row.color_rgba && runs.len() < MAX_FONT_CANVAS_RUNS_PER_LAYER
+        }) {
+            Some(index) => index,
+            None => {
+                groups.push((row.color_rgba, Vec::new()));
+                groups.len() - 1
+            }
+        };
+        groups[group_index].1.push(RetainedFontRun {
+            text: row.text.clone(),
+            position: row.position,
+            font_pixels: row.font_pixels,
+            slant: 0.0,
+        });
+    }
+    let layers = groups
+        .into_iter()
+        .map(|(color_rgba, runs)| {
+            let [r, g, b, a] = color_rgba.to_le_bytes();
+            FontStampLayer {
+                scene: RetainSceneRequest {
+                    runs,
+                    font: description.font,
+                    viewport_width: description.width,
+                    viewport_height: description.height,
+                    raster_width: description.width,
+                    raster_height: description.height,
+                    positioning: RetainedFontPositioning::SceneOrigin,
+                },
+                foreground: GpuFontRgba::new(r, g, b, a),
+            }
+        })
+        .collect();
+    debug_assert!(
+        font_canvas_internal_layer_count(&description.rows) <= MAX_FONT_CANVAS_INTERNAL_LAYERS
+    );
+    FontStampRequest {
+        layers,
+        fit: FontStampFit::Canvas,
+    }
+}
+
+fn retain_font_canvas_for_surface(
+    owner: WindowOwner,
+    window_id: u32,
+    description: BlueprintFontCanvasDescription,
+) -> i32 {
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    if surface.gpu_submission_unretired {
+        return ERROR_BUSY;
+    }
+
+    if let Some(canvas) = surface.font_canvas.as_mut() {
+        if !canvas.description.same_canvas(&description) {
+            if canvas.pending.is_some() {
+                return ERROR_BUSY;
+            }
+            let pending = match submit_stamp(font_canvas_request(&description)) {
+                Ok(pending) => pending,
+                Err(FontKernelError::QueueFull) => return ERROR_BUSY,
+                Err(error) => {
+                    log_font_kernel_error(
+                        "canvas-stamp",
+                        owner,
+                        window_id,
+                        description.font,
+                        description.rows.len(),
+                        error,
+                    );
+                    return ERROR_FONT;
+                }
+            };
+            *canvas = BlueprintFontCanvas {
+                description,
+                pending: Some(pending),
+                ready: None,
+                submitted_ms: Instant::now().as_millis(),
+            };
+        }
+    } else {
+        let pending = match submit_stamp(font_canvas_request(&description)) {
+            Ok(pending) => pending,
+            Err(FontKernelError::QueueFull) => return ERROR_BUSY,
+            Err(error) => {
+                log_font_kernel_error(
+                    "canvas-stamp",
+                    owner,
+                    window_id,
+                    description.font,
+                    description.rows.len(),
+                    error,
+                );
+                return ERROR_FONT;
+            }
+        };
+        surface.font_canvas = Some(BlueprintFontCanvas {
+            description,
+            pending: Some(pending),
+            ready: None,
+            submitted_ms: Instant::now().as_millis(),
+        });
+    }
+
+    let canvas = surface.font_canvas.as_mut().expect("font canvas installed");
+    if canvas.ready.is_some() {
+        return 0;
+    }
+    let completion = canvas.pending.as_mut().and_then(PendingFontStamp::try_take);
+    let Some(completion) = completion else {
+        return ERROR_BUSY;
+    };
+    canvas.pending = None;
+    match completion {
+        Ok(buffer) => {
+            let ticket = buffer.ticket().raw();
+            let extent = buffer.surface();
+            let glyphs = buffer.glyphs();
+            let submits = buffer.submits();
+            let walkers = buffer.active_walkers();
+            let build_ms = Instant::now()
+                .as_millis()
+                .saturating_sub(canvas.submitted_ms);
+            canvas.ready = Some(buffer);
+            crate::log_info!(
+                target: "ui4/font-canvas";
+                "FontKernel RGBA canvas ready owner={:?} window={} ticket={} rows={} internal_layers={} extent={}x{} glyphs={} submits={} walkers={} build_ms={} storage=gpu-vm-rgba8 alpha=premultiplied-coverage path=skrifa->gpu-vm-r8->cpp-igc->guc-rcs->owned-rgba8 cpu_readback=0 cpu_frame_copy=0\n",
+                owner,
+                window_id,
+                ticket,
+                canvas.description.rows.len(),
+                font_canvas_internal_layer_count(&canvas.description.rows),
+                extent.width,
+                extent.height,
+                glyphs,
+                submits,
+                walkers,
+                build_ms,
+            );
+            0
+        }
+        Err(error) => {
+            log_font_kernel_error(
+                "canvas-stamp",
+                owner,
+                window_id,
+                canvas.description.font,
+                canvas.description.rows.len(),
+                error,
+            );
+            ERROR_FONT
+        }
     }
 }
 
@@ -3235,6 +3556,61 @@ unsafe fn guest_text_scene(
     }
 }
 
+unsafe fn guest_font_canvas(
+    window_id: u32,
+    font_id: u32,
+    canvas_width: u32,
+    canvas_height: u32,
+    rows: *const TrueosUi4FontCanvasRow,
+    row_count: usize,
+) -> i32 {
+    if rows.is_null() || row_count == 0 || row_count > MAX_FONT_CANVAS_ROWS {
+        return ERROR_INVALID;
+    }
+    let input = unsafe { core::slice::from_raw_parts(rows, row_count) };
+    let mut payload = Vec::with_capacity(
+        FONT_CANVAS_WIRE_HEADER_BYTES
+            .saturating_add(row_count.saturating_mul(FONT_CANVAS_ROW_WIRE_HEADER_BYTES + 32)),
+    );
+    payload.extend_from_slice(&canvas_width.to_le_bytes());
+    payload.extend_from_slice(&canvas_height.to_le_bytes());
+    payload.extend_from_slice(&(row_count as u32).to_le_bytes());
+    for row in input {
+        if row.text_ptr.is_null() || row.text_len == 0 || row.text_len > MAX_TEXT_ROW_BYTES {
+            return ERROR_INVALID;
+        }
+        let Some(required) = payload
+            .len()
+            .checked_add(FONT_CANVAS_ROW_WIRE_HEADER_BYTES)
+            .and_then(|bytes| bytes.checked_add(row.text_len))
+        else {
+            return ERROR_INVALID;
+        };
+        if required > trueos_vm::vmcall::PAYLOAD_CAP {
+            return ERROR_INVALID;
+        }
+        let text = unsafe { core::slice::from_raw_parts(row.text_ptr, row.text_len) };
+        payload.extend_from_slice(&row.x.to_bits().to_le_bytes());
+        payload.extend_from_slice(&row.y.to_bits().to_le_bytes());
+        payload.extend_from_slice(&row.font_pixels.to_bits().to_le_bytes());
+        payload.extend_from_slice(&row.color_rgba.to_le_bytes());
+        payload.extend_from_slice(&(row.text_len as u32).to_le_bytes());
+        payload.extend_from_slice(text);
+    }
+    loop {
+        let result = guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_FONT_CANVAS,
+            window_id as u64,
+            font_id as u64,
+            payload.as_slice(),
+        );
+        if result != ERROR_BUSY {
+            return result;
+        }
+        trueos_vm::vmcall::sleep_ms(GUEST_TEXT_SCENE_BUSY_POLL_MS);
+    }
+}
+
 fn guest_status(op: u32, arg0: u64, arg1: u64, payload: &[u8]) -> i32 {
     let (status, data) = trueos_vm::vmcall::call_with_payload(op, arg0, arg1, payload, &mut []);
     if status == trueos_vm::vmcall::STATUS_OK {
@@ -3578,7 +3954,10 @@ fn rounded_sprite_coordinate(value: f32) -> Option<i32> {
     Some(rounded as i32)
 }
 
-fn gpgpu_sprite_quad_descriptor(quad: TrueosUi4SpriteQuad) -> GpgpuSpriteQuadWorklistDesc {
+fn gpgpu_sprite_quad_descriptor(
+    quad: TrueosUi4SpriteQuad,
+    premultiplied_source: bool,
+) -> GpgpuSpriteQuadWorklistDesc {
     GpgpuSpriteQuadWorklistDesc {
         c0_x: quad.c0_x,
         c0_y: quad.c0_y,
@@ -3599,6 +3978,10 @@ fn gpgpu_sprite_quad_descriptor(quad: TrueosUi4SpriteQuad) -> GpgpuSpriteQuadWor
         color_rgba: quad.color_rgba,
         flags: if quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0 {
             SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER
+        } else {
+            0
+        } | if premultiplied_source {
+            SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC
         } else {
             0
         },
@@ -3751,6 +4134,20 @@ fn alpha_rect_descriptor(
     })
 }
 
+fn retained_font_canvas_surface(surface: &BlueprintSceneSurface) -> Option<GpgpuRgba8Surface> {
+    surface
+        .font_canvas
+        .as_ref()
+        .and_then(|canvas| canvas.ready.as_ref())
+        .map(FontStampedBuffer::surface)
+        .or_else(|| {
+            surface
+                .retained_text_backbuffer
+                .as_ref()
+                .map(GpgpuOwnedRgba8Surface::surface)
+        })
+}
+
 pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     struct OwnedRun {
         sprite_id: u32,
@@ -3824,6 +4221,21 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     if surface.gpu_submission_unretired {
         return ERROR_BUSY;
     }
+    let lane_wait_started = crate::chronos::monotonic_nanos();
+    let _gpu_lane = loop {
+        if let Some(lane) = try_acquire_gpu_lane(FontKernelConsumer::new(
+            FontKernelConsumerPath::BlueprintCompositor,
+            u64::from(window_id),
+        )) {
+            break lane;
+        }
+        if crate::chronos::monotonic_nanos().saturating_sub(lane_wait_started)
+            >= DIRECT_RCS_LANE_WAIT_NS
+        {
+            return ERROR_BUSY;
+        }
+        core::hint::spin_loop();
+    };
     let solid = match ensure_solid_source(surface) {
         Ok(source) => source,
         Err(code) => return code,
@@ -3834,11 +4246,11 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
 
     let full_frame_copy = match upload.quads.as_slice() {
         [quad] if quad.sprite_id == TEXT_BACKBUFFER_SPRITE_ID => {
-            let Some(source) = surface.retained_text_backbuffer.as_ref() else {
+            let Some(source) = retained_font_canvas_surface(surface) else {
                 return ERROR_NOT_FOUND;
             };
             matches!(
-                alpha_rect_descriptor(*quad, source.surface(), destination),
+                alpha_rect_descriptor(*quad, source, destination),
                 AlphaRectConversion::Exact(descriptor)
                     if descriptor.dst_xy == 0
                         && descriptor.size
@@ -3866,17 +4278,17 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         prepared.push(PreparedOp::Quad {
             sprite_id: 0,
             source: solid.surface,
-            descriptor: gpgpu_sprite_quad_descriptor(clear),
+            descriptor: gpgpu_sprite_quad_descriptor(clear, false),
         });
     }
     for quad in upload.quads {
         let source = if quad.sprite_id == 0 {
             solid.surface
         } else if quad.sprite_id == TEXT_BACKBUFFER_SPRITE_ID {
-            let Some(source) = surface.retained_text_backbuffer.as_ref() else {
+            let Some(source) = retained_font_canvas_surface(surface) else {
                 return ERROR_NOT_FOUND;
             };
-            source.surface()
+            source
         } else {
             let Some((_, source)) = surface
                 .sprites
@@ -3907,7 +4319,10 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
             AlphaRectConversion::Unsupported => prepared.push(PreparedOp::Quad {
                 sprite_id: quad.sprite_id,
                 source,
-                descriptor: gpgpu_sprite_quad_descriptor(quad),
+                descriptor: gpgpu_sprite_quad_descriptor(
+                    quad,
+                    quad.sprite_id == TEXT_BACKBUFFER_SPRITE_ID,
+                ),
             }),
         }
     }
@@ -4676,5 +5091,86 @@ mod tests {
         changed.runs[1].text = String::from("different");
         assert_eq!(base.translation_to(&changed), None);
         assert_eq!(base.translation_to(&retained_description(40.5)), None,);
+    }
+
+    #[test]
+    fn font_canvas_hides_color_layers_behind_one_stamp_request() {
+        let description = BlueprintFontCanvasDescription {
+            font: GpuFontFace::Inconsolata,
+            width: 960,
+            height: 720,
+            rows: alloc::vec![
+                BlueprintFontCanvasRow {
+                    text: String::from("title"),
+                    position: [24.0, 24.0],
+                    font_pixels: 28.0,
+                    color_rgba: u32::from_le_bytes([255, 255, 255, 255]),
+                },
+                BlueprintFontCanvasRow {
+                    text: String::from("detail"),
+                    position: [24.0, 64.0],
+                    font_pixels: 18.0,
+                    color_rgba: u32::from_le_bytes([128, 160, 192, 255]),
+                },
+                BlueprintFontCanvasRow {
+                    text: String::from("same title color"),
+                    position: [24.0, 96.0],
+                    font_pixels: 18.0,
+                    color_rgba: u32::from_le_bytes([255, 255, 255, 255]),
+                },
+            ],
+        };
+
+        let request = font_canvas_request(&description);
+
+        assert_eq!(request.fit, FontStampFit::Canvas);
+        assert_eq!(request.layers.len(), 2);
+        assert_eq!(request.layers[0].scene.runs.len(), 2);
+        assert_eq!(request.layers[1].scene.runs.len(), 1);
+        assert!(request.layers.iter().all(|layer| {
+            layer.scene.raster_width == 960
+                && layer.scene.raster_height == 720
+                && layer.scene.positioning == RetainedFontPositioning::SceneOrigin
+        }));
+    }
+
+    #[test]
+    fn font_canvas_splits_large_same_color_run_sets_only_inside_stamp() {
+        let rows = (0..65)
+            .map(|index| BlueprintFontCanvasRow {
+                text: alloc::format!("row {index}"),
+                position: [12.0, index as f32 * 16.0],
+                font_pixels: 14.0,
+                color_rgba: u32::from_le_bytes([255, 255, 255, 255]),
+            })
+            .collect::<Vec<_>>();
+        let description = BlueprintFontCanvasDescription {
+            font: GpuFontFace::Inconsolata,
+            width: 960,
+            height: 1_200,
+            rows,
+        };
+
+        let request = font_canvas_request(&description);
+
+        assert_eq!(font_canvas_internal_layer_count(&description.rows), 2);
+        assert_eq!(request.layers.len(), 2);
+        assert_eq!(request.layers[0].scene.runs.len(), 64);
+        assert_eq!(request.layers[1].scene.runs.len(), 1);
+    }
+
+    #[test]
+    fn font_canvas_quad_keeps_premultiplied_source_over_math() {
+        let quad = TrueosUi4SpriteQuad {
+            flags: SPRITE_QUAD_FLAG_SRC_OVER,
+            ..TrueosUi4SpriteQuad::default()
+        };
+
+        let descriptor = gpgpu_sprite_quad_descriptor(quad, true);
+
+        assert_eq!(
+            descriptor.flags,
+            SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER | SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
+        );
     }
 }

@@ -38,6 +38,10 @@ const STATIC30_COLUMNS: u32 = 6;
 const STATIC30_ROWS: u32 = 5;
 const STATIC30_MAX_WIDTH: u32 = 320;
 const STATIC30_MAX_HEIGHT: u32 = 180;
+const CPP_FONT_GO_WINDOWS: usize = 4;
+const CPP_FONT_GO_DURATION_MS: u64 = 60_000;
+const CPP_FONT_GO_CADENCE_MS: u64 = 1_000;
+const CPP_FONT_GO_STAGE_MS: u64 = 10_000;
 
 pub(crate) const GPGPU_PREVIEW_DEFAULT_DURATION_MS: u64 = 5_000;
 pub(crate) const GPGPU_PREVIEW_DEFAULT_CADENCE_MS: u64 = 33;
@@ -63,6 +67,7 @@ pub(crate) enum GpgpuPreviewPreset {
     CppAudio,
     CppParticle,
     CppFont,
+    CppFontGo,
 }
 
 impl GpgpuPreviewPreset {
@@ -84,6 +89,7 @@ impl GpgpuPreviewPreset {
             Self::CppAudio => "cpp-audio",
             Self::CppParticle => "cpp-particle",
             Self::CppFont => "cpp-font",
+            Self::CppFontGo => "cpp-font-go",
         }
     }
 
@@ -99,17 +105,19 @@ impl GpgpuPreviewPreset {
                 | Self::CppAudio
                 | Self::CppParticle
                 | Self::CppFont
+                | Self::CppFontGo
         )
     }
 
     pub(crate) const fn is_resizable_cpp(self) -> bool {
-        self.is_cpp() && !matches!(self, Self::CppFont)
+        self.is_cpp() && !matches!(self, Self::CppFont | Self::CppFontGo)
     }
 
     pub(crate) const fn buffering_label(self) -> &'static str {
         match self {
             Self::All => "double-per-frame",
             Self::Static30 | Self::CppFont => "single",
+            Self::CppFontGo => "double-per-frame",
             _ => "double",
         }
     }
@@ -132,6 +140,7 @@ impl GpgpuPreviewPreset {
             | Self::CppAudio
             | Self::CppParticle
             | Self::CppFont => "slot1-direct",
+            Self::CppFontGo => "slots1+2+3/2x2-composed",
         }
     }
 }
@@ -367,6 +376,8 @@ struct ActivePreview {
     extra_surfaces: Vec<StaticPreviewSurface>,
     particle_craft: Option<crate::intel::gpgpu::GpgpuOwnedParticleCraftState>,
     font_stamp: Option<crate::r::font_kernel_service::FontStampRequest>,
+    font_go_quadrant: Option<u8>,
+    font_go_stage: u8,
     metrics: GpgpuPreviewMetrics,
 }
 
@@ -412,6 +423,18 @@ pub(crate) fn request_cpp_font_preview_start(
     control.status.height = height;
     control.status.last_error = "none";
     Ok(serial)
+}
+
+pub(crate) fn request_cpp_font_go_start() -> Result<u64, &'static str> {
+    if !crate::r::font_kernel_service::status().online {
+        return Err("font-service-offline");
+    }
+    request_gpgpu_preview_start(GpgpuPreviewConfig {
+        preset: GpgpuPreviewPreset::CppFontGo,
+        duration_ms: CPP_FONT_GO_DURATION_MS,
+        cadence_ms: CPP_FONT_GO_CADENCE_MS,
+        publish_every: 1,
+    })
 }
 
 pub(crate) fn request_gpgpu_lab256_startup(
@@ -641,6 +664,8 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
 fn initialize_previews(desired: DesiredPreview) -> Result<Vec<ActivePreview>, &'static str> {
     if desired.config.preset == GpgpuPreviewPreset::All {
         initialize_compute_preview_set(desired)
+    } else if desired.config.preset == GpgpuPreviewPreset::CppFontGo {
+        initialize_cpp_font_go_set(desired)
     } else {
         Ok(alloc::vec![initialize_preview(desired)?])
     }
@@ -727,6 +752,8 @@ fn initialize_compute_preview_set(
             extra_surfaces: Vec::new(),
             particle_craft: None,
             font_stamp: None,
+            font_go_quadrant: None,
+            font_go_stage: u8::MAX,
             metrics: GpgpuPreviewMetrics::default(),
         });
     }
@@ -738,6 +765,89 @@ fn abandon_compute_preview_initialization(session: WindowSessionId, previews: &[
     for preview in previews {
         let _ = destroy_frame(preview.frame);
     }
+}
+
+fn initialize_cpp_font_go_set(
+    desired: DesiredPreview,
+) -> Result<Vec<ActivePreview>, &'static str> {
+    let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
+    let session =
+        begin_window_session(PREVIEW_OWNER).map_err(|_| "font-go-session-create-failed")?;
+    let (output_width, output_height) =
+        crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
+    let width = output_width / 2;
+    let height = output_height / 2;
+    if width == 0 || height == 0 {
+        let _ = finish_window_session(PREVIEW_OWNER, session);
+        return Err("font-go-output-too-small");
+    }
+    let mut previews = Vec::with_capacity(CPP_FONT_GO_WINDOWS);
+    for index in 0..CPP_FONT_GO_WINDOWS {
+        let frame = match create_cpp_font_go_frame(output, width, height, index as u8) {
+            Ok(frame) => frame,
+            Err(_) => {
+                abandon_compute_preview_initialization(session, &previews);
+                return Err("font-go-frame-create-failed");
+            }
+        };
+        let column = index as u32 % 2;
+        let row = index as u32 / 2;
+        let plane_slot = index % 3 + 1;
+        let window = match create_window(WindowCreate {
+            owner: PREVIEW_OWNER,
+            session,
+            frame,
+            output,
+            plane: WindowPlane::Universal(plane_slot as u8),
+            placement: WindowPlacement {
+                x: column.saturating_mul(width) as i32,
+                y: row.saturating_mul(height) as i32,
+                width,
+                height,
+                z: PREVIEW_Z.saturating_add(index as i32),
+                opacity: u8::MAX,
+                visible: true,
+            },
+            interaction: super::WindowInteraction {
+                movable: false,
+                maximizable: false,
+                receives_input: false,
+                resize_on_maximize: false,
+            },
+        }) {
+            Ok(window) => window,
+            Err(_) => {
+                let _ = destroy_frame(frame);
+                abandon_compute_preview_initialization(session, &previews);
+                return Err("font-go-window-create-failed");
+            }
+        };
+        let now = Instant::now();
+        previews.push(ActivePreview {
+            request_serial: desired.serial,
+            config: desired.config,
+            policy: desired.policy,
+            cadence_phase: 0,
+            session,
+            frame,
+            window,
+            width,
+            height,
+            resize_retry_width: 0,
+            resize_retry_height: 0,
+            resize_retry_at: now,
+            started: now,
+            next_render: now,
+            static_needs_publish: true,
+            extra_surfaces: Vec::new(),
+            particle_craft: None,
+            font_stamp: None,
+            font_go_quadrant: Some(index as u8),
+            font_go_stage: u8::MAX,
+            metrics: GpgpuPreviewMetrics::default(),
+        });
+    }
+    Ok(previews)
 }
 
 fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static str> {
@@ -814,6 +924,8 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         extra_surfaces: Vec::new(),
         particle_craft: None,
         font_stamp: None,
+        font_go_quadrant: None,
+        font_go_stage: u8::MAX,
         metrics: GpgpuPreviewMetrics::default(),
     })
 }
@@ -897,6 +1009,8 @@ fn initialize_cpp_font_preview(desired: DesiredPreview) -> Result<ActivePreview,
         extra_surfaces: Vec::new(),
         particle_craft: None,
         font_stamp: Some(request),
+        font_go_quadrant: None,
+        font_go_stage: u8::MAX,
         metrics: GpgpuPreviewMetrics::default(),
     })
 }
@@ -1002,6 +1116,8 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
         extra_surfaces: surfaces.iter().copied().skip(1).collect(),
         particle_craft: None,
         font_stamp: None,
+        font_go_quadrant: None,
+        font_go_stage: u8::MAX,
         metrics: GpgpuPreviewMetrics::default(),
     })
 }
@@ -1101,9 +1217,30 @@ fn create_static30_frame(
     })
 }
 
+fn create_cpp_font_go_frame(
+    output: OutputId,
+    width: u32,
+    height: u32,
+    quadrant: u8,
+) -> Result<FrameHandle, FramePoolError> {
+    create_frame(FrameSpec {
+        output,
+        content: FrameContent::FontScene2d,
+        cadence: FrameCadence::Dirty,
+        buffering: super::FrameBuffering::Double,
+        format: ScanoutFormat::Rgba8888Premultiplied,
+        width,
+        height,
+        base_color: Some(cpp_font_go_background(quadrant, 0)),
+    })
+}
+
 async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str> {
     if preview.config.preset == GpgpuPreviewPreset::CppFont {
         return render_cpp_font_frame(preview).await;
+    }
+    if preview.config.preset == GpgpuPreviewPreset::CppFontGo {
+        return render_cpp_font_go_frame(preview).await;
     }
     if preview.config.preset == GpgpuPreviewPreset::Static30 {
         return render_static30_frames(preview).await;

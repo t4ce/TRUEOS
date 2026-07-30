@@ -122,6 +122,7 @@ pub const OP_BP_ARCHIVE_UNPACK_START: u32 = 0xFB;
 pub const OP_BP_ARCHIVE_STATUS: u32 = 0xFC;
 pub const OP_BP_ARCHIVE_REPORT: u32 = 0xFD;
 pub const OP_BP_ARCHIVE_DISCARD: u32 = 0xFE;
+pub const OP_BP_UI4_FONT_CANVAS: u32 = 0xFF;
 pub const OP_BP_LUMEN_TEMPLATE_OPEN: u32 = 0x100;
 pub const OP_BP_LUMEN_PROMPT_SUBMIT: u32 = 0x101;
 pub const OP_BP_LUMEN_STATUS: u32 = 0x102;

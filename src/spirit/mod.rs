@@ -539,6 +539,7 @@ fn submit_spirit_vfx_frame(
     id: SpiritFenceId,
     present_fps: u32,
     source_frame: lilly::LillyResidentFrame,
+    gpu_lane: crate::r::font_kernel_service::FontKernelGpuLease,
 ) -> Result<GpuInflight, SpiritSubmitError> {
     let lease = acquire_frame(id, SpiritBarrierSet::GPU)?;
     let target = match gpgpu_bgra_target(lease) {
@@ -591,6 +592,7 @@ fn submit_spirit_vfx_frame(
         lease,
         submission,
         polls: 0,
+        _gpu_lane: gpu_lane,
     })
 }
 
@@ -740,11 +742,11 @@ struct Inflight {
     retries: u8,
 }
 
-#[derive(Copy, Clone)]
 struct GpuInflight {
     lease: SpiritFrameLease,
     submission: crate::intel::gpgpu::SpiritVfxSubmission,
     polls: u32,
+    _gpu_lane: crate::r::font_kernel_service::FontKernelGpuLease,
 }
 
 /// Low-cost display-rate feedback for the shader status dot. Only completed
@@ -960,7 +962,7 @@ pub(crate) async fn spirit_worker_task(worker_index: u8) {
     WORKER_FENCE_BINDINGS[worker_index as usize].store(id.0, Ordering::Release);
     let lilly_ready = worker_index != 0 || lilly::prepare_resident_once();
     crate::log!(
-        "trueos-spirit: worker={} bound fence={} pipe={} carrier_slot={} expected_carrier_slot={} selection=complete-scanout-1to1-cursor-bank pool-active={} first_job=lilly-resident-assets lilly_ready={} route=guc-spirit-vfx-optional-background+sprite->spirit-cursor-backbuffer->cur-base default=clean-lilly/one-walker producer_release=guc-post-sync display_release=cursor-surflive mode=continuous initial_trace_frames={} target_hz={} ui4_publish=0\n",
+        "trueos-spirit: worker={} bound fence={} pipe={} carrier_slot={} expected_carrier_slot={} selection=complete-scanout-1to1-cursor-bank pool-active={} first_job=lilly-resident-assets lilly_ready={} route=guc-spirit-vfx-optional-background+sprite->spirit-cursor-backbuffer->cur-base default=clean-lilly/one-walker producer_release=guc-post-sync display_release=cursor-surflive gpu_admission=fair-direct-rcs-lane mode=continuous initial_trace_frames={} target_hz={} ui4_publish=0\n",
         worker_index,
         id.index(),
         pipe_name(id),
@@ -1053,7 +1055,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
             }
         }
 
-        if let Some(mut producing) = gpu_inflight {
+        if let Some(mut producing) = gpu_inflight.take() {
             match crate::intel::gpgpu::poll_spirit_vfx_submission(producing.submission) {
                 crate::intel::gpgpu::SpiritVfxCompletion::Pending => {
                     producing.polls = producing.polls.saturating_add(1);
@@ -1352,7 +1354,19 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     Timer::after(Duration::from_millis(SPIRIT_IDLE_POLL_MS)).await;
                     continue;
                 };
-                match submit_spirit_vfx_frame(id, presentation_rate.estimate_fps(), source_frame) {
+                let gpu_lane = crate::r::font_kernel_service::acquire_gpu_lane(
+                    crate::r::font_kernel_service::FontKernelConsumer::new(
+                        crate::r::font_kernel_service::FontKernelConsumerPath::SpiritVfx,
+                        stream_queued_frames.saturating_add(1),
+                    ),
+                )
+                .await;
+                match submit_spirit_vfx_frame(
+                    id,
+                    presentation_rate.estimate_fps(),
+                    source_frame,
+                    gpu_lane,
+                ) {
                     Ok(producing) => {
                         let period = spirit_vfx_frame_period(&mut stream_cadence_phase);
                         let scheduled = stream_next_deadline + period;
@@ -1366,7 +1380,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                         if spirit_should_trace_frame(stream_queued_frames) {
                             crate::log_info!(
                                 target: "gfx";
-                                "trueos-spirit: vfx stream submitted frame={} shader_frame={} tag={} fence={} sequence={} target_hz={} present_fps={} sample_window_ms={} cadence=deadline-paced/no-catch-up issuer=one-shot completion=tag-poll/yield gate=gpu-only cpu-gate=0 producer-release=guc-post-sync display-release=surflive mode=continuous artifacts=optional-background+sprite default=clean-lilly\n",
+                                "trueos-spirit: vfx stream submitted frame={} shader_frame={} tag={} fence={} sequence={} target_hz={} present_fps={} sample_window_ms={} cadence=deadline-paced/no-catch-up issuer=one-shot completion=tag-poll/yield gate=fair-direct-rcs-lane producer-release=guc-post-sync display-release=surflive mode=continuous artifacts=optional-background+sprite default=clean-lilly\n",
                                 stream_queued_frames,
                                 producing.submission.frame(),
                                 producing.submission.tag(),
