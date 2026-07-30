@@ -177,7 +177,7 @@ pub fn pick_tokio_blocking_lane() -> Result<LaneTarget, LanePickError> {
 }
 
 pub fn try_lease_tokio_blocking_lane_for_slot(slot: u32) -> Option<LaneLease> {
-    if !crate::workers::is_background_worker_slot(slot) {
+    if !crate::workers::is_general_background_worker_slot(slot) {
         return None;
     }
     crate::workers::spawner_for_slot(slot)?;
@@ -193,7 +193,9 @@ fn collect_candidates(profile: LaneProfile) -> Vec<LaneCandidate> {
 fn collect_ap2_candidates() -> Vec<LaneCandidate> {
     let mut pool = Vec::new();
     for slot in crate::workers::background_slot_range() {
-        if slot < AP2_FIRST_CARRIER_SLOT {
+        if slot < AP2_FIRST_CARRIER_SLOT
+            || !crate::workers::is_general_background_worker_slot(slot)
+        {
             continue;
         }
         let Some(spawner) = crate::workers::spawner_for_slot(slot) else {

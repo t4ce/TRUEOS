@@ -532,7 +532,7 @@ pub(crate) async fn ui4_h264_encode_udp_egress_task(assigned_slot: u32) {
         .unwrap_or("unknown");
     EGRESS_WORKER_SLOT.store(worker_slot, Ordering::Release);
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: udp-egress service online carrier=background-worker assigned_slot={} worker_slot={} worker_kind={} queue_cap={} ownership=fragment+checked-send-receipts ordering=session-sequence backpressure=bounded-wait-no-drop\n",
+        "intel/media-encode: udp-egress service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} queue_cap={} ownership=fragment+checked-send-receipts ordering=session-sequence backpressure=bounded-wait-no-drop\n",
         assigned_slot,
         worker_slot,
         worker_kind,

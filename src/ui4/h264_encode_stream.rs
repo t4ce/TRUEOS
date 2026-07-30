@@ -265,7 +265,7 @@ pub(crate) async fn ui4_h264_encode_prepare_task(assigned_slot: u32) {
         .unwrap_or("unknown");
     PREPARE_WORKER_SLOT.store(worker_slot, Ordering::Release);
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: preparation service online carrier=background-worker assigned_slot={} worker_slot={} worker_kind={} pipeline=rgba-to-nv12 engine=guc-rcs kernel=cpp-linear-rgba8-to-nv12 cpu_pixel_math=0 dma_buffers=persistent producer buffering=double slots={} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied synchronization=completion-marker-before-vdbox\n",
+        "intel/media-encode: preparation service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} pipeline=rgba-to-nv12 engine=guc-rcs kernel=cpp-linear-rgba8-to-nv12 cpu_pixel_math=0 dma_buffers=persistent producer buffering=double slots={} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied synchronization=completion-marker-before-vdbox\n",
         assigned_slot,
         worker_slot,
         worker_kind,
@@ -600,7 +600,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
         .map(|profile| profile.core_kind_name())
         .unwrap_or("unknown");
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: service online carrier=background-worker worker_slot={} worker_kind={} performance_preferred=1 background_slot_min=2 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=ui4-logical-scanout-d01 encode_size={}x{} target_fps={} backend=gen12-vdenc-mfx output=udp-only live_high_water_cap={} pipeline=prepare-producer+encode-producer+udp-egress-consumer preparation=distinct-worker-double-buffer slots={} filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
+        "intel/media-encode: service online carrier=lastap worker_slot={} worker_kind={} exclusive_carrier=1 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=ui4-logical-scanout-d01 encode_size={}x{} target_fps={} backend=gen12-vdenc-mfx output=udp-only live_high_water_cap={} pipeline=prepare-producer+encode-producer+udp-egress-consumer preparation=cooperative-lastap-double-buffer slots={} filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
         worker_slot,
         worker_kind,
         ENCODE_WIDTH,

@@ -16,6 +16,11 @@ pub const AP1_UI_SERVICE_SLOT: u32 = 1;
 const FIRST_BACKGROUND_SLOT: u32 = 2;
 const APP_PARALLELISM_NO_UI: bool = false;
 const WORKER_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
+// The live scanout -> H.264 -> UDP path still contains synchronous ownership
+// boundaries which make sharing a cooperative executor unsafe.  Until that
+// path is folded into AP1 as a fully asynchronous media-engine service, reserve
+// the topology's final AP as its private buddy carrier.
+const LAST_AP_SERVICE_RESERVED: bool = cfg!(feature = "trueos_h264_encode_stream");
 
 static CORE_SPAWNERS: Mutex<BTreeMap<u32, SendSpawner>> = Mutex::new(BTreeMap::new());
 static CORE_KINDS: Mutex<BTreeMap<u32, u8>> = Mutex::new(BTreeMap::new());
@@ -95,14 +100,15 @@ fn maybe_log_worker_summary(registered: usize) {
     }
 
     crate::log!(
-        "workers: registration summary slots=0..{} registered={}/{} kinds(perf/eff/unknown)={}/{}/{} app_visible={}\n",
+        "workers: registration summary slots=0..{} registered={}/{} kinds(perf/eff/unknown)={}/{}/{} app_visible={} lastap_service_slot={:?}\n",
         topology_slots - 1,
         registered,
         topology_slots,
         perf,
         eff,
         unknown,
-        app_visible_parallelism()
+        app_visible_parallelism(),
+        last_ap_service_slot(),
     );
 }
 
@@ -119,8 +125,14 @@ pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
     };
     CORE_KINDS.lock().insert(cpu_slot, core_kind);
     maybe_log_worker_summary(registered);
-    if is_background_worker_slot(cpu_slot) {
+    if is_general_background_worker_slot(cpu_slot) {
         crate::r::blocking::start_service_lane_for_slot(cpu_slot);
+    } else if is_last_ap_service_slot(cpu_slot) {
+        crate::log_info!(target: "service";
+            "lastap: reserved slot={} core_kind={} owner=ui4-h264-udp excluded_from=vm-hull+blocking-lanes+background-round-robin lifecycle=temporary-until-ap1-media-integration\n",
+            cpu_slot,
+            core_kind,
+        );
     }
 }
 
@@ -159,6 +171,35 @@ pub fn ap1_ui_core_spawner() -> Option<WorkerSpawner> {
     spawner_for_slot(AP1_UI_SERVICE_SLOT)
 }
 
+/// Temporary exclusive service carrier at the final topology slot.
+///
+/// The identity is derived from topology rather than registration order, so
+/// early AP registration cannot make the reservation migrate between cores.
+pub fn last_ap_service_slot() -> Option<u32> {
+    if !LAST_AP_SERVICE_RESERVED {
+        return None;
+    }
+    let slot = topology_core_slot_count().checked_sub(1)?;
+    if slot < FIRST_BACKGROUND_SLOT as usize || slot >= WORKER_SLOT_LIMIT {
+        return None;
+    }
+    Some(slot as u32)
+}
+
+pub fn is_last_ap_service_slot(cpu_slot: u32) -> bool {
+    last_ap_service_slot() == Some(cpu_slot)
+}
+
+pub fn is_general_background_worker_slot(cpu_slot: u32) -> bool {
+    is_background_worker_slot(cpu_slot) && !is_last_ap_service_slot(cpu_slot)
+}
+
+pub fn last_ap_service_worker() -> Option<(u32, u8, WorkerSpawner)> {
+    let slot = last_ap_service_slot()?;
+    let spawner = spawner_for_slot(slot)?;
+    Some((slot, core_kind_for_slot(slot), spawner))
+}
+
 pub fn background_slot_range() -> core::ops::Range<u32> {
     FIRST_BACKGROUND_SLOT..WORKER_SLOT_LIMIT as u32
 }
@@ -173,7 +214,7 @@ pub fn background_worker_slots() -> Vec<u32> {
     let mut out: Vec<u32> = map
         .keys()
         .copied()
-        .filter(|slot| *slot >= FIRST_BACKGROUND_SLOT)
+        .filter(|slot| is_general_background_worker_slot(*slot))
         .collect();
     out.sort_unstable();
     out
@@ -185,7 +226,7 @@ pub fn has_perf_background_worker_slot() -> bool {
     let map = CORE_SPAWNERS.lock();
     let kinds = CORE_KINDS.lock();
     map.keys().any(|slot| {
-        *slot >= FIRST_BACKGROUND_SLOT
+        is_general_background_worker_slot(*slot)
             && kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN) == CORE_KIND_PERF
     })
 }
@@ -211,15 +252,19 @@ pub fn app_visible_parallelism() -> usize {
     };
     let topology_slots = topology_core_slot_count();
     if topology_slots != 0 {
-        return topology_slots
-            .saturating_sub(first_app_slot as usize)
-            .max(1);
+        let background = topology_slots.saturating_sub(first_app_slot as usize);
+        let reserved = usize::from(
+            last_ap_service_slot().is_some_and(|slot| slot as usize >= first_app_slot as usize),
+        );
+        return background.saturating_sub(reserved).max(1);
     }
 
     CORE_SPAWNERS
         .lock()
         .keys()
-        .filter(|slot| **slot >= first_app_slot)
+        .filter(|slot| {
+            **slot >= first_app_slot && !is_last_ap_service_slot(**slot)
+        })
         .count()
         .max(1)
 }
@@ -237,7 +282,7 @@ pub fn has_background_worker_slot() -> bool {
     CORE_SPAWNERS
         .lock()
         .keys()
-        .any(|slot| *slot >= FIRST_BACKGROUND_SLOT)
+        .any(|slot| is_general_background_worker_slot(*slot))
 }
 
 pub fn pick_background_spawner() -> Option<WorkerSpawner> {
@@ -297,7 +342,9 @@ where
     let kinds = CORE_KINDS.lock();
     let perf_count = map
         .iter()
-        .filter(|(slot, _)| **slot >= FIRST_BACKGROUND_SLOT && accept_slot(**slot))
+        .filter(|(slot, _)| {
+            is_general_background_worker_slot(**slot) && accept_slot(**slot)
+        })
         .filter(|(slot, _)| kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN) == CORE_KIND_PERF)
         .count();
 
@@ -305,7 +352,7 @@ where
         let idx = SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize % perf_count;
         let mut seen = 0;
         for (slot, spawner) in map.iter() {
-            if *slot < FIRST_BACKGROUND_SLOT || !accept_slot(*slot) {
+            if !is_general_background_worker_slot(*slot) || !accept_slot(*slot) {
                 continue;
             }
             let kind = kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN);
@@ -322,7 +369,9 @@ where
 
     let eligible_count = map
         .keys()
-        .filter(|slot| **slot >= FIRST_BACKGROUND_SLOT && accept_slot(**slot))
+        .filter(|slot| {
+            is_general_background_worker_slot(**slot) && accept_slot(**slot)
+        })
         .count();
     if eligible_count == 0 {
         return None;
@@ -331,7 +380,7 @@ where
     let idx = SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize % eligible_count;
     let mut seen = 0;
     for (slot, spawner) in map.iter() {
-        if *slot < FIRST_BACKGROUND_SLOT || !accept_slot(*slot) {
+        if !is_general_background_worker_slot(*slot) || !accept_slot(*slot) {
             continue;
         }
         if seen == idx {

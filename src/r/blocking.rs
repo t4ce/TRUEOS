@@ -228,7 +228,7 @@ pub async fn blocking_job_dispatcher_task() {
 }
 
 pub fn start_service_lane_for_slot(slot: u32) -> bool {
-    if !crate::workers::is_background_worker_slot(slot) {
+    if !crate::workers::is_general_background_worker_slot(slot) {
         return false;
     }
     let Some(started) = SERVICE_LANE_STARTED.get(slot as usize) else {

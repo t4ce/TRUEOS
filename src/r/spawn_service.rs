@@ -691,55 +691,13 @@ fn spawn_ui4_screenshot_service_task(spawner: Spawner) -> SpawnAttempt {
 #[cfg(feature = "trueos_h264_encode_stream")]
 fn spawn_ui4_h264_encode_stream_task(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
-    let encode_worker = crate::workers::pick_perf_background_spawner_with_slot()
-        .or_else(crate::workers::pick_background_spawner_with_slot);
-    let Some((encode_slot, encode_kind, encode_spawner)) = encode_worker else {
+    let Some((lastap_slot, lastap_kind, lastap_spawner)) =
+        crate::workers::last_ap_service_worker()
+    else {
         return SpawnAttempt::Skipped;
     };
-    let background_slots = crate::workers::background_worker_slots();
-    let prepare_slot = background_slots
-        .iter()
-        .copied()
-        .find(|slot| {
-            *slot != encode_slot
-                && crate::workers::core_kind_for_slot(*slot) == crate::workers::CORE_KIND_PERF
-        })
-        .or_else(|| {
-            background_slots
-                .iter()
-                .copied()
-                .find(|slot| *slot != encode_slot)
-        });
-    let Some(prepare_slot) = prepare_slot else {
-        return SpawnAttempt::Skipped;
-    };
-    let Some(prepare_spawner) = crate::workers::spawner_for_slot(prepare_slot) else {
-        return SpawnAttempt::Skipped;
-    };
-    let prepare_kind = crate::workers::core_kind_for_slot(prepare_slot);
-    let egress_slot = background_slots
-        .iter()
-        .copied()
-        .find(|slot| {
-            *slot != encode_slot
-                && *slot != prepare_slot
-                && crate::workers::core_kind_for_slot(*slot) == crate::workers::CORE_KIND_PERF
-        })
-        .or_else(|| {
-            background_slots
-                .iter()
-                .copied()
-                .find(|slot| *slot != encode_slot && *slot != prepare_slot)
-        });
-    let Some(egress_slot) = egress_slot else {
-        return SpawnAttempt::Skipped;
-    };
-    let Some(egress_spawner) = crate::workers::spawner_for_slot(egress_slot) else {
-        return SpawnAttempt::Skipped;
-    };
-    let egress_kind = crate::workers::core_kind_for_slot(egress_slot);
 
-    let prepare_token = match crate::ui4::ui4_h264_encode_prepare_task(prepare_slot) {
+    let prepare_token = match crate::ui4::ui4_h264_encode_prepare_task(lastap_slot) {
         Ok(token) => token,
         Err(error) => return SpawnAttempt::Failed(error),
     };
@@ -747,21 +705,20 @@ fn spawn_ui4_h264_encode_stream_task(spawner: Spawner) -> SpawnAttempt {
         Ok(token) => token,
         Err(error) => return SpawnAttempt::Failed(error),
     };
-    let egress_token = match crate::ui4::ui4_h264_encode_udp_egress_task(egress_slot) {
+    let egress_token = match crate::ui4::ui4_h264_encode_udp_egress_task(lastap_slot) {
         Ok(token) => token,
         Err(error) => return SpawnAttempt::Failed(error),
     };
-    prepare_spawner.spawn(prepare_token);
-    encode_spawner.spawn(encode_token);
-    egress_spawner.spawn(egress_token);
+    lastap_spawner.spawn(prepare_token);
+    lastap_spawner.spawn(encode_token);
+    lastap_spawner.spawn(egress_token);
     crate::log_info!(target: "service";
-        "ui4 h264 stream pipeline assigned encode_slot={} encode_kind={} prepare_slot={} prepare_kind={} egress_slot={} egress_kind={} distinct_workers=3 preparation_buffering=double encoded_au_queue=bounded\n",
-        encode_slot,
-        encode_kind,
-        prepare_slot,
-        prepare_kind,
-        egress_slot,
-        egress_kind,
+        "ui4 h264 stream pipeline assigned carrier=lastap slot={} core_kind={} cooperative_tasks=3 prepare_slot={} encode_slot={} egress_slot={} exclusive_from=vm-hull+blocking-lanes+background-round-robin preparation_buffering=double encoded_au_queue=bounded future_home=ap1-ui\n",
+        lastap_slot,
+        lastap_kind,
+        lastap_slot,
+        lastap_slot,
+        lastap_slot,
     );
     SpawnAttempt::Spawned
 }
@@ -884,6 +841,12 @@ fn ap1_ui_core_ready_gate() -> bool {
 #[inline]
 fn intel_media_engine_gate() -> bool {
     crate::intel::has_media_decode_engine()
+}
+
+#[cfg(feature = "trueos_h264_encode_stream")]
+#[inline]
+fn h264_lastap_service_gate() -> bool {
+    intel_media_engine_gate() && crate::workers::last_ap_service_worker().is_some()
 }
 
 #[inline]
@@ -1801,7 +1764,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "ui4-h264-encode-stream",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        intel_media_engine_gate,
+        h264_lastap_service_gate,
         &UI4_H264_ENCODE_STREAM_STARTED,
         spawn_ui4_h264_encode_stream_task,
     ),
