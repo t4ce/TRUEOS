@@ -46,6 +46,7 @@ impl WindowOwner {
     pub(crate) const DRAW3D_SERVICE: Self = Self::KernelApp(3);
     pub(crate) const GRIDPAPER_SERVICE: Self = Self::KernelApp(4);
     pub(crate) const GPGPU_PREVIEW: Self = Self::KernelApp(5);
+    pub(crate) const COLOR_PICKER_SERVICE: Self = Self::KernelApp(6);
     pub(crate) const SVG_OUTLINE_PROBE: Self = Self::KernelApp(7);
 
     /// Stable, allocation-free producer name for diagnostics. The enum still
@@ -57,6 +58,7 @@ impl WindowOwner {
             Self::DRAW3D_SERVICE => "draw3d-service",
             Self::GRIDPAPER_SERVICE => "gridpaper-service",
             Self::GPGPU_PREVIEW => "gpgpu-preview",
+            Self::COLOR_PICKER_SERVICE => "color-picker-service",
             Self::SVG_OUTLINE_PROBE => "svg-outline-probe",
             Self::KernelApp(_) => "kernel-app",
             Self::Vm(_) => "blueprint-vm",

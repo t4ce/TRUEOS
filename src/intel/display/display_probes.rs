@@ -101,6 +101,10 @@ unsafe impl Send for Nv12PlaneProbeSurface {}
 unsafe impl Sync for Nv12PlaneProbeSurface {}
 
 pub(super) fn probe_boot_logo_decode() -> bool {
+    if !PRIMARY_BOOT_STAMPS_ENABLED {
+        return false;
+    }
+
     match PRIMARY_BOOT_LOGO_DECODE_MODE {
         PrimaryBootLogoDecodeMode::HwPic => probe_hw_logo_decode(),
         PrimaryBootLogoDecodeMode::ZuneJpeg => probe_zune_boot_logo_decode(),

@@ -62,8 +62,11 @@ const VIDEO_NV12_BLACK_PROOF_LIFT: bool = false;
 const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
 const PRIMARY_BOOT_INTEL_GRAPHICS_STAMP_PNG: &[u8] =
     include_bytes!("../../Intel_Graphics_logo.png");
-const PRIMARY_BOOT_LOGO_ENABLED: bool = true;
-const PRIMARY_BOOT_INTEL_GRAPHICS_STAMP_ENABLED: bool = true;
+// One deliberately blunt switch owns every boot stamp: the TRUEOS JPEG, the
+// Intel PNG and the firmware BGRT image. Keep this false while Slot 0 carries
+// the hardware-blending reference pattern.
+const PRIMARY_BOOT_STAMPS_ENABLED: bool = false;
+const PRIMARY_BOOT_BLEND_REFERENCE_ENABLED: bool = true;
 const PRIMARY_BOOT_LOGO_DECODE_MODE: PrimaryBootLogoDecodeMode =
     PrimaryBootLogoDecodeMode::ZuneJpeg;
 const PRIMARY_BOOT_LOGO_WAIT_TIMEOUT_MS: u64 = 5000;
@@ -1140,6 +1143,69 @@ enum OverlayAlphaMode {
 
 const UI4_RGBA8_OVERLAY_CONTRACT: OverlayAlphaMode = OverlayAlphaMode::PremultipliedRgba;
 
+/// Paint the opaque Slot-0 reference beneath every blend-capable overlay:
+///
+/// ```text
+/// +-----------+-----------+-----------+
+/// |           |   white   |           |
+/// |   white   +-----------+   black   |
+/// |           |   black   |           |
+/// +-----------+-----------+-----------+
+/// ```
+///
+/// The strip selection is derived from the active scanout dimensions. Integer
+/// quantization can make strips differ by at most one pixel when the width is
+/// not divisible by three. Alpha bytes are 0xFF even though Slot 0 currently
+/// scans out as XRGB, keeping the backing unambiguously opaque if that contract
+/// later becomes ARGB.
+fn paint_primary_boot_blend_reference(surface: PrimarySurface) -> bool {
+    if !PRIMARY_BOOT_BLEND_REFERENCE_ENABLED
+        || surface.virt.is_null()
+        || surface.width == 0
+        || surface.height == 0
+        || surface.pitch_bytes < surface.width.saturating_mul(PRIMARY_BYTES_PER_PIXEL)
+    {
+        return false;
+    }
+
+    let width = surface.width as usize;
+    let height = surface.height as usize;
+    let pitch = surface.pitch_bytes as usize;
+
+    // Initialize the padding and edge-guard area as opaque black too. Only the
+    // width x height viewport is scanned out, but no uninitialized allocation
+    // bytes should border a display surface used by later GPU work.
+    let allocation_pixels = surface.byte_len / core::mem::size_of::<u32>();
+    let allocation =
+        unsafe { core::slice::from_raw_parts_mut(surface.virt.cast::<u32>(), allocation_pixels) };
+    for pixel in allocation {
+        *pixel = 0xFF00_0000;
+    }
+
+    for y in 0..height {
+        let center_is_white = y < height / 2;
+        let row = unsafe { surface.virt.add(y.saturating_mul(pitch)).cast::<u32>() };
+        for x in 0..width {
+            let strip = x.saturating_mul(3) / width;
+            let white = strip == 0 || (strip == 1 && center_is_white);
+            let pixel = if white { 0xFFFF_FFFF } else { 0xFF00_0000 };
+            unsafe {
+                core::ptr::write_volatile(row.add(x), pixel);
+            }
+        }
+    }
+
+    crate::intel::dma_flush(surface.virt, surface.byte_len);
+    crate::log!(
+        "intel/display: primary-boot blend-reference pipe={} size={}x{} slot=0 opaque=1 layout=thirds left=white center_top=white center_bottom=black right=black stamps={}\n",
+        surface.pipe.name,
+        surface.width,
+        surface.height,
+        PRIMARY_BOOT_STAMPS_ENABLED as u8,
+    );
+    true
+}
+
 pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     if PRIMARY_BOOT_SURFACE_INIT.swap(true, Ordering::AcqRel) {
         return;
@@ -1255,6 +1321,8 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     *primary_surface_owner(pipe).lock() = Some(primary_surface);
     log_primary_scanout_pte_window(dev, "after-primary-init", primary_gpu, byte_len);
 
+    let blend_reference = paint_primary_boot_blend_reference(primary_surface);
+
     log_primary_plane_probe(dev, pipe, "before-rgba8-stack-bootstrap");
     let ok = bootstrap_ui4_rgba8_plane_stack_once(dev, primary_surface);
     log_primary_plane_probe(dev, pipe, "after-rgba8-stack-bootstrap");
@@ -1263,7 +1331,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     let surf_live = crate::intel::mmio_read(dev, pipe.primary_plane().surf_live());
     let ctl_after = crate::intel::mmio_read(dev, pipe.primary_plane().ctl());
 
-    let logo_ok = if PRIMARY_BOOT_LOGO_ENABLED {
+    let logo_ok = if PRIMARY_BOOT_STAMPS_ENABLED {
         let warmup_ok = if PRIMARY_BOOT_DISPLAY_WARMUP_ENABLED {
             run_primary_display_warmup(primary_surface, false)
         } else {
@@ -1284,7 +1352,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     }
 
     crate::log!(
-        "intel/display: primary-boot-surface pipe={} size={}x{} backing={}x{} pitch=0x{:X} bytes=0x{:X} guard={} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={} overlays=transparent-native-rgba8-slots1-4 ui=bootstrap-stack-ready\n",
+        "intel/display: primary-boot-surface pipe={} size={}x{} backing={}x{} pitch=0x{:X} bytes=0x{:X} guard={} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} blend_reference={} stamps={} logo={} overlays=transparent-native-rgba8-slots1-4 ui=bootstrap-stack-ready\n",
         pipe.name,
         width,
         height,
@@ -1302,6 +1370,8 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         surf_armed,
         surf_live,
         ok as u8,
+        blend_reference as u8,
+        PRIMARY_BOOT_STAMPS_ENABLED as u8,
         logo_ok as u8,
     );
     log_display_pipeline_topology(dev, "after-primary-init");
@@ -1318,7 +1388,7 @@ pub(super) fn log_bsp_display_metrics_probe(dev: crate::intel::Dev) {
 }
 
 fn stamp_intel_graphics_logo_top_left_screen() -> bool {
-    if !PRIMARY_BOOT_INTEL_GRAPHICS_STAMP_ENABLED {
+    if !PRIMARY_BOOT_STAMPS_ENABLED {
         return false;
     }
 
@@ -1359,6 +1429,10 @@ fn stamp_intel_graphics_logo_top_left_screen() -> bool {
 }
 
 fn stamp_bgrt_logo_bottom_right_screen() -> bool {
+    if !PRIMARY_BOOT_STAMPS_ENABLED {
+        return false;
+    }
+
     let Some((bgrt_width, bgrt_height, bgrt_pixels)) = crate::efi::acpi::bgrt::decoded_logo_rgba()
     else {
         crate::log!("intel/display: boot-logo bgrt stamp skipped reason=no-bgrt-logo\n");
@@ -1592,7 +1666,7 @@ fn run_primary_display_warmup(_surface: PrimarySurface, release_render_after: bo
 }
 
 pub(crate) async fn wait_hw_logo_sequence_done() {
-    if !PRIMARY_BOOT_LOGO_ENABLED {
+    if !PRIMARY_BOOT_STAMPS_ENABLED {
         return;
     }
     while !HW_LOGO_SEQUENCE_DONE.load(Ordering::Acquire) {
@@ -1615,6 +1689,10 @@ fn mark_hw_logo_sequence_done(reason: &'static str) {
 }
 
 fn submit_next_hw_logo_stage() -> bool {
+    if !PRIMARY_BOOT_STAMPS_ENABLED {
+        return false;
+    }
+
     let stage_idx = HW_LOGO_NEXT_STAGE.fetch_add(1, Ordering::AcqRel) as usize;
     if stage_idx != 0 {
         return false;

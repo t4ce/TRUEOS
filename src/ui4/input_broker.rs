@@ -604,7 +604,17 @@ impl InputBroker {
         if secondary_released {
             let had_anchor = self.cursors[index].secondary_anchor.take().is_some();
             if had_anchor && !secondary_drop && !self.cursors[index].suppress_context_menu_open {
-                self.cursors[index].context_menu = Some((x, y));
+                let selected = super::selected_frame_for_source(source);
+                if let Some(target) = hit.filter(|window| {
+                    selected == Some(WindowTarget::from(*window).cursor_frame_key())
+                }) {
+                    super::color_picker::open_default_context_menu(
+                        source,
+                        target,
+                        (x, y),
+                        self.cursors[index].color,
+                    );
+                }
             }
             self.cursors[index].secondary_dragged = false;
         }
@@ -1349,6 +1359,37 @@ pub(crate) fn select_window_for_cursor(
         i64::from(snapshot.placement.x).clamp(0, i64::from(screen_width.saturating_sub(1))) as u32;
     let y =
         i64::from(snapshot.placement.y).clamp(0, i64::from(screen_height.saturating_sub(1))) as u32;
+    let (combo_id, vcursor) = cursor_hut_metadata(source);
+    let mut broker = INPUT_BROKER.lock();
+    let index = broker.cursor_index(source, x, y);
+    broker.cursors[index].x = x;
+    broker.cursors[index].y = y;
+    broker.cursors[index].visible_after_motion = true;
+    Ok(broker.select_frame(index, Some(WindowTarget { owner, window }), combo_id, vcursor))
+}
+
+/// Programmatically focus a ready frame while retaining a known cursor
+/// position. Context-menu actions use their captured anchor so opening a
+/// service frame never teleports the software cursor to the frame origin.
+pub(super) fn select_window_for_cursor_at(
+    source: Ui4CursorSource,
+    owner: WindowOwner,
+    window: WindowId,
+    x: u32,
+    y: u32,
+) -> Result<bool, Ui4ProgrammaticSelectionError> {
+    let snapshot = super::window_broker::window_snapshot(owner, window)
+        .ok_or(Ui4ProgrammaticSelectionError::NotFound)?;
+    if snapshot.state != WindowState::Ready || !snapshot.placement.visible {
+        return Err(Ui4ProgrammaticSelectionError::NotReady);
+    }
+    let (screen_width, screen_height) = crate::intel::active_scanout_dimensions()
+        .ok_or(Ui4ProgrammaticSelectionError::OutputUnavailable)?;
+    if screen_width == 0 || screen_height == 0 {
+        return Err(Ui4ProgrammaticSelectionError::OutputUnavailable);
+    }
+    let x = x.min(screen_width - 1);
+    let y = y.min(screen_height - 1);
     let (combo_id, vcursor) = cursor_hut_metadata(source);
     let mut broker = INPUT_BROKER.lock();
     let index = broker.cursor_index(source, x, y);

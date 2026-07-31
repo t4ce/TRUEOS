@@ -4,6 +4,7 @@
 //! not expose a guest/userspace ABI; the compositor service owns presentation.
 
 pub(crate) mod blueprint_text;
+mod color_picker;
 mod compositor_service;
 mod context_menu;
 mod cursor_frame_inout;
@@ -58,6 +59,7 @@ impl InteractionCadence {
     }
 }
 
+pub(crate) use color_picker::ui4_color_picker_service_task;
 pub(crate) use compositor_service::ui4_compositor_service_task;
 pub(crate) use context_menu::{
     ContextMenuCloseReason, ContextMenuEntry, ContextMenuError, ContextMenuRequest,

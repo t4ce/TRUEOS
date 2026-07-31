@@ -71,8 +71,10 @@ pub(crate) enum ContextMenuCloseReason {
 }
 
 pub(crate) struct ContextMenuResult {
+    pub(crate) source: Ui4CursorSource,
     pub(crate) owner: WindowOwner,
     pub(crate) window: WindowId,
+    pub(crate) anchor: (u32, u32),
     pub(crate) context: u64,
     pub(crate) selected_action: Option<u32>,
     pub(crate) reason: ContextMenuCloseReason,
@@ -407,8 +409,10 @@ fn queue_close(
     PENDING_CALLBACKS.lock().push_back(PendingCallback {
         callback: menu.callback,
         result: ContextMenuResult {
+            source: menu.source,
             owner: menu.owner,
             window: menu.window,
+            anchor: menu.anchor,
             context: menu.context,
             selected_action,
             reason,
