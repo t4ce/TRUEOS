@@ -568,6 +568,102 @@ fn write_triangle_probe_state_with_flush(
     })
 }
 
+/// Lower Helio's exact five-DWORD DrawIndexedIndirectArgs ABI to the Intel
+/// auto-draw registers. Keeping this as a small standalone encoder makes the
+/// ABI testable without a device and leaves the record GPU-writable for the
+/// next culling step.
+fn encode_draw_indexed_indirect_register_loads(
+    batch_dwords: &mut [u32],
+    cursor: &mut usize,
+    args_gpu_addr: u64,
+) -> Result<(), &'static str> {
+    if args_gpu_addr & 3 != 0 {
+        return Err("probe-indirect-address");
+    }
+    let fields = [
+        (RCS_3DPRIM_VERTEX_COUNT, 0u64),
+        (RCS_3DPRIM_INSTANCE_COUNT, 4),
+        (RCS_3DPRIM_START_VERTEX, 8),
+        (RCS_3DPRIM_BASE_VERTEX, 12),
+        (RCS_3DPRIM_START_INSTANCE, 16),
+        // Gen11+ routes gl_BaseVertex through XP0 when extended parameters
+        // are present. The current clip-space VS does not consume it, but
+        // mirroring Mesa here keeps the bridge correct for Helio shaders that
+        // do.
+        (RCS_3DPRIM_XP_BASE_VERTEX, 12),
+    ];
+    let required = fields
+        .len()
+        .checked_mul(4)
+        .ok_or("probe-indirect-capacity")?;
+    if cursor.saturating_add(required) > batch_dwords.len() {
+        return Err("probe-batch-exhausted");
+    }
+    for (register, byte_offset) in fields {
+        let address = args_gpu_addr
+            .checked_add(byte_offset)
+            .ok_or("probe-indirect-address")?;
+        batch_dwords[*cursor] = MI_LOAD_REGISTER_MEM;
+        batch_dwords[*cursor + 1] = register;
+        batch_dwords[*cursor + 2] = address as u32;
+        batch_dwords[*cursor + 3] = (address >> 32) as u32;
+        *cursor += 4;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod draw_indexed_indirect_encoder_tests {
+    use super::{
+        MI_LOAD_REGISTER_MEM, RCS_3DPRIM_BASE_VERTEX, RCS_3DPRIM_INSTANCE_COUNT,
+        RCS_3DPRIM_START_INSTANCE, RCS_3DPRIM_START_VERTEX, RCS_3DPRIM_VERTEX_COUNT,
+        RCS_3DPRIM_XP_BASE_VERTEX, encode_draw_indexed_indirect_register_loads,
+    };
+
+    #[test]
+    fn lowers_the_exact_twenty_byte_helio_record_to_rcs_registers() {
+        let base = 0x0000_1234_5678_9000u64;
+        let mut batch = [0u32; 24];
+        let mut cursor = 0usize;
+        encode_draw_indexed_indirect_register_loads(&mut batch, &mut cursor, base).unwrap();
+        assert_eq!(cursor, batch.len());
+
+        let expected = [
+            (RCS_3DPRIM_VERTEX_COUNT, 0u64),
+            (RCS_3DPRIM_INSTANCE_COUNT, 4),
+            (RCS_3DPRIM_START_VERTEX, 8),
+            (RCS_3DPRIM_BASE_VERTEX, 12),
+            (RCS_3DPRIM_START_INSTANCE, 16),
+            (RCS_3DPRIM_XP_BASE_VERTEX, 12),
+        ];
+        for (packet, (register, byte_offset)) in batch.chunks_exact(4).zip(expected) {
+            let address = base + byte_offset;
+            assert_eq!(packet[0], MI_LOAD_REGISTER_MEM);
+            assert_eq!(packet[1], register);
+            assert_eq!(packet[2], address as u32);
+            assert_eq!(packet[3], (address >> 32) as u32);
+        }
+    }
+
+    #[test]
+    fn rejects_unaligned_or_truncated_indirect_packets() {
+        let mut batch = [0u32; 24];
+        let mut cursor = 0usize;
+        assert_eq!(
+            encode_draw_indexed_indirect_register_loads(&mut batch, &mut cursor, 0x1002),
+            Err("probe-indirect-address")
+        );
+        assert_eq!(cursor, 0);
+
+        let mut short = [0u32; 23];
+        assert_eq!(
+            encode_draw_indexed_indirect_register_loads(&mut short, &mut cursor, 0x1000),
+            Err("probe-batch-exhausted")
+        );
+        assert_eq!(cursor, 0);
+    }
+}
+
 fn encode_triangle_probe_batch(
     submit_name: &'static str,
     batch_dwords: &mut [u32],
@@ -621,6 +717,9 @@ fn encode_triangle_probe_batch(
     let vf_synthesized_vue = batch_mode.vf_synthesized_vue();
     let force_vs_with_vf_synthesized_vue =
         vf_synthesized_vue && front_end_contract.force_vs_with_vf_synthesized_vue;
+    if draw.indirect_args_gpu_addr.is_some() && draw.index_buffer.is_none() {
+        return Err("probe-indirect-requires-index-buffer");
+    }
 
     fn log_batch_offset(cursor: usize, label: &str) {
         intel_render_batch_log!(
@@ -2744,6 +2843,11 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, binding_table_pointer_offset)?;
     }
 
+    if let Some(args_gpu_addr) = draw.indirect_args_gpu_addr {
+        log_batch_offset(cursor, "Helio DrawIndexedIndirectArgs -> 3DPRIM registers");
+        encode_draw_indexed_indirect_register_loads(batch_dwords, &mut cursor, args_gpu_addr)?;
+    }
+
     log_batch_offset(cursor, "3DPRIMITIVE");
     if device_is_gfx12(warm.device_id) {
         // Gfx11+ direct draws use the extended ten-DWORD form.  Topology is
@@ -2751,7 +2855,16 @@ fn encode_triangle_probe_batch(
         // repeat firstVertex, firstInstance, and baseVertex.  The verified
         // host packet is 0x7B000808 followed by nine zero/default fields apart
         // from vertex and instance counts.
-        push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE_EXTENDED)?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            CMD_3DPRIMITIVE_EXTENDED
+                | if draw.indirect_args_gpu_addr.is_some() {
+                    PRIMITIVE_INDIRECT_PARAMETER_ENABLE
+                } else {
+                    0
+                },
+        )?;
         push(
             batch_dwords,
             &mut cursor,
@@ -2770,7 +2883,16 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, 0)?;
     } else {
-        push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE)?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            CMD_3DPRIMITIVE
+                | if draw.indirect_args_gpu_addr.is_some() {
+                    PRIMITIVE_INDIRECT_PARAMETER_ENABLE
+                } else {
+                    0
+                },
+        )?;
         push(
             batch_dwords,
             &mut cursor,
@@ -3352,11 +3474,22 @@ fn encode_triangle_probe_batch(
         ps_dispatch_32,
     );
     intel_render_verbose_log!(
-        "3dprimitive-setup mode={:?} topo={} vertices={} start_vertex=0 instances={} start_instance=0 base_vertex=0 vb=0x{:X} stride={} rt=0x{:X} pitch=0x{:X} rect={}x{} postdraw_sync={} light_flags=0x{:08X}\n",
+        "3dprimitive-setup mode={:?} topo={} vertices={} start_vertex=0 instances={} start_instance=0 base_vertex=0 indirect_gpu=0x{:X} indirect_stride={} command_owner={} vb=0x{:X} stride={} rt=0x{:X} pitch=0x{:X} rect={}x{} postdraw_sync={} light_flags=0x{:08X}\n",
         batch_mode,
         primitive_topology_label(batch_mode.topology()),
         draw.vertex_count,
         1,
+        draw.indirect_args_gpu_addr.unwrap_or(0),
+        if draw.indirect_args_gpu_addr.is_some() {
+            DRAW_INDEXED_INDIRECT_BYTES
+        } else {
+            0
+        },
+        if draw.indirect_args_gpu_addr.is_some() {
+            "helio-gpu-record"
+        } else {
+            "trueos-direct"
+        },
         draw.vertex_gpu_addr,
         draw.vertex_stride,
         draw.rt_gpu_addr,

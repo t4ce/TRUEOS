@@ -19,6 +19,8 @@ const fn example_name(id: u8) -> &'static str {
     match id {
         1 => "simple-cube",
         2 => "churn-benchmark",
+        3 => "shape-battle-royale",
+        4 => "pendulum-bigcloth",
         _ => "reserved",
     }
 }
@@ -27,8 +29,8 @@ fn print_list(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "helio examples:");
     print_shell_line(io, "  1  simple-cube       static full-stack smoke scene");
     print_shell_line(io, "  2  churn-benchmark   live retained-batch stress scene");
-    print_shell_line(io, "  3  reserved");
-    print_shell_line(io, "  4  reserved");
+    print_shell_line(io, "  3  shape-battle-royale   physics arena scene");
+    print_shell_line(io, "  4  pendulum-bigcloth     linked-cloth physics scene");
     print_shell_line(
         io,
         "  monitor [SECONDS]    temporary Spirit 256x256 direct GPU logger (aliases: perf, logger)",
@@ -85,32 +87,36 @@ fn parse_monitor_command(value: Option<&str>) -> Option<MonitorCommand> {
 
 fn print_monitor_status(io: &'static dyn ShellBackend2) {
     let status = crate::spirit::gpu_logger::status();
+    let sample =
+        crate::spirit::gpu_logger::latest_sample(crate::spirit::gpu_logger::GpuLoggerSource::Helio);
     print_shell_line(
         io,
         format!(
-            "helio monitor: active={} source={} generation={} remaining_ms={} frame={} frame_us={} geometry_us={} prepare_us={} retire_wait_us={} poll_iters={} objects={} draws={} triangles={} busy_retries={} incomplete_retries={}; Spirit 256x256 direct GPU logger; temporary; bypasses UI4/composition; auto-restores",
+            "helio monitor: active={} source={} generation={} remaining_ms={} sample_source=helio frame={} cadence_us={} fps={} frame_us={} geometry_us={} prepare_us={} retire_wait_us={} poll_iters={} objects={} draws={} triangles={} busy_retries={} incomplete_retries={}; Spirit 256x256 direct GPU logger; temporary; bypasses UI4/composition; auto-restores",
             status.active as u8,
             logger_source_name(status.source),
             status.generation,
             status.remaining_ms,
-            status.sample.frame_index,
-            status.sample.frame_us,
-            status.sample.geometry_us,
-            status.sample.prepare_us,
-            status.sample.retire_wait_us,
-            status.sample.poll_iters,
-            status.sample.objects,
-            status.sample.draws,
-            status.sample.triangles,
-            status.sample.busy_retries,
-            status.sample.incomplete_retries,
+            sample.frame_index,
+            sample.cadence_us,
+            crate::spirit::gpu_logger::fps_from_cadence_us(sample.cadence_us),
+            sample.frame_us,
+            sample.geometry_us,
+            sample.prepare_us,
+            sample.retire_wait_us,
+            sample.poll_iters,
+            sample.objects,
+            sample.draws,
+            sample.triangles,
+            sample.busy_retries,
+            sample.incomplete_retries,
         )
         .as_str(),
     );
 }
 
 fn monitor(io: &'static dyn ShellBackend2, command: MonitorCommand) {
-    use crate::spirit::gpu_logger::{self, GpuLoggerSource};
+    use crate::spirit::gpu_logger::{self, GpuLoggerLease, GpuLoggerSource};
 
     match command {
         MonitorCommand::Start(seconds) => {
@@ -138,7 +144,13 @@ fn monitor(io: &'static dyn ShellBackend2, command: MonitorCommand) {
         }
         MonitorCommand::Status => print_monitor_status(io),
         MonitorCommand::Off => {
-            let stopped = gpu_logger::stop_source(GpuLoggerSource::Helio);
+            let current = gpu_logger::status();
+            let stopped = current.active
+                && current.source == Some(GpuLoggerSource::Helio)
+                && gpu_logger::release(GpuLoggerLease {
+                    generation: current.generation,
+                    source: GpuLoggerSource::Helio,
+                });
             print_shell_line(
                 io,
                 format!(
@@ -201,6 +213,10 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
             );
             print_shell_line(
                 io,
+                "helio: examples 1=simple-cube, 2=churn-benchmark, 3=shape-battle-royale, 4=pendulum-bigcloth",
+            );
+            print_shell_line(
+                io,
                 "helio: monitor defaults to 30s, accepts 1..300s, aliases are perf and logger; Spirit 256x256 direct GPU logger bypasses UI4/composition and auto-restores",
             );
         }
@@ -228,7 +244,16 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 
 #[cfg(test)]
 mod tests {
-    use super::{MONITOR_DEFAULT_SECONDS, MonitorCommand, parse_monitor_command};
+    use super::{MONITOR_DEFAULT_SECONDS, MonitorCommand, example_name, parse_monitor_command};
+
+    #[test]
+    fn all_numbered_example_slots_have_names() {
+        assert_eq!(example_name(1), "simple-cube");
+        assert_eq!(example_name(2), "churn-benchmark");
+        assert_eq!(example_name(3), "shape-battle-royale");
+        assert_eq!(example_name(4), "pendulum-bigcloth");
+        assert_eq!(example_name(5), "reserved");
+    }
 
     #[test]
     fn monitor_defaults_to_a_bounded_thirty_second_lease() {

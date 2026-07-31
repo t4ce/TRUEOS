@@ -17,7 +17,7 @@ use crate::intel::gpgpu::{GpgpuRect, GpgpuSolidRect};
 const MIN_TTL_MS: u64 = 1_000;
 const MAX_TTL_MS: u64 = 300_000;
 const PANEL_DIM: u32 = 256;
-const METRIC_ROW_Y: [u32; 10] = [58, 72, 86, 100, 114, 128, 142, 156, 170, 184];
+const METRIC_ROW_Y: [u32; 11] = [58, 72, 86, 100, 114, 128, 142, 156, 170, 184, 198];
 const BAR_X: u32 = 29;
 const BAR_WIDTH: u32 = 211;
 
@@ -37,6 +37,10 @@ pub(crate) struct GpuLoggerLease {
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GpuLoggerSample {
     pub(crate) frame_index: u64,
+    /// Time between consecutive successful producer publications. Unlike
+    /// `frame_us`, this includes pacing, admission waits, and retry delay, so
+    /// its reciprocal is the producer's measured delivered rate.
+    pub(crate) cadence_us: u64,
     pub(crate) frame_us: u64,
     pub(crate) geometry_us: u64,
     pub(crate) prepare_us: u64,
@@ -51,6 +55,7 @@ pub(crate) struct GpuLoggerSample {
 
 const EMPTY_SAMPLE: GpuLoggerSample = GpuLoggerSample {
     frame_index: 0,
+    cadence_us: 0,
     frame_us: 0,
     geometry_us: 0,
     prepare_us: 0,
@@ -190,6 +195,7 @@ impl GpuLoggerState {
         matches
     }
 
+    #[allow(dead_code)]
     fn stop_source_at(&mut self, source: GpuLoggerSource, now_ms: u64) -> bool {
         self.expire_at(now_ms);
         let matches = self.active.is_some_and(|active| active.source == source);
@@ -264,6 +270,7 @@ pub(crate) fn release(lease: GpuLoggerLease) -> bool {
 
 /// Administrative source-scoped stop used when the requester no longer has
 /// its most recent renewal token.
+#[allow(dead_code)]
 pub(crate) fn stop_source(source: GpuLoggerSource) -> bool {
     GPU_LOGGER.lock().stop_source_at(source, now_ms())
 }
@@ -277,6 +284,13 @@ pub(crate) fn publish(source: GpuLoggerSource, sample: GpuLoggerSample) -> bool 
 
 pub(crate) fn status() -> GpuLoggerStatus {
     GPU_LOGGER.lock().status_at(now_ms())
+}
+
+/// Read the newest complete sample independently of the visual lease. This
+/// lets Shell2 inspect baseline producer cadence without enabling the Spirit
+/// override and perturbing the shared GPU lane it is measuring.
+pub(crate) fn latest_sample(source: GpuLoggerSource) -> GpuLoggerSample {
+    GPU_LOGGER.lock().latest_sample(source)
 }
 
 /// Spirit-worker-only read of the active override.  Expiry is enforced here,
@@ -423,14 +437,9 @@ pub(crate) fn build_gpu_rect_layers(snapshot: ActiveSnapshot) -> GpuLoggerRectLa
 /// Flat compatibility view of the panel.  GPU producers must submit it using
 /// the boundaries returned by [`build_gpu_rect_layers`], not as one unordered
 /// worklist.
-pub(crate) fn build_gpu_rects(snapshot: ActiveSnapshot) -> Vec<GpgpuSolidRect> {
+#[cfg(test)]
+fn build_gpu_rects(snapshot: ActiveSnapshot) -> Vec<GpgpuSolidRect> {
     build_gpu_rect_layers(snapshot).rects
-}
-
-pub(crate) fn append_gpu_rects(rects: &mut Vec<GpgpuSolidRect>, snapshot: ActiveSnapshot) {
-    rects.clear();
-    let mut sink = GpuRectSink { rects };
-    draw_panel(&mut sink, snapshot);
 }
 
 /// Allocation-free CPU reference/fallback rasterizer for the cursor's direct
@@ -483,30 +492,27 @@ fn draw_panel_foreground(sink: &mut impl RectSink, snapshot: ActiveSnapshot) {
     draw_text(sink, 203, 16, source_label(snapshot.source), 1, CYAN);
     draw_text(sink, 16, 39, b"DIRECT CURSOR / NO UI4", 1, MUTED);
     draw_text(sink, 190, 39, b"FPS", 1, MUTED);
-    let fps = if sample.frame_us == 0 {
-        0
-    } else {
-        1_000_000u64 / sample.frame_us.max(1)
-    };
+    let fps = fps_from_cadence_us(sample.cadence_us);
     draw_u64_right(sink, 240, 39, fps, 1, CYAN);
 
     let health = health_color(sample);
     sink.rect(238, 16, 4, 10, health);
 
     draw_metric(sink, METRIC_ROW_Y[0], b"FRAME", sample.frame_index);
-    draw_metric(sink, METRIC_ROW_Y[1], b"FRAME US", sample.frame_us);
-    draw_metric(sink, METRIC_ROW_Y[2], b"GEOM US", sample.geometry_us);
-    draw_metric(sink, METRIC_ROW_Y[3], b"PREP US", sample.prepare_us);
-    draw_metric(sink, METRIC_ROW_Y[4], b"WAIT US", sample.retire_wait_us);
-    draw_metric(sink, METRIC_ROW_Y[5], b"POLL", sample.poll_iters);
-    draw_metric(sink, METRIC_ROW_Y[6], b"OBJECTS", sample.objects);
-    draw_metric(sink, METRIC_ROW_Y[7], b"DRAWS", sample.draws);
-    draw_metric(sink, METRIC_ROW_Y[8], b"TRIANGLES", sample.triangles);
-    draw_text(sink, 14, METRIC_ROW_Y[9], b"RETRY B/I", 1, MUTED);
+    draw_metric(sink, METRIC_ROW_Y[1], b"CADENCE US", sample.cadence_us);
+    draw_metric(sink, METRIC_ROW_Y[2], b"RENDER US", sample.frame_us);
+    draw_metric(sink, METRIC_ROW_Y[3], b"GEOM US", sample.geometry_us);
+    draw_metric(sink, METRIC_ROW_Y[4], b"PREP US", sample.prepare_us);
+    draw_metric(sink, METRIC_ROW_Y[5], b"WAIT US", sample.retire_wait_us);
+    draw_metric(sink, METRIC_ROW_Y[6], b"POLL", sample.poll_iters);
+    draw_metric(sink, METRIC_ROW_Y[7], b"OBJECTS", sample.objects);
+    draw_metric(sink, METRIC_ROW_Y[8], b"DRAWS", sample.draws);
+    draw_metric(sink, METRIC_ROW_Y[9], b"TRIANGLES", sample.triangles);
+    draw_text(sink, 14, METRIC_ROW_Y[10], b"RETRY B/I", 1, MUTED);
     draw_pair_right(
         sink,
         240,
-        METRIC_ROW_Y[9],
+        METRIC_ROW_Y[10],
         sample.busy_retries,
         sample.incomplete_retries,
         if sample.busy_retries == 0 && sample.incomplete_retries == 0 {
@@ -516,8 +522,15 @@ fn draw_panel_foreground(sink: &mut impl RectSink, snapshot: ActiveSnapshot) {
         },
     );
 
-    draw_meter_foreground(sink, 210, b"F", sample.frame_us, 33_334, frame_color(sample.frame_us));
-    draw_meter_foreground(sink, 225, b"G", sample.geometry_us, sample.frame_us.max(1), CYAN);
+    draw_meter_foreground(
+        sink,
+        210,
+        b"C",
+        sample.cadence_us,
+        33_334,
+        frame_color(sample.cadence_us),
+    );
+    draw_meter_foreground(sink, 225, b"R", sample.frame_us, sample.cadence_us.max(1), CYAN);
     draw_meter_foreground(
         sink,
         240,
@@ -568,10 +581,18 @@ fn frame_color(frame_us: u64) -> Color {
     }
 }
 
+pub(crate) const fn fps_from_cadence_us(cadence_us: u64) -> u64 {
+    if cadence_us == 0 {
+        0
+    } else {
+        1_000_000u64.saturating_add(cadence_us / 2) / cadence_us
+    }
+}
+
 fn health_color(sample: GpuLoggerSample) -> Color {
-    if sample.incomplete_retries != 0 || sample.frame_us > 33_334 {
+    if sample.incomplete_retries != 0 || sample.cadence_us > 33_334 {
         RED
-    } else if sample.busy_retries != 0 || sample.frame_us > 16_667 {
+    } else if sample.busy_retries != 0 || sample.cadence_us > 16_667 {
         AMBER
     } else {
         GREEN
@@ -731,6 +752,7 @@ mod tests {
     fn sample() -> GpuLoggerSample {
         GpuLoggerSample {
             frame_index: 73,
+            cadence_us: 40_000,
             frame_us: 16_250,
             geometry_us: 8_000,
             prepare_us: 1_500,
@@ -742,6 +764,26 @@ mod tests {
             busy_retries: 1,
             incomplete_retries: 0,
         }
+    }
+
+    #[test]
+    fn fps_is_measured_from_successful_publish_cadence() {
+        assert_eq!(fps_from_cadence_us(0), 0);
+        assert_eq!(fps_from_cadence_us(16_667), 60);
+        assert_eq!(fps_from_cadence_us(40_000), 25);
+        assert_eq!(fps_from_cadence_us(142_857), 7);
+    }
+
+    #[test]
+    fn latest_sample_survives_visual_lease_release() {
+        let mut state = GpuLoggerState::new();
+        let lease = state
+            .request_at(GpuLoggerSource::Helio, 1_000, 100)
+            .unwrap();
+        assert!(state.publish_at(GpuLoggerSource::Helio, sample(), 101));
+        assert!(state.release_at(lease, 102));
+        assert!(!state.status_at(103).active);
+        assert_eq!(state.latest_sample(GpuLoggerSource::Helio), sample());
     }
 
     #[test]

@@ -10,6 +10,7 @@
 use core::{fmt, str};
 
 pub mod render_ir;
+pub mod replay;
 
 /// Magic bytes at the start of every HELIOA container.
 pub const MAGIC: [u8; 8] = *b"HELIOA\0\0";
@@ -28,6 +29,7 @@ pub enum SectionKind {
     IntelXeLpIsa,
     CompilerMetadata,
     NormalizedRenderIr,
+    RenderReplay,
     Unknown(u16),
 }
 
@@ -42,6 +44,7 @@ impl SectionKind {
             // Reserved for the normalized render IR being paved between Helio
             // and TRUEOS. Kept here as one point to align with its producer.
             6 => Self::NormalizedRenderIr,
+            7 => Self::RenderReplay,
             other => Self::Unknown(other),
         }
     }
@@ -54,6 +57,7 @@ impl SectionKind {
             Self::IntelXeLpIsa => 4,
             Self::CompilerMetadata => 5,
             Self::NormalizedRenderIr => 6,
+            Self::RenderReplay => 7,
             Self::Unknown(raw) => raw,
         }
     }
@@ -208,6 +212,17 @@ impl<'a> Artifact<'a> {
         render_ir::Program::parse(section.data).map_err(Error::InvalidRenderIr)
     }
 
+    /// Opens Helio's symbolic indexed-draw replay plan after its kind is checked.
+    pub fn replay_plan(&self) -> Result<replay::ReplayPlan<'a>, Error> {
+        self.replay_plan_named(replay::SECTION_NAME)
+    }
+
+    pub fn replay_plan_named(&self, section_name: &str) -> Result<replay::ReplayPlan<'a>, Error> {
+        let section =
+            self.require(RequiredSection::new(section_name, SectionKind::RenderReplay))?;
+        replay::ReplayPlan::parse(section.data).map_err(Error::InvalidReplay)
+    }
+
     fn raw_entries(&self) -> RawEntries<'a> {
         RawEntries {
             bytes: self.bytes,
@@ -352,6 +367,7 @@ pub enum Error {
         actual: SectionKind,
     },
     InvalidRenderIr(render_ir::Error),
+    InvalidReplay(replay::Error),
 }
 
 impl fmt::Display for Error {

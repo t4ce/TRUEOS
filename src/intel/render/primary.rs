@@ -1396,7 +1396,7 @@ fn submit_resident_scene_geometry_batched(
     if !RESIDENT_SCENE_BATCH_PATH_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "render";
-            "draw3d: frame launch path=one-guc-scene-batch draws={} secondaries={} render_submits=1 per_mesh_context_rebuilds=0 target={}x{} fragment_contract=standalone-simd16-corrected dispatch=010 ksp0=simd16 ksp1=off ksp2=off vector_mask=1 color=specialized-per-draw\n",
+            "draw3d: frame launch path=helio-indexed-indirect-v1->one-guc-scene-schedule draws={} secondaries={} command_owner=helio-gpu-record draw_parameter_translation=0 guc_role=schedule-only render_submits=1 per_mesh_context_rebuilds=0 target={}x{} fragment_contract=standalone-simd16-corrected dispatch=010 ksp0=simd16 ksp1=off ksp2=off vector_mask=1 color=specialized-per-draw\n",
             draws.len(),
             secondary_count,
             target_width,

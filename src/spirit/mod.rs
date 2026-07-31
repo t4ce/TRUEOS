@@ -1557,7 +1557,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                         if gpu_logger_frames == 1 || gpu_logger_frames.is_multiple_of(16) {
                             crate::log_info!(
                                 target: "gfx";
-                                "trueos-spirit: gpu-logger frame={} source={:?} generation={} fence={} sequence={} path={:?} rects={} gpu_submits={} gpu_submit_ms={} release={} sample_frame={} frame_us={} geometry_us={} prepare_us={} retire_wait_us={} objects={} draws={} triangles={} retries={}/{} carrier=hardware-cursor display_release=surflive ui4_publish=0 composition=0\n",
+                                "trueos-spirit: gpu-logger frame={} source={:?} generation={} fence={} sequence={} path={:?} rects={} gpu_submits={} gpu_submit_ms={} release={} sample_frame={} cadence_us={} fps={} frame_us={} geometry_us={} prepare_us={} retire_wait_us={} objects={} draws={} triangles={} retries={}/{} carrier=hardware-cursor display_release=surflive ui4_publish=0 composition=0\n",
                                 gpu_logger_frames,
                                 snapshot.source,
                                 snapshot.generation,
@@ -1569,6 +1569,8 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                                 submitted.gpu_submit_ms,
                                 submitted.release_sequence,
                                 snapshot.sample.frame_index,
+                                snapshot.sample.cadence_us,
+                                gpu_logger::fps_from_cadence_us(snapshot.sample.cadence_us),
                                 snapshot.sample.frame_us,
                                 snapshot.sample.geometry_us,
                                 snapshot.sample.prepare_us,

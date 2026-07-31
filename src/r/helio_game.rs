@@ -6,12 +6,13 @@
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, Ordering};
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 
 const GAME_ARTIFACT: &[u8] = include_bytes!("../../assets/helio/simple-cube.trueos.intel.helio");
 const OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(8);
 const PLANE_SLOT: usize = crate::ui4::RGB_OVERLAY_PLANE_SLOT_2;
 const MARGIN: u32 = 48;
+const TRANSPARENT_CLEAR_RGBA: [u8; 4] = [0, 0, 0, 0];
 
 const STATE_IDLE: u8 = 0;
 const STATE_PHASE_MASK: u8 = 0xf0;
@@ -78,7 +79,7 @@ fn game_state() -> GameState {
 
 /// Queue the embedded game for the already-resident AP1/UI runtime service.
 pub(crate) fn request_launch(example_id: u8) -> LaunchRequest {
-    if !matches!(example_id, 1 | 2) {
+    if !(1..=4).contains(&example_id) {
         return LaunchRequest::Reserved;
     }
     match GAME_STATE.compare_exchange(
@@ -314,7 +315,7 @@ fn create_game_frame(width: u32, height: u32) -> Result<crate::ui4::FrameHandle,
         format: crate::ui4::ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
-        base_color: Some(crate::ui4::PremultipliedRgba8::from_straight_rgba(0, 0, 0, u8::MAX)),
+        base_color: Some(crate::ui4::PremultipliedRgba8::TRANSPARENT),
     })?)
 }
 
@@ -447,6 +448,7 @@ fn release_resident_scene(resident: Vec<ResidentTriangle>) {
 fn gpu_logger_sample(
     result: &crate::intel::render::ResidentSceneFrameResult,
     frame_index: u64,
+    cadence_us: u64,
     objects: usize,
     resident: &[ResidentTriangle],
     busy_retries: u64,
@@ -454,6 +456,7 @@ fn gpu_logger_sample(
 ) -> crate::spirit::gpu_logger::GpuLoggerSample {
     crate::spirit::gpu_logger::GpuLoggerSample {
         frame_index,
+        cadence_us,
         frame_us: result.frame_us,
         geometry_us: result.geometry_us,
         prepare_us: result.geometry_prepare_us,
@@ -604,10 +607,29 @@ fn make_resident_batches(
     let mut resident = Vec::with_capacity(batches.len());
     for batch in batches {
         match crate::intel::render::create_resident_triangle_mesh(&batch.vertices, &batch.indices) {
-            Ok(mesh) => resident.push(ResidentTriangle {
-                mesh,
-                rgba: batch.rgba,
-            }),
+            Ok(mesh) => {
+                let args = batch
+                    .draw_indexed_indirect()
+                    .map_err(GameError::Artifact)?;
+                if let Err(error) =
+                    crate::intel::render::update_resident_triangle_draw_indexed_indirect(
+                        &mesh,
+                        args.index_count,
+                        args.instance_count,
+                        args.first_index,
+                        args.base_vertex,
+                        args.first_instance,
+                    )
+                {
+                    let _ = crate::intel::render::release_resident_triangle_mesh(&mesh);
+                    release_resident_scene(resident);
+                    return Err(GameError::Render(error));
+                }
+                resident.push(ResidentTriangle {
+                    mesh,
+                    rgba: batch.rgba,
+                });
+            }
             Err(error) => {
                 release_resident_scene(resident);
                 return Err(GameError::Render(error));
@@ -629,6 +651,18 @@ fn update_resident_batches(
             &resident.mesh,
             &batch.vertices,
             &batch.indices,
+        )
+        .map_err(GameError::Render)?;
+        let args = batch
+            .draw_indexed_indirect()
+            .map_err(GameError::Artifact)?;
+        crate::intel::render::update_resident_triangle_draw_indexed_indirect(
+            &resident.mesh,
+            args.index_count,
+            args.instance_count,
+            args.first_index,
+            args.base_vertex,
+            args.first_instance,
         )
         .map_err(GameError::Render)?;
     }
@@ -676,9 +710,146 @@ fn apply_churn_key_actions(
     }
 }
 
-async fn start_cube() -> Result<(GameSurface, Vec<ResidentTriangle>, usize), GameError> {
+enum PortedSceneEngine {
+    Battle(trueos_helio_runtime::battle::Engine),
+    Pendulum(trueos_helio_runtime::pendulum_bigcloth::Engine),
+}
+
+impl PortedSceneEngine {
+    fn decode(example_id: u8) -> Result<Self, trueos_helio_runtime::Error> {
+        match example_id {
+            3 => trueos_helio_runtime::battle::Spec::decode_artifact(GAME_ARTIFACT)
+                .and_then(trueos_helio_runtime::battle::Engine::new)
+                .map(Self::Battle),
+            4 => trueos_helio_runtime::pendulum_bigcloth::Spec::decode_artifact(GAME_ARTIFACT)
+                .and_then(trueos_helio_runtime::pendulum_bigcloth::Engine::new)
+                .map(Self::Pendulum),
+            _ => Err(trueos_helio_runtime::Error::Artifact),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Battle(_) => "shape-battle-royale",
+            Self::Pendulum(_) => "pendulum-bigcloth",
+        }
+    }
+
+    fn controls(&self) -> &'static str {
+        match self {
+            Self::Battle(_) => "WASD+Space+Shift,left-drag-look,+/-shape-count",
+            Self::Pendulum(_) => "WASD+Space+Shift,left-drag-look,C-pause,R-reset",
+        }
+    }
+
+    fn object_count(&self) -> usize {
+        match self {
+            Self::Battle(engine) => engine.shape_count(),
+            Self::Pendulum(engine) => engine.segment_count(),
+        }
+    }
+
+    fn camera(&self) -> trueos_helio_runtime::Camera {
+        match self {
+            Self::Battle(engine) => engine.camera(),
+            Self::Pendulum(engine) => engine.camera(),
+        }
+    }
+
+    fn set_camera(
+        &mut self,
+        camera: trueos_helio_runtime::Camera,
+    ) -> Result<(), trueos_helio_runtime::Error> {
+        match self {
+            Self::Battle(engine) => engine.set_camera(camera),
+            Self::Pendulum(engine) => engine.set_camera(camera),
+        }
+    }
+
+    fn step(
+        &mut self,
+        aspect: f32,
+    ) -> Result<&[trueos_helio_runtime::churn::Batch], trueos_helio_runtime::Error> {
+        match self {
+            Self::Battle(engine) => engine.step(aspect),
+            Self::Pendulum(engine) => engine.step(aspect),
+        }
+    }
+
+    fn batches(&self) -> &[trueos_helio_runtime::churn::Batch] {
+        match self {
+            Self::Battle(engine) => engine.batches(),
+            Self::Pendulum(engine) => engine.batches(),
+        }
+    }
+
+    fn apply_key_actions(
+        &mut self,
+        window: crate::ui4::WindowId,
+        events: &[crate::ui4::winit_input::Event],
+    ) {
+        use crate::ui4::winit_input::{ElementState, Event, KeyCode, PhysicalKey, WindowEvent};
+
+        for event in events {
+            let Event::WindowEvent {
+                window_id,
+                event:
+                    WindowEvent::KeyboardInput {
+                        event:
+                            crate::ui4::winit_input::KeyEvent {
+                                physical_key: PhysicalKey::Code(key),
+                                state: ElementState::Pressed,
+                                ..
+                            },
+                    },
+                ..
+            } = *event
+            else {
+                continue;
+            };
+            if window_id != window {
+                continue;
+            }
+            match self {
+                Self::Battle(engine) => {
+                    let delta = match key {
+                        KeyCode::Equal | KeyCode::NumpadAdd => 1,
+                        KeyCode::Minus | KeyCode::NumpadSubtract => -1,
+                        _ => continue,
+                    };
+                    engine.adjust_shape_count(delta);
+                    crate::log_info!(
+                        target: "helio";
+                        "helio battle input shape_count={} action=restart source=ui4-winit-bridge\n",
+                        engine.shape_count(),
+                    );
+                }
+                Self::Pendulum(engine) => match key {
+                    KeyCode::KeyC => {
+                        engine.toggle_enabled();
+                        crate::log_info!(
+                            target: "helio";
+                            "helio pendulum input physics={} source=ui4-winit-bridge\n",
+                            engine.enabled(),
+                        );
+                    }
+                    KeyCode::KeyR => {
+                        engine.reset();
+                        crate::log_info!(
+                            target: "helio";
+                            "helio pendulum input action=reset source=ui4-winit-bridge\n",
+                        );
+                    }
+                    _ => {}
+                },
+            }
+        }
+    }
+}
+
+async fn run_cube() -> Result<(), GameError> {
     let mut surface = create_surface()?;
-    let scene = match trueos_helio_runtime::decode_artifact(
+    let initial_scene = match trueos_helio_runtime::decode_artifact(
         GAME_ARTIFACT,
         surface.width as f32 / surface.height as f32,
         trueos_helio_runtime::Camera::helio_simple_graph(),
@@ -689,14 +860,16 @@ async fn start_cube() -> Result<(GameSurface, Vec<ResidentTriangle>, usize), Gam
             return Err(GameError::Artifact(error));
         }
     };
-    let resident = match make_resident_scene(&scene) {
+    let clear_rgba = TRANSPARENT_CLEAR_RGBA;
+    let triangle_count = initial_scene.triangles.len();
+    let resident = match make_resident_scene(&initial_scene) {
         Ok(resident) => resident,
         Err(error) => {
             destroy_unpublished_surface(surface);
             return Err(error);
         }
     };
-    let rendered = match render_publish(&mut surface, &resident, scene.clear_rgba).await {
+    let rendered = match render_publish(&mut surface, &resident, clear_rgba).await {
         Ok(rendered) => rendered,
         Err(error) => {
             release_resident_scene(resident);
@@ -704,13 +877,154 @@ async fn start_cube() -> Result<(GameSurface, Vec<ResidentTriangle>, usize), Gam
             return Err(error);
         }
     };
-    publish_gpu_logger_sample(gpu_logger_sample(&rendered, 1, 1, &resident, 0, 0));
-    Ok((surface, resident, scene.triangles.len()))
+    publish_gpu_logger_sample(gpu_logger_sample(&rendered, 1, 0, 1, &resident, 0, 0));
+
+    let window = surface.window.expect("published Helio cube window");
+    let mut input = crate::ui4::winit_input::EventLoopInput::new(OWNER);
+    if !input.register_window(window) {
+        release_resident_scene(resident);
+        destroy_unpublished_surface(surface);
+        return Err(GameError::Render("helio-input-window-capacity"));
+    }
+    GAME_STATE.store(STATE_ONLINE | 1, Ordering::Release);
+    *LAST_ERROR.lock() = None;
+    crate::log_info!(
+        target: "helio";
+        "helio example=1 name=simple-cube online artifact_bytes={} normalized_triangles={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied resize=ui4-broker->render-new-native-ring->atomic-frame-swap path=helioa-v1+render-ir-v1->resident-triangles->one-guc-render->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+        GAME_ARTIFACT.len(),
+        triangle_count,
+        surface.frame.raw(),
+        window.raw(),
+        surface.width,
+        surface.height,
+        PLANE_SLOT,
+    );
+
+    let mut retired_frames = Vec::new();
+    let mut pending_resize: Option<PendingGameResize> = None;
+    let mut frame_index = 1u64;
+    loop {
+        retire_frames(&mut retired_frames);
+        let _ = input.poll();
+
+        if pending_resize.is_none()
+            && let Some((width, height)) = desired_resize(&surface)
+        {
+            match prepare_resize(&surface, width, height) {
+                Ok(replacement) => {
+                    let scene = match trueos_helio_runtime::decode_artifact(
+                        GAME_ARTIFACT,
+                        width as f32 / height as f32,
+                        trueos_helio_runtime::Camera::helio_simple_graph(),
+                    ) {
+                        Ok(scene) => scene,
+                        Err(error) => {
+                            let _ = crate::ui4::destroy_frame(replacement.frame);
+                            release_resident_scene(resident);
+                            destroy_unpublished_surface(surface);
+                            return Err(GameError::Artifact(error));
+                        }
+                    };
+                    if let Err(error) = update_resident_scene(&resident, &scene) {
+                        let _ = crate::ui4::destroy_frame(replacement.frame);
+                        release_resident_scene(resident);
+                        destroy_unpublished_surface(surface);
+                        return Err(error);
+                    }
+                    crate::log_info!(
+                        target: "helio";
+                        "helio resize prepared example=1 window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap old_front=retain-surflive\n",
+                        window.raw(),
+                        surface.width,
+                        surface.height,
+                        width,
+                        height,
+                        replacement.frame.raw(),
+                    );
+                    pending_resize = Some(replacement);
+                }
+                Err(error) => {
+                    crate::log_warn!(
+                        target: "helio";
+                        "helio resize deferred example=1 window={} old={}x{} requested={}x{} error={:?} action=retain-current-frame-and-reconcile\n",
+                        window.raw(),
+                        surface.width,
+                        surface.height,
+                        width,
+                        height,
+                        error,
+                    );
+                }
+            }
+        }
+
+        let Some(replacement) = pending_resize else {
+            Timer::after(Duration::from_millis(16)).await;
+            continue;
+        };
+        let rendered = match render_frame(
+            replacement.frame,
+            replacement.width,
+            replacement.height,
+            &resident,
+            clear_rgba,
+        )
+        .await
+        {
+            Ok(rendered) => rendered,
+            Err(GameError::Frame(crate::ui4::FramePoolError::Busy))
+            | Err(GameError::Render("helio-incomplete-direct-frame")) => {
+                Timer::after(Duration::from_millis(16)).await;
+                continue;
+            }
+            Err(error) => {
+                let _ = crate::ui4::destroy_frame(replacement.frame);
+                release_resident_scene(resident);
+                destroy_unpublished_surface(surface);
+                return Err(error);
+            }
+        };
+        pending_resize = None;
+        match commit_resize(&mut surface, replacement) {
+            Ok(previous) => {
+                retired_frames.push(previous);
+                frame_index = frame_index.saturating_add(1);
+                publish_gpu_logger_sample(gpu_logger_sample(
+                    &rendered,
+                    frame_index,
+                    0,
+                    1,
+                    &resident,
+                    0,
+                    0,
+                ));
+                crate::log_info!(
+                    target: "helio";
+                    "helio resize committed example=1 window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1 cpu_readback=0 cpu_frame_copy=0\n",
+                    window.raw(),
+                    surface.width,
+                    surface.height,
+                    surface.frame.raw(),
+                );
+            }
+            Err(error) => {
+                let _ = crate::ui4::destroy_frame(replacement.frame);
+                crate::log_warn!(
+                    target: "helio";
+                    "helio resize commit rejected example=1 window={} requested={}x{} error={:?} action=old-front-restored\n",
+                    window.raw(),
+                    replacement.width,
+                    replacement.height,
+                    error,
+                );
+            }
+        }
+    }
 }
 
 async fn run_churn() -> Result<(), GameError> {
     let mut surface = create_surface()?;
-    let aspect = surface.width as f32 / surface.height as f32;
+    let initial_aspect = surface.width as f32 / surface.height as f32;
     let spec = match trueos_helio_runtime::churn::Spec::decode_artifact(GAME_ARTIFACT) {
         Ok(spec) => spec,
         Err(error) => {
@@ -718,7 +1032,7 @@ async fn run_churn() -> Result<(), GameError> {
             return Err(GameError::Artifact(error));
         }
     };
-    let clear_rgba = spec.clear_rgba;
+    let clear_rgba = TRANSPARENT_CLEAR_RGBA;
     let mut engine = match trueos_helio_runtime::churn::Engine::new(spec) {
         Ok(engine) => engine,
         Err(error) => {
@@ -726,20 +1040,11 @@ async fn run_churn() -> Result<(), GameError> {
             return Err(GameError::Artifact(error));
         }
     };
-    if let Err(error) = engine.step(aspect) {
+    if let Err(error) = engine.step(initial_aspect) {
         destroy_unpublished_surface(surface);
         return Err(GameError::Artifact(error));
     }
-    let floor = match engine.floor(aspect) {
-        Ok(floor) => floor,
-        Err(error) => {
-            destroy_unpublished_surface(surface);
-            return Err(GameError::Artifact(error));
-        }
-    };
-    let mut initial_batches = engine.batches().to_vec();
-    initial_batches.push(floor);
-    let resident = match make_resident_batches(&initial_batches) {
+    let resident = match make_resident_batches(engine.batches()) {
         Ok(resident) => resident,
         Err(error) => {
             destroy_unpublished_surface(surface);
@@ -756,7 +1061,11 @@ async fn run_churn() -> Result<(), GameError> {
     let mut busy_retries = 0u64;
     let mut incomplete_retries = 0u64;
     let mut last_sample: Option<crate::spirit::gpu_logger::GpuLoggerSample> = None;
+    let mut last_successful_publish: Option<Instant> = None;
+    let mut retired_frames = Vec::new();
+    let mut pending_resize: Option<PendingGameResize> = None;
     let result = loop {
+        retire_frames(&mut retired_frames);
         if !first_frame && !frame_prepared {
             let Some(window) = surface.window else {
                 break Err(GameError::InvalidFrame);
@@ -765,6 +1074,42 @@ async fn run_churn() -> Result<(), GameError> {
             apply_churn_key_actions(&mut engine, window, &events);
             let camera_changed = fly_camera.apply_events(&events)
                 | fly_camera.apply_held_keys(&input, window, 0.033);
+            if pending_resize.is_none()
+                && let Some((width, height)) = desired_resize(&surface)
+            {
+                match prepare_resize(&surface, width, height) {
+                    Ok(replacement) => {
+                        crate::log_info!(
+                            target: "helio";
+                            "helio resize prepared example=2 window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap old_front=retain-surflive\n",
+                            window.raw(),
+                            surface.width,
+                            surface.height,
+                            width,
+                            height,
+                            replacement.frame.raw(),
+                        );
+                        pending_resize = Some(replacement);
+                    }
+                    Err(error) => {
+                        crate::log_warn!(
+                            target: "helio";
+                            "helio resize deferred example=2 window={} old={}x{} requested={}x{} error={:?} action=retain-current-frame-and-reconcile\n",
+                            window.raw(),
+                            surface.width,
+                            surface.height,
+                            width,
+                            height,
+                            error,
+                        );
+                    }
+                }
+            }
+            let (render_width, render_height) = pending_resize
+                .map_or((surface.width, surface.height), |replacement| {
+                    (replacement.width, replacement.height)
+                });
+            let aspect = render_width as f32 / render_height as f32;
             if camera_changed {
                 if let Err(error) = engine.set_camera(fly_camera.camera) {
                     break Err(GameError::Artifact(error));
@@ -776,31 +1121,57 @@ async fn run_churn() -> Result<(), GameError> {
             if let Err(error) = update_resident_batches(&resident, engine.batches()) {
                 break Err(error);
             }
-            if camera_changed {
-                let floor = match engine.floor(aspect) {
-                    Ok(floor) => floor,
-                    Err(error) => break Err(GameError::Artifact(error)),
-                };
-                let Some(floor_resident) = resident.last() else {
-                    break Err(GameError::Render("helio-churn-floor-batch"));
-                };
-                if let Err(error) = crate::intel::render::update_resident_triangle_mesh(
-                    &floor_resident.mesh,
-                    &floor.vertices,
-                    &floor.indices,
-                ) {
-                    break Err(GameError::Render(error));
-                }
-            }
             frame_prepared = true;
         }
-        match render_publish(&mut surface, &resident, clear_rgba).await {
+        let (render_frame_handle, render_width, render_height) = pending_resize
+            .map_or((surface.frame, surface.width, surface.height), |replacement| {
+                (replacement.frame, replacement.width, replacement.height)
+            });
+        match render_frame(render_frame_handle, render_width, render_height, &resident, clear_rgba)
+            .await
+        {
             Ok(rendered) => {
+                if let Some(replacement) = pending_resize.take() {
+                    match commit_resize(&mut surface, replacement) {
+                        Ok(previous) => {
+                            retired_frames.push(previous);
+                            crate::log_info!(
+                                target: "helio";
+                                "helio resize committed example=2 window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1 cpu_readback=0 cpu_frame_copy=0\n",
+                                surface.window.map_or(0, crate::ui4::WindowId::raw),
+                                surface.width,
+                                surface.height,
+                                surface.frame.raw(),
+                            );
+                        }
+                        Err(error) => {
+                            let _ = crate::ui4::destroy_frame(replacement.frame);
+                            frame_prepared = false;
+                            crate::log_warn!(
+                                target: "helio";
+                                "helio resize commit rejected example=2 requested={}x{} error={:?} action=old-front-restored-and-reproject\n",
+                                replacement.width,
+                                replacement.height,
+                                error,
+                            );
+                            Timer::after(Duration::from_millis(16)).await;
+                            continue;
+                        }
+                    }
+                } else if let Err(error) = publish_surface_window(&mut surface) {
+                    break Err(error);
+                }
                 frame_prepared = false;
                 frame_index = frame_index.saturating_add(1);
+                let published_at = Instant::now();
+                let cadence_us = last_successful_publish
+                    .map(|previous| published_at.saturating_duration_since(previous).as_micros())
+                    .unwrap_or(0);
+                last_successful_publish = Some(published_at);
                 let sample = gpu_logger_sample(
                     &rendered,
                     frame_index,
+                    cadence_us,
                     engine.active_objects(),
                     &resident,
                     busy_retries,
@@ -846,7 +1217,7 @@ async fn run_churn() -> Result<(), GameError> {
             }
             crate::log_info!(
                 target: "helio";
-                "helio example=2 name=churn-benchmark online artifact_bytes={} active_objects={} resident_batches={} frame={} window={} extent={}x{} plane={} input=ui4-owner-broker->winit-shaped-events controls=WASD+Space+Shift,left-drag-look,+/- path=helioa-v1+churn-v1->resident-batches->one-guc-render->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+                "helio example=2 name=churn-benchmark online artifact_bytes={} active_objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba floor=none alpha=premultiplied animation_rate=1.5x producer_pacing=relative-post-work delay_ms=33 nominal_ceiling_fps=30 input=ui4-owner-broker->winit-shaped-events controls=WASD+Space+Shift,left-drag-look,+/- resize=ui4-broker->render-new-native-ring->atomic-frame-swap path=helioa-v1+churn-v1->resident-batches->one-guc-render->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
                 GAME_ARTIFACT.len(),
                 engine.active_objects(),
                 resident.len(),
@@ -860,6 +1231,221 @@ async fn run_churn() -> Result<(), GameError> {
         }
         Timer::after(Duration::from_millis(33)).await;
     };
+    retire_frames(&mut retired_frames);
+    release_resident_scene(resident);
+    destroy_unpublished_surface(surface);
+    result
+}
+
+async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
+    let mut surface = create_surface()?;
+    let initial_aspect = surface.width as f32 / surface.height as f32;
+    let mut engine = match PortedSceneEngine::decode(example_id) {
+        Ok(engine) => engine,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(GameError::Artifact(error));
+        }
+    };
+    if let Err(error) = engine.step(initial_aspect) {
+        destroy_unpublished_surface(surface);
+        return Err(GameError::Artifact(error));
+    }
+    let resident = match make_resident_batches(engine.batches()) {
+        Ok(resident) => resident,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(error);
+        }
+    };
+
+    let mut input = crate::ui4::winit_input::EventLoopInput::new(OWNER);
+    let mut fly_camera = FlyCamera::new(engine.camera());
+    let mut first_frame = true;
+    let mut frame_prepared = true;
+    let mut frame_index = 0u64;
+    let mut busy_retries = 0u64;
+    let mut incomplete_retries = 0u64;
+    let mut last_sample: Option<crate::spirit::gpu_logger::GpuLoggerSample> = None;
+    let mut last_successful_publish: Option<Instant> = None;
+    let mut retired_frames = Vec::new();
+    let mut pending_resize: Option<PendingGameResize> = None;
+    let result = loop {
+        retire_frames(&mut retired_frames);
+        if !first_frame && !frame_prepared {
+            let Some(window) = surface.window else {
+                break Err(GameError::InvalidFrame);
+            };
+            let events = input.poll();
+            engine.apply_key_actions(window, &events);
+            let camera_changed = fly_camera.apply_events(&events)
+                | fly_camera.apply_held_keys(&input, window, 0.033);
+            if pending_resize.is_none()
+                && let Some((width, height)) = desired_resize(&surface)
+            {
+                match prepare_resize(&surface, width, height) {
+                    Ok(replacement) => {
+                        crate::log_info!(
+                            target: "helio";
+                            "helio resize prepared example={} window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap old_front=retain-surflive\n",
+                            example_id,
+                            window.raw(),
+                            surface.width,
+                            surface.height,
+                            width,
+                            height,
+                            replacement.frame.raw(),
+                        );
+                        pending_resize = Some(replacement);
+                    }
+                    Err(error) => {
+                        crate::log_warn!(
+                            target: "helio";
+                            "helio resize deferred example={} window={} old={}x{} requested={}x{} error={:?} action=retain-current-frame-and-reconcile\n",
+                            example_id,
+                            window.raw(),
+                            surface.width,
+                            surface.height,
+                            width,
+                            height,
+                            error,
+                        );
+                    }
+                }
+            }
+            let (render_width, render_height) = pending_resize
+                .map_or((surface.width, surface.height), |replacement| {
+                    (replacement.width, replacement.height)
+                });
+            if camera_changed && let Err(error) = engine.set_camera(fly_camera.camera) {
+                break Err(GameError::Artifact(error));
+            }
+            if let Err(error) = engine.step(render_width as f32 / render_height as f32) {
+                break Err(GameError::Artifact(error));
+            }
+            if let Err(error) = update_resident_batches(&resident, engine.batches()) {
+                break Err(error);
+            }
+            frame_prepared = true;
+        }
+
+        let (render_frame_handle, render_width, render_height) = pending_resize
+            .map_or((surface.frame, surface.width, surface.height), |replacement| {
+                (replacement.frame, replacement.width, replacement.height)
+            });
+        match render_frame(
+            render_frame_handle,
+            render_width,
+            render_height,
+            &resident,
+            TRANSPARENT_CLEAR_RGBA,
+        )
+        .await
+        {
+            Ok(rendered) => {
+                if let Some(replacement) = pending_resize.take() {
+                    match commit_resize(&mut surface, replacement) {
+                        Ok(previous) => {
+                            retired_frames.push(previous);
+                            crate::log_info!(
+                                target: "helio";
+                                "helio resize committed example={} window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1 cpu_readback=0 cpu_frame_copy=0\n",
+                                example_id,
+                                surface.window.map_or(0, crate::ui4::WindowId::raw),
+                                surface.width,
+                                surface.height,
+                                surface.frame.raw(),
+                            );
+                        }
+                        Err(error) => {
+                            let _ = crate::ui4::destroy_frame(replacement.frame);
+                            frame_prepared = false;
+                            crate::log_warn!(
+                                target: "helio";
+                                "helio resize commit rejected example={} requested={}x{} error={:?} action=old-front-restored-and-reproject\n",
+                                example_id,
+                                replacement.width,
+                                replacement.height,
+                                error,
+                            );
+                            Timer::after(Duration::from_millis(16)).await;
+                            continue;
+                        }
+                    }
+                } else if let Err(error) = publish_surface_window(&mut surface) {
+                    break Err(error);
+                }
+                frame_prepared = false;
+                frame_index = frame_index.saturating_add(1);
+                let published_at = Instant::now();
+                let cadence_us = last_successful_publish
+                    .map(|previous| published_at.saturating_duration_since(previous).as_micros())
+                    .unwrap_or(0);
+                last_successful_publish = Some(published_at);
+                let sample = gpu_logger_sample(
+                    &rendered,
+                    frame_index,
+                    cadence_us,
+                    engine.object_count(),
+                    &resident,
+                    busy_retries,
+                    incomplete_retries,
+                );
+                publish_gpu_logger_sample(sample);
+                last_sample = Some(sample);
+            }
+            Err(GameError::Frame(crate::ui4::FramePoolError::Busy)) => {
+                busy_retries = busy_retries.saturating_add(1);
+                if let Some(mut sample) = last_sample {
+                    sample.busy_retries = busy_retries;
+                    publish_gpu_logger_sample(sample);
+                    last_sample = Some(sample);
+                }
+                Timer::after(Duration::from_millis(16)).await;
+                continue;
+            }
+            Err(GameError::Render("helio-incomplete-direct-frame")) => {
+                incomplete_retries = incomplete_retries.saturating_add(1);
+                if let Some(mut sample) = last_sample {
+                    sample.incomplete_retries = incomplete_retries;
+                    publish_gpu_logger_sample(sample);
+                    last_sample = Some(sample);
+                }
+                Timer::after(Duration::from_millis(16)).await;
+                continue;
+            }
+            Err(error) => break Err(error),
+        }
+        if first_frame {
+            GAME_STATE.store(STATE_ONLINE | example_id, Ordering::Release);
+            *LAST_ERROR.lock() = None;
+            let window = surface.window.expect("published ported Helio window");
+            if !input.register_window(window) {
+                break Err(GameError::Render("helio-input-window-capacity"));
+            }
+            crate::log_info!(
+                target: "helio";
+                "helio example={} name={} online artifact_bytes={} objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied input=ui4-owner-broker->winit-shaped-events controls={} resize=ui4-broker->render-new-native-ring->atomic-frame-swap path=helioa-v1+scene-v1->resident-batches->one-guc-render->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+                example_id,
+                engine.name(),
+                GAME_ARTIFACT.len(),
+                engine.object_count(),
+                resident.len(),
+                surface.frame.raw(),
+                window.raw(),
+                surface.width,
+                surface.height,
+                PLANE_SLOT,
+                engine.controls(),
+            );
+            first_frame = false;
+        }
+        Timer::after(Duration::from_millis(33)).await;
+    };
+    if let Some(replacement) = pending_resize {
+        let _ = crate::ui4::destroy_frame(replacement.frame);
+    }
+    retire_frames(&mut retired_frames);
     release_resident_scene(resident);
     destroy_unpublished_surface(surface);
     result
@@ -877,31 +1463,12 @@ pub async fn helio_game_service_task() {
         };
         GAME_STATE.store(STATE_STARTING | example_id, Ordering::Release);
         let result = match example_id {
-            1 => start_cube().await.map(|(surface, resident, triangle_count)| {
-                GAME_STATE.store(STATE_ONLINE | 1, Ordering::Release);
-                *LAST_ERROR.lock() = None;
-                let window = surface.window.expect("published Helio cube window");
-                crate::log_info!(
-                    target: "helio";
-                    "helio example=1 name=simple-cube online artifact_bytes={} normalized_triangles={} frame={} window={} extent={}x{} plane={} path=helioa-v1+render-ir-v1->resident-triangles->one-guc-render->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
-                    GAME_ARTIFACT.len(),
-                    triangle_count,
-                    surface.frame.raw(),
-                    window.raw(),
-                    surface.width,
-                    surface.height,
-                    PLANE_SLOT,
-                );
-                core::mem::forget(resident);
-                core::mem::forget(surface);
-            }),
+            1 => run_cube().await,
             2 => run_churn().await,
+            3 | 4 => run_ported_scene(example_id).await,
             _ => Err(GameError::Render("helio-example-reserved")),
         };
         match result {
-            Ok(()) if example_id == 1 => {
-                core::future::pending::<()>().await;
-            }
             Ok(()) => {}
             Err(error) => {
                 GAME_STATE.store(STATE_REQUESTED | example_id, Ordering::Release);

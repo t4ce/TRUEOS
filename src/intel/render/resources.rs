@@ -506,6 +506,7 @@ fn prepare_triangle_draw_resources_for_geometry(
         vertex_format: TriangleVertexFormat::Float3,
         vertex_gpu_addr: vertex_proof.gpu_addr,
         index_buffer: None,
+        indirect_args_gpu_addr: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -619,6 +620,7 @@ fn prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
         vertex_format: TriangleVertexFormat::Float3,
         vertex_gpu_addr: vertex_proof.gpu_addr,
         index_buffer: None,
+        indirect_args_gpu_addr: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -700,6 +702,7 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
             byte_len: u32::try_from(index_byte_len).ok()?,
             gpu_addr: index_gpu_addr,
         }),
+        indirect_args_gpu_addr: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -797,8 +800,17 @@ pub(crate) fn create_resident_triangle_mesh(
         .len()
         .checked_mul(core::mem::size_of::<u32>())
         .ok_or("resident-triangle-bytes")?;
-    let used_bytes = index_offset
+    let index_end = index_offset
         .checked_add(index_bytes)
+        .ok_or("resident-triangle-bytes")?;
+    // Keep Helio's standard 20-byte indexed-indirect record in the same
+    // stable PPGTT allocation as the geometry it addresses. This makes the
+    // record independently writable by a later cull/compaction pass without
+    // introducing target GPU addresses into the .helio artifact.
+    let indirect_args_offset =
+        crate::intel::align_up(index_end, 64).ok_or("resident-triangle-align")?;
+    let used_bytes = indirect_args_offset
+        .checked_add(DRAW_INDEXED_INDIRECT_BYTES)
         .ok_or("resident-triangle-bytes")?;
     let storage_bytes =
         crate::intel::align_up(used_bytes, 4096).ok_or("resident-triangle-align")?;
@@ -809,6 +821,9 @@ pub(crate) fn create_resident_triangle_mesh(
     let index_bytes_u32 = u32::try_from(index_bytes).map_err(|_| "resident-triangle-count")?;
     let index_gpu_addr = gpu_base
         .checked_add(index_offset as u64)
+        .ok_or("resident-triangle-address")?;
+    let indirect_args_gpu_addr = gpu_base
+        .checked_add(indirect_args_offset as u64)
         .ok_or("resident-triangle-address")?;
     let Some((storage_phys, storage_virt)) = crate::dma::alloc(storage_bytes, 4096) else {
         return Err("resident-triangle-alloc");
@@ -826,6 +841,13 @@ pub(crate) fn create_resident_triangle_mesh(
             storage_virt.add(index_offset),
             index_bytes,
         );
+        for (index, value) in [index_count, 1, 0, 0, 0].into_iter().enumerate() {
+            core::ptr::copy_nonoverlapping(
+                value.to_le_bytes().as_ptr(),
+                storage_virt.add(indirect_args_offset + index * core::mem::size_of::<u32>()),
+                core::mem::size_of::<u32>(),
+            );
+        }
     }
     crate::intel::dma_flush(storage_virt, storage_bytes);
     if !map_render_ppgtt_range(gpu_base, storage_phys, storage_bytes) {
@@ -844,14 +866,18 @@ pub(crate) fn create_resident_triangle_mesh(
         index_gpu_addr,
         index_count,
         index_bytes: index_bytes_u32,
+        indirect_args_gpu_addr,
+        indirect_args_offset,
     };
     intel_render_focus_log!(
-        "resident-triangle upload authority=gpu-resident phys=0x{:X} gpu=0x{:X} bytes=0x{:X} vertices={} indices={} cpu_uploads=1 retained=1\n",
+        "resident-triangle upload authority=gpu-resident phys=0x{:X} gpu=0x{:X} bytes=0x{:X} vertices={} indices={} indirect_gpu=0x{:X} indirect_stride={} cpu_uploads=1 retained=1\n",
         resident.storage_phys,
         resident.gpu_base,
         resident.storage_bytes,
         resident.vertex_count,
         resident.index_count,
+        resident.indirect_args_gpu_addr,
+        DRAW_INDEXED_INDIRECT_BYTES,
     );
     Ok(resident)
 }
@@ -911,6 +937,53 @@ pub(crate) fn update_resident_triangle_mesh(
     // allocation made small streaming meshes pay for untouched tail space on
     // every frame.
     crate::intel::dma_flush(mesh.storage_virt, index_offset + index_bytes);
+    Ok(())
+}
+
+/// Publish one exact WGPU/Helio DrawIndexedIndirectArgs record beside a
+/// resident mesh. The RCS scene path consumes these bytes without translating
+/// them into a CPU-authored 3DPRIMITIVE payload.
+pub(crate) fn update_resident_triangle_draw_indexed_indirect(
+    mesh: &ResidentTriangleMesh,
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    base_vertex: i32,
+    first_instance: u32,
+) -> Result<(), &'static str> {
+    let draw_end = first_index
+        .checked_add(index_count)
+        .ok_or("resident-indirect-index-range")?;
+    if index_count == 0
+        || draw_end > mesh.index_count
+        || mesh.indirect_args_offset.saturating_add(DRAW_INDEXED_INDIRECT_BYTES)
+            > mesh.storage_bytes
+        || mesh.indirect_args_gpu_addr
+            != mesh.gpu_base.saturating_add(mesh.indirect_args_offset as u64)
+    {
+        return Err("resident-indirect-shape");
+    }
+    let words = [
+        index_count,
+        instance_count,
+        first_index,
+        base_vertex as u32,
+        first_instance,
+    ];
+    unsafe {
+        for (index, value) in words.into_iter().enumerate() {
+            core::ptr::copy_nonoverlapping(
+                value.to_le_bytes().as_ptr(),
+                mesh.storage_virt
+                    .add(mesh.indirect_args_offset + index * core::mem::size_of::<u32>()),
+                core::mem::size_of::<u32>(),
+            );
+        }
+        crate::intel::dma_flush(
+            mesh.storage_virt.add(mesh.indirect_args_offset),
+            DRAW_INDEXED_INDIRECT_BYTES,
+        );
+    }
     Ok(())
 }
 
@@ -1067,6 +1140,7 @@ fn prepare_triangle_draw_resources_for_scene_resident_mesh(
         mesh,
         false,
     )
+    .map(|draw| draw.with_indirect_args(mesh.indirect_args_gpu_addr))
 }
 
 fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
@@ -1103,6 +1177,7 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
             byte_len: mesh.index_bytes,
             gpu_addr: mesh.index_gpu_addr,
         }),
+        indirect_args_gpu_addr: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -1149,6 +1224,7 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
         vertex_format: TriangleVertexFormat::Float3,
         vertex_gpu_addr: vertex_proof.gpu_addr,
         index_buffer: None,
+        indirect_args_gpu_addr: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -1566,6 +1642,7 @@ fn prepare_vf_streamout_proof_resources(
         vertex_format: TriangleVertexFormat::Float3,
         vertex_gpu_addr: GPU_VA_VERTEX_BASE,
         index_buffer: None,
+        indirect_args_gpu_addr: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,

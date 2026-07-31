@@ -3,7 +3,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::{Camera, Error, Projector, linear_rgba_to_srgba8};
+use crate::{Camera, DrawIndexedIndirectArgs, Error, Projector, linear_rgba_to_srgba8};
 
 pub const SECTION_NAME: &str = "scene/churn-v1.bin";
 const MAGIC: &[u8; 8] = b"HCHURN\0\0";
@@ -14,6 +14,7 @@ const SHAPE_COUNT: usize = 3;
 const VERTICES_PER_OBJECT: usize = 24;
 const INDICES_PER_OBJECT: usize = 36;
 const HIDDEN: [f32; 3] = [2.0, 2.0, 0.999];
+const ANIMATION_RATE_SCALE: f32 = 1.5;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Spec {
@@ -165,6 +166,21 @@ pub struct Batch {
     pub rgba: [u8; 4],
 }
 
+impl Batch {
+    /// The command record Helio owns for this material batch. Geometry is
+    /// expanded today, so each batch is one indexed instance; moving object
+    /// transforms to a storage buffer later changes the instance fields but
+    /// not this ABI or the Intel consumer.
+    pub fn draw_indexed_indirect(&self) -> Result<DrawIndexedIndirectArgs, Error> {
+        let index_count =
+            u32::try_from(self.indices.len()).map_err(|_| Error::InvalidChurnScene)?;
+        if index_count == 0 {
+            return Err(Error::InvalidChurnScene);
+        }
+        Ok(DrawIndexedIndirectArgs::new(index_count))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Object {
     seed: f32,
@@ -282,7 +298,9 @@ impl Engine {
             batch.vertices.fill(HIDDEN);
         }
         let projector = Projector::new(self.spec.camera, aspect)?;
-        let time = self.frame as f32 * self.spec.time_step;
+        // Speed up only the visual clock. Spawn cadence and retained geometry
+        // remain driven by their baked frame/count contracts.
+        let time = self.frame as f32 * self.spec.time_step * ANIMATION_RATE_SCALE;
         for (object_index, object) in self.objects.iter().copied().enumerate() {
             let phase = object.seed + time * object.speed;
             let radius = self.spec.orbit_radius
@@ -473,6 +491,8 @@ mod tests {
         assert_eq!(spec.max_objects, 2_200);
         assert_eq!(spec.spawn_rate, 8);
         assert_eq!(spec.spawn_interval_frames, 2);
+        assert!((spec.time_step - 0.01).abs() <= f32::EPSILON);
+        assert!((spec.time_step * ANIMATION_RATE_SCALE - 0.015).abs() <= f32::EPSILON);
 
         let mut engine = Engine::new(spec).unwrap();
         engine.step(16.0 / 9.0).unwrap();

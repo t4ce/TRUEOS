@@ -6,7 +6,9 @@
 
 extern crate alloc;
 
+pub mod battle;
 pub mod churn;
+pub mod pendulum_bigcloth;
 
 use alloc::vec::Vec;
 use trueos_helio_artifact::render_ir::{
@@ -60,6 +62,55 @@ pub struct Scene {
     pub clear_rgba: [u8; 4],
 }
 
+/// Helio's native GPU draw record, byte-for-byte compatible with
+/// `wgpu::util::DrawIndexedIndirectArgs` and the output of Helio's
+/// `IndirectDispatchPass`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DrawIndexedIndirectArgs {
+    pub index_count: u32,
+    pub instance_count: u32,
+    pub first_index: u32,
+    pub base_vertex: i32,
+    pub first_instance: u32,
+}
+
+impl DrawIndexedIndirectArgs {
+    pub const BYTE_LEN: usize = 5 * core::mem::size_of::<u32>();
+
+    pub const fn new(index_count: u32) -> Self {
+        Self {
+            index_count,
+            instance_count: 1,
+            first_index: 0,
+            base_vertex: 0,
+            first_instance: 0,
+        }
+    }
+
+    pub const fn to_le_bytes(self) -> [u8; Self::BYTE_LEN] {
+        let fields = [
+            self.index_count,
+            self.instance_count,
+            self.first_index,
+            self.base_vertex as u32,
+            self.first_instance,
+        ];
+        let mut bytes = [0; Self::BYTE_LEN];
+        let mut field = 0usize;
+        while field < fields.len() {
+            let encoded = fields[field].to_le_bytes();
+            let mut byte = 0usize;
+            while byte < encoded.len() {
+                bytes[field * 4 + byte] = encoded[byte];
+                byte += 1;
+            }
+            field += 1;
+        }
+        bytes
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     Artifact,
@@ -78,6 +129,10 @@ pub enum Error {
     DegenerateTriangle,
     MissingChurnScene,
     InvalidChurnScene,
+    MissingBattleScene,
+    InvalidBattleScene,
+    MissingPendulumScene,
+    InvalidPendulumScene,
 }
 
 pub fn decode_artifact(bytes: &[u8], aspect: f32, camera: Camera) -> Result<Scene, Error> {

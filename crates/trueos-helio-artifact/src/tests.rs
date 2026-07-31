@@ -188,9 +188,96 @@ fn rejects_impossible_count_before_iteration() {
 
 #[test]
 fn section_kind_round_trips_raw_values() {
-    for raw in [0, 1, 2, 3, 4, 5, 6, 77, u16::MAX] {
+    for raw in [0, 1, 2, 3, 4, 5, 6, 7, 77, u16::MAX] {
         assert_eq!(SectionKind::from_raw(raw).raw(), raw);
     }
+}
+
+#[test]
+fn opens_typed_replay_plan_section() {
+    let replay = replay_fixture();
+    let bytes = fixture(&[
+        TestSection {
+            kind: 1,
+            name: "manifest.json",
+            data: b"{}",
+        },
+        TestSection {
+            kind: 7,
+            name: replay::SECTION_NAME,
+            data: &replay,
+        },
+    ]);
+    let artifact = Artifact::parse(&bytes).unwrap();
+    let plan = artifact.replay_plan().unwrap();
+    assert_eq!(plan.command_count(), 1);
+    assert_eq!(plan.commands().next().unwrap().index_count, 36);
+}
+
+#[test]
+fn replay_accessor_checks_kind_and_payload() {
+    let replay = replay_fixture();
+    let wrong_kind = fixture(&[
+        TestSection {
+            kind: 1,
+            name: "manifest.json",
+            data: b"{}",
+        },
+        TestSection {
+            kind: 6,
+            name: replay::SECTION_NAME,
+            data: &replay,
+        },
+    ]);
+    assert_eq!(
+        Artifact::parse(&wrong_kind)
+            .unwrap()
+            .replay_plan()
+            .unwrap_err(),
+        Error::WrongSectionKind {
+            expected: SectionKind::RenderReplay,
+            actual: SectionKind::NormalizedRenderIr,
+        }
+    );
+
+    let mut invalid = replay;
+    invalid[0] ^= 1;
+    let bad_payload = fixture(&[
+        TestSection {
+            kind: 1,
+            name: "manifest.json",
+            data: b"{}",
+        },
+        TestSection {
+            kind: 7,
+            name: replay::SECTION_NAME,
+            data: &invalid,
+        },
+    ]);
+    assert_eq!(
+        Artifact::parse(&bad_payload)
+            .unwrap()
+            .replay_plan()
+            .unwrap_err(),
+        Error::InvalidReplay(replay::Error::BadMagic)
+    );
+}
+
+fn replay_fixture() -> Vec<u8> {
+    let mut bytes = vec![0u8; replay::HEADER_LEN + replay::COMMAND_STRIDE];
+    bytes[..8].copy_from_slice(&replay::MAGIC);
+    put_u16(&mut bytes, 8, replay::VERSION);
+    put_u16(&mut bytes, 10, replay::HEADER_LEN as u16);
+    let total_len = bytes.len() as u32;
+    put_u32(&mut bytes, 12, total_len);
+    put_u32(&mut bytes, 16, 1);
+    put_u32(&mut bytes, 20, replay::COMMAND_STRIDE as u32);
+    put_u32(&mut bytes, 28, 0x1234_5678);
+    put_u32(&mut bytes, 32, 1);
+    put_u32(&mut bytes, 36, 2);
+    put_u32(&mut bytes, replay::HEADER_LEN, 36);
+    put_u32(&mut bytes, replay::HEADER_LEN + 4, 1);
+    bytes
 }
 
 fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {

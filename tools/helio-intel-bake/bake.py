@@ -31,6 +31,127 @@ UPSTREAM_EXTRACTOR = (
     TRUEOS / "crates/trueos-shader/xe_lp_shader_bake/extract_from_pipeline_cache.py"
 )
 MAGIC = b"HELIOA\0\0"
+OTHER_SECTION_KIND = 0xFFFF
+RENDER_IR_SECTION = "render/ir-v1.bin"
+RENDER_IR_KIND = 6
+REPLAY_SECTION = "render/replay-v1.bin"
+REPLAY_KIND = 7
+REPLAY_MAGIC = b"HELIORP\0"
+REPLAY_HEADER_LEN = 64
+REPLAY_COMMAND_STRIDE = 20
+
+
+def encode_replay_plan(render_ir: bytes) -> bytes:
+    """Mechanically lower HELIOIR v1's indexed draw to Helio replay-v1."""
+    if len(render_ir) < 256 or render_ir[:8] != b"HELIOIR\0":
+        raise SystemExit("cannot lower replay-v1 from malformed HELIOIR")
+    version, header_len, total_len = struct.unpack_from("<HHI", render_ir, 8)
+    if version != 1 or header_len != 256 or total_len != len(render_ir):
+        raise SystemExit("cannot lower replay-v1 from unsupported HELIOIR header")
+
+    vertex_buffer_id = struct.unpack_from("<I", render_ir, 20)[0]
+    index_buffer_id = struct.unpack_from("<I", render_ir, 36)[0]
+    if (
+        vertex_buffer_id == 0
+        or index_buffer_id == 0
+        or vertex_buffer_id == index_buffer_id
+    ):
+        raise SystemExit("cannot lower replay-v1 with invalid HELIOIR resource IDs")
+
+    # HELIOIR v1 stores its one DrawIndexed call as the canonical five fields
+    # at 212..232. Copying these bytes preserves wgpu's signed base_vertex bit
+    # pattern and keeps this lowering independent of scene semantics.
+    draw = render_ir[212:232]
+    if len(draw) != REPLAY_COMMAND_STRIDE:
+        raise SystemExit("cannot lower replay-v1 from truncated HELIOIR draw")
+    index_count, instance_count, first_index, _, first_instance = struct.unpack(
+        "<IIIII", draw
+    )
+    if (
+        index_count == 0
+        or instance_count == 0
+        or first_index + index_count > 0xFFFF_FFFF
+        or first_instance + instance_count > 0xFFFF_FFFF
+    ):
+        raise SystemExit("cannot lower replay-v1 from invalid HELIOIR draw")
+
+    total_len = REPLAY_HEADER_LEN + REPLAY_COMMAND_STRIDE
+    out = bytearray(total_len)
+    out[:8] = REPLAY_MAGIC
+    struct.pack_into(
+        "<HHIIIIIII",
+        out,
+        8,
+        1,
+        REPLAY_HEADER_LEN,
+        total_len,
+        1,
+        REPLAY_COMMAND_STRIDE,
+        0,
+        zlib.crc32(render_ir) & 0xFFFF_FFFF,
+        vertex_buffer_id,
+        index_buffer_id,
+    )
+    out[REPLAY_HEADER_LEN:] = draw
+    return bytes(out)
+
+
+def _put_f32s(out: bytearray, offset: int, values: tuple[float, ...]) -> None:
+    struct.pack_into("<" + "f" * len(values), out, offset, *values)
+
+
+def encode_shape_battle_scene() -> bytes:
+    """Encode the stable no_std port contract for shape_battle_royale.rs."""
+    out = bytearray(320)
+    out[:8] = b"HBATTLE\0"
+    struct.pack_into("<HHI", out, 8, 1, len(out), len(out))
+    struct.pack_into("<IIIII", out, 16, 4, 4, 16, 4, 4)
+    struct.pack_into("<I", out, 36, 16)
+    struct.pack_into("<Q", out, 40, 0x4BA7_71E5_2026_0801)
+    _put_f32s(out, 48, (0.0, 16.0, 32.0, 0.0, -0.45,
+                       0.7853981633974483, 0.1, 200.0))
+    _put_f32s(out, 80, (0.0, 0.0, 0.0, 0.0))
+    _put_f32s(out, 96, (0.15, 0.15, 0.18, 1.0))
+    _put_f32s(out, 112, (17.5, 6.0, 1.0, 0.95))
+    for index, rgba in enumerate((
+        (0.84, 0.14, 0.14, 1.0),
+        (0.18, 0.85, 0.25, 1.0),
+        (0.20, 0.38, 0.90, 1.0),
+        (0.95, 0.85, 0.17, 1.0),
+    )):
+        _put_f32s(out, 128 + index * 16, rgba)
+    for index, extents in enumerate((
+        (0.40, 0.40, 0.40),
+        (0.35, 0.55, 0.25),
+        (0.35, 0.55, 0.35),
+        (0.30, 0.60, 0.30),
+    )):
+        _put_f32s(out, 192 + index * 12, extents)
+    _put_f32s(out, 240, (0.45, 0.50, 0.75, 0.66))
+    _put_f32s(out, 256, (
+        1.0 / 60.0, 16.0, 2.0, -9.81, 0.8, 4.0,
+    ))
+    struct.pack_into("<II", out, 280, 42, 120)
+    return bytes(out)
+
+
+def encode_pendulum_bigcloth_scene() -> bytes:
+    """Encode the stable no_std port contract for rapier_pendulum_bigcloth.rs."""
+    out = bytearray(192)
+    out[:8] = b"HPENDUL\0"
+    struct.pack_into("<HHI", out, 8, 1, len(out), len(out))
+    struct.pack_into("<HHHH", out, 16, 14, 24, 8, 0)
+    _put_f32s(out, 24, (0.0, 8.0, 35.0, 0.0, -0.2,
+                       0.7853981633974483, 0.1, 300.0))
+    _put_f32s(out, 60, (
+        1.35, 1.0, 18.0, 0.4, 0.8, -9.81, 1.0 / 60.0,
+        0.995, -0.2, 0.4, 0.2,
+    ))
+    _put_f32s(out, 104, (0.20, 0.50, 0.80, 1.0))
+    _put_f32s(out, 120, (0.25, 0.25, 0.30, 1.0))
+    struct.pack_into("<f", out, 136, 50.0)
+    _put_f32s(out, 140, (0.0, 0.0, 0.0, 0.0))
+    return bytes(out)
 
 
 def run(
@@ -354,6 +475,25 @@ def main() -> None:
 
     artifact_path = args.artifact.resolve()
     sections = parse_helioa(artifact_path.read_bytes())
+    # These scene contracts are the build-time handoff from the hosted Helio
+    # demos to TRUEOS's no_std retained renderer. They deliberately share the
+    # captured Helio/WGPU graph and native shader pair in this artifact.
+    sections["scene/shape-battle-v1.bin"] = (
+        OTHER_SECTION_KIND, encode_shape_battle_scene(),
+    )
+    sections["scene/pendulum-bigcloth-v1.bin"] = (
+        OTHER_SECTION_KIND, encode_pendulum_bigcloth_scene(),
+    )
+    try:
+        render_ir_kind, render_ir = sections[RENDER_IR_SECTION]
+    except KeyError:
+        raise SystemExit(f"required HELIOA section absent: {RENDER_IR_SECTION}") from None
+    if render_ir_kind != RENDER_IR_KIND:
+        raise SystemExit(
+            f"wrong section kind for {RENDER_IR_SECTION}: {render_ir_kind}"
+        )
+    replay = encode_replay_plan(render_ir)
+    sections[REPLAY_SECTION] = (REPLAY_KIND, replay)
     wgsl_section, wgsl_data = captured_wgsl(sections)
     output = (args.out or artifact_path.with_name(artifact_path.stem + ".intel.helio")).resolve()
     work = (args.work_dir or output.with_suffix(output.suffix + ".work")).resolve()
@@ -462,12 +602,18 @@ def main() -> None:
 
     # Reparse and validate every CRC plus native section hash before success.
     validated = parse_helioa(output.read_bytes())
+    if validated.get(REPLAY_SECTION) != (REPLAY_KIND, replay):
+        raise SystemExit("packaged replay-v1 differs from HELIOIR lowering")
     for stage in stages:
         actual = validated[stage["section"]][1]
         if sha256(actual) != stage["sha256"]:
             raise SystemExit(f"packaged ISA hash mismatch: {stage['section']}")
     print(f"baked {output}")
     print(f"  captured WGSL: {wgsl_section} sha256={sha256(wgsl_data)}")
+    print(
+        f"  {REPLAY_SECTION}: 1 x {REPLAY_COMMAND_STRIDE}-byte indexed draw "
+        f"from HELIOIR crc32={zlib.crc32(render_ir) & 0xFFFF_FFFF:08x}"
+    )
     print(f"  Intel compiler: {device['name']} 8086:{device['device_id']:04X}")
     for stage in stages:
         print(f"  {stage['section']}: {stage['code_size_bytes']} bytes sha256={stage['sha256']}")

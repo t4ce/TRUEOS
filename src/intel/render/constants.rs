@@ -206,6 +206,10 @@ const MI_BATCH_GTT: u32 = 2 << 6;
 // Draw3D uses one small secondary per object beneath one frame-level primary
 // batch, so the render context is submitted exactly once per scene update.
 const MI_BATCH_2ND_LEVEL: u32 = 1 << 22;
+// Gen8+ four-DWORD PPGTT load. Helio's draw stream uses this to feed the
+// hardware auto-draw registers directly from its resident 20-byte
+// DrawIndexedIndirectArgs records.
+const MI_LOAD_REGISTER_MEM: u32 = (0x29 << 23) | 2;
 const MI_LOAD_REGISTER_IMM: u32 = 0x1100_0000;
 const MI_LRI_CS_MMIO: u32 = 1 << 19;
 const MI_LRI_FORCE_POSTED: u32 = 1 << 12;
@@ -398,7 +402,17 @@ const CMD_3DPRIMITIVE: u32 = 5 | (3 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DPRIMITIVE_EXTENDED: u32 = 8 | (1 << 11) | (3 << 24) | (3 << 27) | (3 << 29);
 const INDEX_BUFFER_FORMAT_DWORD: u32 = 2;
 const INDEX_BUFFER_L3_BYPASS_DISABLE: u32 = 1 << 11;
+const PRIMITIVE_INDIRECT_PARAMETER_ENABLE: u32 = 1 << 10;
 const PRIMITIVE_VERTEX_ACCESS_RANDOM: u32 = 1 << 8;
+const RCS_3DPRIM_START_VERTEX: u32 = 0x2430;
+const RCS_3DPRIM_VERTEX_COUNT: u32 = 0x2434;
+const RCS_3DPRIM_INSTANCE_COUNT: u32 = 0x2438;
+const RCS_3DPRIM_START_INSTANCE: u32 = 0x243C;
+const RCS_3DPRIM_BASE_VERTEX: u32 = 0x2440;
+const RCS_3DPRIM_XP_BASE_VERTEX: u32 = 0x2690;
+const DRAW_INDEXED_INDIRECT_DWORDS: usize = 5;
+const DRAW_INDEXED_INDIRECT_BYTES: usize =
+    DRAW_INDEXED_INDIRECT_DWORDS * core::mem::size_of::<u32>();
 const PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER: u32 = 1 << 9;
 const PIPE_CONTROL_UNTYPED_DATAPORT_FLUSH_HEADER: u32 = 1 << 11;
 const PIPE_CONTROL_DEPTH_CACHE_FLUSH: u32 = 1 << 0;

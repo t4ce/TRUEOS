@@ -13,7 +13,11 @@ import zlib
 
 HELIOA_MAGIC = b"HELIOA\0\0"
 HELIOIR_MAGIC = b"HELIOIR\0"
+HELIORP_MAGIC = b"HELIORP\0"
 IR_SECTION = "render/ir-v1.bin"
+REPLAY_SECTION = "render/replay-v1.bin"
+BATTLE_SECTION = "scene/shape-battle-v1.bin"
+BIGCLOTH_SECTION = "scene/pendulum-bigcloth-v1.bin"
 
 
 def fail(message: str) -> "None":
@@ -173,6 +177,44 @@ def validate_ir(ir: bytes) -> None:
         fail("HELIOIR has no captured SimpleCube shader")
 
 
+def validate_replay(replay: bytes, ir: bytes) -> None:
+    if len(replay) < 64 or replay[:8] != HELIORP_MAGIC:
+        fail("bad HELIORP magic")
+    version, header_size, total_size = struct.unpack_from("<HHI", replay, 8)
+    command_count, command_stride, flags = struct.unpack_from("<III", replay, 16)
+    if version != 1 or header_size != 64 or total_size != len(replay):
+        fail("unsupported HELIORP header")
+    if command_count != 1 or command_stride != 20:
+        fail("HELIORP command layout does not match HELIOIR v1")
+    if flags != 0 or any(replay[40:64]):
+        fail("nonzero HELIORP flags or reserved bytes")
+    if len(replay) != 64 + command_count * command_stride:
+        fail("HELIORP length does not match command table")
+
+    source_crc, vertex_id, index_id = struct.unpack_from("<III", replay, 28)
+    if source_crc != (zlib.crc32(ir) & 0xFFFF_FFFF):
+        fail("HELIORP source CRC does not match render/ir-v1.bin")
+    if vertex_id != u32(ir, 20) or index_id != u32(ir, 36):
+        fail("HELIORP resource IDs do not match render/ir-v1.bin")
+    if vertex_id == 0 or index_id == 0 or vertex_id == index_id:
+        fail("invalid HELIORP resource IDs")
+
+    # This exact byte comparison is intentional: it proves the replay record
+    # is the canonical 20-byte wgpu DrawIndexedIndirectArgs representation of
+    # HELIOIR v1's draw, including the signed base_vertex bit pattern.
+    if replay[64:84] != ir[212:232]:
+        fail("HELIORP draw does not match render/ir-v1.bin")
+    index_count, instance_count, first_index, _, first_instance = struct.unpack_from(
+        "<IIIII", replay, 64
+    )
+    if index_count == 0 or instance_count == 0:
+        fail("HELIORP contains an empty indexed draw")
+    if first_index + index_count > 0xFFFF_FFFF:
+        fail("HELIORP indexed range overflows u32")
+    if first_instance + instance_count > 0xFFFF_FFFF:
+        fail("HELIORP instance range overflows u32")
+
+
 def validate_native(sections: dict[str, tuple[int, bytes]]) -> None:
     metadata_data = section(sections, "compiler/intel-xe-lp.json", 5)
     try:
@@ -206,6 +248,30 @@ def validate_native(sections: dict[str, tuple[int, bytes]]) -> None:
         fail("required SIMD8 VS/PS pair absent")
 
 
+def validate_scene_contracts(sections: dict[str, tuple[int, bytes]]) -> None:
+    battle = section(sections, BATTLE_SECTION, 0xFFFF)
+    if len(battle) != 320 or battle[:8] != b"HBATTLE\0":
+        fail("bad shape-battle scene header")
+    if u16(battle, 8) != 1 or u16(battle, 10) != 320 or u32(battle, 12) != 320:
+        fail("unsupported shape-battle scene version")
+    if tuple(u32(battle, offset) for offset in (16, 20, 24, 28, 32, 36)) != (
+        4, 4, 16, 4, 4, 16,
+    ):
+        fail("shape-battle count contract changed")
+    if any(battle[288:]):
+        fail("nonzero shape-battle reserved bytes")
+
+    cloth = section(sections, BIGCLOTH_SECTION, 0xFFFF)
+    if len(cloth) != 192 or cloth[:8] != b"HPENDUL\0":
+        fail("bad pendulum-bigcloth scene header")
+    if u16(cloth, 8) != 1 or u16(cloth, 10) != 192 or u32(cloth, 12) != 192:
+        fail("unsupported pendulum-bigcloth scene version")
+    if tuple(u16(cloth, offset) for offset in (16, 18, 20, 22)) != (14, 24, 8, 0):
+        fail("pendulum-bigcloth topology contract changed")
+    if any(cloth[56:60]) or any(cloth[156:]):
+        fail("nonzero pendulum-bigcloth reserved bytes")
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit(f"usage: {sys.argv[0]} artifact.helio")
@@ -216,11 +282,13 @@ def main() -> None:
         raise SystemExit(f"cannot read {path}: {error}") from error
     sections = parse_helioa(data)
     validate_manifest(section(sections, "manifest.json", 1))
-    validate_ir(section(sections, IR_SECTION, 6))
+    ir = section(sections, IR_SECTION, 6)
+    validate_ir(ir)
+    validate_replay(section(sections, REPLAY_SECTION, 7), ir)
     validate_native(sections)
+    validate_scene_contracts(sections)
     print(f"validated {path} ({len(data)} bytes, {len(sections)} sections)")
 
 
 if __name__ == "__main__":
     main()
-

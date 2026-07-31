@@ -94,6 +94,8 @@ struct TriangleDrawPrep {
     vertex_format: TriangleVertexFormat,
     vertex_gpu_addr: u64,
     index_buffer: Option<TriangleIndexBufferPrep>,
+    /// GPU address of one Helio/WGPU DrawIndexedIndirectArgs record.
+    indirect_args_gpu_addr: Option<u64>,
     state_gpu_addr: u64,
     rt_gpu_addr: u64,
     rt_surface_format: u32,
@@ -109,6 +111,11 @@ impl TriangleDrawPrep {
 
     fn with_rt_surface_format(mut self, format: u32) -> Self {
         self.rt_surface_format = format;
+        self
+    }
+
+    fn with_indirect_args(mut self, gpu_addr: u64) -> Self {
+        self.indirect_args_gpu_addr = Some(gpu_addr);
         self
     }
 }
@@ -139,6 +146,9 @@ pub(crate) struct ResidentTriangleMesh {
     pub(crate) index_gpu_addr: u64,
     pub(crate) index_count: u32,
     pub(crate) index_bytes: u32,
+    /// One tightly packed, GPU-visible WGPU/Helio indexed-indirect record.
+    pub(crate) indirect_args_gpu_addr: u64,
+    pub(crate) indirect_args_offset: usize,
 }
 
 unsafe impl Send for ResidentTriangleMesh {}
