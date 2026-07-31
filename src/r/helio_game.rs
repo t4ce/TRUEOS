@@ -371,11 +371,22 @@ fn destroy_unpublished_surface(surface: GameSurface) {
     let _ = crate::ui4::destroy_frame(surface.frame);
 }
 
-fn render_publish(
+async fn render_publish(
     surface: &mut GameSurface,
     resident: &[ResidentTriangle],
     clear_rgba: [u8; 4],
 ) -> Result<(), GameError> {
+    // Render and the detached Spirit/font/compositor jobs all execute on the
+    // one physical RCS0. Hold their existing fair lane through the exact
+    // completion marker so a streaming game frame cannot reset or overwrite
+    // another accepted context.
+    let _gpu_lane = crate::r::font_kernel_service::acquire_gpu_lane(
+        crate::r::font_kernel_service::FontKernelConsumer::new(
+            crate::r::font_kernel_service::FontKernelConsumerPath::Helio,
+            surface.frame.raw(),
+        ),
+    )
+    .await;
     let lease = crate::ui4::acquire_frame_buffer(surface.frame)?;
     let destination = match crate::ui4::gpgpu_rgba_surface(lease) {
         Ok(destination)
@@ -537,7 +548,7 @@ fn apply_churn_key_actions(
     }
 }
 
-fn start_cube() -> Result<(GameSurface, Vec<ResidentTriangle>, usize), GameError> {
+async fn start_cube() -> Result<(GameSurface, Vec<ResidentTriangle>, usize), GameError> {
     let mut surface = create_surface()?;
     let scene = match trueos_helio_runtime::decode_artifact(
         GAME_ARTIFACT,
@@ -557,7 +568,7 @@ fn start_cube() -> Result<(GameSurface, Vec<ResidentTriangle>, usize), GameError
             return Err(error);
         }
     };
-    if let Err(error) = render_publish(&mut surface, &resident, scene.clear_rgba) {
+    if let Err(error) = render_publish(&mut surface, &resident, scene.clear_rgba).await {
         release_resident_scene(resident);
         destroy_unpublished_surface(surface);
         return Err(error);
@@ -647,8 +658,15 @@ async fn run_churn() -> Result<(), GameError> {
             }
             frame_prepared = true;
         }
-        match render_publish(&mut surface, &resident, clear_rgba) {
+        match render_publish(&mut surface, &resident, clear_rgba).await {
             Ok(()) => frame_prepared = false,
+            Err(GameError::Frame(crate::ui4::FramePoolError::Busy)) => {
+                // Triple-buffer ownership can legitimately lag one producer
+                // tick. Keep these exact prepared bytes and retry after UI4
+                // has had a display-release opportunity.
+                Timer::after(Duration::from_millis(16)).await;
+                continue;
+            }
             Err(GameError::Render("helio-incomplete-direct-frame")) => {
                 // Keep the last complete UI4 buffer visible and retry these
                 // exact resident bytes. A bounded GuC poll miss must not
@@ -698,7 +716,7 @@ pub async fn helio_game_service_task() {
         };
         GAME_STATE.store(STATE_STARTING | example_id, Ordering::Release);
         let result = match example_id {
-            1 => start_cube().map(|(surface, resident, triangle_count)| {
+            1 => start_cube().await.map(|(surface, resident, triangle_count)| {
                 GAME_STATE.store(STATE_ONLINE | 1, Ordering::Release);
                 *LAST_ERROR.lock() = None;
                 let window = surface.window.expect("published Helio cube window");

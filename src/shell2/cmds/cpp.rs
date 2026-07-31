@@ -743,7 +743,7 @@ fn print_font_service_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "cpp font status: online={} queued={} outputs={} output_reservations={} output_bytes={} output_capacity={} active_ticket={} active_stage={} active_consumer={}:{} lane_waiters={} lane_peak={} lane_admissions={} lane_contentions={} lane_wait_ms={} lane_wait_max_ms={} lane_paths=retain:{},stamp:{},grid-page:{},grid-patch:{},grid-present:{},grid-print:{},spirit-vfx:{},blueprint-compositor:{} lane_retries={} gpu_retries={} retain_submitted={} retain_completed={} stamp_submitted={} stamp_completed={} failed={} caps=rgba8-{}px/uhd-pixels+{}glyphs carrier=bsp-controller+leased-blocking-lane gpu_lane=fair-fifo-direct-rcs ownership=gpu-vm-r8+gpu-vm-rgba8 completion=ticket-signal",
+            "cpp font status: online={} queued={} outputs={} output_reservations={} output_bytes={} output_capacity={} active_ticket={} active_stage={} active_consumer={}:{} lane_waiters={} lane_peak={} lane_admissions={} lane_contentions={} lane_wait_ms={} lane_wait_max_ms={} lane_paths=retain:{},stamp:{},grid-page:{},grid-patch:{},grid-present:{},grid-print:{},spirit-vfx:{},helio:{},blueprint-compositor:{} lane_retries={} gpu_retries={} retain_submitted={} retain_completed={} stamp_submitted={} stamp_completed={} failed={} caps=rgba8-{}px/uhd-pixels+{}glyphs carrier=bsp-controller+leased-blocking-lane gpu_lane=fair-fifo-direct-rcs ownership=gpu-vm-r8+gpu-vm-rgba8 completion=ticket-signal",
             status.online as u8,
             status.queued,
             outputs,
@@ -773,6 +773,7 @@ fn print_font_service_status(io: &'static dyn ShellBackend2) {
             status.grid_present_lane_admissions,
             status.grid_print_lane_admissions,
             status.spirit_vfx_lane_admissions,
+            status.helio_lane_admissions,
             status.blueprint_compositor_lane_admissions,
             status.lane_retries,
             status.gpu_retries,

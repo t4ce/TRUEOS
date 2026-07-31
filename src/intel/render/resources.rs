@@ -907,7 +907,10 @@ pub(crate) fn update_resident_triangle_mesh(
             index_bytes,
         );
     }
-    crate::intel::dma_flush(mesh.storage_virt, mesh.storage_bytes);
+    // Only the live vertex/index payload changed. Flushing the page-rounded
+    // allocation made small streaming meshes pay for untouched tail space on
+    // every frame.
+    crate::intel::dma_flush(mesh.storage_virt, index_offset + index_bytes);
     Ok(())
 }
 

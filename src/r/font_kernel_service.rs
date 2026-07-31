@@ -68,6 +68,7 @@ pub(crate) enum FontKernelConsumerPath {
     GridPresent,
     GridPrint,
     SpiritVfx,
+    Helio,
     BlueprintCompositor,
 }
 
@@ -81,6 +82,7 @@ impl FontKernelConsumerPath {
             Self::GridPresent => "grid-present",
             Self::GridPrint => "grid-print",
             Self::SpiritVfx => "spirit-vfx",
+            Self::Helio => "helio",
             Self::BlueprintCompositor => "blueprint-compositor",
         }
     }
@@ -198,6 +200,9 @@ fn record_gpu_lane_admission(consumer: FontKernelConsumer, waited_ms: u64) {
         }
         FontKernelConsumerPath::SpiritVfx => {
             status.spirit_vfx_lane_admissions = status.spirit_vfx_lane_admissions.saturating_add(1);
+        }
+        FontKernelConsumerPath::Helio => {
+            status.helio_lane_admissions = status.helio_lane_admissions.saturating_add(1);
         }
         FontKernelConsumerPath::BlueprintCompositor => {
             status.blueprint_compositor_lane_admissions = status
@@ -457,6 +462,7 @@ pub(crate) struct FontKernelServiceStatus {
     pub(crate) grid_present_lane_admissions: u64,
     pub(crate) grid_print_lane_admissions: u64,
     pub(crate) spirit_vfx_lane_admissions: u64,
+    pub(crate) helio_lane_admissions: u64,
     pub(crate) blueprint_compositor_lane_admissions: u64,
     pub(crate) queued: usize,
 }
@@ -488,6 +494,7 @@ impl FontKernelServiceStatus {
             grid_present_lane_admissions: 0,
             grid_print_lane_admissions: 0,
             spirit_vfx_lane_admissions: 0,
+            helio_lane_admissions: 0,
             blueprint_compositor_lane_admissions: 0,
             queued: 0,
         }

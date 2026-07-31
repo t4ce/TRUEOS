@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn embedded_artifact_drives_fixed_retained_batches() {
         let spec = Spec::decode_artifact(ARTIFACT).unwrap();
-        assert_eq!(spec.max_objects, 2_200);
+        assert_eq!(spec.max_objects, 20);
         assert_eq!(spec.spawn_rate, 8);
         assert_eq!(spec.spawn_interval_frames, 2);
 
@@ -479,8 +479,8 @@ mod tests {
         assert_eq!(engine.active_objects(), 8);
         assert_eq!(engine.batches().len(), 4);
         assert!(engine.batches().iter().all(|batch| {
-            batch.vertices.len() == 13_200
-                && batch.indices.len() == 19_800
+            batch.vertices.len() == 120
+                && batch.indices.len() == 180
                 && batch
                     .vertices
                     .iter()
