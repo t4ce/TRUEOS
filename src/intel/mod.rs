@@ -526,8 +526,7 @@ pub(crate) fn copy_engine_activity_snapshot() -> self::blt::CopyEngineActivitySn
 pub(crate) use self::display::{
     CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, RgbaOverlayTile,
     Ui4AsyncComposition, Ui4AsyncCompositionError, Ui4AsyncCompositionPoll, Ui4DirectRgbaFrame,
-    Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll,
-    Ui4StreamSlot0View,
+    Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll, Ui4StreamSlot0View,
 };
 
 pub(crate) fn with_ui4_stream_pipe_a_slot0_surflive<R>(

@@ -1033,11 +1033,7 @@ impl PcmEmission {
     }
 
     fn into_capture_parts(self) -> (Vec<f32>, u32, u16) {
-        (
-            self.waveform,
-            self.model_chunk_index,
-            self.model_chunk_phonemes,
-        )
+        (self.waveform, self.model_chunk_index, self.model_chunk_phonemes)
     }
 }
 

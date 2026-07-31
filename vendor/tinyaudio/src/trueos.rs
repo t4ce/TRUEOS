@@ -18,6 +18,10 @@ const STREAM_HANDLE_NONE: usize = 0;
 const PUMP_PERIOD_MS: u64 = 5;
 const TARGET_QUEUED_MS: usize = 20;
 const TARGET_QUEUED_SAMPLES: usize = (SAMPLE_RATE * TARGET_QUEUED_MS / 1_000) * CHANNELS;
+const URGENT_TARGET_QUEUED_MS: usize = 80;
+const URGENT_TARGET_QUEUED_SAMPLES: usize =
+    (SAMPLE_RATE * URGENT_TARGET_QUEUED_MS / 1_000) * CHANNELS;
+const MAX_CALLBACK_BLOCKS_PER_PUMP: usize = 4;
 
 /// TRUEOS audio output backed by the kernel HDA PCM stream.
 pub struct TrueOsAudioDevice {
@@ -51,6 +55,7 @@ unsafe extern "C" {
     fn trueos_tinyaudio_hda_writable_samples(handle: usize, guard_samples: usize) -> isize;
     fn trueos_tinyaudio_hda_queued_samples(handle: usize) -> isize;
     fn trueos_tinyaudio_hda_push_samples(handle: usize, samples: *const i16, len: usize) -> i32;
+    fn trueos_tinyaudio_audio_urgent_pending() -> i32;
     fn trueos_tinyaudio_spawn_output_pump(
         ctx: usize,
         pump: unsafe extern "C" fn(usize) -> i32,
@@ -154,41 +159,48 @@ impl SharedStream {
 
 impl StreamInner {
     fn pump_once(&mut self) -> Result<(), ()> {
-        let queued = unsafe { trueos_tinyaudio_hda_queued_samples(self.hda_handle) };
-        if queued < 0 {
-            return Err(());
-        }
-        if (queued as usize) >= TARGET_QUEUED_SAMPLES {
-            return Ok(());
+        for _ in 0..MAX_CALLBACK_BLOCKS_PER_PUMP {
+            let target_queued_samples = if unsafe { trueos_tinyaudio_audio_urgent_pending() } != 0 {
+                URGENT_TARGET_QUEUED_SAMPLES
+            } else {
+                TARGET_QUEUED_SAMPLES
+            };
+            let queued = unsafe { trueos_tinyaudio_hda_queued_samples(self.hda_handle) };
+            if queued < 0 {
+                return Err(());
+            }
+            if (queued as usize) >= target_queued_samples {
+                return Ok(());
+            }
+
+            let writable = unsafe { trueos_tinyaudio_hda_writable_samples(self.hda_handle, 0) };
+            if writable < 0 {
+                return Err(());
+            }
+            if (writable as usize) < self.output_buffer.len() {
+                return Ok(());
+            }
+
+            self.data_buffer.fill(0.0);
+            (self.callback)(&mut self.data_buffer);
+
+            for (input, output) in self.data_buffer.iter().zip(self.output_buffer.iter_mut()) {
+                *output = (input.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+            }
+
+            let rc = unsafe {
+                trueos_tinyaudio_hda_push_samples(
+                    self.hda_handle,
+                    self.output_buffer.as_ptr(),
+                    self.output_buffer.len(),
+                )
+            };
+            if rc != 0 {
+                return Err(());
+            }
         }
 
-        let writable = unsafe { trueos_tinyaudio_hda_writable_samples(self.hda_handle, 0) };
-        if writable < 0 {
-            return Err(());
-        }
-        if (writable as usize) < self.output_buffer.len() {
-            return Ok(());
-        }
-
-        self.data_buffer.fill(0.0);
-        (self.callback)(&mut self.data_buffer);
-
-        for (input, output) in self.data_buffer.iter().zip(self.output_buffer.iter_mut()) {
-            *output = (input.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-        }
-
-        let rc = unsafe {
-            trueos_tinyaudio_hda_push_samples(
-                self.hda_handle,
-                self.output_buffer.as_ptr(),
-                self.output_buffer.len(),
-            )
-        };
-        if rc == 0 {
-            Ok(())
-        } else {
-            Err(())
-        }
+        Ok(())
     }
 }
 

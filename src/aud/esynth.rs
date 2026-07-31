@@ -1,5 +1,5 @@
 use alloc::{sync::Arc, vec, vec::Vec};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::aud::{
     backing_pattern::{BackingPatternRenderSource, backing_config},
@@ -39,6 +39,7 @@ const BLUEPRINT_OVERLAY_LOG_SAMPLE_EVERY: u32 = 1_000;
 static CALLBACKS: AtomicU32 = AtomicU32::new(0);
 static SAMPLES_WRITTEN: AtomicU32 = AtomicU32::new(0);
 static BLUEPRINT_OVERLAY_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
+static PCM_OVERLAY_CURRENT: AtomicBool = AtomicBool::new(false);
 static LIVE_PCM_RING: Mutex<Option<LivePcmRing>> = Mutex::new(None);
 
 fn sampled_blueprint_overlay_log() -> bool {
@@ -255,7 +256,7 @@ pub fn live_pcm_read_since(cursor: u64, out: &mut Vec<i16>, max_samples: usize) 
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_tinyaudio_audio_urgent_pending() -> i32 {
-    i32::from(crate::aud::pcm_lane::urgent_pending())
+    i32::from(PCM_OVERLAY_CURRENT.load(Ordering::Acquire) || crate::aud::pcm_lane::urgent_pending())
 }
 
 impl PatternSource {
@@ -311,7 +312,8 @@ impl PianoSource {
 }
 
 impl PcmOverlaySource {
-    const fn new() -> Self {
+    fn new() -> Self {
+        PCM_OVERLAY_CURRENT.store(false, Ordering::Release);
         Self {
             current: None,
             cursor: 0,
@@ -337,6 +339,7 @@ impl PcmOverlaySource {
                 );
             }
             self.cursor = 0;
+            PCM_OVERLAY_CURRENT.store(false, Ordering::Release);
         }
 
         crate::aud::pcm_lane::paused()
@@ -362,6 +365,7 @@ impl PcmOverlaySource {
             }
             self.current = Some(next);
             self.cursor = 0;
+            PCM_OVERLAY_CURRENT.store(true, Ordering::Release);
         }
     }
 
@@ -391,6 +395,7 @@ impl PcmOverlaySource {
             if take == 0 {
                 self.current = None;
                 self.cursor = 0;
+                PCM_OVERLAY_CURRENT.store(false, Ordering::Release);
                 continue;
             }
 
@@ -420,6 +425,7 @@ impl PcmOverlaySource {
                 }
                 self.current = None;
                 self.cursor = 0;
+                PCM_OVERLAY_CURRENT.store(false, Ordering::Release);
             }
         }
     }

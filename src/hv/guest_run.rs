@@ -165,9 +165,7 @@ fn container_shell_command(raw: &str) -> bool {
             }
         }
         "snapshot" | "snap" => {
-            attached_write_line(
-                "vmx-shell: requesting Blueprint PreparePause for warm snapshot",
-            );
+            attached_write_line("vmx-shell: requesting Blueprint PreparePause for warm snapshot");
             let (status, _) =
                 trueos_vm::vmcall::call(trueos_vm::vmcall::OP_LIFECYCLE_SNAPSHOT, 0, 0);
             if status != trueos_vm::vmcall::STATUS_OK {
