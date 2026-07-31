@@ -8,8 +8,7 @@ use embassy_time::{Duration, Timer};
 use spin::Mutex;
 
 use super::{
-    ContextMenuCloseReason, ContextMenuEntry, ContextMenuRequest, ContextMenuResult, DamageRect,
-    FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId,
+    DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId,
     PremultipliedRgba8, ScanoutFormat, Ui4CursorSource, Ui4InputEvent, WindowCreate,
     WindowInteraction, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
     WindowSessionId, acquire_frame_buffer, begin_window_session, create_frame, create_window,
@@ -18,7 +17,6 @@ use super::{
 };
 
 const OWNER: WindowOwner = WindowOwner::COLOR_PICKER_SERVICE;
-const DEFAULT_MENU_ACTION: u32 = 1;
 const PRIMARY_BUTTON_MASK: u32 = 1;
 const SERVICE_POLL_MS: u64 = 16;
 const PICKER_WIDTH: u32 = 256;
@@ -88,41 +86,8 @@ struct ActiveColorPicker {
     picker_dirty: bool,
 }
 
-pub(super) fn open_default_context_menu(
-    source: Ui4CursorSource,
-    target: super::WindowSnapshot,
-    anchor: (u32, u32),
-    color: crate::graphics::primitives::Rgba8,
-) {
-    let request = ContextMenuRequest {
-        entries: alloc::vec![ContextMenuEntry::action(
-            "COLOR PICKER",
-            DEFAULT_MENU_ACTION
-        )],
-        context: 0,
-        callback: default_context_menu_result,
-    };
-    if let Err(error) =
-        super::context_menu::open(source, target.owner, target.id, anchor, color, request)
-    {
-        crate::log_warn!(target: "ui4/color-picker";
-            "ui4/color-picker: default context menu rejected owner={:?} window={} error={:?}\n",
-            target.owner,
-            target.id.raw(),
-            error,
-        );
-    }
-}
-
-fn default_context_menu_result(result: ContextMenuResult) {
-    if result.reason == ContextMenuCloseReason::Selected
-        && result.selected_action == Some(DEFAULT_MENU_ACTION)
-    {
-        *OPEN_REQUEST.lock() = Some(ColorPickerOpenRequest {
-            source: result.source,
-            anchor: result.anchor,
-        });
-    }
+pub(super) fn request_open(source: Ui4CursorSource, anchor: (u32, u32)) {
+    *OPEN_REQUEST.lock() = Some(ColorPickerOpenRequest { source, anchor });
 }
 
 #[embassy_executor::task]
