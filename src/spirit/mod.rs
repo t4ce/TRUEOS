@@ -18,6 +18,7 @@ use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
 mod intel_cursor;
+pub(crate) mod gpu_logger;
 mod lilly;
 mod lilly_cursor;
 pub(crate) mod lilly_protocol;
@@ -59,6 +60,7 @@ const SPIRIT_RETRY_MS: u64 = 50;
 const SPIRIT_VFX_INITIAL_TRACE_FRAMES: u64 = 30;
 const SPIRIT_VFX_PERIODIC_TRACE_FRAMES: u64 = 60;
 const SPIRIT_VFX_TARGET_HZ: u64 = 60;
+const SPIRIT_GPU_LOGGER_TARGET_HZ: u64 = 4;
 const SPIRIT_PRESENT_FPS_WINDOW_MS: u64 = 500;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -251,6 +253,14 @@ struct QueuedFrame {
     lease: SpiritFrameLease,
     required: SpiritBarrierSet,
     released: SpiritBarrierSet,
+    producer: SpiritFrameProducer,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum SpiritFrameProducer {
+    External,
+    Vfx,
+    GpuLogger(u64),
 }
 
 impl QueuedFrame {
@@ -380,6 +390,14 @@ pub(crate) fn acquire_frame(
     id: SpiritFenceId,
     required: SpiritBarrierSet,
 ) -> Result<SpiritFrameLease, SpiritSubmitError> {
+    acquire_frame_for(id, required, SpiritFrameProducer::External)
+}
+
+fn acquire_frame_for(
+    id: SpiritFenceId,
+    required: SpiritBarrierSet,
+    producer: SpiritFrameProducer,
+) -> Result<SpiritFrameLease, SpiritSubmitError> {
     if !id.is_active() {
         return Err(SpiritSubmitError::InactiveFence);
     }
@@ -401,6 +419,7 @@ pub(crate) fn acquire_frame(
         lease,
         required,
         released: SpiritBarrierSet::NONE,
+        producer,
     });
     Ok(lease)
 }
@@ -541,7 +560,7 @@ fn submit_spirit_vfx_frame(
     source_frame: lilly::LillyResidentFrame,
     gpu_lane: crate::r::font_kernel_service::FontKernelGpuLease,
 ) -> Result<GpuInflight, SpiritSubmitError> {
-    let lease = acquire_frame(id, SpiritBarrierSet::GPU)?;
+    let lease = acquire_frame_for(id, SpiritBarrierSet::GPU, SpiritFrameProducer::Vfx)?;
     let target = match gpgpu_bgra_target(lease) {
         Ok(target) => target,
         Err(error) => {

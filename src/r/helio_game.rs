@@ -363,6 +363,39 @@ fn release_resident_scene(resident: Vec<ResidentTriangle>) {
     }
 }
 
+fn gpu_logger_sample(
+    result: &crate::intel::render::ResidentSceneFrameResult,
+    frame_index: u64,
+    objects: usize,
+    resident: &[ResidentTriangle],
+    busy_retries: u64,
+    incomplete_retries: u64,
+) -> crate::spirit::gpu_logger::GpuLoggerSample {
+    crate::spirit::gpu_logger::GpuLoggerSample {
+        frame_index,
+        frame_us: result.frame_us,
+        geometry_us: result.geometry_us,
+        prepare_us: result.geometry_prepare_us,
+        retire_wait_us: result.gpu_poll_us,
+        poll_iters: result.gpu_poll_iters,
+        objects: u64::try_from(objects).unwrap_or(u64::MAX),
+        draws: u64::try_from(result.requested_draws).unwrap_or(u64::MAX),
+        triangles: resident
+            .iter()
+            .map(|triangle| u64::from(triangle.mesh.index_count / 3))
+            .sum(),
+        busy_retries,
+        incomplete_retries,
+    }
+}
+
+fn publish_gpu_logger_sample(sample: crate::spirit::gpu_logger::GpuLoggerSample) {
+    crate::spirit::gpu_logger::publish(
+        crate::spirit::gpu_logger::GpuLoggerSource::Helio,
+        sample,
+    );
+}
+
 fn destroy_unpublished_surface(surface: GameSurface) {
     if let Some(window) = surface.window {
         let _ = crate::ui4::close_window(OWNER, window);
@@ -375,7 +408,7 @@ async fn render_publish(
     surface: &mut GameSurface,
     resident: &[ResidentTriangle],
     clear_rgba: [u8; 4],
-) -> Result<(), GameError> {
+) -> Result<crate::intel::render::ResidentSceneFrameResult, GameError> {
     // Render and the detached Spirit/font/compositor jobs all execute on the
     // one physical RCS0. Hold their existing fair lane through the exact
     // completion marker so a streaming game frame cannot reset or overwrite
@@ -467,7 +500,7 @@ async fn render_publish(
     }
     let window = surface.window.ok_or(GameError::InvalidFrame)?;
     crate::ui4::publish_window_frame(OWNER, window, crate::ui4::DamageRect::FULL)?;
-    Ok(())
+    Ok(result)
 }
 
 fn make_resident_batches(
@@ -568,11 +601,22 @@ async fn start_cube() -> Result<(GameSurface, Vec<ResidentTriangle>, usize), Gam
             return Err(error);
         }
     };
-    if let Err(error) = render_publish(&mut surface, &resident, scene.clear_rgba).await {
-        release_resident_scene(resident);
-        destroy_unpublished_surface(surface);
-        return Err(error);
-    }
+    let rendered = match render_publish(&mut surface, &resident, scene.clear_rgba).await {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            release_resident_scene(resident);
+            destroy_unpublished_surface(surface);
+            return Err(error);
+        }
+    };
+    publish_gpu_logger_sample(gpu_logger_sample(
+        &rendered,
+        1,
+        1,
+        &resident,
+        0,
+        0,
+    ));
     Ok((surface, resident, scene.triangles.len()))
 }
 
@@ -620,6 +664,10 @@ async fn run_churn() -> Result<(), GameError> {
 
     let mut first_frame = true;
     let mut frame_prepared = true;
+    let mut frame_index = 0u64;
+    let mut busy_retries = 0u64;
+    let mut incomplete_retries = 0u64;
+    let mut last_sample: Option<crate::spirit::gpu_logger::GpuLoggerSample> = None;
     let result = loop {
         if !first_frame && !frame_prepared {
             let Some(window) = surface.window else {
@@ -659,11 +707,30 @@ async fn run_churn() -> Result<(), GameError> {
             frame_prepared = true;
         }
         match render_publish(&mut surface, &resident, clear_rgba).await {
-            Ok(()) => frame_prepared = false,
+            Ok(rendered) => {
+                frame_prepared = false;
+                frame_index = frame_index.saturating_add(1);
+                let sample = gpu_logger_sample(
+                    &rendered,
+                    frame_index,
+                    engine.active_objects(),
+                    &resident,
+                    busy_retries,
+                    incomplete_retries,
+                );
+                publish_gpu_logger_sample(sample);
+                last_sample = Some(sample);
+            }
             Err(GameError::Frame(crate::ui4::FramePoolError::Busy)) => {
                 // Triple-buffer ownership can legitimately lag one producer
                 // tick. Keep these exact prepared bytes and retry after UI4
                 // has had a display-release opportunity.
+                busy_retries = busy_retries.saturating_add(1);
+                if let Some(mut sample) = last_sample {
+                    sample.busy_retries = busy_retries;
+                    publish_gpu_logger_sample(sample);
+                    last_sample = Some(sample);
+                }
                 Timer::after(Duration::from_millis(16)).await;
                 continue;
             }
@@ -671,6 +738,12 @@ async fn run_churn() -> Result<(), GameError> {
                 // Keep the last complete UI4 buffer visible and retry these
                 // exact resident bytes. A bounded GuC poll miss must not
                 // advance the game or rewrite late-read geometry.
+                incomplete_retries = incomplete_retries.saturating_add(1);
+                if let Some(mut sample) = last_sample {
+                    sample.incomplete_retries = incomplete_retries;
+                    publish_gpu_logger_sample(sample);
+                    last_sample = Some(sample);
+                }
                 Timer::after(Duration::from_millis(16)).await;
                 continue;
             }
