@@ -47,7 +47,7 @@ Build and run the fixed userspace C++ lane:
 make lfm25-cpp
 ./tools/lfm2.5-350m/cpp_prompt.sh --native "hi ai"
 make lfm25-cpp-verify
-make lfm25-igpu-verify
+make lfm25-igpu-packed-verify
 ```
 
 `lfm25-fixed` is intentionally model-specific rather than a general inference
@@ -68,19 +68,6 @@ b10075 values, runs the complete 16-layer native path across all ten sealed
 the b10075 oracle: `Hello! How can I help you today?`. The native path includes
 Q8 embeddings and projections, RMS norms, short convolution, RoPE attention
 with F16 KV state, SwiGLU, residuals, and the tied vocabulary projection.
-
-`make lfm25-igpu-verify` is the Ubuntu hardware gate. It feeds the published
-62,288-byte SPIR-V artifact to Intel NEO with `clCreateProgramWithIL`, requires
-IGC to return an executable device binary, and runs every fixed Q8 projection
-on the selected Intel GPU. The remaining norms, state updates, attention
-reductions, nonlinearities, tokenization, and control flow stay on the CPU.
-The gate traces the process and fails unless it observes `libigdrcl`, the IGC
-compiler libraries, an Intel DRM render node, and successful
-`DRM_IOCTL_I915_GEM_EXECBUFFER2` submissions. It then requires all ten sealed
-`hi` decisions and the complete `hi ai` reply to match the pinned b10075 oracle
-byte for byte. The runner reports the selected device, projection count,
-OpenCL event-profiled kernel time, NEO driver version, and the size and SHA-256
-of the host-specific executable returned after the IGC build.
 
 The packed endgame projection lane is verified independently before it enters
 the TRUEOS product image:
@@ -106,15 +93,8 @@ the packed SPIR-V to NEO, reports effective model-weight GB/s, and requires
 sealed `hi` plus `hi ai` parity. After that gate passes, TRUEOS repacks the
 sealed model once in place, verifies the packed hash, and selects the checked
 packed ADL-S artifact through the existing hybrid backend. The Shell2 `lum`
-command is unchanged, the legacy projection artifact remains published, and
-the product build requires both artifacts while rerunning the packed ISA
-check.
-
-The checked-in `lfm25_q8_project.bin` is the separate ADL-S Zebin admitted by
-the TRUEOS artifact contract. Ubuntu does not submit that ADL-S binary to the
-Raptor Lake UHD 770; it uses the identical published SPIR-V and lets the host
-IGC produce the appropriate Raptor Lake executable. This keeps the hardware
-test honest about the target while exercising the same kernel source and ABI.
+command is unchanged. The product build admits only the packed projection
+artifact and reruns its ISA check.
 
 The launchers use Liquid AI's recommended generation defaults: temperature
 `0.1`, top-k `50`, repetition penalty `1.05`, and a 32,768-token context.

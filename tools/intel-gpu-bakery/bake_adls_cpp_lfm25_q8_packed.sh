@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Canonical pinned bake for the fixed packed LFM2.5-350M Q8 projection.
-# This is an experimental sibling of lfm25_q8_project, not a replacement.
+# This is the sole published Lumen projection artifact.
 
 tool_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 trueos_root="$(cd "${tool_dir}/../.." && pwd)"

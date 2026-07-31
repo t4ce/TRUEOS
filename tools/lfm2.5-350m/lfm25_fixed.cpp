@@ -289,14 +289,12 @@ options parse_options(int argc, char ** argv) {
         fail(
             "usage: lfm25-fixed [--threads N] [--max-tokens N] PROMPT\n"
             "       lfm25-fixed --native [--threads N] [--max-tokens N] PROMPT\n"
-            "       lfm25-fixed --igpu [--max-tokens N] PROMPT\n"
             "       lfm25-fixed --igpu-packed [--max-tokens N] PROMPT\n"
             "       lfm25-fixed --parity-hi\n"
             "       lfm25-fixed [--threads N] --parity-q8\n"
             "       lfm25-fixed [--threads N] --parity-q8-packed\n"
             "       lfm25-fixed [--threads N] --parity-native-hi\n"
             "       lfm25-fixed --parity-packed-hi\n"
-            "       lfm25-fixed --parity-igpu-hi\n"
             "       lfm25-fixed --parity-igpu-packed-hi");
     }
     if (result.prompt.size() > kMaxPromptBytes) {

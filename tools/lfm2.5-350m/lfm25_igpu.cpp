@@ -433,7 +433,7 @@ struct intel_igc_projector::implementation {
                 0,
                 nullptr,
                 &raw_event),
-            "clEnqueueNDRangeKernel(lfm25_q8_project)");
+            "clEnqueueNDRangeKernel(lfm25_q8_project_packed)");
         event_owner event(raw_event);
 
         std::vector<float> result(rows);
