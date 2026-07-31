@@ -66,14 +66,14 @@ Both hashes are independent fields in the sealed header. A matching graph
 with a different voice archive is rejected because the style tensor's meaning
 depends on that archive.
 
-## Exact waveform parity gate
+## Native waveform acceptance
 
-`verify_kokoro_waveform.py` is the host-only step-2 acceptance gate. It pins
-the exact prepared-graph RTen reference and the KKAOT provenance, but compares
-a native waveform numerically. This distinction is intentional: the native
-quantized implementation must be deterministic across its own runs, while it
-does not need to be byte-identical to a different runtime's floating-point
-evaluation order.
+`verify_kokoro_waveform.py` retains the exact prepared-graph RTen comparison as
+a numerical diagnostic. Readiness uses `--native-acceptance`: it pins KKAOT
+provenance, requires byte-identical independent native runs, checks a finite
+non-silent waveform, and requires the pinned Whisper round-trip transcript.
+Raw RTen sample correlation is not a sound pass/fail gate for a different
+floating-point runtime with recurrent layers.
 
 The pinned input is voice `af_heart`, speed `1.0`, style row 149, and this
 149-token IPA string:
@@ -100,22 +100,29 @@ the exact prepared graph from `crates/ttstt` with:
   "həlˈoʊ fɹʌm tɹu oʊ ɛs. ðə kwɪk bɹaʊn fɑks dʒʌmps oʊvɚ ðə leɪzi dɔɡ. spɪtʃ sɪnθəsɪs ɪz naʊ ɹʌnɪŋ ɪn ðə kɜɹnəl, wɪð ə sɪɹiəlaɪzd eɪsɪŋk kju fɔɹ ðə ʃɛl."
 ```
 
-Once the native host harness emits two independent runs, the parity claim is:
+The accepted native vector resolves to `F=416`, or 249,600 samples. Once the
+host harness emits two independent runs, generate its transcript and run:
 
 ```sh
-python3 tools/ttstt/verify_kokoro_waveform.py \
-  --reference /tmp/trueos-kokoro-rten-baseline.wav \
+crates/ttstt/target/release/ttstt --quiet stt \
+  /tmp/trueos-kokoro-native-1.wav \
+  --model crates/ttstt/.ttstt/models/whisper/ggml-base.bin \
+  --language en --output /tmp/trueos-kokoro-native-transcript.txt
+
+python3 tools/ttstt/verify_kokoro_waveform.py --native-acceptance \
   --native /tmp/trueos-kokoro-native-1.wav \
   --native-repeat /tmp/trueos-kokoro-native-2.wav \
+  --transcript /tmp/trueos-kokoro-native-transcript.txt \
   --kkaot crates/ttstt/.ttstt/models/kokoro/kokoro.kkaot \
-  --controlled-perturbation
+  --print-contract
 ```
 
-The default quality gates are correlation at least 0.99, SNR at least 20 dB,
-RMSE at most 0.01, maximum absolute sample error at most 0.15, finite samples,
-absolute peak at most 1.0, and non-silent RMS. `--allow-single-native` is for
-diagnostics only and does not prove deterministic inference. Use
-`--print-contract` to emit the complete machine-readable pin set.
+The RTen diagnostic mode keeps gates of correlation at least 0.99, SNR at
+least 20 dB, RMSE at most 0.01, maximum absolute sample error at most 0.15,
+finite samples, absolute peak at most 1.0, and non-silent RMS.
+`--allow-single-native` is diagnostic only and does not prove deterministic
+inference. Use `--print-contract` to emit the complete machine-readable pin
+set.
 
 ## Real-model result
 

@@ -942,3 +942,33 @@ pub unsafe extern "C" fn trueos_cabi_spirit_response_present(
         .map(|owner| spirit_response_present(owner, turn, text))
         .unwrap_or(ERROR_BAD_OWNER)
 }
+
+pub(crate) fn spirit_move(x_normalized: f32, y_normalized: f32) -> i32 {
+    if !x_normalized.is_finite()
+        || !y_normalized.is_finite()
+        || !(0.0..=1.0).contains(&x_normalized)
+        || !(0.0..=1.0).contains(&y_normalized)
+    {
+        return ERROR_BAD_INPUT;
+    }
+    crate::spirit::move_spirit_to(x_normalized as f64, y_normalized as f64)
+        .map(|_| 0)
+        .unwrap_or(ERROR_UNAVAILABLE)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_spirit_move(x_normalized: f32, y_normalized: f32) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, data) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_SPIRIT_MOVE,
+            x_normalized.to_bits() as u64,
+            y_normalized.to_bits() as u64,
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            data as i64 as i32
+        } else {
+            ERROR_TRANSPORT
+        };
+    }
+    spirit_move(x_normalized, y_normalized)
+}

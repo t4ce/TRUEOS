@@ -136,6 +136,7 @@ pub const OP_BP_LUMEN_RESTORE_COMMIT: u32 = 0x108;
 pub const OP_BP_LUMEN_CLOSE: u32 = 0x109;
 pub const OP_BP_SPIRIT_EMOTION_PLAY: u32 = 0x10A;
 pub const OP_BP_SPIRIT_RESPONSE_PRESENT: u32 = 0x10B;
+pub const OP_BP_SPIRIT_MOVE: u32 = 0x10C;
 pub const OP_NET_TCP_WRITE: u32 = 0x10;
 pub const OP_NET_TCP_READ: u32 = 0x11;
 pub const OP_BP_NET_OPEN: u32 = 0x20;

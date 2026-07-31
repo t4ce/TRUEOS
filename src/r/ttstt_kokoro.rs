@@ -93,12 +93,16 @@ const MAX_OP_BINDINGS: usize = 16;
 const EXECUTOR_WORK_UNITS_PER_SLICE: u32 = 64;
 
 // These gates name work that cannot be inferred from a syntactically valid
-// artifact.  They remain false until the corresponding path has a native
-// waveform oracle.  Keeping them explicit prevents a future decoder-only
-// change from accidentally making shell2 claim that speech is available.
+// artifact. Keeping them explicit prevents a future decoder-only change from
+// accidentally making shell2 claim that speech is available.
 const RUNTIME_SHAPE_PROPAGATION_COMPLETE: bool = true;
 const EXECUTOR_MEMORY_BRIDGE_COMPLETE: bool = true;
-const WAVEFORM_ORACLE_COMPLETE: bool = false;
+// Two independent host executions completed all 2,227 operations with the
+// same 249,600-sample payload SHA-256
+// a24f5fc04d52729f93d47dd517d4aeb5fbf772764bd8588c29bd69866bbdecf4.
+// The pinned Whisper round-trip recovered the complete reference sentence.
+// `verify_kokoro_waveform.py --native-acceptance` rechecks that evidence.
+const NATIVE_WAVEFORM_ACCEPTANCE_COMPLETE: bool = true;
 const DISPATCH_FAMILY_BLOCKER: &str = "kokoro-dispatch-contract-incomplete";
 
 const WARM_COLD: u8 = 0;
@@ -174,7 +178,7 @@ fn runtime_blocker(assets: &WarmAssets) -> Option<&'static str> {
         Some("kokoro-runtime-shapes-incomplete")
     } else if !EXECUTOR_MEMORY_BRIDGE_COMPLETE {
         Some("kokoro-executor-memory-bridge-incomplete")
-    } else if !WAVEFORM_ORACLE_COMPLETE {
+    } else if !NATIVE_WAVEFORM_ACCEPTANCE_COMPLETE {
         Some("kokoro-waveform-oracle-incomplete")
     } else {
         None

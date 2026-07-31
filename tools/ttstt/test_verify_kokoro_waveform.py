@@ -36,6 +36,21 @@ class KokoroWaveformParityTests(unittest.TestCase):
             TOOL.EXPECTED_SAMPLE_COUNT,
             TOOL.EXPECTED_DECODER_FRAMES * TOOL.SAMPLES_PER_DECODER_FRAME,
         )
+        self.assertEqual(
+            TOOL.NATIVE_ACCEPTED_SAMPLE_COUNT,
+            TOOL.NATIVE_ACCEPTED_DECODER_FRAMES
+            * TOOL.NATIVE_ACCEPTED_SAMPLES_PER_FRAME,
+        )
+
+    def test_native_whisper_transcript_gate_is_word_exact(self) -> None:
+        TOOL.validate_native_transcript(TOOL.NATIVE_ACCEPTED_TRANSCRIPT)
+        TOOL.validate_native_transcript(
+            "HELLO from True OS! The quick brown fox jumps over the lazy dog; "
+            "spitch synthesis is now running in the kernel with a serialized "
+            "async queue for the shell."
+        )
+        with self.assertRaises(TOOL.VerificationError):
+            TOOL.validate_native_transcript("unintelligible output")
 
     def test_exact_waveform_has_perfect_metrics(self) -> None:
         samples = [0.0, 0.125, -0.25, 0.5, -0.375]

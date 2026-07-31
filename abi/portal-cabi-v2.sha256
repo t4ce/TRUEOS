@@ -58,10 +58,13 @@
 # Spirit response presentation is strictly additive. It accepts only the
 # Blueprint adapter's display-safe text after tool-control spans are handled;
 # existing Lumen and non-Lumen Blueprints do not import it and remain unchanged.
+# Spirit movement is strictly additive. It accepts only finite normalized
+# scanout coordinates and queues them through Spirit's existing bounded,
+# latest-wins movement capability; older Blueprints import no such authority.
 # The archive operation calls are strictly additive. They expose owner-scoped,
 # bounded, asynchronous TRUEOSFS path operations; older Blueprints do not
 # import them, and no existing filesystem or codec contract changes.
 # The UI4 font-canvas call is strictly additive. It accepts bounded colored
 # rows and builds one window-retained premultiplied RGBA8 canvas without
 # changing the legacy text-scene or frame-publish contracts.
-bada45f5c5c2eedb65cb2e0d945da311f600da3c756d3abace599d571f5ab4c4
+975178e8039e4f04b4033984845342995fdaea8cafcaa3b9f16fcdaeb0204ed1

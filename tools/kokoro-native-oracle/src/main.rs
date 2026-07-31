@@ -42,8 +42,10 @@ const EXPECTED_MODEL_SHA256: [u8; 32] = [
 ];
 
 const REFERENCE_IPA: &str = "həlˈoʊ fɹʌm tɹu oʊ ɛs. ðə kwɪk bɹaʊn fɑks dʒʌmps oʊvɚ ðə leɪzi dɔɡ. spɪtʃ sɪnθəsɪs ɪz naʊ ɹʌnɪŋ ɪn ðə kɜɹnəl, wɪð ə sɪɹiəlaɪzd eɪsɪŋk kju fɔɹ ðə ʃɛl.";
-const REFERENCE_FRAMES: u32 = 412;
-const REFERENCE_SAMPLES: usize = 247_200;
+const REFERENCE_FRAMES: u32 = 416;
+const REFERENCE_SAMPLES: usize = 249_600;
+const REFERENCE_WAV_SHA256: &str =
+    "1e940079ead43156d13dfd8f55fb1955804da04d5cef2ba987c3cd0d69e5aba3";
 const REFERENCE_LOGITS_SHA256: &str =
     "6d1489df516fb94f03727b2943d0d11fb3e38b3253db9191e6aa5b4be3acb77a";
 const REFERENCE_PRE_QGEMM_SHA256: &str =
@@ -84,10 +86,9 @@ impl Config {
             wav_path: PathBuf::from("/tmp/trueos-kokoro-native-oracle.wav"),
             expect_frames: Some(REFERENCE_FRAMES),
             expect_samples: Some(REFERENCE_SAMPLES),
-            // Native floating-point kernels are gated numerically against the
-            // RTen oracle by verify_kokoro_waveform.py. Byte identity is an
-            // optional stronger assertion, not a valid default requirement.
-            expect_wav_sha256: None,
+            // This golden was reproduced by two independent full executions
+            // and passed the pinned Whisper round-trip acceptance gate.
+            expect_wav_sha256: Some(REFERENCE_WAV_SHA256.to_owned()),
             phase0_only: false,
         };
 
@@ -100,7 +101,7 @@ impl Config {
                     config.input = Input::Ipa(REFERENCE_IPA.to_owned());
                     config.expect_frames = Some(REFERENCE_FRAMES);
                     config.expect_samples = Some(REFERENCE_SAMPLES);
-                    config.expect_wav_sha256 = None;
+                    config.expect_wav_sha256 = Some(REFERENCE_WAV_SHA256.to_owned());
                     custom_input = false;
                 }
                 "--model-dir" => {
@@ -190,10 +191,10 @@ fn usage(code: i32) -> ! {
     eprintln!(
         "usage: kokoro-native-oracle [OPTIONS]\n\
          \n\
-         With no options, run the pinned F=412 RTen parity vector.\n\
+         With no options, run the accepted deterministic F=416 native vector.\n\
          \n\
          Input (choose one):\n\
-           --reference                 pinned IPA, frame, and sample expectations\n\
+           --reference                 pinned IPA and native golden expectations\n\
            --ipa IPA                   deterministic pre-phonemized input\n\
            --ipa-file PATH             read deterministic IPA from a file\n\
            --text TEXT                 run native G2P + Misaki first\n\

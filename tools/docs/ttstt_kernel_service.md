@@ -249,24 +249,18 @@ HDA readiness, and cumulative handoff/completion/failure/cancellation counts.
 ## Current implementation boundary
 
 The model residency, serialized queue, validated streaming contract, PCM
-handoff into the live kernel playback lane, local Rust oracle, and quantized
-CPU/GPU kernels are implemented. The full 3,615-node source graph now closes to
-2,227 non-overlapping typed operations: every source node has exactly one
-owner, the phase ranges are `[0,1079)` and `[1079,2227)`, and recurrent,
-layout/index, float-convolution, resize, inverse-STFT, scalar, and duration
-kernels exist behind checked no-std APIs. The zero-copy voice parser, exact
-runtime shape table, cooperative executor, and allocation-free tensor-memory
-bridge also pass their independent gates.
+handoff into the live kernel playback lane, and native `SpeechBackend` are
+implemented. The full 3,615-node source graph closes to 2,227 non-overlapping
+typed operations with phase ranges `[0,1079)` and `[1079,2227)`. The resident
+job preserves executor, arena, workspace, waveform, and PCM-backpressure state
+across cooperative scheduler visits.
 
-The repository does not yet install a native Kokoro `SpeechBackend`;
-consequently a current boot correctly reports
-`native-kokoro-backend-unregistered` and does not generate placeholder tones or
-claim synthesis. The remaining critical path is narrower and explicit: emit
-the real post-fusion slot/capacity-planned `kokoro.kkaot`, finish the typed Rust
-attribute dispatcher and English frontend assets, bind the three model inputs
-and waveform output, then compare native samples against the pinned oracle.
-Audible speech begins only when that complete executor registers the backend
-and passes the waveform check.
+Two independent host executions completed every operation and emitted the
+same 249,600-sample native payload. The pinned Whisper round trip recovered the
+complete reference sentence, so native readiness is sealed by deterministic
+output plus semantic audio acceptance rather than raw RTen sample identity.
+The remaining validation boundary is a boot and live `tts` playback run on the
+i5-14500T target; host success does not by itself prove the HDA hardware path.
 
 File STT reads a signed 16-bit mono/stereo PCM WAV from TRUEOSFS on the BSP,
 downmixes and resamples it to Whisper's mono 16 kHz boundary with periodic

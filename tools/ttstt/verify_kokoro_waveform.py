@@ -30,6 +30,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 import struct
 import sys
 from typing import Sequence
@@ -55,6 +56,28 @@ EXPECTED_SAMPLE_COUNT = EXPECTED_DECODER_FRAMES * SAMPLES_PER_DECODER_FRAME
 EXPECTED_SAMPLE_RATE = 24_000
 EXPECTED_CHANNELS = 1
 EXPECTED_SAMPLE_BYTES = 4
+
+# The native implementation is a different floating-point runtime, so raw
+# sample identity with RTen is not a sound readiness criterion.  This golden
+# is accepted only together with an exact independent repeat and the pinned
+# Whisper round-trip transcript below.
+NATIVE_ACCEPTED_DECODER_FRAMES = 416
+NATIVE_ACCEPTED_SAMPLES_PER_FRAME = 600
+NATIVE_ACCEPTED_SAMPLE_COUNT = (
+    NATIVE_ACCEPTED_DECODER_FRAMES * NATIVE_ACCEPTED_SAMPLES_PER_FRAME
+)
+NATIVE_ACCEPTED_WAV_BYTES = 998_468
+NATIVE_ACCEPTED_WAV_SHA256 = (
+    "1e940079ead43156d13dfd8f55fb1955804da04d5cef2ba987c3cd0d69e5aba3"
+)
+NATIVE_ACCEPTED_PAYLOAD_SHA256 = (
+    "a24f5fc04d52729f93d47dd517d4aeb5fbf772764bd8588c29bd69866bbdecf4"
+)
+NATIVE_ACCEPTED_TRANSCRIPT = (
+    "Hello from True OS. The quick brown fox jumps over the lazy dog. "
+    "Spitch synthesis is now running in the kernel, with a serialized async "
+    "queue for the shell."
+)
 
 REFERENCE_WAV_BYTES = 988_868
 REFERENCE_WAV_SHA256 = "754ce3b947dde9dbe99279a77a3b7ddf85a0be1bc2dc05663864e40bf8be4388"
@@ -222,7 +245,14 @@ def read_waveform(path: Path) -> Waveform:
     )
 
 
-def validate_shape(waveform: Waveform, role: str) -> SampleStats:
+def validate_shape_contract(
+    waveform: Waveform,
+    role: str,
+    *,
+    expected_frames: int,
+    samples_per_frame: int,
+    expected_samples: int,
+) -> SampleStats:
     fmt = waveform.audio_format
     if fmt.sample_bytes != EXPECTED_SAMPLE_BYTES:
         raise VerificationError(f"{role}: sample width is not f32")
@@ -233,16 +263,16 @@ def validate_shape(waveform: Waveform, role: str) -> SampleStats:
                 f"channels={fmt.channels} rate={fmt.sample_rate}"
             )
     count = len(waveform.samples)
-    if count != EXPECTED_SAMPLE_COUNT:
+    if count != expected_samples:
         raise VerificationError(
-            f"{role}: expected {EXPECTED_SAMPLE_COUNT} samples, got {count}"
+            f"{role}: expected {expected_samples} samples, got {count}"
         )
-    if count % SAMPLES_PER_DECODER_FRAME != 0:
+    if count % samples_per_frame != 0:
         raise VerificationError(f"{role}: waveform is not frame-exact")
-    frames = count // SAMPLES_PER_DECODER_FRAME
-    if frames != EXPECTED_DECODER_FRAMES:
+    frames = count // samples_per_frame
+    if frames != expected_frames:
         raise VerificationError(
-            f"{role}: expected F={EXPECTED_DECODER_FRAMES}, got F={frames}"
+            f"{role}: expected F={expected_frames}, got F={frames}"
         )
     if not all(math.isfinite(value) for value in waveform.samples):
         raise VerificationError(f"{role}: waveform contains NaN or infinity")
@@ -258,6 +288,51 @@ def validate_shape(waveform: Waveform, role: str) -> SampleStats:
             f"{ABSOLUTE_SAMPLE_LIMIT}"
         )
     return SampleStats(count, frames, minimum, maximum, peak, mean, rms)
+
+
+def validate_shape(waveform: Waveform, role: str) -> SampleStats:
+    return validate_shape_contract(
+        waveform,
+        role,
+        expected_frames=EXPECTED_DECODER_FRAMES,
+        samples_per_frame=SAMPLES_PER_DECODER_FRAME,
+        expected_samples=EXPECTED_SAMPLE_COUNT,
+    )
+
+
+def validate_native_acceptance(waveform: Waveform, role: str) -> SampleStats:
+    stats = validate_shape_contract(
+        waveform,
+        role,
+        expected_frames=NATIVE_ACCEPTED_DECODER_FRAMES,
+        samples_per_frame=NATIVE_ACCEPTED_SAMPLES_PER_FRAME,
+        expected_samples=NATIVE_ACCEPTED_SAMPLE_COUNT,
+    )
+    if waveform.payload_sha256 != NATIVE_ACCEPTED_PAYLOAD_SHA256:
+        raise VerificationError(
+            f"{role}: payload SHA-256 does not match the accepted native golden"
+        )
+    if waveform.audio_format.container == "wav-f32le":
+        if waveform.file_sha256 != NATIVE_ACCEPTED_WAV_SHA256:
+            raise VerificationError(
+                f"{role}: WAVE SHA-256 does not match the accepted native golden"
+            )
+        if waveform.path.stat().st_size != NATIVE_ACCEPTED_WAV_BYTES:
+            raise VerificationError(f"{role}: native WAVE byte length changed")
+    if stats.rms < MIN_NATIVE_RMS:
+        raise VerificationError(f"{role}: native waveform is silent")
+    return stats
+
+
+def normalized_transcript(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.casefold())
+
+
+def validate_native_transcript(text: str) -> None:
+    if normalized_transcript(text) != normalized_transcript(NATIVE_ACCEPTED_TRANSCRIPT):
+        raise VerificationError(
+            "native transcript does not match the pinned Whisper round-trip"
+        )
 
 
 def validate_reference(waveform: Waveform) -> None:
@@ -414,6 +489,15 @@ def contract() -> dict[str, object]:
             "model_sha256": KKAOT_MODEL_SHA256,
             "voices_sha256": KKAOT_VOICES_SHA256,
         },
+        "native_acceptance": {
+            "decoder_frames": NATIVE_ACCEPTED_DECODER_FRAMES,
+            "samples_per_decoder_frame": NATIVE_ACCEPTED_SAMPLES_PER_FRAME,
+            "sample_count": NATIVE_ACCEPTED_SAMPLE_COUNT,
+            "wav_bytes": NATIVE_ACCEPTED_WAV_BYTES,
+            "wav_sha256": NATIVE_ACCEPTED_WAV_SHA256,
+            "payload_sha256": NATIVE_ACCEPTED_PAYLOAD_SHA256,
+            "whisper_transcript": NATIVE_ACCEPTED_TRANSCRIPT,
+        },
     }
 
 
@@ -482,6 +566,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--kkaot", type=Path, help="also validate the exact KKAOT artifact")
     parser.add_argument(
+        "--native-acceptance",
+        action="store_true",
+        help=(
+            "validate the deterministic native golden and Whisper round-trip "
+            "instead of requiring raw RTen sample parity"
+        ),
+    )
+    parser.add_argument(
+        "--transcript",
+        type=Path,
+        help="Whisper transcript produced from --native (required by --native-acceptance)",
+    )
+    parser.add_argument(
         "--allow-single-native",
         action="store_true",
         help="diagnostic metrics only; deterministic native inference remains unproven",
@@ -504,8 +601,76 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def run_native_acceptance(args: argparse.Namespace) -> int:
+    missing = []
+    if args.native is None:
+        missing.append("--native")
+    if not args.native_repeat:
+        missing.append("--native-repeat")
+    if args.transcript is None:
+        missing.append("--transcript")
+    if args.kkaot is None:
+        missing.append("--kkaot")
+    if missing:
+        raise SystemExit(
+            "--native-acceptance requires " + ", ".join(missing)
+        )
+
+    try:
+        native = read_waveform(args.native)
+        native_stats = validate_native_acceptance(native, "native")
+        repeat_reports: list[dict[str, object]] = []
+        for index, repeat_path in enumerate(args.native_repeat, start=1):
+            repeat = read_waveform(repeat_path)
+            repeat_stats = validate_native_acceptance(repeat, f"native repeat {index}")
+            if repeat.payload_sha256 != native.payload_sha256:
+                raise VerificationError(
+                    f"native repeat {index} is not byte-deterministic"
+                )
+            repeat_reports.append(_waveform_report(repeat, repeat_stats))
+        try:
+            transcript = args.transcript.read_text(encoding="utf-8")
+        except OSError as error:
+            raise VerificationError(
+                f"cannot read native transcript {args.transcript}: {error}"
+            ) from error
+        validate_native_transcript(transcript)
+        kkaot_report = validate_kkaot(args.kkaot)
+    except VerificationError as error:
+        if args.json:
+            print(json.dumps({"pass": False, "error": str(error)}, indent=2))
+        else:
+            print(f"kokoro-native-acceptance: FAIL: {error}")
+        return 1
+
+    report: dict[str, object] = {
+        "pass": True,
+        "contract": contract() if args.print_contract else None,
+        "native": _waveform_report(native, native_stats),
+        "native_repeats": repeat_reports,
+        "transcript": transcript.strip(),
+        "kkaot": kkaot_report,
+    }
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False))
+    else:
+        print(
+            "kokoro-native-acceptance: PASS "
+            f"F={native_stats.decoder_frames} samples={native_stats.count} "
+            f"native_sha256={native.payload_sha256} repeats={len(repeat_reports)}"
+        )
+        print(f"  Whisper: {transcript.strip()}")
+        print(
+            f"  KKAOT: bytes={kkaot_report['bytes']} "
+            f"sha256={kkaot_report['file_sha256']}"
+        )
+    return 0
+
+
 def main() -> int:
     args = parse_args()
+    if args.native_acceptance:
+        return run_native_acceptance(args)
     if args.print_contract and args.reference is None and args.native is None:
         print(json.dumps(contract(), indent=2, sort_keys=True, ensure_ascii=False))
         return 0

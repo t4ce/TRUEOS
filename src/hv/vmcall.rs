@@ -160,6 +160,7 @@ pub const OP_BP_LUMEN_RESTORE_COMMIT: u32 = 0x108;
 pub const OP_BP_LUMEN_CLOSE: u32 = 0x109;
 pub const OP_BP_SPIRIT_EMOTION_PLAY: u32 = 0x10A;
 pub const OP_BP_SPIRIT_RESPONSE_PRESENT: u32 = 0x10B;
+pub const OP_BP_SPIRIT_MOVE: u32 = 0x10C;
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -770,6 +771,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let rc = request_payload(vm_id, req_len)
                 .map(|text| crate::r::lumen_service::spirit_response_present(vm_id, arg0, text))
                 .unwrap_or(-3);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SPIRIT_MOVE => {
+            let x = f32::from_bits(arg0 as u32);
+            let y = f32::from_bits(arg1 as u32);
+            let rc = crate::r::lumen_service::spirit_move(x, y);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

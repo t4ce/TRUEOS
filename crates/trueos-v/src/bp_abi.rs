@@ -302,6 +302,7 @@ unsafe extern "C" {
         text_ptr: *const u8,
         text_len: usize,
     ) -> i32;
+    pub fn trueos_cabi_spirit_move(x_normalized: f32, y_normalized: f32) -> i32;
 
     pub fn trueos_cabi_gridpaper_snapshot_submit(
         generation: u64,
