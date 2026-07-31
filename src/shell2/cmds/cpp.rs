@@ -382,7 +382,7 @@ fn print_list(io: &'static dyn ShellBackend2) {
     );
     print_shell_line(
         io,
-        "cpp font go: 60-second progressive FontKernel stamp probe; four dirty/double UI4 frames tile the scanout in a 2x2 layout",
+        "cpp font go: 60-second progressive FontKernel stamp probe; four dirty/double UI4 frames tile one composed plane in a 2x2 layout",
     );
     print_shell_line(
         io,
@@ -1204,7 +1204,7 @@ fn queue_font_service_go(io: &'static dyn ShellBackend2) {
             print_shell_line(
                 io,
                 alloc::format!(
-                    "cpp font go: queued=1 request={} windows=4 layout=2x2 scanout={}x{} frame_extent={}x{} duration_ms=60000 cadence_ms=2000 ramp=48-to-1408-glyphs-per-frame variations=font+size+slant+color+alpha+position+layers output=ui4-direct-font-scene path=gpu-clear->skrifa->gpu-vm-r8->cpp-igc->guc-rcs->ui4-rgba8 stop=\"cpp stop\"",
+                    "cpp font go: queued=1 request={} windows=4 layout=2x2 scanout={}x{} frame_extent={}x{} duration_ms=60000 cadence_ms=2000 ramp=48-to-1408-glyphs-per-frame variations=font+size+slant+color+alpha+position+layers output=ui4-composed-font-scene path=gpu-clear->skrifa->gpu-vm-r8->cpp-igc->guc-rcs->ui4-rgba8 stop=\"cpp stop\"",
                     serial,
                     scanout_width,
                     scanout_height,

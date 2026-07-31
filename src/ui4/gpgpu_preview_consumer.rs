@@ -140,7 +140,7 @@ impl GpgpuPreviewPreset {
             | Self::CppAudio
             | Self::CppParticle
             | Self::CppFont => "slot1-direct",
-            Self::CppFontGo => "slots0+1+2+3-direct/2x2",
+            Self::CppFontGo => "slot1-composed/2x2",
         }
     }
 }
@@ -858,7 +858,13 @@ fn cpp_font_go_tile(
     let height = output_height / 2;
     let column = index as u32 % 2;
     let row = index as u32 / 2;
-    (column.saturating_mul(width), row.saturating_mul(height), width, height, index % 3 + 1)
+    (
+        column.saturating_mul(width),
+        row.saturating_mul(height),
+        width,
+        height,
+        super::ALPHA_OVERLAY_PLANE_SLOT,
+    )
 }
 
 fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static str> {
@@ -2274,7 +2280,7 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "ui4-cpp-resizable-slot1",
         GpgpuPreviewPreset::CppFont => "ui4-font-scene-slot1",
-        GpgpuPreviewPreset::CppFontGo => "ui4-font-scene-2x2-direct",
+        GpgpuPreviewPreset::CppFontGo => "ui4-font-scene-2x2-composed",
         GpgpuPreviewPreset::Static => "ui4-overlay",
         GpgpuPreviewPreset::Static30 => "ui4-font-scene-slots1+2+3",
     }
@@ -2874,8 +2880,8 @@ mod tests {
     #[test]
     fn cpp_font_go_tiles_1440p_into_four_equal_frames() {
         assert_eq!(cpp_font_go_tile(2560, 1440, 0), (0, 0, 1280, 720, 1));
-        assert_eq!(cpp_font_go_tile(2560, 1440, 1), (1280, 0, 1280, 720, 2));
-        assert_eq!(cpp_font_go_tile(2560, 1440, 2), (0, 720, 1280, 720, 3));
+        assert_eq!(cpp_font_go_tile(2560, 1440, 1), (1280, 0, 1280, 720, 1));
+        assert_eq!(cpp_font_go_tile(2560, 1440, 2), (0, 720, 1280, 720, 1));
         assert_eq!(cpp_font_go_tile(2560, 1440, 3), (1280, 720, 1280, 720, 1));
     }
 

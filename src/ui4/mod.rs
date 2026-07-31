@@ -464,6 +464,18 @@ impl FramePlan {
     }
 }
 
+/// Frames which intentionally share their requested broker plane and are
+/// therefore composed together by UI4 instead of being isolated for direct
+/// scanout. Dirty FontScene frames retain double buffering so a producer
+/// never overwrites the stable front while composition reads it.
+pub(crate) const fn frame_plan_shares_compositor_plane(plan: FramePlan) -> bool {
+    matches!(plan.buffering, FrameBuffering::Single)
+        || matches!(
+            (plan.content, plan.cadence, plan.buffering),
+            (FrameContent::FontScene2d, FrameCadence::Dirty, FrameBuffering::Double)
+        )
+}
+
 pub(crate) const fn video_frame_extent_admitted(width: u32, height: u32) -> bool {
     width != 0
         && height != 0
@@ -545,4 +557,24 @@ const _: () = {
         }),
         Err(FramePlanError::RenderSceneRequiresTripleBuffering)
     ));
+    let shared_font_scene = match FramePlan::from_spec(FrameSpec {
+        content: FrameContent::FontScene2d,
+        cadence: FrameCadence::Dirty,
+        buffering: FrameBuffering::Double,
+        ..admitted_video
+    }) {
+        Ok(plan) => plan,
+        Err(_) => panic!("dirty/double FontScene plan must be valid"),
+    };
+    assert!(frame_plan_shares_compositor_plane(shared_font_scene));
+    let isolated_image = match FramePlan::from_spec(FrameSpec {
+        content: FrameContent::Image,
+        cadence: FrameCadence::Dirty,
+        buffering: FrameBuffering::Double,
+        ..admitted_video
+    }) {
+        Ok(plan) => plan,
+        Err(_) => panic!("dirty/double image plan must be valid"),
+    };
+    assert!(!frame_plan_shares_compositor_plane(isolated_image));
 };

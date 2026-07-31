@@ -21,9 +21,10 @@ pub(super) const MAX_WINDOWS: usize = 256;
 // MAX_WINDOWS remains only the broker registry's hard storage bound.
 const MAX_WINDOWS_PER_SESSION: usize = 32;
 const MAX_SESSIONS: usize = 64;
-/// Temporary direct-scanout admission boundary. Double- and triple-buffered
-/// windows each own one of the four application planes; single-buffered
-/// windows remain unrestricted by this soft cap and may share those planes.
+/// Temporary direct-scanout admission boundary. Non-shareable double- and
+/// triple-buffered windows each own one of the four application planes.
+/// Single-buffered windows and dirty/double FontScene composition members
+/// remain unrestricted by this soft cap and may share a requested plane.
 pub(super) const MAX_EXPENSIVE_WINDOWS: usize = super::INTERACTION_OVERLAY_PLANE_SLOT;
 pub(crate) const WINDOW_BROKER_SNAPSHOT_PERIOD_MS: u64 = 3_000;
 const WINDOW_BROKER_SNAPSHOT_RECEIVERS: usize = 8;
@@ -577,20 +578,23 @@ impl WindowBroker {
         &self,
         requested: WindowPlane,
         buffering: FrameBuffering,
+        share_requested_plane: bool,
         replacing_slot: Option<usize>,
         owner: WindowOwner,
         session: WindowSessionId,
     ) -> Result<WindowPlane, WindowBrokerError> {
-        if buffering == FrameBuffering::Single {
+        if share_requested_plane {
             return Ok(requested);
         }
 
         let mut occupied = [false; MAX_EXPENSIVE_WINDOWS];
         let mut active = 0usize;
         for (slot, window) in self.windows.iter().enumerate() {
+            let shares_compositor_plane = super::frame_snapshot(window.frame)
+                .is_ok_and(|snapshot| super::frame_plan_shares_compositor_plane(snapshot.plan));
             if Some(slot) != replacing_slot
                 && window.state != WindowState::Closed
-                && window.buffering != FrameBuffering::Single
+                && !shares_compositor_plane
             {
                 active = active.saturating_add(1);
                 occupied[window.plane.slot()] = true;
@@ -621,8 +625,17 @@ impl WindowBroker {
 
     fn create(
         &mut self,
+        request: WindowCreate,
+        buffering: FrameBuffering,
+    ) -> Result<WindowId, WindowBrokerError> {
+        self.create_with_plane_policy(request, buffering, buffering == FrameBuffering::Single)
+    }
+
+    fn create_with_plane_policy(
+        &mut self,
         mut request: WindowCreate,
         buffering: FrameBuffering,
+        share_requested_plane: bool,
     ) -> Result<WindowId, WindowBrokerError> {
         self.checked_session(request.owner, request.session)?;
         if !request.placement.valid() {
@@ -642,8 +655,14 @@ impl WindowBroker {
             return Err(WindowBrokerError::Capacity);
         }
         let requested_plane = request.plane;
-        request.plane =
-            self.select_plane(request.plane, buffering, None, request.owner, request.session)?;
+        request.plane = self.select_plane(
+            request.plane,
+            buffering,
+            share_requested_plane,
+            None,
+            request.owner,
+            request.session,
+        )?;
         if request.plane != requested_plane {
             crate::log_info!(
                 target: "ui4";
@@ -683,6 +702,7 @@ impl WindowBroker {
         id: WindowId,
         frame: FrameHandle,
         buffering: FrameBuffering,
+        share_requested_plane: bool,
     ) -> Result<(), WindowBrokerError> {
         let (slot, generation) = unpack_handle(id.0)?;
         let current = self
@@ -704,6 +724,7 @@ impl WindowBroker {
         let plane = self.select_plane(
             current.plane,
             buffering,
+            share_requested_plane,
             Some(slot),
             current.owner,
             current.session,
@@ -1255,11 +1276,16 @@ fn reap_transition_retired_frames() {
 }
 
 pub(crate) fn create_window(request: WindowCreate) -> Result<WindowId, WindowBrokerError> {
-    let buffering = super::frame_snapshot(request.frame)
+    let plan = super::frame_snapshot(request.frame)
         .map_err(|_| WindowBrokerError::InvalidHandle)?
-        .plan
-        .buffering;
-    let id = WINDOW_BROKER.lock().create(request, buffering)?;
+        .plan;
+    let id = if super::frame_plan_shares_compositor_plane(plan) {
+        WINDOW_BROKER
+            .lock()
+            .create_with_plane_policy(request, plan.buffering, true)?
+    } else {
+        WINDOW_BROKER.lock().create(request, plan.buffering)?
+    };
     if super::cursor_frame_inout::frame_opened(request.owner, request.session, id).is_err() {
         let _ = close_window(request.owner, id);
         return Err(WindowBrokerError::Capacity);
@@ -1272,13 +1298,16 @@ pub(crate) fn replace_window_frame(
     id: WindowId,
     frame: FrameHandle,
 ) -> Result<(), WindowBrokerError> {
-    let buffering = super::frame_snapshot(frame)
+    let plan = super::frame_snapshot(frame)
         .map_err(|_| WindowBrokerError::InvalidHandle)?
-        .plan
-        .buffering;
-    WINDOW_BROKER
-        .lock()
-        .replace_frame(owner, id, frame, buffering)?;
+        .plan;
+    WINDOW_BROKER.lock().replace_frame(
+        owner,
+        id,
+        frame,
+        plan.buffering,
+        super::frame_plan_shares_compositor_plane(plan),
+    )?;
     super::cursor_frame_inout::frame_visual_changed(owner, id);
     Ok(())
 }

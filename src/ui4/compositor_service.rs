@@ -28,6 +28,7 @@ static COMPUTE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_CPU_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_BCS0_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
+static DIRTY_FONT_SHARED_COMPOSITION_LOGGED: AtomicBool = AtomicBool::new(false);
 static VIDEO_SURFLIVE_RELEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -276,7 +277,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand expensive=double+triple/one-per-slot/soft-cap-4 mixed_slot=local-winner/placement-old+new-repair static_single=shared-slot-composition slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
+        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand expensive=nonshared-double+triple/one-per-slot/soft-cap-4 shared=single+dirty-font-double/slot-local-composition mixed_slot=local-winner/placement-old+new-repair static_single=shared-slot-composition slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
         CLOSE_TRANSITION_PERIOD_MS,
         PENDING_POLL_PERIOD_MS,
     );
@@ -778,16 +779,44 @@ fn queue_async_plane(
             (window, view)
         })
         .collect();
-    // Single-buffer frames are already complete rectangles. They do
-    // not need a per-output-pixel layer search: the first pristine backbuffer
-    // is painted by one ordered BCS batch, while the CPU fallback still owns
-    // non-pristine damage until a BCS clear is activated. Plane slots are
-    // independent scanout inputs, so overlap is considered only inside this
-    // already slot-filtered selection.
-    let all_static_single = !selected.is_empty()
-        && selected
-            .iter()
-            .all(|(window, _)| window.buffering == super::FrameBuffering::Single);
+    // Explicitly shareable frames compose into one broker plane instead of
+    // consuming one hardware plane per window. Immutable/single sources use
+    // the sparse BCS/CPU painter. Dirty/double FontScene sources keep a stable
+    // published front while their producer writes the back buffer, then use
+    // the ordinary GPU compositor. Plane slots are independent scanout inputs,
+    // so overlap is considered only inside this already slot-filtered set.
+    let all_shared_composable = !selected.is_empty()
+        && selected.iter().all(|(window, _)| {
+            frame_snapshot(window.frame)
+                .is_ok_and(|snapshot| super::frame_plan_shares_compositor_plane(snapshot.plan))
+        });
+    let all_static_single = all_shared_composable
+        && selected.iter().all(|(window, _)| {
+            frame_snapshot(window.frame).is_ok_and(|snapshot| {
+                snapshot.plan.cadence == super::FrameCadence::Immutable
+                    && snapshot.plan.buffering == super::FrameBuffering::Single
+            })
+        });
+    let all_dirty_double_font = all_shared_composable
+        && selected.iter().all(|(window, _)| {
+            frame_snapshot(window.frame).is_ok_and(|snapshot| {
+                matches!(
+                    (snapshot.plan.content, snapshot.plan.cadence, snapshot.plan.buffering),
+                    (
+                        FrameContent::FontScene2d,
+                        super::FrameCadence::Dirty,
+                        super::FrameBuffering::Double
+                    )
+                )
+            })
+        });
+    if all_dirty_double_font && !DIRTY_FONT_SHARED_COMPOSITION_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_info!(target: "ui4";
+            "ui4/font-composition: mode=shared-slot plane={} windows={} buffering=dirty/double backend=guc-rcs-rgba8-batch source_ownership=stable-front+producer-back direct_scanout=0 cpu_frame_copy=0 log=once\n",
+            target_plane_slot(plan.target),
+            selected.len(),
+        );
+    }
     let sparse_static_painter = all_static_single;
     if sparse_static_painter
         && same_slot_windows_overlap(&selected)
@@ -800,7 +829,7 @@ fn queue_async_plane(
     }
     let local_direct = if selected.len() == 1 {
         selected.first().copied()
-    } else if !all_static_single {
+    } else if !all_shared_composable {
         plan.selected
             .and_then(|id| selected.iter().copied().find(|(window, _)| window.id == id))
             .or_else(|| selected.last().copied())
@@ -884,7 +913,7 @@ fn queue_async_plane(
             }
         }
     }
-    if !all_static_single && !selected.is_empty() {
+    if !all_shared_composable && !selected.is_empty() {
         return Err(Ui4CompositorError::PresentFailed);
     }
     let pixels: Vec<&[u8]> = selected
@@ -1013,22 +1042,14 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
         }
         FrameGpuRelease::Compute(_) => {
             window.plane.slot() < super::INTERACTION_OVERLAY_PLANE_SLOT
-                && compute_release_direct_lifecycle(snapshot.plan.content, snapshot.plan.buffering)
+                && matches!(
+                    (snapshot.plan.content, snapshot.plan.buffering),
+                    (FrameContent::Image, super::FrameBuffering::Double)
+                        | (FrameContent::BlueprintScene, super::FrameBuffering::Triple)
+                        | (FrameContent::Video, super::FrameBuffering::Quad)
+                )
         }
     })
-}
-
-const fn compute_release_direct_lifecycle(
-    content: FrameContent,
-    buffering: super::FrameBuffering,
-) -> bool {
-    matches!(
-        (content, buffering),
-        (FrameContent::Image, super::FrameBuffering::Double)
-            | (FrameContent::FontScene2d, super::FrameBuffering::Double)
-            | (FrameContent::BlueprintScene, super::FrameBuffering::Triple)
-            | (FrameContent::Video, super::FrameBuffering::Quad)
-    )
 }
 
 fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool {
@@ -1431,18 +1452,6 @@ mod damage_tests {
         assert!(half_scale_backing_matches(2559, 1439, 1280, 720));
         assert!(!half_scale_backing_matches(2560, 1440, 640, 400));
         assert!(!half_scale_backing_matches(2560, 1440, 2560, 1440));
-    }
-
-    #[test]
-    fn dirty_double_font_frames_are_direct_presentable() {
-        assert!(compute_release_direct_lifecycle(
-            FrameContent::FontScene2d,
-            super::super::FrameBuffering::Double,
-        ));
-        assert!(!compute_release_direct_lifecycle(
-            FrameContent::FontScene2d,
-            super::super::FrameBuffering::Single,
-        ));
     }
 
     #[test]
