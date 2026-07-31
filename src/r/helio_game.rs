@@ -1,16 +1,89 @@
-//! Boot-time presentation of the build-produced Helio game artifact.
+//! On-demand presentation of the build-produced Helio game artifact.
 //!
 //! Artifact parsing and CPU-side dynamic-camera lowering are reusable and
 //! scene-independent. This module owns only TRUEOS residency, its existing
 //! one-GuC Render submission, and UI4 publication.
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU8, Ordering};
 use embassy_time::{Duration, Timer};
 
 const GAME_ARTIFACT: &[u8] = include_bytes!("../../assets/helio/simple-cube.trueos.intel.helio");
 const OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(8);
 const PLANE_SLOT: usize = crate::ui4::RGB_OVERLAY_PLANE_SLOT_2;
 const MARGIN: u32 = 48;
+
+const STATE_IDLE: u8 = 0;
+const STATE_REQUESTED: u8 = 1;
+const STATE_STARTING: u8 = 2;
+const STATE_ONLINE: u8 = 3;
+
+static GAME_STATE: AtomicU8 = AtomicU8::new(STATE_IDLE);
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameState {
+    Idle,
+    Requested,
+    Starting,
+    Online,
+}
+
+impl GameState {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Requested => "requested",
+            Self::Starting => "starting",
+            Self::Online => "online",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum LaunchRequest {
+    Queued,
+    AlreadyRequested,
+    AlreadyStarting,
+    AlreadyOnline,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameStatus {
+    pub(crate) state: GameState,
+    pub(crate) artifact_bytes: usize,
+}
+
+fn game_state() -> GameState {
+    match GAME_STATE.load(Ordering::Acquire) {
+        STATE_REQUESTED => GameState::Requested,
+        STATE_STARTING => GameState::Starting,
+        STATE_ONLINE => GameState::Online,
+        _ => GameState::Idle,
+    }
+}
+
+/// Queue the embedded game for the already-resident AP1/UI runtime service.
+pub(crate) fn request_launch() -> LaunchRequest {
+    match GAME_STATE.compare_exchange(
+        STATE_IDLE,
+        STATE_REQUESTED,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        Ok(_) => LaunchRequest::Queued,
+        Err(STATE_REQUESTED) => LaunchRequest::AlreadyRequested,
+        Err(STATE_STARTING) => LaunchRequest::AlreadyStarting,
+        Err(STATE_ONLINE) => LaunchRequest::AlreadyOnline,
+        Err(_) => LaunchRequest::AlreadyRequested,
+    }
+}
+
+pub(crate) fn status() -> GameStatus {
+    GameStatus {
+        state: game_state(),
+        artifact_bytes: GAME_ARTIFACT.len(),
+    }
+}
 
 #[derive(Copy, Clone, Debug)]
 enum GameError {
@@ -216,12 +289,18 @@ fn render_publish_once(
     Ok(())
 }
 
-/// Loads the build-produced `.helio`, resolves its two dynamic slots, uploads
-/// its normalized draw once, and publishes it as a UI4 RenderScene3d window.
+/// Waits for the Shell2/Blueprint launch request, loads the build-produced
+/// `.helio`, resolves its two dynamic slots, uploads its normalized draw once,
+/// and publishes it as a UI4 RenderScene3d window.
 #[embassy_executor::task]
 pub async fn helio_game_service_task() {
     let mut last_error = None;
     loop {
+        if game_state() != GameState::Requested {
+            Timer::after(Duration::from_millis(50)).await;
+            continue;
+        }
+        GAME_STATE.store(STATE_STARTING, Ordering::Release);
         let result = (|| {
             let surface = create_surface()?;
             let scene = match trueos_helio_runtime::decode_artifact(
@@ -253,12 +332,14 @@ pub async fn helio_game_service_task() {
         })();
         match result {
             Ok(resident) => {
+                GAME_STATE.store(STATE_ONLINE, Ordering::Release);
                 // Window, frame ring, and resident Render mappings intentionally
                 // remain owned by this static service for the life of the OS.
                 core::mem::forget(resident);
                 core::future::pending::<()>().await;
             }
             Err(error) => {
+                GAME_STATE.store(STATE_REQUESTED, Ordering::Release);
                 if last_error != Some(core::mem::discriminant(&error)) {
                     crate::log_warn!(
                         target: "helio";

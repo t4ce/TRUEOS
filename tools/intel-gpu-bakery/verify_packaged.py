@@ -80,7 +80,12 @@ def main(argv: list[str] | None = None) -> int:
     staged_sha256 = _require_identical(
         args.runtime_elf, args.staged_elf, "ISO staging ELF"
     )
-    with tempfile.TemporaryDirectory(prefix="trueos-artifact-verify-") as directory:
+    # Some deployment hosts confine xorriso away from the system /tmp even
+    # though the Python process can create directories there. Keep extraction
+    # beside the ISO so the final packaged-copy check works in that setup too.
+    with tempfile.TemporaryDirectory(
+        prefix="trueos-artifact-verify-", dir=args.iso.parent
+    ) as directory:
         extracted = Path(directory) / "TRUEOS.elf"
         process = subprocess.run(
             [
