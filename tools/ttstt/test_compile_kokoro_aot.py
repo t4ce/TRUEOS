@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -20,6 +22,8 @@ SPEC.loader.exec_module(TOOL)
 
 MODEL = ROOT / "crates/ttstt/.ttstt/models/kokoro/kokoro-rten.onnx"
 VOICES = ROOT / "crates/ttstt/.ttstt/models/kokoro/voices-v1.0.bin"
+RUST_MANIFEST = ROOT / "crates/trueos-kokoro-aot/Cargo.toml"
+RUST_INSPECTOR = ROOT / "crates/trueos-kokoro-aot/examples/inspect.rs"
 HAS_ONNX = importlib.util.find_spec("onnx") is not None
 
 
@@ -80,6 +84,43 @@ class KokoroAotFixtureTests(unittest.TestCase):
             with self.assertRaisesRegex(TOOL.CompileError, "destination exists"):
                 TOOL.write_atomic(path, b"second", False)
             self.assertEqual(path.read_bytes(), b"first")
+
+    @unittest.skipUnless(
+        shutil.which("cargo") and RUST_MANIFEST.is_file() and RUST_INSPECTOR.is_file(),
+        "Rust cross-language inspector is not available",
+    )
+    def test_rust_parser_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "fixture.kkaot"
+            artifact.write_bytes(TOOL.synthetic_fixture_artifact())
+            completed = subprocess.run(
+                [
+                    "cargo",
+                    "run",
+                    "--quiet",
+                    "--manifest-path",
+                    str(RUST_MANIFEST),
+                    "--example",
+                    "inspect",
+                    "--",
+                    str(artifact),
+                    "16",
+                ],
+                # Running outside the checkout intentionally avoids the kernel
+                # workspace's build-std/custom-target Cargo configuration.
+                cwd="/tmp",
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+            self.assertIn(
+                "artifact_sha256=0df8861b0d55f3a1d8587b0993a5588b098800c9c3006d080c19e6b90ad8df44",
+                completed.stdout,
+            )
+            self.assertIn("resolved_frame_count=16", completed.stdout)
+            self.assertIn("resolved_arena_bytes=128", completed.stdout)
 
 
 @unittest.skipUnless(

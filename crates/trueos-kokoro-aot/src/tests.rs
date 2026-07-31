@@ -5,7 +5,7 @@ use crate::*;
 const MODEL_HASH: &str = "239d9f4df112a375bea52146570b97eb5c5af727c007761ee121ed123fd1ab29";
 const VOICES_HASH: &str = "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d";
 const FIXTURE_ARTIFACT_HASH: &str =
-    "4f7d538e8cbf7d04dab287f4835358b4967b80ccde30e643af0ad4b65ad15c50";
+    "0df8861b0d55f3a1d8587b0993a5588b098800c9c3006d080c19e6b90ad8df44";
 
 struct Parts {
     tensors: Vec<[u8; TENSOR_RECORD_BYTES]>,
@@ -329,7 +329,7 @@ fn sha256_matches_standard_vectors() {
     );
     assert_eq!(
         sha256(&[0x5a; 1_000]),
-        hex32("8fe15844cfeedd35c121a9af71f312c74d6418e99239463f7b7b93313a1b8f7b")
+        hex32("8fe15844cfeedd35f5dc30a9fa5ed38afd849dbe4f8dcae5642d934be0afb13d")
     );
 }
 
@@ -460,13 +460,32 @@ fn header_hash_and_directory_corruption_are_rejected() {
     assert_eq!(Program::parse(&artifact).unwrap_err(), ParseError::ArtifactHashMismatch);
 
     let mut artifact = original.clone();
+    artifact[MODEL_SHA256_OFFSET] ^= 1;
+    assert_eq!(Program::parse(&artifact).unwrap_err(), ParseError::ArtifactHashMismatch);
+
+    let mut artifact = original.clone();
+    artifact[VOICES_SHA256_OFFSET] ^= 1;
+    assert_eq!(Program::parse(&artifact).unwrap_err(), ParseError::ArtifactHashMismatch);
+
+    let mut artifact = original.clone();
+    artifact[SECTION_DIRECTORY_OFFSET + 16] ^= 1;
+    assert_eq!(Program::parse(&artifact).unwrap_err(), ParseError::ArtifactHashMismatch);
+
+    let mut artifact = original.clone();
+    let claimed_len = get_u64(&artifact, 16);
+    put_u64(&mut artifact, 16, claimed_len - 1);
+    assert_eq!(Program::parse(&artifact).unwrap_err(), ParseError::BadArtifactSize);
+
+    let mut artifact = original.clone();
     put_u64(&mut artifact, SECTION_DIRECTORY_OFFSET + 16, u64::MAX);
+    reseal(&mut artifact);
     assert_eq!(Program::parse(&artifact).unwrap_err(), ParseError::SectionLengthOverflow);
 
     let mut artifact = original.clone();
     let tensor_entry = SECTION_DIRECTORY_OFFSET;
     let offset = get_u64(&artifact, tensor_entry + 8);
     put_u64(&mut artifact, tensor_entry + 8, offset + 16);
+    reseal(&mut artifact);
     assert_eq!(Program::parse(&artifact).unwrap_err(), ParseError::NonCanonicalSectionOffset);
 
     let mut artifact = original;
