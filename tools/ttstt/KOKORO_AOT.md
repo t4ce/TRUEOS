@@ -82,7 +82,8 @@ The pinned input is voice `af_heart`, speed `1.0`, style row 149, and this
 həlˈoʊ fɹʌm tɹu oʊ ɛs. ðə kwɪk bɹaʊn fɑks dʒʌmps oʊvɚ ðə leɪzi dɔɡ. spɪtʃ sɪnθəsɪs ɪz naʊ ɹʌnɪŋ ɪn ðə kɜɹnəl, wɪð ə sɪɹiəlaɪzd eɪsɪŋk kju fɔɹ ðə ʃɛl.
 ```
 
-It resolves to `F=824` and exactly 247,200 mono f32 samples at 24 kHz.
+The RTen phase-boundary scalar resolves to `F=412`; the decoder emits exactly
+600 samples per frame, for 247,200 mono f32 samples at 24 kHz.
 The reference WAVE is 988,868 bytes with SHA-256
 `754ce3b947dde9dbe99279a77a3b7ddf85a0be1bc2dc05663864e40bf8be4388`;
 its 988,800-byte f32 payload hashes to

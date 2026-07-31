@@ -230,12 +230,12 @@ kernel's 48 kHz stereo lane.
 The sizing policy is backed by a pinned-model ORT run on the i9-13900K rather
 than a character-count estimate:
 
-| Phoneme tokens | Speed | 24 kHz waveform | Decoder frames (`samples / 300`) | ORT wall | Peak host RSS |
+| Phoneme tokens | Speed | 24 kHz waveform | Decoder frames (`samples / 600`) | ORT wall | Peak host RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 60 | 1.0 | 4.12 s | ~330 | 1.74 s | 287 MiB |
-| 120 | 1.0 | 7.75 s | ~620 | 3.42 s | 390 MiB |
-| 180 | 1.0 | 11.25 s | ~900 | 5.18 s | 425 MiB |
-| 240 | 1.0 | 14.82 s | ~1,186 | 7.43 s | 473 MiB |
+| 60 | 1.0 | 4.12 s | ~165 | 1.74 s | 287 MiB |
+| 120 | 1.0 | 7.75 s | ~310 | 3.42 s | 390 MiB |
+| 180 | 1.0 | 11.25 s | ~450 | 5.18 s | 425 MiB |
+| 240 | 1.0 | 14.82 s | ~593 | 7.43 s | 473 MiB |
 
 These RSS figures include ONNX Runtime and are not a native-arena budget. They
 show the latency/memory knee at 60--120 tokens. The artifact proves capacity

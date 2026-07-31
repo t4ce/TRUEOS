@@ -12,8 +12,8 @@ Pinned invocation contract:
   sɪnθəsɪs ɪz naʊ ɹʌnɪŋ ɪn ðə kɜɹnəl, wɪð ə sɪɹiəlaɪzd eɪsɪŋk kju fɔɹ ðə ʃɛl.``
 * voice ``af_heart``, style row 149, speed 1.0
 * padded token shape ``[1, 151]`` (149 IPA tokens plus BOS/EOS zeroes)
-* decoder frames ``F=824``
-* waveform shape ``[247200]`` (300 samples per frame), mono f32 at 24 kHz
+* decoder frames ``F=412``
+* waveform shape ``[247200]`` (600 samples per frame), mono f32 at 24 kHz
 
 Only the Python standard library is required.  Both RIFF/WAVE IEEE-f32
 (including WAVE_FORMAT_EXTENSIBLE) and headerless little-endian f32 inputs are
@@ -49,8 +49,8 @@ REFERENCE_PADDED_I32LE_SHA256 = (
     "a456bb84dc5704dd80372df5dd14c3160e397435eec8bc789ac457c594998e7d"
 )
 
-EXPECTED_DECODER_FRAMES = 824
-SAMPLES_PER_DECODER_FRAME = 300
+EXPECTED_DECODER_FRAMES = 412
+SAMPLES_PER_DECODER_FRAME = 600
 EXPECTED_SAMPLE_COUNT = EXPECTED_DECODER_FRAMES * SAMPLES_PER_DECODER_FRAME
 EXPECTED_SAMPLE_RATE = 24_000
 EXPECTED_CHANNELS = 1

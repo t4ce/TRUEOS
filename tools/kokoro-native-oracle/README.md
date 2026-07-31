@@ -6,7 +6,8 @@ lives outside the kernel package so filesystem, timing, WAV, and CLI code do
 not leak into the `no_std` runtime crates.
 
 With no input argument it runs the pinned `af_heart`, speed-1 IPA vector whose
-RTen reference is exactly 824 decoder frames and 247,200 mono 24-kHz samples:
+RTen reference is exactly 412 decoder frames and 247,200 mono 24-kHz samples
+(600 samples per frame):
 
 ```sh
 cargo run --offline --release \

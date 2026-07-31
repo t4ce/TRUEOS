@@ -14,15 +14,17 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use spin::Mutex;
 use trueos_kokoro_aot::{
-    ARENA_ALIGNMENT, DType, OpCode, ParseOptions, Phase, Program, STATIC_DIM, SlotKind,
-    StorageKind, TensorDesc, WorkBudget,
+    ARENA_ALIGNMENT, ArenaPlanError, DType, OpCode, ParseOptions, Phase, Program, STATIC_DIM,
+    SlotKind, StorageKind, TensorDesc, WorkBudget,
 };
 use trueos_kokoro_audio::{convert_frame_range, output_frames};
 use trueos_kokoro_dispatch::{
     CpuDispatcher, CpuWorkspace, KOKORO_CPU_WORKSPACE_REQUIREMENTS, decode,
     native_dispatch_requires_workspace, native_dispatch_supported,
 };
-use trueos_kokoro_exec::{Executor, ResolvedPhase, RuntimeShape, SliceEvent, TensorShapeTable};
+use trueos_kokoro_exec::{
+    Executor, ExecutorFault, ResolvedPhase, RuntimeShape, SliceEvent, TensorShapeTable,
+};
 use trueos_kokoro_g2p::{FrontendOutput, Model as G2pModel, prepare_english_with};
 use trueos_kokoro_lexicon::Lexicon;
 use trueos_kokoro_memory::{ExternalBindings, TensorMemory};
@@ -30,8 +32,8 @@ use trueos_kokoro_voice::{PINNED_ARCHIVE_SHA256, STYLE_WIDTH, VoiceArchive};
 
 use super::ttstt_service::{
     BackendTtsRequest, Direction, InferenceJob, JobProgress, ModelSet, SpeechBackend, SttRequest,
-    TTS_PCM_CHANNELS, TTS_PCM_CHUNK_MAX_FRAMES, TtsAudioChunk, TtsOutputError, WorkerContext,
-    install_speech_backend,
+    TTS_PCM_CHANNELS, TTS_PCM_CHUNK_MAX_FRAMES, TtsAudioChunk, TtsOutput, TtsOutputError,
+    WorkerContext, install_speech_backend,
 };
 
 const BACKEND_NAME: &str = "kokoro-kkaot-cpu";
@@ -61,8 +63,8 @@ const PHASE_ONE_ARENA_MAX_BYTES: u64 = 1_572_883_968;
 /// A duration above this authenticated capacity must split and retry the
 /// current text chunk. It must never be clamped or over-allocated.
 const SERVICE_FRAME_CEILING: u32 = 1_024;
-/// The pinned RTen oracle maps 824 decoder frames to 247,200 24-kHz samples.
-const WAVEFORM_SAMPLES_PER_FRAME: u32 = 300;
+/// The pinned RTen oracle maps 412 decoder frames to 247,200 24-kHz samples.
+const WAVEFORM_SAMPLES_PER_FRAME: u32 = 600;
 const MAX_DATA_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SEALED_ARENA_BYTES: u64 = PHASE_ONE_ARENA_MAX_BYTES;
 
@@ -73,7 +75,7 @@ const _: () = {
     assert!(STYLE_WIDTH == 256);
     assert!(DATA_BYTES as u64 <= MAX_DATA_BYTES);
     assert!(SERVICE_FRAME_CEILING < COMPILER_FRAME_CEILING);
-    assert!(COMPILER_FRAME_CEILING * WAVEFORM_SAMPLES_PER_FRAME == 768_000);
+    assert!(COMPILER_FRAME_CEILING * WAVEFORM_SAMPLES_PER_FRAME == 1_536_000);
     assert!(PHASE_ZERO_ARENA_BYTES % ARENA_ALIGNMENT as u64 == 0);
     assert!(PHASE_ONE_ARENA_MIN_BYTES % ARENA_ALIGNMENT as u64 == 0);
     assert!(PHASE_ONE_ARENA_MAX_BYTES % ARENA_ALIGNMENT as u64 == 0);
@@ -594,16 +596,20 @@ enum TtsStage {
     Frontend,
     PrepareChunk,
     Execute,
+    EmitPcm,
+    Finish,
 }
 
-/// Cooperative ownership skeleton for one serialized shell2 request.
-/// Numerical execution is unreachable while `runtime_blocker` is non-empty.
+/// Cooperative ownership for one serialized shell2 request. Factory admission
+/// remains fail-closed until the native waveform parity gate is sealed, but the
+/// complete execution and PCM path lives here rather than behind a host shim.
 struct KokoroTtsJob {
     request: BackendTtsRequest,
     stage: TtsStage,
     frontend: Option<FrontendOutput>,
     model_chunk_index: usize,
     invocation: Option<InvocationScaffold>,
+    emission: Option<PcmEmission>,
 }
 
 impl KokoroTtsJob {
@@ -614,20 +620,24 @@ impl KokoroTtsJob {
             frontend: None,
             model_chunk_index: 0,
             invocation: None,
+            emission: None,
         }
     }
 
-    fn fail(&self, reason: &'static str) -> JobProgress {
+    fn fail(&mut self, reason: &'static str) -> JobProgress {
+        if let Some(invocation) = self.invocation.as_mut() {
+            invocation.cancel();
+        }
         let _ = self.request.output.finish_error(reason);
         JobProgress::Failed(reason)
     }
 
     /// Replace an over-cap current chunk with two deterministic subchunks and
-    /// rerun phase zero. The future execution bridge calls this when the
-    /// authenticated duration scalar exceeds `SERVICE_FRAME_CEILING`.
-    #[allow(dead_code)]
+    /// rerun phase zero. The duration result is never clamped and no phase-one
+    /// allocation is attempted for a service-rejected frame count.
     fn split_current_chunk_for_retry(&mut self) -> Result<(), &'static str> {
         self.invocation = None;
+        self.emission = None;
         let frontend = self.frontend.as_mut().ok_or("kokoro-frontend-state-lost")?;
         let range = frontend
             .chunks
@@ -682,8 +692,8 @@ impl InferenceJob for KokoroTtsJob {
         }
         match self.stage {
             TtsStage::Frontend => {
-                let assets = WARM_ASSETS.lock();
-                let Some(assets) = assets.as_ref() else {
+                let assets_guard = WARM_ASSETS.lock();
+                let Some(assets) = assets_guard.as_ref() else {
                     return self.fail("kokoro-warm-state-lost");
                 };
                 let frontend = match prepare_english_with(
@@ -711,7 +721,11 @@ impl InferenceJob for KokoroTtsJob {
                     return self.fail("kokoro-frontend-state-lost");
                 };
                 let Some(range) = frontend.chunks.get(self.model_chunk_index).cloned() else {
-                    return self.fail("kokoro-finished-without-waveform");
+                    if self.model_chunk_index == 0 {
+                        return self.fail("kokoro-finished-without-waveform");
+                    }
+                    self.stage = TtsStage::Finish;
+                    return JobProgress::Pending;
                 };
                 let assets = WARM_ASSETS.lock();
                 let Some(assets) = assets.as_ref() else {
@@ -733,11 +747,189 @@ impl InferenceJob for KokoroTtsJob {
                 JobProgress::Pending
             }
             TtsStage::Execute => {
-                // Factory admission currently makes this state unreachable.
-                // Leaving an explicit terminal guard is safer than allowing a
-                // future gate edit to emit empty or synthetic audio.
-                self.fail("kokoro-native-execution-not-sealed")
+                let assets_guard = WARM_ASSETS.lock();
+                let Some(assets) = assets_guard.as_ref() else {
+                    return self.fail("kokoro-warm-state-lost");
+                };
+                let Some(invocation) = self.invocation.as_mut() else {
+                    return self.fail("kokoro-invocation-state-lost");
+                };
+                match invocation.run_slice(&assets.program) {
+                    InvocationProgress::Pending => JobProgress::Pending,
+                    InvocationProgress::SplitRequired(frame_count) => {
+                        crate::log_info!(
+                            target: "ttstt";
+                            "ttstt: kokoro chunk split retry model_chunk={} frames={} service_cap={}\n",
+                            self.model_chunk_index,
+                            frame_count,
+                            SERVICE_FRAME_CEILING
+                        );
+                        drop(assets_guard);
+                        match self.split_current_chunk_for_retry() {
+                            Ok(()) => JobProgress::Pending,
+                            Err(reason) => self.fail(reason),
+                        }
+                    }
+                    InvocationProgress::Complete => {
+                        let Some(invocation) = self.invocation.take() else {
+                            return self.fail("kokoro-invocation-state-lost");
+                        };
+                        let waveform = match invocation.into_waveform() {
+                            Ok(waveform) => waveform,
+                            Err(reason) => return self.fail(reason),
+                        };
+                        let Some(frontend) = self.frontend.as_ref() else {
+                            return self.fail("kokoro-frontend-state-lost");
+                        };
+                        let Some(range) = frontend.chunks.get(self.model_chunk_index) else {
+                            return self.fail("kokoro-model-chunk-state-lost");
+                        };
+                        let phonemes = match u16::try_from(range.end - range.start) {
+                            Ok(phonemes) if phonemes != 0 => phonemes,
+                            _ => return self.fail("kokoro-model-chunk-size-invalid"),
+                        };
+                        let model_chunk_index = match u32::try_from(self.model_chunk_index) {
+                            Ok(index) => index,
+                            Err(_) => return self.fail("kokoro-model-chunk-index-overflow"),
+                        };
+                        self.emission =
+                            match PcmEmission::new(waveform, model_chunk_index, phonemes) {
+                                Ok(emission) => Some(emission),
+                                Err(reason) => return self.fail(reason),
+                            };
+                        self.stage = TtsStage::EmitPcm;
+                        JobProgress::Pending
+                    }
+                    InvocationProgress::Failed(reason) => self.fail(reason),
+                }
             }
+            TtsStage::EmitPcm => {
+                let Some(emission) = self.emission.as_mut() else {
+                    return self.fail("kokoro-pcm-emission-state-lost");
+                };
+                match emission.run_slice(&self.request.output) {
+                    Ok(EmissionProgress::Pending) => JobProgress::Pending,
+                    Ok(EmissionProgress::Complete) => {
+                        self.emission = None;
+                        self.model_chunk_index = match self.model_chunk_index.checked_add(1) {
+                            Some(index) => index,
+                            None => return self.fail("kokoro-model-chunk-index-overflow"),
+                        };
+                        self.stage = TtsStage::PrepareChunk;
+                        JobProgress::Pending
+                    }
+                    Err(reason) => self.fail(reason),
+                }
+            }
+            TtsStage::Finish => {
+                if self.request.output.finish_success() {
+                    JobProgress::Complete
+                } else {
+                    JobProgress::Failed("kokoro-output-finish-raced")
+                }
+            }
+        }
+    }
+}
+
+struct PendingPcm {
+    chunk: TtsAudioChunk,
+    frame_end: usize,
+}
+
+struct PcmEmission {
+    waveform: Vec<f32>,
+    next_frame: usize,
+    total_frames: usize,
+    model_chunk_index: u32,
+    model_chunk_phonemes: u16,
+    pending: Option<PendingPcm>,
+}
+
+#[derive(Clone, Copy)]
+enum EmissionProgress {
+    Pending,
+    Complete,
+}
+
+impl PcmEmission {
+    fn new(
+        waveform: Vec<f32>,
+        model_chunk_index: u32,
+        model_chunk_phonemes: u16,
+    ) -> Result<Self, &'static str> {
+        if waveform.is_empty() {
+            return Err("kokoro-waveform-empty");
+        }
+        if waveform.iter().any(|sample| !sample.is_finite()) {
+            return Err("kokoro-waveform-non-finite");
+        }
+        let total_frames =
+            output_frames(waveform.len()).map_err(|_| "kokoro-pcm-frame-count-invalid")?;
+        if total_frames == 0 {
+            return Err("kokoro-waveform-empty");
+        }
+        Ok(Self {
+            waveform,
+            next_frame: 0,
+            total_frames,
+            model_chunk_index,
+            model_chunk_phonemes,
+            pending: None,
+        })
+    }
+
+    fn run_slice(&mut self, output: &TtsOutput) -> Result<EmissionProgress, &'static str> {
+        if self.pending.is_none() {
+            if self.next_frame == self.total_frames {
+                return Ok(EmissionProgress::Complete);
+            }
+            let remaining = self.total_frames - self.next_frame;
+            let frames = remaining.min(TTS_PCM_CHUNK_MAX_FRAMES);
+            let sample_count = frames
+                .checked_mul(TTS_PCM_CHANNELS)
+                .ok_or("kokoro-pcm-size-overflow")?;
+            let mut samples = Vec::new();
+            samples
+                .try_reserve_exact(sample_count)
+                .map_err(|_| "kokoro-pcm-allocation-failed")?;
+            samples.resize(sample_count, 0_i16);
+            convert_frame_range(&self.waveform, self.next_frame, &mut samples)
+                .map_err(|_| "kokoro-pcm-conversion-failed")?;
+            let frame_end = self
+                .next_frame
+                .checked_add(frames)
+                .ok_or("kokoro-pcm-frame-count-invalid")?;
+            self.pending = Some(PendingPcm {
+                chunk: TtsAudioChunk {
+                    samples_i16_stereo_48k: samples,
+                    model_chunk_index: self.model_chunk_index,
+                    model_chunk_phonemes: self.model_chunk_phonemes,
+                    end_of_model_chunk: frame_end == self.total_frames,
+                },
+                frame_end,
+            });
+        }
+
+        let Some(pending) = self.pending.take() else {
+            return Err("kokoro-pcm-emission-state-lost");
+        };
+        let frame_end = pending.frame_end;
+        match output.try_push(pending.chunk) {
+            Ok(()) => {
+                self.next_frame = frame_end;
+                if self.next_frame == self.total_frames {
+                    Ok(EmissionProgress::Complete)
+                } else {
+                    Ok(EmissionProgress::Pending)
+                }
+            }
+            Err(TtsOutputError::WouldBlock(chunk)) => {
+                self.pending = Some(PendingPcm { chunk, frame_end });
+                Ok(EmissionProgress::Pending)
+            }
+            Err(TtsOutputError::Closed(_)) => Err("kokoro-pcm-output-closed"),
+            Err(TtsOutputError::Invalid { reason, .. }) => Err(reason),
         }
     }
 }
@@ -768,6 +960,70 @@ impl AlignedArena {
         // and this exclusive borrow keeps the resulting byte slice unique.
         unsafe { core::slice::from_raw_parts_mut(self.lines.as_mut_ptr().cast::<u8>(), self.bytes) }
     }
+
+    fn as_bytes(&self) -> &[u8] {
+        // SAFETY: the same representation proof as `as_mut_bytes` applies;
+        // this borrow is shared and bounded by the logical byte length.
+        unsafe { core::slice::from_raw_parts(self.lines.as_ptr().cast::<u8>(), self.bytes) }
+    }
+}
+
+struct WorkspaceBuffers {
+    quant_u8: Vec<u8>,
+    packed_i8: Vec<i8>,
+    accum_i32: Vec<i32>,
+    row_sums_i32: Vec<i32>,
+    bias_i32: Vec<i32>,
+    lstm_gates_f32: Vec<f32>,
+}
+
+impl WorkspaceBuffers {
+    fn try_new() -> Result<Self, &'static str> {
+        let required = KOKORO_CPU_WORKSPACE_REQUIREMENTS;
+        Ok(Self {
+            quant_u8: try_zeroed_vec(required.quant_u8, 0_u8)?,
+            packed_i8: try_zeroed_vec(required.packed_i8, 0_i8)?,
+            accum_i32: try_zeroed_vec(required.accum_i32, 0_i32)?,
+            row_sums_i32: try_zeroed_vec(required.row_sums_i32, 0_i32)?,
+            bias_i32: try_zeroed_vec(required.bias_i32, 0_i32)?,
+            lstm_gates_f32: try_zeroed_vec(required.lstm_gates_f32, 0.0_f32)?,
+        })
+    }
+
+    fn workspace(&mut self) -> Result<CpuWorkspace<'_>, &'static str> {
+        CpuWorkspace::new(
+            &mut self.quant_u8,
+            &mut self.packed_i8,
+            &mut self.accum_i32,
+            &mut self.row_sums_i32,
+            &mut self.bias_i32,
+            &mut self.lstm_gates_f32,
+        )
+        .map_err(|_| "kokoro-cpu-workspace-rejected")
+    }
+}
+
+fn try_zeroed_vec<T: Clone>(len: usize, value: T) -> Result<Vec<T>, &'static str> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(len)
+        .map_err(|_| "kokoro-cpu-workspace-allocation-failed")?;
+    output.resize(len, value);
+    Ok(output)
+}
+
+#[derive(Clone, Copy)]
+enum InvocationStage {
+    PhaseZero,
+    PhaseOne(ResolvedPhase),
+    Complete,
+}
+
+enum InvocationProgress {
+    Pending,
+    SplitRequired(u32),
+    Complete,
+    Failed(&'static str),
 }
 
 /// External bindings and phase-zero arena proven without retaining any
@@ -778,7 +1034,13 @@ struct InvocationScaffold {
     padded_tokens: Vec<i64>,
     style: [f32; STYLE_WIDTH],
     speed: [f32; 1],
-    phase_zero_arena: AlignedArena,
+    phase_zero_arena: Option<AlignedArena>,
+    phase_one_arena: Option<AlignedArena>,
+    slot_bases: Vec<u64>,
+    waveform: Vec<f32>,
+    workspace: WorkspaceBuffers,
+    executor: Executor<SLOT_CAPACITY>,
+    stage: InvocationStage,
 }
 
 impl InvocationScaffold {
@@ -855,12 +1117,19 @@ impl InvocationScaffold {
         )
         .map_err(|_| "kokoro-phase0-arena-too-large")?;
         let phase_zero_arena = AlignedArena::try_new(phase_zero_bytes)?;
+        let workspace = WorkspaceBuffers::try_new()?;
         let mut scaffold = Self {
             shapes,
             padded_tokens,
             style,
             speed: [speed],
-            phase_zero_arena,
+            phase_zero_arena: Some(phase_zero_arena),
+            phase_one_arena: None,
+            slot_bases: Vec::new(),
+            waveform: Vec::new(),
+            workspace,
+            executor: Executor::new(),
+            stage: InvocationStage::PhaseZero,
         };
         scaffold.validate_phase_zero_bridge(program)?;
         Ok(scaffold)
@@ -873,7 +1142,11 @@ impl InvocationScaffold {
             style,
             speed,
             phase_zero_arena,
+            ..
         } = self;
+        let phase_zero_arena = phase_zero_arena
+            .as_mut()
+            .ok_or("kokoro-phase0-arena-state-lost")?;
         let mut externals = ExternalBindings::<3>::new();
         externals
             .bind_input(program, shapes.as_ref(), TOKENS_TENSOR_ID, padded_tokens)
@@ -894,31 +1167,142 @@ impl InvocationScaffold {
         Ok(())
     }
 
-    /// Preflight the exact F2560 dynamic arena before any allocation.
-    /// Over-cap durations are a split-and-retry signal, never a clamp.
-    #[allow(dead_code)]
-    fn phase_one_reservation(
+    fn run_slice(&mut self, program: &Program<'_>) -> InvocationProgress {
+        match self.stage {
+            InvocationStage::PhaseZero => self.run_phase_zero_slice(program),
+            InvocationStage::PhaseOne(admission) => self.run_phase_one_slice(program, admission),
+            InvocationStage::Complete => InvocationProgress::Complete,
+        }
+    }
+
+    fn run_phase_zero_slice(&mut self, program: &Program<'_>) -> InvocationProgress {
+        let Self {
+            shapes,
+            padded_tokens,
+            style,
+            speed,
+            phase_zero_arena,
+            workspace,
+            executor,
+            ..
+        } = self;
+        let Some(phase_zero_arena) = phase_zero_arena.as_mut() else {
+            return InvocationProgress::Failed("kokoro-phase0-arena-state-lost");
+        };
+        let mut externals = ExternalBindings::<3>::new();
+        if externals
+            .bind_input(program, shapes.as_ref(), TOKENS_TENSOR_ID, padded_tokens)
+            .is_err()
+        {
+            return InvocationProgress::Failed("kokoro-token-memory-bind-failed");
+        }
+        if externals
+            .bind_input(program, shapes.as_ref(), STYLE_TENSOR_ID, style)
+            .is_err()
+        {
+            return InvocationProgress::Failed("kokoro-style-memory-bind-failed");
+        }
+        if externals
+            .bind_input(program, shapes.as_ref(), SPEED_TENSOR_ID, speed)
+            .is_err()
+        {
+            return InvocationProgress::Failed("kokoro-speed-memory-bind-failed");
+        }
+        let mut memory =
+            match TensorMemory::<'_, '_, '_, SHAPE_CAPACITY, 3, MAX_OP_BINDINGS>::phase_zero(
+                program,
+                shapes.as_mut(),
+                phase_zero_arena.as_mut_bytes(),
+                &mut externals,
+            ) {
+                Ok(memory) => memory,
+                Err(_) => {
+                    return InvocationProgress::Failed("kokoro-phase0-memory-bridge-rejected");
+                }
+            };
+        let mut cpu_workspace = match workspace.workspace() {
+            Ok(workspace) => workspace,
+            Err(reason) => return InvocationProgress::Failed(reason),
+        };
+        let mut dispatcher = CpuDispatcher::new_with_workspace(&mut memory, &mut cpu_workspace);
+        let mut budget = match WorkBudget::new(EXECUTOR_WORK_UNITS_PER_SLICE) {
+            Ok(budget) => budget,
+            Err(_) => return InvocationProgress::Failed("kokoro-executor-budget-invalid"),
+        };
+        let report = executor.run_slice(program, &mut dispatcher, &mut budget);
+        match report.event {
+            SliceEvent::BudgetExhausted if report.consumed != 0 => InvocationProgress::Pending,
+            SliceEvent::BudgetExhausted => {
+                Self::log_execution_failure::<trueos_kokoro_dispatch::DispatchError>(
+                    program,
+                    executor,
+                    "phase0-stalled",
+                    None,
+                );
+                InvocationProgress::Failed("kokoro-phase0-made-no-progress")
+            }
+            SliceEvent::PhaseAdmitted(admission) => {
+                if admission.frame_count() > SERVICE_FRAME_CEILING {
+                    return InvocationProgress::SplitRequired(admission.frame_count());
+                }
+                match self.prepare_phase_one(program, admission) {
+                    Ok(()) => InvocationProgress::Pending,
+                    Err(reason) => InvocationProgress::Failed(reason),
+                }
+            }
+            SliceEvent::DispatchFailed(error) => {
+                Self::log_execution_failure(program, executor, "phase0-dispatch", Some(&error));
+                InvocationProgress::Failed("kokoro-phase0-dispatch-failed")
+            }
+            SliceEvent::Faulted(ExecutorFault::Arena(ArenaPlanError::FrameCountOutOfRange)) => {
+                // The executor intentionally does not expose an unadmitted
+                // frame scalar. A sealed range rejection is sufficient to
+                // split and rerun phase zero without allocating phase one.
+                InvocationProgress::SplitRequired(COMPILER_FRAME_CEILING.saturating_add(1))
+            }
+            SliceEvent::Faulted(error) => {
+                Self::log_execution_failure::<trueos_kokoro_dispatch::DispatchError>(
+                    program,
+                    executor,
+                    "phase0-fault",
+                    None,
+                );
+                crate::log_warn!(
+                    target: "ttstt";
+                    "ttstt: kokoro phase0 executor fault error={:?}\n",
+                    error
+                );
+                InvocationProgress::Failed("kokoro-phase0-executor-fault")
+            }
+            SliceEvent::Complete => {
+                InvocationProgress::Failed("kokoro-phase0-completed-without-admission")
+            }
+            SliceEvent::Cancelled => InvocationProgress::Failed("kokoro-executor-cancelled"),
+        }
+    }
+
+    fn prepare_phase_one(
         &mut self,
         program: &Program<'_>,
-        frame_count: u32,
-    ) -> Result<(AlignedArena, Vec<u64>, Vec<f32>), &'static str> {
+        admission: ResolvedPhase,
+    ) -> Result<(), &'static str> {
+        let frame_count = admission.frame_count();
         if frame_count == 0 {
             return Err("kokoro-frame-count-zero");
         }
         if frame_count > SERVICE_FRAME_CEILING {
             return Err("kokoro-frame-count-split-required");
         }
-        let slot_count = program.slot_count() as usize;
         let mut slot_bases = Vec::new();
         slot_bases
-            .try_reserve_exact(slot_count)
+            .try_reserve_exact(program.slot_count() as usize)
             .map_err(|_| "kokoro-slot-table-allocation-failed")?;
-        slot_bases.resize(slot_count, 0);
-        let plan = program
-            .resolve_phase_two(frame_count, &mut slot_bases)
-            .map_err(|_| "kokoro-phase1-plan-rejected")?;
-        let arena_bytes =
-            usize::try_from(plan.arena_bytes()).map_err(|_| "kokoro-phase1-arena-too-large")?;
+        slot_bases.extend_from_slice(self.executor.slot_bases());
+        if slot_bases.len() != program.slot_count() as usize {
+            return Err("kokoro-slot-table-count-mismatch");
+        }
+        let arena_bytes = usize::try_from(admission.arena_bytes())
+            .map_err(|_| "kokoro-phase1-arena-too-large")?;
         let samples = frame_count
             .checked_mul(WAVEFORM_SAMPLES_PER_FRAME)
             .and_then(|samples| usize::try_from(samples).ok())
@@ -931,12 +1315,178 @@ impl InvocationScaffold {
                     .map_err(|_| "kokoro-waveform-shape-invalid")?,
             )
             .map_err(|_| "kokoro-waveform-shape-bind-failed")?;
-        let arena = AlignedArena::try_new(arena_bytes)?;
+        let mut phase_one_arena = AlignedArena::try_new(arena_bytes)?;
+        let phase_zero_arena = self
+            .phase_zero_arena
+            .take()
+            .ok_or("kokoro-phase0-arena-state-lost")?;
+        copy_shared_slots(program, &phase_zero_arena, &mut phase_one_arena, frame_count)?;
         let mut waveform = Vec::new();
         waveform
             .try_reserve_exact(samples)
             .map_err(|_| "kokoro-waveform-allocation-failed")?;
         waveform.resize(samples, 0.0);
-        Ok((arena, slot_bases, waveform))
+        self.phase_one_arena = Some(phase_one_arena);
+        self.slot_bases = slot_bases;
+        self.waveform = waveform;
+        self.stage = InvocationStage::PhaseOne(admission);
+        Ok(())
     }
+
+    fn run_phase_one_slice(
+        &mut self,
+        program: &Program<'_>,
+        admission: ResolvedPhase,
+    ) -> InvocationProgress {
+        let Self {
+            shapes,
+            phase_one_arena,
+            slot_bases,
+            waveform,
+            workspace,
+            executor,
+            stage,
+            ..
+        } = self;
+        let Some(phase_one_arena) = phase_one_arena.as_mut() else {
+            return InvocationProgress::Failed("kokoro-phase1-arena-state-lost");
+        };
+        let mut externals = ExternalBindings::<1>::new();
+        if externals
+            .bind_output(program, shapes.as_ref(), WAVEFORM_TENSOR_ID, waveform.as_mut_slice())
+            .is_err()
+        {
+            return InvocationProgress::Failed("kokoro-waveform-memory-bind-failed");
+        }
+        let mut memory =
+            match TensorMemory::<'_, '_, '_, SHAPE_CAPACITY, 1, MAX_OP_BINDINGS>::phase_one(
+                program,
+                shapes.as_mut(),
+                phase_one_arena.as_mut_bytes(),
+                admission,
+                slot_bases,
+                &mut externals,
+            ) {
+                Ok(memory) => memory,
+                Err(_) => {
+                    return InvocationProgress::Failed("kokoro-phase1-memory-bridge-rejected");
+                }
+            };
+        let mut cpu_workspace = match workspace.workspace() {
+            Ok(workspace) => workspace,
+            Err(reason) => return InvocationProgress::Failed(reason),
+        };
+        let mut dispatcher = CpuDispatcher::new_with_workspace(&mut memory, &mut cpu_workspace);
+        let mut budget = match WorkBudget::new(EXECUTOR_WORK_UNITS_PER_SLICE) {
+            Ok(budget) => budget,
+            Err(_) => return InvocationProgress::Failed("kokoro-executor-budget-invalid"),
+        };
+        let report = executor.run_slice(program, &mut dispatcher, &mut budget);
+        match report.event {
+            SliceEvent::BudgetExhausted if report.consumed != 0 => InvocationProgress::Pending,
+            SliceEvent::BudgetExhausted => {
+                Self::log_execution_failure::<trueos_kokoro_dispatch::DispatchError>(
+                    program,
+                    executor,
+                    "phase1-stalled",
+                    None,
+                );
+                InvocationProgress::Failed("kokoro-phase1-made-no-progress")
+            }
+            SliceEvent::Complete => {
+                *stage = InvocationStage::Complete;
+                InvocationProgress::Complete
+            }
+            SliceEvent::DispatchFailed(error) => {
+                Self::log_execution_failure(program, executor, "phase1-dispatch", Some(&error));
+                InvocationProgress::Failed("kokoro-phase1-dispatch-failed")
+            }
+            SliceEvent::Faulted(error) => {
+                Self::log_execution_failure::<trueos_kokoro_dispatch::DispatchError>(
+                    program,
+                    executor,
+                    "phase1-fault",
+                    None,
+                );
+                crate::log_warn!(
+                    target: "ttstt";
+                    "ttstt: kokoro phase1 executor fault error={:?}\n",
+                    error
+                );
+                InvocationProgress::Failed("kokoro-phase1-executor-fault")
+            }
+            SliceEvent::PhaseAdmitted(_) => {
+                InvocationProgress::Failed("kokoro-phase1-duplicate-admission")
+            }
+            SliceEvent::Cancelled => InvocationProgress::Failed("kokoro-executor-cancelled"),
+        }
+    }
+
+    fn log_execution_failure<E: core::fmt::Debug>(
+        program: &Program<'_>,
+        executor: &Executor<SLOT_CAPACITY>,
+        kind: &'static str,
+        error: Option<&E>,
+    ) {
+        let cursor = executor.cursor();
+        let opcode = program.op(cursor.op_index()).map(|op| op.opcode);
+        crate::log_warn!(
+            target: "ttstt";
+            "ttstt: kokoro execution failure kind={} op={} opcode={:?} unit={} error={:?}\n",
+            kind,
+            cursor.op_index(),
+            opcode,
+            cursor.unit_offset(),
+            error
+        );
+    }
+
+    fn cancel(&mut self) {
+        let _ = self.executor.cancel();
+    }
+
+    fn into_waveform(self) -> Result<Vec<f32>, &'static str> {
+        if !matches!(self.stage, InvocationStage::Complete) {
+            return Err("kokoro-waveform-before-executor-complete");
+        }
+        if self.waveform.is_empty() {
+            return Err("kokoro-waveform-empty");
+        }
+        Ok(self.waveform)
+    }
+}
+
+fn copy_shared_slots(
+    program: &Program<'_>,
+    phase_zero: &AlignedArena,
+    phase_one: &mut AlignedArena,
+    frame_count: u32,
+) -> Result<(), &'static str> {
+    let source = phase_zero.as_bytes();
+    let destination = phase_one.as_mut_bytes();
+    for slot_id in 0..program.slot_count() {
+        let slot = program
+            .slot(slot_id)
+            .ok_or("kokoro-shared-slot-descriptor-missing")?;
+        if slot.kind != SlotKind::Fixed || slot.phase != Phase::Shared {
+            continue;
+        }
+        let bytes = slot
+            .bytes_at(frame_count)
+            .map_err(|_| "kokoro-shared-slot-span-invalid")?;
+        let start =
+            usize::try_from(slot.fixed_offset).map_err(|_| "kokoro-shared-slot-range-invalid")?;
+        let bytes = usize::try_from(bytes).map_err(|_| "kokoro-shared-slot-range-invalid")?;
+        let end = start
+            .checked_add(bytes)
+            .ok_or("kokoro-shared-slot-range-invalid")?;
+        let source_slot = source
+            .get(start..end)
+            .ok_or("kokoro-shared-slot-exceeds-phase0")?;
+        let destination_slot = destination
+            .get_mut(start..end)
+            .ok_or("kokoro-shared-slot-exceeds-phase1")?;
+        destination_slot.copy_from_slice(source_slot);
+    }
+    Ok(())
 }

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::fmt::Write as _;
 use std::fs::{self, File};
@@ -26,7 +27,7 @@ const WAVEFORM_TENSOR_ID: u32 = TENSOR_COUNT - 1;
 const SHAPE_CAPACITY: usize = TENSOR_COUNT as usize;
 const SLOT_CAPACITY: usize = SLOT_COUNT as usize;
 const MAX_OP_BINDINGS: usize = 16;
-const WAVEFORM_SAMPLES_PER_FRAME: u32 = 300;
+const WAVEFORM_SAMPLES_PER_FRAME: u32 = 600;
 const SAMPLE_RATE: u32 = 24_000;
 const MAX_DATA_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_ARENA_BYTES: u64 = 1_572_883_968;
@@ -41,8 +42,12 @@ const EXPECTED_MODEL_SHA256: [u8; 32] = [
 ];
 
 const REFERENCE_IPA: &str = "həlˈoʊ fɹʌm tɹu oʊ ɛs. ðə kwɪk bɹaʊn fɑks dʒʌmps oʊvɚ ðə leɪzi dɔɡ. spɪtʃ sɪnθəsɪs ɪz naʊ ɹʌnɪŋ ɪn ðə kɜɹnəl, wɪð ə sɪɹiəlaɪzd eɪsɪŋk kju fɔɹ ðə ʃɛl.";
-const REFERENCE_FRAMES: u32 = 824;
+const REFERENCE_FRAMES: u32 = 412;
 const REFERENCE_SAMPLES: usize = 247_200;
+const REFERENCE_LOGITS_SHA256: &str =
+    "6d1489df516fb94f03727b2943d0d11fb3e38b3253db9191e6aa5b4be3acb77a";
+const REFERENCE_PRE_QGEMM_SHA256: &str =
+    "2f5fb400cb18696b71422d498b70e8dd959b82251e1dc00993d7bc2efd5274f9";
 #[derive(Clone, Debug)]
 enum Input {
     Ipa(String),
@@ -60,6 +65,7 @@ struct Config {
     expect_frames: Option<u32>,
     expect_samples: Option<usize>,
     expect_wav_sha256: Option<String>,
+    phase0_only: bool,
 }
 
 impl Config {
@@ -82,6 +88,7 @@ impl Config {
             // RTen oracle by verify_kokoro_waveform.py. Byte identity is an
             // optional stronger assertion, not a valid default requirement.
             expect_wav_sha256: None,
+            phase0_only: false,
         };
 
         let mut args = env::args().skip(1);
@@ -121,6 +128,7 @@ impl Config {
                 "--speed" => {
                     config.speed = parse_value(&next_value(&mut args, &argument)?, &argument)?
                 }
+                "--phase0-only" => config.phase0_only = true,
                 "--raw" => config.raw_path = PathBuf::from(next_value(&mut args, &argument)?),
                 "--wav" => config.wav_path = PathBuf::from(next_value(&mut args, &argument)?),
                 "--expect-frames" => {
@@ -182,7 +190,7 @@ fn usage(code: i32) -> ! {
     eprintln!(
         "usage: kokoro-native-oracle [OPTIONS]\n\
          \n\
-         With no options, run the pinned F=824 RTen parity vector.\n\
+         With no options, run the pinned F=412 RTen parity vector.\n\
          \n\
          Input (choose one):\n\
            --reference                 pinned IPA, frame, and sample expectations\n\
@@ -195,6 +203,7 @@ fn usage(code: i32) -> ! {
            --model-dir PATH            directory containing Kokoro assets\n\
            --voice NAME                default: af_heart\n\
            --speed FLOAT               sealed range 0.5..=2.0; default: 1\n\
+           --phase0-only               stop after and report duration admission\n\
          \n\
          Outputs and optional parity gates:\n\
            --raw PATH                  little-endian f32 output path\n\
@@ -397,6 +406,354 @@ fn failure_location(program: &Program<'_>, executor: &Executor<SLOT_CAPACITY>) -
     format!("op={} opcode={opcode:?} unit={}", cursor.op_index(), cursor.unit_offset())
 }
 
+fn failure_bindings(
+    program: &Program<'_>,
+    executor: &Executor<SLOT_CAPACITY>,
+    memory: &TensorMemory<'_, '_, '_, SHAPE_CAPACITY, 1, MAX_OP_BINDINGS>,
+) -> String {
+    let op_index = executor.cursor().op_index();
+    let Some(op) = program.op(op_index) else {
+        return "bindings=unavailable".to_owned();
+    };
+    let mut result = String::from("bindings=[");
+    let count = op.input_count + op.output_count;
+    for binding in 0..count {
+        if binding != 0 {
+            result.push_str(", ");
+        }
+        let tensor = if binding < op.input_count {
+            program.op_input(op, binding)
+        } else {
+            program.op_output(op, binding - op.input_count)
+        };
+        let role = if binding < op.input_count {
+            "in"
+        } else {
+            "out"
+        };
+        match tensor {
+            Some(tensor) => {
+                let shape = memory.tensor_shape(tensor);
+                let descriptor = program.tensor(tensor);
+                let _ =
+                    write!(result, "{role}{binding}:t{tensor}:shape={shape:?}:desc={descriptor:?}");
+            }
+            None => {
+                let _ = write!(result, "{role}{binding}:missing");
+            }
+        }
+    }
+    result.push(']');
+    result
+}
+
+#[derive(Debug)]
+struct ResolverAudit {
+    op_index: u32,
+    logits_producer_op: u32,
+    logits_producer_opcode: trueos_kokoro_aot::OpCode,
+    pre_qgemm_tensor: u32,
+    pre_qgemm_shape: Vec<u32>,
+    pre_qgemm_len: usize,
+    pre_qgemm_sha256: String,
+    pre_qgemm_min: f32,
+    pre_qgemm_max: f32,
+    pre_qgemm_mean: f64,
+    pre_qgemm_rms: f64,
+    pre_qgemm_first8: Vec<f32>,
+    logits_tensor: u32,
+    logits_shape: Vec<u32>,
+    logits_len: usize,
+    logits_sha256: String,
+    logits_min: f32,
+    logits_max: f32,
+    logits_mean: f64,
+    logits_rms: f64,
+    speed_tensor: u32,
+    speed_shape: Vec<u32>,
+    speed_value: f32,
+    cumulative_tensor: u32,
+    cumulative_shape: Vec<u32>,
+    cumulative_sha256: String,
+    cumulative: Vec<i64>,
+    scalar_tensor: u32,
+    scalar_shape: Vec<u32>,
+    scalar_value: i64,
+    duration_min: i64,
+    duration_max: i64,
+    duration_sum: i64,
+    durations: Vec<i64>,
+    duration_histogram: Vec<(i64, usize)>,
+}
+
+fn typed_sha256_f32(values: &[f32]) -> String {
+    let mut hasher = Sha256::new();
+    for value in values {
+        hasher.update(value.to_le_bytes());
+    }
+    let digest: [u8; 32] = hasher.finalize().into();
+    hex_bytes(&digest)
+}
+
+fn typed_sha256_i64(values: &[i64]) -> String {
+    let mut hasher = Sha256::new();
+    for value in values {
+        hasher.update(value.to_le_bytes());
+    }
+    let digest: [u8; 32] = hasher.finalize().into();
+    hex_bytes(&digest)
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    output
+}
+
+fn audit_resolver<const EXTERNALS: usize>(
+    program: &Program<'_>,
+    memory: &TensorMemory<'_, '_, '_, SHAPE_CAPACITY, EXTERNALS, MAX_OP_BINDINGS>,
+) -> Result<ResolverAudit, String> {
+    let mut resolver = None;
+    for op_index in 0..program.op_count() {
+        let op = program
+            .op(op_index)
+            .ok_or_else(|| format!("operation {op_index} is missing"))?;
+        if op.opcode == trueos_kokoro_aot::OpCode::ResolveDecoderShape {
+            if resolver.replace((op_index, op)).is_some() {
+                return Err("program contains multiple duration resolvers".to_owned());
+            }
+        }
+    }
+    let (op_index, op) = resolver.ok_or("program contains no duration resolver")?;
+    if op.input_count != 2 || op.output_count != 2 {
+        return Err(format!(
+            "resolver arity changed: inputs={} outputs={}",
+            op.input_count, op.output_count
+        ));
+    }
+    let tensor = |input: bool, binding: u16| {
+        if input {
+            program.op_input(op, binding)
+        } else {
+            program.op_output(op, binding)
+        }
+        .ok_or_else(|| format!("resolver binding {binding} is missing"))
+    };
+    let logits_tensor = tensor(true, 0)?;
+    let speed_tensor = tensor(true, 1)?;
+    let cumulative_tensor = tensor(false, 0)?;
+    let scalar_tensor = tensor(false, 1)?;
+
+    let mut logits_producer = None;
+    for candidate_index in 0..op_index {
+        let candidate = program
+            .op(candidate_index)
+            .ok_or_else(|| format!("operation {candidate_index} is missing"))?;
+        for output in 0..candidate.output_count {
+            if program.op_output(candidate, output) == Some(logits_tensor) {
+                if logits_producer
+                    .replace((candidate_index, candidate))
+                    .is_some()
+                {
+                    return Err(format!(
+                        "resolver logits tensor {logits_tensor} has multiple producers"
+                    ));
+                }
+            }
+        }
+    }
+    let (logits_producer_op, logits_producer) = logits_producer
+        .ok_or_else(|| format!("resolver logits tensor {logits_tensor} has no producer"))?;
+    let pre_qgemm_tensor = program
+        .op_input(logits_producer, 0)
+        .ok_or("resolver logits producer has no activation input")?;
+
+    let (
+        pre_qgemm_shape,
+        pre_qgemm_len,
+        pre_qgemm_sha256,
+        pre_qgemm_min,
+        pre_qgemm_max,
+        pre_qgemm_mean,
+        pre_qgemm_rms,
+        pre_qgemm_first8,
+    ) = memory
+        .with_read::<f32, _, _>(pre_qgemm_tensor, |values, shape| {
+            let sum = values.iter().map(|&value| f64::from(value)).sum::<f64>();
+            let square_sum = values
+                .iter()
+                .map(|&value| {
+                    let value = f64::from(value);
+                    value * value
+                })
+                .sum::<f64>();
+            (
+                shape.dims().to_vec(),
+                values.len(),
+                typed_sha256_f32(values),
+                values.iter().copied().fold(f32::INFINITY, f32::min),
+                values.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+                sum / values.len() as f64,
+                (square_sum / values.len() as f64).sqrt(),
+                values[..values.len().min(8)].to_vec(),
+            )
+        })
+        .map_err(|error| format!("cannot audit pre-qGEMM activation: {error:?}"))?;
+
+    let (logits_shape, logits_len, logits_sha256, logits_min, logits_max, logits_mean, logits_rms) =
+        memory
+            .with_read::<f32, _, _>(logits_tensor, |values, shape| {
+                let sum = values.iter().map(|&value| f64::from(value)).sum::<f64>();
+                let square_sum = values
+                    .iter()
+                    .map(|&value| {
+                        let value = f64::from(value);
+                        value * value
+                    })
+                    .sum::<f64>();
+                (
+                    shape.dims().to_vec(),
+                    values.len(),
+                    typed_sha256_f32(values),
+                    values.iter().copied().fold(f32::INFINITY, f32::min),
+                    values.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+                    sum / values.len() as f64,
+                    (square_sum / values.len() as f64).sqrt(),
+                )
+            })
+            .map_err(|error| format!("cannot audit resolver logits: {error:?}"))?;
+    let (speed_shape, speed_value) = memory
+        .with_read::<f32, _, _>(speed_tensor, |values, shape| {
+            (shape.dims().to_vec(), values.first().copied())
+        })
+        .map_err(|error| format!("cannot audit resolver speed: {error:?}"))?;
+    let speed_value = speed_value.ok_or("resolver speed tensor is empty")?;
+    let (cumulative_shape, cumulative_sha256, cumulative) = memory
+        .with_read::<i64, _, _>(cumulative_tensor, |values, shape| {
+            (shape.dims().to_vec(), typed_sha256_i64(values), values.to_vec())
+        })
+        .map_err(|error| format!("cannot audit cumulative durations: {error:?}"))?;
+    let (scalar_shape, scalar_value) = memory
+        .with_read::<i64, _, _>(scalar_tensor, |values, shape| {
+            (shape.dims().to_vec(), values.first().copied())
+        })
+        .map_err(|error| format!("cannot audit resolver scalar: {error:?}"))?;
+    let scalar_value = scalar_value.ok_or("resolver scalar tensor is empty")?;
+
+    let mut previous = 0i64;
+    let mut duration_min = i64::MAX;
+    let mut duration_max = i64::MIN;
+    let mut durations = Vec::with_capacity(cumulative.len());
+    let mut histogram = BTreeMap::new();
+    for &value in &cumulative {
+        let duration = value
+            .checked_sub(previous)
+            .ok_or("cumulative duration subtraction overflow")?;
+        if duration < 1 {
+            return Err(format!("resolver emitted non-positive duration {duration}"));
+        }
+        duration_min = duration_min.min(duration);
+        duration_max = duration_max.max(duration);
+        durations.push(duration);
+        *histogram.entry(duration).or_insert(0usize) += 1;
+        previous = value;
+    }
+    if cumulative.is_empty() {
+        return Err("resolver cumulative output is empty".to_owned());
+    }
+    if previous != scalar_value {
+        return Err(format!(
+            "resolver scalar {scalar_value} differs from cumulative tail {previous}"
+        ));
+    }
+
+    Ok(ResolverAudit {
+        op_index,
+        logits_producer_op,
+        logits_producer_opcode: logits_producer.opcode,
+        pre_qgemm_tensor,
+        pre_qgemm_shape,
+        pre_qgemm_len,
+        pre_qgemm_sha256,
+        pre_qgemm_min,
+        pre_qgemm_max,
+        pre_qgemm_mean,
+        pre_qgemm_rms,
+        pre_qgemm_first8,
+        logits_tensor,
+        logits_shape,
+        logits_len,
+        logits_sha256,
+        logits_min,
+        logits_max,
+        logits_mean,
+        logits_rms,
+        speed_tensor,
+        speed_shape,
+        speed_value,
+        cumulative_tensor,
+        cumulative_shape,
+        cumulative_sha256,
+        cumulative,
+        scalar_tensor,
+        scalar_shape,
+        scalar_value,
+        duration_min,
+        duration_max,
+        duration_sum: previous,
+        durations,
+        duration_histogram: histogram.into_iter().collect(),
+    })
+}
+
+fn print_resolver_audit(audit: &ResolverAudit) {
+    println!("resolver_op={}", audit.op_index);
+    println!("resolver_logits_producer_op={}", audit.logits_producer_op);
+    println!("resolver_logits_producer_opcode={:?}", audit.logits_producer_opcode);
+    println!("resolver_pre_qgemm_tensor={}", audit.pre_qgemm_tensor);
+    println!("resolver_pre_qgemm_shape={:?}", audit.pre_qgemm_shape);
+    println!("resolver_pre_qgemm_len={}", audit.pre_qgemm_len);
+    println!("resolver_pre_qgemm_sha256={}", audit.pre_qgemm_sha256);
+    println!("resolver_pre_qgemm_min={:.9}", audit.pre_qgemm_min);
+    println!("resolver_pre_qgemm_max={:.9}", audit.pre_qgemm_max);
+    println!("resolver_pre_qgemm_mean={:.12}", audit.pre_qgemm_mean);
+    println!("resolver_pre_qgemm_rms={:.12}", audit.pre_qgemm_rms);
+    println!("resolver_pre_qgemm_first8={:?}", audit.pre_qgemm_first8);
+    println!("resolver_pre_qgemm_reference_sha256={REFERENCE_PRE_QGEMM_SHA256}");
+    println!(
+        "resolver_pre_qgemm_hash_match={}",
+        audit.pre_qgemm_sha256 == REFERENCE_PRE_QGEMM_SHA256
+    );
+    println!("resolver_logits_tensor={}", audit.logits_tensor);
+    println!("resolver_logits_shape={:?}", audit.logits_shape);
+    println!("resolver_logits_len={}", audit.logits_len);
+    println!("resolver_logits_sha256={}", audit.logits_sha256);
+    println!("resolver_logits_min={:.9}", audit.logits_min);
+    println!("resolver_logits_max={:.9}", audit.logits_max);
+    println!("resolver_logits_mean={:.12}", audit.logits_mean);
+    println!("resolver_logits_rms={:.12}", audit.logits_rms);
+    println!("resolver_speed_tensor={}", audit.speed_tensor);
+    println!("resolver_speed_shape={:?}", audit.speed_shape);
+    println!("resolver_speed={:.9}", audit.speed_value);
+    println!("resolver_cumulative_tensor={}", audit.cumulative_tensor);
+    println!("resolver_cumulative_shape={:?}", audit.cumulative_shape);
+    println!("resolver_cumulative_sha256={}", audit.cumulative_sha256);
+    println!("resolver_cumulative={:?}", audit.cumulative);
+    println!("resolver_scalar_tensor={}", audit.scalar_tensor);
+    println!("resolver_scalar_shape={:?}", audit.scalar_shape);
+    println!("resolver_scalar={}", audit.scalar_value);
+    println!("resolver_duration_min={}", audit.duration_min);
+    println!("resolver_duration_max={}", audit.duration_max);
+    println!("resolver_duration_sum={}", audit.duration_sum);
+    println!("resolver_duration_first16={:?}", &audit.durations[..audit.durations.len().min(16)]);
+    println!("resolver_duration_histogram={:?}", audit.duration_histogram);
+    println!("resolver_logits_reference_sha256={REFERENCE_LOGITS_SHA256}");
+    println!("resolver_logits_hash_match={}", audit.logits_sha256 == REFERENCE_LOGITS_SHA256);
+}
+
 fn run_phase_zero(
     program: &Program<'_>,
     executor: &mut Executor<SLOT_CAPACITY>,
@@ -406,7 +763,7 @@ fn run_phase_zero(
     style: &[f32; STYLE_WIDTH],
     speed: &[f32; 1],
     workspace_buffers: &mut WorkspaceBuffers,
-) -> Result<ResolvedPhase, String> {
+) -> Result<(ResolvedPhase, ResolverAudit), String> {
     let mut externals = ExternalBindings::<3>::new();
     externals
         .bind_input(program, shapes, TOKENS_TENSOR_ID, padded_tokens)
@@ -427,7 +784,10 @@ fn run_phase_zero(
         let mut budget = WorkBudget::new(u32::MAX).expect("non-zero budget");
         let report = executor.run_slice(program, &mut dispatcher, &mut budget);
         match report.event {
-            SliceEvent::PhaseAdmitted(admission) => return Ok(admission),
+            SliceEvent::PhaseAdmitted(admission) => {
+                let audit = audit_resolver(program, dispatcher.memory())?;
+                return Ok((admission, audit));
+            }
             SliceEvent::BudgetExhausted if report.consumed != 0 => {}
             SliceEvent::BudgetExhausted => {
                 return Err(format!(
@@ -541,8 +901,9 @@ fn run_phase_one(
             }
             SliceEvent::DispatchFailed(error) => {
                 return Err(format!(
-                    "phase-one dispatch failed at {}: {error:?}",
-                    failure_location(program, executor)
+                    "phase-one dispatch failed at {}: {error:?}; {}",
+                    failure_location(program, executor),
+                    failure_bindings(program, executor, dispatcher.memory())
                 ));
             }
             SliceEvent::Faulted(error) => {
@@ -685,7 +1046,7 @@ fn run() -> Result<(), String> {
     let mut executor = Executor::<SLOT_CAPACITY>::new();
 
     let phase_zero_start = Instant::now();
-    let admission = run_phase_zero(
+    let (admission, resolver_audit) = run_phase_zero(
         &program,
         &mut executor,
         &mut shapes,
@@ -698,6 +1059,31 @@ fn run() -> Result<(), String> {
     let phase_zero_elapsed = phase_zero_start.elapsed();
 
     let frame_count = admission.frame_count();
+    println!("backend=trueos-kokoro-native-cpu");
+    println!("voice={}", config.voice);
+    println!("speed={}", config.speed);
+    println!("phonemes={:?}", prepared.phonemes);
+    println!("phoneme_tokens={token_count}");
+    println!("padded_tokens={}", padded_tokens.len());
+    println!("frames={frame_count}");
+    println!("phase0_arena_bytes={phase_zero_bytes}");
+    println!("load_seconds={}", format_seconds(load_elapsed));
+    println!("frontend_seconds={}", format_seconds(frontend_elapsed));
+    println!("phase0_seconds={}", format_seconds(phase_zero_elapsed));
+    print_resolver_audit(&resolver_audit);
+    if config.phase0_only {
+        println!("total_seconds={}", format_seconds(total_start.elapsed()));
+        if let Some(expected) = config.expect_frames
+            && frame_count != expected
+        {
+            return Err(format!(
+                "phase-zero frame parity failed: native={frame_count} expected={expected}"
+            ));
+        }
+        println!("phase0_parity=ok");
+        return Ok(());
+    }
+
     let sample_count = frame_count
         .checked_mul(WAVEFORM_SAMPLES_PER_FRAME)
         .and_then(|samples| usize::try_from(samples).ok())
@@ -736,23 +1122,12 @@ fn run() -> Result<(), String> {
     let (raw_sha256, wav_sha256, wav_bytes) = write_outputs(&config, &waveform)?;
     let write_elapsed = write_start.elapsed();
 
-    println!("backend=trueos-kokoro-native-cpu");
-    println!("voice={}", config.voice);
-    println!("speed={}", config.speed);
-    println!("phonemes={:?}", prepared.phonemes);
-    println!("phoneme_tokens={token_count}");
-    println!("padded_tokens={}", padded_tokens.len());
-    println!("frames={frame_count}");
     println!("samples={sample_count}");
     println!("sample_rate_hz={SAMPLE_RATE}");
     println!("audio_seconds={:.6}", sample_count as f64 / SAMPLE_RATE as f64);
-    println!("phase0_arena_bytes={phase_zero_bytes}");
     println!("phase1_arena_bytes={phase_one_bytes}");
     println!("shared_slots_copied={shared_slots}");
     println!("shared_bytes_copied={shared_bytes}");
-    println!("load_seconds={}", format_seconds(load_elapsed));
-    println!("frontend_seconds={}", format_seconds(frontend_elapsed));
-    println!("phase0_seconds={}", format_seconds(phase_zero_elapsed));
     println!("phase1_seconds={}", format_seconds(phase_one_elapsed));
     println!("write_seconds={}", format_seconds(write_elapsed));
     println!("total_seconds={}", format_seconds(total_start.elapsed()));
