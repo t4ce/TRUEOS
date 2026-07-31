@@ -414,7 +414,7 @@ pub(super) async fn stream_generated_annex_b<B, R, F>(
 where
     B: FnOnce(),
     R: FnMut(u32) -> bool,
-    F: FnMut(u32) -> Option<Vec<u8>>,
+    F: AsyncFnMut(u32) -> Option<Vec<u8>>,
 {
     if access_unit_count == 0 || target_hz == 0 {
         return MediaUdpStreamReport {
@@ -485,7 +485,7 @@ where
             }
         }
 
-        let Some(bytes) = generate(sequence) else {
+        let Some(bytes) = generate(sequence).await else {
             producer_dropped_access_units = producer_dropped_access_units.saturating_add(1);
             break;
         };

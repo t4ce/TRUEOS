@@ -63,13 +63,9 @@ const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
 const PRIMARY_BOOT_INTEL_GRAPHICS_STAMP_PNG: &[u8] =
     include_bytes!("../../Intel_Graphics_logo.png");
 // One deliberately blunt switch owns every boot stamp: the TRUEOS JPEG, the
-// Intel PNG and the firmware BGRT image. Keep this false while Slot 0 carries
-// the hardware-blending reference pattern.
+// Intel PNG and the firmware BGRT image. The UI4 handoff intentionally starts
+// Slot0 empty, so any enabled boot stamps remain boot-phase-only content.
 const PRIMARY_BOOT_STAMPS_ENABLED: bool = false;
-const PRIMARY_BOOT_BLEND_REFERENCE_ENABLED: bool = false;
-// Temporary Pipe A bottom-color test: retain the active Slot0 plane contract,
-// but make its UI4 RGBA contents fully transparent at the one-time handoff.
-const PRIMARY_SLOT0_TRANSPARENT_FOR_BOTTOM_COLOR_TEST: bool = true;
 const PRIMARY_BOOT_LOGO_DECODE_MODE: PrimaryBootLogoDecodeMode =
     PrimaryBootLogoDecodeMode::ZuneJpeg;
 const PRIMARY_BOOT_LOGO_WAIT_TIMEOUT_MS: u64 = 5000;
@@ -1146,22 +1142,9 @@ enum OverlayAlphaMode {
 
 const UI4_RGBA8_OVERLAY_CONTRACT: OverlayAlphaMode = OverlayAlphaMode::PremultipliedRgba;
 
-/// Paint the opaque Slot-0 reference beneath every blend-capable overlay:
-///
-/// ```text
-/// +-----------+-----------+-----------+
-/// |           |   white   |           |
-/// |   white   +-----------+   black   |
-/// |           |   black   |           |
-/// +-----------+-----------+-----------+
-/// ```
-///
-/// The strip selection is derived from the active scanout dimensions. Integer
-/// quantization can make strips differ by at most one pixel when the width is
-/// not divisible by three. Alpha bytes are 0xFF even though Slot 0 currently
-/// scans out as XRGB, keeping the backing unambiguously opaque if that contract
-/// later becomes ARGB.
-fn paint_primary_boot_blend_reference(surface: PrimarySurface) -> bool {
+/// Give the firmware-compatible XRGB boot phase deterministic pixels. UI4
+/// discards this boot content when Slot0 becomes its transparent RGBA slice.
+fn initialize_primary_boot_surface_black(surface: PrimarySurface) -> bool {
     if surface.virt.is_null()
         || surface.width == 0
         || surface.height == 0
@@ -1169,10 +1152,6 @@ fn paint_primary_boot_blend_reference(surface: PrimarySurface) -> bool {
     {
         return false;
     }
-
-    let width = surface.width as usize;
-    let height = surface.height as usize;
-    let pitch = surface.pitch_bytes as usize;
 
     // Initialize the padding and edge-guard area as opaque black too. Only the
     // width x height viewport is scanned out, but no uninitialized allocation
@@ -1184,35 +1163,12 @@ fn paint_primary_boot_blend_reference(surface: PrimarySurface) -> bool {
         *pixel = 0xFF00_0000;
     }
 
-    if !PRIMARY_BOOT_BLEND_REFERENCE_ENABLED {
-        crate::intel::dma_flush(surface.virt, surface.byte_len);
-        crate::log!(
-            "intel/display: primary-boot blend-reference disabled pipe={} slot=0 temporary=opaque-black-until-ui4-transparent-handoff\n",
-            surface.pipe.name,
-        );
-        return false;
-    }
-
-    for y in 0..height {
-        let center_is_white = y < height / 2;
-        let row = unsafe { surface.virt.add(y.saturating_mul(pitch)).cast::<u32>() };
-        for x in 0..width {
-            let strip = x.saturating_mul(3) / width;
-            let white = strip == 0 || (strip == 1 && center_is_white);
-            let pixel = if white { 0xFFFF_FFFF } else { 0xFF00_0000 };
-            unsafe {
-                core::ptr::write_volatile(row.add(x), pixel);
-            }
-        }
-    }
-
     crate::intel::dma_flush(surface.virt, surface.byte_len);
     crate::log!(
-        "intel/display: primary-boot blend-reference pipe={} size={}x{} slot=0 opaque=1 layout=thirds left=white center_top=white center_bottom=black right=black stamps={}\n",
+        "intel/display: primary-boot initialization pipe={} size={}x{} slot=0 xrgb=opaque-black ui4_handoff=transparent-rgba\n",
         surface.pipe.name,
         surface.width,
         surface.height,
-        PRIMARY_BOOT_STAMPS_ENABLED as u8,
     );
     true
 }
@@ -1332,7 +1288,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     *primary_surface_owner(pipe).lock() = Some(primary_surface);
     log_primary_scanout_pte_window(dev, "after-primary-init", primary_gpu, byte_len);
 
-    let blend_reference = paint_primary_boot_blend_reference(primary_surface);
+    let primary_initialized = initialize_primary_boot_surface_black(primary_surface);
 
     log_primary_plane_probe(dev, pipe, "before-rgba8-stack-bootstrap");
     let ok = bootstrap_ui4_rgba8_plane_stack_once(dev, primary_surface);
@@ -1363,7 +1319,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     }
 
     crate::log!(
-        "intel/display: primary-boot-surface pipe={} size={}x{} backing={}x{} pitch=0x{:X} bytes=0x{:X} guard={} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} blend_reference={} stamps={} logo={} overlays=transparent-native-rgba8-slots1-4 ui=bootstrap-stack-ready\n",
+        "intel/display: primary-boot-surface pipe={} size={}x{} backing={}x{} pitch=0x{:X} bytes=0x{:X} guard={} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} primary_initialized={} stamps={} logo={} overlays=transparent-native-rgba8-slots1-4 ui=bootstrap-stack-ready\n",
         pipe.name,
         width,
         height,
@@ -1381,7 +1337,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         surf_armed,
         surf_live,
         ok as u8,
-        blend_reference as u8,
+        primary_initialized as u8,
         PRIMARY_BOOT_STAMPS_ENABLED as u8,
         logo_ok as u8,
     );
@@ -6461,10 +6417,9 @@ fn ui4_rgba8_plane_stack_ready(pipe: PipeInfo) -> bool {
         && UI4_RGBA8_PLANE_STACK_PIPE_SLOT.load(Ordering::Acquire) == pipe.slot as u32
 }
 
-/// Hand the firmware-compatible XRGB boot primary to UI4 as the fourth native
-/// premultiplied-RGBA application plane. This is a one-time boundary after the
-/// logo producer is finished; normal runtime presentation changes only plane
-/// geometry, constant alpha and SURF.
+/// Hand Slot0 to UI4 as an enabled, initially empty premultiplied-RGBA plane.
+/// Boot-phase XRGB pixels are deliberately discarded: the pipe bottom color is
+/// the permanent base beneath UI4's independently populated plane slices.
 pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
@@ -6487,31 +6442,9 @@ pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
         return false;
     }
 
-    if PRIMARY_SLOT0_TRANSPARENT_FOR_BOTTOM_COLOR_TEST {
-        // Slot0 remains enabled and keeps its ordinary premultiplied-RGBA
-        // contract. Zero pixels make it an empty slice so the pipe bottom
-        // color, rather than an opaque substitute, becomes observable.
-        unsafe { core::ptr::write_bytes(primary.virt, 0, primary.byte_len) };
-    } else {
-        // Boot scanout is XRGB bytes (B,G,R,X). Preserve the completed image
-        // while changing the storage convention to UI4's native R,G,B,A with
-        // opaque A.
-        for y in 0..primary.height as usize {
-            let row = unsafe {
-                primary
-                    .virt
-                    .add(y.saturating_mul(primary.pitch_bytes as usize))
-            };
-            for x in 0..primary.width as usize {
-                let pixel = unsafe { core::ptr::read_volatile(row.cast::<u32>().add(x)) };
-                let red = (pixel >> 16) & 0xFF;
-                let green = (pixel >> 8) & 0xFF;
-                let blue = pixel & 0xFF;
-                let rgba = red | (green << 8) | (blue << 16) | 0xFF00_0000;
-                unsafe { core::ptr::write_volatile(row.cast::<u32>().add(x), rgba) };
-            }
-        }
-    }
+    // Slot0 remains enabled. Transparent pixels make it an empty slice rather
+    // than an opaque imitation of a background.
+    unsafe { core::ptr::write_bytes(primary.virt, 0, primary.byte_len) };
     crate::intel::dma_flush(primary.virt, primary.byte_len);
 
     let plane = pipe.plane(crate::ui4::PRIMARY_PLANE_SLOT);
@@ -6540,10 +6473,9 @@ pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
         )
         .is_ok();
     crate::log_info!(target: "ui4";
-        "ui4/application-plane-stack rgba_handoff={} pipe={} slots=0-3/premultiplied-rgba8 slot4=interaction-only boot_primary=xrgb-to-rgba-once slot0_transparent_bottom_color_test={} cpu_blend=0 frame={}=>{} frame_wait={} surf=0x{:08X} live=0x{:08X} live_iters={}\n",
+        "ui4/application-plane-stack rgba_handoff={} pipe={} slots=0-3/premultiplied-rgba8 slot4=interaction-only boot_primary=discarded slot0_initial=transparent pipe_bottom=permanent-base cpu_blend=0 frame={}=>{} frame_wait={} surf=0x{:08X} live=0x{:08X} live_iters={}\n",
         ready as u8,
         pipe.name,
-        PRIMARY_SLOT0_TRANSPARENT_FOR_BOTTOM_COLOR_TEST as u8,
         frame_before,
         frame_after,
         frame_wait,

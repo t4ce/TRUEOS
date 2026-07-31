@@ -9,9 +9,11 @@ subscriber-driven kernel service:
    output all validate. No diagnostic media file or software encoder is linked
    into the kernel.
 2. A receiver sends `TME1GET1` to UDP port 9650.
-3. On subscription, two distinct performance-preferred background workers
-   enter a bounded producer/consumer pipeline. The producer captures the
-   entire 2560x1440 UI4 D01 composition in memory. It first borrows the
+3. On subscription, one isolated final-AP worker enters a bounded,
+   three-task producer/consumer pipeline. This intentionally remains a weak
+   core when the topology's final AP is an E-core, making the path expose CPU
+   work that should have stayed behind hardware fences. The producer captures
+   the entire 2560x1440 UI4 D01 composition in memory. It first borrows the
    original immutable pipe-A plane-0 surface only when PLANE_SURFLIVE still
    matches the expected full-output RGBA primary, and copies it as the opaque
    background. The fixed test-rig contract is that the UI4 broker places no
@@ -35,6 +37,8 @@ subscriber-driven kernel service:
    playback conversion and RDP conversion cannot remap one another's PPGTT
    pages. Exactly two reusable RGBA/NV12 slot pairs let preparation of the next
    frame overlap Gen12 VDEnc/MFX encode and UDP egress of the preceding frame.
+   VDBOX completion is awaited cooperatively on that worker, so preparation
+   and egress remain runnable while hardware owns the encode interval.
    The consumer emits a fresh IDR access unit on each absolute 40 Hz deadline.
    The first frame is prepared before cadence measurement begins, and the
    producer cannot advance more than one frame ahead of the consumer.

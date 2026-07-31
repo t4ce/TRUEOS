@@ -9,6 +9,7 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, Ordering};
 
+use embassy_time::{Duration, Timer};
 use spin::Mutex;
 
 use super::engine as media;
@@ -659,13 +660,14 @@ pub(crate) fn snapshot() -> AvcEncodeProbeReport {
 }
 
 /// Submit a GPU-produced linear NV12 surface directly as the VDBOX source.
-/// The caller retains the DMA allocation until this synchronous submission
-/// retires. No CPU-side full-frame copy is performed.
-pub(crate) fn run_nv12_dma_frame(surface: AvcNv12DmaSurface) -> AvcEncodeProbeReport {
-    run_live_frame(AvcFrameSource::Dma(surface))
+/// The caller retains the DMA allocation until the submission retires, but
+/// fence completion is awaited cooperatively. No CPU-side full-frame copy is
+/// performed.
+pub(crate) async fn run_nv12_dma_frame(surface: AvcNv12DmaSurface) -> AvcEncodeProbeReport {
+    run_live_frame(AvcFrameSource::Dma(surface)).await
 }
 
-fn run_live_frame(source: AvcFrameSource) -> AvcEncodeProbeReport {
+async fn run_live_frame(source: AvcFrameSource) -> AvcEncodeProbeReport {
     let state = AvcEncodeProbeState::from_raw(STATE.load(Ordering::Acquire));
     if state == AvcEncodeProbeState::Passed {
         STATE.store(AvcEncodeProbeState::NotRun as u8, Ordering::Release);
@@ -674,14 +676,14 @@ fn run_live_frame(source: AvcFrameSource) -> AvcEncodeProbeReport {
     }
 
     *CODED_ACCESS_UNIT.lock() = None;
-    run_with_source(source)
+    run_with_source(source).await
 }
 
-pub(crate) fn run_once() -> AvcEncodeProbeReport {
-    run_with_source(AvcFrameSource::BootProof)
+pub(crate) async fn run_once() -> AvcEncodeProbeReport {
+    run_with_source(AvcFrameSource::BootProof).await
 }
 
-fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
+async fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
     let current = AvcEncodeProbeState::from_raw(STATE.load(Ordering::Acquire));
     if current != AvcEncodeProbeState::NotRun {
         return snapshot();
@@ -913,7 +915,11 @@ fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
         if crate::chronos::monotonic_nanos() >= deadline {
             break;
         }
-        core::hint::spin_loop();
+        // VDBOX owns the expensive part of this interval. Yield the private
+        // LastAP executor so scanout preparation and UDP egress can advance
+        // while the media fence is pending instead of serializing all three
+        // cooperative tasks behind a CPU spin loop.
+        Timer::after(Duration::from_micros(0)).await;
     }
 
     crate::intel::dma_flush(result_virt, RESULT_BYTES);

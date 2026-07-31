@@ -134,8 +134,6 @@ pub(super) fn capture_stream_scanout_rgba_into(
     if rgba_premultiplied.len() != byte_len {
         return Err(CaptureError::InvalidFrameLayout);
     }
-    rgba_premultiplied.fill(0);
-
     let mut windows = super::visible_windows_for_output(output);
     windows.sort_unstable_by_key(|window| (window.plane.slot(), window.placement.z, window.id));
     let rects = super::slot4_service::presented_rects();
@@ -158,6 +156,12 @@ pub(super) fn capture_stream_scanout_rgba_into(
             .collect::<Result<Vec<FrameRgbaView>, _>>()?;
         let slot0_scanout_pixels =
             copy_stream_pipe_a_slot0_premultiplied(rgba_premultiplied, width, height);
+        if slot0_scanout_pixels == 0 {
+            // The reusable stream buffer still contains the preceding frame.
+            // Clear only when the full-screen physical base could not replace
+            // it; the normal SURFLIVE path overwrites every destination byte.
+            rgba_premultiplied.fill(0);
+        }
         for (window, view) in windows.iter().zip(views.iter()) {
             crate::intel::dma_flush(view.virt, view.byte_len);
             let pixels =
@@ -763,12 +767,37 @@ fn blend_window(
         else {
             return;
         };
+        if opacity == u8::MAX
+            && source_row
+                .chunks_exact(4)
+                .all(|source| source[3] == u8::MAX)
+        {
+            destination_row.copy_from_slice(source_row);
+            continue;
+        }
         for (src, dst) in source_row
             .chunks_exact(4)
             .zip(destination_row.chunks_exact_mut(4))
         {
-            let scale = |value: u8| multiply_u8(value, opacity);
-            blend_premultiplied(dst, scale(src[0]), scale(src[1]), scale(src[2]), scale(src[3]));
+            if src[3] == 0 {
+                continue;
+            }
+            if opacity == u8::MAX {
+                if src[3] == u8::MAX {
+                    dst.copy_from_slice(src);
+                } else {
+                    blend_premultiplied(dst, src[0], src[1], src[2], src[3]);
+                }
+            } else {
+                let scale = |value: u8| multiply_u8(value, opacity);
+                blend_premultiplied(
+                    dst,
+                    scale(src[0]),
+                    scale(src[1]),
+                    scale(src[2]),
+                    scale(src[3]),
+                );
+            }
         }
     }
 }

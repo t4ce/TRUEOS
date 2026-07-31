@@ -1084,9 +1084,9 @@ pub(crate) fn run_media_guc_vcs0_probe_once() -> self::media::guc_probe::GucVcs0
 }
 
 #[cfg(feature = "trueos_h264_encode_stream")]
-pub(crate) fn run_media_avc_encode_probe_once()
+pub(crate) async fn run_media_avc_encode_probe_once()
 -> self::media::avc_encode_probe::AvcEncodeProbeReport {
-    self::media::avc_encode_probe::run_once()
+    self::media::avc_encode_probe::run_once().await
 }
 
 pub(crate) fn hw_pic_service()

@@ -600,7 +600,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
         .map(|profile| profile.core_kind_name())
         .unwrap_or("unknown");
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: service online carrier=lastap worker_slot={} worker_kind={} exclusive_carrier=1 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=ui4-logical-scanout-d01 encode_size={}x{} target_fps={} backend=gen12-vdenc-mfx output=udp-only live_high_water_cap={} pipeline=prepare-producer+encode-producer+udp-egress-consumer preparation=cooperative-lastap-double-buffer slots={} filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
+        "intel/media-encode: service online carrier=lastap worker_slot={} worker_kind={} exclusive_carrier=1 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=ui4-logical-scanout-d01 encode_size={}x{} target_fps={} backend=gen12-vdenc-mfx completion_wait=cooperative-fence-yield output=udp-only live_high_water_cap={} pipeline=prepare-producer+encode-producer+udp-egress-consumer preparation=cooperative-lastap-double-buffer slots={} filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
         worker_slot,
         worker_kind,
         ENCODE_WIDTH,
@@ -676,7 +676,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
     }
 
     if vcs0_probe.state == crate::intel::media::guc_probe::GucVcs0ProbeState::Passed {
-        let mut avc_probe = crate::intel::run_media_avc_encode_probe_once();
+        let mut avc_probe = crate::intel::run_media_avc_encode_probe_once().await;
         let mut avc_probe_attempts = 1usize;
         while avc_probe.state
             == crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Deferred
@@ -690,7 +690,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
                 );
             }
             Timer::after(Duration::from_millis(VCS0_PROBE_RETRY_MS)).await;
-            avc_probe = crate::intel::run_media_avc_encode_probe_once();
+            avc_probe = crate::intel::run_media_avc_encode_probe_once().await;
             avc_probe_attempts += 1;
         }
         if avc_probe.state == crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Passed {
@@ -923,7 +923,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             crate::allcaps::media_encode::REALTIME_HZ,
             || begin_preparation_session(stream_session_id, access_unit_count),
             |sequence| prepared_scanout_ready(stream_session_id, sequence),
-            |sequence| encode_prepared_scanout(stream_session_id, sequence, &mut stats),
+            async |sequence| encode_prepared_scanout(stream_session_id, sequence, &mut stats).await,
         )
         .await;
         end_preparation_session(stream_session_id);
@@ -1039,7 +1039,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
     }
 }
 
-fn encode_prepared_scanout(
+async fn encode_prepared_scanout(
     session_id: u32,
     sequence: u32,
     stats: &mut LiveEncodeStats,
@@ -1063,7 +1063,7 @@ fn encode_prepared_scanout(
         STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
         return None;
     };
-    let encode = crate::intel::media::avc_encode_probe::run_nv12_dma_frame(surface);
+    let encode = crate::intel::media::avc_encode_probe::run_nv12_dma_frame(surface).await;
     STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
     release_prepared_scanout(&mut prepared);
     if encode.state != crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Passed
