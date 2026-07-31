@@ -540,6 +540,10 @@ pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str)
     self::display::set_primary_plane_source(source, reason)
 }
 
+pub(crate) fn set_pipe_a_bottom_color_rgb8(red: u8, green: u8, blue: u8) -> bool {
+    self::display::set_pipe_a_bottom_color_rgb8(red, green, blue)
+}
+
 pub(crate) fn set_primary_plane_source_mapped(source: PrimaryPlaneSource, reason: &str) -> bool {
     self::display::set_primary_plane_source_mapped(source, reason)
 }

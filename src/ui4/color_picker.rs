@@ -1,9 +1,10 @@
-//! Kernel-internal UI4 color picker used to exercise hardware alpha blending.
+//! Kernel-internal UI4 picker for the hardware Pipe A bottom color.
 //!
 //! The service owns no frame while closed. The ordinary default context menu
-//! queues an open request; Escape closes the session and transfers both frame
-//! rings back to UI4 for SURFLIVE-safe retirement.
+//! queues an open request; Escape closes the session and transfers its frame
+//! ring back to UI4 for SURFLIVE-safe retirement.
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration, Timer};
 use spin::Mutex;
 
@@ -30,6 +31,7 @@ const PICKER_MARGIN: u32 = 24;
 const MAX_ACTIVE_GESTURES: usize = 32;
 
 static OPEN_REQUEST: Mutex<Option<ColorPickerOpenRequest>> = Mutex::new(None);
+static ESCAPE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone)]
 struct ColorPickerOpenRequest {
@@ -76,13 +78,11 @@ static SELECTED_COLOR: Mutex<PickerColor> = Mutex::new(PickerColor::INITIAL);
 
 struct ActiveColorPicker {
     session: WindowSessionId,
-    tint_frame: FrameHandle,
-    tint_window: super::WindowId,
     picker_frame: FrameHandle,
     picker_window: super::WindowId,
+    escape_hook: super::GlobalKeyboardHookId,
     color: PickerColor,
     gestures: [Option<PickerGesture>; MAX_ACTIVE_GESTURES],
-    tint_dirty: bool,
     picker_dirty: bool,
 }
 
@@ -90,10 +90,23 @@ pub(super) fn request_open(source: Ui4CursorSource, anchor: (u32, u32)) {
     *OPEN_REQUEST.lock() = Some(ColorPickerOpenRequest { source, anchor });
 }
 
+fn capture_escape(
+    event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
+) -> super::GlobalKeyboardDisposition {
+    if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+        && event.key_code == crate::r::keyboard::KEYBOARD_KEY_ESCAPE
+    {
+        ESCAPE_REQUESTED.store(true, Ordering::Release);
+        super::GlobalKeyboardDisposition::Consume
+    } else {
+        super::GlobalKeyboardDisposition::PassThrough
+    }
+}
+
 #[embassy_executor::task]
 pub(crate) async fn ui4_color_picker_service_task() {
     crate::log_info!(target: "ui4/color-picker";
-        "ui4/color-picker: service online lifecycle=context-menu-open+escape-close owner=kernel-internal controls=sv256+hue+alpha commit=button-release preview=full-output-premultiplied-rgba\n"
+        "ui4/color-picker: service online lifecycle=context-menu-open+escape-close owner=kernel-internal controls=sv256+hue+alpha commit=button-release target=pipe-a-bottom-color alpha=ui-only\n"
     );
     let mut active = None;
     loop {
@@ -108,7 +121,10 @@ pub(crate) async fn ui4_color_picker_service_task() {
             }
         }
 
-        if active.as_mut().is_some_and(service_active_picker) {
+        if let Some(picker) = active.as_mut() {
+            service_active_picker(picker);
+        }
+        if ESCAPE_REQUESTED.swap(false, Ordering::AcqRel) {
             if active
                 .as_ref()
                 .is_some_and(|picker| close_picker(picker, "escape"))
@@ -120,31 +136,19 @@ pub(crate) async fn ui4_color_picker_service_task() {
     }
 }
 
-/// Return true when this service turn consumed Escape and closed the picker.
-fn service_active_picker(picker: &mut ActiveColorPicker) -> bool {
+fn service_active_picker(picker: &mut ActiveColorPicker) {
     for event in take_owner_input_events(OWNER) {
         match event {
             Ui4InputEvent::Pointer(event) if event.window == picker.picker_window => {
                 picker.handle_pointer(event);
             }
-            Ui4InputEvent::Keyboard(event)
-                if (event.window == picker.picker_window || event.window == picker.tint_window)
-                    && event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
-                    && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_ESCAPE =>
-            {
-                return true;
-            }
             _ => {}
         }
     }
 
-    if picker.tint_dirty && render_tint(picker).is_ok() {
-        picker.tint_dirty = false;
-    }
     if picker.picker_dirty && render_picker(picker).is_ok() {
         picker.picker_dirty = false;
     }
-    false
 }
 
 fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'static str> {
@@ -156,51 +160,11 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
     }
 
     let session = begin_window_session(OWNER).map_err(|_| "session-create")?;
-    let tint_frame = match create_picker_frame(output, screen_width, screen_height) {
-        Ok(frame) => frame,
-        Err(_) => {
-            let _ = finish_window_session(OWNER, session);
-            return Err("tint-frame-create");
-        }
-    };
     let picker_frame = match create_picker_frame(output, PICKER_WIDTH, PICKER_HEIGHT) {
         Ok(frame) => frame,
         Err(_) => {
             let _ = finish_window_session(OWNER, session);
-            let _ = destroy_frame(tint_frame);
             return Err("control-frame-create");
-        }
-    };
-
-    let tint_window = match create_window(WindowCreate {
-        owner: OWNER,
-        session,
-        frame: tint_frame,
-        output,
-        plane: WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
-        placement: WindowPlacement {
-            x: 0,
-            y: 0,
-            width: screen_width,
-            height: screen_height,
-            z: 0,
-            opacity: u8::MAX,
-            visible: true,
-        },
-        interaction: WindowInteraction {
-            movable: false,
-            maximizable: false,
-            // This plane also catches clicks outside the control. Keeping it in
-            // the owner input route means Escape still closes the picker after
-            // such a click; pointer events on it are deliberately ignored.
-            receives_input: true,
-            resize_on_maximize: false,
-        },
-    }) {
-        Ok(window) => window,
-        Err(_) => {
-            cleanup_failed_open(session, tint_frame, picker_frame);
-            return Err("tint-window-create");
         }
     };
 
@@ -233,27 +197,33 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
     }) {
         Ok(window) => window,
         Err(_) => {
-            cleanup_failed_open(session, tint_frame, picker_frame);
+            cleanup_failed_open(session, picker_frame);
             return Err("control-window-create");
+        }
+    };
+
+    let escape_hook = match super::register_global_keyboard_hook(u8::MAX, capture_escape) {
+        Ok(hook) => hook,
+        Err(_) => {
+            cleanup_failed_open(session, picker_frame);
+            return Err("escape-hook-register");
         }
     };
 
     let mut picker = ActiveColorPicker {
         session,
-        tint_frame,
-        tint_window,
         picker_frame,
         picker_window,
+        escape_hook,
         color: *SELECTED_COLOR.lock(),
         gestures: [None; MAX_ACTIVE_GESTURES],
-        tint_dirty: true,
         picker_dirty: true,
     };
-    if render_tint(&picker).is_err() {
-        let _ = close_picker(&picker, "initial-tint-render-failed");
-        return Err("initial-tint-render");
+    let initial = picker.color.straight_rgba();
+    if !crate::intel::set_pipe_a_bottom_color_rgb8(initial[0], initial[1], initial[2]) {
+        let _ = close_picker(&picker, "initial-bottom-color-program-failed");
+        return Err("initial-bottom-color-program");
     }
-    picker.tint_dirty = false;
     if render_picker(&picker).is_err() {
         let _ = close_picker(&picker, "initial-control-render-failed");
         return Err("initial-control-render");
@@ -269,10 +239,8 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
 
     let rgba = picker.color.straight_rgba();
     crate::log_info!(target: "ui4/color-picker";
-        "ui4/color-picker: opened session={} tint_frame={} tint_window={} picker_frame={} picker_window={} picker={}x{}@{},{} rgba={},{},{},{} commit=release\n",
+        "ui4/color-picker: opened session={} picker_frame={} picker_window={} picker={}x{}@{},{} rgba={},{},{},{} target=pipe-a-bottom-color alpha_unmapped=1 commit=release\n",
         session.raw(),
-        tint_frame.raw(),
-        tint_window.raw(),
         picker_frame.raw(),
         picker_window.raw(),
         PICKER_WIDTH,
@@ -304,9 +272,8 @@ fn create_picker_frame(
     })
 }
 
-fn cleanup_failed_open(session: WindowSessionId, tint: FrameHandle, picker: FrameHandle) {
+fn cleanup_failed_open(session: WindowSessionId, picker: FrameHandle) {
     let _ = finish_window_session(OWNER, session);
-    let _ = destroy_frame(tint);
     let _ = destroy_frame(picker);
 }
 
@@ -314,6 +281,7 @@ fn close_picker(picker: &ActiveColorPicker, reason: &'static str) -> bool {
     let close = WindowSessionCloseRequest::default().direct_plane_animate_and_retire_frames();
     match finish_window_session_with_request(OWNER, picker.session, close) {
         Ok(closed) => {
+            let _ = super::unregister_global_keyboard_hook(picker.escape_hook);
             crate::log_info!(target: "ui4/color-picker";
                 "ui4/color-picker: closed reason={} session={} windows={} frame_retirement=ui4-owned\n",
                 reason,
@@ -388,11 +356,11 @@ impl ActiveColorPicker {
             }
         }
         *SELECTED_COLOR.lock() = self.color;
-        self.tint_dirty = true;
         self.picker_dirty = true;
         let rgba = self.color.straight_rgba();
+        let programmed = crate::intel::set_pipe_a_bottom_color_rgb8(rgba[0], rgba[1], rgba[2]);
         crate::log_info!(target: "ui4/color-picker";
-            "ui4/color-picker: selected panel={:?} hsv={},{},{} rgba={},{},{},{} publish=pending\n",
+            "ui4/color-picker: selected panel={:?} hsv={},{},{} rgba={},{},{},{} pipe_a_bottom_programmed={} alpha_unmapped=1 picker_publish=pending\n",
             panel,
             self.color.hue,
             self.color.saturation,
@@ -401,6 +369,7 @@ impl ActiveColorPicker {
             rgba[1],
             rgba[2],
             rgba[3],
+            programmed as u8,
         );
     }
 }
@@ -429,21 +398,6 @@ fn panel_axis(value: i32, origin: u32, extent: u32) -> u8 {
         .saturating_sub(i64::from(origin))
         .clamp(0, i64::from(extent - 1)) as u32;
     ((local * 255 + (extent - 1) / 2) / (extent - 1)) as u8
-}
-
-fn render_tint(picker: &ActiveColorPicker) -> Result<(), ()> {
-    let rgba = picker.color.straight_rgba();
-    render_and_publish(picker.tint_frame, picker.tint_window, |pixels, width, height, pitch| {
-        let native = PremultipliedRgba8::from_straight_rgba(rgba[0], rgba[1], rgba[2], rgba[3])
-            .to_native_bytes();
-        for y in 0..height as usize {
-            let row_start = y * pitch;
-            let row = &mut pixels[row_start..row_start + width as usize * 4];
-            for pixel in row.chunks_exact_mut(4) {
-                pixel.copy_from_slice(&native);
-            }
-        }
-    })
 }
 
 fn render_picker(picker: &ActiveColorPicker) -> Result<(), ()> {

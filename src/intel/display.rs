@@ -66,7 +66,10 @@ const PRIMARY_BOOT_INTEL_GRAPHICS_STAMP_PNG: &[u8] =
 // Intel PNG and the firmware BGRT image. Keep this false while Slot 0 carries
 // the hardware-blending reference pattern.
 const PRIMARY_BOOT_STAMPS_ENABLED: bool = false;
-const PRIMARY_BOOT_BLEND_REFERENCE_ENABLED: bool = true;
+const PRIMARY_BOOT_BLEND_REFERENCE_ENABLED: bool = false;
+// Temporary Pipe A bottom-color test: retain the active Slot0 plane contract,
+// but make its UI4 RGBA contents fully transparent at the one-time handoff.
+const PRIMARY_SLOT0_TRANSPARENT_FOR_BOTTOM_COLOR_TEST: bool = true;
 const PRIMARY_BOOT_LOGO_DECODE_MODE: PrimaryBootLogoDecodeMode =
     PrimaryBootLogoDecodeMode::ZuneJpeg;
 const PRIMARY_BOOT_LOGO_WAIT_TIMEOUT_MS: u64 = 5000;
@@ -1159,8 +1162,7 @@ const UI4_RGBA8_OVERLAY_CONTRACT: OverlayAlphaMode = OverlayAlphaMode::Premultip
 /// scans out as XRGB, keeping the backing unambiguously opaque if that contract
 /// later becomes ARGB.
 fn paint_primary_boot_blend_reference(surface: PrimarySurface) -> bool {
-    if !PRIMARY_BOOT_BLEND_REFERENCE_ENABLED
-        || surface.virt.is_null()
+    if surface.virt.is_null()
         || surface.width == 0
         || surface.height == 0
         || surface.pitch_bytes < surface.width.saturating_mul(PRIMARY_BYTES_PER_PIXEL)
@@ -1180,6 +1182,15 @@ fn paint_primary_boot_blend_reference(surface: PrimarySurface) -> bool {
         unsafe { core::slice::from_raw_parts_mut(surface.virt.cast::<u32>(), allocation_pixels) };
     for pixel in allocation {
         *pixel = 0xFF00_0000;
+    }
+
+    if !PRIMARY_BOOT_BLEND_REFERENCE_ENABLED {
+        crate::intel::dma_flush(surface.virt, surface.byte_len);
+        crate::log!(
+            "intel/display: primary-boot blend-reference disabled pipe={} slot=0 temporary=opaque-black-until-ui4-transparent-handoff\n",
+            surface.pipe.name,
+        );
+        return false;
     }
 
     for y in 0..height {
@@ -1995,7 +2006,7 @@ fn decode_trans_bits_per_color(v: u32) -> u32 {
     }
 }
 
-fn program_pipe_bottom_color(dev: crate::intel::Dev, pipe: PipeInfo, raw: u32) {
+fn program_pipe_bottom_color(dev: crate::intel::Dev, pipe: PipeInfo, raw: u32) -> bool {
     let reg = SKL_BOTTOM_COLOR_A + pipe.slot * SKL_BOTTOM_COLOR_PIPE_STRIDE;
     crate::intel::mmio_write(dev, reg, raw);
     let readback = crate::intel::mmio_read(dev, reg);
@@ -2006,6 +2017,7 @@ fn program_pipe_bottom_color(dev: crate::intel::Dev, pipe: PipeInfo, raw: u32) {
         raw,
         readback
     );
+    readback == raw
 }
 
 fn pipe_bottom_color_from_xrgb(color: u32) -> u32 {
@@ -2013,6 +2025,29 @@ fn pipe_bottom_color_from_xrgb(color: u32) -> u32 {
     let green = ((color >> 8) & 0xFF) * 0x3FF / 0xFF;
     let blue = (color & 0xFF) * 0x3FF / 0xFF;
     pipe_bottom_color_u0_10(red, green, blue)
+}
+
+/// Program the real Pipe A bottom color. This register has RGB channels but no
+/// alpha channel; it is visible only where enabled planes do not cover the
+/// pipe output.
+pub(crate) fn set_pipe_a_bottom_color_rgb8(red: u8, green: u8, blue: u8) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let pipe = PIPES[0];
+    let xrgb = (u32::from(red) << 16) | (u32::from(green) << 8) | u32::from(blue);
+    let raw = pipe_bottom_color_from_xrgb(xrgb);
+    let programmed = program_pipe_bottom_color(dev, pipe, raw);
+    crate::log_info!(target: "intel/display";
+        "intel/display: runtime bottom-color pipe={} rgb8={},{},{} raw=0x{:08X} programmed={} source=ui4-color-picker\n",
+        pipe.name,
+        red,
+        green,
+        blue,
+        raw,
+        programmed as u8,
+    );
+    programmed
 }
 
 pub(crate) fn active_scanout_dimensions() -> Option<(u32, u32)> {
@@ -6452,27 +6487,32 @@ pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
         return false;
     }
 
-    // Boot scanout is XRGB bytes (B,G,R,X). Preserve the completed image while
-    // changing the storage convention to UI4's native R,G,B,A with opaque A.
-    for y in 0..primary.height as usize {
-        let row = unsafe {
-            primary
-                .virt
-                .add(y.saturating_mul(primary.pitch_bytes as usize))
-        };
-        for x in 0..primary.width as usize {
-            let pixel = unsafe { core::ptr::read_volatile(row.cast::<u32>().add(x)) };
-            let red = (pixel >> 16) & 0xFF;
-            let green = (pixel >> 8) & 0xFF;
-            let blue = pixel & 0xFF;
-            let rgba = red | (green << 8) | (blue << 16) | 0xFF00_0000;
-            unsafe { core::ptr::write_volatile(row.cast::<u32>().add(x), rgba) };
+    if PRIMARY_SLOT0_TRANSPARENT_FOR_BOTTOM_COLOR_TEST {
+        // Slot0 remains enabled and keeps its ordinary premultiplied-RGBA
+        // contract. Zero pixels make it an empty slice so the pipe bottom
+        // color, rather than an opaque substitute, becomes observable.
+        unsafe { core::ptr::write_bytes(primary.virt, 0, primary.byte_len) };
+    } else {
+        // Boot scanout is XRGB bytes (B,G,R,X). Preserve the completed image
+        // while changing the storage convention to UI4's native R,G,B,A with
+        // opaque A.
+        for y in 0..primary.height as usize {
+            let row = unsafe {
+                primary
+                    .virt
+                    .add(y.saturating_mul(primary.pitch_bytes as usize))
+            };
+            for x in 0..primary.width as usize {
+                let pixel = unsafe { core::ptr::read_volatile(row.cast::<u32>().add(x)) };
+                let red = (pixel >> 16) & 0xFF;
+                let green = (pixel >> 8) & 0xFF;
+                let blue = pixel & 0xFF;
+                let rgba = red | (green << 8) | (blue << 16) | 0xFF00_0000;
+                unsafe { core::ptr::write_volatile(row.cast::<u32>().add(x), rgba) };
+            }
         }
     }
-    crate::intel::dma_flush(
-        primary.virt,
-        (primary.pitch_bytes as usize).saturating_mul(primary.height as usize),
-    );
+    crate::intel::dma_flush(primary.virt, primary.byte_len);
 
     let plane = pipe.plane(crate::ui4::PRIMARY_PLANE_SLOT);
     let ctl_before = crate::intel::mmio_read(dev, plane.ctl());
@@ -6500,9 +6540,10 @@ pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
         )
         .is_ok();
     crate::log_info!(target: "ui4";
-        "ui4/application-plane-stack rgba_handoff={} pipe={} slots=0-3/premultiplied-rgba8 slot4=interaction-only boot_primary=xrgb-to-rgba-once cpu_blend=0 frame={}=>{} frame_wait={} surf=0x{:08X} live=0x{:08X} live_iters={}\n",
+        "ui4/application-plane-stack rgba_handoff={} pipe={} slots=0-3/premultiplied-rgba8 slot4=interaction-only boot_primary=xrgb-to-rgba-once slot0_transparent_bottom_color_test={} cpu_blend=0 frame={}=>{} frame_wait={} surf=0x{:08X} live=0x{:08X} live_iters={}\n",
         ready as u8,
         pipe.name,
+        PRIMARY_SLOT0_TRANSPARENT_FOR_BOTTOM_COLOR_TEST as u8,
         frame_before,
         frame_after,
         frame_wait,
