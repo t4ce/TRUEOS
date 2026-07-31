@@ -955,6 +955,12 @@ pub(crate) fn update_resident_triangle_draw_indexed_indirect(
         .checked_add(index_count)
         .ok_or("resident-indirect-index-range")?;
     if index_count == 0
+        // This first retained backend expands transforms into vertices and
+        // has no instance storage binding yet. Zero remains valid for Helio's
+        // GPU culling result; one is the only drawable instance contract.
+        || instance_count > 1
+        || base_vertex != 0
+        || first_instance != 0
         || draw_end > mesh.index_count
         || mesh.indirect_args_offset.saturating_add(DRAW_INDEXED_INDIRECT_BYTES)
             > mesh.storage_bytes

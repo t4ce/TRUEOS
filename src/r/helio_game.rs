@@ -401,12 +401,35 @@ fn make_resident_scene(
     scene: &trueos_helio_runtime::Scene,
 ) -> Result<Vec<ResidentTriangle>, GameError> {
     let mut resident = Vec::with_capacity(scene.triangles.len());
-    for triangle in &scene.triangles {
+    for (triangle_index, triangle) in scene.triangles.iter().enumerate() {
+        let args = match scene.resident_triangle_draw_indexed_indirect(triangle_index) {
+            Ok(args) => args,
+            Err(error) => {
+                release_resident_scene(resident);
+                return Err(GameError::Artifact(error));
+            }
+        };
         match crate::intel::render::create_resident_triangle_mesh(&triangle.vertices, &[0, 1, 2]) {
-            Ok(mesh) => resident.push(ResidentTriangle {
-                mesh,
-                rgba: triangle.rgba,
-            }),
+            Ok(mesh) => {
+                if let Err(error) =
+                    crate::intel::render::update_resident_triangle_draw_indexed_indirect(
+                        &mesh,
+                        args.index_count,
+                        args.instance_count,
+                        args.first_index,
+                        args.base_vertex,
+                        args.first_instance,
+                    )
+                {
+                    let _ = crate::intel::render::release_resident_triangle_mesh(&mesh);
+                    release_resident_scene(resident);
+                    return Err(GameError::Render(error));
+                }
+                resident.push(ResidentTriangle {
+                    mesh,
+                    rgba: triangle.rgba,
+                });
+            }
             Err(error) => {
                 release_resident_scene(resident);
                 return Err(GameError::Render(error));
@@ -426,11 +449,24 @@ fn update_resident_scene(
     if resident.len() != scene.triangles.len() {
         return Err(GameError::Render("helio-resize-triangle-count"));
     }
-    for (resident, triangle) in resident.iter().zip(&scene.triangles) {
+    for (triangle_index, (resident, triangle)) in resident.iter().zip(&scene.triangles).enumerate()
+    {
         crate::intel::render::update_resident_triangle_mesh(
             &resident.mesh,
             &triangle.vertices,
             &[0, 1, 2],
+        )
+        .map_err(GameError::Render)?;
+        let args = scene
+            .resident_triangle_draw_indexed_indirect(triangle_index)
+            .map_err(GameError::Artifact)?;
+        crate::intel::render::update_resident_triangle_draw_indexed_indirect(
+            &resident.mesh,
+            args.index_count,
+            args.instance_count,
+            args.first_index,
+            args.base_vertex,
+            args.first_instance,
         )
         .map_err(GameError::Render)?;
     }
@@ -606,11 +642,15 @@ fn make_resident_batches(
 ) -> Result<Vec<ResidentTriangle>, GameError> {
     let mut resident = Vec::with_capacity(batches.len());
     for batch in batches {
+        let args = match batch.draw_indexed_indirect() {
+            Ok(args) => args,
+            Err(error) => {
+                release_resident_scene(resident);
+                return Err(GameError::Artifact(error));
+            }
+        };
         match crate::intel::render::create_resident_triangle_mesh(&batch.vertices, &batch.indices) {
             Ok(mesh) => {
-                let args = batch
-                    .draw_indexed_indirect()
-                    .map_err(GameError::Artifact)?;
                 if let Err(error) =
                     crate::intel::render::update_resident_triangle_draw_indexed_indirect(
                         &mesh,
@@ -653,9 +693,7 @@ fn update_resident_batches(
             &batch.indices,
         )
         .map_err(GameError::Render)?;
-        let args = batch
-            .draw_indexed_indirect()
-            .map_err(GameError::Artifact)?;
+        let args = batch.draw_indexed_indirect().map_err(GameError::Artifact)?;
         crate::intel::render::update_resident_triangle_draw_indexed_indirect(
             &resident.mesh,
             args.index_count,
@@ -849,7 +887,7 @@ impl PortedSceneEngine {
 
 async fn run_cube() -> Result<(), GameError> {
     let mut surface = create_surface()?;
-    let initial_scene = match trueos_helio_runtime::decode_artifact(
+    let initial_scene = match trueos_helio_runtime::decode_artifact_with_replay(
         GAME_ARTIFACT,
         surface.width as f32 / surface.height as f32,
         trueos_helio_runtime::Camera::helio_simple_graph(),
@@ -890,9 +928,11 @@ async fn run_cube() -> Result<(), GameError> {
     *LAST_ERROR.lock() = None;
     crate::log_info!(
         target: "helio";
-        "helio example=1 name=simple-cube online artifact_bytes={} normalized_triangles={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied resize=ui4-broker->render-new-native-ring->atomic-frame-swap path=helioa-v1+render-ir-v1->resident-triangles->one-guc-render->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+        "helio example=1 name=simple-cube online artifact_bytes={} normalized_triangles={} source_draw_indices={} draw_source={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied resize=ui4-broker->render-new-native-ring->atomic-frame-swap path=helioa-v1+render-ir-v1+artifact-replay-v1->uniform-color-subdraws->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
         GAME_ARTIFACT.len(),
         triangle_count,
+        initial_scene.source_draw_indexed_indirect.index_count,
+        initial_scene.draw_source.label(),
         surface.frame.raw(),
         window.raw(),
         surface.width,
@@ -912,7 +952,7 @@ async fn run_cube() -> Result<(), GameError> {
         {
             match prepare_resize(&surface, width, height) {
                 Ok(replacement) => {
-                    let scene = match trueos_helio_runtime::decode_artifact(
+                    let scene = match trueos_helio_runtime::decode_artifact_with_replay(
                         GAME_ARTIFACT,
                         width as f32 / height as f32,
                         trueos_helio_runtime::Camera::helio_simple_graph(),
@@ -1217,7 +1257,7 @@ async fn run_churn() -> Result<(), GameError> {
             }
             crate::log_info!(
                 target: "helio";
-                "helio example=2 name=churn-benchmark online artifact_bytes={} active_objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba floor=none alpha=premultiplied animation_rate=1.5x producer_pacing=relative-post-work delay_ms=33 nominal_ceiling_fps=30 input=ui4-owner-broker->winit-shaped-events controls=WASD+Space+Shift,left-drag-look,+/- resize=ui4-broker->render-new-native-ring->atomic-frame-swap path=helioa-v1+churn-v1->resident-batches->one-guc-render->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+                "helio example=2 name=churn-benchmark online artifact_bytes={} active_objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba floor=none alpha=premultiplied animation_rate=1.5x producer_pacing=relative-post-work delay_ms=33 nominal_ceiling_fps=30 input=ui4-owner-broker->winit-shaped-events controls=WASD+Space+Shift,left-drag-look,+/- resize=ui4-broker->render-new-native-ring->atomic-frame-swap path=helioa-v1+churn-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
                 GAME_ARTIFACT.len(),
                 engine.active_objects(),
                 resident.len(),
@@ -1425,7 +1465,7 @@ async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
             }
             crate::log_info!(
                 target: "helio";
-                "helio example={} name={} online artifact_bytes={} objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied input=ui4-owner-broker->winit-shaped-events controls={} resize=ui4-broker->render-new-native-ring->atomic-frame-swap path=helioa-v1+scene-v1->resident-batches->one-guc-render->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+                "helio example={} name={} online artifact_bytes={} objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied input=ui4-owner-broker->winit-shaped-events controls={} resize=ui4-broker->render-new-native-ring->atomic-frame-swap path=helioa-v1+scene-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
                 example_id,
                 engine.name(),
                 GAME_ARTIFACT.len(),

@@ -507,6 +507,16 @@ mod tests {
                     .flatten()
                     .all(|value| value.is_finite())
         }));
+        assert!(engine.batches().iter().all(|batch| {
+            batch.draw_indexed_indirect()
+                == Ok(DrawIndexedIndirectArgs {
+                    index_count: 19_800,
+                    instance_count: 1,
+                    first_index: 0,
+                    base_vertex: 0,
+                    first_instance: 0,
+                })
+        }));
         engine.step(16.0 / 9.0).unwrap();
         assert_eq!(engine.active_objects(), 8);
         engine.step(16.0 / 9.0).unwrap();

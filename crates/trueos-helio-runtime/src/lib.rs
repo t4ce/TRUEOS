@@ -12,9 +12,10 @@ pub mod pendulum_bigcloth;
 
 use alloc::vec::Vec;
 use trueos_helio_artifact::render_ir::{
-    BindingKind, CompareFunction, CullMode, FrontFace, IndexFormat, PrimitiveTopology, Program,
-    ShaderStages, TextureFormat, VertexAttribute,
+    BindingKind, CompareFunction, CullMode, DrawIndexed, FrontFace, IndexFormat, PrimitiveTopology,
+    Program, ShaderStages, TextureFormat, VertexAttribute,
 };
+use trueos_helio_artifact::replay::ReplayPlan;
 
 const MAX_TRIANGLES: usize = 4_096;
 
@@ -60,6 +61,51 @@ pub struct Triangle {
 pub struct Scene {
     pub triangles: Vec<Triangle>,
     pub clear_rgba: [u8; 4],
+    /// The one authoritative indexed draw from the normalized Helio program.
+    /// When `draw_source` is `ArtifactReplayV1`, this is the record carried by
+    /// `render/replay-v1.bin`, after it has been cross-checked against the IR.
+    pub source_draw_indexed_indirect: DrawIndexedIndirectArgs,
+    pub draw_source: DrawCommandSource,
+}
+
+impl Scene {
+    /// Lower one source triangle to the current constant-color Intel backend.
+    ///
+    /// The artifact replay record remains authoritative for selecting and
+    /// validating the source index range. The retained renderer currently
+    /// specializes one uniform color per draw, so each decoded triangle owns a
+    /// rebased three-index resident mesh and therefore a local three-index
+    /// indirect record. This can disappear once per-vertex color reaches the
+    /// retained backend.
+    pub fn resident_triangle_draw_indexed_indirect(
+        &self,
+        triangle_index: usize,
+    ) -> Result<DrawIndexedIndirectArgs, Error> {
+        let source_indices = usize::try_from(self.source_draw_indexed_indirect.index_count)
+            .map_err(|_| Error::IndexOutOfRange)?;
+        let source_triangles = source_indices / 3;
+        if triangle_index >= self.triangles.len() || triangle_index >= source_triangles {
+            return Err(Error::IndexOutOfRange);
+        }
+        Ok(DrawIndexedIndirectArgs::new(3))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DrawCommandSource {
+    /// Compatibility path for older artifacts without a replay section.
+    RenderIrFallback,
+    /// Strictly validated `render/replay-v1.bin` supplied the source record.
+    ArtifactReplayV1,
+}
+
+impl DrawCommandSource {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::RenderIrFallback => "render-ir-fallback",
+            Self::ArtifactReplayV1 => "artifact-replay-v1",
+        }
+    }
 }
 
 /// Helio's native GPU draw record, byte-for-byte compatible with
@@ -85,6 +131,16 @@ impl DrawIndexedIndirectArgs {
             first_index: 0,
             base_vertex: 0,
             first_instance: 0,
+        }
+    }
+
+    pub const fn from_render_ir(draw: DrawIndexed) -> Self {
+        Self {
+            index_count: draw.index_count,
+            instance_count: draw.instance_count,
+            first_index: draw.first_index,
+            base_vertex: draw.base_vertex,
+            first_instance: draw.first_instance,
         }
     }
 
@@ -127,6 +183,11 @@ pub enum Error {
     InvalidCamera,
     VertexBehindCamera,
     DegenerateTriangle,
+    MissingReplay,
+    ReplayCommandCount,
+    ReplayChecksumMismatch,
+    ReplayResourceMismatch,
+    ReplayDrawMismatch,
     MissingChurnScene,
     InvalidChurnScene,
     MissingBattleScene,
@@ -138,15 +199,66 @@ pub enum Error {
 pub fn decode_artifact(bytes: &[u8], aspect: f32, camera: Camera) -> Result<Scene, Error> {
     let artifact = trueos_helio_artifact::Artifact::parse(bytes).map_err(|_| Error::Artifact)?;
     let program = artifact.render_program().map_err(|_| Error::Artifact)?;
-    decode_program(&program, aspect, camera)
+    let Some(_) = artifact.section(trueos_helio_artifact::replay::SECTION_NAME) else {
+        return decode_program(&program, aspect, camera);
+    };
+    let render_ir = artifact
+        .section(trueos_helio_artifact::render_ir::SECTION_NAME)
+        .ok_or(Error::Artifact)?;
+    let replay = artifact.replay_plan().map_err(|_| Error::Artifact)?;
+    let draw = validate_replay_plan(&program, render_ir.data, replay)?;
+    decode_program_with_draw(&program, aspect, camera, draw, DrawCommandSource::ArtifactReplayV1)
+}
+
+/// Decode only artifacts that carry the validated Helio replay contract.
+///
+/// `decode_artifact` intentionally retains an explicit Render-IR fallback for
+/// old build products. The kernel demo uses this strict entry point so its
+/// telemetry cannot claim GPU-owned indirect parameters when the section is
+/// absent.
+pub fn decode_artifact_with_replay(
+    bytes: &[u8],
+    aspect: f32,
+    camera: Camera,
+) -> Result<Scene, Error> {
+    let artifact = trueos_helio_artifact::Artifact::parse(bytes).map_err(|_| Error::Artifact)?;
+    let program = artifact.render_program().map_err(|_| Error::Artifact)?;
+    let render_ir = artifact
+        .section(trueos_helio_artifact::render_ir::SECTION_NAME)
+        .ok_or(Error::Artifact)?;
+    if artifact
+        .section(trueos_helio_artifact::replay::SECTION_NAME)
+        .is_none()
+    {
+        return Err(Error::MissingReplay);
+    }
+    let replay = artifact.replay_plan().map_err(|_| Error::Artifact)?;
+    let draw = validate_replay_plan(&program, render_ir.data, replay)?;
+    decode_program_with_draw(&program, aspect, camera, draw, DrawCommandSource::ArtifactReplayV1)
 }
 
 pub fn decode_program(program: &Program<'_>, aspect: f32, camera: Camera) -> Result<Scene, Error> {
+    decode_program_with_draw(
+        program,
+        aspect,
+        camera,
+        DrawIndexedIndirectArgs::from_render_ir(program.draw),
+        DrawCommandSource::RenderIrFallback,
+    )
+}
+
+fn decode_program_with_draw(
+    program: &Program<'_>,
+    aspect: f32,
+    camera: Camera,
+    source_draw: DrawIndexedIndirectArgs,
+    draw_source: DrawCommandSource,
+) -> Result<Scene, Error> {
     validate_contract(program)?;
     let position = attribute(program, 0).ok_or(Error::MissingPosition)?;
     let color = attribute(program, 2).ok_or(Error::MissingColor)?;
     let draw_count =
-        usize::try_from(program.draw.index_count).map_err(|_| Error::DrawNotTriangleList)?;
+        usize::try_from(source_draw.index_count).map_err(|_| Error::DrawNotTriangleList)?;
     if !draw_count.is_multiple_of(3) {
         return Err(Error::DrawNotTriangleList);
     }
@@ -157,7 +269,7 @@ pub fn decode_program(program: &Program<'_>, aspect: f32, camera: Camera) -> Res
 
     let projector = Projector::new(camera, aspect)?;
     let first_index =
-        usize::try_from(program.draw.first_index).map_err(|_| Error::IndexOutOfRange)?;
+        usize::try_from(source_draw.first_index).map_err(|_| Error::IndexOutOfRange)?;
     let mut triangles = Vec::with_capacity(triangle_count);
     for triangle_index in 0..triangle_count {
         let first = first_index
@@ -171,7 +283,7 @@ pub fn decode_program(program: &Program<'_>, aspect: f32, camera: Camera) -> Res
         let mut colors = [[0.0; 3]; 3];
         for corner in 0..3 {
             let source_index = read_index(program, first + corner)?;
-            let adjusted = i64::from(source_index) + i64::from(program.draw.base_vertex);
+            let adjusted = i64::from(source_index) + i64::from(source_draw.base_vertex);
             let vertex_index = usize::try_from(adjusted).map_err(|_| Error::IndexOutOfRange)?;
             let position = read_f32x3(program, vertex_index, position)?;
             let color = read_f32x3(program, vertex_index, color)?;
@@ -207,7 +319,45 @@ pub fn decode_program(program: &Program<'_>, aspect: f32, camera: Camera) -> Res
     Ok(Scene {
         triangles,
         clear_rgba: linear_rgba_to_srgba8(program.pipeline.clear_color)?,
+        source_draw_indexed_indirect: source_draw,
+        draw_source,
     })
+}
+
+fn validate_replay_plan(
+    program: &Program<'_>,
+    render_ir_bytes: &[u8],
+    replay: ReplayPlan<'_>,
+) -> Result<DrawIndexedIndirectArgs, Error> {
+    if replay.command_count() != 1 {
+        return Err(Error::ReplayCommandCount);
+    }
+    if replay.source_render_ir_crc32() != crc32(render_ir_bytes) {
+        return Err(Error::ReplayChecksumMismatch);
+    }
+    if replay.vertex_buffer_id() != program.vertex.id
+        || replay.index_buffer_id() != program.index.id
+    {
+        return Err(Error::ReplayResourceMismatch);
+    }
+    let replay_draw = replay.commands().next().ok_or(Error::ReplayCommandCount)?;
+    if replay_draw != program.draw {
+        return Err(Error::ReplayDrawMismatch);
+    }
+    Ok(DrawIndexedIndirectArgs::from_render_ir(replay_draw))
+}
+
+/// Table-free IEEE CRC32 keeps the no-std replay/IR binding self-contained.
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
 }
 
 fn validate_contract(program: &Program<'_>) -> Result<(), Error> {
@@ -428,6 +578,7 @@ mod tests {
         CameraBinding, DrawIndexed, IndexBuffer, PipelineState, ResourceId, Shader, StateFlags,
         VertexBuffer, VertexFormat,
     };
+    use trueos_helio_artifact::replay::{COMMAND_STRIDE, HEADER_LEN, MAGIC, VERSION};
 
     fn f32s(values: &[f32]) -> Vec<u8> {
         values
@@ -509,6 +660,42 @@ mod tests {
         StateFlags::from_bits(0b11_1111).unwrap()
     }
 
+    fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn replay_bytes(
+        render_ir: &[u8],
+        vertex_id: ResourceId,
+        index_id: ResourceId,
+        commands: &[DrawIndexed],
+    ) -> Vec<u8> {
+        let mut bytes = alloc::vec![0u8; HEADER_LEN + commands.len() * COMMAND_STRIDE];
+        bytes[..8].copy_from_slice(&MAGIC);
+        put_u16(&mut bytes, 8, VERSION);
+        put_u16(&mut bytes, 10, HEADER_LEN as u16);
+        let total_len = bytes.len() as u32;
+        put_u32(&mut bytes, 12, total_len);
+        put_u32(&mut bytes, 16, commands.len() as u32);
+        put_u32(&mut bytes, 20, COMMAND_STRIDE as u32);
+        put_u32(&mut bytes, 28, crc32(render_ir));
+        put_u32(&mut bytes, 32, vertex_id.0);
+        put_u32(&mut bytes, 36, index_id.0);
+        for (index, command) in commands.iter().enumerate() {
+            let base = HEADER_LEN + index * COMMAND_STRIDE;
+            put_u32(&mut bytes, base, command.index_count);
+            put_u32(&mut bytes, base + 4, command.instance_count);
+            put_u32(&mut bytes, base + 8, command.first_index);
+            put_u32(&mut bytes, base + 12, command.base_vertex as u32);
+            put_u32(&mut bytes, base + 16, command.first_instance);
+        }
+        bytes
+    }
+
     #[test]
     fn fixed_camera_projects_generic_triangle() {
         let vertices = f32s(&[
@@ -533,6 +720,93 @@ mod tests {
                 .iter()
                 .all(|vertex| (0.0..1.0).contains(&vertex[2]))
         );
+        assert_eq!(scene.draw_source, DrawCommandSource::RenderIrFallback);
+        assert_eq!(scene.source_draw_indexed_indirect, DrawIndexedIndirectArgs::new(3));
+        assert_eq!(
+            scene.resident_triangle_draw_indexed_indirect(0).unwrap(),
+            DrawIndexedIndirectArgs::new(3)
+        );
+        assert_eq!(scene.resident_triangle_draw_indexed_indirect(1), Err(Error::IndexOutOfRange));
+    }
+
+    #[test]
+    fn draw_indexed_indirect_abi_is_exactly_wgpu_order() {
+        let draw = DrawIndexedIndirectArgs {
+            index_count: 0x0102_0304,
+            instance_count: 0x1112_1314,
+            first_index: 0x2122_2324,
+            base_vertex: -2,
+            first_instance: 0x4142_4344,
+        };
+        assert_eq!(DrawIndexedIndirectArgs::BYTE_LEN, 20);
+        assert_eq!(
+            draw.to_le_bytes(),
+            [
+                0x04, 0x03, 0x02, 0x01, 0x14, 0x13, 0x12, 0x11, 0x24, 0x23, 0x22, 0x21, 0xfe, 0xff,
+                0xff, 0xff, 0x44, 0x43, 0x42, 0x41,
+            ]
+        );
+    }
+
+    #[test]
+    fn replay_is_bound_to_ir_crc_resources_and_exact_draw() {
+        let vertices = f32s(&[
+            -0.5, -0.5, 0.0, 1.0, 0.2, 0.1, 0.5, -0.5, 0.0, 1.0, 0.2, 0.1, 0.0, 0.5, 0.0, 1.0, 0.2,
+            0.1,
+        ]);
+        let indices = [0, 0, 1, 0, 2, 0];
+        let program = program(&vertices, &indices);
+        let render_ir = b"normalized-render-ir";
+
+        let valid = replay_bytes(render_ir, program.vertex.id, program.index.id, &[program.draw]);
+        assert_eq!(
+            validate_replay_plan(&program, render_ir, ReplayPlan::parse(&valid).unwrap()),
+            Ok(DrawIndexedIndirectArgs::new(3))
+        );
+
+        let mut bad_crc = valid.clone();
+        put_u32(&mut bad_crc, 28, crc32(render_ir) ^ 1);
+        assert_eq!(
+            validate_replay_plan(&program, render_ir, ReplayPlan::parse(&bad_crc).unwrap()),
+            Err(Error::ReplayChecksumMismatch)
+        );
+
+        let wrong_resource =
+            replay_bytes(render_ir, ResourceId(9), program.index.id, &[program.draw]);
+        assert_eq!(
+            validate_replay_plan(&program, render_ir, ReplayPlan::parse(&wrong_resource).unwrap()),
+            Err(Error::ReplayResourceMismatch)
+        );
+
+        let different_draw = DrawIndexed {
+            index_count: program.draw.index_count,
+            instance_count: program.draw.instance_count,
+            first_index: program.draw.first_index,
+            base_vertex: program.draw.base_vertex,
+            first_instance: 1,
+        };
+        let wrong_draw =
+            replay_bytes(render_ir, program.vertex.id, program.index.id, &[different_draw]);
+        assert_eq!(
+            validate_replay_plan(&program, render_ir, ReplayPlan::parse(&wrong_draw).unwrap()),
+            Err(Error::ReplayDrawMismatch)
+        );
+
+        let two_draws = replay_bytes(
+            render_ir,
+            program.vertex.id,
+            program.index.id,
+            &[program.draw, program.draw],
+        );
+        assert_eq!(
+            validate_replay_plan(&program, render_ir, ReplayPlan::parse(&two_draws).unwrap()),
+            Err(Error::ReplayCommandCount)
+        );
+    }
+
+    #[test]
+    fn crc32_matches_ieee_reference_vector() {
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
     }
 
     #[test]

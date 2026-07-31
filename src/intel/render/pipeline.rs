@@ -587,9 +587,9 @@ fn encode_draw_indexed_indirect_register_loads(
         (RCS_3DPRIM_BASE_VERTEX, 12),
         (RCS_3DPRIM_START_INSTANCE, 16),
         // Gen11+ routes gl_BaseVertex through XP0 when extended parameters
-        // are present. The current clip-space VS does not consume it, but
-        // mirroring Mesa here keeps the bridge correct for Helio shaders that
-        // do.
+        // are present. The current clip-space VS does not consume it. This
+        // prepares XP0; future Helio shader metadata must also enable its
+        // 3DSTATE_VF_SGVS_2 slot before the builtin is delivered.
         (RCS_3DPRIM_XP_BASE_VERTEX, 12),
     ];
     let required = fields
@@ -603,8 +603,11 @@ fn encode_draw_indexed_indirect_register_loads(
         let address = args_gpu_addr
             .checked_add(byte_offset)
             .ok_or("probe-indirect-address")?;
-        batch_dwords[*cursor] = MI_LOAD_REGISTER_MEM;
-        batch_dwords[*cursor + 1] = register;
+        // Gfx11+ addresses engine-relative CS MMIO registers through the
+        // AddCSMMIOStartOffset bit. Mesa's mi_adjust_reg_num() applies the
+        // same 0x2000 subtraction before emitting MI_LOAD_REGISTER_MEM.
+        batch_dwords[*cursor] = MI_LOAD_REGISTER_MEM | MI_LRI_CS_MMIO;
+        batch_dwords[*cursor + 1] = register - RCS_RING_BASE as u32;
         batch_dwords[*cursor + 2] = address as u32;
         batch_dwords[*cursor + 3] = (address >> 32) as u32;
         *cursor += 4;
@@ -615,9 +618,10 @@ fn encode_draw_indexed_indirect_register_loads(
 #[cfg(test)]
 mod draw_indexed_indirect_encoder_tests {
     use super::{
-        MI_LOAD_REGISTER_MEM, RCS_3DPRIM_BASE_VERTEX, RCS_3DPRIM_INSTANCE_COUNT,
-        RCS_3DPRIM_START_INSTANCE, RCS_3DPRIM_START_VERTEX, RCS_3DPRIM_VERTEX_COUNT,
-        RCS_3DPRIM_XP_BASE_VERTEX, encode_draw_indexed_indirect_register_loads,
+        MI_LOAD_REGISTER_MEM, MI_LRI_CS_MMIO, RCS_3DPRIM_BASE_VERTEX,
+        RCS_3DPRIM_INSTANCE_COUNT, RCS_3DPRIM_START_INSTANCE, RCS_3DPRIM_START_VERTEX,
+        RCS_3DPRIM_VERTEX_COUNT, RCS_3DPRIM_XP_BASE_VERTEX, RCS_RING_BASE,
+        encode_draw_indexed_indirect_register_loads,
     };
 
     #[test]
@@ -638,8 +642,8 @@ mod draw_indexed_indirect_encoder_tests {
         ];
         for (packet, (register, byte_offset)) in batch.chunks_exact(4).zip(expected) {
             let address = base + byte_offset;
-            assert_eq!(packet[0], MI_LOAD_REGISTER_MEM);
-            assert_eq!(packet[1], register);
+            assert_eq!(packet[0], MI_LOAD_REGISTER_MEM | MI_LRI_CS_MMIO);
+            assert_eq!(packet[1], register - RCS_RING_BASE as u32);
             assert_eq!(packet[2], address as u32);
             assert_eq!(packet[3], (address >> 32) as u32);
         }
@@ -719,6 +723,13 @@ fn encode_triangle_probe_batch(
         vf_synthesized_vue && front_end_contract.force_vs_with_vf_synthesized_vue;
     if draw.indirect_args_gpu_addr.is_some() && draw.index_buffer.is_none() {
         return Err("probe-indirect-requires-index-buffer");
+    }
+    if draw.indirect_args_gpu_addr.is_some() && !device_is_gfx12(warm.device_id) {
+        // The CS-MMIO-relative MLRM encoding and XP0 register used below are
+        // the gfx11+ contract. TRUEOS's production targets are gfx12; reject
+        // older devices instead of pairing those loads with the legacy draw
+        // packet and pretending it is portable.
+        return Err("probe-indirect-device");
     }
 
     fn log_batch_offset(cursor: usize, label: &str) {
