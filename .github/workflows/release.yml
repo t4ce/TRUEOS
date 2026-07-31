@@ -27,12 +27,13 @@ permissions:
 jobs:
   build-sign-release:
     name: Build, sign, and publish
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
 
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
+      DPCPP_COMMIT: 383a356a5caf9ba3f5bbd1c0812da350c62870ba
 
     steps:
       - name: Checkout source
@@ -59,9 +60,11 @@ jobs:
             autoconf \
             automake \
             build-essential \
+            clang-21 \
             dosfstools \
             gcc \
             git \
+            git-lfs \
             libasound2-dev \
             linux-firmware \
             mtools \
@@ -72,6 +75,32 @@ jobs:
             python3-cryptography \
             xorriso \
             zstd
+
+      - name: Checkout pinned C++ shader toolchain
+        shell: bash
+        env:
+          GIT_LFS_SKIP_SMUDGE: "1"
+        run: |
+          set -euo pipefail
+
+          toolchain_path="${RUNNER_TEMP}/trueos-dpcpp"
+          git init "${toolchain_path}"
+          git -C "${toolchain_path}" remote add origin https://github.com/t4ce/dpcpp.git
+          git -C "${toolchain_path}" fetch --depth=1 origin "${DPCPP_COMMIT}"
+          git -C "${toolchain_path}" checkout --detach FETCH_HEAD
+          git -C "${toolchain_path}" lfs install --local
+          git -C "${toolchain_path}" lfs pull
+
+          test "$(git -C "${toolchain_path}" rev-parse HEAD)" = "${DPCPP_COMMIT}"
+          test -x "${toolchain_path}/bin/llvm-spirv"
+          test -x "${toolchain_path}/lib/ocloc/bin/ocloc"
+          test -x "${toolchain_path}/lib/igc/bin/iga64"
+
+          echo "CLANG=/usr/bin/clang-21" >> "${GITHUB_ENV}"
+          echo "LLVM_SPIRV=${toolchain_path}/bin/llvm-spirv" >> "${GITHUB_ENV}"
+          echo "OCLOC=${toolchain_path}/lib/ocloc/bin/ocloc" >> "${GITHUB_ENV}"
+          echo "OCLOC_LD_LIBRARY_PATH=${toolchain_path}/lib/ocloc/lib:${toolchain_path}/lib/igc/lib:${toolchain_path}/lib/igc/lib/igc2" >> "${GITHUB_ENV}"
+          echo "${toolchain_path}/lib/igc/bin" >> "${GITHUB_PATH}"
 
       - name: Install Rust nightly toolchain
         shell: bash
@@ -104,6 +133,16 @@ jobs:
           echo "ovmf=${ovmf_path}" >> "${GITHUB_OUTPUT}"
           echo "guc=${guc_path}" >> "${GITHUB_OUTPUT}"
           echo "huc=${huc_path}" >> "${GITHUB_OUTPUT}"
+
+      - name: Rebuild and verify C++ shader artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          make intel-gpu-bake-cpp-artifacts
+          make intel-gpu-verify-cpp-artifacts
+          git diff --exit-code -- \
+            crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp
 
       - name: Build release bundle
         shell: bash
