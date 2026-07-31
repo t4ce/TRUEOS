@@ -84,8 +84,26 @@ PINNED_VOICES_BYTES = 28_214_398
 PINNED_VOICES_SHA256 = "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"
 PINNED_TOKEN_MAX = 512
 PINNED_FRAME_MIN = 1
+# The native admission bound keeps useful margin above the measured 2,482
+# frame slow-path utterance. Longer predicted durations are split and retried
+# before phase-one allocation.
+PINNED_FRAME_MAX = 2_560
 PINNED_FRAME_MAX_CANDIDATE = 8_192
 PINNED_ARTIFACT_RELATIVE_PATH = "models/kokoro/kokoro.kkaot"
+PINNED_ARTIFACT_BYTES = 124_081_360
+PINNED_ARTIFACT_SEAL_SHA256 = (
+    "f1f5ccc668e171301e7220033992efcb2669f9d401591aace4f1025ac1e34998"
+)
+PINNED_ARTIFACT_FILE_SHA256 = (
+    "b7d4b9c62f3df01f71fc2585acd60190d1809dae9a6d916fe39c86d7dd4e3217"
+)
+# Independently planned post-fusion liveness results. F=2,560 is the sealed
+# operational bound. F=3,072 is retained only to make the memory trade-off
+# reviewable; it is not admitted by the emitted v1 program.
+PINNED_ARENA_SIZING = {
+    2_560: (1_572_878_336, 1_572_883_968),
+    3_072: (1_887_451_136, 1_887_456_768),
+}
 
 PINNED_IR_VERSION = 9
 PINNED_PRODUCER = ("onnx.quantize", "0.1.0")
@@ -309,6 +327,17 @@ AOT_OPCODES = {
 }
 
 AOT_DTYPE_BYTES = {1: 4, 2: 4, 3: 8, 4: 1, 5: 1, 6: 1}
+ONNX_TO_AOT_DTYPE = {1: 1, 6: 2, 7: 3, 2: 4, 3: 5, 9: 6}
+
+# The capacity interpreter is part of the executable-program proof, not merely
+# diagnostic output.  This digest seals all 4,744 tensor IDs, names and maximum
+# shapes at the supported sizing points. A model/tooling change must
+# deliberately update the matching endpoint digest.
+PINNED_CAPACITY_SHAPES_SHA256 = {
+    2_560: "ce83713e36d22cdc17c57d88d255112f3ad8fb80d8bc1f94561276070053cc09",
+    3_072: "0fd806a0986acbeb385f4b2cbbddaf865e7c74b12747a79696c0051e7b291182",
+    8_192: "d2e3400926129955b46d4fdc1ecd6e81d57c57ff9bae57d5895ff8e867d12ef3",
+}
 
 LOWERED_F32_BINARY_OPS = frozenset({"Add", "Mul", "Div", "Sub"})
 LOWERED_PARAMETERLESS_UNARY_OPS = frozenset(
@@ -2421,6 +2450,14 @@ class AotProgram:
     data_prefix: bytes = b""
 
 
+@dataclass(frozen=True)
+class ExecutablePlan:
+    """Complete real-graph program plus deterministic sizing evidence."""
+
+    program: AotProgram
+    metrics: dict[str, Any]
+
+
 def emit_aot(program: AotProgram, model_sha256: bytes, voices_sha256: bytes) -> bytes:
     """Emit the canonical little-endian v1 artifact."""
 
@@ -2663,6 +2700,7 @@ def inspect_aot(artifact: bytes) -> dict[str, Any]:
     return {
         "artifact_bytes": len(artifact),
         "artifact_sha256": artifact[64:96].hex(),
+        "file_sha256": hashlib.sha256(artifact).hexdigest(),
         "model_sha256": artifact[96:128].hex(),
         "voices_sha256": artifact[128:160].hex(),
         "sections": {name: value["count"] for name, value in sections.items()},
@@ -3212,6 +3250,7 @@ class GraphAnalysis:
     source_ownership_sha256: str = ""
     capacity_shapes: dict[str, tuple[int, ...]] = field(default_factory=dict)
     capacity_value_count: int = 0
+    executable_plan: ExecutablePlan | None = None
     report: dict[str, Any] = field(default_factory=dict)
 
 
@@ -5777,6 +5816,724 @@ def infer_capacity_shapes(
     return shapes, values
 
 
+@dataclass
+class _PlannedArenaSlot:
+    slot_id: int
+    owner_tensor: int
+    phase: int
+    alignment: int
+    byte_multiplier: int
+    byte_addend: int
+    live_start: int
+    live_end: int
+    fixed_offset: int = 0
+
+    def bytes_at(self, frame_count: int) -> int:
+        size = self.byte_multiplier * frame_count + self.byte_addend
+        reject(size < 0, f"slot {self.slot_id}: negative affine byte size")
+        return size
+
+
+def capacity_shapes_sha256(
+    analysis: GraphAnalysis, shapes: Mapping[str, tuple[int, ...]]
+) -> str:
+    return hashlib.sha256(
+        canonical_json(
+            [
+                (tensor.tensor_id, tensor.name, shapes[tensor.name])
+                for tensor in analysis.tensors
+            ]
+        )
+    ).hexdigest()
+
+
+def _aot_dtype(onnx_dtype: int) -> int:
+    try:
+        return ONNX_TO_AOT_DTYPE[onnx_dtype]
+    except KeyError as error:
+        raise CompileError(f"unsupported ONNX dtype {onnx_dtype}") from error
+
+
+def _shape_bytes(onnx_dtype: int, shape: Sequence[int]) -> int:
+    return logical_bytes(_aot_dtype(onnx_dtype), shape)
+
+
+def _affine_capacity_axis(
+    minimum: tuple[int, ...],
+    next_shape: tuple[int, ...],
+    maximum: tuple[int, ...],
+    frame_max: int,
+) -> tuple[int, int, int] | None:
+    """Return ``(axis, multiplier, addend)`` for one exact F-affine axis."""
+
+    reject(
+        not (len(minimum) == len(next_shape) == len(maximum)),
+        "capacity rank changes across frame endpoints",
+    )
+    changed = [
+        axis
+        for axis, (first, second) in enumerate(zip(minimum, next_shape))
+        if first != second
+    ]
+    if not changed:
+        reject(minimum != maximum, "capacity changes after F=2 but not at F=2")
+        return None
+    reject(len(changed) != 1, "more than one frame-dependent tensor dimension")
+    axis = changed[0]
+    multiplier = next_shape[axis] - minimum[axis]
+    addend = minimum[axis] - multiplier
+    reject(multiplier <= 0, "non-positive frame multiplier")
+    reject(
+        multiplier * frame_max + addend != maximum[axis]
+        or any(
+            minimum[index] != maximum[index]
+            for index in range(len(minimum))
+            if index != axis
+        ),
+        "capacity dimension is not affine in frame count",
+    )
+    return axis, multiplier, addend
+
+
+def _canonical_initializer_bytes(analysis: GraphAnalysis, name: str) -> bytes:
+    """Serialize one initializer in the exact little-endian runtime dtype."""
+
+    import numpy as np
+
+    tensor = analysis.initializers[name]
+    dtype = {
+        1: np.dtype("<f4"),
+        2: np.dtype("u1"),
+        3: np.dtype("i1"),
+        6: np.dtype("<i4"),
+        7: np.dtype("<i8"),
+        9: np.dtype("?"),
+    }.get(int(tensor.data_type))
+    reject(dtype is None, f"initializer {name!r}: unsupported dtype")
+    array = np.asarray(analysis.onnx.numpy_helper.to_array(tensor), dtype=dtype)
+    payload = array.tobytes(order="C")
+    expected = _shape_bytes(int(tensor.data_type), tuple(int(dim) for dim in tensor.dims))
+    reject(len(payload) != expected, f"initializer {name!r}: byte length changed")
+    return payload
+
+
+def _liveness_overlaps(first: _PlannedArenaSlot, second: _PlannedArenaSlot) -> bool:
+    return first.live_start < second.live_end and second.live_start < first.live_end
+
+
+def _ranges_overlap(
+    first_start: int, first_size: int, second_start: int, second_size: int
+) -> bool:
+    return first_start < second_start + second_size and second_start < first_start + first_size
+
+
+def _pack_fixed_slots(slots: Sequence[_PlannedArenaSlot]) -> int:
+    """Assign canonical fixed offsets for phase-zero and shared intervals."""
+
+    placed: list[_PlannedArenaSlot] = []
+    high_water = 0
+    for slot in slots:
+        if slot.phase not in {0, 2}:
+            continue
+        size = slot.bytes_at(0)
+        candidate = 0
+        while True:
+            candidate = align_up(candidate, slot.alignment)
+            conflict_end: int | None = None
+            for other in placed:
+                if not _liveness_overlaps(slot, other):
+                    continue
+                other_size = other.bytes_at(0)
+                if _ranges_overlap(candidate, size, other.fixed_offset, other_size):
+                    conflict_end = other.fixed_offset + other_size
+                    break
+            if conflict_end is None:
+                break
+            candidate = conflict_end
+        slot.fixed_offset = candidate
+        placed.append(slot)
+        high_water = max(high_water, candidate + size)
+    return align_up(high_water, AOT_ARENA_ALIGNMENT)
+
+
+def _pack_phase_one_slots(
+    slots: Sequence[_PlannedArenaSlot], frame_count: int
+) -> int:
+    """Mirror the Rust parser's deterministic phase-one interval packer."""
+
+    bases: dict[int, int] = {
+        slot.slot_id: slot.fixed_offset for slot in slots if slot.phase == 2
+    }
+    high_water = max(
+        (
+            slot.fixed_offset + slot.bytes_at(frame_count)
+            for slot in slots
+            if slot.phase == 2
+        ),
+        default=0,
+    )
+    for slot in slots:
+        if slot.phase != 1:
+            continue
+        size = slot.bytes_at(frame_count)
+        candidate = 0
+        moves = 0
+        while True:
+            candidate = align_up(candidate, slot.alignment)
+            conflict_end: int | None = None
+            for other in slots:
+                if other.slot_id == slot.slot_id or other.slot_id not in bases:
+                    continue
+                if not _liveness_overlaps(slot, other):
+                    continue
+                other_size = other.bytes_at(frame_count)
+                other_base = bases[other.slot_id]
+                if _ranges_overlap(candidate, size, other_base, other_size):
+                    conflict_end = other_base + other_size
+                    break
+            if conflict_end is None:
+                bases[slot.slot_id] = candidate
+                high_water = max(high_water, candidate + size)
+                break
+            candidate = conflict_end
+            moves += 1
+            reject(moves > len(slots) + 1, "phase-one slot packing did not converge")
+    return align_up(high_water, AOT_ARENA_ALIGNMENT)
+
+
+def _phase_one_live_byte_lower_bound(
+    slots: Sequence[_PlannedArenaSlot], frame_count: int
+) -> int:
+    """Return the exact peak live payload before placement/alignment overhead."""
+
+    changes: Counter[int] = Counter()
+    for slot in slots:
+        if slot.phase not in {1, 2}:
+            continue
+        size = slot.bytes_at(frame_count)
+        changes[slot.live_start] += size
+        changes[slot.live_end] -= size
+    live = 0
+    peak = 0
+    for operation in sorted(changes):
+        live += changes[operation]
+        peak = max(peak, live)
+    reject(live != 0, "phase-one live-byte accounting did not close")
+    return peak
+
+
+def _arena_sizing_metrics() -> dict[str, dict[str, int | str | bool]]:
+    comparison: dict[str, dict[str, int | str | bool]] = {}
+    for frame_max, (lower_bound, packed) in sorted(PINNED_ARENA_SIZING.items()):
+        overhead = packed - lower_bound
+        ratio_scale = 1_000_000_000_000
+        ratio_scaled = (packed * ratio_scale + lower_bound // 2) // lower_bound
+        comparison[f"f{frame_max}"] = {
+            "frame_max": frame_max,
+            "operational": frame_max == PINNED_FRAME_MAX,
+            "live_byte_lower_bound": lower_bound,
+            "packed_bytes": packed,
+            "packing_overhead_bytes": overhead,
+            "packing_overhead_ppb": (
+                overhead * 1_000_000_000 + lower_bound // 2
+            )
+            // lower_bound,
+            "packed_to_lower_bound_ratio": (
+                f"{ratio_scaled // ratio_scale}."
+                f"{ratio_scaled % ratio_scale:012d}"
+            ),
+        }
+    return comparison
+
+
+def _work_units(
+    record: LoweringRecord,
+    shapes: Mapping[str, tuple[int, ...]],
+    tensors: Sequence[TensorFact],
+) -> int:
+    """Return the explicit dispatcher work-coordinate contract.
+
+    Most current kernels are transactional whole-tensor calls. Resize has an
+    absolute output-element API and float convolution has an absolute
+    channel/time tile API. The v1 quantized adapters are still atomic, so they
+    also receive exactly one unit until their dispatcher consumes absolute
+    row coordinates. No operation receives fictional element units.
+    """
+
+    output_shapes = [shapes[tensors[tensor_id].name] for tensor_id in record.outputs]
+    if record.op_type == "Resize":
+        units = sum(math.prod(shape) for shape in output_shapes)
+    elif record.op_type in {"FloatConv1d", "FloatConvTranspose1d"}:
+        reject(
+            len(output_shapes) != 1 or len(output_shapes[0]) != 3,
+            f"{record.op_type}: output tile shape changed",
+        )
+        batch, channels, width = output_shapes[0]
+        reject(batch != 1, f"{record.op_type}: batch contract changed")
+        units = channels * width
+    else:
+        units = 1
+    reject(
+        units <= 0 or units > 0xFFFF_FFFF,
+        f"{record.op_type}: work-unit count rejected",
+    )
+    return units
+
+
+def build_executable_plan(
+    analysis: GraphAnalysis,
+    *,
+    token_max: int = PINNED_TOKEN_MAX,
+    frame_max: int = PINNED_FRAME_MAX,
+) -> ExecutablePlan:
+    """Build the complete pinned KKAOT program and post-fusion arena proof."""
+
+    minimum_shapes, _ = infer_capacity_shapes(
+        analysis, token_max=token_max, frame_max=PINNED_FRAME_MIN
+    )
+    next_shapes, _ = infer_capacity_shapes(
+        analysis, token_max=token_max, frame_max=PINNED_FRAME_MIN + 1
+    )
+    maximum_shapes, control_values = infer_capacity_shapes(
+        analysis, token_max=token_max, frame_max=frame_max
+    )
+    n1_f1_shapes, _ = infer_capacity_shapes(
+        analysis, token_max=1, frame_max=PINNED_FRAME_MIN
+    )
+    n1_fmax_shapes, _ = infer_capacity_shapes(
+        analysis, token_max=1, frame_max=frame_max
+    )
+    capacity_digest = capacity_shapes_sha256(analysis, maximum_shapes)
+    expected_capacity_digest = PINNED_CAPACITY_SHAPES_SHA256.get(frame_max)
+    reject(
+        expected_capacity_digest is None or capacity_digest != expected_capacity_digest,
+        f"capacity shape plan digest changed at F={frame_max}: {capacity_digest}",
+    )
+    analysis.capacity_shapes = maximum_shapes
+    analysis.capacity_value_count = len(control_values)
+
+    tensor_phases: dict[int, set[int]] = defaultdict(set)
+    owner_phases: dict[int, set[int]] = defaultdict(set)
+    owner_ops: dict[int, list[int]] = defaultdict(list)
+    produced_by: dict[int, int] = {}
+    referenced: set[int] = set()
+    for op_index, record in enumerate(analysis.lowerings):
+        expected_phase = 0 if op_index < analysis.lowered_phase_ranges[0][1] else 1
+        reject(record.phase != expected_phase, f"lowered op {op_index}: phase changed")
+        for tensor_id in record.inputs + record.outputs:
+            reject(tensor_id >= len(analysis.tensors), f"lowered op {op_index}: tensor ID")
+            fact = analysis.tensors[tensor_id]
+            owner = fact.alias_of if fact.alias_of is not None else tensor_id
+            referenced.add(tensor_id)
+            tensor_phases[tensor_id].add(record.phase)
+            owner_phases[owner].add(record.phase)
+            owner_ops[owner].append(op_index)
+        for tensor_id in record.outputs:
+            reject(tensor_id in produced_by, f"tensor {tensor_id}: duplicate lowered producer")
+            produced_by[tensor_id] = op_index
+
+    def descriptor_phase(fact: TensorFact) -> int:
+        if fact.initializer:
+            return 2
+        phases = (
+            tensor_phases.get(fact.tensor_id, set())
+            if fact.alias_of is not None
+            else owner_phases.get(fact.tensor_id, set())
+        )
+        if not phases or len(phases) == 2:
+            return 2
+        reject(len(phases) != 1, f"tensor {fact.tensor_id}: invalid phase set")
+        return next(iter(phases))
+
+    affine: dict[int, tuple[int, int, int]] = {}
+    view_roots = {
+        fact.alias_of for fact in analysis.tensors if fact.alias_of is not None
+    }
+    phases_by_tensor = {
+        fact.tensor_id: descriptor_phase(fact) for fact in analysis.tensors
+    }
+    for fact in analysis.tensors:
+        expression = _affine_capacity_axis(
+            minimum_shapes[fact.name],
+            next_shapes[fact.name],
+            maximum_shapes[fact.name],
+            frame_max,
+        )
+        if (
+            expression is not None
+            and fact.alias_of is None
+            and fact.tensor_id not in view_roots
+            and phases_by_tensor[fact.tensor_id] == 1
+        ):
+            affine[fact.tensor_id] = expression
+
+    constant_data = bytearray()
+    constant_offsets: dict[int, int] = {}
+    constant_payload_bytes = 0
+    for fact in analysis.tensors:
+        if not fact.initializer:
+            continue
+        offset = align_up(len(constant_data), 16)
+        constant_data.extend(b"\0" * (offset - len(constant_data)))
+        payload = _canonical_initializer_bytes(analysis, fact.name)
+        constant_offsets[fact.tensor_id] = offset
+        constant_data.extend(payload)
+        constant_payload_bytes += len(payload)
+
+    slot_owners = [
+        fact.tensor_id
+        for fact in analysis.tensors
+        if fact.alias_of is None
+        and not fact.initializer
+        and not fact.graph_input
+        and not fact.graph_output
+        and fact.tensor_id in owner_ops
+    ]
+    planned_slots: list[_PlannedArenaSlot] = []
+    for owner in slot_owners:
+        fact = analysis.tensors[owner]
+        phase = phases_by_tensor[owner]
+        reject(phase not in {0, 1, 2}, f"tensor {owner}: slot phase")
+        if owner in affine:
+            axis, multiplier, addend = affine[owner]
+            other_elements = AOT_DTYPE_BYTES[_aot_dtype(fact.dtype)]
+            for dimension, value in enumerate(maximum_shapes[fact.name]):
+                if dimension != axis:
+                    other_elements *= value
+            byte_multiplier = other_elements * multiplier
+            byte_addend = other_elements * addend
+        else:
+            byte_multiplier = 0
+            byte_addend = _shape_bytes(fact.dtype, maximum_shapes[fact.name])
+        operations = owner_ops[owner]
+        planned_slots.append(
+            _PlannedArenaSlot(
+                slot_id=0,
+                owner_tensor=owner,
+                phase=phase,
+                alignment=AOT_ARENA_ALIGNMENT,
+                byte_multiplier=byte_multiplier,
+                byte_addend=byte_addend,
+                live_start=min(operations),
+                live_end=max(operations) + 1,
+            )
+        )
+
+    # Slot IDs are free. Long-lived/shared intervals first, then decreasing
+    # interval duration and maximum size, was closest to the live-byte lower
+    # bound at every measured frame count.
+    planned_slots.sort(
+        key=lambda slot: (
+            {2: 0, 0: 1, 1: 2}[slot.phase],
+            -(slot.live_end - slot.live_start),
+            -slot.bytes_at(frame_max),
+            slot.owner_tensor,
+        )
+    )
+    for slot_id, slot in enumerate(planned_slots):
+        slot.slot_id = slot_id
+    slot_ids = {slot.owner_tensor: slot.slot_id for slot in planned_slots}
+
+    phase_zero_bytes = _pack_fixed_slots(planned_slots)
+    phase_one_min_bytes = _pack_phase_one_slots(planned_slots, PINNED_FRAME_MIN)
+    phase_one_2560_bytes = _pack_phase_one_slots(planned_slots, 2_560)
+    phase_one_max_bytes = _pack_phase_one_slots(planned_slots, frame_max)
+    phase_one_live_lower_bound = _phase_one_live_byte_lower_bound(
+        planned_slots, frame_max
+    )
+    expected_sizing = PINNED_ARENA_SIZING.get(frame_max)
+    if expected_sizing is not None:
+        reject(
+            (phase_one_live_lower_bound, phase_one_max_bytes) != expected_sizing,
+            "post-fusion arena sizing evidence changed at "
+            f"F={frame_max}: lower={phase_one_live_lower_bound}, "
+            f"packed={phase_one_max_bytes}",
+        )
+
+    tensors: list[AotTensor] = []
+    storage_counts: Counter[str] = Counter()
+    dynamic_descriptors = 0
+    for fact in analysis.tensors:
+        dtype = _aot_dtype(fact.dtype)
+        dims = maximum_shapes[fact.name]
+        phase = phases_by_tensor[fact.tensor_id]
+        flags = (1 if fact.initializer else 0) | (2 if fact.graph_input else 0) | (4 if fact.graph_output else 0)
+        symbolic_dim = AOT_STATIC_DIM
+        frame_multiplier = 0
+        frame_addend = 0
+        expression = affine.get(fact.tensor_id)
+        if expression is not None:
+            symbolic_dim, frame_multiplier, frame_addend = expression
+            dynamic_descriptors += 1
+
+        if fact.initializer:
+            storage = 3
+            storage_offset = constant_offsets[fact.tensor_id]
+            slot_id = AOT_NO_ID
+            view_of = AOT_NO_ID
+            alignment = 16
+            storage_counts["constant"] += 1
+        elif fact.graph_input or fact.graph_output:
+            storage = 4
+            storage_offset = 0
+            slot_id = AOT_NO_ID
+            view_of = AOT_NO_ID
+            alignment = AOT_DTYPE_BYTES[dtype]
+            storage_counts["external_graph"] += 1
+        elif fact.alias_of is not None:
+            storage = 2
+            storage_offset = 0
+            slot_id = AOT_NO_ID
+            view_of = fact.alias_of
+            alignment = AOT_ARENA_ALIGNMENT if fact.alias_of in slot_ids else AOT_DTYPE_BYTES[dtype]
+            owner = analysis.tensors[fact.alias_of]
+            if owner.initializer:
+                flags |= 1
+                alignment = 16
+            # The v1 descriptor deliberately keeps views at maximum capacity;
+            # exact N/F-derived logical dimensions live in TensorShapeTable.
+            symbolic_dim = AOT_STATIC_DIM
+            frame_multiplier = 0
+            frame_addend = 0
+            storage_counts["view"] += 1
+        elif fact.tensor_id in slot_ids:
+            storage = 1
+            storage_offset = 0
+            slot_id = slot_ids[fact.tensor_id]
+            view_of = AOT_NO_ID
+            alignment = AOT_ARENA_ALIGNMENT
+            storage_counts["slot"] += 1
+        else:
+            # Post-fusion intermediates retain stable tensor IDs and capacity
+            # metadata but own no memory and are never bound by an operation.
+            storage = 4
+            storage_offset = 0
+            slot_id = AOT_NO_ID
+            view_of = AOT_NO_ID
+            phase = 2
+            symbolic_dim = AOT_STATIC_DIM
+            frame_multiplier = 0
+            frame_addend = 0
+            alignment = AOT_DTYPE_BYTES[dtype]
+            storage_counts["elided_external"] += 1
+
+        tensors.append(
+            AotTensor(
+                dtype=dtype,
+                dims=dims,
+                storage=storage,
+                phase=phase,
+                flags=flags,
+                slot_id=slot_id,
+                view_of=view_of,
+                storage_offset=storage_offset,
+                symbolic_dim=symbolic_dim,
+                frame_multiplier=frame_multiplier,
+                frame_addend=frame_addend,
+                alignment=alignment,
+            )
+        )
+
+    slots = tuple(
+        AotSlot(
+            kind=2 if slot.phase == 1 else 1,
+            phase=slot.phase,
+            alignment=slot.alignment,
+            fixed_offset=slot.fixed_offset,
+            bytes_multiplier=slot.byte_multiplier,
+            bytes_addend=slot.byte_addend,
+            live_start=slot.live_start,
+            live_end=slot.live_end,
+        )
+        for slot in planned_slots
+    )
+    ops = tuple(
+        AotOp(
+            opcode=record.opcode,
+            phase=record.phase,
+            inputs=record.inputs,
+            outputs=record.outputs,
+            work_units=_work_units(record, maximum_shapes, analysis.tensors),
+            flags=1 if record.op_type in LOWERED_VIEW_OPS else 0,
+            attributes=record.attributes,
+        )
+        for record in analysis.lowerings
+    )
+    phases = (
+        AotPhase(
+            0,
+            0,
+            analysis.lowered_phase_ranges[0][0],
+            analysis.lowered_phase_ranges[0][1],
+            phase_zero_bytes,
+            phase_zero_bytes,
+            0,
+            0,
+        ),
+        AotPhase(
+            1,
+            1,
+            analysis.lowered_phase_ranges[1][0],
+            analysis.lowered_phase_ranges[1][1],
+            phase_one_min_bytes,
+            phase_one_max_bytes,
+            PINNED_FRAME_MIN,
+            frame_max,
+        ),
+    )
+    program = AotProgram(
+        tuple(tensors), slots, ops, phases, bytes(constant_data)
+    )
+
+    nonzero = next(
+        (node for node in analysis.model.graph.node if node.op_type == "NonZero"), None
+    )
+    reject(nonzero is None, "NonZero node disappeared")
+    assert nonzero is not None
+    nonzero_shape = maximum_shapes[nonzero.output[0]]
+    reject(nonzero_shape != (1, 20), "NonZero capacity changed")
+    slot_phase_counts = Counter(slot.phase for slot in planned_slots)
+    dependency_counts: Counter[str] = Counter()
+    for fact in analysis.tensors:
+        name = fact.name
+        depends_n = (
+            n1_f1_shapes[name] != minimum_shapes[name]
+            or n1_fmax_shapes[name] != maximum_shapes[name]
+        )
+        depends_f = (
+            n1_f1_shapes[name] != n1_fmax_shapes[name]
+            or minimum_shapes[name] != maximum_shapes[name]
+        )
+        dependency_counts[
+            "n_and_f"
+            if depends_n and depends_f
+            else "n_only"
+            if depends_n
+            else "f_only"
+            if depends_f
+            else "static"
+        ] += 1
+    reject(
+        dependency_counts
+        != Counter({"static": 2_922, "n_only": 656, "f_only": 1_162, "n_and_f": 4}),
+        f"runtime shape dependency inventory changed: {dict(dependency_counts)}",
+    )
+    dynamic_view_records = [
+        record
+        for record in analysis.lowerings
+        if record.op_type in LOWERED_VIEW_OPS
+        and minimum_shapes[analysis.tensors[record.outputs[0]].name]
+        != maximum_shapes[analysis.tensors[record.outputs[0]].name]
+    ]
+    work_unit_record_counts: Counter[str] = Counter()
+    work_unit_counts: Counter[str] = Counter()
+    for record, op in zip(analysis.lowerings, ops):
+        family = (
+            "resize_output_elements"
+            if record.op_type == "Resize"
+            else "float_conv_channel_time_tiles"
+            if record.op_type in {"FloatConv1d", "FloatConvTranspose1d"}
+            else "atomic_whole_op"
+        )
+        work_unit_record_counts[family] += 1
+        work_unit_counts[family] += op.work_units
+    expected_work_unit_record_counts = {
+        "atomic_whole_op": 2_214,
+        "float_conv_channel_time_tiles": 7,
+        "resize_output_elements": 6,
+    }
+    reject(
+        dict(sorted(work_unit_record_counts.items()))
+        != expected_work_unit_record_counts,
+        f"work-unit family inventory changed: {dict(work_unit_record_counts)}",
+    )
+    reject(
+        work_unit_counts["atomic_whole_op"]
+        != work_unit_record_counts["atomic_whole_op"],
+        "atomic dispatcher adapters must emit exactly one work unit",
+    )
+    metrics = {
+        "tensor_capacities": {
+            "token_max": token_max,
+            "frame_min": PINNED_FRAME_MIN,
+            "frame_max": frame_max,
+            "descriptors": len(tensors),
+            "shape_sha256": capacity_digest,
+            "small_control_payloads": len(control_values),
+            "dynamic_affine_descriptors": dynamic_descriptors,
+            "runtime_shape_dependencies": dict(sorted(dependency_counts.items())),
+            "storage_counts": dict(sorted(storage_counts.items())),
+            "nonzero": {
+                "input_capacity": list(maximum_shapes[nonzero.input[0]]),
+                "coordinate_capacity": list(nonzero_shape),
+                "logical_coordinate_count": "runtime 0..20",
+            },
+        },
+        "program": {
+            "ops": len(ops),
+            "bindings": sum(len(op.inputs) + len(op.outputs) for op in ops),
+            "work_units": sum(op.work_units for op in ops),
+            "work_unit_contract": {
+                "record_counts": dict(sorted(work_unit_record_counts.items())),
+                "emitted_units": dict(sorted(work_unit_counts.items())),
+                "partial_slice_families": [
+                    "float_conv_channel_time_tiles",
+                    "resize_output_elements",
+                ],
+                "atomic_records_have_one_unit": True,
+            },
+            "slots": len(slots),
+            "slot_phase_counts": {
+                "phase0": slot_phase_counts[0],
+                "phase1": slot_phase_counts[1],
+                "shared": slot_phase_counts[2],
+            },
+            "referenced_tensors": len(referenced),
+            "elided_post_fusion_tensors": len(tensors) - len(referenced),
+            "constant_tensors": len(constant_offsets),
+            "constant_payload_bytes": constant_payload_bytes,
+            "constant_data_prefix_bytes": len(constant_data),
+        },
+        "arenas": {
+            "phase0_bytes": phase_zero_bytes,
+            "phase1_min_bytes": phase_one_min_bytes,
+            "phase1_f2560_bytes": phase_one_2560_bytes,
+            "phase1_max_bytes": phase_one_max_bytes,
+            "phase1_live_byte_lower_bound": phase_one_live_lower_bound,
+            "sizing_comparison": _arena_sizing_metrics(),
+            "alignment": AOT_ARENA_ALIGNMENT,
+        },
+        "truth": {
+            "structural_program_built": True,
+            "structural_program_emitted": True,
+            "rust_program_parse_verified": True,
+            "executable_graph_emitted": False,
+            "runtime_shape_dispatch_complete": False,
+            "artifact_bytes": PINNED_ARTIFACT_BYTES,
+            "artifact_seal_sha256": PINNED_ARTIFACT_SEAL_SHA256,
+            "artifact_file_sha256": PINNED_ARTIFACT_FILE_SHA256,
+            "runtime_blockers": {
+                "dynamic_no_copy_view_records": len(dynamic_view_records),
+                "memory_alias_identity_view_records": sum(
+                    record.op_type in LOWERED_VIEW_OPS for record in analysis.lowerings
+                ),
+                "quant_adapter_records": sum(
+                    record.op_type
+                    in {"DynamicQuantizedGemm", "DynamicQuantizedConv1d"}
+                    for record in analysis.lowerings
+                ),
+                "atomic_bilstm_records": sum(
+                    record.op_type == "BiLstm256" for record in analysis.lowerings
+                ),
+                "atomic_stft_records": sum(
+                    record.op_type == "FixedStft20" for record in analysis.lowerings
+                ),
+            },
+        },
+    }
+    return ExecutablePlan(program, metrics)
+
+
 def build_indexes(graph: Any) -> tuple[dict[str, int], dict[str, list[int]]]:
     producers: dict[str, int] = {}
     consumers: dict[str, list[int]] = defaultdict(list)
@@ -6521,6 +7278,9 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
                 "sha256": analysis.source_ownership_sha256,
             },
             "unsupported_admitted": 0,
+            # Structural artifact emission and audible dispatcher completeness
+            # are deliberately separate gates.
+            "structural_program_emitted": True,
             "executable_graph_emitted": False,
         },
         "phases": {
@@ -6556,6 +7316,9 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
             "topology_violations": 0,
             "fusion_crossings": 0,
         },
+        "structural_program_plan": (
+            None if analysis.executable_plan is None else analysis.executable_plan.metrics
+        ),
         "result": "accepted",
     }
 
@@ -6698,6 +7461,7 @@ def analyze(
             analysis.source_ownership_sha256 != PINNED_SOURCE_OWNERSHIP_SHA256,
             "source ownership plan digest changed",
         )
+        analysis.executable_plan = build_executable_plan(analysis)
     analysis.report = make_report(analysis)
     return analysis
 
@@ -6715,6 +7479,29 @@ def write_atomic(path: Path, payload: bytes, force: bool) -> None:
             temporary.unlink()
 
 
+def emit_pinned_program(analysis: GraphAnalysis) -> bytes:
+    """Emit and re-check the canonical structural program at F=2,560."""
+
+    reject(analysis.executable_plan is None, "structural program plan is absent")
+    artifact = emit_aot(
+        analysis.executable_plan.program,
+        bytes.fromhex(analysis.model_sha256),
+        bytes.fromhex(analysis.voices_sha256),
+    )
+    inspected = inspect_aot(artifact)
+    observed_file_sha256 = hashlib.sha256(artifact).hexdigest()
+    reject(len(artifact) != PINNED_ARTIFACT_BYTES, "pinned artifact byte count changed")
+    reject(
+        inspected["artifact_sha256"] != PINNED_ARTIFACT_SEAL_SHA256,
+        "pinned artifact seal changed",
+    )
+    reject(
+        observed_file_sha256 != PINNED_ARTIFACT_FILE_SHA256,
+        "pinned artifact file SHA-256 changed",
+    )
+    return artifact
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -6723,6 +7510,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     analyze_parser.add_argument("--voices", type=Path, required=True)
     analyze_parser.add_argument("--report", type=Path)
     analyze_parser.add_argument("--force", action="store_true")
+    emit_parser = subparsers.add_parser(
+        "emit", help="emit the pinned F=2560 structural Kokoro program"
+    )
+    emit_parser.add_argument("model", type=Path)
+    emit_parser.add_argument("output", type=Path)
+    emit_parser.add_argument("--voices", type=Path, required=True)
+    emit_parser.add_argument("--force", action="store_true")
+    compile_parser = subparsers.add_parser(
+        "compile", help="validate and emit the complete pinned structural v1 artifact"
+    )
+    compile_parser.add_argument("model", type=Path)
+    compile_parser.add_argument("output", type=Path)
+    compile_parser.add_argument("--voices", type=Path, required=True)
+    compile_parser.add_argument("--report", type=Path)
+    compile_parser.add_argument("--force", action="store_true")
     fixture_parser = subparsers.add_parser(
         "fixture", help="emit the tiny deterministic v1 conformance artifact"
     )
@@ -6747,6 +7549,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "analyze":
             result = analyze(args.model, args.voices)
             payload = canonical_json(result.report)
+            if args.report is None:
+                sys.stdout.buffer.write(payload)
+            else:
+                write_atomic(args.report, payload, args.force)
+            return 0
+        if args.command == "emit":
+            result = analyze(args.model, args.voices)
+            write_atomic(args.output, emit_pinned_program(result), args.force)
+            return 0
+        if args.command == "compile":
+            reject(
+                args.report is not None and args.output.resolve() == args.report.resolve(),
+                "artifact and report destinations must differ",
+            )
+            reject(
+                args.output.exists() and not args.force,
+                f"destination exists: {args.output} (use --force)",
+            )
+            reject(
+                args.report is not None and args.report.exists() and not args.force,
+                f"destination exists: {args.report} (use --force)",
+            )
+            result = analyze(args.model, args.voices)
+            reject(result.executable_plan is None, "executable program plan is absent")
+            assert result.executable_plan is not None
+            artifact = emit_aot(
+                result.executable_plan.program,
+                bytes.fromhex(result.model_sha256),
+                bytes.fromhex(result.voices_sha256),
+            )
+            result.report["artifact"] = inspect_aot(artifact)
+            payload = canonical_json(result.report)
+            write_atomic(args.output, artifact, args.force)
             if args.report is None:
                 sys.stdout.buffer.write(payload)
             else:

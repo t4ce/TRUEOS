@@ -6,6 +6,10 @@ use crate::{DecodeError, IpaError, Model, PronunciationLookup, canonicalize_ipa,
 pub const KOKORO_BOUNDARY_TOKEN: u8 = 0;
 pub const CHUNK_TARGET_MIN: usize = 175;
 pub const CHUNK_TARGET_MAX: usize = 250;
+/// Furthest lexical-boundary search, not a decoder-frame admission guarantee.
+///
+/// The backend must resolve the duration scalar for the requested speed and
+/// split/retry any chunk whose decoder frame count exceeds its sealed ceiling.
 pub const CHUNK_FALLBACK_MAX: usize = 450;
 pub const KOKORO_MODEL_MAX: usize = 510;
 
@@ -340,12 +344,12 @@ fn write_cardinal(value: u64, output: &mut String) -> Result<(), FrontendError> 
     if value >= 100 {
         push_word(output, small_number_word((value / 100) as u8))?;
         push_word(output, "hundred")?;
-        if value % 100 != 0 {
+        if !value.is_multiple_of(100) {
             write_cardinal(value % 100, output)?;
         }
     } else if value >= 20 {
         push_word(output, tens_word((value / 10) as u8))?;
-        if value % 10 != 0 {
+        if !value.is_multiple_of(10) {
             push_word(output, small_number_word((value % 10) as u8))?;
         }
     } else {
@@ -590,12 +594,11 @@ fn scan_number(text: &str, start: usize) -> usize {
     let mut end = start;
     let mut characters = text[start..].char_indices().peekable();
     while let Some((offset, character)) = characters.next() {
-        if character.is_ascii_digit() {
-            end = start + offset + 1;
-        } else if character == ','
-            && characters
-                .peek()
-                .is_some_and(|(_, next)| next.is_ascii_digit())
+        if character.is_ascii_digit()
+            || (character == ','
+                && characters
+                    .peek()
+                    .is_some_and(|(_, next)| next.is_ascii_digit()))
         {
             end = start + offset + 1;
         } else {
@@ -609,12 +612,11 @@ fn scan_word(text: &str, start: usize) -> usize {
     let mut end = start;
     let mut characters = text[start..].char_indices().peekable();
     while let Some((offset, character)) = characters.next() {
-        if character.is_alphabetic() {
-            end = start + offset + character.len_utf8();
-        } else if matches!(character, '\'' | '‘' | '’' | '-')
-            && characters
-                .peek()
-                .is_some_and(|(_, next)| next.is_alphabetic())
+        if character.is_alphabetic()
+            || (matches!(character, '\'' | '‘' | '’' | '-')
+                && characters
+                    .peek()
+                    .is_some_and(|(_, next)| next.is_alphabetic()))
         {
             end = start + offset + character.len_utf8();
         } else {

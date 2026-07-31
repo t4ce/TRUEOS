@@ -103,6 +103,15 @@ fn pinned_asset_contract_is_stable() {
 }
 
 #[test]
+fn pinned_parser_authenticates_before_interpreting_the_image() {
+    let mut bytes = vec![0; PINNED_ENGLISH_BYTES];
+    bytes[..4].copy_from_slice(b"G2P2");
+    // Although the fake image has the right byte count and magic, its digest
+    // is rejected before its deliberately nonsensical body reaches parsing.
+    assert!(matches!(Model::parse_pinned_english(&bytes), Err(ModelError::EnglishDigestMismatch)));
+}
+
+#[test]
 fn tiny_model_parses_and_matches_upstream_beam_tiers() {
     let bytes = toy_blob();
     let model = Model::parse(&bytes).unwrap();
@@ -181,8 +190,8 @@ fn tokenizer_is_contiguous_and_classifies_english_surface_forms() {
 
 #[test]
 fn ipa_is_canonicalized_to_the_fixed_kokoro_vocabulary() {
-    let encoded = canonicalize_ipa("d͡ʒ gɝxɬ l̩ aɪ̯ ɜ˞").unwrap();
-    assert_eq!(encoded.phonemes, "ʤ ɡɚkl ᵊl aɪ ɚ");
+    let encoded = canonicalize_ipa("d͡ʒ gɝxɬ l̩ aɪ̯ ɜ˞ o\u{200d}ʊ").unwrap();
+    assert_eq!(encoded.phonemes, "ʤ ɡɚkl ᵊl aɪ ɚ oʊ");
     assert_eq!(encoded.token_ids[0], 82);
     assert_eq!(kokoro_token_id('ɡ'), Some(92));
     assert_eq!(kokoro_token_id('ᵊ'), Some(42));
@@ -206,6 +215,11 @@ fn assert_complete_partition(ranges: &[core::ops::Range<usize>], length: usize) 
 
 #[test]
 fn chunker_prefers_model_sized_breaks_then_bounded_fallbacks() {
+    assert_eq!(CHUNK_TARGET_MIN, 175);
+    assert_eq!(CHUNK_TARGET_MAX, 250);
+    assert_eq!(CHUNK_FALLBACK_MAX, 450);
+    assert_eq!(KOKORO_MODEL_MAX, 510);
+
     let mut tokens = vec![43; 900];
     tokens[224] = 4;
     tokens[449] = 3;
@@ -231,6 +245,16 @@ fn chunker_prefers_model_sized_breaks_then_bounded_fallbacks() {
     let ranges = chunk_ranges(&pathological).unwrap();
     assert_eq!(ranges, vec![0..510, 510..1_020, 1_020..1_200]);
     assert_complete_partition(&ranges, pathological.len());
+}
+
+#[test]
+fn fallback_growth_is_lexical_not_decoder_admission() {
+    // With no natural break, the frontend may offer all 450 tokens as one
+    // lexical chunk. It has neither speed nor duration logits, so this range
+    // is not proof that the decoder's F<=2560 contract holds. The runtime must
+    // reject and split/retry after phase-zero duration resolution when needed.
+    let ranges = chunk_ranges(&vec![43; CHUNK_FALLBACK_MAX]).unwrap();
+    assert_eq!(ranges, vec![0..CHUNK_FALLBACK_MAX]);
 }
 
 #[test]
@@ -309,8 +333,13 @@ fn released_english_model_matches_upstream_reference() {
     assert_eq!(model.lexicon_count(), 92_406);
     let memory = model.memory_usage();
     assert_eq!(memory.borrowed_model_bytes, PINNED_ENGLISH_BYTES);
+    assert_eq!(memory.token_index_bytes, 115_200);
+    assert_eq!(memory.graph_index_bytes, 86_376);
+    assert_eq!(memory.ngram_index_bytes, 5_040_512);
+    assert_eq!(memory.backoff_index_bytes, 3_387_984);
+    assert_eq!(memory.lexicon_index_bytes, 2_956_992);
+    assert_eq!(memory.allocated_index_bytes, 11_587_064);
     assert_eq!(memory.contiguous_allocations, 5);
-    assert!(memory.allocated_index_bytes < 12 * 1024 * 1024);
 
     for (word, expected) in [
         ("hello", "hɛloʊ"),
@@ -344,5 +373,26 @@ fn released_english_model_matches_upstream_reference() {
         ("AVX", "eɪvks"),
     ] {
         assert_eq!(model.phonemize(word).unwrap(), expected, "word={word}");
+        let encoded = canonicalize_ipa(expected).unwrap_or_else(|error| {
+            panic!("word={word} produced IPA outside Kokoro's vocabulary: {error:?}")
+        });
+        assert!(!encoded.token_ids.is_empty(), "word={word}");
     }
+
+    let sentence = prepare_english(&model, "Hello world, Kokoro speaks through TrueOS 42!")
+        .expect("representative English must reach Kokoro tokens");
+    assert!(!sentence.token_ids.is_empty());
+    assert_complete_partition(&sentence.chunks, sentence.token_ids.len());
+    assert!(
+        sentence
+            .chunks
+            .iter()
+            .all(|range| range.len() <= KOKORO_MODEL_MAX)
+    );
+    assert!(
+        sentence
+            .token_ids
+            .iter()
+            .all(|&token| token != KOKORO_BOUNDARY_TOKEN)
+    );
 }

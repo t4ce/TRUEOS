@@ -332,7 +332,7 @@ pub struct TensorMemory<
     const BINDINGS: usize,
 > {
     program: &'memory Program<'artifact>,
-    shapes: &'memory TensorShapeTable<SHAPES>,
+    shapes: &'memory mut TensorShapeTable<SHAPES>,
     arena: NonNull<u8>,
     arena_len: usize,
     externals: &'memory ExternalBindings<'buffers, EXTERNALS>,
@@ -356,7 +356,7 @@ impl<
     /// Construct phase-zero memory from the sealed fixed arena plan.
     pub fn phase_zero(
         program: &'memory Program<'artifact>,
-        shapes: &'memory TensorShapeTable<SHAPES>,
+        shapes: &'memory mut TensorShapeTable<SHAPES>,
         arena: &'memory mut [u8],
         externals: &'memory mut ExternalBindings<'buffers, EXTERNALS>,
     ) -> Result<Self, MemoryError> {
@@ -374,7 +374,7 @@ impl<
     #[allow(clippy::too_many_arguments)]
     pub fn phase_one(
         program: &'memory Program<'artifact>,
-        shapes: &'memory TensorShapeTable<SHAPES>,
+        shapes: &'memory mut TensorShapeTable<SHAPES>,
         arena: &'memory mut [u8],
         admission: ResolvedPhase,
         slot_bases: &'memory [u64],
@@ -396,7 +396,7 @@ impl<
     #[allow(clippy::too_many_arguments)]
     fn construct(
         program: &'memory Program<'artifact>,
-        shapes: &'memory TensorShapeTable<SHAPES>,
+        shapes: &'memory mut TensorShapeTable<SHAPES>,
         arena: &'memory mut [u8],
         externals: &'memory mut ExternalBindings<'buffers, EXTERNALS>,
         phase: Phase,
@@ -446,6 +446,39 @@ impl<
 
     pub const fn arena_bytes(&self) -> u64 {
         self.arena_bytes
+    }
+
+    /// Return one already-declared exact logical shape.
+    ///
+    /// Dispatchers use this before preparing an operation so output shapes can
+    /// be derived from initialized inputs without resolving writable outputs.
+    pub fn tensor_shape(&self, tensor_id: u32) -> Result<RuntimeShape, MemoryError> {
+        self.shapes
+            .shape(self.program, tensor_id)
+            .map_err(map_shape_error)
+    }
+
+    /// Atomically declare the exact logical output shapes for one operation.
+    ///
+    /// This is intentionally separate from [`with_op`](Self::with_op): shape
+    /// inference may inspect small control tensors first, while `with_op`
+    /// remains the point that resolves and alias-checks the complete binding
+    /// set. A rejected declaration leaves the shape table unchanged.
+    pub fn declare_op_outputs(
+        &mut self,
+        op_index: u32,
+        shapes: &[RuntimeShape],
+    ) -> Result<(), MemoryError> {
+        let op = self
+            .program
+            .op(op_index)
+            .ok_or(MemoryError::OperationOutOfBounds)?;
+        if op.phase != self.phase {
+            return Err(MemoryError::WrongPhase);
+        }
+        self.shapes
+            .declare_op_outputs(self.program, op_index, shapes)
+            .map_err(map_shape_error)
     }
 
     /// Read one exact contiguous tensor during a non-escaping callback.
@@ -821,13 +854,31 @@ fn align_up(value: u64, alignment: u32) -> Option<u64> {
 }
 
 fn view_is_contiguous(descriptor: TensorDesc, shape: RuntimeShape) -> Result<bool, MemoryError> {
+    // Shape-only aliases (Reshape/Squeeze/Unsqueeze) carry canonical strides
+    // for their maximum-capacity descriptor. Their invocation-local logical
+    // dimensions live in TensorShapeTable and therefore may be smaller; the
+    // contiguous strides are implicit for that logical shape rather than a
+    // second mutable descriptor. Preserve support for an explicitly encoded
+    // runtime-sized stride set as well, but never admit a genuinely strided
+    // maximum view as contiguous merely because one degenerate shape happens
+    // to hide its stride.
+    if strides_are_contiguous(
+        descriptor,
+        &descriptor.max_dims[..usize::from(descriptor.rank)],
+    )? {
+        return Ok(true);
+    }
+    strides_are_contiguous(descriptor, shape.dims())
+}
+
+fn strides_are_contiguous(descriptor: TensorDesc, dims: &[u32]) -> Result<bool, MemoryError> {
     let mut stride = descriptor.dtype.element_bytes();
     for axis in (0..usize::from(descriptor.rank)).rev() {
         if descriptor.max_byte_strides[axis] != stride {
             return Ok(false);
         }
         stride = stride
-            .checked_mul(u64::from(shape.dims()[axis]))
+            .checked_mul(u64::from(dims[axis]))
             .ok_or(MemoryError::AddressSpaceOverflow)?;
     }
     Ok(true)

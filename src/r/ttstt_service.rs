@@ -597,6 +597,15 @@ pub trait SpeechBackend: Send + Sync {
         self.ready()
     }
 
+    /// A terminal warm failure for the permanently resident model set.
+    ///
+    /// `None` means that warming may still start or retry. Returning a reason
+    /// stops automatic retries until reboot/model replacement and lets shell2
+    /// distinguish a rejected asset from a backend that is merely warming.
+    fn warm_failure_reason(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Construct a bounded-slice warm job for both resident model images.
     fn create_warm_job(&self) -> Result<Box<dyn InferenceJob>, &'static str>;
 
@@ -638,6 +647,11 @@ pub fn speech_backend_ready() -> bool {
     backend.is_some_and(SpeechBackend::ready)
 }
 
+pub fn speech_backend_warm_failure_reason() -> Option<&'static str> {
+    let backend = *SPEECH_BACKEND.lock();
+    backend.and_then(SpeechBackend::warm_failure_reason)
+}
+
 pub fn tts_backend_ready() -> bool {
     let backend = *SPEECH_BACKEND.lock();
     backend.is_some_and(SpeechBackend::tts_ready)
@@ -654,6 +668,9 @@ fn ensure_backend_warm_started() -> bool {
     };
     if backend.ready() {
         return true;
+    }
+    if backend.warm_failure_reason().is_some() {
+        return false;
     }
     if ServiceState::from_u8(SERVICE_STATE.load(Ordering::Acquire)) != ServiceState::Ready {
         return false;
@@ -724,6 +741,9 @@ pub fn submit_tts(request: TtsRequest) -> Result<TtsSubmission, SpeechRequestErr
     }
     let backend = (*SPEECH_BACKEND.lock()).ok_or(SpeechRequestError::BackendUnavailable)?;
     if !backend.tts_ready() {
+        if let Some(reason) = backend.warm_failure_reason() {
+            return Err(SpeechRequestError::BackendRejected(reason));
+        }
         let _ = ensure_backend_warm_started();
         return Err(SpeechRequestError::BackendWarming);
     }
@@ -758,6 +778,9 @@ pub fn submit_stt(request: SttRequest) -> Result<u64, SpeechRequestError> {
     }
     let backend = (*SPEECH_BACKEND.lock()).ok_or(SpeechRequestError::BackendUnavailable)?;
     if !backend.stt_ready() {
+        if let Some(reason) = backend.warm_failure_reason() {
+            return Err(SpeechRequestError::BackendRejected(reason));
+        }
         let _ = ensure_backend_warm_started();
         return Err(SpeechRequestError::BackendWarming);
     }
@@ -1307,14 +1330,17 @@ fn finish_job(queued: QueuedJob, direction: Direction, result: JobProgress) {
     }
     if direction == Direction::Warmup {
         let ready = speech_backend_ready();
-        if !matches!(result, JobProgress::Complete) || !ready {
+        let terminal_reason = speech_backend_warm_failure_reason();
+        if terminal_reason.is_none() && (!matches!(result, JobProgress::Complete) || !ready) {
             BACKEND_WARM_STARTED.store(false, Ordering::Release);
         }
         crate::log_info!(
             target: "ttstt";
-            "ttstt: backend warm finished id={} ready={}\n",
+            "ttstt: backend warm finished id={} ready={} terminal={} reason={}\n",
             id,
-            ready
+            ready,
+            terminal_reason.is_some() as u8,
+            terminal_reason.unwrap_or("none")
         );
     }
 }
@@ -1410,6 +1436,7 @@ async fn start_worker_pool(models: &'static ModelSet) -> Result<usize, SpawnErro
 /// task locally; only the inference workers are placed on AP executors.
 #[embassy_executor::task]
 pub async fn service_task() {
+    crate::r::ttstt_kokoro::install();
     loop {
         let models = if let Some(models) = resident_models() {
             // A previous worker-pool attempt failed before spawning anything.

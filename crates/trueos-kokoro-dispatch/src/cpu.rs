@@ -1,0 +1,2471 @@
+//! Native CPU implementation for the operation families whose scheduler
+//! mapping and tensor semantics are already sealed.
+
+use core::convert::TryFrom;
+
+use trueos_kokoro_aot::{DType, OpCode, Phase, Program, StorageKind, WorkSlice};
+use trueos_kokoro_exec::{DispatchResult, Dispatcher as ExecDispatcher, RuntimeShape};
+use trueos_kokoro_memory::{MemoryError, OpAccess, TensorElement, TensorMemory};
+
+use crate::attributes::{
+    AttributeDType, AttributeError, Attributes, BinaryAttributes, CastAttributes,
+    ComparisonAttributes, ConcatAttributes, ControlMode, ExpandAttributes, FloatConvAttributes,
+    GatherAttributes, MatMulAttributes, PadAttributes, ResizeAttributes, ResizeMode,
+    SliceAttributes, SplitAttributes, TransposeAttributes, UnaryAttributes, ViewAttributes,
+};
+use crate::decode;
+
+/// Return whether the concrete CPU dispatcher has a real execution adapter
+/// for this decoded attribute contract. This is the single warm-audit source
+/// of truth; unsupported entries still fail closed in [`CpuDispatcher`].
+pub const fn native_dispatch_supported(attributes: Attributes) -> bool {
+    !matches!(
+        attributes,
+        Attributes::BiLstm256(_)
+            | Attributes::DynamicQuantizedGemm(_)
+            | Attributes::DynamicQuantizedConv1d(_)
+    )
+}
+
+/// Exact native-dispatch failures. Unsupported work never commits its AOT
+/// cursor: there is deliberately no success fallback for a missing kernel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DispatchError {
+    MissingAttributes,
+    Attribute(AttributeError),
+    Memory(MemoryError),
+    F32(trueos_kokoro_f32::Error),
+    Scalar(trueos_kokoro_scalar::Error),
+    Layout(trueos_kokoro_layout::Error),
+    Resize(trueos_kokoro_resize::Error),
+    Duration(trueos_kokoro_duration::ResolveError),
+    Conv(trueos_kokoro_conv::Error),
+    Gemm(trueos_kokoro_gemm::Error),
+    StftContract(trueos_kokoro_stft::ContractError),
+    StftAdvance(trueos_kokoro_stft::AdvanceError),
+    ShapeConversion,
+    InvalidArity,
+    InvalidControlTensor,
+    InvalidWorkContract { opcode: OpCode },
+    UnsupportedAttributeProfile { opcode: OpCode },
+    UnsupportedOpcode { opcode: OpCode },
+}
+
+impl From<AttributeError> for DispatchError {
+    fn from(value: AttributeError) -> Self {
+        Self::Attribute(value)
+    }
+}
+
+impl From<MemoryError> for DispatchError {
+    fn from(value: MemoryError) -> Self {
+        Self::Memory(value)
+    }
+}
+
+impl From<trueos_kokoro_f32::Error> for DispatchError {
+    fn from(value: trueos_kokoro_f32::Error) -> Self {
+        Self::F32(value)
+    }
+}
+
+impl From<trueos_kokoro_scalar::Error> for DispatchError {
+    fn from(value: trueos_kokoro_scalar::Error) -> Self {
+        Self::Scalar(value)
+    }
+}
+
+impl From<trueos_kokoro_layout::Error> for DispatchError {
+    fn from(value: trueos_kokoro_layout::Error) -> Self {
+        Self::Layout(value)
+    }
+}
+
+impl From<trueos_kokoro_resize::Error> for DispatchError {
+    fn from(value: trueos_kokoro_resize::Error) -> Self {
+        Self::Resize(value)
+    }
+}
+
+impl From<trueos_kokoro_duration::ResolveError> for DispatchError {
+    fn from(value: trueos_kokoro_duration::ResolveError) -> Self {
+        Self::Duration(value)
+    }
+}
+
+impl From<trueos_kokoro_conv::Error> for DispatchError {
+    fn from(value: trueos_kokoro_conv::Error) -> Self {
+        Self::Conv(value)
+    }
+}
+
+impl From<trueos_kokoro_gemm::Error> for DispatchError {
+    fn from(value: trueos_kokoro_gemm::Error) -> Self {
+        Self::Gemm(value)
+    }
+}
+
+impl From<trueos_kokoro_stft::ContractError> for DispatchError {
+    fn from(value: trueos_kokoro_stft::ContractError) -> Self {
+        Self::StftContract(value)
+    }
+}
+
+impl From<trueos_kokoro_stft::AdvanceError> for DispatchError {
+    fn from(value: trueos_kokoro_stft::AdvanceError) -> Self {
+        Self::StftAdvance(value)
+    }
+}
+
+/// Dispatcher over one already-admitted phase's validated tensor memory.
+///
+/// Runtime input shapes must already be present in the executor's shape table.
+/// The dispatcher derives and transactionally declares each operation's output
+/// shapes before resolving its typed bindings. A backend creates a new instance
+/// when phase one is admitted. This type owns no buffers and performs no
+/// allocation.
+pub struct CpuDispatcher<
+    'dispatch,
+    'memory,
+    'artifact,
+    'buffers,
+    const SHAPES: usize,
+    const EXTERNALS: usize,
+    const BINDINGS: usize,
+> {
+    memory: &'dispatch mut TensorMemory<'memory, 'artifact, 'buffers, SHAPES, EXTERNALS, BINDINGS>,
+    conv: trueos_kokoro_conv::Dispatcher,
+    gemm: trueos_kokoro_gemm::Dispatcher,
+}
+
+impl<
+    'dispatch,
+    'memory,
+    'artifact,
+    'buffers,
+    const SHAPES: usize,
+    const EXTERNALS: usize,
+    const BINDINGS: usize,
+> CpuDispatcher<'dispatch, 'memory, 'artifact, 'buffers, SHAPES, EXTERNALS, BINDINGS>
+{
+    pub fn new(
+        memory: &'dispatch mut TensorMemory<
+            'memory,
+            'artifact,
+            'buffers,
+            SHAPES,
+            EXTERNALS,
+            BINDINGS,
+        >,
+    ) -> Self {
+        Self {
+            memory,
+            conv: trueos_kokoro_conv::Dispatcher::detect(),
+            gemm: trueos_kokoro_gemm::Dispatcher::detect(),
+        }
+    }
+
+    pub fn memory(
+        &self,
+    ) -> &TensorMemory<'memory, 'artifact, 'buffers, SHAPES, EXTERNALS, BINDINGS> {
+        self.memory
+    }
+}
+
+#[derive(Clone, Copy)]
+struct OutputShapes {
+    values: [RuntimeShape; 3],
+    len: usize,
+}
+
+impl OutputShapes {
+    const fn one(shape: RuntimeShape) -> Self {
+        Self {
+            values: [shape, RuntimeShape::scalar(), RuntimeShape::scalar()],
+            len: 1,
+        }
+    }
+
+    const fn two(first: RuntimeShape, second: RuntimeShape) -> Self {
+        Self {
+            values: [first, second, RuntimeShape::scalar()],
+            len: 2,
+        }
+    }
+
+    fn as_slice(&self) -> &[RuntimeShape] {
+        &self.values[..self.len]
+    }
+}
+
+fn infer_output_shapes<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: Attributes,
+) -> Result<OutputShapes, DispatchError> {
+    let result = match attributes {
+        Attributes::Binary(value) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 2, 1)?;
+            let lhs = input_shape(memory, program, work, 0)?;
+            let rhs = input_shape(memory, program, work, 1)?;
+            require_rank(lhs, value.lhs_rank)?;
+            require_rank(rhs, value.rhs_rank)?;
+            let output = broadcast_shape(lhs, rhs)?;
+            require_rank(output, value.output_rank)?;
+            OutputShapes::one(output)
+        }
+        Attributes::Comparison(value) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 2, 1)?;
+            let lhs = input_shape(memory, program, work, 0)?;
+            let rhs = input_shape(memory, program, work, 1)?;
+            require_rank(lhs, value.lhs_rank)?;
+            require_rank(rhs, value.rhs_rank)?;
+            let output = broadcast_shape(lhs, rhs)?;
+            require_rank(output, value.output_rank)?;
+            OutputShapes::one(output)
+        }
+        Attributes::Cast(value) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 1, 1)?;
+            let output = input_shape(memory, program, work, 0)?;
+            require_rank(output, value.rank)?;
+            OutputShapes::one(output)
+        }
+        Attributes::ConstantOfShape(value) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 1, 1)?;
+            let dimensions = read_i64_control::<8, _, _, _>(memory, program, work, 0)?;
+            if dimensions.len != usize::from(value.output_rank) {
+                return Err(DispatchError::InvalidControlTensor);
+            }
+            OutputShapes::one(runtime_shape_i64(&dimensions.values[..dimensions.len])?)
+        }
+        Attributes::CumSum(value) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 2, 1)?;
+            let output = input_shape(memory, program, work, 0)?;
+            require_rank(output, value.rank)?;
+            let axis = read_i32_scalar(memory, program, work, 1)?;
+            if axis != value.axis {
+                return Err(DispatchError::InvalidControlTensor);
+            }
+            OutputShapes::one(output)
+        }
+        Attributes::DequantizeLinear(value) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 3, 1)?;
+            let output = input_shape(memory, program, work, 0)?;
+            require_rank(output, value.rank)?;
+            OutputShapes::one(output)
+        }
+        Attributes::Where(value) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 3, 1)?;
+            let condition = input_shape(memory, program, work, 0)?;
+            let when_true = input_shape(memory, program, work, 1)?;
+            let when_false = input_shape(memory, program, work, 2)?;
+            require_rank(condition, value.condition_rank)?;
+            require_rank(when_true, value.true_rank)?;
+            require_rank(when_false, value.false_rank)?;
+            let output = broadcast_shape(condition, broadcast_shape(when_true, when_false)?)?;
+            require_rank(output, value.output_rank)?;
+            OutputShapes::one(output)
+        }
+        Attributes::MatMul(value) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 2, 1)?;
+            let lhs = input_shape(memory, program, work, 0)?;
+            let rhs = input_shape(memory, program, work, 1)?;
+            let (_, output) = matmul_profile(value, lhs, rhs)?;
+            OutputShapes::one(output)
+        }
+        Attributes::Pow(value) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 2, 1)?;
+            let output = input_shape(memory, program, work, 0)?;
+            require_rank(output, value.rank)?;
+            let exponent = read_f32_scalar(memory, program, work, 1)?;
+            if exponent.to_bits() != value.exponent_bits {
+                return Err(DispatchError::InvalidControlTensor);
+            }
+            OutputShapes::one(output)
+        }
+        Attributes::Range => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 3, 1)?;
+            let start = read_i64_scalar(memory, program, work, 0)?;
+            let limit = read_i64_scalar(memory, program, work, 1)?;
+            let delta = read_i64_scalar(memory, program, work, 2)?;
+            let count = trueos_kokoro_scalar::range_count(start, limit, delta)?;
+            let count = u32::try_from(count).map_err(|_| DispatchError::ShapeConversion)?;
+            OutputShapes::one(
+                RuntimeShape::new(&[count]).map_err(|_| DispatchError::ShapeConversion)?,
+            )
+        }
+        Attributes::Resize(value) => {
+            require_op_arity(work, 2, 1)?;
+            let input = input_shape(memory, program, work, 0)?;
+            let dims = input.dims();
+            if dims.len() != 3 {
+                return Err(DispatchError::ShapeConversion);
+            }
+            let scales = read_f32_control::<4, _, _, _>(memory, program, work, 1)?;
+            let (mode, scale, expected_scale) = resize_profile(value)?;
+            if scales.len != 3
+                || scales.values[0].to_bits() != 1.0_f32.to_bits()
+                || scales.values[1].to_bits() != 1.0_f32.to_bits()
+                || scales.values[2].to_bits() != expected_scale.to_bits()
+            {
+                return Err(DispatchError::InvalidControlTensor);
+            }
+            let plan = trueos_kokoro_resize::ResizePlan::new(
+                dims[0] as usize,
+                dims[1] as usize,
+                dims[2] as usize,
+                mode,
+                scale,
+            )?;
+            require_cooperative_work(work, plan.output_elements())?;
+            let width =
+                u32::try_from(plan.output_len()).map_err(|_| DispatchError::ShapeConversion)?;
+            OutputShapes::one(
+                RuntimeShape::new(&[dims[0], dims[1], width])
+                    .map_err(|_| DispatchError::ShapeConversion)?,
+            )
+        }
+        Attributes::FloatConv(value) => {
+            require_op_arity(work, if value.has_bias { 3 } else { 2 }, 1)?;
+            let input = input_shape(memory, program, work, 0)?;
+            let dims = input.dims();
+            if dims.len() != 3 || dims[0] != 1 || dims[1] != value.input_channels {
+                return Err(DispatchError::ShapeConversion);
+            }
+            let profile = conv_profile(value, dims[2] as usize)?;
+            validate_conv_attributes(value, profile)?;
+            let dimensions = profile.dimensions()?;
+            require_cooperative_work(work, dimensions.output_elements()?)?;
+            let width = u32::try_from(dimensions.output_width)
+                .map_err(|_| DispatchError::ShapeConversion)?;
+            OutputShapes::one(
+                RuntimeShape::new(&[1, value.output_channels, width])
+                    .map_err(|_| DispatchError::ShapeConversion)?,
+            )
+        }
+        Attributes::Unary(_)
+        | Attributes::LeakyRelu(_)
+        | Attributes::LayerNormalization(_)
+        | Attributes::Softmax(_)
+        | Attributes::FastGelu(_)
+        | Attributes::SkipLayerNormalization(_) => {
+            require_whole_unit(work)?;
+            let expected_inputs = match attributes {
+                Attributes::LayerNormalization(_) => 3,
+                Attributes::FastGelu(_) => 2,
+                Attributes::SkipLayerNormalization(_) => 4,
+                _ => 1,
+            };
+            require_op_arity(work, expected_inputs, 1)?;
+            OutputShapes::one(input_shape(memory, program, work, 0)?)
+        }
+        Attributes::ReduceMean(value) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 2, 1)?;
+            let input = input_shape(memory, program, work, 0)?;
+            require_rank(input, value.rank)?;
+            let axis_control = read_i64_scalar(memory, program, work, 1)?;
+            if axis_control != i64::from(value.axis) {
+                return Err(DispatchError::InvalidControlTensor);
+            }
+            let axis = normalize_axis(value.axis, input.rank())?;
+            let mut dims = [1_u32; 4];
+            dims[..input.dims().len()].copy_from_slice(input.dims());
+            dims[axis] = 1;
+            OutputShapes::one(
+                RuntimeShape::new(&dims[..input.dims().len()])
+                    .map_err(|_| DispatchError::ShapeConversion)?,
+            )
+        }
+        Attributes::ResolveDecoderShape(_) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 2, 2)?;
+            let logits = input_shape(memory, program, work, 0)?;
+            let dims = logits.dims();
+            if dims.len() != 3
+                || dims[0] != 1
+                || dims[2] != trueos_kokoro_duration::KOKORO_DURATION_BINS as u32
+            {
+                return Err(DispatchError::InvalidControlTensor);
+            }
+            OutputShapes::two(
+                RuntimeShape::new(&[dims[1]]).map_err(|_| DispatchError::ShapeConversion)?,
+                RuntimeShape::scalar(),
+            )
+        }
+        Attributes::Transpose(value) => infer_transpose(memory, program, work, value)?,
+        Attributes::Gather(value) => infer_gather(memory, program, work, value)?,
+        Attributes::Concat(value) => infer_concat(memory, program, work, value)?,
+        Attributes::Split(value) => infer_split(memory, program, work, value)?,
+        Attributes::Expand(value) => infer_expand(memory, program, work, value)?,
+        Attributes::Shape(value) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 1, 1)?;
+            let input = input_shape(memory, program, work, 0)?;
+            require_rank(input, value.input_rank)?;
+            OutputShapes::one(
+                RuntimeShape::new(&[u32::from(value.input_rank)])
+                    .map_err(|_| DispatchError::ShapeConversion)?,
+            )
+        }
+        Attributes::Slice(value) => infer_slice(memory, program, work, value)?,
+        Attributes::Pad(value) => infer_pad(memory, program, work, value)?,
+        Attributes::NonZero => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 1, 1)?;
+            let input_id = op_input(program, work, 0)?;
+            let (count, shape) = memory.with_read::<bool, _, _>(input_id, |values, shape| {
+                (values.iter().filter(|&&item| item).count(), shape)
+            })?;
+            if shape.rank() != 1 {
+                return Err(DispatchError::ShapeConversion);
+            }
+            let count = u32::try_from(count).map_err(|_| DispatchError::ShapeConversion)?;
+            OutputShapes::one(
+                RuntimeShape::new(&[1, count]).map_err(|_| DispatchError::ShapeConversion)?,
+            )
+        }
+        Attributes::ScatterNd(_) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 3, 1)?;
+            OutputShapes::one(input_shape(memory, program, work, 0)?)
+        }
+        Attributes::View(value) => infer_view(memory, program, work, value)?,
+        Attributes::FixedStft20(value) => {
+            require_whole_unit(work)?;
+            require_op_arity(work, 4, 1)?;
+            validate_stft_controls(memory, program, work)?;
+            if value.frame_length != trueos_kokoro_stft::FRAME_LENGTH as u32
+                || value.frame_step != trueos_kokoro_stft::FRAME_STEP as u32
+                || value.bins != trueos_kokoro_stft::OUTPUT_BINS as u32
+            {
+                return Err(DispatchError::UnsupportedAttributeProfile {
+                    opcode: OpCode::FixedStft20,
+                });
+            }
+            let input = input_shape(memory, program, work, 0)?;
+            let dims = input.dims();
+            if dims.len() != 2 || dims[0] == 0 || dims[1] < value.frame_length {
+                return Err(DispatchError::ShapeConversion);
+            }
+            let frames = dims[1]
+                .checked_sub(value.frame_length)
+                .and_then(|tail| tail.checked_div(value.frame_step))
+                .and_then(|count| count.checked_add(1))
+                .ok_or(DispatchError::ShapeConversion)?;
+            OutputShapes::one(
+                RuntimeShape::new(&[dims[0], frames, value.bins, 2])
+                    .map_err(|_| DispatchError::ShapeConversion)?,
+            )
+        }
+        Attributes::BiLstm256(_)
+        | Attributes::DynamicQuantizedGemm(_)
+        | Attributes::DynamicQuantizedConv1d(_) => {
+            return Err(DispatchError::UnsupportedOpcode {
+                opcode: attributes.opcode(),
+            });
+        }
+    };
+    Ok(result)
+}
+
+fn require_op_arity(work: WorkSlice, inputs: u16, outputs: u16) -> Result<(), DispatchError> {
+    if work.op().input_count == inputs && work.op().output_count == outputs {
+        Ok(())
+    } else {
+        Err(DispatchError::InvalidArity)
+    }
+}
+
+fn require_cooperative_work(work: WorkSlice, output_elements: usize) -> Result<(), DispatchError> {
+    if usize::try_from(work.op().work_units).ok() == Some(output_elements)
+        && work.unit_count() != 0
+        && work.unit_end() <= work.op().work_units
+    {
+        Ok(())
+    } else {
+        Err(DispatchError::InvalidWorkContract {
+            opcode: work.op().opcode,
+        })
+    }
+}
+
+fn op_input(program: &Program<'_>, work: WorkSlice, input: u16) -> Result<u32, DispatchError> {
+    program
+        .op_input(work.op(), input)
+        .ok_or(DispatchError::InvalidArity)
+}
+
+fn input_shape<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    input: u16,
+) -> Result<RuntimeShape, DispatchError> {
+    Ok(memory.tensor_shape(op_input(program, work, input)?)?)
+}
+
+fn require_rank(shape: RuntimeShape, rank: u8) -> Result<(), DispatchError> {
+    if shape.rank() == rank {
+        Ok(())
+    } else {
+        Err(DispatchError::ShapeConversion)
+    }
+}
+
+fn normalize_axis(axis: i32, rank: u8) -> Result<usize, DispatchError> {
+    let rank = i32::from(rank);
+    let normalized = if axis < 0 { axis + rank } else { axis };
+    if normalized >= 0 && normalized < rank {
+        Ok(normalized as usize)
+    } else {
+        Err(DispatchError::ShapeConversion)
+    }
+}
+
+fn broadcast_shape(lhs: RuntimeShape, rhs: RuntimeShape) -> Result<RuntimeShape, DispatchError> {
+    let rank = usize::from(lhs.rank().max(rhs.rank()));
+    let mut dims = [1_u32; 4];
+    for reverse in 0..rank {
+        let lhs_dim = lhs
+            .dims()
+            .len()
+            .checked_sub(reverse + 1)
+            .map_or(1, |axis| lhs.dims()[axis]);
+        let rhs_dim = rhs
+            .dims()
+            .len()
+            .checked_sub(reverse + 1)
+            .map_or(1, |axis| rhs.dims()[axis]);
+        let output = if lhs_dim == rhs_dim {
+            lhs_dim
+        } else if lhs_dim == 1 {
+            rhs_dim
+        } else if rhs_dim == 1 {
+            lhs_dim
+        } else {
+            return Err(DispatchError::ShapeConversion);
+        };
+        dims[rank - reverse - 1] = output;
+    }
+    RuntimeShape::new(&dims[..rank]).map_err(|_| DispatchError::ShapeConversion)
+}
+
+struct SmallControl<T: Copy, const CAPACITY: usize> {
+    values: [T; CAPACITY],
+    len: usize,
+}
+
+fn read_i64_control<
+    const CAPACITY: usize,
+    const SHAPES: usize,
+    const EXTERNALS: usize,
+    const BINDINGS: usize,
+>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    input: u16,
+) -> Result<SmallControl<i64, CAPACITY>, DispatchError> {
+    let tensor = op_input(program, work, input)?;
+    memory.with_read::<i64, _, _>(tensor, |values, _| {
+        if values.len() > CAPACITY {
+            return Err(DispatchError::InvalidControlTensor);
+        }
+        let mut copied = [0_i64; CAPACITY];
+        copied[..values.len()].copy_from_slice(values);
+        Ok(SmallControl {
+            values: copied,
+            len: values.len(),
+        })
+    })?
+}
+
+fn read_f32_control<
+    const CAPACITY: usize,
+    const SHAPES: usize,
+    const EXTERNALS: usize,
+    const BINDINGS: usize,
+>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    input: u16,
+) -> Result<SmallControl<f32, CAPACITY>, DispatchError> {
+    let tensor = op_input(program, work, input)?;
+    memory.with_read::<f32, _, _>(tensor, |values, _| {
+        if values.len() > CAPACITY {
+            return Err(DispatchError::InvalidControlTensor);
+        }
+        let mut copied = [0.0_f32; CAPACITY];
+        copied[..values.len()].copy_from_slice(values);
+        Ok(SmallControl {
+            values: copied,
+            len: values.len(),
+        })
+    })?
+}
+
+fn read_i64_scalar<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    input: u16,
+) -> Result<i64, DispatchError> {
+    let values = read_i64_control::<1, _, _, _>(memory, program, work, input)?;
+    if values.len == 1 {
+        Ok(values.values[0])
+    } else {
+        Err(DispatchError::InvalidControlTensor)
+    }
+}
+
+fn read_f32_scalar<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    input: u16,
+) -> Result<f32, DispatchError> {
+    let values = read_f32_control::<1, _, _, _>(memory, program, work, input)?;
+    if values.len == 1 {
+        Ok(values.values[0])
+    } else {
+        Err(DispatchError::InvalidControlTensor)
+    }
+}
+
+fn read_i32_scalar<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    input: u16,
+) -> Result<i32, DispatchError> {
+    let tensor = op_input(program, work, input)?;
+    memory.with_read::<i32, _, _>(tensor, |values, _| {
+        if values.len() == 1 {
+            Ok(values[0])
+        } else {
+            Err(DispatchError::InvalidControlTensor)
+        }
+    })?
+}
+
+fn validate_stft_controls<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+) -> Result<(), DispatchError> {
+    if read_i64_scalar(memory, program, work, 1)? != trueos_kokoro_stft::FRAME_STEP as i64
+        || read_i64_scalar(memory, program, work, 3)? != trueos_kokoro_stft::FRAME_LENGTH as i64
+    {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let window = read_f32_control::<{ trueos_kokoro_stft::FRAME_LENGTH }, _, _, _>(
+        memory, program, work, 2,
+    )?;
+    if window.len != trueos_kokoro_stft::FRAME_LENGTH
+        || window
+            .values
+            .iter()
+            .zip(trueos_kokoro_stft::HANN_WINDOW_BITS)
+            .any(|(value, expected)| value.to_bits() != expected)
+    {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    Ok(())
+}
+
+fn runtime_shape_i64(dimensions: &[i64]) -> Result<RuntimeShape, DispatchError> {
+    let mut dims = [1_u32; 4];
+    if dimensions.len() > dims.len() {
+        return Err(DispatchError::ShapeConversion);
+    }
+    for (destination, &dimension) in dims.iter_mut().zip(dimensions) {
+        *destination = u32::try_from(dimension).map_err(|_| DispatchError::ShapeConversion)?;
+        if *destination == 0 {
+            return Err(DispatchError::ShapeConversion);
+        }
+    }
+    RuntimeShape::new(&dims[..dimensions.len()]).map_err(|_| DispatchError::ShapeConversion)
+}
+
+fn runtime_from_layout(shape: trueos_kokoro_layout::Shape) -> Result<RuntimeShape, DispatchError> {
+    let mut dims = [1_u32; 4];
+    for (destination, &dimension) in dims.iter_mut().zip(shape.dims()) {
+        *destination = u32::try_from(dimension).map_err(|_| DispatchError::ShapeConversion)?;
+    }
+    RuntimeShape::new(&dims[..shape.rank()]).map_err(|_| DispatchError::ShapeConversion)
+}
+
+fn matmul_profile(
+    attributes: MatMulAttributes,
+    lhs: RuntimeShape,
+    rhs: RuntimeShape,
+) -> Result<(trueos_kokoro_gemm::KokoroMatMul, RuntimeShape), DispatchError> {
+    require_rank(lhs, attributes.lhs_rank)?;
+    require_rank(rhs, attributes.rhs_rank)?;
+    let lhs_dims = lhs.dims();
+    let rhs_dims = rhs.dims();
+    let (profile, output) = match attributes.profile {
+        1 => {
+            if (
+                attributes.constant_roles,
+                attributes.k,
+                attributes.n,
+                attributes.lane,
+                attributes.frame_axis,
+            ) != (0, 64, 0, 64, 2)
+                || lhs_dims[0] != 1
+                || lhs_dims[1] != trueos_kokoro_gemm::ATTENTION_HEADS as u32
+                || lhs_dims[3] != trueos_kokoro_gemm::ATTENTION_HEAD_WIDTH as u32
+                || rhs_dims
+                    != [
+                        1,
+                        trueos_kokoro_gemm::ATTENTION_HEADS as u32,
+                        trueos_kokoro_gemm::ATTENTION_HEAD_WIDTH as u32,
+                        lhs_dims[2],
+                    ]
+            {
+                return Err(DispatchError::ShapeConversion);
+            }
+            let sequence =
+                usize::try_from(lhs_dims[2]).map_err(|_| DispatchError::ShapeConversion)?;
+            (
+                trueos_kokoro_gemm::KokoroMatMul::AttentionScores { sequence },
+                RuntimeShape::new(&[
+                    1,
+                    trueos_kokoro_gemm::ATTENTION_HEADS as u32,
+                    lhs_dims[2],
+                    lhs_dims[2],
+                ])
+                .map_err(|_| DispatchError::ShapeConversion)?,
+            )
+        }
+        2 => {
+            if (
+                attributes.constant_roles,
+                attributes.k,
+                attributes.n,
+                attributes.lane,
+                attributes.frame_axis,
+            ) != (0, 0, 64, 64, 2)
+                || lhs_dims[0] != 1
+                || lhs_dims[1] != trueos_kokoro_gemm::ATTENTION_HEADS as u32
+                || lhs_dims[3] != lhs_dims[2]
+                || rhs_dims
+                    != [
+                        1,
+                        trueos_kokoro_gemm::ATTENTION_HEADS as u32,
+                        lhs_dims[2],
+                        trueos_kokoro_gemm::ATTENTION_HEAD_WIDTH as u32,
+                    ]
+            {
+                return Err(DispatchError::ShapeConversion);
+            }
+            let sequence =
+                usize::try_from(lhs_dims[2]).map_err(|_| DispatchError::ShapeConversion)?;
+            (
+                trueos_kokoro_gemm::KokoroMatMul::AttentionContext { sequence },
+                RuntimeShape::new(&[
+                    1,
+                    trueos_kokoro_gemm::ATTENTION_HEADS as u32,
+                    lhs_dims[2],
+                    trueos_kokoro_gemm::ATTENTION_HEAD_WIDTH as u32,
+                ])
+                .map_err(|_| DispatchError::ShapeConversion)?,
+            )
+        }
+        3 | 4 => {
+            let (channels, expected_channels) = if attributes.profile == 3 {
+                (trueos_kokoro_gemm::DurationChannels::Prosody640, 640)
+            } else {
+                (trueos_kokoro_gemm::DurationChannels::Text512, 512)
+            };
+            if (
+                attributes.constant_roles,
+                attributes.k,
+                attributes.n,
+                attributes.lane,
+                attributes.frame_axis,
+            ) != (0, expected_channels, 512, 1, 1)
+                || lhs_dims[0] != 1
+                || lhs_dims[1] != expected_channels
+                || rhs_dims[0] != lhs_dims[2]
+            {
+                return Err(DispatchError::ShapeConversion);
+            }
+            let sequence =
+                usize::try_from(lhs_dims[2]).map_err(|_| DispatchError::ShapeConversion)?;
+            let frames =
+                usize::try_from(rhs_dims[1]).map_err(|_| DispatchError::ShapeConversion)?;
+            (
+                trueos_kokoro_gemm::KokoroMatMul::DurationProjection {
+                    channels,
+                    sequence,
+                    frames,
+                },
+                RuntimeShape::new(&[1, expected_channels, rhs_dims[1]])
+                    .map_err(|_| DispatchError::ShapeConversion)?,
+            )
+        }
+        5 => {
+            if (
+                attributes.constant_roles,
+                attributes.k,
+                attributes.n,
+                attributes.lane,
+                attributes.frame_axis,
+            ) != (0b10, 9, 1, 1, 1)
+                || lhs_dims[0] != 1
+                || lhs_dims[2] != 9
+                || rhs_dims != [9, 1]
+            {
+                return Err(DispatchError::ShapeConversion);
+            }
+            let samples =
+                usize::try_from(lhs_dims[1]).map_err(|_| DispatchError::ShapeConversion)?;
+            (
+                trueos_kokoro_gemm::KokoroMatMul::SourceLinear { samples },
+                RuntimeShape::new(&[1, lhs_dims[1], 1])
+                    .map_err(|_| DispatchError::ShapeConversion)?,
+            )
+        }
+        _ => {
+            return Err(DispatchError::UnsupportedAttributeProfile {
+                opcode: OpCode::MatMul,
+            });
+        }
+    };
+    require_rank(output, attributes.output_rank)?;
+    let dimensions = profile.dimensions()?;
+    let lhs_elements = usize::try_from(
+        lhs.element_count()
+            .map_err(|_| DispatchError::ShapeConversion)?,
+    )
+    .map_err(|_| DispatchError::ShapeConversion)?;
+    let rhs_elements = usize::try_from(
+        rhs.element_count()
+            .map_err(|_| DispatchError::ShapeConversion)?,
+    )
+    .map_err(|_| DispatchError::ShapeConversion)?;
+    let output_elements = usize::try_from(
+        output
+            .element_count()
+            .map_err(|_| DispatchError::ShapeConversion)?,
+    )
+    .map_err(|_| DispatchError::ShapeConversion)?;
+    if dimensions.lhs_elements()? != lhs_elements
+        || dimensions.rhs_elements()? != rhs_elements
+        || dimensions.output_elements()? != output_elements
+    {
+        return Err(DispatchError::ShapeConversion);
+    }
+    Ok((profile, output))
+}
+
+fn resize_profile(
+    attributes: ResizeAttributes,
+) -> Result<(trueos_kokoro_resize::ResizeMode, trueos_kokoro_resize::ResizeScale, f32), DispatchError>
+{
+    let profile = match attributes.profile {
+        1 => (
+            trueos_kokoro_resize::ResizeMode::NearestAsymmetric,
+            trueos_kokoro_resize::ResizeScale::Up2,
+            2.0_f32,
+        ),
+        2 => (
+            trueos_kokoro_resize::ResizeMode::NearestAsymmetric,
+            trueos_kokoro_resize::ResizeScale::Up300,
+            300.0_f32,
+        ),
+        3 => (
+            trueos_kokoro_resize::ResizeMode::LinearHalfPixel,
+            trueos_kokoro_resize::ResizeScale::Down300,
+            1.0_f32 / 300.0_f32,
+        ),
+        4 => (
+            trueos_kokoro_resize::ResizeMode::LinearHalfPixel,
+            trueos_kokoro_resize::ResizeScale::Up300,
+            300.0_f32,
+        ),
+        _ => {
+            return Err(DispatchError::UnsupportedAttributeProfile {
+                opcode: OpCode::Resize,
+            });
+        }
+    };
+    let expected_mode = match attributes.mode {
+        ResizeMode::Nearest => trueos_kokoro_resize::ResizeMode::NearestAsymmetric,
+        ResizeMode::Linear => trueos_kokoro_resize::ResizeMode::LinearHalfPixel,
+    };
+    if profile.0 != expected_mode {
+        return Err(DispatchError::UnsupportedAttributeProfile {
+            opcode: OpCode::Resize,
+        });
+    }
+    Ok(profile)
+}
+
+fn conv_profile(
+    attributes: FloatConvAttributes,
+    input_width: usize,
+) -> Result<trueos_kokoro_conv::Profile, DispatchError> {
+    match attributes.profile {
+        1 if attributes.opcode == OpCode::FloatConv1d => {
+            Ok(trueos_kokoro_conv::Profile::PostConv128To22 { input_width })
+        }
+        2 if attributes.opcode == OpCode::FloatConvTranspose1d => {
+            Ok(trueos_kokoro_conv::Profile::EncoderDepthwise512 { input_width })
+        }
+        3 if attributes.opcode == OpCode::FloatConvTranspose1d => {
+            Ok(trueos_kokoro_conv::Profile::DecoderDepthwise1090 { input_width })
+        }
+        4 if attributes.opcode == OpCode::FloatConvTranspose1d => {
+            Ok(trueos_kokoro_conv::Profile::Upsample512To256 { input_width })
+        }
+        5 if attributes.opcode == OpCode::FloatConvTranspose1d => {
+            Ok(trueos_kokoro_conv::Profile::Upsample256To128 { input_width })
+        }
+        6 if attributes.opcode == OpCode::FloatConvTranspose1d => {
+            Ok(trueos_kokoro_conv::Profile::Istft22To1 { input_width })
+        }
+        _ => Err(DispatchError::UnsupportedAttributeProfile {
+            opcode: attributes.opcode,
+        }),
+    }
+}
+
+fn validate_conv_attributes(
+    attributes: FloatConvAttributes,
+    profile: trueos_kokoro_conv::Profile,
+) -> Result<(), DispatchError> {
+    let parameters = profile.parameters();
+    if parameters.input_channels != attributes.input_channels as usize
+        || parameters.output_channels != attributes.output_channels as usize
+        || parameters.kernel_width != attributes.kernel as usize
+        || parameters.stride != attributes.stride as usize
+        || attributes.dilation != 1
+        || parameters.pad_left != attributes.pad_left as usize
+        || parameters.pad_right != attributes.pad_right as usize
+        || parameters.output_padding != attributes.output_padding as usize
+        || parameters.groups != attributes.groups as usize
+        || parameters.has_bias != attributes.has_bias
+    {
+        Err(DispatchError::UnsupportedAttributeProfile {
+            opcode: attributes.opcode,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn infer_transpose<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: TransposeAttributes,
+) -> Result<OutputShapes, DispatchError> {
+    require_whole_unit(work)?;
+    require_op_arity(work, 1, 1)?;
+    let input = input_shape(memory, program, work, 0)?;
+    require_rank(input, attributes.rank)?;
+    let mut dims = [1_u32; 4];
+    for (output_axis, destination) in dims
+        .iter_mut()
+        .enumerate()
+        .take(usize::from(attributes.rank))
+    {
+        *destination = input.dims()[attributes.permutation[output_axis] as usize];
+    }
+    Ok(OutputShapes::one(
+        RuntimeShape::new(&dims[..usize::from(attributes.rank)])
+            .map_err(|_| DispatchError::ShapeConversion)?,
+    ))
+}
+
+fn infer_gather<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: GatherAttributes,
+) -> Result<OutputShapes, DispatchError> {
+    require_whole_unit(work)?;
+    require_op_arity(work, 2, 1)?;
+    let data = input_shape(memory, program, work, 0)?;
+    let indices = input_shape(memory, program, work, 1)?;
+    require_rank(data, attributes.data_rank)?;
+    require_rank(indices, attributes.indices_rank)?;
+    let axis = normalize_axis(attributes.axis, data.rank())?;
+    let mut dims = [1_u32; 4];
+    dims[..axis].copy_from_slice(&data.dims()[..axis]);
+    let indices_end = axis + indices.dims().len();
+    dims[axis..indices_end].copy_from_slice(indices.dims());
+    dims[indices_end..usize::from(attributes.output_rank)]
+        .copy_from_slice(&data.dims()[axis + 1..]);
+    Ok(OutputShapes::one(
+        RuntimeShape::new(&dims[..usize::from(attributes.output_rank)])
+            .map_err(|_| DispatchError::ShapeConversion)?,
+    ))
+}
+
+fn infer_concat<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: ConcatAttributes,
+) -> Result<OutputShapes, DispatchError> {
+    require_whole_unit(work)?;
+    require_op_arity(work, u16::from(attributes.input_count), 1)?;
+    let first = input_shape(memory, program, work, 0)?;
+    require_rank(first, attributes.rank)?;
+    let axis = normalize_axis(attributes.axis, first.rank())?;
+    let mut dims = [1_u32; 4];
+    dims[..first.dims().len()].copy_from_slice(first.dims());
+    dims[axis] = 0;
+    for input in 0..u16::from(attributes.input_count) {
+        let shape = input_shape(memory, program, work, input)?;
+        if shape.rank() != first.rank() {
+            return Err(DispatchError::ShapeConversion);
+        }
+        for dimension in 0..shape.dims().len() {
+            if dimension != axis && shape.dims()[dimension] != first.dims()[dimension] {
+                return Err(DispatchError::ShapeConversion);
+            }
+        }
+        dims[axis] = dims[axis]
+            .checked_add(shape.dims()[axis])
+            .ok_or(DispatchError::ShapeConversion)?;
+    }
+    Ok(OutputShapes::one(
+        RuntimeShape::new(&dims[..first.dims().len()])
+            .map_err(|_| DispatchError::ShapeConversion)?,
+    ))
+}
+
+fn infer_split<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: SplitAttributes,
+) -> Result<OutputShapes, DispatchError> {
+    require_whole_unit(work)?;
+    require_op_arity(work, 2, 2)?;
+    let input = input_shape(memory, program, work, 0)?;
+    require_rank(input, attributes.rank)?;
+    let lengths = read_i64_control::<2, _, _, _>(memory, program, work, 1)?;
+    if lengths.len != 2
+        || lengths.values[0] != i64::from(attributes.first_axis_len)
+        || lengths.values[1] != i64::from(attributes.second_axis_len)
+    {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let axis = normalize_axis(attributes.axis, input.rank())?;
+    if input.dims()[axis]
+        != attributes
+            .first_axis_len
+            .checked_add(attributes.second_axis_len)
+            .ok_or(DispatchError::ShapeConversion)?
+    {
+        return Err(DispatchError::ShapeConversion);
+    }
+    let mut first = [1_u32; 4];
+    let mut second = [1_u32; 4];
+    first[..input.dims().len()].copy_from_slice(input.dims());
+    second[..input.dims().len()].copy_from_slice(input.dims());
+    first[axis] = attributes.first_axis_len;
+    second[axis] = attributes.second_axis_len;
+    Ok(OutputShapes::two(
+        RuntimeShape::new(&first[..input.dims().len()])
+            .map_err(|_| DispatchError::ShapeConversion)?,
+        RuntimeShape::new(&second[..input.dims().len()])
+            .map_err(|_| DispatchError::ShapeConversion)?,
+    ))
+}
+
+fn infer_expand<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: ExpandAttributes,
+) -> Result<OutputShapes, DispatchError> {
+    require_whole_unit(work)?;
+    require_op_arity(work, 2, 1)?;
+    let input = input_shape(memory, program, work, 0)?;
+    require_rank(input, attributes.input_rank)?;
+    let target = read_i64_control::<4, _, _, _>(memory, program, work, 1)?;
+    if target.len != usize::from(attributes.output_rank) {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    if attributes.control_mode == ControlMode::Initializer {
+        for (index, &dimension) in target.values[..target.len].iter().enumerate() {
+            if dimension != i64::from(attributes.target_dims[index]) {
+                return Err(DispatchError::InvalidControlTensor);
+            }
+        }
+    }
+    let output = runtime_shape_i64(&target.values[..target.len])?;
+    let leading = usize::from(output.rank() - input.rank());
+    for input_axis in 0..input.dims().len() {
+        let source = input.dims()[input_axis];
+        let destination = output.dims()[leading + input_axis];
+        if source != 1 && source != destination {
+            return Err(DispatchError::ShapeConversion);
+        }
+    }
+    Ok(OutputShapes::one(output))
+}
+
+fn infer_slice<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: SliceAttributes,
+) -> Result<OutputShapes, DispatchError> {
+    require_whole_unit(work)?;
+    let control_count =
+        2 + u16::from(attributes.flags & 1 != 0) + u16::from(attributes.flags & 2 != 0);
+    require_op_arity(work, 1 + control_count, 1)?;
+    let input = input_shape(memory, program, work, 0)?;
+    require_rank(input, attributes.rank)?;
+    let mut controls = [0_i64; 4];
+    for (slot, control) in controls
+        .iter_mut()
+        .enumerate()
+        .take(usize::from(control_count))
+    {
+        *control = read_i64_scalar(memory, program, work, slot as u16 + 1)?;
+        if attributes.control_modes[slot] == ControlMode::Initializer
+            && *control != attributes.control_values[slot]
+        {
+            return Err(DispatchError::InvalidControlTensor);
+        }
+    }
+    let axis = if attributes.flags & 1 != 0 {
+        normalize_axis(
+            i32::try_from(controls[2]).map_err(|_| DispatchError::InvalidControlTensor)?,
+            input.rank(),
+        )?
+    } else {
+        0
+    };
+    if attributes.flags & 2 != 0 && controls[3] != 1 {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let dimension = i64::from(input.dims()[axis]);
+    let start = normalize_slice_bound(controls[0], dimension);
+    let end = normalize_slice_bound(controls[1], dimension);
+    let length =
+        u32::try_from(end.saturating_sub(start)).map_err(|_| DispatchError::ShapeConversion)?;
+    if length == 0 {
+        return Err(DispatchError::ShapeConversion);
+    }
+    let mut dims = [1_u32; 4];
+    dims[..input.dims().len()].copy_from_slice(input.dims());
+    dims[axis] = length;
+    Ok(OutputShapes::one(
+        RuntimeShape::new(&dims[..input.dims().len()])
+            .map_err(|_| DispatchError::ShapeConversion)?,
+    ))
+}
+
+fn normalize_slice_bound(bound: i64, dimension: i64) -> i64 {
+    if bound < 0 {
+        bound.saturating_add(dimension).clamp(0, dimension)
+    } else {
+        bound.clamp(0, dimension)
+    }
+}
+
+fn infer_pad<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: PadAttributes,
+) -> Result<OutputShapes, DispatchError> {
+    require_whole_unit(work)?;
+    require_op_arity(work, 2, 1)?;
+    let input = input_shape(memory, program, work, 0)?;
+    require_rank(input, attributes.rank)?;
+    let count = usize::from(attributes.rank) * 2;
+    let pads = read_i64_control::<8, _, _, _>(memory, program, work, 1)?;
+    if pads.len != count {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let mut dims = [1_u32; 4];
+    dims[..input.dims().len()].copy_from_slice(input.dims());
+    for (axis, dimension) in dims
+        .iter_mut()
+        .enumerate()
+        .take(usize::from(attributes.rank))
+    {
+        if pads.values[axis] != i64::from(attributes.pads[axis])
+            || pads.values[usize::from(attributes.rank) + axis]
+                != i64::from(attributes.pads[usize::from(attributes.rank) + axis])
+        {
+            return Err(DispatchError::InvalidControlTensor);
+        }
+        let before = attributes.pads[axis];
+        let after = attributes.pads[usize::from(attributes.rank) + axis];
+        if (before != 0 && before >= input.dims()[axis])
+            || (after != 0 && after >= input.dims()[axis])
+        {
+            return Err(DispatchError::ShapeConversion);
+        }
+        *dimension = before
+            .checked_add(input.dims()[axis])
+            .and_then(|value| value.checked_add(after))
+            .ok_or(DispatchError::ShapeConversion)?;
+    }
+    Ok(OutputShapes::one(
+        RuntimeShape::new(&dims[..input.dims().len()])
+            .map_err(|_| DispatchError::ShapeConversion)?,
+    ))
+}
+
+fn infer_view<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: ViewAttributes,
+) -> Result<OutputShapes, DispatchError> {
+    require_whole_unit(work)?;
+    require_op_arity(work, 2, 1)?;
+    let input = input_shape(memory, program, work, 0)?;
+    require_rank(input, attributes.input_rank)?;
+    let control = read_i64_control::<4, _, _, _>(memory, program, work, 1)?;
+    if attributes.static_control {
+        if control.len != usize::from(attributes.count) {
+            return Err(DispatchError::InvalidControlTensor);
+        }
+        for (index, &value) in control.values[..control.len].iter().enumerate() {
+            if value != i64::from(attributes.parameters[index]) {
+                return Err(DispatchError::InvalidControlTensor);
+            }
+        }
+    }
+    let input_layout = layout_shape(input)?;
+    let output_layout = match attributes.opcode {
+        OpCode::Reshape => {
+            trueos_kokoro_layout::reshape_view(input_layout, &control.values[..control.len], false)?
+        }
+        OpCode::Unsqueeze => {
+            let mut axes = [0_isize; 4];
+            for (destination, &axis) in axes.iter_mut().zip(&control.values[..control.len]) {
+                *destination = isize::try_from(axis).map_err(|_| DispatchError::ShapeConversion)?;
+            }
+            trueos_kokoro_layout::unsqueeze_view(input_layout, &axes[..control.len])?
+        }
+        OpCode::Squeeze => {
+            let mut axes = [0_isize; 4];
+            for (destination, &axis) in axes.iter_mut().zip(&control.values[..control.len]) {
+                *destination = isize::try_from(axis).map_err(|_| DispatchError::ShapeConversion)?;
+            }
+            trueos_kokoro_layout::squeeze_view(input_layout, Some(&axes[..control.len]))?
+        }
+        opcode => return Err(DispatchError::UnsupportedOpcode { opcode }),
+    };
+    let output = runtime_from_layout(output_layout)?;
+    require_rank(output, attributes.output_rank)?;
+    validate_view_descriptor(program, work, attributes)?;
+    Ok(OutputShapes::one(output))
+}
+
+fn validate_view_descriptor(
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: ViewAttributes,
+) -> Result<(), DispatchError> {
+    let input_id = op_input(program, work, 0)?;
+    let output_id = program
+        .op_output(work.op(), 0)
+        .ok_or(DispatchError::InvalidArity)?;
+    let input = program
+        .tensor(input_id)
+        .ok_or(DispatchError::ShapeConversion)?;
+    let output = program
+        .tensor(output_id)
+        .ok_or(DispatchError::ShapeConversion)?;
+    let expected_dtype = match attributes.dtype {
+        AttributeDType::Float => DType::F32,
+        AttributeDType::Int32 => DType::I32,
+        AttributeDType::Int64 => DType::I64,
+        _ => return Err(DispatchError::ShapeConversion),
+    };
+    let root = if input.storage == StorageKind::View {
+        input.view_of
+    } else {
+        input_id
+    };
+    let input_storage = program
+        .resolve_storage(input_id)
+        .map_err(|_| DispatchError::ShapeConversion)?;
+    let output_storage = program
+        .resolve_storage(output_id)
+        .map_err(|_| DispatchError::ShapeConversion)?;
+    if input.dtype != expected_dtype
+        || output.dtype != expected_dtype
+        || output.storage != StorageKind::View
+        || output.view_of != root
+        || output_storage.owner != input_storage.owner
+        || output_storage.offset != input_storage.offset
+    {
+        return Err(DispatchError::ShapeConversion);
+    }
+    Ok(())
+}
+
+fn validate_view_storage<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: ViewAttributes,
+    expected: RuntimeShape,
+) -> Result<(), DispatchError> {
+    let output = program
+        .op_output(work.op(), 0)
+        .ok_or(DispatchError::InvalidArity)?;
+    let actual = match attributes.dtype {
+        AttributeDType::Float => memory.with_read::<f32, _, _>(output, |_, shape| shape)?,
+        AttributeDType::Int32 => memory.with_read::<i32, _, _>(output, |_, shape| shape)?,
+        AttributeDType::Int64 => memory.with_read::<i64, _, _>(output, |_, shape| shape)?,
+        _ => return Err(DispatchError::ShapeConversion),
+    };
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(DispatchError::ShapeConversion)
+    }
+}
+
+impl<
+    'dispatch,
+    'memory,
+    'artifact,
+    'buffers,
+    const SHAPES: usize,
+    const EXTERNALS: usize,
+    const BINDINGS: usize,
+> ExecDispatcher
+    for CpuDispatcher<'dispatch, 'memory, 'artifact, 'buffers, SHAPES, EXTERNALS, BINDINGS>
+{
+    type Error = DispatchError;
+
+    fn dispatch(
+        &mut self,
+        program: &Program<'_>,
+        work: WorkSlice,
+    ) -> Result<DispatchResult, Self::Error> {
+        let record = program
+            .op_attributes(work.op())
+            .ok_or(DispatchError::MissingAttributes)?;
+        let attributes = decode(record, work.op().opcode)?;
+        if !native_dispatch_supported(attributes) {
+            return Err(DispatchError::UnsupportedOpcode {
+                opcode: attributes.opcode(),
+            });
+        }
+        let output_shapes = infer_output_shapes(self.memory, program, work, attributes)?;
+        self.memory
+            .declare_op_outputs(work.op_index(), output_shapes.as_slice())?;
+        if let Attributes::View(view) = attributes {
+            validate_view_storage(self.memory, program, work, view, output_shapes.values[0])?;
+            return Ok(DispatchResult::Completed);
+        }
+        let conv = self.conv;
+        let gemm = self.gemm;
+        self.memory
+            .with_op(work.op_index(), |access| {
+                execute(access, program, work, attributes, conv, gemm)
+            })
+            .map_err(DispatchError::Memory)?
+    }
+}
+
+fn execute<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: Attributes,
+    conv: trueos_kokoro_conv::Dispatcher,
+    gemm: trueos_kokoro_gemm::Dispatcher,
+) -> Result<DispatchResult, DispatchError> {
+    match attributes {
+        Attributes::Binary(value) => {
+            require_whole_unit(work)?;
+            execute_binary(access, value)?;
+        }
+        Attributes::Comparison(value) => {
+            require_whole_unit(work)?;
+            execute_comparison(access, value)?;
+        }
+        Attributes::Cast(value) => {
+            require_whole_unit(work)?;
+            execute_cast(access, value)?;
+        }
+        Attributes::ConstantOfShape(value) => {
+            require_whole_unit(work)?;
+            require_arity(access, 1, 1)?;
+            let dimensions = access.input::<i64>(0)?;
+            let mut output = access.output::<f32>(0)?;
+            trueos_kokoro_scalar::constant_of_shape_f32(
+                &dimensions,
+                f32::from_bits(value.fill_bits),
+                &mut output,
+            )?;
+        }
+        Attributes::CumSum(value) => {
+            require_whole_unit(work)?;
+            require_arity(access, 2, 1)?;
+            let input = access.input::<f32>(0)?;
+            let axis = access.input::<i32>(1)?;
+            if axis.len() != 1 || axis[0] != value.axis {
+                return Err(DispatchError::InvalidControlTensor);
+            }
+            let shape = layout_shape(input.shape())?;
+            let mut output = access.output::<f32>(0)?;
+            trueos_kokoro_scalar::cumulative_sum_f32(
+                &input,
+                shape,
+                value.axis as isize,
+                &mut output,
+            )?;
+        }
+        Attributes::DequantizeLinear(_) => {
+            require_whole_unit(work)?;
+            require_arity(access, 3, 1)?;
+            let input = access.input::<i8>(0)?;
+            let scale = access.input::<f32>(1)?;
+            let zero = access.input::<i8>(2)?;
+            if scale.len() != 1 || zero.len() != 1 {
+                return Err(DispatchError::InvalidControlTensor);
+            }
+            let shape = layout_shape(input.shape())?;
+            let mut output = access.output::<f32>(0)?;
+            trueos_kokoro_scalar::dequantize_linear_i8_scalar(
+                &input,
+                shape,
+                scale[0],
+                zero[0],
+                &mut output,
+            )?;
+        }
+        Attributes::Where(value) => {
+            require_whole_unit(work)?;
+            execute_where(access, value.dtype)?;
+        }
+        Attributes::MatMul(value) => {
+            require_whole_unit(work)?;
+            execute_matmul(access, value, gemm)?;
+        }
+        Attributes::Pow(_) => {
+            require_whole_unit(work)?;
+            require_arity(access, 2, 1)?;
+            let input = access.input::<f32>(0)?;
+            let exponent = access.input::<f32>(1)?;
+            if exponent.len() != 1 || exponent[0].to_bits() != 2.0_f32.to_bits() {
+                return Err(DispatchError::InvalidControlTensor);
+            }
+            let input_layout = contiguous_f32(input.shape())?;
+            let mut output = access.output::<f32>(0)?;
+            let output_layout = contiguous_f32(output.shape())?;
+            trueos_kokoro_f32::pow_square(&input, input_layout, &mut output, output_layout)?;
+        }
+        Attributes::Range => {
+            require_whole_unit(work)?;
+            require_arity(access, 3, 1)?;
+            let start = access.input::<i64>(0)?;
+            let limit = access.input::<i64>(1)?;
+            let delta = access.input::<i64>(2)?;
+            if start.len() != 1 || limit.len() != 1 || delta.len() != 1 {
+                return Err(DispatchError::InvalidControlTensor);
+            }
+            let mut output = access.output::<i64>(0)?;
+            trueos_kokoro_scalar::range_i64(start[0], limit[0], delta[0], &mut output)?;
+        }
+        Attributes::Resize(value) => execute_resize(access, work, value)?,
+        Attributes::FloatConv(value) => execute_float_conv(access, work, value, conv)?,
+        Attributes::Unary(value) => {
+            require_whole_unit(work)?;
+            execute_unary(access, value)?;
+        }
+        Attributes::LeakyRelu(value) => {
+            require_whole_unit(work)?;
+            require_arity(access, 1, 1)?;
+            let input = access.input::<f32>(0)?;
+            let input_layout = contiguous_f32(input.shape())?;
+            let mut output = access.output::<f32>(0)?;
+            let output_layout = contiguous_f32(output.shape())?;
+            trueos_kokoro_f32::leaky_relu(
+                &input,
+                input_layout,
+                f32::from_bits(value.alpha_bits),
+                &mut output,
+                output_layout,
+            )?;
+        }
+        Attributes::ReduceMean(value) => {
+            require_whole_unit(work)?;
+            require_arity(access, 2, 1)?;
+            let input = access.input::<f32>(0)?;
+            let axes = access.input::<i64>(1)?;
+            if axes.len() != 1 || axes[0] != i64::from(value.axis) {
+                return Err(DispatchError::InvalidControlTensor);
+            }
+            let shape = f32_shape(input.shape())?;
+            let mut output = access.output::<f32>(0)?;
+            trueos_kokoro_f32::reduce_mean(&input, shape, value.axis as isize, true, &mut output)?;
+        }
+        Attributes::LayerNormalization(value) => {
+            require_whole_unit(work)?;
+            require_arity(access, 3, 1)?;
+            let input = access.input::<f32>(0)?;
+            let scale = access.input::<f32>(1)?;
+            let bias = access.input::<f32>(2)?;
+            let shape = f32_shape(input.shape())?;
+            let mut output = access.output::<f32>(0)?;
+            trueos_kokoro_f32::layer_normalization(
+                &input,
+                shape,
+                value.axis as isize,
+                &scale,
+                &bias,
+                f32::from_bits(value.epsilon_bits),
+                &mut output,
+            )?;
+        }
+        Attributes::Softmax(value) => {
+            require_whole_unit(work)?;
+            require_arity(access, 1, 1)?;
+            let input = access.input::<f32>(0)?;
+            let shape = f32_shape(input.shape())?;
+            let mut output = access.output::<f32>(0)?;
+            trueos_kokoro_f32::softmax(&input, shape, value.axis as isize, &mut output)?;
+        }
+        Attributes::FastGelu(_) => {
+            require_whole_unit(work)?;
+            require_arity(access, 2, 1)?;
+            let input = access.input::<f32>(0)?;
+            let bias = access.input::<f32>(1)?;
+            let shape = f32_shape(input.shape())?;
+            let mut output = access.output::<f32>(0)?;
+            trueos_kokoro_f32::fast_gelu(&input, shape, Some(&bias), &mut output)?;
+        }
+        Attributes::SkipLayerNormalization(value) => {
+            require_whole_unit(work)?;
+            require_arity(access, 4, 1)?;
+            let input = access.input::<f32>(0)?;
+            let skip = access.input::<f32>(1)?;
+            let scale = access.input::<f32>(2)?;
+            let bias = access.input::<f32>(3)?;
+            let shape = f32_shape(input.shape())?;
+            let mut output = access.output::<f32>(0)?;
+            trueos_kokoro_f32::skip_layer_normalization(
+                &input,
+                &skip,
+                shape,
+                &scale,
+                &bias,
+                f32::from_bits(value.epsilon_bits),
+                &mut output,
+            )?;
+        }
+        Attributes::ResolveDecoderShape(_) => {
+            require_whole_unit(work)?;
+            return execute_resolve(access, program);
+        }
+        Attributes::FixedStft20(_) => execute_stft(access)?,
+        Attributes::Transpose(value) => execute_transpose(access, value)?,
+        Attributes::Gather(value) => execute_gather(access, value)?,
+        Attributes::Concat(value) => execute_concat(access, value)?,
+        Attributes::Split(value) => execute_split(access, value)?,
+        Attributes::Expand(value) => execute_expand(access, value)?,
+        Attributes::Shape(_) => execute_shape(access, program)?,
+        Attributes::Slice(value) => execute_slice(access, value)?,
+        Attributes::Pad(value) => execute_pad(access, value)?,
+        Attributes::NonZero => execute_nonzero(access)?,
+        Attributes::ScatterNd(_) => execute_scatter(access)?,
+        Attributes::BiLstm256(_)
+        | Attributes::DynamicQuantizedGemm(_)
+        | Attributes::DynamicQuantizedConv1d(_)
+        | Attributes::View(_) => {
+            return Err(DispatchError::UnsupportedOpcode {
+                opcode: attributes.opcode(),
+            });
+        }
+    }
+    Ok(DispatchResult::Completed)
+}
+
+fn execute_transpose<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: TransposeAttributes,
+) -> Result<(), DispatchError> {
+    require_arity(access, 1, 1)?;
+    let mut permutation = [0_usize; 4];
+    for (destination, &axis) in permutation
+        .iter_mut()
+        .zip(&attributes.permutation[..usize::from(attributes.rank)])
+    {
+        *destination = usize::try_from(axis).map_err(|_| DispatchError::ShapeConversion)?;
+    }
+    match attributes.dtype {
+        AttributeDType::Float => execute_transpose_t::<f32, BINDINGS>(
+            access,
+            &permutation[..usize::from(attributes.rank)],
+        ),
+        AttributeDType::Int64 => execute_transpose_t::<i64, BINDINGS>(
+            access,
+            &permutation[..usize::from(attributes.rank)],
+        ),
+        _ => Err(DispatchError::UnsupportedAttributeProfile {
+            opcode: OpCode::Transpose,
+        }),
+    }
+}
+
+fn execute_transpose_t<T: TensorElement, const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    permutation: &[usize],
+) -> Result<(), DispatchError> {
+    let input = access.input::<T>(0)?;
+    let shape = layout_shape(input.shape())?;
+    let mut output = access.output::<T>(0)?;
+    trueos_kokoro_layout::transpose(&input, shape, permutation, &mut output)?;
+    Ok(())
+}
+
+fn execute_gather<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: GatherAttributes,
+) -> Result<(), DispatchError> {
+    require_arity(access, 2, 1)?;
+    match attributes.dtype {
+        AttributeDType::Float => execute_gather_t::<f32, BINDINGS>(access, attributes.axis),
+        AttributeDType::Int8 => execute_gather_t::<i8, BINDINGS>(access, attributes.axis),
+        AttributeDType::Int64 => execute_gather_t::<i64, BINDINGS>(access, attributes.axis),
+        _ => Err(DispatchError::UnsupportedAttributeProfile {
+            opcode: OpCode::Gather,
+        }),
+    }
+}
+
+fn execute_gather_t<T: TensorElement, const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    axis: i32,
+) -> Result<(), DispatchError> {
+    let data = access.input::<T>(0)?;
+    let indices = access.input::<i64>(1)?;
+    let data_shape = layout_shape(data.shape())?;
+    let indices_shape = layout_shape(indices.shape())?;
+    let mut output = access.output::<T>(0)?;
+    trueos_kokoro_layout::gather(
+        &data,
+        data_shape,
+        &indices,
+        indices_shape,
+        axis as isize,
+        &mut output,
+    )?;
+    Ok(())
+}
+
+fn execute_concat<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: ConcatAttributes,
+) -> Result<(), DispatchError> {
+    require_arity(access, u16::from(attributes.input_count), 1)?;
+    match attributes.dtype {
+        AttributeDType::Float => {
+            execute_concat_t::<f32, BINDINGS>(access, attributes.axis, attributes.input_count)
+        }
+        AttributeDType::Int64 => {
+            execute_concat_t::<i64, BINDINGS>(access, attributes.axis, attributes.input_count)
+        }
+        _ => Err(DispatchError::UnsupportedAttributeProfile {
+            opcode: OpCode::Concat,
+        }),
+    }
+}
+
+fn execute_concat_t<T: TensorElement, const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    axis: i32,
+    count: u8,
+) -> Result<(), DispatchError> {
+    let first = access.input::<T>(0)?;
+    let first_shape = layout_shape(first.shape())?;
+    let second = access.input::<T>(1)?;
+    let second_shape = layout_shape(second.shape())?;
+    let mut output = access.output::<T>(0)?;
+    match count {
+        2 => {
+            let inputs = [
+                trueos_kokoro_layout::TensorView::new(&first, first_shape)?,
+                trueos_kokoro_layout::TensorView::new(&second, second_shape)?,
+            ];
+            trueos_kokoro_layout::concat(&inputs, axis as isize, &mut output)?;
+        }
+        3 => {
+            let third = access.input::<T>(2)?;
+            let inputs = [
+                trueos_kokoro_layout::TensorView::new(&first, first_shape)?,
+                trueos_kokoro_layout::TensorView::new(&second, second_shape)?,
+                trueos_kokoro_layout::TensorView::new(&third, layout_shape(third.shape())?)?,
+            ];
+            trueos_kokoro_layout::concat(&inputs, axis as isize, &mut output)?;
+        }
+        4 => {
+            let third = access.input::<T>(2)?;
+            let fourth = access.input::<T>(3)?;
+            let inputs = [
+                trueos_kokoro_layout::TensorView::new(&first, first_shape)?,
+                trueos_kokoro_layout::TensorView::new(&second, second_shape)?,
+                trueos_kokoro_layout::TensorView::new(&third, layout_shape(third.shape())?)?,
+                trueos_kokoro_layout::TensorView::new(&fourth, layout_shape(fourth.shape())?)?,
+            ];
+            trueos_kokoro_layout::concat(&inputs, axis as isize, &mut output)?;
+        }
+        _ => return Err(DispatchError::InvalidArity),
+    }
+    Ok(())
+}
+
+fn execute_split<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: SplitAttributes,
+) -> Result<(), DispatchError> {
+    require_arity(access, 2, 2)?;
+    let input = access.input::<f32>(0)?;
+    let lengths = access.input::<i64>(1)?;
+    if lengths.len() != 2
+        || lengths[0] != i64::from(attributes.first_axis_len)
+        || lengths[1] != i64::from(attributes.second_axis_len)
+    {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let shape = layout_shape(input.shape())?;
+    let mut first = access.output::<f32>(0)?;
+    let mut second = access.output::<f32>(1)?;
+    trueos_kokoro_layout::split_two(
+        &input,
+        shape,
+        attributes.axis as isize,
+        attributes.first_axis_len as usize,
+        &mut first,
+        &mut second,
+    )?;
+    Ok(())
+}
+
+fn execute_expand<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: ExpandAttributes,
+) -> Result<(), DispatchError> {
+    require_arity(access, 2, 1)?;
+    match attributes.dtype {
+        AttributeDType::Float => execute_expand_t::<f32, BINDINGS>(access),
+        AttributeDType::Int64 => execute_expand_t::<i64, BINDINGS>(access),
+        _ => Err(DispatchError::UnsupportedAttributeProfile {
+            opcode: OpCode::Expand,
+        }),
+    }
+}
+
+fn execute_expand_t<T: TensorElement, const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+) -> Result<(), DispatchError> {
+    let input = access.input::<T>(0)?;
+    let target = access.input::<i64>(1)?;
+    let input_shape = layout_shape(input.shape())?;
+    let mut dims = [0_usize; 4];
+    if target.len() > dims.len() {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    for (destination, &dimension) in dims.iter_mut().zip(target.iter()) {
+        *destination =
+            usize::try_from(dimension).map_err(|_| DispatchError::InvalidControlTensor)?;
+        if *destination == 0 {
+            return Err(DispatchError::InvalidControlTensor);
+        }
+    }
+    let mut output = access.output::<T>(0)?;
+    trueos_kokoro_layout::expand(&input, input_shape, &dims[..target.len()], &mut output)?;
+    Ok(())
+}
+
+fn execute_shape<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    program: &Program<'_>,
+) -> Result<(), DispatchError> {
+    require_arity(access, 1, 1)?;
+    let tensor_id = access
+        .input_tensor_id(0)
+        .ok_or(DispatchError::InvalidArity)?;
+    let dtype = program
+        .tensor(tensor_id)
+        .ok_or(DispatchError::ShapeConversion)?
+        .dtype;
+    let shape = match dtype {
+        DType::F32 => access.input::<f32>(0)?.shape(),
+        DType::I64 => access.input::<i64>(0)?.shape(),
+        _ => {
+            return Err(DispatchError::UnsupportedAttributeProfile {
+                opcode: OpCode::Shape,
+            });
+        }
+    };
+    let mut output = access.output::<i64>(0)?;
+    trueos_kokoro_layout::shape_of(layout_shape(shape)?, 0, None, &mut output)?;
+    Ok(())
+}
+
+fn execute_slice<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: SliceAttributes,
+) -> Result<(), DispatchError> {
+    require_arity(
+        access,
+        3 + u16::from(attributes.flags & 1 != 0) + u16::from(attributes.flags & 2 != 0),
+        1,
+    )?;
+    match attributes.dtype {
+        AttributeDType::Float => execute_slice_t::<f32, BINDINGS>(access, attributes),
+        AttributeDType::Int64 => execute_slice_t::<i64, BINDINGS>(access, attributes),
+        _ => Err(DispatchError::UnsupportedAttributeProfile {
+            opcode: OpCode::Slice,
+        }),
+    }
+}
+
+fn execute_slice_t<T: TensorElement, const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: SliceAttributes,
+) -> Result<(), DispatchError> {
+    let input = access.input::<T>(0)?;
+    let starts = access.input::<i64>(1)?;
+    let ends = access.input::<i64>(2)?;
+    if starts.len() != 1 || ends.len() != 1 {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let axes = if attributes.flags & 1 != 0 {
+        let value = access.input::<i64>(3)?;
+        if value.len() != 1 {
+            return Err(DispatchError::InvalidControlTensor);
+        }
+        Some(value)
+    } else {
+        None
+    };
+    let steps_index = if attributes.flags & 1 != 0 { 4 } else { 3 };
+    let steps = if attributes.flags & 2 != 0 {
+        let value = access.input::<i64>(steps_index)?;
+        if value.len() != 1 {
+            return Err(DispatchError::InvalidControlTensor);
+        }
+        Some(value)
+    } else {
+        None
+    };
+    let mut axis_values = [0_isize; 1];
+    let axes_slice = if let Some(values) = axes.as_ref() {
+        axis_values[0] =
+            isize::try_from(values[0]).map_err(|_| DispatchError::InvalidControlTensor)?;
+        Some(&axis_values[..])
+    } else {
+        None
+    };
+    let mut output = access.output::<T>(0)?;
+    trueos_kokoro_layout::slice(
+        &input,
+        layout_shape(input.shape())?,
+        &starts,
+        &ends,
+        axes_slice,
+        steps.as_deref(),
+        &mut output,
+    )?;
+    Ok(())
+}
+
+fn execute_pad<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: PadAttributes,
+) -> Result<(), DispatchError> {
+    require_arity(access, 2, 1)?;
+    let input = access.input::<f32>(0)?;
+    let control = access.input::<i64>(1)?;
+    let count = usize::from(attributes.rank) * 2;
+    if control.len() != count {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let mut pads = [0_usize; 8];
+    for index in 0..count {
+        if control[index] != i64::from(attributes.pads[index]) {
+            return Err(DispatchError::InvalidControlTensor);
+        }
+        pads[index] = attributes.pads[index] as usize;
+    }
+    let mut output = access.output::<f32>(0)?;
+    trueos_kokoro_layout::reflect_pad(
+        &input,
+        layout_shape(input.shape())?,
+        &pads[..count],
+        &mut output,
+    )?;
+    Ok(())
+}
+
+fn execute_nonzero<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+) -> Result<(), DispatchError> {
+    require_arity(access, 1, 1)?;
+    let input = access.input::<bool>(0)?;
+    let mut output = access.output::<i64>(0)?;
+    let count =
+        trueos_kokoro_layout::nonzero_bool(&input, layout_shape(input.shape())?, &mut output)?;
+    let output_shape = output.shape();
+    let dims = output_shape.dims();
+    if dims != [input.shape().rank() as u32, count as u32] {
+        return Err(DispatchError::ShapeConversion);
+    }
+    Ok(())
+}
+
+fn execute_scatter<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+) -> Result<(), DispatchError> {
+    require_arity(access, 3, 1)?;
+    let data = access.input::<f32>(0)?;
+    let indices = access.input::<i64>(1)?;
+    let updates = access.input::<f32>(2)?;
+    let mut output = access.output::<f32>(0)?;
+    trueos_kokoro_layout::scatter_nd_ordered(
+        &data,
+        layout_shape(data.shape())?,
+        &indices,
+        layout_shape(indices.shape())?,
+        &updates,
+        &mut output,
+    )?;
+    Ok(())
+}
+
+fn execute_matmul<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: MatMulAttributes,
+    dispatcher: trueos_kokoro_gemm::Dispatcher,
+) -> Result<(), DispatchError> {
+    require_arity(access, 2, 1)?;
+    let lhs = access.input::<f32>(0)?;
+    let rhs = access.input::<f32>(1)?;
+    let (profile, expected_output) = matmul_profile(attributes, lhs.shape(), rhs.shape())?;
+    let mut output = access.output::<f32>(0)?;
+    if output.shape() != expected_output {
+        return Err(DispatchError::ShapeConversion);
+    }
+    dispatcher.matmul(profile, &lhs, &rhs, &mut output)?;
+    Ok(())
+}
+
+fn execute_stft<const BINDINGS: usize>(access: &OpAccess<BINDINGS>) -> Result<(), DispatchError> {
+    require_arity(access, 4, 1)?;
+    let input = access.input::<f32>(0)?;
+    let frame_step = access.input::<i64>(1)?;
+    let window = access.input::<f32>(2)?;
+    let frame_length = access.input::<i64>(3)?;
+    if frame_step.len() != 1
+        || frame_step[0] != trueos_kokoro_stft::FRAME_STEP as i64
+        || frame_length.len() != 1
+        || frame_length[0] != trueos_kokoro_stft::FRAME_LENGTH as i64
+        || window.len() != trueos_kokoro_stft::FRAME_LENGTH
+        || window
+            .iter()
+            .zip(trueos_kokoro_stft::HANN_WINDOW_BITS)
+            .any(|(value, expected)| value.to_bits() != expected)
+    {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let dims = input.shape();
+    if dims.rank() != 2 {
+        return Err(DispatchError::ShapeConversion);
+    }
+    let problem =
+        trueos_kokoro_stft::Problem::new(dims.dims()[0] as usize, dims.dims()[1] as usize, &input)?;
+    let mut output = access.output::<f32>(0)?;
+    let mut state = trueos_kokoro_stft::CooperativeStft::start(problem, &mut output)?;
+    let budget = state.total_frames().max(1);
+    while !state.is_complete() {
+        state.advance(budget)?;
+    }
+    Ok(())
+}
+
+fn execute_binary<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: BinaryAttributes,
+) -> Result<(), DispatchError> {
+    require_arity(access, 2, 1)?;
+    if attributes.dtype == AttributeDType::Int64 {
+        if attributes.opcode != OpCode::Add {
+            return Err(DispatchError::UnsupportedAttributeProfile {
+                opcode: attributes.opcode,
+            });
+        }
+        let lhs = access.input::<i64>(0)?;
+        let rhs = access.input::<i64>(1)?;
+        let lhs_shape = layout_shape(lhs.shape())?;
+        let rhs_shape = layout_shape(rhs.shape())?;
+        let mut output = access.output::<i64>(0)?;
+        trueos_kokoro_scalar::add_i64(&lhs, lhs_shape, &rhs, rhs_shape, &mut output)?;
+        return Ok(());
+    }
+    let lhs = access.input::<f32>(0)?;
+    let rhs = access.input::<f32>(1)?;
+    let lhs_layout = contiguous_f32(lhs.shape())?;
+    let rhs_layout = contiguous_f32(rhs.shape())?;
+    let mut output = access.output::<f32>(0)?;
+    let output_layout = contiguous_f32(output.shape())?;
+    match attributes.opcode {
+        OpCode::Add => {
+            trueos_kokoro_f32::add(&lhs, lhs_layout, &rhs, rhs_layout, &mut output, output_layout)?
+        }
+        OpCode::Mul => {
+            trueos_kokoro_f32::mul(&lhs, lhs_layout, &rhs, rhs_layout, &mut output, output_layout)?
+        }
+        OpCode::Div => {
+            trueos_kokoro_f32::div(&lhs, lhs_layout, &rhs, rhs_layout, &mut output, output_layout)?
+        }
+        OpCode::Sub => {
+            trueos_kokoro_f32::sub(&lhs, lhs_layout, &rhs, rhs_layout, &mut output, output_layout)?
+        }
+        opcode => return Err(DispatchError::UnsupportedOpcode { opcode }),
+    }
+    Ok(())
+}
+
+fn execute_comparison<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: ComparisonAttributes,
+) -> Result<(), DispatchError> {
+    require_arity(access, 2, 1)?;
+    match (attributes.opcode, attributes.input_dtype) {
+        (OpCode::And, AttributeDType::Bool) => {
+            let lhs = access.input::<bool>(0)?;
+            let rhs = access.input::<bool>(1)?;
+            let lhs_shape = layout_shape(lhs.shape())?;
+            let rhs_shape = layout_shape(rhs.shape())?;
+            let mut output = access.output::<bool>(0)?;
+            trueos_kokoro_scalar::and_bool(&lhs, lhs_shape, &rhs, rhs_shape, &mut output)?;
+        }
+        (OpCode::Equal, AttributeDType::Int64) => {
+            let lhs = access.input::<i64>(0)?;
+            let rhs = access.input::<i64>(1)?;
+            let lhs_shape = layout_shape(lhs.shape())?;
+            let rhs_shape = layout_shape(rhs.shape())?;
+            let mut output = access.output::<bool>(0)?;
+            trueos_kokoro_scalar::equal_i64(&lhs, lhs_shape, &rhs, rhs_shape, &mut output)?;
+        }
+        (OpCode::Greater, AttributeDType::Float) => {
+            let lhs = access.input::<f32>(0)?;
+            let rhs = access.input::<f32>(1)?;
+            let lhs_shape = layout_shape(lhs.shape())?;
+            let rhs_shape = layout_shape(rhs.shape())?;
+            let mut output = access.output::<bool>(0)?;
+            trueos_kokoro_scalar::greater_f32(&lhs, lhs_shape, &rhs, rhs_shape, &mut output)?;
+        }
+        (OpCode::GreaterOrEqual, AttributeDType::Float) => {
+            let lhs = access.input::<f32>(0)?;
+            let rhs = access.input::<f32>(1)?;
+            let lhs_shape = layout_shape(lhs.shape())?;
+            let rhs_shape = layout_shape(rhs.shape())?;
+            let mut output = access.output::<bool>(0)?;
+            trueos_kokoro_scalar::greater_or_equal_f32(
+                &lhs,
+                lhs_shape,
+                &rhs,
+                rhs_shape,
+                &mut output,
+            )?;
+        }
+        (OpCode::Less, AttributeDType::Float) => {
+            let lhs = access.input::<f32>(0)?;
+            let rhs = access.input::<f32>(1)?;
+            let lhs_shape = layout_shape(lhs.shape())?;
+            let rhs_shape = layout_shape(rhs.shape())?;
+            let mut output = access.output::<bool>(0)?;
+            trueos_kokoro_scalar::less_f32(&lhs, lhs_shape, &rhs, rhs_shape, &mut output)?;
+        }
+        (OpCode::Less, AttributeDType::Int64) => {
+            let lhs = access.input::<i64>(0)?;
+            let rhs = access.input::<i64>(1)?;
+            let lhs_shape = layout_shape(lhs.shape())?;
+            let rhs_shape = layout_shape(rhs.shape())?;
+            let mut output = access.output::<bool>(0)?;
+            trueos_kokoro_scalar::less_i64(&lhs, lhs_shape, &rhs, rhs_shape, &mut output)?;
+        }
+        (opcode, _) => return Err(DispatchError::UnsupportedAttributeProfile { opcode }),
+    }
+    Ok(())
+}
+
+fn execute_cast<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: CastAttributes,
+) -> Result<(), DispatchError> {
+    require_arity(access, 1, 1)?;
+    match (attributes.input_dtype, attributes.output_dtype) {
+        (AttributeDType::Float, AttributeDType::Bool) => {
+            let input = access.input::<f32>(0)?;
+            let mut output = access.output::<bool>(0)?;
+            trueos_kokoro_scalar::cast_f32_to_bool(&input, &mut output)?;
+        }
+        (AttributeDType::Int64, AttributeDType::Float) => {
+            let input = access.input::<i64>(0)?;
+            let mut output = access.output::<f32>(0)?;
+            trueos_kokoro_scalar::cast_i64_to_f32(&input, &mut output)?;
+        }
+        (AttributeDType::Bool, AttributeDType::Float) => {
+            let input = access.input::<bool>(0)?;
+            let mut output = access.output::<f32>(0)?;
+            trueos_kokoro_scalar::cast_bool_to_f32(&input, &mut output)?;
+        }
+        _ => {
+            return Err(DispatchError::UnsupportedAttributeProfile {
+                opcode: OpCode::Cast,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn execute_where<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    dtype: AttributeDType,
+) -> Result<(), DispatchError> {
+    require_arity(access, 3, 1)?;
+    let condition = access.input::<bool>(0)?;
+    let condition_shape = layout_shape(condition.shape())?;
+    match dtype {
+        AttributeDType::Float => {
+            let when_true = access.input::<f32>(1)?;
+            let when_false = access.input::<f32>(2)?;
+            let true_shape = layout_shape(when_true.shape())?;
+            let false_shape = layout_shape(when_false.shape())?;
+            let mut output = access.output::<f32>(0)?;
+            trueos_kokoro_scalar::where_f32(
+                &condition,
+                condition_shape,
+                &when_true,
+                true_shape,
+                &when_false,
+                false_shape,
+                &mut output,
+            )?;
+        }
+        AttributeDType::Int64 => {
+            let when_true = access.input::<i64>(1)?;
+            let when_false = access.input::<i64>(2)?;
+            let true_shape = layout_shape(when_true.shape())?;
+            let false_shape = layout_shape(when_false.shape())?;
+            let mut output = access.output::<i64>(0)?;
+            trueos_kokoro_scalar::where_i64(
+                &condition,
+                condition_shape,
+                &when_true,
+                true_shape,
+                &when_false,
+                false_shape,
+                &mut output,
+            )?;
+        }
+        _ => {
+            return Err(DispatchError::UnsupportedAttributeProfile {
+                opcode: OpCode::Where,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn execute_unary<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: UnaryAttributes,
+) -> Result<(), DispatchError> {
+    require_arity(access, 1, 1)?;
+    let input = access.input::<f32>(0)?;
+    let input_layout = contiguous_f32(input.shape())?;
+    let mut output = access.output::<f32>(0)?;
+    let output_layout = contiguous_f32(output.shape())?;
+    match attributes.opcode {
+        OpCode::Atan => trueos_kokoro_f32::atan(&input, input_layout, &mut output, output_layout)?,
+        OpCode::Cos => trueos_kokoro_f32::cos(&input, input_layout, &mut output, output_layout)?,
+        OpCode::Exp => trueos_kokoro_f32::exp(&input, input_layout, &mut output, output_layout)?,
+        OpCode::Floor => {
+            trueos_kokoro_f32::floor(&input, input_layout, &mut output, output_layout)?
+        }
+        OpCode::Round => {
+            trueos_kokoro_f32::round(&input, input_layout, &mut output, output_layout)?
+        }
+        OpCode::Sigmoid => {
+            trueos_kokoro_f32::sigmoid(&input, input_layout, &mut output, output_layout)?
+        }
+        OpCode::Sin => trueos_kokoro_f32::sin(&input, input_layout, &mut output, output_layout)?,
+        OpCode::Sqrt => trueos_kokoro_f32::sqrt(&input, input_layout, &mut output, output_layout)?,
+        OpCode::Tanh => trueos_kokoro_f32::tanh(&input, input_layout, &mut output, output_layout)?,
+        opcode => return Err(DispatchError::UnsupportedOpcode { opcode }),
+    }
+    Ok(())
+}
+
+fn execute_resize<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    work: WorkSlice,
+    attributes: ResizeAttributes,
+) -> Result<(), DispatchError> {
+    require_arity(access, 2, 1)?;
+    let input = access.input::<f32>(0)?;
+    let scales = access.input::<f32>(1)?;
+    let input_shape = input.shape();
+    let dims = input_shape.dims();
+    if dims.len() != 3 || scales.len() != 3 {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let (mode, scale, expected_scale) = match attributes.profile {
+        1 => (
+            trueos_kokoro_resize::ResizeMode::NearestAsymmetric,
+            trueos_kokoro_resize::ResizeScale::Up2,
+            2.0_f32,
+        ),
+        2 => (
+            trueos_kokoro_resize::ResizeMode::NearestAsymmetric,
+            trueos_kokoro_resize::ResizeScale::Up300,
+            300.0_f32,
+        ),
+        3 => (
+            trueos_kokoro_resize::ResizeMode::LinearHalfPixel,
+            trueos_kokoro_resize::ResizeScale::Down300,
+            1.0_f32 / 300.0_f32,
+        ),
+        4 => (
+            trueos_kokoro_resize::ResizeMode::LinearHalfPixel,
+            trueos_kokoro_resize::ResizeScale::Up300,
+            300.0_f32,
+        ),
+        _ => {
+            return Err(DispatchError::UnsupportedAttributeProfile {
+                opcode: OpCode::Resize,
+            });
+        }
+    };
+    let expected_mode = match attributes.mode {
+        ResizeMode::Nearest => trueos_kokoro_resize::ResizeMode::NearestAsymmetric,
+        ResizeMode::Linear => trueos_kokoro_resize::ResizeMode::LinearHalfPixel,
+    };
+    if mode != expected_mode
+        || scales[0].to_bits() != 1.0_f32.to_bits()
+        || scales[1].to_bits() != 1.0_f32.to_bits()
+        || scales[2].to_bits() != expected_scale.to_bits()
+    {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let plan = trueos_kokoro_resize::ResizePlan::new(
+        usize::try_from(dims[0]).map_err(|_| DispatchError::ShapeConversion)?,
+        usize::try_from(dims[1]).map_err(|_| DispatchError::ShapeConversion)?,
+        usize::try_from(dims[2]).map_err(|_| DispatchError::ShapeConversion)?,
+        mode,
+        scale,
+    )?;
+    let mut output = access.output::<f32>(0)?;
+    if usize::try_from(work.op().work_units).ok() != Some(output.len()) {
+        return Err(DispatchError::InvalidWorkContract {
+            opcode: OpCode::Resize,
+        });
+    }
+    plan.run_range(&input, &mut output, work.unit_start() as usize, work.unit_count() as usize)?;
+    Ok(())
+}
+
+fn execute_float_conv<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    work: WorkSlice,
+    attributes: FloatConvAttributes,
+    dispatcher: trueos_kokoro_conv::Dispatcher,
+) -> Result<(), DispatchError> {
+    require_arity(access, if attributes.has_bias { 3 } else { 2 }, 1)?;
+    let input = access.input::<f32>(0)?;
+    let weights = access.input::<f32>(1)?;
+    let bias = if attributes.has_bias {
+        Some(access.input::<f32>(2)?)
+    } else {
+        None
+    };
+    let input_shape = input.shape();
+    let input_dims = input_shape.dims();
+    if input_dims.len() != 3 || input_dims[0] != 1 {
+        return Err(DispatchError::ShapeConversion);
+    }
+    let input_width = input_dims[2] as usize;
+    let profile = match attributes.profile {
+        1 if attributes.opcode == OpCode::FloatConv1d => {
+            trueos_kokoro_conv::Profile::PostConv128To22 { input_width }
+        }
+        2 if attributes.opcode == OpCode::FloatConvTranspose1d => {
+            trueos_kokoro_conv::Profile::EncoderDepthwise512 { input_width }
+        }
+        3 if attributes.opcode == OpCode::FloatConvTranspose1d => {
+            trueos_kokoro_conv::Profile::DecoderDepthwise1090 { input_width }
+        }
+        4 if attributes.opcode == OpCode::FloatConvTranspose1d => {
+            trueos_kokoro_conv::Profile::Upsample512To256 { input_width }
+        }
+        5 if attributes.opcode == OpCode::FloatConvTranspose1d => {
+            trueos_kokoro_conv::Profile::Upsample256To128 { input_width }
+        }
+        6 if attributes.opcode == OpCode::FloatConvTranspose1d => {
+            trueos_kokoro_conv::Profile::Istft22To1 { input_width }
+        }
+        _ => {
+            return Err(DispatchError::UnsupportedAttributeProfile {
+                opcode: attributes.opcode,
+            });
+        }
+    };
+    let parameters = profile.parameters();
+    if parameters.input_channels != attributes.input_channels as usize
+        || parameters.output_channels != attributes.output_channels as usize
+        || parameters.kernel_width != attributes.kernel as usize
+        || parameters.stride != attributes.stride as usize
+        || attributes.dilation != 1
+        || parameters.pad_left != attributes.pad_left as usize
+        || parameters.pad_right != attributes.pad_right as usize
+        || parameters.output_padding != attributes.output_padding as usize
+        || parameters.groups != attributes.groups as usize
+        || parameters.has_bias != attributes.has_bias
+    {
+        return Err(DispatchError::UnsupportedAttributeProfile {
+            opcode: attributes.opcode,
+        });
+    }
+    let problem = trueos_kokoro_conv::Problem::new(profile, &input, &weights, bias.as_deref())?;
+    let dimensions = problem.dimensions();
+    let mut output = access.output::<f32>(0)?;
+    if usize::try_from(work.op().work_units).ok() != Some(output.len())
+        || output.len() != dimensions.output_elements()?
+    {
+        return Err(DispatchError::InvalidWorkContract {
+            opcode: attributes.opcode,
+        });
+    }
+    let mut linear = work.unit_start() as usize;
+    let end = work.unit_end() as usize;
+    while linear < end {
+        let channel = linear / dimensions.output_width;
+        let time = linear % dimensions.output_width;
+        let count = (end - linear).min(dimensions.output_width - time);
+        dispatcher.convolve_tile_with_lane(
+            problem,
+            &mut output,
+            trueos_kokoro_conv::Tile {
+                channel_start: channel,
+                channel_count: 1,
+                time_start: time,
+                time_count: count,
+            },
+            dispatcher.best_lane(),
+        )?;
+        linear += count;
+    }
+    Ok(())
+}
+
+fn execute_resolve<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    program: &Program<'_>,
+) -> Result<DispatchResult, DispatchError> {
+    require_arity(access, 2, 2)?;
+    let logits = access.input::<f32>(0)?;
+    let speed = access.input::<f32>(1)?;
+    let logits_shape = logits.shape();
+    let dims = logits_shape.dims();
+    if dims.len() != 3
+        || dims[0] != 1
+        || dims[2] != trueos_kokoro_duration::KOKORO_DURATION_BINS as u32
+        || speed.len() != 1
+    {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let token_count = dims[1] as usize;
+    let frame_limit = program
+        .phase(Phase::Phase1)
+        .ok_or(DispatchError::InvalidControlTensor)?
+        .frame_count_max;
+    let mut cumulative = access.output::<i64>(0)?;
+    let mut frame_scalar = access.output::<i64>(1)?;
+    if frame_scalar.len() != 1 {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let frame_count = trueos_kokoro_duration::resolve_decoder_shape(
+        &logits,
+        token_count,
+        speed[0],
+        frame_limit,
+        &mut cumulative,
+    )?;
+    frame_scalar[0] = i64::from(frame_count);
+    Ok(DispatchResult::FrameCount(frame_count))
+}
+
+fn require_whole_unit(work: WorkSlice) -> Result<(), DispatchError> {
+    if work.op().work_units == 1 && work.unit_start() == 0 && work.unit_count() == 1 {
+        Ok(())
+    } else {
+        Err(DispatchError::InvalidWorkContract {
+            opcode: work.op().opcode,
+        })
+    }
+}
+
+fn require_arity<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    inputs: u16,
+    outputs: u16,
+) -> Result<(), DispatchError> {
+    if access.input_count() == inputs && access.output_count() == outputs {
+        Ok(())
+    } else {
+        Err(DispatchError::InvalidArity)
+    }
+}
+
+fn shape_dims(shape: RuntimeShape) -> Result<([usize; 4], usize), DispatchError> {
+    let mut dims = [0_usize; 4];
+    for (index, &dimension) in shape.dims().iter().enumerate() {
+        dims[index] = usize::try_from(dimension).map_err(|_| DispatchError::ShapeConversion)?;
+    }
+    Ok((dims, shape.dims().len()))
+}
+
+fn f32_shape(shape: RuntimeShape) -> Result<trueos_kokoro_f32::Shape, DispatchError> {
+    let (dims, rank) = shape_dims(shape)?;
+    trueos_kokoro_f32::Shape::new(&dims[..rank]).map_err(DispatchError::F32)
+}
+
+fn contiguous_f32(shape: RuntimeShape) -> Result<trueos_kokoro_f32::TensorLayout, DispatchError> {
+    Ok(trueos_kokoro_f32::TensorLayout::contiguous(f32_shape(shape)?))
+}
+
+fn layout_shape(shape: RuntimeShape) -> Result<trueos_kokoro_layout::Shape, DispatchError> {
+    let (dims, rank) = shape_dims(shape)?;
+    trueos_kokoro_layout::Shape::new(&dims[..rank]).map_err(DispatchError::Layout)
+}

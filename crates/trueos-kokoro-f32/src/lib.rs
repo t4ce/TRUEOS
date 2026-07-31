@@ -12,6 +12,10 @@
 
 use core::mem::size_of;
 
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+mod avx2;
+
 pub const MAX_RANK: usize = 4;
 pub const PINNED_BINARY_NODES: usize = 1_444;
 pub const PINNED_REDUCE_MEAN_NODES: usize = 130;
@@ -48,6 +52,41 @@ pub enum Error {
     ParameterTooSmall,
     NonFiniteInput,
     NonFiniteOutput,
+    UnsupportedLane,
+}
+
+/// Runtime-selected implementation for the dominant contiguous f32 kernels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ElementwiseLane {
+    Scalar,
+    Avx2,
+}
+
+impl ElementwiseLane {
+    pub fn is_available(self) -> bool {
+        match self {
+            Self::Scalar => true,
+            Self::Avx2 => {
+                #[cfg(target_arch = "x86_64")]
+                {
+                    avx2::is_available()
+                }
+                #[cfg(not(target_arch = "x86_64"))]
+                {
+                    false
+                }
+            }
+        }
+    }
+}
+
+/// Detect AVX2 only when CPUID, OSXSAVE, and XCR0 all admit YMM state.
+pub fn elementwise_lane() -> ElementwiseLane {
+    if ElementwiseLane::Avx2.is_available() {
+        ElementwiseLane::Avx2
+    } else {
+        ElementwiseLane::Scalar
+    }
 }
 
 /// A checked scalar or rank-one-through-rank-four tensor shape.
@@ -238,6 +277,18 @@ impl TensorLayout {
         }
         offset
     }
+
+    fn is_contiguous(self) -> bool {
+        let mut expected_stride = 1usize;
+        for axis in (0..self.shape.rank()).rev() {
+            let dimension = self.shape.dims[axis];
+            if dimension > 1 && self.strides[axis] != expected_stride {
+                return false;
+            }
+            expected_stride *= dimension;
+        }
+        true
+    }
 }
 
 /// Compute ONNX multidirectional-broadcast output shape.
@@ -293,7 +344,21 @@ pub fn add(
     output: &mut [f32],
     output_layout: TensorLayout,
 ) -> Result<(), Error> {
+    add_on_lane(elementwise_lane(), lhs, lhs_layout, rhs, rhs_layout, output, output_layout)
+}
+
+/// `Add` with an explicit lane, primarily for a worker-owned dispatcher.
+pub fn add_on_lane(
+    lane: ElementwiseLane,
+    lhs: &[f32],
+    lhs_layout: TensorLayout,
+    rhs: &[f32],
+    rhs_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
     binary_elementwise(
+        lane,
         BinaryOperation::Add,
         lhs,
         lhs_layout,
@@ -313,7 +378,21 @@ pub fn mul(
     output: &mut [f32],
     output_layout: TensorLayout,
 ) -> Result<(), Error> {
+    mul_on_lane(elementwise_lane(), lhs, lhs_layout, rhs, rhs_layout, output, output_layout)
+}
+
+/// `Mul` with an explicit lane, primarily for a worker-owned dispatcher.
+pub fn mul_on_lane(
+    lane: ElementwiseLane,
+    lhs: &[f32],
+    lhs_layout: TensorLayout,
+    rhs: &[f32],
+    rhs_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
     binary_elementwise(
+        lane,
         BinaryOperation::Mul,
         lhs,
         lhs_layout,
@@ -333,7 +412,21 @@ pub fn div(
     output: &mut [f32],
     output_layout: TensorLayout,
 ) -> Result<(), Error> {
+    div_on_lane(elementwise_lane(), lhs, lhs_layout, rhs, rhs_layout, output, output_layout)
+}
+
+/// `Div` with an explicit lane, primarily for a worker-owned dispatcher.
+pub fn div_on_lane(
+    lane: ElementwiseLane,
+    lhs: &[f32],
+    lhs_layout: TensorLayout,
+    rhs: &[f32],
+    rhs_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
     binary_elementwise(
+        lane,
         BinaryOperation::Div,
         lhs,
         lhs_layout,
@@ -353,7 +446,21 @@ pub fn sub(
     output: &mut [f32],
     output_layout: TensorLayout,
 ) -> Result<(), Error> {
+    sub_on_lane(elementwise_lane(), lhs, lhs_layout, rhs, rhs_layout, output, output_layout)
+}
+
+/// `Sub` with an explicit lane, primarily for a worker-owned dispatcher.
+pub fn sub_on_lane(
+    lane: ElementwiseLane,
+    lhs: &[f32],
+    lhs_layout: TensorLayout,
+    rhs: &[f32],
+    rhs_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
     binary_elementwise(
+        lane,
         BinaryOperation::Sub,
         lhs,
         lhs_layout,
@@ -423,7 +530,25 @@ pub fn pow_square(
     output: &mut [f32],
     output_layout: TensorLayout,
 ) -> Result<(), Error> {
-    unary_elementwise(UnaryOperation::Square, input, input_layout, output, output_layout)
+    pow_square_on_lane(elementwise_lane(), input, input_layout, output, output_layout)
+}
+
+/// Pinned square specialization with an explicit worker lane.
+pub fn pow_square_on_lane(
+    lane: ElementwiseLane,
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    unary_elementwise_on_lane(
+        lane,
+        UnaryOperation::Square,
+        input,
+        input_layout,
+        output,
+        output_layout,
+    )
 }
 
 /// ONNX `Sqrt` over checked rank-four strided views.
@@ -537,12 +662,46 @@ fn unary_elementwise(
     output: &mut [f32],
     output_layout: TensorLayout,
 ) -> Result<(), Error> {
+    unary_elementwise_on_lane(
+        ElementwiseLane::Scalar,
+        operation,
+        input,
+        input_layout,
+        output,
+        output_layout,
+    )
+}
+
+fn unary_elementwise_on_lane(
+    lane: ElementwiseLane,
+    operation: UnaryOperation,
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
     validate_input_layout(input, input_layout)?;
     validate_output_layout(output, output_layout)?;
     if input_layout.shape != output_layout.shape {
         return Err(Error::OutputShapeMismatch);
     }
     reject_alias(output, input)?;
+    if !lane.is_available() {
+        return Err(Error::UnsupportedLane);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    if lane == ElementwiseLane::Avx2
+        && matches!(operation, UnaryOperation::Square)
+        && input_layout.is_contiguous()
+        && output_layout.is_contiguous()
+    {
+        let elements = input_layout.shape.element_count();
+        let input = contiguous_input(input, input_layout, elements).ok_or(Error::BufferTooSmall)?;
+        let output =
+            contiguous_output(output, output_layout, elements).ok_or(Error::BufferTooSmall)?;
+        return avx2::square(input, output);
+    }
 
     let shape = input_layout.shape;
     let mut coordinates = [0usize; MAX_RANK];
@@ -596,7 +755,9 @@ fn round_ties_even(value: f32) -> f32 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn binary_elementwise(
+    lane: ElementwiseLane,
     operation: BinaryOperation,
     lhs: &[f32],
     lhs_layout: TensorLayout,
@@ -614,6 +775,45 @@ fn binary_elementwise(
     }
     reject_alias(output, lhs)?;
     reject_alias(output, rhs)?;
+    if !lane.is_available() {
+        return Err(Error::UnsupportedLane);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    if lane == ElementwiseLane::Avx2 && output_layout.is_contiguous() {
+        let elements = expected.element_count();
+        if lhs_layout.shape == expected
+            && rhs_layout.shape == expected
+            && lhs_layout.is_contiguous()
+            && rhs_layout.is_contiguous()
+        {
+            let lhs = contiguous_input(lhs, lhs_layout, elements).ok_or(Error::BufferTooSmall)?;
+            let rhs = contiguous_input(rhs, rhs_layout, elements).ok_or(Error::BufferTooSmall)?;
+            let output =
+                contiguous_output(output, output_layout, elements).ok_or(Error::BufferTooSmall)?;
+            return avx2::binary_pair(operation, lhs, rhs, output);
+        }
+        if lhs_layout.shape.element_count() == 1
+            && rhs_layout.shape == expected
+            && rhs_layout.is_contiguous()
+        {
+            let lhs = *lhs.get(lhs_layout.offset).ok_or(Error::BufferTooSmall)?;
+            let rhs = contiguous_input(rhs, rhs_layout, elements).ok_or(Error::BufferTooSmall)?;
+            let output =
+                contiguous_output(output, output_layout, elements).ok_or(Error::BufferTooSmall)?;
+            return avx2::binary_lhs_scalar(operation, lhs, rhs, output);
+        }
+        if rhs_layout.shape.element_count() == 1
+            && lhs_layout.shape == expected
+            && lhs_layout.is_contiguous()
+        {
+            let lhs = contiguous_input(lhs, lhs_layout, elements).ok_or(Error::BufferTooSmall)?;
+            let rhs = *rhs.get(rhs_layout.offset).ok_or(Error::BufferTooSmall)?;
+            let output =
+                contiguous_output(output, output_layout, elements).ok_or(Error::BufferTooSmall)?;
+            return avx2::binary_rhs_scalar(operation, lhs, rhs, output);
+        }
+    }
 
     let mut coordinates = [0usize; MAX_RANK];
     for linear in 0..expected.element_count() {
@@ -638,6 +838,20 @@ fn binary_elementwise(
         output[output_offset] = operation.apply(lhs[lhs_offset], rhs[rhs_offset]);
     }
     Ok(())
+}
+
+fn contiguous_input(data: &[f32], layout: TensorLayout, elements: usize) -> Option<&[f32]> {
+    let end = layout.offset.checked_add(elements)?;
+    data.get(layout.offset..end)
+}
+
+fn contiguous_output(
+    data: &mut [f32],
+    layout: TensorLayout,
+    elements: usize,
+) -> Option<&mut [f32]> {
+    let end = layout.offset.checked_add(elements)?;
+    data.get_mut(layout.offset..end)
 }
 
 fn validate_input_layout(data: &[f32], layout: TensorLayout) -> Result<(), Error> {
@@ -1128,6 +1342,23 @@ mod tests {
 
     const ORT127_POW_SQUARE: &[u8] = include_bytes!("../tests/fixtures/ort127_pow_square.bin");
 
+    type BinaryLaneKernel = fn(
+        ElementwiseLane,
+        &[f32],
+        TensorLayout,
+        &[f32],
+        TensorLayout,
+        &mut [f32],
+        TensorLayout,
+    ) -> Result<(), Error>;
+
+    const BINARY_LANE_KERNELS: [(&str, BinaryLaneKernel); 4] = [
+        ("add", add_on_lane),
+        ("mul", mul_on_lane),
+        ("div", div_on_lane),
+        ("sub", sub_on_lane),
+    ];
+
     // Generated with ONNX 1.22.0 and ONNX Runtime 1.28.0, optimizations
     // disabled, sequential CPU execution, opset 20 / com.microsoft opset 1.
 
@@ -1263,6 +1494,233 @@ mod tests {
             Err(Error::NonFiniteOutput)
         );
         assert_eq!(output, [123.0; 4]);
+    }
+
+    #[test]
+    fn avx2_binary_pair_and_scalar_broadcast_are_bit_exact() {
+        if !ElementwiseLane::Avx2.is_available() {
+            return;
+        }
+        assert_eq!(elementwise_lane(), ElementwiseLane::Avx2);
+
+        let shape = Shape::new(&[257]).unwrap();
+        let layout = TensorLayout::contiguous(shape);
+        let lhs_pattern = [
+            -0.0,
+            0.0,
+            f32::from_bits(1),
+            -f32::from_bits(1),
+            f32::MIN_POSITIVE,
+            -f32::MIN_POSITIVE,
+            0.125,
+            -3.75,
+            1024.0,
+        ];
+        let rhs_pattern = [1.0, -1.0, 2.0, -2.0, 0.5, -0.25, 3.0, -8.0, 0.75];
+        let lhs: Vec<_> = (0..shape.element_count())
+            .map(|index| lhs_pattern[index % lhs_pattern.len()])
+            .collect();
+        let rhs: Vec<_> = (0..shape.element_count())
+            .map(|index| rhs_pattern[index % rhs_pattern.len()])
+            .collect();
+        let scalar_shape = Shape::scalar();
+        let scalar_layout = TensorLayout::contiguous(scalar_shape);
+
+        for (name, kernel) in BINARY_LANE_KERNELS {
+            let mut scalar = vec![f32::NAN; shape.element_count()];
+            let mut vector = vec![f32::NAN; shape.element_count()];
+            kernel(ElementwiseLane::Scalar, &lhs, layout, &rhs, layout, &mut scalar, layout)
+                .unwrap();
+            kernel(ElementwiseLane::Avx2, &lhs, layout, &rhs, layout, &mut vector, layout).unwrap();
+            assert_eq!(
+                vector
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                scalar
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                "same-shape {name}"
+            );
+
+            for lhs_is_scalar in [true, false] {
+                scalar.fill(f32::NAN);
+                vector.fill(f32::NAN);
+                let one = [-0.75_f32];
+                let (left, left_layout, right, right_layout) = if lhs_is_scalar {
+                    (&one[..], scalar_layout, &rhs[..], layout)
+                } else {
+                    (&lhs[..], layout, &one[..], scalar_layout)
+                };
+                kernel(
+                    ElementwiseLane::Scalar,
+                    left,
+                    left_layout,
+                    right,
+                    right_layout,
+                    &mut scalar,
+                    layout,
+                )
+                .unwrap();
+                kernel(
+                    ElementwiseLane::Avx2,
+                    left,
+                    left_layout,
+                    right,
+                    right_layout,
+                    &mut vector,
+                    layout,
+                )
+                .unwrap();
+                assert_eq!(
+                    vector
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>(),
+                    scalar
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>(),
+                    "scalar-broadcast {name} lhs_is_scalar={lhs_is_scalar}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn avx2_square_is_bit_exact_including_tail_subnormal_and_signed_zero() {
+        if !ElementwiseLane::Avx2.is_available() {
+            return;
+        }
+        let shape = Shape::new(&[257]).unwrap();
+        let layout = TensorLayout::contiguous(shape);
+        let pattern = [
+            -0.0,
+            0.0,
+            f32::from_bits(1),
+            -f32::from_bits(1),
+            f32::MIN_POSITIVE,
+            -f32::MIN_POSITIVE,
+            0.25,
+            -3.75,
+            10_000_000_000.0,
+        ];
+        let input: Vec<_> = (0..shape.element_count())
+            .map(|index| pattern[index % pattern.len()])
+            .collect();
+        let mut scalar = vec![f32::NAN; shape.element_count()];
+        let mut vector = vec![f32::NAN; shape.element_count()];
+        pow_square_on_lane(ElementwiseLane::Scalar, &input, layout, &mut scalar, layout).unwrap();
+        pow_square_on_lane(ElementwiseLane::Avx2, &input, layout, &mut vector, layout).unwrap();
+        assert_eq!(
+            vector
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            scalar
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn avx2_validation_matches_scalar_and_never_partially_writes() {
+        if !ElementwiseLane::Avx2.is_available() {
+            return;
+        }
+        let shape = Shape::new(&[19]).unwrap();
+        let layout = TensorLayout::contiguous(shape);
+
+        for (name, kernel) in BINARY_LANE_KERNELS {
+            let mut lhs = vec![2.0_f32; shape.element_count()];
+            let mut rhs = vec![3.0_f32; shape.element_count()];
+            match name {
+                "add" | "mul" => {
+                    lhs[8] = f32::MAX;
+                    rhs[8] = f32::MAX;
+                }
+                "div" => rhs[16] = 0.0,
+                "sub" => {
+                    lhs[7] = f32::MAX;
+                    rhs[7] = -f32::MAX;
+                }
+                _ => unreachable!(),
+            }
+            let mut scalar = vec![91.0_f32; shape.element_count()];
+            let mut vector = scalar.clone();
+            let scalar_error =
+                kernel(ElementwiseLane::Scalar, &lhs, layout, &rhs, layout, &mut scalar, layout);
+            let vector_error =
+                kernel(ElementwiseLane::Avx2, &lhs, layout, &rhs, layout, &mut vector, layout);
+            assert_eq!(vector_error, scalar_error, "{name} error class");
+            assert_eq!(vector_error, Err(Error::NonFiniteOutput), "{name}");
+            assert_eq!(scalar, vec![91.0; shape.element_count()]);
+            assert_eq!(vector, vec![91.0; shape.element_count()]);
+
+            lhs.fill(2.0);
+            rhs.fill(3.0);
+            rhs[15] = f32::NAN;
+            scalar.fill(92.0);
+            vector.fill(92.0);
+            let scalar_error =
+                kernel(ElementwiseLane::Scalar, &lhs, layout, &rhs, layout, &mut scalar, layout);
+            let vector_error =
+                kernel(ElementwiseLane::Avx2, &lhs, layout, &rhs, layout, &mut vector, layout);
+            assert_eq!(vector_error, scalar_error, "{name} input error class");
+            assert_eq!(vector_error, Err(Error::NonFiniteInput), "{name}");
+            assert_eq!(scalar, vec![92.0; shape.element_count()]);
+            assert_eq!(vector, vec![92.0; shape.element_count()]);
+        }
+
+        let mut input = vec![2.0_f32; shape.element_count()];
+        input[8] = f32::MAX;
+        let mut scalar = vec![93.0_f32; shape.element_count()];
+        let mut vector = scalar.clone();
+        let scalar_error =
+            pow_square_on_lane(ElementwiseLane::Scalar, &input, layout, &mut scalar, layout);
+        let vector_error =
+            pow_square_on_lane(ElementwiseLane::Avx2, &input, layout, &mut vector, layout);
+        assert_eq!(vector_error, scalar_error);
+        assert_eq!(vector_error, Err(Error::NonFiniteOutput));
+        assert_eq!(scalar, vec![93.0; shape.element_count()]);
+        assert_eq!(vector, vec![93.0; shape.element_count()]);
+    }
+
+    #[test]
+    fn explicit_avx2_lane_preserves_general_strided_fallback() {
+        if !ElementwiseLane::Avx2.is_available() {
+            return;
+        }
+        let shape = Shape::new(&[2, 3]).unwrap();
+        let input_layout = TensorLayout::strided(shape, &[4, 1], 1).unwrap();
+        let output_layout = TensorLayout::strided(shape, &[5, 1], 1).unwrap();
+        let lhs = [-9.0, 1.0, 2.0, 3.0, -9.0, 4.0, 5.0, 6.0];
+        let rhs = [-9.0, 10.0, 20.0, 30.0, -9.0, 40.0, 50.0, 60.0];
+        let mut scalar = [-7.0_f32; 9];
+        let mut vector = scalar;
+        add_on_lane(
+            ElementwiseLane::Scalar,
+            &lhs,
+            input_layout,
+            &rhs,
+            input_layout,
+            &mut scalar,
+            output_layout,
+        )
+        .unwrap();
+        add_on_lane(
+            ElementwiseLane::Avx2,
+            &lhs,
+            input_layout,
+            &rhs,
+            input_layout,
+            &mut vector,
+            output_layout,
+        )
+        .unwrap();
+        assert_eq!(vector.map(f32::to_bits), scalar.map(f32::to_bits));
     }
 
     #[test]

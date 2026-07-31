@@ -131,7 +131,17 @@ pub(crate) fn try_parse_tts(
         return ParseOutcome::Handled;
     }
     if !crate::r::ttstt_service::tts_backend_ready() {
-        print_shell_line(io, "tts: unavailable reason=native-kokoro-backend-warming");
+        if let Some(reason) = crate::r::ttstt_service::speech_backend_warm_failure_reason() {
+            print_shell_line(
+                io,
+                alloc::format!(
+                    "tts: unavailable reason=native-kokoro-backend-rejected detail={reason}"
+                )
+                .as_str(),
+            );
+        } else {
+            print_shell_line(io, "tts: unavailable reason=native-kokoro-backend-warming");
+        }
         print_status(io, "tts");
         return ParseOutcome::Handled;
     }
@@ -482,10 +492,18 @@ pub(crate) fn try_parse_stt(
         return ParseOutcome::Handled;
     }
     if !crate::r::ttstt_service::stt_backend_ready() {
-        print_shell_line(
-            io,
-            "stt: unavailable reason=native-whisper-backend-warming; no audio file was read",
-        );
+        if let Some(reason) = crate::r::ttstt_service::speech_backend_warm_failure_reason() {
+            print_shell_line(
+                io,
+                alloc::format!("stt: unavailable reason=speech-backend-rejected detail={reason}; no audio file was read")
+                    .as_str(),
+            );
+        } else {
+            print_shell_line(
+                io,
+                "stt: unavailable reason=native-whisper-backend-warming; no audio file was read",
+            );
+        }
         print_status(io, "stt");
         return ParseOutcome::Handled;
     }
@@ -526,6 +544,7 @@ fn print_status(io: &'static dyn ShellBackend2, command: &str) {
         ServiceState::Ready => "ready",
     };
     let backend = crate::r::ttstt_service::speech_backend_name().unwrap_or("unregistered");
+    let backend_failure = crate::r::ttstt_service::speech_backend_warm_failure_reason();
     let direction_ready = if command == "tts" {
         crate::r::ttstt_service::tts_backend_ready()
     } else {
@@ -533,6 +552,8 @@ fn print_status(io: &'static dyn ShellBackend2, command: &str) {
     };
     let backend_state = if backend == "unregistered" {
         "unregistered"
+    } else if backend_failure.is_some() {
+        "rejected"
     } else if direction_ready {
         "ready"
     } else {
@@ -543,7 +564,8 @@ fn print_status(io: &'static dyn ShellBackend2, command: &str) {
         print_shell_line(
             io,
             alloc::format!(
-                "tts: state={state} backend={backend} backend_state={backend_state} resident_bytes={} workers={} outstanding={} tts_outstanding={} tts_queued={} tts_active_job={} output_buffered_chunks={}/{} output_buffered_frames={} shell_waiting={}/{} shell_phase={} shell_request={} shell_job={} pcm_lane_pending_frames={} pcm_lane_paused={} hda_ready={} model_chunk_max_phonemes={} pcm_chunk_max_frames={} emitted_chunks={} emitted_frames={} service_streams_ok={} service_streams_failed={} handed_chunks={} handed_frames={} shell_completed={} shell_failed={} shell_cancelled={} policy=AP2+-prefer-pcore playback_completion=untracked",
+                "tts: state={state} backend={backend} backend_state={backend_state} backend_reason={} resident_bytes={} workers={} outstanding={} tts_outstanding={} tts_queued={} tts_active_job={} output_buffered_chunks={}/{} output_buffered_frames={} shell_waiting={}/{} shell_phase={} shell_request={} shell_job={} pcm_lane_pending_frames={} pcm_lane_paused={} hda_ready={} model_chunk_max_phonemes={} pcm_chunk_max_frames={} emitted_chunks={} emitted_frames={} service_streams_ok={} service_streams_failed={} handed_chunks={} handed_frames={} shell_completed={} shell_failed={} shell_cancelled={} policy=AP2+-prefer-pcore playback_completion=untracked",
+                backend_failure.unwrap_or("none"),
                 status.resident_bytes,
                 status.workers,
                 status.outstanding_jobs,
@@ -579,7 +601,8 @@ fn print_status(io: &'static dyn ShellBackend2, command: &str) {
         print_shell_line(
             io,
             alloc::format!(
-                "{command}: state={state} backend={backend} backend_state={backend_state} resident_bytes={} workers={} outstanding={} policy=AP2+-prefer-pcore",
+                "{command}: state={state} backend={backend} backend_state={backend_state} backend_reason={} resident_bytes={} workers={} outstanding={} policy=AP2+-prefer-pcore",
+                backend_failure.unwrap_or("none"),
                 status.resident_bytes,
                 status.workers,
                 status.outstanding_jobs

@@ -24,7 +24,16 @@ MODEL = ROOT / "crates/ttstt/.ttstt/models/kokoro/kokoro-rten.onnx"
 VOICES = ROOT / "crates/ttstt/.ttstt/models/kokoro/voices-v1.0.bin"
 RUST_MANIFEST = ROOT / "crates/trueos-kokoro-aot/Cargo.toml"
 RUST_INSPECTOR = ROOT / "crates/trueos-kokoro-aot/examples/inspect.rs"
+RUST_TARGET_DIR = ROOT / "target/kokoro-aot-host-test"
+TEST_SCRATCH_ROOT = ROOT / "target/kokoro-aot-host-test-scratch"
 HAS_ONNX = importlib.util.find_spec("onnx") is not None
+
+
+def test_scratch_directory() -> tempfile.TemporaryDirectory[str]:
+    """Keep large real-model fixtures off small or quota-limited /tmp mounts."""
+
+    TEST_SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(dir=TEST_SCRATCH_ROOT)
 
 
 class KokoroAotFixtureTests(unittest.TestCase):
@@ -222,7 +231,7 @@ class KokoroAotFixtureTests(unittest.TestCase):
             TOOL.inspect_aot(bytes(artifact))
 
     def test_atomic_writer_refuses_implicit_replacement(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with test_scratch_directory() as directory:
             path = Path(directory) / "fixture.kkaot"
             TOOL.write_atomic(path, b"first", False)
             with self.assertRaisesRegex(TOOL.CompileError, "destination exists"):
@@ -234,7 +243,7 @@ class KokoroAotFixtureTests(unittest.TestCase):
         "Rust cross-language inspector is not available",
     )
     def test_rust_parser_round_trip(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with test_scratch_directory() as directory:
             artifact = Path(directory) / "fixture.kkaot"
             artifact.write_bytes(TOOL.synthetic_fixture_artifact())
             completed = subprocess.run(
@@ -271,7 +280,7 @@ class KokoroAotFixtureTests(unittest.TestCase):
         "Rust cross-language inspector is not available",
     )
     def test_rust_parser_accepts_attribute_fixture(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with test_scratch_directory() as directory:
             artifact = Path(directory) / "attributes.kkaot"
             artifact.write_bytes(TOOL.synthetic_attribute_fixture_artifact())
             completed = subprocess.run(
@@ -375,13 +384,174 @@ class KokoroPinnedGraphTests(unittest.TestCase):
             report["phases"]["resolve_decoder_shape"]["output_bindings"],
             ["/encoder/CumSum_output_0", TOOL.FRAME_COUNT_TENSOR],
         )
+        self.assertTrue(lowering["structural_program_emitted"])
         self.assertFalse(lowering["executable_graph_emitted"])
+        structural = report["structural_program_plan"]
+        self.assertIsNotNone(structural)
+        assert structural is not None
+        capacities = structural["tensor_capacities"]
+        self.assertEqual(capacities["token_max"], 512)
+        self.assertEqual(capacities["frame_max"], 2_560)
+        self.assertEqual(capacities["descriptors"], 4_744)
+        self.assertEqual(
+            capacities["shape_sha256"],
+            TOOL.PINNED_CAPACITY_SHAPES_SHA256[2_560],
+        )
+        self.assertEqual(
+            capacities["runtime_shape_dependencies"],
+            {"static": 2_922, "n_only": 656, "f_only": 1_162, "n_and_f": 4},
+        )
+        self.assertEqual(capacities["dynamic_affine_descriptors"], 815)
+        self.assertEqual(
+            structural["arenas"],
+            {
+                "phase0_bytes": 33_229_952,
+                "phase1_min_bytes": 12_475_392,
+                "phase1_f2560_bytes": 1_572_883_968,
+                "phase1_max_bytes": 1_572_883_968,
+                "phase1_live_byte_lower_bound": 1_572_878_336,
+                "sizing_comparison": {
+                    "f2560": {
+                        "frame_max": 2_560,
+                        "operational": True,
+                        "live_byte_lower_bound": 1_572_878_336,
+                        "packed_bytes": 1_572_883_968,
+                        "packing_overhead_bytes": 5_632,
+                        "packing_overhead_ppb": 3_581,
+                        "packed_to_lower_bound_ratio": "1.000003580697",
+                    },
+                    "f3072": {
+                        "frame_max": 3_072,
+                        "operational": False,
+                        "live_byte_lower_bound": 1_887_451_136,
+                        "packed_bytes": 1_887_456_768,
+                        "packing_overhead_bytes": 5_632,
+                        "packing_overhead_ppb": 2_984,
+                        "packed_to_lower_bound_ratio": "1.000002983918",
+                    },
+                },
+                "alignment": 64,
+            },
+        )
+        self.assertEqual(structural["program"]["ops"], 2_227)
+        self.assertEqual(structural["program"]["bindings"], 7_314)
+        self.assertEqual(structural["program"]["slots"], 2_055)
+        self.assertEqual(
+            structural["program"]["slot_phase_counts"],
+            {"phase0": 788, "phase1": 1_123, "shared": 144},
+        )
+        self.assertEqual(structural["program"]["constant_tensors"], 762)
+        self.assertEqual(structural["program"]["constant_payload_bytes"], 123_168_704)
+        self.assertEqual(
+            structural["program"]["work_unit_contract"],
+            {
+                "record_counts": {
+                    "atomic_whole_op": 2_214,
+                    "float_conv_channel_time_tiles": 7,
+                    "resize_output_elements": 6,
+                },
+                "emitted_units": {
+                    "atomic_whole_op": 2_214,
+                    "float_conv_channel_time_tiles": 71_546_922,
+                    "resize_output_elements": 26_229_760,
+                },
+                "partial_slice_families": [
+                    "float_conv_channel_time_tiles",
+                    "resize_output_elements",
+                ],
+                "atomic_records_have_one_unit": True,
+            },
+        )
+        truth = structural["truth"]
+        self.assertTrue(truth["structural_program_emitted"])
+        self.assertTrue(truth["rust_program_parse_verified"])
+        self.assertFalse(truth["executable_graph_emitted"])
+        self.assertEqual(truth["artifact_bytes"], TOOL.PINNED_ARTIFACT_BYTES)
+        self.assertEqual(
+            truth["runtime_blockers"],
+            {
+                "dynamic_no_copy_view_records": 14,
+                "memory_alias_identity_view_records": 258,
+                "quant_adapter_records": 235,
+                "atomic_bilstm_records": 6,
+                "atomic_stft_records": 1,
+            },
+        )
         self.assertEqual(
             self.analysis.ranks[
                 "/decoder/decoder/generator/istft/stft/Reshape_1_output_0"
             ],
             2,
         )
+
+    def test_real_structural_artifact_is_canonical(self) -> None:
+        plan = self.analysis.executable_plan
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        artifact = TOOL.emit_pinned_program(self.analysis)
+        inspected = TOOL.inspect_aot(artifact)
+        self.assertEqual(len(artifact), TOOL.PINNED_ARTIFACT_BYTES)
+        self.assertEqual(
+            inspected["artifact_sha256"],
+            TOOL.PINNED_ARTIFACT_SEAL_SHA256,
+        )
+        self.assertEqual(
+            inspected["file_sha256"],
+            TOOL.PINNED_ARTIFACT_FILE_SHA256,
+        )
+        self.assertEqual(
+            inspected["sections"],
+            {
+                "tensors": 4_744,
+                "slots": 2_055,
+                "ops": 2_227,
+                "bindings": 7_314,
+                "phases": 2,
+                "data": 123_223_824,
+            },
+        )
+
+    @unittest.skipUnless(
+        shutil.which("cargo") and RUST_MANIFEST.is_file() and RUST_INSPECTOR.is_file(),
+        "Rust cross-language inspector is not available",
+    )
+    def test_rust_parser_accepts_real_structural_program(self) -> None:
+        plan = self.analysis.executable_plan
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        artifact = TOOL.emit_pinned_program(self.analysis)
+        with test_scratch_directory() as directory:
+            path = Path(directory) / "kokoro.kkaot"
+            path.write_bytes(artifact)
+            completed = subprocess.run(
+                [
+                    "cargo",
+                    "run",
+                    "--quiet",
+                    "--manifest-path",
+                    str(RUST_MANIFEST),
+                    "--target-dir",
+                    str(RUST_TARGET_DIR),
+                    "--example",
+                    "inspect",
+                    "--",
+                    str(path),
+                    "2560",
+                ],
+                cwd="/tmp",
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertIn("section[0]=Tensors offset=352 count=4744", completed.stdout)
+        self.assertIn("phase=Phase0 ops=0..1079 arena=33229952..33229952", completed.stdout)
+        self.assertIn(
+            "phase=Phase1 ops=1079..2227 arena=12475392..1572883968",
+            completed.stdout,
+        )
+        self.assertIn("resolved_arena_bytes=1572883968", completed.stdout)
 
     def test_complete_attributes_and_source_ownership(self) -> None:
         owners: list[int] = []
@@ -404,6 +574,51 @@ class KokoroPinnedGraphTests(unittest.TestCase):
         self.assertEqual(resolver.owned_sources, tuple(range(1_738, 1_747)))
         self.assertEqual(len(resolver.inputs), 2)
         self.assertEqual(len(resolver.outputs), 2)
+
+    def test_structural_program_is_byte_exact_and_rust_parseable(self) -> None:
+        artifact = TOOL.emit_pinned_program(self.analysis)
+        self.assertEqual(len(artifact), TOOL.PINNED_ARTIFACT_BYTES)
+        self.assertEqual(
+            TOOL.hashlib.sha256(artifact).hexdigest(),
+            TOOL.PINNED_ARTIFACT_FILE_SHA256,
+        )
+        inspected = TOOL.inspect_aot(artifact)
+        self.assertEqual(
+            inspected["artifact_sha256"], TOOL.PINNED_ARTIFACT_SEAL_SHA256
+        )
+        self.assertEqual(inspected["sections"]["tensors"], 4_744)
+        self.assertEqual(inspected["sections"]["slots"], 2_055)
+        self.assertEqual(inspected["sections"]["ops"], 2_227)
+
+        if shutil.which("cargo") and RUST_MANIFEST.is_file() and RUST_INSPECTOR.is_file():
+            with test_scratch_directory() as directory:
+                path = Path(directory) / "kokoro.kkaot"
+                path.write_bytes(artifact)
+                completed = subprocess.run(
+                    [
+                        "cargo",
+                        "run",
+                        "--quiet",
+                        "--manifest-path",
+                        str(RUST_MANIFEST),
+                        "--target-dir",
+                        str(RUST_TARGET_DIR),
+                        "--example",
+                        "inspect",
+                        "--",
+                        str(path),
+                    ],
+                    cwd="/tmp",
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stdout)
+                self.assertIn(
+                    f"artifact_sha256={TOOL.PINNED_ARTIFACT_SEAL_SHA256}",
+                    completed.stdout,
+                )
 
     def test_model_hash_change_is_rejected(self) -> None:
         with self.assertRaisesRegex(TOOL.CompileError, "SHA-256"):

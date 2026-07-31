@@ -39,15 +39,14 @@ pub fn canonicalize_ipa(input: &str) -> Result<EncodedPhonemes, IpaError> {
     let mut characters = input.chars().peekable();
     while let Some(character) = characters.next() {
         let mut lookahead = characters.clone();
-        if matches!(lookahead.next(), Some('\u{035c}' | '\u{0361}')) {
-            if let Some(right) = lookahead.next()
-                && let Some(affricate) = affricate(character, right)
-            {
-                characters.next();
-                characters.next();
-                push(&mut output, affricate)?;
-                continue;
-            }
+        if matches!(lookahead.next(), Some('\u{035c}' | '\u{0361}'))
+            && let Some(right) = lookahead.next()
+            && let Some(affricate) = affricate(character, right)
+        {
+            characters.next();
+            characters.next();
+            push(&mut output, affricate)?;
+            continue;
         }
         if character == 'ɜ' && characters.peek() == Some(&'˞') {
             characters.next();
@@ -111,8 +110,8 @@ fn push_mapped(output: &mut EncodedPhonemes, character: char) -> Result<(), IpaE
         '\u{035c}' | '\u{0361}' | '\u{0301}' | '\u{0306}' | '\u{0308}' | '\u{030a}'
         | '\u{030d}' | '\u{0319}' | '\u{031a}' | '\u{031d}' | '\u{031e}' | '\u{031f}'
         | '\u{0320}' | '\u{0325}' | '\u{0329}' | '\u{032a}' | '\u{032c}' | '\u{032f}'
-        | '\u{0330}' | '\u{0346}' | '˞' | 'ˤ' | '˥' | '˦' | '˧' | '˨' | '˩' | '˭' | '-' | '‿'
-        | '⁽' | '⁾' => Ok(()),
+        | '\u{0330}' | '\u{0346}' | '\u{200d}' | '˞' | 'ˤ' | '˥' | '˦' | '˧' | '˨' | '˩' | '˭'
+        | '-' | '‿' | '⁽' | '⁾' => Ok(()),
         value if value.is_whitespace() => push(output, ' '),
         value => push(output, value),
     }

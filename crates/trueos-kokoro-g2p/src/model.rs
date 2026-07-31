@@ -252,13 +252,17 @@ impl<'a> Model<'a> {
         if bytes.len() != PINNED_ENGLISH_BYTES {
             return Err(ModelError::EnglishSizeMismatch);
         }
-        let model = Self::parse(bytes)?;
-        if model.order != 6 || model.logo {
-            return Err(ModelError::EnglishProfileMismatch);
-        }
+        // Authenticate the resident image before interpreting attacker-controlled
+        // counts or allocating any indexes.  Apart from making the provenance
+        // boundary explicit, this keeps a same-sized corrupt image from driving
+        // the general parser's (bounded but deliberately generous) allocations.
         let digest: [u8; 32] = Sha256::digest(bytes).into();
         if digest != PINNED_ENGLISH_SHA256 {
             return Err(ModelError::EnglishDigestMismatch);
+        }
+        let model = Self::parse(bytes)?;
+        if model.order != 6 || model.logo {
+            return Err(ModelError::EnglishProfileMismatch);
         }
         Ok(model)
     }
@@ -320,7 +324,11 @@ impl<'a> Model<'a> {
                 + ngram_index_bytes
                 + backoff_index_bytes
                 + lexicon_index_bytes,
-            contiguous_allocations: 5,
+            contiguous_allocations: usize::from(self.tokens.capacity() != 0)
+                + usize::from(self.graphs.capacity() != 0)
+                + usize::from(self.ngrams.capacity() != 0)
+                + usize::from(self.backoffs.capacity() != 0)
+                + usize::from(self.lexicon.capacity() != 0),
         }
     }
 

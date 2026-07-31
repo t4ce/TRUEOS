@@ -37,6 +37,7 @@ pub mod static_slots;
 pub mod stream;
 pub mod sync;
 pub mod time;
+pub mod ttstt_kokoro;
 pub mod ttstt_service;
 pub mod ui_cursor;
 pub mod ui_surface;

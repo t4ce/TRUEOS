@@ -31,11 +31,22 @@ pub fn dynamic_quantize_linear_u8(
     input: &[f32],
     output: &mut [u8],
 ) -> Result<DynamicQuantization, QuantizationError> {
+    let quantization = dynamic_quantization_parameters(input)?;
+    quantize_linear_u8_with_parameters(input, quantization, output)?;
+    Ok(quantization)
+}
+
+/// Compute the exact ONNX `DynamicQuantizeLinear` scale and zero point
+/// without materializing the quantized tensor.
+///
+/// This lets fused matrix and convolution adapters quantize one bounded row
+/// or receptive-field patch at a time while preserving the whole-input
+/// reduction semantics.
+pub fn dynamic_quantization_parameters(
+    input: &[f32],
+) -> Result<DynamicQuantization, QuantizationError> {
     if input.is_empty() {
         return Err(QuantizationError::EmptyInput);
-    }
-    if output.len() < input.len() {
-        return Err(QuantizationError::OutputTooSmall);
     }
 
     let mut minimum = 0.0f32;
@@ -59,11 +70,44 @@ pub fn dynamic_quantize_linear_u8(
     let zero_point_f32 = round_ties_even_small((-minimum / scale).clamp(0.0, 255.0));
     let zero_point = zero_point_f32 as u8;
 
+    Ok(DynamicQuantization { scale, zero_point })
+}
+
+/// Quantize a bounded slice with parameters derived from the complete source
+/// tensor by [`dynamic_quantization_parameters`].
+///
+/// Validation completes before the destination changes, so callers may reuse
+/// a small row or patch buffer transactionally.
+pub fn quantize_linear_u8_with_parameters(
+    input: &[f32],
+    quantization: DynamicQuantization,
+    output: &mut [u8],
+) -> Result<(), QuantizationError> {
+    if input.is_empty() {
+        return Err(QuantizationError::EmptyInput);
+    }
+    if output.len() < input.len() {
+        return Err(QuantizationError::OutputTooSmall);
+    }
+    if !quantization.scale.is_finite() || quantization.scale <= 0.0 {
+        return Err(QuantizationError::InvalidScale);
+    }
+    if input.iter().any(|value| !value.is_finite()) {
+        return Err(QuantizationError::NonFiniteInput);
+    }
+
     for (&value, quantized) in input.iter().zip(output.iter_mut()) {
-        let rounded = round_ties_even_small(value / scale) + zero_point_f32;
+        let rounded = round_ties_even_small(value / quantization.scale)
+            + f32::from(quantization.zero_point);
         *quantized = rounded.clamp(0.0, 255.0) as u8;
     }
-    Ok(DynamicQuantization { scale, zero_point })
+    Ok(())
+}
+
+pub(crate) fn quantize_value_u8(value: f32, quantization: DynamicQuantization) -> u8 {
+    let rounded = round_ties_even_small(value / quantization.scale)
+        + f32::from(quantization.zero_point);
+    rounded.clamp(0.0, 255.0) as u8
 }
 
 /// Compute the scalar scale used by every ConvInteger epilogue in the pinned
@@ -276,6 +320,19 @@ mod tests {
         assert_eq!(quantization.scale.to_bits(), 0x3D44_C4C5);
         assert_eq!(quantization.zero_point, 68);
         assert_eq!(irregular, [0, 47, 66, 72, 125, 255]);
+    }
+
+    #[test]
+    fn split_parameter_and_bounded_quantization_matches_whole_tensor() {
+        let input = [-1.0, 0.0, 1.0, -0.5, 0.5, 0.25, -0.25];
+        let mut whole = [0_u8; 7];
+        let expected = dynamic_quantize_linear_u8(&input, &mut whole).unwrap();
+        let observed = dynamic_quantization_parameters(&input).unwrap();
+        assert_eq!(observed, expected);
+        let mut split = [0_u8; 7];
+        quantize_linear_u8_with_parameters(&input[..3], observed, &mut split[..3]).unwrap();
+        quantize_linear_u8_with_parameters(&input[3..], observed, &mut split[3..]).unwrap();
+        assert_eq!(split, whole);
     }
 
     #[test]

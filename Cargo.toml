@@ -82,7 +82,9 @@ trueos-kokoro-audio = { path = "crates/trueos-kokoro-audio" }
 trueos-kokoro-conv = { path = "crates/trueos-kokoro-conv" }
 trueos-kokoro-exec = { path = "crates/trueos-kokoro-exec" }
 trueos-kokoro-f32 = { path = "crates/trueos-kokoro-f32" }
+trueos-kokoro-g2p = { path = "crates/trueos-kokoro-g2p" }
 trueos-kokoro-gemm = { path = "crates/trueos-kokoro-gemm" }
+trueos-kokoro-lexicon = { path = "crates/trueos-kokoro-lexicon" }
 trueos-kokoro-duration = { path = "crates/trueos-kokoro-duration" }
 trueos-kokoro-dispatch = { path = "crates/trueos-kokoro-dispatch" }
 trueos-kokoro-layout = { path = "crates/trueos-kokoro-layout" }

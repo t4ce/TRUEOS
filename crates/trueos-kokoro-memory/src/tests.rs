@@ -433,7 +433,7 @@ fn initialize_shapes<const N: usize>(program: &Program<'_>) -> TensorShapeTable<
 fn maps_data_fixed_views_externals_zero_size_and_every_dtype() {
     let (artifact, len) = aligned_fixture();
     let program = Program::parse(&artifact.0[..len]).unwrap();
-    let shapes = initialize_shapes::<20>(&program);
+    let mut shapes = initialize_shapes::<20>(&program);
 
     let input = AlignedF32([10.0, 20.0, 30.0, 40.0]);
     let mut output = AlignedF32([0.0; 4]);
@@ -464,7 +464,7 @@ fn maps_data_fixed_views_externals_zero_size_and_every_dtype() {
     let mut arena = AlignedArena([0; 512]);
     {
         let mut memory: TensorMemory<'_, '_, '_, 20, 8, 8> =
-            TensorMemory::phase_zero(&program, &shapes, &mut arena.0, &mut externals).unwrap();
+            TensorMemory::phase_zero(&program, &mut shapes, &mut arena.0, &mut externals).unwrap();
 
         memory
             .with_read::<f32, _, _>(1, |values, shape| {
@@ -532,7 +532,7 @@ fn maps_data_fixed_views_externals_zero_size_and_every_dtype() {
 fn operation_leases_enforce_aliases_and_exact_in_place_identity() {
     let (artifact, len) = aligned_fixture();
     let program = Program::parse(&artifact.0[..len]).unwrap();
-    let shapes = initialize_shapes::<20>(&program);
+    let mut shapes = initialize_shapes::<20>(&program);
     let input = AlignedF32([1.0, 2.0, 3.0, 4.0]);
     let mut output = AlignedF32([0.0; 4]);
     let mut second = AlignedF32([0.0; 4]);
@@ -548,7 +548,7 @@ fn operation_leases_enforce_aliases_and_exact_in_place_identity() {
         .unwrap();
     let mut arena = AlignedArena([0; 512]);
     let mut memory: TensorMemory<'_, '_, '_, 20, 4, 8> =
-        TensorMemory::phase_zero(&program, &shapes, &mut arena.0, &mut externals).unwrap();
+        TensorMemory::phase_zero(&program, &mut shapes, &mut arena.0, &mut externals).unwrap();
 
     memory
         .with_op(0, |op| {
@@ -640,14 +640,14 @@ fn constructors_reject_alignment_foreign_shapes_and_noncontiguous_views() {
     let mut aligned = AlignedArtifact([0; MAX_ARTIFACT_BYTES]);
     aligned.0[..original.len()].copy_from_slice(&original);
     let program = Program::parse(&aligned.0[..original.len()]).unwrap();
-    let shapes = initialize_shapes::<20>(&program);
+    let mut shapes = initialize_shapes::<20>(&program);
     let mut externals: ExternalBindings<'_, 1> = ExternalBindings::new();
     let mut arena = AlignedArena([0; 512]);
 
     assert!(matches!(
         TensorMemory::<'_, '_, '_, 20, 1, 8>::phase_zero(
             &program,
-            &shapes,
+            &mut shapes,
             &mut arena.0[1..],
             &mut externals,
         ),
@@ -656,7 +656,7 @@ fn constructors_reject_alignment_foreign_shapes_and_noncontiguous_views() {
     assert!(matches!(
         TensorMemory::<'_, '_, '_, 20, 1, 8>::phase_zero(
             &program,
-            &shapes,
+            &mut shapes,
             &mut arena.0[..64],
             &mut externals,
         ),
@@ -666,11 +666,11 @@ fn constructors_reject_alignment_foreign_shapes_and_noncontiguous_views() {
     let mut shifted = AlignedArtifact([0; MAX_ARTIFACT_BYTES]);
     shifted.0[1..1 + original.len()].copy_from_slice(&original);
     let shifted_program = Program::parse(&shifted.0[1..1 + original.len()]).unwrap();
-    let shifted_shapes = initialize_shapes::<20>(&shifted_program);
+    let mut shifted_shapes = initialize_shapes::<20>(&shifted_program);
     assert!(matches!(
         TensorMemory::<'_, '_, '_, 20, 1, 8>::phase_zero(
             &shifted_program,
-            &shifted_shapes,
+            &mut shifted_shapes,
             &mut arena.0,
             &mut externals,
         ),
@@ -684,11 +684,11 @@ fn constructors_reject_alignment_foreign_shapes_and_noncontiguous_views() {
     let mut foreign_aligned = AlignedArtifact([0; MAX_ARTIFACT_BYTES]);
     foreign_aligned.0[..foreign_bytes.len()].copy_from_slice(&foreign_bytes);
     let foreign_program = Program::parse(&foreign_aligned.0[..foreign_bytes.len()]).unwrap();
-    let foreign_shapes = initialize_shapes::<20>(&foreign_program);
+    let mut foreign_shapes = initialize_shapes::<20>(&foreign_program);
     assert!(matches!(
         TensorMemory::<'_, '_, '_, 20, 1, 8>::phase_zero(
             &program,
-            &foreign_shapes,
+            &mut foreign_shapes,
             &mut arena.0,
             &mut externals,
         ),
@@ -698,6 +698,15 @@ fn constructors_reject_alignment_foreign_shapes_and_noncontiguous_views() {
     let mut strided = program.tensor(3).unwrap();
     strided.max_byte_strides[0] = 8;
     assert!(!view_is_contiguous(strided, RuntimeShape::new(&[2]).unwrap()).unwrap());
+
+    let mut logical_alias = program.tensor(3).unwrap();
+    logical_alias.rank = 2;
+    logical_alias.max_dims = [2, 3, 1, 1];
+    logical_alias.max_byte_strides = [12, 4, 0, 0];
+    assert!(
+        view_is_contiguous(logical_alias, RuntimeShape::new(&[1, 2]).unwrap()).unwrap(),
+        "a maximum-contiguous shape alias remains contiguous at its exact runtime shape"
+    );
 }
 
 struct AdmitDispatcher;
@@ -753,7 +762,7 @@ fn phase_one_uses_executor_admission_and_revalidates_slot_bases() {
     assert!(matches!(
         TensorMemory::<'_, '_, '_, 20, 2, 8>::phase_one(
             &program,
-            &shapes,
+            &mut shapes,
             &mut arena.0,
             admission,
             &executor.slot_bases()[..2],
@@ -765,7 +774,7 @@ fn phase_one_uses_executor_admission_and_revalidates_slot_bases() {
     assert!(matches!(
         TensorMemory::<'_, '_, '_, 20, 2, 8>::phase_one(
             &program,
-            &shapes,
+            &mut shapes,
             &mut arena.0,
             admission,
             &unresolved,
@@ -777,7 +786,7 @@ fn phase_one_uses_executor_admission_and_revalidates_slot_bases() {
     assert!(matches!(
         TensorMemory::<'_, '_, '_, 20, 2, 8>::phase_one(
             &program,
-            &shapes,
+            &mut shapes,
             &mut arena.0,
             admission,
             &misaligned,
@@ -789,7 +798,7 @@ fn phase_one_uses_executor_admission_and_revalidates_slot_bases() {
     assert!(matches!(
         TensorMemory::<'_, '_, '_, 20, 2, 8>::phase_one(
             &program,
-            &shapes,
+            &mut shapes,
             &mut arena.0,
             admission,
             &overlapping,
@@ -801,7 +810,7 @@ fn phase_one_uses_executor_admission_and_revalidates_slot_bases() {
     {
         let mut memory: TensorMemory<'_, '_, '_, 20, 2, 8> = TensorMemory::phase_one(
             &program,
-            &shapes,
+            &mut shapes,
             &mut arena.0,
             admission,
             executor.slot_bases(),
@@ -823,6 +832,43 @@ fn phase_one_uses_executor_admission_and_revalidates_slot_bases() {
             .unwrap();
     }
     assert_eq!(&output.0[..4], &[2.0, 4.0, 6.0, 8.0]);
+}
+
+#[test]
+fn output_shape_declaration_is_transactional_and_releases_for_phase_clear() {
+    let (artifact, len) = aligned_fixture();
+    let program = Program::parse(&artifact.0[..len]).unwrap();
+    let mut shapes = initialize_shapes::<20>(&program);
+    let mut externals: ExternalBindings<'_, 0> = ExternalBindings::new();
+    let mut arena = AlignedArena([0; 512]);
+    let first_output = program.op_output(program.op(0).unwrap(), 0).unwrap();
+    let original = shapes.shape(&program, first_output).unwrap();
+
+    {
+        let mut memory: TensorMemory<'_, '_, '_, 20, 0, 8> =
+            TensorMemory::phase_zero(&program, &mut shapes, &mut arena.0, &mut externals).unwrap();
+        assert_eq!(memory.tensor_shape(first_output), Ok(original));
+        assert_eq!(
+            memory.declare_op_outputs(
+                0,
+                &[
+                    RuntimeShape::new(&[2]).unwrap(),
+                    RuntimeShape::new(&[2]).unwrap(),
+                    RuntimeShape::scalar(),
+                ],
+            ),
+            Err(MemoryError::Shape(ShapeError::DimensionExceedsCapacity))
+        );
+        assert_eq!(memory.tensor_shape(first_output), Ok(original));
+        assert_eq!(
+            memory.declare_op_outputs(6, &[RuntimeShape::new(&[4]).unwrap()]),
+            Err(MemoryError::WrongPhase)
+        );
+    }
+
+    assert_eq!(shapes.shape(&program, first_output), Ok(original));
+    shapes.clear_phase(&program, Phase::Phase0).unwrap();
+    assert_eq!(shapes.shape(&program, first_output), Err(ShapeError::TensorUninitialized));
 }
 
 #[test]

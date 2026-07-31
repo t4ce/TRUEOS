@@ -21,7 +21,8 @@ mod quant;
 
 pub use quant::{
     DynamicQuantization, QuantizationError, conv_integer_scale, dequantize_conv_integer_ncw,
-    dequantize_matmul_integer_per_output, dynamic_quantize_linear_u8, quantize_conv_bias_floor,
+    dequantize_matmul_integer_per_output, dynamic_quantization_parameters,
+    dynamic_quantize_linear_u8, quantize_conv_bias_floor, quantize_linear_u8_with_parameters,
 };
 
 /// A CPU implementation of the unsigned-by-signed integer dot product.
@@ -97,6 +98,9 @@ pub enum Error {
     ScalesTooSmall,
     BiasTooSmall,
     ScratchTooSmall,
+    NonFiniteInput,
+    InvalidScale,
+    InvalidQuantization,
     InvalidConvolutionShape,
     UnsupportedLane,
 }
@@ -287,6 +291,80 @@ impl QConv1dParams<'_> {
         }
         Ok(output_width)
     }
+
+    fn validate_dequantized(
+        self,
+        input: &[f32],
+        weights: &[i8],
+        output: &[f32],
+        patch_scratch: &[u8],
+        activation_quantization: DynamicQuantization,
+        combined_scale: f32,
+        bias_quantized: Option<&[i32]>,
+    ) -> Result<usize, Error> {
+        let output_width = self.output_width()?;
+        let reduction = self
+            .input_channels
+            .checked_mul(self.kernel_width)
+            .ok_or(Error::ShapeOverflow)?;
+        let input_len = self
+            .batch
+            .checked_mul(self.input_channels)
+            .and_then(|elements| elements.checked_mul(self.input_width))
+            .ok_or(Error::ShapeOverflow)?;
+        let weights_len = self
+            .output_channels
+            .checked_mul(reduction)
+            .ok_or(Error::ShapeOverflow)?;
+        let output_len = self
+            .batch
+            .checked_mul(self.output_channels)
+            .and_then(|elements| elements.checked_mul(output_width))
+            .ok_or(Error::ShapeOverflow)?;
+        if input.len() < input_len {
+            return Err(Error::LhsTooSmall);
+        }
+        if weights.len() < weights_len {
+            return Err(Error::RhsTooSmall);
+        }
+        if output.len() < output_len {
+            return Err(Error::OutputTooSmall);
+        }
+        if patch_scratch.len() < reduction {
+            return Err(Error::ScratchTooSmall);
+        }
+        if !activation_quantization.scale.is_finite()
+            || activation_quantization.scale <= 0.0
+            || !combined_scale.is_finite()
+            || combined_scale <= 0.0
+        {
+            return Err(Error::InvalidScale);
+        }
+        let expected = dynamic_quantization_parameters(&input[..input_len]).map_err(|error| {
+            if error == QuantizationError::NonFiniteInput {
+                Error::NonFiniteInput
+            } else {
+                Error::InvalidQuantization
+            }
+        })?;
+        if expected.scale.to_bits() != activation_quantization.scale.to_bits()
+            || expected.zero_point != activation_quantization.zero_point
+            || self.input_zero_point != activation_quantization.zero_point
+        {
+            return Err(Error::InvalidQuantization);
+        }
+        self.weight_zero_points.validate(self.output_channels)?;
+        if self
+            .weight_row_sums
+            .is_some_and(|row_sums| row_sums.len() < self.output_channels)
+        {
+            return Err(Error::RowSumsTooSmall);
+        }
+        if bias_quantized.is_some_and(|bias| bias.len() < self.output_channels) {
+            return Err(Error::BiasTooSmall);
+        }
+        Ok(output_width)
+    }
 }
 
 /// A per-current-CPU runtime dispatcher.
@@ -429,6 +507,162 @@ impl Dispatcher {
         Ok(lane)
     }
 
+    /// Run the fused Kokoro ConvInteger epilogue without materializing either
+    /// the complete quantized activation or an i32 output tensor.
+    ///
+    /// The activation quantization parameters must have been reduced over the
+    /// whole `input_ncl`. Quantization is then performed only for each bounded
+    /// receptive-field patch; every i32 dot result is immediately bias-added,
+    /// cast, scaled, and committed to the f32 destination.
+    #[allow(clippy::too_many_arguments)]
+    pub fn qconv1d_dequantized(
+        self,
+        input_ncl: &[f32],
+        weights_oki: &[i8],
+        output_ncl: &mut [f32],
+        patch_scratch: &mut [u8],
+        params: QConv1dParams<'_>,
+        activation_quantization: DynamicQuantization,
+        combined_scale: f32,
+        bias_quantized: Option<&[i32]>,
+    ) -> Result<Lane, Error> {
+        let lane = self.best_lane();
+        self.qconv1d_dequantized_with_lane(
+            input_ncl,
+            weights_oki,
+            output_ncl,
+            patch_scratch,
+            params,
+            activation_quantization,
+            combined_scale,
+            bias_quantized,
+            lane,
+        )?;
+        Ok(lane)
+    }
+
+    /// Explicit-lane form of [`Self::qconv1d_dequantized`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn qconv1d_dequantized_with_lane(
+        self,
+        input_ncl: &[f32],
+        weights_oki: &[i8],
+        output_ncl: &mut [f32],
+        patch_scratch: &mut [u8],
+        params: QConv1dParams<'_>,
+        activation_quantization: DynamicQuantization,
+        combined_scale: f32,
+        bias_quantized: Option<&[i32]>,
+        lane: Lane,
+    ) -> Result<(), Error> {
+        let output_width = params.validate_dequantized(
+            input_ncl,
+            weights_oki,
+            output_ncl,
+            patch_scratch,
+            activation_quantization,
+            combined_scale,
+            bias_quantized,
+        )?;
+        if !self.supports(lane) {
+            return Err(Error::UnsupportedLane);
+        }
+        let reduction = params
+            .input_channels
+            .checked_mul(params.kernel_width)
+            .ok_or(Error::ShapeOverflow)?;
+
+        for batch in 0..params.batch {
+            let mut output_x = 0usize;
+            #[cfg(target_arch = "x86_64")]
+            if lane == Lane::AvxVnni
+                && patch_scratch.len() >= reduction.checked_mul(4).ok_or(Error::ShapeOverflow)?
+            {
+                while output_x + 4 <= output_width {
+                    let blocked_patches = &mut patch_scratch[..reduction * 4];
+                    for position in 0..4 {
+                        let patch_start = position * reduction;
+                        gather_qconv1d_patch_f32(
+                            input_ncl,
+                            &mut blocked_patches[patch_start..patch_start + reduction],
+                            params,
+                            activation_quantization,
+                            batch,
+                            output_x + position,
+                        )?;
+                    }
+                    let lhs_sums = [
+                        sum_u8(&blocked_patches[..reduction]),
+                        sum_u8(&blocked_patches[reduction..reduction * 2]),
+                        sum_u8(&blocked_patches[reduction * 2..reduction * 3]),
+                        sum_u8(&blocked_patches[reduction * 3..reduction * 4]),
+                    ];
+                    for output_channel in 0..params.output_channels {
+                        let weights_start = output_channel * reduction;
+                        let weights = &weights_oki[weights_start..weights_start + reduction];
+                        let raw = unsafe { raw_dot4_avx_vnni(blocked_patches, reduction, weights) };
+                        let weight_sum = params
+                            .weight_row_sums
+                            .map_or_else(|| sum_i8(weights), |sums| sums[output_channel]);
+                        let weight_zero_point = params.weight_zero_points.get(output_channel);
+                        let output_start = (batch * params.output_channels + output_channel)
+                            * output_width
+                            + output_x;
+                        let bias = bias_quantized.map_or(0, |values| values[output_channel]);
+                        for position in 0..4 {
+                            let accumulator = apply_zero_points(
+                                raw[position],
+                                lhs_sums[position],
+                                weight_sum,
+                                reduction,
+                                params.input_zero_point,
+                                weight_zero_point,
+                            )
+                            .wrapping_add(bias);
+                            output_ncl[output_start + position] =
+                                accumulator as f32 * combined_scale;
+                        }
+                    }
+                    output_x += 4;
+                }
+            }
+
+            while output_x < output_width {
+                let patch = &mut patch_scratch[..reduction];
+                gather_qconv1d_patch_f32(
+                    input_ncl,
+                    patch,
+                    params,
+                    activation_quantization,
+                    batch,
+                    output_x,
+                )?;
+                let lhs_sum = sum_u8(patch);
+                for output_channel in 0..params.output_channels {
+                    let weights_start = output_channel * reduction;
+                    let weights = &weights_oki[weights_start..weights_start + reduction];
+                    let weight_sum = params
+                        .weight_row_sums
+                        .map_or_else(|| sum_i8(weights), |sums| sums[output_channel]);
+                    let accumulator = apply_zero_points(
+                        raw_dot(patch, weights, lane),
+                        lhs_sum,
+                        weight_sum,
+                        reduction,
+                        params.input_zero_point,
+                        params.weight_zero_points.get(output_channel),
+                    )
+                    .wrapping_add(bias_quantized.map_or(0, |values| values[output_channel]));
+                    let output_index =
+                        (batch * params.output_channels + output_channel) * output_width + output_x;
+                    output_ncl[output_index] = accumulator as f32 * combined_scale;
+                }
+                output_x += 1;
+            }
+        }
+        Ok(())
+    }
+
     /// Run allocation-free 1-D ConvInteger on an explicitly selected lane.
     ///
     /// Out-of-bounds spatial taps are filled with `input_zero_point`, which is
@@ -566,6 +800,41 @@ fn gather_qconv1d_patch(
     Ok(())
 }
 
+fn gather_qconv1d_patch_f32(
+    input_ncl: &[f32],
+    patch: &mut [u8],
+    params: QConv1dParams<'_>,
+    quantization: DynamicQuantization,
+    batch: usize,
+    output_x: usize,
+) -> Result<(), Error> {
+    let output_origin = output_x
+        .checked_mul(params.stride)
+        .ok_or(Error::ShapeOverflow)?;
+    for kernel_x in 0..params.kernel_width {
+        let padded_x = kernel_x
+            .checked_mul(params.dilation)
+            .and_then(|offset| output_origin.checked_add(offset))
+            .ok_or(Error::ShapeOverflow)?;
+        let patch_start = kernel_x * params.input_channels;
+        let patch_slice = &mut patch[patch_start..patch_start + params.input_channels];
+        let Some(input_x) = padded_x.checked_sub(params.pad_left) else {
+            patch_slice.fill(params.input_zero_point);
+            continue;
+        };
+        if input_x >= params.input_width {
+            patch_slice.fill(params.input_zero_point);
+            continue;
+        }
+        for (input_channel, value) in patch_slice.iter_mut().enumerate() {
+            let input_index =
+                (batch * params.input_channels + input_channel) * params.input_width + input_x;
+            *value = quant::quantize_value_u8(input_ncl[input_index], quantization);
+        }
+    }
+    Ok(())
+}
+
 /// Shift one ONNX `u8` weight or zero point into the signed VNNI domain.
 ///
 /// The mapping is exact because `signed(w) - signed(zp) == w - zp` for all
@@ -606,7 +875,9 @@ pub fn pack_conv1d_weights_u8(
         return Err(Error::RowSumsTooSmall);
     }
 
-    for output_channel in 0..output_channels {
+    for (output_channel, packed_row_sum) in
+        packed_row_sums.iter_mut().take(output_channels).enumerate()
+    {
         let mut row_sum = 0i32;
         for kernel_x in 0..kernel_width {
             for input_channel in 0..input_channels {
@@ -619,7 +890,51 @@ pub fn pack_conv1d_weights_u8(
                 row_sum = row_sum.wrapping_add(i32::from(packed));
             }
         }
-        packed_row_sums[output_channel] = row_sum;
+        *packed_row_sum = row_sum;
+    }
+    Ok(())
+}
+
+/// Pack an ONNX MatMulInteger weight from `[k, n]` into the CPU-native
+/// transposed `[n, k]` layout and compute one signed row sum per output.
+///
+/// The pinned artifact preserves canonical ONNX initializer bytes. Calling
+/// this once while warming the model produces the layout accepted by
+/// [`Dispatcher::qgemm`] without changing or duplicating quantization. The
+/// packed bytes remain signed `i8`; only their order changes.
+pub fn pack_matmul_weights_i8(
+    weights_kn: &[i8],
+    k: usize,
+    n: usize,
+    packed_nk: &mut [i8],
+    packed_row_sums: &mut [i32],
+) -> Result<(), Error> {
+    if n == 0 {
+        return Err(Error::EmptyMatrix);
+    }
+    if k == 0 {
+        return Err(Error::EmptyReduction);
+    }
+    let elements = k.checked_mul(n).ok_or(Error::ShapeOverflow)?;
+    if weights_kn.len() < elements {
+        return Err(Error::RhsTooSmall);
+    }
+    if packed_nk.len() < elements {
+        return Err(Error::OutputTooSmall);
+    }
+    if packed_row_sums.len() < n {
+        return Err(Error::RowSumsTooSmall);
+    }
+
+    for (output, packed_row_sum) in packed_row_sums.iter_mut().take(n).enumerate() {
+        let mut row_sum = 0i32;
+        let destination = output * k;
+        for reduction in 0..k {
+            let value = weights_kn[reduction * n + output];
+            packed_nk[destination + reduction] = value;
+            row_sum = row_sum.wrapping_add(i32::from(value));
+        }
+        *packed_row_sum = row_sum;
     }
     Ok(())
 }
@@ -1008,7 +1323,7 @@ unsafe fn raw_dot4_avx_vnni(patches: &[u8], patch_stride: usize, rhs: &[i8]) -> 
     let mut index = 0usize;
     while index + 32 <= rhs.len() {
         let weights = unsafe { _mm256_loadu_si256(rhs.as_ptr().add(index).cast::<__m256i>()) };
-        for position in 0..4 {
+        for (position, accumulator) in accumulators.iter_mut().enumerate() {
             let activation = unsafe {
                 _mm256_loadu_si256(
                     patches
@@ -1017,8 +1332,7 @@ unsafe fn raw_dot4_avx_vnni(patches: &[u8], patch_stride: usize, rhs: &[i8]) -> 
                         .cast::<__m256i>(),
                 )
             };
-            accumulators[position] =
-                _mm256_dpbusd_avx_epi32(accumulators[position], activation, weights);
+            *accumulator = _mm256_dpbusd_avx_epi32(*accumulator, activation, weights);
         }
         index += 32;
     }
@@ -1291,6 +1605,77 @@ mod tests {
                 .dot_with_lane(&lhs, &rhs, lhs_zero_point, rhs_zero_point, Lane::Scalar,)
                 .unwrap(),
             direct
+        );
+    }
+
+    #[test]
+    fn matmulinteger_kn_pack_transposes_and_precomputes_rows() {
+        const K: usize = 3;
+        const N: usize = 4;
+
+        let weights_kn = [
+            -7i8, 2, 11, -13, // k=0
+            5, -17, 19, 23, // k=1
+            -29, 31, -37, 41, // k=2
+        ];
+        let mut packed_nk = [0i8; K * N];
+        let mut row_sums = [0i32; N];
+        pack_matmul_weights_i8(&weights_kn, K, N, &mut packed_nk, &mut row_sums).unwrap();
+
+        assert_eq!(packed_nk, [-7, 5, -29, 2, -17, 31, 11, 19, -37, -13, 23, 41]);
+        assert_eq!(row_sums, [-31, 16, -7, 51]);
+
+        let input = [3u8, 127, 251];
+        let zero_points = [-3i8, 0, 7, -11];
+        let params = QGemmParams {
+            m: 1,
+            n: N,
+            k: K,
+            lhs_zero_point: 113,
+            rhs_zero_points: RhsZeroPoints::PerOutput(&zero_points),
+            rhs_row_sums: Some(&row_sums),
+        };
+        let mut output = [0i32; N];
+        Dispatcher::detect()
+            .qgemm_with_lane(&input, &packed_nk, &mut output, params, Lane::Scalar)
+            .unwrap();
+        let expected = core::array::from_fn(|column| {
+            (0..K).fold(0i32, |sum, reduction| {
+                sum.wrapping_add(
+                    (i32::from(input[reduction]) - i32::from(params.lhs_zero_point)).wrapping_mul(
+                        i32::from(weights_kn[reduction * N + column])
+                            - i32::from(zero_points[column]),
+                    ),
+                )
+            })
+        });
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn matmulinteger_kn_pack_validation_is_fail_closed() {
+        let source = [1i8; 6];
+        let mut packed = [0i8; 6];
+        let mut sums = [0i32; 3];
+        assert_eq!(
+            pack_matmul_weights_i8(&source, 0, 3, &mut packed, &mut sums),
+            Err(Error::EmptyReduction)
+        );
+        assert_eq!(
+            pack_matmul_weights_i8(&source, 2, 0, &mut packed, &mut sums),
+            Err(Error::EmptyMatrix)
+        );
+        assert_eq!(
+            pack_matmul_weights_i8(&source[..5], 2, 3, &mut packed, &mut sums),
+            Err(Error::RhsTooSmall)
+        );
+        assert_eq!(
+            pack_matmul_weights_i8(&source, 2, 3, &mut packed[..5], &mut sums),
+            Err(Error::OutputTooSmall)
+        );
+        assert_eq!(
+            pack_matmul_weights_i8(&source, 2, 3, &mut packed, &mut sums[..2]),
+            Err(Error::RowSumsTooSmall)
         );
     }
 

@@ -3,22 +3,26 @@
 `compile_kokoro_aot.py` is a model-specific, fail-closed host tool for the
 prepared Kokoro graph. It does not attempt to be a general ONNX runtime.
 
-The checked-in tool currently provides three deliberately separate results:
+The checked-in tool provides four deliberately separate results:
 
 1. A complete audit/lowering inventory for the real 124 MB prepared graph.
 2. A complete canonical lowering inventory: every one of the 3,615 source
    nodes is owned exactly once by a typed scalar/f32/layout record, one of 235
    native quantized fusions, or the native duration resolver.
-3. A byte-exact v1 emitter exercised by a 1,651-byte synthetic program using
-   the native `DynamicQuantizedGemm`, `ResolveDecoderShape`, and
-   `DynamicQuantizedConv1d` opcodes.
+3. A byte-exact v1 emitter exercised by synthetic format/attribute fixtures
+   and by the full pinned graph.
+4. A complete structural program for the pinned graph: all 4,744 maximum
+   tensor descriptors, 762 constants, 2,055 post-fusion arena slots, 7,314
+   bindings, 2,227 work records, and both phase plans.
 
-The large ONNX graph, voice archive, and a large emitted program are not
-checked in. This step does not assign arena slots, tensor capacities, a
-fixed maximum frame count, or runtime logical shapes. Consequently it does
-not claim that the real analysis is already an executable Kokoro artifact.
-The complete lowering stream is a sealed input to that next planning step;
-real emission remains gated (`executable_graph_emitted=false`).
+The large ONNX graph, voice archive, and generated program are runtime assets,
+not source files. The compiler seals `N_max=512`, `F_max=2560`,
+exact capacity shapes, post-fusion liveness, fixed/shared offsets and affine
+phase-1 slots. Runtime logical shapes remain separate from those maximum
+capacities. This distinction is explicit in the report:
+`structural_program_emitted=true`, while
+`executable_graph_emitted=false` until dispatcher-owned sequential runtime
+shape inference is complete.
 
 ## Reproduce the audit
 
@@ -35,6 +39,16 @@ Then run:
 .venv-kokoro-aot/bin/python tools/ttstt/compile_kokoro_aot.py analyze \
   crates/ttstt/.ttstt/models/kokoro/kokoro-rten.onnx \
   --voices crates/ttstt/.ttstt/models/kokoro/voices-v1.0.bin
+```
+
+Emit the runtime artifact and its canonical report:
+
+```sh
+.venv-kokoro-aot/bin/python tools/ttstt/compile_kokoro_aot.py compile \
+  crates/ttstt/.ttstt/models/kokoro/kokoro-rten.onnx \
+  crates/ttstt/.ttstt/models/kokoro/kokoro.kkaot \
+  --voices crates/ttstt/.ttstt/models/kokoro/voices-v1.0.bin \
+  --report tools/ttstt/kokoro_aot_analysis.json --force
 ```
 
 The committed canonical result is
@@ -85,9 +99,10 @@ operators, 287 have initializer control tensors and 51 Reshape target tensors
 come from runtime `Concat` nodes. All 338 have a statically proven rank and
 alias root, but the latter 51 are not falsely described as compile-time-shaped.
 After quant fusion, 258 view records survive in the complete lowered stream;
-the other 80 Reshapes are owned by quantized Conv bias fusions. No full graph
-is emitted in this stepstone, so no artifact instantiates those runtime-
-resolved descriptors yet.
+the other 80 Reshapes are owned by quantized Conv bias fusions. All 338 source
+alias facts remain in the descriptor table. A dynamic owner cannot back a v1
+view, so the nine F-dependent owners with views retain maximum fixed capacity;
+their exact logical dimensions still travel through `TensorShapeTable`.
 The canonical tensor/alias/liveness plan hashes to
 `8bad04023c1aa2d2810646ea4558942e23e8aab1bd901c6cb8d292845db2c653`;
 the 235-entry native quantized lowering plan hashes to
@@ -200,11 +215,10 @@ There is intentionally no second allocation barrier after source node 2067.
 That point only finishes F0/N tensors shaped `[1,F]`, reveals no new size, and
 would carry 120 live values after decoder work has already begun.
 
-## Deferred frame-capacity planning
+## Sealed capacities and post-fusion arenas
 
-`F_max` is intentionally not part of this compiler result. Exact pinned-model
-ORT measurements on the i9 for a repeated legal 14-token phrase currently
-give these sizing points:
+Exact pinned-model ORT measurements on the i9 for a repeated legal 14-token
+phrase gave these sizing points:
 
 | Tokens | Speed | Audio samples | Decoder frames | Audio seconds |
 | ---: | ---: | ---: | ---: | ---: |
@@ -213,11 +227,69 @@ give these sizing points:
 | 252 | 0.5 | 744,600 | 2,482 | 31.025 |
 
 The intended native text policy targets 175–250 tokens, may grow to 450 at a
-sentence boundary, and uses 510 only as the graph hard fail-safe. `F_max=8192`
-is therefore a candidate, not a sealed choice. The next step must run the
-post-fusion allocator against that bound, prove the resulting memory budget,
-and pair fixed capacities with runtime logical tensor shapes before real AOT
-artifact emission can be enabled.
+sentence boundary, and uses 510 only as the graph hard fail-safe. The emitted
+program seals `N_max=512` and `F_max=2560`. The capacity interpreter proves all
+4,744 descriptors; its canonical SHA-256 is
+`ce83713e36d22cdc17c57d88d255112f3ad8fb80d8bc1f94561276070053cc09`.
+All 1,166 F-varying shapes are single-axis affine. Of these, 815 material or
+external descriptors can use the v1 symbolic-dimension field; views and their
+owners retain safe maxima.
+
+Post-fusion binding liveness produces 788 phase-0, 144 shared, and 1,123
+phase-1 slots. Deterministic interval packing yields:
+
+| Arena | Bytes |
+| --- | ---: |
+| Phase 0, fixed N=512 capacity | 33,229,952 |
+| Phase 1 at F=1 | 12,475,392 |
+| Phase 1 resolved at measured F=2482 | 1,524,960,768 |
+| Phase 1 at sealed F=2560 | 1,572,883,968 |
+
+F=2560 leaves 78 frames, or 3.14%, above the measured 2,482-frame slow-path
+utterance. If `ResolveDecoderShape` predicts more than 2,560 frames, admission
+must split the text and retry before phase-1 allocation. The former oversized
+diagnostic ceiling is rejected as an operational capacity because it would
+reserve about 5.03 GB for phase 1.
+
+The allocator is already effectively at the live-byte limit. The report keeps
+the independently planned F=3072 alternative visible so the policy choice is
+reviewable:
+
+| Bound | Live-byte lower bound | Packed bytes | Overhead | Packed/lower |
+| ---: | ---: | ---: | ---: | ---: |
+| F=2560 (sealed) | 1,572,878,336 | 1,572,883,968 | 5,632 | 1.000003580697 |
+| F=3072 (diagnostic) | 1,887,451,136 | 1,887,456,768 | 5,632 | 1.000002983918 |
+
+Choosing F=2560 saves 314,572,800 bytes (300 MiB) relative to F=3072. Further
+arena work should therefore target the model's true live set or chunking, not
+the placement heuristic.
+
+The iSTFT `NonZero` input has capacity 20 and its coordinate tensor has
+capacity `[1,20]`. Its second logical dimension remains the kernel-produced
+runtime count `0..20`; the allocator never mistakes capacity 20 for the
+invocation's actual coordinate count.
+
+## Structural emission and runtime execution gate
+
+Rust `Program::parse` accepts the full sealed artifact and resolves its affine
+arena at both F=2482 and F=2560. That proves format, section, descriptor,
+binding, liveness, and arena consistency; it does not claim audible inference.
+
+The v1 tensor descriptor carries a maximum shape and, where representable, one
+affine F axis. It is not a complete per-operation logical-shape formula table.
+The dispatcher must walk all 2,227 operations in order, infer each output shape
+from typed attributes, already-declared input shapes, and small control-tensor
+payloads, then atomically declare those outputs in `TensorShapeTable`. The
+executable gate stays false until every declaration matches the pinned RTen/
+ORT intermediate-shape oracle at more than one token/frame point.
+
+Work slicing follows the same fail-closed rule. Exactly 2,214 records are
+atomic and emit `work_units=1`, including the current quantized, BiLSTM, STFT,
+view/layout, scalar, and generic f32 adapters. Only six Resize records and seven
+float Conv/ConvTranspose records advertise partial work, because those
+dispatchers consume absolute output-element or channel/time coordinates.
+Quantized row/tile counts may be enabled later only when the adapter consumes
+absolute `WorkSlice` coordinates.
 
 ## Sealed fixture and tests
 
@@ -233,8 +305,13 @@ python3 tools/ttstt/compile_kokoro_aot.py inspect \
 python3 -m unittest tools.ttstt.test_compile_kokoro_aot -v
 ```
 
-With the local model and ONNX tooling installed, the same test module also runs
-the full pinned audit. The fixture covers the 352-byte header, independent
+With the local model and ONNX tooling installed, the same test module also
+emits the 124,081,360-byte real artifact and makes the Rust reader parse and
+resolve its F=2560 arena. Its canonical artifact seal is
+`f1f5ccc668e171301e7220033992efcb2669f9d401591aace4f1025ac1e34998`;
+its ordinary whole-file SHA-256 is
+`b7d4b9c62f3df01f71fc2585acd60190d1809dae9a6d916fe39c86d7dd4e3217`.
+The fixture covers the 352-byte header, independent
 model/voice hashes, a whole-artifact SHA-256 seal (with only the seal field
 zeroed while hashing), six canonical aligned sections,
 constants in DATA, a static view, fixed and affine frame-count slots, two phase
