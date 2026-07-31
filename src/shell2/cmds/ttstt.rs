@@ -1,11 +1,15 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use spin::Mutex;
 
 use super::super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
@@ -16,12 +20,31 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 const DEFAULT_VOICE: &str = "af_heart";
 const DEFAULT_SPEED: f32 = 1.0;
+// This is a defensive shell allocation cap, not Kokoro's model limit. The
+// backend must enforce KOKORO_MAX_PHONEMES after language-specific G2P.
 const TTS_TEXT_MAX_BYTES: usize = 8 * 1024;
 const TTS_PLAYBACK_CHUNK_FRAMES: usize = 12_000;
+const TTS_SHELL_QUEUE_DEPTH: usize = 8;
 const STT_AUDIO_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const STT_AUDIO_MAX_SECONDS: usize = 5 * 60;
 const STT_SAMPLE_RATE_HZ: u32 = 16_000;
 const STT_CONVERT_YIELD_FRAMES: usize = 8 * 1024;
+
+struct ShellTtsRequest {
+    target: MatrixTarget,
+    text: String,
+    voice: String,
+    speed: f32,
+    stop_generation: u32,
+}
+
+type TtsResultSlot = Arc<Mutex<Option<Result<TtsAudio, &'static str>>>>;
+
+static TTS_SHELL_QUEUE: Mutex<VecDeque<ShellTtsRequest>> = Mutex::new(VecDeque::new());
+static TTS_SHELL_QUEUE_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+static TTS_COMPLETION_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+static TTS_SHELL_WORKER_STARTED: AtomicBool = AtomicBool::new(false);
+static TTS_SHELL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn try_parse_tts(
     _spawner: &Spawner,
@@ -39,7 +62,14 @@ pub(crate) fn try_parse_tts(
     }
     if input.eq_ignore_ascii_case("stop") {
         let generation = crate::aud::pcm_lane::request_stop();
-        print_shell_line(io, alloc::format!("tts: playback stop generation={generation}").as_str());
+        let cancelled = cancel_waiting_tts();
+        print_shell_line(
+            io,
+            alloc::format!(
+                "tts: stop generation={generation} cancelled_waiting={cancelled} active_inference_cancel=discard-result"
+            )
+            .as_str(),
+        );
         return ParseOutcome::Handled;
     }
 
@@ -74,41 +104,165 @@ pub(crate) fn try_parse_tts(
         return ParseOutcome::Handled;
     }
 
+    if let Err(reason) = ensure_tts_shell_worker() {
+        print_shell_line(io, alloc::format!("tts: unavailable reason={reason}").as_str());
+        return ParseOutcome::Handled;
+    }
+
     let active_target = matrix_target_for_backend(io);
     let target = switch_matrix_target_slot(&active_target, "tts");
     set_matrix_target_active(&target, true);
-    let completion_target = target.clone();
-    let complete = Box::new(move |result: Result<TtsAudio, &'static str>| match result {
-        Ok(audio) => start_tts_playback(completion_target, audio),
-        Err(reason) => {
-            print_matrix_target_line(
-                &completion_target,
-                alloc::format!("tts: inference failed reason={reason}").as_str(),
-            );
-            set_matrix_target_active(&completion_target, false);
-        }
-    });
-    let request = TtsRequest {
+    let request = ShellTtsRequest {
+        target: target.clone(),
         text,
         voice: voice.clone(),
         speed,
-        complete,
+        stop_generation: crate::aud::pcm_lane::stop_generation(),
     };
-    match crate::r::ttstt_service::submit_tts(request) {
+    let depth = {
+        let mut queue = TTS_SHELL_QUEUE.lock();
+        if queue.len() >= TTS_SHELL_QUEUE_DEPTH {
+            set_matrix_target_active(&target, false);
+            print_matrix_target_line(
+                &target,
+                alloc::format!(
+                    "tts: submit failed reason=shell-queue-full cap={TTS_SHELL_QUEUE_DEPTH}"
+                )
+                .as_str(),
+            );
+            return ParseOutcome::Handled;
+        }
+        queue.push_back(request);
+        queue.len()
+    };
+    TTS_SHELL_QUEUE_WAIT.notify_one();
+    print_matrix_target_line(
+        &target,
+        alloc::format!(
+            "tts: queued depth={depth}/{TTS_SHELL_QUEUE_DEPTH} voice={voice} speed={speed:.2} max_phonemes={}",
+            crate::r::ttstt_service::KOKORO_MAX_PHONEMES
+        )
+        .as_str(),
+    );
+
+    ParseOutcome::Handled
+}
+
+fn ensure_tts_shell_worker() -> Result<(), &'static str> {
+    if TTS_SHELL_WORKER_STARTED.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let Some(ap1) = crate::workers::ap1_ui_core_spawner() else {
+        return Err("ap1-audio-service-core-unavailable");
+    };
+    if TTS_SHELL_WORKER_STARTED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Ok(());
+    }
+    match tts_shell_worker_task() {
+        Ok(token) => {
+            ap1.spawn(token);
+            Ok(())
+        }
+        Err(_) => {
+            TTS_SHELL_WORKER_STARTED.store(false, Ordering::Release);
+            Err("tts-queue-worker-spawn-failed")
+        }
+    }
+}
+
+fn cancel_waiting_tts() -> usize {
+    let waiting = {
+        let mut queue = TTS_SHELL_QUEUE.lock();
+        queue.drain(..).collect::<Vec<_>>()
+    };
+    let count = waiting.len();
+    for request in waiting {
+        print_matrix_target_line(&request.target, "tts: cancelled before inference");
+        set_matrix_target_active(&request.target, false);
+    }
+    count
+}
+
+fn tts_shell_queue_status() -> (usize, bool) {
+    (TTS_SHELL_QUEUE.lock().len(), TTS_SHELL_ACTIVE.load(Ordering::Acquire))
+}
+
+#[embassy_executor::task]
+async fn tts_shell_worker_task() {
+    loop {
+        let request = { TTS_SHELL_QUEUE.lock().pop_front() };
+        let Some(request) = request else {
+            TTS_SHELL_QUEUE_WAIT.wait_for_event_timeout(25).await;
+            continue;
+        };
+        TTS_SHELL_ACTIVE.store(true, Ordering::Release);
+        process_tts_request(request).await;
+        TTS_SHELL_ACTIVE.store(false, Ordering::Release);
+    }
+}
+
+async fn process_tts_request(request: ShellTtsRequest) {
+    if crate::aud::pcm_lane::stop_generation() != request.stop_generation {
+        print_matrix_target_line(&request.target, "tts: cancelled before inference");
+        set_matrix_target_active(&request.target, false);
+        return;
+    }
+
+    let result_slot: TtsResultSlot = Arc::new(Mutex::new(None));
+    let completion_slot = result_slot.clone();
+    let complete = Box::new(move |result: Result<TtsAudio, &'static str>| {
+        *completion_slot.lock() = Some(result);
+        TTS_COMPLETION_WAIT.notify_one();
+    });
+    let voice = request.voice.clone();
+    match crate::r::ttstt_service::submit_tts(TtsRequest {
+        text: request.text,
+        voice: request.voice,
+        speed: request.speed,
+        complete,
+    }) {
         Ok(id) => print_matrix_target_line(
-            &target,
-            alloc::format!("tts: queued id={id} voice={voice} speed={speed:.2}").as_str(),
+            &request.target,
+            alloc::format!(
+                "tts: inference started id={id} voice={voice} speed={:.2}",
+                request.speed
+            )
+            .as_str(),
         ),
         Err(error) => {
             print_matrix_target_line(
-                &target,
+                &request.target,
                 alloc::format!("tts: submit failed reason={}", request_error(error)).as_str(),
             );
-            set_matrix_target_active(&target, false);
+            set_matrix_target_active(&request.target, false);
+            return;
         }
     }
 
-    ParseOutcome::Handled
+    let result = loop {
+        if let Some(result) = result_slot.lock().take() {
+            break result;
+        }
+        TTS_COMPLETION_WAIT.wait_for_event_timeout(25).await;
+    };
+    if crate::aud::pcm_lane::stop_generation() != request.stop_generation {
+        print_matrix_target_line(&request.target, "tts: stopped; synthesized audio discarded");
+        set_matrix_target_active(&request.target, false);
+        return;
+    }
+    match result {
+        Ok(audio) => play_tts_audio(request.target, audio, request.stop_generation).await,
+        Err(reason) => {
+            print_matrix_target_line(
+                &request.target,
+                alloc::format!("tts: inference failed reason={reason}").as_str(),
+            );
+            set_matrix_target_active(&request.target, false);
+        }
+    }
 }
 
 pub(crate) fn try_parse_stt(
@@ -206,16 +360,34 @@ fn print_status(io: &'static dyn ShellBackend2, command: &str) {
     } else {
         "warming"
     };
-    print_shell_line(
-        io,
-        alloc::format!(
-            "{command}: state={state} backend={backend} backend_state={backend_state} resident_bytes={} workers={} outstanding={} policy=AP2+-prefer-pcore",
-            status.resident_bytes,
-            status.workers,
-            status.outstanding_jobs
-        )
-        .as_str(),
-    );
+    if command == "tts" {
+        let (waiting, active) = tts_shell_queue_status();
+        print_shell_line(
+            io,
+            alloc::format!(
+                "tts: state={state} backend={backend} backend_state={backend_state} resident_bytes={} workers={} outstanding={} tts_outstanding={} tts_active_id={} shell_waiting={waiting}/{TTS_SHELL_QUEUE_DEPTH} shell_active={} max_phonemes={} policy=AP2+-prefer-pcore",
+                status.resident_bytes,
+                status.workers,
+                status.outstanding_jobs,
+                status.outstanding_tts_jobs,
+                status.active_tts_job_id.unwrap_or(0),
+                active as u8,
+                crate::r::ttstt_service::KOKORO_MAX_PHONEMES,
+            )
+            .as_str(),
+        );
+    } else {
+        print_shell_line(
+            io,
+            alloc::format!(
+                "{command}: state={state} backend={backend} backend_state={backend_state} resident_bytes={} workers={} outstanding={} policy=AP2+-prefer-pcore",
+                status.resident_bytes,
+                status.workers,
+                status.outstanding_jobs
+            )
+            .as_str(),
+        );
+    }
 }
 
 fn print_capture_status(io: &'static dyn ShellBackend2) {
@@ -253,8 +425,8 @@ fn parse_tts_request(input: &str) -> Result<(String, String, f32), &'static str>
             voice = value.to_string();
         } else if let Some(value) = token.strip_prefix("speed=") {
             speed = value.parse::<f32>().map_err(|_| "invalid-speed")?;
-            if !speed.is_finite() || !(0.25..=4.0).contains(&speed) {
-                return Err("speed-out-of-range-0.25-to-4.0");
+            if !speed.is_finite() || !(0.5..=2.0).contains(&speed) {
+                return Err("speed-out-of-range-0.5-to-2.0");
             }
         } else {
             break;
@@ -482,7 +654,7 @@ async fn load_wav_mono_16k(path: &str) -> Result<Vec<f32>, String> {
     Ok(out)
 }
 
-fn start_tts_playback(target: MatrixTarget, audio: TtsAudio) {
+async fn play_tts_audio(target: MatrixTarget, audio: TtsAudio, stop_generation: u32) {
     if audio.samples_i16_stereo_48k.is_empty()
         || !audio.samples_i16_stereo_48k.len().is_multiple_of(2)
     {
@@ -490,26 +662,7 @@ fn start_tts_playback(target: MatrixTarget, audio: TtsAudio) {
         set_matrix_target_active(&target, false);
         return;
     }
-    let Some(ap1) = crate::workers::ap1_ui_core_spawner() else {
-        print_matrix_target_line(&target, "tts: AP1 audio/service core is unavailable");
-        set_matrix_target_active(&target, false);
-        return;
-    };
-    let stop_generation = crate::aud::pcm_lane::stop_generation();
-    match tts_playback_task(target.clone(), audio.samples_i16_stereo_48k, stop_generation) {
-        Ok(token) => ap1.spawn(token),
-        Err(error) => {
-            print_matrix_target_line(
-                &target,
-                alloc::format!("tts: playback task spawn failed err={error:?}").as_str(),
-            );
-            set_matrix_target_active(&target, false);
-        }
-    }
-}
-
-#[embassy_executor::task(pool_size = 2)]
-async fn tts_playback_task(target: MatrixTarget, samples: Vec<i16>, stop_generation: u32) {
+    let samples = audio.samples_i16_stereo_48k;
     let total_frames = samples.len() / 2;
     let mut frame_offset = 0usize;
     while frame_offset < total_frames {
@@ -569,7 +722,7 @@ fn request_error(error: SpeechRequestError) -> String {
 fn tts_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "tts: usage `tts [voice=NAME] [speed=0.25..4.0] <text|\"quoted text\">` | `tts status` | `tts stop`",
+        "tts: usage `tts [voice=NAME] [speed=0.5..2.0] <text|\"quoted text\">` | `tts status` | `tts stop`; queue=8 serialized/asynchronous, model_window=510 phonemes after G2P",
     );
 }
 

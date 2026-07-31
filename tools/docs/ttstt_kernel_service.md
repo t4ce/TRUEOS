@@ -34,6 +34,9 @@ retries without blocking boot.
   fallback only when the complete topology contains no eligible P-core lane.
 - Each `InferenceJob::run_slice` call is one bounded unit of CPU work. Pending
   work is requeued, and the worker yields before taking another slice.
+- Kokoro jobs have one active owner and remain FIFO even though the shared
+  pool has multiple workers. Up to eight more TTS jobs may wait; STT work can
+  still use the remaining workers concurrently.
 - `WorkerContext::matvec_bf16` uses TRUEOS's runtime AVX2/FMA dispatch with its
   established SSE2/scalar fallback.
 
@@ -55,6 +58,15 @@ or GGML. The service refuses speech requests with `BackendUnavailable` until
 this adapter is installed, and with `BackendWarming` until warm completes;
 model residency alone is never reported as decoded inference.
 
+For the packaged quantized Kokoro graph this is a substantial, explicit port:
+the ONNX file is opset 20 with 3,614 nodes across 56 operator kinds and 775
+initializers. It includes integer convolution/matmul, six
+`DynamicQuantizeLSTM` nodes, Microsoft fused operators, resize, and STFT. The
+existing BF16 matvec dispatch is useful infrastructure but is not an ONNX
+executor. The Linux static ONNX Runtime build is also not directly linkable to
+the freestanding kernel: it imports pthreads, mmap, dynamic loading, libc
+allocation, files, clocks, and scheduler/syscall APIs.
+
 ## F4 shell commands
 
 The first command consumer is shell2 F4 cmd mode:
@@ -69,8 +81,19 @@ stt file recordings/hello.wav language=en
 stt record
 ```
 
-`tts` expects a registered Kokoro backend to return signed i16, stereo, 48 kHz
-PCM. Playback is chunked cooperatively through the existing AP1/HDA PCM lane.
+`tts` returns to the shell after enqueueing. One AP1 queue worker serializes
+inference and playback, preserving submission order with a depth of eight.
+`tts stop` clears waiting requests and discards the active inference result if
+it cannot be cancelled inside the backend. The backend returns signed i16,
+stereo, 48 kHz PCM, which is chunked cooperatively into the existing HDA lane.
+
+Kokoro's input tensor has 512 positions, with two used for boundary padding.
+The exact single-pass limit is therefore 510 phoneme tokens. The voice archive
+has the matching `(510, 1, 256)` style shape. This must be enforced after
+language-specific grapheme-to-phoneme conversion; a UTF-8 byte or Unicode
+character limit cannot represent the model window exactly. Shell2 separately
+uses an 8 KiB defensive allocation limit. Requests above 510 phonemes need to
+be rejected or punctuation-split by the native backend.
 
 File STT reads a signed 16-bit mono/stereo PCM WAV from TRUEOSFS on the BSP,
 downmixes and resamples it to Whisper's mono 16 kHz boundary with periodic

@@ -38,6 +38,11 @@ const WORKER_SLICE_YIELD_MS: u64 = 1;
 const MODEL_FILE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const MODEL_SET_MAX_BYTES: usize = 768 * 1024 * 1024;
 const JOB_QUEUE_CAP: usize = 64;
+/// Match the proven host service: one Kokoro owner with eight requests waiting.
+pub const TTS_QUEUE_DEPTH: usize = 8;
+const TTS_MAX_OUTSTANDING: usize = TTS_QUEUE_DEPTH + 1;
+/// Kokoro's 512-position input reserves the first and last positions for padding.
+pub const KOKORO_MAX_PHONEMES: usize = 510;
 const WORKER_TASK_POOL: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 
 static SERVICE_STATE: AtomicU8 = AtomicU8::new(ServiceState::WaitingForModels as u8);
@@ -45,6 +50,8 @@ static RESIDENT_BYTES: AtomicU64 = AtomicU64::new(0);
 static WORKER_COUNT: AtomicU32 = AtomicU32::new(0);
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
 static OUTSTANDING_JOBS: AtomicUsize = AtomicUsize::new(0);
+static OUTSTANDING_TTS_JOBS: AtomicUsize = AtomicUsize::new(0);
+static ACTIVE_TTS_JOB_ID: AtomicU64 = AtomicU64::new(0);
 static BACKEND_WARM_STARTED: AtomicBool = AtomicBool::new(false);
 
 static MODELS: Mutex<Option<Arc<ModelSet>>> = Mutex::new(None);
@@ -78,14 +85,19 @@ pub struct ServiceStatus {
     pub resident_bytes: u64,
     pub workers: u32,
     pub outstanding_jobs: usize,
+    pub outstanding_tts_jobs: usize,
+    pub active_tts_job_id: Option<u64>,
 }
 
 pub fn status() -> ServiceStatus {
+    let active_tts_job_id = ACTIVE_TTS_JOB_ID.load(Ordering::Acquire);
     ServiceStatus {
         state: ServiceState::from_u8(SERVICE_STATE.load(Ordering::Acquire)),
         resident_bytes: RESIDENT_BYTES.load(Ordering::Acquire),
         workers: WORKER_COUNT.load(Ordering::Acquire),
         outstanding_jobs: OUTSTANDING_JOBS.load(Ordering::Acquire),
+        outstanding_tts_jobs: OUTSTANDING_TTS_JOBS.load(Ordering::Acquire),
+        active_tts_job_id: (active_tts_job_id != 0).then_some(active_tts_job_id),
     }
 }
 
@@ -312,7 +324,7 @@ pub fn submit_tts(request: TtsRequest) -> Result<u64, SpeechRequestError> {
     if request.voice.trim().is_empty() {
         return Err(SpeechRequestError::InvalidRequest("empty-voice"));
     }
-    if !request.speed.is_finite() || !(0.25..=4.0).contains(&request.speed) {
+    if !request.speed.is_finite() || !(0.5..=2.0).contains(&request.speed) {
         return Err(SpeechRequestError::InvalidRequest("speed-out-of-range"));
     }
     let backend = (*SPEECH_BACKEND.lock()).ok_or(SpeechRequestError::BackendUnavailable)?;
@@ -417,11 +429,26 @@ pub fn submit(job: Box<dyn InferenceJob>) -> Result<u64, SubmitError> {
         return Err(SubmitError::NotReady);
     }
 
-    OUTSTANDING_JOBS
+    let direction = job.direction();
+    if direction == Direction::TextToSpeech {
+        OUTSTANDING_TTS_JOBS
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current < TTS_MAX_OUTSTANDING).then_some(current + 1)
+            })
+            .map_err(|_| SubmitError::QueueFull)?;
+    }
+
+    if OUTSTANDING_JOBS
         .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
             (current < JOB_QUEUE_CAP).then_some(current + 1)
         })
-        .map_err(|_| SubmitError::QueueFull)?;
+        .is_err()
+    {
+        if direction == Direction::TextToSpeech {
+            OUTSTANDING_TTS_JOBS.fetch_sub(1, Ordering::AcqRel);
+        }
+        return Err(SubmitError::QueueFull);
+    }
 
     let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
     JOBS.lock().push_back(QueuedJob { id, job });
@@ -702,7 +729,18 @@ async fn eligible_worker_slots() -> Vec<u32> {
 }
 
 fn pop_job() -> Option<QueuedJob> {
-    JOBS.lock().pop_front()
+    let mut jobs = JOBS.lock();
+    let active_tts_id = ACTIVE_TTS_JOB_ID.load(Ordering::Acquire);
+    let index = jobs.iter().position(|queued| {
+        let direction = queued.job.direction();
+        direction != Direction::TextToSpeech || active_tts_id == 0 || queued.id == active_tts_id
+    })?;
+    let queued = jobs.remove(index)?;
+    if queued.job.direction() == Direction::TextToSpeech && active_tts_id == 0 {
+        // The queue lock makes selection and ownership assignment one operation.
+        ACTIVE_TTS_JOB_ID.store(queued.id, Ordering::Release);
+    }
+    Some(queued)
 }
 
 fn requeue_job(job: QueuedJob) {
@@ -712,6 +750,12 @@ fn requeue_job(job: QueuedJob) {
 
 fn finish_job(id: u64, direction: Direction, result: JobProgress) {
     OUTSTANDING_JOBS.fetch_sub(1, Ordering::AcqRel);
+    if direction == Direction::TextToSpeech {
+        OUTSTANDING_TTS_JOBS.fetch_sub(1, Ordering::AcqRel);
+        let _ = ACTIVE_TTS_JOB_ID.compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire);
+        // Workers may be asleep because they observed only blocked TTS jobs.
+        JOB_WAIT.notify_one();
+    }
     match result {
         JobProgress::Complete => crate::log_info!(
             target: "ttstt";
@@ -833,9 +877,11 @@ pub async fn service_task() {
                         SERVICE_STATE.store(ServiceState::Ready as u8, Ordering::Release);
                         crate::log_info!(
                             target: "ttstt";
-                            "ttstt: ready resident_bytes={} workers={} filesystem_on_inference_path=no\n",
+                            "ttstt: ready resident_bytes={} workers={} filesystem_on_inference_path=no speech_backend={} speech_ready={}\n",
                             RESIDENT_BYTES.load(Ordering::Acquire),
-                            workers
+                            workers,
+                            speech_backend_name().unwrap_or("unregistered"),
+                            speech_backend_ready() as u8
                         );
                         loop {
                             let _ = ensure_backend_warm_started();
