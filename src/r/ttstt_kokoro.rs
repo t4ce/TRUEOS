@@ -99,7 +99,7 @@ const RUNTIME_SHAPE_PROPAGATION_COMPLETE: bool = true;
 const EXECUTOR_MEMORY_BRIDGE_COMPLETE: bool = true;
 // Two independent host executions completed all 2,227 operations with the
 // same 249,600-sample payload SHA-256
-// a24f5fc04d52729f93d47dd517d4aeb5fbf772764bd8588c29bd69866bbdecf4.
+// 57c2b9b5782ae67a98fd6321034c7c270b44b47147cbbedcdd5f20f0c4ad1ecb.
 // The pinned Whisper round-trip recovered the complete reference sentence.
 // `verify_kokoro_waveform.py --native-acceptance` rechecks that evidence.
 const NATIVE_WAVEFORM_ACCEPTANCE_COMPLETE: bool = true;
