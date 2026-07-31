@@ -1020,18 +1020,10 @@ pub(crate) const UI4_COMPOSITOR_RCS_JOB_SLOTS: usize = 2;
 // disjoint from both persistent font resources and UI4 RGBA VAs.
 pub(crate) const UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE: u64 = 0x1000_0000;
 const UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
-// Keep the encoder destination outside decoder slots, the complete UI-surface
-// arena, and display's 0x2000_0000..0x2800_0000 compositor-alias arena. The
-// fused stream owns this PAT0 mapping for the lifetime of its NV12 allocation.
-pub(crate) const UI4_STREAM_NV12_DESTINATION_GPU: u64 = 0x2800_0000;
-// Display/GGTT producer addresses are not necessarily representable by this
-// context's 1-GiB PPGTT (slot 4 starts exactly at 0x4000_0000). Sample every
-// selected layer through a stream-private alias. Keep PAT0 and PAT3 aliases in
-// separate ranges so changing the selected layer set can never request a
-// forbidden cache-policy transition at a previously populated PTE.
-const UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE: u64 = 0x2900_0000;
-const UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE: u64 = 0x3100_0000;
-const UI4_STREAM_SOURCE_ALIAS_GPU_LIMIT: u64 = DIRECT_RCS_PPGTT_LIMIT_BYTES;
+// Keep the encoder destination outside both decoder source slots and the
+// complete UI-surface arena. The former base+one-slot address collided with
+// decoder slot 1 whenever local playback and RDP conversion overlapped.
+pub(crate) const UI4_STREAM_NV12_DESTINATION_GPU: u64 = crate::r::ui_surface::UI_SURFACE_GPU_LIMIT;
 const _: () = assert!(UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE.is_multiple_of(4096));
 const _: () = assert!(
     UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE
@@ -1041,12 +1033,8 @@ const _: () = assert!(
 const _: () = assert!(UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT);
 const _: () = assert!(
     UI4_STREAM_NV12_DESTINATION_GPU + UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES as u64
-        <= UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE
+        <= DIRECT_RCS_PPGTT_LIMIT_BYTES
 );
-const _: () = assert!(UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE.is_multiple_of(4096));
-const _: () = assert!(UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE.is_multiple_of(4096));
-const _: () = assert!(UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE < UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE);
-const _: () = assert!(UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE < UI4_STREAM_SOURCE_ALIAS_GPU_LIMIT);
 const _: () = assert!(
     UI4_COMPOSITOR_RCS_GPU_VA_RESULT_BASE
         + (UI4_COMPOSITOR_RCS_JOB_SLOTS * DIRECT_RCS_RESULT_BYTES) as u64

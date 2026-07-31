@@ -1649,20 +1649,6 @@ pub(crate) fn acknowledge_window_frame(id: WindowId, publish_serial: u64) -> boo
         (acknowledged, first_presentation)
     };
     if let Some(window) = first_presentation {
-        crate::log_trace!(target: "ui4";
-            "ui4/window: first-presentation owner={:?} window={} frame={} plane_slot={} z={} publish_serial={} placement={}x{}@{},{} boundary=display-surflive broker_acknowledged={}\n",
-            window.owner,
-            window.id.raw(),
-            window.frame.raw(),
-            window.plane.slot(),
-            window.placement.z,
-            window.publish_serial,
-            window.placement.width,
-            window.placement.height,
-            window.placement.x,
-            window.placement.y,
-            acknowledged as u8,
-        );
         publish_window_first_presentation(window);
     }
     acknowledged

@@ -30,20 +30,6 @@ pub(crate) mod flags {
     /// false compile-folds Lumen submissions back to the unsampled path.
     pub(crate) const LUMEN_PERF_DIAG_PROFILE_ENABLED: bool = true;
 
-    /// Focused UI4 frame-to-display presentation trace.
-    ///
-    /// This admits Debug/Trace records only for the `ui4` target family.  It
-    /// deliberately does not raise the broad Global or Gfx areas, so a frame
-    /// handoff investigation can observe broker, compositor, BCS/GuC, flip,
-    /// and SURFLIVE boundaries without enabling unrelated media/network noise.
-    pub(crate) const UI4_COMPOSITION_DIAG_PROFILE_ENABLED: bool = true;
-
-    pub(crate) fn ui4_composition_diag_accepts(target: &str, level: Level) -> bool {
-        UI4_COMPOSITION_DIAG_PROFILE_ENABLED
-            && matches!(level, Level::Debug | Level::Trace)
-            && (target == "ui4" || target.starts_with("ui4/"))
-    }
-
     pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
         // Preserve the original USB hunt's full Global side, including Debug.
         LogLevelPolicy::up(LevelFilter::Trace)
@@ -450,27 +436,10 @@ pub fn log_with_target_purpose(
     purpose: Option<&str>,
     args: fmt::Arguments<'_>,
 ) {
-    if flags::ui4_composition_diag_accepts(target, level) {
-        let area = log_os_core::target_log_area(target);
-        write_with_tags(area, purpose, args);
-        if EMULATOR_UART_LOGGING.load(Ordering::Acquire) {
-            write_uart_with_tags(area, purpose, args);
-        }
-        return;
-    }
     log_os_core::log_with_target_purpose(&TRUEOS_LOG_ROUTER, target, level, purpose, args);
 }
 
 pub fn log_with_target_level(target: &str, level: log::Level, args: fmt::Arguments<'_>) {
-    if flags::ui4_composition_diag_accepts(target, level) {
-        let area = log_os_core::target_log_area(target);
-        let purpose = Some(log_os_core::purpose_for_level(level));
-        write_with_tags(area, purpose, args);
-        if EMULATOR_UART_LOGGING.load(Ordering::Acquire) {
-            write_uart_with_tags(area, purpose, args);
-        }
-        return;
-    }
     log_os_core::log_with_target_level(&TRUEOS_LOG_ROUTER, target, level, args);
 }
 
