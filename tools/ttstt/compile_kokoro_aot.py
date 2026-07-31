@@ -29,6 +29,18 @@ from typing import Any, Iterable, Mapping, Sequence
 TOOL_VERSION = 1
 ANALYSIS_SCHEMA = "trueos.kokoro-aot-analysis.v1"
 
+# Operation attributes have their own ABI because the outer artifact format is
+# intentionally opaque to individual kernels. Every non-empty record begins
+# with ``<u16 version, u16 kind/opcode, u32 total_bytes>``. Version one records
+# are four-byte aligned, fixed-size per kind, and require every reserved byte
+# to remain zero.
+ATTRIBUTE_ABI_VERSION = 1
+ATTRIBUTE_LAYOUT_CHECKED = 1
+ATTRIBUTE_BINARY_MULTIDIRECTIONAL = 1 << 0
+ATTRIBUTE_BINARY_RUNTIME_SHAPE_CHECK = 1 << 1
+ATTRIBUTE_VIEW_ALIAS = 1 << 0
+ATTRIBUTE_VIEW_STATIC_CONTROL = 1 << 1
+
 PINNED_MODEL_FILE = "kokoro-rten.onnx"
 PINNED_MODEL_BYTES = 124_604_222
 PINNED_MODEL_SHA256 = "239d9f4df112a375bea52146570b97eb5c5af727c007761ee121ed123fd1ab29"
@@ -258,6 +270,59 @@ AOT_OPCODES = {
 
 AOT_DTYPE_BYTES = {1: 4, 2: 4, 3: 8, 4: 1, 5: 1, 6: 1}
 
+LOWERED_F32_BINARY_OPS = frozenset({"Add", "Mul", "Div", "Sub"})
+LOWERED_PARAMETERLESS_UNARY_OPS = frozenset(
+    {"Atan", "Cos", "Exp", "Floor", "Round", "Sigmoid", "Sin", "Sqrt", "Tanh"}
+)
+LOWERED_UNARY_OPS = LOWERED_PARAMETERLESS_UNARY_OPS | {"LeakyRelu"}
+LOWERED_F32_OPS = frozenset(
+    {
+        *LOWERED_F32_BINARY_OPS,
+        *LOWERED_UNARY_OPS,
+        "ReduceMean",
+        "LayerNormalization",
+        "Softmax",
+        "FastGelu",
+        "SkipLayerNormalization",
+    }
+)
+LOWERED_VIEW_OPS = frozenset({"Reshape", "Squeeze", "Unsqueeze"})
+LOWERED_OPS = LOWERED_F32_OPS | LOWERED_VIEW_OPS
+
+PINNED_LOWERING_COUNTS = {
+    "Add": 465,
+    "Atan": 1,
+    "Cos": 1,
+    "Div": 174,
+    "Exp": 1,
+    "FastGelu": 12,
+    "Floor": 81,
+    "LayerNormalization": 19,
+    "LeakyRelu": 28,
+    "Mul": 737,
+    "ReduceMean": 130,
+    "Reshape": 141,
+    "Round": 1,
+    "Sigmoid": 1,
+    "SkipLayerNormalization": 12,
+    "Sin": 51,
+    "Softmax": 12,
+    "Sqrt": 90,
+    "Squeeze": 5,
+    "Sub": 68,
+    "Tanh": 1,
+    "Unsqueeze": 192,
+}
+
+# Filled from the canonical lowering stream after every record has passed the
+# operation-specific validator. This is deliberately separate from the model
+# hash: it seals the compiler's interpretation of the accepted graph.
+PINNED_LOWERING_SHA256 = "544ce73ccb271fb993b0c8636c48dd333ab6073199df3a9daea3c818e8a2024b"
+
+LAYER_NORM_EPSILON_BITS = frozenset({0x2B8CBCCC, 0x3727C5AC})
+SKIP_LAYER_NORM_EPSILON_BITS = 0x2B8CBCCC
+LEAKY_RELU_ALPHA_BITS = frozenset({0x3C23D70A, 0x3DCCCCCD, 0x3E4CCCCD})
+
 
 def align_up(value: int, alignment: int) -> int:
     reject(alignment <= 0 or alignment & (alignment - 1) != 0, "invalid alignment")
@@ -282,6 +347,462 @@ def logical_bytes(dtype: int, dims: Sequence[int]) -> int:
         size *= dim
         reject(size > 0xFFFF_FFFF_FFFF_FFFF, "tensor byte capacity overflows u64")
     return size
+
+
+def f32_bits(value: float) -> int:
+    """Return the exact IEEE-754 binary32 payload used by ONNX attributes."""
+
+    return struct.unpack("<I", struct.pack("<f", float(value)))[0]
+
+
+def _attribute_record(opcode: int, body: bytes) -> bytes:
+    total_bytes = 8 + len(body)
+    reject(opcode not in AOT_OPCODES.values(), f"attribute kind 0x{opcode:04x} rejected")
+    reject(total_bytes % 4 != 0, "attribute record is not four-byte aligned")
+    return struct.pack(
+        "<HHI", ATTRIBUTE_ABI_VERSION, opcode, total_bytes
+    ) + body
+
+
+def binary_attribute(
+    op_type: str, lhs_rank: int, rhs_rank: int, output_rank: int
+) -> bytes:
+    reject(op_type not in LOWERED_F32_BINARY_OPS, f"binary attribute kind {op_type!r}")
+    return _attribute_record(
+        AOT_OPCODES[op_type],
+        struct.pack(
+            "<BBBBBB2x",
+            lhs_rank,
+            rhs_rank,
+            output_rank,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            ATTRIBUTE_BINARY_MULTIDIRECTIONAL
+            | ATTRIBUTE_BINARY_RUNTIME_SHAPE_CHECK,
+        ),
+    )
+
+
+def parameterless_unary_attribute(op_type: str) -> bytes:
+    reject(
+        op_type not in LOWERED_PARAMETERLESS_UNARY_OPS,
+        f"parameterless unary attribute kind {op_type!r}",
+    )
+    return _attribute_record(AOT_OPCODES[op_type], b"")
+
+
+def leaky_relu_attribute(alpha_bits: int, input_rank: int, output_rank: int) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["LeakyRelu"],
+        struct.pack(
+            "<IBBBx",
+            alpha_bits,
+            input_rank,
+            output_rank,
+            ATTRIBUTE_LAYOUT_CHECKED,
+        ),
+    )
+
+
+def reduce_mean_attribute(
+    axis: int, keepdims: int, noop_with_empty_axes: int, input_rank: int, output_rank: int
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["ReduceMean"],
+        struct.pack(
+            "<iBBBBB3x",
+            axis,
+            keepdims,
+            noop_with_empty_axes,
+            input_rank,
+            output_rank,
+            ATTRIBUTE_LAYOUT_CHECKED,
+        ),
+    )
+
+
+def layer_norm_attribute(
+    axis: int,
+    epsilon_bits: int,
+    stash_type: int,
+    input_rank: int,
+    output_rank: int,
+    parameter_rank: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["LayerNormalization"],
+        struct.pack(
+            "<iIIBBBB",
+            axis,
+            epsilon_bits,
+            stash_type,
+            input_rank,
+            output_rank,
+            parameter_rank,
+            ATTRIBUTE_LAYOUT_CHECKED,
+        ),
+    )
+
+
+def softmax_attribute(axis: int, input_rank: int, output_rank: int) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["Softmax"],
+        struct.pack(
+            "<iBBBx",
+            axis,
+            input_rank,
+            output_rank,
+            ATTRIBUTE_LAYOUT_CHECKED,
+        ),
+    )
+
+
+def fast_gelu_attribute(
+    has_bias: int, input_rank: int, output_rank: int, bias_rank: int
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["FastGelu"],
+        struct.pack(
+            "<BBBBB3x",
+            has_bias,
+            input_rank,
+            output_rank,
+            bias_rank,
+            ATTRIBUTE_LAYOUT_CHECKED,
+        ),
+    )
+
+
+def skip_layer_norm_attribute(
+    epsilon_bits: int, input_rank: int, output_rank: int, parameter_rank: int
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["SkipLayerNormalization"],
+        struct.pack(
+            "<IBBBB",
+            epsilon_bits,
+            input_rank,
+            output_rank,
+            parameter_rank,
+            ATTRIBUTE_LAYOUT_CHECKED,
+        ),
+    )
+
+
+def view_attribute(
+    op_type: str,
+    input_rank: int,
+    output_rank: int,
+    dtype: int,
+    *,
+    static_control: bool,
+    allowzero: int = 0,
+    parameters: Sequence[int] = (),
+) -> bytes:
+    reject(op_type not in LOWERED_VIEW_OPS, f"view attribute kind {op_type!r}")
+    reject(len(parameters) > 4, f"{op_type} has too many view parameters")
+    padded = tuple(int(value) for value in parameters) + (0,) * (4 - len(parameters))
+    flags = ATTRIBUTE_VIEW_ALIAS
+    if static_control:
+        flags |= ATTRIBUTE_VIEW_STATIC_CONTROL
+    return _attribute_record(
+        AOT_OPCODES[op_type],
+        struct.pack(
+            "<BBBBBBBB4i",
+            input_rank,
+            output_rank,
+            dtype,
+            flags,
+            allowzero,
+            len(parameters),
+            ATTRIBUTE_LAYOUT_CHECKED,
+            0,
+            *padded,
+        ),
+    )
+
+
+ATTRIBUTE_RECORD_BYTES = {
+    AOT_OPCODES["Add"]: 16,
+    AOT_OPCODES["Mul"]: 16,
+    AOT_OPCODES["Div"]: 16,
+    AOT_OPCODES["Sub"]: 16,
+    **{AOT_OPCODES[name]: 8 for name in LOWERED_PARAMETERLESS_UNARY_OPS},
+    AOT_OPCODES["LeakyRelu"]: 16,
+    AOT_OPCODES["ReduceMean"]: 20,
+    AOT_OPCODES["LayerNormalization"]: 24,
+    AOT_OPCODES["Softmax"]: 16,
+    AOT_OPCODES["FastGelu"]: 16,
+    AOT_OPCODES["SkipLayerNormalization"]: 16,
+    AOT_OPCODES["Reshape"]: 32,
+    AOT_OPCODES["Squeeze"]: 32,
+    AOT_OPCODES["Unsqueeze"]: 32,
+}
+
+
+def inspect_attribute_record(
+    record: bytes, expected_opcode: int | None = None
+) -> dict[str, int | tuple[int, ...]]:
+    """Validate one canonical v1 attribute record and return its fields."""
+
+    reject(len(record) < 8 or len(record) % 4 != 0, "attribute length rejected")
+    version, kind, total_bytes = struct.unpack_from("<HHI", record)
+    reject(version != ATTRIBUTE_ABI_VERSION, "attribute ABI version rejected")
+    reject(expected_opcode is not None and kind != expected_opcode, "attribute kind rejected")
+    reject(total_bytes != len(record), "attribute byte count rejected")
+    reject(kind not in ATTRIBUTE_RECORD_BYTES, f"attribute kind 0x{kind:04x} unsupported")
+    reject(len(record) != ATTRIBUTE_RECORD_BYTES[kind], "attribute fixed size rejected")
+
+    result: dict[str, int | tuple[int, ...]] = {
+        "version": version,
+        "kind": kind,
+        "bytes": total_bytes,
+    }
+    if kind in {AOT_OPCODES[name] for name in LOWERED_F32_BINARY_OPS}:
+        lhs_rank, rhs_rank, output_rank, input_layout, output_layout, flags = (
+            struct.unpack_from("<BBBBBB", record, 8)
+        )
+        reject(any(record[14:16]), "binary attribute reserved bytes rejected")
+        reject(max(lhs_rank, rhs_rank, output_rank) > 4, "binary attribute rank rejected")
+        reject(output_rank != max(lhs_rank, rhs_rank), "binary output rank rejected")
+        reject(
+            input_layout != ATTRIBUTE_LAYOUT_CHECKED
+            or output_layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "binary layout contract rejected",
+        )
+        reject(
+            flags
+            != ATTRIBUTE_BINARY_MULTIDIRECTIONAL
+            | ATTRIBUTE_BINARY_RUNTIME_SHAPE_CHECK,
+            "binary flags rejected",
+        )
+        result.update(
+            lhs_rank=lhs_rank,
+            rhs_rank=rhs_rank,
+            output_rank=output_rank,
+            flags=flags,
+        )
+    elif kind in {
+        AOT_OPCODES[name] for name in LOWERED_PARAMETERLESS_UNARY_OPS
+    }:
+        # The opcode in the common header is the complete parameterless
+        # contract. Rank/layout facts are validated by the lowering record.
+        pass
+    elif kind == AOT_OPCODES["LeakyRelu"]:
+        alpha_bits, input_rank, output_rank, layout = struct.unpack_from(
+            "<IBBB", record, 8
+        )
+        reject(record[15] != 0, "LeakyRelu reserved byte rejected")
+        alpha = struct.unpack("<f", struct.pack("<I", alpha_bits))[0]
+        reject(
+            not (alpha > 0.0 and alpha < float("inf"))
+            or input_rank > 4
+            or output_rank != input_rank
+            or layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "LeakyRelu contract rejected",
+        )
+        result.update(
+            alpha_bits=alpha_bits,
+            input_rank=input_rank,
+            output_rank=output_rank,
+        )
+    elif kind == AOT_OPCODES["ReduceMean"]:
+        axis, keepdims, noop, input_rank, output_rank, layout = struct.unpack_from(
+            "<iBBBBB", record, 8
+        )
+        reject(any(record[17:20]), "ReduceMean reserved bytes rejected")
+        reject(
+            input_rank == 0
+            or input_rank > 4
+            or output_rank != input_rank
+            or axis < -input_rank
+            or axis >= input_rank,
+            "ReduceMean rank/axis rejected",
+        )
+        reject(
+            (keepdims, noop, layout) != (1, 0, ATTRIBUTE_LAYOUT_CHECKED),
+            "ReduceMean flags rejected",
+        )
+        result.update(
+            axis=axis,
+            keepdims=keepdims,
+            noop_with_empty_axes=noop,
+            input_rank=input_rank,
+            output_rank=output_rank,
+        )
+    elif kind == AOT_OPCODES["LayerNormalization"]:
+        axis, epsilon_bits, stash_type, input_rank, output_rank, parameter_rank, layout = (
+            struct.unpack_from("<iIIBBBB", record, 8)
+        )
+        reject(
+            input_rank == 0
+            or input_rank > 4
+            or output_rank != input_rank
+            or axis < -input_rank
+            or axis >= input_rank,
+            "LayerNormalization rank/axis rejected",
+        )
+        reject(
+            stash_type != 1
+            or parameter_rank != 1
+            or layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "LayerNormalization contract rejected",
+        )
+        epsilon = struct.unpack("<f", struct.pack("<I", epsilon_bits))[0]
+        reject(not (epsilon > 0.0 and epsilon < float("inf")), "epsilon rejected")
+        result.update(
+            axis=axis,
+            epsilon_bits=epsilon_bits,
+            stash_type=stash_type,
+            input_rank=input_rank,
+            output_rank=output_rank,
+            parameter_rank=parameter_rank,
+        )
+    elif kind == AOT_OPCODES["Softmax"]:
+        axis, input_rank, output_rank, layout = struct.unpack_from("<iBBB", record, 8)
+        reject(record[15] != 0, "Softmax reserved byte rejected")
+        reject(
+            input_rank == 0
+            or input_rank > 4
+            or output_rank != input_rank
+            or axis < -input_rank
+            or axis >= input_rank
+            or layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "Softmax contract rejected",
+        )
+        result.update(axis=axis, input_rank=input_rank, output_rank=output_rank)
+    elif kind == AOT_OPCODES["FastGelu"]:
+        has_bias, input_rank, output_rank, bias_rank, layout = struct.unpack_from(
+            "<BBBBB", record, 8
+        )
+        reject(any(record[13:16]), "FastGelu reserved bytes rejected")
+        reject(
+            has_bias != 1
+            or input_rank == 0
+            or input_rank > 4
+            or output_rank != input_rank
+            or bias_rank != 1
+            or layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "FastGelu contract rejected",
+        )
+        result.update(
+            has_bias=has_bias,
+            input_rank=input_rank,
+            output_rank=output_rank,
+            parameter_rank=bias_rank,
+        )
+    elif kind == AOT_OPCODES["SkipLayerNormalization"]:
+        epsilon_bits, input_rank, output_rank, parameter_rank, layout = struct.unpack_from(
+            "<IBBBB", record, 8
+        )
+        epsilon = struct.unpack("<f", struct.pack("<I", epsilon_bits))[0]
+        reject(
+            not (epsilon > 0.0 and epsilon < float("inf"))
+            or input_rank == 0
+            or input_rank > 4
+            or output_rank != input_rank
+            or parameter_rank != 1
+            or layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "SkipLayerNormalization contract rejected",
+        )
+        result.update(
+            epsilon_bits=epsilon_bits,
+            input_rank=input_rank,
+            output_rank=output_rank,
+            parameter_rank=parameter_rank,
+        )
+    else:
+        input_rank, output_rank, dtype, flags, allowzero, count, layout, reserved = (
+            struct.unpack_from("<BBBBBBBB", record, 8)
+        )
+        parameters = struct.unpack_from("<4i", record, 16)
+        reject(reserved != 0, "view reserved byte rejected")
+        reject(
+            input_rank > 4
+            or output_rank > 4
+            or dtype not in {1, 6, 7}
+            or flags & ~(ATTRIBUTE_VIEW_ALIAS | ATTRIBUTE_VIEW_STATIC_CONTROL)
+            or not flags & ATTRIBUTE_VIEW_ALIAS
+            or allowzero != 0
+            or count > 4
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or any(parameters[count:]),
+            "view attribute contract rejected",
+        )
+        is_static = bool(flags & ATTRIBUTE_VIEW_STATIC_CONTROL)
+        if kind == AOT_OPCODES["Reshape"]:
+            reject(
+                (is_static and count != output_rank)
+                or (not is_static and count != 0),
+                "Reshape control contract rejected",
+            )
+        elif kind == AOT_OPCODES["Unsqueeze"]:
+            reject(
+                not is_static or count == 0 or output_rank != input_rank + count,
+                "Unsqueeze control contract rejected",
+            )
+        else:
+            reject(
+                not is_static or count == 0 or output_rank + count != input_rank,
+                "Squeeze control contract rejected",
+            )
+        result.update(
+            input_rank=input_rank,
+            output_rank=output_rank,
+            dtype=dtype,
+            flags=flags,
+            allowzero=allowzero,
+            parameter_count=count,
+            parameters=parameters[:count],
+        )
+    return result
+
+
+@dataclass(frozen=True)
+class LoweringRecord:
+    source_index: int
+    op_type: str
+    opcode: int
+    phase: int
+    inputs: tuple[int, ...]
+    outputs: tuple[int, ...]
+    attributes: bytes
+    variant: str
+
+    def canonical_bytes(self) -> bytes:
+        reject(self.source_index < 0 or self.source_index > 0xFFFF_FFFF, "source index")
+        reject(self.opcode != AOT_OPCODES.get(self.op_type), "lowering opcode mismatch")
+        reject(self.phase not in {0, 1}, "lowering phase rejected")
+        reject(not self.outputs, "lowering has no outputs")
+        reject(
+            len(self.inputs) > 0xFFFF or len(self.outputs) > 0xFFFF,
+            "lowering binding count rejected",
+        )
+        inspect_attribute_record(self.attributes, self.opcode)
+        header = struct.pack(
+            "<IHBBHHI",
+            self.source_index,
+            self.opcode,
+            self.phase,
+            0,
+            len(self.inputs),
+            len(self.outputs),
+            len(self.attributes),
+        )
+        bindings = b"".join(
+            struct.pack("<I", tensor_id) for tensor_id in self.inputs + self.outputs
+        )
+        return header + bindings + self.attributes
+
+
+def lowering_plan_bytes(records: Sequence[LoweringRecord]) -> bytes:
+    return b"KKLOWER1" + struct.pack("<I", len(records)) + b"".join(
+        record.canonical_bytes() for record in records
+    )
+
+
+def lowering_plan_sha256(records: Sequence[LoweringRecord]) -> str:
+    return hashlib.sha256(lowering_plan_bytes(records)).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -450,6 +971,7 @@ def emit_aot(program: AotProgram, model_sha256: bytes, voices_sha256: bytes) -> 
         bindings.extend(op.inputs)
         bindings.extend(op.outputs)
         if op.attributes:
+            inspect_attribute_record(op.attributes, op.opcode)
             attribute_offset = align_up(len(data), 4)
             data.extend(b"\0" * (attribute_offset - len(data)))
             data.extend(op.attributes)
@@ -595,16 +1117,48 @@ def inspect_aot(artifact: bytes) -> dict[str, Any]:
     reject(cursor != len(artifact), "artifact has trailing bytes")
 
     op_section = sections["ops"]
+    binding_section = sections["bindings"]
+    data_section = sections["data"]
+    attribute_kinds: Counter[int] = Counter()
     for index in range(op_section["count"]):
         offset = op_section["offset"] + index * 40
-        opcode, op_flags, phase = struct.unpack_from("<HHB", artifact, offset)
+        (
+            opcode,
+            op_flags,
+            phase,
+            binding_start,
+            input_count,
+            output_count,
+            attribute_offset,
+            attribute_len,
+            work_units,
+        ) = struct.unpack_from("<HHB3xIHHQII", artifact, offset)
         reject(opcode not in AOT_OPCODES.values(), f"op {index}: opcode rejected")
         reject(op_flags & ~1 != 0 or phase not in {0, 1}, f"op {index}: flags rejected")
+        reject(output_count == 0 or work_units == 0, f"op {index}: arity/work rejected")
+        reject(
+            binding_start + input_count + output_count > binding_section["count"],
+            f"op {index}: binding range rejected",
+        )
         reject(
             any(artifact[offset + 5 : offset + 8])
             or any(artifact[offset + 32 : offset + 40]),
             f"op {index}: reserved bytes rejected",
         )
+        if attribute_len == 0:
+            reject(attribute_offset != 0, f"op {index}: empty attribute is non-canonical")
+        else:
+            reject(attribute_offset % 4 != 0, f"op {index}: attribute alignment rejected")
+            attribute_end = attribute_offset + attribute_len
+            reject(
+                attribute_end > data_section["count"],
+                f"op {index}: attribute range rejected",
+            )
+            start = data_section["offset"] + attribute_offset
+            decoded = inspect_attribute_record(
+                artifact[start : start + attribute_len], opcode
+            )
+            attribute_kinds[int(decoded["kind"])] += 1
     phase_section = sections["phases"]
     phase_ids = tuple(artifact[phase_section["offset"] + index * 48] for index in range(2))
     reject(phase_ids != (0, 1), "phase IDs rejected")
@@ -614,6 +1168,14 @@ def inspect_aot(artifact: bytes) -> dict[str, Any]:
         "model_sha256": artifact[96:128].hex(),
         "voices_sha256": artifact[128:160].hex(),
         "sections": {name: value["count"] for name, value in sections.items()},
+        "attribute_abi": {
+            "version": ATTRIBUTE_ABI_VERSION,
+            "records": sum(attribute_kinds.values()),
+            "kind_counts": {
+                f"0x{kind:04x}": count
+                for kind, count in sorted(attribute_kinds.items())
+            },
+        },
     }
 
 
@@ -664,6 +1226,166 @@ def synthetic_fixture_artifact() -> bytes:
     )
     return emit_aot(
         AotProgram(tensors, slots, ops, phases, bytes(data)),
+        bytes.fromhex(PINNED_MODEL_SHA256),
+        bytes.fromhex(PINNED_VOICES_SHA256),
+    )
+
+
+def synthetic_attribute_fixture_artifact() -> bytes:
+    """Emit one parseable v1 attribute record for every admitted CPU kind."""
+
+    tensors: list[AotTensor] = []
+    ops: list[AotOp] = []
+
+    def external(dtype: int, dims: tuple[int, ...]) -> int:
+        tensor_id = len(tensors)
+        alignment = 8 if dtype == 3 else 4
+        tensors.append(AotTensor(dtype, dims, 4, 0, alignment=alignment))
+        return tensor_id
+
+    def operation(
+        op_type: str,
+        input_specs: Sequence[tuple[int, tuple[int, ...]]],
+        output_specs: Sequence[tuple[int, tuple[int, ...]]],
+        attrs: bytes,
+    ) -> None:
+        inputs = tuple(external(dtype, dims) for dtype, dims in input_specs)
+        outputs = tuple(external(dtype, dims) for dtype, dims in output_specs)
+        ops.append(AotOp(AOT_OPCODES[op_type], 0, inputs, outputs, attributes=attrs))
+
+    operation(
+        "Add",
+        ((1, (1, 4)), (1, (4,))),
+        ((1, (1, 4)),),
+        binary_attribute("Add", 2, 1, 2),
+    )
+    operation(
+        "Mul",
+        ((1, ()), (1, (1, 2, 3))),
+        ((1, (1, 2, 3)),),
+        binary_attribute("Mul", 0, 3, 3),
+    )
+    operation(
+        "Div",
+        ((1, (4,)), (1, ())),
+        ((1, (4,)),),
+        binary_attribute("Div", 1, 0, 1),
+    )
+    operation(
+        "Sub",
+        ((1, (1, 2, 3)), (1, (1, 2, 3))),
+        ((1, (1, 2, 3)),),
+        binary_attribute("Sub", 3, 3, 3),
+    )
+    for op_type in sorted(LOWERED_PARAMETERLESS_UNARY_OPS):
+        operation(
+            op_type,
+            ((1, (1, 2, 3)),),
+            ((1, (1, 2, 3)),),
+            parameterless_unary_attribute(op_type),
+        )
+    operation(
+        "LeakyRelu",
+        ((1, (1, 2, 3)),),
+        ((1, (1, 2, 3)),),
+        leaky_relu_attribute(0x3E4CCCCD, 3, 3),
+    )
+    operation(
+        "ReduceMean",
+        ((1, (1, 2, 4)), (3, (1,))),
+        ((1, (1, 2, 1)),),
+        reduce_mean_attribute(2, 1, 0, 3, 3),
+    )
+    operation(
+        "LayerNormalization",
+        ((1, (1, 2, 4)), (1, (4,)), (1, (4,))),
+        ((1, (1, 2, 4)),),
+        layer_norm_attribute(-1, 0x3727C5AC, 1, 3, 3, 1),
+    )
+    operation(
+        "Softmax",
+        ((1, (1, 2, 3, 4)),),
+        ((1, (1, 2, 3, 4)),),
+        softmax_attribute(-1, 4, 4),
+    )
+    operation(
+        "FastGelu",
+        ((1, (1, 2, 4)), (1, (4,))),
+        ((1, (1, 2, 4)),),
+        fast_gelu_attribute(1, 3, 3, 1),
+    )
+    operation(
+        "SkipLayerNormalization",
+        ((1, (1, 2, 4)), (1, (1, 2, 4)), (1, (4,)), (1, (4,))),
+        ((1, (1, 2, 4)),),
+        skip_layer_norm_attribute(0x2B8CBCCC, 3, 3, 1),
+    )
+
+    def view_operation(
+        op_type: str,
+        dtype: int,
+        input_dims: tuple[int, ...],
+        control_dims: tuple[int, ...],
+        output_dims: tuple[int, ...],
+        attrs: bytes,
+    ) -> None:
+        owner = external(dtype, input_dims)
+        control = external(3, control_dims)
+        output = len(tensors)
+        tensors.append(
+            AotTensor(
+                dtype,
+                output_dims,
+                2,
+                0,
+                view_of=owner,
+                alignment=8 if dtype == 3 else 4,
+            )
+        )
+        ops.append(
+            AotOp(
+                AOT_OPCODES[op_type],
+                0,
+                (owner, control),
+                (output,),
+                flags=1,
+                attributes=attrs,
+            )
+        )
+
+    view_operation(
+        "Reshape",
+        2,
+        (4,),
+        (3,),
+        (1, 4, 1),
+        view_attribute(
+            "Reshape", 1, 3, 6, static_control=True, parameters=(1, -1, 1)
+        ),
+    )
+    view_operation(
+        "Unsqueeze",
+        3,
+        (),
+        (1,),
+        (1,),
+        view_attribute("Unsqueeze", 0, 1, 7, static_control=True, parameters=(0,)),
+    )
+    view_operation(
+        "Squeeze",
+        1,
+        (1, 4, 1),
+        (1,),
+        (1, 4),
+        view_attribute("Squeeze", 3, 2, 1, static_control=True, parameters=(1,)),
+    )
+
+    phases = (
+        AotPhase(0, 0, 0, len(ops), 0, 0, 0, 0),
+        AotPhase(1, 1, len(ops), len(ops), 0, 0, 1, 1),
+    )
+    return emit_aot(
+        AotProgram(tuple(tensors), (), tuple(ops), phases),
         bytes.fromhex(PINNED_MODEL_SHA256),
         bytes.fromhex(PINNED_VOICES_SHA256),
     )
@@ -751,6 +1473,7 @@ class GraphAnalysis:
     tensors: list[TensorFact]
     quant_fusions: list[QuantFusion]
     phase_cut: int
+    lowerings: list[LoweringRecord] = field(default_factory=list)
     report: dict[str, Any] = field(default_factory=dict)
 
 
@@ -768,6 +1491,581 @@ def axes_from_input(
     if tensor is None:
         return None
     return tuple(int(value) for value in initializer_values(onnx, tensor))
+
+
+def _declared_shape(
+    analysis: GraphAnalysis, tensor_name: str
+) -> tuple[int | str | None, ...] | None:
+    tensor = analysis.initializers.get(tensor_name)
+    if tensor is not None:
+        return tuple(int(dim) for dim in tensor.dims)
+    value_info = analysis.value_infos.get(tensor_name)
+    return None if value_info is None else tensor_shape(value_info)
+
+
+def _validate_declared_rank(analysis: GraphAnalysis, tensor_name: str) -> None:
+    shape = _declared_shape(analysis, tensor_name)
+    if shape is None:
+        return
+    reject(
+        len(shape) != analysis.ranks[tensor_name],
+        f"tensor {tensor_name!r}: declared/inferred rank mismatch",
+    )
+    reject(
+        any(isinstance(dim, int) and dim <= 0 for dim in shape),
+        f"tensor {tensor_name!r}: non-positive dimension rejected",
+    )
+
+
+def _validate_same_numeric_shape(
+    analysis: GraphAnalysis, names: Sequence[str], context: str
+) -> None:
+    shapes = [_declared_shape(analysis, name) for name in names]
+    known = [shape for shape in shapes if shape is not None]
+    if not known:
+        return
+    rank = len(known[0])
+    reject(any(len(shape) != rank for shape in known), f"{context}: rank mismatch")
+    for axis in range(rank):
+        numeric = {
+            int(shape[axis])
+            for shape in known
+            if isinstance(shape[axis], int)
+        }
+        reject(len(numeric) > 1, f"{context}: dimension {axis} mismatch")
+
+
+def _validate_binary_broadcast(
+    analysis: GraphAnalysis, lhs: str, rhs: str, output: str, context: str
+) -> None:
+    lhs_rank = analysis.ranks[lhs]
+    rhs_rank = analysis.ranks[rhs]
+    output_rank = analysis.ranks[output]
+    reject(output_rank != max(lhs_rank, rhs_rank), f"{context}: output rank mismatch")
+    shapes = (
+        _declared_shape(analysis, lhs),
+        _declared_shape(analysis, rhs),
+        _declared_shape(analysis, output),
+    )
+    if any(shape is None for shape in shapes):
+        return
+    lhs_shape, rhs_shape, output_shape = shapes
+    assert lhs_shape is not None and rhs_shape is not None and output_shape is not None
+    lhs_aligned = (1,) * (output_rank - lhs_rank) + lhs_shape
+    rhs_aligned = (1,) * (output_rank - rhs_rank) + rhs_shape
+    for axis, (lhs_dim, rhs_dim, output_dim) in enumerate(
+        zip(lhs_aligned, rhs_aligned, output_shape)
+    ):
+        if isinstance(lhs_dim, int) and isinstance(rhs_dim, int):
+            reject(
+                lhs_dim != rhs_dim and lhs_dim != 1 and rhs_dim != 1,
+                f"{context}: broadcast mismatch at axis {axis}",
+            )
+            if isinstance(output_dim, int):
+                reject(
+                    output_dim != max(lhs_dim, rhs_dim),
+                    f"{context}: broadcast output mismatch at axis {axis}",
+                )
+        elif isinstance(output_dim, int):
+            for input_dim in (lhs_dim, rhs_dim):
+                reject(
+                    isinstance(input_dim, int) and input_dim not in {1, output_dim},
+                    f"{context}: runtime broadcast mismatch at axis {axis}",
+                )
+
+
+def _small_int_initializer(
+    analysis: GraphAnalysis, tensor_name: str, context: str
+) -> tuple[int, ...]:
+    tensor = analysis.initializers.get(tensor_name)
+    reject(tensor is None, f"{context}: controller is not an initializer")
+    assert tensor is not None
+    reject(
+        int(tensor.data_type) != 7 or len(tensor.dims) != 1,
+        f"{context}: controller must be rank-one INT64",
+    )
+    count = int(tensor.dims[0])
+    reject(count < 1 or count > 4, f"{context}: controller length rejected")
+    values = initializer_values(analysis.onnx, tensor)
+    reject(len(values) != count, f"{context}: controller payload length changed")
+    reject(
+        any(not isinstance(value, int) for value in values),
+        f"{context}: controller payload is not integral",
+    )
+    return tuple(int(value) for value in values)
+
+
+def _normalize_axes(axes: Sequence[int], rank: int, context: str) -> tuple[int, ...]:
+    normalized = tuple(axis + rank if axis < 0 else axis for axis in axes)
+    reject(
+        any(axis < 0 or axis >= rank for axis in normalized)
+        or len(set(normalized)) != len(normalized),
+        f"{context}: axes rejected",
+    )
+    return normalized
+
+
+def _validate_last_dimension_parameter(
+    analysis: GraphAnalysis, data: str, parameter: str, context: str
+) -> int | None:
+    reject(
+        parameter not in analysis.initializers,
+        f"{context}: parameter {parameter!r} is not constant",
+    )
+    parameter_shape = _declared_shape(analysis, parameter)
+    reject(
+        parameter_shape is None
+        or len(parameter_shape) != 1
+        or not isinstance(parameter_shape[0], int)
+        or parameter_shape[0] <= 0,
+        f"{context}: parameter must be a non-empty rank-one tensor",
+    )
+    data_shape = _declared_shape(analysis, data)
+    if data_shape is not None and isinstance(data_shape[-1], int):
+        reject(
+            data_shape[-1] != parameter_shape[0],
+            f"{context}: parameter/last-dimension mismatch",
+        )
+    return int(parameter_shape[0])
+
+
+def _validate_reshape_static_shape(
+    analysis: GraphAnalysis,
+    data: str,
+    output: str,
+    target: Sequence[int],
+    context: str,
+) -> None:
+    input_rank = analysis.ranks[data]
+    reject(
+        sum(value == -1 for value in target) > 1
+        or any(value < -1 for value in target),
+        f"{context}: Reshape target values rejected",
+    )
+    for axis, value in enumerate(target):
+        reject(value == 0 and axis >= input_rank, f"{context}: Reshape zero index rejected")
+
+    source_shape = _declared_shape(analysis, data)
+    output_shape = _declared_shape(analysis, output)
+    resolved: list[int | str | None] = list(target)
+    if source_shape is not None:
+        for axis, value in enumerate(resolved):
+            if value == 0:
+                resolved[axis] = source_shape[axis]
+    source_numeric = source_shape is not None and all(
+        isinstance(dim, int) for dim in source_shape
+    )
+    known_target = [dim for dim in resolved if isinstance(dim, int) and dim > 0]
+    if source_numeric:
+        source_elements = 1
+        for dim in source_shape:
+            assert isinstance(dim, int)
+            source_elements *= dim
+        target_elements = 1
+        for dim in known_target:
+            target_elements *= dim
+        infer_positions = [index for index, dim in enumerate(resolved) if dim == -1]
+        if infer_positions:
+            reject(
+                target_elements == 0 or source_elements % target_elements != 0,
+                f"{context}: Reshape inferred dimension is not integral",
+            )
+            resolved[infer_positions[0]] = source_elements // target_elements
+        else:
+            reject(
+                target_elements != source_elements,
+                f"{context}: Reshape element count mismatch",
+            )
+    if output_shape is not None:
+        reject(len(output_shape) != len(resolved), f"{context}: Reshape output rank mismatch")
+        for axis, (expected, actual) in enumerate(zip(resolved, output_shape)):
+            reject(
+                isinstance(expected, int)
+                and expected > 0
+                and isinstance(actual, int)
+                and expected != actual,
+                f"{context}: Reshape output dimension {axis} mismatch",
+            )
+
+
+def build_supported_lowerings(analysis: GraphAnalysis) -> list[LoweringRecord]:
+    """Validate and lower only CPU kernels/views already implemented in Rust."""
+
+    graph = analysis.model.graph
+    tensor_ids = {tensor.name: tensor.tensor_id for tensor in analysis.tensors}
+    tensor_facts = {tensor.name: tensor for tensor in analysis.tensors}
+    records: list[LoweringRecord] = []
+
+    def require_arity(node: Any, index: int, inputs: int, outputs: int) -> None:
+        reject(
+            len(node.input) != inputs
+            or any(not name for name in node.input)
+            or len(node.output) != outputs
+            or any(not name for name in node.output),
+            f"node {index} {node.name!r}: {node.op_type} arity rejected",
+        )
+
+    def require_f32(names: Sequence[str], context: str) -> None:
+        reject(
+            any(analysis.dtypes.get(name) != 1 for name in names),
+            f"{context}: expected FLOAT tensors",
+        )
+        for name in names:
+            _validate_declared_rank(analysis, name)
+            reject(analysis.ranks[name] > 4, f"{context}: rank exceeds four")
+
+    def append(index: int, node: Any, attrs: bytes, variant: str) -> None:
+        inspect_attribute_record(attrs, AOT_OPCODES[node.op_type])
+        records.append(
+            LoweringRecord(
+                source_index=index,
+                op_type=node.op_type,
+                opcode=AOT_OPCODES[node.op_type],
+                phase=0 if index < analysis.phase_cut else 1,
+                inputs=tuple(tensor_ids[name] for name in node.input),
+                outputs=tuple(tensor_ids[name] for name in node.output),
+                attributes=attrs,
+                variant=variant,
+            )
+        )
+
+    for index, node in enumerate(graph.node):
+        op_type = node.op_type
+        if op_type not in LOWERED_OPS:
+            continue
+        context = f"node {index} {node.name!r}"
+        node_attrs = attributes(analysis.onnx, node)
+
+        if op_type in LOWERED_F32_BINARY_OPS:
+            require_arity(node, index, 2, 1)
+            reject(node.domain != "" or node_attrs, f"{context}: binary contract changed")
+            names = tuple(node.input) + tuple(node.output)
+            dtypes = {analysis.dtypes[name] for name in names}
+            if dtypes != {1}:
+                # The prepared graph also contains 80 INT32 and one INT64 Add
+                # used outside this f32 lane. They remain explicit, unlowered
+                # graph operations and cannot be mistaken for a CPU f32 record.
+                reject(
+                    op_type != "Add" or len(dtypes) != 1 or next(iter(dtypes)) not in {6, 7},
+                    f"{context}: mixed/unsupported binary dtype",
+                )
+                continue
+            require_f32(names, context)
+            lhs_rank, rhs_rank = (analysis.ranks[name] for name in node.input)
+            output_rank = analysis.ranks[node.output[0]]
+            _validate_binary_broadcast(
+                analysis, node.input[0], node.input[1], node.output[0], context
+            )
+            reject(
+                tensor_facts[node.output[0]].alias_of is not None,
+                f"{context}: compute output cannot be a view",
+            )
+            append(
+                index,
+                node,
+                binary_attribute(op_type, lhs_rank, rhs_rank, output_rank),
+                f"r{lhs_rank},r{rhs_rank}->r{output_rank}:checked-broadcast",
+            )
+            continue
+
+        if op_type in LOWERED_UNARY_OPS:
+            require_arity(node, index, 1, 1)
+            reject(node.domain != "", f"{context}: unary domain changed")
+            require_f32(tuple(node.input) + tuple(node.output), context)
+            input_rank = analysis.ranks[node.input[0]]
+            output_rank = analysis.ranks[node.output[0]]
+            reject(input_rank != output_rank, f"{context}: unary rank mismatch")
+            _validate_same_numeric_shape(
+                analysis, (node.input[0], node.output[0]), context
+            )
+            reject(
+                tensor_facts[node.output[0]].alias_of is not None,
+                f"{context}: compute output cannot be a view",
+            )
+            if op_type == "LeakyRelu":
+                reject(set(node_attrs) != {"alpha"}, f"{context}: LeakyRelu attrs changed")
+                alpha_bits = f32_bits(float(node_attrs["alpha"]))
+                reject(
+                    alpha_bits not in LEAKY_RELU_ALPHA_BITS,
+                    f"{context}: LeakyRelu alpha rejected",
+                )
+                encoded = leaky_relu_attribute(alpha_bits, input_rank, output_rank)
+                variant = f"r{input_rank}:alpha=0x{alpha_bits:08x}:checked-strided"
+            else:
+                reject(node_attrs, f"{context}: parameterless unary attrs changed")
+                encoded = parameterless_unary_attribute(op_type)
+                variant = f"r{input_rank}:checked-strided"
+            append(index, node, encoded, variant)
+            continue
+
+        if op_type == "ReduceMean":
+            require_arity(node, index, 2, 1)
+            reject(
+                node.domain != ""
+                or node_attrs != {"keepdims": 1, "noop_with_empty_axes": 0},
+                f"{context}: ReduceMean attributes changed",
+            )
+            require_f32((node.input[0], node.output[0]), context)
+            reject(
+                analysis.dtypes[node.input[1]] != 7
+                or analysis.ranks[node.input[1]] != 1,
+                f"{context}: ReduceMean axes tensor rejected",
+            )
+            axes = _small_int_initializer(analysis, node.input[1], context)
+            reject(len(axes) != 1, f"{context}: ReduceMean requires exactly one axis")
+            input_rank = analysis.ranks[node.input[0]]
+            output_rank = analysis.ranks[node.output[0]]
+            axis = axes[0]
+            normalized_axis = _normalize_axes(axes, input_rank, context)[0]
+            reject(output_rank != input_rank, f"{context}: ReduceMean output rank changed")
+            input_shape = _declared_shape(analysis, node.input[0])
+            output_shape = _declared_shape(analysis, node.output[0])
+            if input_shape is not None and output_shape is not None:
+                for dimension, (source, target) in enumerate(zip(input_shape, output_shape)):
+                    if dimension == normalized_axis:
+                        reject(
+                            isinstance(target, int) and target != 1,
+                            f"{context}: reduced dimension is not one",
+                        )
+                    else:
+                        reject(
+                            isinstance(source, int)
+                            and isinstance(target, int)
+                            and source != target,
+                            f"{context}: non-reduced dimension changed",
+                        )
+            append(
+                index,
+                node,
+                reduce_mean_attribute(axis, 1, 0, input_rank, output_rank),
+                f"r{input_rank}:axis={axis}:keepdims=1:contiguous",
+            )
+            continue
+
+        if op_type == "LayerNormalization":
+            require_arity(node, index, 3, 1)
+            reject(
+                node.domain != ""
+                or set(node_attrs) != {"axis", "epsilon", "stash_type"}
+                or int(node_attrs["axis"]) != -1
+                or int(node_attrs["stash_type"]) != 1,
+                f"{context}: LayerNormalization attributes changed",
+            )
+            epsilon_bits = f32_bits(float(node_attrs["epsilon"]))
+            reject(
+                epsilon_bits not in LAYER_NORM_EPSILON_BITS,
+                f"{context}: LayerNormalization epsilon rejected",
+            )
+            require_f32(tuple(node.input) + tuple(node.output), context)
+            input_rank = analysis.ranks[node.input[0]]
+            output_rank = analysis.ranks[node.output[0]]
+            reject(
+                input_rank == 0 or output_rank != input_rank,
+                f"{context}: LayerNormalization rank rejected",
+            )
+            scale_dim = _validate_last_dimension_parameter(
+                analysis, node.input[0], node.input[1], context
+            )
+            bias_dim = _validate_last_dimension_parameter(
+                analysis, node.input[0], node.input[2], context
+            )
+            reject(scale_dim != bias_dim, f"{context}: scale/bias dimensions differ")
+            _validate_same_numeric_shape(
+                analysis, (node.input[0], node.output[0]), context
+            )
+            append(
+                index,
+                node,
+                layer_norm_attribute(-1, epsilon_bits, 1, input_rank, output_rank, 1),
+                f"r{input_rank}:axis=-1:epsilon=0x{epsilon_bits:08x}:width={scale_dim}",
+            )
+            continue
+
+        if op_type == "Softmax":
+            require_arity(node, index, 1, 1)
+            reject(
+                node.domain != "" or node_attrs != {"axis": -1},
+                f"{context}: Softmax attributes changed",
+            )
+            require_f32(tuple(node.input) + tuple(node.output), context)
+            input_rank = analysis.ranks[node.input[0]]
+            output_rank = analysis.ranks[node.output[0]]
+            reject(input_rank == 0 or input_rank != output_rank, f"{context}: Softmax rank")
+            _validate_same_numeric_shape(
+                analysis, (node.input[0], node.output[0]), context
+            )
+            append(
+                index,
+                node,
+                softmax_attribute(-1, input_rank, output_rank),
+                f"r{input_rank}:axis=-1:contiguous",
+            )
+            continue
+
+        if op_type == "FastGelu":
+            require_arity(node, index, 2, 1)
+            reject(
+                node.domain != "com.microsoft" or node_attrs,
+                f"{context}: FastGelu contract changed",
+            )
+            require_f32(tuple(node.input) + tuple(node.output), context)
+            input_rank = analysis.ranks[node.input[0]]
+            output_rank = analysis.ranks[node.output[0]]
+            reject(input_rank == 0 or input_rank != output_rank, f"{context}: FastGelu rank")
+            bias_dim = _validate_last_dimension_parameter(
+                analysis, node.input[0], node.input[1], context
+            )
+            _validate_same_numeric_shape(
+                analysis, (node.input[0], node.output[0]), context
+            )
+            append(
+                index,
+                node,
+                fast_gelu_attribute(1, input_rank, output_rank, 1),
+                f"r{input_rank}:bias=1:width={bias_dim}:contiguous",
+            )
+            continue
+
+        if op_type == "SkipLayerNormalization":
+            require_arity(node, index, 4, 1)
+            reject(
+                node.domain != "com.microsoft" or set(node_attrs) != {"epsilon"},
+                f"{context}: SkipLayerNormalization contract changed",
+            )
+            epsilon_bits = f32_bits(float(node_attrs["epsilon"]))
+            reject(
+                epsilon_bits != SKIP_LAYER_NORM_EPSILON_BITS,
+                f"{context}: SkipLayerNormalization epsilon rejected",
+            )
+            require_f32(tuple(node.input) + tuple(node.output), context)
+            input_rank = analysis.ranks[node.input[0]]
+            output_rank = analysis.ranks[node.output[0]]
+            reject(
+                input_rank == 0
+                or analysis.ranks[node.input[1]] != input_rank
+                or output_rank != input_rank,
+                f"{context}: SkipLayerNormalization rank rejected",
+            )
+            scale_dim = _validate_last_dimension_parameter(
+                analysis, node.input[0], node.input[2], context
+            )
+            bias_dim = _validate_last_dimension_parameter(
+                analysis, node.input[0], node.input[3], context
+            )
+            reject(scale_dim != bias_dim, f"{context}: scale/bias dimensions differ")
+            _validate_same_numeric_shape(
+                analysis, (node.input[0], node.input[1], node.output[0]), context
+            )
+            append(
+                index,
+                node,
+                skip_layer_norm_attribute(epsilon_bits, input_rank, output_rank, 1),
+                f"r{input_rank}:epsilon=0x{epsilon_bits:08x}:width={scale_dim}",
+            )
+            continue
+
+        assert op_type in LOWERED_VIEW_OPS
+        require_arity(node, index, 2, 1)
+        reject(node.domain != "", f"{context}: view domain changed")
+        data, control = node.input
+        output = node.output[0]
+        dtype = analysis.dtypes[data]
+        reject(
+            dtype not in {1, 6, 7}
+            or analysis.dtypes[output] != dtype
+            or analysis.dtypes[control] != 7
+            or analysis.ranks[control] != 1,
+            f"{context}: view dtype/controller rejected",
+        )
+        input_rank = analysis.ranks[data]
+        output_rank = analysis.ranks[output]
+        reject(input_rank > 4 or output_rank > 4, f"{context}: view rank exceeds four")
+        _validate_declared_rank(analysis, data)
+        _validate_declared_rank(analysis, control)
+        _validate_declared_rank(analysis, output)
+        input_root = tensor_facts[data].alias_of
+        if input_root is None:
+            input_root = tensor_facts[data].tensor_id
+        reject(
+            tensor_facts[output].alias_of != input_root,
+            f"{context}: view alias root changed",
+        )
+        static_control = control in analysis.initializers
+        parameters: tuple[int, ...]
+        if op_type == "Reshape":
+            reject(
+                node_attrs not in ({}, {"allowzero": 0}),
+                f"{context}: Reshape attributes changed",
+            )
+            reject(output_rank == 0, f"{context}: scalar Reshape not admitted")
+            if static_control:
+                parameters = _small_int_initializer(analysis, control, context)
+                reject(
+                    len(parameters) != output_rank,
+                    f"{context}: Reshape controller/output rank mismatch",
+                )
+                _validate_reshape_static_shape(
+                    analysis, data, output, parameters, context
+                )
+                control_variant = "static:" + ",".join(map(str, parameters))
+            else:
+                producer_index = analysis.producers.get(control)
+                reject(
+                    producer_index is None
+                    or graph.node[producer_index].op_type != "Concat",
+                    f"{context}: dynamic Reshape controller is not Concat",
+                )
+                control_shape = _declared_shape(analysis, control)
+                reject(
+                    control_shape is not None
+                    and isinstance(control_shape[0], int)
+                    and control_shape[0] != output_rank,
+                    f"{context}: dynamic Reshape controller length mismatch",
+                )
+                parameters = ()
+                control_variant = "dynamic:Concat"
+        else:
+            reject(node_attrs, f"{context}: {op_type} attributes changed")
+            reject(not static_control, f"{context}: {op_type} axes must be constant")
+            parameters = _small_int_initializer(analysis, control, context)
+            if op_type == "Unsqueeze":
+                reject(
+                    output_rank != input_rank + len(parameters),
+                    f"{context}: Unsqueeze rank mismatch",
+                )
+                _normalize_axes(parameters, output_rank, context)
+            else:
+                reject(
+                    input_rank != output_rank + len(parameters),
+                    f"{context}: Squeeze rank mismatch",
+                )
+                normalized = _normalize_axes(parameters, input_rank, context)
+                data_shape = _declared_shape(analysis, data)
+                if data_shape is not None:
+                    reject(
+                        any(
+                            isinstance(data_shape[axis], int)
+                            and data_shape[axis] != 1
+                            for axis in normalized
+                        ),
+                        f"{context}: Squeeze axis is not unit-sized",
+                    )
+            control_variant = "static:" + ",".join(map(str, parameters))
+        append(
+            index,
+            node,
+            view_attribute(
+                op_type,
+                input_rank,
+                output_rank,
+                dtype,
+                static_control=static_control,
+                parameters=parameters,
+            ),
+            f"{DTYPE_NAMES[dtype]}:r{input_rank}->r{output_rank}:{control_variant}:alias",
+        )
+
+    return records
 
 
 def infer_output_ranks(
@@ -1492,6 +2790,26 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
             ]
         )
     ).hexdigest()
+    lowering_counts = Counter(record.op_type for record in analysis.lowerings)
+    lowering_variants: dict[str, Counter[str]] = defaultdict(Counter)
+    attribute_bytes = Counter()
+    static_views = dynamic_views = 0
+    for record in analysis.lowerings:
+        lowering_variants[record.op_type][record.variant] += 1
+        attribute_bytes[len(record.attributes)] += 1
+        if record.op_type in LOWERED_VIEW_OPS:
+            decoded = inspect_attribute_record(record.attributes, record.opcode)
+            if int(decoded["flags"]) & ATTRIBUTE_VIEW_STATIC_CONTROL:
+                static_views += 1
+            else:
+                dynamic_views += 1
+    unary_count = sum(lowering_counts[name] for name in LOWERED_UNARY_OPS)
+    core_f32_count = sum(
+        lowering_counts[name]
+        for name in LOWERED_F32_OPS
+        if name not in LOWERED_UNARY_OPS
+    )
+    view_count = sum(lowering_counts[name] for name in LOWERED_VIEW_OPS)
     return {
         "schema": ANALYSIS_SCHEMA,
         "tool_version": TOOL_VERSION,
@@ -1555,6 +2873,30 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
             "native_conv_opcode": "DynamicQuantizedConv1d:0x0301",
             "plan_sha256": fusion_plan_digest,
             "unsupported": 0,
+        },
+        "cpu_attribute_lowering": {
+            "abi": "trueos.kokoro-op-attributes.v1",
+            "abi_version": ATTRIBUTE_ABI_VERSION,
+            "record_header": "<u16 version,u16 kind/opcode,u32 total_bytes>",
+            "records": len(analysis.lowerings),
+            "f32_core_records": core_f32_count,
+            "f32_unary_records": unary_count,
+            "f32_total_records": core_f32_count + unary_count,
+            "view_alias_records": view_count,
+            "view_static_controllers": static_views,
+            "view_dynamic_controllers": dynamic_views,
+            "excluded_non_f32_add": op_counts["Add"] - lowering_counts["Add"],
+            "operator_counts": dict(sorted(lowering_counts.items())),
+            "attribute_size_counts": {
+                str(size): count for size, count in sorted(attribute_bytes.items())
+            },
+            "variants": {
+                op_type: dict(sorted(variants.items()))
+                for op_type, variants in sorted(lowering_variants.items())
+            },
+            "plan_sha256": lowering_plan_sha256(analysis.lowerings),
+            "unsupported_admitted": 0,
+            "executable_graph_emitted": False,
         },
         "phases": {
             "count": 2,
@@ -1696,6 +3038,18 @@ def analyze(
         quant_fusions=quant_fusions,
         phase_cut=phase_cut,
     )
+    analysis.lowerings = build_supported_lowerings(analysis)
+    if pinned:
+        lowering_counts = Counter(record.op_type for record in analysis.lowerings)
+        reject(
+            dict(sorted(lowering_counts.items())) != PINNED_LOWERING_COUNTS,
+            "CPU lowering inventory changed",
+        )
+        lowering_digest = lowering_plan_sha256(analysis.lowerings)
+        reject(
+            lowering_digest != PINNED_LOWERING_SHA256,
+            "CPU lowering plan digest changed",
+        )
     analysis.report = make_report(analysis)
     return analysis
 
@@ -1726,6 +3080,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     fixture_parser.add_argument("output", type=Path)
     fixture_parser.add_argument("--force", action="store_true")
+    attribute_fixture_parser = subparsers.add_parser(
+        "attribute-fixture",
+        help="emit one canonical v1 record for each admitted CPU attribute kind",
+    )
+    attribute_fixture_parser.add_argument("output", type=Path)
+    attribute_fixture_parser.add_argument("--force", action="store_true")
     inspect_parser = subparsers.add_parser(
         "inspect", help="verify and summarize a sealed v1 artifact"
     )
@@ -1746,6 +3106,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "fixture":
             write_atomic(args.output, synthetic_fixture_artifact(), args.force)
+            return 0
+        if args.command == "attribute-fixture":
+            write_atomic(args.output, synthetic_attribute_fixture_artifact(), args.force)
             return 0
         if args.command == "inspect":
             sys.stdout.buffer.write(canonical_json(inspect_aot(args.artifact.read_bytes())))

@@ -133,6 +133,16 @@ encoder/duration prediction first, decoder/vocoder arena resolution second.
 The observed 36 MiB host activation peak is a measurement, not an unchecked
 kernel allocation limit.
 
+The allocation-free f32 lane now implements 1,885 pinned graph nodes:
+broadcast Add/Mul/Div/Sub, ReduceMean, LayerNormalization, Softmax, FastGelu,
+SkipLayerNormalization, and every remaining elementwise unary math operator.
+It accepts rank-four-or-smaller checked strided views and leaves outputs
+unchanged on validation or math failure. A separate model-specific duration
+kernel fuses the proven 50-logit Sigmoid/ReduceSum/Div/Round/Clip/Cast/CumSum
+chain. It returns both the INT64 cumulative-duration vector and the checked
+frame count used to size phase 1; an ONNX Runtime 1.28 fixture covers the exact
+barrier contract.
+
 ## F4 shell commands
 
 The first command consumer is shell2 F4 cmd mode:
@@ -188,9 +198,10 @@ quantized CPU/GPU kernels are implemented. The repository does not yet install
 a native Kokoro `SpeechBackend`; consequently a current boot correctly reports
 `native-kokoro-backend-unregistered` and does not generate placeholder tones
 or claim synthesis. The remaining critical path is the sealed AOT graph
-program/runtime and its float recurrent, attention, elementwise, and vocoder
-operators. Audible speech begins only when that executor registers the native
-backend and passes the waveform oracle.
+program emission/dispatch and its recurrent, attention, layout/index,
+float-convolution, resize, inverse-STFT, and vocoder operators. Audible speech
+begins only when that executor registers the native backend and passes the
+waveform oracle.
 
 File STT reads a signed 16-bit mono/stereo PCM WAV from TRUEOSFS on the BSP,
 downmixes and resamples it to Whisper's mono 16 kHz boundary with periodic

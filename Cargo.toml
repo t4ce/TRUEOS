@@ -80,6 +80,9 @@ trueos-ttstt-cpu = { path = "crates/trueos-ttstt-cpu" }
 trueos-kokoro-aot = { path = "crates/trueos-kokoro-aot" }
 trueos-kokoro-exec = { path = "crates/trueos-kokoro-exec" }
 trueos-kokoro-f32 = { path = "crates/trueos-kokoro-f32" }
+trueos-kokoro-gemm = { path = "crates/trueos-kokoro-gemm" }
+trueos-kokoro-duration = { path = "crates/trueos-kokoro-duration" }
+trueos-kokoro-layout = { path = "crates/trueos-kokoro-layout" }
 trueos-fs = { path = "crates/trueos-fs" }
 v = { path = "crates/trueos-v" }
 trueos-vm = { path = "crates/trueos-vm" }

@@ -10,8 +10,8 @@
 //! phase-one arena, and never commits failed work.
 
 use trueos_kokoro_aot::{
-    ArenaPlanError, CursorError, CursorPoll, OpCode, OpCursor, Program,
-    UNRESOLVED_SLOT_BASE, WorkBudget, WorkSlice,
+    ArenaPlanError, CursorError, CursorPoll, OpCode, OpCursor, Program, UNRESOLVED_SLOT_BASE,
+    WorkBudget, WorkSlice,
 };
 
 /// Successful result of dispatching one cooperative work slice.
@@ -159,9 +159,10 @@ impl<const SLOT_CAPACITY: usize> Executor<SLOT_CAPACITY> {
     }
 
     pub fn slot_base(&self, slot: u32) -> Option<u64> {
-        self.slot_bases().get(slot as usize).copied().filter(|base| {
-            *base != UNRESOLVED_SLOT_BASE
-        })
+        self.slot_bases()
+            .get(slot as usize)
+            .copied()
+            .filter(|base| *base != UNRESOLVED_SLOT_BASE)
     }
 
     pub const fn is_terminal(&self) -> bool {
@@ -214,11 +215,7 @@ impl<const SLOT_CAPACITY: usize> Executor<SLOT_CAPACITY> {
         let artifact_sha256 = *program.artifact_sha256();
         match self.bound_artifact_sha256 {
             Some(bound) if bound != artifact_sha256 => {
-                return self.fail(
-                    ExecutorFault::ForeignProgram,
-                    initial_remaining,
-                    budget,
-                );
+                return self.fail(ExecutorFault::ForeignProgram, initial_remaining, budget);
             }
             Some(_) => {}
             None => self.bound_artifact_sha256 = Some(artifact_sha256),
@@ -227,11 +224,7 @@ impl<const SLOT_CAPACITY: usize> Executor<SLOT_CAPACITY> {
         loop {
             match self.cursor.poll(program, budget) {
                 CursorPoll::BudgetExhausted => {
-                    return report(
-                        SliceEvent::BudgetExhausted,
-                        initial_remaining,
-                        budget,
-                    );
+                    return report(SliceEvent::BudgetExhausted, initial_remaining, budget);
                 }
                 CursorPoll::Complete => {
                     self.state = ExecutorState::Complete;
@@ -261,20 +254,12 @@ impl<const SLOT_CAPACITY: usize> Executor<SLOT_CAPACITY> {
                         slot_count: program.slot_count(),
                     };
                     if let Err(error) = self.cursor.admit_phase_two(program, &plan) {
-                        return self.fail(
-                            ExecutorFault::Cursor(error),
-                            initial_remaining,
-                            budget,
-                        );
+                        return self.fail(ExecutorFault::Cursor(error), initial_remaining, budget);
                     }
                     self.pending_frame_count = None;
                     self.resolved_phase = Some(resolved);
                     self.state = ExecutorState::Phase1;
-                    return report(
-                        SliceEvent::PhaseAdmitted(resolved),
-                        initial_remaining,
-                        budget,
-                    );
+                    return report(SliceEvent::PhaseAdmitted(resolved), initial_remaining, budget);
                 }
                 CursorPoll::Ready(work) => {
                     let dispatch_result = match dispatcher.dispatch(program, work) {
@@ -290,7 +275,8 @@ impl<const SLOT_CAPACITY: usize> Executor<SLOT_CAPACITY> {
                     let frame_count = match dispatch_result {
                         DispatchResult::Completed => None,
                         DispatchResult::FrameCount(frame_count) => {
-                            if work.op().opcode != OpCode::ResolveDecoderShape
+                            if self.state != ExecutorState::Phase0
+                                || work.op().opcode != OpCode::ResolveDecoderShape
                                 || !work.completes_op()
                             {
                                 return self.fail(
@@ -310,11 +296,7 @@ impl<const SLOT_CAPACITY: usize> Executor<SLOT_CAPACITY> {
                         }
                     };
                     if let Err(error) = self.cursor.commit(program, work) {
-                        return self.fail(
-                            ExecutorFault::Cursor(error),
-                            initial_remaining,
-                            budget,
-                        );
+                        return self.fail(ExecutorFault::Cursor(error), initial_remaining, budget);
                     }
                     if let Some(frame_count) = frame_count {
                         self.pending_frame_count = Some(frame_count);
@@ -341,11 +323,7 @@ impl<const SLOT_CAPACITY: usize> Default for Executor<SLOT_CAPACITY> {
     }
 }
 
-fn report<E>(
-    event: SliceEvent<E>,
-    initial_remaining: u32,
-    budget: &WorkBudget,
-) -> SliceReport<E> {
+fn report<E>(event: SliceEvent<E>, initial_remaining: u32, budget: &WorkBudget) -> SliceReport<E> {
     SliceReport {
         event,
         consumed: initial_remaining - budget.remaining(),

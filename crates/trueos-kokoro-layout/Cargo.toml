@@ -1,0 +1,14 @@
+[package]
+name = "trueos-kokoro-layout"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+description = "Allocation-free rank-four layout and index kernels for TRUEOS Kokoro"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]

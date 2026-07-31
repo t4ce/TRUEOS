@@ -57,6 +57,54 @@ class KokoroAotFixtureTests(unittest.TestCase):
             "0df8861b0d55f3a1d8587b0993a5588b098800c9c3006d080c19e6b90ad8df44",
         )
 
+    def test_attribute_fixture_is_canonical_and_deterministic(self) -> None:
+        first = TOOL.synthetic_attribute_fixture_artifact()
+        second = TOOL.synthetic_attribute_fixture_artifact()
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 9_332)
+        self.assertEqual(
+            TOOL.hashlib.sha256(first).hexdigest(),
+            "f0dd87a37795952218ba3d388618f0a96bf156e6ff38563d2657cd5488a8990b",
+        )
+        inspected = TOOL.inspect_aot(first)
+        self.assertEqual(
+            inspected["sections"],
+            {
+                "tensors": 58,
+                "slots": 0,
+                "ops": 22,
+                "bindings": 58,
+                "phases": 2,
+                "data": 340,
+            },
+        )
+        self.assertEqual(inspected["attribute_abi"]["version"], 1)
+        self.assertEqual(inspected["attribute_abi"]["records"], 22)
+        self.assertEqual(
+            inspected["artifact_sha256"],
+            "b7f753066166dd676fbe6523c2ac2c801f9fc3ace952aa33ac6e175660f6335e",
+        )
+
+    def test_attribute_records_fail_closed(self) -> None:
+        record = TOOL.binary_attribute("Add", 3, 0, 3)
+        decoded = TOOL.inspect_attribute_record(record, TOOL.AOT_OPCODES["Add"])
+        self.assertEqual(decoded["version"], 1)
+        self.assertEqual(decoded["bytes"], 16)
+
+        corruptions = {
+            "version": (0, 2, "version"),
+            "byte count": (4, 12, "byte count"),
+            "reserved": (15, 1, "reserved"),
+        }
+        for name, (offset, value, message) in corruptions.items():
+            with self.subTest(name=name):
+                corrupt = bytearray(record)
+                corrupt[offset] = value
+                with self.assertRaisesRegex(TOOL.CompileError, message):
+                    TOOL.inspect_attribute_record(bytes(corrupt), TOOL.AOT_OPCODES["Add"])
+        with self.assertRaisesRegex(TOOL.CompileError, "kind"):
+            TOOL.inspect_attribute_record(record, TOOL.AOT_OPCODES["Mul"])
+
     def test_fixture_payload_tamper_is_rejected(self) -> None:
         artifact = bytearray(TOOL.synthetic_fixture_artifact())
         artifact[-1] ^= 1
@@ -122,6 +170,40 @@ class KokoroAotFixtureTests(unittest.TestCase):
             self.assertIn("resolved_frame_count=16", completed.stdout)
             self.assertIn("resolved_arena_bytes=128", completed.stdout)
 
+    @unittest.skipUnless(
+        shutil.which("cargo") and RUST_MANIFEST.is_file() and RUST_INSPECTOR.is_file(),
+        "Rust cross-language inspector is not available",
+    )
+    def test_rust_parser_accepts_attribute_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "attributes.kkaot"
+            artifact.write_bytes(TOOL.synthetic_attribute_fixture_artifact())
+            completed = subprocess.run(
+                [
+                    "cargo",
+                    "run",
+                    "--quiet",
+                    "--manifest-path",
+                    str(RUST_MANIFEST),
+                    "--example",
+                    "inspect",
+                    "--",
+                    str(artifact),
+                ],
+                cwd="/tmp",
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+            self.assertIn("section[2]=Ops", completed.stdout)
+            self.assertIn("count=22", completed.stdout)
+            self.assertIn(
+                "artifact_sha256=b7f753066166dd676fbe6523c2ac2c801f9fc3ace952aa33ac6e175660f6335e",
+                completed.stdout,
+            )
+
 
 @unittest.skipUnless(
     HAS_ONNX and MODEL.is_file() and VOICES.is_file(),
@@ -152,6 +234,18 @@ class KokoroPinnedGraphTests(unittest.TestCase):
         )
         self.assertEqual(report["phases"]["phase0_source_nodes"], [0, 1_747])
         self.assertEqual(report["phases"]["phase1_source_nodes"], [1_747, 3_615])
+        lowering = report["cpu_attribute_lowering"]
+        self.assertEqual(lowering["records"], 2_223)
+        self.assertEqual(lowering["f32_core_records"], 1_629)
+        self.assertEqual(lowering["f32_unary_records"], 256)
+        self.assertEqual(lowering["f32_total_records"], 1_885)
+        self.assertEqual(lowering["view_alias_records"], 338)
+        self.assertEqual(lowering["view_static_controllers"], 287)
+        self.assertEqual(lowering["view_dynamic_controllers"], 51)
+        self.assertEqual(lowering["excluded_non_f32_add"], 81)
+        self.assertEqual(lowering["operator_counts"], TOOL.PINNED_LOWERING_COUNTS)
+        self.assertEqual(lowering["plan_sha256"], TOOL.PINNED_LOWERING_SHA256)
+        self.assertFalse(lowering["executable_graph_emitted"])
 
     def test_model_hash_change_is_rejected(self) -> None:
         with self.assertRaisesRegex(TOOL.CompileError, "SHA-256"):
@@ -178,6 +272,36 @@ class KokoroPinnedGraphTests(unittest.TestCase):
                 )
         finally:
             kernel.input[2] = original
+
+    def test_cpu_attribute_change_is_rejected(self) -> None:
+        node = next(
+            node
+            for node in self.analysis.model.graph.node
+            if node.op_type == "ReduceMean"
+        )
+        keepdims = next(attribute for attribute in node.attribute if attribute.name == "keepdims")
+        original = keepdims.i
+        keepdims.i = 0
+        try:
+            with self.assertRaisesRegex(TOOL.CompileError, "ReduceMean attributes"):
+                TOOL.build_supported_lowerings(self.analysis)
+        finally:
+            keepdims.i = original
+
+    def test_view_attribute_change_is_rejected(self) -> None:
+        node = next(
+            node
+            for node in self.analysis.model.graph.node
+            if node.op_type == "Reshape" and node.attribute
+        )
+        allowzero = next(attribute for attribute in node.attribute if attribute.name == "allowzero")
+        original = allowzero.i
+        allowzero.i = 1
+        try:
+            with self.assertRaisesRegex(TOOL.CompileError, "Reshape attributes"):
+                TOOL.build_supported_lowerings(self.analysis)
+        finally:
+            allowzero.i = original
 
 
 if __name__ == "__main__":

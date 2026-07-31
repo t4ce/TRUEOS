@@ -1,0 +1,15 @@
+[package]
+name = "trueos-kokoro-gemm"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+description = "Deterministic no-std f32 GEMM kernels for sealed TRUEOS Kokoro inference"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+libm = { version = "0.2", default-features = false }

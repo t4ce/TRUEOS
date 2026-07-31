@@ -56,17 +56,14 @@ pub fn resolve_decoder_shape(
     frame_limit: u32,
     cumulative_durations: &mut [i64],
 ) -> Result<u32, ResolveError> {
-    validate_call(
-        biased_logits,
-        token_count,
-        speed,
-        cumulative_durations.len(),
-    )?;
+    validate_call(biased_logits, token_count, speed, cumulative_durations.len())?;
 
     // Pass one proves every conversion and the final arena bound before the
     // caller-owned output is changed.
+    let (rows, remainder) = biased_logits.as_chunks::<KOKORO_DURATION_BINS>();
+    debug_assert!(remainder.is_empty());
     let mut total = 0_i64;
-    for row in biased_logits.chunks_exact(KOKORO_DURATION_BINS) {
+    for row in rows {
         let duration = duration_for_row(row, speed)?;
         total = total
             .checked_add(duration)
@@ -80,10 +77,7 @@ pub fn resolve_decoder_shape(
     // The same fixed-order f32 chain is deterministic, so the second pass can
     // materialize the CumSum without scratch storage.
     let mut cumulative = 0_i64;
-    for (row, output) in biased_logits
-        .chunks_exact(KOKORO_DURATION_BINS)
-        .zip(cumulative_durations.iter_mut())
-    {
+    for (row, output) in rows.iter().zip(cumulative_durations.iter_mut()) {
         let duration = duration_for_row(row, speed)?;
         cumulative += duration;
         *output = cumulative;
@@ -125,9 +119,7 @@ fn duration_for_row(row: &[f32], speed: f32) -> Result<i64, ResolveError> {
         if !logit.is_finite() {
             return Err(ResolveError::NonFiniteLogit);
         }
-        // This is the scalar ONNX Sigmoid definition. Overflow in expf for a
-        // large negative finite logit intentionally produces a zero sigmoid.
-        sum += 1.0 / (1.0 + libm::expf(-logit));
+        sum += sigmoid(logit);
     }
     let scaled = sum / speed;
     if !scaled.is_finite() {
@@ -143,6 +135,17 @@ fn duration_for_row(row: &[f32], speed: f32) -> Result<i64, ResolveError> {
         return Err(ResolveError::DurationOutOfRange);
     }
     Ok(clipped as i64)
+}
+
+fn sigmoid(value: f32) -> f32 {
+    // The negative branch is algebraically identical and matches the f32
+    // kernel lane while avoiding an intermediate infinity.
+    if value >= 0.0 {
+        1.0 / (1.0 + libm::expf(-value))
+    } else {
+        let exponential = libm::expf(value);
+        exponential / (1.0 + exponential)
+    }
 }
 
 fn round_ties_even_nonnegative(value: f32) -> f32 {
@@ -185,6 +188,29 @@ mod tests {
         let frames = resolve_decoder_shape(&logits, 4, 1.37, 1_024, &mut cumulative).unwrap();
         assert_eq!(cumulative, [18, 36, 54, 73]);
         assert_eq!(frames, 73);
+    }
+
+    #[test]
+    fn pinned_ort_1_28_speed_sweep_matches() {
+        let mut logits = [0.0_f32; 8 * KOKORO_DURATION_BINS];
+        for (index, value) in logits.iter_mut().enumerate() {
+            let raw = (((index as u64 * 1_103_515_245 + 12_345) & 0xffff) % 401) as i32;
+            *value = (raw - 200) as f32 / 16.0;
+        }
+        let fixtures = [
+            (0.5, [52, 102, 150, 194, 246, 302, 352, 400]),
+            (0.85, [31, 60, 88, 114, 145, 178, 207, 235]),
+            (1.0, [26, 51, 75, 97, 123, 151, 176, 200]),
+            (1.37, [19, 37, 54, 70, 89, 110, 128, 145]),
+            (2.0, [13, 26, 38, 49, 62, 76, 88, 100]),
+            (4.0, [7, 13, 19, 25, 32, 39, 45, 51]),
+        ];
+        for (speed, expected) in fixtures {
+            let mut cumulative = [0_i64; 8];
+            let frames = resolve_decoder_shape(&logits, 8, speed, 1_024, &mut cumulative).unwrap();
+            assert_eq!(cumulative, expected, "speed={speed}");
+            assert_eq!(frames, expected[7] as u32, "speed={speed}");
+        }
     }
 
     #[test]
