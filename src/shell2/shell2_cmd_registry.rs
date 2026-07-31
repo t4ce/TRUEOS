@@ -25,9 +25,11 @@ const STATUS_BLUE_RGB: (u8, u8, u8) = (120, 210, 255);
 const STATUS_NETWORK_RGB: (u8, u8, u8) = (70, 220, 210);
 const STATUS_ORANGE_RGB: (u8, u8, u8) = (255, 190, 90);
 const STATUS_GRAY_RGB: (u8, u8, u8) = (160, 168, 176);
+const STATUS_DARK_RED_RGB: (u8, u8, u8) = (139, 0, 0);
 const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_AUD: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path. Non-.7z files compress to a sibling .7z archive; .7z archives extract beside the archive."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_CPP: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["start","list","status","stop","font","spirit","svg"],"description":"Launch, inspect, or stop the C++/IGC suite, stamp/present font RGBA, select Spirit's C++ repass, or control the SVG experiment."},"mode":{"type":"string","enum":["gallery","aurora","julia","sdf","voronoi","retro-sun","audio","particle"],"description":"C++ for OpenCL workload to display."},"font_action":{"type":"string","enum":["stamp","present","status","release"],"description":"Create an owned async RGBA stamp or present it directly through UI4."},"text":{"type":"string","maxLength":4096,"description":"UTF-8 text for action=font; newlines create rows."},"font":{"type":"integer","minimum":1,"maximum":3,"description":"Optional GPU font face for action=font."},"size":{"type":"number","minimum":4,"maximum":2048,"description":"Font pixel size for action=font."},"color":{"type":"string","description":"Font RGBA color encoded as RRGGBBAA."},"canvas":{"type":"string","description":"Optional WIDTHxHEIGHT RGBA8 canvas at or below the UHD/4K soft cap."},"duration_ms":{"type":"integer","minimum":0,"description":"Demo lifetime in milliseconds; zero runs until stopped."},"cadence_ms":{"type":"integer","minimum":1,"maximum":60000,"description":"Target GPU launch cadence in milliseconds."},"publish_every":{"type":"integer","minimum":1,"maximum":1024,"description":"Publish every Nth retired GPU frame."},"background_id":{"type":"integer","enum":[0,2,3,4,5,6,7,8,9,10,11],"description":"Spirit background ID when action is spirit; 11 is the UTC MagicTimeCircle."},"shader_id":{"type":"integer","minimum":0,"maximum":15,"description":"Spirit sprite shader ID when action is spirit."},"svg_action":{"type":"string","enum":["start","status","stop"],"description":"SVG-experiment lifecycle action when action=svg."},"svg_demo":{"type":"string","enum":["basic","curves","holes"],"description":"Byte-embedded SVG outline experiment selected when action=svg."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc","log"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format or optional disk id for action=log."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw TRUEOSFS log records to print for action=log."}},"required":["action"],"additionalProperties":false}"#;
@@ -57,6 +59,10 @@ const TOOL_JSON_XHCI: &str = r#"{"type":"object","properties":{"command":{"type"
 fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::acpi::try_parse(io, &mut args)
+}
+
+fn dispatch_aud(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::aud::try_parse(spawner, io, rest)
 }
 
 fn dispatch_7z(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -213,11 +219,22 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "acpi",
         mode: "cmd",
-        color: Some(STATUS_GRAY_RGB),
+        color: Some(STATUS_DARK_RED_RGB),
         advertised: true,
         handler: dispatch_acpi,
         tool_description: Some("Run ACPI power actions."),
         tool_parameters_json: Some(TOOL_JSON_ACPI),
+    },
+    BuiltinShell2CmdEntry {
+        name: "aud",
+        mode: "cmd",
+        color: Some(STATUS_ORANGE_RGB),
+        advertised: true,
+        handler: dispatch_aud,
+        tool_description: Some(
+            "Launch the Player Blueprint in VMX-minishell mode without its terminal TUI.",
+        ),
+        tool_parameters_json: Some(TOOL_JSON_AUD),
     },
     BuiltinShell2CmdEntry {
         name: "cpp",
@@ -233,7 +250,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "cry",
         mode: "cmd",
-        color: Some(STATUS_BLUE_RGB),
+        color: Some(STATUS_PINK_RGB),
         advertised: true,
         handler: dispatch_cry,
         tool_description: None,
@@ -543,7 +560,7 @@ fn starts_with_command<'a>(submitted: &'a str, name: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use super::starts_with_command;
+    use super::{command_names_status_text, command_registry_json, starts_with_command};
 
     #[test]
     fn unrelated_command_length_may_land_inside_utf8() {
@@ -560,6 +577,27 @@ mod tests {
     fn command_match_still_requires_a_token_boundary() {
         assert_eq!(starts_with_command("cppish", "cpp"), None);
         assert_eq!(starts_with_command("CPP\tfont status", "cpp"), Some("\tfont status"));
+    }
+
+    #[test]
+    fn titlebar_accents_media_commands_and_acpi() {
+        let status = command_names_status_text();
+
+        let rainbow_start = "\x1b[1;4;38;5;199m";
+        assert_eq!(status.matches(rainbow_start).count(), 4);
+        assert!(status.contains("\x1b[1;38;2;139;0;0macpi\x1b[0m"));
+    }
+
+    #[test]
+    fn titlebar_groups_cry_and_display_only_backup_with_pink_commands() {
+        let status = command_names_status_text();
+        let positions = ["cry", "backup", "install", "update"].map(|label| {
+            let token = alloc::format!("\x1b[1;38;2;255;55;255m{label}\x1b[0m");
+            status.find(token.as_str()).unwrap()
+        });
+
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(!command_registry_json().contains("\"name\":\"backup\""));
     }
 }
 
@@ -579,9 +617,9 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "surf", "net", "ssh",
-        "qjs", "txt", "grid", "tts", "stt", "cpp", "vgpu", "vid", "cry", "acpi", "tlb", "ram",
-        "smp", "etc",
+        "7z", "lsd", "rm", "mv", "sha", "disc", "cry", "backup", "install", "update", "hyper",
+        "surf", "net", "ssh", "qjs", "txt", "grid", "tts", "stt", "cpp", "vgpu", "aud", "vid",
+        "acpi", "tlb", "ram", "smp", "etc",
     ];
 
     let mut out = AllocString::new();
@@ -590,6 +628,14 @@ pub(crate) fn command_names_status_text() -> AllocString {
     for name in STATUS_ORDER {
         // `rm` and `mv` remain separate commands; only their statusbar glyphs overlap.
         if *name == "mv" {
+            continue;
+        }
+        if *name == "backup" {
+            if !first {
+                out.push(' ');
+            }
+            first = false;
+            push_colored_status_token(&mut out, name, STATUS_PINK_RGB);
             continue;
         }
         let Some(entry) = BUILTIN_CMD_REGISTRY
@@ -630,14 +676,18 @@ fn push_rm_mv_status_token(out: &mut AllocString) {
 fn push_status_command_name(out: &mut AllocString, entry: &BuiltinShell2CmdEntry) {
     let label = status_command_label(entry);
 
-    if entry.name == "cpp" {
+    if matches!(entry.name, "cpp" | "vgpu" | "aud" | "vid") {
         push_static_rainbow_token(out, label);
     } else if let Some(color) = entry.color {
-        let styled = alloc::format!("{}", super::term_style::paint(label).bold().color(color));
-        out.push_str(styled.as_str());
+        push_colored_status_token(out, label, color);
     } else {
         out.push_str(label);
     }
+}
+
+fn push_colored_status_token(out: &mut AllocString, text: &str, color: (u8, u8, u8)) {
+    let styled = alloc::format!("{}", super::term_style::paint(text).bold().color(color));
+    out.push_str(styled.as_str());
 }
 
 fn status_command_label(entry: &BuiltinShell2CmdEntry) -> &'static str {

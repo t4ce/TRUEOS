@@ -233,7 +233,13 @@ pub struct ResolvedStorage {
     pub alignment: u32,
 }
 
-#[derive(Debug)]
+/// Immutable proof returned by the sealed parser.
+///
+/// Every field is either copied metadata or a borrowed view into the same
+/// immutable artifact, so copying a `Program` preserves the complete parse
+/// proof. This lets a boot-warmed backend hand one validated program value to
+/// each serialized inference job without reparsing or extending lifetimes.
+#[derive(Clone, Copy, Debug)]
 pub struct Program<'a> {
     artifact: &'a [u8],
     sections: [SectionDesc; SECTION_COUNT],

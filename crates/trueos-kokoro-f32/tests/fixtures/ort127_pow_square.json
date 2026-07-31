@@ -1,0 +1,23 @@
+{
+  "execution_provider": "CPUExecutionProvider",
+  "exponent_bits": "0x40000000",
+  "exponent_dtype": "FLOAT",
+  "fixture": "ort127_pow_square.bin",
+  "graph_optimization": "ORT_DISABLE_ALL",
+  "input_shape": [
+    2,
+    2,
+    3
+  ],
+  "inter_op_threads": 1,
+  "intra_op_threads": 1,
+  "ir_version": 10,
+  "model_sha256": "239d9f4df112a375bea52146570b97eb5c5af727c007761ee121ed123fd1ab29",
+  "onnx_version": "1.21.0",
+  "onnxruntime_version": "1.27.0",
+  "operation": "Pow",
+  "opset": 20,
+  "payload": "header, input FLOAT bits, output FLOAT bits",
+  "schema": "trueos-kokoro-source-op-ort-fixture-v1",
+  "sha256": "aa70ad1605e17e50bc71680dcf5973f5357cb75c0f1555866bba4e1a7ecd06b0"
+}

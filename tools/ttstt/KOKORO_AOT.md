@@ -6,20 +6,19 @@ prepared Kokoro graph. It does not attempt to be a general ONNX runtime.
 The checked-in tool currently provides three deliberately separate results:
 
 1. A complete audit/lowering inventory for the real 124 MB prepared graph.
-2. Canonical, versioned attribute/lowering records for the CPU math kernels,
-   materialized layout kernels, and no-copy views which have concrete Rust
-   implementations.
+2. A complete canonical lowering inventory: every one of the 3,615 source
+   nodes is owned exactly once by a typed scalar/f32/layout record, one of 235
+   native quantized fusions, or the native duration resolver.
 3. A byte-exact v1 emitter exercised by a 1,651-byte synthetic program using
    the native `DynamicQuantizedGemm`, `ResolveDecoderShape`, and
    `DynamicQuantizedConv1d` opcodes.
 
 The large ONNX graph, voice archive, and a large emitted program are not
-checked in. The current v1 runtime treats operation attributes as opaque and
-does not yet have a math dispatcher for all 3,615 source nodes. Consequently
-this tool does not claim that the real analysis is already an executable
-Kokoro artifact. The new records are a sealed input to that later wiring, not
-a substitute for it. Real emission stays gated until every emitted opcode has
-a runtime contract.
+checked in. This step does not assign arena slots, tensor capacities, a
+fixed maximum frame count, or runtime logical shapes. Consequently it does
+not claim that the real analysis is already an executable Kokoro artifact.
+The complete lowering stream is a sealed input to that next planning step;
+real emission remains gated (`executable_graph_emitted=false`).
 
 ## Reproduce the audit
 
@@ -85,8 +84,10 @@ raw-plan peak is 770 simultaneously live storage owners. Of those view
 operators, 287 have initializer control tensors and 51 Reshape target tensors
 come from runtime `Concat` nodes. All 338 have a statically proven rank and
 alias root, but the latter 51 are not falsely described as compile-time-shaped.
-No full graph is emitted in this stepstone, so no artifact instantiates those
-runtime-resolved descriptors yet.
+After quant fusion, 258 view records survive in the complete lowered stream;
+the other 80 Reshapes are owned by quantized Conv bias fusions. No full graph
+is emitted in this stepstone, so no artifact instantiates those runtime-
+resolved descriptors yet.
 The canonical tensor/alias/liveness plan hashes to
 `8bad04023c1aa2d2810646ea4558942e23e8aab1bd901c6cb8d292845db2c653`;
 the 235-entry native quantized lowering plan hashes to
@@ -103,9 +104,6 @@ u16 kind = operation opcode
 u32 total_record_bytes (including this header)
 ```
 
-Operations outside this admitted set still use the outer format's canonical
-empty form (`attribute_offset=0`, `attribute_len=0`).
-
 Each kind then has a fixed-size body. Reserved bytes must be zero, the outer op
 record length must equal `total_record_bytes`, and the kind must equal the
 outer opcode. The binary bodies carry input/output ranks and checked ONNX
@@ -116,14 +114,31 @@ their complete record. View bodies carry dtype, ranks, alias/static-control
 flags, `allowzero`, and up to four exact shape/axis integers. A dynamic Reshape
 body carries no invented dimensions and retains its controller tensor binding.
 
-The pinned graph admits exactly 2,696 records:
+The v1 typed bodies now also cover Bool/I64 comparisons, the I64 Add variant,
+Cast, ConstantOfShape, CumSum, DequantizeLinear, Where, MatMul, Pow, Range,
+Resize, `BiLstm256`, float Conv/ConvTranspose, `FixedStft20`, both native
+quantized kernels, and `ResolveDecoderShape`. Native records bind original
+float activations plus constant weight/scale/zero/bias roles; their profile
+IDs seal the exact model-specific ranks, dtypes and attributes.
 
-| Lane | Records | Detail |
-| --- | ---: | --- |
-| Existing f32 core | 1,629 | 1,444 Add/Mul/Div/Sub, 130 ReduceMean, 19 LayerNormalization, 12 Softmax, 12 FastGelu, 12 SkipLayerNormalization |
-| f32 unary extension | 256 | 90 Sqrt, 81 Floor, 51 Sin, 28 LeakyRelu, and six singleton unary nodes |
-| Materialized layout | 473 | 88 Transpose, 135 Gather, 72 Concat, 74 two-output Split, 5 Expand, 73 Shape, 22 Slice, 2 reflect Pad, 1 NonZero, 1 ScatterND |
-| View aliases | 338 | 141 Reshape, 192 Unsqueeze, 5 Squeeze |
+The earlier raw pass still validates 2,696 potential records (1,885 f32 and
+811 layout/view). Native-chain ownership removes overlaps and yields exactly
+2,227 non-overlapping lowered operations:
+
+| Lane | Lowered ops | Source nodes owned |
+| --- | ---: | ---: |
+| Surviving original scalar/f32/layout records | 1,845 | 1,845 |
+| Direct typed residual profiles | 146 | 146 |
+| DynamicQuantizedGemm/Conv1d | 235 | 1,615 |
+| ResolveDecoderShape | 1 | 9 |
+| **Total** | **2,227** | **3,615** |
+
+The 146 direct residual profiles comprise one I64 Add, And, 17 Cast, six
+ConstantOfShape, one CumSum, four DequantizeLinear, the comparison/Where
+control operations, 27 MatMul, 50 Pow, two Range, six Resize, six BiLSTM,
+one float Conv, six float ConvTranspose, and one fixed STFT. There is no
+generic fallback: an unsupported profile, unowned source node, or duplicate
+owner rejects the model.
 
 The 811-record layout lane resolves rank gaps through the compiler's propagated
 descriptors. Its records preserve exact permutations and axes, both Split
@@ -146,18 +161,21 @@ The record also requires strictly increasing, unique destinations; the runtime
 kernel checks that precondition on every invocation. The canonical 16-phoneme
 trace produces destinations `[1..19]`.
 
-The complete canonical stream includes source node index, phase, opcode,
-tensor-ID bindings, and attribute bytes. It hashes to
-`fd91172b0b96ae5f22a353664d381b58d4e708a6effaca2b183332e63d0b9920`.
-The compiler explicitly leaves 80 INT32 and one INT64 Add outside the f32
-lane. Any admitted arity, domain, dtype, rank, broadcast, axis, epsilon,
-alpha, parameter-width, view-control, or alias-root change is rejected.
+The `KKLOWER2` canonical stream includes anchor source index, an ordered list
+of source nodes owned by the record, phase, opcode, tensor-ID bindings, and
+typed attribute bytes. Its complete plan SHA-256 is
+`7ea9436430722d1ce9ddfad00f579883f6628e9f4518f66f464eb5d3e6b5c463`.
+The source-to-lowered-op ownership map hashes to
+`248cbd89b62638bd1fc2ba16649e46d35204cc5fe7abfc1e799620ea2a166ac4`;
+all 3,615 source nodes have count one. The pre-fusion/raw plan independently
+hashes to
+`93fcb54122768eab1d40abb0e84fe69a46433688bd4a61243dba69dc57b03b51`.
 
 ## Checked phase boundary
 
-Phase 0 is source nodes `[0,1747)` and phase 1 is `[1747,3615)`. Lowering must
-recompute the exclusive operation offset after fusion; `1747` is not written
-blindly into a lowered program.
+Phase 0 is source nodes `[0,1747)` and phase 1 is `[1747,3615)`. After fusion,
+the recomputed lowered ranges are `[0,1079)` and `[1079,2227)`; source index
+`1747` is not written blindly into a lowered program.
 
 Node 1746, `/encoder/Gather_1`, produces the scalar INT64 tensor
 `/encoder/Cast_1_output_0`. Its audited chain is:
@@ -167,7 +185,11 @@ Sigmoid -> ReduceSum(axis=-1) -> Div(speed) -> Round -> Clip(min=1)
         -> Cast(INT64) -> Gather(batch=0) -> CumSum(axis=0) -> Gather(last)
 ```
 
-This yields the total decoder frame count. Its sole consumer is node 1749,
+Those nine nodes are one `ResolveDecoderShape` record. It binds the biased
+duration logits and `speed`, preserves `/encoder/CumSum_output_0` as an INT64
+rank-one output for later consumers, and exposes
+`/encoder/Cast_1_output_0` explicitly as the returned INT64 frame scalar.
+That scalar's sole consumer is node 1749,
 `Range(0, frame_count, 1)`, the first frame-count-sized tensor. Of 1,868 phase-1
 nodes, 1,862 descend from that scalar. The remaining six nodes (1747, 1748,
 1750, 1752, 1755, and 1759) form companion alignment operands which join a
@@ -177,6 +199,25 @@ crosses the cut.
 There is intentionally no second allocation barrier after source node 2067.
 That point only finishes F0/N tensors shaped `[1,F]`, reveals no new size, and
 would carry 120 live values after decoder work has already begun.
+
+## Deferred frame-capacity planning
+
+`F_max` is intentionally not part of this compiler result. Exact pinned-model
+ORT measurements on the i9 for a repeated legal 14-token phrase currently
+give these sizing points:
+
+| Tokens | Speed | Audio samples | Decoder frames | Audio seconds |
+| ---: | ---: | ---: | ---: | ---: |
+| 252 | 1.0 | 372,600 | 1,242 | 15.525 |
+| 448 | 1.0 | 625,800 | 2,086 | 26.075 |
+| 252 | 0.5 | 744,600 | 2,482 | 31.025 |
+
+The intended native text policy targets 175–250 tokens, may grow to 450 at a
+sentence boundary, and uses 510 only as the graph hard fail-safe. `F_max=8192`
+is therefore a candidate, not a sealed choice. The next step must run the
+post-fusion allocator against that bound, prove the resulting memory budget,
+and pair fixed capacities with runtime logical tensor shapes before real AOT
+artifact emission can be enabled.
 
 ## Sealed fixture and tests
 
@@ -200,12 +241,12 @@ constants in DATA, a static view, fixed and affine frame-count slots, two phase
 records, bindings, and native quantized opcodes. Payload, provenance, directory,
 and reserved-header tampering are negative tests.
 
-The separate 14,260-byte attribute fixture contains 32 op records: one for
-each admitted opcode kind across binary, unary, normalization, contrib, and
-layout/view lanes. Its whole-file SHA-256 is
-`c28964ad9f347ec5df9ba3bd2d583d14aa9da9124d2e828a983bf1474c3a0084` and
+The separate 27,500-byte attribute fixture contains 56 op records, including
+all newly admitted scalar/control and native profiles plus distinct f32/I64
+Add and three Cast dtype variants. Its whole-file SHA-256 is
+`76b3b6f833b7cdbf4933b0985ad081ebe7b543b21d6d7c68ca9ff3ad19b603e9` and
 its canonical artifact seal is
-`eb620cfaade0098dc6f63f5053f08094c1c9a3a935371f5edddbd24dea8261a4`.
+`52b9d668b82cf015259ae8ecbf3001d6719048ffdce15b04f642b4f009480a0d`.
 Python validates each body fail-closed; the existing Rust reader parses the
 same artifact as opaque attribute slices, ready for a later typed decoder.
 

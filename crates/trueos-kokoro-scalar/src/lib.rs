@@ -635,6 +635,129 @@ extern crate std;
 mod tests {
     use super::*;
 
+    const ORT127_SOURCE_OPS: &[u8] = include_bytes!("../tests/fixtures/ort127_source_ops.bin");
+
+    fn fixture_u32(bytes: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+    }
+
+    fn fixture_i64(bytes: &[u8], offset: usize) -> i64 {
+        i64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+    }
+
+    #[test]
+    fn pinned_source_ops_match_official_ort_1_27_fixture() {
+        const HEADER: usize = 28;
+        const DEQUANT_SCALE_BITS: [u32; 4] = [0x3bac_9658, 0x3d8c_c081, 0x3ba0_f77c, 0x3c28_1417];
+        assert_eq!(&ORT127_SOURCE_OPS[..8], b"KSRC1271");
+        assert_eq!(fixture_u32(ORT127_SOURCE_OPS, 8), 1);
+        let less_i64_elements = fixture_u32(ORT127_SOURCE_OPS, 12) as usize;
+        let less_f32_elements = fixture_u32(ORT127_SOURCE_OPS, 16) as usize;
+        let add_elements = fixture_u32(ORT127_SOURCE_OPS, 20) as usize;
+        let dequant_elements = fixture_u32(ORT127_SOURCE_OPS, 24) as usize;
+        assert_eq!(
+            (less_i64_elements, less_f32_elements, add_elements, dequant_elements),
+            (12, 1, 6, 64)
+        );
+        assert_eq!(ORT127_SOURCE_OPS.len(), 345);
+
+        let less_i64_start = HEADER;
+        let less_f32_start = less_i64_start + less_i64_elements;
+        let add_start = less_f32_start + less_f32_elements;
+        let dequant_start = add_start + add_elements * 8;
+
+        let lhs_shape = Shape::new(&[1, 4]).unwrap();
+        let rhs_shape = Shape::new(&[3, 1]).unwrap();
+        let mut less_output = [false; 12];
+        let output_shape =
+            less_i64(&[-3, 0, 7, 19], lhs_shape, &[-2, 0, 8], rhs_shape, &mut less_output).unwrap();
+        assert_eq!(output_shape.dims(), &[3, 4]);
+        for (index, &value) in less_output.iter().enumerate() {
+            assert_eq!(u8::from(value), ORT127_SOURCE_OPS[less_i64_start + index]);
+        }
+
+        let mut scalar_less = [false];
+        less_f32(&[-0.125], Shape::scalar(), &[0.0], Shape::scalar(), &mut scalar_less).unwrap();
+        assert_eq!(u8::from(scalar_less[0]), ORT127_SOURCE_OPS[less_f32_start]);
+
+        let mut add_output = [0_i64; 6];
+        let add_shape = add_i64(
+            &[-5, 10],
+            Shape::new(&[2, 1]).unwrap(),
+            &[1, 2, 3],
+            Shape::new(&[1, 3]).unwrap(),
+            &mut add_output,
+        )
+        .unwrap();
+        assert_eq!(add_shape.dims(), &[2, 3]);
+        for (index, &value) in add_output.iter().enumerate() {
+            assert_eq!(value, fixture_i64(ORT127_SOURCE_OPS, add_start + index * 8));
+        }
+
+        let dequant_input = [
+            -128, -96, -64, -32, -7, -1, 0, 1, 7, 16, 31, 63, 95, 112, 126, 127,
+        ];
+        let dequant_shape = Shape::new(&[2, 2, 4]).unwrap();
+        let mut dequant_output = [0.0_f32; 16];
+        for (scale_index, &scale_bits) in DEQUANT_SCALE_BITS.iter().enumerate() {
+            dequantize_linear_i8_scalar(
+                &dequant_input,
+                dequant_shape,
+                f32::from_bits(scale_bits),
+                0,
+                &mut dequant_output,
+            )
+            .unwrap();
+            for (element, &value) in dequant_output.iter().enumerate() {
+                let expected_offset = dequant_start + (scale_index * 16 + element) * 4;
+                assert_eq!(
+                    value.to_bits(),
+                    fixture_u32(ORT127_SOURCE_OPS, expected_offset),
+                    "scale {scale_index}, element {element}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn new_source_op_failures_are_transactional() {
+        let matrix = Shape::new(&[2, 2]).unwrap();
+        let scalar = Shape::scalar();
+        let mut booleans = [true; 4];
+        assert_eq!(
+            less_f32(&[1.0, 2.0, f32::NAN, 4.0], matrix, &[0.0], scalar, &mut booleans,),
+            Err(Error::NonFiniteInput)
+        );
+        assert_eq!(booleans, [true; 4]);
+
+        let mut integers = [91_i64; 4];
+        assert_eq!(
+            add_i64(&[1, i64::MAX, 3, 4], matrix, &[1], scalar, &mut integers,),
+            Err(Error::IntegerOverflow)
+        );
+        assert_eq!(integers, [91; 4]);
+
+        let mut floats = [92.0_f32; 4];
+        assert_eq!(
+            dequantize_linear_i8_scalar(&[1, 2, 3, 4], matrix, 0.0, 0, &mut floats),
+            Err(Error::InvalidScale)
+        );
+        assert_eq!(floats, [92.0; 4]);
+        assert_eq!(
+            dequantize_linear_i8_scalar(&[1, 2, 3, 4], matrix, f32::MAX, 0, &mut floats),
+            Err(Error::NonFiniteOutput)
+        );
+        assert_eq!(floats, [92.0; 4]);
+    }
+
+    #[test]
+    fn pinned_scalar_coverage_is_exact() {
+        assert_eq!(PINNED_LESS_NODES, 2);
+        assert_eq!(PINNED_DEQUANTIZE_LINEAR_NODES, 4);
+        assert_eq!(PINNED_INT64_ADD_NODES, 1);
+        assert_eq!(PINNED_OPERATOR_NODES, 366);
+    }
+
     #[test]
     fn casts_match_onnx_truncation_and_boolean_rules() {
         let input = [-2.9_f32, -0.0, 0.9, 7.1];

@@ -260,6 +260,81 @@ fn cancel_reset_and_foreign_program_are_terminal_and_deterministic() {
     assert_eq!(dispatcher.calls.last().unwrap().artifact_sha256, *program_b.artifact_sha256());
 }
 
+#[test]
+fn runtime_shape_table_tracks_exact_logical_dims_over_max_capacity() {
+    let artifact = fixture(64, 0x31, 1);
+    let program = Program::parse(&artifact).unwrap();
+    let mut shapes = TensorShapeTable::<2>::new();
+    assert_eq!(shapes.shape(&program, 0), Err(ShapeError::ForeignProgram));
+    shapes.initialize(&program).unwrap();
+    assert_eq!(shapes.tensor_count(), 2);
+    assert_eq!(shapes.initialized_count(), 0);
+    assert_eq!(shapes.shape(&program, 0), Err(ShapeError::TensorUninitialized));
+
+    shapes
+        .bind_external(&program, 0, RuntimeShape::scalar())
+        .unwrap();
+    assert_eq!(shapes.shape(&program, 0), Ok(RuntimeShape::scalar()));
+    shapes.validate_inputs(&program, 1).unwrap();
+
+    let waveform = RuntimeShape::new(&[4]).unwrap();
+    shapes.declare_op_outputs(&program, 1, &[waveform]).unwrap();
+    assert_eq!(shapes.shape(&program, 1), Ok(waveform));
+    assert_eq!(waveform.element_count(), Ok(4));
+    assert_eq!(waveform.logical_bytes(DType::F32), Ok(16));
+
+    shapes.clear_phase(&program, Phase::Phase1).unwrap();
+    assert_eq!(shapes.shape(&program, 1), Err(ShapeError::TensorUninitialized));
+    assert_eq!(shapes.shape(&program, 0), Ok(RuntimeShape::scalar()));
+}
+
+#[test]
+fn runtime_shape_declarations_are_bounded_transactional_and_program_pinned() {
+    let artifact = fixture(64, 0x41, 1);
+    let foreign_artifact = fixture(64, 0x42, 1);
+    let program = Program::parse(&artifact).unwrap();
+    let foreign = Program::parse(&foreign_artifact).unwrap();
+    let mut shapes = TensorShapeTable::<2>::new();
+    shapes.initialize(&program).unwrap();
+    shapes
+        .bind_external(&program, 0, RuntimeShape::scalar())
+        .unwrap();
+    let original = RuntimeShape::new(&[5]).unwrap();
+    shapes.declare_op_outputs(&program, 1, &[original]).unwrap();
+
+    let too_large = RuntimeShape::new(&[9]).unwrap();
+    assert_eq!(
+        shapes.declare_op_outputs(&program, 1, &[too_large]),
+        Err(ShapeError::DimensionExceedsCapacity)
+    );
+    assert_eq!(shapes.shape(&program, 1), Ok(original));
+
+    let first = RuntimeShape::new(&[3]).unwrap();
+    let second = RuntimeShape::new(&[2]).unwrap();
+    assert_eq!(
+        shapes.declare_op_outputs(&program, 1, &[first, second]),
+        Err(ShapeError::OutputCountMismatch)
+    );
+    assert_eq!(shapes.shape(&program, 1), Ok(original));
+    assert_eq!(
+        shapes.declare_op_outputs(&program, 99, &[first]),
+        Err(ShapeError::TensorOutOfBounds)
+    );
+    assert_eq!(shapes.shape(&program, 1), Ok(original));
+
+    assert_eq!(shapes.shape(&foreign, 1), Err(ShapeError::ForeignProgram));
+    assert_eq!(
+        TensorShapeTable::<1>::new().initialize(&program),
+        Err(ShapeError::TableCapacityTooSmall)
+    );
+
+    // Zero-sized logical tensors (for example an empty Slice) are valid while
+    // their maximum-capacity owner remains nonzero.
+    let empty = RuntimeShape::new(&[0]).unwrap();
+    shapes.declare_op_outputs(&program, 1, &[empty]).unwrap();
+    assert_eq!(empty.logical_bytes(DType::F32), Ok(0));
+}
+
 fn fixture(arena_max: u64, model_tag: u8, resolver_count: u32) -> Vec<u8> {
     assert!((1..=2).contains(&resolver_count));
     let op_count = resolver_count + 1;

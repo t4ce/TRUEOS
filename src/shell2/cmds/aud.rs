@@ -1,0 +1,64 @@
+use alloc::string::String;
+
+use embassy_executor::{Spawner, task};
+
+use super::super::shell2_cmd::ParseOutcome;
+use super::super::{
+    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_system_line,
+    print_shell_line, submit_online_to_target,
+};
+
+const AUD_APP: &str = "Player";
+const AUD_ARCHIVE: &str = "Player.bp";
+
+#[task(pool_size = 2)]
+async fn launch_aud(spawner: Spawner, target: MatrixTarget) {
+    let app_args = alloc::vec![String::from(crate::hv::BLUEPRINT_VMX_MINISHELL_ARG)];
+    match super::run::submit_archive_name_to_target_prefer_trueosfs_async(
+        target.clone(),
+        AUD_ARCHIVE,
+        app_args.clone(),
+    )
+    .await
+    {
+        Ok(_) => {}
+        Err(error) if error == "archive not found" => {
+            let online_args = core::iter::once(String::from(AUD_APP))
+                .chain(app_args)
+                .collect();
+            if submit_online_to_target(&spawner, target.clone(), online_args).is_err() {
+                print_matrix_target_system_line(&target, "aud: online launch task unavailable");
+            }
+        }
+        Err(error) => print_matrix_target_system_line(
+            &target,
+            alloc::format!("aud: could not launch {AUD_ARCHIVE}: {error}").as_str(),
+        ),
+    }
+}
+
+pub(crate) fn try_parse(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    rest: &str,
+) -> ParseOutcome {
+    let trimmed = rest.trim();
+    if matches!(trimmed, "help" | "-h" | "--help") {
+        print_shell_line(
+            io,
+            "aud: launch Player without its terminal TUI; use Player commands in the VMX minishell and `vmx help` for VM controls",
+        );
+        return ParseOutcome::Handled;
+    }
+    if !trimmed.is_empty() {
+        print_shell_line(io, "aud: no arguments expected; use `aud --help`");
+        return ParseOutcome::Handled;
+    }
+
+    let target = matrix_target_for_backend(io);
+    match launch_aud(*spawner, target) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => print_shell_line(io, "aud: launch task unavailable"),
+    }
+    ParseOutcome::Handled
+}

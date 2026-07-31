@@ -514,7 +514,7 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
         log("apps: interrupted before preflight");
         return;
     }
-    let plan = if request.preflight_complete {
+    let mut plan = if request.preflight_complete {
         blueprint_launch_plan(request.archive.as_str(), request.module_bytes.as_slice())
             .unwrap_or_else(|err| {
                 log(alloc::format!("apps: launch plan fallback: {}", err).as_str());
@@ -537,6 +537,14 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
             }
         }
     };
+    if request
+        .app_args
+        .iter()
+        .any(|arg| arg == crate::hv::BLUEPRINT_VMX_MINISHELL_ARG)
+    {
+        plan.console_surface = BlueprintConsoleSurface::Text;
+        log("apps: console surface Text (VMX-minishell override; terminal TUI disabled)");
+    }
     if matrix_target_interrupted(&request.target) {
         log("apps: interrupted before vm start");
         return;

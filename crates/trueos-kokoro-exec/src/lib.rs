@@ -10,9 +10,322 @@
 //! phase-one arena, and never commits failed work.
 
 use trueos_kokoro_aot::{
-    ArenaPlanError, CursorError, CursorPoll, OpCode, OpCursor, Program, UNRESOLVED_SLOT_BASE,
-    WorkBudget, WorkSlice,
+    ArenaPlanError, CursorError, CursorPoll, DType, OpCode, OpCursor, Phase, Program, StorageKind,
+    UNRESOLVED_SLOT_BASE, WorkBudget, WorkSlice,
 };
+
+/// Exact logical dimensions of one tensor during an invocation.
+///
+/// The sealed descriptor carries maximum-capacity dimensions. Kokoro also has
+/// runtime `N` (token count), `F` (decoder frame count), and operator-derived
+/// dimensions. Keeping those logical dimensions separately lets phase-zero
+/// `N`, `N x N`, mixed `N/F`, and dynamic contiguous views share fixed maximum
+/// storage without weakening the AOT capacity proof.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeShape {
+    rank: u8,
+    dims: [u32; 4],
+}
+
+impl RuntimeShape {
+    pub const fn scalar() -> Self {
+        Self {
+            rank: 0,
+            dims: [1; 4],
+        }
+    }
+
+    pub fn new(dims: &[u32]) -> Result<Self, ShapeError> {
+        if dims.len() > 4 {
+            return Err(ShapeError::RankTooLarge);
+        }
+        let mut stored = [1; 4];
+        stored[..dims.len()].copy_from_slice(dims);
+        Ok(Self {
+            rank: dims.len() as u8,
+            dims: stored,
+        })
+    }
+
+    pub const fn rank(self) -> u8 {
+        self.rank
+    }
+
+    pub fn dims(&self) -> &[u32] {
+        &self.dims[..usize::from(self.rank)]
+    }
+
+    pub fn element_count(self) -> Result<u64, ShapeError> {
+        let mut elements = 1_u64;
+        for &dimension in self.dims() {
+            elements = elements
+                .checked_mul(u64::from(dimension))
+                .ok_or(ShapeError::ByteLengthOverflow)?;
+        }
+        Ok(elements)
+    }
+
+    pub fn logical_bytes(self, dtype: DType) -> Result<u64, ShapeError> {
+        self.element_count()?
+            .checked_mul(dtype.element_bytes())
+            .ok_or(ShapeError::ByteLengthOverflow)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShapeError {
+    RankTooLarge,
+    TableCapacityTooSmall,
+    ForeignProgram,
+    TensorOutOfBounds,
+    TensorUninitialized,
+    NotExternal,
+    RankMismatch,
+    DimensionExceedsCapacity,
+    ByteLengthOverflow,
+    ByteCapacityExceeded,
+    ReadOnlyOutput,
+    WrongPhase,
+    OutputCountMismatch,
+    DuplicateOutput,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeTensorState {
+    shape: RuntimeShape,
+    initialized: bool,
+}
+
+impl RuntimeTensorState {
+    const EMPTY: Self = Self {
+        shape: RuntimeShape::scalar(),
+        initialized: false,
+    };
+}
+
+/// Caller-owned, allocation-free logical-shape state for a sealed program.
+///
+/// Constants are initialized from their exact descriptors. External tensors
+/// are explicitly bound by the backend. A concrete dispatcher declares an
+/// operation's output shapes after validating all of them, so a rejected
+/// declaration cannot partially mutate the table.
+#[derive(Debug)]
+pub struct TensorShapeTable<const CAPACITY: usize> {
+    states: [RuntimeTensorState; CAPACITY],
+    tensor_count: u32,
+    bound_artifact_sha256: Option<[u8; 32]>,
+}
+
+impl<const CAPACITY: usize> TensorShapeTable<CAPACITY> {
+    pub const fn new() -> Self {
+        Self {
+            states: [RuntimeTensorState::EMPTY; CAPACITY],
+            tensor_count: 0,
+            bound_artifact_sha256: None,
+        }
+    }
+
+    /// Bind the table to one artifact and initialize its constant tensors.
+    pub fn initialize(&mut self, program: &Program<'_>) -> Result<(), ShapeError> {
+        let tensor_count = program.tensor_count();
+        if tensor_count as usize > CAPACITY {
+            return Err(ShapeError::TableCapacityTooSmall);
+        }
+        self.states.fill(RuntimeTensorState::EMPTY);
+        for tensor_id in 0..tensor_count {
+            let descriptor = program
+                .tensor(tensor_id)
+                .ok_or(ShapeError::TensorOutOfBounds)?;
+            if descriptor.storage == StorageKind::Constant {
+                let shape = descriptor_max_shape(descriptor.rank, &descriptor.max_dims)?;
+                validate_shape(descriptor, shape)?;
+                self.states[tensor_id as usize] = RuntimeTensorState {
+                    shape,
+                    initialized: true,
+                };
+            }
+        }
+        self.tensor_count = tensor_count;
+        self.bound_artifact_sha256 = Some(*program.artifact_sha256());
+        Ok(())
+    }
+
+    pub const fn tensor_count(&self) -> u32 {
+        self.tensor_count
+    }
+
+    pub fn initialized_count(&self) -> usize {
+        self.states[..self.tensor_count as usize]
+            .iter()
+            .filter(|state| state.initialized)
+            .count()
+    }
+
+    /// Bind one exact logical shape for an external input or output buffer.
+    pub fn bind_external(
+        &mut self,
+        program: &Program<'_>,
+        tensor_id: u32,
+        shape: RuntimeShape,
+    ) -> Result<(), ShapeError> {
+        self.check_program(program)?;
+        let descriptor = self.descriptor(program, tensor_id)?;
+        if descriptor.storage != StorageKind::External {
+            return Err(ShapeError::NotExternal);
+        }
+        validate_shape(descriptor, shape)?;
+        self.states[tensor_id as usize] = RuntimeTensorState {
+            shape,
+            initialized: true,
+        };
+        Ok(())
+    }
+
+    pub fn shape(&self, program: &Program<'_>, tensor_id: u32) -> Result<RuntimeShape, ShapeError> {
+        self.check_program(program)?;
+        let state = *self
+            .states
+            .get(tensor_id as usize)
+            .filter(|_| tensor_id < self.tensor_count)
+            .ok_or(ShapeError::TensorOutOfBounds)?;
+        if state.initialized {
+            Ok(state.shape)
+        } else {
+            Err(ShapeError::TensorUninitialized)
+        }
+    }
+
+    /// Verify that every input binding of an operation has a logical shape.
+    pub fn validate_inputs(&self, program: &Program<'_>, op_index: u32) -> Result<(), ShapeError> {
+        self.check_program(program)?;
+        let op = program.op(op_index).ok_or(ShapeError::TensorOutOfBounds)?;
+        for input in 0..op.input_count {
+            let tensor_id = program
+                .op_input(op, input)
+                .ok_or(ShapeError::TensorOutOfBounds)?;
+            let descriptor = self.descriptor(program, tensor_id)?;
+            validate_phase(descriptor.phase, op.phase)?;
+            self.shape(program, tensor_id)?;
+        }
+        Ok(())
+    }
+
+    /// Atomically declare the exact shapes of one sealed operation's outputs.
+    ///
+    /// `shapes` is in binding order and must match the sealed output count.
+    /// may include external graph outputs and contiguous views, but never an
+    /// arbitrary tensor ID or a read-only constant.
+    pub fn declare_op_outputs(
+        &mut self,
+        program: &Program<'_>,
+        op_index: u32,
+        shapes: &[RuntimeShape],
+    ) -> Result<(), ShapeError> {
+        self.check_program(program)?;
+        let op = program.op(op_index).ok_or(ShapeError::TensorOutOfBounds)?;
+        if shapes.len() != usize::from(op.output_count) {
+            return Err(ShapeError::OutputCountMismatch);
+        }
+        for (index, &shape) in shapes.iter().enumerate() {
+            let tensor_id = program
+                .op_output(op, index as u16)
+                .ok_or(ShapeError::TensorOutOfBounds)?;
+            for previous in 0..index {
+                if program.op_output(op, previous as u16) == Some(tensor_id) {
+                    return Err(ShapeError::DuplicateOutput);
+                }
+            }
+            let descriptor = self.descriptor(program, tensor_id)?;
+            if descriptor.is_read_only() {
+                return Err(ShapeError::ReadOnlyOutput);
+            }
+            validate_phase(descriptor.phase, op.phase)?;
+            validate_shape(descriptor, shape)?;
+        }
+        for (index, &shape) in shapes.iter().enumerate() {
+            let tensor_id = program
+                .op_output(op, index as u16)
+                .ok_or(ShapeError::TensorOutOfBounds)?;
+            self.states[tensor_id as usize] = RuntimeTensorState {
+                shape,
+                initialized: true,
+            };
+        }
+        Ok(())
+    }
+
+    /// Invalidate all phase-local state after a phase is no longer live.
+    pub fn clear_phase(&mut self, program: &Program<'_>, phase: Phase) -> Result<(), ShapeError> {
+        self.check_program(program)?;
+        for tensor_id in 0..self.tensor_count {
+            let descriptor = self.descriptor(program, tensor_id)?;
+            if descriptor.phase == phase && descriptor.storage != StorageKind::Constant {
+                self.states[tensor_id as usize] = RuntimeTensorState::EMPTY;
+            }
+        }
+        Ok(())
+    }
+
+    fn descriptor(
+        &self,
+        program: &Program<'_>,
+        tensor_id: u32,
+    ) -> Result<trueos_kokoro_aot::TensorDesc, ShapeError> {
+        if tensor_id >= self.tensor_count {
+            return Err(ShapeError::TensorOutOfBounds);
+        }
+        program
+            .tensor(tensor_id)
+            .ok_or(ShapeError::TensorOutOfBounds)
+    }
+
+    fn check_program(&self, program: &Program<'_>) -> Result<(), ShapeError> {
+        if self.bound_artifact_sha256 == Some(*program.artifact_sha256()) {
+            Ok(())
+        } else {
+            Err(ShapeError::ForeignProgram)
+        }
+    }
+}
+
+impl<const CAPACITY: usize> Default for TensorShapeTable<CAPACITY> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn descriptor_max_shape(rank: u8, max_dims: &[u32; 4]) -> Result<RuntimeShape, ShapeError> {
+    if rank > 4 {
+        return Err(ShapeError::RankTooLarge);
+    }
+    RuntimeShape::new(&max_dims[..usize::from(rank)])
+}
+
+fn validate_shape(
+    descriptor: trueos_kokoro_aot::TensorDesc,
+    shape: RuntimeShape,
+) -> Result<(), ShapeError> {
+    if shape.rank != descriptor.rank {
+        return Err(ShapeError::RankMismatch);
+    }
+    for axis in 0..usize::from(shape.rank) {
+        if shape.dims[axis] > descriptor.max_dims[axis] {
+            return Err(ShapeError::DimensionExceedsCapacity);
+        }
+    }
+    if shape.logical_bytes(descriptor.dtype)? > descriptor.byte_capacity {
+        return Err(ShapeError::ByteCapacityExceeded);
+    }
+    Ok(())
+}
+
+fn validate_phase(tensor_phase: Phase, operation_phase: Phase) -> Result<(), ShapeError> {
+    if tensor_phase == Phase::Shared || tensor_phase == operation_phase {
+        Ok(())
+    } else {
+        Err(ShapeError::WrongPhase)
+    }
+}
 
 /// Successful result of dispatching one cooperative work slice.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

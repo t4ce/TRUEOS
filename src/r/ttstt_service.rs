@@ -24,8 +24,11 @@ use spin::Mutex;
 const MODEL_ROOT: &str = "models";
 const WHISPER_MODEL_PATH: &str = "models/whisper/ggml-base.bin";
 const KOKORO_DIR: &str = "models/kokoro";
-const KOKORO_PREFERRED_MODEL_PATH: &str = "models/kokoro/kokoro-quant-convinteger.onnx";
+const KOKORO_AOT_PATH: &str = "models/kokoro/kokoro.kkaot";
+const KOKORO_ONNX_PREFERRED_PATH: &str = "models/kokoro/kokoro-quant-convinteger.onnx";
 const KOKORO_VOICES_PATH: &str = "models/kokoro/voices-v1.0.bin";
+const KOKORO_G2P_PATH: &str = "models/kokoro/en.g2p";
+const KOKORO_LEXICON_PATH: &str = "models/kokoro/misaki-us.klex";
 
 // Range reads keep both the device and the BSP executor moving. Model files
 // are deliberately read once; inference jobs never reopen them.
@@ -67,7 +70,11 @@ static TTS_PCM_FRAMES_BUFFERED: AtomicU64 = AtomicU64::new(0);
 static TTS_STREAMS_COMPLETED: AtomicU64 = AtomicU64::new(0);
 static TTS_STREAMS_FAILED: AtomicU64 = AtomicU64::new(0);
 
-static MODELS: Mutex<Option<Arc<ModelSet>>> = Mutex::new(None);
+// Model images are loaded once and deliberately remain resident for the life
+// of the kernel. Exposing that lifetime explicitly lets zero-copy AOT, voice,
+// and G2P parsers retain validated views without self-referential ownership or
+// unsafe lifetime extension. Worker-spawn retries reuse this same allocation.
+static MODELS: Mutex<Option<&'static ModelSet>> = Mutex::new(None);
 static JOBS: Mutex<VecDeque<QueuedJob>> = Mutex::new(VecDeque::new());
 static JOB_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static SPEECH_BACKEND: Mutex<Option<&'static dyn SpeechBackend>> = Mutex::new(None);
@@ -150,6 +157,8 @@ pub struct ModelSet {
     whisper: ModelImage,
     kokoro: ModelImage,
     kokoro_voices: ModelImage,
+    kokoro_g2p: Option<ModelImage>,
+    kokoro_lexicon: Option<ModelImage>,
     total_bytes: usize,
 }
 
@@ -166,14 +175,25 @@ impl ModelSet {
         &self.kokoro_voices
     }
 
+    /// Optional compact English fallback frontend. Its absence keeps model
+    /// residency/STT available but leaves the native Kokoro backend unready.
+    pub fn kokoro_g2p(&self) -> Option<&ModelImage> {
+        self.kokoro_g2p.as_ref()
+    }
+
+    /// Optional Kokoro/Misaki pronunciation overlay used ahead of G2P2.
+    pub fn kokoro_lexicon(&self) -> Option<&ModelImage> {
+        self.kokoro_lexicon.as_ref()
+    }
+
     pub const fn total_bytes(&self) -> usize {
         self.total_bytes
     }
 }
 
-/// Clone the immutable resident model set without performing filesystem I/O.
-pub fn resident_models() -> Option<Arc<ModelSet>> {
-    MODELS.lock().clone()
+/// Borrow the immutable, permanently resident model set without filesystem I/O.
+pub fn resident_models() -> Option<&'static ModelSet> {
+    *MODELS.lock()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -209,7 +229,7 @@ pub enum JobProgress {
 pub trait InferenceJob: Send {
     fn direction(&self) -> Direction;
 
-    fn run_slice(&mut self, models: &ModelSet, worker: WorkerContext) -> JobProgress;
+    fn run_slice(&mut self, models: &'static ModelSet, worker: WorkerContext) -> JobProgress;
 }
 
 /// One finalized, bounded handoff from a native Kokoro job.
@@ -567,6 +587,16 @@ pub trait SpeechBackend: Send + Sync {
     /// True only after model parsing and backend state construction completed.
     fn ready(&self) -> bool;
 
+    /// Directional readiness lets the TTS-first native port become truthful
+    /// without claiming that its later Whisper adapter is already available.
+    fn tts_ready(&self) -> bool {
+        self.ready()
+    }
+
+    fn stt_ready(&self) -> bool {
+        self.ready()
+    }
+
     /// Construct a bounded-slice warm job for both resident model images.
     fn create_warm_job(&self) -> Result<Box<dyn InferenceJob>, &'static str>;
 
@@ -606,6 +636,16 @@ pub fn speech_backend_name() -> Option<&'static str> {
 pub fn speech_backend_ready() -> bool {
     let backend = *SPEECH_BACKEND.lock();
     backend.is_some_and(SpeechBackend::ready)
+}
+
+pub fn tts_backend_ready() -> bool {
+    let backend = *SPEECH_BACKEND.lock();
+    backend.is_some_and(SpeechBackend::tts_ready)
+}
+
+pub fn stt_backend_ready() -> bool {
+    let backend = *SPEECH_BACKEND.lock();
+    backend.is_some_and(SpeechBackend::stt_ready)
 }
 
 fn ensure_backend_warm_started() -> bool {
@@ -683,7 +723,7 @@ pub fn submit_tts(request: TtsRequest) -> Result<TtsSubmission, SpeechRequestErr
         return Err(SpeechRequestError::InvalidRequest("speed-out-of-range"));
     }
     let backend = (*SPEECH_BACKEND.lock()).ok_or(SpeechRequestError::BackendUnavailable)?;
-    if !backend.ready() {
+    if !backend.tts_ready() {
         let _ = ensure_backend_warm_started();
         return Err(SpeechRequestError::BackendWarming);
     }
@@ -717,7 +757,7 @@ pub fn submit_stt(request: SttRequest) -> Result<u64, SpeechRequestError> {
         return Err(SpeechRequestError::InvalidRequest("empty-pcm"));
     }
     let backend = (*SPEECH_BACKEND.lock()).ok_or(SpeechRequestError::BackendUnavailable)?;
-    if !backend.ready() {
+    if !backend.stt_ready() {
         let _ = ensure_backend_warm_started();
         return Err(SpeechRequestError::BackendWarming);
     }
@@ -971,12 +1011,27 @@ fn map_q8_kernel_lane(lane: trueos_ttstt_cpu::Lane) -> KernelLane {
 async fn find_kokoro_model_path(
     disk: crate::disc::block::DeviceHandle,
 ) -> Result<String, ModelLoadError> {
-    match crate::r::fs::trueosfs::file_info_async(disk, KOKORO_PREFERRED_MODEL_PATH).await {
-        Ok(Some(_)) => return Ok(KOKORO_PREFERRED_MODEL_PATH.to_string()),
+    // The sealed native artifact owns its prepacked constants and is the only
+    // inference image the kernel backend needs. Retain ONNX discovery as a
+    // migration fallback while existing TRUEOSFS installations are updated;
+    // an ONNX image can be resident but cannot make the native backend ready.
+    match crate::r::fs::trueosfs::file_info_async(disk, KOKORO_AOT_PATH).await {
+        Ok(Some(_)) => return Ok(KOKORO_AOT_PATH.to_string()),
         Ok(None) => {}
         Err(error) => {
             return Err(ModelLoadError::FileSystem {
-                path: KOKORO_PREFERRED_MODEL_PATH.to_string(),
+                path: KOKORO_AOT_PATH.to_string(),
+                error,
+            });
+        }
+    }
+
+    match crate::r::fs::trueosfs::file_info_async(disk, KOKORO_ONNX_PREFERRED_PATH).await {
+        Ok(Some(_)) => return Ok(KOKORO_ONNX_PREFERRED_PATH.to_string()),
+        Ok(None) => {}
+        Err(error) => {
+            return Err(ModelLoadError::FileSystem {
+                path: KOKORO_ONNX_PREFERRED_PATH.to_string(),
                 error,
             });
         }
@@ -1097,7 +1152,32 @@ async fn preflight_model_image(
     Ok(info.data_len)
 }
 
-async fn load_model_set() -> Result<Arc<ModelSet>, ModelLoadError> {
+async fn preflight_optional_model_image(
+    disk: crate::disc::block::DeviceHandle,
+    path: &str,
+) -> Result<Option<u64>, ModelLoadError> {
+    let Some(info) = crate::r::fs::trueosfs::file_info_async(disk, path)
+        .await
+        .map_err(|error| ModelLoadError::FileSystem {
+            path: path.to_string(),
+            error,
+        })?
+    else {
+        return Ok(None);
+    };
+    if info.data_len == 0 {
+        return Err(ModelLoadError::Empty(path.to_string()));
+    }
+    if info.data_len > MODEL_FILE_MAX_BYTES {
+        return Err(ModelLoadError::TooLarge {
+            path: path.to_string(),
+            bytes: info.data_len,
+        });
+    }
+    Ok(Some(info.data_len))
+}
+
+async fn load_model_set() -> Result<Box<ModelSet>, ModelLoadError> {
     let disk = crate::r::fs::trueosfs::primary_root_handle()
         .ok_or_else(|| ModelLoadError::Missing(MODEL_ROOT.to_string()))?;
     let kokoro_path = find_kokoro_model_path(disk).await?;
@@ -1107,9 +1187,13 @@ async fn load_model_set() -> Result<Arc<ModelSet>, ModelLoadError> {
     let whisper_len = preflight_model_image(disk, WHISPER_MODEL_PATH).await?;
     let kokoro_len = preflight_model_image(disk, kokoro_path.as_str()).await?;
     let voices_len = preflight_model_image(disk, KOKORO_VOICES_PATH).await?;
+    let g2p_len = preflight_optional_model_image(disk, KOKORO_G2P_PATH).await?;
+    let lexicon_len = preflight_optional_model_image(disk, KOKORO_LEXICON_PATH).await?;
     let total_bytes_u64 = whisper_len
         .checked_add(kokoro_len)
         .and_then(|bytes| bytes.checked_add(voices_len))
+        .and_then(|bytes| bytes.checked_add(g2p_len.unwrap_or(0)))
+        .and_then(|bytes| bytes.checked_add(lexicon_len.unwrap_or(0)))
         .ok_or(ModelLoadError::SetTooLarge(usize::MAX))?;
     let total_bytes =
         usize::try_from(total_bytes_u64).map_err(|_| ModelLoadError::SetTooLarge(usize::MAX))?;
@@ -1122,11 +1206,21 @@ async fn load_model_set() -> Result<Arc<ModelSet>, ModelLoadError> {
     let whisper = load_model_image(disk, WHISPER_MODEL_PATH.to_string(), whisper_len).await?;
     let kokoro = load_model_image(disk, kokoro_path, kokoro_len).await?;
     let kokoro_voices = load_model_image(disk, KOKORO_VOICES_PATH.to_string(), voices_len).await?;
+    let kokoro_g2p = match g2p_len {
+        Some(len) => Some(load_model_image(disk, KOKORO_G2P_PATH.to_string(), len).await?),
+        None => None,
+    };
+    let kokoro_lexicon = match lexicon_len {
+        Some(len) => Some(load_model_image(disk, KOKORO_LEXICON_PATH.to_string(), len).await?),
+        None => None,
+    };
 
-    Ok(Arc::new(ModelSet {
+    Ok(Box::new(ModelSet {
         whisper,
         kokoro,
         kokoro_voices,
+        kokoro_g2p,
+        kokoro_lexicon,
         total_bytes,
     }))
 }
@@ -1226,7 +1320,7 @@ fn finish_job(queued: QueuedJob, direction: Direction, result: JobProgress) {
 }
 
 #[embassy_executor::task(pool_size = WORKER_TASK_POOL)]
-async fn worker_task(slot: u32, core_kind: u8, models: Arc<ModelSet>) {
+async fn worker_task(slot: u32, core_kind: u8, models: &'static ModelSet) {
     let q8_dispatcher = trueos_ttstt_cpu::Dispatcher::detect();
     let context = WorkerContext {
         slot,
@@ -1267,7 +1361,7 @@ async fn worker_task(slot: u32, core_kind: u8, models: Arc<ModelSet>) {
             Timer::after(EmbassyDuration::from_millis(WORKER_SLICE_YIELD_MS)).await;
             continue;
         }
-        match queued.job.run_slice(models.as_ref(), context) {
+        match queued.job.run_slice(models, context) {
             JobProgress::Pending if matches!(&queued.completion, JobCompletion::Tts(output) if output.finished()) => {
                 finish_job(queued, direction, JobProgress::Complete)
             }
@@ -1278,7 +1372,7 @@ async fn worker_task(slot: u32, core_kind: u8, models: Arc<ModelSet>) {
     }
 }
 
-async fn start_worker_pool(models: Arc<ModelSet>) -> Result<usize, SpawnError> {
+async fn start_worker_pool(models: &'static ModelSet) -> Result<usize, SpawnError> {
     let slots = eligible_worker_slots().await;
     let perf_affine = slots
         .iter()
@@ -1289,7 +1383,7 @@ async fn start_worker_pool(models: Arc<ModelSet>) -> Result<usize, SpawnError> {
             continue;
         };
         let core_kind = crate::workers::core_kind_for_slot(slot);
-        match worker_task(slot, core_kind, models.clone()) {
+        match worker_task(slot, core_kind, models) {
             Ok(token) => {
                 spawner.spawn(token);
                 spawned += 1;
@@ -1317,61 +1411,73 @@ async fn start_worker_pool(models: Arc<ModelSet>) -> Result<usize, SpawnError> {
 #[embassy_executor::task]
 pub async fn service_task() {
     loop {
-        SERVICE_STATE.store(ServiceState::LoadingModels as u8, Ordering::Release);
-        crate::log_info!(
-            target: "ttstt";
-            "ttstt: cooperative model warm begin root=trueosfs:/{} chunk_bytes={}\n",
-            MODEL_ROOT,
-            MODEL_READ_CHUNK_BYTES
-        );
-        match load_model_set().await {
-            Ok(models) => {
-                RESIDENT_BYTES.store(models.total_bytes() as u64, Ordering::Release);
-                *MODELS.lock() = Some(models.clone());
+        let models = if let Some(models) = resident_models() {
+            // A previous worker-pool attempt failed before spawning anything.
+            // Model residency is permanent, so retry placement without doing
+            // filesystem I/O or allocating a second resident copy.
+            SERVICE_STATE.store(ServiceState::ModelsResident as u8, Ordering::Release);
+            models
+        } else {
+            SERVICE_STATE.store(ServiceState::LoadingModels as u8, Ordering::Release);
+            crate::log_info!(
+                target: "ttstt";
+                "ttstt: cooperative model warm begin root=trueosfs:/{} chunk_bytes={}\n",
+                MODEL_ROOT,
+                MODEL_READ_CHUNK_BYTES
+            );
+            match load_model_set().await {
+                Ok(models) => {
+                    // Model inference is a boot-lifetime service: seal the one
+                    // successful load into permanent residency. This is the
+                    // ownership proof for all zero-copy backend views.
+                    let models: &'static ModelSet = Box::leak(models);
+                    RESIDENT_BYTES.store(models.total_bytes() as u64, Ordering::Release);
+                    *MODELS.lock() = Some(models);
+                    SERVICE_STATE.store(ServiceState::ModelsResident as u8, Ordering::Release);
+                    models
+                }
+                Err(error) => {
+                    let delay_ms = error.retry_ms();
+                    crate::log_warn!(
+                        target: "ttstt";
+                        "ttstt: model warm deferred reason={} retry_ms={}\n",
+                        error.describe(),
+                        delay_ms
+                    );
+                    SERVICE_STATE.store(ServiceState::WaitingForModels as u8, Ordering::Release);
+                    Timer::after(EmbassyDuration::from_millis(delay_ms)).await;
+                    continue;
+                }
+            }
+        };
+
+        match start_worker_pool(models).await {
+            Ok(0) => {
+                crate::log_warn!(target: "ttstt"; "ttstt: no AP2+ worker could start\n");
                 SERVICE_STATE.store(ServiceState::ModelsResident as u8, Ordering::Release);
-                match start_worker_pool(models).await {
-                    Ok(0) => {
-                        crate::log_warn!(target: "ttstt"; "ttstt: no AP2+ worker could start\n");
-                        *MODELS.lock() = None;
-                        RESIDENT_BYTES.store(0, Ordering::Release);
-                    }
-                    Ok(workers) => {
-                        SERVICE_STATE.store(ServiceState::Ready as u8, Ordering::Release);
-                        crate::log_info!(
-                            target: "ttstt";
-                            "ttstt: ready resident_bytes={} workers={} filesystem_on_inference_path=no speech_backend={} speech_ready={}\n",
-                            RESIDENT_BYTES.load(Ordering::Acquire),
-                            workers,
-                            speech_backend_name().unwrap_or("unregistered"),
-                            speech_backend_ready() as u8
-                        );
-                        loop {
-                            let _ = ensure_backend_warm_started();
-                            Timer::after(EmbassyDuration::from_secs(1)).await;
-                        }
-                    }
-                    Err(error) => {
-                        crate::log_warn!(
-                            target: "ttstt";
-                            "ttstt: worker pool start failed err={:?}\n",
-                            error
-                        );
-                        *MODELS.lock() = None;
-                        RESIDENT_BYTES.store(0, Ordering::Release);
-                    }
+            }
+            Ok(workers) => {
+                SERVICE_STATE.store(ServiceState::Ready as u8, Ordering::Release);
+                crate::log_info!(
+                    target: "ttstt";
+                    "ttstt: ready resident_bytes={} workers={} filesystem_on_inference_path=no speech_backend={} speech_ready={}\n",
+                    RESIDENT_BYTES.load(Ordering::Acquire),
+                    workers,
+                    speech_backend_name().unwrap_or("unregistered"),
+                    speech_backend_ready() as u8
+                );
+                loop {
+                    let _ = ensure_backend_warm_started();
+                    Timer::after(EmbassyDuration::from_secs(1)).await;
                 }
             }
             Err(error) => {
-                let delay_ms = error.retry_ms();
                 crate::log_warn!(
                     target: "ttstt";
-                    "ttstt: model warm deferred reason={} retry_ms={}\n",
-                    error.describe(),
-                    delay_ms
+                    "ttstt: worker pool start failed err={:?}\n",
+                    error
                 );
-                SERVICE_STATE.store(ServiceState::WaitingForModels as u8, Ordering::Release);
-                Timer::after(EmbassyDuration::from_millis(delay_ms)).await;
-                continue;
+                SERVICE_STATE.store(ServiceState::ModelsResident as u8, Ordering::Release);
             }
         }
 

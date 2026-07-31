@@ -1126,6 +1126,8 @@ fn memory_ranges_overlap(lhs: *const f32, lhs_len: usize, rhs: *const f32, rhs_l
 mod tests {
     use super::*;
 
+    const ORT127_POW_SQUARE: &[u8] = include_bytes!("../tests/fixtures/ort127_pow_square.bin");
+
     // Generated with ONNX 1.22.0 and ONNX Runtime 1.28.0, optimizations
     // disabled, sequential CPU execution, opset 20 / com.microsoft opset 1.
 
@@ -1152,6 +1154,56 @@ mod tests {
                 "index {index}: actual={actual:?} expected={expected:?} error={error:?} limit={limit:?}"
             );
         }
+    }
+
+    fn fixture_u32(bytes: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+    }
+
+    #[test]
+    fn pinned_pow_square_matches_official_ort_1_27_fixture() {
+        const HEADER: usize = 16;
+        assert_eq!(&ORT127_POW_SQUARE[..8], b"KPOW1271");
+        assert_eq!(fixture_u32(ORT127_POW_SQUARE, 8), 1);
+        let elements = fixture_u32(ORT127_POW_SQUARE, 12) as usize;
+        assert_eq!(elements, 12);
+        assert_eq!(ORT127_POW_SQUARE.len(), HEADER + elements * 8);
+
+        let mut input = [0.0_f32; 12];
+        for (index, value) in input.iter_mut().enumerate() {
+            *value = f32::from_bits(fixture_u32(ORT127_POW_SQUARE, HEADER + index * 4));
+        }
+        let shape = Shape::new(&[2, 2, 3]).unwrap();
+        let layout = TensorLayout::contiguous(shape);
+        let mut output = [123.0_f32; 12];
+        pow_square(&input, layout, &mut output, layout).unwrap();
+
+        let expected_start = HEADER + elements * 4;
+        for (index, &value) in output.iter().enumerate() {
+            assert_eq!(
+                value.to_bits(),
+                fixture_u32(ORT127_POW_SQUARE, expected_start + index * 4),
+                "output index {index}"
+            );
+        }
+        assert_eq!(output[2].to_bits(), 0, "negative zero squared is +0");
+    }
+
+    #[test]
+    fn pow_square_numerical_failures_are_transactional() {
+        let shape = Shape::new(&[3]).unwrap();
+        let layout = TensorLayout::contiguous(shape);
+        let mut output = [77.0_f32; 3];
+        assert_eq!(
+            pow_square(&[2.0, f32::MAX, 3.0], layout, &mut output, layout),
+            Err(Error::NonFiniteOutput)
+        );
+        assert_eq!(output, [77.0; 3]);
+        assert_eq!(
+            pow_square(&[2.0, f32::NAN, 3.0], layout, &mut output, layout),
+            Err(Error::NonFiniteInput)
+        );
+        assert_eq!(output, [77.0; 3]);
     }
 
     #[test]

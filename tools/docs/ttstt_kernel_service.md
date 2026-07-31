@@ -11,15 +11,24 @@ below `trueosfs:/models`:
 ```text
 models/
 ├── kokoro/
-│   ├── kokoro-quant-convinteger.onnx
-│   └── voices-v1.0.bin
+│   ├── kokoro.kkaot
+│   ├── voices-v1.0.bin
+│   ├── en.g2p
+│   └── misaki-us.klex
 └── whisper/
     └── ggml-base.bin
 ```
 
-If the preferred Kokoro filename is absent, exactly one `.onnx` file in the
-Kokoro directory is accepted. Missing assets leave the service dormant and it
-retries without blocking boot.
+`kokoro.kkaot` is the native, hash-sealed program and prepacked constant image.
+During migration, if it is absent the loader accepts
+`kokoro-quant-convinteger.onnx`, or exactly one other `.onnx` file. That keeps
+the existing resident model/STT service bootable, but ONNX bytes alone cannot
+make the native Kokoro backend ready. `en.g2p` is the compact English fallback
+frontend and `misaki-us.klex` is its higher-quality pronunciation overlay. The
+frontend assets are optional to the shared residency service so their absence
+does not disable STT; native TTS reports the missing asset instead. Missing
+mandatory model/voice assets leave the service dormant and it retries without
+blocking boot.
 
 ## Residency and scheduling contract
 
@@ -28,7 +37,10 @@ retries without blocking boot.
   files are read sequentially to avoid boot-time device pressure and excess
   scratch memory.
 - Inference workers never access TRUEOSFS. They share one immutable resident
-  `ModelSet`.
+  `ModelSet`. The one successful load is explicitly promoted to kernel-lifetime
+  residency; worker-spawn retries reuse it rather than rereading or leaking a
+  second copy. This lifetime is also the ownership proof for zero-copy AOT,
+  voice, lexicon, and G2P views.
 - Workers wait for the CPU topology to settle, then start one pinned Embassy
   task on every registered AP2+ P-core executor. E/unknown AP2+ lanes are a
   fallback only when the complete topology contains no eligible P-core lane.
@@ -73,8 +85,10 @@ alone is never reported as decoded inference.
 plus a `TtsStream`. The native backend receives the same request with a
 `TtsOutput` producer. This is an owned, bounded, nonblocking boundary:
 
-- Language-specific G2P and text splitting belong to the backend. Each model
-  inference chunk contains 1 through 510 phonemes.
+- Language-specific G2P and text splitting belong to the backend. The graph
+  admits 1 through 510 phonemes, but the streaming policy targets 175 through
+  250, may grow to 450 to preserve a sentence boundary, and uses 510 only as
+  the final unbreakable-input safety limit.
 - Every emitted `TtsAudioChunk` identifies its zero-based model-chunk index and
   phoneme count. Multiple PCM chunks can refer to one model chunk; exactly the
   last sets `end_of_model_chunk`.
@@ -202,10 +216,32 @@ The exact single-pass limit is therefore 510 phoneme tokens. The voice archive
 has the matching `(510, 1, 256)` style shape. This must be enforced after
 language-specific grapheme-to-phoneme conversion; a UTF-8 byte or Unicode
 character limit cannot represent the model window exactly. Shell2 separately
-uses an 8 KiB defensive allocation limit. Requests above 510 phonemes are
-split by the native backend into ordered model chunks, preferably at
-punctuation in the final fifth of the window, matching the proven host
-streaming behavior.
+uses an 8 KiB defensive allocation limit.
+
+The hard tensor limit is not the preferred paragraph size. Long near-limit
+chunks can sound rushed and delay the first PCM handoff. Native chunking
+therefore seeks a sentence or clause boundary in a 175--250-token target
+window, permits growth to 450 when that preserves a natural boundary, and
+reserves 510 for pathological text with no usable break. Every range remains
+ordered, nonempty, nonoverlapping, and lossless. Adjacent model waveforms use
+the existing 240-sample (10 ms at 24 kHz) crossfade before conversion to the
+kernel's 48 kHz stereo lane.
+
+The sizing policy is backed by a pinned-model ORT run on the i9-13900K rather
+than a character-count estimate:
+
+| Phoneme tokens | Speed | 24 kHz waveform | Decoder frames (`samples / 300`) | ORT wall | Peak host RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 252 | 1.0 | 15.525 s | 1,242 | 7.92 s | 506,236 KiB |
+| 448 | 1.0 | 26.075 s | 2,086 | 13.31 s | 687,784 KiB |
+| 252 | 0.5 | 31.025 s | 2,482 | 15.81 s | 747,528 KiB |
+
+These RSS figures include ONNX Runtime and are not a native-arena budget. They
+do show why the default should stay near 250 tokens. An 8,192-frame native cap
+is the current sizing candidate: it leaves margin for a 450-token
+boundary-preserving chunk at the admitted minimum speed of 0.5. The real
+post-fusion slot allocator must prove that budget before the compiler seals it;
+the runtime will then reject a larger duration result before arena access.
 
 `tts status` reports model/backend readiness, service active and queued jobs,
 buffered/emitted PCM, shell request/job IDs and phase, shared PCM-lane depth,
@@ -214,15 +250,24 @@ HDA readiness, and cumulative handoff/completion/failure/cancellation counts.
 ## Current implementation boundary
 
 The model residency, serialized queue, validated streaming contract, PCM
-handoff into the live kernel playback lane, local Rust oracle, and primary
-quantized CPU/GPU kernels are implemented. The repository does not yet install
-a native Kokoro `SpeechBackend`; consequently a current boot correctly reports
-`native-kokoro-backend-unregistered` and does not generate placeholder tones
-or claim synthesis. The remaining critical path is the sealed AOT graph
-program emission/dispatch and its recurrent, attention, layout/index,
-float-convolution, resize, inverse-STFT, and vocoder operators. Audible speech
-begins only when that executor registers the native backend and passes the
-waveform oracle.
+handoff into the live kernel playback lane, local Rust oracle, and quantized
+CPU/GPU kernels are implemented. The full 3,615-node source graph now closes to
+2,227 non-overlapping typed operations: every source node has exactly one
+owner, the phase ranges are `[0,1079)` and `[1079,2227)`, and recurrent,
+layout/index, float-convolution, resize, inverse-STFT, scalar, and duration
+kernels exist behind checked no-std APIs. The zero-copy voice parser, exact
+runtime shape table, cooperative executor, and allocation-free tensor-memory
+bridge also pass their independent gates.
+
+The repository does not yet install a native Kokoro `SpeechBackend`;
+consequently a current boot correctly reports
+`native-kokoro-backend-unregistered` and does not generate placeholder tones or
+claim synthesis. The remaining critical path is narrower and explicit: emit
+the real post-fusion slot/capacity-planned `kokoro.kkaot`, finish the typed Rust
+attribute dispatcher and English frontend assets, bind the three model inputs
+and waveform output, then compare native samples against the pinned oracle.
+Audible speech begins only when that complete executor registers the backend
+and passes the waveform check.
 
 File STT reads a signed 16-bit mono/stereo PCM WAV from TRUEOSFS on the BSP,
 downmixes and resamples it to Whisper's mono 16 kHz boundary with periodic

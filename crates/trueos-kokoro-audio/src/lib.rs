@@ -65,8 +65,8 @@ pub fn convert_frame_range(
     if frame_count != 0 {
         let first_source = frame_start / 2;
         let last_frame = frame_end - 1;
-        let last_source = (last_frame / 2 + usize::from(last_frame & 1 != 0))
-            .min(input_mono_24k.len() - 1);
+        let last_source =
+            (last_frame / 2 + usize::from(last_frame & 1 != 0)).min(input_mono_24k.len() - 1);
         if input_mono_24k[first_source..=last_source]
             .iter()
             .any(|sample| !sample.is_finite())
@@ -75,7 +75,9 @@ pub fn convert_frame_range(
         }
     }
 
-    for (local_frame, stereo) in output_stereo.chunks_exact_mut(2).enumerate() {
+    let (stereo_frames, remainder) = output_stereo.as_chunks_mut::<TRUEOS_CHANNELS>();
+    debug_assert!(remainder.is_empty());
+    for (local_frame, stereo) in stereo_frames.iter_mut().enumerate() {
         let output_frame = frame_start + local_frame;
         let source = output_frame / 2;
         let sample = if output_frame & 1 == 0 {
@@ -124,8 +126,7 @@ pub fn crossfade(
     }
     for (index, destination) in output.iter_mut().enumerate() {
         let weight = (index + 1) as f32 / denominator;
-        *destination =
-            retained_left[index] * (1.0 - weight) + incoming_right[index] * weight;
+        *destination = retained_left[index] * (1.0 - weight) + incoming_right[index] * weight;
     }
     Ok(())
 }
@@ -162,8 +163,7 @@ mod tests {
         assert_eq!(
             output,
             [
-                0, 0, 16_383, 16_383, 32_767, 32_767, 0, 0, -32_767, -32_767, -32_767,
-                -32_767,
+                0, 0, 16_383, 16_383, 32_767, 32_767, 0, 0, -32_767, -32_767, -32_767, -32_767,
             ]
         );
     }
@@ -195,15 +195,9 @@ mod tests {
     fn all_rejections_are_transactional() {
         let input = [0.0_f32, f32::NAN];
         let mut output = [7_i16; 4];
-        assert_eq!(
-            convert_frame_range(&input, 1, &mut output),
-            Err(Error::NonFiniteInput)
-        );
+        assert_eq!(convert_frame_range(&input, 1, &mut output), Err(Error::NonFiniteInput));
         assert_eq!(output, [7; 4]);
-        assert_eq!(
-            convert_frame_range(&[0.0], 1, &mut output),
-            Err(Error::FrameRangeOutOfBounds)
-        );
+        assert_eq!(convert_frame_range(&[0.0], 1, &mut output), Err(Error::FrameRangeOutOfBounds));
         assert_eq!(output, [7; 4]);
 
         let mut blend = [9.0_f32; 2];

@@ -84,11 +84,14 @@ trueos-kokoro-exec = { path = "crates/trueos-kokoro-exec" }
 trueos-kokoro-f32 = { path = "crates/trueos-kokoro-f32" }
 trueos-kokoro-gemm = { path = "crates/trueos-kokoro-gemm" }
 trueos-kokoro-duration = { path = "crates/trueos-kokoro-duration" }
+trueos-kokoro-dispatch = { path = "crates/trueos-kokoro-dispatch" }
 trueos-kokoro-layout = { path = "crates/trueos-kokoro-layout" }
 trueos-kokoro-lstm = { path = "crates/trueos-kokoro-lstm" }
+trueos-kokoro-memory = { path = "crates/trueos-kokoro-memory" }
 trueos-kokoro-resize = { path = "crates/trueos-kokoro-resize" }
 trueos-kokoro-scalar = { path = "crates/trueos-kokoro-scalar" }
 trueos-kokoro-stft = { path = "crates/trueos-kokoro-stft" }
+trueos-kokoro-voice = { path = "crates/trueos-kokoro-voice" }
 trueos-fs = { path = "crates/trueos-fs" }
 v = { path = "crates/trueos-v" }
 trueos-vm = { path = "crates/trueos-vm" }

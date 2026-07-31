@@ -61,29 +61,40 @@ class KokoroAotFixtureTests(unittest.TestCase):
         first = TOOL.synthetic_attribute_fixture_artifact()
         second = TOOL.synthetic_attribute_fixture_artifact()
         self.assertEqual(first, second)
-        self.assertEqual(len(first), 14_260)
+        self.assertEqual(len(first), 27_500)
         self.assertEqual(
             TOOL.hashlib.sha256(first).hexdigest(),
-            "c28964ad9f347ec5df9ba3bd2d583d14aa9da9124d2e828a983bf1474c3a0084",
+            "76b3b6f833b7cdbf4933b0985ad081ebe7b543b21d6d7c68ca9ff3ad19b603e9",
         )
         inspected = TOOL.inspect_aot(first)
         self.assertEqual(
             inspected["sections"],
             {
-                "tensors": 90,
+                "tensors": 178,
                 "slots": 0,
-                "ops": 32,
-                "bindings": 90,
+                "ops": 56,
+                "bindings": 178,
                 "phases": 2,
-                "data": 644,
+                "data": 1_308,
             },
         )
         self.assertEqual(inspected["attribute_abi"]["version"], 1)
-        self.assertEqual(inspected["attribute_abi"]["records"], 32)
+        self.assertEqual(inspected["attribute_abi"]["records"], 56)
         self.assertEqual(
             inspected["artifact_sha256"],
-            "eb620cfaade0098dc6f63f5053f08094c1c9a3a935371f5edddbd24dea8261a4",
+            "52b9d668b82cf015259ae8ecbf3001d6719048ffdce15b04f642b4f009480a0d",
         )
+        kind_counts = inspected["attribute_abi"]["kind_counts"]
+        for op_type in (
+            "ResolveDecoderShape",
+            "DynamicQuantizedGemm",
+            "DynamicQuantizedConv1d",
+            "BiLstm256",
+            "FloatConv1d",
+            "FloatConvTranspose1d",
+            "FixedStft20",
+        ):
+            self.assertEqual(kind_counts[f"0x{TOOL.AOT_OPCODES[op_type]:04x}"], 1)
 
     def test_attribute_records_fail_closed(self) -> None:
         record = TOOL.binary_attribute("Add", 3, 0, 3)
@@ -153,6 +164,42 @@ class KokoroAotFixtureTests(unittest.TestCase):
         scatter[15] = 0
         with self.assertRaisesRegex(TOOL.CompileError, "ScatterND contract"):
             TOOL.inspect_attribute_record(bytes(scatter))
+        with self.assertRaisesRegex(TOOL.CompileError, "Cast contract"):
+            TOOL.inspect_attribute_record(TOOL.cast_attribute(1, 1, 1, 7, 1))
+        with self.assertRaisesRegex(TOOL.CompileError, "Pow contract"):
+            TOOL.inspect_attribute_record(TOOL.pow_attribute(TOOL.f32_bits(3.0), 3, 3, 1, 0))
+        with self.assertRaisesRegex(TOOL.CompileError, "DynamicQuantizedGemm"):
+            TOOL.inspect_attribute_record(
+                TOOL.quant_gemm_attribute(1, 3, 3, TOOL.ATTRIBUTE_BIAS_QUANTIZED_INT32, 128, 256, 6)
+            )
+
+    def test_lowering_source_ownership_is_canonical(self) -> None:
+        record = TOOL.LoweringRecord(
+            3,
+            "Add",
+            TOOL.AOT_OPCODES["Add"],
+            0,
+            (1, 2),
+            (3,),
+            TOOL.binary_attribute("Add", 1, 1, 1),
+            "fixture",
+            (1, 2, 3),
+        )
+        encoded = record.canonical_bytes()
+        self.assertEqual(encoded[7], 3)
+        self.assertTrue(TOOL.lowering_plan_bytes((record,)).startswith(b"KKLOWER2"))
+        with self.assertRaisesRegex(TOOL.CompileError, "source ownership"):
+            TOOL.LoweringRecord(
+                3,
+                "Add",
+                TOOL.AOT_OPCODES["Add"],
+                0,
+                (1, 2),
+                (3,),
+                TOOL.binary_attribute("Add", 1, 1, 1),
+                "fixture",
+                (1, 3, 3),
+            ).canonical_bytes()
 
     def test_fixture_payload_tamper_is_rejected(self) -> None:
         artifact = bytearray(TOOL.synthetic_fixture_artifact())
@@ -247,9 +294,9 @@ class KokoroAotFixtureTests(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, completed.stdout)
             self.assertIn("section[2]=Ops", completed.stdout)
-            self.assertIn("count=32", completed.stdout)
+            self.assertIn("count=56", completed.stdout)
             self.assertIn(
-                "artifact_sha256=eb620cfaade0098dc6f63f5053f08094c1c9a3a935371f5edddbd24dea8261a4",
+                "artifact_sha256=52b9d668b82cf015259ae8ecbf3001d6719048ffdce15b04f642b4f009480a0d",
                 completed.stdout,
             )
 
@@ -284,19 +331,50 @@ class KokoroPinnedGraphTests(unittest.TestCase):
         self.assertEqual(report["phases"]["phase0_source_nodes"], [0, 1_747])
         self.assertEqual(report["phases"]["phase1_source_nodes"], [1_747, 3_615])
         lowering = report["cpu_attribute_lowering"]
-        self.assertEqual(lowering["records"], 2_696)
-        self.assertEqual(lowering["f32_core_records"], 1_629)
-        self.assertEqual(lowering["f32_unary_records"], 256)
-        self.assertEqual(lowering["f32_total_records"], 1_885)
-        self.assertEqual(lowering["layout_material_records"], 473)
-        self.assertEqual(lowering["layout_view_records"], 338)
-        self.assertEqual(lowering["layout_total_records"], 811)
-        self.assertEqual(lowering["view_alias_records"], 338)
-        self.assertEqual(lowering["view_static_controllers"], 287)
+        self.assertEqual(lowering["records"], 2_227)
+        self.assertEqual(lowering["raw_admitted_records_before_fusion"], 2_696)
+        self.assertEqual(lowering["raw_surviving_records"], 1_845)
+        self.assertEqual(lowering["direct_residual_records"], 146)
+        self.assertEqual(lowering["native_quant_records"], 235)
+        self.assertEqual(lowering["resolve_decoder_shape_records"], 1)
+        self.assertEqual(lowering["f32_core_records"], 943)
+        self.assertEqual(lowering["f32_unary_records"], 174)
+        self.assertEqual(lowering["f32_total_records"], 1_117)
+        self.assertEqual(lowering["layout_material_records"], 471)
+        self.assertEqual(lowering["layout_view_records"], 258)
+        self.assertEqual(lowering["layout_total_records"], 729)
+        self.assertEqual(lowering["view_alias_records"], 258)
+        self.assertEqual(lowering["view_static_controllers"], 207)
         self.assertEqual(lowering["view_dynamic_controllers"], 51)
         self.assertEqual(lowering["excluded_non_f32_add"], 81)
-        self.assertEqual(lowering["operator_counts"], TOOL.PINNED_LOWERING_COUNTS)
-        self.assertEqual(lowering["plan_sha256"], TOOL.PINNED_LOWERING_SHA256)
+        self.assertEqual(lowering["operator_counts"]["DynamicQuantizedGemm"], 148)
+        self.assertEqual(lowering["operator_counts"]["DynamicQuantizedConv1d"], 87)
+        self.assertEqual(lowering["operator_counts"]["MatMul"], 27)
+        self.assertEqual(lowering["operator_counts"]["Pow"], 50)
+        self.assertEqual(lowering["operator_counts"]["BiLstm256"], 6)
+        self.assertEqual(lowering["raw_plan_sha256"], TOOL.PINNED_LOWERING_SHA256)
+        self.assertEqual(
+            lowering["plan_sha256"],
+            TOOL.PINNED_COMPLETE_LOWERING_SHA256,
+        )
+        self.assertEqual(
+            lowering["source_ownership"],
+            {
+                "graph_source_nodes": 3_615,
+                "owned_source_nodes": 3_615,
+                "unowned_source_nodes": 0,
+                "duplicate_source_nodes": 0,
+                "quant_component_source_nodes": 1_615,
+                "duration_component_source_nodes": 9,
+                "sha256": TOOL.PINNED_SOURCE_OWNERSHIP_SHA256,
+            },
+        )
+        self.assertEqual(report["phases"]["phase0_lowered_ops"], [0, 1_079])
+        self.assertEqual(report["phases"]["phase1_lowered_ops"], [1_079, 2_227])
+        self.assertEqual(
+            report["phases"]["resolve_decoder_shape"]["output_bindings"],
+            ["/encoder/CumSum_output_0", TOOL.FRAME_COUNT_TENSOR],
+        )
         self.assertFalse(lowering["executable_graph_emitted"])
         self.assertEqual(
             self.analysis.ranks[
@@ -304,6 +382,28 @@ class KokoroPinnedGraphTests(unittest.TestCase):
             ],
             2,
         )
+
+    def test_complete_attributes_and_source_ownership(self) -> None:
+        owners: list[int] = []
+        native_quant = 0
+        resolver = None
+        for record in self.analysis.lowerings:
+            TOOL.inspect_attribute_record(record.attributes, record.opcode)
+            owners.extend(record.owned_sources or (record.source_index,))
+            native_quant += record.op_type in {
+                "DynamicQuantizedGemm",
+                "DynamicQuantizedConv1d",
+            }
+            if record.op_type == "ResolveDecoderShape":
+                resolver = record
+        self.assertEqual(native_quant, 235)
+        self.assertEqual(sorted(owners), list(range(3_615)))
+        self.assertEqual(len(owners), len(set(owners)))
+        self.assertIsNotNone(resolver)
+        assert resolver is not None
+        self.assertEqual(resolver.owned_sources, tuple(range(1_738, 1_747)))
+        self.assertEqual(len(resolver.inputs), 2)
+        self.assertEqual(len(resolver.outputs), 2)
 
     def test_model_hash_change_is_rejected(self) -> None:
         with self.assertRaisesRegex(TOOL.CompileError, "SHA-256"):

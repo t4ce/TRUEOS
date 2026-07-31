@@ -1,0 +1,16 @@
+[package]
+name = "trueos-kokoro-memory"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+description = "Allocation-free tensor-memory bridge for sealed TRUEOS Kokoro AOT execution"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+trueos-kokoro-aot = { path = "../trueos-kokoro-aot", default-features = false }
+trueos-kokoro-exec = { path = "../trueos-kokoro-exec", default-features = false }

@@ -498,6 +498,7 @@ pub(crate) enum BlueprintConsoleSurface {
     Terminal,
 }
 
+pub(crate) const BLUEPRINT_VMX_MINISHELL_ARG: &str = "--vmx-minishell";
 pub(crate) const BLUEPRINT_TUI_REENTER_BYTE: u8 = 0x1f;
 
 impl BlueprintConsoleSurface {
@@ -569,6 +570,7 @@ pub(crate) struct BlueprintProcessContext {
     console_surface: BlueprintConsoleSurface,
     console_route: BlueprintConsoleRoute,
     console_attached: bool,
+    app_command_passthrough: bool,
     terminal_reentry_ready: bool,
     console_input: VecDeque<u8>,
     control_shell_line: AllocVec<u8>,
@@ -2209,6 +2211,10 @@ pub fn stage_blueprint_launch(
         return Err(StartError::UnsupportedVmId);
     };
     let app_fs_root = state.app_fs_root.clone();
+    let app_command_passthrough = state
+        .app_args
+        .iter()
+        .any(|arg| arg == BLUEPRINT_VMX_MINISHELL_ARG);
     let console_route =
         if blueprint_uses_net_shell_direct_path(console_surface, console_target.as_ref()) {
             BlueprintConsoleRoute::NetShellDirect
@@ -2239,6 +2245,7 @@ pub fn stage_blueprint_launch(
         console_surface,
         console_route,
         console_attached: true,
+        app_command_passthrough,
         terminal_reentry_ready: false,
         console_input: VecDeque::new(),
         control_shell_line: AllocVec::new(),
@@ -3249,7 +3256,58 @@ pub(crate) fn blueprint_console_tui_demo_idle(vm_id: u8) -> bool {
     true
 }
 
+fn blueprint_app_command_passthrough_enabled(vm_id: u8) -> bool {
+    BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .and_then(|slot| {
+            slot.lock()
+                .as_ref()
+                .map(|context| context.console_attached && context.app_command_passthrough)
+        })
+        .unwrap_or(false)
+}
+
+fn blueprint_forward_app_command(vm_id: u8, raw: &str) -> bool {
+    const MAX_CONSOLE_INPUT: usize = 64 * 1024;
+
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return false;
+    };
+    let mut guard = slot.lock();
+    let Some(context) = guard.as_mut() else {
+        return false;
+    };
+    if !context.console_attached || !context.app_command_passthrough {
+        return false;
+    }
+    for byte in raw.bytes().chain(core::iter::once(b'\n')) {
+        if context.console_input.len() >= MAX_CONSOLE_INPUT {
+            let _ = context.console_input.pop_front();
+        }
+        context.console_input.push_back(byte);
+    }
+    true
+}
+
 fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
+    let trimmed = raw.trim();
+    if blueprint_app_command_passthrough_enabled(vm_id) {
+        let mut words = trimmed.splitn(2, char::is_whitespace);
+        if words.next() == Some("vmx") {
+            let command = words
+                .next()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            blueprint_control_shell_vmx_command(vm_id, command.unwrap_or("help"));
+        } else if !trimmed.is_empty() && !blueprint_forward_app_command(vm_id, trimmed) {
+            blueprint_control_shell_line(vm_id, "vmx-shell: Blueprint command channel unavailable");
+        }
+        return;
+    }
+    blueprint_control_shell_vmx_command(vm_id, raw);
+}
+
+fn blueprint_control_shell_vmx_command(vm_id: u8, raw: &str) {
     let trimmed = raw.trim();
     let mut words = trimmed.split_whitespace();
     let cmd = words.next().unwrap_or("");
@@ -3276,19 +3334,33 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
                 .as_str(),
             );
         }
-        "help" | "?" => blueprint_control_shell_write_text(
-            vm_id,
-            "commands: tui env smp leave help stop pause snapshot preserve\n\
-             tui: re-enter this Blueprint's terminal UI\n\
-             tui demo: launch the built-in three-button TUI preview\n\
-             leave: return to the default Matrix slot\n\
-             stop: stop without a checkpoint\n\
-             pause: preserve-pause; resume by vmid from F2 pause\n\
-             snapshot: Blueprint Ready checkpoint; durable and resumable\n\
-             preserve: preserve-stop; checkpoint first, then tear down",
-        ),
+        "help" | "?" => {
+            let text = if blueprint_app_command_passthrough_enabled(vm_id) {
+                "VM controls: vmx env|smp|help|stop|pause|snapshot|preserve\n\
+                 Player commands are entered without a prefix\n\
+                 stop: stop without a checkpoint\n\
+                 pause: preserve-pause; resume by vmid from F2 pause\n\
+                 snapshot: Blueprint Ready checkpoint; durable and resumable\n\
+                 preserve: preserve-stop; checkpoint first, then tear down"
+            } else {
+                "commands: tui env smp leave help stop pause snapshot preserve\n\
+                 tui: re-enter this Blueprint's terminal UI\n\
+                 tui demo: launch the built-in three-button TUI preview\n\
+                 leave: return to the default Matrix slot\n\
+                 stop: stop without a checkpoint\n\
+                 pause: preserve-pause; resume by vmid from F2 pause\n\
+                 snapshot: Blueprint Ready checkpoint; durable and resumable\n\
+                 preserve: preserve-stop; checkpoint first, then tear down"
+            };
+            blueprint_control_shell_write_text(vm_id, text);
+        }
         "tui" | "terminal" | "term" => {
-            if argument == Some("demo") && !has_extra_arguments {
+            if blueprint_app_command_passthrough_enabled(vm_id) {
+                blueprint_control_shell_line(
+                    vm_id,
+                    "vmx-shell: terminal TUI disabled for this launch; use Player commands directly",
+                );
+            } else if argument == Some("demo") && !has_extra_arguments {
                 if !blueprint_console_start_tui_demo(vm_id) {
                     blueprint_control_shell_line(vm_id, "vmx-shell: tui demo is not available");
                 }

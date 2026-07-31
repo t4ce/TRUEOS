@@ -1,0 +1,15 @@
+[package]
+name = "trueos-kokoro-voice"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+description = "Zero-copy no-std parser for the sealed TRUEOS Kokoro voice archive"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+sha2 = { version = "0.10.9", default-features = false }

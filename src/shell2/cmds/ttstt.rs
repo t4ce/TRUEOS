@@ -130,7 +130,7 @@ pub(crate) fn try_parse_tts(
         print_status(io, "tts");
         return ParseOutcome::Handled;
     }
-    if !crate::r::ttstt_service::speech_backend_ready() {
+    if !crate::r::ttstt_service::tts_backend_ready() {
         print_shell_line(io, "tts: unavailable reason=native-kokoro-backend-warming");
         print_status(io, "tts");
         return ParseOutcome::Handled;
@@ -481,7 +481,7 @@ pub(crate) fn try_parse_stt(
         print_status(io, "stt");
         return ParseOutcome::Handled;
     }
-    if !crate::r::ttstt_service::speech_backend_ready() {
+    if !crate::r::ttstt_service::stt_backend_ready() {
         print_shell_line(
             io,
             "stt: unavailable reason=native-whisper-backend-warming; no audio file was read",
@@ -526,9 +526,14 @@ fn print_status(io: &'static dyn ShellBackend2, command: &str) {
         ServiceState::Ready => "ready",
     };
     let backend = crate::r::ttstt_service::speech_backend_name().unwrap_or("unregistered");
+    let direction_ready = if command == "tts" {
+        crate::r::ttstt_service::tts_backend_ready()
+    } else {
+        crate::r::ttstt_service::stt_backend_ready()
+    };
     let backend_state = if backend == "unregistered" {
         "unregistered"
-    } else if crate::r::ttstt_service::speech_backend_ready() {
+    } else if direction_ready {
         "ready"
     } else {
         "warming"

@@ -1,0 +1,66 @@
+{
+  "add_i64_shapes": [
+    [
+      2,
+      1
+    ],
+    [
+      1,
+      3
+    ],
+    [
+      2,
+      3
+    ]
+  ],
+  "dequant_scale_bits": [
+    "0x3bac9658",
+    "0x3d8cc081",
+    "0x3ba0f77c",
+    "0x3c281417"
+  ],
+  "dequant_shape": [
+    2,
+    2,
+    4
+  ],
+  "dequant_zero_point": 0,
+  "execution_provider": "CPUExecutionProvider",
+  "fixture": "ort127_source_ops.bin",
+  "graph_optimization": "ORT_DISABLE_ALL",
+  "inter_op_threads": 1,
+  "intra_op_threads": 1,
+  "ir_version": 10,
+  "less_f32_shapes": [
+    [],
+    [],
+    []
+  ],
+  "less_i64_shapes": [
+    [
+      1,
+      4
+    ],
+    [
+      3,
+      1
+    ],
+    [
+      3,
+      4
+    ]
+  ],
+  "model_sha256": "239d9f4df112a375bea52146570b97eb5c5af727c007761ee121ed123fd1ab29",
+  "onnx_version": "1.21.0",
+  "onnxruntime_version": "1.27.0",
+  "operations": [
+    "Less(INT64)",
+    "Less(FLOAT)",
+    "Add(INT64)",
+    "DequantizeLinear(INT8)"
+  ],
+  "opset": 20,
+  "payload": "header, Less BOOL outputs, Add INT64 output, four DequantizeLinear FLOAT outputs",
+  "schema": "trueos-kokoro-source-op-ort-fixture-v1",
+  "sha256": "b4918f18fda4e6d3100f53504740c0e56acd4ae54a345928fc919fa6cc4a4432"
+}

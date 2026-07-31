@@ -20,6 +20,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 import hashlib
 import json
+import math
 from pathlib import Path
 import struct
 import sys
@@ -46,12 +47,45 @@ ATTRIBUTE_CONTROL_DYNAMIC = 2
 ATTRIBUTE_PAD_REFLECT = 1
 ATTRIBUTE_SCATTER_REDUCTION_NONE = 0
 ATTRIBUTE_SCATTER_ORDERED_UNIQUE = 1
+ATTRIBUTE_ROLE_WEIGHT = 1 << 0
+ATTRIBUTE_ROLE_SCALE = 1 << 1
+ATTRIBUTE_ROLE_ZERO = 1 << 2
+ATTRIBUTE_ROLE_BIAS = 1 << 3
+ATTRIBUTE_ROLE_CONTROL = 1 << 4
+ATTRIBUTE_BIAS_NONE = 0
+ATTRIBUTE_BIAS_FLOAT = 1
+ATTRIBUTE_BIAS_QUANTIZED_INT32 = 2
+
+# Model-specific profile IDs are intentional.  These are not a generic ONNX
+# ABI: each ID selects one already implemented Kokoro kernel contract and the
+# remainder of the record seals the exact ranks, dtypes and source attributes.
+MATMUL_ATTENTION_SCORES = 1
+MATMUL_ATTENTION_CONTEXT = 2
+MATMUL_DURATION_PROSODY = 3
+MATMUL_DURATION_TEXT = 4
+MATMUL_SOURCE_LINEAR = 5
+RESIZE_NEAREST_UP2 = 1
+RESIZE_NEAREST_UP300 = 2
+RESIZE_LINEAR_DOWN300 = 3
+RESIZE_LINEAR_UP300 = 4
+RESIZE_NEAREST = 1
+RESIZE_LINEAR = 2
+FLOAT_CONV_POST_128_TO_22 = 1
+FLOAT_CONV_TRANSPOSE_ENCODER_512 = 2
+FLOAT_CONV_TRANSPOSE_DECODER_1090 = 3
+FLOAT_CONV_TRANSPOSE_UP_512_TO_256 = 4
+FLOAT_CONV_TRANSPOSE_UP_256_TO_128 = 5
+FLOAT_CONV_TRANSPOSE_ISTFT_22_TO_1 = 6
 
 PINNED_MODEL_FILE = "kokoro-rten.onnx"
 PINNED_MODEL_BYTES = 124_604_222
 PINNED_MODEL_SHA256 = "239d9f4df112a375bea52146570b97eb5c5af727c007761ee121ed123fd1ab29"
 PINNED_VOICES_BYTES = 28_214_398
 PINNED_VOICES_SHA256 = "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"
+PINNED_TOKEN_MAX = 512
+PINNED_FRAME_MIN = 1
+PINNED_FRAME_MAX_CANDIDATE = 8_192
+PINNED_ARTIFACT_RELATIVE_PATH = "models/kokoro/kokoro.kkaot"
 
 PINNED_IR_VERSION = 9
 PINNED_PRODUCER = ("onnx.quantize", "0.1.0")
@@ -348,7 +382,9 @@ PINNED_LOWERING_COUNTS = {
 # Filled from the canonical lowering stream after every record has passed the
 # operation-specific validator. This is deliberately separate from the model
 # hash: it seals the compiler's interpretation of the accepted graph.
-PINNED_LOWERING_SHA256 = "fd91172b0b96ae5f22a353664d381b58d4e708a6effaca2b183332e63d0b9920"
+PINNED_LOWERING_SHA256 = "93fcb54122768eab1d40abb0e84fe69a46433688bd4a61243dba69dc57b03b51"
+PINNED_COMPLETE_LOWERING_SHA256 = "7ea9436430722d1ce9ddfad00f579883f6628e9f4518f66f464eb5d3e6b5c463"
+PINNED_SOURCE_OWNERSHIP_SHA256 = "248cbd89b62638bd1fc2ba16649e46d35204cc5fe7abfc1e799620ea2a166ac4"
 
 LAYER_NORM_EPSILON_BITS = frozenset({0x2B8CBCCC, 0x3727C5AC})
 SKIP_LAYER_NORM_EPSILON_BITS = 0x2B8CBCCC
@@ -396,13 +432,17 @@ def _attribute_record(opcode: int, body: bytes) -> bytes:
 
 
 def binary_attribute(
-    op_type: str, lhs_rank: int, rhs_rank: int, output_rank: int
+    op_type: str,
+    lhs_rank: int,
+    rhs_rank: int,
+    output_rank: int,
+    dtype: int = 1,
 ) -> bytes:
     reject(op_type not in LOWERED_F32_BINARY_OPS, f"binary attribute kind {op_type!r}")
     return _attribute_record(
         AOT_OPCODES[op_type],
         struct.pack(
-            "<BBBBBB2x",
+            "<BBBBBBBB",
             lhs_rank,
             rhs_rank,
             output_rank,
@@ -410,6 +450,444 @@ def binary_attribute(
             ATTRIBUTE_LAYOUT_CHECKED,
             ATTRIBUTE_BINARY_MULTIDIRECTIONAL
             | ATTRIBUTE_BINARY_RUNTIME_SHAPE_CHECK,
+            dtype,
+            0,
+        ),
+    )
+
+
+def comparison_attribute(
+    op_type: str,
+    lhs_rank: int,
+    rhs_rank: int,
+    output_rank: int,
+    input_dtype: int,
+    output_dtype: int = 9,
+    constant_roles: int = 0,
+) -> bytes:
+    reject(
+        op_type not in {"And", "Equal", "Greater", "GreaterOrEqual", "Less"},
+        f"comparison attribute kind {op_type!r}",
+    )
+    return _attribute_record(
+        AOT_OPCODES[op_type],
+        struct.pack(
+            "<BBBBBBBB4x",
+            lhs_rank,
+            rhs_rank,
+            output_rank,
+            input_dtype,
+            output_dtype,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            ATTRIBUTE_BINARY_MULTIDIRECTIONAL
+            | ATTRIBUTE_BINARY_RUNTIME_SHAPE_CHECK,
+            constant_roles,
+        ),
+    )
+
+
+def cast_attribute(
+    input_rank: int,
+    output_rank: int,
+    input_dtype: int,
+    output_dtype: int,
+    saturate: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["Cast"],
+        struct.pack(
+            "<BBBBBB2x",
+            input_rank,
+            output_rank,
+            input_dtype,
+            output_dtype,
+            saturate,
+            ATTRIBUTE_LAYOUT_CHECKED,
+        ),
+    )
+
+
+def constant_of_shape_attribute(
+    fill_bits: int, control_rank: int, output_rank: int, output_dtype: int
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["ConstantOfShape"],
+        struct.pack(
+            "<IBBBBB3x",
+            fill_bits,
+            control_rank,
+            output_rank,
+            output_dtype,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            ATTRIBUTE_ROLE_CONTROL,
+        ),
+    )
+
+
+def cumsum_attribute(
+    axis: int,
+    input_rank: int,
+    output_rank: int,
+    dtype: int,
+    exclusive: int,
+    reverse: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["CumSum"],
+        struct.pack(
+            "<iBBBBBBB1x",
+            axis,
+            input_rank,
+            output_rank,
+            dtype,
+            exclusive,
+            reverse,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            0b10,
+        ),
+    )
+
+
+def dequantize_linear_attribute(
+    input_rank: int,
+    output_rank: int,
+    input_dtype: int,
+    scale_rank: int,
+    zero_rank: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["DequantizeLinear"],
+        struct.pack(
+            "<BBBBBBBB4x",
+            input_rank,
+            output_rank,
+            input_dtype,
+            1,
+            scale_rank,
+            zero_rank,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            ATTRIBUTE_ROLE_SCALE | ATTRIBUTE_ROLE_ZERO,
+        ),
+    )
+
+
+def where_attribute(
+    condition_rank: int,
+    true_rank: int,
+    false_rank: int,
+    output_rank: int,
+    value_dtype: int,
+    constant_roles: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["Where"],
+        struct.pack(
+            "<BBBBBBBBBB2x",
+            condition_rank,
+            true_rank,
+            false_rank,
+            output_rank,
+            9,
+            value_dtype,
+            value_dtype,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            ATTRIBUTE_BINARY_MULTIDIRECTIONAL
+            | ATTRIBUTE_BINARY_RUNTIME_SHAPE_CHECK,
+            constant_roles,
+        ),
+    )
+
+
+def matmul_attribute(
+    profile: int,
+    lhs_rank: int,
+    rhs_rank: int,
+    output_rank: int,
+    dtype: int,
+    constant_roles: int,
+    k: int,
+    n: int,
+    lane: int,
+    frame_axis: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["MatMul"],
+        struct.pack(
+            "<BBBBBBBB4I",
+            profile,
+            lhs_rank,
+            rhs_rank,
+            output_rank,
+            dtype,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            constant_roles,
+            0,
+            k,
+            n,
+            lane,
+            frame_axis,
+        ),
+    )
+
+
+def pow_attribute(
+    exponent_bits: int,
+    input_rank: int,
+    output_rank: int,
+    dtype: int,
+    exponent_rank: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["Pow"],
+        struct.pack(
+            "<IBBBBBB2x",
+            exponent_bits,
+            input_rank,
+            output_rank,
+            dtype,
+            exponent_rank,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            0b10,
+        ),
+    )
+
+
+def range_attribute(
+    start_rank: int, limit_rank: int, delta_rank: int, output_rank: int, dtype: int
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["Range"],
+        struct.pack(
+            "<BBBBBBBB4x",
+            start_rank,
+            limit_rank,
+            delta_rank,
+            output_rank,
+            dtype,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            0b101,
+            0,
+        ),
+    )
+
+
+def resize_attribute(
+    profile: int,
+    input_rank: int,
+    output_rank: int,
+    mode: int,
+    scale: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["Resize"],
+        struct.pack(
+            "<BBBBBBBBII",
+            profile,
+            input_rank,
+            output_rank,
+            1,
+            mode,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            0b10,
+            0,
+            scale,
+            0,
+        ),
+    )
+
+
+def bilstm_attribute(profile: int, input_width: int, constant_input_mask: int) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["BiLstm256"],
+        struct.pack(
+            "<H10B5I",
+            profile,
+            3,
+            4,
+            3,
+            1,
+            1,
+            2,
+            6,
+            3,
+            constant_input_mask,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            256,
+            input_width,
+            4,
+            0,
+            0,
+        ),
+    )
+
+
+def float_conv_attribute(
+    op_type: str,
+    profile: int,
+    input_channels: int,
+    output_channels: int,
+    kernel: int,
+    stride: int,
+    dilation: int,
+    pad_left: int,
+    pad_right: int,
+    output_padding: int,
+    groups: int,
+    has_bias: bool,
+) -> bytes:
+    reject(op_type not in {"FloatConv1d", "FloatConvTranspose1d"}, "float Conv kind")
+    return _attribute_record(
+        AOT_OPCODES[op_type],
+        struct.pack(
+            "<H10B9I",
+            profile,
+            1 if op_type == "FloatConv1d" else 2,
+            3,
+            3,
+            1 if has_bias else 0,
+            3,
+            1,
+            int(has_bias),
+            ATTRIBUTE_LAYOUT_CHECKED,
+            0b110 if has_bias else 0b010,
+            0,
+            input_channels,
+            output_channels,
+            kernel,
+            stride,
+            dilation,
+            pad_left,
+            pad_right,
+            output_padding,
+            groups,
+        ),
+    )
+
+
+def fixed_stft_attribute() -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["FixedStft20"],
+        struct.pack(
+            "<H10B3I",
+            1,
+            2,
+            4,
+            1,
+            1,
+            1,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            0b1110,
+            4,
+            0,
+            0,
+            20,
+            5,
+            11,
+        ),
+    )
+
+
+def resolve_decoder_shape_attribute() -> bytes:
+    # flags: sigmoid, reduce-last, divide-speed, round, clamp-min-one,
+    # cast-i64, batch-gather-zero, inclusive-forward-cumsum, gather-last.
+    return _attribute_record(
+        AOT_OPCODES["ResolveDecoderShape"],
+        struct.pack(
+            "<H10B5I",
+            1,
+            3,
+            1,
+            1,
+            0,
+            1,
+            7,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            2,
+            2,
+            0,
+            50,
+            512,
+            0x1FF,
+            f32_bits(1.0),
+            9,
+        ),
+    )
+
+
+def quant_gemm_attribute(
+    profile: int,
+    activation_rank: int,
+    output_rank: int,
+    bias_mode: int,
+    k: int,
+    n: int,
+    semantic_source_count: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["DynamicQuantizedGemm"],
+        struct.pack(
+            "<H10B5I",
+            profile,
+            activation_rank,
+            2,
+            output_rank,
+            1,
+            3,
+            1,
+            1,
+            1,
+            bias_mode,
+            0b11110 if bias_mode else 0b01110,
+            k,
+            n,
+            semantic_source_count,
+            0,
+            1 if bias_mode else 0,
+        ),
+    )
+
+
+def quant_conv_attribute(
+    profile: int,
+    bias_mode: int,
+    input_channels: int,
+    output_channels: int,
+    kernel: int,
+    stride: int,
+    dilation: int,
+    pad_left: int,
+    pad_right: int,
+    groups: int,
+    weight_zero: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["DynamicQuantizedConv1d"],
+        struct.pack(
+            "<H14B9I",
+            profile,
+            3,
+            3,
+            3,
+            0,
+            0,
+            1 if bias_mode else 0,
+            1,
+            2,
+            1,
+            bias_mode,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            0b11110 if bias_mode else 0b01110,
+            10 if bias_mode == ATTRIBUTE_BIAS_QUANTIZED_INT32 else 5,
+            0,
+            input_channels,
+            output_channels,
+            kernel,
+            stride,
+            dilation,
+            pad_left,
+            pad_right,
+            groups,
+            weight_zero,
         ),
     )
 
@@ -811,6 +1289,27 @@ ATTRIBUTE_RECORD_BYTES = {
     AOT_OPCODES["Pad"]: 48,
     AOT_OPCODES["NonZero"]: 16,
     AOT_OPCODES["ScatterND"]: 20,
+    AOT_OPCODES["And"]: 20,
+    AOT_OPCODES["Equal"]: 20,
+    AOT_OPCODES["Greater"]: 20,
+    AOT_OPCODES["GreaterOrEqual"]: 20,
+    AOT_OPCODES["Less"]: 20,
+    AOT_OPCODES["Cast"]: 16,
+    AOT_OPCODES["ConstantOfShape"]: 20,
+    AOT_OPCODES["CumSum"]: 20,
+    AOT_OPCODES["DequantizeLinear"]: 20,
+    AOT_OPCODES["Where"]: 20,
+    AOT_OPCODES["MatMul"]: 32,
+    AOT_OPCODES["Pow"]: 20,
+    AOT_OPCODES["Range"]: 20,
+    AOT_OPCODES["Resize"]: 24,
+    AOT_OPCODES["BiLstm256"]: 40,
+    AOT_OPCODES["FloatConv1d"]: 56,
+    AOT_OPCODES["FloatConvTranspose1d"]: 56,
+    AOT_OPCODES["FixedStft20"]: 32,
+    AOT_OPCODES["ResolveDecoderShape"]: 40,
+    AOT_OPCODES["DynamicQuantizedGemm"]: 40,
+    AOT_OPCODES["DynamicQuantizedConv1d"]: 60,
 }
 
 
@@ -833,12 +1332,14 @@ def inspect_attribute_record(
         "bytes": total_bytes,
     }
     if kind in {AOT_OPCODES[name] for name in LOWERED_F32_BINARY_OPS}:
-        lhs_rank, rhs_rank, output_rank, input_layout, output_layout, flags = (
-            struct.unpack_from("<BBBBBB", record, 8)
+        lhs_rank, rhs_rank, output_rank, input_layout, output_layout, flags, dtype, reserved = (
+            struct.unpack_from("<BBBBBBBB", record, 8)
         )
-        reject(any(record[14:16]), "binary attribute reserved bytes rejected")
+        reject(reserved != 0, "binary attribute reserved byte rejected")
         reject(max(lhs_rank, rhs_rank, output_rank) > 4, "binary attribute rank rejected")
         reject(output_rank != max(lhs_rank, rhs_rank), "binary output rank rejected")
+        reject(dtype not in {1, 7}, "binary dtype rejected")
+        reject(kind != AOT_OPCODES["Add"] and dtype != 1, "non-Add binary dtype rejected")
         reject(
             input_layout != ATTRIBUTE_LAYOUT_CHECKED
             or output_layout != ATTRIBUTE_LAYOUT_CHECKED,
@@ -855,7 +1356,328 @@ def inspect_attribute_record(
             rhs_rank=rhs_rank,
             output_rank=output_rank,
             flags=flags,
+            dtype=dtype,
         )
+    elif kind in {
+        AOT_OPCODES[name]
+        for name in ("And", "Equal", "Greater", "GreaterOrEqual", "Less")
+    }:
+        (
+            lhs_rank,
+            rhs_rank,
+            output_rank,
+            input_dtype,
+            output_dtype,
+            layout,
+            flags,
+            constant_roles,
+        ) = struct.unpack_from("<BBBBBBBB", record, 8)
+        reject(any(record[16:20]), "comparison reserved bytes rejected")
+        reject(
+            max(lhs_rank, rhs_rank, output_rank) > 4
+            or output_rank != max(lhs_rank, rhs_rank)
+            or output_dtype != 9
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or flags
+            != ATTRIBUTE_BINARY_MULTIDIRECTIONAL
+            | ATTRIBUTE_BINARY_RUNTIME_SHAPE_CHECK
+            or constant_roles & ~3,
+            "comparison contract rejected",
+        )
+        if kind == AOT_OPCODES["And"]:
+            reject(input_dtype != 9, "And dtype rejected")
+        else:
+            reject(input_dtype not in {1, 7}, "comparison input dtype rejected")
+        result.update(
+            lhs_rank=lhs_rank,
+            rhs_rank=rhs_rank,
+            output_rank=output_rank,
+            dtype=input_dtype,
+            constant_roles=constant_roles,
+        )
+    elif kind == AOT_OPCODES["Cast"]:
+        input_rank, output_rank, input_dtype, output_dtype, saturate, layout = (
+            struct.unpack_from("<BBBBBB", record, 8)
+        )
+        reject(any(record[14:16]), "Cast reserved bytes rejected")
+        reject(
+            input_rank > 4
+            or output_rank != input_rank
+            or input_dtype not in SUPPORTED_DTYPES
+            or output_dtype not in SUPPORTED_DTYPES
+            or (input_dtype, output_dtype) not in {(1, 9), (7, 1), (9, 1)}
+            or saturate != 1
+            or layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "Cast contract rejected",
+        )
+        result.update(
+            input_rank=input_rank,
+            output_rank=output_rank,
+            input_dtype=input_dtype,
+            output_dtype=output_dtype,
+        )
+    elif kind == AOT_OPCODES["ConstantOfShape"]:
+        fill_bits, control_rank, output_rank, output_dtype, layout, roles = (
+            struct.unpack_from("<IBBBBB", record, 8)
+        )
+        reject(any(record[17:20]), "ConstantOfShape reserved bytes rejected")
+        reject(
+            fill_bits not in {0, f32_bits(1.0)}
+            or control_rank != 1
+            or output_rank not in {2, 3}
+            or output_dtype != 1
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or roles != ATTRIBUTE_ROLE_CONTROL,
+            "ConstantOfShape contract rejected",
+        )
+        result.update(fill_bits=fill_bits, input_rank=control_rank, output_rank=output_rank)
+    elif kind == AOT_OPCODES["CumSum"]:
+        axis, input_rank, output_rank, dtype, exclusive, reverse, layout, roles = (
+            struct.unpack_from("<iBBBBBBB", record, 8)
+        )
+        reject(record[19] != 0, "CumSum reserved byte rejected")
+        reject(
+            axis != 1
+            or input_rank != 3
+            or output_rank != input_rank
+            or dtype != 1
+            or exclusive != 0
+            or reverse != 0
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or roles != 0b10,
+            "CumSum contract rejected",
+        )
+        result.update(axis=axis, input_rank=input_rank, output_rank=output_rank, dtype=dtype)
+    elif kind == AOT_OPCODES["DequantizeLinear"]:
+        input_rank, output_rank, input_dtype, output_dtype, scale_rank, zero_rank, layout, roles = (
+            struct.unpack_from("<BBBBBBBB", record, 8)
+        )
+        reject(any(record[16:20]), "DequantizeLinear reserved bytes rejected")
+        reject(
+            input_rank != 3
+            or output_rank != input_rank
+            or input_dtype != 3
+            or output_dtype != 1
+            or scale_rank != 0
+            or zero_rank != 0
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or roles != ATTRIBUTE_ROLE_SCALE | ATTRIBUTE_ROLE_ZERO,
+            "DequantizeLinear contract rejected",
+        )
+        result.update(input_rank=input_rank, output_rank=output_rank, dtype=input_dtype)
+    elif kind == AOT_OPCODES["Where"]:
+        fields = struct.unpack_from("<BBBBBBBBBB", record, 8)
+        reject(any(record[18:20]), "Where reserved bytes rejected")
+        condition_rank, true_rank, false_rank, output_rank = fields[:4]
+        condition_dtype, value_dtype, output_dtype, layout, flags, roles = fields[4:]
+        reject(
+            max(condition_rank, true_rank, false_rank, output_rank) > 4
+            or output_rank != max(condition_rank, true_rank, false_rank)
+            or condition_dtype != 9
+            or value_dtype not in {1, 7}
+            or output_dtype != value_dtype
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or flags
+            != ATTRIBUTE_BINARY_MULTIDIRECTIONAL
+            | ATTRIBUTE_BINARY_RUNTIME_SHAPE_CHECK
+            or roles & ~3,
+            "Where contract rejected",
+        )
+        result.update(output_rank=output_rank, dtype=value_dtype, constant_roles=roles)
+    elif kind == AOT_OPCODES["MatMul"]:
+        profile, lhs_rank, rhs_rank, output_rank, dtype, layout, roles, reserved, k, n, lane, frame_axis = (
+            struct.unpack_from("<BBBBBBBB4I", record, 8)
+        )
+        reject(
+            profile not in range(MATMUL_ATTENTION_SCORES, MATMUL_SOURCE_LINEAR + 1)
+            or lhs_rank not in {3, 4}
+            or rhs_rank not in {2, 4}
+            or output_rank != lhs_rank
+            or dtype != 1
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or roles & ~0b10
+            or reserved != 0
+            or lane == 0
+            or frame_axis > 2,
+            "MatMul contract rejected",
+        )
+        if profile == MATMUL_ATTENTION_SCORES:
+            reject((lhs_rank, rhs_rank, output_rank, k, n, lane) != (4, 4, 4, 64, 0, 64), "attention-score MatMul rejected")
+        elif profile == MATMUL_ATTENTION_CONTEXT:
+            reject((lhs_rank, rhs_rank, output_rank, k, n, lane) != (4, 4, 4, 0, 64, 64), "attention-context MatMul rejected")
+        else:
+            reject(rhs_rank != 2 or min(k, n) == 0, "linear MatMul rejected")
+        reject(
+            roles != (0b10 if profile == MATMUL_SOURCE_LINEAR else 0),
+            "MatMul constant-input roles rejected",
+        )
+        result.update(profile=profile, input_rank=lhs_rank, output_rank=output_rank, k=k, n=n)
+    elif kind == AOT_OPCODES["Pow"]:
+        exponent_bits, input_rank, output_rank, dtype, exponent_rank, layout, roles = (
+            struct.unpack_from("<IBBBBBB", record, 8)
+        )
+        reject(any(record[18:20]), "Pow reserved bytes rejected")
+        reject(
+            exponent_bits != f32_bits(2.0)
+            or input_rank != 3
+            or output_rank != 3
+            or dtype != 1
+            or exponent_rank != 0
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or roles != 0b10,
+            "Pow contract rejected",
+        )
+        result.update(exponent_bits=exponent_bits, input_rank=input_rank, output_rank=output_rank)
+    elif kind == AOT_OPCODES["Range"]:
+        start_rank, limit_rank, delta_rank, output_rank, dtype, layout, roles, reserved = (
+            struct.unpack_from("<BBBBBBBB", record, 8)
+        )
+        reject(any(record[16:20]) or reserved != 0, "Range reserved bytes rejected")
+        reject(
+            (start_rank, limit_rank, delta_rank, output_rank) != (0, 0, 0, 1)
+            or dtype != 7
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or roles != 0b101,
+            "Range contract rejected",
+        )
+        result.update(input_rank=0, output_rank=1, dtype=dtype)
+    elif kind == AOT_OPCODES["Resize"]:
+        profile, input_rank, output_rank, dtype, mode, layout, roles, reserved, scale, flags = (
+            struct.unpack_from("<BBBBBBBBII", record, 8)
+        )
+        reject(
+            profile not in {
+                RESIZE_NEAREST_UP2,
+                RESIZE_NEAREST_UP300,
+                RESIZE_LINEAR_DOWN300,
+                RESIZE_LINEAR_UP300,
+            }
+            or input_rank != 3
+            or output_rank != 3
+            or dtype != 1
+            or mode not in {RESIZE_NEAREST, RESIZE_LINEAR}
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or roles != 0b10
+            or reserved != 0
+            or scale not in {2, 300}
+            or flags != 0,
+            "Resize contract rejected",
+        )
+        result.update(profile=profile, input_rank=input_rank, output_rank=output_rank, scale=scale)
+    elif kind == AOT_OPCODES["BiLstm256"]:
+        profile, *byte_fields, hidden, input_width, gates, flags, reserved = struct.unpack_from(
+            "<H10B5I", record, 8
+        )
+        constant_mask = byte_fields[8]
+        reject(
+            profile not in range(1, 7)
+            or tuple(byte_fields[:8]) != (3, 4, 3, 1, 1, 2, 6, 3)
+            or constant_mask != (0b111110 if profile == 1 else 0b001110)
+            or byte_fields[9] != ATTRIBUTE_LAYOUT_CHECKED
+            or hidden != 256
+            or input_width not in {512, 640}
+            or gates != 4
+            or flags != 0
+            or reserved != 0,
+            "BiLstm256 contract rejected",
+        )
+        result.update(profile=profile, input_width=input_width, hidden=hidden)
+    elif kind in {AOT_OPCODES["FloatConv1d"], AOT_OPCODES["FloatConvTranspose1d"]}:
+        profile, *byte_fields, input_channels, output_channels, kernel, stride, dilation, pad_left, pad_right, output_padding, groups = struct.unpack_from(
+            "<H10B9I", record, 8
+        )
+        conv_kind, input_rank, weight_rank, bias_rank, output_rank, dtype, has_bias, layout, roles, reserved = byte_fields
+        reject(
+            profile not in range(FLOAT_CONV_POST_128_TO_22, FLOAT_CONV_TRANSPOSE_ISTFT_22_TO_1 + 1)
+            or conv_kind != (1 if kind == AOT_OPCODES["FloatConv1d"] else 2)
+            or (input_rank, weight_rank, output_rank, dtype) != (3, 3, 3, 1)
+            or bias_rank != has_bias
+            or has_bias not in {0, 1}
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or roles != (0b110 if has_bias else 0b010)
+            or reserved != 0
+            or min(input_channels, output_channels, kernel, stride, dilation, groups) == 0,
+            "float Conv contract rejected",
+        )
+        result.update(profile=profile, input_rank=input_rank, output_rank=output_rank, kernel=kernel)
+    elif kind == AOT_OPCODES["FixedStft20"]:
+        profile, *byte_fields, frame_length, frame_step, bins = struct.unpack_from("<H10B3I", record, 8)
+        reject(
+            profile != 1
+            or tuple(byte_fields)
+            != (2, 4, 1, 1, 1, ATTRIBUTE_LAYOUT_CHECKED, 0b1110, 4, 0, 0)
+            or (frame_length, frame_step, bins) != (20, 5, 11),
+            "FixedStft20 contract rejected",
+        )
+        result.update(profile=profile, frame_length=frame_length, frame_step=frame_step)
+    elif kind == AOT_OPCODES["ResolveDecoderShape"]:
+        profile, *byte_fields, bins, max_tokens, flags, min_bits, sources = struct.unpack_from("<H10B5I", record, 8)
+        reject(
+            profile != 1
+            or tuple(byte_fields) != (3, 1, 1, 0, 1, 7, ATTRIBUTE_LAYOUT_CHECKED, 2, 2, 0)
+            or bins != 50
+            or max_tokens != 512
+            or flags != 0x1FF
+            or min_bits != f32_bits(1.0)
+            or sources != 9,
+            "ResolveDecoderShape contract rejected",
+        )
+        result.update(profile=profile, bins=bins, max_tokens=max_tokens, source_count=sources)
+    elif kind == AOT_OPCODES["DynamicQuantizedGemm"]:
+        profile, *byte_fields, k, n, sources, flags, bias_rank = struct.unpack_from("<H10B5I", record, 8)
+        activation_rank, weight_rank, output_rank, activation_dtype, weight_dtype, output_dtype, scale_rank, zero_rank, bias_mode, roles = byte_fields
+        expected_roles = 0b11110 if bias_mode else 0b01110
+        reject(
+            profile == 0
+            or profile > 148
+            or activation_rank not in {2, 3}
+            or weight_rank != 2
+            or output_rank != activation_rank
+            or (activation_dtype, weight_dtype, output_dtype, scale_rank, zero_rank) != (1, 3, 1, 1, 1)
+            or bias_mode not in {ATTRIBUTE_BIAS_NONE, ATTRIBUTE_BIAS_FLOAT}
+            or roles != expected_roles
+            or sources != (6 if bias_mode else 5)
+            or min(k, n) == 0
+            or flags != 0
+            or bias_rank != (1 if bias_mode else 0),
+            "DynamicQuantizedGemm contract rejected",
+        )
+        result.update(profile=profile, k=k, n=n, source_count=sources, bias_mode=bias_mode)
+    elif kind == AOT_OPCODES["DynamicQuantizedConv1d"]:
+        profile, *byte_fields, input_channels, output_channels, kernel, stride, dilation, pad_left, pad_right, groups, weight_zero = struct.unpack_from("<H14B9I", record, 8)
+        (
+            activation_rank,
+            weight_rank,
+            output_rank,
+            scale_rank,
+            zero_rank,
+            bias_rank,
+            activation_dtype,
+            weight_dtype,
+            output_dtype,
+            bias_mode,
+            layout,
+            roles,
+            semantic_sources,
+            reserved,
+        ) = byte_fields
+        expected_roles = 0b11110 if bias_mode else 0b01110
+        reject(
+            profile == 0
+            or profile > 87
+            or (activation_rank, weight_rank, output_rank, activation_dtype, weight_dtype, output_dtype) != (3, 3, 3, 1, 2, 1)
+            or (scale_rank, zero_rank) != (0, 0)
+            or bias_mode not in {ATTRIBUTE_BIAS_NONE, ATTRIBUTE_BIAS_QUANTIZED_INT32}
+            or bias_rank != (1 if bias_mode else 0)
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or roles != expected_roles
+            or semantic_sources != (10 if bias_mode else 5)
+            or reserved != 0
+            or min(input_channels, output_channels, kernel, stride, dilation, groups) == 0
+            or weight_zero > 255,
+            "DynamicQuantizedConv1d contract rejected",
+        )
+        result.update(profile=profile, kernel=kernel, stride=stride, bias_mode=bias_mode)
     elif kind in {
         AOT_OPCODES[name] for name in LOWERED_PARAMETERLESS_UNARY_OPS
     }:
@@ -1398,6 +2220,9 @@ class LoweringRecord:
     outputs: tuple[int, ...]
     attributes: bytes
     variant: str
+    # Source-node ownership is part of the canonical plan.  Ordinary records
+    # own their anchor node; native fusions own every raw node they replace.
+    owned_sources: tuple[int, ...] = ()
 
     def canonical_bytes(self) -> bytes:
         reject(self.source_index < 0 or self.source_index > 0xFFFF_FFFF, "source index")
@@ -1412,26 +2237,36 @@ class LoweringRecord:
             any(tensor_id < 0 or tensor_id > 0xFFFF_FFFF for tensor_id in self.inputs + self.outputs),
             "lowering tensor ID rejected",
         )
+        sources = self.owned_sources or (self.source_index,)
+        reject(
+            len(sources) > 0xFF
+            or tuple(sorted(set(sources))) != sources
+            or self.source_index not in sources
+            or self.source_index != max(sources)
+            or any(source < 0 or source > 0xFFFF_FFFF for source in sources),
+            "lowering source ownership rejected",
+        )
         inspect_attribute_record(self.attributes, self.opcode)
         header = struct.pack(
             "<IHBBHHI",
             self.source_index,
             self.opcode,
             self.phase,
-            0,
+            len(sources),
             len(self.inputs),
             len(self.outputs),
             len(self.attributes),
         )
+        ownership = b"".join(struct.pack("<I", source) for source in sources)
         bindings = b"".join(
             struct.pack("<I", tensor_id) for tensor_id in self.inputs + self.outputs
         )
-        return header + bindings + self.attributes
+        return header + ownership + bindings + self.attributes
 
 
 def lowering_plan_bytes(records: Sequence[LoweringRecord]) -> bytes:
     reject(len(records) > 0xFFFF_FFFF, "lowering record count rejected")
-    return b"KKLOWER1" + struct.pack("<I", len(records)) + b"".join(
+    return b"KKLOWER2" + struct.pack("<I", len(records)) + b"".join(
         record.canonical_bytes() for record in records
     )
 
@@ -2065,6 +2900,159 @@ def synthetic_attribute_fixture_artifact() -> bytes:
         ((1, (2, 3)),),
         scatter_nd_attribute(2, 3, 2, 2, 1, 2),
     )
+    # The single non-f32 Add profile is deliberately a second fixture record:
+    # dtype is now part of the binary ABI and must not alias the f32 contract.
+    operation(
+        "Add",
+        ((3, (2, 1)), (3, (2, 1))),
+        ((3, (2, 1)),),
+        binary_attribute("Add", 2, 2, 2, 7),
+    )
+    operation(
+        "And",
+        ((6, (2, 1)), (6, (1,))),
+        ((6, (2, 1)),),
+        comparison_attribute("And", 2, 1, 2, 9),
+    )
+    operation(
+        "Equal",
+        ((3, (4,)), (3, (4,))),
+        ((6, (4,)),),
+        comparison_attribute("Equal", 1, 1, 1, 7, constant_roles=2),
+    )
+    operation(
+        "Greater",
+        ((1, (1, 2, 4)), (1, ())),
+        ((6, (1, 2, 4)),),
+        comparison_attribute("Greater", 3, 0, 3, 1, constant_roles=2),
+    )
+    operation(
+        "GreaterOrEqual",
+        ((1, (2, 4)), (1, (4,))),
+        ((6, (2, 4)),),
+        comparison_attribute("GreaterOrEqual", 2, 1, 2, 1),
+    )
+    operation(
+        "Less",
+        ((3, (2, 1)), (3, ())),
+        ((6, (2, 1)),),
+        comparison_attribute("Less", 2, 0, 2, 7, constant_roles=2),
+    )
+    operation(
+        "Cast",
+        ((1, (1, 2, 4)),),
+        ((6, (1, 2, 4)),),
+        cast_attribute(3, 3, 1, 9, 1),
+    )
+    operation(
+        "Cast",
+        ((3, (4,)),),
+        ((1, (4,)),),
+        cast_attribute(1, 1, 7, 1, 1),
+    )
+    operation(
+        "Cast",
+        ((6, (2, 4)),),
+        ((1, (2, 4)),),
+        cast_attribute(2, 2, 9, 1, 1),
+    )
+    operation(
+        "ConstantOfShape",
+        ((3, (3,)),),
+        ((1, (1, 2, 3)),),
+        constant_of_shape_attribute(0, 1, 3, 1),
+    )
+    operation(
+        "CumSum",
+        ((1, (1, 2, 4)), (2, ())),
+        ((1, (1, 2, 4)),),
+        cumsum_attribute(1, 3, 3, 1, 0, 0),
+    )
+    operation(
+        "DequantizeLinear",
+        ((5, (1, 2, 4)), (1, ()), (5, ())),
+        ((1, (1, 2, 4)),),
+        dequantize_linear_attribute(3, 3, 3, 0, 0),
+    )
+    operation(
+        "Where",
+        ((6, (1, 2, 4)), (1, ()), (1, (1, 2, 4))),
+        ((1, (1, 2, 4)),),
+        where_attribute(3, 0, 3, 3, 1, 1),
+    )
+    operation(
+        "MatMul",
+        ((1, (1, 2, 4, 64)), (1, (1, 2, 64, 4))),
+        ((1, (1, 2, 4, 4)),),
+        matmul_attribute(MATMUL_ATTENTION_SCORES, 4, 4, 4, 1, 0, 64, 0, 64, 2),
+    )
+    operation(
+        "Pow",
+        ((1, (1, 2, 4)), (1, ())),
+        ((1, (1, 2, 4)),),
+        pow_attribute(f32_bits(2.0), 3, 3, 1, 0),
+    )
+    operation(
+        "Range",
+        ((3, ()), (3, ()), (3, ())),
+        ((3, (8,)),),
+        range_attribute(0, 0, 0, 1, 7),
+    )
+    operation(
+        "Resize",
+        ((1, (1, 1, 4)), (1, (3,))),
+        ((1, (1, 1, 8)),),
+        resize_attribute(RESIZE_NEAREST_UP2, 3, 3, RESIZE_NEAREST, 2),
+    )
+    operation(
+        "DynamicQuantizedGemm",
+        ((1, (1, 4)), (5, (4, 3)), (1, (3,)), (5, (3,)), (1, (3,))),
+        ((1, (1, 3)),),
+        quant_gemm_attribute(1, 2, 2, ATTRIBUTE_BIAS_FLOAT, 4, 3, 6),
+    )
+    operation(
+        "DynamicQuantizedConv1d",
+        ((1, (1, 4, 8)), (4, (6, 4, 3)), (1, ()), (4, ()), (1, (6,))),
+        ((1, (1, 6, 8)),),
+        quant_conv_attribute(1, ATTRIBUTE_BIAS_QUANTIZED_INT32, 4, 6, 3, 1, 1, 1, 1, 1, 128),
+    )
+    operation(
+        "BiLstm256",
+        (
+            (1, (4, 1, 512)),
+            (1, (2, 1024, 512)),
+            (1, (2, 1024, 256)),
+            (1, (2, 2048)),
+            (1, (2, 1, 256)),
+            (1, (2, 1, 256)),
+        ),
+        ((1, (4, 2, 1, 256)), (1, (2, 1, 256)), (1, (2, 1, 256))),
+        bilstm_attribute(1, 512, 0b111110),
+    )
+    operation(
+        "FloatConv1d",
+        ((1, (1, 128, 8)), (1, (22, 128, 7)), (1, (22,))),
+        ((1, (1, 22, 8)),),
+        float_conv_attribute("FloatConv1d", 1, 128, 22, 7, 1, 1, 3, 3, 0, 1, True),
+    )
+    operation(
+        "FloatConvTranspose1d",
+        ((1, (1, 512, 8)), (1, (512, 1, 3)), (1, (512,))),
+        ((1, (1, 512, 16)),),
+        float_conv_attribute("FloatConvTranspose1d", 2, 512, 512, 3, 2, 1, 1, 1, 1, 512, True),
+    )
+    operation(
+        "FixedStft20",
+        ((1, (1, 64)), (3, ()), (1, (20,)), (3, ())),
+        ((1, (1, 9, 11, 2)),),
+        fixed_stft_attribute(),
+    )
+    operation(
+        "ResolveDecoderShape",
+        ((1, (1, 8, 50)), (1, (1,))),
+        ((3, (8,)), (3, ())),
+        resolve_decoder_shape_attribute(),
+    )
 
     def view_operation(
         op_type: str,
@@ -2218,7 +3206,12 @@ class GraphAnalysis:
     tensors: list[TensorFact]
     quant_fusions: list[QuantFusion]
     phase_cut: int
+    raw_lowerings: list[LoweringRecord] = field(default_factory=list)
     lowerings: list[LoweringRecord] = field(default_factory=list)
+    lowered_phase_ranges: tuple[tuple[int, int], tuple[int, int]] = ((0, 0), (0, 0))
+    source_ownership_sha256: str = ""
+    capacity_shapes: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    capacity_value_count: int = 0
     report: dict[str, Any] = field(default_factory=dict)
 
 
@@ -3521,6 +4514,612 @@ def build_supported_lowerings(analysis: GraphAnalysis) -> list[LoweringRecord]:
     return records
 
 
+def _tensor_ids(analysis: GraphAnalysis) -> dict[str, int]:
+    return {tensor.name: tensor.tensor_id for tensor in analysis.tensors}
+
+
+def _initializer_scalar(analysis: GraphAnalysis, name: str, context: str) -> int | float:
+    tensor = analysis.initializers.get(name)
+    reject(tensor is None, f"{context}: {name!r} is not an initializer")
+    assert tensor is not None
+    values = initializer_values(analysis.onnx, tensor)
+    reject(len(values) != 1, f"{context}: {name!r} is not scalar")
+    return values[0]
+
+
+def _constant_role_mask(analysis: GraphAnalysis, inputs: Sequence[str]) -> int:
+    return sum(
+        1 << index for index, name in enumerate(inputs) if name in analysis.initializers
+    )
+
+
+def build_residual_lowerings(
+    analysis: GraphAnalysis, source_indices: Iterable[int]
+) -> list[LoweringRecord]:
+    """Lower the pinned raw nodes not covered by the original CPU inventory.
+
+    This intentionally admits only the exact Kokoro profiles backed by the
+    scalar/control, f32, BiLSTM, convolution, resize and fixed-STFT kernels.
+    """
+
+    graph = analysis.model.graph
+    tensor_ids = _tensor_ids(analysis)
+    records: list[LoweringRecord] = []
+
+    def add(
+        index: int,
+        op_type: str,
+        inputs: Sequence[str],
+        outputs: Sequence[str],
+        attrs: bytes,
+        variant: str,
+    ) -> None:
+        reject(any(not name for name in inputs + outputs), f"node {index}: empty binding")
+        inspect_attribute_record(attrs, AOT_OPCODES[op_type])
+        records.append(
+            LoweringRecord(
+                index,
+                op_type,
+                AOT_OPCODES[op_type],
+                0 if index < analysis.phase_cut else 1,
+                tuple(tensor_ids[name] for name in inputs),
+                tuple(tensor_ids[name] for name in outputs),
+                attrs,
+                variant,
+            )
+        )
+
+    for index in sorted(source_indices):
+        node = graph.node[index]
+        context = f"node {index} {node.name!r}"
+        attrs = attributes(analysis.onnx, node)
+        inputs = tuple(name for name in node.input if name)
+        outputs = tuple(name for name in node.output if name)
+
+        if node.op_type == "Add":
+            reject(len(inputs) != 2 or len(outputs) != 1 or attrs, f"{context}: Add contract")
+            dtype = analysis.dtypes[inputs[0]]
+            reject(dtype != 7 or any(analysis.dtypes[name] != dtype for name in inputs + outputs), f"{context}: only residual INT64 Add admitted")
+            _validate_binary_broadcast(analysis, inputs[0], inputs[1], outputs[0], context)
+            ranks = tuple(analysis.ranks[name] for name in inputs + outputs)
+            add(index, "Add", inputs, outputs, binary_attribute("Add", *ranks, dtype), "INT64:r2,r2->r2:checked-broadcast")
+            continue
+
+        if node.op_type in {"And", "Equal", "Greater", "GreaterOrEqual", "Less"}:
+            reject(len(inputs) != 2 or len(outputs) != 1 or attrs, f"{context}: comparison contract")
+            input_dtype = analysis.dtypes[inputs[0]]
+            reject(
+                any(analysis.dtypes[name] != input_dtype for name in inputs)
+                or analysis.dtypes[outputs[0]] != 9
+                or (node.op_type == "And" and input_dtype != 9)
+                or (node.op_type != "And" and input_dtype not in {1, 7}),
+                f"{context}: comparison dtype changed",
+            )
+            _validate_binary_broadcast(analysis, inputs[0], inputs[1], outputs[0], context)
+            lhs_rank, rhs_rank = (analysis.ranks[name] for name in inputs)
+            output_rank = analysis.ranks[outputs[0]]
+            roles = _constant_role_mask(analysis, inputs)
+            add(
+                index,
+                node.op_type,
+                inputs,
+                outputs,
+                comparison_attribute(node.op_type, lhs_rank, rhs_rank, output_rank, input_dtype, 9, roles),
+                f"{DTYPE_NAMES[input_dtype]}:r{lhs_rank},r{rhs_rank}->BOOL:r{output_rank}:const={roles}",
+            )
+            continue
+
+        if node.op_type == "Cast":
+            reject(len(inputs) != 1 or len(outputs) != 1 or set(attrs) != {"saturate", "to"}, f"{context}: Cast attrs changed")
+            input_dtype, output_dtype = analysis.dtypes[inputs[0]], analysis.dtypes[outputs[0]]
+            input_rank, output_rank = analysis.ranks[inputs[0]], analysis.ranks[outputs[0]]
+            reject(
+                int(attrs["saturate"]) != 1
+                or int(attrs["to"]) != output_dtype
+                or input_rank != output_rank
+                or (input_dtype, output_dtype) not in {(1, 9), (7, 1), (9, 1)},
+                f"{context}: Cast profile rejected",
+            )
+            add(index, "Cast", inputs, outputs, cast_attribute(input_rank, output_rank, input_dtype, output_dtype, 1), f"{DTYPE_NAMES[input_dtype]}->{DTYPE_NAMES[output_dtype]}:r{input_rank}:saturate")
+            continue
+
+        if node.op_type == "ConstantOfShape":
+            reject(len(inputs) != 1 or len(outputs) != 1 or set(attrs) != {"value"}, f"{context}: ConstantOfShape attrs changed")
+            value = attrs["value"]
+            values = initializer_values(analysis.onnx, value)
+            reject(int(value.data_type) != 1 or tuple(value.dims) != (1,) or len(values) != 1, f"{context}: fill tensor rejected")
+            fill_bits = f32_bits(float(values[0]))
+            control_rank, output_rank = analysis.ranks[inputs[0]], analysis.ranks[outputs[0]]
+            reject(
+                analysis.dtypes[inputs[0]] != 7
+                or analysis.dtypes[outputs[0]] != 1
+                or control_rank != 1
+                or output_rank not in {2, 3}
+                or fill_bits not in {0, f32_bits(1.0)},
+                f"{context}: ConstantOfShape profile rejected",
+            )
+            add(index, "ConstantOfShape", inputs, outputs, constant_of_shape_attribute(fill_bits, control_rank, output_rank, 1), f"FLOAT:r{output_rank}:fill=0x{fill_bits:08x}")
+            continue
+
+        if node.op_type == "CumSum":
+            reject(len(inputs) != 2 or len(outputs) != 1 or attrs != {"exclusive": 0, "reverse": 0}, f"{context}: CumSum attrs changed")
+            axis = int(_initializer_scalar(analysis, inputs[1], context))
+            input_rank, output_rank = analysis.ranks[inputs[0]], analysis.ranks[outputs[0]]
+            reject(
+                axis != 1
+                or analysis.dtypes[inputs[0]] != 1
+                or analysis.dtypes[outputs[0]] != 1
+                or analysis.dtypes[inputs[1]] != 6
+                or input_rank != 3
+                or output_rank != input_rank,
+                f"{context}: CumSum profile rejected",
+            )
+            add(index, "CumSum", inputs, outputs, cumsum_attribute(axis, input_rank, output_rank, 1, 0, 0), "FLOAT:r3:axis=1:inclusive-forward")
+            continue
+
+        if node.op_type == "DequantizeLinear":
+            reject(len(inputs) != 3 or len(outputs) != 1 or attrs, f"{context}: DequantizeLinear attrs changed")
+            ranks = tuple(analysis.ranks[name] for name in inputs + outputs)
+            reject(
+                tuple(analysis.dtypes[name] for name in inputs + outputs) != (3, 1, 3, 1)
+                or ranks != (3, 0, 0, 3)
+                or inputs[1] not in analysis.initializers
+                or inputs[2] not in analysis.initializers
+                or int(_initializer_scalar(analysis, inputs[2], context)) != 0,
+                f"{context}: DequantizeLinear profile rejected",
+            )
+            add(index, "DequantizeLinear", inputs, outputs, dequantize_linear_attribute(3, 3, 3, 0, 0), "INT8:r3:scalar-scale-zero->FLOAT:r3")
+            continue
+
+        if node.op_type == "Where":
+            reject(len(inputs) != 3 or len(outputs) != 1 or attrs, f"{context}: Where contract changed")
+            value_dtype = analysis.dtypes[inputs[1]]
+            reject(
+                analysis.dtypes[inputs[0]] != 9
+                or analysis.dtypes[inputs[2]] != value_dtype
+                or analysis.dtypes[outputs[0]] != value_dtype
+                or value_dtype not in {1, 7},
+                f"{context}: Where dtype rejected",
+            )
+            ranks = tuple(analysis.ranks[name] for name in inputs + outputs)
+            reject(ranks[3] != max(ranks[:3]), f"{context}: Where output rank rejected")
+            roles = _constant_role_mask(analysis, inputs[1:])
+            add(index, "Where", inputs, outputs, where_attribute(*ranks, value_dtype, roles), f"{DTYPE_NAMES[value_dtype]}:r{ranks[0]},r{ranks[1]},r{ranks[2]}->r{ranks[3]}:const={roles}")
+            continue
+
+        if node.op_type == "MatMul":
+            reject(len(inputs) != 2 or len(outputs) != 1 or attrs, f"{context}: MatMul contract changed")
+            ranks = tuple(analysis.ranks[name] for name in inputs + outputs)
+            reject(any(analysis.dtypes[name] != 1 for name in inputs + outputs), f"{context}: MatMul dtype rejected")
+            roles = 0b10 if inputs[1] in analysis.initializers else 0
+            if index < 1_700:
+                if node.name.endswith("/MatMul"):
+                    profile, k, n, lane, frame_axis = MATMUL_ATTENTION_SCORES, 64, 0, 64, 2
+                else:
+                    reject(not node.name.endswith("/MatMul_1"), f"{context}: attention MatMul identity changed")
+                    profile, k, n, lane, frame_axis = MATMUL_ATTENTION_CONTEXT, 0, 64, 64, 2
+                reject(ranks != (4, 4, 4) or roles != 0, f"{context}: attention MatMul profile changed")
+            elif index == 1_760:
+                profile, k, n, lane, frame_axis = MATMUL_DURATION_PROSODY, 640, 512, 1, 1
+                reject(ranks != (3, 2, 3) or roles != 0, f"{context}: prosody MatMul profile changed")
+            elif index == 1_761:
+                profile, k, n, lane, frame_axis = MATMUL_DURATION_TEXT, 512, 512, 1, 1
+                reject(ranks != (3, 2, 3) or roles != 0, f"{context}: text MatMul profile changed")
+            elif index == 2_123:
+                profile, k, n, lane, frame_axis = MATMUL_SOURCE_LINEAR, 9, 1, 1, 1
+                reject(ranks != (3, 2, 3) or roles != 0b10, f"{context}: source MatMul profile changed")
+            else:
+                raise CompileError(f"{context}: unknown MatMul profile")
+            add(index, "MatMul", inputs, outputs, matmul_attribute(profile, *ranks, 1, roles, k, n, lane, frame_axis), f"profile={profile}:FLOAT:r{ranks[0]},r{ranks[1]}->r{ranks[2]}:k={k}:n={n}")
+            continue
+
+        if node.op_type == "Pow":
+            reject(len(inputs) != 2 or len(outputs) != 1 or attrs, f"{context}: Pow contract changed")
+            exponent = _initializer_scalar(analysis, inputs[1], context)
+            ranks = tuple(analysis.ranks[name] for name in inputs + outputs)
+            reject(tuple(analysis.dtypes[name] for name in inputs + outputs) != (1, 1, 1) or ranks != (3, 0, 3) or f32_bits(float(exponent)) != f32_bits(2.0), f"{context}: Pow(x,2) profile rejected")
+            add(index, "Pow", inputs, outputs, pow_attribute(f32_bits(2.0), 3, 3, 1, 0), "FLOAT:r3:exponent=2.0")
+            continue
+
+        if node.op_type == "Range":
+            reject(len(inputs) != 3 or len(outputs) != 1 or attrs, f"{context}: Range contract changed")
+            reject(
+                tuple(analysis.dtypes[name] for name in inputs + outputs) != (7, 7, 7, 7)
+                or tuple(analysis.ranks[name] for name in inputs + outputs) != (0, 0, 0, 1)
+                or int(_initializer_scalar(analysis, inputs[0], context)) != 0
+                or int(_initializer_scalar(analysis, inputs[2], context)) != 1,
+                f"{context}: Range(0,limit,1) profile rejected",
+            )
+            add(index, "Range", inputs, outputs, range_attribute(0, 0, 0, 1, 7), "INT64:Range(0,limit,1)")
+            continue
+
+        if node.op_type == "Resize":
+            reject(len(inputs) != 2 or len(outputs) != 1, f"{context}: Resize arity changed")
+            expected_common = {
+                "extrapolation_value": 0.0,
+                "keep_aspect_ratio_policy": b"stretch",
+                "exclude_outside": 0,
+                "nearest_mode": b"floor",
+                "antialias": 0,
+                "cubic_coeff_a": -0.75,
+            }
+            reject(any(attrs.get(key) != value for key, value in expected_common.items()) or set(attrs) != set(expected_common) | {"mode", "coordinate_transformation_mode"}, f"{context}: Resize defaults changed")
+            scale_values = tuple(float(value) for value in initializer_values(analysis.onnx, analysis.initializers[inputs[1]]))
+            reject(tuple(analysis.ranks[name] for name in inputs + outputs) != (3, 1, 3) or tuple(analysis.dtypes[name] for name in inputs + outputs) != (1, 1, 1) or len(scale_values) != 3 or scale_values[:2] != (1.0, 1.0), f"{context}: Resize scale/rank changed")
+            if attrs["mode"] == b"nearest":
+                reject(attrs["coordinate_transformation_mode"] != b"asymmetric", f"{context}: nearest transform changed")
+                if f32_bits(scale_values[2]) == f32_bits(2.0):
+                    profile, scale = RESIZE_NEAREST_UP2, 2
+                else:
+                    reject(f32_bits(scale_values[2]) != f32_bits(300.0), f"{context}: nearest scale changed")
+                    profile, scale = RESIZE_NEAREST_UP300, 300
+                mode = RESIZE_NEAREST
+            else:
+                reject(attrs["mode"] != b"linear" or attrs["coordinate_transformation_mode"] != b"half_pixel", f"{context}: linear transform changed")
+                if f32_bits(scale_values[2]) == f32_bits(300.0):
+                    profile, scale = RESIZE_LINEAR_UP300, 300
+                else:
+                    reject(f32_bits(scale_values[2]) != f32_bits(1.0 / 300.0), f"{context}: linear scale changed")
+                    profile, scale = RESIZE_LINEAR_DOWN300, 300
+                mode = RESIZE_LINEAR
+            add(index, "Resize", inputs, outputs, resize_attribute(profile, 3, 3, mode, scale), f"profile={profile}:FLOAT:r3:scale={scale}")
+            continue
+
+        if node.op_type == "LSTM":
+            reject(index not in {740, 1686, 1700, 1714, 1728, 1776} or attrs != {"direction": b"bidirectional", "hidden_size": 256, "input_forget": 0} or len(inputs) != 6 or len(outputs) != 3, f"{context}: BiLSTM256 contract changed")
+            width = 512 if index == 740 else 640
+            profile = (740, 1686, 1700, 1714, 1728, 1776).index(index) + 1
+            reject(
+                tuple(analysis.ranks[name] for name in inputs) != (3, 3, 3, 2, 3, 3)
+                or tuple(analysis.ranks[name] for name in outputs) != (4, 3, 3)
+                or any(analysis.dtypes[name] != 1 for name in inputs + outputs)
+                or any(name not in analysis.initializers for name in inputs[1:4]),
+                f"{context}: BiLSTM256 bindings changed",
+            )
+            weight_shape = _declared_shape(analysis, inputs[1])
+            recurrent_shape = _declared_shape(analysis, inputs[2])
+            bias_shape = _declared_shape(analysis, inputs[3])
+            reject(weight_shape != (2, 1024, width) or recurrent_shape != (2, 1024, 256) or bias_shape != (2, 2048), f"{context}: BiLSTM256 constants changed")
+            constant_mask = _constant_role_mask(analysis, inputs)
+            reject(
+                constant_mask != (0b111110 if profile == 1 else 0b001110),
+                f"{context}: BiLSTM constant-input roles changed",
+            )
+            add(index, "BiLstm256", inputs, outputs, bilstm_attribute(profile, width, constant_mask), f"profile={profile}:bidirectional:hidden=256:input={width}:const=0x{constant_mask:02x}")
+            continue
+
+        if node.op_type in {"Conv", "ConvTranspose"}:
+            profile_by_index = {
+                3568: FLOAT_CONV_POST_128_TO_22,
+                1894: FLOAT_CONV_TRANSPOSE_ENCODER_512,
+                1895: FLOAT_CONV_TRANSPOSE_ENCODER_512,
+                2651: FLOAT_CONV_TRANSPOSE_DECODER_1090,
+                2701: FLOAT_CONV_TRANSPOSE_UP_512_TO_256,
+                3134: FLOAT_CONV_TRANSPOSE_UP_256_TO_128,
+                3578: FLOAT_CONV_TRANSPOSE_ISTFT_22_TO_1,
+            }
+            reject(index not in profile_by_index or len(inputs) not in {2, 3} or len(outputs) != 1, f"{context}: float Conv profile changed")
+            reject(any(analysis.dtypes[name] != 1 for name in inputs + outputs) or tuple(analysis.ranks[name] for name in (inputs[0], inputs[1], outputs[0])) != (3, 3, 3), f"{context}: float Conv dtype/rank changed")
+            expected_keys = {"strides", "kernel_shape", "auto_pad", "dilations", "pads", "group"}
+            if node.op_type == "ConvTranspose" and "output_padding" in attrs:
+                expected_keys.add("output_padding")
+            reject(set(attrs) != expected_keys or attrs["auto_pad"] != b"NOTSET", f"{context}: float Conv attrs changed")
+            kernel = int(attrs["kernel_shape"][0]); stride = int(attrs["strides"][0]); dilation = int(attrs["dilations"][0]); pads = tuple(int(x) for x in attrs["pads"]); groups = int(attrs["group"]); output_padding = int(attrs.get("output_padding", [0])[0])
+            reject(len(attrs["kernel_shape"]) != 1 or len(attrs["strides"]) != 1 or len(attrs["dilations"]) != 1 or len(pads) != 2, f"{context}: float Conv rank attrs changed")
+            weight_shape = _declared_shape(analysis, inputs[1])
+            reject(weight_shape is None or tuple(weight_shape)[-1] != kernel or inputs[1] not in analysis.initializers, f"{context}: float Conv weight changed")
+            assert weight_shape is not None
+            if node.op_type == "Conv":
+                output_channels, input_channels = int(weight_shape[0]), int(weight_shape[1]) * groups
+                native_type = "FloatConv1d"
+            else:
+                input_channels, output_channels = int(weight_shape[0]), int(weight_shape[1]) * groups
+                native_type = "FloatConvTranspose1d"
+            has_bias = len(inputs) == 3
+            reject(has_bias and (_declared_shape(analysis, inputs[2]) != (output_channels,) or inputs[2] not in analysis.initializers), f"{context}: float Conv bias changed")
+            add(index, native_type, inputs, outputs, float_conv_attribute(native_type, profile_by_index[index], input_channels, output_channels, kernel, stride, dilation, pads[0], pads[1], output_padding, groups, has_bias), f"profile={profile_by_index[index]}:{input_channels}->{output_channels}:k{kernel}:s{stride}:g{groups}")
+            continue
+
+        if node.op_type == "STFT":
+            reject(index != 2159 or len(inputs) != 4 or len(outputs) != 1 or attrs != {"onesided": 1}, f"{context}: FixedSTFT identity changed")
+            reject(
+                tuple(analysis.dtypes[name] for name in inputs + outputs) != (1, 7, 1, 7, 1)
+                or tuple(analysis.ranks[name] for name in inputs + outputs) != (2, 0, 1, 0, 4)
+                or int(_initializer_scalar(analysis, inputs[1], context)) != 5
+                or int(_initializer_scalar(analysis, inputs[3], context)) != 20
+                or _declared_shape(analysis, inputs[2]) != (20,)
+                or any(name not in analysis.initializers for name in inputs[1:]),
+                f"{context}: FixedSTFT20 contract changed",
+            )
+            add(index, "FixedStft20", inputs, outputs, fixed_stft_attribute(), "FLOAT:r2:frame=20:hop=5:onesided:bins=11")
+            continue
+
+        raise CompileError(f"{context}: unsupported residual operator {node.op_type}")
+
+    return records
+
+
+def _quant_semantics(
+    analysis: GraphAnalysis, fusion: QuantFusion
+) -> tuple[set[int], tuple[str, ...], tuple[str, ...], int, int, int, dict[str, int]]:
+    """Return exact component ownership, curated bindings and quant dimensions."""
+
+    graph = analysis.model.graph
+    kernel = graph.node[fusion.kernel_index]
+    dql = graph.node[fusion.dynamic_quant_index]
+    scale = graph.node[fusion.scale_index]
+    cast = graph.node[fusion.cast_index]
+    dequant_mul = graph.node[fusion.dequant_mul_index]
+    reject(
+        len(dql.input) != 1
+        or len(dql.output) != 3
+        or attributes(analysis.onnx, dql)
+        or len(scale.input) != 2
+        or len(scale.output) != 1
+        or attributes(analysis.onnx, scale)
+        or attributes(analysis.onnx, cast) != {"to": 1}
+        or len(dequant_mul.input) != 2
+        or len(dequant_mul.output) != 1
+        or attributes(analysis.onnx, dequant_mul),
+        f"node {fusion.kernel_index}: quant primitive attributes changed",
+    )
+    sources = {
+        fusion.dynamic_quant_index,
+        fusion.kernel_index,
+        fusion.scale_index,
+        fusion.cast_index,
+        fusion.dequant_mul_index,
+    }
+    weight = kernel.input[1]
+    weight_scale = other_input(scale, dql.output[1])
+    weight_zero = kernel.input[3]
+    bias_name: str | None = None
+    if fusion.int32_bias:
+        add_index, bias_add = sole_consumer(graph, analysis.consumers, kernel.output[0], "Add")
+        reshape_index = analysis.producers[other_input(bias_add, kernel.output[0])]
+        reshape = graph.node[reshape_index]
+        bias_cast_index = analysis.producers[reshape.input[0]]
+        bias_cast = graph.node[bias_cast_index]
+        floor_index = analysis.producers[bias_cast.input[0]]
+        floor = graph.node[floor_index]
+        div_index = analysis.producers[floor.input[0]]
+        div = graph.node[div_index]
+        reject(
+            attributes(analysis.onnx, bias_add)
+            or attributes(analysis.onnx, reshape)
+            or attributes(analysis.onnx, bias_cast) != {"to": 6}
+            or attributes(analysis.onnx, floor)
+            or attributes(analysis.onnx, div)
+            or len(reshape.input) != 2
+            or reshape.input[1] not in analysis.initializers
+            or tuple(
+                int(value)
+                for value in initializer_values(
+                    analysis.onnx, analysis.initializers[reshape.input[1]]
+                )
+            )
+            != (1, -1, 1),
+            f"node {fusion.kernel_index}: quantized bias attributes changed",
+        )
+        constants = [name for name in div.input if name in analysis.initializers]
+        reject(len(constants) != 1, f"node {fusion.kernel_index}: quant bias source changed")
+        bias_name = constants[0]
+        sources.update({add_index, reshape_index, bias_cast_index, floor_index, div_index})
+    if fusion.float_bias:
+        final_index = analysis.producers[fusion.result_tensor]
+        final_add = graph.node[final_index]
+        reject(
+            final_add.op_type != "Add" or attributes(analysis.onnx, final_add),
+            f"node {fusion.kernel_index}: float bias result changed",
+        )
+        bias_name = other_input(final_add, graph.node[fusion.dequant_mul_index].output[0])
+        reject(bias_name not in analysis.initializers, f"node {fusion.kernel_index}: float bias changed")
+        sources.add(final_index)
+    curated_inputs = (dql.input[0], weight, weight_scale, weight_zero) + (() if bias_name is None else (bias_name,))
+    weight_shape = _declared_shape(analysis, weight)
+    reject(weight_shape is None, f"node {fusion.kernel_index}: weight shape absent")
+    assert weight_shape is not None
+    if fusion.kind == "qgemm":
+        reject(
+            len(weight_shape) != 2 or attributes(analysis.onnx, kernel),
+            f"node {fusion.kernel_index}: GEMM weight/attribute contract changed",
+        )
+        k, n = map(int, weight_shape)
+        reject(
+            analysis.dtypes[weight] != 3
+            or _declared_shape(analysis, weight_scale) != (n,)
+            or _declared_shape(analysis, weight_zero) != (n,)
+            or analysis.dtypes[weight_scale] != 1
+            or analysis.dtypes[weight_zero] != 3
+            or (bias_name is not None and (_declared_shape(analysis, bias_name) != (n,) or analysis.dtypes[bias_name] != 1)),
+            f"node {fusion.kernel_index}: GEMM constant roles/shapes changed",
+        )
+        dimensions = {"k": k, "n": n}
+    else:
+        reject(len(weight_shape) != 3, f"node {fusion.kernel_index}: Conv weight rank")
+        attrs = attributes(analysis.onnx, kernel)
+        reject(
+            set(attrs)
+            != {"auto_pad", "dilations", "group", "kernel_shape", "pads", "strides"}
+            or attrs["auto_pad"] != b"NOTSET"
+            or len(attrs["dilations"]) != 1
+            or len(attrs["kernel_shape"]) != 1
+            or len(attrs["pads"]) != 2
+            or len(attrs["strides"]) != 1,
+            f"node {fusion.kernel_index}: ConvInteger attrs changed",
+        )
+        groups = int(attrs["group"])
+        kernel_width = int(attrs["kernel_shape"][0])
+        stride = int(attrs["strides"][0])
+        dilation = int(attrs["dilations"][0])
+        pads = tuple(int(value) for value in attrs["pads"])
+        reject(len(pads) != 2 or int(weight_shape[2]) != kernel_width, f"node {fusion.kernel_index}: ConvInteger shape attrs changed")
+        dimensions = {
+            "input_channels": int(weight_shape[1]) * groups,
+            "output_channels": int(weight_shape[0]),
+            "kernel": kernel_width,
+            "stride": stride,
+            "dilation": dilation,
+            "pad_left": pads[0],
+            "pad_right": pads[1],
+            "groups": groups,
+            "weight_zero": int(_initializer_scalar(analysis, weight_zero, f"node {fusion.kernel_index}")),
+        }
+        reject(
+            analysis.dtypes[weight] != 2
+            or _declared_shape(analysis, weight_scale) != ()
+            or _declared_shape(analysis, weight_zero) != ()
+            or analysis.dtypes[weight_scale] != 1
+            or analysis.dtypes[weight_zero] != 2
+            or (
+                bias_name is not None
+                and (
+                    _declared_shape(analysis, bias_name) != (dimensions["output_channels"],)
+                    or analysis.dtypes[bias_name] != 1
+                )
+            ),
+            f"node {fusion.kernel_index}: Conv quant constant roles/shapes changed",
+        )
+    result_index = analysis.producers[fusion.result_tensor]
+    reject(result_index not in sources, f"node {fusion.kernel_index}: fusion anchor is not owned")
+    return sources, curated_inputs, (fusion.result_tensor,), result_index, analysis.ranks[dql.input[0]], analysis.ranks[fusion.result_tensor], dimensions
+
+
+def build_quant_lowerings(analysis: GraphAnalysis) -> tuple[list[LoweringRecord], set[int]]:
+    descriptions = [_quant_semantics(analysis, fusion) for fusion in analysis.quant_fusions]
+    claimants: dict[int, list[int]] = defaultdict(list)
+    for fusion_index, (sources, *_rest) in enumerate(descriptions):
+        for source in sources:
+            claimants[source].append(fusion_index)
+    assigned: list[set[int]] = [set() for _ in descriptions]
+    for source, fusion_indices in claimants.items():
+        owner = min(fusion_indices, key=lambda item: analysis.quant_fusions[item].kernel_index)
+        assigned[owner].add(source)
+
+    tensor_ids = _tensor_ids(analysis)
+    records: list[LoweringRecord] = []
+    kind_ordinals: Counter[str] = Counter()
+    for fusion_index, fusion in enumerate(analysis.quant_fusions):
+        sources, inputs, outputs, anchor, input_rank, output_rank, dims = descriptions[fusion_index]
+        kind_ordinals[fusion.kind] += 1
+        profile = kind_ordinals[fusion.kind]
+        owned = tuple(sorted(assigned[fusion_index]))
+        reject(fusion.kernel_index not in owned or anchor not in owned, f"node {fusion.kernel_index}: fusion ownership lost kernel/result")
+        reject(min(sources) < analysis.phase_cut <= max(sources), f"node {fusion.kernel_index}: quant fusion crosses phase")
+        if fusion.kind == "qgemm":
+            op_type = "DynamicQuantizedGemm"
+            bias_mode = ATTRIBUTE_BIAS_FLOAT if fusion.float_bias else ATTRIBUTE_BIAS_NONE
+            attrs = quant_gemm_attribute(profile, input_rank, output_rank, bias_mode, dims["k"], dims["n"], len(sources))
+            variant = f"profile={profile}:r{input_rank}:k={dims['k']}:n={dims['n']}:bias={bias_mode}:sources={len(sources)}"
+        else:
+            op_type = "DynamicQuantizedConv1d"
+            bias_mode = ATTRIBUTE_BIAS_QUANTIZED_INT32 if fusion.int32_bias else ATTRIBUTE_BIAS_NONE
+            attrs = quant_conv_attribute(profile, bias_mode, dims["input_channels"], dims["output_channels"], dims["kernel"], dims["stride"], dims["dilation"], dims["pad_left"], dims["pad_right"], dims["groups"], dims["weight_zero"])
+            variant = f"profile={profile}:{dims['input_channels']}->{dims['output_channels']}:k={dims['kernel']}:s={dims['stride']}:g={dims['groups']}:bias={bias_mode}:sources={len(sources)}"
+        records.append(
+            LoweringRecord(
+                anchor,
+                op_type,
+                AOT_OPCODES[op_type],
+                0 if anchor < analysis.phase_cut else 1,
+                tuple(tensor_ids[name] for name in inputs),
+                tuple(tensor_ids[name] for name in outputs),
+                attrs,
+                variant,
+                owned,
+            )
+        )
+    semantic_union = set(claimants)
+    reject(len(semantic_union) != 1_615, f"quant component inventory changed: {len(semantic_union)}")
+    return records, semantic_union
+
+
+def build_resolve_decoder_shape_lowering(analysis: GraphAnalysis) -> LoweringRecord:
+    graph = analysis.model.graph
+    tensor_ids = _tensor_ids(analysis)
+    sources = tuple(range(1_738, 1_747))
+    logits = graph.node[1_738].input[0]
+    cumulative = graph.node[1_745].output[0]
+    frame = graph.node[1_746].output[0]
+    source_set = set(sources)
+    externally_consumed = {
+        output
+        for source in sources
+        for output in graph.node[source].output
+        if any(consumer not in source_set for consumer in analysis.consumers.get(output, ()))
+    }
+    reject(
+        logits != "/encoder/predictor/duration_proj/linear_layer/Add_output_0"
+        or graph.node[1_740].input[1] != "speed"
+        or tuple(analysis.dtypes[name] for name in (logits, "speed", cumulative, frame)) != (1, 1, 7, 7)
+        or tuple(analysis.ranks[name] for name in (logits, "speed", cumulative, frame)) != (3, 1, 1, 0),
+        "ResolveDecoderShape bindings changed",
+    )
+    reject(
+        externally_consumed != {cumulative, frame},
+        "ResolveDecoderShape externally consumed results changed",
+    )
+    return LoweringRecord(
+        FRAME_COUNT_NODE_INDEX,
+        "ResolveDecoderShape",
+        AOT_OPCODES["ResolveDecoderShape"],
+        0,
+        (tensor_ids[logits], tensor_ids["speed"]),
+        (tensor_ids[cumulative], tensor_ids[frame]),
+        resolve_decoder_shape_attribute(),
+        "bins=50:max-tokens=512:outputs=cumulative-i64-r1,frame-i64-r0",
+        sources,
+    )
+
+
+def build_complete_lowerings(analysis: GraphAnalysis) -> list[LoweringRecord]:
+    raw_records = build_supported_lowerings(analysis)
+    analysis.raw_lowerings = raw_records
+    quant_records, quant_sources = build_quant_lowerings(analysis)
+    resolver = build_resolve_decoder_shape_lowering(analysis)
+    resolver_sources = set(resolver.owned_sources)
+    reject(quant_sources & resolver_sources, "quant/resolver source ownership overlaps")
+
+    claimed = quant_sources | resolver_sources
+    admitted_raw = [record for record in raw_records if record.source_index not in claimed]
+    raw_sources = {record.source_index for record in admitted_raw}
+    reject(len(raw_sources) != len(admitted_raw), "duplicate raw lowering source")
+    residual_sources = set(range(len(analysis.model.graph.node))) - claimed - raw_sources
+    residual_records = build_residual_lowerings(analysis, residual_sources)
+    records = admitted_raw + residual_records + quant_records + [resolver]
+    records.sort(key=lambda record: record.source_index)
+
+    owners: Counter[int] = Counter(
+        source
+        for record in records
+        for source in (record.owned_sources or (record.source_index,))
+    )
+    expected = set(range(len(analysis.model.graph.node)))
+    reject(set(owners) != expected, f"unowned source nodes: {sorted(expected - set(owners))[:16]}")
+    reject(any(count != 1 for count in owners.values()), "duplicate source-node ownership")
+    reject(
+        any(
+            record.phase != (0 if source < analysis.phase_cut else 1)
+            for record in records
+            for source in (record.owned_sources or (record.source_index,))
+        ),
+        "lowering source ownership crosses the phase cut",
+    )
+    reject(len(records) != 2_227, f"complete lowering inventory changed: {len(records)}")
+    phases = [record.phase for record in records]
+    reject(phases != sorted(phases), "lowered phase order is not contiguous")
+    phase_one_start = phases.index(1)
+    analysis.lowered_phase_ranges = ((0, phase_one_start), (phase_one_start, len(records)))
+    analysis.source_ownership_sha256 = hashlib.sha256(
+        b"".join(
+            struct.pack("<II", source, record_index)
+            for record_index, record in enumerate(records)
+            for source in (record.owned_sources or (record.source_index,))
+        )
+    ).hexdigest()
+    return records
+
+
 def infer_output_ranks(
     onnx: Any,
     graph: Any,
@@ -3726,6 +5325,456 @@ def infer_output_ranks(
     reject(bool(missing), f"unproved tensor ranks: {missing[:4]}")
     reject(any(rank > 4 for rank in ranks.values()), "tensor rank exceeds four")
     return ranks
+
+
+def infer_capacity_shapes(
+    analysis: GraphAnalysis,
+    *,
+    token_max: int = PINNED_TOKEN_MAX,
+    frame_max: int = PINNED_FRAME_MAX_CANDIDATE,
+) -> tuple[dict[str, tuple[int, ...]], dict[str, tuple[int | float | bool, ...]]]:
+    """Evaluate every ONNX shape at the sealed N/F capacity endpoints.
+
+    This is a shape interpreter, not tensor inference. It tracks payloads only
+    for small shape/control tensors and refuses to guess when a dynamic shape
+    controller is not derivable from graph semantics.
+    """
+
+    import numpy as np  # ONNX's required host dependency; never on kernel path.
+
+    reject(
+        token_max < 1
+        or token_max > PINNED_TOKEN_MAX
+        or frame_max < PINNED_FRAME_MIN
+        or frame_max > PINNED_FRAME_MAX_CANDIDATE,
+        "capacity endpoint outside sealed maxima",
+    )
+    graph = analysis.model.graph
+    shapes: dict[str, tuple[int, ...]] = {
+        name: tuple(int(dim) for dim in tensor.dims)
+        for name, tensor in analysis.initializers.items()
+    }
+    values: dict[str, tuple[int | float | bool, ...]] = {}
+    for name, tensor in analysis.initializers.items():
+        elements = math.prod(int(dim) for dim in tensor.dims) if tensor.dims else 1
+        if elements <= 32:
+            values[name] = initializer_values(analysis.onnx, tensor)
+    shapes.update(tokens=(1, token_max), style=(1, 256), speed=(1,))
+
+    def fail(index: int, node: Any, detail: str) -> None:
+        raise CompileError(
+            f"capacity blocker at node {index} {node.name!r} "
+            f"({node.op_type}): {detail}"
+        )
+
+    def shape(name: str, index: int, node: Any) -> tuple[int, ...]:
+        if name not in shapes:
+            fail(index, node, f"input shape {name!r} is unproved")
+        return shapes[name]
+
+    def control(name: str, index: int, node: Any) -> tuple[int | float | bool, ...]:
+        if name not in values:
+            fail(index, node, f"control payload {name!r} is unproved")
+        return values[name]
+
+    def broadcast(
+        operands: Sequence[tuple[int, ...]], index: int, node: Any
+    ) -> tuple[int, ...]:
+        rank = max((len(item) for item in operands), default=0)
+        result = [1] * rank
+        for operand in operands:
+            padded = (1,) * (rank - len(operand)) + operand
+            for axis, dim in enumerate(padded):
+                if result[axis] not in {1, dim} and dim != 1:
+                    fail(index, node, f"capacity broadcast mismatch at axis {axis}")
+                result[axis] = max(result[axis], dim)
+        return tuple(result)
+
+    def normalize_axis(axis: int, rank: int, index: int, node: Any) -> int:
+        normalized = axis + rank if axis < 0 else axis
+        if normalized < 0 or normalized >= rank:
+            fail(index, node, f"axis {axis} outside rank {rank}")
+        return normalized
+
+    def store_values(name: str, array: Any) -> None:
+        flattened = np.asarray(array).reshape(-1)
+        if flattened.size <= 32:
+            values[name] = tuple(item.item() for item in flattened)
+
+    def array(name: str, index: int, node: Any) -> Any:
+        tensor_shape = shape(name, index, node)
+        payload = control(name, index, node)
+        return np.asarray(payload).reshape(tensor_shape)
+
+    def matmul_capacity(
+        lhs: tuple[int, ...], rhs: tuple[int, ...], index: int, node: Any
+    ) -> tuple[int, ...]:
+        if not lhs or not rhs:
+            fail(index, node, "MatMul scalar input")
+        lhs_was_vector, rhs_was_vector = len(lhs) == 1, len(rhs) == 1
+        left = (1, lhs[0]) if lhs_was_vector else lhs
+        right = (rhs[0], 1) if rhs_was_vector else rhs
+        if left[-1] != right[-2]:
+            fail(index, node, f"MatMul K mismatch {left[-1]} != {right[-2]}")
+        batch = broadcast((left[:-2], right[:-2]), index, node)
+        result = batch + (left[-2], right[-1])
+        if lhs_was_vector:
+            result = result[:-2] + result[-1:]
+        if rhs_was_vector:
+            result = result[:-1]
+        return result
+
+    unary_same = {
+        "Atan",
+        "Cast",
+        "Clip",
+        "Cos",
+        "CumSum",
+        "DequantizeLinear",
+        "Exp",
+        "FastGelu",
+        "Floor",
+        "LayerNormalization",
+        "LeakyRelu",
+        "Round",
+        "Sigmoid",
+        "Sin",
+        "Softmax",
+        "Sqrt",
+        "Tanh",
+    }
+    binary_broadcast = {
+        "Add",
+        "And",
+        "Div",
+        "Equal",
+        "Greater",
+        "GreaterOrEqual",
+        "Less",
+        "Mul",
+        "Pow",
+        "Sub",
+    }
+
+    for index, node in enumerate(graph.node):
+        attrs = attributes(analysis.onnx, node)
+        inputs = tuple(name for name in node.input if name)
+        outputs = tuple(name for name in node.output if name)
+        output_shapes: list[tuple[int, ...]]
+
+        if node.op_type in unary_same:
+            output_shapes = [shape(inputs[0], index, node)] * len(outputs)
+        elif node.op_type in binary_broadcast:
+            output_shapes = [
+                broadcast(tuple(shape(name, index, node) for name in inputs[:2]), index, node)
+            ]
+        elif node.op_type == "Where":
+            output_shapes = [
+                broadcast(tuple(shape(name, index, node) for name in inputs), index, node)
+            ]
+        elif node.op_type == "DynamicQuantizeLinear":
+            output_shapes = [shape(inputs[0], index, node), (), ()]
+        elif node.op_type in {"Conv", "ConvInteger", "ConvTranspose"}:
+            data_shape = shape(inputs[0], index, node)
+            weight_shape = shape(inputs[1], index, node)
+            if len(data_shape) != 3 or len(weight_shape) != 3:
+                fail(index, node, "only rank-three 1-D convolution is admitted")
+            stride = int(attrs.get("strides", [1])[0])
+            dilation = int(attrs.get("dilations", [1])[0])
+            pads = tuple(int(item) for item in attrs.get("pads", [0, 0]))
+            group = int(attrs.get("group", 1))
+            kernel = int(weight_shape[2])
+            effective = dilation * (kernel - 1) + 1
+            if node.op_type == "ConvTranspose":
+                output_padding = int(attrs.get("output_padding", [0])[0])
+                width = (
+                    (data_shape[2] - 1) * stride
+                    - pads[0]
+                    - pads[1]
+                    + effective
+                    + output_padding
+                )
+                channels = weight_shape[1] * group
+            else:
+                width = (data_shape[2] + pads[0] + pads[1] - effective) // stride + 1
+                channels = weight_shape[0]
+            output_shapes = [(data_shape[0], channels, width)]
+        elif node.op_type in {"MatMul", "MatMulInteger"}:
+            output_shapes = [
+                matmul_capacity(
+                    shape(inputs[0], index, node),
+                    shape(inputs[1], index, node),
+                    index,
+                    node,
+                )
+            ]
+        elif node.op_type in {"ReduceMean", "ReduceSum"}:
+            source = shape(inputs[0], index, node)
+            raw_axes = (
+                tuple(int(item) for item in control(inputs[1], index, node))
+                if len(inputs) > 1
+                else tuple(int(item) for item in attrs.get("axes", range(len(source))))
+            )
+            axes = {normalize_axis(axis, len(source), index, node) for axis in raw_axes}
+            if int(attrs.get("keepdims", 1)):
+                output_shapes = [
+                    tuple(1 if axis in axes else dim for axis, dim in enumerate(source))
+                ]
+            else:
+                output_shapes = [
+                    tuple(dim for axis, dim in enumerate(source) if axis not in axes)
+                ]
+        elif node.op_type == "Shape":
+            source = shape(inputs[0], index, node)
+            start = int(attrs.get("start", 0))
+            end = int(attrs.get("end", len(source)))
+            selected = source[slice(start, end)]
+            output_shapes = [(len(selected),)]
+            values[outputs[0]] = selected
+        elif node.op_type == "Range":
+            start, limit, delta = (
+                control(name, index, node)[0] for name in inputs
+            )
+            if index == FRAME_RANGE_NODE_INDEX:
+                limit = frame_max
+            reject(float(delta) == 0.0, f"node {index}: Range delta is zero")
+            count = max(0, int(math.ceil((float(limit) - float(start)) / float(delta))))
+            output_shapes = [(count,)]
+            if count <= 32:
+                values[outputs[0]] = tuple(
+                    start + item * delta for item in range(count)
+                )
+        elif node.op_type == "NonZero":
+            source = shape(inputs[0], index, node)
+            output_shapes = [(len(source), math.prod(source))]
+        elif node.op_type == "ScatterND":
+            output_shapes = [shape(inputs[0], index, node)]
+        elif node.op_type == "Concat":
+            operand_shapes = [shape(name, index, node) for name in inputs]
+            rank = len(operand_shapes[0])
+            axis = normalize_axis(int(attrs["axis"]), rank, index, node)
+            base = list(operand_shapes[0])
+            for operand in operand_shapes[1:]:
+                if len(operand) != rank:
+                    fail(index, node, "Concat rank mismatch")
+                for dimension in range(rank):
+                    if dimension != axis and operand[dimension] != base[dimension]:
+                        fail(index, node, "Concat non-axis dimension mismatch")
+                base[axis] += operand[axis]
+            output_shapes = [tuple(base)]
+            if axis == 0 and rank == 1 and all(name in values for name in inputs):
+                values[outputs[0]] = tuple(
+                    item for name in inputs for item in values[name]
+                )
+        elif node.op_type == "Split":
+            source = shape(inputs[0], index, node)
+            axis = normalize_axis(int(attrs.get("axis", 0)), len(source), index, node)
+            if len(inputs) > 1:
+                lengths = tuple(int(item) for item in control(inputs[1], index, node))
+            else:
+                reject(source[axis] % len(outputs) != 0, f"node {index}: uneven Split")
+                lengths = (source[axis] // len(outputs),) * len(outputs)
+            reject(sum(lengths) != source[axis], f"node {index}: Split lengths mismatch")
+            output_shapes = []
+            for length in lengths:
+                result = list(source)
+                result[axis] = length
+                output_shapes.append(tuple(result))
+        elif node.op_type == "Transpose":
+            source = shape(inputs[0], index, node)
+            permutation = tuple(int(item) for item in attrs.get("perm", reversed(range(len(source)))))
+            output_shapes = [tuple(source[axis] for axis in permutation)]
+        elif node.op_type == "Gather":
+            data_shape = shape(inputs[0], index, node)
+            indices_shape = shape(inputs[1], index, node)
+            axis = normalize_axis(int(attrs.get("axis", 0)), len(data_shape), index, node)
+            output_shapes = [data_shape[:axis] + indices_shape + data_shape[axis + 1 :]]
+            if inputs[0] in values and inputs[1] in values:
+                gathered = np.take(
+                    array(inputs[0], index, node),
+                    array(inputs[1], index, node).astype(np.int64),
+                    axis=axis,
+                )
+                store_values(outputs[0], gathered)
+        elif node.op_type == "Reshape":
+            source = shape(inputs[0], index, node)
+            target = [int(item) for item in control(inputs[1], index, node)]
+            resolved = list(target)
+            for axis, dim in enumerate(resolved):
+                if dim == 0:
+                    resolved[axis] = source[axis]
+            infer = [axis for axis, dim in enumerate(resolved) if dim == -1]
+            reject(len(infer) > 1 or any(dim < -1 for dim in resolved), f"node {index}: Reshape target")
+            source_elements = math.prod(source)
+            known = math.prod(dim for dim in resolved if dim != -1)
+            if infer:
+                reject(known == 0 or source_elements % known != 0, f"node {index}: Reshape inference")
+                resolved[infer[0]] = source_elements // known
+            reject(math.prod(resolved) != source_elements, f"node {index}: Reshape element mismatch")
+            output_shapes = [tuple(resolved)]
+            if inputs[0] in values:
+                values[outputs[0]] = values[inputs[0]]
+        elif node.op_type in {"Unsqueeze", "Squeeze"}:
+            source = list(shape(inputs[0], index, node))
+            axes_payload = (
+                control(inputs[1], index, node)
+                if len(inputs) > 1
+                else tuple(int(item) for item in attrs.get("axes", ()))
+            )
+            if node.op_type == "Unsqueeze":
+                output_rank = len(source) + len(axes_payload)
+                axes = sorted(
+                    axis + output_rank if axis < 0 else axis
+                    for axis in (int(item) for item in axes_payload)
+                )
+                for axis in axes:
+                    source.insert(axis, 1)
+            else:
+                axes = sorted(
+                    (axis + len(source) if axis < 0 else axis)
+                    for axis in (int(item) for item in axes_payload)
+                )
+                reject(any(source[axis] != 1 for axis in axes), f"node {index}: Squeeze non-unit")
+                source = [dim for axis, dim in enumerate(source) if axis not in set(axes)]
+            output_shapes = [tuple(source)]
+            if inputs[0] in values:
+                values[outputs[0]] = values[inputs[0]]
+        elif node.op_type == "Expand":
+            source = shape(inputs[0], index, node)
+            target = tuple(int(item) for item in control(inputs[1], index, node))
+            padded = (1,) * (len(target) - len(source)) + source
+            reject(
+                len(target) < len(source)
+                or any(src != dst and src != 1 and dst != 1 for src, dst in zip(padded, target)),
+                f"node {index}: Expand target mismatch source={source} target={target}",
+            )
+            output_shapes = [tuple(max(src, dst) for src, dst in zip(padded, target))]
+        elif node.op_type == "Slice":
+            source = list(shape(inputs[0], index, node))
+            starts = tuple(int(item) for item in control(inputs[1], index, node))
+            ends = tuple(int(item) for item in control(inputs[2], index, node))
+            axes = (
+                tuple(int(item) for item in control(inputs[3], index, node))
+                if len(inputs) > 3
+                else tuple(range(len(starts)))
+            )
+            steps = (
+                tuple(int(item) for item in control(inputs[4], index, node))
+                if len(inputs) > 4
+                else (1,) * len(starts)
+            )
+            for start, end, raw_axis, step in zip(starts, ends, axes, steps):
+                axis = normalize_axis(raw_axis, len(source), index, node)
+                normalized = slice(start, end, step).indices(source[axis])
+                source[axis] = len(range(*normalized))
+            output_shapes = [tuple(source)]
+            if inputs[0] in values and len(source) == 1:
+                result = array(inputs[0], index, node)
+                for start, end, raw_axis, step in zip(starts, ends, axes, steps):
+                    axis = normalize_axis(raw_axis, result.ndim, index, node)
+                    slices = [slice(None)] * result.ndim
+                    slices[axis] = slice(start, end, step)
+                    result = result[tuple(slices)]
+                store_values(outputs[0], result)
+        elif node.op_type == "Pad":
+            source = shape(inputs[0], index, node)
+            pads = tuple(int(item) for item in control(inputs[1], index, node))
+            reject(len(pads) != 2 * len(source), f"node {index}: Pad vector length")
+            output_shapes = [
+                tuple(
+                    source[axis] + pads[axis] + pads[len(source) + axis]
+                    for axis in range(len(source))
+                )
+            ]
+        elif node.op_type == "ConstantOfShape":
+            target = tuple(int(item) for item in control(inputs[0], index, node))
+            reject(any(dim <= 0 for dim in target), f"node {index}: ConstantOfShape target")
+            output_shapes = [target]
+        elif node.op_type == "LSTM":
+            source = shape(inputs[0], index, node)
+            directions = 2 if attrs.get("direction") == b"bidirectional" else 1
+            hidden = int(attrs["hidden_size"])
+            output_shapes = [
+                (source[0], directions, source[1], hidden),
+                (directions, source[1], hidden),
+                (directions, source[1], hidden),
+            ][: len(outputs)]
+        elif node.op_type == "Resize":
+            source = shape(inputs[0], index, node)
+            scales = tuple(float(item) for item in control(inputs[-1], index, node))
+            reject(len(scales) != len(source), f"node {index}: Resize scale rank")
+            output_shapes = [
+                tuple(int(math.floor(dim * scale)) for dim, scale in zip(source, scales))
+            ]
+        elif node.op_type == "STFT":
+            source = shape(inputs[0], index, node)
+            frame_step = int(control(inputs[1], index, node)[0])
+            frame_length = int(control(inputs[3], index, node)[0])
+            frames = (source[-1] - frame_length) // frame_step + 1
+            bins = frame_length // 2 + 1 if int(attrs.get("onesided", 1)) else frame_length
+            output_shapes = [source[:-1] + (frames, bins, 2)]
+        elif node.op_type == "SkipLayerNormalization":
+            source = shape(inputs[0], index, node)
+            output_shapes = [source] + [source[:-1] + (1,)] * (len(outputs) - 1)
+        else:
+            fail(index, node, "no capacity-shape rule")
+
+        if len(output_shapes) != len(outputs):
+            fail(index, node, "capacity output arity mismatch")
+        for output, capacity in zip(outputs, output_shapes):
+            if len(capacity) != analysis.ranks[output]:
+                fail(
+                    index,
+                    node,
+                    f"rank mismatch for {output!r}: {capacity} versus r{analysis.ranks[output]}",
+                )
+            if any(dim < 0 or dim > 0xFFFF_FFFF for dim in capacity):
+                fail(index, node, f"negative/overflow capacity {capacity} for {output!r}")
+            shapes[output] = capacity
+
+        # Evaluate small control tensors through the small subset of scalar
+        # operations used by dynamic shape construction.
+        try:
+            if node.op_type == "Cast" and inputs[0] in values:
+                target = int(attrs["to"])
+                dtype = {1: np.float32, 6: np.int32, 7: np.int64, 9: np.bool_}[target]
+                store_values(outputs[0], array(inputs[0], index, node).astype(dtype))
+            elif node.op_type in binary_broadcast and all(name in values for name in inputs[:2]):
+                lhs, rhs = array(inputs[0], index, node), array(inputs[1], index, node)
+                operation = {
+                    "Add": np.add,
+                    "And": np.logical_and,
+                    "Div": np.divide,
+                    "Equal": np.equal,
+                    "Greater": np.greater,
+                    "GreaterOrEqual": np.greater_equal,
+                    "Less": np.less,
+                    "Mul": np.multiply,
+                    "Pow": np.power,
+                    "Sub": np.subtract,
+                }[node.op_type]
+                store_values(outputs[0], operation(lhs, rhs))
+            elif node.op_type == "Where" and all(name in values for name in inputs):
+                store_values(
+                    outputs[0],
+                    np.where(
+                        array(inputs[0], index, node),
+                        array(inputs[1], index, node),
+                        array(inputs[2], index, node),
+                    ),
+                )
+            elif node.op_type in {"Floor", "Round"} and inputs[0] in values:
+                operation = np.floor if node.op_type == "Floor" else np.round
+                store_values(outputs[0], operation(array(inputs[0], index, node)))
+        except (KeyError, ValueError, OverflowError) as error:
+            fail(index, node, f"small control evaluation failed: {error}")
+
+        if index == FRAME_COUNT_NODE_INDEX:
+            values[FRAME_COUNT_TENSOR] = (frame_max,)
+
+    expected = {tensor.name for tensor in analysis.tensors}
+    reject(set(shapes) != expected, f"capacity tensor coverage changed: missing={sorted(expected-set(shapes))[:4]}")
+    return shapes, values
 
 
 def build_indexes(graph: Any) -> tuple[dict[str, int], dict[str, list[int]]]:
@@ -4067,10 +6116,47 @@ def validate_frame_phase(
         node = graph.node[index]
         reject((node.op_type, node.name) != identity, f"frame resolver node {index} changed")
 
+    chain_attrs = {
+        1_738: {},
+        1_739: {"keepdims": 0, "noop_with_empty_axes": 0},
+        1_740: {},
+        1_741: {},
+        1_742: {},
+        1_743: {"saturate": 1, "to": 7},
+        1_744: {"axis": 0},
+        1_745: {"exclusive": 0, "reverse": 0},
+        1_746: {"axis": 0},
+    }
+    for index, expected_attrs in chain_attrs.items():
+        reject(
+            attributes(onnx, graph.node[index]) != expected_attrs,
+            f"frame resolver node {index} attributes changed",
+        )
+    duration_tensors = (
+        graph.node[1_738].input[0],
+        graph.node[1_738].output[0],
+        graph.node[1_739].output[0],
+        graph.node[1_740].output[0],
+        graph.node[1_741].output[0],
+        graph.node[1_742].output[0],
+        graph.node[1_743].output[0],
+        graph.node[1_744].output[0],
+        graph.node[1_745].output[0],
+        graph.node[1_746].output[0],
+    )
+    reject(
+        tuple(dtypes[name] for name in duration_tensors)
+        != (1, 1, 1, 1, 1, 1, 7, 7, 7, 7)
+        or tuple(ranks[name] for name in duration_tensors)
+        != (3, 3, 2, 2, 2, 2, 2, 1, 1, 0)
+        or dtypes["speed"] != 1
+        or ranks["speed"] != 1,
+        "duration chain dtype/rank contract changed",
+    )
+
     reduce = graph.node[1_739]
     reject(
-        axes_from_input(onnx, reduce, initializers, 1) != (-1,)
-        or int(attributes(onnx, reduce).get("keepdims", 1)) != 0,
+        axes_from_input(onnx, reduce, initializers, 1) != (-1,),
         "duration ReduceSum contract changed",
     )
     reject(graph.node[1_740].input[1] != "speed", "duration speed input changed")
@@ -4083,11 +6169,10 @@ def validate_frame_phase(
         or clip.input[2] != "",
         "duration Clip(min=1,max=none) contract changed",
     )
-    reject(int(attributes(onnx, graph.node[1_743]).get("to", -1)) != 7, "duration Cast changed")
     reject(
         axes_from_input(onnx, graph.node[1_745], initializers, 1) != (0,)
-        or int(attributes(onnx, graph.node[1_745]).get("exclusive", 0)) != 0
-        or int(attributes(onnx, graph.node[1_745]).get("reverse", 0)) != 0,
+        or dtypes[graph.node[1_745].input[1]] != 6
+        or ranks[graph.node[1_745].input[1]] != 0,
         "duration CumSum contract changed",
     )
     batch_index = initializer_values(onnx, initializers[graph.node[1_744].input[1]])
@@ -4291,6 +6376,22 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
         )
     ).hexdigest()
     lowering_counts = Counter(record.op_type for record in analysis.lowerings)
+    raw_lowering_counts = Counter(record.op_type for record in analysis.raw_lowerings)
+    raw_source_indices = {record.source_index for record in analysis.raw_lowerings}
+    native_types = {
+        "DynamicQuantizedGemm",
+        "DynamicQuantizedConv1d",
+        "ResolveDecoderShape",
+    }
+    surviving_raw_records = sum(
+        record.source_index in raw_source_indices and record.op_type not in native_types
+        for record in analysis.lowerings
+    )
+    direct_residual_records = len(analysis.lowerings) - surviving_raw_records - len(fusions) - 1
+    owned_source_count = sum(
+        len(record.owned_sources or (record.source_index,))
+        for record in analysis.lowerings
+    )
     lowering_variants: dict[str, Counter[str]] = defaultdict(Counter)
     attribute_bytes = Counter()
     static_views = dynamic_views = 0
@@ -4382,6 +6483,11 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
             "abi_version": ATTRIBUTE_ABI_VERSION,
             "record_header": "<u16 version,u16 kind/opcode,u32 total_bytes>",
             "records": len(analysis.lowerings),
+            "raw_admitted_records_before_fusion": len(analysis.raw_lowerings),
+            "raw_surviving_records": surviving_raw_records,
+            "direct_residual_records": direct_residual_records,
+            "native_quant_records": len(fusions),
+            "resolve_decoder_shape_records": 1,
             "f32_core_records": core_f32_count,
             "f32_unary_records": unary_count,
             "f32_total_records": core_f32_count + unary_count,
@@ -4391,7 +6497,7 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
             "view_alias_records": view_count,
             "view_static_controllers": static_views,
             "view_dynamic_controllers": dynamic_views,
-            "excluded_non_f32_add": op_counts["Add"] - lowering_counts["Add"],
+            "excluded_non_f32_add": op_counts["Add"] - raw_lowering_counts["Add"],
             "operator_counts": dict(sorted(lowering_counts.items())),
             "layout_operator_counts": {
                 name: lowering_counts[name] for name in sorted(LOWERED_LAYOUT_OPS)
@@ -4404,6 +6510,16 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
                 for op_type, variants in sorted(lowering_variants.items())
             },
             "plan_sha256": lowering_plan_sha256(analysis.lowerings),
+            "raw_plan_sha256": lowering_plan_sha256(analysis.raw_lowerings),
+            "source_ownership": {
+                "graph_source_nodes": len(graph.node),
+                "owned_source_nodes": owned_source_count,
+                "unowned_source_nodes": 0,
+                "duplicate_source_nodes": 0,
+                "quant_component_source_nodes": 1_615,
+                "duration_component_source_nodes": 9,
+                "sha256": analysis.source_ownership_sha256,
+            },
             "unsupported_admitted": 0,
             "executable_graph_emitted": False,
         },
@@ -4411,12 +6527,26 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
             "count": 2,
             "phase0_source_nodes": [0, analysis.phase_cut],
             "phase1_source_nodes": [analysis.phase_cut, len(graph.node)],
+            "phase0_lowered_ops": list(analysis.lowered_phase_ranges[0]),
+            "phase1_lowered_ops": list(analysis.lowered_phase_ranges[1]),
             "resolve_decoder_shape": {
                 "node_index": FRAME_COUNT_NODE_INDEX,
                 "node_name": FRAME_COUNT_NODE_NAME,
                 "tensor": FRAME_COUNT_TENSOR,
                 "dtype": "INT64",
                 "rank": 0,
+                "source_nodes": [1_738, 1_747],
+                "input_bindings": [
+                    "/encoder/predictor/duration_proj/linear_layer/Add_output_0",
+                    "speed",
+                ],
+                "output_bindings": [
+                    "/encoder/CumSum_output_0",
+                    FRAME_COUNT_TENSOR,
+                ],
+                "cumulative_duration_dtype": "INT64",
+                "cumulative_duration_rank": 1,
+                "returned_frame_scalar": FRAME_COUNT_TENSOR,
                 "first_sized_consumer_index": FRAME_RANGE_NODE_INDEX,
                 "first_sized_consumer_name": FRAME_RANGE_NODE_NAME,
                 "formula": "sum(max(1, round(sum(sigmoid(duration_logits), axis=-1) / speed)))",
@@ -4547,17 +6677,26 @@ def analyze(
         quant_fusions=quant_fusions,
         phase_cut=phase_cut,
     )
-    analysis.lowerings = build_supported_lowerings(analysis)
+    analysis.lowerings = build_complete_lowerings(analysis)
     if pinned:
-        lowering_counts = Counter(record.op_type for record in analysis.lowerings)
+        lowering_counts = Counter(record.op_type for record in analysis.raw_lowerings)
         reject(
             dict(sorted(lowering_counts.items())) != PINNED_LOWERING_COUNTS,
             "CPU lowering inventory changed",
         )
-        lowering_digest = lowering_plan_sha256(analysis.lowerings)
+        lowering_digest = lowering_plan_sha256(analysis.raw_lowerings)
         reject(
             lowering_digest != PINNED_LOWERING_SHA256,
-            f"CPU lowering plan digest changed: {lowering_digest}",
+            f"raw CPU lowering plan digest changed: {lowering_digest}",
+        )
+        complete_digest = lowering_plan_sha256(analysis.lowerings)
+        reject(
+            complete_digest != PINNED_COMPLETE_LOWERING_SHA256,
+            f"complete lowering plan digest changed: {complete_digest}",
+        )
+        reject(
+            analysis.source_ownership_sha256 != PINNED_SOURCE_OWNERSHIP_SHA256,
+            "source ownership plan digest changed",
         )
     analysis.report = make_report(analysis)
     return analysis
