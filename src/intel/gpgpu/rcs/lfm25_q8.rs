@@ -118,17 +118,15 @@ fn direct_rcs_write_lfm25_q8_dispatch_state(
         lfm25_q8_state_offset(dispatch, LFM25_Q8_OUTPUT_SURFACE_STATE_RELATIVE_OFFSET_BYTES);
     let payload_offset = lfm25_q8_state_offset(dispatch, LFM25_Q8_PAYLOAD_RELATIVE_OFFSET_BYTES);
     let cross_thread_grfs = LFM25_Q8_CROSS_THREAD_BYTES.div_ceil(32) as u32;
-    let text_offset = match upload.name {
-        LFM25_Q8_PROJECT_KERNEL_NAME => LFM25_Q8_PROJECT_TEXT_OFFSET_BYTES,
-        LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => LFM25_Q8_PROJECT_PACKED_TEXT_OFFSET_BYTES,
-        _ => return false,
-    };
+    if upload.name != LFM25_Q8_PROJECT_PACKED_KERNEL_NAME {
+        return false;
+    }
 
     if !direct_rcs_write_interface_descriptor_at(
         state,
         idd_offset,
         binding_offset,
-        text_offset,
+        LFM25_Q8_PROJECT_PACKED_TEXT_OFFSET_BYTES,
         3,
         cross_thread_grfs,
     ) {
@@ -162,19 +160,10 @@ fn direct_rcs_write_lfm25_q8_dispatch_state(
 }
 
 fn lfm25_q8_project_upload_valid(upload: UploadedKernelArtifact) -> bool {
-    match upload.name {
-        LFM25_Q8_PROJECT_KERNEL_NAME => {
-            upload.bin_sha256 == LFM25_Q8_PROJECT_ADLS_BIN_SHA256
-                && upload.gpu == LFM25_Q8_PROJECT_ADLS_GPU
-                && upload.bytes == LFM25_Q8_PROJECT_ADLS_BIN.len()
-        }
-        LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => {
-            upload.bin_sha256 == LFM25_Q8_PROJECT_PACKED_ADLS_BIN_SHA256
-                && upload.gpu == LFM25_Q8_PROJECT_PACKED_ADLS_GPU
-                && upload.bytes == LFM25_Q8_PROJECT_PACKED_ADLS_BIN.len()
-        }
-        _ => false,
-    }
+    upload.name == LFM25_Q8_PROJECT_PACKED_KERNEL_NAME
+        && upload.bin_sha256 == LFM25_Q8_PROJECT_PACKED_ADLS_BIN_SHA256
+        && upload.gpu == LFM25_Q8_PROJECT_PACKED_ADLS_GPU
+        && upload.bytes == LFM25_Q8_PROJECT_PACKED_ADLS_BIN.len()
 }
 
 fn direct_rcs_encode_lfm25_q8_batch(
@@ -188,11 +177,7 @@ fn direct_rcs_encode_lfm25_q8_batch(
         || !lfm25_q8_project_upload_valid(upload)
         || params.iter().any(|params| {
             let blocks = params.columns as usize / trueos_lfm25_cpu::Q8_BLOCK_VALUES;
-            let activation_bytes = if upload.name == LFM25_Q8_PROJECT_PACKED_KERNEL_NAME {
-                blocks * (core::mem::size_of::<u32>() * 9)
-            } else {
-                blocks * trueos_lfm25_cpu::Q8_BLOCK_BYTES
-            };
+            let activation_bytes = blocks * (core::mem::size_of::<u32>() * 9);
             !lfm25_q8_admitted_shape(params.columns, params.rows)
                 || params.activation_bytes != activation_bytes
                 || params.output_bytes != params.rows as usize * core::mem::size_of::<f32>()

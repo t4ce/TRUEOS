@@ -12,11 +12,6 @@
 
 namespace trueos::lfm25 {
 
-enum class intel_igc_weight_layout {
-    native_q8_0,
-    packed_q8x16_pair,
-};
-
 // Host owner for the published C++ -> SPIR-V -> Intel IGC projection kernel.
 // The implementation deliberately selects an Intel GPU and exposes no generic
 // OpenCL program/source compilation surface.
@@ -26,8 +21,7 @@ class intel_igc_projector {
         const std::filesystem::path & spirv_path,
         const void * native_weights,
         std::size_t native_weight_bytes,
-        intel_igc_weight_layout layout = intel_igc_weight_layout::native_q8_0,
-        std::span<const packed_q8_tensor_spec> packed_tensors = {});
+        std::span<const packed_q8_tensor_spec> packed_tensors);
     ~intel_igc_projector();
 
     intel_igc_projector(const intel_igc_projector &) = delete;

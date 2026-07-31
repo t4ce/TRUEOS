@@ -10,7 +10,6 @@ namespace trueos::lfm25 {
 enum class native_projection_backend {
     cpu_avx2,
     cpu_packed_reference,
-    intel_igc,
     intel_igc_packed,
 };
 

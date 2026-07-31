@@ -849,6 +849,21 @@ pub(crate) fn print_matrix_target_progress_line(target: &MatrixTarget, line: &st
     );
 }
 
+pub(crate) fn replace_matrix_target_transient_lines(target: &MatrixTarget, lines: &[AllocString]) {
+    let _ = matrix::replace_transient_lines_in_live_slot(
+        &target.slot_id,
+        target.slot_lifetime_generation,
+        lines,
+    );
+}
+
+pub(crate) fn clear_matrix_target_transient_lines(target: &MatrixTarget) {
+    let _ = matrix::clear_transient_lines_in_live_slot(
+        &target.slot_id,
+        target.slot_lifetime_generation,
+    );
+}
+
 pub(crate) fn print_matrix_target_system_line(target: &MatrixTarget, line: &str) {
     let _ =
         matrix::record_line_in_live_slot(&target.slot_id, target.slot_lifetime_generation, line);
@@ -1491,6 +1506,15 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         }
 
         if let Some(b) = io.read_byte() {
+            if let Some(vm_id) = active_matrix_vm_id(output_mask)
+                && crate::hv::blueprint_console_submit_tui_demo_input(vm_id, b)
+            {
+                esc = EscState::None;
+                text_decode.reset();
+                live_history_cursor = None;
+                zeroize_input_line(&mut line);
+                continue;
+            }
             if b == LOCAL_ESCAPE_KEY_BYTE {
                 esc = EscState::None;
                 text_decode.reset();
@@ -1870,6 +1894,9 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 Timer::after(EmbassyDuration::from_micros(0)).await;
             }
         } else {
+            if let Some(vm_id) = active_matrix_vm_id(output_mask) {
+                let _ = crate::hv::blueprint_console_tui_demo_idle(vm_id);
+            }
             if (output_mask & (OUTPUT_LOCAL_MASK | OUTPUT_NET_TCP_MASK)) == 0 {
                 if terminal_size_query_idle_ticks == 0 {
                     out.io.raw_write_str(TERMINAL_SIZE_QUERY);

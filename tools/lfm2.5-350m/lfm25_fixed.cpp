@@ -40,9 +40,6 @@ constexpr std::string_view kHiGoldenSha256 =
 constexpr std::uintmax_t kF32SidecarBytes = 262'160;
 constexpr std::string_view kF32SidecarSha256 =
     "a60c0d28e5e0f4830699260fbd9c01153763261a7b132a6b44610d64919609b1";
-constexpr std::uintmax_t kIgcSpirvBytes = 62'288;
-constexpr std::string_view kIgcSpirvSha256 =
-    "66477ba6c412e5e01fafa1ee6cfdfae0ed43056bc3527ab8cd7e702316ea597b";
 constexpr std::uintmax_t kIgcPackedSpirvBytes = 14'740;
 constexpr std::string_view kIgcPackedSpirvSha256 =
     "8753fcd446108571dc8cec3dff29ad9b6703b6beb7a8c0a4e81b34aa77d7baeb";
@@ -110,14 +107,12 @@ struct options {
     uint32_t max_reply_tokens = kMaxReplyTokens;
     int32_t threads = 1;
     bool native = false;
-    bool igpu = false;
     bool igpu_packed = false;
     bool parity_hi = false;
     bool parity_q8 = false;
     bool parity_q8_packed = false;
     bool parity_native_hi = false;
     bool parity_packed_hi = false;
-    bool parity_igpu_hi = false;
     bool parity_igpu_packed_hi = false;
 };
 
@@ -240,16 +235,11 @@ options parse_options(int argc, char ** argv) {
         } else if (argument == "--parity-packed-hi") {
             result.parity_packed_hi = true;
             result.prompt = "hi";
-        } else if (argument == "--parity-igpu-hi") {
-            result.parity_igpu_hi = true;
-            result.prompt = "hi";
         } else if (argument == "--parity-igpu-packed-hi") {
             result.parity_igpu_packed_hi = true;
             result.prompt = "hi";
         } else if (argument == "--native") {
             result.native = true;
-        } else if (argument == "--igpu") {
-            result.igpu = true;
         } else if (argument == "--igpu-packed") {
             result.igpu_packed = true;
         } else if (argument == "--max-tokens") {
@@ -272,7 +262,6 @@ options parse_options(int argc, char ** argv) {
             !result.parity_q8_packed &&
             !result.parity_native_hi &&
             !result.parity_packed_hi &&
-            !result.parity_igpu_hi &&
             !result.parity_igpu_packed_hi) {
             result.prompt = std::string(argument);
         } else {
@@ -285,11 +274,9 @@ options parse_options(int argc, char ** argv) {
         static_cast<unsigned>(result.parity_q8_packed) +
         static_cast<unsigned>(result.parity_native_hi) +
         static_cast<unsigned>(result.parity_packed_hi) +
-        static_cast<unsigned>(result.parity_igpu_hi) +
         static_cast<unsigned>(result.parity_igpu_packed_hi);
     const unsigned execution_modes =
         static_cast<unsigned>(result.native) +
-        static_cast<unsigned>(result.igpu) +
         static_cast<unsigned>(result.igpu_packed);
     if (parity_modes > 1 ||
         (execution_modes != 0 && parity_modes != 0) ||
@@ -443,10 +430,8 @@ int run(const options & arguments) {
     model_params.vocab_only =
         arguments.parity_native_hi ||
         arguments.parity_packed_hi ||
-        arguments.parity_igpu_hi ||
         arguments.parity_igpu_packed_hi ||
         arguments.native ||
-        arguments.igpu ||
         arguments.igpu_packed;
     model_params.n_gpu_layers = 0;
     model_params.use_mmap = true;
@@ -476,19 +461,13 @@ int run(const options & arguments) {
     if (
         arguments.parity_native_hi ||
         arguments.parity_packed_hi ||
-        arguments.parity_igpu_hi ||
         arguments.parity_igpu_packed_hi ||
         arguments.native ||
-        arguments.igpu ||
         arguments.igpu_packed) {
         const auto repository_path = tool_path.parent_path().parent_path();
         const auto native_path = tool_path / "LFM2.5-350M-Q8_0.native.bin";
         const auto contract_path = tool_path / "artifacts/lfm25_model.contract.bin";
         const auto sidecar_path = tool_path / "LFM2.5-350M-Q8_0.cpu-f32.bin";
-        const auto igc_spirv_path =
-            repository_path /
-            "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/"
-            "lfm25_q8_project.spv";
         const auto igc_packed_spirv_path =
             repository_path /
             "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/"
@@ -508,13 +487,6 @@ int run(const options & arguments) {
             kF32SidecarBytes,
             kF32SidecarSha256,
             "pinned F32 sidecar");
-        if (arguments.parity_igpu_hi || arguments.igpu) {
-            verify_file(
-                igc_spirv_path,
-                kIgcSpirvBytes,
-                kIgcSpirvSha256,
-                "published C++/IGC SPIR-V");
-        }
         if (arguments.parity_igpu_packed_hi || arguments.igpu_packed) {
             verify_file(
                 igc_packed_spirv_path,
@@ -540,12 +512,9 @@ int run(const options & arguments) {
         const bool parity_custom_hi =
             arguments.parity_native_hi ||
             arguments.parity_packed_hi ||
-            arguments.parity_igpu_hi ||
             arguments.parity_igpu_packed_hi;
         const bool use_igpu =
-            arguments.igpu ||
             arguments.igpu_packed ||
-            arguments.parity_igpu_hi ||
             arguments.parity_igpu_packed_hi;
         const bool use_packed =
             arguments.igpu_packed ||
@@ -563,15 +532,9 @@ int run(const options & arguments) {
             use_packed_reference
                 ? trueos::lfm25::native_projection_backend::cpu_packed_reference
                 : use_packed
-                ? trueos::lfm25::native_projection_backend::intel_igc_packed
-                : use_igpu
-                    ? trueos::lfm25::native_projection_backend::intel_igc
+                    ? trueos::lfm25::native_projection_backend::intel_igc_packed
                     : trueos::lfm25::native_projection_backend::cpu_avx2,
-            use_packed
-                ? igc_packed_spirv_path
-                : use_igpu
-                    ? igc_spirv_path
-                    : std::filesystem::path{});
+            use_igpu ? igc_packed_spirv_path : std::filesystem::path{});
         if (parity_custom_hi &&
             !std::equal(
                 result.next_tokens.begin(),
@@ -621,9 +584,7 @@ int run(const options & arguments) {
                     ? "packed"
                     : use_packed
                         ? "igpu-packed"
-                        : use_igpu
-                            ? "igpu"
-                            : "native",
+                        : "native",
                 arguments.threads,
                 static_cast<long long>(elapsed.count()),
                 result.projection_device.c_str(),

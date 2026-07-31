@@ -273,21 +273,6 @@ pub(crate) struct Lfm25Q8ProjectSpec {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum Lfm25Q8WeightLayout {
-    NativeQ8,
-    PackedQ8x16Pair,
-}
-
-impl Lfm25Q8WeightLayout {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::NativeQ8 => "native-q8",
-            Self::PackedQ8x16Pair => "pair1088-x16-dp4a",
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Lfm25Q8ModelMapping {
     mapping_phys: u64,
     mapping_gpu: u64,
@@ -295,7 +280,6 @@ pub(crate) struct Lfm25Q8ModelMapping {
     model_gpu: u64,
     model_bytes: usize,
     model_virt: *mut u8,
-    layout: Lfm25Q8WeightLayout,
 }
 
 unsafe impl Send for Lfm25Q8ModelMapping {}
@@ -564,37 +548,15 @@ const _: () = {
     assert!(shortconv * 2 + attention * 2 + layers * 2 == LFM25_Q8_SUBMISSIONS_PER_PREFILL_TOKEN);
 };
 
-pub(crate) fn lfm25_q8_project_supported() -> bool {
-    lfm25_q8_layout_supported(Lfm25Q8WeightLayout::NativeQ8)
-}
-
 pub(crate) fn lfm25_q8_packed_project_supported() -> bool {
-    lfm25_q8_layout_supported(Lfm25Q8WeightLayout::PackedQ8x16Pair)
-}
-
-fn lfm25_q8_layout_supported(layout: Lfm25Q8WeightLayout) -> bool {
     let Some(dev) = super::claimed_device() else {
         return false;
     };
-    lfm25_q8_artifact(layout)
+    LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT
         .target_policy
         .supports(dev.device_id, dev.revision_id)
         && super::gen12_lumen_mocs_ready()
         && !lfm25_rcs_context_is_quarantined()
-}
-
-const fn lfm25_q8_artifact(layout: Lfm25Q8WeightLayout) -> GpgpuKernelArtifact {
-    match layout {
-        Lfm25Q8WeightLayout::NativeQ8 => LFM25_Q8_PROJECT_ADLS_ARTIFACT,
-        Lfm25Q8WeightLayout::PackedQ8x16Pair => LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT,
-    }
-}
-
-fn upload_lfm25_q8_layout_kernel(layout: Lfm25Q8WeightLayout) -> Option<UploadedKernelArtifact> {
-    match layout {
-        Lfm25Q8WeightLayout::NativeQ8 => upload_lfm25_q8_project_kernel(),
-        Lfm25Q8WeightLayout::PackedQ8x16Pair => upload_lfm25_q8_project_packed_kernel(),
-    }
 }
 
 pub(crate) fn lfm25_q8_project_stats() -> Lfm25Q8ProjectStats {
@@ -636,23 +598,10 @@ pub(crate) fn lfm25_q8_phase_probe_snapshot() -> Lfm25Q8PhaseProbeSnapshot {
     Lfm25Q8PhaseProbeSnapshot { buckets }
 }
 
-pub(crate) fn bind_lfm25_q8_model(
-    model: &[u8],
-) -> Result<Lfm25Q8ModelMapping, Lfm25Q8ProjectError> {
-    bind_lfm25_q8_model_layout(model, Lfm25Q8WeightLayout::NativeQ8)
-}
-
 pub(crate) fn bind_lfm25_q8_packed_model(
     model: &[u8],
 ) -> Result<Lfm25Q8ModelMapping, Lfm25Q8ProjectError> {
-    bind_lfm25_q8_model_layout(model, Lfm25Q8WeightLayout::PackedQ8x16Pair)
-}
-
-fn bind_lfm25_q8_model_layout(
-    model: &[u8],
-    layout: Lfm25Q8WeightLayout,
-) -> Result<Lfm25Q8ModelMapping, Lfm25Q8ProjectError> {
-    if !lfm25_q8_layout_supported(layout) {
+    if !lfm25_q8_packed_project_supported() {
         return Err(Lfm25Q8ProjectError::UnsupportedTarget);
     }
     if model.len() != trueos_lfm25_model::lfm25::PINNED_NATIVE_IMAGE_BYTES as usize
@@ -661,10 +610,7 @@ fn bind_lfm25_q8_model_layout(
         return Err(Lfm25Q8ProjectError::InvalidModel);
     }
     let model_virt = model.as_ptr() as *mut u8;
-    let required_alignment = match layout {
-        Lfm25Q8WeightLayout::NativeQ8 => 4usize,
-        Lfm25Q8WeightLayout::PackedQ8x16Pair => 64usize,
-    };
+    let required_alignment = 64usize;
     if model_virt as usize % required_alignment != 0 {
         return Err(Lfm25Q8ProjectError::InvalidModel);
     }
@@ -699,7 +645,6 @@ fn bind_lfm25_q8_model_layout(
         model_gpu: LFM25_Q8_MODEL_MAPPING_GPU_BASE + page_offset as u64,
         model_bytes: model.len(),
         model_virt,
-        layout,
     };
     if mapping.model_gpu % required_alignment as u64 != 0
         || mapping.mapping_gpu + mapping.mapping_bytes as u64 > LFM25_Q8_ACTIVATION_GPU
@@ -715,23 +660,6 @@ fn bind_lfm25_q8_model_layout(
     ensure_lfm25_q8_runtime(&mut runtime_slot)?;
     prepare_lfm25_q8_runtime(runtime_slot.as_mut().unwrap(), mapping)?;
     Ok(mapping)
-}
-
-pub(crate) fn lfm25_q8_project(
-    model: Lfm25Q8ModelMapping,
-    weight_offset: u32,
-    columns: u32,
-    rows: u32,
-    activation: &[u8],
-    output: &mut [f32],
-) -> Result<u64, Lfm25Q8ProjectError> {
-    let specs = [Lfm25Q8ProjectSpec {
-        weight_offset,
-        columns,
-        rows,
-    }];
-    let mut outputs = [output];
-    lfm25_q8_project_batch(model, &specs, activation, &mut outputs)
 }
 
 pub(crate) fn lfm25_q8_project_batch(
@@ -755,13 +683,8 @@ pub(crate) fn lfm25_q8_project_batch(
     if activation.len() != row_bytes {
         return Err(Lfm25Q8ProjectError::InvalidShape);
     }
-    let activation_payload_bytes = match model.layout {
-        Lfm25Q8WeightLayout::NativeQ8 => row_bytes,
-        Lfm25Q8WeightLayout::PackedQ8x16Pair => {
-            trueos_lfm25_cpu::packed_q8x16_activation_bytes(columns as usize)
-                .map_err(|_| Lfm25Q8ProjectError::InvalidShape)?
-        }
-    };
+    let activation_payload_bytes = trueos_lfm25_cpu::packed_q8x16_activation_bytes(columns as usize)
+        .map_err(|_| Lfm25Q8ProjectError::InvalidShape)?;
     if activation_payload_bytes > LFM25_Q8_ACTIVATION_ALLOC_BYTES {
         return Err(Lfm25Q8ProjectError::InvalidShape);
     }
@@ -798,17 +721,12 @@ pub(crate) fn lfm25_q8_project_batch(
     let activation_destination = unsafe {
         core::slice::from_raw_parts_mut(runtime.activation.virt, activation_payload_bytes)
     };
-    match model.layout {
-        Lfm25Q8WeightLayout::NativeQ8 => activation_destination.copy_from_slice(activation),
-        Lfm25Q8WeightLayout::PackedQ8x16Pair => {
-            trueos_lfm25_cpu::pack_q8x16_activation(
-                activation,
-                columns as usize,
-                activation_destination,
-            )
-            .map_err(|_| Lfm25Q8ProjectError::InvalidShape)?;
-        }
-    }
+    trueos_lfm25_cpu::pack_q8x16_activation(
+        activation,
+        columns as usize,
+        activation_destination,
+    )
+    .map_err(|_| Lfm25Q8ProjectError::InvalidShape)?;
     super::dma_flush(runtime.activation.virt, activation_payload_bytes);
 
     let mut params = Vec::new();
@@ -925,8 +843,8 @@ pub(crate) fn lfm25_q8_project_batch(
                     timings.gpu_us,
                     timings.gpu_timestamp_valid as u8,
                     timings.gpu_timestamp_hz,
-                    model.layout.label(),
-                    lfm25_q8_artifact(model.layout).name,
+                    "pair1088-x16-dp4a",
+                    LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT.name,
                 );
             }
             Ok(elapsed_ms)
@@ -1108,7 +1026,7 @@ fn prepare_lfm25_q8_runtime(
         return Ok(());
     }
     let dev = super::claimed_device().ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
-    let upload = upload_lfm25_q8_layout_kernel(model.layout)
+    let upload = upload_lfm25_q8_project_packed_kernel()
         .ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
     let state = lfm25_rcs_state_once(dev).ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
     let mapped = direct_rcs_forcewake(dev)
@@ -1150,9 +1068,9 @@ fn prepare_lfm25_q8_runtime(
         model.mapping_bytes,
         runtime.activation.gpu,
         runtime.output.gpu,
-        model.layout.label(),
-        lfm25_q8_artifact(model.layout).name,
-        lfm25_q8_artifact(model.layout).target,
+        "pair1088-x16-dp4a",
+        LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT.name,
+        LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT.target,
         dev.device_id,
         dev.revision_id,
     );
@@ -1169,7 +1087,7 @@ fn submit_lfm25_q8_project(
         return Err(Lfm25Q8ProjectError::CachePolicyUnavailable);
     }
     let dev = super::claimed_device().ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
-    let upload = upload_lfm25_q8_layout_kernel(model.layout)
+    let upload = upload_lfm25_q8_project_packed_kernel()
         .ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
     let state = lfm25_rcs_state_once(dev).ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
     if !runtime.ready || runtime.bound_model != Some(model) {

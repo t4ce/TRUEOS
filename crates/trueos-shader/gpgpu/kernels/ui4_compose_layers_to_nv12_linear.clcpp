@@ -82,8 +82,16 @@ static inline uint compose_logical_pixel(
             continue;
         }
 
-        uint sx = min(((uint)rel_x * src_width) / layer_width, src_width - 1u);
-        uint sy = min(((uint)rel_y * src_height) / layer_height, src_height - 1u);
+        // The normal UI4 case places a producer surface at its native size.
+        // Avoid sending every sampled pixel through the GPU's integer-divide
+        // sequence in that case; the result is exactly rel_x/rel_y. Keep the
+        // general nearest-neighbour path for deliberately scaled layers.
+        uint sx = src_width == layer_width
+            ? (uint)rel_x
+            : min(((uint)rel_x * src_width) / layer_width, src_width - 1u);
+        uint sy = src_height == layer_height
+            ? (uint)rel_y
+            : min(((uint)rel_y * src_height) / layer_height, src_height - 1u);
         __global const uint *src_rgba = (__global const uint *)src_gpu;
         uint src = src_rgba[sy * src_pitch_pixels + sx];
         if ((flags & UI4_LAYER_FLAG_BGRA) != 0u) {
@@ -105,6 +113,20 @@ static inline uchar rgb_to_luma(uint color)
 
 static inline uint nearest_source_coordinate(uint destination, uint source_size, uint destination_size)
 {
+    if (source_size == destination_size) {
+        return destination;
+    }
+    // LastAP's native 2560x1440 -> 1920x1080 downscale is exactly 4:3 in
+    // both dimensions. Reducing the centre-sample expression
+    //
+    //   floor(((2*d + 1) * 4*k) / (2 * 3*k))
+    //
+    // to floor((4*d + 2) / 3) preserves every selected source coordinate,
+    // while division by the compile-time constant is lowered to multiply and
+    // shift instead of the very costly variable 64-bit divide sequence.
+    if (source_size * 3u == destination_size * 4u) {
+        return (destination * 4u + 2u) / 3u;
+    }
     ulong numerator = ((ulong)destination * 2ul + 1ul) * (ulong)source_size;
     return (uint)(numerator / ((ulong)destination_size * 2ul));
 }

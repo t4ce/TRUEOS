@@ -512,6 +512,39 @@ enum BlueprintConsoleRoute {
     NetShellDirect,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum BlueprintTuiDemoEscape {
+    None,
+    Escape,
+    Csi,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum BlueprintTuiDemoStatus {
+    Ready,
+    Inspected,
+    Reset,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct BlueprintTuiDemo {
+    selected: u8,
+    escape: BlueprintTuiDemoEscape,
+    escape_idle_ticks: u8,
+    status: BlueprintTuiDemoStatus,
+}
+
+impl BlueprintTuiDemo {
+    const fn new() -> Self {
+        Self {
+            selected: 0,
+            escape: BlueprintTuiDemoEscape::None,
+            escape_idle_ticks: 0,
+            status: BlueprintTuiDemoStatus::Ready,
+        }
+    }
+}
+
 impl BlueprintConsoleRoute {
     const fn is_net_shell_direct(self) -> bool {
         matches!(self, Self::NetShellDirect)
@@ -539,6 +572,7 @@ pub(crate) struct BlueprintProcessContext {
     terminal_reentry_ready: bool,
     console_input: VecDeque<u8>,
     control_shell_line: AllocVec<u8>,
+    tui_demo: Option<BlueprintTuiDemo>,
     exit_reason: Option<AllocString>,
 }
 
@@ -2123,6 +2157,7 @@ pub fn stage_blueprint_launch(
         terminal_reentry_ready: false,
         console_input: VecDeque::new(),
         control_shell_line: AllocVec::new(),
+        tui_demo: None,
         exit_reason: None,
     };
     let console_target = process_context.console_target.clone();
@@ -2719,9 +2754,230 @@ fn blueprint_control_shell_write_text(vm_id: u8, text: &str) {
     }
 }
 
+fn blueprint_tui_demo_status_text(status: BlueprintTuiDemoStatus) -> &'static str {
+    match status {
+        BlueprintTuiDemoStatus::Ready => "Ready: move the cursor and activate a button.",
+        BlueprintTuiDemoStatus::Inspected => {
+            "Inspect: vmx-shell owns this preview, not the Blueprint."
+        }
+        BlueprintTuiDemoStatus::Reset => "Reset: the demo cursor and state were restored.",
+    }
+}
+
+fn blueprint_tui_demo_button(selected: u8, index: u8, label: &str) -> AllocString {
+    if selected == index {
+        alloc::format!("▶ [ {} ] ◀", label)
+    } else {
+        alloc::format!("  [ {} ]  ", label)
+    }
+}
+
+fn blueprint_console_render_tui_demo(vm_id: u8) {
+    let presentation = BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .and_then(|slot| {
+            let guard = slot.lock();
+            let context = guard.as_ref()?;
+            Some((context.console_target.clone(), context.tui_demo?))
+        });
+    let Some((Some(target), demo)) = presentation else {
+        return;
+    };
+
+    let buttons = alloc::format!(
+        "{}    {}    {}",
+        blueprint_tui_demo_button(demo.selected, 0, "Inspect"),
+        blueprint_tui_demo_button(demo.selected, 1, "Reset"),
+        blueprint_tui_demo_button(demo.selected, 2, "Exit"),
+    );
+    let lines = alloc::vec![
+        AllocString::from("╭─ vmx-shell · TUI demo ─────────────────────────────────────────╮"),
+        AllocString::from("│ Built-in preview; this panel is not supplied by the Blueprint. │"),
+        alloc::format!("│ {:<62} │", blueprint_tui_demo_status_text(demo.status)),
+        alloc::format!("│ {:<62} │", buttons),
+        alloc::format!(
+            "│ {:<62} │",
+            "←/→ or Tab: move · Enter: activate · Esc: return to vmx-shell"
+        ),
+        AllocString::from("╰────────────────────────────────────────────────────────────────╯"),
+    ];
+    crate::shell2::replace_matrix_target_transient_lines(&target, lines.as_slice());
+}
+
+fn blueprint_console_start_tui_demo(vm_id: u8) -> bool {
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return false;
+    };
+    {
+        let mut guard = slot.lock();
+        let Some(context) = guard.as_mut() else {
+            return false;
+        };
+        if !context.console_attached || context.console_target.is_none() {
+            return false;
+        }
+        context.tui_demo = Some(BlueprintTuiDemo::new());
+        context.control_shell_line.clear();
+    }
+    blueprint_console_render_tui_demo(vm_id);
+    true
+}
+
+fn blueprint_console_exit_tui_demo(vm_id: u8, message: &str) -> bool {
+    let target = BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .and_then(|slot| {
+            let mut guard = slot.lock();
+            let context = guard.as_mut()?;
+            context.tui_demo.take()?;
+            Some(context.console_target.clone())
+        });
+    let Some(target) = target else {
+        return false;
+    };
+    if let Some(target) = target.as_ref() {
+        crate::shell2::clear_matrix_target_transient_lines(target);
+    }
+    blueprint_control_shell_line(vm_id, message);
+    true
+}
+
+fn blueprint_console_tui_reentry_ready(vm_id: u8) -> bool {
+    BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .and_then(|slot| {
+            let guard = slot.lock();
+            guard
+                .as_ref()
+                .map(|context| context.console_attached && context.terminal_reentry_ready)
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn blueprint_console_submit_tui_demo_input(vm_id: u8, byte: u8) -> bool {
+    enum DemoAction {
+        None,
+        Render,
+        Exit,
+    }
+
+    // Preserve vmx-shell's global Ctrl-C stop behavior while the preview owns
+    // the remaining input stream.
+    if byte == 0x03 {
+        return false;
+    }
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return false;
+    };
+    let action = {
+        let mut guard = slot.lock();
+        let Some(context) = guard.as_mut() else {
+            return false;
+        };
+        let Some(demo) = context.tui_demo.as_mut() else {
+            return false;
+        };
+
+        match demo.escape {
+            BlueprintTuiDemoEscape::Escape => {
+                demo.escape_idle_ticks = 0;
+                if matches!(byte, b'[' | b'O') {
+                    demo.escape = BlueprintTuiDemoEscape::Csi;
+                    DemoAction::None
+                } else {
+                    DemoAction::Exit
+                }
+            }
+            BlueprintTuiDemoEscape::Csi => {
+                demo.escape = BlueprintTuiDemoEscape::None;
+                match byte {
+                    b'A' | b'D' | b'Z' => {
+                        demo.selected = demo.selected.checked_sub(1).unwrap_or(2);
+                        DemoAction::Render
+                    }
+                    b'B' | b'C' => {
+                        demo.selected = (demo.selected + 1) % 3;
+                        DemoAction::Render
+                    }
+                    _ => DemoAction::None,
+                }
+            }
+            BlueprintTuiDemoEscape::None => match byte {
+                0x1b => {
+                    demo.escape = BlueprintTuiDemoEscape::Escape;
+                    demo.escape_idle_ticks = 0;
+                    DemoAction::None
+                }
+                // TRUE OS maps the local Escape key to a byte that cannot be
+                // mistaken for the start of a terminal escape sequence.
+                crate::shell2::LOCAL_ESCAPE_KEY_BYTE | 0x11 | b'q' | b'Q' => DemoAction::Exit,
+                b'\t' | b'l' | b'j' => {
+                    demo.selected = (demo.selected + 1) % 3;
+                    DemoAction::Render
+                }
+                b'h' | b'k' => {
+                    demo.selected = demo.selected.checked_sub(1).unwrap_or(2);
+                    DemoAction::Render
+                }
+                b'\r' | b'\n' | b' ' => match demo.selected {
+                    0 => {
+                        demo.status = BlueprintTuiDemoStatus::Inspected;
+                        DemoAction::Render
+                    }
+                    1 => {
+                        *demo = BlueprintTuiDemo::new();
+                        demo.status = BlueprintTuiDemoStatus::Reset;
+                        DemoAction::Render
+                    }
+                    _ => DemoAction::Exit,
+                },
+                _ => DemoAction::None,
+            },
+        }
+    };
+
+    match action {
+        DemoAction::None => {}
+        DemoAction::Render => blueprint_console_render_tui_demo(vm_id),
+        DemoAction::Exit => {
+            let _ = blueprint_console_exit_tui_demo(vm_id, "vmx-shell: tui demo exited");
+        }
+    }
+    true
+}
+
+pub(crate) fn blueprint_console_tui_demo_idle(vm_id: u8) -> bool {
+    const ESCAPE_IDLE_TICKS: u8 = 5;
+
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return false;
+    };
+    let should_exit = {
+        let mut guard = slot.lock();
+        let Some(context) = guard.as_mut() else {
+            return false;
+        };
+        let Some(demo) = context.tui_demo.as_mut() else {
+            return false;
+        };
+        if demo.escape != BlueprintTuiDemoEscape::Escape {
+            return true;
+        }
+        demo.escape_idle_ticks = demo.escape_idle_ticks.saturating_add(1);
+        demo.escape_idle_ticks >= ESCAPE_IDLE_TICKS
+    };
+    if should_exit {
+        let _ = blueprint_console_exit_tui_demo(vm_id, "vmx-shell: tui demo exited");
+    }
+    true
+}
+
 fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
     let trimmed = raw.trim();
-    let cmd = trimmed.split_whitespace().next().unwrap_or("");
+    let mut words = trimmed.split_whitespace();
+    let cmd = words.next().unwrap_or("");
+    let argument = words.next();
+    let has_extra_arguments = words.next().is_some();
     match cmd {
         "" => {}
         "env" => match blueprint_process_env_text(vm_id) {
@@ -2746,7 +3002,8 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
         "help" | "?" => blueprint_control_shell_write_text(
             vm_id,
             "commands: tui env smp leave help stop pause snapshot preserve\n\
-             tui: re-enter this app's optional terminal UI\n\
+             tui: re-enter this Blueprint's terminal UI\n\
+             tui demo: launch the built-in three-button TUI preview\n\
              leave: return to the default Matrix slot\n\
              stop: stop without a checkpoint\n\
              pause: preserve-pause; resume by vmid from F2 pause\n\
@@ -2754,8 +3011,22 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
              preserve: preserve-stop; checkpoint first, then tear down",
         ),
         "tui" | "terminal" | "term" => {
-            if !blueprint_console_enter_tui(vm_id) {
-                blueprint_control_shell_line(vm_id, "vmx-shell: terminal UI is not available");
+            if argument == Some("demo") && !has_extra_arguments {
+                if !blueprint_console_start_tui_demo(vm_id) {
+                    blueprint_control_shell_line(vm_id, "vmx-shell: tui demo is not available");
+                }
+            } else if argument.is_some() {
+                blueprint_control_shell_line(vm_id, "usage: tui [demo]");
+            } else if !blueprint_console_tui_reentry_ready(vm_id) {
+                blueprint_control_shell_line(
+                    vm_id,
+                    "vmx-shell: this Blueprint has not implemented the TUI capability; run \"tui demo\" for the built-in terminal UI preview",
+                );
+            } else if !blueprint_console_enter_tui(vm_id) {
+                blueprint_control_shell_line(
+                    vm_id,
+                    "vmx-shell: the Blueprint terminal UI is temporarily unavailable",
+                );
             }
         }
         "stop" => match stop(vm_id) {
@@ -3012,6 +3283,11 @@ fn clear_blueprint_process_context(vm_id: u8) {
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
         let previous = slot.lock().take();
         if let Some(context) = previous {
+            if context.tui_demo.is_some()
+                && let Some(target) = context.console_target.as_ref()
+            {
+                crate::shell2::clear_matrix_target_transient_lines(target);
+            }
             if context.console_attached && context.console_route.is_net_shell_direct() {
                 crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
             }

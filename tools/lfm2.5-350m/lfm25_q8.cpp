@@ -731,9 +731,7 @@ class native_decoder {
           contract_(read_contract(contract_path)),
           sidecar_(sidecar_path),
           threads_(std::max(1U, threads)) {
-        const bool use_packed =
-            backend == native_projection_backend::cpu_packed_reference ||
-            backend == native_projection_backend::intel_igc_packed;
+        const bool use_packed = backend != native_projection_backend::cpu_avx2;
         std::vector<packed_q8_tensor_spec> packed_tensors;
         if (use_packed) {
             packed_tensors.reserve(contract_.size());
@@ -752,15 +750,11 @@ class native_decoder {
             packed_cpu_ = std::make_unique<packed_q8_model>(
                 pack_q8x16_model(native_.view(), packed_tensors));
         }
-        if (backend == native_projection_backend::intel_igc ||
-            backend == native_projection_backend::intel_igc_packed) {
+        if (backend == native_projection_backend::intel_igc_packed) {
             igpu_ = std::make_unique<intel_igc_projector>(
                 igc_spirv,
                 native_.view().data(),
                 native_.view().size(),
-                use_packed
-                    ? intel_igc_weight_layout::packed_q8x16_pair
-                    : intel_igc_weight_layout::native_q8_0,
                 packed_tensors);
         }
         for (std::size_t layer = 0; layer < kLayers; ++layer) {

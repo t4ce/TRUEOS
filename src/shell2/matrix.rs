@@ -606,6 +606,48 @@ pub(crate) fn record_transient_line_in_live_slot(
     true
 }
 
+pub(crate) fn replace_transient_lines_in_live_slot(
+    slot_id: &MatrixSlotId,
+    lifetime_generation: u64,
+    lines: &[AllocString],
+) -> bool {
+    let mut guard = state().lock();
+    let Some(idx) = guard.slots.iter().position(|slot| slot.id == *slot_id) else {
+        return false;
+    };
+    if guard.slots[idx].lifetime_generation != lifetime_generation {
+        return false;
+    }
+
+    guard.slots[idx].lines.retain(|line| !line.transient);
+    // Transcript entries are presented newest-first. Store the block bottom-up
+    // so callers can provide its rows in their natural visual order.
+    for line in lines.iter().rev() {
+        push_transient_line(&mut guard.slots[idx], line.as_str());
+    }
+    bump_slot_revision(&mut guard, idx);
+    true
+}
+
+pub(crate) fn clear_transient_lines_in_live_slot(
+    slot_id: &MatrixSlotId,
+    lifetime_generation: u64,
+) -> bool {
+    let mut guard = state().lock();
+    let Some(idx) = guard.slots.iter().position(|slot| slot.id == *slot_id) else {
+        return false;
+    };
+    if guard.slots[idx].lifetime_generation != lifetime_generation {
+        return false;
+    }
+    let previous_len = guard.slots[idx].lines.len();
+    guard.slots[idx].lines.retain(|line| !line.transient);
+    if guard.slots[idx].lines.len() != previous_len {
+        bump_slot_revision(&mut guard, idx);
+    }
+    true
+}
+
 pub(crate) fn record_user_input(output_mask: u8, text: &str) {
     crate::user_input_record::capture(output_mask, text);
     let mut guard = state().lock();

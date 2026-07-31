@@ -27,8 +27,7 @@ const FONT_INSTANCE_RGBA8_ADLS_GPU: u64 = 0x0D50_0000;
 const CPP_DEMO_RGBA8_ADLS_GPU: u64 = 0x0D60_0000;
 const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU: u64 = 0x0D70_0000;
 const PARTICLE_CRAFT_ADLS_GPU: u64 = 0x0D78_0000;
-const LFM25_Q8_PROJECT_ADLS_GPU: u64 = 0x0D80_0000;
-const LFM25_Q8_PROJECT_PACKED_ADLS_GPU: u64 = 0x0D82_0000;
+const LFM25_Q8_PROJECT_PACKED_ADLS_GPU: u64 = 0x0D80_0000;
 const _: () = {
     assert!(
         SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU + SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len() as u64
@@ -51,10 +50,7 @@ const _: () = {
             <= PARTICLE_CRAFT_ADLS_GPU
     );
     assert!(
-        PARTICLE_CRAFT_ADLS_GPU + PARTICLE_CRAFT_ADLS_BIN.len() as u64 <= LFM25_Q8_PROJECT_ADLS_GPU
-    );
-    assert!(
-        LFM25_Q8_PROJECT_ADLS_GPU + ((LFM25_Q8_PROJECT_ADLS_BIN.len() as u64 + 4095) & !4095)
+        PARTICLE_CRAFT_ADLS_GPU + PARTICLE_CRAFT_ADLS_BIN.len() as u64
             <= LFM25_Q8_PROJECT_PACKED_ADLS_GPU
     );
     assert!(
@@ -111,7 +107,6 @@ const PARTICLE_CRAFT_RENDER_RGBA8_TEXT_OFFSET_BYTES: u64 =
     PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const FONT_INSTANCE_RGBA8_TEXT_OFFSET_BYTES: u64 =
     FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
-const LFM25_Q8_PROJECT_TEXT_OFFSET_BYTES: u64 = LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const LFM25_Q8_PROJECT_PACKED_TEXT_OFFSET_BYTES: u64 =
     LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const SCENE_AABB_TEXT_OFFSET_BYTES: u64 = SCENE_AABB_ADLS_CPP_ABI_CONTRACT.entry_offset;
@@ -633,20 +628,10 @@ const LFM25_Q8_OUTPUT_SURFACE_STATE_RELATIVE_OFFSET_BYTES: usize = 0x100;
 const LFM25_Q8_PAYLOAD_RELATIVE_OFFSET_BYTES: usize = 0x200;
 const LFM25_Q8_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
 const LFM25_Q8_CROSS_THREAD_BYTES: usize =
-    LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes as usize;
+    LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes as usize;
 const LFM25_Q8_PER_THREAD_BYTES: usize =
-    LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes as usize;
+    LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes as usize;
 const LFM25_Q8_INDIRECT_BYTES: usize = LFM25_Q8_CROSS_THREAD_BYTES + LFM25_Q8_PER_THREAD_BYTES;
-const _: () = {
-    assert!(
-        LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes
-            == LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes
-    );
-    assert!(
-        LFM25_Q8_PROJECT_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes
-            == LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes
-    );
-};
 const LFM25_Q8_PRE_MARKER_SLOT: usize = 45;
 const LFM25_Q8_POST_MARKER_SLOT: usize = 44;
 const LFM25_Q8_GPU_START_TIMESTAMP_SLOT: usize = 46;
@@ -1062,10 +1047,18 @@ pub(crate) const UI4_COMPOSITOR_RCS_JOB_SLOTS: usize = 2;
 // disjoint from both persistent font resources and UI4 RGBA VAs.
 pub(crate) const UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE: u64 = 0x1000_0000;
 const UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
-// Keep the encoder destination outside both decoder source slots and the
-// complete UI-surface arena. The former base+one-slot address collided with
-// decoder slot 1 whenever local playback and RDP conversion overlapped.
-pub(crate) const UI4_STREAM_NV12_DESTINATION_GPU: u64 = crate::r::ui_surface::UI_SURFACE_GPU_LIMIT;
+// Keep the encoder destination outside decoder slots, the complete UI-surface
+// arena, and display's 0x2000_0000..0x2800_0000 compositor-alias arena. The
+// fused stream owns this PAT0 mapping for the lifetime of its NV12 allocation.
+pub(crate) const UI4_STREAM_NV12_DESTINATION_GPU: u64 = 0x2800_0000;
+// Display/GGTT producer addresses are not necessarily representable by this
+// context's 1-GiB PPGTT (slot 4 starts exactly at 0x4000_0000). Sample every
+// selected layer through a stream-private alias. Keep PAT0 and PAT3 aliases in
+// separate ranges so changing the selected layer set can never request a
+// forbidden cache-policy transition at a previously populated PTE.
+const UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE: u64 = 0x2900_0000;
+const UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE: u64 = 0x3100_0000;
+const UI4_STREAM_SOURCE_ALIAS_GPU_LIMIT: u64 = DIRECT_RCS_PPGTT_LIMIT_BYTES;
 const _: () = assert!(UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE.is_multiple_of(4096));
 const _: () = assert!(
     UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE
@@ -1075,8 +1068,12 @@ const _: () = assert!(
 const _: () = assert!(UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT);
 const _: () = assert!(
     UI4_STREAM_NV12_DESTINATION_GPU + UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES as u64
-        <= DIRECT_RCS_PPGTT_LIMIT_BYTES
+        <= UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE
 );
+const _: () = assert!(UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE.is_multiple_of(4096));
+const _: () = assert!(UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE.is_multiple_of(4096));
+const _: () = assert!(UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE < UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE);
+const _: () = assert!(UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE < UI4_STREAM_SOURCE_ALIAS_GPU_LIMIT);
 const _: () = assert!(
     UI4_COMPOSITOR_RCS_GPU_VA_RESULT_BASE
         + (UI4_COMPOSITOR_RCS_JOB_SLOTS * DIRECT_RCS_RESULT_BYTES) as u64

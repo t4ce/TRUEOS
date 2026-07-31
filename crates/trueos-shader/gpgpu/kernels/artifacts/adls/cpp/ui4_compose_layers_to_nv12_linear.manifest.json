@@ -5,10 +5,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "db77147d2ef385494b2cc0f16b1f7308f900e93eff906f49caabc7b36cdbc941",
-      "size_bytes": 59176,
+      "sha256": "172b3245296e70a58b7e92b025d0b057a516d51b859886490092c06242403ed9",
+      "size_bytes": 66440,
       "type": "relocatable",
-      "ze_info_section_offset": 53520,
+      "ze_info_section_offset": 60784,
       "ze_info_section_size": 4804
     },
     "kernels": [
@@ -262,13 +262,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 24328,
+          "entry_size": 27424,
           "section_alignment": 0,
           "section_name": ".text.ui4_compose_layers_to_nv12_linear",
           "section_offset": 64,
-          "section_size": 24512,
-          "sha256": "e29ef7f7a6d118e83c92139fe79cf54ea6b10cff6152c54ff9b25a1dc1b5f77b",
-          "symbol_size": 24328,
+          "section_size": 27584,
+          "sha256": "8c7d6f247836969390b92240a5838f011fec0c6f6ae6dcb6dadebac68d1cc7a3",
+          "symbol_size": 27424,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -284,10 +284,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 24648,
-      "embedded_section_size": 28796,
-      "sha256": "32ea569b25dfdc91abf966ea2515cfafc549cbac8b40d40f3216e9bfb7a520bd",
-      "size_bytes": 28796
+      "embedded_section_offset": 27720,
+      "embedded_section_size": 32992,
+      "sha256": "dfc8109eb442bd12986abf0d0588b2dd99f1d64e0321a3f9d27d13a3c9e7810f",
+      "size_bytes": 32992
     }
   },
   "provenance": {
@@ -486,8 +486,8 @@
     "inputs": [
       {
         "path": "crates/trueos-shader/gpgpu/kernels/ui4_compose_layers_to_nv12_linear.clcpp",
-        "sha256": "9803bd5bce0a0e3dcacf7a8a3c3cc11e2be418862cacdbb9dbb67da725fd84c2",
-        "size_bytes": 6787
+        "sha256": "767f92125b02892d8ad0fc61cd113cea71ef92b6da5c88ca6c5dcc63fbefbdb6",
+        "size_bytes": 7829
       }
     ],
     "language": "C++ for OpenCL",
