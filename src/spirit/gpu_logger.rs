@@ -17,6 +17,9 @@ use crate::intel::gpgpu::{GpgpuRect, GpgpuSolidRect};
 const MIN_TTL_MS: u64 = 1_000;
 const MAX_TTL_MS: u64 = 300_000;
 const PANEL_DIM: u32 = 256;
+const METRIC_ROW_Y: [u32; 10] = [58, 72, 86, 100, 114, 128, 142, 156, 170, 184];
+const BAR_X: u32 = 29;
+const BAR_WIDTH: u32 = 211;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpuLoggerSource {
@@ -371,13 +374,57 @@ impl RectSink for BgraSink<'_> {
     }
 }
 
-/// Production description of the complete opaque panel.  The first rectangle
-/// clears all 256x256 pixels; every later rectangle is decoration, text, or a
-/// meter.  Callers that retain storage can use [`append_gpu_rects`] instead.
-pub(crate) fn build_gpu_rects(snapshot: ActiveSnapshot) -> Vec<GpgpuSolidRect> {
+/// Ordered GPU submission layers for the complete opaque panel.
+///
+/// Rectangles inside one fill-worklist dispatch execute as unordered
+/// workgroups.  These boundaries keep every intentional overlap in a later
+/// dispatch: clear first, mutually-disjoint opaque bases second, and
+/// foreground last.  Foreground rectangles are disjoint unless an overlap has
+/// the same packed color (for example, two ends of the border rule).
+pub(crate) struct GpuLoggerRectLayers {
+    pub(crate) rects: Vec<GpgpuSolidRect>,
+    pub(crate) clear_end: usize,
+    pub(crate) base_end: usize,
+}
+
+impl GpuLoggerRectLayers {
+    pub(crate) fn clear(&self) -> &[GpgpuSolidRect] {
+        &self.rects[..self.clear_end]
+    }
+
+    pub(crate) fn bases(&self) -> &[GpgpuSolidRect] {
+        &self.rects[self.clear_end..self.base_end]
+    }
+
+    pub(crate) fn foreground(&self) -> &[GpgpuSolidRect] {
+        &self.rects[self.base_end..]
+    }
+}
+
+pub(crate) fn build_gpu_rect_layers(snapshot: ActiveSnapshot) -> GpuLoggerRectLayers {
     let mut rects = Vec::with_capacity(768);
-    append_gpu_rects(&mut rects, snapshot);
-    rects
+    let clear_end;
+    let base_end;
+    {
+        let mut sink = GpuRectSink { rects: &mut rects };
+        draw_panel_clear(&mut sink);
+        clear_end = sink.rects.len();
+        draw_panel_bases(&mut sink);
+        base_end = sink.rects.len();
+        draw_panel_foreground(&mut sink, snapshot);
+    }
+    GpuLoggerRectLayers {
+        rects,
+        clear_end,
+        base_end,
+    }
+}
+
+/// Flat compatibility view of the panel.  GPU producers must submit it using
+/// the boundaries returned by [`build_gpu_rect_layers`], not as one unordered
+/// worklist.
+pub(crate) fn build_gpu_rects(snapshot: ActiveSnapshot) -> Vec<GpgpuSolidRect> {
+    build_gpu_rect_layers(snapshot).rects
 }
 
 pub(crate) fn append_gpu_rects(rects: &mut Vec<GpgpuSolidRect>, snapshot: ActiveSnapshot) {
@@ -399,13 +446,35 @@ pub(crate) fn render_bgra(
 }
 
 fn draw_panel(sink: &mut impl RectSink, snapshot: ActiveSnapshot) {
-    let sample = snapshot.sample;
+    draw_panel_clear(sink);
+    draw_panel_bases(sink);
+    draw_panel_foreground(sink, snapshot);
+}
+
+fn draw_panel_clear(sink: &mut impl RectSink) {
     sink.rect(0, 0, PANEL_DIM, PANEL_DIM, BACKGROUND);
+}
+
+fn draw_panel_bases(sink: &mut impl RectSink) {
+    // These opaque rectangles are mutually disjoint, allowing each to occupy
+    // the same unordered worklist submission safely.
+    sink.rect(0, 0, 4, PANEL_DIM, CYAN);
+    sink.rect(8, 8, 240, 42, PANEL);
+    for (index, y) in METRIC_ROW_Y.into_iter().enumerate() {
+        if index & 1 == 0 {
+            sink.rect(8, y - 3, 240, 12, PANEL_ALT);
+        }
+    }
+    draw_meter_base(sink, 210);
+    draw_meter_base(sink, 225);
+    draw_meter_base(sink, 240);
+}
+
+fn draw_panel_foreground(sink: &mut impl RectSink, snapshot: ActiveSnapshot) {
+    let sample = snapshot.sample;
 
     // A restrained instrument-panel frame.  Everything is opaque so cursor
     // blending cannot leak the normal Lilly sprite through logger mode.
-    sink.rect(0, 0, 4, PANEL_DIM, CYAN);
-    sink.rect(8, 8, 240, 42, PANEL);
     sink.rect(8, 8, 240, 1, RULE);
     sink.rect(8, 49, 240, 1, RULE);
     sink.rect(8, 8, 1, 42, RULE);
@@ -424,26 +493,20 @@ fn draw_panel(sink: &mut impl RectSink, snapshot: ActiveSnapshot) {
     let health = health_color(sample);
     sink.rect(238, 16, 4, 10, health);
 
-    const ROW_Y: [u32; 10] = [58, 72, 86, 100, 114, 128, 142, 156, 170, 184];
-    for (index, y) in ROW_Y.into_iter().enumerate() {
-        if index & 1 == 0 {
-            sink.rect(8, y - 3, 240, 12, PANEL_ALT);
-        }
-    }
-    draw_metric(sink, ROW_Y[0], b"FRAME", sample.frame_index);
-    draw_metric(sink, ROW_Y[1], b"FRAME US", sample.frame_us);
-    draw_metric(sink, ROW_Y[2], b"GEOM US", sample.geometry_us);
-    draw_metric(sink, ROW_Y[3], b"PREP US", sample.prepare_us);
-    draw_metric(sink, ROW_Y[4], b"WAIT US", sample.retire_wait_us);
-    draw_metric(sink, ROW_Y[5], b"POLL", sample.poll_iters);
-    draw_metric(sink, ROW_Y[6], b"OBJECTS", sample.objects);
-    draw_metric(sink, ROW_Y[7], b"DRAWS", sample.draws);
-    draw_metric(sink, ROW_Y[8], b"TRIANGLES", sample.triangles);
-    draw_text(sink, 14, ROW_Y[9], b"RETRY B/I", 1, MUTED);
+    draw_metric(sink, METRIC_ROW_Y[0], b"FRAME", sample.frame_index);
+    draw_metric(sink, METRIC_ROW_Y[1], b"FRAME US", sample.frame_us);
+    draw_metric(sink, METRIC_ROW_Y[2], b"GEOM US", sample.geometry_us);
+    draw_metric(sink, METRIC_ROW_Y[3], b"PREP US", sample.prepare_us);
+    draw_metric(sink, METRIC_ROW_Y[4], b"WAIT US", sample.retire_wait_us);
+    draw_metric(sink, METRIC_ROW_Y[5], b"POLL", sample.poll_iters);
+    draw_metric(sink, METRIC_ROW_Y[6], b"OBJECTS", sample.objects);
+    draw_metric(sink, METRIC_ROW_Y[7], b"DRAWS", sample.draws);
+    draw_metric(sink, METRIC_ROW_Y[8], b"TRIANGLES", sample.triangles);
+    draw_text(sink, 14, METRIC_ROW_Y[9], b"RETRY B/I", 1, MUTED);
     draw_pair_right(
         sink,
         240,
-        ROW_Y[9],
+        METRIC_ROW_Y[9],
         sample.busy_retries,
         sample.incomplete_retries,
         if sample.busy_retries == 0 && sample.incomplete_retries == 0 {
@@ -453,9 +516,9 @@ fn draw_panel(sink: &mut impl RectSink, snapshot: ActiveSnapshot) {
         },
     );
 
-    draw_meter(sink, 210, b"F", sample.frame_us, 33_334, frame_color(sample.frame_us));
-    draw_meter(sink, 225, b"G", sample.geometry_us, sample.frame_us.max(1), CYAN);
-    draw_meter(
+    draw_meter_foreground(sink, 210, b"F", sample.frame_us, 33_334, frame_color(sample.frame_us));
+    draw_meter_foreground(sink, 225, b"G", sample.geometry_us, sample.frame_us.max(1), CYAN);
+    draw_meter_foreground(
         sink,
         240,
         b"W",
@@ -474,7 +537,11 @@ fn draw_metric(sink: &mut impl RectSink, y: u32, label: &[u8], value: u64) {
     draw_u64_right(sink, 240, y, value, 1, WHITE);
 }
 
-fn draw_meter(
+fn draw_meter_base(sink: &mut impl RectSink, y: u32) {
+    sink.rect(BAR_X, y, BAR_WIDTH, 5, PANEL_ALT);
+}
+
+fn draw_meter_foreground(
     sink: &mut impl RectSink,
     y: u32,
     label: &[u8],
@@ -482,11 +549,7 @@ fn draw_meter(
     maximum: u64,
     color: Color,
 ) {
-    const BAR_X: u32 = 29;
-    const BAR_WIDTH: u32 = 211;
     draw_text(sink, 14, y, label, 1, MUTED);
-    sink.rect(BAR_X, y, BAR_WIDTH, 5, PANEL_ALT);
-    sink.rect(BAR_X, y, BAR_WIDTH, 1, RULE);
     let fill = if maximum == 0 {
         0
     } else {
@@ -784,5 +847,42 @@ mod tests {
             rects[0].color_rgba.to_le_bytes(),
             [BACKGROUND.b, BACKGROUND.g, BACKGROUND.r, 0xFF]
         );
+    }
+
+    fn overlaps(left: GpgpuRect, right: GpgpuRect) -> bool {
+        let left_right = i64::from(left.x) + i64::from(left.width);
+        let left_bottom = i64::from(left.y) + i64::from(left.height);
+        let right_right = i64::from(right.x) + i64::from(right.width);
+        let right_bottom = i64::from(right.y) + i64::from(right.height);
+        i64::from(left.x) < right_right
+            && i64::from(right.x) < left_right
+            && i64::from(left.y) < right_bottom
+            && i64::from(right.y) < left_bottom
+    }
+
+    #[test]
+    fn gpu_layers_isolate_every_order_dependent_overlap() {
+        let layers = build_gpu_rect_layers(ActiveSnapshot {
+            source: GpuLoggerSource::Helio,
+            generation: 1,
+            remaining_ms: 1_000,
+            sample: sample(),
+        });
+        assert_eq!(layers.clear().len(), 1);
+        assert!(!layers.bases().is_empty());
+        assert!(!layers.foreground().is_empty());
+
+        for (index, left) in layers.bases().iter().enumerate() {
+            for right in &layers.bases()[index + 1..] {
+                assert!(!overlaps(left.rect, right.rect));
+            }
+        }
+        for (index, left) in layers.foreground().iter().enumerate() {
+            for right in &layers.foreground()[index + 1..] {
+                if overlaps(left.rect, right.rect) {
+                    assert_eq!(left.color_rgba, right.color_rgba);
+                }
+            }
+        }
     }
 }

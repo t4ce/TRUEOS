@@ -293,8 +293,32 @@ struct GameSurface {
     height: u32,
 }
 
-fn create_surface() -> Result<GameSurface, GameError> {
+#[derive(Copy, Clone)]
+struct PendingGameResize {
+    frame: crate::ui4::FrameHandle,
+    width: u32,
+    height: u32,
+}
+
+fn create_game_frame(width: u32, height: u32) -> Result<crate::ui4::FrameHandle, GameError> {
+    let (max_width, max_height) = crate::intel::render::resident_scene_target_dimensions();
+    if width == 0 || height == 0 || width as usize > max_width || height as usize > max_height {
+        return Err(GameError::InvalidFrame);
+    }
     let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
+    Ok(crate::ui4::create_frame(crate::ui4::FrameSpec {
+        output,
+        content: crate::ui4::FrameContent::RenderScene3d,
+        cadence: crate::ui4::FrameCadence::Streaming,
+        buffering: crate::ui4::FrameBuffering::Triple,
+        format: crate::ui4::ScanoutFormat::Rgba8888Premultiplied,
+        width,
+        height,
+        base_color: Some(crate::ui4::PremultipliedRgba8::from_straight_rgba(0, 0, 0, u8::MAX)),
+    })?)
+}
+
+fn create_surface() -> Result<GameSurface, GameError> {
     let (render_width, render_height) = crate::intel::render::resident_scene_target_dimensions();
     let (scanout_width, scanout_height) = crate::intel::active_scanout_dimensions()
         .unwrap_or((crate::ui4::DEFAULT_FRAME_WIDTH, crate::ui4::DEFAULT_FRAME_HEIGHT));
@@ -307,16 +331,7 @@ fn create_surface() -> Result<GameSurface, GameError> {
     if width == 0 || height == 0 {
         return Err(GameError::InvalidFrame);
     }
-    let frame = crate::ui4::create_frame(crate::ui4::FrameSpec {
-        output,
-        content: crate::ui4::FrameContent::RenderScene3d,
-        cadence: crate::ui4::FrameCadence::Streaming,
-        buffering: crate::ui4::FrameBuffering::Triple,
-        format: crate::ui4::ScanoutFormat::Rgba8888Premultiplied,
-        width,
-        height,
-        base_color: Some(crate::ui4::PremultipliedRgba8::from_straight_rgba(0, 0, 0, u8::MAX)),
-    })?;
+    let frame = create_game_frame(width, height)?;
     let session = match crate::ui4::begin_window_session(OWNER) {
         Ok(session) => session,
         Err(error) => {
@@ -331,6 +346,54 @@ fn create_surface() -> Result<GameSurface, GameError> {
         width,
         height,
     })
+}
+
+fn desired_resize(surface: &GameSurface) -> Option<(u32, u32)> {
+    let window = surface.window?;
+    let placement = crate::ui4::window_placement(OWNER, window).ok()?;
+    ((placement.width, placement.height) != (surface.width, surface.height))
+        .then_some((placement.width, placement.height))
+}
+
+fn prepare_resize(
+    surface: &GameSurface,
+    width: u32,
+    height: u32,
+) -> Result<PendingGameResize, GameError> {
+    surface.window.ok_or(GameError::InvalidFrame)?;
+    Ok(PendingGameResize {
+        frame: create_game_frame(width, height)?,
+        width,
+        height,
+    })
+}
+
+/// Make an already GPU-authored replacement visible in one broker transition.
+/// The old frame remains attached if the Ready publication fails.
+fn commit_resize(
+    surface: &mut GameSurface,
+    replacement: PendingGameResize,
+) -> Result<crate::ui4::FrameHandle, GameError> {
+    let window = surface.window.ok_or(GameError::InvalidFrame)?;
+    let previous = surface.frame;
+    crate::ui4::replace_window_frame(OWNER, window, replacement.frame)?;
+    if let Err(error) =
+        crate::ui4::publish_window_frame(OWNER, window, crate::ui4::DamageRect::FULL)
+    {
+        let _ = crate::ui4::replace_window_frame(OWNER, window, previous);
+        let _ = crate::ui4::publish_window_frame(OWNER, window, crate::ui4::DamageRect::FULL);
+        return Err(error.into());
+    }
+    surface.frame = replacement.frame;
+    surface.width = replacement.width;
+    surface.height = replacement.height;
+    Ok(previous)
+}
+
+fn retire_frames(frames: &mut Vec<crate::ui4::FrameHandle>) {
+    frames.retain(|frame| {
+        matches!(crate::ui4::destroy_frame(*frame), Err(crate::ui4::FramePoolError::Busy))
+    });
 }
 
 fn make_resident_scene(
@@ -353,6 +416,24 @@ fn make_resident_scene(
         return Err(GameError::Render("helio-empty-scene"));
     }
     Ok(resident)
+}
+
+fn update_resident_scene(
+    resident: &[ResidentTriangle],
+    scene: &trueos_helio_runtime::Scene,
+) -> Result<(), GameError> {
+    if resident.len() != scene.triangles.len() {
+        return Err(GameError::Render("helio-resize-triangle-count"));
+    }
+    for (resident, triangle) in resident.iter().zip(&scene.triangles) {
+        crate::intel::render::update_resident_triangle_mesh(
+            &resident.mesh,
+            &triangle.vertices,
+            &[0, 1, 2],
+        )
+        .map_err(GameError::Render)?;
+    }
+    Ok(())
 }
 
 fn release_resident_scene(resident: Vec<ResidentTriangle>) {
@@ -401,8 +482,10 @@ fn destroy_unpublished_surface(surface: GameSurface) {
     let _ = crate::ui4::destroy_frame(surface.frame);
 }
 
-async fn render_publish(
-    surface: &mut GameSurface,
+async fn render_frame(
+    frame: crate::ui4::FrameHandle,
+    width: u32,
+    height: u32,
     resident: &[ResidentTriangle],
     clear_rgba: [u8; 4],
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, GameError> {
@@ -413,16 +496,16 @@ async fn render_publish(
     let _gpu_lane = crate::r::font_kernel_service::acquire_gpu_lane(
         crate::r::font_kernel_service::FontKernelConsumer::new(
             crate::r::font_kernel_service::FontKernelConsumerPath::Helio,
-            surface.frame.raw(),
+            frame.raw(),
         ),
     )
     .await;
-    let lease = crate::ui4::acquire_frame_buffer(surface.frame)?;
+    let lease = crate::ui4::acquire_frame_buffer(frame)?;
     let destination = match crate::ui4::gpgpu_rgba_surface(lease) {
         Ok(destination)
-            if destination.width == surface.width
-                && destination.height == surface.height
-                && destination.pitch_bytes >= surface.width.saturating_mul(4) =>
+            if destination.width == width
+                && destination.height == height
+                && destination.pitch_bytes >= width.saturating_mul(4) =>
         {
             destination
         }
@@ -473,6 +556,10 @@ async fn render_publish(
         return Err(error.into());
     }
 
+    Ok(result)
+}
+
+fn publish_surface_window(surface: &mut GameSurface) -> Result<(), GameError> {
     let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
     let (scanout_width, scanout_height) =
         crate::intel::active_scanout_dimensions().unwrap_or((surface.width, surface.height));
@@ -497,6 +584,17 @@ async fn render_publish(
     }
     let window = surface.window.ok_or(GameError::InvalidFrame)?;
     crate::ui4::publish_window_frame(OWNER, window, crate::ui4::DamageRect::FULL)?;
+    Ok(())
+}
+
+async fn render_publish(
+    surface: &mut GameSurface,
+    resident: &[ResidentTriangle],
+    clear_rgba: [u8; 4],
+) -> Result<crate::intel::render::ResidentSceneFrameResult, GameError> {
+    let result =
+        render_frame(surface.frame, surface.width, surface.height, resident, clear_rgba).await?;
+    publish_surface_window(surface)?;
     Ok(result)
 }
 

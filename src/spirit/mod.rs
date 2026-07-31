@@ -682,19 +682,28 @@ fn submit_gpu_logger_frame(
             return Err(error);
         }
     };
-    let rects = gpu_logger::build_gpu_rects(snapshot);
-    let filled =
-        crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(target, rects.as_slice());
-    match filled.outcome {
-        GpgpuSubmissionOutcome::Complete => {}
-        GpgpuSubmissionOutcome::Unavailable => {
-            cancel_pending(lease);
-            return submit_gpu_logger_cpu_fallback(id, snapshot);
-        }
-        GpgpuSubmissionOutcome::SubmittedIncomplete => {
-            // The hidden member cannot be reused while a late GPU writer might
-            // still target it. Preserve the currently visible Spirit frame.
-            return Err(SpiritSubmitError::GpuSubmissionFailed);
+    let layers = gpu_logger::build_gpu_rect_layers(snapshot);
+    let mut gpu_submits = 0usize;
+    let mut gpu_submit_ms = 0u64;
+    // Workgroups inside one fill worklist are unordered. Keep intentional
+    // overlaps in distinct, fully-retired passes: clear -> disjoint bases ->
+    // foreground. This prevents the clear or row cards racing the text.
+    for layer in [layers.clear(), layers.bases(), layers.foreground()] {
+        let filled = crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(target, layer);
+        match filled.outcome {
+            GpgpuSubmissionOutcome::Complete => {
+                gpu_submits = gpu_submits.saturating_add(filled.stats.submits);
+                gpu_submit_ms = gpu_submit_ms.saturating_add(filled.stats.submit_ms);
+            }
+            GpgpuSubmissionOutcome::Unavailable => {
+                cancel_pending(lease);
+                return submit_gpu_logger_cpu_fallback(id, snapshot);
+            }
+            GpgpuSubmissionOutcome::SubmittedIncomplete => {
+                // The hidden member cannot be reused while a late GPU writer
+                // might still target it. Preserve the current visible frame.
+                return Err(SpiritSubmitError::GpuSubmissionFailed);
+            }
         }
     }
     let finalized = crate::intel::gpgpu::release_rgba8_surface_for_scanout(target);
@@ -717,9 +726,9 @@ fn submit_gpu_logger_frame(
     Ok(GpuLoggerFrameSubmission {
         fence: lease.fence,
         path: GpuLoggerFramePath::GpuWorklist,
-        rects: rects.len(),
-        gpu_submits: filled.stats.submits.saturating_add(1),
-        gpu_submit_ms: filled.stats.submit_ms.saturating_add(finalized.submit_ms),
+        rects: layers.rects.len(),
+        gpu_submits: gpu_submits.saturating_add(1),
+        gpu_submit_ms: gpu_submit_ms.saturating_add(finalized.submit_ms),
         release_sequence,
     })
 }
