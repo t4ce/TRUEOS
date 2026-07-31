@@ -11,7 +11,7 @@ pub const PHASE_COUNT: usize = 2;
 pub const SECTION_ENTRY_BYTES: usize = 32;
 pub const SECTION_DIRECTORY_OFFSET: usize = 160;
 
-pub const PAYLOAD_SHA256_OFFSET: usize = 64;
+pub const ARTIFACT_SHA256_OFFSET: usize = 64;
 pub const MODEL_SHA256_OFFSET: usize = 96;
 pub const VOICES_SHA256_OFFSET: usize = 128;
 pub const SHA256_BYTES: usize = 32;
@@ -288,12 +288,27 @@ pub(crate) fn checked_align_up(value: u64, alignment: u32) -> Option<u64> {
     value.checked_add(mask).map(|aligned| aligned & !mask)
 }
 
-/// Compute the v1 payload hash. The caller passes only bytes after the fixed
-/// [`HEADER_BYTES`] header.
-pub fn payload_sha256(payload: &[u8]) -> [u8; 32] {
+/// Compute SHA-256 without allocation or external dependencies.
+pub fn sha256(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(payload);
+    hasher.update(bytes);
     hasher.finish()
+}
+
+/// Compute the v1 artifact seal.
+///
+/// Every byte is authenticated except the seal field itself, which is treated
+/// as 32 zero bytes. This binds the provenance hashes and section directory as
+/// well as the record payload.
+pub fn artifact_sha256(artifact: &[u8]) -> Option<[u8; 32]> {
+    if artifact.len() < ARTIFACT_SHA256_OFFSET + SHA256_BYTES {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(&artifact[..ARTIFACT_SHA256_OFFSET]);
+    hasher.update(&[0; SHA256_BYTES]);
+    hasher.update(&artifact[ARTIFACT_SHA256_OFFSET + SHA256_BYTES..]);
+    Some(hasher.finish())
 }
 
 struct Sha256 {

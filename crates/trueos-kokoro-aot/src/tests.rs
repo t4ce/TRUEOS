@@ -4,8 +4,8 @@ use crate::*;
 
 const MODEL_HASH: &str = "239d9f4df112a375bea52146570b97eb5c5af727c007761ee121ed123fd1ab29";
 const VOICES_HASH: &str = "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d";
-const FIXTURE_PAYLOAD_HASH: &str =
-    "1cd84b54299c30f9ae299b51bb4e3e5c4a756b5be599a61554d56a3488f25034";
+const FIXTURE_ARTIFACT_HASH: &str =
+    "4f7d538e8cbf7d04dab287f4835358b4967b80ccde30e643af0ad4b65ad15c50";
 
 struct Parts {
     tensors: Vec<[u8; TENSOR_RECORD_BYTES]>,
@@ -288,8 +288,9 @@ fn hex32(hex: &str) -> [u8; 32] {
 }
 
 fn reseal(artifact: &mut [u8]) {
-    let hash = payload_sha256(&artifact[HEADER_BYTES..]);
-    artifact[PAYLOAD_SHA256_OFFSET..PAYLOAD_SHA256_OFFSET + 32].copy_from_slice(&hash);
+    artifact[ARTIFACT_SHA256_OFFSET..ARTIFACT_SHA256_OFFSET + 32].fill(0);
+    let hash = artifact_sha256(artifact).unwrap();
+    artifact[ARTIFACT_SHA256_OFFSET..ARTIFACT_SHA256_OFFSET + 32].copy_from_slice(&hash);
 }
 
 fn section_offset(artifact: &[u8], section: usize) -> usize {
@@ -319,15 +320,15 @@ fn phase_offset(artifact: &[u8], phase: usize) -> usize {
 #[test]
 fn sha256_matches_standard_vectors() {
     assert_eq!(
-        payload_sha256(b""),
+        sha256(b""),
         hex32("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
     );
     assert_eq!(
-        payload_sha256(b"abc"),
+        sha256(b"abc"),
         hex32("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
     );
     assert_eq!(
-        payload_sha256(&[0x5a; 1_000]),
+        sha256(&[0x5a; 1_000]),
         hex32("8fe15844cfeedd35c121a9af71f312c74d6418e99239463f7b7b93313a1b8f7b")
     );
 }
@@ -337,8 +338,8 @@ fn python_fixture_wire_contract_parses_and_resolves() {
     let artifact = fixture();
     assert_eq!(artifact.len(), 1_651);
     assert_eq!(
-        &artifact[PAYLOAD_SHA256_OFFSET..PAYLOAD_SHA256_OFFSET + 32],
-        &hex32(FIXTURE_PAYLOAD_HASH)
+        &artifact[ARTIFACT_SHA256_OFFSET..ARTIFACT_SHA256_OFFSET + 32],
+        &hex32(FIXTURE_ARTIFACT_HASH)
     );
 
     let program = Program::parse(&artifact).unwrap();
@@ -371,11 +372,11 @@ fn python_fixture_wire_contract_parses_and_resolves() {
 #[test]
 fn pinned_hashes_and_resource_limits_fail_closed() {
     let artifact = fixture();
-    let payload = hex32(FIXTURE_PAYLOAD_HASH);
+    let artifact_hash = hex32(FIXTURE_ARTIFACT_HASH);
     let model = hex32(MODEL_HASH);
     let voices = hex32(VOICES_HASH);
     let options = ParseOptions {
-        expected_payload_sha256: Some(&payload),
+        expected_artifact_sha256: Some(&artifact_hash),
         expected_model_sha256: Some(&model),
         expected_voices_sha256: Some(&voices),
         max_tensors: 7,
@@ -392,12 +393,12 @@ fn pinned_hashes_and_resource_limits_fail_closed() {
         Program::parse_with_options(
             &artifact,
             ParseOptions {
-                expected_payload_sha256: Some(&wrong),
+                expected_artifact_sha256: Some(&wrong),
                 ..ParseOptions::permissive()
             }
         )
         .unwrap_err(),
-        ParseError::ExpectedPayloadHashMismatch
+        ParseError::ExpectedArtifactHashMismatch
     );
     assert_eq!(
         Program::parse_with_options(
@@ -451,12 +452,12 @@ fn header_hash_and_directory_corruption_are_rejected() {
     assert_eq!(Program::parse(&artifact).unwrap_err(), ParseError::HeaderReservedNonZero);
 
     let mut artifact = original.clone();
-    artifact[PAYLOAD_SHA256_OFFSET..PAYLOAD_SHA256_OFFSET + 32].fill(0);
+    artifact[ARTIFACT_SHA256_OFFSET..ARTIFACT_SHA256_OFFSET + 32].fill(0);
     assert_eq!(Program::parse(&artifact).unwrap_err(), ParseError::HashMissing);
 
     let mut artifact = original.clone();
     *artifact.last_mut().unwrap() ^= 1;
-    assert_eq!(Program::parse(&artifact).unwrap_err(), ParseError::PayloadHashMismatch);
+    assert_eq!(Program::parse(&artifact).unwrap_err(), ParseError::ArtifactHashMismatch);
 
     let mut artifact = original.clone();
     put_u64(&mut artifact, SECTION_DIRECTORY_OFFSET + 16, u64::MAX);

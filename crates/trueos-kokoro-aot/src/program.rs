@@ -2,11 +2,11 @@ use core::convert::TryFrom;
 
 use crate::format::{
     ARENA_ALIGNMENT, BINDING_RECORD_BYTES, HEADER_BYTES, LITTLE_ENDIAN_TAG, MAGIC,
-    MODEL_SHA256_OFFSET, OP_FLAG_IN_PLACE, OP_RECORD_BYTES, OpCode, PAYLOAD_SHA256_OFFSET,
+    ARTIFACT_SHA256_OFFSET, MODEL_SHA256_OFFSET, OP_FLAG_IN_PLACE, OP_RECORD_BYTES, OpCode,
     PHASE_COUNT, PHASE_FLAG_RUNTIME_SIZED, PHASE_RECORD_BYTES, SECTION_COUNT,
     SECTION_DIRECTORY_OFFSET, SECTION_ENTRY_BYTES, SHA256_BYTES, SLOT_RECORD_BYTES, SectionKind,
-    TENSOR_RECORD_BYTES, UNRESOLVED_SLOT_BASE, VERSION, VOICES_SHA256_OFFSET, checked_align_up,
-    hash_eq, is_zero, payload_sha256, read_i64, read_u16, read_u32, read_u64,
+    TENSOR_RECORD_BYTES, UNRESOLVED_SLOT_BASE, VERSION, VOICES_SHA256_OFFSET, artifact_sha256,
+    checked_align_up, hash_eq, is_zero, read_i64, read_u16, read_u32, read_u64,
 };
 use crate::tensor::{
     DType, Phase, StorageKind, TensorDesc, TensorError, TensorFlags, access_span,
@@ -15,7 +15,7 @@ use crate::tensor::{
 
 #[derive(Clone, Copy, Debug)]
 pub struct ParseOptions<'a> {
-    pub expected_payload_sha256: Option<&'a [u8; 32]>,
+    pub expected_artifact_sha256: Option<&'a [u8; 32]>,
     pub expected_model_sha256: Option<&'a [u8; 32]>,
     pub expected_voices_sha256: Option<&'a [u8; 32]>,
     pub max_tensors: u32,
@@ -29,7 +29,7 @@ pub struct ParseOptions<'a> {
 impl ParseOptions<'_> {
     pub const fn permissive() -> Self {
         Self {
-            expected_payload_sha256: None,
+            expected_artifact_sha256: None,
             expected_model_sha256: None,
             expected_voices_sha256: None,
             max_tensors: u32::MAX,
@@ -60,8 +60,8 @@ pub enum ParseError {
     BadHeaderRecordSize,
     HeaderReservedNonZero,
     HashMissing,
-    PayloadHashMismatch,
-    ExpectedPayloadHashMismatch,
+    ArtifactHashMismatch,
+    ExpectedArtifactHashMismatch,
     ExpectedModelHashMismatch,
     ExpectedVoicesHashMismatch,
     BadSectionKind,
@@ -243,7 +243,7 @@ pub struct Program<'a> {
     bindings: &'a [u8],
     data: &'a [u8],
     phases: [PhasePlan; PHASE_COUNT],
-    payload_sha256: [u8; 32],
+    artifact_sha256: [u8; 32],
     model_sha256: [u8; 32],
     voices_sha256: [u8; 32],
 }
@@ -296,8 +296,8 @@ impl<'a> Program<'a> {
             return Err(ParseError::HeaderReservedNonZero);
         }
 
-        let payload_hash: [u8; 32] = artifact
-            [PAYLOAD_SHA256_OFFSET..PAYLOAD_SHA256_OFFSET + SHA256_BYTES]
+        let artifact_hash: [u8; 32] = artifact
+            [ARTIFACT_SHA256_OFFSET..ARTIFACT_SHA256_OFFSET + SHA256_BYTES]
             .try_into()
             .expect("header hash");
         let model_hash: [u8; 32] = artifact
@@ -308,18 +308,19 @@ impl<'a> Program<'a> {
             [VOICES_SHA256_OFFSET..VOICES_SHA256_OFFSET + SHA256_BYTES]
             .try_into()
             .expect("header hash");
-        if is_zero(&payload_hash) || is_zero(&model_hash) || is_zero(&voices_hash) {
+        if is_zero(&artifact_hash) || is_zero(&model_hash) || is_zero(&voices_hash) {
             return Err(ParseError::HashMissing);
         }
-        let observed_payload_hash = payload_sha256(&artifact[HEADER_BYTES..]);
-        if !hash_eq(&observed_payload_hash, &payload_hash) {
-            return Err(ParseError::PayloadHashMismatch);
+        let observed_artifact_hash =
+            artifact_sha256(artifact).ok_or(ParseError::HeaderTruncated)?;
+        if !hash_eq(&observed_artifact_hash, &artifact_hash) {
+            return Err(ParseError::ArtifactHashMismatch);
         }
         if options
-            .expected_payload_sha256
-            .is_some_and(|expected| !hash_eq(expected, &payload_hash))
+            .expected_artifact_sha256
+            .is_some_and(|expected| !hash_eq(expected, &artifact_hash))
         {
-            return Err(ParseError::ExpectedPayloadHashMismatch);
+            return Err(ParseError::ExpectedArtifactHashMismatch);
         }
         if options
             .expected_model_sha256
@@ -434,7 +435,7 @@ impl<'a> Program<'a> {
             bindings,
             data,
             phases,
-            payload_sha256: payload_hash,
+            artifact_sha256: artifact_hash,
             model_sha256: model_hash,
             voices_sha256: voices_hash,
         };
@@ -452,8 +453,8 @@ impl<'a> Program<'a> {
         &self.sections
     }
 
-    pub const fn payload_sha256(&self) -> &[u8; 32] {
-        &self.payload_sha256
+    pub const fn artifact_sha256(&self) -> &[u8; 32] {
+        &self.artifact_sha256
     }
 
     pub const fn model_sha256(&self) -> &[u8; 32] {

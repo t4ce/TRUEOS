@@ -118,7 +118,8 @@ python3 -m unittest tools.ttstt.test_compile_kokoro_aot -v
 
 With the local model and ONNX tooling installed, the same test module also runs
 the full pinned audit. The fixture covers the 352-byte header, independent
-model/voice hashes, payload SHA-256 seal, six canonical aligned sections,
+model/voice hashes, a whole-artifact SHA-256 seal (with only the seal field
+zeroed while hashing), six canonical aligned sections,
 constants in DATA, a static view, fixed and affine frame-count slots, two phase
 records, bindings, and native quantized opcodes. Payload and reserved-header
 tampering are negative tests.

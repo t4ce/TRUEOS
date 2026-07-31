@@ -34,7 +34,7 @@ fn main() {
     });
 
     println!("artifact_bytes={}", artifact.len());
-    println!("payload_sha256={}", hash_hex(program.payload_sha256()));
+    println!("artifact_sha256={}", hash_hex(program.artifact_sha256()));
     println!("model_sha256={}", hash_hex(program.model_sha256()));
     println!("voices_sha256={}", hash_hex(program.voices_sha256()));
     for index in 0..SECTION_COUNT {
