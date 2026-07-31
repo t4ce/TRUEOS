@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use embassy_executor::SpawnError;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 const MODEL_ROOT: &str = "models";
@@ -334,9 +334,16 @@ struct TtsOutputState {
     chunks: Mutex<VecDeque<TtsAudioChunk>>,
     progress: Mutex<TtsOutputProgress>,
     completion: Mutex<Option<Result<TtsSynthesisSummary, &'static str>>>,
+    service_timing: Mutex<Option<TtsServiceTimingState>>,
     closed: AtomicBool,
     cancelled: AtomicBool,
     wait: crate::wait::WaitQueue,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TtsServiceTimingState {
+    submitted_at: Instant,
+    first_run_at: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -352,6 +359,7 @@ impl TtsOutputState {
             chunks: Mutex::new(VecDeque::new()),
             progress: Mutex::new(TtsOutputProgress::default()),
             completion: Mutex::new(None),
+            service_timing: Mutex::new(None),
             closed: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
             wait: crate::wait::WaitQueue::new(),
@@ -388,6 +396,25 @@ pub struct TtsOutput {
 }
 
 impl TtsOutput {
+    fn mark_service_submitted(&self, submitted_at: Instant) {
+        let mut timing = self.state.service_timing.lock();
+        if timing.is_none() {
+            *timing = Some(TtsServiceTimingState {
+                submitted_at,
+                first_run_at: None,
+            });
+        }
+    }
+
+    fn mark_service_first_run(&self, first_run_at: Instant) {
+        let mut timing = self.state.service_timing.lock();
+        if let Some(timing) = timing.as_mut()
+            && timing.first_run_at.is_none()
+        {
+            timing.first_run_at = Some(first_run_at);
+        }
+    }
+
     pub fn try_push(&self, chunk: TtsAudioChunk) -> Result<(), TtsOutputError> {
         let frames = match chunk.validate() {
             Ok(frames) => frames,
@@ -512,12 +539,43 @@ pub struct TtsStream {
     state: Arc<TtsOutputState>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TtsServiceDispatchTiming {
+    /// Admission into the shared service queue to the first actual `run_slice`.
+    pub initial_queue_us: u64,
+    /// First actual `run_slice` to the caller's observation timestamp.
+    pub dispatch_elapsed_us: u64,
+    /// Shared service queue admission to the caller's observation timestamp.
+    pub submit_elapsed_us: u64,
+}
+
 pub enum TtsStreamEvent {
     Chunk(TtsAudioChunk),
     Finished(Result<TtsSynthesisSummary, &'static str>),
 }
 
 impl TtsStream {
+    /// Snapshot timing relative to an event observed by the stream consumer.
+    ///
+    /// This becomes available immediately before the job's first real
+    /// `run_slice`; merely selecting, cancelling, or closing a queued job does
+    /// not count as dispatch.
+    pub fn service_timing_at(&self, observed_at: Instant) -> Option<TtsServiceDispatchTiming> {
+        let timing = (*self.state.service_timing.lock())?;
+        let first_run_at = timing.first_run_at?;
+        Some(TtsServiceDispatchTiming {
+            initial_queue_us: first_run_at
+                .saturating_duration_since(timing.submitted_at)
+                .as_micros(),
+            dispatch_elapsed_us: observed_at
+                .saturating_duration_since(first_run_at)
+                .as_micros(),
+            submit_elapsed_us: observed_at
+                .saturating_duration_since(timing.submitted_at)
+                .as_micros(),
+        })
+    }
+
     pub fn try_next(&self) -> Option<TtsStreamEvent> {
         let chunk = { self.state.chunks.lock().pop_front() };
         if let Some(chunk) = chunk {
@@ -930,6 +988,10 @@ struct QueuedJob {
     direction: Direction,
     job: Box<dyn InferenceJob>,
     completion: JobCompletion,
+    submitted_at: Instant,
+    first_run_at: Option<Instant>,
+    run_slices: u64,
+    run_us: u64,
 }
 
 enum JobCompletion {
@@ -977,12 +1039,25 @@ fn submit_with_completion(
     }
 
     let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
-    JOBS.lock().push_back(QueuedJob {
+    let mut jobs = JOBS.lock();
+    // Holding the queue lock makes this timestamp the admission
+    // linearization point: a worker cannot select the job before its timing is
+    // visible to the TTS stream.
+    let submitted_at = Instant::now();
+    if let JobCompletion::Tts(output) = &completion {
+        output.mark_service_submitted(submitted_at);
+    }
+    jobs.push_back(QueuedJob {
         id,
         direction,
         job,
         completion,
+        submitted_at,
+        first_run_at: None,
+        run_slices: 0,
+        run_us: 0,
     });
+    drop(jobs);
     JOB_WAIT.notify_one();
     Ok(id)
 }
@@ -1338,6 +1413,28 @@ fn requeue_job(job: QueuedJob) {
 
 fn finish_job(queued: QueuedJob, direction: Direction, result: JobProgress) {
     let id = queued.id;
+    let finished_at = Instant::now();
+    let total_us = finished_at
+        .saturating_duration_since(queued.submitted_at)
+        .as_micros();
+    let initial_queue_us = queued
+        .first_run_at
+        .map(|first_run_at| {
+            first_run_at
+                .saturating_duration_since(queued.submitted_at)
+                .as_micros()
+        })
+        .unwrap_or(total_us);
+    let active_wall_us = queued
+        .first_run_at
+        .map(|first_run_at| {
+            finished_at
+                .saturating_duration_since(first_run_at)
+                .as_micros()
+        })
+        .unwrap_or(0);
+    let run_slices = queued.run_slices;
+    let run_us = queued.run_us;
     if let JobCompletion::Tts(output) = queued.completion {
         match result {
             JobProgress::Complete => {
@@ -1357,16 +1454,26 @@ fn finish_job(queued: QueuedJob, direction: Direction, result: JobProgress) {
     match result {
         JobProgress::Complete => crate::log_info!(
             target: "ttstt";
-            "ttstt: job complete id={} direction={}\n",
+            "ttstt: job complete id={} direction={} initial_queue_us={} active_wall_us={} run_us={} slices={} total_us={}\n",
             id,
-            direction.as_str()
+            direction.as_str(),
+            initial_queue_us,
+            active_wall_us,
+            run_us,
+            run_slices,
+            total_us
         ),
         JobProgress::Failed(reason) => crate::log_warn!(
             target: "ttstt";
-            "ttstt: job failed id={} direction={} reason={}\n",
+            "ttstt: job failed id={} direction={} reason={} initial_queue_us={} active_wall_us={} run_us={} slices={} total_us={}\n",
             id,
             direction.as_str(),
-            reason
+            reason,
+            initial_queue_us,
+            active_wall_us,
+            run_us,
+            run_slices,
+            total_us
         ),
         JobProgress::Pending => {}
     }
@@ -1429,7 +1536,35 @@ async fn worker_task(slot: u32, core_kind: u8, models: &'static ModelSet) {
             Timer::after(EmbassyDuration::from_millis(WORKER_SLICE_YIELD_MS)).await;
             continue;
         }
-        match queued.job.run_slice(models, context) {
+        let first_dispatch = queued.first_run_at.is_none();
+        let slice_started = Instant::now();
+        if first_dispatch {
+            queued.first_run_at = Some(slice_started);
+            if let JobCompletion::Tts(output) = &queued.completion {
+                output.mark_service_first_run(slice_started);
+            }
+        }
+        let result = queued.job.run_slice(models, context);
+        let slice_finished = Instant::now();
+        queued.run_us = queued.run_us.saturating_add(
+            slice_finished
+                .saturating_duration_since(slice_started)
+                .as_micros(),
+        );
+        queued.run_slices = queued.run_slices.saturating_add(1);
+        if first_dispatch {
+            crate::log_info!(
+                target: "ttstt";
+                "ttstt: job dispatched id={} direction={} initial_queue_us={} slot={}\n",
+                queued.id,
+                direction.as_str(),
+                slice_started
+                    .saturating_duration_since(queued.submitted_at)
+                    .as_micros(),
+                context.slot
+            );
+        }
+        match result {
             JobProgress::Pending if matches!(&queued.completion, JobCompletion::Tts(output) if output.finished()) => {
                 finish_job(queued, direction, JobProgress::Complete)
             }

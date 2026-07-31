@@ -14,27 +14,37 @@ const PLANE_SLOT: usize = crate::ui4::RGB_OVERLAY_PLANE_SLOT_2;
 const MARGIN: u32 = 48;
 
 const STATE_IDLE: u8 = 0;
-const STATE_REQUESTED: u8 = 1;
-const STATE_STARTING: u8 = 2;
-const STATE_ONLINE: u8 = 3;
+const STATE_PHASE_MASK: u8 = 0xf0;
+const STATE_ID_MASK: u8 = 0x0f;
+const STATE_REQUESTED: u8 = 0x10;
+const STATE_STARTING: u8 = 0x20;
+const STATE_ONLINE: u8 = 0x30;
 
 static GAME_STATE: AtomicU8 = AtomicU8::new(STATE_IDLE);
+static LAST_ERROR: spin::Mutex<Option<&'static str>> = spin::Mutex::new(None);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameState {
     Idle,
-    Requested,
-    Starting,
-    Online,
+    Requested(u8),
+    Starting(u8),
+    Online(u8),
 }
 
 impl GameState {
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Idle => "idle",
-            Self::Requested => "requested",
-            Self::Starting => "starting",
-            Self::Online => "online",
+            Self::Requested(_) => "requested",
+            Self::Starting(_) => "starting",
+            Self::Online(_) => "online",
+        }
+    }
+
+    pub(crate) const fn example_id(self) -> Option<u8> {
+        match self {
+            Self::Idle => None,
+            Self::Requested(id) | Self::Starting(id) | Self::Online(id) => Some(id),
         }
     }
 }
@@ -42,39 +52,58 @@ impl GameState {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum LaunchRequest {
     Queued,
-    AlreadyRequested,
-    AlreadyStarting,
-    AlreadyOnline,
+    AlreadyRequested(u8),
+    AlreadyStarting(u8),
+    AlreadyOnline(u8),
+    Reserved,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameStatus {
     pub(crate) state: GameState,
     pub(crate) artifact_bytes: usize,
+    pub(crate) last_error: Option<&'static str>,
 }
 
 fn game_state() -> GameState {
-    match GAME_STATE.load(Ordering::Acquire) {
-        STATE_REQUESTED => GameState::Requested,
-        STATE_STARTING => GameState::Starting,
-        STATE_ONLINE => GameState::Online,
+    let state = GAME_STATE.load(Ordering::Acquire);
+    let id = state & STATE_ID_MASK;
+    match state & STATE_PHASE_MASK {
+        STATE_REQUESTED => GameState::Requested(id),
+        STATE_STARTING => GameState::Starting(id),
+        STATE_ONLINE => GameState::Online(id),
         _ => GameState::Idle,
     }
 }
 
 /// Queue the embedded game for the already-resident AP1/UI runtime service.
-pub(crate) fn request_launch() -> LaunchRequest {
+pub(crate) fn request_launch(example_id: u8) -> LaunchRequest {
+    if !matches!(example_id, 1 | 2) {
+        return LaunchRequest::Reserved;
+    }
     match GAME_STATE.compare_exchange(
         STATE_IDLE,
-        STATE_REQUESTED,
+        STATE_REQUESTED | example_id,
         Ordering::AcqRel,
         Ordering::Acquire,
     ) {
         Ok(_) => LaunchRequest::Queued,
-        Err(STATE_REQUESTED) => LaunchRequest::AlreadyRequested,
-        Err(STATE_STARTING) => LaunchRequest::AlreadyStarting,
-        Err(STATE_ONLINE) => LaunchRequest::AlreadyOnline,
-        Err(_) => LaunchRequest::AlreadyRequested,
+        Err(state) => match decode_non_idle_state(state) {
+            GameState::Requested(id) => LaunchRequest::AlreadyRequested(id),
+            GameState::Starting(id) => LaunchRequest::AlreadyStarting(id),
+            GameState::Online(id) => LaunchRequest::AlreadyOnline(id),
+            GameState::Idle => LaunchRequest::AlreadyRequested(example_id),
+        },
+    }
+}
+
+fn decode_non_idle_state(state: u8) -> GameState {
+    let id = state & STATE_ID_MASK;
+    match state & STATE_PHASE_MASK {
+        STATE_REQUESTED => GameState::Requested(id),
+        STATE_STARTING => GameState::Starting(id),
+        STATE_ONLINE => GameState::Online(id),
+        _ => GameState::Idle,
     }
 }
 
@@ -82,6 +111,7 @@ pub(crate) fn status() -> GameStatus {
     GameStatus {
         state: game_state(),
         artifact_bytes: GAME_ARTIFACT.len(),
+        last_error: *LAST_ERROR.lock(),
     }
 }
 
@@ -92,6 +122,18 @@ enum GameError {
     Window(crate::ui4::WindowBrokerError),
     Render(&'static str),
     InvalidFrame,
+}
+
+impl GameError {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Artifact(_) => "artifact",
+            Self::Frame(_) => "frame-pool",
+            Self::Window(_) => "window-broker",
+            Self::Render(reason) => reason,
+            Self::InvalidFrame => "invalid-frame",
+        }
+    }
 }
 
 impl From<crate::ui4::FramePoolError> for GameError {
@@ -111,10 +153,142 @@ struct ResidentTriangle {
     rgba: [u8; 4],
 }
 
-#[derive(Copy, Clone)]
+struct FlyCamera {
+    camera: trueos_helio_runtime::Camera,
+    yaw: f32,
+    pitch: f32,
+    look_active: bool,
+}
+
+impl FlyCamera {
+    fn new(camera: trueos_helio_runtime::Camera) -> Self {
+        let direction = [
+            camera.target[0] - camera.position[0],
+            camera.target[1] - camera.position[1],
+            camera.target[2] - camera.position[2],
+        ];
+        let length = libm::sqrtf(
+            direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2],
+        )
+        .max(f32::EPSILON);
+        Self {
+            camera,
+            yaw: libm::atan2f(direction[0], -direction[2]),
+            pitch: libm::asinf((direction[1] / length).clamp(-1.0, 1.0)),
+            look_active: false,
+        }
+    }
+
+    fn apply_events(&mut self, events: &[crate::ui4::winit_input::Event]) -> bool {
+        use crate::ui4::winit_input::{
+            DeviceEvent, ElementState, Event, KeyCode, MouseButton, PhysicalKey, WindowEvent,
+        };
+
+        let mut changed = false;
+        for event in events {
+            match *event {
+                Event::WindowEvent {
+                    event:
+                        WindowEvent::MouseInput {
+                            state,
+                            button: MouseButton::Left,
+                        },
+                    ..
+                } => self.look_active = state == ElementState::Pressed,
+                Event::WindowEvent {
+                    event: WindowEvent::Focused(false),
+                    ..
+                } => self.look_active = false,
+                Event::WindowEvent {
+                    event:
+                        WindowEvent::KeyboardInput {
+                            event:
+                                crate::ui4::winit_input::KeyEvent {
+                                    physical_key: PhysicalKey::Code(KeyCode::Escape),
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                        },
+                    ..
+                } => self.look_active = false,
+                Event::DeviceEvent {
+                    event: DeviceEvent::MouseMotion { delta: (dx, dy) },
+                    ..
+                } if self.look_active => {
+                    self.yaw += dx as f32 * 0.003;
+                    self.pitch = (self.pitch - dy as f32 * 0.003).clamp(-1.5, 1.5);
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+        if changed {
+            self.update_target();
+        }
+        changed
+    }
+
+    fn apply_held_keys(
+        &mut self,
+        input: &crate::ui4::winit_input::EventLoopInput,
+        window: crate::ui4::WindowId,
+        dt_seconds: f32,
+    ) -> bool {
+        use crate::ui4::winit_input::KeyCode;
+
+        let forward = [libm::sinf(self.yaw), 0.0, -libm::cosf(self.yaw)];
+        let right = [libm::cosf(self.yaw), 0.0, libm::sinf(self.yaw)];
+        let mut movement = [0.0f32; 3];
+        if input.key_is_down(window, KeyCode::KeyW) {
+            add_scaled(&mut movement, forward, 1.0);
+        }
+        if input.key_is_down(window, KeyCode::KeyS) {
+            add_scaled(&mut movement, forward, -1.0);
+        }
+        if input.key_is_down(window, KeyCode::KeyD) {
+            add_scaled(&mut movement, right, 1.0);
+        }
+        if input.key_is_down(window, KeyCode::KeyA) {
+            add_scaled(&mut movement, right, -1.0);
+        }
+        if input.key_is_down(window, KeyCode::Space) {
+            movement[1] += 1.0;
+        }
+        if input.key_is_down(window, KeyCode::ShiftLeft) {
+            movement[1] -= 1.0;
+        }
+        let length = libm::sqrtf(
+            movement[0] * movement[0] + movement[1] * movement[1] + movement[2] * movement[2],
+        );
+        if length <= f32::EPSILON {
+            return false;
+        }
+        let distance = 4.0 * dt_seconds / length;
+        add_scaled(&mut self.camera.position, movement, distance);
+        self.update_target();
+        true
+    }
+
+    fn update_target(&mut self) {
+        let cos_pitch = libm::cosf(self.pitch);
+        self.camera.target = [
+            self.camera.position[0] + libm::sinf(self.yaw) * cos_pitch,
+            self.camera.position[1] + libm::sinf(self.pitch),
+            self.camera.position[2] - libm::cosf(self.yaw) * cos_pitch,
+        ];
+    }
+}
+
+fn add_scaled(target: &mut [f32; 3], value: [f32; 3], scale: f32) {
+    for index in 0..3 {
+        target[index] += value[index] * scale;
+    }
+}
+
 struct GameSurface {
     session: crate::ui4::WindowSessionId,
     frame: crate::ui4::FrameHandle,
+    window: Option<crate::ui4::WindowId>,
     width: u32,
     height: u32,
 }
@@ -153,6 +327,7 @@ fn create_surface() -> Result<GameSurface, GameError> {
     Ok(GameSurface {
         session,
         frame,
+        window: None,
         width,
         height,
     })
@@ -189,12 +364,15 @@ fn release_resident_scene(resident: Vec<ResidentTriangle>) {
 }
 
 fn destroy_unpublished_surface(surface: GameSurface) {
+    if let Some(window) = surface.window {
+        let _ = crate::ui4::close_window(OWNER, window);
+    }
     let _ = crate::ui4::finish_window_session(OWNER, surface.session);
     let _ = crate::ui4::destroy_frame(surface.frame);
 }
 
-fn render_publish_once(
-    surface: GameSurface,
+fn render_publish(
+    surface: &mut GameSurface,
     resident: &[ResidentTriangle],
     clear_rgba: [u8; 4],
 ) -> Result<(), GameError> {
@@ -257,93 +435,303 @@ fn render_publish_once(
     let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
     let (scanout_width, scanout_height) =
         crate::intel::active_scanout_dimensions().unwrap_or((surface.width, surface.height));
-    let window = crate::ui4::create_window(crate::ui4::WindowCreate {
-        owner: OWNER,
-        session: surface.session,
-        frame: surface.frame,
-        output,
-        plane: crate::ui4::WindowPlane::Universal(PLANE_SLOT as u8),
-        placement: crate::ui4::WindowPlacement {
-            x: scanout_width.saturating_sub(surface.width.saturating_add(MARGIN)) as i32,
-            y: MARGIN.min(scanout_height.saturating_sub(surface.height)) as i32,
-            width: surface.width,
-            height: surface.height,
-            z: 78,
-            opacity: u8::MAX,
-            visible: true,
-        },
-        interaction: crate::ui4::WindowInteraction::APPLICATION,
-    })?;
+    if surface.window.is_none() {
+        surface.window = Some(crate::ui4::create_window(crate::ui4::WindowCreate {
+            owner: OWNER,
+            session: surface.session,
+            frame: surface.frame,
+            output,
+            plane: crate::ui4::WindowPlane::Universal(PLANE_SLOT as u8),
+            placement: crate::ui4::WindowPlacement {
+                x: scanout_width.saturating_sub(surface.width.saturating_add(MARGIN)) as i32,
+                y: MARGIN.min(scanout_height.saturating_sub(surface.height)) as i32,
+                width: surface.width,
+                height: surface.height,
+                z: 78,
+                opacity: u8::MAX,
+                visible: true,
+            },
+            interaction: crate::ui4::WindowInteraction::APPLICATION,
+        })?);
+    }
+    let window = surface.window.ok_or(GameError::InvalidFrame)?;
     crate::ui4::publish_window_frame(OWNER, window, crate::ui4::DamageRect::FULL)?;
-    crate::log_info!(
-        target: "helio";
-        "helio game online artifact_bytes={} normalized_triangles={} frame={} window={} extent={}x{} plane={} path=helioa-v1+render-ir-v1->resident-triangles->one-guc-render->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
-        GAME_ARTIFACT.len(),
-        resident.len(),
-        surface.frame.raw(),
-        window.raw(),
-        surface.width,
-        surface.height,
-        PLANE_SLOT,
-    );
     Ok(())
 }
 
-/// Waits for the Shell2/Blueprint launch request, loads the build-produced
-/// `.helio`, resolves its two dynamic slots, uploads its normalized draw once,
-/// and publishes it as a UI4 RenderScene3d window.
+fn make_resident_batches(
+    batches: &[trueos_helio_runtime::churn::Batch],
+) -> Result<Vec<ResidentTriangle>, GameError> {
+    let mut resident = Vec::with_capacity(batches.len());
+    for batch in batches {
+        match crate::intel::render::create_resident_triangle_mesh(&batch.vertices, &batch.indices) {
+            Ok(mesh) => resident.push(ResidentTriangle {
+                mesh,
+                rgba: batch.rgba,
+            }),
+            Err(error) => {
+                release_resident_scene(resident);
+                return Err(GameError::Render(error));
+            }
+        }
+    }
+    Ok(resident)
+}
+
+fn update_resident_batches(
+    resident: &[ResidentTriangle],
+    batches: &[trueos_helio_runtime::churn::Batch],
+) -> Result<(), GameError> {
+    if resident.len() < batches.len() {
+        return Err(GameError::Render("helio-churn-batch-count"));
+    }
+    for (resident, batch) in resident.iter().zip(batches) {
+        crate::intel::render::update_resident_triangle_mesh(
+            &resident.mesh,
+            &batch.vertices,
+            &batch.indices,
+        )
+        .map_err(GameError::Render)?;
+    }
+    Ok(())
+}
+
+fn apply_churn_key_actions(
+    engine: &mut trueos_helio_runtime::churn::Engine,
+    window: crate::ui4::WindowId,
+    events: &[crate::ui4::winit_input::Event],
+) {
+    use crate::ui4::winit_input::{ElementState, Event, KeyCode, PhysicalKey, WindowEvent};
+
+    for event in events {
+        let Event::WindowEvent {
+            window_id,
+            event:
+                WindowEvent::KeyboardInput {
+                    event:
+                        crate::ui4::winit_input::KeyEvent {
+                            physical_key: PhysicalKey::Code(key),
+                            state: ElementState::Pressed,
+                            ..
+                        },
+                },
+            ..
+        } = *event
+        else {
+            continue;
+        };
+        if window_id != window {
+            continue;
+        }
+        let delta = match key {
+            KeyCode::Equal | KeyCode::NumpadAdd => 1,
+            KeyCode::Minus | KeyCode::NumpadSubtract => -1,
+            _ => continue,
+        };
+        engine.adjust_spawn_rate(delta);
+        crate::log_info!(
+            target: "helio";
+            "helio churn input spawn_rate={} source=ui4-winit-bridge\n",
+            engine.spawn_rate(),
+        );
+    }
+}
+
+fn start_cube() -> Result<(GameSurface, Vec<ResidentTriangle>, usize), GameError> {
+    let mut surface = create_surface()?;
+    let scene = match trueos_helio_runtime::decode_artifact(
+        GAME_ARTIFACT,
+        surface.width as f32 / surface.height as f32,
+        trueos_helio_runtime::Camera::helio_simple_graph(),
+    ) {
+        Ok(scene) => scene,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(GameError::Artifact(error));
+        }
+    };
+    let resident = match make_resident_scene(&scene) {
+        Ok(resident) => resident,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(error);
+        }
+    };
+    if let Err(error) = render_publish(&mut surface, &resident, scene.clear_rgba) {
+        release_resident_scene(resident);
+        destroy_unpublished_surface(surface);
+        return Err(error);
+    }
+    Ok((surface, resident, scene.triangles.len()))
+}
+
+async fn run_churn() -> Result<(), GameError> {
+    let mut surface = create_surface()?;
+    let aspect = surface.width as f32 / surface.height as f32;
+    let spec = match trueos_helio_runtime::churn::Spec::decode_artifact(GAME_ARTIFACT) {
+        Ok(spec) => spec,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(GameError::Artifact(error));
+        }
+    };
+    let clear_rgba = spec.clear_rgba;
+    let mut engine = match trueos_helio_runtime::churn::Engine::new(spec) {
+        Ok(engine) => engine,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(GameError::Artifact(error));
+        }
+    };
+    if let Err(error) = engine.step(aspect) {
+        destroy_unpublished_surface(surface);
+        return Err(GameError::Artifact(error));
+    }
+    let floor = match engine.floor(aspect) {
+        Ok(floor) => floor,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(GameError::Artifact(error));
+        }
+    };
+    let mut initial_batches = engine.batches().to_vec();
+    initial_batches.push(floor);
+    let resident = match make_resident_batches(&initial_batches) {
+        Ok(resident) => resident,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(error);
+        }
+    };
+
+    let mut input = crate::ui4::winit_input::EventLoopInput::new(OWNER);
+    let mut fly_camera = FlyCamera::new(engine.camera());
+
+    let mut first_frame = true;
+    let mut frame_prepared = true;
+    let result = loop {
+        if !first_frame && !frame_prepared {
+            let Some(window) = surface.window else {
+                break Err(GameError::InvalidFrame);
+            };
+            let events = input.poll();
+            apply_churn_key_actions(&mut engine, window, &events);
+            let camera_changed = fly_camera.apply_events(&events)
+                | fly_camera.apply_held_keys(&input, window, 0.033);
+            if camera_changed {
+                if let Err(error) = engine.set_camera(fly_camera.camera) {
+                    break Err(GameError::Artifact(error));
+                }
+            }
+            if let Err(error) = engine.step(aspect) {
+                break Err(GameError::Artifact(error));
+            }
+            if let Err(error) = update_resident_batches(&resident, engine.batches()) {
+                break Err(error);
+            }
+            if camera_changed {
+                let floor = match engine.floor(aspect) {
+                    Ok(floor) => floor,
+                    Err(error) => break Err(GameError::Artifact(error)),
+                };
+                let Some(floor_resident) = resident.last() else {
+                    break Err(GameError::Render("helio-churn-floor-batch"));
+                };
+                if let Err(error) = crate::intel::render::update_resident_triangle_mesh(
+                    &floor_resident.mesh,
+                    &floor.vertices,
+                    &floor.indices,
+                ) {
+                    break Err(GameError::Render(error));
+                }
+            }
+            frame_prepared = true;
+        }
+        match render_publish(&mut surface, &resident, clear_rgba) {
+            Ok(()) => frame_prepared = false,
+            Err(GameError::Render("helio-incomplete-direct-frame")) => {
+                // Keep the last complete UI4 buffer visible and retry these
+                // exact resident bytes. A bounded GuC poll miss must not
+                // advance the game or rewrite late-read geometry.
+                Timer::after(Duration::from_millis(16)).await;
+                continue;
+            }
+            Err(error) => break Err(error),
+        }
+        if first_frame {
+            GAME_STATE.store(STATE_ONLINE | 2, Ordering::Release);
+            *LAST_ERROR.lock() = None;
+            let window = surface.window.expect("published Helio churn window");
+            if !input.register_window(window) {
+                break Err(GameError::Render("helio-input-window-capacity"));
+            }
+            crate::log_info!(
+                target: "helio";
+                "helio example=2 name=churn-benchmark online artifact_bytes={} active_objects={} resident_batches={} frame={} window={} extent={}x{} plane={} input=ui4-owner-broker->winit-shaped-events controls=WASD+Space+Shift,left-drag-look,+/- path=helioa-v1+churn-v1->resident-batches->one-guc-render->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+                GAME_ARTIFACT.len(),
+                engine.active_objects(),
+                resident.len(),
+                surface.frame.raw(),
+                window.raw(),
+                surface.width,
+                surface.height,
+                PLANE_SLOT,
+            );
+            first_frame = false;
+        }
+        Timer::after(Duration::from_millis(33)).await;
+    };
+    release_resident_scene(resident);
+    destroy_unpublished_surface(surface);
+    result
+}
+
+/// Waits for a numbered Shell2/Blueprint request and runs the selected scene
+/// from the one embedded, build-produced `.helio` artifact.
 #[embassy_executor::task]
 pub async fn helio_game_service_task() {
     let mut last_error = None;
     loop {
-        if game_state() != GameState::Requested {
+        let GameState::Requested(example_id) = game_state() else {
             Timer::after(Duration::from_millis(50)).await;
             continue;
-        }
-        GAME_STATE.store(STATE_STARTING, Ordering::Release);
-        let result = (|| {
-            let surface = create_surface()?;
-            let scene = match trueos_helio_runtime::decode_artifact(
-                GAME_ARTIFACT,
-                surface.width as f32 / surface.height as f32,
-                trueos_helio_runtime::Camera::helio_simple_graph(),
-            ) {
-                Ok(scene) => scene,
-                Err(error) => {
-                    destroy_unpublished_surface(surface);
-                    return Err(GameError::Artifact(error));
-                }
-            };
-            let resident = match make_resident_scene(&scene) {
-                Ok(resident) => resident,
-                Err(error) => {
-                    destroy_unpublished_surface(surface);
-                    return Err(error);
-                }
-            };
-            match render_publish_once(surface, &resident, scene.clear_rgba) {
-                Ok(()) => Ok(resident),
-                Err(error) => {
-                    release_resident_scene(resident);
-                    destroy_unpublished_surface(surface);
-                    Err(error)
-                }
-            }
-        })();
-        match result {
-            Ok(resident) => {
-                GAME_STATE.store(STATE_ONLINE, Ordering::Release);
-                // Window, frame ring, and resident Render mappings intentionally
-                // remain owned by this static service for the life of the OS.
+        };
+        GAME_STATE.store(STATE_STARTING | example_id, Ordering::Release);
+        let result = match example_id {
+            1 => start_cube().map(|(surface, resident, triangle_count)| {
+                GAME_STATE.store(STATE_ONLINE | 1, Ordering::Release);
+                *LAST_ERROR.lock() = None;
+                let window = surface.window.expect("published Helio cube window");
+                crate::log_info!(
+                    target: "helio";
+                    "helio example=1 name=simple-cube online artifact_bytes={} normalized_triangles={} frame={} window={} extent={}x{} plane={} path=helioa-v1+render-ir-v1->resident-triangles->one-guc-render->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+                    GAME_ARTIFACT.len(),
+                    triangle_count,
+                    surface.frame.raw(),
+                    window.raw(),
+                    surface.width,
+                    surface.height,
+                    PLANE_SLOT,
+                );
                 core::mem::forget(resident);
+                core::mem::forget(surface);
+            }),
+            2 => run_churn().await,
+            _ => Err(GameError::Render("helio-example-reserved")),
+        };
+        match result {
+            Ok(()) if example_id == 1 => {
                 core::future::pending::<()>().await;
             }
+            Ok(()) => {}
             Err(error) => {
-                GAME_STATE.store(STATE_REQUESTED, Ordering::Release);
+                GAME_STATE.store(STATE_REQUESTED | example_id, Ordering::Release);
+                *LAST_ERROR.lock() = Some(error.label());
                 if last_error != Some(core::mem::discriminant(&error)) {
                     crate::log_warn!(
                         target: "helio";
-                        "helio game start pending error={:?} action=retry\n",
+                        "helio example={} start pending error={:?} action=retry\n",
+                        example_id,
                         error,
                     );
                     last_error = Some(core::mem::discriminant(&error));

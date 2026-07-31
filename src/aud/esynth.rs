@@ -91,6 +91,7 @@ struct PcmOverlaySource {
     current: Option<crate::aud::pcm_lane::PcmLaneRequest>,
     cursor: usize,
     stop_generation: u32,
+    spirit_talk_active: bool,
 }
 
 impl TinyaudioDemoMixer {
@@ -318,6 +319,7 @@ impl PcmOverlaySource {
             current: None,
             cursor: 0,
             stop_generation: 0,
+            spirit_talk_active: false,
         }
     }
 
@@ -340,9 +342,16 @@ impl PcmOverlaySource {
             }
             self.cursor = 0;
             PCM_OVERLAY_CURRENT.store(false, Ordering::Release);
+            self.set_spirit_talk_active(false);
         }
 
-        crate::aud::pcm_lane::paused()
+        let paused = crate::aud::pcm_lane::paused();
+        let current_talk = self
+            .current
+            .as_ref()
+            .is_some_and(|request| request.spirit_talk);
+        self.set_spirit_talk_active(!paused && current_talk);
+        paused
     }
 
     fn take_pending(&mut self) {
@@ -366,7 +375,20 @@ impl PcmOverlaySource {
             self.current = Some(next);
             self.cursor = 0;
             PCM_OVERLAY_CURRENT.store(true, Ordering::Release);
+            let spirit_talk = self
+                .current
+                .as_ref()
+                .is_some_and(|request| request.spirit_talk);
+            self.set_spirit_talk_active(spirit_talk);
         }
+    }
+
+    fn set_spirit_talk_active(&mut self, active: bool) {
+        if self.spirit_talk_active == active {
+            return;
+        }
+        self.spirit_talk_active = active;
+        crate::spirit::lilly_protocol::set_lumen_speech_playing(active);
     }
 
     fn active_or_pending(&self) -> bool {
@@ -387,6 +409,7 @@ impl PcmOverlaySource {
             }
 
             let Some(current) = self.current.as_ref() else {
+                self.set_spirit_talk_active(false);
                 return;
             };
 

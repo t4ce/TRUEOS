@@ -20,6 +20,7 @@ mod input_broker;
 mod screenshot;
 mod slot4_service;
 mod video_frame;
+pub(crate) mod winit_input;
 mod window_broker;
 
 const INTERACTION_CADENCE_HZ: u64 = 60;

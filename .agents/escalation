@@ -1,0 +1,16 @@
+the latest logs wont drain, nothing connects? Testrig seems dead?
+
+First stage is another full !make iso
+that will proc a physical reset button
+
+Sometimes netshell acpi reboot makes it trough anyways
+
+Another idea is: take a picture with local webcam, its always 
+pointed at the actual monitor and will show: oh we are in bios
+or the really weird scenarios: MAC whiped to full 00000000
+
+that happened rarely but in these scenarios it has a
+wallplugged alexa connected workflow that echo/alexa
+can proc a even more raw powerdown reset cycle
+its called "neustart" routine
+-> ask user to fire it is the final solution at this point

@@ -6,6 +6,8 @@
 
 extern crate alloc;
 
+pub mod churn;
+
 use alloc::vec::Vec;
 use trueos_helio_artifact::render_ir::{
     BindingKind, CompareFunction, CullMode, FrontFace, IndexFormat, PrimitiveTopology, Program,
@@ -74,6 +76,8 @@ pub enum Error {
     InvalidCamera,
     VertexBehindCamera,
     DegenerateTriangle,
+    MissingChurnScene,
+    InvalidChurnScene,
 }
 
 pub fn decode_artifact(bytes: &[u8], aspect: f32, camera: Camera) -> Result<Scene, Error> {
@@ -225,7 +229,7 @@ fn read_f32x3(
     ])
 }
 
-struct Projector {
+pub(crate) struct Projector {
     position: [f32; 3],
     right: [f32; 3],
     up: [f32; 3],
@@ -237,7 +241,7 @@ struct Projector {
 }
 
 impl Projector {
-    fn new(camera: Camera, aspect: f32) -> Result<Self, Error> {
+    pub(crate) fn new(camera: Camera, aspect: f32) -> Result<Self, Error> {
         if !aspect.is_finite()
             || aspect <= 0.0
             || !camera.vertical_fov_radians.is_finite()
@@ -269,7 +273,7 @@ impl Projector {
         })
     }
 
-    fn project(&self, point: [f32; 3]) -> Result<[f32; 3], Error> {
+    pub(crate) fn project(&self, point: [f32; 3]) -> Result<[f32; 3], Error> {
         let relative = sub(point, self.position);
         let depth = dot(relative, self.forward);
         if !depth.is_finite() || depth < self.near || depth > self.far {
@@ -297,7 +301,7 @@ fn linear_rgb_to_srgba8(rgb: [f32; 3]) -> Result<[u8; 4], Error> {
     ])
 }
 
-fn linear_rgba_to_srgba8(rgba: [f32; 4]) -> Result<[u8; 4], Error> {
+pub(crate) fn linear_rgba_to_srgba8(rgba: [f32; 4]) -> Result<[u8; 4], Error> {
     if rgba
         .iter()
         .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))

@@ -811,7 +811,7 @@ fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_tinyaudio_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::aud::esynth::tinyaudio_service_task())
+    spawn_on_eff_worker(spawner, |_worker_spawner| crate::aud::esynth::tinyaudio_service_task())
 }
 
 fn spawn_tinyaudio_live_http(spawner: Spawner) -> SpawnAttempt {

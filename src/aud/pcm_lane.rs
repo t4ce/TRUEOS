@@ -20,6 +20,7 @@ fn sampled_queue_log() -> bool {
 pub struct PcmLaneRequest {
     pub label: &'static str,
     pub samples: Vec<i16>,
+    pub spirit_talk: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,7 +41,7 @@ pub fn submit_i16_stereo_48k(
     label: &'static str,
     samples: Vec<i16>,
 ) -> Result<usize, PcmLaneError> {
-    match submit_i16_stereo_48k_inner(label, samples, None) {
+    match submit_i16_stereo_48k_inner(label, samples, None, false) {
         Ok(frames) => Ok(frames),
         Err(GuardedPcmLaneError::Lane(error, _samples)) => Err(error),
         Err(GuardedPcmLaneError::GenerationChanged(_samples)) => {
@@ -59,13 +60,23 @@ pub fn submit_i16_stereo_48k_if_generation(
     samples: Vec<i16>,
     expected_generation: u32,
 ) -> Result<usize, GuardedPcmLaneError> {
-    submit_i16_stereo_48k_inner(label, samples, Some(expected_generation))
+    submit_i16_stereo_48k_inner(label, samples, Some(expected_generation), false)
+}
+
+/// Admit voice PCM whose real mixer lifetime drives Lilly's talk animation.
+pub fn submit_spirit_talk_i16_stereo_48k_if_generation(
+    label: &'static str,
+    samples: Vec<i16>,
+    expected_generation: u32,
+) -> Result<usize, GuardedPcmLaneError> {
+    submit_i16_stereo_48k_inner(label, samples, Some(expected_generation), true)
 }
 
 fn submit_i16_stereo_48k_inner(
     label: &'static str,
     samples: Vec<i16>,
     expected_generation: Option<u32>,
+    spirit_talk: bool,
 ) -> Result<usize, GuardedPcmLaneError> {
     if samples.is_empty() {
         return Err(GuardedPcmLaneError::Lane(PcmLaneError::EmptyBuffer, samples));
@@ -109,7 +120,11 @@ fn submit_i16_stereo_48k_inner(
         return Err(GuardedPcmLaneError::Lane(PcmLaneError::QueueFull, samples));
     }
 
-    requests.push_back(PcmLaneRequest { label, samples });
+    requests.push_back(PcmLaneRequest {
+        label,
+        samples,
+        spirit_talk,
+    });
     if sampled_queue_log() {
         crate::log_info!(
             target: "audio";

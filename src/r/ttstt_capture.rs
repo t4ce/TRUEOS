@@ -47,7 +47,14 @@ static WRITER_STATE: Mutex<WriterState> = Mutex::new(WriterState {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CaptureTiming {
+    /// Wait in shell2's serialized request FIFO before service admission.
     pub queue_wait_ms: u64,
+    /// Shared TTSTT service admission to the first actual backend slice.
+    pub service_queue_wait_us: u64,
+    /// First actual backend slice to first PCM observed by shell2.
+    pub service_dispatch_to_first_pcm_us: u64,
+    /// Shared TTSTT service admission to first PCM observed by shell2.
+    pub service_submit_to_first_pcm_us: u64,
     pub first_pcm_ms: u64,
     pub handoff_wait_ms: u64,
     pub active_ms: u64,
@@ -730,7 +737,22 @@ fn encode_metadata(capture: &CompletedCapture, base: &str) -> String {
     let _ = writeln!(out, "speed={:.6}", payload.speed);
     let _ = writeln!(out, "speed_bits=0x{:08x}", payload.speed.to_bits());
     let _ = writeln!(out, "claimed_at_ms={}", payload.claimed_at_ms);
+    // Retain queue_wait_ms for v1 readers, while making its shell-only scope
+    // explicit and reporting the separate shared service-queue timing.
     let _ = writeln!(out, "queue_wait_ms={}", capture.timing.queue_wait_ms);
+    let _ = writeln!(out, "queue_wait_scope=shell-serialized");
+    let _ = writeln!(out, "shell_queue_wait_ms={}", capture.timing.queue_wait_ms);
+    let _ = writeln!(out, "service_queue_wait_us={}", capture.timing.service_queue_wait_us);
+    let _ = writeln!(
+        out,
+        "service_dispatch_to_first_pcm_us={}",
+        capture.timing.service_dispatch_to_first_pcm_us
+    );
+    let _ = writeln!(
+        out,
+        "service_submit_to_first_pcm_us={}",
+        capture.timing.service_submit_to_first_pcm_us
+    );
     let _ = writeln!(out, "first_pcm_ms={}", capture.timing.first_pcm_ms);
     let _ = writeln!(out, "handoff_wait_ms={}", capture.timing.handoff_wait_ms);
     let _ = writeln!(out, "active_ms={}", capture.timing.active_ms);

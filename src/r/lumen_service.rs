@@ -360,11 +360,26 @@ pub(crate) fn spirit_response_present(owner: u8, turn: u64, text: &[u8]) -> i32 
     if text.trim().is_empty() {
         return ERROR_BAD_INPUT;
     }
-    if crate::spirit::enqueue_reasoning_response(turn, text) {
-        0
-    } else {
-        ERROR_UNAVAILABLE
+    if !crate::spirit::enqueue_reasoning_response(turn, text) {
+        return ERROR_UNAVAILABLE;
     }
+    match crate::shell2::cmds::ttstt::enqueue_lumen_tts(text) {
+        Ok(request) => crate::log_info!(
+            target: "r";
+            "lumen-bp: voice queued owner={} turn={} tts_request={}\n",
+            owner,
+            turn,
+            request,
+        ),
+        Err(reason) => crate::log_warn!(
+            target: "r";
+            "lumen-bp: voice unavailable owner={} turn={} reason={} text_presentation=retained\n",
+            owner,
+            turn,
+            reason,
+        ),
+    }
+    0
 }
 
 #[embassy_executor::task(pool_size = TASK_POOL_SIZE)]

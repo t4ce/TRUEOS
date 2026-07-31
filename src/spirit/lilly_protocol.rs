@@ -11,6 +11,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
@@ -30,6 +31,7 @@ const IDLE_CROSS_ARMS_TRANSITION: &str = "transition.neutral_to_crossed";
 const IDLE_UNCROSS_ARMS_TRANSITION: &str = "transition.uncross_arms";
 const AI_REASONING_START_ANIMATION: &str = "agree.firm_nod";
 const AI_REASONING_FINISH_ANIMATION: &str = "idea.finger_up";
+const LUMEN_TALK_ANIMATION: &str = "talk.calm.uncrossed";
 const IDLE_WINK_VARIANTS: [&str; 5] = [
     "wink.playful",
     "flirt.finger_heart",
@@ -490,6 +492,21 @@ static PACKAGE_RING: Mutex<SpiritPackageRing> = Mutex::new(SpiritPackageRing::ne
 static LAST_RGBA: Mutex<SpiritRgba8> = Mutex::new(SpiritRgba8::WHITE);
 static IDLE_STRATEGY: Mutex<Option<LillyIdleStrategy>> = Mutex::new(None);
 static EMOTION_SELECTOR: Mutex<Option<LillyEmotionSelector>> = Mutex::new(None);
+static LUMEN_SPEECH_PLAYING: AtomicBool = AtomicBool::new(false);
+
+/// Mixer-owned speech state. `true` is published only when Lumen PCM is about
+/// to enter the live audio buffer; `false` follows its final drained sample.
+pub(crate) fn set_lumen_speech_playing(playing: bool) {
+    let previous = LUMEN_SPEECH_PLAYING.swap(playing, Ordering::AcqRel);
+    if previous != playing {
+        crate::log_info!(
+            target: "gfx";
+            "trueos-spirit: lumen speech playback={} clip={} synchronization=audio-mixer-boundary\n",
+            if playing { "started" } else { "drained" },
+            LUMEN_TALK_ANIMATION,
+        );
+    }
+}
 
 /// Queue one owned API package. Validation happens before publication, so the
 /// reader never encounters an unsupported schema or a bad animation tag.
@@ -706,6 +723,11 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
 
         if crate::r::ai_activity::reasoning_active() {
             return next_idle_animation(*LAST_RGBA.lock());
+        }
+
+        if LUMEN_SPEECH_PLAYING.load(Ordering::Acquire) {
+            pause_idle_strategy();
+            return resolve(LUMEN_TALK_ANIMATION, *LAST_RGBA.lock());
         }
 
         let Some((package, ring_remaining)) = PACKAGE_RING.lock().pop() else {
