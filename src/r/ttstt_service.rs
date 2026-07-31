@@ -43,6 +43,13 @@ pub const TTS_QUEUE_DEPTH: usize = 8;
 const TTS_MAX_OUTSTANDING: usize = TTS_QUEUE_DEPTH + 1;
 /// Kokoro's 512-position input reserves the first and last positions for padding.
 pub const KOKORO_MAX_PHONEMES: usize = 510;
+/// PCM accepted by the existing live kernel playback lane.
+pub const TTS_PCM_SAMPLE_RATE_HZ: u32 = 48_000;
+pub const TTS_PCM_CHANNELS: usize = 2;
+/// Bound every backend-to-consumer transfer to 250 ms of PCM.
+pub const TTS_PCM_CHUNK_MAX_FRAMES: usize = 12_000;
+/// Let synthesis run ahead by at most one second of finalized PCM.
+pub const TTS_OUTPUT_QUEUE_DEPTH: usize = 4;
 const WORKER_TASK_POOL: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 
 static SERVICE_STATE: AtomicU8 = AtomicU8::new(ServiceState::WaitingForModels as u8);
@@ -53,6 +60,10 @@ static OUTSTANDING_JOBS: AtomicUsize = AtomicUsize::new(0);
 static OUTSTANDING_TTS_JOBS: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE_TTS_JOB_ID: AtomicU64 = AtomicU64::new(0);
 static BACKEND_WARM_STARTED: AtomicBool = AtomicBool::new(false);
+static TTS_PCM_CHUNKS_EMITTED: AtomicU64 = AtomicU64::new(0);
+static TTS_PCM_FRAMES_EMITTED: AtomicU64 = AtomicU64::new(0);
+static TTS_STREAMS_COMPLETED: AtomicU64 = AtomicU64::new(0);
+static TTS_STREAMS_FAILED: AtomicU64 = AtomicU64::new(0);
 
 static MODELS: Mutex<Option<Arc<ModelSet>>> = Mutex::new(None);
 static JOBS: Mutex<VecDeque<QueuedJob>> = Mutex::new(VecDeque::new());
@@ -86,18 +97,29 @@ pub struct ServiceStatus {
     pub workers: u32,
     pub outstanding_jobs: usize,
     pub outstanding_tts_jobs: usize,
+    pub queued_tts_jobs: usize,
     pub active_tts_job_id: Option<u64>,
+    pub tts_pcm_chunks_emitted: u64,
+    pub tts_pcm_frames_emitted: u64,
+    pub tts_streams_completed: u64,
+    pub tts_streams_failed: u64,
 }
 
 pub fn status() -> ServiceStatus {
     let active_tts_job_id = ACTIVE_TTS_JOB_ID.load(Ordering::Acquire);
+    let outstanding_tts_jobs = OUTSTANDING_TTS_JOBS.load(Ordering::Acquire);
     ServiceStatus {
         state: ServiceState::from_u8(SERVICE_STATE.load(Ordering::Acquire)),
         resident_bytes: RESIDENT_BYTES.load(Ordering::Acquire),
         workers: WORKER_COUNT.load(Ordering::Acquire),
         outstanding_jobs: OUTSTANDING_JOBS.load(Ordering::Acquire),
-        outstanding_tts_jobs: OUTSTANDING_TTS_JOBS.load(Ordering::Acquire),
+        outstanding_tts_jobs,
+        queued_tts_jobs: outstanding_tts_jobs.saturating_sub(usize::from(active_tts_job_id != 0)),
         active_tts_job_id: (active_tts_job_id != 0).then_some(active_tts_job_id),
+        tts_pcm_chunks_emitted: TTS_PCM_CHUNKS_EMITTED.load(Ordering::Acquire),
+        tts_pcm_frames_emitted: TTS_PCM_FRAMES_EMITTED.load(Ordering::Acquire),
+        tts_streams_completed: TTS_STREAMS_COMPLETED.load(Ordering::Acquire),
+        tts_streams_failed: TTS_STREAMS_FAILED.load(Ordering::Acquire),
     }
 }
 
@@ -184,19 +206,221 @@ pub trait InferenceJob: Send {
     fn run_slice(&mut self, models: &ModelSet, worker: WorkerContext) -> JobProgress;
 }
 
-/// Fully rendered output expected by the kernel HDA playback lane.
-pub struct TtsAudio {
+/// One finalized, bounded handoff from a native Kokoro job.
+///
+/// A model inference chunk contains at most [`KOKORO_MAX_PHONEMES`] phonemes.
+/// Its waveform may be divided into several of these PCM chunks. Backends must
+/// set `end_of_model_chunk` on the last PCM chunk produced by that inference.
+#[derive(Debug)]
+pub struct TtsAudioChunk {
     pub samples_i16_stereo_48k: Vec<i16>,
+    pub model_chunk_index: u32,
+    pub model_chunk_phonemes: u16,
+    pub end_of_model_chunk: bool,
 }
 
-pub type TtsCompletion = Box<dyn FnOnce(Result<TtsAudio, &'static str>) + Send + 'static>;
+impl TtsAudioChunk {
+    pub fn validate(&self) -> Result<usize, &'static str> {
+        if self.samples_i16_stereo_48k.is_empty() {
+            return Err("empty-pcm-chunk");
+        }
+        if !self
+            .samples_i16_stereo_48k
+            .len()
+            .is_multiple_of(TTS_PCM_CHANNELS)
+        {
+            return Err("pcm-chunk-not-stereo");
+        }
+        let frames = self.samples_i16_stereo_48k.len() / TTS_PCM_CHANNELS;
+        if frames > TTS_PCM_CHUNK_MAX_FRAMES {
+            return Err("pcm-chunk-too-large");
+        }
+        if self.model_chunk_phonemes == 0
+            || usize::from(self.model_chunk_phonemes) > KOKORO_MAX_PHONEMES
+        {
+            return Err("model-chunk-phonemes-out-of-range");
+        }
+        Ok(frames)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TtsSynthesisSummary {
+    pub model_chunks: u32,
+    pub pcm_chunks: u32,
+    pub pcm_frames: u64,
+}
+
+#[derive(Debug)]
+pub enum TtsOutputError {
+    WouldBlock(TtsAudioChunk),
+    Closed(TtsAudioChunk),
+    Invalid {
+        reason: &'static str,
+        chunk: TtsAudioChunk,
+    },
+}
+
+struct TtsOutputState {
+    chunks: Mutex<VecDeque<TtsAudioChunk>>,
+    completion: Mutex<Option<Result<TtsSynthesisSummary, &'static str>>>,
+    closed: AtomicBool,
+    cancelled: AtomicBool,
+    wait: crate::wait::WaitQueue,
+}
+
+impl TtsOutputState {
+    fn new() -> Self {
+        Self {
+            chunks: Mutex::new(VecDeque::new()),
+            completion: Mutex::new(None),
+            closed: AtomicBool::new(false),
+            cancelled: AtomicBool::new(false),
+            wait: crate::wait::WaitQueue::new(),
+        }
+    }
+}
+
+/// Nonblocking output side held by one native Kokoro inference job.
+///
+/// A backend retains a chunk when [`Self::try_push`] returns `WouldBlock`,
+/// returns `Pending` from `InferenceJob::run_slice`, and retries that same
+/// chunk later. It must not silently discard or reorder output.
+#[derive(Clone)]
+pub struct TtsOutput {
+    state: Arc<TtsOutputState>,
+}
+
+impl TtsOutput {
+    pub fn try_push(&self, chunk: TtsAudioChunk) -> Result<(), TtsOutputError> {
+        let frames = match chunk.validate() {
+            Ok(frames) => frames,
+            Err(reason) => return Err(TtsOutputError::Invalid { reason, chunk }),
+        };
+        if self.state.closed.load(Ordering::Acquire)
+            || self.state.cancelled.load(Ordering::Acquire)
+        {
+            return Err(TtsOutputError::Closed(chunk));
+        }
+        let mut chunks = self.state.chunks.lock();
+        if chunks.len() >= TTS_OUTPUT_QUEUE_DEPTH {
+            return Err(TtsOutputError::WouldBlock(chunk));
+        }
+        // Recheck under the queue lock so finish/cancel cannot accept data
+        // after publishing a terminal state.
+        if self.state.closed.load(Ordering::Acquire)
+            || self.state.cancelled.load(Ordering::Acquire)
+        {
+            return Err(TtsOutputError::Closed(chunk));
+        }
+        chunks.push_back(chunk);
+        drop(chunks);
+        TTS_PCM_CHUNKS_EMITTED.fetch_add(1, Ordering::Relaxed);
+        TTS_PCM_FRAMES_EMITTED.fetch_add(frames as u64, Ordering::Relaxed);
+        self.state.wait.notify_one();
+        Ok(())
+    }
+
+    /// Publish the sole terminal result after all PCM chunks were accepted.
+    pub fn finish(&self, result: Result<TtsSynthesisSummary, &'static str>) -> bool {
+        if self
+            .state
+            .closed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return false;
+        }
+        if result.is_ok() {
+            TTS_STREAMS_COMPLETED.fetch_add(1, Ordering::Relaxed);
+        } else {
+            TTS_STREAMS_FAILED.fetch_add(1, Ordering::Relaxed);
+        }
+        *self.state.completion.lock() = Some(result);
+        self.state.wait.notify_all();
+        true
+    }
+
+    pub fn cancelled(&self) -> bool {
+        self.state.cancelled.load(Ordering::Acquire)
+    }
+
+    fn ensure_finished(&self, result: Result<TtsSynthesisSummary, &'static str>) {
+        let _ = self.finish(result);
+    }
+}
+
+/// Consumer side returned to shell2 immediately after a TTS job is admitted.
+pub struct TtsStream {
+    state: Arc<TtsOutputState>,
+}
+
+pub enum TtsStreamEvent {
+    Chunk(TtsAudioChunk),
+    Finished(Result<TtsSynthesisSummary, &'static str>),
+}
+
+impl TtsStream {
+    pub fn try_next(&self) -> Option<TtsStreamEvent> {
+        if let Some(chunk) = self.state.chunks.lock().pop_front() {
+            // Wake a producer that retained a chunk after WouldBlock.
+            self.state.wait.notify_one();
+            return Some(TtsStreamEvent::Chunk(chunk));
+        }
+        self.state
+            .completion
+            .lock()
+            .take()
+            .map(TtsStreamEvent::Finished)
+    }
+
+    pub async fn next(&self) -> TtsStreamEvent {
+        loop {
+            if let Some(event) = self.try_next() {
+                return event;
+            }
+            self.state.wait.wait_for_event_timeout(25).await;
+        }
+    }
+
+    /// Consumer cancellation is cooperative. It closes the chunk sink, but a
+    /// backend must observe `TtsOutput::cancelled` and finish its job promptly.
+    pub fn cancel(&self) {
+        self.state.cancelled.store(true, Ordering::Release);
+        self.state.wait.notify_all();
+    }
+
+    pub fn pending_chunks(&self) -> usize {
+        self.state.chunks.lock().len()
+    }
+
+    pub fn pending_frames(&self) -> usize {
+        self.state
+            .chunks
+            .lock()
+            .iter()
+            .map(|chunk| chunk.samples_i16_stereo_48k.len() / TTS_PCM_CHANNELS)
+            .sum()
+    }
+}
+
+pub struct TtsSubmission {
+    pub id: u64,
+    pub stream: TtsStream,
+}
+
 pub type SttCompletion = Box<dyn FnOnce(Result<String, &'static str>) + Send + 'static>;
 
 pub struct TtsRequest {
     pub text: String,
     pub voice: String,
     pub speed: f32,
-    pub complete: TtsCompletion,
+}
+
+/// Request delivered to the native backend after service admission.
+pub struct BackendTtsRequest {
+    pub request: TtsRequest,
+    pub output: TtsOutput,
 }
 
 pub struct SttRequest {
@@ -218,7 +442,10 @@ pub trait SpeechBackend: Send + Sync {
     /// Construct a bounded-slice warm job for both resident model images.
     fn create_warm_job(&self) -> Result<Box<dyn InferenceJob>, &'static str>;
 
-    fn create_tts_job(&self, request: TtsRequest) -> Result<Box<dyn InferenceJob>, &'static str>;
+    fn create_tts_job(
+        &self,
+        request: BackendTtsRequest,
+    ) -> Result<Box<dyn InferenceJob>, &'static str>;
 
     fn create_stt_job(&self, request: SttRequest) -> Result<Box<dyn InferenceJob>, &'static str>;
 }
@@ -314,7 +541,7 @@ fn ensure_backend_warm_started() -> bool {
     }
 }
 
-pub fn submit_tts(request: TtsRequest) -> Result<u64, SpeechRequestError> {
+pub fn submit_tts(request: TtsRequest) -> Result<TtsSubmission, SpeechRequestError> {
     if ServiceState::from_u8(SERVICE_STATE.load(Ordering::Acquire)) != ServiceState::Ready {
         return Err(SpeechRequestError::Service(SubmitError::NotReady));
     }
@@ -332,10 +559,27 @@ pub fn submit_tts(request: TtsRequest) -> Result<u64, SpeechRequestError> {
         let _ = ensure_backend_warm_started();
         return Err(SpeechRequestError::BackendWarming);
     }
+    let state = Arc::new(TtsOutputState::new());
+    let output = TtsOutput {
+        state: state.clone(),
+    };
     let job = backend
-        .create_tts_job(request)
+        .create_tts_job(BackendTtsRequest {
+            request,
+            output: output.clone(),
+        })
         .map_err(SpeechRequestError::BackendRejected)?;
-    submit(job).map_err(SpeechRequestError::Service)
+    if job.direction() != Direction::TextToSpeech {
+        return Err(SpeechRequestError::BackendRejected(
+            "tts-factory-returned-wrong-direction",
+        ));
+    }
+    let id = submit_with_completion(job, JobCompletion::Tts(output))
+        .map_err(SpeechRequestError::Service)?;
+    Ok(TtsSubmission {
+        id,
+        stream: TtsStream { state },
+    })
 }
 
 pub fn submit_stt(request: SttRequest) -> Result<u64, SpeechRequestError> {
@@ -353,6 +597,11 @@ pub fn submit_stt(request: SttRequest) -> Result<u64, SpeechRequestError> {
     let job = backend
         .create_stt_job(request)
         .map_err(SpeechRequestError::BackendRejected)?;
+    if job.direction() != Direction::SpeechToText {
+        return Err(SpeechRequestError::BackendRejected(
+            "stt-factory-returned-wrong-direction",
+        ));
+    }
     submit(job).map_err(SpeechRequestError::Service)
 }
 
@@ -421,10 +670,23 @@ pub enum SubmitError {
 struct QueuedJob {
     id: u64,
     job: Box<dyn InferenceJob>,
+    completion: JobCompletion,
+}
+
+enum JobCompletion {
+    None,
+    Tts(TtsOutput),
 }
 
 /// Queue a cooperative STT/TTS backend job on the resident AP2+ worker pool.
 pub fn submit(job: Box<dyn InferenceJob>) -> Result<u64, SubmitError> {
+    submit_with_completion(job, JobCompletion::None)
+}
+
+fn submit_with_completion(
+    job: Box<dyn InferenceJob>,
+    completion: JobCompletion,
+) -> Result<u64, SubmitError> {
     if ServiceState::from_u8(SERVICE_STATE.load(Ordering::Acquire)) != ServiceState::Ready {
         return Err(SubmitError::NotReady);
     }
@@ -451,7 +713,11 @@ pub fn submit(job: Box<dyn InferenceJob>) -> Result<u64, SubmitError> {
     }
 
     let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
-    JOBS.lock().push_back(QueuedJob { id, job });
+    JOBS.lock().push_back(QueuedJob {
+        id,
+        job,
+        completion,
+    });
     JOB_WAIT.notify_one();
     Ok(id)
 }
@@ -748,7 +1014,17 @@ fn requeue_job(job: QueuedJob) {
     JOB_WAIT.notify_one();
 }
 
-fn finish_job(id: u64, direction: Direction, result: JobProgress) {
+fn finish_job(queued: QueuedJob, direction: Direction, result: JobProgress) {
+    let id = queued.id;
+    if let JobCompletion::Tts(output) = queued.completion {
+        match result {
+            JobProgress::Complete => output.ensure_finished(Err(
+                "backend-completed-without-finishing-tts-stream",
+            )),
+            JobProgress::Failed(reason) => output.ensure_finished(Err(reason)),
+            JobProgress::Pending => {}
+        }
+    }
     OUTSTANDING_JOBS.fetch_sub(1, Ordering::AcqRel);
     if direction == Direction::TextToSpeech {
         OUTSTANDING_TTS_JOBS.fetch_sub(1, Ordering::AcqRel);
@@ -810,7 +1086,7 @@ async fn worker_task(slot: u32, core_kind: u8, models: Arc<ModelSet>) {
         let direction = queued.job.direction();
         match queued.job.run_slice(models.as_ref(), context) {
             JobProgress::Pending => requeue_job(queued),
-            result => finish_job(queued.id, direction, result),
+            result => finish_job(queued, direction, result),
         }
         Timer::after(EmbassyDuration::from_millis(WORKER_SLICE_YIELD_MS)).await;
     }

@@ -1,6 +1,7 @@
 use super::hvlogf;
 use crate::phys::HeapArena;
 use crate::r::static_slots::StaticSlots;
+use alloc::vec::Vec;
 use spin::Mutex;
 
 #[inline]
@@ -1121,6 +1122,13 @@ pub fn prepare_guest_stack_bytes_for_vm(
     let bytes = requested_bytes
         .max(GUEST_STACK_MIN_BYTES)
         .min(GUEST_STACK_MAX_BYTES);
+    if GUEST_STACK_BACKINGS[idx]
+        .lock()
+        .arena
+        .is_some_and(|arena| arena.length == bytes)
+    {
+        return Ok(bytes);
+    }
     let arena =
         crate::phys::reserve_heap_arena(bytes, PAGE_SIZE_2M as usize).ok_or("guest stack alloc")?;
     unsafe {
@@ -1140,6 +1148,49 @@ pub fn prepare_guest_stack_bytes_for_vm(
     }
 
     Ok(bytes)
+}
+
+pub fn release_guest_stack_for_vm(vm_id: u8) -> bool {
+    let Ok(idx) = vm_index(vm_id) else {
+        return false;
+    };
+    let old = {
+        let mut backing = GUEST_STACK_BACKINGS[idx].lock();
+        let old = backing.arena.take();
+        backing.active_bytes = 0;
+        old
+    };
+    old.is_some_and(|arena| crate::phys::free_phys_range(arena.phys_start, arena.length))
+}
+
+pub fn snapshot_guest_hull_rw_for_vm(vm_id: u8) -> Result<Vec<u8>, &'static str> {
+    let backing = active_guest_hull_rw_backing_for_vm(vm_id).ok_or("guest hull rw backing")?;
+    let arena = backing.arena.ok_or("guest hull rw arena")?;
+    Ok(unsafe {
+        core::slice::from_raw_parts(arena.virt_start as *const u8, backing.active_bytes).to_vec()
+    })
+}
+
+pub fn restore_guest_hull_rw_for_vm(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
+    ensure_guest_hull_rw_template_ready()?;
+    let backing =
+        prepare_guest_hull_rw_backing_for_vm(vm_id, true)?.ok_or("guest hull rw backing")?;
+    let arena = backing.arena.ok_or("guest hull rw arena")?;
+    if bytes.len() != backing.active_bytes || bytes.len() > arena.length {
+        return Err("guest hull rw image length");
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), arena.virt_start as *mut u8, bytes.len());
+    }
+    Ok(())
+}
+
+pub fn release_guest_hull_rw_for_vm(vm_id: u8) -> bool {
+    let Ok(idx) = vm_index(vm_id) else {
+        return false;
+    };
+    let old = GUEST_HULL_RW_BACKINGS[idx].lock().arena.take();
+    old.is_some_and(|arena| crate::phys::free_phys_range(arena.phys_start, arena.length))
 }
 
 pub fn guest_stack_top() -> u64 {
@@ -1421,6 +1472,35 @@ pub fn clear_restore_meta_for_vm(vm_id: u8) {
     if let Some(meta) = vm_restore_meta_lock(vm_id) {
         *meta.lock() = None;
     }
+}
+
+pub fn clear_snapshot_state_for_vm(vm_id: u8) {
+    clear_restore_meta_for_vm(vm_id);
+    if let Some(meta) = vm_snapshot_meta_lock(vm_id) {
+        *meta.lock() = None;
+    }
+}
+
+/// Rebuild host-physical page-table links after a disk import. The raw VM
+/// snapshot records logical CPU state, but table/stack/hull backing addresses
+/// are boot-local and must be rebound to the resources acquired on this boot.
+pub fn rebind_restored_guest_memory_for_vm(
+    vm_id: u8,
+    boot_mode: crate::hv::VmBootMode,
+) -> Result<(), &'static str> {
+    let restore_lock = vm_restore_meta_lock(vm_id).ok_or("restore metadata slot")?;
+    let mut restored = (*restore_lock.lock()).ok_or("restore metadata missing")?;
+    let cr3 =
+        build_guest_cr3_for_vm_with_mode(vm_id, restored.guest_rip, restored.guest_rsp, boot_mode)?;
+    restored.guest_cr3 = cr3;
+    *restore_lock.lock() = Some(restored);
+    if let Some(snapshot_lock) = vm_snapshot_meta_lock(vm_id)
+        && let Some(mut snapshot) = *snapshot_lock.lock()
+    {
+        snapshot.guest_cr3 = cr3;
+        *snapshot_lock.lock() = Some(snapshot);
+    }
+    Ok(())
 }
 
 pub fn current_guest_cr3_pa() -> Result<u64, &'static str> {

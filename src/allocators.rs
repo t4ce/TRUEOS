@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::asm;
 use core::mem::{align_of, size_of};
@@ -1306,6 +1307,243 @@ pub fn hv_guest_heap_stats_if_configured(vm_id: u8) -> Option<HeapStats> {
         return None;
     }
     Some(heap_stats_from_guard(&mut guard))
+}
+
+const HV_GUEST_HEAP_IMAGE_MAGIC: u32 = u32::from_le_bytes(*b"HGS1");
+const HV_GUEST_HEAP_IMAGE_VERSION: u32 = 1;
+
+fn heap_image_push_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn heap_image_push_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+/// Capture only allocated spans of a paused guest heap. Free spans are encoded
+/// as ranges and rebuilt on import, keeping a 512 MiB arena with 30 MiB in use
+/// close to 30 MiB on disk.
+pub fn snapshot_hv_guest_heap(vm_id: u8) -> Result<Vec<u8>, &'static str> {
+    let page = hv_guest_allocator_page(vm_id).ok_or("unsupported guest heap")?;
+    let mut guard = page.allocator.lock();
+    if !guard.initialized || guard.heap_source != HeapSourceKind::Arena || guard.heap_len == 0 {
+        return Err("guest heap is not an initialized arena");
+    }
+    let heap_start = guard.heap_virt_start;
+    let heap_len = guard.heap_len;
+    let heap_end = heap_start
+        .checked_add(heap_len)
+        .ok_or("guest heap bounds")?;
+    let mut free = Vec::<(usize, usize)>::new();
+    let mut current = guard.head;
+    let mut previous_end = heap_start;
+    while let Some(node) = current {
+        let address = node.as_ptr() as usize;
+        if !guard.is_plausible_free_block_ptr(address) || address < previous_end {
+            return Err("guest heap free list is invalid");
+        }
+        let block = unsafe { node.as_ref() };
+        let end = address
+            .checked_add(block.size)
+            .ok_or("guest heap free range")?;
+        if block.size < minimum_block_size() || end > heap_end {
+            return Err("guest heap free range is invalid");
+        }
+        free.push((address - heap_start, block.size));
+        previous_end = end;
+        current = block.next;
+    }
+
+    let mut occupied = Vec::<(usize, usize)>::new();
+    let mut cursor = 0usize;
+    for &(offset, len) in free.iter() {
+        if cursor < offset {
+            occupied.push((cursor, offset - cursor));
+        }
+        cursor = offset.checked_add(len).ok_or("guest heap free range")?;
+    }
+    if cursor < heap_len {
+        occupied.push((cursor, heap_len - cursor));
+    }
+    let occupied_bytes = occupied
+        .iter()
+        .try_fold(0usize, |total, (_, len)| total.checked_add(*len))
+        .ok_or("guest heap image size")?;
+    let header_bytes = 40usize
+        .checked_add(free.len().saturating_mul(16))
+        .and_then(|v| v.checked_add(occupied.len().saturating_mul(16)))
+        .and_then(|v| v.checked_add(occupied_bytes))
+        .ok_or("guest heap image size")?;
+    let mut out = Vec::with_capacity(header_bytes);
+    heap_image_push_u32(&mut out, HV_GUEST_HEAP_IMAGE_MAGIC);
+    heap_image_push_u32(&mut out, HV_GUEST_HEAP_IMAGE_VERSION);
+    heap_image_push_u64(&mut out, guard.heap_phys_start as u64);
+    heap_image_push_u64(&mut out, heap_start as u64);
+    heap_image_push_u64(&mut out, heap_len as u64);
+    heap_image_push_u32(&mut out, free.len() as u32);
+    heap_image_push_u32(&mut out, occupied.len() as u32);
+    for &(offset, len) in free.iter() {
+        heap_image_push_u64(&mut out, offset as u64);
+        heap_image_push_u64(&mut out, len as u64);
+    }
+    for &(offset, len) in occupied.iter() {
+        heap_image_push_u64(&mut out, offset as u64);
+        heap_image_push_u64(&mut out, len as u64);
+        let bytes = unsafe { core::slice::from_raw_parts((heap_start + offset) as *const u8, len) };
+        out.extend_from_slice(bytes);
+    }
+    Ok(out)
+}
+
+fn heap_image_take_u32(bytes: &[u8], offset: &mut usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let raw = bytes.get(*offset..end)?.try_into().ok()?;
+    *offset = end;
+    Some(u32::from_le_bytes(raw))
+}
+
+fn heap_image_take_u64(bytes: &[u8], offset: &mut usize) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    let raw = bytes.get(*offset..end)?.try_into().ok()?;
+    *offset = end;
+    Some(u64::from_le_bytes(raw))
+}
+
+/// Restore a pointer-bearing guest heap at its original HHDM address.
+pub fn restore_hv_guest_heap(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
+    let mut offset = 0usize;
+    if heap_image_take_u32(bytes, &mut offset) != Some(HV_GUEST_HEAP_IMAGE_MAGIC)
+        || heap_image_take_u32(bytes, &mut offset) != Some(HV_GUEST_HEAP_IMAGE_VERSION)
+    {
+        return Err("bad guest heap image");
+    }
+    let phys_start = heap_image_take_u64(bytes, &mut offset).ok_or("guest heap header")?;
+    let virt_start =
+        usize::try_from(heap_image_take_u64(bytes, &mut offset).ok_or("guest heap header")?)
+            .map_err(|_| "guest heap address")?;
+    let heap_len =
+        usize::try_from(heap_image_take_u64(bytes, &mut offset).ok_or("guest heap header")?)
+            .map_err(|_| "guest heap length")?;
+    let free_count = heap_image_take_u32(bytes, &mut offset).ok_or("guest heap header")? as usize;
+    let occupied_count =
+        heap_image_take_u32(bytes, &mut offset).ok_or("guest heap header")? as usize;
+    if heap_len < minimum_block_size()
+        || phys_start as usize % HV_GUEST_HEAP_ALIGN != 0
+        || heap_len % HV_GUEST_HEAP_ALIGN != 0
+    {
+        return Err("guest heap geometry");
+    }
+    let mut free = Vec::<(usize, usize)>::with_capacity(free_count);
+    let mut previous_end = 0usize;
+    for _ in 0..free_count {
+        let start = usize::try_from(heap_image_take_u64(bytes, &mut offset).ok_or("free range")?)
+            .map_err(|_| "free range")?;
+        let len = usize::try_from(heap_image_take_u64(bytes, &mut offset).ok_or("free range")?)
+            .map_err(|_| "free range")?;
+        let end = start.checked_add(len).ok_or("free range")?;
+        if start < previous_end || end > heap_len || len < minimum_block_size() {
+            return Err("free range geometry");
+        }
+        free.push((start, len));
+        previous_end = end;
+    }
+    let mut occupied = Vec::<(usize, usize, usize)>::with_capacity(occupied_count);
+    previous_end = 0;
+    for _ in 0..occupied_count {
+        let start =
+            usize::try_from(heap_image_take_u64(bytes, &mut offset).ok_or("occupied range")?)
+                .map_err(|_| "occupied range")?;
+        let len = usize::try_from(heap_image_take_u64(bytes, &mut offset).ok_or("occupied range")?)
+            .map_err(|_| "occupied range")?;
+        let end = start.checked_add(len).ok_or("occupied range")?;
+        let data_end = offset.checked_add(len).ok_or("occupied data")?;
+        if start < previous_end || end > heap_len || data_end > bytes.len() {
+            return Err("occupied range geometry");
+        }
+        occupied.push((start, len, offset));
+        previous_end = end;
+        offset = data_end;
+    }
+    if offset != bytes.len() {
+        return Err("trailing guest heap image bytes");
+    }
+    let mut cover = Vec::<(usize, usize)>::with_capacity(free.len() + occupied.len());
+    cover.extend(free.iter().copied());
+    cover.extend(occupied.iter().map(|&(start, len, _)| (start, len)));
+    cover.sort_by_key(|range| range.0);
+    let mut covered = 0usize;
+    for (start, len) in cover {
+        if start != covered {
+            return Err("guest heap image has a gap or overlap");
+        }
+        covered = covered.checked_add(len).ok_or("guest heap coverage")?;
+    }
+    if covered != heap_len {
+        return Err("guest heap image is incomplete");
+    }
+
+    let page = hv_guest_allocator_page(vm_id).ok_or("unsupported guest heap")?;
+    {
+        let guard = page.allocator.lock();
+        if guard.initialized || guard.heap_len != 0 {
+            return Err("guest heap slot is already configured");
+        }
+    }
+    let arena = phys::reserve_heap_arena_at(phys_start, heap_len)
+        .ok_or("original guest heap physical range is unavailable")?;
+    if arena.virt_start != virt_start {
+        let _ = phys::free_phys_range(arena.phys_start, arena.length);
+        return Err("guest heap HHDM address changed");
+    }
+    for &(start, len, data_offset) in occupied.iter() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes[data_offset..data_offset + len].as_ptr(),
+                (virt_start + start) as *mut u8,
+                len,
+            );
+        }
+    }
+    let mut guard = page.allocator.lock();
+    guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
+    guard.initialized = true;
+    let mut next = None;
+    for &(start, len) in free.iter().rev() {
+        let ptr = (virt_start + start) as *mut FreeBlock;
+        unsafe {
+            ptr.write(FreeBlock { size: len, next });
+            next = NonNull::new(ptr);
+        }
+    }
+    guard.head = next;
+    drop(guard);
+    publish_hv_guest_heap_range(vm_id, arena.virt_start, arena.length);
+    page.ready.store(1, Ordering::Release);
+    Ok(())
+}
+
+/// Release an offline guest heap. Callers must first drop all host-owned
+/// Blueprint values allocated from this domain.
+pub fn release_hv_guest_heap_for_vm(vm_id: u8) -> bool {
+    let Some(page) = hv_guest_allocator_page(vm_id) else {
+        return false;
+    };
+    let arena = {
+        let mut guard = page.allocator.lock();
+        if guard.heap_source != HeapSourceKind::Arena || guard.heap_len == 0 {
+            return false;
+        }
+        let arena = HeapArena {
+            phys_start: guard.heap_phys_start as u64,
+            virt_start: guard.heap_virt_start,
+            length: guard.heap_len,
+        };
+        *guard = FreeList::new();
+        arena
+    };
+    page.ready.store(0, Ordering::Release);
+    publish_hv_guest_heap_range(vm_id, 0, 0);
+    phys::free_phys_range(arena.phys_start, arena.length)
 }
 
 pub fn hv_guest_heap_stats_total() -> HeapStats {

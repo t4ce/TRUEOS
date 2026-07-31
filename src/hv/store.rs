@@ -13,16 +13,13 @@ use crate::net::adapter::{
 use crate::r::net::ports;
 use crate::wait::{CompletionCell, WaitQueue};
 
-const VM_STORE_PROBE_PATH: &str = "vm/.probe";
-const VM_STORE_MANIFEST_PREFIX: &str = "vm/committed-";
-const VM_STORE_OBJECT_PREFIX: &str = "vm/object-";
 const VM_STORE_REPL_CHUNK: usize = 1200;
 const VM_STORE_VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
-const VM_STORE_BLOCK_SIZE: u32 = 512;
-const VM_STORE_MIN_RAMDISK_BYTES: u64 = 64 * 1024 * 1024;
-const VM_STORE_RAMDISK_ALIGN_BYTES: u64 = 64 * 1024 * 1024;
 const VM_STORE_QUEUE_CAP: usize = 8;
-const VM_STORE_PROBE_BYTES: &[u8] = b"trueos-hv-store-probe";
+const PERSISTENT_VM_MAGIC: &[u8; 8] = b"TVMSTR1\0";
+const PERSISTENT_VM_VERSION: u32 = 1;
+const PERSISTENT_VM_PREFIX: &str = "vm/snapshots/";
+const PERSISTENT_VM_SUFFIX: &str = ".tvm";
 
 #[inline]
 fn boot_probe_ms() -> u64 {
@@ -31,9 +28,10 @@ fn boot_probe_ms() -> u64 {
 }
 
 static VM_STORE_ONLINE: AtomicBool = AtomicBool::new(false);
-// A save formats a private ramdisk. Keep one handle per VM so pausing another
-// slot cannot replace an earlier slot's committed checkpoint.
-static VM_STORE_DISKS: [Mutex<Option<block::DeviceHandle>>; VM_STORE_VM_ID_LIMIT] =
+// Warm checkpoints are deliberately independent from the block registry.  A
+// slot owns one immutable byte image and `eject` can therefore reclaim it
+// without leaving an immortal private ramdisk device behind.
+static VM_STORE_IMAGES: [Mutex<Option<Arc<[u8]>>>; VM_STORE_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; VM_STORE_VM_ID_LIMIT];
 static VM_STORE_QUEUE: Mutex<Deque<Request, VM_STORE_QUEUE_CAP>> = Mutex::new(Deque::new());
 static VM_STORE_QUEUE_WAIT: WaitQueue = WaitQueue::new();
@@ -53,6 +51,9 @@ pub enum VmStoreError {
     MissingSnapshot,
     Read(block::Error),
     Write(block::Error),
+    NoPersistentRoot,
+    InvalidName,
+    BadEnvelope,
 }
 
 #[derive(Clone, Debug)]
@@ -96,182 +97,14 @@ impl Completion {
     }
 }
 
-struct HvStoreBlockIo {
-    handle: block::DeviceHandle,
-}
-
-impl HvStoreBlockIo {
-    #[inline]
-    const fn new(handle: block::DeviceHandle) -> Self {
-        Self { handle }
-    }
-}
-
-impl trueos_fs::BlockIo for HvStoreBlockIo {
-    type Error = block::Error;
-
-    #[inline]
-    fn block_size(&self) -> usize {
-        self.handle.info().block_size as usize
-    }
-
-    #[inline]
-    fn block_count(&self) -> u64 {
-        self.handle.info().block_count
-    }
-
-    #[inline]
-    fn max_transfer_bytes(&self) -> usize {
-        let v = self.handle.info().max_transfer_bytes as usize;
-        if v == 0 { 256 * 1024 } else { v }
-    }
-
-    async fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>, block::Error> {
-        if blocks == 0 {
-            return Ok(Vec::new());
-        }
-
-        let info = self.handle.info();
-        let bs = info.block_size as usize;
-        if bs == 0 {
-            return Err(block::Error::InvalidParam);
-        }
-
-        let max_blocks = if info.max_transfer_bytes > 0 {
-            (info.max_transfer_bytes as usize / bs).max(1)
-        } else {
-            1
-        };
-
-        let mut out = Vec::with_capacity(bs.saturating_mul(blocks));
-        let mut cur_lba = lba;
-        let mut remaining = blocks;
-        while remaining > 0 {
-            let blocks_here = core::cmp::min(remaining, max_blocks);
-            let tmp = self.handle.read_blocks(cur_lba, blocks_here).await?;
-            out.extend_from_slice(&tmp);
-            cur_lba = cur_lba.saturating_add(blocks_here as u64);
-            remaining = remaining.saturating_sub(blocks_here);
-        }
-
-        Ok(out)
-    }
-
-    async fn write_blocks(&self, lba: u64, buf: &[u8]) -> Result<(), block::Error> {
-        if buf.is_empty() {
-            return Ok(());
-        }
-        let info = self.handle.info();
-        let bs = info.block_size as usize;
-        if bs == 0 || !buf.len().is_multiple_of(bs) {
-            return Err(block::Error::InvalidParam);
-        }
-
-        let max_blocks = if info.max_transfer_bytes > 0 {
-            (info.max_transfer_bytes as usize / bs).max(1)
-        } else {
-            1
-        };
-
-        let mut cur_lba = lba;
-        let mut off = 0usize;
-        while off < buf.len() {
-            let remaining = buf.len() - off;
-            let blocks_here = core::cmp::min(max_blocks, remaining / bs);
-            let bytes_here = blocks_here * bs;
-            self.handle
-                .write_blocks(cur_lba, &buf[off..off + bytes_here])
-                .await?;
-            cur_lba = cur_lba.saturating_add(blocks_here as u64);
-            off = off.saturating_add(bytes_here);
-        }
-
-        Ok(())
-    }
-
-    #[inline]
-    async fn flush(&self) -> Result<(), block::Error> {
-        self.handle.flush().await
-    }
-}
-
-#[inline]
-fn map_engine_err(e: trueos_fs::FsError<block::Error>) -> block::Error {
-    match e {
-        trueos_fs::FsError::Device(e) => e,
-        trueos_fs::FsError::InvalidParam => block::Error::InvalidParam,
-        trueos_fs::FsError::Corrupted => block::Error::Corrupted,
-    }
-}
-
-async fn read_private_file(
-    disk: block::DeviceHandle,
-    path: &str,
-) -> Result<Option<Vec<u8>>, block::Error> {
-    let Some(placement) = crate::r::fs::trueosfs::locate_async(disk).await? else {
-        return Ok(None);
-    };
-
-    let params = trueos_fs::FsParams {
-        super_lba: placement.super_lba,
-        data_lba: placement.data_lba,
-        data_end_lba_exclusive: placement.data_end_lba_exclusive,
-    };
-    let io = HvStoreBlockIo::new(disk);
-    trueos_fs::read_file(&io, &params, path)
-        .await
-        .map_err(map_engine_err)
-}
-
-fn object_path(prefix: &str, seq: u64) -> String {
-    format!("{}{:020}", prefix, seq)
-}
-
-fn parse_manifest_seq(bytes: &[u8]) -> Option<u64> {
-    let s = core::str::from_utf8(bytes).ok()?.trim();
-    s.parse::<u64>().ok()
-}
-
-fn vm_manifest_path(vm_id: u8) -> String {
-    format!("{}{}", VM_STORE_MANIFEST_PREFIX, vm_id)
-}
-
 fn vm_id_supported(vm_id: u8) -> bool {
     (vm_id as usize) < VM_STORE_VM_ID_LIMIT
 }
 
-fn vm_store_disk(vm_id: u8) -> Option<block::DeviceHandle> {
-    VM_STORE_DISKS
+fn vm_store_image(vm_id: u8) -> Option<Arc<[u8]>> {
+    VM_STORE_IMAGES
         .get(vm_id as usize)
-        .and_then(|slot| *slot.lock())
-}
-
-async fn read_committed_bytes(
-    disk: block::DeviceHandle,
-    vm_id: u8,
-) -> Result<Option<Vec<u8>>, block::Error> {
-    let manifest_path = vm_manifest_path(vm_id);
-    let Some(manifest) = read_private_file(disk, manifest_path.as_str()).await? else {
-        return Ok(None);
-    };
-    let Some(seq) = parse_manifest_seq(manifest.as_slice()) else {
-        return Ok(None);
-    };
-    let path = object_path(VM_STORE_OBJECT_PREFIX, seq);
-    read_private_file(disk, path.as_str()).await
-}
-
-async fn write_committed_manifest(
-    disk: block::DeviceHandle,
-    vm_id: u8,
-    seq: u64,
-) -> Result<(), block::Error> {
-    let manifest_path = vm_manifest_path(vm_id);
-    let manifest = format!("{}\n", seq);
-    let ok =
-        crate::r::fs::trueosfs::file_in_async(disk, manifest_path.as_str(), manifest.as_bytes())
-            .await?;
-    if ok { Ok(()) } else { Err(block::Error::Io) }
+        .and_then(|slot| slot.lock().clone())
 }
 
 #[inline]
@@ -330,8 +163,208 @@ pub fn has_committed_vm(vm_id: u8) -> bool {
     VM_STORE_COMMITTED_SEQS.lock().contains_key(&vm_id)
 }
 
+/// Drop only the warm checkpoint for `vm_id`. Persistent named images are not
+/// touched.
+pub fn eject_warm(vm_id: u8) -> bool {
+    if !vm_id_supported(vm_id) {
+        return false;
+    }
+    let dropped = VM_STORE_IMAGES
+        .get(vm_id as usize)
+        .is_some_and(|slot| slot.lock().take().is_some());
+    if dropped {
+        VM_STORE_COMMITTED_SEQS.lock().remove(&vm_id);
+        VM_STORE_COMMIT_WAIT.notify_all();
+    }
+    dropped
+}
+
 pub fn replication_online() -> bool {
     VM_STORE_REPLICATION_ONLINE.load(Ordering::Acquire)
+}
+
+pub struct PersistentVmImage {
+    pub source_vm_id: u8,
+    pub snapshot: Vec<u8>,
+    pub guest_heap: Vec<u8>,
+    pub hull_rw: Vec<u8>,
+    pub blueprint: Vec<u8>,
+}
+
+fn valid_persistent_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && name != "."
+        && name != ".."
+}
+
+fn persistent_path(name: &str) -> Result<String, VmStoreError> {
+    if !valid_persistent_name(name) {
+        return Err(VmStoreError::InvalidName);
+    }
+    Ok(format!("{}{}{}", PERSISTENT_VM_PREFIX, name, PERSISTENT_VM_SUFFIX))
+}
+
+fn persistent_root() -> Result<block::DeviceHandle, VmStoreError> {
+    crate::r::fs::trueosfs::list_roots()
+        .into_iter()
+        .filter_map(|root| {
+            let handle = block::device_handle(root.disk_id)?;
+            let info = handle.info();
+            (info.kind != block::DeviceKind::Ramdisk && info.parent.is_none() && info.writable)
+                .then_some((root.seq, handle))
+        })
+        .max_by_key(|(seq, _)| *seq)
+        .map(|(_, handle)| handle)
+        .ok_or(VmStoreError::NoPersistentRoot)
+}
+
+fn persistent_header(vm_id: u8, lengths: [usize; 4]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(48);
+    out.extend_from_slice(PERSISTENT_VM_MAGIC);
+    out.extend_from_slice(&PERSISTENT_VM_VERSION.to_le_bytes());
+    out.push(vm_id);
+    out.extend_from_slice(&[0; 3]);
+    for len in lengths {
+        out.extend_from_slice(&(len as u64).to_le_bytes());
+    }
+    out
+}
+
+/// Commit the current warm checkpoint and the retained Blueprint-owned memory
+/// to physical TRUEOSFS. The warm checkpoint remains resident.
+pub async fn store_persistent_async(vm_id: u8, name: &str) -> Result<usize, VmStoreError> {
+    let path = persistent_path(name)?;
+    let disk = persistent_root()?;
+    let snapshot = vm_store_image(vm_id).ok_or(VmStoreError::MissingSnapshot)?;
+    let guest_heap =
+        crate::allocators::snapshot_hv_guest_heap(vm_id).map_err(|_| VmStoreError::BadEnvelope)?;
+    let hull_rw = crate::hv::memory::snapshot_guest_hull_rw_for_vm(vm_id)
+        .map_err(|_| VmStoreError::BadEnvelope)?;
+    let blueprint = crate::hv::snapshot_blueprint_portable_state(vm_id)
+        .map_err(|_| VmStoreError::BadEnvelope)?;
+    let header = persistent_header(
+        vm_id,
+        [
+            snapshot.len(),
+            guest_heap.len(),
+            hull_rw.len(),
+            blueprint.len(),
+        ],
+    );
+    let total = header
+        .len()
+        .checked_add(snapshot.len())
+        .and_then(|value| value.checked_add(guest_heap.len()))
+        .and_then(|value| value.checked_add(hull_rw.len()))
+        .and_then(|value| value.checked_add(blueprint.len()))
+        .ok_or(VmStoreError::BadEnvelope)?;
+    let Some(handle) =
+        crate::r::fs::trueosfs::file_write_begin_async(disk, path.as_str(), total as u64)
+            .await
+            .map_err(VmStoreError::BeginWrite)?
+    else {
+        return Err(VmStoreError::BeginWrite(block::Error::Io));
+    };
+    for chunk in [
+        header.as_slice(),
+        snapshot.as_ref(),
+        guest_heap.as_slice(),
+        hull_rw.as_slice(),
+        blueprint.as_slice(),
+    ] {
+        if let Err(error) = crate::r::fs::trueosfs::file_write_chunk_async(handle, chunk).await {
+            let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
+            return Err(VmStoreError::Write(error));
+        }
+    }
+    crate::r::fs::trueosfs::file_write_finish_async(handle)
+        .await
+        .map_err(VmStoreError::Write)?;
+    crate::log!(
+        "hv-store: persistent commit name={} vm_id={} bytes={} disk={} warm_retained=1\n",
+        name,
+        vm_id,
+        total,
+        disk.id().raw()
+    );
+    Ok(total)
+}
+
+fn envelope_take_u32(bytes: &[u8], offset: &mut usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let raw = bytes.get(*offset..end)?.try_into().ok()?;
+    *offset = end;
+    Some(u32::from_le_bytes(raw))
+}
+
+fn envelope_take_u64(bytes: &[u8], offset: &mut usize) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    let raw = bytes.get(*offset..end)?.try_into().ok()?;
+    *offset = end;
+    Some(u64::from_le_bytes(raw))
+}
+
+fn envelope_take_vec(bytes: &[u8], offset: &mut usize, len: usize) -> Option<Vec<u8>> {
+    let end = offset.checked_add(len)?;
+    let value = bytes.get(*offset..end)?.to_vec();
+    *offset = end;
+    Some(value)
+}
+
+pub async fn load_persistent_async(name: &str) -> Result<PersistentVmImage, VmStoreError> {
+    let path = persistent_path(name)?;
+    let disk = persistent_root()?;
+    let bytes = crate::r::fs::trueosfs::file_out_async(disk, path.as_str())
+        .await
+        .map_err(VmStoreError::Read)?
+        .ok_or(VmStoreError::MissingSnapshot)?;
+    let mut offset = 0usize;
+    if bytes.get(..PERSISTENT_VM_MAGIC.len()) != Some(PERSISTENT_VM_MAGIC.as_slice()) {
+        return Err(VmStoreError::BadEnvelope);
+    }
+    offset += PERSISTENT_VM_MAGIC.len();
+    if envelope_take_u32(bytes.as_slice(), &mut offset) != Some(PERSISTENT_VM_VERSION) {
+        return Err(VmStoreError::BadEnvelope);
+    }
+    let source_vm_id = *bytes.get(offset).ok_or(VmStoreError::BadEnvelope)?;
+    offset = offset.checked_add(4).ok_or(VmStoreError::BadEnvelope)?;
+    let mut lengths = [0usize; 4];
+    for len in lengths.iter_mut() {
+        *len = usize::try_from(
+            envelope_take_u64(bytes.as_slice(), &mut offset).ok_or(VmStoreError::BadEnvelope)?,
+        )
+        .map_err(|_| VmStoreError::BadEnvelope)?;
+    }
+    let snapshot = envelope_take_vec(bytes.as_slice(), &mut offset, lengths[0])
+        .ok_or(VmStoreError::BadEnvelope)?;
+    let guest_heap = envelope_take_vec(bytes.as_slice(), &mut offset, lengths[1])
+        .ok_or(VmStoreError::BadEnvelope)?;
+    let hull_rw = envelope_take_vec(bytes.as_slice(), &mut offset, lengths[2])
+        .ok_or(VmStoreError::BadEnvelope)?;
+    let blueprint = envelope_take_vec(bytes.as_slice(), &mut offset, lengths[3])
+        .ok_or(VmStoreError::BadEnvelope)?;
+    if offset != bytes.len() {
+        return Err(VmStoreError::BadEnvelope);
+    }
+    Ok(PersistentVmImage {
+        source_vm_id,
+        snapshot,
+        guest_heap,
+        hull_rw,
+        blueprint,
+    })
+}
+
+pub async fn delete_persistent_async(name: &str) -> Result<bool, VmStoreError> {
+    let path = persistent_path(name)?;
+    let disk = persistent_root()?;
+    crate::r::fs::trueosfs::file_delete_async(disk, path.as_str())
+        .await
+        .map_err(VmStoreError::Write)
 }
 
 fn enqueue(kind: RequestKind) -> Result<Arc<Completion>, VmStoreError> {
@@ -440,7 +473,7 @@ pub async fn vm_store_task() {
     }
 
     VM_STORE_ONLINE.store(true, Ordering::Release);
-    crate::log_info!(target: "hv"; "hv-store: online mode=lazy-ramdisk\n");
+    crate::log_info!(target: "hv"; "hv-store: online mode=warm-arc+persistent-trueosfs\n");
 
     loop {
         let req = {
@@ -563,35 +596,23 @@ pub async fn vm_store_replication_task() {
                                     push_line(&mut tx_buf, "NO");
                                     continue;
                                 }
-                                let Some(disk) = vm_store_disk(id) else {
+                                let Some(bytes) = vm_store_image(id) else {
                                     push_line(&mut tx_buf, "NO");
                                     continue;
                                 };
-                                match read_committed_bytes(disk, id).await {
-                                    Ok(Some(bytes)) => {
-                                        let seq = current_committed_seq(id);
-                                        push_line(
-                                            &mut tx_buf,
-                                            format!("VM {} {} {}", id, seq, bytes.len()).as_str(),
-                                        );
-                                        tx_buf.extend_from_slice(bytes.as_slice());
-                                        crate::log!(
-                                            "hv-store-net: queued vm id={} seq={} bytes={} handle={}\n",
-                                            id,
-                                            seq,
-                                            bytes.len(),
-                                            handle.0
-                                        );
-                                    }
-                                    Ok(None) => push_line(&mut tx_buf, "NO"),
-                                    Err(e) => {
-                                        crate::log!(
-                                            "hv-store-net: read current failed err={:?}\n",
-                                            e
-                                        );
-                                        push_line(&mut tx_buf, "NO");
-                                    }
-                                }
+                                let seq = current_committed_seq(id);
+                                push_line(
+                                    &mut tx_buf,
+                                    format!("VM {} {} {}", id, seq, bytes.len()).as_str(),
+                                );
+                                tx_buf.extend_from_slice(bytes.as_ref());
+                                crate::log!(
+                                    "hv-store-net: queued vm id={} seq={} bytes={} handle={}\n",
+                                    id,
+                                    seq,
+                                    bytes.len(),
+                                    handle.0
+                                );
                             }
                             Some(VmStoreNetCmd::Ack(id, ok)) => {
                                 crate::log!(
@@ -663,180 +684,45 @@ pub async fn vm_store_replication_task() {
     }
 }
 
-fn round_up_bytes(value: u64, align: u64) -> u64 {
-    if align == 0 {
-        return value;
-    }
-    let rem = value % align;
-    if rem == 0 {
-        value
-    } else {
-        value.saturating_add(align - rem)
-    }
-}
-
-fn provisioned_disk_bytes(required_bytes: usize) -> u64 {
-    let required = required_bytes as u64;
-    let headroom = core::cmp::max(VM_STORE_RAMDISK_ALIGN_BYTES / 2, required / 2);
-    let wanted = required.saturating_add(headroom);
-    round_up_bytes(core::cmp::max(VM_STORE_MIN_RAMDISK_BYTES, wanted), VM_STORE_RAMDISK_ALIGN_BYTES)
-}
-
-async fn create_store_ready(size_bytes: u64) -> Result<block::DeviceHandle, VmStoreError> {
-    let t0 = boot_probe_ms();
-    crate::log!("hv-store: ramdisk create begin ms={} bytes={}\n", t0, size_bytes);
-    let disk = crate::r::disc::ramdisk::create_trueos_private(
-        size_bytes,
-        VM_STORE_BLOCK_SIZE,
-        "trueos-hv-store",
-    )
-    .await
-    .map_err(|e| match e {
-        crate::r::disc::ramdisk::TrueosPrivateError::Create(err) => VmStoreError::Create(err),
-        crate::r::disc::ramdisk::TrueosPrivateError::Format(err)
-        | crate::r::disc::ramdisk::TrueosPrivateError::Validate(err) => VmStoreError::Format(err),
-    })?;
-    crate::log!(
-        "hv-store: ramdisk create done ms={} dt={} disk={}\n",
-        boot_probe_ms(),
-        boot_probe_ms().saturating_sub(t0),
-        disk.id().raw()
-    );
-    let t1 = boot_probe_ms();
-    crate::log!("hv-store: format done ms={} dt={}\n", t1, t1.saturating_sub(t0));
-    let t2 = boot_probe_ms();
-    crate::log!(
-        "hv-store: validate done ms={} dt={} step={}\n",
-        t2,
-        t2.saturating_sub(t0),
-        t2.saturating_sub(t1)
-    );
-    let wrote =
-        crate::r::fs::trueosfs::file_in_async(disk, VM_STORE_PROBE_PATH, VM_STORE_PROBE_BYTES)
-            .await
-            .map_err(VmStoreError::Format)?;
-    if !wrote {
-        return Err(VmStoreError::Format(block::Error::Io));
-    }
-    let t3 = boot_probe_ms();
-    crate::log!(
-        "hv-store: probe write done ms={} dt={} step={}\n",
-        t3,
-        t3.saturating_sub(t0),
-        t3.saturating_sub(t2)
-    );
-    let Some(probe) = read_private_file(disk, VM_STORE_PROBE_PATH)
-        .await
-        .map_err(VmStoreError::Format)?
-    else {
-        return Err(VmStoreError::Format(block::Error::Corrupted));
-    };
-    if probe.as_slice() != VM_STORE_PROBE_BYTES {
-        return Err(VmStoreError::Format(block::Error::Corrupted));
-    }
-    let t4 = boot_probe_ms();
-    crate::log!(
-        "hv-store: probe read done ms={} dt={} step={}\n",
-        t4,
-        t4.saturating_sub(t0),
-        t4.saturating_sub(t3)
-    );
-    let t5 = boot_probe_ms();
-    crate::log!(
-        "hv-store: ensure done ms={} dt={} tail={}\n",
-        t5,
-        t5.saturating_sub(t0),
-        t5.saturating_sub(t4)
-    );
-    Ok(disk)
-}
-
 async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, VmStoreError> {
     match kind {
         RequestKind::Save(vm_id, bytes) => {
-            let disk_bytes = provisioned_disk_bytes(bytes.len());
-            crate::log!(
-                "hv-store: save allocate id={} vm_id={} snapshot_bytes={} disk_bytes={}\n",
-                id,
-                vm_id,
-                bytes.len(),
-                disk_bytes
-            );
-            let disk = create_store_ready(disk_bytes).await?;
             let seq = VM_STORE_OBJECT_SEQ.fetch_add(1, Ordering::Relaxed).max(1);
-            let committed_path = object_path(VM_STORE_OBJECT_PREFIX, seq);
             crate::log!(
-                "hv-store: save queued id={} vm_id={} bytes={} committed={}\n",
+                "hv-store: save queued id={} vm_id={} bytes={} seq={}\n",
                 id,
                 vm_id,
                 bytes.len(),
-                committed_path.as_str()
+                seq
             );
-            let Some(handle) = crate::r::fs::trueosfs::file_write_begin_async(
-                disk,
-                committed_path.as_str(),
-                bytes.len() as u64,
-            )
-            .await
-            .map_err(VmStoreError::BeginWrite)?
-            else {
-                return Err(VmStoreError::BeginWrite(block::Error::Io));
-            };
-
-            if let Err(e) =
-                crate::r::fs::trueosfs::file_write_chunk_async(handle, bytes.as_slice()).await
-            {
-                let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
-                return Err(VmStoreError::Write(e));
-            }
-            crate::r::fs::trueosfs::file_write_finish_async(handle)
-                .await
-                .map_err(VmStoreError::Write)?;
-
-            write_committed_manifest(disk, vm_id, seq)
-                .await
-                .map_err(VmStoreError::Write)?;
-            if let Some(slot) = VM_STORE_DISKS.get(vm_id as usize) {
-                *slot.lock() = Some(disk);
+            let len = bytes.len();
+            if let Some(slot) = VM_STORE_IMAGES.get(vm_id as usize) {
+                *slot.lock() = Some(Arc::from(bytes.into_boxed_slice()));
             }
             let mut seqs = VM_STORE_COMMITTED_SEQS.lock();
             seqs.insert(vm_id, seq);
             VM_STORE_COMMIT_WAIT.notify_all();
             crate::log!(
-                "hv-store: save complete id={} vm_id={} seq={} bytes={} committed={} disk={}\n",
+                "hv-store: save complete id={} vm_id={} seq={} bytes={} medium=warm-arc\n",
                 id,
                 vm_id,
                 seq,
-                bytes.len(),
-                committed_path.as_str(),
-                disk.id().raw()
+                len
             );
-            Ok(VmStoreResponse::Saved(bytes.len()))
+            Ok(VmStoreResponse::Saved(len))
         }
         RequestKind::Load(vm_id) => {
-            let Some(disk) = vm_store_disk(vm_id) else {
+            let Some(bytes) = vm_store_image(vm_id) else {
                 return Err(VmStoreError::MissingSnapshot);
             };
-            let manifest_path = vm_manifest_path(vm_id);
-            crate::log!(
-                "hv-store: load queued id={} vm_id={} manifest={}\n",
-                id,
-                vm_id,
-                manifest_path.as_str()
-            );
-            let Some(bytes) = read_committed_bytes(disk, vm_id)
-                .await
-                .map_err(VmStoreError::Read)?
-            else {
-                return Err(VmStoreError::MissingSnapshot);
-            };
+            crate::log!("hv-store: load queued id={} vm_id={} medium=warm-arc\n", id, vm_id);
             crate::log!(
                 "hv-store: load complete id={} vm_id={} bytes={}\n",
                 id,
                 vm_id,
                 bytes.len()
             );
-            Ok(VmStoreResponse::Loaded(bytes))
+            Ok(VmStoreResponse::Loaded(bytes.as_ref().to_vec()))
         }
     }
 }

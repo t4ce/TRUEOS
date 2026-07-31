@@ -581,6 +581,12 @@ pub enum StopError {
     UnsupportedVmId,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum EjectError {
+    UnsupportedVmId,
+    VmBusy,
+}
+
 /// How a live VM is preserved before its hull stops.
 ///
 /// `Stop` writes a raw checkpoint and performs normal teardown. `Pause`
@@ -1507,6 +1513,44 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
     }
 }
 
+/// Destroy an offline retained VM and its warm checkpoint. Named persistent
+/// images are independent and remain on TRUEOSFS.
+pub fn eject(vm_id: u8) -> Result<bool, EjectError> {
+    let Some(vm) = vm_slot(vm_id) else {
+        return Err(EjectError::UnsupportedVmId);
+    };
+    if vm.running.load(Ordering::Acquire)
+        || vm.starting.load(Ordering::Acquire)
+        || vm.restore_inflight.load(Ordering::Acquire)
+    {
+        return Err(EjectError::VmBusy);
+    }
+    let had_state = vm.pause_latched.load(Ordering::Acquire)
+        || blueprint_launch_active(vm_id)
+        || crate::hv::store::has_committed_vm(vm_id);
+    clear_blueprint_pending_launch(vm_id);
+    memory::release_guest_rel_exec_for_vm(vm_id);
+    let launch = take_blueprint_launch(vm_id);
+    drop(launch);
+    clear_blueprint_process_context(vm_id);
+    if let Some(slot) = BLUEPRINT_INSTANCE_IDENTITIES.get(vm_id as usize) {
+        let _ = slot.lock().take();
+    }
+    clear_blueprint_lifecycle_capability(vm_id);
+    let _ = crate::r::lumen_service::close(vm_id);
+    let _ = crate::r::gridpaper_service::release_owner_lifecycle(vm_id);
+    let _ = crate::ui4::release_owner_resources(crate::ui4::WindowOwner::Vm(vm_id));
+    memory::clear_snapshot_state_for_vm(vm_id);
+    let _ = memory::release_guest_hull_rw_for_vm(vm_id);
+    let _ = memory::release_guest_stack_for_vm(vm_id);
+    let _ = crate::allocators::release_hv_guest_heap_for_vm(vm_id);
+    let _ = crate::hv::store::eject_warm(vm_id);
+    vm.pause_latched.store(false, Ordering::Release);
+    vm.pause_store_seq.store(0, Ordering::Release);
+    reset_prepare_pause(vm);
+    Ok(had_state)
+}
+
 pub fn kick(vm_id: u8) -> Result<bool, StopError> {
     let Some(vm) = vm_slot(vm_id) else {
         return Err(StopError::UnsupportedVmId);
@@ -1685,6 +1729,35 @@ pub async fn restore_snapshot_async(vm_id: u8) -> Result<usize, RestoreError> {
     Ok(bytes.len())
 }
 
+pub fn restore_persistent_image(
+    vm_id: u8,
+    image: &crate::hv::store::PersistentVmImage,
+    console_target: Option<MatrixTarget>,
+) -> Result<usize, RestoreError> {
+    if vm_slot(vm_id).is_none() {
+        return Err(RestoreError::UnsupportedVmId);
+    }
+    let result = (|| {
+        crate::allocators::restore_hv_guest_heap(vm_id, image.guest_heap.as_slice())
+            .map_err(|_| RestoreError::BadSnapshot)?;
+        memory::restore_guest_hull_rw_for_vm(vm_id, image.hull_rw.as_slice())
+            .map_err(|_| RestoreError::BadSnapshot)?;
+        restore_blueprint_portable_state(vm_id, image.blueprint.as_slice(), console_target)
+            .map_err(|_| RestoreError::BadSnapshot)?;
+        restore_snapshot_bytes(vm_id, image.snapshot.as_slice())?;
+        memory::rebind_restored_guest_memory_for_vm(vm_id, VmBootMode::Hull)
+            .map_err(|_| RestoreError::BadSnapshot)?;
+        Ok(image.snapshot.len())
+    })();
+    if result.is_err() {
+        if let Some(vm) = vm_slot(vm_id) {
+            vm.restore_inflight.store(false, Ordering::Release);
+        }
+        let _ = eject(vm_id);
+    }
+    result
+}
+
 pub fn try_begin_restore(vm_id: u8) -> Result<bool, StopError> {
     let Some(vm) = vm_slot(vm_id) else {
         return Err(StopError::UnsupportedVmId);
@@ -1715,6 +1788,13 @@ fn map_store_save_error(err: crate::hv::store::VmStoreError) -> SaveError {
         | crate::hv::store::VmStoreError::Write(e)
         | crate::hv::store::VmStoreError::Read(e) => SaveError::Io(e),
         crate::hv::store::VmStoreError::MissingSnapshot => SaveError::BeginWrite,
+        crate::hv::store::VmStoreError::NoPersistentRoot => {
+            SaveError::Io(crate::disc::block::Error::NotReady)
+        }
+        crate::hv::store::VmStoreError::InvalidName
+        | crate::hv::store::VmStoreError::BadEnvelope => {
+            SaveError::Io(crate::disc::block::Error::InvalidParam)
+        }
     }
 }
 
@@ -1732,6 +1812,11 @@ fn map_store_restore_error(err: crate::hv::store::VmStoreError) -> RestoreError 
         | crate::hv::store::VmStoreError::BeginWrite(e)
         | crate::hv::store::VmStoreError::Read(e)
         | crate::hv::store::VmStoreError::Write(e) => RestoreError::Read(e),
+        crate::hv::store::VmStoreError::NoPersistentRoot => {
+            RestoreError::Read(crate::disc::block::Error::NotReady)
+        }
+        crate::hv::store::VmStoreError::InvalidName
+        | crate::hv::store::VmStoreError::BadEnvelope => RestoreError::BadSnapshot,
     }
 }
 
@@ -2189,6 +2274,196 @@ pub fn stage_blueprint_launch(
 
 pub fn take_blueprint_launch(vm_id: u8) -> Option<BlueprintLaunchState> {
     BLUEPRINT_LAUNCH_STATES.get(vm_id as usize)?.lock().take()
+}
+
+const BLUEPRINT_PORTABLE_MAGIC: u32 = u32::from_le_bytes(*b"BPS1");
+const BLUEPRINT_PORTABLE_VERSION: u32 = 1;
+
+fn portable_push_u32(out: &mut AllocVec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn portable_push_u64(out: &mut AllocVec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn portable_push_bytes(out: &mut AllocVec<u8>, value: &[u8]) {
+    portable_push_u64(out, value.len() as u64);
+    out.extend_from_slice(value);
+}
+
+fn portable_push_optional_string(out: &mut AllocVec<u8>, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            out.push(1);
+            portable_push_bytes(out, value.as_bytes());
+        }
+        None => out.push(0),
+    }
+}
+
+/// Serialize the host-owned part of a paused Blueprint. Guest execution state
+/// and guest-owned allocations live in the other persistent envelope members.
+pub fn snapshot_blueprint_portable_state(vm_id: u8) -> Result<AllocVec<u8>, &'static str> {
+    let state = blueprint_launch_snapshot(vm_id).ok_or("blueprint launch state missing")?;
+    let surface = BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .and_then(|slot| slot.lock().as_ref().map(|context| context.console_surface))
+        .ok_or("blueprint process context missing")?;
+    let mut out = AllocVec::new();
+    portable_push_u32(&mut out, BLUEPRINT_PORTABLE_MAGIC);
+    portable_push_u32(&mut out, BLUEPRINT_PORTABLE_VERSION);
+    out.push(match surface {
+        BlueprintConsoleSurface::Text => 0,
+        BlueprintConsoleSurface::Terminal => 1,
+    });
+    portable_push_bytes(&mut out, state.archive.as_bytes());
+    portable_push_bytes(&mut out, state.module_bytes.as_slice());
+    portable_push_bytes(&mut out, state.unpacked_bytes.as_slice());
+    portable_push_u32(&mut out, state.app_args.len() as u32);
+    for arg in state.app_args.iter() {
+        portable_push_bytes(&mut out, arg.as_bytes());
+    }
+    portable_push_bytes(&mut out, state.app_fs_root.as_bytes());
+    out.extend_from_slice(&state.identity.instance);
+    out.extend_from_slice(&state.identity.lineage);
+    portable_push_u64(&mut out, state.identity.generation);
+    out.push(state.identity.clone as u8);
+    portable_push_optional_string(&mut out, state.identity.name.as_deref());
+    portable_push_optional_string(&mut out, state.identity.peer.as_deref());
+    Ok(out)
+}
+
+fn portable_take_u32(bytes: &[u8], offset: &mut usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let raw = bytes.get(*offset..end)?.try_into().ok()?;
+    *offset = end;
+    Some(u32::from_le_bytes(raw))
+}
+
+fn portable_take_u64(bytes: &[u8], offset: &mut usize) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    let raw = bytes.get(*offset..end)?.try_into().ok()?;
+    *offset = end;
+    Some(u64::from_le_bytes(raw))
+}
+
+fn portable_take_bytes<'a>(bytes: &'a [u8], offset: &mut usize) -> Option<&'a [u8]> {
+    let len = usize::try_from(portable_take_u64(bytes, offset)?).ok()?;
+    let end = offset.checked_add(len)?;
+    let value = bytes.get(*offset..end)?;
+    *offset = end;
+    Some(value)
+}
+
+fn portable_take_string(bytes: &[u8], offset: &mut usize) -> Option<AllocString> {
+    Some(AllocString::from(core::str::from_utf8(portable_take_bytes(bytes, offset)?).ok()?))
+}
+
+fn portable_take_optional_string(bytes: &[u8], offset: &mut usize) -> Option<Option<AllocString>> {
+    let present = *bytes.get(*offset)?;
+    *offset += 1;
+    match present {
+        0 => Some(None),
+        1 => portable_take_string(bytes, offset).map(Some),
+        _ => None,
+    }
+}
+
+pub fn restore_blueprint_portable_state(
+    vm_id: u8,
+    bytes: &[u8],
+    console_target: Option<MatrixTarget>,
+) -> Result<(), &'static str> {
+    let vm = vm_slot(vm_id).ok_or("unsupported vm id")?;
+    if vm.running.load(Ordering::Acquire)
+        || vm.starting.load(Ordering::Acquire)
+        || blueprint_launch_active(vm_id)
+    {
+        return Err("vm slot is busy");
+    }
+    let mut offset = 0usize;
+    if portable_take_u32(bytes, &mut offset) != Some(BLUEPRINT_PORTABLE_MAGIC)
+        || portable_take_u32(bytes, &mut offset) != Some(BLUEPRINT_PORTABLE_VERSION)
+    {
+        return Err("bad blueprint state image");
+    }
+    let surface = match bytes.get(offset).copied() {
+        Some(0) => BlueprintConsoleSurface::Text,
+        Some(1) => BlueprintConsoleSurface::Terminal,
+        _ => return Err("bad blueprint console surface"),
+    };
+    offset += 1;
+    let archive = portable_take_string(bytes, &mut offset).ok_or("blueprint archive")?;
+    let module_bytes = portable_take_bytes(bytes, &mut offset)
+        .ok_or("blueprint module")?
+        .to_vec();
+    let unpacked_bytes = portable_take_bytes(bytes, &mut offset)
+        .ok_or("blueprint payload")?
+        .to_vec();
+    let arg_count = portable_take_u32(bytes, &mut offset).ok_or("blueprint args")? as usize;
+    let mut app_args = AllocVec::with_capacity(arg_count);
+    for _ in 0..arg_count {
+        app_args.push(portable_take_string(bytes, &mut offset).ok_or("blueprint arg")?);
+    }
+    let app_fs_root = portable_take_string(bytes, &mut offset).ok_or("blueprint fs root")?;
+    let instance: [u8; 16] = bytes
+        .get(offset..offset + 16)
+        .and_then(|value| value.try_into().ok())
+        .ok_or("blueprint instance")?;
+    offset += 16;
+    let lineage: [u8; 16] = bytes
+        .get(offset..offset + 16)
+        .and_then(|value| value.try_into().ok())
+        .ok_or("blueprint lineage")?;
+    offset += 16;
+    let generation = portable_take_u64(bytes, &mut offset).ok_or("blueprint generation")?;
+    let clone = match bytes.get(offset).copied() {
+        Some(0) => false,
+        Some(1) => true,
+        _ => return Err("blueprint clone flag"),
+    };
+    offset += 1;
+    let name = portable_take_optional_string(bytes, &mut offset).ok_or("blueprint name")?;
+    let peer = portable_take_optional_string(bytes, &mut offset).ok_or("blueprint peer")?;
+    if offset != bytes.len() {
+        return Err("trailing blueprint state bytes");
+    }
+    let identity = BlueprintInstanceIdentity {
+        instance,
+        lineage,
+        generation,
+        clone,
+        name,
+        peer,
+    };
+    if !memory::arm_guest_rel_exec_for_vm(vm_id) {
+        return Err("blueprint execute capability unavailable");
+    }
+    let state = BlueprintLaunchState {
+        archive: archive.clone(),
+        module_bytes,
+        unpacked_bytes,
+        app_args,
+        app_fs_root,
+        identity: identity.clone(),
+    };
+    if stage_blueprint_launch(vm_id, state, console_target, surface).is_err() {
+        memory::release_guest_rel_exec_for_vm(vm_id);
+        return Err("blueprint process reconstruction failed");
+    }
+    if let Some(slot) = BLUEPRINT_INSTANCE_IDENTITIES.get(vm_id as usize) {
+        *slot.lock() = Some(identity);
+    }
+    if let Some(mode) = VM_BOOT_MODES.get(vm_id as usize) {
+        *mode.lock() = VmBootMode::Hull;
+    }
+    set_blueprint_lifecycle_capability(vm_id, archive.as_str(), true);
+    vm.pause_store_seq
+        .store(crate::hv::store::current_committed_seq(vm_id), Ordering::Release);
+    vm.pause_latched.store(true, Ordering::Release);
+    suspend_blueprint_process_context(vm_id);
+    Ok(())
 }
 
 fn blueprint_launch_snapshot(vm_id: u8) -> Option<BlueprintLaunchState> {

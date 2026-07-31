@@ -157,6 +157,28 @@ pub fn reserve_heap_arena(size: usize, align: usize) -> Option<HeapArena> {
     })
 }
 
+/// Reserve an exact physical arena. Snapshot restoration uses this only for
+/// pointer-bearing guest heaps whose virtual addresses cannot be relocated.
+pub fn reserve_heap_arena_at(phys_start: u64, size: usize) -> Option<HeapArena> {
+    if size == 0 || HHDM_BASE.load(Ordering::Relaxed) == 0 {
+        return None;
+    }
+    let size_u64 = u64::try_from(size).ok()?;
+    let end = phys_start.checked_add(size_u64)?;
+    let mut guard = PMM.lock();
+    let state = guard.as_mut()?;
+    let reserved = state.allocate(size_u64, 1, phys_start, Some(end))?;
+    if reserved != phys_start {
+        let _ = state.release(reserved, size_u64);
+        return None;
+    }
+    Some(HeapArena {
+        phys_start,
+        virt_start: phys_to_virt(phys_start as usize),
+        length: size,
+    })
+}
+
 /// Attempts to reserve and install a heap arena from a list of candidate sizes.
 ///
 /// This keeps the selection logic colocated with the PMM/heap-arena reservation

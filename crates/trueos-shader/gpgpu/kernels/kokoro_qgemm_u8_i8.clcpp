@@ -1,0 +1,91 @@
+// Quantized Kokoro matrix multiplication for the TRUEOS C++/IGC lane.
+//
+// The packaged Kokoro graph represents its dense projections as an unsigned
+// dynamically-quantized activation matrix multiplied by signed int8 weights.
+// Every weight zero-point in those 148 MatMulInteger nodes is exactly zero.
+// This kernel consequently computes and dequantizes
+//
+//   Y[m,n] = (sum_k A_u8[m,k] * W_i8[k,n]
+//             - activation_zero_point * sum_k W_i8[k,n])
+//            * activation_scale * weight_scale[n] + bias[n]
+//
+// in one pass.  Weight rows are packed offline in SIMD16 tiles. For each four
+// values of K, the sixteen adjacent output channels occupy sixteen adjacent
+// dwords. This gives every subgroup one coalesced 64-byte weight transaction
+// while all lanes share the same activation dword.
+
+#include "include/trueos_clcpp.hpp"
+
+namespace trueos::gpgpu::kokoro {
+
+inline constexpr uint channels_per_tile = 16u;
+inline constexpr uint values_per_dot = 4u;
+inline constexpr uint max_sequence_rows = 512u;
+
+__attribute__((always_inline)) inline bool admitted_projection(uint k, uint n)
+{
+    if (k == 128u) {
+        return n == 256u || n == 512u || n == 768u || n == 1024u
+            || n == 1028u || n == 2048u || n == 2180u;
+    }
+    if (k == 512u) {
+        return n == 50u;
+    }
+    if (k == 768u) {
+        return n == 512u || n == 768u || n == 2048u;
+    }
+    return k == 2048u && n == 768u;
+}
+
+} // namespace trueos::gpgpu::kokoro
+
+TRUEOS_REQD_SUB_GROUP_SIZE_16
+__kernel void kokoro_qgemm_u8_i8(
+    __global const uint *packed_weights,
+    __global const int *weight_sums,
+    __global const float *weight_scales,
+    __global const uint *activations,
+    __global const float *bias,
+    __global float *output,
+    uint matrix_rows,
+    uint output_columns,
+    uint reduction_words,
+    uint activation_stride_words,
+    uint output_stride,
+    uint activation_zero_point,
+    float activation_scale,
+    uint has_bias)
+{
+    using namespace trueos::gpgpu::kokoro;
+
+    const uint output_column = static_cast<uint>(get_global_id(0));
+    const uint matrix_row = static_cast<uint>(get_global_id(1));
+    const uint reduction_values = reduction_words * values_per_dot;
+    if (matrix_rows == 0u || matrix_rows > max_sequence_rows
+        || matrix_row >= matrix_rows || output_column >= output_columns
+        || !admitted_projection(reduction_values, output_columns)
+        || activation_stride_words < reduction_words
+        || output_stride < output_columns) {
+        return;
+    }
+
+    const uint lane = output_column & (channels_per_tile - 1u);
+    const uint output_tile = output_column / channels_per_tile;
+    const uint activation_base = matrix_row * activation_stride_words;
+    int dot_sum = 0;
+    for (uint word = 0u; word < reduction_words; ++word) {
+        const uint activation_word = activations[activation_base + word];
+        const uint weight_word = packed_weights[
+            (output_tile * reduction_words + word) * channels_per_tile + lane];
+        dot_sum += dot_4x8packed_us_int(activation_word, weight_word);
+    }
+
+    const int corrected = dot_sum
+        - static_cast<int>(activation_zero_point) * weight_sums[output_column];
+    float value = static_cast<float>(corrected)
+        * activation_scale * weight_scales[output_column];
+    if (has_bias != 0u) {
+        value += bias[output_column];
+    }
+    output[matrix_row * output_stride + output_column] = value;
+}

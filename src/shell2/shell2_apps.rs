@@ -20,8 +20,11 @@ enum AppsCommand {
     Peer,
     Pause,
     Snapshot,
+    Store,
     Preserve,
     Load,
+    Eject,
+    Delete,
     Stop,
     Kick,
     Status,
@@ -36,8 +39,11 @@ impl AppsCommand {
             Self::Peer => "peer",
             Self::Pause => "pause",
             Self::Snapshot => "snapshot",
+            Self::Store => "store",
             Self::Preserve => "preserve",
             Self::Load => "load",
+            Self::Eject => "eject",
+            Self::Delete => "delete",
             Self::Stop => "stop",
             Self::Kick => "kick",
             Self::Status => "status",
@@ -45,15 +51,18 @@ impl AppsCommand {
     }
 }
 
-const APP_COMMANDS: [AppsCommand; 11] = [
+const APP_COMMANDS: [AppsCommand; 14] = [
     AppsCommand::Start,
     AppsCommand::Online,
     AppsCommand::Dl,
     AppsCommand::Peer,
     AppsCommand::Pause,
     AppsCommand::Snapshot,
+    AppsCommand::Store,
     AppsCommand::Preserve,
     AppsCommand::Load,
+    AppsCommand::Eject,
+    AppsCommand::Delete,
     AppsCommand::Stop,
     AppsCommand::Kick,
     AppsCommand::Status,
@@ -675,6 +684,139 @@ fn schedule_load_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8
     }
 }
 
+#[embassy_executor::task(pool_size = 2)]
+async fn store_persistent_vm_task(io: &'static dyn ShellBackend2, vm_id: u8, name: String) {
+    match crate::hv::store::store_persistent_async(vm_id, name.as_str()).await {
+        Ok(bytes) => line(
+            io,
+            alloc::format!(
+                "apps: vm{} stored as {} ({} bytes); warm checkpoint retained",
+                vm_id,
+                name,
+                bytes
+            )
+            .as_str(),
+        ),
+        Err(error) => line(io, alloc::format!("apps: store failed: {:?}", error).as_str()),
+    }
+}
+
+fn schedule_store_persistent(spawner: &Spawner, io: &'static dyn ShellBackend2, args: &[String]) {
+    let Some(vm_id) = args.first().and_then(|value| value.parse::<u8>().ok()) else {
+        line(io, "apps: store expects: store <vmid> <name>");
+        return;
+    };
+    let Some(name) = args.get(1).cloned() else {
+        line(io, "apps: store expects: store <vmid> <name>");
+        return;
+    };
+    let state = crate::hv::vm_state(vm_id);
+    if !state.pause_latched || !crate::hv::store::has_committed_vm(vm_id) {
+        line(
+            io,
+            alloc::format!("apps: vm{} needs a completed `snapshot {}` before store", vm_id, vm_id)
+                .as_str(),
+        );
+        return;
+    }
+    match store_persistent_vm_task(io, vm_id, name) {
+        Ok(token) => {
+            line(io, alloc::format!("apps: vm{} persistent store scheduled", vm_id).as_str());
+            spawner.spawn(token);
+        }
+        Err(_) => line(io, "apps: store task unavailable"),
+    }
+}
+
+#[embassy_executor::task(pool_size = 2)]
+async fn load_persistent_vm_task(
+    spawner: Spawner,
+    io: &'static dyn ShellBackend2,
+    vm_id: u8,
+    name: String,
+) {
+    let result = async {
+        let image = crate::hv::store::load_persistent_async(name.as_str()).await?;
+        crate::hv::store::save_bytes_async(vm_id, image.snapshot.clone()).await?;
+        let target = matrix_target_for_backend(io);
+        crate::hv::restore_persistent_image(vm_id, &image, Some(target))
+            .map_err(|_| crate::hv::store::VmStoreError::BadEnvelope)?;
+        Ok::<usize, crate::hv::store::VmStoreError>(image.snapshot.len())
+    }
+    .await;
+    match result {
+        Ok(bytes) => {
+            line(io, alloc::format!("apps: vm{} imported {} from {}", vm_id, bytes, name).as_str());
+            match crate::hv::start(vm_id, &spawner, io, None) {
+                Ok(()) => line(io, alloc::format!("apps: vm{} resume requested", vm_id).as_str()),
+                Err(error) => line(io, alloc::format!("apps: resume failed: {:?}", error).as_str()),
+            }
+        }
+        Err(error) => {
+            line(io, alloc::format!("apps: persistent load failed: {:?}", error).as_str())
+        }
+    }
+    crate::hv::finish_restore(vm_id);
+}
+
+fn schedule_load_persistent(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    name: String,
+    vm_id: u8,
+) {
+    match crate::hv::try_begin_restore(vm_id) {
+        Ok(true) => match load_persistent_vm_task(*spawner, io, vm_id, name) {
+            Ok(token) => {
+                line(io, alloc::format!("apps: vm{} persistent load scheduled", vm_id).as_str());
+                spawner.spawn(token);
+            }
+            Err(_) => {
+                crate::hv::finish_restore(vm_id);
+                line(io, "apps: persistent load task unavailable");
+            }
+        },
+        Ok(false) => line(io, alloc::format!("apps: vm{} load already pending", vm_id).as_str()),
+        Err(error) => line(io, alloc::format!("apps: load failed: {:?}", error).as_str()),
+    }
+}
+
+#[embassy_executor::task(pool_size = 2)]
+async fn delete_persistent_task(io: &'static dyn ShellBackend2, name: String) {
+    match crate::hv::store::delete_persistent_async(name.as_str()).await {
+        Ok(true) => line(io, alloc::format!("apps: deleted persistent image {}", name).as_str()),
+        Ok(false) => line(io, alloc::format!("apps: persistent image {} not found", name).as_str()),
+        Err(error) => line(io, alloc::format!("apps: delete failed: {:?}", error).as_str()),
+    }
+}
+
+fn schedule_delete_persistent(spawner: &Spawner, io: &'static dyn ShellBackend2, args: &[String]) {
+    let Some(name) = args.first().cloned() else {
+        line(io, "apps: delete expects: delete <name>");
+        return;
+    };
+    match delete_persistent_task(io, name) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => line(io, "apps: delete task unavailable"),
+    }
+}
+
+fn eject_vm(io: &'static dyn ShellBackend2, args: &[String]) {
+    let Some(vm_id) = args.first().and_then(|value| value.parse::<u8>().ok()) else {
+        line(io, "apps: eject expects: eject <vmid>");
+        return;
+    };
+    match crate::hv::eject(vm_id) {
+        Ok(true) => line(
+            io,
+            alloc::format!("apps: vm{} warm state ejected; persistent images retained", vm_id)
+                .as_str(),
+        ),
+        Ok(false) => line(io, alloc::format!("apps: vm{} had no retained state", vm_id).as_str()),
+        Err(error) => line(io, alloc::format!("apps: eject failed: {:?}", error).as_str()),
+    }
+}
+
 fn toggle_replicatable_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8) {
     let state = crate::hv::vm_state(vm_id);
     if !state.supported {
@@ -902,15 +1044,18 @@ pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitte
         Some("peer") => AppsCommand::Peer,
         Some("pause" | "unpause") => AppsCommand::Pause,
         Some("snapshot" | "snap") => AppsCommand::Snapshot,
+        Some("store") => AppsCommand::Store,
         Some("preserve" | "save") => AppsCommand::Preserve,
         Some("load") => AppsCommand::Load,
+        Some("eject" | "drop") => AppsCommand::Eject,
+        Some("delete" | "del") => AppsCommand::Delete,
         Some("stop") => AppsCommand::Stop,
         Some("kick") => AppsCommand::Kick,
         Some("status") => AppsCommand::Status,
         Some(_) | None => {
             line(
                 io,
-                "apps: expected start, online, dl, peer, pause, snapshot, preserve, load, stop, kick, or status",
+                "apps: expected start, online, dl, peer, pause, snapshot, store, preserve, load, eject, delete, stop, kick, or status",
             );
             return;
         }
@@ -933,17 +1078,24 @@ pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitte
         AppsCommand::Peer => peer_app(spawner, io, rest),
         AppsCommand::Pause => pause_mode(spawner, io, rest.as_slice()),
         AppsCommand::Snapshot => snapshot_mode(io, rest.as_slice()),
+        AppsCommand::Store => schedule_store_persistent(spawner, io, rest.as_slice()),
         AppsCommand::Load => {
             let mut args = rest.iter();
             let first = args.next().map(String::as_str);
             if let Some(endpoint) = first.filter(|s| s.contains("://")) {
                 let vm_id = parse_id(args.next().map(String::as_str)).unwrap_or(0);
                 load_remote(io, endpoint, vm_id);
-            } else {
-                let vm_id = parse_id(first).unwrap_or(0);
+            } else if let Some(vm_id) = parse_id(first) {
                 schedule_load_vm(spawner, io, vm_id);
+            } else if let Some(name) = first {
+                let vm_id = parse_id(args.next().map(String::as_str)).unwrap_or(0);
+                schedule_load_persistent(spawner, io, String::from(name), vm_id);
+            } else {
+                schedule_load_vm(spawner, io, 0);
             }
         }
+        AppsCommand::Eject => eject_vm(io, rest.as_slice()),
+        AppsCommand::Delete => schedule_delete_persistent(spawner, io, rest.as_slice()),
         AppsCommand::Preserve => {
             preserve_selected_or_all(io, parse_id(rest.first().map(String::as_str)))
         }
