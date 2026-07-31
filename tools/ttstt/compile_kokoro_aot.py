@@ -334,7 +334,14 @@ class AotTensor:
             *strides,
         )
         struct.pack_into("<B", record, 80, self.symbolic_dim)
-        struct.pack_into("<IqI", record, 84, self.frame_multiplier, self.frame_addend, self.alignment)
+        struct.pack_into(
+            "<IqI",
+            record,
+            84,
+            self.frame_multiplier,
+            self.frame_addend,
+            self.alignment,
+        )
         return bytes(record)
 
 
@@ -465,7 +472,10 @@ def emit_aot(program: AotProgram, model_sha256: bytes, voices_sha256: bytes) -> 
             )
         )
 
-    reject(any(binding >= len(program.tensors) for binding in bindings), "binding tensor ID rejected")
+    reject(
+        any(binding >= len(program.tensors) for binding in bindings),
+        "binding tensor ID rejected",
+    )
     sections = {
         "tensors": b"".join(tensor.encode() for tensor in program.tensors),
         "slots": b"".join(slot.encode() for slot in program.slots),
@@ -488,8 +498,25 @@ def emit_aot(program: AotProgram, model_sha256: bytes, voices_sha256: bytes) -> 
         entries.append((kind, alignment, offset, count, stride))
         cursor = offset + len(payload)
 
-    struct.pack_into("<8sHHIQ", artifact, 0, AOT_MAGIC, AOT_VERSION, AOT_ENDIAN_TAG, AOT_HEADER_BYTES, len(artifact))
-    struct.pack_into("<HHII", artifact, 24, AOT_SECTION_COUNT, AOT_PHASE_COUNT, 0, AOT_ARENA_ALIGNMENT)
+    struct.pack_into(
+        "<8sHHIQ",
+        artifact,
+        0,
+        AOT_MAGIC,
+        AOT_VERSION,
+        AOT_ENDIAN_TAG,
+        AOT_HEADER_BYTES,
+        len(artifact),
+    )
+    struct.pack_into(
+        "<HHII",
+        artifact,
+        24,
+        AOT_SECTION_COUNT,
+        AOT_PHASE_COUNT,
+        0,
+        AOT_ARENA_ALIGNMENT,
+    )
     struct.pack_into("<5H", artifact, 36, 128, 64, 40, 48, 4)
     artifact[96:128] = model_sha256
     artifact[128:160] = voices_sha256
@@ -521,14 +548,27 @@ def inspect_aot(artifact: bytes) -> dict[str, Any]:
     reject(len(artifact) < AOT_HEADER_BYTES, "artifact is shorter than header")
     reject(artifact[:8] != AOT_MAGIC, "artifact magic rejected")
     version, endian, header_bytes = struct.unpack_from("<HHI", artifact, 8)
-    reject((version, endian, header_bytes) != (AOT_VERSION, AOT_ENDIAN_TAG, AOT_HEADER_BYTES), "artifact version rejected")
+    reject(
+        (version, endian, header_bytes)
+        != (AOT_VERSION, AOT_ENDIAN_TAG, AOT_HEADER_BYTES),
+        "artifact version rejected",
+    )
     artifact_bytes = struct.unpack_from("<Q", artifact, 16)[0]
     reject(artifact_bytes != len(artifact), "artifact length rejected")
     section_count, phase_count, flags, arena_alignment = struct.unpack_from("<HHII", artifact, 24)
-    reject((section_count, phase_count, flags, arena_alignment) != (6, 2, 0, 64), "artifact fixed header rejected")
-    reject(struct.unpack_from("<5H", artifact, 36) != (128, 64, 40, 48, 4), "artifact record sizes rejected")
+    reject(
+        (section_count, phase_count, flags, arena_alignment) != (6, 2, 0, 64),
+        "artifact fixed header rejected",
+    )
+    reject(
+        struct.unpack_from("<5H", artifact, 36) != (128, 64, 40, 48, 4),
+        "artifact record sizes rejected",
+    )
     reject(any(artifact[46:64]), "artifact header reserved bytes rejected")
-    reject(not any(artifact[96:128]) or not any(artifact[128:160]), "artifact provenance hash rejected")
+    reject(
+        not any(artifact[96:128]) or not any(artifact[128:160]),
+        "artifact provenance hash rejected",
+    )
     observed_seal = hashlib.sha256(
         artifact[:64] + bytes(32) + artifact[96:]
     ).digest()
@@ -539,7 +579,11 @@ def inspect_aot(artifact: bytes) -> dict[str, Any]:
     for index, (kind, alignment, stride, name) in enumerate(AOT_SECTION_SPECS):
         entry = struct.unpack_from("<HHIQQII", artifact, 160 + index * 32)
         actual_kind, entry_flags, actual_alignment, offset, count, actual_stride, reserved = entry
-        reject((actual_kind, entry_flags, actual_alignment, actual_stride, reserved) != (kind, 0, alignment, stride, 0), f"{name} directory entry rejected")
+        reject(
+            (actual_kind, entry_flags, actual_alignment, actual_stride, reserved)
+            != (kind, 0, alignment, stride, 0),
+            f"{name} directory entry rejected",
+        )
         expected_offset = align_up(cursor, alignment)
         reject(offset != expected_offset, f"{name} section offset rejected")
         reject(any(artifact[cursor:offset]), f"{name} section padding rejected")
@@ -556,7 +600,11 @@ def inspect_aot(artifact: bytes) -> dict[str, Any]:
         opcode, op_flags, phase = struct.unpack_from("<HHB", artifact, offset)
         reject(opcode not in AOT_OPCODES.values(), f"op {index}: opcode rejected")
         reject(op_flags & ~1 != 0 or phase not in {0, 1}, f"op {index}: flags rejected")
-        reject(any(artifact[offset + 5 : offset + 8]) or any(artifact[offset + 32 : offset + 40]), f"op {index}: reserved bytes rejected")
+        reject(
+            any(artifact[offset + 5 : offset + 8])
+            or any(artifact[offset + 32 : offset + 40]),
+            f"op {index}: reserved bytes rejected",
+        )
     phase_section = sections["phases"]
     phase_ids = tuple(artifact[phase_section["offset"] + index * 48] for index in range(2))
     reject(phase_ids != (0, 1), "phase IDs rejected")
@@ -1095,7 +1143,10 @@ def recognize_quant_fusions(
             reshape_index = producers.get(bias_reshape)
             reject(reshape_index is None, f"node {kernel_index}: integer bias has no producer")
             reshape = graph.node[reshape_index]
-            reject(reshape.op_type != "Reshape", f"node {kernel_index}: integer bias is not reshaped")
+            reject(
+                reshape.op_type != "Reshape",
+                f"node {kernel_index}: integer bias is not reshaped",
+            )
             bias_cast_index = producers.get(reshape.input[0])
             reject(bias_cast_index is None, f"node {kernel_index}: bias Cast missing")
             bias_cast = graph.node[bias_cast_index]
@@ -1131,7 +1182,10 @@ def recognize_quant_fusions(
 
         cast_index, cast = next_index, next_node
         cast_attrs = attributes(onnx, cast)
-        reject(int(cast_attrs.get("to", -1)) != 1, f"node {cast_index}: accumulator cast is not FLOAT")
+        reject(
+            int(cast_attrs.get("to", -1)) != 1,
+            f"node {cast_index}: accumulator cast is not FLOAT",
+        )
         mul_index, dequant_mul = sole_consumer(graph, consumers, cast.output[0], "Mul")
         scale_tensor = other_input(dequant_mul, cast.output[0])
         scale_index = recognize_scale(
@@ -1190,8 +1244,14 @@ def validate_frame_phase(
         or list(resolver.output) != [FRAME_COUNT_TENSOR],
         "frame-count resolver identity changed",
     )
-    reject(dtypes[FRAME_COUNT_TENSOR] != 7 or ranks[FRAME_COUNT_TENSOR] != 0, "frame count must be INT64 scalar")
-    reject(consumers.get(FRAME_COUNT_TENSOR) != [FRAME_RANGE_NODE_INDEX], "frame count consumer changed")
+    reject(
+        dtypes[FRAME_COUNT_TENSOR] != 7 or ranks[FRAME_COUNT_TENSOR] != 0,
+        "frame count must be INT64 scalar",
+    )
+    reject(
+        consumers.get(FRAME_COUNT_TENSOR) != [FRAME_RANGE_NODE_INDEX],
+        "frame count consumer changed",
+    )
 
     expected_chain = {
         1_738: ("Sigmoid", "/encoder/predictor/Sigmoid"),
@@ -1273,7 +1333,13 @@ def validate_frame_phase(
         if node.op_type in {"DynamicQuantizeLinear", "MatMulInteger", "ConvInteger"}
     }
     reject(
-        any(index < PHASE_ONE_RAW_START <= consumer for index in quant_indices for output in graph.node[index].output for consumer in consumers.get(output, []) if graph.node[consumer].op_type in {"Cast", "Mul"}),
+        any(
+            index < PHASE_ONE_RAW_START <= consumer
+            for index in quant_indices
+            for output in graph.node[index].output
+            for consumer in consumers.get(output, [])
+            if graph.node[consumer].op_type in {"Cast", "Mul"}
+        ),
         "quant lowering crosses the phase cut",
     )
     return PHASE_ONE_RAW_START
@@ -1387,6 +1453,45 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
     )
     op_counts = Counter(node.op_type for node in graph.node)
     domain_counts = Counter(node_domain(node) for node in graph.node)
+    tensor_descriptor_digest = hashlib.sha256(
+        canonical_json(
+            [
+                {
+                    "id": tensor.tensor_id,
+                    "name": tensor.name,
+                    "dtype": tensor.dtype,
+                    "rank": tensor.rank,
+                    "shape": tensor.declared_shape,
+                    "producer": tensor.producer,
+                    "initializer": tensor.initializer,
+                    "input": tensor.graph_input,
+                    "output": tensor.graph_output,
+                    "alias_of": tensor.alias_of,
+                    "live": [tensor.live_start, tensor.live_end],
+                    "phase": tensor.phase,
+                }
+                for tensor in analysis.tensors
+            ]
+        )
+    ).hexdigest()
+    fusion_plan_digest = hashlib.sha256(
+        canonical_json(
+            [
+                {
+                    "kind": fusion.kind,
+                    "kernel": fusion.kernel_index,
+                    "dql": fusion.dynamic_quant_index,
+                    "scale": fusion.scale_index,
+                    "cast": fusion.cast_index,
+                    "dequant_mul": fusion.dequant_mul_index,
+                    "int32_bias": fusion.int32_bias,
+                    "float_bias": fusion.float_bias,
+                    "result": fusion.result_tensor,
+                }
+                for fusion in fusions
+            ]
+        )
+    ).hexdigest()
     return {
         "schema": ANALYSIS_SCHEMA,
         "tool_version": TOOL_VERSION,
@@ -1428,6 +1533,7 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
             "ranks_inferred_without_declared_shape": unknown_declared,
             "view_aliases": sum(view_counts.values()),
             "view_alias_counts": dict(sorted(view_counts.items())),
+            "descriptor_sha256": tensor_descriptor_digest,
             "phase0_only": phase_counts[0],
             "phase1_only": phase_counts[1],
             "shared": phase_counts[2],
@@ -1445,6 +1551,9 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
             "dynamic_quantize_linear": sum(
                 node.op_type == "DynamicQuantizeLinear" for node in graph.node
             ),
+            "native_matmul_opcode": "DynamicQuantizedGemm:0x0300",
+            "native_conv_opcode": "DynamicQuantizedConv1d:0x0301",
+            "plan_sha256": fusion_plan_digest,
             "unsupported": 0,
         },
         "phases": {

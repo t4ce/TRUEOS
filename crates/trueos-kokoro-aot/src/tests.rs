@@ -72,6 +72,7 @@ fn tensor_record(
     record
 }
 
+#[allow(clippy::too_many_arguments)]
 fn slot_record(
     kind: u8,
     phase: u8,
@@ -119,6 +120,7 @@ fn op_record(
     record
 }
 
+#[allow(clippy::too_many_arguments)]
 fn phase_record(
     phase: u8,
     flags: u8,
@@ -512,6 +514,18 @@ fn malformed_tensor_and_shape_overflow_are_rejected() {
 
     let mut artifact = original.clone();
     let offset = tensor_offset(&artifact, 0);
+    artifact[offset + 2] = 0xff;
+    reseal(&mut artifact);
+    assert_eq!(
+        Program::parse(&artifact).unwrap_err(),
+        ParseError::BadTensor {
+            tensor: 0,
+            reason: TensorError::UnknownStorage,
+        }
+    );
+
+    let mut artifact = original.clone();
+    let offset = tensor_offset(&artifact, 0);
     artifact[offset + 1] = 5;
     reseal(&mut artifact);
     assert_eq!(
@@ -663,6 +677,27 @@ fn fixed_and_tensor_aliases_require_explicit_liveness_or_views() {
             second: 3,
         }
     );
+
+    let mut parts = fixture_parts();
+    parts.slots[0] = slot_record(1, 0, 64, 0, 0, 12, 0, 1);
+    parts.slots[1] = slot_record(1, 0, 64, 0, 0, 64, 1, 2);
+    parts.bindings[3] = 0;
+    parts.tensors[6] = tensor_record(
+        1,
+        &[1, 1, 64],
+        4,
+        1,
+        TensorFlags::OUTPUT.bits(),
+        NO_SLOT,
+        NO_TENSOR,
+        0,
+        None,
+        2,
+        2,
+        0,
+        64,
+    );
+    Program::parse(&emit(&parts)).unwrap();
 }
 
 #[test]
@@ -683,12 +718,13 @@ fn dynamic_interval_packing_reuses_nonoverlapping_slots() {
         program.resolve_phase_two(0, &mut bases).unwrap_err(),
         ArenaPlanError::FrameCountOutOfRange
     );
-    let resolved = program.resolve_phase_two(8, &mut bases).unwrap();
-    assert_eq!(resolved.slot_base(1), Some(0));
-    assert_eq!(resolved.slot_base(2), Some(64));
-    assert_eq!(resolved.slot_base(3), Some(64));
-    assert_eq!(resolved.arena_bytes(), 128);
-    drop(resolved);
+    {
+        let resolved = program.resolve_phase_two(8, &mut bases).unwrap();
+        assert_eq!(resolved.slot_base(1), Some(0));
+        assert_eq!(resolved.slot_base(2), Some(64));
+        assert_eq!(resolved.slot_base(3), Some(64));
+        assert_eq!(resolved.arena_bytes(), 128);
+    }
     assert_eq!(
         program.resolve_phase_two(32, &mut bases).unwrap_err(),
         ArenaPlanError::ArenaLimitExceeded
@@ -780,10 +816,10 @@ fn cooperative_cursor_is_transactional_and_phase_gated() {
     assert_eq!((first.op_index(), first.unit_start(), first.unit_count()), (0, 0, 5));
     assert_eq!(cursor.op_index(), 0);
     assert_eq!(cursor.unit_offset(), 0);
-    cursor.commit(first).unwrap();
+    cursor.commit(&program, first).unwrap();
     assert_eq!(cursor.unit_offset(), 5);
     assert_eq!(cursor.poll(&program, &mut budget), CursorPoll::BudgetExhausted);
-    assert_eq!(cursor.commit(first).unwrap_err(), CursorError::StaleWorkSlice);
+    assert_eq!(cursor.commit(&program, first).unwrap_err(), CursorError::StaleWorkSlice);
 
     let mut budget = WorkBudget::new(8).unwrap();
     let rest = match cursor.poll(&program, &mut budget) {
@@ -791,13 +827,13 @@ fn cooperative_cursor_is_transactional_and_phase_gated() {
         other => panic!("expected work, got {other:?}"),
     };
     assert_eq!((rest.unit_start(), rest.unit_count()), (5, 7));
-    cursor.commit(rest).unwrap();
+    cursor.commit(&program, rest).unwrap();
     let resolver = match cursor.poll(&program, &mut budget) {
         CursorPoll::Ready(work) => work,
         other => panic!("expected resolver, got {other:?}"),
     };
     assert_eq!((resolver.op_index(), resolver.unit_count()), (1, 1));
-    cursor.commit(resolver).unwrap();
+    cursor.commit(&program, resolver).unwrap();
     assert!(matches!(
         cursor.poll(&program, &mut budget),
         CursorPoll::PhaseBoundary(PhasePlan { op_start: 2, .. })
@@ -812,7 +848,7 @@ fn cooperative_cursor_is_transactional_and_phase_gated() {
         other => panic!("expected waveform work, got {other:?}"),
     };
     assert!(waveform.completes_op());
-    cursor.commit(waveform).unwrap();
+    cursor.commit(&program, waveform).unwrap();
     assert_eq!(cursor.poll(&program, &mut budget), CursorPoll::Complete);
 
     cursor.reset();
@@ -821,6 +857,24 @@ fn cooperative_cursor_is_transactional_and_phase_gated() {
     assert_eq!(
         OpCursor::from_checkpoint(&program, 0, 5, true).unwrap_err(),
         CursorError::InvalidCheckpoint
+    );
+    assert_eq!(
+        OpCursor::from_checkpoint(&program, 2, 1, false).unwrap_err(),
+        CursorError::InvalidCheckpoint
+    );
+
+    let mut foreign_artifact = fixture();
+    *foreign_artifact.last_mut().unwrap() ^= 1;
+    reseal(&mut foreign_artifact);
+    let foreign_program = Program::parse(&foreign_artifact).unwrap();
+    let mut foreign_budget = WorkBudget::new(5).unwrap();
+    let foreign_work = match OpCursor::new().poll(&foreign_program, &mut foreign_budget) {
+        CursorPoll::Ready(work) => work,
+        other => panic!("expected foreign work, got {other:?}"),
+    };
+    assert_eq!(
+        OpCursor::new().commit(&program, foreign_work).unwrap_err(),
+        CursorError::ProgramMismatch
     );
 }
 
@@ -843,6 +897,30 @@ fn malformed_phase_and_opcode_are_rejected() {
         ParseError::BadOp {
             op: 2,
             reason: OpError::UnknownOpcode,
+        }
+    );
+
+    let mut artifact = fixture();
+    let offset = op_offset(&artifact, 1);
+    artifact[offset + 5] = 1;
+    reseal(&mut artifact);
+    assert_eq!(
+        Program::parse(&artifact).unwrap_err(),
+        ParseError::BadOp {
+            op: 1,
+            reason: OpError::ReservedNonZero,
+        }
+    );
+
+    let mut artifact = fixture();
+    let offset = slot_offset(&artifact, 0);
+    artifact[offset + 2] = 1;
+    reseal(&mut artifact);
+    assert_eq!(
+        Program::parse(&artifact).unwrap_err(),
+        ParseError::BadSlot {
+            slot: 0,
+            reason: ArenaPlanError::UnknownFlags,
         }
     );
 }

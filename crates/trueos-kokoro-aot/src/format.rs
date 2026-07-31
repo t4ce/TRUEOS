@@ -369,8 +369,9 @@ impl Sha256 {
         self.compress(&block);
 
         let mut output = [0u8; 32];
-        for (chunk, word) in output.chunks_exact_mut(4).zip(self.state) {
-            chunk.copy_from_slice(&word.to_be_bytes());
+        for (index, word) in self.state.into_iter().enumerate() {
+            let offset = index * 4;
+            output[offset..offset + 4].copy_from_slice(&word.to_be_bytes());
         }
         output
     }
@@ -390,8 +391,9 @@ impl Sha256 {
         ];
 
         let mut schedule = [0u32; 64];
-        for (index, chunk) in block.chunks_exact(4).enumerate() {
-            schedule[index] = u32::from_be_bytes(chunk.try_into().expect("word"));
+        for (index, word) in schedule[..16].iter_mut().enumerate() {
+            let offset = index * 4;
+            *word = u32::from_be_bytes(block[offset..offset + 4].try_into().expect("word"));
         }
         for index in 16..64 {
             let x = schedule[index - 15];

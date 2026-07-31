@@ -51,6 +51,7 @@ pub struct WorkSlice {
     op: OpDesc,
     unit_start: u32,
     unit_count: u32,
+    artifact_sha256: [u8; 32],
 }
 
 impl WorkSlice {
@@ -140,7 +141,9 @@ impl OpCursor {
             if op_index < phase_two_start && phase_two_admitted {
                 return Err(CursorError::InvalidCheckpoint);
             }
-            if op_index > phase_two_start && !phase_two_admitted {
+            if (op_index > phase_two_start || (op_index == phase_two_start && unit_offset != 0))
+                && !phase_two_admitted
+            {
                 return Err(CursorError::InvalidCheckpoint);
             }
         }
@@ -186,12 +189,19 @@ impl OpCursor {
             op,
             unit_start: self.unit_offset,
             unit_count,
+            artifact_sha256: *program.artifact_sha256(),
         })
     }
 
-    pub fn commit(&mut self, work: WorkSlice) -> Result<(), CursorError> {
+    /// Commit work only against the sealed program that produced the slice.
+    pub fn commit(&mut self, program: &Program<'_>, work: WorkSlice) -> Result<(), CursorError> {
         if work.op_index != self.op_index || work.unit_start != self.unit_offset {
             return Err(CursorError::StaleWorkSlice);
+        }
+        if program.artifact_sha256() != &work.artifact_sha256
+            || program.op(work.op_index) != Some(work.op)
+        {
+            return Err(CursorError::ProgramMismatch);
         }
         if work.unit_count == 0
             || work.unit_end() > work.op.work_units

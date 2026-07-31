@@ -80,6 +80,10 @@ half-open liveness intervals, extends direct owners across view lifetimes, and
 classifies 2,126 phase-0-only, 2,036 phase-1-only, and 582 shared tensors. The
 raw-plan peak is 770 simultaneously live storage owners. Dynamic views are not
 emitted in v1; they must be materialized because v1 permits only static views.
+The canonical tensor/alias/liveness plan hashes to
+`cf1edfd4de99fea4a424f86a3e9cb89eb0c7e94140078bc7c2033fa5f48e6a81`;
+the 235-entry native quantized lowering plan hashes to
+`a949c04bfce049d0c26be6b8ad322d3b1a108b714c479ffe41fe1c094cdefd13`.
 
 ## Checked phase boundary
 
@@ -121,13 +125,17 @@ the full pinned audit. The fixture covers the 352-byte header, independent
 model/voice hashes, a whole-artifact SHA-256 seal (with only the seal field
 zeroed while hashing), six canonical aligned sections,
 constants in DATA, a static view, fixed and affine frame-count slots, two phase
-records, bindings, and native quantized opcodes. Payload and reserved-header
-tampering are negative tests.
+records, bindings, and native quantized opcodes. Payload, provenance, directory,
+and reserved-header tampering are negative tests.
 
-The matching no-std reader lives in `crates/trueos-kokoro-aot`. Its inspector
-can provide the cross-language half of the round trip:
+The matching no-std reader lives in `crates/trueos-kokoro-aot`. The unittest
+invokes its inspector automatically when Cargo is available. To run that half
+manually, start Cargo outside the checkout so the kernel workspace's custom
+target/build-std configuration does not apply:
 
 ```sh
-cargo run --manifest-path crates/trueos-kokoro-aot/Cargo.toml \
-  --example inspect -- /tmp/kokoro-fixture.kkaot 16
+trueos_root="$PWD"
+(cd /tmp && cargo run --manifest-path \
+  "$trueos_root/crates/trueos-kokoro-aot/Cargo.toml" \
+  --example inspect -- /tmp/kokoro-fixture.kkaot 16)
 ```

@@ -224,7 +224,7 @@ impl TensorLayout {
 pub fn broadcast_shape(lhs: Shape, rhs: Shape) -> Result<Shape, Error> {
     let rank = lhs.rank().max(rhs.rank());
     let mut output = [1usize; MAX_RANK];
-    for output_axis in 0..rank {
+    for (output_axis, output_dimension) in output.iter_mut().enumerate().take(rank) {
         let lhs_axis = output_axis as isize - (rank - lhs.rank()) as isize;
         let rhs_axis = output_axis as isize - (rank - rhs.rank()) as isize;
         let lhs_dimension = if lhs_axis < 0 {
@@ -240,7 +240,7 @@ pub fn broadcast_shape(lhs: Shape, rhs: Shape) -> Result<Shape, Error> {
         if lhs_dimension != rhs_dimension && lhs_dimension != 1 && rhs_dimension != 1 {
             return Err(Error::BroadcastMismatch);
         }
-        output[output_axis] = lhs_dimension.max(rhs_dimension);
+        *output_dimension = lhs_dimension.max(rhs_dimension);
     }
     Shape::new(&output[..rank])
 }
@@ -868,4 +868,233 @@ fn memory_ranges_overlap(lhs: *const f32, lhs_len: usize, rhs: *const f32, rhs_l
     let lhs_end = lhs_start.saturating_add(lhs_len.saturating_mul(size_of::<f32>()));
     let rhs_end = rhs_start.saturating_add(rhs_len.saturating_mul(size_of::<f32>()));
     lhs_start < rhs_end && rhs_start < lhs_end
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Generated with ONNX 1.22.0 and ONNX Runtime 1.28.0, optimizations
+    // disabled, sequential CPU execution, opset 20 / com.microsoft opset 1.
+
+    fn assert_close(actual: &[f32], expected_bits: &[u32], tolerance: f32) {
+        assert_eq!(actual.len(), expected_bits.len());
+        for (index, (&actual, &bits)) in actual.iter().zip(expected_bits).enumerate() {
+            let expected = f32::from_bits(bits);
+            let error = (actual - expected).abs();
+            assert!(
+                error <= tolerance,
+                "index {index}: actual={actual:?} expected={expected:?} error={error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn strided_add_obeys_multidirectional_broadcasting() {
+        let lhs_shape = Shape::new(&[2, 1, 3]).unwrap();
+        let rhs_shape = Shape::new(&[2, 1]).unwrap();
+        let output_shape = Shape::new(&[2, 2, 3]).unwrap();
+        let lhs_layout = TensorLayout::strided(lhs_shape, &[4, 3, 1], 0).unwrap();
+        let rhs_layout = TensorLayout::contiguous(rhs_shape);
+        let output_layout = TensorLayout::strided(output_shape, &[8, 3, 1], 0).unwrap();
+        let lhs = [1.0, 2.0, 3.0, -99.0, 4.0, 5.0, 6.0];
+        let rhs = [10.0, 20.0];
+        let mut output = [-99.0f32; 14];
+
+        add(&lhs, lhs_layout, &rhs, rhs_layout, &mut output, output_layout).unwrap();
+        assert_eq!(
+            output,
+            [
+                11.0, 12.0, 13.0, 21.0, 22.0, 23.0, -99.0, -99.0, 14.0, 15.0, 16.0, 24.0, 25.0,
+                26.0,
+            ]
+        );
+    }
+
+    #[test]
+    fn every_binary_operation_preserves_f32_operation_boundaries() {
+        let vector = Shape::new(&[4]).unwrap();
+        let scalar = Shape::scalar();
+        let vector_layout = TensorLayout::contiguous(vector);
+        let scalar_layout = TensorLayout::contiguous(scalar);
+        let input = [1.5, -2.0, 0.25, 8.0];
+        let rhs = [2.0];
+        let mut output = [0.0; 4];
+
+        mul(&input, vector_layout, &rhs, scalar_layout, &mut output, vector_layout).unwrap();
+        assert_eq!(output, [3.0, -4.0, 0.5, 16.0]);
+        div(&input, vector_layout, &rhs, scalar_layout, &mut output, vector_layout).unwrap();
+        assert_eq!(output, [0.75, -1.0, 0.125, 4.0]);
+        sub(&input, vector_layout, &rhs, scalar_layout, &mut output, vector_layout).unwrap();
+        assert_eq!(output, [-0.5, -4.0, -1.75, 6.0]);
+    }
+
+    #[test]
+    fn binary_validation_is_transactional() {
+        let shape = Shape::new(&[2, 2]).unwrap();
+        let contiguous = TensorLayout::contiguous(shape);
+        let overlapping = TensorLayout::strided(shape, &[1, 1], 0).unwrap();
+        let mut output = [123.0f32; 4];
+        assert_eq!(
+            add(&[1.0; 4], contiguous, &[2.0; 4], contiguous, &mut output, overlapping,),
+            Err(Error::OverlappingOutput)
+        );
+        assert_eq!(output, [123.0; 4]);
+
+        assert_eq!(
+            div(&[1.0; 4], contiguous, &[1.0, 0.0, 1.0, 1.0], contiguous, &mut output, contiguous,),
+            Err(Error::NonFiniteOutput)
+        );
+        assert_eq!(output, [123.0; 4]);
+    }
+
+    #[test]
+    fn reduce_mean_matches_both_pinned_axes_exactly() {
+        let shape = Shape::new(&[2, 2, 3]).unwrap();
+        let input = [
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
+        let mut axis_zero = [0.0f32; 6];
+        reduce_mean(&input, shape, 0, true, &mut axis_zero).unwrap();
+        assert_eq!(axis_zero, [4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+
+        let mut axis_two = [0.0f32; 4];
+        reduce_mean(&input, shape, 2, true, &mut axis_two).unwrap();
+        assert_eq!(axis_two, [2.0, 5.0, 8.0, 11.0]);
+        assert_eq!(reduced_shape(shape, -1, true).unwrap().dims(), &[2, 2, 1]);
+    }
+
+    #[test]
+    fn layer_normalization_matches_ort_fixture() {
+        let shape = Shape::new(&[2, 2, 4]).unwrap();
+        let input = [
+            1.0, 2.0, 4.0, -3.0, 1000.0, 1000.25, 999.75, 1001.0, -0.1, 0.2, 0.3, 0.9, 5.0, -2.0,
+            8.0, 1.0,
+        ];
+        let scale = [1.0, 0.5, -2.0, 3.0];
+        let bias = [0.1, -0.2, 0.3, -0.4];
+        let mut output = [0.0f32; 16];
+        layer_normalization(&input, shape, -1, &scale, &bias, 1.0e-12, &mut output).unwrap();
+        assert_close(
+            &output,
+            &[
+                0x3DCC_CCCD,
+                0xBB7E_8880,
+                0xC003_6ACD,
+                0xC0A3_6ACD,
+                0xBEDE_79BB,
+                0xBE4C_CCCD,
+                0x401C_09AA,
+                0x408D_2479,
+                0xBF89_0084,
+                0xBEBE_84D2,
+                0x3EE0_1852,
+                0x408B_3479,
+                0x3F20_0ECC,
+                0xBF5B_45B1,
+                0xC014_DF4B,
+                0xBFFC_E2FE,
+            ],
+            6.0e-7,
+        );
+    }
+
+    #[test]
+    fn softmax_matches_ort_fixture() {
+        let shape = Shape::new(&[1, 1, 2, 5]).unwrap();
+        let input = [-10.0, -1.0, 0.0, 1.0, 10.0, 100.0, 100.0, 99.0, -100.0, 0.0];
+        let mut output = [0.0f32; 10];
+        softmax(&input, shape, -1, &mut output).unwrap();
+        assert_close(
+            &output,
+            &[
+                0x310D_9D7A,
+                0x378C_13FA,
+                0x383E_62C4,
+                0x3901_616C,
+                0x3F7F_F3D9,
+                0x3ED8_3A2C,
+                0x3ED8_3A2C,
+                0x3E1F_1753,
+                0x0000_0000,
+                0x0000_0000,
+            ],
+            2.0e-7,
+        );
+    }
+
+    #[test]
+    fn fast_gelu_with_bias_matches_ort_fixture() {
+        let shape = Shape::new(&[2, 5]).unwrap();
+        let input = [-4.0, -1.25, -0.1, 0.0, 0.75, 1.5, 3.0, 6.0, -2.5, 0.2];
+        let bias = [0.1, -0.2, 0.3, -0.4, 0.5];
+        let mut output = [0.0f32; 10];
+        fast_gelu(&input, shape, Some(&bias), &mut output).unwrap();
+        assert_close(
+            &output,
+            &[
+                0xB8EB_7667,
+                0xBDDA_D172,
+                0x3DED_4385,
+                0xBE0D_259F,
+                0x3F8F_1142,
+                0x3FC1_8DB4,
+                0x4032_C59C,
+                0x40C9_999A,
+                0xBBA2_BF94,
+                0x3F07_D372,
+            ],
+            3.0e-7,
+        );
+    }
+
+    #[test]
+    fn skip_layer_normalization_matches_ort_fixture() {
+        let shape = Shape::new(&[1, 2, 4]).unwrap();
+        let input = [1.0, 2.0, 4.0, -3.0, 1000.0, 1000.25, 999.75, 1001.0];
+        let skip = [0.5, -1.0, 2.0, 3.0, -999.0, -999.0, -999.0, -999.0];
+        let scale = [1.0, 0.5, -2.0, 3.0];
+        let bias = [0.1, -0.2, 0.3, -0.4];
+        let mut output = [0.0f32; 8];
+        skip_layer_normalization(&input, &skip, shape, &scale, &bias, 1.0e-12, &mut output)
+            .unwrap();
+        assert_close(
+            &output,
+            &[
+                0xBE2F_AE24,
+                0xBEE3_893E,
+                0xC044_4FEB,
+                0xC04A_E04C,
+                0xBEDE_79BB,
+                0xBE4C_CCCD,
+                0x401C_09AA,
+                0x408D_2479,
+            ],
+            6.0e-7,
+        );
+    }
+
+    #[test]
+    fn normalization_rejects_nonfinite_input_without_writing() {
+        let shape = Shape::new(&[1, 4]).unwrap();
+        let input = [1.0, 2.0, f32::NAN, 4.0];
+        let mut output = [99.0f32; 4];
+        assert_eq!(
+            layer_normalization(&input, shape, -1, &[1.0; 4], &[0.0; 4], 1.0e-5, &mut output,),
+            Err(Error::NonFiniteInput)
+        );
+        assert_eq!(output, [99.0; 4]);
+    }
+
+    #[test]
+    fn shape_and_axis_errors_are_explicit() {
+        assert_eq!(Shape::new(&[1, 1, 1, 1, 1]), Err(Error::RankTooLarge));
+        assert_eq!(Shape::new(&[2, 0]), Err(Error::ZeroDimension));
+        let shape = Shape::new(&[2, 3]).unwrap();
+        assert_eq!(reduced_shape(shape, 2, true), Err(Error::InvalidAxis));
+        assert_eq!(
+            broadcast_shape(Shape::new(&[2, 3]).unwrap(), Shape::new(&[4]).unwrap()),
+            Err(Error::BroadcastMismatch)
+        );
+    }
 }

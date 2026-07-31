@@ -142,6 +142,14 @@ class KokoroPinnedGraphTests(unittest.TestCase):
         self.assertEqual(report["quantized_lowering"]["conv_recognized"], 87)
         self.assertEqual(report["quantized_lowering"]["conv_int32_bias"], 80)
         self.assertEqual(report["quantized_lowering"]["conv_direct"], 7)
+        self.assertEqual(
+            report["tensor_contract"]["descriptor_sha256"],
+            "cf1edfd4de99fea4a424f86a3e9cb89eb0c7e94140078bc7c2033fa5f48e6a81",
+        )
+        self.assertEqual(
+            report["quantized_lowering"]["plan_sha256"],
+            "a949c04bfce049d0c26be6b8ad322d3b1a108b714c479ffe41fe1c094cdefd13",
+        )
         self.assertEqual(report["phases"]["phase0_source_nodes"], [0, 1_747])
         self.assertEqual(report["phases"]["phase1_source_nodes"], [1_747, 3_615])
 

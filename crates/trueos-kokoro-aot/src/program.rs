@@ -498,18 +498,15 @@ impl<'a> Program<'a> {
     }
 
     pub fn tensor(&self, tensor: u32) -> Option<TensorDesc> {
-        let record = record(self.tensors, tensor, TENSOR_RECORD_BYTES)?;
-        decode_tensor(record).ok()
+        self.decode_tensor_at(tensor).ok()
     }
 
     pub fn slot(&self, slot: u32) -> Option<SlotDesc> {
-        let record = record(self.slots, slot, SLOT_RECORD_BYTES)?;
-        decode_slot(record).ok()
+        self.decode_slot_at(slot).ok()
     }
 
     pub fn op(&self, op: u32) -> Option<OpDesc> {
-        let record = record(self.ops, op, OP_RECORD_BYTES)?;
-        decode_op(record).ok()
+        self.decode_op_at(op).ok()
     }
 
     pub fn binding(&self, binding: u32) -> Option<u32> {
@@ -723,10 +720,12 @@ impl<'a> Program<'a> {
 
     fn validate_slots(&self, slot_count: u32) -> Result<(), ParseError> {
         for slot_id in 0..slot_count {
-            let slot = self.slot(slot_id).ok_or(ParseError::BadSlot {
-                slot: slot_id,
-                reason: ArenaPlanError::UnknownSlotKind,
-            })?;
+            let slot = self
+                .decode_slot_at(slot_id)
+                .map_err(|reason| ParseError::BadSlot {
+                    slot: slot_id,
+                    reason,
+                })?;
             validate_slot(slot, self.phases).map_err(|reason| ParseError::BadSlot {
                 slot: slot_id,
                 reason,
@@ -776,10 +775,12 @@ impl<'a> Program<'a> {
     fn validate_tensors(&self, tensor_count: u32, slot_count: u32) -> Result<(), ParseError> {
         let phase1_frame_max = self.phases[1].frame_count_max;
         for tensor_id in 0..tensor_count {
-            let tensor = self.tensor(tensor_id).ok_or(ParseError::BadTensor {
-                tensor: tensor_id,
-                reason: TensorError::UnknownDType,
-            })?;
+            let tensor =
+                self.decode_tensor_at(tensor_id)
+                    .map_err(|reason| ParseError::BadTensor {
+                        tensor: tensor_id,
+                        reason,
+                    })?;
             tensor
                 .validate_local(phase1_frame_max, slot_count, tensor_count, self.data.len() as u64)
                 .map_err(|reason| ParseError::BadTensor {
@@ -962,12 +963,29 @@ impl<'a> Program<'a> {
                 let effective =
                     effective_view_alignment(owner.guaranteed_alignment, tensor.storage_offset);
                 if tensor.guaranteed_alignment > effective
-                    || tensor.storage_offset % u64::from(tensor.guaranteed_alignment) != 0
+                    || !tensor
+                        .storage_offset
+                        .is_multiple_of(u64::from(tensor.guaranteed_alignment))
                 {
                     return Err(ParseError::BadTensor {
                         tensor: tensor_id,
                         reason: TensorError::MisalignedStorage,
                     });
+                }
+                if owner.storage == StorageKind::Slot {
+                    let slot = self.slot(owner.slot_id).ok_or(ParseError::BadTensor {
+                        tensor: tensor_id,
+                        reason: TensorError::InvalidSlotReference,
+                    })?;
+                    if (tensor.is_input() && slot.live_start != 0)
+                        || (tensor.is_output()
+                            && slot.live_end != self.op_count().saturating_add(1))
+                    {
+                        return Err(ParseError::BadTensor {
+                            tensor: tensor_id,
+                            reason: TensorError::InvalidStorageFields,
+                        });
+                    }
                 }
             }
             StorageKind::Constant => {
@@ -978,7 +996,7 @@ impl<'a> Program<'a> {
                         tensor: tensor_id,
                         reason: TensorError::ByteLengthOverflow,
                     })?;
-                if absolute_offset % u64::from(tensor.guaranteed_alignment) != 0 {
+                if !absolute_offset.is_multiple_of(u64::from(tensor.guaranteed_alignment)) {
                     return Err(ParseError::BadTensor {
                         tensor: tensor_id,
                         reason: TensorError::MisalignedStorage,
@@ -992,10 +1010,9 @@ impl<'a> Program<'a> {
 
     fn validate_ops(&self, op_count: u32) -> Result<(), ParseError> {
         for op_id in 0..op_count {
-            let op = self.op(op_id).ok_or(ParseError::BadOp {
-                op: op_id,
-                reason: OpError::UnknownOpcode,
-            })?;
+            let op = self
+                .decode_op_at(op_id)
+                .map_err(|reason| ParseError::BadOp { op: op_id, reason })?;
             let expected_phase = if op_id < self.phases[0].op_end {
                 Phase::Phase0
             } else {
@@ -1060,13 +1077,13 @@ impl<'a> Program<'a> {
                         reason: OpError::TensorWrongPhase,
                     });
                 }
-                if let Some(slot) = self.tensor_slot(tensor)? {
-                    if op_id < slot.live_start || op_id >= slot.live_end {
-                        return Err(ParseError::BadOp {
-                            op: op_id,
-                            reason: OpError::TensorNotLive,
-                        });
-                    }
+                if let Some(slot) = self.tensor_slot(tensor)?
+                    && (op_id < slot.live_start || op_id >= slot.live_end)
+                {
+                    return Err(ParseError::BadOp {
+                        op: op_id,
+                        reason: OpError::TensorNotLive,
+                    });
                 }
                 if binding_offset >= u32::from(op.input_count) && tensor.is_read_only() {
                     return Err(ParseError::BadOp {
@@ -1148,6 +1165,23 @@ impl<'a> Program<'a> {
         };
         Ok(slot_id.and_then(|id| self.slot(id)))
     }
+
+    fn decode_tensor_at(&self, tensor: u32) -> Result<TensorDesc, TensorError> {
+        let bytes = record(self.tensors, tensor, TENSOR_RECORD_BYTES)
+            .ok_or(TensorError::InvalidStorageFields)?;
+        decode_tensor(bytes)
+    }
+
+    fn decode_slot_at(&self, slot: u32) -> Result<SlotDesc, ArenaPlanError> {
+        let bytes =
+            record(self.slots, slot, SLOT_RECORD_BYTES).ok_or(ArenaPlanError::UnknownSlotKind)?;
+        decode_slot(bytes)
+    }
+
+    fn decode_op_at(&self, op: u32) -> Result<OpDesc, OpError> {
+        let bytes = record(self.ops, op, OP_RECORD_BYTES).ok_or(OpError::UnknownOpcode)?;
+        decode_op(bytes)
+    }
 }
 
 #[derive(Debug)]
@@ -1179,12 +1213,11 @@ impl ResolvedArenaPlan<'_, '_, '_> {
     }
 
     pub fn tensor_arena_offset(&self, tensor_id: u32) -> Option<u64> {
-        let tensor = self.program.tensor(tensor_id)?;
-        if tensor.storage != StorageKind::Slot {
+        let storage = self.program.resolve_storage(tensor_id).ok()?;
+        let StorageOwner::Slot(slot_id) = storage.owner else {
             return None;
-        }
-        self.slot_base(tensor.slot_id)?
-            .checked_add(tensor.storage_offset)
+        };
+        self.slot_base(slot_id)?.checked_add(storage.offset)
     }
 }
 
@@ -1310,7 +1343,7 @@ fn validate_slot(slot: SlotDesc, phases: [PhasePlan; 2]) -> Result<(), ArenaPlan
     match (slot.kind, slot.phase) {
         (SlotKind::Fixed, Phase::Phase0) => {
             if slot.byte_multiplier != 0
-                || slot.fixed_offset % u64::from(slot.alignment) != 0
+                || !slot.fixed_offset.is_multiple_of(u64::from(slot.alignment))
                 || slot.live_end > phases[0].op_end
             {
                 return Err(ArenaPlanError::InvalidPhaseKind);
@@ -1325,7 +1358,7 @@ fn validate_slot(slot: SlotDesc, phases: [PhasePlan; 2]) -> Result<(), ArenaPlan
         }
         (SlotKind::Fixed, Phase::Shared) => {
             if slot.byte_multiplier != 0
-                || slot.fixed_offset % u64::from(slot.alignment) != 0
+                || !slot.fixed_offset.is_multiple_of(u64::from(slot.alignment))
                 || slot.live_start >= phases[0].op_end
                 || slot.live_end <= phases[1].op_start
             {

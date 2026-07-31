@@ -304,7 +304,9 @@ impl TensorDesc {
             StorageKind::Slot => {
                 if self.slot_id >= slot_count
                     || self.view_of != NO_TENSOR
-                    || self.storage_offset % u64::from(self.guaranteed_alignment) != 0
+                    || !self
+                        .storage_offset
+                        .is_multiple_of(u64::from(self.guaranteed_alignment))
                 {
                     return Err(TensorError::InvalidSlotReference);
                 }
