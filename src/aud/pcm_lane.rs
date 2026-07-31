@@ -29,20 +29,59 @@ pub enum PcmLaneError {
     QueueFull,
 }
 
+/// Error returned by generation-guarded PCM admission.
+#[derive(Debug)]
+pub enum GuardedPcmLaneError {
+    GenerationChanged(Vec<i16>),
+    Lane(PcmLaneError, Vec<i16>),
+}
+
 pub fn submit_i16_stereo_48k(
     label: &'static str,
     samples: Vec<i16>,
 ) -> Result<usize, PcmLaneError> {
+    match submit_i16_stereo_48k_inner(label, samples, None) {
+        Ok(frames) => Ok(frames),
+        Err(GuardedPcmLaneError::Lane(error, _samples)) => Err(error),
+        Err(GuardedPcmLaneError::GenerationChanged(_samples)) => {
+            unreachable!("unconditional PCM submission cannot have a generation mismatch")
+        }
+    }
+}
+
+/// Atomically admit PCM only while the stop generation still matches.
+///
+/// Generation validation and insertion share the same queue lock as
+/// [`request_stop`]. A successful return therefore guarantees that no stop
+/// linearized between the caller's generation check and this queue insertion.
+pub fn submit_i16_stereo_48k_if_generation(
+    label: &'static str,
+    samples: Vec<i16>,
+    expected_generation: u32,
+) -> Result<usize, GuardedPcmLaneError> {
+    submit_i16_stereo_48k_inner(label, samples, Some(expected_generation))
+}
+
+fn submit_i16_stereo_48k_inner(
+    label: &'static str,
+    samples: Vec<i16>,
+    expected_generation: Option<u32>,
+) -> Result<usize, GuardedPcmLaneError> {
     if samples.is_empty() {
-        return Err(PcmLaneError::EmptyBuffer);
+        return Err(GuardedPcmLaneError::Lane(PcmLaneError::EmptyBuffer, samples));
     }
     if samples.len() % hda::PCM_CHANNELS != 0 {
-        return Err(PcmLaneError::BadShape);
+        return Err(GuardedPcmLaneError::Lane(PcmLaneError::BadShape, samples));
     }
 
     let sample_count = samples.len();
     let frames = sample_count / hda::PCM_CHANNELS;
     let mut requests = PCM_LANE_REQUESTS.lock();
+    if expected_generation
+        .is_some_and(|expected| PCM_LANE_STOP_GENERATION.load(Ordering::Acquire) != expected)
+    {
+        return Err(GuardedPcmLaneError::GenerationChanged(samples));
+    }
     let queued_frames = requests
         .iter()
         .map(|request| request.samples.len() / hda::PCM_CHANNELS)
@@ -67,7 +106,7 @@ pub fn submit_i16_stereo_48k(
                 PCM_LANE_MAX_QUEUED_FRAMES
             );
         }
-        return Err(PcmLaneError::QueueFull);
+        return Err(GuardedPcmLaneError::Lane(PcmLaneError::QueueFull, samples));
     }
 
     requests.push_back(PcmLaneRequest { label, samples });
@@ -108,19 +147,21 @@ pub fn take_pending() -> Option<PcmLaneRequest> {
 }
 
 pub fn request_stop() -> u32 {
-    let cleared_frames = {
+    let (cleared_frames, generation) = {
         let mut requests = PCM_LANE_REQUESTS.lock();
         let frames = requests
             .iter()
             .map(|request| request.samples.len() / hda::PCM_CHANNELS)
             .sum::<usize>();
         requests.clear();
-        frames
+        // Keep the generation transition under the same queue lock used by
+        // guarded admission. This is the stop operation's linearization point.
+        let generation = PCM_LANE_STOP_GENERATION
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        (frames, generation)
     };
     PCM_LANE_PAUSED.store(false, Ordering::Release);
-    let generation = PCM_LANE_STOP_GENERATION
-        .fetch_add(1, Ordering::AcqRel)
-        .wrapping_add(1);
     crate::log_info!(
         target: "audio";
         "pcm-lane: stop generation={} cleared_frames={}\n",

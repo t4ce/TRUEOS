@@ -244,6 +244,16 @@ pub(crate) const KOKORO_QGEMM_U8_I8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         Some(&KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT),
     );
 
+pub(crate) const KOKORO_CONV1D_U8_U8_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact::new(
+        KOKORO_CONV1D_U8_U8_KERNEL_NAME,
+        KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT.target,
+        KOKORO_CONV1D_U8_U8_ADLS_BIN,
+        KOKORO_CONV1D_U8_U8_ADLS_SPV,
+        KOKORO_CONV1D_U8_U8_ADLS_BIN_SHA256,
+        Some(&KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT),
+    );
+
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,

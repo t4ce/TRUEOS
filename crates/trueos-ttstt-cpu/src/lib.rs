@@ -17,6 +17,13 @@
 //! can construct one after enabling XCR0 on each worker CPU. AVX-512 state is
 //! neither required nor used.
 
+mod quant;
+
+pub use quant::{
+    DynamicQuantization, QuantizationError, conv_integer_scale, dequantize_conv_integer_ncw,
+    dequantize_matmul_integer_per_output, dynamic_quantize_linear_u8, quantize_conv_bias_floor,
+};
+
 /// A CPU implementation of the unsigned-by-signed integer dot product.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Lane {
@@ -89,6 +96,8 @@ pub enum Error {
     RowSumsTooSmall,
     ScalesTooSmall,
     BiasTooSmall,
+    ScratchTooSmall,
+    InvalidConvolutionShape,
     UnsupportedLane,
 }
 
@@ -166,6 +175,117 @@ impl QGemmParams<'_> {
             return Err(Error::RowSumsTooSmall);
         }
         Ok(())
+    }
+}
+
+/// Allocation-free group-one ONNX ConvInteger parameters for one spatial
+/// dimension. All 87 ConvInteger nodes in the pinned Kokoro graph use group
+/// one; unsupported grouped/depthwise layouts are therefore not implied.
+///
+/// The input and output use ONNX's `[batch, channels, width]` layout. Packed
+/// weights use `[output_channel, kernel_x, input_channel]`, which makes every
+/// receptive field one contiguous VNNI dot product after it is gathered into
+/// the caller-owned `patch_scratch` buffer.
+///
+/// Kokoro stores ConvInteger weights as `u8`. Pack them once with
+/// [`pack_conv1d_weights_u8`] and translate their zero points with
+/// [`signed_u8_zero_point`]. This lossless `u8 -> i8` domain shift lets the
+/// same AVX-VNNI primitive implement `(x - x_zero_point) * (w - w_zero_point)`.
+#[derive(Clone, Copy, Debug)]
+pub struct QConv1dParams<'a> {
+    pub batch: usize,
+    pub input_channels: usize,
+    pub input_width: usize,
+    pub output_channels: usize,
+    pub kernel_width: usize,
+    pub stride: usize,
+    pub dilation: usize,
+    pub pad_left: usize,
+    pub pad_right: usize,
+    pub input_zero_point: u8,
+    pub weight_zero_points: RhsZeroPoints<'a>,
+    pub weight_row_sums: Option<&'a [i32]>,
+}
+
+impl QConv1dParams<'_> {
+    /// Return the exact ONNX `NOTSET` output width for this 1-D convolution.
+    pub fn output_width(self) -> Result<usize, Error> {
+        if self.batch == 0
+            || self.input_channels == 0
+            || self.input_width == 0
+            || self.output_channels == 0
+        {
+            return Err(Error::EmptyMatrix);
+        }
+        if self.kernel_width == 0 {
+            return Err(Error::EmptyReduction);
+        }
+        if self.stride == 0 || self.dilation == 0 {
+            return Err(Error::InvalidConvolutionShape);
+        }
+        let effective_kernel = self
+            .kernel_width
+            .checked_sub(1)
+            .and_then(|width| width.checked_mul(self.dilation))
+            .and_then(|width| width.checked_add(1))
+            .ok_or(Error::ShapeOverflow)?;
+        let padded_width = self
+            .input_width
+            .checked_add(self.pad_left)
+            .and_then(|width| width.checked_add(self.pad_right))
+            .ok_or(Error::ShapeOverflow)?;
+        if padded_width < effective_kernel {
+            return Err(Error::InvalidConvolutionShape);
+        }
+        Ok((padded_width - effective_kernel) / self.stride + 1)
+    }
+
+    fn validate(
+        self,
+        input: &[u8],
+        weights: &[i8],
+        output: &[i32],
+        patch_scratch: &[u8],
+    ) -> Result<usize, Error> {
+        let output_width = self.output_width()?;
+        let reduction = self
+            .input_channels
+            .checked_mul(self.kernel_width)
+            .ok_or(Error::ShapeOverflow)?;
+        let input_len = self
+            .batch
+            .checked_mul(self.input_channels)
+            .and_then(|elements| elements.checked_mul(self.input_width))
+            .ok_or(Error::ShapeOverflow)?;
+        let weights_len = self
+            .output_channels
+            .checked_mul(reduction)
+            .ok_or(Error::ShapeOverflow)?;
+        let output_len = self
+            .batch
+            .checked_mul(self.output_channels)
+            .and_then(|elements| elements.checked_mul(output_width))
+            .ok_or(Error::ShapeOverflow)?;
+        if input.len() < input_len {
+            return Err(Error::LhsTooSmall);
+        }
+        if weights.len() < weights_len {
+            return Err(Error::RhsTooSmall);
+        }
+        if output.len() < output_len {
+            return Err(Error::OutputTooSmall);
+        }
+        if patch_scratch.len() < reduction {
+            return Err(Error::ScratchTooSmall);
+        }
+        self.weight_zero_points.validate(self.output_channels)?;
+        if self
+            .weight_row_sums
+            .is_some_and(|row_sums| row_sums.len() < self.output_channels)
+        {
+            return Err(Error::RowSumsTooSmall);
+        }
+        Ok(output_width)
     }
 }
 
@@ -294,6 +414,214 @@ impl Dispatcher {
         }
         Ok(())
     }
+
+    /// Run allocation-free 1-D ConvInteger on the best available lane.
+    pub fn qconv1d(
+        self,
+        input_ncl: &[u8],
+        weights_oki: &[i8],
+        output_ncl: &mut [i32],
+        patch_scratch: &mut [u8],
+        params: QConv1dParams<'_>,
+    ) -> Result<Lane, Error> {
+        let lane = self.best_lane();
+        self.qconv1d_with_lane(input_ncl, weights_oki, output_ncl, patch_scratch, params, lane)?;
+        Ok(lane)
+    }
+
+    /// Run allocation-free 1-D ConvInteger on an explicitly selected lane.
+    ///
+    /// Out-of-bounds spatial taps are filled with `input_zero_point`, which is
+    /// zero in the centered integer domain required by ONNX padding semantics.
+    pub fn qconv1d_with_lane(
+        self,
+        input_ncl: &[u8],
+        weights_oki: &[i8],
+        output_ncl: &mut [i32],
+        patch_scratch: &mut [u8],
+        params: QConv1dParams<'_>,
+        lane: Lane,
+    ) -> Result<(), Error> {
+        let output_width = params.validate(input_ncl, weights_oki, output_ncl, patch_scratch)?;
+        if !self.supports(lane) {
+            return Err(Error::UnsupportedLane);
+        }
+        let reduction = params.input_channels * params.kernel_width;
+
+        for batch in 0..params.batch {
+            let mut output_x = 0usize;
+
+            // The i5 production lane reuses one weight-vector load across
+            // four temporal positions. Callers opt in simply by supplying
+            // four patches of scratch; the one-patch contract stays valid.
+            #[cfg(target_arch = "x86_64")]
+            if lane == Lane::AvxVnni
+                && patch_scratch.len() >= reduction.checked_mul(4).ok_or(Error::ShapeOverflow)?
+            {
+                while output_x + 4 <= output_width {
+                    let blocked_patches = &mut patch_scratch[..reduction * 4];
+                    for position in 0..4 {
+                        let patch_start = position * reduction;
+                        gather_qconv1d_patch(
+                            input_ncl,
+                            &mut blocked_patches[patch_start..patch_start + reduction],
+                            params,
+                            batch,
+                            output_x + position,
+                        )?;
+                    }
+                    let lhs_sums = [
+                        sum_u8(&blocked_patches[..reduction]),
+                        sum_u8(&blocked_patches[reduction..reduction * 2]),
+                        sum_u8(&blocked_patches[reduction * 2..reduction * 3]),
+                        sum_u8(&blocked_patches[reduction * 3..reduction * 4]),
+                    ];
+                    for output_channel in 0..params.output_channels {
+                        let weights_start = output_channel * reduction;
+                        let weights = &weights_oki[weights_start..weights_start + reduction];
+                        let raw = unsafe { raw_dot4_avx_vnni(blocked_patches, reduction, weights) };
+                        let weight_sum = params
+                            .weight_row_sums
+                            .map_or_else(|| sum_i8(weights), |sums| sums[output_channel]);
+                        let weight_zero_point = params.weight_zero_points.get(output_channel);
+                        let output_start = (batch * params.output_channels + output_channel)
+                            * output_width
+                            + output_x;
+                        for position in 0..4 {
+                            output_ncl[output_start + position] = apply_zero_points(
+                                raw[position],
+                                lhs_sums[position],
+                                weight_sum,
+                                reduction,
+                                params.input_zero_point,
+                                weight_zero_point,
+                            );
+                        }
+                    }
+                    output_x += 4;
+                }
+            }
+
+            while output_x < output_width {
+                let patch = &mut patch_scratch[..reduction];
+                gather_qconv1d_patch(input_ncl, patch, params, batch, output_x)?;
+                let lhs_sum = sum_u8(patch);
+                for output_channel in 0..params.output_channels {
+                    let weights_start = output_channel * reduction;
+                    let weights = &weights_oki[weights_start..weights_start + reduction];
+                    let weight_sum = params
+                        .weight_row_sums
+                        .map_or_else(|| sum_i8(weights), |sums| sums[output_channel]);
+                    let weight_zero_point = params.weight_zero_points.get(output_channel);
+                    let value = apply_zero_points(
+                        raw_dot(patch, weights, lane),
+                        lhs_sum,
+                        weight_sum,
+                        reduction,
+                        params.input_zero_point,
+                        weight_zero_point,
+                    );
+                    let output_index =
+                        (batch * params.output_channels + output_channel) * output_width + output_x;
+                    output_ncl[output_index] = value;
+                }
+                output_x += 1;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn gather_qconv1d_patch(
+    input_ncl: &[u8],
+    patch: &mut [u8],
+    params: QConv1dParams<'_>,
+    batch: usize,
+    output_x: usize,
+) -> Result<(), Error> {
+    let output_origin = output_x
+        .checked_mul(params.stride)
+        .ok_or(Error::ShapeOverflow)?;
+    for kernel_x in 0..params.kernel_width {
+        let padded_x = kernel_x
+            .checked_mul(params.dilation)
+            .and_then(|offset| output_origin.checked_add(offset))
+            .ok_or(Error::ShapeOverflow)?;
+        let patch_start = kernel_x * params.input_channels;
+        let patch_slice = &mut patch[patch_start..patch_start + params.input_channels];
+        let Some(input_x) = padded_x.checked_sub(params.pad_left) else {
+            patch_slice.fill(params.input_zero_point);
+            continue;
+        };
+        if input_x >= params.input_width {
+            patch_slice.fill(params.input_zero_point);
+            continue;
+        }
+        for (input_channel, value) in patch_slice.iter_mut().enumerate() {
+            let input_index =
+                (batch * params.input_channels + input_channel) * params.input_width + input_x;
+            *value = input_ncl[input_index];
+        }
+    }
+    Ok(())
+}
+
+/// Shift one ONNX `u8` weight or zero point into the signed VNNI domain.
+///
+/// The mapping is exact because `signed(w) - signed(zp) == w - zp` for all
+/// `u8` values. It changes representation only; it does not requantize.
+pub const fn signed_u8_zero_point(value: u8) -> i8 {
+    (value ^ 0x80) as i8
+}
+
+/// Pack ONNX Conv1D weights from `[output, input, kernel]` `u8` into the
+/// CPU-native `[output, kernel, input]` signed domain and compute row sums.
+pub fn pack_conv1d_weights_u8(
+    weights_ock: &[u8],
+    output_channels: usize,
+    input_channels: usize,
+    kernel_width: usize,
+    packed_oki: &mut [i8],
+    packed_row_sums: &mut [i32],
+) -> Result<(), Error> {
+    if output_channels == 0 || input_channels == 0 {
+        return Err(Error::EmptyMatrix);
+    }
+    if kernel_width == 0 {
+        return Err(Error::EmptyReduction);
+    }
+    let reduction = input_channels
+        .checked_mul(kernel_width)
+        .ok_or(Error::ShapeOverflow)?;
+    let elements = output_channels
+        .checked_mul(reduction)
+        .ok_or(Error::ShapeOverflow)?;
+    if weights_ock.len() < elements {
+        return Err(Error::RhsTooSmall);
+    }
+    if packed_oki.len() < elements {
+        return Err(Error::OutputTooSmall);
+    }
+    if packed_row_sums.len() < output_channels {
+        return Err(Error::RowSumsTooSmall);
+    }
+
+    for output_channel in 0..output_channels {
+        let mut row_sum = 0i32;
+        for kernel_x in 0..kernel_width {
+            for input_channel in 0..input_channels {
+                let source =
+                    (output_channel * input_channels + input_channel) * kernel_width + kernel_x;
+                let destination =
+                    (output_channel * kernel_width + kernel_x) * input_channels + input_channel;
+                let packed = signed_u8_zero_point(weights_ock[source]);
+                packed_oki[destination] = packed;
+                row_sum = row_sum.wrapping_add(i32::from(packed));
+            }
+        }
+        packed_row_sums[output_channel] = row_sum;
+    }
+    Ok(())
 }
 
 /// Compute raw signed row sums for an offline/native weight layout.
@@ -613,12 +941,37 @@ unsafe fn raw_dot_and_sums_avx2(lhs: &[u8], rhs: &[i8]) -> (i32, i32, i32) {
 #[target_feature(enable = "avx2,avxvnni")]
 unsafe fn raw_dot_avx_vnni(lhs: &[u8], rhs: &[i8]) -> i32 {
     use core::arch::x86_64::{
-        __m256i, _mm256_dpbusd_avx_epi32, _mm256_loadu_si256, _mm256_setzero_si256,
-        _mm256_storeu_si256,
+        __m256i, _mm256_add_epi32, _mm256_dpbusd_avx_epi32, _mm256_loadu_si256,
+        _mm256_setzero_si256, _mm256_storeu_si256,
     };
 
     let mut index = 0usize;
-    let mut accumulator = _mm256_setzero_si256();
+    // DPBUSD has a multi-cycle dependency latency. Four independent chains
+    // expose enough instruction-level parallelism for the i5-14500T while
+    // retaining the exact modulo-2^32 reduction.
+    let mut accumulator_0 = _mm256_setzero_si256();
+    let mut accumulator_1 = _mm256_setzero_si256();
+    let mut accumulator_2 = _mm256_setzero_si256();
+    let mut accumulator_3 = _mm256_setzero_si256();
+    while index + 128 <= lhs.len() {
+        let lhs_0 = unsafe { _mm256_loadu_si256(lhs.as_ptr().add(index).cast::<__m256i>()) };
+        let rhs_0 = unsafe { _mm256_loadu_si256(rhs.as_ptr().add(index).cast::<__m256i>()) };
+        let lhs_1 = unsafe { _mm256_loadu_si256(lhs.as_ptr().add(index + 32).cast::<__m256i>()) };
+        let rhs_1 = unsafe { _mm256_loadu_si256(rhs.as_ptr().add(index + 32).cast::<__m256i>()) };
+        let lhs_2 = unsafe { _mm256_loadu_si256(lhs.as_ptr().add(index + 64).cast::<__m256i>()) };
+        let rhs_2 = unsafe { _mm256_loadu_si256(rhs.as_ptr().add(index + 64).cast::<__m256i>()) };
+        let lhs_3 = unsafe { _mm256_loadu_si256(lhs.as_ptr().add(index + 96).cast::<__m256i>()) };
+        let rhs_3 = unsafe { _mm256_loadu_si256(rhs.as_ptr().add(index + 96).cast::<__m256i>()) };
+        accumulator_0 = _mm256_dpbusd_avx_epi32(accumulator_0, lhs_0, rhs_0);
+        accumulator_1 = _mm256_dpbusd_avx_epi32(accumulator_1, lhs_1, rhs_1);
+        accumulator_2 = _mm256_dpbusd_avx_epi32(accumulator_2, lhs_2, rhs_2);
+        accumulator_3 = _mm256_dpbusd_avx_epi32(accumulator_3, lhs_3, rhs_3);
+        index += 128;
+    }
+    let mut accumulator = _mm256_add_epi32(
+        _mm256_add_epi32(accumulator_0, accumulator_1),
+        _mm256_add_epi32(accumulator_2, accumulator_3),
+    );
     while index + 32 <= lhs.len() {
         let lhs_bytes = unsafe { _mm256_loadu_si256(lhs.as_ptr().add(index).cast::<__m256i>()) };
         let rhs_bytes = unsafe { _mm256_loadu_si256(rhs.as_ptr().add(index).cast::<__m256i>()) };
@@ -634,6 +987,60 @@ unsafe fn raw_dot_avx_vnni(lhs: &[u8], rhs: &[i8]) -> i32 {
         index += 1;
     }
     sum
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,avxvnni")]
+unsafe fn raw_dot4_avx_vnni(patches: &[u8], patch_stride: usize, rhs: &[i8]) -> [i32; 4] {
+    use core::arch::x86_64::{
+        __m256i, _mm256_dpbusd_avx_epi32, _mm256_loadu_si256, _mm256_setzero_si256,
+        _mm256_storeu_si256,
+    };
+
+    debug_assert!(patch_stride >= rhs.len());
+    debug_assert!(patches.len() >= patch_stride * 4);
+    let mut accumulators = [
+        _mm256_setzero_si256(),
+        _mm256_setzero_si256(),
+        _mm256_setzero_si256(),
+        _mm256_setzero_si256(),
+    ];
+    let mut index = 0usize;
+    while index + 32 <= rhs.len() {
+        let weights = unsafe { _mm256_loadu_si256(rhs.as_ptr().add(index).cast::<__m256i>()) };
+        for position in 0..4 {
+            let activation = unsafe {
+                _mm256_loadu_si256(
+                    patches
+                        .as_ptr()
+                        .add(position * patch_stride + index)
+                        .cast::<__m256i>(),
+                )
+            };
+            accumulators[position] =
+                _mm256_dpbusd_avx_epi32(accumulators[position], activation, weights);
+        }
+        index += 32;
+    }
+
+    let mut sums = [0i32; 4];
+    for position in 0..4 {
+        let mut lanes = [0i32; 8];
+        unsafe {
+            _mm256_storeu_si256(lanes.as_mut_ptr().cast::<__m256i>(), accumulators[position]);
+        }
+        sums[position] = lanes.into_iter().fold(0i32, i32::wrapping_add);
+    }
+    while index < rhs.len() {
+        for position in 0..4 {
+            sums[position] = sums[position].wrapping_add(
+                i32::from(patches[position * patch_stride + index])
+                    .wrapping_mul(i32::from(rhs[index])),
+            );
+        }
+        index += 1;
+    }
+    sums
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -884,6 +1291,168 @@ mod tests {
                 .dot_with_lane(&lhs, &rhs, lhs_zero_point, rhs_zero_point, Lane::Scalar,)
                 .unwrap(),
             direct
+        );
+    }
+
+    #[test]
+    fn convinteger_u8_pack_and_every_lane_match_onnx_edges() {
+        const BATCH: usize = 2;
+        const INPUT_CHANNELS: usize = 5;
+        const INPUT_WIDTH: usize = 9;
+        const OUTPUT_CHANNELS: usize = 3;
+        const KERNEL_WIDTH: usize = 3;
+
+        let dispatcher = Dispatcher::detect();
+        let input = (0..BATCH * INPUT_CHANNELS * INPUT_WIDTH)
+            .map(|index| (index as u8).wrapping_mul(37).wrapping_add(11))
+            .collect::<Vec<_>>();
+        let weights_ock = (0..OUTPUT_CHANNELS * INPUT_CHANNELS * KERNEL_WIDTH)
+            .map(|index| (index as u8).wrapping_mul(53).wrapping_add(7))
+            .collect::<Vec<_>>();
+        let weight_zero_points_u8 = [0u8, 73, 255];
+        let weight_zero_points = weight_zero_points_u8.map(signed_u8_zero_point);
+        let mut packed = vec![0i8; weights_ock.len()];
+        let mut row_sums = [0i32; OUTPUT_CHANNELS];
+        pack_conv1d_weights_u8(
+            &weights_ock,
+            OUTPUT_CHANNELS,
+            INPUT_CHANNELS,
+            KERNEL_WIDTH,
+            &mut packed,
+            &mut row_sums,
+        )
+        .unwrap();
+
+        assert_eq!(signed_u8_zero_point(0), -128);
+        assert_eq!(signed_u8_zero_point(128), 0);
+        assert_eq!(signed_u8_zero_point(255), 127);
+        for output_channel in 0..OUTPUT_CHANNELS {
+            for kernel_x in 0..KERNEL_WIDTH {
+                for input_channel in 0..INPUT_CHANNELS {
+                    let source =
+                        (output_channel * INPUT_CHANNELS + input_channel) * KERNEL_WIDTH + kernel_x;
+                    let destination =
+                        (output_channel * KERNEL_WIDTH + kernel_x) * INPUT_CHANNELS + input_channel;
+                    assert_eq!(packed[destination], signed_u8_zero_point(weights_ock[source]));
+                }
+            }
+        }
+
+        let params = QConv1dParams {
+            batch: BATCH,
+            input_channels: INPUT_CHANNELS,
+            input_width: INPUT_WIDTH,
+            output_channels: OUTPUT_CHANNELS,
+            kernel_width: KERNEL_WIDTH,
+            stride: 2,
+            dilation: 2,
+            pad_left: 2,
+            pad_right: 3,
+            input_zero_point: 131,
+            weight_zero_points: RhsZeroPoints::PerOutput(&weight_zero_points),
+            weight_row_sums: Some(&row_sums),
+        };
+        let output_width = params.output_width().unwrap();
+        assert_eq!(output_width, 5);
+
+        let mut expected = vec![0i32; BATCH * OUTPUT_CHANNELS * output_width];
+        for batch in 0..BATCH {
+            for output_channel in 0..OUTPUT_CHANNELS {
+                for output_x in 0..output_width {
+                    let mut accumulator = 0i32;
+                    for kernel_x in 0..KERNEL_WIDTH {
+                        let padded_x = output_x * params.stride + kernel_x * params.dilation;
+                        let Some(input_x) = padded_x.checked_sub(params.pad_left) else {
+                            continue;
+                        };
+                        if input_x >= INPUT_WIDTH {
+                            continue;
+                        }
+                        for input_channel in 0..INPUT_CHANNELS {
+                            let input_index =
+                                (batch * INPUT_CHANNELS + input_channel) * INPUT_WIDTH + input_x;
+                            let weight_index = (output_channel * INPUT_CHANNELS + input_channel)
+                                * KERNEL_WIDTH
+                                + kernel_x;
+                            accumulator = accumulator.wrapping_add(
+                                (i32::from(input[input_index])
+                                    - i32::from(params.input_zero_point))
+                                .wrapping_mul(
+                                    i32::from(weights_ock[weight_index])
+                                        - i32::from(weight_zero_points_u8[output_channel]),
+                                ),
+                            );
+                        }
+                    }
+                    expected
+                        [(batch * OUTPUT_CHANNELS + output_channel) * output_width + output_x] =
+                        accumulator;
+                }
+            }
+        }
+
+        for lane in available_lanes(dispatcher) {
+            let mut observed = vec![0i32; expected.len()];
+            let mut scratch = [0u8; INPUT_CHANNELS * KERNEL_WIDTH];
+            dispatcher
+                .qconv1d_with_lane(&input, &packed, &mut observed, &mut scratch, params, lane)
+                .unwrap();
+            assert_eq!(observed, expected, "prepared lane={lane:?}");
+
+            if lane == Lane::AvxVnni {
+                let mut blocked = vec![0i32; expected.len()];
+                let mut blocked_scratch = [0u8; INPUT_CHANNELS * KERNEL_WIDTH * 4];
+                dispatcher
+                    .qconv1d_with_lane(
+                        &input,
+                        &packed,
+                        &mut blocked,
+                        &mut blocked_scratch,
+                        params,
+                        lane,
+                    )
+                    .unwrap();
+                assert_eq!(blocked, expected, "four-position lane={lane:?}");
+            }
+
+            let mut inline = vec![0i32; expected.len()];
+            let inline_params = QConv1dParams {
+                weight_row_sums: None,
+                ..params
+            };
+            dispatcher
+                .qconv1d_with_lane(&input, &packed, &mut inline, &mut scratch, inline_params, lane)
+                .unwrap();
+            assert_eq!(inline, expected, "inline lane={lane:?}");
+        }
+    }
+
+    #[test]
+    fn convinteger_validation_rejects_zero_stride_and_short_scratch() {
+        let dispatcher = Dispatcher::detect();
+        let params = QConv1dParams {
+            batch: 1,
+            input_channels: 2,
+            input_width: 4,
+            output_channels: 1,
+            kernel_width: 3,
+            stride: 0,
+            dilation: 1,
+            pad_left: 1,
+            pad_right: 1,
+            input_zero_point: 0,
+            weight_zero_points: RhsZeroPoints::Scalar(0),
+            weight_row_sums: None,
+        };
+        assert_eq!(params.output_width(), Err(Error::InvalidConvolutionShape));
+
+        let valid = QConv1dParams {
+            stride: 1,
+            ..params
+        };
+        assert_eq!(
+            dispatcher.qconv1d(&[0; 8], &[0; 6], &mut [0; 4], &mut [0; 5], valid),
+            Err(Error::ScratchTooSmall)
         );
     }
 

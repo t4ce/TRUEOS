@@ -71,10 +71,6 @@ impl TtsShellPhase {
 
 static TTS_SHELL_QUEUE: Mutex<VecDeque<ShellTtsRequest>> = Mutex::new(VecDeque::new());
 static TTS_SHELL_QUEUE_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
-/// Linearizes this command's stop operation with its PCM submissions. Without
-/// this lock, a chunk could pass the generation check, then be enqueued just
-/// after `tts stop` cleared the shared PCM lane.
-static TTS_PCM_CONTROL: Mutex<()> = Mutex::new(());
 static TTS_SHELL_WORKER_STARTED: AtomicBool = AtomicBool::new(false);
 static NEXT_TTS_SHELL_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 static TTS_SHELL_ACTIVE_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
@@ -101,10 +97,7 @@ pub(crate) fn try_parse_tts(
         return ParseOutcome::Handled;
     }
     if input.eq_ignore_ascii_case("stop") {
-        let generation = {
-            let _control = TTS_PCM_CONTROL.lock();
-            crate::aud::pcm_lane::request_stop()
-        };
+        let generation = crate::aud::pcm_lane::request_stop();
         let cancelled = cancel_waiting_tts();
         print_shell_line(
             io,
@@ -862,7 +855,7 @@ async fn handoff_tts_audio_chunk(
     let frames = chunk
         .validate()
         .map_err(|reason| alloc::format!("invalid-backend-chunk-{reason}"))?;
-    let samples = chunk.samples_i16_stereo_48k;
+    let mut samples = chunk.samples_i16_stereo_48k;
     let wait_started = Instant::now();
     loop {
         if crate::aud::pcm_lane::stop_generation() != stop_generation {
@@ -881,16 +874,20 @@ async fn handoff_tts_audio_chunk(
             Timer::after(EmbassyDuration::from_millis(5)).await;
             continue;
         }
-        let submitted = {
-            let _control = TTS_PCM_CONTROL.lock();
-            if crate::aud::pcm_lane::stop_generation() != stop_generation {
+        match crate::aud::pcm_lane::submit_i16_stereo_48k_if_generation(
+            "shell2-ttstt",
+            samples,
+            stop_generation,
+        ) {
+            Ok(accepted_frames) => return Ok(accepted_frames),
+            Err(crate::aud::pcm_lane::GuardedPcmLaneError::GenerationChanged(_samples)) => {
                 return Err(String::from("stopped"));
             }
-            crate::aud::pcm_lane::submit_i16_stereo_48k("shell2-ttstt", samples.clone())
-        };
-        match submitted {
-            Ok(accepted_frames) => return Ok(accepted_frames),
-            Err(crate::aud::pcm_lane::PcmLaneError::QueueFull) => {
+            Err(crate::aud::pcm_lane::GuardedPcmLaneError::Lane(
+                crate::aud::pcm_lane::PcmLaneError::QueueFull,
+                returned_samples,
+            )) => {
+                samples = returned_samples;
                 if Instant::now()
                     .saturating_duration_since(wait_started)
                     .as_millis()
@@ -900,7 +897,7 @@ async fn handoff_tts_audio_chunk(
                 }
                 Timer::after(EmbassyDuration::from_millis(5)).await;
             }
-            Err(error) => {
+            Err(crate::aud::pcm_lane::GuardedPcmLaneError::Lane(error, _samples)) => {
                 return Err(alloc::format!("pcm-lane-{error:?}"));
             }
         }

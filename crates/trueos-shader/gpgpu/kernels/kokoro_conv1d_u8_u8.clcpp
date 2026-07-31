@@ -1,0 +1,132 @@
+// Dominant Kokoro ConvInteger family for the TRUEOS C++/IGC lane.
+//
+// The quantized model stores activations and convolution weights as unsigned
+// bytes with independent scalar zero points.  ONNX ConvInteger semantics are
+// therefore, for every in-range temporal tap,
+//
+//   sum_c (X[c,t] - x_zero) * (W[m,c,k] - w_zero)
+//
+// and an out-of-range tap contributes zero in that centered domain.  The host
+// packs four adjacent input channels into one little-endian dword. Weights are
+// packed in M16/tap/Cword order, allowing every SIMD16 subgroup to consume a
+// coalesced cache line while sharing one activation dword.
+// This focused contract is stride-one; output length equals input length.
+//
+// All correction arithmetic is deliberately unsigned and the final bits are
+// reinterpreted as int. This preserves ConvInteger's i32 wrapping contract.
+
+#include "include/trueos_clcpp.hpp"
+
+namespace trueos::gpgpu::kokoro {
+
+inline constexpr uint channels_per_tile = 16u;
+inline constexpr uint values_per_dot = 4u;
+inline constexpr uint packed_ones = 0x01010101u;
+inline constexpr uint max_tile_times = 8192u;
+inline constexpr uint max_input_times = 1u << 20;
+
+__attribute__((always_inline)) inline bool admitted_conv(
+    uint input_channels,
+    uint output_channels,
+    uint kernel_size,
+    uint dilation,
+    uint pad_left)
+{
+    const bool channels = input_channels == output_channels
+        && (input_channels == 128u || input_channels == 256u);
+    const bool kernel_ok = kernel_size == 3u || kernel_size == 7u
+        || kernel_size == 11u;
+    const bool spacing = dilation == 1u || dilation == 3u || dilation == 5u;
+    return channels && kernel_ok && spacing
+        && pad_left == dilation * ((kernel_size - 1u) / 2u);
+}
+
+} // namespace trueos::gpgpu::kokoro
+
+TRUEOS_REQD_SUB_GROUP_SIZE_16
+__kernel void kokoro_conv1d_u8_u8(
+    __global const uint *packed_weights,
+    __global const uint *weight_tap_sums,
+    __global const uint *packed_activations,
+    __global int *output,
+    uint input_length,
+    uint output_base,
+    uint tile_length,
+    uint activation_origin,
+    uint activation_rows,
+    uint input_channels,
+    uint output_channels,
+    uint kernel_size,
+    uint dilation,
+    uint pad_left,
+    uint activation_zero_point,
+    uint weight_zero_point)
+{
+    using namespace trueos::gpgpu::kokoro;
+
+    const uint output_channel = static_cast<uint>(get_global_id(0));
+    const uint tile_time = static_cast<uint>(get_global_id(1));
+    if (input_length == 0u || input_length > max_input_times
+        || tile_length == 0u || tile_length > max_tile_times
+        || tile_time >= tile_length || output_base >= input_length
+        || tile_length > input_length - output_base
+        || output_channel >= output_channels
+        || activation_origin > output_base
+        || activation_rows == 0u || activation_origin >= input_length
+        || activation_rows > input_length - activation_origin
+        || activation_zero_point > 255u || weight_zero_point > 255u
+        || !admitted_conv(input_channels, output_channels, kernel_size,
+                          dilation, pad_left)) {
+        return;
+    }
+
+    const uint channel_words = input_channels / values_per_dot;
+    const uint lane = static_cast<uint>(get_sub_group_local_id());
+    const uint output_tile = output_channel / channels_per_tile;
+    const uint output_time = output_base + tile_time;
+    uint corrected_bits = 0u;
+
+    for (uint tap = 0u; tap < kernel_size; ++tap) {
+        const long source_time = static_cast<long>(output_time)
+            + static_cast<long>(tap * dilation)
+            - static_cast<long>(pad_left);
+        if (source_time < 0l || source_time >= static_cast<long>(input_length)) {
+            continue;
+        }
+        if (source_time < static_cast<long>(activation_origin)
+            || source_time >= static_cast<long>(activation_origin + activation_rows)) {
+            return;
+        }
+
+        const uint activation_row = static_cast<uint>(source_time)
+            - activation_origin;
+        uint raw_dot = 0u;
+        uint lane_activation_sum = 0u;
+        for (uint word = 0u; word < channel_words; ++word) {
+            const uint activation_word = packed_activations[
+                activation_row * channel_words + word];
+            const uint weight_word = packed_weights[
+                ((output_tile * kernel_size + tap) * channel_words + word)
+                    * channels_per_tile + lane];
+            raw_dot += dot_4x8packed_uu_uint(activation_word, weight_word);
+            if (lane == 0u) {
+                lane_activation_sum +=
+                    dot_4x8packed_uu_uint(activation_word, packed_ones);
+            }
+        }
+        const uint activation_sum =
+            sub_group_broadcast(lane_activation_sum, 0u);
+        const uint weight_sum =
+            weight_tap_sums[tap * output_channels + output_channel];
+
+        // Unsigned operations intentionally implement modulo-2^32 i32 math.
+        corrected_bits += raw_dot;
+        corrected_bits -= activation_zero_point * weight_sum;
+        corrected_bits -= weight_zero_point * activation_sum;
+        corrected_bits += input_channels
+            * activation_zero_point * weight_zero_point;
+    }
+
+    output[tile_time * output_channels + output_channel] =
+        as_int(corrected_bits);
+}

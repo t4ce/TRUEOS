@@ -48,13 +48,15 @@ retries without blocking boot.
 
 ## Backend boundary
 
-The host CLI's model engines are not kernel dependencies: Kokoro currently
-uses ONNX Runtime, and Whisper uses whisper.cpp. The kernel service therefore
-does not pretend that loading ONNX/GGML bytes decodes those formats. A native
-decoder implements `InferenceJob`, consumes the resident `ModelSet`, and uses
-the provided CPU kernels in bounded slices. This keeps model parsing and
-filesystem traffic out of the request path while avoiding a `std`, host-thread,
-or C-runtime dependency in the kernel.
+The host CLI's model engines are not kernel dependencies: Kokoro has both an
+ONNX Runtime oracle and a pinned pure-Rust RTen reference, while Whisper uses
+whisper.cpp. RTen proves the graph and audio contract locally, but its
+`std`/Rayon graph runtime is not transplanted into the kernel. The kernel
+service therefore does not pretend that loading ONNX/GGML bytes decodes those
+formats. A native decoder implements `InferenceJob`, consumes the resident
+`ModelSet`, and uses the provided CPU/GPU kernels in bounded slices. This keeps
+model parsing and filesystem traffic out of the request path while avoiding a
+host thread pool, C runtime, or filesystem access during inference.
 
 The decoder installs one `SpeechBackend`. Its cooperative warm job parses both
 resident model images on the AP2+ pool and marks the backend ready; the BSP
@@ -92,14 +94,44 @@ plus a `TtsStream`. The native backend receives the same request with a
   explicit failure rather than leaving shell2 waiting forever. Raw `submit`
   rejects TTS jobs so callers cannot bypass this stream guard.
 
-For the packaged quantized Kokoro graph this is a substantial, explicit port:
-the ONNX file is opset 20 with 3,614 nodes across 56 operator kinds and 775
-initializers. It includes integer convolution/matmul, six
-`DynamicQuantizeLSTM` nodes, Microsoft fused operators, resize, and STFT. The
-existing BF16 matvec dispatch is useful infrastructure but is not an ONNX
-executor. The Linux static ONNX Runtime build is also not directly linkable to
-the freestanding kernel: it imports pthreads, mmap, dynamic loading, libc
-allocation, files, clocks, and scheduler/syscall APIs.
+For the packaged quantized Kokoro graph this is a substantial, explicit port.
+The prepared reference graph is opset 20 with 3,615 nodes, 55 distinct
+domain/operator entries, and 762 initializers. It includes integer
+convolution/matmul, six bidirectional LSTMs, contrib normalization/GELU,
+resize, convolution transpose, and STFT. The existing BF16 matvec dispatch is
+useful infrastructure but is not an ONNX executor. The Linux static ONNX
+Runtime build is also not directly linkable to the freestanding kernel: it
+imports pthreads, mmap, dynamic loading, libc allocation, files, clocks, and
+scheduler/syscall APIs.
+
+### Native quantized-compute coverage
+
+The i5-14500T CPU lane has allocation-free, dependency-free implementations
+for quantized matrix multiplication and every group-one ConvInteger shape in
+the pinned Kokoro graph. It dispatches between scalar, AVX2, and 256-bit
+AVX-VNNI after the worker's XCR0 contract is established. Unsigned convolution
+weights are shifted losslessly into the signed VNNI domain; padding is filled
+with the activation zero-point, so padded taps are exactly zero after
+centering. The checked host oracle reproduces real left-edge, interior, and
+right-edge accumulators bit-for-bit on all three lanes.
+
+The exact `0x4680` revision `0x0C` GPU lane contains baked C++/IGC kernels for
+quantized matrix multiplication and the dominant stride-one ConvInteger
+family. The convolution artifact admits 54 of 87 graph nodes and accounts for
+83.92% of measured ConvInteger time; the generic CPU path is the fallback for
+the remaining shapes. Its direct-RCS boundary uses bounded halo tiles, a
+persistent DMA arena, ordered completion, and strict device/revision gating.
+No neighboring Intel GPU is admitted by inference.
+
+These kernels are not themselves a graph executor. The native path uses an
+offline, hash-sealed Kokoro compiler: it lowers the prepared reference graph
+to model-specific operations, prepacked constants, rank-four tensor
+descriptors, view aliases, and liveness-planned arena slots. The no-std kernel
+runtime executes that sealed program with a cooperative cursor. Duration
+expansion is data-dependent, so the program has an explicit checked barrier:
+encoder/duration prediction first, decoder/vocoder arena resolution second.
+The observed 36 MiB host activation peak is a measurement, not an unchecked
+kernel allocation limit.
 
 ## F4 shell commands
 
@@ -150,12 +182,15 @@ HDA readiness, and cumulative handoff/completion/failure/cancellation counts.
 
 ## Current implementation boundary
 
-The model residency, serialized queue, validated streaming contract, and PCM
-handoff into the live kernel playback lane are implemented. The repository
-does not yet install a native Kokoro `SpeechBackend`; consequently a current
-boot correctly reports `native-kokoro-backend-unregistered` and does not
-generate placeholder tones or claim synthesis. Audible speech begins when the
-native graph executor implements this contract and registers itself.
+The model residency, serialized queue, validated streaming contract, PCM
+handoff into the live kernel playback lane, local Rust oracle, and primary
+quantized CPU/GPU kernels are implemented. The repository does not yet install
+a native Kokoro `SpeechBackend`; consequently a current boot correctly reports
+`native-kokoro-backend-unregistered` and does not generate placeholder tones
+or claim synthesis. The remaining critical path is the sealed AOT graph
+program/runtime and its float recurrent, attention, elementwise, and vocoder
+operators. Audible speech begins only when that executor registers the native
+backend and passes the waveform oracle.
 
 File STT reads a signed 16-bit mono/stereo PCM WAV from TRUEOSFS on the BSP,
 downmixes and resamples it to Whisper's mono 16 kHz boundary with periodic

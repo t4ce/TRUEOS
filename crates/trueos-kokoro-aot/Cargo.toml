@@ -1,0 +1,12 @@
+[package]
+name = "trueos-kokoro-aot"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+description = "Dependency-free no-std substrate for sealed TRUEOS Kokoro AOT programs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []

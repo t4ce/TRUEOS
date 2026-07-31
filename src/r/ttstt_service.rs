@@ -273,7 +273,6 @@ struct TtsOutputState {
     completion: Mutex<Option<Result<TtsSynthesisSummary, &'static str>>>,
     closed: AtomicBool,
     cancelled: AtomicBool,
-    terminal_observed: AtomicBool,
     wait: crate::wait::WaitQueue,
 }
 
@@ -292,7 +291,6 @@ impl TtsOutputState {
             completion: Mutex::new(None),
             closed: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
-            terminal_observed: AtomicBool::new(false),
             wait: crate::wait::WaitQueue::new(),
         }
     }
@@ -467,16 +465,11 @@ impl TtsStream {
             self.state.wait.notify_one();
             return Some(TtsStreamEvent::Chunk(chunk));
         }
-        let terminal = self
-            .state
+        self.state
             .completion
             .lock()
             .take()
-            .map(TtsStreamEvent::Finished);
-        if terminal.is_some() {
-            self.state.terminal_observed.store(true, Ordering::Release);
-        }
-        terminal
+            .map(TtsStreamEvent::Finished)
     }
 
     pub async fn next(&self) -> TtsStreamEvent {
@@ -495,10 +488,15 @@ impl TtsStream {
     /// Consumer cancellation is cooperative. It closes the chunk sink, but a
     /// backend must observe `TtsOutput::cancelled` and finish its job promptly.
     pub fn cancel(&self) {
-        if self.state.terminal_observed.load(Ordering::Acquire) {
+        // Share the producer's queue lock so cancel and finish have one
+        // deterministic ordering. If finish linearized first, its terminal
+        // result is immutable; otherwise finish observes cancellation.
+        let chunks = self.state.chunks.lock();
+        if self.state.closed.load(Ordering::Acquire) {
             return;
         }
         self.state.cancelled.store(true, Ordering::Release);
+        drop(chunks);
         self.state.wait.notify_all();
     }
 
