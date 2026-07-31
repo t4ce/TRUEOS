@@ -3,19 +3,20 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
-use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 use super::super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
     print_shell_line, set_matrix_target_active, switch_matrix_target_slot,
 };
-use crate::r::ttstt_service::{ServiceState, SpeechRequestError, SttRequest, TtsAudio, TtsRequest};
+use crate::r::ttstt_service::{
+    ServiceState, SpeechRequestError, SttRequest, TtsAudioChunk, TtsRequest, TtsStreamEvent,
+};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const DEFAULT_VOICE: &str = "af_heart";
@@ -23,14 +24,15 @@ const DEFAULT_SPEED: f32 = 1.0;
 // This is a defensive shell allocation cap, not Kokoro's model limit. The
 // backend must enforce KOKORO_MAX_PHONEMES after language-specific G2P.
 const TTS_TEXT_MAX_BYTES: usize = 8 * 1024;
-const TTS_PLAYBACK_CHUNK_FRAMES: usize = 12_000;
-const TTS_SHELL_QUEUE_DEPTH: usize = 8;
+const TTS_SHELL_QUEUE_DEPTH: usize = crate::r::ttstt_service::TTS_QUEUE_DEPTH;
+const TTS_PCM_BACKPRESSURE_TIMEOUT_MS: u64 = 30_000;
 const STT_AUDIO_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const STT_AUDIO_MAX_SECONDS: usize = 5 * 60;
 const STT_SAMPLE_RATE_HZ: u32 = 16_000;
 const STT_CONVERT_YIELD_FRAMES: usize = 8 * 1024;
 
 struct ShellTtsRequest {
+    id: u64,
     target: MatrixTarget,
     text: String,
     voice: String,
@@ -38,13 +40,47 @@ struct ShellTtsRequest {
     stop_generation: u32,
 }
 
-type TtsResultSlot = Arc<Mutex<Option<Result<TtsAudio, &'static str>>>>;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+enum TtsShellPhase {
+    Idle = 0,
+    ServiceAdmission = 1,
+    Inference = 2,
+    PcmHandoff = 3,
+}
+
+impl TtsShellPhase {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::ServiceAdmission,
+            2 => Self::Inference,
+            3 => Self::PcmHandoff,
+            _ => Self::Idle,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::ServiceAdmission => "service-admission",
+            Self::Inference => "inference",
+            Self::PcmHandoff => "pcm-handoff",
+        }
+    }
+}
 
 static TTS_SHELL_QUEUE: Mutex<VecDeque<ShellTtsRequest>> = Mutex::new(VecDeque::new());
 static TTS_SHELL_QUEUE_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
-static TTS_COMPLETION_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static TTS_SHELL_WORKER_STARTED: AtomicBool = AtomicBool::new(false);
-static TTS_SHELL_ACTIVE: AtomicBool = AtomicBool::new(false);
+static NEXT_TTS_SHELL_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+static TTS_SHELL_ACTIVE_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
+static TTS_SHELL_ACTIVE_SERVICE_JOB_ID: AtomicU64 = AtomicU64::new(0);
+static TTS_SHELL_PHASE: AtomicU8 = AtomicU8::new(TtsShellPhase::Idle as u8);
+static TTS_SHELL_PCM_CHUNKS_HANDED_OFF: AtomicU64 = AtomicU64::new(0);
+static TTS_SHELL_PCM_FRAMES_HANDED_OFF: AtomicU64 = AtomicU64::new(0);
+static TTS_SHELL_REQUESTS_COMPLETED: AtomicU64 = AtomicU64::new(0);
+static TTS_SHELL_REQUESTS_FAILED: AtomicU64 = AtomicU64::new(0);
+static TTS_SHELL_REQUESTS_CANCELLED: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn try_parse_tts(
     _spawner: &Spawner,
@@ -66,7 +102,7 @@ pub(crate) fn try_parse_tts(
         print_shell_line(
             io,
             alloc::format!(
-                "tts: stop generation={generation} cancelled_waiting={cancelled} active_inference_cancel=discard-result"
+                "tts: stop generation={generation} cancelled_waiting={cancelled} active_stream_cancel=cooperative pcm_lane=cleared"
             )
             .as_str(),
         );
@@ -112,7 +148,9 @@ pub(crate) fn try_parse_tts(
     let active_target = matrix_target_for_backend(io);
     let target = switch_matrix_target_slot(&active_target, "tts");
     set_matrix_target_active(&target, true);
+    let request_id = NEXT_TTS_SHELL_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let request = ShellTtsRequest {
+        id: request_id,
         target: target.clone(),
         text,
         voice: voice.clone(),
@@ -139,8 +177,9 @@ pub(crate) fn try_parse_tts(
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "tts: queued depth={depth}/{TTS_SHELL_QUEUE_DEPTH} voice={voice} speed={speed:.2} max_phonemes={}",
-            crate::r::ttstt_service::KOKORO_MAX_PHONEMES
+            "tts: queued request={request_id} waiting={depth}/{TTS_SHELL_QUEUE_DEPTH} voice={voice} speed={speed:.2} model_chunk_max_phonemes={} pcm_chunk_max_frames={}",
+            crate::r::ttstt_service::KOKORO_MAX_PHONEMES,
+            crate::r::ttstt_service::TTS_PCM_CHUNK_MAX_FRAMES,
         )
         .as_str(),
     );
@@ -180,14 +219,30 @@ fn cancel_waiting_tts() -> usize {
     };
     let count = waiting.len();
     for request in waiting {
-        print_matrix_target_line(&request.target, "tts: cancelled before inference");
+        TTS_SHELL_REQUESTS_CANCELLED.fetch_add(1, Ordering::Relaxed);
+        print_matrix_target_line(
+            &request.target,
+            alloc::format!("tts: cancelled request={} before inference", request.id).as_str(),
+        );
         set_matrix_target_active(&request.target, false);
     }
     count
 }
 
-fn tts_shell_queue_status() -> (usize, bool) {
-    (TTS_SHELL_QUEUE.lock().len(), TTS_SHELL_ACTIVE.load(Ordering::Acquire))
+struct TtsShellQueueStatus {
+    waiting: usize,
+    phase: TtsShellPhase,
+    active_request_id: u64,
+    active_service_job_id: u64,
+}
+
+fn tts_shell_queue_status() -> TtsShellQueueStatus {
+    TtsShellQueueStatus {
+        waiting: TTS_SHELL_QUEUE.lock().len(),
+        phase: TtsShellPhase::from_u8(TTS_SHELL_PHASE.load(Ordering::Acquire)),
+        active_request_id: TTS_SHELL_ACTIVE_REQUEST_ID.load(Ordering::Acquire),
+        active_service_job_id: TTS_SHELL_ACTIVE_SERVICE_JOB_ID.load(Ordering::Acquire),
+    }
 }
 
 #[embassy_executor::task]
@@ -198,69 +253,155 @@ async fn tts_shell_worker_task() {
             TTS_SHELL_QUEUE_WAIT.wait_for_event_timeout(25).await;
             continue;
         };
-        TTS_SHELL_ACTIVE.store(true, Ordering::Release);
+        TTS_SHELL_ACTIVE_REQUEST_ID.store(request.id, Ordering::Release);
+        TTS_SHELL_ACTIVE_SERVICE_JOB_ID.store(0, Ordering::Release);
+        TTS_SHELL_PHASE.store(TtsShellPhase::ServiceAdmission as u8, Ordering::Release);
         process_tts_request(request).await;
-        TTS_SHELL_ACTIVE.store(false, Ordering::Release);
+        TTS_SHELL_PHASE.store(TtsShellPhase::Idle as u8, Ordering::Release);
+        TTS_SHELL_ACTIVE_SERVICE_JOB_ID.store(0, Ordering::Release);
+        TTS_SHELL_ACTIVE_REQUEST_ID.store(0, Ordering::Release);
     }
 }
 
 async fn process_tts_request(request: ShellTtsRequest) {
     if crate::aud::pcm_lane::stop_generation() != request.stop_generation {
-        print_matrix_target_line(&request.target, "tts: cancelled before inference");
+        TTS_SHELL_REQUESTS_CANCELLED.fetch_add(1, Ordering::Relaxed);
+        print_matrix_target_line(
+            &request.target,
+            alloc::format!("tts: cancelled request={} before inference", request.id).as_str(),
+        );
         set_matrix_target_active(&request.target, false);
         return;
     }
 
-    let result_slot: TtsResultSlot = Arc::new(Mutex::new(None));
-    let completion_slot = result_slot.clone();
-    let complete = Box::new(move |result: Result<TtsAudio, &'static str>| {
-        *completion_slot.lock() = Some(result);
-        TTS_COMPLETION_WAIT.notify_one();
-    });
     let voice = request.voice.clone();
-    match crate::r::ttstt_service::submit_tts(TtsRequest {
+    let submission = match crate::r::ttstt_service::submit_tts(TtsRequest {
         text: request.text,
         voice: request.voice,
         speed: request.speed,
-        complete,
     }) {
-        Ok(id) => print_matrix_target_line(
-            &request.target,
-            alloc::format!(
-                "tts: inference started id={id} voice={voice} speed={:.2}",
-                request.speed
-            )
-            .as_str(),
-        ),
+        Ok(submission) => submission,
         Err(error) => {
+            TTS_SHELL_REQUESTS_FAILED.fetch_add(1, Ordering::Relaxed);
             print_matrix_target_line(
                 &request.target,
-                alloc::format!("tts: submit failed reason={}", request_error(error)).as_str(),
+                alloc::format!(
+                    "tts: submit failed request={} reason={}",
+                    request.id,
+                    request_error(error)
+                )
+                .as_str(),
             );
             set_matrix_target_active(&request.target, false);
             return;
         }
-    }
-
-    let result = loop {
-        if let Some(result) = result_slot.lock().take() {
-            break result;
-        }
-        TTS_COMPLETION_WAIT.wait_for_event_timeout(25).await;
     };
-    if crate::aud::pcm_lane::stop_generation() != request.stop_generation {
-        print_matrix_target_line(&request.target, "tts: stopped; synthesized audio discarded");
-        set_matrix_target_active(&request.target, false);
-        return;
-    }
-    match result {
-        Ok(audio) => play_tts_audio(request.target, audio, request.stop_generation).await,
-        Err(reason) => {
+    TTS_SHELL_ACTIVE_SERVICE_JOB_ID.store(submission.id, Ordering::Release);
+    TTS_SHELL_PHASE.store(TtsShellPhase::Inference as u8, Ordering::Release);
+    print_matrix_target_line(
+        &request.target,
+        alloc::format!(
+            "tts: inference started request={} job={} voice={voice} speed={:.2}",
+            request.id,
+            submission.id,
+            request.speed
+        )
+        .as_str(),
+    );
+
+    let stream = submission.stream;
+    let mut handed_pcm_chunks = 0u32;
+    let mut handed_pcm_frames = 0u64;
+    loop {
+        if crate::aud::pcm_lane::stop_generation() != request.stop_generation {
+            stream.cancel();
+            TTS_SHELL_REQUESTS_CANCELLED.fetch_add(1, Ordering::Relaxed);
             print_matrix_target_line(
                 &request.target,
-                alloc::format!("tts: inference failed reason={reason}").as_str(),
+                alloc::format!(
+                    "tts: stopped request={} job={} handed_pcm_chunks={} handed_pcm_frames={}",
+                    request.id,
+                    submission.id,
+                    handed_pcm_chunks,
+                    handed_pcm_frames
+                )
+                .as_str(),
             );
             set_matrix_target_active(&request.target, false);
+            return;
+        }
+
+        let Some(event) = stream.try_next() else {
+            stream.wait_for_event_timeout(25).await;
+            continue;
+        };
+        match event {
+            TtsStreamEvent::Chunk(chunk) => {
+                TTS_SHELL_PHASE.store(TtsShellPhase::PcmHandoff as u8, Ordering::Release);
+                match handoff_tts_audio_chunk(chunk, request.stop_generation).await {
+                    Ok(frames) => {
+                        handed_pcm_chunks = handed_pcm_chunks.saturating_add(1);
+                        handed_pcm_frames = handed_pcm_frames.saturating_add(frames as u64);
+                        TTS_SHELL_PCM_CHUNKS_HANDED_OFF.fetch_add(1, Ordering::Relaxed);
+                        TTS_SHELL_PCM_FRAMES_HANDED_OFF.fetch_add(frames as u64, Ordering::Relaxed);
+                        TTS_SHELL_PHASE.store(TtsShellPhase::Inference as u8, Ordering::Release);
+                    }
+                    Err(reason) => {
+                        stream.cancel();
+                        if crate::aud::pcm_lane::stop_generation() != request.stop_generation {
+                            TTS_SHELL_REQUESTS_CANCELLED.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            TTS_SHELL_REQUESTS_FAILED.fetch_add(1, Ordering::Relaxed);
+                        }
+                        print_matrix_target_line(
+                            &request.target,
+                            alloc::format!(
+                                "tts: pcm handoff failed request={} job={} reason={reason}",
+                                request.id,
+                                submission.id
+                            )
+                            .as_str(),
+                        );
+                        set_matrix_target_active(&request.target, false);
+                        return;
+                    }
+                }
+            }
+            TtsStreamEvent::Finished(Ok(summary)) => {
+                TTS_SHELL_REQUESTS_COMPLETED.fetch_add(1, Ordering::Relaxed);
+                print_matrix_target_line(
+                    &request.target,
+                    alloc::format!(
+                        "tts: pcm handoff complete request={} job={} model_chunks={} pcm_chunks={}/{} frames={}/{} format=s16le/stereo/48k playback_completion=untracked",
+                        request.id,
+                        submission.id,
+                        summary.model_chunks,
+                        handed_pcm_chunks,
+                        summary.pcm_chunks,
+                        handed_pcm_frames,
+                        summary.pcm_frames,
+                    )
+                    .as_str(),
+                );
+                set_matrix_target_active(&request.target, false);
+                return;
+            }
+            TtsStreamEvent::Finished(Err(reason)) => {
+                TTS_SHELL_REQUESTS_FAILED.fetch_add(1, Ordering::Relaxed);
+                print_matrix_target_line(
+                    &request.target,
+                    alloc::format!(
+                        "tts: inference failed request={} job={} reason={reason} partial_pcm_chunks={} partial_pcm_frames={}",
+                        request.id,
+                        submission.id,
+                        handed_pcm_chunks,
+                        handed_pcm_frames,
+                    )
+                    .as_str(),
+                );
+                set_matrix_target_active(&request.target, false);
+                return;
+            }
         }
     }
 }
@@ -361,18 +502,39 @@ fn print_status(io: &'static dyn ShellBackend2, command: &str) {
         "warming"
     };
     if command == "tts" {
-        let (waiting, active) = tts_shell_queue_status();
+        let shell = tts_shell_queue_status();
         print_shell_line(
             io,
             alloc::format!(
-                "tts: state={state} backend={backend} backend_state={backend_state} resident_bytes={} workers={} outstanding={} tts_outstanding={} tts_active_id={} shell_waiting={waiting}/{TTS_SHELL_QUEUE_DEPTH} shell_active={} max_phonemes={} policy=AP2+-prefer-pcore",
+                "tts: state={state} backend={backend} backend_state={backend_state} resident_bytes={} workers={} outstanding={} tts_outstanding={} tts_queued={} tts_active_job={} output_buffered_chunks={}/{} output_buffered_frames={} shell_waiting={}/{} shell_phase={} shell_request={} shell_job={} pcm_lane_pending_frames={} pcm_lane_paused={} hda_ready={} model_chunk_max_phonemes={} pcm_chunk_max_frames={} emitted_chunks={} emitted_frames={} service_streams_ok={} service_streams_failed={} handed_chunks={} handed_frames={} shell_completed={} shell_failed={} shell_cancelled={} policy=AP2+-prefer-pcore playback_completion=untracked",
                 status.resident_bytes,
                 status.workers,
                 status.outstanding_jobs,
                 status.outstanding_tts_jobs,
+                status.queued_tts_jobs,
                 status.active_tts_job_id.unwrap_or(0),
-                active as u8,
+                status.tts_pcm_chunks_buffered,
+                crate::r::ttstt_service::TTS_OUTPUT_QUEUE_DEPTH,
+                status.tts_pcm_frames_buffered,
+                shell.waiting,
+                TTS_SHELL_QUEUE_DEPTH,
+                shell.phase.as_str(),
+                shell.active_request_id,
+                shell.active_service_job_id,
+                crate::aud::pcm_lane::pending_frames(),
+                crate::aud::pcm_lane::paused() as u8,
+                crate::r::readiness::is_set(crate::r::readiness::INTEL_HDA_READY) as u8,
                 crate::r::ttstt_service::KOKORO_MAX_PHONEMES,
+                crate::r::ttstt_service::TTS_PCM_CHUNK_MAX_FRAMES,
+                status.tts_pcm_chunks_emitted,
+                status.tts_pcm_frames_emitted,
+                status.tts_streams_completed,
+                status.tts_streams_failed,
+                TTS_SHELL_PCM_CHUNKS_HANDED_OFF.load(Ordering::Acquire),
+                TTS_SHELL_PCM_FRAMES_HANDED_OFF.load(Ordering::Acquire),
+                TTS_SHELL_REQUESTS_COMPLETED.load(Ordering::Acquire),
+                TTS_SHELL_REQUESTS_FAILED.load(Ordering::Acquire),
+                TTS_SHELL_REQUESTS_CANCELLED.load(Ordering::Acquire),
             )
             .as_str(),
         );
@@ -654,59 +816,49 @@ async fn load_wav_mono_16k(path: &str) -> Result<Vec<f32>, String> {
     Ok(out)
 }
 
-async fn play_tts_audio(target: MatrixTarget, audio: TtsAudio, stop_generation: u32) {
-    if audio.samples_i16_stereo_48k.is_empty()
-        || !audio.samples_i16_stereo_48k.len().is_multiple_of(2)
-    {
-        print_matrix_target_line(&target, "tts: backend returned malformed PCM");
-        set_matrix_target_active(&target, false);
-        return;
-    }
-    let samples = audio.samples_i16_stereo_48k;
-    let total_frames = samples.len() / 2;
-    let mut frame_offset = 0usize;
-    while frame_offset < total_frames {
+async fn handoff_tts_audio_chunk(
+    chunk: TtsAudioChunk,
+    stop_generation: u32,
+) -> Result<usize, String> {
+    let frames = chunk
+        .validate()
+        .map_err(|reason| alloc::format!("invalid-backend-chunk-{reason}"))?;
+    let samples = chunk.samples_i16_stereo_48k;
+    let wait_started = Instant::now();
+    loop {
         if crate::aud::pcm_lane::stop_generation() != stop_generation {
-            print_matrix_target_line(&target, "tts: playback stopped");
-            set_matrix_target_active(&target, false);
-            return;
+            return Err(String::from("stopped"));
         }
-        let frames = (total_frames - frame_offset).min(TTS_PLAYBACK_CHUNK_FRAMES);
-        while crate::aud::pcm_lane::pending_frames().saturating_add(frames)
+        if crate::aud::pcm_lane::pending_frames().saturating_add(frames)
             > crate::hda::PCM_SAMPLE_RATE_HZ as usize
         {
-            if crate::aud::pcm_lane::stop_generation() != stop_generation {
-                print_matrix_target_line(&target, "tts: playback stopped");
-                set_matrix_target_active(&target, false);
-                return;
+            if Instant::now()
+                .saturating_duration_since(wait_started)
+                .as_millis()
+                >= TTS_PCM_BACKPRESSURE_TIMEOUT_MS
+            {
+                return Err(String::from("pcm-lane-backpressure-timeout"));
             }
             Timer::after(EmbassyDuration::from_millis(5)).await;
+            continue;
         }
-        let sample_start = frame_offset * 2;
-        let sample_end = sample_start + frames * 2;
-        match crate::aud::pcm_lane::submit_i16_stereo_48k(
-            "shell2-ttstt",
-            samples[sample_start..sample_end].to_vec(),
-        ) {
-            Ok(_) => frame_offset += frames,
+        match crate::aud::pcm_lane::submit_i16_stereo_48k("shell2-ttstt", samples.clone()) {
+            Ok(accepted_frames) => return Ok(accepted_frames),
             Err(crate::aud::pcm_lane::PcmLaneError::QueueFull) => {
+                if Instant::now()
+                    .saturating_duration_since(wait_started)
+                    .as_millis()
+                    >= TTS_PCM_BACKPRESSURE_TIMEOUT_MS
+                {
+                    return Err(String::from("pcm-lane-backpressure-timeout"));
+                }
                 Timer::after(EmbassyDuration::from_millis(5)).await;
             }
             Err(error) => {
-                print_matrix_target_line(
-                    &target,
-                    alloc::format!("tts: playback failed err={error:?}").as_str(),
-                );
-                set_matrix_target_active(&target, false);
-                return;
+                return Err(alloc::format!("pcm-lane-{error:?}"));
             }
         }
     }
-    print_matrix_target_line(
-        &target,
-        alloc::format!("tts: audio queued frames={total_frames} rate=48000 channels=2").as_str(),
-    );
-    set_matrix_target_active(&target, false);
 }
 
 fn request_error(error: SpeechRequestError) -> String {
@@ -722,7 +874,7 @@ fn request_error(error: SpeechRequestError) -> String {
 fn tts_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "tts: usage `tts [voice=NAME] [speed=0.5..2.0] <text|\"quoted text\">` | `tts status` | `tts stop`; queue=8 serialized/asynchronous, model_window=510 phonemes after G2P",
+        "tts: usage `tts [voice=NAME] [speed=0.5..2.0] <text|\"quoted text\">` | `tts status` | `tts stop`; waiting_queue=8 serialized/asynchronous, model_chunk=510 phonemes after G2P, pcm=s16le/stereo/48k via live pcm_lane",
     );
 }
 

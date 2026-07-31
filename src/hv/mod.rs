@@ -611,7 +611,7 @@ pub enum BlueprintPauseReason {
 ///
 /// A pause retains the quiesced VM directly in memory. Snapshot-capable
 /// lifecycle reasons additionally serialize that retained state into the
-/// durable per-VM store.
+/// warm per-VM store. `apps store` is the explicit reboot-persistent commit.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum BlueprintReadyDisposition {
     Pause,
@@ -1833,7 +1833,7 @@ fn snapshot_on_preserve_exit(vm_id: u8) {
         Ok(bytes) => match crate::hv::store::save_bytes(vm_id, bytes) {
             Ok(saved) => {
                 hvlogf(format_args!(
-                    "hv: vm{} reporting: preserve snapshot saved store=hv-ramdisk path={} bytes={}",
+                    "hv: vm{} reporting: preserve snapshot saved store=warm-arc path={} bytes={}",
                     vm_id,
                     snapshot_path(vm_id).as_str(),
                     saved
@@ -2407,16 +2407,18 @@ pub fn restore_blueprint_portable_state(
         app_args.push(portable_take_string(bytes, &mut offset).ok_or("blueprint arg")?);
     }
     let app_fs_root = portable_take_string(bytes, &mut offset).ok_or("blueprint fs root")?;
+    let identity_end = offset.checked_add(16).ok_or("blueprint instance")?;
     let instance: [u8; 16] = bytes
-        .get(offset..offset + 16)
+        .get(offset..identity_end)
         .and_then(|value| value.try_into().ok())
         .ok_or("blueprint instance")?;
-    offset += 16;
+    offset = identity_end;
+    let lineage_end = offset.checked_add(16).ok_or("blueprint lineage")?;
     let lineage: [u8; 16] = bytes
-        .get(offset..offset + 16)
+        .get(offset..lineage_end)
         .and_then(|value| value.try_into().ok())
         .ok_or("blueprint lineage")?;
-    offset += 16;
+    offset = lineage_end;
     let generation = portable_take_u64(bytes, &mut offset).ok_or("blueprint generation")?;
     let clone = match bytes.get(offset).copied() {
         Some(0) => false,

@@ -62,6 +62,8 @@ static ACTIVE_TTS_JOB_ID: AtomicU64 = AtomicU64::new(0);
 static BACKEND_WARM_STARTED: AtomicBool = AtomicBool::new(false);
 static TTS_PCM_CHUNKS_EMITTED: AtomicU64 = AtomicU64::new(0);
 static TTS_PCM_FRAMES_EMITTED: AtomicU64 = AtomicU64::new(0);
+static TTS_PCM_CHUNKS_BUFFERED: AtomicUsize = AtomicUsize::new(0);
+static TTS_PCM_FRAMES_BUFFERED: AtomicU64 = AtomicU64::new(0);
 static TTS_STREAMS_COMPLETED: AtomicU64 = AtomicU64::new(0);
 static TTS_STREAMS_FAILED: AtomicU64 = AtomicU64::new(0);
 
@@ -101,6 +103,8 @@ pub struct ServiceStatus {
     pub active_tts_job_id: Option<u64>,
     pub tts_pcm_chunks_emitted: u64,
     pub tts_pcm_frames_emitted: u64,
+    pub tts_pcm_chunks_buffered: usize,
+    pub tts_pcm_frames_buffered: u64,
     pub tts_streams_completed: u64,
     pub tts_streams_failed: u64,
 }
@@ -118,6 +122,8 @@ pub fn status() -> ServiceStatus {
         active_tts_job_id: (active_tts_job_id != 0).then_some(active_tts_job_id),
         tts_pcm_chunks_emitted: TTS_PCM_CHUNKS_EMITTED.load(Ordering::Acquire),
         tts_pcm_frames_emitted: TTS_PCM_FRAMES_EMITTED.load(Ordering::Acquire),
+        tts_pcm_chunks_buffered: TTS_PCM_CHUNKS_BUFFERED.load(Ordering::Acquire),
+        tts_pcm_frames_buffered: TTS_PCM_FRAMES_BUFFERED.load(Ordering::Acquire),
         tts_streams_completed: TTS_STREAMS_COMPLETED.load(Ordering::Acquire),
         tts_streams_failed: TTS_STREAMS_FAILED.load(Ordering::Acquire),
     }
@@ -263,16 +269,25 @@ pub enum TtsOutputError {
 
 struct TtsOutputState {
     chunks: Mutex<VecDeque<TtsAudioChunk>>,
+    progress: Mutex<TtsOutputProgress>,
     completion: Mutex<Option<Result<TtsSynthesisSummary, &'static str>>>,
     closed: AtomicBool,
     cancelled: AtomicBool,
     wait: crate::wait::WaitQueue,
 }
 
+#[derive(Default)]
+struct TtsOutputProgress {
+    summary: TtsSynthesisSummary,
+    next_model_chunk_index: u32,
+    open_model_chunk_phonemes: Option<u16>,
+}
+
 impl TtsOutputState {
     fn new() -> Self {
         Self {
             chunks: Mutex::new(VecDeque::new()),
+            progress: Mutex::new(TtsOutputProgress::default()),
             completion: Mutex::new(None),
             closed: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
@@ -297,8 +312,7 @@ impl TtsOutput {
             Ok(frames) => frames,
             Err(reason) => return Err(TtsOutputError::Invalid { reason, chunk }),
         };
-        if self.state.closed.load(Ordering::Acquire)
-            || self.state.cancelled.load(Ordering::Acquire)
+        if self.state.closed.load(Ordering::Acquire) || self.state.cancelled.load(Ordering::Acquire)
         {
             return Err(TtsOutputError::Closed(chunk));
         }
@@ -308,21 +322,52 @@ impl TtsOutput {
         }
         // Recheck under the queue lock so finish/cancel cannot accept data
         // after publishing a terminal state.
-        if self.state.closed.load(Ordering::Acquire)
-            || self.state.cancelled.load(Ordering::Acquire)
+        if self.state.closed.load(Ordering::Acquire) || self.state.cancelled.load(Ordering::Acquire)
         {
             return Err(TtsOutputError::Closed(chunk));
         }
+        let mut progress = self.state.progress.lock();
+        if chunk.model_chunk_index != progress.next_model_chunk_index {
+            return Err(TtsOutputError::Invalid {
+                reason: "model-chunk-index-out-of-order",
+                chunk,
+            });
+        }
+        match progress.open_model_chunk_phonemes {
+            Some(phonemes) if phonemes != chunk.model_chunk_phonemes => {
+                return Err(TtsOutputError::Invalid {
+                    reason: "model-chunk-phoneme-count-changed",
+                    chunk,
+                });
+            }
+            None => progress.open_model_chunk_phonemes = Some(chunk.model_chunk_phonemes),
+            Some(_) => {}
+        }
+        progress.summary.pcm_chunks = progress.summary.pcm_chunks.saturating_add(1);
+        progress.summary.pcm_frames = progress.summary.pcm_frames.saturating_add(frames as u64);
+        if chunk.end_of_model_chunk {
+            progress.summary.model_chunks = progress.summary.model_chunks.saturating_add(1);
+            progress.next_model_chunk_index = progress.next_model_chunk_index.saturating_add(1);
+            progress.open_model_chunk_phonemes = None;
+        }
         chunks.push_back(chunk);
-        drop(chunks);
+        drop(progress);
         TTS_PCM_CHUNKS_EMITTED.fetch_add(1, Ordering::Relaxed);
         TTS_PCM_FRAMES_EMITTED.fetch_add(frames as u64, Ordering::Relaxed);
+        // Publish buffered counters before releasing the queue lock. A fast
+        // consumer must never decrement them before the producer increments.
+        TTS_PCM_CHUNKS_BUFFERED.fetch_add(1, Ordering::AcqRel);
+        TTS_PCM_FRAMES_BUFFERED.fetch_add(frames as u64, Ordering::AcqRel);
+        drop(chunks);
         self.state.wait.notify_one();
         Ok(())
     }
 
     /// Publish the sole terminal result after all PCM chunks were accepted.
-    pub fn finish(&self, result: Result<TtsSynthesisSummary, &'static str>) -> bool {
+    fn finish(&self, result: Result<TtsSynthesisSummary, &'static str>) -> bool {
+        // Serialize the terminal transition with the final queue push. This
+        // makes the closed recheck in `try_push` a real admission boundary.
+        let chunks = self.state.chunks.lock();
         if self
             .state
             .closed
@@ -331,14 +376,41 @@ impl TtsOutput {
         {
             return false;
         }
+        let result = match (self.state.cancelled.load(Ordering::Acquire), result) {
+            (true, Ok(_)) => Err("tts-stream-cancelled"),
+            (_, Ok(summary)) => {
+                let progress = self.state.progress.lock();
+                if progress.open_model_chunk_phonemes.is_some() {
+                    Err("backend-finished-mid-model-chunk")
+                } else if progress.summary.pcm_chunks == 0 {
+                    Err("backend-finished-without-pcm")
+                } else if summary != progress.summary {
+                    Err("backend-tts-summary-mismatch")
+                } else {
+                    Ok(summary)
+                }
+            }
+            (_, Err(reason)) => Err(reason),
+        };
         if result.is_ok() {
             TTS_STREAMS_COMPLETED.fetch_add(1, Ordering::Relaxed);
         } else {
             TTS_STREAMS_FAILED.fetch_add(1, Ordering::Relaxed);
         }
         *self.state.completion.lock() = Some(result);
+        drop(chunks);
         self.state.wait.notify_all();
         true
+    }
+
+    /// Close a well-formed stream and publish the service-verified counters.
+    pub fn finish_success(&self) -> bool {
+        let summary = self.state.progress.lock().summary;
+        self.finish(Ok(summary))
+    }
+
+    pub fn finish_error(&self, reason: &'static str) -> bool {
+        self.finish(Err(reason))
     }
 
     pub fn cancelled(&self) -> bool {
@@ -362,7 +434,11 @@ pub enum TtsStreamEvent {
 
 impl TtsStream {
     pub fn try_next(&self) -> Option<TtsStreamEvent> {
-        if let Some(chunk) = self.state.chunks.lock().pop_front() {
+        let chunk = { self.state.chunks.lock().pop_front() };
+        if let Some(chunk) = chunk {
+            let frames = chunk.samples_i16_stereo_48k.len() / TTS_PCM_CHANNELS;
+            TTS_PCM_CHUNKS_BUFFERED.fetch_sub(1, Ordering::AcqRel);
+            TTS_PCM_FRAMES_BUFFERED.fetch_sub(frames as u64, Ordering::AcqRel);
             // Wake a producer that retained a chunk after WouldBlock.
             self.state.wait.notify_one();
             return Some(TtsStreamEvent::Chunk(chunk));
@@ -383,6 +459,10 @@ impl TtsStream {
         }
     }
 
+    pub async fn wait_for_event_timeout(&self, timeout_ms: u64) -> bool {
+        self.state.wait.wait_for_event_timeout(timeout_ms).await
+    }
+
     /// Consumer cancellation is cooperative. It closes the chunk sink, but a
     /// backend must observe `TtsOutput::cancelled` and finish its job promptly.
     pub fn cancel(&self) {
@@ -401,6 +481,24 @@ impl TtsStream {
             .iter()
             .map(|chunk| chunk.samples_i16_stereo_48k.len() / TTS_PCM_CHANNELS)
             .sum()
+    }
+}
+
+impl Drop for TtsStream {
+    fn drop(&mut self) {
+        self.cancel();
+        let mut chunks = self.state.chunks.lock();
+        let chunk_count = chunks.len();
+        let frames = chunks
+            .iter()
+            .map(|chunk| chunk.samples_i16_stereo_48k.len() / TTS_PCM_CHANNELS)
+            .sum::<usize>();
+        chunks.clear();
+        drop(chunks);
+        if chunk_count != 0 {
+            TTS_PCM_CHUNKS_BUFFERED.fetch_sub(chunk_count, Ordering::AcqRel);
+            TTS_PCM_FRAMES_BUFFERED.fetch_sub(frames as u64, Ordering::AcqRel);
+        }
     }
 }
 
@@ -570,9 +668,7 @@ pub fn submit_tts(request: TtsRequest) -> Result<TtsSubmission, SpeechRequestErr
         })
         .map_err(SpeechRequestError::BackendRejected)?;
     if job.direction() != Direction::TextToSpeech {
-        return Err(SpeechRequestError::BackendRejected(
-            "tts-factory-returned-wrong-direction",
-        ));
+        return Err(SpeechRequestError::BackendRejected("tts-factory-returned-wrong-direction"));
     }
     let id = submit_with_completion(job, JobCompletion::Tts(output))
         .map_err(SpeechRequestError::Service)?;
@@ -598,9 +694,7 @@ pub fn submit_stt(request: SttRequest) -> Result<u64, SpeechRequestError> {
         .create_stt_job(request)
         .map_err(SpeechRequestError::BackendRejected)?;
     if job.direction() != Direction::SpeechToText {
-        return Err(SpeechRequestError::BackendRejected(
-            "stt-factory-returned-wrong-direction",
-        ));
+        return Err(SpeechRequestError::BackendRejected("stt-factory-returned-wrong-direction"));
     }
     submit(job).map_err(SpeechRequestError::Service)
 }
@@ -1018,9 +1112,9 @@ fn finish_job(queued: QueuedJob, direction: Direction, result: JobProgress) {
     let id = queued.id;
     if let JobCompletion::Tts(output) = queued.completion {
         match result {
-            JobProgress::Complete => output.ensure_finished(Err(
-                "backend-completed-without-finishing-tts-stream",
-            )),
+            JobProgress::Complete => {
+                output.ensure_finished(Err("backend-completed-without-finishing-tts-stream"))
+            }
             JobProgress::Failed(reason) => output.ensure_finished(Err(reason)),
             JobProgress::Pending => {}
         }

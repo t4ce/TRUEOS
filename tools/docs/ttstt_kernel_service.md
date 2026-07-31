@@ -35,8 +35,8 @@ retries without blocking boot.
 - Each `InferenceJob::run_slice` call is one bounded unit of CPU work. Pending
   work is requeued, and the worker yields before taking another slice.
 - Kokoro jobs have one active owner and remain FIFO even though the shared
-  pool has multiple workers. Up to eight more TTS jobs may wait; STT work can
-  still use the remaining workers concurrently.
+  pool has multiple workers. Up to eight more service-level TTS jobs may wait;
+  STT work can still use the remaining workers concurrently.
 - `WorkerContext::matvec_bf16` uses TRUEOS's runtime AVX2/FMA dispatch with its
   established SSE2/scalar fallback.
 
@@ -54,9 +54,35 @@ The decoder installs one `SpeechBackend`. Its cooperative warm job parses both
 resident model images on the AP2+ pool and marks the backend ready; the BSP
 supervisor retries deferred or failed warm jobs. Typed TTS/STT factories then
 serve shell and later UI clients without teaching those consumers about ONNX
-or GGML. The service refuses speech requests with `BackendUnavailable` until
-this adapter is installed, and with `BackendWarming` until warm completes;
-model residency alone is never reported as decoded inference.
+or GGML. A factory returning a job with the wrong direction is rejected. The
+service refuses speech requests with `BackendUnavailable` until this adapter
+is installed, and with `BackendWarming` until warm completes; model residency
+alone is never reported as decoded inference.
+
+### TTS request and output stream
+
+`submit_tts(TtsRequest)` admits the request and immediately returns a job ID
+plus a `TtsStream`. The native backend receives the same request with a
+`TtsOutput` producer. This is an owned, bounded, nonblocking boundary:
+
+- Language-specific G2P and text splitting belong to the backend. Each model
+  inference chunk contains 1 through 510 phonemes.
+- Every emitted `TtsAudioChunk` identifies its zero-based model-chunk index and
+  phoneme count. Multiple PCM chunks can refer to one model chunk; exactly the
+  last sets `end_of_model_chunk`.
+- PCM is signed i16, interleaved stereo, 48 kHz. A PCM chunk contains at most
+  12,000 frames (250 ms).
+- The stream buffers at most four PCM chunks, so finalized audio can run ahead
+  by no more than one second. `TtsOutput::try_push` never blocks an AP2+ worker.
+  On `WouldBlock`, the backend retains that exact owned chunk, returns
+  `JobProgress::Pending`, and retries it in a later slice.
+- The service rejects empty, malformed, oversized, out-of-order, or
+  phoneme-inconsistent chunks. `finish_success` closes only a complete model
+  chunk and publishes counters calculated by the service itself.
+- Consumer cancellation closes the output side cooperatively. The backend
+  observes `TtsOutput::cancelled` and exits promptly. A TTS job that terminates
+  without closing its stream is converted into an explicit failure rather
+  than leaving shell2 waiting forever.
 
 For the packaged quantized Kokoro graph this is a substantial, explicit port:
 the ONNX file is opset 20 with 3,614 nodes across 56 operator kinds and 775
@@ -81,19 +107,47 @@ stt file recordings/hello.wav language=en
 stt record
 ```
 
-`tts` returns to the shell after enqueueing. One AP1 queue worker serializes
-inference and playback, preserving submission order with a depth of eight.
-`tts stop` clears waiting requests and discards the active inference result if
-it cannot be cancelled inside the backend. The backend returns signed i16,
-stereo, 48 kHz PCM, which is chunked cooperatively into the existing HDA lane.
+`tts` returns to the shell after enqueueing. One AP1 queue worker owns one
+request while up to eight more wait, preserving submission and PCM handoff
+order. As each bounded chunk arrives, that worker applies backpressure and
+calls the existing `aud::pcm_lane::submit_i16_stereo_48k` entry point. The
+eSynth audio service consumes that shared lane and mixes it into live HDA
+output. A stalled lane fails the request after 30 seconds instead of retaining
+an unbounded waveform indefinitely.
+
+`tts stop` clears the eight-request shell queue, increments the PCM stop
+generation, clears pending PCM, and cooperatively cancels the active stream at
+its next poll. The PCM stop is shared with other playback clients, so this
+command intentionally stops those queued overlays too.
+
+The success line says `pcm handoff complete`, not `playback complete`.
+`pcm_lane` presently exposes queue depth but no per-request playback-completion
+callback, and its depth excludes the buffer currently being mixed. Status and
+completion output therefore use `playback_completion=untracked` rather than
+claiming that the speakers have already rendered the final frame.
 
 Kokoro's input tensor has 512 positions, with two used for boundary padding.
 The exact single-pass limit is therefore 510 phoneme tokens. The voice archive
 has the matching `(510, 1, 256)` style shape. This must be enforced after
 language-specific grapheme-to-phoneme conversion; a UTF-8 byte or Unicode
 character limit cannot represent the model window exactly. Shell2 separately
-uses an 8 KiB defensive allocation limit. Requests above 510 phonemes need to
-be rejected or punctuation-split by the native backend.
+uses an 8 KiB defensive allocation limit. Requests above 510 phonemes are
+split by the native backend into ordered model chunks, preferably at
+punctuation in the final fifth of the window, matching the proven host
+streaming behavior.
+
+`tts status` reports model/backend readiness, service active and queued jobs,
+buffered/emitted PCM, shell request/job IDs and phase, shared PCM-lane depth,
+HDA readiness, and cumulative handoff/completion/failure/cancellation counts.
+
+## Current implementation boundary
+
+The model residency, serialized queue, validated streaming contract, and PCM
+handoff into the live kernel playback lane are implemented. The repository
+does not yet install a native Kokoro `SpeechBackend`; consequently a current
+boot correctly reports `native-kokoro-backend-unregistered` and does not
+generate placeholder tones or claim synthesis. Audible speech begins when the
+native graph executor implements this contract and registers itself.
 
 File STT reads a signed 16-bit mono/stereo PCM WAV from TRUEOSFS on the BSP,
 downmixes and resamples it to Whisper's mono 16 kHz boundary with periodic

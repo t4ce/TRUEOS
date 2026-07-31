@@ -66,6 +66,10 @@ pub(crate) fn lfm25_q8_project_packed_upload_status() -> Option<UploadedKernelAr
     *LFM25_Q8_PROJECT_PACKED_UPLOAD.lock()
 }
 
+pub(crate) fn kokoro_qgemm_u8_i8_upload_status() -> Option<UploadedKernelArtifact> {
+    *KOKORO_QGEMM_U8_I8_UPLOAD.lock()
+}
+
 pub(crate) fn spirit_vfx_background_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *SPIRIT_VFX_BACKGROUND_RGBA8_UPLOAD.lock()
 }
@@ -462,6 +466,28 @@ pub(crate) fn upload_lfm25_q8_project_packed_kernel() -> Option<UploadedKernelAr
     Some(upload)
 }
 
+pub(crate) fn upload_kokoro_qgemm_u8_i8_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *KOKORO_QGEMM_U8_I8_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/gpgpu: kokoro-qgemm-u8-i8 upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload = upload_artifact(
+        dev,
+        KOKORO_QGEMM_U8_I8_ADLS_ARTIFACT,
+        KOKORO_QGEMM_U8_I8_ADLS_GPU,
+    )?;
+    *KOKORO_QGEMM_U8_I8_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
 pub(crate) fn upload_font_outline_coverage_r8_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *FONT_OUTLINE_COVERAGE_R8_UPLOAD.lock() {
         return Some(upload);
@@ -581,6 +607,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     PARTICLE_CRAFT_KERNEL_NAME,
     FONT_INSTANCE_RGBA8_KERNEL_NAME,
     LFM25_Q8_PROJECT_PACKED_KERNEL_NAME,
+    KOKORO_QGEMM_U8_I8_KERNEL_NAME,
     FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
     SCENE_AABB_KERNEL_NAME,
     LAB256_MULTIPHASE_KERNEL_NAME,
@@ -761,6 +788,11 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT,
             gpu: LFM25_Q8_PROJECT_PACKED_ADLS_GPU,
             upload: &LFM25_Q8_PROJECT_PACKED_UPLOAD,
+        }),
+        KOKORO_QGEMM_U8_I8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: KOKORO_QGEMM_U8_I8_ADLS_ARTIFACT,
+            gpu: KOKORO_QGEMM_U8_I8_ADLS_GPU,
+            upload: &KOKORO_QGEMM_U8_I8_UPLOAD,
         }),
         FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT,

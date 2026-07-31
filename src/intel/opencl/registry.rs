@@ -53,6 +53,7 @@ pub(crate) enum KnownKernelRole {
     CppDemo,
     CppAudio,
     Lfm25Q8,
+    KokoroQgemm,
     Font,
 }
 
@@ -77,6 +78,8 @@ const CPP_AUDIO_VISUALIZER_CROSS_THREAD_BYTES: u32 =
     gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
 const LFM25_Q8_PROJECT_PACKED_CROSS_THREAD_BYTES: u32 =
     gpgpu::LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
+const KOKORO_QGEMM_U8_I8_CROSS_THREAD_BYTES: u32 =
+    gpgpu::KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
 const FONT_OUTLINE_COVERAGE_R8_CROSS_THREAD_BYTES: u32 = 128;
 const GENERIC_PER_THREAD_BYTES: u32 = 96;
 
@@ -588,6 +591,37 @@ const LFM25_Q8_PROJECT_PACKED_CONTRACT: GpuKernelContract<'_> = GpuKernelContrac
     consumers: &["lfm2.5 fixed packed Q8x16 DP4A reasoning projection"],
 };
 
+const KOKORO_QGEMM_U8_I8_ARGS: &[KernelCallArg<'_>] = &[
+    ro_buf!(0, "packed_weights", "__global const uint*", 0, 12),
+    ro_buf!(1, "weight_sums", "__global const int*", 1, 14),
+    ro_buf!(2, "weight_scales", "__global const float*", 2, 16),
+    ro_buf!(3, "activations", "__global const uint*", 3, 18),
+    ro_buf!(4, "bias", "__global const float*", 4, 20),
+    rw_buf!(5, "output", "__global float*", 5, 22),
+    u32_arg!(6, "matrix_rows", 24),
+    u32_arg!(7, "output_columns", 25),
+    u32_arg!(8, "reduction_words", 26),
+    u32_arg!(9, "activation_stride_words", 27),
+    u32_arg!(10, "output_stride", 28),
+    u32_arg!(11, "activation_zero_point", 29),
+    f32_arg!(12, "activation_scale", 30),
+    u32_arg!(13, "has_bias", 31),
+];
+const KOKORO_QGEMM_U8_I8_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
+    name: gpgpu::KOKORO_QGEMM_U8_I8_KERNEL_NAME,
+    source_path: gpgpu::KOKORO_QGEMM_U8_I8_SOURCE_PATH,
+    producer: IGC,
+    target: ADLS,
+    entry_text_offset_bytes: gpgpu::KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.entry_offset,
+    cross_thread_bytes: KOKORO_QGEMM_U8_I8_CROSS_THREAD_BYTES,
+    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
+    binding_count: 6,
+    args: KOKORO_QGEMM_U8_I8_ARGS,
+    descriptor_layouts: NO_DESCS,
+    launch: KernelLaunchContract::nd_range_2d(None),
+    consumers: &["ttstt Kokoro quantized MatMulInteger projection"],
+};
+
 const FONT_OUTLINE_COVERAGE_R8_ARGS: &[KernelCallArg<'_>] = &[
     ro_buf!(0, "outline_ops", "__global const uint*", 0, 12),
     rw_buf!(1, "mask_u8", "__global uchar*", 1, 14),
@@ -741,6 +775,14 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         upload: gpgpu::upload_lfm25_q8_project_packed_kernel,
         status: gpgpu::lfm25_q8_project_packed_upload_status,
         role: KnownKernelRole::Lfm25Q8,
+    },
+    KnownAotKernel {
+        name: gpgpu::KOKORO_QGEMM_U8_I8_KERNEL_NAME,
+        artifact: &gpgpu::KOKORO_QGEMM_U8_I8_ADLS_ARTIFACT,
+        contract: &KOKORO_QGEMM_U8_I8_CONTRACT,
+        upload: gpgpu::upload_kokoro_qgemm_u8_i8_kernel,
+        status: gpgpu::kokoro_qgemm_u8_i8_upload_status,
+        role: KnownKernelRole::KokoroQgemm,
     },
     KnownAotKernel {
         name: gpgpu::FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,

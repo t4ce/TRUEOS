@@ -79,7 +79,7 @@ fn container_shell_help() {
     attached_write_line("commands: env smp help stop pause snapshot preserve");
     attached_write_line("  stop     stop without writing a checkpoint");
     attached_write_line("  pause    preserve-pause; resume by vmid from F2 pause");
-    attached_write_line("  snapshot Blueprint Ready checkpoint; durable and resumable");
+    attached_write_line("  snapshot Blueprint Ready checkpoint; warm and resumable");
     attached_write_line("  preserve preserve-stop; checkpoint first, then tear down");
 }
 
@@ -166,7 +166,7 @@ fn container_shell_command(raw: &str) -> bool {
         }
         "snapshot" | "snap" => {
             attached_write_line(
-                "vmx-shell: requesting Blueprint PreparePause for durable snapshot",
+                "vmx-shell: requesting Blueprint PreparePause for warm snapshot",
             );
             let (status, _) =
                 trueos_vm::vmcall::call(trueos_vm::vmcall::OP_LIFECYCLE_SNAPSHOT, 0, 0);

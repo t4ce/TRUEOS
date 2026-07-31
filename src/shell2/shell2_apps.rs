@@ -765,6 +765,21 @@ fn schedule_load_persistent(
     name: String,
     vm_id: u8,
 ) {
+    let state = crate::hv::vm_state(vm_id);
+    if state.running || state.starting {
+        line(
+            io,
+            alloc::format!("apps: vm{} is running; stop it before persistent load", vm_id).as_str(),
+        );
+        return;
+    }
+    // A named load replaces any offline warm incarnation in this slot. The
+    // named TRUEOSFS image remains untouched, so the same baseline can be
+    // loaded repeatedly without a manual eject between runs.
+    if let Err(error) = crate::hv::eject(vm_id) {
+        line(io, alloc::format!("apps: load preparation failed: {:?}", error).as_str());
+        return;
+    }
     match crate::hv::try_begin_restore(vm_id) {
         Ok(true) => match load_persistent_vm_task(*spawner, io, vm_id, name) {
             Ok(token) => {
@@ -907,7 +922,7 @@ fn snapshot_mode(io: &'static dyn ShellBackend2, args: &[String]) {
             Ok(true) => line(
                 io,
                 alloc::format!(
-                    "apps: vm{} snapshot PreparePause requested; durable snapshot id={}",
+                    "apps: vm{} warm snapshot requested; follow with `store {} <name>` for reboot persistence",
                     vm_id,
                     vm_id
                 )

@@ -75,6 +75,11 @@ pub(crate) const LFM25_Q8_PROJECT_PACKED_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/lfm25_q8_project_packed.clcpp");
 pub(crate) const LFM25_Q8_PROJECT_PACKED_SOURCE_PATH: &str =
     "crates/trueos-shader/gpgpu/kernels/lfm25_q8_project_packed.clcpp";
+pub(crate) const KOKORO_QGEMM_U8_I8_KERNEL_NAME: &str = "kokoro_qgemm_u8_i8";
+pub(crate) const KOKORO_QGEMM_U8_I8_OPENCL_SOURCE: &str =
+    include_str!("../../../crates/trueos-shader/gpgpu/kernels/kokoro_qgemm_u8_i8.clcpp");
+pub(crate) const KOKORO_QGEMM_U8_I8_SOURCE_PATH: &str =
+    "crates/trueos-shader/gpgpu/kernels/kokoro_qgemm_u8_i8.clcpp";
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME: &str = "font_outline_coverage_r8";
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_OPENCL_SOURCE: &str =
     include_str!("kernels/font_outline_coverage_r8.clcpp");
@@ -123,6 +128,7 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         | PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME => Some(PARTICLE_CRAFT_OPENCL_SOURCE),
         FONT_INSTANCE_RGBA8_KERNEL_NAME => Some(FONT_INSTANCE_RGBA8_OPENCL_SOURCE),
         LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => Some(LFM25_Q8_PROJECT_PACKED_OPENCL_SOURCE),
+        KOKORO_QGEMM_U8_I8_KERNEL_NAME => Some(KOKORO_QGEMM_U8_I8_OPENCL_SOURCE),
         FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => Some(FONT_OUTLINE_COVERAGE_R8_OPENCL_SOURCE),
         SCENE_AABB_KERNEL_NAME => Some(SCENE_AABB_OPENCL_SOURCE),
         LAB256_MULTIPHASE_KERNEL_NAME => Some(LAB256_MULTIPHASE_OPENCL_SOURCE),
@@ -177,6 +183,7 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         | PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME => Some(PARTICLE_CRAFT_SOURCE_PATH),
         FONT_INSTANCE_RGBA8_KERNEL_NAME => Some(FONT_INSTANCE_RGBA8_SOURCE_PATH),
         LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => Some(LFM25_Q8_PROJECT_PACKED_SOURCE_PATH),
+        KOKORO_QGEMM_U8_I8_KERNEL_NAME => Some(KOKORO_QGEMM_U8_I8_SOURCE_PATH),
         FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/font_outline_coverage_r8.clcpp")
         }
@@ -560,6 +567,52 @@ const _: () = {
     assert!(contract.payload_args[3].offset_bytes == 72);
     assert!(contract.payload_args[4].offset_bytes == 76);
     assert!(contract.payload_args[5].offset_bytes == 80);
+};
+include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/kokoro_qgemm_u8_i8.contract.rs"
+);
+pub(crate) const KOKORO_QGEMM_U8_I8_ADLS_BIN: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/kokoro_qgemm_u8_i8.bin"
+);
+pub(crate) const KOKORO_QGEMM_U8_I8_ADLS_SPV: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/kokoro_qgemm_u8_i8.spv"
+);
+pub(crate) const KOKORO_QGEMM_U8_I8_ADLS_BIN_SHA256: [u8; 32] =
+    KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
+const _: () = assert!(matches!(KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
+const _: () = assert!(KOKORO_QGEMM_U8_I8_ADLS_BIN.len() == 24_032);
+const _: () = assert!(KOKORO_QGEMM_U8_I8_ADLS_SPV.len() == 10_212);
+const _: () = {
+    let contract = KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT;
+    assert!(contract.target.pci_device_ids.len() == 1);
+    assert!(contract.target.pci_device_ids[0] == 0x4680);
+    assert!(contract.target.revision_min == 0x0C);
+    assert!(contract.target.revision_max == 0x0C);
+    assert!(contract.entry_offset == 64);
+    assert!(contract.entry_size == 5_592);
+    assert!(contract.simd_width == 16);
+    assert!(contract.grf_count == 128);
+    assert!(contract.scratch_bytes == 0);
+    assert!(contract.slm_bytes == 0);
+    assert!(contract.cross_thread_data_bytes == 128);
+    assert!(contract.per_thread_data_bytes == 96);
+    assert!(contract.bindings.len() == 6);
+    assert!(contract.payload_args.len() == 14);
+    let mut pointer = 0;
+    while pointer < 6 {
+        assert!(contract.bindings[pointer].arg_index as usize == pointer);
+        assert!(contract.bindings[pointer].bti as usize == pointer);
+        assert!(contract.payload_args[pointer].offset_bytes == 48 + pointer as u32 * 8);
+        pointer += 1;
+    }
+    let mut scalar = 6;
+    while scalar < contract.payload_args.len() {
+        assert!(contract.payload_args[scalar].arg_index as usize == scalar);
+        assert!(contract.payload_args[scalar].offset_bytes == 72 + scalar as u32 * 4);
+        assert!(contract.payload_args[scalar].size_bytes == 4);
+        assert!(matches!(contract.payload_args[scalar].kind, GpgpuArtifactArgKind::ByValue));
+        scalar += 1;
+    }
 };
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/font_outline_coverage_r8.bin");

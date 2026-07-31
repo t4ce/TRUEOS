@@ -1,0 +1,17 @@
+[package]
+name = "trueos-ttstt-cpu"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+description = "No-std quantized CPU kernels for TRUEOS speech inference"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[[example]]
+name = "qgemm_bench"
+path = "examples/qgemm_bench.rs"
+

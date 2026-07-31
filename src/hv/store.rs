@@ -237,6 +237,10 @@ fn persistent_header(vm_id: u8, lengths: [usize; 4]) -> Vec<u8> {
 /// Commit the current warm checkpoint and the retained Blueprint-owned memory
 /// to physical TRUEOSFS. The warm checkpoint remains resident.
 pub async fn store_persistent_async(vm_id: u8, name: &str) -> Result<usize, VmStoreError> {
+    let state = crate::hv::vm_state(vm_id);
+    if !state.supported || !state.pause_latched || state.running || state.starting {
+        return Err(VmStoreError::BadEnvelope);
+    }
     let path = persistent_path(name)?;
     let disk = persistent_root()?;
     let snapshot = vm_store_image(vm_id).ok_or(VmStoreError::MissingSnapshot)?;

@@ -76,6 +76,7 @@ crab-usb = { path = "vendor/CrabUSB/usb-host", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
 trueos-lfm25-model = { path = "crates/trueos-lfm25-model" }
 trueos-lfm25-cpu = { path = "crates/trueos-lfm25-cpu" }
+trueos-ttstt-cpu = { path = "crates/trueos-ttstt-cpu" }
 trueos-fs = { path = "crates/trueos-fs" }
 v = { path = "crates/trueos-v" }
 trueos-vm = { path = "crates/trueos-vm" }
