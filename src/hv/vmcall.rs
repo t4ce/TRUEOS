@@ -46,6 +46,7 @@ pub const OP_BP_REL_IMAGE_EXEC_DISABLE: u32 = 0x0B; // trusted loader: exact act
 pub const OP_BP_LIFECYCLE_POLL: u32 = 0x0C; // response operation + deadline/reason when PreparePause is pending
 pub const OP_BP_LIFECYCLE_READY: u32 = 0x0D; // arg0 operation,arg1 checkpoint version -> pause/snapshot at exact boundary
 pub const OP_BP_LIFECYCLE_IDENTITY: u32 = 0x0E; // response generation/flags + instance/lineage UUID bytes
+pub const OP_LIFECYCLE_SNAPSHOT: u32 = 0x0F; // request PreparePause with durable snapshot disposition
 pub const OP_BP_RAPL_SNAPSHOT_READ: u32 = 0x91; // arg0 offset, arg1 cap -> latest RAPL snapshot text
 pub const OP_BP_RAPL_HISTORY_READ: u32 = 0x92; // arg0 offset, arg1 cap -> capped RAPL history text
 pub const OP_BP_PCI_SNAPSHOT_READ: u32 = 0x93; // arg0 offset, arg1 cap -> latest PCI snapshot text
@@ -572,6 +573,21 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             match crate::hv::request_blueprint_prepare_pause(
                 vm_id,
                 crate::hv::BlueprintPauseReason::Pause,
+            ) {
+                Ok(true) => {
+                    write_response(vm_id, seq, STATUS_OK, 0, 0);
+                    DispatchOutcome::Resume
+                }
+                Ok(false) | Err(_) => {
+                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                    DispatchOutcome::Resume
+                }
+            }
+        }
+        OP_LIFECYCLE_SNAPSHOT => {
+            match crate::hv::request_blueprint_prepare_pause(
+                vm_id,
+                crate::hv::BlueprintPauseReason::Replicate,
             ) {
                 Ok(true) => {
                     write_response(vm_id, seq, STATUS_OK, 0, 0);

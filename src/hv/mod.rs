@@ -2724,17 +2724,6 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
     let cmd = trimmed.split_whitespace().next().unwrap_or("");
     match cmd {
         "" => {}
-        "host" => {
-            let hostname = blueprint_process_env_var(vm_id, "HOSTNAME")
-                .or_else(|| blueprint_process_env_var(vm_id, "TRUEOS_HOSTNAME"))
-                .unwrap_or_else(|| AllocString::from("TRUEOS"));
-            blueprint_control_shell_line(vm_id, hostname.as_str());
-        }
-        "home" => {
-            let home =
-                blueprint_process_env_var(vm_id, "HOME").unwrap_or_else(|| AllocString::from("/"));
-            blueprint_control_shell_line(vm_id, home.as_str());
-        }
         "env" => match blueprint_process_env_text(vm_id) {
             Some(text) if !text.is_empty() => {
                 blueprint_control_shell_write_text(vm_id, text.as_str())
@@ -2756,10 +2745,12 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
         }
         "help" | "?" => blueprint_control_shell_write_text(
             vm_id,
-            "commands: tui host home env smp help stop pause preserve\n\
+            "commands: tui env smp leave help stop pause snapshot preserve\n\
              tui: re-enter this app's optional terminal UI\n\
+             leave: return to the default Matrix slot\n\
              stop: stop without a checkpoint\n\
              pause: preserve-pause; resume by vmid from F2 pause\n\
+             snapshot: Blueprint Ready checkpoint; durable and resumable\n\
              preserve: preserve-stop; checkpoint first, then tear down",
         ),
         "tui" | "terminal" | "term" => {
@@ -2800,6 +2791,33 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
                     Err(err) => blueprint_control_shell_line(
                         vm_id,
                         alloc::format!("vmx-shell: pause failed: {:?}", err).as_str(),
+                    ),
+                }
+            }
+        }
+        "snapshot" | "snap" => {
+            let state = vm_state(vm_id);
+            if !state.replicatable {
+                blueprint_control_shell_line(
+                    vm_id,
+                    "vmx-shell: app is not tagged replicatable; use preserve for a raw checkpoint",
+                );
+            } else if !state.running && !state.starting {
+                blueprint_control_shell_line(vm_id, "vmx-shell: vm is not running");
+            } else {
+                blueprint_control_shell_line(
+                    vm_id,
+                    "vmx-shell: requesting replicatable snapshot; waiting for Blueprint Ready",
+                );
+                match request_replicatable_snapshot(vm_id) {
+                    Ok(true) => {}
+                    Ok(false) => blueprint_control_shell_line(
+                        vm_id,
+                        "vmx-shell: replicatable snapshot was not accepted",
+                    ),
+                    Err(err) => blueprint_control_shell_line(
+                        vm_id,
+                        alloc::format!("vmx-shell: snapshot failed: {:?}", err).as_str(),
                     ),
                 }
             }

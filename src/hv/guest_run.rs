@@ -71,18 +71,15 @@ fn guest_text_vmcall(op: u32, request: &[u8]) -> Option<String> {
     core::str::from_utf8(&bytes[..got]).ok().map(String::from)
 }
 
-fn guest_env_var(key: &str) -> Option<String> {
-    guest_text_vmcall(trueos_vm::vmcall::OP_BP_ENV_VAR, key.as_bytes())
-}
-
 fn container_shell_prompt() {
     attached_write_str("vmx> ");
 }
 
 fn container_shell_help() {
-    attached_write_line("commands: host home env smp help stop pause preserve");
+    attached_write_line("commands: env smp help stop pause snapshot preserve");
     attached_write_line("  stop     stop without writing a checkpoint");
     attached_write_line("  pause    preserve-pause; resume by vmid from F2 pause");
+    attached_write_line("  snapshot Blueprint Ready checkpoint; durable and resumable");
     attached_write_line("  preserve preserve-stop; checkpoint first, then tear down");
 }
 
@@ -124,16 +121,6 @@ fn container_shell_command(raw: &str) -> bool {
     let cmd = trimmed.split_whitespace().next().unwrap_or("");
     match cmd {
         "" => {}
-        "host" => {
-            let hostname = guest_env_var("HOSTNAME")
-                .or_else(|| guest_env_var("TRUEOS_HOSTNAME"))
-                .unwrap_or_else(|| String::from("TRUEOS"));
-            attached_write_line(hostname.as_str());
-        }
-        "home" => {
-            let home = guest_env_var("HOME").unwrap_or_else(|| String::from("/"));
-            attached_write_line(home.as_str());
-        }
         "env" => match guest_text_vmcall(trueos_vm::vmcall::OP_BP_ENV_ALL, &[]) {
             Some(text) if !text.is_empty() => attached_write_str(text.as_str()),
             _ => attached_write_line("env: unavailable"),
@@ -175,6 +162,20 @@ fn container_shell_command(raw: &str) -> bool {
                 );
             } else {
                 attached_write_line("vmx-shell: PreparePause requested");
+            }
+        }
+        "snapshot" | "snap" => {
+            attached_write_line(
+                "vmx-shell: requesting Blueprint PreparePause for durable snapshot",
+            );
+            let (status, _) =
+                trueos_vm::vmcall::call(trueos_vm::vmcall::OP_LIFECYCLE_SNAPSHOT, 0, 0);
+            if status != trueos_vm::vmcall::STATUS_OK {
+                attached_write_line(
+                    "vmx-shell: replicatable snapshot unavailable; use preserve for a raw checkpoint",
+                );
+            } else {
+                attached_write_line("vmx-shell: snapshot PreparePause requested");
             }
         }
         "preserve" => {

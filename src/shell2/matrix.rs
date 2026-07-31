@@ -42,7 +42,6 @@ struct MatrixSlot {
     vm_launch_reserved: bool,
     line_width: usize,
     app_label: Option<AllocString>,
-    hotkey_mode: bool,
 }
 
 #[derive(Clone)]
@@ -128,7 +127,6 @@ fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
         vm_launch_reserved: false,
         line_width: DEFAULT_MATRIX_SLOT_LINE_WIDTH,
         app_label: None,
-        hotkey_mode: false,
     });
     slots.len() - 1
 }
@@ -464,7 +462,6 @@ pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
             || slot.running_count != 0
             || slot.line_width != DEFAULT_MATRIX_SLOT_LINE_WIDTH
             || slot.app_label.is_some()
-            || slot.hotkey_mode
         {
             slot.lines.clear();
             slot.activity = MatrixSlotActivity::Idle;
@@ -474,7 +471,6 @@ pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
             slot.vm_launch_reserved = false;
             slot.line_width = DEFAULT_MATRIX_SLOT_LINE_WIDTH;
             slot.app_label = None;
-            slot.hotkey_mode = false;
             bump_slot_revision(&mut guard, idx);
         }
     } else if let Some(idx) = guard.slots.iter().position(|slot| slot.id == freed_id) {
@@ -519,33 +515,6 @@ pub(crate) fn clear_active_lines(output_mask: u8) {
         guard.slots[idx].lines.clear();
         bump_slot_revision(&mut guard, idx);
     }
-}
-
-pub(crate) fn active_terminal_hotkey_mode(output_mask: u8) -> bool {
-    let mut guard = state().lock();
-    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
-    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
-    guard.slots[idx].hotkey_mode
-}
-
-/// Read the presentation-only hotkey flag without spinning behind a Matrix
-/// mutation running on another CPU.
-pub(crate) fn try_active_terminal_hotkey_mode(output_mask: u8) -> Option<bool> {
-    let mut guard = state().try_lock()?;
-    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
-    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
-    Some(guard.slots[idx].hotkey_mode)
-}
-
-pub(crate) fn set_active_terminal_hotkey_mode(output_mask: u8, enabled: bool) -> bool {
-    let mut guard = state().lock();
-    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
-    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
-    if guard.slots[idx].hotkey_mode != enabled {
-        guard.slots[idx].hotkey_mode = enabled;
-        bump_slot_revision(&mut guard, idx);
-    }
-    enabled
 }
 
 pub(crate) fn active_slot_app_label(output_mask: u8) -> Option<AllocString> {
@@ -848,7 +817,6 @@ pub(crate) fn unbind_slot_vm(slot_id: &MatrixSlotId, vm_id: u8) {
         guard.slots[idx].vm_id = None;
         guard.slots[idx].vm_input_attached = false;
         guard.slots[idx].vm_launch_reserved = false;
-        guard.slots[idx].hotkey_mode = false;
         guard.slots[idx].app_label = None;
         bump_slot_revision(&mut guard, idx);
     }

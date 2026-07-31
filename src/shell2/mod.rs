@@ -33,13 +33,13 @@ const BANNER_ROW: usize = 1;
 const STATUS_ROW: usize = 2;
 const PROMPT_ROW: usize = 3;
 const SCROLL_TOP_ROW: usize = 4;
-const VM_HOTKEY_TERMINAL_TOP_ROW: usize = 2;
 const DEFAULT_TRANSCRIPT_VIEW_ROWS: usize = 48;
 const STATUS_SELECTED_RGB: (u8, u8, u8) = (255, 55, 255);
 const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
 const TITLE_COUNT_RGB: (u8, u8, u8) = (255, 255, 255);
 const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 const VMX_STATUS_RGB: (u8, u8, u8) = (120, 210, 255);
+const VMX_TUI_RGB: (u8, u8, u8) = (255, 90, 90);
 pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 0;
 pub(crate) const OUTPUT_LOCAL_MASK: u8 = 1 << 1;
 pub(crate) const OUTPUT_CONTAINER_MASK: u8 = 1 << 2;
@@ -163,7 +163,6 @@ struct ChromeState {
     active_slot_activity: matrix::MatrixSlotActivity,
     app_label: Option<AllocString>,
     is_vmx: bool,
-    terminal_hotkey: bool,
     mode: ShellMode2,
 }
 
@@ -281,9 +280,6 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn mode_status(&self, output_mask: u8, running_go2_phase: usize) {
-        if active_terminal_hotkey_mode(output_mask) {
-            return;
-        }
         self.move_to(STATUS_ROW, 1);
         self.clear_line();
         let slot_text = self.slot_status_text(output_mask, running_go2_phase);
@@ -303,16 +299,8 @@ impl<'a> AlignedWriter<'a> {
                 alloc::format!("{}", term_style::paint("VMX").bold().color(VMX_STATUS_RGB));
             self.push_plain(&mut text, styled.as_str());
             self.push_plain(&mut text, " ");
-            if active_terminal_hotkey_mode(output_mask) {
-                let hotkey =
-                    alloc::format!("{}", term_style::paint("HOTKEY").bold().color((255, 55, 255)));
-                self.push_plain(&mut text, hotkey.as_str());
-                self.push_plain(&mut text, " keys->app ");
-                self.push_function_key_label(&mut text, "[ESC]");
-                self.push_plain(&mut text, " back");
-            } else {
-                self.push_function_key_label(&mut text, "[ESC]");
-            }
+            self.push_function_key_label(&mut text, "[ESC]");
+            self.push_plain(&mut text, " leave");
         } else {
             self.push_plain(&mut text, self.mode_commands_text(mode).as_str());
         }
@@ -328,13 +316,25 @@ impl<'a> AlignedWriter<'a> {
 
     fn vmx_status(&self) {
         let mut text = AllocString::new();
-        for command in [
-            "tui", "host", "home", "env", "smp", "hotkey", "stop", "pause", "preserve",
+        for (command, color) in [
+            ("tui", Some(VMX_TUI_RGB)),
+            ("env", None),
+            ("smp", None),
+            ("leave", None),
+            ("stop", Some(VMX_STATUS_RGB)),
+            ("pause", Some(VMX_STATUS_RGB)),
+            ("snapshot", Some(VMX_STATUS_RGB)),
+            ("preserve", Some(VMX_STATUS_RGB)),
         ] {
             if !text.is_empty() {
                 self.push_plain(&mut text, " ");
             }
-            self.push_plain(&mut text, command);
+            if let Some(color) = color {
+                let styled = alloc::format!("{}", term_style::paint(command).color(color));
+                self.push_plain(&mut text, styled.as_str());
+            } else {
+                self.push_plain(&mut text, command);
+            }
         }
         self.right_text(STATUS_ROW, text.as_str());
     }
@@ -389,11 +389,6 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn prompt(&self, output_mask: u8) {
-        // Prompt painting is best-effort UI work.  Never busy-spin the async
-        // shell task if another CPU is updating Matrix state.
-        if matrix::try_active_terminal_hotkey_mode(output_mask).unwrap_or(false) {
-            return;
-        }
         self.move_to(PROMPT_ROW, 1);
         self.clear_line();
         self.io.raw_write_str("\x1b[0m");
@@ -520,20 +515,12 @@ fn transcript_view_rows_for_output(output_mask: u8) -> usize {
     }
 }
 
-fn slot_content_top_row(output_mask: u8) -> usize {
-    if active_matrix_slot_is_vmx(output_mask) && active_terminal_hotkey_mode(output_mask) {
-        VM_HOTKEY_TERMINAL_TOP_ROW
-    } else {
-        SCROLL_TOP_ROW
-    }
+fn slot_content_top_row(_output_mask: u8) -> usize {
+    SCROLL_TOP_ROW
 }
 
 fn slot_content_rows_for_output(output_mask: u8) -> usize {
     transcript_view_rows_for_output(output_mask)
-}
-
-fn active_terminal_direct_input_mode(output_mask: u8) -> bool {
-    active_terminal_hotkey_mode(output_mask)
 }
 
 fn render_active_slot_content(
@@ -557,7 +544,6 @@ fn current_chrome_state(output_mask: u8, mode: ShellMode2) -> ChromeState {
         active_slot_activity: matrix::active_slot_activity(output_mask),
         app_label: matrix::active_slot_app_label(output_mask),
         is_vmx: active_matrix_slot_is_vmx(output_mask),
-        terminal_hotkey: active_terminal_hotkey_mode(output_mask),
         mode,
     }
 }
@@ -612,16 +598,12 @@ fn banner_left_visible_width(output_mask: u8) -> usize {
 
 fn banner_right_visible_width(output_mask: u8) -> usize {
     if active_matrix_slot_is_vmx(output_mask) {
-        return ecma48::visible_width("VMX HOTKEY keys->app [ESC] back");
+        return ecma48::visible_width("VMX [ESC] leave");
     }
 
     let cmd_width = ecma48::visible_width(command_names_status_text().as_str());
     let apps_width = ecma48::visible_width(shell2_apps::command_names_text().as_str());
     cmd_width.max(apps_width)
-}
-
-fn active_terminal_hotkey_mode(output_mask: u8) -> bool {
-    matrix::active_terminal_hotkey_mode(output_mask)
 }
 
 pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
@@ -1091,7 +1073,7 @@ fn parse_double_section_operator(submitted: &str) -> Option<DoubleSectionOperato
 fn is_vmx_control_command(submitted: &str) -> bool {
     matches!(
         submitted.split_whitespace().next().unwrap_or(""),
-        "host" | "home" | "env" | "smp" | "stop" | "pause" | "preserve"
+        "env" | "smp" | "stop" | "pause" | "snapshot" | "snap" | "preserve"
     )
 }
 
@@ -1099,27 +1081,8 @@ fn is_vmx_tui_command(submitted: &str) -> bool {
     matches!(submitted.split_whitespace().next().unwrap_or(""), "tui" | "terminal" | "term")
 }
 
-#[derive(Clone, Copy)]
-enum VmxHotkeyCommand {
-    Toggle,
-    Set(bool),
-    Status,
-}
-
-fn parse_vmx_hotkey_command(submitted: &str) -> Option<VmxHotkeyCommand> {
-    let mut parts = submitted.split_whitespace();
-    let command = parts.next()?;
-    if !matches!(command, "hotkey" | "hotkeys" | "hk") {
-        return None;
-    }
-
-    match parts.next() {
-        None => Some(VmxHotkeyCommand::Toggle),
-        Some("on" | "enable" | "enabled" | "1") => Some(VmxHotkeyCommand::Set(true)),
-        Some("off" | "disable" | "disabled" | "0") => Some(VmxHotkeyCommand::Set(false)),
-        Some("status" | "?") => Some(VmxHotkeyCommand::Status),
-        Some(_) => Some(VmxHotkeyCommand::Status),
-    }
+fn is_vmx_leave_command(submitted: &str) -> bool {
+    matches!(submitted.split_whitespace().next().unwrap_or(""), "leave")
 }
 
 fn redraw_active_view(
@@ -1140,34 +1103,6 @@ fn redraw_active_view(
     render_active_slot_content(out, output_mask, &transcript);
     out.prompt(output_mask);
     transcript
-}
-
-fn apply_vmx_hotkey_command(
-    out: &AlignedWriter<'_>,
-    io: &'static dyn ShellBackend2,
-    output_mask: u8,
-    mode: ShellMode2,
-    running_go2_phase: usize,
-    minute_text: &str,
-    command: VmxHotkeyCommand,
-) -> VecDeque<TranscriptEntry> {
-    let current = active_terminal_hotkey_mode(output_mask);
-    let next = match command {
-        VmxHotkeyCommand::Toggle => !current,
-        VmxHotkeyCommand::Set(enabled) => enabled,
-        VmxHotkeyCommand::Status => current,
-    };
-    let _ = matrix::set_active_terminal_hotkey_mode(output_mask, next);
-    redraw_active_view(out, io, output_mask, mode, running_go2_phase, minute_text)
-}
-
-fn show_hotkey_notice(out: &AlignedWriter<'_>, output_mask: u8, text: &str) {
-    out.io.raw_write_str(ecma48::SAVE_CURSOR);
-    out.io.raw_write_str(ecma48::RESET);
-    out.banner_left(output_mask, clock_bucket_and_text().1.as_str());
-    let styled = alloc::format!("{}", term_style::paint(text).bold().color((255, 55, 255)));
-    out.right_text(BANNER_ROW, styled.as_str());
-    out.io.raw_write_str(ecma48::RESTORE_CURSOR);
 }
 
 fn rainbow_status_text(phase: usize) -> AllocString {
@@ -1390,9 +1325,6 @@ fn zeroize_input_line(line: &mut HString<MAX_LINE>) {
 }
 
 fn render_prompt_line(out: &AlignedWriter<'_>, output_mask: u8, line: &HString<MAX_LINE>) {
-    if active_terminal_direct_input_mode(output_mask) {
-        return;
-    }
     out.prompt(output_mask);
     for ch in line.chars() {
         out.user_char(ch);
@@ -1563,22 +1495,16 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 esc = EscState::None;
                 text_decode.reset();
                 live_history_cursor = None;
-                if active_terminal_hotkey_mode(output_mask)
-                    && matrix::active_slot_app_label(output_mask).as_deref() == Some("qjs")
-                    && let Some(vm_id) = active_matrix_vm_input_id(output_mask)
-                        .or_else(|| active_matrix_vm_id(output_mask))
-                {
-                    let _ = crate::hv::blueprint_console_submit_stdin(vm_id, &[0x1b]);
-                } else if active_terminal_hotkey_mode(output_mask) {
+                if active_matrix_slot_is_vmx(output_mask) {
                     zeroize_input_line(&mut line);
-                    let _ = matrix::set_active_terminal_hotkey_mode(output_mask, false);
-                    transcript = redraw_active_view(
+                    transcript = apply_matrix_operator_and_refresh(
                         &out,
                         io,
                         output_mask,
-                        mode,
+                        &mut mode,
                         running_go2_phase,
                         minute_text.as_str(),
+                        "§",
                     );
                     last_chrome_state = current_chrome_state(output_mask, mode);
                     last_matrix_revision = matrix::visible_revision(output_mask);
@@ -1592,19 +1518,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 continue;
             }
             if b == LOCAL_UNMAPPED_KEY_BYTE {
-                if active_terminal_hotkey_mode(output_mask) {
-                    show_hotkey_notice(&out, output_mask, "unmapped key");
-                }
-                continue;
-            }
-
-            if active_terminal_direct_input_mode(output_mask) {
-                text_decode.reset();
-                if let Some(vm_id) = active_matrix_vm_input_id(output_mask)
-                    .or_else(|| active_matrix_vm_id(output_mask))
-                {
-                    let _ = crate::hv::blueprint_console_submit_stdin(vm_id, &[b]);
-                }
                 continue;
             }
             if b == 0x03 {
@@ -1761,22 +1674,23 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             submitted,
                         );
                         last_chrome_state = current_chrome_state(output_mask, mode);
+                    } else if active_matrix_slot_is_vmx(output_mask)
+                        && is_vmx_leave_command(submitted)
+                    {
+                        transcript = apply_matrix_operator_and_refresh(
+                            &out,
+                            io,
+                            output_mask,
+                            &mut mode,
+                            running_go2_phase,
+                            minute_text.as_str(),
+                            "§",
+                        );
+                        last_chrome_state = current_chrome_state(output_mask, mode);
                     } else if let Some(vm_id) = active_matrix_vm_input_id(output_mask) {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
-                            if let Some(command) = parse_vmx_hotkey_command(submitted) {
-                                transcript = apply_vmx_hotkey_command(
-                                    &out,
-                                    io,
-                                    output_mask,
-                                    mode,
-                                    running_go2_phase,
-                                    minute_text.as_str(),
-                                    command,
-                                );
-                            } else if is_vmx_tui_command(submitted)
-                                || is_vmx_control_command(submitted)
-                            {
+                            if is_vmx_tui_command(submitted) || is_vmx_control_command(submitted) {
                                 let _ = crate::hv::blueprint_console_submit_control_line(
                                     vm_id, submitted,
                                 );
@@ -1793,19 +1707,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     } else if let Some(vm_id) = active_matrix_vm_id(output_mask) {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
-                            if let Some(command) = parse_vmx_hotkey_command(submitted) {
-                                transcript = apply_vmx_hotkey_command(
-                                    &out,
-                                    io,
-                                    output_mask,
-                                    mode,
-                                    running_go2_phase,
-                                    minute_text.as_str(),
-                                    command,
-                                );
-                            } else if is_vmx_tui_command(submitted)
-                                || is_vmx_control_command(submitted)
-                            {
+                            if is_vmx_tui_command(submitted) || is_vmx_control_command(submitted) {
                                 let _ = crate::hv::blueprint_console_submit_control_line(
                                     vm_id, submitted,
                                 );
