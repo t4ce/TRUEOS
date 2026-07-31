@@ -535,7 +535,23 @@ mod tests {
             .collect()
     }
 
-    fn run_ort_fixture(profile: KokoroMatMul, indices: &[usize], expected: &[u32]) {
+    fn output_fingerprint(values: &[f32]) -> u64 {
+        let mut fingerprint = 0xcbf2_9ce4_8422_2325u64;
+        for value in values {
+            for byte in value.to_bits().to_le_bytes() {
+                fingerprint ^= u64::from(byte);
+                fingerprint = fingerprint.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        fingerprint
+    }
+
+    fn run_ort_fixture(
+        profile: KokoroMatMul,
+        expected_fingerprint: u64,
+        indices: &[usize],
+        expected: &[u32],
+    ) {
         let dimensions = profile.dimensions().unwrap();
         let lhs = pattern(dimensions.lhs_elements().unwrap(), 17, 31, 15, 64.0);
         let rhs = pattern(dimensions.rhs_elements().unwrap(), 13, 29, 14, 32.0);
@@ -544,6 +560,7 @@ mod tests {
         dispatcher
             .matmul_with_lane(profile, &lhs, &rhs, &mut scalar, Lane::Scalar)
             .unwrap();
+        assert_eq!(output_fingerprint(&scalar), expected_fingerprint);
         assert_eq!(indices.len(), expected.len());
         for (&index, &bits) in indices.iter().zip(expected) {
             assert_eq!(scalar[index].to_bits(), bits, "fixture index {index}");
@@ -641,6 +658,7 @@ mod tests {
     fn representative_real_shapes_match_ort_exact_fixtures() {
         run_ort_fixture(
             KokoroMatMul::AttentionScores { sequence: 18 },
+            0xB7FE_2A08_60AD_A31F,
             &[0, 1, 17, 18, 323, 324, 1_944, 3_887],
             &[
                 0xBA00_0000,
@@ -655,6 +673,7 @@ mod tests {
         );
         run_ort_fixture(
             KokoroMatMul::AttentionContext { sequence: 18 },
+            0xB7EF_D499_5E4A_B658,
             &[0, 1, 63, 64, 1_151, 1_152, 6_912, 13_823],
             &[
                 0xBD83_0000,
@@ -673,6 +692,7 @@ mod tests {
                 sequence: 18,
                 frames: 69,
             },
+            0xB033_82C4_46E5_A18E,
             &[0, 1, 68, 69, 22_079, 22_080, 44_159],
             &[
                 0x3D8C_0000,
@@ -690,6 +710,7 @@ mod tests {
                 sequence: 18,
                 frames: 69,
             },
+            0x3AFD_E454_19A5_E737,
             &[0, 1, 68, 69, 17_663, 17_664, 35_327],
             &[
                 0x3D8C_0000,
@@ -703,6 +724,7 @@ mod tests {
         );
         run_ort_fixture(
             KokoroMatMul::SourceLinear { samples: 41_400 },
+            0x48FC_B39F_3C00_CF5C,
             &[0, 1, 20_699, 20_700, 41_399],
             &[
                 0xBDF8_0000,
@@ -720,28 +742,32 @@ mod tests {
         if !dispatcher.supports(Lane::Avx2Fma) {
             return;
         }
-        let profile = KokoroMatMul::AttentionScores { sequence: 19 };
-        let dimensions = profile.dimensions().unwrap();
-        let lhs = pattern(dimensions.lhs_elements().unwrap(), 7, 37, 18, 10.0);
-        let rhs = pattern(dimensions.rhs_elements().unwrap(), 11, 41, 20, 10.0);
-        let mut scalar = vec![0.0; dimensions.output_elements().unwrap()];
-        let mut vector = vec![0.0; scalar.len()];
-        dispatcher
-            .matmul_with_lane(profile, &lhs, &rhs, &mut scalar, Lane::Scalar)
-            .unwrap();
-        dispatcher
-            .matmul_with_lane(profile, &lhs, &rhs, &mut vector, Lane::Avx2Fma)
-            .unwrap();
-        assert_eq!(
-            vector
-                .iter()
-                .map(|value| value.to_bits())
-                .collect::<Vec<_>>(),
-            scalar
-                .iter()
-                .map(|value| value.to_bits())
-                .collect::<Vec<_>>()
-        );
+        for profile in [
+            KokoroMatMul::AttentionScores { sequence: 19 },
+            KokoroMatMul::SourceLinear { samples: 600 },
+        ] {
+            let dimensions = profile.dimensions().unwrap();
+            let lhs = pattern(dimensions.lhs_elements().unwrap(), 7, 37, 18, 10.0);
+            let rhs = pattern(dimensions.rhs_elements().unwrap(), 11, 41, 20, 10.0);
+            let mut scalar = vec![0.0; dimensions.output_elements().unwrap()];
+            let mut vector = vec![0.0; scalar.len()];
+            dispatcher
+                .matmul_with_lane(profile, &lhs, &rhs, &mut scalar, Lane::Scalar)
+                .unwrap();
+            dispatcher
+                .matmul_with_lane(profile, &lhs, &rhs, &mut vector, Lane::Avx2Fma)
+                .unwrap();
+            assert_eq!(
+                vector
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                scalar
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

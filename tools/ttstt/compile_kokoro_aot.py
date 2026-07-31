@@ -40,6 +40,12 @@ ATTRIBUTE_BINARY_MULTIDIRECTIONAL = 1 << 0
 ATTRIBUTE_BINARY_RUNTIME_SHAPE_CHECK = 1 << 1
 ATTRIBUTE_VIEW_ALIAS = 1 << 0
 ATTRIBUTE_VIEW_STATIC_CONTROL = 1 << 1
+ATTRIBUTE_CONTROL_ABSENT = 0
+ATTRIBUTE_CONTROL_INITIALIZER = 1
+ATTRIBUTE_CONTROL_DYNAMIC = 2
+ATTRIBUTE_PAD_REFLECT = 1
+ATTRIBUTE_SCATTER_REDUCTION_NONE = 0
+ATTRIBUTE_SCATTER_ORDERED_UNIQUE = 1
 
 PINNED_MODEL_FILE = "kokoro-rten.onnx"
 PINNED_MODEL_BYTES = 124_604_222
@@ -287,7 +293,22 @@ LOWERED_F32_OPS = frozenset(
     }
 )
 LOWERED_VIEW_OPS = frozenset({"Reshape", "Squeeze", "Unsqueeze"})
-LOWERED_OPS = LOWERED_F32_OPS | LOWERED_VIEW_OPS
+LOWERED_MATERIAL_LAYOUT_OPS = frozenset(
+    {
+        "Transpose",
+        "Gather",
+        "Concat",
+        "Split",
+        "Expand",
+        "Shape",
+        "Slice",
+        "Pad",
+        "NonZero",
+        "ScatterND",
+    }
+)
+LOWERED_LAYOUT_OPS = LOWERED_VIEW_OPS | LOWERED_MATERIAL_LAYOUT_OPS
+LOWERED_OPS = LOWERED_F32_OPS | LOWERED_LAYOUT_OPS
 
 PINNED_LOWERING_COUNTS = {
     "Add": 465,
@@ -297,27 +318,37 @@ PINNED_LOWERING_COUNTS = {
     "Exp": 1,
     "FastGelu": 12,
     "Floor": 81,
+    "Gather": 135,
     "LayerNormalization": 19,
     "LeakyRelu": 28,
     "Mul": 737,
+    "NonZero": 1,
+    "Pad": 2,
     "ReduceMean": 130,
     "Reshape": 141,
     "Round": 1,
+    "ScatterND": 1,
     "Sigmoid": 1,
     "SkipLayerNormalization": 12,
     "Sin": 51,
+    "Shape": 73,
+    "Slice": 22,
     "Softmax": 12,
+    "Split": 74,
     "Sqrt": 90,
     "Squeeze": 5,
     "Sub": 68,
     "Tanh": 1,
+    "Transpose": 88,
     "Unsqueeze": 192,
+    "Concat": 72,
+    "Expand": 5,
 }
 
 # Filled from the canonical lowering stream after every record has passed the
 # operation-specific validator. This is deliberately separate from the model
 # hash: it seals the compiler's interpretation of the accepted graph.
-PINNED_LOWERING_SHA256 = "544ce73ccb271fb993b0c8636c48dd333ab6073199df3a9daea3c818e8a2024b"
+PINNED_LOWERING_SHA256 = "fd91172b0b96ae5f22a353664d381b58d4e708a6effaca2b183332e63d0b9920"
 
 LAYER_NORM_EPSILON_BITS = frozenset({0x2B8CBCCC, 0x3727C5AC})
 SKIP_LAYER_NORM_EPSILON_BITS = 0x2B8CBCCC
@@ -522,6 +553,239 @@ def view_attribute(
     )
 
 
+def transpose_attribute(permutation: Sequence[int], rank: int, dtype: int) -> bytes:
+    reject(len(permutation) > 4, "Transpose permutation exceeds rank four")
+    padded = tuple(int(axis) for axis in permutation) + (0,) * (4 - len(permutation))
+    return _attribute_record(
+        AOT_OPCODES["Transpose"],
+        struct.pack(
+            "<BBBBB3x4i",
+            rank,
+            rank,
+            dtype,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            len(permutation),
+            *padded,
+        ),
+    )
+
+
+def gather_attribute(
+    axis: int,
+    data_rank: int,
+    indices_rank: int,
+    output_rank: int,
+    dtype: int,
+    control_mode: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["Gather"],
+        struct.pack(
+            "<iBBBBBB2x",
+            axis,
+            data_rank,
+            indices_rank,
+            output_rank,
+            dtype,
+            control_mode,
+            ATTRIBUTE_LAYOUT_CHECKED,
+        ),
+    )
+
+
+def concat_attribute(
+    axis: int, rank: int, output_rank: int, dtype: int, input_count: int
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["Concat"],
+        struct.pack(
+            "<iBBBBB3x",
+            axis,
+            rank,
+            output_rank,
+            dtype,
+            input_count,
+            ATTRIBUTE_LAYOUT_CHECKED,
+        ),
+    )
+
+
+def split_attribute(
+    axis: int,
+    first_axis_len: int,
+    second_axis_len: int,
+    input_rank: int,
+    output_rank: int,
+    dtype: int,
+    output_count: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["Split"],
+        struct.pack(
+            "<iIIBBBBB3x",
+            axis,
+            first_axis_len,
+            second_axis_len,
+            input_rank,
+            output_rank,
+            dtype,
+            output_count,
+            ATTRIBUTE_LAYOUT_CHECKED,
+        ),
+    )
+
+
+def expand_attribute(
+    input_rank: int,
+    output_rank: int,
+    dtype: int,
+    control_mode: int,
+    control_rank: int,
+    producer_opcode: int,
+    target_dims: Sequence[int] = (),
+) -> bytes:
+    reject(len(target_dims) > 4, "Expand target rank exceeds four")
+    padded = tuple(int(dim) for dim in target_dims) + (0,) * (4 - len(target_dims))
+    return _attribute_record(
+        AOT_OPCODES["Expand"],
+        struct.pack(
+            "<BBBBBBH4i",
+            input_rank,
+            output_rank,
+            dtype,
+            control_mode,
+            control_rank,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            producer_opcode,
+            *padded,
+        ),
+    )
+
+
+def shape_attribute(
+    start: int,
+    end: int,
+    has_end: int,
+    input_rank: int,
+    output_rank: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["Shape"],
+        struct.pack(
+            "<iiBBBB4x",
+            start,
+            end,
+            input_rank,
+            output_rank,
+            has_end,
+            ATTRIBUTE_LAYOUT_CHECKED,
+        ),
+    )
+
+
+def slice_attribute(
+    input_rank: int,
+    output_rank: int,
+    dtype: int,
+    control_count: int,
+    axes_present: bool,
+    steps_present: bool,
+    control_modes: Sequence[int],
+    control_values: Sequence[int],
+    producer_opcodes: Sequence[int],
+) -> bytes:
+    reject(
+        len(control_modes) != 4
+        or len(control_values) != 4
+        or len(producer_opcodes) != 4,
+        "Slice requires four canonical control slots",
+    )
+    flags = (1 if axes_present else 0) | (2 if steps_present else 0)
+    return _attribute_record(
+        AOT_OPCODES["Slice"],
+        struct.pack(
+            "<BBBBBBH4B4x4q4H",
+            input_rank,
+            output_rank,
+            dtype,
+            control_count,
+            flags,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            0,
+            *control_modes,
+            *control_values,
+            *producer_opcodes,
+        ),
+    )
+
+
+def pad_attribute(
+    input_rank: int, output_rank: int, dtype: int, pads: Sequence[int]
+) -> bytes:
+    reject(len(pads) > 8, "Pad vector exceeds rank-four ABI")
+    padded = tuple(int(value) for value in pads) + (0,) * (8 - len(pads))
+    return _attribute_record(
+        AOT_OPCODES["Pad"],
+        struct.pack(
+            "<BBBBBBH8I",
+            input_rank,
+            output_rank,
+            dtype,
+            ATTRIBUTE_PAD_REFLECT,
+            len(pads),
+            ATTRIBUTE_LAYOUT_CHECKED,
+            0,
+            *padded,
+        ),
+    )
+
+
+def nonzero_attribute(input_rank: int, output_rank: int) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["NonZero"],
+        struct.pack(
+            "<BBBBBB2x",
+            input_rank,
+            output_rank,
+            9,
+            7,
+            ATTRIBUTE_LAYOUT_CHECKED,
+            1,
+        ),
+    )
+
+
+def scatter_nd_attribute(
+    data_rank: int,
+    indices_rank: int,
+    updates_rank: int,
+    output_rank: int,
+    dtype: int,
+    tuple_len: int,
+) -> bytes:
+    return _attribute_record(
+        AOT_OPCODES["ScatterND"],
+        struct.pack(
+            "<BBBBBBBBB3x",
+            data_rank,
+            indices_rank,
+            updates_rank,
+            output_rank,
+            dtype,
+            tuple_len,
+            ATTRIBUTE_SCATTER_REDUCTION_NONE,
+            ATTRIBUTE_SCATTER_ORDERED_UNIQUE,
+            ATTRIBUTE_LAYOUT_CHECKED,
+        ),
+    )
+
+
+def attribute_alignment(record: bytes) -> int:
+    reject(len(record) < 8, "attribute length rejected")
+    kind = struct.unpack_from("<H", record, 2)[0]
+    return 8 if kind == AOT_OPCODES["Slice"] else 4
+
+
 ATTRIBUTE_RECORD_BYTES = {
     AOT_OPCODES["Add"]: 16,
     AOT_OPCODES["Mul"]: 16,
@@ -537,6 +801,16 @@ ATTRIBUTE_RECORD_BYTES = {
     AOT_OPCODES["Reshape"]: 32,
     AOT_OPCODES["Squeeze"]: 32,
     AOT_OPCODES["Unsqueeze"]: 32,
+    AOT_OPCODES["Transpose"]: 32,
+    AOT_OPCODES["Gather"]: 20,
+    AOT_OPCODES["Concat"]: 20,
+    AOT_OPCODES["Split"]: 28,
+    AOT_OPCODES["Expand"]: 32,
+    AOT_OPCODES["Shape"]: 24,
+    AOT_OPCODES["Slice"]: 64,
+    AOT_OPCODES["Pad"]: 48,
+    AOT_OPCODES["NonZero"]: 16,
+    AOT_OPCODES["ScatterND"]: 20,
 }
 
 
@@ -711,6 +985,331 @@ def inspect_attribute_record(
             output_rank=output_rank,
             parameter_rank=parameter_rank,
         )
+    elif kind == AOT_OPCODES["Transpose"]:
+        input_rank, output_rank, dtype, layout, count = struct.unpack_from(
+            "<BBBBB", record, 8
+        )
+        permutation = struct.unpack_from("<4i", record, 16)
+        reject(any(record[13:16]), "Transpose reserved bytes rejected")
+        reject(
+            input_rank == 0
+            or input_rank > 4
+            or output_rank != input_rank
+            or dtype not in {1, 7}
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or count != input_rank
+            or any(permutation[count:])
+            or sorted(permutation[:count]) != list(range(input_rank)),
+            "Transpose contract rejected",
+        )
+        result.update(
+            input_rank=input_rank,
+            output_rank=output_rank,
+            dtype=dtype,
+            parameters=permutation[:count],
+        )
+    elif kind == AOT_OPCODES["Gather"]:
+        axis, data_rank, indices_rank, output_rank, dtype, control_mode, layout = (
+            struct.unpack_from("<iBBBBBB", record, 8)
+        )
+        reject(any(record[18:20]), "Gather reserved bytes rejected")
+        reject(
+            data_rank == 0
+            or data_rank > 4
+            or indices_rank > 4
+            or output_rank != data_rank - 1 + indices_rank
+            or output_rank > 4
+            or axis < -data_rank
+            or axis >= data_rank
+            or dtype not in {1, 3, 7}
+            or control_mode
+            not in {ATTRIBUTE_CONTROL_INITIALIZER, ATTRIBUTE_CONTROL_DYNAMIC}
+            or layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "Gather contract rejected",
+        )
+        result.update(
+            axis=axis,
+            input_rank=data_rank,
+            indices_rank=indices_rank,
+            output_rank=output_rank,
+            dtype=dtype,
+            control_mode=control_mode,
+        )
+    elif kind == AOT_OPCODES["Concat"]:
+        axis, input_rank, output_rank, dtype, input_count, layout = struct.unpack_from(
+            "<iBBBBB", record, 8
+        )
+        reject(any(record[17:20]), "Concat reserved bytes rejected")
+        reject(
+            input_rank == 0
+            or input_rank > 4
+            or output_rank != input_rank
+            or axis < -input_rank
+            or axis >= input_rank
+            or dtype not in {1, 7}
+            or input_count < 2
+            or input_count > 4
+            or layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "Concat contract rejected",
+        )
+        result.update(
+            axis=axis,
+            input_rank=input_rank,
+            output_rank=output_rank,
+            dtype=dtype,
+            input_count=input_count,
+        )
+    elif kind == AOT_OPCODES["Split"]:
+        (
+            axis,
+            first_axis_len,
+            second_axis_len,
+            input_rank,
+            output_rank,
+            dtype,
+            output_count,
+            layout,
+        ) = struct.unpack_from("<iIIBBBBB", record, 8)
+        reject(any(record[25:28]), "Split reserved bytes rejected")
+        reject(
+            input_rank == 0
+            or input_rank > 4
+            or output_rank != input_rank
+            or axis < -input_rank
+            or axis >= input_rank
+            or first_axis_len == 0
+            or second_axis_len == 0
+            or dtype != 1
+            or output_count != 2
+            or layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "Split contract rejected",
+        )
+        result.update(
+            axis=axis,
+            input_rank=input_rank,
+            output_rank=output_rank,
+            dtype=dtype,
+            output_count=output_count,
+            parameters=(first_axis_len, second_axis_len),
+        )
+    elif kind == AOT_OPCODES["Expand"]:
+        (
+            input_rank,
+            output_rank,
+            dtype,
+            control_mode,
+            control_rank,
+            layout,
+            producer_opcode,
+        ) = struct.unpack_from("<BBBBBBH", record, 8)
+        target_dims = struct.unpack_from("<4i", record, 16)
+        reject(
+            input_rank > 4
+            or output_rank < input_rank
+            or output_rank > 4
+            or dtype not in {1, 7}
+            or control_rank != 1
+            or layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "Expand rank/layout rejected",
+        )
+        if control_mode == ATTRIBUTE_CONTROL_INITIALIZER:
+            reject(
+                producer_opcode != 0
+                or any(dim <= 0 for dim in target_dims[:output_rank])
+                or any(target_dims[output_rank:]),
+                "Expand static target rejected",
+            )
+        elif control_mode == ATTRIBUTE_CONTROL_DYNAMIC:
+            reject(
+                producer_opcode not in AOT_OPCODES.values() or any(target_dims),
+                "Expand dynamic target rejected",
+            )
+        else:
+            raise CompileError("Expand control mode rejected")
+        result.update(
+            input_rank=input_rank,
+            output_rank=output_rank,
+            dtype=dtype,
+            control_mode=control_mode,
+            producer_opcode=producer_opcode,
+            parameters=target_dims[:output_rank]
+            if control_mode == ATTRIBUTE_CONTROL_INITIALIZER
+            else (),
+        )
+    elif kind == AOT_OPCODES["Shape"]:
+        start, end, input_rank, output_rank, has_end, layout = struct.unpack_from(
+            "<iiBBBB", record, 8
+        )
+        reject(any(record[20:24]), "Shape reserved bytes rejected")
+        reject(
+            start != 0
+            or end != 0
+            or has_end != 0
+            or input_rank == 0
+            or input_rank > 4
+            or output_rank != 1
+            or layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "Shape contract rejected",
+        )
+        result.update(
+            start=start,
+            end=end,
+            has_end=has_end,
+            input_rank=input_rank,
+            output_rank=output_rank,
+        )
+    elif kind == AOT_OPCODES["Slice"]:
+        input_rank, output_rank, dtype, control_count, flags, layout, reserved = (
+            struct.unpack_from("<BBBBBBH", record, 8)
+        )
+        control_modes = struct.unpack_from("<4B", record, 16)
+        control_values = struct.unpack_from("<4q", record, 24)
+        producer_opcodes = struct.unpack_from("<4H", record, 56)
+        reject(reserved != 0 or any(record[20:24]), "Slice reserved bytes rejected")
+        axes_present = bool(flags & 1)
+        steps_present = bool(flags & 2)
+        reject(
+            input_rank == 0
+            or input_rank > 4
+            or output_rank != input_rank
+            or dtype not in {1, 7}
+            or control_count != 2 + int(axes_present) + int(steps_present)
+            or flags & ~3
+            or layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "Slice rank/control contract rejected",
+        )
+        expected_presence = (True, True, axes_present, steps_present)
+        for slot, present in enumerate(expected_presence):
+            mode = control_modes[slot]
+            value = control_values[slot]
+            producer_opcode = producer_opcodes[slot]
+            if not present:
+                reject(
+                    mode != ATTRIBUTE_CONTROL_ABSENT
+                    or value != 0
+                    or producer_opcode != 0,
+                    "Slice absent control rejected",
+                )
+            elif mode == ATTRIBUTE_CONTROL_INITIALIZER:
+                reject(producer_opcode != 0, "Slice initializer provenance rejected")
+            elif mode == ATTRIBUTE_CONTROL_DYNAMIC:
+                reject(
+                    value != 0 or producer_opcode not in AOT_OPCODES.values(),
+                    "Slice dynamic provenance rejected",
+                )
+            else:
+                raise CompileError("Slice control mode rejected")
+        reject(
+            control_modes[0] != ATTRIBUTE_CONTROL_INITIALIZER,
+            "Slice starts must be an initializer",
+        )
+        reject(
+            axes_present
+            and (
+                control_modes[2] != ATTRIBUTE_CONTROL_INITIALIZER
+                or control_values[2] < -input_rank
+                or control_values[2] >= input_rank
+            ),
+            "Slice axes rejected",
+        )
+        reject(
+            steps_present
+            and (
+                control_modes[3] != ATTRIBUTE_CONTROL_INITIALIZER
+                or control_values[3] != 1
+            ),
+            "Slice step rejected",
+        )
+        result.update(
+            input_rank=input_rank,
+            output_rank=output_rank,
+            dtype=dtype,
+            control_count=control_count,
+            flags=flags,
+            control_modes=control_modes,
+            control_values=control_values,
+            producer_opcodes=producer_opcodes,
+        )
+    elif kind == AOT_OPCODES["Pad"]:
+        input_rank, output_rank, dtype, mode, count, layout, reserved = struct.unpack_from(
+            "<BBBBBBH", record, 8
+        )
+        pads = struct.unpack_from("<8I", record, 16)
+        reject(
+            reserved != 0
+            or input_rank == 0
+            or input_rank > 4
+            or output_rank != input_rank
+            or dtype != 1
+            or mode != ATTRIBUTE_PAD_REFLECT
+            or count != input_rank * 2
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or any(pads[count:]),
+            "Pad contract rejected",
+        )
+        result.update(
+            input_rank=input_rank,
+            output_rank=output_rank,
+            dtype=dtype,
+            mode=mode,
+            parameters=pads[:count],
+        )
+    elif kind == AOT_OPCODES["NonZero"]:
+        input_rank, output_rank, input_dtype, output_dtype, layout, row_major = (
+            struct.unpack_from("<BBBBBB", record, 8)
+        )
+        reject(any(record[14:16]), "NonZero reserved bytes rejected")
+        reject(
+            input_rank != 1
+            or output_rank != 2
+            or input_dtype != 9
+            or output_dtype != 7
+            or layout != ATTRIBUTE_LAYOUT_CHECKED
+            or row_major != 1,
+            "NonZero contract rejected",
+        )
+        result.update(
+            input_rank=input_rank,
+            output_rank=output_rank,
+            input_dtype=input_dtype,
+            output_dtype=output_dtype,
+            row_major=row_major,
+        )
+    elif kind == AOT_OPCODES["ScatterND"]:
+        (
+            data_rank,
+            indices_rank,
+            updates_rank,
+            output_rank,
+            dtype,
+            tuple_len,
+            reduction,
+            ordering,
+            layout,
+        ) = struct.unpack_from("<BBBBBBBBB", record, 8)
+        reject(any(record[17:20]), "ScatterND reserved bytes rejected")
+        reject(
+            data_rank != 2
+            or indices_rank != 3
+            or updates_rank != 2
+            or output_rank != 2
+            or dtype != 1
+            or tuple_len != 2
+            or reduction != ATTRIBUTE_SCATTER_REDUCTION_NONE
+            or ordering != ATTRIBUTE_SCATTER_ORDERED_UNIQUE
+            or layout != ATTRIBUTE_LAYOUT_CHECKED,
+            "ScatterND contract rejected",
+        )
+        result.update(
+            input_rank=data_rank,
+            indices_rank=indices_rank,
+            updates_rank=updates_rank,
+            output_rank=output_rank,
+            dtype=dtype,
+            tuple_len=tuple_len,
+            reduction=reduction,
+            ordering=ordering,
+        )
     else:
         input_rank, output_rank, dtype, flags, allowzero, count, layout, reserved = (
             struct.unpack_from("<BBBBBBBB", record, 8)
@@ -732,19 +1331,50 @@ def inspect_attribute_record(
         is_static = bool(flags & ATTRIBUTE_VIEW_STATIC_CONTROL)
         if kind == AOT_OPCODES["Reshape"]:
             reject(
-                (is_static and count != output_rank)
+                output_rank == 0
+                or (is_static and count != output_rank)
                 or (not is_static and count != 0),
                 "Reshape control contract rejected",
+            )
+            reject(
+                is_static
+                and (
+                    sum(value == -1 for value in parameters[:count]) > 1
+                    or any(value < -1 for value in parameters[:count])
+                    or any(
+                        value == 0 and axis >= input_rank
+                        for axis, value in enumerate(parameters[:count])
+                    )
+                ),
+                "Reshape parameters rejected",
             )
         elif kind == AOT_OPCODES["Unsqueeze"]:
             reject(
                 not is_static or count == 0 or output_rank != input_rank + count,
                 "Unsqueeze control contract rejected",
             )
+            normalized = tuple(
+                axis + output_rank if axis < 0 else axis
+                for axis in parameters[:count]
+            )
+            reject(
+                any(axis < 0 or axis >= output_rank for axis in normalized)
+                or len(set(normalized)) != len(normalized),
+                "Unsqueeze axes rejected",
+            )
         else:
             reject(
                 not is_static or count == 0 or output_rank + count != input_rank,
                 "Squeeze control contract rejected",
+            )
+            normalized = tuple(
+                axis + input_rank if axis < 0 else axis
+                for axis in parameters[:count]
+            )
+            reject(
+                any(axis < 0 or axis >= input_rank for axis in normalized)
+                or len(set(normalized)) != len(normalized),
+                "Squeeze axes rejected",
             )
         result.update(
             input_rank=input_rank,
@@ -778,6 +1408,10 @@ class LoweringRecord:
             len(self.inputs) > 0xFFFF or len(self.outputs) > 0xFFFF,
             "lowering binding count rejected",
         )
+        reject(
+            any(tensor_id < 0 or tensor_id > 0xFFFF_FFFF for tensor_id in self.inputs + self.outputs),
+            "lowering tensor ID rejected",
+        )
         inspect_attribute_record(self.attributes, self.opcode)
         header = struct.pack(
             "<IHBBHHI",
@@ -796,6 +1430,7 @@ class LoweringRecord:
 
 
 def lowering_plan_bytes(records: Sequence[LoweringRecord]) -> bytes:
+    reject(len(records) > 0xFFFF_FFFF, "lowering record count rejected")
     return b"KKLOWER1" + struct.pack("<I", len(records)) + b"".join(
         record.canonical_bytes() for record in records
     )
@@ -972,7 +1607,7 @@ def emit_aot(program: AotProgram, model_sha256: bytes, voices_sha256: bytes) -> 
         bindings.extend(op.outputs)
         if op.attributes:
             inspect_attribute_record(op.attributes, op.opcode)
-            attribute_offset = align_up(len(data), 4)
+            attribute_offset = align_up(len(data), attribute_alignment(op.attributes))
             data.extend(b"\0" * (attribute_offset - len(data)))
             data.extend(op.attributes)
             attribute_len = len(op.attributes)
@@ -1120,6 +1755,7 @@ def inspect_aot(artifact: bytes) -> dict[str, Any]:
     binding_section = sections["bindings"]
     data_section = sections["data"]
     attribute_kinds: Counter[int] = Counter()
+    previous_attribute_end: int | None = None
     for index in range(op_section["count"]):
         offset = op_section["offset"] + index * 40
         (
@@ -1140,6 +1776,15 @@ def inspect_aot(artifact: bytes) -> dict[str, Any]:
             binding_start + input_count + output_count > binding_section["count"],
             f"op {index}: binding range rejected",
         )
+        for binding_index in range(
+            binding_start, binding_start + input_count + output_count
+        ):
+            binding_offset = binding_section["offset"] + binding_index * 4
+            tensor_id = struct.unpack_from("<I", artifact, binding_offset)[0]
+            reject(
+                tensor_id >= sections["tensors"]["count"],
+                f"op {index}: tensor binding rejected",
+            )
         reject(
             any(artifact[offset + 5 : offset + 8])
             or any(artifact[offset + 32 : offset + 40]),
@@ -1148,17 +1793,35 @@ def inspect_aot(artifact: bytes) -> dict[str, Any]:
         if attribute_len == 0:
             reject(attribute_offset != 0, f"op {index}: empty attribute is non-canonical")
         else:
-            reject(attribute_offset % 4 != 0, f"op {index}: attribute alignment rejected")
             attribute_end = attribute_offset + attribute_len
             reject(
                 attribute_end > data_section["count"],
                 f"op {index}: attribute range rejected",
             )
             start = data_section["offset"] + attribute_offset
+            attribute_record = artifact[start : start + attribute_len]
+            alignment = attribute_alignment(attribute_record)
+            reject(
+                attribute_offset % alignment != 0,
+                f"op {index}: attribute alignment rejected",
+            )
+            if previous_attribute_end is not None:
+                expected_offset = align_up(previous_attribute_end, alignment)
+                reject(
+                    attribute_offset != expected_offset,
+                    f"op {index}: attribute order/gap rejected",
+                )
+                padding_start = data_section["offset"] + previous_attribute_end
+                padding_end = data_section["offset"] + expected_offset
+                reject(
+                    any(artifact[padding_start:padding_end]),
+                    f"op {index}: attribute padding rejected",
+                )
             decoded = inspect_attribute_record(
-                artifact[start : start + attribute_len], opcode
+                attribute_record, opcode
             )
             attribute_kinds[int(decoded["kind"])] += 1
+            previous_attribute_end = attribute_end
     phase_section = sections["phases"]
     phase_ids = tuple(artifact[phase_section["offset"] + index * 48] for index in range(2))
     reject(phase_ids != (0, 1), "phase IDs rejected")
@@ -1319,6 +1982,88 @@ def synthetic_attribute_fixture_artifact() -> bytes:
         ((1, (1, 2, 4)), (1, (1, 2, 4)), (1, (4,)), (1, (4,))),
         ((1, (1, 2, 4)),),
         skip_layer_norm_attribute(0x2B8CBCCC, 3, 3, 1),
+    )
+    operation(
+        "Transpose",
+        ((1, (1, 2, 3)),),
+        ((1, (1, 3, 2)),),
+        transpose_attribute((0, 2, 1), 3, 1),
+    )
+    operation(
+        "Gather",
+        ((1, (2, 3)), (3, ())),
+        ((1, (3,)),),
+        gather_attribute(0, 2, 0, 1, 1, ATTRIBUTE_CONTROL_INITIALIZER),
+    )
+    operation(
+        "Concat",
+        ((1, (2, 2)), (1, (2, 3))),
+        ((1, (2, 5)),),
+        concat_attribute(1, 2, 2, 1, 2),
+    )
+    operation(
+        "Split",
+        ((1, (2, 5)), (3, (2,))),
+        ((1, (2, 2)), (1, (2, 3))),
+        split_attribute(1, 2, 3, 2, 2, 1, 2),
+    )
+    operation(
+        "Expand",
+        ((3, (2, 1)), (3, (3,))),
+        ((3, (3, 2, 2)),),
+        expand_attribute(
+            2,
+            3,
+            7,
+            ATTRIBUTE_CONTROL_DYNAMIC,
+            1,
+            AOT_OPCODES["Where"],
+        ),
+    )
+    operation(
+        "Shape",
+        ((1, (2, 3, 4)),),
+        ((3, (3,)),),
+        shape_attribute(0, 0, 0, 3, 1),
+    )
+    operation(
+        "Slice",
+        ((1, (2, 3, 4)), (3, (1,)), (3, (1,)), (3, (1,)), (3, (1,))),
+        ((1, (2, 2, 4)),),
+        slice_attribute(
+            3,
+            3,
+            1,
+            4,
+            True,
+            True,
+            (
+                ATTRIBUTE_CONTROL_INITIALIZER,
+                ATTRIBUTE_CONTROL_INITIALIZER,
+                ATTRIBUTE_CONTROL_INITIALIZER,
+                ATTRIBUTE_CONTROL_INITIALIZER,
+            ),
+            (0, 2, 1, 1),
+            (0, 0, 0, 0),
+        ),
+    )
+    operation(
+        "Pad",
+        ((1, (1, 1, 3)), (3, (6,))),
+        ((1, (1, 1, 6)),),
+        pad_attribute(3, 3, 1, (0, 0, 2, 0, 0, 1)),
+    )
+    operation(
+        "NonZero",
+        ((6, (4,)),),
+        ((3, (1, 2)),),
+        nonzero_attribute(1, 2),
+    )
+    operation(
+        "ScatterND",
+        ((1, (2, 3)), (3, (1, 2, 2)), (1, (1, 2))),
+        ((1, (2, 3)),),
+        scatter_nd_attribute(2, 3, 2, 2, 1, 2),
     )
 
     def view_operation(
@@ -1575,7 +2320,11 @@ def _validate_binary_broadcast(
 
 
 def _small_int_initializer(
-    analysis: GraphAnalysis, tensor_name: str, context: str
+    analysis: GraphAnalysis,
+    tensor_name: str,
+    context: str,
+    *,
+    max_count: int = 4,
 ) -> tuple[int, ...]:
     tensor = analysis.initializers.get(tensor_name)
     reject(tensor is None, f"{context}: controller is not an initializer")
@@ -1585,7 +2334,7 @@ def _small_int_initializer(
         f"{context}: controller must be rank-one INT64",
     )
     count = int(tensor.dims[0])
-    reject(count < 1 or count > 4, f"{context}: controller length rejected")
+    reject(count < 1 or count > max_count, f"{context}: controller length rejected")
     values = initializer_values(analysis.onnx, tensor)
     reject(len(values) != count, f"{context}: controller payload length changed")
     reject(
@@ -1964,6 +2713,710 @@ def build_supported_lowerings(analysis: GraphAnalysis) -> list[LoweringRecord]:
             )
             continue
 
+        if op_type == "Transpose":
+            require_arity(node, index, 1, 1)
+            reject(
+                node.domain != "" or set(node_attrs) != {"perm"},
+                f"{context}: Transpose attributes changed",
+            )
+            permutation = tuple(int(axis) for axis in node_attrs["perm"])
+            data, output = node.input[0], node.output[0]
+            dtype = analysis.dtypes[data]
+            input_rank = analysis.ranks[data]
+            output_rank = analysis.ranks[output]
+            reject(
+                dtype not in {1, 7}
+                or analysis.dtypes[output] != dtype
+                or input_rank == 0
+                or output_rank != input_rank
+                or len(permutation) != input_rank
+                or sorted(permutation) != list(range(input_rank)),
+                f"{context}: Transpose dtype/rank/permutation rejected",
+            )
+            input_shape = _declared_shape(analysis, data)
+            output_shape = _declared_shape(analysis, output)
+            if input_shape is not None and output_shape is not None:
+                for output_axis, input_axis in enumerate(permutation):
+                    source = input_shape[input_axis]
+                    target = output_shape[output_axis]
+                    reject(
+                        isinstance(source, int)
+                        and isinstance(target, int)
+                        and source != target,
+                        f"{context}: Transpose output dimension mismatch",
+                    )
+            reject(
+                tensor_facts[output].alias_of is not None,
+                f"{context}: Transpose output cannot be a view",
+            )
+            append(
+                index,
+                node,
+                transpose_attribute(permutation, input_rank, dtype),
+                f"{DTYPE_NAMES[dtype]}:r{input_rank}:perm="
+                + ",".join(map(str, permutation)),
+            )
+            continue
+
+        if op_type == "Gather":
+            require_arity(node, index, 2, 1)
+            reject(
+                node.domain != "" or set(node_attrs) != {"axis"},
+                f"{context}: Gather attributes changed",
+            )
+            data, indices = node.input
+            output = node.output[0]
+            dtype = analysis.dtypes[data]
+            data_rank = analysis.ranks[data]
+            indices_rank = analysis.ranks[indices]
+            output_rank = analysis.ranks[output]
+            axis = int(node_attrs["axis"])
+            normalized_axis = _normalize_axes((axis,), data_rank, context)[0]
+            reject(
+                dtype not in {1, 3, 7}
+                or analysis.dtypes[indices] != 7
+                or analysis.dtypes[output] != dtype
+                or output_rank != data_rank - 1 + indices_rank
+                or output_rank > 4,
+                f"{context}: Gather dtype/rank rejected",
+            )
+            for name in (data, indices, output):
+                _validate_declared_rank(analysis, name)
+            data_shape = _declared_shape(analysis, data)
+            indices_shape = _declared_shape(analysis, indices)
+            output_shape = _declared_shape(analysis, output)
+            if data_shape is not None and indices_shape is not None and output_shape is not None:
+                expected = (
+                    data_shape[:normalized_axis]
+                    + indices_shape
+                    + data_shape[normalized_axis + 1 :]
+                )
+                reject(len(expected) != len(output_shape), f"{context}: Gather output rank")
+                for source, target in zip(expected, output_shape):
+                    reject(
+                        isinstance(source, int)
+                        and isinstance(target, int)
+                        and source != target,
+                        f"{context}: Gather output dimension mismatch",
+                    )
+            static_indices = indices in analysis.initializers
+            if static_indices:
+                index_tensor = analysis.initializers[indices]
+                element_count = 1
+                for dim in index_tensor.dims:
+                    element_count *= int(dim)
+                reject(element_count > 4, f"{context}: Gather index fixture widened")
+                index_values = tuple(
+                    int(value) for value in initializer_values(analysis.onnx, index_tensor)
+                )
+                if (
+                    data_shape is not None
+                    and isinstance(data_shape[normalized_axis], int)
+                ):
+                    axis_len = int(data_shape[normalized_axis])
+                    reject(
+                        any(value < -axis_len or value >= axis_len for value in index_values),
+                        f"{context}: Gather initializer index rejected",
+                    )
+            control_mode = (
+                ATTRIBUTE_CONTROL_INITIALIZER
+                if static_indices
+                else ATTRIBUTE_CONTROL_DYNAMIC
+            )
+            reject(
+                tensor_facts[output].alias_of is not None,
+                f"{context}: Gather output cannot be a view",
+            )
+            append(
+                index,
+                node,
+                gather_attribute(
+                    axis, data_rank, indices_rank, output_rank, dtype, control_mode
+                ),
+                f"{DTYPE_NAMES[dtype]}:r{data_rank},indices-r{indices_rank}"
+                f"->r{output_rank}:axis={axis}:"
+                + ("static" if static_indices else "dynamic"),
+            )
+            continue
+
+        if op_type == "Concat":
+            reject(
+                len(node.input) < 2
+                or len(node.input) > 4
+                or any(not name for name in node.input)
+                or len(node.output) != 1
+                or not node.output[0],
+                f"{context}: Concat arity rejected",
+            )
+            reject(
+                node.domain != "" or set(node_attrs) != {"axis"},
+                f"{context}: Concat attributes changed",
+            )
+            output = node.output[0]
+            dtype = analysis.dtypes[node.input[0]]
+            rank = analysis.ranks[node.input[0]]
+            output_rank = analysis.ranks[output]
+            axis = int(node_attrs["axis"])
+            normalized_axis = _normalize_axes((axis,), rank, context)[0]
+            reject(
+                dtype not in {1, 7}
+                or any(analysis.dtypes[name] != dtype for name in node.input)
+                or analysis.dtypes[output] != dtype
+                or any(analysis.ranks[name] != rank for name in node.input)
+                or output_rank != rank,
+                f"{context}: Concat dtype/rank rejected",
+            )
+            input_shapes = [_declared_shape(analysis, name) for name in node.input]
+            output_shape = _declared_shape(analysis, output)
+            if output_shape is not None:
+                for dimension in range(rank):
+                    known_inputs = [
+                        int(shape[dimension])
+                        for shape in input_shapes
+                        if shape is not None and isinstance(shape[dimension], int)
+                    ]
+                    target = output_shape[dimension]
+                    if dimension == normalized_axis:
+                        if len(known_inputs) == len(input_shapes) and isinstance(target, int):
+                            reject(
+                                sum(known_inputs) != target,
+                                f"{context}: Concat axis dimension mismatch",
+                            )
+                    else:
+                        reject(
+                            len(set(known_inputs)) > 1
+                            or (
+                                known_inputs
+                                and isinstance(target, int)
+                                and target != known_inputs[0]
+                            ),
+                            f"{context}: Concat non-axis dimension mismatch",
+                        )
+            reject(
+                tensor_facts[output].alias_of is not None,
+                f"{context}: Concat output cannot be a view",
+            )
+            append(
+                index,
+                node,
+                concat_attribute(axis, rank, output_rank, dtype, len(node.input)),
+                f"{DTYPE_NAMES[dtype]}:r{rank}:axis={axis}:inputs={len(node.input)}",
+            )
+            continue
+
+        if op_type == "Split":
+            require_arity(node, index, 2, 2)
+            reject(
+                node.domain != "" or set(node_attrs) != {"axis"},
+                f"{context}: Split attributes changed",
+            )
+            data, split_control = node.input
+            axis = int(node_attrs["axis"])
+            input_rank = analysis.ranks[data]
+            normalized_axis = _normalize_axes((axis,), input_rank, context)[0]
+            split_lengths = _small_int_initializer(analysis, split_control, context)
+            reject(
+                len(split_lengths) != 2
+                or any(length <= 0 or length > 0xFFFF_FFFF for length in split_lengths)
+                or analysis.dtypes[data] != 1
+                or analysis.dtypes[split_control] != 7
+                or any(analysis.dtypes[output] != 1 for output in node.output)
+                or any(analysis.ranks[output] != input_rank for output in node.output),
+                f"{context}: Split dtype/rank/length rejected",
+            )
+            input_shape = _declared_shape(analysis, data)
+            output_shapes = [_declared_shape(analysis, output) for output in node.output]
+            if input_shape is not None and isinstance(input_shape[normalized_axis], int):
+                reject(
+                    sum(split_lengths) != input_shape[normalized_axis],
+                    f"{context}: Split lengths do not cover input axis",
+                )
+            for output_index, output_shape in enumerate(output_shapes):
+                if output_shape is None:
+                    continue
+                for dimension, target in enumerate(output_shape):
+                    expected = (
+                        split_lengths[output_index]
+                        if dimension == normalized_axis
+                        else None if input_shape is None else input_shape[dimension]
+                    )
+                    reject(
+                        isinstance(expected, int)
+                        and isinstance(target, int)
+                        and expected != target,
+                        f"{context}: Split output dimension mismatch",
+                    )
+            reject(
+                any(tensor_facts[output].alias_of is not None for output in node.output),
+                f"{context}: Split outputs cannot be views",
+            )
+            append(
+                index,
+                node,
+                split_attribute(
+                    axis,
+                    split_lengths[0],
+                    split_lengths[1],
+                    input_rank,
+                    input_rank,
+                    1,
+                    2,
+                ),
+                f"FLOAT:r{input_rank}:axis={axis}:split="
+                + ",".join(map(str, split_lengths)),
+            )
+            continue
+
+        if op_type == "Expand":
+            require_arity(node, index, 2, 1)
+            reject(node.domain != "" or node_attrs, f"{context}: Expand attributes changed")
+            data, shape_control = node.input
+            output = node.output[0]
+            dtype = analysis.dtypes[data]
+            input_rank = analysis.ranks[data]
+            output_rank = analysis.ranks[output]
+            reject(
+                dtype not in {1, 7}
+                or analysis.dtypes[shape_control] != 7
+                or analysis.ranks[shape_control] != 1
+                or analysis.dtypes[output] != dtype
+                or output_rank < input_rank
+                or output_rank > 4,
+                f"{context}: Expand dtype/rank rejected",
+            )
+            control_shape = _declared_shape(analysis, shape_control)
+            reject(
+                control_shape is not None
+                and isinstance(control_shape[0], int)
+                and control_shape[0] != output_rank,
+                f"{context}: Expand control length mismatch",
+            )
+            if shape_control in analysis.initializers:
+                target_dims = _small_int_initializer(analysis, shape_control, context)
+                reject(
+                    len(target_dims) != output_rank
+                    or any(dim <= 0 or dim > 0x7FFF_FFFF for dim in target_dims),
+                    f"{context}: Expand static target rejected",
+                )
+                control_mode = ATTRIBUTE_CONTROL_INITIALIZER
+                producer_opcode = 0
+            else:
+                producer_index = analysis.producers.get(shape_control)
+                reject(
+                    producer_index is None
+                    or graph.node[producer_index].op_type != "Where",
+                    f"{context}: Expand dynamic target provenance changed",
+                )
+                target_dims = ()
+                control_mode = ATTRIBUTE_CONTROL_DYNAMIC
+                producer_opcode = AOT_OPCODES["Where"]
+            input_shape = _declared_shape(analysis, data)
+            output_shape = _declared_shape(analysis, output)
+            if input_shape is not None and output_shape is not None:
+                leading = output_rank - input_rank
+                for input_axis, source in enumerate(input_shape):
+                    target = output_shape[leading + input_axis]
+                    reject(
+                        isinstance(source, int)
+                        and isinstance(target, int)
+                        and source not in {1, target},
+                        f"{context}: Expand broadcast mismatch",
+                    )
+            reject(
+                tensor_facts[output].alias_of is not None,
+                f"{context}: Expand output cannot be a view",
+            )
+            append(
+                index,
+                node,
+                expand_attribute(
+                    input_rank,
+                    output_rank,
+                    dtype,
+                    control_mode,
+                    1,
+                    producer_opcode,
+                    target_dims,
+                ),
+                f"{DTYPE_NAMES[dtype]}:r{input_rank}->r{output_rank}:"
+                + ("static" if control_mode == ATTRIBUTE_CONTROL_INITIALIZER else "dynamic:Where"),
+            )
+            continue
+
+        if op_type == "Shape":
+            require_arity(node, index, 1, 1)
+            reject(
+                node.domain != "" or node_attrs != {"start": 0},
+                f"{context}: Shape attributes changed",
+            )
+            data, output = node.input[0], node.output[0]
+            input_rank = analysis.ranks[data]
+            output_rank = analysis.ranks[output]
+            reject(
+                analysis.dtypes[data] not in {1, 7}
+                or analysis.dtypes[output] != 7
+                or input_rank == 0
+                or input_rank > 4
+                or output_rank != 1,
+                f"{context}: Shape dtype/rank rejected",
+            )
+            output_shape = _declared_shape(analysis, output)
+            reject(
+                output_shape is not None
+                and isinstance(output_shape[0], int)
+                and output_shape[0] != input_rank,
+                f"{context}: Shape result length mismatch",
+            )
+            reject(
+                tensor_facts[output].alias_of is not None,
+                f"{context}: Shape output cannot be a view",
+            )
+            append(
+                index,
+                node,
+                shape_attribute(0, 0, 0, input_rank, output_rank),
+                f"input-r{input_rank}:start=0:end=rank",
+            )
+            continue
+
+        if op_type == "Slice":
+            reject(
+                len(node.input) < 3
+                or len(node.input) > 5
+                or any(not name for name in node.input)
+                or len(node.output) != 1
+                or not node.output[0],
+                f"{context}: Slice arity rejected",
+            )
+            reject(node.domain != "" or node_attrs, f"{context}: Slice attributes changed")
+            data, output = node.input[0], node.output[0]
+            dtype = analysis.dtypes[data]
+            input_rank = analysis.ranks[data]
+            output_rank = analysis.ranks[output]
+            reject(
+                dtype not in {1, 7}
+                or analysis.dtypes[output] != dtype
+                or input_rank == 0
+                or output_rank != input_rank,
+                f"{context}: Slice data dtype/rank rejected",
+            )
+            axes_present = len(node.input) >= 4
+            steps_present = len(node.input) == 5
+            control_modes = [ATTRIBUTE_CONTROL_ABSENT] * 4
+            control_values = [0] * 4
+            producer_opcodes = [0] * 4
+            for slot, control in enumerate(node.input[1:]):
+                reject(
+                    analysis.dtypes[control] != 7 or analysis.ranks[control] != 1,
+                    f"{context}: Slice control dtype/rank rejected",
+                )
+                control_shape = _declared_shape(analysis, control)
+                reject(
+                    control_shape is not None
+                    and isinstance(control_shape[0], int)
+                    and control_shape[0] != 1,
+                    f"{context}: Slice control must contain one value",
+                )
+                if control in analysis.initializers:
+                    values = _small_int_initializer(analysis, control, context)
+                    reject(len(values) != 1, f"{context}: Slice control widened")
+                    control_modes[slot] = ATTRIBUTE_CONTROL_INITIALIZER
+                    control_values[slot] = values[0]
+                else:
+                    producer_index = analysis.producers.get(control)
+                    reject(
+                        slot != 1
+                        or producer_index is None
+                        or graph.node[producer_index].op_type != "Unsqueeze",
+                        f"{context}: Slice dynamic control provenance changed",
+                    )
+                    control_modes[slot] = ATTRIBUTE_CONTROL_DYNAMIC
+                    producer_opcodes[slot] = AOT_OPCODES["Unsqueeze"]
+            reject(
+                control_modes[0] != ATTRIBUTE_CONTROL_INITIALIZER,
+                f"{context}: Slice starts must be constant",
+            )
+            axis = control_values[2] if axes_present else 0
+            normalized_axis = _normalize_axes((axis,), input_rank, context)[0]
+            reject(
+                steps_present
+                and (
+                    control_modes[3] != ATTRIBUTE_CONTROL_INITIALIZER
+                    or control_values[3] != 1
+                ),
+                f"{context}: negative/non-unit Slice step rejected",
+            )
+            input_shape = _declared_shape(analysis, data)
+            output_shape = _declared_shape(analysis, output)
+            if input_shape is not None and output_shape is not None:
+                for dimension, (source, target) in enumerate(zip(input_shape, output_shape)):
+                    if dimension != normalized_axis:
+                        reject(
+                            isinstance(source, int)
+                            and isinstance(target, int)
+                            and source != target,
+                            f"{context}: Slice non-axis dimension mismatch",
+                        )
+                    elif (
+                        control_modes[1] == ATTRIBUTE_CONTROL_INITIALIZER
+                        and isinstance(source, int)
+                        and isinstance(target, int)
+                    ):
+                        start = control_values[0]
+                        end = control_values[1]
+                        normalized_start = (
+                            max(0, min(source, start + source))
+                            if start < 0
+                            else min(source, start)
+                        )
+                        normalized_end = (
+                            max(0, min(source, end + source))
+                            if end < 0
+                            else min(source, end)
+                        )
+                        reject(
+                            max(0, normalized_end - normalized_start) != target,
+                            f"{context}: Slice output dimension mismatch",
+                        )
+            reject(
+                tensor_facts[output].alias_of is not None,
+                f"{context}: Slice output cannot be a view",
+            )
+            provenance = []
+            for slot, label in enumerate(("starts", "ends", "axes", "steps")):
+                if control_modes[slot] == ATTRIBUTE_CONTROL_ABSENT:
+                    provenance.append(f"{label}=default")
+                elif control_modes[slot] == ATTRIBUTE_CONTROL_INITIALIZER:
+                    provenance.append(f"{label}={control_values[slot]}")
+                else:
+                    provenance.append(f"{label}=dynamic:Unsqueeze")
+            append(
+                index,
+                node,
+                slice_attribute(
+                    input_rank,
+                    output_rank,
+                    dtype,
+                    len(node.input) - 1,
+                    axes_present,
+                    steps_present,
+                    control_modes,
+                    control_values,
+                    producer_opcodes,
+                ),
+                f"{DTYPE_NAMES[dtype]}:r{input_rank}:" + ":".join(provenance),
+            )
+            continue
+
+        if op_type == "Pad":
+            require_arity(node, index, 2, 1)
+            reject(
+                node.domain != "" or node_attrs != {"mode": b"reflect"},
+                f"{context}: non-reflect Pad rejected",
+            )
+            data, pads_control = node.input
+            output = node.output[0]
+            input_rank = analysis.ranks[data]
+            output_rank = analysis.ranks[output]
+            pads = _small_int_initializer(
+                analysis, pads_control, context, max_count=8
+            )
+            reject(
+                analysis.dtypes[data] != 1
+                or analysis.dtypes[pads_control] != 7
+                or analysis.dtypes[output] != 1
+                or input_rank == 0
+                or output_rank != input_rank
+                or len(pads) != input_rank * 2
+                or any(value < 0 or value > 0xFFFF_FFFF for value in pads),
+                f"{context}: Pad dtype/rank/vector rejected",
+            )
+            input_shape = _declared_shape(analysis, data)
+            output_shape = _declared_shape(analysis, output)
+            if input_shape is not None:
+                for dimension in range(input_rank):
+                    before = pads[dimension]
+                    after = pads[input_rank + dimension]
+                    source = input_shape[dimension]
+                    if isinstance(source, int):
+                        reject(
+                            (before != 0 and before >= source)
+                            or (after != 0 and after >= source),
+                            f"{context}: reflect Pad exceeds input dimension",
+                        )
+                        if output_shape is not None and isinstance(output_shape[dimension], int):
+                            reject(
+                                output_shape[dimension] != before + source + after,
+                                f"{context}: Pad output dimension mismatch",
+                            )
+            reject(
+                tensor_facts[output].alias_of is not None,
+                f"{context}: Pad output cannot be a view",
+            )
+            append(
+                index,
+                node,
+                pad_attribute(input_rank, output_rank, 1, pads),
+                f"FLOAT:r{input_rank}:reflect:pads=" + ",".join(map(str, pads)),
+            )
+            continue
+
+        if op_type == "NonZero":
+            require_arity(node, index, 1, 1)
+            reject(node.domain != "" or node_attrs, f"{context}: NonZero contract changed")
+            data, output = node.input[0], node.output[0]
+            input_rank = analysis.ranks[data]
+            output_rank = analysis.ranks[output]
+            reject(
+                analysis.dtypes[data] != 9
+                or analysis.dtypes[output] != 7
+                or input_rank != 1
+                or output_rank != 2,
+                f"{context}: NonZero dtype/rank rejected",
+            )
+            _validate_declared_rank(analysis, data)
+            _validate_declared_rank(analysis, output)
+            output_shape = _declared_shape(analysis, output)
+            reject(
+                output_shape is not None
+                and isinstance(output_shape[0], int)
+                and output_shape[0] != input_rank,
+                f"{context}: NonZero coordinate dimension mismatch",
+            )
+            reject(
+                tensor_facts[output].alias_of is not None,
+                f"{context}: NonZero output cannot be a view",
+            )
+            append(
+                index,
+                node,
+                nonzero_attribute(input_rank, output_rank),
+                "BOOL:r1->INT64:r2:row-major",
+            )
+            continue
+
+        if op_type == "ScatterND":
+            require_arity(node, index, 3, 1)
+            reject(
+                node.domain != "" or node_attrs != {"reduction": b"none"},
+                f"{context}: ScatterND reduction contract changed",
+            )
+            data, indices, updates = node.input
+            output = node.output[0]
+            ranks = (
+                analysis.ranks[data],
+                analysis.ranks[indices],
+                analysis.ranks[updates],
+                analysis.ranks[output],
+            )
+            reject(
+                (
+                    analysis.dtypes[data],
+                    analysis.dtypes[indices],
+                    analysis.dtypes[updates],
+                    analysis.dtypes[output],
+                )
+                != (1, 7, 1, 1)
+                or ranks != (2, 3, 2, 2),
+                f"{context}: ScatterND dtype/rank rejected",
+            )
+            for name in (data, indices, updates, output):
+                _validate_declared_rank(analysis, name)
+            indices_shape = _declared_shape(analysis, indices)
+            reject(
+                indices_shape is None
+                or not isinstance(indices_shape[-1], int)
+                or indices_shape[-1] != ranks[0],
+                f"{context}: ScatterND index tuple length rejected",
+            )
+            _validate_same_numeric_shape(analysis, (data, output), context)
+            updates_shape = _declared_shape(analysis, updates)
+            if updates_shape is not None:
+                for dimension, (index_dim, update_dim) in enumerate(
+                    zip(indices_shape[:-1], updates_shape)
+                ):
+                    reject(
+                        isinstance(index_dim, int)
+                        and isinstance(update_dim, int)
+                        and index_dim != update_dim,
+                        f"{context}: ScatterND updates dimension {dimension} mismatch",
+                    )
+
+            data_producer = analysis.producers.get(data)
+            indices_producer = analysis.producers.get(indices)
+            updates_producer = analysis.producers.get(updates)
+            reject(
+                data_producer is None
+                or graph.node[data_producer].op_type != "Squeeze"
+                or indices_producer is None
+                or graph.node[indices_producer].op_type != "Concat"
+                or updates_producer is None
+                or graph.node[updates_producer].op_type != "Reshape",
+                f"{context}: ScatterND tail provenance changed",
+            )
+            assert indices_producer is not None and updates_producer is not None
+            indices_node = graph.node[indices_producer]
+            reject(
+                indices_node.domain != ""
+                or attributes(analysis.onnx, indices_node) != {"axis": -1}
+                or len(indices_node.input) != 2,
+                f"{context}: ScatterND index constructor changed",
+            )
+
+            def nonzero_ancestors(tensor_name: str) -> set[int]:
+                pending = [tensor_name]
+                visited: set[str] = set()
+                found: set[int] = set()
+                while pending:
+                    name = pending.pop()
+                    if name in visited:
+                        continue
+                    visited.add(name)
+                    producer = analysis.producers.get(name)
+                    if producer is None:
+                        continue
+                    producer_node = graph.node[producer]
+                    if producer_node.op_type == "NonZero":
+                        found.add(producer)
+                    else:
+                        pending.extend(input_name for input_name in producer_node.input if input_name)
+                return found
+
+            branch_nonzeros = [
+                nonzero_ancestors(input_name) for input_name in indices_node.input
+            ]
+            reject(
+                len(branch_nonzeros) != 2
+                or len(branch_nonzeros[0]) != 1
+                or branch_nonzeros[0] != branch_nonzeros[1],
+                f"{context}: ScatterND indices are not derived from one NonZero",
+            )
+            updates_node = graph.node[updates_producer]
+            reject(
+                updates_node.domain != ""
+                or attributes(analysis.onnx, updates_node) not in ({}, {"allowzero": 0})
+                or len(updates_node.input) != 2,
+                f"{context}: ScatterND updates Reshape changed",
+            )
+            shape_producer = analysis.producers.get(updates_node.input[1])
+            reject(
+                shape_producer is None
+                or graph.node[shape_producer].op_type != "Concat"
+                or attributes(analysis.onnx, graph.node[shape_producer]) != {"axis": 0},
+                f"{context}: ScatterND updates shape provenance changed",
+            )
+            reject(
+                tensor_facts[output].alias_of is not None,
+                f"{context}: ScatterND output cannot be a view",
+            )
+            append(
+                index,
+                node,
+                scatter_nd_attribute(2, 3, 2, 2, 1, 2),
+                "FLOAT:r2:indices-r3:updates-r2:tuple=2:reduction=none:ordered-unique",
+            )
+            continue
+
         assert op_type in LOWERED_VIEW_OPS
         require_arity(node, index, 2, 1)
         reject(node.domain != "", f"{context}: view domain changed")
@@ -2079,6 +3532,16 @@ def infer_output_ranks(
     ranks: dict[str, int] = {
         name: rank for name, rank in declared_ranks.items() if rank is not None
     }
+    # Rank-one INT64 tensors used as shape controllers carry a second static
+    # descriptor: their element count. Propagating that count through the
+    # iSTFT Shape/Slice/Concat tail proves the final dynamic Reshape rank as
+    # two. Falling back to its data rank would incorrectly classify the
+    # ScatterND updates as rank three.
+    shape_vector_lengths: dict[str, int] = {
+        name: int(tensor.dims[0])
+        for name, tensor in initializers.items()
+        if int(tensor.data_type) == 7 and len(tensor.dims) == 1
+    }
 
     unary = {
         "Atan",
@@ -2120,12 +3583,48 @@ def infer_output_ranks(
         return ranks.get(node.input[index])
 
     for index, node in enumerate(graph.node):
+        attrs = attributes(onnx, node)
+        first = input_rank(node)
+
+        if node.op_type == "Shape" and first is not None and node.output:
+            start = int(attrs.get("start", 0))
+            end = int(attrs.get("end", 2**63 - 1))
+            normalized_start, normalized_end, step = slice(start, end).indices(first)
+            shape_vector_lengths[node.output[0]] = len(
+                range(normalized_start, normalized_end, step)
+            )
+        elif node.op_type == "Slice" and node.output and node.input:
+            source_length = shape_vector_lengths.get(node.input[0])
+            starts = axes_from_input(onnx, node, initializers, 1)
+            ends = axes_from_input(onnx, node, initializers, 2)
+            axes = axes_from_input(onnx, node, initializers, 3)
+            steps = axes_from_input(onnx, node, initializers, 4)
+            if (
+                source_length is not None
+                and starts is not None
+                and ends is not None
+                and len(starts) == len(ends) == 1
+                and (axes is None or axes in {(0,), (-1,)})
+                and (steps is None or steps == (1,))
+            ):
+                normalized_start, normalized_end, step = slice(
+                    starts[0], ends[0], 1
+                ).indices(source_length)
+                shape_vector_lengths[node.output[0]] = len(
+                    range(normalized_start, normalized_end, step)
+                )
+        elif node.op_type == "Concat" and node.output:
+            axis = int(attrs.get("axis", 0))
+            lengths = [shape_vector_lengths.get(name) for name in node.input]
+            if axis in {0, -1} and lengths and all(length is not None for length in lengths):
+                shape_vector_lengths[node.output[0]] = sum(
+                    int(length) for length in lengths if length is not None
+                )
+
         missing = [name for name in node.output if name and name not in ranks]
         if not missing:
             continue
-        attrs = attributes(onnx, node)
         inferred: list[int | None]
-        first = input_rank(node)
         if node.op_type in unary:
             inferred = [first] * len(node.output)
         elif node.op_type in broadcast:
@@ -2195,12 +3694,13 @@ def infer_output_ranks(
             if shape_tensor is not None:
                 result = len(initializer_values(onnx, shape_tensor))
             else:
-                # The only prepared-graph Reshape missing declared shape is the
-                # final iSTFT scatter reshape; it preserves its rank-3 data.
-                result = first
+                result = shape_vector_lengths.get(node.input[1])
             inferred = [result]
         elif node.op_type == "Expand":
-            inferred = [ranks.get(node.output[0], first)]
+            target_rank = (
+                shape_vector_lengths.get(node.input[1]) if len(node.input) > 1 else None
+            )
+            inferred = [ranks.get(node.output[0], target_rank or first)]
         elif node.op_type == "ConstantOfShape":
             inferred = [ranks.get(node.output[0])]
         elif node.op_type == "LSTM":
@@ -2810,6 +4310,9 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
         if name not in LOWERED_UNARY_OPS
     )
     view_count = sum(lowering_counts[name] for name in LOWERED_VIEW_OPS)
+    material_layout_count = sum(
+        lowering_counts[name] for name in LOWERED_MATERIAL_LAYOUT_OPS
+    )
     return {
         "schema": ANALYSIS_SCHEMA,
         "tool_version": TOOL_VERSION,
@@ -2882,11 +4385,17 @@ def make_report(analysis: GraphAnalysis) -> dict[str, Any]:
             "f32_core_records": core_f32_count,
             "f32_unary_records": unary_count,
             "f32_total_records": core_f32_count + unary_count,
+            "layout_material_records": material_layout_count,
+            "layout_view_records": view_count,
+            "layout_total_records": material_layout_count + view_count,
             "view_alias_records": view_count,
             "view_static_controllers": static_views,
             "view_dynamic_controllers": dynamic_views,
             "excluded_non_f32_add": op_counts["Add"] - lowering_counts["Add"],
             "operator_counts": dict(sorted(lowering_counts.items())),
+            "layout_operator_counts": {
+                name: lowering_counts[name] for name in sorted(LOWERED_LAYOUT_OPS)
+            },
             "attribute_size_counts": {
                 str(size): count for size, count in sorted(attribute_bytes.items())
             },
@@ -3048,7 +4557,7 @@ def analyze(
         lowering_digest = lowering_plan_sha256(analysis.lowerings)
         reject(
             lowering_digest != PINNED_LOWERING_SHA256,
-            "CPU lowering plan digest changed",
+            f"CPU lowering plan digest changed: {lowering_digest}",
         )
     analysis.report = make_report(analysis)
     return analysis

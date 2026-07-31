@@ -61,28 +61,28 @@ class KokoroAotFixtureTests(unittest.TestCase):
         first = TOOL.synthetic_attribute_fixture_artifact()
         second = TOOL.synthetic_attribute_fixture_artifact()
         self.assertEqual(first, second)
-        self.assertEqual(len(first), 9_332)
+        self.assertEqual(len(first), 14_260)
         self.assertEqual(
             TOOL.hashlib.sha256(first).hexdigest(),
-            "f0dd87a37795952218ba3d388618f0a96bf156e6ff38563d2657cd5488a8990b",
+            "c28964ad9f347ec5df9ba3bd2d583d14aa9da9124d2e828a983bf1474c3a0084",
         )
         inspected = TOOL.inspect_aot(first)
         self.assertEqual(
             inspected["sections"],
             {
-                "tensors": 58,
+                "tensors": 90,
                 "slots": 0,
-                "ops": 22,
-                "bindings": 58,
+                "ops": 32,
+                "bindings": 90,
                 "phases": 2,
-                "data": 340,
+                "data": 644,
             },
         )
         self.assertEqual(inspected["attribute_abi"]["version"], 1)
-        self.assertEqual(inspected["attribute_abi"]["records"], 22)
+        self.assertEqual(inspected["attribute_abi"]["records"], 32)
         self.assertEqual(
             inspected["artifact_sha256"],
-            "b7f753066166dd676fbe6523c2ac2c801f9fc3ace952aa33ac6e175660f6335e",
+            "eb620cfaade0098dc6f63f5053f08094c1c9a3a935371f5edddbd24dea8261a4",
         )
 
     def test_attribute_records_fail_closed(self) -> None:
@@ -104,6 +104,55 @@ class KokoroAotFixtureTests(unittest.TestCase):
                     TOOL.inspect_attribute_record(bytes(corrupt), TOOL.AOT_OPCODES["Add"])
         with self.assertRaisesRegex(TOOL.CompileError, "kind"):
             TOOL.inspect_attribute_record(record, TOOL.AOT_OPCODES["Mul"])
+        with self.assertRaisesRegex(TOOL.CompileError, "Unsqueeze axes"):
+            TOOL.inspect_attribute_record(
+                TOOL.view_attribute(
+                    "Unsqueeze",
+                    2,
+                    4,
+                    1,
+                    static_control=True,
+                    parameters=(1, 1),
+                )
+            )
+        with self.assertRaisesRegex(TOOL.CompileError, "Reshape parameters"):
+            TOOL.inspect_attribute_record(
+                TOOL.view_attribute(
+                    "Reshape",
+                    2,
+                    2,
+                    1,
+                    static_control=True,
+                    parameters=(-1, -1),
+                )
+            )
+        with self.assertRaisesRegex(TOOL.CompileError, "Transpose contract"):
+            TOOL.inspect_attribute_record(
+                TOOL.transpose_attribute((0, 0), 2, 1)
+            )
+        with self.assertRaisesRegex(TOOL.CompileError, "Slice step"):
+            TOOL.inspect_attribute_record(
+                TOOL.slice_attribute(
+                    3,
+                    3,
+                    1,
+                    4,
+                    True,
+                    True,
+                    (
+                        TOOL.ATTRIBUTE_CONTROL_INITIALIZER,
+                        TOOL.ATTRIBUTE_CONTROL_INITIALIZER,
+                        TOOL.ATTRIBUTE_CONTROL_INITIALIZER,
+                        TOOL.ATTRIBUTE_CONTROL_INITIALIZER,
+                    ),
+                    (0, 2, 1, -1),
+                    (0, 0, 0, 0),
+                )
+            )
+        scatter = bytearray(TOOL.scatter_nd_attribute(2, 3, 2, 2, 1, 2))
+        scatter[15] = 0
+        with self.assertRaisesRegex(TOOL.CompileError, "ScatterND contract"):
+            TOOL.inspect_attribute_record(bytes(scatter))
 
     def test_fixture_payload_tamper_is_rejected(self) -> None:
         artifact = bytearray(TOOL.synthetic_fixture_artifact())
@@ -198,9 +247,9 @@ class KokoroAotFixtureTests(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, completed.stdout)
             self.assertIn("section[2]=Ops", completed.stdout)
-            self.assertIn("count=22", completed.stdout)
+            self.assertIn("count=32", completed.stdout)
             self.assertIn(
-                "artifact_sha256=b7f753066166dd676fbe6523c2ac2c801f9fc3ace952aa33ac6e175660f6335e",
+                "artifact_sha256=eb620cfaade0098dc6f63f5053f08094c1c9a3a935371f5edddbd24dea8261a4",
                 completed.stdout,
             )
 
@@ -226,7 +275,7 @@ class KokoroPinnedGraphTests(unittest.TestCase):
         self.assertEqual(report["quantized_lowering"]["conv_direct"], 7)
         self.assertEqual(
             report["tensor_contract"]["descriptor_sha256"],
-            "cf1edfd4de99fea4a424f86a3e9cb89eb0c7e94140078bc7c2033fa5f48e6a81",
+            "8bad04023c1aa2d2810646ea4558942e23e8aab1bd901c6cb8d292845db2c653",
         )
         self.assertEqual(
             report["quantized_lowering"]["plan_sha256"],
@@ -235,10 +284,13 @@ class KokoroPinnedGraphTests(unittest.TestCase):
         self.assertEqual(report["phases"]["phase0_source_nodes"], [0, 1_747])
         self.assertEqual(report["phases"]["phase1_source_nodes"], [1_747, 3_615])
         lowering = report["cpu_attribute_lowering"]
-        self.assertEqual(lowering["records"], 2_223)
+        self.assertEqual(lowering["records"], 2_696)
         self.assertEqual(lowering["f32_core_records"], 1_629)
         self.assertEqual(lowering["f32_unary_records"], 256)
         self.assertEqual(lowering["f32_total_records"], 1_885)
+        self.assertEqual(lowering["layout_material_records"], 473)
+        self.assertEqual(lowering["layout_view_records"], 338)
+        self.assertEqual(lowering["layout_total_records"], 811)
         self.assertEqual(lowering["view_alias_records"], 338)
         self.assertEqual(lowering["view_static_controllers"], 287)
         self.assertEqual(lowering["view_dynamic_controllers"], 51)
@@ -246,6 +298,12 @@ class KokoroPinnedGraphTests(unittest.TestCase):
         self.assertEqual(lowering["operator_counts"], TOOL.PINNED_LOWERING_COUNTS)
         self.assertEqual(lowering["plan_sha256"], TOOL.PINNED_LOWERING_SHA256)
         self.assertFalse(lowering["executable_graph_emitted"])
+        self.assertEqual(
+            self.analysis.ranks[
+                "/decoder/decoder/generator/istft/stft/Reshape_1_output_0"
+            ],
+            2,
+        )
 
     def test_model_hash_change_is_rejected(self) -> None:
         with self.assertRaisesRegex(TOOL.CompileError, "SHA-256"):
@@ -302,6 +360,70 @@ class KokoroPinnedGraphTests(unittest.TestCase):
                 TOOL.build_supported_lowerings(self.analysis)
         finally:
             allowzero.i = original
+
+    def test_layout_permutation_change_is_rejected(self) -> None:
+        node = next(
+            node for node in self.analysis.model.graph.node if node.op_type == "Transpose"
+        )
+        permutation = next(
+            attribute for attribute in node.attribute if attribute.name == "perm"
+        )
+        original = tuple(permutation.ints)
+        del permutation.ints[:]
+        permutation.ints.extend([0] * len(original))
+        try:
+            with self.assertRaisesRegex(TOOL.CompileError, "Transpose.*rejected"):
+                TOOL.build_supported_lowerings(self.analysis)
+        finally:
+            del permutation.ints[:]
+            permutation.ints.extend(original)
+
+    def test_negative_slice_step_is_rejected(self) -> None:
+        node = next(
+            node
+            for node in self.analysis.model.graph.node
+            if node.op_type == "Slice" and len(node.input) == 5
+        )
+        negative_one = next(
+            name
+            for name, tensor in self.analysis.initializers.items()
+            if int(tensor.data_type) == 7
+            and tuple(int(dim) for dim in tensor.dims) == (1,)
+            and TOOL.initializer_values(self.analysis.onnx, tensor) == (-1,)
+        )
+        original = node.input[4]
+        node.input[4] = negative_one
+        try:
+            with self.assertRaisesRegex(TOOL.CompileError, "negative/non-unit Slice step"):
+                TOOL.build_supported_lowerings(self.analysis)
+        finally:
+            node.input[4] = original
+
+    def test_non_reflect_pad_is_rejected(self) -> None:
+        node = next(node for node in self.analysis.model.graph.node if node.op_type == "Pad")
+        mode = next(attribute for attribute in node.attribute if attribute.name == "mode")
+        original = mode.s
+        mode.s = b"constant"
+        try:
+            with self.assertRaisesRegex(TOOL.CompileError, "non-reflect Pad"):
+                TOOL.build_supported_lowerings(self.analysis)
+        finally:
+            mode.s = original
+
+    def test_scatter_reduction_change_is_rejected(self) -> None:
+        node = next(
+            node for node in self.analysis.model.graph.node if node.op_type == "ScatterND"
+        )
+        reduction = next(
+            attribute for attribute in node.attribute if attribute.name == "reduction"
+        )
+        original = reduction.s
+        reduction.s = b"add"
+        try:
+            with self.assertRaisesRegex(TOOL.CompileError, "reduction contract"):
+                TOOL.build_supported_lowerings(self.analysis)
+        finally:
+            reduction.s = original
 
 
 if __name__ == "__main__":

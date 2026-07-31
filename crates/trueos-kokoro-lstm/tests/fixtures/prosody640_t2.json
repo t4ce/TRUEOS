@@ -1,0 +1,41 @@
+{
+  "execution_provider": "CPUExecutionProvider",
+  "fixture": "prosody640_t2.bin",
+  "graph_optimization": "ORT_DISABLE_ALL",
+  "inter_op_threads": 1,
+  "intra_op_threads": 1,
+  "ir_version": 10,
+  "node": {
+    "activations": [
+      "Sigmoid",
+      "Tanh",
+      "Tanh"
+    ],
+    "batch": 1,
+    "direction": "bidirectional",
+    "gate_order": "IOFC",
+    "hidden_size": 256,
+    "initial_h_c": "implicit zero",
+    "input_forget": 0,
+    "input_width": 640,
+    "layout": 0,
+    "op_type": "LSTM",
+    "peepholes": "absent",
+    "sequence": 2,
+    "sequence_lens": "absent"
+  },
+  "onnx_version": "1.21.0",
+  "onnxruntime_version": "1.27.0",
+  "opset": 20,
+  "payload": {
+    "arrays": [
+      "Y",
+      "Y_h",
+      "Y_c"
+    ],
+    "dtype": "float32",
+    "endianness": "little"
+  },
+  "schema": "trueos-kokoro-lstm-ort-fixture-v1",
+  "sha256": "e6ee9b0131577f6b7424ca21ac8897f11f621ca6e4a7c4e038eeec511fcf0e65"
+}

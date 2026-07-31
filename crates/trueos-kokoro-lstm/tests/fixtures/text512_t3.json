@@ -1,0 +1,41 @@
+{
+  "execution_provider": "CPUExecutionProvider",
+  "fixture": "text512_t3.bin",
+  "graph_optimization": "ORT_DISABLE_ALL",
+  "inter_op_threads": 1,
+  "intra_op_threads": 1,
+  "ir_version": 10,
+  "node": {
+    "activations": [
+      "Sigmoid",
+      "Tanh",
+      "Tanh"
+    ],
+    "batch": 1,
+    "direction": "bidirectional",
+    "gate_order": "IOFC",
+    "hidden_size": 256,
+    "initial_h_c": "implicit zero",
+    "input_forget": 0,
+    "input_width": 512,
+    "layout": 0,
+    "op_type": "LSTM",
+    "peepholes": "absent",
+    "sequence": 3,
+    "sequence_lens": "absent"
+  },
+  "onnx_version": "1.21.0",
+  "onnxruntime_version": "1.27.0",
+  "opset": 20,
+  "payload": {
+    "arrays": [
+      "Y",
+      "Y_h",
+      "Y_c"
+    ],
+    "dtype": "float32",
+    "endianness": "little"
+  },
+  "schema": "trueos-kokoro-lstm-ort-fixture-v1",
+  "sha256": "6698f5c69b2323c8105095044697a140a11a790159c5233b9626742fe90e6bbe"
+}

@@ -1,0 +1,15 @@
+[package]
+name = "trueos-kokoro-resize"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+description = "Allocation-free pinned ONNX Resize kernels for TRUEOS Kokoro"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+libm = { version = "0.2", default-features = false }

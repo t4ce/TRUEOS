@@ -140,8 +140,29 @@ It accepts rank-four-or-smaller checked strided views and leaves outputs
 unchanged on validation or math failure. A separate model-specific duration
 kernel fuses the proven 50-logit Sigmoid/ReduceSum/Div/Round/Clip/Cast/CumSum
 chain. It returns both the INT64 cumulative-duration vector and the checked
-frame count used to size phase 1; an ONNX Runtime 1.28 fixture covers the exact
-barrier contract.
+frame count used to size phase 1; a pinned ONNX Runtime oracle fixture covers
+the exact barrier contract.
+
+The typed layout lane covers another 811 pinned nodes: all Transpose, Gather,
+Concat, two-way Split, Expand, Shape, Slice, both reflection Pad nodes,
+NonZero, ScatterND, and 338
+statically proven Reshape/Squeeze/Unsqueeze aliases. Copy kernels are generic across the model's
+six admitted element types, normalize negative axes and indices exactly, and
+validate every shape, permutation, broadcast, buffer, and alias before writing
+the destination.
+
+All six model Resize nodes also have a fixed no-std lane. Its admitted
+contracts are nearest/asymmetric time upsampling by 2 or 300 and
+linear/half-pixel down/up sampling by 300; batch and channel dimensions cannot
+change. The scale enum, divisibility checks, and cooperative output ranges keep
+shape policy out of the hot loop, and stable ONNX Runtime fixtures cover every
+mode/scale family bit-for-bit.
+
+The remaining scalar/control lane implements every pinned Cast, Range,
+CumSum, comparison, boolean-And, Where, and ConstantOfShape form. That is 359
+source nodes before quant-fusion overlap is removed. It uses the same rank-four
+broadcast rules, checks integer ranges and cumulative overflow, and performs a
+validation pass before any cast, range, or cumulative destination is changed.
 
 ## F4 shell commands
 

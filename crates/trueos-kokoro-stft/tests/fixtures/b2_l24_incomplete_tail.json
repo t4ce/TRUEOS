@@ -1,0 +1,114 @@
+{
+  "execution_provider": "CPUExecutionProvider",
+  "fixture": "b2_l24_incomplete_tail.bin",
+  "graph_optimization": "ORT_DISABLE_ALL",
+  "inter_op_threads": 1,
+  "intra_op_threads": 1,
+  "ir_version": 10,
+  "node": {
+    "component_order": [
+      "real",
+      "imaginary"
+    ],
+    "forward_imaginary_sign": "negative sine",
+    "frame_length": 20,
+    "frame_step": 5,
+    "implicit_padding": false,
+    "input_shape": [
+      2,
+      24
+    ],
+    "onesided": 1,
+    "op_type": "STFT",
+    "output_shape": [
+      2,
+      1,
+      11,
+      2
+    ],
+    "window_bits": [
+      "0x00000000",
+      "0x3cc878f6",
+      "0x3dc3910d",
+      "0x3e530dd0",
+      "0x3eb0e443",
+      "0x3f000000",
+      "0x3f278dde",
+      "0x3f4b3c8c",
+      "0x3f678dde",
+      "0x3f79bc38",
+      "0x3f800000",
+      "0x3f79bc38",
+      "0x3f678dde",
+      "0x3f4b3c8c",
+      "0x3f278dde",
+      "0x3f000000",
+      "0x3eb0e443",
+      "0x3e530dd0",
+      "0x3dc3910d",
+      "0x3cc878f6"
+    ]
+  },
+  "onnx_version": "1.21.0",
+  "onnxruntime_version": "1.27.0",
+  "opset": 20,
+  "payload": {
+    "array": "output",
+    "dtype": "float32",
+    "endianness": "little"
+  },
+  "pinned_model": {
+    "node_index": 2159,
+    "node_name": "/decoder/decoder/generator/STFT",
+    "sha256": "239d9f4df112a375bea52146570b97eb5c5af727c007761ee121ed123fd1ab29"
+  },
+  "root_tables": {
+    "coefficient_sha256": "31ebf6912db12febc90e02da9adb05f37f1a94e68491e0be7f4031347724134c",
+    "cos_bits": [
+      "0x3f800000",
+      "0x3f737871",
+      "0x3f4f1bbd",
+      "0x3f167918",
+      "0x3e9e377a",
+      "0x00000000",
+      "0xbe9e377a",
+      "0xbf167918",
+      "0xbf4f1bbd",
+      "0xbf737871",
+      "0xbf800000",
+      "0xbf737871",
+      "0xbf4f1bbd",
+      "0xbf167918",
+      "0xbe9e377a",
+      "0x00000000",
+      "0x3e9e377a",
+      "0x3f167918",
+      "0x3f4f1bbd",
+      "0x3f737871"
+    ],
+    "negative_sin_bits": [
+      "0x00000000",
+      "0xbe9e377a",
+      "0xbf167918",
+      "0xbf4f1bbd",
+      "0xbf737871",
+      "0xbf800000",
+      "0xbf737871",
+      "0xbf4f1bbd",
+      "0xbf167918",
+      "0xbe9e377a",
+      "0x00000000",
+      "0x3e9e377a",
+      "0x3f167918",
+      "0x3f4f1bbd",
+      "0x3f737871",
+      "0x3f800000",
+      "0x3f737871",
+      "0x3f4f1bbd",
+      "0x3f167918",
+      "0x3e9e377a"
+    ]
+  },
+  "schema": "trueos-kokoro-stft-ort-fixture-v1",
+  "sha256": "378e6a1fb7b7ad278fddd193e98d148e5f2fad7264ed4db01523ac629550096b"
+}

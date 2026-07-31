@@ -5,14 +5,30 @@
 //!
 //! The pinned graph uses rank-four-or-smaller tensors for 1,444 f32 binary
 //! elementwise nodes, 130 `ReduceMean`, 19 `LayerNormalization`, 12 `Softmax`,
-//! 12 `FastGelu`, 12 `SkipLayerNormalization`, and 256 unary math nodes. This
-//! crate covers 1,885 pinned nodes in total, keeps ONNX operation boundaries
+//! 12 `FastGelu`, 12 `SkipLayerNormalization`, 256 unary math nodes, and 50
+//! scalar-exponent `Pow(x, 2.0)` nodes. This crate covers 1,935 pinned nodes in
+//! total, keeps ONNX operation boundaries
 //! explicit, and requires caller-owned storage.
 
 use core::mem::size_of;
 
 pub const MAX_RANK: usize = 4;
-pub const PINNED_NODE_COVERAGE: usize = 1_885;
+pub const PINNED_BINARY_NODES: usize = 1_444;
+pub const PINNED_REDUCE_MEAN_NODES: usize = 130;
+pub const PINNED_LAYER_NORMALIZATION_NODES: usize = 19;
+pub const PINNED_SOFTMAX_NODES: usize = 12;
+pub const PINNED_FAST_GELU_NODES: usize = 12;
+pub const PINNED_SKIP_LAYER_NORMALIZATION_NODES: usize = 12;
+pub const PINNED_UNARY_MATH_NODES: usize = 256;
+pub const PINNED_POW_SQUARE_NODES: usize = 50;
+pub const PINNED_NODE_COVERAGE: usize = PINNED_BINARY_NODES
+    + PINNED_REDUCE_MEAN_NODES
+    + PINNED_LAYER_NORMALIZATION_NODES
+    + PINNED_SOFTMAX_NODES
+    + PINNED_FAST_GELU_NODES
+    + PINNED_SKIP_LAYER_NORMALIZATION_NODES
+    + PINNED_UNARY_MATH_NODES
+    + PINNED_POW_SQUARE_NODES;
 
 /// Validation failures are reported before an output buffer is modified.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -350,6 +366,7 @@ pub fn sub(
 
 #[derive(Clone, Copy)]
 enum UnaryOperation {
+    Square,
     Sqrt,
     Floor,
     Sin,
@@ -365,6 +382,7 @@ enum UnaryOperation {
 impl UnaryOperation {
     fn apply(self, value: f32) -> Result<f32, Error> {
         let result = match self {
+            Self::Square => value * value,
             Self::Sqrt => {
                 if value < 0.0 {
                     return Err(Error::DomainError);
@@ -393,6 +411,19 @@ impl UnaryOperation {
             Err(Error::NonFiniteOutput)
         }
     }
+}
+
+/// The pinned ONNX `Pow` family: FLOAT input raised to scalar FLOAT `2.0`.
+///
+/// All 50 source nodes share exponent bits `0x4000_0000`, so this deliberately
+/// exposes square rather than a general, slower `powf` operation.
+pub fn pow_square(
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    unary_elementwise(UnaryOperation::Square, input, input_layout, output, output_layout)
 }
 
 /// ONNX `Sqrt` over checked rank-four strided views.
@@ -1568,7 +1599,8 @@ mod tests {
 
     #[test]
     fn shape_and_axis_errors_are_explicit() {
-        assert_eq!(PINNED_NODE_COVERAGE, 1_885);
+        assert_eq!(PINNED_POW_SQUARE_NODES, 50);
+        assert_eq!(PINNED_NODE_COVERAGE, 1_935);
         assert_eq!(Shape::new(&[1, 1, 1, 1, 1]), Err(Error::RankTooLarge));
         assert_eq!(Shape::new(&[2, 0]), Err(Error::ZeroDimension));
         let shape = Shape::new(&[2, 3]).unwrap();

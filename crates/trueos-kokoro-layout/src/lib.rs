@@ -18,6 +18,10 @@ pub const PINNED_CONCAT_NODES: usize = 72;
 pub const PINNED_SPLIT_NODES: usize = 74;
 pub const PINNED_EXPAND_NODES: usize = 5;
 pub const PINNED_SHAPE_NODES: usize = 73;
+pub const PINNED_SLICE_NODES: usize = 22;
+pub const PINNED_REFLECT_PAD_NODES: usize = 2;
+pub const PINNED_NONZERO_NODES: usize = 1;
+pub const PINNED_SCATTER_ND_NODES: usize = 1;
 pub const PINNED_STATIC_VIEW_NODES: usize = 338;
 pub const PINNED_NODE_COVERAGE: usize = PINNED_TRANSPOSE_NODES
     + PINNED_GATHER_NODES
@@ -25,6 +29,10 @@ pub const PINNED_NODE_COVERAGE: usize = PINNED_TRANSPOSE_NODES
     + PINNED_SPLIT_NODES
     + PINNED_EXPAND_NODES
     + PINNED_SHAPE_NODES
+    + PINNED_SLICE_NODES
+    + PINNED_REFLECT_PAD_NODES
+    + PINNED_NONZERO_NODES
+    + PINNED_SCATTER_ND_NODES
     + PINNED_STATIC_VIEW_NODES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,6 +50,9 @@ pub enum Error {
     InvalidIndex,
     EmptyInputList,
     InvalidSplit,
+    UnsupportedStep,
+    InvalidPadding,
+    UnorderedIndices,
     InvalidReshape,
     UnsupportedAllowZero,
     Aliasing,
@@ -373,6 +384,221 @@ pub fn expand<T: Copy>(
     Ok(output_shape)
 }
 
+/// Materialize the pinned graph's positive-unit-step ONNX `Slice` form.
+///
+/// `axes=None` means axes `0..starts.len()`. All 22 pinned nodes use the
+/// default step or an explicit step of one; any changed graph requesting a
+/// reverse or strided slice is rejected instead of silently mis-executed.
+pub fn slice<T: Copy>(
+    input: &[T],
+    input_shape: Shape,
+    starts: &[i64],
+    ends: &[i64],
+    axes: Option<&[isize]>,
+    steps: Option<&[i64]>,
+    output: &mut [T],
+) -> Result<Shape, Error> {
+    validate_element::<T>()?;
+    validate_buffer(input, input_shape)?;
+    if starts.len() != ends.len()
+        || axes.is_some_and(|values| values.len() != starts.len())
+        || steps.is_some_and(|values| values.len() != starts.len())
+    {
+        return Err(Error::ShapeMismatch);
+    }
+    if starts.len() > input_shape.rank() {
+        return Err(Error::InvalidAxis);
+    }
+
+    let mut selected = [false; MAX_RANK];
+    let mut normalized_starts = [0usize; MAX_RANK];
+    let mut output_dims = input_shape.dims;
+    for index in 0..starts.len() {
+        if steps.is_some_and(|values| values[index] != 1) {
+            return Err(Error::UnsupportedStep);
+        }
+        let axis = if let Some(values) = axes {
+            input_shape.normalized_axis(values[index])?
+        } else {
+            index
+        };
+        if selected[axis] {
+            return Err(Error::DuplicateAxis);
+        }
+        selected[axis] = true;
+        let dimension = input_shape.dims[axis] as i64;
+        let start = normalize_slice_bound(starts[index], dimension);
+        let end = normalize_slice_bound(ends[index], dimension);
+        let length = end.saturating_sub(start) as usize;
+        if length == 0 {
+            return Err(Error::ZeroDimension);
+        }
+        normalized_starts[axis] = start as usize;
+        output_dims[axis] = length;
+    }
+    let output_shape = Shape::new(&output_dims[..input_shape.rank()])?;
+    validate_buffer(output, output_shape)?;
+    reject_overlap(output, input)?;
+
+    let mut output_coordinates = [0usize; MAX_RANK];
+    let mut input_coordinates = [0usize; MAX_RANK];
+    for (output_index, destination) in output.iter_mut().enumerate() {
+        unravel(output_index, output_shape, &mut output_coordinates);
+        for axis in 0..input_shape.rank() {
+            input_coordinates[axis] = output_coordinates[axis] + normalized_starts[axis];
+        }
+        *destination = input[linear_index(input_shape, &input_coordinates)];
+    }
+    Ok(output_shape)
+}
+
+/// Materialize ONNX `Pad(mode="reflect")` for non-negative pinned pads.
+pub fn reflect_pad<T: Copy>(
+    input: &[T],
+    input_shape: Shape,
+    pads: &[usize],
+    output: &mut [T],
+) -> Result<Shape, Error> {
+    validate_element::<T>()?;
+    validate_buffer(input, input_shape)?;
+    if pads.len() != input_shape.rank() * 2 {
+        return Err(Error::InvalidPadding);
+    }
+    let mut output_dims = input_shape.dims;
+    for axis in 0..input_shape.rank() {
+        let before = pads[axis];
+        let after = pads[input_shape.rank() + axis];
+        let dimension = input_shape.dims[axis];
+        if before >= dimension && before != 0 || after >= dimension && after != 0 {
+            return Err(Error::InvalidPadding);
+        }
+        output_dims[axis] = before
+            .checked_add(dimension)
+            .and_then(|value| value.checked_add(after))
+            .ok_or(Error::ShapeOverflow)?;
+    }
+    let output_shape = Shape::new(&output_dims[..input_shape.rank()])?;
+    validate_buffer(output, output_shape)?;
+    reject_overlap(output, input)?;
+
+    let mut output_coordinates = [0usize; MAX_RANK];
+    let mut input_coordinates = [0usize; MAX_RANK];
+    for (output_index, destination) in output.iter_mut().enumerate() {
+        unravel(output_index, output_shape, &mut output_coordinates);
+        for axis in 0..input_shape.rank() {
+            let before = pads[axis] as isize;
+            let dimension = input_shape.dims[axis] as isize;
+            let coordinate = output_coordinates[axis] as isize - before;
+            input_coordinates[axis] = if coordinate < 0 {
+                -coordinate as usize
+            } else if coordinate >= dimension {
+                (2 * dimension - 2 - coordinate) as usize
+            } else {
+                coordinate as usize
+            };
+        }
+        *destination = input[linear_index(input_shape, &input_coordinates)];
+    }
+    Ok(output_shape)
+}
+
+/// Materialize ONNX `NonZero` in row-major input order.
+///
+/// The output is laid out as `[input_rank, nonzero_count]`, matching ONNX. The
+/// count is returned separately because a zero-count tensor cannot be
+/// represented by this crate's non-empty [`Shape`].
+pub fn nonzero_bool(
+    input: &[bool],
+    input_shape: Shape,
+    output: &mut [i64],
+) -> Result<usize, Error> {
+    validate_buffer(input, input_shape)?;
+    if input_shape.rank() == 0 {
+        return Err(Error::ShapeMismatch);
+    }
+    let count = input.iter().filter(|&&value| value).count();
+    let output_len = input_shape
+        .rank()
+        .checked_mul(count)
+        .ok_or(Error::ShapeOverflow)?;
+    if output.len() != output_len {
+        return Err(Error::BufferLengthMismatch);
+    }
+    reject_overlap(output, input)?;
+
+    let mut coordinates = [0usize; MAX_RANK];
+    let mut nonzero_index = 0usize;
+    for (linear, &value) in input.iter().enumerate() {
+        if !value {
+            continue;
+        }
+        unravel(linear, input_shape, &mut coordinates);
+        for axis in 0..input_shape.rank() {
+            output[axis * count + nonzero_index] = coordinates[axis] as i64;
+        }
+        nonzero_index += 1;
+    }
+    Ok(count)
+}
+
+/// Materialize the pinned `ScatterND(reduction="none")` form.
+///
+/// Index tuples must be strictly increasing in destination order. The model's
+/// indices originate from `NonZero` and satisfy that property; enforcing it
+/// rejects duplicate/overlapping writes without heap scratch or quadratic
+/// duplicate detection.
+pub fn scatter_nd_ordered<T: Copy>(
+    data: &[T],
+    data_shape: Shape,
+    indices: &[i64],
+    indices_shape: Shape,
+    updates: &[T],
+    output: &mut [T],
+) -> Result<(), Error> {
+    validate_element::<T>()?;
+    validate_buffer(data, data_shape)?;
+    validate_buffer(indices, indices_shape)?;
+    validate_buffer(output, data_shape)?;
+    if indices_shape.rank() == 0 {
+        return Err(Error::ShapeMismatch);
+    }
+    let tuple_len = indices_shape.dims[indices_shape.rank() - 1];
+    if tuple_len == 0 || tuple_len > data_shape.rank() {
+        return Err(Error::ShapeMismatch);
+    }
+    let tuple_count = indices_shape.element_count() / tuple_len;
+    let block_elements: usize = data_shape.dims[tuple_len..data_shape.rank()]
+        .iter()
+        .product();
+    let expected_updates = tuple_count
+        .checked_mul(block_elements)
+        .ok_or(Error::ShapeOverflow)?;
+    if updates.len() != expected_updates {
+        return Err(Error::BufferLengthMismatch);
+    }
+    reject_overlap(output, data)?;
+    reject_overlap(output, indices)?;
+    reject_overlap(output, updates)?;
+
+    let mut previous_base = None;
+    for tuple in indices.chunks_exact(tuple_len) {
+        let base = scatter_base(tuple, data_shape, block_elements)?;
+        if previous_base.is_some_and(|previous| base <= previous) {
+            return Err(Error::UnorderedIndices);
+        }
+        previous_base = Some(base);
+    }
+
+    output.copy_from_slice(data);
+    for (tuple_index, tuple) in indices.chunks_exact(tuple_len).enumerate() {
+        let base = scatter_base(tuple, data_shape, block_elements)?;
+        let update_start = tuple_index * block_elements;
+        output[base..base + block_elements]
+            .copy_from_slice(&updates[update_start..update_start + block_elements]);
+    }
+    Ok(())
+}
+
 /// Execute ONNX `Shape` for a statically resolved tensor descriptor.
 pub fn shape_of(
     input_shape: Shape,
@@ -521,6 +747,40 @@ fn normalize_shape_bound(bound: isize, rank: isize) -> isize {
     }
 }
 
+fn normalize_slice_bound(bound: i64, dimension: i64) -> i64 {
+    if bound < 0 {
+        bound.saturating_add(dimension).clamp(0, dimension)
+    } else {
+        bound.clamp(0, dimension)
+    }
+}
+
+fn scatter_base(
+    tuple: &[i64],
+    data_shape: Shape,
+    block_elements: usize,
+) -> Result<usize, Error> {
+    let mut prefix = 0usize;
+    for (axis, &raw_index) in tuple.iter().enumerate() {
+        let dimension = data_shape.dims[axis] as i64;
+        if raw_index < -dimension || raw_index >= dimension {
+            return Err(Error::InvalidIndex);
+        }
+        let index = if raw_index < 0 {
+            (raw_index + dimension) as usize
+        } else {
+            raw_index as usize
+        };
+        prefix = prefix
+            .checked_mul(data_shape.dims[axis])
+            .and_then(|value| value.checked_add(index))
+            .ok_or(Error::ShapeOverflow)?;
+    }
+    prefix
+        .checked_mul(block_elements)
+        .ok_or(Error::ShapeOverflow)
+}
+
 fn validate_element<T>() -> Result<(), Error> {
     if size_of::<T>() == 0 {
         Err(Error::UnsupportedElement)
@@ -581,7 +841,7 @@ mod tests {
 
     #[test]
     fn pinned_coverage_is_explicit() {
-        assert_eq!(PINNED_NODE_COVERAGE, 785);
+        assert_eq!(PINNED_NODE_COVERAGE, 811);
     }
 
     #[test]
@@ -663,6 +923,84 @@ mod tests {
                 .dims(),
             &[2]
         );
+    }
+
+    #[test]
+    fn slice_normalizes_negative_and_maximum_bounds() {
+        let input: [i32; 24] = core::array::from_fn(|index| index as i32);
+        let shape = Shape::new(&[2, 3, 4]).unwrap();
+        let mut output = [0_i32; 12];
+        let output_shape =
+            slice(&input, shape, &[-2, 0], &[i64::MAX, -1], Some(&[1, 2]), None, &mut output)
+                .unwrap();
+        assert_eq!(output_shape.dims(), &[2, 2, 3]);
+        assert_eq!(output, [4, 5, 6, 8, 9, 10, 16, 17, 18, 20, 21, 22]);
+
+        let mut untouched = [44_i32; 12];
+        assert_eq!(
+            slice(&input, shape, &[0], &[2], Some(&[0]), Some(&[-1]), &mut untouched,),
+            Err(Error::UnsupportedStep)
+        );
+        assert_eq!(untouched, [44; 12]);
+    }
+
+    #[test]
+    fn reflection_padding_matches_onnx_edge_exclusion() {
+        let input = [1_i32, 2, 3];
+        let input_shape = Shape::new(&[1, 1, 3]).unwrap();
+        let mut output = [0_i32; 6];
+        let output_shape =
+            reflect_pad(&input, input_shape, &[0, 0, 2, 0, 0, 1], &mut output).unwrap();
+        assert_eq!(output_shape.dims(), &[1, 1, 6]);
+        assert_eq!(output, [3, 2, 1, 2, 3, 2]);
+
+        let mut untouched = [9_i32; 5];
+        assert_eq!(
+            reflect_pad(&input, input_shape, &[0, 0, 3, 0, 0, 0], &mut untouched),
+            Err(Error::InvalidPadding)
+        );
+        assert_eq!(untouched, [9; 5]);
+    }
+
+    #[test]
+    fn nonzero_and_ordered_scatter_match_onnx_layout() {
+        let mask = [false, true, false, true, true, false];
+        let mask_shape = Shape::new(&[2, 3]).unwrap();
+        let mut coordinates = [0_i64; 6];
+        let count = nonzero_bool(&mask, mask_shape, &mut coordinates).unwrap();
+        assert_eq!(count, 3);
+        assert_eq!(coordinates, [0, 1, 1, 1, 0, 1]);
+
+        let data: [i32; 12] = core::array::from_fn(|index| index as i32);
+        let data_shape = Shape::new(&[3, 4]).unwrap();
+        let indices = [0_i64, -1];
+        let indices_shape = Shape::new(&[2, 1]).unwrap();
+        let updates = [100, 101, 102, 103, 200, 201, 202, 203];
+        let mut output = [-1_i32; 12];
+        scatter_nd_ordered(
+            &data,
+            data_shape,
+            &indices,
+            indices_shape,
+            &updates,
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(output, [100, 101, 102, 103, 4, 5, 6, 7, 200, 201, 202, 203]);
+
+        let snapshot = output;
+        assert_eq!(
+            scatter_nd_ordered(
+                &data,
+                data_shape,
+                &[-1, 0],
+                indices_shape,
+                &updates,
+                &mut output,
+            ),
+            Err(Error::UnorderedIndices)
+        );
+        assert_eq!(output, snapshot);
     }
 
     #[test]

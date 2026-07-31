@@ -1,0 +1,15 @@
+[package]
+name = "trueos-kokoro-lstm"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+description = "Allocation-free cooperative LSTM executor for the sealed TRUEOS Kokoro graph"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+libm = { version = "0.2", default-features = false }
