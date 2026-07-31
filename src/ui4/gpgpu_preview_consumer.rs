@@ -508,7 +508,6 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
         worker_slot,
         crate::percpu::current_slot(),
     );
-    crate::intel::wait_hw_logo_sequence_done().await;
     {
         let mut control = PREVIEW_CONTROL.lock();
         control.status.online = true;

@@ -524,9 +524,9 @@ pub(crate) fn copy_engine_activity_snapshot() -> self::blt::CopyEngineActivitySn
 }
 
 pub(crate) use self::display::{
-    CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, PrimaryPlaneSource,
-    RgbaOverlayTile, Ui4AsyncComposition, Ui4AsyncCompositionError, Ui4AsyncCompositionPoll,
-    Ui4DirectRgbaFrame, Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll,
+    CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, RgbaOverlayTile,
+    Ui4AsyncComposition, Ui4AsyncCompositionError, Ui4AsyncCompositionPoll, Ui4DirectRgbaFrame,
+    Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll,
     Ui4StreamInteractionOverlayLease,
 };
 
@@ -539,16 +539,8 @@ pub(crate) fn acquire_ui4_stream_pipe_a_slot4_surface() -> Option<Ui4StreamInter
     self::display::acquire_ui4_stream_pipe_a_slot4_surface()
 }
 
-pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
-    self::display::set_primary_plane_source(source, reason)
-}
-
 pub(crate) fn set_pipe_a_bottom_color_rgb8(red: u8, green: u8, blue: u8) -> bool {
     self::display::set_pipe_a_bottom_color_rgb8(red, green, blue)
-}
-
-pub(crate) fn set_primary_plane_source_mapped(source: PrimaryPlaneSource, reason: &str) -> bool {
-    self::display::set_primary_plane_source_mapped(source, reason)
 }
 
 pub(crate) fn begin_ui4_plane_surface_flip_batch() -> bool {
@@ -663,55 +655,6 @@ pub(crate) fn ui4_composition_flip_is_live(composition: Ui4AsyncComposition) -> 
     self::display::ui4_composition_flip_is_live(composition)
 }
 
-pub(crate) fn present_ui_surface_to_primary_plane(
-    surface: types::UiSurface,
-    phys: u64,
-    byte_len: usize,
-    src: types::UiRect,
-    dst: types::UiRect,
-    reason: &str,
-) -> bool {
-    self::display::present_ui_surface_to_primary_plane(surface, phys, byte_len, src, dst, reason)
-}
-
-pub(crate) fn present_ui_surface_to_primary_backing(
-    surface: types::UiSurface,
-    virt: *const u8,
-    byte_len: usize,
-    src: types::UiRect,
-    dst: types::UiRect,
-    reason: &str,
-) -> bool {
-    self::display::present_ui_surface_to_primary_backing(surface, virt, byte_len, src, dst, reason)
-}
-
-pub(crate) fn present_premultiplied_rgba_primary_tiles(
-    tiles: &[RgbaOverlayTile<'_>],
-    reason: &str,
-) -> bool {
-    self::display::present_premultiplied_rgba_primary_tiles(tiles, reason)
-}
-
-pub(crate) fn present_premultiplied_rgba_primary_tiles_damage(
-    tiles: &[RgbaOverlayTile<'_>],
-    damage: CompositionDamageRegion,
-    reason: &str,
-) -> bool {
-    self::display::present_premultiplied_rgba_primary_tiles_damage(tiles, damage, reason)
-}
-
-pub fn primary_surface_gpu_addr() -> Option<u64> {
-    self::display::primary_surface_gpu_addr()
-}
-
-pub fn primary_present_surface_gpu_addr() -> Option<u64> {
-    primary_surface_gpu_addr()
-}
-
-pub fn primary_present_shadow_surface_gpu_addr() -> Option<u64> {
-    primary_surface_gpu_addr()
-}
-
 pub fn dma_cache_flush_range(ptr: *const u8, len: usize) {
     dma_flush(ptr as *mut u8, len)
 }
@@ -783,87 +726,9 @@ pub fn warm_state() -> Option<()> {
     None
 }
 
-pub(crate) fn clear_primary_surface_color(color: u32, reason: &str) -> bool {
-    self::display::clear_primary_surface_color(color, reason)
-}
-
-pub(crate) async fn wait_hw_logo_sequence_done() {
-    self::display::wait_hw_logo_sequence_done().await
-}
-
-pub(crate) fn present_i226_diagnostic_screen(
-    snapshot: crate::net::i226::I226Snapshot,
-    reason: &str,
-) -> bool {
-    self::display::present_i226_diagnostic_screen(snapshot, reason)
-}
-
 pub(crate) fn capture_primary_surface_bgra8() -> Option<self::display::PrimarySurfaceBgra8Snapshot>
 {
     self::display::capture_primary_surface_bgra8()
-}
-
-pub fn present_rgba_overlay_top_right(
-    src: &[u8],
-    src_width: u32,
-    src_height: u32,
-    src_pitch_bytes: usize,
-) -> bool {
-    self::display::present_rgba_overlay_top_right(src, src_width, src_height, src_pitch_bytes)
-}
-
-pub fn present_rgba_overlay_at(
-    src: &[u8],
-    src_width: u32,
-    src_height: u32,
-    src_pitch_bytes: usize,
-    x: u32,
-    y: u32,
-    preserve_alpha: bool,
-    reason: &str,
-) -> bool {
-    self::display::present_rgba_overlay_at(
-        src,
-        src_width,
-        src_height,
-        src_pitch_bytes,
-        x,
-        y,
-        preserve_alpha,
-        reason,
-    )
-}
-
-pub(crate) fn present_live_overlay_rects(rects: &[LiveOverlayRect], reason: &str) -> bool {
-    self::display::present_live_overlay_rects(rects, reason)
-}
-
-pub(crate) fn present_live_overlay_rects_damage(
-    rects: &[LiveOverlayRect],
-    damage: CompositionDamageRect,
-    reason: &str,
-) -> bool {
-    self::display::present_live_overlay_rects_damage(rects, damage, reason)
-}
-
-pub(crate) fn present_live_overlay_rects_on_slot_damage(
-    plane_slot: usize,
-    rects: &[LiveOverlayRect],
-    damage: CompositionDamageRect,
-    reason: &str,
-) -> bool {
-    self::display::present_live_overlay_rects_on_slot_damage(plane_slot, rects, damage, reason)
-}
-
-pub(crate) fn present_live_overlay_rects_on_slot_damage_region(
-    plane_slot: usize,
-    rects: &[LiveOverlayRect],
-    damage: CompositionDamageRegion,
-    reason: &str,
-) -> bool {
-    self::display::present_live_overlay_rects_on_slot_damage_region(
-        plane_slot, rects, damage, reason,
-    )
 }
 
 pub(crate) fn queue_ui4_live_overlay_rects_on_slot_damage_region(
@@ -881,190 +746,8 @@ pub(crate) fn poll_ui4_live_overlay_flip(flip: Ui4LiveOverlayFlip) -> Ui4LiveOve
     self::display::poll_ui4_live_overlay_flip(flip)
 }
 
-pub(crate) fn present_live_overlay_rects_preserving(
-    rects: &[LiveOverlayRect],
-    preserve: Option<LiveOverlayRect>,
-    reason: &str,
-) -> bool {
-    self::display::present_live_overlay_rects_preserving(rects, preserve, reason)
-}
-
-pub(crate) fn present_rgba_overlay_tiles(tiles: &[RgbaOverlayTile<'_>], reason: &str) -> bool {
-    self::display::present_rgba_overlay_tiles(tiles, reason)
-}
-
-pub(crate) fn present_rgba_overlay_tiles_on_slot(
-    plane_slot: usize,
-    tiles: &[RgbaOverlayTile<'_>],
-    reason: &str,
-) -> bool {
-    self::display::present_rgba_overlay_tiles_on_slot(plane_slot, tiles, reason)
-}
-
-pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
-    plane_slot: usize,
-    tiles: &[RgbaOverlayTile<'_>],
-    damage: CompositionDamageRegion,
-    reason: &str,
-) -> bool {
-    self::display::present_premultiplied_rgba_overlay_tiles_on_slot_damage(
-        plane_slot, tiles, damage, reason,
-    )
-}
-
 pub fn log_display_plane_ladder_probe(label: &str) {
     self::display::log_display_plane_ladder_probe(label)
-}
-
-pub fn present_rgba_primary(
-    src: &[u8],
-    src_width: u32,
-    src_height: u32,
-    src_pitch_bytes: usize,
-    reason: &str,
-) -> bool {
-    self::display::present_rgba_primary(src, src_width, src_height, src_pitch_bytes, reason)
-}
-
-pub fn present_rgba_primary_center_unscaled(
-    src: &[u8],
-    src_width: u32,
-    src_height: u32,
-    src_pitch_bytes: usize,
-    reason: &str,
-) -> bool {
-    self::display::present_rgba_primary_center_unscaled(
-        src,
-        src_width,
-        src_height,
-        src_pitch_bytes,
-        reason,
-    )
-}
-
-pub fn present_rgba_primary_center_unscaled_bg(
-    src: &[u8],
-    src_width: u32,
-    src_height: u32,
-    src_pitch_bytes: usize,
-    bg_xrgb: u32,
-    reason: &str,
-) -> bool {
-    self::display::present_rgba_primary_center_unscaled_bg(
-        src,
-        src_width,
-        src_height,
-        src_pitch_bytes,
-        bg_xrgb,
-        reason,
-    )
-}
-
-pub fn present_rgba_primary_center_plane_bg(
-    src: &[u8],
-    src_width: u32,
-    src_height: u32,
-    src_pitch_bytes: usize,
-    bg_xrgb: u32,
-    reason: &str,
-) -> bool {
-    self::display::present_rgba_primary_center_plane_bg(
-        src,
-        src_width,
-        src_height,
-        src_pitch_bytes,
-        bg_xrgb,
-        reason,
-    )
-}
-
-pub fn blend_rgba_primary_rect(
-    src: &[u8],
-    src_width: u32,
-    src_height: u32,
-    src_pitch_bytes: usize,
-    src_x: u32,
-    src_y: u32,
-    dst_x: i32,
-    dst_y: i32,
-    width: u32,
-    height: u32,
-    reason: &str,
-) -> bool {
-    self::display::blend_rgba_primary_rect(
-        src,
-        src_width,
-        src_height,
-        src_pitch_bytes,
-        src_x,
-        src_y,
-        dst_x,
-        dst_y,
-        width,
-        height,
-        reason,
-    )
-}
-
-pub fn blend_rgba_primary_rect_scaled(
-    src: &[u8],
-    src_width: u32,
-    src_height: u32,
-    src_pitch_bytes: usize,
-    src_x: u32,
-    src_y: u32,
-    src_w: u32,
-    src_h: u32,
-    dst_x: i32,
-    dst_y: i32,
-    dst_w: u32,
-    dst_h: u32,
-    reason: &str,
-) -> bool {
-    self::display::blend_rgba_primary_rect_scaled(
-        src,
-        src_width,
-        src_height,
-        src_pitch_bytes,
-        src_x,
-        src_y,
-        src_w,
-        src_h,
-        dst_x,
-        dst_y,
-        dst_w,
-        dst_h,
-        reason,
-    )
-}
-
-pub fn present_rgba_primary_rot180(
-    src: &[u8],
-    src_width: u32,
-    src_height: u32,
-    src_pitch_bytes: usize,
-    reason: &str,
-) -> bool {
-    self::display::present_rgba_primary_rot180(src, src_width, src_height, src_pitch_bytes, reason)
-}
-
-pub fn present_rgba_primary_flip_y(
-    src: &[u8],
-    src_width: u32,
-    src_height: u32,
-    src_pitch_bytes: usize,
-    reason: &str,
-) -> bool {
-    self::display::present_rgba_primary_flip_y(src, src_width, src_height, src_pitch_bytes, reason)
-}
-
-pub fn present_rgba_primary_top_right(
-    src: &[u8],
-    src_width: u32,
-    src_height: u32,
-    src_pitch_bytes: usize,
-) -> bool {
-    self::display::present_rgba_primary_top_right(src, src_width, src_height, src_pitch_bytes)
 }
 
 pub async fn run_media2_first_frame_async() -> Option<self::xelp_media2_ngin::Media2FirstFrameState>
@@ -1117,11 +800,6 @@ pub(crate) async fn hw_pic_wait_output_for_id(
 
 pub(crate) fn hw_pic_snapshot() -> self::hw_pic::HwPicQueueSnapshot {
     self::hw_pic::snapshot()
-}
-
-pub(crate) fn hw_logo_present_task()
--> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
-    self::display::hw_logo_present_task()
 }
 
 pub async fn run_media_source_warmup_async() {

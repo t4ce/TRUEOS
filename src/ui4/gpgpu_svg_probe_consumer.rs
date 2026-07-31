@@ -187,7 +187,6 @@ pub(crate) async fn gpgpu_svg_probe_consumer_service_task(worker_slot: u32) {
         worker_slot,
         crate::percpu::current_slot(),
     );
-    crate::intel::wait_hw_logo_sequence_done().await;
     {
         let mut control = SVG_PROBE_CONTROL.lock();
         control.status.online = true;

@@ -3,13 +3,7 @@ fn upload_triangle_shader_pipeline(
     pipeline: &'static crate::intel::shader::TrianglePipeline,
     draw_rgba: Option<[u8; 4]>,
 ) -> Result<TriangleShaderLayout, &'static str> {
-    upload_triangle_shader_pipeline_at(
-        warm,
-        pipeline,
-        draw_rgba,
-        GPU_VA_DRAW_STATE_BASE,
-        true,
-    )
+    upload_triangle_shader_pipeline_at(warm, pipeline, draw_rgba, GPU_VA_DRAW_STATE_BASE, true)
 }
 
 /// Upload the proven triangle shaders into a caller-owned state slot.
@@ -808,8 +802,7 @@ pub(crate) fn create_resident_triangle_mesh(
         .ok_or("resident-triangle-bytes")?;
     let storage_bytes =
         crate::intel::align_up(used_bytes, 4096).ok_or("resident-triangle-align")?;
-    let gpu_base =
-        reserve_persistent_render_gpu_va(storage_bytes).ok_or("resident-triangle-va")?;
+    let gpu_base = reserve_persistent_render_gpu_va(storage_bytes).ok_or("resident-triangle-va")?;
     let vertex_count = u32::try_from(draw_vertices.len()).map_err(|_| "resident-triangle-count")?;
     let vertex_bytes_u32 = u32::try_from(vertex_bytes).map_err(|_| "resident-triangle-count")?;
     let index_count = u32::try_from(draw_indices.len()).map_err(|_| "resident-triangle-count")?;
@@ -943,10 +936,8 @@ pub(crate) fn allocate_resident_render_buffer(
     if render_ppgtt_pml4_phys() == 0 || warm.vertex_len == 0 {
         return Err("render-ppgtt");
     }
-    let storage_bytes =
-        crate::intel::align_up(bytes, 4096).ok_or("resident-resource-align")?;
-    let gpu_base = reserve_persistent_render_gpu_va(storage_bytes)
-        .ok_or("resident-resource-va")?;
+    let storage_bytes = crate::intel::align_up(bytes, 4096).ok_or("resident-resource-align")?;
+    let gpu_base = reserve_persistent_render_gpu_va(storage_bytes).ok_or("resident-resource-va")?;
     let Some((storage_phys, storage_virt)) = crate::dma::alloc(storage_bytes, 4096) else {
         recycle_persistent_render_gpu_va(gpu_base, storage_bytes);
         return Err("resident-resource-alloc");
@@ -1657,144 +1648,4 @@ fn submit_triangle_to_surface(
         RESULT_SLOT_PRE3D_DWORD,
         "mi-triangle",
     )
-}
-
-fn submit_vertical_stripes_to_surface(
-    dev: crate::intel::Dev,
-    warm: RenderWarmState,
-    dst_gpu_addr: u64,
-    pitch: usize,
-    rect_w: usize,
-    rect_h: usize,
-) -> bool {
-    let stripe_x_phase = PRIMARY_STRIPE_X_PHASE.fetch_add(MI_STRIPE_X_STEP_PX, Ordering::AcqRel);
-
-    unsafe {
-        core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
-    }
-    crate::intel::dma_flush(warm.result_virt, core::mem::size_of::<u32>());
-
-    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
-    let batch =
-        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
-    let Ok(batch_tail_bytes) = encode_vertical_stripe_store_batch(
-        batch,
-        dst_gpu_addr,
-        pitch,
-        rect_w,
-        rect_h,
-        stripe_x_phase,
-        GPU_VA_RESULT_BASE,
-        RCS_EXEC_RESULT_DONE,
-    ) else {
-        crate::log!(
-            "primary-mi-stripes batch build failed size={}x{} pitch=0x{:X} batch=0x{:X} phase={}\n",
-            rect_w,
-            rect_h,
-            pitch,
-            warm.batch_len,
-            stripe_x_phase
-        );
-        return false;
-    };
-    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
-
-    if should_log_primary_probe("periodic", PRIMARY_PROBE_SEQ.load(Ordering::Acquire)) {
-        crate::log!(
-            "primary-mi-stripes phase={} step={} stripes={} width={}\n",
-            stripe_x_phase,
-            MI_STRIPE_X_STEP_PX,
-            MI_STRIPE_COUNT,
-            MI_STRIPE_WIDTH_PX
-        );
-    }
-
-    submit_warm_render_batch(dev, warm, RCS_EXEC_RESULT_DONE, RESULT_SLOT_PRE3D_DWORD, "mi-stripes")
-}
-
-fn submit_mi_scanout_store_proof(
-    dev: crate::intel::Dev,
-    warm: RenderWarmState,
-    dst_gpu_addr: u64,
-    pitch: usize,
-    rect_w: usize,
-    rect_h: usize,
-) -> bool {
-    if rect_w == 0 || rect_h == 0 {
-        crate::log!("mi-scanout-store-proof accepted=0 reason=empty-target\n");
-        return false;
-    }
-
-    let x = (rect_w / 2).min(rect_w.saturating_sub(1));
-    let y = (rect_h / 2).min(rect_h.saturating_sub(1));
-    let Some(before) = crate::intel::display::sample_primary_surface_pixel(x as u32, y as u32)
-    else {
-        crate::log!("mi-scanout-store-proof accepted=0 reason=no-before-sample\n");
-        return false;
-    };
-    let color = before ^ 0x00FF_FFFF;
-    let Some(pixel_offset) = y
-        .checked_mul(pitch)
-        .and_then(|v| v.checked_add(x.saturating_mul(4)))
-    else {
-        crate::log!("mi-scanout-store-proof accepted=0 reason=offset-overflow\n");
-        return false;
-    };
-    let pixel_gpu = dst_gpu_addr.saturating_add(pixel_offset as u64);
-
-    unsafe {
-        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
-        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
-        core::ptr::write_volatile(warm.result_virt as *mut u32, RESULT_DEBUG_SENTINEL);
-    }
-    crate::intel::dma_flush(warm.result_virt, warm.result_len);
-
-    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
-    let batch =
-        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
-    let Ok(batch_tail_bytes) = encode_single_store_probe_batch(
-        batch,
-        pixel_gpu,
-        color,
-        GPU_VA_RESULT_BASE,
-        RCS_EXEC_RESULT_MI_SCANOUT_DONE,
-    ) else {
-        crate::log!("mi-scanout-store-proof accepted=0 reason=batch-build\n");
-        return false;
-    };
-    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
-
-    let completed = submit_warm_render_batch(
-        dev,
-        warm,
-        RCS_EXEC_RESULT_MI_SCANOUT_DONE,
-        RESULT_SLOT_PRE3D_DWORD,
-        "mi-scanout-store",
-    );
-    crate::intel::dma_flush(warm.result_virt, warm.result_len);
-    let marker = read_result_dword(warm, RESULT_SLOT_PRE3D_DWORD);
-    let after = crate::intel::display::sample_primary_surface_pixel(x as u32, y as u32)
-        .unwrap_or(0xFFFF_FFFF);
-    let accepted =
-        completed && marker == RCS_EXEC_RESULT_MI_SCANOUT_DONE && after == color && before != after;
-
-    intel_render_focus_log!(
-        "mi-scanout-store-proof accepted={} completed={} marker=0x{:08X} xy={}x{} gpu=0x{:X} pitch=0x{:X} before=0x{:08X} after=0x{:08X} color=0x{:08X} does_not_prove=3d_pipeline_or_ps\n",
-        accepted as u8,
-        completed as u8,
-        marker,
-        x,
-        y,
-        pixel_gpu,
-        pitch,
-        before,
-        after,
-        color,
-    );
-
-    if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, "mi-scanout-store");
-    }
-    accepted
 }

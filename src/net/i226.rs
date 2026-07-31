@@ -1,7 +1,5 @@
 use core::ptr::{NonNull, read_volatile};
-use core::sync::atomic::{AtomicBool, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 use crate::net::core::VendorAdapter;
@@ -53,7 +51,6 @@ const ECAP_L1PM_BIT: u32 = 1 << 11;
 const ECAP_PTM_BIT: u32 = 1 << 12;
 
 static PRIMARY_SNAPSHOT: Mutex<Option<I226Snapshot>> = Mutex::new(None);
-static DIAG_SCREEN_DRAWN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct I226Snapshot {
@@ -331,32 +328,6 @@ impl VendorAdapter for I226Adapter {
     }
 
     fn bind_ring(&mut self, _ring: *mut NetRing) {}
-}
-
-#[embassy_executor::task]
-pub(crate) async fn i226_diagnostic_display_task() {
-    if !has_primary_snapshot() {
-        return;
-    }
-    crate::intel::wait_hw_logo_sequence_done().await;
-    Timer::after(EmbassyDuration::from_secs(10)).await;
-    let Some(snapshot) = primary_snapshot() else {
-        return;
-    };
-    let ok = crate::intel::present_i226_diagnostic_screen(snapshot, "i226-diagnostic-screen");
-    DIAG_SCREEN_DRAWN.store(ok, Ordering::Release);
-    crate::log_info!(
-        target: "net";
-        "net/i226: diagnostic display submitted ok={} bdf={:02x}:{:02x}.{} passive=1\n",
-        ok as u8,
-        snapshot.bus,
-        snapshot.slot,
-        snapshot.function
-    );
-}
-
-pub(crate) fn has_primary_snapshot() -> bool {
-    PRIMARY_SNAPSHOT.lock().is_some()
 }
 
 pub(crate) fn primary_snapshot() -> Option<I226Snapshot> {

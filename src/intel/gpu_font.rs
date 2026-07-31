@@ -1247,7 +1247,6 @@ struct PersistentGpuFontGridCell {
 struct PersistentGpuFontGrid {
     cells: Vec<PersistentGpuFontGridCell>,
     engine_frame_requests: u64,
-    presented_frames: u64,
     exact_color_check: bool,
     color_proof_pixels: u64,
     color_proof_mismatches: u64,
@@ -1270,7 +1269,6 @@ pub(crate) struct PersistentGpuFontAnimationStatus {
 pub(crate) struct PersistentGpuFontGridStatus {
     pub(crate) cells: usize,
     pub(crate) engine_frame_requests: u64,
-    pub(crate) presented_frames: u64,
     pub(crate) failures: u64,
     pub(crate) halted_cells: usize,
     pub(crate) exact_color_check: bool,
@@ -1351,7 +1349,6 @@ pub(crate) fn install_persistent_font_demo_grid(
         .replace(PersistentGpuFontGrid {
             cells,
             engine_frame_requests: 0,
-            presented_frames: 0,
             exact_color_check,
             color_proof_pixels: 0,
             color_proof_mismatches: 0,
@@ -1359,7 +1356,7 @@ pub(crate) fn install_persistent_font_demo_grid(
     drop(old);
     crate::log_info!(
         target: "render";
-        "intel/gpu-font: demo-grid-install cells=9 layout=3x3 policy=elapsed-time-sampled-per-engine-frame overlay_commits=one-per-grid-frame exact_color_check={} authority=kernel-service-owned\n",
+        "intel/gpu-font: demo-grid-install cells=9 layout=3x3 policy=elapsed-time-sampled-per-engine-frame display_commits=0 exact_color_check={} authority=kernel-service-owned\n",
         exact_color_check as u8,
     );
     Ok(())
@@ -1510,7 +1507,6 @@ pub(crate) fn persistent_font_demo_grid_status() -> Option<PersistentGpuFontGrid
     Some(PersistentGpuFontGridStatus {
         cells: grid.cells.len(),
         engine_frame_requests: grid.engine_frame_requests,
-        presented_frames: grid.presented_frames,
         failures: grid.cells.iter().map(|cell| cell.failures).sum(),
         halted_cells: grid.cells.iter().filter(|cell| cell.halted).count(),
         exact_color_check: grid.exact_color_check,
@@ -1664,59 +1660,11 @@ fn submit_persistent_font_demo_grid_engine_frame() -> bool {
         return true;
     }
 
-    let Some((scanout_w, scanout_h)) = crate::intel::active_scanout_dimensions() else {
-        return true;
-    };
-    let cell_w = scanout_w / 3;
-    let cell_h = scanout_h / 3;
-    if cell_w == 0 || cell_h == 0 {
-        return true;
-    }
-    let mut tiles = Vec::with_capacity(9);
-    for (index, cell) in grid.cells.iter().enumerate() {
-        let captured = cell.readback.as_ref().expect("checked above");
-        let column = index as u32 % 3;
-        let row = index as u32 / 3;
-        let x = column
-            .saturating_mul(cell_w)
-            .saturating_add(cell_w.saturating_sub(captured.width) / 2);
-        let y = row
-            .saturating_mul(cell_h)
-            .saturating_add(cell_h.saturating_sub(captured.height) / 2);
-        tiles.push(crate::intel::display::RgbaOverlayTile {
-            x,
-            y,
-            width: captured.width,
-            height: captured.height,
-            source_width: captured.width,
-            source_height: captured.height,
-            pitch_bytes: captured.width as usize * 4,
-            pixels: captured.pixels.as_slice(),
-            gpgpu_surface: None,
-            gpgpu_scanout_cache: false,
-            opacity: u8::MAX,
-            known_opaque: false,
-            expected_rgba: if exact_color_check {
-                cell.last_submitted
-            } else {
-                None
-            },
-        });
-    }
-    if crate::intel::display::present_rgba_overlay_tiles(tiles.as_slice(), "font-persist-demo-grid")
-    {
-        grid.presented_frames = grid.presented_frames.saturating_add(1);
-        if grid.presented_frames <= 8 || grid.presented_frames.is_multiple_of(60) {
-            crate::log_info!(
-                target: "render";
-                "intel/gpu-font: demo-grid-frame frame={} engine_requests={} cells=9 layout=3x3 scanout={}x{} overlay_commits=1 clock=monotonic-elapsed geometry_uploads=0\n",
-                grid.presented_frames,
-                grid.engine_frame_requests,
-                scanout_w,
-                scanout_h,
-            );
-        }
-    }
+    crate::log_info!(
+        target: "render";
+        "intel/gpu-font: demo-grid-readback engine_requests={} cells=9 layout=3x3 display_commits=0 clock=monotonic-elapsed geometry_uploads=0\n",
+        grid.engine_frame_requests,
+    );
     true
 }
 

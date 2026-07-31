@@ -100,64 +100,6 @@ struct Nv12PlaneProbeSurface {
 unsafe impl Send for Nv12PlaneProbeSurface {}
 unsafe impl Sync for Nv12PlaneProbeSurface {}
 
-pub(super) fn probe_boot_logo_decode() -> bool {
-    if !PRIMARY_BOOT_STAMPS_ENABLED {
-        return false;
-    }
-
-    match PRIMARY_BOOT_LOGO_DECODE_MODE {
-        PrimaryBootLogoDecodeMode::HwPic => probe_hw_logo_decode(),
-        PrimaryBootLogoDecodeMode::ZuneJpeg => probe_zune_boot_logo_decode(),
-    }
-}
-
-fn probe_hw_logo_decode() -> bool {
-    let submitted = submit_next_hw_logo_stage();
-    crate::log!("intel/display: boot-logo decode mode=hw_pic submitted={}\n", submitted as u8);
-    submitted
-}
-
-fn probe_zune_boot_logo_decode() -> bool {
-    let decoded = match crate::graphics::jpeg_codec::decode_jpeg_rgba(PRIMARY_BOOT_LOGO_JPEG) {
-        Ok(decoded) => decoded,
-        Err(err) => {
-            crate::log!(
-                "intel/display: boot-logo decode mode=zune_jpeg failed code={} bytes=0x{:X}\n",
-                err.code(),
-                PRIMARY_BOOT_LOGO_JPEG.len()
-            );
-            return false;
-        }
-    };
-
-    let stored = present_rgba_primary_center(
-        decoded.rgba.as_slice(),
-        decoded.width,
-        decoded.height,
-        decoded.width as usize * 4,
-        "boot-logo-zune-jpeg-intel-graphics-stamp-center",
-    );
-    let intel_graphics_stamped = stored && stamp_intel_graphics_logo_top_left_screen();
-    let bgrt_stamped = stored && stamp_bgrt_logo_bottom_right_screen();
-    let plane_bars_stamped = stored
-        && PRIMARY_BOOT_NATIVE_PLANE_SLOT_BARS_ENABLED
-        && stamp_boot_native_plane_slot_bars_top_right();
-    crate::log!(
-        "intel/display: boot-logo decode mode=zune_jpeg decoded={}x{} bytes=0x{:X} intel_graphics_stamp={} bgrt_stamp={} plane_bars={} stored={}\n",
-        decoded.width,
-        decoded.height,
-        decoded.rgba.len(),
-        intel_graphics_stamped as u8,
-        bgrt_stamped as u8,
-        plane_bars_stamped as u8,
-        stored as u8
-    );
-    if stored {
-        mark_hw_logo_sequence_done("zune-logo-presented");
-    }
-    stored
-}
-
 pub(crate) fn log_display_plane_ladder_probe(label: &str) {
     crate::log!("intel/display: display-ladder label={} stage=read-only begin\n", label);
     log_primary_surface_samples("display-ladder-primary");

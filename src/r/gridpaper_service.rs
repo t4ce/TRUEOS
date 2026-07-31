@@ -5609,8 +5609,6 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
 
 #[embassy_executor::task(pool_size = GRIDPAPER_POOL_SOFT_CAP)]
 async fn gridpaper_instance_worker_task(pool_slot: usize) {
-    crate::intel::wait_hw_logo_sequence_done().await;
-
     let mut observed_lease_epoch = 0u64;
     let mut runtime: Option<GridPaperRuntime> = None;
     let mut presentation_session = None;
@@ -5777,7 +5775,6 @@ fn spawn_gridpaper_instance_pool() -> usize {
 /// fair GPU-font lane as retained-scene and one-shot stamp consumers.
 #[embassy_executor::task]
 pub async fn gridpaper_service_task() {
-    crate::intel::wait_hw_logo_sequence_done().await;
     let spawned = spawn_gridpaper_instance_pool();
     crate::log_info!(
         target: "gridpaper";

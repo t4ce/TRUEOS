@@ -621,7 +621,6 @@ fn capture_screenshot_view() -> bool {
 /// scene-level GuC fence retires.
 #[embassy_executor::task]
 pub async fn draw3d_ui4_render_task() {
-    crate::intel::wait_hw_logo_sequence_done().await;
     let mut last_init_error = None;
     let mut surface = loop {
         match initialize_ui4_surface() {

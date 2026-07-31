@@ -266,7 +266,6 @@ pub(crate) async fn ui4_compositor_service_task() {
         crate::workers::AP1_UI_SERVICE_SLOT,
         crate::percpu::current_slot()
     );
-    crate::intel::wait_hw_logo_sequence_done().await;
     if !crate::intel::activate_ui4_application_rgba_planes() {
         crate::log_error!(target: "ui4";
             "ui4 compositor startup rejected cause=slot0-rgba-handoff-failed action=return\n"

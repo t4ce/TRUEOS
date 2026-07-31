@@ -1,17 +1,5 @@
 use alloc::vec::Vec;
 
-pub(crate) fn submit_primary_triangle_once() {
-    if PRIMARY_TRIANGLE_SUBMITTED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    let _ = submit_primary_probe_now("boot-once");
-}
-
-pub(crate) fn submit_primary_probe_periodic() {
-    let _ = submit_primary_probe_now("periodic");
-}
-
 pub(crate) struct RenderJokerResult {
     pub(crate) variant: &'static str,
     pub(crate) submit_name: &'static str,
@@ -24,9 +12,9 @@ pub(crate) struct RenderJokerResult {
     pub(crate) ps_observed: bool,
 }
 
-/// CPU-visible copy of one completed font render target. The bounded 3x3 demo
-/// compositor needs all nine independently colored results before committing
-/// the single display overlay plane.
+/// CPU-visible copy of one completed offscreen font render target. Diagnostic
+/// consumers may compare the independently colored results, but visibility
+/// requires an ordinary UI4 frame/window producer.
 pub(crate) struct FontRenderTargetReadback {
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -2296,13 +2284,14 @@ struct RenderJokerSpec {
 
 #[derive(Copy, Clone)]
 enum RenderJokerTarget {
-    Primary,
     ScratchRt,
 }
 
 fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
-    let surface = RenderJokerTarget::Primary;
     let scratch = RenderJokerTarget::ScratchRt;
+    // Historical variants that once targeted the live primary are retained as
+    // offscreen diagnostics. Render probes never acquire a display surface.
+    let offscreen = scratch;
     let explicit = TriangleBlendProbeMode::ExplicitRt0;
     let zeroed = TriangleBlendProbeMode::MesaZeroedState;
     let canonical = VfPrimitiveGeometry::Canonical;
@@ -2328,7 +2317,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "canonical",
             submit_name: "vf-draw-path",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: canonical,
             backend: BackendProbeMode::MesaLike,
@@ -2338,7 +2327,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "mesa",
             submit_name: "ps-launch-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::MesaLike,
@@ -2348,7 +2337,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "mesa-retire",
             submit_name: "ps-launch-big-primitive-retire",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::MesaLike,
@@ -2372,7 +2361,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "bt0-primary",
             submit_name: "ps-bt0-primary-rt",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsBindingTableCountZero,
@@ -2392,7 +2381,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "point",
             submit_name: "point-vf-giant",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: point,
             backend: BackendProbeMode::MesaLike,
@@ -2932,7 +2921,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "point-bt1",
             submit_name: "point-vf-giant-bt1",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: point,
             backend: BackendProbeMode::PsBindingTableCountOne,
@@ -2942,7 +2931,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "point-slot0",
             submit_name: "point-vf-giant-slot0",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: point,
             backend: BackendProbeMode::PsDispatchSlot0,
@@ -3532,7 +3521,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "so-vf",
             submit_name: "joker-vf-streamout",
-            target: surface,
+            target: offscreen,
             blend: zeroed,
             geometry: canonical,
             backend: BackendProbeMode::MesaLike,
@@ -3542,7 +3531,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "so-vf-header",
             submit_name: "joker-vf-streamout-header",
-            target: surface,
+            target: offscreen,
             blend: zeroed,
             geometry: canonical,
             backend: BackendProbeMode::MesaLike,
@@ -3552,7 +3541,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "so-vs",
             submit_name: "joker-vs-streamout",
-            target: surface,
+            target: offscreen,
             blend: zeroed,
             geometry: canonical,
             backend: BackendProbeMode::MesaLike,
@@ -3562,7 +3551,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "so-vs-header",
             submit_name: "joker-vs-streamout-header",
-            target: surface,
+            target: offscreen,
             blend: zeroed,
             geometry: canonical,
             backend: BackendProbeMode::MesaLike,
@@ -3572,7 +3561,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "bt1",
             submit_name: "ps-bt1-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsBindingTableCountOne,
@@ -3582,7 +3571,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "wm-normal",
             submit_name: "ps-wm-normal-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::WmNormalDispatch,
@@ -3592,7 +3581,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "slot0",
             submit_name: "ps-dispatch-slot0-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsDispatchSlot0,
@@ -3602,7 +3591,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "slot1",
             submit_name: "ps-dispatch-slot1-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsDispatchSlot1,
@@ -3612,7 +3601,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "slot2",
             submit_name: "ps-dispatch-slot2-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsDispatchSlot2,
@@ -3622,7 +3611,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "all",
             submit_name: "ps-dispatch-all-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsDispatchAllKspSlots,
@@ -3632,7 +3621,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "simd16",
             submit_name: "ps-simd16-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsSimd16,
@@ -3642,7 +3631,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "simd16-retire",
             submit_name: "ps-simd16-big-primitive-retire",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsSimd16,
@@ -3652,7 +3641,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "eot",
             submit_name: "ps-eot-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsEotOnly,
@@ -3662,7 +3651,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "eot-retire",
             submit_name: "ps-eot-big-primitive-retire",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsEotOnly,
@@ -3672,7 +3661,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "cps",
             submit_name: "ps-cps-disabled-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsCpsDisabled,
@@ -3682,7 +3671,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "cps-retire",
             submit_name: "ps-cps-disabled-big-primitive-retire",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsCpsDisabled,
@@ -3692,7 +3681,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "hz",
             submit_name: "wm-hz-sample-mask-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::WmHzSampleMask,
@@ -3702,7 +3691,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "hz-retire",
             submit_name: "wm-hz-sample-mask-big-primitive-retire",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::WmHzSampleMask,
@@ -3712,7 +3701,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "reemit",
             submit_name: "wm-late-reemit-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::WmLateReemit,
@@ -3724,7 +3713,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "reemit-retire",
             submit_name: "wm-late-reemit-big-primitive-retire",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::WmLateReemit,
@@ -3736,7 +3725,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "reemit-vs-retire",
             submit_name: "wm-late-reemit-vs-big-primitive-retire",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::WmLateReemit,
@@ -3748,7 +3737,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "reemit-vs-slot0-retire",
             submit_name: "wm-late-reemit-vs-slot0-big-primitive-retire",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::WmLateReemit,
@@ -3760,7 +3749,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "reemit-vs-urb2-retire",
             submit_name: "wm-late-reemit-vs-urb2-big-primitive-retire",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::WmLateReemit,
@@ -3772,7 +3761,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "reemit-vs-urb2-slot0-retire",
             submit_name: "wm-late-reemit-vs-urb2-slot0-big-primitive-retire",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::WmLateReemit,
@@ -3782,7 +3771,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "payload-push",
             submit_name: "ps-payload-push-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsPayloadPushConstant,
@@ -3792,7 +3781,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "payload-attr",
             submit_name: "ps-payload-attr-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsPayloadAttributeEnable,
@@ -3802,7 +3791,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "payload-simple",
             submit_name: "ps-payload-simple-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsPayloadSimpleHint,
@@ -3812,7 +3801,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "payload-depthw",
             submit_name: "ps-payload-source-depth-w-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsPayloadSourceDepthW,
@@ -3822,7 +3811,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "payload-bary",
             submit_name: "ps-payload-bary-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsPayloadBaryPlanes,
@@ -3832,7 +3821,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "grf1",
             submit_name: "ps-grf-start-r1-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsGrfStartR1,
@@ -3842,7 +3831,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "grf2",
             submit_name: "ps-grf-start-r2-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsGrfStartR2,
@@ -3852,7 +3841,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "grf4",
             submit_name: "ps-grf-start-r4-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsGrfStartR4,
@@ -3862,7 +3851,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "mt31",
             submit_name: "ps-grf-maxthreads-31-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsGrfMaxThreads31,
@@ -3872,7 +3861,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "mt15",
             submit_name: "ps-grf-maxthreads-15-big-primitive",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsGrfMaxThreads15,
@@ -3882,7 +3871,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "sync-light",
             submit_name: "postdraw-light-only-retire",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: canonical,
             backend: BackendProbeMode::MesaLike,
@@ -3892,7 +3881,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "sync-post-no-cs",
             submit_name: "postdraw-pc-postsync-no-cs",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: canonical,
             backend: BackendProbeMode::MesaLike,
@@ -3902,7 +3891,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         RenderJokerSpec {
             variant: "sync-cs-no-post",
             submit_name: "postdraw-pc-cs-no-postsync",
-            target: surface,
+            target: offscreen,
             blend: explicit,
             geometry: canonical,
             backend: BackendProbeMode::MesaLike,
@@ -4806,22 +4795,6 @@ fn submit_render_joker_probe_locked(
         crate::log!("joker skipped reason=no-device variant={}\n", spec.variant);
         return Err("no-device");
     };
-    let Some(surface_gpu) = crate::intel::display::primary_surface_gpu_addr() else {
-        crate::log!("joker skipped reason=no-surface variant={}\n", spec.variant);
-        return Err("no-surface");
-    };
-    let Some((width, height)) = crate::intel::display::active_scanout_dimensions() else {
-        crate::log!("joker skipped reason=no-dimensions variant={}\n", spec.variant);
-        return Err("no-dimensions");
-    };
-    let Some(pitch_bytes) = width
-        .checked_mul(4)
-        .and_then(|v| crate::intel::align_up(v as usize, 64))
-    else {
-        crate::log!("joker skipped reason=bad-pitch width={}\n", width);
-        return Err("bad-pitch");
-    };
-
     let warm = warm_once(dev);
     if warm.ring_len == 0
         || warm.context_len == 0
@@ -4843,19 +4816,14 @@ fn submit_render_joker_probe_locked(
         return Err("ggtt-map");
     }
 
-    let (target_gpu, target_pitch, target_w, target_h, target_label) = match spec.target {
-        RenderJokerTarget::Primary => {
-            (surface_gpu, pitch_bytes, width as usize, height as usize, "primary")
-        }
-        RenderJokerTarget::ScratchRt => {
-            unsafe {
-                core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
-                core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
-            }
-            crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
-            (GPU_VA_STREAMOUT_BASE, 8 * core::mem::size_of::<u32>(), 8, 8, "scratch")
-        }
-    };
+    let RenderJokerTarget::ScratchRt = spec.target;
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+    let (target_gpu, target_pitch, target_w, target_h, target_label) =
+        (GPU_VA_STREAMOUT_BASE, 8 * core::mem::size_of::<u32>(), 8, 8, "scratch");
 
     let streamout_kind = render_joker_streamout_kind(spec.variant);
     let real_vs_contract = render_joker_real_vs_front_end_contract(spec.variant);
@@ -4953,625 +4921,12 @@ fn submit_render_joker_probe_locked(
     })
 }
 
-fn submit_primary_probe_now(reason: &'static str) -> bool {
-    let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    if PRIMARY_PROBE_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        crate::log!("primary-probe skipped reason=in-flight trigger={}\n", reason);
-        return false;
-    }
-
-    if PRIMARY_DISABLE_RENDER_BRINGUP {
-        crate::log!("primary-probe skipped reason=disabled trigger={} seq={}\n", reason, probe_seq);
-        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-        return false;
-    }
-
-    let Some(dev) = crate::intel::claimed_device() else {
-        crate::log!("primary-triangle skipped reason=no-device\n");
-        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-        return false;
-    };
-    let Some(surface_gpu) = crate::intel::display::primary_surface_gpu_addr() else {
-        crate::log!("primary-triangle skipped reason=no-surface\n");
-        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-        return false;
-    };
-    let Some((width, height)) = crate::intel::display::active_scanout_dimensions() else {
-        crate::log!("primary-triangle skipped reason=no-dimensions\n");
-        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-        return false;
-    };
-    let Some(pitch_bytes) = width
-        .checked_mul(4)
-        .and_then(|v| crate::intel::align_up(v as usize, 64))
-    else {
-        crate::log!("primary-triangle skipped reason=bad-pitch width={}\n", width);
-        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-        return false;
-    };
-
-    let warm = warm_once(dev);
-    if warm.ring_len == 0
-        || warm.context_len == 0
-        || warm.batch_len == 0
-        || warm.draw_state_len == 0
-        || warm.vertex_len == 0
-        || warm.result_len == 0
-        || warm.streamout_len == 0
-    {
-        crate::log!("primary-triangle skipped reason=warm-buffers\n");
-        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-        return false;
-    }
-    if !forcewake_render_acquire(warm) {
-        crate::log!("primary-triangle skipped reason=forcewake\n");
-        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-        return false;
-    }
-    if !ensure_smoke_buffers_mapped(dev, warm) {
-        crate::log!("primary-triangle skipped reason=ggtt-map\n");
-        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-        return false;
-    }
-    if PRIMARY_USE_MI_SCANOUT_PROOF
-        && reason == "boot-once"
-        && !PRIMARY_MI_SCANOUT_PROOF_SUBMITTED.swap(true, Ordering::AcqRel)
-    {
-        let accepted = submit_mi_scanout_store_proof(
-            dev,
-            warm,
-            surface_gpu,
-            pitch_bytes,
-            width as usize,
-            height as usize,
-        );
-        if !accepted {
-            intel_render_verbose_log!("primary-mi-scanout-store proof failed trigger={}\n", reason);
-        }
-    }
-    let completed = if PRIMARY_USE_DRAW_PATH_BOOT_ONCE && reason == "boot-once" {
-        let completed = submit_primary_triangle_with_retries(
-            dev,
-            warm,
-            surface_gpu,
-            pitch_bytes,
-            width as usize,
-            height as usize,
-        );
-        if !completed {
-            intel_render_verbose_log!(
-                "primary-draw-path submit failed trigger={} mode=clean-boot-once\n",
-                reason
-            );
-        }
-        completed
-    } else if PRIMARY_USE_MI_STRIPE_PROBE {
-        let completed = submit_vertical_stripes_to_surface(
-            dev,
-            warm,
-            surface_gpu,
-            pitch_bytes,
-            width as usize,
-            height as usize,
-        );
-        if !completed {
-            intel_render_verbose_log!("primary-mi-stripes submit failed trigger={}\n", reason);
-        }
-        completed
-    } else if PRIMARY_USE_3D_NO_DRAW_PROBE {
-        let completed = submit_3d_no_draw_probe(dev, warm);
-        if !completed {
-            intel_render_verbose_log!("primary-3d-no-draw submit failed trigger={}\n", reason);
-        }
-        completed
-    } else if submit_primary_triangle_with_retries(
-        dev,
-        warm,
-        surface_gpu,
-        pitch_bytes,
-        width as usize,
-        height as usize,
-    ) {
-        true
-    } else {
-        let completed = submit_triangle_to_surface(
-            dev,
-            warm,
-            surface_gpu,
-            pitch_bytes,
-            width as usize,
-            height as usize,
-        );
-        if !completed {
-            intel_render_verbose_log!("primary-triangle submit failed trigger={}\n", reason);
-        }
-        completed
-    };
-    if should_log_primary_probe(reason, probe_seq) {
-        intel_render_verbose_log!(
-            "primary-probe seq={} trigger={} completed={} mode={}\n",
-            probe_seq,
-            reason,
-            completed as u8,
-            if PRIMARY_USE_MI_STRIPE_PROBE {
-                "mi-stripes"
-            } else if PRIMARY_USE_DRAW_PATH_BOOT_ONCE && reason == "boot-once" {
-                "draw-path"
-            } else if PRIMARY_USE_3D_NO_DRAW_PROBE {
-                "3d-no-draw"
-            } else {
-                "3d"
-            }
-        );
-    }
-    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-    completed
-}
-
 fn seed_render_scratch_rt(warm: RenderWarmState) {
     unsafe {
         core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
         core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
     }
     crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
-}
-
-fn submit_primary_triangle_with_retries(
-    dev: crate::intel::Dev,
-    warm: RenderWarmState,
-    surface_gpu: u64,
-    pitch_bytes: usize,
-    width: usize,
-    height: usize,
-) -> bool {
-    if !PRIMARY_BOOT_3D_PROBES_ENABLED {
-        let completed = submit_triangle_vf_draw_to_surface(
-            "primary-single-submit",
-            dev,
-            warm,
-            surface_gpu,
-            pitch_bytes,
-            width,
-            height,
-            TriangleBlendProbeMode::ExplicitRt0,
-            VfPrimitiveGeometry::Canonical,
-            BackendProbeMode::MesaLike,
-            PostDrawSyncVariant::HeavyAll,
-        );
-        intel_render_focus_log!(
-            "primary-single-submit completed={} action=stop-after-one-submit reason=boot-3d-probes-disabled\n",
-            completed as u8,
-        );
-        return completed;
-    }
-    intel_render_focus_log!(
-        "primary-boot-3d-probes enabled=1 action=run-frontier-ladder vf_streamout=1 ps_spectrum=1 vs_frontier=1 revision=nonvisual-vs-scratch-rt32-trilist-split\n",
-    );
-
-    let initial_streamout_experiment =
-        select_streamout_proof_experiment(PRIMARY_PROBE_SEQ.load(Ordering::Acquire));
-    let vf_streamout_precheck = submit_triangle_vf_streamout_proof(
-        dev,
-        warm,
-        surface_gpu,
-        pitch_bytes,
-        width,
-        height,
-        initial_streamout_experiment,
-    );
-    intel_render_verbose_log!(
-        "primary-vf-streamout-precheck experiment={} accepted={}\n",
-        initial_streamout_experiment.label(),
-        vf_streamout_precheck as u8,
-    );
-    if !vf_streamout_precheck {
-        return false;
-    }
-
-    let vf_draw_precheck = submit_triangle_vf_draw_to_surface(
-        "vf-draw-path",
-        dev,
-        warm,
-        surface_gpu,
-        pitch_bytes,
-        width,
-        height,
-        TriangleBlendProbeMode::ExplicitRt0,
-        VfPrimitiveGeometry::Canonical,
-        BackendProbeMode::MesaLike,
-        PostDrawSyncVariant::HeavyAll,
-    );
-    intel_render_verbose_log!("primary-vf-draw-precheck completed={}\n", vf_draw_precheck as u8,);
-    if vf_draw_precheck {
-        return true;
-    }
-    reset_fragment_boundary_probe();
-    let ps_launch_big_primitive = submit_triangle_vf_draw_to_surface(
-        "ps-launch-big-primitive",
-        dev,
-        warm,
-        surface_gpu,
-        pitch_bytes,
-        width,
-        height,
-        TriangleBlendProbeMode::ExplicitRt0,
-        VfPrimitiveGeometry::Oversized,
-        BackendProbeMode::MesaLike,
-        PostDrawSyncVariant::HeavyAll,
-    );
-    intel_render_verbose_log!(
-        "primary-ps-launch-big-primitive completed={}\n",
-        ps_launch_big_primitive as u8,
-    );
-    if ps_launch_big_primitive {
-        return true;
-    }
-
-    run_postdraw_pc_retire_spectrum(dev, warm, surface_gpu, pitch_bytes, width, height);
-
-    seed_render_scratch_rt(warm);
-    let ps_bt0_scratch_rt = submit_triangle_vf_draw_to_surface(
-        "ps-bt0-scratch-rt",
-        dev,
-        warm,
-        GPU_VA_STREAMOUT_BASE,
-        8 * core::mem::size_of::<u32>(),
-        8,
-        8,
-        TriangleBlendProbeMode::MesaZeroedState,
-        VfPrimitiveGeometry::Oversized,
-        BackendProbeMode::PsBindingTableCountZero,
-        PostDrawSyncVariant::LightPostSyncNoCs,
-    );
-    intel_render_verbose_log!("primary-ps-bt0-scratch-rt completed={}\n", ps_bt0_scratch_rt as u8,);
-    intel_render_focus_log!(
-        "primary-ps-bt0-scratch-rt diagnostic completed={} note=no-cs-tail-completion-is-not-a-fence\n",
-        ps_bt0_scratch_rt as u8,
-    );
-    if ps_bt0_scratch_rt {
-        recover_render_engine_after_nonretired_submit(dev, warm, "ps-bt0-scratch-rt");
-    }
-
-    seed_render_scratch_rt(warm);
-    let raster_wm_oa_probe = submit_triangle_vf_draw_to_surface(
-        "raster-wm-oa-probe",
-        dev,
-        warm,
-        GPU_VA_STREAMOUT_BASE,
-        8 * core::mem::size_of::<u32>(),
-        8,
-        8,
-        TriangleBlendProbeMode::MesaZeroedState,
-        VfPrimitiveGeometry::Oversized,
-        BackendProbeMode::RasterWmInputOa,
-        PostDrawSyncVariant::LightPostSyncNoCs,
-    );
-    intel_render_verbose_log!(
-        "primary-raster-wm-oa-probe completed={}\n",
-        raster_wm_oa_probe as u8,
-    );
-    intel_render_focus_log!(
-        "primary-raster-wm-oa-probe diagnostic completed={} note=no-cs-tail-completion-is-not-a-fence\n",
-        raster_wm_oa_probe as u8,
-    );
-    if raster_wm_oa_probe {
-        recover_render_engine_after_nonretired_submit(dev, warm, "raster-wm-oa-probe");
-    }
-
-    let fragment_candidate_ready = fragment_candidate_ready();
-    let fragment_boundary_seen = fragment_boundary_observed();
-    intel_render_focus_log!(
-        "primary-fragment-boundary-gate candidate_ready={} fragment_observed={} action={} reason=shape_to_fragment_boundary_precedes_ps_spectrum\n",
-        fragment_candidate_ready as u8,
-        fragment_boundary_seen as u8,
-        if fragment_boundary_seen {
-            "continue-ps-spectrum"
-        } else {
-            "continue-ps-spectrum-diagnostic"
-        },
-    );
-
-    let ps_bt1_big_primitive = submit_triangle_vf_draw_to_surface(
-        "ps-bt1-big-primitive",
-        dev,
-        warm,
-        surface_gpu,
-        pitch_bytes,
-        width,
-        height,
-        TriangleBlendProbeMode::ExplicitRt0,
-        VfPrimitiveGeometry::Oversized,
-        BackendProbeMode::PsBindingTableCountOne,
-        PostDrawSyncVariant::HeavyAll,
-    );
-    intel_render_verbose_log!(
-        "primary-ps-bt1-big-primitive completed={}\n",
-        ps_bt1_big_primitive as u8,
-    );
-    if ps_bt1_big_primitive {
-        return true;
-    }
-
-    let ps_wm_normal_big_primitive = submit_triangle_vf_draw_to_surface(
-        "ps-wm-normal-big-primitive",
-        dev,
-        warm,
-        surface_gpu,
-        pitch_bytes,
-        width,
-        height,
-        TriangleBlendProbeMode::ExplicitRt0,
-        VfPrimitiveGeometry::Oversized,
-        BackendProbeMode::WmNormalDispatch,
-        PostDrawSyncVariant::HeavyAll,
-    );
-    intel_render_verbose_log!(
-        "primary-ps-wm-normal-big-primitive completed={}\n",
-        ps_wm_normal_big_primitive as u8,
-    );
-    if ps_wm_normal_big_primitive {
-        return true;
-    }
-
-    let ps_dispatch_slot0_big_primitive = submit_triangle_vf_draw_to_surface(
-        "ps-dispatch-slot0-big-primitive",
-        dev,
-        warm,
-        surface_gpu,
-        pitch_bytes,
-        width,
-        height,
-        TriangleBlendProbeMode::ExplicitRt0,
-        VfPrimitiveGeometry::Oversized,
-        BackendProbeMode::PsDispatchSlot0,
-        PostDrawSyncVariant::HeavyAll,
-    );
-    intel_render_verbose_log!(
-        "primary-ps-dispatch-slot0-big-primitive completed={}\n",
-        ps_dispatch_slot0_big_primitive as u8,
-    );
-    if ps_dispatch_slot0_big_primitive {
-        return true;
-    }
-
-    let ps_dispatch_slot1_big_primitive = submit_triangle_vf_draw_to_surface(
-        "ps-dispatch-slot1-big-primitive",
-        dev,
-        warm,
-        surface_gpu,
-        pitch_bytes,
-        width,
-        height,
-        TriangleBlendProbeMode::ExplicitRt0,
-        VfPrimitiveGeometry::Oversized,
-        BackendProbeMode::PsDispatchSlot1,
-        PostDrawSyncVariant::HeavyAll,
-    );
-    intel_render_verbose_log!(
-        "primary-ps-dispatch-slot1-big-primitive completed={}\n",
-        ps_dispatch_slot1_big_primitive as u8,
-    );
-    if ps_dispatch_slot1_big_primitive {
-        return true;
-    }
-
-    let ps_dispatch_slot2_big_primitive = submit_triangle_vf_draw_to_surface(
-        "ps-dispatch-slot2-big-primitive",
-        dev,
-        warm,
-        surface_gpu,
-        pitch_bytes,
-        width,
-        height,
-        TriangleBlendProbeMode::ExplicitRt0,
-        VfPrimitiveGeometry::Oversized,
-        BackendProbeMode::PsDispatchSlot2,
-        PostDrawSyncVariant::HeavyAll,
-    );
-    intel_render_verbose_log!(
-        "primary-ps-dispatch-slot2-big-primitive completed={}\n",
-        ps_dispatch_slot2_big_primitive as u8,
-    );
-    if ps_dispatch_slot2_big_primitive {
-        return true;
-    }
-
-    let payload_variants = [
-        ("ps-payload-push-big-primitive", BackendProbeMode::PsPayloadPushConstant),
-        ("ps-payload-attr-big-primitive", BackendProbeMode::PsPayloadAttributeEnable),
-        ("ps-payload-simple-big-primitive", BackendProbeMode::PsPayloadSimpleHint),
-        ("ps-payload-source-depth-w-big-primitive", BackendProbeMode::PsPayloadSourceDepthW),
-        ("ps-payload-bary-big-primitive", BackendProbeMode::PsPayloadBaryPlanes),
-    ];
-    for (payload_submit_name, payload_mode) in payload_variants {
-        let completed = submit_triangle_vf_draw_to_surface(
-            payload_submit_name,
-            dev,
-            warm,
-            surface_gpu,
-            pitch_bytes,
-            width,
-            height,
-            TriangleBlendProbeMode::ExplicitRt0,
-            VfPrimitiveGeometry::Oversized,
-            payload_mode,
-            PostDrawSyncVariant::HeavyAll,
-        );
-        intel_render_verbose_log!(
-            "primary-{} completed={}\n",
-            payload_submit_name,
-            completed as u8,
-        );
-        if completed {
-            return true;
-        }
-    }
-
-    let grf_variants = [
-        ("ps-grf-start-r1-big-primitive", BackendProbeMode::PsGrfStartR1),
-        ("ps-grf-start-r2-big-primitive", BackendProbeMode::PsGrfStartR2),
-        ("ps-grf-start-r4-big-primitive", BackendProbeMode::PsGrfStartR4),
-        ("ps-grf-maxthreads-31-big-primitive", BackendProbeMode::PsGrfMaxThreads31),
-        ("ps-grf-maxthreads-15-big-primitive", BackendProbeMode::PsGrfMaxThreads15),
-    ];
-    for (grf_submit_name, grf_mode) in grf_variants {
-        let completed = submit_triangle_vf_draw_to_surface(
-            grf_submit_name,
-            dev,
-            warm,
-            surface_gpu,
-            pitch_bytes,
-            width,
-            height,
-            TriangleBlendProbeMode::ExplicitRt0,
-            VfPrimitiveGeometry::Oversized,
-            grf_mode,
-            PostDrawSyncVariant::HeavyAll,
-        );
-        intel_render_verbose_log!("primary-{} completed={}\n", grf_submit_name, completed as u8,);
-        if completed {
-            return true;
-        }
-    }
-
-    let ps_dispatch_all_big_primitive = submit_triangle_vf_draw_to_surface(
-        "ps-dispatch-all-big-primitive",
-        dev,
-        warm,
-        surface_gpu,
-        pitch_bytes,
-        width,
-        height,
-        TriangleBlendProbeMode::ExplicitRt0,
-        VfPrimitiveGeometry::Oversized,
-        BackendProbeMode::PsDispatchAllKspSlots,
-        PostDrawSyncVariant::HeavyAll,
-    );
-    intel_render_verbose_log!(
-        "primary-ps-dispatch-all-big-primitive completed={}\n",
-        ps_dispatch_all_big_primitive as u8,
-    );
-    if ps_dispatch_all_big_primitive {
-        return true;
-    }
-
-    reset_fragment_boundary_probe();
-    let fragment_shape_frontier = run_fragment_shape_frontier_spectrum(dev, warm);
-    intel_render_focus_log!(
-        "primary-fragment-shape-spectrum completed={} observed={} note=shape_clip_sf_axis_after_ps_state_axis\n",
-        fragment_shape_frontier as u8,
-        fragment_boundary_observed() as u8,
-    );
-    if fragment_shape_frontier {
-        return true;
-    }
-
-    let vs_draw_frontier_scratch = submit_triangle_vs_draw_frontier_to_scratch(dev, warm);
-    intel_render_focus_log!(
-        "primary-vs-draw-frontier-scratch completed={} observed={} note=nonvisual-vs-clip-join-probe\n",
-        vs_draw_frontier_scratch as u8,
-        fragment_boundary_observed() as u8,
-    );
-    if vs_draw_frontier_scratch {
-        return true;
-    }
-    intel_render_focus_log!(
-        "primary-vs-draw-frontier-precheck skipped reason=scratch-frontier-unobserved avoid_visible_scanout_flash surface=0x{:X} size={}x{} pitch=0x{:X}\n",
-        surface_gpu,
-        width,
-        height,
-        pitch_bytes,
-    );
-
-    let mut vs_streamout_experiment = initial_streamout_experiment;
-    let mut vs_streamout_precheck = false;
-    for attempt in 1..=3 {
-        let accepted = submit_triangle_vs_streamout_proof(
-            dev,
-            warm,
-            surface_gpu,
-            pitch_bytes,
-            width,
-            height,
-            vs_streamout_experiment,
-        );
-        intel_render_verbose_log!(
-            "primary-vs-streamout-precheck experiment={} accepted={} attempt={}/3\n",
-            vs_streamout_experiment.label(),
-            accepted as u8,
-            attempt
-        );
-        if accepted {
-            vs_streamout_precheck = true;
-            break;
-        }
-        vs_streamout_experiment = vs_streamout_experiment.alternate();
-    }
-    if !vs_streamout_precheck {
-        return false;
-    }
-
-    let mut streamout_experiment = vs_streamout_experiment;
-    let mut streamout_precheck = false;
-    for attempt in 1..=3 {
-        let accepted = submit_triangle_streamout_proof(
-            dev,
-            warm,
-            surface_gpu,
-            pitch_bytes,
-            width,
-            height,
-            streamout_experiment,
-        );
-        intel_render_verbose_log!(
-            "primary-streamout-precheck experiment={} accepted={} attempt={}/3\n",
-            streamout_experiment.label(),
-            accepted as u8,
-            attempt
-        );
-        if accepted {
-            streamout_precheck = true;
-            break;
-        }
-        streamout_experiment = streamout_experiment.alternate();
-    }
-    if !streamout_precheck {
-        return false;
-    }
-
-    let mut completed_any = false;
-    for attempt in 1..=PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS {
-        let blend_mode = TriangleBlendProbeMode::for_attempt(attempt);
-        let completed = submit_triangle_draw_to_surface(
-            dev,
-            warm,
-            surface_gpu,
-            pitch_bytes,
-            width,
-            height,
-            blend_mode,
-        );
-        intel_render_verbose_log!(
-            "primary-triangle attempt={}/{} target=0x{:X} blend_probe={} completed={}\n",
-            attempt,
-            PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS,
-            surface_gpu,
-            blend_mode.label(),
-            completed as u8
-        );
-        completed_any |= completed;
-        if !completed {
-            intel_render_verbose_log!(
-                "primary-streamout-proof skipped trigger=draw-fail attempt={} reason=post-hang-state-not-clean\n",
-                attempt,
-            );
-            break;
-        }
-    }
-    completed_any
 }
 
 fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
@@ -8147,62 +7502,46 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         ) && completed
             && changed_pixels != 0
         {
-            // Read back the complete target once. It was seeded with a constant
-            // poison value, so full-size before/after vectors are redundant.
-            // Reuse the caller's allocation when this is a transient stamp.
-            let target_bytes = pixel_count.saturating_mul(4);
-            let mut visible_rgba = readback
-                .as_deref_mut()
-                .and_then(Option::take)
-                .map(|previous| previous.pixels)
-                .unwrap_or_default();
-            visible_rgba.clear();
-            visible_rgba.reserve_exact(target_bytes);
-            for y in 0..target_height {
-                let row_offset = y.saturating_mul(draw.rt_pitch as usize);
-                for x in 0..target_width {
-                    let after = read_scratch_dword(row_offset.saturating_add(x.saturating_mul(4)));
-                    if after == 0xDEAD_BEEF {
-                        visible_rgba.extend_from_slice(&[0, 0, 0, 0]);
-                    } else {
-                        visible_rgba.extend_from_slice(&after.to_le_bytes());
+            // A font job produces an offscreen result only. Visibility belongs
+            // to a UI4 frame/window; this render service may return pixels to
+            // such a producer but cannot write an application plane directly.
+            let captured = if let Some(output) = readback.as_deref_mut() {
+                let target_bytes = pixel_count.saturating_mul(4);
+                let mut visible_rgba = output
+                    .take()
+                    .map(|previous| previous.pixels)
+                    .unwrap_or_default();
+                visible_rgba.clear();
+                visible_rgba.reserve_exact(target_bytes);
+                for y in 0..target_height {
+                    let row_offset = y.saturating_mul(draw.rt_pitch as usize);
+                    for x in 0..target_width {
+                        let after =
+                            read_scratch_dword(row_offset.saturating_add(x.saturating_mul(4)));
+                        if after == 0xDEAD_BEEF {
+                            visible_rgba.extend_from_slice(&[0, 0, 0, 0]);
+                        } else {
+                            visible_rgba.extend_from_slice(&after.to_le_bytes());
+                        }
                     }
                 }
-            }
-            let display_width = target_width;
-            let display_height = target_height;
-            let display_pitch = display_width.saturating_mul(4);
-            let captured = readback.is_some();
-            let presented = if let Some(output) = readback.as_deref_mut() {
                 *output = Some(FontRenderTargetReadback {
-                    width: display_width as u32,
-                    height: display_height as u32,
+                    width: target_width as u32,
+                    height: target_height as u32,
                     pixels: visible_rgba,
                 });
-                false
+                true
             } else {
-                crate::intel::display::present_rgba_overlay_at(
-                    &visible_rgba,
-                    display_width as u32,
-                    display_height as u32,
-                    display_pitch,
-                    96,
-                    96,
-                    true,
-                    "font-tessel-render-target",
-                )
+                false
             };
             intel_render_focus_log!(
-                "{} visible-stamp presented={} captured={} pos={} source_size={}x{} display_size={}x{} scale=1 native_1to1=1 changed_pixels={} readback_buffers=1 source=whole-linear-rgba8-readback\n",
+                "{} offscreen-result captured={} presented=0 source_size={}x{} changed_pixels={} readback_buffers={} visibility=ui4-frame-required source=whole-linear-rgba8-readback\n",
                 submit_name,
-                presented as u8,
                 captured as u8,
-                if captured { "deferred-grid" } else { "96x96" },
                 draw.target_w,
                 draw.target_h,
-                display_width,
-                display_height,
                 changed_pixels,
+                captured as u8,
             );
         }
     }

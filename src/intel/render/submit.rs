@@ -32,12 +32,6 @@ fn submit_warm_render_batch(
         TriangleStageStats::default()
     };
     let stats_context_baseline = TriangleStageStats::default();
-    let surface_samples_before =
-        if is_surface_draw_submit_name(submit_name) && !is_scratch_rt_submit_name(submit_name) {
-            crate::intel::display::capture_primary_surface_samples()
-        } else {
-            None
-        };
     if triangle_debug_submit {
         log_triangle_stage_stats(
             submit_name,
@@ -105,10 +99,7 @@ fn submit_warm_render_batch(
         // This is a safety ceiling only. Native scanout rendering is judged
         // by elapsed time below rather than by CPU-dependent spin counts.
         5_000_000
-    } else if matches!(
-        submit_name,
-        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d"
-    ) {
+    } else if matches!(submit_name, "font-tessel-3d-once" | "font-outline-gpu-mesh-3d") {
         200_000
     } else {
         4096
@@ -180,9 +171,7 @@ fn submit_warm_render_batch(
             RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD => {
                 read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD)
             }
-            RESULT_SLOT_SCENE_FRAME_DWORD => {
-                read_result_dword(warm, RESULT_SLOT_SCENE_FRAME_DWORD)
-            }
+            RESULT_SLOT_SCENE_FRAME_DWORD => read_result_dword(warm, RESULT_SLOT_SCENE_FRAME_DWORD),
             _ => result0,
         };
         // The scene release uses a QWord cookie from the dedicated post-sync
@@ -243,9 +232,7 @@ fn submit_warm_render_batch(
         core::hint::spin_loop();
         iter += 1;
     }
-    let poll_elapsed_us = crate::chronos::monotonic_nanos()
-        .saturating_sub(poll_started_ns)
-        / 1_000;
+    let poll_elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(poll_started_ns) / 1_000;
     if draw3d_scene_submit {
         DRAW3D_LAST_GPU_POLL_US.store(poll_elapsed_us, Ordering::Release);
         DRAW3D_LAST_GPU_POLL_ITERS.store(iter as u64, Ordering::Release);
@@ -292,9 +279,6 @@ fn submit_warm_render_batch(
             crate::intel::mmio_read(dev, RCS_RING_CTL),
             crate::intel::mmio_read(dev, RCS_RING_INSTDONE)
         );
-        if is_surface_draw_submit_name(submit_name) && !is_scratch_rt_submit_name(submit_name) {
-            crate::intel::display::log_primary_surface_samples("post-render-primary-target");
-        }
     }
     if is_triangle_debug_submit_name(submit_name) {
         intel_render_focus_log!(
@@ -626,12 +610,7 @@ fn submit_warm_render_batch(
             result6,
             result7,
         );
-        log_triangle_stage_diagnosis(
-            submit_name,
-            completed,
-            stats_context_baseline,
-            stats_after,
-        );
+        log_triangle_stage_diagnosis(submit_name, completed, stats_context_baseline, stats_after);
         log_triangle_named_proofs(
             dev,
             submit_name,
@@ -645,56 +624,8 @@ fn submit_warm_render_batch(
             result7,
         );
     }
-    if is_surface_draw_submit_name(submit_name) && !is_scratch_rt_submit_name(submit_name) {
-        if let (Some(before), Some(after)) =
-            (surface_samples_before, crate::intel::display::capture_primary_surface_samples())
-        {
-            let stats_after = capture_triangle_stage_stats(dev);
-            let delta = stats_after.delta_since(stats_context_baseline);
-            let any_change = after.any_changed_since(before);
-            let triangle_change = after.triangle_points_changed_since(before);
-            intel_render_focus_log!(
-                "{} ps-rt-proof accepted={} ps_delta={} rt_any_change={} rt_triangle_change={} does_not_prove=display_scanout\n",
-                submit_name,
-                (delta.ps_invocations > 0 && any_change) as u8,
-                delta.ps_invocations,
-                any_change as u8,
-                triangle_change as u8,
-            );
-            intel_render_focus_log!(
-                "{} render-target completed={} any_change={} triangle_change={} apex={}=>{} centroid={}=>{} left={}=>{} right={}=>{} center={}=>{}\n",
-                submit_name,
-                completed as u8,
-                any_change as u8,
-                triangle_change as u8,
-                before.apex,
-                after.apex,
-                before.centroid,
-                after.centroid,
-                before.left,
-                after.left,
-                before.right,
-                after.right,
-                before.center,
-                after.center,
-            );
-        }
-    }
     if is_surface_draw_submit_name(submit_name) {
         log_triangle_demo_stats(dev, completed);
-    }
-    if completed
-        && is_surface_draw_submit_name(submit_name)
-        && !is_scratch_rt_submit_name(submit_name)
-    {
-        let label = match submit_name {
-            "vf-draw-path" => "post-vf-draw-path",
-            "vs-draw-frontier" => "post-vs-draw-frontier",
-            _ => "post-draw-path",
-        };
-        let kicked = crate::intel::display::kick_primary_surface_scanout(label);
-        intel_render_verbose_log!("{} scanout-kick={}\n", submit_name, kicked as u8);
-        crate::intel::display::log_pipe_live_scanout_state(label);
     }
     if !completed && submit_name == "draw3d-scene" {
         intel_render_focus_log!(
@@ -2015,10 +1946,7 @@ fn masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
     set_bits | (update << 16)
 }
 
-fn build_execlist_context_descriptor(
-    context_gpu_addr: u64,
-    ppgtt_enable: bool,
-) -> (u32, u32) {
+fn build_execlist_context_descriptor(context_gpu_addr: u64, ppgtt_enable: bool) -> (u32, u32) {
     static RCS_SUBMIT_COUNTER: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(0);
 
@@ -2026,7 +1954,11 @@ fn build_execlist_context_descriptor(
     let desc = base
         | GEN8_CTX_VALID
         | CTX_DESC_FORCE_RESTORE
-        | if ppgtt_enable { GEN8_CTX_PPGTT_ENABLE } else { 0 }
+        | if ppgtt_enable {
+            GEN8_CTX_PPGTT_ENABLE
+        } else {
+            0
+        }
         | GEN8_CTX_PRIVILEGE
         | GEN12_CTX_PRIORITY_NORMAL
         | (INTEL_LEGACY_64B_CONTEXT << GEN8_CTX_ADDRESSING_MODE_SHIFT);

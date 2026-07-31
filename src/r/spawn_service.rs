@@ -89,7 +89,6 @@ define_started_flags!(
     GPGPU_UI4_PREVIEW_CONSUMER_STARTED,
     GPGPU_UI4_SVG_PROBE_CONSUMER_STARTED,
     HW_PIC_SERVICE_STARTED,
-    HW_LOGO_PRESENT_TASK_STARTED,
     VIRTIO_GPU_UI_STARTED,
     INTEL_HDA_AUDIO_DEMO_STARTED,
     RAPLE_SERVICE_STARTED,
@@ -104,7 +103,6 @@ define_started_flags!(
     NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
     ATOMIC_BOMB_STARTED,
-    I226_DIAGNOSTIC_DISPLAY_STARTED,
     TINYAUDIO_SERVICE_STARTED,
     TINYAUDIO_LIVE_HTTP_STARTED,
     EXECUTOR_REALM_MIGRATION_SMOKE_STARTED,
@@ -507,10 +505,6 @@ fn spawn_net_throughput_bench(spawner: Spawner) -> SpawnAttempt {
     SpawnAttempt::Spawned
 }
 
-fn spawn_i226_diagnostic_display(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::net::i226::i226_diagnostic_display_task())
-}
-
 fn spawn_net_cache_service(spawner: Spawner) -> SpawnAttempt {
     spawn_bool_result_to_attempt(crate::net::cache_service::ensure_service_started(spawner))
 }
@@ -766,10 +760,6 @@ fn spawn_gpgpu_ui4_svg_probe_consumer_service_task(spawner: Spawner) -> SpawnAtt
 
 fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_pic_service())
-}
-
-fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_logo_present_task())
 }
 
 fn spawn_virtio_gpu_ui_task(spawner: Spawner) -> SpawnAttempt {
@@ -1449,7 +1439,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 72
+const TASK_COUNT: usize = 70
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
@@ -1823,19 +1813,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         intel_media_engine_gate,
         &HW_PIC_SERVICE_STARTED,
         spawn_hw_pic_service,
-    ),
-    TaskSpec::enabled_gated(
-        "hw_logo_present_task",
-        0,
-        intel_media_engine_gate,
-        &HW_LOGO_PRESENT_TASK_STARTED,
-        spawn_hw_logo_present_task,
-    ),
-    TaskSpec::disabled(
-        "i226-diagnostic-display",
-        0,
-        &I226_DIAGNOSTIC_DISPLAY_STARTED,
-        spawn_i226_diagnostic_display,
     ),
     TaskSpec::enabled_gated(
         "virtio-gpu-ui",

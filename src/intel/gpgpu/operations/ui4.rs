@@ -784,8 +784,9 @@ pub(crate) fn queue_ui4_stream_layers_to_nv12_linear(
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
     let queue_started_tick = direct_rcs_now_tick();
     let mut probe = GpgpuSubmissionProbe::default();
-    if layers.is_empty()
-        || layers.len() > UI4_COMPOSE_LAYERS_MAX_LAYERS
+    // Zero selected layers is a valid black frame. In particular, stream
+    // liveness must not depend on a mouse-created slot-4 overlay being present.
+    if layers.len() > UI4_COMPOSE_LAYERS_MAX_LAYERS
         || logical_width == 0
         || logical_height == 0
         || !destination.is_valid()
@@ -866,7 +867,9 @@ pub(crate) fn queue_ui4_stream_layers_to_nv12_linear(
             );
         }
     }
-    super::dma_flush(desc.virt, descriptor_bytes);
+    if descriptor_bytes != 0 {
+        super::dma_flush(desc.virt, descriptor_bytes);
+    }
 
     let params = Ui4ComposeLayersToNv12LinearParams {
         layers_gpu: desc.gpu,

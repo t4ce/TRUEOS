@@ -39,7 +39,6 @@ impl Slot4State {
 
 #[embassy_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_slot4_service_task() {
-    crate::intel::wait_hw_logo_sequence_done().await;
     crate::log_info!(target: "ui4/slot4";
         "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=static-color-crosshairs+selected-frame-strips+selection-outline-1px+maximize-outline-1px+context-menu hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=ordered-linear-diff gpu_submits=0 synthetic-motion=off\n",
         super::INTERACTION_CADENCE_HZ,

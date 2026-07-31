@@ -1,8 +1,6 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::graphics::primitives::{
-    Error, Result, UiPlaneSlot, UiPresent, UiPresentPath, UiRect, UiSurface, UiSurfaceFormat,
-};
+use crate::graphics::primitives::{Error, Result, UiRect, UiSurface, UiSurfaceFormat};
 use spin::Mutex;
 
 // Keep a generous table of trusted physical-buffer handles. This is separate
@@ -368,62 +366,6 @@ pub fn clear_surface_rgb(handle: UiSurfaceHandle, rgb: u32) -> Result<()> {
     }
     flush_surface_rect(surface, rect);
     Ok(())
-}
-
-pub fn present_surface(
-    handle: UiSurfaceHandle,
-    present: UiPresent,
-    reason: &'static str,
-) -> Result<UiPresentPath> {
-    let surface = lookup(handle).ok_or(Error::NotFound)?;
-    let src = clip_rect_to_surface(present.src, surface.desc).ok_or(Error::Invalid)?;
-    if present.dst.is_empty() {
-        return Err(Error::Invalid);
-    }
-
-    match present.plane {
-        UiPlaneSlot::Primary => present_primary(surface, src, present.dst, reason),
-        UiPlaneSlot::Overlay(_) => Err(Error::Unsupported),
-    }
-}
-
-fn present_primary(
-    surface: TrustedUiSurface,
-    src: UiRect,
-    dst: UiRect,
-    reason: &'static str,
-) -> Result<UiPresentPath> {
-    if surface.desc.format == UiSurfaceFormat::Rgba8888 {
-        if present_primary_backing_copy(surface, src, dst, reason) {
-            return Ok(UiPresentPath::CpuCopy);
-        }
-        return Err(Error::Unsupported);
-    }
-
-    if present_primary_backing_copy(surface, src, dst, reason) {
-        return Ok(UiPresentPath::CpuCopy);
-    }
-
-    Err(Error::Unsupported)
-}
-
-fn present_primary_backing_copy(
-    surface: TrustedUiSurface,
-    src: UiRect,
-    dst: UiRect,
-    reason: &'static str,
-) -> bool {
-    matches!(
-        surface.desc.format,
-        UiSurfaceFormat::Rgba8888 | UiSurfaceFormat::Xrgb8888 | UiSurfaceFormat::Xbgr8888
-    ) && crate::intel::present_ui_surface_to_primary_backing(
-        surface.desc,
-        surface.virt.cast_const(),
-        surface.byte_len,
-        src,
-        dst,
-        reason,
-    )
 }
 
 fn lookup(handle: UiSurfaceHandle) -> Option<TrustedUiSurface> {

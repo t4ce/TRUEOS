@@ -3,8 +3,10 @@
 //
 // One SIMD16 work-item produces one 2x2 NV12 macro-pixel. Each of the four
 // nearest-neighbour logical scanout samples is composed from the explicit RDP
-// layer table in plane/z order and converted in registers. No full-resolution
-// RGBA mirror, CPU pixel pass, or GPU-to-CPU ownership transition exists.
+// layer table in plane/z order and converted in registers. An empty layer table
+// intentionally emits black, keeping UDP frame production independent of UI
+// interaction. No full-resolution RGBA mirror, CPU pixel pass, or GPU-to-CPU
+// ownership transition exists.
 
 #define UI4_LAYER_DWORDS 12u
 #define UI4_LAYER_FLAG_BGRA (1u << 0)

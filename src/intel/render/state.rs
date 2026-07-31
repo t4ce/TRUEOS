@@ -183,7 +183,11 @@ impl ResidentRenderBuffer {
             return false;
         }
         unsafe {
-            core::ptr::copy_nonoverlapping(bytes.as_ptr(), self.storage_virt.add(offset), bytes.len());
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                self.storage_virt.add(offset),
+                bytes.len(),
+            );
         }
         true
     }
@@ -2360,9 +2364,7 @@ unsafe impl Send for RenderWarmState {}
 unsafe impl Sync for RenderWarmState {}
 
 static WARM_STATE: Mutex<Option<RenderWarmState>> = Mutex::new(None);
-static PRIMARY_TRIANGLE_SUBMITTED: AtomicBool = AtomicBool::new(false);
 static PRIMARY_PROBE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
-static PRIMARY_MI_SCANOUT_PROOF_SUBMITTED: AtomicBool = AtomicBool::new(false);
 static FRAGMENT_CANDIDATE_READY: AtomicBool = AtomicBool::new(false);
 static FRAGMENT_BOUNDARY_OBSERVED: AtomicBool = AtomicBool::new(false);
 static RENDER_FRONTIER_COMPLETED: AtomicBool = AtomicBool::new(false);

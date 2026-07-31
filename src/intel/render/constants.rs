@@ -242,11 +242,6 @@ const RCS_EXEC_RESULT_DRAW_POST3D: u32 = 0xC0DE_7722;
 const RCS_ARTIFICIAL_FRAGMENT_PRE_COLOR: u32 = 0xA17F_1001;
 const RCS_ARTIFICIAL_FRAGMENT_POST_COLOR: u32 = 0xA17F_1002;
 const PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS: usize = 3;
-const PRIMARY_USE_MI_STRIPE_PROBE: bool = false;
-const PRIMARY_USE_MI_SCANOUT_PROOF: bool = false;
-const PRIMARY_USE_3D_NO_DRAW_PROBE: bool = false;
-const PRIMARY_USE_DRAW_PATH_BOOT_ONCE: bool = true;
-const PRIMARY_BOOT_3D_PROBES_ENABLED: bool = true;
 // Temporary one-boot quiet switch: keep RCS render/GPGPU probes off while
 // validating the rest of boot without render-engine traffic.
 const PRIMARY_DISABLE_RENDER_BRINGUP: bool = true;
@@ -459,9 +454,8 @@ const PIPE_CONTROL_SCENE_COLOR_RELEASE_BITS: u32 = PIPE_CONTROL_RENDER_TARGET_CA
 // QWord write is the retirement cookie observed by the host. Keep the generic
 // PIPE_CONTROL flush bit on this packet as i915 does for its separated Gen12
 // RCS breadcrumb write.
-const PIPE_CONTROL_SCENE_RELEASE_MARKER_BITS: u32 = PIPE_CONTROL_FLUSH_ENABLE
-    | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE
-    | PIPE_CONTROL_CS_STALL;
+const PIPE_CONTROL_SCENE_RELEASE_MARKER_BITS: u32 =
+    PIPE_CONTROL_FLUSH_ENABLE | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_CS_STALL;
 // Exact successful gfx12 post-draw completion packet from the Mesa capture.
 // It targets PPGTT (DEST_GGTT clear) and avoids HDC flush, whose gfx12 form
 // additionally requires a header bit.
