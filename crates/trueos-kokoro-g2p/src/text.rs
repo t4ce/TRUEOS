@@ -547,7 +547,7 @@ fn preferred_break(token_ids: &[u8], low: usize, high: usize) -> Option<usize> {
         return None;
     }
     for class in [BreakClass::Sentence, BreakClass::Clause, BreakClass::Space] {
-        if let Some(boundary) = (low..=high).find(|&boundary| {
+        if let Some(boundary) = (low..=high).rev().find(|&boundary| {
             token_ids
                 .get(boundary.saturating_sub(1))
                 .is_some_and(|&token| class.matches(token))
