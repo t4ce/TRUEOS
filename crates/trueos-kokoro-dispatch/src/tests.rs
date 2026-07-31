@@ -13,7 +13,11 @@ use trueos_kokoro_aot::{
 use trueos_kokoro_exec::{Executor, RuntimeShape, SliceEvent, TensorShapeTable};
 use trueos_kokoro_memory::{ExternalBindings, TensorMemory};
 
-use crate::{AttributeError, CpuDispatcher, decode, record_bytes};
+use crate::{
+    AttributeError, Attributes, CpuDispatcher, CpuWorkspace, DispatchError,
+    KOKORO_CPU_WORKSPACE_REQUIREMENTS, WorkspaceError, decode,
+    native_dispatch_requires_workspace, native_dispatch_supported, record_bytes,
+};
 
 #[repr(align(64))]
 struct AlignedArtifact([u8; 32_768]);
@@ -360,6 +364,187 @@ fn cpu_dispatcher_rejects_non_atomic_matmul_work_before_writing_output() {
     }
     assert!(output.iter().all(|&value| value == 37.0));
     fs::remove_file(path).expect("remove generated test fixture");
+}
+
+struct WorkspaceBuffers {
+    quant_u8: Vec<u8>,
+    packed_i8: Vec<i8>,
+    accum_i32: Vec<i32>,
+    row_sums_i32: Vec<i32>,
+    bias_i32: Vec<i32>,
+    lstm_gates_f32: Vec<f32>,
+}
+
+impl WorkspaceBuffers {
+    fn pinned() -> Self {
+        let required = KOKORO_CPU_WORKSPACE_REQUIREMENTS;
+        Self {
+            quant_u8: vec![0; required.quant_u8],
+            packed_i8: vec![0; required.packed_i8],
+            accum_i32: vec![0; required.accum_i32],
+            row_sums_i32: vec![0; required.row_sums_i32],
+            bias_i32: vec![0; required.bias_i32],
+            lstm_gates_f32: vec![0.0; required.lstm_gates_f32],
+        }
+    }
+
+    fn workspace(&mut self) -> CpuWorkspace<'_> {
+        CpuWorkspace::new(
+            &mut self.quant_u8,
+            &mut self.packed_i8,
+            &mut self.accum_i32,
+            &mut self.row_sums_i32,
+            &mut self.bias_i32,
+            &mut self.lstm_gates_f32,
+        )
+        .unwrap()
+    }
+}
+
+fn selected_fixture(opcode: OpCode) -> (Vec<u8>, PathBuf, Vec<u32>, Vec<u32>) {
+    let (mut artifact, path) = fixture();
+    let (op_index, input_ids, output_ids) = {
+        let program = Program::parse(&artifact).unwrap();
+        let op_index = (0..program.op_count())
+            .find(|&index| program.op(index).unwrap().opcode == opcode)
+            .unwrap();
+        let op = program.op(op_index).unwrap();
+        let inputs = (0..op.input_count)
+            .map(|input| program.op_input(op, input).unwrap())
+            .collect::<Vec<_>>();
+        let outputs = (0..op.output_count)
+            .map(|output| program.op_output(op, output).unwrap())
+            .collect::<Vec<_>>();
+        (op_index, inputs, outputs)
+    };
+
+    let op_offset = fixture_section_offset(&artifact, 2);
+    let selected = op_offset + op_index as usize * OP_RECORD_BYTES;
+    artifact.copy_within(selected..selected + OP_RECORD_BYTES, op_offset);
+    for &tensor in &input_ids {
+        rewrite_external_flags(&mut artifact, tensor, TensorFlags::INPUT);
+    }
+    for &tensor in &output_ids {
+        rewrite_external_flags(&mut artifact, tensor, TensorFlags::OUTPUT);
+    }
+    let seal = artifact_sha256(&artifact).unwrap();
+    artifact[64..96].copy_from_slice(&seal);
+    (artifact, path, input_ids, output_ids)
+}
+
+fn rewrite_external_flags(artifact: &mut [u8], tensor_id: u32, flags: TensorFlags) {
+    let offset = fixture_section_offset(artifact, 0) + tensor_id as usize * TENSOR_RECORD_BYTES;
+    assert_eq!(artifact[offset + 2], 4, "fixture tensor must be external");
+    artifact[offset + 4..offset + 8].copy_from_slice(&flags.bits().to_le_bytes());
+}
+
+fn bind_fixture_shapes<const SHAPES: usize>(
+    program: &Program<'_>,
+    shapes: &mut TensorShapeTable<SHAPES>,
+    tensor_ids: &[u32],
+) {
+    for &tensor_id in tensor_ids {
+        let tensor = program.tensor(tensor_id).unwrap();
+        let shape = RuntimeShape::new(&tensor.max_dims[..usize::from(tensor.rank)]).unwrap();
+        shapes.bind_external(program, tensor_id, shape).unwrap();
+    }
+}
+
+#[test]
+fn quantized_gemm_dispatch_matches_centered_onnx_arithmetic_and_requires_workspace() {
+    let (artifact, path, inputs, outputs) = selected_fixture(OpCode::DynamicQuantizedGemm);
+    let mut aligned = AlignedArtifact([0; 32_768]);
+    aligned.0[..artifact.len()].copy_from_slice(&artifact);
+    let program = Program::parse(&aligned.0[..artifact.len()]).unwrap();
+    assert_eq!(inputs.len(), 5);
+    assert_eq!(outputs.len(), 1);
+
+    let activation = [-1.0_f32, 0.25, 2.0, -0.5];
+    let weights = [2_i8, -3, 7, -5, 4, 1, 6, -8, 3, 9, 2, -4];
+    let weight_scales = [0.125_f32, 0.25, 0.5];
+    let weight_zero_points = [1_i8, -1, 2];
+    let bias = [0.5_f32, -1.0, 2.0];
+    let mut shapes: TensorShapeTable<256> = TensorShapeTable::new();
+    shapes.initialize(&program).unwrap();
+    bind_fixture_shapes(&program, &mut shapes, &inputs);
+    bind_fixture_shapes(&program, &mut shapes, &outputs);
+    let mut arena = AlignedArena([0; 64]);
+
+    {
+        let mut rejected_output = [91.0_f32; 3];
+        let mut bindings: ExternalBindings<'_, 6> = ExternalBindings::new();
+        bindings.bind_input(&program, &shapes, inputs[0], &activation).unwrap();
+        bindings.bind_input(&program, &shapes, inputs[1], &weights).unwrap();
+        bindings
+            .bind_input(&program, &shapes, inputs[2], &weight_scales)
+            .unwrap();
+        bindings
+            .bind_input(&program, &shapes, inputs[3], &weight_zero_points)
+            .unwrap();
+        bindings.bind_input(&program, &shapes, inputs[4], &bias).unwrap();
+        bindings
+            .bind_output(&program, &shapes, outputs[0], &mut rejected_output)
+            .unwrap();
+        let mut memory: TensorMemory<'_, '_, '_, 256, 6, 8> =
+            TensorMemory::phase_zero(&program, &mut shapes, &mut arena.0, &mut bindings).unwrap();
+        let mut dispatcher = CpuDispatcher::new(&mut memory);
+        let mut executor: Executor<1> = Executor::new();
+        let mut budget = WorkBudget::new(1).unwrap();
+        let report = executor.run_slice(&program, &mut dispatcher, &mut budget);
+        assert!(matches!(
+            report.event,
+            SliceEvent::DispatchFailed(DispatchError::WorkspaceRequired {
+                opcode: OpCode::DynamicQuantizedGemm
+            })
+        ));
+        drop(dispatcher);
+        drop(memory);
+        drop(bindings);
+        assert_eq!(rejected_output, [91.0; 3]);
+    }
+
+    let mut output = [91.0_f32; 3];
+    let mut bindings: ExternalBindings<'_, 6> = ExternalBindings::new();
+    bindings.bind_input(&program, &shapes, inputs[0], &activation).unwrap();
+    bindings.bind_input(&program, &shapes, inputs[1], &weights).unwrap();
+    bindings
+        .bind_input(&program, &shapes, inputs[2], &weight_scales)
+        .unwrap();
+    bindings
+        .bind_input(&program, &shapes, inputs[3], &weight_zero_points)
+        .unwrap();
+    bindings.bind_input(&program, &shapes, inputs[4], &bias).unwrap();
+    bindings
+        .bind_output(&program, &shapes, outputs[0], &mut output)
+        .unwrap();
+    let mut workspace_buffers = WorkspaceBuffers::pinned();
+    {
+        let mut memory: TensorMemory<'_, '_, '_, 256, 6, 8> =
+            TensorMemory::phase_zero(&program, &mut shapes, &mut arena.0, &mut bindings).unwrap();
+        let mut workspace = workspace_buffers.workspace();
+        let mut dispatcher = CpuDispatcher::new_with_workspace(&mut memory, &mut workspace);
+        let mut executor: Executor<1> = Executor::new();
+        let mut budget = WorkBudget::new(1).unwrap();
+        let report = executor.run_slice(&program, &mut dispatcher, &mut budget);
+        assert!(matches!(report.event, SliceEvent::BudgetExhausted));
+        assert_eq!(report.consumed, 1);
+    }
+
+    let mut quantized = [0_u8; 4];
+    let quantization =
+        trueos_ttstt_cpu::dynamic_quantize_linear_u8(&activation, &mut quantized).unwrap();
+    let expected = core::array::from_fn(|column| {
+        let mut accumulator = 0_i32;
+        for reduction in 0..4 {
+            accumulator += (i32::from(quantized[reduction])
+                - i32::from(quantization.zero_point))
+                * (i32::from(weights[reduction * 3 + column])
+                    - i32::from(weight_zero_points[column]));
+        }
+        accumulator as f32 * (quantization.scale * weight_scales[column]) + bias[column]
+    });
+    assert_eq!(output.map(f32::to_bits), expected.map(f32::to_bits));
+    fs::remove_file(path).unwrap();
 }
 
 fn matmul_fixture(work_units: u32) -> (Vec<u8>, PathBuf, u32, u32, u32) {

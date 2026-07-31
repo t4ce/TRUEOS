@@ -2,6 +2,7 @@ bld/
 .limine/
 tgt/
 target/
+target-*-host*/
 *.img
 virglrenderer-1.0.0/
 Cargo.lock
