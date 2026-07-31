@@ -17,8 +17,8 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
-mod intel_cursor;
 pub(crate) mod gpu_logger;
+mod intel_cursor;
 mod lilly;
 mod lilly_cursor;
 pub(crate) mod lilly_protocol;
@@ -615,6 +615,115 @@ fn submit_spirit_vfx_frame(
     })
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum GpuLoggerFramePath {
+    GpuWorklist,
+    CpuDirectFallback,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct GpuLoggerFrameSubmission {
+    fence: SpiritFence,
+    path: GpuLoggerFramePath,
+    rects: usize,
+    gpu_submits: usize,
+    gpu_submit_ms: u64,
+    release_sequence: u64,
+}
+
+fn submit_gpu_logger_cpu_fallback(
+    id: SpiritFenceId,
+    snapshot: gpu_logger::ActiveSnapshot,
+) -> Result<GpuLoggerFrameSubmission, SpiritSubmitError> {
+    let lease = acquire_frame_for(
+        id,
+        SpiritBarrierSet::CPU,
+        SpiritFrameProducer::GpuLogger(snapshot.generation),
+    )?;
+    if let Err(error) = write_cpu(lease, |pixels, layout| {
+        gpu_logger::render_bgra(pixels, layout, snapshot);
+    })
+    .and_then(|_| release_cpu(lease))
+    {
+        cancel_pending(lease);
+        return Err(error);
+    }
+    Ok(GpuLoggerFrameSubmission {
+        fence: lease.fence,
+        path: GpuLoggerFramePath::CpuDirectFallback,
+        rects: 0,
+        gpu_submits: 0,
+        gpu_submit_ms: 0,
+        release_sequence: 0,
+    })
+}
+
+/// Author one opaque diagnostic panel into Spirit's exact hidden cursor
+/// member. The worklist and final cache-release packet both retire before the
+/// common mailbox/arm path can expose the allocation. If GPU admission has
+/// not crossed the hardware boundary, retain the debug surface's availability
+/// with a direct CPU raster fallback; a submitted-incomplete job is never
+/// presented as valid.
+fn submit_gpu_logger_frame(
+    id: SpiritFenceId,
+    snapshot: gpu_logger::ActiveSnapshot,
+) -> Result<GpuLoggerFrameSubmission, SpiritSubmitError> {
+    use crate::intel::gpgpu::GpgpuSubmissionOutcome;
+
+    let lease = acquire_frame_for(
+        id,
+        SpiritBarrierSet::GPU,
+        SpiritFrameProducer::GpuLogger(snapshot.generation),
+    )?;
+    let target = match gpgpu_bgra_target(lease) {
+        Ok(target) => target,
+        Err(error) => {
+            cancel_pending(lease);
+            return Err(error);
+        }
+    };
+    let rects = gpu_logger::build_gpu_rects(snapshot);
+    let filled =
+        crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(target, rects.as_slice());
+    match filled.outcome {
+        GpgpuSubmissionOutcome::Complete => {}
+        GpgpuSubmissionOutcome::Unavailable => {
+            cancel_pending(lease);
+            return submit_gpu_logger_cpu_fallback(id, snapshot);
+        }
+        GpgpuSubmissionOutcome::SubmittedIncomplete => {
+            // The hidden member cannot be reused while a late GPU writer might
+            // still target it. Preserve the currently visible Spirit frame.
+            return Err(SpiritSubmitError::GpuSubmissionFailed);
+        }
+    }
+    let finalized = crate::intel::gpgpu::release_rgba8_surface_for_scanout(target);
+    if !finalized.ok {
+        if finalized.submitted {
+            return Err(SpiritSubmitError::GpuSubmissionFailed);
+        }
+        cancel_pending(lease);
+        return submit_gpu_logger_cpu_fallback(id, snapshot);
+    }
+    let Some(release) = finalized.release else {
+        cancel_pending(lease);
+        return Err(SpiritSubmitError::InvalidGpuRelease);
+    };
+    let release_sequence = release.sequence();
+    if let Err(error) = release_gpgpu(lease, release) {
+        cancel_pending(lease);
+        return Err(error);
+    }
+    Ok(GpuLoggerFrameSubmission {
+        fence: lease.fence,
+        path: GpuLoggerFramePath::GpuWorklist,
+        rects: rects.len(),
+        gpu_submits: filled.stats.submits.saturating_add(1),
+        gpu_submit_ms: filled.stats.submit_ms.saturating_add(finalized.submit_ms),
+        release_sequence,
+    })
+}
+
 /// Queue an absolute Spirit movement without coupling it to either UI4's
 /// software cursors or the 60 Hz VFX producer. Repeated calls are latest-wins;
 /// the returned fence proves that the dedicated task programmed this request
@@ -1033,13 +1142,15 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
         Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
     }
 
-    let mut retained: Option<QueuedFrame> = None;
+    let mut retained_normal: Option<QueuedFrame> = None;
+    let mut retained_gpu_logger: Option<QueuedFrame> = None;
     let mut inflight: Option<Inflight> = None;
     let mut gpu_inflight: Option<GpuInflight> = None;
     let mut rearm_retry: Option<QueuedFrame> = None;
     let mut stream_queued_frames = 0u64;
     let mut stream_next_deadline = Instant::now();
     let mut stream_cadence_phase = 0u64;
+    let mut gpu_logger_cadence_phase = 0u64;
     let mut presentation_rate = SpiritPresentationRate::new();
     let mut stream_aborted = false;
     let mut boot_move_queued = false;
@@ -1048,9 +1159,46 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
     let mut package_started = Instant::now();
     let mut package_active: Option<lilly_protocol::LillyScheduledAnimation> = None;
     let mut package_reader_failures = 0u32;
+    let mut gpu_logger_pause_started: Option<Instant> = None;
+    let mut gpu_logger_next_deadline = Instant::now();
+    let mut gpu_logger_frames = 0u64;
     loop {
         let package_now = Instant::now();
-        if id == SpiritFenceId::FENCE_0 && package_now >= package_next_boundary {
+        let gpu_logger_snapshot = gpu_logger::active_snapshot();
+        match (gpu_logger_pause_started, gpu_logger_snapshot) {
+            (None, Some(snapshot)) => {
+                gpu_logger_pause_started = Some(package_now);
+                gpu_logger_next_deadline = package_now;
+                gpu_logger_cadence_phase = 0;
+                gpu_logger_frames = 0;
+                crate::log_info!(
+                    target: "gfx";
+                    "trueos-spirit: gpu-logger override entering source={:?} generation={} ttl_remaining_ms={} extent=256x256 carrier=hardware-cursor producer=direct-gpu-worklist normal_sprite_vfx=suppressed ui4_publish=0 composition=0\n",
+                    snapshot.source,
+                    snapshot.generation,
+                    snapshot.remaining_ms,
+                );
+            }
+            (Some(paused_at), None) => {
+                let paused = package_now.saturating_duration_since(paused_at);
+                package_next_boundary = package_next_boundary + paused;
+                package_started = package_started + paused;
+                stream_next_deadline = stream_next_deadline + paused;
+                presentation_rate.begin(package_now);
+                gpu_logger_pause_started = None;
+                crate::log_info!(
+                    target: "gfx";
+                    "trueos-spirit: gpu-logger override released frames={} paused_ms={} action=resume-lilly-sprite-vfx state=preserved cadence=deadline-shifted\n",
+                    gpu_logger_frames,
+                    paused.as_millis(),
+                );
+            }
+            _ => {}
+        }
+        if gpu_logger_snapshot.is_none()
+            && id == SpiritFenceId::FENCE_0
+            && package_now >= package_next_boundary
+        {
             match lilly_protocol::next_animation() {
                 Ok(scheduled) => {
                     package_reader_failures = 0;
@@ -1141,7 +1289,9 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                 Ok(intel_cursor::SpiritCursorFlipState::Visible { ctl, base, live }) => {
                     if active.completes_fence {
                         complete_frame(active.frame.lease);
-                        presentation_rate.observe_surflive(Instant::now());
+                        if active.frame.producer == SpiritFrameProducer::Vfx {
+                            presentation_rate.observe_surflive(Instant::now());
+                        }
                         if !boot_move_queued {
                             boot_move_queued = true;
                             match crate::intel::complete_scanout_pipeline_dimensions(id.index()) {
@@ -1178,7 +1328,9 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                                 ),
                             }
                         }
-                        if spirit_should_trace_frame(stream_queued_frames) {
+                        if active.frame.producer == SpiritFrameProducer::Vfx
+                            && spirit_should_trace_frame(stream_queued_frames)
+                        {
                             crate::log_info!(
                                 target: "gfx";
                                 "trueos-spirit: cursor SURFLIVE proven frame={} fence={} sequence={} pipe={} buffer={} ctl=0x{:08X} base=0x{:08X} live=0x{:08X} present_fps={} sample_window_ms={} boundary=cursor-display-live mode=continuous ui4_publish=0\n",
@@ -1208,7 +1360,14 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     } else {
                         finish_rearm(id);
                     }
-                    retained = Some(active.frame);
+                    match active.frame.producer {
+                        SpiritFrameProducer::GpuLogger(_) => {
+                            retained_gpu_logger = Some(active.frame);
+                        }
+                        SpiritFrameProducer::External | SpiritFrameProducer::Vfx => {
+                            retained_normal = Some(active.frame);
+                        }
+                    }
                     inflight = None;
                     continue;
                 }
@@ -1345,8 +1504,12 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
             Some((frame, true))
         } else if let Some(frame) = rearm_retry.take() {
             Some((frame, false))
-        } else if stream_aborted
-            && let Some(frame) = retained
+        } else if (stream_aborted || gpu_logger_snapshot.is_some())
+            && let Some(frame) = (if gpu_logger_snapshot.is_some() {
+                retained_gpu_logger
+            } else {
+                retained_normal
+            })
             && matches!(intel_cursor::spirit_cursor_rearm_needed(fence_index), Ok(true))
             && begin_rearm(id)
         {
@@ -1356,6 +1519,86 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
         };
 
         let Some((frame, completes_fence)) = candidate else {
+            if let Some(snapshot) = gpu_logger_snapshot {
+                if Instant::now() < gpu_logger_next_deadline {
+                    Timer::at(gpu_logger_next_deadline).await;
+                    continue;
+                }
+                let _gpu_lane = crate::r::font_kernel_service::acquire_gpu_lane(
+                    crate::r::font_kernel_service::FontKernelConsumer::new(
+                        crate::r::font_kernel_service::FontKernelConsumerPath::SpiritGpuLogger,
+                        snapshot
+                            .generation
+                            .rotate_left(17)
+                            .wrapping_add(gpu_logger_frames.saturating_add(1)),
+                    ),
+                )
+                .await;
+                match submit_gpu_logger_frame(id, snapshot) {
+                    Ok(submitted) => {
+                        let period = spirit_gpu_logger_frame_period(&mut gpu_logger_cadence_phase);
+                        let scheduled = gpu_logger_next_deadline + period;
+                        let now = Instant::now();
+                        gpu_logger_next_deadline = if now > scheduled {
+                            now + period
+                        } else {
+                            scheduled
+                        };
+                        gpu_logger_frames = gpu_logger_frames.saturating_add(1);
+                        if gpu_logger_frames == 1 || gpu_logger_frames.is_multiple_of(16) {
+                            crate::log_info!(
+                                target: "gfx";
+                                "trueos-spirit: gpu-logger frame={} source={:?} generation={} fence={} sequence={} path={:?} rects={} gpu_submits={} gpu_submit_ms={} release={} sample_frame={} frame_us={} geometry_us={} prepare_us={} retire_wait_us={} objects={} draws={} triangles={} retries={}/{} carrier=hardware-cursor display_release=surflive ui4_publish=0 composition=0\n",
+                                gpu_logger_frames,
+                                snapshot.source,
+                                snapshot.generation,
+                                fence_index,
+                                submitted.fence.sequence,
+                                submitted.path,
+                                submitted.rects,
+                                submitted.gpu_submits,
+                                submitted.gpu_submit_ms,
+                                submitted.release_sequence,
+                                snapshot.sample.frame_index,
+                                snapshot.sample.frame_us,
+                                snapshot.sample.geometry_us,
+                                snapshot.sample.prepare_us,
+                                snapshot.sample.retire_wait_us,
+                                snapshot.sample.objects,
+                                snapshot.sample.draws,
+                                snapshot.sample.triangles,
+                                snapshot.sample.busy_retries,
+                                snapshot.sample.incomplete_retries,
+                            );
+                        }
+                        continue;
+                    }
+                    Err(SpiritSubmitError::GpuSubmissionFailed) => {
+                        crate::log_error!(
+                            target: "gfx";
+                            "trueos-spirit: gpu-logger producer incomplete source={:?} generation={} fence={} frame={} action=preserve-current-surflive-and-stop-worker\n",
+                            snapshot.source,
+                            snapshot.generation,
+                            fence_index,
+                            gpu_logger_frames.saturating_add(1),
+                        );
+                        return;
+                    }
+                    Err(error) => {
+                        crate::log_warn!(
+                            target: "gfx";
+                            "trueos-spirit: gpu-logger admission deferred source={:?} generation={} fence={} frame={} error={:?}\n",
+                            snapshot.source,
+                            snapshot.generation,
+                            fence_index,
+                            gpu_logger_frames.saturating_add(1),
+                            error,
+                        );
+                    }
+                }
+                Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
+                continue;
+            }
             if !stream_aborted {
                 if Instant::now() < stream_next_deadline {
                     Timer::at(stream_next_deadline).await;
@@ -1562,7 +1805,14 @@ fn finish_rearm(id: SpiritFenceId) {
 }
 
 fn spirit_vfx_frame_period(phase: &mut u64) -> Duration {
-    let hz = SPIRIT_VFX_TARGET_HZ;
+    spirit_frame_period(phase, SPIRIT_VFX_TARGET_HZ)
+}
+
+fn spirit_gpu_logger_frame_period(phase: &mut u64) -> Duration {
+    spirit_frame_period(phase, SPIRIT_GPU_LOGGER_TARGET_HZ)
+}
+
+fn spirit_frame_period(phase: &mut u64, hz: u64) -> Duration {
     let mut ticks = embassy_time::TICK_HZ / hz;
     *phase = phase.saturating_add(embassy_time::TICK_HZ % hz);
     if *phase >= hz {

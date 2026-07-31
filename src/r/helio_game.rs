@@ -390,10 +390,7 @@ fn gpu_logger_sample(
 }
 
 fn publish_gpu_logger_sample(sample: crate::spirit::gpu_logger::GpuLoggerSample) {
-    crate::spirit::gpu_logger::publish(
-        crate::spirit::gpu_logger::GpuLoggerSource::Helio,
-        sample,
-    );
+    crate::spirit::gpu_logger::publish(crate::spirit::gpu_logger::GpuLoggerSource::Helio, sample);
 }
 
 fn destroy_unpublished_surface(surface: GameSurface) {
@@ -609,14 +606,7 @@ async fn start_cube() -> Result<(GameSurface, Vec<ResidentTriangle>, usize), Gam
             return Err(error);
         }
     };
-    publish_gpu_logger_sample(gpu_logger_sample(
-        &rendered,
-        1,
-        1,
-        &resident,
-        0,
-        0,
-    ));
+    publish_gpu_logger_sample(gpu_logger_sample(&rendered, 1, 1, &resident, 0, 0));
     Ok((surface, resident, scene.triangles.len()))
 }
 

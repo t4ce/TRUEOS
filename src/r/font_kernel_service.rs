@@ -204,9 +204,8 @@ fn record_gpu_lane_admission(consumer: FontKernelConsumer, waited_ms: u64) {
             status.spirit_vfx_lane_admissions = status.spirit_vfx_lane_admissions.saturating_add(1);
         }
         FontKernelConsumerPath::SpiritGpuLogger => {
-            status.spirit_gpu_logger_lane_admissions = status
-                .spirit_gpu_logger_lane_admissions
-                .saturating_add(1);
+            status.spirit_gpu_logger_lane_admissions =
+                status.spirit_gpu_logger_lane_admissions.saturating_add(1);
         }
         FontKernelConsumerPath::Helio => {
             status.helio_lane_admissions = status.helio_lane_admissions.saturating_add(1);

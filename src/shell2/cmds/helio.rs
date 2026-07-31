@@ -4,6 +4,17 @@ use super::super::{ShellBackend2, print_shell_line};
 use crate::r::helio_game::{self, LaunchRequest};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
+const MONITOR_DEFAULT_SECONDS: u64 = 30;
+const MONITOR_MIN_SECONDS: u64 = 1;
+const MONITOR_MAX_SECONDS: u64 = 300;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MonitorCommand {
+    Start(u64),
+    Status,
+    Off,
+}
+
 const fn example_name(id: u8) -> &'static str {
     match id {
         1 => "simple-cube",
@@ -18,10 +29,26 @@ fn print_list(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "  2  churn-benchmark   live retained-batch stress scene");
     print_shell_line(io, "  3  reserved");
     print_shell_line(io, "  4  reserved");
+    print_shell_line(
+        io,
+        "  monitor [SECONDS]    temporary Spirit 256x256 direct GPU logger (aliases: perf, logger)",
+    );
+}
+
+const fn logger_source_name(
+    source: Option<crate::spirit::gpu_logger::GpuLoggerSource>,
+) -> &'static str {
+    match source {
+        Some(crate::spirit::gpu_logger::GpuLoggerSource::Helio) => "helio",
+        #[cfg(test)]
+        Some(crate::spirit::gpu_logger::GpuLoggerSource::Other) => "other",
+        None => "none",
+    }
 }
 
 fn print_status(io: &'static dyn ShellBackend2) {
     let status = helio_game::status();
+    let logger = crate::spirit::gpu_logger::status();
     let example = status
         .state
         .example_id()
@@ -30,14 +57,98 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         format!(
-            "helio: state={} example={} last_error={} artifact=embedded:simple-cube.trueos.intel.helio bytes={} path=helioa-v1->render/guc->ui4",
+            "helio: state={} example={} last_error={} artifact=embedded:simple-cube.trueos.intel.helio bytes={} path=helioa-v1->render/guc->ui4 spirit_logger_active={} spirit_logger_source={} spirit_logger_remaining_ms={}",
             status.state.label(),
             example,
             status.last_error.unwrap_or("none"),
             status.artifact_bytes,
+            logger.active as u8,
+            logger_source_name(logger.source),
+            logger.remaining_ms,
         )
         .as_str(),
     );
+}
+
+fn parse_monitor_command(value: Option<&str>) -> Option<MonitorCommand> {
+    match value {
+        None => Some(MonitorCommand::Start(MONITOR_DEFAULT_SECONDS)),
+        Some("status") => Some(MonitorCommand::Status),
+        Some("off") => Some(MonitorCommand::Off),
+        Some(raw) => raw.parse::<u64>().ok().and_then(|seconds| {
+            (MONITOR_MIN_SECONDS..=MONITOR_MAX_SECONDS)
+                .contains(&seconds)
+                .then_some(MonitorCommand::Start(seconds))
+        }),
+    }
+}
+
+fn print_monitor_status(io: &'static dyn ShellBackend2) {
+    let status = crate::spirit::gpu_logger::status();
+    print_shell_line(
+        io,
+        format!(
+            "helio monitor: active={} source={} generation={} remaining_ms={} frame={} frame_us={} geometry_us={} prepare_us={} retire_wait_us={} poll_iters={} objects={} draws={} triangles={} busy_retries={} incomplete_retries={}; Spirit 256x256 direct GPU logger; temporary; bypasses UI4/composition; auto-restores",
+            status.active as u8,
+            logger_source_name(status.source),
+            status.generation,
+            status.remaining_ms,
+            status.sample.frame_index,
+            status.sample.frame_us,
+            status.sample.geometry_us,
+            status.sample.prepare_us,
+            status.sample.retire_wait_us,
+            status.sample.poll_iters,
+            status.sample.objects,
+            status.sample.draws,
+            status.sample.triangles,
+            status.sample.busy_retries,
+            status.sample.incomplete_retries,
+        )
+        .as_str(),
+    );
+}
+
+fn monitor(io: &'static dyn ShellBackend2, command: MonitorCommand) {
+    use crate::spirit::gpu_logger::{self, GpuLoggerSource};
+
+    match command {
+        MonitorCommand::Start(seconds) => {
+            let duration_ms = seconds.saturating_mul(1_000);
+            match gpu_logger::request(GpuLoggerSource::Helio, duration_ms) {
+                Ok(lease) => print_shell_line(
+                    io,
+                    format!(
+                        "helio monitor: started=1 source=helio generation={} duration={}s; Spirit 256x256 direct GPU logger; temporary; bypasses UI4/composition; auto-restores",
+                        lease.generation, seconds,
+                    )
+                    .as_str(),
+                ),
+                Err(busy) => print_shell_line(
+                    io,
+                    format!(
+                        "helio monitor: started=0 busy_source={} busy_generation={} remaining_ms={}; Spirit 256x256 direct GPU logger remains temporary, bypasses UI4/composition, and auto-restores",
+                        logger_source_name(Some(busy.active_source)),
+                        busy.active_generation,
+                        busy.remaining_ms,
+                    )
+                    .as_str(),
+                ),
+            }
+        }
+        MonitorCommand::Status => print_monitor_status(io),
+        MonitorCommand::Off => {
+            let stopped = gpu_logger::stop_source(GpuLoggerSource::Helio);
+            print_shell_line(
+                io,
+                format!(
+                    "helio monitor: stopped={}; Spirit 256x256 direct GPU logger released for Helio; normal Spirit presentation restored (or unchanged); automatic expiry remains the fallback",
+                    stopped as u8,
+                )
+                .as_str(),
+            );
+        }
+    }
 }
 
 fn launch(io: &'static dyn ShellBackend2, id: u8) {
@@ -84,14 +195,57 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         (Some("status"), None, None) => print_status(io),
         (Some("list"), None, None) => print_list(io),
         (Some("help" | "-h" | "--help"), None, None) => {
-            print_shell_line(io, "helio: usage `helio [1|2|3|4|list|status]`");
+            print_shell_line(
+                io,
+                "helio: usage `helio [1|2|3|4|list|status|monitor [SECONDS|status|off]]`",
+            );
+            print_shell_line(
+                io,
+                "helio: monitor defaults to 30s, accepts 1..300s, aliases are perf and logger; Spirit 256x256 direct GPU logger bypasses UI4/composition and auto-restores",
+            );
+        }
+        (Some("monitor" | "perf" | "logger"), value, None) => {
+            if let Some(command) = parse_monitor_command(value) {
+                monitor(io, command);
+            } else {
+                print_shell_line(
+                    io,
+                    "helio monitor: expected SECONDS (1..300), status, or off; Spirit 256x256 direct GPU logger is temporary and auto-restores",
+                );
+            }
         }
         (Some("start" | "run"), None, None) => launch(io, 1),
         (Some("start" | "run"), Some(id), None) if parse_id(id).is_some() => {
             launch(io, parse_id(id).unwrap());
         }
         (Some(id), None, None) if parse_id(id).is_some() => launch(io, parse_id(id).unwrap()),
-        _ => print_shell_line(io, "helio: expected 1, 2, 3, 4, list, or status"),
+        _ => {
+            print_shell_line(io, "helio: expected 1, 2, 3, 4, list, status, or monitor/perf/logger")
+        }
     }
     ParseOutcome::Handled
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MONITOR_DEFAULT_SECONDS, MonitorCommand, parse_monitor_command};
+
+    #[test]
+    fn monitor_defaults_to_a_bounded_thirty_second_lease() {
+        assert_eq!(
+            parse_monitor_command(None),
+            Some(MonitorCommand::Start(MONITOR_DEFAULT_SECONDS))
+        );
+        assert_eq!(parse_monitor_command(Some("1")), Some(MonitorCommand::Start(1)));
+        assert_eq!(parse_monitor_command(Some("300")), Some(MonitorCommand::Start(300)));
+    }
+
+    #[test]
+    fn monitor_parses_lifecycle_actions_and_rejects_unbounded_durations() {
+        assert_eq!(parse_monitor_command(Some("status")), Some(MonitorCommand::Status));
+        assert_eq!(parse_monitor_command(Some("off")), Some(MonitorCommand::Off));
+        for invalid in ["0", "301", "-1", "forever", "1.5"] {
+            assert_eq!(parse_monitor_command(Some(invalid)), None);
+        }
+    }
 }
