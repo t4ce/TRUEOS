@@ -25,6 +25,9 @@ struct AlignedArtifact([u8; 32_768]);
 #[repr(align(64))]
 struct AlignedArena([u8; 64]);
 
+#[repr(align(4))]
+struct Aligned4<T>(T);
+
 fn fixture() -> (Vec<u8>, PathBuf) {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root = PathBuf::from(
@@ -460,9 +463,9 @@ fn quantized_gemm_dispatch_matches_centered_onnx_arithmetic_and_requires_workspa
     assert_eq!(outputs.len(), 1);
 
     let activation = [-1.0_f32, 0.25, 2.0, -0.5];
-    let weights = [2_i8, -3, 7, -5, 4, 1, 6, -8, 3, 9, 2, -4];
+    let weights = Aligned4([2_i8, -3, 7, -5, 4, 1, 6, -8, 3, 9, 2, -4]);
     let weight_scales = [0.125_f32, 0.25, 0.5];
-    let weight_zero_points = [1_i8, -1, 2];
+    let weight_zero_points = Aligned4([1_i8, -1, 2]);
     let bias = [0.5_f32, -1.0, 2.0];
     let mut shapes: TensorShapeTable<256> = TensorShapeTable::new();
     shapes.initialize(&program).unwrap();
@@ -474,12 +477,12 @@ fn quantized_gemm_dispatch_matches_centered_onnx_arithmetic_and_requires_workspa
         let mut rejected_output = [91.0_f32; 3];
         let mut bindings: ExternalBindings<'_, 6> = ExternalBindings::new();
         bindings.bind_input(&program, &shapes, inputs[0], &activation).unwrap();
-        bindings.bind_input(&program, &shapes, inputs[1], &weights).unwrap();
+        bindings.bind_input(&program, &shapes, inputs[1], &weights.0).unwrap();
         bindings
             .bind_input(&program, &shapes, inputs[2], &weight_scales)
             .unwrap();
         bindings
-            .bind_input(&program, &shapes, inputs[3], &weight_zero_points)
+            .bind_input(&program, &shapes, inputs[3], &weight_zero_points.0)
             .unwrap();
         bindings.bind_input(&program, &shapes, inputs[4], &bias).unwrap();
         bindings
@@ -506,12 +509,12 @@ fn quantized_gemm_dispatch_matches_centered_onnx_arithmetic_and_requires_workspa
     let mut output = [91.0_f32; 3];
     let mut bindings: ExternalBindings<'_, 6> = ExternalBindings::new();
     bindings.bind_input(&program, &shapes, inputs[0], &activation).unwrap();
-    bindings.bind_input(&program, &shapes, inputs[1], &weights).unwrap();
+    bindings.bind_input(&program, &shapes, inputs[1], &weights.0).unwrap();
     bindings
         .bind_input(&program, &shapes, inputs[2], &weight_scales)
         .unwrap();
     bindings
-        .bind_input(&program, &shapes, inputs[3], &weight_zero_points)
+        .bind_input(&program, &shapes, inputs[3], &weight_zero_points.0)
         .unwrap();
     bindings.bind_input(&program, &shapes, inputs[4], &bias).unwrap();
     bindings
@@ -538,8 +541,8 @@ fn quantized_gemm_dispatch_matches_centered_onnx_arithmetic_and_requires_workspa
         for reduction in 0..4 {
             accumulator += (i32::from(quantized[reduction])
                 - i32::from(quantization.zero_point))
-                * (i32::from(weights[reduction * 3 + column])
-                    - i32::from(weight_zero_points[column]));
+                * (i32::from(weights.0[reduction * 3 + column])
+                    - i32::from(weight_zero_points.0[column]));
         }
         accumulator as f32 * (quantization.scale * weight_scales[column]) + bias[column]
     });

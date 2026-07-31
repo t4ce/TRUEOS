@@ -344,6 +344,34 @@ pub fn split_two<T: Copy>(
     Ok((first_shape, second_shape))
 }
 
+/// Resolve the ONNX multidirectional broadcast of `input_shape` and an
+/// `Expand` shape-control tensor.
+///
+/// The control tensor is a broadcast participant, not necessarily the literal
+/// output shape.  In particular, expanding `[1, 128]` with `[1, N, 1]`
+/// produces `[1, N, 128]`.
+pub fn expand_shape(input_shape: Shape, target_dims: &[usize]) -> Result<Shape, Error> {
+    let target_shape = Shape::new(target_dims)?;
+    if target_shape.rank() < input_shape.rank() {
+        return Err(Error::BroadcastMismatch);
+    }
+    let leading = target_shape.rank() - input_shape.rank();
+    let mut output_dims = [1usize; MAX_RANK];
+    output_dims[..target_shape.rank()].copy_from_slice(target_shape.dims());
+    for input_axis in 0..input_shape.rank() {
+        let output_axis = leading + input_axis;
+        let input_dim = input_shape.dims[input_axis];
+        let target_dim = target_shape.dims[output_axis];
+        output_dims[output_axis] = match (input_dim, target_dim) {
+            (same, other) if same == other => same,
+            (1, other) => other,
+            (other, 1) => other,
+            _ => return Err(Error::BroadcastMismatch),
+        };
+    }
+    Shape::new(&output_dims[..target_shape.rank()])
+}
+
 /// Materialize ONNX multidirectional `Expand` into a contiguous destination.
 pub fn expand<T: Copy>(
     input: &[T],
@@ -353,18 +381,8 @@ pub fn expand<T: Copy>(
 ) -> Result<Shape, Error> {
     validate_element::<T>()?;
     validate_buffer(input, input_shape)?;
-    let output_shape = Shape::new(target_dims)?;
-    if output_shape.rank() < input_shape.rank() {
-        return Err(Error::BroadcastMismatch);
-    }
+    let output_shape = expand_shape(input_shape, target_dims)?;
     let leading = output_shape.rank() - input_shape.rank();
-    for input_axis in 0..input_shape.rank() {
-        let input_dim = input_shape.dims[input_axis];
-        let output_dim = output_shape.dims[leading + input_axis];
-        if input_dim != 1 && input_dim != output_dim {
-            return Err(Error::BroadcastMismatch);
-        }
-    }
     validate_buffer(output, output_shape)?;
     reject_overlap(output, input)?;
 
@@ -904,6 +922,18 @@ mod tests {
             expand(&scalar_rows, Shape::new(&[2, 1]).unwrap(), &[3, 2, 2], &mut expanded).unwrap();
         assert_eq!(expanded_shape.dims(), &[3, 2, 2]);
         assert_eq!(expanded, [7, 7, 8, 8, 7, 7, 8, 8, 7, 7, 8, 8]);
+
+        let style = [10_i32, 20, 30, 40];
+        let mut expanded_style = [0_i32; 12];
+        let expanded_shape = expand(
+            &style,
+            Shape::new(&[1, 4]).unwrap(),
+            &[1, 3, 1],
+            &mut expanded_style,
+        )
+        .unwrap();
+        assert_eq!(expanded_shape.dims(), &[1, 3, 4]);
+        assert_eq!(expanded_style, [10, 20, 30, 40, 10, 20, 30, 40, 10, 20, 30, 40]);
     }
 
     #[test]

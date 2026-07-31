@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -69,11 +70,17 @@ def main() -> int:
         raise SystemExit("lfm25-packed-isa: kernel entry bounds rejected")
 
     iga = resolve_iga(args.iga)
-    with tempfile.TemporaryDirectory(prefix="trueos-lfm25-packed-isa.") as directory:
+    scratch_root = ROOT / "bld" / "tmp"
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="trueos-lfm25-packed-isa.", dir=scratch_root
+    ) as directory:
         temporary = Path(directory)
         kernel_path = temporary / "kernel.krn"
         assembly_path = temporary / "kernel.asm"
         kernel_path.write_bytes(binary[entry_offset : entry_offset + entry_size])
+        environment = os.environ.copy()
+        environment["TMPDIR"] = str(scratch_root)
         completed = subprocess.run(
             [
                 str(iga),
@@ -88,6 +95,7 @@ def main() -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            env=environment,
         )
         if completed.returncode != 0:
             raise SystemExit(

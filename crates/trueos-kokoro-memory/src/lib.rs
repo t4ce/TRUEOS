@@ -912,6 +912,14 @@ impl Region {
 }
 
 fn validate_typed_region<T: TensorElement>(region: Region) -> Result<(), MemoryError> {
+    validate_typed_layout::<T>(region)?;
+    if T::VALIDATE_BOOL && !valid_bool_bytes(region.pointer, region.bytes) {
+        return Err(MemoryError::InvalidBoolValue);
+    }
+    Ok(())
+}
+
+fn validate_typed_layout<T: TensorElement>(region: Region) -> Result<(), MemoryError> {
     if region.dtype != T::DTYPE || size_of::<T>() as u64 != region.dtype.element_bytes() {
         return Err(MemoryError::DTypeMismatch);
     }
@@ -925,9 +933,6 @@ fn validate_typed_region<T: TensorElement>(region: Region) -> Result<(), MemoryE
         != region.bytes
     {
         return Err(MemoryError::LogicalSpanExceedsCapacity);
-    }
-    if T::VALIDATE_BOOL && !valid_bool_bytes(region.pointer, region.bytes) {
-        return Err(MemoryError::InvalidBoolValue);
     }
     Ok(())
 }
@@ -1095,10 +1100,23 @@ impl<const CAPACITY: usize> OpAccess<CAPACITY> {
         if !region.writable {
             return Err(MemoryError::ReadOnlyWrite);
         }
-        validate_typed_region::<T>(region)?;
+        // A fresh output may reuse arena bytes that held an arbitrary dtype in
+        // an earlier operation. Validate its typed layout without inspecting
+        // the old representation, then acquire exclusivity before making a
+        // Rust `bool` representation valid. Inputs and explicitly in-place
+        // outputs continue to validate and preserve their existing bytes.
+        validate_typed_layout::<T>(region)?;
         self.acquire_write(index)?;
+        if T::VALIDATE_BOOL && region.bytes != 0 {
+            // SAFETY: the region was proved writable, aligned, and in-bounds;
+            // `acquire_write` excludes every overlapping lease. Zero is a
+            // valid Rust bool representation and initializes every element
+            // before a `&mut [bool]` is formed.
+            unsafe { core::ptr::write_bytes(region.pointer.as_ptr(), 0, region.bytes) };
+        }
         // SAFETY: alias validation rejected forbidden op aliases, while the
         // runtime lease excludes every currently overlapping read or write.
+        // Fresh bool outputs were initialized to valid representations above.
         let values = unsafe { region_slice_mut::<T>(region) };
         Ok(WriteLease {
             values,
@@ -1125,7 +1143,21 @@ impl<const CAPACITY: usize> OpAccess<CAPACITY> {
         {
             return Err(MemoryError::InPlaceNotSealed);
         }
-        self.output(output)
+        let region = self.regions[output_index];
+        if !region.writable {
+            return Err(MemoryError::ReadOnlyWrite);
+        }
+        validate_typed_region::<T>(region)?;
+        self.acquire_write(output_index)?;
+        // SAFETY: exact same-ID/same-region in-place identity was sealed;
+        // typed validation includes existing bool representations, and the
+        // writer lease excludes every overlapping borrow.
+        let values = unsafe { region_slice_mut::<T>(region) };
+        Ok(WriteLease {
+            values,
+            shape: region.shape,
+            state: &self.borrows[output_index],
+        })
     }
 
     fn acquire_read(&self, index: usize) -> Result<(), MemoryError> {

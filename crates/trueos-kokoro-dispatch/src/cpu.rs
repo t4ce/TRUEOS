@@ -695,7 +695,10 @@ fn require_op_arity(work: WorkSlice, inputs: u16, outputs: u16) -> Result<(), Di
 }
 
 fn require_cooperative_work(work: WorkSlice, output_elements: usize) -> Result<(), DispatchError> {
-    if usize::try_from(work.op().work_units).ok() == Some(output_elements)
+    // Runtime-sized phase-one tensors use the artifact's sealed maximum-F
+    // coordinate space. A shorter utterance consumes only the live prefix;
+    // scheduler slices in the remaining suffix are intentional no-ops.
+    if usize::try_from(work.op().work_units).is_ok_and(|units| units >= output_elements)
         && work.unit_count() != 0
         && work.unit_end() <= work.op().work_units
     {
@@ -1491,16 +1494,16 @@ fn infer_expand<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usi
             }
         }
     }
-    let output = runtime_shape_i64(&target.values[..target.len])?;
-    let leading = usize::from(output.rank() - input.rank());
-    for input_axis in 0..input.dims().len() {
-        let source = input.dims()[input_axis];
-        let destination = output.dims()[leading + input_axis];
-        if source != 1 && source != destination {
-            return Err(DispatchError::ShapeConversion);
-        }
+    let target_shape = runtime_shape_i64(&target.values[..target.len])?;
+    let mut target_dims = [1usize; 4];
+    for (destination, &dimension) in target_dims.iter_mut().zip(target_shape.dims()) {
+        *destination = usize::try_from(dimension).map_err(|_| DispatchError::ShapeConversion)?;
     }
-    Ok(OutputShapes::one(output))
+    let output = trueos_kokoro_layout::expand_shape(
+        layout_shape(input)?,
+        &target_dims[..target.len],
+    )?;
+    Ok(OutputShapes::one(runtime_from_layout(output)?))
 }
 
 fn infer_slice<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
@@ -3015,12 +3018,21 @@ fn execute_resize<const BINDINGS: usize>(
         scale,
     )?;
     let mut output = access.output::<f32>(0)?;
-    if usize::try_from(work.op().work_units).ok() != Some(output.len()) {
+    let sealed_units = usize::try_from(work.op().work_units).map_err(|_| {
+        DispatchError::InvalidWorkContract {
+            opcode: OpCode::Resize,
+        }
+    })?;
+    if sealed_units < output.len() {
         return Err(DispatchError::InvalidWorkContract {
             opcode: OpCode::Resize,
         });
     }
-    plan.run_range(&input, &mut output, work.unit_start() as usize, work.unit_count() as usize)?;
+    let start = (work.unit_start() as usize).min(output.len());
+    let end = (work.unit_end() as usize).min(output.len());
+    if start < end {
+        plan.run_range(&input, &mut output, start, end - start)?;
+    }
     Ok(())
 }
 
@@ -3088,15 +3100,19 @@ fn execute_float_conv<const BINDINGS: usize>(
     let problem = trueos_kokoro_conv::Problem::new(profile, &input, &weights, bias.as_deref())?;
     let dimensions = problem.dimensions();
     let mut output = access.output::<f32>(0)?;
-    if usize::try_from(work.op().work_units).ok() != Some(output.len())
-        || output.len() != dimensions.output_elements()?
+    let sealed_units = usize::try_from(work.op().work_units).map_err(|_| {
+        DispatchError::InvalidWorkContract {
+            opcode: attributes.opcode,
+        }
+    })?;
+    if sealed_units < output.len() || output.len() != dimensions.output_elements()?
     {
         return Err(DispatchError::InvalidWorkContract {
             opcode: attributes.opcode,
         });
     }
-    let mut linear = work.unit_start() as usize;
-    let end = work.unit_end() as usize;
+    let mut linear = (work.unit_start() as usize).min(output.len());
+    let end = (work.unit_end() as usize).min(output.len());
     while linear < end {
         let channel = linear / dimensions.output_width;
         let time = linear % dimensions.output_width;

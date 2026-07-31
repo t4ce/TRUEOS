@@ -66,6 +66,56 @@ Both hashes are independent fields in the sealed header. A matching graph
 with a different voice archive is rejected because the style tensor's meaning
 depends on that archive.
 
+## Exact waveform parity gate
+
+`verify_kokoro_waveform.py` is the host-only step-2 acceptance gate. It pins
+the exact prepared-graph RTen reference and the KKAOT provenance, but compares
+a native waveform numerically. This distinction is intentional: the native
+quantized implementation must be deterministic across its own runs, while it
+does not need to be byte-identical to a different runtime's floating-point
+evaluation order.
+
+The pinned input is voice `af_heart`, speed `1.0`, style row 149, and this
+149-token IPA string:
+
+```text
+həlˈoʊ fɹʌm tɹu oʊ ɛs. ðə kwɪk bɹaʊn fɑks dʒʌmps oʊvɚ ðə leɪzi dɔɡ. spɪtʃ sɪnθəsɪs ɪz naʊ ɹʌnɪŋ ɪn ðə kɜɹnəl, wɪð ə sɪɹiəlaɪzd eɪsɪŋk kju fɔɹ ðə ʃɛl.
+```
+
+It resolves to `F=824` and exactly 247,200 mono f32 samples at 24 kHz.
+The reference WAVE is 988,868 bytes with SHA-256
+`754ce3b947dde9dbe99279a77a3b7ddf85a0be1bc2dc05663864e40bf8be4388`;
+its 988,800-byte f32 payload hashes to
+`e9cde5b662b5ee34604fcfdebfbf2ffef2e6b8751f133f46b6b7cb1d2212f8e9`.
+
+The current reference remains a host-generated runtime asset at
+`/tmp/trueos-kokoro-rten-baseline.wav`; it is not committed. Reproduce it from
+the exact prepared graph from `crates/ttstt` with:
+
+```sh
+./target/release/ttstt tts --backend rten --threads 10 \
+  --voice af_heart --speed 1.0 --phonemes \
+  --output /tmp/trueos-kokoro-rten-baseline.wav \
+  "həlˈoʊ fɹʌm tɹu oʊ ɛs. ðə kwɪk bɹaʊn fɑks dʒʌmps oʊvɚ ðə leɪzi dɔɡ. spɪtʃ sɪnθəsɪs ɪz naʊ ɹʌnɪŋ ɪn ðə kɜɹnəl, wɪð ə sɪɹiəlaɪzd eɪsɪŋk kju fɔɹ ðə ʃɛl."
+```
+
+Once the native host harness emits two independent runs, the parity claim is:
+
+```sh
+python3 tools/ttstt/verify_kokoro_waveform.py \
+  --reference /tmp/trueos-kokoro-rten-baseline.wav \
+  --native /tmp/trueos-kokoro-native-1.wav \
+  --native-repeat /tmp/trueos-kokoro-native-2.wav \
+  --kkaot crates/ttstt/.ttstt/models/kokoro/kokoro.kkaot \
+  --controlled-perturbation
+```
+
+The default quality gates are correlation at least 0.99, SNR at least 20 dB,
+RMSE at most 0.01, maximum absolute sample error at most 0.15, finite samples,
+absolute peak at most 1.0, and non-silent RMS. `--allow-single-native` is for
+diagnostics only and does not prove deterministic inference. Use
+`--print-contract` to emit the complete machine-readable pin set.
+
 ## Real-model result
 
 The 2026-07-31 audit accepts exactly 3,615 nodes, 762 initializers, 3 inputs,

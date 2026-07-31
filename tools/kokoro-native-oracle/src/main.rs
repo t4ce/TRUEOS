@@ -7,15 +7,9 @@ use std::process;
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
-use trueos_kokoro_aot::{
-    ARENA_ALIGNMENT, ParseOptions, Phase, Program, SlotKind, WorkBudget,
-};
-use trueos_kokoro_dispatch::{
-    CpuDispatcher, CpuWorkspace, KOKORO_CPU_WORKSPACE_REQUIREMENTS,
-};
-use trueos_kokoro_exec::{
-    Executor, ResolvedPhase, RuntimeShape, SliceEvent, TensorShapeTable,
-};
+use trueos_kokoro_aot::{ARENA_ALIGNMENT, ParseOptions, Phase, Program, SlotKind, WorkBudget};
+use trueos_kokoro_dispatch::{CpuDispatcher, CpuWorkspace, KOKORO_CPU_WORKSPACE_REQUIREMENTS};
+use trueos_kokoro_exec::{Executor, ResolvedPhase, RuntimeShape, SliceEvent, TensorShapeTable};
 use trueos_kokoro_g2p::{Model as G2pModel, canonicalize_ipa, prepare_english_with};
 use trueos_kokoro_lexicon::Lexicon;
 use trueos_kokoro_memory::{ExternalBindings, TensorMemory};
@@ -49,9 +43,6 @@ const EXPECTED_MODEL_SHA256: [u8; 32] = [
 const REFERENCE_IPA: &str = "həlˈoʊ fɹʌm tɹu oʊ ɛs. ðə kwɪk bɹaʊn fɑks dʒʌmps oʊvɚ ðə leɪzi dɔɡ. spɪtʃ sɪnθəsɪs ɪz naʊ ɹʌnɪŋ ɪn ðə kɜɹnəl, wɪð ə sɪɹiəlaɪzd eɪsɪŋk kju fɔɹ ðə ʃɛl.";
 const REFERENCE_FRAMES: u32 = 824;
 const REFERENCE_SAMPLES: usize = 247_200;
-const REFERENCE_WAV_SHA256: &str =
-    "754ce3b947dde9dbe99279a77a3b7ddf85a0be1bc2dc05663864e40bf8be4388";
-
 #[derive(Clone, Debug)]
 enum Input {
     Ipa(String),
@@ -87,7 +78,10 @@ impl Config {
             wav_path: PathBuf::from("/tmp/trueos-kokoro-native-oracle.wav"),
             expect_frames: Some(REFERENCE_FRAMES),
             expect_samples: Some(REFERENCE_SAMPLES),
-            expect_wav_sha256: Some(REFERENCE_WAV_SHA256.to_owned()),
+            // Native floating-point kernels are gated numerically against the
+            // RTen oracle by verify_kokoro_waveform.py. Byte identity is an
+            // optional stronger assertion, not a valid default requirement.
+            expect_wav_sha256: None,
         };
 
         let mut args = env::args().skip(1);
@@ -99,10 +93,12 @@ impl Config {
                     config.input = Input::Ipa(REFERENCE_IPA.to_owned());
                     config.expect_frames = Some(REFERENCE_FRAMES);
                     config.expect_samples = Some(REFERENCE_SAMPLES);
-                    config.expect_wav_sha256 = Some(REFERENCE_WAV_SHA256.to_owned());
+                    config.expect_wav_sha256 = None;
                     custom_input = false;
                 }
-                "--model-dir" => config.model_dir = PathBuf::from(next_value(&mut args, &argument)?),
+                "--model-dir" => {
+                    config.model_dir = PathBuf::from(next_value(&mut args, &argument)?)
+                }
                 "--ipa" => {
                     config.input = Input::Ipa(next_value(&mut args, &argument)?);
                     custom_input = true;
@@ -128,16 +124,12 @@ impl Config {
                 "--raw" => config.raw_path = PathBuf::from(next_value(&mut args, &argument)?),
                 "--wav" => config.wav_path = PathBuf::from(next_value(&mut args, &argument)?),
                 "--expect-frames" => {
-                    config.expect_frames = Some(parse_value(
-                        &next_value(&mut args, &argument)?,
-                        &argument,
-                    )?)
+                    config.expect_frames =
+                        Some(parse_value(&next_value(&mut args, &argument)?, &argument)?)
                 }
                 "--expect-samples" => {
-                    config.expect_samples = Some(parse_value(
-                        &next_value(&mut args, &argument)?,
-                        &argument,
-                    )?)
+                    config.expect_samples =
+                        Some(parse_value(&next_value(&mut args, &argument)?, &argument)?)
                 }
                 "--expect-wav-sha256" => {
                     let digest = next_value(&mut args, &argument)?.to_ascii_lowercase();
@@ -164,7 +156,8 @@ impl Config {
 }
 
 fn next_value(args: &mut impl Iterator<Item = String>, option: &str) -> Result<String, String> {
-    args.next().ok_or_else(|| format!("{option} requires a value"))
+    args.next()
+        .ok_or_else(|| format!("{option} requires a value"))
 }
 
 fn parse_value<T: std::str::FromStr>(value: &str, option: &str) -> Result<T, String> {
@@ -192,7 +185,7 @@ fn usage(code: i32) -> ! {
          With no options, run the pinned F=824 RTen parity vector.\n\
          \n\
          Input (choose one):\n\
-           --reference                 pinned IPA and exact RTen expectations\n\
+           --reference                 pinned IPA, frame, and sample expectations\n\
            --ipa IPA                   deterministic pre-phonemized input\n\
            --ipa-file PATH             read deterministic IPA from a file\n\
            --text TEXT                 run native G2P + Misaki first\n\
@@ -233,7 +226,10 @@ impl AlignedBytes {
             .try_reserve_exact(lines)
             .map_err(|_| format!("failed to reserve {len} aligned bytes"))?;
         storage.resize(lines, AlignedLine([0; 64]));
-        Ok(Self { lines: storage, len })
+        Ok(Self {
+            lines: storage,
+            len,
+        })
     }
 
     fn read(path: &Path) -> Result<Self, String> {
@@ -398,11 +394,7 @@ fn bind_phase_zero_shapes(
 fn failure_location(program: &Program<'_>, executor: &Executor<SLOT_CAPACITY>) -> String {
     let cursor = executor.cursor();
     let opcode = program.op(cursor.op_index()).map(|op| op.opcode);
-    format!(
-        "op={} opcode={opcode:?} unit={}",
-        cursor.op_index(),
-        cursor.unit_offset()
-    )
+    format!("op={} opcode={opcode:?} unit={}", cursor.op_index(), cursor.unit_offset())
 }
 
 fn run_phase_zero(
@@ -688,10 +680,7 @@ fn run() -> Result<(), String> {
     )
     .map_err(|_| "phase-zero arena is too large for this host")?;
     let mut phase_zero_arena = AlignedBytes::zeroed(phase_zero_bytes)?;
-    debug_assert_eq!(
-        phase_zero_arena.as_slice().as_ptr() as usize % ARENA_ALIGNMENT as usize,
-        0
-    );
+    debug_assert_eq!(phase_zero_arena.as_slice().as_ptr() as usize % ARENA_ALIGNMENT as usize, 0);
     let mut workspace = WorkspaceBuffers::new();
     let mut executor = Executor::<SLOT_CAPACITY>::new();
 
@@ -716,12 +705,8 @@ fn run() -> Result<(), String> {
     let phase_one_bytes = usize::try_from(admission.arena_bytes())
         .map_err(|_| "phase-one arena is too large for this host")?;
     let mut phase_one_arena = AlignedBytes::zeroed(phase_one_bytes)?;
-    let (shared_slots, shared_bytes) = copy_shared_slots(
-        &program,
-        &phase_zero_arena,
-        &mut phase_one_arena,
-        frame_count,
-    )?;
+    let (shared_slots, shared_bytes) =
+        copy_shared_slots(&program, &phase_zero_arena, &mut phase_one_arena, frame_count)?;
     let slot_bases = executor.slot_bases().to_vec();
     if slot_bases.len() != SLOT_CAPACITY {
         return Err(format!(
