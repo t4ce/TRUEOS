@@ -321,6 +321,7 @@ enum BinaryOperation {
     Add,
     Mul,
     Div,
+    DivIeee,
     Sub,
 }
 
@@ -329,8 +330,15 @@ impl BinaryOperation {
         match self {
             Self::Add => lhs + rhs,
             Self::Mul => lhs * rhs,
-            Self::Div => lhs / rhs,
+            Self::Div | Self::DivIeee => lhs / rhs,
             Self::Sub => lhs - rhs,
+        }
+    }
+
+    fn valid_output(self, value: f32) -> bool {
+        match self {
+            Self::DivIeee => !value.is_nan(),
+            Self::Add | Self::Mul | Self::Div | Self::Sub => value.is_finite(),
         }
     }
 }
@@ -437,6 +445,45 @@ pub fn div_on_lane(
     )
 }
 
+/// ONNX `Div` with the graph-pinned IEEE-754 infinity policy needed by
+/// Kokoro's STFT phase reconstruction.
+///
+/// Finite non-zero values divided by signed zero produce signed infinity;
+/// `0.0 / 0.0` remains a terminal numerical error. Callers must use this only
+/// for a graph edge whose immediate consumer is an infinity-safe operation.
+pub fn div_ieee(
+    lhs: &[f32],
+    lhs_layout: TensorLayout,
+    rhs: &[f32],
+    rhs_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    div_ieee_on_lane(elementwise_lane(), lhs, lhs_layout, rhs, rhs_layout, output, output_layout)
+}
+
+/// Graph-pinned IEEE `Div` with an explicit worker lane.
+pub fn div_ieee_on_lane(
+    lane: ElementwiseLane,
+    lhs: &[f32],
+    lhs_layout: TensorLayout,
+    rhs: &[f32],
+    rhs_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    binary_elementwise(
+        lane,
+        BinaryOperation::DivIeee,
+        lhs,
+        lhs_layout,
+        rhs,
+        rhs_layout,
+        output,
+        output_layout,
+    )
+}
+
 /// ONNX multidirectional-broadcast `Sub` over checked rank-four views.
 pub fn sub(
     lhs: &[f32],
@@ -482,11 +529,16 @@ enum UnaryOperation {
     Round,
     Tanh,
     Atan,
+    AtanIeee,
     Exp,
     Cos,
 }
 
 impl UnaryOperation {
+    fn valid_input(self, value: f32) -> bool {
+        value.is_finite() || matches!(self, Self::AtanIeee) && value.is_infinite()
+    }
+
     fn apply(self, value: f32) -> Result<f32, Error> {
         let result = match self {
             Self::Square => value * value,
@@ -508,7 +560,7 @@ impl UnaryOperation {
             Self::Sigmoid => sigmoid_value(value),
             Self::Round => round_ties_even(value),
             Self::Tanh => libm::tanhf(value),
-            Self::Atan => libm::atanf(value),
+            Self::Atan | Self::AtanIeee => libm::atanf(value),
             Self::Exp => libm::expf(value),
             Self::Cos => libm::cosf(value),
         };
@@ -635,6 +687,16 @@ pub fn atan(
     unary_elementwise(UnaryOperation::Atan, input, input_layout, output, output_layout)
 }
 
+/// `Atan` accepting signed infinity for the graph-pinned STFT phase edge.
+pub fn atan_ieee(
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    unary_elementwise(UnaryOperation::AtanIeee, input, input_layout, output, output_layout)
+}
+
 /// ONNX `Exp` over checked rank-four strided views.
 pub fn exp(
     input: &[f32],
@@ -709,7 +771,7 @@ fn unary_elementwise_on_lane(
         unravel(linear, shape, &mut coordinates);
         let input_offset = input_layout.physical_offset(&coordinates);
         let value = input[input_offset];
-        if !value.is_finite() {
+        if !operation.valid_input(value) {
             return Err(Error::NonFiniteInput);
         }
         operation.apply(value)?;
@@ -825,7 +887,7 @@ fn binary_elementwise(
         if !lhs_value.is_finite() || !rhs_value.is_finite() {
             return Err(Error::NonFiniteInput);
         }
-        if !operation.apply(lhs_value, rhs_value).is_finite() {
+        if !operation.valid_output(operation.apply(lhs_value, rhs_value)) {
             return Err(Error::NonFiniteOutput);
         }
     }
@@ -1686,6 +1748,61 @@ mod tests {
         assert_eq!(vector_error, Err(Error::NonFiniteOutput));
         assert_eq!(scalar, vec![93.0; shape.element_count()]);
         assert_eq!(vector, vec![93.0; shape.element_count()]);
+    }
+
+    #[test]
+    fn ieee_division_by_signed_zero_feeds_finite_atan_phase() {
+        let shape = Shape::new(&[8]).unwrap();
+        let layout = TensorLayout::contiguous(shape);
+        let lhs = [1.0, -1.0, 1.0, -1.0, 2.0, -2.0, 2.0, -2.0];
+        let rhs = [0.0, 0.0, -0.0, -0.0, 0.0, 0.0, -0.0, -0.0];
+        let mut scalar = [0.0; 8];
+        div_ieee_on_lane(ElementwiseLane::Scalar, &lhs, layout, &rhs, layout, &mut scalar, layout)
+            .unwrap();
+        assert_eq!(
+            scalar.map(f32::to_bits),
+            [
+                f32::INFINITY.to_bits(),
+                f32::NEG_INFINITY.to_bits(),
+                f32::NEG_INFINITY.to_bits(),
+                f32::INFINITY.to_bits(),
+                f32::INFINITY.to_bits(),
+                f32::NEG_INFINITY.to_bits(),
+                f32::NEG_INFINITY.to_bits(),
+                f32::INFINITY.to_bits(),
+            ]
+        );
+
+        if ElementwiseLane::Avx2.is_available() {
+            let mut vector = [0.0; 8];
+            div_ieee_on_lane(
+                ElementwiseLane::Avx2,
+                &lhs,
+                layout,
+                &rhs,
+                layout,
+                &mut vector,
+                layout,
+            )
+            .unwrap();
+            assert_eq!(vector.map(f32::to_bits), scalar.map(f32::to_bits));
+        }
+
+        let mut phase = [0.0; 8];
+        atan_ieee(&scalar, layout, &mut phase, layout).unwrap();
+        assert_eq!(
+            phase.map(f32::to_bits),
+            [
+                0x3fc9_0fda,
+                0xbfc9_0fda,
+                0xbfc9_0fda,
+                0x3fc9_0fda,
+                0x3fc9_0fda,
+                0xbfc9_0fda,
+                0xbfc9_0fda,
+                0x3fc9_0fda,
+            ]
+        );
     }
 
     #[test]

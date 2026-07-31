@@ -252,7 +252,7 @@ unsafe fn apply_vector(operation: BinaryOperation, lhs: __m256, rhs: __m256) -> 
     match operation {
         BinaryOperation::Add => _mm256_add_ps(lhs, rhs),
         BinaryOperation::Mul => _mm256_mul_ps(lhs, rhs),
-        BinaryOperation::Div => _mm256_div_ps(lhs, rhs),
+        BinaryOperation::Div | BinaryOperation::DivIeee => _mm256_div_ps(lhs, rhs),
         BinaryOperation::Sub => _mm256_sub_ps(lhs, rhs),
     }
 }
@@ -309,7 +309,7 @@ fn validate_values(operation: BinaryOperation, lhs: f32, rhs: f32) -> Result<(),
     if !lhs.is_finite() || !rhs.is_finite() {
         return Err(Error::NonFiniteInput);
     }
-    if !operation.apply(lhs, rhs).is_finite() {
+    if !operation.valid_output(operation.apply(lhs, rhs)) {
         return Err(Error::NonFiniteOutput);
     }
     Ok(())

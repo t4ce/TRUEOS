@@ -136,10 +136,53 @@ pub fn status() -> ServiceStatus {
     }
 }
 
+// The sealed Kokoro graph contains constant tensors whose proven alignment is
+// as large as 64 bytes.  A `Vec<u8>` allocation only promises byte alignment,
+// even when every on-disk section offset is correctly aligned.  Keep resident
+// model images in the same aligned representation used by the native host
+// oracle so zero-copy tensor views preserve the artifact's alignment proof.
+#[repr(C, align(64))]
+#[derive(Clone, Copy, Debug)]
+struct ModelImageLine([u8; 64]);
+
+const _: () = assert!(core::mem::size_of::<ModelImageLine>() == 64);
+
+#[derive(Debug)]
+struct ModelImageBytes {
+    lines: Vec<ModelImageLine>,
+    len: usize,
+}
+
+impl ModelImageBytes {
+    fn try_zeroed(len: usize) -> Result<Self, ()> {
+        let line_count = len.checked_add(63).ok_or(())? / 64;
+        let mut lines = Vec::new();
+        lines.try_reserve_exact(line_count).map_err(|_| ())?;
+        lines.resize(line_count, ModelImageLine([0; 64]));
+        Ok(Self { lines, len })
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        // SAFETY: ModelImageLine is a repr(C), 64-byte-aligned wrapper with
+        // exactly 64 initialized bytes. `len` is bounded by the Vec storage.
+        unsafe { core::slice::from_raw_parts(self.lines.as_ptr().cast::<u8>(), self.len) }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: the same representation proof as `as_slice` applies and the
+        // exclusive borrow keeps the returned byte slice unique.
+        unsafe { core::slice::from_raw_parts_mut(self.lines.as_mut_ptr().cast::<u8>(), self.len) }
+    }
+}
+
 #[derive(Debug)]
 pub struct ModelImage {
     path: String,
-    bytes: Vec<u8>,
+    bytes: ModelImageBytes,
 }
 
 impl ModelImage {
@@ -563,6 +606,7 @@ pub struct TtsRequest {
     pub text: String,
     pub voice: String,
     pub speed: f32,
+    pub(crate) capture: Option<crate::r::ttstt_capture::CaptureSession>,
 }
 
 /// Request delivered to the native backend after service admission.
@@ -1113,10 +1157,8 @@ async fn load_model_image(
         bytes: data_len,
     })?;
 
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(len)
-        .map_err(|_| ModelLoadError::Allocation(path.clone()))?;
+    let mut bytes =
+        ModelImageBytes::try_zeroed(len).map_err(|_| ModelLoadError::Allocation(path.clone()))?;
     let mut scratch = vec![0u8; MODEL_READ_CHUNK_BYTES.min(len)];
     let mut offset = 0usize;
     while offset < len {
@@ -1138,7 +1180,7 @@ async fn load_model_image(
         if got != want {
             return Err(ModelLoadError::ShortRead { path, offset });
         }
-        bytes.extend_from_slice(&scratch[..got]);
+        bytes.as_mut_slice()[offset..offset + got].copy_from_slice(&scratch[..got]);
         offset += got;
         Timer::after(EmbassyDuration::from_millis(MODEL_READ_YIELD_MS)).await;
     }

@@ -80,15 +80,21 @@ pub struct CpuWorkspaceRequirements {
     pub lstm_gates_f32: usize,
 }
 
-pub const KOKORO_CPU_WORKSPACE_REQUIREMENTS: CpuWorkspaceRequirements =
-    CpuWorkspaceRequirements {
-        quant_u8: 13_080,
-        packed_i8: 3_348_480,
-        accum_i32: 2_180,
-        row_sums_i32: 2_180,
-        bias_i32: 1_024,
-        lstm_gates_f32: 1_024,
-    };
+pub const KOKORO_CPU_WORKSPACE_REQUIREMENTS: CpuWorkspaceRequirements = CpuWorkspaceRequirements {
+    quant_u8: 13_080,
+    packed_i8: 3_348_480,
+    accum_i32: 2_180,
+    row_sums_i32: 2_180,
+    bias_i32: 1_024,
+    lstm_gates_f32: 1_024,
+};
+
+// The pinned 2,227-operation Kokoro graph lowers `atan2(imaginary, real)` to
+// Div -> Atan -> quadrant correction. Only this edge is allowed to carry the
+// signed infinity produced when `real` is exactly zero; all other arithmetic
+// keeps the dispatcher's fail-closed finite-value policy.
+const KOKORO_STFT_PHASE_DIV_OP_INDEX: u32 = 1_324;
+const KOKORO_STFT_PHASE_ATAN_OP_INDEX: u32 = 1_330;
 
 /// Exact workspace slice rejected by [`CpuWorkspace::new`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -313,17 +319,7 @@ impl<
     const SHAPES: usize,
     const EXTERNALS: usize,
     const BINDINGS: usize,
->
-    CpuDispatcher<
-        'dispatch,
-        'memory,
-        'artifact,
-        'buffers,
-        'workspace,
-        SHAPES,
-        EXTERNALS,
-        BINDINGS,
-    >
+> CpuDispatcher<'dispatch, 'memory, 'artifact, 'buffers, 'workspace, SHAPES, EXTERNALS, BINDINGS>
 {
     pub fn new(
         memory: &'dispatch mut TensorMemory<
@@ -488,9 +484,7 @@ fn infer_output_shapes<const SHAPES: usize, const EXTERNALS: usize, const BINDIN
             let (_, output) = matmul_profile(value, lhs, rhs)?;
             OutputShapes::one(output)
         }
-        Attributes::DynamicQuantizedGemm(value) => {
-            infer_quant_gemm(memory, program, work, value)?
-        }
+        Attributes::DynamicQuantizedGemm(value) => infer_quant_gemm(memory, program, work, value)?,
         Attributes::DynamicQuantizedConv1d(value) => {
             infer_quant_conv(memory, program, work, value)?
         }
@@ -771,11 +765,7 @@ fn broadcast_shape(lhs: RuntimeShape, rhs: RuntimeShape) -> Result<RuntimeShape,
     RuntimeShape::new(&dims[..rank]).map_err(|_| DispatchError::ShapeConversion)
 }
 
-fn infer_quant_gemm<
-    const SHAPES: usize,
-    const EXTERNALS: usize,
-    const BINDINGS: usize,
->(
+fn infer_quant_gemm<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
     memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
     program: &Program<'_>,
     work: WorkSlice,
@@ -805,11 +795,7 @@ fn infer_quant_gemm<
     ))
 }
 
-fn infer_quant_conv<
-    const SHAPES: usize,
-    const EXTERNALS: usize,
-    const BINDINGS: usize,
->(
+fn infer_quant_conv<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
     memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
     program: &Program<'_>,
     work: WorkSlice,
@@ -836,8 +822,7 @@ fn infer_quant_conv<
         || input_shape(memory, program, work, 2)?.rank() != 0
         || input_shape(memory, program, work, 3)?.rank() != 0
         || (has_bias
-            && input_shape(memory, program, work, 4)?.dims()
-                != [attributes.output_channels])
+            && input_shape(memory, program, work, 4)?.dims() != [attributes.output_channels])
     {
         return Err(DispatchError::ShapeConversion);
     }
@@ -865,8 +850,8 @@ fn infer_quant_conv<
         ),
         weight_row_sums: None,
     };
-    let output_width = u32::try_from(params.output_width()?)
-        .map_err(|_| DispatchError::ShapeConversion)?;
+    let output_width =
+        u32::try_from(params.output_width()?).map_err(|_| DispatchError::ShapeConversion)?;
     Ok(OutputShapes::one(
         RuntimeShape::new(&[dims[0], attributes.output_channels, output_width])
             .map_err(|_| DispatchError::ShapeConversion)?,
@@ -914,13 +899,8 @@ fn infer_bilstm<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usi
     let state = RuntimeShape::new(&[2, 1, trueos_kokoro_lstm::HIDDEN_SIZE as u32])
         .map_err(|_| DispatchError::ShapeConversion)?;
     Ok(OutputShapes::three(
-        RuntimeShape::new(&[
-            dims[0],
-            2,
-            1,
-            trueos_kokoro_lstm::HIDDEN_SIZE as u32,
-        ])
-        .map_err(|_| DispatchError::ShapeConversion)?,
+        RuntimeShape::new(&[dims[0], 2, 1, trueos_kokoro_lstm::HIDDEN_SIZE as u32])
+            .map_err(|_| DispatchError::ShapeConversion)?,
         state,
         state,
     ))
@@ -1499,10 +1479,8 @@ fn infer_expand<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usi
     for (destination, &dimension) in target_dims.iter_mut().zip(target_shape.dims()) {
         *destination = usize::try_from(dimension).map_err(|_| DispatchError::ShapeConversion)?;
     }
-    let output = trueos_kokoro_layout::expand_shape(
-        layout_shape(input)?,
-        &target_dims[..target.len],
-    )?;
+    let output =
+        trueos_kokoro_layout::expand_shape(layout_shape(input)?, &target_dims[..target.len])?;
     Ok(OutputShapes::one(runtime_from_layout(output)?))
 }
 
@@ -1780,9 +1758,7 @@ impl<
         let workspace = self.workspace.as_deref_mut();
         self.memory
             .with_op(work.op_index(), |access| {
-                execute(
-                    access, program, work, attributes, conv, gemm, quant, workspace,
-                )
+                execute(access, program, work, attributes, conv, gemm, quant, workspace)
             })
             .map_err(DispatchError::Memory)?
     }
@@ -1801,7 +1777,7 @@ fn execute<const BINDINGS: usize>(
     match attributes {
         Attributes::Binary(value) => {
             require_whole_unit(work)?;
-            execute_binary(access, value)?;
+            execute_binary(access, work, value)?;
         }
         Attributes::Comparison(value) => {
             require_whole_unit(work)?;
@@ -1886,11 +1862,7 @@ fn execute<const BINDINGS: usize>(
         }
         Attributes::BiLstm256(value) => {
             require_whole_unit(work)?;
-            execute_bilstm(
-                access,
-                value,
-                require_workspace(workspace, OpCode::BiLstm256)?,
-            )?;
+            execute_bilstm(access, value, require_workspace(workspace, OpCode::BiLstm256)?)?;
         }
         Attributes::Pow(_) => {
             require_whole_unit(work)?;
@@ -1917,11 +1889,13 @@ fn execute<const BINDINGS: usize>(
             let mut output = access.output::<i64>(0)?;
             trueos_kokoro_scalar::range_i64(start[0], limit[0], delta[0], &mut output)?;
         }
-        Attributes::Resize(value) => execute_resize(access, work, value)?,
-        Attributes::FloatConv(value) => execute_float_conv(access, work, value, conv)?,
+        Attributes::Resize(value) => return execute_resize(access, work, value),
+        Attributes::FloatConv(value) => {
+            return execute_float_conv(access, work, value, conv);
+        }
         Attributes::Unary(value) => {
             require_whole_unit(work)?;
-            execute_unary(access, value)?;
+            execute_unary(access, work, value)?;
         }
         Attributes::LeakyRelu(value) => {
             require_whole_unit(work)?;
@@ -2423,9 +2397,7 @@ fn execute_quant_gemm<const BINDINGS: usize>(
     if rows == 0 {
         return Err(DispatchError::ShapeConversion);
     }
-    let output_elements = rows
-        .checked_mul(n)
-        .ok_or(DispatchError::ShapeConversion)?;
+    let output_elements = rows.checked_mul(n).ok_or(DispatchError::ShapeConversion)?;
     let quantization = trueos_ttstt_cpu::dynamic_quantization_parameters(&activation)?;
     for &scale in weight_scales.iter() {
         trueos_ttstt_cpu::conv_integer_scale(quantization.scale, scale)?;
@@ -2475,9 +2447,7 @@ fn execute_quant_gemm<const BINDINGS: usize>(
                 n,
                 k,
                 lhs_zero_point: quantization.zero_point,
-                rhs_zero_points: trueos_ttstt_cpu::RhsZeroPoints::PerOutput(
-                    &weight_zero_points,
-                ),
+                rhs_zero_points: trueos_ttstt_cpu::RhsZeroPoints::PerOutput(&weight_zero_points),
                 rhs_row_sums: Some(row_sums),
             },
         )?;
@@ -2648,10 +2618,7 @@ fn execute_bilstm<const BINDINGS: usize>(
     let initial_cell = access.input::<f32>(5)?;
     let input_shape = input.shape();
     let input_dims = input_shape.dims();
-    if input_dims.len() != 3
-        || input_dims[1] != 1
-        || input_dims[2] != attributes.input_width
-    {
+    if input_dims.len() != 3 || input_dims[1] != 1 || input_dims[2] != attributes.input_width {
         return Err(DispatchError::ShapeConversion);
     }
     let sequence_length = input_dims[0] as usize;
@@ -2670,12 +2637,7 @@ fn execute_bilstm<const BINDINGS: usize>(
     let mut output = access.output::<f32>(0)?;
     let mut hidden = access.output::<f32>(1)?;
     let mut cell = access.output::<f32>(2)?;
-    let buffers = trueos_kokoro_lstm::Buffers::new(
-        &mut output,
-        &mut hidden,
-        &mut cell,
-        gates,
-    );
+    let buffers = trueos_kokoro_lstm::Buffers::new(&mut output, &mut hidden, &mut cell, gates);
     let mut invocation = trueos_kokoro_lstm::CooperativeLstm::start_with_state(
         problem,
         buffers,
@@ -2741,6 +2703,7 @@ fn execute_stft<const BINDINGS: usize>(access: &OpAccess<BINDINGS>) -> Result<()
 
 fn execute_binary<const BINDINGS: usize>(
     access: &OpAccess<BINDINGS>,
+    work: WorkSlice,
     attributes: BinaryAttributes,
 ) -> Result<(), DispatchError> {
     require_arity(access, 2, 1)?;
@@ -2772,7 +2735,25 @@ fn execute_binary<const BINDINGS: usize>(
             trueos_kokoro_f32::mul(&lhs, lhs_layout, &rhs, rhs_layout, &mut output, output_layout)?
         }
         OpCode::Div => {
-            trueos_kokoro_f32::div(&lhs, lhs_layout, &rhs, rhs_layout, &mut output, output_layout)?
+            if work.op_index() == KOKORO_STFT_PHASE_DIV_OP_INDEX {
+                trueos_kokoro_f32::div_ieee(
+                    &lhs,
+                    lhs_layout,
+                    &rhs,
+                    rhs_layout,
+                    &mut output,
+                    output_layout,
+                )?
+            } else {
+                trueos_kokoro_f32::div(
+                    &lhs,
+                    lhs_layout,
+                    &rhs,
+                    rhs_layout,
+                    &mut output,
+                    output_layout,
+                )?
+            }
         }
         OpCode::Sub => {
             trueos_kokoro_f32::sub(&lhs, lhs_layout, &rhs, rhs_layout, &mut output, output_layout)?
@@ -2928,6 +2909,7 @@ fn execute_where<const BINDINGS: usize>(
 
 fn execute_unary<const BINDINGS: usize>(
     access: &OpAccess<BINDINGS>,
+    work: WorkSlice,
     attributes: UnaryAttributes,
 ) -> Result<(), DispatchError> {
     require_arity(access, 1, 1)?;
@@ -2936,6 +2918,9 @@ fn execute_unary<const BINDINGS: usize>(
     let mut output = access.output::<f32>(0)?;
     let output_layout = contiguous_f32(output.shape())?;
     match attributes.opcode {
+        OpCode::Atan if work.op_index() == KOKORO_STFT_PHASE_ATAN_OP_INDEX => {
+            trueos_kokoro_f32::atan_ieee(&input, input_layout, &mut output, output_layout)?
+        }
         OpCode::Atan => trueos_kokoro_f32::atan(&input, input_layout, &mut output, output_layout)?,
         OpCode::Cos => trueos_kokoro_f32::cos(&input, input_layout, &mut output, output_layout)?,
         OpCode::Exp => trueos_kokoro_f32::exp(&input, input_layout, &mut output, output_layout)?,
@@ -2960,7 +2945,7 @@ fn execute_resize<const BINDINGS: usize>(
     access: &OpAccess<BINDINGS>,
     work: WorkSlice,
     attributes: ResizeAttributes,
-) -> Result<(), DispatchError> {
+) -> Result<DispatchResult, DispatchError> {
     require_arity(access, 2, 1)?;
     let input = access.input::<f32>(0)?;
     let scales = access.input::<f32>(1)?;
@@ -3015,22 +3000,13 @@ fn execute_resize<const BINDINGS: usize>(
         scale,
     )?;
     let mut output = access.output::<f32>(0)?;
-    let sealed_units = usize::try_from(work.op().work_units).map_err(|_| {
-        DispatchError::InvalidWorkContract {
-            opcode: OpCode::Resize,
-        }
-    })?;
-    if sealed_units < output.len() {
-        return Err(DispatchError::InvalidWorkContract {
-            opcode: OpCode::Resize,
-        });
-    }
+    let completion = cooperative_completion(work, output.len())?;
     let start = (work.unit_start() as usize).min(output.len());
     let end = (work.unit_end() as usize).min(output.len());
     if start < end {
         plan.run_range(&input, &mut output, start, end - start)?;
     }
-    Ok(())
+    Ok(completion)
 }
 
 fn execute_float_conv<const BINDINGS: usize>(
@@ -3038,7 +3014,7 @@ fn execute_float_conv<const BINDINGS: usize>(
     work: WorkSlice,
     attributes: FloatConvAttributes,
     dispatcher: trueos_kokoro_conv::Dispatcher,
-) -> Result<(), DispatchError> {
+) -> Result<DispatchResult, DispatchError> {
     require_arity(access, if attributes.has_bias { 3 } else { 2 }, 1)?;
     let input = access.input::<f32>(0)?;
     let weights = access.input::<f32>(1)?;
@@ -3097,17 +3073,12 @@ fn execute_float_conv<const BINDINGS: usize>(
     let problem = trueos_kokoro_conv::Problem::new(profile, &input, &weights, bias.as_deref())?;
     let dimensions = problem.dimensions();
     let mut output = access.output::<f32>(0)?;
-    let sealed_units = usize::try_from(work.op().work_units).map_err(|_| {
-        DispatchError::InvalidWorkContract {
-            opcode: attributes.opcode,
-        }
-    })?;
-    if sealed_units < output.len() || output.len() != dimensions.output_elements()?
-    {
+    if output.len() != dimensions.output_elements()? {
         return Err(DispatchError::InvalidWorkContract {
             opcode: attributes.opcode,
         });
     }
+    let completion = cooperative_completion(work, output.len())?;
     let mut linear = (work.unit_start() as usize).min(output.len());
     let end = (work.unit_end() as usize).min(output.len());
     while linear < end {
@@ -3127,7 +3098,27 @@ fn execute_float_conv<const BINDINGS: usize>(
         )?;
         linear += count;
     }
-    Ok(())
+    Ok(completion)
+}
+
+fn cooperative_completion(
+    work: WorkSlice,
+    runtime_work_units: usize,
+) -> Result<DispatchResult, DispatchError> {
+    let runtime_work_units =
+        u32::try_from(runtime_work_units).map_err(|_| DispatchError::InvalidWorkContract {
+            opcode: work.op().opcode,
+        })?;
+    if runtime_work_units > work.op().work_units {
+        return Err(DispatchError::InvalidWorkContract {
+            opcode: work.op().opcode,
+        });
+    }
+    if work.unit_end() >= runtime_work_units {
+        Ok(DispatchResult::CompletedOperation { runtime_work_units })
+    } else {
+        Ok(DispatchResult::Completed)
+    }
 }
 
 fn execute_resolve<const BINDINGS: usize>(

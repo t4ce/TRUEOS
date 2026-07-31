@@ -2,9 +2,8 @@
 //!
 //! The resident service owns all model bytes for the life of the kernel.  This
 //! module turns those bytes into validated, zero-copy views during a staged
-//! warm job.  It deliberately does not advertise TTS yet: the current CPU
-//! dispatcher still rejects mandatory operations in the sealed graph and the
-//! runtime shape-propagation bridge is not complete.
+//! warm job and executes the fully admitted graph through the native CPU
+//! dispatcher.
 
 extern crate alloc;
 
@@ -80,6 +79,12 @@ const _: () = {
     assert!(PHASE_ONE_ARENA_MIN_BYTES % ARENA_ALIGNMENT as u64 == 0);
     assert!(PHASE_ONE_ARENA_MAX_BYTES % ARENA_ALIGNMENT as u64 == 0);
     assert!(PHASE_ONE_ARENA_MIN_BYTES <= PHASE_ONE_ARENA_MAX_BYTES);
+    assert!(ATOMIC_WORK_UNITS_PER_SLICE != 0);
+    assert!(COOPERATIVE_WORK_UNITS_PER_SLICE > ATOMIC_WORK_UNITS_PER_SLICE);
+    assert!(
+        SEALED_FLOAT_CONV_WORK_UNITS + SEALED_RESIZE_WORK_UNITS + SEALED_ATOMIC_OPS as u64
+            == SEALED_WORK_UNITS
+    );
 };
 
 const TOKENS_TENSOR_ID: u32 = 0;
@@ -89,8 +94,20 @@ const WAVEFORM_TENSOR_ID: u32 = TENSOR_COUNT - 1;
 const SHAPE_CAPACITY: usize = TENSOR_COUNT as usize;
 const SLOT_CAPACITY: usize = SLOT_COUNT as usize;
 const MAX_OP_BINDINGS: usize = 16;
-/// Bound one scheduler visit while still admitting every whole-unit adapter.
-const EXECUTOR_WORK_UNITS_PER_SLICE: u32 = 64;
+/// The pinned max-frame plan contains this exact number of scheduler work
+/// units. Most are runtime-sized Resize/float-convolution coordinates; the
+/// remaining records are whole-operation adapters with one sealed unit each.
+const SEALED_WORK_UNITS: u64 = 97_778_896;
+/// Preserve short scheduling checkpoints while walking atomic graph records.
+const ATOMIC_WORK_UNITS_PER_SLICE: u32 = 64;
+/// Coordinate cap selected from the slowest pinned float-convolution profile.
+/// On the i9-13900K oracle it bounds a cooperative tile to about 15 ms; the
+/// target i5-14500T retains the same AVX2/FMA and AVX-VNNI execution lanes.
+const COOPERATIVE_WORK_UNITS_PER_SLICE: u32 = 32_768;
+const SEALED_ATOMIC_OPS: u32 = 2_214;
+const SEALED_COOPERATIVE_OPS: u32 = 13;
+const SEALED_FLOAT_CONV_WORK_UNITS: u64 = 71_546_922;
+const SEALED_RESIZE_WORK_UNITS: u64 = 26_229_760;
 
 // These gates name work that cannot be inferred from a syntactically valid
 // artifact. Keeping them explicit prevents a future decoder-only change from
@@ -172,7 +189,11 @@ impl DispatchCoverage {
 }
 
 fn runtime_blocker(assets: &WarmAssets) -> Option<&'static str> {
-    if assets.coverage.missing_ops != 0 {
+    if !(assets.program.artifact().as_ptr() as usize).is_multiple_of(ARENA_ALIGNMENT as usize)
+        || !(assets.program.data().as_ptr() as usize).is_multiple_of(ARENA_ALIGNMENT as usize)
+    {
+        Some("kokoro-artifact-memory-misaligned")
+    } else if assets.coverage.missing_ops != 0 {
         Some(DISPATCH_FAMILY_BLOCKER)
     } else if !RUNTIME_SHAPE_PROPAGATION_COMPLETE {
         Some("kokoro-runtime-shapes-incomplete")
@@ -437,12 +458,15 @@ impl InferenceJob for KokoroWarmJob {
                 let blocker = runtime_blocker(&assets).unwrap_or("none");
                 crate::log_info!(
                     target: "ttstt";
-                    "ttstt: kokoro native warm authenticated artifact_bytes={} tensors={} slots={} ops={} bindings={} phase0_arena_bytes={} phase1_arena_min_bytes={} phase1_arena_max_bytes={} frame_proof_max={} service_frame_cap={} waveform_max_samples_24k={} voices={} g2p_borrowed_bytes={} g2p_index_bytes={} lexicon_bytes={} lexicon_entries={} lexicon_variants={} dispatch_missing_ops={} dispatch_workspace_ops={} first_missing={:?} asset_ready=1 tts_ready={} blocker={}\n",
+                    "ttstt: kokoro native warm authenticated artifact_bytes={} tensors={} slots={} ops={} bindings={} sealed_work_units={} atomic_slice_units={} cooperative_slice_units={} phase0_arena_bytes={} phase1_arena_min_bytes={} phase1_arena_max_bytes={} frame_proof_max={} service_frame_cap={} waveform_max_samples_24k={} voices={} g2p_borrowed_bytes={} g2p_index_bytes={} lexicon_bytes={} lexicon_entries={} lexicon_variants={} dispatch_missing_ops={} dispatch_workspace_ops={} first_missing={:?} asset_ready=1 tts_ready={} blocker={}\n",
                     assets.program.artifact().len(),
                     assets.program.tensor_count(),
                     assets.program.slot_count(),
                     assets.program.op_count(),
                     assets.program.binding_count(),
+                    SEALED_WORK_UNITS,
+                    ATOMIC_WORK_UNITS_PER_SLICE,
+                    COOPERATIVE_WORK_UNITS_PER_SLICE,
                     PHASE_ZERO_ARENA_BYTES,
                     PHASE_ONE_ARENA_MIN_BYTES,
                     PHASE_ONE_ARENA_MAX_BYTES,
@@ -478,6 +502,47 @@ fn validate_program_contract(program: &Program<'_>) -> Result<(), &'static str> 
         || program.binding_count() != BINDING_COUNT
     {
         return Err("kokoro-kkaot-structural-count-mismatch");
+    }
+    let mut sealed_work_units = 0u64;
+    let mut atomic_ops = 0u32;
+    let mut cooperative_ops = 0u32;
+    let mut float_conv_work_units = 0u64;
+    let mut resize_work_units = 0u64;
+    for op_index in 0..program.op_count() {
+        let op = program.op(op_index).ok_or("kokoro-op-descriptor-missing")?;
+        sealed_work_units = sealed_work_units
+            .checked_add(u64::from(op.work_units))
+            .ok_or("kokoro-work-unit-total-overflow")?;
+        if op.work_units == 1 {
+            atomic_ops = atomic_ops
+                .checked_add(1)
+                .ok_or("kokoro-atomic-op-count-overflow")?;
+            continue;
+        }
+        cooperative_ops = cooperative_ops
+            .checked_add(1)
+            .ok_or("kokoro-cooperative-op-count-overflow")?;
+        match op.opcode {
+            OpCode::Resize => {
+                resize_work_units = resize_work_units
+                    .checked_add(u64::from(op.work_units))
+                    .ok_or("kokoro-resize-work-unit-overflow")?;
+            }
+            OpCode::FloatConv1d | OpCode::FloatConvTranspose1d => {
+                float_conv_work_units = float_conv_work_units
+                    .checked_add(u64::from(op.work_units))
+                    .ok_or("kokoro-float-conv-work-unit-overflow")?;
+            }
+            _ => return Err("kokoro-work-unit-family-mismatch"),
+        }
+    }
+    if sealed_work_units != SEALED_WORK_UNITS
+        || atomic_ops != SEALED_ATOMIC_OPS
+        || cooperative_ops != SEALED_COOPERATIVE_OPS
+        || float_conv_work_units != SEALED_FLOAT_CONV_WORK_UNITS
+        || resize_work_units != SEALED_RESIZE_WORK_UNITS
+    {
+        return Err("kokoro-work-unit-contract-mismatch");
     }
     if program.model_sha256() != &EXPECTED_MODEL_SHA256
         || program.voices_sha256() != &PINNED_ARCHIVE_SHA256
@@ -567,6 +632,22 @@ fn validate_program_contract(program: &Program<'_>) -> Result<(), &'static str> 
     Ok(())
 }
 
+fn executor_work_units_per_slice(program: &Program<'_>, executor: &Executor<SLOT_CAPACITY>) -> u32 {
+    let cursor = executor.cursor();
+    match program.op(cursor.op_index()) {
+        Some(op)
+            if op.work_units > 1
+                && matches!(
+                    op.opcode,
+                    OpCode::Resize | OpCode::FloatConv1d | OpCode::FloatConvTranspose1d
+                ) =>
+        {
+            COOPERATIVE_WORK_UNITS_PER_SLICE
+        }
+        _ => ATOMIC_WORK_UNITS_PER_SLICE,
+    }
+}
+
 fn validate_external_tensor(
     tensor: Option<TensorDesc>,
     dtype: DType,
@@ -631,6 +712,9 @@ impl KokoroTtsJob {
     fn fail(&mut self, reason: &'static str) -> JobProgress {
         if let Some(invocation) = self.invocation.as_mut() {
             invocation.cancel();
+        }
+        if let Some(capture) = self.request.request.capture.as_ref() {
+            capture.fail(reason);
         }
         let _ = self.request.output.finish_error(reason);
         JobProgress::Failed(reason)
@@ -814,7 +898,18 @@ impl InferenceJob for KokoroTtsJob {
                 match emission.run_slice(&self.request.output) {
                     Ok(EmissionProgress::Pending) => JobProgress::Pending,
                     Ok(EmissionProgress::Complete) => {
-                        self.emission = None;
+                        let Some(emission) = self.emission.take() else {
+                            return self.fail("kokoro-pcm-emission-state-lost");
+                        };
+                        if let Some(capture) = self.request.request.capture.as_ref() {
+                            let (waveform, model_chunk_index, model_chunk_phonemes) =
+                                emission.into_capture_parts();
+                            capture.push_raw_model_chunk(
+                                model_chunk_index,
+                                model_chunk_phonemes,
+                                waveform,
+                            );
+                        }
                         self.model_chunk_index = match self.model_chunk_index.checked_add(1) {
                             Some(index) => index,
                             None => return self.fail("kokoro-model-chunk-index-overflow"),
@@ -935,6 +1030,14 @@ impl PcmEmission {
             Err(TtsOutputError::Closed(_)) => Err("kokoro-pcm-output-closed"),
             Err(TtsOutputError::Invalid { reason, .. }) => Err(reason),
         }
+    }
+
+    fn into_capture_parts(self) -> (Vec<f32>, u32, u16) {
+        (
+            self.waveform,
+            self.model_chunk_index,
+            self.model_chunk_phonemes,
+        )
     }
 }
 
@@ -1167,7 +1270,14 @@ impl InvocationScaffold {
             phase_zero_arena.as_mut_bytes(),
             &mut externals,
         )
-        .map_err(|_| "kokoro-phase0-memory-bridge-rejected")?;
+        .map_err(|error| {
+            crate::log_warn!(
+                target: "ttstt";
+                "ttstt: kokoro phase0 memory bridge rejected stage=prepare error={:?}\n",
+                error
+            );
+            "kokoro-phase0-memory-bridge-rejected"
+        })?;
         Ok(())
     }
 
@@ -1220,7 +1330,12 @@ impl InvocationScaffold {
                 &mut externals,
             ) {
                 Ok(memory) => memory,
-                Err(_) => {
+                Err(error) => {
+                    crate::log_warn!(
+                        target: "ttstt";
+                        "ttstt: kokoro phase0 memory bridge rejected stage=run error={:?}\n",
+                        error
+                    );
                     return InvocationProgress::Failed("kokoro-phase0-memory-bridge-rejected");
                 }
             };
@@ -1229,7 +1344,7 @@ impl InvocationScaffold {
             Err(reason) => return InvocationProgress::Failed(reason),
         };
         let mut dispatcher = CpuDispatcher::new_with_workspace(&mut memory, &mut cpu_workspace);
-        let mut budget = match WorkBudget::new(EXECUTOR_WORK_UNITS_PER_SLICE) {
+        let mut budget = match WorkBudget::new(executor_work_units_per_slice(program, executor)) {
             Ok(budget) => budget,
             Err(_) => return InvocationProgress::Failed("kokoro-executor-budget-invalid"),
         };
@@ -1381,7 +1496,7 @@ impl InvocationScaffold {
             Err(reason) => return InvocationProgress::Failed(reason),
         };
         let mut dispatcher = CpuDispatcher::new_with_workspace(&mut memory, &mut cpu_workspace);
-        let mut budget = match WorkBudget::new(EXECUTOR_WORK_UNITS_PER_SLICE) {
+        let mut budget = match WorkBudget::new(executor_work_units_per_slice(program, executor)) {
             Ok(budget) => budget,
             Err(_) => return InvocationProgress::Failed("kokoro-executor-budget-invalid"),
         };

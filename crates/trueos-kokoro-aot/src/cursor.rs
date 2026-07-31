@@ -96,6 +96,7 @@ pub enum CursorError {
     PhaseTwoNotResolved,
     StaleWorkSlice,
     InvalidWorkSlice,
+    InvalidRuntimeCompletion,
 }
 
 /// Transactional cursor over a sealed program.
@@ -195,6 +196,35 @@ impl OpCursor {
 
     /// Commit work only against the sealed program that produced the slice.
     pub fn commit(&mut self, program: &Program<'_>, work: WorkSlice) -> Result<(), CursorError> {
+        self.validate_commit(program, work)?;
+        self.unit_offset = work.unit_end();
+        if self.unit_offset == work.op.work_units {
+            self.advance_operation();
+        }
+        Ok(())
+    }
+
+    /// Commit the executed slice and a dispatcher-proven empty runtime suffix.
+    ///
+    /// `runtime_work_units` is the live prefix length for this invocation. It
+    /// must fit both the sealed operation and the slice just executed. The
+    /// cursor never derives this boundary itself; only a dispatcher that has
+    /// validated the runtime output shape can attest it.
+    pub fn commit_runtime_complete(
+        &mut self,
+        program: &Program<'_>,
+        work: WorkSlice,
+        runtime_work_units: u32,
+    ) -> Result<(), CursorError> {
+        self.validate_commit(program, work)?;
+        if runtime_work_units > work.op.work_units || runtime_work_units > work.unit_end() {
+            return Err(CursorError::InvalidRuntimeCompletion);
+        }
+        self.advance_operation();
+        Ok(())
+    }
+
+    fn validate_commit(&self, program: &Program<'_>, work: WorkSlice) -> Result<(), CursorError> {
         if work.op_index != self.op_index || work.unit_start != self.unit_offset {
             return Err(CursorError::StaleWorkSlice);
         }
@@ -209,12 +239,12 @@ impl OpCursor {
         {
             return Err(CursorError::InvalidWorkSlice);
         }
-        self.unit_offset = work.unit_end();
-        if self.unit_offset == work.op.work_units {
-            self.op_index = self.op_index.saturating_add(1);
-            self.unit_offset = 0;
-        }
         Ok(())
+    }
+
+    fn advance_operation(&mut self) {
+        self.op_index = self.op_index.saturating_add(1);
+        self.unit_offset = 0;
     }
 
     pub fn admit_phase_two(

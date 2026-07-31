@@ -332,8 +332,15 @@ fn validate_phase(tensor_phase: Phase, operation_phase: Phase) -> Result<(), Sha
 pub enum DispatchResult {
     /// The requested units completed without producing control-plane data.
     Completed,
+    /// The requested units completed and reached the invocation's live work
+    /// boundary, so the remaining sealed maximum-capacity suffix is empty.
+    CompletedOperation { runtime_work_units: u32 },
     /// The final resolver slice completed and produced phase one's frame count.
     FrameCount(u32),
+}
+
+const fn supports_runtime_completion(opcode: OpCode) -> bool {
+    matches!(opcode, OpCode::Resize | OpCode::FloatConv1d | OpCode::FloatConvTranspose1d)
 }
 
 /// Backend boundary for CPU, GPU, or mixed operation implementations.
@@ -360,6 +367,9 @@ pub enum ExecutorFault {
     MissingFrameCount,
     /// A dispatcher reported a frame count from the wrong or a partial op.
     UnexpectedFrameCount,
+    /// A dispatcher tried to shorten an operation without a runtime-prefix
+    /// work contract.
+    UnexpectedOperationCompletion,
     /// More than one frame-count result was reported.
     DuplicateFrameCount,
     /// Runtime arena resolution rejected the frame count or capacity plan.
@@ -585,8 +595,18 @@ impl<const SLOT_CAPACITY: usize> Executor<SLOT_CAPACITY> {
                             );
                         }
                     };
-                    let frame_count = match dispatch_result {
-                        DispatchResult::Completed => None,
+                    let (frame_count, runtime_completion) = match dispatch_result {
+                        DispatchResult::Completed => (None, None),
+                        DispatchResult::CompletedOperation { runtime_work_units } => {
+                            if !supports_runtime_completion(work.op().opcode) {
+                                return self.fail(
+                                    ExecutorFault::UnexpectedOperationCompletion,
+                                    initial_remaining,
+                                    budget,
+                                );
+                            }
+                            (None, Some(runtime_work_units))
+                        }
                         DispatchResult::FrameCount(frame_count) => {
                             if self.state != ExecutorState::Phase0
                                 || work.op().opcode != OpCode::ResolveDecoderShape
@@ -605,10 +625,17 @@ impl<const SLOT_CAPACITY: usize> Executor<SLOT_CAPACITY> {
                                     budget,
                                 );
                             }
-                            Some(frame_count)
+                            (Some(frame_count), None)
                         }
                     };
-                    if let Err(error) = self.cursor.commit(program, work) {
+                    let commit = match runtime_completion {
+                        Some(runtime_work_units) => {
+                            self.cursor
+                                .commit_runtime_complete(program, work, runtime_work_units)
+                        }
+                        None => self.cursor.commit(program, work),
+                    };
+                    if let Err(error) = commit {
                         return self.fail(ExecutorFault::Cursor(error), initial_remaining, budget);
                     }
                     if let Some(frame_count) = frame_count {

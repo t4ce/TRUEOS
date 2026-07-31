@@ -205,6 +205,61 @@ fn cpu_dispatcher_executes_first_fixture_add_through_typed_memory() {
 }
 
 #[test]
+fn cpu_resize_attests_the_runtime_prefix_and_skips_sealed_capacity() {
+    let (mut artifact, path, inputs, outputs) = selected_fixture(OpCode::Resize);
+    assert_eq!((inputs.len(), outputs.len()), (2, 1));
+    let op_offset = fixture_section_offset(&artifact, 2);
+    artifact[op_offset + 28..op_offset + 32].copy_from_slice(&128_u32.to_le_bytes());
+    let seal = artifact_sha256(&artifact).unwrap();
+    artifact[64..96].copy_from_slice(&seal);
+
+    let mut aligned = AlignedArtifact([0; 32_768]);
+    aligned.0[..artifact.len()].copy_from_slice(&artifact);
+    let program = Program::parse(&aligned.0[..artifact.len()]).unwrap();
+    let mut shapes: TensorShapeTable<256> = TensorShapeTable::new();
+    shapes.initialize(&program).unwrap();
+    shapes
+        .bind_external(&program, inputs[0], RuntimeShape::new(&[1, 1, 2]).unwrap())
+        .unwrap();
+    shapes
+        .bind_external(&program, inputs[1], RuntimeShape::new(&[3]).unwrap())
+        .unwrap();
+    shapes
+        .bind_external(&program, outputs[0], RuntimeShape::new(&[1, 1, 4]).unwrap())
+        .unwrap();
+
+    let input = [3.0_f32, 7.0];
+    let scales = [1.0_f32, 1.0, 2.0];
+    let mut output = [0.0_f32; 4];
+    let mut bindings: ExternalBindings<'_, 3> = ExternalBindings::new();
+    bindings
+        .bind_input(&program, &shapes, inputs[0], &input)
+        .unwrap();
+    bindings
+        .bind_input(&program, &shapes, inputs[1], &scales)
+        .unwrap();
+    bindings
+        .bind_output(&program, &shapes, outputs[0], &mut output)
+        .unwrap();
+    let mut arena = AlignedArena([0; 64]);
+
+    {
+        let mut memory: TensorMemory<'_, '_, '_, 256, 3, 8> =
+            TensorMemory::phase_zero(&program, &mut shapes, &mut arena.0, &mut bindings).unwrap();
+        let mut dispatcher = CpuDispatcher::new(&mut memory);
+        let mut executor: Executor<1> = Executor::new();
+        let mut budget = WorkBudget::new(8).unwrap();
+        let report = executor.run_slice(&program, &mut dispatcher, &mut budget);
+        assert!(matches!(report.event, SliceEvent::BudgetExhausted));
+        assert_eq!((report.consumed, report.remaining), (8, 0));
+        assert_eq!((executor.cursor().op_index(), executor.cursor().unit_offset()), (1, 0));
+    }
+
+    assert_eq!(output, [3.0, 3.0, 7.0, 7.0]);
+    fs::remove_file(path).expect("remove generated test fixture");
+}
+
+#[test]
 fn cpu_dispatcher_materializes_fixture_transpose() {
     let (mut artifact, path) = fixture();
     let original = Program::parse(&artifact).unwrap();

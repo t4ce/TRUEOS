@@ -879,6 +879,48 @@ fn cooperative_cursor_is_transactional_and_phase_gated() {
 }
 
 #[test]
+fn runtime_completion_commit_is_bounded_and_transactional() {
+    let artifact = fixture();
+    let program = Program::parse(&artifact).unwrap();
+    let mut cursor = OpCursor::new();
+    let mut budget = WorkBudget::new(5).unwrap();
+    let work = match cursor.poll(&program, &mut budget) {
+        CursorPoll::Ready(work) => work,
+        other => panic!("expected work, got {other:?}"),
+    };
+
+    assert_eq!(
+        cursor
+            .commit_runtime_complete(&program, work, work.unit_end() + 1)
+            .unwrap_err(),
+        CursorError::InvalidRuntimeCompletion
+    );
+    assert_eq!((cursor.op_index(), cursor.unit_offset()), (0, 0));
+
+    cursor
+        .commit_runtime_complete(&program, work, work.unit_end())
+        .unwrap();
+    assert_eq!((cursor.op_index(), cursor.unit_offset()), (1, 0));
+    assert_eq!(
+        cursor
+            .commit_runtime_complete(&program, work, work.unit_end())
+            .unwrap_err(),
+        CursorError::StaleWorkSlice
+    );
+
+    let mut foreign_artifact = fixture();
+    *foreign_artifact.last_mut().unwrap() ^= 1;
+    reseal(&mut foreign_artifact);
+    let foreign_program = Program::parse(&foreign_artifact).unwrap();
+    assert_eq!(
+        OpCursor::new()
+            .commit_runtime_complete(&foreign_program, work, work.unit_end())
+            .unwrap_err(),
+        CursorError::ProgramMismatch
+    );
+}
+
+#[test]
 fn malformed_phase_and_opcode_are_rejected() {
     let original = fixture();
 

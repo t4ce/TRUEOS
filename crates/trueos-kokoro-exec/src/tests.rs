@@ -17,6 +17,7 @@ struct RecordingDispatcher {
     frame_count: Option<u32>,
     fail_next: bool,
     force_frame_count: bool,
+    runtime_completion: Option<(OpCode, u32)>,
 }
 
 impl RecordingDispatcher {
@@ -26,6 +27,7 @@ impl RecordingDispatcher {
             frame_count,
             fail_next: false,
             force_frame_count: false,
+            runtime_completion: None,
         }
     }
 }
@@ -50,6 +52,11 @@ impl Dispatcher for RecordingDispatcher {
         }
         if self.force_frame_count {
             return Ok(DispatchResult::FrameCount(self.frame_count.unwrap_or(1)));
+        }
+        if let Some((opcode, runtime_work_units)) = self.runtime_completion
+            && work.op().opcode == opcode
+        {
+            return Ok(DispatchResult::CompletedOperation { runtime_work_units });
         }
         if work.op().opcode == OpCode::ResolveDecoderShape
             && work.completes_op()
@@ -134,6 +141,92 @@ fn dispatcher_failure_does_not_commit_and_the_exact_slice_retries() {
     assert!(matches!(report.event, SliceEvent::PhaseAdmitted(_)));
     assert_eq!(dispatcher.calls[1], failed_call);
     assert_eq!(executor.state(), ExecutorState::Phase1);
+}
+
+#[test]
+fn runtime_completion_skips_only_the_proven_sealed_suffix() {
+    for opcode in [
+        OpCode::Resize,
+        OpCode::FloatConv1d,
+        OpCode::FloatConvTranspose1d,
+    ] {
+        let artifact = fixture_with_phase_one_operation(64, 0x11, 1, opcode, 1_000_000);
+        let program = Program::parse(&artifact).unwrap();
+        let mut executor = Executor::<1>::new();
+        let mut dispatcher = RecordingDispatcher::with_frame_count(Some(4));
+        dispatcher.runtime_completion = Some((opcode, 37));
+
+        let mut budget = WorkBudget::new(2).unwrap();
+        assert!(matches!(
+            executor
+                .run_slice(&program, &mut dispatcher, &mut budget)
+                .event,
+            SliceEvent::PhaseAdmitted(_)
+        ));
+        let phase_zero_calls = dispatcher.calls.len();
+
+        let mut budget = WorkBudget::new(64).unwrap();
+        let report = executor.run_slice(&program, &mut dispatcher, &mut budget);
+        assert_eq!(report.event, SliceEvent::Complete, "{opcode:?}");
+        assert_eq!((report.consumed, report.remaining), (64, 0));
+        assert_eq!(executor.state(), ExecutorState::Complete);
+        assert_eq!((executor.cursor().op_index(), executor.cursor().unit_offset()), (2, 0));
+        assert_eq!(dispatcher.calls.len(), phase_zero_calls + 1);
+        assert_eq!(
+            dispatcher.calls[phase_zero_calls],
+            Call {
+                artifact_sha256: *program.artifact_sha256(),
+                op_index: 1,
+                unit_start: 0,
+                unit_count: 64,
+            }
+        );
+    }
+}
+
+#[test]
+fn runtime_completion_rejects_a_boundary_beyond_the_executed_slice() {
+    let artifact = fixture_with_phase_one_operation(64, 0x11, 1, OpCode::Resize, 1_000_000);
+    let program = Program::parse(&artifact).unwrap();
+    let mut executor = Executor::<1>::new();
+    let mut dispatcher = RecordingDispatcher::with_frame_count(Some(4));
+    dispatcher.runtime_completion = Some((OpCode::Resize, 65));
+
+    let mut budget = WorkBudget::new(2).unwrap();
+    assert!(matches!(
+        executor
+            .run_slice(&program, &mut dispatcher, &mut budget)
+            .event,
+        SliceEvent::PhaseAdmitted(_)
+    ));
+    let mut budget = WorkBudget::new(64).unwrap();
+    let report = executor.run_slice(&program, &mut dispatcher, &mut budget);
+    assert_eq!(
+        report.event,
+        SliceEvent::Faulted(ExecutorFault::Cursor(CursorError::InvalidRuntimeCompletion))
+    );
+    assert_eq!((executor.cursor().op_index(), executor.cursor().unit_offset()), (1, 0));
+}
+
+#[test]
+fn runtime_completion_is_restricted_to_runtime_prefix_opcodes() {
+    let artifact = fixture(64, 0x11, 1);
+    let program = Program::parse(&artifact).unwrap();
+    let mut executor = Executor::<1>::new();
+    let mut dispatcher = RecordingDispatcher::with_frame_count(Some(4));
+    dispatcher.runtime_completion = Some((OpCode::Add, 5));
+
+    let mut budget = WorkBudget::new(2).unwrap();
+    assert!(matches!(
+        executor
+            .run_slice(&program, &mut dispatcher, &mut budget)
+            .event,
+        SliceEvent::PhaseAdmitted(_)
+    ));
+    let mut budget = WorkBudget::new(5).unwrap();
+    let report = executor.run_slice(&program, &mut dispatcher, &mut budget);
+    assert_eq!(report.event, SliceEvent::Faulted(ExecutorFault::UnexpectedOperationCompletion));
+    assert_eq!((executor.cursor().op_index(), executor.cursor().unit_offset()), (1, 0));
 }
 
 #[test]
@@ -336,6 +429,16 @@ fn runtime_shape_declarations_are_bounded_transactional_and_program_pinned() {
 }
 
 fn fixture(arena_max: u64, model_tag: u8, resolver_count: u32) -> Vec<u8> {
+    fixture_with_phase_one_operation(arena_max, model_tag, resolver_count, OpCode::Add, 5)
+}
+
+fn fixture_with_phase_one_operation(
+    arena_max: u64,
+    model_tag: u8,
+    resolver_count: u32,
+    phase_one_opcode: OpCode,
+    phase_one_work_units: u32,
+) -> Vec<u8> {
     assert!((1..=2).contains(&resolver_count));
     let op_count = resolver_count + 1;
 
@@ -393,12 +496,12 @@ fn fixture(arena_max: u64, model_tag: u8, resolver_count: u32) -> Vec<u8> {
         bindings.extend_from_slice(&0u32.to_le_bytes());
     }
     ops.extend_from_slice(&op_record(
-        OpCode::Add as u16,
+        phase_one_opcode as u16,
         Phase::Phase1 as u8,
         resolver_count,
         1,
         1,
-        5,
+        phase_one_work_units,
     ));
     bindings.extend_from_slice(&0u32.to_le_bytes());
     bindings.extend_from_slice(&1u32.to_le_bytes());
