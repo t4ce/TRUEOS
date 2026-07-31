@@ -58,7 +58,8 @@ pub enum Error {
     Aliasing,
 }
 
-/// A scalar or a non-empty, rank-one-through-rank-four shape.
+/// A scalar or rank-one-through-rank-four shape, including ONNX tensors with
+/// a zero-length dimension.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Shape {
     rank: u8,
@@ -82,9 +83,6 @@ impl Shape {
         let mut stored = [0; MAX_RANK];
         let mut elements = 1usize;
         for (axis, &dimension) in dims.iter().enumerate() {
-            if dimension == 0 {
-                return Err(Error::ZeroDimension);
-            }
             elements = elements
                 .checked_mul(dimension)
                 .ok_or(Error::ShapeOverflow)?;
@@ -448,9 +446,6 @@ pub fn slice<T: Copy>(
         let start = normalize_slice_bound(starts[index], dimension);
         let end = normalize_slice_bound(ends[index], dimension);
         let length = end.saturating_sub(start) as usize;
-        if length == 0 {
-            return Err(Error::ZeroDimension);
-        }
         normalized_starts[axis] = start as usize;
         output_dims[axis] = length;
     }
@@ -523,8 +518,8 @@ pub fn reflect_pad<T: Copy>(
 /// Materialize ONNX `NonZero` in row-major input order.
 ///
 /// The output is laid out as `[input_rank, nonzero_count]`, matching ONNX. The
-/// count is returned separately because a zero-count tensor cannot be
-/// represented by this crate's non-empty [`Shape`].
+/// count is returned separately so callers can declare the exact dynamic
+/// `[input_rank, count]` output shape.
 pub fn nonzero_bool(
     input: &[bool],
     input_shape: Shape,
@@ -965,6 +960,20 @@ mod tests {
                 .unwrap();
         assert_eq!(output_shape.dims(), &[2, 2, 3]);
         assert_eq!(output, [4, 5, 6, 8, 9, 10, 16, 17, 18, 20, 21, 22]);
+
+        let mut empty = [0_i32; 0];
+        let empty_shape = slice(
+            &[11_i32, 12],
+            Shape::new(&[2]).unwrap(),
+            &[2],
+            &[i64::MAX],
+            Some(&[0]),
+            None,
+            &mut empty,
+        )
+        .unwrap();
+        assert_eq!(empty_shape.dims(), &[0]);
+        assert_eq!(empty_shape.element_count(), 0);
 
         let mut untouched = [44_i32; 12];
         assert_eq!(

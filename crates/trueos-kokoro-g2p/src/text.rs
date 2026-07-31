@@ -4,13 +4,13 @@ use core::{ops::Range, str};
 use crate::{DecodeError, IpaError, Model, PronunciationLookup, canonicalize_ipa, kokoro_token_id};
 
 pub const KOKORO_BOUNDARY_TOKEN: u8 = 0;
-pub const CHUNK_TARGET_MIN: usize = 175;
-pub const CHUNK_TARGET_MAX: usize = 250;
+pub const CHUNK_TARGET_MIN: usize = 60;
+pub const CHUNK_TARGET_MAX: usize = 120;
 /// Furthest lexical-boundary search, not a decoder-frame admission guarantee.
 ///
 /// The backend must resolve the duration scalar for the requested speed and
 /// split/retry any chunk whose decoder frame count exceeds its sealed ceiling.
-pub const CHUNK_FALLBACK_MAX: usize = 450;
+pub const CHUNK_FALLBACK_MAX: usize = 180;
 pub const KOKORO_MODEL_MAX: usize = 510;
 
 const MAX_TEXT_BYTES: usize = 8 * 1024;

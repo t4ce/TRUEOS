@@ -276,9 +276,10 @@ phrase gave these sizing points:
 | 448 | 1.0 | 625,800 | 2,086 | 26.075 |
 | 252 | 0.5 | 744,600 | 2,482 | 31.025 |
 
-The intended native text policy targets 175–250 tokens, may grow to 450 at a
+The intended native text policy targets 60–120 tokens, may grow to 180 at a
 sentence boundary, and uses 510 only as the graph hard fail-safe. The emitted
-program seals `N_max=512` and `F_max=2560`. The capacity interpreter proves all
+program seals `N_max=512` and `F_max=2560`; the kernel service separately caps
+admission at `F=1024` and split/retries larger results. The capacity interpreter proves all
 4,744 descriptors; its canonical SHA-256 is
 `ce83713e36d22cdc17c57d88d255112f3ad8fb80d8bc1f94561276070053cc09`.
 All 1,166 F-varying shapes are single-axis affine. Of these, 815 material or

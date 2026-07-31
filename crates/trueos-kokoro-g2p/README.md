@@ -9,14 +9,15 @@ Kokoro v1.0 model. The crate provides:
 - English acronym and integer normalization while retaining punctuation and
   whitespace boundaries;
 - Kokoro IPA canonicalization and the fixed v1.0 character-to-token mapping;
-- deterministic model ranges targeting 175–250 tokens, searching as far as
-  450 tokens for a natural boundary, with 510 as the graph's final hard limit.
+- deterministic model ranges targeting 60–120 tokens, searching as far as
+  180 tokens for a natural boundary, with 510 as the graph's final hard limit.
 
-The 450-token fallback is only a lexical chunking opportunity, never a decoder
+The 180-token fallback is only a lexical chunking opportunity, never a decoder
 admission guarantee. The backend must resolve the duration scalar at the
 requested speed and reject, split, and retry before phase-one allocation when
-the result exceeds the sealed `F=2560` ceiling. In particular, a slow request
-such as speed 0.5 can require a split well below 450 tokens.
+the result exceeds the service's `F=1024` ceiling. The artifact retains its
+sealed `F=2560` capacity proof, but the kernel intentionally admits less. In
+particular, speed 0.5 can require a split well below 180 tokens.
 
 `FrontendOutput::token_ids` and its `chunks` deliberately exclude Kokoro's
 boundary token. For each returned range the backend forms

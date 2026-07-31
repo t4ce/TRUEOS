@@ -1547,9 +1547,6 @@ fn infer_slice<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usiz
     let end = normalize_slice_bound(controls[1], dimension);
     let length =
         u32::try_from(end.saturating_sub(start)).map_err(|_| DispatchError::ShapeConversion)?;
-    if length == 0 {
-        return Err(DispatchError::ShapeConversion);
-    }
     let mut dims = [1_u32; 4];
     dims[..input.dims().len()].copy_from_slice(input.dims());
     dims[axis] = length;

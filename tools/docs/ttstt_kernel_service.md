@@ -220,8 +220,8 @@ uses an 8 KiB defensive allocation limit.
 
 The hard tensor limit is not the preferred paragraph size. Long near-limit
 chunks can sound rushed and delay the first PCM handoff. Native chunking
-therefore seeks a sentence or clause boundary in a 175--250-token target
-window, permits growth to 450 when that preserves a natural boundary, and
+therefore seeks a sentence or clause boundary in a 60--120-token target
+window, permits growth to 180 when that preserves a natural boundary, and
 reserves 510 for pathological text with no usable break. Every range remains
 ordered, nonempty, nonoverlapping, and lossless. Adjacent model waveforms use
 the existing 240-sample (10 ms at 24 kHz) crossfade before conversion to the
@@ -232,16 +232,15 @@ than a character-count estimate:
 
 | Phoneme tokens | Speed | 24 kHz waveform | Decoder frames (`samples / 300`) | ORT wall | Peak host RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 252 | 1.0 | 15.525 s | 1,242 | 7.92 s | 506,236 KiB |
-| 448 | 1.0 | 26.075 s | 2,086 | 13.31 s | 687,784 KiB |
-| 252 | 0.5 | 31.025 s | 2,482 | 15.81 s | 747,528 KiB |
+| 60 | 1.0 | 4.12 s | ~330 | 1.74 s | 287 MiB |
+| 120 | 1.0 | 7.75 s | ~620 | 3.42 s | 390 MiB |
+| 180 | 1.0 | 11.25 s | ~900 | 5.18 s | 425 MiB |
+| 240 | 1.0 | 14.82 s | ~1,186 | 7.43 s | 473 MiB |
 
 These RSS figures include ONNX Runtime and are not a native-arena budget. They
-do show why the default should stay near 250 tokens. An 8,192-frame native cap
-is the current sizing candidate: it leaves margin for a 450-token
-boundary-preserving chunk at the admitted minimum speed of 0.5. The real
-post-fusion slot allocator must prove that budget before the compiler seals it;
-the runtime will then reject a larger duration result before arena access.
+show the latency/memory knee at 60--120 tokens. The artifact proves capacity
+through `F=2560`, while the kernel service admits at most `F=1024`; a duration
+above that bound is split and retried before phase-one allocation.
 
 `tts status` reports model/backend readiness, service active and queued jobs,
 buffered/emitted PCM, shell request/job IDs and phase, shared PCM-lane depth,

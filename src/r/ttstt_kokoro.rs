@@ -14,11 +14,15 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use spin::Mutex;
 use trueos_kokoro_aot::{
-    ARENA_ALIGNMENT, DType, OpCode, ParseOptions, Phase, Program, STATIC_DIM, StorageKind,
-    TensorDesc,
+    ARENA_ALIGNMENT, DType, OpCode, ParseOptions, Phase, Program, STATIC_DIM, SlotKind,
+    StorageKind, TensorDesc, WorkBudget,
 };
-use trueos_kokoro_dispatch::{decode, native_dispatch_supported};
-use trueos_kokoro_exec::{RuntimeShape, TensorShapeTable};
+use trueos_kokoro_audio::{convert_frame_range, output_frames};
+use trueos_kokoro_dispatch::{
+    CpuDispatcher, CpuWorkspace, KOKORO_CPU_WORKSPACE_REQUIREMENTS, decode,
+    native_dispatch_requires_workspace, native_dispatch_supported,
+};
+use trueos_kokoro_exec::{Executor, ResolvedPhase, RuntimeShape, SliceEvent, TensorShapeTable};
 use trueos_kokoro_g2p::{FrontendOutput, Model as G2pModel, prepare_english_with};
 use trueos_kokoro_lexicon::Lexicon;
 use trueos_kokoro_memory::{ExternalBindings, TensorMemory};
@@ -26,7 +30,8 @@ use trueos_kokoro_voice::{PINNED_ARCHIVE_SHA256, STYLE_WIDTH, VoiceArchive};
 
 use super::ttstt_service::{
     BackendTtsRequest, Direction, InferenceJob, JobProgress, ModelSet, SpeechBackend, SttRequest,
-    WorkerContext, install_speech_backend,
+    TTS_PCM_CHANNELS, TTS_PCM_CHUNK_MAX_FRAMES, TtsAudioChunk, TtsOutputError, WorkerContext,
+    install_speech_backend,
 };
 
 const BACKEND_NAME: &str = "kokoro-kkaot-cpu";
@@ -55,7 +60,7 @@ const PHASE_ONE_ARENA_MIN_BYTES: u64 = 12_475_392;
 const PHASE_ONE_ARENA_MAX_BYTES: u64 = 1_572_883_968;
 /// A duration above this authenticated capacity must split and retry the
 /// current text chunk. It must never be clamped or over-allocated.
-const SERVICE_FRAME_CEILING: u32 = COMPILER_FRAME_CEILING;
+const SERVICE_FRAME_CEILING: u32 = 1_024;
 /// The pinned RTen oracle maps 824 decoder frames to 247,200 24-kHz samples.
 const WAVEFORM_SAMPLES_PER_FRAME: u32 = 300;
 const MAX_DATA_BYTES: u64 = 128 * 1024 * 1024;
@@ -67,7 +72,7 @@ const MAX_SPEED: f32 = 2.0;
 const _: () = {
     assert!(STYLE_WIDTH == 256);
     assert!(DATA_BYTES as u64 <= MAX_DATA_BYTES);
-    assert!(SERVICE_FRAME_CEILING == COMPILER_FRAME_CEILING);
+    assert!(SERVICE_FRAME_CEILING < COMPILER_FRAME_CEILING);
     assert!(COMPILER_FRAME_CEILING * WAVEFORM_SAMPLES_PER_FRAME == 768_000);
     assert!(PHASE_ZERO_ARENA_BYTES % ARENA_ALIGNMENT as u64 == 0);
     assert!(PHASE_ONE_ARENA_MIN_BYTES % ARENA_ALIGNMENT as u64 == 0);
@@ -80,16 +85,19 @@ const STYLE_TENSOR_ID: u32 = 1;
 const SPEED_TENSOR_ID: u32 = 2;
 const WAVEFORM_TENSOR_ID: u32 = TENSOR_COUNT - 1;
 const SHAPE_CAPACITY: usize = TENSOR_COUNT as usize;
+const SLOT_CAPACITY: usize = SLOT_COUNT as usize;
 const MAX_OP_BINDINGS: usize = 16;
+/// Bound one scheduler visit while still admitting every whole-unit adapter.
+const EXECUTOR_WORK_UNITS_PER_SLICE: u32 = 64;
 
 // These gates name work that cannot be inferred from a syntactically valid
 // artifact.  They remain false until the corresponding path has a native
 // waveform oracle.  Keeping them explicit prevents a future decoder-only
 // change from accidentally making shell2 claim that speech is available.
-const RUNTIME_SHAPE_PROPAGATION_COMPLETE: bool = false;
-const EXECUTOR_MEMORY_BRIDGE_COMPLETE: bool = false;
+const RUNTIME_SHAPE_PROPAGATION_COMPLETE: bool = true;
+const EXECUTOR_MEMORY_BRIDGE_COMPLETE: bool = true;
 const WAVEFORM_ORACLE_COMPLETE: bool = false;
-const DISPATCH_FAMILY_BLOCKER: &str = "kokoro-dispatch-missing-qgemm+qconv+bilstm";
+const DISPATCH_FAMILY_BLOCKER: &str = "kokoro-dispatch-contract-incomplete";
 
 const WARM_COLD: u8 = 0;
 const WARM_RUNNING: u8 = 1;
@@ -120,6 +128,7 @@ struct WarmAssets {
 struct DispatchCoverage {
     missing_ops: u32,
     first_missing: Option<OpCode>,
+    workspace_ops: u32,
 }
 
 impl DispatchCoverage {
@@ -127,6 +136,7 @@ impl DispatchCoverage {
         let mut coverage = Self {
             missing_ops: 0,
             first_missing: None,
+            workspace_ops: 0,
         };
         for op_index in 0..program.op_count() {
             let op = program.op(op_index).ok_or("kokoro-op-missing")?;
@@ -146,6 +156,9 @@ impl DispatchCoverage {
             if !native_dispatch_supported(attributes) {
                 coverage.missing_ops = coverage.missing_ops.saturating_add(1);
                 coverage.first_missing.get_or_insert(op.opcode);
+            }
+            if native_dispatch_requires_workspace(attributes) {
+                coverage.workspace_ops = coverage.workspace_ops.saturating_add(1);
             }
         }
         Ok(coverage)
@@ -418,7 +431,7 @@ impl InferenceJob for KokoroWarmJob {
                 let blocker = runtime_blocker(&assets).unwrap_or("none");
                 crate::log_info!(
                     target: "ttstt";
-                    "ttstt: kokoro native warm authenticated artifact_bytes={} tensors={} slots={} ops={} bindings={} phase0_arena_bytes={} phase1_arena_min_bytes={} phase1_arena_max_bytes={} frame_proof_max={} waveform_max_samples_24k={} voices={} g2p_borrowed_bytes={} g2p_index_bytes={} lexicon_bytes={} lexicon_entries={} lexicon_variants={} dispatch_missing_ops={} first_missing={:?} asset_ready=1 tts_ready={} blocker={}\n",
+                    "ttstt: kokoro native warm authenticated artifact_bytes={} tensors={} slots={} ops={} bindings={} phase0_arena_bytes={} phase1_arena_min_bytes={} phase1_arena_max_bytes={} frame_proof_max={} service_frame_cap={} waveform_max_samples_24k={} voices={} g2p_borrowed_bytes={} g2p_index_bytes={} lexicon_bytes={} lexicon_entries={} lexicon_variants={} dispatch_missing_ops={} dispatch_workspace_ops={} first_missing={:?} asset_ready=1 tts_ready={} blocker={}\n",
                     assets.program.artifact().len(),
                     assets.program.tensor_count(),
                     assets.program.slot_count(),
@@ -428,6 +441,7 @@ impl InferenceJob for KokoroWarmJob {
                     PHASE_ONE_ARENA_MIN_BYTES,
                     PHASE_ONE_ARENA_MAX_BYTES,
                     COMPILER_FRAME_CEILING,
+                    SERVICE_FRAME_CEILING,
                     COMPILER_FRAME_CEILING * WAVEFORM_SAMPLES_PER_FRAME,
                     assets.voices.len(),
                     memory.borrowed_model_bytes,
@@ -436,6 +450,7 @@ impl InferenceJob for KokoroWarmJob {
                     assets.lexicon.entry_count(),
                     assets.lexicon.variant_count(),
                     assets.coverage.missing_ops,
+                    assets.coverage.workspace_ops,
                     assets.coverage.first_missing,
                     tts_ready as u8,
                     blocker

@@ -215,18 +215,18 @@ fn assert_complete_partition(ranges: &[core::ops::Range<usize>], length: usize) 
 
 #[test]
 fn chunker_prefers_model_sized_breaks_then_bounded_fallbacks() {
-    assert_eq!(CHUNK_TARGET_MIN, 175);
-    assert_eq!(CHUNK_TARGET_MAX, 250);
-    assert_eq!(CHUNK_FALLBACK_MAX, 450);
+    assert_eq!(CHUNK_TARGET_MIN, 60);
+    assert_eq!(CHUNK_TARGET_MAX, 120);
+    assert_eq!(CHUNK_FALLBACK_MAX, 180);
     assert_eq!(KOKORO_MODEL_MAX, 510);
 
     let mut tokens = vec![43; 900];
-    tokens[224] = 4;
-    tokens[449] = 3;
-    tokens[674] = 16;
+    tokens[99] = 4;
+    tokens[199] = 3;
+    tokens[299] = 16;
     let ranges = chunk_ranges(&tokens).unwrap();
     assert_complete_partition(&ranges, tokens.len());
-    assert_eq!(ranges[0], 0..225);
+    assert_eq!(ranges[0], 0..100);
     assert!(
         ranges
             .iter()
@@ -235,10 +235,10 @@ fn chunker_prefers_model_sized_breaks_then_bounded_fallbacks() {
     );
 
     let mut ordinary_fallback = vec![43; 700];
-    ordinary_fallback[399] = 16;
+    ordinary_fallback[159] = 16;
     let ranges = chunk_ranges(&ordinary_fallback).unwrap();
     assert_complete_partition(&ranges, ordinary_fallback.len());
-    assert_eq!(ranges[0], 0..400);
+    assert_eq!(ranges[0], 0..160);
     assert!(ranges[0].len() <= CHUNK_FALLBACK_MAX);
 
     let pathological = vec![43; 1_200];
@@ -249,9 +249,9 @@ fn chunker_prefers_model_sized_breaks_then_bounded_fallbacks() {
 
 #[test]
 fn fallback_growth_is_lexical_not_decoder_admission() {
-    // With no natural break, the frontend may offer all 450 tokens as one
+    // With no natural break, the frontend may offer all 180 tokens as one
     // lexical chunk. It has neither speed nor duration logits, so this range
-    // is not proof that the decoder's F<=2560 contract holds. The runtime must
+    // is not proof that the service's F<=1024 contract holds. The runtime must
     // reject and split/retry after phase-zero duration resolution when needed.
     let ranges = chunk_ranges(&vec![43; CHUNK_FALLBACK_MAX]).unwrap();
     assert_eq!(ranges, vec![0..CHUNK_FALLBACK_MAX]);

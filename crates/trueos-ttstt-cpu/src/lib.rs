@@ -151,8 +151,20 @@ pub struct QGemmParams<'a> {
     pub rhs_row_sums: Option<&'a [i32]>,
 }
 
+/// Caller-owned storage needed by [`Dispatcher::qgemm_dequantized`].
+///
+/// Only one activation row and one accumulator row are materialized, so these
+/// requirements do not grow with `m`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QGemmScratchRequirements {
+    /// Number of `u8` elements needed for one dynamically quantized row.
+    pub quantized_row_bytes: usize,
+    /// Number of `i32` elements needed for one accumulator row.
+    pub accumulator_elements: usize,
+}
+
 impl QGemmParams<'_> {
-    fn validate(self, lhs: &[u8], rhs: &[i8], output: &[i32]) -> Result<(), Error> {
+    fn checked_lengths(self) -> Result<(usize, usize, usize), Error> {
         if self.m == 0 || self.n == 0 {
             return Err(Error::EmptyMatrix);
         }
@@ -162,6 +174,32 @@ impl QGemmParams<'_> {
         let lhs_len = self.m.checked_mul(self.k).ok_or(Error::ShapeOverflow)?;
         let rhs_len = self.n.checked_mul(self.k).ok_or(Error::ShapeOverflow)?;
         let output_len = self.m.checked_mul(self.n).ok_or(Error::ShapeOverflow)?;
+        Ok((lhs_len, rhs_len, output_len))
+    }
+
+    fn validate_metadata(self) -> Result<(), Error> {
+        self.rhs_zero_points.validate(self.n)?;
+        if self
+            .rhs_row_sums
+            .is_some_and(|row_sums| row_sums.len() < self.n)
+        {
+            return Err(Error::RowSumsTooSmall);
+        }
+        Ok(())
+    }
+
+    /// Return the exact bounded scratch needed by the fused f32 adapter.
+    pub fn dequantized_scratch_requirements(self) -> Result<QGemmScratchRequirements, Error> {
+        self.checked_lengths()?;
+        self.validate_metadata()?;
+        Ok(QGemmScratchRequirements {
+            quantized_row_bytes: self.k,
+            accumulator_elements: self.n,
+        })
+    }
+
+    fn validate(self, lhs: &[u8], rhs: &[i8], output: &[i32]) -> Result<(), Error> {
+        let (lhs_len, rhs_len, output_len) = self.checked_lengths()?;
         if lhs.len() < lhs_len {
             return Err(Error::LhsTooSmall);
         }
@@ -171,14 +209,41 @@ impl QGemmParams<'_> {
         if output.len() < output_len {
             return Err(Error::OutputTooSmall);
         }
-        self.rhs_zero_points.validate(self.n)?;
-        if self
-            .rhs_row_sums
-            .is_some_and(|row_sums| row_sums.len() < self.n)
-        {
-            return Err(Error::RowSumsTooSmall);
+        self.validate_metadata()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validate_dequantized(
+        self,
+        lhs: &[f32],
+        rhs: &[i8],
+        weight_scales: &[f32],
+        output: &[f32],
+        quantized_row_scratch: &[u8],
+        accumulator_scratch: &[i32],
+        bias: Option<&[f32]>,
+    ) -> Result<usize, Error> {
+        let (lhs_len, rhs_len, output_len) = self.checked_lengths()?;
+        if lhs.len() < lhs_len {
+            return Err(Error::LhsTooSmall);
         }
-        Ok(())
+        if rhs.len() < rhs_len {
+            return Err(Error::RhsTooSmall);
+        }
+        if weight_scales.len() < self.n {
+            return Err(Error::ScalesTooSmall);
+        }
+        if output.len() < output_len {
+            return Err(Error::OutputTooSmall);
+        }
+        if quantized_row_scratch.len() < self.k || accumulator_scratch.len() < self.n {
+            return Err(Error::ScratchTooSmall);
+        }
+        if bias.is_some_and(|values| values.len() < self.n) {
+            return Err(Error::BiasTooSmall);
+        }
+        self.validate_metadata()?;
+        Ok(lhs_len)
     }
 }
 
@@ -209,6 +274,17 @@ pub struct QConv1dParams<'a> {
     pub input_zero_point: u8,
     pub weight_zero_points: RhsZeroPoints<'a>,
     pub weight_row_sums: Option<&'a [i32]>,
+}
+
+/// Caller-owned storage needed by [`Dispatcher::qconv1d_dequantized`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QConv1dScratchRequirements {
+    /// Minimum `u8` patch storage accepted on every lane.
+    pub minimum_patch_bytes: usize,
+    /// Preferred `u8` storage for the AVX-VNNI four-position kernel.
+    pub four_patch_bytes: usize,
+    /// Number of `i32` elements needed when a convolution has f32 bias.
+    pub bias_elements: usize,
 }
 
 impl QConv1dParams<'_> {
@@ -242,6 +318,32 @@ impl QConv1dParams<'_> {
             return Err(Error::InvalidConvolutionShape);
         }
         Ok((padded_width - effective_kernel) / self.stride + 1)
+    }
+
+    /// Return exact minimum and four-position scratch sizes for the fused
+    /// adapter. `has_bias` controls whether its integer bias row is needed.
+    pub fn dequantized_scratch_requirements(
+        self,
+        has_bias: bool,
+    ) -> Result<QConv1dScratchRequirements, Error> {
+        self.output_width()?;
+        let reduction = self
+            .input_channels
+            .checked_mul(self.kernel_width)
+            .ok_or(Error::ShapeOverflow)?;
+        let four_patch_bytes = reduction.checked_mul(4).ok_or(Error::ShapeOverflow)?;
+        self.weight_zero_points.validate(self.output_channels)?;
+        if self
+            .weight_row_sums
+            .is_some_and(|row_sums| row_sums.len() < self.output_channels)
+        {
+            return Err(Error::RowSumsTooSmall);
+        }
+        Ok(QConv1dScratchRequirements {
+            minimum_patch_bytes: reduction,
+            four_patch_bytes,
+            bias_elements: if has_bias { self.output_channels } else { 0 },
+        })
     }
 
     fn validate(
