@@ -3193,22 +3193,25 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
         Some(release) => publish_gpgpu_scene_frame_buffer(lease, release),
         None => publish_frame_buffer(lease),
     };
-    if let Err(error) = publish {
-        crate::log_warn!(
-            target: "ui4/blueprint-frame";
-            "frame publish handoff rejected owner={:?} window={} frame={} buffer={} cadence={:?} gpu_release={} error={:?} action=retain-write-lease\n",
-            owner,
-            window_id,
-            lease.frame.raw(),
-            lease.buffer_index,
-            surface.cadence,
-            u8::from(release.is_some()),
-            error,
-        );
-        surface.write_lease = Some(lease);
-        surface.pending_gpu_release = release;
-        return ERROR_UI4;
-    }
+    let published = match publish {
+        Ok(published) => published,
+        Err(error) => {
+            crate::log_warn!(
+                target: "ui4/blueprint-frame";
+                "frame publish handoff rejected owner={:?} window={} frame={} buffer={} cadence={:?} gpu_release={} error={:?} action=retain-write-lease\n",
+                owner,
+                window_id,
+                lease.frame.raw(),
+                lease.buffer_index,
+                surface.cadence,
+                u8::from(release.is_some()),
+                error,
+            );
+            surface.write_lease = Some(lease);
+            surface.pending_gpu_release = release;
+            return ERROR_UI4;
+        }
+    };
     let immutable_replacement =
         (lease.frame != surface.frame).then_some((surface.frame, lease.frame));
     if let Some((previous, replacement)) = immutable_replacement
@@ -3218,10 +3221,12 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
         crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh broker swap failed owner={:?} window={} old_frame={} replacement_frame={} action=retain-surflive-front\n", owner, window_id, previous.raw(), replacement.raw());
         return ERROR_UI4;
     }
-    if damage.width == 0
-        || damage.height == 0
-        || publish_window_frame(owner, surface.window, damage).is_err()
-    {
+    let broker_publish = if damage.width == 0 || damage.height == 0 {
+        Err(super::WindowBrokerError::EmptyDamage)
+    } else {
+        publish_window_frame(owner, surface.window, damage)
+    };
+    let Ok(window_publish_serial) = broker_publish else {
         if let Some((previous, replacement)) = immutable_replacement {
             let _ = replace_window_frame(owner, surface.window, previous);
             let _ = publish_window_frame(owner, surface.window, DamageRect::FULL);
@@ -3229,7 +3234,22 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
             crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh publish failed owner={:?} window={} old_frame={} replacement_frame={} action=old-front-restored\n", owner, window_id, previous.raw(), replacement.raw());
         }
         return ERROR_UI4;
-    }
+    };
+    crate::log_trace!(target: "ui4/blueprint-frame";
+        "frame publish accepted owner={:?} window={} frame={} buffer={} frame_publish_serial={} window_publish_serial={} cadence={:?} gpu_release={} damage={}x{}@{},{} boundary=producer-complete+broker-pending next=ui4-compositor\n",
+        owner,
+        window_id,
+        published.frame.raw(),
+        published.buffer_index,
+        published.publish_serial,
+        window_publish_serial,
+        surface.cadence,
+        u8::from(release.is_some()),
+        damage.width,
+        damage.height,
+        damage.x,
+        damage.y,
+    );
     if let Some((previous, replacement)) = immutable_replacement {
         surface.frame = replacement;
         if let Err(error) = destroy_frame(previous) {
@@ -4391,6 +4411,9 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     }
 
     let batch_count = batches.len();
+    let descriptor_total = batches
+        .iter()
+        .fold(0usize, |total, batch| total.saturating_add(batch.descriptor_count()));
     let mut final_release = None;
     for (batch_index, batch) in batches.iter().enumerate() {
         let descriptor_count = batch.descriptor_count();
@@ -4565,6 +4588,19 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     let Some(final_release) = final_release else {
         return ERROR_UI4;
     };
+    crate::log_trace!(target: "ui4/blueprint-frame";
+        "sprite scene retired owner={:?} window={} frame={} buffer={} batches={} descriptors={} release_sequence={} destination_phys=0x{:X} destination_gpu=0x{:X} destination_bytes=0x{:X} cache=pat3-uc boundary=producer-complete next=frame-publish\n",
+        owner,
+        window_id,
+        lease.frame.raw(),
+        lease.buffer_index,
+        batch_count,
+        descriptor_total,
+        final_release.sequence(),
+        destination.phys,
+        destination.gpu,
+        destination.bytes,
+    );
     surface.pending_gpu_release = Some(final_release);
     surface.sprite_clear_rgba = None;
     0

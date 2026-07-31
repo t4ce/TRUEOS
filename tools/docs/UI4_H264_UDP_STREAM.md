@@ -12,18 +12,19 @@ subscriber-driven kernel service:
 3. On subscription, one isolated final-AP worker enters a bounded,
    three-task producer/consumer pipeline. This intentionally remains a weak
    core when the topology's final AP is an E-core, making the path expose CPU
-   work that should have stayed behind hardware fences. The producer captures
-   the entire 2560x1440 UI4 D01 composition in memory. It first borrows the
-   original immutable pipe-A plane-0 surface only when PLANE_SURFLIVE still
-   matches the expected full-output RGBA primary, and copies it as the opaque
-   background. The fixed test-rig contract is that the UI4 broker places no
-   windows on slot 0. The producer then blends the logical higher-plane windows
-   and slot-4 service rectangles, borrows pipe A's currently CUR_SURFLIVE
-   Spirit buffer and actual CUR_POS,
-   blends that 256x256 premultiplied-BGRA sprite without waiting for a newer
-   Spirit frame. The composition is written directly into one of two persistent
-   DMA-backed premultiplied-RGBA surfaces. A C++ for OpenCL kernel then runs
-   through the isolated UI4 GuC/RCS context, applies the fixed 4:3
+   work that should have stayed behind hardware fences. The producer builds an
+   explicit RDP composition manifest: immutable slot-0 base, selected visible
+   broker windows in plane/z order, slot-4 service rectangles, and Spirit.
+   One C++ for OpenCL layer-compositor dispatch samples the base and selected
+   window allocations directly into one of two persistent DMA-backed
+   premultiplied-RGBA final mirrors. The full 2560x1440 base is neither cleared
+   nor copied by the CPU. Small slot-4 solid rectangles and the BGRA Spirit
+   cursor remain exact finishing passes after the composition marker. If the
+   GPU request cannot be admitted before submission, the previous scalar
+   composer remains the correctness fallback.
+
+   A second C++ for OpenCL dispatch through the same isolated UI4 GuC/RCS
+   context applies the fixed 4:3
    center-sampled nearest downscale, converts directly to limited-range BT.601
    NV12, and fills four black rows above and below the centered 1920x1080 image
    in the macroblock-aligned 1920x1088 surface. Ordinary screenshots still

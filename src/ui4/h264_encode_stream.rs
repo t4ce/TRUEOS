@@ -60,6 +60,11 @@ struct LiveEncodeStats {
     source_changes: usize,
     capture_us: u64,
     capture_max_us: u64,
+    composition_gpu_frames: usize,
+    composition_cpu_frames: usize,
+    composition_layers_max: usize,
+    composition_gpu_us: u64,
+    composition_gpu_max_us: u64,
     convert_wall_us: u64,
     convert_wall_max_us: u64,
     convert_gpu_us: u64,
@@ -91,6 +96,9 @@ struct PrepareSlot {
     source_height: u32,
     source_fnv1a32: u32,
     capture_us: u64,
+    composition_gpu: bool,
+    composition_layers: usize,
+    composition_gpu_us: u64,
     convert_wall_us: u64,
     convert_gpu_us: u64,
     slot0_scanout_pixels: usize,
@@ -111,6 +119,9 @@ impl PrepareSlot {
             source_height: 0,
             source_fnv1a32: 0,
             capture_us: 0,
+            composition_gpu: false,
+            composition_layers: 0,
+            composition_gpu_us: 0,
             convert_wall_us: 0,
             convert_gpu_us: 0,
             slot0_scanout_pixels: 0,
@@ -126,6 +137,9 @@ impl PrepareSlot {
         self.source_height = 0;
         self.source_fnv1a32 = 0;
         self.capture_us = 0;
+        self.composition_gpu = false;
+        self.composition_layers = 0;
+        self.composition_gpu_us = 0;
         self.convert_wall_us = 0;
         self.convert_gpu_us = 0;
         self.slot0_scanout_pixels = 0;
@@ -174,6 +188,9 @@ struct PreparedScanout {
     source_height: u32,
     source_fnv1a32: u32,
     capture_us: u64,
+    composition_gpu: bool,
+    composition_layers: usize,
+    composition_gpu_us: u64,
     convert_wall_us: u64,
     convert_gpu_us: u64,
     slot0_scanout_pixels: usize,
@@ -265,7 +282,7 @@ pub(crate) async fn ui4_h264_encode_prepare_task(assigned_slot: u32) {
         .unwrap_or("unknown");
     PREPARE_WORKER_SLOT.store(worker_slot, Ordering::Release);
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: preparation service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} pipeline=rgba-to-nv12 engine=guc-rcs kernel=cpp-linear-rgba8-to-nv12 cpu_pixel_math=0 dma_buffers=persistent producer buffering=double slots={} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied synchronization=completion-marker-before-vdbox\n",
+        "intel/media-encode: preparation service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} pipeline=selected-layers-to-rgba-mirror-to-nv12 engine=guc-rcs composition_kernel=ui4-compose-layers conversion_kernel=cpp-linear-rgba8-to-nv12 cpu_full_frame_blend=0 cpu_fallback=scalar-exact dma_buffers=persistent producer buffering=double slots={} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 selection=slot0-base+visible-broker-windows+slot4-rects+spirit slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied synchronization=composition-marker-before-conversion-marker-before-vdbox\n",
         assigned_slot,
         worker_slot,
         worker_kind,
@@ -327,6 +344,9 @@ async fn prepare_scanout(mut job: PrepareJob) {
     let mut source_height = 0;
     let mut source_fnv1a32 = 0;
     let mut capture_us = 0;
+    let mut composition_gpu = false;
+    let mut composition_layers = 0usize;
+    let mut composition_gpu_us = 0u64;
     let mut convert_wall_us = 0;
     let mut convert_gpu_us = 0;
     let mut slot0_scanout_pixels = 0;
@@ -354,7 +374,24 @@ async fn prepare_scanout(mut job: PrepareJob) {
                 .source_rgba
                 .as_mut()
                 .expect("checked source DMA allocation");
-            super::screenshot::capture_stream_scanout_rgba_into(source.as_mut_slice())
+            let source_surface = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+                source.phys,
+                crate::intel::gpgpu::UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE,
+                source.bytes,
+                TEST_RIG_SCANOUT_WIDTH,
+                TEST_RIG_SCANOUT_HEIGHT,
+                TEST_RIG_SCANOUT_WIDTH.saturating_mul(4),
+            );
+            match source_surface {
+                Some(source_surface) => {
+                    super::screenshot::capture_stream_scanout_rgba_into_fast(
+                        source_surface,
+                        source.as_mut_slice(),
+                    )
+                    .await
+                }
+                None => Err(super::screenshot::CaptureError::InvalidFrameLayout),
+            }
         };
         capture_us = crate::chronos::monotonic_nanos().saturating_sub(capture_started_ns) / 1_000;
         match capture_result {
@@ -363,6 +400,22 @@ async fn prepare_scanout(mut job: PrepareJob) {
                 source_height = capture.height;
                 slot0_scanout_pixels = capture.slot0_scanout_pixels;
                 spirit_overlay_pixels = capture.spirit_overlay_pixels;
+                composition_gpu = capture.gpu_composed;
+                composition_layers = capture.compose_layers;
+                composition_gpu_us = capture.compose_gpu_us;
+                crate::log_trace!(target: "intel/media-encode";
+                    "intel/media-encode: rgba-mirror retired session={} sequence={} backend={} selected_layers={} compose_wall_us={} compose_gpu_us={} slot0_pixels={} spirit_pixels={} cpu_full_frame_blend={} fallback={}\n",
+                    job.session_id,
+                    job.sequence,
+                    if capture.gpu_composed { "guc-rcs-ui4-compose-layers" } else { "scalar-exact" },
+                    capture.compose_layers,
+                    capture_us,
+                    capture.compose_gpu_us,
+                    capture.slot0_scanout_pixels,
+                    capture.spirit_overlay_pixels,
+                    (!capture.gpu_composed) as u8,
+                    (!capture.gpu_composed) as u8,
+                );
                 let source = job
                     .source_rgba
                     .as_ref()
@@ -469,11 +522,19 @@ async fn prepare_scanout(mut job: PrepareJob) {
                 }
             }
             Err(error) => {
+                if matches!(error, super::screenshot::CaptureError::GpuCompositionFailed)
+                    && let Some(source) = job.source_rgba.take()
+                {
+                    // An admitted writer without a trustworthy retirement
+                    // marker may still touch this exact allocation later.
+                    core::mem::forget(source);
+                }
                 crate::log_error!(target: "intel/media-encode";
-                    "intel/media-encode: live frame rejected session={} sequence={} stage=ui4-scanout-capture error={:?} filesystem_writes=0 software_fallback=0\n",
+                    "intel/media-encode: live frame rejected session={} sequence={} stage=ui4-scanout-capture error={:?} rgba_quarantined={} filesystem_writes=0 software_fallback=0\n",
                     job.session_id,
                     job.sequence,
                     error,
+                    matches!(error, super::screenshot::CaptureError::GpuCompositionFailed) as u8,
                 );
             }
         }
@@ -493,6 +554,9 @@ async fn prepare_scanout(mut job: PrepareJob) {
         slot.source_height = source_height;
         slot.source_fnv1a32 = source_fnv1a32;
         slot.capture_us = capture_us;
+        slot.composition_gpu = composition_gpu;
+        slot.composition_layers = composition_layers;
+        slot.composition_gpu_us = composition_gpu_us;
         slot.convert_wall_us = convert_wall_us;
         slot.convert_gpu_us = convert_gpu_us;
         slot.slot0_scanout_pixels = slot0_scanout_pixels;
@@ -564,6 +628,9 @@ fn take_prepared_scanout(session_id: u32, sequence: u32) -> Option<PreparedScano
         source_height: slot.source_height,
         source_fnv1a32: slot.source_fnv1a32,
         capture_us: slot.capture_us,
+        composition_gpu: slot.composition_gpu,
+        composition_layers: slot.composition_layers,
+        composition_gpu_us: slot.composition_gpu_us,
         convert_wall_us: slot.convert_wall_us,
         convert_gpu_us: slot.convert_gpu_us,
         slot0_scanout_pixels: slot.slot0_scanout_pixels,
@@ -958,7 +1025,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             Ordering::Release,
         );
         crate::log_info!(target: "intel/media-encode";
-            "intel/media-encode: udp-live complete accepted={} delivery_complete={} cadence_target_met={} retry_free={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} mapping=full-frame-nearest-downscale conversion=guc-rcs-cpp-linear-rgba8-to-nv12 cpu_pixel_math=0 dma_buffers=persistent vdbox_source=gpu-dma-direct cpu_nv12_copy_bytes=0 active_size={}x{} padding=top:4,bottom:4 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none slot0_scanout_frames={} slot0_scanout_pixels={} spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=rcs-completion-before-vdbox format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc direct_execlist_submit=0 hardware_encode=1 all_idr=1 protocol=tme1 version=1 egress_path=smoltcp-borrowed-direct-nic-dma-fill session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} producer_queue_wait_events={} producer_queue_wait_us={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_sampled_fnv1a32=0x{:08X} source_last_sampled_fnv1a32=0x{:08X} source_changes={} capture_avg_us={} capture_max_us={} convert_wall_avg_us={} convert_wall_max_us={} convert_gpu_avg_us={} convert_gpu_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=prepare+encode+independent-egress buffering=double+bounded-au-queue prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} egress_worker_slot={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
+            "intel/media-encode: udp-live complete accepted={} delivery_complete={} cadence_target_met={} retry_free={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} mapping=full-frame-nearest-downscale composition=selected-layers-to-final-rgba-mirror composition_gpu_frames={} composition_cpu_fallback_frames={} composition_layers_max={} composition_gpu_avg_us={} composition_gpu_max_us={} conversion=guc-rcs-cpp-linear-rgba8-to-nv12 cpu_full_frame_blend={} dma_buffers=persistent vdbox_source=gpu-dma-direct cpu_nv12_copy_bytes=0 active_size={}x{} padding=top:4,bottom:4 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none slot0_scanout_frames={} slot0_scanout_pixels={} spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=composition-marker-before-conversion-marker-before-vdbox format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc direct_execlist_submit=0 hardware_encode=1 all_idr=1 protocol=tme1 version=1 egress_path=smoltcp-borrowed-direct-nic-dma-fill session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} producer_queue_wait_events={} producer_queue_wait_us={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_sampled_fnv1a32=0x{:08X} source_last_sampled_fnv1a32=0x{:08X} source_changes={} capture_avg_us={} capture_max_us={} convert_wall_avg_us={} convert_wall_max_us={} convert_gpu_avg_us={} convert_gpu_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=prepare+encode+independent-egress buffering=double+bounded-au-queue prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} egress_worker_slot={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
             delivered as u8,
             delivered as u8,
             cadence_target_met as u8,
@@ -967,6 +1034,12 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             stats.source_height,
             ENCODE_WIDTH,
             ENCODE_HEIGHT,
+            stats.composition_gpu_frames,
+            stats.composition_cpu_frames,
+            stats.composition_layers_max,
+            average_u64(stats.composition_gpu_us, stats.composition_gpu_frames),
+            stats.composition_gpu_max_us,
+            (stats.composition_cpu_frames != 0) as u8,
             ENCODE_WIDTH,
             ACTIVE_HEIGHT,
             stats.slot0_scanout_frames,
@@ -1100,6 +1173,20 @@ async fn encode_prepared_scanout(
     stats.last_source_fnv1a32 = prepared.source_fnv1a32;
     stats.capture_us = stats.capture_us.saturating_add(prepared.capture_us);
     stats.capture_max_us = stats.capture_max_us.max(prepared.capture_us);
+    if prepared.composition_gpu {
+        stats.composition_gpu_frames = stats.composition_gpu_frames.saturating_add(1);
+    } else {
+        stats.composition_cpu_frames = stats.composition_cpu_frames.saturating_add(1);
+    }
+    stats.composition_layers_max = stats
+        .composition_layers_max
+        .max(prepared.composition_layers);
+    stats.composition_gpu_us = stats
+        .composition_gpu_us
+        .saturating_add(prepared.composition_gpu_us);
+    stats.composition_gpu_max_us = stats
+        .composition_gpu_max_us
+        .max(prepared.composition_gpu_us);
     stats.convert_wall_us = stats
         .convert_wall_us
         .saturating_add(prepared.convert_wall_us);

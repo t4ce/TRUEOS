@@ -8,6 +8,29 @@ pub(crate) fn queue_ui4_compositor_layers(
     damage: GpgpuRect,
     flags: u32,
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
+    queue_ui4_compositor_layers_mode(base, dst, layers, damage, flags, true)
+}
+
+/// Compose the explicitly selected RDP layers into its off-screen RGBA mirror.
+/// Unlike a display destination, this allocation remains PAT0/WB before the
+/// immediately following RGBA-to-NV12 dispatch; it must never take the PAT3/UC
+/// scanout mapping used by ordinary UI4 plane composition.
+pub(crate) fn queue_ui4_stream_compositor_layers(
+    dst: GpgpuRgba8Surface,
+    layers: &[GpgpuUi4ComposeLayer],
+    damage: GpgpuRect,
+) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
+    queue_ui4_compositor_layers_mode(None, dst, layers, damage, 0, false)
+}
+
+fn queue_ui4_compositor_layers_mode(
+    base: Option<GpgpuRgba8Surface>,
+    dst: GpgpuRgba8Surface,
+    layers: &[GpgpuUi4ComposeLayer],
+    damage: GpgpuRect,
+    flags: u32,
+    destination_scanout_cache: bool,
+) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
     if !dst.is_valid()
         || damage.x < 0
         || damage.y < 0
@@ -93,21 +116,26 @@ pub(crate) fn queue_ui4_compositor_layers(
     let kernel_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
     // Overlay composition uses the destination itself as the preserved base.
-    // Map that exact VA once as PAT3/UC: mapping it first as PAT0/WB and then
-    // rewriting the same PTEs for the destination recreated the cache-policy
-    // transition which corrupted earlier producer/display handoffs.
+    // A display-bound destination is mapped exactly once as PAT3/UC; the RDP
+    // mirror stays PAT0/WB for the following conversion dispatch. Rewriting
+    // either VA between policies recreates the cache transition that corrupted
+    // earlier producer/display handoffs.
     let base_ok = kernel_ok
-        && if base_is_dst {
+        && if base_is_dst && destination_scanout_cache {
             direct_rcs_map_ppgtt_scanout(state, base.gpu, base.phys, base.bytes)
         } else {
             direct_rcs_map_ppgtt_kernel(state, base.gpu, base.phys, base.bytes)
         };
-    // This allocation transfers directly to a display plane after GuC
-    // retirement. Sources and descriptors remain PAT0/WB, while the exact
-    // destination follows the proven PAT3/UC scanout contract used by the
-    // native-video, Draw3D, Gridpaper, and preview paths.
+    // Display-bound allocations follow the proven PAT3/UC scanout contract;
+    // an off-screen stream mirror remains PAT0/WB. Sources retain their
+    // producer-stable policy and descriptors remain PAT0/WB.
     let dst_ok = base_ok
-        && (base_is_dst || direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes));
+        && (base_is_dst
+            || if destination_scanout_cache {
+                direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes)
+            } else {
+                direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes)
+            });
     let desc_ok = dst_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
     let mut sources_ok = desc_ok;
     for layer in layers {
@@ -194,7 +222,7 @@ pub(crate) fn queue_ui4_compositor_layers(
         overdue_logged: false,
     });
     crate::log_trace!(target: "ui4";
-        "ui4/guc-compositor: queued serial={} kernel=ui4-compose-layers layers={} walkers=1 damage={}x{}@{},{} dst_gpu=0x{:X} ppgtt_base={} ppgtt_dst=pat3-uc desc=pat0-wb sources=producer-stable-pat same_va_cache_remap=0 context=isolated persistent=1 wait=none\n",
+        "ui4/guc-compositor: queued serial={} kernel=ui4-compose-layers layers={} walkers=1 damage={}x{}@{},{} dst_gpu=0x{:X} ppgtt_base={} ppgtt_dst={} desc=pat0-wb sources=producer-stable-pat same_va_cache_remap=0 context=isolated persistent=1 wait=none\n",
         serial,
         layers.len(),
         damage_width,
@@ -202,7 +230,8 @@ pub(crate) fn queue_ui4_compositor_layers(
         damage_x,
         damage_y,
         dst.gpu,
-        if base_is_dst { "dst-pat3-uc" } else { "pat0-wb" },
+        if base_is_dst && destination_scanout_cache { "dst-pat3-uc" } else { "pat0-wb" },
+        if destination_scanout_cache { "pat3-uc" } else { "pat0-wb" },
     );
     Ok(submission)
 }

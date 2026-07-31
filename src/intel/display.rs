@@ -409,6 +409,9 @@ pub(crate) struct PrimarySurfaceBgra8Snapshot {
 /// XRGB-to-RGBA handoff, the original primary allocation remains the opaque
 /// full-output logo/background and the broker places no windows on slot 0.
 pub(crate) struct Ui4StreamSlot0View<'a> {
+    pub(crate) phys: u64,
+    pub(crate) gpu: u64,
+    pub(crate) byte_len: usize,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) pitch_bytes: u32,
@@ -751,6 +754,9 @@ pub(crate) fn with_ui4_stream_pipe_a_slot0_surflive<R>(
     let rgba_premultiplied =
         unsafe { core::slice::from_raw_parts(surface.virt.cast_const(), visible_bytes) };
     Some(read(Ui4StreamSlot0View {
+        phys: surface.phys,
+        gpu: surface.gpu,
+        byte_len: surface.byte_len,
         width: surface.width,
         height: surface.height,
         pitch_bytes: surface.pitch_bytes,
@@ -8574,6 +8580,21 @@ pub(crate) fn queue_ui4_static_overlay_composition_bcs0(
         height: surface.height,
         pitch_bytes: surface.pitch_bytes,
     };
+    let scanout_cache_sources = tiles.iter().filter(|tile| tile.gpgpu_scanout_cache).count();
+    let first_source = tiles.iter().find_map(|tile| tile.gpgpu_surface);
+    crate::log_trace!(target: "ui4";
+        "ui4/static-painter: queue slot={} tiles={} copies={} scanout_cache_sources={} source_phys=0x{:X} source_gpu=0x{:X} source_bytes=0x{:X} source_map=bcs-ppgtt-pat0-wb destination_phys=0x{:X} destination_gpu=0x{:X} destination_map=bcs-ppgtt-pat3-uc damage_rects={} boundary=published-source-to-bcs-copy\n",
+        plane_slot,
+        tiles.len(),
+        copies.len(),
+        scanout_cache_sources,
+        first_source.map_or(0, |source| source.phys),
+        first_source.map_or(0, |source| source.gpu),
+        first_source.map_or(0, |source| source.bytes),
+        destination.phys,
+        destination.gpu,
+        painted.len(),
+    );
     let blit =
         crate::intel::queue_guc_bcs0_rgba_copies(destination, &copies).map_err(
             |error| match error {
