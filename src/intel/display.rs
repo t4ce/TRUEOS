@@ -378,6 +378,21 @@ pub(crate) struct PrimarySurfaceBgra8Snapshot {
     pub(crate) pixels: Vec<u8>,
 }
 
+/// Borrowed view of the immutable UI4 slot-0 base currently latched by pipe A.
+///
+/// This is intentionally the fixed D01 test-rig contract: after the one-time
+/// XRGB-to-RGBA handoff, the original primary allocation remains the opaque
+/// full-output logo/background and the broker places no windows on slot 0.
+pub(crate) struct Ui4StreamSlot0View<'a> {
+    pub(crate) phys: u64,
+    pub(crate) gpu: u64,
+    pub(crate) byte_len: usize,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch_bytes: u32,
+    pub(crate) rgba_premultiplied: &'a [u8],
+}
+
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct LiveOverlayRect {
     pub(crate) x: u32,
@@ -661,10 +676,9 @@ fn active_primary_surface() -> Option<PrimarySurface> {
     PRIMARY_SURFACES.iter().find_map(|owner| *owner.lock())
 }
 
-/// Return only the GPU identity of the immutable UI4 slot-0 base currently
-/// latched by pipe A. The stream path never constructs a CPU framebuffer view.
-pub(crate) fn ui4_stream_pipe_a_slot0_gpu_surface() -> Option<crate::intel::gpgpu::GpgpuRgba8Surface>
-{
+pub(crate) fn with_ui4_stream_pipe_a_slot0_surflive<R>(
+    read: impl FnOnce(Ui4StreamSlot0View<'_>) -> R,
+) -> Option<R> {
     const STREAM_PIPE: usize = 0;
 
     let dev = crate::intel::claimed_device()?;
@@ -693,14 +707,21 @@ pub(crate) fn ui4_stream_pipe_a_slot0_gpu_surface() -> Option<crate::intel::gpgp
     {
         return None;
     }
-    crate::intel::gpgpu::GpgpuRgba8Surface::new(
-        surface.phys,
-        surface.gpu,
-        surface.byte_len,
-        surface.width,
-        surface.height,
-        surface.pitch_bytes,
-    )
+    let visible_bytes = (surface.pitch_bytes as usize).checked_mul(surface.height as usize)?;
+    if surface.virt.is_null() || visible_bytes > surface.byte_len {
+        return None;
+    }
+    let rgba_premultiplied =
+        unsafe { core::slice::from_raw_parts(surface.virt.cast_const(), visible_bytes) };
+    Some(read(Ui4StreamSlot0View {
+        phys: surface.phys,
+        gpu: surface.gpu,
+        byte_len: surface.byte_len,
+        width: surface.width,
+        height: surface.height,
+        pitch_bytes: surface.pitch_bytes,
+        rgba_premultiplied,
+    }))
 }
 
 fn primary_surface_gpu_for_pipe(pipe: PipeInfo) -> Option<u64> {
@@ -965,10 +986,6 @@ struct OverlaySurfacePool {
     /// as a composition destination. Sparse immutable painters can use that
     /// known base directly instead of launching a fullscreen clear.
     content_initialized: [bool; OVERLAY_SWAP_BUFFER_COUNT],
-    /// RDP's fused compositor may sample a live slot-4 allocation after the
-    /// display latch. Keep that exact buffer out of the producer's back-buffer
-    /// rotation until the RCS completion marker retires.
-    stream_readers: [u32; OVERLAY_SWAP_BUFFER_COUNT],
     /// Previous-size surface retained only until the replacement is proven
     /// live. It is not a render target and must be reclaimed after the latch.
     retiring_front: Option<OverlaySurface>,
@@ -1026,53 +1043,12 @@ impl OverlaySurfacePool {
             surfaces: [None; OVERLAY_SWAP_BUFFER_COUNT],
             damage_debt: [CompositionDamageRegion::EMPTY; OVERLAY_SWAP_BUFFER_COUNT],
             content_initialized: [false; OVERLAY_SWAP_BUFFER_COUNT],
-            stream_readers: [0; OVERLAY_SWAP_BUFFER_COUNT],
             retiring_front: None,
         }
     }
 
     fn matches(self, width: u32, height: u32, pipe: PipeInfo) -> bool {
         self.width == width && self.height == height && self.pipe_slot == pipe.slot
-    }
-}
-
-/// Read ownership for the exact slot-4 surface sampled by the fused RDP
-/// compositor. The lease contains no CPU pixel view.
-pub(crate) struct Ui4StreamInteractionOverlayLease {
-    surface: OverlaySurface,
-}
-
-impl Ui4StreamInteractionOverlayLease {
-    pub(crate) fn gpgpu_surface(&self) -> Option<crate::intel::gpgpu::GpgpuRgba8Surface> {
-        crate::intel::gpgpu::GpgpuRgba8Surface::new(
-            self.surface.phys,
-            self.surface.gpu,
-            self.surface.byte_len,
-            self.surface.width,
-            self.surface.height,
-            self.surface.pitch_bytes,
-        )
-    }
-}
-
-impl Drop for Ui4StreamInteractionOverlayLease {
-    fn drop(&mut self) {
-        let Some(surface_pool) = overlay_surface_pool(self.surface.pipe, self.surface.plane_slot)
-        else {
-            return;
-        };
-        let mut pool = surface_pool.lock();
-        if pool.matches(self.surface.width, self.surface.height, self.surface.pipe)
-            && pool
-                .surfaces
-                .get(self.surface.buffer_index)
-                .copied()
-                .flatten()
-                .is_some_and(|surface| surface.phys == self.surface.phys)
-        {
-            pool.stream_readers[self.surface.buffer_index] =
-                pool.stream_readers[self.surface.buffer_index].saturating_sub(1);
-        }
     }
 }
 
@@ -3955,31 +3931,6 @@ fn overlay_surface_pool(
     }
 }
 
-/// Acquire the exact pipe-A interaction overlay that hardware has latched.
-/// The producer cannot select this allocation as its back buffer until the
-/// returned lease is dropped after RCS retirement.
-pub(crate) fn acquire_ui4_stream_pipe_a_slot4_surface() -> Option<Ui4StreamInteractionOverlayLease>
-{
-    let dev = crate::intel::claimed_device()?;
-    let pipe = PIPES[0];
-    let plane_slot = crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT;
-    let surface_pool = overlay_surface_pool(pipe, plane_slot)?;
-    let mut pool = surface_pool.lock();
-    let front_index = pool.front_index?;
-    let surface = pool.surfaces.get(front_index).copied().flatten()?;
-    if surface.pipe.slot != pipe.slot
-        || surface.plane_slot != plane_slot
-        || crate::intel::mmio_read(
-            dev,
-            overlay_plane_base(pipe, plane_slot) + UNI_PLANE_SURFLIVE_OFF,
-        ) != u32::try_from(surface.gpu).ok()?
-    {
-        return None;
-    }
-    pool.stream_readers[front_index] = pool.stream_readers[front_index].checked_add(1)?;
-    Some(Ui4StreamInteractionOverlayLease { surface })
-}
-
 fn ui4_direct_scanout_pool(
     pipe: PipeInfo,
     plane_slot: usize,
@@ -4570,9 +4521,6 @@ fn ensure_overlay_surface_for_pipe(
         let mut pool = surface_pool.lock();
         if pool.matches(width, height, pipe) {
             let index = overlay_back_buffer_index(*pool);
-            if pool.stream_readers[index] != 0 {
-                return None;
-            }
             if let Some(surface) = pool.surfaces[index] {
                 return Some(surface);
             }
@@ -4590,9 +4538,6 @@ fn ensure_overlay_surface_for_pipe(
             }
             (index, None, None)
         } else {
-            if pool.stream_readers.iter().any(|readers| *readers != 0) {
-                return None;
-            }
             // Buffer GPU addresses are stable across surface-size changes.
             // Preserve the slot which the plane is currently scanning and
             // allocate the resized surface in the other slot. Reusing slot 0
@@ -4643,7 +4588,6 @@ fn ensure_overlay_surface_for_pipe(
                 pool.matches(width, height, pipe)
                     .then(|| {
                         pool.front_index
-                            .filter(|front_index| pool.stream_readers[*front_index] == 0)
                             .and_then(|front_index| pool.surfaces[front_index])
                     })
                     .flatten()
@@ -4724,7 +4668,6 @@ fn ensure_overlay_surface_for_pipe(
                 surfaces: [None; OVERLAY_SWAP_BUFFER_COUNT],
                 damage_debt: [CompositionDamageRegion::EMPTY; OVERLAY_SWAP_BUFFER_COUNT],
                 content_initialized: [false; OVERLAY_SWAP_BUFFER_COUNT],
-                stream_readers: [0; OVERLAY_SWAP_BUFFER_COUNT],
                 retiring_front: resize_guard.map(|(_, _, _, _, surface)| surface),
             };
         }
@@ -5232,7 +5175,6 @@ pub(crate) fn queue_ui4_static_overlay_composition_bcs0(
                 width: source.width,
                 height: source.height,
                 pitch_bytes: source.pitch_bytes,
-                scanout_cache: tile.gpgpu_scanout_cache,
             },
             source_x: draw.x.saturating_sub(tile.x),
             source_y: draw.y.saturating_sub(tile.y),
@@ -5254,29 +5196,18 @@ pub(crate) fn queue_ui4_static_overlay_composition_bcs0(
         width: surface.width,
         height: surface.height,
         pitch_bytes: surface.pitch_bytes,
-        scanout_cache: true,
     };
-    let scanout_cache_sources = copies
-        .iter()
-        .filter(|copy| copy.source.scanout_cache)
-        .count();
-    let writeback_cache_sources = copies.len().saturating_sub(scanout_cache_sources);
-    let first_source = copies.first().map(|copy| copy.source);
+    let scanout_cache_sources = tiles.iter().filter(|tile| tile.gpgpu_scanout_cache).count();
+    let first_source = tiles.iter().find_map(|tile| tile.gpgpu_surface);
     crate::log_trace!(target: "ui4";
-        "ui4/static-painter: queue slot={} tiles={} copies={} source_maps=pat3-uc:{},pat0-wb:{} first_source_phys=0x{:X} first_source_gpu=0x{:X} first_source_bytes=0x{:X} first_source_map={} destination_phys=0x{:X} destination_gpu=0x{:X} destination_map=pat3-uc damage_rects={} cache_contract=producer-stable boundary=published-source-to-bcs-copy\n",
+        "ui4/static-painter: queue slot={} tiles={} copies={} scanout_cache_sources={} source_phys=0x{:X} source_gpu=0x{:X} source_bytes=0x{:X} source_map=bcs-ppgtt-pat0-wb destination_phys=0x{:X} destination_gpu=0x{:X} destination_map=bcs-ppgtt-pat3-uc damage_rects={} boundary=published-source-to-bcs-copy\n",
         plane_slot,
         tiles.len(),
         copies.len(),
         scanout_cache_sources,
-        writeback_cache_sources,
         first_source.map_or(0, |source| source.phys),
         first_source.map_or(0, |source| source.gpu),
         first_source.map_or(0, |source| source.bytes),
-        first_source.map_or("none", |source| if source.scanout_cache {
-            "pat3-uc"
-        } else {
-            "pat0-wb"
-        }),
         destination.phys,
         destination.gpu,
         painted.len(),

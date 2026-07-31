@@ -30,10 +30,6 @@ pub(crate) fn ui4_compose_layers_rgba8_upload_status() -> Option<UploadedKernelA
     *UI4_COMPOSE_LAYERS_RGBA8_UPLOAD.lock()
 }
 
-pub(crate) fn ui4_compose_layers_to_nv12_linear_upload_status() -> Option<UploadedKernelArtifact> {
-    *UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_UPLOAD.lock()
-}
-
 pub(crate) fn mandel64_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *MANDEL64_WORKLIST_RGBA8_UPLOAD.lock()
 }
@@ -308,21 +304,6 @@ pub(crate) fn upload_ui4_compose_layers_rgba8_kernel() -> Option<UploadedKernelA
     Some(upload)
 }
 
-pub(crate) fn upload_ui4_compose_layers_to_nv12_linear_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let dev = super::claimed_device()?;
-    let upload = upload_artifact(
-        dev,
-        UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_ADLS_ARTIFACT,
-        UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_ADLS_GPU,
-    )?;
-    *UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
 pub(crate) fn upload_mandel64_worklist_rgba8_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *MANDEL64_WORKLIST_RGBA8_UPLOAD.lock() {
         return Some(upload);
@@ -592,7 +573,6 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME,
     SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,
     UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
-    UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_KERNEL_NAME,
     MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
     SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
     CHART_SINE_RGBA8_KERNEL_NAME,
@@ -741,11 +721,6 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: UI4_COMPOSE_LAYERS_RGBA8_ADLS_ARTIFACT,
             gpu: UI4_COMPOSE_LAYERS_RGBA8_ADLS_GPU,
             upload: &UI4_COMPOSE_LAYERS_RGBA8_UPLOAD,
-        }),
-        UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_ADLS_ARTIFACT,
-            gpu: UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_ADLS_GPU,
-            upload: &UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_UPLOAD,
         }),
         MANDEL64_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: MANDEL64_WORKLIST_RGBA8_ADLS_ARTIFACT,

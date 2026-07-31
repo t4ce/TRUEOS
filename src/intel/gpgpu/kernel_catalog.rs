@@ -35,10 +35,6 @@ pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
 pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME: &str = "ui4_compose_layers_rgba8";
 pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/ui4_compose_layers_rgba8.clcpp");
-pub(crate) const UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_KERNEL_NAME: &str =
-    "ui4_compose_layers_to_nv12_linear";
-pub(crate) const UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_OPENCL_SOURCE: &str =
-    include_str!("kernels/ui4_compose_layers_to_nv12_linear.clcpp");
 pub(crate) const MANDEL64_WORKLIST_RGBA8_KERNEL_NAME: &str = "mandel64_worklist_rgba8";
 pub(crate) const MANDEL64_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/mandel64_worklist_rgba8.clcpp");
@@ -115,9 +111,6 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME => Some(UI4_RGBA8_TO_NV12_LINEAR_OPENCL_SOURCE),
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => Some(SPRITE_QUAD_WORKLIST_RGBA8_OPENCL_SOURCE),
         UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME => Some(UI4_COMPOSE_LAYERS_RGBA8_OPENCL_SOURCE),
-        UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_KERNEL_NAME => {
-            Some(UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_OPENCL_SOURCE)
-        }
         MANDEL64_WORKLIST_RGBA8_KERNEL_NAME => Some(MANDEL64_WORKLIST_RGBA8_OPENCL_SOURCE),
         SKYBOX_SAMPLE_RGB565_KERNEL_NAME => Some(SKYBOX_SAMPLE_RGB565_OPENCL_SOURCE),
         CHART_SINE_RGBA8_KERNEL_NAME => Some(CHART_SINE_RGBA8_OPENCL_SOURCE),
@@ -168,9 +161,6 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/ui4_compose_layers_rgba8.clcpp")
         }
-        UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_KERNEL_NAME => {
-            Some("src/intel/gpgpu/kernels/ui4_compose_layers_to_nv12_linear.clcpp")
-        }
         MANDEL64_WORKLIST_RGBA8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/mandel64_worklist_rgba8.clcpp")
         }
@@ -216,7 +206,6 @@ include!("kernels/artifacts/adls/cpp/scene_aabb.contract.rs");
 include!("kernels/artifacts/adls/cpp/skybox_sample_rgb565.contract.rs");
 include!("kernels/artifacts/adls/cpp/sprite_quad_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.contract.rs");
-include!("kernels/artifacts/adls/cpp/ui4_compose_layers_to_nv12_linear.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_rgba8_to_nv12_linear.contract.rs");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN: &[u8] =
@@ -346,10 +335,6 @@ pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.bin");
 pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.spv");
-pub(crate) const UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/ui4_compose_layers_to_nv12_linear.bin");
-pub(crate) const UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/ui4_compose_layers_to_nv12_linear.spv");
 pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/mandel64_worklist_rgba8.bin");
 pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
@@ -670,8 +655,6 @@ pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     SPRITE_QUAD_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     UI4_COMPOSE_LAYERS_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-pub(crate) const UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_ADLS_BIN_SHA256: [u8; 32] =
-    UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     MANDEL64_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_BIN_SHA256: [u8; 32] =

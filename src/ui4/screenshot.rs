@@ -19,14 +19,14 @@ use spin::Mutex;
 
 use super::{
     FramePoolError, FrameReadLease, FrameRgbaView, WindowSnapshot, acquire_published_frame,
-    published_gpgpu_rgba_view, published_rgba_view, release_published_frame,
+    published_rgba_view, release_published_frame,
 };
 
 const MAX_PENDING_REQUESTS: usize = 4;
 const MAX_CAPTURE_QUEUE: usize = 4;
 const SAVE_IDLE_PERIOD_MS: u64 = 25;
 const ROOT_RETRY_PERIOD_MS: u64 = 500;
-const STREAM_COMPOSITOR_BUSY_LOG_INTERVAL: usize = 1_000;
+const STREAM_COMPOSITOR_BUSY_RETRY_LIMIT: usize = 8;
 const SCREENSHOT_DIRECTORY: &str = "screenshots";
 const FINAL_FRAME_DIRECTORY: &str = "finalframes";
 
@@ -102,20 +102,24 @@ struct CapturedComposition {
     monotonic_ms: u64,
     width: u32,
     height: u32,
-    /// Straight-alpha RGBA8 for file captures.
+    /// Straight-alpha RGBA8 for file captures; premultiplied RGBA8 for streams.
     rgba: Vec<u8>,
     scope: CaptureScope,
     path_override: Option<String>,
     release_interactive_gate: bool,
+    slot0_scanout_pixels: usize,
+    spirit_overlay_pixels: usize,
 }
 
-/// Metadata for one immutable logical snapshot of D01, composed directly into
-/// the encoder's NV12 target in the same hardware-plane order as presentation.
+/// One immutable logical snapshot of D01, composed in the same hardware-plane
+/// order as UI4 presentation. The encoder consumes this in memory; it never
+/// enters the screenshot queue or filesystem worker.
 pub(super) struct StreamScanoutCapture {
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) slot0_scanout_pixels: usize,
     pub(super) spirit_overlay_pixels: usize,
+    pub(super) gpu_composed: bool,
     pub(super) compose_layers: usize,
     pub(super) compose_gpu_us: u64,
 }
@@ -124,7 +128,7 @@ pub(super) struct StreamScanoutCapture {
 struct StreamCompositionSelection {
     slot0_base: bool,
     broker_windows: bool,
-    slot4_overlay: bool,
+    slot4_rects: bool,
     spirit: bool,
 }
 
@@ -134,7 +138,7 @@ struct StreamCompositionSelection {
 const RDP_COMPOSITION_SELECTION: StreamCompositionSelection = StreamCompositionSelection {
     slot0_base: true,
     broker_windows: true,
-    slot4_overlay: true,
+    slot4_rects: true,
     spirit: true,
 };
 
@@ -143,10 +147,9 @@ struct StreamCompositionManifest {
     height: u32,
     layers: Vec<crate::intel::gpgpu::GpgpuUi4ComposeLayer>,
     leases: Vec<FrameReadLease>,
-    _slot4_lease: Option<crate::intel::Ui4StreamInteractionOverlayLease>,
-    _spirit_lease: Option<crate::spirit::SpiritStreamGpuLease>,
+    rects: Vec<crate::intel::LiveOverlayRect>,
     slot0_scanout_pixels: usize,
-    spirit_overlay_pixels: usize,
+    include_spirit: bool,
 }
 
 impl Drop for StreamCompositionManifest {
@@ -180,8 +183,8 @@ impl StreamCompositionManifest {
         let views = match leases
             .iter()
             .copied()
-            .map(published_gpgpu_rgba_view)
-            .collect::<Result<Vec<_>, _>>()
+            .map(published_rgba_view)
+            .collect::<Result<Vec<FrameRgbaView>, _>>()
         {
             Ok(views) => views,
             Err(error) => {
@@ -190,14 +193,25 @@ impl StreamCompositionManifest {
             }
         };
 
-        let mut layers = Vec::with_capacity(views.len().saturating_add(3));
+        let mut layers = Vec::with_capacity(views.len().saturating_add(1));
         let mut slot0_scanout_pixels = 0usize;
         if RDP_COMPOSITION_SELECTION.slot0_base {
-            let base = crate::intel::ui4_stream_pipe_a_slot0_gpu_surface().and_then(|source| {
-                (source.width == width
-                    && source.height == height
-                    && source.pitch_bytes >= width.saturating_mul(4))
-                .then_some(crate::intel::gpgpu::GpgpuUi4ComposeLayer {
+            let base = crate::intel::with_ui4_stream_pipe_a_slot0_surflive(|slot0| {
+                if slot0.width != width
+                    || slot0.height != height
+                    || slot0.pitch_bytes < width.saturating_mul(4)
+                {
+                    return None;
+                }
+                let source = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+                    slot0.phys,
+                    slot0.gpu,
+                    slot0.byte_len,
+                    slot0.width,
+                    slot0.height,
+                    slot0.pitch_bytes,
+                )?;
+                Some(crate::intel::gpgpu::GpgpuUi4ComposeLayer {
                     src: source,
                     src_scanout_cache: true,
                     dst_x: 0,
@@ -206,7 +220,8 @@ impl StreamCompositionManifest {
                     dst_height: height,
                     opacity: u8::MAX,
                 })
-            });
+            })
+            .flatten();
             if let Some(base) = base {
                 layers.push(base);
                 slot0_scanout_pixels = (width as usize).saturating_mul(height as usize);
@@ -214,8 +229,8 @@ impl StreamCompositionManifest {
         }
 
         for (window, view) in windows.iter().zip(views.iter()) {
-            let draw_width = view.surface.width.min(window.placement.width);
-            let draw_height = view.surface.height.min(window.placement.height);
+            let draw_width = view.width.min(window.placement.width);
+            let draw_height = view.height.min(window.placement.height);
             if !window.placement.visible
                 || window.placement.opacity == 0
                 || draw_width == 0
@@ -223,17 +238,16 @@ impl StreamCompositionManifest {
             {
                 continue;
             }
-            // Publication is the producer's release boundary. CPU producers
-            // flush before publishing and GPU producers carry a completion
-            // fence; the stream must not repair coherence with a frame-sized
-            // cache sweep of its own.
+            if view.gpu_release.is_none() {
+                crate::intel::dma_flush(view.virt, view.byte_len);
+            }
             let Some(source) = crate::intel::gpgpu::GpgpuRgba8Surface::new(
-                view.surface.phys,
-                view.surface.gpu,
-                view.surface.bytes,
+                view.phys,
+                view.gpu,
+                view.byte_len,
                 draw_width,
                 draw_height,
-                view.surface.pitch_bytes,
+                view.pitch,
             ) else {
                 release_leases(&leases);
                 return Err(CaptureError::InvalidFrameLayout);
@@ -249,111 +263,71 @@ impl StreamCompositionManifest {
             });
         }
 
-        let slot4_lease = if RDP_COMPOSITION_SELECTION.slot4_overlay {
-            crate::intel::acquire_ui4_stream_pipe_a_slot4_surface()
-        } else {
-            None
-        };
-        if let Some(slot4) = slot4_lease.as_ref() {
-            let Some(source) = slot4.gpgpu_surface() else {
-                release_leases(&leases);
-                return Err(CaptureError::InvalidFrameLayout);
-            };
-            layers.push(crate::intel::gpgpu::GpgpuUi4ComposeLayer {
-                src: source,
-                src_scanout_cache: true,
-                dst_x: 0,
-                dst_y: 0,
-                dst_width: source.width,
-                dst_height: source.height,
-                opacity: u8::MAX,
-            });
-        }
-
-        let spirit_lease = if RDP_COMPOSITION_SELECTION.spirit {
-            crate::spirit::acquire_stream_overlay_pipe_a_gpu()
-        } else {
-            None
-        };
-        let mut spirit_overlay_pixels = 0usize;
-        if let Some(spirit) = spirit_lease.as_ref() {
-            let Some(source) = spirit.gpgpu_surface() else {
-                release_leases(&leases);
-                return Err(CaptureError::InvalidFrameLayout);
-            };
-            let (left, top) = spirit.position();
-            let clipped_left = i64::from(left).max(0);
-            let clipped_top = i64::from(top).max(0);
-            let clipped_right = (i64::from(left) + i64::from(source.width)).min(i64::from(width));
-            let clipped_bottom = (i64::from(top) + i64::from(source.height)).min(i64::from(height));
-            if clipped_right > clipped_left && clipped_bottom > clipped_top {
-                spirit_overlay_pixels = usize::try_from(clipped_right - clipped_left)
-                    .unwrap_or(0)
-                    .saturating_mul(usize::try_from(clipped_bottom - clipped_top).unwrap_or(0));
-                layers.push(crate::intel::gpgpu::GpgpuUi4ComposeLayer {
-                    src: source,
-                    src_scanout_cache: true,
-                    dst_x: left,
-                    dst_y: top,
-                    dst_width: source.width,
-                    dst_height: source.height,
-                    opacity: u8::MAX,
-                });
-            }
-        }
-
         Ok(Self {
             width,
             height,
             layers,
             leases,
-            _slot4_lease: slot4_lease,
-            _spirit_lease: spirit_lease,
+            rects: if RDP_COMPOSITION_SELECTION.slot4_rects {
+                super::slot4_service::presented_rects().to_vec()
+            } else {
+                Vec::new()
+            },
             slot0_scanout_pixels,
-            spirit_overlay_pixels,
+            include_spirit: RDP_COMPOSITION_SELECTION.spirit,
         })
     }
 
-    fn finish(self, compose_gpu_us: u64) -> StreamScanoutCapture {
+    fn finish(self, rgba_premultiplied: &mut [u8]) -> StreamScanoutCapture {
+        let stride = self.width as usize * 4;
+        for rect in self.rects.iter().copied() {
+            blend_visual_rect(rgba_premultiplied, stride, self.width, self.height, rect);
+        }
+        let spirit_overlay_pixels = if self.include_spirit {
+            blend_stream_spirit_overlay_premultiplied(rgba_premultiplied, self.width, self.height)
+        } else {
+            0
+        };
         StreamScanoutCapture {
             width: self.width,
             height: self.height,
             slot0_scanout_pixels: self.slot0_scanout_pixels,
-            spirit_overlay_pixels: self.spirit_overlay_pixels,
+            spirit_overlay_pixels,
+            gpu_composed: true,
             compose_layers: self.layers.len(),
-            compose_gpu_us,
+            compose_gpu_us: 0,
         }
     }
 }
 
-pub(super) async fn capture_stream_scanout_to_rgba_hardware(
+pub(super) async fn capture_stream_scanout_rgba_into_fast(
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    rgba_premultiplied: &mut [u8],
 ) -> Result<StreamScanoutCapture, CaptureError> {
+    let manifest = match StreamCompositionManifest::prepare() {
+        Ok(manifest) => manifest,
+        Err(_) => return capture_stream_scanout_rgba_into(rgba_premultiplied),
+    };
     let mut busy_retries = 0usize;
-    let (manifest, submission) = loop {
-        let manifest = StreamCompositionManifest::prepare()?;
+    let submission = loop {
         match crate::intel::gpgpu::queue_ui4_stream_compositor_layers(
             destination,
             manifest.layers.as_slice(),
             crate::intel::gpgpu::GpgpuRect::new(0, 0, manifest.width, manifest.height),
         ) {
-            Ok(submission) => break (manifest, submission),
+            Ok(submission) => break submission,
             Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
-                busy_retries = busy_retries.saturating_add(1);
-                // Do not pin any producer front buffer while another RCS job
-                // owns the isolated compositor context. Rebuild a current
-                // manifest after yielding instead of aborting the subscriber
-                // or falling back to CPU pixels.
-                drop(manifest);
-                if busy_retries.is_multiple_of(STREAM_COMPOSITOR_BUSY_LOG_INTERVAL) {
-                    crate::log_warn!(target: "ui4";
-                        "ui4/guc-stream-compose: waiting reason=compositor-busy retries={} retry_ms=1 source_leases=0 software_fallback=0\n",
-                        busy_retries,
-                    );
+                if busy_retries >= STREAM_COMPOSITOR_BUSY_RETRY_LIMIT {
+                    drop(manifest);
+                    return capture_stream_scanout_rgba_into(rgba_premultiplied);
                 }
+                busy_retries = busy_retries.saturating_add(1);
                 Timer::after(Duration::from_millis(1)).await;
             }
-            Err(_) => return Err(CaptureError::GpuCompositionFailed),
+            Err(_) => {
+                drop(manifest);
+                return capture_stream_scanout_rgba_into(rgba_premultiplied);
+            }
         }
     };
     loop {
@@ -362,7 +336,10 @@ pub(super) async fn capture_stream_scanout_to_rgba_hardware(
                 Timer::after(Duration::from_millis(1)).await;
             }
             crate::intel::gpgpu::Ui4CompositorCompletion::Complete(stats) => {
-                return Ok(manifest.finish(stats.probe.gpu_walker_us));
+                crate::intel::dma_flush(rgba_premultiplied.as_mut_ptr(), rgba_premultiplied.len());
+                let mut capture = manifest.finish(rgba_premultiplied);
+                capture.compose_gpu_us = stats.probe.gpu_walker_us;
+                return Ok(capture);
             }
             crate::intel::gpgpu::Ui4CompositorCompletion::Failed
             | crate::intel::gpgpu::Ui4CompositorCompletion::InvalidSubmission => {
@@ -370,6 +347,191 @@ pub(super) async fn capture_stream_scanout_to_rgba_hardware(
             }
         }
     }
+}
+
+pub(super) fn capture_stream_scanout_rgba_into(
+    rgba_premultiplied: &mut [u8],
+) -> Result<StreamScanoutCapture, CaptureError> {
+    let output = super::OutputId::from_slot(0).ok_or(CaptureError::NoScanout)?;
+    let (width, height) =
+        crate::intel::active_scanout_dimensions().ok_or(CaptureError::NoScanout)?;
+    let stride = usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+        .ok_or(CaptureError::DimensionTooLarge)?;
+    let byte_len = stride
+        .checked_mul(usize::try_from(height).map_err(|_| CaptureError::DimensionTooLarge)?)
+        .ok_or(CaptureError::DimensionTooLarge)?;
+    if rgba_premultiplied.len() != byte_len {
+        return Err(CaptureError::InvalidFrameLayout);
+    }
+    let mut windows = if RDP_COMPOSITION_SELECTION.broker_windows {
+        super::visible_windows_for_output(output)
+    } else {
+        Vec::new()
+    };
+    windows.sort_unstable_by_key(|window| (window.plane.slot(), window.placement.z, window.id));
+    let rects = if RDP_COMPOSITION_SELECTION.slot4_rects {
+        super::slot4_service::presented_rects().to_vec()
+    } else {
+        Vec::new()
+    };
+
+    let mut leases = Vec::with_capacity(windows.len());
+    for window in &windows {
+        match acquire_published_frame(window.frame) {
+            Ok(lease) => leases.push(lease),
+            Err(error) => {
+                release_leases(&leases);
+                return Err(error.into());
+            }
+        }
+    }
+    let result = (|| {
+        let views = leases
+            .iter()
+            .copied()
+            .map(published_rgba_view)
+            .collect::<Result<Vec<FrameRgbaView>, _>>()?;
+        let slot0_scanout_pixels = if RDP_COMPOSITION_SELECTION.slot0_base {
+            copy_stream_pipe_a_slot0_premultiplied(rgba_premultiplied, width, height)
+        } else {
+            0
+        };
+        if slot0_scanout_pixels == 0 {
+            // The reusable stream buffer still contains the preceding frame.
+            // Clear only when the full-screen physical base could not replace
+            // it; the normal SURFLIVE path overwrites every destination byte.
+            rgba_premultiplied.fill(0);
+        }
+        let mut window_layers = 0usize;
+        for (window, view) in windows.iter().zip(views.iter()) {
+            crate::intel::dma_flush(view.virt, view.byte_len);
+            let pixels =
+                unsafe { core::slice::from_raw_parts(view.virt.cast_const(), view.byte_len) };
+            let draw_width = view.width.min(window.placement.width);
+            let draw_height = view.height.min(window.placement.height);
+            if window.placement.visible
+                && window.placement.opacity != 0
+                && draw_width != 0
+                && draw_height != 0
+            {
+                window_layers = window_layers.saturating_add(1);
+            }
+            blend_window(rgba_premultiplied, stride, width, height, *window, *view, pixels);
+        }
+        for rect in rects {
+            blend_visual_rect(rgba_premultiplied, stride, width, height, rect);
+        }
+        let spirit_overlay_pixels = if RDP_COMPOSITION_SELECTION.spirit {
+            blend_stream_spirit_overlay_premultiplied(rgba_premultiplied, width, height)
+        } else {
+            0
+        };
+        Ok::<_, CaptureError>((slot0_scanout_pixels, spirit_overlay_pixels, window_layers))
+    })();
+    release_leases(&leases);
+    let (slot0_scanout_pixels, spirit_overlay_pixels, window_layers) = result?;
+
+    Ok(StreamScanoutCapture {
+        width,
+        height,
+        slot0_scanout_pixels,
+        spirit_overlay_pixels,
+        gpu_composed: false,
+        compose_layers: window_layers.saturating_add(usize::from(slot0_scanout_pixels != 0)),
+        compose_gpu_us: 0,
+    })
+}
+
+fn copy_stream_pipe_a_slot0_premultiplied(
+    destination: &mut [u8],
+    width: u32,
+    height: u32,
+) -> usize {
+    let Some(row_bytes) = (width as usize).checked_mul(4) else {
+        return 0;
+    };
+    crate::intel::with_ui4_stream_pipe_a_slot0_surflive(|slot0| {
+        if slot0.width != width
+            || slot0.height != height
+            || (slot0.pitch_bytes as usize) < row_bytes
+        {
+            return 0;
+        }
+        for row in 0..height as usize {
+            let source_offset = row.saturating_mul(slot0.pitch_bytes as usize);
+            let destination_offset = row.saturating_mul(row_bytes);
+            let Some(source_row) = slot0
+                .rgba_premultiplied
+                .get(source_offset..source_offset + row_bytes)
+            else {
+                return 0;
+            };
+            let Some(destination_row) =
+                destination.get_mut(destination_offset..destination_offset + row_bytes)
+            else {
+                return 0;
+            };
+            destination_row.copy_from_slice(source_row);
+        }
+        (width as usize).saturating_mul(height as usize)
+    })
+    .unwrap_or(0)
+}
+
+fn blend_stream_spirit_overlay_premultiplied(
+    destination: &mut [u8],
+    width: u32,
+    height: u32,
+) -> usize {
+    let destination_stride = width as usize * 4;
+    crate::spirit::with_stream_overlay_pipe_a(|overlay| {
+        let left = i64::from(overlay.left).max(0);
+        let top = i64::from(overlay.top).max(0);
+        let right = (i64::from(overlay.left) + i64::from(overlay.width)).min(i64::from(width));
+        let bottom = (i64::from(overlay.top) + i64::from(overlay.height)).min(i64::from(height));
+        if right <= left || bottom <= top {
+            return 0;
+        }
+
+        let source_x = left.saturating_sub(i64::from(overlay.left)) as usize;
+        let source_y = top.saturating_sub(i64::from(overlay.top)) as usize;
+        let copy_width = (right - left) as usize;
+        let copy_height = (bottom - top) as usize;
+        let mut blended_pixels = 0usize;
+        for row in 0..copy_height {
+            let source_offset = (source_y + row)
+                .saturating_mul(overlay.pitch_bytes as usize)
+                .saturating_add(source_x.saturating_mul(4));
+            let destination_offset = (top as usize + row)
+                .saturating_mul(destination_stride)
+                .saturating_add(left as usize * 4);
+            let Some(source_row) = overlay
+                .bgra_premultiplied
+                .get(source_offset..source_offset + copy_width * 4)
+            else {
+                return blended_pixels;
+            };
+            let Some(destination_row) =
+                destination.get_mut(destination_offset..destination_offset + copy_width * 4)
+            else {
+                return blended_pixels;
+            };
+            for (source, destination) in source_row
+                .chunks_exact(4)
+                .zip(destination_row.chunks_exact_mut(4))
+            {
+                if source[3] == 0 {
+                    continue;
+                }
+                blend_premultiplied(destination, source[2], source[1], source[0], source[3]);
+                blended_pixels = blended_pixels.saturating_add(1);
+            }
+        }
+        blended_pixels
+    })
+    .unwrap_or(0)
 }
 
 /// Arm one composition capture. Calls are bounded so a burst of side-button
@@ -459,7 +621,7 @@ pub(super) fn capture_compositor_frame(windows: &[WindowSnapshot]) {
         CaptureSelection::Window { .. } => heapless::Vec::new(),
     };
     let result = match request.selection {
-        CaptureSelection::Composition => capture_windows(windows, &rects),
+        CaptureSelection::Composition => capture_windows(windows, &rects, false),
         CaptureSelection::Window { id, plane_slot } => windows
             .iter()
             .copied()
@@ -524,6 +686,7 @@ fn capture_scope_log_fields(selection: CaptureSelection) -> (&'static str, u32, 
 fn capture_windows(
     windows: &[WindowSnapshot],
     rects: &[crate::intel::LiveOverlayRect],
+    stream_capture: bool,
 ) -> Result<CapturedComposition, CaptureError> {
     let (width, height) =
         crate::intel::active_scanout_dimensions().ok_or(CaptureError::NoScanout)?;
@@ -560,6 +723,14 @@ fn capture_windows(
             .map(published_rgba_view)
             .collect::<Result<Vec<FrameRgbaView>, _>>()?;
         let mut rgba = alloc::vec![0u8; byte_len];
+        // D01's original pipe-A primary is the immutable opaque background.
+        // The fixed test rig has no broker windows on slot 0; a changed
+        // SURFLIVE therefore rejects this copy in the display accessor.
+        let slot0_scanout_pixels = if stream_capture {
+            copy_stream_pipe_a_slot0_premultiplied(&mut rgba, width, height)
+        } else {
+            0
+        };
         for (window, view) in ordered_windows.iter().zip(views.iter()) {
             crate::intel::dma_flush(view.virt, view.byte_len);
             let pixels =
@@ -569,11 +740,21 @@ fn capture_windows(
         for rect in rects {
             blend_visual_rect(&mut rgba, stride, width, height, *rect);
         }
-        unpremultiply_rgba(&mut rgba);
-        Ok::<_, CaptureError>(rgba)
+        // The encoder composites premultiplied RGB directly onto black. Keep
+        // that representation for stream capture and reserve the expensive
+        // straight-alpha conversion for exported screenshots.
+        let spirit_overlay_pixels = if stream_capture {
+            blend_stream_spirit_overlay_premultiplied(&mut rgba, width, height)
+        } else {
+            0
+        };
+        if !stream_capture {
+            unpremultiply_rgba(&mut rgba);
+        }
+        Ok::<_, CaptureError>((rgba, slot0_scanout_pixels, spirit_overlay_pixels))
     })();
     release_leases(&leases);
-    let rgba = result?;
+    let (rgba, slot0_scanout_pixels, spirit_overlay_pixels) = result?;
 
     Ok(CapturedComposition {
         sequence: CAPTURE_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1,
@@ -585,6 +766,8 @@ fn capture_windows(
         scope: CaptureScope::Composition,
         path_override: None,
         release_interactive_gate: true,
+        slot0_scanout_pixels,
+        spirit_overlay_pixels,
     })
 }
 
@@ -634,6 +817,8 @@ fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, Capture
         },
         path_override: None,
         release_interactive_gate: true,
+        slot0_scanout_pixels: 0,
+        spirit_overlay_pixels: 0,
     })
 }
 

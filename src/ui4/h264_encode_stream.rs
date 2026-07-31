@@ -1,29 +1,32 @@
 //! Resident UI4 scanout-to-Intel-H.264-to-UDP service.
 //!
 //! After a boot-time hardware proof, each subscriber receives a fresh,
-//! deadline-paced ten-second session. Selected D01 layers are composed and
-//! converted directly into NV12 by RCS, encoded by Gen12 VDEnc/MFX, and handed
-//! directly to the bounded TME1 transport. No CPU framebuffer, filesystem, or
-//! software-codec stage participates.
+//! deadline-paced ten-second session. Logical D01 scanout is composed in
+//! memory, converted to NV12, encoded by Gen12 VDEnc/MFX, and handed directly
+//! to the bounded TME1 transport. No filesystem or software-codec stage
+//! participates.
 
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use embassy_time::{Duration, Timer};
+use spin::Mutex;
 
 const PROBE_START_DELAY_MS: u64 = 15_000;
 const VCS0_PROBE_RETRY_MS: u64 = 50;
 const TEST_RIG_SCANOUT_WIDTH: u32 = 2560;
 const TEST_RIG_SCANOUT_HEIGHT: u32 = 1440;
+const SOURCE_RGBA_BYTES: usize =
+    TEST_RIG_SCANOUT_WIDTH as usize * TEST_RIG_SCANOUT_HEIGHT as usize * 4;
 const ENCODE_WIDTH: usize = 1920;
 const ENCODE_HEIGHT: usize = 1088;
 const ACTIVE_HEIGHT: usize = 1080;
 const ACTIVE_TOP: usize = (ENCODE_HEIGHT - ACTIVE_HEIGHT) / 2;
-const SOURCE_RGBA_BYTES: usize =
-    TEST_RIG_SCANOUT_WIDTH as usize * TEST_RIG_SCANOUT_HEIGHT as usize * 4;
 const ENCODE_LUMA_BYTES: usize = ENCODE_WIDTH * ENCODE_HEIGHT;
 const ENCODE_NV12_BYTES: usize = ENCODE_LUMA_BYTES * 3 / 2;
 const CADENCE_TOLERANCE_PERCENT: u64 = 5;
+const PREPARE_IDLE_POLL_MS: u64 = 1;
+const PREPARE_SLOT_COUNT: usize = 2;
 // A foreground decode stream owns a session-level VCS0 reservation. Keep the
 // boot proof retryable until that stream drains instead of permanently parking
 // the encoder after an arbitrary startup window.
@@ -33,6 +36,8 @@ static STATE: AtomicU8 = AtomicU8::new(H264EncodeStreamState::Waiting as u8);
 static ENCODE_US: AtomicU64 = AtomicU64::new(0);
 static SOURCE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static ENCODED_BYTES: AtomicUsize = AtomicUsize::new(0);
+static PREPARE_WORKER_SLOT: AtomicU32 = AtomicU32::new(u32::MAX);
+static PREPARE_PIPELINE: Mutex<PreparePipeline> = Mutex::new(PreparePipeline::new());
 
 const _: () = {
     assert!(ENCODE_WIDTH % 16 == 0);
@@ -50,16 +55,20 @@ struct LiveEncodeStats {
     frames: usize,
     source_width: u32,
     source_height: u32,
+    first_source_fnv1a32: u32,
+    last_source_fnv1a32: u32,
+    source_changes: usize,
     capture_us: u64,
     capture_max_us: u64,
     composition_gpu_frames: usize,
+    composition_cpu_frames: usize,
     composition_layers_max: usize,
     composition_gpu_us: u64,
     composition_gpu_max_us: u64,
-    conversion_wall_us: u64,
-    conversion_wall_max_us: u64,
-    conversion_gpu_us: u64,
-    conversion_gpu_max_us: u64,
+    convert_wall_us: u64,
+    convert_wall_max_us: u64,
+    convert_gpu_us: u64,
+    convert_gpu_max_us: u64,
     encode_us: u64,
     encode_max_us: u64,
     coded_bytes: usize,
@@ -68,6 +77,127 @@ struct LiveEncodeStats {
     slot0_scanout_pixels: usize,
     spirit_overlay_frames: usize,
     spirit_overlay_pixels: usize,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum PrepareSlotState {
+    Empty,
+    Filling,
+    Ready,
+    Consuming,
+}
+
+struct PrepareSlot {
+    state: PrepareSlotState,
+    generation: u64,
+    session_id: u32,
+    sequence: u32,
+    source_width: u32,
+    source_height: u32,
+    source_fnv1a32: u32,
+    capture_us: u64,
+    composition_gpu: bool,
+    composition_layers: usize,
+    composition_gpu_us: u64,
+    convert_wall_us: u64,
+    convert_gpu_us: u64,
+    slot0_scanout_pixels: usize,
+    spirit_overlay_pixels: usize,
+    valid: bool,
+    source_rgba: Option<EncodeDmaBuffer>,
+    nv12: Option<EncodeDmaBuffer>,
+}
+
+impl PrepareSlot {
+    const fn new() -> Self {
+        Self {
+            state: PrepareSlotState::Empty,
+            generation: 0,
+            session_id: 0,
+            sequence: 0,
+            source_width: 0,
+            source_height: 0,
+            source_fnv1a32: 0,
+            capture_us: 0,
+            composition_gpu: false,
+            composition_layers: 0,
+            composition_gpu_us: 0,
+            convert_wall_us: 0,
+            convert_gpu_us: 0,
+            slot0_scanout_pixels: 0,
+            spirit_overlay_pixels: 0,
+            valid: false,
+            source_rgba: None,
+            nv12: None,
+        }
+    }
+
+    fn reset_metadata(&mut self) {
+        self.source_width = 0;
+        self.source_height = 0;
+        self.source_fnv1a32 = 0;
+        self.capture_us = 0;
+        self.composition_gpu = false;
+        self.composition_layers = 0;
+        self.composition_gpu_us = 0;
+        self.convert_wall_us = 0;
+        self.convert_gpu_us = 0;
+        self.slot0_scanout_pixels = 0;
+        self.spirit_overlay_pixels = 0;
+        self.valid = false;
+    }
+}
+
+struct PreparePipeline {
+    active: bool,
+    generation: u64,
+    session_id: u32,
+    access_unit_count: usize,
+    next_sequence: usize,
+    slots: [PrepareSlot; PREPARE_SLOT_COUNT],
+}
+
+impl PreparePipeline {
+    const fn new() -> Self {
+        Self {
+            active: false,
+            generation: 0,
+            session_id: 0,
+            access_unit_count: 0,
+            next_sequence: 0,
+            slots: [PrepareSlot::new(), PrepareSlot::new()],
+        }
+    }
+}
+
+struct PrepareJob {
+    slot_index: usize,
+    generation: u64,
+    session_id: u32,
+    sequence: u32,
+    source_rgba: Option<EncodeDmaBuffer>,
+    nv12: Option<EncodeDmaBuffer>,
+}
+
+struct PreparedScanout {
+    slot_index: usize,
+    generation: u64,
+    session_id: u32,
+    sequence: u32,
+    source_width: u32,
+    source_height: u32,
+    source_fnv1a32: u32,
+    capture_us: u64,
+    composition_gpu: bool,
+    composition_layers: usize,
+    composition_gpu_us: u64,
+    convert_wall_us: u64,
+    convert_gpu_us: u64,
+    slot0_scanout_pixels: usize,
+    spirit_overlay_pixels: usize,
+    valid: bool,
+    source_rgba: Option<EncodeDmaBuffer>,
+    nv12: Option<EncodeDmaBuffer>,
 }
 
 struct EncodeDmaBuffer {
@@ -80,11 +210,21 @@ unsafe impl Send for EncodeDmaBuffer {}
 unsafe impl Sync for EncodeDmaBuffer {}
 
 impl EncodeDmaBuffer {
-    /// Allocate a target whose first owner is guaranteed to overwrite every
-    /// byte on the GPU. No CPU clear or cache sweep is required.
-    fn allocate_gpu_target(bytes: usize) -> Option<Self> {
+    fn allocate(bytes: usize) -> Option<Self> {
         let (phys, virt) = crate::dma::alloc(bytes, crate::intel::WARM_ALIGN)?;
+        unsafe {
+            core::ptr::write_bytes(virt, 0, bytes);
+        }
+        crate::intel::dma_flush(virt, bytes);
         Some(Self { phys, virt, bytes })
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.virt.cast_const(), self.bytes) }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe { core::slice::from_raw_parts_mut(self.virt, self.bytes) }
     }
 }
 
@@ -134,32 +274,410 @@ pub(crate) fn h264_encode_stream_snapshot() -> H264EncodeStreamSnapshot {
 }
 
 #[embassy_executor::task(pool_size = 1)]
-pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
+pub(crate) async fn ui4_h264_encode_prepare_task(assigned_slot: u32) {
+    let worker = crate::cpu::CpuProfile::current();
+    let worker_slot = worker.map(|profile| profile.slot()).unwrap_or(u32::MAX);
+    let worker_kind = worker
+        .map(|profile| profile.core_kind_name())
+        .unwrap_or("unknown");
+    PREPARE_WORKER_SLOT.store(worker_slot, Ordering::Release);
+    crate::log_info!(target: "intel/media-encode";
+        "intel/media-encode: preparation service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} pipeline=selected-layers-to-rgba-mirror-to-nv12 engine=guc-rcs composition_kernel=ui4-compose-layers conversion_kernel=cpp-linear-rgba8-to-nv12 cpu_full_frame_blend=0 cpu_fallback=scalar-exact dma_buffers=persistent producer buffering=double slots={} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 selection=slot0-base+visible-broker-windows+slot4-rects+spirit slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied synchronization=composition-marker-before-conversion-marker-before-vdbox\n",
+        assigned_slot,
+        worker_slot,
+        worker_kind,
+        PREPARE_SLOT_COUNT,
+        ENCODE_WIDTH,
+        ENCODE_HEIGHT,
+        ENCODE_WIDTH,
+        ACTIVE_HEIGHT,
+    );
+    if worker_slot != assigned_slot {
+        crate::log_error!(target: "intel/media-encode";
+            "intel/media-encode: preparation service rejected assigned_slot={} actual_slot={} reason=executor-residency-mismatch action=park\n",
+            assigned_slot,
+            worker_slot,
+        );
+        park().await;
+    }
+
+    loop {
+        let Some(job) = take_prepare_job() else {
+            Timer::after(Duration::from_millis(PREPARE_IDLE_POLL_MS)).await;
+            continue;
+        };
+        prepare_scanout(job).await;
+    }
+}
+
+fn take_prepare_job() -> Option<PrepareJob> {
+    let mut pipeline = PREPARE_PIPELINE.lock();
+    if !pipeline.active || pipeline.next_sequence >= pipeline.access_unit_count {
+        return None;
+    }
+    let slot_index = pipeline
+        .slots
+        .iter()
+        .position(|slot| slot.state == PrepareSlotState::Empty)?;
+    let generation = pipeline.generation;
+    let session_id = pipeline.session_id;
+    let sequence = pipeline.next_sequence as u32;
+    pipeline.next_sequence = pipeline.next_sequence.saturating_add(1);
+    let slot = &mut pipeline.slots[slot_index];
+    slot.state = PrepareSlotState::Filling;
+    slot.generation = generation;
+    slot.session_id = session_id;
+    slot.sequence = sequence;
+    slot.reset_metadata();
+    Some(PrepareJob {
+        slot_index,
+        generation,
+        session_id,
+        sequence,
+        source_rgba: slot.source_rgba.take(),
+        nv12: slot.nv12.take(),
+    })
+}
+
+async fn prepare_scanout(mut job: PrepareJob) {
+    let mut source_width = 0;
+    let mut source_height = 0;
+    let mut source_fnv1a32 = 0;
+    let mut capture_us = 0;
+    let mut composition_gpu = false;
+    let mut composition_layers = 0usize;
+    let mut composition_gpu_us = 0u64;
+    let mut convert_wall_us = 0;
+    let mut convert_gpu_us = 0;
+    let mut slot0_scanout_pixels = 0;
+    let mut spirit_overlay_pixels = 0;
+    if job.source_rgba.is_none() {
+        job.source_rgba = EncodeDmaBuffer::allocate(SOURCE_RGBA_BYTES);
+    }
+    if job.nv12.is_none() {
+        job.nv12 = EncodeDmaBuffer::allocate(ENCODE_NV12_BYTES);
+    }
+
+    let mut valid = false;
+    if job.source_rgba.is_none() || job.nv12.is_none() {
+        crate::log_error!(target: "intel/media-encode";
+            "intel/media-encode: live frame rejected session={} sequence={} stage=guc-rcs-dma-allocation rgba_bytes={} nv12_bytes={} software_fallback=0\n",
+            job.session_id,
+            job.sequence,
+            SOURCE_RGBA_BYTES,
+            ENCODE_NV12_BYTES,
+        );
+    } else {
+        let capture_started_ns = crate::chronos::monotonic_nanos();
+        let capture_result = {
+            let source = job
+                .source_rgba
+                .as_mut()
+                .expect("checked source DMA allocation");
+            let source_surface = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+                source.phys,
+                crate::intel::gpgpu::UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE,
+                source.bytes,
+                TEST_RIG_SCANOUT_WIDTH,
+                TEST_RIG_SCANOUT_HEIGHT,
+                TEST_RIG_SCANOUT_WIDTH.saturating_mul(4),
+            );
+            match source_surface {
+                Some(source_surface) => {
+                    super::screenshot::capture_stream_scanout_rgba_into_fast(
+                        source_surface,
+                        source.as_mut_slice(),
+                    )
+                    .await
+                }
+                None => Err(super::screenshot::CaptureError::InvalidFrameLayout),
+            }
+        };
+        capture_us = crate::chronos::monotonic_nanos().saturating_sub(capture_started_ns) / 1_000;
+        match capture_result {
+            Ok(capture) => {
+                source_width = capture.width;
+                source_height = capture.height;
+                slot0_scanout_pixels = capture.slot0_scanout_pixels;
+                spirit_overlay_pixels = capture.spirit_overlay_pixels;
+                composition_gpu = capture.gpu_composed;
+                composition_layers = capture.compose_layers;
+                composition_gpu_us = capture.compose_gpu_us;
+                crate::log_trace!(target: "intel/media-encode";
+                    "intel/media-encode: rgba-mirror retired session={} sequence={} backend={} selected_layers={} compose_wall_us={} compose_gpu_us={} slot0_pixels={} spirit_pixels={} cpu_full_frame_blend={} fallback={}\n",
+                    job.session_id,
+                    job.sequence,
+                    if capture.gpu_composed { "guc-rcs-ui4-compose-layers" } else { "scalar-exact" },
+                    capture.compose_layers,
+                    capture_us,
+                    capture.compose_gpu_us,
+                    capture.slot0_scanout_pixels,
+                    capture.spirit_overlay_pixels,
+                    (!capture.gpu_composed) as u8,
+                    (!capture.gpu_composed) as u8,
+                );
+                let source = job
+                    .source_rgba
+                    .as_ref()
+                    .expect("checked source DMA allocation");
+                let destination = job.nv12.as_ref().expect("checked NV12 DMA allocation");
+                crate::intel::dma_flush(source.virt, source.bytes);
+                let source_surface = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+                    source.phys,
+                    crate::intel::gpgpu::UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE,
+                    source.bytes,
+                    capture.width,
+                    capture.height,
+                    capture.width.saturating_mul(4),
+                );
+                let destination_surface = crate::intel::gpgpu::GpgpuNv12LinearSurface::new(
+                    destination.phys,
+                    crate::intel::gpgpu::UI4_STREAM_NV12_DESTINATION_GPU,
+                    destination.bytes,
+                    ENCODE_WIDTH as u32,
+                    ENCODE_HEIGHT as u32,
+                    ENCODE_WIDTH as u32,
+                );
+                if let (Some(source_surface), Some(destination_surface)) =
+                    (source_surface, destination_surface)
+                {
+                    let conversion_started_ns = crate::chronos::monotonic_nanos();
+                    let submission = loop {
+                        match crate::intel::gpgpu::queue_ui4_stream_rgba8_to_nv12_linear(
+                            source_surface,
+                            destination_surface,
+                            ACTIVE_TOP as u32,
+                            ACTIVE_HEIGHT as u32,
+                        ) {
+                            Ok(submission) => break Some(submission),
+                            Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
+                                Timer::after(Duration::from_millis(1)).await;
+                            }
+                            Err(error) => {
+                                crate::log_error!(target: "intel/media-encode";
+                                    "intel/media-encode: live frame rejected session={} sequence={} stage=guc-rcs-rgba-to-nv12-submit error={:?} software_fallback=0\n",
+                                    job.session_id,
+                                    job.sequence,
+                                    error,
+                                );
+                                break None;
+                            }
+                        }
+                    };
+                    if let Some(submission) = submission {
+                        loop {
+                            match crate::intel::gpgpu::poll_ui4_compositor_submission(submission) {
+                                crate::intel::gpgpu::Ui4CompositorCompletion::Pending => {
+                                    Timer::after(Duration::from_millis(1)).await;
+                                }
+                                crate::intel::gpgpu::Ui4CompositorCompletion::Complete(stats) => {
+                                    crate::intel::dma_flush(destination.virt, destination.bytes);
+                                    source_fnv1a32 = fnv1a32_sampled(destination.as_slice());
+                                    convert_gpu_us = stats.probe.gpu_walker_us;
+                                    convert_wall_us = crate::chronos::monotonic_nanos()
+                                        .saturating_sub(conversion_started_ns)
+                                        / 1_000;
+                                    crate::log_trace!(target: "intel/media-encode";
+                                        "intel/media-encode: rgba-to-nv12 retired session={} sequence={} engine=guc-rcs kernel=cpp-linear-rgba8-to-nv12 submit_ms={} convert_wall_us={} gpu_walker_us={} cpu_pixel_math=0 cpu_validation_bytes_max=4096 source_bytes={} destination_bytes={}\n",
+                                        job.session_id,
+                                        job.sequence,
+                                        stats.submit_ms,
+                                        convert_wall_us,
+                                        stats.probe.gpu_walker_us,
+                                        source.bytes,
+                                        destination.bytes,
+                                    );
+                                    valid = true;
+                                    break;
+                                }
+                                crate::intel::gpgpu::Ui4CompositorCompletion::Failed
+                                | crate::intel::gpgpu::Ui4CompositorCompletion::InvalidSubmission =>
+                                {
+                                    crate::log_error!(target: "intel/media-encode";
+                                        "intel/media-encode: live frame rejected session={} sequence={} stage=guc-rcs-rgba-to-nv12-completion action=quarantine-dma-buffers software_fallback=0\n",
+                                        job.session_id,
+                                        job.sequence,
+                                    );
+                                    if let Some(source) = job.source_rgba.take() {
+                                        core::mem::forget(source);
+                                    }
+                                    if let Some(destination) = job.nv12.take() {
+                                        core::mem::forget(destination);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    crate::log_error!(target: "intel/media-encode";
+                        "intel/media-encode: live frame rejected session={} sequence={} stage=guc-rcs-surface-contract source={}x{} destination={}x{} software_fallback=0\n",
+                        job.session_id,
+                        job.sequence,
+                        capture.width,
+                        capture.height,
+                        ENCODE_WIDTH,
+                        ENCODE_HEIGHT,
+                    );
+                }
+            }
+            Err(error) => {
+                if matches!(error, super::screenshot::CaptureError::GpuCompositionFailed)
+                    && let Some(source) = job.source_rgba.take()
+                {
+                    // An admitted writer without a trustworthy retirement
+                    // marker may still touch this exact allocation later.
+                    core::mem::forget(source);
+                }
+                crate::log_error!(target: "intel/media-encode";
+                    "intel/media-encode: live frame rejected session={} sequence={} stage=ui4-scanout-capture error={:?} rgba_quarantined={} filesystem_writes=0 software_fallback=0\n",
+                    job.session_id,
+                    job.sequence,
+                    error,
+                    matches!(error, super::screenshot::CaptureError::GpuCompositionFailed) as u8,
+                );
+            }
+        }
+    }
+
+    let mut pipeline = PREPARE_PIPELINE.lock();
+    let session_current = pipeline.active
+        && pipeline.generation == job.generation
+        && pipeline.session_id == job.session_id;
+    let slot = &mut pipeline.slots[job.slot_index];
+    if session_current
+        && slot.state == PrepareSlotState::Filling
+        && slot.generation == job.generation
+        && slot.sequence == job.sequence
+    {
+        slot.source_width = source_width;
+        slot.source_height = source_height;
+        slot.source_fnv1a32 = source_fnv1a32;
+        slot.capture_us = capture_us;
+        slot.composition_gpu = composition_gpu;
+        slot.composition_layers = composition_layers;
+        slot.composition_gpu_us = composition_gpu_us;
+        slot.convert_wall_us = convert_wall_us;
+        slot.convert_gpu_us = convert_gpu_us;
+        slot.slot0_scanout_pixels = slot0_scanout_pixels;
+        slot.spirit_overlay_pixels = spirit_overlay_pixels;
+        slot.valid = valid;
+        slot.source_rgba = job.source_rgba;
+        slot.nv12 = job.nv12;
+        slot.state = PrepareSlotState::Ready;
+    }
+}
+
+fn begin_preparation_session(session_id: u32, access_unit_count: usize) {
+    let mut pipeline = PREPARE_PIPELINE.lock();
+    pipeline.generation = pipeline.generation.wrapping_add(1);
+    pipeline.active = true;
+    pipeline.session_id = session_id;
+    pipeline.access_unit_count = access_unit_count;
+    pipeline.next_sequence = 0;
+    let generation = pipeline.generation;
+    for slot in &mut pipeline.slots {
+        slot.state = PrepareSlotState::Empty;
+        slot.generation = generation;
+        slot.session_id = session_id;
+        slot.sequence = 0;
+        slot.reset_metadata();
+    }
+}
+
+fn end_preparation_session(session_id: u32) {
+    let mut pipeline = PREPARE_PIPELINE.lock();
+    if !pipeline.active || pipeline.session_id != session_id {
+        return;
+    }
+    pipeline.active = false;
+    pipeline.generation = pipeline.generation.wrapping_add(1);
+    pipeline.access_unit_count = 0;
+    pipeline.next_sequence = 0;
+    let generation = pipeline.generation;
+    for slot in &mut pipeline.slots {
+        slot.state = PrepareSlotState::Empty;
+        slot.generation = generation;
+        slot.reset_metadata();
+    }
+}
+
+fn prepared_scanout_ready(session_id: u32, sequence: u32) -> bool {
+    PREPARE_PIPELINE.lock().slots.iter().any(|slot| {
+        slot.state == PrepareSlotState::Ready
+            && slot.session_id == session_id
+            && slot.sequence == sequence
+    })
+}
+
+fn take_prepared_scanout(session_id: u32, sequence: u32) -> Option<PreparedScanout> {
+    let mut pipeline = PREPARE_PIPELINE.lock();
+    let slot_index = pipeline.slots.iter().position(|slot| {
+        slot.state == PrepareSlotState::Ready
+            && slot.session_id == session_id
+            && slot.sequence == sequence
+    })?;
+    let slot = &mut pipeline.slots[slot_index];
+    slot.state = PrepareSlotState::Consuming;
+    Some(PreparedScanout {
+        slot_index,
+        generation: slot.generation,
+        session_id: slot.session_id,
+        sequence: slot.sequence,
+        source_width: slot.source_width,
+        source_height: slot.source_height,
+        source_fnv1a32: slot.source_fnv1a32,
+        capture_us: slot.capture_us,
+        composition_gpu: slot.composition_gpu,
+        composition_layers: slot.composition_layers,
+        composition_gpu_us: slot.composition_gpu_us,
+        convert_wall_us: slot.convert_wall_us,
+        convert_gpu_us: slot.convert_gpu_us,
+        slot0_scanout_pixels: slot.slot0_scanout_pixels,
+        spirit_overlay_pixels: slot.spirit_overlay_pixels,
+        valid: slot.valid,
+        source_rgba: slot.source_rgba.take(),
+        nv12: slot.nv12.take(),
+    })
+}
+
+fn release_prepared_scanout(prepared: &mut PreparedScanout) {
+    let mut pipeline = PREPARE_PIPELINE.lock();
+    let session_current = pipeline.active
+        && pipeline.generation == prepared.generation
+        && pipeline.session_id == prepared.session_id;
+    let slot = &mut pipeline.slots[prepared.slot_index];
+    if session_current
+        && slot.state == PrepareSlotState::Consuming
+        && slot.generation == prepared.generation
+        && slot.sequence == prepared.sequence
+    {
+        slot.source_rgba = prepared.source_rgba.take();
+        slot.nv12 = prepared.nv12.take();
+        slot.state = PrepareSlotState::Empty;
+        slot.reset_metadata();
+    }
+}
+
+#[embassy_executor::task(pool_size = 1)]
+pub(crate) async fn ui4_h264_encode_stream_task() {
     let worker = crate::cpu::CpuProfile::current();
     let worker_slot = worker.map(|profile| profile.slot()).unwrap_or(u32::MAX);
     let worker_kind = worker
         .map(|profile| profile.core_kind_name())
         .unwrap_or("unknown");
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} exclusive_carrier=1 cooperative_tasks=1 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=ui4-logical-scanout-d01 encode_size={}x{} target_fps={} backend=guc-rcs-selected-layers-rgba-mirror+rgba-to-nv12+gen12-vdenc-mfx completion_wait=cooperative-fence-yield output=udp-only pipeline=single-task-capture-encode-send gpu_dispatches_per_frame=2 rgba_mirror_bytes={} cpu_pixel_access=0 filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
-        assigned_slot,
+        "intel/media-encode: service online carrier=lastap worker_slot={} worker_kind={} exclusive_carrier=1 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=ui4-logical-scanout-d01 encode_size={}x{} target_fps={} backend=gen12-vdenc-mfx completion_wait=cooperative-fence-yield output=udp-only live_high_water_cap={} pipeline=prepare-producer+encode-producer+udp-egress-consumer preparation=cooperative-lastap-double-buffer slots={} filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
         worker_slot,
         worker_kind,
         ENCODE_WIDTH,
         ENCODE_HEIGHT,
         crate::allcaps::media_encode::REALTIME_HZ,
-        SOURCE_RGBA_BYTES,
+        super::h264_encode_udp::encoded_access_unit_queue_cap(),
+        PREPARE_SLOT_COUNT,
         crate::allports::services::MEDIA_ENCODE_UDP_PORT,
         PROBE_START_DELAY_MS,
     );
-    if worker_slot != assigned_slot {
-        crate::log_error!(target: "intel/media-encode";
-            "intel/media-encode: service rejected assigned_slot={} actual_slot={} reason=executor-residency-mismatch action=park\n",
-            assigned_slot,
-            worker_slot,
-        );
-        park().await;
-    }
 
     Timer::after(Duration::from_millis(PROBE_START_DELAY_MS)).await;
 
@@ -458,13 +976,6 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
     ENCODED_BYTES.store(probe_annex_b.len(), Ordering::Release);
     drop(probe_annex_b);
 
-    // The LastAP-resident task owns both persistent hardware input memory and
-    // the boot-lifetime network registration. Awaiting either subsystem yields
-    // this same task; it does not create a second encoder worker.
-    let mut rgba_mirror = None;
-    let mut nv12 = None;
-    let mut udp_transport = super::h264_encode_udp::MediaUdpTransport::open().await;
-
     let timestamp = crate::chronos::best_effort_unix_time_seconds();
     let mut stream_session_id = timestamp
         .map(|timestamp| timestamp as u32)
@@ -474,22 +985,15 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
         let mut stats = LiveEncodeStats::default();
         let access_unit_count = crate::allcaps::media_encode::VALIDATION_SESSION_ACCESS_UNITS;
         let udp_report = super::h264_encode_udp::stream_generated_annex_b(
-            &mut udp_transport,
             stream_session_id,
             access_unit_count,
             crate::allcaps::media_encode::REALTIME_HZ,
-            async |sequence| {
-                encode_hardware_scanout(
-                    stream_session_id,
-                    sequence,
-                    &mut rgba_mirror,
-                    &mut nv12,
-                    &mut stats,
-                )
-                .await
-            },
+            || begin_preparation_session(stream_session_id, access_unit_count),
+            |sequence| prepared_scanout_ready(stream_session_id, sequence),
+            async |sequence| encode_prepared_scanout(stream_session_id, sequence, &mut stats).await,
         )
         .await;
+        end_preparation_session(stream_session_id);
         let expected_units = crate::allcaps::media_encode::VALIDATION_SESSION_ACCESS_UNITS;
         let interval_millifps = if udp_report.sent_access_units > 1 && udp_report.elapsed_us != 0 {
             (udp_report.sent_access_units.saturating_sub(1) as u64).saturating_mul(1_000_000_000)
@@ -521,7 +1025,7 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
             Ordering::Release,
         );
         crate::log_info!(target: "intel/media-encode";
-            "intel/media-encode: udp-live complete accepted={} delivery_complete={} cadence_target_met={} retry_free={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} active_size={}x{} padding=top:4,bottom:4 composition=selected-layers-to-final-rgba-mirror composition_kernel=ui4-compose-layers-rgba8 gpu_dispatches_per_frame=2 composition_gpu_frames={} composition_layers_max={} composition_gpu_avg_us={} composition_gpu_max_us={} composition_wall_avg_us={} composition_wall_max_us={} conversion=ui4-rgba8-to-nv12-linear conversion_wall_avg_us={} conversion_wall_max_us={} conversion_gpu_avg_us={} conversion_gpu_max_us={} rgba_mirror_bytes={} cpu_pixel_reads=0 cpu_pixel_writes=0 cpu_nv12_copy_bytes=0 dma_buffers=persistent vdbox_source=gpu-dma-direct slot0_scanout_frames={} slot0_scanout_pixels={} spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=composition-marker-before-conversion-marker-before-vdbox format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc hardware_encode=1 all_idr=1 protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=single-lastap-task cooperative_tasks=1 worker_slot={} worker_kind={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
+            "intel/media-encode: udp-live complete accepted={} delivery_complete={} cadence_target_met={} retry_free={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} mapping=full-frame-nearest-downscale composition=selected-layers-to-final-rgba-mirror composition_gpu_frames={} composition_cpu_fallback_frames={} composition_layers_max={} composition_gpu_avg_us={} composition_gpu_max_us={} conversion=guc-rcs-cpp-linear-rgba8-to-nv12 cpu_full_frame_blend={} dma_buffers=persistent vdbox_source=gpu-dma-direct cpu_nv12_copy_bytes=0 active_size={}x{} padding=top:4,bottom:4 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none slot0_scanout_frames={} slot0_scanout_pixels={} spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=composition-marker-before-conversion-marker-before-vdbox format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc direct_execlist_submit=0 hardware_encode=1 all_idr=1 protocol=tme1 version=1 egress_path=smoltcp-borrowed-direct-nic-dma-fill session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} producer_queue_wait_events={} producer_queue_wait_us={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_sampled_fnv1a32=0x{:08X} source_last_sampled_fnv1a32=0x{:08X} source_changes={} capture_avg_us={} capture_max_us={} convert_wall_avg_us={} convert_wall_max_us={} convert_gpu_avg_us={} convert_gpu_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=prepare+encode+independent-egress buffering=double+bounded-au-queue prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} egress_worker_slot={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
             delivered as u8,
             delivered as u8,
             cadence_target_met as u8,
@@ -530,19 +1034,14 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
             stats.source_height,
             ENCODE_WIDTH,
             ENCODE_HEIGHT,
-            ENCODE_WIDTH,
-            ACTIVE_HEIGHT,
             stats.composition_gpu_frames,
+            stats.composition_cpu_frames,
             stats.composition_layers_max,
             average_u64(stats.composition_gpu_us, stats.composition_gpu_frames),
             stats.composition_gpu_max_us,
-            average_u64(stats.capture_us, stats.frames),
-            stats.capture_max_us,
-            average_u64(stats.conversion_wall_us, stats.frames),
-            stats.conversion_wall_max_us,
-            average_u64(stats.conversion_gpu_us, stats.frames),
-            stats.conversion_gpu_max_us,
-            SOURCE_RGBA_BYTES,
+            (stats.composition_cpu_frames != 0) as u8,
+            ENCODE_WIDTH,
+            ACTIVE_HEIGHT,
             stats.slot0_scanout_frames,
             stats.slot0_scanout_pixels,
             stats.spirit_overlay_frames,
@@ -558,6 +1057,8 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
             udp_report.dropped_bytes,
             udp_report.high_water_access_units,
             udp_report.high_water_bytes,
+            udp_report.producer_queue_wait_events,
+            udp_report.producer_queue_wait_us,
             udp_report.submit_retries,
             udp_report.adapter_backpressure_events,
             udp_report.adapter_send_errors,
@@ -566,6 +1067,15 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
             udp_report.late_access_units,
             udp_report.max_late_us,
             udp_report.elapsed_us,
+            stats.first_source_fnv1a32,
+            stats.last_source_fnv1a32,
+            stats.source_changes,
+            average_u64(stats.capture_us, stats.frames),
+            stats.capture_max_us,
+            average_u64(stats.convert_wall_us, stats.frames),
+            stats.convert_wall_max_us,
+            average_u64(stats.convert_gpu_us, stats.frames),
+            stats.convert_gpu_max_us,
             average_u64(stats.encode_us, stats.frames),
             stats.encode_max_us,
             average_usize(stats.coded_bytes, stats.frames),
@@ -576,8 +1086,11 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
             udp_report.peer_addr[3],
             udp_report.peer_port,
             crate::allcaps::media_encode::VALIDATION_SESSION_SECONDS,
+            PREPARE_SLOT_COUNT,
+            PREPARE_WORKER_SLOT.load(Ordering::Acquire),
             worker_slot,
             worker_kind,
+            super::h264_encode_udp::egress_worker_slot(),
         );
 
         if !delivered {
@@ -599,142 +1112,33 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
     }
 }
 
-async fn encode_hardware_scanout(
+async fn encode_prepared_scanout(
     session_id: u32,
     sequence: u32,
-    rgba_mirror: &mut Option<EncodeDmaBuffer>,
-    nv12: &mut Option<EncodeDmaBuffer>,
     stats: &mut LiveEncodeStats,
 ) -> Option<Vec<u8>> {
-    if rgba_mirror.is_none() {
-        *rgba_mirror = EncodeDmaBuffer::allocate_gpu_target(SOURCE_RGBA_BYTES);
+    let mut prepared = take_prepared_scanout(session_id, sequence)?;
+    if !prepared.valid {
+        release_prepared_scanout(&mut prepared);
+        return None;
     }
-    if nv12.is_none() {
-        *nv12 = EncodeDmaBuffer::allocate_gpu_target(ENCODE_NV12_BYTES);
-    }
-    let mirror = rgba_mirror.as_ref()?;
-    let target = nv12.as_ref()?;
-    let source = crate::intel::gpgpu::GpgpuRgba8Surface::new(
-        mirror.phys,
-        crate::intel::gpgpu::UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE,
-        mirror.bytes,
-        TEST_RIG_SCANOUT_WIDTH,
-        TEST_RIG_SCANOUT_HEIGHT,
-        TEST_RIG_SCANOUT_WIDTH.saturating_mul(4),
-    )?;
-    let destination = crate::intel::gpgpu::GpgpuNv12LinearSurface::new(
-        target.phys,
-        crate::intel::gpgpu::UI4_STREAM_NV12_DESTINATION_GPU,
-        target.bytes,
-        ENCODE_WIDTH as u32,
-        ENCODE_HEIGHT as u32,
-        ENCODE_WIDTH as u32,
-    )?;
 
-    let composition_started_ns = crate::chronos::monotonic_nanos();
-    let capture = match super::screenshot::capture_stream_scanout_to_rgba_hardware(source).await {
-        Ok(capture) => capture,
-        Err(error) => {
-            crate::log_error!(target: "intel/media-encode";
-                "intel/media-encode: live frame rejected session={} sequence={} stage=selected-layers-rgba-mirror error={:?} rgba_mirror_bytes={} cpu_pixel_access=0 software_fallback=0\n",
-                session_id,
-                sequence,
-                error,
-                SOURCE_RGBA_BYTES,
-            );
-            return None;
-        }
-    };
-    let composition_wall_us =
-        crate::chronos::monotonic_nanos().saturating_sub(composition_started_ns) / 1_000;
-    crate::log_trace!(target: "intel/media-encode";
-        "intel/media-encode: rgba-mirror retired session={} sequence={} engine=guc-rcs kernel=ui4-compose-layers-rgba8 selected_layers={} logical={}x{} destination={}x{} wall_us={} gpu_walker_us={} slot0_pixels={} spirit_pixels={} gpu_dispatches=1 rgba_mirror_bytes={} cpu_pixel_reads=0 cpu_pixel_writes=0\n",
-        session_id,
-        sequence,
-        capture.compose_layers,
-        capture.width,
-        capture.height,
-        capture.width,
-        capture.height,
-        composition_wall_us,
-        capture.compose_gpu_us,
-        capture.slot0_scanout_pixels,
-        capture.spirit_overlay_pixels,
-        SOURCE_RGBA_BYTES,
-    );
-
-    let conversion_started_ns = crate::chronos::monotonic_nanos();
-    let conversion_submission = loop {
-        match crate::intel::gpgpu::queue_ui4_stream_rgba8_to_nv12_linear(
-            source,
-            destination,
-            ACTIVE_TOP as u32,
-            ACTIVE_HEIGHT as u32,
-        ) {
-            Ok(submission) => break submission,
-            Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
-                Timer::after(Duration::from_millis(1)).await;
-            }
-            Err(error) => {
-                crate::log_error!(target: "intel/media-encode";
-                    "intel/media-encode: live frame rejected session={} sequence={} stage=rgba-mirror-to-nv12-submit error={:?} cpu_pixel_access=0 software_fallback=0\n",
-                    session_id,
-                    sequence,
-                    error,
-                );
-                return None;
-            }
-        }
-    };
-    let conversion_gpu_us = loop {
-        match crate::intel::gpgpu::poll_ui4_compositor_submission(conversion_submission) {
-            crate::intel::gpgpu::Ui4CompositorCompletion::Pending => {
-                Timer::after(Duration::from_millis(1)).await;
-            }
-            crate::intel::gpgpu::Ui4CompositorCompletion::Complete(completion) => {
-                break completion.probe.gpu_walker_us;
-            }
-            crate::intel::gpgpu::Ui4CompositorCompletion::Failed
-            | crate::intel::gpgpu::Ui4CompositorCompletion::InvalidSubmission => {
-                crate::log_error!(target: "intel/media-encode";
-                    "intel/media-encode: live frame rejected session={} sequence={} stage=rgba-mirror-to-nv12-completion action=reject-frame software_fallback=0\n",
-                    session_id,
-                    sequence,
-                );
-                return None;
-            }
-        }
-    };
-    let conversion_wall_us =
-        crate::chronos::monotonic_nanos().saturating_sub(conversion_started_ns) / 1_000;
-    crate::log_trace!(target: "intel/media-encode";
-        "intel/media-encode: rgba-to-nv12 retired session={} sequence={} engine=guc-rcs kernel=ui4-rgba8-to-nv12-linear source={}x{} destination={}x{} active={}x{}@0,{} wall_us={} gpu_walker_us={} gpu_dispatches=1 cpu_pixel_math=0 cpu_nv12_copy_bytes=0\n",
-        session_id,
-        sequence,
-        capture.width,
-        capture.height,
-        ENCODE_WIDTH,
-        ENCODE_HEIGHT,
-        ENCODE_WIDTH,
-        ACTIVE_HEIGHT,
-        ACTIVE_TOP,
-        conversion_wall_us,
-        conversion_gpu_us,
-    );
-
-    let Some(surface) =
-        crate::intel::media::avc_encode_probe::AvcNv12DmaSurface::new(target.phys, target.bytes)
-    else {
-        crate::log_error!(target: "intel/media-encode";
-            "intel/media-encode: live frame rejected session={} sequence={} stage=vdbox-nv12-surface-contract cpu_pixel_access=0 software_fallback=0\n",
-            session_id,
-            sequence,
-        );
+    STATE.store(H264EncodeStreamState::Encoding as u8, Ordering::Release);
+    let Some(nv12) = prepared.nv12.as_ref() else {
+        release_prepared_scanout(&mut prepared);
+        STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
         return None;
     };
-    STATE.store(H264EncodeStreamState::Encoding as u8, Ordering::Release);
+    let Some(surface) = crate::intel::media::avc_encode_probe::AvcNv12DmaSurface::new(
+        nv12.phys, nv12.virt, nv12.bytes,
+    ) else {
+        release_prepared_scanout(&mut prepared);
+        STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
+        return None;
+    };
     let encode = crate::intel::media::avc_encode_probe::run_nv12_dma_frame(surface).await;
     STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
+    release_prepared_scanout(&mut prepared);
     if encode.state != crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Passed
         || !encode.coded_output_validated
     {
@@ -752,39 +1156,54 @@ async fn encode_hardware_scanout(
     }
     let Some(annex_b) = crate::intel::media::avc_encode_probe::take_coded_access_unit() else {
         crate::log_error!(target: "intel/media-encode";
-            "intel/media-encode: live frame rejected session={} sequence={} stage=coded-au-handoff reason=validated-access-unit-unavailable software_fallback=0\n",
-            session_id,
+            "intel/media-encode: live frame rejected sequence={} stage=coded-au-handoff reason=validated-access-unit-unavailable software_fallback=0\n",
             sequence,
         );
         return None;
     };
 
+    if stats.frames == 0 {
+        stats.first_source_fnv1a32 = prepared.source_fnv1a32;
+    } else if stats.last_source_fnv1a32 != prepared.source_fnv1a32 {
+        stats.source_changes = stats.source_changes.saturating_add(1);
+    }
     stats.frames = stats.frames.saturating_add(1);
-    stats.source_width = capture.width;
-    stats.source_height = capture.height;
-    stats.capture_us = stats.capture_us.saturating_add(composition_wall_us);
-    stats.capture_max_us = stats.capture_max_us.max(composition_wall_us);
-    stats.composition_gpu_frames = stats.composition_gpu_frames.saturating_add(1);
-    stats.composition_layers_max = stats.composition_layers_max.max(capture.compose_layers);
+    stats.source_width = prepared.source_width;
+    stats.source_height = prepared.source_height;
+    stats.last_source_fnv1a32 = prepared.source_fnv1a32;
+    stats.capture_us = stats.capture_us.saturating_add(prepared.capture_us);
+    stats.capture_max_us = stats.capture_max_us.max(prepared.capture_us);
+    if prepared.composition_gpu {
+        stats.composition_gpu_frames = stats.composition_gpu_frames.saturating_add(1);
+    } else {
+        stats.composition_cpu_frames = stats.composition_cpu_frames.saturating_add(1);
+    }
+    stats.composition_layers_max = stats
+        .composition_layers_max
+        .max(prepared.composition_layers);
     stats.composition_gpu_us = stats
         .composition_gpu_us
-        .saturating_add(capture.compose_gpu_us);
-    stats.composition_gpu_max_us = stats.composition_gpu_max_us.max(capture.compose_gpu_us);
-    stats.conversion_wall_us = stats.conversion_wall_us.saturating_add(conversion_wall_us);
-    stats.conversion_wall_max_us = stats.conversion_wall_max_us.max(conversion_wall_us);
-    stats.conversion_gpu_us = stats.conversion_gpu_us.saturating_add(conversion_gpu_us);
-    stats.conversion_gpu_max_us = stats.conversion_gpu_max_us.max(conversion_gpu_us);
-    if capture.slot0_scanout_pixels != 0 {
+        .saturating_add(prepared.composition_gpu_us);
+    stats.composition_gpu_max_us = stats
+        .composition_gpu_max_us
+        .max(prepared.composition_gpu_us);
+    stats.convert_wall_us = stats
+        .convert_wall_us
+        .saturating_add(prepared.convert_wall_us);
+    stats.convert_wall_max_us = stats.convert_wall_max_us.max(prepared.convert_wall_us);
+    stats.convert_gpu_us = stats.convert_gpu_us.saturating_add(prepared.convert_gpu_us);
+    stats.convert_gpu_max_us = stats.convert_gpu_max_us.max(prepared.convert_gpu_us);
+    if prepared.slot0_scanout_pixels != 0 {
         stats.slot0_scanout_frames = stats.slot0_scanout_frames.saturating_add(1);
         stats.slot0_scanout_pixels = stats
             .slot0_scanout_pixels
-            .saturating_add(capture.slot0_scanout_pixels);
+            .saturating_add(prepared.slot0_scanout_pixels);
     }
-    if capture.spirit_overlay_pixels != 0 {
+    if prepared.spirit_overlay_pixels != 0 {
         stats.spirit_overlay_frames = stats.spirit_overlay_frames.saturating_add(1);
         stats.spirit_overlay_pixels = stats
             .spirit_overlay_pixels
-            .saturating_add(capture.spirit_overlay_pixels);
+            .saturating_add(prepared.spirit_overlay_pixels);
     }
     stats.encode_us = stats.encode_us.saturating_add(encode.elapsed_us);
     stats.encode_max_us = stats.encode_max_us.max(encode.elapsed_us);
@@ -794,6 +1213,25 @@ async fn encode_hardware_scanout(
     SOURCE_BYTES.store(ENCODE_NV12_BYTES, Ordering::Release);
     ENCODED_BYTES.store(annex_b.len(), Ordering::Release);
     Some(annex_b)
+}
+
+fn fnv1a32_sampled(bytes: &[u8]) -> u32 {
+    const MAX_SAMPLES: usize = 4096;
+
+    let mut hash = 0x811c_9dc5u32;
+    let samples = bytes.len().min(MAX_SAMPLES);
+    if samples == 0 {
+        return hash;
+    }
+    for sample in 0..samples {
+        let offset =
+            sample.saturating_mul(bytes.len().saturating_sub(1)) / samples.saturating_sub(1).max(1);
+        hash ^= u32::from(bytes[offset]);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash ^= bytes.len() as u32;
+    hash = hash.wrapping_mul(0x0100_0193);
+    hash
 }
 
 fn average_u64(total: u64, count: usize) -> u64 {

@@ -238,65 +238,6 @@ fn direct_rcs_write_ui4_rgba8_to_nv12_payload_at(
     true
 }
 
-fn direct_rcs_write_ui4_compose_layers_to_nv12_payload_at(
-    state: DirectRcsState,
-    payload_offset: usize,
-    params: Ui4ComposeLayersToNv12LinearParams,
-) -> bool {
-    if payload_offset + UI4_COMPOSE_LAYERS_TO_NV12_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
-        return false;
-    }
-    unsafe {
-        let payload = state.batch_virt.add(payload_offset);
-        core::ptr::write_bytes(payload, 0, UI4_COMPOSE_LAYERS_TO_NV12_INDIRECT_BYTES);
-        let dwords = payload as *mut u32;
-        core::ptr::write_volatile(dwords.add(3), 16);
-        core::ptr::write_volatile(dwords.add(4), 1);
-        core::ptr::write_volatile(dwords.add(5), 1);
-        core::ptr::write_volatile(dwords.add(8), 16);
-        core::ptr::write_volatile(dwords.add(9), 1);
-        core::ptr::write_volatile(dwords.add(10), 1);
-        core::ptr::write_volatile(dwords.add(12), params.layers_gpu as u32);
-        core::ptr::write_volatile(dwords.add(13), (params.layers_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
-        core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
-
-        let Some(known) = super::opencl::registry::known_aot_kernel(
-            UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_KERNEL_NAME,
-        ) else {
-            return false;
-        };
-        let cross_thread = core::slice::from_raw_parts_mut(
-            payload,
-            UI4_COMPOSE_LAYERS_TO_NV12_CROSS_THREAD_BYTES,
-        );
-        let values = (|| {
-            let mut writer = super::opencl::KernelValueWriter::new(known.contract, cross_thread)?;
-            writer.set_u32(2, params.logical_width)?;
-            writer.set_u32(3, params.logical_height)?;
-            writer.set_u32(4, params.dst_pitch_bytes)?;
-            writer.set_u32(5, params.dst_width)?;
-            writer.set_u32(6, params.dst_height)?;
-            writer.set_u32(7, params.active_top)?;
-            writer.set_u32(8, params.active_height)?;
-            writer.set_u32(9, params.layer_count)?;
-            writer.finish()?;
-            Ok::<(), super::opencl::KernelValueError>(())
-        })();
-        if values.is_err() {
-            return false;
-        }
-
-        let local_ids = payload.add(UI4_COMPOSE_LAYERS_TO_NV12_CROSS_THREAD_BYTES) as *mut u16;
-        for lane in 0..16usize {
-            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
-            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
-            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
-        }
-    }
-    true
-}
-
 fn direct_rcs_write_copy_rect_payload_at(
     state: DirectRcsState,
     payload_offset: usize,

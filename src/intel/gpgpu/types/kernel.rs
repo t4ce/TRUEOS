@@ -140,22 +140,6 @@ struct Ui4ComposeLayersParams {
     flags: u32,
 }
 
-#[derive(Copy, Clone, Debug)]
-struct Ui4ComposeLayersToNv12LinearParams {
-    layers_gpu: u64,
-    dst_gpu: u64,
-    logical_width: u32,
-    logical_height: u32,
-    dst_pitch_bytes: u32,
-    dst_width: u32,
-    dst_height: u32,
-    active_top: u32,
-    active_height: u32,
-    layer_count: u32,
-}
-
-const UI4_COMPOSE_LAYER_FLAG_BGRA: u32 = 1 << 0;
-
 pub(crate) const UI4_COMPOSE_FLAG_BASE_XRGB: u32 = 1 << 0;
 pub(crate) const UI4_COMPOSE_FLAG_DEST_XRGB: u32 = 1 << 1;
 

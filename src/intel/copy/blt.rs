@@ -206,10 +206,6 @@ pub(crate) struct GucBcs0RgbaSurface {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) pitch_bytes: u32,
-    /// Preserve the producer's PAT3/UC PPGTT contract. Cache policy is part
-    /// of the surface identity: a scanout-authored allocation must not be
-    /// sampled through a PAT0/WB synonym by BCS0.
-    pub(crate) scanout_cache: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -494,11 +490,7 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
     let Some(state) = direct_blt_state_once() else {
         return Err(GucBcs0CopySubmitError::Unavailable);
     };
-    // This entry point hands its output directly to a display plane. Reject a
-    // destination whose declared cache contract would recreate a WB-to-scanout
-    // transition after BCS retirement.
-    if !destination.scanout_cache
-        || !guc_blt_valid_surface(destination)
+    if !guc_blt_valid_surface(destination)
         || copies.is_empty()
         || copies.len() > GUC_BLT_UI4_MAX_COPIES
     {
@@ -1039,11 +1031,7 @@ fn guc_blt_map_ui4_surfaces(
         destination.gpu,
         destination.phys,
         destination.bytes,
-        if destination.scanout_cache {
-            pte_present_rw_scanout_uc
-        } else {
-            pte_present_rw_wb
-        },
+        pte_present_rw_scanout_uc,
     ) {
         return false;
     }
@@ -1057,11 +1045,7 @@ fn guc_blt_map_ui4_surfaces(
             copy.source.gpu,
             copy.source.phys,
             copy.source.bytes,
-            if copy.source.scanout_cache {
-                pte_present_rw_scanout_uc
-            } else {
-                pte_present_rw_wb
-            },
+            pte_present_rw_wb,
         ) {
             return false;
         }

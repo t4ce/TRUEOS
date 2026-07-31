@@ -8,19 +8,19 @@ pub(crate) fn queue_ui4_compositor_layers(
     damage: GpgpuRect,
     flags: u32,
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
-    queue_ui4_compositor_layers_mode(base, dst, layers, damage, flags, true, false)
+    queue_ui4_compositor_layers_mode(base, dst, layers, damage, flags, true)
 }
 
 /// Compose the explicitly selected RDP layers into its off-screen RGBA mirror.
-/// The mirror stays PAT0/WB for the immediately following RGBA-to-NV12 pass.
-/// Producer addresses are sampled through compositor-private aliases because
-/// display VAs such as slot 4's 0x4000_0000 are outside this context's PPGTT.
+/// Unlike a display destination, this allocation remains PAT0/WB before the
+/// immediately following RGBA-to-NV12 dispatch; it must never take the PAT3/UC
+/// scanout mapping used by ordinary UI4 plane composition.
 pub(crate) fn queue_ui4_stream_compositor_layers(
     dst: GpgpuRgba8Surface,
     layers: &[GpgpuUi4ComposeLayer],
     damage: GpgpuRect,
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
-    queue_ui4_compositor_layers_mode(None, dst, layers, damage, 0, false, true)
+    queue_ui4_compositor_layers_mode(None, dst, layers, damage, 0, false)
 }
 
 fn queue_ui4_compositor_layers_mode(
@@ -30,9 +30,7 @@ fn queue_ui4_compositor_layers_mode(
     damage: GpgpuRect,
     flags: u32,
     destination_scanout_cache: bool,
-    stream_source_aliases: bool,
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
-    let mut probe = GpgpuSubmissionProbe::default();
     if !dst.is_valid()
         || damage.x < 0
         || damage.y < 0
@@ -81,56 +79,15 @@ fn queue_ui4_compositor_layers_mode(
     let desc = ui4_compositor_sprite_quad_desc_buffer_once()
         .ok_or(Ui4CompositorSubmitError::Unavailable)?;
 
-    let mut pat0_alias = UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE;
-    let mut pat3_alias = UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE;
-    let mut source_addresses = Vec::with_capacity(layers.len());
-    for layer in layers {
-        if !stream_source_aliases {
-            source_addresses.push(layer.src.gpu);
-            continue;
-        }
-        let aligned_bytes = u64::try_from(layer.src.bytes)
-            .ok()
-            .and_then(|bytes| bytes.checked_add((super::WARM_ALIGN - 1) as u64))
-            .map(|bytes| bytes & !((super::WARM_ALIGN - 1) as u64))
-            .ok_or(Ui4CompositorSubmitError::InvalidWorklist)?;
-        let (alias, next, limit) = if layer.src_scanout_cache {
-            let alias = pat3_alias;
-            let next = alias
-                .checked_add(aligned_bytes)
-                .ok_or(Ui4CompositorSubmitError::InvalidWorklist)?;
-            (alias, next, UI4_STREAM_SOURCE_ALIAS_GPU_LIMIT)
-        } else {
-            let alias = pat0_alias;
-            let next = alias
-                .checked_add(aligned_bytes)
-                .ok_or(Ui4CompositorSubmitError::InvalidWorklist)?;
-            (alias, next, UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE)
-        };
-        if next > limit {
-            return Err(Ui4CompositorSubmitError::InvalidWorklist);
-        }
-        if layer.src_scanout_cache {
-            pat3_alias = next;
-        } else {
-            pat0_alias = next;
-        }
-        source_addresses.push(alias);
-    }
-
     unsafe {
         core::ptr::write_bytes(desc.virt, 0, desc.bytes);
         let out = desc.virt as *mut GpgpuUi4ComposeLayerDesc;
-        for (index, (layer, source_gpu)) in layers
-            .iter()
-            .zip(source_addresses.iter().copied())
-            .enumerate()
-        {
+        for (index, layer) in layers.iter().enumerate() {
             core::ptr::write_volatile(
                 out.add(index),
                 GpgpuUi4ComposeLayerDesc {
-                    src_gpu_lo: source_gpu as u32,
-                    src_gpu_hi: (source_gpu >> 32) as u32,
+                    src_gpu_lo: layer.src.gpu as u32,
+                    src_gpu_hi: (layer.src.gpu >> 32) as u32,
                     src_pitch_bytes: layer.src.pitch_bytes,
                     src_width: layer.src.width,
                     src_height: layer.src.height,
@@ -139,10 +96,7 @@ fn queue_ui4_compositor_layers_mode(
                     dst_width: layer.dst_width,
                     dst_height: layer.dst_height,
                     opacity: layer.opacity as u32,
-                    flags: match layer.src.storage_order {
-                        GpgpuRgba8StorageOrder::Rgba => 0,
-                        GpgpuRgba8StorageOrder::Bgra => UI4_COMPOSE_LAYER_FLAG_BGRA,
-                    },
+                    flags: 0,
                     reserved: 0,
                 },
             );
@@ -151,9 +105,6 @@ fn queue_ui4_compositor_layers_mode(
     super::dma_flush(desc.virt, desc.bytes);
 
     let forcewake_ok = direct_rcs_forcewake(dev);
-    if forcewake_ok {
-        probe.gpu_timestamp_frequency_hz = u64::from(direct_rcs_timestamp_frequency_hz(dev));
-    }
     let mapped_ok = forcewake_ok && (runtime.state_mapped || direct_rcs_map_state(dev, state));
     if mapped_ok {
         runtime.state_mapped = true;
@@ -166,15 +117,18 @@ fn queue_ui4_compositor_layers_mode(
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
     // Overlay composition uses the destination itself as the preserved base.
     // A display-bound destination is mapped exactly once as PAT3/UC; the RDP
-    // mirror remains PAT0/WB for its following conversion dispatch.
+    // mirror stays PAT0/WB for the following conversion dispatch. Rewriting
+    // either VA between policies recreates the cache transition that corrupted
+    // earlier producer/display handoffs.
     let base_ok = kernel_ok
         && if base_is_dst && destination_scanout_cache {
             direct_rcs_map_ppgtt_scanout(state, base.gpu, base.phys, base.bytes)
         } else {
             direct_rcs_map_ppgtt_kernel(state, base.gpu, base.phys, base.bytes)
         };
-    // Sources retain their producer-stable policy. Stream sources use private
-    // addresses, while ordinary display composition retains the producer VA.
+    // Display-bound allocations follow the proven PAT3/UC scanout contract;
+    // an off-screen stream mirror remains PAT0/WB. Sources retain their
+    // producer-stable policy and descriptors remain PAT0/WB.
     let dst_ok = base_ok
         && (base_is_dst
             || if destination_scanout_cache {
@@ -184,33 +138,17 @@ fn queue_ui4_compositor_layers_mode(
             });
     let desc_ok = dst_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
     let mut sources_ok = desc_ok;
-    for (index, (layer, source_gpu)) in layers
-        .iter()
-        .zip(source_addresses.iter().copied())
-        .enumerate()
-    {
+    for layer in layers {
         if !sources_ok {
             break;
         }
         let mapped = if layer.src_scanout_cache {
-            direct_rcs_map_ppgtt_scanout(state, source_gpu, layer.src.phys, layer.src.bytes)
+            direct_rcs_map_ppgtt_scanout(state, layer.src.gpu, layer.src.phys, layer.src.bytes)
         } else {
-            direct_rcs_map_ppgtt_kernel(state, source_gpu, layer.src.phys, layer.src.bytes)
+            direct_rcs_map_ppgtt_kernel(state, layer.src.gpu, layer.src.phys, layer.src.bytes)
         };
         if !mapped {
             sources_ok = false;
-            if stream_source_aliases {
-                crate::log_error!(target: "ui4";
-                    "ui4/guc-stream-compose: source alias rejected index={} producer_gpu=0x{:X} alias_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} pat={} ppgtt_limit=0x{:X}\n",
-                    index,
-                    layer.src.gpu,
-                    source_gpu,
-                    layer.src.phys,
-                    layer.src.bytes,
-                    if layer.src_scanout_cache { 3 } else { 0 },
-                    UI4_STREAM_SOURCE_ALIAS_GPU_LIMIT,
-                );
-            }
         }
     }
     let params = Ui4ComposeLayersParams {
@@ -251,7 +189,6 @@ fn queue_ui4_compositor_layers_mode(
         );
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
-    probe.gpu_host_pre_submit_timestamp = direct_rcs_read_render_timestamp(dev);
     let started_tick = direct_rcs_now_tick();
     let Some(gpu) = direct_rcs_submit_batch_with_runtime(
         dev,
@@ -265,10 +202,6 @@ fn queue_ui4_compositor_layers_mode(
     let admitted_tick = direct_rcs_now_tick();
     runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
     let serial = runtime.next_serial;
-    probe.guc_h2g_publish_sequence = gpu.physical_publish_sequence();
-    if crate::intel::guc_ctb::h2g_sequence_consumed(probe.guc_h2g_publish_sequence) {
-        probe.gpu_h2g_consumed_observe_timestamp = direct_rcs_read_render_timestamp(dev);
-    }
     let submission = Ui4CompositorSubmission { serial, gpu };
     runtime.pending.push_back(Ui4CompositorPending {
         submission,
@@ -284,7 +217,7 @@ fn queue_ui4_compositor_layers_mode(
             walkers: 1,
             submits: 1,
             submit_ms: 0,
-            probe,
+            probe: GpgpuSubmissionProbe::default(),
         },
         overdue_logged: false,
     });
@@ -300,18 +233,6 @@ fn queue_ui4_compositor_layers_mode(
         if base_is_dst && destination_scanout_cache { "dst-pat3-uc" } else { "pat0-wb" },
         if destination_scanout_cache { "pat3-uc" } else { "pat0-wb" },
     );
-    if stream_source_aliases {
-        crate::log_trace!(target: "ui4";
-            "ui4/guc-stream-compose: queued serial={} layers={} logical={}x{} destination_gpu=0x{:X} source_alias_pat0_bytes=0x{:X} source_alias_pat3_bytes=0x{:X} destination_cache=pat0-wb dispatches=1 cpu_pixel_access=0\n",
-            serial,
-            layers.len(),
-            dst.width,
-            dst.height,
-            dst.gpu,
-            pat0_alias.saturating_sub(UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE),
-            pat3_alias.saturating_sub(UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE),
-        );
-    }
     Ok(submission)
 }
 
@@ -872,306 +793,6 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     Ok(submission)
 }
 
-/// Compose the exact set of RDP-visible layers, downsample it, and convert it
-/// directly into VDBOX's linear NV12 input in one RCS dispatch. The CPU only
-/// authors the small layer table; it never maps or samples a frame's pixels.
-pub(crate) fn queue_ui4_stream_layers_to_nv12_linear(
-    layers: &[GpgpuUi4ComposeLayer],
-    logical_width: u32,
-    logical_height: u32,
-    destination: GpgpuNv12LinearSurface,
-    active_top: u32,
-    active_height: u32,
-) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
-    let queue_started_tick = direct_rcs_now_tick();
-    let mut probe = GpgpuSubmissionProbe::default();
-    // Zero selected layers is a valid black frame. In particular, stream
-    // liveness must not depend on a mouse-created slot-4 overlay being present.
-    if layers.len() > UI4_COMPOSE_LAYERS_MAX_LAYERS
-        || logical_width == 0
-        || logical_height == 0
-        || !destination.is_valid()
-        || destination.gpu != UI4_STREAM_NV12_DESTINATION_GPU
-        || destination.bytes > UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES
-        || destination.width % 2 != 0
-        || destination.height % 2 != 0
-        || !active_top.is_multiple_of(2)
-        || !active_height.is_multiple_of(2)
-        || active_height == 0
-        || active_top
-            .checked_add(active_height)
-            .is_none_or(|bottom| bottom > destination.height)
-        || layers.iter().any(|layer| {
-            !layer.src.is_valid()
-                || layer.dst_width == 0
-                || layer.dst_height == 0
-                || gpu_ranges_overlap(
-                    layer.src.gpu,
-                    layer.src.bytes,
-                    destination.gpu,
-                    destination.bytes,
-                )
-                || gpu_ranges_overlap(
-                    layer.src.phys,
-                    layer.src.bytes,
-                    destination.phys,
-                    destination.bytes,
-                )
-        })
-    {
-        return Err(Ui4CompositorSubmitError::InvalidWorklist);
-    }
-
-    let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
-    if !runtime.pending.is_empty() {
-        return Err(Ui4CompositorSubmitError::Busy);
-    }
-    let job_slot = 0usize;
-    let dev = super::claimed_device().ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let upload = upload_ui4_compose_layers_to_nv12_linear_kernel()
-        .ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let shared_state =
-        ui4_compositor_rcs_state_once(dev).ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let state =
-        direct_rcs_job_slot(shared_state, job_slot).ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let desc = ui4_compositor_sprite_quad_desc_buffer_once()
-        .ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let descriptor_bytes = layers
-        .len()
-        .checked_mul(core::mem::size_of::<GpgpuUi4ComposeLayerDesc>())
-        .filter(|bytes| *bytes <= desc.bytes)
-        .ok_or(Ui4CompositorSubmitError::InvalidWorklist)?;
-
-    // Producer GPU addresses belong to their owning display/render address
-    // spaces. In particular, slot 4's stable display VA begins at the exact
-    // end of this RCS context's PPGTT. Pack the physical sources into two
-    // compositor-private VA ranges instead of borrowing those producer VAs.
-    // Separate cursors preserve each source's established PAT policy across
-    // changing layer order and selection.
-    let mut pat0_alias = UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE;
-    let mut pat3_alias = UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE;
-    let mut source_aliases = Vec::with_capacity(layers.len());
-    for layer in layers {
-        let aligned_bytes = u64::try_from(layer.src.bytes)
-            .ok()
-            .and_then(|bytes| bytes.checked_add((super::WARM_ALIGN - 1) as u64))
-            .map(|bytes| bytes & !((super::WARM_ALIGN - 1) as u64))
-            .ok_or(Ui4CompositorSubmitError::InvalidWorklist)?;
-        let (alias, next, limit) = if layer.src_scanout_cache {
-            let alias = pat3_alias;
-            let next = alias
-                .checked_add(aligned_bytes)
-                .ok_or(Ui4CompositorSubmitError::InvalidWorklist)?;
-            (alias, next, UI4_STREAM_SOURCE_ALIAS_GPU_LIMIT)
-        } else {
-            let alias = pat0_alias;
-            let next = alias
-                .checked_add(aligned_bytes)
-                .ok_or(Ui4CompositorSubmitError::InvalidWorklist)?;
-            (alias, next, UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE)
-        };
-        if next > limit {
-            return Err(Ui4CompositorSubmitError::InvalidWorklist);
-        }
-        if layer.src_scanout_cache {
-            pat3_alias = next;
-        } else {
-            pat0_alias = next;
-        }
-        source_aliases.push(alias);
-    }
-
-    unsafe {
-        core::ptr::write_bytes(desc.virt, 0, descriptor_bytes);
-        let out = desc.virt as *mut GpgpuUi4ComposeLayerDesc;
-        for (index, (layer, source_alias)) in
-            layers.iter().zip(source_aliases.iter().copied()).enumerate()
-        {
-            core::ptr::write_volatile(
-                out.add(index),
-                GpgpuUi4ComposeLayerDesc {
-                    src_gpu_lo: source_alias as u32,
-                    src_gpu_hi: (source_alias >> 32) as u32,
-                    src_pitch_bytes: layer.src.pitch_bytes,
-                    src_width: layer.src.width,
-                    src_height: layer.src.height,
-                    dst_x: layer.dst_x,
-                    dst_y: layer.dst_y,
-                    dst_width: layer.dst_width,
-                    dst_height: layer.dst_height,
-                    opacity: layer.opacity as u32,
-                    flags: match layer.src.storage_order {
-                        GpgpuRgba8StorageOrder::Rgba => 0,
-                        GpgpuRgba8StorageOrder::Bgra => UI4_COMPOSE_LAYER_FLAG_BGRA,
-                    },
-                    reserved: 0,
-                },
-            );
-        }
-    }
-    if descriptor_bytes != 0 {
-        super::dma_flush(desc.virt, descriptor_bytes);
-    }
-
-    let params = Ui4ComposeLayersToNv12LinearParams {
-        layers_gpu: desc.gpu,
-        dst_gpu: destination.gpu,
-        logical_width,
-        logical_height,
-        dst_pitch_bytes: destination.pitch_bytes,
-        dst_width: destination.width,
-        dst_height: destination.height,
-        active_top,
-        active_height,
-        layer_count: layers.len() as u32,
-    };
-    let phase_started_tick = direct_rcs_now_tick();
-    let forcewake_ok = direct_rcs_forcewake(dev);
-    probe.forcewake_us = direct_rcs_elapsed_us_since(phase_started_tick);
-    if forcewake_ok {
-        probe.gpu_timestamp_frequency_hz = u64::from(direct_rcs_timestamp_frequency_hz(dev));
-    }
-    let phase_started_tick = direct_rcs_now_tick();
-    let state_ok =
-        forcewake_ok && (runtime.state_mapped || direct_rcs_map_state(dev, shared_state));
-    probe.state_map_us = direct_rcs_elapsed_us_since(phase_started_tick);
-    if state_ok {
-        runtime.state_mapped = true;
-    }
-    let phase_started_tick = direct_rcs_now_tick();
-    let ppgtt_ok = state_ok && (runtime.ppgtt_initialized || direct_rcs_init_ppgtt(shared_state));
-    probe.ppgtt_init_us = direct_rcs_elapsed_us_since(phase_started_tick);
-    if ppgtt_ok {
-        runtime.ppgtt_initialized = true;
-    }
-    let phase_started_tick = direct_rcs_now_tick();
-    let kernel_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    probe.kernel_map_us = direct_rcs_elapsed_us_since(phase_started_tick);
-    let phase_started_tick = direct_rcs_now_tick();
-    let desc_ok = kernel_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
-    let mut sources_ok = desc_ok;
-    for (index, (layer, source_alias)) in layers
-        .iter()
-        .zip(source_aliases.iter().copied())
-        .enumerate()
-    {
-        if !sources_ok {
-            break;
-        }
-        sources_ok = if layer.src_scanout_cache {
-            direct_rcs_map_ppgtt_scanout(state, source_alias, layer.src.phys, layer.src.bytes)
-        } else {
-            direct_rcs_map_ppgtt_kernel(state, source_alias, layer.src.phys, layer.src.bytes)
-        };
-        if !sources_ok {
-            crate::log_error!(target: "ui4";
-                "ui4/guc-stream-fused: source alias rejected index={} producer_gpu=0x{:X} alias_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} pat={} ppgtt_limit=0x{:X}\n",
-                index,
-                layer.src.gpu,
-                source_alias,
-                layer.src.phys,
-                layer.src.bytes,
-                if layer.src_scanout_cache { 3 } else { 0 },
-                UI4_STREAM_SOURCE_ALIAS_GPU_LIMIT,
-            );
-        }
-    }
-    probe.source_map_us = direct_rcs_elapsed_us_since(phase_started_tick);
-    let phase_started_tick = direct_rcs_now_tick();
-    let destination_ok = sources_ok
-        && direct_rcs_map_ppgtt_kernel(
-            state,
-            destination.gpu,
-            destination.phys,
-            destination.bytes,
-        );
-    probe.destination_map_us = direct_rcs_elapsed_us_since(phase_started_tick);
-    let phase_started_tick = direct_rcs_now_tick();
-    let batch_ok = destination_ok
-        && direct_rcs_encode_ui4_compose_layers_to_nv12_linear_batch(
-            state,
-            upload,
-            params,
-            desc.bytes,
-            destination.bytes,
-        );
-    probe.batch_encode_us = direct_rcs_elapsed_us_since(phase_started_tick);
-    if !batch_ok {
-        crate::log_error!(target: "ui4";
-            "ui4/guc-stream-fused: queue rejected forcewake={} state={} ppgtt={} kernel={} desc={} sources={} destination={} batch={} layers={} destination_gpu=0x{:X}\n",
-            forcewake_ok as u8,
-            state_ok as u8,
-            ppgtt_ok as u8,
-            kernel_ok as u8,
-            desc_ok as u8,
-            sources_ok as u8,
-            destination_ok as u8,
-            batch_ok as u8,
-            layers.len(),
-            destination.gpu,
-        );
-        return Err(Ui4CompositorSubmitError::InvalidWorklist);
-    }
-
-    probe.queue_prepare_us = direct_rcs_elapsed_us_since(queue_started_tick);
-    probe.gpu_host_pre_submit_timestamp = direct_rcs_read_render_timestamp(dev);
-    let started_tick = direct_rcs_now_tick();
-    let Some(gpu) = direct_rcs_submit_batch_with_runtime(
-        dev,
-        state,
-        &mut runtime.submit,
-        crate::gpu::vgpu::KernelClient::Ui4Compositor,
-        true,
-    ) else {
-        return Err(Ui4CompositorSubmitError::SubmissionRejected);
-    };
-    let admitted_tick = direct_rcs_now_tick();
-    probe.admission_us = direct_rcs_elapsed_us_since(started_tick);
-    probe.queue_total_us = direct_rcs_elapsed_us_since(queue_started_tick);
-    runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
-    let serial = runtime.next_serial;
-    probe.guc_h2g_publish_sequence = gpu.physical_publish_sequence();
-    if crate::intel::guc_ctb::h2g_sequence_consumed(probe.guc_h2g_publish_sequence) {
-        probe.gpu_h2g_consumed_observe_timestamp = direct_rcs_read_render_timestamp(dev);
-    }
-    let submission = Ui4CompositorSubmission { serial, gpu };
-    runtime.pending.push_back(Ui4CompositorPending {
-        submission,
-        job_slot,
-        queue_depth_at_admission: 1,
-        started_tick,
-        admitted_tick,
-        marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
-        marker_value: SPRITE_QUAD_WORKLIST_POST_MARKER,
-        kernel: "ui4-compose-layers-to-nv12-linear",
-        stats: GpgpuWorklistSubmitStats {
-            descs: layers.len(),
-            walkers: 1,
-            submits: 1,
-            submit_ms: 0,
-            probe,
-        },
-        overdue_logged: false,
-    });
-    crate::log_trace!(target: "ui4";
-        "ui4/guc-stream-fused: queued serial={} layers={} logical={}x{} destination={}x{} active={}x{}@0,{} destination_gpu=0x{:X} source_alias_pat0_bytes=0x{:X} source_alias_pat3_bytes=0x{:X} dispatches=1 rgba_mirror_bytes=0 cpu_pixel_access=0\n",
-        serial,
-        layers.len(),
-        logical_width,
-        logical_height,
-        destination.width,
-        destination.height,
-        destination.width,
-        active_height,
-        active_top,
-        destination.gpu,
-        pat0_alias.saturating_sub(UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE),
-        pat3_alias.saturating_sub(UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE),
-    );
-    Ok(submission)
-}
-
 /// Convert one CPU-composed linear RGBA8 scanout into the exact linear NV12
 /// input consumed by VDBOX. The request uses the compositor's isolated GuC RCS
 /// context. Source and destination ownership remains with the stream until it
@@ -1437,13 +1058,7 @@ pub(crate) fn poll_ui4_compositor_submission(
         pending.stats.submit_ms = direct_rcs_elapsed_ms_since(pending.started_tick);
         pending.stats.probe.submit_to_marker_us =
             direct_rcs_elapsed_us_since(pending.admitted_tick);
-        if matches!(
-            pending.kernel,
-            "nv12-media-ytile-rgba8-frame"
-                | "rgba8-linear-nv12-encode"
-                | "ui4-compose-layers"
-                | "ui4-compose-layers-to-nv12-linear"
-        ) {
+        if matches!(pending.kernel, "nv12-media-ytile-rgba8-frame" | "rgba8-linear-nv12-encode") {
             let batch_enter =
                 direct_rcs_read_result_qword(state, UI4_VIDEO_FRAME_GPU_BATCH_ENTER_TIMESTAMP_SLOT);
             let pre =
