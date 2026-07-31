@@ -273,6 +273,7 @@ struct TtsOutputState {
     completion: Mutex<Option<Result<TtsSynthesisSummary, &'static str>>>,
     closed: AtomicBool,
     cancelled: AtomicBool,
+    terminal_observed: AtomicBool,
     wait: crate::wait::WaitQueue,
 }
 
@@ -291,7 +292,26 @@ impl TtsOutputState {
             completion: Mutex::new(None),
             closed: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
+            terminal_observed: AtomicBool::new(false),
             wait: crate::wait::WaitQueue::new(),
+        }
+    }
+}
+
+impl Drop for TtsOutputState {
+    fn drop(&mut self) {
+        // Normally the sole TtsStream drains this queue. Also account for a
+        // backend factory that fails after emitting prematurely, so global
+        // observability cannot retain phantom buffered audio.
+        let chunks = self.chunks.lock();
+        let chunk_count = chunks.len();
+        let frames = chunks
+            .iter()
+            .map(|chunk| chunk.samples_i16_stereo_48k.len() / TTS_PCM_CHANNELS)
+            .sum::<usize>();
+        if chunk_count != 0 {
+            TTS_PCM_CHUNKS_BUFFERED.fetch_sub(chunk_count, Ordering::AcqRel);
+            TTS_PCM_FRAMES_BUFFERED.fetch_sub(frames as u64, Ordering::AcqRel);
         }
     }
 }
@@ -417,6 +437,10 @@ impl TtsOutput {
         self.state.cancelled.load(Ordering::Acquire)
     }
 
+    fn finished(&self) -> bool {
+        self.state.closed.load(Ordering::Acquire)
+    }
+
     fn ensure_finished(&self, result: Result<TtsSynthesisSummary, &'static str>) {
         let _ = self.finish(result);
     }
@@ -443,11 +467,16 @@ impl TtsStream {
             self.state.wait.notify_one();
             return Some(TtsStreamEvent::Chunk(chunk));
         }
-        self.state
+        let terminal = self
+            .state
             .completion
             .lock()
             .take()
-            .map(TtsStreamEvent::Finished)
+            .map(TtsStreamEvent::Finished);
+        if terminal.is_some() {
+            self.state.terminal_observed.store(true, Ordering::Release);
+        }
+        terminal
     }
 
     pub async fn next(&self) -> TtsStreamEvent {
@@ -466,6 +495,9 @@ impl TtsStream {
     /// Consumer cancellation is cooperative. It closes the chunk sink, but a
     /// backend must observe `TtsOutput::cancelled` and finish its job promptly.
     pub fn cancel(&self) {
+        if self.state.terminal_observed.load(Ordering::Acquire) {
+            return;
+        }
         self.state.cancelled.store(true, Ordering::Release);
         self.state.wait.notify_all();
     }
@@ -616,7 +648,7 @@ fn ensure_backend_warm_started() -> bool {
         );
         return false;
     }
-    match submit(job) {
+    match submit_with_completion(job, JobCompletion::None, Direction::Warmup) {
         Ok(id) => {
             crate::log_info!(
                 target: "ttstt";
@@ -667,10 +699,11 @@ pub fn submit_tts(request: TtsRequest) -> Result<TtsSubmission, SpeechRequestErr
             output: output.clone(),
         })
         .map_err(SpeechRequestError::BackendRejected)?;
-    if job.direction() != Direction::TextToSpeech {
+    let direction = job.direction();
+    if direction != Direction::TextToSpeech {
         return Err(SpeechRequestError::BackendRejected("tts-factory-returned-wrong-direction"));
     }
-    let id = submit_with_completion(job, JobCompletion::Tts(output))
+    let id = submit_with_completion(job, JobCompletion::Tts(output), direction)
         .map_err(SpeechRequestError::Service)?;
     Ok(TtsSubmission {
         id,
@@ -693,20 +726,38 @@ pub fn submit_stt(request: SttRequest) -> Result<u64, SpeechRequestError> {
     let job = backend
         .create_stt_job(request)
         .map_err(SpeechRequestError::BackendRejected)?;
-    if job.direction() != Direction::SpeechToText {
+    let direction = job.direction();
+    if direction != Direction::SpeechToText {
         return Err(SpeechRequestError::BackendRejected("stt-factory-returned-wrong-direction"));
     }
-    submit(job).map_err(SpeechRequestError::Service)
+    submit_with_completion(job, JobCompletion::None, direction).map_err(SpeechRequestError::Service)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KernelLane {
     Scalar,
+    Avx2,
+    AvxVnni,
+}
+
+impl KernelLane {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scalar => "scalar",
+            Self::Avx2 => "avx2",
+            Self::AvxVnni => "avx-vnni",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Bf16KernelLane {
+    Scalar,
     Sse2,
     Avx2Fma,
 }
 
-impl KernelLane {
+impl Bf16KernelLane {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Scalar => "scalar",
@@ -721,11 +772,15 @@ pub enum KernelError {
     InvalidShape,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct WorkerContext {
     pub slot: u32,
     pub core_kind: u8,
-    pub lane: KernelLane,
+    /// Best `u8 x i8` Kokoro lane detected on this worker's current CPU.
+    pub q8_lane: KernelLane,
+    /// Per-current-CPU dispatcher; safe entry points recheck lane support.
+    pub q8_dispatcher: trueos_ttstt_cpu::Dispatcher,
+    pub bf16_lane: Bf16KernelLane,
 }
 
 impl WorkerContext {
@@ -740,7 +795,7 @@ impl WorkerContext {
         out: &mut [f32],
         row_start: usize,
         row_end: usize,
-    ) -> Result<KernelLane, KernelError> {
+    ) -> Result<Bf16KernelLane, KernelError> {
         crate::turbo::avx2_fma_sse2_help::matvec_rowmajor_bf16_dispatch(
             x,
             weights_rowmajor_bf16,
@@ -750,7 +805,7 @@ impl WorkerContext {
             row_start,
             row_end,
         )
-        .map(map_kernel_lane)
+        .map(map_bf16_kernel_lane)
         .map_err(|_| KernelError::InvalidShape)
     }
 }
@@ -759,10 +814,15 @@ impl WorkerContext {
 pub enum SubmitError {
     NotReady,
     QueueFull,
+    TtsOutputRequired,
 }
 
 struct QueuedJob {
     id: u64,
+    /// Cache the admitted direction. `InferenceJob::direction` is not an
+    /// immutable associated value, so consulting an implementation again
+    /// would let a stateful job evade TTS serialization and counter cleanup.
+    direction: Direction,
     job: Box<dyn InferenceJob>,
     completion: JobCompletion,
 }
@@ -772,20 +832,25 @@ enum JobCompletion {
     Tts(TtsOutput),
 }
 
-/// Queue a cooperative STT/TTS backend job on the resident AP2+ worker pool.
+/// Queue a cooperative warmup or STT job on the resident AP2+ worker pool.
+/// TTS must enter through [`submit_tts`] so its bounded stream guard is present.
 pub fn submit(job: Box<dyn InferenceJob>) -> Result<u64, SubmitError> {
-    submit_with_completion(job, JobCompletion::None)
+    let direction = job.direction();
+    submit_with_completion(job, JobCompletion::None, direction)
 }
 
 fn submit_with_completion(
     job: Box<dyn InferenceJob>,
     completion: JobCompletion,
+    direction: Direction,
 ) -> Result<u64, SubmitError> {
     if ServiceState::from_u8(SERVICE_STATE.load(Ordering::Acquire)) != ServiceState::Ready {
         return Err(SubmitError::NotReady);
     }
 
-    let direction = job.direction();
+    if direction == Direction::TextToSpeech && !matches!(&completion, JobCompletion::Tts(_)) {
+        return Err(SubmitError::TtsOutputRequired);
+    }
     if direction == Direction::TextToSpeech {
         OUTSTANDING_TTS_JOBS
             .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
@@ -809,6 +874,7 @@ fn submit_with_completion(
     let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
     JOBS.lock().push_back(QueuedJob {
         id,
+        direction,
         job,
         completion,
     });
@@ -887,17 +953,21 @@ impl ModelLoadError {
     }
 }
 
-fn map_kernel_lane(lane: crate::turbo::avx2_fma_sse2_help::Bf16MatvecLane) -> KernelLane {
+fn map_bf16_kernel_lane(lane: crate::turbo::avx2_fma_sse2_help::Bf16MatvecLane) -> Bf16KernelLane {
     use crate::turbo::avx2_fma_sse2_help::Bf16MatvecLane;
     match lane {
-        Bf16MatvecLane::Scalar => KernelLane::Scalar,
-        Bf16MatvecLane::Sse2 => KernelLane::Sse2,
-        Bf16MatvecLane::Avx2Fma => KernelLane::Avx2Fma,
+        Bf16MatvecLane::Scalar => Bf16KernelLane::Scalar,
+        Bf16MatvecLane::Sse2 => Bf16KernelLane::Sse2,
+        Bf16MatvecLane::Avx2Fma => Bf16KernelLane::Avx2Fma,
     }
 }
 
-fn selected_kernel_lane() -> KernelLane {
-    map_kernel_lane(crate::turbo::avx2_fma_sse2_help::selected_bf16_matvec_lane())
+fn map_q8_kernel_lane(lane: trueos_ttstt_cpu::Lane) -> KernelLane {
+    match lane {
+        trueos_ttstt_cpu::Lane::Scalar => KernelLane::Scalar,
+        trueos_ttstt_cpu::Lane::Avx2 => KernelLane::Avx2,
+        trueos_ttstt_cpu::Lane::AvxVnni => KernelLane::AvxVnni,
+    }
 }
 
 async fn find_kokoro_model_path(
@@ -1092,11 +1162,12 @@ fn pop_job() -> Option<QueuedJob> {
     let mut jobs = JOBS.lock();
     let active_tts_id = ACTIVE_TTS_JOB_ID.load(Ordering::Acquire);
     let index = jobs.iter().position(|queued| {
-        let direction = queued.job.direction();
-        direction != Direction::TextToSpeech || active_tts_id == 0 || queued.id == active_tts_id
+        queued.direction != Direction::TextToSpeech
+            || active_tts_id == 0
+            || queued.id == active_tts_id
     })?;
     let queued = jobs.remove(index)?;
-    if queued.job.direction() == Direction::TextToSpeech && active_tts_id == 0 {
+    if queued.direction == Direction::TextToSpeech && active_tts_id == 0 {
         // The queue lock makes selection and ownership assignment one operation.
         ACTIVE_TTS_JOB_ID.store(queued.id, Ordering::Release);
     }
@@ -1158,18 +1229,24 @@ fn finish_job(queued: QueuedJob, direction: Direction, result: JobProgress) {
 
 #[embassy_executor::task(pool_size = WORKER_TASK_POOL)]
 async fn worker_task(slot: u32, core_kind: u8, models: Arc<ModelSet>) {
+    let q8_dispatcher = trueos_ttstt_cpu::Dispatcher::detect();
     let context = WorkerContext {
         slot,
         core_kind,
-        lane: selected_kernel_lane(),
+        q8_lane: map_q8_kernel_lane(q8_dispatcher.best_lane()),
+        q8_dispatcher,
+        bf16_lane: map_bf16_kernel_lane(
+            crate::turbo::avx2_fma_sse2_help::selected_bf16_matvec_lane(),
+        ),
     };
     WORKER_COUNT.fetch_add(1, Ordering::AcqRel);
     crate::log_info!(
         target: "ttstt";
-        "ttstt: worker online slot={} core_kind={} lane={} policy=ap2+-prefer-pcore\n",
+        "ttstt: worker online slot={} core_kind={} q8_lane={} bf16_lane={} policy=ap2+-prefer-pcore\n",
         slot,
         core_kind,
-        context.lane.as_str()
+        context.q8_lane.as_str(),
+        context.bf16_lane.as_str()
     );
 
     loop {
@@ -1177,8 +1254,25 @@ async fn worker_task(slot: u32, core_kind: u8, models: Arc<ModelSet>) {
             JOB_WAIT.wait_for_event_timeout(WORKER_IDLE_POLL_MS).await;
             continue;
         };
-        let direction = queued.job.direction();
+        let direction = queued.direction;
+        if matches!(&queued.completion, JobCompletion::Tts(output) if output.cancelled()) {
+            finish_job(queued, direction, JobProgress::Failed("tts-stream-cancelled"));
+            Timer::after(EmbassyDuration::from_millis(WORKER_SLICE_YIELD_MS)).await;
+            continue;
+        }
+        // A stream terminal is the output-side commit point. Do not retain the
+        // serialized owner forever if a backend closes it but mistakenly
+        // reports `Pending`, including when another output clone closes it
+        // between worker slices.
+        if matches!(&queued.completion, JobCompletion::Tts(output) if output.finished()) {
+            finish_job(queued, direction, JobProgress::Complete);
+            Timer::after(EmbassyDuration::from_millis(WORKER_SLICE_YIELD_MS)).await;
+            continue;
+        }
         match queued.job.run_slice(models.as_ref(), context) {
+            JobProgress::Pending if matches!(&queued.completion, JobCompletion::Tts(output) if output.finished()) => {
+                finish_job(queued, direction, JobProgress::Complete)
+            }
             JobProgress::Pending => requeue_job(queued),
             result => finish_job(queued, direction, result),
         }

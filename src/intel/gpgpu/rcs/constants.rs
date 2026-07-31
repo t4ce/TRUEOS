@@ -674,6 +674,114 @@ const _: () = {
     );
 };
 
+// Kokoro's quantized dense lane stages one complete admitted projection in a
+// persistent, page-aligned DMA arena.  The six regions deliberately live in
+// one allocation: one PPGTT mapping publishes the complete ABI while the
+// stateful binding table still exposes six independently-bounded surfaces.
+const KOKORO_QGEMM_MAX_MATRIX_ROWS: usize = 512;
+const KOKORO_QGEMM_MAX_OUTPUT_COLUMNS: usize = 2_180;
+const KOKORO_QGEMM_MAX_REDUCTION_WORDS: usize = 2_048 / 4;
+const KOKORO_QGEMM_PACKED_WEIGHTS_ALLOC_BYTES: usize = 0x0018_0000;
+const KOKORO_QGEMM_VECTOR_ALLOC_BYTES: usize = 0x0000_3000;
+const KOKORO_QGEMM_ACTIVATIONS_ALLOC_BYTES: usize = 0x0010_0000;
+const KOKORO_QGEMM_OUTPUT_ALLOC_BYTES: usize = 0x0044_2000;
+const KOKORO_QGEMM_PACKED_WEIGHTS_OFFSET_BYTES: usize = 0;
+const KOKORO_QGEMM_WEIGHT_SUMS_OFFSET_BYTES: usize =
+    KOKORO_QGEMM_PACKED_WEIGHTS_OFFSET_BYTES + KOKORO_QGEMM_PACKED_WEIGHTS_ALLOC_BYTES;
+const KOKORO_QGEMM_WEIGHT_SCALES_OFFSET_BYTES: usize =
+    KOKORO_QGEMM_WEIGHT_SUMS_OFFSET_BYTES + KOKORO_QGEMM_VECTOR_ALLOC_BYTES;
+const KOKORO_QGEMM_ACTIVATIONS_OFFSET_BYTES: usize =
+    KOKORO_QGEMM_WEIGHT_SCALES_OFFSET_BYTES + KOKORO_QGEMM_VECTOR_ALLOC_BYTES;
+const KOKORO_QGEMM_BIAS_OFFSET_BYTES: usize =
+    KOKORO_QGEMM_ACTIVATIONS_OFFSET_BYTES + KOKORO_QGEMM_ACTIVATIONS_ALLOC_BYTES;
+const KOKORO_QGEMM_OUTPUT_OFFSET_BYTES: usize =
+    KOKORO_QGEMM_BIAS_OFFSET_BYTES + KOKORO_QGEMM_VECTOR_ALLOC_BYTES;
+const KOKORO_QGEMM_ARENA_BYTES: usize =
+    KOKORO_QGEMM_OUTPUT_OFFSET_BYTES + KOKORO_QGEMM_OUTPUT_ALLOC_BYTES;
+const KOKORO_QGEMM_ARENA_GPU: u64 = 0x2100_0000;
+const KOKORO_QGEMM_ARENA_GPU_LIMIT: u64 = 0x2200_0000;
+
+const KOKORO_QGEMM_IDD_OFFSET_BYTES: usize = 0x7000;
+const KOKORO_QGEMM_BINDING_TABLE_OFFSET_BYTES: usize = 0x7040;
+const KOKORO_QGEMM_PACKED_WEIGHTS_SURFACE_OFFSET_BYTES: usize = 0x7080;
+const KOKORO_QGEMM_WEIGHT_SUMS_SURFACE_OFFSET_BYTES: usize = 0x70C0;
+const KOKORO_QGEMM_WEIGHT_SCALES_SURFACE_OFFSET_BYTES: usize = 0x7100;
+const KOKORO_QGEMM_ACTIVATIONS_SURFACE_OFFSET_BYTES: usize = 0x7140;
+const KOKORO_QGEMM_BIAS_SURFACE_OFFSET_BYTES: usize = 0x7180;
+const KOKORO_QGEMM_OUTPUT_SURFACE_OFFSET_BYTES: usize = 0x71C0;
+const KOKORO_QGEMM_PAYLOAD_OFFSET_BYTES: usize = 0x7400;
+const KOKORO_QGEMM_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
+const KOKORO_QGEMM_CROSS_THREAD_BYTES: usize =
+    KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes as usize;
+const KOKORO_QGEMM_PER_THREAD_BYTES: usize =
+    KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes as usize;
+const KOKORO_QGEMM_INDIRECT_BYTES: usize =
+    KOKORO_QGEMM_CROSS_THREAD_BYTES + KOKORO_QGEMM_PER_THREAD_BYTES;
+const KOKORO_QGEMM_POST_MARKER_SLOT: usize = 56;
+const KOKORO_QGEMM_PRE_MARKER_SLOT: usize = 58;
+const KOKORO_QGEMM_POST_MARKER: u32 = 0xC0DE_7A02;
+const KOKORO_QGEMM_PRE_MARKER: u32 = 0xC0DE_7A01;
+const KOKORO_QGEMM_COMPLETION_TIMEOUT_MS: u64 = 5_000;
+
+const _: () = {
+    assert!(KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.simd_width == 16);
+    assert!(KOKORO_QGEMM_CROSS_THREAD_BYTES == 128);
+    assert!(KOKORO_QGEMM_PER_THREAD_BYTES == 96);
+    assert!(KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.bindings.len() == 6);
+    assert!(KOKORO_QGEMM_MAX_REDUCTION_WORDS * 4 == 2_048);
+    assert!(
+        KOKORO_QGEMM_MAX_REDUCTION_WORDS
+            * 768
+            * core::mem::size_of::<u32>()
+            == KOKORO_QGEMM_PACKED_WEIGHTS_ALLOC_BYTES
+    );
+    assert!(
+        KOKORO_QGEMM_MAX_OUTPUT_COLUMNS * core::mem::size_of::<u32>()
+            <= KOKORO_QGEMM_VECTOR_ALLOC_BYTES
+    );
+    assert!(
+        KOKORO_QGEMM_MAX_MATRIX_ROWS
+            * KOKORO_QGEMM_MAX_REDUCTION_WORDS
+            * core::mem::size_of::<u32>()
+            == KOKORO_QGEMM_ACTIVATIONS_ALLOC_BYTES
+    );
+    assert!(
+        KOKORO_QGEMM_MAX_MATRIX_ROWS
+            * KOKORO_QGEMM_MAX_OUTPUT_COLUMNS
+            * core::mem::size_of::<f32>()
+            == KOKORO_QGEMM_OUTPUT_ALLOC_BYTES
+    );
+    assert!(KOKORO_QGEMM_ARENA_GPU.is_multiple_of(4096));
+    assert!(KOKORO_QGEMM_ARENA_BYTES.is_multiple_of(4096));
+    assert!(
+        KOKORO_QGEMM_ARENA_GPU + KOKORO_QGEMM_ARENA_BYTES as u64
+            <= KOKORO_QGEMM_ARENA_GPU_LIMIT
+    );
+    assert!(KOKORO_QGEMM_ARENA_GPU_LIMIT <= DIRECT_RCS_PPGTT_LIMIT_BYTES);
+    assert!(
+        KOKORO_QGEMM_IDD_OFFSET_BYTES + KOKORO_QGEMM_IDD_BYTES
+            <= KOKORO_QGEMM_BINDING_TABLE_OFFSET_BYTES
+    );
+    assert!(
+        KOKORO_QGEMM_OUTPUT_SURFACE_OFFSET_BYTES
+            + COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>()
+            <= KOKORO_QGEMM_PAYLOAD_OFFSET_BYTES
+    );
+    assert!(
+        KOKORO_QGEMM_PAYLOAD_OFFSET_BYTES + KOKORO_QGEMM_INDIRECT_BYTES
+            <= DIRECT_RCS_BATCH_BYTES
+    );
+    assert!(
+        KOKORO_QGEMM_PAYLOAD_OFFSET_BYTES.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES)
+    );
+    assert!(KOKORO_QGEMM_POST_MARKER_SLOT.is_multiple_of(2));
+    assert!(KOKORO_QGEMM_POST_MARKER_SLOT + 1 != KOKORO_QGEMM_PRE_MARKER_SLOT);
+    assert!(
+        (KOKORO_QGEMM_PRE_MARKER_SLOT + 1) * core::mem::size_of::<u32>()
+            <= DIRECT_RCS_RESULT_BYTES
+    );
+};
+
 // A UI4 compute producer may be queued behind the compositor on RCS0. In
 // particular, the first use of each primary swap buffer seeds and composes a
 // full scanout-sized surface, which is deliberately allowed to take much

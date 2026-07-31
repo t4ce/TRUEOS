@@ -37,8 +37,14 @@ retries without blocking boot.
 - Kokoro jobs have one active owner and remain FIFO even though the shared
   pool has multiple workers. Up to eight more service-level TTS jobs may wait;
   STT work can still use the remaining workers concurrently.
-- `WorkerContext::matvec_bf16` uses TRUEOS's runtime AVX2/FMA dispatch with its
-  established SSE2/scalar fallback.
+- Each worker constructs `trueos_ttstt_cpu::Dispatcher` after entering its AP
+  executor. Quantized Kokoro work therefore selects AVX-VNNI on the i5-14500T
+  and i9-13900K, AVX2 on the presently enabled Tiger Lake XSTATE contract, and
+  scalar only when YMM state or AVX2 is unavailable. The dispatcher is carried
+  in `WorkerContext` so a backend uses the lane detected on that worker CPU.
+- `WorkerContext::matvec_bf16` remains a separate runtime AVX2/FMA path with
+  its established SSE2/scalar fallback; status logs distinguish `q8_lane` from
+  `bf16_lane` rather than conflating the two instruction contracts.
 
 ## Backend boundary
 
@@ -79,10 +85,12 @@ plus a `TtsStream`. The native backend receives the same request with a
 - The service rejects empty, malformed, oversized, out-of-order, or
   phoneme-inconsistent chunks. `finish_success` closes only a complete model
   chunk and publishes counters calculated by the service itself.
-- Consumer cancellation closes the output side cooperatively. The backend
-  observes `TtsOutput::cancelled` and exits promptly. A TTS job that terminates
-  without closing its stream is converted into an explicit failure rather
-  than leaving shell2 waiting forever.
+- Consumer cancellation closes the output side cooperatively. The backend can
+  observe `TtsOutput::cancelled` and exit early; independently, the service
+  drops the job with `tts-stream-cancelled` before its next bounded slice. A
+  TTS job that terminates without closing its stream is converted into an
+  explicit failure rather than leaving shell2 waiting forever. Raw `submit`
+  rejects TTS jobs so callers cannot bypass this stream guard.
 
 For the packaged quantized Kokoro graph this is a substantial, explicit port:
 the ONNX file is opset 20 with 3,614 nodes across 56 operator kinds and 775
