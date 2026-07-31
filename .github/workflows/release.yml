@@ -60,6 +60,7 @@ jobs:
             autoconf \
             automake \
             build-essential \
+            curl \
             dosfstools \
             gcc \
             git \
@@ -95,7 +96,6 @@ jobs:
           test -x "${toolchain_path}/lib/ocloc/bin/ocloc"
           test -x "${toolchain_path}/lib/igc/bin/iga64"
 
-          echo "CLANG=/usr/bin/clang-21" >> "${GITHUB_ENV}"
           echo "LLVM_SPIRV=${toolchain_path}/bin/llvm-spirv" >> "${GITHUB_ENV}"
           echo "OCLOC=${toolchain_path}/lib/ocloc/bin/ocloc" >> "${GITHUB_ENV}"
           echo "OCLOC_LD_LIBRARY_PATH=${toolchain_path}/lib/ocloc/lib:${toolchain_path}/lib/igc/lib:${toolchain_path}/lib/igc/lib/igc2" >> "${GITHUB_ENV}"
