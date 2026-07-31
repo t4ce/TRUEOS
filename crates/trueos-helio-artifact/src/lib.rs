@@ -91,8 +91,8 @@ impl<'a> Artifact<'a> {
             return Err(Error::MalformedHeader);
         }
 
-        let section_count = usize::try_from(read_u32(bytes, 12)?)
-            .map_err(|_| Error::OutOfBounds)?;
+        let section_count =
+            usize::try_from(read_u32(bytes, 12)?).map_err(|_| Error::OutOfBounds)?;
         let toc_len = to_usize(read_u64(bytes, 16)?)?;
         let payload_offset = to_usize(read_u64(bytes, 24)?)?;
         let toc_end = HEADER_LEN.checked_add(toc_len).ok_or(Error::OutOfBounds)?;
@@ -136,7 +136,8 @@ impl<'a> Artifact<'a> {
                     if left.name == right.name {
                         return Err(Error::DuplicateName);
                     }
-                    if ranges_overlap(left.offset, left.data.len(), right.offset, right.data.len()) {
+                    if ranges_overlap(left.offset, left.data.len(), right.offset, right.data.len())
+                    {
                         return Err(Error::OverlappingSections);
                     }
                 }
@@ -166,10 +167,17 @@ impl<'a> Artifact<'a> {
         self.sections().find(|section| section.name == name)
     }
 
+    pub fn first_section_of_kind(&self, kind: SectionKind) -> Option<Section<'a>> {
+        self.sections().find(|section| section.kind == kind)
+    }
+
+    pub fn require_kind(&self, kind: SectionKind) -> Result<Section<'a>, Error> {
+        self.first_section_of_kind(kind)
+            .ok_or(Error::MissingSection)
+    }
+
     pub fn require(&self, required: RequiredSection<'_>) -> Result<Section<'a>, Error> {
-        let section = self
-            .section(required.name)
-            .ok_or(Error::MissingSection)?;
+        let section = self.section(required.name).ok_or(Error::MissingSection)?;
         if section.kind != required.kind {
             return Err(Error::WrongSectionKind {
                 expected: required.kind,
@@ -187,11 +195,16 @@ impl<'a> Artifact<'a> {
     }
 
     /// Opens the normalized render program section after its kind is checked.
-    pub fn render_program(&self, section_name: &str) -> Result<render_ir::Program<'a>, Error> {
-        let section = self.require(RequiredSection::new(
-            section_name,
-            SectionKind::NormalizedRenderIr,
-        ))?;
+    pub fn render_program(&self) -> Result<render_ir::Program<'a>, Error> {
+        self.render_program_named(render_ir::SECTION_NAME)
+    }
+
+    pub fn render_program_named(
+        &self,
+        section_name: &str,
+    ) -> Result<render_ir::Program<'a>, Error> {
+        let section =
+            self.require(RequiredSection::new(section_name, SectionKind::NormalizedRenderIr))?;
         render_ir::Program::parse(section.data).map_err(Error::InvalidRenderIr)
     }
 
@@ -299,8 +312,8 @@ impl<'a> RawEntries<'a> {
         if name_end > self.payload_offset {
             return Err(Error::OutOfBounds);
         }
-        let name = str::from_utf8(&self.bytes[fixed_end..name_end])
-            .map_err(|_| Error::InvalidName)?;
+        let name =
+            str::from_utf8(&self.bytes[fixed_end..name_end]).map_err(|_| Error::InvalidName)?;
         validate_name(name)?;
 
         let data_end = offset.checked_add(len).ok_or(Error::OutOfBounds)?;

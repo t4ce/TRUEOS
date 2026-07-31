@@ -1,5 +1,5 @@
 use super::*;
-use std::{string::String, vec, vec::Vec};
+use std::{vec, vec::Vec};
 
 struct TestSection<'a> {
     kind: u16,
@@ -13,7 +13,10 @@ fn fixture(sections: &[TestSection<'_>]) -> Vec<u8> {
         .map(|section| align_8(ENTRY_FIXED_LEN + section.name.len()).unwrap())
         .sum::<usize>();
     let payload_offset = HEADER_LEN + toc_len;
-    let payload_len = sections.iter().map(|section| section.data.len()).sum::<usize>();
+    let payload_len = sections
+        .iter()
+        .map(|section| section.data.len())
+        .sum::<usize>();
     let mut bytes = vec![0u8; payload_offset + payload_len];
     bytes[..8].copy_from_slice(&MAGIC);
     put_u16(&mut bytes, 8, FORMAT_VERSION);
@@ -72,10 +75,7 @@ fn parses_helioa_v1_without_allocation_api() {
             data: b"draw_indexed",
         })
     );
-    assert_eq!(
-        artifact.section("future/optional.bin").unwrap().kind,
-        SectionKind::Unknown(77)
-    );
+    assert_eq!(artifact.section("future/optional.bin").unwrap().kind, SectionKind::Unknown(77));
     assert_eq!(artifact.sections().len(), 3);
 }
 
@@ -91,10 +91,7 @@ fn required_sections_check_name_and_kind() {
         .unwrap();
     assert_eq!(
         artifact
-            .require(RequiredSection::new(
-                "wgpu/trace.ron",
-                SectionKind::ShaderSource,
-            ))
+            .require(RequiredSection::new("wgpu/trace.ron", SectionKind::ShaderSource,))
             .unwrap_err(),
         Error::WrongSectionKind {
             expected: SectionKind::ShaderSource,
@@ -160,10 +157,7 @@ fn rejects_overlapping_payloads_even_with_valid_checksums() {
     let first_offset = read_u64(&bytes, HEADER_LEN + 8).unwrap();
     let second_toc = align_8(HEADER_LEN + ENTRY_FIXED_LEN + "manifest.json".len()).unwrap();
     put_u64(&mut bytes, second_toc + 8, first_offset);
-    assert_eq!(
-        Artifact::parse(&bytes).unwrap_err(),
-        Error::OverlappingSections
-    );
+    assert_eq!(Artifact::parse(&bytes).unwrap_err(), Error::OverlappingSections);
 }
 
 #[test]
@@ -209,9 +203,4 @@ fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
 
 fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
-}
-
-#[allow(dead_code)]
-fn owned(value: &str) -> String {
-    String::from(value)
 }

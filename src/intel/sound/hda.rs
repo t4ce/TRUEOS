@@ -604,7 +604,10 @@ pub struct PcmStreamHandle {
     ring: PcmRingAccounting,
     underrun_count: u64,
     ambiguous_cursor_count: u64,
+    low_lead_recovery_count: u64,
 }
+
+// BEGIN HDA PCM RING ACCOUNTING
 
 /// Software-owned accounting for the cyclic HDA buffer.
 ///
@@ -649,14 +652,22 @@ impl PcmRingAccounting {
         }
     }
 
-    fn prime(&mut self, capacity_frames: usize, start_ahead_frames: usize, now: u64) {
+    fn max_queued_frames(&self) -> usize {
+        self.capacity_frames.saturating_sub(1)
+    }
+
+    fn writable_frames(&self) -> usize {
+        self.max_queued_frames().saturating_sub(self.queued_frames)
+    }
+
+    fn prime(&mut self, capacity_frames: usize, start_ahead_frames: usize) {
         let queued_frames = start_ahead_frames.min(capacity_frames.saturating_sub(1));
         *self = Self {
             capacity_frames,
             write_frame: queued_frames,
             last_play_frame: 0,
             queued_frames,
-            last_observed_tick: now,
+            last_observed_tick: 0,
         };
     }
 
@@ -664,11 +675,21 @@ impl PcmRingAccounting {
         *self = Self::stopped();
     }
 
-    fn mark_started(&mut self, play_frame: usize, now: u64) {
+    /// Establish the known reset cursor immediately before setting RUN.
+    ///
+    /// Do not sample LPIB after RUN here: replacing frame zero with that value
+    /// would erase real playback between the RUN write and cursor read. The
+    /// first `observe` call must debit that entire advance from frame zero.
+    fn arm_start_cursor(&mut self, now: u64) {
         if self.capacity_frames != 0 {
-            self.last_play_frame = play_frame % self.capacity_frames;
+            self.last_play_frame = 0;
             self.last_observed_tick = now;
         }
+    }
+
+    fn needs_low_lead_recovery(&self, start_ahead_frames: usize) -> bool {
+        let required_frames = start_ahead_frames.min(self.max_queued_frames());
+        required_frames != 0 && self.queued_frames < required_frames
     }
 
     fn observe(
@@ -720,9 +741,7 @@ impl PcmRingAccounting {
     }
 
     fn commit_write(&mut self, frames: usize) -> bool {
-        if self.capacity_frames == 0
-            || frames > self.capacity_frames.saturating_sub(self.queued_frames)
-        {
+        if self.capacity_frames < 2 || frames > self.writable_frames() {
             return false;
         }
         self.queued_frames += frames;
@@ -730,6 +749,142 @@ impl PcmRingAccounting {
         true
     }
 }
+
+fn ring_cursor_distance(from: usize, to: usize, cap: usize) -> usize {
+    if to >= from {
+        to - from
+    } else {
+        cap - from + to
+    }
+}
+
+fn channel_aligned_capacity_frames(capacity_samples: usize, channels: usize) -> Option<usize> {
+    if channels == 0 || !capacity_samples.is_multiple_of(channels) {
+        return None;
+    }
+    let capacity_frames = capacity_samples / channels;
+    (capacity_frames >= 2).then_some(capacity_frames)
+}
+
+fn writable_frames_after_reprime(capacity_frames: usize, start_ahead_frames: usize) -> usize {
+    let maximum = capacity_frames.saturating_sub(1);
+    maximum.saturating_sub(start_ahead_frames.min(maximum))
+}
+
+#[cfg(test)]
+mod pcm_ring_accounting_tests {
+    use super::*;
+
+    #[test]
+    fn exact_drain_is_not_misreported_as_a_full_ring() {
+        let mut ring = PcmRingAccounting::stopped();
+        ring.prime(16, 4);
+        assert!(ring.commit_write(4));
+        ring.arm_start_cursor(10);
+
+        assert_eq!(
+            ring.observe(8, 11, 16),
+            PcmRingObservation::Drained {
+                queued_before: 8,
+                advanced_frames: 8,
+            }
+        );
+        assert_eq!(ring.queued_frames, 0);
+        assert_eq!(ring.write_frame, 8);
+    }
+
+    #[test]
+    fn playback_overtake_is_a_drain() {
+        let mut ring = PcmRingAccounting::stopped();
+        ring.prime(16, 4);
+        assert!(ring.commit_write(4));
+        ring.arm_start_cursor(20);
+
+        assert_eq!(
+            ring.observe(10, 21, 16),
+            PcmRingObservation::Drained {
+                queued_before: 8,
+                advanced_frames: 10,
+            }
+        );
+    }
+
+    #[test]
+    fn cursor_wrap_debits_only_the_wrapped_advance() {
+        let mut ring = PcmRingAccounting::stopped();
+        ring.prime(16, 14);
+        assert!(ring.commit_write(1));
+        ring.arm_start_cursor(30);
+        assert_eq!(ring.observe(14, 31, 16), PcmRingObservation::Healthy { queued_frames: 1 });
+        assert!(ring.commit_write(3));
+
+        assert_eq!(ring.observe(1, 32, 16), PcmRingObservation::Healthy { queued_frames: 1 });
+        assert_eq!(ring.write_frame, 2);
+    }
+
+    #[test]
+    fn a_full_ring_observation_gap_is_ambiguous() {
+        let mut ring = PcmRingAccounting::stopped();
+        ring.prime(16, 4);
+        assert!(ring.commit_write(4));
+        ring.arm_start_cursor(40);
+
+        assert_eq!(
+            ring.observe(0, 56, 16),
+            PcmRingObservation::AmbiguousGap {
+                queued_before: 8,
+                elapsed_ticks: 16,
+                limit_ticks: 16,
+            }
+        );
+        assert_eq!(ring.queued_frames, 0);
+    }
+
+    #[test]
+    fn capacity_minus_one_is_the_hard_queue_limit() {
+        let mut ring = PcmRingAccounting::stopped();
+        ring.prime(16, 0);
+
+        assert_eq!(ring.max_queued_frames(), 15);
+        assert_eq!(ring.writable_frames(), 15);
+        assert_eq!(writable_frames_after_reprime(16, 0), 15);
+        assert_eq!(writable_frames_after_reprime(16, 4), 11);
+        assert!(ring.commit_write(15));
+        assert_eq!(ring.writable_frames(), 0);
+        assert!(!ring.commit_write(1));
+    }
+
+    #[test]
+    fn odd_stereo_sample_capacity_is_rejected() {
+        assert_eq!(channel_aligned_capacity_frames(31, 2), None);
+        assert_eq!(channel_aligned_capacity_frames(32, 2), Some(16));
+    }
+
+    #[test]
+    fn low_lead_is_detected_only_below_the_restart_threshold() {
+        let mut ring = PcmRingAccounting::stopped();
+        ring.prime(16, 4);
+        ring.arm_start_cursor(60);
+        assert!(!ring.needs_low_lead_recovery(4));
+
+        assert_eq!(ring.observe(1, 61, 16), PcmRingObservation::Healthy { queued_frames: 3 });
+        assert!(ring.needs_low_lead_recovery(4));
+    }
+
+    #[test]
+    fn arming_at_zero_preserves_post_run_consumption_for_first_observation() {
+        let mut ring = PcmRingAccounting::stopped();
+        ring.prime(16, 4);
+        assert!(ring.commit_write(4));
+        ring.arm_start_cursor(70);
+
+        assert_eq!(ring.last_play_frame, 0);
+        assert_eq!(ring.queued_frames, 8);
+        assert_eq!(ring.observe(2, 71, 16), PcmRingObservation::Healthy { queued_frames: 6 });
+    }
+}
+
+// END HDA PCM RING ACCOUNTING
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MMIO Helpers
@@ -2037,12 +2192,8 @@ pub fn get_lpib() -> u32 {
     }
 }
 
-fn ring_cursor_distance(from: usize, to: usize, cap: usize) -> usize {
-    if to >= from {
-        to - from
-    } else {
-        cap - from + to
-    }
+fn pcm_capacity_frames(capacity_samples: usize) -> Option<usize> {
+    channel_aligned_capacity_frames(capacity_samples, PCM_CHANNELS)
 }
 
 fn pcm_ring_observation_limit_ticks(capacity_frames: usize) -> u64 {
@@ -2061,6 +2212,7 @@ fn pcm_ring_observation_limit_ticks(capacity_frames: usize) -> u64 {
 /// Return the active HDA PCM stream format and DMA ring capacity.
 pub fn pcm_stream_info() -> Option<PcmStreamInfo> {
     let (_buf, cap_samples) = get_dma_buffer_info()?;
+    pcm_capacity_frames(cap_samples)?;
     Some(PcmStreamInfo::current(cap_samples * PCM_SAMPLE_BYTES))
 }
 
@@ -2073,9 +2225,7 @@ pub fn open_pcm_stream() -> Result<PcmStreamHandle, &'static str> {
     }
 
     let (_buf, cap_samples) = get_dma_buffer_info().ok_or("HDA: DMA buffer not initialized")?;
-    if cap_samples == 0 {
-        return Err("HDA: empty DMA buffer");
-    }
+    pcm_capacity_frames(cap_samples).ok_or("HDA: invalid stereo DMA buffer capacity")?;
 
     Ok(PcmStreamHandle {
         started: false,
@@ -2086,6 +2236,7 @@ pub fn open_pcm_stream() -> Result<PcmStreamHandle, &'static str> {
         ring: PcmRingAccounting::stopped(),
         underrun_count: 0,
         ambiguous_cursor_count: 0,
+        low_lead_recovery_count: 0,
     })
 }
 
@@ -2275,17 +2426,20 @@ impl PcmStreamHandle {
     /// Number of interleaved i16 samples that can be queued before the guard.
     pub fn writable_samples(&mut self, guard_samples: usize) -> Option<usize> {
         if !self.started {
-            return Some(self.info.buffer_samples);
+            return self.writable_samples_after_reprime(guard_samples);
         }
-        let queued = self.sync_playback()?;
+        self.sync_playback()?;
         if !self.started {
-            return Some(self.info.buffer_samples);
+            return self.writable_samples_after_reprime(guard_samples);
         }
-        let cap = self.dma_len_samples;
-        Some(
-            cap.saturating_sub(queued)
-                .saturating_sub(guard_samples.min(cap)),
-        )
+
+        let writable_frames = if self.ring.needs_low_lead_recovery(self.start_ahead_frames) {
+            writable_frames_after_reprime(self.ring.capacity_frames, self.start_ahead_frames)
+        } else {
+            self.ring.writable_frames()
+        };
+        let writable_samples = writable_frames.checked_mul(PCM_CHANNELS)?;
+        Some(writable_samples.saturating_sub(guard_samples.min(writable_samples)))
     }
 
     /// Number of interleaved i16 samples currently queued ahead of playback.
@@ -2317,9 +2471,7 @@ impl PcmStreamHandle {
             return Err("HDA: not initialized");
         }
 
-        if self.started && self.sync_playback().is_none() {
-            return Err("HDA: PCM cursor accounting unavailable");
-        }
+        self.synchronize_before_push()?;
 
         let needs_start = !self.started;
         if needs_start {
@@ -2332,24 +2484,24 @@ impl PcmStreamHandle {
         let Some((buf, cap)) = get_dma_buffer_info() else {
             return Err("HDA: DMA buffer not initialized");
         };
-        if cap == 0 {
-            return Err("HDA: empty DMA buffer");
-        }
+        let capacity_frames =
+            pcm_capacity_frames(cap).ok_or("HDA: invalid stereo DMA buffer capacity")?;
 
         let sample_count = frames
             .checked_mul(channels)
             .ok_or("HDA: PCM buffer too large")?;
-        if sample_count > cap {
+        let max_samples = capacity_frames
+            .saturating_sub(1)
+            .checked_mul(PCM_CHANNELS)
+            .ok_or("HDA: PCM buffer too large")?;
+        if sample_count > max_samples {
             return Err("HDA: PCM write larger than DMA buffer");
         }
 
         self.dma_len_samples = cap;
         self.info = PcmStreamInfo::current(cap * PCM_SAMPLE_BYTES);
 
-        let capacity_frames = cap / channels;
-        if self.ring.capacity_frames != capacity_frames
-            || frames > capacity_frames.saturating_sub(self.ring.queued_frames)
-        {
+        if self.ring.capacity_frames != capacity_frames || frames > self.ring.writable_frames() {
             return Err("HDA: PCM write would overwrite queued audio");
         }
         let write_frame = self.ring.write_frame;
@@ -2371,10 +2523,9 @@ impl PcmStreamHandle {
 
         clear_stream_status();
         if needs_start {
+            self.ring.arm_start_cursor(embassy_time_driver::now());
             start_dma()?;
             self.started = true;
-            self.ring
-                .mark_started(self.play_cursor_frame(capacity_frames), embassy_time_driver::now());
         } else {
             let _ = ensure_running();
         }
@@ -2402,9 +2553,7 @@ impl PcmStreamHandle {
             return Err("HDA: not initialized");
         }
 
-        if self.started && self.sync_playback().is_none() {
-            return Err("HDA: PCM cursor accounting unavailable");
-        }
+        self.synchronize_before_push()?;
 
         let needs_start = !self.started;
         if needs_start {
@@ -2417,21 +2566,21 @@ impl PcmStreamHandle {
         let Some((buf, cap)) = get_dma_buffer_info() else {
             return Err("HDA: DMA buffer not initialized");
         };
-        if cap == 0 {
-            return Err("HDA: empty DMA buffer");
-        }
-        if samples.len() > cap {
+        let capacity_frames =
+            pcm_capacity_frames(cap).ok_or("HDA: invalid stereo DMA buffer capacity")?;
+        let max_samples = capacity_frames
+            .saturating_sub(1)
+            .checked_mul(PCM_CHANNELS)
+            .ok_or("HDA: PCM buffer too large")?;
+        if samples.len() > max_samples {
             return Err("HDA: PCM write larger than DMA buffer");
         }
 
         self.dma_len_samples = cap;
         self.info = PcmStreamInfo::current(cap * PCM_SAMPLE_BYTES);
 
-        let capacity_frames = cap / PCM_CHANNELS;
         let frames = samples.len() / PCM_CHANNELS;
-        if self.ring.capacity_frames != capacity_frames
-            || frames > capacity_frames.saturating_sub(self.ring.queued_frames)
-        {
+        if self.ring.capacity_frames != capacity_frames || frames > self.ring.writable_frames() {
             return Err("HDA: PCM write would overwrite queued audio");
         }
         let mut write_cursor = self.ring.write_frame * PCM_CHANNELS;
@@ -2460,10 +2609,9 @@ impl PcmStreamHandle {
 
         clear_stream_status();
         if needs_start {
+            self.ring.arm_start_cursor(embassy_time_driver::now());
             start_dma()?;
             self.started = true;
-            self.ring
-                .mark_started(self.play_cursor_frame(capacity_frames), embassy_time_driver::now());
         } else {
             let _ = ensure_running();
         }
@@ -2477,9 +2625,8 @@ impl PcmStreamHandle {
         let Some((buf, cap)) = get_dma_buffer_info() else {
             return Err("HDA: DMA buffer not initialized");
         };
-        if cap == 0 {
-            return Err("HDA: empty DMA buffer");
-        }
+        let capacity_frames =
+            pcm_capacity_frames(cap).ok_or("HDA: invalid stereo DMA buffer capacity")?;
 
         unsafe {
             core::ptr::write_bytes(buf, 0, cap);
@@ -2487,18 +2634,42 @@ impl PcmStreamHandle {
 
         self.dma_len_samples = cap;
         self.info = PcmStreamInfo::current(cap * PCM_SAMPLE_BYTES);
-        let capacity_frames = cap / PCM_CHANNELS;
-        self.ring
-            .prime(capacity_frames, self.start_ahead_frames, embassy_time_driver::now());
+        self.ring.prime(capacity_frames, self.start_ahead_frames);
         Ok(())
+    }
+
+    fn synchronize_before_push(&mut self) -> Result<(), &'static str> {
+        if !self.started {
+            return Ok(());
+        }
+        self.sync_playback()
+            .ok_or("HDA: PCM cursor accounting unavailable")?;
+        if self.started && self.ring.needs_low_lead_recovery(self.start_ahead_frames) {
+            let queued_before = self.ring.queued_frames;
+            let play_frame = self.ring.last_play_frame;
+            self.low_lead_recovery_count = self.low_lead_recovery_count.saturating_add(1);
+            self.recover_cursor_accounting(
+                "low-lead-before-write",
+                queued_before,
+                self.start_ahead_frames,
+                play_frame,
+                0,
+            );
+        }
+        Ok(())
+    }
+
+    fn writable_samples_after_reprime(&self, guard_samples: usize) -> Option<usize> {
+        let capacity_frames = pcm_capacity_frames(self.dma_len_samples)?;
+        let writable_samples =
+            writable_frames_after_reprime(capacity_frames, self.start_ahead_frames)
+                .checked_mul(PCM_CHANNELS)?;
+        Some(writable_samples.saturating_sub(guard_samples.min(writable_samples)))
     }
 
     fn sync_playback(&mut self) -> Option<usize> {
         let capacity_samples = self.dma_len_samples;
-        if capacity_samples == 0 || !capacity_samples.is_multiple_of(PCM_CHANNELS) {
-            return None;
-        }
-        let capacity_frames = capacity_samples / PCM_CHANNELS;
+        let capacity_frames = pcm_capacity_frames(capacity_samples)?;
         if self.ring.capacity_frames != capacity_frames {
             self.recover_cursor_accounting("capacity-changed", self.ring.queued_frames, 0, 0, 0);
             return Some(0);
@@ -2554,14 +2725,15 @@ impl PcmStreamHandle {
         elapsed_ticks: u64,
     ) {
         hda_warn!(
-            "PCM stream recovery reason={} queued_before_frames={} advanced_or_limit={} play_frame={} elapsed_ticks={} underruns={} ambiguous={} action=stop-and-reprime",
+            "PCM stream recovery reason={} queued_before_frames={} advanced_or_limit={} play_frame={} elapsed_ticks={} underruns={} ambiguous={} low_lead={} action=stop-and-reprime",
             reason,
             queued_before,
             advanced_or_limit,
             play_frame,
             elapsed_ticks,
             self.underrun_count,
-            self.ambiguous_cursor_count
+            self.ambiguous_cursor_count,
+            self.low_lead_recovery_count
         );
         let _ = stop();
         self.started = false;
