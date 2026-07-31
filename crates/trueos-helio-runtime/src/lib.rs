@@ -9,7 +9,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use trueos_helio_artifact::render_ir::{
     BindingKind, CompareFunction, CullMode, FrontFace, IndexFormat, PrimitiveTopology, Program,
-    ShaderStages, StateFlags, TextureFormat, VertexAttribute,
+    ShaderStages, TextureFormat, VertexAttribute,
 };
 
 const MAX_TRIANGLES: usize = 4_096;
@@ -86,8 +86,8 @@ pub fn decode_program(program: &Program<'_>, aspect: f32, camera: Camera) -> Res
     validate_contract(program)?;
     let position = attribute(program, 0).ok_or(Error::MissingPosition)?;
     let color = attribute(program, 2).ok_or(Error::MissingColor)?;
-    let draw_count = usize::try_from(program.draw.index_count)
-        .map_err(|_| Error::DrawNotTriangleList)?;
+    let draw_count =
+        usize::try_from(program.draw.index_count).map_err(|_| Error::DrawNotTriangleList)?;
     if !draw_count.is_multiple_of(3) {
         return Err(Error::DrawNotTriangleList);
     }
@@ -97,11 +97,16 @@ pub fn decode_program(program: &Program<'_>, aspect: f32, camera: Camera) -> Res
     }
 
     let projector = Projector::new(camera, aspect)?;
-    let first_index = usize::try_from(program.draw.first_index).map_err(|_| Error::IndexOutOfRange)?;
+    let first_index =
+        usize::try_from(program.draw.first_index).map_err(|_| Error::IndexOutOfRange)?;
     let mut triangles = Vec::with_capacity(triangle_count);
     for triangle_index in 0..triangle_count {
         let first = first_index
-            .checked_add(triangle_index.checked_mul(3).ok_or(Error::IndexOutOfRange)?)
+            .checked_add(
+                triangle_index
+                    .checked_mul(3)
+                    .ok_or(Error::IndexOutOfRange)?,
+            )
             .ok_or(Error::IndexOutOfRange)?;
         let mut projected = [[0.0; 3]; 3];
         let mut colors = [[0.0; 3]; 3];
@@ -111,7 +116,11 @@ pub fn decode_program(program: &Program<'_>, aspect: f32, camera: Camera) -> Res
             let vertex_index = usize::try_from(adjusted).map_err(|_| Error::IndexOutOfRange)?;
             let position = read_f32x3(program, vertex_index, position)?;
             let color = read_f32x3(program, vertex_index, color)?;
-            if position.iter().chain(color.iter()).any(|value| !value.is_finite()) {
+            if position
+                .iter()
+                .chain(color.iter())
+                .any(|value| !value.is_finite())
+            {
                 return Err(Error::NonFiniteVertex);
             }
             projected[corner] = projector.project(position)?;
@@ -151,10 +160,7 @@ fn validate_contract(program: &Program<'_>) -> Result<(), Error> {
         || pipeline.cull_mode != CullMode::Back
         || pipeline.depth_compare != CompareFunction::Less
         || pipeline.color_write_mask != 0xf
-        || !pipeline.flags.contains(StateFlags::DEPTH_WRITE)
-        || !pipeline.flags.contains(StateFlags::COLOR_STORE)
-        || !pipeline.flags.contains(StateFlags::COLOR_CLEAR)
-        || !pipeline.flags.contains(StateFlags::DEPTH_CLEAR)
+        || pipeline.flags.bits() != 0b11_1111
         || program.draw.instance_count != 1
         || program.draw.first_instance != 0
     {
@@ -292,7 +298,10 @@ fn linear_rgb_to_srgba8(rgb: [f32; 3]) -> Result<[u8; 4], Error> {
 }
 
 fn linear_rgba_to_srgba8(rgba: [f32; 4]) -> Result<[u8; 4], Error> {
-    if rgba.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
+    if rgba
+        .iter()
+        .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
+    {
         return Err(Error::ColorOutOfRange);
     }
     let alpha = quantize(rgba[3]);
@@ -357,29 +366,61 @@ fn normalize(value: [f32; 3]) -> Result<[f32; 3], Error> {
 mod tests {
     use super::*;
     use trueos_helio_artifact::render_ir::{
-        CameraBinding, DrawIndexed, IndexBuffer, PipelineState, ResourceId, Shader, VertexBuffer,
-        VertexFormat,
+        CameraBinding, DrawIndexed, IndexBuffer, PipelineState, ResourceId, Shader, StateFlags,
+        VertexBuffer, VertexFormat,
     };
 
     fn f32s(values: &[f32]) -> Vec<u8> {
-        values.iter().flat_map(|value| value.to_le_bytes()).collect()
+        values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect()
     }
 
     fn program<'a>(vertices: &'a [u8], indices: &'a [u8]) -> Program<'a> {
         Program {
-            vertex: VertexBuffer { id: ResourceId(1), data: vertices, stride: 24 },
-            index: IndexBuffer { id: ResourceId(2), data: indices, format: IndexFormat::Uint16 },
+            vertex: VertexBuffer {
+                id: ResourceId(1),
+                data: vertices,
+                stride: 24,
+            },
+            index: IndexBuffer {
+                id: ResourceId(2),
+                data: indices,
+                format: IndexFormat::Uint16,
+            },
             attributes: [
-                VertexAttribute { shader_location: 0, format: VertexFormat::Float32x3, offset: 0 },
-                VertexAttribute { shader_location: 2, format: VertexFormat::Float32x3, offset: 12 },
-                VertexAttribute { shader_location: 0, format: VertexFormat::Float32x3, offset: 0 },
+                VertexAttribute {
+                    shader_location: 0,
+                    format: VertexFormat::Float32x3,
+                    offset: 0,
+                },
+                VertexAttribute {
+                    shader_location: 2,
+                    format: VertexFormat::Float32x3,
+                    offset: 12,
+                },
+                VertexAttribute {
+                    shader_location: 0,
+                    format: VertexFormat::Float32x3,
+                    offset: 0,
+                },
             ],
             attribute_count: 2,
-            shader: Shader { wgsl: "shader", vertex_entry: "vs_main", fragment_entry: "fs_main" },
+            shader: Shader {
+                wgsl: "shader",
+                vertex_entry: "vs_main",
+                fragment_entry: "fs_main",
+            },
             camera: CameraBinding {
-                buffer_id: ResourceId(3), minimum_size: 192, dynamic_slot: "camera.view_proj",
-                group: 0, binding: 0, kind: BindingKind::StorageBuffer,
-                visibility: ShaderStages::VERTEX, read_only: true,
+                buffer_id: ResourceId(3),
+                minimum_size: 192,
+                dynamic_slot: "camera.view_proj",
+                group: 0,
+                binding: 0,
+                kind: BindingKind::StorageBuffer,
+                visibility: ShaderStages::VERTEX,
+                read_only: true,
             },
             pipeline: PipelineState {
                 color_format: TextureFormat::Bgra8UnormSrgb,
@@ -390,41 +431,49 @@ mod tests {
                 depth_compare: CompareFunction::Less,
                 flags: state_flags(),
                 color_write_mask: 0xf,
-                clear_color: [0.01, 0.01, 0.02, 1.0], clear_depth: 1.0,
+                clear_color: [0.01, 0.01, 0.02, 1.0],
+                clear_depth: 1.0,
             },
-            draw: DrawIndexed { index_count: 3, instance_count: 1, first_index: 0, base_vertex: 0, first_instance: 0 },
-            output_dynamic_slot: "output.surface", pass_label: "fixture",
+            draw: DrawIndexed {
+                index_count: 3,
+                instance_count: 1,
+                first_index: 0,
+                base_vertex: 0,
+                first_instance: 0,
+            },
+            output_dynamic_slot: "output.surface",
+            pass_label: "fixture",
         }
     }
 
     fn state_flags() -> StateFlags {
-        // StateFlags intentionally has no bit-or surface; parse the same flag
-        // value through a minimal IR fixture would obscure this decoder test.
-        // All six producer flags are required in the real path, while the
-        // decoder only queries these four individually. This helper starts
-        // with one public value and cannot construct the union, so contract
-        // validation is covered by artifact integration instead.
-        StateFlags::DEPTH_WRITE
+        StateFlags::from_bits(0b11_1111).unwrap()
     }
 
     #[test]
     fn fixed_camera_projects_generic_triangle() {
         let vertices = f32s(&[
-            -0.5, -0.5, 0.0, 1.0, 0.2, 0.1,
-             0.5, -0.5, 0.0, 1.0, 0.2, 0.1,
-             0.0,  0.5, 0.0, 1.0, 0.2, 0.1,
+            -0.5, -0.5, 0.0, 1.0, 0.2, 0.1, 0.5, -0.5, 0.0, 1.0, 0.2, 0.1, 0.0, 0.5, 0.0, 1.0, 0.2,
+            0.1,
         ]);
         let indices = [0, 0, 1, 0, 2, 0];
-        let mut program = program(&vertices, &indices);
-        // Unit tests exercise the projection and decoding through a relaxed
-        // program by asserting the expected contract rejection first.
-        assert_eq!(decode_program(&program, 16.0 / 9.0, Camera::helio_simple_graph()), Err(Error::UnsupportedPipeline));
-        program.pipeline.flags = StateFlags::DEPTH_WRITE;
-        let projector = Projector::new(Camera::helio_simple_graph(), 16.0 / 9.0).unwrap();
-        let point = projector.project([0.0, 0.0, 0.0]).unwrap();
-        assert!(point[0].abs() < 1.0e-6);
-        assert!(point[1].abs() < 1.0e-6);
-        assert!((0.0..1.0).contains(&point[2]));
+        let program = program(&vertices, &indices);
+        let scene = decode_program(&program, 16.0 / 9.0, Camera::helio_simple_graph()).unwrap();
+        assert_eq!(scene.triangles.len(), 1);
+        assert_eq!(scene.triangles[0].rgba, [255, 124, 89, 255]);
+        let center_x = scene.triangles[0]
+            .vertices
+            .iter()
+            .map(|vertex| vertex[0])
+            .sum::<f32>()
+            / 3.0;
+        assert!(center_x.abs() < 1.0e-6);
+        assert!(
+            scene.triangles[0]
+                .vertices
+                .iter()
+                .all(|vertex| (0.0..1.0).contains(&vertex[2]))
+        );
     }
 
     #[test]
@@ -437,14 +486,16 @@ mod tests {
     #[test]
     fn uniform_triangle_color_is_enforced() {
         let vertices = f32s(&[
-            -0.5, -0.5, 0.0, 1.0, 0.0, 0.0,
-             0.5, -0.5, 0.0, 0.0, 1.0, 0.0,
-             0.0,  0.5, 0.0, 1.0, 0.0, 0.0,
+            -0.5, -0.5, 0.0, 1.0, 0.0, 0.0, 0.5, -0.5, 0.0, 0.0, 1.0, 0.0, 0.0, 0.5, 0.0, 1.0, 0.0,
+            0.0,
         ]);
         let program = program(&vertices, &[0, 0, 1, 0, 2, 0]);
         let position = attribute(&program, 0).unwrap();
         let color = attribute(&program, 2).unwrap();
         assert_eq!(read_f32x3(&program, 1, position).unwrap(), [0.5, -0.5, 0.0]);
-        assert_ne!(read_f32x3(&program, 0, color).unwrap(), read_f32x3(&program, 1, color).unwrap());
+        assert_ne!(
+            read_f32x3(&program, 0, color).unwrap(),
+            read_f32x3(&program, 1, color).unwrap()
+        );
     }
 }

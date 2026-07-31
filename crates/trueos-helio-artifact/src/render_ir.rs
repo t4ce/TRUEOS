@@ -100,6 +100,14 @@ impl StateFlags {
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
+
+    pub const fn from_bits(bits: u32) -> Option<Self> {
+        if bits & !KNOWN_STATE_FLAGS == 0 {
+            Some(Self(bits))
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
