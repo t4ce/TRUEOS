@@ -697,7 +697,7 @@ fn spawn_ui4_h264_encode_stream_task(spawner: Spawner) -> SpawnAttempt {
     };
     lastap_spawner.spawn(token);
     crate::log_info!(target: "service";
-        "ui4 h264 stream pipeline assigned carrier=lastap slot={} core_kind={} cooperative_tasks=1 task_owns=fused-gpu-composition+vdbox-encode+udp-egress gpu_dispatches_per_frame=1 rgba_mirror_bytes=0 cpu_pixel_access=0 exclusive_from=vm-hull+blocking-lanes+background-round-robin future_home=ap1-ui\n",
+        "ui4 h264 stream pipeline assigned carrier=lastap slot={} core_kind={} cooperative_tasks=1 task_owns=gpu-rgba-composition+gpu-nv12-conversion+vdbox-encode+udp-egress gpu_dispatches_per_frame=2 rgba_mirror_bytes=14745600 cpu_pixel_access=0 exclusive_from=vm-hull+blocking-lanes+background-round-robin future_home=ap1-ui\n",
         lastap_slot,
         lastap_kind,
     );

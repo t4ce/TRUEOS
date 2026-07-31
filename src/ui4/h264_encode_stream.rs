@@ -602,13 +602,26 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
 async fn encode_hardware_scanout(
     session_id: u32,
     sequence: u32,
+    rgba_mirror: &mut Option<EncodeDmaBuffer>,
     nv12: &mut Option<EncodeDmaBuffer>,
     stats: &mut LiveEncodeStats,
 ) -> Option<Vec<u8>> {
+    if rgba_mirror.is_none() {
+        *rgba_mirror = EncodeDmaBuffer::allocate_gpu_target(SOURCE_RGBA_BYTES);
+    }
     if nv12.is_none() {
         *nv12 = EncodeDmaBuffer::allocate_gpu_target(ENCODE_NV12_BYTES);
     }
+    let mirror = rgba_mirror.as_ref()?;
     let target = nv12.as_ref()?;
+    let source = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+        mirror.phys,
+        crate::intel::gpgpu::UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE,
+        mirror.bytes,
+        TEST_RIG_SCANOUT_WIDTH,
+        TEST_RIG_SCANOUT_HEIGHT,
+        TEST_RIG_SCANOUT_WIDTH.saturating_mul(4),
+    )?;
     let destination = crate::intel::gpgpu::GpgpuNv12LinearSurface::new(
         target.phys,
         crate::intel::gpgpu::UI4_STREAM_NV12_DESTINATION_GPU,
@@ -618,31 +631,86 @@ async fn encode_hardware_scanout(
         ENCODE_WIDTH as u32,
     )?;
 
-    let fused_started_ns = crate::chronos::monotonic_nanos();
-    let capture = match super::screenshot::capture_stream_scanout_to_nv12_hardware(
-        destination,
-        ACTIVE_TOP as u32,
-        ACTIVE_HEIGHT as u32,
-    )
-    .await
-    {
+    let composition_started_ns = crate::chronos::monotonic_nanos();
+    let capture = match super::screenshot::capture_stream_scanout_to_rgba_hardware(source).await {
         Ok(capture) => capture,
         Err(error) => {
             crate::log_error!(target: "intel/media-encode";
-                "intel/media-encode: live frame rejected session={} sequence={} stage=fused-compose-downscale-nv12 error={:?} rgba_mirror_bytes=0 cpu_pixel_access=0 software_fallback=0\n",
+                "intel/media-encode: live frame rejected session={} sequence={} stage=selected-layers-rgba-mirror error={:?} rgba_mirror_bytes={} cpu_pixel_access=0 software_fallback=0\n",
                 session_id,
                 sequence,
                 error,
+                SOURCE_RGBA_BYTES,
             );
             return None;
         }
     };
-    let fused_wall_us = crate::chronos::monotonic_nanos().saturating_sub(fused_started_ns) / 1_000;
+    let composition_wall_us =
+        crate::chronos::monotonic_nanos().saturating_sub(composition_started_ns) / 1_000;
     crate::log_trace!(target: "intel/media-encode";
-        "intel/media-encode: fused-nv12 retired session={} sequence={} engine=guc-rcs kernel=ui4-compose-layers-to-nv12-linear selected_layers={} logical={}x{} destination={}x{} active={}x{}@0,{} wall_us={} gpu_walker_us={} slot0_pixels={} spirit_pixels={} gpu_dispatches=1 rgba_mirror_bytes=0 cpu_pixel_reads=0 cpu_pixel_writes=0\n",
+        "intel/media-encode: rgba-mirror retired session={} sequence={} engine=guc-rcs kernel=ui4-compose-layers-rgba8 selected_layers={} logical={}x{} destination={}x{} wall_us={} gpu_walker_us={} slot0_pixels={} spirit_pixels={} gpu_dispatches=1 rgba_mirror_bytes={} cpu_pixel_reads=0 cpu_pixel_writes=0\n",
         session_id,
         sequence,
         capture.compose_layers,
+        capture.width,
+        capture.height,
+        capture.width,
+        capture.height,
+        composition_wall_us,
+        capture.compose_gpu_us,
+        capture.slot0_scanout_pixels,
+        capture.spirit_overlay_pixels,
+        SOURCE_RGBA_BYTES,
+    );
+
+    let conversion_started_ns = crate::chronos::monotonic_nanos();
+    let conversion_submission = loop {
+        match crate::intel::gpgpu::queue_ui4_stream_rgba8_to_nv12_linear(
+            source,
+            destination,
+            ACTIVE_TOP as u32,
+            ACTIVE_HEIGHT as u32,
+        ) {
+            Ok(submission) => break submission,
+            Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
+                Timer::after(Duration::from_millis(1)).await;
+            }
+            Err(error) => {
+                crate::log_error!(target: "intel/media-encode";
+                    "intel/media-encode: live frame rejected session={} sequence={} stage=rgba-mirror-to-nv12-submit error={:?} cpu_pixel_access=0 software_fallback=0\n",
+                    session_id,
+                    sequence,
+                    error,
+                );
+                return None;
+            }
+        }
+    };
+    let conversion_gpu_us = loop {
+        match crate::intel::gpgpu::poll_ui4_compositor_submission(conversion_submission) {
+            crate::intel::gpgpu::Ui4CompositorCompletion::Pending => {
+                Timer::after(Duration::from_millis(1)).await;
+            }
+            crate::intel::gpgpu::Ui4CompositorCompletion::Complete(completion) => {
+                break completion.probe.gpu_walker_us;
+            }
+            crate::intel::gpgpu::Ui4CompositorCompletion::Failed
+            | crate::intel::gpgpu::Ui4CompositorCompletion::InvalidSubmission => {
+                crate::log_error!(target: "intel/media-encode";
+                    "intel/media-encode: live frame rejected session={} sequence={} stage=rgba-mirror-to-nv12-completion action=reject-frame software_fallback=0\n",
+                    session_id,
+                    sequence,
+                );
+                return None;
+            }
+        }
+    };
+    let conversion_wall_us =
+        crate::chronos::monotonic_nanos().saturating_sub(conversion_started_ns) / 1_000;
+    crate::log_trace!(target: "intel/media-encode";
+        "intel/media-encode: rgba-to-nv12 retired session={} sequence={} engine=guc-rcs kernel=ui4-rgba8-to-nv12-linear source={}x{} destination={}x{} active={}x{}@0,{} wall_us={} gpu_walker_us={} gpu_dispatches=1 cpu_pixel_math=0 cpu_nv12_copy_bytes=0\n",
+        session_id,
+        sequence,
         capture.width,
         capture.height,
         ENCODE_WIDTH,
@@ -650,10 +718,8 @@ async fn encode_hardware_scanout(
         ENCODE_WIDTH,
         ACTIVE_HEIGHT,
         ACTIVE_TOP,
-        fused_wall_us,
-        capture.compose_gpu_us,
-        capture.slot0_scanout_pixels,
-        capture.spirit_overlay_pixels,
+        conversion_wall_us,
+        conversion_gpu_us,
     );
 
     let Some(surface) =
@@ -696,14 +762,18 @@ async fn encode_hardware_scanout(
     stats.frames = stats.frames.saturating_add(1);
     stats.source_width = capture.width;
     stats.source_height = capture.height;
-    stats.capture_us = stats.capture_us.saturating_add(fused_wall_us);
-    stats.capture_max_us = stats.capture_max_us.max(fused_wall_us);
+    stats.capture_us = stats.capture_us.saturating_add(composition_wall_us);
+    stats.capture_max_us = stats.capture_max_us.max(composition_wall_us);
     stats.composition_gpu_frames = stats.composition_gpu_frames.saturating_add(1);
     stats.composition_layers_max = stats.composition_layers_max.max(capture.compose_layers);
     stats.composition_gpu_us = stats
         .composition_gpu_us
         .saturating_add(capture.compose_gpu_us);
     stats.composition_gpu_max_us = stats.composition_gpu_max_us.max(capture.compose_gpu_us);
+    stats.conversion_wall_us = stats.conversion_wall_us.saturating_add(conversion_wall_us);
+    stats.conversion_wall_max_us = stats.conversion_wall_max_us.max(conversion_wall_us);
+    stats.conversion_gpu_us = stats.conversion_gpu_us.saturating_add(conversion_gpu_us);
+    stats.conversion_gpu_max_us = stats.conversion_gpu_max_us.max(conversion_gpu_us);
     if capture.slot0_scanout_pixels != 0 {
         stats.slot0_scanout_frames = stats.slot0_scanout_frames.saturating_add(1);
         stats.slot0_scanout_pixels = stats

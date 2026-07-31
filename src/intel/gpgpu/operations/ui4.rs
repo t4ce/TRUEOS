@@ -32,6 +32,7 @@ fn queue_ui4_compositor_layers_mode(
     destination_scanout_cache: bool,
     stream_source_aliases: bool,
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
+    let mut probe = GpgpuSubmissionProbe::default();
     if !dst.is_valid()
         || damage.x < 0
         || damage.y < 0
@@ -150,6 +151,9 @@ fn queue_ui4_compositor_layers_mode(
     super::dma_flush(desc.virt, desc.bytes);
 
     let forcewake_ok = direct_rcs_forcewake(dev);
+    if forcewake_ok {
+        probe.gpu_timestamp_frequency_hz = u64::from(direct_rcs_timestamp_frequency_hz(dev));
+    }
     let mapped_ok = forcewake_ok && (runtime.state_mapped || direct_rcs_map_state(dev, state));
     if mapped_ok {
         runtime.state_mapped = true;
@@ -247,6 +251,7 @@ fn queue_ui4_compositor_layers_mode(
         );
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
+    probe.gpu_host_pre_submit_timestamp = direct_rcs_read_render_timestamp(dev);
     let started_tick = direct_rcs_now_tick();
     let Some(gpu) = direct_rcs_submit_batch_with_runtime(
         dev,
@@ -260,6 +265,10 @@ fn queue_ui4_compositor_layers_mode(
     let admitted_tick = direct_rcs_now_tick();
     runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
     let serial = runtime.next_serial;
+    probe.guc_h2g_publish_sequence = gpu.physical_publish_sequence();
+    if crate::intel::guc_ctb::h2g_sequence_consumed(probe.guc_h2g_publish_sequence) {
+        probe.gpu_h2g_consumed_observe_timestamp = direct_rcs_read_render_timestamp(dev);
+    }
     let submission = Ui4CompositorSubmission { serial, gpu };
     runtime.pending.push_back(Ui4CompositorPending {
         submission,
@@ -275,7 +284,7 @@ fn queue_ui4_compositor_layers_mode(
             walkers: 1,
             submits: 1,
             submit_ms: 0,
-            probe: GpgpuSubmissionProbe::default(),
+            probe,
         },
         overdue_logged: false,
     });
@@ -1432,6 +1441,7 @@ pub(crate) fn poll_ui4_compositor_submission(
             pending.kernel,
             "nv12-media-ytile-rgba8-frame"
                 | "rgba8-linear-nv12-encode"
+                | "ui4-compose-layers"
                 | "ui4-compose-layers-to-nv12-linear"
         ) {
             let batch_enter =

@@ -251,8 +251,13 @@ fn direct_rcs_encode_ui4_compose_layers_batch(
     let mut cursor = 0usize;
     let group_x = params.damage_width.div_ceil(16).max(1);
     let group_y = params.damage_height.max(1);
-    let mut ok =
-        direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload, state.gpu_va.batch);
+    let mut ok = direct_rcs_push_pipe_control_timestamp_at(
+        batch,
+        &mut cursor,
+        state.gpu_va.result,
+        UI4_VIDEO_FRAME_GPU_BATCH_ENTER_TIMESTAMP_SLOT,
+    );
+    ok &= direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload, state.gpu_va.batch);
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, RECT_WORKLIST_IDD_BYTES as u32);
@@ -263,6 +268,12 @@ fn direct_rcs_encode_ui4_compose_layers_batch(
         state.gpu_va.result,
         SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT,
         UI4_COMPOSE_LAYERS_PRE_MARKER,
+    );
+    ok &= direct_rcs_push_pipe_control_timestamp_at(
+        batch,
+        &mut cursor,
+        state.gpu_va.result,
+        UI4_VIDEO_FRAME_GPU_PRE_WALKER_TIMESTAMP_SLOT,
     );
     ok &= direct_rcs_push_gpgpu_walker_2d(
         batch,
@@ -275,10 +286,17 @@ fn direct_rcs_encode_ui4_compose_layers_batch(
     );
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
+    ok &= direct_rcs_push_pipe_control_timestamp_at(
         batch,
         &mut cursor,
         state.gpu_va.result,
+        UI4_VIDEO_FRAME_GPU_POST_WALKER_TIMESTAMP_SLOT,
+    );
+    ok &= direct_rcs_push_gpgpu_dispatch_timestamped_epilogue(
+        batch,
+        &mut cursor,
+        state.gpu_va.result,
+        UI4_VIDEO_FRAME_GPU_POST_RELEASE_TIMESTAMP_SLOT,
         SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
         UI4_COMPOSE_LAYERS_POST_MARKER,
     );
