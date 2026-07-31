@@ -201,8 +201,6 @@ pub(super) fn presented_rects() -> Slot4Rects {
 }
 
 fn software_cursor_rects() -> Slot4Rects {
-    use crate::graphics::primitives::Rgba8;
-
     let visuals = super::software_cursor_visuals();
     let mut rects = Slot4Rects::new();
     let (screen_w, screen_h) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
@@ -231,32 +229,6 @@ fn software_cursor_rects() -> Slot4Rects {
         }
         if let Some(maximize_preview) = visual.maximize_preview {
             push_selection_outline(&mut rects, maximize_preview, visual.color);
-        }
-    }
-
-    for visual in &visuals {
-        let Some((x, y)) = visual.context_menu else {
-            continue;
-        };
-        let menu_rect = super::input_broker::context_menu_rect((x, y), screen_w, screen_h);
-        push_overlay_rect(
-            &mut rects,
-            menu_rect.x,
-            menu_rect.y,
-            menu_rect.width,
-            menu_rect.height,
-            Rgba8::new(22, 25, 33, 235),
-        );
-        push_rect_border(&mut rects, menu_rect, 2, visual.color);
-        for row in 1..4u32 {
-            push_overlay_rect(
-                &mut rects,
-                menu_rect.x.saturating_add(12),
-                menu_rect.y.saturating_add(row * 27),
-                menu_rect.width.saturating_sub(24),
-                1,
-                Rgba8::new(180, 188, 204, 150),
-            );
         }
     }
 

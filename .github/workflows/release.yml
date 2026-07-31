@@ -60,7 +60,6 @@ jobs:
             autoconf \
             automake \
             build-essential \
-            clang-21 \
             dosfstools \
             gcc \
             git \
@@ -101,6 +100,17 @@ jobs:
           echo "OCLOC=${toolchain_path}/lib/ocloc/bin/ocloc" >> "${GITHUB_ENV}"
           echo "OCLOC_LD_LIBRARY_PATH=${toolchain_path}/lib/ocloc/lib:${toolchain_path}/lib/igc/lib:${toolchain_path}/lib/igc/lib/igc2" >> "${GITHUB_ENV}"
           echo "${toolchain_path}/lib/igc/bin" >> "${GITHUB_PATH}"
+
+      - name: Install locked Clang frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          clang_root="${RUNNER_TEMP}/trueos-clang21"
+          tools/intel-gpu-bakery/install_locked_clang21.sh "${clang_root}"
+
+          echo "CLANG=${clang_root}/usr/lib/llvm-21/bin/clang" >> "${GITHUB_ENV}"
+          echo "OCLOC_LD_LIBRARY_PATH=${OCLOC_LD_LIBRARY_PATH}:${clang_root}/usr/lib/x86_64-linux-gnu" >> "${GITHUB_ENV}"
 
       - name: Install Rust nightly toolchain
         shell: bash

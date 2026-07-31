@@ -33,9 +33,6 @@ const SCREENSHOT_BUTTON_MASK: u32 = (1 << 3) | (1 << 4);
 const INTERACTIVE_SCREENSHOT_ENABLED: bool = false;
 const FRAME_DRAG_GESTURE_MIN_TRAVEL_PX: u32 = 8;
 const MAXIMIZE_LATCH_TOP_PX: u32 = 48;
-const CONTEXT_MENU_OFFSET_PX: u32 = 14;
-const CONTEXT_MENU_WIDTH_PX: u32 = 196;
-const CONTEXT_MENU_HEIGHT_PX: u32 = 116;
 
 static OWNER_QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
 static KEYBOARD_TEXT_FORWARDS: AtomicU32 = AtomicU32::new(0);
@@ -153,7 +150,6 @@ pub(crate) struct Ui4SoftwareCursorVisual {
     pub(crate) x: u32,
     pub(crate) y: u32,
     pub(crate) color: crate::graphics::primitives::Rgba8,
-    pub(crate) context_menu: Option<(u32, u32)>,
     pub(crate) selection: Option<Ui4VisualRect>,
     pub(crate) maximize_preview: Option<Ui4VisualRect>,
 }
@@ -239,10 +235,7 @@ struct CursorRoute {
     secondary_dragged: bool,
     secondary_restored_from_maximize: bool,
     maximize_preview: Option<Ui4VisualRect>,
-    context_menu: Option<(u32, u32)>,
-    context_menu_owns_gesture: bool,
     requested_context_menu_gesture: Option<u64>,
-    suppress_context_menu_open: bool,
     selection_anchor: Option<(u32, u32)>,
     absorb_select: bool,
 }
@@ -264,10 +257,7 @@ impl CursorRoute {
             secondary_dragged: false,
             secondary_restored_from_maximize: false,
             maximize_preview: None,
-            context_menu: None,
-            context_menu_owns_gesture: false,
             requested_context_menu_gesture: None,
-            suppress_context_menu_open: false,
             selection_anchor: None,
             absorb_select: false,
         }
@@ -286,32 +276,7 @@ impl CursorRoute {
 
     fn clear_window_interaction(&mut self) {
         self.clear_frame_interaction();
-        self.context_menu = None;
-        self.context_menu_owns_gesture = false;
         self.requested_context_menu_gesture = None;
-        self.suppress_context_menu_open = false;
-    }
-
-    /// Returns true when the menu owns this mouse-down. An outside press
-    /// dismisses this route's menu but remains available to normal UI4 input.
-    fn handle_context_menu_mouse_down(
-        &mut self,
-        x: u32,
-        y: u32,
-        screen_width: u32,
-        screen_height: u32,
-    ) -> bool {
-        let Some(anchor) = self.context_menu else {
-            return false;
-        };
-        if visual_rect_contains(context_menu_rect(anchor, screen_width, screen_height), x, y) {
-            self.context_menu_owns_gesture = true;
-            true
-        } else {
-            self.context_menu = None;
-            self.suppress_context_menu_open = true;
-            false
-        }
     }
 }
 
@@ -517,31 +482,6 @@ impl InputBroker {
                 self.cursors[index].requested_context_menu_gesture = None;
                 super::context_menu::pointer_up(source, serial, x, y, width, height);
                 self.cursors[index].absorb_select = false;
-                self.cursors[index].suppress_context_menu_open = false;
-            }
-            return;
-        }
-
-        if pressed != 0 {
-            // Legacy right-click menu actions are not wired yet. An inside
-            // click belongs to this cursor's menu and cannot leak through to
-            // the frame below. An outside click dismisses only this cursor's
-            // menu; a secondary click is suppressed from reopening it on the
-            // matching release.
-            self.cursors[index].handle_context_menu_mouse_down(x, y, width, height);
-        }
-
-        if self.cursors[index].context_menu_owns_gesture {
-            self.cursors[index].x = x;
-            self.cursors[index].y = y;
-            self.cursors[index].buttons_down = event.buttons_down;
-            if buttons_down == 0 {
-                self.cursors[index].context_menu_owns_gesture = false;
-                // A different cursor may have changed global selection while
-                // this menu-owned gesture was held. Both absorption latches
-                // end on this same release.
-                self.cursors[index].absorb_select = false;
-                self.cursors[index].suppress_context_menu_open = false;
             }
             return;
         }
@@ -572,7 +512,6 @@ impl InputBroker {
             self.cursors[index].buttons_down = event.buttons_down;
             if buttons_down == 0 {
                 self.cursors[index].absorb_select = false;
-                self.cursors[index].suppress_context_menu_open = false;
             }
             return;
         }
@@ -588,7 +527,6 @@ impl InputBroker {
             self.cursors[index].secondary_start_placement = hit.map(|window| window.placement);
             self.cursors[index].secondary_dragged = false;
             self.cursors[index].secondary_restored_from_maximize = false;
-            self.cursors[index].context_menu = None;
         }
         if buttons_down & SECONDARY_BUTTON_MASK != 0
             && self.cursors[index].secondary_anchor.is_some_and(|anchor| {
@@ -603,7 +541,7 @@ impl InputBroker {
             && self.cursors[index].secondary_dragged;
         if secondary_released {
             let had_anchor = self.cursors[index].secondary_anchor.take().is_some();
-            if had_anchor && !secondary_drop && !self.cursors[index].suppress_context_menu_open {
+            if had_anchor && !secondary_drop {
                 let selected = super::selected_frame_for_source(source);
                 if let Some(target) = hit.filter(|window| {
                     selected == Some(WindowTarget::from(*window).cursor_frame_key())
@@ -641,7 +579,6 @@ impl InputBroker {
                         target.placement = transition.placement;
                         target.maximized = transition.maximized;
                         self.cursors[index].secondary_restored_from_maximize = true;
-                        self.cursors[index].context_menu = None;
                         crate::log_info!(target: "ui4";
                             "ui4/input: frame-maximize-toggle owner={:?} window={} plane={} state=restored old={}x{}@{},{} new={}x{}@{},{} cursor={}:{}:{} trigger=secondary-drag-begin\n",
                             target.owner,
@@ -738,7 +675,6 @@ impl InputBroker {
                     Ok(transition) => {
                         target.placement = transition.placement;
                         target.maximized = transition.maximized;
-                        self.cursors[index].context_menu = None;
                         crate::log_info!(target: "ui4";
                             "ui4/input: frame-maximize-toggle owner={:?} window={} plane={} state={} old={}x{}@{},{} new={}x{}@{},{} cursor={}:{}:{} trigger=secondary-drag-drop\n",
                             target.owner,
@@ -884,7 +820,6 @@ impl InputBroker {
         }
         if buttons_down == 0 {
             self.cursors[index].capture = None;
-            self.cursors[index].suppress_context_menu_open = false;
         }
     }
 
@@ -1217,7 +1152,6 @@ impl InputBroker {
                 x: route.x,
                 y: route.y,
                 color: route.color,
-                context_menu: route.context_menu,
                 maximize_preview: route.maximize_preview,
                 selection: route.selection_anchor.and_then(|anchor| {
                     (route.buttons_down & PRIMARY_BUTTON_MASK != 0)
@@ -1308,7 +1242,6 @@ pub(crate) fn show_context_menu(
         {
             return Err(super::ContextMenuError::NotFocused);
         }
-        route.context_menu = None;
         ((route.x, route.y), route.color)
     };
     super::context_menu::open(source, owner, window, anchor, color, request)
@@ -1585,32 +1518,6 @@ fn selection_rect_between(anchor: (u32, u32), point: (u32, u32)) -> Ui4VisualRec
         width: anchor.0.abs_diff(point.0).saturating_add(1),
         height: anchor.1.abs_diff(point.1).saturating_add(1),
     }
-}
-
-pub(crate) fn context_menu_rect(
-    anchor: (u32, u32),
-    screen_width: u32,
-    screen_height: u32,
-) -> Ui4VisualRect {
-    Ui4VisualRect {
-        x: anchor
-            .0
-            .saturating_add(CONTEXT_MENU_OFFSET_PX)
-            .min(screen_width.saturating_sub(CONTEXT_MENU_WIDTH_PX)),
-        y: anchor
-            .1
-            .saturating_add(CONTEXT_MENU_OFFSET_PX)
-            .min(screen_height.saturating_sub(CONTEXT_MENU_HEIGHT_PX)),
-        width: CONTEXT_MENU_WIDTH_PX.min(screen_width),
-        height: CONTEXT_MENU_HEIGHT_PX.min(screen_height),
-    }
-}
-
-fn visual_rect_contains(rect: Ui4VisualRect, x: u32, y: u32) -> bool {
-    x >= rect.x
-        && y >= rect.y
-        && x < rect.x.saturating_add(rect.width)
-        && y < rect.y.saturating_add(rect.height)
 }
 
 fn point_travel_reached(origin: (u32, u32), point: (u32, u32), threshold: u32) -> bool {
