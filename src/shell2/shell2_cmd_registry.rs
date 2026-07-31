@@ -41,14 +41,13 @@ const TOOL_JSON_MV: &str = r#"{"type":"object","properties":{"src":{"type":"stri
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_QJS: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_RAM: &str = r#"{"type":"object","properties":{"scope":{"type":"string","description":"Optional pmm, host, or numeric VM id. Omit to list all configured RAM scopes."}},"required":[],"additionalProperties":false}"#;
-const TOOL_JSON_RAPL: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["store"],"description":"Store the current in-memory RAPL history in TRUEOSFS."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_RM: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file or directory path."},"regex":{"type":"string","description":"Optional -regx pattern to match children under path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
 const TOOL_JSON_SHA: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to hash with SHA-256."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SSH: &str = r#"{"type":"object","properties":{"endpoint":{"type":"string","description":"SSH target in [user@]host[:port] form. Port 22 is used when omitted."}},"required":["endpoint"],"additionalProperties":false}"#;
 const TOOL_JSON_SURF: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["https","http","file","html"],"description":"Surf input type."},"input":{"type":"string","description":"Host, URL, TRUEOSFS path, or inline HTML selected by subcommand."}},"required":["subcommand","input"],"additionalProperties":false}"#;
-const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","smbios","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
+const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","smbios","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"action":{"type":"string","enum":["store"],"description":"Optional RAPL action when target=rapl."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
 const TOOL_JSON_TXT: &str = r#"{"type":"object","properties":{"file":{"type":"string","description":"Optional file path to open in the Blueprint terminal editor."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_TTS: &str = r#"{"type":"object","properties":{"text":{"type":"string","description":"Text to synthesize and play through the kernel HDA lane."},"voice":{"type":"string","description":"Kokoro voice name; defaults to af_heart."},"speed":{"type":"number","minimum":0.25,"maximum":4.0,"description":"Speech speed multiplier."}},"required":["text"],"additionalProperties":false}"#;
 const TOOL_JSON_STT: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path to a mono/stereo signed-16-bit PCM WAV file."},"language":{"type":"string","description":"Whisper language code or auto."},"translate":{"type":"boolean","description":"Translate recognized speech to English."}},"required":["path"],"additionalProperties":false}"#;
@@ -174,10 +173,6 @@ fn dispatch_ram(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
     super::cmds::ram::try_parse(io, &mut args)
 }
 
-fn dispatch_rapl(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::rapl::try_parse(spawner, io, rest)
-}
-
 fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::tlb::try_parse(spawner, io, &mut args)
@@ -294,7 +289,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "hyper",
         mode: "cmd",
-        color: Some(STATUS_BLUE_RGB),
+        color: Some(STATUS_NETWORK_RGB),
         advertised: true,
         handler: dispatch_hyper,
         tool_description: Some("Inspect the kernel Hyper HTTP/HTTPS transport surface."),
@@ -303,7 +298,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "surf",
         mode: "cmd",
-        color: Some(STATUS_PINK_RGB),
+        color: Some(STATUS_NETWORK_RGB),
         advertised: true,
         handler: dispatch_surf,
         tool_description: Some(
@@ -396,7 +391,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "net",
         mode: "cmd",
-        color: Some(STATUS_BLUE_RGB),
+        color: Some(STATUS_NETWORK_RGB),
         advertised: true,
         handler: dispatch_net,
         tool_description: Some(
@@ -414,15 +409,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
             "Open the persistent QuickJS scripting workbench. Exit with ESC or :quit.",
         ),
         tool_parameters_json: Some(TOOL_JSON_QJS),
-    },
-    BuiltinShell2CmdEntry {
-        name: "rapl",
-        mode: "cmd",
-        color: Some(STATUS_GRAY_RGB),
-        advertised: true,
-        handler: dispatch_rapl,
-        tool_description: Some("Store the current in-memory RAPL history in TRUEOSFS."),
-        tool_parameters_json: Some(TOOL_JSON_RAPL),
     },
     BuiltinShell2CmdEntry {
         name: "tlb",
@@ -593,9 +579,9 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "surf", "net", "qjs",
-        "ssh", "txt", "grid", "tts", "stt", "cpp", "vgpu", "vid", "cry", "acpi", "rapl", "tlb",
-        "ram", "smp", "etc",
+        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "surf", "net", "ssh",
+        "qjs", "txt", "grid", "tts", "stt", "cpp", "vgpu", "vid", "cry", "acpi", "tlb", "ram",
+        "smp", "etc",
     ];
 
     let mut out = AllocString::new();

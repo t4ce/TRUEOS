@@ -18,7 +18,7 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 pub(crate) const DUMP_FILE_PATH: &str = "trueos/pci/tlb.txt";
 
-const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|turbo|ucode|pmu|rapl|thermal|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|smbios|x2apic|usb [probe]|dump]`";
+const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|turbo|ucode|pmu|rapl [store]|thermal|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|smbios|x2apic|usb [probe]|dump]`";
 const TLB_ACPI_USAGE: &str = "tlb: usage `tlb acpi [sig [index]]`";
 const TLB_AML_USAGE: &str = "tlb: usage `tlb aml [ec|symbol <path>|prefix <path>]`";
 const ACPI_HEXDUMP_MAX_BYTES: usize = 512;
@@ -33,7 +33,7 @@ const TLB_MENU_ROWS: [(&str, &str); 21] = [
     ("turbo", "List CPU turbo state and all-core verify stats"),
     ("ucode", "Show Intel microcode loader snapshot"),
     ("pmu", "Show architectural PMU/perf snapshot"),
-    ("rapl", "Show latest Intel RAPL energy snapshot"),
+    ("rapl", "Show Intel RAPL energy or store its history (`tlb rapl store`)"),
     ("thermal", "Show latest Intel thermal sensor snapshot"),
     ("acpi", "List ACPI tables or dump one (`tlb acpi SSDT 3`)"),
     ("aml", "Inspect parsed AML namespace (`tlb aml ec|symbol|prefix`)"),
@@ -1690,6 +1690,20 @@ fn cmd_tlb_rapl(io: &'static dyn ShellBackend2) {
         );
     }
     sample_table.emit_footer(|text| line(io, text));
+}
+
+fn cmd_tlb_rapl_args(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    args: &mut SplitWhitespace<'_>,
+) {
+    match args.next() {
+        None => cmd_tlb_rapl(io),
+        Some("store") if ensure_no_args(io, args, "tlb: usage `tlb rapl [store]`") => {
+            super::rapl::store(spawner, io)
+        }
+        Some(_) => line(io, "tlb: usage `tlb rapl [store]`"),
+    }
 }
 
 fn cmd_tlb_thermal(io: &'static dyn ShellBackend2) {
@@ -4421,7 +4435,7 @@ pub(crate) fn try_parse(
         Some("turbo") if ensure_no_args(io, args, "tlb: usage `tlb turbo`") => cmd_tlb_turbo(io),
         Some("ucode") if ensure_no_args(io, args, "tlb: usage `tlb ucode`") => cmd_tlb_ucode(io),
         Some("pmu") if ensure_no_args(io, args, "tlb: usage `tlb pmu`") => cmd_tlb_pmu(io),
-        Some("rapl") if ensure_no_args(io, args, "tlb: usage `tlb rapl`") => cmd_tlb_rapl(io),
+        Some("rapl") => cmd_tlb_rapl_args(spawner, io, args),
         Some("thermal") if ensure_no_args(io, args, "tlb: usage `tlb thermal`") => {
             cmd_tlb_thermal(io)
         }
