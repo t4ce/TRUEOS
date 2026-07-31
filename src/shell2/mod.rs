@@ -388,7 +388,7 @@ impl<'a> AlignedWriter<'a> {
         out
     }
 
-    fn prompt(&self, output_mask: u8) {
+    fn prompt(&self, _output_mask: u8) {
         self.move_to(PROMPT_ROW, 1);
         self.clear_line();
         self.io.raw_write_str("\x1b[0m");
@@ -1141,7 +1141,7 @@ fn show_status_row_message(out: &AlignedWriter<'_>, text: &str) {
 async fn run_plain_section_status(
     out: &AlignedWriter<'_>,
     output_mask: u8,
-    mode: ShellMode2,
+    _mode: ShellMode2,
     running_go2_phase: usize,
 ) {
     let white = alloc::format!(

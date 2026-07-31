@@ -189,26 +189,38 @@ pub(crate) struct SpiritSurfaceLayout {
     pub(crate) byte_len: usize,
 }
 
-/// One borrowed view of the exact Spirit cursor surface currently latched by
-/// one display pipe. The cursor-state lock remains held for the callback, so
-/// that pipe's live buffer cannot become the producer's next back buffer
-/// mid-read.
-pub(crate) struct SpiritStreamOverlay<'a> {
-    pub(crate) left: i32,
-    pub(crate) top: i32,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) pitch_bytes: u32,
-    pub(crate) bgra_premultiplied: &'a [u8],
+/// GPU-only ownership of the exact Spirit surface currently latched on pipe A.
+/// Dropping it returns that allocation to Spirit's producer rotation.
+pub(crate) struct SpiritStreamGpuLease {
+    overlay: intel_cursor::SpiritStreamGpuOverlay,
 }
 
-/// Borrow Spirit's current pipe-A CUR_SURFLIVE image and actual CUR_POS without
-/// waiting for a newer Spirit frame. An absent or transiently invalid cursor
-/// plane remains a cheap `None`, allowing scanout capture to dominate cadence.
-pub(crate) fn with_stream_overlay_pipe_a<R>(
-    read: impl FnOnce(SpiritStreamOverlay<'_>) -> R,
-) -> Option<R> {
-    intel_cursor::with_stream_overlay_pipe_a_surflive(read)
+impl SpiritStreamGpuLease {
+    pub(crate) fn gpgpu_surface(&self) -> Option<crate::intel::gpgpu::GpgpuRgba8Surface> {
+        crate::intel::gpgpu::GpgpuRgba8Surface::new_bgra(
+            self.overlay.phys,
+            self.overlay.gpu,
+            self.overlay.byte_len,
+            self.overlay.width,
+            self.overlay.height,
+            self.overlay.pitch_bytes,
+        )
+    }
+
+    pub(crate) const fn position(&self) -> (i32, i32) {
+        (self.overlay.left, self.overlay.top)
+    }
+}
+
+impl Drop for SpiritStreamGpuLease {
+    fn drop(&mut self) {
+        intel_cursor::release_stream_overlay_pipe_a_gpu(self.overlay);
+    }
+}
+
+pub(crate) fn acquire_stream_overlay_pipe_a_gpu() -> Option<SpiritStreamGpuLease> {
+    intel_cursor::acquire_stream_overlay_pipe_a_gpu()
+        .map(|overlay| SpiritStreamGpuLease { overlay })
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

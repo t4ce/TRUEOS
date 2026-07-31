@@ -210,6 +210,7 @@ struct SpiritCursorChannel {
     surfaces: [Option<SpiritCursorSurface>; SPIRIT_SURFACES_PER_CHANNEL],
     front: Option<u8>,
     pending: Option<u8>,
+    stream_readers: [u32; SPIRIT_SURFACES_PER_CHANNEL],
     init_failed: bool,
     visible: bool,
 }
@@ -220,6 +221,7 @@ impl SpiritCursorChannel {
             surfaces: [None, None],
             front: None,
             pending: None,
+            stream_readers: [0; SPIRIT_SURFACES_PER_CHANNEL],
             init_failed: false,
             visible: false,
         }
@@ -300,6 +302,9 @@ pub(super) fn spirit_cursor_back_surface(
         return Err(SpiritCursorError::FlipPending);
     }
     let surface_index = channel_state.front.map_or(0, |front| 1 - front);
+    if channel_state.stream_readers[surface_index as usize] != 0 {
+        return Err(SpiritCursorError::FlipPending);
+    }
     let surface = channel_state.surfaces[surface_index as usize]
         .ok_or(SpiritCursorError::HardwareNotReady)?;
     Ok(surface_access(channel, surface_index, surface))
@@ -528,44 +533,73 @@ pub(super) fn spirit_cursor_rearm_needed(channel: u8) -> Result<bool, SpiritCurs
     Ok(contract_lost)
 }
 
-pub(super) fn with_stream_overlay_pipe_a_surflive<R>(
-    read: impl FnOnce(super::SpiritStreamOverlay<'_>) -> R,
-) -> Option<R> {
-    // The fixed test-rig stream source is D01, currently driven by display
-    // pipe A. Cursor ownership and registers are per-pipe on this platform.
+#[derive(Copy, Clone)]
+pub(super) struct SpiritStreamGpuOverlay {
+    pub(super) surface: u8,
+    pub(super) left: i32,
+    pub(super) top: i32,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) pitch_bytes: u32,
+    pub(super) byte_len: usize,
+    pub(super) phys: u64,
+    pub(super) gpu: u64,
+}
+
+/// Lease the exact pipe-A cursor allocation named by CUR_SURFLIVE without
+/// exposing a CPU slice or performing a cache sweep.
+pub(super) fn acquire_stream_overlay_pipe_a_gpu() -> Option<SpiritStreamGpuOverlay> {
     const STREAM_PIPE: usize = 0;
 
     let dev = crate::intel::claimed_device()?;
-    let state = SPIRIT_CURSOR_STATE.lock();
-    let pipe_state = &state.channels[STREAM_PIPE];
+    let mut state = SPIRIT_CURSOR_STATE.lock();
+    let pipe_state = &mut state.channels[STREAM_PIPE];
     let regs = cursor_regs(STREAM_PIPE);
     if crate::intel::mmio_read(dev, regs.ctl) & CURSOR_MODE_MASK == 0 {
         return None;
     }
     let live = crate::intel::mmio_read(dev, regs.surf_live);
-    let surface = pipe_state
-        .surfaces
-        .iter()
-        .flatten()
-        .copied()
-        .find(|surface| {
-            u32::try_from(surface.gpu)
-                .ok()
-                .is_some_and(|gpu| gpu == live)
-        })?;
-
+    let (surface_index, surface) =
+        pipe_state
+            .surfaces
+            .iter()
+            .enumerate()
+            .find_map(|(index, surface)| {
+                surface.as_ref().copied().and_then(|surface| {
+                    u32::try_from(surface.gpu)
+                        .ok()
+                        .filter(|gpu| *gpu == live)
+                        .map(|_| (index, surface))
+                })
+            })?;
+    pipe_state.stream_readers[surface_index] =
+        pipe_state.stream_readers[surface_index].checked_add(1)?;
     let (left, top) = cursor_pos_from_reg(crate::intel::mmio_read(dev, regs.pos));
-    crate::intel::dma_flush(surface.virt, surface.byte_len);
-    let bgra_premultiplied =
-        unsafe { core::slice::from_raw_parts(surface.virt.cast_const(), surface.byte_len) };
-    Some(read(super::SpiritStreamOverlay {
+    Some(SpiritStreamGpuOverlay {
+        surface: surface_index as u8,
         left,
         top,
         width: surface.width,
         height: surface.height,
         pitch_bytes: surface.pitch_bytes,
-        bgra_premultiplied,
-    }))
+        byte_len: surface.byte_len,
+        phys: surface.phys,
+        gpu: surface.gpu,
+    })
+}
+
+pub(super) fn release_stream_overlay_pipe_a_gpu(overlay: SpiritStreamGpuOverlay) {
+    const STREAM_PIPE: usize = 0;
+
+    let mut state = SPIRIT_CURSOR_STATE.lock();
+    let pipe_state = &mut state.channels[STREAM_PIPE];
+    let index = overlay.surface as usize;
+    if index < SPIRIT_SURFACES_PER_CHANNEL
+        && pipe_state.surfaces[index]
+            .is_some_and(|surface| surface.phys == overlay.phys && surface.gpu == overlay.gpu)
+    {
+        pipe_state.stream_readers[index] = pipe_state.stream_readers[index].saturating_sub(1);
+    }
 }
 
 fn channel_index(channel: u8) -> Result<usize, SpiritCursorError> {

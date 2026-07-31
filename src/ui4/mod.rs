@@ -78,8 +78,9 @@ pub(crate) use frame_pool::{
     destroy_frame, frame_buffer_ownership_probe, frame_snapshot, gpgpu_rgba_surface,
     mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_frame_buffer,
     publish_gpgpu_scene_frame_buffer, publish_gpgpu_video_frame_buffer,
-    publish_gpu_font_frame_buffer, publish_gpu_frame_buffer, published_rgba_view,
-    release_published_frame, retain_published_frame, wait_frame_buffer_release, writable_rgba_view,
+    publish_gpu_font_frame_buffer, publish_gpu_frame_buffer, published_gpgpu_rgba_view,
+    published_rgba_view, release_published_frame, retain_published_frame,
+    wait_frame_buffer_release, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_DURATION_MS,
@@ -93,9 +94,7 @@ pub(crate) use gpgpu_svg_probe_consumer::{
     request_gpgpu_svg_probe_start, request_gpgpu_svg_probe_stop,
 };
 #[cfg(feature = "trueos_h264_encode_stream")]
-pub(crate) use h264_encode_stream::{ui4_h264_encode_prepare_task, ui4_h264_encode_stream_task};
-#[cfg(feature = "trueos_h264_encode_stream")]
-pub(crate) use h264_encode_udp::ui4_h264_encode_udp_egress_task;
+pub(crate) use h264_encode_stream::ui4_h264_encode_stream_task;
 pub(crate) use input_broker::{
     Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent,
     Ui4VisualRect, focused_keyboard_state, select_window_for_cursor, show_context_menu,

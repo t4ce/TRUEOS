@@ -527,13 +527,16 @@ pub(crate) use self::display::{
     CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, PrimaryPlaneSource,
     RgbaOverlayTile, Ui4AsyncComposition, Ui4AsyncCompositionError, Ui4AsyncCompositionPoll,
     Ui4DirectRgbaFrame, Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll,
-    Ui4StreamSlot0View,
+    Ui4StreamInteractionOverlayLease,
 };
 
-pub(crate) fn with_ui4_stream_pipe_a_slot0_surflive<R>(
-    read: impl FnOnce(Ui4StreamSlot0View<'_>) -> R,
-) -> Option<R> {
-    self::display::with_ui4_stream_pipe_a_slot0_surflive(read)
+pub(crate) fn ui4_stream_pipe_a_slot0_gpu_surface() -> Option<self::gpgpu::GpgpuRgba8Surface> {
+    self::display::ui4_stream_pipe_a_slot0_gpu_surface()
+}
+
+pub(crate) fn acquire_ui4_stream_pipe_a_slot4_surface() -> Option<Ui4StreamInteractionOverlayLease>
+{
+    self::display::acquire_ui4_stream_pipe_a_slot4_surface()
 }
 
 pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {

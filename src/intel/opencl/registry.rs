@@ -140,7 +140,7 @@ const UI4_COMPOSE_LAYER_DESC_FIELDS: &[DescriptorField<'_>] = &[
     DescriptorField::new("flags", 10, 1),
 ];
 const UI4_COMPOSE_LAYER_DESC: DescriptorLayout<'_> =
-    DescriptorLayout::new("Ui4ComposeLayerDesc", 12, Some(32), UI4_COMPOSE_LAYER_DESC_FIELDS);
+    DescriptorLayout::new("Ui4ComposeLayerDesc", 12, Some(384), UI4_COMPOSE_LAYER_DESC_FIELDS);
 
 const MANDEL64_DESC_FIELDS: &[DescriptorField<'_>] = &[
     DescriptorField::new("src_xy", 0, 1),
@@ -380,6 +380,33 @@ const UI4_COMPOSE_LAYERS_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     descriptor_layouts: UI4_COMPOSE_LAYER_DESCS,
     launch: KernelLaunchContract::nd_range_2d(None),
     consumers: &["ui4 persistent GuC compositor"],
+};
+
+const UI4_COMPOSE_LAYERS_TO_NV12_ARGS: &[KernelCallArg<'_>] = &[
+    ro_buf!(0, "layers", "__global const uint*", 0, 12),
+    rw_buf!(1, "dst_nv12_words", "__global uint*", 1, 14),
+    u32_arg!(2, "logical_width", 16),
+    u32_arg!(3, "logical_height", 17),
+    u32_arg!(4, "dst_pitch_bytes", 18),
+    u32_arg!(5, "dst_width", 19),
+    u32_arg!(6, "dst_height", 20),
+    u32_arg!(7, "active_top", 21),
+    u32_arg!(8, "active_height", 22),
+    u32_arg!(9, "layer_count", 23),
+];
+const UI4_COMPOSE_LAYERS_TO_NV12_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
+    name: gpgpu::UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_KERNEL_NAME,
+    source_path: "src/intel/gpgpu/kernels/ui4_compose_layers_to_nv12_linear.clcpp",
+    producer: IGC,
+    target: ADLS,
+    entry_text_offset_bytes: TEXT_OFFSET,
+    cross_thread_bytes: UI4_COMPOSE_LAYERS_CROSS_THREAD_BYTES,
+    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
+    binding_count: 2,
+    args: UI4_COMPOSE_LAYERS_TO_NV12_ARGS,
+    descriptor_layouts: UI4_COMPOSE_LAYER_DESCS,
+    launch: KernelLaunchContract::nd_range_2d(None),
+    consumers: &["single-task UI4 RDP fused compositor"],
 };
 
 const MANDEL64_ARGS: &[KernelCallArg<'_>] = FILL_RECT_WORKLIST_ARGS;
@@ -700,6 +727,14 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         contract: &UI4_COMPOSE_LAYERS_CONTRACT,
         upload: gpgpu::upload_ui4_compose_layers_rgba8_kernel,
         status: gpgpu::ui4_compose_layers_rgba8_upload_status,
+        role: KnownKernelRole::Present,
+    },
+    KnownAotKernel {
+        name: gpgpu::UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_KERNEL_NAME,
+        artifact: &gpgpu::UI4_COMPOSE_LAYERS_TO_NV12_LINEAR_ADLS_ARTIFACT,
+        contract: &UI4_COMPOSE_LAYERS_TO_NV12_CONTRACT,
+        upload: gpgpu::upload_ui4_compose_layers_to_nv12_linear_kernel,
+        status: gpgpu::ui4_compose_layers_to_nv12_linear_upload_status,
         role: KnownKernelRole::Present,
     },
     KnownAotKernel {

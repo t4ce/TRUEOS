@@ -611,7 +611,6 @@ unsafe impl Send for ProbeBacking {}
 #[derive(Copy, Clone)]
 pub(crate) struct AvcNv12DmaSurface {
     phys: u64,
-    virt: *mut u8,
     bytes: usize,
 }
 
@@ -619,12 +618,10 @@ unsafe impl Send for AvcNv12DmaSurface {}
 unsafe impl Sync for AvcNv12DmaSurface {}
 
 impl AvcNv12DmaSurface {
-    pub(crate) fn new(phys: u64, virt: *mut u8, bytes: usize) -> Option<Self> {
-        (phys != 0
-            && !virt.is_null()
-            && phys.is_multiple_of(crate::intel::WARM_ALIGN as u64)
-            && bytes == SOURCE_BYTES)
-            .then_some(Self { phys, virt, bytes })
+    /// Describe a GPU-produced VDBOX source without exposing a CPU mapping.
+    pub(crate) fn new(phys: u64, bytes: usize) -> Option<Self> {
+        (phys != 0 && phys.is_multiple_of(crate::intel::WARM_ALIGN as u64) && bytes == SOURCE_BYTES)
+            .then_some(Self { phys, bytes })
     }
 }
 
@@ -767,9 +764,9 @@ async fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
 
     let arena_source_phys = backing.arena_phys.saturating_add(SOURCE_OFFSET as u64);
     let source_virt = unsafe { backing.arena_virt.add(SOURCE_OFFSET) };
-    let source = unsafe { core::slice::from_raw_parts_mut(source_virt, SOURCE_BYTES) };
     let (source_phys, source_hash) = match source_kind {
         AvcFrameSource::BootProof => {
+            let source = unsafe { core::slice::from_raw_parts_mut(source_virt, SOURCE_BYTES) };
             if !fill_boot_proof_nv12(source) {
                 return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
             }
@@ -779,10 +776,10 @@ async fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
             if surface.bytes != SOURCE_BYTES {
                 return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
             }
-            crate::intel::dma_flush(surface.virt, surface.bytes);
-            let bytes =
-                unsafe { core::slice::from_raw_parts(surface.virt.cast_const(), surface.bytes) };
-            (surface.phys, fnv1a32_sampled(bytes))
+            // RCS has already retired a full cache/fabric-flush epilogue. Map
+            // that physical allocation directly for VDBOX; the live path has
+            // no CPU pointer, cache sweep, sample, or telemetry hash.
+            (surface.phys, 0)
         }
     };
     if backing
@@ -1349,20 +1346,6 @@ fn fnv1a32(bytes: &[u8]) -> u32 {
     let mut hash = 0x811c_9dc5u32;
     for byte in bytes {
         hash ^= *byte as u32;
-        hash = hash.wrapping_mul(0x0100_0193);
-    }
-    hash
-}
-
-/// A bounded change detector for GPU-produced frame telemetry. Sampling keeps
-/// validation from turning the eliminated full-frame CPU copy into a disguised
-/// full-frame CPU readback.
-fn fnv1a32_sampled(bytes: &[u8]) -> u32 {
-    const MAX_SAMPLES: usize = 4096;
-    let stride = bytes.len().div_ceil(MAX_SAMPLES).max(1);
-    let mut hash = 0x811c_9dc5u32 ^ bytes.len() as u32;
-    for byte in bytes.iter().step_by(stride) {
-        hash ^= u32::from(*byte);
         hash = hash.wrapping_mul(0x0100_0193);
     }
     hash

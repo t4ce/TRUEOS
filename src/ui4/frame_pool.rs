@@ -103,6 +103,14 @@ pub(crate) struct FrameRgbaView {
 unsafe impl Send for FrameRgbaView {}
 unsafe impl Sync for FrameRgbaView {}
 
+/// GPU-only view of a pinned published RGBA frame. Unlike `FrameRgbaView`,
+/// this contract cannot expose or touch the allocation through the CPU.
+#[derive(Copy, Clone)]
+pub(crate) struct FrameGpgpuRgbaView {
+    pub(crate) surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+    pub(crate) gpu_release: Option<FrameGpuRelease>,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PublishedFrame {
     pub(crate) frame: FrameHandle,
@@ -420,6 +428,30 @@ pub(crate) fn published_rgba_view(lease: FrameReadLease) -> Result<FrameRgbaView
         height: access.height,
         pitch: access.pitch,
         gpu_authored,
+        gpu_release,
+    })
+}
+
+pub(crate) fn published_gpgpu_rgba_view(
+    lease: FrameReadLease,
+) -> Result<FrameGpgpuRgbaView, FramePoolError> {
+    let (surface, gpu_release) = {
+        let pool = FRAME_POOL.lock();
+        let frame = pool.checked(lease.frame)?;
+        if frame.readers[lease.buffer_index as usize] == 0 {
+            return Err(FramePoolError::InvalidLease);
+        }
+        if frame.plan.format != ScanoutFormat::Rgba8888Premultiplied {
+            return Err(FramePoolError::UnsupportedFormat);
+        }
+        (
+            frame.surfaces[lease.buffer_index as usize].ok_or(FramePoolError::InvalidLease)?,
+            frame.gpu_release[lease.buffer_index as usize],
+        )
+    };
+    let surface = ui_surface::gpgpu_rgba_surface(surface).ok_or(FramePoolError::InvalidLease)?;
+    Ok(FrameGpgpuRgbaView {
+        surface,
         gpu_release,
     })
 }

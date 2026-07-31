@@ -697,28 +697,15 @@ fn spawn_ui4_h264_encode_stream_task(spawner: Spawner) -> SpawnAttempt {
         return SpawnAttempt::Skipped;
     };
 
-    let prepare_token = match crate::ui4::ui4_h264_encode_prepare_task(lastap_slot) {
+    let token = match crate::ui4::ui4_h264_encode_stream_task(lastap_slot) {
         Ok(token) => token,
         Err(error) => return SpawnAttempt::Failed(error),
     };
-    let encode_token = match crate::ui4::ui4_h264_encode_stream_task() {
-        Ok(token) => token,
-        Err(error) => return SpawnAttempt::Failed(error),
-    };
-    let egress_token = match crate::ui4::ui4_h264_encode_udp_egress_task(lastap_slot) {
-        Ok(token) => token,
-        Err(error) => return SpawnAttempt::Failed(error),
-    };
-    lastap_spawner.spawn(prepare_token);
-    lastap_spawner.spawn(encode_token);
-    lastap_spawner.spawn(egress_token);
+    lastap_spawner.spawn(token);
     crate::log_info!(target: "service";
-        "ui4 h264 stream pipeline assigned carrier=lastap slot={} core_kind={} cooperative_tasks=3 prepare_slot={} encode_slot={} egress_slot={} exclusive_from=vm-hull+blocking-lanes+background-round-robin preparation_buffering=double encoded_au_queue=bounded future_home=ap1-ui\n",
+        "ui4 h264 stream pipeline assigned carrier=lastap slot={} core_kind={} cooperative_tasks=1 task_owns=fused-gpu-composition+vdbox-encode+udp-egress gpu_dispatches_per_frame=1 rgba_mirror_bytes=0 cpu_pixel_access=0 exclusive_from=vm-hull+blocking-lanes+background-round-robin future_home=ap1-ui\n",
         lastap_slot,
         lastap_kind,
-        lastap_slot,
-        lastap_slot,
-        lastap_slot,
     );
     SpawnAttempt::Spawned
 }
