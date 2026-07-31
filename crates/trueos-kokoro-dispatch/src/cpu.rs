@@ -1866,6 +1866,32 @@ fn execute<const BINDINGS: usize>(
             require_whole_unit(work)?;
             execute_matmul(access, value, gemm)?;
         }
+        Attributes::DynamicQuantizedGemm(value) => {
+            require_whole_unit(work)?;
+            execute_quant_gemm(
+                access,
+                value,
+                quant,
+                require_workspace(workspace, OpCode::DynamicQuantizedGemm)?,
+            )?;
+        }
+        Attributes::DynamicQuantizedConv1d(value) => {
+            require_whole_unit(work)?;
+            execute_quant_conv(
+                access,
+                value,
+                quant,
+                require_workspace(workspace, OpCode::DynamicQuantizedConv1d)?,
+            )?;
+        }
+        Attributes::BiLstm256(value) => {
+            require_whole_unit(work)?;
+            execute_bilstm(
+                access,
+                value,
+                require_workspace(workspace, OpCode::BiLstm256)?,
+            )?;
+        }
         Attributes::Pow(_) => {
             require_whole_unit(work)?;
             require_arity(access, 2, 1)?;
@@ -1993,16 +2019,20 @@ fn execute<const BINDINGS: usize>(
         Attributes::Pad(value) => execute_pad(access, value)?,
         Attributes::NonZero => execute_nonzero(access)?,
         Attributes::ScatterNd(_) => execute_scatter(access)?,
-        Attributes::BiLstm256(_)
-        | Attributes::DynamicQuantizedGemm(_)
-        | Attributes::DynamicQuantizedConv1d(_)
-        | Attributes::View(_) => {
+        Attributes::View(_) => {
             return Err(DispatchError::UnsupportedOpcode {
                 opcode: attributes.opcode(),
             });
         }
     }
     Ok(DispatchResult::Completed)
+}
+
+fn require_workspace<'workspace, 'buffers>(
+    workspace: Option<&'workspace mut CpuWorkspace<'buffers>>,
+    opcode: OpCode,
+) -> Result<&'workspace mut CpuWorkspace<'buffers>, DispatchError> {
+    workspace.ok_or(DispatchError::WorkspaceRequired { opcode })
 }
 
 fn execute_transpose<const BINDINGS: usize>(
@@ -2356,6 +2386,306 @@ fn execute_scatter<const BINDINGS: usize>(
         &updates,
         &mut output,
     )?;
+    Ok(())
+}
+
+fn execute_quant_gemm<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: QuantGemmAttributes,
+    dispatcher: trueos_ttstt_cpu::Dispatcher,
+    workspace: &mut CpuWorkspace<'_>,
+) -> Result<(), DispatchError> {
+    let has_bias = attributes.bias_mode == BiasMode::Float;
+    require_arity(access, if has_bias { 5 } else { 4 }, 1)?;
+    let activation = access.input::<f32>(0)?;
+    let weights = access.input::<i8>(1)?;
+    let weight_scales = access.input::<f32>(2)?;
+    let weight_zero_points = access.input::<i8>(3)?;
+    let bias = if has_bias {
+        Some(access.input::<f32>(4)?)
+    } else {
+        None
+    };
+    let k = usize::try_from(attributes.k).map_err(|_| DispatchError::ShapeConversion)?;
+    let n = usize::try_from(attributes.n).map_err(|_| DispatchError::ShapeConversion)?;
+    let packed_elements = k.checked_mul(n).ok_or(DispatchError::ShapeConversion)?;
+    if k == 0
+        || n == 0
+        || !activation.len().is_multiple_of(k)
+        || weights.len() != packed_elements
+        || weight_scales.len() != n
+        || weight_zero_points.len() != n
+        || bias.as_ref().is_some_and(|values| values.len() != n)
+    {
+        return Err(DispatchError::ShapeConversion);
+    }
+    let rows = activation.len() / k;
+    if rows == 0 {
+        return Err(DispatchError::ShapeConversion);
+    }
+    let output_elements = rows
+        .checked_mul(n)
+        .ok_or(DispatchError::ShapeConversion)?;
+    let quantization = trueos_ttstt_cpu::dynamic_quantization_parameters(&activation)?;
+    for &scale in weight_scales.iter() {
+        trueos_ttstt_cpu::conv_integer_scale(quantization.scale, scale)?;
+    }
+    if bias
+        .as_ref()
+        .is_some_and(|values| values.iter().any(|value| !value.is_finite()))
+    {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+
+    let packed = workspace
+        .packed_i8
+        .get_mut(..packed_elements)
+        .ok_or(WorkspaceError::PackedI8TooSmall)?;
+    let row_sums = workspace
+        .row_sums_i32
+        .get_mut(..n)
+        .ok_or(WorkspaceError::RowSumsI32TooSmall)?;
+    let quantized_row = workspace
+        .quant_u8
+        .get_mut(..k)
+        .ok_or(WorkspaceError::QuantU8TooSmall)?;
+    let accumulators = workspace
+        .accum_i32
+        .get_mut(..n)
+        .ok_or(WorkspaceError::AccumI32TooSmall)?;
+    trueos_ttstt_cpu::pack_matmul_weights_i8(&weights, k, n, packed, row_sums)?;
+
+    let mut output = access.output::<f32>(0)?;
+    if output.len() != output_elements {
+        return Err(DispatchError::ShapeConversion);
+    }
+    for row in 0..rows {
+        let input_start = row * k;
+        trueos_ttstt_cpu::quantize_linear_u8_with_parameters(
+            &activation[input_start..input_start + k],
+            quantization,
+            quantized_row,
+        )?;
+        dispatcher.qgemm(
+            quantized_row,
+            packed,
+            accumulators,
+            trueos_ttstt_cpu::QGemmParams {
+                m: 1,
+                n,
+                k,
+                lhs_zero_point: quantization.zero_point,
+                rhs_zero_points: trueos_ttstt_cpu::RhsZeroPoints::PerOutput(
+                    &weight_zero_points,
+                ),
+                rhs_row_sums: Some(row_sums),
+            },
+        )?;
+        let output_start = row * n;
+        trueos_ttstt_cpu::dequantize_matmul_integer_per_output(
+            accumulators,
+            1,
+            n,
+            quantization.scale,
+            &weight_scales,
+            &mut output[output_start..output_start + n],
+        )?;
+        if let Some(values) = bias.as_ref() {
+            for (destination, &value) in output[output_start..output_start + n]
+                .iter_mut()
+                .zip(values.iter())
+            {
+                *destination += value;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn execute_quant_conv<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: QuantConvAttributes,
+    dispatcher: trueos_ttstt_cpu::Dispatcher,
+    workspace: &mut CpuWorkspace<'_>,
+) -> Result<(), DispatchError> {
+    let has_bias = attributes.bias_mode == BiasMode::QuantizedInt32;
+    require_arity(access, if has_bias { 5 } else { 4 }, 1)?;
+    if attributes.groups != 1 {
+        return Err(DispatchError::UnsupportedAttributeProfile {
+            opcode: OpCode::DynamicQuantizedConv1d,
+        });
+    }
+    let input = access.input::<f32>(0)?;
+    let weights = access.input::<u8>(1)?;
+    let weight_scale = access.input::<f32>(2)?;
+    let weight_zero = access.input::<u8>(3)?;
+    let bias = if has_bias {
+        Some(access.input::<f32>(4)?)
+    } else {
+        None
+    };
+    let input_shape = input.shape();
+    let input_dims = input_shape.dims();
+    if input_dims.len() != 3 || weight_scale.len() != 1 || weight_zero.len() != 1 {
+        return Err(DispatchError::ShapeConversion);
+    }
+    if u32::from(weight_zero[0]) != attributes.weight_zero {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let batch = input_dims[0] as usize;
+    let input_channels = attributes.input_channels as usize;
+    let input_width = input_dims[2] as usize;
+    let output_channels = attributes.output_channels as usize;
+    let kernel_width = attributes.kernel as usize;
+    let reduction = input_channels
+        .checked_mul(kernel_width)
+        .ok_or(DispatchError::ShapeConversion)?;
+    let packed_elements = output_channels
+        .checked_mul(reduction)
+        .ok_or(DispatchError::ShapeConversion)?;
+    if input_dims[1] as usize != input_channels
+        || weights.len() != packed_elements
+        || bias
+            .as_ref()
+            .is_some_and(|values| values.len() != output_channels)
+    {
+        return Err(DispatchError::ShapeConversion);
+    }
+    let packed = workspace
+        .packed_i8
+        .get_mut(..packed_elements)
+        .ok_or(WorkspaceError::PackedI8TooSmall)?;
+    let row_sums = workspace
+        .row_sums_i32
+        .get_mut(..output_channels)
+        .ok_or(WorkspaceError::RowSumsI32TooSmall)?;
+    let blocked_reduction = reduction
+        .checked_mul(4)
+        .ok_or(DispatchError::ShapeConversion)?;
+    let patch_elements = if workspace.quant_u8.len() >= blocked_reduction {
+        blocked_reduction
+    } else {
+        reduction
+    };
+    let patch_scratch = workspace
+        .quant_u8
+        .get_mut(..patch_elements)
+        .ok_or(WorkspaceError::QuantU8TooSmall)?;
+    let bias_scratch = if has_bias {
+        workspace
+            .bias_i32
+            .get_mut(..output_channels)
+            .ok_or(WorkspaceError::BiasI32TooSmall)?
+    } else {
+        &mut workspace.bias_i32[..0]
+    };
+    trueos_ttstt_cpu::pack_conv1d_weights_u8(
+        &weights,
+        output_channels,
+        input_channels,
+        kernel_width,
+        packed,
+        row_sums,
+    )?;
+    let params = trueos_ttstt_cpu::QConv1dParams {
+        batch,
+        input_channels,
+        input_width,
+        output_channels,
+        kernel_width,
+        stride: attributes.stride as usize,
+        dilation: attributes.dilation as usize,
+        pad_left: attributes.pad_left as usize,
+        pad_right: attributes.pad_right as usize,
+        input_zero_point: 0,
+        weight_zero_points: trueos_ttstt_cpu::RhsZeroPoints::Scalar(
+            trueos_ttstt_cpu::signed_u8_zero_point(weight_zero[0]),
+        ),
+        weight_row_sums: Some(row_sums),
+    };
+    let output_width = params.output_width()?;
+    let expected_output = batch
+        .checked_mul(output_channels)
+        .and_then(|elements| elements.checked_mul(output_width))
+        .ok_or(DispatchError::ShapeConversion)?;
+    let mut output = access.output::<f32>(0)?;
+    if output.len() != expected_output {
+        return Err(DispatchError::ShapeConversion);
+    }
+    dispatcher.qconv1d_dequantized(
+        &input,
+        packed,
+        &mut output,
+        patch_scratch,
+        bias_scratch,
+        params,
+        weight_scale[0],
+        bias.as_deref(),
+    )?;
+    Ok(())
+}
+
+fn execute_bilstm<const BINDINGS: usize>(
+    access: &OpAccess<BINDINGS>,
+    attributes: BiLstmAttributes,
+    workspace: &mut CpuWorkspace<'_>,
+) -> Result<(), DispatchError> {
+    require_arity(access, 6, 3)?;
+    let input_width = match (attributes.profile, attributes.input_width) {
+        (1, 512) => trueos_kokoro_lstm::InputWidth::Text512,
+        (2..=6, 640) => trueos_kokoro_lstm::InputWidth::Prosody640,
+        _ => {
+            return Err(DispatchError::UnsupportedAttributeProfile {
+                opcode: OpCode::BiLstm256,
+            });
+        }
+    };
+    let input = access.input::<f32>(0)?;
+    let weights = access.input::<f32>(1)?;
+    let recurrent = access.input::<f32>(2)?;
+    let bias = access.input::<f32>(3)?;
+    let initial_hidden = access.input::<f32>(4)?;
+    let initial_cell = access.input::<f32>(5)?;
+    let input_shape = input.shape();
+    let input_dims = input_shape.dims();
+    if input_dims.len() != 3
+        || input_dims[1] != 1
+        || input_dims[2] != attributes.input_width
+    {
+        return Err(DispatchError::ShapeConversion);
+    }
+    let sequence_length = input_dims[0] as usize;
+    let problem = trueos_kokoro_lstm::Problem::new(
+        sequence_length,
+        input_width,
+        &input,
+        &weights,
+        &recurrent,
+        &bias,
+    )?;
+    let gates = workspace
+        .lstm_gates_f32
+        .get_mut(..trueos_kokoro_lstm::GATE_SCRATCH_ELEMENTS)
+        .ok_or(WorkspaceError::LstmGatesF32TooSmall)?;
+    let mut output = access.output::<f32>(0)?;
+    let mut hidden = access.output::<f32>(1)?;
+    let mut cell = access.output::<f32>(2)?;
+    let buffers = trueos_kokoro_lstm::Buffers::new(
+        &mut output,
+        &mut hidden,
+        &mut cell,
+        gates,
+    );
+    let mut invocation = trueos_kokoro_lstm::CooperativeLstm::start_with_state(
+        problem,
+        buffers,
+        &initial_hidden,
+        &initial_cell,
+    )?;
+    let mut dense = trueos_kokoro_lstm::DispatchedDense::detect();
+    while !invocation.is_complete() {
+        invocation.advance(&mut dense)?;
+    }
     Ok(())
 }
 

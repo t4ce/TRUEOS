@@ -1823,6 +1823,114 @@ mod tests {
     }
 
     #[test]
+    fn fused_dequantized_qconv_matches_materialized_reference_on_every_lane() {
+        const BATCH: usize = 1;
+        const INPUT_CHANNELS: usize = 3;
+        const INPUT_WIDTH: usize = 8;
+        const OUTPUT_CHANNELS: usize = 4;
+        const KERNEL_WIDTH: usize = 3;
+
+        let dispatcher = Dispatcher::detect();
+        let input = (0..BATCH * INPUT_CHANNELS * INPUT_WIDTH)
+            .map(|index| ((index * 29 % 41) as f32 - 20.0) * 0.071)
+            .collect::<Vec<_>>();
+        let weights_ock = (0..OUTPUT_CHANNELS * INPUT_CHANNELS * KERNEL_WIDTH)
+            .map(|index| (index as u8).wrapping_mul(47).wrapping_add(19))
+            .collect::<Vec<_>>();
+        let weight_zero = 137u8;
+        let weight_scale = 0.03125f32;
+        let bias = [-0.75f32, 0.125, 1.25, -0.0625];
+        let mut packed = vec![0i8; weights_ock.len()];
+        let mut row_sums = [0i32; OUTPUT_CHANNELS];
+        pack_conv1d_weights_u8(
+            &weights_ock,
+            OUTPUT_CHANNELS,
+            INPUT_CHANNELS,
+            KERNEL_WIDTH,
+            &mut packed,
+            &mut row_sums,
+        )
+        .unwrap();
+
+        let mut quantized_input = vec![0u8; input.len()];
+        let quantization = dynamic_quantize_linear_u8(&input, &mut quantized_input).unwrap();
+        let params = QConv1dParams {
+            batch: BATCH,
+            input_channels: INPUT_CHANNELS,
+            input_width: INPUT_WIDTH,
+            output_channels: OUTPUT_CHANNELS,
+            kernel_width: KERNEL_WIDTH,
+            stride: 2,
+            dilation: 1,
+            pad_left: 1,
+            pad_right: 2,
+            input_zero_point: quantization.zero_point,
+            weight_zero_points: RhsZeroPoints::Scalar(signed_u8_zero_point(weight_zero)),
+            weight_row_sums: Some(&row_sums),
+        };
+        let output_width = params.output_width().unwrap();
+        let mut accumulators = vec![0i32; BATCH * OUTPUT_CHANNELS * output_width];
+        let mut reference_patch = [0u8; INPUT_CHANNELS * KERNEL_WIDTH];
+        dispatcher
+            .qconv1d_with_lane(
+                &quantized_input,
+                &packed,
+                &mut accumulators,
+                &mut reference_patch,
+                params,
+                Lane::Scalar,
+            )
+            .unwrap();
+        let mut quantized_bias = [0i32; OUTPUT_CHANNELS];
+        let combined_scale = quantize_conv_bias_floor(
+            &bias,
+            quantization.scale,
+            weight_scale,
+            &mut quantized_bias,
+        )
+        .unwrap();
+        let mut expected = vec![0f32; accumulators.len()];
+        dequantize_conv_integer_ncw(
+            &accumulators,
+            BATCH,
+            OUTPUT_CHANNELS,
+            output_width,
+            Some(&quantized_bias),
+            combined_scale,
+            &mut expected,
+        )
+        .unwrap();
+
+        for lane in available_lanes(dispatcher) {
+            let mut observed = vec![0f32; expected.len()];
+            let mut patch = [0u8; INPUT_CHANNELS * KERNEL_WIDTH * 4];
+            let mut bias_scratch = [0i32; OUTPUT_CHANNELS];
+            let observed_quantization = dispatcher
+                .qconv1d_dequantized_with_lane(
+                    &input,
+                    &packed,
+                    &mut observed,
+                    &mut patch,
+                    &mut bias_scratch,
+                    QConv1dParams {
+                        input_zero_point: 0,
+                        ..params
+                    },
+                    weight_scale,
+                    Some(&bias),
+                    lane,
+                )
+                .unwrap();
+            assert_eq!(observed_quantization, quantization);
+            assert_eq!(
+                observed.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                expected.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                "lane={lane:?}",
+            );
+        }
+    }
+
+    #[test]
     fn convinteger_validation_rejects_zero_stride_and_short_scratch() {
         let dispatcher = Dispatcher::detect();
         let params = QConv1dParams {
