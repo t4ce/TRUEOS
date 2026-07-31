@@ -9,6 +9,7 @@ pub mod font_kernel_service;
 pub mod fs;
 pub mod gamepad_control_service;
 pub mod gridpaper_service;
+pub mod helio_game;
 pub mod hid_udp_srv;
 pub mod io;
 pub mod kernel_task_domain;

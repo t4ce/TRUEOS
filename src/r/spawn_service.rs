@@ -63,6 +63,7 @@ define_started_flags!(
     NET_SHELL_STARTED,
     DRAW3D_SERVICE_STARTED,
     DRAW3D_UI4_RENDER_STARTED,
+    HELIO_GAME_STARTED,
     GRIDPAPER_SERVICE_STARTED,
     HID_UDP_SRV_STARTED,
     AI_QJS_ONESHOT_STARTED,
@@ -539,6 +540,10 @@ fn spawn_draw3d_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_draw3d_ui4_render(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::r::draw3d_service::draw3d_ui4_render_task())
+}
+
+fn spawn_helio_game(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::r::helio_game::helio_game_service_task())
 }
 
 fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
@@ -1458,7 +1463,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 71
+const TASK_COUNT: usize = 72
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
@@ -1606,8 +1611,15 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &DRAW3D_UI4_RENDER_STARTED,
         spawn_draw3d_ui4_render,
     ),
-    // The two resident-scene consumers now use independent direct planes and
-    // the same triple-buffer release -> SURFLIVE ownership contract.
+    TaskSpec::enabled_gated(
+        "helio-game",
+        0,
+        ap1_ui_core_ready_gate,
+        &HELIO_GAME_STARTED,
+        spawn_helio_game,
+    ),
+    // Resident-scene consumers use independent direct planes and the same
+    // triple-buffer release -> SURFLIVE ownership contract.
     TaskSpec::enabled(
         "gridpaper-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
