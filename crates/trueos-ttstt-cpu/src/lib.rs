@@ -298,10 +298,9 @@ impl QConv1dParams<'_> {
         weights: &[i8],
         output: &[f32],
         patch_scratch: &[u8],
-        activation_quantization: DynamicQuantization,
-        combined_scale: f32,
-        bias_quantized: Option<&[i32]>,
-    ) -> Result<usize, Error> {
+        bias: Option<&[f32]>,
+        bias_scratch: &[i32],
+    ) -> Result<(usize, usize), Error> {
         let output_width = self.output_width()?;
         let reduction = self
             .input_channels
@@ -333,26 +332,6 @@ impl QConv1dParams<'_> {
         if patch_scratch.len() < reduction {
             return Err(Error::ScratchTooSmall);
         }
-        if !activation_quantization.scale.is_finite()
-            || activation_quantization.scale <= 0.0
-            || !combined_scale.is_finite()
-            || combined_scale <= 0.0
-        {
-            return Err(Error::InvalidScale);
-        }
-        let expected = dynamic_quantization_parameters(&input[..input_len]).map_err(|error| {
-            if error == QuantizationError::NonFiniteInput {
-                Error::NonFiniteInput
-            } else {
-                Error::InvalidQuantization
-            }
-        })?;
-        if expected.scale.to_bits() != activation_quantization.scale.to_bits()
-            || expected.zero_point != activation_quantization.zero_point
-            || self.input_zero_point != activation_quantization.zero_point
-        {
-            return Err(Error::InvalidQuantization);
-        }
         self.weight_zero_points.validate(self.output_channels)?;
         if self
             .weight_row_sums
@@ -360,10 +339,12 @@ impl QConv1dParams<'_> {
         {
             return Err(Error::RowSumsTooSmall);
         }
-        if bias_quantized.is_some_and(|bias| bias.len() < self.output_channels) {
+        if bias.is_some_and(|values| values.len() < self.output_channels)
+            || (bias.is_some() && bias_scratch.len() < self.output_channels)
+        {
             return Err(Error::BiasTooSmall);
         }
-        Ok(output_width)
+        Ok((output_width, input_len))
     }
 }
 
@@ -510,10 +491,11 @@ impl Dispatcher {
     /// Run the fused Kokoro ConvInteger epilogue without materializing either
     /// the complete quantized activation or an i32 output tensor.
     ///
-    /// The activation quantization parameters must have been reduced over the
+    /// Activation quantization parameters are reduced exactly once over the
     /// whole `input_ncl`. Quantization is then performed only for each bounded
     /// receptive-field patch; every i32 dot result is immediately bias-added,
-    /// cast, scaled, and committed to the f32 destination.
+    /// cast, scaled, and committed to the f32 destination. Optional bias is
+    /// quantized into caller-owned scratch before the destination is touched.
     #[allow(clippy::too_many_arguments)]
     pub fn qconv1d_dequantized(
         self,
@@ -521,24 +503,24 @@ impl Dispatcher {
         weights_oki: &[i8],
         output_ncl: &mut [f32],
         patch_scratch: &mut [u8],
+        bias_scratch: &mut [i32],
         params: QConv1dParams<'_>,
-        activation_quantization: DynamicQuantization,
-        combined_scale: f32,
-        bias_quantized: Option<&[i32]>,
-    ) -> Result<Lane, Error> {
+        weight_scale: f32,
+        bias: Option<&[f32]>,
+    ) -> Result<(Lane, DynamicQuantization), Error> {
         let lane = self.best_lane();
-        self.qconv1d_dequantized_with_lane(
+        let quantization = self.qconv1d_dequantized_with_lane(
             input_ncl,
             weights_oki,
             output_ncl,
             patch_scratch,
+            bias_scratch,
             params,
-            activation_quantization,
-            combined_scale,
-            bias_quantized,
+            weight_scale,
+            bias,
             lane,
         )?;
-        Ok(lane)
+        Ok((lane, quantization))
     }
 
     /// Explicit-lane form of [`Self::qconv1d_dequantized`].
@@ -549,24 +531,44 @@ impl Dispatcher {
         weights_oki: &[i8],
         output_ncl: &mut [f32],
         patch_scratch: &mut [u8],
+        bias_scratch: &mut [i32],
         params: QConv1dParams<'_>,
-        activation_quantization: DynamicQuantization,
-        combined_scale: f32,
-        bias_quantized: Option<&[i32]>,
+        weight_scale: f32,
+        bias: Option<&[f32]>,
         lane: Lane,
-    ) -> Result<(), Error> {
-        let output_width = params.validate_dequantized(
+    ) -> Result<DynamicQuantization, Error> {
+        let (output_width, input_len) = params.validate_dequantized(
             input_ncl,
             weights_oki,
             output_ncl,
             patch_scratch,
-            activation_quantization,
-            combined_scale,
-            bias_quantized,
+            bias,
+            bias_scratch,
         )?;
         if !self.supports(lane) {
             return Err(Error::UnsupportedLane);
         }
+        let activation_quantization = dynamic_quantization_parameters(&input_ncl[..input_len])
+            .map_err(map_quantization_error)?;
+        let params = QConv1dParams {
+            input_zero_point: activation_quantization.zero_point,
+            ..params
+        };
+        let combined_scale;
+        let bias_quantized = if let Some(values) = bias {
+            combined_scale = quantize_conv_bias_floor(
+                &values[..params.output_channels],
+                activation_quantization.scale,
+                weight_scale,
+                &mut bias_scratch[..params.output_channels],
+            )
+            .map_err(map_quantization_error)?;
+            Some(&bias_scratch[..params.output_channels])
+        } else {
+            combined_scale = conv_integer_scale(activation_quantization.scale, weight_scale)
+                .map_err(map_quantization_error)?;
+            None
+        };
         let reduction = params
             .input_channels
             .checked_mul(params.kernel_width)
@@ -660,7 +662,7 @@ impl Dispatcher {
                 output_x += 1;
             }
         }
-        Ok(())
+        Ok(activation_quantization)
     }
 
     /// Run allocation-free 1-D ConvInteger on an explicitly selected lane.
@@ -833,6 +835,14 @@ fn gather_qconv1d_patch_f32(
         }
     }
     Ok(())
+}
+
+fn map_quantization_error(error: QuantizationError) -> Error {
+    match error {
+        QuantizationError::NonFiniteInput => Error::NonFiniteInput,
+        QuantizationError::InvalidScale => Error::InvalidScale,
+        _ => Error::InvalidQuantization,
+    }
 }
 
 /// Shift one ONNX `u8` weight or zero point into the signed VNNI domain.

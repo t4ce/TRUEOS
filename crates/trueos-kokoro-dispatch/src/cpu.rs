@@ -8,23 +8,150 @@ use trueos_kokoro_exec::{DispatchResult, Dispatcher as ExecDispatcher, RuntimeSh
 use trueos_kokoro_memory::{MemoryError, OpAccess, TensorElement, TensorMemory};
 
 use crate::attributes::{
-    AttributeDType, AttributeError, Attributes, BinaryAttributes, CastAttributes,
-    ComparisonAttributes, ConcatAttributes, ControlMode, ExpandAttributes, FloatConvAttributes,
-    GatherAttributes, MatMulAttributes, PadAttributes, ResizeAttributes, ResizeMode,
-    SliceAttributes, SplitAttributes, TransposeAttributes, UnaryAttributes, ViewAttributes,
+    AttributeDType, AttributeError, Attributes, BiLstmAttributes, BiasMode, BinaryAttributes,
+    CastAttributes, ComparisonAttributes, ConcatAttributes, ControlMode, ExpandAttributes,
+    FloatConvAttributes, GatherAttributes, MatMulAttributes, PadAttributes, QuantConvAttributes,
+    QuantGemmAttributes, ResizeAttributes, ResizeMode, SliceAttributes, SplitAttributes,
+    TransposeAttributes, UnaryAttributes, ViewAttributes,
 };
 use crate::decode;
 
 /// Return whether the concrete CPU dispatcher has a real execution adapter
 /// for this decoded attribute contract. This is the single warm-audit source
-/// of truth; unsupported entries still fail closed in [`CpuDispatcher`].
+/// of truth.
 pub const fn native_dispatch_supported(attributes: Attributes) -> bool {
-    !matches!(
+    match attributes {
+        Attributes::Binary(_)
+        | Attributes::Comparison(_)
+        | Attributes::Cast(_)
+        | Attributes::ConstantOfShape(_)
+        | Attributes::CumSum(_)
+        | Attributes::DequantizeLinear(_)
+        | Attributes::Where(_)
+        | Attributes::MatMul(_)
+        | Attributes::Pow(_)
+        | Attributes::Range
+        | Attributes::Resize(_)
+        | Attributes::BiLstm256(_)
+        | Attributes::FloatConv(_)
+        | Attributes::FixedStft20(_)
+        | Attributes::ResolveDecoderShape(_)
+        | Attributes::DynamicQuantizedGemm(_)
+        | Attributes::DynamicQuantizedConv1d(_)
+        | Attributes::Unary(_)
+        | Attributes::LeakyRelu(_)
+        | Attributes::ReduceMean(_)
+        | Attributes::LayerNormalization(_)
+        | Attributes::Softmax(_)
+        | Attributes::FastGelu(_)
+        | Attributes::SkipLayerNormalization(_)
+        | Attributes::Transpose(_)
+        | Attributes::Gather(_)
+        | Attributes::Concat(_)
+        | Attributes::Split(_)
+        | Attributes::Expand(_)
+        | Attributes::Shape(_)
+        | Attributes::Slice(_)
+        | Attributes::Pad(_)
+        | Attributes::NonZero
+        | Attributes::ScatterNd(_)
+        | Attributes::View(_) => true,
+    }
+}
+
+/// Return whether an adapter needs the bounded caller-owned native workspace.
+pub const fn native_dispatch_requires_workspace(attributes: Attributes) -> bool {
+    matches!(
         attributes,
         Attributes::BiLstm256(_)
             | Attributes::DynamicQuantizedGemm(_)
             | Attributes::DynamicQuantizedConv1d(_)
     )
+}
+
+/// Largest scratch slices required by the pinned 2,227-operation artifact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CpuWorkspaceRequirements {
+    pub quant_u8: usize,
+    pub packed_i8: usize,
+    pub accum_i32: usize,
+    pub row_sums_i32: usize,
+    pub bias_i32: usize,
+    pub lstm_gates_f32: usize,
+}
+
+pub const KOKORO_CPU_WORKSPACE_REQUIREMENTS: CpuWorkspaceRequirements =
+    CpuWorkspaceRequirements {
+        quant_u8: 13_080,
+        packed_i8: 3_348_480,
+        accum_i32: 2_180,
+        row_sums_i32: 2_180,
+        bias_i32: 1_024,
+        lstm_gates_f32: 1_024,
+    };
+
+/// Exact workspace slice rejected by [`CpuWorkspace::new`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkspaceError {
+    QuantU8TooSmall,
+    PackedI8TooSmall,
+    AccumI32TooSmall,
+    RowSumsI32TooSmall,
+    BiasI32TooSmall,
+    LstmGatesF32TooSmall,
+}
+
+/// Caller-owned, reusable scratch for quantized and recurrent adapters.
+///
+/// The largest member is the signed runtime weight pack (3,348,480 bytes).
+/// Activations and full i32 outputs are deliberately never materialized.
+pub struct CpuWorkspace<'a> {
+    quant_u8: &'a mut [u8],
+    packed_i8: &'a mut [i8],
+    accum_i32: &'a mut [i32],
+    row_sums_i32: &'a mut [i32],
+    bias_i32: &'a mut [i32],
+    lstm_gates_f32: &'a mut [f32],
+}
+
+impl<'a> CpuWorkspace<'a> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        quant_u8: &'a mut [u8],
+        packed_i8: &'a mut [i8],
+        accum_i32: &'a mut [i32],
+        row_sums_i32: &'a mut [i32],
+        bias_i32: &'a mut [i32],
+        lstm_gates_f32: &'a mut [f32],
+    ) -> Result<Self, WorkspaceError> {
+        let required = KOKORO_CPU_WORKSPACE_REQUIREMENTS;
+        if quant_u8.len() < required.quant_u8 {
+            return Err(WorkspaceError::QuantU8TooSmall);
+        }
+        if packed_i8.len() < required.packed_i8 {
+            return Err(WorkspaceError::PackedI8TooSmall);
+        }
+        if accum_i32.len() < required.accum_i32 {
+            return Err(WorkspaceError::AccumI32TooSmall);
+        }
+        if row_sums_i32.len() < required.row_sums_i32 {
+            return Err(WorkspaceError::RowSumsI32TooSmall);
+        }
+        if bias_i32.len() < required.bias_i32 {
+            return Err(WorkspaceError::BiasI32TooSmall);
+        }
+        if lstm_gates_f32.len() < required.lstm_gates_f32 {
+            return Err(WorkspaceError::LstmGatesF32TooSmall);
+        }
+        Ok(Self {
+            quant_u8,
+            packed_i8,
+            accum_i32,
+            row_sums_i32,
+            bias_i32,
+            lstm_gates_f32,
+        })
+    }
 }
 
 /// Exact native-dispatch failures. Unsupported work never commits its AOT
@@ -41,8 +168,14 @@ pub enum DispatchError {
     Duration(trueos_kokoro_duration::ResolveError),
     Conv(trueos_kokoro_conv::Error),
     Gemm(trueos_kokoro_gemm::Error),
+    Quant(trueos_ttstt_cpu::Error),
+    Quantization(trueos_ttstt_cpu::QuantizationError),
     StftContract(trueos_kokoro_stft::ContractError),
     StftAdvance(trueos_kokoro_stft::AdvanceError),
+    LstmContract(trueos_kokoro_lstm::ContractError),
+    LstmDense(trueos_kokoro_lstm::DenseError),
+    Workspace(WorkspaceError),
+    WorkspaceRequired { opcode: OpCode },
     ShapeConversion,
     InvalidArity,
     InvalidControlTensor,
@@ -105,6 +238,36 @@ impl From<trueos_kokoro_gemm::Error> for DispatchError {
     }
 }
 
+impl From<trueos_ttstt_cpu::Error> for DispatchError {
+    fn from(value: trueos_ttstt_cpu::Error) -> Self {
+        Self::Quant(value)
+    }
+}
+
+impl From<trueos_ttstt_cpu::QuantizationError> for DispatchError {
+    fn from(value: trueos_ttstt_cpu::QuantizationError) -> Self {
+        Self::Quantization(value)
+    }
+}
+
+impl From<trueos_kokoro_lstm::ContractError> for DispatchError {
+    fn from(value: trueos_kokoro_lstm::ContractError) -> Self {
+        Self::LstmContract(value)
+    }
+}
+
+impl From<trueos_kokoro_lstm::DenseError> for DispatchError {
+    fn from(value: trueos_kokoro_lstm::DenseError) -> Self {
+        Self::LstmDense(value)
+    }
+}
+
+impl From<WorkspaceError> for DispatchError {
+    fn from(value: WorkspaceError) -> Self {
+        Self::Workspace(value)
+    }
+}
+
 impl From<trueos_kokoro_stft::ContractError> for DispatchError {
     fn from(value: trueos_kokoro_stft::ContractError) -> Self {
         Self::StftContract(value)
@@ -129,13 +292,16 @@ pub struct CpuDispatcher<
     'memory,
     'artifact,
     'buffers,
+    'workspace,
     const SHAPES: usize,
     const EXTERNALS: usize,
     const BINDINGS: usize,
 > {
     memory: &'dispatch mut TensorMemory<'memory, 'artifact, 'buffers, SHAPES, EXTERNALS, BINDINGS>,
+    workspace: Option<&'dispatch mut CpuWorkspace<'workspace>>,
     conv: trueos_kokoro_conv::Dispatcher,
     gemm: trueos_kokoro_gemm::Dispatcher,
+    quant: trueos_ttstt_cpu::Dispatcher,
 }
 
 impl<
@@ -143,10 +309,21 @@ impl<
     'memory,
     'artifact,
     'buffers,
+    'workspace,
     const SHAPES: usize,
     const EXTERNALS: usize,
     const BINDINGS: usize,
-> CpuDispatcher<'dispatch, 'memory, 'artifact, 'buffers, SHAPES, EXTERNALS, BINDINGS>
+>
+    CpuDispatcher<
+        'dispatch,
+        'memory,
+        'artifact,
+        'buffers,
+        'workspace,
+        SHAPES,
+        EXTERNALS,
+        BINDINGS,
+    >
 {
     pub fn new(
         memory: &'dispatch mut TensorMemory<
@@ -160,8 +337,30 @@ impl<
     ) -> Self {
         Self {
             memory,
+            workspace: None,
             conv: trueos_kokoro_conv::Dispatcher::detect(),
             gemm: trueos_kokoro_gemm::Dispatcher::detect(),
+            quant: trueos_ttstt_cpu::Dispatcher::detect(),
+        }
+    }
+
+    pub fn new_with_workspace(
+        memory: &'dispatch mut TensorMemory<
+            'memory,
+            'artifact,
+            'buffers,
+            SHAPES,
+            EXTERNALS,
+            BINDINGS,
+        >,
+        workspace: &'dispatch mut CpuWorkspace<'workspace>,
+    ) -> Self {
+        Self {
+            memory,
+            workspace: Some(workspace),
+            conv: trueos_kokoro_conv::Dispatcher::detect(),
+            gemm: trueos_kokoro_gemm::Dispatcher::detect(),
+            quant: trueos_ttstt_cpu::Dispatcher::detect(),
         }
     }
 
@@ -190,6 +389,13 @@ impl OutputShapes {
         Self {
             values: [first, second, RuntimeShape::scalar()],
             len: 2,
+        }
+    }
+
+    const fn three(first: RuntimeShape, second: RuntimeShape, third: RuntimeShape) -> Self {
+        Self {
+            values: [first, second, third],
+            len: 3,
         }
     }
 
@@ -282,6 +488,13 @@ fn infer_output_shapes<const SHAPES: usize, const EXTERNALS: usize, const BINDIN
             let (_, output) = matmul_profile(value, lhs, rhs)?;
             OutputShapes::one(output)
         }
+        Attributes::DynamicQuantizedGemm(value) => {
+            infer_quant_gemm(memory, program, work, value)?
+        }
+        Attributes::DynamicQuantizedConv1d(value) => {
+            infer_quant_conv(memory, program, work, value)?
+        }
+        Attributes::BiLstm256(value) => infer_bilstm(memory, program, work, value)?,
         Attributes::Pow(value) => {
             require_whole_unit(work)?;
             require_op_arity(work, 2, 1)?;
@@ -469,13 +682,6 @@ fn infer_output_shapes<const SHAPES: usize, const EXTERNALS: usize, const BINDIN
                     .map_err(|_| DispatchError::ShapeConversion)?,
             )
         }
-        Attributes::BiLstm256(_)
-        | Attributes::DynamicQuantizedGemm(_)
-        | Attributes::DynamicQuantizedConv1d(_) => {
-            return Err(DispatchError::UnsupportedOpcode {
-                opcode: attributes.opcode(),
-            });
-        }
     };
     Ok(result)
 }
@@ -560,6 +766,161 @@ fn broadcast_shape(lhs: RuntimeShape, rhs: RuntimeShape) -> Result<RuntimeShape,
         dims[rank - reverse - 1] = output;
     }
     RuntimeShape::new(&dims[..rank]).map_err(|_| DispatchError::ShapeConversion)
+}
+
+fn infer_quant_gemm<
+    const SHAPES: usize,
+    const EXTERNALS: usize,
+    const BINDINGS: usize,
+>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: QuantGemmAttributes,
+) -> Result<OutputShapes, DispatchError> {
+    require_whole_unit(work)?;
+    let has_bias = attributes.bias_mode == BiasMode::Float;
+    require_op_arity(work, if has_bias { 5 } else { 4 }, 1)?;
+    let activation = input_shape(memory, program, work, 0)?;
+    require_rank(activation, attributes.activation_rank)?;
+    let activation_dims = activation.dims();
+    let rank = activation_dims.len();
+    if !matches!(rank, 2 | 3)
+        || activation_dims[rank - 1] != attributes.k
+        || input_shape(memory, program, work, 1)?.dims() != [attributes.k, attributes.n]
+        || input_shape(memory, program, work, 2)?.dims() != [attributes.n]
+        || input_shape(memory, program, work, 3)?.dims() != [attributes.n]
+        || (has_bias && input_shape(memory, program, work, 4)?.dims() != [attributes.n])
+    {
+        return Err(DispatchError::ShapeConversion);
+    }
+    let mut output_dims = [1_u32; 4];
+    output_dims[..rank].copy_from_slice(activation_dims);
+    output_dims[rank - 1] = attributes.n;
+    Ok(OutputShapes::one(
+        RuntimeShape::new(&output_dims[..rank]).map_err(|_| DispatchError::ShapeConversion)?,
+    ))
+}
+
+fn infer_quant_conv<
+    const SHAPES: usize,
+    const EXTERNALS: usize,
+    const BINDINGS: usize,
+>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: QuantConvAttributes,
+) -> Result<OutputShapes, DispatchError> {
+    require_whole_unit(work)?;
+    let has_bias = attributes.bias_mode == BiasMode::QuantizedInt32;
+    require_op_arity(work, if has_bias { 5 } else { 4 }, 1)?;
+    if attributes.groups != 1 {
+        return Err(DispatchError::UnsupportedAttributeProfile {
+            opcode: OpCode::DynamicQuantizedConv1d,
+        });
+    }
+    let input = input_shape(memory, program, work, 0)?;
+    let dims = input.dims();
+    if dims.len() != 3
+        || dims[1] != attributes.input_channels
+        || input_shape(memory, program, work, 1)?.dims()
+            != [
+                attributes.output_channels,
+                attributes.input_channels,
+                attributes.kernel,
+            ]
+        || input_shape(memory, program, work, 2)?.rank() != 0
+        || input_shape(memory, program, work, 3)?.rank() != 0
+        || (has_bias
+            && input_shape(memory, program, work, 4)?.dims()
+                != [attributes.output_channels])
+    {
+        return Err(DispatchError::ShapeConversion);
+    }
+    let weight_scale = read_f32_scalar(memory, program, work, 2)?;
+    let weight_zero = read_u8_scalar(memory, program, work, 3)?;
+    if !weight_scale.is_finite()
+        || weight_scale <= 0.0
+        || u32::from(weight_zero) != attributes.weight_zero
+    {
+        return Err(DispatchError::InvalidControlTensor);
+    }
+    let params = trueos_ttstt_cpu::QConv1dParams {
+        batch: dims[0] as usize,
+        input_channels: dims[1] as usize,
+        input_width: dims[2] as usize,
+        output_channels: attributes.output_channels as usize,
+        kernel_width: attributes.kernel as usize,
+        stride: attributes.stride as usize,
+        dilation: attributes.dilation as usize,
+        pad_left: attributes.pad_left as usize,
+        pad_right: attributes.pad_right as usize,
+        input_zero_point: 0,
+        weight_zero_points: trueos_ttstt_cpu::RhsZeroPoints::Scalar(
+            trueos_ttstt_cpu::signed_u8_zero_point(weight_zero),
+        ),
+        weight_row_sums: None,
+    };
+    let output_width = u32::try_from(params.output_width()?)
+        .map_err(|_| DispatchError::ShapeConversion)?;
+    Ok(OutputShapes::one(
+        RuntimeShape::new(&[dims[0], attributes.output_channels, output_width])
+            .map_err(|_| DispatchError::ShapeConversion)?,
+    ))
+}
+
+fn infer_bilstm<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    attributes: BiLstmAttributes,
+) -> Result<OutputShapes, DispatchError> {
+    require_whole_unit(work)?;
+    require_op_arity(work, 6, 3)?;
+    let expected_width = if attributes.profile == 1 { 512 } else { 640 };
+    if attributes.input_width != expected_width {
+        return Err(DispatchError::UnsupportedAttributeProfile {
+            opcode: OpCode::BiLstm256,
+        });
+    }
+    let input = input_shape(memory, program, work, 0)?;
+    let dims = input.dims();
+    if dims.len() != 3
+        || dims[0] == 0
+        || dims[0] > trueos_kokoro_lstm::MAX_SEQUENCE_LENGTH as u32
+        || dims[1] != 1
+        || dims[2] != expected_width
+        || input_shape(memory, program, work, 1)?.dims()
+            != [2, trueos_kokoro_lstm::GATE_ELEMENTS as u32, expected_width]
+        || input_shape(memory, program, work, 2)?.dims()
+            != [
+                2,
+                trueos_kokoro_lstm::GATE_ELEMENTS as u32,
+                trueos_kokoro_lstm::HIDDEN_SIZE as u32,
+            ]
+        || input_shape(memory, program, work, 3)?.dims()
+            != [2, trueos_kokoro_lstm::BIAS_ELEMENTS_PER_DIRECTION as u32]
+        || input_shape(memory, program, work, 4)?.dims()
+            != [2, 1, trueos_kokoro_lstm::HIDDEN_SIZE as u32]
+        || input_shape(memory, program, work, 5)?.dims()
+            != [2, 1, trueos_kokoro_lstm::HIDDEN_SIZE as u32]
+    {
+        return Err(DispatchError::ShapeConversion);
+    }
+    let state = RuntimeShape::new(&[2, 1, trueos_kokoro_lstm::HIDDEN_SIZE as u32])
+        .map_err(|_| DispatchError::ShapeConversion)?;
+    Ok(OutputShapes::three(
+        RuntimeShape::new(&[
+            dims[0],
+            2,
+            1,
+            trueos_kokoro_lstm::HIDDEN_SIZE as u32,
+        ])
+        .map_err(|_| DispatchError::ShapeConversion)?,
+        state,
+        state,
+    ))
 }
 
 struct SmallControl<T: Copy, const CAPACITY: usize> {
@@ -653,6 +1014,22 @@ fn read_i32_scalar<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: 
 ) -> Result<i32, DispatchError> {
     let tensor = op_input(program, work, input)?;
     memory.with_read::<i32, _, _>(tensor, |values, _| {
+        if values.len() == 1 {
+            Ok(values[0])
+        } else {
+            Err(DispatchError::InvalidControlTensor)
+        }
+    })?
+}
+
+fn read_u8_scalar<const SHAPES: usize, const EXTERNALS: usize, const BINDINGS: usize>(
+    memory: &TensorMemory<'_, '_, '_, SHAPES, EXTERNALS, BINDINGS>,
+    program: &Program<'_>,
+    work: WorkSlice,
+    input: u16,
+) -> Result<u8, DispatchError> {
+    let tensor = op_input(program, work, input)?;
+    memory.with_read::<u8, _, _>(tensor, |values, _| {
         if values.len() == 1 {
             Ok(values[0])
         } else {
@@ -1353,11 +1730,21 @@ impl<
     'memory,
     'artifact,
     'buffers,
+    'workspace,
     const SHAPES: usize,
     const EXTERNALS: usize,
     const BINDINGS: usize,
 > ExecDispatcher
-    for CpuDispatcher<'dispatch, 'memory, 'artifact, 'buffers, SHAPES, EXTERNALS, BINDINGS>
+    for CpuDispatcher<
+        'dispatch,
+        'memory,
+        'artifact,
+        'buffers,
+        'workspace,
+        SHAPES,
+        EXTERNALS,
+        BINDINGS,
+    >
 {
     type Error = DispatchError;
 
@@ -1375,6 +1762,11 @@ impl<
                 opcode: attributes.opcode(),
             });
         }
+        if native_dispatch_requires_workspace(attributes) && self.workspace.is_none() {
+            return Err(DispatchError::WorkspaceRequired {
+                opcode: attributes.opcode(),
+            });
+        }
         let output_shapes = infer_output_shapes(self.memory, program, work, attributes)?;
         self.memory
             .declare_op_outputs(work.op_index(), output_shapes.as_slice())?;
@@ -1384,9 +1776,13 @@ impl<
         }
         let conv = self.conv;
         let gemm = self.gemm;
+        let quant = self.quant;
+        let workspace = self.workspace.as_deref_mut();
         self.memory
             .with_op(work.op_index(), |access| {
-                execute(access, program, work, attributes, conv, gemm)
+                execute(
+                    access, program, work, attributes, conv, gemm, quant, workspace,
+                )
             })
             .map_err(DispatchError::Memory)?
     }
@@ -1399,6 +1795,8 @@ fn execute<const BINDINGS: usize>(
     attributes: Attributes,
     conv: trueos_kokoro_conv::Dispatcher,
     gemm: trueos_kokoro_gemm::Dispatcher,
+    quant: trueos_ttstt_cpu::Dispatcher,
+    workspace: Option<&mut CpuWorkspace<'_>>,
 ) -> Result<DispatchResult, DispatchError> {
     match attributes {
         Attributes::Binary(value) => {
