@@ -326,21 +326,16 @@ impl StreamCompositionManifest {
     }
 }
 
-pub(super) async fn capture_stream_scanout_to_nv12_hardware(
-    destination: crate::intel::gpgpu::GpgpuNv12LinearSurface,
-    active_top: u32,
-    active_height: u32,
+pub(super) async fn capture_stream_scanout_to_rgba_hardware(
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> Result<StreamScanoutCapture, CaptureError> {
     let mut busy_retries = 0usize;
     let (manifest, submission) = loop {
         let manifest = StreamCompositionManifest::prepare()?;
-        match crate::intel::gpgpu::queue_ui4_stream_layers_to_nv12_linear(
-            manifest.layers.as_slice(),
-            manifest.width,
-            manifest.height,
+        match crate::intel::gpgpu::queue_ui4_stream_compositor_layers(
             destination,
-            active_top,
-            active_height,
+            manifest.layers.as_slice(),
+            crate::intel::gpgpu::GpgpuRect::new(0, 0, manifest.width, manifest.height),
         ) {
             Ok(submission) => break (manifest, submission),
             Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
@@ -352,7 +347,7 @@ pub(super) async fn capture_stream_scanout_to_nv12_hardware(
                 drop(manifest);
                 if busy_retries.is_multiple_of(STREAM_COMPOSITOR_BUSY_LOG_INTERVAL) {
                     crate::log_warn!(target: "ui4";
-                        "ui4/guc-stream-fused: waiting reason=compositor-busy retries={} retry_ms=1 source_leases=0 software_fallback=0\n",
+                        "ui4/guc-stream-compose: waiting reason=compositor-busy retries={} retry_ms=1 source_leases=0 software_fallback=0\n",
                         busy_retries,
                     );
                 }

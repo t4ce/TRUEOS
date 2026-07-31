@@ -10,6 +10,7 @@
 // - Layers are axis-aligned, nearest sampled, and applied in table/z order.
 
 #define UI4_LAYER_DWORDS 12u
+#define UI4_LAYER_FLAG_BGRA (1u << 0)
 #define UI4_COMPOSE_FLAG_BASE_XRGB (1u << 0)
 #define UI4_COMPOSE_FLAG_DEST_XRGB (1u << 1)
 
@@ -31,6 +32,13 @@ static inline uint rgba_to_xrgb(uint rgba)
     return ((rgba & 0xFFu) << 16)
         | (rgba & 0x0000FF00u)
         | ((rgba >> 16) & 0xFFu);
+}
+
+static inline uint swap_red_blue(uint color)
+{
+    return (color & 0xFF00FF00u)
+        | ((color & 0x000000FFu) << 16)
+        | ((color & 0x00FF0000u) >> 16);
 }
 
 static inline uint apply_opacity(uint src, uint opacity)
@@ -108,6 +116,7 @@ __kernel void ui4_compose_layers_rgba8(
         uint layer_width = layers[d + 7u];
         uint layer_height = layers[d + 8u];
         uint opacity = min(layers[d + 9u], 255u);
+        uint layer_flags = layers[d + 10u];
 
         int rel_x = (int)x - dst_x;
         int rel_y = (int)y - dst_y;
@@ -117,10 +126,18 @@ __kernel void ui4_compose_layers_rgba8(
             continue;
         }
 
-        uint sx = min(((uint)rel_x * src_width) / layer_width, src_width - 1u);
-        uint sy = min(((uint)rel_y * src_height) / layer_height, src_height - 1u);
+        uint sx = src_width == layer_width
+            ? (uint)rel_x
+            : min(((uint)rel_x * src_width) / layer_width, src_width - 1u);
+        uint sy = src_height == layer_height
+            ? (uint)rel_y
+            : min(((uint)rel_y * src_height) / layer_height, src_height - 1u);
         __global const uint *src_rgba = (__global const uint *)src_gpu;
-        uint src = apply_opacity(src_rgba[sy * src_pitch_pixels + sx], opacity);
+        uint src = src_rgba[sy * src_pitch_pixels + sx];
+        if ((layer_flags & UI4_LAYER_FLAG_BGRA) != 0u) {
+            src = swap_red_blue(src);
+        }
+        src = apply_opacity(src, opacity);
         color = premul_src_over(src, color);
     }
 

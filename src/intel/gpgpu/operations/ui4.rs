@@ -8,7 +8,19 @@ pub(crate) fn queue_ui4_compositor_layers(
     damage: GpgpuRect,
     flags: u32,
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
-    queue_ui4_compositor_layers_mode(base, dst, layers, damage, flags)
+    queue_ui4_compositor_layers_mode(base, dst, layers, damage, flags, true, false)
+}
+
+/// Compose the explicitly selected RDP layers into its off-screen RGBA mirror.
+/// The mirror stays PAT0/WB for the immediately following RGBA-to-NV12 pass.
+/// Producer addresses are sampled through compositor-private aliases because
+/// display VAs such as slot 4's 0x4000_0000 are outside this context's PPGTT.
+pub(crate) fn queue_ui4_stream_compositor_layers(
+    dst: GpgpuRgba8Surface,
+    layers: &[GpgpuUi4ComposeLayer],
+    damage: GpgpuRect,
+) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
+    queue_ui4_compositor_layers_mode(None, dst, layers, damage, 0, false, true)
 }
 
 fn queue_ui4_compositor_layers_mode(
@@ -17,6 +29,8 @@ fn queue_ui4_compositor_layers_mode(
     layers: &[GpgpuUi4ComposeLayer],
     damage: GpgpuRect,
     flags: u32,
+    destination_scanout_cache: bool,
+    stream_source_aliases: bool,
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
     if !dst.is_valid()
         || damage.x < 0
@@ -66,15 +80,56 @@ fn queue_ui4_compositor_layers_mode(
     let desc = ui4_compositor_sprite_quad_desc_buffer_once()
         .ok_or(Ui4CompositorSubmitError::Unavailable)?;
 
+    let mut pat0_alias = UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE;
+    let mut pat3_alias = UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE;
+    let mut source_addresses = Vec::with_capacity(layers.len());
+    for layer in layers {
+        if !stream_source_aliases {
+            source_addresses.push(layer.src.gpu);
+            continue;
+        }
+        let aligned_bytes = u64::try_from(layer.src.bytes)
+            .ok()
+            .and_then(|bytes| bytes.checked_add((super::WARM_ALIGN - 1) as u64))
+            .map(|bytes| bytes & !((super::WARM_ALIGN - 1) as u64))
+            .ok_or(Ui4CompositorSubmitError::InvalidWorklist)?;
+        let (alias, next, limit) = if layer.src_scanout_cache {
+            let alias = pat3_alias;
+            let next = alias
+                .checked_add(aligned_bytes)
+                .ok_or(Ui4CompositorSubmitError::InvalidWorklist)?;
+            (alias, next, UI4_STREAM_SOURCE_ALIAS_GPU_LIMIT)
+        } else {
+            let alias = pat0_alias;
+            let next = alias
+                .checked_add(aligned_bytes)
+                .ok_or(Ui4CompositorSubmitError::InvalidWorklist)?;
+            (alias, next, UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE)
+        };
+        if next > limit {
+            return Err(Ui4CompositorSubmitError::InvalidWorklist);
+        }
+        if layer.src_scanout_cache {
+            pat3_alias = next;
+        } else {
+            pat0_alias = next;
+        }
+        source_addresses.push(alias);
+    }
+
     unsafe {
         core::ptr::write_bytes(desc.virt, 0, desc.bytes);
         let out = desc.virt as *mut GpgpuUi4ComposeLayerDesc;
-        for (index, layer) in layers.iter().enumerate() {
+        for (index, (layer, source_gpu)) in layers
+            .iter()
+            .zip(source_addresses.iter().copied())
+            .enumerate()
+        {
             core::ptr::write_volatile(
                 out.add(index),
                 GpgpuUi4ComposeLayerDesc {
-                    src_gpu_lo: layer.src.gpu as u32,
-                    src_gpu_hi: (layer.src.gpu >> 32) as u32,
+                    src_gpu_lo: source_gpu as u32,
+                    src_gpu_hi: (source_gpu >> 32) as u32,
                     src_pitch_bytes: layer.src.pitch_bytes,
                     src_width: layer.src.width,
                     src_height: layer.src.height,
@@ -83,7 +138,10 @@ fn queue_ui4_compositor_layers_mode(
                     dst_width: layer.dst_width,
                     dst_height: layer.dst_height,
                     opacity: layer.opacity as u32,
-                    flags: 0,
+                    flags: match layer.src.storage_order {
+                        GpgpuRgba8StorageOrder::Rgba => 0,
+                        GpgpuRgba8StorageOrder::Bgra => UI4_COMPOSE_LAYER_FLAG_BGRA,
+                    },
                     reserved: 0,
                 },
             );
@@ -103,30 +161,52 @@ fn queue_ui4_compositor_layers_mode(
     let kernel_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
     // Overlay composition uses the destination itself as the preserved base.
-    // A display-bound destination is mapped exactly once as PAT3/UC.
+    // A display-bound destination is mapped exactly once as PAT3/UC; the RDP
+    // mirror remains PAT0/WB for its following conversion dispatch.
     let base_ok = kernel_ok
-        && if base_is_dst {
+        && if base_is_dst && destination_scanout_cache {
             direct_rcs_map_ppgtt_scanout(state, base.gpu, base.phys, base.bytes)
         } else {
             direct_rcs_map_ppgtt_kernel(state, base.gpu, base.phys, base.bytes)
         };
-    // Sources retain their producer-stable policy and descriptors remain
-    // PAT0/WB.
+    // Sources retain their producer-stable policy. Stream sources use private
+    // addresses, while ordinary display composition retains the producer VA.
     let dst_ok = base_ok
-        && (base_is_dst || direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes));
+        && (base_is_dst
+            || if destination_scanout_cache {
+                direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes)
+            } else {
+                direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes)
+            });
     let desc_ok = dst_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
     let mut sources_ok = desc_ok;
-    for layer in layers {
+    for (index, (layer, source_gpu)) in layers
+        .iter()
+        .zip(source_addresses.iter().copied())
+        .enumerate()
+    {
         if !sources_ok {
             break;
         }
         let mapped = if layer.src_scanout_cache {
-            direct_rcs_map_ppgtt_scanout(state, layer.src.gpu, layer.src.phys, layer.src.bytes)
+            direct_rcs_map_ppgtt_scanout(state, source_gpu, layer.src.phys, layer.src.bytes)
         } else {
-            direct_rcs_map_ppgtt_kernel(state, layer.src.gpu, layer.src.phys, layer.src.bytes)
+            direct_rcs_map_ppgtt_kernel(state, source_gpu, layer.src.phys, layer.src.bytes)
         };
         if !mapped {
             sources_ok = false;
+            if stream_source_aliases {
+                crate::log_error!(target: "ui4";
+                    "ui4/guc-stream-compose: source alias rejected index={} producer_gpu=0x{:X} alias_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} pat={} ppgtt_limit=0x{:X}\n",
+                    index,
+                    layer.src.gpu,
+                    source_gpu,
+                    layer.src.phys,
+                    layer.src.bytes,
+                    if layer.src_scanout_cache { 3 } else { 0 },
+                    UI4_STREAM_SOURCE_ALIAS_GPU_LIMIT,
+                );
+            }
         }
     }
     let params = Ui4ComposeLayersParams {
@@ -208,9 +288,21 @@ fn queue_ui4_compositor_layers_mode(
         damage_x,
         damage_y,
         dst.gpu,
-        if base_is_dst { "dst-pat3-uc" } else { "pat0-wb" },
-        "pat3-uc",
+        if base_is_dst && destination_scanout_cache { "dst-pat3-uc" } else { "pat0-wb" },
+        if destination_scanout_cache { "pat3-uc" } else { "pat0-wb" },
     );
+    if stream_source_aliases {
+        crate::log_trace!(target: "ui4";
+            "ui4/guc-stream-compose: queued serial={} layers={} logical={}x{} destination_gpu=0x{:X} source_alias_pat0_bytes=0x{:X} source_alias_pat3_bytes=0x{:X} destination_cache=pat0-wb dispatches=1 cpu_pixel_access=0\n",
+            serial,
+            layers.len(),
+            dst.width,
+            dst.height,
+            dst.gpu,
+            pat0_alias.saturating_sub(UI4_STREAM_SOURCE_PAT0_ALIAS_GPU_BASE),
+            pat3_alias.saturating_sub(UI4_STREAM_SOURCE_PAT3_ALIAS_GPU_BASE),
+        );
+    }
     Ok(submission)
 }
 

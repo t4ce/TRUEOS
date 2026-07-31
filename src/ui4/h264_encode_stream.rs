@@ -19,6 +19,8 @@ const ENCODE_WIDTH: usize = 1920;
 const ENCODE_HEIGHT: usize = 1088;
 const ACTIVE_HEIGHT: usize = 1080;
 const ACTIVE_TOP: usize = (ENCODE_HEIGHT - ACTIVE_HEIGHT) / 2;
+const SOURCE_RGBA_BYTES: usize =
+    TEST_RIG_SCANOUT_WIDTH as usize * TEST_RIG_SCANOUT_HEIGHT as usize * 4;
 const ENCODE_LUMA_BYTES: usize = ENCODE_WIDTH * ENCODE_HEIGHT;
 const ENCODE_NV12_BYTES: usize = ENCODE_LUMA_BYTES * 3 / 2;
 const CADENCE_TOLERANCE_PERCENT: u64 = 5;
@@ -54,6 +56,10 @@ struct LiveEncodeStats {
     composition_layers_max: usize,
     composition_gpu_us: u64,
     composition_gpu_max_us: u64,
+    conversion_wall_us: u64,
+    conversion_wall_max_us: u64,
+    conversion_gpu_us: u64,
+    conversion_gpu_max_us: u64,
     encode_us: u64,
     encode_max_us: u64,
     coded_bytes: usize,
@@ -135,13 +141,14 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
         .map(|profile| profile.core_kind_name())
         .unwrap_or("unknown");
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} exclusive_carrier=1 cooperative_tasks=1 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=ui4-logical-scanout-d01 encode_size={}x{} target_fps={} backend=fused-guc-rcs-compose-downscale-nv12+gen12-vdenc-mfx completion_wait=cooperative-fence-yield output=udp-only pipeline=single-task-capture-encode-send gpu_dispatches_per_frame=1 rgba_mirror_bytes=0 cpu_pixel_access=0 filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
+        "intel/media-encode: service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} exclusive_carrier=1 cooperative_tasks=1 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=ui4-logical-scanout-d01 encode_size={}x{} target_fps={} backend=guc-rcs-selected-layers-rgba-mirror+rgba-to-nv12+gen12-vdenc-mfx completion_wait=cooperative-fence-yield output=udp-only pipeline=single-task-capture-encode-send gpu_dispatches_per_frame=2 rgba_mirror_bytes={} cpu_pixel_access=0 filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
         assigned_slot,
         worker_slot,
         worker_kind,
         ENCODE_WIDTH,
         ENCODE_HEIGHT,
         crate::allcaps::media_encode::REALTIME_HZ,
+        SOURCE_RGBA_BYTES,
         crate::allports::services::MEDIA_ENCODE_UDP_PORT,
         PROBE_START_DELAY_MS,
     );
@@ -454,6 +461,7 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
     // The LastAP-resident task owns both persistent hardware input memory and
     // the boot-lifetime network registration. Awaiting either subsystem yields
     // this same task; it does not create a second encoder worker.
+    let mut rgba_mirror = None;
     let mut nv12 = None;
     let mut udp_transport = super::h264_encode_udp::MediaUdpTransport::open().await;
 
@@ -471,7 +479,14 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
             access_unit_count,
             crate::allcaps::media_encode::REALTIME_HZ,
             async |sequence| {
-                encode_hardware_scanout(stream_session_id, sequence, &mut nv12, &mut stats).await
+                encode_hardware_scanout(
+                    stream_session_id,
+                    sequence,
+                    &mut rgba_mirror,
+                    &mut nv12,
+                    &mut stats,
+                )
+                .await
             },
         )
         .await;
@@ -506,7 +521,7 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
             Ordering::Release,
         );
         crate::log_info!(target: "intel/media-encode";
-            "intel/media-encode: udp-live complete accepted={} delivery_complete={} cadence_target_met={} retry_free={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} active_size={}x{} padding=top:4,bottom:4 composition=fused-selected-layers-nearest-downscale-rgb-to-nv12 kernel=ui4-compose-layers-to-nv12-linear gpu_dispatches_per_frame=1 composition_gpu_frames={} composition_layers_max={} composition_gpu_avg_us={} composition_gpu_max_us={} fused_wall_avg_us={} fused_wall_max_us={} rgba_mirror_bytes=0 cpu_pixel_reads=0 cpu_pixel_writes=0 cpu_nv12_copy_bytes=0 dma_buffers=persistent vdbox_source=gpu-dma-direct slot0_scanout_frames={} slot0_scanout_pixels={} spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=fused-rcs-marker-before-vdbox format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc hardware_encode=1 all_idr=1 protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=single-lastap-task cooperative_tasks=1 worker_slot={} worker_kind={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
+            "intel/media-encode: udp-live complete accepted={} delivery_complete={} cadence_target_met={} retry_free={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} active_size={}x{} padding=top:4,bottom:4 composition=selected-layers-to-final-rgba-mirror composition_kernel=ui4-compose-layers-rgba8 gpu_dispatches_per_frame=2 composition_gpu_frames={} composition_layers_max={} composition_gpu_avg_us={} composition_gpu_max_us={} composition_wall_avg_us={} composition_wall_max_us={} conversion=ui4-rgba8-to-nv12-linear conversion_wall_avg_us={} conversion_wall_max_us={} conversion_gpu_avg_us={} conversion_gpu_max_us={} rgba_mirror_bytes={} cpu_pixel_reads=0 cpu_pixel_writes=0 cpu_nv12_copy_bytes=0 dma_buffers=persistent vdbox_source=gpu-dma-direct slot0_scanout_frames={} slot0_scanout_pixels={} spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=composition-marker-before-conversion-marker-before-vdbox format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc hardware_encode=1 all_idr=1 protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=single-lastap-task cooperative_tasks=1 worker_slot={} worker_kind={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
             delivered as u8,
             delivered as u8,
             cadence_target_met as u8,
@@ -523,6 +538,11 @@ pub(crate) async fn ui4_h264_encode_stream_task(assigned_slot: u32) {
             stats.composition_gpu_max_us,
             average_u64(stats.capture_us, stats.frames),
             stats.capture_max_us,
+            average_u64(stats.conversion_wall_us, stats.frames),
+            stats.conversion_wall_max_us,
+            average_u64(stats.conversion_gpu_us, stats.frames),
+            stats.conversion_gpu_max_us,
+            SOURCE_RGBA_BYTES,
             stats.slot0_scanout_frames,
             stats.slot0_scanout_pixels,
             stats.spirit_overlay_frames,
