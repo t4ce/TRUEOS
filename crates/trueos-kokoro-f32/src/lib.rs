@@ -5,12 +5,14 @@
 //!
 //! The pinned graph uses rank-four-or-smaller tensors for 1,444 f32 binary
 //! elementwise nodes, 130 `ReduceMean`, 19 `LayerNormalization`, 12 `Softmax`,
-//! 12 `FastGelu`, and 12 `SkipLayerNormalization` nodes. This crate keeps the
-//! ONNX operation boundaries explicit and requires caller-owned storage.
+//! 12 `FastGelu`, 12 `SkipLayerNormalization`, and 256 unary math nodes. This
+//! crate covers 1,885 pinned nodes in total, keeps ONNX operation boundaries
+//! explicit, and requires caller-owned storage.
 
 use core::mem::size_of;
 
 pub const MAX_RANK: usize = 4;
+pub const PINNED_NODE_COVERAGE: usize = 1_885;
 
 /// Validation failures are reported before an output buffer is modified.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,6 +27,8 @@ pub enum Error {
     Aliasing,
     InvalidAxis,
     InvalidEpsilon,
+    InvalidParameter,
+    DomainError,
     ParameterTooSmall,
     NonFiniteInput,
     NonFiniteOutput,
@@ -342,6 +346,223 @@ pub fn sub(
         output,
         output_layout,
     )
+}
+
+#[derive(Clone, Copy)]
+enum UnaryOperation {
+    Sqrt,
+    Floor,
+    Sin,
+    LeakyRelu(f32),
+    Sigmoid,
+    Round,
+    Tanh,
+    Atan,
+    Exp,
+    Cos,
+}
+
+impl UnaryOperation {
+    fn apply(self, value: f32) -> Result<f32, Error> {
+        let result = match self {
+            Self::Sqrt => {
+                if value < 0.0 {
+                    return Err(Error::DomainError);
+                }
+                libm::sqrtf(value)
+            }
+            Self::Floor => libm::floorf(value),
+            Self::Sin => libm::sinf(value),
+            Self::LeakyRelu(alpha) => {
+                if value >= 0.0 {
+                    value
+                } else {
+                    alpha * value
+                }
+            }
+            Self::Sigmoid => sigmoid_value(value),
+            Self::Round => round_ties_even(value),
+            Self::Tanh => libm::tanhf(value),
+            Self::Atan => libm::atanf(value),
+            Self::Exp => libm::expf(value),
+            Self::Cos => libm::cosf(value),
+        };
+        if result.is_finite() {
+            Ok(result)
+        } else {
+            Err(Error::NonFiniteOutput)
+        }
+    }
+}
+
+/// ONNX `Sqrt` over checked rank-four strided views.
+pub fn sqrt(
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    unary_elementwise(UnaryOperation::Sqrt, input, input_layout, output, output_layout)
+}
+
+/// ONNX `Floor` over checked rank-four strided views.
+pub fn floor(
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    unary_elementwise(UnaryOperation::Floor, input, input_layout, output, output_layout)
+}
+
+/// ONNX `Sin` over checked rank-four strided views.
+pub fn sin(
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    unary_elementwise(UnaryOperation::Sin, input, input_layout, output, output_layout)
+}
+
+/// ONNX `LeakyRelu` with an explicit finite `alpha` attribute.
+pub fn leaky_relu(
+    input: &[f32],
+    input_layout: TensorLayout,
+    alpha: f32,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    if !alpha.is_finite() {
+        return Err(Error::InvalidParameter);
+    }
+    unary_elementwise(UnaryOperation::LeakyRelu(alpha), input, input_layout, output, output_layout)
+}
+
+/// ONNX `Sigmoid` over checked rank-four strided views.
+pub fn sigmoid(
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    unary_elementwise(UnaryOperation::Sigmoid, input, input_layout, output, output_layout)
+}
+
+/// ONNX `Round`, round-to-nearest with ties to even.
+pub fn round(
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    unary_elementwise(UnaryOperation::Round, input, input_layout, output, output_layout)
+}
+
+/// ONNX `Tanh` over checked rank-four strided views.
+pub fn tanh(
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    unary_elementwise(UnaryOperation::Tanh, input, input_layout, output, output_layout)
+}
+
+/// ONNX `Atan` over checked rank-four strided views.
+pub fn atan(
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    unary_elementwise(UnaryOperation::Atan, input, input_layout, output, output_layout)
+}
+
+/// ONNX `Exp` over checked rank-four strided views.
+pub fn exp(
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    unary_elementwise(UnaryOperation::Exp, input, input_layout, output, output_layout)
+}
+
+/// ONNX `Cos` over checked rank-four strided views.
+pub fn cos(
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    unary_elementwise(UnaryOperation::Cos, input, input_layout, output, output_layout)
+}
+
+fn unary_elementwise(
+    operation: UnaryOperation,
+    input: &[f32],
+    input_layout: TensorLayout,
+    output: &mut [f32],
+    output_layout: TensorLayout,
+) -> Result<(), Error> {
+    validate_input_layout(input, input_layout)?;
+    validate_output_layout(output, output_layout)?;
+    if input_layout.shape != output_layout.shape {
+        return Err(Error::OutputShapeMismatch);
+    }
+    reject_alias(output, input)?;
+
+    let shape = input_layout.shape;
+    let mut coordinates = [0usize; MAX_RANK];
+    for linear in 0..shape.element_count() {
+        unravel(linear, shape, &mut coordinates);
+        let input_offset = input_layout.physical_offset(&coordinates);
+        let value = input[input_offset];
+        if !value.is_finite() {
+            return Err(Error::NonFiniteInput);
+        }
+        operation.apply(value)?;
+    }
+    for linear in 0..shape.element_count() {
+        unravel(linear, shape, &mut coordinates);
+        let input_offset = input_layout.physical_offset(&coordinates);
+        let output_offset = output_layout.physical_offset(&coordinates);
+        output[output_offset] = operation.apply(input[input_offset])?;
+    }
+    Ok(())
+}
+
+fn sigmoid_value(value: f32) -> f32 {
+    // The algebraically equivalent negative branch avoids an intermediate
+    // infinity for large finite negative inputs.
+    if value >= 0.0 {
+        1.0 / (1.0 + libm::expf(-value))
+    } else {
+        let exponential = libm::expf(value);
+        exponential / (1.0 + exponential)
+    }
+}
+
+fn round_ties_even(value: f32) -> f32 {
+    // Every finite f32 at or above 2^23 is already integral.
+    if value.to_bits() & 0x7FFF_FFFF >= 0x4B00_0000 {
+        return value;
+    }
+    let truncated = value as i32;
+    let fraction = value - truncated as f32;
+    let rounded = if fraction > 0.5 || (fraction == 0.5 && truncated & 1 != 0) {
+        truncated + 1
+    } else if fraction < -0.5 || (fraction == -0.5 && truncated & 1 != 0) {
+        truncated - 1
+    } else {
+        truncated
+    };
+    if rounded == 0 {
+        f32::from_bits(value.to_bits() & 0x8000_0000)
+    } else {
+        rounded as f32
+    }
 }
 
 fn binary_elementwise(
@@ -889,6 +1110,19 @@ mod tests {
         }
     }
 
+    fn assert_close_relative(actual: &[f32], expected_bits: &[u32], tolerance: f32) {
+        assert_eq!(actual.len(), expected_bits.len());
+        for (index, (&actual, &bits)) in actual.iter().zip(expected_bits).enumerate() {
+            let expected = f32::from_bits(bits);
+            let error = (actual - expected).abs();
+            let limit = tolerance * expected.abs().max(1.0);
+            assert!(
+                error <= limit,
+                "index {index}: actual={actual:?} expected={expected:?} error={error:?} limit={limit:?}"
+            );
+        }
+    }
+
     #[test]
     fn strided_add_obeys_multidirectional_broadcasting() {
         let lhs_shape = Shape::new(&[2, 1, 3]).unwrap();
@@ -1087,7 +1321,254 @@ mod tests {
     }
 
     #[test]
+    fn round_strided_matches_ort_ties_and_signed_zero_exactly() {
+        let shape = Shape::new(&[2, 6]).unwrap();
+        let input_layout = TensorLayout::strided(shape, &[8, 1], 0).unwrap();
+        let output_layout = TensorLayout::strided(shape, &[7, 1], 0).unwrap();
+        let input = [
+            -3.5,
+            -2.5,
+            -1.5,
+            -0.5,
+            -0.0,
+            0.0,
+            f32::NAN,
+            f32::NAN,
+            0.5,
+            1.5,
+            2.5,
+            3.5,
+            -8_388_607.5,
+            8_388_607.5,
+        ];
+        let mut output = [f32::from_bits(0x7FC0_0123); 13];
+        round(&input, input_layout, &mut output, output_layout).unwrap();
+        assert_eq!(
+            output.map(f32::to_bits),
+            [
+                0xC080_0000,
+                0xC000_0000,
+                0xC000_0000,
+                0x8000_0000,
+                0x8000_0000,
+                0x0000_0000,
+                0x7FC0_0123,
+                0x0000_0000,
+                0x4000_0000,
+                0x4000_0000,
+                0x4080_0000,
+                0xCB00_0000,
+                0x4B00_0000,
+            ]
+        );
+    }
+
+    #[test]
+    fn sqrt_floor_and_all_pinned_leaky_relu_alphas_match_ort() {
+        let sqrt_shape = Shape::new(&[5]).unwrap();
+        let sqrt_layout = TensorLayout::contiguous(sqrt_shape);
+        let mut sqrt_output = [0.0f32; 5];
+        sqrt(&[-0.0, 0.0, 0.25, 2.0, 100.0], sqrt_layout, &mut sqrt_output, sqrt_layout).unwrap();
+        assert_eq!(
+            sqrt_output.map(f32::to_bits),
+            [0x8000_0000, 0, 0x3F00_0000, 0x3FB5_04F3, 0x4120_0000]
+        );
+
+        let floor_shape = Shape::new(&[9]).unwrap();
+        let floor_layout = TensorLayout::contiguous(floor_shape);
+        let mut floor_output = [0.0f32; 9];
+        floor(
+            &[-2.5, -2.0, -1.1, -0.5, -0.0, 0.0, 0.5, 1.1, 2.5],
+            floor_layout,
+            &mut floor_output,
+            floor_layout,
+        )
+        .unwrap();
+        assert_eq!(
+            floor_output.map(f32::to_bits),
+            [
+                0xC040_0000,
+                0xC000_0000,
+                0xC000_0000,
+                0xBF80_0000,
+                0x8000_0000,
+                0,
+                0,
+                0x3F80_0000,
+                0x4000_0000,
+            ]
+        );
+
+        let leaky_shape = Shape::new(&[6]).unwrap();
+        let leaky_layout = TensorLayout::contiguous(leaky_shape);
+        let input = [-10.0, -1.0, -0.0, 0.0, 0.5, 3.0];
+        let mut output = [0.0f32; 6];
+        leaky_relu(&input, leaky_layout, 0.2, &mut output, leaky_layout).unwrap();
+        assert_eq!(
+            output.map(f32::to_bits),
+            [
+                0xC000_0000,
+                0xBE4C_CCCD,
+                0x8000_0000,
+                0,
+                0x3F00_0000,
+                0x4040_0000,
+            ]
+        );
+        leaky_relu(&input, leaky_layout, 0.1, &mut output, leaky_layout).unwrap();
+        assert_eq!(output[1].to_bits(), (-0.1f32).to_bits());
+        leaky_relu(&input, leaky_layout, 0.01, &mut output, leaky_layout).unwrap();
+        assert_eq!(output[1].to_bits(), (-0.01f32).to_bits());
+    }
+
+    #[test]
+    fn transcendental_unary_kernels_match_ort_fixtures() {
+        let shape = Shape::new(&[8]).unwrap();
+        let layout = TensorLayout::contiguous(shape);
+        let trig_input = [
+            -10.0,
+            -core::f32::consts::PI,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            core::f32::consts::PI,
+            10.0,
+        ];
+        let mut output = [0.0f32; 8];
+        sin(&trig_input, layout, &mut output, layout).unwrap();
+        assert_close(
+            &output,
+            &[
+                0x3F0B_44F7,
+                0x33BB_BD2E,
+                0xBF57_6AA4,
+                0x8000_0000,
+                0,
+                0x3F57_6AA4,
+                0xB3BB_BD2E,
+                0xBF0B_44F7,
+            ],
+            2.0e-7,
+        );
+        cos(&trig_input, layout, &mut output, layout).unwrap();
+        assert_close(
+            &output,
+            &[
+                0xBF56_CD64,
+                0xBF80_0000,
+                0x3F0A_5140,
+                0x3F80_0000,
+                0x3F80_0000,
+                0x3F0A_5140,
+                0xBF80_0000,
+                0xBF56_CD64,
+            ],
+            2.0e-7,
+        );
+
+        let symmetric_input = [-10.0, -3.0, -1.0, -0.0, 0.0, 1.0, 3.0, 10.0];
+        tanh(&symmetric_input, layout, &mut output, layout).unwrap();
+        assert_close(
+            &output,
+            &[
+                0xBF80_0000,
+                0xBF7E_BBE8,
+                0xBF42_F7D6,
+                0x8000_0000,
+                0,
+                0x3F42_F7D6,
+                0x3F7E_BBE8,
+                0x3F80_0000,
+            ],
+            2.0e-7,
+        );
+
+        let atan_input = [-100.0, -3.0, -1.0, -0.0, 0.0, 1.0, 3.0, 100.0];
+        atan(&atan_input, layout, &mut output, layout).unwrap();
+        assert_close(
+            &output,
+            &[
+                0xBFC7_C830,
+                0xBF9F_E0BC,
+                0xBF49_0FDA,
+                0x8000_0000,
+                0,
+                0x3F49_0FDA,
+                0x3F9F_E0BC,
+                0x3FC7_C830,
+            ],
+            2.0e-7,
+        );
+    }
+
+    #[test]
+    fn sigmoid_and_exp_match_ort_fixtures() {
+        let shape = Shape::new(&[8]).unwrap();
+        let layout = TensorLayout::contiguous(shape);
+        let mut output = [0.0f32; 8];
+        sigmoid(&[-100.0, -20.0, -2.0, -0.0, 0.0, 2.0, 20.0, 100.0], layout, &mut output, layout)
+            .unwrap();
+        assert_close(
+            &output,
+            &[
+                0,
+                0,
+                0x3DF4_20A8,
+                0x3F00_0000,
+                0x3F00_0000,
+                0x3F61_7BEB,
+                0x3F80_0000,
+                0x3F80_0000,
+            ],
+            2.0e-7,
+        );
+
+        exp(&[-100.0, -10.0, -1.0, -0.0, 0.0, 1.0, 10.0, 80.0], layout, &mut output, layout)
+            .unwrap();
+        assert_close_relative(
+            &output,
+            &[
+                0x0000_001B,
+                0x383E_6BCE,
+                0x3EBC_5AB2,
+                0x3F80_0000,
+                0x3F80_0000,
+                0x402D_F854,
+                0x46AC_14EF,
+                0x792A_BBCE,
+            ],
+            2.0e-7,
+        );
+    }
+
+    #[test]
+    fn unary_domain_nonfinite_and_parameter_errors_are_transactional() {
+        let shape = Shape::new(&[3]).unwrap();
+        let layout = TensorLayout::contiguous(shape);
+        let mut output = [123.0f32; 3];
+        assert_eq!(sqrt(&[4.0, -1.0, 9.0], layout, &mut output, layout), Err(Error::DomainError));
+        assert_eq!(output, [123.0; 3]);
+        assert_eq!(
+            exp(&[0.0, 100.0, 1.0], layout, &mut output, layout),
+            Err(Error::NonFiniteOutput)
+        );
+        assert_eq!(output, [123.0; 3]);
+        assert_eq!(
+            sin(&[0.0, f32::NAN, 1.0], layout, &mut output, layout),
+            Err(Error::NonFiniteInput)
+        );
+        assert_eq!(output, [123.0; 3]);
+        assert_eq!(
+            leaky_relu(&[1.0; 3], layout, f32::INFINITY, &mut output, layout),
+            Err(Error::InvalidParameter)
+        );
+        assert_eq!(output, [123.0; 3]);
+    }
+
+    #[test]
     fn shape_and_axis_errors_are_explicit() {
+        assert_eq!(PINNED_NODE_COVERAGE, 1_885);
         assert_eq!(Shape::new(&[1, 1, 1, 1, 1]), Err(Error::RankTooLarge));
         assert_eq!(Shape::new(&[2, 0]), Err(Error::ZeroDimension));
         let shape = Shape::new(&[2, 3]).unwrap();

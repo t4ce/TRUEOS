@@ -1,0 +1,15 @@
+[package]
+name = "trueos-kokoro-exec"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+description = "Allocation-free control-plane executor for sealed TRUEOS Kokoro AOT programs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+trueos-kokoro-aot = { path = "../trueos-kokoro-aot", default-features = false }

@@ -78,6 +78,7 @@ trueos-lfm25-model = { path = "crates/trueos-lfm25-model" }
 trueos-lfm25-cpu = { path = "crates/trueos-lfm25-cpu" }
 trueos-ttstt-cpu = { path = "crates/trueos-ttstt-cpu" }
 trueos-kokoro-aot = { path = "crates/trueos-kokoro-aot" }
+trueos-kokoro-exec = { path = "crates/trueos-kokoro-exec" }
 trueos-kokoro-f32 = { path = "crates/trueos-kokoro-f32" }
 trueos-fs = { path = "crates/trueos-fs" }
 v = { path = "crates/trueos-v" }
