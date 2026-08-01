@@ -1544,7 +1544,18 @@ async fn worker_task(slot: u32, core_kind: u8, models: &'static ModelSet) {
                 output.mark_service_first_run(slice_started);
             }
         }
+        // Keep the high-performance request strictly inside this synchronous
+        // Kokoro slice. The AP executor is slot-pinned until `run_slice`
+        // returns, so the core-local HWP state is restored before any yield.
+        // Unsupported or firmware-disabled HWP takes the unchanged fallback
+        // without executing WRMSR.
+        let hwp_boost = if direction == Direction::TextToSpeech {
+            crate::power::hwp::ScopedHwpPerformance::try_begin().ok()
+        } else {
+            None
+        };
         let result = queued.job.run_slice(models, context);
+        drop(hwp_boost);
         let slice_finished = Instant::now();
         queued.run_us = queued.run_us.saturating_add(
             slice_finished

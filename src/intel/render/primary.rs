@@ -282,7 +282,8 @@ unsafe impl Send for ResidentSceneBatchState {}
 
 static RESIDENT_SCENE_BATCH_STATE: Mutex<Option<ResidentSceneBatchState>> = Mutex::new(None);
 static RESIDENT_SCENE_BATCH_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
-static RESIDENT_CHURN_FORWARD_GPU_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
+static RESIDENT_CHURN_FORWARD_GPU_NATIVE_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
+static RESIDENT_CHURN_FORWARD_GPU_EXPANDED_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_FORWARD_CPU_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 
 // The entry packet sits before either opening PIPE_CONTROL. Slot 14 proves
@@ -1134,9 +1135,9 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_dep
 }
 
 /// Helio Churn rendered into UI4's leased linear RGBA surface in one scene
-/// submission. Retained-transform frames use the GPU-authored Float3,
-/// storage-free VS path; CPU-expanded fallback frames keep the artifact-native
-/// PosNormal/storage-buffer pipeline.
+/// submission. Retained-transform frames can feed GPU-authored matrices and
+/// compacted indices straight into the artifact-native VS; the GPU-expanded
+/// Float3 stream remains an explicit fallback during physical admission.
 pub(crate) fn render_resident_churn_forward_frame_direct_to_surface(
     resident: &ResidentChurnForward,
     clear_rgba: Option<[u8; 4]>,
@@ -1604,6 +1605,7 @@ fn submit_resident_churn_forward_geometry_batched(
     let prepare_started_ns = crate::chronos::monotonic_nanos();
     const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
     let transform_dispatch = resident.transform_dispatch();
+    let transform_handoff = transform_dispatch.map(|dispatch| dispatch.output.into());
     let transform_secondary_count = usize::from(transform_dispatch.is_some());
     let secondary_count = CHURN_FORWARD_DRAW_COUNT + 1 + transform_secondary_count;
     let used_batch_bytes = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
@@ -1668,60 +1670,79 @@ fn submit_resident_churn_forward_geometry_batched(
     for group in 0..CHURN_FORWARD_DRAW_COUNT {
         let secondary_index = group + 1 + transform_secondary_count;
         let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
-        if transform_dispatch.is_some() {
-            let draw = prepare_resident_churn_expanded_draw(
-                state_warm,
-                resident,
-                group,
-                render_target_gpu,
-                render_target_pitch,
-                target_width,
-                target_height,
-            )
-            .ok_or("churn-expanded-draw-resources")?
-            .with_rt_surface_format(render_target_surface_format);
-            stage_resident_scene_secondary(
-                warm,
-                state_warm,
-                state_gpu,
-                draw,
-                TriangleBlendProbeMode::MesaZeroedState,
-                Some(draw_depth),
-                resident.material_rgba(group % trueos_helio_runtime::churn::MATERIAL_COUNT),
-                [0.0, 0.0],
-                secondary_index,
-            )?;
-        } else {
-            let draw = prepare_resident_churn_forward_draw(
-                state_warm,
-                resident,
-                group,
-                render_target_gpu,
-                render_target_pitch,
-                target_width,
-                target_height,
-            )
-            .ok_or("churn-native-draw-resources")?
-            .with_rt_surface_format(render_target_surface_format);
-            stage_resident_churn_forward_secondary(
-                warm,
-                state_warm,
-                state_gpu,
-                draw,
-                draw_depth,
-                resident,
-                secondary_index,
-            )?;
+        match transform_handoff {
+            Some(RetainedGraphicsHandoff::NativeMatrices) | None => {
+                let draw = prepare_resident_churn_forward_draw(
+                    state_warm,
+                    resident,
+                    group,
+                    render_target_gpu,
+                    render_target_pitch,
+                    target_width,
+                    target_height,
+                )
+                .ok_or("churn-native-draw-resources")?
+                .with_rt_surface_format(render_target_surface_format);
+                stage_resident_churn_forward_secondary(
+                    warm,
+                    state_warm,
+                    state_gpu,
+                    draw,
+                    draw_depth,
+                    resident,
+                    secondary_index,
+                )?;
+            }
+            Some(RetainedGraphicsHandoff::ExpandedPositions) => {
+                let draw = prepare_resident_churn_expanded_draw(
+                    state_warm,
+                    resident,
+                    group,
+                    render_target_gpu,
+                    render_target_pitch,
+                    target_width,
+                    target_height,
+                )
+                .ok_or("churn-expanded-draw-resources")?
+                .with_rt_surface_format(render_target_surface_format);
+                stage_resident_scene_secondary(
+                    warm,
+                    state_warm,
+                    state_gpu,
+                    draw,
+                    TriangleBlendProbeMode::MesaZeroedState,
+                    Some(draw_depth),
+                    resident.material_rgba(group % trueos_helio_runtime::churn::MATERIAL_COUNT),
+                    [0.0, 0.0],
+                    secondary_index,
+                )?;
+            }
         }
     }
 
     let primary_bytes = encode_resident_scene_primary_batch(warm, secondary_count)?;
     crate::intel::dma_flush(warm.batch_virt, primary_bytes);
-    if transform_dispatch.is_some() {
-        if !RESIDENT_CHURN_FORWARD_GPU_PATH_LOGGED.swap(true, Ordering::AcqRel) {
+    if transform_handoff.is_some_and(RetainedGraphicsHandoff::uses_native_matrices) {
+        if !RESIDENT_CHURN_FORWARD_GPU_NATIVE_PATH_LOGGED.swap(true, Ordering::AcqRel) {
+            let graph = transform_dispatch.and_then(|dispatch| dispatch.hierarchy);
             crate::log_info!(
                 target: "render";
-                "resident-scene: native Churn online path=helioa-churn-forward-v1->retained-transform-simd16(prep+rows+expanded-position)->gpu-float3+indexed-indirect->storage-free-pass-through-vs+constant-ps->12-indexed-indirect-secondaries->one-guc-scene-schedule geometry=24-float3+36-indices-per-compacted-slot gpu_transform=1 transform_secondaries=1 cpu_matrix_expansion=0 vs_storage_bindings=0 synthetic_instance_id=0 render_submits=1 target={}x{}\n",
+                "resident-scene: native Churn online path=helioa-churn-forward-v1->retained-transform-simd16(prep+matrix-rows+compaction)->gpu-208b-instance+u32-compacted+20b-indexed-indirect->artifact-native-vs+ps->12-indexed-indirect-secondaries->one-guc-scene-schedule geometry=3x(pos-normal-cube/24v/36i) gpu_transform=1 graphics_handoff=native-matrices transform_secondaries=1 retained_graph={} graph_nodes={} dirty_local={} dirty_world={} dirty_rows={} max_depth={} cpu_matrix_expansion=0 cpu_vertex_projection=0 cpu_readback=0 instance_index=starting_instance+instance_id render_submits=1 target={}x{}\n",
+                graph.is_some() as u8,
+                graph.map_or(0, |graph| graph.node_count),
+                graph.map_or(0, |graph| graph.dirty_local_count),
+                graph.map_or(0, |graph| graph.dirty_world_count),
+                graph.map_or(0, |graph| graph.dirty_row_count),
+                graph.map_or(0, |graph| graph.max_depth),
+                target_width,
+                target_height,
+            );
+        }
+    } else if transform_handoff == Some(RetainedGraphicsHandoff::ExpandedPositions) {
+        if !RESIDENT_CHURN_FORWARD_GPU_EXPANDED_PATH_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::log_info!(
+                target: "render";
+                "resident-scene: native Churn online path=helioa-churn-forward-v1->retained-transform-simd16(prep+rows+expanded-position)->gpu-float3+indexed-indirect->storage-free-pass-through-vs+constant-ps->12-indexed-indirect-secondaries->one-guc-scene-schedule geometry=24-float3+36-indices-per-compacted-slot gpu_transform=1 graphics_handoff=expanded-positions fallback=physical-admission transform_secondaries=1 cpu_matrix_expansion=0 vs_storage_bindings=0 synthetic_instance_id=0 render_submits=1 target={}x{}\n",
                 target_width,
                 target_height,
             );

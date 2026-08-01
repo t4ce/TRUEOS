@@ -1,12 +1,20 @@
 const HELIO_TRANSFORM_IDD_OFFSET_BYTES: usize = 0x1000;
 const HELIO_TRANSFORM_BINDING_TABLE_OFFSET_BYTES: usize = 0x1040;
 const HELIO_TRANSFORM_SURFACE_STATE_OFFSET_BYTES: usize = 0x1080;
-const HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES: usize = 0x1300;
-const HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES: usize = 0x1400;
-const HELIO_TRANSFORM_BINDINGS: usize = 8;
-const HELIO_TRANSFORM_MODE_PREPARE: u32 = 2;
-const HELIO_TRANSFORM_MODE_ROWS: u32 = 3;
-const HELIO_TRANSFORM_CROSS_THREAD_BYTES: usize = 128;
+const HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES: usize = 0x1500;
+const HELIO_TRANSFORM_LOCAL_PAYLOAD_OFFSET_BYTES: usize = 0x1680;
+const HELIO_TRANSFORM_RESOLVE_PAYLOAD_OFFSET_BYTES: usize = 0x1800;
+const HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES: usize = 0x1980;
+const HELIO_TRANSFORM_BINDINGS: usize = 16;
+const HELIO_TRANSFORM_MODE_PREPARE_NATIVE: u32 = 0;
+const HELIO_TRANSFORM_MODE_ROWS_NATIVE: u32 = 1;
+const HELIO_TRANSFORM_MODE_PREPARE_EXPANDED: u32 = 2;
+const HELIO_TRANSFORM_MODE_ROWS_EXPANDED: u32 = 3;
+const HELIO_TRANSFORM_MODE_HIERARCHY_LOCAL: u32 = 4;
+const HELIO_TRANSFORM_MODE_HIERARCHY_RESOLVE: u32 = 5;
+const HELIO_TRANSFORM_MODE_HIERARCHY_ROWS_NATIVE: u32 = 6;
+const HELIO_TRANSFORM_MODE_HIERARCHY_ROWS_EXPANDED: u32 = 7;
+const HELIO_TRANSFORM_CROSS_THREAD_BYTES: usize = 224;
 const HELIO_TRANSFORM_PER_THREAD_BYTES: usize = 96;
 const HELIO_TRANSFORM_INDIRECT_BYTES: usize =
     HELIO_TRANSFORM_CROSS_THREAD_BYTES + HELIO_TRANSFORM_PER_THREAD_BYTES;
@@ -22,6 +30,8 @@ const _: () = assert!(PIPE_CONTROL_CMD | HELIO_TRANSFORM_RELEASE_HEADER_BITS == 
 
 const _: () = {
     assert!(HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES.is_multiple_of(64));
+    assert!(HELIO_TRANSFORM_LOCAL_PAYLOAD_OFFSET_BYTES.is_multiple_of(64));
+    assert!(HELIO_TRANSFORM_RESOLVE_PAYLOAD_OFFSET_BYTES.is_multiple_of(64));
     assert!(HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES.is_multiple_of(64));
     assert!(
         HELIO_TRANSFORM_SURFACE_STATE_OFFSET_BYTES
@@ -32,23 +42,42 @@ const _: () = {
     );
     assert!(
         HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + HELIO_TRANSFORM_INDIRECT_BYTES
+            <= HELIO_TRANSFORM_LOCAL_PAYLOAD_OFFSET_BYTES
+    );
+    assert!(
+        HELIO_TRANSFORM_LOCAL_PAYLOAD_OFFSET_BYTES + HELIO_TRANSFORM_INDIRECT_BYTES
+            <= HELIO_TRANSFORM_RESOLVE_PAYLOAD_OFFSET_BYTES
+    );
+    assert!(
+        HELIO_TRANSFORM_RESOLVE_PAYLOAD_OFFSET_BYTES + HELIO_TRANSFORM_INDIRECT_BYTES
             <= HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES
     );
     assert!(
         HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES + HELIO_TRANSFORM_INDIRECT_BYTES
             <= GPGPU_HELIO_TRANSFORM_STATE_BLOB_BYTES
     );
+    assert!(
+        HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes
+            == HELIO_TRANSFORM_CROSS_THREAD_BYTES as u32
+    );
+    assert!(
+        HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes
+            == HELIO_TRANSFORM_PER_THREAD_BYTES as u32
+    );
 };
 
-/// Encode one Render-secondary compute batch. It contains two ordered walkers
-/// of the same native entrypoint:
+/// Encode one Render-secondary compute batch. It contains two flat walkers or
+/// four ordered hierarchy walkers of the same native entrypoint:
 ///
 /// 1. prepare all exact WGPU indirect records and publish group capacities;
-/// 2. expand rows in parallel into producer-assigned compact slots.
+/// 2. materialize dirty dynamic TRS nodes as local affine matrices;
+/// 3. independently resolve dirty world nodes across SIMD16 lanes;
+/// 4. emit dirty rows into producer-assigned compact slots.
 ///
 /// The batch restores the 3D pipeline before its second-level BBE. The next
-/// resident draw secondary therefore consumes a GPU-authored Float3 position
-/// stream and indexed-indirect storage without a context switch or readback.
+/// resident draw secondary therefore consumes either GPU-authored instance
+/// matrices or the compatibility Float3 stream, plus indexed-indirect storage,
+/// without a context switch or readback.
 pub(crate) fn encode_helio_retained_transform_secondary(
     state: &mut GpgpuHelioRetainedTransformStateBlob<'_>,
     artifact: GpgpuHelioRetainedTransformArtifactMapping,
@@ -65,26 +94,69 @@ pub(crate) fn encode_helio_retained_transform_secondary(
     bytes.fill(0);
     write_helio_transform_interface_descriptor(bytes, artifact.entry_offset)?;
     write_helio_transform_surfaces(bytes, dispatch)?;
+    let expanded = dispatch.output == GpgpuHelioRetainedTransformOutput::ExpandedPositions;
+    let prepare_mode = if expanded {
+        HELIO_TRANSFORM_MODE_PREPARE_EXPANDED
+    } else {
+        HELIO_TRANSFORM_MODE_PREPARE_NATIVE
+    };
     write_helio_transform_payload(
         bytes,
         HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES,
         dispatch,
-        HELIO_TRANSFORM_MODE_PREPARE,
+        prepare_mode,
     )?;
+    let (local_groups, hierarchy_groups, transform_groups, row_mode) =
+        if let Some(graph) = dispatch.hierarchy {
+            write_helio_transform_payload(
+                bytes,
+                HELIO_TRANSFORM_LOCAL_PAYLOAD_OFFSET_BYTES,
+                dispatch,
+                HELIO_TRANSFORM_MODE_HIERARCHY_LOCAL,
+            )?;
+            write_helio_transform_payload(
+                bytes,
+                HELIO_TRANSFORM_RESOLVE_PAYLOAD_OFFSET_BYTES,
+                dispatch,
+                HELIO_TRANSFORM_MODE_HIERARCHY_RESOLVE,
+            )?;
+            (
+                graph.dirty_local_count.div_ceil(16),
+                graph.dirty_world_count.div_ceil(16),
+                graph.dirty_row_count.div_ceil(16),
+                if expanded {
+                    HELIO_TRANSFORM_MODE_HIERARCHY_ROWS_EXPANDED
+                } else {
+                    HELIO_TRANSFORM_MODE_HIERARCHY_ROWS_NATIVE
+                },
+            )
+        } else {
+            (
+                0,
+                0,
+                dispatch.row_count.div_ceil(16),
+                if expanded {
+                    HELIO_TRANSFORM_MODE_ROWS_EXPANDED
+                } else {
+                    HELIO_TRANSFORM_MODE_ROWS_NATIVE
+                },
+            )
+        };
     write_helio_transform_payload(
         bytes,
         HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES,
         dispatch,
-        HELIO_TRANSFORM_MODE_ROWS,
+        row_mode,
     )?;
 
     let prepare_groups = dispatch.draw_count.div_ceil(16);
-    let transform_groups = dispatch.row_count.div_ceil(16);
     // Gen12 applies RightExecutionMask to every SIMD hardware thread, not
     // merely to the final X group.  Keep every lane live in every group and
     // let the entrypoint's item >= draw_count / row_count guards reject only
     // the padded lanes in each pass's final group.
     let prepare_mask = GPGPU_WALKER_SIMD16_MASK;
+    let local_mask = GPGPU_WALKER_SIMD16_MASK;
+    let hierarchy_mask = GPGPU_WALKER_SIMD16_MASK;
     let transform_mask = GPGPU_WALKER_SIMD16_MASK;
     let batch = unsafe {
         core::slice::from_raw_parts_mut(
@@ -142,17 +214,62 @@ pub(crate) fn encode_helio_retained_transform_secondary(
         GPGPU_HELIO_DIAGNOSTIC_SLOT_PREPARE,
         GPGPU_HELIO_DIAGNOSTIC_PREPARE,
     );
-    ok &= direct_rcs_push_gpgpu_walker_2d(
-        batch,
-        &mut cursor,
-        HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES,
-        HELIO_TRANSFORM_INDIRECT_BYTES,
-        transform_groups,
-        1,
-        transform_mask,
-    );
-    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    if local_groups != 0 {
+        ok &= direct_rcs_push_gpgpu_walker_2d(
+            batch,
+            &mut cursor,
+            HELIO_TRANSFORM_LOCAL_PAYLOAD_OFFSET_BYTES,
+            HELIO_TRANSFORM_INDIRECT_BYTES,
+            local_groups,
+            1,
+            local_mask,
+        );
+        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, 0);
+        // Dynamic TRS seeds have now authored their node-local affine rows.
+        // Publish those rows before any independent ancestor walker reads
+        // them, including when parent and leaf occupy different workgroups.
+        ok &= direct_rcs_push_pipe_control_full(
+            batch,
+            &mut cursor,
+            HELIO_TRANSFORM_RELEASE_HEADER_BITS,
+            PIPE_CONTROL_FLUSH_BITS,
+        );
+    }
+    if hierarchy_groups != 0 {
+        ok &= direct_rcs_push_gpgpu_walker_2d(
+            batch,
+            &mut cursor,
+            HELIO_TRANSFORM_RESOLVE_PAYLOAD_OFFSET_BYTES,
+            HELIO_TRANSFORM_INDIRECT_BYTES,
+            hierarchy_groups,
+            1,
+            hierarchy_mask,
+        );
+        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, 0);
+        // Every dirty world is now complete. The dirty-row emitter can read a
+        // leaf written by any preceding SIMD16 group without a CPU fence.
+        ok &= direct_rcs_push_pipe_control_full(
+            batch,
+            &mut cursor,
+            HELIO_TRANSFORM_RELEASE_HEADER_BITS,
+            PIPE_CONTROL_FLUSH_BITS,
+        );
+    }
+    if transform_groups != 0 {
+        ok &= direct_rcs_push_gpgpu_walker_2d(
+            batch,
+            &mut cursor,
+            HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES,
+            HELIO_TRANSFORM_INDIRECT_BYTES,
+            transform_groups,
+            1,
+            transform_mask,
+        );
+        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, 0);
+    }
     // GPU producer release for all following resident draw secondaries.
     ok &= direct_rcs_push_pipe_control_full(
         batch,
@@ -200,6 +317,8 @@ pub(crate) fn encode_helio_retained_transform_secondary(
     Ok(GpgpuHelioRetainedTransformEncoding {
         command_dwords: cursor,
         prepare_groups,
+        local_groups,
+        hierarchy_groups,
         transform_groups,
     })
 }
@@ -232,19 +351,8 @@ fn validate_helio_transform_encoder_ranges(
 ) -> Result<(), GpgpuHelioTransformError> {
     let state = (state_gpu, GPGPU_HELIO_TRANSFORM_STATE_BLOB_BYTES);
     let artifact_range = (artifact.gpu, artifact.mapped_bytes);
-    let buffers = [
-        (dispatch.transforms.gpu, dispatch.transforms.bytes),
-        (dispatch.draw_templates.gpu, dispatch.draw_templates.bytes),
-        (dispatch.instances.gpu, dispatch.instances.bytes),
-        (dispatch.compacted_indices.gpu, dispatch.compacted_indices.bytes),
-        (dispatch.indirect_args.gpu, dispatch.indirect_args.bytes),
-        (dispatch.camera.gpu, dispatch.camera.bytes),
-        (dispatch.source_vertices.gpu, dispatch.source_vertices.bytes),
-        (
-            dispatch.expanded_positions.gpu,
-            dispatch.expanded_positions.bytes,
-        ),
-    ];
+    let buffers = helio_transform_surfaces(dispatch)
+        .map(|surface| (surface.gpu, surface.bytes));
     if ranges_overlap(state, artifact_range)
         || buffers
             .into_iter()
@@ -287,16 +395,7 @@ fn write_helio_transform_surfaces(
     bytes: &mut [u8],
     dispatch: GpgpuHelioRetainedTransformDispatch,
 ) -> Result<(), GpgpuHelioTransformError> {
-    let surfaces = [
-        dispatch.transforms,
-        dispatch.draw_templates,
-        dispatch.instances,
-        dispatch.compacted_indices,
-        dispatch.indirect_args,
-        dispatch.camera,
-        dispatch.source_vertices,
-        dispatch.expanded_positions,
-    ];
+    let surfaces = helio_transform_surfaces(dispatch);
     for (index, slice) in surfaces.into_iter().enumerate() {
         let surface_offset = HELIO_TRANSFORM_SURFACE_STATE_OFFSET_BYTES
             + index * COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>();
@@ -308,6 +407,44 @@ fn write_helio_transform_surfaces(
         write_helio_transform_buffer_surface(bytes, surface_offset, slice)?;
     }
     Ok(())
+}
+
+/// The compiled artifact has a fixed sixteen-entry binding table. Unused mode
+/// inputs alias an already-valid dispatch range; the kernel mode guarantees
+/// that those BTIs are never accessed. This keeps the legacy flat path and the
+/// native matrix output free from dummy allocations.
+fn helio_transform_surfaces(
+    dispatch: GpgpuHelioRetainedTransformDispatch,
+) -> [GpgpuHelioBufferSlice; HELIO_TRANSFORM_BINDINGS] {
+    let (camera, source_vertices, expanded_positions) =
+        if dispatch.output == GpgpuHelioRetainedTransformOutput::ExpandedPositions {
+            (
+                dispatch.camera,
+                dispatch.source_vertices,
+                dispatch.expanded_positions,
+            )
+        } else {
+            (dispatch.transforms, dispatch.transforms, dispatch.instances)
+        };
+    let graph = dispatch.hierarchy;
+    [
+        dispatch.transforms,
+        dispatch.draw_templates,
+        dispatch.instances,
+        dispatch.compacted_indices,
+        dispatch.indirect_args,
+        camera,
+        source_vertices,
+        expanded_positions,
+        graph.map_or(dispatch.transforms, |value| value.nodes),
+        graph.map_or(dispatch.transforms, |value| value.dynamic_bindings),
+        graph.map_or(dispatch.instances, |value| value.local_affines),
+        graph.map_or(dispatch.instances, |value| value.world_affines),
+        graph.map_or(dispatch.compacted_indices, |value| value.dirty_local_nodes),
+        graph.map_or(dispatch.compacted_indices, |value| value.dirty_world_nodes),
+        graph.map_or(dispatch.compacted_indices, |value| value.dirty_rows),
+        graph.map_or(dispatch.compacted_indices, |value| value.row_leaf_nodes),
+    ]
 }
 
 fn write_helio_transform_buffer_surface(
@@ -348,22 +485,20 @@ fn write_helio_transform_payload(
         write_helio_transform_u32(payload, implicit_offset + 4, 1)?;
         write_helio_transform_u32(payload, implicit_offset + 8, 1)?;
     }
-    let pointers = [
-        dispatch.transforms.gpu,
-        dispatch.draw_templates.gpu,
-        dispatch.instances.gpu,
-        dispatch.compacted_indices.gpu,
-        dispatch.indirect_args.gpu,
-        dispatch.camera.gpu,
-        dispatch.source_vertices.gpu,
-        dispatch.expanded_positions.gpu,
-    ];
+    let pointers = helio_transform_surfaces(dispatch).map(|surface| surface.gpu);
     for (index, pointer) in pointers.into_iter().enumerate() {
         write_helio_transform_u64(payload, 48 + index * 8, pointer)?;
     }
-    write_helio_transform_u32(payload, 112, dispatch.row_count)?;
-    write_helio_transform_u32(payload, 116, dispatch.draw_count)?;
-    write_helio_transform_u32(payload, 120, mode)?;
+    write_helio_transform_u32(payload, 176, dispatch.row_count)?;
+    write_helio_transform_u32(payload, 180, dispatch.draw_count)?;
+    write_helio_transform_u32(payload, 184, mode)?;
+    if let Some(graph) = dispatch.hierarchy {
+        write_helio_transform_u32(payload, 188, graph.node_count)?;
+        write_helio_transform_u32(payload, 192, graph.dirty_local_count)?;
+        write_helio_transform_u32(payload, 196, graph.dirty_world_count)?;
+        write_helio_transform_u32(payload, 200, graph.dirty_row_count)?;
+        write_helio_transform_u32(payload, 204, graph.max_depth)?;
+    }
     for lane in 0..16usize {
         write_helio_transform_u16(
             payload,
@@ -464,6 +599,8 @@ mod helio_transform_encoder_tests {
             expanded_positions: GpgpuHelioBufferSlice::new(0x0380_0000, 337 * 24 * 12),
             row_count: 337,
             draw_count: 12,
+            output: GpgpuHelioRetainedTransformOutput::ExpandedPositions,
+            hierarchy: None,
         }
     }
 
@@ -481,7 +618,7 @@ mod helio_transform_encoder_tests {
             &mut storage,
             HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES,
             dispatch,
-            HELIO_TRANSFORM_MODE_PREPARE,
+            HELIO_TRANSFORM_MODE_PREPARE_EXPANDED,
         )
         .unwrap();
 
@@ -489,52 +626,37 @@ mod helio_transform_encoder_tests {
             |offset: usize| u32::from_le_bytes(storage[offset..offset + 4].try_into().unwrap());
         let read_u64 =
             |offset: usize| u64::from_le_bytes(storage[offset..offset + 8].try_into().unwrap());
-        let expected = [
-            (0u16, 0u16, dispatch.transforms.gpu),
-            (1, 1, dispatch.draw_templates.gpu),
-            (2, 2, dispatch.instances.gpu),
-            (3, 3, dispatch.compacted_indices.gpu),
-            (4, 4, dispatch.indirect_args.gpu),
-            (8, 5, dispatch.camera.gpu),
-            (9, 6, dispatch.source_vertices.gpu),
-            (10, 7, dispatch.expanded_positions.gpu),
-        ];
+        let arg_indices = [0u16, 1, 2, 3, 4, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
+        let surfaces = helio_transform_surfaces(dispatch);
         let bindings = HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.bindings;
         assert_eq!(bindings.len(), HELIO_TRANSFORM_BINDINGS);
-        for (index, (arg_index, bti, gpu)) in expected.into_iter().enumerate() {
+        for (index, (arg_index, surface)) in arg_indices
+            .into_iter()
+            .zip(surfaces)
+            .enumerate()
+        {
+            let bti = index as u16;
             assert_eq!(bindings[index].arg_index, arg_index);
             assert_eq!(bindings[index].bti, bti);
             let surface_offset =
                 read_u32(HELIO_TRANSFORM_BINDING_TABLE_OFFSET_BYTES + usize::from(bti) * 4)
                     as usize;
-            assert_eq!(read_u64(surface_offset + 8 * 4), gpu);
+            assert_eq!(read_u64(surface_offset + 8 * 4), surface.gpu);
         }
         assert_eq!(
             read_u32(HELIO_TRANSFORM_IDD_OFFSET_BYTES + 4 * 4),
             HELIO_TRANSFORM_BINDING_TABLE_OFFSET_BYTES as u32 | HELIO_TRANSFORM_BINDINGS as u32
         );
-        for (index, gpu) in [
-            dispatch.transforms.gpu,
-            dispatch.draw_templates.gpu,
-            dispatch.instances.gpu,
-            dispatch.compacted_indices.gpu,
-            dispatch.indirect_args.gpu,
-            dispatch.camera.gpu,
-            dispatch.source_vertices.gpu,
-            dispatch.expanded_positions.gpu,
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (index, surface) in surfaces.into_iter().enumerate() {
             assert_eq!(
                 read_u64(HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 48 + index * 8),
-                gpu
+                surface.gpu
             );
         }
         // Generated BufferOffset{arg1}; zero means the draw-template surface
         // and pointer share the same byte-zero origin.
         assert_eq!(
-            read_u32(HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 124),
+            read_u32(HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 208),
             0
         );
     }
@@ -552,6 +674,8 @@ mod helio_transform_encoder_tests {
         )
         .unwrap();
         assert_eq!(encoding.prepare_groups, 1);
+        assert_eq!(encoding.local_groups, 0);
+        assert_eq!(encoding.hierarchy_groups, 0);
         assert_eq!(encoding.transform_groups, 22);
         assert!(encoding.prepare_groups * 16 >= dispatch().draw_count);
         assert!((encoding.prepare_groups - 1) * 16 < dispatch().draw_count);
@@ -616,21 +740,104 @@ mod helio_transform_encoder_tests {
         );
         assert_eq!(
             u32::from_le_bytes(
-                state.bytes()[HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 120
-                    ..HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 124]
+                state.bytes()[HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 184
+                    ..HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 188]
                     .try_into()
                     .unwrap()
             ),
-            HELIO_TRANSFORM_MODE_PREPARE
+            HELIO_TRANSFORM_MODE_PREPARE_EXPANDED
         );
         assert_eq!(
             u32::from_le_bytes(
-                state.bytes()[HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES + 120
-                    ..HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES + 124]
+                state.bytes()[HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES + 184
+                    ..HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES + 188]
                     .try_into()
                     .unwrap()
             ),
-            HELIO_TRANSFORM_MODE_ROWS
+            HELIO_TRANSFORM_MODE_ROWS_EXPANDED
+        );
+    }
+
+    #[test]
+    fn hierarchy_encoder_exposes_exact_dirty_groups_and_barriers() {
+        let mut dispatch = dispatch();
+        dispatch.output = GpgpuHelioRetainedTransformOutput::InstanceMatrices;
+        dispatch.camera = GpgpuHelioBufferSlice::unused();
+        dispatch.source_vertices = GpgpuHelioBufferSlice::unused();
+        dispatch.expanded_positions = GpgpuHelioBufferSlice::unused();
+        dispatch.hierarchy = Some(GpgpuHelioRetainedHierarchyDispatch {
+            nodes: GpgpuHelioBufferSlice::new(0x0390_0000, 400 * 16),
+            dynamic_bindings: GpgpuHelioBufferSlice::new(0x03A0_0000, 400 * 4),
+            local_affines: GpgpuHelioBufferSlice::new(0x03B0_0000, 400 * 48),
+            world_affines: GpgpuHelioBufferSlice::new(0x03C0_0000, 400 * 48),
+            dirty_local_nodes: GpgpuHelioBufferSlice::new(0x03D0_0000, 33 * 4),
+            dirty_world_nodes: GpgpuHelioBufferSlice::new(0x03E0_0000, 257 * 4),
+            dirty_rows: GpgpuHelioBufferSlice::new(0x03F0_0000, 65 * 4),
+            row_leaf_nodes: GpgpuHelioBufferSlice::new(0x0400_0000, 337 * 4),
+            node_count: 400,
+            dirty_local_count: 33,
+            dirty_world_count: 257,
+            dirty_row_count: 65,
+            max_depth: 8,
+        });
+
+        let mut storage = alloc::vec![0u8; GPGPU_HELIO_TRANSFORM_STATE_BLOB_BYTES];
+        let mut state =
+            GpgpuHelioRetainedTransformStateBlob::new(&mut storage, 0x0100_0000).unwrap();
+        let encoding = encode_helio_retained_transform_secondary(
+            &mut state,
+            artifact(),
+            dispatch,
+            0x0084_0000,
+        )
+        .unwrap();
+        assert_eq!(encoding.prepare_groups, 1);
+        assert_eq!(encoding.local_groups, 3);
+        assert_eq!(encoding.hierarchy_groups, 17);
+        assert_eq!(encoding.transform_groups, 5);
+
+        let commands = unsafe {
+            core::slice::from_raw_parts(
+                state.bytes().as_ptr().cast::<u32>(),
+                encoding.command_dwords,
+            )
+        };
+        let walkers = commands
+            .iter()
+            .enumerate()
+            .filter_map(|(index, command)| (*command == GPGPU_WALKER_CMD).then_some(index))
+            .collect::<alloc::vec::Vec<_>>();
+        assert_eq!(walkers.len(), 4);
+        let release_cmd = PIPE_CONTROL_CMD | HELIO_TRANSFORM_RELEASE_HEADER_BITS;
+        for pair in walkers.windows(2) {
+            assert!((pair[0]..pair[1]).any(|index| {
+                commands[index] == release_cmd
+                    && commands[index + 1] == PIPE_CONTROL_FLUSH_BITS
+            }));
+        }
+
+        let read_mode = |payload: usize| {
+            u32::from_le_bytes(
+                state.bytes()[payload + 184..payload + 188]
+                    .try_into()
+                    .unwrap(),
+            )
+        };
+        assert_eq!(
+            read_mode(HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES),
+            HELIO_TRANSFORM_MODE_PREPARE_NATIVE
+        );
+        assert_eq!(
+            read_mode(HELIO_TRANSFORM_LOCAL_PAYLOAD_OFFSET_BYTES),
+            HELIO_TRANSFORM_MODE_HIERARCHY_LOCAL
+        );
+        assert_eq!(
+            read_mode(HELIO_TRANSFORM_RESOLVE_PAYLOAD_OFFSET_BYTES),
+            HELIO_TRANSFORM_MODE_HIERARCHY_RESOLVE
+        );
+        assert_eq!(
+            read_mode(HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES),
+            HELIO_TRANSFORM_MODE_HIERARCHY_ROWS_NATIVE
         );
     }
 }

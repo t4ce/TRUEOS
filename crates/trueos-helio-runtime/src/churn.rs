@@ -3,6 +3,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::retained_transform::{RetainedTransformProgram, TransformHierarchyFrame};
 use crate::{Camera, DrawIndexedIndirectArgs, Error, Projector, linear_rgba_to_srgba8};
 
 pub const SECTION_NAME: &str = "scene/churn-v1.bin";
@@ -485,6 +486,9 @@ pub struct TransformFrame<'a> {
     pub draw_templates: &'a [GpuRetainedDrawTemplate; DRAW_GROUP_COUNT],
     pub seed_dirty: DirtyRange,
     pub draw_templates_dirty: DirtyRange,
+    /// Levelized retained affine graph consumed by Helio's three GPU passes:
+    /// dynamic local authoring, dirty world resolution, then row emission.
+    pub hierarchy: TransformHierarchyFrame<'a>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -797,6 +801,7 @@ pub struct Engine {
     gpu_draws: [DrawIndexedIndirectArgs; DRAW_GROUP_COUNT],
     gpu_transform_seeds: Vec<GpuRetainedTransformSeed>,
     gpu_draw_templates: [GpuRetainedDrawTemplate; DRAW_GROUP_COUNT],
+    gpu_transform_hierarchy: RetainedTransformProgram,
     previous_view_proj: Option<[f32; 16]>,
 }
 
@@ -902,6 +907,8 @@ impl Engine {
             gpu_draws,
             gpu_transform_seeds: Vec::with_capacity(max_objects),
             gpu_draw_templates: [GpuRetainedDrawTemplate::default(); DRAW_GROUP_COUNT],
+            gpu_transform_hierarchy: RetainedTransformProgram::compile_rooted_dynamic_rows(0)
+                .map_err(|_| Error::InvalidChurnScene)?,
             previous_view_proj: None,
         })
     }
@@ -1155,6 +1162,27 @@ impl Engine {
             return Err(Error::InvalidChurnScene);
         }
 
+        // The graph is persistent while topology is stable. A growing Churn
+        // scene recompiles once with generation 1 and publishes those initial
+        // worklists directly; this avoids bumping a never-emitted row to
+        // generation 2. Ordinary frames only mark their changing TRS rows.
+        if self.gpu_transform_hierarchy.authored_leaf_nodes.len() != object_count + 1 {
+            self.gpu_transform_hierarchy =
+                RetainedTransformProgram::compile_rooted_dynamic_rows(object_count)
+                    .map_err(|_| Error::InvalidChurnScene)?;
+        } else {
+            self.gpu_transform_hierarchy.begin_update();
+            for row in 0..object_count_u32 {
+                if !self
+                    .gpu_transform_hierarchy
+                    .mark_dynamic_slot_dirty(row)
+                    .map_err(|_| Error::InvalidChurnScene)?
+                {
+                    return Err(Error::InvalidChurnScene);
+                }
+            }
+            self.gpu_transform_hierarchy.propagate_dirty();
+        }
         let camera = gpu_camera_uniforms(
             self.spec.camera,
             aspect,
@@ -1203,6 +1231,18 @@ impl Engine {
             draw_templates_dirty: DirtyRange {
                 first: 0,
                 count: DRAW_GROUP_COUNT as u32,
+            },
+            hierarchy: TransformHierarchyFrame {
+                nodes: &self.gpu_transform_hierarchy.nodes,
+                local_affines: &self.gpu_transform_hierarchy.local_affines,
+                dynamic_bindings: &self.gpu_transform_hierarchy.dynamic_bindings,
+                level_indices: &self.gpu_transform_hierarchy.level_indices,
+                levels: &self.gpu_transform_hierarchy.levels,
+                dirty_local_nodes: &self.gpu_transform_hierarchy.dirty_local_node_ids,
+                dirty_world_nodes: &self.gpu_transform_hierarchy.dirty_world_node_ids,
+                dirty_rows: &self.gpu_transform_hierarchy.dirty_row_ids,
+                row_leaf_nodes: &self.gpu_transform_hierarchy.row_leaf_nodes,
+                report: self.gpu_transform_hierarchy.report(),
             },
         })
     }
@@ -2079,6 +2119,27 @@ mod tests {
             let frame = engine.step_transform_frame(16.0 / 9.0).unwrap();
             assert_eq!(frame.seeds.len(), 8);
             assert_eq!(frame.seed_dirty, DirtyRange { first: 0, count: 8 });
+            assert_eq!(frame.hierarchy.nodes.len(), 9);
+            assert_eq!(frame.hierarchy.local_affines.len(), 9);
+            assert_eq!(frame.hierarchy.dynamic_bindings[0], u32::MAX);
+            assert_eq!(frame.hierarchy.dynamic_bindings[1..], [0, 1, 2, 3, 4, 5, 6, 7]);
+            assert_eq!(frame.hierarchy.row_leaf_nodes, &[1, 2, 3, 4, 5, 6, 7, 8]);
+            assert_eq!(frame.hierarchy.dirty_local_nodes, &[1, 2, 3, 4, 5, 6, 7, 8]);
+            assert_eq!(frame.hierarchy.dirty_world_nodes, &[0, 1, 2, 3, 4, 5, 6, 7, 8]);
+            assert_eq!(frame.hierarchy.dirty_rows, &[0, 1, 2, 3, 4, 5, 6, 7]);
+            assert_eq!(frame.hierarchy.report.authored_ops, 10);
+            assert_eq!(frame.hierarchy.report.constant_ops_folded, 2);
+            assert_eq!(frame.hierarchy.report.runtime_nodes, 9);
+            assert_eq!(frame.hierarchy.report.max_depth, 2);
+            assert_eq!(frame.hierarchy.report.dirty_local, 8);
+            assert_eq!(frame.hierarchy.report.dirty_world, 9);
+            assert!(
+                frame
+                    .hierarchy
+                    .nodes
+                    .iter()
+                    .all(|node| node.local_generation == 1 && node.world_generation == 1)
+            );
             assert_eq!(frame.draw_templates.len(), DRAW_GROUP_COUNT);
             assert_eq!(
                 frame.draw_templates_dirty,
@@ -2148,6 +2209,11 @@ mod tests {
 
         let frame = engine.step_transform_frame(16.0 / 9.0).unwrap();
         assert_eq!(frame.camera.prev_view_proj, first_view_proj);
+        assert!(
+            frame.hierarchy.nodes[1..]
+                .iter()
+                .all(|node| node.local_generation == 2 && node.world_generation == 2)
+        );
         assert!(
             frame
                 .seeds

@@ -33,7 +33,6 @@ num_enum = {version = "0.7", default-features = false}
 spin = {version = "0.10"}
 thiserror = {workspace = true}
 tock-registers.workspace = true
-trait-ffi = "0.2.4"
 usb-if = {workspace = true}
 xhci = "0.9"
 

@@ -8,12 +8,22 @@ use std::process;
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
-use trueos_kokoro_aot::{ARENA_ALIGNMENT, ParseOptions, Phase, Program, SlotKind, WorkBudget};
-use trueos_kokoro_dispatch::{CpuDispatcher, CpuWorkspace, KOKORO_CPU_WORKSPACE_REQUIREMENTS};
-use trueos_kokoro_exec::{Executor, ResolvedPhase, RuntimeShape, SliceEvent, TensorShapeTable};
+use trueos_kokoro_aot::{
+    ARENA_ALIGNMENT, OpCode, ParseOptions, Phase, Program, SlotKind, WorkBudget, WorkSlice,
+};
+use trueos_kokoro_audio::{
+    TRUEOS_CHANNELS, TRUEOS_SAMPLE_RATE_HZ, convert_frame_range, fade_in_frame_range, output_frames,
+};
+use trueos_kokoro_dispatch::{
+    CpuDispatchPlan, CpuDispatcher, CpuWorkspace, KOKORO_CPU_WORKSPACE_REQUIREMENTS,
+};
+use trueos_kokoro_exec::{
+    DispatchResult, Dispatcher as ExecDispatcher, Executor, ResolvedPhase, RuntimeShape,
+    SliceEvent, TensorShapeTable,
+};
 use trueos_kokoro_g2p::{Model as G2pModel, canonicalize_ipa, prepare_english_with};
 use trueos_kokoro_lexicon::Lexicon;
-use trueos_kokoro_memory::{ExternalBindings, TensorMemory};
+use trueos_kokoro_memory::{ExternalBindings, PhaseOneMemoryPlan, TensorMemory};
 use trueos_kokoro_voice::{PINNED_ARCHIVE_SHA256, STYLE_WIDTH, VoiceArchive};
 
 const TOKENS_TENSOR_ID: u32 = 0;
@@ -31,6 +41,8 @@ const WAVEFORM_SAMPLES_PER_FRAME: u32 = 600;
 const SAMPLE_RATE: u32 = 24_000;
 const MAX_DATA_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_ARENA_BYTES: u64 = 1_572_883_968;
+const KERNEL_ATOMIC_WORK_UNITS_PER_SLICE: u32 = 64;
+const KERNEL_COOPERATIVE_WORK_UNITS_PER_SLICE: u32 = 32_768;
 
 const EXPECTED_ARTIFACT_SHA256: [u8; 32] = [
     0xf1, 0xf5, 0xcc, 0xc6, 0x68, 0xe1, 0x71, 0x30, 0x1e, 0x72, 0x20, 0x03, 0x39, 0x92, 0xef, 0xcb,
@@ -64,10 +76,13 @@ struct Config {
     speed: f32,
     raw_path: PathBuf,
     wav_path: PathBuf,
+    pcm_wav_path: PathBuf,
     expect_frames: Option<u32>,
     expect_samples: Option<usize>,
     expect_wav_sha256: Option<String>,
     phase0_only: bool,
+    profile_ops: bool,
+    kernel_slices: bool,
 }
 
 impl Config {
@@ -84,12 +99,15 @@ impl Config {
             speed: 1.0,
             raw_path: PathBuf::from("/tmp/trueos-kokoro-native-oracle.f32le"),
             wav_path: PathBuf::from("/tmp/trueos-kokoro-native-oracle.wav"),
+            pcm_wav_path: PathBuf::from("/tmp/trueos-kokoro-native-oracle-pcm-s16-stereo-48k.wav"),
             expect_frames: Some(REFERENCE_FRAMES),
             expect_samples: Some(REFERENCE_SAMPLES),
             // This golden was reproduced by two independent full executions
             // and passed the pinned Whisper round-trip acceptance gate.
             expect_wav_sha256: Some(REFERENCE_WAV_SHA256.to_owned()),
             phase0_only: false,
+            profile_ops: false,
+            kernel_slices: false,
         };
 
         let mut args = env::args().skip(1);
@@ -130,8 +148,13 @@ impl Config {
                     config.speed = parse_value(&next_value(&mut args, &argument)?, &argument)?
                 }
                 "--phase0-only" => config.phase0_only = true,
+                "--profile-ops" => config.profile_ops = true,
+                "--kernel-slices" => config.kernel_slices = true,
                 "--raw" => config.raw_path = PathBuf::from(next_value(&mut args, &argument)?),
                 "--wav" => config.wav_path = PathBuf::from(next_value(&mut args, &argument)?),
+                "--pcm-wav" => {
+                    config.pcm_wav_path = PathBuf::from(next_value(&mut args, &argument)?)
+                }
                 "--expect-frames" => {
                     config.expect_frames =
                         Some(parse_value(&next_value(&mut args, &argument)?, &argument)?)
@@ -205,10 +228,13 @@ fn usage(code: i32) -> ! {
            --voice NAME                default: af_heart\n\
            --speed FLOAT               sealed range 0.5..=2.0; default: 1\n\
            --phase0-only               stop after and report duration admission\n\
+           --profile-ops               report dispatch time by opcode and graph record\n\
+           --kernel-slices             reproduce kernel slice budgets and bridge rebuilds\n\
          \n\
          Outputs and optional parity gates:\n\
            --raw PATH                  little-endian f32 output path\n\
            --wav PATH                  WAVE_FORMAT_EXTENSIBLE f32 path\n\
+           --pcm-wav PATH              stereo 48-kHz signed-16 presentation WAVE path\n\
            --expect-frames N\n\
            --expect-samples N\n\
            --expect-wav-sha256 HEX"
@@ -299,6 +325,204 @@ impl WorkspaceBuffers {
             &mut self.lstm_gates_f32,
         )
         .map_err(|error| format!("CPU workspace rejected: {error:?}"))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TimingBucket {
+    calls: u64,
+    work_units: u64,
+    elapsed: Duration,
+    max_call: Duration,
+}
+
+impl TimingBucket {
+    fn record(&mut self, work_units: u32, elapsed: Duration) {
+        self.calls += 1;
+        self.work_units += u64::from(work_units);
+        self.elapsed += elapsed;
+        self.max_call = self.max_call.max(elapsed);
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.calls += other.calls;
+        self.work_units += other.work_units;
+        self.elapsed += other.elapsed;
+        self.max_call = self.max_call.max(other.max_call);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OpTiming {
+    opcode: OpCode,
+    timing: TimingBucket,
+}
+
+#[derive(Debug)]
+struct DispatchProfile {
+    enabled: bool,
+    total: TimingBucket,
+    by_op: BTreeMap<u32, OpTiming>,
+}
+
+impl DispatchProfile {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            total: TimingBucket::default(),
+            by_op: BTreeMap::new(),
+        }
+    }
+
+    fn record(&mut self, work: WorkSlice, elapsed: Duration) {
+        self.total.record(work.unit_count(), elapsed);
+        self.by_op
+            .entry(work.op_index())
+            .or_insert(OpTiming {
+                opcode: work.op().opcode,
+                timing: TimingBucket::default(),
+            })
+            .timing
+            .record(work.unit_count(), elapsed);
+    }
+
+    fn merge(&mut self, other: Self) {
+        debug_assert_eq!(self.enabled, other.enabled);
+        self.total.merge(other.total);
+        for (op_index, op) in other.by_op {
+            self.by_op
+                .entry(op_index)
+                .or_insert(OpTiming {
+                    opcode: op.opcode,
+                    timing: TimingBucket::default(),
+                })
+                .timing
+                .merge(op.timing);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SliceMetrics {
+    calls: u64,
+    bridge_rebuilds: u64,
+    bridge_setup: Duration,
+}
+
+impl SliceMetrics {
+    fn record_plan_setup(&mut self, elapsed: Duration) {
+        self.bridge_setup += elapsed;
+    }
+
+    fn record_bridge(&mut self, elapsed: Duration) {
+        self.bridge_rebuilds += 1;
+        self.bridge_setup += elapsed;
+    }
+
+    fn record_slice(&mut self) {
+        self.calls += 1;
+    }
+}
+
+struct ProfiledDispatcher<D> {
+    inner: D,
+    profile: DispatchProfile,
+}
+
+impl<D> ProfiledDispatcher<D> {
+    fn new(inner: D, enabled: bool) -> Self {
+        Self {
+            inner,
+            profile: DispatchProfile::new(enabled),
+        }
+    }
+
+    fn into_profile(self) -> DispatchProfile {
+        self.profile
+    }
+}
+
+impl<D: ExecDispatcher> ExecDispatcher for ProfiledDispatcher<D> {
+    type Error = D::Error;
+
+    fn dispatch(
+        &mut self,
+        program: &Program<'_>,
+        work: WorkSlice,
+    ) -> Result<DispatchResult, Self::Error> {
+        if !self.profile.enabled {
+            return self.inner.dispatch(program, work);
+        }
+        let started = Instant::now();
+        let result = self.inner.dispatch(program, work);
+        self.profile.record(work, started.elapsed());
+        result
+    }
+}
+
+fn print_dispatch_profile(phase: &str, profile: &DispatchProfile, phase_elapsed: Duration) {
+    if !profile.enabled {
+        return;
+    }
+    let dispatch_elapsed = profile.total.elapsed;
+    let non_dispatch_elapsed = phase_elapsed.saturating_sub(dispatch_elapsed);
+    let dispatch_share = if phase_elapsed.is_zero() {
+        0.0
+    } else {
+        dispatch_elapsed.as_secs_f64() / phase_elapsed.as_secs_f64() * 100.0
+    };
+    println!(
+        "profile_phase={phase} dispatch_calls={} dispatch_work_units={} dispatch_seconds={} non_dispatch_seconds={} dispatch_share_percent={dispatch_share:.3}",
+        profile.total.calls,
+        profile.total.work_units,
+        format_seconds(dispatch_elapsed),
+        format_seconds(non_dispatch_elapsed),
+    );
+
+    let mut by_opcode = BTreeMap::<u16, (OpCode, TimingBucket)>::new();
+    for op in profile.by_op.values() {
+        by_opcode
+            .entry(op.opcode as u16)
+            .or_insert((op.opcode, TimingBucket::default()))
+            .1
+            .merge(op.timing);
+    }
+    let mut opcode_rows: Vec<_> = by_opcode.into_values().collect();
+    opcode_rows.sort_by(|left, right| right.1.elapsed.cmp(&left.1.elapsed));
+    for (opcode, timing) in opcode_rows {
+        let share = if dispatch_elapsed.is_zero() {
+            0.0
+        } else {
+            timing.elapsed.as_secs_f64() / dispatch_elapsed.as_secs_f64() * 100.0
+        };
+        println!(
+            "profile_opcode phase={phase} opcode={opcode:?} code=0x{:04x} calls={} work_units={} seconds={} dispatch_share_percent={share:.3} max_call_ms={:.6}",
+            opcode as u16,
+            timing.calls,
+            timing.work_units,
+            format_seconds(timing.elapsed),
+            timing.max_call.as_secs_f64() * 1_000.0,
+        );
+    }
+
+    let mut op_rows: Vec<_> = profile.by_op.iter().collect();
+    op_rows.sort_by(|left, right| right.1.timing.elapsed.cmp(&left.1.timing.elapsed));
+    for (rank, (&op_index, op)) in op_rows.into_iter().take(32).enumerate() {
+        let share = if dispatch_elapsed.is_zero() {
+            0.0
+        } else {
+            op.timing.elapsed.as_secs_f64() / dispatch_elapsed.as_secs_f64() * 100.0
+        };
+        println!(
+            "profile_op phase={phase} rank={} op={} opcode={:?} calls={} work_units={} seconds={} dispatch_share_percent={share:.3} max_call_ms={:.6}",
+            rank + 1,
+            op_index,
+            op.opcode,
+            op.timing.calls,
+            op.timing.work_units,
+            format_seconds(op.timing.elapsed),
+            op.timing.max_call.as_secs_f64() * 1_000.0,
+        );
     }
 }
 
@@ -755,6 +979,21 @@ fn print_resolver_audit(audit: &ResolverAudit) {
     println!("resolver_logits_hash_match={}", audit.logits_sha256 == REFERENCE_LOGITS_SHA256);
 }
 
+fn kernel_work_units_per_slice(program: &Program<'_>, executor: &Executor<SLOT_CAPACITY>) -> u32 {
+    match program.op(executor.cursor().op_index()) {
+        Some(op)
+            if op.work_units > 1
+                && matches!(
+                    op.opcode,
+                    OpCode::Resize | OpCode::FloatConv1d | OpCode::FloatConvTranspose1d
+                ) =>
+        {
+            KERNEL_COOPERATIVE_WORK_UNITS_PER_SLICE
+        }
+        _ => KERNEL_ATOMIC_WORK_UNITS_PER_SLICE,
+    }
+}
+
 fn run_phase_zero(
     program: &Program<'_>,
     executor: &mut Executor<SLOT_CAPACITY>,
@@ -764,7 +1003,9 @@ fn run_phase_zero(
     style: &[f32; STYLE_WIDTH],
     speed: &[f32; 1],
     workspace_buffers: &mut WorkspaceBuffers,
-) -> Result<(ResolvedPhase, ResolverAudit), String> {
+    profile_ops: bool,
+) -> Result<(ResolvedPhase, ResolverAudit, DispatchProfile, SliceMetrics), String> {
+    let bridge_started = Instant::now();
     let mut externals = ExternalBindings::<3>::new();
     externals
         .bind_input(program, shapes, TOKENS_TENSOR_ID, padded_tokens)
@@ -779,15 +1020,21 @@ fn run_phase_zero(
         TensorMemory::phase_zero(program, shapes, arena.as_mut_slice(), &mut externals)
             .map_err(|error| format!("phase-zero memory rejected: {error:?}"))?;
     let mut workspace = workspace_buffers.workspace()?;
-    let mut dispatcher = CpuDispatcher::new_with_workspace(&mut memory, &mut workspace);
+    let mut dispatcher = ProfiledDispatcher::new(
+        CpuDispatcher::new_with_workspace(&mut memory, &mut workspace),
+        profile_ops,
+    );
+    let mut slice_metrics = SliceMetrics::default();
+    slice_metrics.record_bridge(bridge_started.elapsed());
 
     loop {
         let mut budget = WorkBudget::new(u32::MAX).expect("non-zero budget");
+        slice_metrics.record_slice();
         let report = executor.run_slice(program, &mut dispatcher, &mut budget);
         match report.event {
             SliceEvent::PhaseAdmitted(admission) => {
-                let audit = audit_resolver(program, dispatcher.memory())?;
-                return Ok((admission, audit));
+                let audit = audit_resolver(program, dispatcher.inner.memory())?;
+                return Ok((admission, audit, dispatcher.into_profile(), slice_metrics));
             }
             SliceEvent::BudgetExhausted if report.consumed != 0 => {}
             SliceEvent::BudgetExhausted => {
@@ -809,6 +1056,81 @@ fn run_phase_zero(
                 ));
             }
             SliceEvent::Complete => return Err("phase zero completed without admission".to_owned()),
+            SliceEvent::Cancelled => return Err("phase-zero executor was cancelled".to_owned()),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_phase_zero_kernel_slices(
+    program: &Program<'_>,
+    executor: &mut Executor<SLOT_CAPACITY>,
+    shapes: &mut TensorShapeTable<SHAPE_CAPACITY>,
+    arena: &mut AlignedBytes,
+    padded_tokens: &[i64],
+    style: &[f32; STYLE_WIDTH],
+    speed: &[f32; 1],
+    workspace_buffers: &mut WorkspaceBuffers,
+    profile_ops: bool,
+) -> Result<(ResolvedPhase, ResolverAudit, DispatchProfile, SliceMetrics), String> {
+    let mut combined_profile = DispatchProfile::new(profile_ops);
+    let mut slice_metrics = SliceMetrics::default();
+    loop {
+        let bridge_started = Instant::now();
+        let mut externals = ExternalBindings::<3>::new();
+        externals
+            .bind_input(program, shapes, TOKENS_TENSOR_ID, padded_tokens)
+            .map_err(|error| format!("token memory binding failed: {error:?}"))?;
+        externals
+            .bind_input(program, shapes, STYLE_TENSOR_ID, style)
+            .map_err(|error| format!("style memory binding failed: {error:?}"))?;
+        externals
+            .bind_input(program, shapes, SPEED_TENSOR_ID, speed)
+            .map_err(|error| format!("speed memory binding failed: {error:?}"))?;
+        let mut memory: TensorMemory<'_, '_, '_, SHAPE_CAPACITY, 3, MAX_OP_BINDINGS> =
+            TensorMemory::phase_zero(program, shapes, arena.as_mut_slice(), &mut externals)
+                .map_err(|error| format!("phase-zero memory rejected: {error:?}"))?;
+        let mut workspace = workspace_buffers.workspace()?;
+        let mut dispatcher = ProfiledDispatcher::new(
+            CpuDispatcher::new_with_workspace(&mut memory, &mut workspace),
+            profile_ops,
+        );
+        slice_metrics.record_bridge(bridge_started.elapsed());
+
+        let mut budget = WorkBudget::new(kernel_work_units_per_slice(program, executor))
+            .expect("kernel slice budgets are non-zero");
+        slice_metrics.record_slice();
+        let report = executor.run_slice(program, &mut dispatcher, &mut budget);
+        match report.event {
+            SliceEvent::PhaseAdmitted(admission) => {
+                let audit = audit_resolver(program, dispatcher.inner.memory())?;
+                combined_profile.merge(dispatcher.into_profile());
+                return Ok((admission, audit, combined_profile, slice_metrics));
+            }
+            SliceEvent::BudgetExhausted if report.consumed != 0 => {
+                combined_profile.merge(dispatcher.into_profile());
+            }
+            SliceEvent::BudgetExhausted => {
+                return Err(format!(
+                    "phase zero made no progress at {}",
+                    failure_location(program, executor)
+                ));
+            }
+            SliceEvent::DispatchFailed(error) => {
+                return Err(format!(
+                    "phase-zero dispatch failed at {}: {error:?}",
+                    failure_location(program, executor)
+                ));
+            }
+            SliceEvent::Faulted(error) => {
+                return Err(format!(
+                    "phase-zero executor fault at {}: {error:?}",
+                    failure_location(program, executor)
+                ));
+            }
+            SliceEvent::Complete => {
+                return Err("phase zero completed without admission".to_owned());
+            }
             SliceEvent::Cancelled => return Err("phase-zero executor was cancelled".to_owned()),
         }
     }
@@ -865,7 +1187,9 @@ fn run_phase_one(
     arena: &mut AlignedBytes,
     waveform: &mut [f32],
     workspace_buffers: &mut WorkspaceBuffers,
-) -> Result<(), String> {
+    profile_ops: bool,
+) -> Result<(DispatchProfile, SliceMetrics), String> {
+    let bridge_started = Instant::now();
     let waveform_shape = RuntimeShape::new(&[waveform.len() as u32])
         .map_err(|error| format!("waveform shape rejected: {error:?}"))?;
     shapes
@@ -886,13 +1210,19 @@ fn run_phase_one(
         )
         .map_err(|error| format!("phase-one memory rejected: {error:?}"))?;
     let mut workspace = workspace_buffers.workspace()?;
-    let mut dispatcher = CpuDispatcher::new_with_workspace(&mut memory, &mut workspace);
+    let mut dispatcher = ProfiledDispatcher::new(
+        CpuDispatcher::new_with_workspace(&mut memory, &mut workspace),
+        profile_ops,
+    );
+    let mut slice_metrics = SliceMetrics::default();
+    slice_metrics.record_bridge(bridge_started.elapsed());
 
     loop {
         let mut budget = WorkBudget::new(u32::MAX).expect("non-zero budget");
+        slice_metrics.record_slice();
         let report = executor.run_slice(program, &mut dispatcher, &mut budget);
         match report.event {
-            SliceEvent::Complete => return Ok(()),
+            SliceEvent::Complete => return Ok((dispatcher.into_profile(), slice_metrics)),
             SliceEvent::BudgetExhausted if report.consumed != 0 => {}
             SliceEvent::BudgetExhausted => {
                 return Err(format!(
@@ -904,7 +1234,96 @@ fn run_phase_one(
                 return Err(format!(
                     "phase-one dispatch failed at {}: {error:?}; {}",
                     failure_location(program, executor),
-                    failure_bindings(program, executor, dispatcher.memory())
+                    failure_bindings(program, executor, dispatcher.inner.memory())
+                ));
+            }
+            SliceEvent::Faulted(error) => {
+                return Err(format!(
+                    "phase-one executor fault at {}: {error:?}",
+                    failure_location(program, executor)
+                ));
+            }
+            SliceEvent::PhaseAdmitted(_) => {
+                return Err("phase one reported a duplicate admission".to_owned());
+            }
+            SliceEvent::Cancelled => return Err("phase-one executor was cancelled".to_owned()),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_phase_one_kernel_slices(
+    program: &Program<'_>,
+    executor: &mut Executor<SLOT_CAPACITY>,
+    admission: ResolvedPhase,
+    slot_bases: &[u64],
+    shapes: &mut TensorShapeTable<SHAPE_CAPACITY>,
+    arena: &mut AlignedBytes,
+    waveform: &mut [f32],
+    workspace_buffers: &mut WorkspaceBuffers,
+    profile_ops: bool,
+) -> Result<(DispatchProfile, SliceMetrics), String> {
+    let waveform_shape = RuntimeShape::new(&[waveform.len() as u32])
+        .map_err(|error| format!("waveform shape rejected: {error:?}"))?;
+    shapes
+        .bind_external(program, WAVEFORM_TENSOR_ID, waveform_shape)
+        .map_err(|error| format!("waveform shape binding failed: {error:?}"))?;
+
+    let mut combined_profile = DispatchProfile::new(profile_ops);
+    let mut slice_metrics = SliceMetrics::default();
+    let plan_started = Instant::now();
+    let phase_one_plan = PhaseOneMemoryPlan::<SLOT_CAPACITY>::new(*program, admission, slot_bases)
+        .map_err(|error| format!("phase-one memory plan rejected: {error:?}"))?;
+    let cpu_dispatch_plan = CpuDispatchPlan::detect();
+    slice_metrics.record_plan_setup(plan_started.elapsed());
+    loop {
+        let bridge_started = Instant::now();
+        let mut externals = ExternalBindings::<1>::new();
+        externals
+            .bind_output(program, shapes, WAVEFORM_TENSOR_ID, waveform)
+            .map_err(|error| format!("waveform memory binding failed: {error:?}"))?;
+        let mut memory: TensorMemory<'_, '_, '_, SHAPE_CAPACITY, 1, MAX_OP_BINDINGS> =
+            TensorMemory::phase_one_prevalidated(
+                &phase_one_plan,
+                shapes,
+                arena.as_mut_slice(),
+                &mut externals,
+            )
+            .map_err(|error| format!("phase-one memory rejected: {error:?}"))?;
+        let mut workspace = workspace_buffers.workspace()?;
+        let mut dispatcher = ProfiledDispatcher::new(
+            CpuDispatcher::new_with_workspace_and_plan(
+                &mut memory,
+                &mut workspace,
+                cpu_dispatch_plan,
+            ),
+            profile_ops,
+        );
+        slice_metrics.record_bridge(bridge_started.elapsed());
+
+        let mut budget = WorkBudget::new(kernel_work_units_per_slice(program, executor))
+            .expect("kernel slice budgets are non-zero");
+        slice_metrics.record_slice();
+        let report = executor.run_slice(program, &mut dispatcher, &mut budget);
+        match report.event {
+            SliceEvent::Complete => {
+                combined_profile.merge(dispatcher.into_profile());
+                return Ok((combined_profile, slice_metrics));
+            }
+            SliceEvent::BudgetExhausted if report.consumed != 0 => {
+                combined_profile.merge(dispatcher.into_profile());
+            }
+            SliceEvent::BudgetExhausted => {
+                return Err(format!(
+                    "phase one made no progress at {}",
+                    failure_location(program, executor)
+                ));
+            }
+            SliceEvent::DispatchFailed(error) => {
+                return Err(format!(
+                    "phase-one dispatch failed at {}: {error:?}; {}",
+                    failure_location(program, executor),
+                    failure_bindings(program, executor, dispatcher.inner.memory())
                 ));
             }
             SliceEvent::Faulted(error) => {
@@ -953,6 +1372,37 @@ fn wav_header(sample_count: usize) -> Result<Vec<u8>, String> {
     Ok(header)
 }
 
+fn pcm_wav_header(frame_count: usize) -> Result<Vec<u8>, String> {
+    let block_align = u16::try_from(TRUEOS_CHANNELS * size_of::<i16>())
+        .map_err(|_| "presentation PCM block alignment overflow")?;
+    let data_bytes = frame_count
+        .checked_mul(usize::from(block_align))
+        .and_then(|bytes| u32::try_from(bytes).ok())
+        .ok_or("presentation PCM is too large for RIFF/WAVE")?;
+    let riff_bytes = data_bytes
+        .checked_add(36)
+        .ok_or("presentation PCM RIFF byte count overflow")?;
+    let byte_rate = TRUEOS_SAMPLE_RATE_HZ
+        .checked_mul(u32::from(block_align))
+        .ok_or("presentation PCM byte rate overflow")?;
+
+    let mut header = Vec::with_capacity(44);
+    header.extend_from_slice(b"RIFF");
+    header.extend_from_slice(&riff_bytes.to_le_bytes());
+    header.extend_from_slice(b"WAVEfmt ");
+    header.extend_from_slice(&16u32.to_le_bytes());
+    header.extend_from_slice(&1u16.to_le_bytes());
+    header.extend_from_slice(&(TRUEOS_CHANNELS as u16).to_le_bytes());
+    header.extend_from_slice(&TRUEOS_SAMPLE_RATE_HZ.to_le_bytes());
+    header.extend_from_slice(&byte_rate.to_le_bytes());
+    header.extend_from_slice(&block_align.to_le_bytes());
+    header.extend_from_slice(&(i16::BITS as u16).to_le_bytes());
+    header.extend_from_slice(b"data");
+    header.extend_from_slice(&data_bytes.to_le_bytes());
+    debug_assert_eq!(header.len(), 44);
+    Ok(header)
+}
+
 fn waveform_bytes(waveform: &[f32]) -> Result<Vec<u8>, String> {
     let byte_count = waveform
         .len()
@@ -968,6 +1418,40 @@ fn waveform_bytes(waveform: &[f32]) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+fn presentation_pcm(waveform: &[f32]) -> Result<(Vec<i16>, usize), String> {
+    let frame_count = output_frames(waveform.len())
+        .map_err(|error| format!("presentation PCM frame count rejected: {error:?}"))?;
+    let sample_count = frame_count
+        .checked_mul(TRUEOS_CHANNELS)
+        .ok_or("presentation PCM sample count overflow")?;
+    let mut pcm = vec![0_i16; sample_count];
+    let converted = convert_frame_range(waveform, 0, &mut pcm)
+        .map_err(|error| format!("presentation PCM conversion failed: {error:?}"))?;
+    if converted != frame_count {
+        return Err(format!(
+            "presentation PCM conversion produced {converted} frames, expected {frame_count}"
+        ));
+    }
+    fade_in_frame_range(0, &mut pcm)
+        .map_err(|error| format!("presentation PCM request fade failed: {error:?}"))?;
+    Ok((pcm, frame_count))
+}
+
+fn pcm_bytes(pcm: &[i16]) -> Result<Vec<u8>, String> {
+    let byte_count = pcm
+        .len()
+        .checked_mul(size_of::<i16>())
+        .ok_or("presentation PCM byte count overflow")?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(byte_count)
+        .map_err(|_| format!("failed to reserve {byte_count} presentation PCM bytes"))?;
+    for sample in pcm {
+        bytes.extend_from_slice(&sample.to_le_bytes());
+    }
+    Ok(bytes)
+}
+
 fn digest_hex(bytes: &[u8]) -> String {
     let digest: [u8; 32] = Sha256::digest(bytes).into();
     let mut output = String::with_capacity(64);
@@ -977,7 +1461,17 @@ fn digest_hex(bytes: &[u8]) -> String {
     output
 }
 
-fn write_outputs(config: &Config, waveform: &[f32]) -> Result<(String, String, usize), String> {
+struct WrittenOutputs {
+    raw_sha256: String,
+    wav_sha256: String,
+    wav_bytes: usize,
+    pcm_frames: usize,
+    pcm_data_bytes: usize,
+    pcm_wav_bytes: usize,
+    pcm_wav_sha256: String,
+}
+
+fn write_outputs(config: &Config, waveform: &[f32]) -> Result<WrittenOutputs, String> {
     let raw = waveform_bytes(waveform)?;
     let header = wav_header(waveform.len())?;
     fs::write(&config.raw_path, &raw)
@@ -997,7 +1491,30 @@ fn write_outputs(config: &Config, waveform: &[f32]) -> Result<(String, String, u
     for byte in wav_digest {
         write!(&mut wav_sha256, "{byte:02x}").expect("writing to String cannot fail");
     }
-    Ok((raw_sha256, wav_sha256, header.len() + raw.len()))
+
+    let (pcm, pcm_frames) = presentation_pcm(waveform)?;
+    let pcm_data = pcm_bytes(&pcm)?;
+    let pcm_header = pcm_wav_header(pcm_frames)?;
+    let mut pcm_wav = File::create(&config.pcm_wav_path)
+        .map_err(|error| format!("cannot create {}: {error}", config.pcm_wav_path.display()))?;
+    pcm_wav
+        .write_all(&pcm_header)
+        .and_then(|()| pcm_wav.write_all(&pcm_data))
+        .map_err(|error| format!("cannot write {}: {error}", config.pcm_wav_path.display()))?;
+    let mut pcm_wav_hasher = Sha256::new();
+    pcm_wav_hasher.update(&pcm_header);
+    pcm_wav_hasher.update(&pcm_data);
+    let pcm_wav_sha256 = format!("{:x}", pcm_wav_hasher.finalize());
+
+    Ok(WrittenOutputs {
+        raw_sha256,
+        wav_sha256,
+        wav_bytes: header.len() + raw.len(),
+        pcm_frames,
+        pcm_data_bytes: pcm_data.len(),
+        pcm_wav_bytes: pcm_header.len() + pcm_data.len(),
+        pcm_wav_sha256,
+    })
 }
 
 fn format_seconds(duration: Duration) -> String {
@@ -1047,20 +1564,44 @@ fn run() -> Result<(), String> {
     let mut executor = Executor::<SLOT_CAPACITY>::new();
 
     let phase_zero_start = Instant::now();
-    let (admission, resolver_audit) = run_phase_zero(
-        &program,
-        &mut executor,
-        &mut shapes,
-        &mut phase_zero_arena,
-        &padded_tokens,
-        &style,
-        &speed,
-        &mut workspace,
-    )?;
+    let (admission, resolver_audit, phase_zero_profile, phase_zero_slices) = if config.kernel_slices
+    {
+        run_phase_zero_kernel_slices(
+            &program,
+            &mut executor,
+            &mut shapes,
+            &mut phase_zero_arena,
+            &padded_tokens,
+            &style,
+            &speed,
+            &mut workspace,
+            config.profile_ops,
+        )?
+    } else {
+        run_phase_zero(
+            &program,
+            &mut executor,
+            &mut shapes,
+            &mut phase_zero_arena,
+            &padded_tokens,
+            &style,
+            &speed,
+            &mut workspace,
+            config.profile_ops,
+        )?
+    };
     let phase_zero_elapsed = phase_zero_start.elapsed();
 
     let frame_count = admission.frame_count();
     println!("backend=trueos-kokoro-native-cpu");
+    println!(
+        "execution_mode={}",
+        if config.kernel_slices {
+            "kernel-slices"
+        } else {
+            "persistent-dispatcher"
+        }
+    );
     println!("voice={}", config.voice);
     println!("speed={}", config.speed);
     println!("phonemes={:?}", prepared.phonemes);
@@ -1071,6 +1612,10 @@ fn run() -> Result<(), String> {
     println!("load_seconds={}", format_seconds(load_elapsed));
     println!("frontend_seconds={}", format_seconds(frontend_elapsed));
     println!("phase0_seconds={}", format_seconds(phase_zero_elapsed));
+    println!("phase0_executor_slices={}", phase_zero_slices.calls);
+    println!("phase0_bridge_rebuilds={}", phase_zero_slices.bridge_rebuilds);
+    println!("phase0_bridge_setup_seconds={}", format_seconds(phase_zero_slices.bridge_setup));
+    print_dispatch_profile("phase0", &phase_zero_profile, phase_zero_elapsed);
     print_resolver_audit(&resolver_audit);
     if config.phase0_only {
         println!("total_seconds={}", format_seconds(total_start.elapsed()));
@@ -1104,23 +1649,38 @@ fn run() -> Result<(), String> {
     let mut waveform = vec![0.0f32; sample_count];
 
     let phase_one_start = Instant::now();
-    run_phase_one(
-        &program,
-        &mut executor,
-        admission,
-        &slot_bases,
-        &mut shapes,
-        &mut phase_one_arena,
-        &mut waveform,
-        &mut workspace,
-    )?;
+    let (phase_one_profile, phase_one_slices) = if config.kernel_slices {
+        run_phase_one_kernel_slices(
+            &program,
+            &mut executor,
+            admission,
+            &slot_bases,
+            &mut shapes,
+            &mut phase_one_arena,
+            &mut waveform,
+            &mut workspace,
+            config.profile_ops,
+        )?
+    } else {
+        run_phase_one(
+            &program,
+            &mut executor,
+            admission,
+            &slot_bases,
+            &mut shapes,
+            &mut phase_one_arena,
+            &mut waveform,
+            &mut workspace,
+            config.profile_ops,
+        )?
+    };
     let phase_one_elapsed = phase_one_start.elapsed();
 
     if waveform.iter().any(|sample| !sample.is_finite()) {
         return Err("native waveform contains a non-finite sample".to_owned());
     }
     let write_start = Instant::now();
-    let (raw_sha256, wav_sha256, wav_bytes) = write_outputs(&config, &waveform)?;
+    let outputs = write_outputs(&config, &waveform)?;
     let write_elapsed = write_start.elapsed();
 
     println!("samples={sample_count}");
@@ -1130,14 +1690,23 @@ fn run() -> Result<(), String> {
     println!("shared_slots_copied={shared_slots}");
     println!("shared_bytes_copied={shared_bytes}");
     println!("phase1_seconds={}", format_seconds(phase_one_elapsed));
+    println!("phase1_executor_slices={}", phase_one_slices.calls);
+    println!("phase1_bridge_rebuilds={}", phase_one_slices.bridge_rebuilds);
+    println!("phase1_bridge_setup_seconds={}", format_seconds(phase_one_slices.bridge_setup));
+    print_dispatch_profile("phase1", &phase_one_profile, phase_one_elapsed);
     println!("write_seconds={}", format_seconds(write_elapsed));
     println!("total_seconds={}", format_seconds(total_start.elapsed()));
     println!("raw_path={}", config.raw_path.display());
     println!("raw_bytes={}", sample_count * size_of::<f32>());
-    println!("raw_sha256={raw_sha256}");
+    println!("raw_sha256={}", outputs.raw_sha256);
     println!("wav_path={}", config.wav_path.display());
-    println!("wav_bytes={wav_bytes}");
-    println!("wav_sha256={wav_sha256}");
+    println!("wav_bytes={}", outputs.wav_bytes);
+    println!("wav_sha256={}", outputs.wav_sha256);
+    println!("pcm_wav_path={}", config.pcm_wav_path.display());
+    println!("pcm_frames={}", outputs.pcm_frames);
+    println!("pcm_data_bytes={}", outputs.pcm_data_bytes);
+    println!("pcm_wav_bytes={}", outputs.pcm_wav_bytes);
+    println!("pcm_wav_sha256={}", outputs.pcm_wav_sha256);
 
     if let Some(expected) = config.expect_frames
         && frame_count != expected
@@ -1150,10 +1719,11 @@ fn run() -> Result<(), String> {
         return Err(format!("sample parity failed: native={sample_count} expected={expected}"));
     }
     if let Some(expected) = &config.expect_wav_sha256
-        && wav_sha256 != *expected
+        && outputs.wav_sha256 != *expected
     {
         return Err(format!(
-            "waveform parity failed: native_wav_sha256={wav_sha256} expected={expected}"
+            "waveform parity failed: native_wav_sha256={} expected={expected}",
+            outputs.wav_sha256
         ));
     }
     println!("parity=ok");
@@ -1182,10 +1752,44 @@ mod tests {
     fn wav_header_matches_the_rten_extensible_f32_contract() {
         let header = wav_header(REFERENCE_SAMPLES).unwrap();
         assert_eq!(header.len(), 68);
-        assert_eq!(&header[..12], b"RIFF\xbc\x16\x0f\x00WAVE");
+        assert_eq!(&header[..4], b"RIFF");
+        assert_eq!(
+            u32::from_le_bytes(header[4..8].try_into().unwrap()),
+            (REFERENCE_SAMPLES * size_of::<f32>() + 60) as u32
+        );
+        assert_eq!(&header[8..12], b"WAVE");
         assert_eq!(&header[12..20], b"fmt \x28\x00\x00\x00");
         assert_eq!(&header[20..24], b"\xfe\xff\x01\x00");
         assert_eq!(&header[60..64], b"data");
-        assert_eq!(u32::from_le_bytes(header[64..68].try_into().unwrap()), 988_800);
+        assert_eq!(
+            u32::from_le_bytes(header[64..68].try_into().unwrap()),
+            (REFERENCE_SAMPLES * size_of::<f32>()) as u32
+        );
+    }
+
+    #[test]
+    fn presentation_wav_matches_stereo_48k_signed_16_contract() {
+        let header = pcm_wav_header(123).unwrap();
+        assert_eq!(header.len(), 44);
+        assert_eq!(&header[..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes(header[4..8].try_into().unwrap()), 36 + 123 * 4);
+        assert_eq!(&header[8..12], b"WAVE");
+        assert_eq!(&header[12..20], b"fmt \x10\x00\x00\x00");
+        assert_eq!(&header[20..24], b"\x01\x00\x02\x00");
+        assert_eq!(u32::from_le_bytes(header[24..28].try_into().unwrap()), 48_000);
+        assert_eq!(u32::from_le_bytes(header[28..32].try_into().unwrap()), 192_000);
+        assert_eq!(&header[32..36], b"\x04\x00\x10\x00");
+        assert_eq!(&header[36..40], b"data");
+        assert_eq!(u32::from_le_bytes(header[40..44].try_into().unwrap()), 123 * 4);
+    }
+
+    #[test]
+    fn presentation_pcm_uses_shared_converter_and_request_fade() {
+        let waveform = vec![1.0_f32; 241];
+        let (pcm, frames) = presentation_pcm(&waveform).unwrap();
+        assert_eq!(frames, 482);
+        assert_eq!(pcm.len(), frames * TRUEOS_CHANNELS);
+        assert_eq!(&pcm[..2], &[0, 0]);
+        assert_eq!(&pcm[480 * TRUEOS_CHANNELS..482 * TRUEOS_CHANNELS], &[32_767; 4]);
     }
 }

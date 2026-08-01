@@ -1,9 +1,13 @@
-//! Explicit, bounded TTS diagnostic capture and BSP-owned TRUEOSFS writer.
+//! Bounded TTS diagnostic capture and BSP-owned TRUEOSFS writer.
 //!
-//! Capture is deliberately one-shot. The audio path only moves a completed
-//! model waveform into the session and copies bounded PCM into it; filesystem
-//! work and WAV encoding happen later on the BSP executor. Capture exhaustion,
-//! truncation, and persistence failures never become TTS failures.
+//! Automatic recent capture starts armed for exactly three claimed sessions
+//! per boot (or explicit rearm) and retains at most three committed bundles in
+//! stable rolling slots. This physical-write budget matters because TRUEOSFS is
+//! append-only. The explicit one-shot arm remains available, takes precedence,
+//! and does not consume the automatic budget. The audio path only moves a
+//! completed model waveform into the session and copies bounded PCM into it;
+//! filesystem work and WAV encoding happen later on the BSP executor. Capture
+//! exhaustion, truncation, and persistence failures never become TTS failures.
 
 extern crate alloc;
 
@@ -24,12 +28,15 @@ const RAW_SAMPLE_CAP: usize = CAPTURE_RAW_SAMPLE_RATE_HZ * CAPTURE_MAX_SECONDS;
 const PCM_FRAME_CAP: usize = CAPTURE_PCM_SAMPLE_RATE_HZ * CAPTURE_MAX_SECONDS;
 const PCM_SAMPLE_CAP: usize = PCM_FRAME_CAP * CAPTURE_PCM_CHANNELS;
 const RAW_MODEL_CHUNK_CAP: usize = 128;
+pub(crate) const RECENT_SLOT_COUNT: usize = 3;
+pub(crate) const RECENT_CLAIM_BUDGET: u8 = RECENT_SLOT_COUNT as u8;
 
 const SESSION_ACTIVE: u8 = 0;
 const SESSION_FINISHING: u8 = 1;
 const SESSION_FINISHED: u8 = 2;
 
 static ARMED: AtomicBool = AtomicBool::new(false);
+static RECENT_CLAIMS_REMAINING: AtomicU8 = AtomicU8::new(RECENT_CLAIM_BUDGET);
 static ACTIVE_SESSION: AtomicBool = AtomicBool::new(false);
 static WRITER_ONLINE: AtomicBool = AtomicBool::new(false);
 static NEXT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -38,6 +45,7 @@ static CAPTURES_QUEUED: AtomicU64 = AtomicU64::new(0);
 static CAPTURES_WRITTEN: AtomicU64 = AtomicU64::new(0);
 static CAPTURES_FAILED: AtomicU64 = AtomicU64::new(0);
 static CAPTURES_DROPPED: AtomicU64 = AtomicU64::new(0);
+static CAPTURES_SKIPPED: AtomicU64 = AtomicU64::new(0);
 static WRITER_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 
 static WRITER_STATE: Mutex<WriterState> = Mutex::new(WriterState {
@@ -83,6 +91,9 @@ pub(crate) struct CaptureFinish {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CaptureStatus {
     pub armed: bool,
+    pub recent_enabled: bool,
+    pub recent_claims_remaining: u8,
+    pub active: bool,
     pub writer_online: bool,
     pub busy: bool,
     pub queued: bool,
@@ -90,7 +101,23 @@ pub(crate) struct CaptureStatus {
     pub captures_written: u64,
     pub captures_failed: u64,
     pub captures_dropped: u64,
+    pub captures_skipped: u64,
     pub last_sequence: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CaptureMode {
+    OneShot,
+    Recent,
+}
+
+impl CaptureMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::OneShot => "one-shot",
+            Self::Recent => "recent",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -100,6 +127,9 @@ pub(crate) struct CaptureSession {
 
 struct CaptureInner {
     sequence: u64,
+    slot: u8,
+    mode: CaptureMode,
+    recent_claims_remaining: Option<u8>,
     request_id: u64,
     job_id: AtomicU64,
     terminal: AtomicU8,
@@ -147,6 +177,9 @@ enum CaptureTerminal {
 
 struct CompletedCapture {
     sequence: u64,
+    slot: u8,
+    mode: CaptureMode,
+    recent_claims_remaining: Option<u8>,
     request_id: u64,
     job_id: u64,
     terminal: CaptureTerminal,
@@ -193,34 +226,138 @@ pub(crate) fn disarm() -> bool {
     was_armed
 }
 
-/// Claim the one-shot arm for a request and retain diagnostic metadata.
+/// Rearm bounded automatic capture for exactly three claimed sessions. This
+/// resets the budget even when it was already enabled. Active and queued work
+/// is not affected.
+pub(crate) fn arm_recent() -> u8 {
+    let previous = RECENT_CLAIMS_REMAINING.swap(RECENT_CLAIM_BUDGET, Ordering::AcqRel);
+    crate::log_info!(target: "ttstt";
+        "ttstt-capture: mode=recent enabled=1 rearmed=1 previous_remaining={} remaining={} physical_budget={}-per-arm slots={} max_seconds={}\n",
+        previous,
+        RECENT_CLAIM_BUDGET,
+        RECENT_CLAIM_BUDGET,
+        RECENT_SLOT_COUNT,
+        CAPTURE_MAX_SECONDS,
+    );
+    previous
+}
+
+/// Disable automatic recent capture without disturbing active or queued work.
+pub(crate) fn disable_recent() -> u8 {
+    let previous = RECENT_CLAIMS_REMAINING.swap(0, Ordering::AcqRel);
+    crate::log_info!(target: "ttstt";
+        "ttstt-capture: mode=recent enabled=0 previous_remaining={} remaining=0 physical_budget={}-per-arm active_capture=unaffected\n",
+        previous,
+        RECENT_CLAIM_BUDGET,
+    );
+    previous
+}
+
+/// Consume one automatic claim atomically. The returned value is the budget
+/// remaining after this claim; zero also represents automatic disablement.
+fn claim_recent_budget() -> Option<u8> {
+    let mut remaining = RECENT_CLAIMS_REMAINING.load(Ordering::Acquire);
+    loop {
+        if remaining == 0 {
+            return None;
+        }
+        let next = remaining - 1;
+        match RECENT_CLAIMS_REMAINING.compare_exchange_weak(
+            remaining,
+            next,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return Some(next),
+            Err(actual) => remaining = actual,
+        }
+    }
+}
+
+fn skip_capture(mode: CaptureMode, request_id: u64, reason: &'static str) {
+    let skipped = CAPTURES_SKIPPED
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    crate::log_info!(target: "ttstt";
+        "ttstt-capture: skipped mode={} request={} reason={} skipped_total={} speech_affected=0\n",
+        mode.as_str(),
+        request_id,
+        reason,
+        skipped,
+    );
+}
+
+/// Claim an explicit one-shot arm, or otherwise the automatic recent slot, for
+/// a shell request. This is best-effort and never waits for capture capacity.
 pub(crate) fn claim_next(
     request_id: u64,
     text: &str,
     voice: &str,
     speed: f32,
 ) -> Option<CaptureSession> {
-    if !ARMED.load(Ordering::Acquire) {
+    let mut mode = if ARMED.load(Ordering::Acquire) {
+        CaptureMode::OneShot
+    } else if RECENT_CLAIMS_REMAINING.load(Ordering::Acquire) != 0 {
+        CaptureMode::Recent
+    } else {
         return None;
+    };
+
+    {
+        let writer = WRITER_STATE.lock();
+        if writer.busy || writer.queued.is_some() {
+            skip_capture(mode, request_id, "writer-busy-or-queued");
+            return None;
+        }
     }
     if ACTIVE_SESSION
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        return None;
-    }
-    if ARMED
-        .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        ACTIVE_SESSION.store(false, Ordering::Release);
+        skip_capture(mode, request_id, "active-session");
         return None;
     }
 
+    // Close the arm/claim race: an explicit one-shot arm established before
+    // this request acquired ACTIVE_SESSION still takes precedence.
+    let one_shot_claimed = ARMED
+        .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok();
+    if one_shot_claimed {
+        mode = CaptureMode::OneShot;
+    } else if mode == CaptureMode::OneShot {
+        if RECENT_CLAIMS_REMAINING.load(Ordering::Acquire) != 0 {
+            mode = CaptureMode::Recent;
+        } else {
+            ACTIVE_SESSION.store(false, Ordering::Release);
+            return None;
+        }
+    }
+
+    let recent_claims_remaining = if mode == CaptureMode::Recent {
+        let Some(remaining) = claim_recent_budget() else {
+            ACTIVE_SESSION.store(false, Ordering::Release);
+            return None;
+        };
+        if remaining == 0 {
+            crate::log_info!(target: "ttstt";
+                "ttstt-capture: mode=recent auto-disabled=1 reason=physical-budget-exhausted remaining=0 physical_budget={}-per-arm rearm_command=tts-capture-recent-on\n",
+                RECENT_CLAIM_BUDGET,
+            );
+        }
+        Some(remaining)
+    } else {
+        None
+    };
+
     let sequence = NEXT_SEQUENCE.fetch_add(1, Ordering::AcqRel).max(1);
+    let slot = ((sequence - 1) % RECENT_SLOT_COUNT as u64) as u8;
     LAST_SEQUENCE.store(sequence, Ordering::Release);
     let inner = CaptureInner {
         sequence,
+        slot,
+        mode,
+        recent_claims_remaining,
         request_id,
         job_id: AtomicU64::new(0),
         terminal: AtomicU8::new(SESSION_ACTIVE),
@@ -245,10 +382,17 @@ pub(crate) fn claim_next(
         })),
         finish: Mutex::new(None),
     };
+    let base = capture_base_path_for_slot(slot);
     crate::log_info!(target: "ttstt";
-        "ttstt-capture: claimed sequence={} request={} max_raw_samples={} max_pcm_frames={}\n",
+        "ttstt-capture: claimed mode={} sequence={} slot={} request={} recent_remaining={} physical_budget={}-per-arm one_shot_consumes_recent_budget=0 base=trueosfs:/{} metadata=trueosfs:/{}-metadata.txt max_raw_samples={} max_pcm_frames={}\n",
+        mode.as_str(),
         sequence,
+        slot,
         request_id,
+        recent_claims_remaining.unwrap_or_else(|| RECENT_CLAIMS_REMAINING.load(Ordering::Acquire)),
+        RECENT_CLAIM_BUDGET,
+        base,
+        base,
         RAW_SAMPLE_CAP,
         PCM_FRAME_CAP,
     );
@@ -259,8 +403,12 @@ pub(crate) fn claim_next(
 
 pub(crate) fn status() -> CaptureStatus {
     let writer = WRITER_STATE.lock();
+    let recent_claims_remaining = RECENT_CLAIMS_REMAINING.load(Ordering::Acquire);
     CaptureStatus {
         armed: ARMED.load(Ordering::Acquire),
+        recent_enabled: recent_claims_remaining != 0,
+        recent_claims_remaining,
+        active: ACTIVE_SESSION.load(Ordering::Acquire),
         writer_online: WRITER_ONLINE.load(Ordering::Acquire),
         busy: writer.busy,
         queued: writer.queued.is_some(),
@@ -268,6 +416,7 @@ pub(crate) fn status() -> CaptureStatus {
         captures_written: CAPTURES_WRITTEN.load(Ordering::Acquire),
         captures_failed: CAPTURES_FAILED.load(Ordering::Acquire),
         captures_dropped: CAPTURES_DROPPED.load(Ordering::Acquire),
+        captures_skipped: CAPTURES_SKIPPED.load(Ordering::Acquire),
         last_sequence: LAST_SEQUENCE.load(Ordering::Acquire),
     }
 }
@@ -275,6 +424,22 @@ pub(crate) fn status() -> CaptureStatus {
 impl CaptureSession {
     pub(crate) fn sequence(&self) -> u64 {
         self.inner.sequence
+    }
+
+    pub(crate) fn slot(&self) -> u8 {
+        self.inner.slot
+    }
+
+    pub(crate) fn mode_name(&self) -> &'static str {
+        self.inner.mode.as_str()
+    }
+
+    pub(crate) fn recent_claims_remaining(&self) -> Option<u8> {
+        self.inner.recent_claims_remaining
+    }
+
+    pub(crate) fn metadata_path(&self) -> String {
+        alloc::format!("trueosfs:/{}-metadata.txt", capture_base_path_for_slot(self.inner.slot))
     }
 
     pub(crate) fn set_job_id(&self, job_id: u64) {
@@ -458,6 +623,9 @@ impl CaptureSession {
         );
         let mut completed = Some(CompletedCapture {
             sequence: self.inner.sequence,
+            slot: self.inner.slot,
+            mode: self.inner.mode,
+            recent_claims_remaining: self.inner.recent_claims_remaining,
             request_id: self.inner.request_id,
             job_id,
             terminal,
@@ -483,8 +651,10 @@ impl CaptureSession {
         } else {
             CAPTURES_DROPPED.fetch_add(1, Ordering::Relaxed);
             crate::log_warn!(target: "ttstt";
-                "ttstt-capture: dropped sequence={} request={} job={} reason=writer-busy-or-queued\n",
+                "ttstt-capture: dropped mode={} sequence={} slot={} request={} job={} reason=writer-busy-or-queued\n",
+                self.inner.mode.as_str(),
                 self.inner.sequence,
+                self.inner.slot,
                 self.inner.request_id,
                 job_id,
             );
@@ -516,8 +686,10 @@ impl Drop for CaptureInner {
             ACTIVE_SESSION.store(false, Ordering::Release);
             CAPTURES_DROPPED.fetch_add(1, Ordering::Relaxed);
             crate::log_warn!(target: "ttstt";
-                "ttstt-capture: dropped sequence={} request={} job={} reason=session-abandoned\n",
+                "ttstt-capture: dropped mode={} sequence={} slot={} request={} job={} reason=session-abandoned\n",
+                self.mode.as_str(),
                 self.sequence,
+                self.slot,
                 self.request_id,
                 self.job_id.load(Ordering::Acquire),
             );
@@ -532,8 +704,11 @@ pub(crate) async fn writer_task() {
         return;
     }
     crate::log_info!(target: "ttstt";
-        "ttstt-capture: writer online realm=bsp queue_cap=1 max_seconds={} default=off\n",
+        "ttstt-capture: writer online realm=bsp queue_cap=1 max_seconds={} recent_default=armed recent_remaining={} physical_budget={}-per-arm recent_slots={} paths=trueosfs:/audio/tts-recent-s{{0,1,2}}-*\n",
         CAPTURE_MAX_SECONDS,
+        RECENT_CLAIM_BUDGET,
+        RECENT_CLAIM_BUDGET,
+        RECENT_SLOT_COUNT,
     );
 
     loop {
@@ -608,6 +783,9 @@ async fn write_completed_capture(mut capture: CompletedCapture) -> bool {
         );
         return false;
     };
+    if !prepare_capture_slot(disk, capture.slot, metadata_path.as_str()).await {
+        return false;
+    }
     if !write_artifact(disk, pcm_path.as_str(), pcm_wav.as_slice()).await {
         return false;
     }
@@ -618,7 +796,7 @@ async fn write_completed_capture(mut capture: CompletedCapture) -> bool {
     let raw_chunks = core::mem::take(&mut capture.payload.raw_chunks);
     let raw_file_count = raw_chunks.len();
     for (ordinal, chunk) in raw_chunks.into_iter().enumerate() {
-        let raw_path = raw_chunk_path(&base, ordinal, &chunk);
+        let raw_path = raw_chunk_path(&base, ordinal);
         let Some(raw_wav) = encode_f32_wav(chunk.samples.as_slice()) else {
             crate::log_warn!(target: "ttstt";
                 "ttstt-capture: encode failed sequence={} artifact=raw ordinal={} model_chunk={} reason=allocation-or-size\n",
@@ -644,17 +822,113 @@ async fn write_completed_capture(mut capture: CompletedCapture) -> bool {
     }
 
     crate::log_info!(target: "ttstt";
-        "ttstt-capture: wrote sequence={} request={} job={} base=trueosfs:/{} raw_files={} pcm_frames={} raw_truncated={} pcm_truncated={}\n",
+        "ttstt-capture: wrote mode={} sequence={} slot={}/{} request={} job={} recent_remaining_after_claim={} physical_budget={}-per-arm base=trueosfs:/{} metadata=trueosfs:/{} raw_files={} pcm_frames={} raw_truncated={} pcm_truncated={}\n",
+        capture.mode.as_str(),
         capture.sequence,
+        capture.slot,
+        RECENT_SLOT_COUNT,
         capture.request_id,
         capture.job_id,
+        capture.recent_claims_remaining.map_or_else(
+            || String::from("unchanged"),
+            |remaining| alloc::format!("{}", remaining),
+        ),
+        RECENT_CLAIM_BUDGET,
         base,
+        metadata_path,
         raw_file_count,
         pcm_frames,
         usize::from(capture.payload.raw_truncated),
         usize::from(capture.payload.pcm_truncated),
     );
     true
+}
+
+/// Invalidate and clean one rolling slot before publishing its replacement.
+/// Metadata is deleted first because it is the only commit marker consumers
+/// may use to recognize a complete bundle.
+async fn prepare_capture_slot(
+    disk: crate::disc::block::DeviceHandle,
+    slot: u8,
+    metadata_path: &str,
+) -> bool {
+    let listing = match crate::r::fs::trueosfs::list_dir_async(disk, "audio").await {
+        Ok(Some(listing)) => listing,
+        Ok(None) => {
+            crate::log_warn!(target: "ttstt";
+                "ttstt-capture: slot prepare failed slot={} reason=no-trueosfs-root\n",
+                slot,
+            );
+            return false;
+        }
+        Err(error) => {
+            crate::log_warn!(target: "ttstt";
+                "ttstt-capture: slot prepare failed slot={} reason=list-audio error={:?}\n",
+                slot,
+                error,
+            );
+            return false;
+        }
+    };
+
+    if !delete_artifact(disk, metadata_path, "invalidate-commit").await {
+        return false;
+    }
+
+    let child_prefix = alloc::format!("tts-recent-s{}-", slot);
+    let mut listing_truncated = false;
+    for child in listing.lines() {
+        if child == "..." {
+            listing_truncated = true;
+            continue;
+        }
+        if !child.starts_with(child_prefix.as_str()) {
+            continue;
+        }
+        let path = alloc::format!("audio/{}", child);
+        if path == metadata_path {
+            continue;
+        }
+        if !delete_artifact(disk, path.as_str(), "replace-slot").await {
+            return false;
+        }
+    }
+
+    // A truncated directory listing cannot prove cleanliness. Sweep every
+    // filename admitted by this bounded format before reusing the slot.
+    if listing_truncated {
+        let base = capture_base_path_for_slot(slot);
+        let pcm_path = alloc::format!("{}-pcm-s16-stereo-48k.wav", base);
+        if !delete_artifact(disk, pcm_path.as_str(), "replace-slot-fallback").await {
+            return false;
+        }
+        for ordinal in 0..RAW_MODEL_CHUNK_CAP {
+            let raw_path = raw_chunk_path(base.as_str(), ordinal);
+            if !delete_artifact(disk, raw_path.as_str(), "replace-slot-fallback").await {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+async fn delete_artifact(
+    disk: crate::disc::block::DeviceHandle,
+    path: &str,
+    operation: &'static str,
+) -> bool {
+    match crate::r::fs::trueosfs::file_delete_async(disk, path).await {
+        Ok(_) => true,
+        Err(error) => {
+            crate::log_warn!(target: "ttstt";
+                "ttstt-capture: artifact delete failed operation={} path=trueosfs:/{} error={:?}\n",
+                operation,
+                path,
+                error,
+            );
+            false
+        }
+    }
 }
 
 async fn cleanup_artifacts(disk: crate::disc::block::DeviceHandle, paths: &[String]) {
@@ -698,22 +972,15 @@ async fn write_artifact(disk: crate::disc::block::DeviceHandle, path: &str, byte
 }
 
 fn capture_base_path(capture: &CompletedCapture) -> String {
-    alloc::format!(
-        "audio/tts-capture-{:06}-r{}-j{}",
-        capture.sequence,
-        capture.request_id,
-        capture.job_id,
-    )
+    capture_base_path_for_slot(capture.slot)
 }
 
-fn raw_chunk_path(base: &str, ordinal: usize, chunk: &RawModelChunk) -> String {
-    alloc::format!(
-        "{}-raw-o{:03}-m{:03}-p{}-f32-mono-24k.wav",
-        base,
-        ordinal,
-        chunk.index,
-        chunk.phonemes,
-    )
+fn capture_base_path_for_slot(slot: u8) -> String {
+    alloc::format!("audio/tts-recent-s{}", slot)
+}
+
+fn raw_chunk_path(base: &str, ordinal: usize) -> String {
+    alloc::format!("{}-raw-o{:03}-f32-mono-24k.wav", base, ordinal)
 }
 
 fn encode_metadata(capture: &CompletedCapture, base: &str) -> String {
@@ -723,8 +990,17 @@ fn encode_metadata(capture: &CompletedCapture, base: &str) -> String {
         CaptureTerminal::Success => "success",
         CaptureTerminal::Failed(_) => "failed",
     };
-    let _ = writeln!(out, "format=trueos-tts-capture-v1");
+    let _ = writeln!(out, "format=trueos-tts-capture-v2");
     let _ = writeln!(out, "base_path=trueosfs:/{}", base);
+    let _ = writeln!(out, "capture_mode={}", capture.mode.as_str());
+    let _ = writeln!(out, "physical_budget={}-per-arm", RECENT_CLAIM_BUDGET);
+    let _ = writeln!(out, "one_shot_consumes_recent_budget=0");
+    if let Some(remaining) = capture.recent_claims_remaining {
+        let _ = writeln!(out, "recent_claims_remaining_after_claim={}", remaining);
+    }
+    let _ = writeln!(out, "rolling_slot={}", capture.slot);
+    let _ = writeln!(out, "rolling_slot_count={}", RECENT_SLOT_COUNT);
+    let _ = writeln!(out, "retention=latest-{}-committed-bundles", RECENT_SLOT_COUNT);
     let _ = writeln!(out, "sequence={}", capture.sequence);
     let _ = writeln!(out, "request_id={}", capture.request_id);
     let _ = writeln!(out, "job_id={}", capture.job_id);
@@ -790,7 +1066,7 @@ fn encode_metadata(capture: &CompletedCapture, base: &str) -> String {
             chunk.phonemes,
             chunk.original_samples,
             chunk.samples.len(),
-            raw_chunk_path(base, ordinal, chunk),
+            raw_chunk_path(base, ordinal),
         );
     }
     out

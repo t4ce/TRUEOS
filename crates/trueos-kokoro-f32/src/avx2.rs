@@ -100,6 +100,46 @@ pub(super) fn binary_rhs_scalar(
     unsafe { binary_rhs_scalar_avx2(operation, lhs, rhs, output) }
 }
 
+pub(super) fn binary_lhs_row_scalar(
+    operation: BinaryOperation,
+    lhs: &[f32],
+    rhs: &[f32],
+    row_elements: usize,
+    output: &mut [f32],
+) -> Result<(), Error> {
+    if row_elements == 0
+        || lhs.len().checked_mul(row_elements) != Some(rhs.len())
+        || rhs.len() != output.len()
+    {
+        return Err(Error::BufferTooSmall);
+    }
+    if !is_available() {
+        return Err(Error::UnsupportedLane);
+    }
+    // SAFETY: availability and the complete row partition are proven above.
+    unsafe { binary_lhs_row_scalar_avx2(operation, lhs, rhs, row_elements, output) }
+}
+
+pub(super) fn binary_rhs_row_scalar(
+    operation: BinaryOperation,
+    lhs: &[f32],
+    rhs: &[f32],
+    row_elements: usize,
+    output: &mut [f32],
+) -> Result<(), Error> {
+    if row_elements == 0
+        || rhs.len().checked_mul(row_elements) != Some(lhs.len())
+        || lhs.len() != output.len()
+    {
+        return Err(Error::BufferTooSmall);
+    }
+    if !is_available() {
+        return Err(Error::UnsupportedLane);
+    }
+    // SAFETY: availability and the complete row partition are proven above.
+    unsafe { binary_rhs_row_scalar_avx2(operation, lhs, rhs, row_elements, output) }
+}
+
 pub(super) fn square(input: &[f32], output: &mut [f32]) -> Result<(), Error> {
     if input.len() != output.len() {
         return Err(Error::BufferTooSmall);
@@ -216,6 +256,102 @@ unsafe fn binary_rhs_scalar_avx2(
     }
     for index in vector_end..lhs.len() {
         output[index] = operation.apply(lhs[index], rhs);
+    }
+    Ok(())
+}
+
+#[target_feature(enable = "avx2")]
+unsafe fn binary_lhs_row_scalar_avx2(
+    operation: BinaryOperation,
+    lhs: &[f32],
+    rhs: &[f32],
+    row_elements: usize,
+    output: &mut [f32],
+) -> Result<(), Error> {
+    let vector_elements = row_elements / LANES * LANES;
+    for (row, &lhs) in lhs.iter().enumerate() {
+        if !lhs.is_finite() {
+            return Err(Error::NonFiniteInput);
+        }
+        let start = row * row_elements;
+        let vector_end = start + vector_elements;
+        let end = start + row_elements;
+        let lhs_vector = _mm256_set1_ps(lhs);
+        let mut index = start;
+        while index < vector_end {
+            let rhs_vector = unsafe { _mm256_loadu_ps(rhs.as_ptr().add(index)) };
+            let result = unsafe { apply_vector(operation, lhs_vector, rhs_vector) };
+            if unsafe { nonfinite_mask(rhs_vector) | nonfinite_mask(result) } != 0 {
+                validate_lhs_scalar(operation, lhs, rhs, index, index + LANES)?;
+            }
+            index += LANES;
+        }
+        validate_lhs_scalar(operation, lhs, rhs, vector_end, end)?;
+    }
+
+    for (row, &lhs) in lhs.iter().enumerate() {
+        let start = row * row_elements;
+        let vector_end = start + vector_elements;
+        let end = start + row_elements;
+        let lhs_vector = _mm256_set1_ps(lhs);
+        let mut index = start;
+        while index < vector_end {
+            let rhs_vector = unsafe { _mm256_loadu_ps(rhs.as_ptr().add(index)) };
+            let result = unsafe { apply_vector(operation, lhs_vector, rhs_vector) };
+            unsafe { _mm256_storeu_ps(output.as_mut_ptr().add(index), result) };
+            index += LANES;
+        }
+        for index in vector_end..end {
+            output[index] = operation.apply(lhs, rhs[index]);
+        }
+    }
+    Ok(())
+}
+
+#[target_feature(enable = "avx2")]
+unsafe fn binary_rhs_row_scalar_avx2(
+    operation: BinaryOperation,
+    lhs: &[f32],
+    rhs: &[f32],
+    row_elements: usize,
+    output: &mut [f32],
+) -> Result<(), Error> {
+    let vector_elements = row_elements / LANES * LANES;
+    for (row, &rhs) in rhs.iter().enumerate() {
+        if !rhs.is_finite() {
+            return Err(Error::NonFiniteInput);
+        }
+        let start = row * row_elements;
+        let vector_end = start + vector_elements;
+        let end = start + row_elements;
+        let rhs_vector = _mm256_set1_ps(rhs);
+        let mut index = start;
+        while index < vector_end {
+            let lhs_vector = unsafe { _mm256_loadu_ps(lhs.as_ptr().add(index)) };
+            let result = unsafe { apply_vector(operation, lhs_vector, rhs_vector) };
+            if unsafe { nonfinite_mask(lhs_vector) | nonfinite_mask(result) } != 0 {
+                validate_rhs_scalar(operation, lhs, rhs, index, index + LANES)?;
+            }
+            index += LANES;
+        }
+        validate_rhs_scalar(operation, lhs, rhs, vector_end, end)?;
+    }
+
+    for (row, &rhs) in rhs.iter().enumerate() {
+        let start = row * row_elements;
+        let vector_end = start + vector_elements;
+        let end = start + row_elements;
+        let rhs_vector = _mm256_set1_ps(rhs);
+        let mut index = start;
+        while index < vector_end {
+            let lhs_vector = unsafe { _mm256_loadu_ps(lhs.as_ptr().add(index)) };
+            let result = unsafe { apply_vector(operation, lhs_vector, rhs_vector) };
+            unsafe { _mm256_storeu_ps(output.as_mut_ptr().add(index), result) };
+            index += LANES;
+        }
+        for index in vector_end..end {
+            output[index] = operation.apply(lhs[index], rhs);
+        }
     }
     Ok(())
 }

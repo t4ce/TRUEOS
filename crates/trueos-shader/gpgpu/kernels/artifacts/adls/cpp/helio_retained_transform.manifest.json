@@ -5,11 +5,11 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "36fa76ad50a08f94975043958a901753d997602b0e8d8968d8cc0ad3f18af5fa",
-      "size_bytes": 80408,
+      "sha256": "282a048741d8a8c9f1505785411fd94df12a7d3aba7457cbc91257c7a49f25d2",
+      "size_bytes": 197976,
       "type": "relocatable",
-      "ze_info_section_offset": 72832,
-      "ze_info_section_size": 6743
+      "ze_info_section_offset": 183960,
+      "ze_info_section_size": 13183
     },
     "kernels": [
       {
@@ -45,9 +45,41 @@
           {
             "arg_index": 10,
             "bti": 7
+          },
+          {
+            "arg_index": 11,
+            "bti": 8
+          },
+          {
+            "arg_index": 12,
+            "bti": 9
+          },
+          {
+            "arg_index": 13,
+            "bti": 10
+          },
+          {
+            "arg_index": 14,
+            "bti": 11
+          },
+          {
+            "arg_index": 15,
+            "bti": 12
+          },
+          {
+            "arg_index": 16,
+            "bti": 13
+          },
+          {
+            "arg_index": 17,
+            "bti": 14
+          },
+          {
+            "arg_index": 18,
+            "bti": 15
           }
         ],
-        "cross_thread_data_bytes": 128,
+        "cross_thread_data_bytes": 224,
         "execution_env": {
           "eu_thread_count": 7,
           "grf_count": 128,
@@ -75,7 +107,7 @@
           {
             "arg_index": 1,
             "arg_type": "buffer_offset",
-            "offset": 124,
+            "offset": 208,
             "size": 4
           }
         ],
@@ -177,7 +209,7 @@
             "address_space": "private",
             "arg_index": 5,
             "kind": "by_value",
-            "offset_bytes": 112,
+            "offset_bytes": 176,
             "size_bytes": 4
           },
           {
@@ -186,7 +218,7 @@
             "address_space": "private",
             "arg_index": 6,
             "kind": "by_value",
-            "offset_bytes": 116,
+            "offset_bytes": 180,
             "size_bytes": 4
           },
           {
@@ -195,7 +227,7 @@
             "address_space": "private",
             "arg_index": 7,
             "kind": "by_value",
-            "offset_bytes": 120,
+            "offset_bytes": 184,
             "size_bytes": 4
           },
           {
@@ -251,6 +283,195 @@
               }
             ],
             "size_bytes": 8
+          },
+          {
+            "access": "readonly",
+            "address_mode": "stateful",
+            "address_space": "global",
+            "arg_index": 11,
+            "kind": "by_pointer",
+            "offset_bytes": 112,
+            "representations": [
+              {
+                "access": "readonly",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              }
+            ],
+            "size_bytes": 8
+          },
+          {
+            "access": "readonly",
+            "address_mode": "stateful",
+            "address_space": "global",
+            "arg_index": 12,
+            "kind": "by_pointer",
+            "offset_bytes": 120,
+            "representations": [
+              {
+                "access": "readonly",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              }
+            ],
+            "size_bytes": 8
+          },
+          {
+            "access": "readwrite",
+            "address_mode": "stateful",
+            "address_space": "global",
+            "arg_index": 13,
+            "kind": "by_pointer",
+            "offset_bytes": 128,
+            "representations": [
+              {
+                "access": "readwrite",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              }
+            ],
+            "size_bytes": 8
+          },
+          {
+            "access": "readwrite",
+            "address_mode": "stateful",
+            "address_space": "global",
+            "arg_index": 14,
+            "kind": "by_pointer",
+            "offset_bytes": 136,
+            "representations": [
+              {
+                "access": "readwrite",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              }
+            ],
+            "size_bytes": 8
+          },
+          {
+            "access": "readonly",
+            "address_mode": "stateful",
+            "address_space": "global",
+            "arg_index": 15,
+            "kind": "by_pointer",
+            "offset_bytes": 144,
+            "representations": [
+              {
+                "access": "readonly",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              }
+            ],
+            "size_bytes": 8
+          },
+          {
+            "access": "readonly",
+            "address_mode": "stateful",
+            "address_space": "global",
+            "arg_index": 16,
+            "kind": "by_pointer",
+            "offset_bytes": 152,
+            "representations": [
+              {
+                "access": "readonly",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              }
+            ],
+            "size_bytes": 8
+          },
+          {
+            "access": "readonly",
+            "address_mode": "stateful",
+            "address_space": "global",
+            "arg_index": 17,
+            "kind": "by_pointer",
+            "offset_bytes": 160,
+            "representations": [
+              {
+                "access": "readonly",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              }
+            ],
+            "size_bytes": 8
+          },
+          {
+            "access": "readonly",
+            "address_mode": "stateful",
+            "address_space": "global",
+            "arg_index": 18,
+            "kind": "by_pointer",
+            "offset_bytes": 168,
+            "representations": [
+              {
+                "access": "readonly",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              }
+            ],
+            "size_bytes": 8
+          },
+          {
+            "access": "none",
+            "address_mode": "none",
+            "address_space": "private",
+            "arg_index": 19,
+            "kind": "by_value",
+            "offset_bytes": 188,
+            "size_bytes": 4
+          },
+          {
+            "access": "none",
+            "address_mode": "none",
+            "address_space": "private",
+            "arg_index": 20,
+            "kind": "by_value",
+            "offset_bytes": 192,
+            "size_bytes": 4
+          },
+          {
+            "access": "none",
+            "address_mode": "none",
+            "address_space": "private",
+            "arg_index": 21,
+            "kind": "by_value",
+            "offset_bytes": 196,
+            "size_bytes": 4
+          },
+          {
+            "access": "none",
+            "address_mode": "none",
+            "address_space": "private",
+            "arg_index": 22,
+            "kind": "by_value",
+            "offset_bytes": 200,
+            "size_bytes": 4
+          },
+          {
+            "access": "none",
+            "address_mode": "none",
+            "address_space": "private",
+            "arg_index": 23,
+            "kind": "by_value",
+            "offset_bytes": 204,
+            "size_bytes": 4
           }
         ],
         "per_thread_data_bytes": 96,
@@ -352,17 +573,121 @@
             "name": "expanded_positions",
             "type_name": "uint*;8",
             "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 11,
+            "name": "hierarchy_nodes",
+            "type_name": "uint*;8",
+            "type_qualifiers": "const"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 12,
+            "name": "dynamic_bindings",
+            "type_name": "uint*;8",
+            "type_qualifiers": "const"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 13,
+            "name": "local_affines",
+            "type_name": "uint*;8",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 14,
+            "name": "world_affines",
+            "type_name": "uint*;8",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 15,
+            "name": "dirty_local_nodes",
+            "type_name": "uint*;8",
+            "type_qualifiers": "const"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 16,
+            "name": "dirty_world_nodes",
+            "type_name": "uint*;8",
+            "type_qualifiers": "const"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 17,
+            "name": "dirty_rows",
+            "type_name": "uint*;8",
+            "type_qualifiers": "const"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 18,
+            "name": "row_leaf_nodes",
+            "type_name": "uint*;8",
+            "type_qualifiers": "const"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__private",
+            "index": 19,
+            "name": "hierarchy_node_count",
+            "type_name": "uint;4",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__private",
+            "index": 20,
+            "name": "dirty_local_count",
+            "type_name": "uint;4",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__private",
+            "index": 21,
+            "name": "dirty_world_count",
+            "type_name": "uint;4",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__private",
+            "index": 22,
+            "name": "dirty_row_count",
+            "type_name": "uint;4",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__private",
+            "index": 23,
+            "name": "hierarchy_max_depth",
+            "type_name": "uint;4",
+            "type_qualifiers": "NONE"
           }
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 18984,
+          "entry_size": 40832,
           "section_alignment": 0,
           "section_name": ".text.helio_retained_transform",
           "section_offset": 64,
-          "section_size": 19136,
-          "sha256": "b8474fd7044199a8f5ad4ad6758b2e7d6b2a9d75a85cd31686323779f63ef4f7",
-          "symbol_size": 18984,
+          "section_size": 40960,
+          "sha256": "003536fa03d8f1b1c3144a1245a7f563f3e2617d0bb201051a7d22e8a5891c0e",
+          "symbol_size": 40832,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -378,10 +703,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 19272,
-      "embedded_section_size": 53488,
-      "sha256": "09ec39d859f289d136686487ecaa6814c9e48fe5aef76dfc499507d775308679",
-      "size_bytes": 53488
+      "embedded_section_offset": 41096,
+      "embedded_section_size": 142792,
+      "sha256": "265045c6cbed444af20b4c7ac5bd66e7355b40b99d6a2f8689762b36fb8170fa",
+      "size_bytes": 142792
     }
   },
   "provenance": {
@@ -580,8 +905,8 @@
     "inputs": [
       {
         "path": "crates/trueos-shader/gpgpu/kernels/helio_retained_transform.clcpp",
-        "sha256": "c539aa755b63e0a53a126a943fbde08a775a8cf1c78277c3357d89674d82e57c",
-        "size_bytes": 12750
+        "sha256": "549be9c45f8a61a09905b4f4e65a147b638339f6ade0a4305cd149a0aca6ec10",
+        "size_bytes": 29333
       }
     ],
     "language": "C++ for OpenCL",

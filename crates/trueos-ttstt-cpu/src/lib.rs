@@ -676,6 +676,27 @@ impl Dispatcher {
             .checked_mul(params.kernel_width)
             .ok_or(Error::ShapeOverflow)?;
 
+        // A time-major tile quantizes each source sample once for all
+        // overlapping receptive fields in that tile. The existing bounded
+        // patch buffer owns the cache, so the public scratch contract and the
+        // scalar/AVX2 fallback remain unchanged.
+        #[cfg(target_arch = "x86_64")]
+        if lane == Lane::AvxVnni
+            && qconv1d_dequantized_cached_avx_vnni(
+                input_ncl,
+                weights_oki,
+                output_ncl,
+                patch_scratch,
+                params,
+                activation_quantization,
+                combined_scale,
+                bias_quantized,
+                output_width,
+            )?
+        {
+            return Ok(activation_quantization);
+        }
+
         for batch in 0..params.batch {
             let mut output_x = 0usize;
             #[cfg(target_arch = "x86_64")]
@@ -940,6 +961,203 @@ fn gather_qconv1d_patch_f32(
         }
     }
     Ok(())
+}
+
+#[cfg(target_arch = "x86_64")]
+#[allow(clippy::too_many_arguments)]
+fn qconv1d_dequantized_cached_avx_vnni(
+    input_ncl: &[f32],
+    weights_oki: &[i8],
+    output_ncl: &mut [f32],
+    cache_scratch: &mut [u8],
+    params: QConv1dParams<'_>,
+    quantization: DynamicQuantization,
+    combined_scale: f32,
+    bias_quantized: Option<&[i32]>,
+    output_width: usize,
+) -> Result<bool, Error> {
+    let effective_kernel = params
+        .kernel_width
+        .checked_sub(1)
+        .and_then(|width| width.checked_mul(params.dilation))
+        .and_then(|width| width.checked_add(1))
+        .ok_or(Error::ShapeOverflow)?;
+    let cache_columns = cache_scratch.len() / params.input_channels;
+    let minimum_four_columns = params
+        .stride
+        .checked_mul(3)
+        .and_then(|width| effective_kernel.checked_add(width))
+        .ok_or(Error::ShapeOverflow)?;
+    if cache_columns < minimum_four_columns {
+        return Ok(false);
+    }
+    let maximum_tile_outputs = (cache_columns - effective_kernel) / params.stride + 1;
+
+    for batch in 0..params.batch {
+        let mut tile_output_x = 0usize;
+        while tile_output_x < output_width {
+            let tile_outputs = maximum_tile_outputs.min(output_width - tile_output_x);
+            let cache_width = (tile_outputs - 1)
+                .checked_mul(params.stride)
+                .and_then(|width| width.checked_add(effective_kernel))
+                .ok_or(Error::ShapeOverflow)?;
+            let cache_elements = cache_width
+                .checked_mul(params.input_channels)
+                .ok_or(Error::ShapeOverflow)?;
+            let cache = &mut cache_scratch[..cache_elements];
+            gather_qconv1d_cache_f32(
+                input_ncl,
+                cache,
+                0..cache_width,
+                params,
+                quantization,
+                batch,
+                tile_output_x,
+            )?;
+
+            let mut tile_position = 0usize;
+            while tile_position + 4 <= tile_outputs {
+                let lhs_sums = [
+                    sum_qconv1d_cached_patch(cache, params, tile_position),
+                    sum_qconv1d_cached_patch(cache, params, tile_position + 1),
+                    sum_qconv1d_cached_patch(cache, params, tile_position + 2),
+                    sum_qconv1d_cached_patch(cache, params, tile_position + 3),
+                ];
+                for output_channel in 0..params.output_channels {
+                    let weights_start =
+                        output_channel * params.input_channels * params.kernel_width;
+                    let weights = &weights_oki[weights_start
+                        ..weights_start + params.input_channels * params.kernel_width];
+                    let raw = unsafe {
+                        raw_qconv1d_dot4_cached_avx_vnni(cache, weights, params, tile_position)
+                    };
+                    let weight_sum = params
+                        .weight_row_sums
+                        .map_or_else(|| sum_i8(weights), |sums| sums[output_channel]);
+                    let weight_zero_point = params.weight_zero_points.get(output_channel);
+                    let output_start = (batch * params.output_channels + output_channel)
+                        * output_width
+                        + tile_output_x
+                        + tile_position;
+                    let bias = bias_quantized.map_or(0, |values| values[output_channel]);
+                    for position in 0..4 {
+                        let accumulator = apply_zero_points(
+                            raw[position],
+                            lhs_sums[position],
+                            weight_sum,
+                            params.input_channels * params.kernel_width,
+                            params.input_zero_point,
+                            weight_zero_point,
+                        )
+                        .wrapping_add(bias);
+                        output_ncl[output_start + position] = accumulator as f32 * combined_scale;
+                    }
+                }
+                tile_position += 4;
+            }
+
+            while tile_position < tile_outputs {
+                let lhs_sum = sum_qconv1d_cached_patch(cache, params, tile_position);
+                for output_channel in 0..params.output_channels {
+                    let weights_start =
+                        output_channel * params.input_channels * params.kernel_width;
+                    let weights = &weights_oki[weights_start
+                        ..weights_start + params.input_channels * params.kernel_width];
+                    let raw =
+                        qconv1d_dot_cached(cache, weights, params, tile_position, Lane::AvxVnni);
+                    let weight_sum = params
+                        .weight_row_sums
+                        .map_or_else(|| sum_i8(weights), |sums| sums[output_channel]);
+                    let accumulator = apply_zero_points(
+                        raw,
+                        lhs_sum,
+                        weight_sum,
+                        params.input_channels * params.kernel_width,
+                        params.input_zero_point,
+                        params.weight_zero_points.get(output_channel),
+                    )
+                    .wrapping_add(bias_quantized.map_or(0, |values| values[output_channel]));
+                    let output_index = (batch * params.output_channels + output_channel)
+                        * output_width
+                        + tile_output_x
+                        + tile_position;
+                    output_ncl[output_index] = accumulator as f32 * combined_scale;
+                }
+                tile_position += 1;
+            }
+            tile_output_x += tile_outputs;
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(target_arch = "x86_64")]
+fn gather_qconv1d_cache_f32(
+    input_ncl: &[f32],
+    cache: &mut [u8],
+    cache_columns: core::ops::Range<usize>,
+    params: QConv1dParams<'_>,
+    quantization: DynamicQuantization,
+    batch: usize,
+    output_x: usize,
+) -> Result<(), Error> {
+    let padded_origin = output_x
+        .checked_mul(params.stride)
+        .ok_or(Error::ShapeOverflow)?;
+    for cache_x in cache_columns {
+        let padded_x = padded_origin
+            .checked_add(cache_x)
+            .ok_or(Error::ShapeOverflow)?;
+        let cache_start = cache_x * params.input_channels;
+        let cache_column = &mut cache[cache_start..cache_start + params.input_channels];
+        let Some(input_x) = padded_x.checked_sub(params.pad_left) else {
+            cache_column.fill(RTEN_U8_IM2COL_PADDING);
+            continue;
+        };
+        if input_x >= params.input_width {
+            cache_column.fill(RTEN_U8_IM2COL_PADDING);
+            continue;
+        }
+        for (input_channel, value) in cache_column.iter_mut().enumerate() {
+            let input_index =
+                (batch * params.input_channels + input_channel) * params.input_width + input_x;
+            *value = quant::quantize_value_u8(input_ncl[input_index], quantization);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "x86_64")]
+fn sum_qconv1d_cached_patch(cache: &[u8], params: QConv1dParams<'_>, tile_position: usize) -> i32 {
+    let mut sum = 0i32;
+    for kernel_x in 0..params.kernel_width {
+        let cache_x = tile_position * params.stride + kernel_x * params.dilation;
+        let start = cache_x * params.input_channels;
+        sum = sum.wrapping_add(sum_u8(&cache[start..start + params.input_channels]));
+    }
+    sum
+}
+
+#[cfg(target_arch = "x86_64")]
+fn qconv1d_dot_cached(
+    cache: &[u8],
+    weights: &[i8],
+    params: QConv1dParams<'_>,
+    tile_position: usize,
+    lane: Lane,
+) -> i32 {
+    let mut sum = 0i32;
+    for kernel_x in 0..params.kernel_width {
+        let cache_x = tile_position * params.stride + kernel_x * params.dilation;
+        let activation_start = cache_x * params.input_channels;
+        let weight_start = kernel_x * params.input_channels;
+        sum = sum.wrapping_add(raw_dot(
+            &cache[activation_start..activation_start + params.input_channels],
+            &weights[weight_start..weight_start + params.input_channels],
+            lane,
+        ));
+    }
+    sum
 }
 
 fn map_quantization_error(error: QuantizationError) -> Error {
@@ -1474,6 +1692,72 @@ unsafe fn raw_dot4_avx_vnni(patches: &[u8], patch_stride: usize, rhs: &[i8]) -> 
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,avxvnni")]
+unsafe fn raw_qconv1d_dot4_cached_avx_vnni(
+    cache: &[u8],
+    weights: &[i8],
+    params: QConv1dParams<'_>,
+    tile_position: usize,
+) -> [i32; 4] {
+    use core::arch::x86_64::{
+        __m256i, _mm256_dpbusd_avx_epi32, _mm256_loadu_si256, _mm256_setzero_si256,
+        _mm256_storeu_si256,
+    };
+
+    debug_assert!(weights.len() >= params.input_channels * params.kernel_width);
+    let mut accumulators = [
+        _mm256_setzero_si256(),
+        _mm256_setzero_si256(),
+        _mm256_setzero_si256(),
+        _mm256_setzero_si256(),
+    ];
+    let mut tails = [0i32; 4];
+    for kernel_x in 0..params.kernel_width {
+        let weight_start = kernel_x * params.input_channels;
+        let mut input_channel = 0usize;
+        while input_channel + 32 <= params.input_channels {
+            let weight = unsafe {
+                _mm256_loadu_si256(
+                    weights
+                        .as_ptr()
+                        .add(weight_start + input_channel)
+                        .cast::<__m256i>(),
+                )
+            };
+            for (position, accumulator) in accumulators.iter_mut().enumerate() {
+                let cache_x =
+                    (tile_position + position) * params.stride + kernel_x * params.dilation;
+                let activation_start = cache_x * params.input_channels + input_channel;
+                let activation = unsafe {
+                    _mm256_loadu_si256(cache.as_ptr().add(activation_start).cast::<__m256i>())
+                };
+                *accumulator = _mm256_dpbusd_avx_epi32(*accumulator, activation, weight);
+            }
+            input_channel += 32;
+        }
+        while input_channel < params.input_channels {
+            let weight = i32::from(weights[weight_start + input_channel]);
+            for (position, tail) in tails.iter_mut().enumerate() {
+                let cache_x =
+                    (tile_position + position) * params.stride + kernel_x * params.dilation;
+                let activation = i32::from(cache[cache_x * params.input_channels + input_channel]);
+                *tail = tail.wrapping_add(activation.wrapping_mul(weight));
+            }
+            input_channel += 1;
+        }
+    }
+
+    for position in 0..4 {
+        let mut lanes = [0i32; 8];
+        unsafe {
+            _mm256_storeu_si256(lanes.as_mut_ptr().cast::<__m256i>(), accumulators[position]);
+        }
+        tails[position] = lanes.into_iter().fold(tails[position], i32::wrapping_add);
+    }
+    tails
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,avxvnni")]
 unsafe fn raw_dot_and_sums_avx_vnni(lhs: &[u8], rhs: &[i8]) -> (i32, i32, i32) {
     use core::arch::x86_64::{
         __m256i, _mm256_add_epi32, _mm256_castsi256_si128, _mm256_cvtepi8_epi16,
@@ -1918,10 +2202,7 @@ mod tests {
                 }
             }
         }
-        assert!(
-            edge_differences > 0,
-            "RTen's shifted-domain zero padding must affect an edge"
-        );
+        assert!(edge_differences > 0, "RTen's shifted-domain zero padding must affect an edge");
 
         for lane in available_lanes(dispatcher) {
             let mut observed = vec![0i32; expected.len()];
@@ -2019,13 +2300,9 @@ mod tests {
             )
             .unwrap();
         let mut quantized_bias = [0i32; OUTPUT_CHANNELS];
-        let combined_scale = quantize_conv_bias_floor(
-            &bias,
-            quantization.scale,
-            weight_scale,
-            &mut quantized_bias,
-        )
-        .unwrap();
+        let combined_scale =
+            quantize_conv_bias_floor(&bias, quantization.scale, weight_scale, &mut quantized_bias)
+                .unwrap();
         let mut expected = vec![0f32; accumulators.len()];
         dequantize_conv_integer_ncw(
             &accumulators,
@@ -2060,10 +2337,51 @@ mod tests {
                 .unwrap();
             assert_eq!(observed_quantization, quantization);
             assert_eq!(
-                observed.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
-                expected.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                observed
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
                 "lane={lane:?}",
             );
+
+            if lane == Lane::AvxVnni {
+                // Exactly four cached positions force a second tile for the
+                // fifth output, exercising a second cache fill and scalar tail.
+                let mut tiled = vec![0f32; expected.len()];
+                let mut tiled_patch = [0u8; INPUT_CHANNELS * (KERNEL_WIDTH + 3 * 2)];
+                let tiled_quantization = dispatcher
+                    .qconv1d_dequantized_with_lane(
+                        &input,
+                        &packed,
+                        &mut tiled,
+                        &mut tiled_patch,
+                        &mut bias_scratch,
+                        QConv1dParams {
+                            input_zero_point: 0,
+                            ..params
+                        },
+                        weight_scale,
+                        Some(&bias),
+                        lane,
+                    )
+                    .unwrap();
+                assert_eq!(tiled_quantization, quantization);
+                assert_eq!(
+                    tiled
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>(),
+                    expected
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>(),
+                    "tiled lane={lane:?}",
+                );
+            }
         }
     }
 

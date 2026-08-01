@@ -49,6 +49,81 @@ CHURN_FORWARD_BYTES = 768
 CHURN_LIGHT_SECTION = "scene/churn-light-v1.bin"
 CHURN_LIGHT_MAGIC = b"HCHLIT\0\0"
 CHURN_LIGHT_BYTES = 160
+RETAINED_TRANSFORM_SECTION = "scene/retained-transform-template-v1.bin"
+RETAINED_TRANSFORM_MAGIC = b"HRTXFM\0\0"
+RETAINED_TRANSFORM_HEADER_BYTES = 80
+RETAINED_TRANSFORM_BYTES = 128
+RETAINED_TRANSFORM_FLAGS = 0xF
+
+
+def _affine3x4_mul(
+    left: tuple[float, ...], right: tuple[float, ...]
+) -> tuple[float, ...]:
+    """Compose two row-major affine 3x4 matrices as left * right."""
+    if len(left) != 12 or len(right) != 12:
+        raise SystemExit("affine3x4 operands must contain 12 floats")
+    product: list[float] = []
+    for row in range(3):
+        for column in range(3):
+            product.append(sum(
+                left[row * 4 + axis] * right[axis * 4 + column]
+                for axis in range(3)
+            ))
+        product.append(
+            left[row * 4 + 3]
+            + sum(
+                left[row * 4 + axis] * right[axis * 4 + 3]
+                for axis in range(3)
+            )
+        )
+    return tuple(product)
+
+
+def encode_retained_transform_template() -> bytes:
+    """Fold the canonical authored root and encode its row-child template."""
+    identity = (
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+    )
+    # This is the build-time fold stage in its smallest useful form: two
+    # authored constant operations become one retained affine root. Dynamic
+    # render rows are declared by the header and instantiated at runtime.
+    authored_constant_ops = (identity, identity)
+    folded = identity
+    for operation in authored_constant_ops:
+        folded = _affine3x4_mul(folded, operation)
+    if folded != identity:
+        raise SystemExit("canonical retained-transform identity fold changed")
+
+    out = bytearray(RETAINED_TRANSFORM_BYTES)
+    out[:8] = RETAINED_TRANSFORM_MAGIC
+    struct.pack_into(
+        "<HH17I",
+        out,
+        8,
+        1,                                  # format version
+        RETAINED_TRANSFORM_HEADER_BYTES,
+        RETAINED_TRANSFORM_BYTES,
+        RETAINED_TRANSFORM_FLAGS,           # pointer-free/3x4/row-child/folded
+        48,                                 # affine stride
+        RETAINED_TRANSFORM_HEADER_BYTES,    # root affine byte offset
+        1,                                  # root affine count
+        len(authored_constant_ops),         # authored constant-op count
+        1,                                  # maximal constant-run count
+        1,                                  # emitted constant-affine count
+        len(authored_constant_ops) - 1,     # constant ops removed by folding
+        1,                                  # dynamic children per render row
+        4096,                               # maximum render rows
+        4097,                               # maximum instantiated nodes
+        2,                                  # maximum root-to-leaf traversal depth
+        0,                                  # root node index
+        0,                                  # dynamic-child parent node index
+        1,                                  # dynamic binding kind: render-row index
+        0,                                  # reserved
+    )
+    struct.pack_into("<12f", out, RETAINED_TRANSFORM_HEADER_BYTES, *folded)
+    return bytes(out)
 
 
 def encode_replay_plan(render_ir: bytes) -> bytes:
@@ -842,6 +917,12 @@ def main() -> None:
 
     artifact_path = args.artifact.resolve()
     sections = parse_helioa(artifact_path.read_bytes())
+    # Both the SimpleCube and Churn-only lanes carry the same canonical graph
+    # seed. Assignment (rather than setdefault) prevents stale input sections
+    # from surviving a new bake under the versioned name.
+    sections[RETAINED_TRANSFORM_SECTION] = (
+        OTHER_SECTION_KIND, encode_retained_transform_template(),
+    )
     if CHURN_FORWARD_SOURCE in sections and RENDER_IR_SECTION not in sections:
         bake_churn_only(args, artifact_path, sections)
         return

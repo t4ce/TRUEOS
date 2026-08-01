@@ -16,9 +16,9 @@ use trueos_kokoro_aot::{
     ARENA_ALIGNMENT, ArenaPlanError, DType, OpCode, ParseOptions, Phase, Program, STATIC_DIM,
     SlotKind, StorageKind, TensorDesc, WorkBudget,
 };
-use trueos_kokoro_audio::{convert_frame_range, output_frames};
+use trueos_kokoro_audio::{convert_frame_range, fade_in_frame_range, output_frames};
 use trueos_kokoro_dispatch::{
-    CpuDispatcher, CpuWorkspace, KOKORO_CPU_WORKSPACE_REQUIREMENTS, decode,
+    CpuDispatchPlan, CpuDispatcher, CpuWorkspace, KOKORO_CPU_WORKSPACE_REQUIREMENTS, decode,
     native_dispatch_requires_workspace, native_dispatch_supported,
 };
 use trueos_kokoro_exec::{
@@ -26,7 +26,7 @@ use trueos_kokoro_exec::{
 };
 use trueos_kokoro_g2p::{FrontendOutput, Model as G2pModel, prepare_english_with};
 use trueos_kokoro_lexicon::Lexicon;
-use trueos_kokoro_memory::{ExternalBindings, TensorMemory};
+use trueos_kokoro_memory::{ExternalBindings, PhaseOneMemoryPlan, TensorMemory};
 use trueos_kokoro_voice::{PINNED_ARCHIVE_SHA256, STYLE_WIDTH, VoiceArchive};
 
 use super::ttstt_service::{
@@ -995,6 +995,10 @@ impl PcmEmission {
             samples.resize(sample_count, 0_i16);
             convert_frame_range(&self.waveform, self.next_frame, &mut samples)
                 .map_err(|_| "kokoro-pcm-conversion-failed")?;
+            if self.model_chunk_index == 0 {
+                fade_in_frame_range(self.next_frame, &mut samples)
+                    .map_err(|_| "kokoro-pcm-fade-in-failed")?;
+            }
             let frame_end = self
                 .next_frame
                 .checked_add(frames)
@@ -1131,7 +1135,8 @@ enum InvocationProgress {
 
 /// External bindings and phase-zero arena proven without retaining any
 /// self-referential borrows. TensorMemory is reconstructed around these stable
-/// owned buffers for each future executor slice.
+/// owned buffers for each future executor slice. The expensive phase-one slot
+/// proof and CPU lane detection are retained as borrow-free owned plans.
 struct InvocationScaffold {
     shapes: Box<TensorShapeTable<SHAPE_CAPACITY>>,
     padded_tokens: Vec<i64>,
@@ -1139,16 +1144,17 @@ struct InvocationScaffold {
     speed: [f32; 1],
     phase_zero_arena: Option<AlignedArena>,
     phase_one_arena: Option<AlignedArena>,
-    slot_bases: Vec<u64>,
+    phase_one_plan: Option<PhaseOneMemoryPlan<'static, SLOT_CAPACITY>>,
     waveform: Vec<f32>,
     workspace: WorkspaceBuffers,
+    cpu_dispatch_plan: CpuDispatchPlan,
     executor: Executor<SLOT_CAPACITY>,
     stage: InvocationStage,
 }
 
 impl InvocationScaffold {
     fn prepare(
-        program: &Program<'_>,
+        program: &Program<'static>,
         voices: &VoiceArchive<'_>,
         token_ids: &[u8],
         full_phoneme_count: usize,
@@ -1228,9 +1234,10 @@ impl InvocationScaffold {
             speed: [speed],
             phase_zero_arena: Some(phase_zero_arena),
             phase_one_arena: None,
-            slot_bases: Vec::new(),
+            phase_one_plan: None,
             waveform: Vec::new(),
             workspace,
+            cpu_dispatch_plan: CpuDispatchPlan::detect(),
             executor: Executor::new(),
             stage: InvocationStage::PhaseZero,
         };
@@ -1238,7 +1245,10 @@ impl InvocationScaffold {
         Ok(scaffold)
     }
 
-    fn validate_phase_zero_bridge(&mut self, program: &Program<'_>) -> Result<(), &'static str> {
+    fn validate_phase_zero_bridge(
+        &mut self,
+        program: &Program<'static>,
+    ) -> Result<(), &'static str> {
         let Self {
             shapes,
             padded_tokens,
@@ -1277,7 +1287,7 @@ impl InvocationScaffold {
         Ok(())
     }
 
-    fn run_slice(&mut self, program: &Program<'_>) -> InvocationProgress {
+    fn run_slice(&mut self, program: &Program<'static>) -> InvocationProgress {
         match self.stage {
             InvocationStage::PhaseZero => self.run_phase_zero_slice(program),
             InvocationStage::PhaseOne(admission) => self.run_phase_one_slice(program, admission),
@@ -1285,7 +1295,7 @@ impl InvocationScaffold {
         }
     }
 
-    fn run_phase_zero_slice(&mut self, program: &Program<'_>) -> InvocationProgress {
+    fn run_phase_zero_slice(&mut self, program: &Program<'static>) -> InvocationProgress {
         let Self {
             shapes,
             padded_tokens,
@@ -1293,6 +1303,7 @@ impl InvocationScaffold {
             speed,
             phase_zero_arena,
             workspace,
+            cpu_dispatch_plan,
             executor,
             ..
         } = self;
@@ -1339,7 +1350,11 @@ impl InvocationScaffold {
             Ok(workspace) => workspace,
             Err(reason) => return InvocationProgress::Failed(reason),
         };
-        let mut dispatcher = CpuDispatcher::new_with_workspace(&mut memory, &mut cpu_workspace);
+        let mut dispatcher = CpuDispatcher::new_with_workspace_and_plan(
+            &mut memory,
+            &mut cpu_workspace,
+            *cpu_dispatch_plan,
+        );
         let mut budget = match WorkBudget::new(executor_work_units_per_slice(program, executor)) {
             Ok(budget) => budget,
             Err(_) => return InvocationProgress::Failed("kokoro-executor-budget-invalid"),
@@ -1398,7 +1413,7 @@ impl InvocationScaffold {
 
     fn prepare_phase_one(
         &mut self,
-        program: &Program<'_>,
+        program: &Program<'static>,
         admission: ResolvedPhase,
     ) -> Result<(), &'static str> {
         let frame_count = admission.frame_count();
@@ -1408,14 +1423,22 @@ impl InvocationScaffold {
         if frame_count > SERVICE_FRAME_CEILING {
             return Err("kokoro-frame-count-split-required");
         }
-        let mut slot_bases = Vec::new();
-        slot_bases
-            .try_reserve_exact(program.slot_count() as usize)
-            .map_err(|_| "kokoro-slot-table-allocation-failed")?;
-        slot_bases.extend_from_slice(self.executor.slot_bases());
-        if slot_bases.len() != program.slot_count() as usize {
+        if self.executor.slot_bases().len() != program.slot_count() as usize {
             return Err("kokoro-slot-table-count-mismatch");
         }
+        let phase_one_plan = PhaseOneMemoryPlan::<SLOT_CAPACITY>::new(
+            *program,
+            admission,
+            self.executor.slot_bases(),
+        )
+        .map_err(|error| {
+            crate::log_warn!(
+                target: "ttstt";
+                "ttstt: kokoro phase1 memory plan rejected error={:?}\n",
+                error
+            );
+            "kokoro-phase1-memory-plan-rejected"
+        })?;
         let arena_bytes = usize::try_from(admission.arena_bytes())
             .map_err(|_| "kokoro-phase1-arena-too-large")?;
         let samples = frame_count
@@ -1442,7 +1465,7 @@ impl InvocationScaffold {
             .map_err(|_| "kokoro-waveform-allocation-failed")?;
         waveform.resize(samples, 0.0);
         self.phase_one_arena = Some(phase_one_arena);
-        self.slot_bases = slot_bases;
+        self.phase_one_plan = Some(phase_one_plan);
         self.waveform = waveform;
         self.stage = InvocationStage::PhaseOne(admission);
         Ok(())
@@ -1450,15 +1473,16 @@ impl InvocationScaffold {
 
     fn run_phase_one_slice(
         &mut self,
-        program: &Program<'_>,
+        _program: &Program<'static>,
         admission: ResolvedPhase,
     ) -> InvocationProgress {
         let Self {
             shapes,
             phase_one_arena,
-            slot_bases,
+            phase_one_plan,
             waveform,
             workspace,
+            cpu_dispatch_plan,
             executor,
             stage,
             ..
@@ -1466,6 +1490,13 @@ impl InvocationScaffold {
         let Some(phase_one_arena) = phase_one_arena.as_mut() else {
             return InvocationProgress::Failed("kokoro-phase1-arena-state-lost");
         };
+        let Some(phase_one_plan) = phase_one_plan.as_ref() else {
+            return InvocationProgress::Failed("kokoro-phase1-memory-plan-state-lost");
+        };
+        if phase_one_plan.admission() != admission {
+            return InvocationProgress::Failed("kokoro-phase1-admission-state-mismatch");
+        }
+        let program = phase_one_plan.program();
         let mut externals = ExternalBindings::<1>::new();
         if externals
             .bind_output(program, shapes.as_ref(), WAVEFORM_TENSOR_ID, waveform.as_mut_slice())
@@ -1474,12 +1505,10 @@ impl InvocationScaffold {
             return InvocationProgress::Failed("kokoro-waveform-memory-bind-failed");
         }
         let mut memory =
-            match TensorMemory::<'_, '_, '_, SHAPE_CAPACITY, 1, MAX_OP_BINDINGS>::phase_one(
-                program,
+            match TensorMemory::<'_, '_, '_, SHAPE_CAPACITY, 1, MAX_OP_BINDINGS>::phase_one_prevalidated(
+                phase_one_plan,
                 shapes.as_mut(),
                 phase_one_arena.as_mut_bytes(),
-                admission,
-                slot_bases,
                 &mut externals,
             ) {
                 Ok(memory) => memory,
@@ -1491,7 +1520,11 @@ impl InvocationScaffold {
             Ok(workspace) => workspace,
             Err(reason) => return InvocationProgress::Failed(reason),
         };
-        let mut dispatcher = CpuDispatcher::new_with_workspace(&mut memory, &mut cpu_workspace);
+        let mut dispatcher = CpuDispatcher::new_with_workspace_and_plan(
+            &mut memory,
+            &mut cpu_workspace,
+            *cpu_dispatch_plan,
+        );
         let mut budget = match WorkBudget::new(executor_work_units_per_slice(program, executor)) {
             Ok(budget) => budget,
             Err(_) => return InvocationProgress::Failed("kokoro-executor-budget-invalid"),

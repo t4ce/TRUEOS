@@ -310,6 +310,29 @@ pub struct CpuDispatcher<
     quant: trueos_ttstt_cpu::Dispatcher,
 }
 
+/// Reusable host-kernel selection for cooperatively sliced CPU execution.
+///
+/// This value owns no tensor or workspace borrows, so an inference job can
+/// retain it safely while rebuilding only the short-lived validated memory
+/// view required by each scheduler slice.
+#[derive(Clone, Copy)]
+pub struct CpuDispatchPlan {
+    conv: trueos_kokoro_conv::Dispatcher,
+    gemm: trueos_kokoro_gemm::Dispatcher,
+    quant: trueos_ttstt_cpu::Dispatcher,
+}
+
+impl CpuDispatchPlan {
+    /// Detect the best sealed kernel lanes once for the current CPU.
+    pub fn detect() -> Self {
+        Self {
+            conv: trueos_kokoro_conv::Dispatcher::detect(),
+            gemm: trueos_kokoro_gemm::Dispatcher::detect(),
+            quant: trueos_ttstt_cpu::Dispatcher::detect(),
+        }
+    }
+}
+
 impl<
     'dispatch,
     'memory,
@@ -331,12 +354,27 @@ impl<
             BINDINGS,
         >,
     ) -> Self {
+        Self::new_with_plan(memory, CpuDispatchPlan::detect())
+    }
+
+    /// Construct a dispatcher from a previously detected CPU kernel plan.
+    pub fn new_with_plan(
+        memory: &'dispatch mut TensorMemory<
+            'memory,
+            'artifact,
+            'buffers,
+            SHAPES,
+            EXTERNALS,
+            BINDINGS,
+        >,
+        plan: CpuDispatchPlan,
+    ) -> Self {
         Self {
             memory,
             workspace: None,
-            conv: trueos_kokoro_conv::Dispatcher::detect(),
-            gemm: trueos_kokoro_gemm::Dispatcher::detect(),
-            quant: trueos_ttstt_cpu::Dispatcher::detect(),
+            conv: plan.conv,
+            gemm: plan.gemm,
+            quant: plan.quant,
         }
     }
 
@@ -351,12 +389,28 @@ impl<
         >,
         workspace: &'dispatch mut CpuWorkspace<'workspace>,
     ) -> Self {
+        Self::new_with_workspace_and_plan(memory, workspace, CpuDispatchPlan::detect())
+    }
+
+    /// Construct a workspace-backed dispatcher from a retained kernel plan.
+    pub fn new_with_workspace_and_plan(
+        memory: &'dispatch mut TensorMemory<
+            'memory,
+            'artifact,
+            'buffers,
+            SHAPES,
+            EXTERNALS,
+            BINDINGS,
+        >,
+        workspace: &'dispatch mut CpuWorkspace<'workspace>,
+        plan: CpuDispatchPlan,
+    ) -> Self {
         Self {
             memory,
             workspace: Some(workspace),
-            conv: trueos_kokoro_conv::Dispatcher::detect(),
-            gemm: trueos_kokoro_gemm::Dispatcher::detect(),
-            quant: trueos_ttstt_cpu::Dispatcher::detect(),
+            conv: plan.conv,
+            gemm: plan.gemm,
+            quant: plan.quant,
         }
     }
 

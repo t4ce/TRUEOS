@@ -112,6 +112,65 @@ rdrand = { version = "0.8", default-features = false }
 panic = "abort"
 opt-level = 1
 
+# The default bare-metal iteration build intentionally keeps the kernel at
+# opt-level 1, but Kokoro is production numerical code even while the rest of
+# the OS is being debugged.  Building these hot crates at opt-level 3 preserves
+# the fast edit/link cycle for TRUEOS while avoiding a roughly 2x inference
+# penalty in ordinary `make kernel` images.
+[profile.dev.package.trueos-ttstt-cpu]
+opt-level = 3
+codegen-units = 1
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.trueos-kokoro-conv]
+opt-level = 3
+codegen-units = 1
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.trueos-kokoro-dispatch]
+opt-level = 3
+codegen-units = 1
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.trueos-kokoro-f32]
+opt-level = 3
+codegen-units = 1
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.trueos-kokoro-gemm]
+opt-level = 3
+codegen-units = 1
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.trueos-kokoro-lstm]
+opt-level = 3
+codegen-units = 1
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.trueos-kokoro-resize]
+opt-level = 3
+codegen-units = 1
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.trueos-kokoro-scalar]
+opt-level = 3
+codegen-units = 1
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.trueos-kokoro-stft]
+opt-level = 3
+codegen-units = 1
+debug-assertions = false
+overflow-checks = false
+
 [profile.release]
 panic = "abort"
 lto = "fat"
@@ -119,6 +178,36 @@ codegen-units = 1
 strip = true
 debug = false
 opt-level = 2
+
+# Keep the same numerical policy in production images. The kernel-wide release
+# profile remains size-conscious at opt-level 2; only the measured Kokoro hot
+# crates use speed-oriented code generation.
+[profile.release.package.trueos-ttstt-cpu]
+opt-level = 3
+
+[profile.release.package.trueos-kokoro-conv]
+opt-level = 3
+
+[profile.release.package.trueos-kokoro-dispatch]
+opt-level = 3
+
+[profile.release.package.trueos-kokoro-f32]
+opt-level = 3
+
+[profile.release.package.trueos-kokoro-gemm]
+opt-level = 3
+
+[profile.release.package.trueos-kokoro-lstm]
+opt-level = 3
+
+[profile.release.package.trueos-kokoro-resize]
+opt-level = 3
+
+[profile.release.package.trueos-kokoro-scalar]
+opt-level = 3
+
+[profile.release.package.trueos-kokoro-stft]
+opt-level = 3
 
 [patch.crates-io]
 embassy-time = { path = "crates/trueos-executor/embassy-time" }
@@ -144,5 +233,6 @@ dma-api = { path = "vendor/dma-api-0.7.3" }
 alsa = { path = "vendor/alsa-0.11.0" }
 symphonia-core = { path = "vendor/symphonia-core-0.5.5-trueos" }
 symphonia-codec-aac = { path = "vendor/symphonia-codec-aac-0.5.5-trueos" }
+
 [build-dependencies]
 sha2 = "=0.10.9"

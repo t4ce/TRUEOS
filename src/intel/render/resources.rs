@@ -1307,6 +1307,309 @@ fn publish_churn_material_rgba(
     Ok(())
 }
 
+const _: () = {
+    assert!(
+        core::mem::size_of::<trueos_helio_runtime::retained_transform::RetainedTransformNode>()
+            == crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_NODE_BYTES
+    );
+    assert!(
+        core::mem::size_of::<trueos_helio_runtime::retained_transform::Affine3x4>()
+            == crate::intel::gpgpu::GPGPU_HELIO_AFFINE_BYTES
+    );
+};
+
+fn encode_churn_hierarchy_nodes(
+    nodes: &[trueos_helio_runtime::retained_transform::RetainedTransformNode],
+) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(
+        nodes.len() * crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_NODE_BYTES,
+    );
+    for node in nodes {
+        bytes.extend_from_slice(&node.to_le_bytes());
+    }
+    bytes
+}
+
+fn encode_churn_affines(
+    affines: &[trueos_helio_runtime::retained_transform::Affine3x4],
+) -> Vec<u8> {
+    let mut bytes =
+        Vec::with_capacity(affines.len() * crate::intel::gpgpu::GPGPU_HELIO_AFFINE_BYTES);
+    for affine in affines {
+        bytes.extend_from_slice(&affine.to_le_bytes());
+    }
+    bytes
+}
+
+fn encode_churn_hierarchy_indices(indices: &[u32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(
+        indices.len() * crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_INDEX_BYTES,
+    );
+    for index in indices {
+        bytes.extend_from_slice(&index.to_le_bytes());
+    }
+    bytes
+}
+
+fn stage_resident_churn_hierarchy_inputs(
+    resident: &ResidentChurnHierarchy,
+    frame: &trueos_helio_runtime::retained_transform::TransformHierarchyFrame<'_>,
+    row_count: u32,
+) -> Result<crate::intel::gpgpu::GpgpuHelioRetainedHierarchyDispatch, &'static str> {
+    use trueos_helio_runtime::retained_transform::{CONSTANT_NODE, NO_PARENT};
+
+    let node_count = u32::try_from(frame.nodes.len()).map_err(|_| "churn-hierarchy-capacity")?;
+    let dirty_local_count = u32::try_from(frame.dirty_local_nodes.len())
+        .map_err(|_| "churn-hierarchy-dirty-capacity")?;
+    let dirty_world_count = u32::try_from(frame.dirty_world_nodes.len())
+        .map_err(|_| "churn-hierarchy-dirty-capacity")?;
+    let dirty_row_count = u32::try_from(frame.dirty_rows.len())
+        .map_err(|_| "churn-hierarchy-dirty-capacity")?;
+    let max_depth = frame.report.max_depth;
+    let level_node_count = frame.levels.iter().try_fold(0u32, |total, level| {
+        total.checked_add(level.count)
+    });
+    if node_count == 0
+        || frame.nodes.len() > resident.node_capacity
+        || frame.local_affines.len() != frame.nodes.len()
+        || frame.dynamic_bindings.len() != frame.nodes.len()
+        || frame.row_leaf_nodes.len() != row_count as usize
+        || frame.level_indices.len() != frame.nodes.len()
+        || level_node_count != Some(node_count)
+        || frame.levels.len() != max_depth as usize
+        || frame.report.runtime_nodes != node_count
+        || frame.report.dirty_local != dirty_local_count
+        || frame.report.dirty_world != dirty_world_count
+        || max_depth == 0
+        || max_depth > crate::intel::gpgpu::GPGPU_HELIO_MAX_HIERARCHY_DEPTH
+        || dirty_row_count > row_count
+        || frame.nodes.iter().any(|node| {
+            (node.parent != NO_PARENT && node.parent >= node_count) || node.level >= max_depth
+        })
+        || frame
+            .dynamic_bindings
+            .iter()
+            .any(|binding| *binding != CONSTANT_NODE && *binding >= row_count)
+        || frame
+            .level_indices
+            .iter()
+            .chain(frame.dirty_local_nodes)
+            .chain(frame.dirty_world_nodes)
+            .chain(frame.row_leaf_nodes)
+            .any(|node| *node >= node_count)
+        || frame.dirty_rows.iter().any(|row| *row >= row_count)
+    {
+        return Err("churn-hierarchy-frame-contract");
+    }
+
+    let topology_changed = resident.node_count.load(Ordering::Acquire) != node_count;
+    if topology_changed {
+        let node_bytes = encode_churn_hierarchy_nodes(frame.nodes);
+        let binding_bytes = encode_churn_hierarchy_indices(frame.dynamic_bindings);
+        let local_bytes = encode_churn_affines(frame.local_affines);
+        let row_leaf_bytes = encode_churn_hierarchy_indices(frame.row_leaf_nodes);
+        if !resident.nodes.write_and_flush(0, &node_bytes) {
+            return Err("churn-hierarchy-node-upload");
+        }
+        if !resident
+            .dynamic_bindings
+            .write_and_flush(0, &binding_bytes)
+        {
+            return Err("churn-hierarchy-binding-upload");
+        }
+        // Dynamic entries are identity placeholders on the CPU. Upload them
+        // only with a new topology; rewriting an unchanged graph would erase
+        // clean GPU-authored locals retained from the preceding frame.
+        if !resident.local_affines.write_and_flush(0, &local_bytes) {
+            return Err("churn-hierarchy-local-upload");
+        }
+        if !resident
+            .row_leaf_nodes
+            .write_and_flush(0, &row_leaf_bytes)
+        {
+            return Err("churn-hierarchy-row-leaf-upload");
+        }
+    }
+
+    for (buffer, indices, error) in [
+        (
+            &resident.dirty_local_nodes,
+            frame.dirty_local_nodes,
+            "churn-hierarchy-dirty-local-upload",
+        ),
+        (
+            &resident.dirty_world_nodes,
+            frame.dirty_world_nodes,
+            "churn-hierarchy-dirty-world-upload",
+        ),
+        (
+            &resident.dirty_rows,
+            frame.dirty_rows,
+            "churn-hierarchy-dirty-row-upload",
+        ),
+    ] {
+        if !indices.is_empty() {
+            let bytes = encode_churn_hierarchy_indices(indices);
+            if !buffer.write_and_flush(0, &bytes) {
+                return Err(error);
+            }
+        }
+    }
+
+    Ok(crate::intel::gpgpu::GpgpuHelioRetainedHierarchyDispatch {
+        nodes: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.nodes.gpu_base(),
+            resident.nodes.storage_bytes(),
+        ),
+        dynamic_bindings: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.dynamic_bindings.gpu_base(),
+            resident.dynamic_bindings.storage_bytes(),
+        ),
+        local_affines: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.local_affines.gpu_base(),
+            resident.local_affines.storage_bytes(),
+        ),
+        world_affines: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.world_affines.gpu_base(),
+            resident.world_affines.storage_bytes(),
+        ),
+        dirty_local_nodes: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.dirty_local_nodes.gpu_base(),
+            resident.dirty_local_nodes.storage_bytes(),
+        ),
+        dirty_world_nodes: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.dirty_world_nodes.gpu_base(),
+            resident.dirty_world_nodes.storage_bytes(),
+        ),
+        dirty_rows: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.dirty_rows.gpu_base(),
+            resident.dirty_rows.storage_bytes(),
+        ),
+        row_leaf_nodes: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.row_leaf_nodes.gpu_base(),
+            resident.row_leaf_nodes.storage_bytes(),
+        ),
+        node_count,
+        dirty_local_count,
+        dirty_world_count,
+        dirty_row_count,
+        max_depth,
+    })
+}
+
+fn publish_resident_churn_hierarchy_counts(
+    resident: &ResidentChurnHierarchy,
+    dispatch: crate::intel::gpgpu::GpgpuHelioRetainedHierarchyDispatch,
+) {
+    resident
+        .dirty_local_count
+        .store(dispatch.dirty_local_count, Ordering::Release);
+    resident
+        .dirty_world_count
+        .store(dispatch.dirty_world_count, Ordering::Release);
+    resident
+        .dirty_row_count
+        .store(dispatch.dirty_row_count, Ordering::Release);
+    resident
+        .max_depth
+        .store(dispatch.max_depth, Ordering::Release);
+    // Node count is the graph-present flag read by the Render encoder. Publish
+    // it last so every preceding input write and metadata count is visible.
+    resident
+        .node_count
+        .store(dispatch.node_count, Ordering::Release);
+}
+
+fn churn_hierarchy_node_capacity(max_instances: usize) -> Option<usize> {
+    let max_rows = crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize;
+    let max_nodes = crate::intel::gpgpu::GPGPU_HELIO_MAX_HIERARCHY_NODES as usize;
+    if max_instances == 0 || max_instances > max_rows {
+        return None;
+    }
+    max_instances
+        .checked_add(1)
+        .filter(|node_capacity| *node_capacity <= max_nodes)
+}
+
+fn allocate_resident_churn_hierarchy(
+    max_instances: usize,
+) -> Result<ResidentChurnHierarchy, &'static str> {
+    let node_capacity =
+        churn_hierarchy_node_capacity(max_instances).ok_or("churn-hierarchy-node-capacity")?;
+    let node_bytes = node_capacity
+        .checked_mul(crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_NODE_BYTES)
+        .ok_or("churn-hierarchy-buffer-capacity")?;
+    let binding_bytes = node_capacity
+        .checked_mul(crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_DYNAMIC_BINDING_BYTES)
+        .ok_or("churn-hierarchy-buffer-capacity")?;
+    let affine_bytes = node_capacity
+        .checked_mul(crate::intel::gpgpu::GPGPU_HELIO_AFFINE_BYTES)
+        .ok_or("churn-hierarchy-buffer-capacity")?;
+    let dirty_node_bytes = node_capacity
+        .checked_mul(crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_INDEX_BYTES)
+        .ok_or("churn-hierarchy-buffer-capacity")?;
+    let row_index_bytes = max_instances
+        .checked_mul(crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_INDEX_BYTES)
+        .ok_or("churn-hierarchy-buffer-capacity")?;
+    let layouts = [
+        (node_bytes, "churn-hierarchy-node-allocation"),
+        (binding_bytes, "churn-hierarchy-binding-allocation"),
+        (affine_bytes, "churn-hierarchy-local-allocation"),
+        (affine_bytes, "churn-hierarchy-world-allocation"),
+        (dirty_node_bytes, "churn-hierarchy-dirty-local-allocation"),
+        (dirty_node_bytes, "churn-hierarchy-dirty-world-allocation"),
+        (row_index_bytes, "churn-hierarchy-dirty-row-allocation"),
+        (row_index_bytes, "churn-hierarchy-row-leaf-allocation"),
+    ];
+    let mut allocated = Vec::with_capacity(layouts.len());
+    for (bytes, error) in layouts {
+        match allocate_resident_render_buffer(bytes) {
+            Ok(buffer) => allocated.push(buffer),
+            Err(_) => {
+                for buffer in allocated.iter().rev() {
+                    let _ = release_resident_render_buffer(buffer);
+                }
+                return Err(error);
+            }
+        }
+    }
+    let buffers: [ResidentRenderBuffer; 8] = match allocated.try_into() {
+        Ok(buffers) => buffers,
+        Err(buffers) => {
+            for buffer in buffers.iter().rev() {
+                let _ = release_resident_render_buffer(buffer);
+            }
+            return Err("churn-hierarchy-allocation-count");
+        }
+    };
+    let [
+        nodes,
+        dynamic_bindings,
+        local_affines,
+        world_affines,
+        dirty_local_nodes,
+        dirty_world_nodes,
+        dirty_rows,
+        row_leaf_nodes,
+    ] = buffers;
+    Ok(ResidentChurnHierarchy {
+        nodes,
+        dynamic_bindings,
+        local_affines,
+        world_affines,
+        dirty_local_nodes,
+        dirty_world_nodes,
+        dirty_rows,
+        row_leaf_nodes,
+        node_capacity,
+        node_count: AtomicU32::new(0),
+        dirty_local_count: AtomicU32::new(0),
+        dirty_world_count: AtomicU32::new(0),
+        dirty_row_count: AtomicU32::new(0),
+        max_depth: AtomicU32::new(0),
+    })
+}
+
 fn create_resident_churn_transform(
     max_instances: usize,
     hardware_admission: ChurnHardwareAdmission,
@@ -1338,9 +1641,18 @@ fn create_resident_churn_transform(
             return Err("churn-transform-template-allocation");
         }
     };
+    let hierarchy = match allocate_resident_churn_hierarchy(max_instances) {
+        Ok(hierarchy) => hierarchy,
+        Err(error) => {
+            let _ = release_resident_render_buffer(&draw_templates);
+            let _ = release_resident_render_buffer(&seeds);
+            return Err(error);
+        }
+    };
     Ok(ResidentChurnTransform {
         seeds,
         draw_templates,
+        hierarchy,
         artifact,
         row_count: AtomicU32::new(0),
     })
@@ -1710,7 +2022,8 @@ pub(crate) fn update_resident_churn_forward_frame(
 
 /// Publish one compact retained-transform frame. Instances, compacted indices,
 /// and WGPU indexed-indirect records remain GPU-owned outputs; the following
-/// Render submission expands them before issuing any draw command.
+/// Render submission consumes them directly through the native artifact VS or
+/// selects the expanded-position compatibility handoff explicitly.
 pub(crate) fn update_resident_churn_forward_transform_frame(
     resident: &ResidentChurnForward,
     frame: &trueos_helio_runtime::churn::TransformFrame<'_>,
@@ -1764,12 +2077,6 @@ pub(crate) fn update_resident_churn_forward_transform_frame(
             packed_mesh_material: template.packed_mesh_material,
         }
     });
-    let dispatch = resident
-        .transform_dispatch_for_rows(row_count)
-        .ok_or("churn-transform-unavailable")?;
-    dispatch
-        .validate_templates(&gpu_templates)
-        .map_err(|_| "churn-transform-dispatch-contract")?;
     for (group, template) in frame.draw_templates.iter().enumerate() {
         let mesh = frame.meshes[group / trueos_helio_runtime::churn::MATERIAL_COUNT];
         let draw_group = frame.groups[group];
@@ -1810,6 +2117,20 @@ pub(crate) fn update_resident_churn_forward_transform_frame(
         .checked_mul(trueos_helio_runtime::churn::GpuRetainedDrawTemplate::BYTE_LEN)
         .ok_or("churn-transform-dirty-range")?;
 
+    // Stop the Render encoder from acquiring an old row count while its
+    // persistent hierarchy/worklists are being refreshed.  A failed upload
+    // deliberately leaves the transformer disabled instead of exposing a
+    // mixture of old and new graph inputs.
+    transform.row_count.store(0, Ordering::Release);
+    let hierarchy_dispatch =
+        stage_resident_churn_hierarchy_inputs(&transform.hierarchy, &frame.hierarchy, row_count)?;
+    let dispatch = resident
+        .transform_dispatch_for_rows_with_hierarchy(row_count, Some(hierarchy_dispatch))
+        .ok_or("churn-transform-unavailable")?;
+    dispatch
+        .validate_templates(&gpu_templates)
+        .map_err(|_| "churn-transform-dispatch-contract")?;
+
     if !resident
         .camera
         .write_and_flush(0, &frame.camera.to_le_bytes())
@@ -1826,12 +2147,17 @@ pub(crate) fn update_resident_churn_forward_transform_frame(
         return Err("churn-transform-template-upload");
     }
 
-    // Release-publish the new row count only after all CPU-written inputs are
-    // cache-clean. The Render encoder's acquire pairs with this store.
+    // Publish graph metadata after every CPU-written range is cache-clean.
+    // Node count is the hierarchy-present flag; row count is the final
+    // transaction commit observed by the Render encoder.
+    publish_resident_churn_hierarchy_counts(&transform.hierarchy, hierarchy_dispatch);
     transform.row_count.store(row_count, Ordering::Release);
     Ok(())
 }
 
+/// Native retained graphics handoff. The preceding GPU pass owns all mutable
+/// inputs: 208-byte matrix rows, compacted row indices, and the exact indirect
+/// record. Graphics only binds those resident ranges and the immutable mesh.
 fn prepare_resident_churn_forward_draw(
     _warm: RenderWarmState,
     resident: &ResidentChurnForward,
@@ -1869,7 +2195,7 @@ fn prepare_resident_churn_forward_draw(
     })
 }
 
-/// Storage-free graphics half of the retained transformer path.
+/// Storage-free compatibility graphics half of the retained transformer path.
 ///
 /// Positions and indexed-indirect records are authored by the preceding GPU
 /// secondary.  The VS sees only one ordinary Float32x3 VF element; there are
@@ -1921,6 +2247,14 @@ pub(crate) fn release_resident_churn_forward(resident: &ResidentChurnForward) ->
     released &= release_resident_render_buffer(&resident.compacted_indices);
     released &= release_resident_render_buffer(&resident.instances);
     if let Some(transform) = resident.transform.as_ref() {
+        released &= release_resident_render_buffer(&transform.hierarchy.row_leaf_nodes);
+        released &= release_resident_render_buffer(&transform.hierarchy.dirty_rows);
+        released &= release_resident_render_buffer(&transform.hierarchy.dirty_world_nodes);
+        released &= release_resident_render_buffer(&transform.hierarchy.dirty_local_nodes);
+        released &= release_resident_render_buffer(&transform.hierarchy.world_affines);
+        released &= release_resident_render_buffer(&transform.hierarchy.local_affines);
+        released &= release_resident_render_buffer(&transform.hierarchy.dynamic_bindings);
+        released &= release_resident_render_buffer(&transform.hierarchy.nodes);
         released &= release_resident_render_buffer(&transform.draw_templates);
         released &= release_resident_render_buffer(&transform.seeds);
     }
@@ -1938,7 +2272,8 @@ mod churn_forward_geometry_tests {
     use super::{
         CHURN_FORWARD_INDICES_PER_MESH, CHURN_FORWARD_MESH_COUNT,
         CHURN_FORWARD_VERTICES_PER_MESH, build_churn_expanded_indices,
-        build_churn_forward_geometry,
+        build_churn_forward_geometry, churn_hierarchy_node_capacity, encode_churn_affines,
+        encode_churn_hierarchy_indices, encode_churn_hierarchy_nodes,
     };
 
     #[test]
@@ -2007,6 +2342,60 @@ mod churn_forward_geometry_tests {
                 *index >= CHURN_FORWARD_VERTICES_PER_MESH as u32
                     && *index < (CHURN_FORWARD_VERTICES_PER_MESH * 2) as u32
             }));
+    }
+
+    #[test]
+    fn churn_hierarchy_reserves_one_root_and_one_leaf_per_row() {
+        assert_eq!(churn_hierarchy_node_capacity(0), None);
+        assert_eq!(churn_hierarchy_node_capacity(1), Some(2));
+        assert_eq!(
+            churn_hierarchy_node_capacity(
+                crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize
+            ),
+            Some(crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize + 1)
+        );
+        assert_eq!(
+            churn_hierarchy_node_capacity(
+                crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize + 1
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn retained_hierarchy_uploads_have_exact_little_endian_gpu_strides() {
+        let nodes = [
+            trueos_helio_runtime::retained_transform::RetainedTransformNode {
+                parent: u32::MAX,
+                level: 0,
+                local_generation: 1,
+                world_generation: 2,
+            },
+            trueos_helio_runtime::retained_transform::RetainedTransformNode {
+                parent: 0,
+                level: 1,
+                local_generation: 3,
+                world_generation: 4,
+            },
+        ];
+        let node_bytes = encode_churn_hierarchy_nodes(&nodes);
+        assert_eq!(node_bytes.len(), 2 * 16);
+        assert_eq!(&node_bytes[0..4], &u32::MAX.to_le_bytes());
+        assert_eq!(&node_bytes[16..20], &0u32.to_le_bytes());
+        assert_eq!(&node_bytes[28..32], &4u32.to_le_bytes());
+
+        let affine = trueos_helio_runtime::retained_transform::Affine3x4 {
+            rows: core::array::from_fn(|index| index as f32 + 0.25),
+        };
+        let affine_bytes = encode_churn_affines(&[affine]);
+        assert_eq!(affine_bytes.len(), 48);
+        assert_eq!(&affine_bytes[0..4], &0.25f32.to_le_bytes());
+        assert_eq!(&affine_bytes[44..48], &11.25f32.to_le_bytes());
+
+        let index_bytes = encode_churn_hierarchy_indices(&[0x1122_3344, 0xAABB_CCDD]);
+        assert_eq!(index_bytes.len(), 8);
+        assert_eq!(&index_bytes[0..4], &0x1122_3344u32.to_le_bytes());
+        assert_eq!(&index_bytes[4..8], &0xAABB_CCDDu32.to_le_bytes());
     }
 }
 

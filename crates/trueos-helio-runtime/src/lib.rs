@@ -9,6 +9,7 @@ extern crate alloc;
 pub mod battle;
 pub mod churn;
 pub mod pendulum_bigcloth;
+pub mod retained_transform;
 
 use alloc::vec::Vec;
 use trueos_helio_artifact::render_ir::{
@@ -196,6 +197,8 @@ pub enum Error {
     InvalidBattleScene,
     MissingPendulumScene,
     InvalidPendulumScene,
+    MissingRetainedTransformTemplate,
+    InvalidRetainedTransformTemplate,
 }
 
 pub fn decode_artifact(bytes: &[u8], aspect: f32, camera: Camera) -> Result<Scene, Error> {

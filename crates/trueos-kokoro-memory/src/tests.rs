@@ -807,16 +807,18 @@ fn phase_one_uses_executor_admission_and_revalidates_slot_bases() {
         Err(MemoryError::OverlappingLiveSlots)
     ));
 
+    assert!(matches!(
+        PhaseOneMemoryPlan::<2>::new(program, admission, executor.slot_bases()),
+        Err(MemoryError::SlotBasesTooSmall)
+    ));
+    let plan = PhaseOneMemoryPlan::<3>::new(program, admission, executor.slot_bases()).unwrap();
+    assert_eq!(plan.admission(), admission);
+    assert_eq!(plan.slot_bases(), executor.slot_bases());
+
     {
-        let mut memory: TensorMemory<'_, '_, '_, 20, 2, 8> = TensorMemory::phase_one(
-            &program,
-            &mut shapes,
-            &mut arena.0,
-            admission,
-            executor.slot_bases(),
-            &mut externals,
-        )
-        .unwrap();
+        let mut memory: TensorMemory<'_, '_, '_, 20, 2, 8> =
+            TensorMemory::phase_one_prevalidated(&plan, &mut shapes, &mut arena.0, &mut externals)
+                .unwrap();
         memory
             .with_write::<f32, _, _>(7, |values, shape| {
                 assert_eq!(shape.dims(), &[4]);

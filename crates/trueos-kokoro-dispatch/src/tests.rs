@@ -14,9 +14,9 @@ use trueos_kokoro_exec::{Executor, RuntimeShape, SliceEvent, TensorShapeTable};
 use trueos_kokoro_memory::{ExternalBindings, TensorMemory};
 
 use crate::{
-    AttributeError, Attributes, CpuDispatcher, CpuWorkspace, DispatchError,
-    KOKORO_CPU_WORKSPACE_REQUIREMENTS, WorkspaceError, decode,
-    native_dispatch_requires_workspace, native_dispatch_supported, record_bytes,
+    AttributeError, Attributes, CpuDispatchPlan, CpuDispatcher, CpuWorkspace, DispatchError,
+    KOKORO_CPU_WORKSPACE_REQUIREMENTS, WorkspaceError, decode, native_dispatch_requires_workspace,
+    native_dispatch_supported, record_bytes,
 };
 
 #[repr(align(64))]
@@ -531,15 +531,21 @@ fn quantized_gemm_dispatch_matches_centered_onnx_arithmetic_and_requires_workspa
     {
         let mut rejected_output = [91.0_f32; 3];
         let mut bindings: ExternalBindings<'_, 6> = ExternalBindings::new();
-        bindings.bind_input(&program, &shapes, inputs[0], &activation).unwrap();
-        bindings.bind_input(&program, &shapes, inputs[1], &weights.0).unwrap();
+        bindings
+            .bind_input(&program, &shapes, inputs[0], &activation)
+            .unwrap();
+        bindings
+            .bind_input(&program, &shapes, inputs[1], &weights.0)
+            .unwrap();
         bindings
             .bind_input(&program, &shapes, inputs[2], &weight_scales)
             .unwrap();
         bindings
             .bind_input(&program, &shapes, inputs[3], &weight_zero_points.0)
             .unwrap();
-        bindings.bind_input(&program, &shapes, inputs[4], &bias).unwrap();
+        bindings
+            .bind_input(&program, &shapes, inputs[4], &bias)
+            .unwrap();
         bindings
             .bind_output(&program, &shapes, outputs[0], &mut rejected_output)
             .unwrap();
@@ -563,15 +569,21 @@ fn quantized_gemm_dispatch_matches_centered_onnx_arithmetic_and_requires_workspa
 
     let mut output = [91.0_f32; 3];
     let mut bindings: ExternalBindings<'_, 6> = ExternalBindings::new();
-    bindings.bind_input(&program, &shapes, inputs[0], &activation).unwrap();
-    bindings.bind_input(&program, &shapes, inputs[1], &weights.0).unwrap();
+    bindings
+        .bind_input(&program, &shapes, inputs[0], &activation)
+        .unwrap();
+    bindings
+        .bind_input(&program, &shapes, inputs[1], &weights.0)
+        .unwrap();
     bindings
         .bind_input(&program, &shapes, inputs[2], &weight_scales)
         .unwrap();
     bindings
         .bind_input(&program, &shapes, inputs[3], &weight_zero_points.0)
         .unwrap();
-    bindings.bind_input(&program, &shapes, inputs[4], &bias).unwrap();
+    bindings
+        .bind_input(&program, &shapes, inputs[4], &bias)
+        .unwrap();
     bindings
         .bind_output(&program, &shapes, outputs[0], &mut output)
         .unwrap();
@@ -580,7 +592,9 @@ fn quantized_gemm_dispatch_matches_centered_onnx_arithmetic_and_requires_workspa
         let mut memory: TensorMemory<'_, '_, '_, 256, 6, 8> =
             TensorMemory::phase_zero(&program, &mut shapes, &mut arena.0, &mut bindings).unwrap();
         let mut workspace = workspace_buffers.workspace();
-        let mut dispatcher = CpuDispatcher::new_with_workspace(&mut memory, &mut workspace);
+        let plan = CpuDispatchPlan::detect();
+        let mut dispatcher =
+            CpuDispatcher::new_with_workspace_and_plan(&mut memory, &mut workspace, plan);
         let mut executor: Executor<1> = Executor::new();
         let mut budget = WorkBudget::new(1).unwrap();
         let report = executor.run_slice(&program, &mut dispatcher, &mut budget);
@@ -594,8 +608,7 @@ fn quantized_gemm_dispatch_matches_centered_onnx_arithmetic_and_requires_workspa
     let expected = core::array::from_fn(|column| {
         let mut accumulator = 0_i32;
         for reduction in 0..4 {
-            accumulator += (i32::from(quantized[reduction])
-                - i32::from(quantization.zero_point))
+            accumulator += (i32::from(quantized[reduction]) - i32::from(quantization.zero_point))
                 * (i32::from(weights.0[reduction * 3 + column])
                     - i32::from(weight_zero_points.0[column]));
         }

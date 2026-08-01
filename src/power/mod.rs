@@ -1,3 +1,4 @@
+pub(crate) mod hwp;
 pub(crate) mod rapl;
 pub(crate) mod thermal;
 pub(crate) mod turbo;
@@ -208,8 +209,10 @@ fn detect_msr_details() -> Option<PowerMsrDetails> {
 
     if caps.has_hwp {
         let caps = unsafe { Msr::new(IA32_MSR_HWP_CAPABILITIES).read() };
-        let lowest = (caps & 0xff) as u8;
-        let highest = ((caps >> 24) & 0xff) as u8;
+        // IA32_HWP_CAPABILITIES follows the architectural byte order:
+        // highest [7:0], guaranteed [15:8], efficient [23:16], lowest [31:24].
+        let highest = (caps & 0xff) as u8;
+        let lowest = ((caps >> 24) & 0xff) as u8;
         if lowest > 0 {
             hwp_lowest = Some(lowest);
         }

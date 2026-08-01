@@ -344,6 +344,66 @@ pub struct TensorMemory<
     _binding_capacity: PhantomData<[(); BINDINGS]>,
 }
 
+/// Owned proof of one fully validated phase-one activation layout.
+///
+/// Constructing phase-one tensor memory normally revalidates every slot and
+/// every pair of simultaneously-live slots. A cooperatively sliced execution
+/// presents the exact same immutable admission and slot bases on every slice,
+/// so repeating that quadratic proof is unnecessary. This plan performs the
+/// full validation once, copies the exact bases into fixed-capacity storage,
+/// and owns a copy of the parser's immutable [`Program`] proof. Future memory
+/// views can therefore borrow this plan without retaining self-referential
+/// pointers into a movable inference job.
+///
+/// `SLOTS` is a compile-time memory bound. Construction fails closed when it
+/// cannot hold the program's complete slot table; it never allocates.
+pub struct PhaseOneMemoryPlan<'artifact, const SLOTS: usize> {
+    program: Program<'artifact>,
+    admission: ResolvedPhase,
+    slot_bases: [u64; SLOTS],
+    slot_count: usize,
+}
+
+impl<'artifact, const SLOTS: usize> PhaseOneMemoryPlan<'artifact, SLOTS> {
+    /// Validate and retain one exact executor admission and slot layout.
+    pub fn new(
+        program: Program<'artifact>,
+        admission: ResolvedPhase,
+        slot_bases: &[u64],
+    ) -> Result<Self, MemoryError> {
+        let slot_count =
+            usize::try_from(program.slot_count()).map_err(|_| MemoryError::AddressSpaceOverflow)?;
+        if slot_count > SLOTS {
+            return Err(MemoryError::SlotBasesTooSmall);
+        }
+        validate_phase_one(&program, admission, slot_bases)?;
+
+        let mut retained = [UNRESOLVED_SLOT_BASE; SLOTS];
+        retained[..slot_count].copy_from_slice(&slot_bases[..slot_count]);
+        Ok(Self {
+            program,
+            admission,
+            slot_bases: retained,
+            slot_count,
+        })
+    }
+
+    /// The immutable parser proof used to validate this layout.
+    pub const fn program(&self) -> &Program<'artifact> {
+        &self.program
+    }
+
+    /// The exact admitted phase-one runtime facts.
+    pub const fn admission(&self) -> ResolvedPhase {
+        self.admission
+    }
+
+    /// The complete exact slot table retained by this proof.
+    pub fn slot_bases(&self) -> &[u64] {
+        &self.slot_bases[..self.slot_count]
+    }
+}
+
 impl<
     'memory,
     'artifact,
@@ -390,6 +450,31 @@ impl<
             admission.frame_count(),
             admission.arena_bytes(),
             slot_bases,
+        )
+    }
+
+    /// Construct phase-one memory from an owned, previously validated layout.
+    ///
+    /// This retains all ordinary shape-table, external-binding, arena-size,
+    /// arena-alignment, and DATA-alignment checks. Only the immutable slot
+    /// admission proof is reused, avoiding its quadratic liveness scan on
+    /// every cooperative executor slice.
+    pub fn phase_one_prevalidated<const SLOTS: usize>(
+        plan: &'memory PhaseOneMemoryPlan<'artifact, SLOTS>,
+        shapes: &'memory mut TensorShapeTable<SHAPES>,
+        arena: &'memory mut [u8],
+        externals: &'memory mut ExternalBindings<'buffers, EXTERNALS>,
+    ) -> Result<Self, MemoryError> {
+        let admission = plan.admission();
+        Self::construct(
+            plan.program(),
+            shapes,
+            arena,
+            externals,
+            Phase::Phase1,
+            admission.frame_count(),
+            admission.arena_bytes(),
+            plan.slot_bases(),
         )
     }
 
@@ -862,10 +947,7 @@ fn view_is_contiguous(descriptor: TensorDesc, shape: RuntimeShape) -> Result<boo
     // runtime-sized stride set as well, but never admit a genuinely strided
     // maximum view as contiguous merely because one degenerate shape happens
     // to hide its stride.
-    if strides_are_contiguous(
-        descriptor,
-        &descriptor.max_dims[..usize::from(descriptor.rank)],
-    )? {
+    if strides_are_contiguous(descriptor, &descriptor.max_dims[..usize::from(descriptor.rank)])? {
         return Ok(true);
     }
     strides_are_contiguous(descriptor, shape.dims())

@@ -9,10 +9,11 @@
 // GPU-authored Float3 NDC stream. A storage-free pass-through vertex shader can
 // consume that stream with a repeated immutable cube-index buffer.
 //
-// The command encoder invokes this entrypoint twice. PREPARE publishes the
-// exact indirect records, then an ordered TRANSFORM dispatch fans rows across
-// all available SIMD16 groups. Keeping both modes in one artifact avoids a
-// second instruction image without imposing a single-workgroup bottleneck.
+// A flat frame invokes this entrypoint twice. A retained affine graph invokes
+// it four times: PREPARE, dirty-local TRS materialization, bounded independent
+// dirty-world composition, and dirty-row emission. Explicit encoder barriers
+// separate those stages. Keeping every mode in one artifact avoids additional
+// instruction images while each worklist still fans out across SIMD16 groups.
 
 enum : uint {
     HELIO_TRANSFORM_WORDS = 16,
@@ -24,11 +25,18 @@ enum : uint {
     HELIO_VERTICES_PER_MESH = 24,
     HELIO_INDICES_PER_MESH = 36,
     HELIO_EXPANDED_POSITION_WORDS = 3,
+    HELIO_AFFINE_WORDS = 12,
+    HELIO_HIERARCHY_NODE_WORDS = 4,
+    HELIO_HIERARCHY_ROOT = 0xFFFFFFFFu,
     HELIO_DISABLED_DRAW_GROUP = 0xFFFFFFFFu,
     HELIO_MODE_PREPARE = 0u,
     HELIO_MODE_TRANSFORM = 1u,
     HELIO_MODE_PREPARE_EXPANDED = 2u,
     HELIO_MODE_TRANSFORM_EXPANDED = 3u,
+    HELIO_MODE_MATERIALIZE_HIERARCHY_LOCALS = 4u,
+    HELIO_MODE_RESOLVE_HIERARCHY = 5u,
+    HELIO_MODE_EMIT_HIERARCHY = 6u,
+    HELIO_MODE_EMIT_HIERARCHY_EXPANDED = 7u,
 };
 
 static_assert(HELIO_CAMERA_VIEW_PROJ_WORD * sizeof(uint) == 128u,
@@ -43,6 +51,50 @@ static inline void helio_store_float(__global uint *dst, uint word, float value)
     dst[word] = as_uint(value);
 }
 
+// Helio's retained affine program stores row-major 3x4 matrices.  Resolving a
+// leaf independently is deliberately redundant at shared ancestors: it keeps
+// every dirty node schedulable as one SIMD lane and needs no cross-workgroup
+// synchronization.  The compiler bounds every chain; the kernel enforces the
+// same bound so malformed retained data cannot spin on the GPU.
+static inline bool helio_load_affine(
+    __global const uint *affines,
+    uint node,
+    uint node_count,
+    float value[HELIO_AFFINE_WORDS])
+{
+    if (node >= node_count) {
+        return false;
+    }
+    uint base = node * HELIO_AFFINE_WORDS;
+    for (uint word = 0u; word < HELIO_AFFINE_WORDS; ++word) {
+        value[word] = as_float(affines[base + word]);
+        if (!isfinite(value[word])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static inline void helio_affine_multiply(
+    const float parent[HELIO_AFFINE_WORDS],
+    const float child[HELIO_AFFINE_WORDS],
+    float output[HELIO_AFFINE_WORDS])
+{
+    for (uint row = 0u; row < 3u; ++row) {
+        uint dst = row * 4u;
+        for (uint column = 0u; column < 3u; ++column) {
+            output[dst + column] =
+                parent[dst + 0u] * child[0u * 4u + column]
+                + parent[dst + 1u] * child[1u * 4u + column]
+                + parent[dst + 2u] * child[2u * 4u + column];
+        }
+        output[dst + 3u] = parent[dst + 0u] * child[3u]
+            + parent[dst + 1u] * child[7u]
+            + parent[dst + 2u] * child[11u]
+            + parent[dst + 3u];
+    }
+}
+
 __attribute__((intel_reqd_sub_group_size(16)))
 __kernel void helio_retained_transform(
     __global const uint *transforms,
@@ -55,7 +107,20 @@ __kernel void helio_retained_transform(
     uint mode,
     __global const uint *camera,
     __global const uint *source_vertices,
-    __global uint *expanded_positions)
+    __global uint *expanded_positions,
+    __global const uint *hierarchy_nodes,
+    __global const uint *dynamic_bindings,
+    __global uint *local_affines,
+    __global uint *world_affines,
+    __global const uint *dirty_local_nodes,
+    __global const uint *dirty_world_nodes,
+    __global const uint *dirty_rows,
+    __global const uint *row_leaf_nodes,
+    uint hierarchy_node_count,
+    uint dirty_local_count,
+    uint dirty_world_count,
+    uint dirty_row_count,
+    uint hierarchy_max_depth)
 {
     uint item = get_global_id(0);
     if (mode == HELIO_MODE_PREPARE || mode == HELIO_MODE_PREPARE_EXPANDED) {
@@ -87,6 +152,317 @@ __kernel void helio_retained_transform(
         }
         return;
     }
+    if (mode == HELIO_MODE_MATERIALIZE_HIERARCHY_LOCALS) {
+        if (item >= dirty_local_count || hierarchy_node_count == 0u) {
+            return;
+        }
+        uint node = dirty_local_nodes[item];
+        if (node >= hierarchy_node_count) {
+            return;
+        }
+        uint seed_row = dynamic_bindings[node];
+        // UINT_MAX identifies a baked constant local. It is already resident
+        // in local_affines and therefore deliberately consumes no GPU work.
+        if (seed_row == HELIO_HIERARCHY_ROOT || seed_row >= row_count) {
+            return;
+        }
+        uint seed = seed_row * HELIO_TRANSFORM_WORDS;
+        float tx = as_float(transforms[seed + 0u]);
+        float ty = as_float(transforms[seed + 1u]);
+        float tz = as_float(transforms[seed + 2u]);
+        float sx = as_float(transforms[seed + 3u]);
+        float sy = as_float(transforms[seed + 4u]);
+        float sz = as_float(transforms[seed + 5u]);
+        float qx = as_float(transforms[seed + 6u]);
+        float qy = as_float(transforms[seed + 7u]);
+        float qz = as_float(transforms[seed + 8u]);
+        float qw = as_float(transforms[seed + 9u]);
+        float quaternion_length_squared = qx * qx + qy * qy + qz * qz + qw * qw;
+        if (!(isfinite(tx) && isfinite(ty) && isfinite(tz)
+            && isfinite(sx) && isfinite(sy) && isfinite(sz)
+            && isfinite(qx) && isfinite(qy) && isfinite(qz) && isfinite(qw)
+            && isfinite(quaternion_length_squared))
+            || sx <= 0.0f || sy <= 0.0f || sz <= 0.0f
+            || quaternion_length_squared <= 1.0e-12f) {
+            return;
+        }
+        float inverse_quaternion_length = rsqrt(quaternion_length_squared);
+        qx *= inverse_quaternion_length;
+        qy *= inverse_quaternion_length;
+        qz *= inverse_quaternion_length;
+        qw *= inverse_quaternion_length;
+        float xx = qx * qx;
+        float yy = qy * qy;
+        float zz = qz * qz;
+        float xy = qx * qy;
+        float xz = qx * qz;
+        float yz = qy * qz;
+        float xw = qx * qw;
+        float yw = qy * qw;
+        float zw = qz * qw;
+        float r00 = 1.0f - 2.0f * (yy + zz);
+        float r01 = 2.0f * (xy - zw);
+        float r02 = 2.0f * (xz + yw);
+        float r10 = 2.0f * (xy + zw);
+        float r11 = 1.0f - 2.0f * (xx + zz);
+        float r12 = 2.0f * (yz - xw);
+        float r20 = 2.0f * (xz - yw);
+        float r21 = 2.0f * (yz + xw);
+        float r22 = 1.0f - 2.0f * (xx + yy);
+        uint local_base = node * HELIO_AFFINE_WORDS;
+        helio_store_float(local_affines, local_base + 0u, r00 * sx);
+        helio_store_float(local_affines, local_base + 1u, r01 * sy);
+        helio_store_float(local_affines, local_base + 2u, r02 * sz);
+        helio_store_float(local_affines, local_base + 3u, tx);
+        helio_store_float(local_affines, local_base + 4u, r10 * sx);
+        helio_store_float(local_affines, local_base + 5u, r11 * sy);
+        helio_store_float(local_affines, local_base + 6u, r12 * sz);
+        helio_store_float(local_affines, local_base + 7u, ty);
+        helio_store_float(local_affines, local_base + 8u, r20 * sx);
+        helio_store_float(local_affines, local_base + 9u, r21 * sy);
+        helio_store_float(local_affines, local_base + 10u, r22 * sz);
+        helio_store_float(local_affines, local_base + 11u, tz);
+        return;
+    }
+    if (mode == HELIO_MODE_RESOLVE_HIERARCHY) {
+        if (item >= dirty_world_count || hierarchy_node_count == 0u
+            || hierarchy_max_depth == 0u) {
+            return;
+        }
+        uint leaf = dirty_world_nodes[item];
+        if (leaf >= hierarchy_node_count) {
+            return;
+        }
+
+        float accumulated[HELIO_AFFINE_WORDS] = {
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+        };
+        uint node = leaf;
+        bool reached_root = false;
+        for (uint depth = 0u; depth < hierarchy_max_depth; ++depth) {
+            float local_matrix[HELIO_AFFINE_WORDS];
+            float composed[HELIO_AFFINE_WORDS];
+            if (!helio_load_affine(
+                    local_affines, node, hierarchy_node_count, local_matrix)) {
+                return;
+            }
+            helio_affine_multiply(local_matrix, accumulated, composed);
+            for (uint word = 0u; word < HELIO_AFFINE_WORDS; ++word) {
+                accumulated[word] = composed[word];
+            }
+
+            uint parent = hierarchy_nodes[node * HELIO_HIERARCHY_NODE_WORDS + 0u];
+            if (parent == HELIO_HIERARCHY_ROOT) {
+                reached_root = true;
+                break;
+            }
+            if (parent >= hierarchy_node_count) {
+                return;
+            }
+            node = parent;
+        }
+        if (!reached_root) {
+            return;
+        }
+
+        uint world = leaf * HELIO_AFFINE_WORDS;
+        for (uint word = 0u; word < HELIO_AFFINE_WORDS; ++word) {
+            helio_store_float(world_affines, world + word, accumulated[word]);
+        }
+        return;
+    }
+
+    bool hierarchy_emit = mode == HELIO_MODE_EMIT_HIERARCHY
+        || mode == HELIO_MODE_EMIT_HIERARCHY_EXPANDED;
+    if (hierarchy_emit) {
+        if (item >= dirty_row_count || hierarchy_node_count == 0u) {
+            return;
+        }
+
+        uint row = dirty_rows[item];
+        if (row >= row_count) {
+            return;
+        }
+        uint src = row * HELIO_TRANSFORM_WORDS;
+        uint draw = transforms[src + 14u];
+        if (draw == HELIO_DISABLED_DRAW_GROUP || draw >= draw_count) {
+            return;
+        }
+        float local_radius = as_float(transforms[src + 10u]);
+        if (!isfinite(local_radius) || local_radius < 0.0f) {
+            return;
+        }
+        uint draw_src = draw * HELIO_DRAW_TEMPLATE_WORDS;
+        uint capacity = draw_templates[draw_src + 4u];
+        uint packed_slot_flags = transforms[src + 15u];
+        uint slot = packed_slot_flags >> 16;
+        if (slot >= capacity) {
+            return;
+        }
+        uint leaf = row_leaf_nodes[row];
+        if (leaf >= hierarchy_node_count) {
+            return;
+        }
+        uint world = leaf * HELIO_AFFINE_WORDS;
+        float m00 = as_float(world_affines[world + 0u]);
+        float m01 = as_float(world_affines[world + 1u]);
+        float m02 = as_float(world_affines[world + 2u]);
+        float tx = as_float(world_affines[world + 3u]);
+        float m10 = as_float(world_affines[world + 4u]);
+        float m11 = as_float(world_affines[world + 5u]);
+        float m12 = as_float(world_affines[world + 6u]);
+        float ty = as_float(world_affines[world + 7u]);
+        float m20 = as_float(world_affines[world + 8u]);
+        float m21 = as_float(world_affines[world + 9u]);
+        float m22 = as_float(world_affines[world + 10u]);
+        float tz = as_float(world_affines[world + 11u]);
+        if (!(isfinite(m00) && isfinite(m01) && isfinite(m02) && isfinite(tx)
+            && isfinite(m10) && isfinite(m11) && isfinite(m12) && isfinite(ty)
+            && isfinite(m20) && isfinite(m21) && isfinite(m22) && isfinite(tz))) {
+            return;
+        }
+
+        // Generic inverse-transpose.  Unlike the flat TRS fast path this also
+        // handles affine chains that naturally reduce to shear.
+        float c00 = m11 * m22 - m12 * m21;
+        float c01 = m12 * m20 - m10 * m22;
+        float c02 = m10 * m21 - m11 * m20;
+        float c10 = m02 * m21 - m01 * m22;
+        float c11 = m00 * m22 - m02 * m20;
+        float c12 = m01 * m20 - m00 * m21;
+        float c20 = m01 * m12 - m02 * m11;
+        float c21 = m02 * m10 - m00 * m12;
+        float c22 = m00 * m11 - m01 * m10;
+        float determinant = m00 * c00 + m01 * c01 + m02 * c02;
+        if (!isfinite(determinant) || fabs(determinant) <= 1.0e-12f) {
+            return;
+        }
+        float inverse_determinant = 1.0f / determinant;
+        uint dst = row * HELIO_INSTANCE_WORDS;
+
+        bool first_world = hierarchy_nodes[
+            leaf * HELIO_HIERARCHY_NODE_WORDS + 3u] <= 1u
+            || instances[dst + 51u] != 0xFFFFFFFFu;
+        // Preserve the preceding retained world transform for temporal use.
+        // The initial generation has no preceding value, so it is initialized
+        // to the just-resolved world below rather than an allocation remnant.
+        // The lightmap sentinel also recognizes a zeroed fresh instance even
+        // if its graph generation advanced twice before the first submission.
+        if (!first_world) {
+            for (uint word = 0u; word < 16u; ++word) {
+                instances[dst + 32u + word] = instances[dst + word];
+            }
+        }
+        helio_store_float(instances, dst + 0u, m00);
+        helio_store_float(instances, dst + 1u, m10);
+        helio_store_float(instances, dst + 2u, m20);
+        helio_store_float(instances, dst + 3u, 0.0f);
+        helio_store_float(instances, dst + 4u, m01);
+        helio_store_float(instances, dst + 5u, m11);
+        helio_store_float(instances, dst + 6u, m21);
+        helio_store_float(instances, dst + 7u, 0.0f);
+        helio_store_float(instances, dst + 8u, m02);
+        helio_store_float(instances, dst + 9u, m12);
+        helio_store_float(instances, dst + 10u, m22);
+        helio_store_float(instances, dst + 11u, 0.0f);
+        helio_store_float(instances, dst + 12u, tx);
+        helio_store_float(instances, dst + 13u, ty);
+        helio_store_float(instances, dst + 14u, tz);
+        helio_store_float(instances, dst + 15u, 1.0f);
+        if (first_world) {
+            for (uint word = 0u; word < 16u; ++word) {
+                instances[dst + 32u + word] = instances[dst + word];
+            }
+        }
+
+        helio_store_float(instances, dst + 16u, c00 * inverse_determinant);
+        helio_store_float(instances, dst + 17u, c10 * inverse_determinant);
+        helio_store_float(instances, dst + 18u, c20 * inverse_determinant);
+        helio_store_float(instances, dst + 19u, 0.0f);
+        helio_store_float(instances, dst + 20u, c01 * inverse_determinant);
+        helio_store_float(instances, dst + 21u, c11 * inverse_determinant);
+        helio_store_float(instances, dst + 22u, c21 * inverse_determinant);
+        helio_store_float(instances, dst + 23u, 0.0f);
+        helio_store_float(instances, dst + 24u, c02 * inverse_determinant);
+        helio_store_float(instances, dst + 25u, c12 * inverse_determinant);
+        helio_store_float(instances, dst + 26u, c22 * inverse_determinant);
+        helio_store_float(instances, dst + 27u, 0.0f);
+
+        // Frobenius norm safely bounds the affine linear part for retained
+        // sphere culling, including shear.
+        float affine_norm = sqrt(
+            m00 * m00 + m01 * m01 + m02 * m02
+            + m10 * m10 + m11 * m11 + m12 * m12
+            + m20 * m20 + m21 * m21 + m22 * m22);
+        helio_store_float(instances, dst + 28u, tx);
+        helio_store_float(instances, dst + 29u, ty);
+        helio_store_float(instances, dst + 30u, tz);
+        helio_store_float(instances, dst + 31u, local_radius * affine_norm);
+
+        uint packed_mesh_material = draw_templates[draw_src + 5u];
+        instances[dst + 48u] = packed_mesh_material & 0xFFFFu;
+        instances[dst + 49u] = packed_mesh_material >> 16;
+        instances[dst + 50u] = packed_slot_flags & 0xFFFFu;
+        instances[dst + 51u] = 0xFFFFFFFFu;
+
+        uint first_instance = draw_templates[draw_src + 3u];
+        uint compacted_slot = first_instance + slot;
+        compacted_indices[compacted_slot] = row;
+
+        if (mode != HELIO_MODE_EMIT_HIERARCHY_EXPANDED) {
+            return;
+        }
+
+        uint vp = HELIO_CAMERA_VIEW_PROJ_WORD;
+        float vp00 = as_float(camera[vp + 0u]);
+        float vp10 = as_float(camera[vp + 1u]);
+        float vp20 = as_float(camera[vp + 2u]);
+        float vp30 = as_float(camera[vp + 3u]);
+        float vp01 = as_float(camera[vp + 4u]);
+        float vp11 = as_float(camera[vp + 5u]);
+        float vp21 = as_float(camera[vp + 6u]);
+        float vp31 = as_float(camera[vp + 7u]);
+        float vp02 = as_float(camera[vp + 8u]);
+        float vp12 = as_float(camera[vp + 9u]);
+        float vp22 = as_float(camera[vp + 10u]);
+        float vp32 = as_float(camera[vp + 11u]);
+        float vp03 = as_float(camera[vp + 12u]);
+        float vp13 = as_float(camera[vp + 13u]);
+        float vp23 = as_float(camera[vp + 14u]);
+        float vp33 = as_float(camera[vp + 15u]);
+        uint mesh = draw_templates[draw_src + 5u] & 0xFFFFu;
+        uint mesh_vertex = mesh * HELIO_VERTICES_PER_MESH;
+        uint expanded_vertex = compacted_slot * HELIO_VERTICES_PER_MESH;
+        for (uint vertex = 0u; vertex < HELIO_VERTICES_PER_MESH; ++vertex) {
+            uint source = (mesh_vertex + vertex) * HELIO_SOURCE_VERTEX_WORDS;
+            float lx = as_float(source_vertices[source + 0u]);
+            float ly = as_float(source_vertices[source + 1u]);
+            float lz = as_float(source_vertices[source + 2u]);
+            float wx = m00 * lx + m01 * ly + m02 * lz + tx;
+            float wy = m10 * lx + m11 * ly + m12 * lz + ty;
+            float wz = m20 * lx + m21 * ly + m22 * lz + tz;
+            float cx = vp00 * wx + vp01 * wy + vp02 * wz + vp03;
+            float cy = vp10 * wx + vp11 * wy + vp12 * wz + vp13;
+            float cz = vp20 * wx + vp21 * wy + vp22 * wz + vp23;
+            float cw = vp30 * wx + vp31 * wy + vp32 * wz + vp33;
+            uint output = (expanded_vertex + vertex) * HELIO_EXPANDED_POSITION_WORDS;
+            if (isfinite(cx) && isfinite(cy) && isfinite(cz) && isfinite(cw)
+                && cw > 1.0e-8f) {
+                float inverse_w = 1.0f / cw;
+                helio_store_float(expanded_positions, output + 0u, cx * inverse_w);
+                helio_store_float(expanded_positions, output + 1u, cy * inverse_w);
+                helio_store_float(expanded_positions, output + 2u, cz * inverse_w);
+            } else {
+                helio_store_float(expanded_positions, output + 0u, 2.0f);
+                helio_store_float(expanded_positions, output + 1u, 2.0f);
+                helio_store_float(expanded_positions, output + 2u, 0.999f);
+            }
+        }
+        return;
+    }
+
     bool expand_positions = mode == HELIO_MODE_TRANSFORM_EXPANDED;
     if ((mode != HELIO_MODE_TRANSFORM && !expand_positions) || item >= row_count) {
         return;

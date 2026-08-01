@@ -25,10 +25,20 @@ The output defaults to `simple-cube.trueos.intel.helio` and adds:
 - `intel-xe-lp/ps.simd8.bin`
 - `intel-xe-lp/ps.simd16.bin` when ANV emits it
 - `compiler/intel-xe-lp.json`
+- `scene/retained-transform-template-v1.bin`
 
 The tool validates the input/output HELIOA tables and CRCs, requires the
 expected captured SimpleCube entry points and layouts, rejects empty or
 unaligned ISA, and verifies every packaged SHA-256.
+
+Both the SimpleCube and Churn-only bake lanes emit the same canonical
+`SectionKind::Other` retained-transform template. It contains no pointers or
+GPU addresses: two authored constant identity operations are multiplied at
+build time into one row-major 3x4 identity root, followed at runtime by one
+dynamic child per render row (up to 4096 rows and a traversal depth of two).
+The 128-byte little-endian payload is an 80-byte header followed by the one
+48-byte affine; the exact header offsets are documented in
+`tools/helio-build/README.md`.
 
 This reaches genuine native gfx125 ISA, but it is not yet directly launchable
 by TRUEOS. The EU assembly makes the resource ABI concrete: VS reads the

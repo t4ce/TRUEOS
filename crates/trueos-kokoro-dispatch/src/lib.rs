@@ -14,7 +14,7 @@ pub use attributes::{
     ATTRIBUTE_ABI_VERSION, AttributeError, Attributes, ContractReason, decode, record_bytes,
 };
 pub use cpu::{
-    CpuDispatcher, CpuWorkspace, CpuWorkspaceRequirements, DispatchError,
+    CpuDispatchPlan, CpuDispatcher, CpuWorkspace, CpuWorkspaceRequirements, DispatchError,
     KOKORO_CPU_WORKSPACE_REQUIREMENTS, WorkspaceError, native_dispatch_requires_workspace,
     native_dispatch_supported,
 };

@@ -876,6 +876,112 @@ fn validate_triangle_native_draw_contract(
     Ok(())
 }
 
+#[cfg(test)]
+mod retained_native_matrix_draw_contract_tests {
+    use super::{
+        ChurnHardwareAdmission, TriangleDrawPrep, TriangleIndexBufferPrep,
+        TriangleNativeDrawContract, TriangleStorageBufferBinding, TriangleVertexFormat,
+        TriangleVfInstancingState, validate_triangle_native_draw_contract,
+    };
+
+    const CAMERA_GPU: u64 = 0x2000_0000;
+    const INSTANCES_GPU: u64 = 0x2100_0000;
+    const COMPACTED_GPU: u64 = 0x2200_0000;
+    const INDIRECT_GPU: u64 = 0x2300_0028;
+    const ROWS: u32 = 337;
+
+    fn native_contract() -> TriangleNativeDrawContract {
+        TriangleNativeDrawContract {
+            hardware_admission: ChurnHardwareAdmission::ValidatedProduction,
+            vs_storage_bindings: [
+                TriangleStorageBufferBinding {
+                    gpu_addr: CAMERA_GPU,
+                    byte_len: trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN as u32,
+                },
+                TriangleStorageBufferBinding {
+                    gpu_addr: INSTANCES_GPU,
+                    byte_len: ROWS
+                        * trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN as u32,
+                },
+                TriangleStorageBufferBinding {
+                    gpu_addr: COMPACTED_GPU,
+                    byte_len: ROWS * core::mem::size_of::<u32>() as u32,
+                },
+            ],
+            vf_sgvs_dw1: 0xE002_4002,
+            vf_sgvs_2_dw1: 0xB002_0002,
+            vf_sgvs_2_dw2: 3,
+            vf_component_packing: [0x0000_0A77, 0, 0, 0],
+            vf_instancing: core::array::from_fn(|element_index| TriangleVfInstancingState {
+                element_index: element_index as u8,
+                enabled: false,
+                step_rate: 0,
+            }),
+        }
+    }
+
+    fn native_draw(native: TriangleNativeDrawContract) -> TriangleDrawPrep {
+        TriangleDrawPrep {
+            vertex_count: 108,
+            vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
+            vertex_buffer_bytes: 108 * trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
+            vertex_format: TriangleVertexFormat::PosNormal,
+            vertex_gpu_addr: 0x2400_0000,
+            index_buffer: Some(TriangleIndexBufferPrep {
+                index_count: 108,
+                byte_len: 108 * core::mem::size_of::<u32>() as u32,
+                gpu_addr: 0x2500_0000,
+            }),
+            indirect_args_gpu_addr: Some(INDIRECT_GPU),
+            native: Some(native),
+            state_gpu_addr: 0x2600_0000,
+            rt_gpu_addr: 0x2700_0000,
+            rt_surface_format: 0,
+            rt_pitch: 4096,
+            target_w: 1024,
+            target_h: 768,
+        }
+    }
+
+    #[test]
+    fn gpu_authored_rows_feed_the_native_indexed_indirect_contract() {
+        let native = native_contract();
+        let draw = native_draw(native);
+        assert_eq!(
+            trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN,
+            208
+        );
+        assert_eq!(
+            trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN,
+            20
+        );
+        assert_eq!(draw.indirect_args_gpu_addr, Some(INDIRECT_GPU));
+        assert_eq!(draw.native.unwrap().vs_storage_bindings, native.vs_storage_bindings);
+        assert_eq!(
+            native.vs_storage_bindings.map(|binding| binding.gpu_addr),
+            [CAMERA_GPU, INSTANCES_GPU, COMPACTED_GPU]
+        );
+        assert_eq!(validate_triangle_native_draw_contract(draw, native), Ok(()));
+    }
+
+    #[test]
+    fn matrix_handoff_rejects_misaligned_instance_and_compaction_capacities() {
+        let mut native = native_contract();
+        native.vs_storage_bindings[1].byte_len -= 1;
+        assert_eq!(
+            validate_triangle_native_draw_contract(native_draw(native), native),
+            Err("probe-native-vf-contract")
+        );
+
+        let mut native = native_contract();
+        native.vs_storage_bindings[2].byte_len -= core::mem::size_of::<u32>() as u32;
+        assert_eq!(
+            validate_triangle_native_draw_contract(native_draw(native), native),
+            Err("probe-native-vf-contract")
+        );
+    }
+}
+
 fn encode_triangle_probe_batch(
     submit_name: &'static str,
     batch_dwords: &mut [u32],

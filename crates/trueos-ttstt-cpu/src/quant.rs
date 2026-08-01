@@ -97,16 +97,16 @@ pub fn quantize_linear_u8_with_parameters(
     }
 
     for (&value, quantized) in input.iter().zip(output.iter_mut()) {
-        let rounded = round_ties_even_small(value / quantization.scale)
-            + f32::from(quantization.zero_point);
+        let rounded =
+            round_ties_even_small(value / quantization.scale) + f32::from(quantization.zero_point);
         *quantized = rounded.clamp(0.0, 255.0) as u8;
     }
     Ok(())
 }
 
 pub(crate) fn quantize_value_u8(value: f32, quantization: DynamicQuantization) -> u8 {
-    let rounded = round_ties_even_small(value / quantization.scale)
-        + f32::from(quantization.zero_point);
+    let rounded =
+        round_ties_even_small(value / quantization.scale) + f32::from(quantization.zero_point);
     rounded.clamp(0.0, 255.0) as u8
 }
 

@@ -55,6 +55,35 @@ linking. It does not repeat the hosted Vulkan compilation on every OS build.
 Use the explicit build scripts when Helio, WGPU, a shader, or a captured ABI
 changes; a failed rebuild never replaces the last validated asset.
 
+Both artifacts carry
+`scene/retained-transform-template-v1.bin` as `SectionKind::Other`. This is a
+canonical, pointer-free retained graph seed: two authored identity transform
+operations have already been folded into one static root, and the runtime may
+instantiate one dynamic child of that root for every render row. The template
+caps the expansion at 4096 rows (4097 nodes including the root) and traversal
+at two nodes.
+
+The section is exactly 128 bytes, little-endian:
+
+| Offset | Bytes | Field |
+| ---: | ---: | --- |
+| 0 | 8 | magic `HRTXFM\0\0` |
+| 8 | 2 | version (`1`) |
+| 10 | 2 | header bytes (`80`) |
+| 12 | 4 | total bytes (`128`) |
+| 16 | 4 | flags (`0x0f`: pointer-free, row-major affine 3x4, dynamic child per row, constant run folded) |
+| 20 | 4 | affine stride (`48`) |
+| 24 | 4 | root-affine offset (`80`) |
+| 28 | 4 | root-affine count (`1`) |
+| 32 | 16 | fold report: authored constant ops (`2`), constant runs (`1`), emitted affines (`1`), removed ops (`1`) |
+| 48 | 20 | row template: children per row (`1`), max rows (`4096`), max nodes (`4097`), traversal depth (`2`), root index (`0`) |
+| 68 | 8 | dynamic parent index (`0`) and binding kind (`1`, render-row index) |
+| 76 | 4 | reserved zero |
+| 80 | 48 | folded root, 12 IEEE-754 `f32` values in row-major 3x4 identity order |
+
+The validator checks every header/report field, the reserved word, the full
+identity payload, container kind, length, and CRC on both program paths.
+
 The artifact also carries Helio's versioned churn contracts. Helio example 2
 uses `scene/churn-v1.bin` for geometry and animation plus
 `scene/churn-light-v1.bin` for the original ambient, two point lights, and four

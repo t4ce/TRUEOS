@@ -875,6 +875,32 @@ fn binary_elementwise(
                 contiguous_output(output, output_layout, elements).ok_or(Error::BufferTooSmall)?;
             return avx2::binary_rhs_scalar(operation, lhs, rhs, output);
         }
+        if rhs_layout.is_contiguous()
+            && lhs_layout.shape == expected
+            && lhs_layout.is_contiguous()
+            && let Some(row_elements) = trailing_scalar_rows(rhs_layout.shape, expected)
+        {
+            let lhs = contiguous_input(lhs, lhs_layout, elements).ok_or(Error::BufferTooSmall)?;
+            let rhs_elements = rhs_layout.shape.element_count();
+            let rhs =
+                contiguous_input(rhs, rhs_layout, rhs_elements).ok_or(Error::BufferTooSmall)?;
+            let output =
+                contiguous_output(output, output_layout, elements).ok_or(Error::BufferTooSmall)?;
+            return avx2::binary_rhs_row_scalar(operation, lhs, rhs, row_elements, output);
+        }
+        if lhs_layout.is_contiguous()
+            && rhs_layout.shape == expected
+            && rhs_layout.is_contiguous()
+            && let Some(row_elements) = trailing_scalar_rows(lhs_layout.shape, expected)
+        {
+            let lhs_elements = lhs_layout.shape.element_count();
+            let lhs =
+                contiguous_input(lhs, lhs_layout, lhs_elements).ok_or(Error::BufferTooSmall)?;
+            let rhs = contiguous_input(rhs, rhs_layout, elements).ok_or(Error::BufferTooSmall)?;
+            let output =
+                contiguous_output(output, output_layout, elements).ok_or(Error::BufferTooSmall)?;
+            return avx2::binary_lhs_row_scalar(operation, lhs, rhs, row_elements, output);
+        }
     }
 
     let mut coordinates = [0usize; MAX_RANK];
@@ -900,6 +926,21 @@ fn binary_elementwise(
         output[output_offset] = operation.apply(lhs[lhs_offset], rhs[rhs_offset]);
     }
     Ok(())
+}
+
+fn trailing_scalar_rows(input: Shape, output: Shape) -> Option<usize> {
+    let rank = output.rank();
+    if rank == 0 || input.rank() != rank {
+        return None;
+    }
+    let last = rank - 1;
+    if input.dims[last] != 1 || output.dims[last] <= 1 {
+        return None;
+    }
+    if input.dims[..last] != output.dims[..last] {
+        return None;
+    }
+    Some(output.dims[last])
 }
 
 fn contiguous_input(data: &[f32], layout: TensorLayout, elements: usize) -> Option<&[f32]> {
@@ -1647,6 +1688,93 @@ mod tests {
                     "scalar-broadcast {name} lhs_is_scalar={lhs_is_scalar}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn avx2_trailing_scalar_rows_are_bit_exact_and_transactional() {
+        if !ElementwiseLane::Avx2.is_available() {
+            return;
+        }
+        let dense_shape = Shape::new(&[2, 3, 17]).unwrap();
+        let row_shape = Shape::new(&[2, 3, 1]).unwrap();
+        let dense_layout = TensorLayout::contiguous(dense_shape);
+        let row_layout = TensorLayout::contiguous(row_shape);
+        let dense_pattern = [
+            0.0001_f32, -0.0001, 0.03125, -0.0625, 0.125, -3.75, 1024.0, -0.25, 2.0,
+        ];
+        let dense: Vec<_> = (0..dense_shape.element_count())
+            .map(|index| dense_pattern[index % dense_pattern.len()])
+            .collect();
+        let rows = [0.5_f32, -0.75, 2.0, -3.0, 0.25, -8.0];
+
+        for (name, kernel) in BINARY_LANE_KERNELS {
+            for lhs_is_row_scalar in [true, false] {
+                let (lhs, lhs_layout, rhs, rhs_layout) = if lhs_is_row_scalar {
+                    (&rows[..], row_layout, &dense[..], dense_layout)
+                } else {
+                    (&dense[..], dense_layout, &rows[..], row_layout)
+                };
+                let mut scalar = vec![f32::NAN; dense_shape.element_count()];
+                let mut vector = vec![f32::NAN; dense_shape.element_count()];
+                kernel(
+                    ElementwiseLane::Scalar,
+                    lhs,
+                    lhs_layout,
+                    rhs,
+                    rhs_layout,
+                    &mut scalar,
+                    dense_layout,
+                )
+                .unwrap();
+                kernel(
+                    ElementwiseLane::Avx2,
+                    lhs,
+                    lhs_layout,
+                    rhs,
+                    rhs_layout,
+                    &mut vector,
+                    dense_layout,
+                )
+                .unwrap();
+                assert_eq!(
+                    vector
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>(),
+                    scalar
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>(),
+                    "trailing-row broadcast {name} lhs_is_row_scalar={lhs_is_row_scalar}"
+                );
+            }
+        }
+
+        for lhs_is_row_scalar in [true, false] {
+            let mut invalid_rows = rows;
+            invalid_rows[5] = f32::MAX;
+            let mut invalid_dense = dense.clone();
+            invalid_dense[5 * 17 + 11] = f32::MAX;
+            let (lhs, lhs_layout, rhs, rhs_layout) = if lhs_is_row_scalar {
+                (&invalid_rows[..], row_layout, &invalid_dense[..], dense_layout)
+            } else {
+                (&invalid_dense[..], dense_layout, &invalid_rows[..], row_layout)
+            };
+            let mut output = vec![77.0_f32; dense_shape.element_count()];
+            assert_eq!(
+                add_on_lane(
+                    ElementwiseLane::Avx2,
+                    lhs,
+                    lhs_layout,
+                    rhs,
+                    rhs_layout,
+                    &mut output,
+                    dense_layout,
+                ),
+                Err(Error::NonFiniteOutput)
+            );
+            assert_eq!(output, vec![77.0; dense_shape.element_count()]);
         }
     }
 

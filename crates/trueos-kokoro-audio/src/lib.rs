@@ -13,6 +13,10 @@ pub const TRUEOS_SAMPLE_RATE_HZ: u32 = 48_000;
 pub const TRUEOS_CHANNELS: usize = 2;
 pub const CHUNK_CROSSFADE_SAMPLES_24K: usize = 240;
 pub const CHUNK_CROSSFADE_FRAMES_48K: usize = CHUNK_CROSSFADE_SAMPLES_24K * 2;
+/// Smooth the start of a request over 10 ms without changing the retained
+/// native waveform. Kokoro can emit an isolated onset impulse before speech;
+/// applying this only to presentation PCM keeps raw-model parity inspectable.
+pub const STREAM_FADE_IN_FRAMES_48K: usize = 480;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -91,6 +95,36 @@ pub fn convert_frame_range(
         stereo[1] = sample;
     }
     Ok(frame_count)
+}
+
+/// Apply the request-level 10 ms fade to one independently emitted PCM range.
+///
+/// `frame_start` is relative to the beginning of the request, not the current
+/// PCM buffer. A smoothstep envelope strongly attenuates sub-millisecond
+/// decoder settlement while reaching unity before ordinary speech begins.
+/// Calling this for arbitrary consecutive ranges produces the same result as
+/// calling it once for their concatenation.
+pub fn fade_in_frame_range(frame_start: usize, stereo: &mut [i16]) -> Result<(), Error> {
+    if !stereo.len().is_multiple_of(TRUEOS_CHANNELS) {
+        return Err(Error::OutputNotStereo);
+    }
+    let (frames, remainder) = stereo.as_chunks_mut::<TRUEOS_CHANNELS>();
+    debug_assert!(remainder.is_empty());
+    frame_start
+        .checked_add(frames.len())
+        .ok_or(Error::FrameRangeOutOfBounds)?;
+    for (local_frame, channels) in frames.iter_mut().enumerate() {
+        let frame = frame_start + local_frame;
+        if frame >= STREAM_FADE_IN_FRAMES_48K {
+            break;
+        }
+        let x = frame as f32 / (STREAM_FADE_IN_FRAMES_48K - 1) as f32;
+        let gain = x * x * (3.0 - 2.0 * x);
+        for sample in channels {
+            *sample = (*sample as f32 * gain) as i16;
+        }
+    }
+    Ok(())
 }
 
 /// Blend equal-size retained and incoming 24 kHz boundaries.
@@ -179,6 +213,22 @@ mod tests {
         convert_frame_range(&input, 3, &mut assembled[6..14]).unwrap();
         convert_frame_range(&input, 7, &mut assembled[14..]).unwrap();
         assert_eq!(assembled.as_slice(), whole.as_slice());
+    }
+
+    #[test]
+    fn request_fade_is_chunk_boundary_independent() {
+        let mut whole = vec![12_000_i16; (STREAM_FADE_IN_FRAMES_48K + 2) * TRUEOS_CHANNELS];
+        fade_in_frame_range(0, &mut whole).unwrap();
+
+        let split_frame = 137;
+        let mut chunked = vec![12_000_i16; whole.len()];
+        let split_sample = split_frame * TRUEOS_CHANNELS;
+        fade_in_frame_range(0, &mut chunked[..split_sample]).unwrap();
+        fade_in_frame_range(split_frame, &mut chunked[split_sample..]).unwrap();
+        assert_eq!(chunked, whole);
+        assert_eq!(&whole[..TRUEOS_CHANNELS], &[0, 0]);
+        let unity = STREAM_FADE_IN_FRAMES_48K * TRUEOS_CHANNELS;
+        assert_eq!(&whole[unity..unity + TRUEOS_CHANNELS], &[12_000, 12_000]);
     }
 
     #[test]

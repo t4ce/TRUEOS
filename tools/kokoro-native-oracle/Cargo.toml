@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 sha2 = { version = "0.10.9", default-features = false }
+trueos-kokoro-audio = { path = "../../crates/trueos-kokoro-audio" }
 trueos-kokoro-aot = { path = "../../crates/trueos-kokoro-aot" }
 trueos-kokoro-dispatch = { path = "../../crates/trueos-kokoro-dispatch" }
 trueos-kokoro-exec = { path = "../../crates/trueos-kokoro-exec" }

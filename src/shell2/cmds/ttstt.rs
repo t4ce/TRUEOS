@@ -207,12 +207,36 @@ pub(crate) fn try_parse_tts(
         return ParseOutcome::Handled;
     };
     TTS_SHELL_QUEUE_WAIT.notify_one();
+    let capture_report = capture.as_ref().map_or_else(
+        || {
+            let capture_status = crate::r::ttstt_capture::status();
+            alloc::format!(
+                "capture_mode=none recent_remaining={} physical_budget=3-per-arm",
+                capture_status.recent_claims_remaining,
+            )
+        },
+        |capture| {
+            let recent_budget = capture.recent_claims_remaining().map_or_else(
+                || String::from("unchanged"),
+                |remaining| alloc::format!("{}", remaining),
+            );
+            alloc::format!(
+                "capture_mode={} capture_sequence={} capture_slot={} recent_remaining={} physical_budget=3-per-arm capture_metadata={}",
+                capture.mode_name(),
+                capture.sequence(),
+                capture.slot(),
+                recent_budget,
+                capture.metadata_path(),
+            )
+        },
+    );
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "tts: queued request={request_id} waiting={depth}/{TTS_SHELL_QUEUE_DEPTH} voice={voice} speed={speed:.2} model_chunk_max_phonemes={} pcm_chunk_max_frames={}",
+            "tts: queued request={request_id} waiting={depth}/{TTS_SHELL_QUEUE_DEPTH} voice={voice} speed={speed:.2} model_chunk_max_phonemes={} pcm_chunk_max_frames={} {}",
             crate::r::ttstt_service::KOKORO_MAX_PHONEMES,
             crate::r::ttstt_service::TTS_PCM_CHUNK_MAX_FRAMES,
+            capture_report,
         )
         .as_str(),
     );
@@ -322,11 +346,52 @@ fn handle_tts_capture_command(io: &'static dyn ShellBackend2, argument: &str) {
         print_shell_line(
             io,
             if armed {
-                "tts: capture armed mode=next max_seconds=30 outputs=mono24-f32+stereo48-s16+metadata"
+                "tts: capture armed mode=next precedence=over-recent one_shot_consumes_recent_budget=0 physical_budget=3-per-arm max_seconds=30 outputs=mono24-f32+stereo48-s16+metadata retention=rolling-3"
             } else {
-                "tts: capture already armed mode=next"
+                "tts: capture not armed mode=next reason=already-armed-or-capture-active-or-writer-busy"
             },
         );
+        return;
+    }
+    let mut capture_args = argument.split_whitespace();
+    if capture_args
+        .next()
+        .is_some_and(|command| command.eq_ignore_ascii_case("recent"))
+    {
+        let action = capture_args.next().unwrap_or_default();
+        if capture_args.next().is_some() {
+            print_shell_line(io, "tts: capture usage `tts capture recent on|off|status`");
+            return;
+        }
+        if action.eq_ignore_ascii_case("on") {
+            let previous_remaining = crate::r::ttstt_capture::arm_recent();
+            print_shell_line(
+                io,
+                alloc::format!(
+                    "tts: capture recent enabled=1 rearmed=1 previous_remaining={} remaining=3 physical_budget=3-per-arm auto_disable=after-third-claim active_capture=unaffected slots=3 retention=rolling-3 bases=trueosfs:/audio/tts-recent-s0,trueosfs:/audio/tts-recent-s1,trueosfs:/audio/tts-recent-s2",
+                    previous_remaining,
+                )
+                .as_str(),
+            );
+            return;
+        }
+        if action.eq_ignore_ascii_case("off") {
+            let previous_remaining = crate::r::ttstt_capture::disable_recent();
+            print_shell_line(
+                io,
+                alloc::format!(
+                    "tts: capture recent enabled=0 previous_remaining={} remaining=0 physical_budget=3-per-arm active_capture=unaffected stored_bundles=retained",
+                    previous_remaining,
+                )
+                .as_str(),
+            );
+            return;
+        }
+        if action.is_empty() || action.eq_ignore_ascii_case("status") {
+            print_tts_capture_status(io);
+            return;
+        }
+        print_shell_line(io, "tts: capture usage `tts capture recent on|off|status`");
         return;
     }
     if argument.eq_ignore_ascii_case("off") {
@@ -342,26 +407,37 @@ fn handle_tts_capture_command(io: &'static dyn ShellBackend2, argument: &str) {
         return;
     }
     if argument.is_empty() || argument.eq_ignore_ascii_case("status") {
-        let status = crate::r::ttstt_capture::status();
-        print_shell_line(
-            io,
-            alloc::format!(
-                "tts: capture armed={} writer_online={} busy={} queued={} queued_total={} written={} failed={} dropped={} last_sequence={} mode=one-shot max_seconds=30",
-                status.armed as u8,
-                status.writer_online as u8,
-                status.busy as u8,
-                status.queued,
-                status.captures_queued,
-                status.captures_written,
-                status.captures_failed,
-                status.captures_dropped,
-                status.last_sequence,
-            )
-            .as_str(),
-        );
+        print_tts_capture_status(io);
         return;
     }
-    print_shell_line(io, "tts: capture usage `tts capture next|off|status`");
+    print_shell_line(
+        io,
+        "tts: capture usage `tts capture next|off|status` | `tts capture recent on|off|status`",
+    );
+}
+
+fn print_tts_capture_status(io: &'static dyn ShellBackend2) {
+    let status = crate::r::ttstt_capture::status();
+    print_shell_line(
+        io,
+        alloc::format!(
+            "tts: capture recent_enabled={} recent_remaining={} physical_budget=3-per-arm auto_disable=after-third-claim rearm=`tts capture recent on` one_shot_armed={} one_shot_consumes_recent_budget=0 active={} writer_online={} writer_busy={} queued={} queued_total={} written={} failed={} dropped={} skipped={} last_sequence={} max_seconds=30 queue_cap=1 slots=3 retention=rolling-3 bases=trueosfs:/audio/tts-recent-s0,trueosfs:/audio/tts-recent-s1,trueosfs:/audio/tts-recent-s2 artifacts=BASE-metadata.txt+BASE-pcm-s16-stereo-48k.wav+BASE-raw-oNNN-f32-mono-24k.wav",
+            status.recent_enabled as u8,
+            status.recent_claims_remaining,
+            status.armed as u8,
+            status.active as u8,
+            status.writer_online as u8,
+            status.busy as u8,
+            status.queued as u8,
+            status.captures_queued,
+            status.captures_written,
+            status.captures_failed,
+            status.captures_dropped,
+            status.captures_skipped,
+            status.last_sequence,
+        )
+        .as_str(),
+    );
 }
 
 fn cancel_waiting_tts() -> usize {
@@ -1186,7 +1262,7 @@ fn request_error(error: SpeechRequestError) -> String {
 fn tts_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "tts: usage `tts [voice=NAME] [speed=0.5..2.0] <text|\"quoted text\">` | `tts status` | `tts stop` | `tts capture next|off|status`; waiting_queue=8 serialized/asynchronous, model_chunk=510 phonemes after G2P, pcm=s16le/stereo/48k via live pcm_lane",
+        "tts: usage `tts [voice=NAME] [speed=0.5..2.0] <text|\"quoted text\">` | `tts status` | `tts stop` | `tts capture next|off|status` | `tts capture recent on|off|status`; waiting_queue=8 serialized/asynchronous, recent_capture=3-claims-per-boot-or-rearm, physical_budget=3-per-arm, recent_auto_disables_after_third_claim=1, one_shot_budget=independent, model_chunk=510 phonemes after G2P, pcm=s16le/stereo/48k via live pcm_lane",
     );
 }
 

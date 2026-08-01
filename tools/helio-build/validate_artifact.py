@@ -23,6 +23,11 @@ CHURN_FORWARD_PS = "intel-xe-lp/churn-forward.ps.simd8.bin"
 CHURN_LIGHT_SECTION = "scene/churn-light-v1.bin"
 BATTLE_SECTION = "scene/shape-battle-v1.bin"
 BIGCLOTH_SECTION = "scene/pendulum-bigcloth-v1.bin"
+RETAINED_TRANSFORM_SECTION = "scene/retained-transform-template-v1.bin"
+RETAINED_TRANSFORM_MAGIC = b"HRTXFM\0\0"
+RETAINED_TRANSFORM_HEADER_BYTES = 80
+RETAINED_TRANSFORM_BYTES = 128
+RETAINED_TRANSFORM_FLAGS = 0xF
 
 
 def fail(message: str) -> "None":
@@ -199,6 +204,74 @@ def validate_churn_light_only(sections: dict[str, tuple[int, bytes]]) -> None:
     )
     if light != bytes(expected):
         fail("churn-light payload changed")
+
+
+def validate_retained_transform_template(
+    sections: dict[str, tuple[int, bytes]],
+) -> None:
+    """Validate the complete pointer-free build-time affine fold contract."""
+    data = section(sections, RETAINED_TRANSFORM_SECTION, 0xFFFF)
+    if len(data) != RETAINED_TRANSFORM_BYTES or data[:8] != RETAINED_TRANSFORM_MAGIC:
+        fail("bad retained-transform template header")
+
+    version, header_bytes, *fields = struct.unpack_from("<HH17I", data, 8)
+    (
+        total_bytes,
+        flags,
+        affine_stride,
+        root_affine_offset,
+        root_affine_count,
+        authored_constant_ops,
+        constant_runs,
+        emitted_constant_affines,
+        folded_constant_ops,
+        dynamic_children_per_row,
+        max_render_rows,
+        max_runtime_nodes,
+        traversal_depth,
+        root_node_index,
+        dynamic_parent_node_index,
+        dynamic_binding_kind,
+        reserved,
+    ) = fields
+    if (version, header_bytes, total_bytes) != (
+        1, RETAINED_TRANSFORM_HEADER_BYTES, RETAINED_TRANSFORM_BYTES,
+    ):
+        fail("unsupported retained-transform template version")
+    if flags != RETAINED_TRANSFORM_FLAGS:
+        fail("retained-transform pointer-free/fold/template flags changed")
+    if (affine_stride, root_affine_offset, root_affine_count) != (48, 80, 1):
+        fail("retained-transform root-affine layout changed")
+    if (
+        authored_constant_ops,
+        constant_runs,
+        emitted_constant_affines,
+        folded_constant_ops,
+    ) != (2, 1, 1, 1):
+        fail("retained-transform constant-fold report changed")
+    if (
+        dynamic_children_per_row,
+        max_render_rows,
+        max_runtime_nodes,
+        traversal_depth,
+    ) != (1, 4096, 4097, 2):
+        fail("retained-transform dynamic-row template changed")
+    if (
+        root_node_index,
+        dynamic_parent_node_index,
+        dynamic_binding_kind,
+        reserved,
+    ) != (0, 0, 1, 0):
+        fail("retained-transform node/binding declaration changed")
+
+    expected_identity = struct.pack(
+        "<12f",
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+    )
+    if data[root_affine_offset:] != expected_identity:
+        fail("retained-transform folded root is not row-major 3x4 identity")
 
 
 def ir_long(ir: bytes, offset_at: int, size_at: int) -> bytes:
@@ -510,6 +583,7 @@ def main() -> None:
         validate_churn_forward(sections)
         validate_churn_scene(sections)
         validate_churn_light_only(sections)
+        validate_retained_transform_template(sections)
         print(f"validated {path} ({len(data)} bytes, {len(sections)} sections)")
         return
 
@@ -520,6 +594,7 @@ def main() -> None:
     validate_native(sections)
     validate_churn_forward(sections)
     validate_scene_contracts(sections)
+    validate_retained_transform_template(sections)
     print(f"validated {path} ({len(data)} bytes, {len(sections)} sections)")
 
 

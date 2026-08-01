@@ -291,15 +291,72 @@ fn resident_helio_transform_artifact()
 /// Persistent GPU resources for the artifact-native Churn forward pass.
 ///
 /// Geometry and shader bytes are immutable after this cold-path owner is
-/// created. The CPU-expanded instance/compacted/indirect buffers remain the
-/// baseline native path. Retained-transform resources are an optional
-/// acceleration bundle so artifact admission, mapping, or allocation failure
-/// cannot make the artifact-native VS/PS path unavailable.
+/// created. The instance/compacted/indirect buffers have one stable native
+/// graphics ABI whether their producer is the CPU fallback or the retained GPU
+/// transformer. Retained-transform resources are optional so artifact
+/// admission, mapping, or allocation failure cannot make the artifact-native
+/// VS/PS path unavailable.
 struct ResidentChurnTransform {
     seeds: ResidentRenderBuffer,
     draw_templates: ResidentRenderBuffer,
+    hierarchy: ResidentChurnHierarchy,
     artifact: crate::intel::gpgpu::GpgpuHelioRetainedTransformArtifactMapping,
     row_count: AtomicU32,
+}
+
+/// Stable render-PPGTT storage for one compiled retained affine graph.
+/// Immutable node/binding tables and mutable affine/worklist buffers share the
+/// lifetime of the owning Helio scene; ordinary frames only update dirty byte
+/// ranges and publish new counts.
+struct ResidentChurnHierarchy {
+    nodes: ResidentRenderBuffer,
+    dynamic_bindings: ResidentRenderBuffer,
+    local_affines: ResidentRenderBuffer,
+    world_affines: ResidentRenderBuffer,
+    dirty_local_nodes: ResidentRenderBuffer,
+    dirty_world_nodes: ResidentRenderBuffer,
+    dirty_rows: ResidentRenderBuffer,
+    row_leaf_nodes: ResidentRenderBuffer,
+    node_capacity: usize,
+    node_count: AtomicU32,
+    dirty_local_count: AtomicU32,
+    dirty_world_count: AtomicU32,
+    dirty_row_count: AtomicU32,
+    max_depth: AtomicU32,
+}
+
+/// Graphics consumer selected for one retained-transform dispatch.
+///
+/// Both variants are entirely GPU-resident. `NativeMatrices` consumes the
+/// transformer's 208-byte instance rows, compacted indices, and exact WGPU
+/// indirect records through the authenticated Helio artifact VS. The expanded
+/// variant remains a physically proven fallback while the native handoff is
+/// being admitted on each device.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum RetainedGraphicsHandoff {
+    NativeMatrices,
+    ExpandedPositions,
+}
+
+impl RetainedGraphicsHandoff {
+    const fn uses_native_matrices(self) -> bool {
+        matches!(self, Self::NativeMatrices)
+    }
+}
+
+impl From<crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput>
+    for RetainedGraphicsHandoff
+{
+    fn from(output: crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput) -> Self {
+        match output {
+            crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput::InstanceMatrices => {
+                Self::NativeMatrices
+            }
+            crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput::ExpandedPositions => {
+                Self::ExpandedPositions
+            }
+        }
+    }
 }
 
 pub(crate) struct ResidentChurnForward {
@@ -405,6 +462,61 @@ impl ResidentChurnForward {
         row_count: u32,
     ) -> Option<crate::intel::gpgpu::GpgpuHelioRetainedTransformDispatch> {
         let transform = self.transform.as_ref()?;
+        let hierarchy = &transform.hierarchy;
+        let node_count = hierarchy.node_count.load(Ordering::Acquire);
+        let hierarchy = (node_count != 0).then(|| {
+            crate::intel::gpgpu::GpgpuHelioRetainedHierarchyDispatch {
+                nodes: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                    hierarchy.nodes.gpu_base(),
+                    hierarchy.nodes.storage_bytes(),
+                ),
+                dynamic_bindings: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                    hierarchy.dynamic_bindings.gpu_base(),
+                    hierarchy.dynamic_bindings.storage_bytes(),
+                ),
+                local_affines: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                    hierarchy.local_affines.gpu_base(),
+                    hierarchy.local_affines.storage_bytes(),
+                ),
+                world_affines: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                    hierarchy.world_affines.gpu_base(),
+                    hierarchy.world_affines.storage_bytes(),
+                ),
+                dirty_local_nodes: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                    hierarchy.dirty_local_nodes.gpu_base(),
+                    hierarchy.dirty_local_nodes.storage_bytes(),
+                ),
+                dirty_world_nodes: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                    hierarchy.dirty_world_nodes.gpu_base(),
+                    hierarchy.dirty_world_nodes.storage_bytes(),
+                ),
+                dirty_rows: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                    hierarchy.dirty_rows.gpu_base(),
+                    hierarchy.dirty_rows.storage_bytes(),
+                ),
+                row_leaf_nodes: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                    hierarchy.row_leaf_nodes.gpu_base(),
+                    hierarchy.row_leaf_nodes.storage_bytes(),
+                ),
+                node_count,
+                dirty_local_count: hierarchy.dirty_local_count.load(Ordering::Acquire),
+                dirty_world_count: hierarchy.dirty_world_count.load(Ordering::Acquire),
+                dirty_row_count: hierarchy.dirty_row_count.load(Ordering::Acquire),
+                max_depth: hierarchy.max_depth.load(Ordering::Acquire),
+            }
+        });
+        self.transform_dispatch_for_rows_with_hierarchy(row_count, hierarchy)
+    }
+
+    pub(crate) fn transform_dispatch_for_rows_with_hierarchy(
+        &self,
+        row_count: u32,
+        hierarchy: Option<crate::intel::gpgpu::GpgpuHelioRetainedHierarchyDispatch>,
+    ) -> Option<crate::intel::gpgpu::GpgpuHelioRetainedTransformDispatch> {
+        let transform = self.transform.as_ref()?;
+        let output = crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput::InstanceMatrices;
+        let expanded_output =
+            output == crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput::ExpandedPositions;
         Some(crate::intel::gpgpu::GpgpuHelioRetainedTransformDispatch {
             transforms: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
                 transform.seeds.gpu_base(),
@@ -426,14 +538,28 @@ impl ResidentChurnForward {
                 self.indirect_args.gpu_base(),
                 self.indirect_args.storage_bytes(),
             ),
-            camera: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
-                self.camera.gpu_base(),
-                self.camera.storage_bytes(),
-            ),
-            source_vertices: self.retained_geometry_vertices(),
-            expanded_positions: self.expanded_position_vertices(),
+            camera: if expanded_output {
+                crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                    self.camera.gpu_base(),
+                    self.camera.storage_bytes(),
+                )
+            } else {
+                crate::intel::gpgpu::GpgpuHelioBufferSlice::unused()
+            },
+            source_vertices: if expanded_output {
+                self.retained_geometry_vertices()
+            } else {
+                crate::intel::gpgpu::GpgpuHelioBufferSlice::unused()
+            },
+            expanded_positions: if expanded_output {
+                self.expanded_position_vertices()
+            } else {
+                crate::intel::gpgpu::GpgpuHelioBufferSlice::unused()
+            },
             row_count,
             draw_count: trueos_helio_runtime::churn::DRAW_GROUP_COUNT as u32,
+            output,
+            hierarchy,
         })
     }
 
