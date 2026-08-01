@@ -84,6 +84,39 @@ struct TriangleIndexBufferPrep {
 enum TriangleVertexFormat {
     Float2,
     Float3,
+    /// Helio Churn's immutable `@location(0) position` plus
+    /// `@location(1) normal` input, both Float32x3.
+    PosNormal,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct TriangleStorageBufferBinding {
+    gpu_addr: u64,
+    byte_len: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct TriangleVfInstancingState {
+    element_index: u8,
+    enabled: bool,
+    step_rate: u32,
+}
+
+/// Descriptor-authenticated compiler/fixed-function handoff for Helio's
+/// `@builtin(instance_index)` vertex input.
+///
+/// This is deliberately carried by each native draw instead of inferred from
+/// WGSL. A mismatched synthetic vertex element or SGVS slot can execute valid
+/// ISA with the wrong instance record, so absence of this contract keeps the
+/// native path cold rather than falling through to 3DPRIMITIVE.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct TriangleNativeDrawContract {
+    vs_storage_bindings: [TriangleStorageBufferBinding; 3],
+    vf_sgvs_dw1: u32,
+    vf_sgvs_2_dw1: u32,
+    vf_sgvs_2_dw2: u32,
+    vf_component_packing: [u32; 4],
+    vf_instancing: [TriangleVfInstancingState; 3],
 }
 
 #[derive(Copy, Clone)]
@@ -96,6 +129,8 @@ struct TriangleDrawPrep {
     index_buffer: Option<TriangleIndexBufferPrep>,
     /// GPU address of one Helio/WGPU DrawIndexedIndirectArgs record.
     indirect_args_gpu_addr: Option<u64>,
+    /// Present only after a complete artifact/native ABI validation.
+    native: Option<TriangleNativeDrawContract>,
     state_gpu_addr: u64,
     rt_gpu_addr: u64,
     rt_surface_format: u32,
@@ -202,8 +237,58 @@ impl ResidentRenderBuffer {
         true
     }
 
+    /// Update and publish one bounded range without flushing untouched
+    /// resident data. This matches Helio's dirty instance-buffer contract.
+    pub(crate) fn write_and_flush(&self, offset: usize, bytes: &[u8]) -> bool {
+        if !self.write(offset, bytes) {
+            return false;
+        }
+        if !bytes.is_empty() {
+            unsafe {
+                crate::intel::dma_flush(self.storage_virt.add(offset), bytes.len());
+            }
+        }
+        true
+    }
+
     pub(crate) fn flush(&self) {
         crate::intel::dma_flush(self.storage_virt, self.storage_bytes);
+    }
+}
+
+/// Persistent GPU resources for the artifact-native Churn forward pass.
+///
+/// Geometry and shader bytes are immutable after this cold-path owner is
+/// created. Frame updates touch only camera, dirty instance records, compacted
+/// indices and the twelve tightly packed indexed-indirect records.
+pub(crate) struct ResidentChurnForward {
+    geometry: ResidentRenderBuffer,
+    camera: ResidentRenderBuffer,
+    instances: ResidentRenderBuffer,
+    compacted_indices: ResidentRenderBuffer,
+    indirect_args: ResidentRenderBuffer,
+    pipeline: crate::intel::shader::TrianglePipeline,
+    native_vf: TriangleNativeDrawContract,
+    front_end_contract: TriangleFrontEndContract,
+    vertex_gpu_addr: u64,
+    vertex_count: u32,
+    vertex_bytes: u32,
+    index_gpu_addr: u64,
+    index_count: u32,
+    index_bytes: u32,
+    max_instances: usize,
+}
+
+unsafe impl Send for ResidentChurnForward {}
+unsafe impl Sync for ResidentChurnForward {}
+
+impl ResidentChurnForward {
+    pub(crate) const fn max_instances(&self) -> usize {
+        self.max_instances
+    }
+
+    pub(crate) const fn index_count(&self) -> u32 {
+        self.index_count
     }
 }
 

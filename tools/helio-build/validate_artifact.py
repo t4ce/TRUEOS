@@ -16,6 +16,10 @@ HELIOIR_MAGIC = b"HELIOIR\0"
 HELIORP_MAGIC = b"HELIORP\0"
 IR_SECTION = "render/ir-v1.bin"
 REPLAY_SECTION = "render/replay-v1.bin"
+CHURN_FORWARD_SECTION = "render/churn-forward-v1.bin"
+CHURN_FORWARD_SOURCE = "render/churn-forward.wgsl"
+CHURN_FORWARD_VS = "intel-xe-lp/churn-forward.vs.simd8.bin"
+CHURN_FORWARD_PS = "intel-xe-lp/churn-forward.ps.simd8.bin"
 CHURN_LIGHT_SECTION = "scene/churn-light-v1.bin"
 BATTLE_SECTION = "scene/shape-battle-v1.bin"
 BIGCLOTH_SECTION = "scene/pendulum-bigcloth-v1.bin"
@@ -126,6 +130,75 @@ def validate_manifest(data: bytes) -> None:
         "output.surface": "ui4-bgra8-srgb",
     }:
         fail("unexpected dynamic-slot contract")
+
+
+def validate_churn_manifest(data: bytes) -> None:
+    try:
+        manifest = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        fail("malformed Churn manifest.json")
+    expected = {
+        "schema": 1,
+        "engine": "Helio",
+        "program": "churn-forward",
+        "graph": "Helio ForwardLit-derived single pass",
+        "capture": "wgpu-native-trace-v30",
+        "target_api": "trueos-render",
+        "target_architecture": "intel-xe-lp",
+        "surface_format": "Bgra8UnormSrgb",
+        "width": 320,
+        "height": 180,
+    }
+    for key, value in expected.items():
+        if manifest.get(key) != value:
+            fail(f"Churn manifest {key} is not {value!r}")
+    slots = {slot.get("name"): slot.get("kind") for slot in manifest.get("dynamic_slots", [])}
+    if slots != {
+        "camera": "libhelio::GpuCameraUniforms[1]",
+        "scene.instances": "libhelio::GpuInstanceData[]",
+        "scene.compacted_indices": "u32[]",
+        "draw.indexed_indirect": "libhelio::DrawIndexedIndirectArgs",
+        "output.surface": "ui4-bgra8-srgb-alpha",
+    }:
+        fail("unexpected Churn dynamic-slot contract")
+
+
+def validate_churn_scene(sections: dict[str, tuple[int, bytes]]) -> None:
+    scene = section(sections, "scene/churn-forward-v1.bin", 0xFFFF)
+    if len(scene) != 7988 or scene[:8] != b"HCFWD1\0\0":
+        fail("bad churn-forward seed image")
+    if struct.unpack_from("<HHII", scene, 8) != (1, 96, 320, 180):
+        fail("unsupported churn-forward seed header")
+    layouts = tuple(struct.unpack_from("<II", scene, 20 + index * 8) for index in range(6))
+    if layouts != ((24, 24), (4, 36), (368, 1), (208, 32), (4, 32), (20, 1)):
+        fail("churn-forward seed ABI/count drift")
+    offsets = struct.unpack_from("<6I", scene, 68)
+    if offsets != (96, 672, 816, 1184, 7840, 7968):
+        fail("churn-forward seed payload offsets changed")
+    compacted = struct.unpack_from("<32I", scene, offsets[4])
+    if compacted != tuple(range(32)):
+        fail("churn-forward compacted indices are not the canonical identity list")
+    if struct.unpack_from("<5I", scene, offsets[5]) != (36, 32, 0, 0, 0):
+        fail("churn-forward canonical DrawIndexedIndirectArgs changed")
+
+
+def validate_churn_light_only(sections: dict[str, tuple[int, bytes]]) -> None:
+    light = section(sections, CHURN_LIGHT_SECTION, 0xFFFF)
+    expected = bytearray(160)
+    expected[:8] = b"HCHLIT\0\0"
+    struct.pack_into("<HHIII", expected, 8, 1, 160, 160, 2, 4)
+    struct.pack_into("<4f", expected, 24, 0.12, 0.12, 0.14, 1.0)
+    struct.pack_into(
+        "<8f", expected, 40, -20.0, 5.0, -20.0, 40.0, 0.8, 0.7, 0.55, 7.0
+    )
+    struct.pack_into(
+        "<8f", expected, 72, 20.0, 5.0, 20.0, 40.0, 0.5, 0.7, 1.0, 7.0
+    )
+    struct.pack_into(
+        "<8f", expected, 104, 0.65, 0.0, 0.60, 0.0, 0.70, 0.0, 0.15, 0.80
+    )
+    if light != bytes(expected):
+        fail("churn-light payload changed")
 
 
 def ir_long(ir: bytes, offset_at: int, size_at: int) -> bytes:
@@ -249,6 +322,122 @@ def validate_native(sections: dict[str, tuple[int, bytes]]) -> None:
         fail("required SIMD8 VS/PS pair absent")
 
 
+def validate_churn_forward(sections: dict[str, tuple[int, bytes]]) -> None:
+    """Validate the binary-only ABI handoff and every referenced payload."""
+    if CHURN_FORWARD_SECTION not in sections:
+        if CHURN_FORWARD_SOURCE in sections:
+            fail("captured Churn source has no native churn-forward-v1 descriptor")
+        return
+    data = section(sections, CHURN_FORWARD_SECTION, 8)
+    if len(data) != 768 or data[:8] != b"HCFWD\0\0\0":
+        fail("bad churn-forward descriptor header")
+    if struct.unpack_from("<HHIIHHH", data, 8) != (1, 768, 768, 0x3F, 2, 3, 2):
+        fail("unsupported churn-forward descriptor version")
+    if any(data[26:32]):
+        fail("nonzero churn-forward header reserved bytes")
+    if struct.unpack_from("<10I", data, 32) != (
+        368, 0, 64, 128, 192, 256, 272, 288, 304, 0,
+    ):
+        fail("churn-forward GpuCameraUniforms ABI drift")
+    if struct.unpack_from("<12I", data, 72) != (
+        208, 0, 64, 112, 128, 192, 196, 200, 204, 64, 48, 0,
+    ):
+        fail("churn-forward GpuInstanceData ABI drift")
+    if struct.unpack_from("<10I", data, 120) != (
+        4, 20, 0, 4, 8, 12, 16, 36, 0, 0,
+    ):
+        fail("churn-forward compacted/DrawIndexedIndirectArgs ABI drift")
+    expected_vertex = bytearray(48)
+    struct.pack_into("<IHH", expected_vertex, 0, 24, 1, 2)
+    struct.pack_into("<HHII", expected_vertex, 8, 0, 1, 0, 0x7)
+    struct.pack_into("<HHII", expected_vertex, 20, 1, 1, 12, 0x7)
+    struct.pack_into("<HHI", expected_vertex, 32, 0, 0, 24)
+    if data[160:208] != expected_vertex:
+        fail("churn-forward vertex fetch/VF-mask contract drift")
+    expected_bindings = bytearray(48)
+    for offset, binding, bti, size in (
+        (0, 0, 1, 368), (16, 1, 2, 208), (32, 2, 3, 4),
+    ):
+        struct.pack_into(
+            "<BBBBBBHII", expected_bindings, offset,
+            0, binding, bti, 1, 1, 1, 0, size, size,
+        )
+    if data[208:256] != expected_bindings:
+        fail("churn-forward storage binding/BTI contract drift")
+    fixed = struct.unpack_from("<8HIIHBBHH", data, 256)
+    if fixed[:8] != (1,) * 8 or fixed[8:11] != (1, 0xF, 0):
+        fail("churn-forward fixed-function state drift")
+    if fixed[11:] != (1, 1, 2, 0):
+        fail("invalid churn-forward SBE state")
+
+    def stage_ref(
+        offset: int, expected_stage: int, expected_entry: bytes, expected_name: str,
+    ) -> None:
+        values = struct.unpack_from("<HHIIIIHHHHHHHHIII", data, offset)
+        (
+            stage, simd, code_size, code_offset, alignment, ksp_offset,
+            grf_start, grf_used, max_threads, bt_count, samplers, push_bytes,
+            urb_length, varying_count, ps_flags, flat_inputs, reserved,
+        ) = values
+        if (
+            stage != expected_stage or simd != 8 or not code_size
+            or code_size % 4 or code_offset != 0 or alignment != 64
+            or ksp_offset != 0 or grf_start != 2 or grf_used != 128
+            or max_threads != 64 or samplers or push_bytes or reserved
+        ):
+            fail(f"invalid churn-forward stage metadata for {expected_name}")
+        if expected_stage == 1:
+            if bt_count != 4 or urb_length != 1 or varying_count or ps_flags or flat_inputs:
+                fail("invalid churn-forward VS payload metadata")
+        elif bt_count != 1 or urb_length or varying_count != 2 \
+                or ps_flags != 1 or flat_inputs != 2:
+            fail("invalid churn-forward PS payload metadata")
+        entry_len, name_len, reserved2 = struct.unpack_from("<HHI", data, offset + 80)
+        if reserved2 or not entry_len or entry_len > 16 or not name_len or name_len > 56:
+            fail("invalid churn-forward stage string lengths")
+        entry = data[offset + 88:offset + 88 + entry_len]
+        name_bytes = data[offset + 104:offset + 104 + name_len]
+        if entry != expected_entry or name_bytes != expected_name.encode():
+            fail("churn-forward stage reference changed")
+        if any(data[offset + 88 + entry_len:offset + 104]) \
+                or any(data[offset + 104 + name_len:offset + 160]):
+            fail("nonzero churn-forward stage string padding")
+        binary = section(sections, expected_name, 4)
+        if len(binary) != code_size:
+            fail(f"churn-forward stage size mismatch for {expected_name}")
+        if hashlib.sha256(binary).digest() != data[offset + 48:offset + 80]:
+            fail(f"churn-forward stage hash mismatch for {expected_name}")
+
+    stage_ref(288, 1, b"vs_main", CHURN_FORWARD_VS)
+    stage_ref(448, 2, b"fs_main", CHURN_FORWARD_PS)
+
+    source_size, source_name_len, source_reserved = struct.unpack_from("<IHH", data, 608)
+    if not source_size or source_reserved or not source_name_len or source_name_len > 56:
+        fail("invalid churn-forward source reference")
+    source_name = data[648:648 + source_name_len]
+    if source_name != CHURN_FORWARD_SOURCE.encode() or any(data[648 + source_name_len:704]):
+        fail("churn-forward source section name changed")
+    source_data = section(sections, CHURN_FORWARD_SOURCE, 3)
+    if len(source_data) != source_size:
+        fail("churn-forward source size mismatch")
+    if hashlib.sha256(source_data).digest() != data[616:648]:
+        fail("churn-forward source hash mismatch")
+    if struct.unpack_from("<III", data, 704) != (0xE002_4002, 0xB002_0002, 3):
+        fail("churn-forward InstanceIndex SGVS contract drift")
+    if struct.unpack_from("<HH", data, 716) != (3, 0):
+        fail("churn-forward VF instancing count drift")
+    if struct.unpack_from("<HBBI", data, 720) != (0, 0, 0, 0) \
+            or struct.unpack_from("<HBBI", data, 728) != (1, 0, 0, 0) \
+            or struct.unpack_from("<HBBI", data, 736) != (2, 0, 0, 0):
+        fail("churn-forward per-element VF instancing contract drift")
+    if struct.unpack_from("<HBBH4BH", data, 744) != (2, 31, 0, 135, 2, 2, 2, 2, 0):
+        fail("churn-forward synthetic InstanceIndex vertex element drift")
+    if struct.unpack_from("<IHH", data, 756) != (0x0000_0A77, 8, 1):
+        fail("churn-forward VF component packing/URB input contract drift")
+    if any(data[764:]):
+        fail("nonzero churn-forward descriptor reserved bytes")
+
+
 def validate_scene_contracts(sections: dict[str, tuple[int, bytes]]) -> None:
     light = section(sections, CHURN_LIGHT_SECTION, 0xFFFF)
     if len(light) != 160 or light[:8] != b"HCHLIT\0\0":
@@ -310,11 +499,26 @@ def main() -> None:
     except OSError as error:
         raise SystemExit(f"cannot read {path}: {error}") from error
     sections = parse_helioa(data)
-    validate_manifest(section(sections, "manifest.json", 1))
+    manifest_data = section(sections, "manifest.json", 1)
+    try:
+        program = json.loads(manifest_data).get("program")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        fail("malformed manifest.json")
+    if program == "churn-forward":
+        validate_churn_manifest(manifest_data)
+        validate_native(sections)
+        validate_churn_forward(sections)
+        validate_churn_scene(sections)
+        validate_churn_light_only(sections)
+        print(f"validated {path} ({len(data)} bytes, {len(sections)} sections)")
+        return
+
+    validate_manifest(manifest_data)
     ir = section(sections, IR_SECTION, 6)
     validate_ir(ir)
     validate_replay(section(sections, REPLAY_SECTION, 7), ir)
     validate_native(sections)
+    validate_churn_forward(sections)
     validate_scene_contracts(sections)
     print(f"validated {path} ({len(data)} bytes, {len(sections)} sections)")
 

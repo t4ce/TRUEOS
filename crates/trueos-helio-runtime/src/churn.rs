@@ -12,9 +12,10 @@ const LIGHT_MAGIC: &[u8; 8] = b"HCHLIT\0\0";
 const VERSION: u16 = 1;
 const ENCODED_LEN: usize = 320;
 const LIGHT_ENCODED_LEN: usize = 160;
-const MATERIAL_COUNT: usize = 4;
-const SHAPE_COUNT: usize = 3;
-const LIGHT_COUNT: usize = 2;
+pub const MATERIAL_COUNT: usize = 4;
+pub const SHAPE_COUNT: usize = 3;
+pub const LIGHT_COUNT: usize = 2;
+pub const DRAW_GROUP_COUNT: usize = MATERIAL_COUNT * SHAPE_COUNT;
 const FACE_COUNT: usize = 6;
 const BATCH_COUNT: usize = MATERIAL_COUNT * FACE_COUNT;
 const VERTICES_PER_OBJECT: usize = 24;
@@ -26,6 +27,305 @@ const ANIMATION_RATE_SCALE: f32 = 1.5;
 const FLAT_LIGHT_RESPONSE_SCALE: f32 = 12.0;
 const COLLISION_BURST_FRAMES: u32 = 75;
 const COLLISION_BURST_DISTANCE: f32 = 12.0;
+
+pub const INSTANCE_FLAG_CASTS_SHADOW: u32 = 1 << 0;
+pub const INSTANCE_FLAG_RECEIVES_SHADOW: u32 = 1 << 1;
+
+/// Helio's storage-buffer instance ABI, byte-for-byte.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GpuInstanceData {
+    pub model: [f32; 16],
+    pub normal_mat: [f32; 12],
+    pub bounds: [f32; 4],
+    pub prev_model: [f32; 16],
+    pub mesh_id: u32,
+    pub material_id: u32,
+    pub flags: u32,
+    pub lightmap_index: u32,
+}
+
+impl GpuInstanceData {
+    pub const BYTE_LEN: usize = 208;
+
+    pub fn to_le_bytes(self) -> [u8; Self::BYTE_LEN] {
+        let mut bytes = [0; Self::BYTE_LEN];
+        write_f32s(&mut bytes, 0, &self.model);
+        write_f32s(&mut bytes, 64, &self.normal_mat);
+        write_f32s(&mut bytes, 112, &self.bounds);
+        write_f32s(&mut bytes, 128, &self.prev_model);
+        write_u32(&mut bytes, 192, self.mesh_id);
+        write_u32(&mut bytes, 196, self.material_id);
+        write_u32(&mut bytes, 200, self.flags);
+        write_u32(&mut bytes, 204, self.lightmap_index);
+        bytes
+    }
+}
+
+/// Helio's per-frame camera storage-buffer ABI, byte-for-byte.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GpuCameraUniforms {
+    pub view: [f32; 16],
+    pub proj: [f32; 16],
+    pub view_proj: [f32; 16],
+    pub inv_view_proj: [f32; 16],
+    pub position_near: [f32; 4],
+    pub forward_far: [f32; 4],
+    pub jitter_frame: [f32; 4],
+    pub prev_view_proj: [f32; 16],
+}
+
+impl GpuCameraUniforms {
+    pub const BYTE_LEN: usize = 368;
+
+    pub fn to_le_bytes(self) -> [u8; Self::BYTE_LEN] {
+        let mut bytes = [0; Self::BYTE_LEN];
+        write_f32s(&mut bytes, 0, &self.view);
+        write_f32s(&mut bytes, 64, &self.proj);
+        write_f32s(&mut bytes, 128, &self.view_proj);
+        write_f32s(&mut bytes, 192, &self.inv_view_proj);
+        write_f32s(&mut bytes, 256, &self.position_near);
+        write_f32s(&mut bytes, 272, &self.forward_far);
+        write_f32s(&mut bytes, 288, &self.jitter_frame);
+        write_f32s(&mut bytes, 304, &self.prev_view_proj);
+        bytes
+    }
+}
+
+/// Helio's material storage-buffer ABI, byte-for-byte.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GpuMaterial {
+    pub base_color: [f32; 4],
+    pub emissive: [f32; 4],
+    pub roughness_metallic: [f32; 4],
+    pub tex_base_color: u32,
+    pub tex_normal: u32,
+    pub tex_roughness: u32,
+    pub tex_emissive: u32,
+    pub tex_occlusion: u32,
+    pub workflow: u32,
+    pub flags: u32,
+    pub material_class: u32,
+    pub class_params: [f32; 4],
+}
+
+impl GpuMaterial {
+    pub const BYTE_LEN: usize = 96;
+    pub const NO_TEXTURE: u32 = u32::MAX;
+
+    pub fn to_le_bytes(self) -> [u8; Self::BYTE_LEN] {
+        let mut bytes = [0; Self::BYTE_LEN];
+        write_f32s(&mut bytes, 0, &self.base_color);
+        write_f32s(&mut bytes, 16, &self.emissive);
+        write_f32s(&mut bytes, 32, &self.roughness_metallic);
+        write_u32(&mut bytes, 48, self.tex_base_color);
+        write_u32(&mut bytes, 52, self.tex_normal);
+        write_u32(&mut bytes, 56, self.tex_roughness);
+        write_u32(&mut bytes, 60, self.tex_emissive);
+        write_u32(&mut bytes, 64, self.tex_occlusion);
+        write_u32(&mut bytes, 68, self.workflow);
+        write_u32(&mut bytes, 72, self.flags);
+        write_u32(&mut bytes, 76, self.material_class);
+        write_f32s(&mut bytes, 80, &self.class_params);
+        bytes
+    }
+}
+
+/// Helio's light storage-buffer ABI, including its current feature tail.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuLight {
+    pub position_range: [f32; 4],
+    pub direction_outer: [f32; 4],
+    pub color_intensity: [f32; 4],
+    pub shadow_index: u32,
+    pub light_type: u32,
+    pub inner_angle: f32,
+    pub _pad: u32,
+    pub god_rays_enabled: u32,
+    pub god_rays_density: f32,
+    pub god_rays_weight: f32,
+    pub god_rays_decay: f32,
+    pub god_rays_exposure: f32,
+    pub flare_enabled: u32,
+    pub flare_type: u32,
+    pub flare_intensity: f32,
+    pub flare_scale: f32,
+    pub flare_tint_r: f32,
+    pub flare_tint_g: f32,
+    pub flare_tint_b: f32,
+    pub ies_profile_index: i32,
+    pub light_function_index: i32,
+    pub ies_angle_scale: f32,
+    pub ies_angle_offset: f32,
+}
+
+impl GpuLight {
+    pub const BYTE_LEN: usize = 128;
+
+    pub fn to_le_bytes(self) -> [u8; Self::BYTE_LEN] {
+        let mut bytes = [0; Self::BYTE_LEN];
+        write_f32s(&mut bytes, 0, &self.position_range);
+        write_f32s(&mut bytes, 16, &self.direction_outer);
+        write_f32s(&mut bytes, 32, &self.color_intensity);
+        write_u32(&mut bytes, 48, self.shadow_index);
+        write_u32(&mut bytes, 52, self.light_type);
+        write_f32(&mut bytes, 56, self.inner_angle);
+        write_u32(&mut bytes, 60, self._pad);
+        write_u32(&mut bytes, 64, self.god_rays_enabled);
+        write_f32(&mut bytes, 68, self.god_rays_density);
+        write_f32(&mut bytes, 72, self.god_rays_weight);
+        write_f32(&mut bytes, 76, self.god_rays_decay);
+        write_f32(&mut bytes, 80, self.god_rays_exposure);
+        write_u32(&mut bytes, 84, self.flare_enabled);
+        write_u32(&mut bytes, 88, self.flare_type);
+        write_f32(&mut bytes, 92, self.flare_intensity);
+        write_f32(&mut bytes, 96, self.flare_scale);
+        write_f32(&mut bytes, 100, self.flare_tint_r);
+        write_f32(&mut bytes, 104, self.flare_tint_g);
+        write_f32(&mut bytes, 108, self.flare_tint_b);
+        write_i32(&mut bytes, 112, self.ies_profile_index);
+        write_i32(&mut bytes, 116, self.light_function_index);
+        write_f32(&mut bytes, 120, self.ies_angle_scale);
+        write_f32(&mut bytes, 124, self.ies_angle_offset);
+        bytes
+    }
+}
+
+impl Default for GpuLight {
+    fn default() -> Self {
+        Self {
+            position_range: [0.0; 4],
+            direction_outer: [0.0, -1.0, 0.0, 0.0],
+            color_intensity: [1.0; 4],
+            shadow_index: u32::MAX,
+            light_type: 1,
+            inner_angle: 0.0,
+            _pad: 0,
+            god_rays_enabled: 0,
+            god_rays_density: 1.0,
+            god_rays_weight: 0.6,
+            god_rays_decay: 1.0,
+            god_rays_exposure: 0.7,
+            flare_enabled: 0,
+            flare_type: 0,
+            flare_intensity: 1.0,
+            flare_scale: 1.0,
+            flare_tint_r: 1.0,
+            flare_tint_g: 1.0,
+            flare_tint_b: 1.0,
+            ies_profile_index: -1,
+            light_function_index: -1,
+            ies_angle_scale: 1.0,
+            ies_angle_offset: 0.0,
+        }
+    }
+}
+
+/// The exact globals layout consumed by Helio's forward-lit pass.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GpuForwardLitGlobals {
+    pub frame: u32,
+    pub delta_time: f32,
+    pub light_count: u32,
+    pub ambient_intensity: f32,
+    pub ambient_color: [f32; 4],
+    pub num_tiles_x: u32,
+    pub num_tiles_y: u32,
+    pub screen_width: f32,
+    pub screen_height: f32,
+}
+
+impl GpuForwardLitGlobals {
+    pub const BYTE_LEN: usize = 48;
+
+    pub fn to_le_bytes(self) -> [u8; Self::BYTE_LEN] {
+        let mut bytes = [0; Self::BYTE_LEN];
+        write_u32(&mut bytes, 0, self.frame);
+        write_f32(&mut bytes, 4, self.delta_time);
+        write_u32(&mut bytes, 8, self.light_count);
+        write_f32(&mut bytes, 12, self.ambient_intensity);
+        write_f32s(&mut bytes, 16, &self.ambient_color);
+        write_u32(&mut bytes, 32, self.num_tiles_x);
+        write_u32(&mut bytes, 36, self.num_tiles_y);
+        write_f32(&mut bytes, 40, self.screen_width);
+        write_f32(&mut bytes, 44, self.screen_height);
+        bytes
+    }
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<GpuInstanceData>() == GpuInstanceData::BYTE_LEN);
+    assert!(core::mem::offset_of!(GpuInstanceData, model) == 0);
+    assert!(core::mem::offset_of!(GpuInstanceData, normal_mat) == 64);
+    assert!(core::mem::offset_of!(GpuInstanceData, bounds) == 112);
+    assert!(core::mem::offset_of!(GpuInstanceData, prev_model) == 128);
+    assert!(core::mem::offset_of!(GpuInstanceData, mesh_id) == 192);
+    assert!(core::mem::offset_of!(GpuInstanceData, material_id) == 196);
+    assert!(core::mem::offset_of!(GpuInstanceData, flags) == 200);
+    assert!(core::mem::offset_of!(GpuInstanceData, lightmap_index) == 204);
+
+    assert!(core::mem::size_of::<GpuCameraUniforms>() == GpuCameraUniforms::BYTE_LEN);
+    assert!(core::mem::offset_of!(GpuCameraUniforms, view) == 0);
+    assert!(core::mem::offset_of!(GpuCameraUniforms, proj) == 64);
+    assert!(core::mem::offset_of!(GpuCameraUniforms, view_proj) == 128);
+    assert!(core::mem::offset_of!(GpuCameraUniforms, inv_view_proj) == 192);
+    assert!(core::mem::offset_of!(GpuCameraUniforms, position_near) == 256);
+    assert!(core::mem::offset_of!(GpuCameraUniforms, forward_far) == 272);
+    assert!(core::mem::offset_of!(GpuCameraUniforms, jitter_frame) == 288);
+    assert!(core::mem::offset_of!(GpuCameraUniforms, prev_view_proj) == 304);
+
+    assert!(core::mem::size_of::<GpuLight>() == GpuLight::BYTE_LEN);
+    assert!(core::mem::offset_of!(GpuLight, shadow_index) == 48);
+    assert!(core::mem::offset_of!(GpuLight, god_rays_enabled) == 64);
+    assert!(core::mem::offset_of!(GpuLight, flare_enabled) == 84);
+    assert!(core::mem::offset_of!(GpuLight, ies_profile_index) == 112);
+
+    assert!(core::mem::size_of::<GpuMaterial>() == GpuMaterial::BYTE_LEN);
+    assert!(core::mem::offset_of!(GpuMaterial, tex_base_color) == 48);
+    assert!(core::mem::offset_of!(GpuMaterial, class_params) == 80);
+    assert!(core::mem::size_of::<GpuForwardLitGlobals>() == GpuForwardLitGlobals::BYTE_LEN);
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirtyRange {
+    pub first: u32,
+    pub count: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeshDescriptor {
+    pub mesh_id: u32,
+    pub half_extents: [f32; 3],
+    pub first_vertex: u32,
+    pub vertex_count: u32,
+    pub first_index: u32,
+    pub index_count: u32,
+    pub base_vertex: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DrawGroupDescriptor {
+    pub mesh_id: u32,
+    pub material_id: u32,
+}
+
+pub struct InstanceFrame<'a> {
+    pub camera: &'a GpuCameraUniforms,
+    pub globals: &'a GpuForwardLitGlobals,
+    pub lights: &'a [GpuLight; LIGHT_COUNT],
+    pub materials: &'a [GpuMaterial; MATERIAL_COUNT],
+    pub meshes: &'a [MeshDescriptor; SHAPE_COUNT],
+    pub groups: &'a [DrawGroupDescriptor; DRAW_GROUP_COUNT],
+    pub instances: &'a [GpuInstanceData],
+    pub compacted_indices: &'a [u32],
+    pub draws: &'a [DrawIndexedIndirectArgs; DRAW_GROUP_COUNT],
+    pub instance_dirty: DirtyRange,
+    pub compacted_indices_dirty: DirtyRange,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct PointLight {
@@ -271,10 +571,9 @@ pub struct Batch {
 }
 
 impl Batch {
-    /// The command record Helio owns for this material/face light batch.
-    /// Geometry is expanded today, so each batch is one indexed instance;
-    /// moving object transforms and light evaluation to GPU buffers later
-    /// changes the instance fields but not this ABI or the Intel consumer.
+    /// The command record Helio owns for this compatibility material/face
+    /// batch. The native path uses the same WGPU record layout for retained
+    /// meshes and dense instance ranges; only this fallback expands geometry.
     pub fn draw_indexed_indirect(&self) -> Result<DrawIndexedIndirectArgs, Error> {
         let index_count =
             u32::try_from(self.indices.len()).map_err(|_| Error::InvalidChurnScene)?;
@@ -291,6 +590,7 @@ struct Object {
     speed: f32,
     scale: f32,
     shape: usize,
+    previous_model: Option<[f32; 16]>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -325,6 +625,16 @@ pub struct Engine {
     recycle: usize,
     collisions_enabled: bool,
     collision_burst_frame: u32,
+    gpu_camera: GpuCameraUniforms,
+    gpu_globals: GpuForwardLitGlobals,
+    gpu_lights: [GpuLight; LIGHT_COUNT],
+    gpu_materials: [GpuMaterial; MATERIAL_COUNT],
+    gpu_meshes: [MeshDescriptor; SHAPE_COUNT],
+    gpu_groups: [DrawGroupDescriptor; DRAW_GROUP_COUNT],
+    gpu_instances: Vec<GpuInstanceData>,
+    gpu_compacted_indices: Vec<u32>,
+    gpu_draws: [DrawIndexedIndirectArgs; DRAW_GROUP_COUNT],
+    previous_view_proj: Option<[f32; 16]>,
 }
 
 impl Engine {
@@ -350,6 +660,65 @@ impl Engine {
                 });
             }
         }
+        let gpu_meshes = core::array::from_fn(|shape| MeshDescriptor {
+            mesh_id: shape as u32,
+            half_extents: spec.shape_half_extents[shape],
+            first_vertex: (shape * VERTICES_PER_OBJECT) as u32,
+            vertex_count: VERTICES_PER_OBJECT as u32,
+            first_index: (shape * INDICES_PER_OBJECT) as u32,
+            index_count: INDICES_PER_OBJECT as u32,
+            base_vertex: (shape * VERTICES_PER_OBJECT) as i32,
+        });
+        let gpu_groups = core::array::from_fn(|group| DrawGroupDescriptor {
+            mesh_id: (group / MATERIAL_COUNT) as u32,
+            material_id: (group % MATERIAL_COUNT) as u32,
+        });
+        let gpu_draws = core::array::from_fn(|group| {
+            let mesh = gpu_meshes[group / MATERIAL_COUNT];
+            DrawIndexedIndirectArgs {
+                index_count: mesh.index_count,
+                instance_count: 0,
+                first_index: mesh.first_index,
+                base_vertex: mesh.base_vertex,
+                first_instance: 0,
+            }
+        });
+        let gpu_materials = core::array::from_fn(|material| {
+            let [roughness, metallic] = spec.material_surface[material];
+            GpuMaterial {
+                base_color: spec.material_linear_rgba[material],
+                emissive: [0.0; 4],
+                roughness_metallic: [roughness, metallic, 1.5, 0.5],
+                tex_base_color: GpuMaterial::NO_TEXTURE,
+                tex_normal: GpuMaterial::NO_TEXTURE,
+                tex_roughness: GpuMaterial::NO_TEXTURE,
+                tex_emissive: GpuMaterial::NO_TEXTURE,
+                tex_occlusion: GpuMaterial::NO_TEXTURE,
+                workflow: 0,
+                flags: 0,
+                material_class: 0,
+                class_params: [0.0; 4],
+            }
+        });
+        let gpu_lights = core::array::from_fn(|index| {
+            let source = spec.lights[index];
+            GpuLight {
+                position_range: [
+                    source.position[0],
+                    source.position[1],
+                    source.position[2],
+                    source.range,
+                ],
+                color_intensity: [
+                    source.color[0],
+                    source.color[1],
+                    source.color[2],
+                    source.intensity,
+                ],
+                ..GpuLight::default()
+            }
+        });
+        let max_objects = spec.max_objects;
         Ok(Self {
             rng: Rng::new(spec.seed),
             spec,
@@ -359,6 +728,16 @@ impl Engine {
             recycle: 0,
             collisions_enabled: false,
             collision_burst_frame: 0,
+            gpu_camera: GpuCameraUniforms::default(),
+            gpu_globals: GpuForwardLitGlobals::default(),
+            gpu_lights,
+            gpu_materials,
+            gpu_meshes,
+            gpu_groups,
+            gpu_instances: Vec::with_capacity(max_objects),
+            gpu_compacted_indices: Vec::with_capacity(max_objects),
+            gpu_draws,
+            previous_view_proj: None,
         })
     }
 
@@ -437,26 +816,16 @@ impl Engine {
             0.0
         };
         for (object_index, object) in self.objects.iter().copied().enumerate() {
-            let phase = object.seed + time * object.speed;
-            let radius = self.spec.orbit_radius
-                + libm::sinf(phase * self.spec.radius_phase_scale)
-                    * self.spec.orbit_radius_amplitude;
-            let mut center = [
-                libm::cosf(phase) * radius,
-                self.spec.height_base
-                    + libm::sinf(phase * self.spec.height_phase_scale) * self.spec.height_amplitude,
-                libm::sinf(phase) * radius,
-            ];
-            let mut angle = phase * self.spec.rotation_scale;
-            if self.collisions_enabled {
-                let direction = collision_burst_direction(object.seed, object_index);
-                let eased = smoothstep01(burst_progress);
-                for axis in 0..3 {
-                    center[axis] += direction[axis] * COLLISION_BURST_DISTANCE * eased;
-                }
-                angle += direction[1] * core::f32::consts::TAU * eased;
-            }
-            let (sin_angle, cos_angle) = (libm::sinf(angle), libm::cosf(angle));
+            let pose = object_pose(
+                &self.spec,
+                object,
+                object_index,
+                time,
+                self.collisions_enabled,
+                burst_progress,
+            );
+            let center = pose.center;
+            let (sin_angle, cos_angle) = (libm::sinf(pose.angle), libm::cosf(pose.angle));
             let material_index = object_index % MATERIAL_COUNT;
             let slot = object_index / MATERIAL_COUNT;
             let local = box_vertices(self.spec.shape_half_extents[object.shape]);
@@ -464,6 +833,8 @@ impl Engine {
                 let batch_index = material_index * FACE_COUNT + face;
                 let start = slot * VERTICES_PER_FACE;
                 let mut world_face = [[0.0f32; 3]; VERTICES_PER_FACE];
+                let mut projected_face = [HIDDEN; VERTICES_PER_FACE];
+                let mut visible = true;
                 for (face_offset, world) in world_face.iter_mut().enumerate() {
                     let point = local[face * VERTICES_PER_FACE + face_offset];
                     let scaled = [
@@ -476,9 +847,21 @@ impl Engine {
                         center[1] + scaled[1],
                         center[2] - scaled[0] * sin_angle + scaled[2] * cos_angle,
                     ];
-                    self.batches[batch_index].vertices[start + face_offset] =
-                        projector.project(*world)?;
+                    match projector.project(*world) {
+                        Ok(projected) => projected_face[face_offset] = projected,
+                        // A burst or a moved fly camera can put an object across
+                        // the near/far plane. The fixed resident draw stays valid;
+                        // collapse that face outside NDC for this frame instead of
+                        // treating ordinary frustum clipping as a scene failure.
+                        Err(Error::VertexBehindCamera) => visible = false,
+                        Err(error) => return Err(error),
+                    }
                 }
+                if !visible {
+                    continue;
+                }
+                self.batches[batch_index].vertices[start..start + VERTICES_PER_FACE]
+                    .copy_from_slice(&projected_face);
                 let lit = shade_face(&self.spec, material_index, world_face);
                 for channel in 0..3 {
                     light_sums[batch_index][channel] += lit[channel];
@@ -507,6 +890,138 @@ impl Engine {
         }
         self.frame = self.frame.wrapping_add(1);
         Ok(&self.batches)
+    }
+
+    /// Advance the same Churn simulation while retaining Helio's GPU-native
+    /// scene shape. This path updates only object matrices and compact draw
+    /// ranges; it deliberately performs no CPU vertex projection or lighting.
+    pub fn step_instances(&mut self, aspect: f32) -> Result<InstanceFrame<'_>, Error> {
+        // Keep camera validation identical to the compatibility path, without
+        // using Projector::project for any geometry.
+        Projector::new(self.spec.camera, aspect)?;
+        if self.frame % u64::from(self.spec.spawn_interval_frames) == 0 {
+            self.spawn();
+        }
+
+        let time = self.frame as f32 * self.spec.time_step * ANIMATION_RATE_SCALE;
+        let burst_progress = if self.collisions_enabled {
+            let frame = self
+                .collision_burst_frame
+                .saturating_add(1)
+                .min(COLLISION_BURST_FRAMES);
+            frame as f32 / COLLISION_BURST_FRAMES as f32
+        } else {
+            0.0
+        };
+
+        let object_count = self.objects.len();
+        let object_count_u32 = u32::try_from(object_count).map_err(|_| Error::InvalidChurnScene)?;
+        let mut group_counts = [0usize; DRAW_GROUP_COUNT];
+        for (object_index, object) in self.objects.iter().enumerate() {
+            let group = object.shape * MATERIAL_COUNT + object_index % MATERIAL_COUNT;
+            group_counts[group] += 1;
+        }
+        let mut group_starts = [0usize; DRAW_GROUP_COUNT];
+        let mut next_start = 0usize;
+        for group in 0..DRAW_GROUP_COUNT {
+            group_starts[group] = next_start;
+            next_start += group_counts[group];
+            let mesh = self.gpu_meshes[group / MATERIAL_COUNT];
+            self.gpu_draws[group] = DrawIndexedIndirectArgs {
+                index_count: mesh.index_count,
+                instance_count: group_counts[group] as u32,
+                first_index: mesh.first_index,
+                base_vertex: mesh.base_vertex,
+                first_instance: group_starts[group] as u32,
+            };
+        }
+
+        self.gpu_instances
+            .resize(object_count, GpuInstanceData::default());
+        self.gpu_compacted_indices.resize(object_count, 0);
+        let mut group_cursors = group_starts;
+        for object_index in 0..object_count {
+            let object = self.objects[object_index];
+            let pose = object_pose(
+                &self.spec,
+                object,
+                object_index,
+                time,
+                self.collisions_enabled,
+                burst_progress,
+            );
+            let model = model_matrix(pose.center, pose.angle, object.scale);
+            let previous_model = object.previous_model.unwrap_or(model);
+            let group = object.shape * MATERIAL_COUNT + object_index % MATERIAL_COUNT;
+            let packed_index = group_cursors[group];
+            group_cursors[group] += 1;
+            let extents = self.spec.shape_half_extents[object.shape];
+            let radius = libm::sqrtf(
+                extents[0] * extents[0] + extents[1] * extents[1] + extents[2] * extents[2],
+            ) * object.scale;
+            self.gpu_instances[packed_index] = GpuInstanceData {
+                model,
+                normal_mat: normal_matrix_y(pose.angle, object.scale),
+                bounds: [pose.center[0], pose.center[1], pose.center[2], radius],
+                prev_model: previous_model,
+                mesh_id: object.shape as u32,
+                material_id: (object_index % MATERIAL_COUNT) as u32,
+                flags: INSTANCE_FLAG_CASTS_SHADOW | INSTANCE_FLAG_RECEIVES_SHADOW,
+                lightmap_index: u32::MAX,
+            };
+            self.gpu_compacted_indices[packed_index] = packed_index as u32;
+            self.objects[object_index].previous_model = Some(model);
+        }
+
+        let camera = gpu_camera_uniforms(
+            self.spec.camera,
+            aspect,
+            self.frame as u32,
+            self.previous_view_proj,
+        )?;
+        self.previous_view_proj = Some(camera.view_proj);
+        self.gpu_camera = camera;
+        self.gpu_globals = GpuForwardLitGlobals {
+            frame: self.frame as u32,
+            delta_time: self.spec.time_step * ANIMATION_RATE_SCALE,
+            light_count: LIGHT_COUNT as u32,
+            ambient_intensity: self.spec.ambient_intensity,
+            ambient_color: [
+                self.spec.ambient_rgb[0],
+                self.spec.ambient_rgb[1],
+                self.spec.ambient_rgb[2],
+                1.0,
+            ],
+            num_tiles_x: 1,
+            num_tiles_y: 1,
+            screen_width: aspect,
+            screen_height: 1.0,
+        };
+
+        if self.collisions_enabled {
+            self.collision_burst_frame = self
+                .collision_burst_frame
+                .saturating_add(1)
+                .min(COLLISION_BURST_FRAMES);
+        }
+        self.frame = self.frame.wrapping_add(1);
+        let dirty = DirtyRange {
+            first: 0,
+            count: object_count_u32,
+        };
+        Ok(InstanceFrame {
+            camera: &self.gpu_camera,
+            globals: &self.gpu_globals,
+            lights: &self.gpu_lights,
+            materials: &self.gpu_materials,
+            meshes: &self.gpu_meshes,
+            groups: &self.gpu_groups,
+            instances: &self.gpu_instances,
+            compacted_indices: &self.gpu_compacted_indices,
+            draws: &self.gpu_draws,
+            instance_dirty: dirty,
+            compacted_indices_dirty: dirty,
+        })
     }
 
     pub fn floor(&self, aspect: f32) -> Result<Batch, Error> {
@@ -541,6 +1056,7 @@ impl Engine {
                 seed: self.rng.next_f32([0.0, core::f32::consts::TAU]),
                 speed: self.rng.next_f32(self.spec.speed_range),
                 scale: self.rng.next_f32(self.spec.scale_range),
+                previous_model: None,
             };
             if self.objects.len() < self.spec.max_objects {
                 self.objects.push(object);
@@ -550,6 +1066,206 @@ impl Engine {
             }
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct ObjectPose {
+    center: [f32; 3],
+    angle: f32,
+}
+
+fn object_pose(
+    spec: &Spec,
+    object: Object,
+    object_index: usize,
+    time: f32,
+    collisions_enabled: bool,
+    burst_progress: f32,
+) -> ObjectPose {
+    let phase = object.seed + time * object.speed;
+    let radius = spec.orbit_radius
+        + libm::sinf(phase * spec.radius_phase_scale) * spec.orbit_radius_amplitude;
+    let mut center = [
+        libm::cosf(phase) * radius,
+        spec.height_base + libm::sinf(phase * spec.height_phase_scale) * spec.height_amplitude,
+        libm::sinf(phase) * radius,
+    ];
+    let mut angle = phase * spec.rotation_scale;
+    if collisions_enabled {
+        let direction = collision_burst_direction(object.seed, object_index);
+        let eased = smoothstep01(burst_progress);
+        for axis in 0..3 {
+            center[axis] += direction[axis] * COLLISION_BURST_DISTANCE * eased;
+        }
+        angle += direction[1] * core::f32::consts::TAU * eased;
+    }
+    ObjectPose { center, angle }
+}
+
+fn model_matrix(center: [f32; 3], angle: f32, scale: f32) -> [f32; 16] {
+    let sin = libm::sinf(angle);
+    let cos = libm::cosf(angle);
+    [
+        cos * scale,
+        0.0,
+        -sin * scale,
+        0.0,
+        0.0,
+        scale,
+        0.0,
+        0.0,
+        sin * scale,
+        0.0,
+        cos * scale,
+        0.0,
+        center[0],
+        center[1],
+        center[2],
+        1.0,
+    ]
+}
+
+fn normal_matrix_y(angle: f32, scale: f32) -> [f32; 12] {
+    let inverse_scale = 1.0 / scale;
+    let sin = libm::sinf(angle);
+    let cos = libm::cosf(angle);
+    [
+        cos * inverse_scale,
+        0.0,
+        -sin * inverse_scale,
+        0.0,
+        0.0,
+        inverse_scale,
+        0.0,
+        0.0,
+        sin * inverse_scale,
+        0.0,
+        cos * inverse_scale,
+        0.0,
+    ]
+}
+
+fn gpu_camera_uniforms(
+    camera: Camera,
+    aspect: f32,
+    frame: u32,
+    previous_view_proj: Option<[f32; 16]>,
+) -> Result<GpuCameraUniforms, Error> {
+    let forward = normalize3(subtract3(camera.target, camera.position));
+    let right = normalize3(cross3(forward, camera.up));
+    let up = normalize3(cross3(right, forward));
+    let view = [
+        right[0],
+        up[0],
+        -forward[0],
+        0.0,
+        right[1],
+        up[1],
+        -forward[1],
+        0.0,
+        right[2],
+        up[2],
+        -forward[2],
+        0.0,
+        -dot3(right, camera.position),
+        -dot3(up, camera.position),
+        dot3(forward, camera.position),
+        1.0,
+    ];
+    let f = 1.0 / libm::tanf(camera.vertical_fov_radians * 0.5);
+    let depth = camera.far / (camera.near - camera.far);
+    let proj = [
+        f / aspect,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        f,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        depth,
+        -1.0,
+        0.0,
+        0.0,
+        camera.near * depth,
+        0.0,
+    ];
+    let view_proj = matrix4_mul(proj, view);
+    let inv_view_proj = matrix4_inverse(view_proj).ok_or(Error::InvalidCamera)?;
+    Ok(GpuCameraUniforms {
+        view,
+        proj,
+        view_proj,
+        inv_view_proj,
+        position_near: [
+            camera.position[0],
+            camera.position[1],
+            camera.position[2],
+            camera.near,
+        ],
+        forward_far: [forward[0], forward[1], forward[2], camera.far],
+        jitter_frame: [0.0, 0.0, frame as f32, 0.0],
+        prev_view_proj: previous_view_proj.unwrap_or(view_proj),
+    })
+}
+
+fn matrix4_mul(left: [f32; 16], right: [f32; 16]) -> [f32; 16] {
+    let mut product = [0.0; 16];
+    for column in 0..4 {
+        for row in 0..4 {
+            for inner in 0..4 {
+                product[column * 4 + row] += left[inner * 4 + row] * right[column * 4 + inner];
+            }
+        }
+    }
+    product
+}
+
+fn matrix4_inverse(matrix: [f32; 16]) -> Option<[f32; 16]> {
+    let mut augmented = [[0.0f32; 8]; 4];
+    for row in 0..4 {
+        for column in 0..4 {
+            augmented[row][column] = matrix[column * 4 + row];
+        }
+        augmented[row][row + 4] = 1.0;
+    }
+    for column in 0..4 {
+        let mut pivot = column;
+        for row in column + 1..4 {
+            if augmented[row][column].abs() > augmented[pivot][column].abs() {
+                pivot = row;
+            }
+        }
+        if !augmented[pivot][column].is_finite() || augmented[pivot][column].abs() <= 1.0e-12 {
+            return None;
+        }
+        augmented.swap(column, pivot);
+        let divisor = augmented[column][column];
+        for value in &mut augmented[column] {
+            *value /= divisor;
+        }
+        for row in 0..4 {
+            if row == column {
+                continue;
+            }
+            let factor = augmented[row][column];
+            for entry in 0..8 {
+                augmented[row][entry] -= factor * augmented[column][entry];
+            }
+        }
+    }
+    let mut inverse = [0.0; 16];
+    for row in 0..4 {
+        for column in 0..4 {
+            inverse[column * 4 + row] = augmented[row][column + 4];
+        }
+    }
+    inverse
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(inverse)
 }
 
 fn initial_face_rgba(spec: &Spec, material: usize, face: usize) -> Result<[u8; 4], Error> {
@@ -734,6 +1450,24 @@ fn normalize_triangle_winding(batch: &mut Batch, triangle: usize) {
     }
 }
 
+fn write_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_i32(bytes: &mut [u8], offset: usize, value: i32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_f32(bytes: &mut [u8], offset: usize, value: f32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_f32s(bytes: &mut [u8], offset: usize, values: &[f32]) {
+    for (index, value) in values.iter().enumerate() {
+        write_f32(bytes, offset + index * 4, *value);
+    }
+}
+
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, Error> {
     Ok(u16::from_le_bytes(read_array(bytes, offset)?))
 }
@@ -857,5 +1591,179 @@ mod tests {
         burst.step(16.0 / 9.0).unwrap();
         orbit.step(16.0 / 9.0).unwrap();
         assert_eq!(burst.batches(), orbit.batches());
+    }
+
+    #[test]
+    fn collision_burst_reaching_full_separation_does_not_abort_the_scene() {
+        let spec = Spec::decode_artifact(ARTIFACT).unwrap();
+        let mut engine = Engine::new(spec).unwrap();
+        engine.step(16.0 / 9.0).unwrap();
+        assert!(engine.toggle_collisions());
+
+        for burst_frame in 0..=COLLISION_BURST_FRAMES {
+            engine
+                .step(16.0 / 9.0)
+                .unwrap_or_else(|error| panic!("collision burst frame {burst_frame}: {error:?}"));
+        }
+
+        assert_eq!(engine.collision_burst_frame, COLLISION_BURST_FRAMES);
+        assert!(engine.batches().iter().all(|batch| {
+            batch
+                .vertices
+                .iter()
+                .flatten()
+                .all(|coordinate| coordinate.is_finite())
+        }));
+    }
+
+    #[test]
+    fn camera_moving_past_geometry_depth_clips_faces_without_aborting() {
+        let spec = Spec::decode_artifact(ARTIFACT).unwrap();
+        let mut engine = Engine::new(spec).unwrap();
+        engine.step(16.0 / 9.0).unwrap();
+
+        let mut camera = engine.camera();
+        camera.target = [
+            camera.position[0],
+            camera.position[1],
+            camera.position[2] + 1.0,
+        ];
+        engine.set_camera(camera).unwrap();
+        engine
+            .step(16.0 / 9.0)
+            .expect("geometry outside the camera depth range must be clipped");
+
+        assert!(
+            engine
+                .batches()
+                .iter()
+                .flat_map(|batch| batch.vertices.chunks_exact(VERTICES_PER_FACE))
+                .all(|face| face.iter().all(|vertex| *vertex == HIDDEN))
+        );
+    }
+
+    #[test]
+    fn helio_gpu_abi_lengths_offsets_and_little_endian_encoding_are_exact() {
+        assert_eq!(core::mem::size_of::<GpuInstanceData>(), 208);
+        assert_eq!(core::mem::size_of::<GpuCameraUniforms>(), 368);
+        assert_eq!(core::mem::size_of::<GpuLight>(), 128);
+        assert_eq!(core::mem::size_of::<GpuMaterial>(), 96);
+        assert_eq!(core::mem::size_of::<GpuForwardLitGlobals>(), 48);
+
+        let instance = GpuInstanceData {
+            model: core::array::from_fn(|index| index as f32 + 0.25),
+            normal_mat: core::array::from_fn(|index| index as f32 + 20.25),
+            bounds: [40.25, 41.25, 42.25, 43.25],
+            prev_model: core::array::from_fn(|index| index as f32 + 50.25),
+            mesh_id: 0x1122_3344,
+            material_id: 0x5566_7788,
+            flags: 0x99aa_bbcc,
+            lightmap_index: 0xddee_ff00,
+        };
+        let bytes = instance.to_le_bytes();
+        assert_eq!(&bytes[0..4], &0.25f32.to_le_bytes());
+        assert_eq!(&bytes[64..68], &20.25f32.to_le_bytes());
+        assert_eq!(&bytes[112..116], &40.25f32.to_le_bytes());
+        assert_eq!(&bytes[128..132], &50.25f32.to_le_bytes());
+        assert_eq!(&bytes[192..196], &0x1122_3344u32.to_le_bytes());
+        assert_eq!(&bytes[204..208], &0xddee_ff00u32.to_le_bytes());
+
+        let mut camera = GpuCameraUniforms::default();
+        camera.proj[0] = 2.5;
+        camera.position_near[3] = 0.125;
+        camera.prev_view_proj[15] = 7.5;
+        let bytes = camera.to_le_bytes();
+        assert_eq!(&bytes[64..68], &2.5f32.to_le_bytes());
+        assert_eq!(&bytes[268..272], &0.125f32.to_le_bytes());
+        assert_eq!(&bytes[364..368], &7.5f32.to_le_bytes());
+
+        let mut light = GpuLight::default();
+        light.flare_enabled = 0x1020_3040;
+        light.ies_profile_index = -7;
+        let bytes = light.to_le_bytes();
+        assert_eq!(&bytes[84..88], &0x1020_3040u32.to_le_bytes());
+        assert_eq!(&bytes[112..116], &(-7i32).to_le_bytes());
+
+        let mut material = GpuMaterial::default();
+        material.tex_base_color = 0x1234_5678;
+        material.class_params[0] = 3.25;
+        let bytes = material.to_le_bytes();
+        assert_eq!(&bytes[48..52], &0x1234_5678u32.to_le_bytes());
+        assert_eq!(&bytes[80..84], &3.25f32.to_le_bytes());
+    }
+
+    #[test]
+    fn instance_step_groups_contiguously_and_keeps_temporal_models() {
+        let spec = Spec::decode_artifact(ARTIFACT).unwrap();
+        let mut engine = Engine::new(spec).unwrap();
+        let (first_models, first_view_proj) = {
+            let frame = engine.step_instances(16.0 / 9.0).unwrap();
+            assert_eq!(frame.instances.len(), 8);
+            assert_eq!(frame.instance_dirty, DirtyRange { first: 0, count: 8 });
+            assert_eq!(frame.compacted_indices, &[0, 1, 2, 3, 4, 5, 6, 7]);
+            assert_eq!(frame.meshes.len(), SHAPE_COUNT);
+            assert_eq!(frame.groups.len(), DRAW_GROUP_COUNT);
+            assert_eq!(
+                frame
+                    .draws
+                    .iter()
+                    .map(|draw| draw.instance_count)
+                    .sum::<u32>(),
+                8
+            );
+
+            let mut expected_first = 0u32;
+            for (group_index, (group, draw)) in
+                frame.groups.iter().zip(frame.draws.iter()).enumerate()
+            {
+                assert_eq!(draw.first_instance, expected_first);
+                let start = draw.first_instance as usize;
+                let end = start + draw.instance_count as usize;
+                assert!(frame.instances[start..end].iter().all(|instance| {
+                    instance.mesh_id == group.mesh_id
+                        && instance.material_id == group.material_id
+                        && instance.prev_model == instance.model
+                }));
+                assert_eq!(
+                    draw.first_index,
+                    frame.meshes[group_index / MATERIAL_COUNT].first_index
+                );
+                expected_first += draw.instance_count;
+            }
+
+            let identity = matrix4_mul(frame.camera.view_proj, frame.camera.inv_view_proj);
+            for (index, value) in identity.iter().enumerate() {
+                let expected = if index % 5 == 0 { 1.0 } else { 0.0 };
+                assert!((value - expected).abs() < 2.0e-4, "identity[{index}]={value}");
+            }
+            assert!(frame.camera.view_proj.iter().all(|value| value.is_finite()));
+            assert_eq!(frame.camera.prev_view_proj, frame.camera.view_proj);
+            (
+                frame
+                    .instances
+                    .iter()
+                    .map(|instance| instance.model)
+                    .collect::<Vec<_>>(),
+                frame.camera.view_proj,
+            )
+        };
+
+        let frame = engine.step_instances(16.0 / 9.0).unwrap();
+        assert_eq!(frame.instances.len(), first_models.len());
+        assert_eq!(frame.camera.prev_view_proj, first_view_proj);
+        assert!(
+            frame
+                .instances
+                .iter()
+                .zip(first_models.iter())
+                .all(|(instance, previous)| instance.prev_model == *previous)
+        );
+        assert!(
+            frame
+                .instances
+                .iter()
+                .zip(first_models.iter())
+                .any(|(instance, previous)| instance.model != *previous)
+        );
     }
 }

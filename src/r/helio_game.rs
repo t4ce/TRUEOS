@@ -9,6 +9,8 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use embassy_time::{Duration, Instant, Timer};
 
 const GAME_ARTIFACT: &[u8] = include_bytes!("../../assets/helio/simple-cube.trueos.intel.helio");
+const CHURN_FORWARD_ARTIFACT: &[u8] =
+    include_bytes!("../../assets/helio/churn-forward.trueos.intel.helio");
 const OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(8);
 const PLANE_SLOT: usize = crate::ui4::RGB_OVERLAY_PLANE_SLOT_2;
 const MARGIN: u32 = 48;
@@ -122,6 +124,7 @@ enum GameError {
     Frame(crate::ui4::FramePoolError),
     Window(crate::ui4::WindowBrokerError),
     Render(&'static str),
+    NativeUnavailable(&'static str),
     InvalidFrame,
 }
 
@@ -132,6 +135,7 @@ impl GameError {
             Self::Frame(_) => "frame-pool",
             Self::Window(_) => "window-broker",
             Self::Render(reason) => reason,
+            Self::NativeUnavailable(reason) => reason,
             Self::InvalidFrame => "invalid-frame",
         }
     }
@@ -465,10 +469,9 @@ fn update_resident_scene(
     }
     for (triangle_index, (resident, triangle)) in resident.iter().zip(&scene.triangles).enumerate()
     {
-        crate::intel::render::update_resident_triangle_mesh(
+        crate::intel::render::update_resident_triangle_vertices(
             &resident.mesh,
             &triangle.vertices,
-            &[0, 1, 2],
         )
         .map_err(GameError::Render)?;
         let args = scene
@@ -518,6 +521,31 @@ fn gpu_logger_sample(
             .iter()
             .map(|triangle| u64::from(triangle.mesh.index_count / 3))
             .sum(),
+        busy_retries,
+        incomplete_retries,
+    }
+}
+
+fn native_churn_gpu_logger_sample(
+    result: &crate::intel::render::ResidentSceneFrameResult,
+    frame_index: u64,
+    cadence_us: u64,
+    objects: usize,
+    triangles: u64,
+    busy_retries: u64,
+    incomplete_retries: u64,
+) -> crate::spirit::gpu_logger::GpuLoggerSample {
+    crate::spirit::gpu_logger::GpuLoggerSample {
+        frame_index,
+        cadence_us,
+        frame_us: result.frame_us,
+        geometry_us: result.geometry_us,
+        prepare_us: result.geometry_prepare_us,
+        retire_wait_us: result.gpu_poll_us,
+        poll_iters: result.gpu_poll_iters,
+        objects: u64::try_from(objects).unwrap_or(u64::MAX),
+        draws: u64::try_from(result.requested_draws).unwrap_or(u64::MAX),
+        triangles,
         busy_retries,
         incomplete_retries,
     }
@@ -612,6 +640,69 @@ async fn render_frame(
     Ok(result)
 }
 
+async fn render_native_churn_frame(
+    frame: crate::ui4::FrameHandle,
+    width: u32,
+    height: u32,
+    resident: &crate::intel::render::ResidentChurnForward,
+    clear_rgba: [u8; 4],
+) -> Result<crate::intel::render::ResidentSceneFrameResult, GameError> {
+    let _gpu_lane = crate::r::font_kernel_service::acquire_gpu_lane(
+        crate::r::font_kernel_service::FontKernelConsumer::new(
+            crate::r::font_kernel_service::FontKernelConsumerPath::Helio,
+            frame.raw(),
+        ),
+    )
+    .await;
+    let lease = crate::ui4::acquire_frame_buffer(frame)?;
+    let destination = match crate::ui4::gpgpu_rgba_surface(lease) {
+        Ok(destination)
+            if destination.width == width
+                && destination.height == height
+                && destination.pitch_bytes >= width.saturating_mul(4) =>
+        {
+            destination
+        }
+        Ok(_) => {
+            let _ = crate::ui4::cancel_frame_buffer(lease);
+            return Err(GameError::InvalidFrame);
+        }
+        Err(error) => {
+            let _ = crate::ui4::cancel_frame_buffer(lease);
+            return Err(error.into());
+        }
+    };
+    let result = match crate::intel::render::render_resident_churn_forward_frame_direct_to_surface(
+        resident,
+        Some(clear_rgba),
+        destination,
+        false,
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = crate::ui4::cancel_frame_buffer(lease);
+            return Err(GameError::Render(error));
+        }
+    };
+    if result.completed_draws != result.requested_draws
+        || result.requested_draws != trueos_helio_runtime::churn::DRAW_GROUP_COUNT
+        || result.rgba.is_some()
+        || result.present_copy_performed
+    {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
+        return Err(GameError::Render("helio-incomplete-native-churn-frame"));
+    }
+    let Some(release) = result.release_fence else {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
+        return Err(GameError::Render("helio-missing-release-fence"));
+    };
+    if let Err(error) = crate::ui4::publish_gpu_frame_buffer(lease, release) {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
+        return Err(error.into());
+    }
+    Ok(result)
+}
+
 fn publish_surface_window(surface: &mut GameSurface) -> Result<(), GameError> {
     let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
     let (scanout_width, scanout_height) =
@@ -701,10 +792,9 @@ fn update_resident_batches(
         return Err(GameError::Render("helio-churn-batch-count"));
     }
     for (resident, batch) in resident.iter_mut().zip(batches) {
-        crate::intel::render::update_resident_triangle_mesh(
+        crate::intel::render::update_resident_triangle_vertices(
             &resident.mesh,
             &batch.vertices,
-            &batch.indices,
         )
         .map_err(GameError::Render)?;
         let args = batch.draw_indexed_indirect().map_err(GameError::Artifact)?;
@@ -1289,7 +1379,7 @@ async fn run_churn() -> Result<(), GameError> {
             }
             crate::log_info!(
                 target: "helio";
-                "helio example=2 name=churn-benchmark online artifact_bytes={} active_objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba floor=none alpha=premultiplied animation_rate=1.5x lighting=churn-light-v1+24-face-batches lights=2 ambient=hemisphere controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=relative-post-work delay_ms=33 nominal_ceiling_fps=30 input=ui4-owner-broker->winit-shaped-events resize=ui4-broker->render-native-or-half-scale-ring->atomic-frame-swap->direct-plane-1x-or-2x path=helioa-v1+churn-v1+flat-light-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+                "helio example=2 name=churn-benchmark online artifact_bytes={} active_objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba floor=none alpha=premultiplied animation_rate=1.5x lighting=churn-light-v1+24-face-batches lights=2 ambient=hemisphere controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=relative-post-work delay_ms=33 nominal_ceiling_fps=30 input=ui4-owner-broker->winit-shaped-events resize=ui4-broker->render-native-or-half-scale-ring->atomic-frame-swap->direct-plane-1x-or-2x path=helioa-v1+churn-v1+flat-light-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct mutable_upload=vertices-only immutable_indices=retained cpu_readback=0 cpu_frame_copy=0\n",
                 GAME_ARTIFACT.len(),
                 engine.active_objects(),
                 resident.len(),

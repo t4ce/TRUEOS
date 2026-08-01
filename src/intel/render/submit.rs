@@ -981,7 +981,7 @@ fn log_backend_dispatch_contract(
 
 fn log_mesa_spec_cross_compare(
     warm: RenderWarmState,
-    pipeline: &'static crate::intel::shader::TrianglePipeline,
+    pipeline: &crate::intel::shader::TrianglePipeline,
     sbe_dw1: u32,
     baked_vs_urb_output_length: u8,
     programmed_vs_urb_output_length: u8,

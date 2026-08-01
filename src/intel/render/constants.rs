@@ -274,16 +274,27 @@ const GEN12_L3ALLOC: usize = 0xB134;
 const GEN12_L3ALLOC_ADL_DEFAULT: u32 = (32 << 1) | (88 << 25);
 const GFX125_L3ALLOC_FULL_WAYS: u32 = 1 << 9;
 const SURFTYPE_2D: u32 = 1;
+const SURFTYPE_BUFFER: u32 = 4;
 const SURFTYPE_NULL: u32 = 7;
+const SURFACE_FORMAT_RAW: u32 = 0x1FF;
 const SURFACE_FORMAT_B8G8R8A8_UNORM: u32 = 192;
 const SURFACE_FORMAT_R8G8B8A8_UNORM: u32 = 199;
 const SURFACE_FORMAT_R32G32B32A32_FLOAT: u32 = 0;
 const SURFACE_FORMAT_R32G32B32A32_UINT: u32 = 2;
 const SURFACE_FORMAT_R32G32B32_FLOAT: u32 = 64;
 const SURFACE_FORMAT_R32G32_FLOAT: u32 = 133;
+const SURFACE_FORMAT_R32G32_UINT: u32 = 135;
 const DEPTH_SURFACE_FORMAT_D32_FLOAT: u32 = 1;
 const COMPARE_FUNCTION_ALWAYS: u8 = 0;
+const COMPARE_FUNCTION_LESS: u8 = 2;
 const COMPARE_FUNCTION_LEQUAL: u8 = 4;
+
+/// The checked-in Churn ISA was compiled and captured on RPL-S 0xA780.
+/// Keep this separate from the DG2-only `device_is_gfx125` helper: admitting
+/// another Xe-LP device requires its own compiled artifact validation.
+const fn device_supports_churn_forward_native(device_id: u16) -> bool {
+    device_id == 0xA780
+}
 const SURFACE_HALIGN_4: u32 = 1;
 const SURFACE_HALIGN_128_GFX125: u32 = 3;
 const SURFACE_VALIGN_4: u32 = 1;

@@ -359,11 +359,33 @@ fn write_triangle_probe_state_with_flush(
     {
         return Err("probe-viewport-translation");
     }
+    let binding_table_entries = if draw.native.is_some() { 4usize } else { 1usize };
+    let surface_state_count = binding_table_entries;
     let mut cursor = shader_layout.state_region_offset_bytes as usize;
     let binding_table_offset = cursor;
-    cursor = crate::intel::align_up(binding_table_offset + 4, 64).ok_or("probe-state-align")?;
+    cursor = crate::intel::align_up(
+        binding_table_offset
+            .checked_add(
+                binding_table_entries
+                    .checked_mul(core::mem::size_of::<u32>())
+                    .ok_or("probe-state-overflow")?,
+            )
+            .ok_or("probe-state-overflow")?,
+        64,
+    )
+    .ok_or("probe-state-align")?;
     let surface_state_offset = cursor;
-    cursor = crate::intel::align_up(surface_state_offset + 64, 32).ok_or("probe-state-align")?;
+    cursor = crate::intel::align_up(
+        surface_state_offset
+            .checked_add(
+                surface_state_count
+                    .checked_mul(64)
+                    .ok_or("probe-state-overflow")?,
+            )
+            .ok_or("probe-state-overflow")?,
+        32,
+    )
+    .ok_or("probe-state-align")?;
     let sampler_state_offset = cursor;
     cursor = crate::intel::align_up(sampler_state_offset + 16, 64).ok_or("probe-state-align")?;
     let blend_state_offset = cursor;
@@ -399,7 +421,14 @@ fn write_triangle_probe_state_with_flush(
     let dwords = unsafe {
         core::slice::from_raw_parts_mut(warm.draw_state_virt as *mut u32, warm.draw_state_len / 4)
     };
-    dwords[binding_table_offset / 4] = surface_state_offset as u32;
+    for entry in 0..binding_table_entries {
+        dwords[binding_table_offset / 4 + entry] = u32::try_from(
+            surface_state_offset
+                .checked_add(entry * 64)
+                .ok_or("probe-state-overflow")?,
+        )
+        .map_err(|_| "probe-state-overflow")?;
+    }
 
     let surface = &mut dwords[surface_state_offset / 4..surface_state_offset / 4 + 16];
     surface.fill(0);
@@ -459,6 +488,13 @@ fn write_triangle_probe_state_with_flush(
         if resident_msaa4 { 4 } else { 1 },
         if resident_msaa4 { "tile64" } else { "linear" },
     );
+
+    if let Some(native) = draw.native {
+        for (binding_index, binding) in native.vs_storage_bindings.into_iter().enumerate() {
+            let start = surface_state_offset / 4 + (binding_index + 1) * 16;
+            write_triangle_raw_buffer_surface_state(&mut dwords[start..start + 16], binding)?;
+        }
+    }
 
     let sampler = &mut dwords[sampler_state_offset / 4..sampler_state_offset / 4 + 4];
     sampler.fill(0);
@@ -568,6 +604,91 @@ fn write_triangle_probe_state_with_flush(
     })
 }
 
+/// Encode the Gen12 RAW buffer surface used by Churn's read-only storage
+/// bindings. The extent is the exact bound byte range, not the page-rounded
+/// allocation size, so an out-of-contract shader index still faults at the
+/// narrowest surface boundary the hardware supports.
+fn write_triangle_raw_buffer_surface_state(
+    surface: &mut [u32],
+    binding: TriangleStorageBufferBinding,
+) -> Result<(), &'static str> {
+    if surface.len() != 16 || binding.byte_len == 0 {
+        return Err("probe-native-buffer-surface");
+    }
+    surface.fill(0);
+    let extent = u64::from(binding.byte_len - 1);
+    let width_minus_1 = (extent & 0x7f) as u32;
+    let height_minus_1 = ((extent >> 7) & 0x3fff) as u32;
+    let depth_minus_1 = ((extent >> 21) & 0x7ff) as u32;
+    surface[0] = (SURFTYPE_BUFFER << 29)
+        | (SURFACE_FORMAT_RAW << 18)
+        | (SURFACE_HALIGN_4 << 14)
+        | (SURFACE_VALIGN_4 << 16);
+    surface[1] = RENDER_MOCS << 24;
+    surface[2] = (height_minus_1 << 16) | width_minus_1;
+    surface[3] = depth_minus_1 << 21;
+    surface[8] = binding.gpu_addr as u32;
+    surface[9] = (binding.gpu_addr >> 32) as u32;
+    Ok(())
+}
+
+#[cfg(test)]
+mod churn_raw_surface_tests {
+    use super::{
+        RENDER_MOCS, SURFACE_FORMAT_RAW, SURFTYPE_BUFFER, TriangleStorageBufferBinding,
+        write_triangle_raw_buffer_surface_state,
+    };
+
+    #[test]
+    fn encodes_exact_raw_extent_and_address() {
+        let mut surface = [0xFFFF_FFFF; 16];
+        let binding = TriangleStorageBufferBinding {
+            gpu_addr: 0x0000_1234_5678_9000,
+            byte_len: 368,
+        };
+        write_triangle_raw_buffer_surface_state(&mut surface, binding).unwrap();
+        let extent = 367u32;
+        assert_eq!(
+            surface[0],
+            (SURFTYPE_BUFFER << 29)
+                | (SURFACE_FORMAT_RAW << 18)
+                | (super::SURFACE_HALIGN_4 << 14)
+                | (super::SURFACE_VALIGN_4 << 16)
+        );
+        assert_eq!(surface[1], RENDER_MOCS << 24);
+        assert_eq!(surface[2], (((extent >> 7) & 0x3fff) << 16) | (extent & 0x7f));
+        assert_eq!(surface[3], ((extent >> 21) & 0x7ff) << 21);
+        assert_eq!(surface[8], 0x5678_9000);
+        assert_eq!(surface[9], 0x0000_1234);
+        assert!(surface[4..8].iter().chain(&surface[10..]).all(|&word| word == 0));
+    }
+
+    #[test]
+    fn rejects_zero_sized_or_wrong_sized_surface() {
+        let mut surface = [0u32; 16];
+        assert_eq!(
+            write_triangle_raw_buffer_surface_state(
+                &mut surface,
+                TriangleStorageBufferBinding {
+                    gpu_addr: 0x1000,
+                    byte_len: 0,
+                },
+            ),
+            Err("probe-native-buffer-surface")
+        );
+        assert_eq!(
+            write_triangle_raw_buffer_surface_state(
+                &mut surface[..15],
+                TriangleStorageBufferBinding {
+                    gpu_addr: 0x1000,
+                    byte_len: 4,
+                },
+            ),
+            Err("probe-native-buffer-surface")
+        );
+    }
+}
+
 /// Lower Helio's exact five-DWORD DrawIndexedIndirectArgs ABI to the Intel
 /// auto-draw registers. Keeping this as a small standalone encoder makes the
 /// ABI testable without a device and leaves the record GPU-writable for the
@@ -668,6 +789,57 @@ mod draw_indexed_indirect_encoder_tests {
     }
 }
 
+fn validate_triangle_native_draw_contract(
+    draw: TriangleDrawPrep,
+    native: TriangleNativeDrawContract,
+) -> Result<(), &'static str> {
+    let [camera, instances, compacted] = native.vs_storage_bindings;
+    let instance_count = instances.byte_len / trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN as u32;
+    let compacted_count = compacted.byte_len / core::mem::size_of::<u32>() as u32;
+    let expected_instancing = [
+        TriangleVfInstancingState {
+            element_index: 0,
+            enabled: false,
+            step_rate: 0,
+        },
+        TriangleVfInstancingState {
+            element_index: 1,
+            enabled: false,
+            step_rate: 0,
+        },
+        TriangleVfInstancingState {
+            element_index: 2,
+            enabled: false,
+            step_rate: 0,
+        },
+    ];
+    if draw.vertex_format != TriangleVertexFormat::PosNormal
+        || draw.vertex_stride != trueos_helio_artifact::churn_forward::VERTEX_STRIDE
+        || draw.index_buffer.is_none()
+        || draw.indirect_args_gpu_addr.is_none()
+        || camera.gpu_addr == 0
+        || instances.gpu_addr == 0
+        || compacted.gpu_addr == 0
+        || camera.byte_len
+            != trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN as u32
+        || instances.byte_len == 0
+        || instances.byte_len
+            % trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN as u32
+            != 0
+        || compacted.byte_len == 0
+        || compacted.byte_len % core::mem::size_of::<u32>() as u32 != 0
+        || instance_count != compacted_count
+        || native.vf_sgvs_dw1 != 0xE002_4002
+        || native.vf_sgvs_2_dw1 != 0xB002_0002
+        || native.vf_sgvs_2_dw2 != 3
+        || native.vf_component_packing != [0x0000_0A77, 0, 0, 0]
+        || native.vf_instancing != expected_instancing
+    {
+        return Err("probe-native-vf-contract");
+    }
+    Ok(())
+}
+
 fn encode_triangle_probe_batch(
     submit_name: &'static str,
     batch_dwords: &mut [u32],
@@ -675,7 +847,7 @@ fn encode_triangle_probe_batch(
     draw: TriangleDrawPrep,
     blend_mode: TriangleBlendProbeMode,
     depth_config: Option<TriangleDepthConfig>,
-    pipeline: &'static crate::intel::shader::TrianglePipeline,
+    pipeline: &crate::intel::shader::TrianglePipeline,
     shader_layout: TriangleShaderLayout,
     probe_state: TriangleProbeStateLayout,
     result_gpu_addr: u64,
@@ -690,6 +862,12 @@ fn encode_triangle_probe_batch(
     post_draw_sync_variant: PostDrawSyncVariant,
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
+    if let Some(native) = draw.native {
+        validate_triangle_native_draw_contract(draw, native)?;
+        if !device_supports_churn_forward_native(warm.device_id) {
+            return Err("probe-native-device-mismatch");
+        }
+    }
     let resident_msaa4 = draw.uses_resident_scene_msaa4();
     if resident_msaa4 && !device_is_gfx125(warm.device_id) {
         return Err("probe-msaa4-device");
@@ -1004,6 +1182,7 @@ fn encode_triangle_probe_batch(
     }
 
     let mesa_host_fixed_function = matches!(backend_probe_mode, BackendProbeMode::MesaLike);
+    let artifact_native_fixed_function = draw.native.is_some();
     let surface_base_relative_binding_table =
         mesa_host_fixed_function && !device_is_gfx125(warm.device_id);
     let binding_table_pool_size = warm
@@ -1052,12 +1231,16 @@ fn encode_triangle_probe_batch(
     };
     let vs_ksp_offset = shader_layout.vs.code_offset_bytes + shader_layout.vs.ksp_offset_bytes;
     let ps_ksp_offset = shader_layout.ps.code_offset_bytes + shader_layout.ps.ksp_offset_bytes;
-    let sbe_vertex_read_offset = if mesa_host_fixed_function || backend_probe_mode.force_sbe_read0() {
+    let sbe_vertex_read_offset = if (mesa_host_fixed_function && !artifact_native_fixed_function)
+        || backend_probe_mode.force_sbe_read0()
+    {
         0
     } else {
         front_end_contract.sbe_read_offset as u32
     };
-    let sbe_vertex_read_length = if mesa_host_fixed_function || backend_probe_mode.force_sbe_read0() {
+    let sbe_vertex_read_length = if (mesa_host_fixed_function && !artifact_native_fixed_function)
+        || backend_probe_mode.force_sbe_read0()
+    {
         0
     } else {
         front_end_contract.sbe_read_length as u32
@@ -1200,7 +1383,11 @@ fn encode_triangle_probe_batch(
     // Mirror Mesa's simple-shader path here as literally as possible: cull
     // none, and otherwise leave raster defaults boring until we have visual
     // proof that a more opinionated packet is required.
-    let raster_dw1 = if mesa_host_fixed_function {
+    let raster_dw1 = if artifact_native_fixed_function {
+        // Exact gfx125 ANV state for CCW front faces, BACK culling, solid
+        // fill, one raster sample, near/far clip and scissor enabled.
+        0x04A3_1003
+    } else if mesa_host_fixed_function {
         if resident_msaa4 {
             0x04A1_1C03
         } else {
@@ -1707,7 +1894,15 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_VS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_VS)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        if artifact_native_fixed_function {
+            binding_table_pointer_offset
+        } else {
+            0
+        },
+    )?;
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_HS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_HS)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -1786,7 +1981,9 @@ fn encode_triangle_probe_batch(
     );
 
     log_batch_offset(cursor, "3DSTATE_VERTEX_ELEMENTS");
-    let vf_vertex_element_count = if mesa_simple_rect_stack && vf_synthesized_vue {
+    let vf_vertex_element_count = if artifact_native_fixed_function {
+        3
+    } else if mesa_simple_rect_stack && vf_synthesized_vue {
         2
     } else {
         streamout_experiment.vf_vertex_element_count()
@@ -1794,7 +1991,7 @@ fn encode_triangle_probe_batch(
     push(
         batch_dwords,
         &mut cursor,
-        if vf_synthesized_vue {
+        if artifact_native_fixed_function || vf_synthesized_vue {
             cmd_3dstate_vertex_elements(vf_vertex_element_count)?
         } else {
             CMD_3DSTATE_VERTEX_ELEMENTS_1
@@ -1945,6 +2142,44 @@ fn encode_triangle_probe_batch(
                 VFCOMP_STORE_SRC,
                 VFCOMP_STORE_1_FP,
             )?,
+            TriangleVertexFormat::PosNormal => {
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    0,
+                    0,
+                    SURFACE_FORMAT_R32G32B32_FLOAT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_1_FP,
+                )?;
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    0,
+                    12,
+                    SURFACE_FORMAT_R32G32B32_FLOAT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_1_FP,
+                )?;
+                // ANV appends one non-memory synthetic element. SGVS writes
+                // StartingInstance into Y and InstanceID into W; all fetched
+                // components are zero so VB31 needs no backing allocation.
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    31,
+                    0,
+                    SURFACE_FORMAT_R32G32_UINT,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
+                )?;
+            }
         }
     }
 
@@ -1970,7 +2205,12 @@ fn encode_triangle_probe_batch(
     } else {
         0
     };
-    let vf_component_packing_enable = if mesa_host_fixed_function { 1 << 9 } else { 0 };
+    let vf_component_packing_enable =
+        if mesa_host_fixed_function || artifact_native_fixed_function {
+            1 << 9
+        } else {
+            0
+        };
     push(
         batch_dwords,
         &mut cursor,
@@ -2005,7 +2245,9 @@ fn encode_triangle_probe_batch(
     }
     log_batch_offset(cursor, "3DSTATE_VF_SGVS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_SGVS)?;
-    let vf_sgvs_dw1 = if mesa_host_fixed_function {
+    let vf_sgvs_dw1 = if let Some(native) = draw.native {
+        native.vf_sgvs_dw1
+    } else if mesa_host_fixed_function {
         0x6001_4001
     } else if mesa_simple_rect_stack && vf_synthesized_vue {
         (1 << 31) | (1 << 29)
@@ -2018,10 +2260,31 @@ fn encode_triangle_probe_batch(
     push(
         batch_dwords,
         &mut cursor,
-        if mesa_host_fixed_function { 0x3001_0001 } else { 0 },
+        draw.native.map_or_else(
+            || if mesa_host_fixed_function { 0x3001_0001 } else { 0 },
+            |native| native.vf_sgvs_2_dw1,
+        ),
     )?;
-    push(batch_dwords, &mut cursor, if mesa_host_fixed_function { 2 } else { 0 })?;
-    if mesa_simple_rect_stack && vf_synthesized_vue {
+    push(
+        batch_dwords,
+        &mut cursor,
+        draw.native.map_or_else(
+            || if mesa_host_fixed_function { 2 } else { 0 },
+            |native| native.vf_sgvs_2_dw2,
+        ),
+    )?;
+    if let Some(native) = draw.native {
+        for instancing in native.vf_instancing {
+            log_batch_offset(cursor, "3DSTATE_VF_INSTANCING artifact-native");
+            push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_INSTANCING)?;
+            push(
+                batch_dwords,
+                &mut cursor,
+                u32::from(instancing.element_index) | (u32::from(instancing.enabled) << 8),
+            )?;
+            push(batch_dwords, &mut cursor, instancing.step_rate)?;
+        }
+    } else if mesa_simple_rect_stack && vf_synthesized_vue {
         for element_index in 0..2 {
             log_batch_offset(cursor, "3DSTATE_VF_INSTANCING mesa-simple");
             push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_INSTANCING)?;
@@ -2090,17 +2353,22 @@ fn encode_triangle_probe_batch(
         (sf_dw2 >> 29) & 0x3,
     );
 
-    if mesa_host_fixed_function {
+    if mesa_host_fixed_function || artifact_native_fixed_function {
         log_batch_offset(cursor, "3DSTATE_VF_COMPONENT_PACKING");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_COMPONENT_PACKING)?;
-        // The imported host VS consumes one R32G32B32 input.  Its compiler
-        // contract marks components X/Y/Z live and W absent.
-        push(batch_dwords, &mut cursor, 0x0000_0007)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, 0)?;
+        let packing = draw
+            .native
+            .map_or([0x0000_0007, 0, 0, 0], |native| native.vf_component_packing);
+        for dword in packing {
+            push(batch_dwords, &mut cursor, dword)?;
+        }
         intel_render_verbose_log!(
-            "probe-vf-component-packing enabled=1 masks=[0x00000007,0,0,0] source=verified-host-vs\n",
+            "probe-vf-component-packing enabled=1 masks=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] source={}\n",
+            packing[0],
+            packing[1],
+            packing[2],
+            packing[3],
+            if artifact_native_fixed_function { "artifact-native" } else { "verified-host-vs" },
         );
     }
 
@@ -2808,7 +3076,7 @@ fn encode_triangle_probe_batch(
         )?;
     }
 
-    if surface_base_relative_binding_table {
+    if surface_base_relative_binding_table && !artifact_native_fixed_function {
         // The verified gfx12 Mesa draw re-arms this state as one stalled tail
         // immediately before 3DPRIMITIVE.  Keep the order and payloads exact:
         // this is the final SVL/URB admission block, not a second draw.

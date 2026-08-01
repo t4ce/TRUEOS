@@ -1,4 +1,5 @@
 use super::*;
+use sha2::{Digest, Sha256};
 use std::{vec, vec::Vec};
 
 struct TestSection<'a> {
@@ -188,9 +189,181 @@ fn rejects_impossible_count_before_iteration() {
 
 #[test]
 fn section_kind_round_trips_raw_values() {
-    for raw in [0, 1, 2, 3, 4, 5, 6, 7, 77, u16::MAX] {
+    for raw in [0, 1, 2, 3, 4, 5, 6, 7, 8, 77, u16::MAX] {
         assert_eq!(SectionKind::from_raw(raw).raw(), raw);
     }
+}
+
+#[test]
+fn opens_authenticated_churn_forward_program() {
+    let source = b"Helio Churn forward WGSL";
+    let vs = b"vertex00";
+    let ps = b"pixel000";
+    let descriptor = churn_descriptor(source, vs, ps);
+    let bytes = fixture(&[
+        TestSection {
+            kind: 1,
+            name: "manifest.json",
+            data: b"{}",
+        },
+        TestSection {
+            kind: 8,
+            name: churn_forward::SECTION_NAME,
+            data: &descriptor,
+        },
+        TestSection {
+            kind: 3,
+            name: churn_forward::SHADER_SOURCE_SECTION,
+            data: source,
+        },
+        TestSection {
+            kind: 4,
+            name: churn_forward::VERTEX_ISA_SECTION,
+            data: vs,
+        },
+        TestSection {
+            kind: 4,
+            name: churn_forward::FRAGMENT_ISA_SECTION,
+            data: ps,
+        },
+    ]);
+    let program = Artifact::parse(&bytes)
+        .unwrap()
+        .churn_forward_program()
+        .unwrap();
+    assert_eq!(program.camera_layout().stride, 368);
+    assert_eq!(program.camera_layout().prev_view_proj, 304);
+    assert_eq!(program.instance_layout().material_id, 196);
+    assert_eq!(program.instance_layout().lightmap_index, 204);
+    assert_eq!(program.indirect_layout().stride, 20);
+    assert_eq!(program.vertex_fetch().attributes[1].offset, 12);
+    assert_eq!(program.vertex_fetch().vf_component_packing_dw0, 0x0000_0a77);
+    assert_eq!(program.vertex_fetch().packed_vs_input_count, 8);
+    assert_eq!(program.bindings()[2].intel_bti, 3);
+    assert_eq!(program.vertex_stage().grf_start_register, 2);
+    assert_eq!(program.vertex_stage().urb_entry_output_length, 1);
+    assert_eq!(program.fragment_stage().num_varying_inputs, 2);
+    assert!(program.fragment_stage().uses_vmask);
+    assert_eq!(program.fragment_stage().flat_inputs, 2);
+    assert_eq!(program.sgvs().vf_sgvs_dw1, 0xe002_4002);
+    assert_eq!(program.vf_instancing()[0].element_index, 0);
+    assert!(!program.vf_instancing()[1].enabled);
+    assert_eq!(program.vf_instancing()[2].element_index, 2);
+    assert_eq!(program.synthetic_instance_id_element().vertex_buffer_index, 31);
+}
+
+#[test]
+fn published_churn_forward_artifact_authenticates() {
+    let bytes = include_bytes!("../../../assets/helio/churn-forward.trueos.intel.helio");
+    let program = Artifact::parse(bytes)
+        .unwrap()
+        .churn_forward_program()
+        .unwrap();
+    assert_eq!(program.vertex_stage().code_size_bytes, 912);
+    assert_eq!(program.fragment_stage().code_size_bytes, 736);
+    assert_eq!(program.shader_source().byte_len, 2_852);
+}
+
+#[test]
+fn churn_forward_rejects_layout_corruption() {
+    let mut descriptor = churn_descriptor(b"source", b"vert", b"frag");
+    put_u32(&mut descriptor, 32, 256);
+    let bytes = fixture(&[
+        TestSection {
+            kind: 1,
+            name: "manifest.json",
+            data: b"{}",
+        },
+        TestSection {
+            kind: 8,
+            name: churn_forward::SECTION_NAME,
+            data: &descriptor,
+        },
+    ]);
+    assert_eq!(
+        Artifact::parse(&bytes)
+            .unwrap()
+            .churn_forward_program()
+            .unwrap_err(),
+        Error::InvalidChurnForward(churn_forward::Error::InvalidLayout)
+    );
+}
+
+#[test]
+fn churn_forward_rejects_reference_kind_and_hash() {
+    let source = b"source";
+    let vs = b"vert";
+    let ps = b"frag";
+    let descriptor = churn_descriptor(source, vs, ps);
+    let wrong_kind = fixture(&[
+        TestSection {
+            kind: 1,
+            name: "manifest.json",
+            data: b"{}",
+        },
+        TestSection {
+            kind: 8,
+            name: churn_forward::SECTION_NAME,
+            data: &descriptor,
+        },
+        TestSection {
+            kind: 4,
+            name: churn_forward::SHADER_SOURCE_SECTION,
+            data: source,
+        },
+        TestSection {
+            kind: 4,
+            name: churn_forward::VERTEX_ISA_SECTION,
+            data: vs,
+        },
+        TestSection {
+            kind: 4,
+            name: churn_forward::FRAGMENT_ISA_SECTION,
+            data: ps,
+        },
+    ]);
+    assert_eq!(
+        Artifact::parse(&wrong_kind)
+            .unwrap()
+            .churn_forward_program()
+            .unwrap_err(),
+        Error::WrongChurnForwardReferenceKind
+    );
+
+    let wrong_hash = fixture(&[
+        TestSection {
+            kind: 1,
+            name: "manifest.json",
+            data: b"{}",
+        },
+        TestSection {
+            kind: 8,
+            name: churn_forward::SECTION_NAME,
+            data: &descriptor,
+        },
+        TestSection {
+            kind: 3,
+            name: churn_forward::SHADER_SOURCE_SECTION,
+            data: source,
+        },
+        TestSection {
+            kind: 4,
+            name: churn_forward::VERTEX_ISA_SECTION,
+            data: b"xxxx",
+        },
+        TestSection {
+            kind: 4,
+            name: churn_forward::FRAGMENT_ISA_SECTION,
+            data: ps,
+        },
+    ]);
+    assert_eq!(
+        Artifact::parse(&wrong_hash)
+            .unwrap()
+            .churn_forward_program()
+            .unwrap_err(),
+        Error::ChurnForwardReferenceHashMismatch
+    );
 }
 
 #[test]
@@ -278,6 +451,103 @@ fn replay_fixture() -> Vec<u8> {
     put_u32(&mut bytes, replay::HEADER_LEN, 36);
     put_u32(&mut bytes, replay::HEADER_LEN + 4, 1);
     bytes
+}
+
+fn churn_descriptor(source: &[u8], vs: &[u8], ps: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0u8; churn_forward::BYTE_LEN];
+    bytes[..8].copy_from_slice(&churn_forward::MAGIC);
+    put_u16(&mut bytes, 8, churn_forward::FORMAT_VERSION);
+    put_u16(&mut bytes, 10, churn_forward::BYTE_LEN as u16);
+    put_u32(&mut bytes, 12, churn_forward::BYTE_LEN as u32);
+    put_u32(&mut bytes, 16, 0x3f);
+    put_u16(&mut bytes, 20, 2);
+    put_u16(&mut bytes, 22, 3);
+    put_u16(&mut bytes, 24, 2);
+    put_u32s(&mut bytes, 32, &[368, 0, 64, 128, 192, 256, 272, 288, 304, 0]);
+    put_u32s(&mut bytes, 72, &[208, 0, 64, 112, 128, 192, 196, 200, 204, 64, 48, 0]);
+    put_u32s(&mut bytes, 120, &[4, 20, 0, 4, 8, 12, 16, 36, 0, 0]);
+    put_u32(&mut bytes, 160, 24);
+    put_u16(&mut bytes, 164, 1);
+    put_u16(&mut bytes, 166, 2);
+    put_attribute(&mut bytes, 168, 0, 0);
+    put_attribute(&mut bytes, 180, 1, 12);
+    put_u32(&mut bytes, 196, 24);
+    put_binding(&mut bytes, 208, 0, 1, 368);
+    put_binding(&mut bytes, 224, 1, 2, 208);
+    put_binding(&mut bytes, 240, 2, 3, 4);
+    for offset in (256..=270).step_by(2) {
+        put_u16(&mut bytes, offset, 1);
+    }
+    put_u32(&mut bytes, 272, 1);
+    put_u32(&mut bytes, 276, 0xf);
+    bytes[282] = 1;
+    bytes[283] = 1;
+    put_u16(&mut bytes, 284, 2);
+    put_stage(&mut bytes, 288, 1, vs, b"vs_main", churn_forward::VERTEX_ISA_SECTION.as_bytes());
+    put_stage(&mut bytes, 448, 2, ps, b"fs_main", churn_forward::FRAGMENT_ISA_SECTION.as_bytes());
+    put_u32(&mut bytes, 608, source.len() as u32);
+    put_u16(&mut bytes, 612, churn_forward::SHADER_SOURCE_SECTION.len() as u16);
+    bytes[616..648].copy_from_slice(&Sha256::digest(source));
+    bytes[648..648 + churn_forward::SHADER_SOURCE_SECTION.len()]
+        .copy_from_slice(churn_forward::SHADER_SOURCE_SECTION.as_bytes());
+    put_u32(&mut bytes, 704, 0xe002_4002);
+    put_u32(&mut bytes, 708, 0xb002_0002);
+    put_u32(&mut bytes, 712, 3);
+    put_u16(&mut bytes, 716, 3);
+    put_u16(&mut bytes, 720, 0);
+    put_u16(&mut bytes, 728, 1);
+    put_u16(&mut bytes, 736, 2);
+    put_u16(&mut bytes, 744, 2);
+    bytes[746] = 31;
+    put_u16(&mut bytes, 748, 135);
+    bytes[750..754].copy_from_slice(&[2; 4]);
+    put_u32(&mut bytes, 756, 0x0000_0a77);
+    put_u16(&mut bytes, 760, 8);
+    put_u16(&mut bytes, 762, 1);
+    bytes
+}
+
+fn put_stage(bytes: &mut [u8], offset: usize, stage: u16, code: &[u8], entry: &[u8], name: &[u8]) {
+    put_u16(bytes, offset, stage);
+    put_u16(bytes, offset + 2, 8);
+    put_u32(bytes, offset + 4, code.len() as u32);
+    put_u32(bytes, offset + 12, 64);
+    put_u16(bytes, offset + 20, 2);
+    put_u16(bytes, offset + 22, 128);
+    put_u16(bytes, offset + 24, 64);
+    put_u16(bytes, offset + 26, if stage == 1 { 4 } else { 1 });
+    put_u16(bytes, offset + 32, if stage == 1 { 1 } else { 0 });
+    put_u16(bytes, offset + 34, if stage == 1 { 0 } else { 2 });
+    put_u32(bytes, offset + 36, if stage == 1 { 0 } else { 1 });
+    put_u32(bytes, offset + 40, if stage == 1 { 0 } else { 2 });
+    bytes[offset + 48..offset + 80].copy_from_slice(&Sha256::digest(code));
+    put_u16(bytes, offset + 80, entry.len() as u16);
+    put_u16(bytes, offset + 82, name.len() as u16);
+    bytes[offset + 88..offset + 88 + entry.len()].copy_from_slice(entry);
+    bytes[offset + 104..offset + 104 + name.len()].copy_from_slice(name);
+}
+
+fn put_attribute(bytes: &mut [u8], offset: usize, location: u16, byte_offset: u32) {
+    put_u16(bytes, offset, location);
+    put_u16(bytes, offset + 2, 1);
+    put_u32(bytes, offset + 4, byte_offset);
+    put_u32(bytes, offset + 8, 0x7);
+}
+
+fn put_binding(bytes: &mut [u8], offset: usize, binding: u8, bti: u8, size: u32) {
+    bytes[offset + 1] = binding;
+    bytes[offset + 2] = bti;
+    bytes[offset + 3] = 1;
+    bytes[offset + 4] = 1;
+    bytes[offset + 5] = 1;
+    put_u32(bytes, offset + 8, size);
+    put_u32(bytes, offset + 12, size);
+}
+
+fn put_u32s(bytes: &mut [u8], offset: usize, values: &[u32]) {
+    for (index, value) in values.iter().copied().enumerate() {
+        put_u32(bytes, offset + index * 4, value);
+    }
 }
 
 fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {

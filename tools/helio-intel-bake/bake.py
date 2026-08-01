@@ -39,6 +39,13 @@ REPLAY_KIND = 7
 REPLAY_MAGIC = b"HELIORP\0"
 REPLAY_HEADER_LEN = 64
 REPLAY_COMMAND_STRIDE = 20
+CHURN_FORWARD_SECTION = "render/churn-forward-v1.bin"
+CHURN_FORWARD_KIND = 8
+CHURN_FORWARD_SOURCE = "render/churn-forward.wgsl"
+CHURN_FORWARD_VS = "intel-xe-lp/churn-forward.vs.simd8.bin"
+CHURN_FORWARD_PS = "intel-xe-lp/churn-forward.ps.simd8.bin"
+CHURN_FORWARD_MAGIC = b"HCFWD\0\0\0"
+CHURN_FORWARD_BYTES = 768
 CHURN_LIGHT_SECTION = "scene/churn-light-v1.bin"
 CHURN_LIGHT_MAGIC = b"HCHLIT\0\0"
 CHURN_LIGHT_BYTES = 160
@@ -117,6 +124,141 @@ def encode_churn_light_scene() -> bytes:
     _put_f32s(out, 40, (-20.0, 5.0, -20.0, 40.0, 0.8, 0.7, 0.55, 7.0))
     _put_f32s(out, 72, (20.0, 5.0, 20.0, 40.0, 0.5, 0.7, 1.0, 7.0))
     _put_f32s(out, 104, (0.65, 0.0, 0.60, 0.0, 0.70, 0.0, 0.15, 0.80))
+    return bytes(out)
+
+
+def _encode_churn_stage(
+    out: bytearray,
+    offset: int,
+    *,
+    stage: int,
+    code: bytes,
+    entry_point: str,
+    section_name: str,
+) -> None:
+    """Write one fixed-size native stage reference for churn-forward-v1."""
+    entry = entry_point.encode("ascii")
+    name = section_name.encode("ascii")
+    if not code or len(code) % 4 or len(entry) > 16 or len(name) > 56:
+        raise SystemExit("invalid churn-forward native stage")
+    # ShaderKernelMetadata fields consumed by TRUEOS. The ANV gfx125 programs
+    # use SIMD8 with r2 as the payload start. The 128-GRF/64-thread envelope is
+    # the same conservative Xe-LP contract used by trueos-shader.
+    struct.pack_into(
+        "<HHIIIIHHHHHHHHIII",
+        out,
+        offset,
+        stage,
+        8,                  # dispatch width
+        len(code),
+        0,                  # code offset inside the named section
+        64,                 # required upload alignment
+        0,                  # KSP offset from uploaded code base
+        2,                  # dispatch GRF start
+        128,                # GRF allocation envelope
+        64,                 # max threads
+        4 if stage == 1 else 1,
+        0,                  # samplers
+        0,                  # push constants
+        1 if stage == 1 else 0,  # VS URB output length
+        0 if stage == 1 else 2,  # world normal and flat material ID
+        0 if stage == 1 else 1,  # PS uses VMASK
+        0 if stage == 1 else 2,  # material_id is flat location 1
+        0,
+    )
+    out[offset + 48:offset + 80] = hashlib.sha256(code).digest()
+    struct.pack_into("<HHI", out, offset + 80, len(entry), len(name), 0)
+    out[offset + 88:offset + 88 + len(entry)] = entry
+    out[offset + 104:offset + 104 + len(name)] = name
+
+
+def encode_churn_forward_program(wgsl: bytes, vs: bytes, ps: bytes) -> bytes:
+    """Encode Helio's pointer-free Churn transform/indirect/native ABI."""
+    for marker in (
+        b"struct GpuInstanceData",
+        b"compacted_indices",
+        b"@group(0) @binding(0)",
+        b"@group(0) @binding(1)",
+        b"@group(0) @binding(2)",
+        b"fn vs_main",
+        b"fn fs_main",
+    ):
+        if marker not in wgsl:
+            raise SystemExit(f"churn-forward WGSL lacks required marker: {marker!r}")
+
+    out = bytearray(CHURN_FORWARD_BYTES)
+    out[:8] = CHURN_FORWARD_MAGIC
+    struct.pack_into(
+        "<HHIIHHH",
+        out,
+        8,
+        1,
+        CHURN_FORWARD_BYTES,
+        CHURN_FORWARD_BYTES,
+        0x3F,
+        2,
+        3,
+        2,
+    )
+
+    # Exact current Helio GpuCameraUniforms layout (the old 256-byte comment in
+    # camera.rs is stale; the eight fields below occupy 368 bytes).
+    struct.pack_into("<10I", out, 32, 368, 0, 64, 128, 192, 256, 272, 288, 304, 0)
+    # Exact current Helio GpuInstanceData layout and member sizes.
+    struct.pack_into(
+        "<12I", out, 72,
+        208, 0, 64, 112, 128, 192, 196, 200, 204, 64, 48, 0,
+    )
+    # compacted u32 IDs followed by wgpu DrawIndexedIndirectArgs offsets;
+    # the captured cube draw has 36 indices and zero base/first instance.
+    struct.pack_into("<10I", out, 120, 4, 20, 0, 4, 8, 12, 16, 36, 0, 0)
+
+    struct.pack_into("<IHH", out, 160, 24, 1, 2)  # Uint32 indices, two attrs
+    struct.pack_into("<HHII", out, 168, 0, 1, 0, 0x7)   # position Float32x3
+    struct.pack_into("<HHII", out, 180, 1, 1, 12, 0x7)  # normal Float32x3
+    struct.pack_into("<HHI", out, 192, 0, 0, 24)        # VB0, per-vertex
+
+    # ANV reserves BTI0; the three vertex-stage read-only storage buffers map
+    # directly to BTI1..3 in bind-group order.
+    for offset, binding, bti, size in (
+        (208, 0, 1, 368),
+        (224, 1, 2, 208),
+        (240, 2, 3, 4),
+    ):
+        struct.pack_into(
+            "<BBBBBBHII", out, offset,
+            0, binding, bti, 1, 1, 1, 0, size, size,
+        )
+
+    # triangle-list, CCW, back-cull, BGRA8 sRGB, Depth32Float, Less, Uint32,
+    # sample1; depth writes on, blend off, RGBA writes. SBE reads the two
+    # forward varyings after the position header.
+    struct.pack_into("<8HIIHBBHH", out, 256, *([1] * 8), 1, 0xF, 0, 1, 1, 2, 0)
+
+    _encode_churn_stage(
+        out, 288, stage=1, code=vs, entry_point="vs_main",
+        section_name=CHURN_FORWARD_VS,
+    )
+    _encode_churn_stage(
+        out, 448, stage=2, code=ps, entry_point="fs_main",
+        section_name=CHURN_FORWARD_PS,
+    )
+    source_name = CHURN_FORWARD_SOURCE.encode("ascii")
+    struct.pack_into("<IHH", out, 608, len(wgsl), len(source_name), 0)
+    out[616:648] = hashlib.sha256(wgsl).digest()
+    out[648:648 + len(source_name)] = source_name
+    # Pinned Mesa genX_shader.c appends id_slot=2 for InstanceIndex. On gfx125
+    # this packs InstanceID+BaseInstance as the exact SGVS words below, backed
+    # by a synthetic VB31 R32G32_UINT element with STORE_0 component controls.
+    struct.pack_into("<III", out, 704, 0xE002_4002, 0xB002_0002, 3)
+    struct.pack_into("<HH", out, 716, 3, 0)
+    struct.pack_into("<HBBI", out, 720, 0, 0, 0, 0)
+    struct.pack_into("<HBBI", out, 728, 1, 0, 0, 0)
+    struct.pack_into("<HBBI", out, 736, 2, 0, 0, 0)
+    struct.pack_into("<HBBH4BH", out, 744, 2, 31, 0, 135, 2, 2, 2, 2, 0)
+    # brw_nir_pack_vs_input packs position.xyz (7), normal.xyz (7), then the
+    # synthetic base_instance.y + instance_id.w components (A): eight inputs.
+    struct.pack_into("<IHH", out, 756, 0x0000_0A77, 8, 1)
     return bytes(out)
 
 
@@ -255,7 +397,10 @@ def emit_helioa(sections: dict[str, tuple[int, bytes]]) -> bytes:
 def captured_wgsl(sections: dict[str, tuple[int, bytes]]) -> tuple[str, bytes]:
     candidates = [
         (name, data) for name, (_, data) in sections.items()
-        if name.endswith(".wgsl") and b"@vertex" in data and b"@fragment" in data
+        if name != CHURN_FORWARD_SOURCE
+        and name.endswith(".wgsl")
+        and b"@vertex" in data
+        and b"@fragment" in data
     ]
     if len(candidates) != 1:
         raise SystemExit(f"expected one captured vertex+fragment WGSL section, found {len(candidates)}")
@@ -358,6 +503,68 @@ def make_compile_only_dumper(destination: Path) -> None:
     destination.write_text(source)
 
 
+def make_churn_compile_only_dumper(destination: Path) -> None:
+    """Specialize the proven ANV compile dumper for Helio's Churn ABI."""
+    make_compile_only_dumper(destination)
+    source = destination.read_text()
+    source = replace_once(source, '''    const VkVertexInputBindingDescription binding = {
+        .binding = 0,
+        .stride = 36,
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    };
+    const VkVertexInputAttributeDescription attributes[3] = {
+        { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
+        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 12 },
+        { .location = 2, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 24 },
+    };
+    const VkPipelineVertexInputStateCreateInfo vertex_input = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &binding,
+        .vertexAttributeDescriptionCount = 3,
+        .pVertexAttributeDescriptions = attributes,
+    };''', '''    const VkVertexInputBindingDescription binding = {
+        .binding = 0,
+        .stride = 24,
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    };
+    const VkVertexInputAttributeDescription attributes[2] = {
+        { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
+        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 12 },
+    };
+    const VkPipelineVertexInputStateCreateInfo vertex_input = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &binding,
+        .vertexAttributeDescriptionCount = 2,
+        .pVertexAttributeDescriptions = attributes,
+    };''')
+    source = replace_once(source, '''    const VkDescriptorSetLayoutBinding camera_binding = {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+    };
+    const VkDescriptorSetLayoutCreateInfo set_layout_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &camera_binding,
+    };''', '''    const VkDescriptorSetLayoutBinding storage_bindings[3] = {
+        { .binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_VERTEX_BIT },
+        { .binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_VERTEX_BIT },
+        { .binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_VERTEX_BIT },
+    };
+    const VkDescriptorSetLayoutCreateInfo set_layout_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 3,
+        .pBindings = storage_bindings,
+    };''')
+    destination.write_text(source)
+
+
 def naga_compile(wgsl: Path, entry: str, output: Path) -> None:
     run([
         "cargo", "run", "-q", "--manifest-path", str(NAGA_MANIFEST), "--",
@@ -423,7 +630,10 @@ def assembly_code_size(path: Path) -> int:
     for line in path.read_text(errors="replace").splitlines():
         # Mesa 26 omits instruction offsets. Continuation lines for SEND
         # descriptors are indented; each other non-empty line is an EU op.
-        if not line or line[0].isspace() or line == "\0":
+        # Branch labels are assembler annotations, not EU instructions. Tiny
+        # SimpleCube had no labels; Churn's material switch exposed this old
+        # over-count and therefore the wrong combined-fragment cache size.
+        if not line or line[0].isspace() or line == "\0" or line.startswith("LABEL"):
             continue
         size += 8 if "compacted" in line else 16
     if size == 0:
@@ -478,6 +688,140 @@ def extract_native(exec_dir: Path, native_dir: Path) -> tuple[bytes, bytes, byte
     return vs, slices[0], ps16
 
 
+def bake_churn_only(
+    args: argparse.Namespace,
+    artifact_path: Path,
+    sections: dict[str, tuple[int, bytes]],
+) -> None:
+    """Compile/package the separate Helio Churn capture without SimpleCube."""
+    source_kind, wgsl_data = sections[CHURN_FORWARD_SOURCE]
+    if source_kind != 3:
+        raise SystemExit(
+            f"wrong section kind for {CHURN_FORWARD_SOURCE}: {source_kind}"
+        )
+    sections.setdefault(
+        CHURN_LIGHT_SECTION,
+        (OTHER_SECTION_KIND, encode_churn_light_scene()),
+    )
+    output = (args.out or artifact_path.with_name(
+        artifact_path.stem + ".intel.helio"
+    )).resolve()
+    work = (args.work_dir or output.with_suffix(output.suffix + ".work")).resolve()
+    work.mkdir(parents=True, exist_ok=True)
+    exec_dir = work / f"pipeline_exec-{os.getpid()}"
+    native_dir = work / "native"
+    exec_dir.mkdir(exist_ok=True)
+    native_dir.mkdir(exist_ok=True)
+
+    wgsl = work / "captured-churn-forward.wgsl"
+    vs_spv = work / "churn-forward.vert.spv"
+    fs_spv = work / "churn-forward.frag.spv"
+    wgsl.write_bytes(wgsl_data)
+    naga_compile(wgsl, "vs_main", vs_spv)
+    naga_compile(wgsl, "fs_main", fs_spv)
+
+    dumper_source = work / "helio_churn_pipeline_dump.c"
+    dumper = work / "helio_churn_pipeline_dump"
+    make_churn_compile_only_dumper(dumper_source)
+    run(["cc", str(dumper_source), "-o", str(dumper), *vulkan_compile_flags()])
+    env = os.environ.copy()
+    env["TRUEOS_EXECUTABLE_DUMP_DIR"] = str(exec_dir)
+    if args.device_id:
+        env["TRUEOS_VK_DEVICE_ID"] = args.device_id
+    compile_log = work / "compile.log"
+    run([str(dumper), str(vs_spv), str(fs_spv)], env=env, log=compile_log)
+    log_text = compile_log.read_text()
+    if "helio_pipeline_dump: compiled_only=1" not in log_text:
+        raise SystemExit("Intel Churn pipeline compilation did not complete")
+    vs, ps, _ = extract_native(exec_dir, native_dir)
+    if not vs or not ps or len(vs) % 4 or len(ps) % 4:
+        raise SystemExit("extracted Churn Intel ISA is empty or misaligned")
+    device, executables = parse_compile_log(log_text)
+    sections[CHURN_FORWARD_VS] = (4, vs)
+    sections[CHURN_FORWARD_PS] = (4, ps)
+    descriptor = encode_churn_forward_program(wgsl_data, vs, ps)
+    sections[CHURN_FORWARD_SECTION] = (CHURN_FORWARD_KIND, descriptor)
+
+    stages = [
+        {
+            "stage": "vertex", "entry_point": "vs_main", "simd_width": 8,
+            "section": CHURN_FORWARD_VS, "code_size_bytes": len(vs),
+            "sha256": sha256(vs), "binding_table_entry_count": 4,
+            "sampler_count": 0, "scratch_bytes": 0,
+            "grf_start_register": 2, "grf_used": 128, "max_threads": 64,
+            "urb_entry_output_length": 1,
+        },
+        {
+            "stage": "fragment", "entry_point": "fs_main", "simd_width": 8,
+            "section": CHURN_FORWARD_PS, "code_size_bytes": len(ps),
+            "sha256": sha256(ps), "binding_table_entry_count": 1,
+            "sampler_count": 0, "scratch_bytes": 0,
+            "grf_start_register": 2, "grf_used": 128, "max_threads": 64,
+            "num_varying_inputs": 2, "uses_vmask": True, "flat_inputs": 2,
+        },
+    ]
+    metadata = {
+        "schema": 1,
+        "producer": "helio-intel-bake",
+        "frontend": "captured-wgsl-via-helio-vendored-naga",
+        "backend": "mesa-anv-vulkan-pipeline-cache",
+        "architecture": "intel-gfx125-xe-lp-compatible",
+        "requested_trueos_device": "8086:4680-r0C",
+        "compile_device": device,
+        "program": "churn-forward",
+        "descriptor_section": CHURN_FORWARD_SECTION,
+        "wgsl_section": CHURN_FORWARD_SOURCE,
+        "wgsl_sha256": sha256(wgsl_data),
+        "spirv": {
+            "vs_main_sha256": sha256(vs_spv.read_bytes()),
+            "fs_main_sha256": sha256(fs_spv.read_bytes()),
+        },
+        "runtime_abi": "mesa-anv-gfx125-eu",
+        "vertex_layout": {
+            "stride": 24,
+            "attributes": [
+                {"location": 0, "format": "float32x3", "offset": 0,
+                 "vf_component_mask": 7},
+                {"location": 1, "format": "float32x3", "offset": 12,
+                 "vf_component_mask": 7},
+            ],
+        },
+        "bindings": [
+            {"group": 0, "binding": 0, "type": "read-only-storage-buffer",
+             "stages": ["vertex"], "intel_bti": 1, "element_stride": 368},
+            {"group": 0, "binding": 1, "type": "read-only-storage-buffer",
+             "stages": ["vertex"], "intel_bti": 2, "element_stride": 208},
+            {"group": 0, "binding": 2, "type": "read-only-storage-buffer",
+             "stages": ["vertex"], "intel_bti": 3, "element_stride": 4},
+            {"type": "render-target", "stages": ["fragment"], "intel_bti": 0},
+        ],
+        "stages": stages,
+        "compiler_executables": list(executables.values()),
+    }
+    sections["compiler/intel-xe-lp.json"] = (
+        5, (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode(),
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(emit_helioa(sections))
+
+    validated = parse_helioa(output.read_bytes())
+    if validated.get(CHURN_FORWARD_SECTION) != (CHURN_FORWARD_KIND, descriptor):
+        raise SystemExit("packaged churn-forward-v1 descriptor changed")
+    for stage in stages:
+        binary = validated[stage["section"]][1]
+        if sha256(binary) != stage["sha256"]:
+            raise SystemExit(f"packaged ISA hash mismatch: {stage['section']}")
+    print(f"baked {output}")
+    print(f"  {CHURN_FORWARD_SOURCE}: sha256={sha256(wgsl_data)}")
+    print(f"  {CHURN_FORWARD_SECTION}: {len(descriptor)} bytes")
+    print(f"  Intel compiler: {device['name']} 8086:{device['device_id']:04X}")
+    for stage in stages:
+        print(
+            f"  {stage['section']}: {stage['code_size_bytes']} bytes "
+            f"sha256={stage['sha256']}"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact", type=Path)
@@ -495,6 +839,9 @@ def main() -> None:
 
     artifact_path = args.artifact.resolve()
     sections = parse_helioa(artifact_path.read_bytes())
+    if CHURN_FORWARD_SOURCE in sections and RENDER_IR_SECTION not in sections:
+        bake_churn_only(args, artifact_path, sections)
+        return
     # These scene contracts are the build-time handoff from the hosted Helio
     # demos to TRUEOS's no_std retained renderer. They deliberately share the
     # captured Helio/WGPU graph and native shader pair in this artifact.
@@ -521,7 +868,7 @@ def main() -> None:
     output = (args.out or artifact_path.with_name(artifact_path.stem + ".intel.helio")).resolve()
     work = (args.work_dir or output.with_suffix(output.suffix + ".work")).resolve()
     work.mkdir(parents=True, exist_ok=True)
-    exec_dir = work / "pipeline_exec"
+    exec_dir = work / f"pipeline_exec-{os.getpid()}"
     native_dir = work / "native"
     exec_dir.mkdir(exist_ok=True)
     native_dir.mkdir(exist_ok=True)
@@ -580,6 +927,87 @@ def main() -> None:
             "num_varying_inputs": 1,
         })
 
+    churn_metadata = None
+    churn_executables: list[dict[str, object]] = []
+    if CHURN_FORWARD_SOURCE in sections:
+        churn_source_kind, churn_wgsl_data = sections[CHURN_FORWARD_SOURCE]
+        if churn_source_kind != 3:
+            raise SystemExit(
+                f"wrong section kind for {CHURN_FORWARD_SOURCE}: {churn_source_kind}"
+            )
+        churn_exec_dir = work / f"churn_pipeline_exec-{os.getpid()}"
+        churn_native_dir = work / "churn_native"
+        churn_exec_dir.mkdir(exist_ok=True)
+        churn_native_dir.mkdir(exist_ok=True)
+        churn_wgsl = work / "captured-churn-forward.wgsl"
+        churn_vs_spv = work / "churn-forward.vert.spv"
+        churn_fs_spv = work / "churn-forward.frag.spv"
+        churn_wgsl.write_bytes(churn_wgsl_data)
+        naga_compile(churn_wgsl, "vs_main", churn_vs_spv)
+        naga_compile(churn_wgsl, "fs_main", churn_fs_spv)
+
+        churn_dumper_source = work / "helio_churn_pipeline_dump.c"
+        churn_dumper = work / "helio_churn_pipeline_dump"
+        make_churn_compile_only_dumper(churn_dumper_source)
+        run([
+            "cc", str(churn_dumper_source), "-o", str(churn_dumper),
+            *vulkan_compile_flags(),
+        ])
+        churn_env = os.environ.copy()
+        churn_env["TRUEOS_EXECUTABLE_DUMP_DIR"] = str(churn_exec_dir)
+        if args.device_id:
+            churn_env["TRUEOS_VK_DEVICE_ID"] = args.device_id
+        churn_log = work / "churn-compile.log"
+        run(
+            [str(churn_dumper), str(churn_vs_spv), str(churn_fs_spv)],
+            env=churn_env,
+            log=churn_log,
+        )
+        churn_log_text = churn_log.read_text()
+        if "helio_pipeline_dump: compiled_only=1" not in churn_log_text:
+            raise SystemExit("Intel Churn pipeline compilation did not complete")
+        churn_vs, churn_ps, _ = extract_native(churn_exec_dir, churn_native_dir)
+        churn_device, churn_compiler_executables = parse_compile_log(churn_log_text)
+        if churn_device["vendor_id"] != device["vendor_id"] \
+                or churn_device["device_id"] != device["device_id"]:
+            raise SystemExit("SimpleCube and Churn native stages used different devices")
+        churn_executables = list(churn_compiler_executables.values())
+        sections[CHURN_FORWARD_VS] = (4, churn_vs)
+        sections[CHURN_FORWARD_PS] = (4, churn_ps)
+        descriptor = encode_churn_forward_program(
+            churn_wgsl_data, churn_vs, churn_ps,
+        )
+        sections[CHURN_FORWARD_SECTION] = (CHURN_FORWARD_KIND, descriptor)
+        churn_metadata = {
+            "schema": 1,
+            "descriptor_section": CHURN_FORWARD_SECTION,
+            "wgsl_section": CHURN_FORWARD_SOURCE,
+            "wgsl_sha256": sha256(churn_wgsl_data),
+            "spirv": {
+                "vs_main_sha256": sha256(churn_vs_spv.read_bytes()),
+                "fs_main_sha256": sha256(churn_fs_spv.read_bytes()),
+            },
+            "stages": [
+                {
+                    "stage": "vertex", "entry_point": "vs_main", "simd_width": 8,
+                    "section": CHURN_FORWARD_VS, "code_size_bytes": len(churn_vs),
+                    "sha256": sha256(churn_vs), "binding_table_entry_count": 4,
+                    "sampler_count": 0, "scratch_bytes": 0,
+                    "grf_start_register": 2, "grf_used": 128, "max_threads": 64,
+                    "urb_entry_output_length": 1,
+                },
+                {
+                    "stage": "fragment", "entry_point": "fs_main", "simd_width": 8,
+                    "section": CHURN_FORWARD_PS, "code_size_bytes": len(churn_ps),
+                    "sha256": sha256(churn_ps), "binding_table_entry_count": 1,
+                    "sampler_count": 0, "scratch_bytes": 0,
+                    "grf_start_register": 2, "grf_used": 128, "max_threads": 64,
+                    "num_varying_inputs": 2, "uses_vmask": True, "flat_inputs": 2,
+                },
+            ],
+        }
+        stages.extend(churn_metadata["stages"])
+
     metadata = {
         "schema": 1,
         "producer": "helio-intel-bake",
@@ -618,6 +1046,9 @@ def main() -> None:
         "stages": stages,
         "compiler_executables": list(executables.values()),
     }
+    if churn_metadata is not None:
+        metadata["churn_forward"] = churn_metadata
+        metadata["compiler_executables"].extend(churn_executables)
     metadata_data = (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode()
     sections["compiler/intel-xe-lp.json"] = (5, metadata_data)
     output.parent.mkdir(parents=True, exist_ok=True)

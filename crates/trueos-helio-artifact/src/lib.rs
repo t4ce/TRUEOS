@@ -8,7 +8,9 @@
 //! sections to the render backend; it never treats captured IDs as addresses.
 
 use core::{fmt, str};
+use sha2::{Digest, Sha256};
 
+pub mod churn_forward;
 pub mod render_ir;
 pub mod replay;
 
@@ -30,6 +32,7 @@ pub enum SectionKind {
     CompilerMetadata,
     NormalizedRenderIr,
     RenderReplay,
+    ChurnForward,
     Unknown(u16),
 }
 
@@ -45,6 +48,7 @@ impl SectionKind {
             // and TRUEOS. Kept here as one point to align with its producer.
             6 => Self::NormalizedRenderIr,
             7 => Self::RenderReplay,
+            8 => Self::ChurnForward,
             other => Self::Unknown(other),
         }
     }
@@ -58,6 +62,7 @@ impl SectionKind {
             Self::CompilerMetadata => 5,
             Self::NormalizedRenderIr => 6,
             Self::RenderReplay => 7,
+            Self::ChurnForward => 8,
             Self::Unknown(raw) => raw,
         }
     }
@@ -223,6 +228,43 @@ impl<'a> Artifact<'a> {
         replay::ReplayPlan::parse(section.data).map_err(Error::InvalidReplay)
     }
 
+    /// Opens the Churn forward native-program contract and authenticates every
+    /// named source/code section before returning it to the Intel backend.
+    pub fn churn_forward_program(&self) -> Result<churn_forward::Program<'a>, Error> {
+        let descriptor = self.require(RequiredSection::new(
+            churn_forward::SECTION_NAME,
+            SectionKind::ChurnForward,
+        ))?;
+        let program =
+            churn_forward::Program::parse(descriptor.data).map_err(Error::InvalidChurnForward)?;
+
+        let source_ref = program.shader_source();
+        let source = self
+            .section(source_ref.section_name)
+            .ok_or(Error::MissingChurnForwardReference)?;
+        if source.kind != SectionKind::ShaderSource {
+            return Err(Error::WrongChurnForwardReferenceKind);
+        }
+        if source.data.len() != source_ref.byte_len as usize {
+            return Err(Error::ChurnForwardReferenceSizeMismatch);
+        }
+        verify_sha256(source.data, &source_ref.sha256)?;
+
+        for stage in [program.vertex_stage(), program.fragment_stage()] {
+            let section = self
+                .section(stage.section_name)
+                .ok_or(Error::MissingChurnForwardReference)?;
+            if section.kind != SectionKind::IntelXeLpIsa {
+                return Err(Error::WrongChurnForwardReferenceKind);
+            }
+            if section.data.len() != stage.code_size_bytes as usize {
+                return Err(Error::ChurnForwardReferenceSizeMismatch);
+            }
+            verify_sha256(section.data, &stage.sha256)?;
+        }
+        Ok(program)
+    }
+
     fn raw_entries(&self) -> RawEntries<'a> {
         RawEntries {
             bytes: self.bytes,
@@ -368,6 +410,11 @@ pub enum Error {
     },
     InvalidRenderIr(render_ir::Error),
     InvalidReplay(replay::Error),
+    InvalidChurnForward(churn_forward::Error),
+    MissingChurnForwardReference,
+    WrongChurnForwardReferenceKind,
+    ChurnForwardReferenceSizeMismatch,
+    ChurnForwardReferenceHashMismatch,
 }
 
 impl fmt::Display for Error {
@@ -384,6 +431,13 @@ fn validate_name(name: &str) -> Result<(), Error> {
         || name.contains('\\')
     {
         return Err(Error::InvalidName);
+    }
+    Ok(())
+}
+
+fn verify_sha256(data: &[u8], expected: &[u8; 32]) -> Result<(), Error> {
+    if Sha256::digest(data).as_slice() != expected {
+        return Err(Error::ChurnForwardReferenceHashMismatch);
     }
     Ok(())
 }

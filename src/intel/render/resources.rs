@@ -1,6 +1,6 @@
 fn upload_triangle_shader_pipeline(
     warm: RenderWarmState,
-    pipeline: &'static crate::intel::shader::TrianglePipeline,
+    pipeline: &crate::intel::shader::TrianglePipeline,
     draw_rgba: Option<[u8; 4]>,
 ) -> Result<TriangleShaderLayout, &'static str> {
     upload_triangle_shader_pipeline_at(warm, pipeline, draw_rgba, GPU_VA_DRAW_STATE_BASE, true)
@@ -14,7 +14,7 @@ fn upload_triangle_shader_pipeline(
 /// submission has retired.
 fn upload_triangle_shader_pipeline_at(
     warm: RenderWarmState,
-    pipeline: &'static crate::intel::shader::TrianglePipeline,
+    pipeline: &crate::intel::shader::TrianglePipeline,
     draw_rgba: Option<[u8; 4]>,
     bo_gpu_base: u64,
     flush_upload: bool,
@@ -210,7 +210,7 @@ mod compacted_float_immediate_tests {
 fn specialize_uploaded_triangle_ps_color(
     dst_base: *mut u8,
     ps_offset_bytes: usize,
-    pipeline: &'static crate::intel::shader::TrianglePipeline,
+    pipeline: &crate::intel::shader::TrianglePipeline,
     rgba: [u8; 4],
 ) -> Result<(), &'static str> {
     let constant_color_pipeline = crate::intel::shader::triangle_pipeline();
@@ -333,7 +333,7 @@ fn shader_word_signature(words: &[u32]) -> u64 {
 
 fn log_uploaded_triangle_shader_verification(
     warm: RenderWarmState,
-    pipeline: &'static crate::intel::shader::TrianglePipeline,
+    pipeline: &crate::intel::shader::TrianglePipeline,
     shader_layout: TriangleShaderLayout,
     submit_name: &'static str,
     draw_rgba: Option<[u8; 4]>,
@@ -507,6 +507,7 @@ fn prepare_triangle_draw_resources_for_geometry(
         vertex_gpu_addr: vertex_proof.gpu_addr,
         index_buffer: None,
         indirect_args_gpu_addr: None,
+        native: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -621,6 +622,7 @@ fn prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
         vertex_gpu_addr: vertex_proof.gpu_addr,
         index_buffer: None,
         indirect_args_gpu_addr: None,
+        native: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -703,6 +705,7 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
             gpu_addr: index_gpu_addr,
         }),
         indirect_args_gpu_addr: None,
+        native: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -940,6 +943,40 @@ pub(crate) fn update_resident_triangle_mesh(
     Ok(())
 }
 
+/// Replace only the mutable vertex payload of a resident indexed mesh.
+///
+/// Helio keeps mesh topology resident while cameras and object transforms
+/// change. Its indexed scene paths therefore must not copy or flush the
+/// immutable index range again on every frame.
+pub(crate) fn update_resident_triangle_vertices(
+    mesh: &ResidentTriangleMesh,
+    vertices: &[[f32; 3]],
+) -> Result<(), &'static str> {
+    let vertex_bytes = vertices
+        .len()
+        .checked_mul(core::mem::size_of::<[f32; 3]>())
+        .ok_or("resident-triangle-bytes")?;
+    if vertices.len() != mesh.vertex_count as usize
+        || vertex_bytes != mesh.vertex_bytes as usize
+        || vertices
+            .iter()
+            .flatten()
+            .any(|component| !component.is_finite())
+        || vertex_bytes > mesh.storage_bytes
+    {
+        return Err("resident-triangle-update-shape");
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            vertices.as_ptr() as *const u8,
+            mesh.storage_virt,
+            vertex_bytes,
+        );
+    }
+    crate::intel::dma_flush(mesh.storage_virt, vertex_bytes);
+    Ok(())
+}
+
 /// Publish one exact WGPU/Helio DrawIndexedIndirectArgs record beside a
 /// resident mesh. The RCS scene path consumes these bytes without translating
 /// them into a CPU-authored 3DPRIMITIVE payload.
@@ -1000,6 +1037,536 @@ pub(crate) fn release_resident_triangle_mesh(mesh: &ResidentTriangleMesh) -> boo
     crate::dma::dealloc(mesh.storage_virt, mesh.storage_bytes);
     recycle_persistent_render_gpu_va(mesh.gpu_base, mesh.storage_bytes);
     true
+}
+
+const CHURN_FORWARD_MESH_COUNT: usize = trueos_helio_runtime::churn::SHAPE_COUNT;
+const CHURN_FORWARD_DRAW_COUNT: usize = trueos_helio_runtime::churn::DRAW_GROUP_COUNT;
+const CHURN_FORWARD_VERTICES_PER_MESH: usize = 24;
+const CHURN_FORWARD_INDICES_PER_MESH: usize = 36;
+static CHURN_FORWARD_PIPELINE: spin::Mutex<Option<crate::intel::shader::TrianglePipeline>> =
+    spin::Mutex::new(None);
+
+fn churn_forward_stage_words(bytes: &[u8]) -> Result<&'static [u32], &'static str> {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(core::mem::size_of::<u32>()) {
+        return Err("churn-native-stage-shape");
+    }
+    let mut words = Vec::with_capacity(bytes.len() / 4);
+    for chunk in bytes.chunks_exact(4) {
+        words.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+    // The embedded artifact and this service are both boot-lifetime owners.
+    // Keeping one aligned native-code copy avoids assuming that a packed
+    // HELIOA section happens to have Rust `u32` alignment.
+    Ok(alloc::boxed::Box::leak(words.into_boxed_slice()))
+}
+
+fn churn_forward_pipeline(
+    artifact: trueos_helio_artifact::Artifact<'_>,
+    program: trueos_helio_artifact::churn_forward::Program<'_>,
+) -> Result<crate::intel::shader::TrianglePipeline, &'static str> {
+    use crate::intel::shader::{
+        DispatchMode, ShaderKernelMetadata, TrianglePipeline, TrianglePixelShader,
+        TrianglePixelShaderMetadata, TriangleVertexShader, TriangleVertexShaderMetadata,
+    };
+
+    let vertex = program.vertex_stage();
+    let fragment = program.fragment_stage();
+    if vertex.simd_width != 8
+        || fragment.simd_width != 8
+        || vertex.code_offset_bytes != 0
+        || fragment.code_offset_bytes != 0
+        || vertex.code_alignment_bytes != 64
+        || fragment.code_alignment_bytes != 64
+        || vertex.ksp_offset_bytes != 0
+        || fragment.ksp_offset_bytes != 0
+        || vertex.grf_start_register != 2
+        || fragment.grf_start_register != 2
+        || vertex.grf_used != 128
+        || fragment.grf_used != 128
+        || vertex.max_threads != 64
+        || fragment.max_threads != 64
+        || vertex.binding_table_entry_count != 4
+        || fragment.binding_table_entry_count != 1
+        || vertex.sampler_count != 0
+        || fragment.sampler_count != 0
+        || vertex.push_constant_bytes != 0
+        || fragment.push_constant_bytes != 0
+        || vertex.urb_entry_output_length != 1
+        || vertex.num_varying_inputs != 0
+        || fragment.urb_entry_output_length != 0
+        || fragment.num_varying_inputs != 2
+        || !fragment.uses_vmask
+        || fragment.computed_stencil
+        || fragment.persample_dispatch
+        || fragment.computed_depth_mode != 0
+        || fragment.flat_inputs != 2
+    {
+        return Err("churn-native-stage-contract");
+    }
+    let mut cached = CHURN_FORWARD_PIPELINE.lock();
+    if let Some(pipeline) = *cached {
+        return Ok(pipeline);
+    }
+    let vs_section = artifact
+        .section(vertex.section_name)
+        .ok_or("churn-native-vs-section")?;
+    let ps_section = artifact
+        .section(fragment.section_name)
+        .ok_or("churn-native-ps-section")?;
+    let vs_code = churn_forward_stage_words(vs_section.data)?;
+    let ps_code = churn_forward_stage_words(ps_section.data)?;
+    let ps_offset = crate::intel::align_up(vs_section.data.len(), 64)
+        .ok_or("churn-native-shader-layout")?;
+    let ps_offset = u32::try_from(ps_offset).map_err(|_| "churn-native-shader-layout")?;
+
+    let kernel = |stage: trueos_helio_artifact::churn_forward::StageRef<'_>, offset| {
+        Ok::<_, &'static str>(ShaderKernelMetadata {
+            code_offset_bytes: offset,
+            code_size_bytes: stage.code_size_bytes,
+            code_alignment_bytes: stage.code_alignment_bytes,
+            ksp_offset_bytes: stage.ksp_offset_bytes,
+            dispatch_mode: DispatchMode::Simd8,
+            grf_start_register: u8::try_from(stage.grf_start_register)
+                .map_err(|_| "churn-native-stage-metadata")?,
+            grf_used: u8::try_from(stage.grf_used)
+                .map_err(|_| "churn-native-stage-metadata")?,
+            push_constant_bytes: stage.push_constant_bytes,
+            binding_table_entry_count: u8::try_from(stage.binding_table_entry_count)
+                .map_err(|_| "churn-native-stage-metadata")?,
+            sampler_count: u8::try_from(stage.sampler_count)
+                .map_err(|_| "churn-native-stage-metadata")?,
+        })
+    };
+    let pipeline = TrianglePipeline {
+        vs: TriangleVertexShader {
+            meta: TriangleVertexShaderMetadata {
+                kernel: kernel(vertex, 0)?,
+                max_threads: vertex.max_threads,
+                urb_entry_output_length: u8::try_from(vertex.urb_entry_output_length)
+                    .map_err(|_| "churn-native-stage-metadata")?,
+            },
+            code: vs_code,
+        },
+        ps: TrianglePixelShader {
+            meta: TrianglePixelShaderMetadata {
+                kernel: kernel(fragment, ps_offset)?,
+                num_varying_inputs: u8::try_from(fragment.num_varying_inputs)
+                    .map_err(|_| "churn-native-stage-metadata")?,
+                uses_vmask: fragment.uses_vmask,
+                computed_stencil: fragment.computed_stencil,
+                persample_dispatch: fragment.persample_dispatch,
+                computed_depth_mode: fragment.computed_depth_mode,
+                flat_inputs: fragment.flat_inputs,
+            },
+            code: ps_code,
+        },
+    };
+    *cached = Some(pipeline);
+    Ok(pipeline)
+}
+
+fn build_churn_forward_geometry(
+    meshes: &[trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
+) -> Result<(Vec<u8>, Vec<u8>), &'static str> {
+    let mut vertices = Vec::with_capacity(
+        CHURN_FORWARD_MESH_COUNT
+            * CHURN_FORWARD_VERTICES_PER_MESH
+            * trueos_helio_artifact::churn_forward::VERTEX_STRIDE as usize,
+    );
+    let mut indices = Vec::with_capacity(
+        CHURN_FORWARD_MESH_COUNT
+            * CHURN_FORWARD_INDICES_PER_MESH
+            * core::mem::size_of::<u32>(),
+    );
+    const FACE_INDICES: [u32; 6] = [0, 1, 2, 0, 2, 3];
+    for (mesh_index, mesh) in meshes.iter().enumerate() {
+        if mesh.mesh_id != mesh_index as u32
+            || mesh.first_vertex != (mesh_index * CHURN_FORWARD_VERTICES_PER_MESH) as u32
+            || mesh.vertex_count != CHURN_FORWARD_VERTICES_PER_MESH as u32
+            || mesh.first_index != (mesh_index * CHURN_FORWARD_INDICES_PER_MESH) as u32
+            || mesh.index_count != CHURN_FORWARD_INDICES_PER_MESH as u32
+            || mesh.base_vertex != (mesh_index * CHURN_FORWARD_VERTICES_PER_MESH) as i32
+            || mesh
+                .half_extents
+                .iter()
+                .any(|extent| !extent.is_finite() || *extent <= 0.0)
+        {
+            return Err("churn-native-mesh-contract");
+        }
+        let [x, y, z] = mesh.half_extents;
+        let faces = [
+            ([0.0, 0.0, 1.0], [[-x, -y, z], [x, -y, z], [x, y, z], [-x, y, z]]),
+            ([0.0, 0.0, -1.0], [[x, -y, -z], [-x, -y, -z], [-x, y, -z], [x, y, -z]]),
+            ([1.0, 0.0, 0.0], [[x, -y, z], [x, -y, -z], [x, y, -z], [x, y, z]]),
+            ([-1.0, 0.0, 0.0], [[-x, -y, -z], [-x, -y, z], [-x, y, z], [-x, y, -z]]),
+            ([0.0, 1.0, 0.0], [[-x, y, z], [x, y, z], [x, y, -z], [-x, y, -z]]),
+            ([0.0, -1.0, 0.0], [[-x, -y, -z], [x, -y, -z], [x, -y, z], [-x, -y, z]]),
+        ];
+        for (face_index, (normal, corners)) in faces.into_iter().enumerate() {
+            for position in corners {
+                for component in position.into_iter().chain(normal) {
+                    vertices.extend_from_slice(&component.to_le_bytes());
+                }
+            }
+            for index in FACE_INDICES {
+                let index = (face_index as u32) * 4 + index;
+                indices.extend_from_slice(&index.to_le_bytes());
+            }
+        }
+    }
+    Ok((vertices, indices))
+}
+
+/// Cold-path activation of the artifact-authenticated Helio Churn pipeline.
+pub(crate) fn create_resident_churn_forward(
+    artifact_bytes: &'static [u8],
+    max_instances: usize,
+    meshes: &[trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
+) -> Result<ResidentChurnForward, &'static str> {
+    if max_instances == 0 {
+        return Err("churn-native-instance-capacity");
+    }
+    let artifact = trueos_helio_artifact::Artifact::parse(artifact_bytes)
+        .map_err(|_| "churn-native-artifact")?;
+    let program = artifact
+        .churn_forward_program()
+        .map_err(|_| "churn-native-program")?;
+    let fetch = program.vertex_fetch();
+    let fixed = program.fixed_function();
+    let sgvs = program.sgvs();
+    let synthetic = program.synthetic_instance_id_element();
+    let instancing = program.vf_instancing();
+    if fetch.stride != trueos_helio_artifact::churn_forward::VERTEX_STRIDE
+        || fetch.vf_component_packing_dw0 != 0x0000_0A77
+        || fetch.packed_vs_input_count != 8
+        || fetch.urb_input_read_length != 1
+        || fixed.sbe_read_offset != 1
+        || fixed.sbe_read_length != 1
+        || fixed.num_sf_attributes != 2
+        || synthetic.element_index != 2
+        || synthetic.vertex_buffer_index != 31
+        || synthetic.surface_format != SURFACE_FORMAT_R32G32_UINT as u16
+        || synthetic.component_controls != [VFCOMP_STORE_0 as u8; 4]
+        || sgvs.vf_sgvs_dw1 != 0xE002_4002
+        || sgvs.vf_sgvs_2_dw1 != 0xB002_0002
+        || sgvs.vf_sgvs_2_dw2 != 3
+        || instancing
+            .iter()
+            .enumerate()
+            .any(|(index, state)| {
+                state.element_index != index as u16 || state.enabled || state.step_rate != 0
+            })
+    {
+        return Err("churn-native-fixed-function-contract");
+    }
+    let Some(dev) = crate::intel::claimed_device() else {
+        return Err("no-device");
+    };
+    if !device_supports_churn_forward_native(warm_once(dev).device_id) {
+        return Err("churn-native-device-mismatch");
+    }
+    // Validate and cache the immutable native code before acquiring any
+    // mapped DMA resources. The aligned code copy is a bounded singleton;
+    // service retries cannot leak another VS/PS pair.
+    let pipeline = churn_forward_pipeline(artifact, program)?;
+    let (vertex_bytes, index_bytes) = build_churn_forward_geometry(meshes)?;
+    let index_offset = crate::intel::align_up(vertex_bytes.len(), 64)
+        .ok_or("churn-native-geometry-layout")?;
+    let geometry_bytes = index_offset
+        .checked_add(index_bytes.len())
+        .ok_or("churn-native-geometry-layout")?;
+    let instance_bytes = max_instances
+        .checked_mul(trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN)
+        .ok_or("churn-native-instance-capacity")?;
+    let compacted_bytes = max_instances
+        .checked_mul(core::mem::size_of::<u32>())
+        .ok_or("churn-native-instance-capacity")?;
+    let indirect_bytes = CHURN_FORWARD_DRAW_COUNT
+        .checked_mul(trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN)
+        .ok_or("churn-native-indirect-capacity")?;
+    let vertex_byte_len =
+        u32::try_from(vertex_bytes.len()).map_err(|_| "churn-native-geometry-layout")?;
+    let index_byte_len =
+        u32::try_from(index_bytes.len()).map_err(|_| "churn-native-geometry-layout")?;
+    let instance_byte_len =
+        u32::try_from(instance_bytes).map_err(|_| "churn-native-instance-capacity")?;
+    let compacted_byte_len =
+        u32::try_from(compacted_bytes).map_err(|_| "churn-native-instance-capacity")?;
+
+    let geometry = allocate_resident_render_buffer(geometry_bytes)?;
+    let camera = match allocate_resident_render_buffer(
+        trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN,
+    ) {
+        Ok(buffer) => buffer,
+        Err(error) => {
+            let _ = release_resident_render_buffer(&geometry);
+            return Err(error);
+        }
+    };
+    let instances = match allocate_resident_render_buffer(instance_bytes) {
+        Ok(buffer) => buffer,
+        Err(error) => {
+            let _ = release_resident_render_buffer(&camera);
+            let _ = release_resident_render_buffer(&geometry);
+            return Err(error);
+        }
+    };
+    let compacted_indices = match allocate_resident_render_buffer(compacted_bytes) {
+        Ok(buffer) => buffer,
+        Err(error) => {
+            let _ = release_resident_render_buffer(&instances);
+            let _ = release_resident_render_buffer(&camera);
+            let _ = release_resident_render_buffer(&geometry);
+            return Err(error);
+        }
+    };
+    let indirect_args = match allocate_resident_render_buffer(indirect_bytes) {
+        Ok(buffer) => buffer,
+        Err(error) => {
+            let _ = release_resident_render_buffer(&compacted_indices);
+            let _ = release_resident_render_buffer(&instances);
+            let _ = release_resident_render_buffer(&camera);
+            let _ = release_resident_render_buffer(&geometry);
+            return Err(error);
+        }
+    };
+    if !geometry.write(0, &vertex_bytes) || !geometry.write(index_offset, &index_bytes) {
+        let _ = release_resident_render_buffer(&indirect_args);
+        let _ = release_resident_render_buffer(&compacted_indices);
+        let _ = release_resident_render_buffer(&instances);
+        let _ = release_resident_render_buffer(&camera);
+        let _ = release_resident_render_buffer(&geometry);
+        return Err("churn-native-geometry-upload");
+    }
+    geometry.flush();
+    let native_vf = TriangleNativeDrawContract {
+        vs_storage_bindings: [
+            TriangleStorageBufferBinding {
+                gpu_addr: camera.gpu_base(),
+                byte_len: trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN as u32,
+            },
+            TriangleStorageBufferBinding {
+                gpu_addr: instances.gpu_base(),
+                byte_len: instance_byte_len,
+            },
+            TriangleStorageBufferBinding {
+                gpu_addr: compacted_indices.gpu_base(),
+                byte_len: compacted_byte_len,
+            },
+        ],
+        vf_sgvs_dw1: sgvs.vf_sgvs_dw1,
+        vf_sgvs_2_dw1: sgvs.vf_sgvs_2_dw1,
+        vf_sgvs_2_dw2: sgvs.vf_sgvs_2_dw2,
+        vf_component_packing: [fetch.vf_component_packing_dw0, 0, 0, 0],
+        vf_instancing: core::array::from_fn(|index| TriangleVfInstancingState {
+            element_index: instancing[index].element_index as u8,
+            enabled: instancing[index].enabled,
+            step_rate: instancing[index].step_rate,
+        }),
+    };
+    Ok(ResidentChurnForward {
+        vertex_gpu_addr: geometry.gpu_base(),
+        vertex_count: (CHURN_FORWARD_MESH_COUNT * CHURN_FORWARD_VERTICES_PER_MESH) as u32,
+        vertex_bytes: vertex_byte_len,
+        index_gpu_addr: geometry.gpu_base() + index_offset as u64,
+        index_count: (CHURN_FORWARD_MESH_COUNT * CHURN_FORWARD_INDICES_PER_MESH) as u32,
+        index_bytes: index_byte_len,
+        pipeline,
+        native_vf,
+        front_end_contract: TriangleFrontEndContract {
+            label: "helio-churn-forward-v1",
+            vs_urb_output_length_override: Some(1),
+            sbe_read_offset: fixed.sbe_read_offset,
+            sbe_read_length: fixed.sbe_read_length,
+            force_sbe_read_offset: true,
+            force_sbe_read_length: true,
+            force_vs_with_vf_synthesized_vue: false,
+        },
+        geometry,
+        camera,
+        instances,
+        compacted_indices,
+        indirect_args,
+        max_instances,
+    })
+}
+
+pub(crate) fn update_resident_churn_forward_frame(
+    resident: &ResidentChurnForward,
+    frame: &trueos_helio_runtime::churn::InstanceFrame<'_>,
+) -> Result<(), &'static str> {
+    if frame.instances.len() > resident.max_instances
+        || frame.compacted_indices.len() > resident.max_instances
+        || frame.instances.len() != frame.compacted_indices.len()
+        || frame.draws.len() != CHURN_FORWARD_DRAW_COUNT
+    {
+        return Err("churn-native-frame-capacity");
+    }
+    let instance_first = frame.instance_dirty.first as usize;
+    let instance_count = frame.instance_dirty.count as usize;
+    let instance_end = instance_first
+        .checked_add(instance_count)
+        .ok_or("churn-native-dirty-range")?;
+    let compacted_first = frame.compacted_indices_dirty.first as usize;
+    let compacted_count = frame.compacted_indices_dirty.count as usize;
+    let compacted_end = compacted_first
+        .checked_add(compacted_count)
+        .ok_or("churn-native-dirty-range")?;
+    if instance_end > frame.instances.len() || compacted_end > frame.compacted_indices.len() {
+        return Err("churn-native-dirty-range");
+    }
+    if !resident.camera.write_and_flush(0, &frame.camera.to_le_bytes()) {
+        return Err("churn-native-camera-upload");
+    }
+    let mut instance_bytes = Vec::with_capacity(
+        instance_count * trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN,
+    );
+    for instance in &frame.instances[instance_first..instance_end] {
+        instance_bytes.extend_from_slice(&instance.to_le_bytes());
+    }
+    let instance_offset = instance_first
+        .checked_mul(trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN)
+        .ok_or("churn-native-dirty-range")?;
+    if !resident
+        .instances
+        .write_and_flush(instance_offset, &instance_bytes)
+    {
+        return Err("churn-native-instance-upload");
+    }
+    let mut compacted_bytes = Vec::with_capacity(compacted_count * 4);
+    for index in &frame.compacted_indices[compacted_first..compacted_end] {
+        compacted_bytes.extend_from_slice(&index.to_le_bytes());
+    }
+    let compacted_offset = compacted_first
+        .checked_mul(core::mem::size_of::<u32>())
+        .ok_or("churn-native-dirty-range")?;
+    if !resident
+        .compacted_indices
+        .write_and_flush(compacted_offset, &compacted_bytes)
+    {
+        return Err("churn-native-compacted-upload");
+    }
+    let mut indirect_bytes = Vec::with_capacity(
+        CHURN_FORWARD_DRAW_COUNT * trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN,
+    );
+    for (group, draw) in frame.draws.iter().enumerate() {
+        let mesh = frame.meshes[group / trueos_helio_runtime::churn::MATERIAL_COUNT];
+        if draw.index_count != mesh.index_count
+            || draw.first_index != mesh.first_index
+            || draw.base_vertex != mesh.base_vertex
+            || draw.first_instance as usize > frame.instances.len()
+            || draw
+                .first_instance
+                .checked_add(draw.instance_count)
+                .map_or(true, |end| end as usize > frame.instances.len())
+        {
+            return Err("churn-native-indirect-contract");
+        }
+        indirect_bytes.extend_from_slice(&draw.to_le_bytes());
+    }
+    if !resident.indirect_args.write_and_flush(0, &indirect_bytes) {
+        return Err("churn-native-indirect-upload");
+    }
+    Ok(())
+}
+
+fn prepare_resident_churn_forward_draw(
+    warm: RenderWarmState,
+    resident: &ResidentChurnForward,
+    group: usize,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    width: usize,
+    height: usize,
+) -> Option<TriangleDrawPrep> {
+    if group >= CHURN_FORWARD_DRAW_COUNT {
+        return None;
+    }
+    Some(TriangleDrawPrep {
+        vertex_count: resident.index_count,
+        vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
+        vertex_buffer_bytes: resident.vertex_bytes,
+        vertex_format: TriangleVertexFormat::PosNormal,
+        vertex_gpu_addr: resident.vertex_gpu_addr,
+        index_buffer: Some(TriangleIndexBufferPrep {
+            index_count: resident.index_count,
+            byte_len: resident.index_bytes,
+            gpu_addr: resident.index_gpu_addr,
+        }),
+        indirect_args_gpu_addr: Some(
+            resident.indirect_args.gpu_base()
+                + (group * trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
+        ),
+        native: Some(resident.native_vf),
+        state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
+        rt_gpu_addr: dst_gpu_addr,
+        rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
+        rt_pitch: u32::try_from(pitch).ok()?,
+        target_w: u32::try_from(width).ok()?,
+        target_h: u32::try_from(height).ok()?,
+    })
+}
+
+pub(crate) fn release_resident_churn_forward(resident: &ResidentChurnForward) -> bool {
+    let mut released = true;
+    released &= release_resident_render_buffer(&resident.indirect_args);
+    released &= release_resident_render_buffer(&resident.compacted_indices);
+    released &= release_resident_render_buffer(&resident.instances);
+    released &= release_resident_render_buffer(&resident.camera);
+    released &= release_resident_render_buffer(&resident.geometry);
+    released
+}
+
+#[cfg(test)]
+mod churn_forward_geometry_tests {
+    use super::{
+        CHURN_FORWARD_INDICES_PER_MESH, CHURN_FORWARD_MESH_COUNT,
+        CHURN_FORWARD_VERTICES_PER_MESH, build_churn_forward_geometry,
+    };
+
+    #[test]
+    fn encodes_three_local_indexed_pos_normal_cubes() {
+        let meshes = core::array::from_fn(|mesh| {
+            trueos_helio_runtime::churn::MeshDescriptor {
+                mesh_id: mesh as u32,
+                half_extents: [1.0 + mesh as f32, 2.0, 3.0],
+                first_vertex: (mesh * CHURN_FORWARD_VERTICES_PER_MESH) as u32,
+                vertex_count: CHURN_FORWARD_VERTICES_PER_MESH as u32,
+                first_index: (mesh * CHURN_FORWARD_INDICES_PER_MESH) as u32,
+                index_count: CHURN_FORWARD_INDICES_PER_MESH as u32,
+                base_vertex: (mesh * CHURN_FORWARD_VERTICES_PER_MESH) as i32,
+            }
+        });
+        let (vertices, indices) = build_churn_forward_geometry(&meshes).unwrap();
+        assert_eq!(
+            vertices.len(),
+            CHURN_FORWARD_MESH_COUNT
+                * CHURN_FORWARD_VERTICES_PER_MESH
+                * trueos_helio_artifact::churn_forward::VERTEX_STRIDE as usize
+        );
+        assert_eq!(
+            indices.len(),
+            CHURN_FORWARD_MESH_COUNT
+                * CHURN_FORWARD_INDICES_PER_MESH
+                * core::mem::size_of::<u32>()
+        );
+        for mesh in 0..CHURN_FORWARD_MESH_COUNT {
+            let start = mesh * CHURN_FORWARD_INDICES_PER_MESH * 4;
+            let words = indices[start..start + CHURN_FORWARD_INDICES_PER_MESH * 4]
+                .chunks_exact(4)
+                .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+                .collect::<Vec<_>>();
+            assert!(words.iter().all(|&index| index < CHURN_FORWARD_VERTICES_PER_MESH as u32));
+            assert_eq!(words.len(), CHURN_FORWARD_INDICES_PER_MESH);
+            for face in 0..6 {
+                let base = face as u32 * 4;
+                assert_eq!(
+                    &words[face * 6..face * 6 + 6],
+                    &[base, base + 1, base + 2, base, base + 2, base + 3]
+                );
+            }
+        }
+    }
 }
 
 /// Allocate zeroed, page-backed storage and map it once into the persistent
@@ -1184,6 +1751,7 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
             gpu_addr: mesh.index_gpu_addr,
         }),
         indirect_args_gpu_addr: None,
+        native: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -1231,6 +1799,7 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
         vertex_gpu_addr: vertex_proof.gpu_addr,
         index_buffer: None,
         indirect_args_gpu_addr: None,
+        native: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -1649,6 +2218,7 @@ fn prepare_vf_streamout_proof_resources(
         vertex_gpu_addr: GPU_VA_VERTEX_BASE,
         index_buffer: None,
         indirect_args_gpu_addr: None,
+        native: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,

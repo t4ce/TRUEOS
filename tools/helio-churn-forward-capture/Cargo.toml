@@ -1,0 +1,14 @@
+[package]
+name = "helio-churn-forward-capture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+glam = "0.33"
+helio-artifact = { path = "../../../Helio/crates/helio-artifact" }
+libhelio = { path = "../../../Helio/crates/libhelio" }
+pollster = "0.4"
+wgpu = { path = "../../../Helio/vendor/wgpu/wgpu", default-features = false, features = ["std", "parking_lot", "vulkan", "gles", "wgsl", "trace"] }
+

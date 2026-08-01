@@ -7,4 +7,4 @@ description = "Zero-copy no_std loader for relocatable Helio render artifacts"
 
 [dependencies]
 crc32fast = { version = "1.5.0", default-features = false }
-
+sha2 = { version = "0.10.9", default-features = false }
