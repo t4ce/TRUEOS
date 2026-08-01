@@ -48,26 +48,20 @@ fn fixture_input(batch: usize, length: usize) -> Vec<f32> {
     signal
 }
 
-fn assert_ort_close(label: &str, actual: &[f32], expected: &[u8]) {
+fn assert_ort_exact(label: &str, actual: &[f32], expected: &[u8]) {
     assert_eq!(expected.len(), actual.len() * 4, "{label} length");
     let (expected, remainder) = expected.as_chunks::<4>();
     assert!(remainder.is_empty());
-    let mut maximum_difference = 0.0_f32;
     for (index, (&candidate, encoded)) in actual.iter().zip(expected).enumerate() {
         let oracle = f32::from_le_bytes(*encoded);
-        let difference = (candidate - oracle).abs();
-        maximum_difference = maximum_difference.max(difference);
-        // ORT uses an FFT butterfly while this fixed-size reference evaluates
-        // the audited DFT roots directly. This bound is tight enough to catch
-        // component/sign/layout errors while admitting only rounding noise.
-        let tolerance = 2.0e-5 + 2.0e-6 * oracle.abs();
-        assert!(
-            difference <= tolerance,
-            "{label}[{index}]: scalar={candidate:?}, ORT={oracle:?}, \
-             difference={difference:?}, tolerance={tolerance:?}"
+        assert_eq!(
+            candidate.to_bits(),
+            oracle.to_bits(),
+            "{label}[{index}]: native={candidate:?} (0x{:08x}), ORT={oracle:?} (0x{:08x})",
+            candidate.to_bits(),
+            oracle.to_bits(),
         );
     }
-    std::println!("{label}: max abs difference from ORT = {maximum_difference:e}");
 }
 
 fn run_fixture(blob: &[u8]) {
@@ -106,7 +100,7 @@ fn run_fixture(blob: &[u8]) {
     assert_eq!(run.completed_frames(), run.total_frames());
     assert_eq!(run.next_frame(), None);
     assert_eq!(run.advance(1).unwrap(), Advance::Complete);
-    assert_ort_close("STFT", run.output(), oracle.output);
+    assert_ort_exact("STFT", run.output(), oracle.output);
 }
 
 #[test]
@@ -157,10 +151,11 @@ fn one_sample_probe_places_real_then_negative_sine_imaginary() {
     assert!(matches!(run.advance(1), Ok(Advance::Advanced(_))));
 
     let windowed = f32::from_bits(HANN_WINDOW_BITS[1]);
-    assert_eq!(run.output()[0], windowed);
-    assert_eq!(run.output()[1], 0.0);
-    assert_eq!(run.output()[2], windowed * f32::from_bits(DFT_COS_BITS[1]));
-    assert_eq!(run.output()[3], windowed * f32::from_bits(DFT_NEG_SIN_BITS[1]));
+    // Bluestein's two FFT passes introduce the same tiny rounding residue as
+    // ORT, so only the transform convention—not direct-DFT arithmetic—is the
+    // contract of this focused probe. Bit parity is pinned by the fixtures.
+    assert!((run.output()[0] - windowed).abs() < 2.0e-8);
+    assert!(run.output()[1].abs() < 2.0e-8);
     assert!(run.output()[2] > 0.0);
     assert!(run.output()[3] < 0.0);
 }

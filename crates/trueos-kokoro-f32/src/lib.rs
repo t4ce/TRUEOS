@@ -691,7 +691,14 @@ pub fn atan(
     output: &mut [f32],
     output_layout: TensorLayout,
 ) -> Result<(), Error> {
-    unary_elementwise(UnaryOperation::Atan, input, input_layout, output, output_layout)
+    unary_elementwise_on_lane(
+        elementwise_lane(),
+        UnaryOperation::Atan,
+        input,
+        input_layout,
+        output,
+        output_layout,
+    )
 }
 
 /// `Atan` accepting signed infinity for the graph-pinned STFT phase edge.
@@ -701,7 +708,14 @@ pub fn atan_ieee(
     output: &mut [f32],
     output_layout: TensorLayout,
 ) -> Result<(), Error> {
-    unary_elementwise(UnaryOperation::AtanIeee, input, input_layout, output, output_layout)
+    unary_elementwise_on_lane(
+        elementwise_lane(),
+        UnaryOperation::AtanIeee,
+        input,
+        input_layout,
+        output,
+        output_layout,
+    )
 }
 
 /// ONNX `Exp` over checked rank-four strided views.
@@ -783,6 +797,19 @@ fn unary_elementwise_on_lane(
         let output =
             contiguous_output(output, output_layout, elements).ok_or(Error::BufferTooSmall)?;
         return avx2::sin(input, output);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    if lane == ElementwiseLane::Avx2
+        && matches!(operation, UnaryOperation::Atan | UnaryOperation::AtanIeee)
+        && input_layout.is_contiguous()
+        && output_layout.is_contiguous()
+    {
+        let elements = input_layout.shape.element_count();
+        let input = contiguous_input(input, input_layout, elements).ok_or(Error::BufferTooSmall)?;
+        let output =
+            contiguous_output(output, output_layout, elements).ok_or(Error::BufferTooSmall)?;
+        return avx2::atan(input, output, matches!(operation, UnaryOperation::AtanIeee));
     }
 
     let shape = input_layout.shape;
@@ -2152,17 +2179,22 @@ mod tests {
 
         let mut phase = [0.0; 8];
         atan_ieee(&scalar, layout, &mut phase, layout).unwrap();
+        let half_pi = if ElementwiseLane::Avx2.is_available() {
+            0x3FC9_0FDB
+        } else {
+            0x3FC9_0FDA
+        };
         assert_eq!(
             phase.map(f32::to_bits),
             [
-                0x3fc9_0fda,
-                0xbfc9_0fda,
-                0xbfc9_0fda,
-                0x3fc9_0fda,
-                0x3fc9_0fda,
-                0xbfc9_0fda,
-                0xbfc9_0fda,
-                0x3fc9_0fda,
+                half_pi,
+                half_pi | 0x8000_0000,
+                half_pi | 0x8000_0000,
+                half_pi,
+                half_pi,
+                half_pi | 0x8000_0000,
+                half_pi | 0x8000_0000,
+                half_pi,
             ]
         );
     }
@@ -2581,82 +2613,104 @@ mod tests {
     }
 
     #[test]
-    fn avx2_sin_is_bit_exact_across_medium_domain_and_reduction_boundaries() {
+    fn avx2_sin_matches_ort_eigen_packet4_and_scalar_tail() {
         if !ElementwiseLane::Avx2.is_available() {
             return;
         }
 
-        let mut input = Vec::new();
-        // Cover both ends of every coarse mantissa bucket for every exponent
-        // handled by libm's medium Cody-Waite reducer, in both signs.
-        for exponent in 0_u32..=0x9b {
-            for mantissa_prefix in 0_u32..1024 {
-                let base = (exponent << 23) | (mantissa_prefix << 13);
-                for tail in [0_u32, 0x1fff] {
-                    let magnitude = base | tail;
-                    if magnitude < 0x7f80_0000 {
-                        input.push(f32::from_bits(magnitude));
-                        input.push(f32::from_bits(magnitude | 0x8000_0000));
-                    }
-                }
-            }
-        }
-
-        // Exercise every branch transition and adjacent representable values.
-        for boundary in [
-            0x3980_0000_u32,
-            0x3f49_0fda,
-            0x4016_cbe3,
-            0x407b_53d1,
-            0x40af_eddf,
-            0x40e2_31d5,
-            0x4dc9_0fdb,
-        ] {
-            for delta in -64_i64..=64 {
-                let magnitude = (i64::from(boundary) + delta).clamp(0, 0x7f7f_ffff) as u32;
-                input.push(f32::from_bits(magnitude));
-                input.push(f32::from_bits(magnitude | 0x8000_0000));
-            }
-        }
-
-        // The pinned graph's largest argument is about 7,512 half-pi periods.
-        // Probe each such reduction point and its immediate neighbors.
-        for quadrant in -7_600_i32..=7_600 {
-            let center = (quadrant as f32 * core::f32::consts::FRAC_PI_2).to_bits();
-            for delta in -2_i64..=2 {
-                let bits = if center >> 31 == 0 {
-                    (i64::from(center) + delta).clamp(0, 0x7f7f_ffff) as u32
-                } else {
-                    let magnitude = center & 0x7fff_ffff;
-                    ((i64::from(magnitude) + delta).clamp(0, 0x7f7f_ffff) as u32) | 0x8000_0000
-                };
-                input.push(f32::from_bits(bits));
-            }
-        }
-        input.extend([
-            f32::MAX,
-            -f32::MAX,
-            1.0e20,
-            -1.0e20,
-            f32::from_bits(1),
-            -f32::from_bits(1),
-            -0.0,
-        ]);
-
+        // First eight and four widely separated high-domain values are exact
+        // t3117/t3120 checkpoint pairs. The repeated final value deliberately
+        // differs by one ULP between Eigen's packet polynomial and sinf: four
+        // packet lanes followed by three scalar-tail lanes pin width and tail.
+        let input_bits = [
+            0x3EE3_7C7B,
+            0x3F63_7C7B,
+            0x3FAA_9D5B,
+            0x3FE3_7C7B,
+            0x400E_2DCD,
+            0x402A_9D5B,
+            0x4047_0CEA,
+            0x4063_7C7B,
+            0x43E5_E886,
+            0x4524_4173,
+            0x45A1_1A31,
+            0x4637_B4C1,
+            0x3FE3_7C7B,
+            0x3FE3_7C7B,
+            0x3FE3_7C7B,
+            0x3FE3_7C7B,
+            0x3FE3_7C7B,
+            0x3FE3_7C7B,
+            0x3FE3_7C7B,
+        ];
+        let expected_bits = [
+            0x3EDC_1339,
+            0x3F46_B520,
+            0x3F78_CAA8,
+            0x3F7A_9076,
+            0x3F4B_AE6C,
+            0x3EEA_7E52,
+            0x3D00_B6BC,
+            0xBECD_7083,
+            0x3F69_0AE1,
+            0x3F7D_3073,
+            0x3DA2_E312,
+            0x3F79_B742,
+            0x3F7A_9076,
+            0x3F7A_9076,
+            0x3F7A_9076,
+            0x3F7A_9076,
+            0x3F7A_9077,
+            0x3F7A_9077,
+            0x3F7A_9077,
+        ];
+        let input = input_bits.map(f32::from_bits);
         let shape = Shape::new(&[input.len()]).unwrap();
         let layout = TensorLayout::contiguous(shape);
-        let expected: Vec<_> = input.iter().copied().map(libm::sinf).collect();
-        let mut observed = vec![f32::NAN; input.len()];
+        let mut observed = [f32::NAN; 19];
         sin(&input, layout, &mut observed, layout).unwrap();
-        for (index, (&observed, &expected)) in observed.iter().zip(&expected).enumerate() {
-            assert_eq!(
-                observed.to_bits(),
-                expected.to_bits(),
-                "index={index} input={:?} input_bits=0x{:08x}",
-                input[index],
-                input[index].to_bits(),
-            );
+        assert_eq!(observed.map(f32::to_bits), expected_bits);
+    }
+
+    #[test]
+    fn avx2_atan_matches_ort_eigen_packet4_and_scalar_tail() {
+        if !ElementwiseLane::Avx2.is_available() {
+            return;
         }
+
+        // The final t3171 value is deliberately repeated: Eigen's Packet4f
+        // rational approximation and scalar atanf differ by one ULP here.
+        let input = [f32::from_bits(0xC226_F47F); 7];
+        let shape = Shape::new(&[input.len()]).unwrap();
+        let layout = TensorLayout::contiguous(shape);
+        let mut output = [f32::NAN; 7];
+        atan(&input, layout, &mut output, layout).unwrap();
+        assert_eq!(
+            output.map(f32::to_bits),
+            [
+                0xBFC5_FEEF,
+                0xBFC5_FEEF,
+                0xBFC5_FEEF,
+                0xBFC5_FEEF,
+                0xBFC5_FEEE,
+                0xBFC5_FEEE,
+                0xBFC5_FEEE,
+            ],
+        );
+
+        let ieee_input = [f32::INFINITY, f32::NEG_INFINITY, 0.0, -0.0];
+        let ieee_shape = Shape::new(&[4]).unwrap();
+        let ieee_layout = TensorLayout::contiguous(ieee_shape);
+        let mut ieee_output = [f32::NAN; 4];
+        atan_ieee(&ieee_input, ieee_layout, &mut ieee_output, ieee_layout).unwrap();
+        assert_eq!(ieee_output.map(f32::to_bits), [0x3FC9_0FDB, 0xBFC9_0FDB, 0, 0x8000_0000],);
+
+        let mut rejected = [123.0f32; 4];
+        assert_eq!(
+            atan(&ieee_input, ieee_layout, &mut rejected, ieee_layout),
+            Err(Error::NonFiniteInput),
+        );
+        assert_eq!(rejected, [123.0; 4]);
     }
 
     #[test]

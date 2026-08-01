@@ -7,8 +7,11 @@
 //! parameter families. Tensors use contiguous NCW layout with batch one.
 //! ConvTranspose weights retain ONNX layout `[C_in, C_out / group, K]`; Conv
 //! weights use `[C_out, C_in / group, K]`. Every dot product visits input
-//! channels and then kernel taps in ascending order. The AVX2+FMA lane only
-//! evaluates eight adjacent output times in parallel, preserving that order.
+//! channels and then kernel taps in ascending order. The decoder's depthwise
+//! pool additionally mirrors ORT's GEMM -> Col2im -> bias arithmetic: products
+//! are rounded before zero-seeded additions and bias is added last. The AVX2
+//! lane only evaluates eight adjacent output times in parallel, preserving the
+//! profile-specific arithmetic order.
 
 pub const PINNED_NODE_COVERAGE: usize = 7;
 pub const SIMD_TIME_TILE: usize = 8;
@@ -688,6 +691,10 @@ fn conv_element(problem: Problem<'_>, output_channel: usize, output_time: usize)
 
 #[inline]
 fn conv_transpose_element(problem: Problem<'_>, output_channel: usize, output_time: usize) -> f32 {
+    if matches!(problem.profile, Profile::DecoderDepthwise1090 { .. }) {
+        return conv_transpose_decoder_depthwise_element(problem, output_channel, output_time);
+    }
+
     let dimensions = problem.dimensions;
     let input_per_group = dimensions.input_channels_per_group();
     let output_per_group = dimensions.output_channels_per_group();
@@ -720,6 +727,42 @@ fn conv_transpose_element(problem: Problem<'_>, output_channel: usize, output_ti
         }
     }
     accumulator
+}
+
+/// Match ORT's depthwise decoder pool exactly. Its K=1 MLAS GEMM first writes
+/// separately rounded products, Col2im accumulates those products from +0.0 in
+/// ascending kernel order, and Eigen broadcasts the bias only after Col2im.
+#[inline]
+fn conv_transpose_decoder_depthwise_element(
+    problem: Problem<'_>,
+    output_channel: usize,
+    output_time: usize,
+) -> f32 {
+    debug_assert!(matches!(problem.profile, Profile::DecoderDepthwise1090 { .. }));
+    let dimensions = problem.dimensions;
+    debug_assert_eq!(dimensions.input_channels_per_group(), 1);
+    debug_assert_eq!(dimensions.output_channels_per_group(), 1);
+
+    let padded_output_time = output_time + dimensions.pad_left;
+    let input_row = output_channel * dimensions.input_width;
+    let weight_row = output_channel * dimensions.kernel_width;
+    let mut accumulator = 0.0_f32;
+    for kernel in 0..dimensions.kernel_width {
+        if padded_output_time < kernel {
+            continue;
+        }
+        let expanded_input_time = padded_output_time - kernel;
+        if !expanded_input_time.is_multiple_of(dimensions.stride) {
+            continue;
+        }
+        let input_time = expanded_input_time / dimensions.stride;
+        if input_time < dimensions.input_width {
+            let product =
+                problem.input[input_row + input_time] * problem.weights[weight_row + kernel];
+            accumulator += product;
+        }
+    }
+    accumulator + problem.bias.expect("decoder depthwise profile has bias")[output_channel]
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -849,13 +892,14 @@ fn vector_from_i32(values: [i32; SIMD_TIME_TILE]) -> core::arch::x86_64::__m256i
 #[target_feature(enable = "avx2,fma")]
 unsafe fn conv_transpose_avx2_fma(problem: Problem<'_>, output: &mut [f32], tile: Tile) {
     use core::arch::x86_64::{
-        _mm256_castsi256_ps, _mm256_fmadd_ps, _mm256_mask_i32gather_ps, _mm256_set1_ps,
-        _mm256_setzero_ps, _mm256_storeu_ps,
+        _mm256_add_ps, _mm256_castsi256_ps, _mm256_fmadd_ps, _mm256_mask_i32gather_ps,
+        _mm256_mul_ps, _mm256_set1_ps, _mm256_setzero_ps, _mm256_storeu_ps,
     };
 
     let dimensions = problem.dimensions;
     let input_per_group = dimensions.input_channels_per_group();
     let output_per_group = dimensions.output_channels_per_group();
+    let decoder_depthwise = matches!(problem.profile, Profile::DecoderDepthwise1090 { .. });
     let (channel_end, time_end) = tile.checked_ends(dimensions).unwrap();
     for output_channel in tile.channel_start..channel_end {
         let group = output_channel / output_per_group;
@@ -866,7 +910,11 @@ unsafe fn conv_transpose_avx2_fma(problem: Problem<'_>, output: &mut [f32], tile
         while output_time + SIMD_TIME_TILE <= time_end {
             let (plans, layer_count) = transpose_gather_plans(dimensions, output_time);
             let bias = problem.bias.map_or(0.0, |values| values[output_channel]);
-            let mut accumulator = _mm256_set1_ps(bias);
+            let mut accumulator = if decoder_depthwise {
+                _mm256_setzero_ps()
+            } else {
+                _mm256_set1_ps(bias)
+            };
             for local_input_channel in 0..input_per_group {
                 let input_channel = first_input_channel + local_input_channel;
                 let input_row = input_channel * dimensions.input_width;
@@ -892,8 +940,17 @@ unsafe fn conv_transpose_avx2_fma(problem: Problem<'_>, output: &mut [f32], tile
                             mask,
                         )
                     };
-                    accumulator = _mm256_fmadd_ps(input_values, weights, accumulator);
+                    accumulator = if decoder_depthwise {
+                        // ORT materializes the K=1 GEMM product before Col2im's
+                        // plain addition; do not contract these two operations.
+                        _mm256_add_ps(accumulator, _mm256_mul_ps(input_values, weights))
+                    } else {
+                        _mm256_fmadd_ps(input_values, weights, accumulator)
+                    };
                 }
+            }
+            if decoder_depthwise {
+                accumulator = _mm256_add_ps(accumulator, _mm256_set1_ps(bias));
             }
             unsafe {
                 _mm256_storeu_ps(output.as_mut_ptr().add(output_row + output_time), accumulator);
@@ -1251,6 +1308,87 @@ mod tests {
             &[0, 1, 34, 17],
             &[0x3BD8_0000, 0x3B60_0000, 0x3AD0_0000, 0xBC4A_0000],
         );
+    }
+
+    #[test]
+    fn decoder_depthwise_uses_ort_col2im_rounding_and_bias_order() {
+        let profile = Profile::DecoderDepthwise1090 { input_width: 5 };
+        let dimensions = profile.dimensions().unwrap();
+        let mut input = vec![0.0; dimensions.input_elements().unwrap()];
+        let mut weights = vec![
+            0.0;
+            dimensions
+                .weight_elements(OperatorKind::ConvTranspose)
+                .unwrap()
+        ];
+        let mut bias = vec![0.0; dimensions.output_channels];
+
+        // Channel zero distinguishes a separately rounded second product from
+        // an FMA into the first product. ORT produces 0x3f95_a61c; contracting
+        // the second multiply-add produces the adjacent 0x3f95_a61d value.
+        let product_input = f32::from_bits(0xcb3a_ae05);
+        let product_weight = f32::from_bits(0x343b_335b);
+        let first_product = f32::from_bits(0x4053_559f);
+        input[0] = product_input;
+        input[1] = first_product;
+        weights[0] = 1.0;
+        weights[2] = product_weight;
+
+        // Channel one distinguishes Col2im's zero-seeded cancellation followed
+        // by bias from the former bias-seeded accumulation.
+        let channel_one_input = dimensions.input_width;
+        let channel_one_weight = dimensions.kernel_width;
+        input[channel_one_input] = 100_000_000.0;
+        input[channel_one_input + 1] = 100_000_000.0;
+        weights[channel_one_weight] = 1.0;
+        weights[channel_one_weight + 2] = -1.0;
+        bias[1] = 1.0;
+
+        // Channel two isolates the K=1 GEMM product rounding from the final
+        // Eigen bias broadcast on an even output position.
+        let channel_two_input = 2 * dimensions.input_width;
+        let channel_two_weight = 2 * dimensions.kernel_width;
+        input[channel_two_input] = product_input;
+        weights[channel_two_weight + 1] = product_weight;
+        bias[2] = first_product;
+
+        let problem = Problem::new(profile, &input, &weights, Some(&bias)).unwrap();
+        let dispatcher = Dispatcher::detect();
+        let mut scalar = vec![0.0; dimensions.output_elements().unwrap()];
+        dispatcher
+            .convolve_with_lane(problem, &mut scalar, Lane::Scalar)
+            .unwrap();
+
+        let channel_zero_odd = 1;
+        let channel_one_odd = dimensions.output_width + 1;
+        let channel_two_even = 2 * dimensions.output_width;
+        assert_eq!(scalar[channel_zero_odd].to_bits(), 0x3f95_a61c);
+        assert_eq!(scalar[channel_one_odd].to_bits(), 1.0_f32.to_bits());
+        assert_eq!(scalar[channel_two_even].to_bits(), 0x3f95_a61c);
+
+        assert_eq!(libm::fmaf(product_input, product_weight, first_product).to_bits(), 0x3f95_a61d);
+        let bias_seeded = libm::fmaf(100_000_000.0, 1.0, 1.0);
+        assert_eq!(libm::fmaf(100_000_000.0, -1.0, bias_seeded), 0.0);
+
+        if dispatcher.supports(Lane::Avx2Fma) {
+            let mut vector = vec![0.0; scalar.len()];
+            dispatcher
+                .convolve_with_lane(problem, &mut vector, Lane::Avx2Fma)
+                .unwrap();
+            assert_eq!(vector[channel_zero_odd].to_bits(), 0x3f95_a61c);
+            assert_eq!(vector[channel_one_odd].to_bits(), 1.0_f32.to_bits());
+            assert_eq!(vector[channel_two_even].to_bits(), 0x3f95_a61c);
+            assert_eq!(
+                vector
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                scalar
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]
