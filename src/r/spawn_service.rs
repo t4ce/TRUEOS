@@ -74,6 +74,7 @@ define_started_flags!(
     PRINTER_SPOOLER_STARTED,
     FTP_SERVER_STARTED,
     GPU_COMPLETION_REAPER_STARTED,
+    GPU_FAULT_CONTAINMENT_STARTED,
     TRUEOS_SPIRIT_STARTED,
     SPIRIT_RESPONSE_WINDOW_STARTED,
     MOUSE_MOTION_SERVICE_STARTED,
@@ -730,6 +731,10 @@ fn spawn_gpu_completion_reaper(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::intel::gpgpu::gpu_completion_reaper_task())
 }
 
+fn spawn_gpu_fault_containment(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::gpu::vgpu::gpu_fault_containment_task())
+}
+
 fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     let Some(ap1_spawner) = crate::workers::ap1_ui_core_spawner() else {
@@ -949,6 +954,11 @@ fn spawn_tinyaudio_live_http(spawner: Spawner) -> SpawnAttempt {
 #[inline]
 fn intel_device_gate() -> bool {
     crate::intel::has_claimed_device()
+}
+
+#[inline]
+fn gpu_fault_containment_gate() -> bool {
+    crate::intel::guc_submission_ready() && crate::gpu::physical::physical_device().is_some()
 }
 
 #[inline]
@@ -1597,7 +1607,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 70
+const TASK_COUNT: usize = 71
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
@@ -1831,6 +1841,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         intel_device_gate,
         &GPU_COMPLETION_REAPER_STARTED,
         spawn_gpu_completion_reaper,
+    ),
+    TaskSpec::enabled_gated(
+        "gpu-fault-containment",
+        0,
+        gpu_fault_containment_gate,
+        &GPU_FAULT_CONTAINMENT_STARTED,
+        spawn_gpu_fault_containment,
     ),
     // TrueOS-Spirit reserves all four cursor-pipe fences, but its sane initial
     // deployment starts one Embassy worker only after a complete scanout

@@ -9,12 +9,14 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+use embassy_time::{Duration, Timer};
 use spin::Mutex;
 
 use super::physical::{
-    PhysicalBufferSlice, PhysicalContextDescriptor, PhysicalContextHandle, PhysicalContextPriority,
-    PhysicalGpuDevice, PhysicalGpuError, PhysicalGpuVmHandle, PhysicalSceneAabbRequest,
-    PhysicalSchedulerStatus, physical_device,
+    PhysicalBufferSlice, PhysicalContextDescriptor, PhysicalContextFaultKind,
+    PhysicalContextHandle, PhysicalContextPriority, PhysicalGpuDevice, PhysicalGpuError,
+    PhysicalGpuFault, PhysicalGpuVmHandle, PhysicalSceneAabbRequest, PhysicalSchedulerStatus,
+    physical_device,
 };
 
 const PAGE_BYTES: usize = 4096;
@@ -506,6 +508,9 @@ enum BufferBacking {
         vm_id: u8,
         guest_va: u64,
         pages: Vec<u64>,
+        /// Allocator ownership remains pinned until a definitive PPGTT unmap.
+        /// `None` is fail-closed quarantine, never permission to reuse pages.
+        dma_pin: Option<crate::allocators::HvGuestDmaPin>,
     },
 }
 
@@ -530,6 +535,9 @@ struct QueueRecord {
     class: QueueClass,
     timeline: TimelineStatus,
     failed_points: Vec<u64>,
+    /// Broker-visible operation lease. Long synchronous physical calls release
+    /// `BROKER`, so queue destruction must remain fenced independently.
+    in_flight: u32,
 }
 
 struct QueueSlot {
@@ -575,11 +583,16 @@ struct DeviceSlot {
 
 struct Broker {
     epoch: u64,
+    /// Sticky until a real device reset/reboot. This makes unattributed GuC
+    /// faults idempotent and prevents new mediated devices entering a GT whose
+    /// ownership can no longer be established.
+    physical_lost: bool,
     devices: Vec<DeviceSlot>,
 }
 
 static BROKER: Mutex<Broker> = Mutex::new(Broker {
     epoch: 1,
+    physical_lost: false,
     devices: Vec::new(),
 });
 
@@ -636,6 +649,7 @@ pub(crate) struct BrokerStatus {
     pub(crate) physical_revision_id: u8,
     pub(crate) guc_submission: bool,
     pub(crate) epoch: u64,
+    pub(crate) physical_lost: bool,
     pub(crate) scheduler: PhysicalSchedulerStatus,
     pub(crate) kernel_context_boundaries: KernelContextBoundaryStatus,
     pub(crate) devices: Vec<DeviceStatusSnapshot>,
@@ -649,6 +663,10 @@ pub(crate) struct KernelContextBoundaryStatus {
     pub(crate) coherent: bool,
     pub(crate) unique_hwlrcas: bool,
     pub(crate) unique_ppgtt_roots: bool,
+    pub(crate) helio_render_live: bool,
+    pub(crate) spirit_execution_live: bool,
+    pub(crate) helio_spirit_distinct_hwlrca: bool,
+    pub(crate) helio_spirit_distinct_ppgtt_root: bool,
 }
 
 impl KernelContextBoundaryStatus {
@@ -659,6 +677,13 @@ impl KernelContextBoundaryStatus {
             && self.coherent
             && self.unique_hwlrcas
             && self.unique_ppgtt_roots
+    }
+
+    pub(crate) const fn helio_spirit_valid(self) -> bool {
+        self.helio_render_live
+            && self.spirit_execution_live
+            && self.helio_spirit_distinct_hwlrca
+            && self.helio_spirit_distinct_ppgtt_root
     }
 }
 
@@ -704,6 +729,13 @@ pub(crate) fn open(
     }
     let gpuvm = physical.create_gpuvm()?;
     let mut broker = BROKER.lock();
+    if broker.physical_lost {
+        // No work was admitted through this VM. Reclaim its CPU-owned page
+        // tables instead of publishing a new device after global GT loss.
+        drop(broker);
+        let _ = physical.destroy_gpuvm(gpuvm);
+        return Err(VgpuError::DeviceLost);
+    }
     let epoch = broker.epoch;
     let record = VirtualDevice {
         principal,
@@ -727,25 +759,54 @@ pub(crate) fn open(
 pub(crate) fn close(principal: Principal, handle: DeviceHandle) -> Result<(), VgpuError> {
     let physical = require_physical()?;
     let mut broker = BROKER.lock();
-    let (slot, generation) = decode_handle(handle.raw())?;
-    let device_slot = broker
-        .devices
-        .get_mut(slot)
-        .ok_or(VgpuError::InvalidHandle)?;
-    if device_slot.generation != generation {
-        return Err(VgpuError::InvalidHandle);
+    let device = lookup_device(&broker, handle, principal)?;
+    if device_has_operation_leases(device) {
+        // A known in-flight operation owns its queue and pages. An
+        // administrative close attempt is not device loss and must not poison
+        // the operation's eventual exact lease release.
+        return Err(VgpuError::Busy);
     }
-    let mut device = device_slot.record.take().ok_or(VgpuError::InvalidHandle)?;
-    if device.principal != principal {
-        device_slot.record = Some(device);
-        return Err(VgpuError::PermissionDenied);
-    }
-
-    if let Err(error) = destroy_device_resources(physical, &mut device) {
-        device_slot.record = Some(device);
-        return Err(error);
-    }
-    Ok(())
+    let mut fault_service = PhysicalFaultServiceResult::default();
+    let contexts = destroy_device_contexts_locked(
+        &mut broker,
+        physical,
+        handle,
+        principal,
+        &mut fault_service,
+    );
+    let result = match contexts {
+        Ok(_) => match decode_handle(handle.raw()) {
+            Err(error) => Err(error),
+            Ok((slot, generation)) => match broker.devices.get_mut(slot) {
+                None => Err(VgpuError::InvalidHandle),
+                Some(device_slot) if device_slot.generation != generation => {
+                    Err(VgpuError::InvalidHandle)
+                }
+                Some(device_slot) => match device_slot.record.take() {
+                    None => Err(VgpuError::InvalidHandle),
+                    Some(mut device) => match destroy_device_resources(physical, &mut device) {
+                        Ok(()) => Ok(()),
+                        Err(error) => {
+                            if error != VgpuError::Busy {
+                                device.lost = true;
+                            }
+                            device_slot.record = Some(device);
+                            Err(error)
+                        }
+                    },
+                },
+            },
+        },
+        Err(error) => {
+            if let Ok(device) = lookup_device_mut(&mut broker, handle, principal) {
+                device.lost = true;
+            }
+            Err(error)
+        }
+    };
+    drop(broker);
+    finish_physical_gpu_fault_service(fault_service);
+    result
 }
 
 /// Tear down every vGPU device owned by a Hull VM at its VMX lifetime
@@ -753,33 +814,89 @@ pub(crate) fn close(principal: Principal, handle: DeviceHandle) -> Result<(), Vg
 /// generations and a new broker epoch. Resources whose GPU ownership is
 /// uncertain remain installed, lost, and pinned rather than being reused.
 pub(crate) fn release_hull_guest(vm_id: u8) -> (usize, usize, u64) {
-    let Some(physical) = physical_device().filter(|device| device.ready()) else {
-        return (0, 0, 0);
-    };
     let principal = Principal::HullGuest(vm_id as u16);
+    let Some(physical) = physical_device().filter(|device| device.ready()) else {
+        let broker = BROKER.lock();
+        let quarantined = broker
+            .devices
+            .iter()
+            .filter_map(|slot| slot.record.as_ref())
+            .filter(|device| device.principal == principal)
+            .count();
+        return (0, quarantined, broker.epoch);
+    };
     let mut broker = BROKER.lock();
     broker.epoch = broker.epoch.wrapping_add(1).max(1);
-    let epoch = broker.epoch;
     let mut released = 0usize;
     let mut quarantined = 0usize;
-    for slot in &mut broker.devices {
-        let Some(mut device) = slot.record.take() else {
-            continue;
-        };
-        if device.principal != principal {
-            slot.record = Some(device);
+    let handles: Vec<DeviceHandle> = broker
+        .devices
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, entry)| {
+            entry
+                .record
+                .as_ref()
+                .filter(|device| device.principal == principal)
+                .map(|_| DeviceHandle::from_raw(encode_handle(slot, entry.generation)))
+        })
+        .collect();
+    let mut fault_service = PhysicalFaultServiceResult::default();
+    for handle in handles {
+        if lookup_device(&broker, handle, principal).is_ok_and(device_has_operation_leases) {
+            // The VM CPU is gone, but a physical operation still has an exact
+            // completion owner. Keep the device live long enough for that
+            // completion to release its leases; the VM slot/heap gate below
+            // prevents a new tenant from reusing the pages meanwhile.
+            quarantined = quarantined.saturating_add(1);
             continue;
         }
+        let contexts = destroy_device_contexts_locked(
+            &mut broker,
+            physical,
+            handle,
+            principal,
+            &mut fault_service,
+        );
+        if contexts.is_err() {
+            let current_epoch = broker.epoch;
+            if let Ok(device) = lookup_device_mut(&mut broker, handle, principal) {
+                device.epoch = current_epoch;
+                device.lost = true;
+            }
+            quarantined = quarantined.saturating_add(1);
+            continue;
+        }
+        let Ok((slot, generation)) = decode_handle(handle.raw()) else {
+            quarantined = quarantined.saturating_add(1);
+            continue;
+        };
+        let current_epoch = broker.epoch;
+        let Some(device_slot) = broker.devices.get_mut(slot) else {
+            quarantined = quarantined.saturating_add(1);
+            continue;
+        };
+        if device_slot.generation != generation {
+            quarantined = quarantined.saturating_add(1);
+            continue;
+        }
+        let Some(mut device) = device_slot.record.take() else {
+            quarantined = quarantined.saturating_add(1);
+            continue;
+        };
         match destroy_device_resources(physical, &mut device) {
             Ok(()) => released = released.saturating_add(1),
             Err(_) => {
-                device.epoch = epoch;
+                device.epoch = current_epoch;
                 device.lost = true;
-                slot.record = Some(device);
+                device_slot.record = Some(device);
                 quarantined = quarantined.saturating_add(1);
             }
         }
     }
+    let epoch = broker.epoch;
+    drop(broker);
+    finish_physical_gpu_fault_service(fault_service);
     (released, quarantined, epoch)
 }
 
@@ -936,6 +1053,11 @@ pub(crate) fn create_vvideo_mem(
     {
         return Err(VgpuError::Unsupported);
     }
+    // Pin the allocator allocation before resolving or publishing any PPGTT
+    // mapping. This closes the raw-ABI path where the guest could otherwise
+    // return these pages to its free list while the GPU still named them.
+    let dma_pin = crate::allocators::pin_hv_guest_dma_range(vm_id, guest_va, bytes)
+        .ok_or(VgpuError::PermissionDenied)?;
     let page_count = bytes / PAGE_BYTES;
     let mut pages = Vec::with_capacity(page_count);
     for page in 0..page_count {
@@ -992,8 +1114,17 @@ pub(crate) fn create_vvideo_mem(
     for (page, phys) in pages.iter().copied().enumerate() {
         let page_gpu = gpu + (page * PAGE_BYTES) as u64;
         if let Err(error) = physical.map_gpuvm(vm, page_gpu, phys, PAGE_BYTES) {
-            if mapped != 0 {
-                let _ = physical.unmap_gpuvm(vm, gpu, mapped * PAGE_BYTES);
+            // `map_gpuvm` may fail during post-write verification, so include
+            // the just-attempted page in rollback rather than assuming an
+            // error proves that no PTE was installed.
+            let rollback_bytes = mapped.saturating_add(1).saturating_mul(PAGE_BYTES);
+            if physical.unmap_gpuvm(vm, gpu, rollback_bytes).is_err() {
+                // Rollback did not prove that the partial PPGTT mapping is
+                // gone. Keep the allocation pin and fence the whole vGPU/VM
+                // lifecycle rather than hand late-write pages back to either
+                // allocator or a future VM-slot occupant.
+                device.lost = true;
+                dma_pin.quarantine();
             }
             return Err(error.into());
         }
@@ -1002,11 +1133,17 @@ pub(crate) fn create_vvideo_mem(
     match physical.verify_gpuvm_pages(vm, gpu, &pages) {
         Ok(true) => {}
         Ok(false) => {
-            let _ = physical.unmap_gpuvm(vm, gpu, bytes);
+            if physical.unmap_gpuvm(vm, gpu, bytes).is_err() {
+                device.lost = true;
+                dma_pin.quarantine();
+            }
             return Err(VgpuError::Physical(PhysicalGpuError::MapFailed));
         }
         Err(error) => {
-            let _ = physical.unmap_gpuvm(vm, gpu, bytes);
+            if physical.unmap_gpuvm(vm, gpu, bytes).is_err() {
+                device.lost = true;
+                dma_pin.quarantine();
+            }
             return Err(error.into());
         }
     }
@@ -1020,6 +1157,7 @@ pub(crate) fn create_vvideo_mem(
                 vm_id,
                 guest_va,
                 pages,
+                dma_pin: Some(dma_pin.retain_for_mapping()),
             },
             bytes,
             gpu,
@@ -1262,6 +1400,7 @@ pub(crate) fn create_queue(
             class,
             timeline: TimelineStatus::default(),
             failed_points: Vec::new(),
+            in_flight: 0,
         },
     ))
 }
@@ -1278,6 +1417,7 @@ pub(crate) fn destroy_queue(
         .contexts
         .iter()
         .any(|binding| binding.queue == queue_handle)
+        || lookup_queue(device, queue_handle)?.in_flight != 0
     {
         return Err(VgpuError::Busy);
     }
@@ -1304,6 +1444,9 @@ pub(crate) fn submit_control_nop(
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
     let queue = lookup_queue_mut(device, queue_handle)?;
+    if queue.in_flight != 0 {
+        return Err(VgpuError::Busy);
+    }
     queue.timeline.submitted = queue.timeline.submitted.wrapping_add(1).max(1);
     queue.timeline.completed = queue.timeline.submitted;
     Ok(TimelinePoint {
@@ -1379,34 +1522,88 @@ pub(crate) fn submit_scene_aabb(
         query_max: dispatch.query_max,
     };
     pin_scene_aabb_buffers(device, &dispatch)?;
-    let completion = match physical.submit_scene_aabb(request) {
-        Ok(completion) => completion,
+    let queue = match lookup_queue_mut(device, queue_handle) {
+        Ok(queue) if queue.in_flight == 0 => queue,
+        Ok(_) => {
+            unpin_scene_aabb_buffers(device, &dispatch);
+            return Err(VgpuError::Busy);
+        }
         Err(error) => {
-            // A timeout means hardware ownership is unknown. Preserve the
-            // pins permanently; freeing or remapping those pages could turn a
-            // late GPU access into cross-tenant corruption.
-            if error != PhysicalGpuError::CompletionTimeout {
-                unpin_scene_aabb_buffers(device, &dispatch);
-            }
-            let queue = lookup_queue_mut(device, queue_handle)?;
-            queue.timeline.failures = queue.timeline.failures.saturating_add(1);
-            return Err(error.into());
+            unpin_scene_aabb_buffers(device, &dispatch);
+            return Err(error);
         }
     };
-    unpin_scene_aabb_buffers(device, &dispatch);
-    let queue = lookup_queue_mut(device, queue_handle)?;
-    queue.timeline.submitted = queue.timeline.submitted.wrapping_add(1).max(1);
-    queue.timeline.completed = queue.timeline.submitted;
-    queue.timeline.last_physical_serial = completion.serial;
-    Ok(SceneAabbResult {
-        point: TimelinePoint {
-            queue: queue_handle,
-            value: queue.timeline.submitted,
-            physical_serial: completion.serial,
-            physical_publish_sequence: 0,
-        },
-        hits: completion.hits,
-    })
+    queue.in_flight = 1;
+
+    // The buffer and queue leases keep this exact operation's resources alive;
+    // unrelated vGPU clients and the 2 ms GuC fault pump must not wait behind
+    // the physical completion spin (up to 500 ms).
+    drop(broker);
+    let physical_result = physical.submit_scene_aabb(request);
+    let mut broker = BROKER.lock();
+    let mut fault_service = PhysicalFaultServiceResult::default();
+    service_physical_gpu_faults_locked(&mut broker, physical, &mut fault_service);
+    let ownership_uncertain = matches!(physical_result, Err(PhysicalGpuError::CompletionTimeout));
+    if ownership_uncertain {
+        if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
+            device.lost = true;
+        }
+    }
+    let current_lost = broker.physical_lost
+        || match lookup_device(&broker, device_handle, principal) {
+            Ok(device) => device.lost,
+            Err(_) => true,
+        };
+    // A definite physical return settles this operation's page ownership even
+    // if a concurrent administrative close or an unrelated device fault made
+    // the virtual device lost. Only an ambiguous completion timeout retains
+    // this exact queue/buffer lease.
+    let release_lease = !ownership_uncertain;
+    let completed = match lookup_device_mut(&mut broker, device_handle, principal) {
+        Err(error) => Err(error),
+        Ok(device) => {
+            let completed = match lookup_queue_mut(device, queue_handle) {
+                Err(error) => Err(error),
+                Ok(queue) if current_lost => {
+                    queue.timeline.failures = queue.timeline.failures.saturating_add(1);
+                    Err(VgpuError::DeviceLost)
+                }
+                Ok(queue) => match physical_result {
+                    Ok(completion) => {
+                        queue.timeline.submitted = queue.timeline.submitted.wrapping_add(1).max(1);
+                        queue.timeline.completed = queue.timeline.submitted;
+                        queue.timeline.last_physical_serial = completion.serial;
+                        Ok(SceneAabbResult {
+                            point: TimelinePoint {
+                                queue: queue_handle,
+                                value: queue.timeline.submitted,
+                                physical_serial: completion.serial,
+                                physical_publish_sequence: 0,
+                            },
+                            hits: completion.hits,
+                        })
+                    }
+                    Err(error) => {
+                        queue.timeline.failures = queue.timeline.failures.saturating_add(1);
+                        Err(error.into())
+                    }
+                },
+            };
+            if release_lease {
+                if let Ok(queue) = lookup_queue_mut(device, queue_handle) {
+                    queue.in_flight = queue.in_flight.saturating_sub(1);
+                }
+                // A timeout means hardware ownership is unknown. In that case
+                // both pins and the queue lease remain sticky so neither pages
+                // nor handle can be recycled.
+                unpin_scene_aabb_buffers(device, &dispatch);
+            }
+            completed
+        }
+    };
+    drop(broker);
+    finish_physical_gpu_fault_service(fault_service);
+    completed
 }
 
 fn scene_aabb_buffer_handles(dispatch: &SceneAabbDispatch) -> [BufferHandle; 8] {
@@ -1575,60 +1772,141 @@ pub(crate) fn submit_kernel_context(
     }
 
     let device_handle = ensure_kernel_device(&mut broker, client, descriptor.gpuvm_root_phys)?;
-    let device = lookup_device_mut(&mut broker, device_handle, client.principal())?;
-    ensure_live(device)?;
-    let queue_handle = ensure_kernel_queue(device, client.queue_class())?;
-
-    let context = if let Some(bound) = device.kernel_context_capability {
-        if bound != descriptor {
-            // A kernel principal is not a bag of interchangeable contexts.
-            // Rebinding any component would silently couple unrelated LRC
-            // storage or address spaces through one software identity.
-            return Err(VgpuError::PermissionDenied);
-        }
-        let Some(binding) = device.contexts.first() else {
-            // A bound descriptor with no retained physical registration is a
-            // quarantined identity, never permission to recycle its backing.
-            return Err(VgpuError::DeviceLost);
+    let (queue_handle, existing_context) = {
+        let device = lookup_device_mut(&mut broker, device_handle, client.principal())?;
+        ensure_live(device)?;
+        let queue_handle = ensure_kernel_queue(device, client.queue_class())?;
+        let context = if let Some(bound) = device.kernel_context_capability {
+            if bound != descriptor {
+                // A kernel principal is not a bag of interchangeable contexts.
+                // Rebinding any component would silently couple unrelated LRC
+                // storage or address spaces through one software identity.
+                return Err(VgpuError::PermissionDenied);
+            }
+            let Some(binding) = device.contexts.first() else {
+                // A bound descriptor with no retained physical registration is
+                // a quarantined identity, never permission to recycle backing.
+                return Err(VgpuError::DeviceLost);
+            };
+            if binding.queue != queue_handle || binding.descriptor != descriptor {
+                return Err(VgpuError::DeviceLost);
+            }
+            Some(binding.context)
+        } else {
+            if !device.contexts.is_empty() {
+                return Err(VgpuError::DeviceLost);
+            }
+            if device.contexts.len() >= device.quota.contexts {
+                return Err(VgpuError::QuotaExceeded);
+            }
+            None
         };
-        if binding.queue != queue_handle || binding.descriptor != descriptor {
-            return Err(VgpuError::DeviceLost);
-        }
-        binding.context
+        (queue_handle, context)
+    };
+
+    let mut fault_service = PhysicalFaultServiceResult::default();
+    let context = if let Some(context) = existing_context {
+        context
     } else {
-        if !device.contexts.is_empty() {
+        let context = match physical.register_context(descriptor, client.physical_priority()) {
+            Ok(context) => context,
+            Err(error) => {
+                // A rejected return does not prove REGISTER was never
+                // published; policy enqueue or a queued CAT can fail after
+                // firmware accepted the ID. Bind the immutable descriptor and
+                // quarantine its storage even without a returned token.
+                if let Ok(device) =
+                    lookup_device_mut(&mut broker, device_handle, client.principal())
+                {
+                    device.kernel_context_capability = Some(descriptor);
+                    device.lost = true;
+                }
+                service_physical_gpu_faults_locked(&mut broker, physical, &mut fault_service);
+                drop(broker);
+                finish_physical_gpu_fault_service(fault_service);
+                return Err(error.into());
+            }
+        };
+        let binding_inserted =
+            match lookup_device_mut(&mut broker, device_handle, client.principal()) {
+                Ok(device) => {
+                    device.contexts.push(ContextBinding {
+                        queue: queue_handle,
+                        descriptor,
+                        context,
+                    });
+                    device.kernel_context_capability = Some(descriptor);
+                    true
+                }
+                Err(_) => false,
+            };
+
+        // REGISTER may itself ingest a queued CAT event. Publish the returned
+        // token into the broker map first, then classify that event before any
+        // SUBMIT can cross the same ownership boundary.
+        service_physical_gpu_faults_locked(&mut broker, physical, &mut fault_service);
+        if !binding_inserted {
+            // A successful physical registration without a durable owner map
+            // cannot be recovered by guessing which tenant owns the token.
+            record_physical_device_loss_locked(&mut broker, &mut fault_service, 0);
+            drop(broker);
+            finish_physical_gpu_fault_service(fault_service);
             return Err(VgpuError::DeviceLost);
         }
-        if device.contexts.len() >= device.quota.contexts {
-            return Err(VgpuError::QuotaExceeded);
+        let current_lost = broker.physical_lost
+            || match lookup_device(&broker, device_handle, client.principal()) {
+                Ok(device) => device.lost,
+                Err(_) => true,
+            };
+        if current_lost {
+            drop(broker);
+            finish_physical_gpu_fault_service(fault_service);
+            return Err(VgpuError::DeviceLost);
         }
-        let context = physical.register_context(descriptor, client.physical_priority())?;
-        device.contexts.push(ContextBinding {
-            queue: queue_handle,
-            descriptor,
-            context,
-        });
-        device.kernel_context_capability = Some(descriptor);
         context
     };
 
-    let submission = match physical.submit_context(context) {
-        Ok(submission) => submission,
+    // Record accepted work before servicing G2H so an immediately reported
+    // CAT marks this exact virtual point failed rather than losing its fence.
+    let submitted = match physical.submit_context(context) {
+        Ok(submission) => match lookup_device_mut(&mut broker, device_handle, client.principal())
+            .and_then(|device| lookup_queue_mut(device, queue_handle))
+        {
+            Ok(queue) => {
+                queue.timeline.submitted = queue.timeline.submitted.wrapping_add(1).max(1);
+                queue.timeline.last_physical_serial = submission.serial;
+                Ok(TimelinePoint {
+                    queue: queue_handle,
+                    value: queue.timeline.submitted,
+                    physical_serial: submission.serial,
+                    physical_publish_sequence: submission.scheduler_publish_sequence,
+                })
+            }
+            Err(error) => Err(error),
+        },
         Err(error) => {
-            let queue = lookup_queue_mut(device, queue_handle)?;
-            queue.timeline.failures = queue.timeline.failures.saturating_add(1);
-            return Err(error.into());
+            if let Ok(queue) = lookup_device_mut(&mut broker, device_handle, client.principal())
+                .and_then(|device| lookup_queue_mut(device, queue_handle))
+            {
+                queue.timeline.failures = queue.timeline.failures.saturating_add(1);
+            }
+            Err(error.into())
         }
     };
-    let queue = lookup_queue_mut(device, queue_handle)?;
-    queue.timeline.submitted = queue.timeline.submitted.wrapping_add(1).max(1);
-    queue.timeline.last_physical_serial = submission.serial;
-    Ok(TimelinePoint {
-        queue: queue_handle,
-        value: queue.timeline.submitted,
-        physical_serial: submission.serial,
-        physical_publish_sequence: submission.scheduler_publish_sequence,
-    })
+    service_physical_gpu_faults_locked(&mut broker, physical, &mut fault_service);
+    let current_lost = broker.physical_lost
+        || match lookup_device(&broker, device_handle, client.principal()) {
+            Ok(device) => device.lost,
+            Err(_) => true,
+        };
+    let submitted = if current_lost {
+        Err(VgpuError::DeviceLost)
+    } else {
+        submitted
+    };
+    drop(broker);
+    finish_physical_gpu_fault_service(fault_service);
+    submitted
 }
 
 /// Retire one exact serialized kernel submission after its hardware
@@ -1678,6 +1956,9 @@ pub(crate) fn kernel_timeline(client: KernelClient) -> Option<TimelineStatus> {
 /// partially destroyed capability is permanently non-reusable until reboot.
 pub(crate) fn kernel_context_storage_reusable(client: KernelClient) -> bool {
     let broker = BROKER.lock();
+    if broker.physical_lost {
+        return false;
+    }
     let Some((_, device)) = find_device_by_principal(&broker, client.principal()) else {
         return true;
     };
@@ -1711,10 +1992,16 @@ pub(crate) struct KernelClientIsolation {
 pub(crate) fn isolate_kernel_context(client: KernelClient) -> KernelClientIsolation {
     let physical = physical_device();
     let mut broker = BROKER.lock();
-    let Some((_, device)) = find_device_mut_by_principal(&mut broker, client.principal()) else {
+    let Some((handle, _)) = find_device_by_principal(&broker, client.principal()) else {
+        // Isolation can race the interval after executor reservation but before
+        // the first broker device is published. Fence that client in the
+        // executor even when there is no physical context to tear down yet.
+        drop(broker);
+        crate::gpu::executor::notify_kernel_client_lost(client);
         return KernelClientIsolation::default();
     };
-
+    let device = lookup_device_mut(&mut broker, handle, client.principal())
+        .expect("principal lookup returned an invalid vGPU handle");
     device.lost = true;
     let mut report = KernelClientIsolation {
         device_found: true,
@@ -1722,26 +2009,34 @@ pub(crate) fn isolate_kernel_context(client: KernelClient) -> KernelClientIsolat
     };
     let Some(physical) = physical else {
         report.contexts_retained = device.contexts.len();
+        drop(broker);
+        crate::gpu::executor::notify_kernel_client_lost(client);
         return report;
     };
 
-    let mut index = 0usize;
-    while index < device.contexts.len() {
-        let context = device.contexts[index].context;
-        match physical.destroy_context(context) {
-            Ok(()) => {
-                device.contexts.remove(index);
-                report.contexts_disabled = report.contexts_disabled.saturating_add(1);
-            }
-            Err(_) => {
-                // Keep the binding live: destroy_context deliberately leaves a
-                // rejected GuC slot allocated, and the broker must mirror that
-                // ownership rather than permit a late-write alias.
-                report.contexts_retained = report.contexts_retained.saturating_add(1);
-                index = index.saturating_add(1);
-            }
+    let mut fault_service = PhysicalFaultServiceResult::default();
+    // Isolation is itself a sticky loss boundary, even when no CAT record was
+    // involved. Wake every fence for this client after releasing BROKER.
+    fault_service.push_client(client);
+    match destroy_device_contexts_locked(
+        &mut broker,
+        physical,
+        handle,
+        client.principal(),
+        &mut fault_service,
+    ) {
+        Ok(destroyed) => report.contexts_disabled = destroyed,
+        Err(_) => {
+            // The helper retains every context whose firmware lifecycle or
+            // fault attribution is incomplete, keeping its ID and backing from
+            // becoming a late-write alias.
+            report.contexts_retained = lookup_device(&broker, handle, client.principal())
+                .map(|device| device.contexts.len())
+                .unwrap_or(0);
         }
     }
+    drop(broker);
+    finish_physical_gpu_fault_service(fault_service);
     report
 }
 
@@ -1753,16 +2048,326 @@ pub(crate) fn isolate_kernel_client(client: KernelClient) -> KernelClientIsolati
     isolate_kernel_context(client)
 }
 
-/// Reset/device-loss hook for the physical driver. All tenant handles remain
-/// queryable for diagnosis but reject further allocation and submission.
-pub(crate) fn notify_physical_device_lost() -> u64 {
-    let mut broker = BROKER.lock();
-    broker.epoch = broker.epoch.wrapping_add(1).max(1);
-    let epoch = broker.epoch;
+const fn kernel_client_for_principal(principal: Principal) -> Option<KernelClient> {
+    match principal {
+        Principal::KernelRender => Some(KernelClient::Render),
+        Principal::KernelRender1 => Some(KernelClient::Render1),
+        Principal::KernelRender2 => Some(KernelClient::Render2),
+        Principal::KernelGpgpuSystem => Some(KernelClient::GpgpuSystem),
+        Principal::KernelGpgpuExecution => Some(KernelClient::GpgpuExecution),
+        Principal::KernelLfm25 => Some(KernelClient::Lfm25),
+        Principal::KernelUi4Compositor => Some(KernelClient::Ui4Compositor),
+        Principal::KernelUi4Blitter => Some(KernelClient::Ui4Blitter),
+        Principal::HostRuntime | Principal::HullGuest(_) | Principal::RuntimeTest(_) => None,
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct PhysicalContextFaultIsolation {
+    bindings_found: usize,
+    devices_lost: usize,
+    timelines_failed: usize,
+    engine_mismatches: usize,
+    ownership_corrupt: bool,
+    clients: Vec<KernelClient>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RecordedPhysicalContextFault {
+    context: PhysicalContextHandle,
+    engine: super::physical::PhysicalEngineId,
+    mediated: bool,
+    kind: PhysicalContextFaultKind,
+    hw_type: Option<u32>,
+    report: PhysicalContextFaultIsolation,
+    acknowledged: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct PhysicalFaultServiceResult {
+    clients: Vec<KernelClient>,
+    exact_reports: Vec<RecordedPhysicalContextFault>,
+    global_report: Option<(u64, u64)>,
+}
+
+impl PhysicalFaultServiceResult {
+    fn push_client(&mut self, client: KernelClient) {
+        if !self.clients.contains(&client) {
+            self.clients.push(client);
+        }
+    }
+}
+
+fn record_physical_device_loss_locked(
+    broker: &mut Broker,
+    result: &mut PhysicalFaultServiceResult,
+    unattributed_events: u64,
+) {
+    let (epoch, newly_lost, affected) = mark_physical_device_lost_locked(broker);
+    for client in affected {
+        result.push_client(client);
+    }
+    if newly_lost {
+        result.global_report = Some((epoch, unattributed_events));
+    }
+}
+
+const fn physical_fault_ownership_is_exact(
+    mediated: bool,
+    bindings_found: usize,
+    engine_mismatches: usize,
+) -> bool {
+    if mediated {
+        bindings_found == 1 && engine_mismatches == 0
+    } else {
+        bindings_found == 0
+    }
+}
+
+const _: () = {
+    assert!(physical_fault_ownership_is_exact(true, 1, 0));
+    assert!(physical_fault_ownership_is_exact(false, 0, 0));
+    assert!(!physical_fault_ownership_is_exact(true, 0, 0));
+    assert!(!physical_fault_ownership_is_exact(true, 2, 0));
+    assert!(!physical_fault_ownership_is_exact(true, 1, 1));
+    assert!(!physical_fault_ownership_is_exact(false, 1, 0));
+};
+
+/// Mark only the mediated owner of one generation-tagged physical context as
+/// lost. This helper owns no GuC/backend calls, so `BROKER` is never nested
+/// with the physical context registry.
+fn mark_physical_context_faulted(
+    broker: &mut Broker,
+    context: PhysicalContextHandle,
+    engine: super::physical::PhysicalEngineId,
+    mediated: bool,
+) -> PhysicalContextFaultIsolation {
+    let mut report = PhysicalContextFaultIsolation::default();
+
+    // Classify the ownership map before changing any tenant. A physical token
+    // registered through this boundary must have exactly one matching broker
+    // binding and engine. A direct backend token must have none. Anything else
+    // is ownership corruption and requires global loss, never a guessed owner.
+    for slot in &broker.devices {
+        let Some(device) = slot.record.as_ref() else {
+            continue;
+        };
+        for binding in &device.contexts {
+            if binding.context != context {
+                continue;
+            }
+            report.bindings_found = report.bindings_found.saturating_add(1);
+            if binding.descriptor.engine != engine {
+                report.engine_mismatches = report.engine_mismatches.saturating_add(1);
+            }
+        }
+    }
+    if !physical_fault_ownership_is_exact(mediated, report.bindings_found, report.engine_mismatches)
+    {
+        report.ownership_corrupt = true;
+        return report;
+    }
+    if !mediated {
+        return report;
+    }
+
     for slot in &mut broker.devices {
         let Some(device) = slot.record.as_mut() else {
             continue;
         };
+        let matching_bindings: Vec<(QueueHandle, bool)> = device
+            .contexts
+            .iter()
+            .filter(|binding| binding.context == context)
+            .map(|binding| (binding.queue, binding.descriptor.engine == engine))
+            .collect();
+        if matching_bindings.is_empty() {
+            continue;
+        }
+        if let Some(client) = kernel_client_for_principal(device.principal)
+            && !report.clients.contains(&client)
+        {
+            report.clients.push(client);
+        }
+        if device.lost {
+            continue;
+        }
+        device.lost = true;
+        report.devices_lost = report.devices_lost.saturating_add(1);
+        for (index, (queue_handle, _)) in matching_bindings.iter().copied().enumerate() {
+            if matching_bindings[..index]
+                .iter()
+                .any(|(previous, _)| *previous == queue_handle)
+            {
+                continue;
+            }
+            let Ok(queue) = lookup_queue_mut(device, queue_handle) else {
+                continue;
+            };
+            if queue.timeline.completed < queue.timeline.submitted {
+                queue.timeline.failures = queue.timeline.failures.saturating_add(1);
+                let first_failed = queue.timeline.completed.saturating_add(1);
+                for failed_point in first_failed..=queue.timeline.submitted {
+                    if !queue.failed_points.contains(&failed_point) {
+                        queue.failed_points.push(failed_point);
+                    }
+                }
+                report.timelines_failed = report.timelines_failed.saturating_add(1);
+            }
+        }
+    }
+    report
+}
+
+/// Drain and classify every pending physical fault while the broker ownership
+/// map is stable. Callers must release `BROKER` before delivering executor
+/// notifications collected in `result`.
+fn service_physical_gpu_faults_locked(
+    broker: &mut Broker,
+    physical: &'static dyn PhysicalGpuDevice,
+    result: &mut PhysicalFaultServiceResult,
+) {
+    for fault in physical.fault_snapshot() {
+        match fault {
+            PhysicalGpuFault::Context {
+                context,
+                engine,
+                mediated,
+                kind,
+                hw_type,
+            } => {
+                let report = mark_physical_context_faulted(broker, context, engine, mediated);
+                for client in report.clients.iter().copied() {
+                    result.push_client(client);
+                }
+                if report.ownership_corrupt {
+                    record_physical_device_loss_locked(broker, result, 0);
+                }
+                let acknowledged = physical.acknowledge_context_fault(context);
+                result.exact_reports.push(RecordedPhysicalContextFault {
+                    context,
+                    engine,
+                    mediated,
+                    kind,
+                    hw_type,
+                    report,
+                    acknowledged,
+                });
+            }
+            PhysicalGpuFault::UnattributedFault { events } => {
+                record_physical_device_loss_locked(broker, result, events);
+            }
+        }
+    }
+}
+
+fn finish_physical_gpu_fault_service(result: PhysicalFaultServiceResult) {
+    for client in result.clients {
+        crate::gpu::executor::notify_kernel_client_lost(client);
+    }
+    if let Some((epoch, events)) = result.global_report {
+        crate::log_error!(
+            target: "gpgpu";
+            "vgpu: physical-device-lost=1 epoch={} unattributed_fault_events={} action=reject-all-devices-until-reset\n",
+            epoch,
+            events,
+        );
+    }
+    for recorded in result.exact_reports {
+        let RecordedPhysicalContextFault {
+            context,
+            engine,
+            mediated,
+            kind,
+            hw_type,
+            report,
+            acknowledged,
+        } = recorded;
+        crate::log_error!(
+            target: "gpgpu";
+            "vgpu: physical-context-fault={} token=0x{:X} engine={:?}:{} mediated={} hw_type=0x{:08X} bindings_found={} devices_lost={} timelines_failed={} engine_mismatches={} ownership_corrupt={} action=quarantine-owner-and-backing hardware_lifecycle=retain-until-reset\n",
+            kind.name(),
+            context.raw(),
+            engine.class,
+            engine.instance,
+            mediated as u8,
+            hw_type.unwrap_or(u32::MAX),
+            report.bindings_found,
+            report.devices_lost,
+            report.timelines_failed,
+            report.engine_mismatches,
+            report.ownership_corrupt as u8,
+        );
+        if !acknowledged {
+            crate::log_warn!(
+                target: "gpgpu";
+                "vgpu: physical-context-fault ack=0 token=0x{:X} action=retain-and-retry\n",
+                context.raw(),
+            );
+        }
+    }
+}
+
+fn service_physical_gpu_faults_once() {
+    let Some(physical) = physical_device() else {
+        return;
+    };
+    // Canonical ownership order is BROKER -> physical/GuC. Holding the broker
+    // across snapshot, classification, and acknowledgement prevents any CPU
+    // from beginning a new lease in the middle of fault attribution.
+    let mut broker = BROKER.lock();
+    let mut result = PhysicalFaultServiceResult::default();
+    service_physical_gpu_faults_locked(&mut broker, physical, &mut result);
+    drop(broker);
+    finish_physical_gpu_fault_service(result);
+}
+
+/// Boot-owned GuC event/containment pump. It is deliberately independent of
+/// Helio, Spirit, UI4, fonts, and every individual GPU consumer.
+#[embassy_executor::task]
+pub(crate) async fn gpu_fault_containment_task() {
+    loop {
+        service_physical_gpu_faults_once();
+        Timer::after(Duration::from_millis(2)).await;
+    }
+}
+
+/// Reset/device-loss hook for the physical driver. All tenant handles remain
+/// queryable for diagnosis but reject further allocation and submission.
+pub(crate) fn notify_physical_device_lost() -> u64 {
+    let mut broker = BROKER.lock();
+    let (epoch, newly_lost, clients) = mark_physical_device_lost_locked(&mut broker);
+    drop(broker);
+    for client in clients {
+        crate::gpu::executor::notify_kernel_client_lost(client);
+    }
+    if newly_lost {
+        crate::log_error!(
+            target: "gpgpu";
+            "vgpu: physical-device-lost=1 epoch={} reason=physical-driver-notification action=reject-all-devices-until-reset\n",
+            epoch,
+        );
+    }
+    epoch
+}
+
+fn mark_physical_device_lost_locked(broker: &mut Broker) -> (u64, bool, Vec<KernelClient>) {
+    if broker.physical_lost {
+        return (broker.epoch, false, Vec::new());
+    }
+    broker.physical_lost = true;
+    broker.epoch = broker.epoch.wrapping_add(1).max(1);
+    let epoch = broker.epoch;
+    let mut clients = Vec::new();
+    for slot in &mut broker.devices {
+        let Some(device) = slot.record.as_mut() else {
+            continue;
+        };
+        if let Some(client) = kernel_client_for_principal(device.principal)
+            && !clients.contains(&client)
+        {
+            clients.push(client);
+        }
         device.epoch = epoch;
         device.lost = true;
         for queue in &mut device.queues {
@@ -1774,7 +2379,7 @@ pub(crate) fn notify_physical_device_lost() -> u64 {
             }
         }
     }
-    epoch
+    (epoch, true, clients)
 }
 
 /// Copy the broker's allocation counters without probing or validating the
@@ -1891,6 +2496,7 @@ pub(crate) fn broker_status() -> BrokerStatus {
         physical_revision_id: info.map(|info| info.revision_id).unwrap_or(0),
         guc_submission: info.is_some_and(|info| info.guc_submission),
         epoch: broker.epoch,
+        physical_lost: broker.physical_lost,
         scheduler,
         kernel_context_boundaries,
         devices,
@@ -1934,13 +2540,80 @@ fn kernel_context_boundary_status(broker: &Broker) -> KernelContextBoundaryStatu
         report.coherent &= root_matches && binding_matches && live_context_present;
 
         for previous in &identities {
-            report.unique_hwlrcas &= previous.hwlrca_lo != identity.hwlrca_lo
-                || previous.hwlrca_hi != identity.hwlrca_hi;
+            report.unique_hwlrcas &=
+                hwlrca_backing_identity(*previous) != hwlrca_backing_identity(identity);
             report.unique_ppgtt_roots &= previous.gpuvm_root_phys != identity.gpuvm_root_phys;
         }
         identities.push(identity);
     }
+    let helio = live_kernel_context_descriptor(broker, Principal::KernelRender);
+    let spirit = live_kernel_context_descriptor(broker, Principal::KernelGpgpuExecution);
+    report.helio_render_live = helio.is_some();
+    report.spirit_execution_live = spirit.is_some();
+    if let (Some(helio), Some(spirit)) = (helio, spirit) {
+        report.helio_spirit_distinct_hwlrca =
+            hwlrca_backing_identity(helio) != hwlrca_backing_identity(spirit);
+        report.helio_spirit_distinct_ppgtt_root = helio.gpuvm_root_phys != 0
+            && spirit.gpuvm_root_phys != 0
+            && helio.gpuvm_root_phys != spirit.gpuvm_root_phys;
+    }
     report
+}
+
+fn live_kernel_context_descriptor(
+    broker: &Broker,
+    principal: Principal,
+) -> Option<PhysicalContextDescriptor> {
+    let mut matches = broker
+        .devices
+        .iter()
+        .filter_map(|slot| slot.record.as_ref())
+        .filter(|device| device.principal == principal);
+    let device = matches.next()?;
+    if matches.next().is_some() || device.lost || device.contexts.len() != 1 {
+        return None;
+    }
+    let identity = device.kernel_context_capability?;
+    let GpuVmBinding::Borrowed { root_phys } = device.gpuvm else {
+        return None;
+    };
+    let binding = &device.contexts[0];
+    (root_phys != 0 && root_phys == identity.gpuvm_root_phys && binding.descriptor == identity)
+        .then_some(identity)
+}
+
+const fn hwlrca_backing_identity(descriptor: PhysicalContextDescriptor) -> (u32, u32) {
+    (descriptor.hwlrca_hi, descriptor.hwlrca_lo & !0xFFF)
+}
+
+/// Guest heap and VM-slot storage may be reused only after every vGPU device
+/// for this principal has been removed. A retained device may still name guest
+/// physical pages even when the VM CPU has already stopped.
+pub(crate) fn hull_guest_storage_reusable(vm_id: u8) -> bool {
+    let bit = 1u64.checked_shl(vm_id as u32).unwrap_or(0);
+    bit != 0 && hull_guest_reuse_fence_mask() & bit == 0
+}
+
+pub(crate) fn hull_guest_reuse_fence_mask() -> u64 {
+    let mut mask = {
+        let broker = BROKER.lock();
+        broker
+            .devices
+            .iter()
+            .filter_map(|slot| slot.record.as_ref())
+            .filter_map(|device| match device.principal {
+                Principal::HullGuest(vm_id) => Some(u32::from(vm_id)),
+                _ => None,
+            })
+            .filter_map(|vm_id| 1u64.checked_shl(vm_id))
+            .fold(0u64, |mask, bit| mask | bit)
+    };
+    for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
+        if crate::allocators::hv_guest_dma_ranges_pinned(vm_id as u8) {
+            mask |= 1u64.checked_shl(vm_id as u32).unwrap_or(0);
+        }
+    }
+    mask
 }
 
 pub(crate) fn run_broker_self_test() -> BrokerSelfTestReport {
@@ -2016,6 +2689,9 @@ fn mark_one_device_lost_for_test(principal: Principal, handle: DeviceHandle) -> 
 }
 
 fn require_physical() -> Result<&'static dyn PhysicalGpuDevice, VgpuError> {
+    if BROKER.lock().physical_lost {
+        return Err(VgpuError::DeviceLost);
+    }
     let physical = physical_device().ok_or(VgpuError::NoPhysicalDevice)?;
     if !physical.ready() {
         return Err(VgpuError::DeviceNotReady);
@@ -2068,6 +2744,9 @@ fn ensure_kernel_device(
     client: KernelClient,
     root_phys: u64,
 ) -> Result<DeviceHandle, VgpuError> {
+    if broker.physical_lost {
+        return Err(VgpuError::DeviceLost);
+    }
     let principal = client.principal();
     if let Some((handle, device)) = find_device_mut_by_principal(broker, principal) {
         let current_root = match device.gpuvm {
@@ -2130,6 +2809,7 @@ fn ensure_kernel_queue(
             class,
             timeline: TimelineStatus::default(),
             failed_points: Vec::new(),
+            in_flight: 0,
         },
     ))
 }
@@ -2161,24 +2841,65 @@ fn device_gpuvm_root(principal: Principal, handle: DeviceHandle) -> Option<u64> 
     }
 }
 
+fn destroy_device_contexts_locked(
+    broker: &mut Broker,
+    physical: &'static dyn PhysicalGpuDevice,
+    handle: DeviceHandle,
+    principal: Principal,
+    fault_service: &mut PhysicalFaultServiceResult,
+) -> Result<usize, VgpuError> {
+    let mut destroyed = 0usize;
+    loop {
+        if broker.physical_lost {
+            return Err(VgpuError::DeviceLost);
+        }
+        let Some(context) = lookup_device(broker, handle, principal)?
+            .contexts
+            .last()
+            .map(|binding| binding.context)
+        else {
+            return Ok(destroyed);
+        };
+
+        let exact_before = fault_service.exact_reports.len();
+        let result = physical.destroy_context(context);
+        // Keep the binding visible until every G2H event consumed by DESTROY
+        // has been classified. Removing it first would turn an exact owner into
+        // a false global ownership failure.
+        service_physical_gpu_faults_locked(broker, physical, fault_service);
+        let boundary_faulted = broker.physical_lost
+            || fault_service.exact_reports[exact_before..]
+                .iter()
+                .any(|fault| fault.context == context);
+        if boundary_faulted {
+            return Err(VgpuError::DeviceLost);
+        }
+        result?;
+
+        let device = lookup_device_mut(broker, handle, principal)?;
+        let Some(binding) = device.contexts.last() else {
+            return Err(VgpuError::InvalidHandle);
+        };
+        if binding.context != context {
+            device.lost = true;
+            return Err(VgpuError::DeviceLost);
+        }
+        device.contexts.pop();
+        destroyed = destroyed.saturating_add(1);
+    }
+}
+
 fn destroy_device_resources(
     physical: &'static dyn PhysicalGpuDevice,
     device: &mut VirtualDevice,
 ) -> Result<(), VgpuError> {
-    if device
-        .buffers
-        .iter()
-        .filter_map(|slot| slot.record.as_ref())
-        .any(|record| record.in_flight != 0)
-    {
+    if device_has_operation_leases(device) {
         return Err(VgpuError::Busy);
     }
-    while let Some(context) = device.contexts.last().map(|binding| binding.context) {
-        // GuC destruction is complete only after DEREGISTER_CONTEXT_DONE. If
-        // that event is still pending, retain the binding and all backing so a
-        // late firmware access can never target recycled storage.
-        physical.destroy_context(context)?;
-        device.contexts.pop();
+    if !device.contexts.is_empty() {
+        // Physical context teardown must run through
+        // `destroy_device_contexts_locked` while the broker mapping is visible.
+        return Err(VgpuError::DeviceLost);
     }
     let vm = match device.gpuvm {
         GpuVmBinding::Owned(vm) => Some(vm),
@@ -2200,14 +2921,28 @@ fn destroy_device_resources(
     Ok(())
 }
 
+fn device_has_operation_leases(device: &VirtualDevice) -> bool {
+    device
+        .buffers
+        .iter()
+        .filter_map(|slot| slot.record.as_ref())
+        .any(|record| record.in_flight != 0)
+        || device
+            .queues
+            .iter()
+            .filter_map(|slot| slot.record.as_ref())
+            .any(|record| record.in_flight != 0)
+}
+
 fn release_buffer_backing(record: &mut BufferRecord) {
     match &mut record.backing {
         BufferBacking::Dma { virt, .. } => crate::dma::dealloc(*virt, record.bytes),
-        BufferBacking::GuestPages { pages, .. } => {
-            for phys in pages.iter().copied() {
-                let virt = crate::phys::phys_to_virt(phys as usize) as *mut u8;
-                unsafe { core::ptr::write_bytes(virt, 0, PAGE_BYTES) };
-                crate::intel::dma_flush(virt, PAGE_BYTES);
+        BufferBacking::GuestPages { dma_pin, .. } => {
+            if let Some(pin) = dma_pin.take() {
+                // Every caller reaches this helper only after a successful
+                // physical unmap. If token validation unexpectedly fails, the
+                // allocator's aggregate pin count remains sticky/fail-closed.
+                let _ = crate::allocators::release_hv_guest_dma_pin(pin);
             }
         }
     }

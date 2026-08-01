@@ -683,8 +683,19 @@ pub(crate) const SCENE_AABB_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/scene_aabb.bin");
 pub(crate) const SCENE_AABB_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/scene_aabb.spv");
+// Keep the native retained-transform Zebin in release images even while the
+// ADL-S compatibility policy parks its submission path.  `.gpgpu_artifacts`
+// is retained by the linker script specifically for dormant, explicitly
+// gated GPU experiments; parking the path must not silently erase its baked
+// provenance from the image.
+const HELIO_RETAINED_TRANSFORM_ADLS_BIN_BYTES: usize =
+    include_bytes!("kernels/artifacts/adls/cpp/helio_retained_transform.bin").len();
+#[used]
+#[unsafe(link_section = ".gpgpu_artifacts")]
+static HELIO_RETAINED_TRANSFORM_ADLS_BIN_STORAGE: [u8; HELIO_RETAINED_TRANSFORM_ADLS_BIN_BYTES] =
+    *include_bytes!("kernels/artifacts/adls/cpp/helio_retained_transform.bin");
 pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/helio_retained_transform.bin");
+    &HELIO_RETAINED_TRANSFORM_ADLS_BIN_STORAGE;
 pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/helio_retained_transform.spv");
 pub(crate) const LAB256_MULTIPHASE_ADLS_BIN: &[u8] = include_bytes!(
@@ -749,19 +760,14 @@ pub(crate) const FILL_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     FILL_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const FILL_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-const _: () = assert!(matches!(
-    FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(),
-    Ok(())
-));
+const _: () = assert!(matches!(FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
 pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     GRADIENT_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 
 pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     ALPHA_BLEND_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-const _: () = assert!(matches!(
-    ALPHA_BLEND_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(),
-    Ok(())
-));
+const _: () =
+    assert!(matches!(ALPHA_BLEND_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
 pub(crate) const GLYPH_MASK_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     GLYPH_MASK_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN_SHA256: [u8; 32] =

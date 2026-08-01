@@ -62,6 +62,7 @@ pub enum RestoreError {
     Read(crate::disc::block::Error),
     BadSnapshot,
     CodeMismatch,
+    VgpuQuarantined,
 }
 
 pub fn capture_snapshot_meta(vm_id: u8, lr: crate::hv::vmx::LaunchResult) {
@@ -158,6 +159,9 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
     let Some(restore_meta_lock) = vm_restore_meta_lock(vm_id) else {
         return Err(RestoreError::UnsupportedVmId);
     };
+    if !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
+        return Err(RestoreError::VgpuQuarantined);
+    }
     if bytes.len() < VM_SNAPSHOT_LEGACY_HEADER_BYTES {
         return Err(RestoreError::BadSnapshot);
     }

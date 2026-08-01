@@ -21,6 +21,8 @@ const INTEL_GUC_ACTION_HOST2GUC_UPDATE_CONTEXT_POLICIES: u32 = 0x100B;
 const INTEL_GUC_ACTION_REGISTER_CONTEXT: u32 = 0x4502;
 const INTEL_GUC_ACTION_DEREGISTER_CONTEXT: u32 = 0x4503;
 const INTEL_GUC_ACTION_DEREGISTER_CONTEXT_DONE: u32 = 0x4600;
+const INTEL_GUC_ACTION_MEMORY_CAT_ERROR: u32 = 0x6000;
+const GUC_ID_UNKNOWN: u32 = u32::MAX;
 const GUC_CONTEXT_DISABLE: u32 = 0;
 const GUC_CONTEXT_ENABLE: u32 = 1;
 const CONTEXT_REGISTRATION_FLAG_KMD: u32 = 1;
@@ -42,6 +44,12 @@ const GEN12_HW_CONTEXT_PRIORITY_NORMAL: u32 = 0b01 << GEN12_HW_CONTEXT_PRIORITY_
 const GEN12_HW_CONTEXT_PRIORITY_HIGH: u32 = 0b10 << GEN12_HW_CONTEXT_PRIORITY_SHIFT;
 const MAX_GUC_CONTEXTS: usize = 32;
 const GUC_LIFECYCLE_POLL_ITERS: usize = 8_192;
+const HWLRCA_PAGE_MASK: u32 = !0xFFF;
+const REPORT_ENABLE_TIMEOUT: u8 = 1 << 0;
+const REPORT_DISABLE_TIMEOUT: u8 = 1 << 1;
+const REPORT_DEREGISTER_TIMEOUT: u8 = 1 << 2;
+const REPORT_DISABLE_REJECTED: u8 = 1 << 0;
+const REPORT_DEREGISTER_REJECTED: u8 = 1 << 1;
 
 #[derive(Copy, Clone)]
 struct GucEngineAbi {
@@ -110,8 +118,10 @@ impl GucContextToken {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GucSubmissionError {
     TransportNotReady,
+    DeviceFaulted,
     ContextRegistryFull,
     InvalidContext,
+    OwnershipConflict,
     RegisterRejected,
     PriorityConflict,
     PolicyEnqueueRejected,
@@ -126,8 +136,10 @@ impl GucSubmissionError {
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::TransportNotReady => "transport-not-ready",
+            Self::DeviceFaulted => "device-faulted",
             Self::ContextRegistryFull => "context-registry-full",
             Self::InvalidContext => "invalid-context",
+            Self::OwnershipConflict => "ownership-conflict",
             Self::RegisterRejected => "register-rejected",
             Self::PriorityConflict => "priority-conflict",
             Self::PolicyEnqueueRejected => "policy-enqueue-rejected",
@@ -147,6 +159,22 @@ pub(crate) struct GucPhysicalSubmission {
     pub(crate) h2g_publish_sequence: u64,
 }
 
+/// Immutable ownership origin for one GuC registration generation. This tag
+/// prevents an idempotent HWLRCA lookup from silently mixing direct backend
+/// contexts with contexts owned by the mediated vGPU broker.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GucContextOrigin {
+    Direct,
+    Mediated,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GucContextFaultKind {
+    MemoryCat,
+    ContextReset,
+    LifecycleProtocol,
+}
+
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GucSchedulerStatus {
     pub(crate) capacity: usize,
@@ -156,12 +184,19 @@ pub(crate) struct GucSchedulerStatus {
     pub(crate) pending_enable: usize,
     pub(crate) pending_disable: usize,
     pub(crate) pending_deregister: usize,
+    pub(crate) faulted: usize,
+    pub(crate) owner_handoffs_pending: usize,
     pub(crate) submissions: u64,
     pub(crate) registrations: u64,
     pub(crate) deregistrations: u64,
     pub(crate) failures: u64,
     pub(crate) async_events: u64,
     pub(crate) async_event_errors: u64,
+    pub(crate) memory_cat_faults: u64,
+    pub(crate) unattributed_faults: u64,
+    pub(crate) lifecycle_timeouts: u64,
+    pub(crate) lifecycle_retries: u64,
+    pub(crate) gt_faulted: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -170,12 +205,17 @@ pub(crate) struct GucContextStatus {
     pub(crate) context_id: u32,
     pub(crate) engine: crate::gpu::physical::PhysicalEngineId,
     pub(crate) priority: crate::gpu::physical::PhysicalContextPriority,
+    pub(crate) origin: GucContextOrigin,
     pub(crate) policy_enqueued: bool,
     pub(crate) enabled: bool,
     pub(crate) destroy_requested: bool,
     pub(crate) pending_enable: bool,
     pub(crate) pending_disable: bool,
     pub(crate) pending_deregister: bool,
+    pub(crate) faulted: bool,
+    pub(crate) owner_handoff_pending: bool,
+    pub(crate) fault_kind: Option<GucContextFaultKind>,
+    pub(crate) cat_hw_type: Option<u32>,
     pub(crate) hwlrca_lo: u32,
     pub(crate) hwlrca_hi: u32,
     pub(crate) submissions: u64,
@@ -192,7 +232,14 @@ struct GucContextState {
     pending_disable: bool,
     pending_deregister: bool,
     faulted: bool,
+    owner_fault_reported: bool,
+    owner_handoff_pending: bool,
+    fault_kind: Option<GucContextFaultKind>,
+    cat_hw_type: Option<u32>,
+    lifecycle_timeout_reported: u8,
+    lifecycle_reject_reported: u8,
     generation: u32,
+    origin: GucContextOrigin,
     engine: crate::gpu::physical::PhysicalEngineId,
     priority: crate::gpu::physical::PhysicalContextPriority,
     policy_enqueued: bool,
@@ -210,7 +257,14 @@ impl GucContextState {
         pending_disable: false,
         pending_deregister: false,
         faulted: false,
+        owner_fault_reported: false,
+        owner_handoff_pending: false,
+        fault_kind: None,
+        cat_hw_type: None,
+        lifecycle_timeout_reported: 0,
+        lifecycle_reject_reported: 0,
         generation: 0,
+        origin: GucContextOrigin::Direct,
         engine: crate::gpu::physical::PhysicalEngineId::RCS0,
         priority: crate::gpu::physical::PhysicalContextPriority::KernelNormal,
         policy_enqueued: false,
@@ -232,6 +286,11 @@ struct GucSubmissionState {
     failures: u64,
     async_events: u64,
     async_event_errors: u64,
+    memory_cat_faults: u64,
+    unattributed_faults: u64,
+    lifecycle_timeouts: u64,
+    lifecycle_retries: u64,
+    gt_faulted: bool,
 }
 
 static CONTEXTS: Mutex<GucSubmissionState> = Mutex::new(GucSubmissionState {
@@ -242,7 +301,30 @@ static CONTEXTS: Mutex<GucSubmissionState> = Mutex::new(GucSubmissionState {
     failures: 0,
     async_events: 0,
     async_event_errors: 0,
+    memory_cat_faults: 0,
+    unattributed_faults: 0,
+    lifecycle_timeouts: 0,
+    lifecycle_retries: 0,
+    gt_faulted: false,
 });
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GucContextFault {
+    pub(crate) token: GucContextToken,
+    pub(crate) engine: crate::gpu::physical::PhysicalEngineId,
+    pub(crate) origin: GucContextOrigin,
+    pub(crate) kind: GucContextFaultKind,
+    /// Optional firmware telemetry. The value is hardware-defined and is not
+    /// an engine selector or permission to program a reset register.
+    pub(crate) hw_type: Option<u32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GucFaultSnapshot {
+    pub(crate) gt_faulted: bool,
+    pub(crate) unattributed_faults: u64,
+    pub(crate) contexts: Vec<GucContextFault>,
+}
 
 /// Explicit physical scheduler owned by the Intel backend.
 pub(crate) struct IntelGucScheduler;
@@ -262,7 +344,18 @@ impl IntelGucScheduler {
         hwlrca_hi: u32,
         priority: crate::gpu::physical::PhysicalContextPriority,
     ) -> Result<GucContextToken, GucSubmissionError> {
-        register_context(dev, engine, hwlrca_lo, hwlrca_hi, priority)
+        register_context(dev, engine, hwlrca_lo, hwlrca_hi, priority, GucContextOrigin::Direct)
+    }
+
+    pub(crate) fn register_mediated(
+        &self,
+        dev: crate::intel::Dev,
+        engine: crate::gpu::physical::PhysicalEngineId,
+        hwlrca_lo: u32,
+        hwlrca_hi: u32,
+        priority: crate::gpu::physical::PhysicalContextPriority,
+    ) -> Result<GucContextToken, GucSubmissionError> {
+        register_context(dev, engine, hwlrca_lo, hwlrca_hi, priority, GucContextOrigin::Mediated)
     }
 
     pub(crate) fn submit(
@@ -288,6 +381,14 @@ impl IntelGucScheduler {
     pub(crate) fn contexts(&self) -> Vec<GucContextStatus> {
         context_status()
     }
+
+    pub(crate) fn fault_snapshot(&self) -> GucFaultSnapshot {
+        fault_snapshot()
+    }
+
+    pub(crate) fn acknowledge_fault(&self, token: GucContextToken) -> bool {
+        acknowledge_fault(token)
+    }
 }
 
 pub(crate) fn ready() -> bool {
@@ -302,6 +403,7 @@ pub(crate) fn register_context(
     hwlrca_lo: u32,
     hwlrca_hi: u32,
     priority: crate::gpu::physical::PhysicalContextPriority,
+    origin: GucContextOrigin,
 ) -> Result<GucContextToken, GucSubmissionError> {
     if !ready() {
         return Err(GucSubmissionError::TransportNotReady);
@@ -311,6 +413,9 @@ pub(crate) fn register_context(
     let hwlrca_lo = guc_hwlrca_descriptor(engine, priority, hwlrca_lo);
     let mut state = CONTEXTS.lock();
     drain_g2h_events(&mut state);
+    if state.gt_faulted {
+        return Err(GucSubmissionError::DeviceFaulted);
+    }
     if let Some((slot, context)) =
         state
             .contexts
@@ -319,8 +424,7 @@ pub(crate) fn register_context(
             .enumerate()
             .find(|(_, context)| {
                 context.registered
-                    && context.engine == engine
-                    && context.hwlrca_lo == hwlrca_lo
+                    && hwlrca_backing_page(context.hwlrca_lo) == hwlrca_backing_page(hwlrca_lo)
                     && context.hwlrca_hi == hwlrca_hi
             })
     {
@@ -331,6 +435,33 @@ pub(crate) fn register_context(
         {
             state.failures = state.failures.saturating_add(1);
             return Err(GucSubmissionError::InvalidContext);
+        }
+        if context.engine != engine {
+            state.failures = state.failures.saturating_add(1);
+            crate::log_error!(
+                target: "gpgpu";
+                "intel/guc-submit: context-owner conflict=1 context_id={} current_engine={:?}:{} requested_engine={:?}:{} hwlrca_page=0x{:08X}:0x{:08X} action=reject-cross-engine-hwlrca-alias\n",
+                context_id(slot),
+                context.engine.class,
+                context.engine.instance,
+                engine.class,
+                engine.instance,
+                hwlrca_hi,
+                hwlrca_backing_page(hwlrca_lo),
+            );
+            return Err(GucSubmissionError::OwnershipConflict);
+        }
+        if context.origin != origin {
+            state.failures = state.failures.saturating_add(1);
+            crate::log_error!(
+                target: "gpgpu";
+                "intel/guc-submit: context-owner conflict=1 engine={} context_id={} current_origin={:?} requested_origin={:?} action=reject-cross-origin-hwlrca-alias\n",
+                engine_abi.name,
+                context_id(slot),
+                context.origin,
+                origin,
+            );
+            return Err(GucSubmissionError::OwnershipConflict);
         }
         if context.priority != priority {
             state.failures = state.failures.saturating_add(1);
@@ -347,12 +478,26 @@ pub(crate) fn register_context(
         if context.policy_enqueued {
             return Ok(context.token(slot));
         }
+        let token = context.token(slot);
+        drain_g2h_events(&mut state);
+        if state.gt_faulted {
+            return Err(GucSubmissionError::DeviceFaulted);
+        }
+        if state.contexts[slot].faulted {
+            return Ok(token);
+        }
         if !program_context_priority(dev, context_id(slot), engine_abi, priority) {
             state.failures = state.failures.saturating_add(1);
-            return Err(GucSubmissionError::PolicyEnqueueRejected);
+            // The registration predates this policy retry. Preserve its token
+            // as ownership evidence; submit will reject until policy succeeds.
+            return Ok(token);
         }
         state.contexts[slot].policy_enqueued = true;
-        return Ok(context.token(slot));
+        drain_g2h_events(&mut state);
+        if state.gt_faulted {
+            return Err(GucSubmissionError::DeviceFaulted);
+        }
+        return Ok(token);
     }
 
     let Some(slot) = state
@@ -365,6 +510,10 @@ pub(crate) fn register_context(
     };
     let context_id = (slot + 1) as u32;
     let generation = state.contexts[slot].generation.wrapping_add(1).max(1);
+    drain_g2h_events(&mut state);
+    if state.gt_faulted {
+        return Err(GucSubmissionError::DeviceFaulted);
+    }
     let register = crate::intel::guc_ctb::send_hxg_fast_action(
         dev,
         INTEL_GUC_ACTION_REGISTER_CONTEXT,
@@ -408,7 +557,14 @@ pub(crate) fn register_context(
         pending_disable: false,
         pending_deregister: false,
         faulted: false,
+        owner_fault_reported: false,
+        owner_handoff_pending: false,
+        fault_kind: None,
+        cat_hw_type: None,
+        lifecycle_timeout_reported: 0,
+        lifecycle_reject_reported: 0,
         generation,
+        origin,
         engine,
         priority,
         policy_enqueued: false,
@@ -418,11 +574,31 @@ pub(crate) fn register_context(
     };
     state.registrations = state.registrations.saturating_add(1);
     let token = GucContextToken::new(slot, generation);
+    // REGISTER's transport wait may have queued G2H events. Install the slot
+    // first so an exact CAT can be attributed, then drain and refuse the
+    // follow-up policy H2G if that registration or the whole GT faulted.
+    drain_g2h_events(&mut state);
+    if state.gt_faulted {
+        return Err(GucSubmissionError::DeviceFaulted);
+    }
+    if state.contexts[slot].faulted {
+        // REGISTER was accepted, so the caller owns this generation even when
+        // firmware immediately faulted it. Return the token as ownership
+        // evidence; submit remains blocked and the broker will synchronously
+        // map the pending exact fault to this one owner.
+        return Ok(token);
+    }
     if !program_context_priority(dev, context_id, engine_abi, priority) {
         state.failures = state.failures.saturating_add(1);
-        return Err(GucSubmissionError::PolicyEnqueueRejected);
+        // REGISTER is already accepted. Returning its token keeps ownership
+        // representable even though submit remains fenced by policy_enqueued.
+        return Ok(token);
     }
     state.contexts[slot].policy_enqueued = true;
+    drain_g2h_events(&mut state);
+    if state.gt_faulted {
+        return Err(GucSubmissionError::DeviceFaulted);
+    }
     crate::log!(
         "intel/guc-submit: register enqueued=1 engine={} context_id={} token=0x{:X} class={} submit_mask=0x{:X} hwlrca=0x{:08X}:0x{:08X} abi=v1 single_lrc=1 priority={} priority_abi={} hwlrca_priority_bits=0x{:03X} policy_enqueued=1 hxg=fast-request\n",
         engine_abi.name,
@@ -454,6 +630,9 @@ pub(crate) fn submit_context(
 
     let mut state = CONTEXTS.lock();
     drain_g2h_events(&mut state);
+    if state.gt_faulted {
+        return Err(GucSubmissionError::DeviceFaulted);
+    }
     let (slot, generation) = token.parts().ok_or(GucSubmissionError::InvalidContext)?;
     let Some(context) = state.contexts.get(slot).copied() else {
         return Err(GucSubmissionError::InvalidContext);
@@ -469,13 +648,38 @@ pub(crate) fn submit_context(
         state.failures = state.failures.saturating_add(1);
         return Err(GucSubmissionError::InvalidContext);
     }
-    if !context.policy_enqueued {
-        state.failures = state.failures.saturating_add(1);
-        return Err(GucSubmissionError::PolicyEnqueueRejected);
-    }
     let engine_abi =
         guc_engine_abi(dev, context.engine).ok_or(GucSubmissionError::InvalidContext)?;
+    if !context.policy_enqueued {
+        // REGISTER may have succeeded while the immediately following policy
+        // H2G was transiently rejected. The broker already owns this exact
+        // generation, so retry only the missing idempotent policy operation at
+        // the next submission boundary instead of stranding the context.
+        drain_g2h_events(&mut state);
+        if fault_requires_retention(&state, slot) {
+            return Err(GucSubmissionError::DeviceFaulted);
+        }
+        if !program_context_priority(dev, context_id(slot), engine_abi, context.priority) {
+            state.failures = state.failures.saturating_add(1);
+            drain_g2h_events(&mut state);
+            if fault_requires_retention(&state, slot) {
+                return Err(GucSubmissionError::DeviceFaulted);
+            }
+            return Err(GucSubmissionError::PolicyEnqueueRejected);
+        }
+        state.contexts[slot].policy_enqueued = true;
+        drain_g2h_events(&mut state);
+        if fault_requires_retention(&state, slot) {
+            return Err(GucSubmissionError::DeviceFaulted);
+        }
+    }
     let context_id = (slot + 1) as u32;
+    // Revalidate immediately at the CTB publication boundary. The post-send
+    // drain below catches events ingested while the request was in flight.
+    drain_g2h_events(&mut state);
+    if fault_requires_retention(&state, slot) {
+        return Err(GucSubmissionError::DeviceFaulted);
+    }
     let (action, args): (u32, &[u32]) = if context.enabled {
         (INTEL_GUC_ACTION_SCHED_CONTEXT, core::slice::from_ref(&context_id))
     } else {
@@ -494,6 +698,10 @@ pub(crate) fn submit_context(
                 INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_SET,
                 scheduled,
             );
+            drain_g2h_events(&mut state);
+            if fault_requires_retention(&state, slot) {
+                return Err(GucSubmissionError::DeviceFaulted);
+            }
             return Err(GucSubmissionError::ScheduleRejected);
         }
         state.contexts[slot].enabled = true;
@@ -501,6 +709,10 @@ pub(crate) fn submit_context(
         state.contexts[slot].submissions = state.contexts[slot].submissions.saturating_add(1);
         state.serial = state.serial.wrapping_add(1).max(1);
         let serial = state.serial;
+        drain_g2h_events(&mut state);
+        if fault_requires_retention(&state, slot) {
+            return Err(GucSubmissionError::DeviceFaulted);
+        }
         crate::log_trace!(
             target: "gpgpu";
             "intel/guc-submit: schedule enqueued=1 engine={} context_id={} token=0x{:X} serial={} action=0x{:04X} hxg=fast-request pending_enable=1 completion_event=sched-context-mode-done submission_owner=guc\n",
@@ -520,12 +732,20 @@ pub(crate) fn submit_context(
     if !scheduled.accepted {
         state.failures = state.failures.saturating_add(1);
         log_schedule_rejected(engine_abi.name, context_id, action, scheduled);
+        drain_g2h_events(&mut state);
+        if fault_requires_retention(&state, slot) {
+            return Err(GucSubmissionError::DeviceFaulted);
+        }
         return Err(GucSubmissionError::ScheduleRejected);
     }
 
     state.contexts[slot].submissions = state.contexts[slot].submissions.saturating_add(1);
     state.serial = state.serial.wrapping_add(1).max(1);
     let serial = state.serial;
+    drain_g2h_events(&mut state);
+    if fault_requires_retention(&state, slot) {
+        return Err(GucSubmissionError::DeviceFaulted);
+    }
     crate::log_trace!(
         target: "gpgpu";
         "intel/guc-submit: schedule enqueued=1 engine={} context_id={} token=0x{:X} serial={} action=0x{:04X} hxg=fast-request submission_owner=guc\n",
@@ -579,6 +799,14 @@ pub(crate) fn destroy_context(
     if !context.registered {
         return Ok(());
     }
+    // A CAT/reset notification means firmware lifecycle state is no longer
+    // trustworthy. Do not compound the fault with a blind mode-set or
+    // deregister request. The generation-tagged ID and all backing remain
+    // quarantined until a real GT reset/reboot establishes a new boundary.
+    if fault_requires_retention(&state, slot) {
+        state.contexts[slot].destroy_requested = true;
+        return Err(GucSubmissionError::DeviceFaulted);
+    }
     let engine_abi =
         guc_engine_abi(dev, context.engine).ok_or(GucSubmissionError::InvalidContext)?;
     let context_id = (slot + 1) as u32;
@@ -589,20 +817,46 @@ pub(crate) fn destroy_context(
     state.contexts[slot].destroy_requested = true;
 
     if state.contexts[slot].pending_deregister {
-        if wait_for_transition(&mut state, slot, GucPendingTransition::Deregister) {
+        let completed = wait_for_transition(&mut state, slot, GucPendingTransition::Deregister);
+        if fault_requires_retention(&state, slot) {
+            return Err(GucSubmissionError::DeviceFaulted);
+        }
+        if completed {
             return Ok(());
         }
-        note_lifecycle_timeout(&mut state, engine_abi.name, context_id, "deregister-done");
+        note_lifecycle_timeout(
+            &mut state,
+            slot,
+            engine_abi.name,
+            context_id,
+            "deregister-done",
+            REPORT_DEREGISTER_TIMEOUT,
+        );
         return Err(GucSubmissionError::DeregisterPending);
     }
 
-    if state.contexts[slot].pending_enable
-        && !wait_for_transition(&mut state, slot, GucPendingTransition::Enable)
-    {
-        note_lifecycle_timeout(&mut state, engine_abi.name, context_id, "enable-done");
-        return Err(GucSubmissionError::DisablePending);
+    if state.contexts[slot].pending_enable {
+        let completed = wait_for_transition(&mut state, slot, GucPendingTransition::Enable);
+        if fault_requires_retention(&state, slot) {
+            return Err(GucSubmissionError::DeviceFaulted);
+        }
+        if !completed {
+            note_lifecycle_timeout(
+                &mut state,
+                slot,
+                engine_abi.name,
+                context_id,
+                "enable-done",
+                REPORT_ENABLE_TIMEOUT,
+            );
+            return Err(GucSubmissionError::DisablePending);
+        }
     }
 
+    drain_g2h_events(&mut state);
+    if fault_requires_retention(&state, slot) {
+        return Err(GucSubmissionError::DeviceFaulted);
+    }
     if state.contexts[slot].enabled {
         let disabled = crate::intel::guc_ctb::send_hxg_fast_action(
             dev,
@@ -610,7 +864,14 @@ pub(crate) fn destroy_context(
             &[context_id, GUC_CONTEXT_DISABLE],
         );
         if !disabled.accepted {
-            state.failures = state.failures.saturating_add(1);
+            note_lifecycle_rejection(
+                &mut state,
+                slot,
+                engine_abi.name,
+                context_id,
+                "disable",
+                REPORT_DISABLE_REJECTED,
+            );
             return Err(GucSubmissionError::DisableRejected);
         }
         state.contexts[slot].enabled = false;
@@ -623,20 +884,42 @@ pub(crate) fn destroy_context(
             token.raw(),
         );
     }
-    if state.contexts[slot].pending_disable
-        && !wait_for_transition(&mut state, slot, GucPendingTransition::Disable)
-    {
-        note_lifecycle_timeout(&mut state, engine_abi.name, context_id, "disable-done");
-        return Err(GucSubmissionError::DisablePending);
+    if state.contexts[slot].pending_disable {
+        let completed = wait_for_transition(&mut state, slot, GucPendingTransition::Disable);
+        if fault_requires_retention(&state, slot) {
+            return Err(GucSubmissionError::DeviceFaulted);
+        }
+        if !completed {
+            note_lifecycle_timeout(
+                &mut state,
+                slot,
+                engine_abi.name,
+                context_id,
+                "disable-done",
+                REPORT_DISABLE_TIMEOUT,
+            );
+            return Err(GucSubmissionError::DisablePending);
+        }
     }
 
+    drain_g2h_events(&mut state);
+    if fault_requires_retention(&state, slot) {
+        return Err(GucSubmissionError::DeviceFaulted);
+    }
     let deregistered = crate::intel::guc_ctb::send_hxg_fast_action(
         dev,
         INTEL_GUC_ACTION_DEREGISTER_CONTEXT,
         &[context_id],
     );
     if !deregistered.accepted {
-        state.failures = state.failures.saturating_add(1);
+        note_lifecycle_rejection(
+            &mut state,
+            slot,
+            engine_abi.name,
+            context_id,
+            "deregister",
+            REPORT_DEREGISTER_REJECTED,
+        );
         return Err(GucSubmissionError::DeregisterRejected);
     }
     state.contexts[slot].pending_deregister = true;
@@ -646,12 +929,31 @@ pub(crate) fn destroy_context(
         context_id,
         token.raw()
     );
-    if wait_for_transition(&mut state, slot, GucPendingTransition::Deregister) {
+    let completed = wait_for_transition(&mut state, slot, GucPendingTransition::Deregister);
+    if fault_requires_retention(&state, slot) {
+        return Err(GucSubmissionError::DeviceFaulted);
+    }
+    if completed {
         Ok(())
     } else {
-        note_lifecycle_timeout(&mut state, engine_abi.name, context_id, "deregister-done");
+        note_lifecycle_timeout(
+            &mut state,
+            slot,
+            engine_abi.name,
+            context_id,
+            "deregister-done",
+            REPORT_DEREGISTER_TIMEOUT,
+        );
         Err(GucSubmissionError::DeregisterPending)
     }
+}
+
+fn fault_requires_retention(state: &GucSubmissionState, slot: usize) -> bool {
+    state.gt_faulted
+        || state
+            .contexts
+            .get(slot)
+            .is_some_and(|context| context.faulted)
 }
 
 #[derive(Copy, Clone)]
@@ -686,15 +988,45 @@ fn wait_for_transition(
 
 fn note_lifecycle_timeout(
     state: &mut GucSubmissionState,
+    slot: usize,
     engine: &'static str,
     context_id: u32,
     transition: &'static str,
+    report_bit: u8,
 ) {
+    if state.contexts[slot].lifecycle_timeout_reported & report_bit != 0 {
+        state.lifecycle_retries = state.lifecycle_retries.saturating_add(1);
+        return;
+    }
+    state.contexts[slot].lifecycle_timeout_reported |= report_bit;
     state.failures = state.failures.saturating_add(1);
-    state.async_event_errors = state.async_event_errors.saturating_add(1);
+    state.lifecycle_timeouts = state.lifecycle_timeouts.saturating_add(1);
     crate::log_warn!(
         target: "gpgpu";
-        "intel/guc-submit: lifecycle pending=1 engine={} context_id={} transition={} action=retain-context-id-and-backing\n",
+        "intel/guc-submit: lifecycle pending=1 engine={} context_id={} transition={} first_timeout=1 action=retain-context-id-and-backing\n",
+        engine,
+        context_id,
+        transition,
+    );
+}
+
+fn note_lifecycle_rejection(
+    state: &mut GucSubmissionState,
+    slot: usize,
+    engine: &'static str,
+    context_id: u32,
+    transition: &'static str,
+    report_bit: u8,
+) {
+    if state.contexts[slot].lifecycle_reject_reported & report_bit != 0 {
+        state.lifecycle_retries = state.lifecycle_retries.saturating_add(1);
+        return;
+    }
+    state.contexts[slot].lifecycle_reject_reported |= report_bit;
+    state.failures = state.failures.saturating_add(1);
+    crate::log_warn!(
+        target: "gpgpu";
+        "intel/guc-submit: lifecycle enqueue=0 engine={} context_id={} transition={} first_rejection=1 action=retain-context-id-and-backing\n",
         engine,
         context_id,
         transition,
@@ -713,20 +1045,39 @@ fn drain_g2h_events(state: &mut GucSubmissionState) {
     if transport_errors != 0 {
         state.async_event_errors = state.async_event_errors.saturating_add(transport_errors);
         state.failures = state.failures.saturating_add(transport_errors);
+        let attribution_errors = result
+            .malformed_messages
+            .saturating_add(result.dropped_events);
+        if attribution_errors != 0 {
+            // A dropped or undecodable G2H message could be the only CAT event
+            // naming its owner. Once that evidence is gone, continuing H2G on
+            // a guessed context would violate isolation, so loss is global.
+            state.gt_faulted = true;
+            state.unattributed_faults =
+                state.unattributed_faults.saturating_add(attribution_errors);
+        }
         crate::log_error!(
             target: "gpgpu";
-            "intel/guc-submit: g2h transport_error=1 malformed={} dropped_events={} unsolicited_responses={} action=retain-pending-contexts\n",
+            "intel/guc-submit: g2h transport_error=1 malformed={} dropped_events={} unsolicited_responses={} attribution_lost={} gt_faulted={} action=retain-pending-contexts-and-reject-new-h2g\n",
             result.malformed_messages,
             result.dropped_events,
             result.unsolicited_responses,
+            attribution_errors,
+            state.gt_faulted as u8,
         );
     }
     if !context_registry_invariants_hold(state) {
         state.async_event_errors = state.async_event_errors.saturating_add(1);
         state.failures = state.failures.saturating_add(1);
+        let newly_faulted = !state.gt_faulted;
+        state.gt_faulted = true;
+        if newly_faulted {
+            state.unattributed_faults = state.unattributed_faults.saturating_add(1);
+        }
         crate::log_error!(
             target: "gpgpu";
-            "intel/guc-submit: lifecycle invariant=0 action=quarantine-registry\n",
+            "intel/guc-submit: lifecycle invariant=0 gt_faulted=1 newly_faulted={} action=quarantine-registry-and-reject-new-h2g\n",
+            newly_faulted as u8,
         );
     }
 }
@@ -780,9 +1131,9 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
                 _ => {
                     // Do not clear either transition on a contradictory event.
                     // Retaining the pending bit keeps the ID and backing fenced.
-                    state.contexts[slot].faulted = true;
-                    note_malformed_lifecycle_event(
+                    note_exact_lifecycle_fault(
                         state,
+                        slot,
                         event,
                         "sched-context-mode-done-state-mismatch",
                     );
@@ -812,6 +1163,17 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
                 return;
             };
             let context = state.contexts[slot];
+            if context.registered && (context.faulted || state.gt_faulted) {
+                crate::log_error!(
+                    target: "gpgpu";
+                    "intel/guc-submit: deregister completion_accepted=0 context_id={} token=0x{:X} faulted={} gt_faulted={} action=retain-context-id-and-backing-until-reset\n",
+                    context_id,
+                    context.token(slot).raw(),
+                    context.faulted as u8,
+                    state.gt_faulted as u8,
+                );
+                return;
+            }
             if !context.registered
                 || !context.destroy_requested
                 || !context.pending_deregister
@@ -819,7 +1181,20 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
                 || context.pending_enable
                 || context.pending_disable
             {
-                note_malformed_lifecycle_event(state, event, "deregister-context-done-unexpected");
+                if context.registered {
+                    note_exact_lifecycle_fault(
+                        state,
+                        slot,
+                        event,
+                        "deregister-context-done-unexpected",
+                    );
+                } else {
+                    note_malformed_lifecycle_event(
+                        state,
+                        event,
+                        "deregister-context-done-unexpected",
+                    );
+                }
                 return;
             }
             let token = context.token(slot);
@@ -839,6 +1214,10 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
             );
         }
         INTEL_GUC_ACTION_CONTEXT_RESET_NOTIFICATION => {
+            if event.payload_len == 0 || event.truncated() {
+                note_malformed_lifecycle_event(state, event, "context-reset");
+                return;
+            }
             let Some(context_id) = event.payload(0) else {
                 note_malformed_lifecycle_event(state, event, "context-reset");
                 return;
@@ -847,28 +1226,88 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
                 note_malformed_lifecycle_event(state, event, "context-reset-context-id");
                 return;
             };
-            if !state.contexts[slot].registered {
+            let context = state.contexts[slot];
+            if !context.registered {
                 note_malformed_lifecycle_event(state, event, "context-reset-unregistered");
                 return;
             }
-            state.contexts[slot].faulted = true;
-            state.failures = state.failures.saturating_add(1);
+            let newly_reported =
+                mark_exact_context_fault(state, slot, GucContextFaultKind::ContextReset, None);
             crate::log_error!(
                 target: "gpgpu";
-                "intel/guc-submit: context-reset=1 context_id={} action=quarantine-context\n",
+                "intel/guc-submit: context-reset=1 context_id={} engine={:?}:{} duplicate={} action=defer-exact-context-owner-handoff\n",
                 context_id,
+                context.engine.class,
+                context.engine.instance,
+                (!newly_reported) as u8,
+            );
+        }
+        INTEL_GUC_ACTION_MEMORY_CAT_ERROR => {
+            if !(event.payload_len == 1 || event.payload_len == 2) || event.truncated() {
+                state.memory_cat_faults = state.memory_cat_faults.saturating_add(1);
+                state.async_event_errors = state.async_event_errors.saturating_add(1);
+                note_unattributed_memory_cat(
+                    state,
+                    event.payload(0).unwrap_or(GUC_ID_UNKNOWN),
+                    event.payload(1),
+                    "malformed-or-truncated",
+                );
+                return;
+            }
+            let Some(context_id) = event.payload(0) else {
+                state.memory_cat_faults = state.memory_cat_faults.saturating_add(1);
+                state.async_event_errors = state.async_event_errors.saturating_add(1);
+                note_unattributed_memory_cat(
+                    state,
+                    GUC_ID_UNKNOWN,
+                    event.payload(1),
+                    "missing-context-id",
+                );
+                return;
+            };
+            let hw_type = event.payload(1);
+            state.memory_cat_faults = state.memory_cat_faults.saturating_add(1);
+
+            if context_id == GUC_ID_UNKNOWN {
+                note_unattributed_memory_cat(state, context_id, hw_type, "guc-id-unknown");
+                return;
+            }
+            let Some(slot) = context_slot(context_id) else {
+                note_unattributed_memory_cat(state, context_id, hw_type, "outside-local-registry");
+                return;
+            };
+            let context = state.contexts[slot];
+            if !context.registered {
+                note_unattributed_memory_cat(state, context_id, hw_type, "unregistered-local-id");
+                return;
+            }
+
+            let newly_reported =
+                mark_exact_context_fault(state, slot, GucContextFaultKind::MemoryCat, hw_type);
+            crate::log_error!(
+                target: "gpgpu";
+                "intel/guc-submit: memory-cat-error=1 context_id={} engine={:?}:{} hw_type=0x{:08X} duplicate={} action=defer-exact-context-containment\n",
+                context_id,
+                context.engine.class,
+                context.engine.instance,
+                hw_type.unwrap_or(u32::MAX),
+                (!newly_reported) as u8,
             );
         }
         INTEL_GUC_ACTION_ENGINE_FAILURE_NOTIFICATION => {
             state.failures = state.failures.saturating_add(1);
+            let newly_faulted = !state.gt_faulted;
+            state.gt_faulted = true;
+            state.unattributed_faults = state.unattributed_faults.saturating_add(1);
             crate::log_error!(
                 target: "gpgpu";
-                "intel/guc-submit: engine-failure=1 class=0x{:X} instance=0x{:X} reason=0x{:08X} payload_len={} truncated={}\n",
+                "intel/guc-submit: engine-failure=1 class=0x{:X} instance=0x{:X} reason=0x{:08X} payload_len={} truncated={} newly_gt_faulted={} action=reject-all-h2g-no-context-guess\n",
                 event.payload(0).unwrap_or(u32::MAX),
                 event.payload(1).unwrap_or(u32::MAX),
                 event.payload(2).unwrap_or(u32::MAX),
                 event.payload_len,
                 event.truncated() as u8,
+                newly_faulted as u8,
             );
         }
         _ => {
@@ -885,6 +1324,28 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
     }
 }
 
+fn note_unattributed_memory_cat(
+    state: &mut GucSubmissionState,
+    context_id: u32,
+    hw_type: Option<u32>,
+    reason: &'static str,
+) {
+    let newly_faulted = !state.gt_faulted;
+    state.gt_faulted = true;
+    state.unattributed_faults = state.unattributed_faults.saturating_add(1);
+    if newly_faulted {
+        state.failures = state.failures.saturating_add(1);
+    }
+    crate::log_error!(
+        target: "gpgpu";
+        "intel/guc-submit: memory-cat-error=1 context_id=0x{:08X} hw_type=0x{:08X} attributed=0 reason={} duplicate={} action=wedge-gt-no-context-guess\n",
+        context_id,
+        hw_type.unwrap_or(u32::MAX),
+        reason,
+        (!newly_faulted) as u8,
+    );
+}
+
 fn note_malformed_lifecycle_event(
     state: &mut GucSubmissionState,
     event: crate::intel::guc_ctb::CtbG2hEvent,
@@ -892,15 +1353,72 @@ fn note_malformed_lifecycle_event(
 ) {
     state.async_event_errors = state.async_event_errors.saturating_add(1);
     state.failures = state.failures.saturating_add(1);
+    let newly_faulted = !state.gt_faulted;
+    state.gt_faulted = true;
+    state.unattributed_faults = state.unattributed_faults.saturating_add(1);
     crate::log_error!(
         target: "gpgpu";
-        "intel/guc-submit: lifecycle event_valid=0 action=0x{:04X} payload_len={} truncated={} payload0=0x{:08X} payload1=0x{:08X} reason={} action_on_error=retain-context-id-and-backing\n",
+        "intel/guc-submit: lifecycle event_valid=0 action=0x{:04X} payload_len={} truncated={} payload0=0x{:08X} payload1=0x{:08X} reason={} newly_gt_faulted={} action_on_error=wedge-gt-owner-evidence-unavailable\n",
         event.action,
         event.payload_len,
         event.truncated() as u8,
         event.payload(0).unwrap_or(u32::MAX),
         event.payload(1).unwrap_or(u32::MAX),
         reason,
+        newly_faulted as u8,
+    );
+}
+
+fn mark_exact_context_fault(
+    state: &mut GucSubmissionState,
+    slot: usize,
+    kind: GucContextFaultKind,
+    hw_type: Option<u32>,
+) -> bool {
+    let newly_reported = !state.contexts[slot].owner_fault_reported;
+    {
+        let context = &mut state.contexts[slot];
+        context.faulted = true;
+        context.destroy_requested = true;
+        context.owner_fault_reported = true;
+        if newly_reported {
+            context.owner_handoff_pending = true;
+        }
+        if matches!(kind, GucContextFaultKind::MemoryCat) || context.fault_kind.is_none() {
+            context.fault_kind = Some(kind);
+        }
+        if matches!(kind, GucContextFaultKind::MemoryCat) {
+            context.cat_hw_type = hw_type;
+        }
+    }
+    if newly_reported {
+        state.failures = state.failures.saturating_add(1);
+    }
+    newly_reported
+}
+
+fn note_exact_lifecycle_fault(
+    state: &mut GucSubmissionState,
+    slot: usize,
+    event: crate::intel::guc_ctb::CtbG2hEvent,
+    reason: &'static str,
+) {
+    let context = state.contexts[slot];
+    state.async_event_errors = state.async_event_errors.saturating_add(1);
+    let newly_reported =
+        mark_exact_context_fault(state, slot, GucContextFaultKind::LifecycleProtocol, None);
+    crate::log_error!(
+        target: "gpgpu";
+        "intel/guc-submit: lifecycle event_valid=0 action=0x{:04X} context_id={} token=0x{:X} payload_len={} truncated={} payload0=0x{:08X} payload1=0x{:08X} reason={} duplicate={} action_on_error=defer-exact-context-owner-handoff\n",
+        event.action,
+        context_id(slot),
+        context.token(slot).raw(),
+        event.payload_len,
+        event.truncated() as u8,
+        event.payload(0).unwrap_or(u32::MAX),
+        event.payload(1).unwrap_or(u32::MAX),
+        reason,
+        (!newly_reported) as u8,
     );
 }
 
@@ -943,17 +1461,98 @@ fn context_registry_invariants_hold(state: &GucSubmissionState) -> bool {
                 && !context.destroy_requested
                 && !context.pending_enable
                 && !context.pending_disable
-                && !context.pending_deregister);
+                && !context.pending_deregister
+                && !context.faulted
+                && !context.owner_fault_reported
+                && !context.owner_handoff_pending
+                && context.fault_kind.is_none()
+                && context.cat_hw_type.is_none()
+                && context.lifecycle_timeout_reported == 0
+                && context.lifecycle_reject_reported == 0);
         let teardown_is_quarantined = (!context.destroy_requested || context.registered)
             && (!context.pending_disable || context.destroy_requested)
             && (!context.pending_deregister || context.destroy_requested);
-        mutually_exclusive && empty_is_inert && teardown_is_quarantined
+        let containment_is_quarantined = !context.owner_handoff_pending
+            || (context.registered
+                && context.faulted
+                && context.destroy_requested
+                && context.fault_kind.is_some());
+        let fault_telemetry_matches = context.cat_hw_type.is_none()
+            || matches!(context.fault_kind, Some(GucContextFaultKind::MemoryCat));
+        let lifecycle_reports_are_teardown_only = (context.lifecycle_timeout_reported == 0
+            && context.lifecycle_reject_reported == 0)
+            || (context.registered && context.destroy_requested);
+        mutually_exclusive
+            && empty_is_inert
+            && teardown_is_quarantined
+            && containment_is_quarantined
+            && fault_telemetry_matches
+            && lifecycle_reports_are_teardown_only
     })
 }
 
-pub(crate) fn scheduler_status() -> GucSchedulerStatus {
+/// Copy sticky physical fault state without performing teardown or calling an
+/// upper layer while the GuC registry lock is held. The caller may already
+/// hold the broker lock in the canonical BROKER -> CONTEXTS order.
+pub(crate) fn fault_snapshot() -> GucFaultSnapshot {
     let mut state = CONTEXTS.lock();
     drain_g2h_events(&mut state);
+    GucFaultSnapshot {
+        gt_faulted: state.gt_faulted,
+        unattributed_faults: state.unattributed_faults,
+        contexts: state
+            .contexts
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, context)| context.registered && context.owner_handoff_pending)
+            .filter_map(|(slot, context)| {
+                context.fault_kind.map(|kind| GucContextFault {
+                    token: context.token(slot),
+                    engine: context.engine,
+                    origin: context.origin,
+                    kind,
+                    hw_type: context.cat_hw_type,
+                })
+            })
+            .collect(),
+    }
+}
+
+/// Confirm that the host ownership layer consumed one exact fault record.
+/// This is only a software owner-handoff acknowledgement: the context remains
+/// faulted, destroy-requested, registered, and permanently non-reusable until
+/// a full reset. No H2G request is sent here.
+pub(crate) fn acknowledge_fault(token: GucContextToken) -> bool {
+    let mut state = CONTEXTS.lock();
+    let Some((slot, generation)) = token.parts() else {
+        return false;
+    };
+    let Some(context) = state.contexts.get(slot).copied() else {
+        return false;
+    };
+    if !context.registered
+        || context.generation != generation
+        || !context.faulted
+        || !context.owner_handoff_pending
+    {
+        return false;
+    }
+    state.contexts[slot].owner_handoff_pending = false;
+    crate::log_error!(
+        target: "gpgpu";
+        "intel/guc-submit: owner_handoff_recorded=1 fault_kind={:?} context_id={} token=0x{:X} engine={:?}:{} hardware_lifecycle=quarantined-until-reset h2g_sent=0\n",
+        context.fault_kind,
+        context_id(slot),
+        token.raw(),
+        context.engine.class,
+        context.engine.instance,
+    );
+    true
+}
+
+pub(crate) fn scheduler_status() -> GucSchedulerStatus {
+    let state = CONTEXTS.lock();
     GucSchedulerStatus {
         capacity: MAX_GUC_CONTEXTS,
         registered: state
@@ -986,18 +1585,32 @@ pub(crate) fn scheduler_status() -> GucSchedulerStatus {
             .iter()
             .filter(|context| context.pending_deregister)
             .count(),
+        faulted: state
+            .contexts
+            .iter()
+            .filter(|context| context.faulted)
+            .count(),
+        owner_handoffs_pending: state
+            .contexts
+            .iter()
+            .filter(|context| context.owner_handoff_pending)
+            .count(),
         submissions: state.serial,
         registrations: state.registrations,
         deregistrations: state.deregistrations,
         failures: state.failures,
         async_events: state.async_events,
         async_event_errors: state.async_event_errors,
+        memory_cat_faults: state.memory_cat_faults,
+        unattributed_faults: state.unattributed_faults,
+        lifecycle_timeouts: state.lifecycle_timeouts,
+        lifecycle_retries: state.lifecycle_retries,
+        gt_faulted: state.gt_faulted,
     }
 }
 
 pub(crate) fn context_status() -> Vec<GucContextStatus> {
-    let mut state = CONTEXTS.lock();
-    drain_g2h_events(&mut state);
+    let state = CONTEXTS.lock();
     state
         .contexts
         .iter()
@@ -1009,12 +1622,17 @@ pub(crate) fn context_status() -> Vec<GucContextStatus> {
             context_id: (slot + 1) as u32,
             engine: context.engine,
             priority: context.priority,
+            origin: context.origin,
             policy_enqueued: context.policy_enqueued,
             enabled: context.enabled,
             destroy_requested: context.destroy_requested,
             pending_enable: context.pending_enable,
             pending_disable: context.pending_disable,
             pending_deregister: context.pending_deregister,
+            faulted: context.faulted,
+            owner_handoff_pending: context.owner_handoff_pending,
+            fault_kind: context.fault_kind,
+            cat_hw_type: context.cat_hw_type,
             hwlrca_lo: context.hwlrca_lo,
             hwlrca_hi: context.hwlrca_hi,
             submissions: context.submissions,
@@ -1024,6 +1642,10 @@ pub(crate) fn context_status() -> Vec<GucContextStatus> {
 
 const fn context_id(slot: usize) -> u32 {
     (slot + 1) as u32
+}
+
+const fn hwlrca_backing_page(hwlrca_lo: u32) -> u32 {
+    hwlrca_lo & HWLRCA_PAGE_MASK
 }
 
 /// Add the Gen12 RCS descriptor priority that is separate from GuC's policy
@@ -1118,6 +1740,9 @@ const _: () = {
         guc_hwlrca_descriptor(crate::gpu::physical::PhysicalEngineId::BCS0, KernelHigh, 0x8000)
             == 0x8000
     );
+    assert!(hwlrca_backing_page(0x8200) == hwlrca_backing_page(0x8400));
+    assert!(hwlrca_backing_page(0x8FFF) == 0x8000);
+    assert!(hwlrca_backing_page(0x9000) != hwlrca_backing_page(0x8400));
     assert!(generation_precedes(1, 2));
     assert!(generation_precedes(u32::MAX, 1));
     assert!(!generation_precedes(2, 1));

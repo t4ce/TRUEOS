@@ -69,15 +69,36 @@ fn submit_tenant_scene_aabb_rcs(
         crate::gpu::physical::PhysicalContextPriority::KernelNormal,
     ) {
         Ok(token) => token,
-        Err(_) => {
+        Err(error) => {
+            if guc_register_may_have_published(error) {
+                SCENE_AABB_QUARANTINED.store(true, Ordering::Release);
+                crate::log_error!(
+                    target: "gpgpu";
+                    "intel/gpgpu: scene-aabb register ownership_uncertain=1 error={} mappings=pinned context=quarantined action=retain-until-reset\n",
+                    error.name(),
+                );
+                return Err(PhysicalGpuError::CompletionTimeout);
+            }
             unmap_scene_aabb_ranges(physical, request.vm, &mappings);
             return Err(PhysicalGpuError::RegisterFailed);
         }
     };
     let submission = match crate::intel::guc_submission::INTEL_GUC_SCHEDULER.submit(dev, token) {
         Ok(submission) => submission,
-        Err(_) => {
-            let _ = crate::intel::guc_submission::INTEL_GUC_SCHEDULER.destroy(dev, token);
+        Err(error) => {
+            let destroyed = crate::intel::guc_submission::INTEL_GUC_SCHEDULER.destroy(dev, token);
+            if matches!(error, crate::intel::guc_submission::GucSubmissionError::DeviceFaulted)
+                || destroyed.is_err()
+            {
+                SCENE_AABB_QUARANTINED.store(true, Ordering::Release);
+                crate::log_error!(
+                    target: "gpgpu";
+                    "intel/gpgpu: scene-aabb submit ownership_uncertain=1 error={} destroy_confirmed={} mappings=pinned context=quarantined action=retain-until-reset\n",
+                    error.name(),
+                    destroyed.is_ok() as u8,
+                );
+                return Err(PhysicalGpuError::CompletionTimeout);
+            }
             unmap_scene_aabb_ranges(physical, request.vm, &mappings);
             return Err(PhysicalGpuError::SubmitFailed);
         }
@@ -107,19 +128,17 @@ fn submit_tenant_scene_aabb_rcs(
     }
 
     let hits = direct_rcs_read_result_slot(state, SCENE_AABB_HIT_COUNT_SLOT);
-    if crate::intel::guc_submission::INTEL_GUC_SCHEDULER
-        .destroy(dev, token)
-        .is_err()
-    {
+    if let Err(error) = crate::intel::guc_submission::INTEL_GUC_SCHEDULER.destroy(dev, token) {
         SCENE_AABB_QUARANTINED.store(true, Ordering::Release);
         crate::log_error!(
             target: "gpgpu";
-            "intel/gpgpu: scene-aabb completed serial={} but context teardown failed; context quarantined\n",
+            "intel/gpgpu: scene-aabb completed serial={} but context teardown failed error={} mappings=pinned context=quarantined action=retain-until-reset\n",
             submission.serial,
+            error.name(),
         );
-    } else {
-        unmap_scene_aabb_ranges(physical, request.vm, &mappings);
+        return Err(PhysicalGpuError::CompletionTimeout);
     }
+    unmap_scene_aabb_ranges(physical, request.vm, &mappings);
 
     crate::log_info!(
         target: "gpgpu";
@@ -133,6 +152,21 @@ fn submit_tenant_scene_aabb_rcs(
         serial: submission.serial,
         hits,
     })
+}
+
+const fn guc_register_may_have_published(
+    error: crate::intel::guc_submission::GucSubmissionError,
+) -> bool {
+    use crate::intel::guc_submission::GucSubmissionError;
+
+    matches!(
+        error,
+        GucSubmissionError::DeviceFaulted
+            | GucSubmissionError::InvalidContext
+            | GucSubmissionError::OwnershipConflict
+            | GucSubmissionError::PriorityConflict
+            | GucSubmissionError::PolicyEnqueueRejected
+    )
 }
 
 fn unmap_scene_aabb_ranges(

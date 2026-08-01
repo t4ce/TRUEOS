@@ -46,8 +46,9 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         format!(
-            "vgpu: physical_ready={} adapter={} pci=8086:{:04X} rev={:02X} guc={} epoch={} devices={} contexts={}/{} submissions={} failures={}",
+            "vgpu: physical_ready={} physical_lost={} adapter={} pci=8086:{:04X} rev={:02X} guc={} epoch={} devices={} contexts={}/{} submissions={} failures={} faulted_contexts={} owner_handoffs_pending={} memory_cat_faults={} unattributed_faults={} gt_faulted={}",
             status.physical_ready as u8,
+            status.physical_lost as u8,
             status.physical_name,
             status.physical_device_id,
             status.physical_revision_id,
@@ -58,6 +59,11 @@ fn print_status(io: &'static dyn ShellBackend2) {
             status.scheduler.context_capacity,
             status.scheduler.submissions,
             status.scheduler.failures,
+            status.scheduler.faulted_contexts,
+            status.scheduler.owner_handoffs_pending,
+            status.scheduler.memory_cat_faults,
+            status.scheduler.unattributed_faults,
+            status.scheduler.gt_faulted as u8,
         )
         .as_str(),
     );
@@ -65,7 +71,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         format!(
-            "vgpu: context-boundaries valid={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} lost_bound={} render_principals_declared={}",
+            "vgpu: context-boundaries valid={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} lost_bound={} helio_render_live={} spirit_execution_live={} helio_spirit_hwlrca_distinct={} helio_spirit_ppgtt_distinct={} helio_spirit_coexistence={} render_principals_declared={}",
             boundaries.valid() as u8,
             boundaries.coherent as u8,
             boundaries.unique_hwlrcas as u8,
@@ -73,6 +79,11 @@ fn print_status(io: &'static dyn ShellBackend2) {
             boundaries.bound,
             boundaries.active,
             boundaries.lost_bound,
+            boundaries.helio_render_live as u8,
+            boundaries.spirit_execution_live as u8,
+            boundaries.helio_spirit_distinct_hwlrca as u8,
+            boundaries.helio_spirit_distinct_ppgtt_root as u8,
+            boundaries.helio_spirit_valid() as u8,
             KernelClient::RENDER_CARRIERS.len(),
         )
         .as_str(),
@@ -80,7 +91,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         format!(
-            "vgpu: executor submissions={} completions={} failures={} preparing={} admitting={} inflight={} waiters={}",
+            "vgpu: executor submissions={} completions={} failures={} preparing={} admitting={} inflight={} waiters={} lost_clients={}",
             executor.submissions,
             executor.completions,
             executor.failures,
@@ -88,6 +99,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
             executor.admitting,
             executor.inflight,
             executor.waiters,
+            executor.lost_clients,
         )
         .as_str(),
     );
@@ -232,20 +244,25 @@ fn test_guc(io: &'static dyn ShellBackend2) -> bool {
     let status = vgpu::broker_status();
     let boundaries = status.kernel_context_boundaries;
     let passed = status.physical_ready
+        && !status.physical_lost
         && status.guc_submission
         && status.scheduler.context_capacity >= 2
         && status.scheduler.registered_contexts >= boundaries.active
         && status.scheduler.enabled_contexts >= boundaries.active
         && status.scheduler.failures == 0
+        && status.scheduler.faulted_contexts == 0
+        && status.scheduler.owner_handoffs_pending == 0
+        && !status.scheduler.gt_faulted
         && boundaries.valid()
         && boundaries.bound == boundaries.active
-        && boundaries.active >= 2
+        && boundaries.helio_spirit_valid()
         && boundaries.lost_bound == 0;
     print_shell_line(
         io,
         format!(
-            "vgpu guc: ready={} guc={} registered={} enabled={} capacity={} submissions={} registrations={} failures={} context_boundaries={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} lost_bound={} coexistence_min=2",
+            "vgpu guc: ready={} physical_lost={} guc={} registered={} enabled={} capacity={} submissions={} registrations={} failures={} faulted_contexts={} owner_handoffs_pending={} gt_faulted={} context_boundaries={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} lost_bound={} helio_render_live={} spirit_execution_live={} helio_spirit_hwlrca_distinct={} helio_spirit_ppgtt_distinct={} helio_spirit_coexistence={}",
             status.physical_ready as u8,
+            status.physical_lost as u8,
             status.guc_submission as u8,
             status.scheduler.registered_contexts,
             status.scheduler.enabled_contexts,
@@ -253,6 +270,9 @@ fn test_guc(io: &'static dyn ShellBackend2) -> bool {
             status.scheduler.submissions,
             status.scheduler.registrations,
             status.scheduler.failures,
+            status.scheduler.faulted_contexts,
+            status.scheduler.owner_handoffs_pending,
+            status.scheduler.gt_faulted as u8,
             boundaries.valid() as u8,
             boundaries.coherent as u8,
             boundaries.unique_hwlrcas as u8,
@@ -260,6 +280,11 @@ fn test_guc(io: &'static dyn ShellBackend2) -> bool {
             boundaries.bound,
             boundaries.active,
             boundaries.lost_bound,
+            boundaries.helio_render_live as u8,
+            boundaries.spirit_execution_live as u8,
+            boundaries.helio_spirit_distinct_hwlrca as u8,
+            boundaries.helio_spirit_distinct_ppgtt_root as u8,
+            boundaries.helio_spirit_valid() as u8,
         )
         .as_str(),
     );

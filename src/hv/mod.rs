@@ -402,6 +402,7 @@ pub enum StartError {
     GuestMemoryUnavailable,
     NoVmSpawner,
     SpawnFailed,
+    VgpuQuarantined,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -581,12 +582,14 @@ pub(crate) struct BlueprintProcessContext {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum StopError {
     UnsupportedVmId,
+    VgpuQuarantined,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EjectError {
     UnsupportedVmId,
     VmBusy,
+    VgpuQuarantined,
 }
 
 /// How a live VM is preserved before its hull stops.
@@ -865,11 +868,13 @@ pub(crate) fn lifecycle_request_pending(vm_id: u8) -> bool {
 }
 
 pub fn first_free_vm_id() -> Option<u8> {
+    let vgpu_fence = crate::gpu::vgpu::hull_guest_reuse_fence_mask();
     for (idx, slot) in trueos_vm_ids.iter().enumerate() {
         if !slot.running.load(Ordering::Acquire)
             && !slot.starting.load(Ordering::Acquire)
             && !slot.pause_latched.load(Ordering::Acquire)
             && !slot.restore_inflight.load(Ordering::Acquire)
+            && vgpu_fence & (1u64 << idx) == 0
         {
             return Some(idx as u8);
         }
@@ -1301,11 +1306,21 @@ fn start_with_mode(
         return Err(StartError::UnsupportedVmId);
     };
 
-    if vm.running.load(Ordering::Acquire)
-        || vm
-            .starting
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
+    if vm.running.load(Ordering::Acquire) {
+        return Err(StartError::AlreadyRunning);
+    }
+    if !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
+        hvwarnf(format_args!(
+            "hv: vm{} lifecycle: start rejected reason=vgpu-storage-quarantined action=retain-vm-slot-and-guest-pages-until-reset",
+            vm_id
+        ));
+        return Err(StartError::VgpuQuarantined);
+    }
+
+    if vm
+        .starting
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
     {
         return Err(StartError::AlreadyRunning);
     }
@@ -1527,6 +1542,14 @@ pub fn eject(vm_id: u8) -> Result<bool, EjectError> {
     {
         return Err(EjectError::VmBusy);
     }
+    let (_, vgpu_quarantined, _) = crate::gpu::vgpu::release_hull_guest(vm_id);
+    if vgpu_quarantined != 0 || !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
+        hvwarnf(format_args!(
+            "hv: vm{} lifecycle: eject rejected reason=vgpu-storage-quarantined retained_devices={} action=retain-vm-slot-and-guest-pages-until-reset",
+            vm_id, vgpu_quarantined
+        ));
+        return Err(EjectError::VgpuQuarantined);
+    }
     let had_state = vm.pause_latched.load(Ordering::Acquire)
         || blueprint_launch_active(vm_id)
         || crate::hv::store::has_committed_vm(vm_id);
@@ -1545,7 +1568,18 @@ pub fn eject(vm_id: u8) -> Result<bool, EjectError> {
     memory::clear_snapshot_state_for_vm(vm_id);
     let _ = memory::release_guest_hull_rw_for_vm(vm_id);
     let _ = memory::release_guest_stack_for_vm(vm_id);
-    let _ = crate::allocators::release_hv_guest_heap_for_vm(vm_id);
+    let heap_configured = crate::allocators::hv_guest_heap_stats_if_configured(vm_id).is_some();
+    if heap_configured && !crate::allocators::release_hv_guest_heap_for_vm(vm_id) {
+        // Keep pause/store state latched so this VM slot cannot be selected for
+        // a new occupant after an allocator-level GPU pin or arena-release
+        // failure. An unconfigured heap needs no release and is not an error.
+        vm.pause_latched.store(true, Ordering::Release);
+        hvwarnf(format_args!(
+            "hv: vm{} lifecycle: eject rejected reason=vgpu-storage-quarantined action=retain-vm-slot-and-guest-pages-until-reset",
+            vm_id
+        ));
+        return Err(EjectError::VgpuQuarantined);
+    }
     let _ = crate::hv::store::eject_warm(vm_id);
     vm.pause_latched.store(false, Ordering::Release);
     vm.pause_store_seq.store(0, Ordering::Release);
@@ -1711,6 +1745,9 @@ pub fn restore_snapshot(vm_id: u8) -> Result<usize, RestoreError> {
     if vm_slot(vm_id).is_none() {
         return Err(RestoreError::UnsupportedVmId);
     }
+    if !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
+        return Err(RestoreError::VgpuQuarantined);
+    }
 
     let bytes = crate::hv::store::load_bytes(vm_id).map_err(map_store_restore_error)?;
 
@@ -1721,6 +1758,9 @@ pub fn restore_snapshot(vm_id: u8) -> Result<usize, RestoreError> {
 pub async fn restore_snapshot_async(vm_id: u8) -> Result<usize, RestoreError> {
     if vm_slot(vm_id).is_none() {
         return Err(RestoreError::UnsupportedVmId);
+    }
+    if !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
+        return Err(RestoreError::VgpuQuarantined);
     }
 
     let bytes = crate::hv::store::load_bytes_async(vm_id)
@@ -1738,6 +1778,9 @@ pub fn restore_persistent_image(
 ) -> Result<usize, RestoreError> {
     if vm_slot(vm_id).is_none() {
         return Err(RestoreError::UnsupportedVmId);
+    }
+    if !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
+        return Err(RestoreError::VgpuQuarantined);
     }
     let result = (|| {
         crate::allocators::restore_hv_guest_heap(vm_id, image.guest_heap.as_slice())
@@ -1764,6 +1807,9 @@ pub fn try_begin_restore(vm_id: u8) -> Result<bool, StopError> {
     let Some(vm) = vm_slot(vm_id) else {
         return Err(StopError::UnsupportedVmId);
     };
+    if !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
+        return Err(StopError::VgpuQuarantined);
+    }
     Ok(vm
         .restore_inflight
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)

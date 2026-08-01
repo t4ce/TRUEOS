@@ -232,26 +232,11 @@ fn log_alloc_domain_mismatch(ptr: *mut u8, address_domain: Option<AllocDomain>, 
     }
 }
 
-unsafe fn validated_dealloc_domain(ptr: *mut u8) -> Option<AllocDomain> {
-    let address_domain = alloc_domain_for_address(ptr as usize);
-    let Some((address_domain, heap_start)) = address_domain else {
+fn dealloc_domain_for_address(ptr: *mut u8) -> Option<AllocDomain> {
+    let Some((address_domain, _)) = alloc_domain_for_address(ptr as usize) else {
         log_alloc_domain_mismatch(ptr, None, None);
         return None;
     };
-    let Some(tag_addr) = (ptr as usize).checked_sub(size_of::<AllocTag>()) else {
-        log_alloc_domain_mismatch(ptr, Some(address_domain), None);
-        return None;
-    };
-    if tag_addr < heap_start {
-        log_alloc_domain_mismatch(ptr, Some(address_domain), None);
-        return None;
-    }
-    let tag = unsafe { core::ptr::read_unaligned(tag_addr as *const AllocTag) };
-    let tag_domain = alloc_domain_from_tag(&tag);
-    if tag_domain != Some(address_domain) {
-        log_alloc_domain_mismatch(ptr, Some(address_domain), Some(tag.domain));
-        return None;
-    }
     Some(address_domain)
 }
 
@@ -293,8 +278,17 @@ struct FreeBlock {
 struct AllocTag {
     block_start: usize,
     block_size: usize,
+    /// Exact allocator-returned pointer; rejects an interior page whose
+    /// preceding payload bytes merely resemble an allocation tag.
+    payload_start: usize,
     domain: u8,
+    /// Host-mediated DMA/GPU mappings that still name this allocation.
+    ///
+    /// This occupies padding already present in the tag on x86_64.
+    dma_pins: u32,
 }
+
+const _: () = assert!(size_of::<AllocTag>() == 32);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum HeapSourceKind {
@@ -306,6 +300,45 @@ pub enum HeapSourceKind {
 pub enum AllocDomain {
     Host,
     HvGuest(u8),
+}
+
+/// Linear ownership token for one allocator-level guest DMA pin.
+///
+/// The token deliberately has no `Drop` implementation. Once registration is
+/// published, an accidental broker-record drop must leak/quarantine the pin,
+/// never make pages reusable without a definitive physical unmap.
+pub(crate) struct HvGuestDmaPin {
+    vm_id: u8,
+    ptr: usize,
+    bytes: usize,
+    block_start: usize,
+    block_size: usize,
+}
+
+/// Rollback guard used before a vVideo mapping is published in the broker.
+pub(crate) struct HvGuestDmaPinReservation {
+    pin: Option<HvGuestDmaPin>,
+}
+
+impl HvGuestDmaPinReservation {
+    /// Transfer the pin into a broker backing after registration succeeds.
+    pub(crate) fn retain_for_mapping(mut self) -> HvGuestDmaPin {
+        self.pin.take().expect("live guest DMA pin reservation")
+    }
+
+    /// Keep the allocator pin without an owner when mapping rollback itself is
+    /// uncertain. The per-VM pin count remains a lifecycle reuse fence.
+    pub(crate) fn quarantine(mut self) {
+        let _ = self.pin.take();
+    }
+}
+
+impl Drop for HvGuestDmaPinReservation {
+    fn drop(&mut self) {
+        if let Some(pin) = self.pin.take() {
+            let _ = release_hv_guest_dma_pin(pin);
+        }
+    }
 }
 
 struct FreeList {
@@ -438,7 +471,9 @@ impl FreeList {
             (tag_ptr as *mut AllocTag).write(AllocTag {
                 block_start,
                 block_size: alloc_block_size,
+                payload_start,
                 domain: alloc_domain_tag(domain),
+                dma_pins: 0,
             });
 
             trace_alloc_success(trace_enabled);
@@ -448,16 +483,47 @@ impl FreeList {
         null_mut()
     }
 
-    unsafe fn dealloc(&mut self, ptr: *mut u8) {
+    unsafe fn dealloc(&mut self, domain: AllocDomain, ptr: *mut u8) {
         if ptr.is_null() {
             return;
         }
 
-        let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
-        let tag = *tag_ptr;
+        // All pointer/tag/free-list validation occurs under this FreeList's
+        // mutex. Whole-heap release can therefore either win first (leaving an
+        // empty geometry that rejects this pointer without dereferencing it)
+        // or wait until deallocation is completely retired.
+        let ptr_addr = ptr as usize;
+        let (heap_start, heap_len) = self.ensure_heap_backing();
+        let Some(heap_end) = heap_start.checked_add(heap_len) else {
+            return;
+        };
+        let Some(tag_addr) = ptr_addr.checked_sub(size_of::<AllocTag>()) else {
+            return;
+        };
+        if heap_start == 0
+            || ptr_addr < heap_start
+            || ptr_addr >= heap_end
+            || tag_addr < heap_start
+            || tag_addr.saturating_add(size_of::<AllocTag>()) > heap_end
+        {
+            return;
+        }
+        let tag_ptr = tag_addr as *mut AllocTag;
+        let tag = unsafe { tag_ptr.read() };
+        if tag.payload_start != ptr_addr || alloc_domain_from_tag(&tag) != Some(domain) {
+            log_alloc_domain_mismatch(ptr, Some(domain), Some(tag.domain));
+            return;
+        }
         let block_size = tag.block_size;
         let block_start = tag.block_start;
-        if !self.is_plausible_alloc_block(block_start, block_size) {
+        let Some(block_end) = block_start.checked_add(block_size) else {
+            return;
+        };
+        if !self.is_plausible_alloc_block(block_start, block_size)
+            || tag_addr < block_start
+            || ptr_addr >= block_end
+            || !unsafe { self.allocation_block_is_live(block_start, block_end) }
+        {
             crate::log!(
                 "alloc: ignored invalid dealloc ptr=0x{:016X} tag_block=0x{:016X} tag_size={} tag_domain={}\n",
                 ptr as usize,
@@ -465,6 +531,11 @@ impl FreeList {
                 block_size,
                 tag.domain
             );
+            return;
+        }
+        if tag.dma_pins != 0 {
+            // Raw guest deallocation cannot return GPU-owned pages to the free
+            // list. The definitive PPGTT unmap path owns the matching token.
             return;
         }
         let block_ptr = block_start as *mut FreeBlock;
@@ -501,6 +572,111 @@ impl FreeList {
         if let Some(p) = prev {
             self.try_merge_with_next(p);
         }
+    }
+
+    unsafe fn pin_dma_range(
+        &mut self,
+        domain: AllocDomain,
+        ptr: usize,
+        bytes: usize,
+    ) -> Option<(usize, usize)> {
+        if bytes == 0 {
+            return None;
+        }
+        let range_end = ptr.checked_add(bytes)?;
+        let tag_addr = ptr.checked_sub(size_of::<AllocTag>())?;
+        let (heap_start, heap_len) = self.ensure_heap_backing();
+        let heap_end = heap_start.checked_add(heap_len)?;
+        if heap_start == 0
+            || ptr < heap_start
+            || ptr >= heap_end
+            || tag_addr < heap_start
+            || tag_addr.checked_add(size_of::<AllocTag>())? > heap_end
+        {
+            return None;
+        }
+        let tag_ptr = tag_addr as *mut AllocTag;
+        let tag = unsafe { tag_ptr.read() };
+        if tag.payload_start != ptr
+            || alloc_domain_from_tag(&tag) != Some(domain)
+            || !self.is_plausible_alloc_block(tag.block_start, tag.block_size)
+        {
+            return None;
+        }
+        let metadata_end = tag
+            .block_start
+            .checked_add(size_of::<FreeBlock>())
+            .and_then(|value| value.checked_add(size_of::<AllocTag>()))?;
+        let block_end = tag.block_start.checked_add(tag.block_size)?;
+        if ptr < metadata_end || tag_addr < tag.block_start || range_end > block_end {
+            return None;
+        }
+        if !unsafe { self.allocation_block_is_live(tag.block_start, block_end) } {
+            return None;
+        }
+        let pins = tag.dma_pins.checked_add(1)?;
+        unsafe { (*tag_ptr).dma_pins = pins };
+        Some((tag.block_start, tag.block_size))
+    }
+
+    unsafe fn unpin_dma_range(&mut self, pin: &HvGuestDmaPin) -> bool {
+        let Some(tag_addr) = pin.ptr.checked_sub(size_of::<AllocTag>()) else {
+            return false;
+        };
+        let (heap_start, heap_len) = self.ensure_heap_backing();
+        let Some(heap_end) = heap_start.checked_add(heap_len) else {
+            return false;
+        };
+        if heap_start == 0
+            || pin.ptr < heap_start
+            || pin.ptr >= heap_end
+            || tag_addr < heap_start
+            || tag_addr.saturating_add(size_of::<AllocTag>()) > heap_end
+        {
+            return false;
+        }
+        let tag_ptr = tag_addr as *mut AllocTag;
+        let tag = unsafe { tag_ptr.read() };
+        let Some(range_end) = pin.ptr.checked_add(pin.bytes) else {
+            return false;
+        };
+        let Some(block_end) = tag.block_start.checked_add(tag.block_size) else {
+            return false;
+        };
+        if tag.payload_start != pin.ptr
+            || alloc_domain_from_tag(&tag) != Some(AllocDomain::HvGuest(pin.vm_id))
+            || tag.block_start != pin.block_start
+            || tag.block_size != pin.block_size
+            || range_end > block_end
+            || tag.dma_pins == 0
+            || !self.is_plausible_alloc_block(tag.block_start, tag.block_size)
+            || !unsafe { self.allocation_block_is_live(tag.block_start, block_end) }
+        {
+            return false;
+        }
+        unsafe { (*tag_ptr).dma_pins = tag.dma_pins - 1 };
+        true
+    }
+
+    unsafe fn allocation_block_is_live(&mut self, block_start: usize, block_end: usize) -> bool {
+        let mut current = self.head;
+        let mut remaining = self.heap_len / minimum_block_size() + 1;
+        while let Some(node) = current {
+            if remaining == 0 || !self.is_plausible_free_block_ptr(node.as_ptr() as usize) {
+                return false;
+            }
+            remaining -= 1;
+            let free = unsafe { node.as_ref() };
+            let free_start = node.as_ptr() as usize;
+            let Some(free_end) = free_start.checked_add(free.size) else {
+                return false;
+            };
+            if block_start < free_end && free_start < block_end {
+                return false;
+            }
+            current = free.next;
+        }
+        true
     }
 
     fn install_heap(&mut self, virt_start: usize, phys_start: usize, len: usize) {
@@ -582,12 +758,66 @@ static HV_GUEST_ALLOCATOR_SHARED_PAGES: [HvGuestAllocatorSharedPage;
     crate::allcaps::hv::VM_ID_LIMIT] =
     [const { HvGuestAllocatorSharedPage::new() }; crate::allcaps::hv::VM_ID_LIMIT];
 
+// Host lifecycle authority for allocator pins. The per-allocation count lives
+// in `AllocTag` so deallocation is serialized by the existing heap mutex; this
+// aggregate lets VM-slot/whole-arena release fail closed without walking every
+// occupied allocation.
+static HV_GUEST_DMA_PIN_TOTALS: [AtomicU64; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { AtomicU64::new(0) }; crate::allcaps::hv::VM_ID_LIMIT];
+
 const _: () = assert!(core::mem::size_of::<HvGuestAllocatorSharedPage>() == 4096);
 const _: () = assert!(core::mem::align_of::<HvGuestAllocatorSharedPage>() == 4096);
 
 #[inline]
 fn hv_guest_allocator_page(vm_id: u8) -> Option<&'static HvGuestAllocatorSharedPage> {
     HV_GUEST_ALLOCATOR_SHARED_PAGES.get(vm_id as usize)
+}
+
+pub(crate) fn pin_hv_guest_dma_range(
+    vm_id: u8,
+    guest_va: u64,
+    bytes: usize,
+) -> Option<HvGuestDmaPinReservation> {
+    let ptr = usize::try_from(guest_va).ok()?;
+    let page = hv_guest_allocator_page(vm_id)?;
+    let total = HV_GUEST_DMA_PIN_TOTALS.get(vm_id as usize)?;
+    let mut guard = page.allocator.lock();
+    if total.load(Ordering::Acquire) == u64::MAX {
+        return None;
+    }
+    let (block_start, block_size) =
+        unsafe { guard.pin_dma_range(AllocDomain::HvGuest(vm_id), ptr, bytes)? };
+    total.fetch_add(1, Ordering::AcqRel);
+    Some(HvGuestDmaPinReservation {
+        pin: Some(HvGuestDmaPin {
+            vm_id,
+            ptr,
+            bytes,
+            block_start,
+            block_size,
+        }),
+    })
+}
+
+pub(crate) fn release_hv_guest_dma_pin(pin: HvGuestDmaPin) -> bool {
+    let Some(page) = hv_guest_allocator_page(pin.vm_id) else {
+        return false;
+    };
+    let Some(total) = HV_GUEST_DMA_PIN_TOTALS.get(pin.vm_id as usize) else {
+        return false;
+    };
+    let mut guard = page.allocator.lock();
+    if total.load(Ordering::Acquire) == 0 || !unsafe { guard.unpin_dma_range(&pin) } {
+        return false;
+    }
+    total.fetch_sub(1, Ordering::AcqRel);
+    true
+}
+
+pub(crate) fn hv_guest_dma_ranges_pinned(vm_id: u8) -> bool {
+    HV_GUEST_DMA_PIN_TOTALS
+        .get(vm_id as usize)
+        .is_some_and(|total| total.load(Ordering::Acquire) != 0)
 }
 
 pub(crate) fn hv_guest_allocator_state_span(vm_id: u8) -> Option<(u64, usize)> {
@@ -940,10 +1170,10 @@ unsafe impl GlobalAlloc for Allocator {
         if ptr.is_null() {
             return;
         }
-        let Some(domain) = (unsafe { validated_dealloc_domain(ptr) }) else {
+        let Some(domain) = dealloc_domain_for_address(ptr) else {
             return;
         };
-        unsafe { allocator_for_domain(domain).lock().dealloc(ptr) }
+        unsafe { allocator_for_domain(domain).lock().dealloc(domain, ptr) }
     }
 }
 
@@ -1071,10 +1301,10 @@ pub unsafe fn dealloc_raw(ptr: *mut u8) {
     if ptr.is_null() {
         return;
     }
-    let Some(domain) = (unsafe { validated_dealloc_domain(ptr) }) else {
+    let Some(domain) = dealloc_domain_for_address(ptr) else {
         return;
     };
-    unsafe { allocator_for_domain(domain).lock().dealloc(ptr) }
+    unsafe { allocator_for_domain(domain).lock().dealloc(domain, ptr) }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1310,7 +1540,8 @@ pub fn hv_guest_heap_stats_if_configured(vm_id: u8) -> Option<HeapStats> {
 }
 
 const HV_GUEST_HEAP_IMAGE_MAGIC: u32 = u32::from_le_bytes(*b"HGS1");
-const HV_GUEST_HEAP_IMAGE_VERSION: u32 = 1;
+// Version 2 records the exact-payload AllocTag layout used by DMA pinning.
+const HV_GUEST_HEAP_IMAGE_VERSION: u32 = 2;
 
 fn heap_image_push_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
@@ -1326,6 +1557,9 @@ fn heap_image_push_u64(out: &mut Vec<u8>, value: u64) {
 pub fn snapshot_hv_guest_heap(vm_id: u8) -> Result<Vec<u8>, &'static str> {
     let page = hv_guest_allocator_page(vm_id).ok_or("unsupported guest heap")?;
     let mut guard = page.allocator.lock();
+    if hv_guest_dma_ranges_pinned(vm_id) {
+        return Err("guest heap has GPU-pinned allocations");
+    }
     if !guard.initialized || guard.heap_source != HeapSourceKind::Arena || guard.heap_len == 0 {
         return Err("guest heap is not an initialized arena");
     }
@@ -1485,7 +1719,7 @@ pub fn restore_hv_guest_heap(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str
     let page = hv_guest_allocator_page(vm_id).ok_or("unsupported guest heap")?;
     {
         let guard = page.allocator.lock();
-        if guard.initialized || guard.heap_len != 0 {
+        if guard.initialized || guard.heap_len != 0 || hv_guest_dma_ranges_pinned(vm_id) {
             return Err("guest heap slot is already configured");
         }
     }
@@ -1505,6 +1739,13 @@ pub fn restore_hv_guest_heap(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str
         }
     }
     let mut guard = page.allocator.lock();
+    if guard.initialized || guard.heap_len != 0 || hv_guest_dma_ranges_pinned(vm_id) {
+        // Close the check/reserve/install window. Another lifecycle operation
+        // may have populated this slot while the exact arena was reserved.
+        drop(guard);
+        let _ = phys::free_phys_range(arena.phys_start, arena.length);
+        return Err("guest heap slot changed during restore");
+    }
     guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
     guard.initialized = true;
     let mut next = None;
@@ -1530,7 +1771,10 @@ pub fn release_hv_guest_heap_for_vm(vm_id: u8) -> bool {
     };
     let arena = {
         let mut guard = page.allocator.lock();
-        if guard.heap_source != HeapSourceKind::Arena || guard.heap_len == 0 {
+        if guard.heap_source != HeapSourceKind::Arena
+            || guard.heap_len == 0
+            || hv_guest_dma_ranges_pinned(vm_id)
+        {
             return false;
         }
         let arena = HeapArena {

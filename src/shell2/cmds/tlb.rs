@@ -2741,7 +2741,7 @@ fn append_intel_gpu_dump(out: &mut String) {
     let status = crate::intel::guc_submission::scheduler_status();
     writeln!(
         out,
-        "capacity={} registered={} enabled={} destroy_requested={} pending_enable={} pending_disable={} pending_deregister={} submissions={} registrations={} deregistrations={} failures={} async_events={} async_event_errors={}",
+        "capacity={} registered={} enabled={} destroy_requested={} pending_enable={} pending_disable={} pending_deregister={} faulted={} owner_handoffs_pending={} submissions={} registrations={} deregistrations={} failures={} async_events={} async_event_errors={} memory_cat_faults={} unattributed_faults={} lifecycle_timeouts={} lifecycle_retries={} gt_faulted={}",
         status.capacity,
         status.registered,
         status.enabled,
@@ -2749,12 +2749,19 @@ fn append_intel_gpu_dump(out: &mut String) {
         status.pending_enable,
         status.pending_disable,
         status.pending_deregister,
+        status.faulted,
+        status.owner_handoffs_pending,
         status.submissions,
         status.registrations,
         status.deregistrations,
         status.failures,
         status.async_events,
         status.async_event_errors,
+        status.memory_cat_faults,
+        status.unattributed_faults,
+        status.lifecycle_timeouts,
+        status.lifecycle_retries,
+        yes_no(status.gt_faulted),
     )
     .unwrap();
     let contexts = crate::intel::guc_submission::context_status();
@@ -2764,17 +2771,22 @@ fn append_intel_gpu_dump(out: &mut String) {
         for context in contexts {
             writeln!(
                 out,
-                "context id={} token=0x{:016X} engine={:?} priority={:?} policy_enqueued={} enabled={} destroy_requested={} pending_enable={} pending_disable={} pending_deregister={} hwlrca=0x{:08X}:0x{:08X} submissions={}",
+                "context id={} token=0x{:016X} engine={:?} priority={:?} origin={:?} policy_enqueued={} enabled={} destroy_requested={} pending_enable={} pending_disable={} pending_deregister={} faulted={} owner_handoff_pending={} fault_kind={:?} cat_hw_type=0x{:08X} hwlrca=0x{:08X}:0x{:08X} submissions={}",
                 context.context_id,
                 context.token.raw(),
                 context.engine,
                 context.priority,
+                context.origin,
                 yes_no(context.policy_enqueued),
                 yes_no(context.enabled),
                 yes_no(context.destroy_requested),
                 yes_no(context.pending_enable),
                 yes_no(context.pending_disable),
                 yes_no(context.pending_deregister),
+                yes_no(context.faulted),
+                yes_no(context.owner_handoff_pending),
+                context.fault_kind,
+                context.cat_hw_type.unwrap_or(u32::MAX),
                 context.hwlrca_hi,
                 context.hwlrca_lo,
                 context.submissions

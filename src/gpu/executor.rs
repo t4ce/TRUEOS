@@ -122,6 +122,10 @@ struct ExecutorState {
     admitting: Vec<KernelClient>,
     inflight: Vec<InflightKernelSubmission>,
     waiters: Vec<FenceWaiter>,
+    /// Sticky host-side admission fence for clients whose exact physical
+    /// context has been quarantined. Cleared only by reboot/reset ownership
+    /// reconstruction.
+    lost_clients: Vec<KernelClient>,
     submissions: u64,
     completions: u64,
     failures: u64,
@@ -134,6 +138,7 @@ impl ExecutorState {
             admitting: Vec::new(),
             inflight: Vec::new(),
             waiters: Vec::new(),
+            lost_clients: Vec::new(),
             submissions: 0,
             completions: 0,
             failures: 0,
@@ -150,6 +155,7 @@ pub(crate) struct GpuExecutorStatus {
     pub(crate) admitting: usize,
     pub(crate) inflight: usize,
     pub(crate) waiters: usize,
+    pub(crate) lost_clients: usize,
 }
 
 static NEXT_WAITER_ID: AtomicU64 = AtomicU64::new(1);
@@ -204,6 +210,9 @@ pub(crate) fn reserve_kernel_context(
         return Err(VgpuError::DeviceLost);
     }
     let mut executor = EXECUTOR.lock();
+    if executor.lost_clients.contains(&client) {
+        return Err(VgpuError::DeviceLost);
+    }
     let client_inflight = executor
         .inflight
         .iter()
@@ -249,6 +258,9 @@ fn admit_kernel_context(
 ) -> Result<KernelSubmission, VgpuError> {
     {
         let mut executor = EXECUTOR.lock();
+        if executor.lost_clients.contains(&client) {
+            return Err(VgpuError::DeviceLost);
+        }
         let client_inflight = executor
             .inflight
             .iter()
@@ -270,6 +282,10 @@ fn admit_kernel_context(
     executor.admitting.retain(|admitting| *admitting != client);
     match submitted {
         Ok(point) => {
+            if executor.lost_clients.contains(&client) {
+                executor.failures = executor.failures.saturating_add(1);
+                return Err(VgpuError::DeviceLost);
+            }
             let submission = KernelSubmission { client, point };
             executor
                 .inflight
@@ -308,6 +324,39 @@ pub(crate) fn complete_kernel_submission(
     Some(retired)
 }
 
+/// Drop host-side reservations for one quarantined physical context and wake
+/// all of its fences. The vGPU broker is marked lost before this is called, so
+/// each awakened future resolves as `DeviceLost` instead of waiting for a GPU
+/// marker that can no longer be trusted.
+pub(crate) fn notify_kernel_client_lost(client: KernelClient) {
+    let wakers = {
+        let mut executor = EXECUTOR.lock();
+        if !executor.lost_clients.contains(&client) {
+            executor.lost_clients.push(client);
+        }
+        executor.preparing.retain(|entry| *entry != client);
+        executor.admitting.retain(|entry| *entry != client);
+        let inflight_before = executor.inflight.len();
+        executor
+            .inflight
+            .retain(|entry| entry.submission.client != client);
+        let failed = inflight_before.saturating_sub(executor.inflight.len()) as u64;
+        executor.failures = executor.failures.saturating_add(failed);
+
+        let mut wakers = Vec::new();
+        let mut index = 0usize;
+        while index < executor.waiters.len() {
+            if executor.waiters[index].target == FenceTarget::Kernel(client) {
+                wakers.push(executor.waiters.remove(index).waker);
+            } else {
+                index += 1;
+            }
+        }
+        wakers
+    };
+    wake_all(wakers);
+}
+
 pub(crate) fn status() -> GpuExecutorStatus {
     let executor = EXECUTOR.lock();
     GpuExecutorStatus {
@@ -318,6 +367,7 @@ pub(crate) fn status() -> GpuExecutorStatus {
         admitting: executor.admitting.len(),
         inflight: executor.inflight.len(),
         waiters: executor.waiters.len(),
+        lost_clients: executor.lost_clients.len(),
     }
 }
 

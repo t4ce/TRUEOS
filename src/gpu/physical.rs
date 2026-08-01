@@ -3,6 +3,9 @@
 //! Virtual devices use this interface without learning Intel MMIO addresses,
 //! GuC CTB details, physical pages, or native context identifiers.
 
+extern crate alloc;
+
+use alloc::vec::Vec;
 use spin::Mutex;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -111,6 +114,42 @@ pub(crate) struct PhysicalSubmission {
     pub(crate) scheduler_publish_sequence: u64,
 }
 
+/// Transport-independent physical fault report. Context handles retain their
+/// backend generation tag so upper layers cannot quarantine a reused slot.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PhysicalContextFaultKind {
+    MemoryCat,
+    ContextReset,
+    LifecycleProtocol,
+}
+
+impl PhysicalContextFaultKind {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::MemoryCat => "memory-cat",
+            Self::ContextReset => "context-reset",
+            Self::LifecycleProtocol => "lifecycle-protocol",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PhysicalGpuFault {
+    Context {
+        context: PhysicalContextHandle,
+        engine: PhysicalEngineId,
+        /// True when the context was registered through this physical vGPU
+        /// boundary; false denotes a backend-internal/direct scheduler user.
+        mediated: bool,
+        kind: PhysicalContextFaultKind,
+        /// Opaque platform-defined telemetry; never an engine selector.
+        hw_type: Option<u32>,
+    },
+    UnattributedFault {
+        events: u64,
+    },
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PhysicalBufferSlice {
     pub(crate) gpu: u64,
@@ -143,6 +182,13 @@ pub(crate) struct PhysicalSchedulerStatus {
     pub(crate) registrations: u64,
     pub(crate) deregistrations: u64,
     pub(crate) failures: u64,
+    pub(crate) faulted_contexts: usize,
+    pub(crate) owner_handoffs_pending: usize,
+    pub(crate) memory_cat_faults: u64,
+    pub(crate) unattributed_faults: u64,
+    pub(crate) lifecycle_timeouts: u64,
+    pub(crate) lifecycle_retries: u64,
+    pub(crate) gt_faulted: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -221,6 +267,14 @@ pub(crate) trait PhysicalGpuDevice: Sync {
         context: PhysicalContextHandle,
     ) -> Result<PhysicalSubmission, PhysicalGpuError>;
     fn destroy_context(&self, context: PhysicalContextHandle) -> Result<(), PhysicalGpuError>;
+    /// Return sticky fault state. The mediated pump calls this while holding
+    /// its broker lock, establishing the canonical BROKER -> backend order;
+    /// implementations must never call back into broker or executor code.
+    fn fault_snapshot(&self) -> Vec<PhysicalGpuFault>;
+    /// Acknowledge that the mediated ownership layer quarantined this exact
+    /// generation-tagged context. This must not reset hardware or release its
+    /// registration/backing.
+    fn acknowledge_context_fault(&self, context: PhysicalContextHandle) -> bool;
 }
 
 static DEVICE: Mutex<Option<&'static dyn PhysicalGpuDevice>> = Mutex::new(None);

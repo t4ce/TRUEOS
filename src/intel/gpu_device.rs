@@ -6,9 +6,10 @@ use alloc::vec::Vec;
 use spin::Mutex;
 
 use crate::gpu::physical::{
-    PhysicalAdapterInfo, PhysicalContextDescriptor, PhysicalContextHandle, PhysicalContextPriority,
-    PhysicalGpuDevice, PhysicalGpuError, PhysicalGpuVmHandle, PhysicalSceneAabbCompletion,
-    PhysicalSceneAabbRequest, PhysicalSchedulerStatus, PhysicalSubmission,
+    PhysicalAdapterInfo, PhysicalContextDescriptor, PhysicalContextFaultKind,
+    PhysicalContextHandle, PhysicalContextPriority, PhysicalGpuDevice, PhysicalGpuError,
+    PhysicalGpuFault, PhysicalGpuVmHandle, PhysicalSceneAabbCompletion, PhysicalSceneAabbRequest,
+    PhysicalSchedulerStatus, PhysicalSubmission,
 };
 
 pub(crate) static INTEL_PHYSICAL_GPU: IntelPhysicalGpuDevice = IntelPhysicalGpuDevice;
@@ -53,6 +54,13 @@ impl PhysicalGpuDevice for IntelPhysicalGpuDevice {
             registrations: status.registrations,
             deregistrations: status.deregistrations,
             failures: status.failures,
+            faulted_contexts: status.faulted,
+            owner_handoffs_pending: status.owner_handoffs_pending,
+            memory_cat_faults: status.memory_cat_faults,
+            unattributed_faults: status.unattributed_faults,
+            lifecycle_timeouts: status.lifecycle_timeouts,
+            lifecycle_retries: status.lifecycle_retries,
+            gt_faulted: status.gt_faulted,
         }
     }
 
@@ -185,7 +193,13 @@ impl PhysicalGpuDevice for IntelPhysicalGpuDevice {
         }
         let dev = crate::intel::claimed_device().ok_or(PhysicalGpuError::NotReady)?;
         crate::intel::guc_submission::INTEL_GUC_SCHEDULER
-            .register(dev, descriptor.engine, descriptor.hwlrca_lo, descriptor.hwlrca_hi, priority)
+            .register_mediated(
+                dev,
+                descriptor.engine,
+                descriptor.hwlrca_lo,
+                descriptor.hwlrca_hi,
+                priority,
+            )
             .map(|token| PhysicalContextHandle::from_raw(token.raw()))
             .map_err(|_| PhysicalGpuError::RegisterFailed)
     }
@@ -209,7 +223,58 @@ impl PhysicalGpuDevice for IntelPhysicalGpuDevice {
         let dev = crate::intel::claimed_device().ok_or(PhysicalGpuError::NotReady)?;
         crate::intel::guc_submission::INTEL_GUC_SCHEDULER
             .destroy(dev, crate::intel::guc_submission::GucContextToken::from_raw(context.raw()))
-            .map_err(|_| PhysicalGpuError::DestroyFailed)
+            .map_err(|error| match error {
+                crate::intel::guc_submission::GucSubmissionError::DisablePending
+                | crate::intel::guc_submission::GucSubmissionError::DeregisterPending
+                | crate::intel::guc_submission::GucSubmissionError::DeviceFaulted => {
+                    PhysicalGpuError::CompletionTimeout
+                }
+                _ => PhysicalGpuError::DestroyFailed,
+            })
+    }
+
+    fn fault_snapshot(&self) -> Vec<PhysicalGpuFault> {
+        let snapshot = crate::intel::guc_submission::INTEL_GUC_SCHEDULER.fault_snapshot();
+        if snapshot.gt_faulted {
+            let mut faults = Vec::with_capacity(1);
+            faults.push(PhysicalGpuFault::UnattributedFault {
+                events: snapshot.unattributed_faults,
+            });
+            return faults;
+        }
+        let mut faults = Vec::with_capacity(snapshot.contexts.len());
+        faults.extend(
+            snapshot
+                .contexts
+                .into_iter()
+                .map(|fault| PhysicalGpuFault::Context {
+                    context: PhysicalContextHandle::from_raw(fault.token.raw()),
+                    engine: fault.engine,
+                    mediated: matches!(
+                        fault.origin,
+                        crate::intel::guc_submission::GucContextOrigin::Mediated
+                    ),
+                    kind: match fault.kind {
+                        crate::intel::guc_submission::GucContextFaultKind::MemoryCat => {
+                            PhysicalContextFaultKind::MemoryCat
+                        }
+                        crate::intel::guc_submission::GucContextFaultKind::ContextReset => {
+                            PhysicalContextFaultKind::ContextReset
+                        }
+                        crate::intel::guc_submission::GucContextFaultKind::LifecycleProtocol => {
+                            PhysicalContextFaultKind::LifecycleProtocol
+                        }
+                    },
+                    hw_type: fault.hw_type,
+                }),
+        );
+        faults
+    }
+
+    fn acknowledge_context_fault(&self, context: PhysicalContextHandle) -> bool {
+        crate::intel::guc_submission::INTEL_GUC_SCHEDULER.acknowledge_fault(
+            crate::intel::guc_submission::GucContextToken::from_raw(context.raw()),
+        )
     }
 }
 
