@@ -1052,6 +1052,7 @@ const DIRECT_RCS_ENABLED: bool = true;
 const DIRECT_RCS_RING_BYTES: usize = 4096;
 const DIRECT_RCS_CONTEXT_BYTES: usize = 22 * 4096;
 const DIRECT_RCS_BATCH_BYTES: usize = 256 * 1024;
+const EXECUTION_RCS_JOB_SLOTS: usize = 2;
 // Worst case: every descriptor changes texture, so each contributes one
 // four-DWORD IDD load, one 15-DWORD walker, one two-DWORD state flush, and one
 // six-DWORD ordering PIPE_CONTROL.  The fixed allowance covers the prologue,
@@ -1182,6 +1183,16 @@ const LFM25_RCS_GPU_VA_RING_BASE: u64 = 0x0820_0000;
 const LFM25_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x0821_0000;
 const LFM25_RCS_GPU_VA_RESULT_BASE: u64 = 0x0824_0000;
 const LFM25_RCS_GPU_VA_BATCH_BASE: u64 = 0x0830_0000;
+const _: () = assert!(
+    EXECUTION_RCS_GPU_VA_RESULT_BASE
+        + (EXECUTION_RCS_JOB_SLOTS * DIRECT_RCS_RESULT_BYTES) as u64
+        <= EXECUTION_RCS_GPU_VA_BATCH_BASE
+);
+const _: () = assert!(
+    EXECUTION_RCS_GPU_VA_BATCH_BASE
+        + (EXECUTION_RCS_JOB_SLOTS * DIRECT_RCS_BATCH_BYTES) as u64
+        <= LFM25_RCS_GPU_VA_RING_BASE
+);
 const SCENE_AABB_RCS_GPU_VA_RING_BASE: u64 = 0x01F0_0000;
 const SCENE_AABB_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x01F1_0000;
 const SCENE_AABB_RCS_GPU_VA_RESULT_BASE: u64 = 0x01F4_0000;

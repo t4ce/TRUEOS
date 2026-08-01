@@ -378,37 +378,39 @@ fn submit_spirit_vfx_batch(
         None
     };
     let sprite_upload = upload_spirit_vfx_sprite_rgba8_kernel()?;
-    let state = execution_rcs_state_once(dev)?;
+    let shared_state = execution_rcs_state_once(dev)?;
     let runtime = spirit_vfx_runtime_once()?;
     let frame = SPIRIT_VFX_NEXT_FRAME.fetch_add(1, Ordering::AcqRel);
     spirit_vfx_write_control(runtime.control, frame, dst.pitch_bytes, source, control, present_fps);
 
     let forcewake_ok = direct_rcs_forcewake(dev);
-    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, shared_state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(shared_state);
     let background_ok = match background_upload {
         Some(upload) => {
-            direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
+            direct_rcs_map_ppgtt_kernel(shared_state, upload.gpu, upload.phys, upload.mapped_bytes)
         }
         None => true,
     };
     let kernels_ok = ppgtt_ok
         && background_ok
         && direct_rcs_map_ppgtt_kernel(
-            state,
+            shared_state,
             sprite_upload.gpu,
             sprite_upload.phys,
             sprite_upload.mapped_bytes,
         );
     let resources_ok = kernels_ok
         && direct_rcs_map_ppgtt_kernel(
-            state,
+            shared_state,
             runtime.control.gpu,
             runtime.control.phys,
             runtime.control.bytes,
         )
-        && direct_rcs_map_ppgtt_kernel(state, source.gpu, source.phys, source.bytes);
-    let dst_ok = resources_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
+        && direct_rcs_map_ppgtt_kernel(shared_state, source.gpu, source.phys, source.bytes);
+    let dst_ok = resources_ok
+        && direct_rcs_map_ppgtt_scanout(shared_state, dst.gpu, dst.phys, dst.bytes);
+    let state = execution_rcs_next_job_slot(shared_state)?;
     let batch_ok = dst_ok
         && direct_rcs_encode_spirit_vfx_batch(
             state,

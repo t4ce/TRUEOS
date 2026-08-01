@@ -131,8 +131,16 @@ pub(crate) fn request_launch(example_id: u8) -> LaunchRequest {
     let (instance_id, stopping_instance_id, dropped_instance_id) = {
         let mut pool = GAME_POOL.lock();
         let instance_id = pool.allocate_instance_id();
-        let active = pool.slots.iter().flatten().count();
-        let demand = active.saturating_add(pool.pending.len());
+        // Slots already in Stopping are capacity which is on its way back to
+        // the queue. Count only continuing instances here so a manual stop
+        // followed by one launch does not evict a second, healthy window.
+        let continuing = pool
+            .slots
+            .iter()
+            .flatten()
+            .filter(|record| record.state != InstanceState::Stopping)
+            .count();
+        let demand = continuing.saturating_add(pool.pending.len());
         let stopping_instance_id = if demand >= INSTANCE_CAPACITY {
             let oldest = pool
                 .slots
@@ -417,6 +425,12 @@ fn requeue_failed_spawn(context: InstanceContext) {
         return;
     }
     pool.slots[context.slot] = None;
+    // A stop can race the executor's task-pool admission failure. In that
+    // case freeing the claimed slot completes the stop; requeueing would
+    // otherwise resurrect the exact instance the caller just closed.
+    if record.state == InstanceState::Stopping {
+        return;
+    }
     if pool.pending.len() >= PENDING_CAPACITY {
         let _ = pool.pending.pop_front();
     }

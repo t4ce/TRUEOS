@@ -2591,7 +2591,6 @@ fn queue_ui4_plane_surface_flip(
             | "ui4-rgb-slot2-async"
             | "ui4-rgb-slot3-async"
             | "ui4-solara-slot2-async"
-            | "ui4-rgb-slot3-async"
             | "ui4-overlay-async"
     ) {
         return PlaneSurfaceFlipQueueResult::Inactive;

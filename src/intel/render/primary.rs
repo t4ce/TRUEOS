@@ -799,168 +799,6 @@ pub(crate) const fn resident_scene_target_dimensions() -> (usize, usize) {
     (RESIDENT_SCENE_TARGET_WIDTH, RESIDENT_SCENE_TARGET_HEIGHT)
 }
 
-/// Render an off-screen straight-RGBA frame without changing local scanout.
-pub(crate) fn capture_resident_triangle_scene_frame(
-    draws: &[ResidentSceneDraw<'_>],
-    clear_rgba: Option<[u8; 4]>,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    let (width, height) = resident_scene_target_dimensions();
-    submit_resident_triangle_scene_capture(
-        draws,
-        &[],
-        clear_rgba,
-        diagnostic_logs,
-        true,
-        false,
-        ResidentSceneRasterQuality::SingleSample,
-        width,
-        height,
-        ResidentSceneFrameOutput::Readback,
-    )
-}
-
-/// Resident-scene capture with opaque depth writes and read-only depth testing for
-/// blended meshes. Alpha classification remains an internal renderer policy;
-/// the TCP v1 wire format is unchanged.
-pub(crate) fn capture_resident_triangle_scene_frame_with_opaque_depth(
-    draws: &[ResidentSceneDraw<'_>],
-    clear_rgba: Option<[u8; 4]>,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    let (width, height) = resident_scene_target_dimensions();
-    submit_resident_triangle_scene_capture(
-        draws,
-        &[],
-        clear_rgba,
-        diagnostic_logs,
-        true,
-        true,
-        ResidentSceneRasterQuality::SingleSample,
-        width,
-        height,
-        ResidentSceneFrameOutput::Readback,
-    )
-}
-
-/// Full-size straight-RGBA Resident-scene capture with 4x color/depth coverage.
-pub(crate) fn capture_resident_triangle_scene_frame_with_opaque_depth_msaa4(
-    draws: &[ResidentSceneDraw<'_>],
-    clear_rgba: Option<[u8; 4]>,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    let (width, height) = resident_scene_target_dimensions();
-    submit_resident_triangle_scene_capture(
-        draws,
-        &[],
-        clear_rgba,
-        diagnostic_logs,
-        true,
-        true,
-        ResidentSceneRasterQuality::Multisample4x,
-        width,
-        height,
-        ResidentSceneFrameOutput::Readback,
-    )
-}
-
-/// Render an off-screen frame in UI4's native premultiplied-RGBA convention.
-///
-/// The fixed-function blend target already contains premultiplied RGB.  This
-/// entry point preserves those bytes and premultiplies the straight protocol
-/// clear color once before the GPU clear, avoiding a full-frame round trip
-/// through straight alpha when the consumer is the UI4 compositor.
-pub(crate) fn capture_resident_triangle_scene_frame_premultiplied(
-    draws: &[ResidentSceneDraw<'_>],
-    clear_rgba: Option<[u8; 4]>,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    let (width, height) = resident_scene_target_dimensions();
-    submit_resident_triangle_scene_capture(
-        draws,
-        &[],
-        clear_rgba,
-        diagnostic_logs,
-        false,
-        false,
-        ResidentSceneRasterQuality::SingleSample,
-        width,
-        height,
-        ResidentSceneFrameOutput::Readback,
-    )
-}
-
-/// Render a premultiplied UI4 frame at the consumer's actual content extent.
-///
-/// The screenshot API intentionally retains the full resident-scene target.
-/// UI4, however, must not render and CPU-read a 2560x1440 scratch image only to
-/// reduce it into a much smaller broker frame.
-pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent(
-    draws: &[ResidentSceneDraw<'_>],
-    clear_rgba: Option<[u8; 4]>,
-    width: u32,
-    height: u32,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_triangle_scene_capture(
-        draws,
-        &[],
-        clear_rgba,
-        diagnostic_logs,
-        false,
-        false,
-        ResidentSceneRasterQuality::SingleSample,
-        width as usize,
-        height as usize,
-        ResidentSceneFrameOutput::Readback,
-    )
-}
-
-/// UI4-sized Resident-scene capture using the opaque-depth visibility contract.
-pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with_opaque_depth(
-    draws: &[ResidentSceneDraw<'_>],
-    clear_rgba: Option<[u8; 4]>,
-    width: u32,
-    height: u32,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_triangle_scene_capture(
-        draws,
-        &[],
-        clear_rgba,
-        diagnostic_logs,
-        false,
-        true,
-        ResidentSceneRasterQuality::SingleSample,
-        width as usize,
-        height as usize,
-        ResidentSceneFrameOutput::Readback,
-    )
-}
-
-/// UI4-sized resident scene with native gfx12.5 4x sample coverage and a GPU
-/// resolve into the ordinary premultiplied frame buffer.
-pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4(
-    draws: &[ResidentSceneDraw<'_>],
-    clear_rgba: Option<[u8; 4]>,
-    width: u32,
-    height: u32,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_triangle_scene_capture(
-        draws,
-        &[],
-        clear_rgba,
-        diagnostic_logs,
-        false,
-        false,
-        ResidentSceneRasterQuality::Multisample4x,
-        width as usize,
-        height as usize,
-        ResidentSceneFrameOutput::Readback,
-    )
-}
-
 /// UI4-sized 4x triangle scene followed by persistent analytical font masks.
 /// Coverage is composited only after the MSAA resolve, preserving its R8 alpha
 /// steps instead of treating the mask as additional fixed-function samples.
@@ -1060,29 +898,6 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_coverage_a
     Ok(result)
 }
 
-/// Render a depth-tested retained 4x scene directly into a leased UI4 RGBA
-/// surface. This is Resident-scene's live presentation path: the final scanout release
-/// follows resolve completion, and no CPU readback or full-frame copy runs.
-pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_msaa4_to_surface(
-    draws: &[ResidentSceneDraw<'_>],
-    clear_rgba: Option<[u8; 4]>,
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_triangle_scene_capture(
-        draws,
-        &[],
-        clear_rgba,
-        diagnostic_logs,
-        false,
-        true,
-        ResidentSceneRasterQuality::Multisample4x,
-        destination.width as usize,
-        destination.height as usize,
-        ResidentSceneFrameOutput::GpuSurface(destination),
-    )
-}
-
 /// Render a depth-tested retained scene directly into the one permanent UI4
 /// linear surface used by the compositor-rewire checkpoint. There is no
 /// scratch target, resolve, or post-render compute copy on this path.
@@ -1127,28 +942,6 @@ pub(crate) fn render_resident_churn_forward_frame_direct_to_surface(
         destination.width as usize,
         destination.height as usize,
         ResidentSceneFrameOutput::DirectGpuSurface(destination),
-    )
-}
-
-/// UI4-sized depth-tested resident scene with matching 4x color and depth.
-pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with_opaque_depth_msaa4(
-    draws: &[ResidentSceneDraw<'_>],
-    clear_rgba: Option<[u8; 4]>,
-    width: u32,
-    height: u32,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_triangle_scene_capture(
-        draws,
-        &[],
-        clear_rgba,
-        diagnostic_logs,
-        false,
-        true,
-        ResidentSceneRasterQuality::Multisample4x,
-        width as usize,
-        height as usize,
-        ResidentSceneFrameOutput::Readback,
     )
 }
 
@@ -1203,7 +996,7 @@ fn stage_resident_scene_secondary(
         )
     };
     let bytes = encode_triangle_probe_batch(
-        "resident-scene-scene",
+        "resident-scene",
         batch,
         state_warm,
         draw,
@@ -1504,10 +1297,10 @@ fn submit_resident_scene_geometry_batched(
         warm,
         RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
         RESULT_SLOT_SCENE_FRAME_DWORD,
-        "resident-scene-scene",
+        "resident-scene",
     );
     if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, "resident-scene-scene");
+        recover_render_engine_after_nonretired_submit(dev, warm, "resident-scene");
     }
     let (gpu_poll_us, gpu_poll_iters) = resident_scene_last_gpu_poll_profile();
     Ok(ResidentSceneGeometryResult {
@@ -1873,7 +1666,7 @@ fn submit_resident_scene_capture_inner(
             );
             crate::log_info!(
                 target: "render";
-                "resident-scene-depth: contract enabled opaque={} blended={} skipped={} clear=fullscreen-color+depth opaque_order=front-to-back opaque_state=depth-test+write+blend-off transparent_order=back-to-front transparent_state=depth-test+write-off+straight-alpha compare=lequal hiz=off protocol=v1-unchanged\n",
+                "resident-scene-depth: contract enabled opaque={} blended={} skipped={} clear=fullscreen-color+depth opaque_order=front-to-back opaque_state=depth-test+write+blend-off transparent_order=back-to-front transparent_state=depth-test+write-off+straight-alpha compare=lequal hiz=off\n",
                 opaque,
                 blended,
                 skipped,
@@ -7684,7 +7477,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
 
     let (completion_value, completion_slot, completion_kind) = if matches!(
         submit_name,
-        "resident-scene-scene" | "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d"
+        "resident-scene" | "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d"
     ) && post_draw_sync_variant
         == PostDrawSyncVariant::HeavyAll
     {

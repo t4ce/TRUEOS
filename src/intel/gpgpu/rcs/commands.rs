@@ -418,6 +418,23 @@ fn direct_rcs_submit_batch_with_runtime(
     let old_tail_bytes = runtime.ring_tail_bytes;
     let ring_tail_bytes =
         direct_rcs_append_ring_batch_start(state, old_tail_bytes, state.gpu_va.batch);
+    let ring_entries = DIRECT_RCS_RING_BYTES / (DIRECT_RCS_BATCH_START_DWORDS * 4);
+    let submission_sequence = runtime.submissions.saturating_add(1);
+    let ring_position = (submission_sequence as usize) % ring_entries;
+    let trace_ring_boundary = runtime.submissions != 0
+        && (ring_position <= 4 || ring_position >= ring_entries.saturating_sub(4));
+    if trace_ring_boundary {
+        crate::log_info!(target: "gpgpu";
+            "intel/gpgpu: persistent-ring boundary client={} submission={} entries={} old_tail={} new_tail={} saved_head={} engine_head_snapshot={} encoder_ring_clear=0 ownership=guc-context\n",
+            client.name(),
+            submission_sequence,
+            ring_entries,
+            old_tail_bytes,
+            ring_tail_bytes,
+            direct_rcs_read_lrc_ring_head(state),
+            super::mmio_read(dev, RCS_RING_HEAD) & (DIRECT_RCS_RING_BYTES as u32 - 1),
+        );
+    }
     let Some(ring_ctl) = direct_rcs_ring_ctl_value(DIRECT_RCS_RING_BYTES) else {
         return None;
     };
@@ -446,6 +463,7 @@ fn direct_rcs_submit_batch_with_runtime(
     match crate::gpu::executor::submit_kernel_context(client, descriptor) {
         Ok(submission) => {
             runtime.ring_tail_bytes = ring_tail_bytes;
+            runtime.submissions = submission_sequence;
             if !allow_queued {
                 runtime.pending = Some(submission);
             }

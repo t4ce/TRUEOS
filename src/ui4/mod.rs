@@ -80,7 +80,7 @@ pub(crate) use frame_pool::{
     mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_frame_buffer,
     publish_gpgpu_scene_frame_buffer, publish_gpgpu_video_frame_buffer,
     publish_gpu_font_frame_buffer, publish_gpu_frame_buffer, published_rgba_view,
-    release_published_frame, retain_published_frame, wait_frame_buffer_release, writable_rgba_view,
+    release_published_frame, retain_published_frame, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_DURATION_MS,
@@ -98,7 +98,7 @@ pub(crate) use h264_encode_stream::{ui4_h264_encode_prepare_task, ui4_h264_encod
 #[cfg(feature = "trueos_h264_encode_stream")]
 pub(crate) use h264_encode_udp::ui4_h264_encode_udp_egress_task;
 pub(crate) use input_broker::{
-    Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent,
+    Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase,
     Ui4VisualRect, focused_keyboard_state, select_window_for_cursor, show_context_menu,
     software_cursor_visuals, take_owner_input_events, ui4_input_service_task, window_input_routes,
 };

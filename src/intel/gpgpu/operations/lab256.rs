@@ -380,7 +380,7 @@ fn submit_lab256_batch(
     let Some(upload) = upload_lab256_multiphase_kernel() else {
         return None;
     };
-    let Some(state) = execution_rcs_state_once(dev) else {
+    let Some(shared_state) = execution_rcs_state_once(dev) else {
         return None;
     };
     let Some(runtime_snapshot) = lab256_runtime_once() else {
@@ -399,26 +399,43 @@ fn submit_lab256_batch(
     let present_fps = present_fps.min(1_000);
     lab256_write_fixed_control(runtime_snapshot.control, frame, present_fps, pointer_xy);
     let forcewake_ok = direct_rcs_forcewake(dev);
-    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, shared_state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(shared_state);
     let kernel_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let resources_ok = kernel_ok
-        && direct_rcs_map_ppgtt_kernel(state, state_in.gpu, state_in.phys, state_in.bytes)
-        && direct_rcs_map_ppgtt_kernel(state, state_out.gpu, state_out.phys, state_out.bytes)
         && direct_rcs_map_ppgtt_kernel(
-            state,
+            shared_state,
+            upload.gpu,
+            upload.phys,
+            upload.mapped_bytes,
+        );
+    let resources_ok = kernel_ok
+        && direct_rcs_map_ppgtt_kernel(
+            shared_state,
+            state_in.gpu,
+            state_in.phys,
+            state_in.bytes,
+        )
+        && direct_rcs_map_ppgtt_kernel(
+            shared_state,
+            state_out.gpu,
+            state_out.phys,
+            state_out.bytes,
+        )
+        && direct_rcs_map_ppgtt_kernel(
+            shared_state,
             runtime_snapshot.control.gpu,
             runtime_snapshot.control.phys,
             runtime_snapshot.control.bytes,
         )
         && direct_rcs_map_ppgtt_kernel(
-            state,
+            shared_state,
             runtime_snapshot.report.gpu,
             runtime_snapshot.report.phys,
             runtime_snapshot.report.bytes,
         );
-    let dst_ok = resources_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
+    let dst_ok = resources_ok
+        && direct_rcs_map_ppgtt_scanout(shared_state, dst.gpu, dst.phys, dst.bytes);
+    let state = execution_rcs_next_job_slot(shared_state)?;
     let batch_ok = dst_ok
         && direct_rcs_encode_lab256_batch(
             state,

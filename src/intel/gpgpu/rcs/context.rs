@@ -251,6 +251,25 @@ fn direct_rcs_write_lrc_ring_tail(state: DirectRcsState, ring_tail: u32) {
     }
 }
 
+fn direct_rcs_read_lrc_ring_head(state: DirectRcsState) -> u32 {
+    const LRC_RING_HEAD_VALUE_DW: usize = 5;
+
+    let total_dwords = DIRECT_RCS_CONTEXT_BYTES / core::mem::size_of::<u32>();
+    let index = DIRECT_RCS_LRC_STATE_OFFSET_DWORDS + LRC_RING_HEAD_VALUE_DW;
+    if total_dwords <= index {
+        return u32::MAX;
+    }
+    let address = unsafe {
+        state
+            .context_virt
+            .add(index * core::mem::size_of::<u32>())
+    };
+    // The context image is GPU-written on save. Evict the CPU cache line
+    // before sampling it so wrap telemetry does not report an old CPU copy.
+    super::dma_flush(address, core::mem::size_of::<u32>());
+    unsafe { core::ptr::read_volatile(address.cast::<u32>()) }
+}
+
 fn guc_rcs_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
     let base = (context_gpu_addr as u32) & 0xFFFF_F000;
     let descriptor = base

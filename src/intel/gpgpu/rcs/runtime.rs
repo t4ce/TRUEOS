@@ -39,7 +39,7 @@ const EXECUTION_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     context: EXECUTION_RCS_GPU_VA_CONTEXT_BASE,
     batch: EXECUTION_RCS_GPU_VA_BATCH_BASE,
     result: EXECUTION_RCS_GPU_VA_RESULT_BASE,
-    job_slots: 1,
+    job_slots: EXECUTION_RCS_JOB_SLOTS,
     map_general_auxiliary: false,
 };
 
@@ -74,6 +74,7 @@ const SCENE_AABB_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
 struct DirectRcsSubmitRuntime {
     context_initialized: bool,
     ring_tail_bytes: usize,
+    submissions: u64,
     pending: Option<crate::gpu::executor::KernelSubmission>,
 }
 
@@ -82,6 +83,7 @@ impl DirectRcsSubmitRuntime {
         Self {
             context_initialized: false,
             ring_tail_bytes: 0,
+            submissions: 0,
             pending: None,
         }
     }
@@ -267,6 +269,25 @@ fn direct_rcs_job_slot(state: DirectRcsState, slot: usize) -> Option<DirectRcsSt
     selected.gpu_va.result = selected.gpu_va.result.checked_add(result_offset as u64)?;
     selected.gpu_va.job_slots = 1;
     Some(selected)
+}
+
+/// Select the command/result generation that is safe to rewrite next.
+///
+/// Execution submissions are strictly ordered and limited to one pending
+/// marker. Alternating two slots means slot A is reused only after slot B's
+/// marker: reaching B proves A returned through MI_BATCH_BUFFER_END, not just
+/// that A emitted its producer-release marker.
+fn execution_rcs_next_job_slot(state: DirectRcsState) -> Option<DirectRcsState> {
+    if state.gpu_va.job_slots != EXECUTION_RCS_JOB_SLOTS {
+        return None;
+    }
+    let runtime = EXECUTION_RCS_SUBMIT_RUNTIME.lock();
+    if runtime.pending.is_some() {
+        return None;
+    }
+    let slot = (runtime.submissions as usize) % EXECUTION_RCS_JOB_SLOTS;
+    drop(runtime);
+    direct_rcs_job_slot(state, slot)
 }
 
 fn direct_rcs_map_state(dev: super::Dev, state: DirectRcsState) -> bool {

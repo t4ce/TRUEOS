@@ -122,7 +122,7 @@ const GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
 const GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
 const GPU_VA_DRAW_STATE_BASE: u64 = 0x0086_0000;
 // One bounded state slot per resident-scene draw plus the full-screen clear. The
-// scene service owns this mapping for its lifetime; probe state remains at the
+// resident renderer owns this mapping for its lifetime; probe state remains at the
 // historical warm-state VA above.
 const GPU_VA_RESIDENT_SCENE_STATE_BASE: u64 = 0x3000_0000;
 const RESIDENT_SCENE_MAX_DRAWS: usize = 100;
