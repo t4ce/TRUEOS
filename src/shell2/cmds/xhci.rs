@@ -3,7 +3,10 @@ use alloc::format;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, with_timeout};
 
-use super::super::{ShellBackend2, print_shell_line};
+use super::super::{
+    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
+    print_shell_line,
+};
 use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::usb2::lab::{LabCommand, PendingLabRequest};
 
@@ -31,7 +34,7 @@ pub(crate) fn try_parse(
         }
     };
     print_shell_line(io, format!("xhci: queued run={}", pending.run_id).as_str());
-    match xhci_command_task(io, pending) {
+    match xhci_command_task(matrix_target_for_backend(io), pending) {
         Ok(token) => spawner.spawn(token),
         Err(_) => print_shell_line(io, "xhci: task spawn failed"),
     }
@@ -200,24 +203,24 @@ fn parse_u64(raw: &str) -> Result<u64, &'static str> {
 }
 
 #[embassy_executor::task(pool_size = 2)]
-async fn xhci_command_task(io: &'static dyn ShellBackend2, pending: PendingLabRequest) {
+async fn xhci_command_task(output_target: MatrixTarget, pending: PendingLabRequest) {
     let run_id = pending.run_id;
     match with_timeout(Duration::from_secs(COMMAND_TIMEOUT_SECS), pending.wait()).await {
         Ok(Ok(report)) => {
             for line in report.lines {
-                print_shell_line(io, line.as_str());
+                print_matrix_target_line(&output_target, line.as_str());
             }
-            print_shell_line(
-                io,
+            print_matrix_target_line(
+                &output_target,
                 format!("xhci: complete run={} status=ok", report.run_id).as_str(),
             );
         }
-        Ok(Err(reason)) => print_shell_line(
-            io,
+        Ok(Err(reason)) => print_matrix_target_line(
+            &output_target,
             format!("xhci: complete run={run_id} status=failed reason={reason}").as_str(),
         ),
-        Err(_) => print_shell_line(
-            io,
+        Err(_) => print_matrix_target_line(
+            &output_target,
             format!("xhci: complete run={run_id} status=timeout timeout_s={COMMAND_TIMEOUT_SECS}")
                 .as_str(),
         ),

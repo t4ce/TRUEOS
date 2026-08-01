@@ -37,7 +37,7 @@ use x86_64::registers::model_specific::Msr;
 use x86_64::registers::rflags;
 use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
-use crate::shell2::{MatrixTarget, ShellBackend2};
+use crate::shell2::MatrixTarget;
 
 use guest_work::{VmLaneProfile, pick_vm_hull_lane};
 use memory::*;
@@ -696,6 +696,13 @@ fn vm_slot(vm_id: u8) -> Option<&'static TrueosVmId> {
     trueos_vm_ids.get(vm_id as usize)
 }
 
+/// Current incarnation of a VM id. Subsystems that retain per-Blueprint state
+/// must pair this with the small numeric id so a later VM reuse cannot inherit
+/// an older owner's lease.
+pub(crate) fn vm_run_generation(vm_id: u8) -> Option<u64> {
+    vm_slot(vm_id).map(|vm| vm.run_generation.load(Ordering::Acquire))
+}
+
 fn lifecycle_now_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
     embassy_time_driver::now().saturating_mul(1000) / hz
@@ -1260,16 +1267,14 @@ pub fn status() -> HvStatus {
 pub fn start(
     vm_id: u8,
     spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
     stack_mb: Option<usize>,
 ) -> Result<(), StartError> {
-    start_with_mode(vm_id, spawner, io, VmBootMode::Hull, stack_mb, None)
+    start_with_mode(vm_id, spawner, VmBootMode::Hull, stack_mb, None)
 }
 
 pub fn start_blueprint_app_vm(
     vm_id: u8,
     spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
     archive: AllocString,
     module_bytes: AllocVec<u8>,
     app_args: AllocVec<AllocString>,
@@ -1280,7 +1285,6 @@ pub fn start_blueprint_app_vm(
     start_with_mode(
         vm_id,
         spawner,
-        io,
         VmBootMode::Hull,
         None,
         Some(BlueprintPendingLaunchState {
@@ -1297,7 +1301,6 @@ pub fn start_blueprint_app_vm(
 fn start_with_mode(
     vm_id: u8,
     spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
     boot_mode: VmBootMode,
     stack_mb: Option<usize>,
     pending_blueprint: Option<BlueprintPendingLaunchState>,
@@ -1418,7 +1421,6 @@ fn start_with_mode(
     }
 
     let _ = spawner;
-    let _ = io;
     let profile = VmLaneProfile::vm_default();
     let mut target = match pick_vm_hull_lane() {
         Ok(target) => target,
@@ -3672,9 +3674,9 @@ pub(crate) fn blueprint_process_context(vm_id: u8) -> Option<BlueprintProcessCon
 }
 
 fn clear_blueprint_process_context(vm_id: u8) {
-    // Frontend ownership is independent of the Blueprint's Matrix console
-    // attachment, so always retire it when the owning VM leaves.
-    let _ = crate::shell2::backends::net_tcp::release_net_shell_frontend(vm_id);
+    // Explicit detach supports reattachment while the VM is alive. VM teardown
+    // closes the generation and returns its interpreter worker to the pool.
+    let _ = crate::shell2::backends::session_pool::close_owner(vm_id);
     if let Some(log_slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
         let _ = log_slot.lock().take();
     }

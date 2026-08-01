@@ -339,6 +339,14 @@ pub(crate) fn net_shell_direct_readable_len(vm_id: u8) -> usize {
 }
 
 impl ShellIo2 for NetTcpShellBackend {
+    fn output_mask(&self) -> crate::shell2::OutputMask {
+        crate::shell2::OUTPUT_NET_TCP_MASK
+    }
+
+    fn transport_scope(&self) -> u8 {
+        crate::shell2::TRANSPORT_NET_TCP_SCOPE
+    }
+
     #[inline]
     fn raw_write_str(&self, s: &str) {
         crate::shell2::crlf::write_bytes_crlf(s.as_bytes(), &NET_TCP_LAST_WAS_CR, |chunk| {

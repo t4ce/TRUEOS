@@ -11,7 +11,7 @@ use embassy_executor::Spawner;
 
 use super::super::{
     MatrixTarget, ShellBackend2, line_width_for_backend, matrix_target_for_backend,
-    print_shell_line, set_matrix_target_active,
+    print_matrix_target_line, print_shell_line, set_matrix_target_active,
 };
 use super::tlb_helper::TlbTable;
 use crate::shell2::shell2_cmd::ParseOutcome;
@@ -865,7 +865,7 @@ fn emit_table_header(io: &'static dyn ShellBackend2, cols: &[Column]) {
     emit_table_row(io, cols, &sep_refs);
 }
 
-fn emit_table_row(io: &'static dyn ShellBackend2, cols: &[Column], cells: &[&str]) {
+fn table_row_text(cols: &[Column], cells: &[&str]) -> String {
     let mut out = String::new();
     for (index, col) in cols.iter().enumerate() {
         if index > 0 {
@@ -873,7 +873,29 @@ fn emit_table_row(io: &'static dyn ShellBackend2, cols: &[Column], cells: &[&str
         }
         out.push_str(truncate_cell(cells.get(index).copied().unwrap_or(""), col.width).as_str());
     }
-    line(io, out.as_str());
+    out
+}
+
+fn emit_table_row(io: &'static dyn ShellBackend2, cols: &[Column], cells: &[&str]) {
+    line(io, table_row_text(cols, cells).as_str());
+}
+
+fn emit_table_header_to_target(target: &MatrixTarget, cols: &[Column]) {
+    emit_table_row_to_target(
+        target,
+        cols,
+        &cols.iter().map(|col| col.header).collect::<Vec<_>>(),
+    );
+    let sep = cols
+        .iter()
+        .map(|col| "-".repeat(col.width))
+        .collect::<Vec<_>>();
+    let sep_refs = sep.iter().map(String::as_str).collect::<Vec<_>>();
+    emit_table_row_to_target(target, cols, &sep_refs);
+}
+
+fn emit_table_row_to_target(target: &MatrixTarget, cols: &[Column], cells: &[&str]) {
+    print_matrix_target_line(target, table_row_text(cols, cells).as_str());
 }
 
 fn usb_port_speed_text(portsc: u32) -> String {
@@ -1093,7 +1115,7 @@ fn print_menu(io: &'static dyn ShellBackend2) {
 }
 
 #[embassy_executor::task(pool_size = 2)]
-async fn cmd_tlb_pci_task(target: MatrixTarget, io: &'static dyn ShellBackend2) {
+async fn cmd_tlb_pci_task(target: MatrixTarget, shell_width: usize) {
     ensure_pci_devices_enumerated();
 
     let db = if crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
@@ -1102,11 +1124,10 @@ async fn cmd_tlb_pci_task(target: MatrixTarget, io: &'static dyn ShellBackend2) 
             .ok()
             .flatten()
     } else {
-        line(io, "tlb pci: no filesystem readiness");
+        print_matrix_target_line(&target, "tlb pci: no filesystem readiness");
         None
     };
 
-    let shell_width = line_width_for_backend(io);
     let fixed_width = 10 + 6 + 6 + 4 + 18;
     let separator_width = 2 * 5;
     let min_name_width = 16usize.max("Name".chars().count());
@@ -1140,11 +1161,11 @@ async fn cmd_tlb_pci_task(target: MatrixTarget, io: &'static dyn ShellBackend2) 
             width: 18,
         },
     ];
-    emit_table_header(io, &cols);
+    emit_table_header_to_target(&target, &cols);
 
     for row in pci_device_rows(db.as_deref()) {
-        emit_table_row(
-            io,
+        emit_table_row_to_target(
+            &target,
             &cols,
             &[
                 &row.name,
@@ -1163,8 +1184,9 @@ fn cmd_tlb_pci(spawner: &Spawner, io: &'static dyn ShellBackend2) {
     // `pci.ids` lives on TRUEOSFS, so the complete table command must run as a
     // native BSP future. Never restore the former blocking pciids loader here.
     let target = matrix_target_for_backend(io);
+    let shell_width = line_width_for_backend(io);
     set_matrix_target_active(&target, true);
-    match cmd_tlb_pci_task(target.clone(), io) {
+    match cmd_tlb_pci_task(target.clone(), shell_width) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             set_matrix_target_active(&target, false);
@@ -3516,16 +3538,22 @@ pub(crate) async fn write_dump_bytes_to_default_path(
 }
 
 #[embassy_executor::task(pool_size = 2)]
-async fn cmd_tlb_dump_task(target: MatrixTarget, io: &'static dyn ShellBackend2) {
+async fn cmd_tlb_dump_task(target: MatrixTarget) {
     let out = build_dump_text().await;
-    line(io, alloc::format!("Writing {} bytes to {}...", out.len(), DUMP_FILE_PATH).as_str());
+    print_matrix_target_line(
+        &target,
+        alloc::format!("Writing {} bytes to {}...", out.len(), DUMP_FILE_PATH).as_str(),
+    );
 
     let out_bytes = out.into_bytes();
     let result = write_dump_bytes_to_default_path(&out_bytes).await;
 
     match result {
-        Ok(()) => line(io, "Success."),
-        Err(err) => line(io, alloc::format!("Error writing file: {:?}", err).as_str()),
+        Ok(()) => print_matrix_target_line(&target, "Success."),
+        Err(err) => print_matrix_target_line(
+            &target,
+            alloc::format!("Error writing file: {:?}", err).as_str(),
+        ),
     }
     set_matrix_target_active(&target, false);
 }
@@ -3533,7 +3561,7 @@ async fn cmd_tlb_dump_task(target: MatrixTarget, io: &'static dyn ShellBackend2)
 fn cmd_tlb_dump(spawner: &Spawner, io: &'static dyn ShellBackend2) {
     let target = matrix_target_for_backend(io);
     set_matrix_target_active(&target, true);
-    match cmd_tlb_dump_task(target.clone(), io) {
+    match cmd_tlb_dump_task(target.clone()) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             set_matrix_target_active(&target, false);

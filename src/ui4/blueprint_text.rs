@@ -62,6 +62,7 @@ const MAX_TEXT_ROW_BYTES: usize = 1_024;
 const MAX_NATIVE_FONT_SIZES: usize = 32;
 const MAX_PENDING_POINTER_EVENTS: usize = 256;
 const MAX_PENDING_PAN_EVENTS: usize = 256;
+const MAX_PENDING_KEYBOARD_EVENTS: usize = 256;
 const MAX_INPUT_ROUTES: usize = 32;
 const RETAINED_TEXT_MASK_BATCH_CAPACITY: usize = 64;
 const TEXT_ROWS_WIRE_HEADER_BYTES: usize = 16;
@@ -368,6 +369,8 @@ struct BlueprintSceneSurface {
     pending_pointer_events: VecDeque<TrueosUi4PointerEvent>,
     pending_pan_events: VecDeque<TrueosUi4PanEvent>,
     pending_resize_events: VecDeque<TrueosUi4ResizeEvent>,
+    pending_keyboard_events: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
+    pending_keyboard_burst: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
     retained_text_layers: Vec<BlueprintRetainedTextLayer>,
     retained_text_cursor: usize,
     retained_text_rendered: bool,
@@ -775,6 +778,8 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
                 pending_pointer_events: VecDeque::new(),
                 pending_pan_events: VecDeque::new(),
                 pending_resize_events: VecDeque::new(),
+                pending_keyboard_events: VecDeque::new(),
+                pending_keyboard_burst: VecDeque::new(),
                 retained_text_layers: Vec::new(),
                 retained_text_cursor: 0,
                 retained_text_rendered: false,
@@ -813,6 +818,8 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         pending_pointer_events: VecDeque::new(),
         pending_pan_events: VecDeque::new(),
         pending_resize_events: VecDeque::new(),
+        pending_keyboard_events: VecDeque::new(),
+        pending_keyboard_burst: VecDeque::new(),
         retained_text_layers: Vec::new(),
         retained_text_cursor: 0,
         retained_text_rendered: false,
@@ -988,6 +995,43 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_pointer_event_take(
         return ERROR_NOT_FOUND;
     };
     let Some(event) = surface.pending_pointer_events.pop_front() else {
+        return 1;
+    };
+    // SAFETY: the non-null output points to one writable ABI event.
+    unsafe { out.write(event) };
+    0
+}
+
+/// Take one keyboard event after UI4 has routed it to this exact Blueprint
+/// window. A return value of one means the queue is currently empty; zero
+/// writes one event. Text bursts are staged until their END marker arrives, so
+/// an incomplete paste is never exposed as a complete window input operation.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_keyboard_event_take(
+    window_id: u32,
+    out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent,
+) -> i32 {
+    if out.is_null() {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_keyboard_event_take(window_id, out) };
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    {
+        let mut surfaces = SURFACES.lock();
+        if surface_mut(&mut surfaces, owner, window_id).is_none() {
+            return ERROR_NOT_FOUND;
+        }
+    }
+
+    route_owner_input_events(owner);
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    let Some(event) = surface.pending_keyboard_events.pop_front() else {
         return 1;
     };
     // SAFETY: the non-null output points to one writable ABI event.
@@ -1250,10 +1294,9 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_input_routes(
     routes.len() as isize
 }
 
-/// Drain one VM owner's broker queue once and preserve every pointer, pan, and
-/// resize event for its exact surface. Keyboard held state remains in the input
-/// broker; draining its cooked events here prevents an interactive Blueprint
-/// from filling the owner queue while it polls the selected-frame contracts.
+/// Drain one VM owner's broker queue once and preserve every pointer, pan,
+/// resize, and keyboard event for its exact surface. Keyboard held state
+/// remains available separately through the input broker snapshot contract.
 fn route_owner_input_events(owner: WindowOwner) {
     let input_events = take_owner_input_events(owner);
     if input_events.is_empty() {
@@ -1335,8 +1378,79 @@ fn route_owner_input_events(owner: WindowOwner) {
                         height: event.height,
                     });
             }
+            Ui4InputEvent::Keyboard(event) => {
+                let Some(surface) = surface_mut(&mut surfaces, owner, event.window.raw()) else {
+                    continue;
+                };
+                enqueue_window_keyboard_event(
+                    &mut surface.pending_keyboard_events,
+                    &mut surface.pending_keyboard_burst,
+                    event.event,
+                );
+            }
             _ => {}
         }
+    }
+}
+
+fn enqueue_window_keyboard_event(
+    pending: &mut VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
+    burst: &mut VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
+    event: crate::r::keyboard::TrueosKeyboardOutputEvent,
+) {
+    let burst_member = event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST != 0;
+    if !burst_member {
+        // A non-burst transition after a truncated burst proves that END was
+        // lost. Discard the unpublished prefix, then preserve the transition.
+        burst.clear();
+        if pending.len() < MAX_PENDING_KEYBOARD_EVENTS {
+            pending.push_back(event);
+        }
+        return;
+    }
+
+    let burst_start = event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START != 0;
+    let burst_end = event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END != 0;
+
+    if burst_start {
+        // A newer START also terminates any unpublished, incomplete prefix.
+        burst.clear();
+        if event.device_seq == 0
+            || event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_SYNTHETIC == 0
+        {
+            return;
+        }
+    } else {
+        let Some(previous) = burst.back().copied() else {
+            // This is a tail whose START was lost upstream.
+            return;
+        };
+        let same_burst = event.device_seq == previous.device_seq
+            && event.controller_id == previous.controller_id
+            && event.slot_id == previous.slot_id
+            && event.ep_target == previous.ep_target
+            && event.seq == previous.seq.wrapping_add(1);
+        if !same_burst {
+            burst.clear();
+            return;
+        }
+    }
+
+    if burst.len() >= MAX_PENDING_KEYBOARD_EVENTS {
+        burst.clear();
+        return;
+    }
+    burst.push_back(event);
+    if !burst_end {
+        return;
+    }
+
+    // Publish the burst to the window queue only when every contiguous scalar
+    // including END fits. Otherwise discard the whole operation atomically.
+    if pending.len().saturating_add(burst.len()) <= MAX_PENDING_KEYBOARD_EVENTS {
+        pending.append(burst);
+    } else {
+        burst.clear();
     }
 }
 
@@ -3342,6 +3456,30 @@ unsafe fn guest_pointer_event_take(window_id: u32, out: *mut TrueosUi4PointerEve
     0
 }
 
+unsafe fn guest_keyboard_event_take(
+    window_id: u32,
+    out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent,
+) -> i32 {
+    let mut response = [0u8; core::mem::size_of::<crate::r::keyboard::TrueosKeyboardOutputEvent>()];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE,
+        window_id as u64,
+        0,
+        &[],
+        &mut response,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4;
+    }
+    let result = data as i64 as i32;
+    if result != 0 {
+        return result;
+    }
+    let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
+    unsafe { out.write(event) };
+    0
+}
+
 unsafe fn guest_pan_event_take(window_id: u32, out: *mut TrueosUi4PanEvent) -> i32 {
     let mut response = [0u8; core::mem::size_of::<TrueosUi4PanEvent>()];
     let (status, data) = trueos_vm::vmcall::call_with_payload(
@@ -5037,6 +5175,65 @@ const fn mul_div_255(left: u8, right: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn keyboard_event(
+        seq: u32,
+        burst_id: u32,
+        flags: u32,
+    ) -> crate::r::keyboard::TrueosKeyboardOutputEvent {
+        crate::r::keyboard::TrueosKeyboardOutputEvent {
+            seq,
+            device_seq: burst_id,
+            slot_id: 7,
+            flags: flags
+                | crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_SYNTHETIC
+                | crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST,
+            ..crate::r::keyboard::TrueosKeyboardOutputEvent::default()
+        }
+    }
+
+    #[test]
+    fn keyboard_text_burst_is_hidden_until_complete() {
+        let mut pending = VecDeque::new();
+        let mut burst = VecDeque::new();
+
+        enqueue_window_keyboard_event(
+            &mut pending,
+            &mut burst,
+            keyboard_event(10, 3, crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START),
+        );
+        enqueue_window_keyboard_event(&mut pending, &mut burst, keyboard_event(11, 3, 0));
+        assert!(pending.is_empty());
+        assert_eq!(burst.len(), 2);
+
+        enqueue_window_keyboard_event(
+            &mut pending,
+            &mut burst,
+            keyboard_event(12, 3, crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END),
+        );
+        assert_eq!(pending.len(), 3);
+        assert!(burst.is_empty());
+    }
+
+    #[test]
+    fn keyboard_text_burst_with_a_sequence_gap_is_discarded() {
+        let mut pending = VecDeque::new();
+        let mut burst = VecDeque::new();
+
+        enqueue_window_keyboard_event(
+            &mut pending,
+            &mut burst,
+            keyboard_event(20, 4, crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START),
+        );
+        enqueue_window_keyboard_event(
+            &mut pending,
+            &mut burst,
+            keyboard_event(22, 4, crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END),
+        );
+
+        assert!(pending.is_empty());
+        assert!(burst.is_empty());
+    }
 
     fn retained_description(y: f32) -> BlueprintRetainedTextDescription {
         BlueprintRetainedTextDescription {

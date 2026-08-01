@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 use spin::Mutex;
 
 use super::super::{
-    MatrixTarget, NET_TCP_SHELL_BACKEND, matrix_target_interrupted,
-    print_matrix_target_system_line, release_matrix_target_vm_reservation,
+    MatrixTarget, matrix_target_interrupted, print_matrix_target_system_line,
+    release_matrix_target_vm_reservation,
     reserve_matrix_target_for_vm_slot_selected, set_matrix_target_active,
     set_matrix_target_app_label,
 };
@@ -76,7 +76,7 @@ fn app_label_for_instance(archive: &str, instance: &crate::hv::BlueprintInstance
 
 fn reserve_target_for_archive(target: &MatrixTarget, archive: &str) -> MatrixTarget {
     let preferred = preferred_slot_for_archive(archive);
-    reserve_matrix_target_for_vm_slot_selected(target.output_mask, preferred.as_str())
+    reserve_matrix_target_for_vm_slot_selected(target, preferred.as_str())
 }
 
 #[derive(Clone)]
@@ -958,7 +958,6 @@ fn start_blueprint_launch(
     match crate::hv::start_blueprint_app_vm(
         vm_id,
         spawner,
-        &NET_TCP_SHELL_BACKEND,
         request.archive.clone(),
         request.module_bytes.clone(),
         request.app_args.clone(),

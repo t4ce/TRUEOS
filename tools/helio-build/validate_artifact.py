@@ -455,7 +455,9 @@ def validate_churn_forward(sections: dict[str, tuple[int, bytes]]) -> None:
         if (
             stage != expected_stage or simd != 8 or not code_size
             or code_size % 4 or code_offset != 0 or alignment != 64
-            or ksp_offset != 0 or grf_start != 2 or grf_used != 128
+            or ksp_offset != 0
+            or grf_start != (2 if expected_stage == 1 else 4)
+            or grf_used != 128
             or max_threads != 64 or samplers or push_bytes or reserved
         ):
             fail(f"invalid churn-forward stage metadata for {expected_name}")

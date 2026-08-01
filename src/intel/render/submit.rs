@@ -247,8 +247,8 @@ fn submit_warm_render_batch(
             // QWord release cookie. Reading fourteen unrelated diagnostic
             // slots on every spin multiplied CPU/memory traffic without
             // strengthening the ownership proof.
-            let release_lo = read_result_dword(warm, RESULT_SLOT_SCENE_FRAME_DWORD);
-            let release_hi = read_result_dword(warm, RESULT_SLOT_SCENE_FRAME_DWORD + 1);
+            let (release_lo, release_hi) =
+                read_result_qword_coherent(warm, RESULT_SLOT_SCENE_FRAME_DWORD);
             if release_lo == expected_result
                 && release_hi == RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI
             {
@@ -366,6 +366,16 @@ fn submit_warm_render_batch(
         }
         core::hint::spin_loop();
         iter += 1;
+    }
+    if resident_scene_submit && !completed {
+        // Do one final coherent sample at the elapsed-time boundary. The GPU
+        // may publish the cookie between the loop's last sample and its
+        // timeout check; that boundary must not turn a completed scene into a
+        // failed Render timeline point.
+        let (release_lo, release_hi) =
+            read_result_qword_coherent(warm, RESULT_SLOT_SCENE_FRAME_DWORD);
+        completed = release_lo == expected_result
+            && release_hi == RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI;
     }
     let poll_elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(poll_started_ns) / 1_000;
     if resident_scene_submit {
@@ -675,18 +685,9 @@ fn submit_warm_render_batch(
             crate::log!(
                 "{} retained-transform-frontier prologue=0x{:08X} prepare=0x{:08X} transform=0x{:08X} handoff3d=0x{:08X} expected=0x{:08X}/0x{:08X}\n",
                 submit_name,
-                read_result_dword(
-                    warm,
-                    crate::intel::gpgpu::GPGPU_HELIO_DIAGNOSTIC_SLOT_PROLOGUE,
-                ),
-                read_result_dword(
-                    warm,
-                    crate::intel::gpgpu::GPGPU_HELIO_DIAGNOSTIC_SLOT_PREPARE,
-                ),
-                read_result_dword(
-                    warm,
-                    crate::intel::gpgpu::GPGPU_HELIO_DIAGNOSTIC_SLOT_TRANSFORM,
-                ),
+                read_result_dword(warm, crate::intel::gpgpu::GPGPU_HELIO_DIAGNOSTIC_SLOT_PROLOGUE,),
+                read_result_dword(warm, crate::intel::gpgpu::GPGPU_HELIO_DIAGNOSTIC_SLOT_PREPARE,),
+                read_result_dword(warm, crate::intel::gpgpu::GPGPU_HELIO_DIAGNOSTIC_SLOT_TRANSFORM,),
                 read_result_dword(
                     warm,
                     crate::intel::gpgpu::GPGPU_HELIO_DIAGNOSTIC_SLOT_3D_HANDOFF,
@@ -2040,11 +2041,27 @@ fn read_result_dword(warm: RenderWarmState, index: usize) -> u32 {
     unsafe { core::ptr::read_volatile((warm.result_virt as *const u32).add(index)) }
 }
 
+/// Read one GPU-authored QWord release cookie after evicting its CPU cache
+/// line. A volatile load orders the compiler, but it does not make a cached
+/// CPU copy coherent with a PIPE_CONTROL post-sync write.
+fn read_result_qword_coherent(warm: RenderWarmState, index: usize) -> (u32, u32) {
+    let offset = index.saturating_mul(core::mem::size_of::<u32>());
+    if index & 1 != 0
+        || warm.result_virt.is_null()
+        || offset.saturating_add(core::mem::size_of::<u64>()) > warm.result_len
+    {
+        return (0, 0);
+    }
+    let value = unsafe { warm.result_virt.add(offset) };
+    crate::intel::dma_flush(value, core::mem::size_of::<u64>());
+    let low = unsafe { core::ptr::read_volatile(value.cast::<u32>()) };
+    let high =
+        unsafe { core::ptr::read_volatile(value.add(core::mem::size_of::<u32>()).cast::<u32>()) };
+    (low, high)
+}
+
 fn is_gpgpu_submit_name(name: &str) -> bool {
-    matches!(
-        name,
-        "gpgpu-preflight" | "gpgpu-compute-walker" | "helio-churn-forward"
-    )
+    matches!(name, "gpgpu-preflight" | "gpgpu-compute-walker" | "helio-churn-forward")
 }
 
 fn is_font_vf_vue_clip_submit_name(name: &str) -> bool {
@@ -2074,10 +2091,7 @@ fn seed_result_debug_slots(warm: RenderWarmState) {
 /// one context-isolation request for every ambiguous or non-retired publish.
 /// Callers must remain diagnostic-only: a second disable request races GuC's
 /// first transition and obscures which containment event belongs to the fault.
-fn record_render_engine_after_nonretired_submit(
-    dev: crate::intel::Dev,
-    submit_name: &'static str,
-) {
+fn record_render_engine_after_nonretired_submit(dev: crate::intel::Dev, submit_name: &'static str) {
     let el_pre = crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO);
     let mi_mode_pre = crate::intel::mmio_read(dev, RCS_RING_MI_MODE);
     let acthd_pre = crate::intel::mmio_read(dev, RCS_RING_ACTHD);
@@ -2093,10 +2107,7 @@ fn record_render_engine_after_nonretired_submit(
 /// Diagnostic spectra deliberately stop Render between completed variants so
 /// that one probe cannot carry live context state into the next experiment.
 /// Keep that policy explicit and separate from failed-submit containment.
-fn isolate_render_context_after_completed_probe(
-    dev: crate::intel::Dev,
-    submit_name: &'static str,
-) {
+fn isolate_render_context_after_completed_probe(dev: crate::intel::Dev, submit_name: &'static str) {
     let el_pre = crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO);
     let mi_mode_pre = crate::intel::mmio_read(dev, RCS_RING_MI_MODE);
     let acthd_pre = crate::intel::mmio_read(dev, RCS_RING_ACTHD);

@@ -6,7 +6,10 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use embassy_executor::Spawner;
 use spin::Mutex;
 
-use super::super::{ShellBackend2, print_shell_line};
+use super::super::{
+    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
+    print_shell_line,
+};
 use crate::intel::gpu_font::{GpuFontFace, GpuFontRgba};
 use crate::r::font_kernel_service::{
     FONT_STAMP_MAX_EXTENT, FONT_STAMP_MAX_GLYPHS, FontStampFit, FontStampLayer, FontStampRequest,
@@ -1129,7 +1132,7 @@ fn queue_font_service_stamp(spawner: &Spawner, io: &'static dyn ShellBackend2, i
         }
     };
     let ticket = pending.ticket().raw();
-    match cpp_font_stamp_task(io, pending) {
+    match cpp_font_stamp_task(matrix_target_for_backend(io), pending) {
         Ok(task) => {
             spawner.spawn(task);
             print_shell_line(
@@ -1216,7 +1219,7 @@ fn queue_font_service_go(io: &'static dyn ShellBackend2) {
 
 #[embassy_executor::task(pool_size = 32)]
 async fn cpp_font_stamp_task(
-    io: &'static dyn ShellBackend2,
+    output_target: MatrixTarget,
     pending: crate::r::font_kernel_service::PendingFontStamp,
 ) {
     let ticket = pending.ticket().raw();
@@ -1232,8 +1235,8 @@ async fn cpp_font_stamp_task(
                 outputs.push_back(buffer);
                 outputs.len()
             };
-            print_shell_line(
-                io,
+            print_matrix_target_line(
+                &output_target,
                 alloc::format!(
                     "cpp font stamp complete: ticket={} ok=1 handle={} gpu=0x{:X} extent={}x{} pitch={} logical_origin={},{} glyphs={} submits={} walkers={} retained_outputs={} rgba=premultiplied-rgba8 alpha=coverage-multiplied source_over=1 cpu_readback=0 runtime_compiler=0",
                     ticket,
@@ -1254,8 +1257,8 @@ async fn cpp_font_stamp_task(
         }
         Err(error) => {
             release_font_output_reservation(1);
-            print_shell_line(
-                io,
+            print_matrix_target_line(
+                &output_target,
                 alloc::format!("cpp font stamp complete: ticket={} ok=0 reason={error:?}", ticket,)
                     .as_str(),
             );

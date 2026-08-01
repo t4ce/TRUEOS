@@ -18,6 +18,14 @@ impl TerminalHandoffOwner {
 }
 
 pub(crate) trait ShellIo2: Sync {
+    fn output_mask(&self) -> super::OutputMask {
+        0
+    }
+
+    fn transport_scope(&self) -> u8 {
+        0
+    }
+
     // Raw terminal/backend writes bypass the shell transcript. Normal command
     // output should go through `print_shell_line` or a command session target.
     fn raw_write_str(&self, s: &str);

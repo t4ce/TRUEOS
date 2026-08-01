@@ -285,6 +285,7 @@ static RESIDENT_SCENE_BATCH_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_FORWARD_GPU_NATIVE_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_FORWARD_GPU_EXPANDED_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_FORWARD_CPU_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
+static RESIDENT_CHURN_NATIVE_FLUSHED_PACKET_LOGGED: AtomicBool = AtomicBool::new(false);
 
 // The entry packet sits before either opening PIPE_CONTROL. Slot 14 proves
 // secondary fetch; slot 15 proves both opening controls plus PIPELINE_SELECT.
@@ -356,6 +357,82 @@ fn resident_secondary_marker(base: u32, secondary_index: usize) -> Result<u32, &
     }
     base.checked_add(index << 8)
         .ok_or("scene-frame-secondary-index")
+}
+
+fn log_resident_churn_flushed_binding_packets(
+    batch: &[u32],
+    bytes: usize,
+    batch_gpu: u64,
+    secondary_index: usize,
+) {
+    // ACTHD 0x0180D614 resolves into retained secondary 3.  Each secondary
+    // owns a different state slot, so sample that exact command stream rather
+    // than consuming the one-shot on the preceding (empty) native group.
+    if secondary_index != 3 {
+        return;
+    }
+    if RESIDENT_CHURN_NATIVE_FLUSHED_PACKET_LOGGED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let dwords = bytes
+        .checked_div(core::mem::size_of::<u32>())
+        .unwrap_or(0)
+        .min(batch.len());
+    let submitted = &batch[..dwords];
+    let sba = submitted
+        .iter()
+        .position(|dw| *dw == STATE_BASE_ADDRESS_CMD);
+    let pool = submitted
+        .iter()
+        .position(|dw| *dw == CMD_3DSTATE_BINDING_TABLE_POOL_ALLOC);
+    let vs_count = submitted
+        .iter()
+        .filter(|dw| **dw == CMD_3DSTATE_BINDING_TABLE_POINTERS_VS)
+        .count();
+    let vs = submitted
+        .iter()
+        .rposition(|dw| *dw == CMD_3DSTATE_BINDING_TABLE_POINTERS_VS);
+    crate::log_info!(
+        target: "gpgpu";
+        "helio-churn: flushed-native-secondary secondary={} batch_gpu=0x{:X} bytes=0x{:X} sba_dw={:?} pool_dw={:?} vs_bt_dw={:?} vs_bt_count={}\n",
+        secondary_index,
+        batch_gpu,
+        bytes,
+        sba,
+        pool,
+        vs,
+        vs_count,
+    );
+    if let Some(offset) = sba
+        && let Some(packet) = submitted.get(offset..offset.saturating_add(22))
+    {
+        crate::log_info!(
+            target: "gpgpu";
+            "helio-churn: flushed-sba offset={} dwords={:X?}\n",
+            offset,
+            packet,
+        );
+    }
+    if let Some(offset) = pool
+        && let Some(packet) = submitted.get(offset..offset.saturating_add(4))
+    {
+        crate::log_info!(
+            target: "gpgpu";
+            "helio-churn: flushed-binding-pool offset={} dwords={:X?}\n",
+            offset,
+            packet,
+        );
+    }
+    if let Some(offset) = vs
+        && let Some(packet) = submitted.get(offset..offset.saturating_add(2))
+    {
+        crate::log_info!(
+            target: "gpgpu";
+            "helio-churn: flushed-vs-binding-pointer offset={} dwords={:X?}\n",
+            offset,
+            packet,
+        );
+    }
 }
 
 fn resident_scene_batch_state(
@@ -1305,6 +1382,12 @@ fn stage_resident_churn_forward_secondary(
     let bytes =
         finish_resident_secondary_breadcrumbs(batch, encoded_payload_bytes, secondary_index)?;
     crate::intel::dma_flush(unsafe { warm.batch_virt.add(batch_offset) }, bytes);
+    log_resident_churn_flushed_binding_packets(
+        batch,
+        bytes,
+        GPU_VA_BATCH_BASE + batch_offset as u64,
+        secondary_index,
+    );
     Ok(bytes)
 }
 

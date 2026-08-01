@@ -4,8 +4,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::super::{
-    ShellBackend2, line_width_for_backend, matrix_target_for_backend, print_native_line,
-    print_shell_line,
+    MatrixTarget, ShellBackend2, line_width_for_backend, matrix_target_for_backend,
+    print_matrix_target_line, print_shell_line,
 };
 use super::tlb_helper::TlbTable;
 use crate::shell2::shell2_cmd::ParseOutcome;
@@ -16,17 +16,19 @@ const TABLE_HEADERS: [&str; 8] = [
 const ARCHIVE_HEADERS: [&str; 4] = ["#", "Size", "CRC", "Name"];
 const ARCHIVE_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 
-fn run_lsd(io: &'static dyn ShellBackend2, args: Vec<String>) -> trueos_io::Result<()> {
-    let target = matrix_target_for_backend(io);
-    let width = line_width_for_backend(io).saturating_sub(2);
+fn run_lsd(
+    target: &MatrixTarget,
+    args: Vec<String>,
+    width: usize,
+) -> trueos_io::Result<()> {
     crate::r::io::env::with_launch_context_console_and_fs_root(
         args.clone(),
         BTreeMap::new(),
-        Some(target),
+        Some(target.clone()),
         None,
         || {
             trueos_lsd::run_with_writer_and_width(args.as_slice(), width, |line| {
-                print_native_line(io, line)
+                print_matrix_target_line(target, line)
             })
         },
     )
@@ -117,10 +119,13 @@ fn parse_args(rest: &str) -> Result<Vec<String>, &'static str> {
     Ok(args)
 }
 
-fn run_lsd_table(io: &'static dyn ShellBackend2, args: Vec<String>) -> trueos_io::Result<()> {
+fn run_lsd_table(
+    target: &MatrixTarget,
+    args: Vec<String>,
+    width: usize,
+) -> trueos_io::Result<()> {
     let listings = trueos_lsd::table_listings(args.as_slice())?;
     let multiple = listings.len() > 1;
-    let width = line_width_for_backend(io).saturating_sub(2);
     let table = TlbTable::with_width(&TABLE_HEADERS, width)
         .with_max_col_widths(&[8, 10, 7, 7, 8, 10, 5, 0]);
 
@@ -130,12 +135,12 @@ fn run_lsd_table(io: &'static dyn ShellBackend2, args: Vec<String>) -> trueos_io
         }
         if multiple {
             if idx > 0 {
-                print_shell_line(io, "");
+                print_matrix_target_line(target, "");
             }
-            print_shell_line(io, alloc::format!("{}:", listing.path).as_str());
+            print_matrix_target_line(target, alloc::format!("{}:", listing.path).as_str());
         }
 
-        table.emit_header(|text| print_shell_line(io, text));
+        table.emit_header(|text| print_matrix_target_line(target, text));
         for row in listing.rows.iter() {
             let cells = [
                 row.id.as_str(),
@@ -147,18 +152,18 @@ fn run_lsd_table(io: &'static dyn ShellBackend2, args: Vec<String>) -> trueos_io
                 row.kind,
                 row.name.as_str(),
             ];
-            table.emit_row(&cells, |text| print_shell_line(io, text));
+            table.emit_row(&cells, |text| print_matrix_target_line(target, text));
         }
-        table.emit_footer(|text| print_shell_line(io, text));
+        table.emit_footer(|text| print_matrix_target_line(target, text));
     }
 
     Ok(())
 }
 
-fn print_archive_line(io: &'static dyn ShellBackend2, text: &str) {
+fn print_archive_line(target: &MatrixTarget, text: &str) {
     let styled =
         alloc::format!("{}", super::super::term_style::paint(text).color(ARCHIVE_TEXT_RGB));
-    print_native_line(io, styled.as_str());
+    print_matrix_target_line(target, styled.as_str());
 }
 
 fn crc_text(crc: Option<u32>) -> String {
@@ -168,13 +173,13 @@ fn crc_text(crc: Option<u32>) -> String {
     }
 }
 
-fn run_lsd_archive(io: &'static dyn ShellBackend2, path: &str) -> Result<(), String> {
+fn run_lsd_archive(target: &MatrixTarget, path: &str, width: usize) -> Result<(), String> {
     let archive = crate::r::io::kfs::read_file(path).map_err(|err| alloc::format!("{err:?}"))?;
     let entries = crate::z7::list_entries(archive.as_slice())
         .map_err(|err| alloc::format!("archive: {err:?}"))?;
 
     print_archive_line(
-        io,
+        target,
         alloc::format!(
             "lsd: 7z archive={} archive_bytes={} entries={}",
             path,
@@ -188,9 +193,8 @@ fn run_lsd_archive(io: &'static dyn ShellBackend2, path: &str) -> Result<(), Str
         return Ok(());
     }
 
-    let width = line_width_for_backend(io);
     let table = TlbTable::with_width(&ARCHIVE_HEADERS, width).with_max_col_widths(&[5, 12, 8, 0]);
-    table.emit_header(|text| print_archive_line(io, text));
+    table.emit_header(|text| print_archive_line(target, text));
     for (idx, entry) in entries.iter().enumerate() {
         let index = alloc::format!("{}", idx + 1);
         let size = alloc::format!("{}", entry.unpacked_size);
@@ -201,9 +205,9 @@ fn run_lsd_archive(io: &'static dyn ShellBackend2, path: &str) -> Result<(), Str
             crc.as_str(),
             entry.name.as_str(),
         ];
-        table.emit_row(&row, |text| print_archive_line(io, text));
+        table.emit_row(&row, |text| print_archive_line(target, text));
     }
-    table.emit_footer(|text| print_archive_line(io, text));
+    table.emit_footer(|text| print_archive_line(target, text));
 
     Ok(())
 }
@@ -227,11 +231,11 @@ fn first_path_arg(args: &[String]) -> Option<String> {
     None
 }
 
-fn run_submitted(io: &'static dyn ShellBackend2, rest: &str) {
+fn run_submitted(target: &MatrixTarget, width: usize, rest: &str) {
     let (mut table, archive_7z, args) = match strip_shell2_flags(rest) {
         Ok(parsed) => parsed,
         Err(err) => {
-            print_shell_line(io, alloc::format!("lsd: {}", err).as_str());
+            print_matrix_target_line(target, alloc::format!("lsd: {}", err).as_str());
             return;
         }
     };
@@ -246,27 +250,30 @@ fn run_submitted(io: &'static dyn ShellBackend2, rest: &str) {
 
     if archive_7z {
         let Some(path) = display_path.as_deref() else {
-            print_shell_line(io, "lsd: usage `lsd -7z path`");
+            print_matrix_target_line(target, "lsd: usage `lsd -7z path`");
             return;
         };
-        if let Err(err) = run_lsd_archive(io, path) {
-            print_shell_line(io, alloc::format!("lsd: {path}: {err}").as_str());
+        if let Err(err) = run_lsd_archive(target, path, width) {
+            print_matrix_target_line(target, alloc::format!("lsd: {path}: {err}").as_str());
         }
         return;
     }
 
     let result = if table {
-        run_lsd_table(io, args)
+        run_lsd_table(target, args, width.saturating_sub(2))
     } else {
-        run_lsd(io, args)
+        run_lsd(target, args, width.saturating_sub(2))
     };
 
     if let Err(err) = result {
         if err.kind() == trueos_io::ErrorKind::NotFound {
             let path = display_path.as_deref().unwrap_or(".");
-            print_shell_line(io, alloc::format!("lsd: {path}: not found").as_str());
+            print_matrix_target_line(
+                target,
+                alloc::format!("lsd: {path}: not found").as_str(),
+            );
         } else {
-            print_shell_line(io, alloc::format!("lsd: {}", err).as_str());
+            print_matrix_target_line(target, alloc::format!("lsd: {}", err).as_str());
         }
     }
 }
@@ -278,6 +285,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     // TRUEOSFS, block I/O, and USB/xHCI progressing asynchronously.
     let submitted = String::from(rest);
     let target = matrix_target_for_backend(io);
+    let width = line_width_for_backend(io);
     super::super::set_matrix_target_active(&target, true);
     let completion_target = target.clone();
     let job = alloc::boxed::Box::new(move || {
@@ -286,7 +294,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
             crate::percpu::this_cpu().cpu_index(),
             crate::percpu::in_executor_poll(),
         );
-        run_submitted(io, submitted.as_str());
+        run_submitted(&completion_target, width, submitted.as_str());
         crate::log_info!(target: "filesystem";
             "shell2/lsd: blocking-lane done cpu={} fs_transport=bsp-request-broker\n",
             crate::percpu::this_cpu().cpu_index(),

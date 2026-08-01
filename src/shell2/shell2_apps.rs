@@ -394,7 +394,6 @@ async fn peer_app_task(
     width: usize,
     args: Vec<String>,
     spawner: Spawner,
-    io: &'static dyn ShellBackend2,
 ) {
     if args.is_empty() {
         print_peer_table(&target, width).await;
@@ -504,7 +503,7 @@ async fn peer_app_task(
                                 )
                                 .as_str(),
                             );
-                            match crate::hv::start(local_vm_id, &spawner, io, None) {
+                            match crate::hv::start(local_vm_id, &spawner, None) {
                                 Ok(()) => print_matrix_target_line(
                                     &target,
                                     alloc::format!("apps: vm{} peer start requested", local_vm_id)
@@ -553,7 +552,7 @@ fn peer_app(spawner: &Spawner, io: &'static dyn ShellBackend2, args: Vec<String>
     let target = matrix_target_for_backend(io);
     let width = line_width_for_backend(io);
     set_matrix_target_active(&target, true);
-    match peer_app_task(target.clone(), width, args, *spawner, io) {
+    match peer_app_task(target.clone(), width, args, *spawner) {
         Ok(token) => {
             spawner.spawn(token);
         }
@@ -631,35 +630,50 @@ fn preserve_selected_or_all(io: &'static dyn ShellBackend2, id: Option<u8>) {
     }
 }
 
-async fn load_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8) -> bool {
+async fn load_vm(spawner: &Spawner, target: &MatrixTarget, vm_id: u8) -> bool {
     match crate::hv::restore_snapshot_async(vm_id).await {
         Ok(bytes) => {
-            line(io, alloc::format!("apps: vm{} loaded {} bytes", vm_id, bytes).as_str());
-            match crate::hv::start(vm_id, spawner, io, None) {
+            print_matrix_target_line(
+                target,
+                alloc::format!("apps: vm{} loaded {} bytes", vm_id, bytes).as_str(),
+            );
+            match crate::hv::start(vm_id, spawner, None) {
                 Ok(()) => {
-                    line(io, alloc::format!("apps: vm{} resume requested", vm_id).as_str());
+                    print_matrix_target_line(
+                        target,
+                        alloc::format!("apps: vm{} resume requested", vm_id).as_str(),
+                    );
                     true
                 }
                 Err(crate::hv::StartError::AlreadyRunning) => {
-                    line(io, alloc::format!("apps: vm{} already running", vm_id).as_str());
+                    print_matrix_target_line(
+                        target,
+                        alloc::format!("apps: vm{} already running", vm_id).as_str(),
+                    );
                     false
                 }
                 Err(err) => {
-                    line(io, alloc::format!("apps: resume failed: {:?}", err).as_str());
+                    print_matrix_target_line(
+                        target,
+                        alloc::format!("apps: resume failed: {:?}", err).as_str(),
+                    );
                     false
                 }
             }
         }
         Err(err) => {
-            line(io, alloc::format!("apps: load failed: {:?}", err).as_str());
+            print_matrix_target_line(
+                target,
+                alloc::format!("apps: load failed: {:?}", err).as_str(),
+            );
             false
         }
     }
 }
 
 #[embassy_executor::task(pool_size = 4)]
-async fn load_vm_task(spawner: Spawner, io: &'static dyn ShellBackend2, vm_id: u8) {
-    let _ = load_vm(&spawner, io, vm_id).await;
+async fn load_vm_task(spawner: Spawner, target: MatrixTarget, vm_id: u8) {
+    let _ = load_vm(&spawner, &target, vm_id).await;
     crate::hv::finish_restore(vm_id);
 }
 
@@ -671,7 +685,7 @@ fn schedule_load_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8
         Err(err) => {
             line(io, alloc::format!("apps: load failed: {:?}", err).as_str());
         }
-        Ok(true) => match load_vm_task(*spawner, io, vm_id) {
+        Ok(true) => match load_vm_task(*spawner, matrix_target_for_backend(io), vm_id) {
             Ok(token) => {
                 line(io, alloc::format!("apps: vm{} resume scheduled", vm_id).as_str());
                 spawner.spawn(token);
@@ -685,10 +699,10 @@ fn schedule_load_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8
 }
 
 #[embassy_executor::task(pool_size = 2)]
-async fn store_persistent_vm_task(io: &'static dyn ShellBackend2, vm_id: u8, name: String) {
+async fn store_persistent_vm_task(target: MatrixTarget, vm_id: u8, name: String) {
     match crate::hv::store::store_persistent_async(vm_id, name.as_str()).await {
-        Ok(bytes) => line(
-            io,
+        Ok(bytes) => print_matrix_target_line(
+            &target,
             alloc::format!(
                 "apps: vm{} stored as {} ({} bytes); warm checkpoint retained",
                 vm_id,
@@ -697,7 +711,10 @@ async fn store_persistent_vm_task(io: &'static dyn ShellBackend2, vm_id: u8, nam
             )
             .as_str(),
         ),
-        Err(error) => line(io, alloc::format!("apps: store failed: {:?}", error).as_str()),
+        Err(error) => print_matrix_target_line(
+            &target,
+            alloc::format!("apps: store failed: {:?}", error).as_str(),
+        ),
     }
 }
 
@@ -719,7 +736,7 @@ fn schedule_store_persistent(spawner: &Spawner, io: &'static dyn ShellBackend2, 
         );
         return;
     }
-    match store_persistent_vm_task(io, vm_id, name) {
+    match store_persistent_vm_task(matrix_target_for_backend(io), vm_id, name) {
         Ok(token) => {
             line(io, alloc::format!("apps: vm{} persistent store scheduled", vm_id).as_str());
             spawner.spawn(token);
@@ -731,29 +748,40 @@ fn schedule_store_persistent(spawner: &Spawner, io: &'static dyn ShellBackend2, 
 #[embassy_executor::task(pool_size = 2)]
 async fn load_persistent_vm_task(
     spawner: Spawner,
-    io: &'static dyn ShellBackend2,
+    target: MatrixTarget,
     vm_id: u8,
     name: String,
 ) {
     let result = async {
         let image = crate::hv::store::load_persistent_async(name.as_str()).await?;
         crate::hv::store::save_bytes_async(vm_id, image.snapshot.clone()).await?;
-        let target = matrix_target_for_backend(io);
-        crate::hv::restore_persistent_image(vm_id, &image, Some(target))
+        crate::hv::restore_persistent_image(vm_id, &image, Some(target.clone()))
             .map_err(|_| crate::hv::store::VmStoreError::BadEnvelope)?;
         Ok::<usize, crate::hv::store::VmStoreError>(image.snapshot.len())
     }
     .await;
     match result {
         Ok(bytes) => {
-            line(io, alloc::format!("apps: vm{} imported {} from {}", vm_id, bytes, name).as_str());
-            match crate::hv::start(vm_id, &spawner, io, None) {
-                Ok(()) => line(io, alloc::format!("apps: vm{} resume requested", vm_id).as_str()),
-                Err(error) => line(io, alloc::format!("apps: resume failed: {:?}", error).as_str()),
+            print_matrix_target_line(
+                &target,
+                alloc::format!("apps: vm{} imported {} from {}", vm_id, bytes, name).as_str(),
+            );
+            match crate::hv::start(vm_id, &spawner, None) {
+                Ok(()) => print_matrix_target_line(
+                    &target,
+                    alloc::format!("apps: vm{} resume requested", vm_id).as_str(),
+                ),
+                Err(error) => print_matrix_target_line(
+                    &target,
+                    alloc::format!("apps: resume failed: {:?}", error).as_str(),
+                ),
             }
         }
         Err(error) => {
-            line(io, alloc::format!("apps: persistent load failed: {:?}", error).as_str())
+            print_matrix_target_line(
+                &target,
+                alloc::format!("apps: persistent load failed: {:?}", error).as_str(),
+            )
         }
     }
     crate::hv::finish_restore(vm_id);
@@ -781,7 +809,12 @@ fn schedule_load_persistent(
         return;
     }
     match crate::hv::try_begin_restore(vm_id) {
-        Ok(true) => match load_persistent_vm_task(*spawner, io, vm_id, name) {
+        Ok(true) => match load_persistent_vm_task(
+            *spawner,
+            matrix_target_for_backend(io),
+            vm_id,
+            name,
+        ) {
             Ok(token) => {
                 line(io, alloc::format!("apps: vm{} persistent load scheduled", vm_id).as_str());
                 spawner.spawn(token);
@@ -797,11 +830,20 @@ fn schedule_load_persistent(
 }
 
 #[embassy_executor::task(pool_size = 2)]
-async fn delete_persistent_task(io: &'static dyn ShellBackend2, name: String) {
+async fn delete_persistent_task(target: MatrixTarget, name: String) {
     match crate::hv::store::delete_persistent_async(name.as_str()).await {
-        Ok(true) => line(io, alloc::format!("apps: deleted persistent image {}", name).as_str()),
-        Ok(false) => line(io, alloc::format!("apps: persistent image {} not found", name).as_str()),
-        Err(error) => line(io, alloc::format!("apps: delete failed: {:?}", error).as_str()),
+        Ok(true) => print_matrix_target_line(
+            &target,
+            alloc::format!("apps: deleted persistent image {}", name).as_str(),
+        ),
+        Ok(false) => print_matrix_target_line(
+            &target,
+            alloc::format!("apps: persistent image {} not found", name).as_str(),
+        ),
+        Err(error) => print_matrix_target_line(
+            &target,
+            alloc::format!("apps: delete failed: {:?}", error).as_str(),
+        ),
     }
 }
 
@@ -810,7 +852,7 @@ fn schedule_delete_persistent(spawner: &Spawner, io: &'static dyn ShellBackend2,
         line(io, "apps: delete expects: delete <name>");
         return;
     };
-    match delete_persistent_task(io, name) {
+    match delete_persistent_task(matrix_target_for_backend(io), name) {
         Ok(token) => spawner.spawn(token),
         Err(_) => line(io, "apps: delete task unavailable"),
     }
@@ -864,7 +906,7 @@ fn toggle_replicatable_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_
     }
 
     if state.pause_latched {
-        match crate::hv::start(vm_id, spawner, io, None) {
+        match crate::hv::start(vm_id, spawner, None) {
             Ok(()) => {
                 line(io, alloc::format!("apps: vm{} direct resume scheduled", vm_id).as_str())
             }

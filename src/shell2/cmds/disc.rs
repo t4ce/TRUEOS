@@ -1,6 +1,8 @@
 use core::str::SplitWhitespace;
 
-use super::super::{ShellBackend2, print_shell_line};
+use super::super::{
+    ShellBackend2, matrix_target_for_backend, print_matrix_target_line, print_shell_line,
+};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const RAMDISK_BLOCK_SIZE: u32 = 512;
@@ -77,6 +79,7 @@ fn create_ramdisc(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
     }
 
     let label = alloc::format!("ramdisc-{}mb", size_bytes / (1024 * 1024));
+    let output_target = matrix_target_for_backend(io);
     // Ramdisk creation formats and mounts TRUEOSFS, so it must yield to the
     // BSP executor instead of synchronously waiting inside the Shell2 task.
     crate::wait::spawn_local_detached(async move {
@@ -101,8 +104,8 @@ fn create_ramdisc(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
             Ok(disk) => {
                 let info = disk.info();
                 let ready = crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
-                print_shell_line(
-                    io,
+                print_matrix_target_line(
+                    &output_target,
                     alloc::format!(
                         "disc ramdisc: ready id={} ({}) size={} bytes trueosfs=1 root_mounted={}",
                         info.id.raw(),
@@ -114,7 +117,10 @@ fn create_ramdisc(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
                 );
             }
             Err(msg) => {
-                print_shell_line(io, alloc::format!("disc ramdisc: {}", msg).as_str());
+                print_matrix_target_line(
+                    &output_target,
+                    alloc::format!("disc ramdisc: {}", msg).as_str(),
+                );
             }
         }
     });

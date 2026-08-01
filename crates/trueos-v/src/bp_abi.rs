@@ -433,6 +433,10 @@ unsafe extern "C" {
         window_id: u32,
         out: *mut TrueosUi4PointerEvent,
     ) -> i32;
+    pub fn trueos_cabi_ui4_scene_keyboard_event_take(
+        window_id: u32,
+        out: *mut TrueosKeyboardOutputEvent,
+    ) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_resize(window_id: u32, width: u32, height: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_write_opaque_rgba8(
         window_id: u32,

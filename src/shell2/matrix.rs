@@ -11,6 +11,7 @@ use super::TranscriptEntry;
 pub(crate) const MATRIX_SLOT_ID_MAX: usize = 5;
 const DEFAULT_MATRIX_SLOT_LINE_CAP: usize = 512;
 pub(crate) const DEFAULT_MATRIX_SLOT_LINE_WIDTH: usize = 180;
+pub(crate) const DEFAULT_MATRIX_VIEW_ROWS: usize = 51;
 const LIVE_USER_INPUT_CAP: usize = 10;
 
 pub(crate) type MatrixSlotId = HString<MATRIX_SLOT_ID_MAX>;
@@ -40,7 +41,6 @@ struct MatrixSlot {
     vm_id: Option<u8>,
     vm_input_attached: bool,
     vm_launch_reserved: bool,
-    line_width: usize,
     app_label: Option<AllocString>,
 }
 
@@ -52,12 +52,10 @@ pub(crate) struct LiveUserInputEntry {
 
 struct MatrixState {
     slots: Vec<MatrixSlot>,
-    net_active: MatrixSlotId,
-    local_active: MatrixSlotId,
-    container_active: MatrixSlotId,
-    net_view_revision: u64,
-    local_view_revision: u64,
-    container_view_revision: u64,
+    active_slot_ids: [MatrixSlotId; super::OUTPUT_SCOPE_COUNT],
+    active_view_revisions: [u64; super::OUTPUT_SCOPE_COUNT],
+    view_line_widths: [usize; super::OUTPUT_SCOPE_COUNT],
+    view_terminal_rows: [usize; super::OUTPUT_SCOPE_COUNT],
     live_user_input_record: VecDeque<LiveUserInputEntry>,
     revision: u64,
 }
@@ -69,12 +67,10 @@ fn state() -> &'static spin::Mutex<MatrixState> {
     MATRIX_STATE.call_once(|| {
         let mut initial = MatrixState {
             slots: Vec::new(),
-            net_active: default_slot_id(),
-            local_active: default_slot_id(),
-            container_active: default_slot_id(),
-            net_view_revision: 1,
-            local_view_revision: 1,
-            container_view_revision: 1,
+            active_slot_ids: core::array::from_fn(|_| default_slot_id()),
+            active_view_revisions: [1; super::OUTPUT_SCOPE_COUNT],
+            view_line_widths: [DEFAULT_MATRIX_SLOT_LINE_WIDTH; super::OUTPUT_SCOPE_COUNT],
+            view_terminal_rows: [DEFAULT_MATRIX_VIEW_ROWS; super::OUTPUT_SCOPE_COUNT],
             live_user_input_record: VecDeque::new(),
             revision: 1,
         };
@@ -125,7 +121,6 @@ fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
         vm_id: None,
         vm_input_attached: false,
         vm_launch_reserved: false,
-        line_width: DEFAULT_MATRIX_SLOT_LINE_WIDTH,
         app_label: None,
     });
     slots.len() - 1
@@ -140,58 +135,36 @@ fn bump_slot_revision(state: &mut MatrixState, idx: usize) {
     bump_revision(state);
 }
 
-fn active_view_revision_ref(state: &MatrixState, output_mask: u8) -> &u64 {
-    if (output_mask & super::OUTPUT_NET_TCP_MASK) != 0 {
-        &state.net_view_revision
-    } else if (output_mask & super::OUTPUT_LOCAL_MASK) != 0 {
-        &state.local_view_revision
-    } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
-        &state.container_view_revision
-    } else {
-        &state.net_view_revision
+fn output_scope_index(output_mask: super::OutputMask) -> usize {
+    if output_mask.count_ones() != 1 {
+        return super::OUTPUT_SYSTEM_MASK.trailing_zeros() as usize;
     }
+    (output_mask.trailing_zeros() as usize).min(super::OUTPUT_SCOPE_COUNT.saturating_sub(1))
 }
 
-fn active_view_revision_mut(state: &mut MatrixState, output_mask: u8) -> &mut u64 {
-    if (output_mask & super::OUTPUT_NET_TCP_MASK) != 0 {
-        &mut state.net_view_revision
-    } else if (output_mask & super::OUTPUT_LOCAL_MASK) != 0 {
-        &mut state.local_view_revision
-    } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
-        &mut state.container_view_revision
-    } else {
-        &mut state.net_view_revision
-    }
+fn active_view_revision_ref(state: &MatrixState, output_mask: super::OutputMask) -> &u64 {
+    &state.active_view_revisions[output_scope_index(output_mask)]
 }
 
-fn bump_active_view_revision(state: &mut MatrixState, output_mask: u8) {
+fn active_view_revision_mut(state: &mut MatrixState, output_mask: super::OutputMask) -> &mut u64 {
+    &mut state.active_view_revisions[output_scope_index(output_mask)]
+}
+
+fn bump_active_view_revision(state: &mut MatrixState, output_mask: super::OutputMask) {
     let revision = active_view_revision_mut(state, output_mask);
     *revision = revision.wrapping_add(1).max(1);
     bump_revision(state);
 }
 
-fn active_slot_id_ref(state: &MatrixState, output_mask: u8) -> &MatrixSlotId {
-    if (output_mask & super::OUTPUT_NET_TCP_MASK) != 0 {
-        &state.net_active
-    } else if (output_mask & super::OUTPUT_LOCAL_MASK) != 0 {
-        &state.local_active
-    } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
-        &state.container_active
-    } else {
-        &state.net_active
-    }
+fn active_slot_id_ref(state: &MatrixState, output_mask: super::OutputMask) -> &MatrixSlotId {
+    &state.active_slot_ids[output_scope_index(output_mask)]
 }
 
-fn active_slot_id_mut(state: &mut MatrixState, output_mask: u8) -> &mut MatrixSlotId {
-    if (output_mask & super::OUTPUT_NET_TCP_MASK) != 0 {
-        &mut state.net_active
-    } else if (output_mask & super::OUTPUT_LOCAL_MASK) != 0 {
-        &mut state.local_active
-    } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
-        &mut state.container_active
-    } else {
-        &mut state.net_active
-    }
+fn active_slot_id_mut(
+    state: &mut MatrixState,
+    output_mask: super::OutputMask,
+) -> &mut MatrixSlotId {
+    &mut state.active_slot_ids[output_scope_index(output_mask)]
 }
 
 fn push_line(slot: &mut MatrixSlot, text: &str) {
@@ -241,18 +214,18 @@ fn visible_activity(slot: &MatrixSlot) -> MatrixSlotActivity {
     }
 }
 
-pub(crate) fn active_slot_id(output_mask: u8) -> MatrixSlotId {
+pub(crate) fn active_slot_id(output_mask: super::OutputMask) -> MatrixSlotId {
     active_slot_id_ref(&state().lock(), output_mask).clone()
 }
 
-pub(crate) fn active_slot_activity(output_mask: u8) -> MatrixSlotActivity {
+pub(crate) fn active_slot_activity(output_mask: super::OutputMask) -> MatrixSlotActivity {
     let mut guard = state().lock();
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
     visible_activity(&guard.slots[idx])
 }
 
-pub(crate) fn switch_active_slot(output_mask: u8, requested: &str) -> MatrixSlotId {
+pub(crate) fn switch_active_slot(output_mask: super::OutputMask, requested: &str) -> MatrixSlotId {
     let next_id = normalize_slot_id(requested);
     let mut guard = state().lock();
     let idx = ensure_slot_index(&mut guard.slots, &next_id);
@@ -320,7 +293,10 @@ fn broad_slot_candidate(mut attempt: u16) -> MatrixSlotId {
     out
 }
 
-pub(crate) fn reserve_available_vm_slot_selected(output_mask: u8, preferred: &str) -> MatrixSlotId {
+pub(crate) fn reserve_available_vm_slot_selected(
+    output_mask: super::OutputMask,
+    preferred: &str,
+) -> MatrixSlotId {
     let preferred_id = normalize_slot_id(preferred);
     let default_id = default_slot_id();
     let mut guard = state().lock();
@@ -388,7 +364,7 @@ fn claim_app_slot(guard: &mut MatrixState, id: &MatrixSlotId, app_label: &str) -
 /// Select one app-owned Matrix slot, reusing its prior claim or applying the
 /// same compact base-36 collision fallback used by VM-backed slots.
 pub(crate) fn claim_available_app_slot_selected(
-    output_mask: u8,
+    output_mask: super::OutputMask,
     preferred: &str,
     app_label: &str,
 ) -> MatrixSlotId {
@@ -460,7 +436,6 @@ pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
         if !slot.lines.is_empty()
             || slot.activity != MatrixSlotActivity::Idle
             || slot.running_count != 0
-            || slot.line_width != DEFAULT_MATRIX_SLOT_LINE_WIDTH
             || slot.app_label.is_some()
         {
             slot.lines.clear();
@@ -469,7 +444,6 @@ pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
             slot.interrupt_generation = 0;
             slot.vm_id = None;
             slot.vm_launch_reserved = false;
-            slot.line_width = DEFAULT_MATRIX_SLOT_LINE_WIDTH;
             slot.app_label = None;
             bump_slot_revision(&mut guard, idx);
         }
@@ -478,17 +452,11 @@ pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
             vm_ids.push(vm_id);
         }
         let _ = guard.slots.remove(idx);
-        if guard.net_active == freed_id {
-            guard.net_active = default_id.clone();
-            bump_active_view_revision(&mut guard, super::OUTPUT_NET_TCP_MASK);
-        }
-        if guard.local_active == freed_id {
-            guard.local_active = default_id.clone();
-            bump_active_view_revision(&mut guard, super::OUTPUT_LOCAL_MASK);
-        }
-        if guard.container_active == freed_id {
-            guard.container_active = default_id.clone();
-            bump_active_view_revision(&mut guard, super::OUTPUT_CONTAINER_MASK);
+        for scope_index in 0..super::OUTPUT_SCOPE_COUNT {
+            if guard.active_slot_ids[scope_index] == freed_id {
+                guard.active_slot_ids[scope_index] = default_id.clone();
+                bump_active_view_revision(&mut guard, 1 << scope_index);
+            }
         }
         changed = true;
     }
@@ -500,14 +468,14 @@ pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
     (freed_id, vm_ids)
 }
 
-pub(crate) fn active_lines(output_mask: u8) -> VecDeque<TranscriptEntry> {
+pub(crate) fn active_lines(output_mask: super::OutputMask) -> VecDeque<TranscriptEntry> {
     let mut guard = state().lock();
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
     guard.slots[idx].lines.clone()
 }
 
-pub(crate) fn clear_active_lines(output_mask: u8) {
+pub(crate) fn clear_active_lines(output_mask: super::OutputMask) {
     let mut guard = state().lock();
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
@@ -517,31 +485,42 @@ pub(crate) fn clear_active_lines(output_mask: u8) {
     }
 }
 
-pub(crate) fn active_slot_app_label(output_mask: u8) -> Option<AllocString> {
+pub(crate) fn active_slot_app_label(output_mask: super::OutputMask) -> Option<AllocString> {
     let mut guard = state().lock();
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
     guard.slots[idx].app_label.clone()
 }
 
-pub(crate) fn active_line_width(output_mask: u8) -> usize {
-    let mut guard = state().lock();
-    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
-    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
-    guard.slots[idx].line_width
+pub(crate) fn active_line_width(output_mask: super::OutputMask) -> usize {
+    let guard = state().lock();
+    guard.view_line_widths[output_scope_index(output_mask)]
 }
 
-pub(crate) fn set_active_line_width(output_mask: u8, width: usize) {
+pub(crate) fn set_active_line_width(output_mask: super::OutputMask, width: usize) {
     let mut guard = state().lock();
-    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
-    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
-    if guard.slots[idx].line_width != width {
-        guard.slots[idx].line_width = width;
-        bump_slot_revision(&mut guard, idx);
+    let index = output_scope_index(output_mask);
+    if guard.view_line_widths[index] != width {
+        guard.view_line_widths[index] = width;
+        bump_active_view_revision(&mut guard, output_mask);
     }
 }
 
-pub(crate) fn record_line_for_output(output_mask: u8, text: &str) -> MatrixSlotId {
+pub(crate) fn active_terminal_rows(output_mask: super::OutputMask) -> usize {
+    let guard = state().lock();
+    guard.view_terminal_rows[output_scope_index(output_mask)]
+}
+
+pub(crate) fn set_active_terminal_rows(output_mask: super::OutputMask, rows: usize) {
+    let mut guard = state().lock();
+    let index = output_scope_index(output_mask);
+    if guard.view_terminal_rows[index] != rows {
+        guard.view_terminal_rows[index] = rows;
+        bump_active_view_revision(&mut guard, output_mask);
+    }
+}
+
+pub(crate) fn record_line_for_output(output_mask: super::OutputMask, text: &str) -> MatrixSlotId {
     let mut guard = state().lock();
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
@@ -648,8 +627,8 @@ pub(crate) fn clear_transient_lines_in_live_slot(
     true
 }
 
-pub(crate) fn record_user_input(output_mask: u8, text: &str) {
-    crate::user_input_record::capture(output_mask, text);
+pub(crate) fn record_user_input(transport_scope: u8, text: &str) {
+    crate::user_input_record::capture(transport_scope, text);
     let mut guard = state().lock();
     push_live_user_input_record(&mut guard, text);
 }
@@ -764,7 +743,7 @@ pub(crate) fn request_slot_interrupt(slot_id: &MatrixSlotId) -> (u64, Option<u8>
     (generation, vm_id)
 }
 
-pub(crate) fn active_slot_vm_input_id(output_mask: u8) -> Option<u8> {
+pub(crate) fn active_slot_vm_input_id(output_mask: super::OutputMask) -> Option<u8> {
     let mut guard = state().lock();
     let active = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &active);
@@ -775,16 +754,26 @@ pub(crate) fn active_slot_vm_input_id(output_mask: u8) -> Option<u8> {
     }
 }
 
-pub(crate) fn active_slot_vm_id(output_mask: u8) -> Option<u8> {
+pub(crate) fn active_slot_vm_id(output_mask: super::OutputMask) -> Option<u8> {
     let mut guard = state().lock();
     let active = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &active);
     guard.slots[idx].vm_id
 }
 
-pub(crate) fn bind_slot_vm(slot_id: &MatrixSlotId, vm_id: u8, input_attached: bool) {
+pub(crate) fn bind_live_slot_vm(
+    slot_id: &MatrixSlotId,
+    lifetime_generation: u64,
+    vm_id: u8,
+    input_attached: bool,
+) -> bool {
     let mut guard = state().lock();
-    let idx = ensure_slot_index(&mut guard.slots, slot_id);
+    let Some(idx) = guard.slots.iter().position(|slot| slot.id == *slot_id) else {
+        return false;
+    };
+    if guard.slots[idx].lifetime_generation != lifetime_generation {
+        return false;
+    }
     if guard.slots[idx].vm_id != Some(vm_id)
         || guard.slots[idx].vm_input_attached != input_attached
         || guard.slots[idx].vm_launch_reserved
@@ -794,6 +783,7 @@ pub(crate) fn bind_slot_vm(slot_id: &MatrixSlotId, vm_id: u8, input_attached: bo
         guard.slots[idx].vm_launch_reserved = false;
         bump_slot_revision(&mut guard, idx);
     }
+    true
 }
 
 pub(crate) fn set_slot_app_label(slot_id: &MatrixSlotId, label: &str) {
@@ -852,9 +842,18 @@ pub(crate) fn release_vm_slot_reservation(
     true
 }
 
-pub(crate) fn unbind_slot_vm(slot_id: &MatrixSlotId, vm_id: u8) {
+pub(crate) fn unbind_live_slot_vm(
+    slot_id: &MatrixSlotId,
+    lifetime_generation: u64,
+    vm_id: u8,
+) -> bool {
     let mut guard = state().lock();
-    let idx = ensure_slot_index(&mut guard.slots, slot_id);
+    let Some(idx) = guard.slots.iter().position(|slot| slot.id == *slot_id) else {
+        return false;
+    };
+    if guard.slots[idx].lifetime_generation != lifetime_generation {
+        return false;
+    }
     if guard.slots[idx].vm_id == Some(vm_id) {
         guard.slots[idx].vm_id = None;
         guard.slots[idx].vm_input_attached = false;
@@ -862,9 +861,10 @@ pub(crate) fn unbind_slot_vm(slot_id: &MatrixSlotId, vm_id: u8) {
         guard.slots[idx].app_label = None;
         bump_slot_revision(&mut guard, idx);
     }
+    true
 }
 
-pub(crate) fn slot_views(output_mask: u8) -> Vec<MatrixSlotView> {
+pub(crate) fn slot_views(output_mask: super::OutputMask) -> Vec<MatrixSlotView> {
     let mut guard = state().lock();
     let selected = active_slot_id_ref(&guard, output_mask).clone();
     let _ = ensure_slot_index(&mut guard.slots, &selected);
@@ -884,7 +884,7 @@ pub(crate) fn revision() -> u64 {
     state().lock().revision
 }
 
-pub(crate) fn visible_revision(output_mask: u8) -> u64 {
+pub(crate) fn visible_revision(output_mask: super::OutputMask) -> u64 {
     let mut guard = state().lock();
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
@@ -895,7 +895,7 @@ pub(crate) fn visible_revision(output_mask: u8) -> u64 {
 
 /// Read the revision used by the paint loop without busy-spinning.  Shell2 can
 /// yield and retry when a producer is updating Matrix state on another CPU.
-pub(crate) fn try_visible_revision(output_mask: u8) -> Option<u64> {
+pub(crate) fn try_visible_revision(output_mask: super::OutputMask) -> Option<u64> {
     let mut guard = state().try_lock()?;
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);

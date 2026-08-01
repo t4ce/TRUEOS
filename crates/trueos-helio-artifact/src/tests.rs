@@ -242,6 +242,7 @@ fn opens_authenticated_churn_forward_program() {
     assert_eq!(program.bindings()[2].intel_bti, 3);
     assert_eq!(program.vertex_stage().grf_start_register, 2);
     assert_eq!(program.vertex_stage().urb_entry_output_length, 1);
+    assert_eq!(program.fragment_stage().grf_start_register, 4);
     assert_eq!(program.fragment_stage().num_varying_inputs, 2);
     assert!(program.fragment_stage().uses_vmask);
     assert_eq!(program.fragment_stage().flat_inputs, 2);

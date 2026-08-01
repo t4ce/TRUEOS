@@ -238,6 +238,71 @@ fn assert_bits_equal(label: &str, actual: &[f32], expected: &[f32]) {
 }
 
 #[test]
+fn mlas_fma3_default_activations_match_ort_1_28_bits() {
+    // Generated with ONNX Runtime 1.28.0 CPUExecutionProvider on the x86-64
+    // development host. More than eight elements force the MLAS FMA3 vector
+    // kernel and the endpoints cover both of its clamped domains.
+    const INPUTS: [f32; 18] = [
+        -100.0, -20.0, -18.0, -9.0, -5.0, -2.0, -1.0, -0.125, -0.0, 0.0, 0.125, 1.0, 2.0, 5.0, 9.0,
+        18.0, 20.0, 100.0,
+    ];
+    const LOGISTIC_BITS: [u32; 18] = [
+        0x0000_0000,
+        0x0000_0000,
+        0x0000_0000,
+        0x3901_6000,
+        0x3bdb_5040,
+        0x3df4_20a8,
+        0x3e89_b2b1,
+        0x3ef0_0553,
+        0x3f00_0000,
+        0x3f00_0000,
+        0x3f07_fd56,
+        0x3f3b_26a8,
+        0x3f61_7beb,
+        0x3f7e_4960,
+        0x3f7f_f7ea,
+        0x3f80_0000,
+        0x3f80_0000,
+        0x3f80_0000,
+    ];
+    const TANH_BITS: [u32; 18] = [
+        0xbf80_0000,
+        0xbf80_0000,
+        0xbf80_0000,
+        0xbf80_0000,
+        0xbf7f_fa0c,
+        0xbf76_ca83,
+        0xbf42_f7d6,
+        0xbdfe_acc9,
+        0x8000_0000,
+        0x0000_0000,
+        0x3dfe_acc9,
+        0x3f42_f7d6,
+        0x3f76_ca83,
+        0x3f7f_fa0c,
+        0x3f80_0000,
+        0x3f80_0000,
+        0x3f80_0000,
+        0x3f80_0000,
+    ];
+
+    for (index, input) in INPUTS.into_iter().enumerate() {
+        assert_eq!(mlas_logistic(input).to_bits(), LOGISTIC_BITS[index], "logistic({input:?})");
+        assert_eq!(mlas_tanh(input).to_bits(), TANH_BITS[index], "tanh({input:?})");
+    }
+    assert!(mlas_logistic(f32::NAN).is_nan());
+    assert!(mlas_tanh(f32::NAN).is_nan());
+}
+
+#[test]
+fn input_and_recurrent_bias_are_rounded_together_before_gate_addition() {
+    let mut gate = [100_000_000.0];
+    add_fused_bias(&mut gate, &[-100_000_000.0], &[1.0]);
+    assert_eq!(gate, [0.0]);
+}
+
+#[test]
 fn official_ort_1_27_text512_semantic_oracle_matches() {
     run_fixture(TEXT_FIXTURE, InputWidth::Text512);
 }

@@ -70,6 +70,14 @@ pub(crate) fn container_shell_drain_output(out: &mut [u8]) -> usize {
 }
 
 impl ShellIo2 for ContainerShellBackend {
+    fn output_mask(&self) -> crate::shell2::OutputMask {
+        crate::shell2::OUTPUT_CONTAINER_MASK
+    }
+
+    fn transport_scope(&self) -> u8 {
+        crate::shell2::TRANSPORT_CONTAINER_SCOPE
+    }
+
     #[inline]
     fn raw_write_str(&self, s: &str) {
         crate::shell2::crlf::write_bytes_crlf(s.as_bytes(), &CONTAINER_LAST_WAS_CR, |chunk| {

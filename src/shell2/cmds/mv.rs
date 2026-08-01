@@ -3,7 +3,10 @@ use alloc::vec::Vec;
 
 use regex_automata::meta::Regex;
 
-use super::super::{ShellBackend2, print_shell_line};
+use super::super::{
+    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
+    print_shell_line,
+};
 use crate::disc::block::{self, DeviceHandle};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
@@ -216,35 +219,54 @@ fn print_usage(io: &'static dyn ShellBackend2, name: &str) {
     );
 }
 
+fn print_usage_target(target: &MatrixTarget, name: &str) {
+    print_matrix_target_line(
+        target,
+        alloc::format!(
+            "{name}: usage `{name} <src> <dst>` | `{name} <src-dir>/* <dst-dir>` | `{name} -regx <pattern> <src-dir> <dst-dir>`"
+        )
+        .as_str(),
+    );
+}
+
 async fn run_move(
-    io: &'static dyn ShellBackend2,
+    output_target: MatrixTarget,
     name: String,
     args: Vec<String>,
     disk: DeviceHandle,
 ) {
     if args.first().map(|arg| arg.as_str()) == Some("-regx") {
         if args.len() != 4 {
-            print_usage(io, name.as_str());
+            print_usage_target(&output_target, name.as_str());
             return;
         }
         let regex = match Regex::new(args[1].as_str()) {
             Ok(regex) => regex,
             Err(_) => {
-                print_shell_line(io, alloc::format!("{name}: bad regex").as_str());
+                print_matrix_target_line(
+                    &output_target,
+                    alloc::format!("{name}: bad regex").as_str(),
+                );
                 return;
             }
         };
         let src_dir = match normalize_path(args[2].as_str(), true) {
             Ok(path) => path,
             Err(err) => {
-                print_shell_line(io, alloc::format!("{name}: {err}").as_str());
+                print_matrix_target_line(
+                    &output_target,
+                    alloc::format!("{name}: {err}").as_str(),
+                );
                 return;
             }
         };
         let dst_dir = match normalize_path(args[3].as_str(), true) {
             Ok(path) => path,
             Err(err) => {
-                print_shell_line(io, alloc::format!("{name}: {err}").as_str());
+                print_matrix_target_line(
+                    &output_target,
+                    alloc::format!("{name}: {err}").as_str(),
+                );
                 return;
             }
         };
@@ -269,48 +291,63 @@ async fn run_move(
                 }
             }
             Err(err) => {
-                print_shell_line(io, alloc::format!("{name}: {:?}", err).as_str());
+                print_matrix_target_line(
+                    &output_target,
+                    alloc::format!("{name}: {:?}", err).as_str(),
+                );
                 return;
             }
         }
-        print_shell_line(
-            io,
+        print_matrix_target_line(
+            &output_target,
             alloc::format!("{name}: moved {moved} files, {missed} missed").as_str(),
         );
         return;
     }
 
     if args.len() != 2 {
-        print_usage(io, name.as_str());
+        print_usage_target(&output_target, name.as_str());
         return;
     }
     let src = match normalize_path(args[0].as_str(), false) {
         Ok(path) => path,
         Err(err) => {
-            print_shell_line(io, alloc::format!("{name}: {err}").as_str());
+            print_matrix_target_line(
+                &output_target,
+                alloc::format!("{name}: {err}").as_str(),
+            );
             return;
         }
     };
     let mut dst = match normalize_path(args[1].as_str(), true) {
         Ok(path) => path,
         Err(err) => {
-            print_shell_line(io, alloc::format!("{name}: {err}").as_str());
+            print_matrix_target_line(
+                &output_target,
+                alloc::format!("{name}: {err}").as_str(),
+            );
             return;
         }
     };
     if let Some(src_dir) = src.strip_suffix("/*") {
         match move_children(disk, src_dir, dst.as_str()).await {
             Ok((moved, 0)) if moved > 0 => {
-                print_shell_line(io, alloc::format!("{name}: moved {moved} files").as_str());
+                print_matrix_target_line(
+                    &output_target,
+                    alloc::format!("{name}: moved {moved} files").as_str(),
+                );
             }
             Ok((moved, missed)) => {
-                print_shell_line(
-                    io,
+                print_matrix_target_line(
+                    &output_target,
                     alloc::format!("{name}: moved {moved} files, {missed} missed").as_str(),
                 );
             }
             Err(err) => {
-                print_shell_line(io, alloc::format!("{name}: {:?}", err).as_str());
+                print_matrix_target_line(
+                    &output_target,
+                    alloc::format!("{name}: {:?}", err).as_str(),
+                );
             }
         }
         return;
@@ -322,16 +359,22 @@ async fn run_move(
 
     match move_path(disk, src.as_str(), dst.as_str()).await {
         Ok((moved, 0)) if moved > 0 => {
-            print_shell_line(io, alloc::format!("{name}: moved {moved} files").as_str());
+            print_matrix_target_line(
+                &output_target,
+                alloc::format!("{name}: moved {moved} files").as_str(),
+            );
         }
         Ok((moved, missed)) => {
-            print_shell_line(
-                io,
+            print_matrix_target_line(
+                &output_target,
                 alloc::format!("{name}: moved {moved} files, {missed} missed").as_str(),
             );
         }
         Err(err) => {
-            print_shell_line(io, alloc::format!("{name}: {:?}", err).as_str());
+            print_matrix_target_line(
+                &output_target,
+                alloc::format!("{name}: {:?}", err).as_str(),
+            );
         }
     }
 }
@@ -365,6 +408,11 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, name: &str, rest: &str) 
     // Moving can perform several directory and rename operations. Keep the
     // whole sequence in one native future so no intermediate probe can block
     // the executor responsible for completing it.
-    crate::wait::spawn_local_detached(run_move(io, String::from(name), args, disk));
+    crate::wait::spawn_local_detached(run_move(
+        matrix_target_for_backend(io),
+        String::from(name),
+        args,
+        disk,
+    ));
     ParseOutcome::Handled
 }

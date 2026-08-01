@@ -417,7 +417,7 @@ fn log_target(target: &MatrixTarget, line: &str) {
 
 pub fn enqueue_7z_compress_file(
     source_path: &str,
-    output_mask: u8,
+    output_mask: crate::shell2::OutputMask,
 ) -> Result<QueuedCodecJob, CodecError> {
     let source_path = normalize_path(source_path, false)?;
     let archive_path = archive_path_for_source(source_path.as_str());
@@ -449,7 +449,7 @@ pub fn enqueue_7z_compress_file(
 
 pub fn enqueue_7z_extract_file(
     archive_path: &str,
-    output_mask: u8,
+    output_mask: crate::shell2::OutputMask,
 ) -> Result<QueuedCodecJob, CodecError> {
     let archive_path = normalize_path(archive_path, false)?;
     let output_path = output_path_for_archive(archive_path.as_str())?;

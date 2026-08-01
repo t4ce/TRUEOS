@@ -242,9 +242,13 @@ fn log_triangle_probe_state(
     let dwords = unsafe {
         core::slice::from_raw_parts(warm.draw_state_virt as *const u32, warm.draw_state_len / 4)
     };
-    let bt_ptr = probe_state
-        .binding_table_offset_bytes
-        .saturating_sub(shader_layout.state_region_offset_bytes);
+    let bt_ptr = if device_is_gfx125(warm.device_id) {
+        probe_state.binding_table_offset_bytes
+    } else {
+        probe_state
+            .binding_table_offset_bytes
+            .saturating_sub(shader_layout.state_region_offset_bytes)
+    };
     let bt_entry = dwords[probe_state.binding_table_offset_bytes as usize / 4];
     let surface = &dwords[probe_state.surface_state_offset_bytes as usize / 4
         ..probe_state.surface_state_offset_bytes as usize / 4 + 16];
@@ -452,13 +456,22 @@ fn write_triangle_probe_state_with_flush(
     let dwords = unsafe {
         core::slice::from_raw_parts_mut(warm.draw_state_virt as *mut u32, warm.draw_state_len / 4)
     };
+    // gfx11 through gfx12.0 address binding tables through Surface State Base
+    // Address.  Point that base directly at this dedicated state region, so a
+    // zero binding-table pointer is both valid and cannot alias shader ISA.
+    // gfx12.5 keeps its existing draw-BO-relative binding-table pool contract.
+    let binding_table_entry_base_offset = if device_is_gfx125(warm.device_id) {
+        0usize
+    } else {
+        shader_layout.state_region_offset_bytes as usize
+    };
     for entry in 0..binding_table_entries {
-        dwords[binding_table_offset / 4 + entry] = u32::try_from(
-            surface_state_offset
-                .checked_add(entry * 64)
-                .ok_or("probe-state-overflow")?,
-        )
-        .map_err(|_| "probe-state-overflow")?;
+        let entry_offset = surface_state_offset
+            .checked_add(entry * 64)
+            .and_then(|offset| offset.checked_sub(binding_table_entry_base_offset))
+            .ok_or("probe-state-overflow")?;
+        dwords[binding_table_offset / 4 + entry] =
+            u32::try_from(entry_offset).map_err(|_| "probe-state-overflow")?;
     }
 
     let surface = &mut dwords[surface_state_offset / 4..surface_state_offset / 4 + 16];
@@ -792,6 +805,7 @@ fn encode_draw_indexed_indirect_register_loads(
     let required = fields
         .len()
         .checked_mul(4)
+        .and_then(|dwords| dwords.checked_add(3))
         .ok_or("probe-indirect-capacity")?;
     if cursor.saturating_add(required) > batch_dwords.len() {
         return Err("probe-batch-exhausted");
@@ -809,6 +823,15 @@ fn encode_draw_indexed_indirect_register_loads(
         batch_dwords[*cursor + 3] = (address >> 32) as u32;
         *cursor += 4;
     }
+    // Gen11+ indirect draws source all three extended parameters from the
+    // 3DPRIM_XP registers when ExtendedParametersPresent is set.  XP1 is
+    // implicit StartInstanceLocation, while XP0 and XP2 must be initialized
+    // explicitly.  Churn is one logical draw per packet, so its DrawID is 0.
+    // Match ANV's exact CS-MMIO LRI form (no ForcePosted bit).
+    batch_dwords[*cursor] = mi_lri_cmd(1, 0);
+    batch_dwords[*cursor + 1] = RCS_3DPRIM_XP_DRAW_ID - RCS_RING_BASE as u32;
+    batch_dwords[*cursor + 2] = 0;
+    *cursor += 3;
     Ok(())
 }
 
@@ -817,13 +840,14 @@ mod draw_indexed_indirect_encoder_tests {
     use super::{
         MI_LOAD_REGISTER_MEM, MI_LRI_CS_MMIO, RCS_3DPRIM_BASE_VERTEX, RCS_3DPRIM_INSTANCE_COUNT,
         RCS_3DPRIM_START_INSTANCE, RCS_3DPRIM_START_VERTEX, RCS_3DPRIM_VERTEX_COUNT,
-        RCS_3DPRIM_XP_BASE_VERTEX, RCS_RING_BASE, encode_draw_indexed_indirect_register_loads,
+        RCS_3DPRIM_XP_BASE_VERTEX, RCS_3DPRIM_XP_DRAW_ID, RCS_RING_BASE,
+        encode_draw_indexed_indirect_register_loads, mi_lri_cmd,
     };
 
     #[test]
     fn lowers_the_exact_twenty_byte_helio_record_to_rcs_registers() {
         let base = 0x0000_1234_5678_9000u64;
-        let mut batch = [0u32; 24];
+        let mut batch = [0u32; 27];
         let mut cursor = 0usize;
         encode_draw_indexed_indirect_register_loads(&mut batch, &mut cursor, base).unwrap();
         assert_eq!(cursor, batch.len());
@@ -836,18 +860,26 @@ mod draw_indexed_indirect_encoder_tests {
             (RCS_3DPRIM_START_INSTANCE, 16),
             (RCS_3DPRIM_XP_BASE_VERTEX, 12),
         ];
-        for (packet, (register, byte_offset)) in batch.chunks_exact(4).zip(expected) {
+        for (packet, (register, byte_offset)) in batch[..24].chunks_exact(4).zip(expected) {
             let address = base + byte_offset;
             assert_eq!(packet[0], MI_LOAD_REGISTER_MEM | MI_LRI_CS_MMIO);
             assert_eq!(packet[1], register - RCS_RING_BASE as u32);
             assert_eq!(packet[2], address as u32);
             assert_eq!(packet[3], (address >> 32) as u32);
         }
+        assert_eq!(
+            &batch[24..],
+            &[
+                mi_lri_cmd(1, 0),
+                RCS_3DPRIM_XP_DRAW_ID - RCS_RING_BASE as u32,
+                0,
+            ]
+        );
     }
 
     #[test]
     fn rejects_unaligned_or_truncated_indirect_packets() {
-        let mut batch = [0u32; 24];
+        let mut batch = [0u32; 27];
         let mut cursor = 0usize;
         assert_eq!(
             encode_draw_indexed_indirect_register_loads(&mut batch, &mut cursor, 0x1002),
@@ -855,7 +887,7 @@ mod draw_indexed_indirect_encoder_tests {
         );
         assert_eq!(cursor, 0);
 
-        let mut short = [0u32; 23];
+        let mut short = [0u32; 26];
         assert_eq!(
             encode_draw_indexed_indirect_register_loads(&mut short, &mut cursor, 0x1000),
             Err("probe-batch-exhausted")
@@ -1364,15 +1396,35 @@ fn encode_triangle_probe_batch(
     // draw on the ordinary Surface State Base Address contract, independent
     // of which diagnostic/fixed-function profile selected the draw.
     //
-    // The old pool path used `state_region_gpu_addr` even though the packet
-    // drops its low twelve bits, then subtracted that same unaligned offset
-    // from the binding-table pointer.  Native Churn therefore programmed a
-    // zero VS pointer: the first ISA DWORD (0xA1370040) became BT entry 0 and
-    // resolved 0x30006000 + 0xA1370040 = 0xD1376040, exactly the CAT page seen
-    // on physical ADL.  The gfx12.5 pool path below is page-based instead.
+    // The old non-host pool path used `state_region_gpu_addr` even though the
+    // packet drops its low twelve bits, then subtracted that same unaligned
+    // offset from the binding-table pointer.  Remove that latent zero-pointer
+    // contract altogether.  The physical ADL fault still has a precise
+    // fingerprint: if the first ISA DWORD (0xA1370040) is consumed as BT entry
+    // zero, 0x30006000 + 0xA1370040 resolves to the captured 0xD1376040.  The
+    // fresh Native Churn call site requested host-style addressing already,
+    // so post-encode packet logging below remains the deciding discriminator.
+    // The gfx12.5 pool path is page-based instead.
     let surface_base_relative_binding_table = !device_is_gfx125(warm.device_id);
     let binding_table_pool_size = warm.draw_state_len;
-    let binding_table_pointer_offset = probe_state.binding_table_offset_bytes;
+    let surface_state_base_offset_bytes = if surface_base_relative_binding_table {
+        shader_layout.state_region_offset_bytes
+    } else {
+        0
+    };
+    let surface_state_base_gpu_addr = if surface_base_relative_binding_table {
+        shader_layout.state_region_gpu_addr
+    } else {
+        draw.state_gpu_addr
+    };
+    let binding_table_pointer_offset = probe_state
+        .binding_table_offset_bytes
+        .checked_sub(surface_state_base_offset_bytes)
+        .ok_or("probe-binding-table-base")?;
+    let surface_state_pointer_offset = probe_state
+        .surface_state_offset_bytes
+        .checked_sub(surface_state_base_offset_bytes)
+        .ok_or("probe-surface-state-base")?;
     let binding_table_pool_base_dw = if surface_base_relative_binding_table {
         RENDER_MOCS & BINDING_TABLE_POOL_MOCS_MASK
     } else {
@@ -1393,9 +1445,9 @@ fn encode_triangle_probe_batch(
         .map_err(|_| "probe-binding-pool-convert")?
             & 0xFFFF_F000
     };
-    let binding_table_gpu_addr = draw.state_gpu_addr + binding_table_pointer_offset as u64;
+    let binding_table_gpu_addr = surface_state_base_gpu_addr + binding_table_pointer_offset as u64;
     let binding_table_entry0_gpu_addr =
-        draw.state_gpu_addr + probe_state.surface_state_offset_bytes as u64;
+        surface_state_base_gpu_addr + surface_state_pointer_offset as u64;
     let binding_table_pool_enable = if surface_base_relative_binding_table {
         "disabled-host-style"
     } else if device_is_gfx125(warm.device_id) {
@@ -1905,7 +1957,15 @@ fn encode_triangle_probe_batch(
         | (ps_dispatch_32 << 2)
         | (u32::from(ps_push_constant_enable) * PS_PUSH_CONSTANT_ENABLE)
         | (ps_max_threads_per_psd << PS_MAX_THREADS_SHIFT);
-    let ps_dw7 = ps_dispatch_contract.grf_start_dw;
+    let ps_dw7 = if artifact_native_fixed_function {
+        // Churn's authenticated SIMD8 binary is KSP0.  The captured ANV
+        // packet pairs KSP0 with Constant/Setup Data 0 (DW7[22:16]); the
+        // generic diagnostic mapper predates this artifact-native contract
+        // and keeps its historical variable-dispatch slot layout.
+        u32::from(ps_grf_start) << 16
+    } else {
+        ps_dispatch_contract.grf_start_dw
+    };
     let [ps_ksp0, ps_ksp1, ps_ksp2] = ps_dispatch_contract.ksp;
     let ps_scratch_space_buffer = 0u32;
     let ps_extra_attribute_enable =
@@ -1981,7 +2041,7 @@ fn encode_triangle_probe_batch(
     // Stateless Data Port Access MOCS is explicitly non-zero in the Gen12
     // packet contract, even when this draw has no stateless shader access.
     push(batch_dwords, &mut cursor, RENDER_MOCS << 16)?;
-    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, draw.state_gpu_addr)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, surface_state_base_gpu_addr)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, draw.state_gpu_addr)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, INDIRECT_OBJECT_SBA_BASE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, draw.state_gpu_addr)?;
@@ -3321,6 +3381,21 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, binding_table_pointer_offset)?;
     }
 
+    if surface_base_relative_binding_table && artifact_native_fixed_function {
+        // On SKL+ the binding-table pointer packets only take effect after the
+        // corresponding push-constant/state sequence.  The artifact-native
+        // path emitted valid pointers during initial state setup, but the
+        // later PUSH_CONSTANT_ALLOC/CONSTANT_ALL and shader-stage packets made
+        // those early values stale.  Re-arm both native stages at the final
+        // draw frontier, after all 3D state and before the indirect loads.
+        log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_VS native-pre-draw");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_VS)?;
+        push(batch_dwords, &mut cursor, binding_table_pointer_offset)?;
+        log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_PS native-pre-draw");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_PS)?;
+        push(batch_dwords, &mut cursor, binding_table_pointer_offset)?;
+    }
+
     if let Some(args_gpu_addr) = draw.indirect_args_gpu_addr {
         log_batch_offset(cursor, "Helio DrawIndexedIndirectArgs -> 3DPRIM registers");
         encode_draw_indexed_indirect_register_loads(batch_dwords, &mut cursor, args_gpu_addr)?;
@@ -3533,14 +3608,14 @@ fn encode_triangle_probe_batch(
     );
     intel_render_verbose_log!(
         "probe-binding-table-pool base=0x{:X} base_dw=0x{:08X} size_dw=0x{:08X} mocs=0x{:X} enable={} ps_bt_ptr=0x{:X} bt_gpu=0x{:X} bt_entry0=0x{:08X} surf_gpu=0x{:X} contract={}\n",
-        draw.state_gpu_addr,
+        surface_state_base_gpu_addr,
         binding_table_pool_base_dw,
         binding_table_pool_size_dw,
         RENDER_MOCS & BINDING_TABLE_POOL_MOCS_MASK,
         binding_table_pool_enable,
         binding_table_pointer_offset,
         binding_table_gpu_addr,
-        probe_state.surface_state_offset_bytes,
+        surface_state_pointer_offset,
         binding_table_entry0_gpu_addr,
         if surface_base_relative_binding_table {
             "surface-base-relative"
@@ -3673,7 +3748,7 @@ fn encode_triangle_probe_batch(
         ps_max_threads_per_psd,
         ps_blend_has_writeable_rt,
         binding_table_pointer_offset,
-        probe_state.surface_state_offset_bytes,
+        surface_state_pointer_offset,
         dispatch_reason,
         dispatch_armed,
         no_varying_payload,
@@ -3725,7 +3800,7 @@ fn encode_triangle_probe_batch(
     let ps_dispatch_bits_ok = (ps_dispatch_8 | ps_dispatch_16 | ps_dispatch_32) != 0;
     let ps_reserved_mbz_ok = (ps_extra_dw1 & (1 << 17)) == 0;
     let rt_binding_ok = ps_blend_has_writeable_rt != 0
-        && bt_entry0 == probe_state.surface_state_offset_bytes
+        && bt_entry0 == surface_state_pointer_offset
         && rt_width == draw.target_w
         && rt_height == draw.target_h;
     let expected_depth_test = u32::from(depth_config.is_some());
@@ -3793,7 +3868,7 @@ fn encode_triangle_probe_batch(
         ps_reserved_mbz_ok as u8,
         rt_binding_ok as u8,
         bt_entry0,
-        probe_state.surface_state_offset_bytes,
+        surface_state_pointer_offset,
         rt_width,
         rt_height,
         surface_base,

@@ -8,7 +8,7 @@ not leak into the `no_std` runtime crates.
 With no input argument it runs the pinned `af_heart`, speed-1 IPA vector. The
 accepted native result is 416 decoder frames and 249,600 mono 24-kHz samples
 (600 samples per frame). Two independent runs produced the same raw SHA-256
-`57c2b9b5782ae67a98fd6321034c7c270b44b47147cbbedcdd5f20f0c4ad1ecb`.
+`a24f5fc04d52729f93d47dd517d4aeb5fbf772764bd8588c29bd69866bbdecf4`.
 The separate RTen diagnostic resolves 412 frames; raw sample identity is not a
 sound readiness gate across these different floating-point runtimes.
 

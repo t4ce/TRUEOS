@@ -2,7 +2,10 @@ use alloc::format;
 use alloc::string::String;
 use core::str::SplitWhitespace;
 
-use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
+use super::super::{
+    ShellBackend2, line_width_for_backend, matrix_target_for_backend, print_matrix_target_line,
+    print_shell_line,
+};
 use crate::disc::block::{self, DeviceHandle};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
@@ -128,25 +131,30 @@ pub(crate) fn try_parse_as(
     };
 
     let command = String::from(command);
+    let output_target = matrix_target_for_backend(io);
+    let output_width = line_width_for_backend(io);
     crate::wait::spawn_local_detached(async move {
         let info = disk.info();
         let scan = match scan(disk, max_records).await {
             Ok(Some(scan)) => scan,
             Ok(None) => {
-                print_shell_line(
-                    io,
+                print_matrix_target_line(
+                    &output_target,
                     format!("{}: disk has no TRUEOSFS placement", command).as_str(),
                 );
                 return;
             }
             Err(err) => {
-                print_shell_line(io, format!("{}: scan failed: {err:?}", command).as_str());
+                print_matrix_target_line(
+                    &output_target,
+                    format!("{}: scan failed: {err:?}", command).as_str(),
+                );
                 return;
             }
         };
 
-        print_shell_line(
-            io,
+        print_matrix_target_line(
+            &output_target,
             format!(
                 "{}: disk={} ({}) bs={} data_lba={} log_head_rel={} checkpoint_rel={} records={} stop={}",
                 command,
@@ -165,10 +173,10 @@ pub(crate) fn try_parse_as(
         let headers = ["FileID", "Rel", "Blocks", "Kind", "Data", "Name", "Extra"];
         let table = super::tlb_helper::TlbTable::with_width(
             &headers,
-            line_width_for_backend(io).saturating_sub(2),
+            output_width.saturating_sub(2),
         )
         .with_max_col_widths(&[8, 8, 6, 4, 8, 0, 18]);
-        table.emit_header(|text| print_shell_line(io, text));
+        table.emit_header(|text| print_matrix_target_line(&output_target, text));
         for record in scan.records.iter() {
             let id = format!("{:08x}", record.entry_lba);
             let rel = format!("{}", record.rel_blocks);
@@ -185,9 +193,9 @@ pub(crate) fn try_parse_as(
                 name.as_str(),
                 extra.as_str(),
             ];
-            table.emit_row(&row, |text| print_shell_line(io, text));
+            table.emit_row(&row, |text| print_matrix_target_line(&output_target, text));
         }
-        table.emit_footer(|text| print_shell_line(io, text));
+        table.emit_footer(|text| print_matrix_target_line(&output_target, text));
     });
 
     ParseOutcome::Handled

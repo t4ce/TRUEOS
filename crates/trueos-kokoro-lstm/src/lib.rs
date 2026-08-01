@@ -21,6 +21,11 @@
 //! storage remains caller-owned. Neither path uses AVX-512 or changes a row's
 //! ascending-K fused accumulation order.
 //!
+//! Default Sigmoid/Tanh activations use the bounded rational approximations
+//! from ONNX Runtime's MLAS FMA3 kernels. The scalar port keeps the exact
+//! single-precision Horner/FMA order, so activation results do not depend on a
+//! hosted math library and remain identical on the bare-metal target.
+//!
 //! On the development i9-13900K, the release `dense_bench` example measured a
 //! `[1024, 512]` accumulation at 1.434 ms scalar, 0.053 ms gathered AVX2
 //! (27.31x), and 0.040 ms prepacked AVX2 (35.70x). `[1024, 640]` measured
@@ -829,7 +834,9 @@ impl<'model, 'workspace> CooperativeLstm<'model, 'workspace> {
         let sequence_index = self.sequence_index();
         let channels = self.problem.input_width.channels();
 
-        // Match the local RTen LSTM accumulation order: X*W, Wb, H*R, Rb.
+        // Match ONNX Runtime's CPU LSTM accumulation order: X*W, H*R, then
+        // one pre-combined Wb+Rb addition. The combined bias is rounded before
+        // it is added to the gate accumulator, as in UniDirectionalLstm::LoadBias.
         // Gate scratch is reinitialized on every attempt, so a failed dense
         // call is retry-safe without touching recurrent or output state.
         self.buffers.gates.fill(0.0);
@@ -840,10 +847,6 @@ impl<'model, 'workspace> CooperativeLstm<'model, 'workspace> {
         let weights = &self.problem.weights[weight_start..weight_start + GATE_ELEMENTS * channels];
         dense.accumulate(GATE_ELEMENTS, channels, weights, input, self.buffers.gates)?;
 
-        let bias_start = direction * BIAS_ELEMENTS_PER_DIRECTION;
-        let input_bias = &self.problem.bias[bias_start..bias_start + GATE_ELEMENTS];
-        add_bias(self.buffers.gates, input_bias);
-
         let state_start = direction * HIDDEN_SIZE;
         let hidden = &self.buffers.hidden[state_start..state_start + HIDDEN_SIZE];
         let recurrent_start = direction * GATE_ELEMENTS * HIDDEN_SIZE;
@@ -851,22 +854,24 @@ impl<'model, 'workspace> CooperativeLstm<'model, 'workspace> {
             [recurrent_start..recurrent_start + GATE_ELEMENTS * HIDDEN_SIZE];
         dense.accumulate(GATE_ELEMENTS, HIDDEN_SIZE, recurrent, hidden, self.buffers.gates)?;
 
+        let bias_start = direction * BIAS_ELEMENTS_PER_DIRECTION;
+        let input_bias = &self.problem.bias[bias_start..bias_start + GATE_ELEMENTS];
         let recurrent_bias = &self.problem.bias
             [bias_start + GATE_ELEMENTS..bias_start + BIAS_ELEMENTS_PER_DIRECTION];
-        add_bias(self.buffers.gates, recurrent_bias);
+        add_fused_bias(self.buffers.gates, input_bias, recurrent_bias);
 
         // No operation below this point can fail. Commit C, H, and Y together,
         // then advance the cooperative cursor.
         let output_start = (sequence_index * DIRECTIONS + direction) * HIDDEN_SIZE;
         for hidden_index in 0..HIDDEN_SIZE {
-            let input_gate = sigmoid(self.buffers.gates[INPUT_GATE_OFFSET + hidden_index]);
-            let output_gate = sigmoid(self.buffers.gates[OUTPUT_GATE_OFFSET + hidden_index]);
-            let forget_gate = sigmoid(self.buffers.gates[FORGET_GATE_OFFSET + hidden_index]);
-            let cell_gate = libm::tanhf(self.buffers.gates[CELL_GATE_OFFSET + hidden_index]);
+            let input_gate = mlas_logistic(self.buffers.gates[INPUT_GATE_OFFSET + hidden_index]);
+            let output_gate = mlas_logistic(self.buffers.gates[OUTPUT_GATE_OFFSET + hidden_index]);
+            let forget_gate = mlas_logistic(self.buffers.gates[FORGET_GATE_OFFSET + hidden_index]);
+            let cell_gate = mlas_tanh(self.buffers.gates[CELL_GATE_OFFSET + hidden_index]);
 
             let state_index = state_start + hidden_index;
             let next_cell = forget_gate * self.buffers.cell[state_index] + input_gate * cell_gate;
-            let next_hidden = output_gate * libm::tanhf(next_cell);
+            let next_hidden = output_gate * mlas_tanh(next_cell);
             self.buffers.cell[state_index] = next_cell;
             self.buffers.hidden[state_index] = next_hidden;
             self.buffers.output[output_start + hidden_index] = next_hidden;
@@ -912,21 +917,83 @@ fn validate_buffers(problem: &Problem<'_>, buffers: &Buffers<'_>) -> Result<(), 
     Ok(())
 }
 
-fn add_bias(output: &mut [f32], bias: &[f32]) {
-    for (output, &bias) in output.iter_mut().zip(bias) {
-        *output += bias;
+fn add_fused_bias(output: &mut [f32], input_bias: &[f32], recurrent_bias: &[f32]) {
+    for ((output, &input_bias), &recurrent_bias) in
+        output.iter_mut().zip(input_bias).zip(recurrent_bias)
+    {
+        *output += input_bias + recurrent_bias;
     }
 }
 
-fn sigmoid(value: f32) -> f32 {
-    // Equivalent to 1/(1+exp(-x)), avoiding a transient infinity for large
-    // negative inputs while preserving the ONNX default activation.
-    if value >= 0.0 {
-        1.0 / (1.0 + libm::expf(-value))
-    } else {
-        let exponential = libm::expf(value);
-        exponential / (1.0 + exponential)
-    }
+// ONNX Runtime 1.28 commit 45de2a8b06, MLAS LogisticKernelFma3. The constants
+// and operation order are intentionally written out instead of generalized:
+// changing one Horner operand can change the recurrent result by an ULP.
+fn mlas_logistic(value: f32) -> f32 {
+    const ALPHA_9: f32 = 4.37031012579801e-11_f32;
+    const ALPHA_7: f32 = 1.15627324459942e-07_f32;
+    const ALPHA_5: f32 = 6.08574864600143e-05_f32;
+    const ALPHA_3: f32 = 8.51377133304701e-03_f32;
+    const ALPHA_1: f32 = 2.48287947061529e-01_f32;
+    const BETA_10: f32 = 6.10247389755681e-13_f32;
+    const BETA_8: f32 = 5.76102136993427e-09_f32;
+    const BETA_6: f32 = 6.29106785017040e-06_f32;
+    const BETA_4: f32 = 1.70198817374094e-03_f32;
+    const BETA_2: f32 = 1.16817656904453e-01_f32;
+    const BETA_0: f32 = 9.93151921023180e-01_f32;
+
+    let value = clamp_preserving_nan(value, -18.0, 18.0);
+    let squared = value * value;
+
+    let mut numerator = libm::fmaf(squared, ALPHA_9, ALPHA_7);
+    numerator = libm::fmaf(numerator, squared, ALPHA_5);
+    numerator = libm::fmaf(numerator, squared, ALPHA_3);
+    numerator = libm::fmaf(numerator, squared, ALPHA_1);
+    numerator *= value;
+
+    let mut denominator = libm::fmaf(squared, BETA_10, BETA_8);
+    denominator = libm::fmaf(denominator, squared, BETA_6);
+    denominator = libm::fmaf(denominator, squared, BETA_4);
+    denominator = libm::fmaf(denominator, squared, BETA_2);
+    denominator = libm::fmaf(denominator, squared, BETA_0);
+
+    let result = numerator / denominator + 0.5;
+    if result < 0.0 { 0.0 } else { result }
+}
+
+// ONNX Runtime 1.28 commit 45de2a8b06, MLAS TanhKernelFma3.
+fn mlas_tanh(value: f32) -> f32 {
+    const ALPHA_13: f32 = -2.76076847742355e-16_f32;
+    const ALPHA_11: f32 = 2.00018790482477e-13_f32;
+    const ALPHA_9: f32 = -8.60467152213735e-11_f32;
+    const ALPHA_7: f32 = 5.12229709037114e-08_f32;
+    const ALPHA_5: f32 = 1.48572235717979e-05_f32;
+    const ALPHA_3: f32 = 6.37261928875436e-04_f32;
+    const ALPHA_1: f32 = 4.89352455891786e-03_f32;
+    const BETA_6: f32 = 1.19825839466702e-06_f32;
+    const BETA_4: f32 = 1.18534705686654e-04_f32;
+    const BETA_2: f32 = 2.26843463243900e-03_f32;
+    const BETA_0: f32 = 4.89352518554385e-03_f32;
+
+    let value = clamp_preserving_nan(value, -9.0, 9.0);
+    let squared = value * value;
+
+    let mut numerator = libm::fmaf(squared, ALPHA_13, ALPHA_11);
+    numerator = libm::fmaf(numerator, squared, ALPHA_9);
+    numerator = libm::fmaf(numerator, squared, ALPHA_7);
+    numerator = libm::fmaf(numerator, squared, ALPHA_5);
+    numerator = libm::fmaf(numerator, squared, ALPHA_3);
+    numerator = libm::fmaf(numerator, squared, ALPHA_1);
+    numerator *= value;
+
+    let mut denominator = libm::fmaf(squared, BETA_6, BETA_4);
+    denominator = libm::fmaf(denominator, squared, BETA_2);
+    denominator = libm::fmaf(denominator, squared, BETA_0);
+    numerator / denominator
+}
+
+fn clamp_preserving_nan(value: f32, lower: f32, upper: f32) -> f32 {
+    let value = if value < lower { lower } else { value };
+    if value > upper { upper } else { value }
 }
 
 #[cfg(test)]

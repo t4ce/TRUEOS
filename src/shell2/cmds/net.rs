@@ -3,7 +3,10 @@ use core::str::SplitWhitespace;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet as api;
 
-use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
+use super::super::{
+    ShellBackend2, line_width_for_backend, matrix_target_for_backend, print_matrix_target_line,
+    print_shell_line,
+};
 use super::tlb_helper::{TlbTable, print_table};
 use crate::r::net::VNet;
 use crate::shell2::shell2_cmd::ParseOutcome;
@@ -171,6 +174,7 @@ fn cmd_net_icmp(
         return;
     }
 
+    let output_target = matrix_target_for_backend(io);
     crate::wait::spawn_local_detached(async move {
         let ip_res = match device_index {
             Some(dev_idx) => {
@@ -194,7 +198,7 @@ fn cmd_net_icmp(
             Ok(addr) => addr,
             Err(err) => {
                 let msg = alloc::format!("net icmp: resolve failed {:?}", err);
-                line(io, msg.as_str());
+                print_matrix_target_line(&output_target, msg.as_str());
                 return;
             }
         };
@@ -207,14 +211,14 @@ fn cmd_net_icmp(
             ip[2],
             ip[3]
         );
-        line(io, header.as_str());
+        print_matrix_target_line(&output_target, header.as_str());
 
         let vnet = match device_index {
             Some(index) => VNet::open(index),
             None => VNet::open_primary(),
         };
         let Some(vnet) = vnet else {
-            line(io, "net icmp: no network device");
+            print_matrix_target_line(&output_target, "net icmp: no network device");
             return;
         };
 
@@ -229,7 +233,7 @@ fn cmd_net_icmp(
                 })
                 .is_err()
             {
-                line(io, "net icmp: send failed");
+                print_matrix_target_line(&output_target, "net icmp: send failed");
             }
 
             let deadline = Instant::now() + EmbassyDuration::from_secs(2);
@@ -254,7 +258,7 @@ fn cmd_net_icmp(
                         seq,
                         rtt_ms
                     );
-                    line(io, msg.as_str());
+                    print_matrix_target_line(&output_target, msg.as_str());
                     got = true;
                     break;
                 }
@@ -263,7 +267,7 @@ fn cmd_net_icmp(
 
             if !got {
                 let msg = alloc::format!("net icmp: request seq={} timeout", seq);
-                line(io, msg.as_str());
+                print_matrix_target_line(&output_target, msg.as_str());
             }
 
             seq = seq.wrapping_add(1);
@@ -299,11 +303,12 @@ fn cmd_net_irc(
         chan = Some(s);
     }
 
+    let output_target = matrix_target_for_backend(io);
     crate::wait::spawn_local_detached(async move {
         use crate::r::net::cli::irc::{IRC_DEFAULT_PORT, IrcSession};
 
         let msg = alloc::format!("irc: connecting {}:{}", server.as_str(), IRC_DEFAULT_PORT);
-        line(io, msg.as_str());
+        print_matrix_target_line(&output_target, msg.as_str());
 
         let mut session = match IrcSession::connect(
             server.as_str(),
@@ -316,7 +321,7 @@ fn cmd_net_irc(
             Ok(s) => s,
             Err(e) => {
                 let msg = alloc::format!("irc: connect failed {:?}", e);
-                line(io, msg.as_str());
+                print_matrix_target_line(&output_target, msg.as_str());
                 return;
             }
         };
@@ -326,32 +331,32 @@ fn cmd_net_irc(
             .await
         {
             let msg = alloc::format!("irc: register failed {:?}", e);
-            line(io, msg.as_str());
+            print_matrix_target_line(&output_target, msg.as_str());
             let _ = session.quit("bye", 1_000).await;
             return;
         }
-        line(io, "irc: registered");
+        print_matrix_target_line(&output_target, "irc: registered");
 
         if let Some(ch) = chan.as_ref() {
             let msg = alloc::format!("irc: joining {}", ch.as_str());
-            line(io, msg.as_str());
+            print_matrix_target_line(&output_target, msg.as_str());
             if let Err(e) = session.join(ch.as_str()) {
                 let msg = alloc::format!("irc: join failed {:?}", e);
-                line(io, msg.as_str());
+                print_matrix_target_line(&output_target, msg.as_str());
             }
         }
 
         let deadline = Instant::now() + EmbassyDuration::from_secs(10);
         while Instant::now() < deadline {
             match session.recv_line(500).await {
-                Ok(Some(l)) => line(io, l.as_str()),
+                Ok(Some(l)) => print_matrix_target_line(&output_target, l.as_str()),
                 Ok(None) => {}
                 Err(_) => break,
             }
         }
 
         let _ = session.quit("bye", 2_000).await;
-        line(io, "irc: done");
+        print_matrix_target_line(&output_target, "irc: done");
     });
 }
 

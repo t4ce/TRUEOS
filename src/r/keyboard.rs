@@ -1,10 +1,15 @@
+use core::sync::atomic::{AtomicU32, Ordering};
 use heapless::Vec;
 use spin::Mutex;
 
 const MAX_KEYBOARD_SNAPSHOTS: usize = 32;
 const MAX_KEYBOARD_OUTPUT_EVENTS: usize = 256;
+pub const KEYBOARD_TEXT_BURST_MAX_SCALARS: usize = MAX_KEYBOARD_OUTPUT_EVENTS;
 const KEYBOARD_OUTPUT_FLAG_PRESS: u32 = 1 << 0;
 pub const KEYBOARD_OUTPUT_FLAG_SYNTHETIC: u32 = 1 << 1;
+pub const KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START: u32 = 1 << 2;
+pub const KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END: u32 = 1 << 3;
+pub const KEYBOARD_OUTPUT_FLAG_TEXT_BURST: u32 = 1 << 4;
 pub const KEYBOARD_OUTPUT_FLAG_DEVICE_LOST: u32 = 1 << 31;
 pub const KEYBOARD_OUTPUT_KIND_TEXT: u8 = 1;
 pub const KEYBOARD_OUTPUT_KIND_KEY: u8 = 2;
@@ -135,10 +140,20 @@ impl KeyboardOutputRing {
             write_seq: 0,
         }
     }
+
+    #[inline]
+    fn push(&mut self, mut evt: TrueosKeyboardOutputEvent) {
+        self.write_seq = self.write_seq.wrapping_add(1);
+        let seq = self.write_seq;
+        evt.seq = seq as u32;
+        let idx = ((seq - 1) as usize) % MAX_KEYBOARD_OUTPUT_EVENTS;
+        self.buf[idx] = evt;
+    }
 }
 
 static KEYBOARD_OUTPUT_RING: Mutex<KeyboardOutputRing> = Mutex::new(KeyboardOutputRing::new());
 static KEYBOARD_OUTPUT_POP_SEQ: Mutex<u64> = Mutex::new(0);
+static NEXT_KEYBOARD_TEXT_BURST_ID: AtomicU32 = AtomicU32::new(1);
 
 pub fn upsert_snapshot(
     controller_id: u32,
@@ -328,13 +343,8 @@ fn hid_boot_keycode_to_named_key(key: u8) -> Option<u16> {
 }
 
 #[inline]
-fn push_output_event(mut evt: TrueosKeyboardOutputEvent) {
-    let mut ring = KEYBOARD_OUTPUT_RING.lock();
-    ring.write_seq = ring.write_seq.wrapping_add(1);
-    let seq = ring.write_seq;
-    evt.seq = seq as u32;
-    let idx = ((seq - 1) as usize) % MAX_KEYBOARD_OUTPUT_EVENTS;
-    ring.buf[idx] = evt;
+fn push_output_event(evt: TrueosKeyboardOutputEvent) {
+    KEYBOARD_OUTPUT_RING.lock().push(evt);
 }
 
 #[inline]
@@ -370,9 +380,32 @@ pub fn push_output_char(
     ch: char,
     flags: u32,
 ) {
+    push_output_event(output_char_event(
+        controller_id,
+        slot_id,
+        ep_target,
+        t_ms,
+        device_seq,
+        modifiers,
+        ch,
+        flags,
+    ));
+}
+
+#[inline]
+fn output_char_event(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    t_ms: u32,
+    device_seq: u32,
+    modifiers: u8,
+    ch: char,
+    flags: u32,
+) -> TrueosKeyboardOutputEvent {
     let mut utf8 = [0u8; 4];
     let utf8_len = ch.encode_utf8(&mut utf8).len() as u8;
-    push_output_event(TrueosKeyboardOutputEvent {
+    TrueosKeyboardOutputEvent {
         t_ms,
         seq: 0,
         device_seq,
@@ -388,7 +421,7 @@ pub fn push_output_char(
         codepoint: ch as u32,
         utf8,
         flags,
-    });
+    }
 }
 
 pub fn push_output_key(
@@ -588,13 +621,67 @@ pub fn inject_text(slot_id: u32, text: &str, flags: u32) -> usize {
         return 0;
     }
 
+    // A logical text burst must remain complete in the output ring. Reject an
+    // oversized injection rather than publishing a prefix or a tail which a
+    // consumer could mistake for the complete paste operation.
+    let Some(scalar_count) = text_burst_scalar_count(text) else {
+        return 0;
+    };
+
     let t_ms = uptime_ms_u32();
-    let mut wrote = 0usize;
-    for ch in text.chars() {
-        push_output_char(0, slot_id, 0, t_ms, 0, 0, ch, flags | KEYBOARD_OUTPUT_FLAG_PRESS);
-        wrote += 1;
+    let burst_id = next_keyboard_text_burst_id();
+    push_text_burst(slot_id, text, scalar_count, burst_id, flags, t_ms)
+}
+
+fn text_burst_scalar_count(text: &str) -> Option<usize> {
+    let scalar_count = text.chars().count();
+    (scalar_count <= KEYBOARD_TEXT_BURST_MAX_SCALARS).then_some(scalar_count)
+}
+
+fn next_keyboard_text_burst_id() -> u32 {
+    loop {
+        let burst_id = NEXT_KEYBOARD_TEXT_BURST_ID.fetch_add(1, Ordering::Relaxed);
+        if burst_id != 0 {
+            return burst_id;
+        }
     }
-    wrote
+}
+
+fn push_text_burst(
+    slot_id: u32,
+    text: &str,
+    scalar_count: usize,
+    burst_id: u32,
+    flags: u32,
+    t_ms: u32,
+) -> usize {
+    let mut ring = KEYBOARD_OUTPUT_RING.lock();
+    push_text_burst_into(&mut ring, slot_id, text, scalar_count, burst_id, flags, t_ms)
+}
+
+fn push_text_burst_into(
+    ring: &mut KeyboardOutputRing,
+    slot_id: u32,
+    text: &str,
+    scalar_count: usize,
+    burst_id: u32,
+    flags: u32,
+    t_ms: u32,
+) -> usize {
+    for (index, ch) in text.chars().enumerate() {
+        let mut event_flags = flags
+            | KEYBOARD_OUTPUT_FLAG_PRESS
+            | KEYBOARD_OUTPUT_FLAG_SYNTHETIC
+            | KEYBOARD_OUTPUT_FLAG_TEXT_BURST;
+        if index == 0 {
+            event_flags |= KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START;
+        }
+        if index + 1 == scalar_count {
+            event_flags |= KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END;
+        }
+        ring.push(output_char_event(0, slot_id, 0, t_ms, burst_id, 0, ch, event_flags));
+    }
+    scalar_count
 }
 
 pub fn inject_key(slot_id: u32, codepoint: u32, key_code: u16, modifiers: u8, flags: u32) -> bool {
@@ -633,8 +720,53 @@ pub fn inject_key(slot_id: u32, codepoint: u32, key_code: u16, modifiers: u8, fl
 mod tests {
     use super::*;
 
+    fn text_burst_events(text: &str) -> KeyboardOutputRing {
+        let scalar_count = text.chars().count();
+        let mut ring = KeyboardOutputRing::new();
+        assert_eq!(push_text_burst_into(&mut ring, 7, text, scalar_count, 9, 0, 42), scalar_count);
+        ring
+    }
+
     #[test]
     fn print_screen_boot_usage_maps_to_named_key() {
         assert_eq!(hid_boot_keycode_to_named_key(0x46), Some(KEYBOARD_KEY_PRINT_SCREEN));
+    }
+
+    #[test]
+    fn one_scalar_text_burst_has_both_boundaries() {
+        let ring = text_burst_events("x");
+        let event = ring.buf[0];
+
+        assert_eq!(ring.write_seq, 1);
+        assert_ne!(event.flags & KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START, 0);
+        assert_ne!(event.flags & KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END, 0);
+        assert_ne!(event.flags & KEYBOARD_OUTPUT_FLAG_TEXT_BURST, 0);
+        assert_ne!(event.flags & KEYBOARD_OUTPUT_FLAG_SYNTHETIC, 0);
+        assert_eq!(event.device_seq, 9);
+    }
+
+    #[test]
+    fn multi_scalar_text_burst_marks_only_first_and_last() {
+        let ring = text_burst_events("aß水");
+        let first = ring.buf[0];
+        let middle = ring.buf[1];
+        let last = ring.buf[2];
+
+        assert_eq!(ring.write_seq, 3);
+        assert_ne!(first.flags & KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START, 0);
+        assert_eq!(first.flags & KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END, 0);
+        assert_eq!(middle.flags & KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START, 0);
+        assert_eq!(middle.flags & KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END, 0);
+        assert_eq!(last.flags & KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START, 0);
+        assert_ne!(last.flags & KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END, 0);
+    }
+
+    #[test]
+    fn oversized_text_burst_is_rejected_as_a_whole() {
+        let text = (0..KEYBOARD_TEXT_BURST_MAX_SCALARS + 1)
+            .map(|_| 'x')
+            .collect::<alloc::string::String>();
+
+        assert_eq!(text_burst_scalar_count(text.as_str()), None);
     }
 }

@@ -1080,7 +1080,7 @@ fn churn_forward_pipeline(
         || vertex.ksp_offset_bytes != 0
         || fragment.ksp_offset_bytes != 0
         || vertex.grf_start_register != 2
-        || fragment.grf_start_register != 2
+        || fragment.grf_start_register != 4
         || vertex.grf_used != 128
         || fragment.grf_used != 128
         || vertex.max_threads != 64

@@ -1471,7 +1471,7 @@ pub extern "C" fn trueos_cabi_shell2_frontend_attach_v1(cols: u32, rows: u32) ->
     let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
         return -3;
     };
-    crate::shell2::backends::net_tcp::attach_net_shell_frontend(vm_id, cols as usize, rows as usize)
+    crate::shell2::backends::session_pool::attach(vm_id, cols as usize, rows as usize)
 }
 
 #[unsafe(no_mangle)]
@@ -1538,7 +1538,7 @@ pub unsafe extern "C" fn trueos_cabi_shell2_frontend_read_v1(
     } else {
         unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) }
     };
-    match crate::shell2::backends::net_tcp::read_net_shell_frontend(vm_id, read_seq, out) {
+    match crate::shell2::backends::session_pool::read(vm_id, read_seq, out) {
         Ok(read) => {
             unsafe {
                 out_next_seq.write(read.next_seq);
@@ -1580,7 +1580,7 @@ pub unsafe extern "C" fn trueos_cabi_shell2_frontend_submit_input_v1(
     let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
         return -3;
     };
-    crate::shell2::backends::net_tcp::submit_net_shell_frontend_input(vm_id, data)
+    crate::shell2::backends::session_pool::submit_input(vm_id, data)
         .map(|written| written as isize)
         .unwrap_or_else(|rc| rc as isize)
 }
@@ -1599,7 +1599,7 @@ pub extern "C" fn trueos_cabi_shell2_frontend_detach_v1() -> i32 {
     let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
         return -3;
     };
-    crate::shell2::backends::net_tcp::release_net_shell_frontend(vm_id)
+    crate::shell2::backends::session_pool::detach(vm_id)
 }
 
 #[unsafe(no_mangle)]

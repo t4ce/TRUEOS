@@ -216,9 +216,10 @@ def _encode_churn_stage(
     name = section_name.encode("ascii")
     if not code or len(code) % 4 or len(entry) > 16 or len(name) > 56:
         raise SystemExit("invalid churn-forward native stage")
-    # ShaderKernelMetadata fields consumed by TRUEOS. The ANV gfx125 programs
-    # use SIMD8 with r2 as the payload start. The 128-GRF/64-thread envelope is
-    # the same conservative Xe-LP contract used by trueos-shader.
+    # ShaderKernelMetadata fields consumed by TRUEOS.  The captured ANV Churn
+    # packet launches the SIMD8 VS at r2 and the SIMD8 PS at r4.  Keep those
+    # compiler-authored payload starts with the extracted ISA instead of
+    # applying one stage-agnostic default.
     struct.pack_into(
         "<HHIIIIHHHHHHHHIII",
         out,
@@ -229,7 +230,7 @@ def _encode_churn_stage(
         0,                  # code offset inside the named section
         64,                 # required upload alignment
         0,                  # KSP offset from uploaded code base
-        2,                  # dispatch GRF start
+        2 if stage == 1 else 4,  # dispatch GRF start
         128,                # GRF allocation envelope
         64,                 # max threads
         4 if stage == 1 else 1,
@@ -834,7 +835,7 @@ def bake_churn_only(
             "section": CHURN_FORWARD_PS, "code_size_bytes": len(ps),
             "sha256": sha256(ps), "binding_table_entry_count": 1,
             "sampler_count": 0, "scratch_bytes": 0,
-            "grf_start_register": 2, "grf_used": 128, "max_threads": 64,
+            "grf_start_register": 4, "grf_used": 128, "max_threads": 64,
             "num_varying_inputs": 2, "uses_vmask": True, "flat_inputs": 2,
         },
     ]
@@ -1085,7 +1086,7 @@ def main() -> None:
                     "section": CHURN_FORWARD_PS, "code_size_bytes": len(churn_ps),
                     "sha256": sha256(churn_ps), "binding_table_entry_count": 1,
                     "sampler_count": 0, "scratch_bytes": 0,
-                    "grf_start_register": 2, "grf_used": 128, "max_threads": 64,
+                    "grf_start_register": 4, "grf_used": 128, "max_threads": 64,
                     "num_varying_inputs": 2, "uses_vmask": True, "flat_inputs": 2,
                 },
             ],

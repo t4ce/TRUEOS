@@ -4,9 +4,10 @@ use core::fmt::Write;
 use qrcodegen::{QrCode, QrCodeEcc, Version};
 
 use super::super::{
-    OUTPUT_CONTAINER_MASK, OUTPUT_NET_TCP_MASK, ShellBackend2,
+    ShellBackend2, TRANSPORT_CONTAINER_SCOPE, TRANSPORT_NET_TCP_SCOPE,
     claim_matrix_target_for_app_slot_selected, konsole_viewport_size_for_target,
     matrix_target_for_backend, output_target_for_backend, print_native_line, print_shell_line,
+    transport_scope_for_backend,
 };
 use crate::crypt::{self, CryError, CryTwoFactorState};
 use crate::shell2::shell2_cmd::ParseOutcome;
@@ -25,11 +26,8 @@ fn usage(io: &'static dyn ShellBackend2) {
 }
 
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let _ = claim_matrix_target_for_app_slot_selected(
-        output_target_for_backend(io),
-        CRY_SLOT,
-        CRY_SLOT,
-    );
+    let active_target = matrix_target_for_backend(io);
+    let _ = claim_matrix_target_for_app_slot_selected(&active_target, CRY_SLOT, CRY_SLOT);
     let mut args = rest.split_whitespace();
     match (args.next(), args.next(), args.next(), args.next()) {
         (None, None, None, None) => {
@@ -61,7 +59,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
             print_shell_line(io, "cry login: enter `cry login <6-digit authenticator code>`");
         }
         (Some(command), None, None, None) if command.eq_ignore_ascii_case("logout") => {
-            let ended = crypt::logout(output_target_for_backend(io));
+            let ended = crypt::logout(transport_scope_for_backend(io));
             print_shell_line(
                 io,
                 if ended {
@@ -164,7 +162,7 @@ fn present_totp_enrollment(io: &'static dyn ShellBackend2) {
 }
 
 fn login_root(io: &'static dyn ShellBackend2, code: &str) {
-    let scope_id = output_target_for_backend(io);
+    let scope_id = transport_scope_for_backend(io);
     match crypt::login_root(code, scope_id) {
         Ok(report) => {
             crate::shell2::matrix::clear_active_lines(output_target_for_backend(io));
@@ -213,7 +211,7 @@ fn login_root(io: &'static dyn ShellBackend2, code: &str) {
 
 fn print_status(io: &'static dyn ShellBackend2) {
     let status = crypt::status();
-    let scope_id = output_target_for_backend(io);
+    let scope_id = transport_scope_for_backend(io);
     let recording_on = status
         .session
         .is_some_and(|session| session.scope_id == scope_id);
@@ -273,9 +271,9 @@ fn print_status(io: &'static dyn ShellBackend2) {
 }
 
 fn scope_name(scope_id: u8) -> &'static str {
-    if (scope_id & OUTPUT_NET_TCP_MASK) != 0 {
+    if (scope_id & TRANSPORT_NET_TCP_SCOPE) != 0 {
         "net-tcp"
-    } else if (scope_id & OUTPUT_CONTAINER_MASK) != 0 {
+    } else if (scope_id & TRANSPORT_CONTAINER_SCOPE) != 0 {
         "container"
     } else {
         "local"
@@ -352,7 +350,8 @@ fn render_qr(
     let output_mask = output_target_for_backend(io);
     let symbol_with_quiet_zone = qr.size() + QR_QUIET_ZONE * 2;
     let required_cols = symbol_with_quiet_zone as usize;
-    let network_warning_rows = usize::from(output_mask == OUTPUT_NET_TCP_MASK);
+    let network_warning_rows =
+        usize::from(transport_scope_for_backend(io) == TRANSPORT_NET_TCP_SCOPE);
     let required_rows = (symbol_with_quiet_zone as usize).div_ceil(2) + 3 + network_warning_rows;
     let target = matrix_target_for_backend(io);
     let (available_cols, available_rows) = konsole_viewport_size_for_target(&target);
@@ -436,7 +435,7 @@ fn print_totp_clock(io: &'static dyn ShellBackend2, clock: Option<crypt::CryTotp
 }
 
 fn print_network_trust_warning(io: &'static dyn ShellBackend2) {
-    if output_target_for_backend(io) == OUTPUT_NET_TCP_MASK {
+    if transport_scope_for_backend(io) == TRANSPORT_NET_TCP_SCOPE {
         print_native_line(
             io,
             "cry 2fa: warning: this F4 session crosses the network; use only on a trusted link",

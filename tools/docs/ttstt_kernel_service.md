@@ -62,13 +62,14 @@ blocking boot.
 
 The host CLI's model engines are not kernel dependencies: Kokoro has both an
 ONNX Runtime oracle and a pinned pure-Rust RTen reference, while Whisper uses
-whisper.cpp. RTen proves the graph and audio contract locally, but its
-`std`/Rayon graph runtime is not transplanted into the kernel. The kernel
-service therefore does not pretend that loading ONNX/GGML bytes decodes those
-formats. A native decoder implements `InferenceJob`, consumes the resident
-`ModelSet`, and uses the provided CPU/GPU kernels in bounded slices. This keeps
-model parsing and filesystem traffic out of the request path while avoiding a
-host thread pool, C runtime, or filesystem access during inference.
+whisper.cpp. ONNX Runtime is the operator-semantics and perceptual oracle; RTen
+proves the prepared graph, tensor shapes, and audio-container contract locally,
+but its `std`/Rayon graph runtime is not transplanted into the kernel. The
+kernel service therefore does not pretend that loading ONNX/GGML bytes decodes
+those formats. A native decoder implements `InferenceJob`, consumes the
+resident `ModelSet`, and uses the provided CPU/GPU kernels in bounded slices.
+This keeps model parsing and filesystem traffic out of the request path while
+avoiding a host thread pool, C runtime, or filesystem access during inference.
 
 The decoder installs one `SpeechBackend`. Its cooperative warm job parses both
 resident model images on the AP2+ pool and marks the backend ready; the BSP

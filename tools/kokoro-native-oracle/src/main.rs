@@ -57,7 +57,7 @@ const REFERENCE_IPA: &str = "həlˈoʊ fɹʌm tɹu oʊ ɛs. ðə kwɪk bɹaʊn f
 const REFERENCE_FRAMES: u32 = 416;
 const REFERENCE_SAMPLES: usize = 249_600;
 const REFERENCE_WAV_SHA256: &str =
-    "da969c5dd6d0ddc6f98818e3af0154326cb7a97b8849d97a5bee730aeae527dd";
+    "1e940079ead43156d13dfd8f55fb1955804da04d5cef2ba987c3cd0d69e5aba3";
 const REFERENCE_LOGITS_SHA256: &str =
     "6d1489df516fb94f03727b2943d0d11fb3e38b3253db9191e6aa5b4be3acb77a";
 const REFERENCE_PRE_QGEMM_SHA256: &str =

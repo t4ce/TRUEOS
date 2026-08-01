@@ -271,8 +271,6 @@ pub fn shell2_raw_write(bytes: &[u8]) -> usize {
     unsafe { vcabi::trueos_cabi_shell2_raw_write(bytes.as_ptr(), bytes.len()) }
 }
 
-+
-
 pub const SHELL2_FRONTEND_READ_DROPPED: u32 = 1 << 0;
 pub const SHELL2_FRONTEND_DIRECT_HANDOFF: u32 = 1 << 1;
 

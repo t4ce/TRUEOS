@@ -3,7 +3,7 @@ use alloc::string::String as AllocString;
 use alloc::vec::Vec;
 use core::cell::Cell;
 use core::fmt::Write as _;
-use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU16, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::String as HString;
@@ -40,9 +40,27 @@ const TITLE_COUNT_RGB: (u8, u8, u8) = (255, 255, 255);
 const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 const VMX_STATUS_RGB: (u8, u8, u8) = (120, 210, 255);
 const VMX_TUI_RGB: (u8, u8, u8) = (255, 90, 90);
-pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 0;
-pub(crate) const OUTPUT_LOCAL_MASK: u8 = 1 << 1;
-pub(crate) const OUTPUT_CONTAINER_MASK: u8 = 1 << 2;
+pub(crate) type OutputMask = u16;
+pub(crate) const OUTPUT_NET_TCP_MASK: OutputMask = 1 << 0;
+pub(crate) const LOCAL_SHELL_SESSION_CAP: usize = 9;
+pub(crate) const LOCAL_SHELL_SESSION_FIRST_BIT: usize = 1;
+pub(crate) const OUTPUT_LOCAL_MASK: OutputMask =
+    ((1 << LOCAL_SHELL_SESSION_CAP) - 1) << LOCAL_SHELL_SESSION_FIRST_BIT;
+pub(crate) const OUTPUT_CONTAINER_MASK: OutputMask = 1 << 10;
+pub(crate) const OUTPUT_SYSTEM_MASK: OutputMask = 1 << 11;
+pub(crate) const OUTPUT_SCOPE_COUNT: usize = 12;
+
+pub(crate) const TRANSPORT_NET_TCP_SCOPE: u8 = 1 << 0;
+pub(crate) const TRANSPORT_LOCAL_SCOPE: u8 = 1 << 1;
+pub(crate) const TRANSPORT_CONTAINER_SCOPE: u8 = 1 << 2;
+
+pub(crate) const fn local_shell_session_output_mask(index: usize) -> OutputMask {
+    if index < LOCAL_SHELL_SESSION_CAP {
+        1 << (LOCAL_SHELL_SESSION_FIRST_BIT + index)
+    } else {
+        0
+    }
+}
 const SECTION_STATUS_TEXT: &str = "t4ce is with you";
 const SECTION_STATUS_HOLD_MS: u64 = 1000;
 const SECTION_RAINBOW_FRAME_MS: u64 = 120;
@@ -57,9 +75,7 @@ const CRY_APP_LABEL: &str = "cry";
 pub(crate) const LOCAL_ESCAPE_KEY_BYTE: u8 = 0x1d;
 pub(crate) const LOCAL_UNMAPPED_KEY_BYTE: u8 = 0x1e;
 
-static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
-static NET_TCP_TERMINAL_ROWS: AtomicUsize =
-    AtomicUsize::new(DEFAULT_TRANSCRIPT_VIEW_ROWS + SCROLL_TOP_ROW - 1);
+static REGISTERED_OUTPUTS: AtomicU16 = AtomicU16::new(0);
 
 #[derive(Clone)]
 pub(crate) struct TranscriptEntry {
@@ -83,10 +99,50 @@ pub(crate) enum CommandSessionInputResult {
 
 #[derive(Clone)]
 pub(crate) struct MatrixTarget {
-    output_mask: u8,
+    output_mask: OutputMask,
+    local_session_generation: Option<u64>,
     slot_id: matrix::MatrixSlotId,
     slot_lifetime_generation: u64,
     interrupt_generation: u64,
+}
+
+fn with_output_scope_lease<R>(
+    output_mask: OutputMask,
+    operation: impl FnOnce(Option<u64>) -> R,
+) -> Option<R> {
+    if (output_mask & OUTPUT_LOCAL_MASK) == 0 {
+        return Some(operation(None));
+    }
+    backends::session_pool::with_active_generation_for_output_mask(output_mask, |generation| {
+        operation(Some(generation))
+    })
+}
+
+fn with_matrix_target_lease<R>(
+    target: &MatrixTarget,
+    operation: impl FnOnce() -> R,
+) -> Option<R> {
+    if (target.output_mask & OUTPUT_LOCAL_MASK) == 0 {
+        return Some(operation());
+    }
+    let generation = target.local_session_generation?;
+    backends::session_pool::with_generation_for_output_mask(
+        target.output_mask,
+        generation,
+        |_| operation(),
+    )
+}
+
+fn with_matrix_target_geometry<R>(
+    target: &MatrixTarget,
+    operation: impl FnOnce((usize, usize)) -> R,
+) -> Option<R> {
+    let generation = target.local_session_generation?;
+    backends::session_pool::with_generation_for_output_mask(
+        target.output_mask,
+        generation,
+        operation,
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -250,14 +306,14 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str(ecma48::RESTORE_CURSOR);
     }
 
-    fn banner(&self, output_mask: u8, mode: ShellMode2, time_text: &str) {
+    fn banner(&self, output_mask: OutputMask, mode: ShellMode2, time_text: &str) {
         self.move_to(BANNER_ROW, 1);
         self.clear_line();
         self.banner_left(output_mask, time_text);
         self.right_text(BANNER_ROW, self.banner_right_text(output_mask, mode).as_str());
     }
 
-    fn banner_left(&self, output_mask: u8, time_text: &str) {
+    fn banner_left(&self, output_mask: OutputMask, time_text: &str) {
         self.move_to(BANNER_ROW, 1);
         self.io.raw_write_str(BANNER_TITLE_TEXT);
         self.io.raw_write_char(' ');
@@ -279,7 +335,7 @@ impl<'a> AlignedWriter<'a> {
         }
     }
 
-    fn mode_status(&self, output_mask: u8, running_go2_phase: usize) {
+    fn mode_status(&self, output_mask: OutputMask, running_go2_phase: usize) {
         self.move_to(STATUS_ROW, 1);
         self.clear_line();
         let slot_text = self.slot_status_text(output_mask, running_go2_phase);
@@ -292,7 +348,7 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str(ecma48::RESET);
     }
 
-    fn banner_right_text(&self, output_mask: u8, mode: ShellMode2) -> AllocString {
+    fn banner_right_text(&self, output_mask: OutputMask, mode: ShellMode2) -> AllocString {
         let mut text = AllocString::new();
         if active_matrix_slot_is_vmx(output_mask) {
             let styled =
@@ -348,7 +404,7 @@ impl<'a> AlignedWriter<'a> {
         out.push_str(styled.as_str());
     }
 
-    fn slot_status_text(&self, output_mask: u8, _running_go2_phase: usize) -> AllocString {
+    fn slot_status_text(&self, output_mask: OutputMask, _running_go2_phase: usize) -> AllocString {
         let slots = matrix::slot_views(output_mask);
         let mut out = AllocString::new();
         for (idx, slot) in slots.iter().enumerate() {
@@ -388,7 +444,7 @@ impl<'a> AlignedWriter<'a> {
         out
     }
 
-    fn prompt(&self, output_mask: u8) {
+    fn prompt(&self, output_mask: OutputMask) {
         self.move_to(PROMPT_ROW, 1);
         self.clear_line();
         self.io.raw_write_str("\x1b[0m");
@@ -458,6 +514,11 @@ fn same_backend_task(io: &'static dyn ShellBackend2, target: &'static dyn ShellI
 }
 
 fn register_output(io: &'static dyn ShellIo2) {
+    let declared = io.output_mask();
+    if declared != 0 {
+        REGISTERED_OUTPUTS.fetch_or(declared, Ordering::Relaxed);
+        return;
+    }
     let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
     if same_backend_io(io, net_io) {
         REGISTERED_OUTPUTS.fetch_or(OUTPUT_NET_TCP_MASK, Ordering::Relaxed);
@@ -499,6 +560,21 @@ pub(crate) fn activate_net_shell_frontend_view(cols: usize, rows: usize) {
     }
 }
 
+pub(crate) fn configure_local_shell_session_view(index: usize, cols: usize, rows: usize) {
+    let output_mask = local_shell_session_output_mask(index);
+    if output_mask != 0 {
+        let _ = apply_reported_terminal_size(output_mask, cols, rows);
+    }
+}
+
+pub(crate) fn initialize_local_shell_session_view(index: usize, cols: usize, rows: usize) {
+    let output_mask = local_shell_session_output_mask(index);
+    if output_mask != 0 {
+        let _ = matrix::switch_active_slot(output_mask, "");
+        let _ = apply_reported_terminal_size(output_mask, cols, rows);
+    }
+}
+
 pub(crate) fn minimum_line_width_for_backend(io: &'static dyn ShellBackend2) -> usize {
     minimum_line_width_for_output(output_target_for_backend(io))
 }
@@ -506,51 +582,46 @@ pub(crate) fn minimum_line_width_for_backend(io: &'static dyn ShellBackend2) -> 
 pub(crate) fn net_shell_terminal_size() -> (usize, usize) {
     (
         line_width_for_output(OUTPUT_NET_TCP_MASK),
-        NET_TCP_TERMINAL_ROWS.load(Ordering::Relaxed).max(1),
+        matrix::active_terminal_rows(OUTPUT_NET_TCP_MASK).max(1),
     )
 }
 
-fn line_width_for_output(output_mask: u8) -> usize {
+fn line_width_for_output(output_mask: OutputMask) -> usize {
     matrix::active_line_width(output_mask)
         .max(minimum_line_width_for_output(output_mask))
         .max(1)
 }
 
-fn transcript_view_rows_for_output(output_mask: u8) -> usize {
+fn transcript_view_rows_for_output(output_mask: OutputMask) -> usize {
     let top_row = slot_content_top_row(output_mask);
-    if (output_mask & OUTPUT_NET_TCP_MASK) != 0 {
-        NET_TCP_TERMINAL_ROWS
-            .load(Ordering::Relaxed)
-            .saturating_sub(top_row.saturating_sub(1))
-            .max(1)
-    } else {
-        DEFAULT_TRANSCRIPT_VIEW_ROWS
-    }
+    matrix::active_terminal_rows(output_mask)
+        .saturating_sub(top_row.saturating_sub(1))
+        .max(1)
 }
 
-fn slot_content_top_row(_output_mask: u8) -> usize {
+fn slot_content_top_row(_output_mask: OutputMask) -> usize {
     SCROLL_TOP_ROW
 }
 
-fn slot_content_rows_for_output(output_mask: u8) -> usize {
+fn slot_content_rows_for_output(output_mask: OutputMask) -> usize {
     transcript_view_rows_for_output(output_mask)
 }
 
 fn render_active_slot_content(
     out: &AlignedWriter<'_>,
-    output_mask: u8,
+    output_mask: OutputMask,
     transcript: &VecDeque<TranscriptEntry>,
 ) -> bool {
     out.render_transcript_at(slot_content_top_row(output_mask), transcript);
     false
 }
 
-fn configure_output_view(out: &AlignedWriter<'_>, output_mask: u8) {
+fn configure_output_view(out: &AlignedWriter<'_>, output_mask: OutputMask) {
     out.set_line_width(line_width_for_output(output_mask));
     out.set_transcript_view_rows(transcript_view_rows_for_output(output_mask));
 }
 
-fn current_chrome_state(output_mask: u8, mode: ShellMode2) -> ChromeState {
+fn current_chrome_state(output_mask: OutputMask, mode: ShellMode2) -> ChromeState {
     ChromeState {
         line_width: line_width_for_output(output_mask),
         active_slot: matrix::active_slot_id(output_mask),
@@ -561,12 +632,18 @@ fn current_chrome_state(output_mask: u8, mode: ShellMode2) -> ChromeState {
     }
 }
 
-fn set_line_width_for_output(output_mask: u8, width: usize) {
-    let width = width.max(minimum_line_width_for_output(output_mask));
+fn set_line_width_for_output(output_mask: OutputMask, width: usize) {
+    let mut width = width.max(minimum_line_width_for_output(output_mask));
+    if (output_mask & OUTPUT_LOCAL_MASK) != 0
+        && let Some((frontend_cols, _)) =
+            backends::session_pool::terminal_size_for_output_mask(output_mask)
+    {
+        width = width.min(frontend_cols.max(1));
+    }
     matrix::set_active_line_width(output_mask, width.max(1));
 }
 
-fn apply_reported_terminal_size(output_mask: u8, cols: usize, rows: usize) -> bool {
+fn apply_reported_terminal_size(output_mask: OutputMask, cols: usize, rows: usize) -> bool {
     if cols == 0 {
         return false;
     }
@@ -576,22 +653,29 @@ fn apply_reported_terminal_size(output_mask: u8, cols: usize, rows: usize) -> bo
         matrix::set_active_line_width(output_mask, cols);
         changed = true;
     }
-    if (output_mask & OUTPUT_NET_TCP_MASK) != 0 && rows > 0 {
+    if rows > 0 {
         let rows = rows.max(1);
-        if NET_TCP_TERMINAL_ROWS.swap(rows, Ordering::Relaxed) != rows {
+        if matrix::active_terminal_rows(output_mask) != rows {
+            matrix::set_active_terminal_rows(output_mask, rows);
             changed = true;
         }
     }
     changed
 }
 
-fn minimum_line_width_for_output(output_mask: u8) -> usize {
+fn minimum_line_width_for_output(output_mask: OutputMask) -> usize {
+    // A local UI frontend has a fixed cell budget. Its wide command legend is
+    // optional (`right_text` elides it when it does not fit), while the shared
+    // Matrix slot overview remains visible on row two.
+    if (output_mask & OUTPUT_LOCAL_MASK) != 0 {
+        return 50;
+    }
     let left = banner_left_visible_width(output_mask);
     left.saturating_add(BANNER_GROUP_GAP_WIDTH)
         .saturating_add(banner_right_visible_width(output_mask))
 }
 
-fn banner_left_visible_width(output_mask: u8) -> usize {
+fn banner_left_visible_width(output_mask: OutputMask) -> usize {
     let mut width = ecma48::visible_width(BANNER_TITLE_TEXT)
         .saturating_add(1)
         .saturating_add(BANNER_CLOCK_WIDTH)
@@ -609,7 +693,7 @@ fn banner_left_visible_width(output_mask: u8) -> usize {
     width
 }
 
-fn banner_right_visible_width(output_mask: u8) -> usize {
+fn banner_right_visible_width(output_mask: OutputMask) -> usize {
     if active_matrix_slot_is_vmx(output_mask) {
         return ecma48::visible_width("VMX [ESC] leave");
     }
@@ -619,7 +703,11 @@ fn banner_right_visible_width(output_mask: u8) -> usize {
     cmd_width.max(apps_width)
 }
 
-pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
+pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> OutputMask {
+    let declared = io.output_mask();
+    if declared != 0 {
+        return declared;
+    }
     let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
     if same_backend_task(io, net_io) {
         return OUTPUT_NET_TCP_MASK;
@@ -633,33 +721,76 @@ pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
     0
 }
 
+pub(crate) fn transport_scope_for_backend(io: &'static dyn ShellBackend2) -> u8 {
+    let declared = io.transport_scope();
+    if declared != 0 {
+        return declared;
+    }
+    let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
+    if same_backend_task(io, net_io) {
+        return TRANSPORT_NET_TCP_SCOPE;
+    }
+    let container_io: &'static dyn ShellIo2 = &CONTAINER_SHELL_BACKEND;
+    if same_backend_task(io, container_io) {
+        return TRANSPORT_CONTAINER_SCOPE;
+    }
+    TRANSPORT_LOCAL_SCOPE
+}
+
+fn matrix_target_from_slot_id(
+    output_mask: OutputMask,
+    local_session_generation: Option<u64>,
+    slot_id: matrix::MatrixSlotId,
+) -> MatrixTarget {
+    let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
+    let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
+    MatrixTarget {
+        output_mask,
+        local_session_generation,
+        slot_id,
+        slot_lifetime_generation,
+        interrupt_generation,
+    }
+}
+
+fn matrix_target_for_slot_name_unpinned(
+    output_mask: OutputMask,
+    local_session_generation: Option<u64>,
+    requested: &str,
+) -> MatrixTarget {
+    matrix_target_from_slot_id(
+        output_mask,
+        local_session_generation,
+        matrix::slot_id_from_name(requested),
+    )
+}
+
 pub(crate) fn matrix_target_for_backend(io: &'static dyn ShellBackend2) -> MatrixTarget {
     let output_mask = output_target_for_backend(io);
-    let slot_id = matrix::active_slot_id(output_mask);
-    let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
-    let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
-    MatrixTarget {
-        output_mask,
-        slot_id,
-        slot_lifetime_generation,
-        interrupt_generation,
-    }
+    with_output_scope_lease(output_mask, |local_session_generation| {
+        matrix_target_from_slot_id(
+            output_mask,
+            local_session_generation,
+            matrix::active_slot_id(output_mask),
+        )
+    })
+    .unwrap_or_else(|| {
+        matrix_target_from_slot_id(output_mask, None, matrix::active_slot_id(output_mask))
+    })
 }
 
-pub(crate) fn matrix_target_routes_to(target: &MatrixTarget, output_mask: u8) -> bool {
-    (target.output_mask & output_mask) != 0
+pub(crate) fn matrix_target_routes_to(target: &MatrixTarget, output_mask: OutputMask) -> bool {
+    with_matrix_target_lease(target, || (target.output_mask & output_mask) != 0).unwrap_or(false)
 }
 
-pub(crate) fn matrix_target_for_slot_name(output_mask: u8, requested: &str) -> MatrixTarget {
-    let slot_id = matrix::slot_id_from_name(requested);
-    let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
-    let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
-    MatrixTarget {
-        output_mask,
-        slot_id,
-        slot_lifetime_generation,
-        interrupt_generation,
-    }
+pub(crate) fn matrix_target_for_slot_name(
+    output_mask: OutputMask,
+    requested: &str,
+) -> MatrixTarget {
+    with_output_scope_lease(output_mask, |local_session_generation| {
+        matrix_target_for_slot_name_unpinned(output_mask, local_session_generation, requested)
+    })
+    .unwrap_or_else(|| matrix_target_for_slot_name_unpinned(output_mask, None, requested))
 }
 
 pub(crate) fn submit_online_to_target(
@@ -667,66 +798,67 @@ pub(crate) fn submit_online_to_target(
     target: MatrixTarget,
     args: Vec<AllocString>,
 ) -> Result<(), embassy_executor::SpawnError> {
-    let width = line_width_for_output(target.output_mask);
+    let width = with_matrix_target_lease(&target, || line_width_for_output(target.output_mask))
+        .unwrap_or(matrix::DEFAULT_MATRIX_SLOT_LINE_WIDTH);
     shell2_dl::submit_online_to_target(spawner, target, width, args)
 }
 
 pub(crate) fn matrix_target_for_slot_name_selected(
-    output_mask: u8,
+    output_mask: OutputMask,
     requested: &str,
 ) -> MatrixTarget {
-    let slot_id = matrix::switch_active_slot(output_mask, requested);
-    let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
-    let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
-    MatrixTarget {
-        output_mask,
-        slot_id,
-        slot_lifetime_generation,
-        interrupt_generation,
-    }
+    with_output_scope_lease(output_mask, |local_session_generation| {
+        matrix_target_from_slot_id(
+            output_mask,
+            local_session_generation,
+            matrix::switch_active_slot(output_mask, requested),
+        )
+    })
+    .unwrap_or_else(|| matrix_target_for_slot_name_unpinned(output_mask, None, requested))
 }
 
 pub(crate) fn reserve_matrix_target_for_vm_slot_selected(
-    output_mask: u8,
+    source: &MatrixTarget,
     requested: &str,
 ) -> MatrixTarget {
-    let slot_id = matrix::reserve_available_vm_slot_selected(output_mask, requested);
-    let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
-    let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
-    MatrixTarget {
-        output_mask,
-        slot_id,
-        slot_lifetime_generation,
-        interrupt_generation,
-    }
+    with_matrix_target_lease(source, || {
+        matrix_target_from_slot_id(
+            source.output_mask,
+            source.local_session_generation,
+            matrix::reserve_available_vm_slot_selected(source.output_mask, requested),
+        )
+    })
+    .unwrap_or_else(|| source.clone())
 }
 
 pub(crate) fn claim_matrix_target_for_app_slot_selected(
-    output_mask: u8,
+    source: &MatrixTarget,
     requested: &str,
     app_label: &str,
 ) -> MatrixTarget {
-    let slot_id = matrix::claim_available_app_slot_selected(output_mask, requested, app_label);
-    let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
-    let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
-    MatrixTarget {
-        output_mask,
-        slot_id,
-        slot_lifetime_generation,
-        interrupt_generation,
-    }
+    with_matrix_target_lease(source, || {
+        matrix_target_from_slot_id(
+            source.output_mask,
+            source.local_session_generation,
+            matrix::claim_available_app_slot_selected(
+                source.output_mask,
+                requested,
+                app_label,
+            ),
+        )
+    })
+    .unwrap_or_else(|| source.clone())
 }
 
 pub(crate) fn switch_matrix_target_slot(target: &MatrixTarget, requested: &str) -> MatrixTarget {
-    let slot_id = matrix::switch_active_slot(target.output_mask, requested);
-    let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
-    let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
-    MatrixTarget {
-        output_mask: target.output_mask,
-        slot_id,
-        slot_lifetime_generation,
-        interrupt_generation,
-    }
+    with_matrix_target_lease(target, || {
+        matrix_target_from_slot_id(
+            target.output_mask,
+            target.local_session_generation,
+            matrix::switch_active_slot(target.output_mask, requested),
+        )
+    })
+    .unwrap_or_else(|| target.clone())
 }
 
 pub(crate) fn spawn_app_vm_run_queue(spawner: Spawner) -> Result<(), embassy_executor::SpawnError> {
@@ -740,20 +872,28 @@ pub(crate) fn spawn_app_vm_run_queue(spawner: Spawner) -> Result<(), embassy_exe
 }
 
 fn matrix_target_for_slot(
-    output_mask: u8,
+    output_mask: OutputMask,
     slot_id: &matrix::MatrixSlotId,
     slot_lifetime_generation: u64,
 ) -> MatrixTarget {
-    let interrupt_generation =
-        matrix::live_slot_interrupt_generation(slot_id, slot_lifetime_generation).unwrap_or(0);
-    MatrixTarget {
+    let build = |local_session_generation| MatrixTarget {
         output_mask,
+        local_session_generation,
         slot_id: slot_id.clone(),
         slot_lifetime_generation,
-        interrupt_generation,
-    }
+        interrupt_generation: matrix::live_slot_interrupt_generation(
+            slot_id,
+            slot_lifetime_generation,
+        )
+        .unwrap_or(0),
+    };
+    with_output_scope_lease(output_mask, build).unwrap_or_else(|| build(None))
 }
 
+// The operations below belong to a shared Matrix page rather than a frontend
+// view. They intentionally remain valid after a local frontend detaches, while
+// the slot lifetime prevents delayed work from touching a deleted/recreated
+// page with the same compact id.
 pub(crate) fn set_matrix_target_active(target: &MatrixTarget, active: bool) {
     if active {
         let _ = matrix::begin_live_slot_running(&target.slot_id, target.slot_lifetime_generation);
@@ -778,15 +918,29 @@ pub(crate) fn matrix_targets_same_slot_lifetime(left: &MatrixTarget, right: &Mat
 }
 
 pub(crate) fn bind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
-    matrix::bind_slot_vm(&target.slot_id, vm_id, false);
+    let _ = matrix::bind_live_slot_vm(
+        &target.slot_id,
+        target.slot_lifetime_generation,
+        vm_id,
+        false,
+    );
 }
 
 pub(crate) fn bind_matrix_target_vm_input(target: &MatrixTarget, vm_id: u8) {
-    matrix::bind_slot_vm(&target.slot_id, vm_id, true);
+    let _ = matrix::bind_live_slot_vm(
+        &target.slot_id,
+        target.slot_lifetime_generation,
+        vm_id,
+        true,
+    );
 }
 
 pub(crate) fn unbind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
-    matrix::unbind_slot_vm(&target.slot_id, vm_id);
+    let _ = matrix::unbind_live_slot_vm(
+        &target.slot_id,
+        target.slot_lifetime_generation,
+        vm_id,
+    );
 }
 
 pub(crate) fn set_matrix_target_app_label(target: &MatrixTarget, label: &str) {
@@ -798,15 +952,15 @@ pub(crate) fn release_matrix_target_vm_reservation(target: &MatrixTarget) {
     let _ = matrix::release_vm_slot_reservation(&target.slot_id, target.slot_lifetime_generation);
 }
 
-pub(crate) fn active_matrix_vm_input_id(output_mask: u8) -> Option<u8> {
+pub(crate) fn active_matrix_vm_input_id(output_mask: OutputMask) -> Option<u8> {
     matrix::active_slot_vm_input_id(output_mask)
 }
 
-pub(crate) fn active_matrix_vm_id(output_mask: u8) -> Option<u8> {
+pub(crate) fn active_matrix_vm_id(output_mask: OutputMask) -> Option<u8> {
     matrix::active_slot_vm_id(output_mask)
 }
 
-fn active_matrix_slot_is_vmx(output_mask: u8) -> bool {
+fn active_matrix_slot_is_vmx(output_mask: OutputMask) -> bool {
     active_matrix_vm_id(output_mask).is_some()
 }
 
@@ -826,7 +980,11 @@ fn command_names_status_text() -> AllocString {
     shell2_cmd_registry::command_names_status_text()
 }
 
-fn output_mask_for_io(io: &dyn ShellIo2) -> u8 {
+fn output_mask_for_io(io: &dyn ShellIo2) -> OutputMask {
+    let declared = io.output_mask();
+    if declared != 0 {
+        return declared;
+    }
     let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
     if same_backend_io(io, net_io) {
         return OUTPUT_NET_TCP_MASK;
@@ -887,12 +1045,22 @@ pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> us
         return 0;
     }
 
+    if (target.output_mask & OUTPUT_LOCAL_MASK) != 0 {
+        let Some(generation) = target.local_session_generation else {
+            return bytes.len();
+        };
+        let _ = backends::session_pool::write_for_output_mask_generation(
+            target.output_mask,
+            generation,
+            bytes,
+        );
+        return bytes.len();
+    }
+
     let io: &'static dyn ShellIo2 = if (target.output_mask & OUTPUT_NET_TCP_MASK) != 0 {
         &NET_TCP_SHELL_BACKEND
     } else if (target.output_mask & OUTPUT_CONTAINER_MASK) != 0 {
         &CONTAINER_SHELL_BACKEND
-    } else if (target.output_mask & OUTPUT_LOCAL_MASK) != 0 {
-        return 0;
     } else {
         return bytes.len();
     };
@@ -914,9 +1082,18 @@ pub(crate) fn raw_write_matrix_target_owned(target: &MatrixTarget, bytes: &[u8])
 }
 
 pub(crate) fn konsole_viewport_size_for_target(target: &MatrixTarget) -> (usize, usize) {
-    let width = line_width_for_output(target.output_mask).max(1);
-    let rows = slot_content_rows_for_output(target.output_mask).max(1);
-    (width, rows)
+    let viewport = || {
+        let width = line_width_for_output(target.output_mask).max(1);
+        let rows = slot_content_rows_for_output(target.output_mask).max(1);
+        (width, rows)
+    };
+    if (target.output_mask & OUTPUT_LOCAL_MASK) != 0 {
+        // The backend state lock pins both the reported geometry and the
+        // Matrix scope incarnation while its view geometry is sampled.
+        with_matrix_target_geometry(target, |_| viewport()).unwrap_or((1, 1))
+    } else {
+        viewport()
+    }
 }
 
 pub(crate) fn konsole_begin_frame_for_target(
@@ -935,7 +1112,10 @@ pub(crate) fn read_matrix_target_byte(target: &MatrixTarget) -> Option<u8> {
     } else if (target.output_mask & OUTPUT_CONTAINER_MASK) != 0 {
         CONTAINER_SHELL_BACKEND.read_byte()
     } else if (target.output_mask & OUTPUT_LOCAL_MASK) != 0 {
-        None
+        backends::session_pool::read_byte_for_output_mask_generation(
+            target.output_mask,
+            target.local_session_generation?,
+        )
     } else {
         None
     }
@@ -944,6 +1124,16 @@ pub(crate) fn read_matrix_target_byte(target: &MatrixTarget) -> Option<u8> {
 pub(crate) fn read_matrix_target_pending_len(target: &MatrixTarget) -> usize {
     if (target.output_mask & OUTPUT_NET_TCP_MASK) != 0 {
         backends::net_tcp::net_shell_readable_len()
+    } else if (target.output_mask & OUTPUT_LOCAL_MASK) != 0 {
+        target
+            .local_session_generation
+            .and_then(|generation| {
+                backends::session_pool::readable_len_for_output_mask_generation(
+                    target.output_mask,
+                    generation,
+                )
+            })
+            .unwrap_or(0)
     } else {
         0
     }
@@ -996,7 +1186,7 @@ fn record_user_line_for_active_slot(io: &'static dyn ShellBackend2, submitted: &
     let _ = matrix::record_line_for_output(output_mask, recorded);
 }
 
-fn user_submission_for_recording(output_mask: u8, submitted: &str) -> &str {
+fn user_submission_for_recording(output_mask: OutputMask, submitted: &str) -> &str {
     let mut args = submitted.split_whitespace();
     let first = args.next();
     let second = args.next();
@@ -1116,7 +1306,7 @@ fn is_vmx_leave_command(submitted: &str) -> bool {
 fn redraw_active_view(
     out: &AlignedWriter<'_>,
     io: &'static dyn ShellBackend2,
-    output_mask: u8,
+    output_mask: OutputMask,
     mode: ShellMode2,
     running_go2_phase: usize,
     minute_text: &str,
@@ -1168,7 +1358,7 @@ fn show_status_row_message(out: &AlignedWriter<'_>, text: &str) {
 
 async fn run_plain_section_status(
     out: &AlignedWriter<'_>,
-    output_mask: u8,
+    output_mask: OutputMask,
     mode: ShellMode2,
     running_go2_phase: usize,
 ) {
@@ -1258,12 +1448,20 @@ fn prune_finished_command_sessions(sessions: &mut alloc::vec::Vec<CommandSession
     });
 }
 
+fn retire_command_sessions(sessions: &mut alloc::vec::Vec<CommandSession>) {
+    for session in sessions.drain(..) {
+        if session.kind.shows_session_activity() {
+            matrix::set_slot_activity(&session.slot_id, matrix::MatrixSlotActivity::Idle);
+        }
+    }
+}
+
 fn handle_command_session_input(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     session: &CommandSession,
     submitted: &str,
-    output_mask: u8,
+    output_mask: OutputMask,
 ) -> CommandSessionInputResult {
     let target =
         matrix_target_for_slot(output_mask, &session.slot_id, session.slot_lifetime_generation);
@@ -1281,7 +1479,7 @@ fn handle_command_session_input(
 
 fn apply_mode_toggle(
     out: &AlignedWriter<'_>,
-    output_mask: u8,
+    output_mask: OutputMask,
     mode: ShellMode2,
     running_go2_phase: usize,
     line: &HString<MAX_LINE>,
@@ -1292,7 +1490,11 @@ fn apply_mode_toggle(
     render_prompt_line(out, output_mask, line);
 }
 
-fn redraw_clock_preserving_cursor(out: &AlignedWriter<'_>, output_mask: u8, time_text: &str) {
+fn redraw_clock_preserving_cursor(
+    out: &AlignedWriter<'_>,
+    output_mask: OutputMask,
+    time_text: &str,
+) {
     out.io.raw_write_str(ecma48::SAVE_CURSOR);
     out.io.raw_write_str(ecma48::RESET);
     out.banner_left(output_mask, time_text);
@@ -1303,7 +1505,7 @@ fn redraw_clock_preserving_cursor(out: &AlignedWriter<'_>, output_mask: u8, time
 fn apply_matrix_operator_and_refresh(
     out: &AlignedWriter<'_>,
     io: &'static dyn ShellBackend2,
-    output_mask: u8,
+    output_mask: OutputMask,
     mode: &mut ShellMode2,
     running_go2_phase: usize,
     minute_text: &str,
@@ -1352,7 +1554,7 @@ fn zeroize_input_line(line: &mut HString<MAX_LINE>) {
     line.clear();
 }
 
-fn render_prompt_line(out: &AlignedWriter<'_>, output_mask: u8, line: &HString<MAX_LINE>) {
+fn render_prompt_line(out: &AlignedWriter<'_>, output_mask: OutputMask, line: &HString<MAX_LINE>) {
     out.prompt(output_mask);
     for ch in line.chars() {
         out.user_char(ch);
@@ -1361,7 +1563,7 @@ fn render_prompt_line(out: &AlignedWriter<'_>, output_mask: u8, line: &HString<M
 
 fn set_input_line(
     out: &AlignedWriter<'_>,
-    output_mask: u8,
+    output_mask: OutputMask,
     line: &mut HString<MAX_LINE>,
     text: &str,
 ) {
@@ -1377,7 +1579,7 @@ fn set_input_line(
 fn handle_control_c(
     io: &'static dyn ShellBackend2,
     out: &AlignedWriter<'_>,
-    output_mask: u8,
+    output_mask: OutputMask,
     line: &mut HString<MAX_LINE>,
 ) -> VecDeque<TranscriptEntry> {
     let active_slot = matrix::active_slot_id(output_mask);
@@ -1439,6 +1641,51 @@ fn cycle_live_history(up: bool, cursor: &mut Option<usize>) -> Option<AllocStrin
 
 #[embassy_executor::task(pool_size = 4)]
 pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
+    run_shell2(spawner, io, None).await;
+}
+
+#[embassy_executor::task(pool_size = 9)]
+pub async fn local_shell_session_worker(spawner: Spawner, index: usize) {
+    loop {
+        let generation = backends::session_pool::wait_for_lease(index).await;
+        if let Some(io) = backends::session_pool::backend(index) {
+            run_shell2(spawner, io, Some((index, generation))).await;
+        }
+        backends::session_pool::acknowledge_closed(index, generation);
+    }
+}
+
+pub(crate) fn spawn_local_shell_session_workers(spawner: Spawner) -> usize {
+    // Reserve the complete static task pool before starting any worker. A
+    // partial carrier set would make admission permanently nondeterministic.
+    let mut tokens = Vec::with_capacity(LOCAL_SHELL_SESSION_CAP);
+    for index in 0..LOCAL_SHELL_SESSION_CAP {
+        match local_shell_session_worker(spawner, index) {
+            Ok(token) => tokens.push(token),
+            Err(error) => {
+                crate::log_error!(target: "shell2";
+                    "shell2-session: worker reservation failed index={} err={:?}\n",
+                    index,
+                    error
+                );
+                backends::session_pool::set_pool_ready(false);
+                return 0;
+            }
+        }
+    }
+    let spawned = tokens.len();
+    for token in tokens {
+        spawner.spawn(token);
+    }
+    backends::session_pool::set_pool_ready(true);
+    spawned
+}
+
+async fn run_shell2(
+    spawner: Spawner,
+    io: &'static dyn ShellBackend2,
+    local_lease: Option<(usize, u64)>,
+) {
     io.init();
     register_output(io);
     let out = AlignedWriter::new(io);
@@ -1473,15 +1720,42 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     }
 
     loop {
-        // Async command preparation can fail after the parser has established
-        // a confirmation session. Retire those completed sessions without
-        // consuming the user's next command as stale confirmation input.
-        prune_finished_command_sessions(&mut command_sessions);
+        if let Some((index, generation)) = local_lease {
+            if !backends::session_pool::generation_active(index, generation) {
+                zeroize_input_line(&mut line);
+                retire_command_sessions(&mut command_sessions);
+                return;
+            }
+        }
 
+        // Handoff owns input and output atomically. In particular, do not
+        // consume a deferred repaint request until that owner releases it.
         if io.terminal_handoff_active() {
             Timer::after(EmbassyDuration::from_millis(10)).await;
             continue;
         }
+
+        if let Some((index, generation)) = local_lease {
+            if backends::session_pool::take_repaint_request(index, generation) {
+                let (_, repaint_time) = clock_bucket_and_text();
+                transcript = redraw_active_view(
+                    &out,
+                    io,
+                    output_mask,
+                    mode,
+                    running_go2_phase,
+                    repaint_time.as_str(),
+                );
+                render_prompt_line(&out, output_mask, &line);
+                last_matrix_revision = matrix::visible_revision(output_mask);
+                last_chrome_state = current_chrome_state(output_mask, mode);
+            }
+        }
+
+        // Async command preparation can fail after the parser has established
+        // a confirmation session. Retire those completed sessions without
+        // consuming the user's next command as stale confirmation input.
+        prune_finished_command_sessions(&mut command_sessions);
 
         let Some(matrix_revision) = matrix::try_visible_revision(output_mask) else {
             // A spin lock must not monopolize this executor: NetShell's TCP
@@ -1672,7 +1946,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     live_history_cursor = None;
                     let submitted_raw = line.as_str();
                     matrix::record_user_input(
-                        output_mask,
+                        transport_scope_for_backend(io),
                         user_submission_for_recording(output_mask, submitted_raw),
                     );
                     let submitted = submitted_raw.trim();

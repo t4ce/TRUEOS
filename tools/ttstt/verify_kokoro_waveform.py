@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Fail-closed waveform parity gate for the pinned Kokoro KKAOT program.
 
-The numerical reference is the exact-source RTen run, not the ONNX Runtime
-compatibility run.  RTen and KKAOT execute the prepared graph with float
-BiLSTMs; the older ORT model uses dynamically quantized LSTMs and is therefore
-only a perceptual reference.
+The optional cross-runtime waveform reference is the exact-source RTen run.
+It is not an operator-semantics oracle: ONNX Runtime runs of both the original
+and prepared graphs remain authoritative for ONNX/Microsoft operator behavior
+and perceptual review.  RTen and KKAOT execute the prepared graph with float
+BiLSTMs, while the original ORT model uses dynamically quantized LSTMs.
 
 Pinned invocation contract:
 
@@ -68,10 +69,10 @@ NATIVE_ACCEPTED_SAMPLE_COUNT = (
 )
 NATIVE_ACCEPTED_WAV_BYTES = 998_468
 NATIVE_ACCEPTED_WAV_SHA256 = (
-    "da969c5dd6d0ddc6f98818e3af0154326cb7a97b8849d97a5bee730aeae527dd"
+    "1e940079ead43156d13dfd8f55fb1955804da04d5cef2ba987c3cd0d69e5aba3"
 )
 NATIVE_ACCEPTED_PAYLOAD_SHA256 = (
-    "57c2b9b5782ae67a98fd6321034c7c270b44b47147cbbedcdd5f20f0c4ad1ecb"
+    "a24f5fc04d52729f93d47dd517d4aeb5fbf772764bd8588c29bd69866bbdecf4"
 )
 NATIVE_ACCEPTED_TRANSCRIPT = (
     "Hello from True OS. The quick brown fox jumps over the lazy dog. "

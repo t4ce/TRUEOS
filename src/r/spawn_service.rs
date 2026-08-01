@@ -62,6 +62,7 @@ define_started_flags!(
     NTP_SYNC_STARTED,
     SNTP_SERVICE_STARTED,
     NET_SHELL_STARTED,
+    LOCAL_SHELL_SESSION_POOL_STARTED,
     HELIO_GAME_STARTED,
     GRIDPAPER_SERVICE_STARTED,
     HID_UDP_SRV_STARTED,
@@ -1370,7 +1371,7 @@ async fn bp_autostart_task(spawner: Spawner) {
         }
 
         let target = crate::shell2::matrix_target_for_slot_name(
-            crate::shell2::OUTPUT_LOCAL_MASK,
+            crate::shell2::OUTPUT_SYSTEM_MASK,
             config.slot,
         );
 
@@ -1436,6 +1437,27 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
         crate::shell2::task(spawner, &crate::shell2::NET_TCP_SHELL_BACKEND)
     })
+}
+
+#[embassy_executor::task]
+async fn local_shell_session_pool_bootstrap_task(spawner: Spawner) {
+    let spawned = crate::shell2::spawn_local_shell_session_workers(spawner);
+    if spawned == crate::shell2::LOCAL_SHELL_SESSION_CAP {
+        crate::log!(
+            "shell2-session: local executor pool ready workers={} host-shell-cap=10 tcp-reserved=1\n",
+            spawned
+        );
+    } else {
+        crate::log_error!(target: "shell2";
+            "shell2-session: local executor pool incomplete workers={} expected={} action=disable-admission\n",
+            spawned,
+            crate::shell2::LOCAL_SHELL_SESSION_CAP
+        );
+    }
+}
+
+fn spawn_local_shell_session_pool(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| local_shell_session_pool_bootstrap_task(spawner))
 }
 
 #[embassy_executor::task]
@@ -1607,7 +1629,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 71
+const TASK_COUNT: usize = 72
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
@@ -2024,6 +2046,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         user_input_writer_gate,
         &USER_INPUT_RECORD_WRITER_STARTED,
         spawn_user_input_record_writer,
+    ),
+    TaskSpec::enabled(
+        "local-shell-session-pool",
+        0,
+        &LOCAL_SHELL_SESSION_POOL_STARTED,
+        spawn_local_shell_session_pool,
     ),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
     TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),

@@ -67,4 +67,10 @@
 # The UI4 font-canvas call is strictly additive. It accepts bounded colored
 # rows and builds one window-retained premultiplied RGBA8 canvas without
 # changing the legacy text-scene or frame-publish contracts.
-975178e8039e4f04b4033984845342995fdaea8cafcaa3b9f16fcdaeb0204ed1
+# The versioned Shell2 frontend attach/read/input/detach calls are strictly
+# additive. Existing v2 artifacts import none of them and retain their prior
+# shell attachment and raw-write behavior.
+# The UI4 keyboard-event take call is strictly additive. It exposes the input
+# broker's existing owner/window route and leaves global keyboard-ring readers
+# and older Blueprint input contracts unchanged.
+27bf9d518d6919aaafda91013fc865de543fb502ccd233ff43da196911afb925

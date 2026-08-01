@@ -47,10 +47,6 @@ impl SpiritVfxSubmission {
 pub(crate) enum SpiritVfxCompletion {
     Pending,
     Complete(GpgpuRgba8ReleaseFence),
-    /// A Render peer faulted while this destination was still in flight.
-    /// The destination and detached submission remain permanently retained;
-    /// Spirit must preserve its last-known-good visible frame.
-    PeerFaultFrozen,
     Failed,
     InvalidSubmission,
 }
@@ -92,7 +88,6 @@ struct SpiritVfxPending {
     handle: SpiritVfxSubmission,
     submitted: SpiritVfxSubmitted,
     timeout_logged: bool,
-    peer_fault_frozen: bool,
 }
 
 static SPIRIT_VFX_RUNTIME: Mutex<Option<SpiritVfxRuntime>> = Mutex::new(None);
@@ -289,7 +284,6 @@ pub(crate) fn submit_spirit_vfx_frame(
         handle,
         submitted,
         timeout_logged: false,
-        peer_fault_frozen: false,
     });
     if submitted.submit_ambiguous || spirit_vfx_trace_frame(submitted.frame) {
         let walkers = 1 + u32::from(submitted.background_mode != 0);
@@ -347,37 +341,22 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
             } else {
                 "spirit-vfx-marker-timeout"
             };
-            pending.peer_fault_frozen = matches!(
-                spirit_vfx_timeout_disposition(),
-                SpiritVfxTimeoutDisposition::FreezeForRenderPeer
+            // Render carriers are independent GuC consumers. Their lifecycle
+            // cannot prove anything about Spirit's HWLRCA, destination, or
+            // producer lease; contain only Spirit's own execution lane while
+            // retaining the exact pending job for a possible late proof.
+            quarantine_execution_rcs_context(reason);
+            crate::log_error!(target: "gpgpu";
+                "intel/gpgpu: spirit-vfx retirement timeout tag={} frame={} marker=0x{:08X} marker_observed={} saved_head={} published_tail={} pending=retained detached_tag=retained timeline=retained producer_lease=retained backing=retained render_peer_dependency=none action=quarantine-execution-lane-and-keep-polling\n",
+                handle.tag,
+                pending.submitted.frame,
+                marker,
+                proof.marker_observed as u8,
+                proof.saved_head_bytes,
+                proof.published_tail_bytes,
             );
-            if pending.peer_fault_frozen {
-                crate::log_error!(target: "gpgpu";
-                    "intel/gpgpu: spirit-vfx retirement timeout tag={} frame={} marker=0x{:08X} marker_observed={} saved_head={} published_tail={} peer=render-faulted execution_context_quarantined=0 pending=retained detached_tag=retained timeline=retained producer_lease=retained destination=permanently-retained action=freeze-spirit-gpu-and-preserve-last-known-good\n",
-                    handle.tag,
-                    pending.submitted.frame,
-                    marker,
-                    proof.marker_observed as u8,
-                    proof.saved_head_bytes,
-                    proof.published_tail_bytes,
-                );
-            } else {
-                quarantine_execution_rcs_context(reason);
-                crate::log_error!(target: "gpgpu";
-                    "intel/gpgpu: spirit-vfx retirement timeout tag={} frame={} marker=0x{:08X} marker_observed={} saved_head={} published_tail={} pending=retained detached_tag=retained timeline=retained producer_lease=retained backing=retained action=quarantine-execution-lane-and-keep-polling\n",
-                    handle.tag,
-                    pending.submitted.frame,
-                    marker,
-                    proof.marker_observed as u8,
-                    proof.saved_head_bytes,
-                    proof.published_tail_bytes,
-                );
-            }
             pending.timeout_logged = true;
             *pending_slot = Some(pending);
-        }
-        if pending.peer_fault_frozen {
-            return SpiritVfxCompletion::PeerFaultFrozen;
         }
         // Returning Failed would make Spirit cancel the producer lease while
         // a late GuC request may still write it. Keep ownership pinned and
@@ -410,50 +389,6 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
     }
     SpiritVfxCompletion::Complete(gpgpu_rgba8_release(pending.submitted.dst))
 }
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum SpiritVfxTimeoutDisposition {
-    FreezeForRenderPeer,
-    QuarantineExecution,
-}
-
-const fn classify_spirit_vfx_timeout(
-    render_peer_faulted: bool,
-    execution_context_reusable: bool,
-) -> SpiritVfxTimeoutDisposition {
-    if render_peer_faulted && execution_context_reusable {
-        SpiritVfxTimeoutDisposition::FreezeForRenderPeer
-    } else {
-        SpiritVfxTimeoutDisposition::QuarantineExecution
-    }
-}
-
-fn spirit_vfx_timeout_disposition() -> SpiritVfxTimeoutDisposition {
-    use crate::gpu::vgpu::KernelClient;
-
-    let execution_context_reusable =
-        crate::gpu::vgpu::kernel_context_storage_reusable(KernelClient::GpgpuExecution);
-    let render_peer_faulted = KernelClient::RENDER_CARRIERS
-        .iter()
-        .copied()
-        .any(|client| !crate::gpu::vgpu::kernel_context_storage_reusable(client));
-    classify_spirit_vfx_timeout(render_peer_faulted, execution_context_reusable)
-}
-
-const _: () = {
-    assert!(matches!(
-        classify_spirit_vfx_timeout(true, true),
-        SpiritVfxTimeoutDisposition::FreezeForRenderPeer
-    ));
-    assert!(matches!(
-        classify_spirit_vfx_timeout(false, true),
-        SpiritVfxTimeoutDisposition::QuarantineExecution
-    ));
-    assert!(matches!(
-        classify_spirit_vfx_timeout(true, false),
-        SpiritVfxTimeoutDisposition::QuarantineExecution
-    ));
-};
 
 fn submit_spirit_vfx_batch(
     dst: GpgpuRgba8Surface,

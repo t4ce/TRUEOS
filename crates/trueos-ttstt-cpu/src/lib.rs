@@ -790,9 +790,8 @@ impl Dispatcher {
 
     /// Run allocation-free 1-D ConvInteger on an explicitly selected lane.
     ///
-    /// Out-of-bounds spatial taps are filled with the raw `u8` midpoint. The
-    /// pinned RTen path shifts `u8` inputs into the `i8` domain before im2col,
-    /// where its zero-filled padding maps back to `128` in our `u8` domain.
+    /// Out-of-bounds spatial taps are filled with `input_zero_point`, which is
+    /// zero in the centered integer domain required by ONNX padding semantics.
     pub fn qconv1d_with_lane(
         self,
         input_ncl: &[u8],
@@ -892,8 +891,6 @@ impl Dispatcher {
     }
 }
 
-const RTEN_U8_IM2COL_PADDING: u8 = 128;
-
 fn gather_qconv1d_patch(
     input_ncl: &[u8],
     patch: &mut [u8],
@@ -912,11 +909,11 @@ fn gather_qconv1d_patch(
         let patch_start = kernel_x * params.input_channels;
         let patch_slice = &mut patch[patch_start..patch_start + params.input_channels];
         let Some(input_x) = padded_x.checked_sub(params.pad_left) else {
-            patch_slice.fill(RTEN_U8_IM2COL_PADDING);
+            patch_slice.fill(params.input_zero_point);
             continue;
         };
         if input_x >= params.input_width {
-            patch_slice.fill(RTEN_U8_IM2COL_PADDING);
+            patch_slice.fill(params.input_zero_point);
             continue;
         }
         for (input_channel, value) in patch_slice.iter_mut().enumerate() {
@@ -947,11 +944,11 @@ fn gather_qconv1d_patch_f32(
         let patch_start = kernel_x * params.input_channels;
         let patch_slice = &mut patch[patch_start..patch_start + params.input_channels];
         let Some(input_x) = padded_x.checked_sub(params.pad_left) else {
-            patch_slice.fill(RTEN_U8_IM2COL_PADDING);
+            patch_slice.fill(params.input_zero_point);
             continue;
         };
         if input_x >= params.input_width {
-            patch_slice.fill(RTEN_U8_IM2COL_PADDING);
+            patch_slice.fill(params.input_zero_point);
             continue;
         }
         for (input_channel, value) in patch_slice.iter_mut().enumerate() {
@@ -1111,11 +1108,11 @@ fn gather_qconv1d_cache_f32(
         let cache_start = cache_x * params.input_channels;
         let cache_column = &mut cache[cache_start..cache_start + params.input_channels];
         let Some(input_x) = padded_x.checked_sub(params.pad_left) else {
-            cache_column.fill(RTEN_U8_IM2COL_PADDING);
+            cache_column.fill(params.input_zero_point);
             continue;
         };
         if input_x >= params.input_width {
-            cache_column.fill(RTEN_U8_IM2COL_PADDING);
+            cache_column.fill(params.input_zero_point);
             continue;
         }
         let input_start = batch * params.input_channels * params.input_width + input_x;
@@ -2164,7 +2161,7 @@ mod tests {
     }
 
     #[test]
-    fn convinteger_u8_pack_and_every_lane_match_rten_shifted_edges() {
+    fn convinteger_u8_pack_and_every_lane_match_onnx_edges() {
         const BATCH: usize = 2;
         const INPUT_CHANNELS: usize = 5;
         const INPUT_WIDTH: usize = 9;
@@ -2225,69 +2222,40 @@ mod tests {
         assert_eq!(output_width, 5);
 
         let mut expected = vec![0i32; BATCH * OUTPUT_CHANNELS * output_width];
-        let mut centered_zero_reference = vec![0i32; expected.len()];
-        let mut output_uses_padding = vec![false; output_width];
         for batch in 0..BATCH {
             for output_channel in 0..OUTPUT_CHANNELS {
                 for output_x in 0..output_width {
                     let mut accumulator = 0i32;
-                    let mut centered_zero_accumulator = 0i32;
                     for kernel_x in 0..KERNEL_WIDTH {
                         let padded_x = output_x * params.stride + kernel_x * params.dilation;
-                        let input_x = padded_x
-                            .checked_sub(params.pad_left)
-                            .filter(|&input_x| input_x < INPUT_WIDTH);
-                        output_uses_padding[output_x] |= input_x.is_none();
+                        let Some(input_x) = padded_x.checked_sub(params.pad_left) else {
+                            continue;
+                        };
+                        if input_x >= INPUT_WIDTH {
+                            continue;
+                        }
                         for input_channel in 0..INPUT_CHANNELS {
+                            let input_index =
+                                (batch * INPUT_CHANNELS + input_channel) * INPUT_WIDTH + input_x;
                             let weight_index = (output_channel * INPUT_CHANNELS + input_channel)
                                 * KERNEL_WIDTH
                                 + kernel_x;
-                            let centered_weight = i32::from(weights_ock[weight_index])
-                                - i32::from(weight_zero_points_u8[output_channel]);
-                            let raw_input = input_x.map_or(128, |input_x| {
-                                let input_index = (batch * INPUT_CHANNELS + input_channel)
-                                    * INPUT_WIDTH
-                                    + input_x;
-                                input[input_index]
-                            });
-                            let contribution = (i32::from(raw_input)
-                                - i32::from(params.input_zero_point))
-                            .wrapping_mul(centered_weight);
-                            accumulator = accumulator.wrapping_add(contribution);
-                            if input_x.is_some() {
-                                centered_zero_accumulator =
-                                    centered_zero_accumulator.wrapping_add(contribution);
-                            }
+                            accumulator = accumulator.wrapping_add(
+                                (i32::from(input[input_index])
+                                    - i32::from(params.input_zero_point))
+                                .wrapping_mul(
+                                    i32::from(weights_ock[weight_index])
+                                        - i32::from(weight_zero_points_u8[output_channel]),
+                                ),
+                            );
                         }
                     }
-                    let output_index =
-                        (batch * OUTPUT_CHANNELS + output_channel) * output_width + output_x;
-                    expected[output_index] = accumulator;
-                    centered_zero_reference[output_index] = centered_zero_accumulator;
+                    expected
+                        [(batch * OUTPUT_CHANNELS + output_channel) * output_width + output_x] =
+                        accumulator;
                 }
             }
         }
-        assert_eq!(output_uses_padding, [true, false, false, false, true]);
-        let mut edge_differences = 0usize;
-        for batch in 0..BATCH {
-            for output_channel in 0..OUTPUT_CHANNELS {
-                for (output_x, &uses_padding) in output_uses_padding.iter().enumerate() {
-                    let output_index =
-                        (batch * OUTPUT_CHANNELS + output_channel) * output_width + output_x;
-                    if uses_padding {
-                        edge_differences += usize::from(
-                            expected[output_index] != centered_zero_reference[output_index],
-                        );
-                    } else {
-                        assert_eq!(
-                            expected[output_index], centered_zero_reference[output_index],
-                            "unpadded interior x={output_x}",
-                        );
-                    }
-                }
-            }
-        }
-        assert!(edge_differences > 0, "RTen's shifted-domain zero padding must affect an edge");
 
         for lane in available_lanes(dispatcher) {
             let mut observed = vec![0i32; expected.len()];

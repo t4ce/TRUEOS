@@ -559,7 +559,7 @@ impl UnaryOperation {
             }
             Self::Sigmoid => sigmoid_value(value),
             Self::Round => round_ties_even(value),
-            Self::Tanh => libm::tanhf(value),
+            Self::Tanh => mlas_tanh_value(value),
             Self::Atan | Self::AtanIeee => libm::atanf(value),
             Self::Exp => libm::expf(value),
             Self::Cos => libm::cosf(value),
@@ -811,14 +811,68 @@ fn unary_elementwise_on_lane(
 }
 
 fn sigmoid_value(value: f32) -> f32 {
-    // The algebraically equivalent negative branch avoids an intermediate
-    // infinity for large finite negative inputs.
-    if value >= 0.0 {
-        1.0 / (1.0 + libm::expf(-value))
-    } else {
-        let exponential = libm::expf(value);
-        exponential / (1.0 + exponential)
-    }
+    mlas_logistic_value(value)
+}
+
+// Scalar transcriptions of ORT's x86 MLAS FMA3 activation kernels. The
+// polynomial order and fused operations are observable in FastGelu and LSTM
+// parity, so keep the coefficient bits and evaluation sequence pinned.
+fn mlas_tanh_value(value: f32) -> f32 {
+    const ALPHA_13: f32 = f32::from_bits(0xA59F_25C0);
+    const ALPHA_11: f32 = f32::from_bits(0x2A61_337E);
+    const ALPHA_9: f32 = f32::from_bits(0xAEBD_37FF);
+    const ALPHA_7: f32 = f32::from_bits(0x335C_0041);
+    const ALPHA_5: f32 = f32::from_bits(0x3779_434A);
+    const ALPHA_3: f32 = f32::from_bits(0x3A27_0DED);
+    const ALPHA_1: f32 = f32::from_bits(0x3BA0_59DC);
+    const BETA_6: f32 = f32::from_bits(0x35A0_D3D8);
+    const BETA_4: f32 = f32::from_bits(0x38F8_95D6);
+    const BETA_2: f32 = f32::from_bits(0x3B14_AA05);
+    const BETA_0: f32 = f32::from_bits(0x3BA0_59DD);
+
+    let clamped = value.max(-9.0).min(9.0);
+    let squared = clamped * clamped;
+    let mut numerator = libm::fmaf(squared, ALPHA_13, ALPHA_11);
+    numerator = libm::fmaf(numerator, squared, ALPHA_9);
+    numerator = libm::fmaf(numerator, squared, ALPHA_7);
+    numerator = libm::fmaf(numerator, squared, ALPHA_5);
+    numerator = libm::fmaf(numerator, squared, ALPHA_3);
+    numerator = libm::fmaf(numerator, squared, ALPHA_1);
+    numerator *= clamped;
+
+    let mut denominator = libm::fmaf(squared, BETA_6, BETA_4);
+    denominator = libm::fmaf(denominator, squared, BETA_2);
+    denominator = libm::fmaf(denominator, squared, BETA_0);
+    numerator / denominator
+}
+
+fn mlas_logistic_value(value: f32) -> f32 {
+    const ALPHA_9: f32 = f32::from_bits(0x2E40_3551);
+    const ALPHA_7: f32 = f32::from_bits(0x33F8_4ECB);
+    const ALPHA_5: f32 = f32::from_bits(0x387F_413B);
+    const ALPHA_3: f32 = f32::from_bits(0x3C0B_7D58);
+    const ALPHA_1: f32 = f32::from_bits(0x3E7E_3F32);
+    const BETA_10: f32 = f32::from_bits(0x2B2B_C4F5);
+    const BETA_8: f32 = f32::from_bits(0x31C5_F27B);
+    const BETA_6: f32 = f32::from_bits(0x36D3_17DD);
+    const BETA_4: f32 = f32::from_bits(0x3ADF_153F);
+    const BETA_2: f32 = f32::from_bits(0x3DEF_3E18);
+    const BETA_0: f32 = f32::from_bits(0x3F7E_3F34);
+
+    let clamped = value.max(-18.0).min(18.0);
+    let squared = clamped * clamped;
+    let mut numerator = libm::fmaf(squared, ALPHA_9, ALPHA_7);
+    numerator = libm::fmaf(numerator, squared, ALPHA_5);
+    numerator = libm::fmaf(numerator, squared, ALPHA_3);
+    numerator = libm::fmaf(numerator, squared, ALPHA_1);
+    numerator *= clamped;
+
+    let mut denominator = libm::fmaf(squared, BETA_10, BETA_8);
+    denominator = libm::fmaf(denominator, squared, BETA_6);
+    denominator = libm::fmaf(denominator, squared, BETA_4);
+    denominator = libm::fmaf(denominator, squared, BETA_2);
+    denominator = libm::fmaf(denominator, squared, BETA_0);
+    (numerator / denominator + 0.5).clamp(0.0, 1.0)
 }
 
 fn round_ties_even(value: f32) -> f32 {
@@ -1129,12 +1183,12 @@ pub fn layer_normalization(
     let rows = shape.element_count() / normalized;
     for row in 0..rows {
         let start = row * normalized;
-        let (mean, inverse_stddev) = direct_statistics(input, start, normalized, epsilon)?;
+        let (mean, standard_deviation) = direct_statistics(input, start, normalized, epsilon)?;
         for column in 0..normalized {
-            let result = normalized_value(
+            let result = directly_normalized_value(
                 input[start + column],
                 mean,
-                inverse_stddev,
+                standard_deviation,
                 scale[column],
                 bias[column],
             );
@@ -1145,12 +1199,12 @@ pub fn layer_normalization(
     }
     for row in 0..rows {
         let start = row * normalized;
-        let (mean, inverse_stddev) = direct_statistics(input, start, normalized, epsilon)?;
+        let (mean, standard_deviation) = direct_statistics(input, start, normalized, epsilon)?;
         for column in 0..normalized {
-            output[start + column] = normalized_value(
+            output[start + column] = directly_normalized_value(
                 input[start + column],
                 mean,
-                inverse_stddev,
+                standard_deviation,
                 scale[column],
                 bias[column],
             );
@@ -1174,9 +1228,10 @@ pub fn softmax(input: &[f32], shape: Shape, axis: isize, output: &mut [f32]) -> 
         for inner_index in 0..inner {
             let (maximum, sum) =
                 softmax_statistics(input, outer_index, inner_index, axis_len, inner)?;
+            let scale = 1.0f32 / sum;
             for axis_index in 0..axis_len {
                 let index = (outer_index * axis_len + axis_index) * inner + inner_index;
-                let result = libm::expf(input[index] - maximum) / sum;
+                let result = mlas_sum_exp_value(input[index], -maximum) * scale;
                 if !result.is_finite() {
                     return Err(Error::NonFiniteOutput);
                 }
@@ -1187,9 +1242,10 @@ pub fn softmax(input: &[f32], shape: Shape, axis: isize, output: &mut [f32]) -> 
         for inner_index in 0..inner {
             let (maximum, sum) =
                 softmax_statistics(input, outer_index, inner_index, axis_len, inner)?;
+            let scale = 1.0f32 / sum;
             for axis_index in 0..axis_len {
                 let index = (outer_index * axis_len + axis_index) * inner + inner_index;
-                output[index] = libm::expf(input[index] - maximum) / sum;
+                output[index] = mlas_sum_exp_value(input[index], -maximum) * scale;
             }
         }
     }
@@ -1269,11 +1325,16 @@ pub fn skip_layer_normalization(
     let rows = shape.element_count() / width;
     for row in 0..rows {
         let start = row * width;
-        let (mean, inverse_stddev) = skip_statistics(input, skip, start, width, epsilon)?;
+        let (mean, standard_deviation) = skip_statistics(input, skip, start, width, epsilon)?;
         for column in 0..width {
             let combined = input[start + column] + skip[start + column];
-            let result =
-                normalized_value(combined, mean, inverse_stddev, scale[column], bias[column]);
+            let result = directly_normalized_value(
+                combined,
+                mean,
+                standard_deviation,
+                scale[column],
+                bias[column],
+            );
             if !result.is_finite() {
                 return Err(Error::NonFiniteOutput);
             }
@@ -1281,11 +1342,16 @@ pub fn skip_layer_normalization(
     }
     for row in 0..rows {
         let start = row * width;
-        let (mean, inverse_stddev) = skip_statistics(input, skip, start, width, epsilon)?;
+        let (mean, standard_deviation) = skip_statistics(input, skip, start, width, epsilon)?;
         for column in 0..width {
             let combined = input[start + column] + skip[start + column];
-            output[start + column] =
-                normalized_value(combined, mean, inverse_stddev, scale[column], bias[column]);
+            output[start + column] = directly_normalized_value(
+                combined,
+                mean,
+                standard_deviation,
+                scale[column],
+                bias[column],
+            );
         }
     }
     Ok(())
@@ -1297,26 +1363,34 @@ fn direct_statistics(
     width: usize,
     epsilon: f32,
 ) -> Result<(f32, f32), Error> {
-    let mut sum = 0.0f32;
-    for &value in &input[start..start + width] {
+    // ORT's float CPU LayerNormalization path uses Welford statistics. Keep
+    // the same f32 update order because even a one-ULP scale change can move a
+    // later DynamicQuantizeLinear sample across an integer threshold.
+    let mut mean = 0.0f32;
+    let mut squared_deviations = 0.0f32;
+    for (index, &value) in input[start..start + width].iter().enumerate() {
         if !value.is_finite() {
             return Err(Error::NonFiniteInput);
         }
-        sum += value;
-        if !sum.is_finite() {
+        let count = (index + 1) as f32;
+        let delta = value - mean;
+        mean += delta / count;
+        let updated_delta = value - mean;
+        squared_deviations += delta * updated_delta;
+        if !mean.is_finite() || !squared_deviations.is_finite() {
             return Err(Error::NonFiniteOutput);
         }
     }
-    let mean = sum / width as f32;
-    let mut squared_sum = 0.0f32;
-    for &value in &input[start..start + width] {
-        let centered = value - mean;
-        squared_sum += centered * centered;
-        if !squared_sum.is_finite() {
-            return Err(Error::NonFiniteOutput);
-        }
+    let adjusted_variance = squared_deviations / width as f32 + epsilon;
+    if !adjusted_variance.is_finite() || adjusted_variance <= 0.0 {
+        return Err(Error::NonFiniteOutput);
     }
-    inverse_standard_deviation(squared_sum / width as f32, epsilon).map(|inverse| (mean, inverse))
+    let standard_deviation = libm::sqrtf(adjusted_variance);
+    if standard_deviation.is_finite() && standard_deviation > 0.0 {
+        Ok((mean, standard_deviation))
+    } else {
+        Err(Error::NonFiniteOutput)
+    }
 }
 
 fn skip_statistics(
@@ -1326,7 +1400,11 @@ fn skip_statistics(
     width: usize,
     epsilon: f32,
 ) -> Result<(f32, f32), Error> {
+    // The Microsoft CPU op intentionally differs from standard ONNX
+    // LayerNormalization: it accumulates sum and sum-of-squares together,
+    // derives E[x^2] - E[x]^2, then divides by the standard deviation.
     let mut sum = 0.0f32;
+    let mut squared_sum = 0.0f32;
     for column in 0..width {
         let lhs = input[start + column];
         let rhs = skip[start + column];
@@ -1338,39 +1416,34 @@ fn skip_statistics(
             return Err(Error::NonFiniteOutput);
         }
         sum += combined;
-        if !sum.is_finite() {
+        squared_sum += combined * combined;
+        if !sum.is_finite() || !squared_sum.is_finite() {
             return Err(Error::NonFiniteOutput);
         }
     }
     let mean = sum / width as f32;
-    let mut squared_sum = 0.0f32;
-    for column in 0..width {
-        let combined = input[start + column] + skip[start + column];
-        let centered = combined - mean;
-        squared_sum += centered * centered;
-        if !squared_sum.is_finite() {
-            return Err(Error::NonFiniteOutput);
-        }
-    }
-    inverse_standard_deviation(squared_sum / width as f32, epsilon).map(|inverse| (mean, inverse))
-}
-
-fn inverse_standard_deviation(variance: f32, epsilon: f32) -> Result<f32, Error> {
-    let adjusted = variance + epsilon;
-    if !adjusted.is_finite() || adjusted <= 0.0 {
+    let variance = squared_sum / width as f32 - mean * mean;
+    let adjusted_variance = variance + epsilon;
+    if !adjusted_variance.is_finite() || adjusted_variance <= 0.0 {
         return Err(Error::NonFiniteOutput);
     }
-    let inverse = 1.0f32 / libm::sqrtf(adjusted);
-    if inverse.is_finite() {
-        Ok(inverse)
+    let standard_deviation = libm::sqrtf(adjusted_variance);
+    if standard_deviation.is_finite() && standard_deviation > 0.0 {
+        Ok((mean, standard_deviation))
     } else {
         Err(Error::NonFiniteOutput)
     }
 }
 
-fn normalized_value(value: f32, mean: f32, inverse: f32, scale: f32, bias: f32) -> f32 {
+fn directly_normalized_value(
+    value: f32,
+    mean: f32,
+    standard_deviation: f32,
+    scale: f32,
+    bias: f32,
+) -> f32 {
     let centered = value - mean;
-    let normalized = centered * inverse;
+    let normalized = centered / standard_deviation;
     let scaled = normalized * scale;
     scaled + bias
 }
@@ -1388,14 +1461,23 @@ fn softmax_statistics(
         let index = (outer_index * axis_len + axis_index) * inner + inner_index;
         maximum = maximum.max(input[index]);
     }
-    let mut sum = 0.0f32;
+    // ORT's x86 float Softmax uses the MLAS AVX2/FMA SumExp kernel. Its
+    // eight independent accumulators and fixed horizontal reduction are
+    // observable at DynamicQuantizeLinear half-way boundaries, so preserve
+    // that order even in this allocation-free scalar transcription.
+    let negative_maximum = -maximum;
+    let mut lanes = [0.0f32; 8];
     for axis_index in 0..axis_len {
         let index = (outer_index * axis_len + axis_index) * inner + inner_index;
-        sum += libm::expf(input[index] - maximum);
-        if !sum.is_finite() {
+        let lane = axis_index & 7;
+        lanes[lane] += mlas_sum_exp_value(input[index], negative_maximum);
+        if !lanes[lane].is_finite() {
             return Err(Error::NonFiniteOutput);
         }
     }
+    let low = (lanes[0] + lanes[1]) + (lanes[2] + lanes[3]);
+    let high = (lanes[4] + lanes[5]) + (lanes[6] + lanes[7]);
+    let sum = high + low;
     if sum > 0.0 {
         Ok((maximum, sum))
     } else {
@@ -1403,14 +1485,55 @@ fn softmax_statistics(
     }
 }
 
+/// Scalar transcription of `MlasComputeSumExpF32KernelFma3`'s exponential
+/// lane. Both supported bare-metal targets have AVX2/FMA, but expressing the
+/// fused operations through `libm::fmaf` also gives deterministic semantics to
+/// host tests and a safe fallback. Inputs have already been proven finite.
+fn mlas_sum_exp_value(value: f32, negative_maximum: f32) -> f32 {
+    const LOWER_RANGE: f32 = f32::from_bits(0xC2B0_C0A5);
+    const ROUNDING_BIAS: f32 = f32::from_bits(0x4B40_0000);
+    const LOG2_RECIPROCAL: f32 = f32::from_bits(0x3FB8_AA3B);
+    const LOG2_HIGH: f32 = f32::from_bits(0xBF31_7200);
+    const LOG2_LOW: f32 = f32::from_bits(0xB5BF_BE8E);
+    const POLY_0: f32 = f32::from_bits(0x3AB4_A000);
+    const POLY_1: f32 = f32::from_bits(0x3C09_2F6E);
+    const POLY_2: f32 = f32::from_bits(0x3D2A_ADAD);
+    const POLY_3: f32 = f32::from_bits(0x3E2A_AA28);
+    const POLY_4: f32 = f32::from_bits(0x3EFF_FFFB);
+    const POLY_56: f32 = 1.0;
+
+    let mut reduced = (value + negative_maximum).max(LOWER_RANGE);
+    let biased = libm::fmaf(LOG2_RECIPROCAL, reduced, ROUNDING_BIAS);
+    let exponent = biased - ROUNDING_BIAS;
+    reduced = libm::fmaf(exponent, LOG2_HIGH, reduced);
+    reduced = libm::fmaf(exponent, LOG2_LOW, reduced);
+
+    let scale_bits = biased
+        .to_bits()
+        .wrapping_shl(23)
+        .wrapping_add(1.0f32.to_bits());
+    let scale = f32::from_bits(scale_bits);
+
+    let mut polynomial = libm::fmaf(POLY_0, reduced, POLY_1);
+    polynomial = libm::fmaf(polynomial, reduced, POLY_2);
+    polynomial = libm::fmaf(polynomial, reduced, POLY_3);
+    polynomial = libm::fmaf(polynomial, reduced, POLY_4);
+    polynomial = libm::fmaf(polynomial, reduced, POLY_56);
+    polynomial = libm::fmaf(polynomial, reduced, POLY_56);
+    polynomial * scale
+}
+
 fn fast_gelu_value(value: f32) -> f32 {
-    const CUBIC: f32 = 0.044_715;
-    const SQRT_TWO_OVER_PI: f32 = 0.797_884_6;
-    let squared = value * value;
-    let cubic = squared * value;
-    let inner = value + CUBIC * cubic;
-    let gate = 1.0 + libm::tanhf(SQRT_TWO_OVER_PI * inner);
-    (0.5 * value) * gate
+    // Match ORT's BiasGelu<float, true> source order exactly. In particular,
+    // this is C*x*x+B (left associative), followed by a separate multiply by
+    // x; the surrounding C++ loop does not contract these operations.
+    const B: f32 = f32::from_bits(0x3F4C_422A);
+    const C: f32 = f32::from_bits(0x3D12_2279);
+    let scaled = C * value;
+    let inner = scaled * value + B;
+    let argument = value * inner;
+    let gate = mlas_tanh_value(argument) + 1.0;
+    (value * 0.5) * gate
 }
 
 fn validate_contiguous_input(data: &[f32], shape: Shape) -> Result<(), Error> {
@@ -2020,9 +2143,9 @@ mod tests {
         let bias = [0.1, -0.2, 0.3, -0.4];
         let mut output = [0.0f32; 16];
         layer_normalization(&input, shape, -1, &scale, &bias, 1.0e-12, &mut output).unwrap();
-        assert_close(
-            &output,
-            &[
+        assert_eq!(
+            output.map(f32::to_bits),
+            [
                 0x3DCC_CCCD,
                 0xBB7E_8880,
                 0xC003_6ACD,
@@ -2040,7 +2163,6 @@ mod tests {
                 0xC014_DF4B,
                 0xBFFC_E2FE,
             ],
-            6.0e-7,
         );
     }
 
@@ -2050,9 +2172,9 @@ mod tests {
         let input = [-10.0, -1.0, 0.0, 1.0, 10.0, 100.0, 100.0, 99.0, -100.0, 0.0];
         let mut output = [0.0f32; 10];
         softmax(&input, shape, -1, &mut output).unwrap();
-        assert_close(
-            &output,
-            &[
+        assert_eq!(
+            output.map(f32::to_bits),
+            [
                 0x310D_9D7A,
                 0x378C_13FA,
                 0x383E_62C4,
@@ -2064,7 +2186,6 @@ mod tests {
                 0x0000_0000,
                 0x0000_0000,
             ],
-            2.0e-7,
         );
     }
 
@@ -2075,9 +2196,9 @@ mod tests {
         let bias = [0.1, -0.2, 0.3, -0.4, 0.5];
         let mut output = [0.0f32; 10];
         fast_gelu(&input, shape, Some(&bias), &mut output).unwrap();
-        assert_close(
-            &output,
-            &[
+        assert_eq!(
+            output.map(f32::to_bits),
+            [
                 0xB8EB_7667,
                 0xBDDA_D172,
                 0x3DED_4385,
@@ -2089,7 +2210,6 @@ mod tests {
                 0xBBA2_BF94,
                 0x3F07_D372,
             ],
-            3.0e-7,
         );
     }
 
@@ -2103,9 +2223,9 @@ mod tests {
         let mut output = [0.0f32; 8];
         skip_layer_normalization(&input, &skip, shape, &scale, &bias, 1.0e-12, &mut output)
             .unwrap();
-        assert_close(
-            &output,
-            &[
+        assert_eq!(
+            output.map(f32::to_bits),
+            [
                 0xBE2F_AE24,
                 0xBEE3_893E,
                 0xC044_4FEB,
@@ -2115,7 +2235,6 @@ mod tests {
                 0x401C_09AA,
                 0x408D_2479,
             ],
-            6.0e-7,
         );
     }
 
@@ -2280,9 +2399,9 @@ mod tests {
 
         let symmetric_input = [-10.0, -3.0, -1.0, -0.0, 0.0, 1.0, 3.0, 10.0];
         tanh(&symmetric_input, layout, &mut output, layout).unwrap();
-        assert_close(
-            &output,
-            &[
+        assert_eq!(
+            output.map(f32::to_bits),
+            [
                 0xBF80_0000,
                 0xBF7E_BBE8,
                 0xBF42_F7D6,
@@ -2292,7 +2411,6 @@ mod tests {
                 0x3F7E_BBE8,
                 0x3F80_0000,
             ],
-            2.0e-7,
         );
 
         let atan_input = [-100.0, -3.0, -1.0, -0.0, 0.0, 1.0, 3.0, 100.0];
@@ -2320,9 +2438,9 @@ mod tests {
         let mut output = [0.0f32; 8];
         sigmoid(&[-100.0, -20.0, -2.0, -0.0, 0.0, 2.0, 20.0, 100.0], layout, &mut output, layout)
             .unwrap();
-        assert_close(
-            &output,
-            &[
+        assert_eq!(
+            output.map(f32::to_bits),
+            [
                 0,
                 0,
                 0x3DF4_20A8,
@@ -2332,7 +2450,6 @@ mod tests {
                 0x3F80_0000,
                 0x3F80_0000,
             ],
-            2.0e-7,
         );
 
         exp(&[-100.0, -10.0, -1.0, -0.0, 0.0, 1.0, 10.0, 80.0], layout, &mut output, layout)
