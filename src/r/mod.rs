@@ -4,7 +4,6 @@ pub mod blocking;
 pub mod codec;
 pub mod cursor;
 pub mod disc;
-pub mod draw3d_service;
 pub mod font_kernel_service;
 pub mod fs;
 pub mod gamepad_control_service;

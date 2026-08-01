@@ -1548,6 +1548,61 @@ pub(crate) fn kernel_timeline(client: KernelClient) -> Option<TimelineStatus> {
     lookup_queue(device, queue).ok().map(|queue| queue.timeline)
 }
 
+/// Result of containing one failed privileged kernel client.
+///
+/// The client's allocations and GPUVM deliberately remain owned by the
+/// broker. A context that timed out may still have late writes in flight, so
+/// none of its address space may be recycled until a full device reset.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct KernelClientIsolation {
+    pub(crate) device_found: bool,
+    pub(crate) contexts_disabled: usize,
+    pub(crate) contexts_retained: usize,
+}
+
+/// Contain one failed kernel consumer without declaring the physical GPU, or
+/// any other virtual device, lost.
+///
+/// Successful GuC context destruction disables scheduling before
+/// deregistration. Failed destructions remain bound in the lost virtual device
+/// so their IDs and backing storage cannot be reused unsafely.
+pub(crate) fn isolate_kernel_client(client: KernelClient) -> KernelClientIsolation {
+    let physical = physical_device();
+    let mut broker = BROKER.lock();
+    let Some((_, device)) = find_device_mut_by_principal(&mut broker, client.principal()) else {
+        return KernelClientIsolation::default();
+    };
+
+    device.lost = true;
+    let mut report = KernelClientIsolation {
+        device_found: true,
+        ..KernelClientIsolation::default()
+    };
+    let Some(physical) = physical else {
+        report.contexts_retained = device.contexts.len();
+        return report;
+    };
+
+    let mut index = 0usize;
+    while index < device.contexts.len() {
+        let context = device.contexts[index].context;
+        match physical.destroy_context(context) {
+            Ok(()) => {
+                device.contexts.remove(index);
+                report.contexts_disabled = report.contexts_disabled.saturating_add(1);
+            }
+            Err(_) => {
+                // Keep the binding live: destroy_context deliberately leaves a
+                // rejected GuC slot allocated, and the broker must mirror that
+                // ownership rather than permit a late-write alias.
+                report.contexts_retained = report.contexts_retained.saturating_add(1);
+                index = index.saturating_add(1);
+            }
+        }
+    }
+    report
+}
+
 /// Reset/device-loss hook for the physical driver. All tenant handles remain
 /// queryable for diagnosis but reject further allocation and submission.
 pub(crate) fn notify_physical_device_lost() -> u64 {

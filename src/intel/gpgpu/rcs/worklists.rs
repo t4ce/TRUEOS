@@ -18,7 +18,6 @@ fn direct_rcs_encode_fill_rect_worklist_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
@@ -83,7 +82,6 @@ fn direct_rcs_encode_alpha_blend_worklist_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
     if !direct_rcs_write_rect_worklist_interface_descriptor_at(
@@ -153,7 +151,6 @@ fn direct_rcs_encode_mandel64_worklist_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
@@ -216,7 +213,6 @@ fn direct_rcs_encode_ui4_compose_layers_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
     if !direct_rcs_write_interface_descriptor_at(
@@ -371,7 +367,6 @@ fn direct_rcs_encode_sprite_quad_worklist_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
@@ -467,7 +462,6 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
@@ -736,7 +730,6 @@ fn direct_rcs_push_gpgpu_dispatch_timestamped_epilogue(
 fn direct_rcs_encode_rgba8_scanout_release_batch(state: DirectRcsState) -> bool {
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
     let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();

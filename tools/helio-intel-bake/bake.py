@@ -303,7 +303,10 @@ def encode_pendulum_bigcloth_scene() -> bytes:
     out[:8] = b"HPENDUL\0"
     struct.pack_into("<HHI", out, 8, 1, len(out), len(out))
     struct.pack_into("<HHHH", out, 16, 14, 24, 8, 0)
-    _put_f32s(out, 24, (0.0, 8.0, 35.0, 0.0, -0.2,
+    # The hosted demo camera starts below the y=18 cloth and looks down, so
+    # its entire first frame is above the viewport. Center the artifact camera
+    # on the authored x=1..24, y=0..18 motion envelope instead.
+    _put_f32s(out, 24, (12.5, 9.0, 42.0, 0.0, 0.0,
                        0.7853981633974483, 0.1, 300.0))
     _put_f32s(out, 60, (
         1.35, 1.0, 18.0, 0.4, 0.8, -9.81, 1.0 / 60.0,

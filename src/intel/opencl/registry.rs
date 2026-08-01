@@ -687,7 +687,6 @@ const FONT_OUTLINE_COVERAGE_R8_CONTRACT: GpuKernelContract<'_> = GpuKernelContra
     consumers: &[
         "intel::gpu_font default analytical coverage",
         "gridpaper resident scene at every supported scale",
-        "draw3d tcp waiting scene",
     ],
 };
 

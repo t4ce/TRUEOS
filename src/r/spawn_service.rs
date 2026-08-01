@@ -61,8 +61,6 @@ define_started_flags!(
     NTP_SYNC_STARTED,
     SNTP_SERVICE_STARTED,
     NET_SHELL_STARTED,
-    DRAW3D_SERVICE_STARTED,
-    DRAW3D_UI4_RENDER_STARTED,
     HELIO_GAME_STARTED,
     GRIDPAPER_SERVICE_STARTED,
     HID_UDP_SRV_STARTED,
@@ -532,14 +530,6 @@ fn spawn_sntp_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::shell2::backends::net_tcp_shell::net_shell_task())
-}
-
-fn spawn_draw3d_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::draw3d_service::draw3d_service_task())
-}
-
-fn spawn_draw3d_ui4_render(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::r::draw3d_service::draw3d_ui4_render_task())
 }
 
 fn spawn_helio_game(spawner: Spawner) -> SpawnAttempt {
@@ -1593,24 +1583,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_sntp_service,
     ),
     TaskSpec::enabled("net-shell-listener", 0, &NET_SHELL_STARTED, spawn_net_shell),
-    TaskSpec::enabled(
-        "draw3d-service",
-        crate::r::readiness::NET_ANY_CONFIGURED,
-        &DRAW3D_SERVICE_STARTED,
-        spawn_draw3d_service,
-    ),
-    TaskSpec::enabled_gated(
-        "draw3d-ui4-render",
-        // The UI4 carrier owns a useful static waiting frame before the TCP
-        // scene service has a client (or even a configured network).  Keep
-        // presentation independent from the producer's control plane so this
-        // frame can exercise the complete frame-pool -> direct plane ->
-        // SURFLIVE path by itself.
-        0,
-        ap1_ui_core_ready_gate,
-        &DRAW3D_UI4_RENDER_STARTED,
-        spawn_draw3d_ui4_render,
-    ),
     TaskSpec::enabled_gated(
         "helio-game",
         0,

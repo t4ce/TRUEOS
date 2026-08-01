@@ -473,6 +473,9 @@ mod tests {
         let initial = engine.positions.clone();
         engine.step(16.0 / 9.0).unwrap();
         assert_ne!(engine.positions, initial);
+        assert!(engine.batches()[0].vertices.iter().any(|vertex| {
+            vertex[0].abs() <= 1.0 && vertex[1].abs() <= 1.0 && (0.0..=1.0).contains(&vertex[2])
+        }));
         assert!(engine.batches().iter().all(|batch| {
             batch
                 .vertices
@@ -480,6 +483,38 @@ mod tests {
                 .flatten()
                 .all(|component| component.is_finite())
         }));
+        let mut visible_triangles = 0usize;
+        let mut visible_area = 0.0f32;
+        for batch in engine.batches() {
+            assert_ne!(batch.rgba[3], 0);
+            for triangle in batch.indices.chunks_exact(3) {
+                let a = batch.vertices[triangle[0] as usize];
+                let b = batch.vertices[triangle[1] as usize];
+                let c = batch.vertices[triangle[2] as usize];
+                let area = ((b[0] - a[0]) * (c[1] - a[1])
+                    - (b[1] - a[1]) * (c[0] - a[0]))
+                    .abs();
+                let x_min = a[0].min(b[0]).min(c[0]);
+                let x_max = a[0].max(b[0]).max(c[0]);
+                let y_min = a[1].min(b[1]).min(c[1]);
+                let y_max = a[1].max(b[1]).max(c[1]);
+                let z_visible = [a[2], b[2], c[2]]
+                    .into_iter()
+                    .any(|z| (0.0..=1.0).contains(&z));
+                if area > f32::EPSILON
+                    && x_max >= -1.0
+                    && x_min <= 1.0
+                    && y_max >= -1.0
+                    && y_min <= 1.0
+                    && z_visible
+                {
+                    visible_triangles += 1;
+                    visible_area += area;
+                }
+            }
+        }
+        assert!(visible_triangles >= 1_000);
+        assert!(visible_area >= 0.1);
         assert_eq!(
             engine
                 .batches()

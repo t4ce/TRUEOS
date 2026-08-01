@@ -564,7 +564,7 @@ pub(crate) fn publish_gpu_frame_buffer(
 
 /// Publish one full-surface compute allocation only after its final
 /// PIPE_CONTROL and post-sync marker retired. This is the double-buffered
-/// counterpart to Draw3D publication: metadata changes ownership, while the
+/// counterpart to resident-scene publication: metadata changes ownership, while the
 /// CPU neither reads nor copies the pixels.
 pub(crate) fn publish_gpgpu_frame_buffer(
     lease: FrameWriteLease,

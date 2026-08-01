@@ -13,7 +13,6 @@ fn direct_rcs_encode_fill_rect_2d_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
@@ -125,7 +124,6 @@ fn direct_rcs_encode_skybox_sample_rgb565_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
@@ -260,7 +258,6 @@ fn direct_rcs_encode_chart_sine_rgba8_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
@@ -395,7 +392,6 @@ fn direct_rcs_encode_pixel_plasma_rgba8_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
@@ -517,4 +513,3 @@ fn direct_rcs_encode_pixel_plasma_rgba8_batch(
     super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
     true
 }
-

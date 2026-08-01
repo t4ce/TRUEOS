@@ -180,7 +180,7 @@ struct CompositionState {
     primary: PlaneCompositionState,
     alpha: PlaneCompositionState,
     solara: PlaneCompositionState,
-    draw3d: PlaneCompositionState,
+    rgb_slot_3: PlaneCompositionState,
 }
 
 struct PlaneCompositionState {
@@ -276,7 +276,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand expensive=nonshared-double+triple/one-per-slot/soft-cap-4 shared=single+dirty-font-double/slot-local-composition mixed_slot=local-winner/placement-old+new-repair static_single=shared-slot-composition slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
+        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand expensive=nonshared-double+triple/one-per-slot/soft-cap-4 shared=single+dirty-font-double+streaming-render-scene-triple/slot-local-composition lone-shared=direct-scanout-when-eligible mixed_slot=local-winner/placement-old+new-repair static_single=shared-slot-composition slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
         CLOSE_TRANSITION_PERIOD_MS,
         PENDING_POLL_PERIOD_MS,
     );
@@ -352,7 +352,7 @@ fn initialize() -> Runtime {
                 initialized: false,
                 windows: Vec::new(),
             },
-            draw3d: PlaneCompositionState {
+            rgb_slot_3: PlaneCompositionState {
                 initialized: false,
                 windows: Vec::new(),
             },
@@ -499,7 +499,7 @@ fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui
             output_height,
         ),
         build_plane_plan(
-            &runtime.composition.draw3d,
+            &runtime.composition.rgb_slot_3,
             &windows,
             &views,
             CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_3),
@@ -780,10 +780,12 @@ fn queue_async_plane(
         .collect();
     // Explicitly shareable frames compose into one broker plane instead of
     // consuming one hardware plane per window. Immutable/single sources use
-    // the sparse BCS/CPU painter. Dirty/double FontScene sources keep a stable
-    // published front while their producer writes the back buffer, then use
-    // the ordinary GPU compositor. Plane slots are independent scanout inputs,
-    // so overlap is considered only inside this already slot-filtered set.
+    // the sparse BCS/CPU painter. Dirty/double FontScene and streaming/triple
+    // RenderScene sources keep a stable published front while their producer
+    // writes another buffer, then use the ordinary GPU compositor. A lone
+    // eligible member still takes the direct path below. Plane slots are
+    // independent scanout inputs, so overlap is considered only inside this
+    // already slot-filtered set.
     let all_shared_composable = !selected.is_empty()
         && selected.iter().all(|(window, _)| {
             frame_snapshot(window.frame)
@@ -1144,7 +1146,7 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
                 &mut runtime.composition.solara
             }
             CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_3) => {
-                &mut runtime.composition.draw3d
+                &mut runtime.composition.rgb_slot_3
             }
             CompositionTarget::Overlay(_) => continue,
         };

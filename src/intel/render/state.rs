@@ -355,7 +355,7 @@ enum TriangleBlendProbeMode {
 
 /// Optional fixed-function depth contract for one triangle submission.
 ///
-/// The surface is shared by all Draw3D submissions in a frame. Opaque draws
+/// The surface is shared by all Resident-scene submissions in a frame. Opaque draws
 /// test and write it; blended draws test the same values without becoming
 /// occluders themselves. Other render consumers pass no depth configuration
 /// and retain the proven null-depth pipeline.
@@ -1701,7 +1701,7 @@ fn is_vf_streamout_submit_name(submit_name: &str) -> bool {
 }
 
 fn is_triangle_debug_submit_name(submit_name: &str) -> bool {
-    submit_name != "draw3d-scene"
+    submit_name != "resident-scene"
         && (is_surface_draw_submit_name(submit_name)
             || is_streamout_submit_name(submit_name)
             || is_scratch_rt_submit_name(submit_name))
@@ -1727,7 +1727,7 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
     }
     if matches!(
         submit_name,
-        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d" | "draw3d-scene"
+        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d" | "resident-scene"
     ) || is_vs_draw_frontier_scratch_submit_name(submit_name)
         || is_font_vf_vue_ps_replay_submit_name(submit_name)
     {
@@ -1880,7 +1880,7 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
 }
 
 fn should_capture_scratch_rt_proof(submit_name: &str) -> bool {
-    is_scratch_rt_submit_name(submit_name) && submit_name != "draw3d-scene"
+    is_scratch_rt_submit_name(submit_name) && submit_name != "resident-scene"
 }
 
 fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {

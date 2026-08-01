@@ -368,20 +368,34 @@ fn quarantine_lfm25_rcs_context(reason: &'static str) {
 }
 
 fn quarantine_direct_rcs_lane(lane: DirectRcsLane, reason: &'static str) {
-    let quarantined = match lane {
-        DirectRcsLane::SystemService => &DIRECT_RCS_CONTEXT_QUARANTINED,
-        DirectRcsLane::Execution => &EXECUTION_RCS_CONTEXT_QUARANTINED,
-        DirectRcsLane::Lfm25 => &LFM25_RCS_CONTEXT_QUARANTINED,
+    let (quarantined, client) = match lane {
+        DirectRcsLane::SystemService => (
+            &DIRECT_RCS_CONTEXT_QUARANTINED,
+            crate::gpu::vgpu::KernelClient::GpgpuSystem,
+        ),
+        DirectRcsLane::Execution => (
+            &EXECUTION_RCS_CONTEXT_QUARANTINED,
+            crate::gpu::vgpu::KernelClient::GpgpuExecution,
+        ),
+        DirectRcsLane::Lfm25 => (
+            &LFM25_RCS_CONTEXT_QUARANTINED,
+            crate::gpu::vgpu::KernelClient::Lfm25,
+        ),
     };
     if quarantined
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
+        let isolation = crate::gpu::vgpu::isolate_kernel_client(client);
         crate::log_error!(
             target: "gpgpu";
-            "intel/gpgpu: direct-rcs context quarantined lane={} reason={} action=reject-future-direct-submits-until-reboot late-batch-reuse=forbidden\n",
+            "intel/gpgpu: direct-rcs context quarantined lane={} client={} reason={} device_found={} contexts_disabled={} contexts_retained={} action=isolate-consumer-and-reject-future-direct-submits-until-reboot late-batch-reuse=forbidden\n",
             lane.name(),
+            client.name(),
             reason,
+            isolation.device_found as u8,
+            isolation.contexts_disabled,
+            isolation.contexts_retained,
         );
     }
 }

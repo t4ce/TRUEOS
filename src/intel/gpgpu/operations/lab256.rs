@@ -293,11 +293,11 @@ pub(crate) fn poll_lab256_spirit_submission(
 
     let ok = marker == LAB256_POST_MARKER;
     let report_ok = ok && lab256_report_audit(pending.submitted.report, pending.submitted.frame);
-    complete_execution_rcs_submission(ok);
-    finish_lab256_runtime(pending.submitted.frame, ok);
     if !ok {
         quarantine_execution_rcs_context("lab256-marker-timeout");
     }
+    complete_execution_rcs_submission(ok);
+    finish_lab256_runtime(pending.submitted.frame, ok);
     EXECUTION_RCS_DETACHED_TAG.store(0, Ordering::Release);
     log_lab256_completion(pending.submitted, marker, report_ok, "spirit-worker");
 

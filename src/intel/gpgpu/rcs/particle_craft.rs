@@ -69,7 +69,6 @@ fn direct_rcs_encode_particle_craft_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 

@@ -4,129 +4,264 @@
 //! scene-independent. This module owns only TRUEOS residency, its existing
 //! one-GuC Render submission, and UI4 publication.
 
-use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU8, Ordering};
+use alloc::{collections::VecDeque, vec::Vec};
 use embassy_time::{Duration, Instant, Timer};
 
 const GAME_ARTIFACT: &[u8] = include_bytes!("../../assets/helio/simple-cube.trueos.intel.helio");
 const CHURN_FORWARD_ARTIFACT: &[u8] =
     include_bytes!("../../assets/helio/churn-forward.trueos.intel.helio");
-const OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(8);
 const PLANE_SLOT: usize = crate::ui4::RGB_OVERLAY_PLANE_SLOT_2;
 const MARGIN: u32 = 48;
 const TRANSPARENT_CLEAR_RGBA: [u8; 4] = [0, 0, 0, 0];
 const NATIVE_CHURN_FRAME_PERIOD_US: u64 = 16_667;
-
-const STATE_IDLE: u8 = 0;
-const STATE_PHASE_MASK: u8 = 0xf0;
-const STATE_ID_MASK: u8 = 0x0f;
-const STATE_REQUESTED: u8 = 0x10;
-const STATE_STARTING: u8 = 0x20;
-const STATE_ONLINE: u8 = 0x30;
-
-static GAME_STATE: AtomicU8 = AtomicU8::new(STATE_IDLE);
-static LAST_ERROR: spin::Mutex<Option<&'static str>> = spin::Mutex::new(None);
+const HELIO_OWNER_BASE: u8 = 8;
+pub(crate) const INSTANCE_CAPACITY: usize = 10;
+const PENDING_CAPACITY: usize = INSTANCE_CAPACITY;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameState {
-    Idle,
-    Requested(u8),
-    Starting(u8),
-    Online(u8),
+pub(crate) enum InstanceState {
+    Queued,
+    Starting,
+    Online,
+    Stopping,
 }
 
-impl GameState {
+impl InstanceState {
     pub(crate) const fn label(self) -> &'static str {
         match self {
-            Self::Idle => "idle",
-            Self::Requested(_) => "requested",
-            Self::Starting(_) => "starting",
-            Self::Online(_) => "online",
-        }
-    }
-
-    pub(crate) const fn example_id(self) -> Option<u8> {
-        match self {
-            Self::Idle => None,
-            Self::Requested(id) | Self::Starting(id) | Self::Online(id) => Some(id),
+            Self::Queued => "queued",
+            Self::Starting => "starting",
+            Self::Online => "online",
+            Self::Stopping => "stopping",
         }
     }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum LaunchRequest {
-    Queued,
-    AlreadyRequested(u8),
-    AlreadyStarting(u8),
-    AlreadyOnline(u8),
+    Queued {
+        instance_id: u32,
+    },
+    Replacing {
+        instance_id: u32,
+        stopping_instance_id: u32,
+    },
     Reserved,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameStatus {
-    pub(crate) state: GameState,
+pub(crate) enum StopRequest {
+    Stopping,
+    AlreadyStopping,
+    CancelledQueued,
+    NotFound,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct InstanceStatus {
+    pub(crate) instance_id: u32,
+    pub(crate) slot: Option<u8>,
+    pub(crate) state: InstanceState,
+    pub(crate) example_id: u8,
     pub(crate) artifact_name: &'static str,
     pub(crate) artifact_bytes: usize,
     pub(crate) last_error: Option<&'static str>,
 }
 
-fn game_state() -> GameState {
-    let state = GAME_STATE.load(Ordering::Acquire);
-    let id = state & STATE_ID_MASK;
-    match state & STATE_PHASE_MASK {
-        STATE_REQUESTED => GameState::Requested(id),
-        STATE_STARTING => GameState::Starting(id),
-        STATE_ONLINE => GameState::Online(id),
-        _ => GameState::Idle,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PoolStatus {
+    pub(crate) capacity: usize,
+    pub(crate) queued: usize,
+    pub(crate) instances: Vec<InstanceStatus>,
+}
+
+#[derive(Copy, Clone)]
+struct LaunchJob {
+    instance_id: u32,
+    example_id: u8,
+}
+
+#[derive(Copy, Clone)]
+struct InstanceRecord {
+    instance_id: u32,
+    example_id: u8,
+    state: InstanceState,
+    last_error: Option<&'static str>,
+}
+
+struct GamePool {
+    next_instance_id: u32,
+    slots: [Option<InstanceRecord>; INSTANCE_CAPACITY],
+    pending: VecDeque<LaunchJob>,
+}
+
+impl GamePool {
+    const fn new() -> Self {
+        Self {
+            next_instance_id: 1,
+            slots: [None; INSTANCE_CAPACITY],
+            pending: VecDeque::new(),
+        }
+    }
+
+    fn allocate_instance_id(&mut self) -> u32 {
+        let id = self.next_instance_id;
+        self.next_instance_id = self.next_instance_id.wrapping_add(1).max(1);
+        id
     }
 }
 
-/// Queue the embedded game for the already-resident AP1/UI runtime service.
+static GAME_POOL: spin::Mutex<GamePool> = spin::Mutex::new(GamePool::new());
+
+const fn artifact_for(example_id: u8) -> (&'static str, usize) {
+    if example_id == 2 {
+        ("churn-forward.trueos.intel.helio", CHURN_FORWARD_ARTIFACT.len())
+    } else {
+        ("simple-cube.trueos.intel.helio", GAME_ARTIFACT.len())
+    }
+}
+
+/// Queue an independent embedded game instance for the resident AP1 service.
+/// Once all ten task slots are occupied, the oldest instance is asked to stop
+/// at its next safe frame boundary and this newest request remains queued.
 pub(crate) fn request_launch(example_id: u8) -> LaunchRequest {
     if !(1..=4).contains(&example_id) {
         return LaunchRequest::Reserved;
     }
-    match GAME_STATE.compare_exchange(
-        STATE_IDLE,
-        STATE_REQUESTED | example_id,
-        Ordering::AcqRel,
-        Ordering::Acquire,
-    ) {
-        Ok(_) => LaunchRequest::Queued,
-        Err(state) => match decode_non_idle_state(state) {
-            GameState::Requested(id) => LaunchRequest::AlreadyRequested(id),
-            GameState::Starting(id) => LaunchRequest::AlreadyStarting(id),
-            GameState::Online(id) => LaunchRequest::AlreadyOnline(id),
-            GameState::Idle => LaunchRequest::AlreadyRequested(example_id),
-        },
-    }
-}
-
-fn decode_non_idle_state(state: u8) -> GameState {
-    let id = state & STATE_ID_MASK;
-    match state & STATE_PHASE_MASK {
-        STATE_REQUESTED => GameState::Requested(id),
-        STATE_STARTING => GameState::Starting(id),
-        STATE_ONLINE => GameState::Online(id),
-        _ => GameState::Idle,
-    }
-}
-
-pub(crate) fn status() -> GameStatus {
-    let state = game_state();
-    let (artifact_name, artifact_bytes) = if state.example_id() == Some(2) {
-        (
-            "churn-forward.trueos.intel.helio",
-            CHURN_FORWARD_ARTIFACT.len(),
-        )
-    } else {
-        ("simple-cube.trueos.intel.helio", GAME_ARTIFACT.len())
+    let (instance_id, stopping_instance_id, dropped_instance_id) = {
+        let mut pool = GAME_POOL.lock();
+        let instance_id = pool.allocate_instance_id();
+        let active = pool.slots.iter().flatten().count();
+        let demand = active.saturating_add(pool.pending.len());
+        let stopping_instance_id = if demand >= INSTANCE_CAPACITY {
+            let oldest = pool
+                .slots
+                .iter()
+                .flatten()
+                .filter(|record| record.state != InstanceState::Stopping)
+                .min_by_key(|record| record.instance_id)
+                .map(|record| record.instance_id);
+            if let Some(oldest) = oldest {
+                if let Some(record) = pool
+                    .slots
+                    .iter_mut()
+                    .flatten()
+                    .find(|record| record.instance_id == oldest)
+                {
+                    record.state = InstanceState::Stopping;
+                }
+            }
+            oldest
+        } else {
+            None
+        };
+        let dropped_instance_id = if pool.pending.len() >= PENDING_CAPACITY {
+            pool.pending.pop_front().map(|job| job.instance_id)
+        } else {
+            None
+        };
+        pool.pending.push_back(LaunchJob {
+            instance_id,
+            example_id,
+        });
+        (instance_id, stopping_instance_id, dropped_instance_id)
     };
-    GameStatus {
-        state,
-        artifact_name,
-        artifact_bytes,
-        last_error: *LAST_ERROR.lock(),
+    if let Some(dropped) = dropped_instance_id {
+        crate::log_warn!(target: "helio";
+            "helio pool pending saturated capacity={} dropped_instance={} newest_instance={} policy=newest-wins\n",
+            PENDING_CAPACITY,
+            dropped,
+            instance_id,
+        );
+    }
+    if let Some(stopping_instance_id) = stopping_instance_id {
+        crate::log_warn!(target: "helio";
+            "helio pool capacity={} oldest_instance={} action=orderly-stop newest_instance={} action=queue\n",
+            INSTANCE_CAPACITY,
+            stopping_instance_id,
+            instance_id,
+        );
+        LaunchRequest::Replacing {
+            instance_id,
+            stopping_instance_id,
+        }
+    } else {
+        LaunchRequest::Queued { instance_id }
+    }
+}
+
+pub(crate) fn request_stop(instance_id: u32) -> StopRequest {
+    let mut pool = GAME_POOL.lock();
+    if let Some(index) = pool
+        .pending
+        .iter()
+        .position(|job| job.instance_id == instance_id)
+    {
+        let _ = pool.pending.remove(index);
+        return StopRequest::CancelledQueued;
+    }
+    let Some(record) = pool
+        .slots
+        .iter_mut()
+        .flatten()
+        .find(|record| record.instance_id == instance_id)
+    else {
+        return StopRequest::NotFound;
+    };
+    if record.state == InstanceState::Stopping {
+        StopRequest::AlreadyStopping
+    } else {
+        record.state = InstanceState::Stopping;
+        StopRequest::Stopping
+    }
+}
+
+pub(crate) fn request_stop_all() -> usize {
+    let mut pool = GAME_POOL.lock();
+    let mut stopped = pool.pending.len();
+    pool.pending.clear();
+    for record in pool.slots.iter_mut().flatten() {
+        if record.state != InstanceState::Stopping {
+            record.state = InstanceState::Stopping;
+            stopped = stopped.saturating_add(1);
+        }
+    }
+    stopped
+}
+
+pub(crate) fn status() -> PoolStatus {
+    let pool = GAME_POOL.lock();
+    let mut instances = Vec::with_capacity(pool.slots.len() + pool.pending.len());
+    for (slot, record) in pool.slots.iter().enumerate() {
+        let Some(record) = record else { continue };
+        let (artifact_name, artifact_bytes) = artifact_for(record.example_id);
+        instances.push(InstanceStatus {
+            instance_id: record.instance_id,
+            slot: u8::try_from(slot).ok(),
+            state: record.state,
+            example_id: record.example_id,
+            artifact_name,
+            artifact_bytes,
+            last_error: record.last_error,
+        });
+    }
+    for job in &pool.pending {
+        let (artifact_name, artifact_bytes) = artifact_for(job.example_id);
+        instances.push(InstanceStatus {
+            instance_id: job.instance_id,
+            slot: None,
+            state: InstanceState::Queued,
+            example_id: job.example_id,
+            artifact_name,
+            artifact_bytes,
+            last_error: None,
+        });
+    }
+    instances.sort_unstable_by_key(|instance| instance.instance_id);
+    PoolStatus {
+        capacity: INSTANCE_CAPACITY,
+        queued: pool.pending.len(),
+        instances,
     }
 }
 
@@ -162,6 +297,145 @@ impl From<crate::ui4::FramePoolError> for GameError {
 impl From<crate::ui4::WindowBrokerError> for GameError {
     fn from(error: crate::ui4::WindowBrokerError) -> Self {
         Self::Window(error)
+    }
+}
+
+#[derive(Copy, Clone)]
+struct InstanceContext {
+    slot: usize,
+    instance_id: u32,
+    example_id: u8,
+    owner: crate::ui4::WindowOwner,
+}
+
+impl InstanceContext {
+    fn is_stopping(self) -> bool {
+        let pool = GAME_POOL.lock();
+        !matches!(
+            pool.slots.get(self.slot).copied().flatten(),
+            Some(record)
+                if record.instance_id == self.instance_id
+                    && record.state != InstanceState::Stopping
+        )
+    }
+
+    fn request_stop(self, reason: &'static str) {
+        let changed = {
+            let mut pool = GAME_POOL.lock();
+            let Some(record) = pool.slots.get_mut(self.slot).and_then(Option::as_mut) else {
+                return;
+            };
+            if record.instance_id != self.instance_id || record.state == InstanceState::Stopping {
+                false
+            } else {
+                record.state = InstanceState::Stopping;
+                true
+            }
+        };
+        if changed {
+            crate::log_info!(target: "helio";
+                "helio instance={} example={} stop requested reason={} boundary=next-safe-frame\n",
+                self.instance_id,
+                self.example_id,
+                reason,
+            );
+        }
+    }
+
+    fn mark_online(self) -> bool {
+        let mut pool = GAME_POOL.lock();
+        let Some(record) = pool.slots.get_mut(self.slot).and_then(Option::as_mut) else {
+            return false;
+        };
+        if record.instance_id != self.instance_id || record.state == InstanceState::Stopping {
+            return false;
+        }
+        record.state = InstanceState::Online;
+        record.last_error = None;
+        true
+    }
+
+    fn mark_starting_error(self, error: &'static str) -> bool {
+        let mut pool = GAME_POOL.lock();
+        let Some(record) = pool.slots.get_mut(self.slot).and_then(Option::as_mut) else {
+            return false;
+        };
+        if record.instance_id != self.instance_id || record.state == InstanceState::Stopping {
+            return false;
+        }
+        record.state = InstanceState::Starting;
+        record.last_error = Some(error);
+        true
+    }
+}
+
+fn escape_pressed(window: crate::ui4::WindowId, events: &[crate::ui4::winit_input::Event]) -> bool {
+    use crate::ui4::winit_input::{ElementState, Event, KeyCode, PhysicalKey, WindowEvent};
+
+    events.iter().any(|event| {
+        matches!(
+            *event,
+            Event::WindowEvent {
+                window_id,
+                event: WindowEvent::KeyboardInput {
+                    event: crate::ui4::winit_input::KeyEvent {
+                        physical_key: PhysicalKey::Code(KeyCode::Escape),
+                        state: ElementState::Pressed,
+                        ..
+                    },
+                },
+                ..
+            } if window_id == window
+        )
+    })
+}
+
+fn claim_next_launch() -> Option<InstanceContext> {
+    let mut pool = GAME_POOL.lock();
+    let slot = pool.slots.iter().position(Option::is_none)?;
+    let job = pool.pending.pop_front()?;
+    pool.slots[slot] = Some(InstanceRecord {
+        instance_id: job.instance_id,
+        example_id: job.example_id,
+        state: InstanceState::Starting,
+        last_error: None,
+    });
+    Some(InstanceContext {
+        slot,
+        instance_id: job.instance_id,
+        example_id: job.example_id,
+        owner: crate::ui4::WindowOwner::KernelApp(HELIO_OWNER_BASE + slot as u8),
+    })
+}
+
+fn requeue_failed_spawn(context: InstanceContext) {
+    let mut pool = GAME_POOL.lock();
+    let Some(record) = pool.slots.get(context.slot).copied().flatten() else {
+        return;
+    };
+    if record.instance_id != context.instance_id {
+        return;
+    }
+    pool.slots[context.slot] = None;
+    if pool.pending.len() >= PENDING_CAPACITY {
+        let _ = pool.pending.pop_front();
+    }
+    pool.pending.push_front(LaunchJob {
+        instance_id: context.instance_id,
+        example_id: context.example_id,
+    });
+}
+
+fn release_instance_slot(context: InstanceContext) {
+    let mut pool = GAME_POOL.lock();
+    if pool
+        .slots
+        .get(context.slot)
+        .copied()
+        .flatten()
+        .is_some_and(|record| record.instance_id == context.instance_id)
+    {
+        pool.slots[context.slot] = None;
     }
 }
 
@@ -303,6 +577,8 @@ fn add_scaled(target: &mut [f32; 3], value: [f32; 3], scale: f32) {
 }
 
 struct GameSurface {
+    owner: crate::ui4::WindowOwner,
+    pool_slot: usize,
     session: crate::ui4::WindowSessionId,
     frame: crate::ui4::FrameHandle,
     window: Option<crate::ui4::WindowId>,
@@ -335,7 +611,7 @@ fn create_game_frame(width: u32, height: u32) -> Result<crate::ui4::FrameHandle,
     })?)
 }
 
-fn create_surface() -> Result<GameSurface, GameError> {
+fn create_surface(context: InstanceContext) -> Result<GameSurface, GameError> {
     let (render_width, render_height) = crate::intel::render::resident_scene_target_dimensions();
     let (scanout_width, scanout_height) = crate::intel::active_scanout_dimensions()
         .unwrap_or((crate::ui4::DEFAULT_FRAME_WIDTH, crate::ui4::DEFAULT_FRAME_HEIGHT));
@@ -349,7 +625,7 @@ fn create_surface() -> Result<GameSurface, GameError> {
         return Err(GameError::InvalidFrame);
     }
     let frame = create_game_frame(width, height)?;
-    let session = match crate::ui4::begin_window_session(OWNER) {
+    let session = match crate::ui4::begin_window_session(context.owner) {
         Ok(session) => session,
         Err(error) => {
             let _ = crate::ui4::destroy_frame(frame);
@@ -357,6 +633,8 @@ fn create_surface() -> Result<GameSurface, GameError> {
         }
     };
     Ok(GameSurface {
+        owner: context.owner,
+        pool_slot: context.slot,
         session,
         frame,
         window: None,
@@ -367,7 +645,7 @@ fn create_surface() -> Result<GameSurface, GameError> {
 
 fn desired_resize(surface: &GameSurface) -> Option<(u32, u32)> {
     let window = surface.window?;
-    let placement = crate::ui4::window_placement(OWNER, window).ok()?;
+    let placement = crate::ui4::window_placement(surface.owner, window).ok()?;
     let target = helio_backing_extent(placement.width, placement.height);
     (target != (surface.width, surface.height)).then_some(target)
 }
@@ -407,12 +685,13 @@ fn commit_resize(
 ) -> Result<crate::ui4::FrameHandle, GameError> {
     let window = surface.window.ok_or(GameError::InvalidFrame)?;
     let previous = surface.frame;
-    crate::ui4::replace_window_frame(OWNER, window, replacement.frame)?;
+    crate::ui4::replace_window_frame(surface.owner, window, replacement.frame)?;
     if let Err(error) =
-        crate::ui4::publish_window_frame(OWNER, window, crate::ui4::DamageRect::FULL)
+        crate::ui4::publish_window_frame(surface.owner, window, crate::ui4::DamageRect::FULL)
     {
-        let _ = crate::ui4::replace_window_frame(OWNER, window, previous);
-        let _ = crate::ui4::publish_window_frame(OWNER, window, crate::ui4::DamageRect::FULL);
+        let _ = crate::ui4::replace_window_frame(surface.owner, window, previous);
+        let _ =
+            crate::ui4::publish_window_frame(surface.owner, window, crate::ui4::DamageRect::FULL);
         return Err(error.into());
     }
     surface.frame = replacement.frame;
@@ -425,6 +704,12 @@ fn retire_frames(frames: &mut Vec<crate::ui4::FrameHandle>) {
     frames.retain(|frame| {
         matches!(crate::ui4::destroy_frame(*frame), Err(crate::ui4::FramePoolError::Busy))
     });
+}
+
+fn transfer_retired_frames(frames: &mut Vec<crate::ui4::FrameHandle>) {
+    for frame in frames.drain(..) {
+        crate::ui4::retire_frame_when_released(frame);
+    }
 }
 
 fn make_resident_scene(
@@ -481,11 +766,8 @@ fn update_resident_scene(
     }
     for (triangle_index, (resident, triangle)) in resident.iter().zip(&scene.triangles).enumerate()
     {
-        crate::intel::render::update_resident_triangle_vertices(
-            &resident.mesh,
-            &triangle.vertices,
-        )
-        .map_err(GameError::Render)?;
+        crate::intel::render::update_resident_triangle_vertices(&resident.mesh, &triangle.vertices)
+            .map_err(GameError::Render)?;
         let args = scene
             .resident_triangle_draw_indexed_indirect(triangle_index)
             .map_err(GameError::Artifact)?;
@@ -568,11 +850,20 @@ fn publish_gpu_logger_sample(sample: crate::spirit::gpu_logger::GpuLoggerSample)
 }
 
 fn destroy_unpublished_surface(surface: GameSurface) {
-    if let Some(window) = surface.window {
-        let _ = crate::ui4::close_window(OWNER, window);
+    if surface.window.is_some() {
+        let request = crate::ui4::WindowSessionCloseRequest::default()
+            .direct_plane_animate_and_retire_frames();
+        if crate::ui4::finish_window_session_with_request(surface.owner, surface.session, request)
+            .is_ok()
+        {
+            return;
+        }
     }
-    let _ = crate::ui4::finish_window_session(OWNER, surface.session);
-    let _ = crate::ui4::destroy_frame(surface.frame);
+    if let Some(window) = surface.window {
+        let _ = crate::ui4::close_window(surface.owner, window);
+    }
+    let _ = crate::ui4::finish_window_session(surface.owner, surface.session);
+    crate::ui4::retire_frame_when_released(surface.frame);
 }
 
 async fn render_frame(
@@ -720,18 +1011,27 @@ fn publish_surface_window(surface: &mut GameSurface) -> Result<(), GameError> {
     let (scanout_width, scanout_height) =
         crate::intel::active_scanout_dimensions().unwrap_or((surface.width, surface.height));
     if surface.window.is_none() {
+        let cascade = u32::try_from(surface.pool_slot)
+            .unwrap_or(0)
+            .saturating_mul(28);
+        let x = scanout_width
+            .saturating_sub(surface.width.saturating_add(MARGIN))
+            .saturating_sub(cascade);
+        let y = MARGIN
+            .saturating_add(cascade)
+            .min(scanout_height.saturating_sub(surface.height));
         surface.window = Some(crate::ui4::create_window(crate::ui4::WindowCreate {
-            owner: OWNER,
+            owner: surface.owner,
             session: surface.session,
             frame: surface.frame,
             output,
             plane: crate::ui4::WindowPlane::Universal(PLANE_SLOT as u8),
             placement: crate::ui4::WindowPlacement {
-                x: scanout_width.saturating_sub(surface.width.saturating_add(MARGIN)) as i32,
-                y: MARGIN.min(scanout_height.saturating_sub(surface.height)) as i32,
+                x: x as i32,
+                y: y as i32,
                 width: surface.width,
                 height: surface.height,
-                z: 78,
+                z: 78 + i32::try_from(surface.pool_slot).unwrap_or(0),
                 opacity: u8::MAX,
                 visible: true,
             },
@@ -739,7 +1039,7 @@ fn publish_surface_window(surface: &mut GameSurface) -> Result<(), GameError> {
         })?);
     }
     let window = surface.window.ok_or(GameError::InvalidFrame)?;
-    crate::ui4::publish_window_frame(OWNER, window, crate::ui4::DamageRect::FULL)?;
+    crate::ui4::publish_window_frame(surface.owner, window, crate::ui4::DamageRect::FULL)?;
     Ok(())
 }
 
@@ -804,11 +1104,8 @@ fn update_resident_batches(
         return Err(GameError::Render("helio-churn-batch-count"));
     }
     for (resident, batch) in resident.iter_mut().zip(batches) {
-        crate::intel::render::update_resident_triangle_vertices(
-            &resident.mesh,
-            &batch.vertices,
-        )
-        .map_err(GameError::Render)?;
+        crate::intel::render::update_resident_triangle_vertices(&resident.mesh, &batch.vertices)
+            .map_err(GameError::Render)?;
         let args = batch.draw_indexed_indirect().map_err(GameError::Artifact)?;
         crate::intel::render::update_resident_triangle_draw_indexed_indirect(
             &resident.mesh,
@@ -826,6 +1123,7 @@ fn update_resident_batches(
 
 fn apply_churn_key_actions(
     engine: &mut trueos_helio_runtime::churn::Engine,
+    instance_id: u32,
     window: crate::ui4::WindowId,
     events: &[crate::ui4::winit_input::Event],
 ) {
@@ -856,7 +1154,8 @@ fn apply_churn_key_actions(
                 engine.adjust_spawn_rate(1);
                 crate::log_info!(
                     target: "helio";
-                    "helio churn input spawn_rate={} source=ui4-winit-bridge\n",
+                    "helio instance={} churn input spawn_rate={} source=ui4-winit-bridge\n",
+                    instance_id,
                     engine.spawn_rate(),
                 );
             }
@@ -864,7 +1163,8 @@ fn apply_churn_key_actions(
                 engine.adjust_spawn_rate(-1);
                 crate::log_info!(
                     target: "helio";
-                    "helio churn input spawn_rate={} source=ui4-winit-bridge\n",
+                    "helio instance={} churn input spawn_rate={} source=ui4-winit-bridge\n",
+                    instance_id,
                     engine.spawn_rate(),
                 );
             }
@@ -872,7 +1172,8 @@ fn apply_churn_key_actions(
                 let collisions = engine.toggle_collisions();
                 crate::log_info!(
                     target: "helio";
-                    "helio churn input collisions={} action={} mode=bounded-deterministic-separation source=ui4-winit-bridge\n",
+                    "helio instance={} churn input collisions={} action={} mode=bounded-deterministic-separation source=ui4-winit-bridge\n",
+                    instance_id,
                     collisions,
                     if collisions { "burst" } else { "orbit-reset" },
                 );
@@ -957,6 +1258,7 @@ impl PortedSceneEngine {
 
     fn apply_key_actions(
         &mut self,
+        instance_id: u32,
         window: crate::ui4::WindowId,
         events: &[crate::ui4::winit_input::Event],
     ) {
@@ -992,7 +1294,8 @@ impl PortedSceneEngine {
                     engine.adjust_shape_count(delta);
                     crate::log_info!(
                         target: "helio";
-                        "helio battle input shape_count={} action=restart source=ui4-winit-bridge\n",
+                        "helio instance={} battle input shape_count={} action=restart source=ui4-winit-bridge\n",
+                        instance_id,
                         engine.shape_count(),
                     );
                 }
@@ -1001,7 +1304,8 @@ impl PortedSceneEngine {
                         engine.toggle_enabled();
                         crate::log_info!(
                             target: "helio";
-                            "helio pendulum input physics={} source=ui4-winit-bridge\n",
+                            "helio instance={} pendulum input physics={} source=ui4-winit-bridge\n",
+                            instance_id,
                             engine.enabled(),
                         );
                     }
@@ -1009,7 +1313,8 @@ impl PortedSceneEngine {
                         engine.reset();
                         crate::log_info!(
                             target: "helio";
-                            "helio pendulum input action=reset source=ui4-winit-bridge\n",
+                            "helio instance={} pendulum input action=reset source=ui4-winit-bridge\n",
+                            instance_id,
                         );
                     }
                     _ => {}
@@ -1019,8 +1324,8 @@ impl PortedSceneEngine {
     }
 }
 
-async fn run_cube() -> Result<(), GameError> {
-    let mut surface = create_surface()?;
+async fn run_cube(context: InstanceContext) -> Result<(), GameError> {
+    let mut surface = create_surface(context)?;
     let initial_scene = match trueos_helio_runtime::decode_artifact_with_replay(
         GAME_ARTIFACT,
         surface.width as f32 / surface.height as f32,
@@ -1052,17 +1357,21 @@ async fn run_cube() -> Result<(), GameError> {
     publish_gpu_logger_sample(gpu_logger_sample(&rendered, 1, 0, 1, &resident, 0, 0));
 
     let window = surface.window.expect("published Helio cube window");
-    let mut input = crate::ui4::winit_input::EventLoopInput::new(OWNER);
+    let mut input = crate::ui4::winit_input::EventLoopInput::new(context.owner);
     if !input.register_window(window) {
         release_resident_scene(resident);
         destroy_unpublished_surface(surface);
         return Err(GameError::Render("helio-input-window-capacity"));
     }
-    GAME_STATE.store(STATE_ONLINE | 1, Ordering::Release);
-    *LAST_ERROR.lock() = None;
+    if !context.mark_online() {
+        release_resident_scene(resident);
+        destroy_unpublished_surface(surface);
+        return Ok(());
+    }
     crate::log_info!(
         target: "helio";
-        "helio example=1 name=simple-cube online artifact_bytes={} normalized_triangles={} source_draw_indices={} draw_source={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied resize=ui4-broker->render-native-or-half-scale-ring->atomic-frame-swap->direct-plane-1x-or-2x path=helioa-v1+render-ir-v1+artifact-replay-v1->uniform-color-subdraws->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+        "helio instance={} example=1 name=simple-cube online artifact_bytes={} normalized_triangles={} source_draw_indices={} draw_source={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied resize=ui4-broker->render-native-or-half-scale-ring->atomic-frame-swap->direct-plane-1x-or-2x path=helioa-v1+render-ir-v1+artifact-replay-v1->uniform-color-subdraws->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+        context.instance_id,
         GAME_ARTIFACT.len(),
         triangle_count,
         initial_scene.source_draw_indexed_indirect.index_count,
@@ -1079,7 +1388,14 @@ async fn run_cube() -> Result<(), GameError> {
     let mut frame_index = 1u64;
     loop {
         retire_frames(&mut retired_frames);
-        let _ = input.poll();
+        if context.is_stopping() {
+            break;
+        }
+        let events = input.poll();
+        if escape_pressed(window, &events) {
+            context.request_stop("focused-window-escape");
+            break;
+        }
 
         if pending_resize.is_none()
             && let Some((width, height)) = desired_resize(&surface)
@@ -1107,7 +1423,8 @@ async fn run_cube() -> Result<(), GameError> {
                     }
                     crate::log_info!(
                         target: "helio";
-                        "helio resize prepared example=1 window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap old_front=retain-surflive\n",
+                        "helio instance={} resize prepared example=1 window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap old_front=retain-surflive\n",
+                        context.instance_id,
                         window.raw(),
                         surface.width,
                         surface.height,
@@ -1120,7 +1437,8 @@ async fn run_cube() -> Result<(), GameError> {
                 Err(error) => {
                     crate::log_warn!(
                         target: "helio";
-                        "helio resize deferred example=1 window={} old={}x{} requested={}x{} error={:?} action=retain-current-frame-and-reconcile\n",
+                        "helio instance={} resize deferred example=1 window={} old={}x{} requested={}x{} error={:?} action=retain-current-frame-and-reconcile\n",
+                        context.instance_id,
                         window.raw(),
                         surface.width,
                         surface.height,
@@ -1174,7 +1492,8 @@ async fn run_cube() -> Result<(), GameError> {
                 ));
                 crate::log_info!(
                     target: "helio";
-                    "helio resize committed example=1 window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1-or-direct-plane-2x cpu_readback=0 cpu_frame_copy=0\n",
+                    "helio instance={} resize committed example=1 window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1-or-direct-plane-2x cpu_readback=0 cpu_frame_copy=0\n",
+                    context.instance_id,
                     window.raw(),
                     surface.width,
                     surface.height,
@@ -1185,7 +1504,8 @@ async fn run_cube() -> Result<(), GameError> {
                 let _ = crate::ui4::destroy_frame(replacement.frame);
                 crate::log_warn!(
                     target: "helio";
-                    "helio resize commit rejected example=1 window={} requested={}x{} error={:?} action=old-front-restored\n",
+                    "helio instance={} resize commit rejected example=1 window={} requested={}x{} error={:?} action=old-front-restored\n",
+                    context.instance_id,
                     window.raw(),
                     replacement.width,
                     replacement.height,
@@ -1194,11 +1514,16 @@ async fn run_cube() -> Result<(), GameError> {
             }
         }
     }
+    if let Some(replacement) = pending_resize {
+        crate::ui4::retire_frame_when_released(replacement.frame);
+    }
+    transfer_retired_frames(&mut retired_frames);
+    release_resident_scene(resident);
+    destroy_unpublished_surface(surface);
+    Ok(())
 }
 
-fn native_churn_triangle_count(
-    frame: &trueos_helio_runtime::churn::InstanceFrame<'_>,
-) -> u64 {
+fn native_churn_triangle_count(frame: &trueos_helio_runtime::churn::InstanceFrame<'_>) -> u64 {
     frame.draws.iter().fold(0u64, |total, draw| {
         total.saturating_add(
             u64::from(draw.index_count / 3).saturating_mul(u64::from(draw.instance_count)),
@@ -1206,9 +1531,11 @@ fn native_churn_triangle_count(
     })
 }
 
-async fn run_churn_native() -> Result<(), GameError> {
-    let mut surface = create_surface()?;
-    let spec = match trueos_helio_runtime::churn::Spec::decode_artifact(CHURN_FORWARD_ARTIFACT) {
+async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
+    let mut surface = create_surface(context)?;
+    // The native artifact owns the WGPU forward program and instance ABI;
+    // the shared game artifact owns the authored churn scene parameters.
+    let spec = match trueos_helio_runtime::churn::Spec::decode_artifact(GAME_ARTIFACT) {
         Ok(spec) => spec,
         Err(error) => {
             destroy_unpublished_surface(surface);
@@ -1241,7 +1568,8 @@ async fn run_churn_native() -> Result<(), GameError> {
             return Err(GameError::NativeUnavailable(reason));
         }
     };
-    if let Err(reason) = crate::intel::render::update_resident_churn_forward_frame(&resident, &initial)
+    if let Err(reason) =
+        crate::intel::render::update_resident_churn_forward_frame(&resident, &initial)
     {
         let _ = crate::intel::render::release_resident_churn_forward(&resident);
         destroy_unpublished_surface(surface);
@@ -1249,7 +1577,7 @@ async fn run_churn_native() -> Result<(), GameError> {
     }
     let mut prepared_triangles = native_churn_triangle_count(&initial);
 
-    let mut input = crate::ui4::winit_input::EventLoopInput::new(OWNER);
+    let mut input = crate::ui4::winit_input::EventLoopInput::new(context.owner);
     let mut fly_camera = FlyCamera::new(engine.camera());
     let clear_rgba = TRANSPARENT_CLEAR_RGBA;
     let mut first_frame = true;
@@ -1264,12 +1592,19 @@ async fn run_churn_native() -> Result<(), GameError> {
     let mut next_frame = Instant::now();
     let result = loop {
         retire_frames(&mut retired_frames);
+        if context.is_stopping() {
+            break Ok(());
+        }
         if !first_frame && !frame_prepared {
             let Some(window) = surface.window else {
                 break Err(GameError::InvalidFrame);
             };
             let events = input.poll();
-            apply_churn_key_actions(&mut engine, window, &events);
+            if escape_pressed(window, &events) {
+                context.request_stop("focused-window-escape");
+                break Ok(());
+            }
+            apply_churn_key_actions(&mut engine, context.instance_id, window, &events);
             let camera_changed = fly_camera.apply_events(&events)
                 | fly_camera.apply_held_keys(&input, window, 0.016);
             if pending_resize.is_none()
@@ -1279,7 +1614,8 @@ async fn run_churn_native() -> Result<(), GameError> {
                     Ok(replacement) => {
                         crate::log_info!(
                             target: "helio";
-                            "helio native resize prepared example=2 window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap\n",
+                            "helio instance={} native resize prepared example=2 window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap\n",
+                            context.instance_id,
                             window.raw(),
                             surface.width,
                             surface.height,
@@ -1292,7 +1628,8 @@ async fn run_churn_native() -> Result<(), GameError> {
                     Err(error) => {
                         crate::log_warn!(
                             target: "helio";
-                            "helio native resize deferred example=2 requested={}x{} error={:?}\n",
+                            "helio instance={} native resize deferred example=2 requested={}x{} error={:?}\n",
+                            context.instance_id,
                             width,
                             height,
                             error,
@@ -1304,9 +1641,7 @@ async fn run_churn_native() -> Result<(), GameError> {
                 .map_or((surface.width, surface.height), |replacement| {
                     (replacement.width, replacement.height)
                 });
-            if camera_changed
-                && let Err(error) = engine.set_camera(fly_camera.camera)
-            {
+            if camera_changed && let Err(error) = engine.set_camera(fly_camera.camera) {
                 break Err(GameError::Artifact(error));
             }
             let prepared = match engine.step_instances(render_width as f32 / render_height as f32) {
@@ -1342,7 +1677,8 @@ async fn run_churn_native() -> Result<(), GameError> {
                             retired_frames.push(previous);
                             crate::log_info!(
                                 target: "helio";
-                                "helio native resize committed example=2 window={} extent={}x{} frame={}\n",
+                                "helio instance={} native resize committed example=2 window={} extent={}x{} frame={}\n",
+                                context.instance_id,
                                 surface.window.map_or(0, crate::ui4::WindowId::raw),
                                 surface.width,
                                 surface.height,
@@ -1354,7 +1690,8 @@ async fn run_churn_native() -> Result<(), GameError> {
                             frame_prepared = false;
                             crate::log_warn!(
                                 target: "helio";
-                                "helio native resize commit rejected requested={}x{} error={:?}\n",
+                                "helio instance={} native resize commit rejected requested={}x{} error={:?}\n",
+                                context.instance_id,
                                 replacement.width,
                                 replacement.height,
                                 error,
@@ -1422,15 +1759,17 @@ async fn run_churn_native() -> Result<(), GameError> {
             Err(error) => break Err(error),
         }
         if first_frame {
-            GAME_STATE.store(STATE_ONLINE | 2, Ordering::Release);
-            *LAST_ERROR.lock() = None;
             let window = surface.window.expect("published native Helio churn window");
             if !input.register_window(window) {
                 break Err(GameError::Render("helio-input-window-capacity"));
             }
+            if !context.mark_online() {
+                break Ok(());
+            }
             crate::log_info!(
                 target: "helio";
-                "helio example=2 name=churn-benchmark native=1 online artifact_bytes={} active_objects={} max_instances={} draw_groups=12 geometry=3x-posnormal-cube frame={} window={} extent={}x{} plane={} background=transparent-rgba controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=absolute-deadline period_us=16667 target_fps=60 missed_deadline=skip-extra-delay path=helioa-churn-forward-v1->artifact-native-vs+ps->camera+instance+compacted-storage->12-indexed-indirect->one-guc-schedule->ui4-triple-direct cpu_vertex_projection=0 mutable_upload=camera+dirty-instances+compacted+indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
+                "helio instance={} example=2 name=churn-benchmark native=1 online artifact_bytes={} active_objects={} max_instances={} draw_groups=12 geometry=3x-posnormal-cube frame={} window={} extent={}x{} plane={} background=transparent-rgba controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=absolute-deadline period_us=16667 target_fps=60 missed_deadline=skip-extra-delay path=helioa-churn-forward-v1->artifact-native-vs+ps->camera+instance+compacted-storage->12-indexed-indirect->one-guc-schedule->ui4-triple-direct cpu_vertex_projection=0 mutable_upload=camera+dirty-instances+compacted+indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
+                context.instance_id,
                 CHURN_FORWARD_ARTIFACT.len(),
                 engine.active_objects(),
                 resident.max_instances(),
@@ -1449,28 +1788,29 @@ async fn run_churn_native() -> Result<(), GameError> {
         Timer::at(next_frame).await;
     };
     if let Some(replacement) = pending_resize {
-        let _ = crate::ui4::destroy_frame(replacement.frame);
+        crate::ui4::retire_frame_when_released(replacement.frame);
     }
-    retire_frames(&mut retired_frames);
+    transfer_retired_frames(&mut retired_frames);
     let _ = crate::intel::render::release_resident_churn_forward(&resident);
     destroy_unpublished_surface(surface);
     result
 }
 
-async fn run_churn() -> Result<(), GameError> {
-    match run_churn_native().await {
+async fn run_churn(context: InstanceContext) -> Result<(), GameError> {
+    match run_churn_native(context).await {
         Ok(()) => return Ok(()),
         Err(GameError::NativeUnavailable(reason)) => {
             crate::log_warn!(
                 target: "helio";
-                "helio example=2 native activation unavailable reason={} artifact_bytes={} action=compatibility-resident-vertices fallback_preserves=simple-cube+legacy-churn\n",
+                "helio instance={} example=2 native activation unavailable reason={} artifact_bytes={} action=compatibility-resident-vertices fallback_preserves=simple-cube+legacy-churn\n",
+                context.instance_id,
                 reason,
                 CHURN_FORWARD_ARTIFACT.len(),
             );
         }
         Err(error) => return Err(error),
     }
-    let mut surface = create_surface()?;
+    let mut surface = create_surface(context)?;
     let initial_aspect = surface.width as f32 / surface.height as f32;
     let spec = match trueos_helio_runtime::churn::Spec::decode_artifact(GAME_ARTIFACT) {
         Ok(spec) => spec,
@@ -1499,7 +1839,7 @@ async fn run_churn() -> Result<(), GameError> {
         }
     };
 
-    let mut input = crate::ui4::winit_input::EventLoopInput::new(OWNER);
+    let mut input = crate::ui4::winit_input::EventLoopInput::new(context.owner);
     let mut fly_camera = FlyCamera::new(engine.camera());
 
     let mut first_frame = true;
@@ -1513,12 +1853,19 @@ async fn run_churn() -> Result<(), GameError> {
     let mut pending_resize: Option<PendingGameResize> = None;
     let result = loop {
         retire_frames(&mut retired_frames);
+        if context.is_stopping() {
+            break Ok(());
+        }
         if !first_frame && !frame_prepared {
             let Some(window) = surface.window else {
                 break Err(GameError::InvalidFrame);
             };
             let events = input.poll();
-            apply_churn_key_actions(&mut engine, window, &events);
+            if escape_pressed(window, &events) {
+                context.request_stop("focused-window-escape");
+                break Ok(());
+            }
+            apply_churn_key_actions(&mut engine, context.instance_id, window, &events);
             let camera_changed = fly_camera.apply_events(&events)
                 | fly_camera.apply_held_keys(&input, window, 0.033);
             if pending_resize.is_none()
@@ -1528,7 +1875,8 @@ async fn run_churn() -> Result<(), GameError> {
                     Ok(replacement) => {
                         crate::log_info!(
                             target: "helio";
-                            "helio resize prepared example=2 window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap old_front=retain-surflive\n",
+                            "helio instance={} resize prepared example=2 window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap old_front=retain-surflive\n",
+                            context.instance_id,
                             window.raw(),
                             surface.width,
                             surface.height,
@@ -1541,7 +1889,8 @@ async fn run_churn() -> Result<(), GameError> {
                     Err(error) => {
                         crate::log_warn!(
                             target: "helio";
-                            "helio resize deferred example=2 window={} old={}x{} requested={}x{} error={:?} action=retain-current-frame-and-reconcile\n",
+                            "helio instance={} resize deferred example=2 window={} old={}x{} requested={}x{} error={:?} action=retain-current-frame-and-reconcile\n",
+                            context.instance_id,
                             window.raw(),
                             surface.width,
                             surface.height,
@@ -1584,7 +1933,8 @@ async fn run_churn() -> Result<(), GameError> {
                             retired_frames.push(previous);
                             crate::log_info!(
                                 target: "helio";
-                                "helio resize committed example=2 window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1-or-direct-plane-2x cpu_readback=0 cpu_frame_copy=0\n",
+                                "helio instance={} resize committed example=2 window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1-or-direct-plane-2x cpu_readback=0 cpu_frame_copy=0\n",
+                                context.instance_id,
                                 surface.window.map_or(0, crate::ui4::WindowId::raw),
                                 surface.width,
                                 surface.height,
@@ -1596,7 +1946,8 @@ async fn run_churn() -> Result<(), GameError> {
                             frame_prepared = false;
                             crate::log_warn!(
                                 target: "helio";
-                                "helio resize commit rejected example=2 requested={}x{} error={:?} action=old-front-restored-and-reproject\n",
+                                "helio instance={} resize commit rejected example=2 requested={}x{} error={:?} action=old-front-restored-and-reproject\n",
+                                context.instance_id,
                                 replacement.width,
                                 replacement.height,
                                 error,
@@ -1656,15 +2007,17 @@ async fn run_churn() -> Result<(), GameError> {
             Err(error) => break Err(error),
         }
         if first_frame {
-            GAME_STATE.store(STATE_ONLINE | 2, Ordering::Release);
-            *LAST_ERROR.lock() = None;
             let window = surface.window.expect("published Helio churn window");
             if !input.register_window(window) {
                 break Err(GameError::Render("helio-input-window-capacity"));
             }
+            if !context.mark_online() {
+                break Ok(());
+            }
             crate::log_info!(
                 target: "helio";
-                "helio example=2 name=churn-benchmark online artifact_bytes={} active_objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba floor=none alpha=premultiplied animation_rate=1.5x lighting=churn-light-v1+24-face-batches lights=2 ambient=hemisphere controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=relative-post-work delay_ms=33 nominal_ceiling_fps=30 input=ui4-owner-broker->winit-shaped-events resize=ui4-broker->render-native-or-half-scale-ring->atomic-frame-swap->direct-plane-1x-or-2x path=helioa-v1+churn-v1+flat-light-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct mutable_upload=vertices-only immutable_indices=retained cpu_readback=0 cpu_frame_copy=0\n",
+                "helio instance={} example=2 name=churn-benchmark online artifact_bytes={} active_objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba floor=none alpha=premultiplied animation_rate=1.5x lighting=churn-light-v1+24-face-batches lights=2 ambient=hemisphere controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=relative-post-work delay_ms=33 nominal_ceiling_fps=30 input=ui4-owner-broker->winit-shaped-events resize=ui4-broker->render-native-or-half-scale-ring->atomic-frame-swap->direct-plane-1x-or-2x path=helioa-v1+churn-v1+flat-light-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct mutable_upload=vertices-only immutable_indices=retained cpu_readback=0 cpu_frame_copy=0\n",
+                context.instance_id,
                 GAME_ARTIFACT.len(),
                 engine.active_objects(),
                 resident.len(),
@@ -1678,14 +2031,18 @@ async fn run_churn() -> Result<(), GameError> {
         }
         Timer::after(Duration::from_millis(33)).await;
     };
-    retire_frames(&mut retired_frames);
+    if let Some(replacement) = pending_resize {
+        crate::ui4::retire_frame_when_released(replacement.frame);
+    }
+    transfer_retired_frames(&mut retired_frames);
     release_resident_scene(resident);
     destroy_unpublished_surface(surface);
     result
 }
 
-async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
-    let mut surface = create_surface()?;
+async fn run_ported_scene(context: InstanceContext) -> Result<(), GameError> {
+    let example_id = context.example_id;
+    let mut surface = create_surface(context)?;
     let initial_aspect = surface.width as f32 / surface.height as f32;
     let mut engine = match PortedSceneEngine::decode(example_id) {
         Ok(engine) => engine,
@@ -1706,7 +2063,7 @@ async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
         }
     };
 
-    let mut input = crate::ui4::winit_input::EventLoopInput::new(OWNER);
+    let mut input = crate::ui4::winit_input::EventLoopInput::new(context.owner);
     let mut fly_camera = FlyCamera::new(engine.camera());
     let mut first_frame = true;
     let mut frame_prepared = true;
@@ -1719,12 +2076,19 @@ async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
     let mut pending_resize: Option<PendingGameResize> = None;
     let result = loop {
         retire_frames(&mut retired_frames);
+        if context.is_stopping() {
+            break Ok(());
+        }
         if !first_frame && !frame_prepared {
             let Some(window) = surface.window else {
                 break Err(GameError::InvalidFrame);
             };
             let events = input.poll();
-            engine.apply_key_actions(window, &events);
+            if escape_pressed(window, &events) {
+                context.request_stop("focused-window-escape");
+                break Ok(());
+            }
+            engine.apply_key_actions(context.instance_id, window, &events);
             let camera_changed = fly_camera.apply_events(&events)
                 | fly_camera.apply_held_keys(&input, window, 0.033);
             if pending_resize.is_none()
@@ -1734,7 +2098,8 @@ async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
                     Ok(replacement) => {
                         crate::log_info!(
                             target: "helio";
-                            "helio resize prepared example={} window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap old_front=retain-surflive\n",
+                            "helio instance={} resize prepared example={} window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap old_front=retain-surflive\n",
+                            context.instance_id,
                             example_id,
                             window.raw(),
                             surface.width,
@@ -1748,7 +2113,8 @@ async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
                     Err(error) => {
                         crate::log_warn!(
                             target: "helio";
-                            "helio resize deferred example={} window={} old={}x{} requested={}x{} error={:?} action=retain-current-frame-and-reconcile\n",
+                            "helio instance={} resize deferred example={} window={} old={}x{} requested={}x{} error={:?} action=retain-current-frame-and-reconcile\n",
+                            context.instance_id,
                             example_id,
                             window.raw(),
                             surface.width,
@@ -1796,7 +2162,8 @@ async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
                             retired_frames.push(previous);
                             crate::log_info!(
                                 target: "helio";
-                                "helio resize committed example={} window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1-or-direct-plane-2x cpu_readback=0 cpu_frame_copy=0\n",
+                                "helio instance={} resize committed example={} window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1-or-direct-plane-2x cpu_readback=0 cpu_frame_copy=0\n",
+                                context.instance_id,
                                 example_id,
                                 surface.window.map_or(0, crate::ui4::WindowId::raw),
                                 surface.width,
@@ -1809,7 +2176,8 @@ async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
                             frame_prepared = false;
                             crate::log_warn!(
                                 target: "helio";
-                                "helio resize commit rejected example={} requested={}x{} error={:?} action=old-front-restored-and-reproject\n",
+                                "helio instance={} resize commit rejected example={} requested={}x{} error={:?} action=old-front-restored-and-reproject\n",
+                                context.instance_id,
                                 example_id,
                                 replacement.width,
                                 replacement.height,
@@ -1864,15 +2232,17 @@ async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
             Err(error) => break Err(error),
         }
         if first_frame {
-            GAME_STATE.store(STATE_ONLINE | example_id, Ordering::Release);
-            *LAST_ERROR.lock() = None;
             let window = surface.window.expect("published ported Helio window");
             if !input.register_window(window) {
                 break Err(GameError::Render("helio-input-window-capacity"));
             }
+            if !context.mark_online() {
+                break Ok(());
+            }
             crate::log_info!(
                 target: "helio";
-                "helio example={} name={} online artifact_bytes={} objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied input=ui4-owner-broker->winit-shaped-events controls={} resize=ui4-broker->render-native-or-half-scale-ring->atomic-frame-swap->direct-plane-1x-or-2x path=helioa-v1+scene-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+                "helio instance={} example={} name={} online artifact_bytes={} objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied input=ui4-owner-broker->winit-shaped-events controls={} resize=ui4-broker->render-native-or-half-scale-ring->atomic-frame-swap->direct-plane-1x-or-2x path=helioa-v1+scene-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+                context.instance_id,
                 example_id,
                 engine.name(),
                 GAME_ARTIFACT.len(),
@@ -1890,41 +2260,39 @@ async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
         Timer::after(Duration::from_millis(33)).await;
     };
     if let Some(replacement) = pending_resize {
-        let _ = crate::ui4::destroy_frame(replacement.frame);
+        crate::ui4::retire_frame_when_released(replacement.frame);
     }
-    retire_frames(&mut retired_frames);
+    transfer_retired_frames(&mut retired_frames);
     release_resident_scene(resident);
     destroy_unpublished_surface(surface);
     result
 }
 
-/// Waits for a numbered Shell2/Blueprint request and runs the selected scene
-/// from the one embedded, build-produced `.helio` artifact.
-#[embassy_executor::task]
-pub async fn helio_game_service_task() {
+#[embassy_executor::task(pool_size = INSTANCE_CAPACITY)]
+async fn helio_game_instance_task(context: InstanceContext) {
     let mut last_error = None;
     loop {
-        let GameState::Requested(example_id) = game_state() else {
-            Timer::after(Duration::from_millis(50)).await;
-            continue;
-        };
-        GAME_STATE.store(STATE_STARTING | example_id, Ordering::Release);
-        let result = match example_id {
-            1 => run_cube().await,
-            2 => run_churn().await,
-            3 | 4 => run_ported_scene(example_id).await,
+        if context.is_stopping() {
+            break;
+        }
+        let result = match context.example_id {
+            1 => run_cube(context).await,
+            2 => run_churn(context).await,
+            3 | 4 => run_ported_scene(context).await,
             _ => Err(GameError::Render("helio-example-reserved")),
         };
         match result {
-            Ok(()) => {}
+            Ok(()) => break,
             Err(error) => {
-                GAME_STATE.store(STATE_REQUESTED | example_id, Ordering::Release);
-                *LAST_ERROR.lock() = Some(error.label());
+                if !context.mark_starting_error(error.label()) {
+                    break;
+                }
                 if last_error != Some(core::mem::discriminant(&error)) {
                     crate::log_warn!(
                         target: "helio";
-                        "helio example={} start pending error={:?} action=retry\n",
-                        example_id,
+                        "helio instance={} example={} start pending error={:?} action=retry\n",
+                        context.instance_id,
+                        context.example_id,
                         error,
                     );
                     last_error = Some(core::mem::discriminant(&error));
@@ -1932,5 +2300,47 @@ pub async fn helio_game_service_task() {
                 Timer::after(Duration::from_millis(250)).await;
             }
         }
+    }
+    crate::log_info!(target: "helio";
+        "helio instance={} example={} offline action=pool-slot-release\n",
+        context.instance_id,
+        context.example_id,
+    );
+    release_instance_slot(context);
+}
+
+/// Dispatches numbered Shell2/Blueprint requests into ten independent Helio
+/// tasks on the already-resident AP1/UI executor.
+#[embassy_executor::task]
+pub async fn helio_game_service_task() {
+    let spawner: embassy_executor::Spawner =
+        unsafe { embassy_executor::Spawner::for_current_executor().await };
+    loop {
+        while let Some(context) = claim_next_launch() {
+            match helio_game_instance_task(context) {
+                Ok(token) => {
+                    spawner.spawn(token);
+                    crate::log_info!(target: "helio";
+                        "helio instance={} example={} launch dispatched pool_slot={}/{} owner=kernel-app-{}\n",
+                        context.instance_id,
+                        context.example_id,
+                        context.slot + 1,
+                        INSTANCE_CAPACITY,
+                        HELIO_OWNER_BASE + context.slot as u8,
+                    );
+                }
+                Err(error) => {
+                    requeue_failed_spawn(context);
+                    crate::log_warn!(target: "helio";
+                        "helio instance={} example={} dispatch deferred error={:?} action=requeue\n",
+                        context.instance_id,
+                        context.example_id,
+                        error,
+                    );
+                    break;
+                }
+            }
+        }
+        Timer::after(Duration::from_millis(10)).await;
     }
 }

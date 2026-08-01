@@ -23,8 +23,9 @@ const MAX_WINDOWS_PER_SESSION: usize = 32;
 const MAX_SESSIONS: usize = 64;
 /// Temporary direct-scanout admission boundary. Non-shareable double- and
 /// triple-buffered windows each own one of the four application planes.
-/// Single-buffered windows and dirty/double FontScene composition members
-/// remain unrestricted by this soft cap and may share a requested plane.
+/// Single-buffered windows, dirty/double FontScene members, and
+/// streaming/triple RenderScene members remain unrestricted by this soft cap
+/// and may share a requested plane through UI4 composition.
 pub(super) const MAX_EXPENSIVE_WINDOWS: usize = super::INTERACTION_OVERLAY_PLANE_SLOT;
 pub(crate) const WINDOW_BROKER_SNAPSHOT_PERIOD_MS: u64 = 3_000;
 const WINDOW_BROKER_SNAPSHOT_RECEIVERS: usize = 8;
@@ -43,7 +44,6 @@ impl WindowOwner {
     /// into the UI4 frame/window model. Keep these assignments in one place so
     /// newly reactivated producers cannot silently collide.
     pub(crate) const VIDEO_PLAYER: Self = Self::KernelApp(2);
-    pub(crate) const DRAW3D_SERVICE: Self = Self::KernelApp(3);
     pub(crate) const GRIDPAPER_SERVICE: Self = Self::KernelApp(4);
     pub(crate) const GPGPU_PREVIEW: Self = Self::KernelApp(5);
     pub(crate) const COLOR_PICKER_SERVICE: Self = Self::KernelApp(6);
@@ -55,7 +55,6 @@ impl WindowOwner {
         match self {
             Self::Kernel => "kernel",
             Self::VIDEO_PLAYER => "video-player",
-            Self::DRAW3D_SERVICE => "draw3d-service",
             Self::GRIDPAPER_SERVICE => "gridpaper-service",
             Self::GPGPU_PREVIEW => "gpgpu-preview",
             Self::COLOR_PICKER_SERVICE => "color-picker-service",
@@ -159,7 +158,7 @@ impl WindowPlacement {
 ///
 /// Moving frame geometry is a UI4 operation and does not imply that the
 /// producer implements an input callback queue or dynamic resize. This keeps
-/// simple GPU producers such as Draw3D movable without feeding them events
+/// simple GPU producers movable without feeding them events
 /// they cannot consume or changing the render-target extent behind them.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WindowInteraction {
@@ -1253,21 +1252,40 @@ fn complete_transition_retirements(retirements: Vec<WindowTransitionRetirement>)
 
 fn retire_transferred_frames(frames: Vec<FrameHandle>) {
     for frame in frames {
-        match super::destroy_frame(frame) {
-            Ok(()) | Err(super::FramePoolError::InvalidHandle) => {}
-            Err(super::FramePoolError::Busy) => {
-                let mut retired = TRANSITION_RETIRED_FRAMES.lock();
-                if !retired.contains(&frame) {
-                    retired.push(frame);
-                }
+        retire_frame_when_released(frame);
+    }
+}
+
+/// Transfer a detached frame to UI4 for destruction after every compositor or
+/// direct-scanout reader has released it. The caller must not use `frame` again.
+/// An already-unreferenced frame is destroyed synchronously; a busy frame joins
+/// the close-transition reaper and is retried on subsequent compositor ticks.
+pub(crate) fn retire_frame_when_released(frame: FrameHandle) {
+    match super::destroy_frame(frame) {
+        Ok(()) | Err(super::FramePoolError::InvalidHandle) => {}
+        Err(super::FramePoolError::Busy) => {
+            if enqueue_busy_retirement(&mut TRANSITION_RETIRED_FRAMES.lock(), frame) {
+                // A detached frame need not have an active close animation to
+                // provide compositor timer ticks. Wake the compositor so the
+                // reaper observes the display-reader handoff to completion.
+                WINDOW_COMPOSITION_CHANGED.signal(());
             }
-            Err(error) => crate::log_warn!(
-                target: "ui4";
-                "ui4 close-transition frame retire abandoned frame={} error={:?}\n",
-                frame.raw(),
-                error,
-            ),
         }
+        Err(error) => crate::log_warn!(
+            target: "ui4";
+            "ui4 deferred frame retire abandoned frame={} error={:?}\n",
+            frame.raw(),
+            error,
+        ),
+    }
+}
+
+fn enqueue_busy_retirement(frames: &mut Vec<FrameHandle>, frame: FrameHandle) -> bool {
+    if !frames.contains(&frame) {
+        frames.push(frame);
+        true
+    } else {
+        false
     }
 }
 
@@ -1585,6 +1603,9 @@ pub(crate) fn window_composition_revision() -> u64 {
 }
 
 pub(crate) fn window_close_transitions_active() -> bool {
+    if !TRANSITION_RETIRED_FRAMES.lock().is_empty() {
+        return true;
+    }
     WINDOW_BROKER
         .lock()
         .windows
@@ -1858,6 +1879,19 @@ mod tests {
         assert_eq!(WindowOwner::Vm(9).name(), "blueprint-vm");
         assert_ne!(WindowOwner::KernelApp(42), WindowOwner::KernelApp(43));
         assert_ne!(WindowOwner::Vm(9), WindowOwner::Vm(10));
+    }
+
+    #[test]
+    fn busy_frame_retirement_queue_deduplicates_handles() {
+        let first = FrameHandle::from_raw(11).unwrap();
+        let second = FrameHandle::from_raw(12).unwrap();
+        let mut frames = Vec::new();
+
+        assert!(enqueue_busy_retirement(&mut frames, first));
+        assert!(!enqueue_busy_retirement(&mut frames, first));
+        assert!(enqueue_busy_retirement(&mut frames, second));
+
+        assert_eq!(frames, Vec::from([first, second]));
     }
 
     #[test]

@@ -105,7 +105,7 @@ pub(crate) fn queue_ui4_compositor_layers(
     // This allocation transfers directly to a display plane after GuC
     // retirement. Sources and descriptors remain PAT0/WB, while the exact
     // destination follows the proven PAT3/UC scanout contract used by the
-    // native-video, Draw3D, Gridpaper, and preview paths.
+    // native-video, resident-scene, Gridpaper, and preview paths.
     let dst_ok = base_ok
         && (base_is_dst || direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes));
     let desc_ok = dst_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);

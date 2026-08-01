@@ -20,8 +20,8 @@ mod input_broker;
 mod screenshot;
 mod slot4_service;
 mod video_frame;
-pub(crate) mod winit_input;
 mod window_broker;
+pub(crate) mod winit_input;
 
 const INTERACTION_CADENCE_HZ: u64 = 60;
 
@@ -119,8 +119,8 @@ pub(crate) use window_broker::{
     advance_window_close_transitions, begin_additional_window_session, begin_window_session,
     close_window, create_window, finish_window_session, finish_window_session_with_request,
     latest_window_broker_snapshot, move_window, publish_window_frame, publish_window_frames,
-    replace_window_frame, set_window_placement, subscribe_window_broker_snapshots,
-    take_window_first_presentation, toggle_window_maximized,
+    replace_window_frame, retire_frame_when_released, set_window_placement,
+    subscribe_window_broker_snapshots, take_window_first_presentation, toggle_window_maximized,
     ui4_window_broker_snapshot_service_task, visible_windows_for_output,
     visible_windows_for_output_with_revision, wait_for_window_composition_change,
     wait_for_window_first_presentation, window_close_transitions_active,
@@ -467,15 +467,18 @@ impl FramePlan {
     }
 }
 
-/// Frames which intentionally share their requested broker plane and are
-/// therefore composed together by UI4 instead of being isolated for direct
-/// scanout. Dirty FontScene frames retain double buffering so a producer
-/// never overwrites the stable front while composition reads it.
+/// Frames which may intentionally share their requested broker plane. A lone
+/// member still takes the direct-scanout path when eligible; two or more
+/// members are composed together by UI4 instead of consuming one hardware
+/// plane each. Dirty FontScene frames retain double buffering, while streaming
+/// RenderScene frames retain triple buffering, so composition always reads a
+/// stable published front.
 pub(crate) const fn frame_plan_shares_compositor_plane(plan: FramePlan) -> bool {
     matches!(plan.buffering, FrameBuffering::Single)
         || matches!(
             (plan.content, plan.cadence, plan.buffering),
             (FrameContent::FontScene2d, FrameCadence::Dirty, FrameBuffering::Double)
+                | (FrameContent::RenderScene3d, FrameCadence::Streaming, FrameBuffering::Triple)
         )
 }
 
@@ -570,6 +573,11 @@ const _: () = {
         Err(_) => panic!("dirty/double FontScene plan must be valid"),
     };
     assert!(frame_plan_shares_compositor_plane(shared_font_scene));
+    let shared_resident_scene = match FramePlan::from_spec(admitted_resident_scene) {
+        Ok(plan) => plan,
+        Err(_) => panic!("streaming/triple RenderScene plan must be valid"),
+    };
+    assert!(frame_plan_shares_compositor_plane(shared_resident_scene));
     let isolated_image = match FramePlan::from_spec(FrameSpec {
         content: FrameContent::Image,
         cadence: FrameCadence::Dirty,

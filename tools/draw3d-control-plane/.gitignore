@@ -1,2 +1,0 @@
-# This is a standalone desktop application, so keep its resolved dependency graph.
-!Cargo.lock

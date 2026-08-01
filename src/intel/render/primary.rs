@@ -171,8 +171,8 @@ fn submit_font_mesh_once_at_extent_inner(
     }
     if target_width == 0
         || target_height == 0
-        || target_width as usize > DRAW3D_SCENE_TARGET_WIDTH
-        || target_height as usize > DRAW3D_SCENE_TARGET_HEIGHT
+        || target_width as usize > RESIDENT_SCENE_TARGET_WIDTH
+        || target_height as usize > RESIDENT_SCENE_TARGET_HEIGHT
     {
         return Err("font-target-extent-range");
     }
@@ -291,26 +291,26 @@ fn resident_scene_batch_state(
     if let Some(state) = *resident {
         return Ok(state);
     }
-    let Some((phys, virt)) = crate::dma::alloc(DRAW3D_SCENE_STATE_BYTES, crate::intel::WARM_ALIGN)
+    let Some((phys, virt)) = crate::dma::alloc(RESIDENT_SCENE_STATE_BYTES, crate::intel::WARM_ALIGN)
     else {
         return Err("scene-frame-state-alloc");
     };
     unsafe {
-        core::ptr::write_bytes(virt, 0, DRAW3D_SCENE_STATE_BYTES);
+        core::ptr::write_bytes(virt, 0, RESIDENT_SCENE_STATE_BYTES);
     }
-    crate::intel::dma_flush(virt, DRAW3D_SCENE_STATE_BYTES);
-    if !map_render_ppgtt_range(GPU_VA_DRAW3D_SCENE_STATE_BASE, phys, DRAW3D_SCENE_STATE_BYTES) {
-        crate::dma::dealloc(virt, DRAW3D_SCENE_STATE_BYTES);
+    crate::intel::dma_flush(virt, RESIDENT_SCENE_STATE_BYTES);
+    if !map_render_ppgtt_range(GPU_VA_RESIDENT_SCENE_STATE_BASE, phys, RESIDENT_SCENE_STATE_BYTES) {
+        crate::dma::dealloc(virt, RESIDENT_SCENE_STATE_BYTES);
         return Err("scene-frame-state-map");
     }
     let state = ResidentSceneBatchState { phys, virt };
     *resident = Some(state);
     crate::log_info!(
         target: "render";
-        "draw3d: resident scene batch state online gpu=0x{:X} bytes=0x{:X} slots={} warm_batch_bytes=0x{:X}\n",
-        GPU_VA_DRAW3D_SCENE_STATE_BASE,
-        DRAW3D_SCENE_STATE_BYTES,
-        DRAW3D_SCENE_MAX_DRAWS + 1,
+        "resident-scene: resident scene batch state online gpu=0x{:X} bytes=0x{:X} slots={} warm_batch_bytes=0x{:X}\n",
+        GPU_VA_RESIDENT_SCENE_STATE_BASE,
+        RESIDENT_SCENE_STATE_BYTES,
+        RESIDENT_SCENE_MAX_DRAWS + 1,
         warm.batch_len,
     );
     Ok(state)
@@ -321,20 +321,20 @@ fn resident_scene_state_warm(
     warm: RenderWarmState,
     slot: usize,
 ) -> Result<(RenderWarmState, u64), &'static str> {
-    if slot > DRAW3D_SCENE_MAX_DRAWS {
+    if slot > RESIDENT_SCENE_MAX_DRAWS {
         return Err("scene-frame-state-slot");
     }
     let offset = slot
-        .checked_mul(DRAW3D_SCENE_STATE_SLOT_BYTES)
+        .checked_mul(RESIDENT_SCENE_STATE_SLOT_BYTES)
         .ok_or("scene-frame-state-slot")?;
     Ok((
         RenderWarmState {
             draw_state_phys: state.phys + offset as u64,
             draw_state_virt: unsafe { state.virt.add(offset) },
-            draw_state_len: DRAW3D_SCENE_STATE_SLOT_BYTES,
+            draw_state_len: RESIDENT_SCENE_STATE_SLOT_BYTES,
             ..warm
         },
-        GPU_VA_DRAW3D_SCENE_STATE_BASE + offset as u64,
+        GPU_VA_RESIDENT_SCENE_STATE_BASE + offset as u64,
     ))
 }
 
@@ -481,8 +481,8 @@ static RESIDENT_SCENE_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex
 static RESIDENT_SCENE_MSAA_COLOR: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_MSAA_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_DIRECT_UI4_TARGETS: Mutex<
-    [Option<ResidentSceneDirectUi4Mapping>; DRAW3D_UI4_DIRECT_MAPPING_COUNT],
-> = Mutex::new([None; DRAW3D_UI4_DIRECT_MAPPING_COUNT]);
+    [Option<ResidentSceneDirectUi4Mapping>; RESIDENT_UI4_DIRECT_MAPPING_COUNT],
+> = Mutex::new([None; RESIDENT_UI4_DIRECT_MAPPING_COUNT]);
 static RESIDENT_SCENE_DEPTH_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_SCENE_MSAA_FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_SCENE_MSAA_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -495,7 +495,7 @@ struct ResidentSceneMsaaColorTarget {
 fn prepare_resident_scene_direct_ui4_target(
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> Result<u64, &'static str> {
-    if !destination.is_valid() || destination.bytes as u64 > GPU_VA_DRAW3D_UI4_FRAME_STRIDE {
+    if !destination.is_valid() || destination.bytes as u64 > GPU_VA_RESIDENT_UI4_FRAME_STRIDE {
         return Err("resident-scene-direct-ui4-shape");
     }
     let mut mappings = RESIDENT_SCENE_DIRECT_UI4_TARGETS.lock();
@@ -514,8 +514,8 @@ fn prepare_resident_scene_direct_ui4_target(
     let Some(slot) = mappings.iter().position(Option::is_none) else {
         return Err("resident-scene-direct-ui4-buffer-limit");
     };
-    let gpu = GPU_VA_DRAW3D_UI4_FRAME_BASE
-        .checked_add(slot as u64 * GPU_VA_DRAW3D_UI4_FRAME_STRIDE)
+    let gpu = GPU_VA_RESIDENT_UI4_FRAME_BASE
+        .checked_add(slot as u64 * GPU_VA_RESIDENT_UI4_FRAME_STRIDE)
         .ok_or("resident-scene-direct-ui4-address")?;
     if !map_render_ppgtt_scanout_range(gpu, destination.phys, destination.bytes) {
         return Err("resident-scene-direct-ui4-map");
@@ -527,9 +527,9 @@ fn prepare_resident_scene_direct_ui4_target(
     });
     crate::log_info!(
         target: "render";
-        "draw3d: acquired UI4 direct target render_slot={} render_slots={} render_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} size={}x{} pitch={} ppgtt_pat=3 ppgtt_cache=uc leaf_readback=verified persistent_render_va=1 hot_remap=0\n",
+        "resident-scene: acquired UI4 direct target render_slot={} render_slots={} render_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} size={}x{} pitch={} ppgtt_pat=3 ppgtt_cache=uc leaf_readback=verified persistent_render_va=1 hot_remap=0\n",
         slot,
-        DRAW3D_UI4_DIRECT_MAPPING_COUNT,
+        RESIDENT_UI4_DIRECT_MAPPING_COUNT,
         gpu,
         destination.phys,
         destination.bytes,
@@ -658,11 +658,11 @@ fn prepare_resident_scene_msaa_depth(
     target_height: usize,
 ) -> Result<TriangleDepthConfig, &'static str> {
     if !device_is_gfx125(device_id) {
-        return Err("draw3d-msaa-depth-device");
+        return Err("resident-scene-msaa-depth-device");
     }
     let (pitch_bytes, aligned_sample_height, storage_bytes) =
         resident_scene_msaa_depth_layout(target_width, target_height)
-            .ok_or("draw3d-msaa-depth-shape")?;
+            .ok_or("resident-scene-msaa-depth-shape")?;
     let _allocation = prepare_resident_scene_msaa_allocation(
         &RESIDENT_SCENE_MSAA_DEPTH,
         GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE,
@@ -671,11 +671,11 @@ fn prepare_resident_scene_msaa_depth(
     )?;
     Ok(TriangleDepthConfig {
         gpu_addr: GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE,
-        pitch_bytes: u32::try_from(pitch_bytes).map_err(|_| "draw3d-msaa-depth-shape")?,
-        width: u32::try_from(target_width).map_err(|_| "draw3d-msaa-depth-shape")?,
-        height: u32::try_from(target_height).map_err(|_| "draw3d-msaa-depth-shape")?,
+        pitch_bytes: u32::try_from(pitch_bytes).map_err(|_| "resident-scene-msaa-depth-shape")?,
+        width: u32::try_from(target_width).map_err(|_| "resident-scene-msaa-depth-shape")?,
+        height: u32::try_from(target_height).map_err(|_| "resident-scene-msaa-depth-shape")?,
         qpitch_rows_div4: u32::try_from(aligned_sample_height / 4)
-            .map_err(|_| "draw3d-msaa-depth-shape")?,
+            .map_err(|_| "resident-scene-msaa-depth-shape")?,
         write_enabled: false,
         compare_function: COMPARE_FUNCTION_LEQUAL,
     })
@@ -717,24 +717,24 @@ fn prepare_resident_scene_depth(
     target_height: usize,
 ) -> Result<TriangleDepthConfig, &'static str> {
     if !device_is_gfx12(device_id) {
-        return Err("draw3d-depth-device");
+        return Err("resident-scene-depth-device");
     }
     let row_bytes = target_width
         .checked_mul(core::mem::size_of::<f32>())
-        .ok_or("draw3d-depth-shape")?;
-    let pitch_bytes = crate::intel::align_up(row_bytes, DRAW3D_SCENE_DEPTH_TILE_WIDTH_BYTES)
-        .ok_or("draw3d-depth-shape")?;
-    let aligned_height = crate::intel::align_up(target_height, DRAW3D_SCENE_DEPTH_TILE_HEIGHT_ROWS)
-        .ok_or("draw3d-depth-shape")?;
+        .ok_or("resident-scene-depth-shape")?;
+    let pitch_bytes = crate::intel::align_up(row_bytes, RESIDENT_SCENE_DEPTH_TILE_WIDTH_BYTES)
+        .ok_or("resident-scene-depth-shape")?;
+    let aligned_height = crate::intel::align_up(target_height, RESIDENT_SCENE_DEPTH_TILE_HEIGHT_ROWS)
+        .ok_or("resident-scene-depth-shape")?;
     let clear_bytes = pitch_bytes
         .checked_mul(aligned_height)
-        .ok_or("draw3d-depth-shape")?;
+        .ok_or("resident-scene-depth-shape")?;
     if target_width == 0
         || target_height == 0
-        || clear_bytes > DRAW3D_SCENE_DEPTH_BYTES
+        || clear_bytes > RESIDENT_SCENE_DEPTH_BYTES
         || !clear_bytes.is_multiple_of(core::mem::size_of::<u32>())
     {
-        return Err("draw3d-depth-shape");
+        return Err("resident-scene-depth-shape");
     }
 
     let allocation = {
@@ -743,33 +743,33 @@ fn prepare_resident_scene_depth(
             allocation
         } else {
             let Some((storage_phys, storage_virt)) =
-                crate::dma::alloc(DRAW3D_SCENE_DEPTH_BYTES, crate::intel::WARM_ALIGN)
+                crate::dma::alloc(RESIDENT_SCENE_DEPTH_BYTES, crate::intel::WARM_ALIGN)
             else {
-                return Err("draw3d-depth-alloc");
+                return Err("resident-scene-depth-alloc");
             };
             if !map_render_ppgtt_range(
-                GPU_VA_DRAW3D_SCENE_DEPTH_BASE,
+                GPU_VA_RESIDENT_SCENE_DEPTH_BASE,
                 storage_phys,
-                DRAW3D_SCENE_DEPTH_BYTES,
+                RESIDENT_SCENE_DEPTH_BYTES,
             ) {
-                crate::dma::dealloc(storage_virt, DRAW3D_SCENE_DEPTH_BYTES);
-                return Err("draw3d-depth-map");
+                crate::dma::dealloc(storage_virt, RESIDENT_SCENE_DEPTH_BYTES);
+                return Err("resident-scene-depth-map");
             }
             let allocation = ResidentSceneDepthAllocation {
                 storage_phys,
                 storage_virt,
-                storage_bytes: DRAW3D_SCENE_DEPTH_BYTES,
+                storage_bytes: RESIDENT_SCENE_DEPTH_BYTES,
             };
             *resident = Some(allocation);
             crate::log_info!(
                 target: "render";
-                "draw3d-depth: resident surface allocated phys=0x{:X} gpu=0x{:X} bytes=0x{:X} format=d32-float tiling={} max={}x{}\n",
+                "resident-scene-depth: resident surface allocated phys=0x{:X} gpu=0x{:X} bytes=0x{:X} format=d32-float tiling={} max={}x{}\n",
                 allocation.storage_phys,
-                GPU_VA_DRAW3D_SCENE_DEPTH_BASE,
+                GPU_VA_RESIDENT_SCENE_DEPTH_BASE,
                 allocation.storage_bytes,
                 if device_is_gfx125(device_id) { "tile4" } else { "y0" },
-                DRAW3D_SCENE_TARGET_WIDTH,
-                DRAW3D_SCENE_TARGET_HEIGHT,
+                RESIDENT_SCENE_TARGET_WIDTH,
+                RESIDENT_SCENE_TARGET_HEIGHT,
             );
             allocation
         }
@@ -781,22 +781,22 @@ fn prepare_resident_scene_depth(
             .storage_phys
             .is_multiple_of(crate::intel::WARM_ALIGN as u64)
     {
-        return Err("draw3d-depth-allocation");
+        return Err("resident-scene-depth-allocation");
     }
 
     Ok(TriangleDepthConfig {
-        gpu_addr: GPU_VA_DRAW3D_SCENE_DEPTH_BASE,
-        pitch_bytes: u32::try_from(pitch_bytes).map_err(|_| "draw3d-depth-shape")?,
-        width: u32::try_from(target_width).map_err(|_| "draw3d-depth-shape")?,
-        height: u32::try_from(target_height).map_err(|_| "draw3d-depth-shape")?,
-        qpitch_rows_div4: u32::try_from(aligned_height / 4).map_err(|_| "draw3d-depth-shape")?,
+        gpu_addr: GPU_VA_RESIDENT_SCENE_DEPTH_BASE,
+        pitch_bytes: u32::try_from(pitch_bytes).map_err(|_| "resident-scene-depth-shape")?,
+        width: u32::try_from(target_width).map_err(|_| "resident-scene-depth-shape")?,
+        height: u32::try_from(target_height).map_err(|_| "resident-scene-depth-shape")?,
+        qpitch_rows_div4: u32::try_from(aligned_height / 4).map_err(|_| "resident-scene-depth-shape")?,
         write_enabled: false,
         compare_function: COMPARE_FUNCTION_LEQUAL,
     })
 }
 
 pub(crate) const fn resident_scene_target_dimensions() -> (usize, usize) {
-    (DRAW3D_SCENE_TARGET_WIDTH, DRAW3D_SCENE_TARGET_HEIGHT)
+    (RESIDENT_SCENE_TARGET_WIDTH, RESIDENT_SCENE_TARGET_HEIGHT)
 }
 
 /// Render an off-screen straight-RGBA frame without changing local scanout.
@@ -820,7 +820,7 @@ pub(crate) fn capture_resident_triangle_scene_frame(
     )
 }
 
-/// Draw3D capture with opaque depth writes and read-only depth testing for
+/// Resident-scene capture with opaque depth writes and read-only depth testing for
 /// blended meshes. Alpha classification remains an internal renderer policy;
 /// the TCP v1 wire format is unchanged.
 pub(crate) fn capture_resident_triangle_scene_frame_with_opaque_depth(
@@ -843,7 +843,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_with_opaque_depth(
     )
 }
 
-/// Full-size straight-RGBA Draw3D capture with 4x color/depth coverage.
+/// Full-size straight-RGBA Resident-scene capture with 4x color/depth coverage.
 pub(crate) fn capture_resident_triangle_scene_frame_with_opaque_depth_msaa4(
     draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
@@ -916,7 +916,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent(
     )
 }
 
-/// UI4-sized Draw3D capture using the opaque-depth visibility contract.
+/// UI4-sized Resident-scene capture using the opaque-depth visibility contract.
 pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with_opaque_depth(
     draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
@@ -1061,7 +1061,7 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_coverage_a
 }
 
 /// Render a depth-tested retained 4x scene directly into a leased UI4 RGBA
-/// surface. This is Draw3D's live presentation path: the final scanout release
+/// surface. This is Resident-scene's live presentation path: the final scanout release
 /// follows resolve completion, and no CPU readback or full-frame copy runs.
 pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_msaa4_to_surface(
     draws: &[ResidentSceneDraw<'_>],
@@ -1183,15 +1183,15 @@ fn stage_resident_scene_secondary(
     // prefix. Publish it once, after every CPU write, instead of three
     // independent CLFLUSH+MFENCE passes over partly overlapping state.
     crate::intel::dma_flush(state_warm.draw_state_virt, probe_state.used_bytes as usize);
-    let batch_offset = DRAW3D_SCENE_PRIMARY_BATCH_BYTES
+    let batch_offset = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
         .checked_add(
             secondary_index
-                .checked_mul(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+                .checked_mul(RESIDENT_SCENE_SECONDARY_BATCH_BYTES)
                 .ok_or("scene-frame-batch-slot")?,
         )
         .ok_or("scene-frame-batch-slot")?;
     let batch_end = batch_offset
-        .checked_add(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+        .checked_add(RESIDENT_SCENE_SECONDARY_BATCH_BYTES)
         .ok_or("scene-frame-batch-slot")?;
     if batch_end > warm.batch_len {
         return Err("scene-frame-batch-capacity");
@@ -1199,11 +1199,11 @@ fn stage_resident_scene_secondary(
     let batch = unsafe {
         core::slice::from_raw_parts_mut(
             warm.batch_virt.add(batch_offset) as *mut u32,
-            DRAW3D_SCENE_SECONDARY_BATCH_BYTES / core::mem::size_of::<u32>(),
+            RESIDENT_SCENE_SECONDARY_BATCH_BYTES / core::mem::size_of::<u32>(),
         )
     };
     let bytes = encode_triangle_probe_batch(
-        "draw3d-scene",
+        "resident-scene-scene",
         batch,
         state_warm,
         draw,
@@ -1256,15 +1256,15 @@ fn stage_resident_churn_forward_secondary(
         [0.0, 0.0],
     )?;
     crate::intel::dma_flush(state_warm.draw_state_virt, probe_state.used_bytes as usize);
-    let batch_offset = DRAW3D_SCENE_PRIMARY_BATCH_BYTES
+    let batch_offset = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
         .checked_add(
             secondary_index
-                .checked_mul(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+                .checked_mul(RESIDENT_SCENE_SECONDARY_BATCH_BYTES)
                 .ok_or("scene-frame-batch-slot")?,
         )
         .ok_or("scene-frame-batch-slot")?;
     let batch_end = batch_offset
-        .checked_add(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+        .checked_add(RESIDENT_SCENE_SECONDARY_BATCH_BYTES)
         .ok_or("scene-frame-batch-slot")?;
     if batch_end > warm.batch_len {
         return Err("scene-frame-batch-capacity");
@@ -1272,7 +1272,7 @@ fn stage_resident_churn_forward_secondary(
     let batch = unsafe {
         core::slice::from_raw_parts_mut(
             warm.batch_virt.add(batch_offset) as *mut u32,
-            DRAW3D_SCENE_SECONDARY_BATCH_BYTES / core::mem::size_of::<u32>(),
+            RESIDENT_SCENE_SECONDARY_BATCH_BYTES / core::mem::size_of::<u32>(),
         )
     };
     let bytes = encode_triangle_probe_batch(
@@ -1307,7 +1307,7 @@ fn encode_resident_scene_primary_batch(
     let batch = unsafe {
         core::slice::from_raw_parts_mut(
             warm.batch_virt as *mut u32,
-            DRAW3D_SCENE_PRIMARY_BATCH_BYTES / core::mem::size_of::<u32>(),
+            RESIDENT_SCENE_PRIMARY_BATCH_BYTES / core::mem::size_of::<u32>(),
         )
     };
     let mut cursor = 0usize;
@@ -1320,10 +1320,10 @@ fn encode_resident_scene_primary_batch(
         Ok(())
     };
     for secondary_index in 0..secondary_count {
-        let offset = DRAW3D_SCENE_PRIMARY_BATCH_BYTES
+        let offset = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
             .checked_add(
                 secondary_index
-                    .checked_mul(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+                    .checked_mul(RESIDENT_SCENE_SECONDARY_BATCH_BYTES)
                     .ok_or("scene-frame-batch-slot")?,
             )
             .ok_or("scene-frame-batch-slot")?;
@@ -1385,7 +1385,7 @@ fn submit_resident_scene_geometry_batched(
 ) -> Result<ResidentSceneGeometryResult, &'static str> {
     let prepare_started_ns = crate::chronos::monotonic_nanos();
     const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
-    if draws.len() > DRAW3D_SCENE_MAX_DRAWS {
+    if draws.len() > RESIDENT_SCENE_MAX_DRAWS {
         return Err("scene-frame-draw-limit");
     }
     if !matches!(
@@ -1395,10 +1395,10 @@ fn submit_resident_scene_geometry_batched(
         return Err("scene-frame-target-format");
     }
     let max_secondary_count = draws.len().saturating_add(1);
-    let used_batch_bytes = DRAW3D_SCENE_PRIMARY_BATCH_BYTES
+    let used_batch_bytes = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
         .checked_add(
             max_secondary_count
-                .checked_mul(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+                .checked_mul(RESIDENT_SCENE_SECONDARY_BATCH_BYTES)
                 .ok_or("scene-frame-batch-capacity")?,
         )
         .ok_or("scene-frame-batch-capacity")?;
@@ -1424,7 +1424,7 @@ fn submit_resident_scene_geometry_batched(
         render_target_pitch,
         target_width,
         target_height,
-        "draw3d-fullscreen-clear",
+        "resident-scene-fullscreen-clear",
         &CLEAR_TRIANGLE,
     )
     .ok_or("target-clear-resources")?
@@ -1491,7 +1491,7 @@ fn submit_resident_scene_geometry_batched(
     if !RESIDENT_SCENE_BATCH_PATH_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "render";
-            "draw3d: frame launch path=helio-indexed-indirect-v1->one-guc-scene-schedule draws={} secondaries={} command_owner=helio-gpu-record draw_parameter_translation=0 guc_role=schedule-only render_submits=1 per_mesh_context_rebuilds=0 target={}x{} fragment_contract=standalone-simd16-corrected dispatch=010 ksp0=simd16 ksp1=off ksp2=off vector_mask=1 color=specialized-per-draw\n",
+            "resident-scene: frame launch path=helio-indexed-indirect-v1->one-guc-scene-schedule draws={} secondaries={} command_owner=helio-gpu-record draw_parameter_translation=0 guc_role=schedule-only render_submits=1 per_mesh_context_rebuilds=0 target={}x{} fragment_contract=standalone-simd16-corrected dispatch=010 ksp0=simd16 ksp1=off ksp2=off vector_mask=1 color=specialized-per-draw\n",
             draws.len(),
             secondary_count,
             target_width,
@@ -1504,12 +1504,12 @@ fn submit_resident_scene_geometry_batched(
         warm,
         RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
         RESULT_SLOT_SCENE_FRAME_DWORD,
-        "draw3d-scene",
+        "resident-scene-scene",
     );
     if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, "draw3d-scene");
+        recover_render_engine_after_nonretired_submit(dev, warm, "resident-scene-scene");
     }
-    let (gpu_poll_us, gpu_poll_iters) = draw3d_last_gpu_poll_profile();
+    let (gpu_poll_us, gpu_poll_iters) = resident_scene_last_gpu_poll_profile();
     Ok(ResidentSceneGeometryResult {
         completed,
         prepare_us,
@@ -1534,10 +1534,10 @@ fn submit_resident_churn_forward_geometry_batched(
     const CLEAR_TRIANGLE: [[f32; 3]; 3] =
         [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
     let secondary_count = CHURN_FORWARD_DRAW_COUNT + 1;
-    let used_batch_bytes = DRAW3D_SCENE_PRIMARY_BATCH_BYTES
+    let used_batch_bytes = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
         .checked_add(
             secondary_count
-                .checked_mul(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+                .checked_mul(RESIDENT_SCENE_SECONDARY_BATCH_BYTES)
                 .ok_or("scene-frame-batch-capacity")?,
         )
         .ok_or("scene-frame-batch-capacity")?;
@@ -1618,7 +1618,7 @@ fn submit_resident_churn_forward_geometry_batched(
     if !RESIDENT_CHURN_FORWARD_PATH_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "render";
-            "draw3d: native Churn online path=helioa-churn-forward-v1->artifact-vs+ps-simd8->camera+instance+compacted-bti1-3->12-indexed-indirect-secondaries->one-guc-scene-schedule geometry=3x(pos-normal-cube/24v/36i) instance_index=starting_instance+instance_id sgvs=E0024002/B0020002/3 component_packing=0xA77 render_submits=1 target={}x{}\n",
+            "resident-scene: native Churn online path=helioa-churn-forward-v1->artifact-vs+ps-simd8->camera+instance+compacted-bti1-3->12-indexed-indirect-secondaries->one-guc-scene-schedule geometry=3x(pos-normal-cube/24v/36i) instance_index=starting_instance+instance_id sgvs=E0024002/B0020002/3 component_packing=0xA77 render_submits=1 target={}x{}\n",
             target_width,
             target_height,
         );
@@ -1634,7 +1634,7 @@ fn submit_resident_churn_forward_geometry_batched(
     if !completed {
         recover_render_engine_after_nonretired_submit(dev, warm, "helio-churn-forward");
     }
-    let (gpu_poll_us, gpu_poll_iters) = draw3d_last_gpu_poll_profile();
+    let (gpu_poll_us, gpu_poll_iters) = resident_scene_last_gpu_poll_profile();
     Ok(ResidentSceneGeometryResult {
         completed,
         prepare_us,
@@ -1689,10 +1689,10 @@ fn submit_resident_scene_capture_inner(
     let geometry_draw_count = native_churn.map_or(draws.len(), |_| CHURN_FORWARD_DRAW_COUNT);
     if target_width == 0
         || target_height == 0
-        || target_width > DRAW3D_SCENE_TARGET_WIDTH
-        || target_height > DRAW3D_SCENE_TARGET_HEIGHT
+        || target_width > RESIDENT_SCENE_TARGET_WIDTH
+        || target_height > RESIDENT_SCENE_TARGET_HEIGHT
     {
-        return Err("draw3d-capture-shape");
+        return Err("resident-scene-capture-shape");
     }
     if let ResidentSceneFrameOutput::GpuSurface(destination)
     | ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination)
@@ -1734,10 +1734,10 @@ fn submit_resident_scene_capture_inner(
     }
     let target_pitch = target_width
         .checked_mul(core::mem::size_of::<u32>())
-        .ok_or("draw3d-capture-shape")?;
+        .ok_or("resident-scene-capture-shape")?;
     let target_bytes = target_pitch
         .checked_mul(target_height)
-        .ok_or("draw3d-capture-shape")?;
+        .ok_or("resident-scene-capture-shape")?;
     let frame_started_ns = crate::chronos::monotonic_nanos();
 
     let lock_started_ns = crate::chronos::monotonic_nanos();
@@ -1762,13 +1762,13 @@ fn submit_resident_scene_capture_inner(
     if lock_spins != 0 {
         crate::log_info!(
             target: "render";
-            "draw3d-screenshot-lock wait_us={} spins={} acquired=1\n",
+            "resident-scene-screenshot-lock wait_us={} spins={} acquired=1\n",
             crate::chronos::monotonic_nanos().saturating_sub(lock_started_ns) / 1_000,
             lock_spins,
         );
     }
 
-    // Draw3d reports one scene-level result. Keep the renderer's proof
+    // Resident-scene reports one scene-level result. Keep the renderer's proof
     // transcript available for a deliberate stalled-frame diagnostic retry,
     // but do not repeat it for every mesh in ordinary scene updates.
     let _summary_only = (!diagnostic_logs).then(RenderSummaryOnlyGuard::enter);
@@ -1873,14 +1873,14 @@ fn submit_resident_scene_capture_inner(
             );
             crate::log_info!(
                 target: "render";
-                "draw3d-depth: contract enabled opaque={} blended={} skipped={} clear=fullscreen-color+depth opaque_order=front-to-back opaque_state=depth-test+write+blend-off transparent_order=back-to-front transparent_state=depth-test+write-off+straight-alpha compare=lequal hiz=off protocol=v1-unchanged\n",
+                "resident-scene-depth: contract enabled opaque={} blended={} skipped={} clear=fullscreen-color+depth opaque_order=front-to-back opaque_state=depth-test+write+blend-off transparent_order=back-to-front transparent_state=depth-test+write-off+straight-alpha compare=lequal hiz=off protocol=v1-unchanged\n",
                 opaque,
                 blended,
                 skipped,
             );
         }
 
-        // Draw3D uses straight-alpha blending.  The GPU must see the real
+        // Resident-scene uses straight-alpha blending.  The GPU must see the real
         // clear color as its destination for the first translucent draw;
         // using the old readback sentinel here would blend the first shape
         // against 0xDEAD_BEEF.  Readback below compares against this same
@@ -2123,7 +2123,7 @@ fn submit_resident_scene_capture_inner(
         if perf_sequence == 1 || perf_sequence.is_multiple_of(256) {
             crate::log_info!(
                 target: "render";
-                "draw3d-perf: seq={} draws={} frame_us={} geometry_us={} prepare_us={} gpu_poll_us={} gpu_poll_iters={} geometry_other_us={} note=geometry_other_includes_lock-forcewake-lrc-guc-submit-result-handoff\n",
+                "resident-scene-perf: seq={} draws={} frame_us={} geometry_us={} prepare_us={} gpu_poll_us={} gpu_poll_iters={} geometry_other_us={} note=geometry_other_includes_lock-forcewake-lrc-guc-submit-result-handoff\n",
                 perf_sequence,
                 geometry_draw_count,
                 frame_us,
@@ -7684,7 +7684,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
 
     let (completion_value, completion_slot, completion_kind) = if matches!(
         submit_name,
-        "draw3d-scene" | "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d"
+        "resident-scene-scene" | "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d"
     ) && post_draw_sync_variant
         == PostDrawSyncVariant::HeavyAll
     {

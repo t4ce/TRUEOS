@@ -2611,7 +2611,7 @@ fn encode_triangle_probe_batch(
         );
     }
 
-    // Bind a real tiled D32 surface only for the Draw3D visibility contract.
+    // Bind a real tiled D32 surface only for the Resident-scene visibility contract.
     // Every other consumer retains the explicit null state proven during the
     // render bring-up. SurfacePitch, Width and Height are encoded minus one;
     // gfx12.5 replaces implicit Y0 with explicit Tile4 (encoding 3).
@@ -3011,7 +3011,7 @@ fn encode_triangle_probe_batch(
     )?;
 
     if depth_config.is_some() && !matches!(backend_probe_mode, BackendProbeMode::WmLateReemit) {
-        log_batch_offset(cursor, "PIPE_CONTROL draw3d-depth-pre-draw");
+        log_batch_offset(cursor, "PIPE_CONTROL resident-scene-depth-pre-draw");
         push_pipe_control_full(
             batch_dwords,
             &mut cursor,
@@ -3271,7 +3271,7 @@ fn encode_triangle_probe_batch(
     )?;
 
     if post_draw_sync_variant == PostDrawSyncVariant::HeavyAll {
-        // Draw3D reuses one color/depth target across separately scheduled
+        // Resident-scene reuses one color/depth target across separately scheduled
         // mesh contexts.  The Mesa-shaped completion packet below drains the
         // render-target cache, but it does not drain D32, Tile, HDC, or the L3
         // fabric.  Its marker can therefore become visible before all pixels

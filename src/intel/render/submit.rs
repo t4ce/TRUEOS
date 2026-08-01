@@ -1,10 +1,10 @@
-static DRAW3D_LAST_GPU_POLL_US: AtomicU64 = AtomicU64::new(0);
-static DRAW3D_LAST_GPU_POLL_ITERS: AtomicU64 = AtomicU64::new(0);
+static RESIDENT_SCENE_LAST_GPU_POLL_US: AtomicU64 = AtomicU64::new(0);
+static RESIDENT_SCENE_LAST_GPU_POLL_ITERS: AtomicU64 = AtomicU64::new(0);
 
-fn draw3d_last_gpu_poll_profile() -> (u64, u64) {
+fn resident_scene_last_gpu_poll_profile() -> (u64, u64) {
     (
-        DRAW3D_LAST_GPU_POLL_US.load(Ordering::Acquire),
-        DRAW3D_LAST_GPU_POLL_ITERS.load(Ordering::Acquire),
+        RESIDENT_SCENE_LAST_GPU_POLL_US.load(Ordering::Acquire),
+        RESIDENT_SCENE_LAST_GPU_POLL_ITERS.load(Ordering::Acquire),
     )
 }
 
@@ -15,12 +15,12 @@ fn submit_warm_render_batch(
     expected_result_slot_dword: usize,
     submit_name: &'static str,
 ) -> bool {
-    let draw3d_scene_submit = submit_name == "draw3d-scene";
-    if draw3d_scene_submit {
+    let resident_scene_submit = submit_name == "resident-scene";
+    if resident_scene_submit {
         // Early submission failures must not leak the preceding frame's
         // profile into scene telemetry.
-        DRAW3D_LAST_GPU_POLL_US.store(0, Ordering::Release);
-        DRAW3D_LAST_GPU_POLL_ITERS.store(0, Ordering::Release);
+        RESIDENT_SCENE_LAST_GPU_POLL_US.store(0, Ordering::Release);
+        RESIDENT_SCENE_LAST_GPU_POLL_ITERS.store(0, Ordering::Release);
     }
     // The MMIO counters visible here still belong to the outgoing context.
     // Every probe below rebuilds a zeroed LRC image before ELSP submission, so
@@ -95,7 +95,7 @@ fn submit_warm_render_batch(
 
     let mut completed = false;
     let mut iter = 0usize;
-    let poll_limit = if draw3d_scene_submit {
+    let poll_limit = if resident_scene_submit {
         // This is a safety ceiling only. Native scanout rendering is judged
         // by elapsed time below rather than by CPU-dependent spin counts.
         5_000_000
@@ -105,9 +105,9 @@ fn submit_warm_render_batch(
         4096
     };
     let poll_started_ns = crate::chronos::monotonic_nanos();
-    const DRAW3D_POLL_TIMEOUT_NS: u64 = 50_000_000;
+    const RESIDENT_SCENE_POLL_TIMEOUT_NS: u64 = 50_000_000;
     while iter < poll_limit {
-        if draw3d_scene_submit {
+        if resident_scene_submit {
             // The production scene has one authoritative completion value: a
             // QWord release cookie. Reading fourteen unrelated diagnostic
             // slots on every spin multiplied CPU/memory traffic without
@@ -122,7 +122,7 @@ fn submit_warm_render_batch(
             }
             if iter.is_multiple_of(256)
                 && crate::chronos::monotonic_nanos().saturating_sub(poll_started_ns)
-                    >= DRAW3D_POLL_TIMEOUT_NS
+                    >= RESIDENT_SCENE_POLL_TIMEOUT_NS
             {
                 break;
             }
@@ -233,9 +233,9 @@ fn submit_warm_render_batch(
         iter += 1;
     }
     let poll_elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(poll_started_ns) / 1_000;
-    if draw3d_scene_submit {
-        DRAW3D_LAST_GPU_POLL_US.store(poll_elapsed_us, Ordering::Release);
-        DRAW3D_LAST_GPU_POLL_ITERS.store(iter as u64, Ordering::Release);
+    if resident_scene_submit {
+        RESIDENT_SCENE_LAST_GPU_POLL_US.store(poll_elapsed_us, Ordering::Release);
+        RESIDENT_SCENE_LAST_GPU_POLL_ITERS.store(iter as u64, Ordering::Release);
     }
 
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
@@ -627,7 +627,7 @@ fn submit_warm_render_batch(
     if is_surface_draw_submit_name(submit_name) {
         log_triangle_demo_stats(dev, completed);
     }
-    if !completed && submit_name == "draw3d-scene" {
+    if !completed && submit_name == "resident-scene" {
         intel_render_focus_log!(
             "{} recovery deferred owner=guc reason=nonretired-context direct-engine-reset=0\n",
             submit_name

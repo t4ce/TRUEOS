@@ -3302,8 +3302,7 @@ pub(crate) fn create_gpu_font_centered_coverage_mask_at_raster(
 }
 
 /// Build the same default analytical mask for origin-positioned font scenes.
-/// This is the path used by the generic kernel font readback/stamp service and
-/// therefore by the Draw3D TCP waiting scene.
+/// This is the path used by the generic kernel font readback/stamp service.
 pub(crate) fn create_gpu_font_scene_coverage_mask_at_raster(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,

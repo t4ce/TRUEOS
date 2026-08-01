@@ -5,7 +5,7 @@
 // into one exact UI4-owned, linear premultiplied RGBA8 Frame buffer. Pixels
 // outside the selected picture are opaque black. The destination can therefore
 // be published and imported by the same release/SURFLIVE lifecycle as the
-// GPGPU preview and resident Draw3D consumers.
+// GPGPU preview and resident-scene consumers.
 
 // The proven linked-plane path de-tiled this exact VDBOX allocation as legacy
 // 128x32 Y tiles before scanout.  MFX_SURFACE_STATE's tilemode value must not

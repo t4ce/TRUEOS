@@ -222,7 +222,6 @@ fn direct_rcs_encode_copy_rect_2d_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
@@ -277,7 +276,6 @@ fn direct_rcs_encode_resolve_tile64_msaa4_2d_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
@@ -406,7 +404,6 @@ fn direct_rcs_encode_font_outline_coverage_r8_2d_batch(
     }
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
     if !direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
@@ -458,7 +455,6 @@ fn direct_rcs_encode_glyph_mask_2d_batch(
     }
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
     if !direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
@@ -527,7 +523,6 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
     let mut walker_index = 0usize;
@@ -679,7 +674,6 @@ fn direct_rcs_encode_font_instance_layers_2d_batch(
 
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 

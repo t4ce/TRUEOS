@@ -370,7 +370,7 @@ fn direct_rcs_map_ppgtt_destination(
 
 /// Map a full-surface compute destination that will transfer directly to the
 /// display engine. PAT3/UC is the same producer-side cache contract used by
-/// Draw3D direct targets; ordinary kernels and resources remain PAT0/WB.
+/// resident-scene direct targets; ordinary kernels and resources remain PAT0/WB.
 fn direct_rcs_map_ppgtt_scanout(state: DirectRcsState, gpu: u64, phys: u64, len: usize) -> bool {
     if !super::gen12_integrated_pat_ready() {
         return false;

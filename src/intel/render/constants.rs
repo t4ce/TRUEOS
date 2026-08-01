@@ -99,16 +99,16 @@ pub(crate) const FONT_STAMP_DEFAULT_NATIVE_SCALE: u32 = 5;
 const FONT_STAMP_BASE_SIZE: usize = 64;
 pub(crate) const FONT_STAMP_MAX_NATIVE_SCALE: u32 =
     (FONT_PROOF_TARGET_SIZE / FONT_STAMP_BASE_SIZE) as u32;
-pub(crate) const DRAW3D_SCENE_TARGET_WIDTH: usize = 2560;
-pub(crate) const DRAW3D_SCENE_TARGET_HEIGHT: usize = 1440;
+pub(crate) const RESIDENT_SCENE_TARGET_WIDTH: usize = 2560;
+pub(crate) const RESIDENT_SCENE_TARGET_HEIGHT: usize = 1440;
 const WARM_STREAMOUT_BYTES: usize =
-    DRAW3D_SCENE_TARGET_WIDTH * DRAW3D_SCENE_TARGET_HEIGHT * core::mem::size_of::<u32>();
-// Draw3D's first hidden-surface rung uses one D32_FLOAT surface. Gen12 depth
+    RESIDENT_SCENE_TARGET_WIDTH * RESIDENT_SCENE_TARGET_HEIGHT * core::mem::size_of::<u32>();
+// The resident-scene hidden-surface path uses one D32_FLOAT surface. Gen12 depth
 // is Y0 tiled and gfx12.5 replaces that layout with the byte-compatible Tile4
 // 4 KiB tile. The maximum target is already 128-byte pitch and 32-row aligned.
-const DRAW3D_SCENE_DEPTH_TILE_WIDTH_BYTES: usize = 128;
-const DRAW3D_SCENE_DEPTH_TILE_HEIGHT_ROWS: usize = 32;
-const DRAW3D_SCENE_DEPTH_BYTES: usize = WARM_STREAMOUT_BYTES;
+const RESIDENT_SCENE_DEPTH_TILE_WIDTH_BYTES: usize = 128;
+const RESIDENT_SCENE_DEPTH_TILE_HEIGHT_ROWS: usize = 32;
+const RESIDENT_SCENE_DEPTH_BYTES: usize = WARM_STREAMOUT_BYTES;
 const RESIDENT_SCENE_MSAA_COLOR_TILE_WIDTH_PIXELS: usize = 64;
 const RESIDENT_SCENE_MSAA_COLOR_TILE_HEIGHT_PIXELS: usize = 64;
 const RESIDENT_SCENE_MSAA_DEPTH_TILE_WIDTH_BYTES: usize = 512;
@@ -121,16 +121,16 @@ const GPU_VA_CONTEXT_BASE: u64 = 0x0081_0000;
 const GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
 const GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
 const GPU_VA_DRAW_STATE_BASE: u64 = 0x0086_0000;
-// One bounded state slot per Draw3D object plus the full-screen clear. The
+// One bounded state slot per resident-scene draw plus the full-screen clear. The
 // scene service owns this mapping for its lifetime; probe state remains at the
 // historical warm-state VA above.
-const GPU_VA_DRAW3D_SCENE_STATE_BASE: u64 = 0x3000_0000;
-const DRAW3D_SCENE_MAX_DRAWS: usize = 100;
-const DRAW3D_SCENE_STATE_SLOT_BYTES: usize = 2 * 4096;
-const DRAW3D_SCENE_STATE_BYTES: usize =
-    (DRAW3D_SCENE_MAX_DRAWS + 1) * DRAW3D_SCENE_STATE_SLOT_BYTES;
-const DRAW3D_SCENE_PRIMARY_BATCH_BYTES: usize = 4096;
-const DRAW3D_SCENE_SECONDARY_BATCH_BYTES: usize = 4 * 4096;
+const GPU_VA_RESIDENT_SCENE_STATE_BASE: u64 = 0x3000_0000;
+const RESIDENT_SCENE_MAX_DRAWS: usize = 100;
+const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 2 * 4096;
+const RESIDENT_SCENE_STATE_BYTES: usize =
+    (RESIDENT_SCENE_MAX_DRAWS + 1) * RESIDENT_SCENE_STATE_SLOT_BYTES;
+const RESIDENT_SCENE_PRIMARY_BATCH_BYTES: usize = 4096;
+const RESIDENT_SCENE_SECONDARY_BATCH_BYTES: usize = 4 * 4096;
 // The original 64 KiB mapping lived directly below STREAMOUT_BASE. The raised
 // 512 KiB soft cap must live outside the full-resolution render target and the
 // persistent-font VA range.
@@ -138,12 +138,12 @@ const GPU_VA_VERTEX_BASE: u64 = 0x2800_0000;
 const GPU_VA_STREAMOUT_BASE: u64 = 0x0088_0000;
 // The 14.0625 MiB D32 scene depth allocation lives above the warm batch and
 // below the GPGPU arena. It never aliases the color target or resident meshes.
-const GPU_VA_DRAW3D_SCENE_DEPTH_BASE: u64 = 0x0200_0000;
+const GPU_VA_RESIDENT_SCENE_DEPTH_BASE: u64 = 0x0200_0000;
 // gfx12.5 Tile64 4x-MSAA surfaces. Each range has 64 MiB of VA headroom;
 // physical storage is allocated lazily at the consumer's actual extent.
 const GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE: u64 = 0x1000_0000;
 const GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE: u64 = 0x1400_0000;
-// Keep one permanent render-PPGTT address for every Draw3D UI4 allocation
+// Keep one permanent render-PPGTT address for every resident-scene UI4 allocation
 // observed during normal maximize/restore replacement. Triple buffering must
 // not retarget one VA between different physical buffers: GuC completion
 // retires the draw, but it does not by itself make a hot PPGTT unmap/remap safe
@@ -152,13 +152,13 @@ const GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE: u64 = 0x1400_0000;
 // the existing disjoint 0x3400_0000..0x4000_0000 range. Destroyed DMA surfaces
 // normally reuse their physical allocation and therefore reuse the existing
 // mapping without consuming another slot.
-const GPU_VA_DRAW3D_UI4_FRAME_BASE: u64 = 0x3400_0000;
-const GPU_VA_DRAW3D_UI4_FRAME_STRIDE: u64 = 0x0100_0000;
-const DRAW3D_UI4_DIRECT_MAPPING_COUNT: usize = 12;
-const GPU_VA_DRAW3D_UI4_FRAME_LIMIT: u64 = GPU_VA_DRAW3D_UI4_FRAME_BASE
-    + DRAW3D_UI4_DIRECT_MAPPING_COUNT as u64 * GPU_VA_DRAW3D_UI4_FRAME_STRIDE;
-const _: () = assert!(GPU_VA_DRAW3D_UI4_FRAME_LIMIT == 0x4000_0000);
-const _: () = assert!(WARM_STREAMOUT_BYTES as u64 <= GPU_VA_DRAW3D_UI4_FRAME_STRIDE);
+const GPU_VA_RESIDENT_UI4_FRAME_BASE: u64 = 0x3400_0000;
+const GPU_VA_RESIDENT_UI4_FRAME_STRIDE: u64 = 0x0100_0000;
+const RESIDENT_UI4_DIRECT_MAPPING_COUNT: usize = 12;
+const GPU_VA_RESIDENT_UI4_FRAME_LIMIT: u64 = GPU_VA_RESIDENT_UI4_FRAME_BASE
+    + RESIDENT_UI4_DIRECT_MAPPING_COUNT as u64 * GPU_VA_RESIDENT_UI4_FRAME_STRIDE;
+const _: () = assert!(GPU_VA_RESIDENT_UI4_FRAME_LIMIT == 0x4000_0000);
+const _: () = assert!(WARM_STREAMOUT_BYTES as u64 <= GPU_VA_RESIDENT_UI4_FRAME_STRIDE);
 // Keep the imported 64 KiB compute mesh outside the 14.0625 MiB 1440p scene
 // target at 0x0088_0000..0x0169_0000 and below the batch at 0x0180_0000.
 const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
@@ -203,7 +203,7 @@ const GRDOM_RENDER: u32 = 1 << 1;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
 const MI_BATCH_GTT: u32 = 2 << 6;
 // MI_BATCH_BUFFER_END returns to the caller only for a second-level batch.
-// Draw3D uses one small secondary per object beneath one frame-level primary
+// Resident scenes use one small secondary per object beneath one frame-level primary
 // batch, so the render context is submitted exactly once per scene update.
 const MI_BATCH_2ND_LEVEL: u32 = 1 << 22;
 // Gen8+ four-DWORD PPGTT load. Helio's draw stream uses this to feed the

@@ -325,10 +325,10 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
     drop(pending_slot);
 
     let ok = marker == SPIRIT_VFX_POST_MARKER;
-    complete_execution_rcs_submission(ok);
     if !ok {
         quarantine_execution_rcs_context("spirit-vfx-marker-timeout");
     }
+    complete_execution_rcs_submission(ok);
     EXECUTION_RCS_DETACHED_TAG.store(0, Ordering::Release);
     if spirit_vfx_trace_frame(pending.submitted.frame) || !ok {
         crate::log_info!(

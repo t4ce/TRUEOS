@@ -46,7 +46,7 @@ python3 tools/xe_lp_shader_bake/summarize_dump.py /tmp/intel-shaders \
   --emit-rust triangle_vs.bin triangle_ps.bin
 ```
 
-The dumper can also validate the static Draw3D push-color pixel shader. Compile
+The dumper can also validate the static resident-scene push-color pixel shader. Compile
 [`push_color.frag`](push_color.frag) to SPIR-V, then run the dumper with
 `TRUEOS_PUSH_COLOR=1`. It supplies `(224,48,220,192)` as four push-constant
 floats and requires the exact returned RGBA bytes. The default invocation and

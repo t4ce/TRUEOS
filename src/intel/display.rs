@@ -96,7 +96,7 @@ const _: () = assert!(DISPLAY_OUTPUT_COUNT == DISPLAY_PIPELINE_COUNT);
 // The first three display overlays retain their bootstrap addresses below the
 // legacy direct-RCS 1 GiB boundary. Slot 4 is CPU-authored UI interaction
 // chrome and therefore needs no direct-RCS alias; keep it above that boundary
-// so it cannot collide with Draw3D's fixed resident scene addresses.
+// so it cannot collide with resident-scene's fixed resident scene addresses.
 const DISPLAY_DIRECT_RCS_VA_LIMIT: u64 = 0x4000_0000;
 // Scanout GGTT addresses are not render-engine addresses. Give every
 // compositor destination a stable private PPGTT VA for its entire lifetime.
@@ -2591,7 +2591,7 @@ fn queue_ui4_plane_surface_flip(
             | "ui4-rgb-slot2-async"
             | "ui4-rgb-slot3-async"
             | "ui4-solara-slot2-async"
-            | "ui4-draw3d-slot3-async"
+            | "ui4-rgb-slot3-async"
             | "ui4-overlay-async"
     ) {
         return PlaneSurfaceFlipQueueResult::Inactive;
@@ -4883,7 +4883,7 @@ struct Ui4CompositionProof {
 }
 
 static UI4_COMPOSITION_PROOF_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-// Direct scanout is the ordinary Draw3D frame path, so lifecycle proof logs
+// Direct scanout is the ordinary resident-scene frame path, so lifecycle proof logs
 // must not become per-frame work. Keep enough checkpoints to diagnose buffer
 // rotation and release ordering without feeding thousands of formatted lines
 // through the kernel logger during a performance run.
