@@ -30,6 +30,11 @@ const COLLISION_BURST_DISTANCE: f32 = 12.0;
 
 pub const INSTANCE_FLAG_CASTS_SHADOW: u32 = 1 << 0;
 pub const INSTANCE_FLAG_RECEIVES_SHADOW: u32 = 1 << 1;
+pub const MAX_RETAINED_TRANSFORM_ROWS: usize = 4_096;
+
+const _: () = {
+    assert!(MAX_RETAINED_TRANSFORM_ROWS <= u16::MAX as usize);
+};
 
 /// Helio's storage-buffer instance ABI, byte-for-byte.
 #[repr(C)]
@@ -78,12 +83,33 @@ pub struct GpuRetainedTransformSeed {
     pub previous_translation: [f32; 3],
     /// Index into the frame's fixed draw-template array.
     pub draw_group: u32,
+    /// High 16 bits are the deterministic slot within `draw_group`; low 16
+    /// bits are the instance flags copied into [`GpuInstanceData`].
     pub flags: u32,
 }
 
 impl GpuRetainedTransformSeed {
     pub const BYTE_LEN: usize = 64;
     pub const DISABLED_DRAW_GROUP: u32 = u32::MAX;
+    pub const COMPACT_SLOT_SHIFT: u32 = 16;
+    pub const INSTANCE_FLAGS_MASK: u32 = u16::MAX as u32;
+    pub const MAX_COMPACT_SLOT: u32 = u16::MAX as u32;
+
+    pub const fn pack_slot_and_flags(compact_slot: u32, instance_flags: u32) -> Option<u32> {
+        if compact_slot > Self::MAX_COMPACT_SLOT || instance_flags & !Self::INSTANCE_FLAGS_MASK != 0
+        {
+            return None;
+        }
+        Some((compact_slot << Self::COMPACT_SLOT_SHIFT) | instance_flags)
+    }
+
+    pub const fn compact_slot(self) -> u32 {
+        self.flags >> Self::COMPACT_SLOT_SHIFT
+    }
+
+    pub const fn instance_flags(self) -> u32 {
+        self.flags & Self::INSTANCE_FLAGS_MASK
+    }
 
     pub fn to_le_bytes(self) -> [u8; Self::BYTE_LEN] {
         let mut bytes = [0; Self::BYTE_LEN];
@@ -530,7 +556,7 @@ impl Spec {
             usize::try_from(read_u32(bytes, 20)?).map_err(|_| Error::InvalidChurnScene)?;
         let spawn_interval_frames = read_u32(bytes, 24)?;
         if max_objects == 0
-            || max_objects > 4_096
+            || max_objects > MAX_RETAINED_TRANSFORM_ROWS
             || spawn_rate == 0
             || spawn_rate > max_objects
             || spawn_interval_frames == 0
@@ -1079,6 +1105,7 @@ impl Engine {
         }
 
         self.gpu_transform_seeds.clear();
+        let mut group_slots = [0u32; DRAW_GROUP_COUNT];
         for object_index in 0..object_count {
             let object = self.objects[object_index];
             let pose = object_pose(
@@ -1099,6 +1126,11 @@ impl Engine {
                 })
                 .unwrap_or(pose.center);
             let extents = self.spec.shape_half_extents[object.shape];
+            let draw_group = object.shape * MATERIAL_COUNT + object_index % MATERIAL_COUNT;
+            let compact_slot = group_slots[draw_group];
+            group_slots[draw_group] = compact_slot
+                .checked_add(1)
+                .ok_or(Error::InvalidChurnScene)?;
             self.gpu_transform_seeds.push(GpuRetainedTransformSeed {
                 translation: pose.center,
                 scale: [object.scale; 3],
@@ -1107,13 +1139,20 @@ impl Engine {
                     extents[0] * extents[0] + extents[1] * extents[1] + extents[2] * extents[2],
                 ),
                 previous_translation,
-                draw_group: (object.shape * MATERIAL_COUNT + object_index % MATERIAL_COUNT) as u32,
-                flags: INSTANCE_FLAG_CASTS_SHADOW | INSTANCE_FLAG_RECEIVES_SHADOW,
+                draw_group: draw_group as u32,
+                flags: GpuRetainedTransformSeed::pack_slot_and_flags(
+                    compact_slot,
+                    INSTANCE_FLAG_CASTS_SHADOW | INSTANCE_FLAG_RECEIVES_SHADOW,
+                )
+                .ok_or(Error::InvalidChurnScene)?,
             });
             self.objects[object_index].previous_translation = Some(pose.center);
             // A later CPU fallback reconstructs its temporal model from the
             // compact translation instead of consuming a stale matrix.
             self.objects[object_index].previous_model = None;
+        }
+        if group_slots != group_counts {
+            return Err(Error::InvalidChurnScene);
         }
 
         let camera = gpu_camera_uniforms(
@@ -1994,6 +2033,14 @@ mod tests {
         assert_eq!(&bytes[44..48], &12.25f32.to_le_bytes());
         assert_eq!(&bytes[56..60], &0x1122_3344u32.to_le_bytes());
         assert_eq!(&bytes[60..64], &0x5566_7788u32.to_le_bytes());
+        assert_eq!(seed.compact_slot(), 0x5566);
+        assert_eq!(seed.instance_flags(), 0x7788);
+        assert_eq!(
+            GpuRetainedTransformSeed::pack_slot_and_flags(0x5566, 0x7788),
+            Some(0x5566_7788)
+        );
+        assert_eq!(GpuRetainedTransformSeed::pack_slot_and_flags(0x1_0000, 0), None);
+        assert_eq!(GpuRetainedTransformSeed::pack_slot_and_flags(0, 0x1_0000), None);
 
         let template = GpuRetainedDrawTemplate::new(
             MeshDescriptor {
@@ -2070,6 +2117,17 @@ mod tests {
                 expected_first += template.capacity;
             }
             assert_eq!(expected_first, frame.seeds.len() as u32);
+            let mut expected_slots = [0u32; DRAW_GROUP_COUNT];
+            for seed in frame.seeds {
+                let group = seed.draw_group as usize;
+                assert_eq!(seed.compact_slot(), expected_slots[group]);
+                assert_eq!(
+                    seed.instance_flags(),
+                    INSTANCE_FLAG_CASTS_SHADOW | INSTANCE_FLAG_RECEIVES_SHADOW
+                );
+                expected_slots[group] += 1;
+            }
+            assert_eq!(expected_slots, frame.draw_templates.map(|template| template.capacity));
             assert!(frame.seeds.iter().all(|seed| {
                 seed.translation.iter().all(|value| value.is_finite())
                     && seed.scale.iter().all(|value| *value > 0.0)

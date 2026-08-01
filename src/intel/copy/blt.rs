@@ -93,6 +93,9 @@ static GUC_BLT_UI4: Mutex<GucBltUi4Runtime> = Mutex::new(GucBltUi4Runtime::new()
 static GUC_BLT_RING: Mutex<GucBltRingRuntime> = Mutex::new(GucBltRingRuntime::new());
 static GUC_BLT_LANE_BUSY: AtomicBool = AtomicBool::new(false);
 static GUC_BLT_LANE_QUARANTINED: AtomicBool = AtomicBool::new(false);
+// The GuC BCS0 control window is process-lifetime immutable. Cache both
+// success and failure so no live context can ever trigger a GGTT remap.
+static DIRECT_BLT_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 
 #[derive(Copy, Clone, Debug)]
 struct DirectBltState {
@@ -408,7 +411,6 @@ pub(crate) fn submit_guc_bcs0_fast_copy_probe_now() -> GucBcs0FastCopyProbe {
         hwlrca_hi,
         gpuvm_root_phys: state.ppgtt_phys,
     };
-    super::ggtt_invalidate(dev);
     core::sync::atomic::fence(Ordering::SeqCst);
     let submission = match crate::gpu::executor::submit_kernel_context(
         crate::gpu::vgpu::KernelClient::Ui4Blitter,
@@ -755,7 +757,6 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
         hwlrca_hi,
         gpuvm_root_phys: state.ppgtt_phys,
     };
-    super::ggtt_invalidate(dev);
     core::sync::atomic::fence(Ordering::SeqCst);
     let submission = match crate::gpu::executor::submit_kernel_context(
         crate::gpu::vgpu::KernelClient::Ui4Blitter,
@@ -1068,42 +1069,68 @@ fn direct_blt_state_once() -> Option<DirectBltState> {
 }
 
 fn direct_blt_map_state(dev: super::Dev, state: DirectBltState) -> bool {
-    let mapped =
-        super::map_ggtt(dev, state.ring_phys, DIRECT_BLT_RING_BYTES, DIRECT_BLT_GPU_VA_RING_BASE)
-            && super::map_ggtt(
-                dev,
-                state.context_phys,
-                DIRECT_BLT_CONTEXT_BYTES,
+    let mapped = *DIRECT_BLT_GGTT_MAPPING.call_once(|| {
+        let accepted =
+            super::map_ggtt(dev, state.ring_phys, DIRECT_BLT_RING_BYTES, DIRECT_BLT_GPU_VA_RING_BASE)
+                && super::map_ggtt(
+                    dev,
+                    state.context_phys,
+                    DIRECT_BLT_CONTEXT_BYTES,
+                    DIRECT_BLT_GPU_VA_CONTEXT_BASE,
+                )
+                && super::map_ggtt(
+                    dev,
+                    state.batch_phys,
+                    DIRECT_BLT_BATCH_BYTES,
+                    DIRECT_BLT_GPU_VA_BATCH_BASE,
+                )
+                && super::map_ggtt(
+                    dev,
+                    state.result_phys,
+                    DIRECT_BLT_RESULT_BYTES,
+                    DIRECT_BLT_GPU_VA_RESULT_BASE,
+                )
+                && super::map_ggtt(
+                    dev,
+                    state.src_phys,
+                    DIRECT_BLT_COPY_BYTES,
+                    DIRECT_BLT_GPU_VA_SRC_BASE,
+                )
+                && super::map_ggtt(
+                    dev,
+                    state.dst_phys,
+                    DIRECT_BLT_COPY_BYTES,
+                    DIRECT_BLT_GPU_VA_DST_BASE,
+                );
+        if accepted {
+            super::ggtt_invalidate(dev);
+            crate::log_info!(target: "gfx";
+                "intel/blt: bcs0 control mapping accepted=1 ring=0x{:X} context=0x{:X} batch=0x{:X} result=0x{:X} ownership=process-lifetime install=exact-once runtime-remap=forbidden\n",
+                DIRECT_BLT_GPU_VA_RING_BASE,
                 DIRECT_BLT_GPU_VA_CONTEXT_BASE,
-            )
-            && super::map_ggtt(
-                dev,
-                state.batch_phys,
-                DIRECT_BLT_BATCH_BYTES,
                 DIRECT_BLT_GPU_VA_BATCH_BASE,
-            )
-            && super::map_ggtt(
-                dev,
-                state.result_phys,
-                DIRECT_BLT_RESULT_BYTES,
                 DIRECT_BLT_GPU_VA_RESULT_BASE,
-            )
-            && super::map_ggtt(
-                dev,
-                state.src_phys,
-                DIRECT_BLT_COPY_BYTES,
-                DIRECT_BLT_GPU_VA_SRC_BASE,
-            )
-            && super::map_ggtt(
-                dev,
-                state.dst_phys,
-                DIRECT_BLT_COPY_BYTES,
-                DIRECT_BLT_GPU_VA_DST_BASE,
             );
-    if mapped {
-        super::ggtt_invalidate(dev);
+        }
+        accepted
+    });
+    if !mapped {
+        let _ = guc_blt_quarantine("ggtt-control-map-failed");
     }
     mapped
+}
+
+pub(crate) fn prewarm_guc_bcs0_control_ggtt(dev: super::Dev) -> bool {
+    let Some(state) = direct_blt_state_once() else {
+        // Seal allocation failure too: a later BCS0 consumer must never turn
+        // into the first writer of this process-global control window.
+        let ready = *DIRECT_BLT_GGTT_MAPPING.call_once(|| false);
+        if !ready {
+            let _ = guc_blt_quarantine("boot-control-backing-allocation-failed");
+        }
+        return false;
+    };
+    direct_blt_map_state(dev, state)
 }
 
 fn direct_blt_init_ppgtt(state: DirectBltState) -> bool {

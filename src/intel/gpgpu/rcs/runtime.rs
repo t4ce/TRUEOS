@@ -15,7 +15,7 @@ struct DirectRcsState {
     gpu_va: DirectRcsGpuVa,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct DirectRcsGpuVa {
     ring: u64,
     context: u64,
@@ -215,6 +215,9 @@ fn ui4_compositor_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
 }
 
 fn scene_aabb_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
+    if SCENE_AABB_QUARANTINED.load(Ordering::Acquire) {
+        return None;
+    }
     if let Some(state) = *SCENE_AABB_RCS_STATE.lock() {
         return Some(state);
     }
@@ -301,30 +304,179 @@ fn execution_rcs_next_job_slot(state: DirectRcsState) -> Option<DirectRcsState> 
 }
 
 fn direct_rcs_map_state(dev: super::Dev, state: DirectRcsState) -> bool {
-    let batch_alloc_bytes = DIRECT_RCS_BATCH_BYTES.saturating_mul(state.gpu_va.job_slots);
-    let result_alloc_bytes = DIRECT_RCS_RESULT_BYTES.saturating_mul(state.gpu_va.job_slots);
-    let core_mapped =
-        super::map_ggtt(dev, state.ring_phys, DIRECT_RCS_RING_BYTES, state.gpu_va.ring)
-            && super::map_ggtt(
+    let Some(mapping) = direct_rcs_ggtt_mapping(state.gpu_va) else {
+        return false;
+    };
+    let mapped = *mapping.call_once(|| {
+        let batch_alloc_bytes = DIRECT_RCS_BATCH_BYTES.saturating_mul(state.gpu_va.job_slots);
+        let result_alloc_bytes = DIRECT_RCS_RESULT_BYTES.saturating_mul(state.gpu_va.job_slots);
+        let core_mapped =
+            super::map_ggtt(dev, state.ring_phys, DIRECT_RCS_RING_BYTES, state.gpu_va.ring)
+                && super::map_ggtt(
+                    dev,
+                    state.context_phys,
+                    DIRECT_RCS_CONTEXT_BYTES,
+                    state.gpu_va.context,
+                )
+                && super::map_ggtt(dev, state.batch_phys, batch_alloc_bytes, state.gpu_va.batch)
+                && super::map_ggtt(
+                    dev,
+                    state.result_phys,
+                    result_alloc_bytes,
+                    state.gpu_va.result,
+                );
+        let auxiliary_mapped = !state.gpu_va.map_general_auxiliary
+            || super::map_ggtt(
                 dev,
-                state.context_phys,
-                DIRECT_RCS_CONTEXT_BYTES,
+                state.clear_test_phys,
+                CLEAR_RECT_TEST_BYTES,
+                DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+            );
+        let accepted = core_mapped && auxiliary_mapped;
+        if accepted {
+            super::ggtt_invalidate(dev);
+            crate::log_info!(target: "gpgpu";
+                "intel/gpgpu: direct-rcs control mapping accepted=1 lane={} ring=0x{:X} context=0x{:X} batch=0x{:X} result=0x{:X} ownership=process-lifetime install=exact-once runtime-remap=forbidden\n",
+                direct_rcs_mapping_name(state.gpu_va),
+                state.gpu_va.ring,
                 state.gpu_va.context,
-            )
-            && super::map_ggtt(dev, state.batch_phys, batch_alloc_bytes, state.gpu_va.batch)
-            && super::map_ggtt(dev, state.result_phys, result_alloc_bytes, state.gpu_va.result);
-    let auxiliary_mapped = !state.gpu_va.map_general_auxiliary
-        || super::map_ggtt(
-            dev,
-            state.clear_test_phys,
-            CLEAR_RECT_TEST_BYTES,
-            DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-        );
-    let mapped = core_mapped && auxiliary_mapped;
-    if mapped {
-        super::ggtt_invalidate(dev);
+                state.gpu_va.batch,
+                state.gpu_va.result,
+            );
+        }
+        accepted
+    });
+    if !mapped {
+        quarantine_direct_rcs_mapping_failure(state.gpu_va, "ggtt-control-map-failed");
     }
     mapped
+}
+
+fn direct_rcs_ggtt_mapping(gpu_va: DirectRcsGpuVa) -> Option<&'static spin::Once<bool>> {
+    match gpu_va {
+        DIRECT_RCS_GPU_VA => Some(&DIRECT_RCS_GGTT_MAPPING),
+        EXECUTION_RCS_GPU_VA => Some(&EXECUTION_RCS_GGTT_MAPPING),
+        LFM25_RCS_GPU_VA => Some(&LFM25_RCS_GGTT_MAPPING),
+        UI4_COMPOSITOR_RCS_GPU_VA => Some(&UI4_COMPOSITOR_RCS_GGTT_MAPPING),
+        SCENE_AABB_RCS_GPU_VA => Some(&SCENE_AABB_RCS_GGTT_MAPPING),
+        _ => None,
+    }
+}
+
+fn direct_rcs_mapping_name(gpu_va: DirectRcsGpuVa) -> &'static str {
+    match gpu_va {
+        DIRECT_RCS_GPU_VA => "system-service",
+        EXECUTION_RCS_GPU_VA => "execution",
+        LFM25_RCS_GPU_VA => "lfm25",
+        UI4_COMPOSITOR_RCS_GPU_VA => "ui4-compositor",
+        SCENE_AABB_RCS_GPU_VA => "scene-aabb",
+        _ => "invalid",
+    }
+}
+
+fn direct_rcs_control_ggtt_ready(state: DirectRcsState) -> bool {
+    // Job-slot views change only batch/result offsets; the owning control
+    // window is identified by its immutable ring address.
+    let mapping = match state.gpu_va.ring {
+        DIRECT_RCS_GPU_VA_RING_BASE => &DIRECT_RCS_GGTT_MAPPING,
+        EXECUTION_RCS_GPU_VA_RING_BASE => &EXECUTION_RCS_GGTT_MAPPING,
+        LFM25_RCS_GPU_VA_RING_BASE => &LFM25_RCS_GGTT_MAPPING,
+        UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE => &UI4_COMPOSITOR_RCS_GGTT_MAPPING,
+        SCENE_AABB_RCS_GPU_VA_RING_BASE => &SCENE_AABB_RCS_GGTT_MAPPING,
+        _ => return false,
+    };
+    mapping.get().copied() == Some(true)
+}
+
+fn quarantine_direct_rcs_mapping_failure(gpu_va: DirectRcsGpuVa, reason: &'static str) {
+    match gpu_va {
+        DIRECT_RCS_GPU_VA => quarantine_direct_rcs_context(reason),
+        EXECUTION_RCS_GPU_VA => quarantine_execution_rcs_context(reason),
+        LFM25_RCS_GPU_VA => quarantine_lfm25_rcs_context(reason),
+        UI4_COMPOSITOR_RCS_GPU_VA => quarantine_ui4_compositor_rcs_context(reason),
+        SCENE_AABB_RCS_GPU_VA => {
+            if !SCENE_AABB_QUARANTINED.swap(true, Ordering::AcqRel) {
+                crate::log_error!(target: "gpgpu";
+                    "intel/gpgpu: scene-aabb control mapping accepted=0 reason={} action=quarantine-scene-aabb-until-reboot retry-map=forbidden backing=retained\n",
+                    reason,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct DirectRcsControlGgttPrewarmReport {
+    pub(crate) system_service: bool,
+    pub(crate) execution: bool,
+    pub(crate) lfm25: bool,
+    pub(crate) ui4_compositor: bool,
+    pub(crate) scene_aabb: bool,
+}
+
+impl DirectRcsControlGgttPrewarmReport {
+    pub(crate) const fn accepted(self) -> bool {
+        self.system_service
+            && self.execution
+            && self.lfm25
+            && self.ui4_compositor
+            && self.scene_aabb
+    }
+}
+
+fn prewarm_direct_rcs_control_ggtt(
+    dev: super::Dev,
+    gpu_va: DirectRcsGpuVa,
+    state: Option<DirectRcsState>,
+) -> bool {
+    let Some(state) = state else {
+        // Allocation failure must close the lane just as permanently as a
+        // partial map failure. Otherwise a later consumer could retry here and
+        // become an unplanned writer of the process-global page table.
+        if let Some(mapping) = direct_rcs_ggtt_mapping(gpu_va) {
+            let ready = *mapping.call_once(|| false);
+            if !ready {
+                quarantine_direct_rcs_mapping_failure(
+                    gpu_va,
+                    "boot-control-backing-allocation-failed",
+                );
+            }
+        }
+        return false;
+    };
+    direct_rcs_map_state(dev, state)
+}
+
+/// Install every persistent RCS control window while physical GT bring-up owns
+/// the global GGTT boundary. Consumer launch may populate only its private
+/// PPGTT; it can neither install nor repair a global ring/HWLRCA mapping.
+pub(crate) fn prewarm_direct_rcs_controls_ggtt(
+    dev: super::Dev,
+) -> DirectRcsControlGgttPrewarmReport {
+    DirectRcsControlGgttPrewarmReport {
+        system_service: prewarm_direct_rcs_control_ggtt(
+            dev,
+            DIRECT_RCS_GPU_VA,
+            direct_rcs_state_once(dev),
+        ),
+        execution: prewarm_direct_rcs_control_ggtt(
+            dev,
+            EXECUTION_RCS_GPU_VA,
+            execution_rcs_state_once(dev),
+        ),
+        lfm25: prewarm_direct_rcs_control_ggtt(dev, LFM25_RCS_GPU_VA, lfm25_rcs_state_once(dev)),
+        ui4_compositor: prewarm_direct_rcs_control_ggtt(
+            dev,
+            UI4_COMPOSITOR_RCS_GPU_VA,
+            ui4_compositor_rcs_state_once(dev),
+        ),
+        scene_aabb: prewarm_direct_rcs_control_ggtt(
+            dev,
+            SCENE_AABB_RCS_GPU_VA,
+            scene_aabb_rcs_state_once(dev),
+        ),
+    }
 }
 
 fn direct_rcs_init_ppgtt(state: DirectRcsState) -> bool {

@@ -152,6 +152,7 @@ pub(crate) struct GucSchedulerStatus {
     pub(crate) capacity: usize,
     pub(crate) registered: usize,
     pub(crate) enabled: usize,
+    pub(crate) destroy_requested: usize,
     pub(crate) pending_enable: usize,
     pub(crate) pending_disable: usize,
     pub(crate) pending_deregister: usize,
@@ -171,6 +172,7 @@ pub(crate) struct GucContextStatus {
     pub(crate) priority: crate::gpu::physical::PhysicalContextPriority,
     pub(crate) policy_enqueued: bool,
     pub(crate) enabled: bool,
+    pub(crate) destroy_requested: bool,
     pub(crate) pending_enable: bool,
     pub(crate) pending_disable: bool,
     pub(crate) pending_deregister: bool,
@@ -183,6 +185,9 @@ pub(crate) struct GucContextStatus {
 struct GucContextState {
     registered: bool,
     enabled: bool,
+    /// The owning vGPU has begun teardown. Keep the ID, HWLRCA, and all
+    /// backing quarantined and reject new work until DEREGISTER_CONTEXT_DONE.
+    destroy_requested: bool,
     pending_enable: bool,
     pending_disable: bool,
     pending_deregister: bool,
@@ -200,6 +205,7 @@ impl GucContextState {
     const EMPTY: Self = Self {
         registered: false,
         enabled: false,
+        destroy_requested: false,
         pending_enable: false,
         pending_disable: false,
         pending_deregister: false,
@@ -318,7 +324,11 @@ pub(crate) fn register_context(
                     && context.hwlrca_hi == hwlrca_hi
             })
     {
-        if context.pending_disable || context.pending_deregister || context.faulted {
+        if context.destroy_requested
+            || context.pending_disable
+            || context.pending_deregister
+            || context.faulted
+        {
             state.failures = state.failures.saturating_add(1);
             return Err(GucSubmissionError::InvalidContext);
         }
@@ -393,6 +403,7 @@ pub(crate) fn register_context(
     state.contexts[slot] = GucContextState {
         registered: true,
         enabled: false,
+        destroy_requested: false,
         pending_enable: false,
         pending_disable: false,
         pending_deregister: false,
@@ -450,7 +461,11 @@ pub(crate) fn submit_context(
     if !context.registered || context.generation != generation {
         return Err(GucSubmissionError::InvalidContext);
     }
-    if context.pending_disable || context.pending_deregister || context.faulted {
+    if context.destroy_requested
+        || context.pending_disable
+        || context.pending_deregister
+        || context.faulted
+    {
         state.failures = state.failures.saturating_add(1);
         return Err(GucSubmissionError::InvalidContext);
     }
@@ -567,6 +582,11 @@ pub(crate) fn destroy_context(
     let engine_abi =
         guc_engine_abi(dev, context.engine).ok_or(GucSubmissionError::InvalidContext)?;
     let context_id = (slot + 1) as u32;
+    // This bit closes the gap between a timed-out enable/disable completion
+    // and the caller's retry. Even if no transition is currently pending,
+    // submit/register may no longer revive a context whose owner is tearing
+    // it down.
+    state.contexts[slot].destroy_requested = true;
 
     if state.contexts[slot].pending_deregister {
         if wait_for_transition(&mut state, slot, GucPendingTransition::Deregister) {
@@ -714,7 +734,12 @@ fn drain_g2h_events(state: &mut GucSubmissionState) {
 fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ctb::CtbG2hEvent) {
     match event.action {
         INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_DONE => {
-            let (Some(context_id), Some(mode_status)) = (event.payload(0), event.payload(1)) else {
+            if event.payload_len != 2 || event.truncated() {
+                note_malformed_lifecycle_event(state, event, "sched-context-mode-done");
+                return;
+            }
+            let (Some(context_id), Some(runnable_state)) = (event.payload(0), event.payload(1))
+            else {
                 note_malformed_lifecycle_event(state, event, "sched-context-mode-done");
                 return;
             };
@@ -731,26 +756,53 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
                 );
                 return;
             }
-            let transition = if context.pending_enable {
-                state.contexts[slot].pending_enable = false;
-                "enable"
-            } else if context.pending_disable {
-                state.contexts[slot].pending_disable = false;
-                "disable"
-            } else {
-                note_malformed_lifecycle_event(state, event, "sched-context-mode-done-unexpected");
-                return;
+            let transition = match runnable_state {
+                GUC_CONTEXT_ENABLE
+                    if pending_mode_matches(
+                        context.pending_enable,
+                        context.pending_disable,
+                        runnable_state,
+                    ) =>
+                {
+                    state.contexts[slot].pending_enable = false;
+                    "enable"
+                }
+                GUC_CONTEXT_DISABLE
+                    if pending_mode_matches(
+                        context.pending_enable,
+                        context.pending_disable,
+                        runnable_state,
+                    ) =>
+                {
+                    state.contexts[slot].pending_disable = false;
+                    "disable"
+                }
+                _ => {
+                    // Do not clear either transition on a contradictory event.
+                    // Retaining the pending bit keeps the ID and backing fenced.
+                    state.contexts[slot].faulted = true;
+                    note_malformed_lifecycle_event(
+                        state,
+                        event,
+                        "sched-context-mode-done-state-mismatch",
+                    );
+                    return;
+                }
             };
             crate::log_trace!(
                 target: "gpgpu";
-                "intel/guc-submit: lifecycle complete=1 context_id={} transition={} mode_status=0x{:08X} action=0x{:04X}\n",
+                "intel/guc-submit: lifecycle complete=1 context_id={} transition={} runnable_state={} action=0x{:04X}\n",
                 context_id,
                 transition,
-                mode_status,
+                runnable_state,
                 event.action,
             );
         }
         INTEL_GUC_ACTION_DEREGISTER_CONTEXT_DONE => {
+            if event.payload_len != 1 || event.truncated() {
+                note_malformed_lifecycle_event(state, event, "deregister-context-done");
+                return;
+            }
             let Some(context_id) = event.payload(0) else {
                 note_malformed_lifecycle_event(state, event, "deregister-context-done");
                 return;
@@ -760,7 +812,13 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
                 return;
             };
             let context = state.contexts[slot];
-            if !context.registered || !context.pending_deregister {
+            if !context.registered
+                || !context.destroy_requested
+                || !context.pending_deregister
+                || context.enabled
+                || context.pending_enable
+                || context.pending_disable
+            {
                 note_malformed_lifecycle_event(state, event, "deregister-context-done-unexpected");
                 return;
             }
@@ -836,9 +894,12 @@ fn note_malformed_lifecycle_event(
     state.failures = state.failures.saturating_add(1);
     crate::log_error!(
         target: "gpgpu";
-        "intel/guc-submit: lifecycle event_valid=0 action=0x{:04X} payload_len={} reason={} action_on_error=retain-context-id-and-backing\n",
+        "intel/guc-submit: lifecycle event_valid=0 action=0x{:04X} payload_len={} truncated={} payload0=0x{:08X} payload1=0x{:08X} reason={} action_on_error=retain-context-id-and-backing\n",
         event.action,
         event.payload_len,
+        event.truncated() as u8,
+        event.payload(0).unwrap_or(u32::MAX),
+        event.payload(1).unwrap_or(u32::MAX),
         reason,
     );
 }
@@ -856,6 +917,22 @@ const fn generation_precedes(candidate: u32, current: u32) -> bool {
     candidate != 0 && current != 0 && distance != 0 && distance < (1u32 << 31)
 }
 
+/// GuC v70 SCHED_CONTEXT_MODE_DONE payload is `[context_id,
+/// runnable_state]`, where runnable state uses the same 0/1 values as the
+/// disable/enable request. A completion is useful only when exactly one local
+/// transition is pending and it agrees with the firmware state.
+const fn pending_mode_matches(
+    pending_enable: bool,
+    pending_disable: bool,
+    runnable_state: u32,
+) -> bool {
+    match runnable_state {
+        GUC_CONTEXT_ENABLE => pending_enable && !pending_disable,
+        GUC_CONTEXT_DISABLE => pending_disable && !pending_enable,
+        _ => false,
+    }
+}
+
 fn context_registry_invariants_hold(state: &GucSubmissionState) -> bool {
     state.contexts.iter().all(|context| {
         let mutually_exclusive = !(context.pending_enable && context.pending_disable)
@@ -863,10 +940,14 @@ fn context_registry_invariants_hold(state: &GucSubmissionState) -> bool {
                 && (context.pending_enable || context.pending_disable || context.enabled));
         let empty_is_inert = context.registered
             || (!context.enabled
+                && !context.destroy_requested
                 && !context.pending_enable
                 && !context.pending_disable
                 && !context.pending_deregister);
-        mutually_exclusive && empty_is_inert
+        let teardown_is_quarantined = (!context.destroy_requested || context.registered)
+            && (!context.pending_disable || context.destroy_requested)
+            && (!context.pending_deregister || context.destroy_requested);
+        mutually_exclusive && empty_is_inert && teardown_is_quarantined
     })
 }
 
@@ -884,6 +965,11 @@ pub(crate) fn scheduler_status() -> GucSchedulerStatus {
             .contexts
             .iter()
             .filter(|context| context.enabled)
+            .count(),
+        destroy_requested: state
+            .contexts
+            .iter()
+            .filter(|context| context.destroy_requested)
             .count(),
         pending_enable: state
             .contexts
@@ -925,6 +1011,7 @@ pub(crate) fn context_status() -> Vec<GucContextStatus> {
             priority: context.priority,
             policy_enqueued: context.policy_enqueued,
             enabled: context.enabled,
+            destroy_requested: context.destroy_requested,
             pending_enable: context.pending_enable,
             pending_disable: context.pending_disable,
             pending_deregister: context.pending_deregister,
@@ -1035,6 +1122,13 @@ const _: () = {
     assert!(generation_precedes(u32::MAX, 1));
     assert!(!generation_precedes(2, 1));
     assert!(!generation_precedes(1, 1));
+    assert!(pending_mode_matches(true, false, GUC_CONTEXT_ENABLE));
+    assert!(pending_mode_matches(false, true, GUC_CONTEXT_DISABLE));
+    assert!(!pending_mode_matches(true, false, GUC_CONTEXT_DISABLE));
+    assert!(!pending_mode_matches(false, true, GUC_CONTEXT_ENABLE));
+    assert!(!pending_mode_matches(false, false, GUC_CONTEXT_ENABLE));
+    assert!(!pending_mode_matches(true, true, GUC_CONTEXT_ENABLE));
+    assert!(!pending_mode_matches(true, false, 2));
 };
 
 fn program_context_priority(

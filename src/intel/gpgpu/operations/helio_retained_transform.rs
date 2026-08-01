@@ -69,6 +69,13 @@ pub(crate) const GPGPU_HELIO_DIAGNOSTIC_PREPARE: u32 = 0x4845_4C11;
 pub(crate) const GPGPU_HELIO_DIAGNOSTIC_TRANSFORM: u32 = 0x4845_4C12;
 pub(crate) const GPGPU_HELIO_DIAGNOSTIC_3D_HANDOFF: u32 = 0x4845_4C13;
 
+const _: () = {
+    assert!(
+        GPGPU_HELIO_MAX_ROWS as usize == trueos_helio_runtime::churn::MAX_RETAINED_TRANSFORM_ROWS
+    );
+    assert!(GPGPU_HELIO_MAX_ROWS <= GpgpuHelioRetainedTransform::MAX_COMPACT_SLOT);
+};
+
 /// Authenticated native artifact mapping for a caller-owned Render PPGTT.
 /// Render maps `phys..phys+mapped_bytes` at `gpu`; the encoder references that
 /// address as its instruction base without creating another GPU context.

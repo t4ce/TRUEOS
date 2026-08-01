@@ -334,11 +334,26 @@ fn init_required_guc_transport(dev: Dev) -> bool {
     let ctb_ready = self::guc_ctb::init_and_enable(dev);
     let registered =
         ctb_ready && crate::gpu::register_physical_device(&self::gpu_device::INTEL_PHYSICAL_GPU);
+    // Install every immutable GuC control window while GT bring-up still owns
+    // the global GGTT boundary. Consumer control setup then performs only
+    // private PPGTT work; it cannot introduce a launch-time global control-PTE
+    // rewrite beside an already resident client.
+    let rcs_controls = registered
+        .then(|| self::gpgpu::prewarm_direct_rcs_controls_ggtt(dev))
+        .unwrap_or_default();
+    let bcs0_control_ready = registered && self::blt::prewarm_guc_bcs0_control_ggtt(dev);
     crate::log!(
-        "intel/guc: admission accepted={} firmware_ready=1 ctb_ready={} physical_gpu_registered={} submission_owner=guc fallback=none next=context-register-on-first-submit\n",
+        "intel/guc: admission accepted={} firmware_ready=1 ctb_ready={} physical_gpu_registered={} rcs_controls={} system_rcs_control={} execution_rcs_control={} lfm25_rcs_control={} ui4_rcs_control={} scene_aabb_rcs_control={} bcs0_control={} control_mapping=boot-exact-once submission_owner=guc fallback=none next=context-register-on-first-submit\n",
         ctb_ready as u8,
         ctb_ready as u8,
-        registered as u8
+        registered as u8,
+        rcs_controls.accepted() as u8,
+        rcs_controls.system_service as u8,
+        rcs_controls.execution as u8,
+        rcs_controls.lfm25 as u8,
+        rcs_controls.ui4_compositor as u8,
+        rcs_controls.scene_aabb as u8,
+        bcs0_control_ready as u8,
     );
     ctb_ready
 }
@@ -921,15 +936,15 @@ fn init_physical_gt_once(dev: Dev) -> PhysicalGtBootReport {
 /// Read-only runtime admission for every RCS GuC client.
 ///
 /// Physical forcewake and global workarounds are established once during
-/// `init_once`.  A client may reject work if that contract was lost, but it
-/// must not repair shared registers underneath another resident context.
+/// `init_once`. The immutable boot report is the workaround authority; a
+/// client verifies only the retained physical forcewake acknowledgements and
+/// never reaches through Render warm state or repairs shared registers.
 pub(crate) fn physical_gt_ready(dev: Dev) -> bool {
     PHYSICAL_GT_BOOT_REPORT.get().is_some_and(|report| {
         report.owns(dev)
             && report.accepted()
             && mmio_read(dev, FORCEWAKE_ACK_RENDER) & FORCEWAKE_KERNEL != 0
             && mmio_read(dev, FORCEWAKE_ACK_GT) & FORCEWAKE_KERNEL != 0
-            && self::render::global_rcs_workarounds_ready(dev)
     })
 }
 

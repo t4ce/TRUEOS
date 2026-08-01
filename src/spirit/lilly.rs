@@ -17,6 +17,11 @@ const PNG_IHDR: &[u8; 4] = b"IHDR";
 const GPU_PAGE_BYTES: usize = 4096;
 const LILLY_EXECUTION_GPU_BASE: u64 = 0x3000_0000;
 const LILLY_EXECUTION_GPU_LIMIT: u64 = 0x4000_0000;
+const _: () = assert!(LILLY_EXECUTION_GPU_BASE.is_multiple_of(GPU_PAGE_BYTES as u64));
+const _: () = assert!(LILLY_EXECUTION_GPU_LIMIT.is_multiple_of(GPU_PAGE_BYTES as u64));
+const _: () = assert!(LILLY_EXECUTION_GPU_BASE < LILLY_EXECUTION_GPU_LIMIT);
+const _: () =
+    assert!(LILLY_EXECUTION_GPU_LIMIT <= crate::intel::gpgpu::DIRECT_RCS_PPGTT_LIMIT_BYTES);
 
 static LILLY_RESIDENT: Mutex<Option<LillyResidentAssets>> = Mutex::new(None);
 

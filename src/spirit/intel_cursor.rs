@@ -374,7 +374,7 @@ pub(super) fn spirit_cursor_arm(
 
     // Frame production owns CUR_BASE but never CUR_POS. CUR_BASE is
     // deliberately last: it arms CTL and the new surface for the next vblank
-    // without coupling motion to this render/flip cadence.
+    // without coupling motion to the frame/flip cadence.
     write_if_changed(dev, regs.buf_cfg, buf_cfg);
     write_if_changed(dev, regs.wm0, CUR_WM_LEVEL0_SPIRIT);
     write_if_changed(dev, regs.wm_trans, 0);
@@ -479,7 +479,7 @@ pub(super) fn spirit_cursor_retry_arm(flip: SpiritCursorFlip) -> Result<(), Spir
     Ok(())
 }
 
-/// Drop only the software ownership of a failed pending flip. The render task
+/// Drop only the software ownership of a failed pending flip. The frame task
 /// stops immediately afterward, performs no further cursor-register writes,
 /// and never reuses the failed back buffer.
 pub(super) fn spirit_cursor_abandon(flip: SpiritCursorFlip) {

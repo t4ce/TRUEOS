@@ -31,6 +31,10 @@ const INDICES_PER_SEGMENT: usize = 36;
 const FLOOR_VERTICES: usize = 4;
 const NATIVE_INSTANCE_COUNT: usize = SEGMENT_COUNT + 1;
 
+const _: () = {
+    assert!(NATIVE_INSTANCE_COUNT <= GpuRetainedTransformSeed::MAX_COMPACT_SLOT as usize);
+};
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Spec {
     pub camera: Camera,
@@ -301,7 +305,11 @@ impl Engine {
                 local_radius: libm::sqrtf(3.0),
                 previous_translation: self.previous[index],
                 draw_group: 0,
-                flags: INSTANCE_FLAG_CASTS_SHADOW | INSTANCE_FLAG_RECEIVES_SHADOW,
+                flags: GpuRetainedTransformSeed::pack_slot_and_flags(
+                    index as u32,
+                    INSTANCE_FLAG_CASTS_SHADOW | INSTANCE_FLAG_RECEIVES_SHADOW,
+                )
+                .ok_or(Error::InvalidPendulumScene)?,
             });
         }
 
@@ -320,7 +328,8 @@ impl Engine {
             local_radius: floor_radius / floor_max_scale,
             previous_translation: floor_center,
             draw_group: 1,
-            flags: INSTANCE_FLAG_RECEIVES_SHADOW,
+            flags: GpuRetainedTransformSeed::pack_slot_and_flags(0, INSTANCE_FLAG_RECEIVES_SHADOW)
+                .ok_or(Error::InvalidPendulumScene)?,
         });
 
         let group_counts: [u32; DRAW_GROUP_COUNT] = core::array::from_fn(|group| match group {
@@ -888,14 +897,23 @@ mod tests {
                 expected_first += template.capacity;
             }
             assert_eq!(expected_first, NATIVE_INSTANCE_COUNT as u32);
-            assert!(frame.seeds[..SEGMENT_COUNT].iter().all(|seed| {
-                seed.draw_group == 0
-                    && seed.rotation == [0.0, 0.0, 0.0, 1.0]
-                    && seed.local_radius == libm::sqrtf(3.0)
-            }));
+            assert!(
+                frame.seeds[..SEGMENT_COUNT]
+                    .iter()
+                    .enumerate()
+                    .all(|(slot, seed)| {
+                        seed.draw_group == 0
+                            && seed.compact_slot() == slot as u32
+                            && seed.instance_flags()
+                                == INSTANCE_FLAG_CASTS_SHADOW | INSTANCE_FLAG_RECEIVES_SHADOW
+                            && seed.rotation == [0.0, 0.0, 0.0, 1.0]
+                            && seed.local_radius == libm::sqrtf(3.0)
+                    })
+            );
             let floor = frame.seeds[SEGMENT_COUNT];
             assert_eq!(floor.draw_group, 1);
-            assert_eq!(floor.flags, INSTANCE_FLAG_RECEIVES_SHADOW);
+            assert_eq!(floor.compact_slot(), 0);
+            assert_eq!(floor.instance_flags(), INSTANCE_FLAG_RECEIVES_SHADOW);
             assert_eq!(floor.translation, floor.previous_translation);
             assert!(frame.camera.view_proj.iter().all(|value| value.is_finite()));
         }

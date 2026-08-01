@@ -54,7 +54,9 @@ fn submit_tenant_scene_aabb_rcs(
     }
 
     let (hwlrca_lo, hwlrca_hi) = guc_rcs_context_descriptor(state.gpu_va.context);
-    super::ggtt_invalidate(dev);
+    // `direct_rcs_map_state` installed and invalidated this immutable control
+    // window exactly once. Tenant PPGTT mappings are context-private and do
+    // not authorize another global GGTT invalidation here.
     core::sync::atomic::fence(Ordering::SeqCst);
     let token = match crate::intel::guc_submission::INTEL_GUC_SCHEDULER.register(
         dev,

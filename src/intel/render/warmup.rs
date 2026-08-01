@@ -470,7 +470,7 @@ pub(crate) fn init_global_rcs_workarounds_for_boot(dev: crate::intel::Dev) -> bo
     accepted
 }
 
-pub(crate) fn global_rcs_workarounds_ready(dev: crate::intel::Dev) -> bool {
+fn global_rcs_workarounds_ready(dev: crate::intel::Dev) -> bool {
     let cs_debug_ready =
         crate::intel::mmio_read(dev, RCS_CS_DEBUG_MODE1) & FF_DOP_CLOCK_GATE_DISABLE != 0;
     let raster_ready = !device_is_gfx125(dev.device_id)

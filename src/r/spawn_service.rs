@@ -738,13 +738,13 @@ fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
 
     let mut spawned_combos = 0usize;
     for fence in 0..crate::spirit::SPIRIT_WORKER_POOL_LIMIT {
-        let render_token = match crate::spirit::spirit_worker_task(fence as u8) {
+        let frame_token = match crate::spirit::spirit_worker_task(fence as u8) {
             Ok(token) => token,
             Err(error) if spawned_combos == 0 => return SpawnAttempt::Failed(error),
             Err(error) => {
                 crate::log_warn!(
                     target: "service";
-                    "trueos-spirit: render worker spawn failed fence={} error={:?}\n",
+                    "trueos-spirit: frame worker spawn failed fence={} error={:?}\n",
                     fence,
                     error,
                 );
@@ -764,7 +764,7 @@ fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
                 continue;
             }
         };
-        ap1_spawner.spawn(render_token);
+        ap1_spawner.spawn(frame_token);
         ap1_spawner.spawn(cursor_token);
         spawned_combos = spawned_combos.saturating_add(1);
     }
@@ -777,7 +777,7 @@ fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
             Err(error) => {
                 crate::log_warn!(
                     target: "service";
-                    "trueos-spirit: window selection task spawn failed error={:?} action=retain-render-and-cursor-workers\n",
+                    "trueos-spirit: window selection task spawn failed error={:?} action=retain-frame-and-cursor-workers\n",
                     error,
                 );
             }

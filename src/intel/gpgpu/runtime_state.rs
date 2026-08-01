@@ -41,6 +41,15 @@ static EXECUTION_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static LFM25_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static UI4_COMPOSITOR_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static SCENE_AABB_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
+// Global control-window PTEs are immutable for the lifetime of each state.
+// `Once<bool>` makes both success and failure irreversible: a live GuC client
+// can never trigger a second installation or repair a partial mapping in
+// place. Failed lanes are quarantined by `direct_rcs_map_state`.
+static DIRECT_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
+static EXECUTION_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
+static LFM25_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
+static UI4_COMPOSITOR_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
+static SCENE_AABB_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 static SCENE_AABB_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static SCENE_AABB_QUARANTINED: AtomicBool = AtomicBool::new(false);
 

@@ -1122,9 +1122,12 @@ fn stage_resident_churn_transform_secondary(
     let mut state =
         crate::intel::gpgpu::GpgpuHelioRetainedTransformStateBlob::new(batch_bytes, batch_gpu)
             .map_err(|_| "churn-transform-state")?;
+    let artifact = resident
+        .transform_artifact()
+        .ok_or("churn-transform-artifact")?;
     let encoded = crate::intel::gpgpu::encode_helio_retained_transform_secondary(
         &mut state,
-        resident.transform_artifact,
+        artifact,
         dispatch,
         GPU_VA_RESULT_BASE,
     )

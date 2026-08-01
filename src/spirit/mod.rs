@@ -5,7 +5,7 @@
 //! owns a double-buffered hardware surface pair and advances independently;
 //! Spirit intentionally has no multi-pipe/gang flip operation.
 //!
-//! Each frame also owns a two-bit producer latch. CPU and 3D-GPU releases are
+//! Each frame also owns a two-bit producer latch. CPU and GPGPU releases are
 //! upstream eligibility proofs; the selected surface is armed only when every
 //! configured bit has arrived. Intel CUR_SURFLIVE is the separate downstream
 //! proof that completes the public Spirit fence.
@@ -903,7 +903,7 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
     }
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: cursor task online worker={} fence={} pipe={} carrier_slot={} expected_carrier_slot={} execution=exclusive-latest-state register_owner=cur-pos render_loop=decoupled ui4_cursor_path=Spirit/Lilly-vcursor-tagged\n",
+        "trueos-spirit: cursor task online worker={} fence={} pipe={} carrier_slot={} expected_carrier_slot={} execution=exclusive-latest-state register_owner=cur-pos frame_loop=decoupled ui4_cursor_path=Spirit/Lilly-vcursor-tagged\n",
         worker_index,
         id.index(),
         pipe_name(id),

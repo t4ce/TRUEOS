@@ -3,7 +3,7 @@
 //
 // The pass deliberately never touches vertex or index data. It expands one
 // compact, positive-scale quaternion transform into Helio's 208-byte
-// GpuInstanceData ABI, compacts enabled instance IDs into fixed per-draw
+// GpuInstanceData ABI, scatters instance IDs into fixed per-draw compact
 // slices, and writes WGPU's exact 20-byte DrawIndexedIndirectArgs records.
 // The following vertex draw can therefore consume every output in-place.
 //
@@ -27,28 +27,13 @@ static inline void helio_store_float(__global uint *dst, uint word, float value)
     dst[word] = as_uint(value);
 }
 
-static inline uint helio_reserve_draw_slot(
-    __global volatile uint *instance_count,
-    uint capacity)
-{
-    uint observed = *instance_count;
-    while (observed < capacity) {
-        uint prior = atomic_cmpxchg(instance_count, observed, observed + 1u);
-        if (prior == observed) {
-            return observed;
-        }
-        observed = prior;
-    }
-    return 0xFFFFFFFFu;
-}
-
 __attribute__((intel_reqd_sub_group_size(16)))
 __kernel void helio_retained_transform(
     __global const uint *transforms,
     __global const uint *draw_templates,
     __global uint *instances,
     __global uint *compacted_indices,
-    __global volatile uint *indirect_args,
+    __global uint *indirect_args,
     uint row_count,
     uint draw_count,
     uint mode)
@@ -64,7 +49,7 @@ __kernel void helio_retained_transform(
         uint src = item * HELIO_DRAW_TEMPLATE_WORDS;
         uint dst = item * HELIO_INDIRECT_WORDS;
         indirect_args[dst + 0u] = draw_templates[src + 0u];
-        indirect_args[dst + 1u] = 0u;
+        indirect_args[dst + 1u] = draw_templates[src + 4u];
         indirect_args[dst + 2u] = draw_templates[src + 1u];
         indirect_args[dst + 3u] = draw_templates[src + 2u];
         indirect_args[dst + 4u] = draw_templates[src + 3u];
@@ -76,8 +61,9 @@ __kernel void helio_retained_transform(
 
     // Transform words:
     //   center.xyz, scale.xyz, rotation quaternion.xyzw, local_radius,
-    //   previous_center.xyz, draw_group, flags. Mesh/material IDs are retained
-    //   in the immutable draw template because they are constant per group.
+    //   previous_center.xyz, draw_group, packed slot/flags. The high 16 bits
+    //   carry a producer-assigned compact slot and the low 16 bits carry
+    //   instance flags. Mesh/material IDs remain in the immutable template.
     uint row = item;
     uint src = row * HELIO_TRANSFORM_WORDS;
     uint draw = transforms[src + 14u];
@@ -115,10 +101,10 @@ __kernel void helio_retained_transform(
     }
 
     uint draw_src = draw * HELIO_DRAW_TEMPLATE_WORDS;
-    uint draw_dst = draw * HELIO_INDIRECT_WORDS;
     uint capacity = draw_templates[draw_src + 4u];
-    uint slot = helio_reserve_draw_slot(&indirect_args[draw_dst + 1u], capacity);
-    if (slot == 0xFFFFFFFFu) {
+    uint packed_slot_flags = transforms[src + 15u];
+    uint slot = packed_slot_flags >> 16;
+    if (slot >= capacity) {
         return;
     }
 
@@ -197,7 +183,7 @@ __kernel void helio_retained_transform(
         uint packed_mesh_material = draw_templates[draw_src + 5u];
         instances[dst + 48u] = packed_mesh_material & 0xFFFFu;
         instances[dst + 49u] = packed_mesh_material >> 16;
-        instances[dst + 50u] = transforms[src + 15u];
+        instances[dst + 50u] = packed_slot_flags & 0xFFFFu;
         instances[dst + 51u] = 0xFFFFFFFFu;
 
         uint first_instance = draw_templates[draw_src + 3u];

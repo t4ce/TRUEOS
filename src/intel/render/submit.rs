@@ -68,6 +68,13 @@ fn submit_warm_render_batch(
     // encoder and retain it until GuC has saved HEAD at the published tail;
     // the scene marker alone is not ownership of the HWLRCA cache line.
     let render_client = crate::gpu::vgpu::KernelClient::Render;
+    // The complete Render0 GGTT control window is installed and invalidated
+    // once by `init_fixed_render_ggtt_for_boot`. Runtime scheduling may update
+    // DMA contents after exact saved-HEAD ownership, but must never touch the
+    // global PTE/cache-control boundary again.
+    if !ensure_smoke_buffers_mapped(dev, warm) {
+        return false;
+    }
     let mut runtime = RENDER_SUBMIT_RUNTIME.lock();
     let old_ring_tail_bytes = runtime.ring_tail_bytes;
     if runtime.context_initialized {
@@ -155,7 +162,6 @@ fn submit_warm_render_batch(
     // publish only TAIL after saved-HEAD ownership; no runtime path rebuilds
     // or CLFLUSHes all 88 KiB of GuC-owned context storage.
     log_lrc_ring_image(warm, submit_name);
-    crate::intel::ggtt_invalidate(dev);
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     let descriptor = crate::gpu::physical::PhysicalContextDescriptor {
         engine: crate::gpu::physical::PhysicalEngineId::RCS0,

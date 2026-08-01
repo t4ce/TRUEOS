@@ -290,20 +290,25 @@ fn resident_helio_transform_artifact()
 /// Persistent GPU resources for the artifact-native Churn forward pass.
 ///
 /// Geometry and shader bytes are immutable after this cold-path owner is
-/// created. The GPU-transform path touches only camera, compact transform
-/// seeds, and twelve prefix-counted draw templates; one ordered compute
-/// secondary expands those inputs into the existing instance, compacted-index,
-/// and indexed-indirect buffers before the draw secondaries consume them.
+/// created. The CPU-expanded instance/compacted/indirect buffers remain the
+/// baseline native path. Retained-transform resources are an optional
+/// acceleration bundle so artifact admission, mapping, or allocation failure
+/// cannot make the artifact-native VS/PS path unavailable.
+struct ResidentChurnTransform {
+    seeds: ResidentRenderBuffer,
+    draw_templates: ResidentRenderBuffer,
+    artifact: crate::intel::gpgpu::GpgpuHelioRetainedTransformArtifactMapping,
+    row_count: AtomicU32,
+}
+
 pub(crate) struct ResidentChurnForward {
     geometry: ResidentRenderBuffer,
     camera: ResidentRenderBuffer,
-    transform_seeds: ResidentRenderBuffer,
-    draw_templates: ResidentRenderBuffer,
     instances: ResidentRenderBuffer,
     compacted_indices: ResidentRenderBuffer,
     indirect_args: ResidentRenderBuffer,
-    transform_artifact: crate::intel::gpgpu::GpgpuHelioRetainedTransformArtifactMapping,
-    transform_row_count: AtomicU32,
+    transform: Option<ResidentChurnTransform>,
+    transform_unavailable_reason: Option<&'static str>,
     pipeline: crate::intel::shader::TrianglePipeline,
     native_vf: TriangleNativeDrawContract,
     front_end_contract: TriangleFrontEndContract,
@@ -328,28 +333,44 @@ impl ResidentChurnForward {
         self.index_count
     }
 
+    pub(crate) const fn retained_transform_available(&self) -> bool {
+        self.transform.is_some()
+    }
+
+    pub(crate) const fn retained_transform_unavailable_reason(&self) -> Option<&'static str> {
+        self.transform_unavailable_reason
+    }
+
+    pub(crate) fn disable_retained_transform_dispatch(&self) {
+        if let Some(transform) = self.transform.as_ref() {
+            transform.row_count.store(0, Ordering::Release);
+        }
+    }
+
     fn transform_dispatch(
         &self,
     ) -> Option<crate::intel::gpgpu::GpgpuHelioRetainedTransformDispatch> {
-        let row_count = self.transform_row_count.load(Ordering::Acquire);
+        let transform = self.transform.as_ref()?;
+        let row_count = transform.row_count.load(Ordering::Acquire);
         if row_count == 0 {
             return None;
         }
-        Some(self.transform_dispatch_for_rows(row_count))
+        self.transform_dispatch_for_rows(row_count)
     }
 
     fn transform_dispatch_for_rows(
         &self,
         row_count: u32,
-    ) -> crate::intel::gpgpu::GpgpuHelioRetainedTransformDispatch {
-        crate::intel::gpgpu::GpgpuHelioRetainedTransformDispatch {
+    ) -> Option<crate::intel::gpgpu::GpgpuHelioRetainedTransformDispatch> {
+        let transform = self.transform.as_ref()?;
+        Some(crate::intel::gpgpu::GpgpuHelioRetainedTransformDispatch {
             transforms: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
-                self.transform_seeds.gpu_base(),
-                self.transform_seeds.storage_bytes(),
+                transform.seeds.gpu_base(),
+                transform.seeds.storage_bytes(),
             ),
             draw_templates: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
-                self.draw_templates.gpu_base(),
-                self.draw_templates.storage_bytes(),
+                transform.draw_templates.gpu_base(),
+                transform.draw_templates.storage_bytes(),
             ),
             instances: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
                 self.instances.gpu_base(),
@@ -365,7 +386,13 @@ impl ResidentChurnForward {
             ),
             row_count,
             draw_count: trueos_helio_runtime::churn::DRAW_GROUP_COUNT as u32,
-        }
+        })
+    }
+
+    fn transform_artifact(
+        &self,
+    ) -> Option<crate::intel::gpgpu::GpgpuHelioRetainedTransformArtifactMapping> {
+        self.transform.as_ref().map(|transform| transform.artifact)
     }
 }
 

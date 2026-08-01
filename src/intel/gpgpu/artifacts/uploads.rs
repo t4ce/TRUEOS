@@ -565,7 +565,11 @@ pub(crate) fn upload_lab256_multiphase_kernel() -> Option<UploadedKernelArtifact
         return Some(upload);
     }
     let dev = super::claimed_device()?;
-    let upload = upload_artifact(dev, LAB256_MULTIPHASE_ADLS_ARTIFACT, LAB256_MULTIPHASE_ADLS_GPU)?;
+    let upload = upload_ppgtt_resident_artifact(
+        dev,
+        LAB256_MULTIPHASE_ADLS_ARTIFACT,
+        LAB256_MULTIPHASE_ADLS_GPU,
+    )?;
     *LAB256_MULTIPHASE_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
@@ -575,7 +579,7 @@ pub(crate) fn upload_spirit_vfx_background_rgba8_kernel() -> Option<UploadedKern
         return Some(upload);
     }
     let dev = super::claimed_device()?;
-    let upload = upload_artifact(
+    let upload = upload_ppgtt_resident_artifact(
         dev,
         SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_ARTIFACT,
         SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU,
@@ -589,7 +593,7 @@ pub(crate) fn upload_spirit_vfx_sprite_rgba8_kernel() -> Option<UploadedKernelAr
         return Some(upload);
     }
     let dev = super::claimed_device()?;
-    let upload = upload_artifact(
+    let upload = upload_ppgtt_resident_artifact(
         dev,
         SPIRIT_VFX_SPRITE_RGBA8_ADLS_ARTIFACT,
         SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU,
@@ -678,7 +682,13 @@ pub(crate) fn reload_known_kernel_artifact(
     };
 
     let reusable_upload = *slot.upload.lock();
-    let address_space = if slot.artifact.name == HELIO_RETAINED_TRANSFORM_KERNEL_NAME {
+    let address_space = if matches!(
+        slot.artifact.name,
+        HELIO_RETAINED_TRANSFORM_KERNEL_NAME
+            | LAB256_MULTIPHASE_KERNEL_NAME
+            | SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME
+            | SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME
+    ) {
         GpgpuArtifactAddressSpace::CallerPpgtt
     } else {
         GpgpuArtifactAddressSpace::GlobalGgtt

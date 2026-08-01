@@ -509,6 +509,9 @@ fn direct_rcs_submit_batch_with_runtime_inner(
     client: crate::gpu::vgpu::KernelClient,
     allow_queued: bool,
 ) -> DirectRcsSubmitAttempt {
+    if !direct_rcs_control_ggtt_ready(state) {
+        return DirectRcsSubmitAttempt::Rejected;
+    }
     if !allow_queued && runtime.pending.is_some() {
         return DirectRcsSubmitAttempt::Rejected;
     }
@@ -586,7 +589,6 @@ fn direct_rcs_submit_batch_with_runtime_inner(
         direct_rcs_write_lrc_ring_tail(state, ring_tail_bytes as u32);
     }
     let (context_desc_lo, context_desc_hi) = guc_rcs_context_descriptor(state.gpu_va.context);
-    super::ggtt_invalidate(dev);
     core::sync::atomic::fence(Ordering::SeqCst);
     let descriptor = crate::gpu::physical::PhysicalContextDescriptor {
         engine: crate::gpu::physical::PhysicalEngineId::RCS0,

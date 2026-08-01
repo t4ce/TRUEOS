@@ -85,6 +85,7 @@ fn direct_rcs_encode_spirit_vfx_batch(
             upload.bin_sha256 == SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN_SHA256
                 && upload.gpu == SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU
                 && upload.bytes == SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len()
+                && upload.address_space == GpgpuArtifactAddressSpace::CallerPpgtt
         }
         None => true,
     };
@@ -92,6 +93,7 @@ fn direct_rcs_encode_spirit_vfx_batch(
         || sprite_upload.bin_sha256 != SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN_SHA256
         || sprite_upload.gpu != SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU
         || sprite_upload.bytes != SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN.len()
+        || sprite_upload.address_space != GpgpuArtifactAddressSpace::CallerPpgtt
         || dst.width != SPIRIT_VFX_SIZE
         || dst.height != SPIRIT_VFX_SIZE
         || dst.pitch_bytes < SPIRIT_VFX_SIZE * 4
