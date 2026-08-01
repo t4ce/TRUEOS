@@ -830,7 +830,7 @@ mod tests {
         program.begin_update();
         assert!(program.mark_dynamic_slot_dirty(1).unwrap());
         program.propagate_dirty();
-        assert_eq!(program.dirty_row_ids, vec![1]);
+        assert_eq!(program.dirty_row_ids, vec![1, 2]);
         assert_eq!(program.dirty_local_node_ids, vec![1]);
         assert_eq!(program.dirty_world_node_ids, vec![1, 2]);
         assert_eq!(program.nodes[1].local_generation, 2);

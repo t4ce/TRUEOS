@@ -1,19 +1,45 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TerminalHandoffOwner(u32);
+pub(crate) struct TerminalHandoffOwner {
+    raw: u32,
+    local_session_generation: u64,
+}
 
 impl TerminalHandoffOwner {
     pub(crate) const STREAM_KIND: u32 = 1 << 31;
 
     pub(crate) const fn blueprint(vm_id: u8) -> Self {
-        Self(vm_id as u32 + 1)
+        Self {
+            raw: vm_id as u32 + 1,
+            local_session_generation: 0,
+        }
     }
 
     pub(crate) const fn stream(session_id: u32) -> Self {
-        Self(Self::STREAM_KIND | (session_id & !Self::STREAM_KIND))
+        Self {
+            raw: Self::STREAM_KIND | (session_id & !Self::STREAM_KIND),
+            local_session_generation: 0,
+        }
+    }
+
+    /// Bind this owner token to one incarnation of a recyclable local shell.
+    /// Net-shell ownership remains transport-global and uses generation zero.
+    pub(crate) const fn for_local_session(self, generation: u64) -> Self {
+        Self {
+            raw: self.raw,
+            local_session_generation: generation,
+        }
+    }
+
+    pub(crate) const fn local_session_generation(self) -> Option<u64> {
+        if self.local_session_generation == 0 {
+            None
+        } else {
+            Some(self.local_session_generation)
+        }
     }
 
     pub(crate) const fn raw(self) -> u32 {
-        self.0
+        self.raw
     }
 }
 

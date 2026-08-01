@@ -1264,11 +1264,7 @@ pub fn status() -> HvStatus {
     }
 }
 
-pub fn start(
-    vm_id: u8,
-    spawner: &Spawner,
-    stack_mb: Option<usize>,
-) -> Result<(), StartError> {
+pub fn start(vm_id: u8, spawner: &Spawner, stack_mb: Option<usize>) -> Result<(), StartError> {
     start_with_mode(vm_id, spawner, VmBootMode::Hull, stack_mb, None)
 }
 

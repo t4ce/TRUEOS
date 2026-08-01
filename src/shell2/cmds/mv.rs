@@ -253,20 +253,14 @@ async fn run_move(
         let src_dir = match normalize_path(args[2].as_str(), true) {
             Ok(path) => path,
             Err(err) => {
-                print_matrix_target_line(
-                    &output_target,
-                    alloc::format!("{name}: {err}").as_str(),
-                );
+                print_matrix_target_line(&output_target, alloc::format!("{name}: {err}").as_str());
                 return;
             }
         };
         let dst_dir = match normalize_path(args[3].as_str(), true) {
             Ok(path) => path,
             Err(err) => {
-                print_matrix_target_line(
-                    &output_target,
-                    alloc::format!("{name}: {err}").as_str(),
-                );
+                print_matrix_target_line(&output_target, alloc::format!("{name}: {err}").as_str());
                 return;
             }
         };
@@ -312,20 +306,14 @@ async fn run_move(
     let src = match normalize_path(args[0].as_str(), false) {
         Ok(path) => path,
         Err(err) => {
-            print_matrix_target_line(
-                &output_target,
-                alloc::format!("{name}: {err}").as_str(),
-            );
+            print_matrix_target_line(&output_target, alloc::format!("{name}: {err}").as_str());
             return;
         }
     };
     let mut dst = match normalize_path(args[1].as_str(), true) {
         Ok(path) => path,
         Err(err) => {
-            print_matrix_target_line(
-                &output_target,
-                alloc::format!("{name}: {err}").as_str(),
-            );
+            print_matrix_target_line(&output_target, alloc::format!("{name}: {err}").as_str());
             return;
         }
     };
@@ -371,10 +359,7 @@ async fn run_move(
             );
         }
         Err(err) => {
-            print_matrix_target_line(
-                &output_target,
-                alloc::format!("{name}: {:?}", err).as_str(),
-            );
+            print_matrix_target_line(&output_target, alloc::format!("{name}: {:?}", err).as_str());
         }
     }
 }

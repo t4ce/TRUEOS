@@ -513,7 +513,7 @@ fn put_stage(bytes: &mut [u8], offset: usize, stage: u16, code: &[u8], entry: &[
     put_u16(bytes, offset + 2, 8);
     put_u32(bytes, offset + 4, code.len() as u32);
     put_u32(bytes, offset + 12, 64);
-    put_u16(bytes, offset + 20, 2);
+    put_u16(bytes, offset + 20, if stage == 1 { 2 } else { 4 });
     put_u16(bytes, offset + 22, 128);
     put_u16(bytes, offset + 24, 64);
     put_u16(bytes, offset + 26, if stage == 1 { 4 } else { 1 });

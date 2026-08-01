@@ -118,19 +118,14 @@ fn with_output_scope_lease<R>(
     })
 }
 
-fn with_matrix_target_lease<R>(
-    target: &MatrixTarget,
-    operation: impl FnOnce() -> R,
-) -> Option<R> {
+fn with_matrix_target_lease<R>(target: &MatrixTarget, operation: impl FnOnce() -> R) -> Option<R> {
     if (target.output_mask & OUTPUT_LOCAL_MASK) == 0 {
         return Some(operation());
     }
     let generation = target.local_session_generation?;
-    backends::session_pool::with_generation_for_output_mask(
-        target.output_mask,
-        generation,
-        |_| operation(),
-    )
+    backends::session_pool::with_generation_for_output_mask(target.output_mask, generation, |_| {
+        operation()
+    })
 }
 
 fn with_matrix_target_geometry<R>(
@@ -560,18 +555,38 @@ pub(crate) fn activate_net_shell_frontend_view(cols: usize, rows: usize) {
     }
 }
 
-pub(crate) fn configure_local_shell_session_view(index: usize, cols: usize, rows: usize) {
+pub(crate) fn configure_local_shell_session_view(
+    index: usize,
+    generation: u64,
+    cols: usize,
+    rows: usize,
+) {
     let output_mask = local_shell_session_output_mask(index);
     if output_mask != 0 {
-        let _ = apply_reported_terminal_size(output_mask, cols, rows);
+        let _ = backends::session_pool::with_generation_for_output_mask(
+            output_mask,
+            generation,
+            |_| apply_reported_terminal_size(output_mask, cols, rows),
+        );
     }
 }
 
-pub(crate) fn initialize_local_shell_session_view(index: usize, cols: usize, rows: usize) {
+pub(crate) fn initialize_local_shell_session_view(
+    index: usize,
+    generation: u64,
+    cols: usize,
+    rows: usize,
+) {
     let output_mask = local_shell_session_output_mask(index);
     if output_mask != 0 {
-        let _ = matrix::switch_active_slot(output_mask, "");
-        let _ = apply_reported_terminal_size(output_mask, cols, rows);
+        let _ = backends::session_pool::with_generation_for_output_mask(
+            output_mask,
+            generation,
+            |_| {
+                let _ = matrix::switch_active_slot(output_mask, "");
+                let _ = apply_reported_terminal_size(output_mask, cols, rows);
+            },
+        );
     }
 }
 
@@ -840,11 +855,7 @@ pub(crate) fn claim_matrix_target_for_app_slot_selected(
         matrix_target_from_slot_id(
             source.output_mask,
             source.local_session_generation,
-            matrix::claim_available_app_slot_selected(
-                source.output_mask,
-                requested,
-                app_label,
-            ),
+            matrix::claim_available_app_slot_selected(source.output_mask, requested, app_label),
         )
     })
     .unwrap_or_else(|| source.clone())
@@ -918,29 +929,17 @@ pub(crate) fn matrix_targets_same_slot_lifetime(left: &MatrixTarget, right: &Mat
 }
 
 pub(crate) fn bind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
-    let _ = matrix::bind_live_slot_vm(
-        &target.slot_id,
-        target.slot_lifetime_generation,
-        vm_id,
-        false,
-    );
+    let _ =
+        matrix::bind_live_slot_vm(&target.slot_id, target.slot_lifetime_generation, vm_id, false);
 }
 
 pub(crate) fn bind_matrix_target_vm_input(target: &MatrixTarget, vm_id: u8) {
-    let _ = matrix::bind_live_slot_vm(
-        &target.slot_id,
-        target.slot_lifetime_generation,
-        vm_id,
-        true,
-    );
+    let _ =
+        matrix::bind_live_slot_vm(&target.slot_id, target.slot_lifetime_generation, vm_id, true);
 }
 
 pub(crate) fn unbind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
-    let _ = matrix::unbind_live_slot_vm(
-        &target.slot_id,
-        target.slot_lifetime_generation,
-        vm_id,
-    );
+    let _ = matrix::unbind_live_slot_vm(&target.slot_id, target.slot_lifetime_generation, vm_id);
 }
 
 pub(crate) fn set_matrix_target_app_label(target: &MatrixTarget, label: &str) {
@@ -1045,7 +1044,22 @@ pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> us
         return 0;
     }
 
-    if (target.output_mask & OUTPUT_LOCAL_MASK) != 0 {
+    if (target.output_mask & (OUTPUT_NET_TCP_MASK | OUTPUT_CONTAINER_MASK)) != 0 {
+        let io: &'static dyn ShellIo2 = if (target.output_mask & OUTPUT_NET_TCP_MASK) != 0 {
+            &NET_TCP_SHELL_BACKEND
+        } else {
+            &CONTAINER_SHELL_BACKEND
+        };
+
+        match core::str::from_utf8(bytes) {
+            Ok(text) => io.raw_write_str(text),
+            Err(_) => {
+                for &b in bytes {
+                    io.raw_write_byte(b);
+                }
+            }
+        }
+    } else if (target.output_mask & OUTPUT_LOCAL_MASK) != 0 {
         let Some(generation) = target.local_session_generation else {
             return bytes.len();
         };
@@ -1054,24 +1068,6 @@ pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> us
             generation,
             bytes,
         );
-        return bytes.len();
-    }
-
-    let io: &'static dyn ShellIo2 = if (target.output_mask & OUTPUT_NET_TCP_MASK) != 0 {
-        &NET_TCP_SHELL_BACKEND
-    } else if (target.output_mask & OUTPUT_CONTAINER_MASK) != 0 {
-        &CONTAINER_SHELL_BACKEND
-    } else {
-        return bytes.len();
-    };
-
-    match core::str::from_utf8(bytes) {
-        Ok(text) => io.raw_write_str(text),
-        Err(_) => {
-            for &b in bytes {
-                io.raw_write_byte(b);
-            }
-        }
     }
     bytes.len()
 }

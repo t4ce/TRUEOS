@@ -31,23 +31,23 @@ pub(crate) const FONT_GPU_OUTLINE_OP_WORDS: usize = 8;
 // labels. Keep the original full-field vertex count at the graphics boundary.
 pub(crate) const FONT_CLIP_FIELD_VERTICES: usize = 6 * 3 * 3;
 
-const EMBEDDED_FONTS: [EmbeddedFontSpec; 1] = [EmbeddedFontSpec {
-    name: "font",
-    file_name: "L_10646.TTF",
-    bytes: include_bytes!("../../tools/fnt/L_10646.TTF"),
-}];
-const TRUEOSFS_FONTS: [TrueosFsFontSpec; 2] = [
-    TrueosFsFontSpec {
+const EMBEDDED_FONTS: [EmbeddedFontSpec; 2] = [
+    EmbeddedFontSpec {
+        name: "font",
+        file_name: "L_10646.TTF",
+        bytes: include_bytes!("../../tools/fnt/L_10646.TTF"),
+    },
+    EmbeddedFontSpec {
         name: "inconsolata",
         file_name: "Inconsolata-Regular.ttf",
-        path: "fonts/Inconsolata-Regular.ttf",
-    },
-    TrueosFsFontSpec {
-        name: "noto-sans-sc",
-        file_name: "NotoSansSC[wght].ttf",
-        path: "fonts/NotoSansSC[wght].ttf",
+        bytes: include_bytes!("../../tools/fnt/Inconsolata-Regular.ttf"),
     },
 ];
+const TRUEOSFS_FONTS: [TrueosFsFontSpec; 1] = [TrueosFsFontSpec {
+    name: "noto-sans-sc",
+    file_name: "NotoSansSC[wght].ttf",
+    path: "fonts/NotoSansSC[wght].ttf",
+}];
 const TRUEOSFS_FONT_HEARTBEAT_SECS: u64 = 30;
 const FONT_WARM_POOL_SIZE: usize = 2;
 const FONT_WARM_JOB_COUNT: usize = 3;
@@ -66,8 +66,8 @@ enum FontWarmJob {
 // These are the complete, deliberately hardcoded TTF warm jobs known at boot.
 const FONT_WARM_JOBS: [FontWarmJob; FONT_WARM_JOB_COUNT] = [
     FontWarmJob::Embedded(0),
+    FontWarmJob::Embedded(1),
     FontWarmJob::TrueosFs(0),
-    FontWarmJob::TrueosFs(1),
 ];
 
 #[derive(Clone, Copy)]

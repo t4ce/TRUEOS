@@ -881,11 +881,7 @@ fn emit_table_row(io: &'static dyn ShellBackend2, cols: &[Column], cells: &[&str
 }
 
 fn emit_table_header_to_target(target: &MatrixTarget, cols: &[Column]) {
-    emit_table_row_to_target(
-        target,
-        cols,
-        &cols.iter().map(|col| col.header).collect::<Vec<_>>(),
-    );
+    emit_table_row_to_target(target, cols, &cols.iter().map(|col| col.header).collect::<Vec<_>>());
     let sep = cols
         .iter()
         .map(|col| "-".repeat(col.width))

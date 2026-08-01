@@ -16,11 +16,7 @@ const TABLE_HEADERS: [&str; 8] = [
 const ARCHIVE_HEADERS: [&str; 4] = ["#", "Size", "CRC", "Name"];
 const ARCHIVE_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 
-fn run_lsd(
-    target: &MatrixTarget,
-    args: Vec<String>,
-    width: usize,
-) -> trueos_io::Result<()> {
+fn run_lsd(target: &MatrixTarget, args: Vec<String>, width: usize) -> trueos_io::Result<()> {
     crate::r::io::env::with_launch_context_console_and_fs_root(
         args.clone(),
         BTreeMap::new(),
@@ -119,11 +115,7 @@ fn parse_args(rest: &str) -> Result<Vec<String>, &'static str> {
     Ok(args)
 }
 
-fn run_lsd_table(
-    target: &MatrixTarget,
-    args: Vec<String>,
-    width: usize,
-) -> trueos_io::Result<()> {
+fn run_lsd_table(target: &MatrixTarget, args: Vec<String>, width: usize) -> trueos_io::Result<()> {
     let listings = trueos_lsd::table_listings(args.as_slice())?;
     let multiple = listings.len() > 1;
     let table = TlbTable::with_width(&TABLE_HEADERS, width)
@@ -268,10 +260,7 @@ fn run_submitted(target: &MatrixTarget, width: usize, rest: &str) {
     if let Err(err) = result {
         if err.kind() == trueos_io::ErrorKind::NotFound {
             let path = display_path.as_deref().unwrap_or(".");
-            print_matrix_target_line(
-                target,
-                alloc::format!("lsd: {path}: not found").as_str(),
-            );
+            print_matrix_target_line(target, alloc::format!("lsd: {path}: not found").as_str());
         } else {
             print_matrix_target_line(target, alloc::format!("lsd: {}", err).as_str());
         }

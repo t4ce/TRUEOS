@@ -7,6 +7,9 @@
 //! transforms are nearest/asymmetric upsampling by 2 or 300 and
 //! linear/half-pixel downsampling or upsampling by 300. Encoding the scales as
 //! an enum avoids rebuilding dynamic float shape policy inside the kernel.
+//! ORT nevertheless routes rank-three linear Resize through its trilinear
+//! implementation, so the identity batch/channel axes remain explicit in the
+//! arithmetic below.
 
 use core::mem::size_of;
 
@@ -192,22 +195,84 @@ impl ResizePlan {
                 let source = position / self.scale.factor();
                 finite_input(input[input_base + source])?
             }
-            ResizeMode::LinearHalfPixel => {
-                let original = (position as f32 + 0.5) / self.scale.as_f32() - 0.5;
-                let floor = libm::floorf(original);
-                let weight = original - floor;
-                let left = clamp_index(floor as isize, self.input_len);
-                let right = clamp_index(floor as isize + 1, self.input_len);
-                let left_value = finite_input(input[input_base + left])?;
-                let right_value = finite_input(input[input_base + right])?;
-                left_value * (1.0 - weight) + right_value * weight
-            }
+            ResizeMode::LinearHalfPixel => self.linear_trilinear_sample(input, plane, position)?,
         };
         if value.is_finite() {
             Ok(value)
         } else {
             Err(Error::NonFiniteOutput)
         }
+    }
+
+    fn linear_trilinear_sample(
+        self,
+        input: &[f32],
+        plane: usize,
+        position: usize,
+    ) -> Result<f32, Error> {
+        // ORT treats a rank-three [B,C,L] input as [D,H,W] and executes the
+        // literal trilinear expression even though the B and C scales are 1.
+        // At the final coordinate of either identity axis its two indices are
+        // equal and ORT assigns both distances 0.5, duplicating terms. Preserve
+        // the exact eight-term source and evaluation order: cancellation can
+        // otherwise change the result by one ULP before a later quantizer.
+        let batch = plane / self.channels;
+        let channel = plane % self.channels;
+        let original = (position as f32 + 0.5) / self.scale.as_f32() - 0.5;
+        let z = linear_axis(batch as f32, self.batch);
+        let y = linear_axis(channel as f32, self.channels);
+        let x = linear_axis(original, self.input_len);
+
+        let offset = |batch: usize, channel: usize, position: usize| {
+            (batch * self.channels + channel) * self.input_len + position
+        };
+        let x111 = finite_input(input[offset(z.lower, y.lower, x.lower)])?;
+        let x211 = finite_input(input[offset(z.lower, y.lower, x.upper)])?;
+        let x121 = finite_input(input[offset(z.lower, y.upper, x.lower)])?;
+        let x221 = finite_input(input[offset(z.lower, y.upper, x.upper)])?;
+        let x112 = finite_input(input[offset(z.upper, y.lower, x.lower)])?;
+        let x212 = finite_input(input[offset(z.upper, y.lower, x.upper)])?;
+        let x122 = finite_input(input[offset(z.upper, y.upper, x.lower)])?;
+        let x222 = finite_input(input[offset(z.upper, y.upper, x.upper)])?;
+
+        let term111 = x.to_upper * y.to_upper * z.to_upper * x111;
+        let term211 = x.to_lower * y.to_upper * z.to_upper * x211;
+        let term121 = x.to_upper * y.to_lower * z.to_upper * x121;
+        let term221 = x.to_lower * y.to_lower * z.to_upper * x221;
+        let term112 = x.to_upper * y.to_upper * z.to_lower * x112;
+        let term212 = x.to_lower * y.to_upper * z.to_lower * x212;
+        let term122 = x.to_upper * y.to_lower * z.to_lower * x122;
+        let term222 = x.to_lower * y.to_lower * z.to_lower * x222;
+        Ok(term111 + term211 + term121 + term221 + term112 + term212 + term122 + term222)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LinearAxis {
+    lower: usize,
+    upper: usize,
+    // ORT names these distances d*1 and d*2. The distance to the upper
+    // coordinate weights the lower sample and vice versa.
+    to_lower: f32,
+    to_upper: f32,
+}
+
+fn linear_axis(original: f32, length: usize) -> LinearAxis {
+    let last = length - 1;
+    let clamped = original.min(last as f32).max(0.0);
+    let lower = (clamped as usize).min(last);
+    let upper = if lower == last { last } else { lower + 1 };
+    let mut to_lower = (clamped - lower as f32).abs();
+    let mut to_upper = (clamped - upper as f32).abs();
+    if lower == upper {
+        to_lower = 0.5;
+        to_upper = 0.5;
+    }
+    LinearAxis {
+        lower,
+        upper,
+        to_lower,
+        to_upper,
     }
 }
 
@@ -217,10 +282,6 @@ fn finite_input(value: f32) -> Result<f32, Error> {
     } else {
         Err(Error::NonFiniteInput)
     }
-}
-
-fn clamp_index(index: isize, length: usize) -> usize {
-    index.clamp(0, length as isize - 1) as usize
 }
 
 fn memory_ranges_overlap(lhs: &[f32], rhs: &[f32]) -> bool {
@@ -274,6 +335,24 @@ mod tests {
         assert_eq!(up_output[0].to_bits(), 0x3f80_0000);
         assert_eq!(up_output[300].to_bits(), 0xbf01_47ae);
         assert_eq!(up_output[599].to_bits(), 0xc000_0000);
+    }
+
+    #[test]
+    fn linear_rank_three_preserves_ort_trilinear_boundary_order() {
+        let plan =
+            ResizePlan::new(1, 2, 2, ResizeMode::LinearHalfPixel, ResizeScale::Up300).unwrap();
+        let input = [1.0_f32, -2.0, 1.0, -2.0];
+        let mut output = [0.0_f32; 1_200];
+        plan.run(&input, &mut output).unwrap();
+
+        // Channel 0 has distinct y1/y2 indices and the zero y2 weights select
+        // its own samples. At the final channel ORT clamps y2 to y1, changes
+        // both y weights to 0.5, and evaluates all eight terms literally.
+        // Collapsing either case to a one-dimensional lerp changes these bits.
+        assert_eq!(output[150].to_bits(), 0x3F7E_B852);
+        assert_eq!(output[600 + 150].to_bits(), 0x3F7E_B851);
+        assert_eq!(output[151].to_bits(), 0x3F7C_28F6);
+        assert_eq!(output[600 + 151].to_bits(), 0x3F7C_28F7);
     }
 
     #[test]

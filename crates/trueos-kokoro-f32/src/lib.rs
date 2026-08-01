@@ -1141,6 +1141,11 @@ fn reduced_mean_value(
     axis_len: usize,
     inner: usize,
 ) -> Result<f32, Error> {
+    if inner == 1 {
+        let start = outer_index * axis_len;
+        return ort_fast_reduce_kr_mean(&input[start..start + axis_len]);
+    }
+
     let mut sum = 0.0f32;
     for axis_index in 0..axis_len {
         let index = (outer_index * axis_len + axis_index) * inner + inner_index;
@@ -1154,6 +1159,87 @@ fn reduced_mean_value(
         }
     }
     Ok(sum / axis_len as f32)
+}
+
+/// Match ORT 1.28's float `ReduceMean` FastReduceKR path for a contiguous row.
+///
+/// The pinned ORT CPU build lowers Eigen's dynamic-vector reduction to SSE:
+/// two four-float accumulators, a 16-byte aligned packet range, and a fixed
+/// horizontal reduction. Alignment is part of the arithmetic order: a row
+/// beginning eight bytes past a 16-byte boundary has a two-element scalar
+/// prefix that Eigen adds after reducing the packet lanes.
+fn ort_fast_reduce_kr_mean(row: &[f32]) -> Result<f32, Error> {
+    const PACKET_WIDTH: usize = 4;
+    const TWO_PACKETS: usize = 2 * PACKET_WIDTH;
+    const PACKET_ALIGNMENT: usize = 16;
+
+    validate_finite(row)?;
+
+    let alignment_offset = row.as_ptr().align_offset(PACKET_ALIGNMENT);
+    let aligned_start = alignment_offset.min(row.len());
+    let aligned_size_two = ((row.len() - aligned_start) / TWO_PACKETS) * TWO_PACKETS;
+    let aligned_size = ((row.len() - aligned_start) / PACKET_WIDTH) * PACKET_WIDTH;
+    let aligned_end_two = aligned_start + aligned_size_two;
+    let aligned_end = aligned_start + aligned_size;
+
+    let mut sum = if aligned_size != 0 {
+        let mut packet_zero = [
+            row[aligned_start],
+            row[aligned_start + 1],
+            row[aligned_start + 2],
+            row[aligned_start + 3],
+        ];
+        if aligned_size > PACKET_WIDTH {
+            let mut packet_one = [
+                row[aligned_start + PACKET_WIDTH],
+                row[aligned_start + PACKET_WIDTH + 1],
+                row[aligned_start + PACKET_WIDTH + 2],
+                row[aligned_start + PACKET_WIDTH + 3],
+            ];
+            let mut index = aligned_start + TWO_PACKETS;
+            while index < aligned_end_two {
+                for lane in 0..PACKET_WIDTH {
+                    packet_zero[lane] += row[index + lane];
+                    packet_one[lane] += row[index + PACKET_WIDTH + lane];
+                }
+                index += TWO_PACKETS;
+            }
+            for lane in 0..PACKET_WIDTH {
+                packet_zero[lane] += packet_one[lane];
+            }
+            if aligned_end > aligned_end_two {
+                for lane in 0..PACKET_WIDTH {
+                    packet_zero[lane] += row[aligned_end_two + lane];
+                }
+            }
+        }
+
+        let low_half = packet_zero[0] + packet_zero[2];
+        let high_half = packet_zero[1] + packet_zero[3];
+        low_half + high_half
+    } else {
+        row[0]
+    };
+
+    if aligned_size != 0 {
+        for &value in &row[..aligned_start] {
+            sum += value;
+        }
+        for &value in &row[aligned_end..] {
+            sum += value;
+        }
+    } else {
+        for &value in &row[1..] {
+            sum += value;
+        }
+    }
+
+    let mean = sum / row.len() as f32;
+    if mean.is_finite() {
+        Ok(mean)
+    } else {
+        Err(Error::NonFiniteOutput)
+    }
 }
 
 /// ONNX `LayerNormalization` for a contiguous tensor and normalized suffix.
@@ -2130,6 +2216,30 @@ mod tests {
         reduce_mean(&input, shape, 2, true, &mut axis_two).unwrap();
         assert_eq!(axis_two, [2.0, 5.0, 8.0, 11.0]);
         assert_eq!(reduced_shape(shape, -1, true).unwrap().dims(), &[2, 2, 1]);
+    }
+
+    #[test]
+    fn reduce_mean_matches_ort_fast_kr_for_aligned_and_two_value_prefix_rows() {
+        #[repr(align(16))]
+        struct AlignedRows([f32; 148]);
+
+        let mut input = AlignedRows([0.0; 148]);
+        let mut state = 0x1234_5678u32;
+        for value in &mut input.0 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let mut bits = 0x3F00_0000 | (state & 0x007F_FFFF);
+            if state & 0x0080_0000 != 0 {
+                bits |= 0x8000_0000;
+            }
+            *value = f32::from_bits(bits);
+        }
+
+        assert_eq!(input.0.as_ptr().align_offset(16), 0);
+        assert_eq!(input.0[74..].as_ptr().align_offset(16), 2);
+
+        let mut output = [0.0f32; 2];
+        reduce_mean(&input.0, Shape::new(&[2, 74]).unwrap(), 1, true, &mut output).unwrap();
+        assert_eq!(output.map(f32::to_bits), [0x3D6B_3164, 0xBCEC_9991]);
     }
 
     #[test]

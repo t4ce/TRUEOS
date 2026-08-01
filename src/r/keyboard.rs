@@ -669,7 +669,10 @@ fn push_text_burst_into(
     t_ms: u32,
 ) -> usize {
     for (index, ch) in text.chars().enumerate() {
-        let mut event_flags = flags
+        let mut event_flags = (flags
+            & !(KEYBOARD_OUTPUT_FLAG_TEXT_BURST
+                | KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START
+                | KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END))
             | KEYBOARD_OUTPUT_FLAG_PRESS
             | KEYBOARD_OUTPUT_FLAG_SYNTHETIC
             | KEYBOARD_OUTPUT_FLAG_TEXT_BURST;
@@ -723,7 +726,13 @@ mod tests {
     fn text_burst_events(text: &str) -> KeyboardOutputRing {
         let scalar_count = text.chars().count();
         let mut ring = KeyboardOutputRing::new();
-        assert_eq!(push_text_burst_into(&mut ring, 7, text, scalar_count, 9, 0, 42), scalar_count);
+        let caller_flags = KEYBOARD_OUTPUT_FLAG_TEXT_BURST
+            | KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START
+            | KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END;
+        assert_eq!(
+            push_text_burst_into(&mut ring, 7, text, scalar_count, 9, caller_flags, 42),
+            scalar_count
+        );
         ring
     }
 

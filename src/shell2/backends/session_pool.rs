@@ -295,8 +295,13 @@ pub(crate) fn attach(vm_id: u8, cols: usize, rows: usize) -> i32 {
             state.reset_replay();
             state.repaint_requested = true;
             drop(state);
+            crate::shell2::configure_local_shell_session_view(
+                existing.index,
+                generation,
+                cols,
+                rows,
+            );
             drop(allocation);
-            crate::shell2::configure_local_shell_session_view(existing.index, cols, rows);
             return 0;
         }
         return FRONTEND_BUSY_ERROR;
@@ -348,9 +353,9 @@ pub(crate) fn attach(vm_id: u8, cols: usize, rows: usize) -> i32 {
     }
     backend.last_was_cr.store(false, Ordering::Release);
     let index = backend.index;
+    crate::shell2::initialize_local_shell_session_view(index, generation, cols, rows);
     drop(allocation);
 
-    crate::shell2::initialize_local_shell_session_view(index, cols, rows);
     // The worker may paint immediately after its wake. Publish its Matrix view
     // geometry and default-page selection before making this generation live.
     backend.wake.signal(generation);
@@ -576,7 +581,7 @@ impl ShellBackend2 for LocalShellSessionBackend {
 
     fn claim_terminal_handoff(&self, owner: TerminalHandoffOwner) -> bool {
         let mut state = self.state.lock();
-        if !matches!(state.lease, LeaseState::Active { .. })
+        if state.active_generation() != owner.local_session_generation()
             || state.handoff_owner.is_some_and(|current| current != owner)
         {
             return false;

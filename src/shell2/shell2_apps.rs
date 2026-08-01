@@ -389,12 +389,7 @@ async fn print_peer_table(target: &MatrixTarget, width: usize) {
 }
 
 #[embassy_executor::task(pool_size = 2)]
-async fn peer_app_task(
-    target: MatrixTarget,
-    width: usize,
-    args: Vec<String>,
-    spawner: Spawner,
-) {
+async fn peer_app_task(target: MatrixTarget, width: usize, args: Vec<String>, spawner: Spawner) {
     if args.is_empty() {
         print_peer_table(&target, width).await;
         set_matrix_target_active(&target, false);
@@ -746,12 +741,7 @@ fn schedule_store_persistent(spawner: &Spawner, io: &'static dyn ShellBackend2, 
 }
 
 #[embassy_executor::task(pool_size = 2)]
-async fn load_persistent_vm_task(
-    spawner: Spawner,
-    target: MatrixTarget,
-    vm_id: u8,
-    name: String,
-) {
+async fn load_persistent_vm_task(spawner: Spawner, target: MatrixTarget, vm_id: u8, name: String) {
     let result = async {
         let image = crate::hv::store::load_persistent_async(name.as_str()).await?;
         crate::hv::store::save_bytes_async(vm_id, image.snapshot.clone()).await?;
@@ -777,12 +767,10 @@ async fn load_persistent_vm_task(
                 ),
             }
         }
-        Err(error) => {
-            print_matrix_target_line(
-                &target,
-                alloc::format!("apps: persistent load failed: {:?}", error).as_str(),
-            )
-        }
+        Err(error) => print_matrix_target_line(
+            &target,
+            alloc::format!("apps: persistent load failed: {:?}", error).as_str(),
+        ),
     }
     crate::hv::finish_restore(vm_id);
 }
@@ -809,21 +797,21 @@ fn schedule_load_persistent(
         return;
     }
     match crate::hv::try_begin_restore(vm_id) {
-        Ok(true) => match load_persistent_vm_task(
-            *spawner,
-            matrix_target_for_backend(io),
-            vm_id,
-            name,
-        ) {
-            Ok(token) => {
-                line(io, alloc::format!("apps: vm{} persistent load scheduled", vm_id).as_str());
-                spawner.spawn(token);
+        Ok(true) => {
+            match load_persistent_vm_task(*spawner, matrix_target_for_backend(io), vm_id, name) {
+                Ok(token) => {
+                    line(
+                        io,
+                        alloc::format!("apps: vm{} persistent load scheduled", vm_id).as_str(),
+                    );
+                    spawner.spawn(token);
+                }
+                Err(_) => {
+                    crate::hv::finish_restore(vm_id);
+                    line(io, "apps: persistent load task unavailable");
+                }
             }
-            Err(_) => {
-                crate::hv::finish_restore(vm_id);
-                line(io, "apps: persistent load task unavailable");
-            }
-        },
+        }
         Ok(false) => line(io, alloc::format!("apps: vm{} load already pending", vm_id).as_str()),
         Err(error) => line(io, alloc::format!("apps: load failed: {:?}", error).as_str()),
     }

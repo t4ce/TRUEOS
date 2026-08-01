@@ -18,8 +18,9 @@
 //! [`DispatchedDense`] probes AVX2, FMA, OSXSAVE, and XCR0 at runtime. Its
 //! direct path gathers eight row-major weights at a time; optional
 //! [`PrepackedMatrix`] views replace gathers with contiguous loads while all
-//! storage remains caller-owned. Neither path uses AVX-512 or changes a row's
-//! ascending-K fused accumulation order.
+//! storage remains caller-owned. Neither path uses AVX-512 or changes the
+//! pinned MLAS panel boundaries, per-panel ascending-K FMA order, or panel
+//! reduction order.
 //!
 //! Default Sigmoid/Tanh activations use the bounded rational approximations
 //! from ONNX Runtime's MLAS FMA3 kernels. The scalar port keeps the exact
@@ -226,6 +227,11 @@ impl<'a> Buffers<'a> {
 ///
 /// Implement `accumulator += matrix * vector`, where `matrix` is
 /// `[rows, columns]`, `vector` is `[columns]`, and `accumulator` is `[rows]`.
+/// The dot product is formed from zero before its single addition to the
+/// accumulator. The pinned input GEMMs additionally use independent panels,
+/// matching the MLAS kernel used by the ORT CPU LSTM: 512 columns reduce as
+/// `panel_1 + panel_0`, while 640 columns reduce as
+/// `panel_2 + (panel_1 + panel_0)` with panel widths 256, 256, and 128.
 /// Every slice supplied by this crate has exactly the documented length. An
 /// implementation may change `accumulator` before returning an error; the LSTM
 /// executor treats the gate vector as disposable scratch and will reinitialize
@@ -243,7 +249,7 @@ pub trait DenseKernel {
     ) -> Result<(), Self::Error>;
 }
 
-/// Deterministic ascending-K scalar reference dense kernel.
+/// Deterministic scalar reference for the pinned MLAS panel reductions.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ScalarDense;
 
@@ -263,11 +269,33 @@ impl DenseKernel for ScalarDense {
         debug_assert_eq!(accumulator.len(), rows);
 
         for (row, output) in matrix.chunks_exact(columns).zip(accumulator.iter_mut()) {
-            let mut sum = *output;
-            for (&weight, &value) in row.iter().zip(vector) {
-                sum = libm::fmaf(weight, value, sum);
-            }
-            *output = sum;
+            let dot = if matches!(columns, 512 | 640) {
+                let mut panel_0 = 0.0;
+                for (&weight, &value) in row[..256].iter().zip(&vector[..256]) {
+                    panel_0 = libm::fmaf(weight, value, panel_0);
+                }
+                let mut panel_1 = 0.0;
+                for (&weight, &value) in row[256..512].iter().zip(&vector[256..512]) {
+                    panel_1 = libm::fmaf(weight, value, panel_1);
+                }
+                let first_two = panel_1 + panel_0;
+                if columns == 640 {
+                    let mut panel_2 = 0.0;
+                    for (&weight, &value) in row[512..].iter().zip(&vector[512..]) {
+                        panel_2 = libm::fmaf(weight, value, panel_2);
+                    }
+                    panel_2 + first_two
+                } else {
+                    first_two
+                }
+            } else {
+                let mut dot = 0.0;
+                for (&weight, &value) in row.iter().zip(vector) {
+                    dot = libm::fmaf(weight, value, dot);
+                }
+                dot
+            };
+            *output += dot;
         }
         Ok(())
     }
@@ -561,8 +589,8 @@ unsafe fn accumulate_avx2_gather(
     accumulator: &mut [f32],
 ) {
     use core::arch::x86_64::{
-        _mm256_fmadd_ps, _mm256_i32gather_ps, _mm256_loadu_ps, _mm256_set_epi32, _mm256_set1_ps,
-        _mm256_storeu_ps, _mm256_zeroupper,
+        _mm256_add_ps, _mm256_fmadd_ps, _mm256_i32gather_ps, _mm256_loadu_ps, _mm256_set_epi32,
+        _mm256_set1_ps, _mm256_setzero_ps, _mm256_storeu_ps, _mm256_zeroupper,
     };
 
     let stride = columns as i32;
@@ -577,14 +605,40 @@ unsafe fn accumulate_avx2_gather(
         0,
     );
     for row in (0..rows).step_by(8) {
-        let mut sum = unsafe { _mm256_loadu_ps(accumulator.as_ptr().add(row)) };
         let matrix_block = unsafe { matrix.as_ptr().add(row * columns) };
-        for (column, &input) in vector.iter().enumerate() {
+        let mut sum = _mm256_setzero_ps();
+        let panel_end = if matches!(columns, 512 | 640) {
+            256
+        } else {
+            columns
+        };
+        for (column, &input) in vector[..panel_end].iter().enumerate() {
             let weights =
                 unsafe { _mm256_i32gather_ps::<4>(matrix_block.add(column), row_offsets) };
-            let value = _mm256_set1_ps(input);
-            sum = _mm256_fmadd_ps(weights, value, sum);
+            sum = _mm256_fmadd_ps(weights, _mm256_set1_ps(input), sum);
         }
+        if matches!(columns, 512 | 640) {
+            let mut panel_1 = _mm256_setzero_ps();
+            for (column, &input) in vector[256..512].iter().enumerate() {
+                let weights = unsafe {
+                    _mm256_i32gather_ps::<4>(matrix_block.add(256 + column), row_offsets)
+                };
+                panel_1 = _mm256_fmadd_ps(weights, _mm256_set1_ps(input), panel_1);
+            }
+            sum = _mm256_add_ps(panel_1, sum);
+        }
+        if columns == 640 {
+            let mut panel_2 = _mm256_setzero_ps();
+            for (column, &input) in vector[512..].iter().enumerate() {
+                let weights = unsafe {
+                    _mm256_i32gather_ps::<4>(matrix_block.add(512 + column), row_offsets)
+                };
+                panel_2 = _mm256_fmadd_ps(weights, _mm256_set1_ps(input), panel_2);
+            }
+            sum = _mm256_add_ps(panel_2, sum);
+        }
+        let existing = unsafe { _mm256_loadu_ps(accumulator.as_ptr().add(row)) };
+        sum = _mm256_add_ps(existing, sum);
         unsafe {
             _mm256_storeu_ps(accumulator.as_mut_ptr().add(row), sum);
         }
@@ -601,19 +655,46 @@ unsafe fn accumulate_avx2_prepacked(
     accumulator: &mut [f32],
 ) {
     use core::arch::x86_64::{
-        _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_storeu_ps, _mm256_zeroupper,
+        _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps,
+        _mm256_storeu_ps, _mm256_zeroupper,
     };
 
     for row_block in 0..GATE_ELEMENTS / 8 {
         let row = row_block * 8;
-        let mut sum = unsafe { _mm256_loadu_ps(accumulator.as_ptr().add(row)) };
         let packed_block = row_block * columns * 8;
-        for (column, &input) in vector.iter().enumerate() {
+        let mut sum = _mm256_setzero_ps();
+        let panel_end = if matches!(columns, 512 | 640) {
+            256
+        } else {
+            columns
+        };
+        for (column, &input) in vector[..panel_end].iter().enumerate() {
             let weights =
                 unsafe { _mm256_loadu_ps(packed.as_ptr().add(packed_block + column * 8)) };
-            let value = _mm256_set1_ps(input);
-            sum = _mm256_fmadd_ps(weights, value, sum);
+            sum = _mm256_fmadd_ps(weights, _mm256_set1_ps(input), sum);
         }
+        if matches!(columns, 512 | 640) {
+            let mut panel_1 = _mm256_setzero_ps();
+            for (column, &input) in vector[256..512].iter().enumerate() {
+                let weights = unsafe {
+                    _mm256_loadu_ps(packed.as_ptr().add(packed_block + (256 + column) * 8))
+                };
+                panel_1 = _mm256_fmadd_ps(weights, _mm256_set1_ps(input), panel_1);
+            }
+            sum = _mm256_add_ps(panel_1, sum);
+        }
+        if columns == 640 {
+            let mut panel_2 = _mm256_setzero_ps();
+            for (column, &input) in vector[512..].iter().enumerate() {
+                let weights = unsafe {
+                    _mm256_loadu_ps(packed.as_ptr().add(packed_block + (512 + column) * 8))
+                };
+                panel_2 = _mm256_fmadd_ps(weights, _mm256_set1_ps(input), panel_2);
+            }
+            sum = _mm256_add_ps(panel_2, sum);
+        }
+        let existing = unsafe { _mm256_loadu_ps(accumulator.as_ptr().add(row)) };
+        sum = _mm256_add_ps(existing, sum);
         unsafe {
             _mm256_storeu_ps(accumulator.as_mut_ptr().add(row), sum);
         }

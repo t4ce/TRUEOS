@@ -563,6 +563,10 @@ fn parse_stage<'a>(
         2 => ShaderStage::Fragment,
         _ => return Err(Error::InvalidStage),
     };
+    let expected_grf_start = match stage {
+        ShaderStage::Vertex => 2,
+        ShaderStage::Fragment => 4,
+    };
     let entry_len = usize::from(u16_at(bytes, offset + 80)?);
     let name_len = usize::from(u16_at(bytes, offset + 82)?);
     if stage != expected_stage
@@ -572,7 +576,7 @@ fn parse_stage<'a>(
         || u32_at(bytes, offset + 8)? != 0
         || u32_at(bytes, offset + 12)? != 64
         || u32_at(bytes, offset + 16)? != 0
-        || u16_at(bytes, offset + 20)? != 2
+        || u16_at(bytes, offset + 20)? != expected_grf_start
         || u16_at(bytes, offset + 22)? != 128
         || u16_at(bytes, offset + 24)? != 64
         || u16_at(bytes, offset + 28)? != 0

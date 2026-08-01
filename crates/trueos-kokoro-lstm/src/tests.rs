@@ -324,6 +324,64 @@ fn scalar_dense_accumulates_row_major_with_existing_output() {
 }
 
 #[test]
+fn scalar_dense_separates_the_dot_from_the_existing_accumulator() {
+    let mut matrix = vec![0.0; HIDDEN_SIZE];
+    let mut vector = vec![0.0; HIDDEN_SIZE];
+    matrix[0] = 100_000_000.0;
+    matrix[1] = -100_000_000.0;
+    vector[0] = 1.0;
+    vector[1] = 1.0;
+    let mut output = [1.0];
+    ScalarDense
+        .accumulate(1, HIDDEN_SIZE, &matrix, &vector, &mut output)
+        .unwrap();
+    assert_eq!(output, [1.0]);
+}
+
+#[test]
+fn scalar_dense_text_input_uses_two_independent_k256_panels() {
+    let mut matrix = vec![0.0; 512];
+    let mut vector = vec![0.0; 512];
+    matrix[0] = 1.0;
+    vector[0] = 1.0;
+    matrix[256] = 100_000_000.0;
+    matrix[257] = -100_000_000.0;
+    vector[256] = 1.0;
+    vector[257] = 1.0;
+    let mut output = [0.0];
+    ScalarDense
+        .accumulate(1, 512, &matrix, &vector, &mut output)
+        .unwrap();
+    assert_eq!(output, [1.0]);
+}
+
+#[test]
+fn scalar_dense_prosody_input_uses_256_256_128_mlas_panels() {
+    let mut matrix = vec![0.0; 2 * 640];
+    let mut vector = vec![0.0; 640];
+
+    // Row zero distinguishes independent panels from one K640 chain.
+    matrix[0] = 1.0;
+    matrix[256] = 100_000_000.0;
+    matrix[257] = -100_000_000.0;
+    vector[0] = 1.0;
+    vector[256] = 1.0;
+    vector[257] = 1.0;
+
+    // Row one distinguishes p2 + (p1 + p0) from (p2 + p1) + p0.
+    matrix[640] = 1.0;
+    matrix[640 + 256] = 100_000_000.0;
+    matrix[640 + 512] = -100_000_000.0;
+    vector[512] = 1.0;
+
+    let mut output = [0.0, 0.0];
+    ScalarDense
+        .accumulate(2, 640, &matrix, &vector, &mut output)
+        .unwrap();
+    assert_eq!(output, [1.0, 0.0]);
+}
+
+#[test]
 fn avx_gather_and_prepacked_lanes_preserve_every_scalar_fma_bit() {
     let capabilities = DispatchedDense::detect().capabilities();
     if !capabilities.supports(DenseLane::Avx2Fma) {

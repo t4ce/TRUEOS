@@ -171,11 +171,9 @@ pub(crate) fn try_parse_as(
         );
 
         let headers = ["FileID", "Rel", "Blocks", "Kind", "Data", "Name", "Extra"];
-        let table = super::tlb_helper::TlbTable::with_width(
-            &headers,
-            output_width.saturating_sub(2),
-        )
-        .with_max_col_widths(&[8, 8, 6, 4, 8, 0, 18]);
+        let table =
+            super::tlb_helper::TlbTable::with_width(&headers, output_width.saturating_sub(2))
+                .with_max_col_widths(&[8, 8, 6, 4, 8, 0, 18]);
         table.emit_header(|text| print_matrix_target_line(&output_target, text));
         for record in scan.records.iter() {
             let id = format!("{:08x}", record.entry_lba);

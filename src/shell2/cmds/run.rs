@@ -9,9 +9,8 @@ use spin::Mutex;
 
 use super::super::{
     MatrixTarget, matrix_target_interrupted, print_matrix_target_system_line,
-    release_matrix_target_vm_reservation,
-    reserve_matrix_target_for_vm_slot_selected, set_matrix_target_active,
-    set_matrix_target_app_label,
+    release_matrix_target_vm_reservation, reserve_matrix_target_for_vm_slot_selected,
+    set_matrix_target_active, set_matrix_target_app_label,
 };
 use super::tlb_helper::TlbTable;
 use crate::hv::BlueprintConsoleSurface;
