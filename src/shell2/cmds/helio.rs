@@ -59,10 +59,11 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         format!(
-            "helio: state={} example={} last_error={} artifact=embedded:simple-cube.trueos.intel.helio bytes={} path=helioa-v1->render/guc->ui4 spirit_logger_active={} spirit_logger_source={} spirit_logger_remaining_ms={}",
+            "helio: state={} example={} last_error={} artifact=embedded:{} bytes={} path=helioa-v1->render/guc->ui4 spirit_logger_active={} spirit_logger_source={} spirit_logger_remaining_ms={}",
             status.state.label(),
             example,
             status.last_error.unwrap_or("none"),
+            status.artifact_name,
             status.artifact_bytes,
             logger.active as u8,
             logger_source_name(logger.source),

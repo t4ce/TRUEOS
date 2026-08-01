@@ -1262,7 +1262,8 @@ pub(crate) fn create_resident_churn_forward(
     let Some(dev) = crate::intel::claimed_device() else {
         return Err("no-device");
     };
-    if !device_supports_churn_forward_native(warm_once(dev).device_id) {
+    let device = warm_once(dev);
+    if !device_supports_churn_forward_native(device.device_id, device.revision_id) {
         return Err("churn-native-device-mismatch");
     }
     // Validate and cache the immutable native code before acquiring any

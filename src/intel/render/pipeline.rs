@@ -12,6 +12,31 @@ struct PixelShaderDispatchContract {
     ksp: [u32; 3],
 }
 
+/// First payload DWORD of 3DSTATE_SBE_SWIZ.
+///
+/// Each attribute detail is 16 bits wide. Native Churn has two fragment
+/// inputs, so identity routing is source 0 in the low half and source 1 in
+/// the high half. Compatibility probes retain their historical all-zero
+/// payload.
+const fn sbe_swiz_first_payload_dw(artifact_native_fixed_function: bool) -> u32 {
+    if artifact_native_fixed_function {
+        0x0001_0000
+    } else {
+        0
+    }
+}
+
+#[cfg(test)]
+mod churn_sbe_swiz_tests {
+    use super::sbe_swiz_first_payload_dw;
+
+    #[test]
+    fn native_churn_routes_normal_and_material_identity() {
+        assert_eq!(sbe_swiz_first_payload_dw(true), 0x0001_0000);
+        assert_eq!(sbe_swiz_first_payload_dw(false), 0);
+    }
+}
+
 /// Resolve the gfx12 variable-pixel-dispatch mapping into the exact
 /// 3DSTATE_PS fields we emit.
 ///
@@ -627,8 +652,15 @@ fn write_triangle_raw_buffer_surface_state(
     surface[1] = RENDER_MOCS << 24;
     surface[2] = (height_minus_1 << 16) | width_minus_1;
     surface[3] = depth_minus_1 << 21;
+    surface[7] = (SHADER_CHANNEL_ALPHA << 16)
+        | (SHADER_CHANNEL_BLUE << 19)
+        | (SHADER_CHANNEL_GREEN << 22)
+        | (SHADER_CHANNEL_RED << 25);
     surface[8] = binding.gpu_addr as u32;
     surface[9] = (binding.gpu_addr >> 32) as u32;
+    // gfx12 ISL carries the exact byte range in the high auxiliary-address
+    // DWORD when buffer_length_in_aux_addr is enabled.
+    surface[11] = binding.byte_len;
     Ok(())
 }
 
@@ -660,7 +692,16 @@ mod churn_raw_surface_tests {
         assert_eq!(surface[3], ((extent >> 21) & 0x7ff) << 21);
         assert_eq!(surface[8], 0x5678_9000);
         assert_eq!(surface[9], 0x0000_1234);
-        assert!(surface[4..8].iter().chain(&surface[10..]).all(|&word| word == 0));
+        assert_eq!(
+            surface[7],
+            (super::SHADER_CHANNEL_ALPHA << 16)
+                | (super::SHADER_CHANNEL_BLUE << 19)
+                | (super::SHADER_CHANNEL_GREEN << 22)
+                | (super::SHADER_CHANNEL_RED << 25)
+        );
+        assert_eq!(surface[10], 0);
+        assert_eq!(surface[11], binding.byte_len);
+        assert!(surface[4..7].iter().chain(&surface[12..]).all(|&word| word == 0));
     }
 
     #[test]
@@ -864,7 +905,7 @@ fn encode_triangle_probe_batch(
     let mut cursor = 0usize;
     if let Some(native) = draw.native {
         validate_triangle_native_draw_contract(draw, native)?;
-        if !device_supports_churn_forward_native(warm.device_id) {
+        if !device_supports_churn_forward_native(warm.device_id, warm.revision_id) {
             return Err("probe-native-device-mismatch");
         }
     }
@@ -1251,6 +1292,12 @@ fn encode_triangle_probe_batch(
         pipeline.ps.meta.num_varying_inputs
     };
     let sbe_attr_swizzle_enable = !backend_probe_mode.disable_sbe_attr_swizzle();
+    // The native Churn PS consumes two contiguous VUE attributes after the
+    // position/header slots: world normal (source attribute 0) and material
+    // id (source attribute 1).  Xe-LP's enabled SBE swizzle packet must spell
+    // that identity routing out; an all-zero payload aliases both inputs to
+    // attribute 0.
+    let sbe_swiz_first_dw = sbe_swiz_first_payload_dw(artifact_native_fixed_function);
     let sbe_dw1 = (sbe_vertex_read_offset << 5)
         | (u32::from(sbe_attr_swizzle_enable) << 21)
         | ((sbe_num_sf_attrs as u32) << 22)
@@ -1384,8 +1431,8 @@ fn encode_triangle_probe_batch(
     // none, and otherwise leave raster defaults boring until we have visual
     // proof that a more opinionated packet is required.
     let raster_dw1 = if artifact_native_fixed_function {
-        // Exact gfx125 ANV state for CCW front faces, BACK culling, solid
-        // fill, one raster sample, near/far clip and scissor enabled.
+        // Exact validated gfx12 Xe-LP state for CCW front faces, BACK culling,
+        // solid fill, one raster sample, near/far clip and scissor enabled.
         0x04A3_1003
     } else if mesa_host_fixed_function {
         if resident_msaa4 {
@@ -2683,7 +2730,8 @@ fn encode_triangle_probe_batch(
 
         log_batch_offset(cursor, "3DSTATE_SBE_SWIZ pre-clip");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE_SWIZ)?;
-        for _ in 0..10 {
+        push(batch_dwords, &mut cursor, sbe_swiz_first_dw)?;
+        for _ in 1..10 {
             push(batch_dwords, &mut cursor, 0)?;
         }
         intel_render_focus_log!(
@@ -2725,7 +2773,8 @@ fn encode_triangle_probe_batch(
 
         log_batch_offset(cursor, "3DSTATE_SBE_SWIZ pre-sf");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE_SWIZ)?;
-        for _ in 0..10 {
+        push(batch_dwords, &mut cursor, sbe_swiz_first_dw)?;
+        for _ in 1..10 {
             push(batch_dwords, &mut cursor, 0)?;
         }
         intel_render_focus_log!(
@@ -2773,7 +2822,8 @@ fn encode_triangle_probe_batch(
         // Gen12/Xe-LP keeps attribute swizzle state in a separate packet.
         log_batch_offset(cursor, "3DSTATE_SBE_SWIZ");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE_SWIZ)?;
-        for _ in 0..10 {
+        push(batch_dwords, &mut cursor, sbe_swiz_first_dw)?;
+        for _ in 1..10 {
             push(batch_dwords, &mut cursor, 0)?;
         }
     }
@@ -2981,7 +3031,8 @@ fn encode_triangle_probe_batch(
 
         log_batch_offset(cursor, "3DSTATE_SBE_SWIZ late-reemit");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE_SWIZ)?;
-        for _ in 0..10 {
+        push(batch_dwords, &mut cursor, sbe_swiz_first_dw)?;
+        for _ in 1..10 {
             push(batch_dwords, &mut cursor, 0)?;
         }
 

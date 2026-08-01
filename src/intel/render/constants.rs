@@ -289,11 +289,26 @@ const COMPARE_FUNCTION_ALWAYS: u8 = 0;
 const COMPARE_FUNCTION_LESS: u8 = 2;
 const COMPARE_FUNCTION_LEQUAL: u8 = 4;
 
-/// The checked-in Churn ISA was compiled and captured on RPL-S 0xA780.
-/// Keep this separate from the DG2-only `device_is_gfx125` helper: admitting
-/// another Xe-LP device requires its own compiled artifact validation.
-const fn device_supports_churn_forward_native(device_id: u16) -> bool {
-    device_id == 0xA780
+/// The checked-in Churn ISA and fixed-function contract are admitted only on
+/// the validated Xe-LP targets: RPL-S 0xA780 and ADL-S 0x4680 stepping 0x0C.
+/// Keep this separate from the DG2-only `device_is_gfx125` helper; every new
+/// device or stepping needs its own end-to-end artifact validation.
+const fn device_supports_churn_forward_native(device_id: u16, revision_id: u8) -> bool {
+    device_id == 0xA780 || (device_id == 0x4680 && revision_id == 0x0C)
+}
+
+#[cfg(test)]
+mod churn_forward_device_admission_tests {
+    use super::device_supports_churn_forward_native;
+
+    #[test]
+    fn admits_only_the_two_validated_xe_lp_targets() {
+        assert!(device_supports_churn_forward_native(0xA780, 0x00));
+        assert!(device_supports_churn_forward_native(0x4680, 0x0C));
+        assert!(!device_supports_churn_forward_native(0x4680, 0x0B));
+        assert!(!device_supports_churn_forward_native(0x4680, 0x0D));
+        assert!(!device_supports_churn_forward_native(0x56A0, 0x08));
+    }
 }
 const SURFACE_HALIGN_4: u32 = 1;
 const SURFACE_HALIGN_128_GFX125: u32 = 3;
