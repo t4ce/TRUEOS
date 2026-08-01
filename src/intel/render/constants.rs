@@ -289,12 +289,16 @@ const COMPARE_FUNCTION_ALWAYS: u8 = 0;
 const COMPARE_FUNCTION_LESS: u8 = 2;
 const COMPARE_FUNCTION_LEQUAL: u8 = 4;
 
-/// The checked-in Churn ISA and fixed-function contract are admitted only on
-/// the validated Xe-LP targets: RPL-S 0xA780 and ADL-S 0x4680 stepping 0x0C.
-/// Keep this separate from the DG2-only `device_is_gfx125` helper; every new
-/// device or stepping needs its own end-to-end artifact validation.
-const fn device_supports_churn_forward_native(device_id: u16, revision_id: u8) -> bool {
-    device_id == 0xA780 || (device_id == 0x4680 && revision_id == 0x0C)
+/// The checked-in Churn ISA was physically validated on RPL-S 0xA780.
+///
+/// ADL-S 0x4680 previously reached this path through a stepping-only software
+/// admission check. That was not sufficient validation: activating the cold
+/// native renderer while another GuC context was resident stopped Spirit's
+/// marker retirement. Keep ADL-S on the proven compatibility renderer until
+/// concurrent native Render/GPGPU context switching passes the bare-metal
+/// coexistence gate.
+const fn device_supports_churn_forward_native(device_id: u16, _revision_id: u8) -> bool {
+    device_id == 0xA780
 }
 
 #[cfg(test)]
@@ -302,9 +306,9 @@ mod churn_forward_device_admission_tests {
     use super::device_supports_churn_forward_native;
 
     #[test]
-    fn admits_only_the_two_validated_xe_lp_targets() {
+    fn admits_only_physically_validated_native_targets() {
         assert!(device_supports_churn_forward_native(0xA780, 0x00));
-        assert!(device_supports_churn_forward_native(0x4680, 0x0C));
+        assert!(!device_supports_churn_forward_native(0x4680, 0x0C));
         assert!(!device_supports_churn_forward_native(0x4680, 0x0B));
         assert!(!device_supports_churn_forward_native(0x4680, 0x0D));
         assert!(!device_supports_churn_forward_native(0x56A0, 0x08));

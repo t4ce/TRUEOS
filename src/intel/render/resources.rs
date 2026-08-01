@@ -1262,10 +1262,13 @@ pub(crate) fn create_resident_churn_forward(
     let Some(dev) = crate::intel::claimed_device() else {
         return Err("no-device");
     };
-    let device = warm_once(dev);
-    if !device_supports_churn_forward_native(device.device_id, device.revision_id) {
+    // Reject unvalidated devices before allocating or mutating any Render
+    // context state. Capability admission must be side-effect free so a
+    // compatibility fallback cannot disturb an unrelated live GuC client.
+    if !device_supports_churn_forward_native(dev.device_id, dev.revision_id) {
         return Err("churn-native-device-mismatch");
     }
+    let device = warm_once(dev);
     // Validate and cache the immutable native code before acquiring any
     // mapped DMA resources. The aligned code copy is a bounded singleton;
     // service retries cannot leak another VS/PS pair.
