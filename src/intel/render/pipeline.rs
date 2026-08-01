@@ -1809,21 +1809,6 @@ fn encode_triangle_probe_batch(
         );
     }
 
-    if device_is_gfx125(warm.device_id) {
-        let chicken_raster_2_value = gfx125_chicken_raster_2_value();
-        log_batch_offset(cursor, "MI_LOAD_REGISTER_IMM CHICKEN_RASTER_2");
-        push_load_register_imm(
-            batch_dwords,
-            &mut cursor,
-            CHICKEN_RASTER_2,
-            chicken_raster_2_value,
-        )?;
-        intel_render_verbose_log!(
-            "gfx125-raster-wa-batch chicken_raster_2=0x{:08X} tbimr_batch_override=1 tbimr_open_batch=1 tbimr_fast_clip=1\n",
-            chicken_raster_2_value,
-        );
-    }
-
     log_batch_offset(cursor, "STATE_BASE_ADDRESS");
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, draw.state_gpu_addr)?;
@@ -4098,21 +4083,6 @@ fn encode_minimal_streamout_proof_batch(
             } else {
                 "adl-gfx12-default"
             },
-        );
-    }
-
-    if device_is_gfx125(warm.device_id) {
-        let chicken_raster_2_value = gfx125_chicken_raster_2_value();
-        log_batch_offset(cursor, "MI_LOAD_REGISTER_IMM CHICKEN_RASTER_2");
-        push_load_register_imm(
-            batch_dwords,
-            &mut cursor,
-            CHICKEN_RASTER_2,
-            chicken_raster_2_value,
-        )?;
-        intel_render_verbose_log!(
-            "gfx125-raster-wa-batch chicken_raster_2=0x{:08X} tbimr_batch_override=1 tbimr_open_batch=1 tbimr_fast_clip=1\n",
-            chicken_raster_2_value,
         );
     }
 

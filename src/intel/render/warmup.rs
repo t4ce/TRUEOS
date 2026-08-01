@@ -6,7 +6,7 @@ static RENDER_PPGTT: Mutex<Option<crate::intel::ppgtt::SparsePpgtt>> = Mutex::ne
 // the HWLRCA/PPGTT backing already handed to the other user.
 static WARM_INIT_LOCK: Mutex<()> = Mutex::new(());
 
-pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
+fn init_warm_state_for_boot(dev: crate::intel::Dev) -> RenderWarmState {
     if let Some(warm) = *WARM_STATE.lock() {
         return warm;
     }

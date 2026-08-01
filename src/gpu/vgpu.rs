@@ -193,9 +193,7 @@ impl KernelClient {
             | Self::Ui4Compositor => {
                 matches!(engine.class, EngineClass::RenderCompute) && engine.instance == 0
             }
-            Self::Ui4Blitter => {
-                matches!(engine.class, EngineClass::Copy) && engine.instance == 0
-            }
+            Self::Ui4Blitter => matches!(engine.class, EngineClass::Copy) && engine.instance == 0,
         }
     }
 }
@@ -634,7 +632,23 @@ pub(crate) struct BrokerStatus {
     pub(crate) guc_submission: bool,
     pub(crate) epoch: u64,
     pub(crate) scheduler: PhysicalSchedulerStatus,
+    pub(crate) kernel_context_boundaries: KernelContextBoundaryStatus,
     pub(crate) devices: Vec<DeviceStatusSnapshot>,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct KernelContextBoundaryStatus {
+    pub(crate) bound: usize,
+    pub(crate) active: usize,
+    pub(crate) coherent: bool,
+    pub(crate) unique_hwlrcas: bool,
+    pub(crate) unique_ppgtt_roots: bool,
+}
+
+impl KernelContextBoundaryStatus {
+    pub(crate) const fn valid(self) -> bool {
+        self.coherent && self.unique_hwlrcas && self.unique_ppgtt_roots
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -1529,26 +1543,28 @@ pub(crate) fn submit_kernel_context(
     }
     let physical = require_physical()?;
     let mut broker = BROKER.lock();
-    let device_handle = ensure_kernel_device(&mut broker, client, descriptor.gpuvm_root_phys)?;
 
     // GuC's registration key is engine + HWLRCA. Reject a second broker
-    // principal claiming that key, even if it supplies the same PPGTT root:
-    // otherwise GuC would hand both virtual clients the same physical token.
-    let hwlrca_claimed_elsewhere = broker.devices.iter().any(|slot| {
+    // principal claiming that key, or another client's PPGTT root: otherwise
+    // GuC could hand two virtual clients the same physical token or address
+    // space despite their distinct software identities.
+    let context_identity_claimed_elsewhere = broker.devices.iter().any(|slot| {
         let Some(other) = slot.record.as_ref() else {
             return false;
         };
         other.principal != client.principal()
             && other.kernel_context_capability.is_some_and(|bound| {
-                bound.engine == descriptor.engine
-                    && bound.hwlrca_lo == descriptor.hwlrca_lo
-                    && bound.hwlrca_hi == descriptor.hwlrca_hi
+                bound.gpuvm_root_phys == descriptor.gpuvm_root_phys
+                    || (bound.engine == descriptor.engine
+                        && bound.hwlrca_lo == descriptor.hwlrca_lo
+                        && bound.hwlrca_hi == descriptor.hwlrca_hi)
             })
     });
-    if hwlrca_claimed_elsewhere {
+    if context_identity_claimed_elsewhere {
         return Err(VgpuError::PermissionDenied);
     }
 
+    let device_handle = ensure_kernel_device(&mut broker, client, descriptor.gpuvm_root_phys)?;
     let device = lookup_device_mut(&mut broker, device_handle, client.principal())?;
     ensure_live(device)?;
     let queue_handle = ensure_kernel_queue(device, client.queue_class())?;
@@ -1647,6 +1663,23 @@ pub(crate) fn kernel_timeline(client: KernelClient) -> Option<TimelineStatus> {
     lookup_queue(device, queue).ok().map(|queue| queue.timeline)
 }
 
+/// Whether a backend may mutate this client's persistent submission storage.
+/// An unseen client is eligible for first-time allocation; a quarantined or
+/// partially destroyed capability is permanently non-reusable until reboot.
+pub(crate) fn kernel_context_storage_reusable(client: KernelClient) -> bool {
+    let broker = BROKER.lock();
+    let Some((_, device)) = find_device_by_principal(&broker, client.principal()) else {
+        return true;
+    };
+    !device.lost
+        && match device.kernel_context_capability {
+            None => device.contexts.is_empty(),
+            Some(identity) => {
+                device.contexts.len() == 1 && device.contexts[0].descriptor == identity
+            }
+        }
+}
+
 /// Result of containing one failed privileged kernel client.
 ///
 /// The client's allocations and GPUVM deliberately remain owned by the
@@ -1665,7 +1698,7 @@ pub(crate) struct KernelClientIsolation {
 /// Successful GuC context destruction disables scheduling before
 /// deregistration. Failed destructions remain bound in the lost virtual device
 /// so their IDs and backing storage cannot be reused unsafely.
-pub(crate) fn isolate_kernel_client(client: KernelClient) -> KernelClientIsolation {
+pub(crate) fn isolate_kernel_context(client: KernelClient) -> KernelClientIsolation {
     let physical = physical_device();
     let mut broker = BROKER.lock();
     let Some((_, device)) = find_device_mut_by_principal(&mut broker, client.principal()) else {
@@ -1700,6 +1733,14 @@ pub(crate) fn isolate_kernel_client(client: KernelClient) -> KernelClientIsolati
         }
     }
     report
+}
+
+/// Compatibility name for callers whose lane and context are synonymous.
+/// The immutable capability rule guarantees that one `KernelClient` owns at
+/// most one physical context, so this never expands recovery to an engine or
+/// another client.
+pub(crate) fn isolate_kernel_client(client: KernelClient) -> KernelClientIsolation {
+    isolate_kernel_context(client)
 }
 
 /// Reset/device-loss hook for the physical driver. All tenant handles remain
@@ -1775,6 +1816,7 @@ pub(crate) fn broker_status() -> BrokerStatus {
         .map(|device| device.scheduler_status())
         .unwrap_or_default();
     let broker = BROKER.lock();
+    let kernel_context_boundaries = kernel_context_boundary_status(&broker);
     let mut devices = Vec::new();
     for (slot, entry) in broker.devices.iter().enumerate() {
         let Some(device) = entry.record.as_ref() else {
@@ -1840,8 +1882,52 @@ pub(crate) fn broker_status() -> BrokerStatus {
         guc_submission: info.is_some_and(|info| info.guc_submission),
         epoch: broker.epoch,
         scheduler,
+        kernel_context_boundaries,
         devices,
     }
+}
+
+fn kernel_context_boundary_status(broker: &Broker) -> KernelContextBoundaryStatus {
+    let mut report = KernelContextBoundaryStatus {
+        coherent: true,
+        unique_hwlrcas: true,
+        unique_ppgtt_roots: true,
+        ..KernelContextBoundaryStatus::default()
+    };
+    let mut identities: Vec<PhysicalContextDescriptor> = Vec::new();
+
+    for device in broker
+        .devices
+        .iter()
+        .filter_map(|slot| slot.record.as_ref())
+    {
+        let Some(identity) = device.kernel_context_capability else {
+            report.coherent &= device.contexts.is_empty();
+            continue;
+        };
+        report.bound = report.bound.saturating_add(1);
+        report.active = report.active.saturating_add(device.contexts.len());
+        let root_matches = matches!(
+            device.gpuvm,
+            GpuVmBinding::Borrowed { root_phys } if root_phys == identity.gpuvm_root_phys
+        );
+        let binding_matches = device.contexts.len() <= 1
+            && device
+                .contexts
+                .iter()
+                .all(|binding| binding.descriptor == identity);
+        let live_context_present = device.lost || device.contexts.len() == 1;
+        report.coherent &= root_matches && binding_matches && live_context_present;
+
+        for previous in &identities {
+            report.unique_hwlrcas &= previous.engine != identity.engine
+                || previous.hwlrca_lo != identity.hwlrca_lo
+                || previous.hwlrca_hi != identity.hwlrca_hi;
+            report.unique_ppgtt_roots &= previous.gpuvm_root_phys != identity.gpuvm_root_phys;
+        }
+        identities.push(identity);
+    }
+    report
 }
 
 pub(crate) fn run_broker_self_test() -> BrokerSelfTestReport {

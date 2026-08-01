@@ -248,7 +248,7 @@ pub fn init_once() {
         guc_ready && physical_gt.accepted() && self::render::init_fixed_render_ggtt_for_boot(dev);
     crate::log_info!(
         target: "render";
-        "intel/gt-global-init: fixed_render_ggtt={} ownership=boot-only guc_ready={} client_remap=forbidden",
+        "intel/gt-global-init: fixed_render_ggtt={} ownership=boot-only guc_ready={} client_remap=forbidden\n",
         fixed_render_ggtt_ready as u8,
         guc_ready as u8,
     );
@@ -902,7 +902,7 @@ fn init_physical_gt_once(dev: Dev) -> PhysicalGtBootReport {
         };
         crate::log_info!(
             target: "render";
-            "intel/gt-global-init: accepted={} ownership=boot-only device=0x{:04X} render_forcewake={} media_forcewake={} gt_forcewake={} rcs_workarounds={} runtime_repair=forbidden",
+            "intel/gt-global-init: accepted={} ownership=boot-only device=0x{:04X} render_forcewake={} media_forcewake={} gt_forcewake={} rcs_workarounds={} runtime_repair=forbidden\n",
             report.accepted() as u8,
             dev.device_id,
             report.render_forcewake_ready as u8,

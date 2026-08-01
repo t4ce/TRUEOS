@@ -14,9 +14,75 @@ const PLANE_SLOT: usize = crate::ui4::RGB_OVERLAY_PLANE_SLOT_2;
 const MARGIN: u32 = 48;
 const TRANSPARENT_CLEAR_RGBA: [u8; 4] = [0, 0, 0, 0];
 const NATIVE_CHURN_FRAME_PERIOD_US: u64 = 16_667;
+const NATIVE_PENDULUM_FRAME_PERIOD_US: u64 = 16_667;
+const NATIVE_FIRST_FRAME_INCOMPLETE_RETRY_LIMIT: u64 = 3;
 const HELIO_OWNER_BASE: u8 = 8;
 pub(crate) const INSTANCE_CAPACITY: usize = 10;
 const PENDING_CAPACITY: usize = INSTANCE_CAPACITY;
+pub(crate) const CPU_CARRIER_CAPACITY: usize = 3;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CpuCarrier {
+    pub(crate) id: u8,
+    pub(crate) worker_slot: u32,
+    pub(crate) core_kind: u8,
+}
+
+#[derive(Copy, Clone)]
+struct CpuCarrierRegistry {
+    count: u8,
+    carriers: [Option<CpuCarrier>; CPU_CARRIER_CAPACITY],
+}
+
+impl CpuCarrierRegistry {
+    const fn new() -> Self {
+        Self {
+            count: 0,
+            carriers: [None; CPU_CARRIER_CAPACITY],
+        }
+    }
+
+    fn carrier_for_instance(self, instance_id: u32) -> Option<CpuCarrier> {
+        if self.count == 0 {
+            return None;
+        }
+        let index = instance_id.wrapping_sub(1) as usize % self.count as usize;
+        self.carriers.get(index).copied().flatten()
+    }
+}
+
+static CPU_CARRIERS: spin::Mutex<CpuCarrierRegistry> = spin::Mutex::new(CpuCarrierRegistry::new());
+
+/// Publish the stable AP2+ worker set before any Helio carrier task starts.
+///
+/// Instance ids are sharded over this exact ordered set. The registry is CPU
+/// placement metadata only: all carriers continue to submit through the one
+/// real Render0 runtime until Render owns independent per-carrier state.
+pub(crate) fn configure_cpu_carriers(workers: &[(u32, u8)]) -> bool {
+    if workers.is_empty() || workers.len() > CPU_CARRIER_CAPACITY {
+        return false;
+    }
+
+    let mut registry = CpuCarrierRegistry::new();
+    registry.count = workers.len() as u8;
+    for (id, &(worker_slot, core_kind)) in workers.iter().enumerate() {
+        if !crate::workers::is_general_background_worker_slot(worker_slot)
+            || crate::workers::core_kind_for_slot(worker_slot) != core_kind
+            || workers[..id]
+                .iter()
+                .any(|(registered_slot, _)| *registered_slot == worker_slot)
+        {
+            return false;
+        }
+        registry.carriers[id] = Some(CpuCarrier {
+            id: id as u8,
+            worker_slot,
+            core_kind,
+        });
+    }
+    *CPU_CARRIERS.lock() = registry;
+    true
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum InstanceState {
@@ -61,6 +127,9 @@ pub(crate) enum StopRequest {
 pub(crate) struct InstanceStatus {
     pub(crate) instance_id: u32,
     pub(crate) slot: Option<u8>,
+    pub(crate) cpu_carrier_id: Option<u8>,
+    pub(crate) worker_slot: Option<u32>,
+    pub(crate) core_kind: Option<u8>,
     pub(crate) state: InstanceState,
     pub(crate) example_id: u8,
     pub(crate) artifact_name: &'static str,
@@ -72,6 +141,7 @@ pub(crate) struct InstanceStatus {
 pub(crate) struct PoolStatus {
     pub(crate) capacity: usize,
     pub(crate) queued: usize,
+    pub(crate) cpu_carriers: Vec<CpuCarrier>,
     pub(crate) instances: Vec<InstanceStatus>,
 }
 
@@ -85,6 +155,7 @@ struct LaunchJob {
 struct InstanceRecord {
     instance_id: u32,
     example_id: u8,
+    cpu_carrier: CpuCarrier,
     state: InstanceState,
     last_error: Option<&'static str>,
 }
@@ -121,7 +192,7 @@ const fn artifact_for(example_id: u8) -> (&'static str, usize) {
     }
 }
 
-/// Queue an independent embedded game instance for the resident AP1 service.
+/// Queue an independent embedded game instance for the resident carrier pool.
 /// Once all ten task slots are occupied, the oldest instance is asked to stop
 /// at its next safe frame boundary and this newest request remains queued.
 pub(crate) fn request_launch(example_id: u8) -> LaunchRequest {
@@ -238,6 +309,7 @@ pub(crate) fn request_stop_all() -> usize {
 }
 
 pub(crate) fn status() -> PoolStatus {
+    let carrier_registry = *CPU_CARRIERS.lock();
     let pool = GAME_POOL.lock();
     let mut instances = Vec::with_capacity(pool.slots.len() + pool.pending.len());
     for (slot, record) in pool.slots.iter().enumerate() {
@@ -246,6 +318,9 @@ pub(crate) fn status() -> PoolStatus {
         instances.push(InstanceStatus {
             instance_id: record.instance_id,
             slot: u8::try_from(slot).ok(),
+            cpu_carrier_id: Some(record.cpu_carrier.id),
+            worker_slot: Some(record.cpu_carrier.worker_slot),
+            core_kind: Some(record.cpu_carrier.core_kind),
             state: record.state,
             example_id: record.example_id,
             artifact_name,
@@ -255,9 +330,13 @@ pub(crate) fn status() -> PoolStatus {
     }
     for job in &pool.pending {
         let (artifact_name, artifact_bytes) = artifact_for(job.example_id);
+        let cpu_carrier = carrier_registry.carrier_for_instance(job.instance_id);
         instances.push(InstanceStatus {
             instance_id: job.instance_id,
             slot: None,
+            cpu_carrier_id: cpu_carrier.map(|carrier| carrier.id),
+            worker_slot: cpu_carrier.map(|carrier| carrier.worker_slot),
+            core_kind: cpu_carrier.map(|carrier| carrier.core_kind),
             state: InstanceState::Queued,
             example_id: job.example_id,
             artifact_name,
@@ -269,6 +348,12 @@ pub(crate) fn status() -> PoolStatus {
     PoolStatus {
         capacity: INSTANCE_CAPACITY,
         queued: pool.pending.len(),
+        cpu_carriers: carrier_registry
+            .carriers
+            .iter()
+            .flatten()
+            .copied()
+            .collect(),
         instances,
     }
 }
@@ -313,6 +398,7 @@ struct InstanceContext {
     slot: usize,
     instance_id: u32,
     example_id: u8,
+    cpu_carrier: CpuCarrier,
     owner: crate::ui4::WindowOwner,
 }
 
@@ -351,15 +437,25 @@ impl InstanceContext {
     }
 
     fn mark_online(self) -> bool {
-        let mut pool = GAME_POOL.lock();
-        let Some(record) = pool.slots.get_mut(self.slot).and_then(Option::as_mut) else {
-            return false;
-        };
-        if record.instance_id != self.instance_id || record.state == InstanceState::Stopping {
-            return false;
+        {
+            let mut pool = GAME_POOL.lock();
+            let Some(record) = pool.slots.get_mut(self.slot).and_then(Option::as_mut) else {
+                return false;
+            };
+            if record.instance_id != self.instance_id || record.state == InstanceState::Stopping {
+                return false;
+            }
+            record.state = InstanceState::Online;
+            record.last_error = None;
         }
-        record.state = InstanceState::Online;
-        record.last_error = None;
+        crate::log_info!(target: "helio";
+            "helio instance={} status=online cpu_carrier={} worker_slot={} current_slot={} core_kind={} cpu_sharding=instance-id-mod-carrier-count gpu_principal=render0 gpu_context=shared-single-render-runtime gpu_affinity=none\n",
+            self.instance_id,
+            self.cpu_carrier.id,
+            self.cpu_carrier.worker_slot,
+            crate::percpu::current_slot(),
+            self.cpu_carrier.core_kind,
+        );
         true
     }
 
@@ -398,13 +494,20 @@ fn escape_pressed(window: crate::ui4::WindowId, events: &[crate::ui4::winit_inpu
     })
 }
 
-fn claim_next_launch() -> Option<InstanceContext> {
+fn claim_next_launch(cpu_carrier: CpuCarrier, carrier_count: u8) -> Option<InstanceContext> {
+    if carrier_count == 0 || cpu_carrier.id >= carrier_count {
+        return None;
+    }
     let mut pool = GAME_POOL.lock();
     let slot = pool.slots.iter().position(Option::is_none)?;
-    let job = pool.pending.pop_front()?;
+    let pending_index = pool.pending.iter().position(|job| {
+        job.instance_id.wrapping_sub(1) % carrier_count as u32 == cpu_carrier.id as u32
+    })?;
+    let job = pool.pending.remove(pending_index)?;
     pool.slots[slot] = Some(InstanceRecord {
         instance_id: job.instance_id,
         example_id: job.example_id,
+        cpu_carrier,
         state: InstanceState::Starting,
         last_error: None,
     });
@@ -412,6 +515,7 @@ fn claim_next_launch() -> Option<InstanceContext> {
         slot,
         instance_id: job.instance_id,
         example_id: job.example_id,
+        cpu_carrier,
         owner: crate::ui4::WindowOwner::KernelApp(HELIO_OWNER_BASE + slot as u8),
     })
 }
@@ -989,7 +1093,7 @@ async fn render_native_churn_frame(
         || result.present_copy_performed
     {
         let _ = crate::ui4::cancel_frame_buffer(lease);
-        return Err(GameError::Render("helio-incomplete-native-churn-frame"));
+        return Err(GameError::Render("helio-incomplete-native-instanced-frame"));
     }
     let Some(release) = result.release_fence else {
         let _ = crate::ui4::cancel_frame_buffer(lease);
@@ -1172,6 +1276,57 @@ fn apply_churn_key_actions(
                     instance_id,
                     collisions,
                     if collisions { "burst" } else { "orbit-reset" },
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+fn apply_pendulum_key_actions(
+    engine: &mut trueos_helio_runtime::pendulum_bigcloth::Engine,
+    instance_id: u32,
+    window: crate::ui4::WindowId,
+    events: &[crate::ui4::winit_input::Event],
+) {
+    use crate::ui4::winit_input::{ElementState, Event, KeyCode, PhysicalKey, WindowEvent};
+
+    for event in events {
+        let Event::WindowEvent {
+            window_id,
+            event:
+                WindowEvent::KeyboardInput {
+                    event:
+                        crate::ui4::winit_input::KeyEvent {
+                            physical_key: PhysicalKey::Code(key),
+                            state: ElementState::Pressed,
+                            ..
+                        },
+                },
+            ..
+        } = *event
+        else {
+            continue;
+        };
+        if window_id != window {
+            continue;
+        }
+        match key {
+            KeyCode::KeyC => {
+                engine.toggle_enabled();
+                crate::log_info!(
+                    target: "helio";
+                    "helio instance={} pendulum input physics={} source=ui4-winit-bridge\n",
+                    instance_id,
+                    engine.enabled(),
+                );
+            }
+            KeyCode::KeyR => {
+                engine.reset();
+                crate::log_info!(
+                    target: "helio";
+                    "helio instance={} pendulum input action=reset source=ui4-winit-bridge\n",
+                    instance_id,
                 );
             }
             _ => {}
@@ -1736,8 +1891,11 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
                 Timer::at(next_frame).await;
                 continue;
             }
-            Err(GameError::Render("helio-incomplete-native-churn-frame")) => {
+            Err(GameError::Render("helio-incomplete-native-instanced-frame")) => {
                 incomplete_retries = incomplete_retries.saturating_add(1);
+                if first_frame && incomplete_retries >= NATIVE_FIRST_FRAME_INCOMPLETE_RETRY_LIMIT {
+                    break Err(GameError::NativeUnavailable("helio-native-first-frame-nonretired"));
+                }
                 if let Some(mut sample) = last_sample {
                     sample.incomplete_retries = incomplete_retries;
                     publish_gpu_logger_sample(sample);
@@ -1790,6 +1948,289 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
     let _ = crate::intel::render::release_resident_churn_forward(&resident);
     destroy_unpublished_surface(surface);
     result
+}
+
+async fn run_pendulum_native(context: InstanceContext) -> Result<(), GameError> {
+    let mut surface = create_surface(context)?;
+    let spec = match trueos_helio_runtime::pendulum_bigcloth::Spec::decode_artifact(GAME_ARTIFACT) {
+        Ok(spec) => spec,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(GameError::Artifact(error));
+        }
+    };
+    let mut engine = match trueos_helio_runtime::pendulum_bigcloth::Engine::new(spec) {
+        Ok(engine) => engine,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(GameError::Artifact(error));
+        }
+    };
+    let initial = match engine.step_instances(surface.width as f32 / surface.height as f32) {
+        Ok(frame) => frame,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(GameError::Artifact(error));
+        }
+    };
+    let max_instances = initial.instances.len();
+    let resident = match crate::intel::render::create_resident_churn_forward(
+        CHURN_FORWARD_ARTIFACT,
+        max_instances,
+        initial.meshes,
+    ) {
+        Ok(resident) => resident,
+        Err(reason) => {
+            destroy_unpublished_surface(surface);
+            return Err(GameError::NativeUnavailable(reason));
+        }
+    };
+    if let Err(reason) =
+        crate::intel::render::update_resident_churn_forward_frame(&resident, &initial)
+    {
+        let _ = crate::intel::render::release_resident_churn_forward(&resident);
+        destroy_unpublished_surface(surface);
+        return Err(GameError::NativeUnavailable(reason));
+    }
+    let mut prepared_triangles = native_churn_triangle_count(&initial);
+
+    let mut input = crate::ui4::winit_input::EventLoopInput::new(context.owner);
+    let mut fly_camera = FlyCamera::new(engine.camera());
+    let mut first_frame = true;
+    let mut frame_prepared = true;
+    let mut frame_index = 0u64;
+    let mut busy_retries = 0u64;
+    let mut incomplete_retries = 0u64;
+    let mut last_sample: Option<crate::spirit::gpu_logger::GpuLoggerSample> = None;
+    let mut last_successful_publish: Option<Instant> = None;
+    let mut retired_frames = Vec::new();
+    let mut pending_resize: Option<PendingGameResize> = None;
+    let mut next_frame = Instant::now();
+    let result = loop {
+        retire_frames(&mut retired_frames);
+        if context.is_stopping() {
+            break Ok(());
+        }
+        if !first_frame && !frame_prepared {
+            let Some(window) = surface.window else {
+                break Err(GameError::InvalidFrame);
+            };
+            let events = input.poll();
+            if escape_pressed(window, &events) {
+                context.request_stop("focused-window-escape");
+                break Ok(());
+            }
+            apply_pendulum_key_actions(&mut engine, context.instance_id, window, &events);
+            let camera_changed = fly_camera.apply_events(&events)
+                | fly_camera.apply_held_keys(&input, window, 0.016);
+            if pending_resize.is_none()
+                && let Some((width, height)) = desired_resize(&surface)
+            {
+                match prepare_resize(&surface, width, height) {
+                    Ok(replacement) => {
+                        crate::log_info!(
+                            target: "helio";
+                            "helio instance={} native resize prepared example=4 window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap\n",
+                            context.instance_id,
+                            window.raw(),
+                            surface.width,
+                            surface.height,
+                            width,
+                            height,
+                            replacement.frame.raw(),
+                        );
+                        pending_resize = Some(replacement);
+                    }
+                    Err(error) => {
+                        crate::log_warn!(
+                            target: "helio";
+                            "helio instance={} native resize deferred example=4 requested={}x{} error={:?}\n",
+                            context.instance_id,
+                            width,
+                            height,
+                            error,
+                        );
+                    }
+                }
+            }
+            let (render_width, render_height) = pending_resize
+                .map_or((surface.width, surface.height), |replacement| {
+                    (replacement.width, replacement.height)
+                });
+            if camera_changed && let Err(error) = engine.set_camera(fly_camera.camera) {
+                break Err(GameError::Artifact(error));
+            }
+            let prepared = match engine.step_instances(render_width as f32 / render_height as f32) {
+                Ok(frame) => frame,
+                Err(error) => break Err(GameError::Artifact(error)),
+            };
+            if let Err(reason) =
+                crate::intel::render::update_resident_churn_forward_frame(&resident, &prepared)
+            {
+                break Err(GameError::Render(reason));
+            }
+            prepared_triangles = native_churn_triangle_count(&prepared);
+            frame_prepared = true;
+        }
+
+        let (render_frame_handle, render_width, render_height) = pending_resize
+            .map_or((surface.frame, surface.width, surface.height), |replacement| {
+                (replacement.frame, replacement.width, replacement.height)
+            });
+        match render_native_churn_frame(
+            render_frame_handle,
+            render_width,
+            render_height,
+            &resident,
+            TRANSPARENT_CLEAR_RGBA,
+        )
+        .await
+        {
+            Ok(rendered) => {
+                if let Some(replacement) = pending_resize.take() {
+                    match commit_resize(&mut surface, replacement) {
+                        Ok(previous) => {
+                            retired_frames.push(previous);
+                            crate::log_info!(
+                                target: "helio";
+                                "helio instance={} native resize committed example=4 window={} extent={}x{} frame={}\n",
+                                context.instance_id,
+                                surface.window.map_or(0, crate::ui4::WindowId::raw),
+                                surface.width,
+                                surface.height,
+                                surface.frame.raw(),
+                            );
+                        }
+                        Err(error) => {
+                            let _ = crate::ui4::destroy_frame(replacement.frame);
+                            frame_prepared = false;
+                            crate::log_warn!(
+                                target: "helio";
+                                "helio instance={} native resize commit rejected example=4 requested={}x{} error={:?}\n",
+                                context.instance_id,
+                                replacement.width,
+                                replacement.height,
+                                error,
+                            );
+                            next_frame += Duration::from_micros(NATIVE_PENDULUM_FRAME_PERIOD_US);
+                            if next_frame <= Instant::now() {
+                                next_frame = Instant::now();
+                            }
+                            Timer::at(next_frame).await;
+                            continue;
+                        }
+                    }
+                } else if let Err(error) = publish_surface_window(&mut surface) {
+                    break Err(error);
+                }
+                frame_prepared = false;
+                frame_index = frame_index.saturating_add(1);
+                let published_at = Instant::now();
+                let cadence_us = last_successful_publish
+                    .map(|previous| published_at.saturating_duration_since(previous).as_micros())
+                    .unwrap_or(0);
+                last_successful_publish = Some(published_at);
+                let sample = native_churn_gpu_logger_sample(
+                    &rendered,
+                    frame_index,
+                    cadence_us,
+                    engine.segment_count() + 1,
+                    prepared_triangles,
+                    busy_retries,
+                    incomplete_retries,
+                );
+                publish_gpu_logger_sample(sample);
+                last_sample = Some(sample);
+            }
+            Err(GameError::Frame(crate::ui4::FramePoolError::Busy)) => {
+                busy_retries = busy_retries.saturating_add(1);
+                if let Some(mut sample) = last_sample {
+                    sample.busy_retries = busy_retries;
+                    publish_gpu_logger_sample(sample);
+                    last_sample = Some(sample);
+                }
+                next_frame += Duration::from_micros(NATIVE_PENDULUM_FRAME_PERIOD_US);
+                if next_frame <= Instant::now() {
+                    next_frame = Instant::now();
+                }
+                Timer::at(next_frame).await;
+                continue;
+            }
+            Err(GameError::Render("helio-incomplete-native-instanced-frame")) => {
+                incomplete_retries = incomplete_retries.saturating_add(1);
+                if first_frame && incomplete_retries >= NATIVE_FIRST_FRAME_INCOMPLETE_RETRY_LIMIT {
+                    break Err(GameError::NativeUnavailable("helio-native-first-frame-nonretired"));
+                }
+                if let Some(mut sample) = last_sample {
+                    sample.incomplete_retries = incomplete_retries;
+                    publish_gpu_logger_sample(sample);
+                    last_sample = Some(sample);
+                }
+                next_frame += Duration::from_micros(NATIVE_PENDULUM_FRAME_PERIOD_US);
+                if next_frame <= Instant::now() {
+                    next_frame = Instant::now();
+                }
+                Timer::at(next_frame).await;
+                continue;
+            }
+            Err(error) => break Err(error),
+        }
+        if first_frame {
+            let window = surface
+                .window
+                .expect("published native Helio pendulum window");
+            if !input.register_window(window) {
+                break Err(GameError::Render("helio-input-window-capacity"));
+            }
+            if !context.mark_online() {
+                break Ok(());
+            }
+            crate::log_info!(
+                target: "helio";
+                "helio instance={} example=4 name=pendulum-bigcloth native=1 online artifact_bytes={} segments={} instances={} draw_groups=12 geometry=one-retained-posnormal-box frame={} window={} extent={}x{} plane={} controls=WASD+Space+Shift,left-drag-look,C-pause,R-reset producer_pacing=absolute-deadline period_us={} path=helioa-pendulum-v1->compact-centers+transforms->artifact-native-vs-local-to-world-to-clip->gpu-indexed-indirect->one-guc-schedule->ui4-triple-direct cpu_vertex_projection=0 cpu_winding_repair=0 mutable_upload=camera+337-instances+compacted+indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
+                context.instance_id,
+                CHURN_FORWARD_ARTIFACT.len(),
+                engine.segment_count(),
+                resident.max_instances(),
+                surface.frame.raw(),
+                window.raw(),
+                surface.width,
+                surface.height,
+                PLANE_SLOT,
+                NATIVE_PENDULUM_FRAME_PERIOD_US,
+            );
+            first_frame = false;
+        }
+        next_frame += Duration::from_micros(NATIVE_PENDULUM_FRAME_PERIOD_US);
+        if next_frame <= Instant::now() {
+            next_frame = Instant::now();
+        }
+        Timer::at(next_frame).await;
+    };
+    if let Some(replacement) = pending_resize {
+        crate::ui4::retire_frame_when_released(replacement.frame);
+    }
+    transfer_retired_frames(&mut retired_frames);
+    let _ = crate::intel::render::release_resident_churn_forward(&resident);
+    destroy_unpublished_surface(surface);
+    result
+}
+
+async fn run_pendulum(context: InstanceContext) -> Result<(), GameError> {
+    match run_pendulum_native(context).await {
+        Ok(()) => Ok(()),
+        Err(GameError::NativeUnavailable(reason)) => {
+            crate::log_warn!(
+                target: "helio";
+                "helio instance={} example=4 native activation unavailable reason={} artifact_bytes={} action=compatibility-resident-vertices\n",
+                context.instance_id,
+                reason,
+                CHURN_FORWARD_ARTIFACT.len(),
+            );
+            run_ported_scene(context).await
+        }
+        Err(error) => Err(error),
+    }
 }
 
 async fn run_churn(context: InstanceContext) -> Result<(), GameError> {
@@ -2271,10 +2712,27 @@ async fn helio_game_instance_task(context: InstanceContext) {
         if context.is_stopping() {
             break;
         }
+        let current_slot = crate::percpu::current_slot() as u32;
+        if current_slot != context.cpu_carrier.worker_slot {
+            if !context.mark_starting_error("helio-cpu-carrier-mismatch") {
+                break;
+            }
+            crate::log_warn!(target: "helio";
+                "helio instance={} example={} cpu carrier mismatch cpu_carrier={} assigned_slot={} current_slot={} action=refuse-wrong-executor\n",
+                context.instance_id,
+                context.example_id,
+                context.cpu_carrier.id,
+                context.cpu_carrier.worker_slot,
+                current_slot,
+            );
+            Timer::after(Duration::from_millis(250)).await;
+            continue;
+        }
         let result = match context.example_id {
             1 => run_cube(context).await,
             2 => run_churn(context).await,
-            3 | 4 => run_ported_scene(context).await,
+            3 => run_ported_scene(context).await,
+            4 => run_pendulum(context).await,
             _ => Err(GameError::Render("helio-example-reserved")),
         };
         match result {
@@ -2298,39 +2756,81 @@ async fn helio_game_instance_task(context: InstanceContext) {
         }
     }
     crate::log_info!(target: "helio";
-        "helio instance={} example={} offline action=pool-slot-release\n",
+        "helio instance={} example={} offline cpu_carrier={} worker_slot={} core_kind={} action=pool-slot-release\n",
         context.instance_id,
         context.example_id,
+        context.cpu_carrier.id,
+        context.cpu_carrier.worker_slot,
+        context.cpu_carrier.core_kind,
     );
     release_instance_slot(context);
 }
 
 /// Dispatches numbered Shell2/Blueprint requests into ten independent Helio
-/// tasks on the already-resident AP1/UI executor.
-#[embassy_executor::task]
-pub async fn helio_game_service_task() {
+/// tasks deterministically sharded across up to three AP2+ executors.
+#[embassy_executor::task(pool_size = CPU_CARRIER_CAPACITY)]
+pub async fn helio_game_service_task(
+    cpu_carrier_id: u8,
+    carrier_count: u8,
+    worker_slot: u32,
+    core_kind: u8,
+) {
+    let cpu_carrier = CpuCarrier {
+        id: cpu_carrier_id,
+        worker_slot,
+        core_kind,
+    };
+    let current_slot = crate::percpu::current_slot() as u32;
+    let current_core_kind = crate::workers::core_kind_for_slot(current_slot);
+    if current_slot != worker_slot
+        || current_core_kind != core_kind
+        || !crate::workers::is_general_background_worker_slot(current_slot)
+    {
+        crate::log_warn!(target: "helio";
+            "helio cpu carrier={} placement invalid assigned_slot={} current_slot={} assigned_core_kind={} current_core_kind={} expected=background-ap2+ action=halt-carrier-before-claim\n",
+            cpu_carrier_id,
+            worker_slot,
+            current_slot,
+            core_kind,
+            current_core_kind,
+        );
+        return;
+    }
+    crate::log_info!(target: "helio";
+        "helio cpu carrier={} online carrier_count={} worker_slot={} current_slot={} core_kind={} placement=background-ap2+ sharding=instance-id-mod-carrier-count gpu_principal=render0 gpu_context=shared-single-render-runtime gpu_affinity=none\n",
+        cpu_carrier_id,
+        carrier_count,
+        worker_slot,
+        current_slot,
+        core_kind,
+    );
     let spawner: embassy_executor::Spawner =
         unsafe { embassy_executor::Spawner::for_current_executor().await };
     loop {
-        while let Some(context) = claim_next_launch() {
+        while let Some(context) = claim_next_launch(cpu_carrier, carrier_count) {
             match helio_game_instance_task(context) {
                 Ok(token) => {
                     spawner.spawn(token);
                     crate::log_info!(target: "helio";
-                        "helio instance={} example={} launch dispatched pool_slot={}/{} owner=kernel-app-{}\n",
+                        "helio instance={} example={} launch dispatched pool_slot={}/{} owner=kernel-app-{} cpu_carrier={} worker_slot={} core_kind={} executor=current-background-worker gpu_principal=render0 gpu_context=shared-single-render-runtime\n",
                         context.instance_id,
                         context.example_id,
                         context.slot + 1,
                         INSTANCE_CAPACITY,
                         HELIO_OWNER_BASE + context.slot as u8,
+                        context.cpu_carrier.id,
+                        context.cpu_carrier.worker_slot,
+                        context.cpu_carrier.core_kind,
                     );
                 }
                 Err(error) => {
                     requeue_failed_spawn(context);
                     crate::log_warn!(target: "helio";
-                        "helio instance={} example={} dispatch deferred error={:?} action=requeue\n",
+                        "helio instance={} example={} dispatch deferred cpu_carrier={} worker_slot={} error={:?} action=requeue-same-shard\n",
                         context.instance_id,
                         context.example_id,
+                        context.cpu_carrier.id,
+                        context.cpu_carrier.worker_slot,
                         error,
                     );
                     break;

@@ -530,42 +530,8 @@ fn direct_rcs_map_ppgtt_region(
 }
 
 fn direct_rcs_forcewake(dev: super::Dev) -> bool {
-    // TRUEOS retains the kernel forcewake request for the lifetime of the
-    // claimed GT.  Releasing and reacquiring it for every tiny LFM projection
-    // forced each submission through an avoidable render power transition.
-    // Match a refcounted forcewake_get(): an already-awake domain is the hot
-    // path, while a lost request is asserted again without first dropping the
-    // other live domain.
-    let render_awake =
-        super::mmio_read(dev, FORCEWAKE_ACK_RENDER) & FORCEWAKE_KERNEL == FORCEWAKE_KERNEL;
-    let gt_awake = super::mmio_read(dev, FORCEWAKE_ACK_GT) & FORCEWAKE_KERNEL == FORCEWAKE_KERNEL;
-
-    let render_ok = render_awake || {
-        super::mmio_write(dev, FORCEWAKE_RENDER, super::mask_en(FORCEWAKE_KERNEL));
-        direct_rcs_wait_eq(
-            dev,
-            FORCEWAKE_ACK_RENDER,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_POLL_ITERS,
-        )
-    };
-    let gt_ok = gt_awake || {
-        super::mmio_write(dev, FORCEWAKE_GT, super::mask_en(FORCEWAKE_KERNEL));
-        direct_rcs_wait_eq(
-            dev,
-            FORCEWAKE_ACK_GT,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_POLL_ITERS,
-        )
-    };
-    if render_ok && super::mmio_read(dev, RCS_CS_DEBUG_MODE1) & FF_DOP_CLOCK_GATE_DISABLE == 0 {
-        super::mmio_write(
-            dev,
-            RCS_CS_DEBUG_MODE1,
-            direct_rcs_masked_bit_enable(FF_DOP_CLOCK_GATE_DISABLE),
-        );
-    }
-    render_ok && gt_ok
+    // Forcewake ownership and device-global RCS workarounds belong to the GT
+    // boot boundary. Runtime clients may observe and reject a lost contract,
+    // but must never repair shared registers beneath another live context.
+    super::physical_gt_ready(dev)
 }

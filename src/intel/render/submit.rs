@@ -658,16 +658,24 @@ fn submit_warm_render_batch(
     if is_surface_draw_submit_name(submit_name) {
         log_triangle_demo_stats(dev, completed);
     }
-    if !completed && resident_scene_submit {
-        intel_render_focus_log!(
-            "{} recovery scoped owner=guc reason=nonretired-context direct-engine-reset=0 action=isolate-render-client\n",
-            submit_name
-        );
-    }
     // This still bridges hardware retirement into the software GuC timeline
     // by CPU-polling the post-sync cookie. It is a correctness boundary, not
     // yet the eventual asynchronous GuC fence implementation.
     let _ = crate::gpu::executor::complete_kernel_submission(gpu_submission, completed);
+    if !completed {
+        // Keep the storage lease live while GuC disables this exact context.
+        // Releasing the lease first would let another CPU rewrite the shared
+        // LRC/ring in the gap between timeout detection and quarantine.
+        let isolation = crate::gpu::vgpu::isolate_kernel_context(render_client);
+        intel_render_focus_log!(
+            "{} recovery scoped owner=guc reason=nonretired-context client={} device_found={} contexts_disabled={} contexts_retained={} direct-engine-reset=0 action=isolate-render-context mutable-lrc-reused=0\n",
+            submit_name,
+            render_client.name(),
+            isolation.device_found as u8,
+            isolation.contexts_disabled,
+            isolation.contexts_retained,
+        );
+    }
     completed
 }
 
@@ -1894,11 +1902,10 @@ fn recover_render_engine_after_nonretired_submit(
     let el_pre = crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO);
     let mi_mode_pre = crate::intel::mmio_read(dev, RCS_RING_MI_MODE);
     let acthd_pre = crate::intel::mmio_read(dev, RCS_RING_ACTHD);
-    let isolation = crate::gpu::vgpu::isolate_kernel_client(
-        crate::gpu::vgpu::KernelClient::Render,
-    );
+    let isolation =
+        crate::gpu::vgpu::isolate_kernel_context(crate::gpu::vgpu::KernelClient::Render);
     intel_render_focus_log!(
-        "{} recovery scoped execlist_lo=0x{:08X} mi_mode=0x{:08X} acthd=0x{:08X} client=kernel-render device_found={} contexts_disabled={} contexts_retained={} direct-engine-reset=0 action=isolate-render-client\n",
+        "{} recovery scoped execlist_lo=0x{:08X} mi_mode=0x{:08X} acthd=0x{:08X} client=kernel-render-0 device_found={} contexts_disabled={} contexts_retained={} direct-engine-reset=0 action=isolate-render-context\n",
         submit_name,
         el_pre,
         mi_mode_pre,

@@ -8,7 +8,15 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::{Camera, Error, Projector, churn::Batch, linear_rgba_to_srgba8};
+use crate::churn::{
+    DRAW_GROUP_COUNT, DirtyRange, DrawGroupDescriptor, GpuCameraUniforms, GpuForwardLitGlobals,
+    GpuInstanceData, GpuLight, GpuMaterial, INSTANCE_FLAG_CASTS_SHADOW,
+    INSTANCE_FLAG_RECEIVES_SHADOW, InstanceFrame, LIGHT_COUNT, MATERIAL_COUNT, MeshDescriptor,
+    SHAPE_COUNT, gpu_camera_uniforms,
+};
+use crate::{
+    Camera, DrawIndexedIndirectArgs, Error, Projector, churn::Batch, linear_rgba_to_srgba8,
+};
 use trueos_helio_artifact::SectionKind;
 
 pub const SECTION_NAME: &str = "scene/pendulum-bigcloth-v1.bin";
@@ -21,6 +29,7 @@ const SEGMENT_COUNT: usize = CHAIN_COUNT * CHAIN_LENGTH;
 const VERTICES_PER_SEGMENT: usize = 24;
 const INDICES_PER_SEGMENT: usize = 36;
 const FLOOR_VERTICES: usize = 4;
+const NATIVE_INSTANCE_COUNT: usize = SEGMENT_COUNT + 1;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Spec {
@@ -142,6 +151,17 @@ pub struct Engine {
     previous: Vec<[f32; 3]>,
     batches: Vec<Batch>,
     enabled: bool,
+    gpu_camera: GpuCameraUniforms,
+    gpu_globals: GpuForwardLitGlobals,
+    gpu_lights: [GpuLight; LIGHT_COUNT],
+    gpu_materials: [GpuMaterial; MATERIAL_COUNT],
+    gpu_meshes: [MeshDescriptor; SHAPE_COUNT],
+    gpu_groups: [DrawGroupDescriptor; DRAW_GROUP_COUNT],
+    gpu_instances: Vec<GpuInstanceData>,
+    gpu_compacted_indices: Vec<u32>,
+    gpu_draws: [DrawIndexedIndirectArgs; DRAW_GROUP_COUNT],
+    previous_view_proj: Option<[f32; 16]>,
+    frame: u32,
 }
 
 impl Engine {
@@ -168,12 +188,45 @@ impl Engine {
                 rgba: spec.floor_rgba,
             },
         ];
+        let gpu_meshes = core::array::from_fn(|mesh| MeshDescriptor {
+            mesh_id: mesh as u32,
+            half_extents: [1.0; 3],
+            first_vertex: (mesh * VERTICES_PER_SEGMENT) as u32,
+            vertex_count: VERTICES_PER_SEGMENT as u32,
+            first_index: (mesh * INDICES_PER_SEGMENT) as u32,
+            index_count: INDICES_PER_SEGMENT as u32,
+            base_vertex: (mesh * VERTICES_PER_SEGMENT) as i32,
+        });
+        let gpu_groups = core::array::from_fn(|group| DrawGroupDescriptor {
+            mesh_id: (group / MATERIAL_COUNT) as u32,
+            material_id: (group % MATERIAL_COUNT) as u32,
+        });
         let mut engine = Self {
             spec,
             positions: vec![[0.0; 3]; SEGMENT_COUNT],
             previous: vec![[0.0; 3]; SEGMENT_COUNT],
             batches,
             enabled: true,
+            gpu_camera: GpuCameraUniforms::default(),
+            gpu_globals: GpuForwardLitGlobals::default(),
+            gpu_lights: core::array::from_fn(|_| GpuLight::default()),
+            gpu_materials: core::array::from_fn(|_| GpuMaterial::default()),
+            gpu_meshes,
+            gpu_groups,
+            gpu_instances: Vec::with_capacity(NATIVE_INSTANCE_COUNT),
+            gpu_compacted_indices: Vec::with_capacity(NATIVE_INSTANCE_COUNT),
+            gpu_draws: core::array::from_fn(|group| {
+                let mesh = gpu_meshes[group / MATERIAL_COUNT];
+                DrawIndexedIndirectArgs {
+                    index_count: mesh.index_count,
+                    instance_count: 0,
+                    first_index: mesh.first_index,
+                    base_vertex: mesh.base_vertex,
+                    first_instance: 0,
+                }
+            }),
+            previous_view_proj: None,
+            frame: 0,
         };
         engine.reset();
         Ok(engine)
@@ -222,6 +275,122 @@ impl Engine {
     }
 
     pub fn step(&mut self, aspect: f32) -> Result<&[Batch], Error> {
+        self.advance_simulation();
+        self.project_batches(aspect)?;
+        Ok(&self.batches)
+    }
+
+    /// Advance the authored cloth while retaining one immutable local-space
+    /// box. Only compact transforms and draw ranges are returned; Helio's
+    /// native vertex shader owns local -> world -> clip transformation.
+    pub fn step_instances(&mut self, aspect: f32) -> Result<InstanceFrame<'_>, Error> {
+        Projector::new(self.spec.camera, aspect)?;
+        self.advance_simulation();
+
+        self.gpu_instances.clear();
+        self.gpu_compacted_indices.clear();
+        let extent = self.spec.box_half_extent * self.spec.visual_scale;
+        let segment_scale = [extent; 3];
+        let segment_radius = libm::sqrtf(3.0) * extent;
+        for (index, center) in self.positions.iter().copied().enumerate() {
+            let previous = self.previous[index];
+            self.gpu_instances.push(GpuInstanceData {
+                model: translation_scale_matrix(center, segment_scale),
+                normal_mat: inverse_scale_normal_matrix(segment_scale),
+                bounds: [center[0], center[1], center[2], segment_radius],
+                prev_model: translation_scale_matrix(previous, segment_scale),
+                mesh_id: 0,
+                material_id: 0,
+                flags: INSTANCE_FLAG_CASTS_SHADOW | INSTANCE_FLAG_RECEIVES_SHADOW,
+                lightmap_index: u32::MAX,
+            });
+            self.gpu_compacted_indices.push(index as u32);
+        }
+
+        let floor_scale = [self.spec.floor_extent, 0.01, self.spec.floor_extent];
+        let floor_center = [0.0, self.spec.ground_y - floor_scale[1], 0.0];
+        self.gpu_instances.push(GpuInstanceData {
+            model: translation_scale_matrix(floor_center, floor_scale),
+            normal_mat: inverse_scale_normal_matrix(floor_scale),
+            bounds: [
+                floor_center[0],
+                floor_center[1],
+                floor_center[2],
+                libm::sqrtf(
+                    floor_scale[0] * floor_scale[0]
+                        + floor_scale[1] * floor_scale[1]
+                        + floor_scale[2] * floor_scale[2],
+                ),
+            ],
+            prev_model: translation_scale_matrix(floor_center, floor_scale),
+            mesh_id: 0,
+            material_id: 1,
+            flags: INSTANCE_FLAG_RECEIVES_SHADOW,
+            lightmap_index: u32::MAX,
+        });
+        self.gpu_compacted_indices.push(SEGMENT_COUNT as u32);
+
+        self.gpu_draws = core::array::from_fn(|group| {
+            let mesh = self.gpu_meshes[group / MATERIAL_COUNT];
+            DrawIndexedIndirectArgs {
+                index_count: mesh.index_count,
+                instance_count: 0,
+                first_index: mesh.first_index,
+                base_vertex: mesh.base_vertex,
+                first_instance: 0,
+            }
+        });
+        self.gpu_draws[0] = DrawIndexedIndirectArgs {
+            index_count: INDICES_PER_SEGMENT as u32,
+            instance_count: SEGMENT_COUNT as u32,
+            first_index: 0,
+            base_vertex: 0,
+            first_instance: 0,
+        };
+        self.gpu_draws[1] = DrawIndexedIndirectArgs {
+            index_count: INDICES_PER_SEGMENT as u32,
+            instance_count: 1,
+            first_index: 0,
+            base_vertex: 0,
+            first_instance: SEGMENT_COUNT as u32,
+        };
+
+        let camera =
+            gpu_camera_uniforms(self.spec.camera, aspect, self.frame, self.previous_view_proj)?;
+        self.previous_view_proj = Some(camera.view_proj);
+        self.gpu_camera = camera;
+        self.gpu_globals = GpuForwardLitGlobals {
+            frame: self.frame,
+            delta_time: self.spec.fixed_dt,
+            light_count: LIGHT_COUNT as u32,
+            ambient_intensity: 0.25,
+            ambient_color: [0.3, 0.4, 0.55, 1.0],
+            num_tiles_x: 1,
+            num_tiles_y: 1,
+            screen_width: aspect,
+            screen_height: 1.0,
+        };
+        self.frame = self.frame.wrapping_add(1);
+        let dirty = DirtyRange {
+            first: 0,
+            count: NATIVE_INSTANCE_COUNT as u32,
+        };
+        Ok(InstanceFrame {
+            camera: &self.gpu_camera,
+            globals: &self.gpu_globals,
+            lights: &self.gpu_lights,
+            materials: &self.gpu_materials,
+            meshes: &self.gpu_meshes,
+            groups: &self.gpu_groups,
+            instances: &self.gpu_instances,
+            compacted_indices: &self.gpu_compacted_indices,
+            draws: &self.gpu_draws,
+            instance_dirty: dirty,
+            compacted_indices_dirty: dirty,
+        })
+    }
+
+    fn advance_simulation(&mut self) {
         if self.enabled {
             self.integrate();
             for _ in 0..self.spec.constraint_iterations {
@@ -230,8 +399,6 @@ impl Engine {
                 self.solve_ground();
             }
         }
-        self.project_batches(aspect)?;
-        Ok(&self.batches)
     }
 
     fn integrate(&mut self) {
@@ -317,6 +484,30 @@ impl Engine {
         normalize_all_winding(floor);
         Ok(())
     }
+}
+
+fn translation_scale_matrix(center: [f32; 3], scale: [f32; 3]) -> [f32; 16] {
+    [
+        scale[0], 0.0, 0.0, 0.0, 0.0, scale[1], 0.0, 0.0, 0.0, 0.0, scale[2], 0.0, center[0],
+        center[1], center[2], 1.0,
+    ]
+}
+
+fn inverse_scale_normal_matrix(scale: [f32; 3]) -> [f32; 12] {
+    [
+        1.0 / scale[0],
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0 / scale[1],
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0 / scale[2],
+        0.0,
+    ]
 }
 
 const fn node_index(chain: usize, segment: usize) -> usize {
@@ -491,9 +682,7 @@ mod tests {
                 let a = batch.vertices[triangle[0] as usize];
                 let b = batch.vertices[triangle[1] as usize];
                 let c = batch.vertices[triangle[2] as usize];
-                let area = ((b[0] - a[0]) * (c[1] - a[1])
-                    - (b[1] - a[1]) * (c[0] - a[0]))
-                    .abs();
+                let area = ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs();
                 let x_min = a[0].min(b[0]).min(c[0]);
                 let x_max = a[0].max(b[0]).max(c[0]);
                 let y_min = a[1].min(b[1]).min(c[1]);
@@ -523,6 +712,35 @@ mod tests {
                 .sum::<usize>(),
             4_034
         );
+
+        let native = engine.step_instances(16.0 / 9.0).unwrap();
+        assert_eq!(native.instances.len(), NATIVE_INSTANCE_COUNT);
+        assert_eq!(native.compacted_indices.len(), NATIVE_INSTANCE_COUNT);
+        assert_eq!(native.draws[0].index_count, 36);
+        assert_eq!(native.draws[0].instance_count, SEGMENT_COUNT as u32);
+        assert_eq!(native.draws[1].instance_count, 1);
+        assert_eq!(native.draws[1].first_instance, SEGMENT_COUNT as u32);
+        assert_eq!(native.meshes[0].vertex_count, VERTICES_PER_SEGMENT as u32);
+        for (group, draw) in native.draws.iter().enumerate() {
+            let mesh = native.meshes[group / MATERIAL_COUNT];
+            assert_eq!(draw.index_count, mesh.index_count);
+            assert_eq!(draw.first_index, mesh.first_index);
+            assert_eq!(draw.base_vertex, mesh.base_vertex);
+            if group >= 2 {
+                assert_eq!(draw.instance_count, 0);
+            }
+        }
+        assert!(native.instances.iter().all(|instance| {
+            instance.model.iter().all(|component| component.is_finite())
+                && instance
+                    .normal_mat
+                    .iter()
+                    .all(|component| component.is_finite())
+                && instance
+                    .bounds
+                    .iter()
+                    .all(|component| component.is_finite())
+        }));
 
         engine.toggle_enabled();
         assert!(!engine.enabled());

@@ -61,13 +61,29 @@ fn print_status(io: &'static dyn ShellBackend2) {
         )
         .as_str(),
     );
+    let boundaries = status.kernel_context_boundaries;
     print_shell_line(
         io,
         format!(
-            "vgpu: executor submissions={} completions={} failures={} admitting={} inflight={} waiters={}",
+            "vgpu: context-boundaries valid={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} render_principals_declared={}",
+            boundaries.valid() as u8,
+            boundaries.coherent as u8,
+            boundaries.unique_hwlrcas as u8,
+            boundaries.unique_ppgtt_roots as u8,
+            boundaries.bound,
+            boundaries.active,
+            KernelClient::RENDER_CARRIERS.len(),
+        )
+        .as_str(),
+    );
+    print_shell_line(
+        io,
+        format!(
+            "vgpu: executor submissions={} completions={} failures={} preparing={} admitting={} inflight={} waiters={}",
             executor.submissions,
             executor.completions,
             executor.failures,
+            executor.preparing,
             executor.admitting,
             executor.inflight,
             executor.waiters,
@@ -97,8 +113,26 @@ fn print_status(io: &'static dyn ShellBackend2) {
             )
             .as_str(),
         );
+        if let Some(identity) = device.kernel_context_capability {
+            print_shell_line(
+                io,
+                format!(
+                    "vgpu: context-capability principal={} engine={:?}:{} hwlrca=0x{:08X}:0x{:08X} ppgtt-root=0x{:016X} immutable=1 registered={}",
+                    device.principal.name(),
+                    identity.engine.class,
+                    identity.engine.instance,
+                    identity.hwlrca_hi,
+                    identity.hwlrca_lo,
+                    identity.gpuvm_root_phys,
+                    device.contexts,
+                )
+                .as_str(),
+            );
+        }
     }
-    print_kernel_timeline(io, "render-graphics", KernelClient::Render);
+    print_kernel_timeline(io, "render-graphics-0", KernelClient::Render);
+    print_kernel_timeline(io, "render-graphics-1", KernelClient::Render1);
+    print_kernel_timeline(io, "render-graphics-2", KernelClient::Render2);
     print_kernel_timeline(io, "gpgpu-system", KernelClient::GpgpuSystem);
     print_kernel_timeline(io, "gpgpu-execution", KernelClient::GpgpuExecution);
     print_kernel_timeline(io, "ui4-compositor", KernelClient::Ui4Compositor);
@@ -195,14 +229,16 @@ fn test_abi(io: &'static dyn ShellBackend2) -> bool {
 
 fn test_guc(io: &'static dyn ShellBackend2) -> bool {
     let status = vgpu::broker_status();
+    let boundaries = status.kernel_context_boundaries;
     let passed = status.physical_ready
         && status.guc_submission
         && status.scheduler.context_capacity >= 2
-        && status.scheduler.failures == 0;
+        && status.scheduler.failures == 0
+        && boundaries.valid();
     print_shell_line(
         io,
         format!(
-            "vgpu guc: ready={} guc={} registered={} enabled={} capacity={} submissions={} registrations={} failures={}",
+            "vgpu guc: ready={} guc={} registered={} enabled={} capacity={} submissions={} registrations={} failures={} context_boundaries={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={}",
             status.physical_ready as u8,
             status.guc_submission as u8,
             status.scheduler.registered_contexts,
@@ -211,6 +247,12 @@ fn test_guc(io: &'static dyn ShellBackend2) -> bool {
             status.scheduler.submissions,
             status.scheduler.registrations,
             status.scheduler.failures,
+            boundaries.valid() as u8,
+            boundaries.coherent as u8,
+            boundaries.unique_hwlrcas as u8,
+            boundaries.unique_ppgtt_roots as u8,
+            boundaries.bound,
+            boundaries.active,
         )
         .as_str(),
     );

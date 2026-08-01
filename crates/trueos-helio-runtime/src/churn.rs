@@ -1145,7 +1145,7 @@ fn normal_matrix_y(angle: f32, scale: f32) -> [f32; 12] {
     ]
 }
 
-fn gpu_camera_uniforms(
+pub(crate) fn gpu_camera_uniforms(
     camera: Camera,
     aspect: f32,
     frame: u32,

@@ -200,6 +200,9 @@ const fn kernel_client_inflight_limit(client: KernelClient) -> usize {
 pub(crate) fn reserve_kernel_context(
     client: KernelClient,
 ) -> Result<KernelContextLease, VgpuError> {
+    if !vgpu::kernel_context_storage_reusable(client) {
+        return Err(VgpuError::DeviceLost);
+    }
     let mut executor = EXECUTOR.lock();
     let client_inflight = executor
         .inflight

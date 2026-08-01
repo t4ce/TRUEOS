@@ -5333,26 +5333,10 @@ fn runtime_needs_render(runtime: &GridPaperRuntime, now_ms: u64) -> bool {
         != runtime.last_sampled_text_colors
 }
 
-fn runtime_needs_font_lane(runtime: &GridPaperRuntime, now_ms: u64) -> bool {
+fn runtime_needs_update(runtime: &GridPaperRuntime, now_ms: u64) -> bool {
     !runtime.dirty_cells.is_empty()
         || runtime.queued_snapshot.is_some()
         || runtime_needs_render(runtime, now_ms)
-}
-
-fn runtime_font_consumer(
-    runtime: &GridPaperRuntime,
-) -> crate::r::font_kernel_service::FontKernelConsumer {
-    use crate::r::font_kernel_service::{FontKernelConsumer, FontKernelConsumerPath};
-
-    let path = if !runtime.dirty_cells.is_empty() {
-        FontKernelConsumerPath::GridCellPatch
-    } else if runtime.queued_snapshot.is_some() {
-        FontKernelConsumerPath::GridPage
-    } else {
-        FontKernelConsumerPath::GridPresent
-    };
-    let id = ((runtime.surface.pool_slot as u64) << 32) | u64::from(runtime.surface.instance_id);
-    FontKernelConsumer::new(path, id)
 }
 
 fn incomplete_pending_page_error(error: ServiceError) -> bool {
@@ -5729,9 +5713,7 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
         }
         prune_grid_cursor_inputs(runtime_ref);
         let now_ms = Instant::now().as_millis();
-        if runtime_needs_font_lane(runtime_ref, now_ms) {
-            let consumer = runtime_font_consumer(runtime_ref);
-            let _font_lane = crate::r::font_kernel_service::acquire_gpu_lane(consumer).await;
+        if runtime_needs_update(runtime_ref, now_ms) {
             if pool_lease_state(pool_slot).epoch == observed_lease_epoch {
                 build_dirty_cell_patches(runtime_ref);
                 build_queued_page(runtime_ref);
@@ -5771,8 +5753,8 @@ fn spawn_gridpaper_instance_pool() -> usize {
 /// Kernel controller for the Gridpaper worker pool. Blueprint documents and
 /// Spirit's single retained response document share up to ten isolated worker
 /// slots, each retaining its own UI4 frame and scene worker. Compute
-/// presentation and print-resolution compatibility rendering enter the same
-/// fair GPU-font lane as retained-scene and one-shot stamp consumers.
+/// presentation and print-resolution rendering are admitted by their own GuC
+/// context rather than through the unrelated font service.
 #[embassy_executor::task]
 pub async fn gridpaper_service_task() {
     let spawned = spawn_gridpaper_instance_pool();
@@ -5800,11 +5782,6 @@ pub async fn gridpaper_service_task() {
                 .find(|snapshot| snapshot.owner.is_some())
                 .map(|snapshot| snapshot.text_animations)
                 .unwrap_or([None; TEXT_ANIMATION_COLOR_SLOTS]);
-            let consumer = crate::r::font_kernel_service::FontKernelConsumer::new(
-                crate::r::font_kernel_service::FontKernelConsumerPath::GridPrint,
-                u64::from(request.job_id),
-            );
-            let _font_lane = crate::r::font_kernel_service::acquire_gpu_lane(consumer).await;
             let result = render_print_page(request, &animations, Instant::now().as_millis());
             PRINT_RENDER_RESULTS.lock().push_back(result);
         }

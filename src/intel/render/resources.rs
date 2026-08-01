@@ -729,10 +729,10 @@ pub(crate) fn create_resident_font_mesh(
     {
         return Err("resident-font-shape");
     }
-    let Some(dev) = crate::intel::claimed_device() else {
+    if crate::intel::claimed_device().is_none() {
         return Err("no-device");
-    };
-    let warm = warm_once(dev);
+    }
+    let warm = warm_state().ok_or("render-boot-not-ready")?;
     if render_ppgtt_pml4_phys() == 0 || warm.vertex_len == 0 {
         return Err("render-ppgtt");
     }
@@ -786,10 +786,10 @@ pub(crate) fn create_resident_triangle_mesh(
     {
         return Err("resident-triangle-shape");
     }
-    let Some(dev) = crate::intel::claimed_device() else {
+    if crate::intel::claimed_device().is_none() {
         return Err("no-device");
-    };
-    let warm = warm_once(dev);
+    }
+    let warm = warm_state().ok_or("render-boot-not-ready")?;
     if render_ppgtt_pml4_phys() == 0 || warm.vertex_len == 0 {
         return Err("render-ppgtt");
     }
@@ -1268,7 +1268,6 @@ pub(crate) fn create_resident_churn_forward(
     if !device_supports_churn_forward_native(dev.device_id, dev.revision_id) {
         return Err("churn-native-device-mismatch");
     }
-    let device = warm_once(dev);
     // Validate and cache the immutable native code before acquiring any
     // mapped DMA resources. The aligned code copy is a bounded singleton;
     // service retries cannot leak another VS/PS pair.
@@ -1475,7 +1474,7 @@ pub(crate) fn update_resident_churn_forward_frame(
 }
 
 fn prepare_resident_churn_forward_draw(
-    warm: RenderWarmState,
+    _warm: RenderWarmState,
     resident: &ResidentChurnForward,
     group: usize,
     dst_gpu_addr: u64,
@@ -1582,10 +1581,10 @@ pub(crate) fn allocate_resident_render_buffer(
     if bytes == 0 {
         return Err("resident-resource-empty");
     }
-    let Some(dev) = crate::intel::claimed_device() else {
+    if crate::intel::claimed_device().is_none() {
         return Err("no-device");
-    };
-    let warm = warm_once(dev);
+    }
+    let warm = warm_state().ok_or("render-boot-not-ready")?;
     if render_ppgtt_pml4_phys() == 0 || warm.vertex_len == 0 {
         return Err("render-ppgtt");
     }

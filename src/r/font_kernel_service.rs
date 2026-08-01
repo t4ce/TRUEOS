@@ -7,10 +7,8 @@
 //! UI4 frame, and returns the owned buffer or exact producer-release proof
 //! asynchronously. Stamp callers may preserve a canvas or request an exact
 //! coverage-union crop; both obey the UHD/4K pixel and 4096-glyph soft caps.
-//! Gridpaper page, cell-patch, presentation, and print work use the same fair
-//! hardware admission lane while retaining independent runtime state. This
-//! lane is deliberately local to font and Gridpaper work; unrelated GPU
-//! clients own their admission through the GPU executor and GuC contexts.
+//! The lane is deliberately local to real font retain/stamp work. Unrelated
+//! GPU clients own admission through the GPU executor and GuC contexts.
 
 use alloc::{boxed::Box, collections::VecDeque, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -62,10 +60,6 @@ impl FontKernelTicket {
 pub(crate) enum FontKernelConsumerPath {
     RetainScene,
     Stamp,
-    GridPage,
-    GridCellPatch,
-    GridPresent,
-    GridPrint,
 }
 
 impl FontKernelConsumerPath {
@@ -73,10 +67,6 @@ impl FontKernelConsumerPath {
         match self {
             Self::RetainScene => "retain-scene",
             Self::Stamp => "stamp",
-            Self::GridPage => "grid-page",
-            Self::GridCellPatch => "grid-cell-patch",
-            Self::GridPresent => "grid-present",
-            Self::GridPrint => "grid-print",
         }
     }
 }
@@ -164,19 +154,6 @@ fn record_gpu_lane_admission(consumer: FontKernelConsumer, waited_ms: u64) {
         }
         FontKernelConsumerPath::Stamp => {
             status.stamp_lane_admissions = status.stamp_lane_admissions.saturating_add(1);
-        }
-        FontKernelConsumerPath::GridPage => {
-            status.grid_page_lane_admissions = status.grid_page_lane_admissions.saturating_add(1);
-        }
-        FontKernelConsumerPath::GridCellPatch => {
-            status.grid_patch_lane_admissions = status.grid_patch_lane_admissions.saturating_add(1);
-        }
-        FontKernelConsumerPath::GridPresent => {
-            status.grid_present_lane_admissions =
-                status.grid_present_lane_admissions.saturating_add(1);
-        }
-        FontKernelConsumerPath::GridPrint => {
-            status.grid_print_lane_admissions = status.grid_print_lane_admissions.saturating_add(1);
         }
     }
 }
@@ -426,10 +403,6 @@ pub(crate) struct FontKernelServiceStatus {
     pub(crate) lane_wait_max_ms: u64,
     pub(crate) retain_lane_admissions: u64,
     pub(crate) stamp_lane_admissions: u64,
-    pub(crate) grid_page_lane_admissions: u64,
-    pub(crate) grid_patch_lane_admissions: u64,
-    pub(crate) grid_present_lane_admissions: u64,
-    pub(crate) grid_print_lane_admissions: u64,
     pub(crate) queued: usize,
 }
 
@@ -455,10 +428,6 @@ impl FontKernelServiceStatus {
             lane_wait_max_ms: 0,
             retain_lane_admissions: 0,
             stamp_lane_admissions: 0,
-            grid_page_lane_admissions: 0,
-            grid_patch_lane_admissions: 0,
-            grid_present_lane_admissions: 0,
-            grid_print_lane_admissions: 0,
             queued: 0,
         }
     }
@@ -1210,7 +1179,7 @@ pub(crate) async fn font_kernel_service_task() {
     ONLINE.store(true, Ordering::Release);
     crate::log_info!(
         target: "render";
-        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp+grid-page+grid-cell-patch+grid-present+grid-print controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-multi-consumer queue_capacity={} retained_storage=gpu-vm-r8 stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
+        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only queue_capacity={} retained_storage=gpu-vm-r8 stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
         FONT_KERNEL_QUEUE_CAPACITY,
     );
     loop {
@@ -1330,15 +1299,12 @@ mod tests {
 
     #[test]
     fn consumer_paths_keep_independent_identity() {
-        let page = FontKernelConsumer::new(FontKernelConsumerPath::GridPage, 1);
-        let other_page = FontKernelConsumer::new(FontKernelConsumerPath::GridPage, 2);
+        let retain = FontKernelConsumer::new(FontKernelConsumerPath::RetainScene, 1);
+        let other_retain = FontKernelConsumer::new(FontKernelConsumerPath::RetainScene, 2);
         let stamp = FontKernelConsumer::new(FontKernelConsumerPath::Stamp, 1);
-        let present = FontKernelConsumer::new(FontKernelConsumerPath::GridPresent, 1);
-        assert_ne!(page, other_page);
-        assert_ne!(page, stamp);
-        assert_ne!(page, present);
-        assert_eq!(page.path.name(), "grid-page");
+        assert_ne!(retain, other_retain);
+        assert_ne!(retain, stamp);
+        assert_eq!(retain.path.name(), "retain-scene");
         assert_eq!(stamp.path.name(), "stamp");
-        assert_eq!(present.path.name(), "grid-present");
     }
 }

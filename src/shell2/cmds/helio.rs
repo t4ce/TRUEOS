@@ -68,31 +68,57 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         format!(
-            "helio: instances={} active={} queued={} capacity={} policy=soft-cap-evict-oldest path=helioa-v1->render/guc->ui4 spirit_logger_active={} spirit_logger_source={} spirit_logger_remaining_ms={}",
+            "helio: instances={} active={} queued={} capacity={} cpu_carriers={} cpu_policy=instance-id-mod-carrier-count gpu_principal=render0 gpu_context=shared-single-render-runtime gpu_affinity=none policy=soft-cap-evict-oldest path=helioa-v1->render/guc->ui4 spirit_logger_active={} spirit_logger_source={} spirit_logger_remaining_ms={}",
             pool.instances.len(),
             active,
             pool.queued,
             pool.capacity,
+            pool.cpu_carriers.len(),
             logger.active as u8,
             logger_source_name(logger.source),
             logger.remaining_ms,
         )
         .as_str(),
     );
+    for carrier in &pool.cpu_carriers {
+        print_shell_line(
+            io,
+            format!(
+                "helio: cpu_carrier={} worker_slot={} core_kind={} placement=background-ap2+ gpu_principal=render0 gpu_context=shared-single-render-runtime gpu_affinity=none",
+                carrier.id, carrier.worker_slot, carrier.core_kind,
+            )
+            .as_str(),
+        );
+    }
     for instance in &pool.instances {
         let slot = instance
             .slot
             .map(|slot| format!("{}", slot))
             .unwrap_or_else(|| "pending".into());
+        let cpu_carrier = instance
+            .cpu_carrier_id
+            .map(|carrier| format!("{}", carrier))
+            .unwrap_or_else(|| "pending".into());
+        let worker_slot = instance
+            .worker_slot
+            .map(|worker_slot| format!("{}", worker_slot))
+            .unwrap_or_else(|| "pending".into());
+        let core_kind = instance
+            .core_kind
+            .map(|core_kind| format!("{}", core_kind))
+            .unwrap_or_else(|| "pending".into());
         print_shell_line(
             io,
             format!(
-                "helio: instance={} slot={} state={} example={}:{} last_error={} artifact=embedded:{} bytes={}",
+                "helio: instance={} slot={} state={} example={}:{} cpu_carrier={} worker_slot={} core_kind={} gpu_principal=render0 gpu_context=shared-single-render-runtime last_error={} artifact=embedded:{} bytes={}",
                 instance.instance_id,
                 slot,
                 instance.state.label(),
                 instance.example_id,
                 example_name(instance.example_id),
+                cpu_carrier,
+                worker_slot,
+                core_kind,
                 instance.last_error.unwrap_or("none"),
                 instance.artifact_name,
                 instance.artifact_bytes,

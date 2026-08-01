@@ -533,7 +533,61 @@ fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_helio_game(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::r::helio_game::helio_game_service_task())
+    let _ = spawner;
+    if !crate::workers::all_topology_spawners_registered() {
+        return SpawnAttempt::Skipped;
+    }
+    let mut worker_spawners = crate::workers::pick_background_spawners_with_slots(
+        crate::r::helio_game::CPU_CARRIER_CAPACITY,
+    );
+    if worker_spawners.is_empty() {
+        return SpawnAttempt::Skipped;
+    }
+    worker_spawners.sort_unstable_by_key(|(worker_slot, _, _)| *worker_slot);
+
+    let carrier_count = worker_spawners.len() as u8;
+    // Reserve every Embassy task slot before starting any carrier. A partial
+    // pool would strand the deterministic shards assigned to a missing worker.
+    let mut carrier_tasks = Vec::with_capacity(worker_spawners.len());
+    for (carrier_id, (worker_slot, core_kind, worker_spawner)) in
+        worker_spawners.into_iter().enumerate()
+    {
+        let token = match crate::r::helio_game::helio_game_service_task(
+            carrier_id as u8,
+            carrier_count,
+            worker_slot,
+            core_kind,
+        ) {
+            Ok(token) => token,
+            Err(error) => return SpawnAttempt::Failed(error),
+        };
+        carrier_tasks.push((carrier_id as u8, worker_slot, core_kind, worker_spawner, token));
+    }
+
+    let carrier_metadata: Vec<(u32, u8)> = carrier_tasks
+        .iter()
+        .map(|(_, worker_slot, core_kind, _, _)| (*worker_slot, *core_kind))
+        .collect();
+    if !crate::r::helio_game::configure_cpu_carriers(&carrier_metadata) {
+        crate::log_warn!(target: "service";
+            "helio: invalid cpu carrier set count={} capacity={} action=skip\n",
+            carrier_metadata.len(),
+            crate::r::helio_game::CPU_CARRIER_CAPACITY,
+        );
+        return SpawnAttempt::Skipped;
+    }
+
+    for (carrier_id, worker_slot, core_kind, worker_spawner, token) in carrier_tasks {
+        worker_spawner.spawn(token);
+        crate::log_info!(target: "service";
+            "helio: cpu carrier={} scheduled carrier_count={} worker_slot={} core_kind={} placement=background-ap2+ sharding=instance-id-mod-carrier-count gpu_principal=render0 gpu_context=shared-single-render-runtime gpu_affinity=none\n",
+            carrier_id,
+            carrier_count,
+            worker_slot,
+            core_kind,
+        );
+    }
+    SpawnAttempt::Spawned
 }
 
 fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
@@ -831,6 +885,12 @@ fn ui4_compositor_gate() -> bool {
 #[inline]
 fn ap1_ui_core_ready_gate() -> bool {
     crate::workers::ap1_ui_core_spawner().is_some()
+}
+
+#[inline]
+fn helio_cpu_carrier_ready_gate() -> bool {
+    crate::workers::all_topology_spawners_registered()
+        && crate::workers::has_background_worker_slot()
 }
 
 #[inline]
@@ -1586,7 +1646,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "helio-game",
         0,
-        ap1_ui_core_ready_gate,
+        helio_cpu_carrier_ready_gate,
         &HELIO_GAME_STARTED,
         spawn_helio_game,
     ),

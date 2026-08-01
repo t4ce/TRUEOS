@@ -1570,7 +1570,7 @@ fn submit_resident_scene_capture_inner(
         let Some(dev) = crate::intel::claimed_device() else {
             return Err("no-device");
         };
-        let warm = warm_once(dev);
+        let warm = warm_state().ok_or("render-boot-not-ready")?;
         if !forcewake_render_acquire(warm) {
             return Err("forcewake");
         }
@@ -2227,7 +2227,8 @@ pub(crate) fn render_oa_control_action(
     let Some(dev) = crate::intel::claimed_device() else {
         return Err("no-device");
     };
-    if !forcewake_render_acquire(warm_once(dev)) {
+    let warm = warm_state().ok_or("render-boot-not-ready")?;
+    if !forcewake_render_acquire(warm) {
         return Err("forcewake");
     }
 
@@ -4662,7 +4663,7 @@ fn submit_render_custom_triangle_probe_locked_at_extent(
         crate::log!("custom-triangle skipped reason=no-device submit={}\n", submit_name);
         return Err("no-device");
     };
-    let warm = warm_once(dev);
+    let warm = warm_state().ok_or("render-boot-not-ready")?;
     let target_row_bytes = target_width
         .checked_mul(core::mem::size_of::<u32>())
         .ok_or("font-target-row-overflow")?;
@@ -4769,7 +4770,7 @@ fn submit_render_artificial_fragment_sentinel_locked()
         crate::log!("artificial-fragment-sentinel skipped reason=no-device\n");
         return Err("no-device");
     };
-    let warm = warm_once(dev);
+    let warm = warm_state().ok_or("render-boot-not-ready")?;
     if warm.streamout_len < 8 * 8 * core::mem::size_of::<u32>()
         || warm.streamout_virt.is_null()
         || warm.streamout_phys == 0
@@ -4870,7 +4871,7 @@ fn submit_render_joker_probe_locked(
         crate::log!("joker skipped reason=no-device variant={}\n", spec.variant);
         return Err("no-device");
     };
-    let warm = warm_once(dev);
+    let warm = warm_state().ok_or("render-boot-not-ready")?;
     if warm.ring_len == 0
         || warm.context_len == 0
         || warm.batch_len == 0
@@ -6605,14 +6606,15 @@ pub(crate) fn init_fixed_render_ggtt_for_boot(dev: crate::intel::Dev) -> bool {
         if !crate::intel::physical_gt_ready(dev) {
             return false;
         }
-        let warm = warm_once(dev);
+        let warm = init_warm_state_for_boot(dev);
         let complete = warm.ring_len != 0
             && warm.context_len != 0
             && warm.batch_len != 0
             && warm.draw_state_len != 0
             && warm.vertex_len != 0
             && warm.result_len != 0
-            && warm.streamout_len != 0;
+            && warm.streamout_len != 0
+            && render_ppgtt_pml4_phys() != 0;
         if !complete || !map_smoke_buffers(dev, warm) {
             WARM_BUFFERS_MAPPED.store(false, Ordering::Release);
             return false;

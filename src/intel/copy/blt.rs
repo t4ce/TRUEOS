@@ -22,12 +22,6 @@ const RING_EXECLIST_STATUS_HI: usize = 0x238;
 const RING_EXECLIST_SQ_LO: usize = 0x510;
 const RING_EXECLIST_SQ_HI: usize = 0x514;
 
-const FORCEWAKE_GT: usize = 0x0A188;
-const FORCEWAKE_ACK_GT: usize = 0x130044;
-const FORCEWAKE_KERNEL: u32 = 1 << 0;
-const FORCEWAKE_FALLBACK: u32 = 1 << 15;
-const FORCEWAKE_POLL_ITERS: usize = 20_000;
-
 const RING_VALID: u32 = 1;
 const EL_CTRL_LOAD: u32 = 1 << 0;
 const CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT: u32 = 1 << 0;
@@ -909,17 +903,10 @@ fn direct_blt_map_ppgtt_region(
 }
 
 fn direct_blt_forcewake(dev: super::Dev) -> bool {
-    let awake = super::mmio_read(dev, FORCEWAKE_ACK_GT) & FORCEWAKE_KERNEL != 0;
-    awake || {
-        super::mmio_write(dev, FORCEWAKE_GT, super::mask_en(FORCEWAKE_KERNEL));
-        direct_blt_wait_eq(
-            dev,
-            FORCEWAKE_ACK_GT,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_POLL_ITERS,
-        )
-    }
+    // BCS consumes the retained physical-GT contract established at boot.
+    // Repairing shared forcewake from a client submission can transition the
+    // GT underneath an unrelated live GuC context.
+    super::physical_gt_ready(dev)
 }
 
 fn direct_blt_encode_fast_copy_batch(state: DirectBltState) -> bool {
@@ -1518,16 +1505,6 @@ fn direct_blt_masked_bit_disable(bit: u32) -> u32 {
 fn direct_blt_masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
     let update = set_bits | clear_bits;
     set_bits | (update << 16)
-}
-
-fn direct_blt_wait_eq(dev: super::Dev, reg: usize, mask: u32, want: u32, n: usize) -> bool {
-    for _ in 0..n {
-        if (super::mmio_read(dev, reg) & mask) == want {
-            return true;
-        }
-        core::hint::spin_loop();
-    }
-    false
 }
 
 fn direct_blt_now_tick() -> u64 {
