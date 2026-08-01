@@ -31,6 +31,7 @@ const GUC_KLV_SELF_CFG_G2H_CTB_DESCRIPTOR_ADDR_KEY: u32 = 0x0906;
 const GUC_KLV_SELF_CFG_G2H_CTB_SIZE_KEY: u32 = 0x0907;
 const GUC_HXG_ORIGIN_GUC: u32 = 1;
 const GUC_HXG_TYPE_REQUEST: u32 = 0;
+const GUC_HXG_TYPE_EVENT: u32 = 1;
 const GUC_HXG_TYPE_FAST_REQUEST: u32 = 2;
 const GUC_HXG_TYPE_RESPONSE_FAILURE: u32 = 6;
 const GUC_HXG_TYPE_RESPONSE_SUCCESS: u32 = 7;
@@ -38,10 +39,13 @@ const GEN11_GUC_HOST_INTERRUPT: usize = 0x0019_01F0;
 const GUC_SEND_TRIGGER: u32 = 1 << 0;
 const CT_H2G_ROOM_POLL_ITERS: usize = 8_192;
 const CT_RESPONSE_POLL_ITERS: usize = 8_192;
+const CT_G2H_EVENT_QUEUE_CAPACITY: usize = 64;
+const CT_G2H_EVENT_PAYLOAD_DWORDS: usize = 4;
 
 static CTB_ENABLED: AtomicBool = AtomicBool::new(false);
 static NEXT_FENCE: AtomicU16 = AtomicU16::new(1);
 static STATE: Mutex<Option<CtbState>> = Mutex::new(None);
+static G2H_EVENTS: Mutex<CtbG2hEventQueue> = Mutex::new(CtbG2hEventQueue::EMPTY);
 
 #[derive(Copy, Clone)]
 struct CtbState {
@@ -57,6 +61,87 @@ struct CtbState {
 }
 
 unsafe impl Send for CtbState {}
+
+/// One asynchronous GuC-to-host HXG event retained outside the CTB ring.
+///
+/// GuC submission lifecycle events use at most two payload dwords. Four are
+/// retained so context-reset and engine-failure notifications can also be
+/// diagnosed without making the transport depend on the submission module.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CtbG2hEvent {
+    pub(crate) action: u32,
+    pub(crate) payload_len: usize,
+    payload: [u32; CT_G2H_EVENT_PAYLOAD_DWORDS],
+}
+
+impl CtbG2hEvent {
+    const EMPTY: Self = Self {
+        action: 0,
+        payload_len: 0,
+        payload: [0; CT_G2H_EVENT_PAYLOAD_DWORDS],
+    };
+
+    pub(crate) const fn payload(self, index: usize) -> Option<u32> {
+        if index < self.payload_len && index < CT_G2H_EVENT_PAYLOAD_DWORDS {
+            Some(self.payload[index])
+        } else {
+            None
+        }
+    }
+
+    pub(crate) const fn truncated(self) -> bool {
+        self.payload_len > CT_G2H_EVENT_PAYLOAD_DWORDS
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CtbG2hPollResult {
+    pub(crate) events: usize,
+    pub(crate) malformed_messages: u64,
+    pub(crate) dropped_events: u64,
+    pub(crate) unsolicited_responses: u64,
+}
+
+struct CtbG2hEventQueue {
+    entries: [CtbG2hEvent; CT_G2H_EVENT_QUEUE_CAPACITY],
+    head: usize,
+    len: usize,
+    malformed_messages: u64,
+    dropped_events: u64,
+    unsolicited_responses: u64,
+}
+
+impl CtbG2hEventQueue {
+    const EMPTY: Self = Self {
+        entries: [CtbG2hEvent::EMPTY; CT_G2H_EVENT_QUEUE_CAPACITY],
+        head: 0,
+        len: 0,
+        malformed_messages: 0,
+        dropped_events: 0,
+        unsolicited_responses: 0,
+    };
+
+    fn push(&mut self, event: CtbG2hEvent) {
+        if self.len == CT_G2H_EVENT_QUEUE_CAPACITY {
+            self.dropped_events = self.dropped_events.saturating_add(1);
+            return;
+        }
+        let tail = (self.head + self.len) % CT_G2H_EVENT_QUEUE_CAPACITY;
+        self.entries[tail] = event;
+        self.len += 1;
+    }
+
+    fn pop(&mut self) -> Option<CtbG2hEvent> {
+        if self.len == 0 {
+            return None;
+        }
+        let event = self.entries[self.head];
+        self.entries[self.head] = CtbG2hEvent::EMPTY;
+        self.head = (self.head + 1) % CT_G2H_EVENT_QUEUE_CAPACITY;
+        self.len -= 1;
+        Some(event)
+    }
+}
 
 pub(crate) struct CtbSendResult {
     pub(crate) accepted: bool,
@@ -219,6 +304,44 @@ pub(crate) fn h2g_sequence_consumed(target_sequence: u64) -> bool {
     consumed
 }
 
+/// Drain asynchronous G2H events without waiting for a new message.
+///
+/// The callback runs without either CTB mutex held. This lets the submission
+/// layer update its context registry while keeping transport lock ordering
+/// one-way. Events consumed while a synchronous response was being awaited are
+/// delivered through the same queue, so they are never mistaken for fenced
+/// responses or silently discarded.
+pub(crate) fn poll_g2h_events(
+    mut visit: impl FnMut(CtbG2hEvent),
+) -> CtbG2hPollResult {
+    {
+        let mut guard = STATE.lock();
+        if let Some(mut state) = *guard {
+            drain_available_g2h(&mut state);
+            *guard = Some(state);
+        }
+    }
+
+    let mut result = CtbG2hPollResult::default();
+    loop {
+        let event = G2H_EVENTS.lock().pop();
+        let Some(event) = event else {
+            break;
+        };
+        result.events = result.events.saturating_add(1);
+        visit(event);
+    }
+
+    let mut queue = G2H_EVENTS.lock();
+    result.malformed_messages = queue.malformed_messages;
+    result.dropped_events = queue.dropped_events;
+    result.unsolicited_responses = queue.unsolicited_responses;
+    queue.malformed_messages = 0;
+    queue.dropped_events = 0;
+    queue.unsolicited_responses = 0;
+    result
+}
+
 fn send_hxg(
     dev: crate::intel::Dev,
     action: u32,
@@ -361,13 +484,26 @@ fn send_hxg(
                 break;
             }
             let hxg = read_ct_dw(state, CT_G2H_OFFSET, (msg_head + 1) % CT_G2H_RING_DWORDS);
+            let origin = hxg_origin(hxg);
+            let message_type = hxg_type(hxg);
+            if message_type == GUC_HXG_TYPE_EVENT {
+                if origin == GUC_HXG_ORIGIN_GUC {
+                    queue_g2h_event(state, msg_head, msg_len, hxg);
+                } else {
+                    let mut queue = G2H_EVENTS.lock();
+                    queue.malformed_messages = queue.malformed_messages.saturating_add(1);
+                }
+            }
             state.g2h_head = ((msg_head + msg_total) % CT_G2H_RING_DWORDS) as u32;
             write_desc_head(state, CT_G2H_DESC_OFFSET, state.g2h_head);
             flush_blob_range(state, CT_G2H_DESC_OFFSET, CT_DESC_BYTES);
             messages = messages.saturating_add(1);
+            if message_type == GUC_HXG_TYPE_EVENT {
+                continue;
+            }
             if msg_fence == fence {
                 response = hxg;
-                response_type = hxg_type(hxg);
+                response_type = message_type;
                 error = match response_type {
                     GUC_HXG_TYPE_RESPONSE_SUCCESS => 0,
                     GUC_HXG_TYPE_RESPONSE_FAILURE => hxg & 0xFFFF,
@@ -386,6 +522,8 @@ fn send_hxg(
                     h2g_publish_sequence,
                 };
             }
+            let mut queue = G2H_EVENTS.lock();
+            queue.unsolicited_responses = queue.unsolicited_responses.saturating_add(1);
         }
         if error == 6 || error == 7 || messages >= CT_G2H_RING_DWORDS {
             break;
@@ -404,6 +542,81 @@ fn send_hxg(
         g2h_poll_iters,
         h2g_publish_sequence,
     }
+}
+
+fn drain_available_g2h(state: &mut CtbState) {
+    flush_blob_range(*state, CT_G2H_DESC_OFFSET, CT_DESC_BYTES);
+    let tail = read_desc_tail(*state, CT_G2H_DESC_OFFSET) as usize;
+    if tail >= CT_G2H_RING_DWORDS {
+        let mut queue = G2H_EVENTS.lock();
+        queue.malformed_messages = queue.malformed_messages.saturating_add(1);
+        return;
+    }
+    if state.g2h_head as usize != tail {
+        flush_blob_range(*state, CT_G2H_OFFSET, CT_G2H_RING_BYTES);
+    }
+
+    let mut messages = 0usize;
+    while state.g2h_head as usize != tail && messages < CT_G2H_RING_DWORDS {
+        let msg_head = state.g2h_head as usize;
+        let available = ct_ring_distance(msg_head, tail, CT_G2H_RING_DWORDS);
+        let header = read_ct_dw(*state, CT_G2H_OFFSET, msg_head);
+        let msg_len = (header & 0xFF) as usize;
+        let msg_total = 1usize.saturating_add(msg_len);
+        if msg_len == 0 || msg_total > available {
+            let mut queue = G2H_EVENTS.lock();
+            queue.malformed_messages = queue.malformed_messages.saturating_add(1);
+            break;
+        }
+
+        let hxg = read_ct_dw(
+            *state,
+            CT_G2H_OFFSET,
+            (msg_head + 1) % CT_G2H_RING_DWORDS,
+        );
+        let origin = hxg_origin(hxg);
+        let message_type = hxg_type(hxg);
+        if origin == GUC_HXG_ORIGIN_GUC && message_type == GUC_HXG_TYPE_EVENT {
+            queue_g2h_event(*state, msg_head, msg_len, hxg);
+        } else if origin == GUC_HXG_ORIGIN_GUC
+            && matches!(
+                message_type,
+                GUC_HXG_TYPE_RESPONSE_FAILURE | GUC_HXG_TYPE_RESPONSE_SUCCESS
+            )
+        {
+            let mut queue = G2H_EVENTS.lock();
+            queue.unsolicited_responses = queue.unsolicited_responses.saturating_add(1);
+        } else {
+            let mut queue = G2H_EVENTS.lock();
+            queue.malformed_messages = queue.malformed_messages.saturating_add(1);
+        }
+
+        state.g2h_head = ((msg_head + msg_total) % CT_G2H_RING_DWORDS) as u32;
+        write_desc_head(*state, CT_G2H_DESC_OFFSET, state.g2h_head);
+        flush_blob_range(*state, CT_G2H_DESC_OFFSET, CT_DESC_BYTES);
+        messages = messages.saturating_add(1);
+    }
+    if messages >= CT_G2H_RING_DWORDS {
+        let mut queue = G2H_EVENTS.lock();
+        queue.malformed_messages = queue.malformed_messages.saturating_add(1);
+    }
+}
+
+fn queue_g2h_event(state: CtbState, msg_head: usize, msg_len: usize, hxg: u32) {
+    let payload_len = msg_len.saturating_sub(1);
+    let mut payload = [0u32; CT_G2H_EVENT_PAYLOAD_DWORDS];
+    for (index, value) in payload.iter_mut().enumerate().take(payload_len) {
+        *value = read_ct_dw(
+            state,
+            CT_G2H_OFFSET,
+            (msg_head + 2 + index) % CT_G2H_RING_DWORDS,
+        );
+    }
+    G2H_EVENTS.lock().push(CtbG2hEvent {
+        action: hxg & 0xFFFF,
+        payload_len,
+        payload,
+    });
 }
 
 fn self_cfg32(dev: crate::intel::Dev, key: u32, value: u32) -> crate::intel::guc::H2gMmioResult {

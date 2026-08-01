@@ -1,0 +1,205 @@
+// Helio retained-geometry transform/compaction pass for TRUEOS Xe-LP.
+// Canonical source language: C++ for OpenCL.
+//
+// The pass deliberately never touches vertex or index data. It expands one
+// compact, positive-scale quaternion transform into Helio's 208-byte
+// GpuInstanceData ABI, compacts enabled instance IDs into fixed per-draw
+// slices, and writes WGPU's exact 20-byte DrawIndexedIndirectArgs records.
+// The following vertex draw can therefore consume every output in-place.
+//
+// The command encoder invokes this entrypoint twice. PREPARE publishes the
+// exact indirect records, then an ordered TRANSFORM dispatch fans rows across
+// all available SIMD16 groups. Keeping both modes in one artifact avoids a
+// second instruction image without imposing a single-workgroup bottleneck.
+
+enum : uint {
+    HELIO_TRANSFORM_WORDS = 16,
+    HELIO_DRAW_TEMPLATE_WORDS = 6,
+    HELIO_INSTANCE_WORDS = 52,
+    HELIO_INDIRECT_WORDS = 5,
+    HELIO_DISABLED_DRAW_GROUP = 0xFFFFFFFFu,
+    HELIO_MODE_PREPARE = 0u,
+    HELIO_MODE_TRANSFORM = 1u,
+};
+
+static inline void helio_store_float(__global uint *dst, uint word, float value)
+{
+    dst[word] = as_uint(value);
+}
+
+static inline uint helio_reserve_draw_slot(
+    __global volatile uint *instance_count,
+    uint capacity)
+{
+    uint observed = *instance_count;
+    while (observed < capacity) {
+        uint prior = atomic_cmpxchg(instance_count, observed, observed + 1u);
+        if (prior == observed) {
+            return observed;
+        }
+        observed = prior;
+    }
+    return 0xFFFFFFFFu;
+}
+
+__attribute__((intel_reqd_sub_group_size(16)))
+__kernel void helio_retained_transform(
+    __global const uint *transforms,
+    __global const uint *draw_templates,
+    __global uint *instances,
+    __global uint *compacted_indices,
+    __global volatile uint *indirect_args,
+    uint row_count,
+    uint draw_count,
+    uint mode)
+{
+    uint item = get_global_id(0);
+    if (mode == HELIO_MODE_PREPARE) {
+        if (item >= draw_count) {
+            return;
+        }
+        // Draw template words:
+        //   index_count, first_index, base_vertex bits, first_instance,
+        //   compacted capacity, packed mesh/material IDs.
+        uint src = item * HELIO_DRAW_TEMPLATE_WORDS;
+        uint dst = item * HELIO_INDIRECT_WORDS;
+        indirect_args[dst + 0u] = draw_templates[src + 0u];
+        indirect_args[dst + 1u] = 0u;
+        indirect_args[dst + 2u] = draw_templates[src + 1u];
+        indirect_args[dst + 3u] = draw_templates[src + 2u];
+        indirect_args[dst + 4u] = draw_templates[src + 3u];
+        return;
+    }
+    if (mode != HELIO_MODE_TRANSFORM || item >= row_count) {
+        return;
+    }
+
+    // Transform words:
+    //   center.xyz, scale.xyz, rotation quaternion.xyzw, local_radius,
+    //   previous_center.xyz, draw_group, flags. Mesh/material IDs are retained
+    //   in the immutable draw template because they are constant per group.
+    uint row = item;
+    uint src = row * HELIO_TRANSFORM_WORDS;
+    uint draw = transforms[src + 14u];
+    if (draw == HELIO_DISABLED_DRAW_GROUP || draw >= draw_count) {
+        return;
+    }
+
+    float tx = as_float(transforms[src + 0u]);
+    float ty = as_float(transforms[src + 1u]);
+    float tz = as_float(transforms[src + 2u]);
+    float sx = as_float(transforms[src + 3u]);
+    float sy = as_float(transforms[src + 4u]);
+    float sz = as_float(transforms[src + 5u]);
+    float qx = as_float(transforms[src + 6u]);
+    float qy = as_float(transforms[src + 7u]);
+    float qz = as_float(transforms[src + 8u]);
+    float qw = as_float(transforms[src + 9u]);
+    float local_radius = as_float(transforms[src + 10u]);
+    float ptx = as_float(transforms[src + 11u]);
+    float pty = as_float(transforms[src + 12u]);
+    float ptz = as_float(transforms[src + 13u]);
+
+    // The initial retained path excludes mirrored and singular transforms.
+    // Besides keeping winding fixed, this makes the inverse-scale normal
+    // matrix finite without a slow generic inverse.
+    float quaternion_length_squared = qx * qx + qy * qy + qz * qz + qw * qw;
+    if (!(isfinite(tx) && isfinite(ty) && isfinite(tz)
+        && isfinite(ptx) && isfinite(pty) && isfinite(ptz)
+        && isfinite(sx) && isfinite(sy) && isfinite(sz)
+        && isfinite(qx) && isfinite(qy) && isfinite(qz) && isfinite(qw)
+        && isfinite(local_radius) && isfinite(quaternion_length_squared))
+        || sx <= 0.0f || sy <= 0.0f || sz <= 0.0f
+        || local_radius < 0.0f || quaternion_length_squared <= 1.0e-12f) {
+        return;
+    }
+
+    uint draw_src = draw * HELIO_DRAW_TEMPLATE_WORDS;
+    uint draw_dst = draw * HELIO_INDIRECT_WORDS;
+    uint capacity = draw_templates[draw_src + 4u];
+    uint slot = helio_reserve_draw_slot(&indirect_args[draw_dst + 1u], capacity);
+    if (slot == 0xFFFFFFFFu) {
+        return;
+    }
+
+    float inverse_quaternion_length = rsqrt(quaternion_length_squared);
+    qx *= inverse_quaternion_length;
+    qy *= inverse_quaternion_length;
+    qz *= inverse_quaternion_length;
+    qw *= inverse_quaternion_length;
+    float xx = qx * qx;
+    float yy = qy * qy;
+    float zz = qz * qz;
+    float xy = qx * qy;
+    float xz = qx * qz;
+    float yz = qy * qz;
+    float xw = qx * qw;
+    float yw = qy * qw;
+    float zw = qz * qw;
+    float r00 = 1.0f - 2.0f * (yy + zz);
+    float r01 = 2.0f * (xy - zw);
+    float r02 = 2.0f * (xz + yw);
+    float r10 = 2.0f * (xy + zw);
+    float r11 = 1.0f - 2.0f * (xx + zz);
+    float r12 = 2.0f * (yz - xw);
+    float r20 = 2.0f * (xz - yw);
+    float r21 = 2.0f * (yz + xw);
+    float r22 = 1.0f - 2.0f * (xx + yy);
+    uint dst = row * HELIO_INSTANCE_WORDS;
+
+    // Column-major model matrix, byte-for-byte compatible with WGSL mat4.
+        helio_store_float(instances, dst + 0u, r00 * sx);
+        helio_store_float(instances, dst + 1u, r10 * sx);
+        helio_store_float(instances, dst + 2u, r20 * sx);
+        helio_store_float(instances, dst + 3u, 0.0f);
+        helio_store_float(instances, dst + 4u, r01 * sy);
+        helio_store_float(instances, dst + 5u, r11 * sy);
+        helio_store_float(instances, dst + 6u, r21 * sy);
+        helio_store_float(instances, dst + 7u, 0.0f);
+        helio_store_float(instances, dst + 8u, r02 * sz);
+        helio_store_float(instances, dst + 9u, r12 * sz);
+        helio_store_float(instances, dst + 10u, r22 * sz);
+        helio_store_float(instances, dst + 11u, 0.0f);
+        helio_store_float(instances, dst + 12u, tx);
+        helio_store_float(instances, dst + 13u, ty);
+        helio_store_float(instances, dst + 14u, tz);
+        helio_store_float(instances, dst + 15u, 1.0f);
+
+        // Three padded vec4 columns expected by Helio's forward vertex shader.
+        helio_store_float(instances, dst + 16u, r00 / sx);
+        helio_store_float(instances, dst + 17u, r10 / sx);
+        helio_store_float(instances, dst + 18u, r20 / sx);
+        helio_store_float(instances, dst + 19u, 0.0f);
+        helio_store_float(instances, dst + 20u, r01 / sy);
+        helio_store_float(instances, dst + 21u, r11 / sy);
+        helio_store_float(instances, dst + 22u, r21 / sy);
+        helio_store_float(instances, dst + 23u, 0.0f);
+        helio_store_float(instances, dst + 24u, r02 / sz);
+        helio_store_float(instances, dst + 25u, r12 / sz);
+        helio_store_float(instances, dst + 26u, r22 / sz);
+        helio_store_float(instances, dst + 27u, 0.0f);
+
+        float max_scale = fmax(sx, fmax(sy, sz));
+        helio_store_float(instances, dst + 28u, tx);
+        helio_store_float(instances, dst + 29u, ty);
+        helio_store_float(instances, dst + 30u, tz);
+        helio_store_float(instances, dst + 31u, local_radius * max_scale);
+
+        // Previous model uses the same rotation/scale and previous center.
+        for (uint word = 0u; word < 12u; ++word) {
+            instances[dst + 32u + word] = instances[dst + word];
+        }
+        helio_store_float(instances, dst + 44u, ptx);
+        helio_store_float(instances, dst + 45u, pty);
+        helio_store_float(instances, dst + 46u, ptz);
+        helio_store_float(instances, dst + 47u, 1.0f);
+
+        uint packed_mesh_material = draw_templates[draw_src + 5u];
+        instances[dst + 48u] = packed_mesh_material & 0xFFFFu;
+        instances[dst + 49u] = packed_mesh_material >> 16;
+        instances[dst + 50u] = transforms[src + 15u];
+        instances[dst + 51u] = 0xFFFFFFFFu;
+
+        uint first_instance = draw_templates[draw_src + 3u];
+        compacted_indices[first_instance + slot] = row;
+}

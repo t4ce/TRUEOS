@@ -257,8 +257,7 @@ fn direct_rcs_push_sba_address(
 ) -> bool {
     debug_assert!(mocs_command_value <= RENDER_MOCS_COMMAND_VALUE_MASK);
     debug_assert_eq!(mocs_command_value & 1, 0);
-    let low =
-        ((address as u32) & 0xFFFF_F000) | (mocs_command_value << 4) | u32::from(enable);
+    let low = ((address as u32) & 0xFFFF_F000) | (mocs_command_value << 4) | u32::from(enable);
     direct_rcs_push(batch, cursor, low) && direct_rcs_push(batch, cursor, (address >> 32) as u32)
 }
 
@@ -292,6 +291,32 @@ impl DirectRcsLane {
             Self::Lfm25 => "lfm25",
         }
     }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum DirectRcsSubmitFailureAction {
+    RollBack,
+    PreserveAndQuarantine,
+}
+
+const fn direct_rcs_submit_failure_action(
+    error: crate::gpu::vgpu::VgpuError,
+) -> DirectRcsSubmitFailureAction {
+    match error {
+        crate::gpu::vgpu::VgpuError::Busy => DirectRcsSubmitFailureAction::RollBack,
+        _ => DirectRcsSubmitFailureAction::PreserveAndQuarantine,
+    }
+}
+
+enum DirectRcsSubmitAttempt {
+    Submitted(crate::gpu::executor::KernelSubmission),
+    Rejected,
+    Ambiguous {
+        error: crate::gpu::vgpu::VgpuError,
+        old_tail_bytes: usize,
+        published_tail_bytes: usize,
+        submission_sequence: u64,
+    },
 }
 
 fn direct_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
@@ -335,8 +360,32 @@ fn direct_rcs_submit_batch_on_lane(
     if quarantined.load(Ordering::Acquire) {
         return false;
     }
-    let mut runtime = runtime.lock();
-    direct_rcs_submit_batch_with_runtime(dev, state, &mut runtime, client, false).is_some()
+    let attempt = {
+        let mut runtime = runtime.lock();
+        direct_rcs_submit_batch_with_runtime_inner(dev, state, &mut runtime, client, false)
+    };
+    match attempt {
+        DirectRcsSubmitAttempt::Submitted(_) => true,
+        DirectRcsSubmitAttempt::Rejected => false,
+        DirectRcsSubmitAttempt::Ambiguous {
+            error,
+            old_tail_bytes,
+            published_tail_bytes,
+            submission_sequence,
+        } => {
+            crate::log_error!(target: "gpgpu";
+                "intel/gpgpu: direct-rcs submit result ambiguous lane={} client={} error={} old_tail={} published_tail={} submission={} runtime_state=advanced backing=retained action=quarantine-exact-lane direct_elsp=0\n",
+                lane.name(),
+                client.name(),
+                error.name(),
+                old_tail_bytes,
+                published_tail_bytes,
+                submission_sequence,
+            );
+            quarantine_direct_rcs_lane(lane, "submit-result-ambiguous-after-tail-publication");
+            false
+        }
+    }
 }
 
 fn quarantine_direct_rcs_context(reason: &'static str) {
@@ -359,6 +408,10 @@ fn lfm25_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&LFM25_RCS_CONTEXT_QUARANTINED)
 }
 
+fn ui4_compositor_rcs_context_is_quarantined() -> bool {
+    !direct_rcs_state_reuse_permitted(&UI4_COMPOSITOR_RCS_CONTEXT_QUARANTINED)
+}
+
 fn quarantine_execution_rcs_context(reason: &'static str) {
     quarantine_direct_rcs_lane(DirectRcsLane::Execution, reason);
 }
@@ -367,20 +420,35 @@ fn quarantine_lfm25_rcs_context(reason: &'static str) {
     quarantine_direct_rcs_lane(DirectRcsLane::Lfm25, reason);
 }
 
+fn quarantine_ui4_compositor_rcs_context(reason: &'static str) {
+    if UI4_COMPOSITOR_RCS_CONTEXT_QUARANTINED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        let client = crate::gpu::vgpu::KernelClient::Ui4Compositor;
+        let isolation = crate::gpu::vgpu::isolate_kernel_client(client);
+        crate::log_error!(target: "ui4";
+            "ui4/guc-compositor: context quarantined client={} reason={} device_found={} contexts_disabled={} contexts_retained={} action=isolate-compositor-and-reject-future-state-access-until-reboot late-batch-reuse=forbidden\n",
+            client.name(),
+            reason,
+            isolation.device_found as u8,
+            isolation.contexts_disabled,
+            isolation.contexts_retained,
+        );
+    }
+}
+
 fn quarantine_direct_rcs_lane(lane: DirectRcsLane, reason: &'static str) {
     let (quarantined, client) = match lane {
-        DirectRcsLane::SystemService => (
-            &DIRECT_RCS_CONTEXT_QUARANTINED,
-            crate::gpu::vgpu::KernelClient::GpgpuSystem,
-        ),
-        DirectRcsLane::Execution => (
-            &EXECUTION_RCS_CONTEXT_QUARANTINED,
-            crate::gpu::vgpu::KernelClient::GpgpuExecution,
-        ),
-        DirectRcsLane::Lfm25 => (
-            &LFM25_RCS_CONTEXT_QUARANTINED,
-            crate::gpu::vgpu::KernelClient::Lfm25,
-        ),
+        DirectRcsLane::SystemService => {
+            (&DIRECT_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::GpgpuSystem)
+        }
+        DirectRcsLane::Execution => {
+            (&EXECUTION_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::GpgpuExecution)
+        }
+        DirectRcsLane::Lfm25 => {
+            (&LFM25_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::Lfm25)
+        }
     };
     if quarantined
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -407,8 +475,43 @@ fn direct_rcs_submit_batch_with_runtime(
     client: crate::gpu::vgpu::KernelClient,
     allow_queued: bool,
 ) -> Option<crate::gpu::executor::KernelSubmission> {
-    if !allow_queued && runtime.pending.is_some() {
+    if ui4_compositor_rcs_context_is_quarantined() {
         return None;
+    }
+    match direct_rcs_submit_batch_with_runtime_inner(dev, state, runtime, client, allow_queued) {
+        DirectRcsSubmitAttempt::Submitted(submission) => Some(submission),
+        DirectRcsSubmitAttempt::Rejected => None,
+        DirectRcsSubmitAttempt::Ambiguous {
+            error,
+            old_tail_bytes,
+            published_tail_bytes,
+            submission_sequence,
+        } => {
+            crate::log_error!(target: "ui4";
+                "ui4/guc-compositor: submit result ambiguous client={} error={} old_tail={} published_tail={} submission={} runtime_state=advanced backing=retained action=quarantine-compositor direct_elsp=0\n",
+                client.name(),
+                error.name(),
+                old_tail_bytes,
+                published_tail_bytes,
+                submission_sequence,
+            );
+            quarantine_ui4_compositor_rcs_context(
+                "submit-result-ambiguous-after-tail-publication",
+            );
+            None
+        }
+    }
+}
+
+fn direct_rcs_submit_batch_with_runtime_inner(
+    dev: super::Dev,
+    state: DirectRcsState,
+    runtime: &mut DirectRcsSubmitRuntime,
+    client: crate::gpu::vgpu::KernelClient,
+    allow_queued: bool,
+) -> DirectRcsSubmitAttempt {
+    if !allow_queued && runtime.pending.is_some() {
+        return DirectRcsSubmitAttempt::Rejected;
     }
     // The GuC owns one persistent logical context for the direct-RCS client.
     // Its ring must therefore be persistent as well: publishing the same tail
@@ -423,8 +526,7 @@ fn direct_rcs_submit_batch_with_runtime(
         // saved HEAD equal to the last published TAIL proves GuC has consumed
         // the ring entry and saved the context. Defer instead of racing a
         // GPU-written head with a CPU cache-line writeback.
-        let saved_head = direct_rcs_read_lrc_ring_head(state)
-            & (DIRECT_RCS_RING_BYTES as u32 - 1);
+        let saved_head = direct_rcs_read_lrc_ring_head(state) & (DIRECT_RCS_RING_BYTES as u32 - 1);
         if saved_head != old_tail_bytes as u32 {
             runtime.retire_deferrals = runtime.retire_deferrals.saturating_add(1);
             if runtime.retire_deferrals == 1 || runtime.retire_deferrals.is_power_of_two() {
@@ -436,7 +538,7 @@ fn direct_rcs_submit_batch_with_runtime(
                     runtime.retire_deferrals,
                 );
             }
-            return None;
+            return DirectRcsSubmitAttempt::Rejected;
         }
         if runtime.retire_deferrals != 0 {
             crate::log_info!(target: "gpgpu";
@@ -469,7 +571,7 @@ fn direct_rcs_submit_batch_with_runtime(
         );
     }
     let Some(ring_ctl) = direct_rcs_ring_ctl_value(DIRECT_RCS_RING_BYTES) else {
-        return None;
+        return DirectRcsSubmitAttempt::Rejected;
     };
     if !runtime.context_initialized {
         if !direct_rcs_init_lrc_context_image(
@@ -478,7 +580,7 @@ fn direct_rcs_submit_batch_with_runtime(
             ring_tail_bytes as u32,
             ring_ctl,
         ) {
-            return None;
+            return DirectRcsSubmitAttempt::Rejected;
         }
         runtime.context_initialized = true;
     } else {
@@ -500,42 +602,107 @@ fn direct_rcs_submit_batch_with_runtime(
             if !allow_queued {
                 runtime.pending = Some(submission);
             }
-            Some(submission)
+            DirectRcsSubmitAttempt::Submitted(submission)
         }
         Err(error) => {
-            // The entry was not admitted. Keep the software tail at the last
-            // accepted position so a retry cannot silently skip ring space.
-            direct_rcs_write_lrc_ring_tail(state, old_tail_bytes as u32);
-            crate::log!(
-                "gpgpu/vgpu: submit failed error={:?} submission_owner=gpu-executor/vgpu/guc direct_elsp=0\n",
-                error
-            );
-            None
+            match direct_rcs_submit_failure_action(error) {
+                DirectRcsSubmitFailureAction::RollBack => {
+                    // Busy is the one proven pre-publication rejection for an
+                    // isolated direct-RCS client.
+                    direct_rcs_write_lrc_ring_tail(state, old_tail_bytes as u32);
+                    crate::log!(
+                        "gpgpu/vgpu: submit failed error={:?} tail_action=rollback submission_owner=gpu-executor/vgpu/guc direct_elsp=0\n",
+                        error
+                    );
+                    DirectRcsSubmitAttempt::Rejected
+                }
+                DirectRcsSubmitFailureAction::PreserveAndQuarantine => {
+                    // Once submit crosses the executor/vGPU/GuC boundary, an
+                    // error other than Busy cannot prove that GuC did not see
+                    // the request. Keep both software and LRC publication at
+                    // the advanced tail and pin the backing via lane
+                    // quarantine; replaying the same ring entry is forbidden.
+                    runtime.ring_tail_bytes = ring_tail_bytes;
+                    runtime.submissions = submission_sequence;
+                    DirectRcsSubmitAttempt::Ambiguous {
+                        error,
+                        old_tail_bytes,
+                        published_tail_bytes: ring_tail_bytes,
+                        submission_sequence,
+                    }
+                }
+            }
         }
     }
 }
 
-fn complete_direct_rcs_submission(completed: bool) {
-    complete_direct_rcs_submission_on_lane(DirectRcsLane::SystemService, completed);
-}
-
-fn complete_execution_rcs_submission(completed: bool) {
-    complete_direct_rcs_submission_on_lane(DirectRcsLane::Execution, completed);
-}
-
-fn complete_lfm25_rcs_submission(completed: bool) {
-    complete_direct_rcs_submission_on_lane(DirectRcsLane::Lfm25, completed);
-}
-
-fn complete_direct_rcs_submission_on_lane(lane: DirectRcsLane, completed: bool) {
-    let runtime = match lane {
+fn direct_rcs_submit_runtime(lane: DirectRcsLane) -> &'static Mutex<DirectRcsSubmitRuntime> {
+    match lane {
         DirectRcsLane::SystemService => &DIRECT_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Execution => &EXECUTION_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Lfm25 => &LFM25_RCS_SUBMIT_RUNTIME,
-    };
-    let submission = runtime.lock().pending.take();
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct DirectRcsRetirementProof {
+    marker_observed: bool,
+    saved_head_bytes: u32,
+    published_tail_bytes: usize,
+}
+
+impl DirectRcsRetirementProof {
+    const fn complete(self) -> bool {
+        direct_rcs_retirement_is_proven(
+            self.marker_observed,
+            self.saved_head_bytes,
+            self.published_tail_bytes,
+        )
+    }
+}
+
+const fn direct_rcs_retirement_is_proven(
+    marker_observed: bool,
+    saved_head_bytes: u32,
+    published_tail_bytes: usize,
+) -> bool {
+    marker_observed && saved_head_bytes as usize == published_tail_bytes
+}
+
+fn direct_rcs_retirement_proof_on_lane(
+    state: DirectRcsState,
+    lane: DirectRcsLane,
+    marker_observed: bool,
+) -> DirectRcsRetirementProof {
+    let published_tail_bytes = direct_rcs_submit_runtime(lane).lock().ring_tail_bytes;
+    let saved_head_bytes =
+        direct_rcs_read_lrc_ring_head(state) & (DIRECT_RCS_RING_BYTES as u32 - 1);
+    DirectRcsRetirementProof {
+        marker_observed,
+        saved_head_bytes,
+        published_tail_bytes,
+    }
+}
+
+fn execution_rcs_retirement_proof(
+    state: DirectRcsState,
+    marker_observed: bool,
+) -> DirectRcsRetirementProof {
+    direct_rcs_retirement_proof_on_lane(state, DirectRcsLane::Execution, marker_observed)
+}
+
+fn complete_direct_rcs_submission() {
+    complete_direct_rcs_submission_on_lane(DirectRcsLane::SystemService);
+}
+
+fn complete_execution_rcs_submission() {
+    complete_direct_rcs_submission_on_lane(DirectRcsLane::Execution);
+}
+
+fn complete_direct_rcs_submission_on_lane(lane: DirectRcsLane) {
+    let submission = direct_rcs_submit_runtime(lane).lock().pending.take();
     if let Some(submission) = submission {
-        let _ = crate::gpu::executor::complete_kernel_submission(submission, completed);
+        let _ = crate::gpu::executor::complete_kernel_submission(submission, true);
     }
 }
 
@@ -568,22 +735,47 @@ fn direct_rcs_append_ring_batch_start(
 
 fn direct_rcs_poll_result_slot(state: DirectRcsState, slot: usize, expected: u32) -> u32 {
     let mut observed = 0;
+    let mut completed = false;
     for _ in 0..DIRECT_RCS_SMOKE_POLL_ITERS {
         observed = direct_rcs_read_result_slot(state, slot);
-        if observed == expected {
+        let proof = direct_rcs_retirement_proof_on_lane(
+            state,
+            DirectRcsLane::SystemService,
+            observed == expected,
+        );
+        if proof.complete() {
+            completed = true;
             break;
         }
         core::hint::spin_loop();
     }
-    let completed = observed == expected;
+    let proof = direct_rcs_retirement_proof_on_lane(
+        state,
+        DirectRcsLane::SystemService,
+        observed == expected,
+    );
+    completed &= proof.complete();
     if !completed {
         // The physical request is not cancelled by failing its software
         // timeline. Poison the shared context before the submit lock can be
         // released so no caller rewrites memory a late batch may still fetch.
-        quarantine_direct_rcs_context("completion-marker-unobserved-reboot-required");
+        let reason = if observed == expected {
+            "completion-marker-observed-context-save-unproven-reboot-required"
+        } else {
+            "completion-marker-unobserved-reboot-required"
+        };
+        crate::log_error!(target: "gpgpu";
+            "intel/gpgpu: direct-rcs retirement unproven lane={} marker_observed={} saved_head={} published_tail={} action=quarantine-retain-pending-and-backing\n",
+            DirectRcsLane::SystemService.name(),
+            (observed == expected) as u8,
+            proof.saved_head_bytes,
+            proof.published_tail_bytes,
+        );
+        quarantine_direct_rcs_context(reason);
+    } else {
+        complete_direct_rcs_submission();
     }
-    complete_direct_rcs_submission(completed);
-    observed
+    if completed { observed } else { 0 }
 }
 
 fn direct_rcs_poll_result_slot_timeout_ms(
@@ -692,17 +884,22 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
         );
     }
     let mut iterations = 0usize;
-    let (observed, gpu_host_observe_timestamp) = loop {
+    let mut marker_observe_timestamp = 0;
+    let (observed, proof) = loop {
         iterations = iterations.saturating_add(1);
         let observed = direct_rcs_read_result_slot(state, slot);
-        if observed == expected {
-            let timestamp = observe_timestamp_dev
+        let marker_observed = observed == expected;
+        if marker_observed && marker_observe_timestamp == 0 {
+            marker_observe_timestamp = observe_timestamp_dev
                 .map(direct_rcs_read_render_timestamp)
                 .unwrap_or(0);
-            break (observed, timestamp);
+        }
+        let proof = direct_rcs_retirement_proof_on_lane(state, lane, marker_observed);
+        if proof.complete() {
+            break (observed, proof);
         }
         if direct_rcs_now_tick() >= deadline {
-            break (observed, 0);
+            break (observed, proof);
         }
         for _ in 0..DIRECT_RCS_TIMEOUT_POLL_PAUSE_ITERS {
             core::hint::spin_loop();
@@ -711,22 +908,38 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
     if log_probe {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: marker-poll end lane={} slot={} observed=0x{:08X} expected=0x{:08X} matched={} iterations={} elapsed_ms={}\n",
+            "intel/gpgpu: marker-poll end lane={} slot={} observed=0x{:08X} expected=0x{:08X} marker_matched={} saved_head={} published_tail={} retirement_proven={} iterations={} elapsed_ms={}\n",
             lane.name(),
             slot,
             observed,
             expected,
             (observed == expected) as u8,
+            proof.saved_head_bytes,
+            proof.published_tail_bytes,
+            proof.complete() as u8,
             iterations,
             direct_rcs_elapsed_ms_since(started),
         );
     }
-    let completed = observed == expected;
+    let completed = proof.complete();
     if !completed {
-        quarantine_direct_rcs_lane(lane, "completion-marker-timeout-reboot-required");
+        let reason = if observed == expected {
+            "completion-marker-observed-context-save-timeout-reboot-required"
+        } else {
+            "completion-marker-timeout-reboot-required"
+        };
+        crate::log_error!(target: "gpgpu";
+            "intel/gpgpu: direct-rcs retirement timeout lane={} marker_observed={} saved_head={} published_tail={} pending=retained timeline=retained backing=retained action=quarantine-exact-lane\n",
+            lane.name(),
+            (observed == expected) as u8,
+            proof.saved_head_bytes,
+            proof.published_tail_bytes,
+        );
+        quarantine_direct_rcs_lane(lane, reason);
+    } else {
+        complete_direct_rcs_submission_on_lane(lane);
     }
-    complete_direct_rcs_submission_on_lane(lane, completed);
-    (observed, gpu_host_observe_timestamp)
+    (if completed { observed } else { 0 }, marker_observe_timestamp)
 }
 
 fn direct_rcs_poll_result_slot_elapsed(
@@ -894,6 +1107,30 @@ fn direct_rcs_elapsed_us_since(start_tick: u64) -> u64 {
 #[cfg(test)]
 mod direct_rcs_fail_closed_tests {
     use super::*;
+
+    #[test]
+    fn only_busy_rolls_back_an_isolated_lane_submission() {
+        assert_eq!(
+            direct_rcs_submit_failure_action(crate::gpu::vgpu::VgpuError::Busy),
+            DirectRcsSubmitFailureAction::RollBack,
+        );
+        assert_eq!(
+            direct_rcs_submit_failure_action(crate::gpu::vgpu::VgpuError::DeviceLost),
+            DirectRcsSubmitFailureAction::PreserveAndQuarantine,
+        );
+        assert_eq!(
+            direct_rcs_submit_failure_action(crate::gpu::vgpu::VgpuError::OutOfMemory),
+            DirectRcsSubmitFailureAction::PreserveAndQuarantine,
+        );
+    }
+
+    #[test]
+    fn marker_alone_cannot_retire_a_direct_rcs_submission() {
+        let tail = DIRECT_RCS_BATCH_START_DWORDS * core::mem::size_of::<u32>();
+        assert!(!direct_rcs_retirement_is_proven(false, tail as u32, tail));
+        assert!(!direct_rcs_retirement_is_proven(true, 0, tail));
+        assert!(direct_rcs_retirement_is_proven(true, tail as u32, tail));
+    }
 
     #[test]
     fn quarantine_irreversibly_denies_shared_state_reuse() {

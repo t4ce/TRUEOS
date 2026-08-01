@@ -122,9 +122,8 @@ pub(crate) async fn acquire_gpu_lane(consumer: FontKernelConsumer) -> FontKernel
             match GPU_LANE.acquire(1).await {
                 Ok(permit) => break permit,
                 Err(_) => {
-                    // Capacity is deliberately larger than every resident
-                    // Gridpaper worker plus the retained/stamp controller.
-                    // Still recover if that invariant is temporarily exceeded.
+                    // The semaphore has bounded waiter storage. Recover if a
+                    // burst temporarily exhausts that bookkeeping capacity.
                     Timer::after(EmbassyDuration::from_millis(FONT_KERNEL_LANE_RETRY_MS)).await;
                 }
             }

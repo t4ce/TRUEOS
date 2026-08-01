@@ -546,6 +546,20 @@ pub(crate) fn upload_scene_aabb_kernel() -> Option<UploadedKernelArtifact> {
     Some(upload)
 }
 
+pub(crate) fn upload_helio_retained_transform_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *HELIO_RETAINED_TRANSFORM_UPLOAD.lock() {
+        return Some(upload);
+    }
+    let dev = super::claimed_device()?;
+    let upload = upload_artifact(
+        dev,
+        HELIO_RETAINED_TRANSFORM_ADLS_ARTIFACT,
+        HELIO_RETAINED_TRANSFORM_ADLS_GPU,
+    )?;
+    *HELIO_RETAINED_TRANSFORM_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
 pub(crate) fn upload_lab256_multiphase_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *LAB256_MULTIPHASE_UPLOAD.lock() {
         return Some(upload);
@@ -637,6 +651,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     KOKORO_CONV1D_U8_U8_KERNEL_NAME,
     FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
     SCENE_AABB_KERNEL_NAME,
+    HELIO_RETAINED_TRANSFORM_KERNEL_NAME,
     LAB256_MULTIPHASE_KERNEL_NAME,
     SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME,
     SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME,
@@ -750,6 +765,11 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: SCENE_AABB_ADLS_ARTIFACT,
             gpu: SCENE_AABB_ADLS_GPU,
             upload: &SCENE_AABB_UPLOAD,
+        }),
+        HELIO_RETAINED_TRANSFORM_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: HELIO_RETAINED_TRANSFORM_ADLS_ARTIFACT,
+            gpu: HELIO_RETAINED_TRANSFORM_ADLS_GPU,
+            upload: &HELIO_RETAINED_TRANSFORM_UPLOAD,
         }),
         LAB256_MULTIPHASE_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: LAB256_MULTIPHASE_ADLS_ARTIFACT,

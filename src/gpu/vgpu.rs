@@ -170,7 +170,12 @@ impl KernelClient {
             // and GPU fonts), so leaving them at normal priority adds one
             // complete GuC scheduler quantum to every copy/coverage/release
             // stage while UI4 window motion itself remains crisp.
-            Self::GpgpuSystem | Self::Ui4Compositor | Self::Lfm25 => {
+            // The execution lane is currently exclusive to Spirit VFX and
+            // Lab256. Both are bounded 256x256, single-pending producers; the
+            // GuC policy gives every context a 1 ms execution quantum, so this
+            // scanout-facing lane can be high priority without admitting an
+            // unbounded high-priority queue.
+            Self::GpgpuSystem | Self::GpgpuExecution | Self::Ui4Compositor | Self::Lfm25 => {
                 PhysicalContextPriority::KernelHigh
             }
             _ => PhysicalContextPriority::KernelNormal,
@@ -213,7 +218,7 @@ const _: () = {
     ));
     assert!(matches!(
         KernelClient::GpgpuExecution.physical_priority(),
-        PhysicalContextPriority::KernelNormal
+        PhysicalContextPriority::KernelHigh
     ));
     assert!(matches!(KernelClient::Lfm25.physical_priority(), PhysicalContextPriority::KernelHigh));
     assert!(matches!(
@@ -640,6 +645,7 @@ pub(crate) struct BrokerStatus {
 pub(crate) struct KernelContextBoundaryStatus {
     pub(crate) bound: usize,
     pub(crate) active: usize,
+    pub(crate) lost_bound: usize,
     pub(crate) coherent: bool,
     pub(crate) unique_hwlrcas: bool,
     pub(crate) unique_ppgtt_roots: bool,
@@ -647,7 +653,12 @@ pub(crate) struct KernelContextBoundaryStatus {
 
 impl KernelContextBoundaryStatus {
     pub(crate) const fn valid(self) -> bool {
-        self.coherent && self.unique_hwlrcas && self.unique_ppgtt_roots
+        self.bound != 0
+            && self.bound == self.active
+            && self.lost_bound == 0
+            && self.coherent
+            && self.unique_hwlrcas
+            && self.unique_ppgtt_roots
     }
 }
 
@@ -1544,10 +1555,10 @@ pub(crate) fn submit_kernel_context(
     let physical = require_physical()?;
     let mut broker = BROKER.lock();
 
-    // GuC's registration key is engine + HWLRCA. Reject a second broker
-    // principal claiming that key, or another client's PPGTT root: otherwise
-    // GuC could hand two virtual clients the same physical token or address
-    // space despite their distinct software identities.
+    // GuC's registration key includes the engine, but HWLRCA is still a global
+    // graphics address naming physical context backing. Reject another broker
+    // principal claiming that backing on any engine, or claiming the same
+    // PPGTT root: different scheduler tokens must never alias storage.
     let context_identity_claimed_elsewhere = broker.devices.iter().any(|slot| {
         let Some(other) = slot.record.as_ref() else {
             return false;
@@ -1555,8 +1566,7 @@ pub(crate) fn submit_kernel_context(
         other.principal != client.principal()
             && other.kernel_context_capability.is_some_and(|bound| {
                 bound.gpuvm_root_phys == descriptor.gpuvm_root_phys
-                    || (bound.engine == descriptor.engine
-                        && bound.hwlrca_lo == descriptor.hwlrca_lo
+                    || (bound.hwlrca_lo == descriptor.hwlrca_lo
                         && bound.hwlrca_hi == descriptor.hwlrca_hi)
             })
     });
@@ -1906,7 +1916,11 @@ fn kernel_context_boundary_status(broker: &Broker) -> KernelContextBoundaryStatu
             continue;
         };
         report.bound = report.bound.saturating_add(1);
-        report.active = report.active.saturating_add(device.contexts.len());
+        if device.lost {
+            report.lost_bound = report.lost_bound.saturating_add(1);
+        } else {
+            report.active = report.active.saturating_add(device.contexts.len());
+        }
         let root_matches = matches!(
             device.gpuvm,
             GpuVmBinding::Borrowed { root_phys } if root_phys == identity.gpuvm_root_phys
@@ -1916,12 +1930,11 @@ fn kernel_context_boundary_status(broker: &Broker) -> KernelContextBoundaryStatu
                 .contexts
                 .iter()
                 .all(|binding| binding.descriptor == identity);
-        let live_context_present = device.lost || device.contexts.len() == 1;
+        let live_context_present = !device.lost && device.contexts.len() == 1;
         report.coherent &= root_matches && binding_matches && live_context_present;
 
         for previous in &identities {
-            report.unique_hwlrcas &= previous.engine != identity.engine
-                || previous.hwlrca_lo != identity.hwlrca_lo
+            report.unique_hwlrcas &= previous.hwlrca_lo != identity.hwlrca_lo
                 || previous.hwlrca_hi != identity.hwlrca_hi;
             report.unique_ppgtt_roots &= previous.gpuvm_root_phys != identity.gpuvm_root_phys;
         }

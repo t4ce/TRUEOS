@@ -10,9 +10,9 @@ use alloc::vec::Vec;
 
 use crate::churn::{
     DRAW_GROUP_COUNT, DirtyRange, DrawGroupDescriptor, GpuCameraUniforms, GpuForwardLitGlobals,
-    GpuInstanceData, GpuLight, GpuMaterial, INSTANCE_FLAG_CASTS_SHADOW,
-    INSTANCE_FLAG_RECEIVES_SHADOW, InstanceFrame, LIGHT_COUNT, MATERIAL_COUNT, MeshDescriptor,
-    SHAPE_COUNT, gpu_camera_uniforms,
+    GpuInstanceData, GpuLight, GpuMaterial, GpuRetainedDrawTemplate, GpuRetainedTransformSeed,
+    INSTANCE_FLAG_CASTS_SHADOW, INSTANCE_FLAG_RECEIVES_SHADOW, InstanceFrame, LIGHT_COUNT,
+    MATERIAL_COUNT, MeshDescriptor, SHAPE_COUNT, TransformFrame, gpu_camera_uniforms,
 };
 use crate::{
     Camera, DrawIndexedIndirectArgs, Error, Projector, churn::Batch, linear_rgba_to_srgba8,
@@ -160,6 +160,8 @@ pub struct Engine {
     gpu_instances: Vec<GpuInstanceData>,
     gpu_compacted_indices: Vec<u32>,
     gpu_draws: [DrawIndexedIndirectArgs; DRAW_GROUP_COUNT],
+    gpu_transform_seeds: Vec<GpuRetainedTransformSeed>,
+    gpu_draw_templates: [GpuRetainedDrawTemplate; DRAW_GROUP_COUNT],
     previous_view_proj: Option<[f32; 16]>,
     frame: u32,
 }
@@ -225,6 +227,8 @@ impl Engine {
                     first_instance: 0,
                 }
             }),
+            gpu_transform_seeds: Vec::with_capacity(NATIVE_INSTANCE_COUNT),
+            gpu_draw_templates: [GpuRetainedDrawTemplate::default(); DRAW_GROUP_COUNT],
             previous_view_proj: None,
             frame: 0,
         };
@@ -278,6 +282,104 @@ impl Engine {
         self.advance_simulation();
         self.project_batches(aspect)?;
         Ok(&self.batches)
+    }
+
+    /// Advance the cloth into compact GPU-transform seeds. No model, normal,
+    /// bounds, compacted-index, or indirect-draw record is built on the CPU.
+    pub fn step_transform_frame(&mut self, aspect: f32) -> Result<TransformFrame<'_>, Error> {
+        Projector::new(self.spec.camera, aspect)?;
+        self.advance_simulation();
+
+        self.gpu_transform_seeds.clear();
+        let extent = self.spec.box_half_extent * self.spec.visual_scale;
+        let segment_scale = [extent; 3];
+        for (index, center) in self.positions.iter().copied().enumerate() {
+            self.gpu_transform_seeds.push(GpuRetainedTransformSeed {
+                translation: center,
+                scale: segment_scale,
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                local_radius: libm::sqrtf(3.0),
+                previous_translation: self.previous[index],
+                draw_group: 0,
+                flags: INSTANCE_FLAG_CASTS_SHADOW | INSTANCE_FLAG_RECEIVES_SHADOW,
+            });
+        }
+
+        let floor_scale = [self.spec.floor_extent, 0.01, self.spec.floor_extent];
+        let floor_center = [0.0, self.spec.ground_y - floor_scale[1], 0.0];
+        let floor_max_scale = floor_scale[0].max(floor_scale[1]).max(floor_scale[2]);
+        let floor_radius = libm::sqrtf(
+            floor_scale[0] * floor_scale[0]
+                + floor_scale[1] * floor_scale[1]
+                + floor_scale[2] * floor_scale[2],
+        );
+        self.gpu_transform_seeds.push(GpuRetainedTransformSeed {
+            translation: floor_center,
+            scale: floor_scale,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            local_radius: floor_radius / floor_max_scale,
+            previous_translation: floor_center,
+            draw_group: 1,
+            flags: INSTANCE_FLAG_RECEIVES_SHADOW,
+        });
+
+        let group_counts: [u32; DRAW_GROUP_COUNT] = core::array::from_fn(|group| match group {
+            0 => SEGMENT_COUNT as u32,
+            1 => 1,
+            _ => 0,
+        });
+        let mut next_start = 0u32;
+        for group in 0..DRAW_GROUP_COUNT {
+            let mesh = self.gpu_meshes[group / MATERIAL_COUNT];
+            self.gpu_draw_templates[group] = GpuRetainedDrawTemplate::new(
+                mesh,
+                self.gpu_groups[group],
+                next_start,
+                group_counts[group],
+            )
+            .ok_or(Error::InvalidPendulumScene)?;
+            next_start = next_start
+                .checked_add(group_counts[group])
+                .ok_or(Error::InvalidPendulumScene)?;
+        }
+        if next_start != NATIVE_INSTANCE_COUNT as u32 {
+            return Err(Error::InvalidPendulumScene);
+        }
+
+        let camera =
+            gpu_camera_uniforms(self.spec.camera, aspect, self.frame, self.previous_view_proj)?;
+        self.previous_view_proj = Some(camera.view_proj);
+        self.gpu_camera = camera;
+        self.gpu_globals = GpuForwardLitGlobals {
+            frame: self.frame,
+            delta_time: self.spec.fixed_dt,
+            light_count: LIGHT_COUNT as u32,
+            ambient_intensity: 0.25,
+            ambient_color: [0.3, 0.4, 0.55, 1.0],
+            num_tiles_x: 1,
+            num_tiles_y: 1,
+            screen_width: aspect,
+            screen_height: 1.0,
+        };
+        self.frame = self.frame.wrapping_add(1);
+        Ok(TransformFrame {
+            camera: &self.gpu_camera,
+            globals: &self.gpu_globals,
+            lights: &self.gpu_lights,
+            materials: &self.gpu_materials,
+            meshes: &self.gpu_meshes,
+            groups: &self.gpu_groups,
+            seeds: &self.gpu_transform_seeds,
+            draw_templates: &self.gpu_draw_templates,
+            seed_dirty: DirtyRange {
+                first: 0,
+                count: NATIVE_INSTANCE_COUNT as u32,
+            },
+            draw_templates_dirty: DirtyRange {
+                first: 0,
+                count: DRAW_GROUP_COUNT as u32,
+            },
+        })
     }
 
     /// Advance the authored cloth while retaining one immutable local-space
@@ -746,6 +848,59 @@ mod tests {
         assert!(!engine.enabled());
         engine.reset();
         assert_eq!(engine.positions, initial);
+    }
+
+    #[test]
+    fn transform_frame_keeps_all_twelve_prefix_slices_without_cpu_matrices() {
+        let spec = Spec::decode_artifact(ARTIFACT).unwrap();
+        let mut engine = Engine::new(spec).unwrap();
+        {
+            let frame = engine.step_transform_frame(16.0 / 9.0).unwrap();
+            assert_eq!(frame.seeds.len(), NATIVE_INSTANCE_COUNT);
+            assert_eq!(
+                frame.seed_dirty,
+                DirtyRange {
+                    first: 0,
+                    count: NATIVE_INSTANCE_COUNT as u32,
+                }
+            );
+            assert_eq!(frame.draw_templates.len(), DRAW_GROUP_COUNT);
+            assert_eq!(frame.draw_templates[0].capacity, SEGMENT_COUNT as u32);
+            assert_eq!(frame.draw_templates[1].capacity, 1);
+            assert_eq!(frame.draw_templates[1].first_instance, SEGMENT_COUNT as u32);
+            assert!(
+                frame.draw_templates[2..]
+                    .iter()
+                    .all(|template| template.capacity == 0
+                        && template.first_instance == NATIVE_INSTANCE_COUNT as u32)
+            );
+
+            let mut expected_first = 0u32;
+            for (group_index, template) in frame.draw_templates.iter().copied().enumerate() {
+                let group = frame.groups[group_index];
+                let mesh = frame.meshes[group_index / MATERIAL_COUNT];
+                assert_eq!(template.first_instance, expected_first);
+                assert_eq!(template.mesh_id(), group.mesh_id);
+                assert_eq!(template.material_id(), group.material_id);
+                assert_eq!(template.index_count, mesh.index_count);
+                assert_eq!(template.first_index, mesh.first_index);
+                assert_eq!(template.base_vertex, mesh.base_vertex);
+                expected_first += template.capacity;
+            }
+            assert_eq!(expected_first, NATIVE_INSTANCE_COUNT as u32);
+            assert!(frame.seeds[..SEGMENT_COUNT].iter().all(|seed| {
+                seed.draw_group == 0
+                    && seed.rotation == [0.0, 0.0, 0.0, 1.0]
+                    && seed.local_radius == libm::sqrtf(3.0)
+            }));
+            let floor = frame.seeds[SEGMENT_COUNT];
+            assert_eq!(floor.draw_group, 1);
+            assert_eq!(floor.flags, INSTANCE_FLAG_RECEIVES_SHADOW);
+            assert_eq!(floor.translation, floor.previous_translation);
+            assert!(frame.camera.view_proj.iter().all(|value| value.is_finite()));
+        }
+        assert!(engine.gpu_instances.is_empty());
+        assert!(engine.gpu_compacted_indices.is_empty());
     }
 
     #[test]

@@ -4966,7 +4966,7 @@ fn build_dirty_cell_patches(runtime: &mut GridPaperRuntime) {
                 runtime.dirty_cells.push_front(selection);
                 crate::log_warn!(
                     target: "gridpaper";
-                    "gridpaper: cell patch deferred instance={} column={} row={} reason={} queued_cells={} action=retain-dirty-cell+retry-on-font-lane\n",
+                    "gridpaper: cell patch deferred instance={} column={} row={} reason={} queued_cells={} action=retain-dirty-cell+retry-gpgpu-coverage\n",
                     runtime.surface.instance_id,
                     selection.column,
                     selection.row,

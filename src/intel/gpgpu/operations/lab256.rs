@@ -56,6 +56,7 @@ struct Lab256Submitted {
 struct Lab256SpiritPending {
     handle: Lab256SpiritSubmission,
     submitted: Lab256Submitted,
+    timeout_logged: bool,
 }
 
 static LAB256_SPIRIT_NEXT_TAG: AtomicU64 = AtomicU64::new(1);
@@ -222,7 +223,8 @@ fn lab256_report_audit(report: Lab256Buffer, frame: u32) -> bool {
 
 /// Admit one Lab256 frame for Spirit and return immediately. The returned tag
 /// owns the execution direct-RCS lane until `poll_lab256_spirit_submission`
-/// observes the post-sync marker; admission never waits for GPU execution.
+/// observes both the post-sync marker and the matching saved LRC head;
+/// admission never waits for GPU execution.
 pub(crate) fn submit_lab256_spirit_frame(
     dst: GpgpuRgba8Surface,
     present_fps: u32,
@@ -247,7 +249,11 @@ pub(crate) fn submit_lab256_spirit_frame(
     // Publish detached ownership before dropping the direct-submit lock. Any
     // later direct-RCS issuer will now defer before touching shared state.
     EXECUTION_RCS_DETACHED_TAG.store(tag, Ordering::Release);
-    *LAB256_SPIRIT_PENDING.lock() = Some(Lab256SpiritPending { handle, submitted });
+    *LAB256_SPIRIT_PENDING.lock() = Some(Lab256SpiritPending {
+        handle,
+        submitted,
+        timeout_logged: false,
+    });
 
     if lab256_trace_spirit_frame(submitted.frame) {
         crate::log_info!(
@@ -265,7 +271,8 @@ pub(crate) fn submit_lab256_spirit_frame(
 }
 
 /// Observe one exact Spirit completion tag once. Pending returns without
-/// spinning; the Embassy owner decides when to poll again.
+/// spinning until both the post-sync marker and the saved LRC head prove that
+/// GuC has retired and saved the persistent execution context.
 pub(crate) fn poll_lab256_spirit_submission(
     handle: Lab256SpiritSubmission,
 ) -> Lab256SpiritCompletion {
@@ -273,7 +280,7 @@ pub(crate) fn poll_lab256_spirit_submission(
         return Lab256SpiritCompletion::InvalidSubmission;
     }
     let mut pending_slot = LAB256_SPIRIT_PENDING.lock();
-    let Some(pending) = *pending_slot else {
+    let Some(mut pending) = *pending_slot else {
         return Lab256SpiritCompletion::InvalidSubmission;
     };
     if pending.handle != handle {
@@ -282,7 +289,31 @@ pub(crate) fn poll_lab256_spirit_submission(
 
     let marker = direct_rcs_read_result_slot(pending.submitted.state, LAB256_POST_MARKER_SLOT);
     let elapsed_ms = direct_rcs_elapsed_ms_since(pending.submitted.started_tick);
-    if marker != LAB256_POST_MARKER && elapsed_ms < LAB256_COMPLETION_TIMEOUT_MS {
+    let proof =
+        execution_rcs_retirement_proof(pending.submitted.state, marker == LAB256_POST_MARKER);
+    if !proof.complete() {
+        if elapsed_ms < LAB256_COMPLETION_TIMEOUT_MS {
+            return Lab256SpiritCompletion::Pending;
+        }
+        if !pending.timeout_logged {
+            let reason = if marker == LAB256_POST_MARKER {
+                "lab256-marker-observed-context-save-timeout"
+            } else {
+                "lab256-marker-timeout"
+            };
+            quarantine_execution_rcs_context(reason);
+            crate::log_error!(target: "gpgpu";
+                "intel/gpgpu: lab256 detached retirement timeout tag={} frame={} marker=0x{:08X} marker_observed={} saved_head={} published_tail={} pending=retained detached_tag=retained timeline=retained producer_lease=retained backing=retained action=quarantine-execution-lane-and-keep-polling\n",
+                handle.tag,
+                pending.submitted.frame,
+                marker,
+                proof.marker_observed as u8,
+                proof.saved_head_bytes,
+                proof.published_tail_bytes,
+            );
+            pending.timeout_logged = true;
+            *pending_slot = Some(pending);
+        }
         return Lab256SpiritCompletion::Pending;
     }
 
@@ -291,21 +322,13 @@ pub(crate) fn poll_lab256_spirit_submission(
     *pending_slot = None;
     drop(pending_slot);
 
-    let ok = marker == LAB256_POST_MARKER;
-    let report_ok = ok && lab256_report_audit(pending.submitted.report, pending.submitted.frame);
-    if !ok {
-        quarantine_execution_rcs_context("lab256-marker-timeout");
-    }
-    complete_execution_rcs_submission(ok);
-    finish_lab256_runtime(pending.submitted.frame, ok);
+    let report_ok = lab256_report_audit(pending.submitted.report, pending.submitted.frame);
+    complete_execution_rcs_submission();
+    finish_lab256_runtime(pending.submitted.frame, true);
     EXECUTION_RCS_DETACHED_TAG.store(0, Ordering::Release);
     log_lab256_completion(pending.submitted, marker, report_ok, "spirit-worker");
 
-    if ok {
-        Lab256SpiritCompletion::Complete(gpgpu_rgba8_release(pending.submitted.dst))
-    } else {
-        Lab256SpiritCompletion::Failed
-    }
+    Lab256SpiritCompletion::Complete(gpgpu_rgba8_release(pending.submitted.dst))
 }
 
 /// Produce the next persistent Lab256 frame for a live UI4 preview.
@@ -402,19 +425,9 @@ fn submit_lab256_batch(
     let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, shared_state);
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(shared_state);
     let kernel_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(
-            shared_state,
-            upload.gpu,
-            upload.phys,
-            upload.mapped_bytes,
-        );
+        && direct_rcs_map_ppgtt_kernel(shared_state, upload.gpu, upload.phys, upload.mapped_bytes);
     let resources_ok = kernel_ok
-        && direct_rcs_map_ppgtt_kernel(
-            shared_state,
-            state_in.gpu,
-            state_in.phys,
-            state_in.bytes,
-        )
+        && direct_rcs_map_ppgtt_kernel(shared_state, state_in.gpu, state_in.phys, state_in.bytes)
         && direct_rcs_map_ppgtt_kernel(
             shared_state,
             state_out.gpu,
@@ -433,8 +446,8 @@ fn submit_lab256_batch(
             runtime_snapshot.report.phys,
             runtime_snapshot.report.bytes,
         );
-    let dst_ok = resources_ok
-        && direct_rcs_map_ppgtt_scanout(shared_state, dst.gpu, dst.phys, dst.bytes);
+    let dst_ok =
+        resources_ok && direct_rcs_map_ppgtt_scanout(shared_state, dst.gpu, dst.phys, dst.bytes);
     let state = execution_rcs_next_job_slot(shared_state)?;
     let batch_ok = dst_ok
         && direct_rcs_encode_lab256_batch(

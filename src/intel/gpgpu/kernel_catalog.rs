@@ -90,6 +90,11 @@ pub(crate) const FONT_OUTLINE_COVERAGE_R8_OPENCL_SOURCE: &str =
     include_str!("kernels/font_outline_coverage_r8.clcpp");
 pub(crate) const SCENE_AABB_KERNEL_NAME: &str = "scene_aabb";
 pub(crate) const SCENE_AABB_OPENCL_SOURCE: &str = include_str!("kernels/scene_aabb.clcpp");
+pub(crate) const HELIO_RETAINED_TRANSFORM_KERNEL_NAME: &str = "helio_retained_transform";
+pub(crate) const HELIO_RETAINED_TRANSFORM_OPENCL_SOURCE: &str =
+    include_str!("kernels/helio_retained_transform.clcpp");
+pub(crate) const HELIO_RETAINED_TRANSFORM_SOURCE_PATH: &str =
+    "crates/trueos-shader/gpgpu/kernels/helio_retained_transform.clcpp";
 pub(crate) const LAB256_MULTIPHASE_KERNEL_NAME: &str = "lab256_multiphase";
 pub(crate) const LAB256_MULTIPHASE_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/lab256_multiphase.clcpp");
@@ -137,6 +142,7 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         KOKORO_CONV1D_U8_U8_KERNEL_NAME => Some(KOKORO_CONV1D_U8_U8_OPENCL_SOURCE),
         FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => Some(FONT_OUTLINE_COVERAGE_R8_OPENCL_SOURCE),
         SCENE_AABB_KERNEL_NAME => Some(SCENE_AABB_OPENCL_SOURCE),
+        HELIO_RETAINED_TRANSFORM_KERNEL_NAME => Some(HELIO_RETAINED_TRANSFORM_OPENCL_SOURCE),
         LAB256_MULTIPHASE_KERNEL_NAME => Some(LAB256_MULTIPHASE_OPENCL_SOURCE),
         SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME => Some(SPIRIT_VFX_BACKGROUND_RGBA8_OPENCL_SOURCE),
         SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME => Some(SPIRIT_VFX_SPRITE_RGBA8_OPENCL_SOURCE),
@@ -195,6 +201,7 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
             Some("src/intel/gpgpu/kernels/font_outline_coverage_r8.clcpp")
         }
         SCENE_AABB_KERNEL_NAME => Some("src/intel/gpgpu/kernels/scene_aabb.clcpp"),
+        HELIO_RETAINED_TRANSFORM_KERNEL_NAME => Some(HELIO_RETAINED_TRANSFORM_SOURCE_PATH),
         LAB256_MULTIPHASE_KERNEL_NAME => {
             Some("crates/trueos-shader/gpgpu/kernels/lab256_multiphase.clcpp")
         }
@@ -212,6 +219,7 @@ include!("kernels/artifacts/adls/cpp/fill_rect_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/font_outline_coverage_r8.contract.rs");
 include!("kernels/artifacts/adls/cpp/glyph_mask_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/gradient_rect_worklist_rgba8.contract.rs");
+include!("kernels/artifacts/adls/cpp/helio_retained_transform.contract.rs");
 include!("kernels/artifacts/adls/cpp/lab256_multiphase.contract.rs");
 include!("kernels/artifacts/adls/cpp/mandel64_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/pixel_plasma_rgba8.contract.rs");
@@ -675,6 +683,10 @@ pub(crate) const SCENE_AABB_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/scene_aabb.bin");
 pub(crate) const SCENE_AABB_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/scene_aabb.spv");
+pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/cpp/helio_retained_transform.bin");
+pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/cpp/helio_retained_transform.spv");
 pub(crate) const LAB256_MULTIPHASE_ADLS_BIN: &[u8] = include_bytes!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lab256_multiphase.bin"
 );
@@ -773,5 +785,27 @@ pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_BIN_SHA256: [u8; 32] =
     FONT_OUTLINE_COVERAGE_R8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const SCENE_AABB_ADLS_BIN_SHA256: [u8; 32] =
     SCENE_AABB_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
+pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_BIN_SHA256: [u8; 32] =
+    HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
+const _: () = {
+    let contract = HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT;
+    assert!(matches!(contract.validate(), Ok(())));
+    assert!(HELIO_RETAINED_TRANSFORM_ADLS_BIN.len() == 53_136);
+    assert!(HELIO_RETAINED_TRANSFORM_ADLS_SPV.len() == 40_728);
+    assert!(contract.target.pci_device_ids.len() == 1);
+    assert!(contract.target.pci_device_ids[0] == 0x4680);
+    assert!(contract.target.revision_min == 0x0C);
+    assert!(contract.target.revision_max == 0x0C);
+    assert!(contract.entry_offset == 64);
+    assert!(contract.entry_size == 6_256);
+    assert!(contract.simd_width == 16);
+    assert!(contract.grf_count == 128);
+    assert!(contract.scratch_bytes == 0);
+    assert!(contract.slm_bytes == 0);
+    assert!(contract.cross_thread_data_bytes == 128);
+    assert!(contract.per_thread_data_bytes == 96);
+    assert!(contract.bindings.len() == 5);
+    assert!(contract.payload_args.len() == 8);
+};
 pub(crate) const LAB256_MULTIPHASE_ADLS_BIN_SHA256: [u8; 32] =
     LAB256_STEP_ADLS_CPP_ABI_CONTRACT.zebin_sha256;

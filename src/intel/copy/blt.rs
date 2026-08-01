@@ -71,6 +71,7 @@ const DIRECT_BLT_GPU_VA_SRC_BASE: u64 = 0x00B6_0000;
 const DIRECT_BLT_GPU_VA_DST_BASE: u64 = 0x00B7_0000;
 const GUC_BLT_UI4_MAX_COPIES: usize = 64;
 const GUC_BLT_UI4_TIMEOUT_MS: u64 = 250;
+const GUC_BLT_PROBE_TIMEOUT_MS: u64 = 2_000;
 const DIRECT_BLT_SMOKE_MARKER: u32 = 0xC0DE_BC50;
 const DIRECT_BLT_SMOKE_POLL_ITERS: usize = 262_144;
 const DIRECT_BLT_COPY_WIDTH: u32 = 4;
@@ -333,9 +334,10 @@ impl GucBltProbeRuntime {
 
 /// Submit one 4x4 XY_FAST_COPY_BLT through the mediated GuC BCS0 lane.
 ///
-/// This intentionally has no direct-execlist fallback. If the marker does not
-/// retire during this call, the exact executor token and all backing storage
-/// remain live; a later probe call only observes that same submission.
+/// This intentionally has no direct-execlist fallback. The call waits on both
+/// the post-sync marker and the context-specific saved HEAD. An elapsed timeout
+/// quarantines this exact lane and retains all backing instead of orphaning a
+/// pending diagnostic that would keep normal UI4 copy work busy forever.
 pub(crate) fn submit_guc_bcs0_fast_copy_probe_now() -> GucBcs0FastCopyProbe {
     if !guc_blt_state_reuse_permitted(&GUC_BLT_LANE_QUARANTINED) {
         return GucBcs0FastCopyProbe::default();
@@ -456,6 +458,10 @@ fn guc_blt_saved_head_reached_tail(saved_head: u32, published_tail_bytes: usize)
     (saved_head & (DIRECT_BLT_RING_BYTES as u32 - 1)) == published_tail_bytes as u32
 }
 
+const fn guc_blt_hardware_retired(marker_observed: bool, context_saved: bool) -> bool {
+    marker_observed && context_saved
+}
+
 fn guc_blt_observe_context_save(
     state: DirectBltState,
     runtime: &mut GucBltRingRuntime,
@@ -544,19 +550,67 @@ fn guc_blt_poll_and_retire(
     state: DirectBltState,
     runtime: &mut GucBltProbeRuntime,
 ) -> GucBcs0FastCopyProbe {
-    let observed = guc_blt_poll_result(state, DIRECT_BLT_SMOKE_MARKER);
-    let marker_observed = observed == DIRECT_BLT_SMOKE_MARKER;
-    let save_status = if marker_observed {
-        guc_blt_context_save_status(state)
-    } else {
-        let ring = GUC_BLT_RING.lock();
-        GucBltContextSaveStatus {
-            observed: false,
-            saved_head: ring.last_saved_head,
-            published_tail_bytes: ring.published_tail_bytes,
+    let (observed, marker_observed, save_status) = loop {
+        let observed = guc_blt_poll_result(state, DIRECT_BLT_SMOKE_MARKER);
+        let marker_observed = observed == DIRECT_BLT_SMOKE_MARKER;
+        let save_status = if marker_observed {
+            guc_blt_context_save_status(state)
+        } else {
+            let ring = GUC_BLT_RING.lock();
+            GucBltContextSaveStatus {
+                observed: false,
+                saved_head: ring.last_saved_head,
+                published_tail_bytes: ring.published_tail_bytes,
+            }
+        };
+        if guc_blt_hardware_retired(marker_observed, save_status.observed) {
+            break (observed, marker_observed, save_status);
         }
+        let retire_ms = direct_blt_elapsed_ms_since(runtime.started_tick);
+        if retire_ms >= GUC_BLT_PROBE_TIMEOUT_MS {
+            let isolation = guc_blt_quarantine(if marker_observed {
+                "probe-context-save-timeout"
+            } else {
+                "probe-completion-marker-timeout"
+            });
+            if let Some(pending) = runtime.pending.take() {
+                let _ = crate::gpu::executor::complete_kernel_submission(pending, false);
+            }
+            let report = GucBcs0FastCopyProbe {
+                forcewake: true,
+                ggtt: true,
+                ppgtt: true,
+                batch: true,
+                submitted: true,
+                pending: false,
+                retired: false,
+                context_saved: save_status.observed,
+                timeline_retired: false,
+                copy_ok: false,
+                src_preserved: false,
+                marker: observed,
+                saved_head: save_status.saved_head,
+                published_tail: save_status.published_tail_bytes as u32,
+                retire_ms,
+            };
+            crate::log_error!(target: "gfx";
+                "intel/blt: guc-bcs0-fast-copy timeout marker_observed={} context_saved={} observed=0x{:08X} expected=0x{:08X} saved_head={} published_tail={} timeout_ms={} action=quarantine-ui4-blitter device_found={} contexts_disabled={} contexts_retained={} lane_busy=1 storage_released=0\n",
+                marker_observed as u8,
+                save_status.observed as u8,
+                observed,
+                DIRECT_BLT_SMOKE_MARKER,
+                save_status.saved_head & (DIRECT_BLT_RING_BYTES as u32 - 1),
+                save_status.published_tail_bytes,
+                GUC_BLT_PROBE_TIMEOUT_MS,
+                isolation.device_found as u8,
+                isolation.contexts_disabled,
+                isolation.contexts_retained,
+            );
+            return report;
+        }
+        core::hint::spin_loop();
     };
-    let retired = marker_observed && save_status.observed;
+    let retired = true;
     let mut timeline_retired = false;
     if retired {
         if let Some(submission) = runtime.pending {
@@ -630,6 +684,9 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
     destination: GucBcs0RgbaSurface,
     copies: &[GucBcs0RgbaCopy],
 ) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
+    if !guc_blt_state_reuse_permitted(&GUC_BLT_LANE_QUARANTINED) {
+        return Err(GucBcs0CopySubmitError::Unavailable);
+    }
     let Some(dev) = super::claimed_device() else {
         return Err(GucBcs0CopySubmitError::Unavailable);
     };
@@ -649,6 +706,13 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
     {
         return Err(GucBcs0CopySubmitError::Busy);
     }
+    if !guc_blt_context_save_status(state).observed {
+        // Every path that can mutate the shared batch/result/PPGTT first
+        // passes this context-specific ownership check. Releasing this
+        // short-lived claim is safe because no storage was touched.
+        GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
+        return Err(GucBcs0CopySubmitError::Busy);
+    }
 
     let prepared = (|| {
         let forcewake = direct_blt_forcewake(dev);
@@ -663,12 +727,25 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
         let marker = 0xBC50_0000 | (sequence & 0xFFFF);
         let (copy_count, copied_bytes) =
             guc_blt_encode_ui4_copy_batch(state, destination, copies, marker)?;
-        let old_tail = guc_blt_prepare_context(state)?;
-        Some((sequence, marker, copy_count, copied_bytes, old_tail))
+        Some((sequence, marker, copy_count, copied_bytes))
     })();
-    let Some((sequence, marker, copy_count, copied_bytes, old_tail)) = prepared else {
+    let Some((sequence, marker, copy_count, copied_bytes)) = prepared else {
         GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
         return Err(GucBcs0CopySubmitError::InvalidRequest);
+    };
+    let old_tail = match guc_blt_prepare_context(state) {
+        Ok(old_tail) => old_tail,
+        Err(GucBltPrepareError::Busy) => {
+            GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
+            return Err(GucBcs0CopySubmitError::Busy);
+        }
+        Err(GucBltPrepareError::Invalid) => {
+            GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
+            return Err(GucBcs0CopySubmitError::InvalidRequest);
+        }
+        Err(GucBltPrepareError::Quarantined) => {
+            return Err(GucBcs0CopySubmitError::Unavailable);
+        }
     };
 
     let (hwlrca_lo, hwlrca_hi) = guc_blt_context_descriptor(DIRECT_BLT_GPU_VA_CONTEXT_BASE);
@@ -691,11 +768,11 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
             return Err(GucBcs0CopySubmitError::Busy);
         }
         Err(error) => {
-            guc_blt_rollback_context_tail(state, old_tail);
-            GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
+            let isolation = guc_blt_quarantine("submit-ambiguous");
             crate::log_error!(target: "gfx";
-                "intel/blt: ui4-bcs0 submitted=0 error={:?} copies={} path=guc direct_elsp=0 legacy_fallback=0\n",
-                error, copy_count,
+                "intel/blt: ui4-bcs0 submitted=0 error={:?} copies={} path=guc direct_elsp=0 legacy_fallback=0 action=quarantine-ui4-blitter device_found={} contexts_disabled={} contexts_retained={} storage_released=0\n",
+                error, copy_count, isolation.device_found as u8,
+                isolation.contexts_disabled, isolation.contexts_retained,
             );
             return Err(GucBcs0CopySubmitError::SubmitFailed);
         }
@@ -727,18 +804,41 @@ pub(crate) fn poll_guc_bcs0_rgba_copies(
     }
     super::dma_flush(state.result_virt, core::mem::size_of::<u32>());
     let observed = unsafe { core::ptr::read_volatile(state.result_virt.cast::<u32>()) };
-    if observed != runtime.expected_marker {
+    let marker_observed = observed == runtime.expected_marker;
+    let save_status = if marker_observed {
+        guc_blt_context_save_status(state)
+    } else {
+        let ring = GUC_BLT_RING.lock();
+        GucBltContextSaveStatus {
+            observed: false,
+            saved_head: ring.last_saved_head,
+            published_tail_bytes: ring.published_tail_bytes,
+        }
+    };
+    if !guc_blt_hardware_retired(marker_observed, save_status.observed) {
         if direct_blt_elapsed_ms_since(runtime.started_tick) < GUC_BLT_UI4_TIMEOUT_MS {
             return GucBcs0CopyCompletion::Pending;
         }
+        // Quarantine before retiring the software point. A missing marker or
+        // saved HEAD is ambiguous ownership: late GuC writes remain possible,
+        // so this lane, context, and every backing allocation stay pinned.
+        let isolation = guc_blt_quarantine(if marker_observed {
+            "context-save-timeout"
+        } else {
+            "completion-marker-timeout"
+        });
         if let Some(pending) = runtime.pending.take() {
             let _ = crate::gpu::executor::complete_kernel_submission(pending, false);
         }
-        GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
         crate::log_error!(target: "gfx";
-            "intel/blt: ui4-bcs0 timeout sequence={} copies={} bytes={} observed=0x{:08X} expected=0x{:08X} timeout_ms={}\n",
-            runtime.sequence, runtime.copies, runtime.bytes, observed,
-            runtime.expected_marker, GUC_BLT_UI4_TIMEOUT_MS,
+            "intel/blt: ui4-bcs0 timeout sequence={} copies={} bytes={} marker_observed={} context_saved={} observed=0x{:08X} expected=0x{:08X} saved_head={} published_tail={} timeout_ms={} action=quarantine-ui4-blitter device_found={} contexts_disabled={} contexts_retained={} lane_busy=1 storage_released=0\n",
+            runtime.sequence, runtime.copies, runtime.bytes,
+            marker_observed as u8, save_status.observed as u8, observed,
+            runtime.expected_marker,
+            save_status.saved_head & (DIRECT_BLT_RING_BYTES as u32 - 1),
+            save_status.published_tail_bytes,
+            GUC_BLT_UI4_TIMEOUT_MS, isolation.device_found as u8,
+            isolation.contexts_disabled, isolation.contexts_retained,
         );
         return GucBcs0CopyCompletion::Failed;
     }
@@ -747,16 +847,46 @@ pub(crate) fn poll_guc_bcs0_rgba_copies(
     };
     let timeline_retired =
         crate::gpu::executor::complete_kernel_submission(pending, true).is_some();
-    GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
     if !timeline_retired {
+        let _ = guc_blt_quarantine("timeline-retire-failed");
         return GucBcs0CopyCompletion::Failed;
     }
+    // This is the sole normal storage-release point: the ordered post-sync
+    // marker ran and this exact HWLRCA saved HEAD reached its published tail.
+    GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
     crate::log_trace!(target: "ui4";
-        "ui4/blt: retired sequence={} engine=bcs0 path=guc copies={} bytes={} marker=0x{:08X} elapsed_ms={} timeline_retired=1\n",
+        "ui4/blt: retired sequence={} engine=bcs0 path=guc copies={} bytes={} marker=0x{:08X} saved_head={} published_tail={} context_saved=1 elapsed_ms={} timeline_retired=1 storage_released=1\n",
         runtime.sequence, runtime.copies, runtime.bytes, observed,
+        save_status.saved_head & (DIRECT_BLT_RING_BYTES as u32 - 1),
+        save_status.published_tail_bytes,
         direct_blt_elapsed_ms_since(runtime.started_tick),
     );
     GucBcs0CopyCompletion::Complete
+}
+
+fn guc_blt_state_reuse_permitted(quarantined: &AtomicBool) -> bool {
+    !quarantined.load(Ordering::Acquire)
+}
+
+fn guc_blt_quarantine(reason: &'static str) -> crate::gpu::vgpu::KernelClientIsolation {
+    let first = !GUC_BLT_LANE_QUARANTINED.swap(true, Ordering::AcqRel);
+    // Busy becomes a permanent storage pin. Never publish a normal release on
+    // a lane whose last GuC ownership transition is ambiguous.
+    GUC_BLT_LANE_BUSY.store(true, Ordering::Release);
+    if !first {
+        return crate::gpu::vgpu::KernelClientIsolation::default();
+    }
+    let isolation =
+        crate::gpu::vgpu::isolate_kernel_context(crate::gpu::vgpu::KernelClient::Ui4Blitter);
+    crate::log_error!(target: "gfx";
+        "intel/blt: guc-bcs0 quarantine reason={} client={} device_found={} contexts_disabled={} contexts_retained={} lane_busy=1 storage_released=0 backing_retained=1 direct-engine-reset=0\n",
+        reason,
+        crate::gpu::vgpu::KernelClient::Ui4Blitter.name(),
+        isolation.device_found as u8,
+        isolation.contexts_disabled,
+        isolation.contexts_retained,
+    );
+    isolation
 }
 
 fn guc_blt_poll_result(state: DirectBltState, expected: u32) -> u32 {
@@ -885,7 +1015,16 @@ pub(crate) fn submit_bcs0_mi_smoke_once() -> bool {
 }
 
 fn direct_blt_state_once() -> Option<DirectBltState> {
-    if let Some(state) = *DIRECT_BLT_STATE.lock() {
+    if !guc_blt_state_reuse_permitted(&GUC_BLT_LANE_QUARANTINED) {
+        return None;
+    }
+    let mut state_slot = DIRECT_BLT_STATE.lock();
+    // Close the race with timeout quarantine between the lock-free check and
+    // taking ownership of the allocation slot.
+    if !guc_blt_state_reuse_permitted(&GUC_BLT_LANE_QUARANTINED) {
+        return None;
+    }
+    if let Some(state) = *state_slot {
         return Some(state);
     }
 
@@ -924,7 +1063,7 @@ fn direct_blt_state_once() -> Option<DirectBltState> {
         ppgtt_phys,
         ppgtt_virt,
     };
-    *DIRECT_BLT_STATE.lock() = Some(state);
+    *state_slot = Some(state);
     Some(state)
 }
 
@@ -1055,16 +1194,15 @@ fn direct_blt_map_ppgtt_region(
 }
 
 fn direct_blt_forcewake(dev: super::Dev) -> bool {
-    // BCS consumes the retained physical-GT contract established at boot.
-    // Repairing shared forcewake from a client submission can transition the
-    // GT underneath an unrelated live GuC context.
-    super::physical_gt_ready(dev)
+    // BCS consumes only its boot-owned forcewake admission contract. It must
+    // not inherit Render/RCS readiness or repair shared GT state from a copy
+    // client submission.
+    super::physical_bcs_ready(dev)
 }
 
 fn direct_blt_encode_fast_copy_batch(state: DirectBltState) -> bool {
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_BLT_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_BLT_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_BLT_RESULT_BYTES);
 
         let result = state.result_virt as *mut u32;
@@ -1536,16 +1674,45 @@ fn direct_blt_init_context_image(
     true
 }
 
-fn guc_blt_write_lrc_ring_tail(state: DirectBltState, ring_tail: u32) {
+fn guc_blt_write_lrc_ring_tail(state: DirectBltState, ring_tail: u32) -> bool {
+    const LRC_CONTEXT_CONTROL_VALUE_DW: usize = 3;
     const LRC_RING_TAIL_VALUE_DW: usize = 7;
     let total_dwords = DIRECT_BLT_CONTEXT_BYTES / core::mem::size_of::<u32>();
-    if total_dwords <= DIRECT_BLT_LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW {
-        return;
+    let first = DIRECT_BLT_LRC_STATE_OFFSET_DWORDS + LRC_CONTEXT_CONTROL_VALUE_DW;
+    let last = DIRECT_BLT_LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW;
+    if state.context_virt.is_null() || total_dwords <= last {
+        return false;
     }
     let dwords =
         unsafe { core::slice::from_raw_parts_mut(state.context_virt.cast::<u32>(), total_dwords) };
-    dwords[DIRECT_BLT_LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW] = ring_tail;
-    super::dma_flush(state.context_virt, DIRECT_BLT_CONTEXT_BYTES);
+    let context_control = dwords[first];
+    dwords[last] = ring_tail;
+    dwords[first] = context_control;
+    // GuC writes saved HEAD in this same first LRC-state cache line. The
+    // caller proved saved HEAD == the previous published tail before reaching
+    // this write; flush only the values intentionally republished by the CPU.
+    unsafe {
+        super::dma_flush(
+            state.context_virt.add(first * core::mem::size_of::<u32>()),
+            (last - first + 1) * core::mem::size_of::<u32>(),
+        );
+    }
+    true
+}
+
+fn guc_blt_read_lrc_ring_head(state: DirectBltState) -> u32 {
+    const LRC_RING_HEAD_VALUE_DW: usize = 5;
+    let total_dwords = DIRECT_BLT_CONTEXT_BYTES / core::mem::size_of::<u32>();
+    let index = DIRECT_BLT_LRC_STATE_OFFSET_DWORDS + LRC_RING_HEAD_VALUE_DW;
+    if state.context_virt.is_null() || total_dwords <= index {
+        return u32::MAX;
+    }
+    let address = unsafe { state.context_virt.add(index * core::mem::size_of::<u32>()) };
+    // Context save is a GPU write. Evict a stale CPU copy before sampling the
+    // context-specific saved HEAD; the BCS MMIO HEAD may belong to another
+    // logical context and is not an ownership proof.
+    super::dma_flush(address, core::mem::size_of::<u32>());
+    unsafe { core::ptr::read_volatile(address.cast::<u32>()) }
 }
 
 fn direct_blt_init_csb_pointers(dev: super::Dev, hwsp_virt: *mut u8) {
@@ -1670,5 +1837,33 @@ fn direct_blt_elapsed_ms_since(start_tick: u64) -> u64 {
         0
     } else {
         elapsed.saturating_mul(1000) / hz
+    }
+}
+
+#[cfg(test)]
+mod guc_blt_saved_context_tests {
+    use super::*;
+
+    #[test]
+    fn marker_alone_never_releases_persistent_storage() {
+        assert!(!guc_blt_hardware_retired(true, false));
+        assert!(!guc_blt_hardware_retired(false, true));
+        assert!(guc_blt_hardware_retired(true, true));
+    }
+
+    #[test]
+    fn saved_head_is_compared_to_the_published_tail_modulo_ring_size() {
+        assert!(guc_blt_saved_head_reached_tail(16, 16));
+        assert!(guc_blt_saved_head_reached_tail(0x1000 | 16, 16));
+        assert!(!guc_blt_saved_head_reached_tail(4080, 0));
+        assert!(guc_blt_saved_head_reached_tail(0x1000, 0));
+    }
+
+    #[test]
+    fn quarantine_irreversibly_denies_blt_state_reuse() {
+        let quarantined = AtomicBool::new(false);
+        assert!(guc_blt_state_reuse_permitted(&quarantined));
+        quarantined.store(true, Ordering::Release);
+        assert!(!guc_blt_state_reuse_permitted(&quarantined));
     }
 }

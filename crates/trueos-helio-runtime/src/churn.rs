@@ -62,6 +62,103 @@ impl GpuInstanceData {
     }
 }
 
+/// Compact CPU/simulation output consumed by Helio's retained GPU transform
+/// pass. The GPU expands this seed into [`GpuInstanceData`] and writes the
+/// compacted draw index, so a frame producer never has to build 208-byte
+/// matrices on the CPU.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GpuRetainedTransformSeed {
+    pub translation: [f32; 3],
+    pub scale: [f32; 3],
+    /// Quaternion in x, y, z, w order. The GPU normalizes it before use.
+    pub rotation: [f32; 4],
+    /// Radius of the retained local-space mesh before `scale` is applied.
+    pub local_radius: f32,
+    pub previous_translation: [f32; 3],
+    /// Index into the frame's fixed draw-template array.
+    pub draw_group: u32,
+    pub flags: u32,
+}
+
+impl GpuRetainedTransformSeed {
+    pub const BYTE_LEN: usize = 64;
+    pub const DISABLED_DRAW_GROUP: u32 = u32::MAX;
+
+    pub fn to_le_bytes(self) -> [u8; Self::BYTE_LEN] {
+        let mut bytes = [0; Self::BYTE_LEN];
+        write_f32s(&mut bytes, 0, &self.translation);
+        write_f32s(&mut bytes, 12, &self.scale);
+        write_f32s(&mut bytes, 24, &self.rotation);
+        write_f32(&mut bytes, 40, self.local_radius);
+        write_f32s(&mut bytes, 44, &self.previous_translation);
+        write_u32(&mut bytes, 56, self.draw_group);
+        write_u32(&mut bytes, 60, self.flags);
+        bytes
+    }
+}
+
+/// Immutable indexed-draw fields plus one disjoint compacted-index slice.
+///
+/// `first_instance..first_instance + capacity` is reserved exclusively for
+/// this group. Empty groups retain their mesh metadata with `capacity == 0`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GpuRetainedDrawTemplate {
+    pub index_count: u32,
+    pub first_index: u32,
+    pub base_vertex: i32,
+    pub first_instance: u32,
+    pub capacity: u32,
+    /// Low 16 bits are mesh ID; high 16 bits are material ID.
+    pub packed_mesh_material: u32,
+}
+
+impl GpuRetainedDrawTemplate {
+    pub const BYTE_LEN: usize = 24;
+
+    pub const fn new(
+        mesh: MeshDescriptor,
+        group: DrawGroupDescriptor,
+        first_instance: u32,
+        capacity: u32,
+    ) -> Option<Self> {
+        if mesh.mesh_id != group.mesh_id
+            || group.mesh_id > u16::MAX as u32
+            || group.material_id > u16::MAX as u32
+        {
+            return None;
+        }
+        Some(Self {
+            index_count: mesh.index_count,
+            first_index: mesh.first_index,
+            base_vertex: mesh.base_vertex,
+            first_instance,
+            capacity,
+            packed_mesh_material: group.mesh_id | (group.material_id << 16),
+        })
+    }
+
+    pub const fn mesh_id(self) -> u32 {
+        self.packed_mesh_material & u16::MAX as u32
+    }
+
+    pub const fn material_id(self) -> u32 {
+        self.packed_mesh_material >> 16
+    }
+
+    pub fn to_le_bytes(self) -> [u8; Self::BYTE_LEN] {
+        let mut bytes = [0; Self::BYTE_LEN];
+        write_u32(&mut bytes, 0, self.index_count);
+        write_u32(&mut bytes, 4, self.first_index);
+        write_i32(&mut bytes, 8, self.base_vertex);
+        write_u32(&mut bytes, 12, self.first_instance);
+        write_u32(&mut bytes, 16, self.capacity);
+        write_u32(&mut bytes, 20, self.packed_mesh_material);
+        bytes
+    }
+}
+
 /// Helio's per-frame camera storage-buffer ABI, byte-for-byte.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -268,6 +365,25 @@ const _: () = {
     assert!(core::mem::offset_of!(GpuInstanceData, flags) == 200);
     assert!(core::mem::offset_of!(GpuInstanceData, lightmap_index) == 204);
 
+    assert!(core::mem::size_of::<GpuRetainedTransformSeed>() == GpuRetainedTransformSeed::BYTE_LEN);
+    assert!(core::mem::align_of::<GpuRetainedTransformSeed>() == 4);
+    assert!(core::mem::offset_of!(GpuRetainedTransformSeed, translation) == 0);
+    assert!(core::mem::offset_of!(GpuRetainedTransformSeed, scale) == 12);
+    assert!(core::mem::offset_of!(GpuRetainedTransformSeed, rotation) == 24);
+    assert!(core::mem::offset_of!(GpuRetainedTransformSeed, local_radius) == 40);
+    assert!(core::mem::offset_of!(GpuRetainedTransformSeed, previous_translation) == 44);
+    assert!(core::mem::offset_of!(GpuRetainedTransformSeed, draw_group) == 56);
+    assert!(core::mem::offset_of!(GpuRetainedTransformSeed, flags) == 60);
+
+    assert!(core::mem::size_of::<GpuRetainedDrawTemplate>() == GpuRetainedDrawTemplate::BYTE_LEN);
+    assert!(core::mem::align_of::<GpuRetainedDrawTemplate>() == 4);
+    assert!(core::mem::offset_of!(GpuRetainedDrawTemplate, index_count) == 0);
+    assert!(core::mem::offset_of!(GpuRetainedDrawTemplate, first_index) == 4);
+    assert!(core::mem::offset_of!(GpuRetainedDrawTemplate, base_vertex) == 8);
+    assert!(core::mem::offset_of!(GpuRetainedDrawTemplate, first_instance) == 12);
+    assert!(core::mem::offset_of!(GpuRetainedDrawTemplate, capacity) == 16);
+    assert!(core::mem::offset_of!(GpuRetainedDrawTemplate, packed_mesh_material) == 20);
+
     assert!(core::mem::size_of::<GpuCameraUniforms>() == GpuCameraUniforms::BYTE_LEN);
     assert!(core::mem::offset_of!(GpuCameraUniforms, view) == 0);
     assert!(core::mem::offset_of!(GpuCameraUniforms, proj) == 64);
@@ -325,6 +441,24 @@ pub struct InstanceFrame<'a> {
     pub draws: &'a [DrawIndexedIndirectArgs; DRAW_GROUP_COUNT],
     pub instance_dirty: DirtyRange,
     pub compacted_indices_dirty: DirtyRange,
+}
+
+/// GPU-transform input for one retained Helio frame.
+///
+/// Seeds stay in simulation order. Each draw template owns a disjoint,
+/// prefix-counted output slice; the GPU pass expands and compacts seeds into
+/// those slices before the existing indexed-indirect Render submission.
+pub struct TransformFrame<'a> {
+    pub camera: &'a GpuCameraUniforms,
+    pub globals: &'a GpuForwardLitGlobals,
+    pub lights: &'a [GpuLight; LIGHT_COUNT],
+    pub materials: &'a [GpuMaterial; MATERIAL_COUNT],
+    pub meshes: &'a [MeshDescriptor; SHAPE_COUNT],
+    pub groups: &'a [DrawGroupDescriptor; DRAW_GROUP_COUNT],
+    pub seeds: &'a [GpuRetainedTransformSeed],
+    pub draw_templates: &'a [GpuRetainedDrawTemplate; DRAW_GROUP_COUNT],
+    pub seed_dirty: DirtyRange,
+    pub draw_templates_dirty: DirtyRange,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -591,6 +725,7 @@ struct Object {
     scale: f32,
     shape: usize,
     previous_model: Option<[f32; 16]>,
+    previous_translation: Option<[f32; 3]>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -634,6 +769,8 @@ pub struct Engine {
     gpu_instances: Vec<GpuInstanceData>,
     gpu_compacted_indices: Vec<u32>,
     gpu_draws: [DrawIndexedIndirectArgs; DRAW_GROUP_COUNT],
+    gpu_transform_seeds: Vec<GpuRetainedTransformSeed>,
+    gpu_draw_templates: [GpuRetainedDrawTemplate; DRAW_GROUP_COUNT],
     previous_view_proj: Option<[f32; 16]>,
 }
 
@@ -737,6 +874,8 @@ impl Engine {
             gpu_instances: Vec::with_capacity(max_objects),
             gpu_compacted_indices: Vec::with_capacity(max_objects),
             gpu_draws,
+            gpu_transform_seeds: Vec::with_capacity(max_objects),
+            gpu_draw_templates: [GpuRetainedDrawTemplate::default(); DRAW_GROUP_COUNT],
             previous_view_proj: None,
         })
     }
@@ -892,6 +1031,143 @@ impl Engine {
         Ok(&self.batches)
     }
 
+    /// Advance Churn into compact retained-transform seeds. The simulation CPU
+    /// writes 64 bytes per object plus twelve prefix-counted templates; matrix,
+    /// normal, bounds, compaction, and indirect-count expansion stay on GPU.
+    pub fn step_transform_frame(&mut self, aspect: f32) -> Result<TransformFrame<'_>, Error> {
+        Projector::new(self.spec.camera, aspect)?;
+        if self.frame % u64::from(self.spec.spawn_interval_frames) == 0 {
+            self.spawn();
+        }
+
+        let time = self.frame as f32 * self.spec.time_step * ANIMATION_RATE_SCALE;
+        let burst_progress = if self.collisions_enabled {
+            let frame = self
+                .collision_burst_frame
+                .saturating_add(1)
+                .min(COLLISION_BURST_FRAMES);
+            frame as f32 / COLLISION_BURST_FRAMES as f32
+        } else {
+            0.0
+        };
+
+        let object_count = self.objects.len();
+        let object_count_u32 = u32::try_from(object_count).map_err(|_| Error::InvalidChurnScene)?;
+        let mut group_counts = [0u32; DRAW_GROUP_COUNT];
+        for (object_index, object) in self.objects.iter().enumerate() {
+            let group = object.shape * MATERIAL_COUNT + object_index % MATERIAL_COUNT;
+            group_counts[group] = group_counts[group]
+                .checked_add(1)
+                .ok_or(Error::InvalidChurnScene)?;
+        }
+        let mut next_start = 0u32;
+        for group in 0..DRAW_GROUP_COUNT {
+            let mesh = self.gpu_meshes[group / MATERIAL_COUNT];
+            self.gpu_draw_templates[group] = GpuRetainedDrawTemplate::new(
+                mesh,
+                self.gpu_groups[group],
+                next_start,
+                group_counts[group],
+            )
+            .ok_or(Error::InvalidChurnScene)?;
+            next_start = next_start
+                .checked_add(group_counts[group])
+                .ok_or(Error::InvalidChurnScene)?;
+        }
+        if next_start != object_count_u32 {
+            return Err(Error::InvalidChurnScene);
+        }
+
+        self.gpu_transform_seeds.clear();
+        for object_index in 0..object_count {
+            let object = self.objects[object_index];
+            let pose = object_pose(
+                &self.spec,
+                object,
+                object_index,
+                time,
+                self.collisions_enabled,
+                burst_progress,
+            );
+            let half_angle = pose.angle * 0.5;
+            let previous_translation = object
+                .previous_translation
+                .or_else(|| {
+                    object
+                        .previous_model
+                        .map(|model| [model[12], model[13], model[14]])
+                })
+                .unwrap_or(pose.center);
+            let extents = self.spec.shape_half_extents[object.shape];
+            self.gpu_transform_seeds.push(GpuRetainedTransformSeed {
+                translation: pose.center,
+                scale: [object.scale; 3],
+                rotation: [0.0, libm::sinf(half_angle), 0.0, libm::cosf(half_angle)],
+                local_radius: libm::sqrtf(
+                    extents[0] * extents[0] + extents[1] * extents[1] + extents[2] * extents[2],
+                ),
+                previous_translation,
+                draw_group: (object.shape * MATERIAL_COUNT + object_index % MATERIAL_COUNT) as u32,
+                flags: INSTANCE_FLAG_CASTS_SHADOW | INSTANCE_FLAG_RECEIVES_SHADOW,
+            });
+            self.objects[object_index].previous_translation = Some(pose.center);
+            // A later CPU fallback reconstructs its temporal model from the
+            // compact translation instead of consuming a stale matrix.
+            self.objects[object_index].previous_model = None;
+        }
+
+        let camera = gpu_camera_uniforms(
+            self.spec.camera,
+            aspect,
+            self.frame as u32,
+            self.previous_view_proj,
+        )?;
+        self.previous_view_proj = Some(camera.view_proj);
+        self.gpu_camera = camera;
+        self.gpu_globals = GpuForwardLitGlobals {
+            frame: self.frame as u32,
+            delta_time: self.spec.time_step * ANIMATION_RATE_SCALE,
+            light_count: LIGHT_COUNT as u32,
+            ambient_intensity: self.spec.ambient_intensity,
+            ambient_color: [
+                self.spec.ambient_rgb[0],
+                self.spec.ambient_rgb[1],
+                self.spec.ambient_rgb[2],
+                1.0,
+            ],
+            num_tiles_x: 1,
+            num_tiles_y: 1,
+            screen_width: aspect,
+            screen_height: 1.0,
+        };
+
+        if self.collisions_enabled {
+            self.collision_burst_frame = self
+                .collision_burst_frame
+                .saturating_add(1)
+                .min(COLLISION_BURST_FRAMES);
+        }
+        self.frame = self.frame.wrapping_add(1);
+        Ok(TransformFrame {
+            camera: &self.gpu_camera,
+            globals: &self.gpu_globals,
+            lights: &self.gpu_lights,
+            materials: &self.gpu_materials,
+            meshes: &self.gpu_meshes,
+            groups: &self.gpu_groups,
+            seeds: &self.gpu_transform_seeds,
+            draw_templates: &self.gpu_draw_templates,
+            seed_dirty: DirtyRange {
+                first: 0,
+                count: object_count_u32,
+            },
+            draw_templates_dirty: DirtyRange {
+                first: 0,
+                count: DRAW_GROUP_COUNT as u32,
+            },
+        })
+    }
+
     /// Advance the same Churn simulation while retaining Helio's GPU-native
     /// scene shape. This path updates only object matrices and compact draw
     /// ranges; it deliberately performs no CPU vertex projection or lighting.
@@ -951,7 +1227,13 @@ impl Engine {
                 burst_progress,
             );
             let model = model_matrix(pose.center, pose.angle, object.scale);
-            let previous_model = object.previous_model.unwrap_or(model);
+            let previous_model = object.previous_model.unwrap_or_else(|| {
+                model_matrix(
+                    object.previous_translation.unwrap_or(pose.center),
+                    pose.angle,
+                    object.scale,
+                )
+            });
             let group = object.shape * MATERIAL_COUNT + object_index % MATERIAL_COUNT;
             let packed_index = group_cursors[group];
             group_cursors[group] += 1;
@@ -971,6 +1253,7 @@ impl Engine {
             };
             self.gpu_compacted_indices[packed_index] = packed_index as u32;
             self.objects[object_index].previous_model = Some(model);
+            self.objects[object_index].previous_translation = Some(pose.center);
         }
 
         let camera = gpu_camera_uniforms(
@@ -1057,6 +1340,7 @@ impl Engine {
                 speed: self.rng.next_f32(self.spec.speed_range),
                 scale: self.rng.next_f32(self.spec.scale_range),
                 previous_model: None,
+                previous_translation: None,
             };
             if self.objects.len() < self.spec.max_objects {
                 self.objects.push(object);
@@ -1645,6 +1929,8 @@ mod tests {
     #[test]
     fn helio_gpu_abi_lengths_offsets_and_little_endian_encoding_are_exact() {
         assert_eq!(core::mem::size_of::<GpuInstanceData>(), 208);
+        assert_eq!(core::mem::size_of::<GpuRetainedTransformSeed>(), 64);
+        assert_eq!(core::mem::size_of::<GpuRetainedDrawTemplate>(), 24);
         assert_eq!(core::mem::size_of::<GpuCameraUniforms>(), 368);
         assert_eq!(core::mem::size_of::<GpuLight>(), 128);
         assert_eq!(core::mem::size_of::<GpuMaterial>(), 96);
@@ -1690,6 +1976,134 @@ mod tests {
         let bytes = material.to_le_bytes();
         assert_eq!(&bytes[48..52], &0x1234_5678u32.to_le_bytes());
         assert_eq!(&bytes[80..84], &3.25f32.to_le_bytes());
+
+        let seed = GpuRetainedTransformSeed {
+            translation: [1.25, 2.25, 3.25],
+            scale: [4.25, 5.25, 6.25],
+            rotation: [7.25, 8.25, 9.25, 10.25],
+            local_radius: 11.25,
+            previous_translation: [12.25, 13.25, 14.25],
+            draw_group: 0x1122_3344,
+            flags: 0x5566_7788,
+        };
+        let bytes = seed.to_le_bytes();
+        assert_eq!(&bytes[0..4], &1.25f32.to_le_bytes());
+        assert_eq!(&bytes[12..16], &4.25f32.to_le_bytes());
+        assert_eq!(&bytes[24..28], &7.25f32.to_le_bytes());
+        assert_eq!(&bytes[40..44], &11.25f32.to_le_bytes());
+        assert_eq!(&bytes[44..48], &12.25f32.to_le_bytes());
+        assert_eq!(&bytes[56..60], &0x1122_3344u32.to_le_bytes());
+        assert_eq!(&bytes[60..64], &0x5566_7788u32.to_le_bytes());
+
+        let template = GpuRetainedDrawTemplate::new(
+            MeshDescriptor {
+                mesh_id: 2,
+                half_extents: [1.0; 3],
+                first_vertex: 0,
+                vertex_count: 24,
+                first_index: 72,
+                index_count: 36,
+                base_vertex: -7,
+            },
+            DrawGroupDescriptor {
+                mesh_id: 2,
+                material_id: 3,
+            },
+            19,
+            23,
+        )
+        .unwrap();
+        assert_eq!(template.mesh_id(), 2);
+        assert_eq!(template.material_id(), 3);
+        let bytes = template.to_le_bytes();
+        assert_eq!(&bytes[0..4], &36u32.to_le_bytes());
+        assert_eq!(&bytes[4..8], &72u32.to_le_bytes());
+        assert_eq!(&bytes[8..12], &(-7i32).to_le_bytes());
+        assert_eq!(&bytes[12..16], &19u32.to_le_bytes());
+        assert_eq!(&bytes[16..20], &23u32.to_le_bytes());
+        assert_eq!(&bytes[20..24], &(2u32 | (3u32 << 16)).to_le_bytes());
+    }
+
+    #[test]
+    fn transform_frame_is_compact_prefix_counted_and_temporal() {
+        let spec = Spec::decode_artifact(ARTIFACT).unwrap();
+        let mut engine = Engine::new(spec).unwrap();
+        let (first_translations, first_view_proj) = {
+            let frame = engine.step_transform_frame(16.0 / 9.0).unwrap();
+            assert_eq!(frame.seeds.len(), 8);
+            assert_eq!(frame.seed_dirty, DirtyRange { first: 0, count: 8 });
+            assert_eq!(frame.draw_templates.len(), DRAW_GROUP_COUNT);
+            assert_eq!(
+                frame.draw_templates_dirty,
+                DirtyRange {
+                    first: 0,
+                    count: DRAW_GROUP_COUNT as u32,
+                }
+            );
+            assert_eq!(
+                frame
+                    .draw_templates
+                    .iter()
+                    .map(|template| template.capacity)
+                    .sum::<u32>(),
+                frame.seeds.len() as u32
+            );
+
+            let mut expected_first = 0u32;
+            for (group_index, template) in frame.draw_templates.iter().copied().enumerate() {
+                let group = frame.groups[group_index];
+                let mesh = frame.meshes[group_index / MATERIAL_COUNT];
+                assert_eq!(template.first_instance, expected_first);
+                assert_eq!(template.mesh_id(), group.mesh_id);
+                assert_eq!(template.material_id(), group.material_id);
+                assert_eq!(template.index_count, mesh.index_count);
+                assert_eq!(template.first_index, mesh.first_index);
+                assert_eq!(template.base_vertex, mesh.base_vertex);
+                assert_eq!(
+                    template.capacity as usize,
+                    frame
+                        .seeds
+                        .iter()
+                        .filter(|seed| seed.draw_group == group_index as u32)
+                        .count()
+                );
+                expected_first += template.capacity;
+            }
+            assert_eq!(expected_first, frame.seeds.len() as u32);
+            assert!(frame.seeds.iter().all(|seed| {
+                seed.translation.iter().all(|value| value.is_finite())
+                    && seed.scale.iter().all(|value| *value > 0.0)
+                    && seed.rotation.iter().all(|value| value.is_finite())
+                    && seed.local_radius > 0.0
+                    && seed.previous_translation == seed.translation
+            }));
+            (
+                frame
+                    .seeds
+                    .iter()
+                    .map(|seed| seed.translation)
+                    .collect::<Vec<_>>(),
+                frame.camera.view_proj,
+            )
+        };
+        assert!(engine.gpu_instances.is_empty());
+
+        let frame = engine.step_transform_frame(16.0 / 9.0).unwrap();
+        assert_eq!(frame.camera.prev_view_proj, first_view_proj);
+        assert!(
+            frame
+                .seeds
+                .iter()
+                .zip(first_translations.iter())
+                .all(|(seed, previous)| seed.previous_translation == *previous)
+        );
+        assert!(
+            frame
+                .seeds
+                .iter()
+                .zip(first_translations.iter())
+                .any(|(seed, previous)| seed.translation != *previous)
+        );
     }
 
     #[test]

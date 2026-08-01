@@ -250,18 +250,17 @@ fn load_resident_assets() -> Result<LillyResidentAssets, LillyLoadError> {
             .ok_or(LillyLoadError::AddressOverflow)?;
     }
 
-    let storage_bytes_u64 = u64::try_from(storage_bytes).map_err(|_| LillyLoadError::AddressOverflow)?;
+    let storage_bytes_u64 =
+        u64::try_from(storage_bytes).map_err(|_| LillyLoadError::AddressOverflow)?;
     if LILLY_EXECUTION_GPU_BASE
         .checked_add(storage_bytes_u64)
         .is_none_or(|end| end > LILLY_EXECUTION_GPU_LIMIT)
     {
         return Err(LillyLoadError::Resident("spirit-execution-va-capacity"));
     }
-    let allocation = crate::gpu::resident::ResidentDmaBuffer::allocate_zeroed(
-        storage_bytes,
-        GPU_PAGE_BYTES,
-    )
-    .ok_or(LillyLoadError::Resident("spirit-resident-dma"))?;
+    let allocation =
+        crate::gpu::resident::ResidentDmaBuffer::allocate_zeroed(storage_bytes, GPU_PAGE_BYTES)
+            .ok_or(LillyLoadError::Resident("spirit-resident-dma"))?;
     let (frames, rgba_bytes) = populate_resident_frames(&allocation, entries, storage_bytes)?;
     let semantic_assets = build_semantic_assets(frames.as_slice(), catalog.as_slice())?;
     allocation.flush();

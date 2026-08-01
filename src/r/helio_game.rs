@@ -110,9 +110,7 @@ fn build_cpu_carrier_registry(workers: &[(u32, u8)]) -> Option<CpuCarrierRegistr
 /// Stage a stable AP2+ carrier set without making it visible to launch/status
 /// consumers. The public registry is committed only after every remote task
 /// has proved that it is executing on its assigned worker.
-pub(crate) fn prepare_cpu_carriers(
-    workers: &[(u32, u8)],
-) -> Option<CpuCarrierBootstrapState> {
+pub(crate) fn prepare_cpu_carriers(workers: &[(u32, u8)]) -> Option<CpuCarrierBootstrapState> {
     let expected = build_cpu_carrier_registry(workers)?;
     let mut bootstrap = CPU_CARRIER_BOOTSTRAP.lock();
     if bootstrap.expected.count == 0 {
@@ -1592,12 +1590,23 @@ async fn run_cube(context: InstanceContext) -> Result<(), GameError> {
             return Err(error);
         }
     };
-    let rendered = match render_publish(&mut surface, &resident, clear_rgba).await {
-        Ok(rendered) => rendered,
-        Err(error) => {
+    let rendered = loop {
+        if context.is_stopping() {
             release_resident_scene(resident);
             destroy_unpublished_surface(surface);
-            return Err(error);
+            return Ok(());
+        }
+        match render_publish(&mut surface, &resident, clear_rgba).await {
+            Ok(rendered) => break rendered,
+            Err(GameError::Frame(crate::ui4::FramePoolError::Busy))
+            | Err(GameError::Render("render-busy" | "render-storage-busy")) => {
+                Timer::after(Duration::from_millis(16)).await;
+            }
+            Err(error) => {
+                release_resident_scene(resident);
+                destroy_unpublished_surface(surface);
+                return Err(error);
+            }
         }
     };
     publish_gpu_logger_sample(gpu_logger_sample(&rendered, 1, 0, 1, &resident, 0, 0));
@@ -1711,6 +1720,7 @@ async fn run_cube(context: InstanceContext) -> Result<(), GameError> {
         {
             Ok(rendered) => rendered,
             Err(GameError::Frame(crate::ui4::FramePoolError::Busy))
+            | Err(GameError::Render("render-busy" | "render-storage-busy"))
             | Err(GameError::Render("helio-incomplete-direct-frame")) => {
                 Timer::after(Duration::from_millis(16)).await;
                 continue;
@@ -1769,10 +1779,10 @@ async fn run_cube(context: InstanceContext) -> Result<(), GameError> {
     Ok(())
 }
 
-fn native_churn_triangle_count(frame: &trueos_helio_runtime::churn::InstanceFrame<'_>) -> u64 {
-    frame.draws.iter().fold(0u64, |total, draw| {
+fn native_churn_triangle_count(frame: &trueos_helio_runtime::churn::TransformFrame<'_>) -> u64 {
+    frame.draw_templates.iter().fold(0u64, |total, draw| {
         total.saturating_add(
-            u64::from(draw.index_count / 3).saturating_mul(u64::from(draw.instance_count)),
+            u64::from(draw.index_count / 3).saturating_mul(u64::from(draw.capacity)),
         )
     })
 }
@@ -1796,7 +1806,7 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
             return Err(GameError::Artifact(error));
         }
     };
-    let initial = match engine.step_instances(surface.width as f32 / surface.height as f32) {
+    let initial = match engine.step_transform_frame(surface.width as f32 / surface.height as f32) {
         Ok(frame) => frame,
         Err(error) => {
             destroy_unpublished_surface(surface);
@@ -1815,7 +1825,7 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
         }
     };
     if let Err(reason) =
-        crate::intel::render::update_resident_churn_forward_frame(&resident, &initial)
+        crate::intel::render::update_resident_churn_forward_transform_frame(&resident, &initial)
     {
         let _ = crate::intel::render::release_resident_churn_forward(&resident);
         destroy_unpublished_surface(surface);
@@ -1890,13 +1900,14 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
             if camera_changed && let Err(error) = engine.set_camera(fly_camera.camera) {
                 break Err(GameError::Artifact(error));
             }
-            let prepared = match engine.step_instances(render_width as f32 / render_height as f32) {
-                Ok(frame) => frame,
-                Err(error) => break Err(GameError::Artifact(error)),
-            };
-            if let Err(reason) =
-                crate::intel::render::update_resident_churn_forward_frame(&resident, &prepared)
-            {
+            let prepared =
+                match engine.step_transform_frame(render_width as f32 / render_height as f32) {
+                    Ok(frame) => frame,
+                    Err(error) => break Err(GameError::Artifact(error)),
+                };
+            if let Err(reason) = crate::intel::render::update_resident_churn_forward_transform_frame(
+                &resident, &prepared,
+            ) {
                 break Err(GameError::Render(reason));
             }
             prepared_triangles = native_churn_triangle_count(&prepared);
@@ -1972,7 +1983,8 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
                 publish_gpu_logger_sample(sample);
                 last_sample = Some(sample);
             }
-            Err(GameError::Frame(crate::ui4::FramePoolError::Busy)) => {
+            Err(GameError::Frame(crate::ui4::FramePoolError::Busy))
+            | Err(GameError::Render("render-busy" | "render-storage-busy")) => {
                 busy_retries = busy_retries.saturating_add(1);
                 if let Some(mut sample) = last_sample {
                     sample.busy_retries = busy_retries;
@@ -2017,7 +2029,7 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
             }
             crate::log_info!(
                 target: "helio";
-                "helio instance={} example=2 name=churn-benchmark native=1 online artifact_bytes={} active_objects={} max_instances={} draw_groups=12 geometry=3x-posnormal-cube frame={} window={} extent={}x{} plane={} background=transparent-rgba controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=absolute-deadline period_us=16667 target_fps=60 missed_deadline=skip-extra-delay path=helioa-churn-forward-v1->artifact-native-vs+ps->camera+instance+compacted-storage->12-indexed-indirect->one-guc-schedule->ui4-triple-direct cpu_vertex_projection=0 mutable_upload=camera+dirty-instances+compacted+indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
+                "helio instance={} example=2 name=churn-benchmark native=1 online artifact_bytes={} active_objects={} max_instances={} draw_groups=12 geometry=3x-posnormal-cube frame={} window={} extent={}x{} plane={} background=transparent-rgba controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=absolute-deadline period_us=16667 target_fps=60 missed_deadline=skip-extra-delay path=helioa-churn-forward-v1->gpu-retained-transform+compaction->artifact-native-vs+ps->12-indexed-indirect->one-guc-schedule->ui4-triple-direct cpu_vertex_projection=0 cpu_matrix_expansion=0 mutable_upload=camera+64b-transform-seeds+24b-draw-templates gpu_outputs=208b-instances+compacted-indices+20b-indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
                 context.instance_id,
                 CHURN_FORWARD_ARTIFACT.len(),
                 engine.active_objects(),
@@ -2061,14 +2073,14 @@ async fn run_pendulum_native(context: InstanceContext) -> Result<(), GameError> 
             return Err(GameError::Artifact(error));
         }
     };
-    let initial = match engine.step_instances(surface.width as f32 / surface.height as f32) {
+    let initial = match engine.step_transform_frame(surface.width as f32 / surface.height as f32) {
         Ok(frame) => frame,
         Err(error) => {
             destroy_unpublished_surface(surface);
             return Err(GameError::Artifact(error));
         }
     };
-    let max_instances = initial.instances.len();
+    let max_instances = initial.seeds.len();
     let resident = match crate::intel::render::create_resident_churn_forward(
         CHURN_FORWARD_ARTIFACT,
         max_instances,
@@ -2081,7 +2093,7 @@ async fn run_pendulum_native(context: InstanceContext) -> Result<(), GameError> 
         }
     };
     if let Err(reason) =
-        crate::intel::render::update_resident_churn_forward_frame(&resident, &initial)
+        crate::intel::render::update_resident_churn_forward_transform_frame(&resident, &initial)
     {
         let _ = crate::intel::render::release_resident_churn_forward(&resident);
         destroy_unpublished_surface(surface);
@@ -2155,13 +2167,14 @@ async fn run_pendulum_native(context: InstanceContext) -> Result<(), GameError> 
             if camera_changed && let Err(error) = engine.set_camera(fly_camera.camera) {
                 break Err(GameError::Artifact(error));
             }
-            let prepared = match engine.step_instances(render_width as f32 / render_height as f32) {
-                Ok(frame) => frame,
-                Err(error) => break Err(GameError::Artifact(error)),
-            };
-            if let Err(reason) =
-                crate::intel::render::update_resident_churn_forward_frame(&resident, &prepared)
-            {
+            let prepared =
+                match engine.step_transform_frame(render_width as f32 / render_height as f32) {
+                    Ok(frame) => frame,
+                    Err(error) => break Err(GameError::Artifact(error)),
+                };
+            if let Err(reason) = crate::intel::render::update_resident_churn_forward_transform_frame(
+                &resident, &prepared,
+            ) {
                 break Err(GameError::Render(reason));
             }
             prepared_triangles = native_churn_triangle_count(&prepared);
@@ -2237,7 +2250,8 @@ async fn run_pendulum_native(context: InstanceContext) -> Result<(), GameError> 
                 publish_gpu_logger_sample(sample);
                 last_sample = Some(sample);
             }
-            Err(GameError::Frame(crate::ui4::FramePoolError::Busy)) => {
+            Err(GameError::Frame(crate::ui4::FramePoolError::Busy))
+            | Err(GameError::Render("render-busy" | "render-storage-busy")) => {
                 busy_retries = busy_retries.saturating_add(1);
                 if let Some(mut sample) = last_sample {
                     sample.busy_retries = busy_retries;
@@ -2282,7 +2296,7 @@ async fn run_pendulum_native(context: InstanceContext) -> Result<(), GameError> 
             }
             crate::log_info!(
                 target: "helio";
-                "helio instance={} example=4 name=pendulum-bigcloth native=1 online artifact_bytes={} segments={} instances={} draw_groups=12 geometry=one-retained-posnormal-box frame={} window={} extent={}x{} plane={} controls=WASD+Space+Shift,left-drag-look,C-pause,R-reset producer_pacing=absolute-deadline period_us={} path=helioa-pendulum-v1->compact-centers+transforms->artifact-native-vs-local-to-world-to-clip->gpu-indexed-indirect->one-guc-schedule->ui4-triple-direct cpu_vertex_projection=0 cpu_winding_repair=0 mutable_upload=camera+337-instances+compacted+indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
+                "helio instance={} example=4 name=pendulum-bigcloth native=1 online artifact_bytes={} segments={} instances={} draw_groups=12 geometry=one-retained-posnormal-box frame={} window={} extent={}x{} plane={} controls=WASD+Space+Shift,left-drag-look,C-pause,R-reset producer_pacing=absolute-deadline period_us={} path=helioa-pendulum-v1->gpu-retained-transform+compaction->artifact-native-vs-local-to-world-to-clip->gpu-indexed-indirect->one-guc-schedule->ui4-triple-direct cpu_vertex_projection=0 cpu_matrix_expansion=0 cpu_winding_repair=0 mutable_upload=camera+337x64b-transform-seeds+12x24b-draw-templates gpu_outputs=208b-instances+compacted-indices+20b-indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
                 context.instance_id,
                 CHURN_FORWARD_ARTIFACT.len(),
                 engine.segment_count(),
@@ -2510,10 +2524,12 @@ async fn run_churn(context: InstanceContext) -> Result<(), GameError> {
                 publish_gpu_logger_sample(sample);
                 last_sample = Some(sample);
             }
-            Err(GameError::Frame(crate::ui4::FramePoolError::Busy)) => {
+            Err(GameError::Frame(crate::ui4::FramePoolError::Busy))
+            | Err(GameError::Render("render-busy" | "render-storage-busy")) => {
                 // Triple-buffer ownership can legitimately lag one producer
-                // tick. Keep these exact prepared bytes and retry after UI4
-                // has had a display-release opportunity.
+                // tick, and another Render0 client can own the persistent
+                // submission storage for this cadence. Keep these exact
+                // prepared bytes and retry without restarting the task.
                 busy_retries = busy_retries.saturating_add(1);
                 if let Some(mut sample) = last_sample {
                     sample.busy_retries = busy_retries;
@@ -2741,7 +2757,8 @@ async fn run_ported_scene(context: InstanceContext) -> Result<(), GameError> {
                 publish_gpu_logger_sample(sample);
                 last_sample = Some(sample);
             }
-            Err(GameError::Frame(crate::ui4::FramePoolError::Busy)) => {
+            Err(GameError::Frame(crate::ui4::FramePoolError::Busy))
+            | Err(GameError::Render("render-busy" | "render-storage-busy")) => {
                 busy_retries = busy_retries.saturating_add(1);
                 if let Some(mut sample) = last_sample {
                     sample.busy_retries = busy_retries;

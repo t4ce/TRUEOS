@@ -152,6 +152,10 @@ impl PhysicalGtBootReport {
         self.forcewake_ready() && self.rcs_workarounds_ready
     }
 
+    const fn bcs_ready(self) -> bool {
+        self.gt_forcewake_ready
+    }
+
     fn owns(self, dev: Dev) -> bool {
         self.device_id == dev.device_id
             && self.revision_id == dev.revision_id
@@ -926,6 +930,18 @@ pub(crate) fn physical_gt_ready(dev: Dev) -> bool {
             && mmio_read(dev, FORCEWAKE_ACK_RENDER) & FORCEWAKE_KERNEL != 0
             && mmio_read(dev, FORCEWAKE_ACK_GT) & FORCEWAKE_KERNEL != 0
             && self::render::global_rcs_workarounds_ready(dev)
+    })
+}
+
+/// Read-only runtime admission for BCS GuC clients.
+///
+/// Copy consumes the boot-retained GT forcewake domain, but it does not depend
+/// on Render forcewake acknowledgement or RCS-specific workaround state.
+pub(crate) fn physical_bcs_ready(dev: Dev) -> bool {
+    PHYSICAL_GT_BOOT_REPORT.get().is_some_and(|report| {
+        report.owns(dev)
+            && report.bcs_ready()
+            && mmio_read(dev, FORCEWAKE_ACK_GT) & FORCEWAKE_KERNEL != 0
     })
 }
 

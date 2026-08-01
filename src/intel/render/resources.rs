@@ -1223,7 +1223,7 @@ pub(crate) fn create_resident_churn_forward(
     max_instances: usize,
     meshes: &[trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
 ) -> Result<ResidentChurnForward, &'static str> {
-    if max_instances == 0 {
+    if max_instances == 0 || max_instances > crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize {
         return Err("churn-native-instance-capacity");
     }
     let artifact = trueos_helio_artifact::Artifact::parse(artifact_bytes)
@@ -1272,6 +1272,7 @@ pub(crate) fn create_resident_churn_forward(
     // mapped DMA resources. The aligned code copy is a bounded singleton;
     // service retries cannot leak another VS/PS pair.
     let pipeline = churn_forward_pipeline(artifact, program)?;
+    let transform_artifact = resident_helio_transform_artifact()?;
     let (vertex_bytes, index_bytes) = build_churn_forward_geometry(meshes)?;
     let index_offset = crate::intel::align_up(vertex_bytes.len(), 64)
         .ok_or("churn-native-geometry-layout")?;
@@ -1281,6 +1282,12 @@ pub(crate) fn create_resident_churn_forward(
     let instance_bytes = max_instances
         .checked_mul(trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN)
         .ok_or("churn-native-instance-capacity")?;
+    let transform_seed_bytes = max_instances
+        .checked_mul(trueos_helio_runtime::churn::GpuRetainedTransformSeed::BYTE_LEN)
+        .ok_or("churn-native-transform-capacity")?;
+    let draw_template_bytes = CHURN_FORWARD_DRAW_COUNT
+        .checked_mul(trueos_helio_runtime::churn::GpuRetainedDrawTemplate::BYTE_LEN)
+        .ok_or("churn-native-transform-capacity")?;
     let compacted_bytes = max_instances
         .checked_mul(core::mem::size_of::<u32>())
         .ok_or("churn-native-instance-capacity")?;
@@ -1306,9 +1313,28 @@ pub(crate) fn create_resident_churn_forward(
             return Err(error);
         }
     };
+    let transform_seeds = match allocate_resident_render_buffer(transform_seed_bytes) {
+        Ok(buffer) => buffer,
+        Err(error) => {
+            let _ = release_resident_render_buffer(&camera);
+            let _ = release_resident_render_buffer(&geometry);
+            return Err(error);
+        }
+    };
+    let draw_templates = match allocate_resident_render_buffer(draw_template_bytes) {
+        Ok(buffer) => buffer,
+        Err(error) => {
+            let _ = release_resident_render_buffer(&transform_seeds);
+            let _ = release_resident_render_buffer(&camera);
+            let _ = release_resident_render_buffer(&geometry);
+            return Err(error);
+        }
+    };
     let instances = match allocate_resident_render_buffer(instance_bytes) {
         Ok(buffer) => buffer,
         Err(error) => {
+            let _ = release_resident_render_buffer(&draw_templates);
+            let _ = release_resident_render_buffer(&transform_seeds);
             let _ = release_resident_render_buffer(&camera);
             let _ = release_resident_render_buffer(&geometry);
             return Err(error);
@@ -1318,6 +1344,8 @@ pub(crate) fn create_resident_churn_forward(
         Ok(buffer) => buffer,
         Err(error) => {
             let _ = release_resident_render_buffer(&instances);
+            let _ = release_resident_render_buffer(&draw_templates);
+            let _ = release_resident_render_buffer(&transform_seeds);
             let _ = release_resident_render_buffer(&camera);
             let _ = release_resident_render_buffer(&geometry);
             return Err(error);
@@ -1328,6 +1356,8 @@ pub(crate) fn create_resident_churn_forward(
         Err(error) => {
             let _ = release_resident_render_buffer(&compacted_indices);
             let _ = release_resident_render_buffer(&instances);
+            let _ = release_resident_render_buffer(&draw_templates);
+            let _ = release_resident_render_buffer(&transform_seeds);
             let _ = release_resident_render_buffer(&camera);
             let _ = release_resident_render_buffer(&geometry);
             return Err(error);
@@ -1337,6 +1367,8 @@ pub(crate) fn create_resident_churn_forward(
         let _ = release_resident_render_buffer(&indirect_args);
         let _ = release_resident_render_buffer(&compacted_indices);
         let _ = release_resident_render_buffer(&instances);
+        let _ = release_resident_render_buffer(&draw_templates);
+        let _ = release_resident_render_buffer(&transform_seeds);
         let _ = release_resident_render_buffer(&camera);
         let _ = release_resident_render_buffer(&geometry);
         return Err("churn-native-geometry-upload");
@@ -1387,9 +1419,13 @@ pub(crate) fn create_resident_churn_forward(
         },
         geometry,
         camera,
+        transform_seeds,
+        draw_templates,
         instances,
         compacted_indices,
         indirect_args,
+        transform_artifact,
+        transform_row_count: AtomicU32::new(0),
         max_instances,
     })
 }
@@ -1470,6 +1506,130 @@ pub(crate) fn update_resident_churn_forward_frame(
     if !resident.indirect_args.write_and_flush(0, &indirect_bytes) {
         return Err("churn-native-indirect-upload");
     }
+    // Preserve the CPU-expanded ABI as an explicit fallback. A successful
+    // legacy update disables the compute secondary for the following frame.
+    resident.transform_row_count.store(0, Ordering::Release);
+    Ok(())
+}
+
+/// Publish one compact retained-transform frame. Instances, compacted indices,
+/// and WGPU indexed-indirect records remain GPU-owned outputs; the following
+/// Render submission expands them before issuing any draw command.
+pub(crate) fn update_resident_churn_forward_transform_frame(
+    resident: &ResidentChurnForward,
+    frame: &trueos_helio_runtime::churn::TransformFrame<'_>,
+) -> Result<(), &'static str> {
+    let row_count = u32::try_from(frame.seeds.len()).map_err(|_| "churn-transform-capacity")?;
+    if row_count == 0
+        || frame.seeds.len() > resident.max_instances
+        || frame.draw_templates.len() != CHURN_FORWARD_DRAW_COUNT
+    {
+        return Err("churn-transform-capacity");
+    }
+
+    let seed_first = frame.seed_dirty.first as usize;
+    let seed_count = frame.seed_dirty.count as usize;
+    let seed_end = seed_first
+        .checked_add(seed_count)
+        .ok_or("churn-transform-dirty-range")?;
+    let template_first = frame.draw_templates_dirty.first as usize;
+    let template_count = frame.draw_templates_dirty.count as usize;
+    let template_end = template_first
+        .checked_add(template_count)
+        .ok_or("churn-transform-dirty-range")?;
+    if seed_end > frame.seeds.len() || template_end > frame.draw_templates.len() {
+        return Err("churn-transform-dirty-range");
+    }
+    let previous_rows = resident.transform_row_count.load(Ordering::Acquire);
+    if (previous_rows == 0 || previous_rows != row_count)
+        && (seed_first != 0 || seed_count != frame.seeds.len())
+    {
+        return Err("churn-transform-initial-seed-range");
+    }
+    if previous_rows == 0 && (template_first != 0 || template_count != CHURN_FORWARD_DRAW_COUNT) {
+        return Err("churn-transform-initial-template-range");
+    }
+
+    let gpu_templates: [crate::intel::gpgpu::GpgpuHelioRetainedDrawTemplate;
+        CHURN_FORWARD_DRAW_COUNT] = core::array::from_fn(|group| {
+        let template = frame.draw_templates[group];
+        crate::intel::gpgpu::GpgpuHelioRetainedDrawTemplate {
+            index_count: template.index_count,
+            first_index: template.first_index,
+            base_vertex: template.base_vertex,
+            first_instance: template.first_instance,
+            capacity: template.capacity,
+            packed_mesh_material: template.packed_mesh_material,
+        }
+    });
+    let dispatch = resident.transform_dispatch_for_rows(row_count);
+    dispatch
+        .validate_templates(&gpu_templates)
+        .map_err(|_| "churn-transform-dispatch-contract")?;
+    for (group, template) in frame.draw_templates.iter().enumerate() {
+        let mesh = frame.meshes[group / trueos_helio_runtime::churn::MATERIAL_COUNT];
+        let draw_group = frame.groups[group];
+        if template.index_count != mesh.index_count
+            || template.first_index != mesh.first_index
+            || template.base_vertex != mesh.base_vertex
+            || template.mesh_id() != draw_group.mesh_id
+            || template.material_id() != draw_group.material_id
+        {
+            return Err("churn-transform-template-contract");
+        }
+    }
+    if frame.seeds.iter().any(|seed| {
+        seed.draw_group
+            != trueos_helio_runtime::churn::GpuRetainedTransformSeed::DISABLED_DRAW_GROUP
+            && seed.draw_group as usize >= CHURN_FORWARD_DRAW_COUNT
+    }) {
+        return Err("churn-transform-seed-group");
+    }
+
+    let mut seed_bytes = Vec::with_capacity(
+        seed_count * trueos_helio_runtime::churn::GpuRetainedTransformSeed::BYTE_LEN,
+    );
+    for seed in &frame.seeds[seed_first..seed_end] {
+        seed_bytes.extend_from_slice(&seed.to_le_bytes());
+    }
+    let seed_offset = seed_first
+        .checked_mul(trueos_helio_runtime::churn::GpuRetainedTransformSeed::BYTE_LEN)
+        .ok_or("churn-transform-dirty-range")?;
+
+    let mut template_bytes = Vec::with_capacity(
+        template_count * trueos_helio_runtime::churn::GpuRetainedDrawTemplate::BYTE_LEN,
+    );
+    for template in &frame.draw_templates[template_first..template_end] {
+        template_bytes.extend_from_slice(&template.to_le_bytes());
+    }
+    let template_offset = template_first
+        .checked_mul(trueos_helio_runtime::churn::GpuRetainedDrawTemplate::BYTE_LEN)
+        .ok_or("churn-transform-dirty-range")?;
+
+    if !resident
+        .camera
+        .write_and_flush(0, &frame.camera.to_le_bytes())
+    {
+        return Err("churn-transform-camera-upload");
+    }
+    if !resident
+        .transform_seeds
+        .write_and_flush(seed_offset, &seed_bytes)
+    {
+        return Err("churn-transform-seed-upload");
+    }
+    if !resident
+        .draw_templates
+        .write_and_flush(template_offset, &template_bytes)
+    {
+        return Err("churn-transform-template-upload");
+    }
+
+    // Release-publish the new row count only after all CPU-written inputs are
+    // cache-clean. The Render encoder's acquire pairs with this store.
+    resident
+        .transform_row_count
+        .store(row_count, Ordering::Release);
     Ok(())
 }
 
@@ -1515,8 +1675,12 @@ pub(crate) fn release_resident_churn_forward(resident: &ResidentChurnForward) ->
     released &= release_resident_render_buffer(&resident.indirect_args);
     released &= release_resident_render_buffer(&resident.compacted_indices);
     released &= release_resident_render_buffer(&resident.instances);
+    released &= release_resident_render_buffer(&resident.draw_templates);
+    released &= release_resident_render_buffer(&resident.transform_seeds);
     released &= release_resident_render_buffer(&resident.camera);
     released &= release_resident_render_buffer(&resident.geometry);
+    // `transform_artifact` is a boot-lifetime shared Render-PPGTT mapping.
+    // Releasing one pooled Helio instance must not unmap it for another.
     released
 }
 

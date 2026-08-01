@@ -273,7 +273,6 @@ struct SpiritMailbox {
     next_sequence: u64,
     pending: Option<QueuedFrame>,
     rearming: bool,
-    last_gpu_release_sequence: [u64; 2],
     last_gpgpu_release_sequence: [u64; 2],
 }
 
@@ -337,7 +336,6 @@ impl SpiritMailbox {
             next_sequence: 0,
             pending: None,
             rearming: false,
-            last_gpu_release_sequence: [0; 2],
             last_gpgpu_release_sequence: [0; 2],
         }
     }
@@ -447,27 +445,6 @@ pub(crate) fn write_cpu<R>(
 ///
 /// The `gpu` field carries the permanent display GGTT alias for identity. The
 /// direct Intel 3D path keys on `phys` and installs its own persistent render
-/// alias; no staging allocation or presentation copy is introduced here. Its
-/// render-target state uses B8G8R8A8 storage so logical shader RGBA lands in
-/// the ARGB cursor plane's required little-endian BGRA byte order.
-#[allow(dead_code)]
-pub(crate) fn render_3d_target(
-    lease: SpiritFrameLease,
-) -> Result<crate::intel::gpgpu::GpgpuRgba8Surface, SpiritSubmitError> {
-    let mailbox = MAILBOXES[lease.fence.id.index()].lock();
-    let pending = matching_pending(&mailbox, lease)?;
-    require_unreleased(pending, SpiritBarrierSet::GPU)?;
-    crate::intel::gpgpu::GpgpuRgba8Surface::new_bgra(
-        lease.surface.phys,
-        lease.surface.cursor_gpu,
-        lease.surface.byte_len,
-        lease.surface.width,
-        lease.surface.height,
-        lease.surface.pitch_bytes,
-    )
-    .ok_or(SpiritSubmitError::HardwareNotReady)
-}
-
 /// Return the cursor allocation in its actual hardware byte order. Spirit VFX
 /// writes premultiplied B,G,R,A bytes explicitly, so colored layers no longer
 /// rely on the grayscale-only accident of the original Lab256 producer.
@@ -504,33 +481,7 @@ pub(crate) fn release_cpu(lease: SpiritFrameLease) -> Result<(), SpiritSubmitErr
     Ok(())
 }
 
-/// Release the 3D producer bit only with the renderer's exact-allocation,
-/// cache-drained completion proof. The sequence must also be newer than the
-/// last proof accepted for this physical member, so an old proof cannot be
-/// replayed when the double buffer cycles back to the same allocation.
-#[allow(dead_code)]
-pub(crate) fn release_gpu(
-    lease: SpiritFrameLease,
-    release: crate::intel::render::ResidentSceneReleaseFence,
-) -> Result<(), SpiritSubmitError> {
-    if !release.matches(lease.surface.phys, lease.surface.byte_len) {
-        return Err(SpiritSubmitError::InvalidGpuRelease);
-    }
-    let mut mailbox = MAILBOXES[lease.fence.id.index()].lock();
-    let surface_index = lease.surface.surface as usize;
-    if surface_index >= mailbox.last_gpu_release_sequence.len()
-        || release.sequence() <= mailbox.last_gpu_release_sequence[surface_index]
-    {
-        return Err(SpiritSubmitError::InvalidGpuRelease);
-    }
-    let pending = matching_pending_mut(&mut mailbox, lease)?;
-    require_unreleased(pending, SpiritBarrierSet::GPU)?;
-    pending.released = pending.released | SpiritBarrierSet::GPU;
-    mailbox.last_gpu_release_sequence[surface_index] = release.sequence();
-    Ok(())
-}
-
-/// Release the same GPU producer bit with the GPGPU lane's exact-allocation
+/// Release the GPU producer bit with Spirit's GPGPU lane exact-allocation
 /// completion proof. This remains distinct from CUR_SURFLIVE: the former makes
 /// a frame eligible to arm, while the latter retires the public Spirit fence.
 fn release_gpgpu(

@@ -197,12 +197,20 @@ fn lfm25_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
 }
 
 fn ui4_compositor_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
-    if let Some(state) = *UI4_COMPOSITOR_RCS_STATE.lock() {
+    if ui4_compositor_rcs_context_is_quarantined() {
+        return None;
+    }
+
+    let mut state_slot = UI4_COMPOSITOR_RCS_STATE.lock();
+    if ui4_compositor_rcs_context_is_quarantined() {
+        return None;
+    }
+    if let Some(state) = *state_slot {
         return Some(state);
     }
 
     let state = allocate_direct_rcs_state(UI4_COMPOSITOR_RCS_GPU_VA)?;
-    *UI4_COMPOSITOR_RCS_STATE.lock() = Some(state);
+    *state_slot = Some(state);
     Some(state)
 }
 
@@ -276,9 +284,9 @@ fn direct_rcs_job_slot(state: DirectRcsState, slot: usize) -> Option<DirectRcsSt
 /// Select the command/result generation that is safe to rewrite next.
 ///
 /// Execution submissions are strictly ordered and limited to one pending
-/// marker. Alternating two slots means slot A is reused only after slot B's
-/// marker: reaching B proves A returned through MI_BATCH_BUFFER_END, not just
-/// that A emitted its producer-release marker.
+/// request. Its pending token is cleared only after both the producer marker
+/// and the saved LRC head prove context retirement, so alternating slots never
+/// treats the marker alone as ownership transfer.
 fn execution_rcs_next_job_slot(state: DirectRcsState) -> Option<DirectRcsState> {
     if state.gpu_va.job_slots != EXECUTION_RCS_JOB_SLOTS {
         return None;

@@ -2681,9 +2681,13 @@ fn append_intel_gpu_dump(out: &mut String) {
     let copy = crate::intel::copy_engine_activity_snapshot();
     writeln!(
         out,
-        "available={} guc_lane_busy={} submit_counter={}",
+        "available={} guc_lane_busy={} guc_lane_quarantined={} guc_context_initialized={} guc_saved_head=0x{:08X} guc_published_tail=0x{:08X} submit_counter={}",
         yes_no(copy.available),
         yes_no(copy.guc_lane_busy),
+        yes_no(copy.guc_lane_quarantined),
+        yes_no(copy.guc_context_initialized),
+        copy.guc_saved_head,
+        copy.guc_published_tail,
         copy.submit_counter
     )
     .unwrap();

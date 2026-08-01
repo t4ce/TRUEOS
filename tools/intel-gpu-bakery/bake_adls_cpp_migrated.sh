@@ -27,6 +27,7 @@ single_entry_kernels=(
   font_outline_coverage_r8
   glyph_mask_rgba8
   gradient_rect_worklist_rgba8
+  helio_retained_transform
   mandel64_worklist_rgba8
   pixel_plasma_rgba8
   resolve_tile64_msaa4_rgba8

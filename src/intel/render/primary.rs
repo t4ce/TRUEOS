@@ -1091,6 +1091,46 @@ fn stage_resident_churn_forward_secondary(
     Ok(bytes)
 }
 
+fn stage_resident_churn_transform_secondary(
+    warm: RenderWarmState,
+    resident: &ResidentChurnForward,
+    secondary_index: usize,
+    dispatch: crate::intel::gpgpu::GpgpuHelioRetainedTransformDispatch,
+) -> Result<usize, &'static str> {
+    let batch_offset = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
+        .checked_add(
+            secondary_index
+                .checked_mul(RESIDENT_SCENE_SECONDARY_BATCH_BYTES)
+                .ok_or("churn-transform-batch-slot")?,
+        )
+        .ok_or("churn-transform-batch-slot")?;
+    let batch_end = batch_offset
+        .checked_add(RESIDENT_SCENE_SECONDARY_BATCH_BYTES)
+        .ok_or("churn-transform-batch-slot")?;
+    if batch_end > warm.batch_len {
+        return Err("churn-transform-batch-capacity");
+    }
+    let batch_gpu = GPU_VA_BATCH_BASE
+        .checked_add(batch_offset as u64)
+        .ok_or("churn-transform-batch-address")?;
+    let batch_bytes = unsafe {
+        core::slice::from_raw_parts_mut(
+            warm.batch_virt.add(batch_offset),
+            RESIDENT_SCENE_SECONDARY_BATCH_BYTES,
+        )
+    };
+    let mut state =
+        crate::intel::gpgpu::GpgpuHelioRetainedTransformStateBlob::new(batch_bytes, batch_gpu)
+            .map_err(|_| "churn-transform-state")?;
+    let encoded = crate::intel::gpgpu::encode_helio_retained_transform_secondary(
+        &mut state,
+        resident.transform_artifact,
+        dispatch,
+    )
+    .map_err(|_| "churn-transform-encode")?;
+    Ok(encoded.command_dwords * core::mem::size_of::<u32>())
+}
+
 fn encode_resident_scene_primary_batch(
     warm: RenderWarmState,
     secondary_count: usize,
@@ -1328,7 +1368,9 @@ fn submit_resident_churn_forward_geometry_batched(
         reserve_warm_render_storage("helio-churn-forward").ok_or("render-storage-busy")?;
     let prepare_started_ns = crate::chronos::monotonic_nanos();
     const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
-    let secondary_count = CHURN_FORWARD_DRAW_COUNT + 1;
+    let transform_dispatch = resident.transform_dispatch();
+    let transform_secondary_count = usize::from(transform_dispatch.is_some());
+    let secondary_count = CHURN_FORWARD_DRAW_COUNT + 1 + transform_secondary_count;
     let used_batch_bytes = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
         .checked_add(
             secondary_count
@@ -1352,10 +1394,16 @@ fn submit_resident_churn_forward_geometry_batched(
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
     let state = resident_scene_batch_state(warm)?;
 
+    if let Some(dispatch) = transform_dispatch {
+        stage_resident_churn_transform_secondary(warm, resident, 0, dispatch)?;
+    }
+
+    let clear_secondary_index = transform_secondary_count;
     let mut clear_depth = depth_config;
     clear_depth.write_enabled = true;
     clear_depth.compare_function = COMPARE_FUNCTION_ALWAYS;
-    let (clear_warm, clear_state_gpu) = resident_scene_state_warm(state, warm, 0)?;
+    let (clear_warm, clear_state_gpu) =
+        resident_scene_state_warm(state, warm, clear_secondary_index)?;
     let clear_draw = prepare_triangle_draw_resources_for_scene_vertex_slice(
         clear_warm,
         render_target_gpu,
@@ -1376,14 +1424,14 @@ fn submit_resident_churn_forward_geometry_batched(
         Some(clear_depth),
         clear,
         [0.0, 0.0],
-        0,
+        clear_secondary_index,
     )?;
 
     let mut draw_depth = depth_config;
     draw_depth.write_enabled = true;
     draw_depth.compare_function = COMPARE_FUNCTION_LESS;
     for group in 0..CHURN_FORWARD_DRAW_COUNT {
-        let secondary_index = group + 1;
+        let secondary_index = group + 1 + transform_secondary_count;
         let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
         let draw = prepare_resident_churn_forward_draw(
             state_warm,
@@ -1412,7 +1460,10 @@ fn submit_resident_churn_forward_geometry_batched(
     if !RESIDENT_CHURN_FORWARD_PATH_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "render";
-            "resident-scene: native Churn online path=helioa-churn-forward-v1->artifact-vs+ps-simd8->camera+instance+compacted-bti1-3->12-indexed-indirect-secondaries->one-guc-scene-schedule geometry=3x(pos-normal-cube/24v/36i) instance_index=starting_instance+instance_id sgvs=E0024002/B0020002/3 component_packing=0xA77 render_submits=1 target={}x{}\n",
+            "resident-scene: native Churn online path=helioa-churn-forward-v1->retained-transform-simd16(prep+rows)->gpu-instance+compacted+indirect->artifact-vs+ps->12-indexed-indirect-secondaries->one-guc-scene-schedule geometry=3x(pos-normal-cube/24v/36i) gpu_transform={} transform_secondaries={} cpu_matrix_expansion={} instance_index=starting_instance+instance_id sgvs=E0024002/B0020002/3 component_packing=0xA77 render_submits=1 target={}x{}\n",
+            u8::from(transform_dispatch.is_some()),
+            transform_secondary_count,
+            u8::from(transform_dispatch.is_none()),
             target_width,
             target_height,
         );
@@ -1535,32 +1586,14 @@ fn submit_resident_scene_capture_inner(
         .ok_or("resident-scene-capture-shape")?;
     let frame_started_ns = crate::chronos::monotonic_nanos();
 
-    let lock_started_ns = crate::chronos::monotonic_nanos();
-    let mut lock_spins = 0usize;
-    loop {
-        if PRIMARY_PROBE_IN_FLIGHT
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            break;
-        }
-        // Screenshot rendering shares the one physical render context. Give
-        // an active GPU job one bounded opportunity to retire.
-        if lock_spins.is_multiple_of(256)
-            && crate::chronos::monotonic_nanos().saturating_sub(lock_started_ns) >= 50_000_000
-        {
-            return Err("in-flight-timeout");
-        }
-        core::hint::spin_loop();
-        lock_spins += 1;
-    }
-    if lock_spins != 0 {
-        crate::log_info!(
-            target: "render";
-            "resident-scene-screenshot-lock wait_us={} spins={} acquired=1\n",
-            crate::chronos::monotonic_nanos().saturating_sub(lock_started_ns) / 1_000,
-            lock_spins,
-        );
+    if PRIMARY_PROBE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        // Render0 is an ordered GuC lane, not a reason to pin and spin an
+        // Embassy carrier. Producers classify this as ordinary backpressure
+        // and retry on their next cadence without restarting the task.
+        return Err("render-busy");
     }
 
     // Resident-scene reports one scene-level result. Keep the renderer's proof

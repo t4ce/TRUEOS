@@ -256,17 +256,54 @@ impl ResidentRenderBuffer {
     }
 }
 
+// The authenticated instruction allocation is process-lifetime resident in
+// the GPGPU artifact catalog. Render adds one stable alias to its own PPGTT and
+// every Helio scene borrows that mapping; releasing one scene must never tear
+// the instruction image out from under another live instance.
+static RESIDENT_HELIO_TRANSFORM_ARTIFACT: Mutex<
+    Option<crate::intel::gpgpu::GpgpuHelioRetainedTransformArtifactMapping>,
+> = Mutex::new(None);
+
+fn resident_helio_transform_artifact()
+-> Result<crate::intel::gpgpu::GpgpuHelioRetainedTransformArtifactMapping, &'static str> {
+    let mut resident = RESIDENT_HELIO_TRANSFORM_ARTIFACT.lock();
+    if let Some(mapping) = *resident {
+        return Ok(mapping);
+    }
+    let mapping = crate::intel::gpgpu::prepare_helio_retained_transform_artifact()
+        .ok_or("helio-transform-artifact")?;
+    if !map_render_ppgtt_range(mapping.gpu, mapping.phys, mapping.mapped_bytes) {
+        return Err("helio-transform-artifact-map");
+    }
+    *resident = Some(mapping);
+    crate::log_info!(
+        target: "render";
+        "helio-transform: authenticated instruction image mapped once gpu=0x{:X} phys=0x{:X} bytes=0x{:X} entry=0x{:X} context=shared-render0 lifetime=boot\n",
+        mapping.gpu,
+        mapping.phys,
+        mapping.bytes,
+        mapping.entry_offset,
+    );
+    Ok(mapping)
+}
+
 /// Persistent GPU resources for the artifact-native Churn forward pass.
 ///
 /// Geometry and shader bytes are immutable after this cold-path owner is
-/// created. Frame updates touch only camera, dirty instance records, compacted
-/// indices and the twelve tightly packed indexed-indirect records.
+/// created. The GPU-transform path touches only camera, compact transform
+/// seeds, and twelve prefix-counted draw templates; one ordered compute
+/// secondary expands those inputs into the existing instance, compacted-index,
+/// and indexed-indirect buffers before the draw secondaries consume them.
 pub(crate) struct ResidentChurnForward {
     geometry: ResidentRenderBuffer,
     camera: ResidentRenderBuffer,
+    transform_seeds: ResidentRenderBuffer,
+    draw_templates: ResidentRenderBuffer,
     instances: ResidentRenderBuffer,
     compacted_indices: ResidentRenderBuffer,
     indirect_args: ResidentRenderBuffer,
+    transform_artifact: crate::intel::gpgpu::GpgpuHelioRetainedTransformArtifactMapping,
+    transform_row_count: AtomicU32,
     pipeline: crate::intel::shader::TrianglePipeline,
     native_vf: TriangleNativeDrawContract,
     front_end_contract: TriangleFrontEndContract,
@@ -289,6 +326,46 @@ impl ResidentChurnForward {
 
     pub(crate) const fn index_count(&self) -> u32 {
         self.index_count
+    }
+
+    fn transform_dispatch(
+        &self,
+    ) -> Option<crate::intel::gpgpu::GpgpuHelioRetainedTransformDispatch> {
+        let row_count = self.transform_row_count.load(Ordering::Acquire);
+        if row_count == 0 {
+            return None;
+        }
+        Some(self.transform_dispatch_for_rows(row_count))
+    }
+
+    fn transform_dispatch_for_rows(
+        &self,
+        row_count: u32,
+    ) -> crate::intel::gpgpu::GpgpuHelioRetainedTransformDispatch {
+        crate::intel::gpgpu::GpgpuHelioRetainedTransformDispatch {
+            transforms: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                self.transform_seeds.gpu_base(),
+                self.transform_seeds.storage_bytes(),
+            ),
+            draw_templates: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                self.draw_templates.gpu_base(),
+                self.draw_templates.storage_bytes(),
+            ),
+            instances: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                self.instances.gpu_base(),
+                self.instances.storage_bytes(),
+            ),
+            compacted_indices: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                self.compacted_indices.gpu_base(),
+                self.compacted_indices.storage_bytes(),
+            ),
+            indirect_args: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                self.indirect_args.gpu_base(),
+                self.indirect_args.storage_bytes(),
+            ),
+            row_count,
+            draw_count: trueos_helio_runtime::churn::DRAW_GROUP_COUNT as u32,
+        }
     }
 }
 

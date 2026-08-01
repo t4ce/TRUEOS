@@ -590,8 +590,7 @@ fn spawn_helio_game(spawner: Spawner) -> SpawnAttempt {
         .iter()
         .map(|(worker_slot, core_kind, _)| (*worker_slot, *core_kind))
         .collect();
-    let Some(bootstrap_state) =
-        crate::r::helio_game::prepare_cpu_carriers(&carrier_metadata)
+    let Some(bootstrap_state) = crate::r::helio_game::prepare_cpu_carriers(&carrier_metadata)
     else {
         crate::log_warn!(target: "service";
             "helio: invalid or changed cpu carrier set count={} capacity={} action=keep-service-pending registry=withheld\n",

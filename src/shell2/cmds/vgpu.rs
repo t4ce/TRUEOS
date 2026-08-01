@@ -65,13 +65,14 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         format!(
-            "vgpu: context-boundaries valid={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} render_principals_declared={}",
+            "vgpu: context-boundaries valid={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} lost_bound={} render_principals_declared={}",
             boundaries.valid() as u8,
             boundaries.coherent as u8,
             boundaries.unique_hwlrcas as u8,
             boundaries.unique_ppgtt_roots as u8,
             boundaries.bound,
             boundaries.active,
+            boundaries.lost_bound,
             KernelClient::RENDER_CARRIERS.len(),
         )
         .as_str(),
@@ -233,12 +234,17 @@ fn test_guc(io: &'static dyn ShellBackend2) -> bool {
     let passed = status.physical_ready
         && status.guc_submission
         && status.scheduler.context_capacity >= 2
+        && status.scheduler.registered_contexts >= boundaries.active
+        && status.scheduler.enabled_contexts >= boundaries.active
         && status.scheduler.failures == 0
-        && boundaries.valid();
+        && boundaries.valid()
+        && boundaries.bound == boundaries.active
+        && boundaries.active >= 2
+        && boundaries.lost_bound == 0;
     print_shell_line(
         io,
         format!(
-            "vgpu guc: ready={} guc={} registered={} enabled={} capacity={} submissions={} registrations={} failures={} context_boundaries={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={}",
+            "vgpu guc: ready={} guc={} registered={} enabled={} capacity={} submissions={} registrations={} failures={} context_boundaries={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} lost_bound={} coexistence_min=2",
             status.physical_ready as u8,
             status.guc_submission as u8,
             status.scheduler.registered_contexts,
@@ -253,6 +259,7 @@ fn test_guc(io: &'static dyn ShellBackend2) -> bool {
             boundaries.unique_ppgtt_roots as u8,
             boundaries.bound,
             boundaries.active,
+            boundaries.lost_bound,
         )
         .as_str(),
     );
@@ -291,7 +298,7 @@ fn test_blit(io: &'static dyn ShellBackend2) -> bool {
     print_shell_line(
         io,
         format!(
-            "vgpu blit: engine=bcs0 path=guc forcewake={} ggtt={} ppgtt={} batch={} submitted={} pending={} retired={} timeline_retired={} copy_ok={} src_preserved={} marker=0x{:08X} retire_ms={} timeline={} points={}->{} completed={} physical_serial={} legacy_fallback=0",
+            "vgpu blit: engine=bcs0 path=guc forcewake={} ggtt={} ppgtt={} batch={} submitted={} pending={} retired={} context_saved={} saved_head={} published_tail={} timeline_retired={} copy_ok={} src_preserved={} marker=0x{:08X} retire_ms={} timeline={} points={}->{} completed={} physical_serial={} legacy_fallback=0",
             probe.forcewake as u8,
             probe.ggtt as u8,
             probe.ppgtt as u8,
@@ -299,6 +306,9 @@ fn test_blit(io: &'static dyn ShellBackend2) -> bool {
             probe.submitted as u8,
             probe.pending as u8,
             probe.retired as u8,
+            probe.context_saved as u8,
+            probe.saved_head & (4096 - 1),
+            probe.published_tail,
             probe.timeline_retired as u8,
             probe.copy_ok as u8,
             probe.src_preserved as u8,

@@ -269,6 +269,14 @@ pub(crate) const SCENE_AABB_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArti
     &SCENE_AABB_ADLS_CPP_ABI_CONTRACT,
 );
 
+pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact::contracted(
+        HELIO_RETAINED_TRANSFORM_KERNEL_NAME,
+        HELIO_RETAINED_TRANSFORM_ADLS_BIN,
+        HELIO_RETAINED_TRANSFORM_ADLS_SPV,
+        &HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT,
+    );
+
 pub(crate) const LAB256_MULTIPHASE_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::multi_entry(
         LAB256_MULTIPHASE_KERNEL_NAME,

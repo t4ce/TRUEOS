@@ -86,6 +86,7 @@ struct SpiritVfxSubmitted {
 struct SpiritVfxPending {
     handle: SpiritVfxSubmission,
     submitted: SpiritVfxSubmitted,
+    timeout_logged: bool,
 }
 
 static SPIRIT_VFX_RUNTIME: Mutex<Option<SpiritVfxRuntime>> = Mutex::new(None);
@@ -278,7 +279,11 @@ pub(crate) fn submit_spirit_vfx_frame(
         frame: submitted.frame,
     };
     EXECUTION_RCS_DETACHED_TAG.store(tag, Ordering::Release);
-    *SPIRIT_VFX_PENDING.lock() = Some(SpiritVfxPending { handle, submitted });
+    *SPIRIT_VFX_PENDING.lock() = Some(SpiritVfxPending {
+        handle,
+        submitted,
+        timeout_logged: false,
+    });
     if spirit_vfx_trace_frame(submitted.frame) {
         let walkers = 1 + u32::from(submitted.background_mode != 0);
         let dependency = if submitted.background_mode == 0 {
@@ -310,7 +315,7 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
         return SpiritVfxCompletion::InvalidSubmission;
     }
     let mut pending_slot = SPIRIT_VFX_PENDING.lock();
-    let Some(pending) = *pending_slot else {
+    let Some(mut pending) = *pending_slot else {
         return SpiritVfxCompletion::InvalidSubmission;
     };
     if pending.handle != handle {
@@ -318,36 +323,56 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
     }
     let marker = direct_rcs_read_result_slot(pending.submitted.state, SPIRIT_VFX_POST_MARKER_SLOT);
     let elapsed_ms = direct_rcs_elapsed_ms_since(pending.submitted.started_tick);
-    if marker != SPIRIT_VFX_POST_MARKER && elapsed_ms < SPIRIT_VFX_COMPLETION_TIMEOUT_MS {
+    let proof =
+        execution_rcs_retirement_proof(pending.submitted.state, marker == SPIRIT_VFX_POST_MARKER);
+    if !proof.complete() {
+        if elapsed_ms < SPIRIT_VFX_COMPLETION_TIMEOUT_MS {
+            return SpiritVfxCompletion::Pending;
+        }
+        if !pending.timeout_logged {
+            let reason = if marker == SPIRIT_VFX_POST_MARKER {
+                "spirit-vfx-marker-observed-context-save-timeout"
+            } else {
+                "spirit-vfx-marker-timeout"
+            };
+            quarantine_execution_rcs_context(reason);
+            crate::log_error!(target: "gpgpu";
+                "intel/gpgpu: spirit-vfx retirement timeout tag={} frame={} marker=0x{:08X} marker_observed={} saved_head={} published_tail={} pending=retained detached_tag=retained timeline=retained producer_lease=retained backing=retained action=quarantine-execution-lane-and-keep-polling\n",
+                handle.tag,
+                pending.submitted.frame,
+                marker,
+                proof.marker_observed as u8,
+                proof.saved_head_bytes,
+                proof.published_tail_bytes,
+            );
+            pending.timeout_logged = true;
+            *pending_slot = Some(pending);
+        }
+        // Returning Failed would make Spirit cancel the producer lease while
+        // a late GuC request may still write it. Keep ownership pinned and
+        // permit only a later marker+saved-HEAD proof to retire this handle.
         return SpiritVfxCompletion::Pending;
     }
     *pending_slot = None;
     drop(pending_slot);
 
-    let ok = marker == SPIRIT_VFX_POST_MARKER;
-    if !ok {
-        quarantine_execution_rcs_context("spirit-vfx-marker-timeout");
-    }
-    complete_execution_rcs_submission(ok);
+    complete_execution_rcs_submission();
     EXECUTION_RCS_DETACHED_TAG.store(0, Ordering::Release);
-    if spirit_vfx_trace_frame(pending.submitted.frame) || !ok {
+    if spirit_vfx_trace_frame(pending.submitted.frame) {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: spirit-vfx complete frame={} ok={} marker=0x{:08X} revision={} background={} shader={} submit_ms={} producer-release=guc-post-sync\n",
+            "intel/gpgpu: spirit-vfx complete frame={} ok=1 marker=0x{:08X} saved_head={} published_tail={} revision={} background={} shader={} submit_ms={} producer-release=marker-plus-guc-context-save\n",
             pending.submitted.frame,
-            ok as u8,
             marker,
+            proof.saved_head_bytes,
+            proof.published_tail_bytes,
             pending.submitted.revision,
             pending.submitted.background_mode,
             pending.submitted.shader_mode,
             direct_rcs_elapsed_ms_since(pending.submitted.started_tick),
         );
     }
-    if ok {
-        SpiritVfxCompletion::Complete(gpgpu_rgba8_release(pending.submitted.dst))
-    } else {
-        SpiritVfxCompletion::Failed
-    }
+    SpiritVfxCompletion::Complete(gpgpu_rgba8_release(pending.submitted.dst))
 }
 
 fn submit_spirit_vfx_batch(
@@ -408,8 +433,8 @@ fn submit_spirit_vfx_batch(
             runtime.control.bytes,
         )
         && direct_rcs_map_ppgtt_kernel(shared_state, source.gpu, source.phys, source.bytes);
-    let dst_ok = resources_ok
-        && direct_rcs_map_ppgtt_scanout(shared_state, dst.gpu, dst.phys, dst.bytes);
+    let dst_ok =
+        resources_ok && direct_rcs_map_ppgtt_scanout(shared_state, dst.gpu, dst.phys, dst.bytes);
     let state = execution_rcs_next_job_slot(shared_state)?;
     let batch_ok = dst_ok
         && direct_rcs_encode_spirit_vfx_batch(
