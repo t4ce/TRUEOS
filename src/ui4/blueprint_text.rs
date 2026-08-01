@@ -31,10 +31,10 @@ use crate::intel::gpu_font::{
     render_font_job_readback_once,
 };
 use crate::r::font_kernel_service::{
-    FontKernelConsumer, FontKernelConsumerPath, FontKernelError, FontKernelRetainedScene,
-    FontStampFit, FontStampLayer, FontStampRequest, FontStampedBuffer, PendingFontFrameStamp,
-    PendingFontStamp, PendingRetainScene, RetainSceneRequest, RetainedFontPositioning,
-    RetainedFontRun, submit_frame_stamp, submit_retain_scene, submit_stamp, try_acquire_gpu_lane,
+    FontKernelError, FontKernelRetainedScene, FontStampFit, FontStampLayer, FontStampRequest,
+    FontStampedBuffer, PendingFontFrameStamp, PendingFontStamp, PendingRetainScene,
+    RetainSceneRequest, RetainedFontPositioning, RetainedFontRun, submit_frame_stamp,
+    submit_retain_scene, submit_stamp,
 };
 
 use super::{
@@ -77,7 +77,6 @@ const UI4_SCENE_SPRITE_MAX_BYTES: usize = 128 * 1024 * 1024;
 const UI4_SCENE_SOLID_SOURCE_BYTES: usize = 4096;
 const MAX_SPRITE_QUADS: usize = 8_192;
 const UI4_SPRITE_BATCH_TIMEOUT_NS: u64 = 1_000_000_000;
-const DIRECT_RCS_LANE_WAIT_NS: u64 = 1_100_000_000;
 const SPRITE_QUAD_FLAG_SRC_OVER: u32 = 1 << 0;
 const SPRITE_QUAD_VALID_FLAGS: u32 = SPRITE_QUAD_FLAG_SRC_OVER;
 const _: () = {
@@ -4221,21 +4220,6 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     if surface.gpu_submission_unretired {
         return ERROR_BUSY;
     }
-    let lane_wait_started = crate::chronos::monotonic_nanos();
-    let _gpu_lane = loop {
-        if let Some(lane) = try_acquire_gpu_lane(FontKernelConsumer::new(
-            FontKernelConsumerPath::BlueprintCompositor,
-            u64::from(window_id),
-        )) {
-            break lane;
-        }
-        if crate::chronos::monotonic_nanos().saturating_sub(lane_wait_started)
-            >= DIRECT_RCS_LANE_WAIT_NS
-        {
-            return ERROR_BUSY;
-        }
-        core::hint::spin_loop();
-    };
     let solid = match ensure_solid_source(surface) {
         Ok(source) => source,
         Err(code) => return code,

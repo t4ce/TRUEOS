@@ -1,7 +1,16 @@
 static RENDER_PPGTT_PML4_PHYS: AtomicU64 = AtomicU64::new(0);
 static RENDER_PPGTT: Mutex<Option<crate::intel::ppgtt::SparsePpgtt>> = Mutex::new(None);
+// `WARM_STATE` protects readers after publication.  Allocation and PPGTT
+// construction also need a gate: without it, two first users can both observe
+// `None`, allocate different roots, and let the last publisher silently replace
+// the HWLRCA/PPGTT backing already handed to the other user.
+static WARM_INIT_LOCK: Mutex<()> = Mutex::new(());
 
 pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
+    if let Some(warm) = *WARM_STATE.lock() {
+        return warm;
+    }
+    let _init = WARM_INIT_LOCK.lock();
     if let Some(warm) = *WARM_STATE.lock() {
         return warm;
     }
@@ -425,6 +434,52 @@ pub fn log_sprite_plane_info(warm: RenderWarmState) {
     );
 }
 
+pub(crate) fn init_global_rcs_workarounds_for_boot(dev: crate::intel::Dev) -> bool {
+    crate::intel::mmio_write(
+        dev,
+        RCS_CS_DEBUG_MODE1,
+        crate::intel::mask_en(FF_DOP_CLOCK_GATE_DISABLE),
+    );
+
+    if device_is_gfx125(dev.device_id) {
+        // Mesa's gfx125 init path enables these TBIMR-related raster controls
+        // before any client context is admitted.  This is a physical-RCS
+        // property, not state owned by an individual Render/Spirit context.
+        crate::intel::mmio_write(dev, CHICKEN_RASTER_2, gfx125_chicken_raster_2_value());
+    }
+
+    let accepted = global_rcs_workarounds_ready(dev);
+    let cs_debug_mode1 = crate::intel::mmio_read(dev, RCS_CS_DEBUG_MODE1);
+    let chicken_raster_2 = device_is_gfx125(dev.device_id)
+        .then(|| crate::intel::mmio_read(dev, CHICKEN_RASTER_2))
+        .unwrap_or(0);
+    crate::log_info!(
+        target: "render";
+        "intel/gt-global-init: rcs_workarounds accepted={} ownership=boot-only device=0x{:04X} cs_debug_mode1=0x{:08X} ff_dop_cg_disable={} chicken_raster_2=0x{:08X} gfx125_tbimr={}\n",
+        accepted as u8,
+        dev.device_id,
+        cs_debug_mode1,
+        ((cs_debug_mode1 & FF_DOP_CLOCK_GATE_DISABLE) != 0) as u8,
+        chicken_raster_2,
+        (!device_is_gfx125(dev.device_id)
+            || chicken_raster_2
+                & (TBIMR_BATCH_SIZE_OVERRIDE | TBIMR_OPEN_BATCH_ENABLE | TBIMR_FAST_CLIP)
+                == (TBIMR_BATCH_SIZE_OVERRIDE | TBIMR_OPEN_BATCH_ENABLE | TBIMR_FAST_CLIP))
+            as u8,
+    );
+    accepted
+}
+
+pub(crate) fn global_rcs_workarounds_ready(dev: crate::intel::Dev) -> bool {
+    let cs_debug_ready =
+        crate::intel::mmio_read(dev, RCS_CS_DEBUG_MODE1) & FF_DOP_CLOCK_GATE_DISABLE != 0;
+    let raster_ready = !device_is_gfx125(dev.device_id)
+        || crate::intel::mmio_read(dev, CHICKEN_RASTER_2)
+            & (TBIMR_BATCH_SIZE_OVERRIDE | TBIMR_OPEN_BATCH_ENABLE | TBIMR_FAST_CLIP)
+            == (TBIMR_BATCH_SIZE_OVERRIDE | TBIMR_OPEN_BATCH_ENABLE | TBIMR_FAST_CLIP);
+    cs_debug_ready && raster_ready
+}
+
 pub fn forcewake_render_acquire(warm: RenderWarmState) -> bool {
     let dev = crate::intel::Dev {
         bus: 0,
@@ -436,78 +491,24 @@ pub fn forcewake_render_acquire(warm: RenderWarmState) -> bool {
         mmio_len: warm.mmio_len,
     };
 
-    // Forcewake is device-global, not owned by this render consumer.  TRUEOS
-    // retains the kernel request for the claimed GT lifetime, so an acquire
-    // may assert a missing request but must never clear a request underneath
-    // another GuC client such as Spirit.
-    let render_awake =
-        crate::intel::mmio_read(dev, FORCEWAKE_ACK_RENDER) & FORCEWAKE_KERNEL != 0;
-    let render_ok = render_awake || {
-        crate::intel::mmio_write(dev, FORCEWAKE_RENDER, crate::intel::mask_en(FORCEWAKE_KERNEL));
-        wait_eq(
-            dev,
-            FORCEWAKE_ACK_RENDER,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_POLL_ITERS,
-        )
-    };
-
-    let gt_awake = crate::intel::mmio_read(dev, FORCEWAKE_ACK_GT) & FORCEWAKE_KERNEL != 0;
-    let gt_ok = gt_awake || {
-        crate::intel::mmio_write(dev, FORCEWAKE_GT, crate::intel::mask_en(FORCEWAKE_KERNEL));
-        wait_eq(
-            dev,
-            FORCEWAKE_ACK_GT,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_POLL_ITERS,
-        )
-    };
-    crate::intel::mmio_write(
-        dev,
-        RCS_CS_DEBUG_MODE1,
-        crate::intel::mask_en(FF_DOP_CLOCK_GATE_DISABLE),
-    );
+    // Render clients consume the physical-GT contract.  They never acquire,
+    // release, or repair device-global forcewake/workaround registers while a
+    // different GuC context may be resident on RCS0.
+    let ok = crate::intel::physical_gt_ready(dev);
     let cs_debug_mode1 = crate::intel::mmio_read(dev, RCS_CS_DEBUG_MODE1);
-    apply_gfx125_raster_workarounds(dev);
 
     if should_log_primary_probe_detail() {
         crate::log!(
-            "forcewake render_retained=1 render_ack=0x{:08X} gt_ack=0x{:08X} cs_debug_mode1=0x{:08X} ff_dop_cg_disable={} ok={}\n",
+            "forcewake ownership=boot-only runtime_writes=0 render_ack=0x{:08X} gt_ack=0x{:08X} cs_debug_mode1=0x{:08X} ff_dop_cg_disable={} ok={}\n",
             crate::intel::mmio_read(dev, FORCEWAKE_ACK_RENDER),
             crate::intel::mmio_read(dev, FORCEWAKE_ACK_GT),
             cs_debug_mode1,
             ((cs_debug_mode1 & FF_DOP_CLOCK_GATE_DISABLE) != 0) as u8,
-            (render_ok && gt_ok) as u8
+            ok as u8
         );
     }
 
-    render_ok && gt_ok
-}
-
-fn apply_gfx125_raster_workarounds(dev: crate::intel::Dev) {
-    if !device_is_gfx125(dev.device_id) {
-        return;
-    }
-
-    // Mesa's gfx125 init path enables these TBIMR-related raster controls up
-    // front. Keep the bring-up path aligned so the first primitive does not
-    // depend on whatever the boot context happened to leave behind.
-    let before = crate::intel::mmio_read(dev, CHICKEN_RASTER_2);
-    crate::intel::mmio_write(dev, CHICKEN_RASTER_2, gfx125_chicken_raster_2_value());
-    let after = crate::intel::mmio_read(dev, CHICKEN_RASTER_2);
-
-    if should_log_primary_probe_detail() {
-        crate::log!(
-            "gfx125-raster-wa chicken_raster_2 before=0x{:08X} after=0x{:08X} tbimr_batch_override={} tbimr_open_batch={} tbimr_fast_clip={}\n",
-            before,
-            after,
-            ((after & TBIMR_BATCH_SIZE_OVERRIDE) != 0) as u8,
-            ((after & TBIMR_OPEN_BATCH_ENABLE) != 0) as u8,
-            ((after & TBIMR_FAST_CLIP) != 0) as u8,
-        );
-    }
+    ok
 }
 
 fn gfx125_chicken_raster_2_value() -> u32 {

@@ -87,7 +87,6 @@ const FORCEWAKE_ACK_RENDER: usize = 0x0D84;
 const FORCEWAKE_ACK_MEDIA: usize = 0x0D88;
 const FORCEWAKE_ACK_GT: usize = 0x130044;
 const FORCEWAKE_KERNEL: u32 = 1 << 0;
-const FORCEWAKE_FALLBACK: u32 = 1 << 15;
 const FORCEWAKE_POLL_ITERS: usize = 20_000;
 const GFX_FLSH_CNTL_GEN6: usize = 0x101008;
 const GFX_FLSH_CNTL_EN: u32 = 1 << 0;
@@ -113,6 +112,7 @@ static GEN12_INTEGRATED_PAT_READY: AtomicBool = AtomicBool::new(false);
 static GEN12_LUMEN_MOCS_READY: AtomicBool = AtomicBool::new(false);
 static DISPLAY_GGTT_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
 static GEN12_LUMEN_MOCS_BOOT_REPORT: Once<self::gt_state::Gen12LumenMocsInitReport> = Once::new();
+static PHYSICAL_GT_BOOT_REPORT: Once<PhysicalGtBootReport> = Once::new();
 // The display device is selected exactly once during boot and never mutates.
 // Keep readers lock-free so interrupt-adjacent display/media paths cannot
 // deadlock an executor by re-entering a spin mutex held by the interrupted CPU.
@@ -130,6 +130,36 @@ pub(crate) struct Dev {
 }
 unsafe impl Send for Dev {}
 unsafe impl Sync for Dev {}
+
+#[derive(Copy, Clone)]
+struct PhysicalGtBootReport {
+    device_id: u16,
+    revision_id: u8,
+    mmio_base: usize,
+    mmio_len: usize,
+    render_forcewake_ready: bool,
+    media_forcewake_ready: bool,
+    gt_forcewake_ready: bool,
+    rcs_workarounds_ready: bool,
+}
+
+impl PhysicalGtBootReport {
+    const fn forcewake_ready(self) -> bool {
+        self.render_forcewake_ready && self.gt_forcewake_ready
+    }
+
+    const fn accepted(self) -> bool {
+        self.forcewake_ready() && self.rcs_workarounds_ready
+    }
+
+    fn owns(self, dev: Dev) -> bool {
+        self.device_id == dev.device_id
+            && self.revision_id == dev.revision_id
+            && self.mmio_base == dev.mmio as usize
+            && self.mmio_len == dev.mmio_len
+    }
+}
+
 #[derive(Copy, Clone)]
 pub(crate) struct Buf {
     pub(crate) phys: u64,
@@ -165,7 +195,9 @@ pub fn init_once() {
         media_decode_enabled_for_device(dev.device_id) as u8
     );
     CLAIMED_DEVICE.call_once(|| dev);
-    let forcewake_ready = device_uses_gen12_integrated_pat(dev.device_id) && forcewake(dev);
+    let physical_gt = init_physical_gt_once(dev);
+    let forcewake_ready =
+        device_uses_gen12_integrated_pat(dev.device_id) && physical_gt.forcewake_ready();
     let lumen_mocs = if forcewake_ready {
         self::gt_state::init_lumen_mocs(dev)
     } else {
@@ -198,18 +230,28 @@ pub fn init_once() {
         self::gt_state::GEN12_LUMEN_MOCS_INDEX,
         self::gt_state::GEN12_LUMEN_MOCS_INDEX << 1,
     );
-    if guc_boot {
-        let _ = init_required_guc_transport(dev);
+    let guc_ready = if guc_boot {
+        let ready = init_required_guc_transport(dev);
         if forcewake_ready {
             let _ = validate_gen12_lumen_mocs_for_dev(dev, "post-guc");
         }
+        ready
     } else {
         crate::log!(
             "intel/uc-fw: firmware bring-up skipped device=0x{:04X} name={} reason=unsupported-device-policy\n",
             dev.device_id,
             display_device_name(dev.device_id)
         );
-    }
+        false
+    };
+    let fixed_render_ggtt_ready =
+        guc_ready && physical_gt.accepted() && self::render::init_fixed_render_ggtt_for_boot(dev);
+    crate::log_info!(
+        target: "render";
+        "intel/gt-global-init: fixed_render_ggtt={} ownership=boot-only guc_ready={} client_remap=forbidden",
+        fixed_render_ggtt_ready as u8,
+        guc_ready as u8,
+    );
     self::display::log_bsp_display_metrics_probe(dev);
     if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
         self::display::init_primary_boot_surface(dev);
@@ -338,7 +380,7 @@ pub(crate) fn begin_lumen_gt_boost() -> Option<self::gt_state::Gen12LumenGtBoost
     let dev = claimed_device()?;
     if !device_uses_gen12_integrated_pat(dev.device_id)
         || !gen12_lumen_mocs_ready()
-        || !forcewake(dev)
+        || !physical_gt_ready(dev)
     {
         return None;
     }
@@ -841,36 +883,71 @@ fn find_dev() -> Option<Dev> {
     out
 }
 
-fn forcewake(dev: Dev) -> bool {
-    let render_awake = mmio_read(dev, FORCEWAKE_ACK_RENDER) & FORCEWAKE_KERNEL != 0;
-    let render_ready = render_awake || {
-        mmio_write(dev, FORCEWAKE_RENDER, mask_en(FORCEWAKE_KERNEL));
-        wait_eq(
-            dev,
-            FORCEWAKE_ACK_RENDER,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_POLL_ITERS,
-        )
-    };
+fn init_physical_gt_once(dev: Dev) -> PhysicalGtBootReport {
+    *PHYSICAL_GT_BOOT_REPORT.call_once(|| {
+        let (render_forcewake_ready, media_forcewake_ready, gt_forcewake_ready) =
+            retain_forcewake_for_boot(dev);
+        let rcs_workarounds_ready = render_forcewake_ready
+            && gt_forcewake_ready
+            && self::render::init_global_rcs_workarounds_for_boot(dev);
+        let report = PhysicalGtBootReport {
+            device_id: dev.device_id,
+            revision_id: dev.revision_id,
+            mmio_base: dev.mmio as usize,
+            mmio_len: dev.mmio_len,
+            render_forcewake_ready,
+            media_forcewake_ready,
+            gt_forcewake_ready,
+            rcs_workarounds_ready,
+        };
+        crate::log_info!(
+            target: "render";
+            "intel/gt-global-init: accepted={} ownership=boot-only device=0x{:04X} render_forcewake={} media_forcewake={} gt_forcewake={} rcs_workarounds={} runtime_repair=forbidden",
+            report.accepted() as u8,
+            dev.device_id,
+            report.render_forcewake_ready as u8,
+            report.media_forcewake_ready as u8,
+            report.gt_forcewake_ready as u8,
+            report.rcs_workarounds_ready as u8,
+        );
+        report
+    })
+}
+
+/// Read-only runtime admission for every RCS GuC client.
+///
+/// Physical forcewake and global workarounds are established once during
+/// `init_once`.  A client may reject work if that contract was lost, but it
+/// must not repair shared registers underneath another resident context.
+pub(crate) fn physical_gt_ready(dev: Dev) -> bool {
+    PHYSICAL_GT_BOOT_REPORT.get().is_some_and(|report| {
+        report.owns(dev)
+            && report.accepted()
+            && mmio_read(dev, FORCEWAKE_ACK_RENDER) & FORCEWAKE_KERNEL != 0
+            && mmio_read(dev, FORCEWAKE_ACK_GT) & FORCEWAKE_KERNEL != 0
+            && self::render::global_rcs_workarounds_ready(dev)
+    })
+}
+
+fn retain_forcewake_for_boot(dev: Dev) -> (bool, bool, bool) {
+    // Establish TRUEOS's retained requests without first clearing firmware or
+    // another boot owner's request.  These writes are confined to boot; all
+    // GuC clients use `physical_gt_ready` as a read-only admission check.
+    mmio_write(dev, FORCEWAKE_RENDER, mask_en(FORCEWAKE_KERNEL));
+    let render_ready = wait_eq(
+        dev,
+        FORCEWAKE_ACK_RENDER,
+        FORCEWAKE_KERNEL,
+        FORCEWAKE_KERNEL,
+        FORCEWAKE_POLL_ITERS,
+    );
     mmio_write(dev, FORCEWAKE_MEDIA, mask_en(FORCEWAKE_KERNEL));
-    let _media_ready =
+    let media_ready =
         wait_eq(dev, FORCEWAKE_ACK_MEDIA, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
-    let gt_awake = mmio_read(dev, FORCEWAKE_ACK_GT) & FORCEWAKE_KERNEL != 0;
-    let gt_ready = gt_awake || {
-        mmio_write(dev, FORCEWAKE_GT, mask_en(FORCEWAKE_KERNEL));
-        wait_eq(
-            dev,
-            FORCEWAKE_ACK_GT,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_KERNEL,
-            FORCEWAKE_POLL_ITERS,
-        )
-    };
-    // The PAT registers are in the GT domain. Media forcewake is retained for
-    // the existing codec path, but its availability must not gate render and
-    // display memory policy on SKUs where media is intentionally disabled.
-    render_ready && gt_ready
+    mmio_write(dev, FORCEWAKE_GT, mask_en(FORCEWAKE_KERNEL));
+    let gt_ready =
+        wait_eq(dev, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
+    (render_ready, media_ready, gt_ready)
 }
 
 fn device_uses_gen12_integrated_pat(device_id: u16) -> bool {

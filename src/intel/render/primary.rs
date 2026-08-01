@@ -6598,6 +6598,32 @@ fn map_smoke_buffers(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
     }
 }
 
+static FIXED_RENDER_GGTT_BOOT_RESULT: spin::Once<bool> = spin::Once::new();
+
+pub(crate) fn init_fixed_render_ggtt_for_boot(dev: crate::intel::Dev) -> bool {
+    *FIXED_RENDER_GGTT_BOOT_RESULT.call_once(|| {
+        if !crate::intel::physical_gt_ready(dev) {
+            return false;
+        }
+        let warm = warm_once(dev);
+        let complete = warm.ring_len != 0
+            && warm.context_len != 0
+            && warm.batch_len != 0
+            && warm.draw_state_len != 0
+            && warm.vertex_len != 0
+            && warm.result_len != 0
+            && warm.streamout_len != 0;
+        if !complete || !map_smoke_buffers(dev, warm) {
+            WARM_BUFFERS_MAPPED.store(false, Ordering::Release);
+            return false;
+        }
+        log_render_memory_proof(warm);
+        MEMORY_PROOF_LOGGED.store(true, Ordering::Release);
+        WARM_BUFFERS_MAPPED.store(true, Ordering::Release);
+        true
+    })
+}
+
 fn read_first_dword(virt: *mut u8, len: usize) -> u32 {
     if virt.is_null() || len < core::mem::size_of::<u32>() {
         return 0;
@@ -6656,15 +6682,15 @@ fn log_render_memory_proof(warm: RenderWarmState) {
 }
 
 fn ensure_smoke_buffers_mapped(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
-    if !map_smoke_buffers(dev, warm) {
-        WARM_BUFFERS_MAPPED.store(false, Ordering::Release);
-        return false;
-    }
-    if !MEMORY_PROOF_LOGGED.swap(true, Ordering::AcqRel) {
-        log_render_memory_proof(warm);
-    }
-    WARM_BUFFERS_MAPPED.store(true, Ordering::Release);
-    true
+    // GGTT PTEs and their invalidate are physical-GT state.  Client launch is
+    // only allowed to consume the immutable boot mapping; it cannot remap the
+    // same fixed addresses while another GuC context is executing.
+    WARM_BUFFERS_MAPPED.load(Ordering::Acquire)
+        && FIXED_RENDER_GGTT_BOOT_RESULT.get().copied() == Some(true)
+        && warm.device_id == dev.device_id
+        && warm.revision_id == dev.revision_id
+        && warm.mmio_base == dev.mmio as usize
+        && warm.mmio_len == dev.mmio_len
 }
 
 fn should_log_primary_probe(reason: &str, seq: u32) -> bool {

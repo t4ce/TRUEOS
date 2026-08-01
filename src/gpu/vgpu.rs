@@ -70,7 +70,14 @@ impl Capabilities {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum KernelClient {
+    /// Legacy/default Render carrier. Its identity is permanently bound to
+    /// one RCS0 HWLRCA and one PPGTT root on first admission.
     Render,
+    /// Additional Render carriers are distinct principals, not aliases for
+    /// the legacy Render context. Callers may use them only with independently
+    /// allocated LRC/ring/batch/result storage and a distinct PPGTT root.
+    Render1,
+    Render2,
     /// Ordered compute lane for kernel system services such as fonts, retained
     /// UI producers, and general-purpose synchronous operations.
     GpgpuSystem,
@@ -91,9 +98,31 @@ pub(crate) enum KernelClient {
 }
 
 impl KernelClient {
+    pub(crate) const RENDER_CARRIERS: [Self; 3] = [Self::Render, Self::Render1, Self::Render2];
+
+    pub(crate) const fn render_carrier(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(Self::Render),
+            1 => Some(Self::Render1),
+            2 => Some(Self::Render2),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn render_carrier_index(self) -> Option<usize> {
+        match self {
+            Self::Render => Some(0),
+            Self::Render1 => Some(1),
+            Self::Render2 => Some(2),
+            _ => None,
+        }
+    }
+
     pub(crate) const fn name(self) -> &'static str {
         match self {
-            Self::Render => "kernel-render",
+            Self::Render => "kernel-render-0",
+            Self::Render1 => "kernel-render-1",
+            Self::Render2 => "kernel-render-2",
             Self::GpgpuSystem => "kernel-gpgpu-system",
             Self::GpgpuExecution => "kernel-gpgpu-execution",
             Self::Lfm25 => "kernel-lfm25",
@@ -105,6 +134,8 @@ impl KernelClient {
     const fn principal(self) -> Principal {
         match self {
             Self::Render => Principal::KernelRender,
+            Self::Render1 => Principal::KernelRender1,
+            Self::Render2 => Principal::KernelRender2,
             Self::GpgpuSystem => Principal::KernelGpgpuSystem,
             Self::GpgpuExecution => Principal::KernelGpgpuExecution,
             Self::Lfm25 => Principal::KernelLfm25,
@@ -115,7 +146,7 @@ impl KernelClient {
 
     const fn queue_class(self) -> QueueClass {
         match self {
-            Self::Render => QueueClass::Render,
+            Self::Render | Self::Render1 | Self::Render2 => QueueClass::Render,
             Self::GpgpuSystem | Self::GpgpuExecution | Self::Lfm25 => QueueClass::Compute,
             Self::Ui4Compositor => QueueClass::Compute,
             Self::Ui4Blitter => QueueClass::Copy,
@@ -143,6 +174,28 @@ impl KernelClient {
                 PhysicalContextPriority::KernelHigh
             }
             _ => PhysicalContextPriority::KernelNormal,
+        }
+    }
+
+    /// Current physical ABI placement for privileged kernel contexts. ADL-S
+    /// exposes RCS0 for render/compute and BCS0 for copies; there is no fake
+    /// EU/CCS affinity hidden behind a software carrier number.
+    const fn accepts_engine(self, engine: super::physical::PhysicalEngineId) -> bool {
+        use super::physical::EngineClass;
+
+        match self {
+            Self::Render
+            | Self::Render1
+            | Self::Render2
+            | Self::GpgpuSystem
+            | Self::GpgpuExecution
+            | Self::Lfm25
+            | Self::Ui4Compositor => {
+                matches!(engine.class, EngineClass::RenderCompute) && engine.instance == 0
+            }
+            Self::Ui4Blitter => {
+                matches!(engine.class, EngineClass::Copy) && engine.instance == 0
+            }
         }
     }
 }
@@ -174,6 +227,8 @@ const _: () = {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Principal {
     KernelRender,
+    KernelRender1,
+    KernelRender2,
     KernelGpgpuSystem,
     KernelGpgpuExecution,
     KernelLfm25,
@@ -187,7 +242,9 @@ pub(crate) enum Principal {
 impl Principal {
     pub(crate) const fn name(self) -> &'static str {
         match self {
-            Self::KernelRender => "kernel-render",
+            Self::KernelRender => "kernel-render-0",
+            Self::KernelRender1 => "kernel-render-1",
+            Self::KernelRender2 => "kernel-render-2",
             Self::KernelGpgpuSystem => "kernel-gpgpu-system",
             Self::KernelGpgpuExecution => "kernel-gpgpu-execution",
             Self::KernelLfm25 => "kernel-lfm25",
@@ -495,6 +552,10 @@ struct VirtualDevice {
     epoch: u64,
     lost: bool,
     gpuvm: GpuVmBinding,
+    /// First successfully registered privileged context descriptor. Kernel
+    /// client identity is a capability for this exact engine, HWLRCA and
+    /// PPGTT root; it may never be rebound in-place.
+    kernel_context_capability: Option<PhysicalContextDescriptor>,
     next_gpu_va: u64,
     memory_used: usize,
     copied_upload_bytes: u64,
@@ -556,6 +617,7 @@ pub(crate) struct DeviceStatusSnapshot {
     pub(crate) buffers: usize,
     pub(crate) queues: usize,
     pub(crate) contexts: usize,
+    pub(crate) kernel_context_capability: Option<PhysicalContextDescriptor>,
     pub(crate) vvideo_buffers: usize,
     pub(crate) vvideo_mapping_identity: bool,
     pub(crate) vvideo_mapping_digest: u64,
@@ -625,6 +687,7 @@ pub(crate) fn open(
         epoch,
         lost: false,
         gpuvm: GpuVmBinding::Owned(gpuvm),
+        kernel_context_capability: None,
         next_gpu_va: CLIENT_GPU_VA_BASE,
         memory_used: 0,
         copied_upload_bytes: 0,
@@ -1461,20 +1524,55 @@ pub(crate) fn submit_kernel_context(
     client: KernelClient,
     descriptor: PhysicalContextDescriptor,
 ) -> Result<TimelinePoint, VgpuError> {
+    if !client.accepts_engine(descriptor.engine) || descriptor.gpuvm_root_phys == 0 {
+        return Err(VgpuError::PermissionDenied);
+    }
     let physical = require_physical()?;
     let mut broker = BROKER.lock();
     let device_handle = ensure_kernel_device(&mut broker, client, descriptor.gpuvm_root_phys)?;
+
+    // GuC's registration key is engine + HWLRCA. Reject a second broker
+    // principal claiming that key, even if it supplies the same PPGTT root:
+    // otherwise GuC would hand both virtual clients the same physical token.
+    let hwlrca_claimed_elsewhere = broker.devices.iter().any(|slot| {
+        let Some(other) = slot.record.as_ref() else {
+            return false;
+        };
+        other.principal != client.principal()
+            && other.kernel_context_capability.is_some_and(|bound| {
+                bound.engine == descriptor.engine
+                    && bound.hwlrca_lo == descriptor.hwlrca_lo
+                    && bound.hwlrca_hi == descriptor.hwlrca_hi
+            })
+    });
+    if hwlrca_claimed_elsewhere {
+        return Err(VgpuError::PermissionDenied);
+    }
+
     let device = lookup_device_mut(&mut broker, device_handle, client.principal())?;
     ensure_live(device)?;
     let queue_handle = ensure_kernel_queue(device, client.queue_class())?;
 
-    let context = if let Some(binding) = device
-        .contexts
-        .iter()
-        .find(|binding| binding.queue == queue_handle && binding.descriptor == descriptor)
-    {
+    let context = if let Some(bound) = device.kernel_context_capability {
+        if bound != descriptor {
+            // A kernel principal is not a bag of interchangeable contexts.
+            // Rebinding any component would silently couple unrelated LRC
+            // storage or address spaces through one software identity.
+            return Err(VgpuError::PermissionDenied);
+        }
+        let Some(binding) = device.contexts.first() else {
+            // A bound descriptor with no retained physical registration is a
+            // quarantined identity, never permission to recycle its backing.
+            return Err(VgpuError::DeviceLost);
+        };
+        if binding.queue != queue_handle || binding.descriptor != descriptor {
+            return Err(VgpuError::DeviceLost);
+        }
         binding.context
     } else {
+        if !device.contexts.is_empty() {
+            return Err(VgpuError::DeviceLost);
+        }
         if device.contexts.len() >= device.quota.contexts {
             return Err(VgpuError::QuotaExceeded);
         }
@@ -1484,6 +1582,7 @@ pub(crate) fn submit_kernel_context(
             descriptor,
             context,
         });
+        device.kernel_context_capability = Some(descriptor);
         context
     };
 
@@ -1725,6 +1824,7 @@ pub(crate) fn broker_status() -> BrokerStatus {
                 .filter(|slot| slot.record.is_some())
                 .count(),
             contexts: device.contexts.len(),
+            kernel_context_capability: device.kernel_context_capability,
             vvideo_buffers,
             vvideo_mapping_identity,
             vvideo_mapping_digest,
@@ -1835,6 +1935,8 @@ fn allowed_capabilities(
     }
     match principal {
         Principal::KernelRender
+        | Principal::KernelRender1
+        | Principal::KernelRender2
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuExecution
         | Principal::KernelLfm25
@@ -1849,6 +1951,8 @@ fn allowed_capabilities(
 const fn quota_for(principal: Principal) -> Quota {
     match principal {
         Principal::KernelRender
+        | Principal::KernelRender1
+        | Principal::KernelRender2
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuExecution
         | Principal::KernelLfm25
@@ -1893,6 +1997,7 @@ fn ensure_kernel_device(
         epoch: broker.epoch,
         lost: false,
         gpuvm: GpuVmBinding::Borrowed { root_phys },
+        kernel_context_capability: None,
         next_gpu_va: CLIENT_GPU_VA_BASE,
         memory_used: 0,
         copied_upload_bytes: 0,

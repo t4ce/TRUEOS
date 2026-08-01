@@ -887,17 +887,6 @@ async fn render_frame(
     resident: &[ResidentTriangle],
     clear_rgba: [u8; 4],
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, GameError> {
-    // Render and the detached Spirit/font/compositor jobs all execute on the
-    // one physical RCS0. Hold their existing fair lane through the exact
-    // completion marker so a streaming game frame cannot reset or overwrite
-    // another accepted context.
-    let _gpu_lane = crate::r::font_kernel_service::acquire_gpu_lane(
-        crate::r::font_kernel_service::FontKernelConsumer::new(
-            crate::r::font_kernel_service::FontKernelConsumerPath::Helio,
-            frame.raw(),
-        ),
-    )
-    .await;
     let lease = crate::ui4::acquire_frame_buffer(frame)?;
     let destination = match crate::ui4::gpgpu_rgba_surface(lease) {
         Ok(destination)
@@ -964,13 +953,6 @@ async fn render_native_churn_frame(
     resident: &crate::intel::render::ResidentChurnForward,
     clear_rgba: [u8; 4],
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, GameError> {
-    let _gpu_lane = crate::r::font_kernel_service::acquire_gpu_lane(
-        crate::r::font_kernel_service::FontKernelConsumer::new(
-            crate::r::font_kernel_service::FontKernelConsumerPath::Helio,
-            frame.raw(),
-        ),
-    )
-    .await;
     let lease = crate::ui4::acquire_frame_buffer(frame)?;
     let destination = match crate::ui4::gpgpu_rgba_surface(lease) {
         Ok(destination)

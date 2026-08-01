@@ -259,6 +259,8 @@ fn principal_instance_suffix(principal: Principal) -> String {
     match principal {
         Principal::HullGuest(id) | Principal::RuntimeTest(id) => alloc::format!("({id})"),
         Principal::KernelRender
+        | Principal::KernelRender1
+        | Principal::KernelRender2
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuExecution
         | Principal::KernelLfm25

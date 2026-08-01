@@ -115,6 +115,10 @@ struct InflightKernelSubmission {
 }
 
 struct ExecutorState {
+    /// Clients whose mutable LRC/ring submission storage is reserved by an
+    /// encoder. A reservation begins before either image is changed and is
+    /// held until the corresponding exact timeline point is retired.
+    preparing: Vec<KernelClient>,
     admitting: Vec<KernelClient>,
     inflight: Vec<InflightKernelSubmission>,
     waiters: Vec<FenceWaiter>,
@@ -126,6 +130,7 @@ struct ExecutorState {
 impl ExecutorState {
     const fn new() -> Self {
         Self {
+            preparing: Vec::new(),
             admitting: Vec::new(),
             inflight: Vec::new(),
             waiters: Vec::new(),
@@ -141,6 +146,7 @@ pub(crate) struct GpuExecutorStatus {
     pub(crate) submissions: u64,
     pub(crate) completions: u64,
     pub(crate) failures: u64,
+    pub(crate) preparing: usize,
     pub(crate) admitting: usize,
     pub(crate) inflight: usize,
     pub(crate) waiters: usize,
@@ -148,6 +154,34 @@ pub(crate) struct GpuExecutorStatus {
 
 static NEXT_WAITER_ID: AtomicU64 = AtomicU64::new(1);
 static EXECUTOR: Mutex<ExecutorState> = Mutex::new(ExecutorState::new());
+
+/// Exclusive ownership of one kernel client's mutable submission storage.
+///
+/// Backends with persistent LRC/ring memory acquire this before encoding the
+/// ring or context image. Dropping it releases only host-side preparation
+/// ownership; an outstanding physical submission independently remains in
+/// `inflight`, so early drops cannot permit storage reuse before retirement.
+pub(crate) struct KernelContextLease {
+    client: KernelClient,
+}
+
+impl KernelContextLease {
+    pub(crate) fn submit(
+        &self,
+        descriptor: PhysicalContextDescriptor,
+    ) -> Result<KernelSubmission, VgpuError> {
+        submit_kernel_context_with_lease(self, descriptor)
+    }
+}
+
+impl Drop for KernelContextLease {
+    fn drop(&mut self) {
+        EXECUTOR
+            .lock()
+            .preparing
+            .retain(|preparing| *preparing != self.client);
+    }
+}
 
 const fn kernel_client_inflight_limit(client: KernelClient) -> usize {
     match client {
@@ -157,6 +191,29 @@ const fn kernel_client_inflight_limit(client: KernelClient) -> usize {
         KernelClient::Ui4Compositor => 2,
         _ => 1,
     }
+}
+
+/// Reserve a client's mutable LRC/ring storage before encoding it.
+///
+/// This is intentionally per client. Independent contexts remain concurrent
+/// and GuC continues to own scheduling on the shared physical engine.
+pub(crate) fn reserve_kernel_context(
+    client: KernelClient,
+) -> Result<KernelContextLease, VgpuError> {
+    let mut executor = EXECUTOR.lock();
+    let client_inflight = executor
+        .inflight
+        .iter()
+        .filter(|entry| entry.submission.client == client)
+        .count();
+    if executor.preparing.contains(&client)
+        || executor.admitting.contains(&client)
+        || client_inflight >= kernel_client_inflight_limit(client)
+    {
+        return Err(VgpuError::Busy);
+    }
+    executor.preparing.push(client);
+    Ok(KernelContextLease { client })
 }
 
 /// Admit one already-encoded kernel context. Each client remains an ordered
@@ -172,6 +229,21 @@ pub(crate) fn submit_kernel_context(
     client: KernelClient,
     descriptor: PhysicalContextDescriptor,
 ) -> Result<KernelSubmission, VgpuError> {
+    admit_kernel_context(client, descriptor, false)
+}
+
+fn submit_kernel_context_with_lease(
+    lease: &KernelContextLease,
+    descriptor: PhysicalContextDescriptor,
+) -> Result<KernelSubmission, VgpuError> {
+    admit_kernel_context(lease.client, descriptor, true)
+}
+
+fn admit_kernel_context(
+    client: KernelClient,
+    descriptor: PhysicalContextDescriptor,
+    storage_reserved: bool,
+) -> Result<KernelSubmission, VgpuError> {
     {
         let mut executor = EXECUTOR.lock();
         let client_inflight = executor
@@ -179,8 +251,11 @@ pub(crate) fn submit_kernel_context(
             .iter()
             .filter(|entry| entry.submission.client == client)
             .count();
+        let reservation_valid = executor.preparing.contains(&client);
         if executor.admitting.contains(&client)
             || client_inflight >= kernel_client_inflight_limit(client)
+            || (storage_reserved && !reservation_valid)
+            || (!storage_reserved && reservation_valid)
         {
             return Err(VgpuError::Busy);
         }
@@ -236,6 +311,7 @@ pub(crate) fn status() -> GpuExecutorStatus {
         submissions: executor.submissions,
         completions: executor.completions,
         failures: executor.failures,
+        preparing: executor.preparing.len(),
         admitting: executor.admitting.len(),
         inflight: executor.inflight.len(),
         waiters: executor.waiters.len(),

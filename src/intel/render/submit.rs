@@ -15,6 +15,32 @@ fn submit_warm_render_batch(
     expected_result_slot_dword: usize,
     submit_name: &'static str,
 ) -> bool {
+    // WARM_STATE currently owns one mutable Render0 LRC/ring pair. Reserve it
+    // before either image is rewritten and retain the lease through exact
+    // marker retirement. Other kernel clients remain independent and are
+    // scheduled concurrently by GuC.
+    let render_client = crate::gpu::vgpu::KernelClient::Render;
+    let lease_started_ns = crate::chronos::monotonic_nanos();
+    let render_lease = loop {
+        match crate::gpu::executor::reserve_kernel_context(render_client) {
+            Ok(lease) => break lease,
+            Err(crate::gpu::vgpu::VgpuError::Busy)
+                if crate::chronos::monotonic_nanos().saturating_sub(lease_started_ns)
+                    < 2_100_000_000 =>
+            {
+                core::hint::spin_loop();
+            }
+            Err(error) => {
+                crate::log!(
+                    "{} render-storage-reserve-failed client={} error={:?} mutable-lrc-reused=0\n",
+                    submit_name,
+                    render_client.name(),
+                    error,
+                );
+                return false;
+            }
+        }
+    };
     // Production scene variants share the dedicated QWord release slot.  Key
     // the scheduling/retirement policy from that ABI instead of one display
     // name: native Helio variants (for example `helio-churn-forward`) must not
@@ -72,10 +98,7 @@ fn submit_warm_render_batch(
         hwlrca_hi: context_desc_hi,
         gpuvm_root_phys: pml4_phys,
     };
-    let gpu_submission = match crate::gpu::executor::submit_kernel_context(
-        crate::gpu::vgpu::KernelClient::Render,
-        descriptor,
-    ) {
+    let gpu_submission = match render_lease.submit(descriptor) {
         Ok(submission) => submission,
         Err(error) => {
             crate::log!(
