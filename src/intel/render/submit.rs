@@ -15,7 +15,11 @@ fn submit_warm_render_batch(
     expected_result_slot_dword: usize,
     submit_name: &'static str,
 ) -> bool {
-    let resident_scene_submit = submit_name == "resident-scene";
+    // Production scene variants share the dedicated QWord release slot.  Key
+    // the scheduling/retirement policy from that ABI instead of one display
+    // name: native Helio variants (for example `helio-churn-forward`) must not
+    // fall through to the tiny diagnostic spin budget.
+    let resident_scene_submit = expected_result_slot_dword == RESULT_SLOT_SCENE_FRAME_DWORD;
     if resident_scene_submit {
         // Early submission failures must not leak the preceding frame's
         // profile into scene telemetry.
@@ -105,7 +109,11 @@ fn submit_warm_render_batch(
         4096
     };
     let poll_started_ns = crate::chronos::monotonic_nanos();
-    const RESIDENT_SCENE_POLL_TIMEOUT_NS: u64 = 50_000_000;
+    // Another normal-priority GuC client may already own RCS for roughly a
+    // frame.  This is a completion ceiling, not permission to reset the shared
+    // engine; allow ordinary cross-client scheduling and contain only Render
+    // if the scene still fails to retire.
+    const RESIDENT_SCENE_POLL_TIMEOUT_NS: u64 = 2_000_000_000;
     while iter < poll_limit {
         if resident_scene_submit {
             // The production scene has one authoritative completion value: a
@@ -627,9 +635,9 @@ fn submit_warm_render_batch(
     if is_surface_draw_submit_name(submit_name) {
         log_triangle_demo_stats(dev, completed);
     }
-    if !completed && submit_name == "resident-scene" {
+    if !completed && resident_scene_submit {
         intel_render_focus_log!(
-            "{} recovery deferred owner=guc reason=nonretired-context direct-engine-reset=0\n",
+            "{} recovery scoped owner=guc reason=nonretired-context direct-engine-reset=0 action=isolate-render-client\n",
             submit_name
         );
     }
@@ -1857,63 +1865,24 @@ fn seed_result_debug_slots(warm: RenderWarmState) {
 
 fn recover_render_engine_after_nonretired_submit(
     dev: crate::intel::Dev,
-    warm: RenderWarmState,
+    _warm: RenderWarmState,
     submit_name: &'static str,
 ) {
     let el_pre = crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO);
     let mi_mode_pre = crate::intel::mmio_read(dev, RCS_RING_MI_MODE);
     let acthd_pre = crate::intel::mmio_read(dev, RCS_RING_ACTHD);
+    let isolation = crate::gpu::vgpu::isolate_kernel_client(
+        crate::gpu::vgpu::KernelClient::Render,
+    );
     intel_render_focus_log!(
-        "{} recovery begin execlist_lo=0x{:08X} mi_mode=0x{:08X} acthd=0x{:08X}\n",
+        "{} recovery scoped execlist_lo=0x{:08X} mi_mode=0x{:08X} acthd=0x{:08X} client=kernel-render device_found={} contexts_disabled={} contexts_retained={} direct-engine-reset=0 action=isolate-render-client\n",
         submit_name,
         el_pre,
         mi_mode_pre,
         acthd_pre,
-    );
-
-    for _ in 0..200_000u32 {
-        let el = crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO);
-        if (el >> 30) == 0 {
-            break;
-        }
-        core::hint::spin_loop();
-    }
-
-    crate::intel::mmio_write(
-        dev,
-        RCS_RING_MI_MODE,
-        RING_MI_MODE_STOP_RING | (RING_MI_MODE_STOP_RING << 16),
-    );
-    for _ in 0..50_000u32 {
-        if crate::intel::mmio_read(dev, RCS_RING_MI_MODE) & MODE_IDLE != 0 {
-            break;
-        }
-        core::hint::spin_loop();
-    }
-
-    crate::intel::mmio_write(dev, GDRST, GRDOM_RENDER);
-    for _ in 0..500_000u32 {
-        if crate::intel::mmio_read(dev, GDRST) & GRDOM_RENDER == 0 {
-            break;
-        }
-        core::hint::spin_loop();
-    }
-
-    crate::intel::mmio_write(dev, RCS_RING_MI_MODE, RING_MI_MODE_STOP_RING << 16);
-    crate::intel::ggtt_invalidate(dev);
-
-    let mode_bits = GFX_RUN_LIST_ENABLE | GEN11_GFX_DISABLE_LEGACY_MODE;
-    crate::intel::mmio_write(dev, RCS_RING_MODE_GEN7, masked_bit_enable(mode_bits));
-    let forcewake_ok = forcewake_render_acquire(warm);
-
-    intel_render_focus_log!(
-        "{} recovery end gdrst=0x{:08X} execlist_lo=0x{:08X} mi_mode=0x{:08X} mode=0x{:08X} forcewake_ok={}\n",
-        submit_name,
-        crate::intel::mmio_read(dev, GDRST),
-        crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO),
-        crate::intel::mmio_read(dev, RCS_RING_MI_MODE),
-        crate::intel::mmio_read(dev, RCS_RING_MODE_GEN7),
-        forcewake_ok as u8,
+        isolation.device_found as u8,
+        isolation.contexts_disabled,
+        isolation.contexts_retained,
     );
 }
 

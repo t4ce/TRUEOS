@@ -436,31 +436,34 @@ pub fn forcewake_render_acquire(warm: RenderWarmState) -> bool {
         mmio_len: warm.mmio_len,
     };
 
-    crate::intel::mmio_write(
-        dev,
-        FORCEWAKE_RENDER,
-        crate::intel::mask_dis(FORCEWAKE_KERNEL | FORCEWAKE_FALLBACK),
-    );
-    let render_cleared = wait_eq(
-        dev,
-        FORCEWAKE_ACK_RENDER,
-        FORCEWAKE_KERNEL | FORCEWAKE_FALLBACK,
-        0,
-        FORCEWAKE_POLL_ITERS,
-    );
+    // Forcewake is device-global, not owned by this render consumer.  TRUEOS
+    // retains the kernel request for the claimed GT lifetime, so an acquire
+    // may assert a missing request but must never clear a request underneath
+    // another GuC client such as Spirit.
+    let render_awake =
+        crate::intel::mmio_read(dev, FORCEWAKE_ACK_RENDER) & FORCEWAKE_KERNEL != 0;
+    let render_ok = render_awake || {
+        crate::intel::mmio_write(dev, FORCEWAKE_RENDER, crate::intel::mask_en(FORCEWAKE_KERNEL));
+        wait_eq(
+            dev,
+            FORCEWAKE_ACK_RENDER,
+            FORCEWAKE_KERNEL,
+            FORCEWAKE_KERNEL,
+            FORCEWAKE_POLL_ITERS,
+        )
+    };
 
-    crate::intel::mmio_write(dev, FORCEWAKE_RENDER, crate::intel::mask_en(FORCEWAKE_KERNEL));
-    let render_ok = wait_eq(
-        dev,
-        FORCEWAKE_ACK_RENDER,
-        FORCEWAKE_KERNEL,
-        FORCEWAKE_KERNEL,
-        FORCEWAKE_POLL_ITERS,
-    );
-
-    crate::intel::mmio_write(dev, FORCEWAKE_GT, crate::intel::mask_en(FORCEWAKE_KERNEL));
-    let gt_ok =
-        wait_eq(dev, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
+    let gt_awake = crate::intel::mmio_read(dev, FORCEWAKE_ACK_GT) & FORCEWAKE_KERNEL != 0;
+    let gt_ok = gt_awake || {
+        crate::intel::mmio_write(dev, FORCEWAKE_GT, crate::intel::mask_en(FORCEWAKE_KERNEL));
+        wait_eq(
+            dev,
+            FORCEWAKE_ACK_GT,
+            FORCEWAKE_KERNEL,
+            FORCEWAKE_KERNEL,
+            FORCEWAKE_POLL_ITERS,
+        )
+    };
     crate::intel::mmio_write(
         dev,
         RCS_CS_DEBUG_MODE1,
@@ -471,8 +474,7 @@ pub fn forcewake_render_acquire(warm: RenderWarmState) -> bool {
 
     if should_log_primary_probe_detail() {
         crate::log!(
-            "forcewake render_cleared={} render_ack=0x{:08X} gt_ack=0x{:08X} cs_debug_mode1=0x{:08X} ff_dop_cg_disable={} ok={}\n",
-            render_cleared as u8,
+            "forcewake render_retained=1 render_ack=0x{:08X} gt_ack=0x{:08X} cs_debug_mode1=0x{:08X} ff_dop_cg_disable={} ok={}\n",
             crate::intel::mmio_read(dev, FORCEWAKE_ACK_RENDER),
             crate::intel::mmio_read(dev, FORCEWAKE_ACK_GT),
             cs_debug_mode1,

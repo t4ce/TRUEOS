@@ -909,22 +909,17 @@ fn direct_blt_map_ppgtt_region(
 }
 
 fn direct_blt_forcewake(dev: super::Dev) -> bool {
-    super::mmio_write(dev, FORCEWAKE_GT, super::mask_dis(FORCEWAKE_KERNEL | FORCEWAKE_FALLBACK));
-    let _ = direct_blt_wait_eq(
-        dev,
-        FORCEWAKE_ACK_GT,
-        FORCEWAKE_KERNEL | FORCEWAKE_FALLBACK,
-        0,
-        FORCEWAKE_POLL_ITERS,
-    );
-    super::mmio_write(dev, FORCEWAKE_GT, super::mask_en(FORCEWAKE_KERNEL));
-    direct_blt_wait_eq(
-        dev,
-        FORCEWAKE_ACK_GT,
-        FORCEWAKE_KERNEL,
-        FORCEWAKE_KERNEL,
-        FORCEWAKE_POLL_ITERS,
-    )
+    let awake = super::mmio_read(dev, FORCEWAKE_ACK_GT) & FORCEWAKE_KERNEL != 0;
+    awake || {
+        super::mmio_write(dev, FORCEWAKE_GT, super::mask_en(FORCEWAKE_KERNEL));
+        direct_blt_wait_eq(
+            dev,
+            FORCEWAKE_ACK_GT,
+            FORCEWAKE_KERNEL,
+            FORCEWAKE_KERNEL,
+            FORCEWAKE_POLL_ITERS,
+        )
+    }
 }
 
 fn direct_blt_encode_fast_copy_batch(state: DirectBltState) -> bool {

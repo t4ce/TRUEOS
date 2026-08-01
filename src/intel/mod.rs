@@ -842,32 +842,35 @@ fn find_dev() -> Option<Dev> {
 }
 
 fn forcewake(dev: Dev) -> bool {
-    mmio_write(dev, FORCEWAKE_RENDER, mask_dis(FORCEWAKE_KERNEL | FORCEWAKE_FALLBACK));
-    let render_cleared = wait_eq(
-        dev,
-        FORCEWAKE_ACK_RENDER,
-        FORCEWAKE_KERNEL | FORCEWAKE_FALLBACK,
-        0,
-        FORCEWAKE_POLL_ITERS,
-    );
-    mmio_write(dev, FORCEWAKE_RENDER, mask_en(FORCEWAKE_KERNEL));
-    let render_ready = wait_eq(
-        dev,
-        FORCEWAKE_ACK_RENDER,
-        FORCEWAKE_KERNEL,
-        FORCEWAKE_KERNEL,
-        FORCEWAKE_POLL_ITERS,
-    );
+    let render_awake = mmio_read(dev, FORCEWAKE_ACK_RENDER) & FORCEWAKE_KERNEL != 0;
+    let render_ready = render_awake || {
+        mmio_write(dev, FORCEWAKE_RENDER, mask_en(FORCEWAKE_KERNEL));
+        wait_eq(
+            dev,
+            FORCEWAKE_ACK_RENDER,
+            FORCEWAKE_KERNEL,
+            FORCEWAKE_KERNEL,
+            FORCEWAKE_POLL_ITERS,
+        )
+    };
     mmio_write(dev, FORCEWAKE_MEDIA, mask_en(FORCEWAKE_KERNEL));
     let _media_ready =
         wait_eq(dev, FORCEWAKE_ACK_MEDIA, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
-    mmio_write(dev, FORCEWAKE_GT, mask_en(FORCEWAKE_KERNEL));
-    let gt_ready =
-        wait_eq(dev, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
+    let gt_awake = mmio_read(dev, FORCEWAKE_ACK_GT) & FORCEWAKE_KERNEL != 0;
+    let gt_ready = gt_awake || {
+        mmio_write(dev, FORCEWAKE_GT, mask_en(FORCEWAKE_KERNEL));
+        wait_eq(
+            dev,
+            FORCEWAKE_ACK_GT,
+            FORCEWAKE_KERNEL,
+            FORCEWAKE_KERNEL,
+            FORCEWAKE_POLL_ITERS,
+        )
+    };
     // The PAT registers are in the GT domain. Media forcewake is retained for
     // the existing codec path, but its availability must not gate render and
     // display memory policy on SKUs where media is intentionally disabled.
-    render_cleared && render_ready && gt_ready
+    render_ready && gt_ready
 }
 
 fn device_uses_gen12_integrated_pat(device_id: u16) -> bool {

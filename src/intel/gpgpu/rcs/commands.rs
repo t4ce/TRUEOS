@@ -416,6 +416,39 @@ fn direct_rcs_submit_batch_with_runtime(
     // advanced the saved ring head. Append one BBS entry and advance the tail
     // instead of rebuilding the registered context at offset zero.
     let old_tail_bytes = runtime.ring_tail_bytes;
+    if runtime.context_initialized {
+        // HW updates HEAD and software updates TAIL in the same first HWLRCA
+        // cache line. The producer marker is before MI_BATCH_BUFFER_END, so it
+        // does not transfer ownership of that line back to the CPU. Only a
+        // saved HEAD equal to the last published TAIL proves GuC has consumed
+        // the ring entry and saved the context. Defer instead of racing a
+        // GPU-written head with a CPU cache-line writeback.
+        let saved_head = direct_rcs_read_lrc_ring_head(state)
+            & (DIRECT_RCS_RING_BYTES as u32 - 1);
+        if saved_head != old_tail_bytes as u32 {
+            runtime.retire_deferrals = runtime.retire_deferrals.saturating_add(1);
+            if runtime.retire_deferrals == 1 || runtime.retire_deferrals.is_power_of_two() {
+                crate::log_info!(target: "gpgpu";
+                    "intel/gpgpu: persistent-ring tail publish deferred client={} saved_head={} published_tail={} deferrals={} ownership=wait-guc-context-save action=retry\n",
+                    client.name(),
+                    saved_head,
+                    old_tail_bytes,
+                    runtime.retire_deferrals,
+                );
+            }
+            return None;
+        }
+        if runtime.retire_deferrals != 0 {
+            crate::log_info!(target: "gpgpu";
+                "intel/gpgpu: persistent-ring context save observed client={} saved_head={} published_tail={} deferrals={} action=resume-tail-publish\n",
+                client.name(),
+                saved_head,
+                old_tail_bytes,
+                runtime.retire_deferrals,
+            );
+            runtime.retire_deferrals = 0;
+        }
+    }
     let ring_tail_bytes =
         direct_rcs_append_ring_batch_start(state, old_tail_bytes, state.gpu_va.batch);
     let ring_entries = DIRECT_RCS_RING_BYTES / (DIRECT_RCS_BATCH_START_DWORDS * 4);

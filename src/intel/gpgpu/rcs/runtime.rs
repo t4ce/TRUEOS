@@ -75,6 +75,7 @@ struct DirectRcsSubmitRuntime {
     context_initialized: bool,
     ring_tail_bytes: usize,
     submissions: u64,
+    retire_deferrals: u64,
     pending: Option<crate::gpu::executor::KernelSubmission>,
 }
 
@@ -84,6 +85,7 @@ impl DirectRcsSubmitRuntime {
             context_initialized: false,
             ring_tail_bytes: 0,
             submissions: 0,
+            retire_deferrals: 0,
             pending: None,
         }
     }
