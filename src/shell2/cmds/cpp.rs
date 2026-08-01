@@ -1234,15 +1234,27 @@ fn queue_font_service_rush(io: &'static dyn ShellBackend2) {
         Ok(serial) => print_shell_line(
             io,
             alloc::format!(
-                "cpp font rush: queued=1 request={} font=0 cadence_ms=1000 slot_add_ms=3000 glyph_layout=1+2+4+16 planes=ui4-display-capability-bounded duration=until-stopped output=ui4-font-scene path=gpu-clear->skrifa->gpu-vm-r8->cpp-igc->guc-rcs->ui4-rgba8 stop=\"cpp font rush stop\"",
+                "cpp font rush: queued=1 request={} font=0 cadence_ms=1000 slot_add_ms=3000 glyph_layout=1+2+4+16 planes=ui4-display-capability-bounded duration=until-stopped output=ui4-font-scene path=gpu-clear->skrifa->gpu-vm-r8->cpp-igc->guc-rcs->ui4-rgba8->display-plane-direct compositor_jobs=0 stop=\"cpp font rush stop\"",
                 serial,
             )
             .as_str(),
         ),
-        Err(reason) => print_shell_line(
-            io,
-            alloc::format!("cpp font rush: queued=0 reason={reason}").as_str(),
-        ),
+        Err(reason) => {
+            let usage = crate::ui4::ui4_live_resource_usage();
+            print_shell_line(
+                io,
+                alloc::format!(
+                    "cpp font rush: queued=0 reason={} active_frames={} active_sessions={} live_windows={} display_idle={} fully_retired={}",
+                    reason,
+                    usage.active_frames,
+                    usage.active_sessions,
+                    usage.live_windows,
+                    usage.is_display_idle() as u8,
+                    usage.is_fully_retired() as u8,
+                )
+                .as_str(),
+            )
+        }
     }
 }
 

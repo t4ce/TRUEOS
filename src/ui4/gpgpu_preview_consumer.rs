@@ -141,7 +141,7 @@ impl GpgpuPreviewPreset {
             | Self::CppAudio
             | Self::CppParticle
             | Self::CppFont => "slot1-direct",
-            Self::CppFontRush => "slots0+1+2+3-capability-bounded",
+            Self::CppFontRush => "slots0+1+2+3-direct-capability-bounded",
         }
     }
 }
@@ -395,6 +395,11 @@ struct CppFontRushTopology {
 struct CppFontRushPlaneState {
     rank: u8,
     topology: CppFontRushTopology,
+    /// The 3-second plane-growth cadence begins only once Slot0 has actually
+    /// published its first generated frame. Service-lane admission may delay
+    /// that first frame during boot and must not make all later planes catch up
+    /// in one burst.
+    growth_started: Option<Instant>,
     rng: crate::tyche::SoftRng,
 }
 
@@ -500,7 +505,15 @@ pub(crate) fn request_cpp_font_rush_stop() -> Result<u64, &'static str> {
 
 fn ensure_cpp_font_rush_ui4_idle(stage: &'static str) -> Result<(), &'static str> {
     let usage = super::ui4_live_resource_usage();
-    if usage.is_idle() {
+    if usage.is_display_idle() {
+        if usage.active_frames != 0 {
+            crate::log_info!(
+                target: "ui4";
+                "ui4 cpp-font-rush admission accepted stage={} display_idle=1 detached_active_frames={} active_sessions=0 live_windows=0 detached_policy=allowed-exclusive-session-gate\n",
+                stage,
+                usage.active_frames,
+            );
+        }
         return Ok(());
     }
     crate::log_warn!(
@@ -1040,6 +1053,7 @@ fn create_cpp_font_rush_preview(
         font_rush: Some(CppFontRushPlaneState {
             rank,
             topology,
+            growth_started: None,
             rng: crate::tyche::soft_rng(),
         }),
         exclusive_admission: None,
@@ -1055,7 +1069,10 @@ fn grow_cpp_font_rush(previews: &mut Vec<ActivePreview>, now: Instant) -> Result
         return Ok(());
     }
     let state = first.font_rush.ok_or("font-rush-plane-state-missing")?;
-    let elapsed_ms = now.saturating_duration_since(first.started).as_millis();
+    let Some(growth_started) = state.growth_started else {
+        return Ok(());
+    };
+    let elapsed_ms = now.saturating_duration_since(growth_started).as_millis();
     let threshold_planes = cpp_font_rush_target_plane_count(elapsed_ms, state.topology.plane_count);
     if previews.len() >= threshold_planes
         || previews.len() >= usize::from(state.topology.plane_count)
@@ -1858,12 +1875,18 @@ async fn render_cpp_font_rush_frame(preview: &mut ActivePreview) -> Result<(), &
         return Err("font-rush-window-publish-failed");
     }
     preview.metrics.published = preview.metrics.published.saturating_add(1);
+    if rank == 0
+        && preview.metrics.published == 1
+        && let Some(state) = preview.font_rush.as_mut()
+    {
+        state.growth_started = Some(Instant::now());
+    }
     preview.metrics.last_iterations = stamped.glyphs() as u32;
     preview.metrics.last_marker = stamped.release().sequence() as u32;
     if should_log_preview_checkpoint(sequence) {
         crate::log_info!(
             target: "ui4";
-            "ui4 cpp-font-rush frame-ready request={} rank={} slot={} active_planes_at_least={} sequence={} elapsed_ms={} extent={}x{} cadence_ms={} requested_glyphs={} rendered_glyphs={} grid={}x{} font=0 application_plane_mask=0x{:02X} usable_planes={} clear_submits={} font_submits={} walkers={} release={} path=gpu-clear->skrifa->gpu-vm-r8->cpp-igc->guc-rcs->ui4-font-scene cpu_readback=0 cpu_frame_copy=0\n",
+            "ui4 cpp-font-rush frame-ready request={} rank={} slot={} active_planes_at_least={} sequence={} elapsed_ms={} extent={}x{} cadence_ms={} requested_glyphs={} rendered_glyphs={} grid={}x{} font=0 application_plane_mask=0x{:02X} usable_planes={} clear_submits={} font_submits={} walkers={} release={} path=gpu-clear->skrifa->gpu-vm-r8->cpp-igc->guc-rcs->ui4-font-scene->display-plane-direct compositor_jobs=0 cpu_readback=0 cpu_frame_copy=0\n",
             preview.request_serial,
             rank,
             rank,
@@ -2613,7 +2636,7 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "ui4-cpp-resizable-slot1",
         GpgpuPreviewPreset::CppFont => "ui4-font-scene-slot1",
-        GpgpuPreviewPreset::CppFontRush => "ui4-font-scene-slots0+1+2+3",
+        GpgpuPreviewPreset::CppFontRush => "ui4-direct-font-scene-slots0+1+2+3",
         GpgpuPreviewPreset::Static => "ui4-overlay",
         GpgpuPreviewPreset::Static30 => "ui4-font-scene-slots1+2+3",
     }
@@ -3311,7 +3334,7 @@ mod tests {
         let mode = GpgpuPreviewPreset::CppFontRush;
         assert_eq!(preview_plane_slot(mode), 0);
         assert_eq!(mode.buffering_label(), "double-per-plane");
-        assert_eq!(mode.plane_layout_label(), "slots0+1+2+3-capability-bounded");
+        assert_eq!(mode.plane_layout_label(), "slots0+1+2+3-direct-capability-bounded");
     }
 
     #[test]

@@ -29,6 +29,8 @@ static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_CPU_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_BCS0_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_SHARED_COMPOSITION_LOGGED: AtomicBool = AtomicBool::new(false);
+static DIRTY_FONT_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
+static DIRTY_FONT_DIRECT_ADMISSION_WARNED: AtomicBool = AtomicBool::new(false);
 static VIDEO_SURFLIVE_RELEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -811,13 +813,6 @@ fn queue_async_plane(
                 )
             })
         });
-    if all_dirty_double_font && !DIRTY_FONT_SHARED_COMPOSITION_LOGGED.swap(true, Ordering::AcqRel) {
-        crate::log_info!(target: "ui4";
-            "ui4/font-composition: mode=shared-slot plane={} windows={} buffering=dirty/double backend=guc-rcs-rgba8-batch source_ownership=stable-front+producer-back direct_scanout=0 cpu_frame_copy=0 log=once\n",
-            target_plane_slot(plan.target),
-            selected.len(),
-        );
-    }
     let sparse_static_painter = all_static_single;
     if sparse_static_painter
         && same_slot_windows_overlap(&selected)
@@ -837,13 +832,17 @@ fn queue_async_plane(
     } else {
         None
     };
-    // Slot 0 owns the display's primary swap chain and cannot use the
-    // universal-overlay direct-import contract. Primary broker windows always
-    // pass through the primary compositor below; slots 1-3 retain the proven
-    // direct path for one eligible producer.
-    if !matches!(plan.target, CompositionTarget::Primary)
-        && let Some((window, view)) = local_direct
-    {
+    // Slot0 joins the same premultiplied-RGBA application-plane contract at
+    // compositor startup and has its own direct-scanout alias pool. Keep the
+    // ordinary primary swap chain for real composition, but let a lone
+    // dirty/double FontScene use the exact released producer allocation on all
+    // four application planes. No render/compositor job is needed in that
+    // case: the display lease remains pinned until SURFLIVE proves the flip.
+    let direct_font_required =
+        local_direct.is_some_and(|(window, _)| dirty_double_font_scene(window));
+    let direct_target_allowed =
+        !matches!(plan.target, CompositionTarget::Primary) || direct_font_required;
+    if direct_target_allowed && let Some((window, view)) = local_direct {
         let slot = target_plane_slot(plan.target);
         if direct_overlay_eligible(window, view) {
             if let Some(release) = view.gpu_release {
@@ -875,6 +874,10 @@ fn queue_async_plane(
                 .position(|candidate| candidate.id == window.id)
                 .ok_or(Ui4CompositorError::PresentFailed)?;
             let display_lease = retain_published_frame(pending.leases[lease_index])?;
+            // The display batch uses the canonical per-plane transaction
+            // reasons.  Font-scene direct scanout is already distinguished by
+            // its frame contract and logs; inventing a second set of reason
+            // strings would only make the display transaction reject it.
             let reason = overlay_async_reason(slot);
             let queued = crate::intel::queue_ui4_direct_overlay_frame(
                 slot,
@@ -900,6 +903,13 @@ fn queue_async_plane(
             );
             match queued {
                 Ok(composition) => {
+                    if direct_font_required
+                        && !DIRTY_FONT_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel)
+                    {
+                        crate::log_info!(target: "ui4";
+                            "ui4/font-direct-present: mode=lone-plane slots=0-3 buffering=dirty/double backend=display-ggtt-alias+surflive source_ownership=stable-front+producer-back compositor_jobs=0 cpu_frame_copy=0 fallback=retry-direct log=once\n"
+                        );
+                    }
                     if pending.direct_leases[slot].is_some() {
                         let _ = release_published_frame(display_lease);
                         return Err(Ui4CompositorError::PresentFailed);
@@ -916,9 +926,32 @@ fn queue_async_plane(
                         display_lease.frame.raw(),
                         display_lease.buffer_index,
                     );
+                    if direct_font_required {
+                        return Err(Ui4CompositorError::PresentFailed);
+                    }
                 }
             }
         }
+        if direct_font_required {
+            if !DIRTY_FONT_DIRECT_ADMISSION_WARNED.swap(true, Ordering::AcqRel) {
+                crate::log_warn!(target: "ui4";
+                    "ui4/font-direct-present: admission unavailable slot={} frame={} gpu_authored={} release={} geometry={} action=leave-live-plane-and-retry compositor_fallback=0 cpu_copy_fallback=0 log=once\n",
+                    slot,
+                    window.frame.raw(),
+                    view.gpu_authored as u8,
+                    view.gpu_release.is_some() as u8,
+                    direct_overlay_geometry_eligible(window, view) as u8,
+                );
+            }
+            return Err(Ui4CompositorError::PresentFailed);
+        }
+    }
+    if all_dirty_double_font && !DIRTY_FONT_SHARED_COMPOSITION_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_info!(target: "ui4";
+            "ui4/font-composition: mode=shared-slot plane={} windows={} buffering=dirty/double backend=guc-rcs-rgba8-batch source_ownership=stable-front+producer-back direct_scanout=0 cpu_frame_copy=0 log=once\n",
+            target_plane_slot(plan.target),
+            selected.len(),
+        );
     }
     if !all_shared_composable && !selected.is_empty() {
         return Err(Ui4CompositorError::PresentFailed);
@@ -1055,13 +1088,37 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
         }
         FrameGpuRelease::Compute(_) => {
             window.plane.slot() < super::INTERACTION_OVERLAY_PLANE_SLOT
-                && matches!(
-                    (snapshot.plan.content, snapshot.plan.buffering),
-                    (FrameContent::Image, super::FrameBuffering::Double)
-                        | (FrameContent::BlueprintScene, super::FrameBuffering::Triple)
-                        | (FrameContent::Video, super::FrameBuffering::Quad)
+                && compute_release_direct_contract(
+                    snapshot.plan.content,
+                    snapshot.plan.cadence,
+                    snapshot.plan.buffering,
                 )
         }
+    })
+}
+
+const fn compute_release_direct_contract(
+    content: FrameContent,
+    cadence: super::FrameCadence,
+    buffering: super::FrameBuffering,
+) -> bool {
+    matches!(
+        (content, buffering),
+        (FrameContent::Image, super::FrameBuffering::Double)
+            | (FrameContent::BlueprintScene, super::FrameBuffering::Triple)
+            | (FrameContent::Video, super::FrameBuffering::Quad)
+    ) || matches!(
+        (content, cadence, buffering),
+        (FrameContent::FontScene2d, super::FrameCadence::Dirty, super::FrameBuffering::Double,)
+    )
+}
+
+fn dirty_double_font_scene(window: WindowSnapshot) -> bool {
+    frame_snapshot(window.frame).is_ok_and(|snapshot| {
+        matches!(
+            (snapshot.plan.content, snapshot.plan.cadence, snapshot.plan.buffering,),
+            (FrameContent::FontScene2d, super::FrameCadence::Dirty, super::FrameBuffering::Double,)
+        )
     })
 }
 
@@ -1134,7 +1191,7 @@ const fn half_scale_backing_matches(
 
 const fn overlay_async_reason(slot: usize) -> &'static str {
     match slot {
-        super::PRIMARY_PLANE_SLOT => "ui4-primary-slot0-async",
+        super::PRIMARY_PLANE_SLOT => "ui4-compositor-primary-async",
         super::ALPHA_OVERLAY_PLANE_SLOT => "ui4-alpha-slot1-async",
         super::RGB_OVERLAY_PLANE_SLOT_2 => "ui4-rgb-slot2-async",
         super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-rgb-slot3-async",
@@ -1458,6 +1515,24 @@ fn release_leases(leases: &[FrameReadLease]) {
 #[cfg(test)]
 mod damage_tests {
     use super::*;
+
+    #[test]
+    fn dirty_double_font_scene_is_a_direct_compute_release_contract() {
+        assert!(compute_release_direct_contract(
+            FrameContent::FontScene2d,
+            super::super::FrameCadence::Dirty,
+            super::super::FrameBuffering::Double,
+        ));
+        assert!(!compute_release_direct_contract(
+            FrameContent::FontScene2d,
+            super::super::FrameCadence::Immutable,
+            super::super::FrameBuffering::Single,
+        ));
+        assert_eq!(overlay_async_reason(0), "ui4-compositor-primary-async");
+        assert_eq!(overlay_async_reason(1), "ui4-alpha-slot1-async");
+        assert_eq!(overlay_async_reason(2), "ui4-rgb-slot2-async");
+        assert_eq!(overlay_async_reason(3), "ui4-rgb-slot3-async");
+    }
 
     #[test]
     fn maximized_half_resolution_backing_is_an_explicit_two_x_scale() {

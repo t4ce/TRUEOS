@@ -312,15 +312,24 @@ fn pick_service_lane_slot() -> Option<(u32, crate::hv::lane::LaneLease)> {
     }
 
     let start = SERVICE_LANE_RR.fetch_add(1, Ordering::Relaxed) as usize;
-    for offset in 0..slots.len() {
-        let slot = slots[(start + offset) % slots.len()];
-        if SERVICE_LANE_STARTED
-            .get(slot as usize)
-            .map(|started| started.load(Ordering::Acquire))
-            .unwrap_or(false)
-            && let Some(lease) = crate::hv::lane::try_lease_tokio_blocking_lane_for_slot(slot)
-        {
-            return Some((slot, lease));
+    // A leased lane is not necessarily an executor that can run promptly: a
+    // cooperative workload may already have several ready tasks on that AP.
+    // Prefer a started executor with no ready work, then retain the original
+    // round-robin scan as a capacity fallback when every executor is busy.
+    for idle_executor_only in [true, false] {
+        for offset in 0..slots.len() {
+            let slot = slots[(start + offset) % slots.len()];
+            if !SERVICE_LANE_STARTED
+                .get(slot as usize)
+                .map(|started| started.load(Ordering::Acquire))
+                .unwrap_or(false)
+                || (idle_executor_only && service_lane_executor_counts(slot).1 != 0)
+            {
+                continue;
+            }
+            if let Some(lease) = crate::hv::lane::try_lease_tokio_blocking_lane_for_slot(slot) {
+                return Some((slot, lease));
+            }
         }
     }
     None

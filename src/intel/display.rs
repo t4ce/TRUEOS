@@ -503,6 +503,10 @@ unsafe impl Sync for PrimarySurface {}
 pub(crate) enum PrimaryPlaneSourceFormat {
     Xrgb8888,
     Xbgr8888,
+    /// Native UI4 bytes `R,G,B,A`, interpreted with software-premultiplied
+    /// pixel alpha. FontKernel and the UI4 composition kernels produce this
+    /// contract directly; no channel swizzle or opaque-alpha relabel is valid.
+    Rgba8888Premultiplied,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1081,6 +1085,11 @@ enum OverlayAlphaMode {
 }
 
 const UI4_RGBA8_OVERLAY_CONTRACT: OverlayAlphaMode = OverlayAlphaMode::PremultipliedRgba;
+/// Slot0 is an application plane, not an opaque framebuffer. Its composition
+/// starts transparent and remains native premultiplied RGBA through scanout.
+/// Setting either UI4 compositor XRGB flag would inject an opaque base or drop
+/// the destination alpha (and swizzle its channels).
+const UI4_PRIMARY_COMPOSITION_FLAGS: u32 = 0;
 
 /// Give the firmware-compatible XRGB boot phase deterministic pixels. UI4
 /// discards this boot content when Slot0 becomes its transparent RGBA slice.
@@ -2205,10 +2214,15 @@ fn program_primary_plane_source_for_pipeline(
 
     let pipe = primary.pipe;
     let ctl_before = crate::intel::mmio_read(dev, pipe.primary_plane().ctl());
+    let alpha = if source.format == PrimaryPlaneSourceFormat::Rgba8888Premultiplied {
+        UI4_RGBA8_OVERLAY_CONTRACT
+    } else {
+        OverlayAlphaMode::Opaque
+    };
     let ctl_enabled = primary_plane_ctl_enabled_for_format(ctl_before, source.format);
     let color_ctl_off = pipe.primary_plane().base() + UNI_PLANE_COLOR_CTL_OFF;
     let color_ctl = crate::intel::mmio_read(dev, color_ctl_off);
-    let color_ctl_enabled = plane_color_ctl_alpha(color_ctl, OverlayAlphaMode::Opaque);
+    let color_ctl_enabled = plane_color_ctl_alpha(color_ctl, alpha);
     let stride_before = crate::intel::mmio_read(dev, pipe.primary_plane().stride());
     let pos_off = pipe.primary_plane().base() + UNI_PLANE_POS_OFF;
     let size_off = pipe.primary_plane().base() + UNI_PLANE_SIZE_OFF;
@@ -2254,11 +2268,17 @@ fn program_primary_plane_source_for_pipeline(
         return false;
     }
     if surf_before == surf_live_before {
+        // Empty-plane parking deliberately sets hardware opacity to zero so
+        // the retiring direct surface cannot flash before the transparent
+        // replacement latches. Restore full plane opacity in the same batch
+        // as the next native-RGBA primary SURF.
+        let constant_alpha =
+            (source.format == PrimaryPlaneSourceFormat::Rgba8888Premultiplied).then_some(u8::MAX);
         match queue_ui4_plane_surface_flip(
             pipe.primary_plane().base(),
             surface_reg,
             None,
-            None,
+            constant_alpha,
             None,
             reason,
         ) {
@@ -2969,7 +2989,9 @@ fn primary_plane_ctl_enabled(ctl_before: u32) -> u32 {
 fn primary_plane_ctl_enabled_for_format(ctl_before: u32, format: PrimaryPlaneSourceFormat) -> u32 {
     let order_bits = match format {
         PrimaryPlaneSourceFormat::Xrgb8888 => 0,
-        PrimaryPlaneSourceFormat::Xbgr8888 => PLANE_CTL_ORDER_RGBX,
+        PrimaryPlaneSourceFormat::Xbgr8888 | PrimaryPlaneSourceFormat::Rgba8888Premultiplied => {
+            PLANE_CTL_ORDER_RGBX
+        }
     };
     (ctl_before
         & !(PLANE_CTL_ENABLE
@@ -4957,6 +4979,21 @@ pub(crate) fn queue_ui4_primary_composition(
     damage: CompositionDamageRegion,
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
+    if tiles.is_empty() {
+        // Retiring a direct Slot0 producer must not depend on the RCS
+        // compositor that the producer was deliberately routed around. The
+        // slot-local overlay pool supports plane 0, so reuse its proven
+        // transparent CPU park and batched SURFLIVE lifecycle. The returned
+        // target still names hardware plane 0; `Overlay` here describes the
+        // generic RGBA surface transaction, not a different plane.
+        return queue_ui4_overlay_composition(
+            crate::ui4::PRIMARY_PLANE_SLOT,
+            tiles,
+            damage,
+            false,
+            reason,
+        );
+    }
     let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
     let target = active_display_pipeline_target().ok_or(Ui4AsyncCompositionError::Unavailable)?;
     let pipe = target
@@ -5701,7 +5738,7 @@ pub(crate) fn stage_ui4_composition_flip(composition: Ui4AsyncComposition) -> bo
                     width: surface.width,
                     height: surface.height,
                     pitch_bytes: surface.pitch_bytes,
-                    format: PrimaryPlaneSourceFormat::Xrgb8888,
+                    format: PrimaryPlaneSourceFormat::Rgba8888Premultiplied,
                     src_x: 0,
                     src_y: 0,
                     dst_x: 0,
@@ -5917,8 +5954,7 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
                 bounds.width,
                 bounds.height,
             ),
-            crate::intel::gpgpu::UI4_COMPOSE_FLAG_BASE_XRGB
-                | crate::intel::gpgpu::UI4_COMPOSE_FLAG_DEST_XRGB,
+            UI4_PRIMARY_COMPOSITION_FLAGS,
         ) {
             Ok(submission) => GpgpuCompositionResult::Queued(submission),
             Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
@@ -7278,7 +7314,33 @@ fn decode_xy_y(v: u32) -> u32 {
 
 #[cfg(test)]
 mod direct_plane_scaler_tests {
-    use super::{direct_plane_scaler_factor, overlay_composition_constant_alpha};
+    use super::{
+        OverlayAlphaMode, PLANE_COLOR_ALPHA_MASK, PLANE_COLOR_ALPHA_SW_PREMULT,
+        PLANE_CTL_FORMAT_MASK_SKL, PLANE_CTL_FORMAT_XRGB_8888, PLANE_CTL_ORDER_RGBX,
+        PrimaryPlaneSourceFormat, UI4_PRIMARY_COMPOSITION_FLAGS, direct_plane_scaler_factor,
+        overlay_composition_constant_alpha, plane_color_ctl_alpha,
+        primary_plane_ctl_enabled_for_format,
+    };
+
+    #[test]
+    fn rgba_primary_source_preserves_native_order_and_premultiplied_alpha() {
+        assert_eq!(
+            UI4_PRIMARY_COMPOSITION_FLAGS
+                & (crate::intel::gpgpu::UI4_COMPOSE_FLAG_BASE_XRGB
+                    | crate::intel::gpgpu::UI4_COMPOSE_FLAG_DEST_XRGB),
+            0
+        );
+
+        let plane_ctl = primary_plane_ctl_enabled_for_format(
+            0,
+            PrimaryPlaneSourceFormat::Rgba8888Premultiplied,
+        );
+        assert_eq!(plane_ctl & PLANE_CTL_FORMAT_MASK_SKL, PLANE_CTL_FORMAT_XRGB_8888);
+        assert_ne!(plane_ctl & PLANE_CTL_ORDER_RGBX, 0);
+
+        let color_ctl = plane_color_ctl_alpha(0, OverlayAlphaMode::PremultipliedRgba);
+        assert_eq!(color_ctl & PLANE_COLOR_ALPHA_MASK, PLANE_COLOR_ALPHA_SW_PREMULT);
+    }
 
     #[test]
     fn accepts_two_x_upscale_and_bounded_close_downscale() {

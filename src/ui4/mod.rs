@@ -150,8 +150,19 @@ pub(crate) struct Ui4LiveResourceUsage {
 }
 
 impl Ui4LiveResourceUsage {
-    pub(crate) const fn is_idle(self) -> bool {
-        self.active_frames == 0 && self.active_sessions == 0 && self.live_windows == 0
+    /// No producer can currently reach a display plane through the broker.
+    ///
+    /// Detached frame allocations are intentionally allowed. Gridpaper keeps
+    /// one retained, offscreen frame warm at boot even when it has no session
+    /// or window. Exclusive admission blocks that producer from opening a new
+    /// session while Font Rush runs, so the detached allocation cannot become
+    /// display-live and does not make the UI4 output busy.
+    pub(crate) const fn is_display_idle(self) -> bool {
+        self.active_sessions == 0 && self.live_windows == 0
+    }
+
+    pub(crate) const fn is_fully_retired(self) -> bool {
+        self.active_frames == 0 && self.is_display_idle()
     }
 }
 
@@ -208,11 +219,12 @@ fn lock_ui4_resource_creation() -> Result<spin::MutexGuard<'static, Ui4ResourceA
     }
 }
 
-/// Atomically reserve an idle UI4 producer set.
+/// Atomically reserve an idle UI4 display-attachment set.
 ///
 /// Ordinary frame and session creation take the same admission lock before
-/// they allocate or register anything. Once this returns, no competing
-/// producer can become live until the reservation is dropped.
+/// they allocate or register anything. Existing detached frames may continue
+/// rendering, but cannot open a session or become visible. Once this returns,
+/// no competing producer can become display-live until the reservation drops.
 fn try_acquire_ui4_exclusive_resource_admission()
 -> Result<Ui4ExclusiveResourceAdmission, Ui4ExclusiveAdmissionFailure> {
     let mut admission = UI4_RESOURCE_ADMISSION.lock();
@@ -223,7 +235,7 @@ fn try_acquire_ui4_exclusive_resource_admission()
         });
     }
     let usage = ui4_live_resource_usage();
-    if !usage.is_idle() {
+    if !usage.is_display_idle() {
         return Err(Ui4ExclusiveAdmissionFailure {
             reason: "ui4-not-idle",
             usage,
@@ -778,23 +790,30 @@ mod live_resource_and_output_capability_tests {
     use super::*;
 
     #[test]
-    fn live_resource_usage_is_idle_only_when_every_producer_count_is_zero() {
-        assert!(Ui4LiveResourceUsage::default().is_idle());
+    fn live_resource_usage_distinguishes_display_idle_from_fully_retired() {
+        let empty = Ui4LiveResourceUsage::default();
+        assert!(empty.is_display_idle());
+        assert!(empty.is_fully_retired());
+
+        let detached_frame = Ui4LiveResourceUsage {
+            active_frames: 1,
+            ..empty
+        };
+        assert!(detached_frame.is_display_idle());
+        assert!(!detached_frame.is_fully_retired());
+
         for usage in [
             Ui4LiveResourceUsage {
-                active_frames: 1,
-                ..Ui4LiveResourceUsage::default()
-            },
-            Ui4LiveResourceUsage {
                 active_sessions: 1,
-                ..Ui4LiveResourceUsage::default()
+                ..empty
             },
             Ui4LiveResourceUsage {
                 live_windows: 1,
-                ..Ui4LiveResourceUsage::default()
+                ..empty
             },
         ] {
-            assert!(!usage.is_idle());
+            assert!(!usage.is_display_idle());
+            assert!(!usage.is_fully_retired());
         }
     }
 
