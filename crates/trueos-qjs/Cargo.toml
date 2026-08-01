@@ -34,5 +34,4 @@ trueos = ["dep:trueos-math", "dep:trueos-locale", "dep:embassy-time-driver", "de
 
 [patch.crates-io]
 embassy-time = { path = "../trueos-executor/embassy-time" }
-num-traits = { path = "../../vendor/num-traits-0.2.19" }
 crc32fast = { path = "../../vendor/crc32fast-1.5.0" }

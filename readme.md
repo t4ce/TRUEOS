@@ -629,8 +629,6 @@ ConWhite 	FF_FF_FF
   ![layout.svg](vendor/CrabUSB/docs/layout.svg)
 - `vendor/CrabUSB/docs/异步请求.drawio.png`  
   ![异步请求.drawio.png](vendor/CrabUSB/docs/异步请求.drawio.png)
-- `vendor/base64-0.22.1/icon_CLion.svg`  
-  ![icon CLion.svg](vendor/base64-0.22.1/icon_CLion.svg)
 - `vendor/limine/logo.png`  
   ![logo.png](vendor/limine/logo.png)
 - `vendor/limine/screenshot.png`  
