@@ -1893,6 +1893,27 @@ fn create_resident_churn_forward_with_admission(
             (None, Some(reason))
         }
     };
+    crate::log_info!(
+        target: "gpgpu";
+        "helio-churn: native-residency geometry=0x{:X}/0x{:X}/0x{:X} camera=0x{:X}/0x{:X}/0x{:X} instances=0x{:X}/0x{:X}/0x{:X} compacted=0x{:X}/0x{:X}/0x{:X} indirect=0x{:X}/0x{:X}/0x{:X} rows={} transform={} address_order=gpu/phys/bytes ppgtt=render0-persistent\n",
+        geometry.gpu_base(),
+        geometry.storage_phys(),
+        geometry.storage_bytes(),
+        camera.gpu_base(),
+        camera.storage_phys(),
+        camera.storage_bytes(),
+        instances.gpu_base(),
+        instances.storage_phys(),
+        instances.storage_bytes(),
+        compacted_indices.gpu_base(),
+        compacted_indices.storage_phys(),
+        compacted_indices.storage_bytes(),
+        indirect_args.gpu_base(),
+        indirect_args.storage_phys(),
+        indirect_args.storage_bytes(),
+        max_instances,
+        transform.is_some() as u8,
+    );
     Ok(ResidentChurnForward {
         vertex_gpu_addr: geometry.gpu_base(),
         vertex_count: (CHURN_FORWARD_MESH_COUNT * CHURN_FORWARD_VERTICES_PER_MESH) as u32,

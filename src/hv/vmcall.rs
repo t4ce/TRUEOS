@@ -161,6 +161,10 @@ pub const OP_BP_LUMEN_CLOSE: u32 = 0x109;
 pub const OP_BP_SPIRIT_EMOTION_PLAY: u32 = 0x10A;
 pub const OP_BP_SPIRIT_RESPONSE_PRESENT: u32 = 0x10B;
 pub const OP_BP_SPIRIT_MOVE: u32 = 0x10C;
+pub const OP_BP_SHELL2_FRONTEND_ATTACH_V1: u32 = 0x10D;
+pub const OP_BP_SHELL2_FRONTEND_READ_V1: u32 = 0x10E;
+pub const OP_BP_SHELL2_FRONTEND_SUBMIT_INPUT_V1: u32 = 0x10F;
+pub const OP_BP_SHELL2_FRONTEND_DETACH_V1: u32 = 0x110;
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -778,6 +782,63 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let x = f32::from_bits(arg0 as u32);
             let y = f32::from_bits(arg1 as u32);
             let rc = crate::r::lumen_service::spirit_move(x, y);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL2_FRONTEND_ATTACH_V1 => {
+            let rc = crate::shell2::backends::net_tcp::attach_net_shell_frontend(
+                vm_id,
+                arg0 as usize,
+                arg1 as usize,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL2_FRONTEND_READ_V1 => {
+            const HEADER_LEN: usize = 24;
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let cap = (arg1 as usize).min(PAYLOAD_CAP.saturating_sub(HEADER_LEN));
+            let payload = unsafe { &mut (*page).payload };
+            match crate::shell2::backends::net_tcp::read_net_shell_frontend(
+                vm_id,
+                arg0,
+                &mut payload[HEADER_LEN..HEADER_LEN + cap],
+            ) {
+                Ok(read) => {
+                    payload[0..8].copy_from_slice(&read.next_seq.to_le_bytes());
+                    payload[8..16].copy_from_slice(&read.epoch.to_le_bytes());
+                    payload[16..20].copy_from_slice(&read.flags.to_le_bytes());
+                    payload[20..24].fill(0);
+                    write_response(
+                        vm_id,
+                        seq,
+                        STATUS_OK,
+                        read.len as u64,
+                        (HEADER_LEN + read.len) as u32,
+                    );
+                }
+                Err(rc) => {
+                    write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+                }
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL2_FRONTEND_SUBMIT_INPUT_V1 => {
+            let rc = request_payload(vm_id, req_len)
+                .map(|bytes| {
+                    crate::shell2::backends::net_tcp::submit_net_shell_frontend_input(vm_id, bytes)
+                        .map(|written| written as isize)
+                        .unwrap_or_else(|error| error as isize)
+                })
+                .unwrap_or(-1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL2_FRONTEND_DETACH_V1 => {
+            let rc = crate::shell2::backends::net_tcp::release_net_shell_frontend(vm_id);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

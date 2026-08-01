@@ -1330,6 +1330,14 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
                 return;
             }
 
+            // Capture the faulting page before GuC's exact-context
+            // containment can replace the live RCS register image.  CAT is
+            // asynchronous to the submitter, so waiting for the ordinary
+            // retirement poll to fail loses this evidence when a completion
+            // cookie happened to retire just ahead of the fault event.
+            if !context.faulted {
+                log_memory_cat_registers(context_id);
+            }
             let newly_reported =
                 mark_exact_context_fault(state, slot, GucContextFaultKind::MemoryCat, hw_type);
             crate::log_error!(
@@ -1370,6 +1378,51 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
             );
         }
     }
+}
+
+fn log_memory_cat_registers(context_id: u32) {
+    const RCS_RING_BASE: usize = 0x2000;
+    const RCS_RING_ACTHD_UDW: usize = RCS_RING_BASE + 0x5C;
+    const RCS_RING_IPEIR: usize = RCS_RING_BASE + 0x64;
+    const RCS_RING_IPEHR: usize = RCS_RING_BASE + 0x68;
+    const RCS_RING_ACTHD: usize = RCS_RING_BASE + 0x74;
+    const RCS_RING_BBADDR: usize = RCS_RING_BASE + 0x140;
+    const RCS_RING_BBADDR_UDW: usize = RCS_RING_BASE + 0x168;
+    const GEN12_FAULT_TLB_DATA0: usize = 0xCEB8;
+    const GEN12_FAULT_TLB_DATA1: usize = 0xCEBC;
+    const GEN12_RING_FAULT_REG: usize = 0xCEC4;
+
+    let Some(dev) = crate::intel::claimed_device() else {
+        return;
+    };
+    let fault = crate::intel::mmio_read(dev, GEN12_RING_FAULT_REG);
+    let data0 = crate::intel::mmio_read(dev, GEN12_FAULT_TLB_DATA0);
+    let data1 = crate::intel::mmio_read(dev, GEN12_FAULT_TLB_DATA1);
+    let fault_gpu = (u64::from(data1 & 0xF) << 44) | (u64::from(data0) << 12);
+    let acthd_lo = crate::intel::mmio_read(dev, RCS_RING_ACTHD);
+    let acthd_hi = crate::intel::mmio_read(dev, RCS_RING_ACTHD_UDW);
+    let bbaddr_lo = crate::intel::mmio_read(dev, RCS_RING_BBADDR);
+    let bbaddr_hi = crate::intel::mmio_read(dev, RCS_RING_BBADDR_UDW);
+    crate::log_error!(
+        target: "gpgpu";
+        "intel/guc-submit: memory-cat-snapshot context_id={} fault=0x{:08X} valid={} type={} source_id={} engine_id={} address_space={} fault_gpu=0x{:016X} data0=0x{:08X} data1=0x{:08X} acthd=0x{:08X}{:08X} bbaddr=0x{:08X}{:08X} ipeir=0x{:08X} ipehr=0x{:08X}\n",
+        context_id,
+        fault,
+        fault & 1,
+        (fault >> 1) & 0x3,
+        (fault >> 3) & 0xFF,
+        (fault >> 12) & 0x1F,
+        if data1 & (1 << 4) != 0 { "ggtt" } else { "ppgtt" },
+        fault_gpu,
+        data0,
+        data1,
+        acthd_hi,
+        acthd_lo,
+        bbaddr_hi,
+        bbaddr_lo,
+        crate::intel::mmio_read(dev, RCS_RING_IPEIR),
+        crate::intel::mmio_read(dev, RCS_RING_IPEHR),
+    );
 }
 
 fn note_unattributed_memory_cat(

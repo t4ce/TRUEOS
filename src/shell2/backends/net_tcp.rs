@@ -15,6 +15,10 @@ static NET_TCP_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 pub(crate) static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_DIRECT_OWNER: AtomicU32 = AtomicU32::new(0);
 static NET_SHELL_DIRECT_RX_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
+const NET_SHELL_RX_CAP: usize = 8 * 1024;
+const NET_SHELL_FRONTEND_REPLAY_CAP: usize = 256 * 1024;
+pub(crate) const NET_SHELL_FRONTEND_FLAG_DROPPED: u32 = 1 << 0;
+pub(crate) const NET_SHELL_FRONTEND_FLAG_HANDOFF: u32 = 1 << 1;
 // Direct terminal apps may stop before their userspace guard flushes its
 // cleanup, and release_net_shell_direct intentionally drops queued app paint.
 // Restore every terminal mode that shell2 relies on before repainting it.
@@ -24,13 +28,146 @@ pub(crate) struct NetShellState {
     pub(crate) handle: Option<NetHandle>,
     pub(crate) rx: VecDeque<u8>,
     pub(crate) tx: VecDeque<u8>,
+    frontend_owner: Option<u8>,
+    frontend_epoch: u64,
+    frontend_base_seq: u64,
+    frontend_next_seq: u64,
+    frontend_replay: VecDeque<u8>,
 }
 
 pub(crate) static NET_SHELL_STATE: spin::Mutex<NetShellState> = spin::Mutex::new(NetShellState {
     handle: None,
     rx: VecDeque::new(),
     tx: VecDeque::new(),
+    frontend_owner: None,
+    frontend_epoch: 0,
+    frontend_base_seq: 0,
+    frontend_next_seq: 0,
+    frontend_replay: VecDeque::new(),
 });
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NetShellFrontendRead {
+    pub(crate) len: usize,
+    pub(crate) next_seq: u64,
+    pub(crate) epoch: u64,
+    pub(crate) flags: u32,
+}
+
+fn reset_frontend_replay(st: &mut NetShellState) {
+    st.frontend_epoch = st.frontend_epoch.wrapping_add(1).max(1);
+    st.frontend_base_seq = 0;
+    st.frontend_next_seq = 0;
+    st.frontend_replay.clear();
+}
+
+fn append_frontend_replay(st: &mut NetShellState, bytes: &[u8]) {
+    if st.frontend_owner.is_none() {
+        return;
+    }
+    for &byte in bytes {
+        if st.frontend_replay.len() >= NET_SHELL_FRONTEND_REPLAY_CAP {
+            let _ = st.frontend_replay.pop_front();
+            st.frontend_base_seq = st.frontend_base_seq.wrapping_add(1);
+        }
+        st.frontend_replay.push_back(byte);
+        st.frontend_next_seq = st.frontend_next_seq.wrapping_add(1);
+    }
+}
+
+pub(crate) fn net_shell_frontend_active() -> bool {
+    NET_SHELL_STATE.lock().frontend_owner.is_some()
+}
+
+pub(crate) fn attach_net_shell_frontend(vm_id: u8, cols: usize, rows: usize) -> i32 {
+    if cols == 0 || rows == 0 || cols > 4_096 || rows > 4_096 {
+        return -1;
+    }
+    {
+        let mut st = NET_SHELL_STATE.lock();
+        if st.frontend_owner.is_some_and(|owner| owner != vm_id) {
+            return -2;
+        }
+        if st.frontend_owner.is_none() {
+            st.frontend_owner = Some(vm_id);
+            reset_frontend_replay(&mut st);
+        }
+    }
+
+    crate::shell2::activate_net_shell_frontend_view(cols, rows);
+    0
+}
+
+pub(crate) fn read_net_shell_frontend(
+    vm_id: u8,
+    read_seq: u64,
+    out: &mut [u8],
+) -> Result<NetShellFrontendRead, i32> {
+    let st = NET_SHELL_STATE.lock();
+    if st.frontend_owner != Some(vm_id) {
+        return Err(-2);
+    }
+
+    let mut flags = if net_shell_direct_active() {
+        NET_SHELL_FRONTEND_FLAG_HANDOFF
+    } else {
+        0
+    };
+    let start_seq = if read_seq < st.frontend_base_seq || read_seq > st.frontend_next_seq {
+        flags |= NET_SHELL_FRONTEND_FLAG_DROPPED;
+        st.frontend_base_seq
+    } else {
+        read_seq
+    };
+    let offset = start_seq.saturating_sub(st.frontend_base_seq) as usize;
+    let len = out
+        .len()
+        .min(st.frontend_replay.len().saturating_sub(offset));
+    for (dst, byte) in out[..len]
+        .iter_mut()
+        .zip(st.frontend_replay.iter().skip(offset))
+    {
+        *dst = *byte;
+    }
+
+    Ok(NetShellFrontendRead {
+        len,
+        next_seq: start_seq.wrapping_add(len as u64),
+        epoch: st.frontend_epoch,
+        flags,
+    })
+}
+
+pub(crate) fn submit_net_shell_frontend_input(vm_id: u8, bytes: &[u8]) -> Result<usize, i32> {
+    if bytes.is_empty() {
+        return Ok(0);
+    }
+    let mut st = NET_SHELL_STATE.lock();
+    if st.frontend_owner != Some(vm_id) {
+        return Err(-2);
+    }
+
+    // Preserve each frontend call as one queue operation. A normal key is one
+    // UTF-8 scalar; a paste is one block. If a block exceeds the shared shell
+    // queue, retain its newest bytes, matching the TCP producer's bounded policy.
+    let accepted = bytes.len().min(NET_SHELL_RX_CAP);
+    let bytes = &bytes[bytes.len() - accepted..];
+    while st.rx.len().saturating_add(bytes.len()) > NET_SHELL_RX_CAP {
+        let _ = st.rx.pop_front();
+    }
+    st.rx.extend(bytes.iter().copied());
+    Ok(accepted)
+}
+
+pub(crate) fn release_net_shell_frontend(vm_id: u8) -> i32 {
+    let mut st = NET_SHELL_STATE.lock();
+    if st.frontend_owner != Some(vm_id) {
+        return -2;
+    }
+    st.frontend_owner = None;
+    reset_frontend_replay(&mut st);
+    0
+}
 
 pub(crate) fn net_shell_read_byte() -> Option<u8> {
     if net_shell_direct_active() {
@@ -49,6 +186,7 @@ pub(crate) fn net_shell_readable_len() -> usize {
 pub(crate) fn net_shell_write_bytes(bytes: &[u8]) {
     const MAX_TX: usize = 2 * 1024 * 1024;
     let mut st = NET_SHELL_STATE.lock();
+    append_frontend_replay(&mut st, bytes);
     let mut dropped = 0usize;
     for &b in bytes {
         if st.tx.len() >= MAX_TX {
@@ -78,6 +216,7 @@ fn claim_net_shell_terminal(owner: TerminalHandoffOwner) -> bool {
     let mut st = NET_SHELL_STATE.lock();
     st.rx.clear();
     st.tx.clear();
+    reset_frontend_replay(&mut st);
     NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
     NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(false, Ordering::Release);
     NET_SHELL_DIRECT_OWNER.store(owner, Ordering::Release);
@@ -95,6 +234,7 @@ fn release_net_shell_terminal(owner: TerminalHandoffOwner) {
             let mut st = NET_SHELL_STATE.lock();
             st.rx.clear();
             st.tx.clear();
+            reset_frontend_replay(&mut st);
         }
         NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
         NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(false, Ordering::Release);

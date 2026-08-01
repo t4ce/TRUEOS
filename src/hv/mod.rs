@@ -3672,6 +3672,9 @@ pub(crate) fn blueprint_process_context(vm_id: u8) -> Option<BlueprintProcessCon
 }
 
 fn clear_blueprint_process_context(vm_id: u8) {
+    // Frontend ownership is independent of the Blueprint's Matrix console
+    // attachment, so always retire it when the owning VM leaves.
+    let _ = crate::shell2::backends::net_tcp::release_net_shell_frontend(vm_id);
     if let Some(log_slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
         let _ = log_slot.lock().take();
     }

@@ -255,11 +255,13 @@ pub async fn net_shell_task() {
                             if let Some((cols, rows, start, end)) =
                                 parse_terminal_size_report(&initial_rx_probe)
                             {
-                                crate::shell2::apply_reported_terminal_size_for_backend(
-                                    &crate::shell2::NET_TCP_SHELL_BACKEND,
-                                    cols,
-                                    rows,
-                                );
+                                if !crate::shell2::backends::net_tcp::net_shell_frontend_active() {
+                                    crate::shell2::apply_reported_terminal_size_for_backend(
+                                        &crate::shell2::NET_TCP_SHELL_BACKEND,
+                                        cols,
+                                        rows,
+                                    );
+                                }
                                 crate::shell2::repaint_backend_screen(
                                     &crate::shell2::NET_TCP_SHELL_BACKEND,
                                 );
@@ -281,7 +283,8 @@ pub async fn net_shell_task() {
                                 if let Some((cols, rows, start, end)) =
                                     parse_terminal_size_report(&resize_rx_probe)
                                 {
-                                    if crate::shell2::apply_reported_terminal_size_for_backend(
+                                    if !crate::shell2::backends::net_tcp::net_shell_frontend_active(
+                                    ) && crate::shell2::apply_reported_terminal_size_for_backend(
                                         &crate::shell2::NET_TCP_SHELL_BACKEND,
                                         cols,
                                         rows,
@@ -306,11 +309,13 @@ pub async fn net_shell_task() {
                             } else if let Some((cols, rows, start, end)) =
                                 parse_terminal_size_report(&rx_data)
                             {
-                                if crate::shell2::apply_reported_terminal_size_for_backend(
-                                    &crate::shell2::NET_TCP_SHELL_BACKEND,
-                                    cols,
-                                    rows,
-                                ) && !direct_mode
+                                if !crate::shell2::backends::net_tcp::net_shell_frontend_active()
+                                    && crate::shell2::apply_reported_terminal_size_for_backend(
+                                        &crate::shell2::NET_TCP_SHELL_BACKEND,
+                                        cols,
+                                        rows,
+                                    )
+                                    && !direct_mode
                                 {
                                     crate::shell2::repaint_backend_screen(
                                         &crate::shell2::NET_TCP_SHELL_BACKEND,

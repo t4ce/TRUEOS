@@ -992,6 +992,20 @@ unsafe extern "C" {
     pub fn trueos_cabi_shell_attached_read_byte() -> i32;
     pub fn trueos_cabi_shell_attached_retarget_slot(slot_ptr: *const u8, slot_len: usize) -> i32;
     pub fn trueos_cabi_shell2_raw_write(data_ptr: *const u8, data_len: usize) -> usize;
+    pub fn trueos_cabi_shell2_frontend_attach_v1(cols: u32, rows: u32) -> i32;
+    pub fn trueos_cabi_shell2_frontend_read_v1(
+        read_seq: u64,
+        out_ptr: *mut u8,
+        out_cap: usize,
+        out_next_seq: *mut u64,
+        out_epoch: *mut u64,
+        out_flags: *mut u32,
+    ) -> isize;
+    pub fn trueos_cabi_shell2_frontend_submit_input_v1(
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> isize;
+    pub fn trueos_cabi_shell2_frontend_detach_v1() -> i32;
     pub fn trueos_cabi_qjs_workbench_eval_v1(
         source_ptr: *const u8,
         source_len: usize,

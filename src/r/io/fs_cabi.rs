@@ -1449,6 +1449,159 @@ pub unsafe extern "C" fn trueos_cabi_shell2_raw_write(
     konsole_write_bytes(data)
 }
 
+const SHELL2_FRONTEND_READ_HEADER_LEN: usize = 24;
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_shell2_frontend_attach_v1(cols: u32, rows: u32) -> i32 {
+    if cols == 0 || rows == 0 {
+        return -1;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, rc) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_SHELL2_FRONTEND_ATTACH_V1,
+            u64::from(cols),
+            u64::from(rows),
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            rc as i64 as i32
+        } else {
+            -3
+        };
+    }
+    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
+        return -3;
+    };
+    crate::shell2::backends::net_tcp::attach_net_shell_frontend(vm_id, cols as usize, rows as usize)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_shell2_frontend_read_v1(
+    read_seq: u64,
+    out_ptr: *mut u8,
+    out_cap: usize,
+    out_next_seq: *mut u64,
+    out_epoch: *mut u64,
+    out_flags: *mut u32,
+) -> isize {
+    if (out_cap != 0 && out_ptr.is_null())
+        || out_next_seq.is_null()
+        || out_epoch.is_null()
+        || out_flags.is_null()
+    {
+        return -1;
+    }
+
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let cap = out_cap
+            .min(trueos_vm::vmcall::PAYLOAD_CAP.saturating_sub(SHELL2_FRONTEND_READ_HEADER_LEN));
+        let mut response = alloc::vec![0u8; SHELL2_FRONTEND_READ_HEADER_LEN + cap];
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SHELL2_FRONTEND_READ_V1,
+            read_seq,
+            cap as u64,
+            &[],
+            response.as_mut_slice(),
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return -3;
+        }
+        let rc = vmcall_signed(rc);
+        if rc < 0 {
+            return rc;
+        }
+        let len = rc as usize;
+        if len > cap {
+            return -3;
+        }
+        let next_seq = u64::from_le_bytes(response[0..8].try_into().unwrap_or_default());
+        let epoch = u64::from_le_bytes(response[8..16].try_into().unwrap_or_default());
+        let flags = u32::from_le_bytes(response[16..20].try_into().unwrap_or_default());
+        unsafe {
+            out_next_seq.write(next_seq);
+            out_epoch.write(epoch);
+            out_flags.write(flags);
+            if len != 0 {
+                core::slice::from_raw_parts_mut(out_ptr, len).copy_from_slice(
+                    &response
+                        [SHELL2_FRONTEND_READ_HEADER_LEN..SHELL2_FRONTEND_READ_HEADER_LEN + len],
+                );
+            }
+        }
+        return len as isize;
+    }
+
+    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
+        return -3;
+    };
+    let out = if out_cap == 0 {
+        &mut [][..]
+    } else {
+        unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) }
+    };
+    match crate::shell2::backends::net_tcp::read_net_shell_frontend(vm_id, read_seq, out) {
+        Ok(read) => {
+            unsafe {
+                out_next_seq.write(read.next_seq);
+                out_epoch.write(read.epoch);
+                out_flags.write(read.flags);
+            }
+            read.len as isize
+        }
+        Err(rc) => rc as isize,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_shell2_frontend_submit_input_v1(
+    data_ptr: *const u8,
+    data_len: usize,
+) -> isize {
+    if data_len == 0 {
+        return 0;
+    }
+    if data_ptr.is_null() || data_len > trueos_vm::vmcall::PAYLOAD_CAP {
+        return -1;
+    }
+    let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SHELL2_FRONTEND_SUBMIT_INPUT_V1,
+            0,
+            0,
+            data,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            vmcall_signed(rc)
+        } else {
+            -3
+        };
+    }
+    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
+        return -3;
+    };
+    crate::shell2::backends::net_tcp::submit_net_shell_frontend_input(vm_id, data)
+        .map(|written| written as isize)
+        .unwrap_or_else(|rc| rc as isize)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_shell2_frontend_detach_v1() -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, rc) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_SHELL2_FRONTEND_DETACH_V1, 0, 0);
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            rc as i64 as i32
+        } else {
+            -3
+        };
+    }
+    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
+        return -3;
+    };
+    crate::shell2::backends::net_tcp::release_net_shell_frontend(vm_id)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_qjs_workbench_eval_v1(
     source_ptr: *const u8,

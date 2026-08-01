@@ -486,6 +486,19 @@ pub(crate) fn apply_reported_terminal_size_for_backend(
     apply_reported_terminal_size(output_target_for_backend(io), cols, rows)
 }
 
+/// Make the local UI frontend the geometry authority for the shared net shell.
+///
+/// Starting a Blueprint selects its Matrix application slot. The shell frontend
+/// is itself the terminal, so attaching it returns the shared net view to the
+/// default CLI slot before repainting that one canonical shell2 session.
+pub(crate) fn activate_net_shell_frontend_view(cols: usize, rows: usize) {
+    let _ = matrix::switch_active_slot(OUTPUT_NET_TCP_MASK, "");
+    let _ = apply_reported_terminal_size(OUTPUT_NET_TCP_MASK, cols, rows);
+    if !backends::net_tcp::net_shell_direct_active() {
+        repaint_backend_screen(&NET_TCP_SHELL_BACKEND);
+    }
+}
+
 pub(crate) fn minimum_line_width_for_backend(io: &'static dyn ShellBackend2) -> usize {
     minimum_line_width_for_output(output_target_for_backend(io))
 }

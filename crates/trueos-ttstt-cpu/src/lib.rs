@@ -2501,6 +2501,7 @@ mod tests {
         let mut observed = [0_u8; CHANNELS];
         unsafe {
             quantize_qconv1d_column_avx2(&input, &mut observed, input_start, WIDTH, quantization);
+            quantize_qconv1d_column_avx2(&[], &mut [], 0, 0, quantization);
         }
         assert_eq!(observed, expected);
     }

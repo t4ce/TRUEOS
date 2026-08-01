@@ -271,6 +271,108 @@ pub fn shell2_raw_write(bytes: &[u8]) -> usize {
     unsafe { vcabi::trueos_cabi_shell2_raw_write(bytes.as_ptr(), bytes.len()) }
 }
 
++
+
+pub const SHELL2_FRONTEND_READ_DROPPED: u32 = 1 << 0;
+pub const SHELL2_FRONTEND_DIRECT_HANDOFF: u32 = 1 << 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Shell2FrontendRead {
+    pub len: usize,
+    pub epoch: u64,
+    pub epoch_changed: bool,
+    pub flags: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Shell2FrontendError(pub i32);
+
+pub struct Shell2Frontend {
+    read_seq: u64,
+    epoch: u64,
+    attached: bool,
+}
+
+impl Shell2Frontend {
+    pub fn attach(cols: u32, rows: u32) -> Result<Self, Shell2FrontendError> {
+        let rc = unsafe { vcabi::trueos_cabi_shell2_frontend_attach_v1(cols, rows) };
+        if rc != 0 {
+            return Err(Shell2FrontendError(rc));
+        }
+        Ok(Self {
+            read_seq: 0,
+            epoch: 0,
+            attached: true,
+        })
+    }
+
+    pub fn read(&mut self, out: &mut [u8]) -> Result<Shell2FrontendRead, Shell2FrontendError> {
+        let mut next_seq = self.read_seq;
+        let mut epoch = self.epoch;
+        let mut flags = 0u32;
+        let rc = unsafe {
+            vcabi::trueos_cabi_shell2_frontend_read_v1(
+                self.read_seq,
+                out.as_mut_ptr(),
+                out.len(),
+                &mut next_seq,
+                &mut epoch,
+                &mut flags,
+            )
+        };
+        if rc < 0 {
+            return Err(Shell2FrontendError(rc as i32));
+        }
+        let len = rc as usize;
+        if len > out.len() {
+            return Err(Shell2FrontendError(-3));
+        }
+        let epoch_changed = self.epoch != 0 && self.epoch != epoch;
+        self.read_seq = next_seq;
+        self.epoch = epoch;
+        Ok(Shell2FrontendRead {
+            len,
+            epoch,
+            epoch_changed,
+            flags,
+        })
+    }
+
+    /// Submit one atomic frontend input operation. Call once per typed glyph,
+    /// or once for an entire coalesced paste burst.
+    pub fn submit_input(&self, bytes: &[u8]) -> Result<usize, Shell2FrontendError> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        let rc = unsafe {
+            vcabi::trueos_cabi_shell2_frontend_submit_input_v1(bytes.as_ptr(), bytes.len())
+        };
+        if rc < 0 {
+            Err(Shell2FrontendError(rc as i32))
+        } else {
+            Ok(rc as usize)
+        }
+    }
+
+    pub fn detach(mut self) -> Result<(), Shell2FrontendError> {
+        let rc = unsafe { vcabi::trueos_cabi_shell2_frontend_detach_v1() };
+        if rc != 0 {
+            return Err(Shell2FrontendError(rc));
+        }
+        self.attached = false;
+        Ok(())
+    }
+}
+
+impl Drop for Shell2Frontend {
+    fn drop(&mut self) {
+        if self.attached {
+            let _ = unsafe { vcabi::trueos_cabi_shell2_frontend_detach_v1() };
+            self.attached = false;
+        }
+    }
+}
+
 const QJS_WORKBENCH_RESPONSE_CAP: usize = 160 * 1024 - 56;
 const QJS_WORKBENCH_RESULT_HEADER_LEN: usize = 10;
 

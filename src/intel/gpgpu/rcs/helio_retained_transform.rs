@@ -18,6 +18,10 @@ const HELIO_TRANSFORM_CROSS_THREAD_BYTES: usize = 224;
 const HELIO_TRANSFORM_PER_THREAD_BYTES: usize = 96;
 const HELIO_TRANSFORM_INDIRECT_BYTES: usize =
     HELIO_TRANSFORM_CROSS_THREAD_BYTES + HELIO_TRANSFORM_PER_THREAD_BYTES;
+// MEDIA_VFE_STATE encodes the per-thread URB entry size in 32-byte units.
+// Derive it from the exact walker payload: growing the kernel ABI must grow
+// the VFE allocation with it, or the first walker triggers a MemoryCat fault.
+const HELIO_GPGPU_VFE_DW5_UOS: u32 = ((HELIO_TRANSFORM_INDIRECT_BYTES / 32) as u32) << 16;
 // Gen12.0 exposes HDC Pipeline Flush at DW0 bit9. Bit11 is MBZ until gfx12.5.
 const HELIO_TRANSFORM_RELEASE_HEADER_BITS: u32 = PIPE_CONTROL_HDC_PIPELINE_FLUSH;
 // VF Cache Invalidation is a 3D-only DW1 control on Gen12. Keep it out of the
@@ -29,6 +33,8 @@ const HELIO_TRANSFORM_3D_CONSUMER_BITS: u32 =
 const _: () = assert!(PIPE_CONTROL_CMD | HELIO_TRANSFORM_RELEASE_HEADER_BITS == 0x7A00_0204);
 
 const _: () = {
+    assert!(HELIO_TRANSFORM_INDIRECT_BYTES.is_multiple_of(32));
+    assert!(HELIO_GPGPU_VFE_DW5_UOS == 0x000A_0000);
     assert!(HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES.is_multiple_of(64));
     assert!(HELIO_TRANSFORM_LOCAL_PAYLOAD_OFFSET_BYTES.is_multiple_of(64));
     assert!(HELIO_TRANSFORM_RESOLVE_PAYLOAD_OFFSET_BYTES.is_multiple_of(64));
@@ -351,8 +357,7 @@ fn validate_helio_transform_encoder_ranges(
 ) -> Result<(), GpgpuHelioTransformError> {
     let state = (state_gpu, GPGPU_HELIO_TRANSFORM_STATE_BLOB_BYTES);
     let artifact_range = (artifact.gpu, artifact.mapped_bytes);
-    let buffers = helio_transform_surfaces(dispatch)
-        .map(|surface| (surface.gpu, surface.bytes));
+    let buffers = helio_transform_surfaces(dispatch).map(|surface| (surface.gpu, surface.bytes));
     if ranges_overlap(state, artifact_range)
         || buffers
             .into_iter()
@@ -418,11 +423,7 @@ fn helio_transform_surfaces(
 ) -> [GpgpuHelioBufferSlice; HELIO_TRANSFORM_BINDINGS] {
     let (camera, source_vertices, expanded_positions) =
         if dispatch.output == GpgpuHelioRetainedTransformOutput::ExpandedPositions {
-            (
-                dispatch.camera,
-                dispatch.source_vertices,
-                dispatch.expanded_positions,
-            )
+            (dispatch.camera, dispatch.source_vertices, dispatch.expanded_positions)
         } else {
             (dispatch.transforms, dispatch.transforms, dispatch.instances)
         };
@@ -630,11 +631,7 @@ mod helio_transform_encoder_tests {
         let surfaces = helio_transform_surfaces(dispatch);
         let bindings = HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.bindings;
         assert_eq!(bindings.len(), HELIO_TRANSFORM_BINDINGS);
-        for (index, (arg_index, surface)) in arg_indices
-            .into_iter()
-            .zip(surfaces)
-            .enumerate()
-        {
+        for (index, (arg_index, surface)) in arg_indices.into_iter().zip(surfaces).enumerate() {
             let bti = index as u16;
             assert_eq!(bindings[index].arg_index, arg_index);
             assert_eq!(bindings[index].bti, bti);
@@ -655,10 +652,7 @@ mod helio_transform_encoder_tests {
         }
         // Generated BufferOffset{arg1}; zero means the draw-template surface
         // and pointer share the same byte-zero origin.
-        assert_eq!(
-            read_u32(HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 208),
-            0
-        );
+        assert_eq!(read_u32(HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 208), 0);
     }
 
     #[test]
@@ -726,18 +720,12 @@ mod helio_transform_encoder_tests {
         assert!(transform_release < consumer_invalidate);
         assert!(consumer_invalidate < handoff_select);
         assert_eq!(commands[handoff_select + 1], release_cmd);
-        assert_eq!(
-            commands[handoff_select + 2],
-            HELIO_TRANSFORM_3D_CONSUMER_BITS
-        );
+        assert_eq!(commands[handoff_select + 2], HELIO_TRANSFORM_3D_CONSUMER_BITS);
         assert_eq!(
             commands[handoff_select + 2] & HELIO_TRANSFORM_VF_CACHE_INVALIDATE,
             HELIO_TRANSFORM_VF_CACHE_INVALIDATE
         );
-        assert_eq!(
-            commands[consumer_invalidate + 1] & HELIO_TRANSFORM_VF_CACHE_INVALIDATE,
-            0
-        );
+        assert_eq!(commands[consumer_invalidate + 1] & HELIO_TRANSFORM_VF_CACHE_INVALIDATE, 0);
         assert_eq!(
             u32::from_le_bytes(
                 state.bytes()[HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 184
@@ -811,8 +799,7 @@ mod helio_transform_encoder_tests {
         let release_cmd = PIPE_CONTROL_CMD | HELIO_TRANSFORM_RELEASE_HEADER_BITS;
         for pair in walkers.windows(2) {
             assert!((pair[0]..pair[1]).any(|index| {
-                commands[index] == release_cmd
-                    && commands[index + 1] == PIPE_CONTROL_FLUSH_BITS
+                commands[index] == release_cmd && commands[index + 1] == PIPE_CONTROL_FLUSH_BITS
             }));
         }
 

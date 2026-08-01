@@ -1,6 +1,8 @@
 const CPS_STATE_DWORDS_PER_VIEWPORT: usize = 8;
 const CPS_STATE_VIEWPORTS: usize = 16;
 const CPS_STATE_DWORDS: usize = CPS_STATE_DWORDS_PER_VIEWPORT * CPS_STATE_VIEWPORTS;
+static CHURN_NATIVE_SURFACE_STATE_LOGGED: AtomicBool = AtomicBool::new(false);
+static CHURN_NATIVE_BINDING_COMMAND_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct PixelShaderDispatchContract {
@@ -384,7 +386,11 @@ fn write_triangle_probe_state_with_flush(
     {
         return Err("probe-viewport-translation");
     }
-    let binding_table_entries = if draw.native.is_some() { 4usize } else { 1usize };
+    let binding_table_entries = if draw.native.is_some() {
+        4usize
+    } else {
+        1usize
+    };
     let surface_state_count = binding_table_entries;
     let mut cursor = shader_layout.state_region_offset_bytes as usize;
     let binding_table_offset = cursor;
@@ -518,6 +524,35 @@ fn write_triangle_probe_state_with_flush(
         for (binding_index, binding) in native.vs_storage_bindings.into_iter().enumerate() {
             let start = surface_state_offset / 4 + (binding_index + 1) * 16;
             write_triangle_raw_buffer_surface_state(&mut dwords[start..start + 16], binding)?;
+        }
+        if !CHURN_NATIVE_SURFACE_STATE_LOGGED.swap(true, Ordering::AcqRel) {
+            let binding_table =
+                &dwords[binding_table_offset / 4..binding_table_offset / 4 + binding_table_entries];
+            let raw0 = &dwords[surface_state_offset / 4 + 16..surface_state_offset / 4 + 32];
+            let raw1 = &dwords[surface_state_offset / 4 + 32..surface_state_offset / 4 + 48];
+            let raw2 = &dwords[surface_state_offset / 4 + 48..surface_state_offset / 4 + 64];
+            crate::log_info!(
+                target: "gpgpu";
+                "helio-churn: native-state gpu=0x{:X} phys=0x{:X} state_region=0x{:X} binding_table=0x{:X} surface_state=0x{:X} bt=[0x{:X},0x{:X},0x{:X},0x{:X}] bindings=[0x{:X}/0x{:X},0x{:X}/0x{:X},0x{:X}/0x{:X}] raw1=[{:08X},{:08X},{:08X},{:08X},{:08X},{:08X},{:08X},{:08X}] raw2=[{:08X},{:08X},{:08X},{:08X},{:08X},{:08X},{:08X},{:08X}] raw3=[{:08X},{:08X},{:08X},{:08X},{:08X},{:08X},{:08X},{:08X}] address_order=gpu/bytes raw_order=dw0,dw1,dw2,dw3,dw7,dw8,dw9,dw11\n",
+                draw.state_gpu_addr,
+                warm.draw_state_phys,
+                shader_layout.state_region_offset_bytes,
+                binding_table_offset,
+                surface_state_offset,
+                binding_table[0],
+                binding_table[1],
+                binding_table[2],
+                binding_table[3],
+                native.vs_storage_bindings[0].gpu_addr,
+                native.vs_storage_bindings[0].byte_len,
+                native.vs_storage_bindings[1].gpu_addr,
+                native.vs_storage_bindings[1].byte_len,
+                native.vs_storage_bindings[2].gpu_addr,
+                native.vs_storage_bindings[2].byte_len,
+                raw0[0], raw0[1], raw0[2], raw0[3], raw0[7], raw0[8], raw0[9], raw0[11],
+                raw1[0], raw1[1], raw1[2], raw1[3], raw1[7], raw1[8], raw1[9], raw1[11],
+                raw2[0], raw2[1], raw2[2], raw2[3], raw2[7], raw2[8], raw2[9], raw2[11],
+            );
         }
     }
 
@@ -696,7 +731,12 @@ mod churn_raw_surface_tests {
         assert_eq!(surface[7], super::SHADER_CHANNEL_ONE << 16);
         assert_eq!(surface[10], 0);
         assert_eq!(surface[11], binding.byte_len);
-        assert!(surface[4..7].iter().chain(&surface[12..]).all(|&word| word == 0));
+        assert!(
+            surface[4..7]
+                .iter()
+                .chain(&surface[12..])
+                .all(|&word| word == 0)
+        );
     }
 
     #[test]
@@ -775,10 +815,9 @@ fn encode_draw_indexed_indirect_register_loads(
 #[cfg(test)]
 mod draw_indexed_indirect_encoder_tests {
     use super::{
-        MI_LOAD_REGISTER_MEM, MI_LRI_CS_MMIO, RCS_3DPRIM_BASE_VERTEX,
-        RCS_3DPRIM_INSTANCE_COUNT, RCS_3DPRIM_START_INSTANCE, RCS_3DPRIM_START_VERTEX,
-        RCS_3DPRIM_VERTEX_COUNT, RCS_3DPRIM_XP_BASE_VERTEX, RCS_RING_BASE,
-        encode_draw_indexed_indirect_register_loads,
+        MI_LOAD_REGISTER_MEM, MI_LRI_CS_MMIO, RCS_3DPRIM_BASE_VERTEX, RCS_3DPRIM_INSTANCE_COUNT,
+        RCS_3DPRIM_START_INSTANCE, RCS_3DPRIM_START_VERTEX, RCS_3DPRIM_VERTEX_COUNT,
+        RCS_3DPRIM_XP_BASE_VERTEX, RCS_RING_BASE, encode_draw_indexed_indirect_register_loads,
     };
 
     #[test]
@@ -830,7 +869,8 @@ fn validate_triangle_native_draw_contract(
     native: TriangleNativeDrawContract,
 ) -> Result<(), &'static str> {
     let [camera, instances, compacted] = native.vs_storage_bindings;
-    let instance_count = instances.byte_len / trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN as u32;
+    let instance_count =
+        instances.byte_len / trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN as u32;
     let compacted_count = compacted.byte_len / core::mem::size_of::<u32>() as u32;
     let expected_instancing = [
         TriangleVfInstancingState {
@@ -856,12 +896,9 @@ fn validate_triangle_native_draw_contract(
         || camera.gpu_addr == 0
         || instances.gpu_addr == 0
         || compacted.gpu_addr == 0
-        || camera.byte_len
-            != trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN as u32
+        || camera.byte_len != trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN as u32
         || instances.byte_len == 0
-        || instances.byte_len
-            % trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN as u32
-            != 0
+        || instances.byte_len % trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN as u32 != 0
         || compacted.byte_len == 0
         || compacted.byte_len % core::mem::size_of::<u32>() as u32 != 0
         || instance_count != compacted_count
@@ -900,8 +937,7 @@ mod retained_native_matrix_draw_contract_tests {
                 },
                 TriangleStorageBufferBinding {
                     gpu_addr: INSTANCES_GPU,
-                    byte_len: ROWS
-                        * trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN as u32,
+                    byte_len: ROWS * trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN as u32,
                 },
                 TriangleStorageBufferBinding {
                     gpu_addr: COMPACTED_GPU,
@@ -947,14 +983,8 @@ mod retained_native_matrix_draw_contract_tests {
     fn gpu_authored_rows_feed_the_native_indexed_indirect_contract() {
         let native = native_contract();
         let draw = native_draw(native);
-        assert_eq!(
-            trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN,
-            208
-        );
-        assert_eq!(
-            trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN,
-            20
-        );
+        assert_eq!(trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN, 208);
+        assert_eq!(trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN, 20);
         assert_eq!(draw.indirect_args_gpu_addr, Some(INDIRECT_GPU));
         assert_eq!(draw.native.unwrap().vs_storage_bindings, native.vs_storage_bindings);
         assert_eq!(
@@ -1329,27 +1359,29 @@ fn encode_triangle_probe_batch(
 
     let mesa_host_fixed_function = matches!(backend_probe_mode, BackendProbeMode::MesaLike);
     let artifact_native_fixed_function = draw.native.is_some();
-    let surface_base_relative_binding_table =
-        mesa_host_fixed_function && !device_is_gfx125(warm.device_id);
-    let binding_table_pool_size = warm
-        .draw_state_len
-        .saturating_sub(shader_layout.state_region_offset_bytes as usize);
-    let binding_table_pointer_offset = if surface_base_relative_binding_table {
-        probe_state.binding_table_offset_bytes
-    } else {
-        probe_state
-            .binding_table_offset_bytes
-            .saturating_sub(shader_layout.state_region_offset_bytes)
-    };
+    // Mesa disables BINDING_TABLE_POOL_ALLOC on gfx11 through gfx12.0 because
+    // this state can leak/corrupt across contexts.  Keep every pre-gfx12.5
+    // draw on the ordinary Surface State Base Address contract, independent
+    // of which diagnostic/fixed-function profile selected the draw.
+    //
+    // The old pool path used `state_region_gpu_addr` even though the packet
+    // drops its low twelve bits, then subtracted that same unaligned offset
+    // from the binding-table pointer.  Native Churn therefore programmed a
+    // zero VS pointer: the first ISA DWORD (0xA1370040) became BT entry 0 and
+    // resolved 0x30006000 + 0xA1370040 = 0xD1376040, exactly the CAT page seen
+    // on physical ADL.  The gfx12.5 pool path below is page-based instead.
+    let surface_base_relative_binding_table = !device_is_gfx125(warm.device_id);
+    let binding_table_pool_size = warm.draw_state_len;
+    let binding_table_pointer_offset = probe_state.binding_table_offset_bytes;
     let binding_table_pool_base_dw = if surface_base_relative_binding_table {
         RENDER_MOCS & BINDING_TABLE_POOL_MOCS_MASK
     } else {
-        binding_table_pool_base_dword(warm.device_id, shader_layout.state_region_gpu_addr)
+        binding_table_pool_base_dword(warm.device_id, draw.state_gpu_addr)
     };
     let binding_table_pool_base_hi = if surface_base_relative_binding_table {
         0
     } else {
-        (shader_layout.state_region_gpu_addr >> 32) as u32
+        (draw.state_gpu_addr >> 32) as u32
     };
     let binding_table_pool_size_dw = if surface_base_relative_binding_table {
         0
@@ -1361,11 +1393,7 @@ fn encode_triangle_probe_batch(
         .map_err(|_| "probe-binding-pool-convert")?
             & 0xFFFF_F000
     };
-    let binding_table_gpu_addr = if surface_base_relative_binding_table {
-        GPU_VA_DRAW_STATE_BASE + binding_table_pointer_offset as u64
-    } else {
-        shader_layout.state_region_gpu_addr + binding_table_pointer_offset as u64
-    };
+    let binding_table_gpu_addr = draw.state_gpu_addr + binding_table_pointer_offset as u64;
     let binding_table_entry0_gpu_addr =
         draw.state_gpu_addr + probe_state.surface_state_offset_bytes as u64;
     let binding_table_pool_enable = if surface_base_relative_binding_table {
@@ -1375,6 +1403,30 @@ fn encode_triangle_probe_batch(
     } else {
         "bit11"
     };
+    if artifact_native_fixed_function
+        && !CHURN_NATIVE_BINDING_COMMAND_LOGGED.swap(true, Ordering::AcqRel)
+    {
+        crate::log_info!(
+            target: "gpgpu";
+            "helio-churn: native-binding-command device=0x{:04X} state_base=0x{:X} state_region=0x{:X} bt_pointer=0x{:X} bt_gpu=0x{:X} surface0_gpu=0x{:X} pool_base_dw=0x{:08X} pool_base_hi=0x{:08X} pool_size_dw=0x{:08X} pool={} contract={} expected_bti1_gpu=0x{:X}\n",
+            warm.device_id,
+            draw.state_gpu_addr,
+            shader_layout.state_region_gpu_addr,
+            binding_table_pointer_offset,
+            binding_table_gpu_addr,
+            binding_table_entry0_gpu_addr,
+            binding_table_pool_base_dw,
+            binding_table_pool_base_hi,
+            binding_table_pool_size_dw,
+            binding_table_pool_enable,
+            if surface_base_relative_binding_table {
+                "surface-base-relative"
+            } else {
+                "page-pool-relative"
+            },
+            binding_table_entry0_gpu_addr + 64,
+        );
+    }
     let vs_ksp_offset = shader_layout.vs.code_offset_bytes + shader_layout.vs.ksp_offset_bytes;
     let ps_ksp_offset = shader_layout.ps.code_offset_bytes + shader_layout.ps.ksp_offset_bytes;
     let sbe_vertex_read_offset = if (mesa_host_fixed_function && !artifact_native_fixed_function)
@@ -1504,9 +1556,7 @@ fn encode_triangle_probe_batch(
     } else {
         (u32::from(sf_viewport_transform_enable) << 1) | (1 << 10)
     };
-    let sf_dw2 = if backend_probe_mode.sf_deref_block_zero()
-        || TRIANGLE_VS_URB_ENTRIES >= 192
-    {
+    let sf_dw2 = if backend_probe_mode.sf_deref_block_zero() || TRIANGLE_VS_URB_ENTRIES >= 192 {
         0
     } else {
         1 << 29
@@ -1585,11 +1635,17 @@ fn encode_triangle_probe_batch(
     // Mesa's simple-shader path emits a nearly all-default WM packet here.
     // Keep this dedicated triangle path equally boring rather than forcing
     // point-rule / line-AA bits that the host reference never asked for.
-    let wm_barycentric_mode = if backend_probe_mode.force_ps_bary_planes() {
-        1 << 11
-    } else {
-        0
-    };
+    // Churn's authenticated fragment ISA starts with a perspective-pixel
+    // barycentric payload read.  The empty leading draw never launches a PS,
+    // which hid this omission until the first live retained group.  Program
+    // the payload mode from the native shader contract; the probe override is
+    // retained for the synthetic diagnostic shaders.
+    let wm_barycentric_mode =
+        if artifact_native_fixed_function || backend_probe_mode.force_ps_bary_planes() {
+            1 << 11
+        } else {
+            0
+        };
     let force_wm_thread_dispatch = (matches!(backend_probe_mode, BackendProbeMode::WmLateReemit)
         || (batch_mode.vf_synthesized_vue()
             && !mesa_simple_rect_stack
@@ -1927,33 +1983,16 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, RENDER_MOCS << 16)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, draw.state_gpu_addr)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, draw.state_gpu_addr)?;
-    push_sba_address(
-        batch_dwords,
-        &mut cursor,
-        true,
-        RENDER_MOCS,
-        INDIRECT_OBJECT_SBA_BASE,
-    )?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, INDIRECT_OBJECT_SBA_BASE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, draw.state_gpu_addr)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
-    push_sba_size(
-        batch_dwords,
-        &mut cursor,
-        true,
-        INDIRECT_OBJECT_SBA_SIZE_BYTES,
-    )?;
+    push_sba_size(batch_dwords, &mut cursor, true, INDIRECT_OBJECT_SBA_SIZE_BYTES)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
     // Complete the 22-DWORD Gen12 SBA.  The host keeps a valid bindless
     // surface range and an explicitly modified null bindless-sampler base;
     // leaving all six DWORDs zero leaves non-zero-MOCS state unspecified.
-    push_sba_address(
-        batch_dwords,
-        &mut cursor,
-        true,
-        RENDER_MOCS,
-        draw.state_gpu_addr,
-    )?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, draw.state_gpu_addr)?;
     push(batch_dwords, &mut cursor, BINDLESS_SURFACE_STATE_SIZE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -1998,7 +2037,11 @@ fn encode_triangle_probe_batch(
         let slice_hash = gfx125_slice_hash.expect("gfx125 slice hash config");
         intel_render_verbose_log!(
             "gfx125-svl-init sample_pattern={} slice_hash_ptr=0x{:X} geom_dss=0x{:08X} ppipe_dss={}/{}/{} mask1=0x{:X} mask2=0x{:X} mode_dw1=0x{:08X} mode_dw3=0x{:08X} cross_slice_mode={}({}) rhwo_disable=1\n",
-            if resident_msaa4 { "standard-4x" } else { "center" },
+            if resident_msaa4 {
+                "standard-4x"
+            } else {
+                "center"
+            },
             probe_state.slice_hash_table_offset_bytes,
             slice_hash.geometry_dss_enable,
             slice_hash.ppipe_subslices[0],
@@ -2347,12 +2390,12 @@ fn encode_triangle_probe_batch(
     } else {
         0
     };
-    let vf_component_packing_enable =
-        if mesa_host_fixed_function || artifact_native_fixed_function {
-            1 << 9
-        } else {
-            0
-        };
+    let vf_component_packing_enable = if mesa_host_fixed_function || artifact_native_fixed_function
+    {
+        1 << 9
+    } else {
+        0
+    };
     push(
         batch_dwords,
         &mut cursor,
@@ -2403,7 +2446,13 @@ fn encode_triangle_probe_batch(
         batch_dwords,
         &mut cursor,
         draw.native.map_or_else(
-            || if mesa_host_fixed_function { 0x3001_0001 } else { 0 },
+            || {
+                if mesa_host_fixed_function {
+                    0x3001_0001
+                } else {
+                    0
+                }
+            },
             |native| native.vf_sgvs_2_dw1,
         ),
     )?;
@@ -2510,7 +2559,11 @@ fn encode_triangle_probe_batch(
             packing[1],
             packing[2],
             packing[3],
-            if artifact_native_fixed_function { "artifact-native" } else { "verified-host-vs" },
+            if artifact_native_fixed_function {
+                "artifact-native"
+            } else {
+                "verified-host-vs"
+            },
         );
     }
 
@@ -3480,7 +3533,7 @@ fn encode_triangle_probe_batch(
     );
     intel_render_verbose_log!(
         "probe-binding-table-pool base=0x{:X} base_dw=0x{:08X} size_dw=0x{:08X} mocs=0x{:X} enable={} ps_bt_ptr=0x{:X} bt_gpu=0x{:X} bt_entry0=0x{:08X} surf_gpu=0x{:X} contract={}\n",
-        shader_layout.state_region_gpu_addr,
+        draw.state_gpu_addr,
         binding_table_pool_base_dw,
         binding_table_pool_size_dw,
         RENDER_MOCS & BINDING_TABLE_POOL_MOCS_MASK,
