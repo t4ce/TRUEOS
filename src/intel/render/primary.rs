@@ -291,7 +291,8 @@ fn resident_scene_batch_state(
     if let Some(state) = *resident {
         return Ok(state);
     }
-    let Some((phys, virt)) = crate::dma::alloc(RESIDENT_SCENE_STATE_BYTES, crate::intel::WARM_ALIGN)
+    let Some((phys, virt)) =
+        crate::dma::alloc(RESIDENT_SCENE_STATE_BYTES, crate::intel::WARM_ALIGN)
     else {
         return Err("scene-frame-state-alloc");
     };
@@ -724,8 +725,9 @@ fn prepare_resident_scene_depth(
         .ok_or("resident-scene-depth-shape")?;
     let pitch_bytes = crate::intel::align_up(row_bytes, RESIDENT_SCENE_DEPTH_TILE_WIDTH_BYTES)
         .ok_or("resident-scene-depth-shape")?;
-    let aligned_height = crate::intel::align_up(target_height, RESIDENT_SCENE_DEPTH_TILE_HEIGHT_ROWS)
-        .ok_or("resident-scene-depth-shape")?;
+    let aligned_height =
+        crate::intel::align_up(target_height, RESIDENT_SCENE_DEPTH_TILE_HEIGHT_ROWS)
+            .ok_or("resident-scene-depth-shape")?;
     let clear_bytes = pitch_bytes
         .checked_mul(aligned_height)
         .ok_or("resident-scene-depth-shape")?;
@@ -789,7 +791,8 @@ fn prepare_resident_scene_depth(
         pitch_bytes: u32::try_from(pitch_bytes).map_err(|_| "resident-scene-depth-shape")?,
         width: u32::try_from(target_width).map_err(|_| "resident-scene-depth-shape")?,
         height: u32::try_from(target_height).map_err(|_| "resident-scene-depth-shape")?,
-        qpitch_rows_div4: u32::try_from(aligned_height / 4).map_err(|_| "resident-scene-depth-shape")?,
+        qpitch_rows_div4: u32::try_from(aligned_height / 4)
+            .map_err(|_| "resident-scene-depth-shape")?,
         write_enabled: false,
         compare_function: COMPARE_FUNCTION_LEQUAL,
     })
@@ -1033,13 +1036,8 @@ fn stage_resident_churn_forward_secondary(
     secondary_index: usize,
 ) -> Result<usize, &'static str> {
     draw.state_gpu_addr = state_gpu;
-    let shader_layout = upload_triangle_shader_pipeline_at(
-        state_warm,
-        &resident.pipeline,
-        None,
-        state_gpu,
-        false,
-    )?;
+    let shader_layout =
+        upload_triangle_shader_pipeline_at(state_warm, &resident.pipeline, None, state_gpu, false)?;
     let probe_state = write_triangle_probe_state_unflushed(
         state_warm,
         draw,
@@ -1176,6 +1174,8 @@ fn submit_resident_scene_geometry_batched(
     target_width: usize,
     target_height: usize,
 ) -> Result<ResidentSceneGeometryResult, &'static str> {
+    let render_lease =
+        reserve_warm_render_storage("resident-scene").ok_or("render-storage-busy")?;
     let prepare_started_ns = crate::chronos::monotonic_nanos();
     const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
     if draws.len() > RESIDENT_SCENE_MAX_DRAWS {
@@ -1293,6 +1293,7 @@ fn submit_resident_scene_geometry_batched(
     }
     let prepare_us = crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
     let completed = submit_warm_render_batch(
+        &render_lease,
         dev,
         warm,
         RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
@@ -1323,9 +1324,10 @@ fn submit_resident_churn_forward_geometry_batched(
     target_width: usize,
     target_height: usize,
 ) -> Result<ResidentSceneGeometryResult, &'static str> {
+    let render_lease =
+        reserve_warm_render_storage("helio-churn-forward").ok_or("render-storage-busy")?;
     let prepare_started_ns = crate::chronos::monotonic_nanos();
-    const CLEAR_TRIANGLE: [[f32; 3]; 3] =
-        [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
+    const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
     let secondary_count = CHURN_FORWARD_DRAW_COUNT + 1;
     let used_batch_bytes = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
         .checked_add(
@@ -1382,8 +1384,7 @@ fn submit_resident_churn_forward_geometry_batched(
     draw_depth.compare_function = COMPARE_FUNCTION_LESS;
     for group in 0..CHURN_FORWARD_DRAW_COUNT {
         let secondary_index = group + 1;
-        let (state_warm, state_gpu) =
-            resident_scene_state_warm(state, warm, secondary_index)?;
+        let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
         let draw = prepare_resident_churn_forward_draw(
             state_warm,
             resident,
@@ -1418,6 +1419,7 @@ fn submit_resident_churn_forward_geometry_batched(
     }
     let prepare_us = crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
     let completed = submit_warm_render_batch(
+        &render_lease,
         dev,
         warm,
         RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
@@ -1660,10 +1662,8 @@ fn submit_resident_scene_capture_inner(
                 },
                 |_| 0,
             );
-            let skipped = native_churn.map_or_else(
-                || draws.iter().filter(|draw| draw.rgba[3] == 0).count(),
-                |_| 0,
-            );
+            let skipped = native_churn
+                .map_or_else(|| draws.iter().filter(|draw| draw.rgba[3] == 0).count(), |_| 0);
             crate::log_info!(
                 target: "render";
                 "resident-scene-depth: contract enabled opaque={} blended={} skipped={} clear=fullscreen-color+depth opaque_order=front-to-back opaque_state=depth-test+write+blend-off transparent_order=back-to-front transparent_state=depth-test+write-off+straight-alpha compare=lequal hiz=off\n",
@@ -4786,18 +4786,18 @@ fn submit_render_artificial_fragment_sentinel_locked()
         crate::log!("artificial-fragment-sentinel skipped reason=ggtt-map\n");
         return Err("ggtt-map");
     }
+    let render_lease =
+        reserve_warm_render_storage("artificial-fragment-sentinel").ok_or("render-storage-busy")?;
 
     const SENTINEL_COLOR: u32 = 0xA17F_F00D;
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
         core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
         core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
         core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
     }
     crate::intel::dma_flush(warm.batch_virt, warm.batch_len);
-    crate::intel::dma_flush(warm.ring_virt, warm.ring_len);
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
     crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
     let before = unsafe { core::ptr::read_volatile(warm.streamout_virt as *const u32) };
@@ -4815,6 +4815,7 @@ fn submit_render_artificial_fragment_sentinel_locked()
     .map_err(|_| "batch")?;
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
     let completed = submit_warm_render_batch(
+        &render_lease,
         dev,
         warm,
         RCS_EXEC_RESULT_MI_PROBE_DONE,
@@ -5443,6 +5444,9 @@ fn submit_triangle_vf_streamout_proof(
     rect_h: usize,
     experiment: StreamoutProofExperiment,
 ) -> bool {
+    let Some(render_lease) = reserve_warm_render_storage("vf-streamout-proof") else {
+        return false;
+    };
     let Some(draw) = prepare_vf_streamout_proof_resources(
         warm,
         dst_gpu_addr,
@@ -5470,7 +5474,6 @@ fn submit_triangle_vf_streamout_proof(
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
         core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
     }
@@ -5510,6 +5513,7 @@ fn submit_triangle_vf_streamout_proof(
 
     let stats_before = capture_triangle_stage_stats(dev);
     let completed = submit_warm_render_batch(
+        &render_lease,
         dev,
         warm,
         RCS_EXEC_RESULT_DONE,
@@ -5582,6 +5586,9 @@ fn submit_triangle_vf_draw_to_surface_ext(
     post_draw_sync_variant: PostDrawSyncVariant,
     vf_experiment: StreamoutProofExperiment,
 ) -> bool {
+    let Some(render_lease) = reserve_warm_render_storage(submit_name) else {
+        return false;
+    };
     let Some(draw) = prepare_vf_streamout_proof_resources(
         warm,
         dst_gpu_addr,
@@ -5812,7 +5819,6 @@ fn submit_triangle_vf_draw_to_surface_ext(
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
     }
     seed_result_debug_slots(warm);
@@ -5922,6 +5928,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
     };
 
     let completed = submit_warm_render_batch(
+        &render_lease,
         dev,
         warm,
         RCS_EXEC_RESULT_DONE,
@@ -5946,9 +5953,9 @@ fn submit_triangle_vf_draw_to_surface_ext(
         let scratch_after = read_scratch_dword(0);
         let center_after = read_scratch_dword(center_offset);
         let post_after = read_scratch_dword(post_offset);
-        // submit_warm_render_batch installs a freshly zeroed LRC image. The
-        // pre-submit MMIO sample is from the outgoing context, while these are
-        // the complete counters of the submitted context.
+        // Render0 now keeps one persistent GuC context. These engine-global
+        // counters remain diagnostic-only; saved-HWLRCA HEAD is the actual
+        // identity-specific retirement proof.
         let delta = capture_triangle_stage_stats(dev);
         let ps_counter_accept =
             delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
@@ -6218,6 +6225,9 @@ fn submit_triangle_vs_streamout_proof(
     rect_h: usize,
     experiment: StreamoutProofExperiment,
 ) -> bool {
+    let Some(render_lease) = reserve_warm_render_storage("vs-streamout-proof") else {
+        return false;
+    };
     let Some(draw) = prepare_triangle_draw_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h)
     else {
         crate::log!(
@@ -6263,7 +6273,6 @@ fn submit_triangle_vs_streamout_proof(
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
         core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
     }
@@ -6307,6 +6316,7 @@ fn submit_triangle_vs_streamout_proof(
 
     let stats_before = capture_triangle_stage_stats(dev);
     let completed = submit_warm_render_batch(
+        &render_lease,
         dev,
         warm,
         RCS_EXEC_RESULT_DONE,
@@ -6345,6 +6355,9 @@ fn submit_triangle_streamout_proof(
     rect_h: usize,
     experiment: StreamoutProofExperiment,
 ) -> bool {
+    let Some(render_lease) = reserve_warm_render_storage("streamout-proof") else {
+        return false;
+    };
     let Some(draw) = prepare_triangle_draw_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h)
     else {
         crate::log!(
@@ -6384,7 +6397,6 @@ fn submit_triangle_streamout_proof(
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
         core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
     }
@@ -6434,6 +6446,7 @@ fn submit_triangle_streamout_proof(
 
     let stats_before = capture_triangle_stage_stats(dev);
     let completed = submit_warm_render_batch(
+        &render_lease,
         dev,
         warm,
         RCS_EXEC_RESULT_DONE,
@@ -6619,7 +6632,7 @@ pub(crate) fn init_fixed_render_ggtt_for_boot(dev: crate::intel::Dev) -> bool {
             WARM_BUFFERS_MAPPED.store(false, Ordering::Release);
             return false;
         }
-        log_render_memory_proof(warm);
+        log_boot_render_memory_proof(warm);
         MEMORY_PROOF_LOGGED.store(true, Ordering::Release);
         WARM_BUFFERS_MAPPED.store(true, Ordering::Release);
         true
@@ -6633,9 +6646,12 @@ fn read_first_dword(virt: *mut u8, len: usize) -> u32 {
     unsafe { core::ptr::read_volatile(virt as *const u32) }
 }
 
-fn log_render_memory_proof(warm: RenderWarmState) {
-    crate::intel::dma_flush(warm.ring_virt, warm.ring_len);
-    crate::intel::dma_flush(warm.context_virt, warm.context_len);
+fn log_boot_render_memory_proof(warm: RenderWarmState) {
+    // This runs only inside FIXED_RENDER_GGTT_BOOT_RESULT before
+    // WARM_BUFFERS_MAPPED is published and before Render0 can register its
+    // HWLRCA. Ring and context contain GPU-written saved state after that
+    // boundary, so proof logging must never flush either allocation. Their
+    // exact initialization/append paths publish only the bytes they own.
     crate::intel::dma_flush(warm.batch_virt, warm.batch_len);
     crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
     crate::intel::dma_flush(warm.vertex_virt, warm.vertex_len);
@@ -6651,7 +6667,7 @@ fn log_render_memory_proof(warm: RenderWarmState) {
     let streamout_rb = read_first_dword(warm.streamout_virt, warm.streamout_len);
 
     intel_render_focus_log!(
-        "memory-proof accepted=1 map=1 ggtt_invalidated=1 flush=all readback=cpu-first-dword ring[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] context[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] batch[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] state[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] vertex[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] result[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] streamout[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] does_not_prove=fragment_ps_rt_progress\n",
+        "memory-proof accepted=1 map=1 ggtt_invalidated=1 flush=client-data-only ring_context_flush=0 phase=boot-before-render0-registration readback=cpu-first-dword ring[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] context[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] batch[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] state[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] vertex[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] result[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] streamout[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] does_not_prove=fragment_ps_rt_progress\n",
         warm.ring_phys,
         GPU_VA_RING_BASE,
         warm.ring_len,
@@ -6772,6 +6788,9 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     post_draw_sync_variant: PostDrawSyncVariant,
     batch_mode_override: Option<TriangleBatchMode>,
 ) -> bool {
+    let Some(render_lease) = reserve_warm_render_storage(submit_name) else {
+        return false;
+    };
     let Some(draw) = prepare_triangle_draw_resources_for_geometry(
         warm,
         dst_gpu_addr,
@@ -6955,7 +6974,6 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
     }
     seed_result_debug_slots(warm);
@@ -7057,6 +7075,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     };
 
     let completed = submit_warm_render_batch(
+        &render_lease,
         dev,
         warm,
         RCS_EXEC_RESULT_DONE,
@@ -7139,6 +7158,9 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     viewport_translation_px: [f32; 2],
     mut readback: Option<&mut Option<FontRenderTargetReadback>>,
 ) -> bool {
+    let Some(render_lease) = reserve_warm_render_storage(submit_name) else {
+        return false;
+    };
     let draw = if let Some(mesh) = resident_mesh {
         if batch_mode.vf_synthesized_vue() {
             None
@@ -7408,7 +7430,6 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
     }
     seed_result_debug_slots(warm);
@@ -7517,8 +7538,14 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     } else {
         (RCS_EXEC_RESULT_DONE, RESULT_SLOT_FINAL_DWORD, "mi-tail-store")
     };
-    let completed =
-        submit_warm_render_batch(dev, warm, completion_value, completion_slot, submit_name);
+    let completed = submit_warm_render_batch(
+        &render_lease,
+        dev,
+        warm,
+        completion_value,
+        completion_slot,
+        submit_name,
+    );
     if let (
         Some((scratch_before, center_before, post_before, center_offset, post_offset)),
         Some(_stats_before),
@@ -7655,9 +7682,11 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
 }
 
 fn submit_result_store_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
+    let Some(render_lease) = reserve_warm_render_storage("mi-store-probe") else {
+        return false;
+    };
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
         core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
     }
@@ -7674,6 +7703,7 @@ fn submit_result_store_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> b
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
     submit_warm_render_batch(
+        &render_lease,
         dev,
         warm,
         RCS_EXEC_RESULT_MI_PROBE_DONE,
@@ -7683,9 +7713,11 @@ fn submit_result_store_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> b
 }
 
 fn submit_3d_no_draw_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
+    let Some(render_lease) = reserve_warm_render_storage("3d-no-draw") else {
+        return false;
+    };
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
         core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
         core::ptr::write_volatile((warm.result_virt as *mut u32).add(1), 0xC0DE_7700);
@@ -7708,6 +7740,7 @@ fn submit_3d_no_draw_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> boo
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
     submit_warm_render_batch(
+        &render_lease,
         dev,
         warm,
         RCS_EXEC_RESULT_3D_NO_DRAW_DONE,

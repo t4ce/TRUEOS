@@ -2273,6 +2273,9 @@ fn submit_triangle_to_surface(
     rect_w: usize,
     rect_h: usize,
 ) -> bool {
+    let Some(render_lease) = reserve_warm_render_storage("mi-triangle") else {
+        return false;
+    };
     unsafe {
         core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
     }
@@ -2301,6 +2304,7 @@ fn submit_triangle_to_surface(
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
 
     submit_warm_render_batch(
+        &render_lease,
         dev,
         warm,
         RCS_EXEC_RESULT_DONE,

@@ -40,21 +40,17 @@ fn init_gen12_lrc_context_image(
     state[idx + 13] = 0;
     state[idx + 14] = 0x2110;
     state[idx + 15] = 0;
-    state[idx + 16] = 0x211C;
+    state[idx + 16] = 0x21C0;
     state[idx + 17] = 0;
-    state[idx + 18] = 0x2114;
+    state[idx + 18] = 0x21C4;
     state[idx + 19] = 0;
-    state[idx + 20] = 0x2118;
-    state[idx + 21] = 0;
-    state[idx + 22] = 0x21C0;
+    state[idx + 20] = 0x21C8;
+    state[idx + 21] = GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT;
+    state[idx + 22] = 0x2180;
     state[idx + 23] = 0;
-    state[idx + 24] = 0x21C4;
+    state[idx + 24] = 0x22B4;
     state[idx + 25] = 0;
-    state[idx + 26] = 0x21C8;
-    state[idx + 27] = GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT;
-    state[idx + 28] = 0x2180;
-    state[idx + 29] = 0;
-    idx += 30;
+    idx += 26;
 
     push_mi_nops(state, &mut idx, 5);
 
@@ -212,6 +208,52 @@ fn init_gen12_lrc_context_image(
 
     crate::intel::dma_flush(warm.context_virt, warm.context_len);
     true
+}
+
+/// Publish only the mutable tail field of an already registered Render0 LRC.
+///
+/// GuC owns the rest of the HWLRCA after first registration. In particular,
+/// HEAD is written by the GPU during context save, so rebuilding or flushing
+/// the complete image for a later request would race GuC's save path.
+fn write_gen12_lrc_ring_tail(warm: RenderWarmState, ring_tail: u32) -> bool {
+    const LRC_CONTEXT_CONTROL_VALUE_DW: usize = 3;
+    const LRC_RING_TAIL_VALUE_DW: usize = 7;
+
+    let total_dwords = warm.context_len / core::mem::size_of::<u32>();
+    let first = LRC_STATE_OFFSET_DWORDS + LRC_CONTEXT_CONTROL_VALUE_DW;
+    let last = LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW;
+    if warm.context_virt.is_null() || total_dwords <= last {
+        return false;
+    }
+    let dwords =
+        unsafe { core::slice::from_raw_parts_mut(warm.context_virt as *mut u32, total_dwords) };
+    let context_control = dwords[first];
+    dwords[last] = ring_tail;
+    // Preserve the control value while publishing the one cache line shared
+    // with GuC's saved HEAD. This mirrors the persistent direct-RCS ABI.
+    dwords[first] = context_control;
+    unsafe {
+        crate::intel::dma_flush(
+            warm.context_virt.add(first * core::mem::size_of::<u32>()),
+            (last - first + 1) * core::mem::size_of::<u32>(),
+        );
+    }
+    true
+}
+
+/// Read the HEAD last saved by GuC into the Render0 HWLRCA.
+fn read_gen12_lrc_ring_head(warm: RenderWarmState) -> u32 {
+    const LRC_RING_HEAD_VALUE_DW: usize = 5;
+
+    let index = LRC_STATE_OFFSET_DWORDS + LRC_RING_HEAD_VALUE_DW;
+    let total_dwords = warm.context_len / core::mem::size_of::<u32>();
+    if warm.context_virt.is_null() || total_dwords <= index {
+        return u32::MAX;
+    }
+    let address = unsafe { warm.context_virt.add(index * core::mem::size_of::<u32>()) };
+    // Context save is a GPU write. Evict any CPU copy before observing it.
+    crate::intel::dma_flush(address, core::mem::size_of::<u32>());
+    unsafe { core::ptr::read_volatile(address.cast::<u32>()) }
 }
 
 fn encode_rgb_triangle_store_batch(

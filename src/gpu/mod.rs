@@ -5,6 +5,7 @@
 
 pub(crate) mod executor;
 pub(crate) mod physical;
+pub(crate) mod resident;
 pub(crate) mod vgpu;
 pub(crate) mod vram;
 

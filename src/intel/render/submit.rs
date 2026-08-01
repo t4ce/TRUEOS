@@ -1,6 +1,34 @@
 static RESIDENT_SCENE_LAST_GPU_POLL_US: AtomicU64 = AtomicU64::new(0);
 static RESIDENT_SCENE_LAST_GPU_POLL_ITERS: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Copy, Clone, Debug)]
+struct RenderSubmitRuntime {
+    context_initialized: bool,
+    ring_tail_bytes: usize,
+    submissions: u64,
+    exact_retirements: u64,
+    retire_failures: u64,
+    last_saved_head: u32,
+}
+
+impl RenderSubmitRuntime {
+    const fn new() -> Self {
+        Self {
+            context_initialized: false,
+            ring_tail_bytes: 0,
+            submissions: 0,
+            exact_retirements: 0,
+            retire_failures: 0,
+            last_saved_head: 0,
+        }
+    }
+}
+
+static RENDER_SUBMIT_RUNTIME: Mutex<RenderSubmitRuntime> = Mutex::new(RenderSubmitRuntime::new());
+
+const RENDER_CONTEXT_SAVE_TIMEOUT_NS: u64 = 2_000_000_000;
+const RENDER_CONTEXT_SAVE_POLL_LIMIT: u64 = 5_000_000;
+
 fn resident_scene_last_gpu_poll_profile() -> (u64, u64) {
     (
         RESIDENT_SCENE_LAST_GPU_POLL_US.load(Ordering::Acquire),
@@ -8,39 +36,64 @@ fn resident_scene_last_gpu_poll_profile() -> (u64, u64) {
     )
 }
 
+/// Reserve Render0's complete mutable job storage before a caller touches the
+/// shared batch, result, draw-state, vertex, ring, or HWLRCA allocations.
+fn reserve_warm_render_storage(
+    submit_name: &'static str,
+) -> Option<crate::gpu::executor::KernelContextLease> {
+    let render_client = crate::gpu::vgpu::KernelClient::Render;
+    match crate::gpu::executor::reserve_kernel_context(render_client) {
+        Ok(lease) => Some(lease),
+        Err(error) => {
+            crate::log!(
+                "{} render-storage-reserve-failed client={} error={:?} mutable-job-storage-reused=0\n",
+                submit_name,
+                render_client.name(),
+                error,
+            );
+            None
+        }
+    }
+}
+
 fn submit_warm_render_batch(
+    render_lease: &crate::gpu::executor::KernelContextLease,
     dev: crate::intel::Dev,
     warm: RenderWarmState,
     expected_result: u32,
     expected_result_slot_dword: usize,
     submit_name: &'static str,
 ) -> bool {
-    // WARM_STATE currently owns one mutable Render0 LRC/ring pair. Reserve it
-    // before either image is rewritten and retain the lease through exact
-    // marker retirement. Other kernel clients remain independent and are
-    // scheduled concurrently by GuC.
+    // WARM_STATE owns one persistent Render0 LRC/ring pair. Reserve the CPU
+    // encoder and retain it until GuC has saved HEAD at the published tail;
+    // the scene marker alone is not ownership of the HWLRCA cache line.
     let render_client = crate::gpu::vgpu::KernelClient::Render;
-    let lease_started_ns = crate::chronos::monotonic_nanos();
-    let render_lease = loop {
-        match crate::gpu::executor::reserve_kernel_context(render_client) {
-            Ok(lease) => break lease,
-            Err(crate::gpu::vgpu::VgpuError::Busy)
-                if crate::chronos::monotonic_nanos().saturating_sub(lease_started_ns)
-                    < 2_100_000_000 =>
-            {
-                core::hint::spin_loop();
-            }
-            Err(error) => {
-                crate::log!(
-                    "{} render-storage-reserve-failed client={} error={:?} mutable-lrc-reused=0\n",
-                    submit_name,
-                    render_client.name(),
-                    error,
-                );
-                return false;
-            }
+    let mut runtime = RENDER_SUBMIT_RUNTIME.lock();
+    let old_ring_tail_bytes = runtime.ring_tail_bytes;
+    if runtime.context_initialized {
+        let (saved, saved_head, wait_iters, wait_us) = wait_for_gen12_lrc_saved_head(
+            warm,
+            old_ring_tail_bytes,
+            RENDER_CONTEXT_SAVE_TIMEOUT_NS,
+        );
+        runtime.last_saved_head = saved_head;
+        if !saved {
+            runtime.retire_failures = runtime.retire_failures.saturating_add(1);
+            crate::log_error!(
+                target: "render";
+                "{} persistent-ring reuse rejected client={} saved_head={} published_tail={} wait_us={} wait_iters={} action=isolate-render-context reason=guc-context-save-unobserved mutable-lrc-reused=0\n",
+                submit_name,
+                render_client.name(),
+                saved_head,
+                old_ring_tail_bytes,
+                wait_us,
+                wait_iters,
+            );
+            drop(runtime);
+            let _ = crate::gpu::vgpu::isolate_kernel_context(render_client);
+            return false;
         }
-    };
+    }
     // Production scene variants share the dedicated QWord release slot.  Key
     // the scheduling/retirement policy from that ABI instead of one display
     // name: native Helio variants (for example `helio-churn-forward`) must not
@@ -52,9 +105,9 @@ fn submit_warm_render_batch(
         RESIDENT_SCENE_LAST_GPU_POLL_US.store(0, Ordering::Release);
         RESIDENT_SCENE_LAST_GPU_POLL_ITERS.store(0, Ordering::Release);
     }
-    // The MMIO counters visible here still belong to the outgoing context.
-    // Every probe below rebuilds a zeroed LRC image before ELSP submission, so
-    // the incoming context's counter baseline is zero, not this snapshot.
+    // The MMIO counters visible here may still belong to another resident
+    // context. Keep them diagnostic-only; the identity-specific retirement
+    // proof comes from Render0's saved HWLRCA HEAD below.
     let triangle_debug_submit = is_triangle_debug_submit_name(submit_name);
     let stats_outgoing_context = if triangle_debug_submit {
         capture_triangle_stage_stats(dev)
@@ -71,24 +124,36 @@ fn submit_warm_render_batch(
             None,
         );
     }
-    let ring_tail_bytes = build_ring_batch_start(warm, GPU_VA_BATCH_BASE);
+    let Some(ring_tail_bytes) =
+        append_ring_batch_start(warm, old_ring_tail_bytes, GPU_VA_BATCH_BASE)
+    else {
+        return false;
+    };
     let pml4_phys = render_ppgtt_pml4_phys();
+    if pml4_phys == 0 {
+        return false;
+    }
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
         return false;
     };
-    if !init_gen12_lrc_context_image(
-        warm,
-        GPU_VA_RING_BASE as u32,
-        ring_tail_bytes as u32,
-        ring_ctl,
-        pml4_phys,
-    ) {
+    let first_registration = !runtime.context_initialized;
+    if first_registration {
+        if !init_gen12_lrc_context_image(
+            warm,
+            GPU_VA_RING_BASE as u32,
+            ring_tail_bytes as u32,
+            ring_ctl,
+            pml4_phys,
+        ) {
+            return false;
+        }
+    } else if !write_gen12_lrc_ring_tail(warm, ring_tail_bytes as u32) {
         return false;
     }
     let (context_desc_lo, context_desc_hi) = build_guc_context_descriptor(GPU_VA_CONTEXT_BASE);
-    // init_gen12_lrc_context_image() already encoded this exact ring tail and
-    // published the complete LRC image. Rewriting it here used to CLFLUSH all
-    // 88 KiB of context storage a second time before every submission.
+    // First registration publishes the complete LRC once. Later schedules
+    // publish only TAIL after saved-HEAD ownership; no runtime path rebuilds
+    // or CLFLUSHes all 88 KiB of GuC-owned context storage.
     log_lrc_ring_image(warm, submit_name);
     crate::intel::ggtt_invalidate(dev);
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
@@ -101,14 +166,42 @@ fn submit_warm_render_batch(
     let gpu_submission = match render_lease.submit(descriptor) {
         Ok(submission) => submission,
         Err(error) => {
+            // A failed H2G transaction may already have crossed the publish
+            // boundary even when its acknowledgement is missing. Never roll
+            // TAIL back under that ambiguity; contain only Render0 and keep
+            // all of its storage retained until reboot.
+            let isolation = crate::gpu::vgpu::isolate_kernel_context(render_client);
             crate::log!(
-                "{} vgpu-submit-failed error={:?} submission_owner=gpu-executor/vgpu/guc direct_elsp=0\n",
+                "{} vgpu-submit-failed error={:?} submission_owner=gpu-executor/vgpu/guc direct_elsp=0 action=isolate-render-context device_found={} contexts_disabled={} contexts_retained={} tail_rollback=forbidden\n",
                 submit_name,
-                error
+                error,
+                isolation.device_found as u8,
+                isolation.contexts_disabled,
+                isolation.contexts_retained,
             );
             return false;
         }
     };
+    runtime.context_initialized = true;
+    runtime.ring_tail_bytes = ring_tail_bytes;
+    runtime.submissions = runtime.submissions.saturating_add(1);
+    if runtime.submissions == 1
+        || ring_tail_bytes < old_ring_tail_bytes
+        || runtime.submissions.is_power_of_two()
+    {
+        crate::log_info!(
+            target: "render";
+            "{} persistent-ring publish client={} submission={} first_registration={} old_tail={} new_tail={} entries={} full-lrc-reinitializations={} ownership=guc-context\n",
+            submit_name,
+            render_client.name(),
+            runtime.submissions,
+            first_registration as u8,
+            old_ring_tail_bytes,
+            ring_tail_bytes,
+            warm.ring_len / RENDER_RING_ENTRY_BYTES,
+            first_registration as u8,
+        );
+    }
 
     if should_log_primary_probe_detail() {
         crate::log!(
@@ -267,6 +360,50 @@ fn submit_warm_render_batch(
     if resident_scene_submit {
         RESIDENT_SCENE_LAST_GPU_POLL_US.store(poll_elapsed_us, Ordering::Release);
         RESIDENT_SCENE_LAST_GPU_POLL_ITERS.store(iter as u64, Ordering::Release);
+    }
+
+    // A PIPE_CONTROL cookie proves the scene's producer release, but it is
+    // deliberately before MI_BATCH_BUFFER_END. Do not retire the software
+    // timeline or release mutable HWLRCA storage until GuC has saved the ring
+    // HEAD at this request's published tail.
+    if completed {
+        let (saved, saved_head, wait_iters, wait_us) =
+            wait_for_gen12_lrc_saved_head(warm, ring_tail_bytes, RENDER_CONTEXT_SAVE_TIMEOUT_NS);
+        runtime.last_saved_head = saved_head;
+        if saved {
+            runtime.exact_retirements = runtime.exact_retirements.saturating_add(1);
+            if runtime.exact_retirements == 1 || runtime.exact_retirements.is_power_of_two() {
+                crate::log_info!(
+                    target: "render";
+                    "{} persistent-ring exact-retirement client={} submission={} saved_head={} published_tail={} wait_us={} wait_iters={} exact_retirements={} marker_only_retirement=0\n",
+                    submit_name,
+                    render_client.name(),
+                    runtime.submissions,
+                    saved_head,
+                    ring_tail_bytes,
+                    wait_us,
+                    wait_iters,
+                    runtime.exact_retirements,
+                );
+            }
+        } else {
+            runtime.retire_failures = runtime.retire_failures.saturating_add(1);
+            crate::log_error!(
+                target: "render";
+                "{} persistent-ring exact-retirement failed client={} submission={} saved_head={} published_tail={} wait_us={} wait_iters={} retire_failures={} action=quarantine-render-context marker_only_retirement=forbidden\n",
+                submit_name,
+                render_client.name(),
+                runtime.submissions,
+                saved_head,
+                ring_tail_bytes,
+                wait_us,
+                wait_iters,
+                runtime.retire_failures,
+            );
+            completed = false;
+        }
+    } else {
+        runtime.last_saved_head = read_gen12_lrc_ring_head(warm) & (warm.ring_len as u32 - 1);
     }
 
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
@@ -658,14 +795,10 @@ fn submit_warm_render_batch(
     if is_surface_draw_submit_name(submit_name) {
         log_triangle_demo_stats(dev, completed);
     }
-    // This still bridges hardware retirement into the software GuC timeline
-    // by CPU-polling the post-sync cookie. It is a correctness boundary, not
-    // yet the eventual asynchronous GuC fence implementation.
-    let _ = crate::gpu::executor::complete_kernel_submission(gpu_submission, completed);
     if !completed {
-        // Keep the storage lease live while GuC disables this exact context.
-        // Releasing the lease first would let another CPU rewrite the shared
-        // LRC/ring in the gap between timeout detection and quarantine.
+        // Keep both the storage lease and executor timeline live while GuC
+        // disables this exact context. A failed timeline must never advertise
+        // reusable memory before the late-write source is contained.
         let isolation = crate::gpu::vgpu::isolate_kernel_context(render_client);
         intel_render_focus_log!(
             "{} recovery scoped owner=guc reason=nonretired-context client={} device_found={} contexts_disabled={} contexts_retained={} direct-engine-reset=0 action=isolate-render-context mutable-lrc-reused=0\n",
@@ -676,6 +809,9 @@ fn submit_warm_render_batch(
             isolation.contexts_retained,
         );
     }
+    // Bridge exact hardware retirement into the software GuC timeline only
+    // after saved-HEAD proof, or after failed storage has been quarantined.
+    let _ = crate::gpu::executor::complete_kernel_submission(gpu_submission, completed);
     completed
 }
 
@@ -1916,15 +2052,63 @@ fn recover_render_engine_after_nonretired_submit(
     );
 }
 
-fn build_ring_batch_start(warm: RenderWarmState, batch_gpu_addr: u64) -> usize {
-    let dwords =
-        unsafe { core::slice::from_raw_parts_mut(warm.ring_virt as *mut u32, BLT_RING_DWORDS) };
-    dwords[0] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT;
-    dwords[1] = batch_gpu_addr as u32;
-    dwords[2] = (batch_gpu_addr >> 32) as u32;
-    dwords[3] = MI_NOOP;
-    crate::intel::dma_flush(warm.ring_virt, BLT_RING_TAIL_BYTES);
-    BLT_RING_TAIL_BYTES
+fn append_ring_batch_start(
+    warm: RenderWarmState,
+    ring_tail_bytes: usize,
+    batch_gpu_addr: u64,
+) -> Option<usize> {
+    if warm.ring_virt.is_null()
+        || warm.ring_len < RENDER_RING_ENTRY_BYTES
+        || !warm.ring_len.is_power_of_two()
+        || !warm.ring_len.is_multiple_of(RENDER_RING_ENTRY_BYTES)
+        || ring_tail_bytes >= warm.ring_len
+        || !ring_tail_bytes.is_multiple_of(RENDER_RING_ENTRY_BYTES)
+    {
+        return None;
+    }
+    let start = ring_tail_bytes / core::mem::size_of::<u32>();
+    unsafe {
+        let dwords = warm.ring_virt.cast::<u32>();
+        core::ptr::write_volatile(dwords.add(start), MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT);
+        core::ptr::write_volatile(dwords.add(start + 1), batch_gpu_addr as u32);
+        core::ptr::write_volatile(dwords.add(start + 2), (batch_gpu_addr >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(start + 3), MI_NOOP);
+        crate::intel::dma_flush(warm.ring_virt.add(ring_tail_bytes), RENDER_RING_ENTRY_BYTES);
+    }
+    Some((ring_tail_bytes + RENDER_RING_ENTRY_BYTES) % warm.ring_len)
+}
+
+fn wait_for_gen12_lrc_saved_head(
+    warm: RenderWarmState,
+    expected_tail_bytes: usize,
+    timeout_ns: u64,
+) -> (bool, u32, u64, u64) {
+    if warm.ring_len == 0
+        || !warm.ring_len.is_power_of_two()
+        || expected_tail_bytes >= warm.ring_len
+    {
+        return (false, u32::MAX, 0, 0);
+    }
+    let mask = warm.ring_len as u32 - 1;
+    let expected = expected_tail_bytes as u32;
+    let started_ns = crate::chronos::monotonic_nanos();
+    let mut iterations = 0u64;
+    loop {
+        let observed = read_gen12_lrc_ring_head(warm) & mask;
+        if observed == expected {
+            let elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
+            return (true, observed, iterations, elapsed_us);
+        }
+        if iterations >= RENDER_CONTEXT_SAVE_POLL_LIMIT
+            || (iterations.is_multiple_of(256)
+                && crate::chronos::monotonic_nanos().saturating_sub(started_ns) >= timeout_ns)
+        {
+            let elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
+            return (false, observed, iterations, elapsed_us);
+        }
+        core::hint::spin_loop();
+        iterations = iterations.saturating_add(1);
+    }
 }
 
 fn ring_ctl_value(size: usize) -> Option<u32> {

@@ -28,7 +28,7 @@ pub(crate) struct CpuCarrier {
     pub(crate) core_kind: u8,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 struct CpuCarrierRegistry {
     count: u8,
     carriers: [Option<CpuCarrier>; CPU_CARRIER_CAPACITY],
@@ -53,14 +53,38 @@ impl CpuCarrierRegistry {
 
 static CPU_CARRIERS: spin::Mutex<CpuCarrierRegistry> = spin::Mutex::new(CpuCarrierRegistry::new());
 
-/// Publish the stable AP2+ worker set before any Helio carrier task starts.
-///
-/// Instance ids are sharded over this exact ordered set. The registry is CPU
-/// placement metadata only: all carriers continue to submit through the one
-/// real Render0 runtime until Render owns independent per-carrier state.
-pub(crate) fn configure_cpu_carriers(workers: &[(u32, u8)]) -> bool {
+#[derive(Copy, Clone)]
+struct CpuCarrierBootstrap {
+    expected: CpuCarrierRegistry,
+    scheduled: bool,
+    online_mask: u8,
+    published: bool,
+}
+
+impl CpuCarrierBootstrap {
+    const fn new() -> Self {
+        Self {
+            expected: CpuCarrierRegistry::new(),
+            scheduled: false,
+            online_mask: 0,
+            published: false,
+        }
+    }
+}
+
+static CPU_CARRIER_BOOTSTRAP: spin::Mutex<CpuCarrierBootstrap> =
+    spin::Mutex::new(CpuCarrierBootstrap::new());
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CpuCarrierBootstrapState {
+    NeedsSchedule,
+    Waiting { online_mask: u8 },
+    Online,
+}
+
+fn build_cpu_carrier_registry(workers: &[(u32, u8)]) -> Option<CpuCarrierRegistry> {
     if workers.is_empty() || workers.len() > CPU_CARRIER_CAPACITY {
-        return false;
+        return None;
     }
 
     let mut registry = CpuCarrierRegistry::new();
@@ -72,7 +96,7 @@ pub(crate) fn configure_cpu_carriers(workers: &[(u32, u8)]) -> bool {
                 .iter()
                 .any(|(registered_slot, _)| *registered_slot == worker_slot)
         {
-            return false;
+            return None;
         }
         registry.carriers[id] = Some(CpuCarrier {
             id: id as u8,
@@ -80,8 +104,79 @@ pub(crate) fn configure_cpu_carriers(workers: &[(u32, u8)]) -> bool {
             core_kind,
         });
     }
-    *CPU_CARRIERS.lock() = registry;
+    Some(registry)
+}
+
+/// Stage a stable AP2+ carrier set without making it visible to launch/status
+/// consumers. The public registry is committed only after every remote task
+/// has proved that it is executing on its assigned worker.
+pub(crate) fn prepare_cpu_carriers(
+    workers: &[(u32, u8)],
+) -> Option<CpuCarrierBootstrapState> {
+    let expected = build_cpu_carrier_registry(workers)?;
+    let mut bootstrap = CPU_CARRIER_BOOTSTRAP.lock();
+    if bootstrap.expected.count == 0 {
+        bootstrap.expected = expected;
+    } else if bootstrap.expected != expected {
+        return None;
+    }
+
+    Some(if bootstrap.published {
+        CpuCarrierBootstrapState::Online
+    } else if bootstrap.scheduled {
+        CpuCarrierBootstrapState::Waiting {
+            online_mask: bootstrap.online_mask,
+        }
+    } else {
+        CpuCarrierBootstrapState::NeedsSchedule
+    })
+}
+
+/// Close the token-reservation phase before any task can report online.
+pub(crate) fn mark_cpu_carriers_scheduled(workers: &[(u32, u8)]) -> bool {
+    let Some(expected) = build_cpu_carrier_registry(workers) else {
+        return false;
+    };
+    let mut bootstrap = CPU_CARRIER_BOOTSTRAP.lock();
+    if bootstrap.expected != expected || bootstrap.published {
+        return false;
+    }
+    bootstrap.scheduled = true;
     true
+}
+
+fn cpu_carrier_mask(count: u8) -> u8 {
+    (1u8 << count).wrapping_sub(1)
+}
+
+/// Admit one carrier after its task validates the current CPU. The last
+/// carrier atomically publishes the complete ordered registry; no partial
+/// carrier set can ever acquire a deterministic shard.
+fn report_cpu_carrier_online(cpu_carrier: CpuCarrier, carrier_count: u8) -> bool {
+    let mut bootstrap = CPU_CARRIER_BOOTSTRAP.lock();
+    if !bootstrap.scheduled
+        || bootstrap.expected.count != carrier_count
+        || cpu_carrier.id >= carrier_count
+        || bootstrap.expected.carriers[cpu_carrier.id as usize] != Some(cpu_carrier)
+    {
+        return false;
+    }
+
+    bootstrap.online_mask |= 1u8 << cpu_carrier.id;
+    if bootstrap.online_mask == cpu_carrier_mask(carrier_count) && !bootstrap.published {
+        // Keep the bootstrap lock through publication so tasks observing
+        // `published` can never race ahead of the registry contents.
+        *CPU_CARRIERS.lock() = bootstrap.expected;
+        bootstrap.published = true;
+    }
+    true
+}
+
+fn cpu_carrier_registry_published(cpu_carrier: CpuCarrier, carrier_count: u8) -> bool {
+    let bootstrap = CPU_CARRIER_BOOTSTRAP.lock();
+    bootstrap.published
+        && bootstrap.expected.count == carrier_count
+        && bootstrap.expected.carriers[cpu_carrier.id as usize] == Some(cpu_carrier)
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -2780,22 +2875,53 @@ pub async fn helio_game_service_task(
         worker_slot,
         core_kind,
     };
-    let current_slot = crate::percpu::current_slot() as u32;
-    let current_core_kind = crate::workers::core_kind_for_slot(current_slot);
-    if current_slot != worker_slot
-        || current_core_kind != core_kind
-        || !crate::workers::is_general_background_worker_slot(current_slot)
-    {
-        crate::log_warn!(target: "helio";
-            "helio cpu carrier={} placement invalid assigned_slot={} current_slot={} assigned_core_kind={} current_core_kind={} expected=background-ap2+ action=halt-carrier-before-claim\n",
-            cpu_carrier_id,
-            worker_slot,
-            current_slot,
-            core_kind,
-            current_core_kind,
-        );
-        return;
+    let mut placement_warning_logged = false;
+    let mut bootstrap_warning_logged = false;
+    loop {
+        let current_slot = crate::percpu::current_slot() as u32;
+        let current_core_kind = crate::workers::core_kind_for_slot(current_slot);
+        let placement_valid = current_slot == worker_slot
+            && current_core_kind == core_kind
+            && crate::workers::is_general_background_worker_slot(current_slot);
+        if placement_valid && report_cpu_carrier_online(cpu_carrier, carrier_count) {
+            if placement_warning_logged || bootstrap_warning_logged {
+                crate::log_info!(target: "helio";
+                    "helio cpu carrier={} validation recovered assigned_slot={} current_slot={} core_kind={} action=join-carrier-barrier\n",
+                    cpu_carrier_id,
+                    worker_slot,
+                    current_slot,
+                    core_kind,
+                );
+            }
+            break;
+        }
+        if !placement_valid && !placement_warning_logged {
+            crate::log_warn!(target: "helio";
+                "helio cpu carrier={} placement invalid assigned_slot={} current_slot={} assigned_core_kind={} current_core_kind={} expected=background-ap2+ action=retry-before-claim registry=withheld\n",
+                cpu_carrier_id,
+                worker_slot,
+                current_slot,
+                core_kind,
+                current_core_kind,
+            );
+            placement_warning_logged = true;
+        } else if placement_valid && !bootstrap_warning_logged {
+            crate::log_warn!(target: "helio";
+                "helio cpu carrier={} bootstrap admission pending carrier_count={} worker_slot={} core_kind={} action=retry-before-claim registry=withheld\n",
+                cpu_carrier_id,
+                carrier_count,
+                worker_slot,
+                core_kind,
+            );
+            bootstrap_warning_logged = true;
+        }
+        Timer::after(Duration::from_millis(250)).await;
     }
+
+    while !cpu_carrier_registry_published(cpu_carrier, carrier_count) {
+        Timer::after(Duration::from_millis(10)).await;
+    }
+    let current_slot = crate::percpu::current_slot() as u32;
     crate::log_info!(target: "helio";
         "helio cpu carrier={} online carrier_count={} worker_slot={} current_slot={} core_kind={} placement=background-ap2+ sharding=instance-id-mod-carrier-count gpu_principal=render0 gpu_context=shared-single-render-runtime gpu_affinity=none\n",
         cpu_carrier_id,

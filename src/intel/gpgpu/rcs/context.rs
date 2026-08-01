@@ -51,21 +51,17 @@ fn direct_rcs_init_lrc_context_image_with_root(
     lrc[idx + 13] = 0;
     lrc[idx + 14] = 0x2110;
     lrc[idx + 15] = 0;
-    lrc[idx + 16] = 0x211C;
+    lrc[idx + 16] = 0x21C0;
     lrc[idx + 17] = 0;
-    lrc[idx + 18] = 0x2114;
+    lrc[idx + 18] = 0x21C4;
     lrc[idx + 19] = 0;
-    lrc[idx + 20] = 0x2118;
+    lrc[idx + 20] = 0x21C8;
     lrc[idx + 21] = 0;
-    lrc[idx + 22] = 0x21C0;
+    lrc[idx + 22] = 0x2180;
     lrc[idx + 23] = 0;
-    lrc[idx + 24] = 0x21C4;
+    lrc[idx + 24] = 0x22B4;
     lrc[idx + 25] = 0;
-    lrc[idx + 26] = 0x21C8;
-    lrc[idx + 27] = 0;
-    lrc[idx + 28] = 0x2180;
-    lrc[idx + 29] = 0;
-    idx += 30;
+    idx += 26;
 
     direct_rcs_push_nops(lrc, &mut idx, 5);
 

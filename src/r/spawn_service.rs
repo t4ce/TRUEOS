@@ -17,6 +17,7 @@ const SPAWN_SERVICE_IDLE_MS: u64 = 250;
 const SYSTEM_SERVICE_SNAPSHOT_PERIOD_MS: u64 = 1_000;
 
 static SYSTEM_SERVICE_SNAPSHOT: Mutex<String> = Mutex::new(String::new());
+static HELIO_CARRIER_WAKE_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Central task orchestrator ("FSM spawn service").
 ///
@@ -532,20 +533,99 @@ fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::shell2::backends::net_tcp_shell::net_shell_task())
 }
 
+fn log_helio_carrier_wake_result(failed_mask: u8, carrier_count: u8, phase: &'static str) {
+    if failed_mask != 0 {
+        if !HELIO_CARRIER_WAKE_FAILURE_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::log_warn!(target: "service";
+                "helio: remote carrier wake incomplete failed_mask=0x{:02X} carrier_count={} phase={} action=keep-service-pending-and-retry registry=withheld\n",
+                failed_mask,
+                carrier_count,
+                phase,
+            );
+        }
+    } else if HELIO_CARRIER_WAKE_FAILURE_LOGGED.swap(false, Ordering::AcqRel) {
+        crate::log_info!(target: "service";
+            "helio: remote carrier wake recovered carrier_count={} phase={} action=await-online-barrier registry=withheld-until-all-online\n",
+            carrier_count,
+            phase,
+        );
+    }
+}
+
 fn spawn_helio_game(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     if !crate::workers::all_topology_spawners_registered() {
         return SpawnAttempt::Skipped;
     }
-    let mut worker_spawners = crate::workers::pick_background_spawners_with_slots(
-        crate::r::helio_game::CPU_CARRIER_CAPACITY,
-    );
+
+    // Select the same carrier set on every spawn-service retry: prefer known
+    // performance workers, break ties by topology slot, then assign carrier
+    // ids in ascending slot order.
+    let mut worker_slots = crate::workers::background_worker_slots();
+    worker_slots.sort_unstable_by_key(|worker_slot| {
+        let core_kind = crate::workers::core_kind_for_slot(*worker_slot);
+        let preference = match core_kind {
+            crate::workers::CORE_KIND_PERF => 0,
+            crate::workers::CORE_KIND_EFF => 1,
+            _ => 2,
+        };
+        (preference, *worker_slot)
+    });
+    worker_slots.truncate(crate::r::helio_game::CPU_CARRIER_CAPACITY);
+    worker_slots.sort_unstable();
+    let worker_spawners: Vec<_> = worker_slots
+        .into_iter()
+        .filter_map(|worker_slot| {
+            let core_kind = crate::workers::core_kind_for_slot(worker_slot);
+            crate::workers::spawner_for_slot(worker_slot)
+                .map(|worker_spawner| (worker_slot, core_kind, worker_spawner))
+        })
+        .collect();
     if worker_spawners.is_empty() {
         return SpawnAttempt::Skipped;
     }
-    worker_spawners.sort_unstable_by_key(|(worker_slot, _, _)| *worker_slot);
 
     let carrier_count = worker_spawners.len() as u8;
+    let carrier_metadata: Vec<(u32, u8)> = worker_spawners
+        .iter()
+        .map(|(worker_slot, core_kind, _)| (*worker_slot, *core_kind))
+        .collect();
+    let Some(bootstrap_state) =
+        crate::r::helio_game::prepare_cpu_carriers(&carrier_metadata)
+    else {
+        crate::log_warn!(target: "service";
+            "helio: invalid or changed cpu carrier set count={} capacity={} action=keep-service-pending registry=withheld\n",
+            carrier_metadata.len(),
+            crate::r::helio_game::CPU_CARRIER_CAPACITY,
+        );
+        return SpawnAttempt::Skipped;
+    };
+
+    match bootstrap_state {
+        crate::r::helio_game::CpuCarrierBootstrapState::Online => {
+            return SpawnAttempt::Spawned;
+        }
+        crate::r::helio_game::CpuCarrierBootstrapState::Waiting { online_mask } => {
+            let mut failed_mask = 0u8;
+            for (carrier_id, (worker_slot, _, _)) in worker_spawners.iter().enumerate() {
+                let carrier_bit = 1u8 << carrier_id;
+                if online_mask & carrier_bit == 0
+                    && !crate::remote_work_wake::wake_cpu_for_remote_work(*worker_slot)
+                {
+                    failed_mask |= carrier_bit;
+                }
+            }
+            log_helio_carrier_wake_result(failed_mask, carrier_count, "handshake-retry");
+            return match crate::r::helio_game::prepare_cpu_carriers(&carrier_metadata) {
+                Some(crate::r::helio_game::CpuCarrierBootstrapState::Online) => {
+                    SpawnAttempt::Spawned
+                }
+                _ => SpawnAttempt::Skipped,
+            };
+        }
+        crate::r::helio_game::CpuCarrierBootstrapState::NeedsSchedule => {}
+    }
+
     // Reserve every Embassy task slot before starting any carrier. A partial
     // pool would strand the deterministic shards assigned to a missing worker.
     let mut carrier_tasks = Vec::with_capacity(worker_spawners.len());
@@ -564,30 +644,35 @@ fn spawn_helio_game(spawner: Spawner) -> SpawnAttempt {
         carrier_tasks.push((carrier_id as u8, worker_slot, core_kind, worker_spawner, token));
     }
 
-    let carrier_metadata: Vec<(u32, u8)> = carrier_tasks
-        .iter()
-        .map(|(_, worker_slot, core_kind, _, _)| (*worker_slot, *core_kind))
-        .collect();
-    if !crate::r::helio_game::configure_cpu_carriers(&carrier_metadata) {
+    if !crate::r::helio_game::mark_cpu_carriers_scheduled(&carrier_metadata) {
         crate::log_warn!(target: "service";
-            "helio: invalid cpu carrier set count={} capacity={} action=skip\n",
+            "helio: cpu carrier schedule contract changed count={} capacity={} action=keep-service-pending registry=withheld\n",
             carrier_metadata.len(),
             crate::r::helio_game::CPU_CARRIER_CAPACITY,
         );
         return SpawnAttempt::Skipped;
     }
 
+    let mut failed_mask = 0u8;
     for (carrier_id, worker_slot, core_kind, worker_spawner, token) in carrier_tasks {
-        worker_spawner.spawn(token);
+        let wake_sent = worker_spawner.spawn_and_wake_remote(token);
+        if !wake_sent {
+            failed_mask |= 1u8 << carrier_id;
+        }
         crate::log_info!(target: "service";
-            "helio: cpu carrier={} scheduled carrier_count={} worker_slot={} core_kind={} placement=background-ap2+ sharding=instance-id-mod-carrier-count gpu_principal=render0 gpu_context=shared-single-render-runtime gpu_affinity=none\n",
+            "helio: cpu carrier={} scheduled carrier_count={} worker_slot={} core_kind={} remote_wake={} placement=background-ap2+ sharding=instance-id-mod-carrier-count registry=withheld-until-all-online gpu_principal=render0 gpu_context=shared-single-render-runtime gpu_affinity=none\n",
             carrier_id,
             carrier_count,
             worker_slot,
             core_kind,
+            wake_sent as u8,
         );
     }
-    SpawnAttempt::Spawned
+    log_helio_carrier_wake_result(failed_mask, carrier_count, "initial-schedule");
+    match crate::r::helio_game::prepare_cpu_carriers(&carrier_metadata) {
+        Some(crate::r::helio_game::CpuCarrierBootstrapState::Online) => SpawnAttempt::Spawned,
+        _ => SpawnAttempt::Skipped,
+    }
 }
 
 fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
