@@ -660,6 +660,30 @@ fn submit_warm_render_batch(
             psmi_ctl,
             nopid,
         );
+        if submit_name == "helio-churn-forward" {
+            crate::log!(
+                "{} retained-transform-frontier prologue=0x{:08X} prepare=0x{:08X} transform=0x{:08X} handoff3d=0x{:08X} expected=0x{:08X}/0x{:08X}\n",
+                submit_name,
+                read_result_dword(
+                    warm,
+                    crate::intel::gpgpu::GPGPU_HELIO_DIAGNOSTIC_SLOT_PROLOGUE,
+                ),
+                read_result_dword(
+                    warm,
+                    crate::intel::gpgpu::GPGPU_HELIO_DIAGNOSTIC_SLOT_PREPARE,
+                ),
+                read_result_dword(
+                    warm,
+                    crate::intel::gpgpu::GPGPU_HELIO_DIAGNOSTIC_SLOT_TRANSFORM,
+                ),
+                read_result_dword(
+                    warm,
+                    crate::intel::gpgpu::GPGPU_HELIO_DIAGNOSTIC_SLOT_3D_HANDOFF,
+                ),
+                crate::intel::gpgpu::GPGPU_HELIO_DIAGNOSTIC_TRANSFORM,
+                crate::intel::gpgpu::GPGPU_HELIO_DIAGNOSTIC_3D_HANDOFF,
+            );
+        }
         crate::log!(
             "{} gpgpu-tdl-status thr_status0=0x{:08X} thr_status1=0x{:08X} disp_count=0x{:08X} disp_threads={} pf_count=0x{:08X} pf_threads={} pf_canonical={} pf_status0=0x{:08X} pf_status1=0x{:08X}\n",
             submit_name,
@@ -2006,7 +2030,10 @@ fn read_result_dword(warm: RenderWarmState, index: usize) -> u32 {
 }
 
 fn is_gpgpu_submit_name(name: &str) -> bool {
-    matches!(name, "gpgpu-preflight" | "gpgpu-compute-walker")
+    matches!(
+        name,
+        "gpgpu-preflight" | "gpgpu-compute-walker" | "helio-churn-forward"
+    )
 }
 
 fn is_font_vf_vue_clip_submit_name(name: &str) -> bool {

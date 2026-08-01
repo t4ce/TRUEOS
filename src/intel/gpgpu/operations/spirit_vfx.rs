@@ -75,6 +75,7 @@ struct SpiritVfxSubmitted {
     state: DirectRcsState,
     source: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
+    submit_ambiguous: bool,
     frame: u32,
     revision: u64,
     background_mode: u32,
@@ -284,7 +285,7 @@ pub(crate) fn submit_spirit_vfx_frame(
         submitted,
         timeout_logged: false,
     });
-    if spirit_vfx_trace_frame(submitted.frame) {
+    if submitted.submit_ambiguous || spirit_vfx_trace_frame(submitted.frame) {
         let walkers = 1 + u32::from(submitted.background_mode != 0);
         let dependency = if submitted.background_mode == 0 {
             "none/clean-lilly"
@@ -293,7 +294,7 @@ pub(crate) fn submit_spirit_vfx_frame(
         };
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: spirit-vfx accepted tag={} frame={} revision={} background={} shader={} src={}x{}@0x{:X} dst=0x{:X} walkers={} dependency={} owner=spirit-worker wait=detached\n",
+            "intel/gpgpu: spirit-vfx accepted tag={} frame={} revision={} background={} shader={} src={}x{}@0x{:X} dst=0x{:X} walkers={} dependency={} owner=spirit-worker admission={} wait=detached producer_lease=retained\n",
             tag,
             submitted.frame,
             submitted.revision,
@@ -305,6 +306,11 @@ pub(crate) fn submit_spirit_vfx_frame(
             submitted.dst.gpu,
             walkers,
             dependency,
+            if submitted.submit_ambiguous {
+                "ambiguous-quarantined"
+            } else {
+                "guc"
+            },
         );
     }
     Some(handle)
@@ -358,10 +364,10 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
 
     complete_execution_rcs_submission();
     EXECUTION_RCS_DETACHED_TAG.store(0, Ordering::Release);
-    if spirit_vfx_trace_frame(pending.submitted.frame) {
+    if pending.submitted.submit_ambiguous || spirit_vfx_trace_frame(pending.submitted.frame) {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: spirit-vfx complete frame={} ok=1 marker=0x{:08X} saved_head={} published_tail={} revision={} background={} shader={} submit_ms={} producer-release=marker-plus-guc-context-save\n",
+            "intel/gpgpu: spirit-vfx complete frame={} ok=1 marker=0x{:08X} saved_head={} published_tail={} revision={} background={} shader={} submit_ms={} admission={} producer-release=marker-plus-guc-context-save\n",
             pending.submitted.frame,
             marker,
             proof.saved_head_bytes,
@@ -370,6 +376,11 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
             pending.submitted.background_mode,
             pending.submitted.shader_mode,
             direct_rcs_elapsed_ms_since(pending.submitted.started_tick),
+            if pending.submitted.submit_ambiguous {
+                "ambiguous-late-accepted"
+            } else {
+                "guc"
+            },
         );
     }
     SpiritVfxCompletion::Complete(gpgpu_rgba8_release(pending.submitted.dst))
@@ -445,13 +456,26 @@ fn submit_spirit_vfx_batch(
             source,
             dst,
         );
-    if !batch_ok || !execution_rcs_submit_batch(dev, state) {
+    if !batch_ok {
+        return None;
+    }
+    let submitted_to_guc = execution_rcs_submit_batch(dev, state);
+    // Every result other than Busy after tail publication is ambiguous: GuC
+    // may still fetch and execute the request even though the software call
+    // returned an error. The lane-level submit path quarantines that exact
+    // context. Preserve a detached Spirit handle in that case so its cursor
+    // producer lease cannot be cancelled/reused until marker + saved HEAD
+    // prove retirement. If GuC never accepted the request, that proof never
+    // arrives and the allocation intentionally remains pinned.
+    let submit_ambiguous = !submitted_to_guc && execution_rcs_context_is_quarantined();
+    if !submitted_to_guc && !submit_ambiguous {
         return None;
     }
     Some(SpiritVfxSubmitted {
         state,
         source,
         dst,
+        submit_ambiguous,
         frame,
         revision: control.revision,
         background_mode: control.background_mode,

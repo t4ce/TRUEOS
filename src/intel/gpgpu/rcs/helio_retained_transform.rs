@@ -37,6 +37,7 @@ pub(crate) fn encode_helio_retained_transform_secondary(
     state: &mut GpgpuHelioRetainedTransformStateBlob<'_>,
     artifact: GpgpuHelioRetainedTransformArtifactMapping,
     dispatch: GpgpuHelioRetainedTransformDispatch,
+    diagnostic_gpu: u64,
 ) -> Result<GpgpuHelioRetainedTransformEncoding, GpgpuHelioTransformError> {
     use GpgpuHelioTransformError as Error;
 
@@ -78,6 +79,13 @@ pub(crate) fn encode_helio_retained_transform_secondary(
     let mut cursor = 0usize;
     let mut ok =
         direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, artifact.upload, state.gpu);
+    ok &= direct_rcs_push_store_marker_at(
+        batch,
+        &mut cursor,
+        diagnostic_gpu,
+        GPGPU_HELIO_DIAGNOSTIC_SLOT_PROLOGUE,
+        GPGPU_HELIO_DIAGNOSTIC_PROLOGUE,
+    );
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
@@ -96,6 +104,13 @@ pub(crate) fn encode_helio_retained_transform_secondary(
     // Producer/consumer ordering inside the compute secondary: the row walker
     // must observe every zero count and immutable draw field from PREPARE.
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker_at(
+        batch,
+        &mut cursor,
+        diagnostic_gpu,
+        GPGPU_HELIO_DIAGNOSTIC_SLOT_PREPARE,
+        GPGPU_HELIO_DIAGNOSTIC_PREPARE,
+    );
     ok &= direct_rcs_push_gpgpu_walker_2d(
         batch,
         &mut cursor,
@@ -109,12 +124,26 @@ pub(crate) fn encode_helio_retained_transform_secondary(
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     // GPU producer release for all following resident draw secondaries.
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker_at(
+        batch,
+        &mut cursor,
+        diagnostic_gpu,
+        GPGPU_HELIO_DIAGNOSTIC_SLOT_TRANSFORM,
+        GPGPU_HELIO_DIAGNOSTIC_TRANSFORM,
+    );
     ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
     ok &= direct_rcs_push_pipe_control_full(
         batch,
         &mut cursor,
         PIPE_CONTROL_HDC_PIPELINE_FLUSH,
         PIPE_CONTROL_CS_STALL,
+    );
+    ok &= direct_rcs_push_store_marker_at(
+        batch,
+        &mut cursor,
+        diagnostic_gpu,
+        GPGPU_HELIO_DIAGNOSTIC_SLOT_3D_HANDOFF,
+        GPGPU_HELIO_DIAGNOSTIC_3D_HANDOFF,
     );
     ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
     ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
@@ -384,7 +413,13 @@ mod helio_transform_encoder_tests {
         let mut state =
             GpgpuHelioRetainedTransformStateBlob::new(&mut storage, 0x0100_0000).unwrap();
         let encoding =
-            encode_helio_retained_transform_secondary(&mut state, artifact(), dispatch()).unwrap();
+            encode_helio_retained_transform_secondary(
+                &mut state,
+                artifact(),
+                dispatch(),
+                0x0084_0000,
+            )
+            .unwrap();
         assert_eq!(encoding.prepare_groups, 1);
         assert_eq!(encoding.transform_groups, 22);
         assert!(encoding.prepare_groups * 16 >= dispatch().draw_count);

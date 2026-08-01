@@ -441,13 +441,12 @@ pub(crate) fn write_cpu<R>(
     Ok(write(bytes, lease.layout()))
 }
 
-/// Return the exact allocation as a 3D render destination.
+/// Return the exact cursor allocation in its actual hardware byte order.
 ///
-/// The `gpu` field carries the permanent display GGTT alias for identity. The
-/// direct Intel 3D path keys on `phys` and installs its own persistent render
-/// Return the cursor allocation in its actual hardware byte order. Spirit VFX
-/// writes premultiplied B,G,R,A bytes explicitly, so colored layers no longer
-/// rely on the grayscale-only accident of the original Lab256 producer.
+/// The `gpu` field is its permanent display alias; Spirit's execution PPGTT
+/// maps the same physical pages for GPGPU access. Spirit VFX writes
+/// premultiplied B,G,R,A bytes explicitly, so colored layers do not rely on
+/// the grayscale-only accident of the original Lab256 producer.
 fn gpgpu_bgra_target(
     lease: SpiritFrameLease,
 ) -> Result<crate::intel::gpgpu::GpgpuRgba8Surface, SpiritSubmitError> {

@@ -8,7 +8,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant as EmbassyInstant, Timer
 const H264_DECODE_TIMEOUT_MS: u64 = 5_000;
 const H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
 const H264_ONLINE_MEDIA_FETCH_MAX_BYTES: usize = 160 * 1024 * 1024;
-const H264_TRUEOSFS_VIDEO_MAX_BYTES: usize = 160 * 1024 * 1024;
+const H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES: usize = 1024 * 1024 * 1024;
 const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 64 * 1024;
 const H264_MEDIA_SESSION_WAIT_MS: u64 = 5_000;
 const H264_MEDIA_SESSION_RETRY_MS: u64 = 1;
@@ -360,7 +360,7 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
         .map_err(|_| "TRUEOSFS video stream open failed")?
         .ok_or("video asset missing from TRUEOSFS root")?;
     let file_bytes = usize::try_from(file.data_len()).map_err(|_| "TRUEOSFS video too large")?;
-    if file_bytes == 0 || file_bytes > H264_TRUEOSFS_VIDEO_MAX_BYTES {
+    if file_bytes == 0 || file_bytes > H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES {
         return Err("TRUEOSFS video size outside playback limit");
     }
     let mut asset = Vec::new();
@@ -1534,7 +1534,7 @@ fn h264_prepare_trueosfs_asset(
     // byte sequences even though its AVC samples are length-prefixed.
     if h264_is_mp4_container(asset.as_slice()) {
         let demuxed = mp4_avc1_to_annexb(asset.as_slice())?;
-        if demuxed.annexb.is_empty() || demuxed.annexb.len() > H264_TRUEOSFS_VIDEO_MAX_BYTES {
+        if demuxed.annexb.is_empty() || demuxed.annexb.len() > H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES {
             return Err("demuxed TRUEOSFS H.264 size outside playback limit");
         }
         return Ok((demuxed.annexb, demuxed.timing, "trueosfs-mp4-avc", "mp4"));

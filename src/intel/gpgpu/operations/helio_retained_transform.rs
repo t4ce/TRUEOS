@@ -60,6 +60,14 @@ pub(crate) const GPGPU_HELIO_INDIRECT_BYTES: usize = 20;
 pub(crate) const GPGPU_HELIO_MAX_ROWS: u32 = 4_096;
 pub(crate) const GPGPU_HELIO_MAX_DRAWS: u32 = 64;
 pub(crate) const GPGPU_HELIO_TRANSFORM_STATE_BLOB_BYTES: usize = 0x2000;
+pub(crate) const GPGPU_HELIO_DIAGNOSTIC_SLOT_PROLOGUE: usize = 26;
+pub(crate) const GPGPU_HELIO_DIAGNOSTIC_SLOT_PREPARE: usize = 27;
+pub(crate) const GPGPU_HELIO_DIAGNOSTIC_SLOT_TRANSFORM: usize = 28;
+pub(crate) const GPGPU_HELIO_DIAGNOSTIC_SLOT_3D_HANDOFF: usize = 29;
+pub(crate) const GPGPU_HELIO_DIAGNOSTIC_PROLOGUE: u32 = 0x4845_4C10;
+pub(crate) const GPGPU_HELIO_DIAGNOSTIC_PREPARE: u32 = 0x4845_4C11;
+pub(crate) const GPGPU_HELIO_DIAGNOSTIC_TRANSFORM: u32 = 0x4845_4C12;
+pub(crate) const GPGPU_HELIO_DIAGNOSTIC_3D_HANDOFF: u32 = 0x4845_4C13;
 
 /// Authenticated native artifact mapping for a caller-owned Render PPGTT.
 /// Render maps `phys..phys+mapped_bytes` at `gpu`; the encoder references that

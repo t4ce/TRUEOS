@@ -140,9 +140,8 @@ pub(super) fn spirit_cursor_local_point(
 /// One exact Spirit allocation selected for producer access and a later flip.
 ///
 /// `cursor_gpu` is the display GGTT alias. The physical allocation is the
-/// identity shared with the CPU and 3D engine; the renderer may install its
-/// own private address-space alias without creating or copying a second
-/// buffer.
+/// identity shared with CPU producers and Spirit's GPGPU execution context;
+/// its PPGTT maps these pages without creating or copying a second buffer.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) struct SpiritCursorSurfaceAccess {
     pub(super) channel: u8,

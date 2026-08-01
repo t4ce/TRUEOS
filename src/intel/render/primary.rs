@@ -1126,6 +1126,7 @@ fn stage_resident_churn_transform_secondary(
         &mut state,
         resident.transform_artifact,
         dispatch,
+        GPU_VA_RESULT_BASE,
     )
     .map_err(|_| "churn-transform-encode")?;
     Ok(encoded.command_dwords * core::mem::size_of::<u32>())

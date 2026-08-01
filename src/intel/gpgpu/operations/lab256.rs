@@ -46,6 +46,7 @@ struct Lab256Submitted {
     state_out: Lab256Buffer,
     report: Lab256Buffer,
     dst: GpgpuRgba8Surface,
+    submit_ambiguous: bool,
     frame: u32,
     present_fps: u32,
     pointer_xy: Option<(u16, u16)>,
@@ -255,16 +256,21 @@ pub(crate) fn submit_lab256_spirit_frame(
         timeout_logged: false,
     });
 
-    if lab256_trace_spirit_frame(submitted.frame) {
+    if submitted.submit_ambiguous || lab256_trace_spirit_frame(submitted.frame) {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: lab256 one-shot accepted tag={} frame={} present_fps={} pointer_active={} pointer_xy={:?} dst=0x{:X} owner=spirit-worker lane=execution admission=gpu-executor/vgpu/guc wait=detached\n",
+            "intel/gpgpu: lab256 one-shot accepted tag={} frame={} present_fps={} pointer_active={} pointer_xy={:?} dst=0x{:X} owner=spirit-worker lane=execution admission={} wait=detached producer_lease=retained\n",
             tag,
             submitted.frame,
             submitted.present_fps,
             submitted.pointer_xy.is_some() as u8,
             submitted.pointer_xy,
             dst.gpu,
+            if submitted.submit_ambiguous {
+                "ambiguous-quarantined"
+            } else {
+                "gpu-executor/vgpu/guc"
+            },
         );
     }
     Some(handle)
@@ -459,7 +465,16 @@ fn submit_lab256_batch(
             runtime_snapshot.report,
             dst,
         );
-    if !batch_ok || !execution_rcs_submit_batch(dev, state) {
+    if !batch_ok {
+        return None;
+    }
+    let submitted_to_guc = execution_rcs_submit_batch(dev, state);
+    // A quarantined execution lane after a failed submit means publication is
+    // ambiguous, not safely rejected. Return a pollable submission so Spirit
+    // retains the exact destination lease until marker + saved HEAD prove the
+    // late request retired. With no late acceptance, the lease stays pinned.
+    let submit_ambiguous = !submitted_to_guc && execution_rcs_context_is_quarantined();
+    if !submitted_to_guc && !submit_ambiguous {
         return None;
     }
     Some(Lab256Submitted {
@@ -468,6 +483,7 @@ fn submit_lab256_batch(
         state_out,
         report: runtime_snapshot.report,
         dst,
+        submit_ambiguous,
         frame,
         present_fps,
         pointer_xy,
@@ -510,7 +526,7 @@ fn log_lab256_completion(
     {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: lab256 frame={} ok={} submitted={} marker=0x{:08X} report_audit={} control_alpha={:.2} present_fps={} pointer_active={} pointer_xy={:?} state_in=0x{:X} state_out=0x{:X} dst=0x{:X} submit_ms={} owner={} admission=gpu-executor/vgpu/guc direct_elsp=0\n",
+            "intel/gpgpu: lab256 frame={} ok={} submitted={} marker=0x{:08X} report_audit={} control_alpha={:.2} present_fps={} pointer_active={} pointer_xy={:?} state_in=0x{:X} state_out=0x{:X} dst=0x{:X} submit_ms={} owner={} admission={} direct_elsp=0\n",
             submitted.frame,
             ok as u8,
             1,
@@ -525,6 +541,11 @@ fn log_lab256_completion(
             submitted.dst.gpu,
             direct_rcs_elapsed_ms_since(submitted.started_tick),
             producer_owner,
+            if submitted.submit_ambiguous {
+                "ambiguous-quarantined"
+            } else {
+                "gpu-executor/vgpu/guc"
+            },
         );
     }
 }
