@@ -16,6 +16,7 @@ HELIOIR_MAGIC = b"HELIOIR\0"
 HELIORP_MAGIC = b"HELIORP\0"
 IR_SECTION = "render/ir-v1.bin"
 REPLAY_SECTION = "render/replay-v1.bin"
+CHURN_LIGHT_SECTION = "scene/churn-light-v1.bin"
 BATTLE_SECTION = "scene/shape-battle-v1.bin"
 BIGCLOTH_SECTION = "scene/pendulum-bigcloth-v1.bin"
 
@@ -249,6 +250,34 @@ def validate_native(sections: dict[str, tuple[int, bytes]]) -> None:
 
 
 def validate_scene_contracts(sections: dict[str, tuple[int, bytes]]) -> None:
+    light = section(sections, CHURN_LIGHT_SECTION, 0xFFFF)
+    if len(light) != 160 or light[:8] != b"HCHLIT\0\0":
+        fail("bad churn-light scene header")
+    if u16(light, 8) != 1 or u16(light, 10) != 160 or u32(light, 12) != 160:
+        fail("unsupported churn-light scene version")
+    if (u32(light, 16), u32(light, 20)) != (2, 4):
+        fail("churn-light count contract changed")
+
+    # Provenance: Helio crates/examples/churn_benchmark.rs owns the two point
+    # lights; crates/examples/churn_scene.rs owns ambient and the four material
+    # roughness/metallic pairs. Validate the complete little-endian payload so
+    # build-time drift cannot silently change TRUEOS's ported lighting contract.
+    expected_light = bytearray(160)
+    expected_light[:8] = b"HCHLIT\0\0"
+    struct.pack_into("<HHIII", expected_light, 8, 1, 160, 160, 2, 4)
+    struct.pack_into("<4f", expected_light, 24, 0.12, 0.12, 0.14, 1.0)
+    struct.pack_into(
+        "<8f", expected_light, 40, -20.0, 5.0, -20.0, 40.0, 0.8, 0.7, 0.55, 7.0
+    )
+    struct.pack_into(
+        "<8f", expected_light, 72, 20.0, 5.0, 20.0, 40.0, 0.5, 0.7, 1.0, 7.0
+    )
+    struct.pack_into(
+        "<8f", expected_light, 104, 0.65, 0.0, 0.60, 0.0, 0.70, 0.0, 0.15, 0.80
+    )
+    if light != bytes(expected_light):
+        fail("churn-light payload changed")
+
     battle = section(sections, BATTLE_SECTION, 0xFFFF)
     if len(battle) != 320 or battle[:8] != b"HBATTLE\0":
         fail("bad shape-battle scene header")

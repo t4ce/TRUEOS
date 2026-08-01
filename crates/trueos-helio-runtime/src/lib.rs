@@ -190,6 +190,8 @@ pub enum Error {
     ReplayDrawMismatch,
     MissingChurnScene,
     InvalidChurnScene,
+    MissingChurnLighting,
+    InvalidChurnLighting,
     MissingBattleScene,
     InvalidBattleScene,
     MissingPendulumScene,

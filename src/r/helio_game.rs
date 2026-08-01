@@ -352,8 +352,22 @@ fn create_surface() -> Result<GameSurface, GameError> {
 fn desired_resize(surface: &GameSurface) -> Option<(u32, u32)> {
     let window = surface.window?;
     let placement = crate::ui4::window_placement(OWNER, window).ok()?;
-    ((placement.width, placement.height) != (surface.width, surface.height))
-        .then_some((placement.width, placement.height))
+    let target = helio_backing_extent(placement.width, placement.height);
+    (target != (surface.width, surface.height)).then_some(target)
+}
+
+/// A maximized Helio scene keeps the broker's full logical extent while the
+/// universal display plane scales a half-resolution backing directly. This is
+/// UI4's native maximize fast path and prevents a 2560x1440 churn frame from
+/// monopolizing the shared RCS lane; ordinary 768x512 windows stay exact 1:1.
+const fn helio_backing_extent(logical_width: u32, logical_height: u32) -> (u32, u32) {
+    if logical_width > crate::ui4::DEFAULT_FRAME_WIDTH
+        && logical_height > crate::ui4::DEFAULT_FRAME_HEIGHT
+    {
+        (logical_width.div_ceil(2), logical_height.div_ceil(2))
+    } else {
+        (logical_width, logical_height)
+    }
 }
 
 fn prepare_resize(
@@ -680,13 +694,13 @@ fn make_resident_batches(
 }
 
 fn update_resident_batches(
-    resident: &[ResidentTriangle],
+    resident: &mut [ResidentTriangle],
     batches: &[trueos_helio_runtime::churn::Batch],
 ) -> Result<(), GameError> {
     if resident.len() < batches.len() {
         return Err(GameError::Render("helio-churn-batch-count"));
     }
-    for (resident, batch) in resident.iter().zip(batches) {
+    for (resident, batch) in resident.iter_mut().zip(batches) {
         crate::intel::render::update_resident_triangle_mesh(
             &resident.mesh,
             &batch.vertices,
@@ -703,6 +717,7 @@ fn update_resident_batches(
             args.first_instance,
         )
         .map_err(GameError::Render)?;
+        resident.rgba = batch.rgba;
     }
     Ok(())
 }
@@ -734,17 +749,34 @@ fn apply_churn_key_actions(
         if window_id != window {
             continue;
         }
-        let delta = match key {
-            KeyCode::Equal | KeyCode::NumpadAdd => 1,
-            KeyCode::Minus | KeyCode::NumpadSubtract => -1,
-            _ => continue,
-        };
-        engine.adjust_spawn_rate(delta);
-        crate::log_info!(
-            target: "helio";
-            "helio churn input spawn_rate={} source=ui4-winit-bridge\n",
-            engine.spawn_rate(),
-        );
+        match key {
+            KeyCode::Equal | KeyCode::NumpadAdd => {
+                engine.adjust_spawn_rate(1);
+                crate::log_info!(
+                    target: "helio";
+                    "helio churn input spawn_rate={} source=ui4-winit-bridge\n",
+                    engine.spawn_rate(),
+                );
+            }
+            KeyCode::Minus | KeyCode::NumpadSubtract => {
+                engine.adjust_spawn_rate(-1);
+                crate::log_info!(
+                    target: "helio";
+                    "helio churn input spawn_rate={} source=ui4-winit-bridge\n",
+                    engine.spawn_rate(),
+                );
+            }
+            KeyCode::KeyC => {
+                let collisions = engine.toggle_collisions();
+                crate::log_info!(
+                    target: "helio";
+                    "helio churn input collisions={} action={} mode=bounded-deterministic-separation source=ui4-winit-bridge\n",
+                    collisions,
+                    if collisions { "burst" } else { "orbit-reset" },
+                );
+            }
+            _ => {}
+        }
     }
 }
 
@@ -928,7 +960,7 @@ async fn run_cube() -> Result<(), GameError> {
     *LAST_ERROR.lock() = None;
     crate::log_info!(
         target: "helio";
-        "helio example=1 name=simple-cube online artifact_bytes={} normalized_triangles={} source_draw_indices={} draw_source={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied resize=ui4-broker->render-new-native-ring->atomic-frame-swap path=helioa-v1+render-ir-v1+artifact-replay-v1->uniform-color-subdraws->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+        "helio example=1 name=simple-cube online artifact_bytes={} normalized_triangles={} source_draw_indices={} draw_source={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied resize=ui4-broker->render-native-or-half-scale-ring->atomic-frame-swap->direct-plane-1x-or-2x path=helioa-v1+render-ir-v1+artifact-replay-v1->uniform-color-subdraws->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
         GAME_ARTIFACT.len(),
         triangle_count,
         initial_scene.source_draw_indexed_indirect.index_count,
@@ -1040,7 +1072,7 @@ async fn run_cube() -> Result<(), GameError> {
                 ));
                 crate::log_info!(
                     target: "helio";
-                    "helio resize committed example=1 window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1 cpu_readback=0 cpu_frame_copy=0\n",
+                    "helio resize committed example=1 window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1-or-direct-plane-2x cpu_readback=0 cpu_frame_copy=0\n",
                     window.raw(),
                     surface.width,
                     surface.height,
@@ -1084,7 +1116,7 @@ async fn run_churn() -> Result<(), GameError> {
         destroy_unpublished_surface(surface);
         return Err(GameError::Artifact(error));
     }
-    let resident = match make_resident_batches(engine.batches()) {
+    let mut resident = match make_resident_batches(engine.batches()) {
         Ok(resident) => resident,
         Err(error) => {
             destroy_unpublished_surface(surface);
@@ -1158,7 +1190,7 @@ async fn run_churn() -> Result<(), GameError> {
             if let Err(error) = engine.step(aspect) {
                 break Err(GameError::Artifact(error));
             }
-            if let Err(error) = update_resident_batches(&resident, engine.batches()) {
+            if let Err(error) = update_resident_batches(&mut resident, engine.batches()) {
                 break Err(error);
             }
             frame_prepared = true;
@@ -1177,7 +1209,7 @@ async fn run_churn() -> Result<(), GameError> {
                             retired_frames.push(previous);
                             crate::log_info!(
                                 target: "helio";
-                                "helio resize committed example=2 window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1 cpu_readback=0 cpu_frame_copy=0\n",
+                                "helio resize committed example=2 window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1-or-direct-plane-2x cpu_readback=0 cpu_frame_copy=0\n",
                                 surface.window.map_or(0, crate::ui4::WindowId::raw),
                                 surface.width,
                                 surface.height,
@@ -1257,7 +1289,7 @@ async fn run_churn() -> Result<(), GameError> {
             }
             crate::log_info!(
                 target: "helio";
-                "helio example=2 name=churn-benchmark online artifact_bytes={} active_objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba floor=none alpha=premultiplied animation_rate=1.5x producer_pacing=relative-post-work delay_ms=33 nominal_ceiling_fps=30 input=ui4-owner-broker->winit-shaped-events controls=WASD+Space+Shift,left-drag-look,+/- resize=ui4-broker->render-new-native-ring->atomic-frame-swap path=helioa-v1+churn-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+                "helio example=2 name=churn-benchmark online artifact_bytes={} active_objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba floor=none alpha=premultiplied animation_rate=1.5x lighting=churn-light-v1+24-face-batches lights=2 ambient=hemisphere controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=relative-post-work delay_ms=33 nominal_ceiling_fps=30 input=ui4-owner-broker->winit-shaped-events resize=ui4-broker->render-native-or-half-scale-ring->atomic-frame-swap->direct-plane-1x-or-2x path=helioa-v1+churn-v1+flat-light-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
                 GAME_ARTIFACT.len(),
                 engine.active_objects(),
                 resident.len(),
@@ -1291,7 +1323,7 @@ async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
         destroy_unpublished_surface(surface);
         return Err(GameError::Artifact(error));
     }
-    let resident = match make_resident_batches(engine.batches()) {
+    let mut resident = match make_resident_batches(engine.batches()) {
         Ok(resident) => resident,
         Err(error) => {
             destroy_unpublished_surface(surface);
@@ -1363,7 +1395,7 @@ async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
             if let Err(error) = engine.step(render_width as f32 / render_height as f32) {
                 break Err(GameError::Artifact(error));
             }
-            if let Err(error) = update_resident_batches(&resident, engine.batches()) {
+            if let Err(error) = update_resident_batches(&mut resident, engine.batches()) {
                 break Err(error);
             }
             frame_prepared = true;
@@ -1389,7 +1421,7 @@ async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
                             retired_frames.push(previous);
                             crate::log_info!(
                                 target: "helio";
-                                "helio resize committed example={} window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1 cpu_readback=0 cpu_frame_copy=0\n",
+                                "helio resize committed example={} window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive presentation=1:1-or-direct-plane-2x cpu_readback=0 cpu_frame_copy=0\n",
                                 example_id,
                                 surface.window.map_or(0, crate::ui4::WindowId::raw),
                                 surface.width,
@@ -1465,7 +1497,7 @@ async fn run_ported_scene(example_id: u8) -> Result<(), GameError> {
             }
             crate::log_info!(
                 target: "helio";
-                "helio example={} name={} online artifact_bytes={} objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied input=ui4-owner-broker->winit-shaped-events controls={} resize=ui4-broker->render-new-native-ring->atomic-frame-swap path=helioa-v1+scene-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+                "helio example={} name={} online artifact_bytes={} objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied input=ui4-owner-broker->winit-shaped-events controls={} resize=ui4-broker->render-native-or-half-scale-ring->atomic-frame-swap->direct-plane-1x-or-2x path=helioa-v1+scene-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
                 example_id,
                 engine.name(),
                 GAME_ARTIFACT.len(),

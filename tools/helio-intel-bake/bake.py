@@ -39,6 +39,9 @@ REPLAY_KIND = 7
 REPLAY_MAGIC = b"HELIORP\0"
 REPLAY_HEADER_LEN = 64
 REPLAY_COMMAND_STRIDE = 20
+CHURN_LIGHT_SECTION = "scene/churn-light-v1.bin"
+CHURN_LIGHT_MAGIC = b"HCHLIT\0\0"
+CHURN_LIGHT_BYTES = 160
 
 
 def encode_replay_plan(render_ir: bytes) -> bytes:
@@ -98,6 +101,23 @@ def encode_replay_plan(render_ir: bytes) -> bytes:
 
 def _put_f32s(out: bytearray, offset: int, values: tuple[float, ...]) -> None:
     struct.pack_into("<" + "f" * len(values), out, offset, *values)
+
+
+def encode_churn_light_scene() -> bytes:
+    """Encode the hosted Helio churn benchmark's lighting/material contract."""
+    # Provenance: Helio crates/examples/churn_benchmark.rs installs these two
+    # point lights, while crates/examples/churn_scene.rs owns the ambient and
+    # four material roughness/metallic values. Keep this build-time handoff
+    # separate from TRUEOS runtime policy and pointer-free in the artifact.
+    out = bytearray(CHURN_LIGHT_BYTES)
+    out[:8] = CHURN_LIGHT_MAGIC
+    struct.pack_into("<HHI", out, 8, 1, CHURN_LIGHT_BYTES, CHURN_LIGHT_BYTES)
+    struct.pack_into("<II", out, 16, 2, 4)
+    _put_f32s(out, 24, (0.12, 0.12, 0.14, 1.0))
+    _put_f32s(out, 40, (-20.0, 5.0, -20.0, 40.0, 0.8, 0.7, 0.55, 7.0))
+    _put_f32s(out, 72, (20.0, 5.0, 20.0, 40.0, 0.5, 0.7, 1.0, 7.0))
+    _put_f32s(out, 104, (0.65, 0.0, 0.60, 0.0, 0.70, 0.0, 0.15, 0.80))
+    return bytes(out)
 
 
 def encode_shape_battle_scene() -> bytes:
@@ -478,6 +498,9 @@ def main() -> None:
     # These scene contracts are the build-time handoff from the hosted Helio
     # demos to TRUEOS's no_std retained renderer. They deliberately share the
     # captured Helio/WGPU graph and native shader pair in this artifact.
+    sections[CHURN_LIGHT_SECTION] = (
+        OTHER_SECTION_KIND, encode_churn_light_scene(),
+    )
     sections["scene/shape-battle-v1.bin"] = (
         OTHER_SECTION_KIND, encode_shape_battle_scene(),
     )

@@ -31,3 +31,12 @@ the checked-in artifact without rebuilding it:
 ```sh
 tools/helio-build/build-simple-cube.sh --validate-only
 ```
+
+The artifact also carries Helio's versioned churn contracts. Helio example 2
+uses `scene/churn-v1.bin` for geometry and animation plus
+`scene/churn-light-v1.bin` for the original ambient, two point lights, and four
+material surface parameters. TRUEOS currently lowers that rig to 24 retained
+material/face light batches while preserving one Helio indirect command per
+batch and one GuC-scheduled frame. Press `C` in the UI4 window to toggle the
+bounded collision-style burst; press it again to return to the procedural
+orbit.
