@@ -3,11 +3,14 @@ fn upload_artifact(
     artifact: GpgpuKernelArtifact,
     gpu: u64,
 ) -> Option<UploadedKernelArtifact> {
+    // The catalog records the proven consumer boundary. New/unknown artifacts
+    // stay global until their call graph is audited; persistent DirectRCS
+    // consumers are admitted as caller-PPGTT residents.
     upload_artifact_from_sources(
         dev,
         artifact,
         gpu,
-        GpgpuArtifactAddressSpace::GlobalGgtt,
+        known_artifact_address_space(artifact.name),
         false,
         None,
     )

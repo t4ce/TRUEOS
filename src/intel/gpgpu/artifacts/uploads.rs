@@ -682,17 +682,7 @@ pub(crate) fn reload_known_kernel_artifact(
     };
 
     let reusable_upload = *slot.upload.lock();
-    let address_space = if matches!(
-        slot.artifact.name,
-        HELIO_RETAINED_TRANSFORM_KERNEL_NAME
-            | LAB256_MULTIPHASE_KERNEL_NAME
-            | SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME
-            | SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME
-    ) {
-        GpgpuArtifactAddressSpace::CallerPpgtt
-    } else {
-        GpgpuArtifactAddressSpace::GlobalGgtt
-    };
+    let address_space = known_artifact_address_space(slot.artifact.name);
     let Some(upload) = upload_artifact_from_sources(
         dev,
         slot.artifact,
@@ -720,6 +710,39 @@ pub(crate) fn reload_known_kernel_artifact(
         digest_hex(&upload.bin_sha256).as_str()
     );
     Ok(upload)
+}
+
+fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
+    match name {
+        COPY_RECT_RGBA8_KERNEL_NAME
+        | RESOLVE_TILE64_MSAA4_RGBA8_KERNEL_NAME
+        | FILL_RECT_RGBA8_KERNEL_NAME
+        | FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME
+        | ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME
+        | GLYPH_MASK_RGBA8_KERNEL_NAME
+        | FONT_INSTANCE_RGBA8_KERNEL_NAME
+        | UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME
+        | UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME
+        | SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME
+        | UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME
+        | MANDEL64_WORKLIST_RGBA8_KERNEL_NAME
+        | SKYBOX_SAMPLE_RGB565_KERNEL_NAME
+        | CHART_SINE_RGBA8_KERNEL_NAME
+        | PIXEL_PLASMA_RGBA8_KERNEL_NAME
+        | CPP_DEMO_RGBA8_KERNEL_NAME
+        | CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME
+        | PARTICLE_CRAFT_KERNEL_NAME
+        | LFM25_Q8_PROJECT_PACKED_KERNEL_NAME
+        | KOKORO_QGEMM_U8_I8_KERNEL_NAME
+        | KOKORO_CONV1D_U8_U8_KERNEL_NAME
+        | FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME
+        | SCENE_AABB_KERNEL_NAME
+        | HELIO_RETAINED_TRANSFORM_KERNEL_NAME
+        | LAB256_MULTIPHASE_KERNEL_NAME
+        | SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME
+        | SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME => GpgpuArtifactAddressSpace::CallerPpgtt,
+        _ => GpgpuArtifactAddressSpace::GlobalGgtt,
+    }
 }
 
 pub(crate) fn reload_all_known_kernel_artifacts() -> GpgpuArtifactReloadSummary {

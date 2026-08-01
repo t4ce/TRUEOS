@@ -153,7 +153,12 @@ pub(crate) fn encode_helio_retained_transform_secondary(
     // Split producer release from consumer invalidation before changing the
     // pipeline. The release above makes transformed rows globally visible;
     // this command discards stale 3D-side views of those buffers.
-    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        HELIO_TRANSFORM_RELEASE_HEADER_BITS,
+        PIPE_CONTROL_INVALIDATE_BITS,
+    );
     ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
     ok &= direct_rcs_push_pipe_control_full(
         batch,
@@ -540,7 +545,7 @@ mod helio_transform_encoder_tests {
             .unwrap();
         let consumer_invalidate = (transform_release + 1..handoff_select)
             .find(|index| {
-                commands[*index] == (PIPE_CONTROL_CMD | PIPE_CONTROL_HDC_PIPELINE_FLUSH)
+                commands[*index] == release_cmd
                     && commands[*index + 1] == PIPE_CONTROL_INVALIDATE_BITS
             })
             .unwrap();

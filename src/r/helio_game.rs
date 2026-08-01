@@ -83,7 +83,10 @@ pub(crate) enum CpuCarrierBootstrapState {
 }
 
 fn build_cpu_carrier_registry(workers: &[(u32, u8)]) -> Option<CpuCarrierRegistry> {
-    if workers.is_empty() || workers.len() > CPU_CARRIER_CAPACITY {
+    // A partial registry would strand every modulo shard assigned to a
+    // missing carrier. Publish exactly three AP2+ executors or keep Helio
+    // pending until the topology is completely available.
+    if workers.len() != CPU_CARRIER_CAPACITY {
         return None;
     }
 
@@ -1779,12 +1782,36 @@ async fn run_cube(context: InstanceContext) -> Result<(), GameError> {
     Ok(())
 }
 
-fn native_churn_triangle_count(frame: &trueos_helio_runtime::churn::TransformFrame<'_>) -> u64 {
+fn native_transform_triangle_count(frame: &trueos_helio_runtime::churn::TransformFrame<'_>) -> u64 {
     frame.draw_templates.iter().fold(0u64, |total, draw| {
         total.saturating_add(
             u64::from(draw.index_count / 3).saturating_mul(u64::from(draw.capacity)),
         )
     })
+}
+
+fn native_cpu_triangle_count(frame: &trueos_helio_runtime::churn::InstanceFrame<'_>) -> u64 {
+    frame.draws.iter().fold(0u64, |total, draw| {
+        total.saturating_add(
+            u64::from(draw.index_count / 3).saturating_mul(u64::from(draw.instance_count)),
+        )
+    })
+}
+
+fn retained_transform_setup_error(reason: &'static str) -> bool {
+    reason.starts_with("churn-transform-") || reason.starts_with("helio-transform-")
+}
+
+fn prepare_native_churn_cpu_frame(
+    engine: &mut trueos_helio_runtime::churn::Engine,
+    resident: &crate::intel::render::ResidentChurnForward,
+    aspect: f32,
+) -> Result<u64, GameError> {
+    let frame = engine.step_instances(aspect).map_err(GameError::Artifact)?;
+    let triangles = native_cpu_triangle_count(&frame);
+    crate::intel::render::update_resident_churn_forward_frame(resident, &frame)
+        .map_err(GameError::Render)?;
+    Ok(triangles)
 }
 
 async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
@@ -1806,32 +1833,63 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
             return Err(GameError::Artifact(error));
         }
     };
-    let initial = match engine.step_transform_frame(surface.width as f32 / surface.height as f32) {
-        Ok(frame) => frame,
-        Err(error) => {
-            destroy_unpublished_surface(surface);
-            return Err(GameError::Artifact(error));
-        }
+    let initial_aspect = surface.width as f32 / surface.height as f32;
+    let (resident, initial_transform) = {
+        let initial = match engine.step_transform_frame(initial_aspect) {
+            Ok(frame) => frame,
+            Err(error) => {
+                destroy_unpublished_surface(surface);
+                return Err(GameError::Artifact(error));
+            }
+        };
+        let resident = match crate::intel::render::create_resident_churn_forward(
+            CHURN_FORWARD_ARTIFACT,
+            max_instances,
+            initial.meshes,
+        ) {
+            Ok(resident) => resident,
+            Err(reason) => {
+                destroy_unpublished_surface(surface);
+                return Err(GameError::NativeUnavailable(reason));
+            }
+        };
+        let transform_result = if resident.retained_transform_available() {
+            crate::intel::render::update_resident_churn_forward_transform_frame(&resident, &initial)
+                .map(|()| native_transform_triangle_count(&initial))
+        } else {
+            Err(resident
+                .retained_transform_unavailable_reason()
+                .unwrap_or("churn-transform-unavailable"))
+        };
+        (resident, transform_result)
     };
-    let resident = match crate::intel::render::create_resident_churn_forward(
-        CHURN_FORWARD_ARTIFACT,
-        max_instances,
-        initial.meshes,
-    ) {
-        Ok(resident) => resident,
-        Err(reason) => {
-            destroy_unpublished_surface(surface);
-            return Err(GameError::NativeUnavailable(reason));
-        }
-    };
-    if let Err(reason) =
-        crate::intel::render::update_resident_churn_forward_transform_frame(&resident, &initial)
-    {
-        let _ = crate::intel::render::release_resident_churn_forward(&resident);
-        destroy_unpublished_surface(surface);
-        return Err(GameError::NativeUnavailable(reason));
-    }
-    let mut prepared_triangles = native_churn_triangle_count(&initial);
+    let (mut gpu_transform_enabled, mut transform_fallback_reason, mut prepared_triangles) =
+        match initial_transform {
+            Ok(triangles) => (true, None, triangles),
+            Err(reason) => {
+                crate::log_warn!(
+                    target: "helio";
+                    "helio instance={} example=2 retained transform unavailable reason={} boundary=pre-window action=native-cpu-expanded-fallback artifact_native_vs_ps=preserved\n",
+                    context.instance_id,
+                    reason,
+                );
+                let triangles =
+                    match prepare_native_churn_cpu_frame(&mut engine, &resident, initial_aspect) {
+                        Ok(triangles) => triangles,
+                        Err(GameError::Render(cpu_reason)) => {
+                            let _ = crate::intel::render::release_resident_churn_forward(&resident);
+                            destroy_unpublished_surface(surface);
+                            return Err(GameError::NativeUnavailable(cpu_reason));
+                        }
+                        Err(error) => {
+                            let _ = crate::intel::render::release_resident_churn_forward(&resident);
+                            destroy_unpublished_surface(surface);
+                            return Err(error);
+                        }
+                    };
+                (false, Some(reason), triangles)
+            }
+        };
 
     let mut input = crate::ui4::winit_input::EventLoopInput::new(context.owner);
     let mut fly_camera = FlyCamera::new(engine.camera());
@@ -1900,17 +1958,43 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
             if camera_changed && let Err(error) = engine.set_camera(fly_camera.camera) {
                 break Err(GameError::Artifact(error));
             }
-            let prepared =
-                match engine.step_transform_frame(render_width as f32 / render_height as f32) {
-                    Ok(frame) => frame,
-                    Err(error) => break Err(GameError::Artifact(error)),
+            let aspect = render_width as f32 / render_height as f32;
+            if gpu_transform_enabled {
+                let transform_update = {
+                    let prepared = match engine.step_transform_frame(aspect) {
+                        Ok(frame) => frame,
+                        Err(error) => break Err(GameError::Artifact(error)),
+                    };
+                    crate::intel::render::update_resident_churn_forward_transform_frame(
+                        &resident, &prepared,
+                    )
+                    .map(|()| native_transform_triangle_count(&prepared))
                 };
-            if let Err(reason) = crate::intel::render::update_resident_churn_forward_transform_frame(
-                &resident, &prepared,
-            ) {
-                break Err(GameError::Render(reason));
+                match transform_update {
+                    Ok(triangles) => prepared_triangles = triangles,
+                    Err(reason) if retained_transform_setup_error(reason) => {
+                        gpu_transform_enabled = false;
+                        transform_fallback_reason = Some(reason);
+                        crate::log_warn!(
+                            target: "helio";
+                            "helio instance={} example=2 retained transform disabled reason={} boundary=frame-input action=native-cpu-expanded-fallback window=preserve\n",
+                            context.instance_id,
+                            reason,
+                        );
+                    }
+                    Err(reason) => break Err(GameError::Render(reason)),
+                }
             }
-            prepared_triangles = native_churn_triangle_count(&prepared);
+            if !gpu_transform_enabled {
+                prepared_triangles =
+                    match prepare_native_churn_cpu_frame(&mut engine, &resident, aspect) {
+                        Ok(triangles) => triangles,
+                        Err(GameError::Render(reason)) if first_frame => {
+                            break Err(GameError::NativeUnavailable(reason));
+                        }
+                        Err(error) => break Err(error),
+                    };
+            }
             frame_prepared = true;
         }
 
@@ -1998,6 +2082,39 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
                 Timer::at(next_frame).await;
                 continue;
             }
+            Err(GameError::Render(reason))
+                if gpu_transform_enabled && retained_transform_setup_error(reason) =>
+            {
+                // Transform state/encoding fails before the primary batch is
+                // submitted. Rebuild the same native VS/PS inputs on the CPU
+                // and retry without discarding the unpublished surface.
+                gpu_transform_enabled = false;
+                transform_fallback_reason = Some(reason);
+                crate::log_warn!(
+                    target: "helio";
+                    "helio instance={} example=2 retained transform disabled reason={} boundary=secondary-encode submission=not-published action=native-cpu-expanded-fallback window=preserve\n",
+                    context.instance_id,
+                    reason,
+                );
+                prepared_triangles = match prepare_native_churn_cpu_frame(
+                    &mut engine,
+                    &resident,
+                    render_width as f32 / render_height as f32,
+                ) {
+                    Ok(triangles) => triangles,
+                    Err(GameError::Render(cpu_reason)) if first_frame => {
+                        break Err(GameError::NativeUnavailable(cpu_reason));
+                    }
+                    Err(error) => break Err(error),
+                };
+                frame_prepared = true;
+                next_frame += Duration::from_micros(NATIVE_CHURN_FRAME_PERIOD_US);
+                if next_frame <= Instant::now() {
+                    next_frame = Instant::now();
+                }
+                Timer::at(next_frame).await;
+                continue;
+            }
             Err(GameError::Render("helio-incomplete-native-instanced-frame")) => {
                 incomplete_retries = incomplete_retries.saturating_add(1);
                 if first_frame && incomplete_retries >= NATIVE_FIRST_FRAME_INCOMPLETE_RETRY_LIMIT {
@@ -2027,19 +2144,36 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
             if !context.mark_online() {
                 break Ok(());
             }
-            crate::log_info!(
-                target: "helio";
-                "helio instance={} example=2 name=churn-benchmark native=1 online artifact_bytes={} active_objects={} max_instances={} draw_groups=12 geometry=3x-posnormal-cube frame={} window={} extent={}x{} plane={} background=transparent-rgba controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=absolute-deadline period_us=16667 target_fps=60 missed_deadline=skip-extra-delay path=helioa-churn-forward-v1->gpu-retained-transform+compaction->artifact-native-vs+ps->12-indexed-indirect->one-guc-schedule->ui4-triple-direct cpu_vertex_projection=0 cpu_matrix_expansion=0 mutable_upload=camera+64b-transform-seeds+24b-draw-templates gpu_outputs=208b-instances+compacted-indices+20b-indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
-                context.instance_id,
-                CHURN_FORWARD_ARTIFACT.len(),
-                engine.active_objects(),
-                resident.max_instances(),
-                surface.frame.raw(),
-                window.raw(),
-                surface.width,
-                surface.height,
-                PLANE_SLOT,
-            );
+            if gpu_transform_enabled {
+                crate::log_info!(
+                    target: "helio";
+                    "helio instance={} example=2 name=churn-benchmark native=1 online artifact_bytes={} active_objects={} max_instances={} draw_groups=12 geometry=3x-posnormal-cube frame={} window={} extent={}x{} plane={} background=transparent-rgba controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=absolute-deadline period_us=16667 target_fps=60 missed_deadline=skip-extra-delay path=helioa-churn-forward-v1->gpu-retained-transform+compaction->artifact-native-vs+ps->12-indexed-indirect->one-guc-schedule->ui4-triple-direct cpu_vertex_projection=0 cpu_matrix_expansion=0 mutable_upload=camera+64b-transform-seeds+24b-draw-templates gpu_outputs=208b-instances+compacted-indices+20b-indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
+                    context.instance_id,
+                    CHURN_FORWARD_ARTIFACT.len(),
+                    engine.active_objects(),
+                    resident.max_instances(),
+                    surface.frame.raw(),
+                    window.raw(),
+                    surface.width,
+                    surface.height,
+                    PLANE_SLOT,
+                );
+            } else {
+                crate::log_info!(
+                    target: "helio";
+                    "helio instance={} example=2 name=churn-benchmark native=1 online artifact_bytes={} active_objects={} max_instances={} draw_groups=12 geometry=3x-posnormal-cube frame={} window={} extent={}x{} plane={} background=transparent-rgba controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=absolute-deadline period_us=16667 target_fps=60 missed_deadline=skip-extra-delay path=helioa-churn-forward-v1->native-cpu-expanded-instances->artifact-native-vs+ps->12-indexed-indirect->one-guc-schedule->ui4-triple-direct retained_transform=0 fallback_reason={} cpu_vertex_projection=0 cpu_matrix_expansion=1 mutable_upload=camera+dirty-208b-instances+compacted-indices+20b-indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
+                    context.instance_id,
+                    CHURN_FORWARD_ARTIFACT.len(),
+                    engine.active_objects(),
+                    resident.max_instances(),
+                    surface.frame.raw(),
+                    window.raw(),
+                    surface.width,
+                    surface.height,
+                    PLANE_SLOT,
+                    transform_fallback_reason.unwrap_or("churn-transform-disabled"),
+                );
+            }
             first_frame = false;
         }
         next_frame += Duration::from_micros(NATIVE_CHURN_FRAME_PERIOD_US);
@@ -2099,7 +2233,7 @@ async fn run_pendulum_native(context: InstanceContext) -> Result<(), GameError> 
         destroy_unpublished_surface(surface);
         return Err(GameError::NativeUnavailable(reason));
     }
-    let mut prepared_triangles = native_churn_triangle_count(&initial);
+    let mut prepared_triangles = native_transform_triangle_count(&initial);
 
     let mut input = crate::ui4::winit_input::EventLoopInput::new(context.owner);
     let mut fly_camera = FlyCamera::new(engine.camera());
@@ -2177,7 +2311,7 @@ async fn run_pendulum_native(context: InstanceContext) -> Result<(), GameError> 
             ) {
                 break Err(GameError::Render(reason));
             }
-            prepared_triangles = native_churn_triangle_count(&prepared);
+            prepared_triangles = native_transform_triangle_count(&prepared);
             frame_prepared = true;
         }
 
@@ -2879,7 +3013,7 @@ async fn helio_game_instance_task(context: InstanceContext) {
 }
 
 /// Dispatches numbered Shell2/Blueprint requests into ten independent Helio
-/// tasks deterministically sharded across up to three AP2+ executors.
+/// tasks deterministically sharded across exactly three AP2+ executors.
 #[embassy_executor::task(pool_size = CPU_CARRIER_CAPACITY)]
 pub async fn helio_game_service_task(
     cpu_carrier_id: u8,

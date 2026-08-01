@@ -282,7 +282,8 @@ unsafe impl Send for ResidentSceneBatchState {}
 
 static RESIDENT_SCENE_BATCH_STATE: Mutex<Option<ResidentSceneBatchState>> = Mutex::new(None);
 static RESIDENT_SCENE_BATCH_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
-static RESIDENT_CHURN_FORWARD_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
+static RESIDENT_CHURN_FORWARD_GPU_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
+static RESIDENT_CHURN_FORWARD_CPU_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 
 fn resident_scene_batch_state(
     warm: RenderWarmState,
@@ -1461,13 +1462,19 @@ fn submit_resident_churn_forward_geometry_batched(
 
     let primary_bytes = encode_resident_scene_primary_batch(warm, secondary_count)?;
     crate::intel::dma_flush(warm.batch_virt, primary_bytes);
-    if !RESIDENT_CHURN_FORWARD_PATH_LOGGED.swap(true, Ordering::AcqRel) {
+    if transform_dispatch.is_some() {
+        if !RESIDENT_CHURN_FORWARD_GPU_PATH_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::log_info!(
+                target: "render";
+                "resident-scene: native Churn online path=helioa-churn-forward-v1->retained-transform-simd16(prep+rows)->gpu-instance+compacted+indirect->artifact-vs+ps->12-indexed-indirect-secondaries->one-guc-scene-schedule geometry=3x(pos-normal-cube/24v/36i) gpu_transform=1 transform_secondaries=1 cpu_matrix_expansion=0 instance_index=starting_instance+instance_id sgvs=E0024002/B0020002/3 component_packing=0xA77 render_submits=1 target={}x{}\n",
+                target_width,
+                target_height,
+            );
+        }
+    } else if !RESIDENT_CHURN_FORWARD_CPU_PATH_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "render";
-            "resident-scene: native Churn online path=helioa-churn-forward-v1->retained-transform-simd16(prep+rows)->gpu-instance+compacted+indirect->artifact-vs+ps->12-indexed-indirect-secondaries->one-guc-scene-schedule geometry=3x(pos-normal-cube/24v/36i) gpu_transform={} transform_secondaries={} cpu_matrix_expansion={} instance_index=starting_instance+instance_id sgvs=E0024002/B0020002/3 component_packing=0xA77 render_submits=1 target={}x{}\n",
-            u8::from(transform_dispatch.is_some()),
-            transform_secondary_count,
-            u8::from(transform_dispatch.is_none()),
+            "resident-scene: native Churn online path=helioa-churn-forward-v1->native-cpu-expanded-instance+compacted+indirect->artifact-vs+ps->12-indexed-indirect-secondaries->one-guc-scene-schedule geometry=3x(pos-normal-cube/24v/36i) gpu_transform=0 transform_secondaries=0 cpu_matrix_expansion=1 instance_index=starting_instance+instance_id sgvs=E0024002/B0020002/3 component_packing=0xA77 render_submits=1 target={}x{}\n",
             target_width,
             target_height,
         );

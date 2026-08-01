@@ -12,6 +12,9 @@ fn submit_tenant_scene_aabb_rcs(
     let dev = super::claimed_device().ok_or(PhysicalGpuError::NotReady)?;
     let physical = crate::gpu::physical::physical_device().ok_or(PhysicalGpuError::NotReady)?;
     let upload = upload_scene_aabb_kernel().ok_or(PhysicalGpuError::SubmitFailed)?;
+    if upload.address_space != GpgpuArtifactAddressSpace::CallerPpgtt {
+        return Err(PhysicalGpuError::MapFailed);
+    }
     let state = scene_aabb_rcs_state_once(dev).ok_or(PhysicalGpuError::OutOfMemory)?;
 
     if !direct_rcs_map_state(dev, state) {
@@ -54,9 +57,9 @@ fn submit_tenant_scene_aabb_rcs(
     }
 
     let (hwlrca_lo, hwlrca_hi) = guc_rcs_context_descriptor(state.gpu_va.context);
-    // `direct_rcs_map_state` installed and invalidated this immutable control
-    // window exactly once. Tenant PPGTT mappings are context-private and do
-    // not authorize another global GGTT invalidation here.
+    // Boot installed and invalidated this immutable control window exactly
+    // once. Tenant PPGTT mappings are context-private and do not authorize
+    // another global GGTT invalidation here.
     core::sync::atomic::fence(Ordering::SeqCst);
     let token = match crate::intel::guc_submission::INTEL_GUC_SCHEDULER.register(
         dev,

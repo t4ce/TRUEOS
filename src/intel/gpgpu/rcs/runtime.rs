@@ -303,7 +303,13 @@ fn execution_rcs_next_job_slot(state: DirectRcsState) -> Option<DirectRcsState> 
     direct_rcs_job_slot(state, slot)
 }
 
-fn direct_rcs_map_state(dev: super::Dev, state: DirectRcsState) -> bool {
+/// Runtime compatibility gate used by existing consumers. Despite the legacy
+/// name, this is deliberately read-only: only boot may install global PTEs.
+fn direct_rcs_map_state(_dev: super::Dev, state: DirectRcsState) -> bool {
+    direct_rcs_control_ggtt_ready(state)
+}
+
+fn install_direct_rcs_control_ggtt_for_boot(dev: super::Dev, state: DirectRcsState) -> bool {
     let Some(mapping) = direct_rcs_ggtt_mapping(state.gpu_va) else {
         return false;
     };
@@ -445,7 +451,7 @@ fn prewarm_direct_rcs_control_ggtt(
         }
         return false;
     };
-    direct_rcs_map_state(dev, state)
+    install_direct_rcs_control_ggtt_for_boot(dev, state)
 }
 
 /// Install every persistent RCS control window while physical GT bring-up owns

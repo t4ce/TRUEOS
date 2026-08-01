@@ -649,7 +649,16 @@ fn direct_rcs_push_gpgpu_dispatch_prologue(
         (1 << 9) | (1 << 11),
         PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
     ) && direct_rcs_push(batch, cursor, PIPELINE_SELECT_GPGPU)
-        && direct_rcs_push_pipe_control_full(batch, cursor, 1 << 9, PIPE_CONTROL_CS_STALL)
+        // Gfx12 substitutes an untyped-dataport drain for the PRM's Generic
+        // Media State Clear, which Mesa documents as hang-prone.  Keep both
+        // HDC and untyped writes drained before the temporary GPGPU -> 3D
+        // transition in this shared prologue.
+        && direct_rcs_push_pipe_control_full(
+            batch,
+            cursor,
+            (1 << 9) | (1 << 11),
+            PIPE_CONTROL_CS_STALL,
+        )
         && direct_rcs_push(batch, cursor, PIPELINE_SELECT_3D)
         && direct_rcs_push_pipe_control_full(
             batch,

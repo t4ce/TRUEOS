@@ -1068,7 +1068,13 @@ fn direct_blt_state_once() -> Option<DirectBltState> {
     Some(state)
 }
 
-fn direct_blt_map_state(dev: super::Dev, state: DirectBltState) -> bool {
+/// Runtime compatibility gate. BCS0 consumers may only observe the immutable
+/// boot result; they never install or repair a global control mapping.
+fn direct_blt_map_state(_dev: super::Dev, _state: DirectBltState) -> bool {
+    DIRECT_BLT_GGTT_MAPPING.get().copied() == Some(true)
+}
+
+fn install_direct_blt_control_ggtt_for_boot(dev: super::Dev, state: DirectBltState) -> bool {
     let mapped = *DIRECT_BLT_GGTT_MAPPING.call_once(|| {
         let accepted =
             super::map_ggtt(dev, state.ring_phys, DIRECT_BLT_RING_BYTES, DIRECT_BLT_GPU_VA_RING_BASE)
@@ -1130,7 +1136,7 @@ pub(crate) fn prewarm_guc_bcs0_control_ggtt(dev: super::Dev) -> bool {
         }
         return false;
     };
-    direct_blt_map_state(dev, state)
+    install_direct_blt_control_ggtt_for_boot(dev, state)
 }
 
 fn direct_blt_init_ppgtt(state: DirectBltState) -> bool {
