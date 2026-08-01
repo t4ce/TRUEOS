@@ -281,8 +281,16 @@ pub(crate) fn destroy_frame(handle: FrameHandle) -> Result<(), FramePoolError> {
     let surfaces = {
         let mut pool = FRAME_POOL.lock();
         let frame = pool.checked_mut(handle)?;
-        if frame.acquired.iter().any(Option::is_some)
-            || frame.readers.iter().any(|readers| *readers != 0)
+        if frame_has_live_buffer_owners(frame) {
+            return Err(FramePoolError::Busy);
+        }
+        // The Render0 alias must disappear before the physical allocation can
+        // return to DMA. Keeping FRAME_POOL locked closes acquisition while the
+        // no-writer/no-reader proof is consumed. Display/GGTT ownership is
+        // represented by `readers`; the alias itself exists only in Render0's
+        // PPGTT and is safe to recycle after this point.
+        if frame.plan.content == FrameContent::RenderScene3d
+            && !release_resident_scene_direct_imports(frame)
         {
             return Err(FramePoolError::Busy);
         }
@@ -293,6 +301,49 @@ pub(crate) fn destroy_frame(handle: FrameHandle) -> Result<(), FramePoolError> {
     };
     destroy_surfaces(surfaces);
     Ok(())
+}
+
+fn frame_has_live_buffer_owners(frame: &FrameRecord) -> bool {
+    buffer_owners_live(&frame.acquired, &frame.readers)
+}
+
+fn buffer_owners_live(
+    acquired: &[Option<AcquiredBuffer>; FRAME_BUFFER_CAPACITY],
+    readers: &[u16; FRAME_BUFFER_CAPACITY],
+) -> bool {
+    acquired.iter().any(Option::is_some) || readers.iter().any(|readers| *readers != 0)
+}
+
+fn release_resident_scene_direct_imports(frame: &FrameRecord) -> bool {
+    frame.surfaces.iter().flatten().copied().all(|surface| {
+        ui_surface::rgba_access(surface).is_some_and(|access| {
+            crate::intel::render::release_resident_scene_direct_ui4_target(
+                access.phys,
+                access.byte_len,
+            )
+        })
+    })
+}
+
+#[cfg(test)]
+mod resident_scene_frame_destroy_tests {
+    use super::{AcquiredBuffer, FRAME_BUFFER_CAPACITY, buffer_owners_live};
+
+    #[test]
+    fn render_alias_release_requires_every_owner_to_be_gone() {
+        let mut acquired = [None; FRAME_BUFFER_CAPACITY];
+        let mut readers = [0; FRAME_BUFFER_CAPACITY];
+        assert!(!buffer_owners_live(&acquired, &readers));
+
+        acquired[1] = Some(AcquiredBuffer { index: 1, token: 7 });
+        assert!(buffer_owners_live(&acquired, &readers));
+        acquired[1] = None;
+
+        readers[2] = 1;
+        assert!(buffer_owners_live(&acquired, &readers));
+        readers[2] = 0;
+        assert!(!buffer_owners_live(&acquired, &readers));
+    }
 }
 
 pub(crate) fn acquire_frame_buffer(handle: FrameHandle) -> Result<FrameWriteLease, FramePoolError> {

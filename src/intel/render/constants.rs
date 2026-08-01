@@ -143,22 +143,32 @@ const GPU_VA_RESIDENT_SCENE_DEPTH_BASE: u64 = 0x0200_0000;
 // physical storage is allocated lazily at the consumer's actual extent.
 const GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE: u64 = 0x1000_0000;
 const GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE: u64 = 0x1400_0000;
-// Keep one permanent render-PPGTT address for every resident-scene UI4 allocation
-// observed during normal maximize/restore replacement. Triple buffering must
-// not retarget one VA between different physical buffers: GuC completion
-// retires the draw, but it does not by itself make a hot PPGTT unmap/remap safe
-// from stale render-TLB translations. A 1440p RGBA target occupies 0xE10000
-// bytes, so 16 MiB slots fit twelve distinct buffers (four complete rings) in
-// the existing disjoint 0x3400_0000..0x4000_0000 range. Destroyed DMA surfaces
-// normally reuse their physical allocation and therefore reuse the existing
-// mapping without consuming another slot.
-const GPU_VA_RESIDENT_UI4_FRAME_BASE: u64 = 0x3400_0000;
+// Render0 owns this PPGTT-only alias arena for direct resident-scene UI4
+// targets. It is deliberately disjoint from every fixed and persistent Render0
+// mapping below 0x3400_0000. Numerically overlapping display GGTT and media
+// PPGTT addresses are separate translation domains and do not alias it.
+//
+// One 16 MiB slot covers the maximum 1440p RGBA target (0xE10000 bytes), and
+// thirty slots admit all ten advertised Helio instances with their complete
+// triple-buffer rings concurrently. A slot remains stable for the lifetime of
+// its UI4 surface and is unmapped/recycled only when UI4 has proved that the
+// frame has neither a writer nor a display/compositor reader.
+const GPU_VA_RESIDENT_UI4_FRAME_BASE: u64 = 0x6000_0000;
 const GPU_VA_RESIDENT_UI4_FRAME_STRIDE: u64 = 0x0100_0000;
-const RESIDENT_UI4_DIRECT_MAPPING_COUNT: usize = 12;
+pub(crate) const RESIDENT_UI4_DIRECT_MAPPING_COUNT: usize = 30;
 const GPU_VA_RESIDENT_UI4_FRAME_LIMIT: u64 = GPU_VA_RESIDENT_UI4_FRAME_BASE
     + RESIDENT_UI4_DIRECT_MAPPING_COUNT as u64 * GPU_VA_RESIDENT_UI4_FRAME_STRIDE;
-const _: () = assert!(GPU_VA_RESIDENT_UI4_FRAME_LIMIT == 0x4000_0000);
-const _: () = assert!(WARM_STREAMOUT_BYTES as u64 <= GPU_VA_RESIDENT_UI4_FRAME_STRIDE);
+const _: () = {
+    assert!(GPU_VA_RESIDENT_UI4_FRAME_BASE == 0x6000_0000);
+    assert!(GPU_VA_RESIDENT_UI4_FRAME_LIMIT == 0x7E00_0000);
+    assert!(GPU_VA_RESIDENT_UI4_FRAME_LIMIT <= 0x8000_0000);
+    assert!(GPU_VA_RESIDENT_UI4_FRAME_BASE % GPU_VA_RESIDENT_UI4_FRAME_STRIDE == 0);
+    assert!(WARM_STREAMOUT_BYTES as u64 <= GPU_VA_RESIDENT_UI4_FRAME_STRIDE);
+    assert!(
+        GPU_VA_RESIDENT_SCENE_STATE_BASE + RESIDENT_SCENE_STATE_BYTES as u64
+            <= GPU_VA_RESIDENT_UI4_FRAME_BASE
+    );
+};
 // Keep the imported 64 KiB compute mesh outside the 14.0625 MiB 1440p scene
 // target at 0x0088_0000..0x0169_0000 and below the batch at 0x0180_0000.
 const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
@@ -201,11 +211,14 @@ const MODE_IDLE: u32 = 1 << 9;
 const RING_MI_MODE_STOP_RING: u32 = 1 << 8;
 const GRDOM_RENDER: u32 = 1 << 1;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
-const MI_BATCH_GTT: u32 = 2 << 6;
 // MI_BATCH_BUFFER_END returns to the caller only for a second-level batch.
 // Resident scenes use one small secondary per object beneath one frame-level primary
 // batch, so the render context is submitted exactly once per scene update.
 const MI_BATCH_2ND_LEVEL: u32 = 1 << 22;
+const _: () = {
+    assert!(MI_BATCH_BUFFER_START_GEN8 == 0x1880_0001);
+    assert!(MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_2ND_LEVEL == 0x18C0_0001);
+};
 // Gen8+ four-DWORD PPGTT load. Helio's draw stream uses this to feed the
 // hardware auto-draw registers directly from its resident 20-byte
 // DrawIndexedIndirectArgs records.
@@ -289,34 +302,70 @@ const COMPARE_FUNCTION_ALWAYS: u8 = 0;
 const COMPARE_FUNCTION_LESS: u8 = 2;
 const COMPARE_FUNCTION_LEQUAL: u8 = 4;
 
-/// The checked-in Churn ISA was physically validated on RPL-S 0xA780.
-///
-/// ADL-S 0x4680 previously reached this path through a stepping-only software
-/// admission check. That was not sufficient validation: activating the cold
-/// native renderer while another GuC context was resident stopped Spirit's
-/// marker retirement. Keep ADL-S on the proven compatibility renderer until
-/// concurrent native Render/GPGPU context switching passes the bare-metal
-/// coexistence gate.
-const fn device_supports_churn_forward_native(device_id: u16, _revision_id: u8) -> bool {
-    device_id == 0xA780
+/// The checked-in Churn front end is physically validated on RPL-S 0xA780 and
+/// ADL-S 0x4680 revision 0x0C. The ADL-S proof includes sustained concurrent
+/// Render0 retained scenes and Spirit GPGPU work on distinct GuC HWLRCAs and
+/// PPGTT roots, with zero context loss or memory CAT faults.
+const fn device_supports_churn_forward_native(device_id: u16, revision_id: u8) -> bool {
+    device_id == 0xA780 || (device_id == 0x4680 && revision_id == 0x0C)
 }
 
 /// The retained-transform compute span is a separate hardware capability from
-/// the native VS/PS path. Its artifact and command stream remain available for
-/// an isolated probe, but no production scene may submit it merely because the
-/// native renderer was admitted on that device.
-const fn device_supports_churn_retained_transform(_device_id: u16, _revision_id: u8) -> bool {
-    false
+/// the forward path. Admit only the ADL-S stepping whose exact eight-BTI kernel
+/// ABI, compute-to-3D handoff, storage-free VF draw, and Spirit coexistence were
+/// exercised on the physical machine.
+const fn device_supports_churn_retained_transform(device_id: u16, revision_id: u8) -> bool {
+    device_id == 0x4680 && revision_id == 0x0C
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ChurnHardwareAdmission {
+    ValidatedProduction,
+    Adls4680Rev0cPhysicalProbe,
+}
+
+const fn device_admits_churn_forward_native(
+    admission: ChurnHardwareAdmission,
+    device_id: u16,
+    revision_id: u8,
+) -> bool {
+    match admission {
+        ChurnHardwareAdmission::ValidatedProduction => {
+            device_supports_churn_forward_native(device_id, revision_id)
+        }
+        ChurnHardwareAdmission::Adls4680Rev0cPhysicalProbe => {
+            device_id == 0x4680 && revision_id == 0x0C
+        }
+    }
+}
+
+const fn device_admits_churn_retained_transform(
+    admission: ChurnHardwareAdmission,
+    device_id: u16,
+    revision_id: u8,
+) -> bool {
+    match admission {
+        ChurnHardwareAdmission::ValidatedProduction => {
+            device_supports_churn_retained_transform(device_id, revision_id)
+        }
+        ChurnHardwareAdmission::Adls4680Rev0cPhysicalProbe => {
+            device_id == 0x4680 && revision_id == 0x0C
+        }
+    }
 }
 
 #[cfg(test)]
 mod churn_forward_device_admission_tests {
-    use super::{device_supports_churn_forward_native, device_supports_churn_retained_transform};
+    use super::{
+        ChurnHardwareAdmission, device_admits_churn_forward_native,
+        device_admits_churn_retained_transform, device_supports_churn_forward_native,
+        device_supports_churn_retained_transform,
+    };
 
     #[test]
     fn admits_only_physically_validated_native_targets() {
         assert!(device_supports_churn_forward_native(0xA780, 0x00));
-        assert!(!device_supports_churn_forward_native(0x4680, 0x0C));
+        assert!(device_supports_churn_forward_native(0x4680, 0x0C));
         assert!(!device_supports_churn_forward_native(0x4680, 0x0B));
         assert!(!device_supports_churn_forward_native(0x4680, 0x0D));
         assert!(!device_supports_churn_forward_native(0x56A0, 0x08));
@@ -325,7 +374,18 @@ mod churn_forward_device_admission_tests {
     #[test]
     fn retained_transform_requires_its_own_hardware_proof() {
         assert!(!device_supports_churn_retained_transform(0xA780, 0x00));
-        assert!(!device_supports_churn_retained_transform(0x4680, 0x0C));
+        assert!(device_supports_churn_retained_transform(0x4680, 0x0C));
+        assert!(!device_supports_churn_retained_transform(0x4680, 0x0B));
+        assert!(!device_supports_churn_retained_transform(0x4680, 0x0D));
+    }
+
+    #[test]
+    fn explicit_probe_is_exactly_the_bare_metal_adls_stepping() {
+        let probe = ChurnHardwareAdmission::Adls4680Rev0cPhysicalProbe;
+        assert!(device_admits_churn_forward_native(probe, 0x4680, 0x0C));
+        assert!(device_admits_churn_retained_transform(probe, 0x4680, 0x0C));
+        assert!(!device_admits_churn_forward_native(probe, 0x4680, 0x0B));
+        assert!(!device_admits_churn_retained_transform(probe, 0xA780, 0x00));
     }
 }
 const SURFACE_HALIGN_4: u32 = 1;
@@ -335,6 +395,7 @@ const SHADER_CHANNEL_RED: u32 = 4;
 const SHADER_CHANNEL_GREEN: u32 = 5;
 const SHADER_CHANNEL_BLUE: u32 = 6;
 const SHADER_CHANNEL_ALPHA: u32 = 7;
+const SHADER_CHANNEL_ONE: u32 = 1;
 const SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD: u32 = 0xFFFF_FFFF;
 const CLIP_FORCE_CLIP_MODE: u32 = 1 << 16;
 const CLIP_PERSPECTIVE_DIVIDE_DISABLE: u32 = 1 << 9;
@@ -458,26 +519,34 @@ const DRAW_INDEXED_INDIRECT_DWORDS: usize = 5;
 const DRAW_INDEXED_INDIRECT_BYTES: usize =
     DRAW_INDEXED_INDIRECT_DWORDS * core::mem::size_of::<u32>();
 const PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER: u32 = 1 << 9;
-const PIPE_CONTROL_UNTYPED_DATAPORT_FLUSH_HEADER: u32 = 1 << 11;
 const PIPE_CONTROL_DEPTH_CACHE_FLUSH: u32 = 1 << 0;
 const PIPE_CONTROL_STALL_AT_SCOREBOARD: u32 = 1 << 1;
 const PIPE_CONTROL_DC_FLUSH_ENABLE: u32 = 1 << 5;
 const PIPE_CONTROL_FLUSH_ENABLE: u32 = 1 << 7;
 const PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH: u32 = 1 << 12;
+// Wa_1409600907 applies to gfx12.0..12.5: every Depth Cache Flush must carry
+// Depth Stall, independent of the selected post-sync operation.
 const PIPE_CONTROL_DEPTH_STALL: u32 = 1 << 13;
-const PIPE_CONTROL_FLUSH_HDC: u32 = 1 << 26;
+// Gen12 DW1 bit26 is Flush LLC, not HDC Pipeline Flush. It requires a
+// post-sync immediate write; HDC Pipeline Flush is DW0 bit9 above.
+const PIPE_CONTROL_FLUSH_LLC: u32 = 1 << 26;
 const PIPE_CONTROL_TILE_CACHE_FLUSH: u32 = 1 << 28;
 const PIPE_CONTROL_COMMAND_CACHE_INVALIDATE: u32 = 1 << 29;
 const PIPE_CONTROL_L3_FABRIC_FLUSH: u32 = 1 << 30;
+const PIPE_CONTROL_TLB_INVALIDATE: u32 = 1 << 18;
 const PIPE_CONTROL_FLUSH_BITS: u32 = PIPE_CONTROL_DC_FLUSH_ENABLE
     | PIPE_CONTROL_FLUSH_ENABLE
     | PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
-    | PIPE_CONTROL_CS_STALL
-    | PIPE_CONTROL_FLUSH_HDC;
-const PIPE_CONTROL_INVALIDATE_BITS: u32 =
-    (1 << 2) | (1 << 3) | (1 << 4) | (1 << 10) | (1 << 11) | (1 << 18) | (1 << 20);
-const PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS: u32 =
-    PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER | PIPE_CONTROL_UNTYPED_DATAPORT_FLUSH_HEADER;
+    | PIPE_CONTROL_CS_STALL;
+const PIPE_CONTROL_INVALIDATE_BITS: u32 = (1 << 2)
+    | (1 << 3)
+    | (1 << 4)
+    | (1 << 10)
+    | (1 << 11)
+    | PIPE_CONTROL_TLB_INVALIDATE
+    | (1 << 20);
+// DW0 bit11 does not exist until gfx12.5 and is MBZ on the ADL-S path.
+const PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS: u32 = PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER;
 const PIPE_CONTROL_BIG_PRE_DRAW_BITS: u32 = PIPE_CONTROL_DEPTH_CACHE_FLUSH
     | PIPE_CONTROL_STALL_AT_SCOREBOARD
     | PIPE_CONTROL_INVALIDATE_BITS
@@ -486,7 +555,6 @@ const PIPE_CONTROL_BIG_PRE_DRAW_BITS: u32 = PIPE_CONTROL_DEPTH_CACHE_FLUSH
     | PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
     | PIPE_CONTROL_DEPTH_STALL
     | PIPE_CONTROL_CS_STALL
-    | PIPE_CONTROL_FLUSH_HDC
     | PIPE_CONTROL_TILE_CACHE_FLUSH
     | PIPE_CONTROL_COMMAND_CACHE_INVALIDATE
     | PIPE_CONTROL_L3_FABRIC_FLUSH;
@@ -500,14 +568,33 @@ const PIPE_CONTROL_POST_DRAW_LIGHT_POSTSYNC_NO_STALL_BITS: u32 =
 const PIPE_CONTROL_POST_DRAW_LIGHT_CS_STALL_ONLY_BITS: u32 = PIPE_CONTROL_CS_STALL;
 const PIPE_CONTROL_POST_DRAW_SYNC_BITS: u32 =
     PIPE_CONTROL_FLUSH_BITS | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_DEST_GGTT;
+const _: () = {
+    assert!(PIPE_CONTROL_FLUSH_BITS == 0x0010_10A0);
+    assert!(PIPE_CONTROL_INVALIDATE_BITS == 0x0014_0C1C);
+    assert!(PIPE_CONTROL_FLUSH_BITS & PIPE_CONTROL_FLUSH_LLC == 0);
+    assert!(PIPE_CONTROL_BIG_PRE_DRAW_BITS & PIPE_CONTROL_FLUSH_LLC == 0);
+    // Every first draw after a lifecycle remap invalidates stale Render0 PPGTT
+    // translations before VF/3D can consume the recycled alias.
+    assert!(PIPE_CONTROL_BIG_PRE_DRAW_BITS & PIPE_CONTROL_TLB_INVALIDATE != 0);
+    assert!(PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS == 1 << 9);
+};
 // Gen12 producer release for a color target written by the 3D pixel backend.
 // Render-target and tile-cache writeback are the only cache operations needed
 // for this path.  Do not add top-of-pipe invalidations here: those execute at
 // parse time and are not part of an end-of-pipe producer release.
-const PIPE_CONTROL_SCENE_COLOR_RELEASE_BITS: u32 = PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
+const PIPE_CONTROL_SCENE_COLOR_RELEASE_HEADER_BITS: u32 = PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER;
+const PIPE_CONTROL_SCENE_COLOR_RELEASE_BITS: u32 = PIPE_CONTROL_DEPTH_CACHE_FLUSH
+    | PIPE_CONTROL_DC_FLUSH_ENABLE
+    | PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
+    | PIPE_CONTROL_DEPTH_STALL
     | PIPE_CONTROL_TILE_CACHE_FLUSH
     | PIPE_CONTROL_FLUSH_ENABLE
-    | PIPE_CONTROL_CS_STALL;
+    | PIPE_CONTROL_CS_STALL
+    | PIPE_CONTROL_L3_FABRIC_FLUSH;
+const _: () = {
+    assert!(PIPE_CONTROL_CMD | PIPE_CONTROL_SCENE_COLOR_RELEASE_HEADER_BITS == 0x7A00_0204);
+    assert!(PIPE_CONTROL_SCENE_COLOR_RELEASE_BITS == 0x5010_30A1);
+};
 // A separate post-sync packet follows the cache-release packet.  Its PPGTT
 // QWord write is the retirement cookie observed by the host. Keep the generic
 // PIPE_CONTROL flush bit on this packet as i915 does for its separated Gen12
@@ -552,7 +639,9 @@ const RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_HI_DWORD: usize = 11;
 const RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD: usize = 12;
 const RESULT_SLOT_PRE_LIGHT_PC_DWORD: usize = 13;
 const RESULT_SLOT_BATCH_ENTRY_DWORD: usize = 14;
-const RESULT_DEBUG_DWORD_COUNT: usize = RESULT_SLOT_BATCH_ENTRY_DWORD + 1;
+// Retained transform/scene diagnostics occupy the contiguous range through
+// the primary's secondary-return breadcrumb at slot 30.
+const RESULT_DEBUG_DWORD_COUNT: usize = 31;
 const RESULT_SLOT_GPGPU_PREFLIGHT_MARKER_DWORD: usize = 16;
 const RESULT_SLOT_GPGPU_PREFLIGHT_DOT_DWORD: usize = 17;
 const RESULT_SLOT_GPGPU_PREFLIGHT_SUM_A_DWORD: usize = 18;

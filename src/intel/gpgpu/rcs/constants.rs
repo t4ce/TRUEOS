@@ -171,7 +171,7 @@ const CTX_CTRL_INHIBIT_SYN_CTX_SWITCH: u32 = 1 << 3;
 
 const RING_MI_MODE_STOP_RING: u32 = 1 << 8;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
-const MI_BATCH_GTT: u32 = 2 << 6;
+const _: () = assert!(MI_BATCH_BUFFER_START_GEN8 == 0x1880_0001);
 const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
 const MI_LOAD_REGISTER_IMM: u32 = 0x1100_0000;
 const MI_LRI_CS_MMIO: u32 = 1 << 19;
@@ -295,6 +295,8 @@ const STATE_BASE_ADDRESS_CMD: u32 = 20 | (1 << 16) | (1 << 24) | (3 << 29);
 const PIPE_CONTROL_DC_FLUSH_ENABLE: u32 = 1 << 5;
 const PIPE_CONTROL_FLUSH_ENABLE: u32 = 1 << 7;
 const PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH: u32 = 1 << 12;
+const PIPE_CONTROL_DEPTH_CACHE_FLUSH: u32 = 1 << 0;
+const PIPE_CONTROL_DEPTH_STALL: u32 = 1 << 13;
 // Gen12 PIPE_CONTROL splits HDC pipeline drain from the DW1 cache controls:
 // HDC Pipeline Flush is DW0 bit 9.  DW1 bit 26 is Flush LLC and is only legal
 // with a post-sync immediate write; treating it as HDC allowed the completion
@@ -313,7 +315,6 @@ const PIPE_CONTROL_INSTRUCTION_CACHE_INVALIDATE: u32 = 1 << 11;
 const PIPE_CONTROL_COMMAND_CACHE_INVALIDATE: u32 = 1 << 29;
 const PIPE_CONTROL_FLUSH_BITS: u32 = PIPE_CONTROL_DC_FLUSH_ENABLE
     | PIPE_CONTROL_FLUSH_ENABLE
-    | PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
     | PIPE_CONTROL_CS_STALL
     // HDC drains data-port writes into L3. Scanout is a separate observer, so
     // force the stalling flush to carry every pending L3 transaction to the
@@ -326,6 +327,13 @@ const PIPE_CONTROL_INVALIDATE_BITS: u32 = PIPE_CONTROL_FLUSH_BITS
     | PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE
     | PIPE_CONTROL_INSTRUCTION_CACHE_INVALIDATE
     | PIPE_CONTROL_COMMAND_CACHE_INVALIDATE;
+const _: () = {
+    // RCS GPGPU mode must not carry 3D-only RT/depth cache controls
+    // (Wa_1606932921). The 3D->GPGPU prologue owns those flushes instead.
+    assert!(PIPE_CONTROL_FLUSH_BITS == 0x4010_00A0);
+    assert!(PIPE_CONTROL_FLUSH_BITS & PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH == 0);
+    assert!(PIPE_CONTROL_FLUSH_BITS & PIPE_CONTROL_DEPTH_CACHE_FLUSH == 0);
+};
 const MEDIA_VFE_STATE_CMD: u32 = (3 << 29) | (2 << 27) | 7;
 const MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD: u32 = (3 << 29) | (2 << 27) | (2 << 16) | 2;
 const GPGPU_WALKER_CMD: u32 = (3 << 29) | (2 << 27) | (1 << 24) | (5 << 16) | 13;
@@ -339,6 +347,10 @@ const PIPELINE_SELECT_GPGPU: u32 = PIPELINE_SELECT_3D | 2;
 const IDD_THREAD_PREEMPTION_DISABLE: u32 = 1 << 20;
 const GPGPU_VFE_DW3_UOS: u32 = 0x00A7_0100;
 const GPGPU_VFE_DW5_UOS: u32 = 0x0782_0000;
+// The mixed Helio pass only needs a 224-byte VFE URB entry. Keeping it below
+// the Gen12 32KiB compute/POSH coexistence limit prevents VFE from trampling
+// the live 3D push-constant allocation.
+const HELIO_GPGPU_VFE_DW5_UOS: u32 = 0x0007_0000;
 const GPGPU_WALKER_GROUP_THREADS: u32 = 1;
 const GPGPU_WALKER_SIMD16_SELECT: u32 = 1;
 const FILL_RECT_PIXELS_PER_GROUP_X: u32 = 16;

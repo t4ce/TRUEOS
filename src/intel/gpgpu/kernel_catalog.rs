@@ -796,22 +796,22 @@ pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_BIN_SHA256: [u8; 32] =
 const _: () = {
     let contract = HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT;
     assert!(matches!(contract.validate(), Ok(())));
-    assert!(HELIO_RETAINED_TRANSFORM_ADLS_BIN.len() == 52_160);
-    assert!(HELIO_RETAINED_TRANSFORM_ADLS_SPV.len() == 40_236);
+    assert!(HELIO_RETAINED_TRANSFORM_ADLS_BIN.len() == 80_408);
+    assert!(HELIO_RETAINED_TRANSFORM_ADLS_SPV.len() == 53_488);
     assert!(contract.target.pci_device_ids.len() == 1);
     assert!(contract.target.pci_device_ids[0] == 0x4680);
     assert!(contract.target.revision_min == 0x0C);
     assert!(contract.target.revision_max == 0x0C);
     assert!(contract.entry_offset == 64);
-    assert!(contract.entry_size == 5_952);
+    assert!(contract.entry_size == 18_984);
     assert!(contract.simd_width == 16);
     assert!(contract.grf_count == 128);
     assert!(contract.scratch_bytes == 0);
     assert!(contract.slm_bytes == 0);
     assert!(contract.cross_thread_data_bytes == 128);
     assert!(contract.per_thread_data_bytes == 96);
-    assert!(contract.bindings.len() == 4);
-    assert!(contract.payload_args.len() == 8);
+    assert!(contract.bindings.len() == 8);
+    assert!(contract.payload_args.len() == 11);
 };
 pub(crate) const LAB256_MULTIPHASE_ADLS_BIN_SHA256: [u8; 32] =
     LAB256_STEP_ADLS_CPP_ABI_CONTRACT.zebin_sha256;

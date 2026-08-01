@@ -24,6 +24,11 @@ impl RenderSubmitRuntime {
     }
 }
 
+// This is also Render0's address-space quiescence gate. Runtime PPGTT
+// map/unmap takes this lock before RENDER_PPGTT; submission takes it only
+// after all PPGTT preparation and never calls a map helper while holding it.
+// Keep that order so resident-resource startup cannot race the live GPU page
+// walker and cannot introduce a recursive lock path.
 static RENDER_SUBMIT_RUNTIME: Mutex<RenderSubmitRuntime> = Mutex::new(RenderSubmitRuntime::new());
 
 const RENDER_CONTEXT_SAVE_TIMEOUT_NS: u64 = 2_000_000_000;
@@ -2126,7 +2131,7 @@ fn append_ring_batch_start(
     let start = ring_tail_bytes / core::mem::size_of::<u32>();
     unsafe {
         let dwords = warm.ring_virt.cast::<u32>();
-        core::ptr::write_volatile(dwords.add(start), MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT);
+        core::ptr::write_volatile(dwords.add(start), MI_BATCH_BUFFER_START_GEN8);
         core::ptr::write_volatile(dwords.add(start + 1), batch_gpu_addr as u32);
         core::ptr::write_volatile(dwords.add(start + 2), (batch_gpu_addr >> 32) as u32);
         core::ptr::write_volatile(dwords.add(start + 3), MI_NOOP);

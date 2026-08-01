@@ -1,23 +1,35 @@
 const HELIO_TRANSFORM_IDD_OFFSET_BYTES: usize = 0x1000;
 const HELIO_TRANSFORM_BINDING_TABLE_OFFSET_BYTES: usize = 0x1040;
 const HELIO_TRANSFORM_SURFACE_STATE_OFFSET_BYTES: usize = 0x1080;
-const HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES: usize = 0x1200;
-const HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES: usize = 0x1300;
-const HELIO_TRANSFORM_BINDINGS: usize = 4;
-const HELIO_TRANSFORM_MODE_PREPARE: u32 = 0;
-const HELIO_TRANSFORM_MODE_ROWS: u32 = 1;
+const HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES: usize = 0x1300;
+const HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES: usize = 0x1400;
+const HELIO_TRANSFORM_BINDINGS: usize = 8;
+const HELIO_TRANSFORM_MODE_PREPARE: u32 = 2;
+const HELIO_TRANSFORM_MODE_ROWS: u32 = 3;
 const HELIO_TRANSFORM_CROSS_THREAD_BYTES: usize = 128;
 const HELIO_TRANSFORM_PER_THREAD_BYTES: usize = 96;
 const HELIO_TRANSFORM_INDIRECT_BYTES: usize =
     HELIO_TRANSFORM_CROSS_THREAD_BYTES + HELIO_TRANSFORM_PER_THREAD_BYTES;
-// Gen12 PIPE_CONTROL DW0: HDC Pipeline Flush (bit 9) plus Untyped Dataport
-// Cache Flush (bit 11). This is the same write-release header used by the
-// physically established direct-RCS GPGPU prologue.
-const HELIO_TRANSFORM_RELEASE_HEADER_BITS: u32 = PIPE_CONTROL_HDC_PIPELINE_FLUSH | (1 << 11);
+// Gen12.0 exposes HDC Pipeline Flush at DW0 bit9. Bit11 is MBZ until gfx12.5.
+const HELIO_TRANSFORM_RELEASE_HEADER_BITS: u32 = PIPE_CONTROL_HDC_PIPELINE_FLUSH;
+// VF Cache Invalidation is a 3D-only DW1 control on Gen12. Keep it out of the
+// pre-PIPELINE_SELECT GPGPU invalidation, then acquire the compute-authored
+// position stream explicitly after switching back to the 3D pipeline.
+const HELIO_TRANSFORM_VF_CACHE_INVALIDATE: u32 = 1 << 4;
+const HELIO_TRANSFORM_3D_CONSUMER_BITS: u32 =
+    PIPE_CONTROL_CS_STALL | HELIO_TRANSFORM_VF_CACHE_INVALIDATE;
+const _: () = assert!(PIPE_CONTROL_CMD | HELIO_TRANSFORM_RELEASE_HEADER_BITS == 0x7A00_0204);
 
 const _: () = {
     assert!(HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES.is_multiple_of(64));
     assert!(HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES.is_multiple_of(64));
+    assert!(
+        HELIO_TRANSFORM_SURFACE_STATE_OFFSET_BYTES
+            + HELIO_TRANSFORM_BINDINGS
+                * COPY_RECT_SURFACE_STATE_DWORDS
+                * core::mem::size_of::<u32>()
+            <= HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES
+    );
     assert!(
         HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + HELIO_TRANSFORM_INDIRECT_BYTES
             <= HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES
@@ -35,8 +47,8 @@ const _: () = {
 /// 2. expand rows in parallel into producer-assigned compact slots.
 ///
 /// The batch restores the 3D pipeline before its second-level BBE. The next
-/// resident draw secondary therefore consumes GPU-authored instance,
-/// compacted-index, and indirect storage without a context switch or readback.
+/// resident draw secondary therefore consumes a GPU-authored Float3 position
+/// stream and indexed-indirect storage without a context switch or readback.
 pub(crate) fn encode_helio_retained_transform_secondary(
     state: &mut GpgpuHelioRetainedTransformStateBlob<'_>,
     artifact: GpgpuHelioRetainedTransformArtifactMapping,
@@ -81,8 +93,13 @@ pub(crate) fn encode_helio_retained_transform_secondary(
         )
     };
     let mut cursor = 0usize;
-    let mut ok =
-        direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, artifact.upload, state.gpu);
+    let mut ok = direct_rcs_push_gpgpu_dispatch_prologue_with_vfe_dw5(
+        batch,
+        &mut cursor,
+        artifact.upload,
+        state.gpu,
+        HELIO_GPGPU_VFE_DW5_UOS,
+    );
     ok &= direct_rcs_push_store_marker_at(
         batch,
         &mut cursor,
@@ -164,7 +181,7 @@ pub(crate) fn encode_helio_retained_transform_secondary(
         batch,
         &mut cursor,
         HELIO_TRANSFORM_RELEASE_HEADER_BITS,
-        PIPE_CONTROL_CS_STALL,
+        HELIO_TRANSFORM_3D_CONSUMER_BITS,
     );
     ok &= direct_rcs_push_store_marker_at(
         batch,
@@ -221,6 +238,12 @@ fn validate_helio_transform_encoder_ranges(
         (dispatch.instances.gpu, dispatch.instances.bytes),
         (dispatch.compacted_indices.gpu, dispatch.compacted_indices.bytes),
         (dispatch.indirect_args.gpu, dispatch.indirect_args.bytes),
+        (dispatch.camera.gpu, dispatch.camera.bytes),
+        (dispatch.source_vertices.gpu, dispatch.source_vertices.bytes),
+        (
+            dispatch.expanded_positions.gpu,
+            dispatch.expanded_positions.bytes,
+        ),
     ];
     if ranges_overlap(state, artifact_range)
         || buffers
@@ -268,7 +291,11 @@ fn write_helio_transform_surfaces(
         dispatch.transforms,
         dispatch.draw_templates,
         dispatch.instances,
+        dispatch.compacted_indices,
         dispatch.indirect_args,
+        dispatch.camera,
+        dispatch.source_vertices,
+        dispatch.expanded_positions,
     ];
     for (index, slice) in surfaces.into_iter().enumerate() {
         let surface_offset = HELIO_TRANSFORM_SURFACE_STATE_OFFSET_BYTES
@@ -327,13 +354,16 @@ fn write_helio_transform_payload(
         dispatch.instances.gpu,
         dispatch.compacted_indices.gpu,
         dispatch.indirect_args.gpu,
+        dispatch.camera.gpu,
+        dispatch.source_vertices.gpu,
+        dispatch.expanded_positions.gpu,
     ];
     for (index, pointer) in pointers.into_iter().enumerate() {
         write_helio_transform_u64(payload, 48 + index * 8, pointer)?;
     }
-    write_helio_transform_u32(payload, 88, dispatch.row_count)?;
-    write_helio_transform_u32(payload, 92, dispatch.draw_count)?;
-    write_helio_transform_u32(payload, 96, mode)?;
+    write_helio_transform_u32(payload, 112, dispatch.row_count)?;
+    write_helio_transform_u32(payload, 116, dispatch.draw_count)?;
+    write_helio_transform_u32(payload, 120, mode)?;
     for lane in 0..16usize {
         write_helio_transform_u16(
             payload,
@@ -429,6 +459,9 @@ mod helio_transform_encoder_tests {
             instances: GpgpuHelioBufferSlice::new(0x0320_0000, 337 * 208),
             compacted_indices: GpgpuHelioBufferSlice::new(0x0340_0000, 337 * 4),
             indirect_args: GpgpuHelioBufferSlice::new(0x0350_0000, 12 * 20),
+            camera: GpgpuHelioBufferSlice::new(0x0360_0000, GPGPU_HELIO_CAMERA_BYTES),
+            source_vertices: GpgpuHelioBufferSlice::new(0x0370_0000, 3 * 24 * 24),
+            expanded_positions: GpgpuHelioBufferSlice::new(0x0380_0000, 337 * 24 * 12),
             row_count: 337,
             draw_count: 12,
         }
@@ -460,7 +493,11 @@ mod helio_transform_encoder_tests {
             (0u16, 0u16, dispatch.transforms.gpu),
             (1, 1, dispatch.draw_templates.gpu),
             (2, 2, dispatch.instances.gpu),
-            (4, 3, dispatch.indirect_args.gpu),
+            (3, 3, dispatch.compacted_indices.gpu),
+            (4, 4, dispatch.indirect_args.gpu),
+            (8, 5, dispatch.camera.gpu),
+            (9, 6, dispatch.source_vertices.gpu),
+            (10, 7, dispatch.expanded_positions.gpu),
         ];
         let bindings = HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.bindings;
         assert_eq!(bindings.len(), HELIO_TRANSFORM_BINDINGS);
@@ -472,20 +509,33 @@ mod helio_transform_encoder_tests {
                     as usize;
             assert_eq!(read_u64(surface_offset + 8 * 4), gpu);
         }
-        assert!(bindings.iter().all(|binding| binding.arg_index != 3));
         assert_eq!(
             read_u32(HELIO_TRANSFORM_IDD_OFFSET_BYTES + 4 * 4),
             HELIO_TRANSFORM_BINDING_TABLE_OFFSET_BYTES as u32 | HELIO_TRANSFORM_BINDINGS as u32
         );
-        // Compacted indices are deliberately A64/stateless-only in this bake,
-        // so they have no BTI but retain their exact cross-thread pointer.
+        for (index, gpu) in [
+            dispatch.transforms.gpu,
+            dispatch.draw_templates.gpu,
+            dispatch.instances.gpu,
+            dispatch.compacted_indices.gpu,
+            dispatch.indirect_args.gpu,
+            dispatch.camera.gpu,
+            dispatch.source_vertices.gpu,
+            dispatch.expanded_positions.gpu,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                read_u64(HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 48 + index * 8),
+                gpu
+            );
+        }
+        // Generated BufferOffset{arg1}; zero means the draw-template surface
+        // and pointer share the same byte-zero origin.
         assert_eq!(
-            read_u64(HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 72),
-            dispatch.compacted_indices.gpu
-        );
-        assert_eq!(
-            read_u64(HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 80),
-            dispatch.indirect_args.gpu
+            read_u32(HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 124),
+            0
         );
     }
 
@@ -552,11 +602,22 @@ mod helio_transform_encoder_tests {
         assert!(transform_release < consumer_invalidate);
         assert!(consumer_invalidate < handoff_select);
         assert_eq!(commands[handoff_select + 1], release_cmd);
-        assert_eq!(commands[handoff_select + 2], PIPE_CONTROL_CS_STALL);
+        assert_eq!(
+            commands[handoff_select + 2],
+            HELIO_TRANSFORM_3D_CONSUMER_BITS
+        );
+        assert_eq!(
+            commands[handoff_select + 2] & HELIO_TRANSFORM_VF_CACHE_INVALIDATE,
+            HELIO_TRANSFORM_VF_CACHE_INVALIDATE
+        );
+        assert_eq!(
+            commands[consumer_invalidate + 1] & HELIO_TRANSFORM_VF_CACHE_INVALIDATE,
+            0
+        );
         assert_eq!(
             u32::from_le_bytes(
-                state.bytes()[HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 96
-                    ..HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 100]
+                state.bytes()[HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 120
+                    ..HELIO_TRANSFORM_PREPARE_PAYLOAD_OFFSET_BYTES + 124]
                     .try_into()
                     .unwrap()
             ),
@@ -564,8 +625,8 @@ mod helio_transform_encoder_tests {
         );
         assert_eq!(
             u32::from_le_bytes(
-                state.bytes()[HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES + 96
-                    ..HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES + 100]
+                state.bytes()[HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES + 120
+                    ..HELIO_TRANSFORM_ROWS_PAYLOAD_OFFSET_BYTES + 124]
                     .try_into()
                     .unwrap()
             ),

@@ -285,6 +285,78 @@ static RESIDENT_SCENE_BATCH_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_FORWARD_GPU_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_FORWARD_CPU_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 
+// The entry packet sits before either opening PIPE_CONTROL. Slot 14 proves
+// secondary fetch; slot 15 proves both opening controls plus PIPELINE_SELECT.
+const RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS: usize = 4;
+const RESIDENT_SECONDARY_OPENING_PIPE_CONTROL_DWORDS: usize = 6;
+const RESIDENT_SECONDARY_POST_OPENING_MARKER_DWORD: usize =
+    RESIDENT_SECONDARY_OPENING_PIPE_CONTROL_DWORDS * 2 + 1;
+const RESULT_SLOT_POST_OPENING_DWORD: usize = 15;
+const RCS_EXEC_RESULT_DRAW_POST_OPENING: u32 = 0xC0DE_772B;
+const RESULT_SLOT_SECONDARY_RETURN_DWORD: usize = 30;
+const RCS_EXEC_RESULT_SECONDARY_RETURN_BASE: u32 = 0xC0DE_7800;
+
+fn finish_resident_secondary_breadcrumbs(
+    batch: &mut [u32],
+    encoded_payload_bytes: usize,
+    secondary_index: usize,
+) -> Result<usize, &'static str> {
+    if !encoded_payload_bytes.is_multiple_of(core::mem::size_of::<u32>()) {
+        return Err("scene-frame-secondary-size");
+    }
+    let payload_dwords = encoded_payload_bytes / core::mem::size_of::<u32>();
+    let payload_end = RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS
+        .checked_add(payload_dwords)
+        .ok_or("scene-frame-secondary-size")?;
+    if payload_end > batch.len() {
+        return Err("scene-frame-secondary-size");
+    }
+
+    let result_entry_gpu =
+        GPU_VA_RESULT_BASE + (RESULT_SLOT_BATCH_ENTRY_DWORD * core::mem::size_of::<u32>()) as u64;
+    let result_post_opening_gpu =
+        GPU_VA_RESULT_BASE + (RESULT_SLOT_POST_OPENING_DWORD * core::mem::size_of::<u32>()) as u64;
+    let payload = &mut batch[RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS..payload_end];
+    let marker = RESIDENT_SECONDARY_POST_OPENING_MARKER_DWORD;
+    if payload.len() < marker + RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS
+        || payload[0] != (PIPE_CONTROL_CMD | PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER)
+        || payload[RESIDENT_SECONDARY_OPENING_PIPE_CONTROL_DWORDS] != PIPE_CONTROL_CMD
+        || payload[marker - 1] != PIPELINE_SELECT_3D
+        || payload[marker] != MI_STORE_DATA_IMM_GGTT_DW1
+        || payload[marker + 1] != result_entry_gpu as u32
+        || payload[marker + 2] != (result_entry_gpu >> 32) as u32
+        || payload[marker + 3] != RCS_EXEC_RESULT_DRAW_BATCH_ENTRY
+    {
+        return Err("scene-frame-secondary-opening-layout");
+    }
+
+    payload[marker + 1] = result_post_opening_gpu as u32;
+    payload[marker + 2] = (result_post_opening_gpu >> 32) as u32;
+    payload[marker + 3] =
+        resident_secondary_marker(RCS_EXEC_RESULT_DRAW_POST_OPENING, secondary_index)?;
+
+    batch[0] = MI_STORE_DATA_IMM_GGTT_DW1;
+    batch[1] = result_entry_gpu as u32;
+    batch[2] = (result_entry_gpu >> 32) as u32;
+    batch[3] = resident_secondary_marker(RCS_EXEC_RESULT_DRAW_BATCH_ENTRY, secondary_index)?;
+
+    encoded_payload_bytes
+        .checked_add(RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS * core::mem::size_of::<u32>())
+        .ok_or("scene-frame-secondary-size")
+}
+
+// Retained secondaries intentionally share the same result slots. Encode the
+// current secondary in bits 8..15 so a CAT leaves an exact parser frontier
+// instead of an ambiguous marker from the preceding empty draw.
+fn resident_secondary_marker(base: u32, secondary_index: usize) -> Result<u32, &'static str> {
+    let index = u32::try_from(secondary_index).map_err(|_| "scene-frame-secondary-index")?;
+    if index > u8::MAX as u32 {
+        return Err("scene-frame-secondary-index");
+    }
+    base.checked_add(index << 8)
+        .ok_or("scene-frame-secondary-index")
+}
+
 fn resident_scene_batch_state(
     warm: RenderWarmState,
 ) -> Result<ResidentSceneBatchState, &'static str> {
@@ -479,6 +551,34 @@ struct ResidentSceneDirectUi4Mapping {
     gpu: u64,
 }
 
+fn resident_scene_direct_ui4_gpu_for_slot(slot: usize) -> Option<u64> {
+    if slot >= RESIDENT_UI4_DIRECT_MAPPING_COUNT {
+        return None;
+    }
+    let gpu = GPU_VA_RESIDENT_UI4_FRAME_BASE.checked_add(
+        u64::try_from(slot)
+            .ok()?
+            .checked_mul(GPU_VA_RESIDENT_UI4_FRAME_STRIDE)?,
+    )?;
+    let end = gpu.checked_add(GPU_VA_RESIDENT_UI4_FRAME_STRIDE)?;
+    (end <= GPU_VA_RESIDENT_UI4_FRAME_LIMIT).then_some(gpu)
+}
+
+fn resident_scene_direct_ui4_mapping_slot(
+    mappings: &[Option<ResidentSceneDirectUi4Mapping>; RESIDENT_UI4_DIRECT_MAPPING_COUNT],
+    phys: u64,
+) -> Option<usize> {
+    mappings
+        .iter()
+        .position(|mapping| mapping.is_some_and(|mapping| mapping.phys == phys))
+}
+
+fn resident_scene_direct_ui4_vacant_slot(
+    mappings: &[Option<ResidentSceneDirectUi4Mapping>; RESIDENT_UI4_DIRECT_MAPPING_COUNT],
+) -> Option<usize> {
+    mappings.iter().position(Option::is_none)
+}
+
 static RESIDENT_SCENE_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_MSAA_COLOR: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_MSAA_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
@@ -501,24 +601,19 @@ fn prepare_resident_scene_direct_ui4_target(
         return Err("resident-scene-direct-ui4-shape");
     }
     let mut mappings = RESIDENT_SCENE_DIRECT_UI4_TARGETS.lock();
-    if let Some(existing) = mappings
-        .iter()
-        .flatten()
-        .copied()
-        .find(|mapping| mapping.phys == destination.phys)
-    {
+    if let Some(slot) = resident_scene_direct_ui4_mapping_slot(&mappings, destination.phys) {
+        let existing = mappings[slot].ok_or("resident-scene-direct-ui4-table")?;
         if existing.bytes != destination.bytes {
             return Err("resident-scene-direct-ui4-shape-changed");
         }
         return Ok(existing.gpu);
     }
 
-    let Some(slot) = mappings.iter().position(Option::is_none) else {
+    let Some(slot) = resident_scene_direct_ui4_vacant_slot(&mappings) else {
         return Err("resident-scene-direct-ui4-buffer-limit");
     };
-    let gpu = GPU_VA_RESIDENT_UI4_FRAME_BASE
-        .checked_add(slot as u64 * GPU_VA_RESIDENT_UI4_FRAME_STRIDE)
-        .ok_or("resident-scene-direct-ui4-address")?;
+    let gpu =
+        resident_scene_direct_ui4_gpu_for_slot(slot).ok_or("resident-scene-direct-ui4-address")?;
     if !map_render_ppgtt_scanout_range(gpu, destination.phys, destination.bytes) {
         return Err("resident-scene-direct-ui4-map");
     }
@@ -540,6 +635,119 @@ fn prepare_resident_scene_direct_ui4_target(
         destination.pitch_bytes,
     );
     Ok(gpu)
+}
+
+/// Release one Render0-only alias after UI4 has proved that the owning frame
+/// has no producer or presentation readers. The physical surface remains live
+/// until this succeeds, so a failed PPGTT unmap cannot leave an alias pointing
+/// at subsequently recycled DMA storage.
+pub(crate) fn release_resident_scene_direct_ui4_target(phys: u64, bytes: usize) -> bool {
+    let mut mappings = RESIDENT_SCENE_DIRECT_UI4_TARGETS.lock();
+    let Some(slot) = resident_scene_direct_ui4_mapping_slot(&mappings, phys) else {
+        return true;
+    };
+    let Some(mapping) = mappings[slot] else {
+        return false;
+    };
+    if mapping.bytes != bytes {
+        crate::log_warn!(
+            target: "render";
+            "resident-scene: refused UI4 direct target release render_slot={} render_gpu=0x{:X} phys=0x{:X} mapped_bytes=0x{:X} release_bytes=0x{:X} reason=shape-changed\n",
+            slot,
+            mapping.gpu,
+            phys,
+            mapping.bytes,
+            bytes,
+        );
+        return false;
+    }
+    if !unmap_render_ppgtt_range(mapping.gpu, mapping.bytes) {
+        crate::log_warn!(
+            target: "render";
+            "resident-scene: deferred UI4 direct target release render_slot={} render_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} reason=ppgtt-unmap\n",
+            slot,
+            mapping.gpu,
+            phys,
+            bytes,
+        );
+        return false;
+    }
+    mappings[slot] = None;
+    crate::log_info!(
+        target: "render";
+        "resident-scene: released UI4 direct target render_slot={} render_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} lifecycle=ui4-frame-destroy slot_reusable=1 next_draw_tlb_invalidate=1\n",
+        slot,
+        mapping.gpu,
+        phys,
+        bytes,
+    );
+    true
+}
+
+#[cfg(test)]
+mod resident_scene_direct_ui4_mapping_tests {
+    use super::{
+        GPU_VA_RESIDENT_UI4_FRAME_BASE, GPU_VA_RESIDENT_UI4_FRAME_LIMIT,
+        GPU_VA_RESIDENT_UI4_FRAME_STRIDE, RESIDENT_UI4_DIRECT_MAPPING_COUNT,
+        ResidentSceneDirectUi4Mapping, resident_scene_direct_ui4_gpu_for_slot,
+        resident_scene_direct_ui4_mapping_slot, resident_scene_direct_ui4_vacant_slot,
+    };
+
+    #[test]
+    fn render0_alias_arena_has_thirty_unique_full_slots() {
+        assert_eq!(RESIDENT_UI4_DIRECT_MAPPING_COUNT, 30);
+        for slot in 0..RESIDENT_UI4_DIRECT_MAPPING_COUNT {
+            let gpu = resident_scene_direct_ui4_gpu_for_slot(slot).unwrap();
+            assert_eq!(
+                gpu,
+                GPU_VA_RESIDENT_UI4_FRAME_BASE + slot as u64 * GPU_VA_RESIDENT_UI4_FRAME_STRIDE
+            );
+            assert!(gpu + GPU_VA_RESIDENT_UI4_FRAME_STRIDE <= GPU_VA_RESIDENT_UI4_FRAME_LIMIT);
+            if slot != 0 {
+                assert_eq!(
+                    gpu - resident_scene_direct_ui4_gpu_for_slot(slot - 1).unwrap(),
+                    GPU_VA_RESIDENT_UI4_FRAME_STRIDE
+                );
+            }
+        }
+        assert!(
+            resident_scene_direct_ui4_gpu_for_slot(RESIDENT_UI4_DIRECT_MAPPING_COUNT).is_none()
+        );
+    }
+
+    #[test]
+    fn lifecycle_release_makes_the_exact_slot_reusable() {
+        let mut mappings = [None; RESIDENT_UI4_DIRECT_MAPPING_COUNT];
+        for (slot, entry) in mappings.iter_mut().enumerate() {
+            *entry = Some(ResidentSceneDirectUi4Mapping {
+                phys: 0x1000_0000 + slot as u64 * 0x0100_0000,
+                bytes: 0x00E1_0000,
+                gpu: resident_scene_direct_ui4_gpu_for_slot(slot).unwrap(),
+            });
+        }
+        assert!(resident_scene_direct_ui4_vacant_slot(&mappings).is_none());
+
+        let retired_slot = 7;
+        let retired = mappings[retired_slot].unwrap();
+        assert_eq!(
+            resident_scene_direct_ui4_mapping_slot(&mappings, retired.phys),
+            Some(retired_slot)
+        );
+        mappings[retired_slot] = None;
+        assert_eq!(resident_scene_direct_ui4_vacant_slot(&mappings), Some(retired_slot));
+        assert_eq!(resident_scene_direct_ui4_mapping_slot(&mappings, retired.phys), None);
+
+        let replacement_phys = 0x5000_0000;
+        mappings[retired_slot] = Some(ResidentSceneDirectUi4Mapping {
+            phys: replacement_phys,
+            bytes: retired.bytes,
+            gpu: resident_scene_direct_ui4_gpu_for_slot(retired_slot).unwrap(),
+        });
+        assert_eq!(
+            resident_scene_direct_ui4_mapping_slot(&mappings, replacement_phys),
+            Some(retired_slot)
+        );
+    }
 }
 
 fn prepare_resident_scene_msaa_allocation(
@@ -925,9 +1133,10 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_dep
     )
 }
 
-/// Artifact-native Helio Churn: immutable PosNormal geometry, storage-buffer
-/// instancing and twelve GPU-authored indexed-indirect groups rendered into
-/// UI4's leased linear RGBA surface in one scene submission.
+/// Helio Churn rendered into UI4's leased linear RGBA surface in one scene
+/// submission. Retained-transform frames use the GPU-authored Float3,
+/// storage-free VS path; CPU-expanded fallback frames keep the artifact-native
+/// PosNormal/storage-buffer pipeline.
 pub(crate) fn render_resident_churn_forward_frame_direct_to_surface(
     resident: &ResidentChurnForward,
     clear_rgba: Option<[u8; 4]>,
@@ -999,9 +1208,10 @@ fn stage_resident_scene_secondary(
             RESIDENT_SCENE_SECONDARY_BATCH_BYTES / core::mem::size_of::<u32>(),
         )
     };
-    let bytes = encode_triangle_probe_batch(
+    batch.fill(0);
+    let encoded_payload_bytes = encode_triangle_probe_batch(
         "resident-scene",
-        batch,
+        &mut batch[RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS..],
         state_warm,
         draw,
         blend_mode,
@@ -1010,9 +1220,9 @@ fn stage_resident_scene_secondary(
         shader_layout,
         probe_state,
         GPU_VA_RESULT_BASE,
-        RCS_EXEC_RESULT_DRAW_PRE3D,
-        RCS_EXEC_RESULT_DRAW_POST3D,
-        RCS_EXEC_RESULT_DONE,
+        resident_secondary_marker(RCS_EXEC_RESULT_DRAW_PRE3D, secondary_index)?,
+        resident_secondary_marker(RCS_EXEC_RESULT_DRAW_POST3D, secondary_index)?,
+        resident_secondary_marker(RCS_EXEC_RESULT_DONE, secondary_index)?,
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
@@ -1023,6 +1233,8 @@ fn stage_resident_scene_secondary(
         // full render/depth/L3 release fence after the final secondary.
         PostDrawSyncVariant::LightCsNoPostSync,
     )?;
+    let bytes =
+        finish_resident_secondary_breadcrumbs(batch, encoded_payload_bytes, secondary_index)?;
     crate::intel::dma_flush(unsafe { warm.batch_virt.add(batch_offset) }, bytes);
     Ok(bytes)
 }
@@ -1067,9 +1279,10 @@ fn stage_resident_churn_forward_secondary(
             RESIDENT_SCENE_SECONDARY_BATCH_BYTES / core::mem::size_of::<u32>(),
         )
     };
-    let bytes = encode_triangle_probe_batch(
+    batch.fill(0);
+    let encoded_payload_bytes = encode_triangle_probe_batch(
         "helio-churn-forward",
-        batch,
+        &mut batch[RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS..],
         state_warm,
         draw,
         TriangleBlendProbeMode::MesaZeroedState,
@@ -1078,9 +1291,9 @@ fn stage_resident_churn_forward_secondary(
         shader_layout,
         probe_state,
         GPU_VA_RESULT_BASE,
-        RCS_EXEC_RESULT_DRAW_PRE3D,
-        RCS_EXEC_RESULT_DRAW_POST3D,
-        RCS_EXEC_RESULT_DONE,
+        resident_secondary_marker(RCS_EXEC_RESULT_DRAW_PRE3D, secondary_index)?,
+        resident_secondary_marker(RCS_EXEC_RESULT_DRAW_POST3D, secondary_index)?,
+        resident_secondary_marker(RCS_EXEC_RESULT_DONE, secondary_index)?,
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         resident.front_end_contract,
@@ -1088,6 +1301,8 @@ fn stage_resident_churn_forward_secondary(
         BackendProbeMode::MesaLike,
         PostDrawSyncVariant::LightCsNoPostSync,
     )?;
+    let bytes =
+        finish_resident_secondary_breadcrumbs(batch, encoded_payload_bytes, secondary_index)?;
     crate::intel::dma_flush(unsafe { warm.batch_virt.add(batch_offset) }, bytes);
     Ok(bytes)
 }
@@ -1155,6 +1370,8 @@ fn encode_resident_scene_primary_batch(
         cursor += 1;
         Ok(())
     };
+    let secondary_return_gpu = GPU_VA_RESULT_BASE
+        + (RESULT_SLOT_SECONDARY_RETURN_DWORD * core::mem::size_of::<u32>()) as u64;
     for secondary_index in 0..secondary_count {
         let offset = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
             .checked_add(
@@ -1164,18 +1381,31 @@ fn encode_resident_scene_primary_batch(
             )
             .ok_or("scene-frame-batch-slot")?;
         let gpu = GPU_VA_BATCH_BASE + offset as u64;
-        push(MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT | MI_BATCH_2ND_LEVEL)?;
+        push(MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_2ND_LEVEL)?;
         push(gpu as u32)?;
         push((gpu >> 32) as u32)?;
+        push(MI_STORE_DATA_IMM_GGTT_DW1)?;
+        push(secondary_return_gpu as u32)?;
+        push((secondary_return_gpu >> 32) as u32)?;
+        push(
+            RCS_EXEC_RESULT_SECONDARY_RETURN_BASE
+                .checked_add(
+                    u32::try_from(secondary_index)
+                        .map_err(|_| "scene-frame-secondary-count")?
+                        .checked_add(1)
+                        .ok_or("scene-frame-secondary-count")?,
+                )
+                .ok_or("scene-frame-secondary-count")?,
+        )?;
     }
     let completion_gpu =
         GPU_VA_RESULT_BASE + (RESULT_SLOT_SCENE_FRAME_DWORD * core::mem::size_of::<u32>()) as u64;
     // Release the color target written by the Gen12 3D pixel backend. Keep
     // this end-of-pipe writeback separate from all top-of-pipe invalidations:
     // mixing them into one packet can invalidate first and only then wait for
-    // older rendering. Depth remains private to the ordered RCS workload, so
-    // it is not part of the display-ownership release.
-    push(PIPE_CONTROL_CMD)?;
+    // older rendering. Gen12 Tile Cache Flush requires the paired depth-cache
+    // flush; Wa_1409600907 in turn requires Depth Stall in the same packet.
+    push(PIPE_CONTROL_CMD | PIPE_CONTROL_SCENE_COLOR_RELEASE_HEADER_BITS)?;
     push(PIPE_CONTROL_SCENE_COLOR_RELEASE_BITS)?;
     push(0)?;
     push(0)?;
@@ -1438,26 +1668,51 @@ fn submit_resident_churn_forward_geometry_batched(
     for group in 0..CHURN_FORWARD_DRAW_COUNT {
         let secondary_index = group + 1 + transform_secondary_count;
         let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
-        let draw = prepare_resident_churn_forward_draw(
-            state_warm,
-            resident,
-            group,
-            render_target_gpu,
-            render_target_pitch,
-            target_width,
-            target_height,
-        )
-        .ok_or("churn-native-draw-resources")?
-        .with_rt_surface_format(render_target_surface_format);
-        stage_resident_churn_forward_secondary(
-            warm,
-            state_warm,
-            state_gpu,
-            draw,
-            draw_depth,
-            resident,
-            secondary_index,
-        )?;
+        if transform_dispatch.is_some() {
+            let draw = prepare_resident_churn_expanded_draw(
+                state_warm,
+                resident,
+                group,
+                render_target_gpu,
+                render_target_pitch,
+                target_width,
+                target_height,
+            )
+            .ok_or("churn-expanded-draw-resources")?
+            .with_rt_surface_format(render_target_surface_format);
+            stage_resident_scene_secondary(
+                warm,
+                state_warm,
+                state_gpu,
+                draw,
+                TriangleBlendProbeMode::MesaZeroedState,
+                Some(draw_depth),
+                resident.material_rgba(group % trueos_helio_runtime::churn::MATERIAL_COUNT),
+                [0.0, 0.0],
+                secondary_index,
+            )?;
+        } else {
+            let draw = prepare_resident_churn_forward_draw(
+                state_warm,
+                resident,
+                group,
+                render_target_gpu,
+                render_target_pitch,
+                target_width,
+                target_height,
+            )
+            .ok_or("churn-native-draw-resources")?
+            .with_rt_surface_format(render_target_surface_format);
+            stage_resident_churn_forward_secondary(
+                warm,
+                state_warm,
+                state_gpu,
+                draw,
+                draw_depth,
+                resident,
+                secondary_index,
+            )?;
+        }
     }
 
     let primary_bytes = encode_resident_scene_primary_batch(warm, secondary_count)?;
@@ -1466,7 +1721,7 @@ fn submit_resident_churn_forward_geometry_batched(
         if !RESIDENT_CHURN_FORWARD_GPU_PATH_LOGGED.swap(true, Ordering::AcqRel) {
             crate::log_info!(
                 target: "render";
-                "resident-scene: native Churn online path=helioa-churn-forward-v1->retained-transform-simd16(prep+rows)->gpu-instance+compacted+indirect->artifact-vs+ps->12-indexed-indirect-secondaries->one-guc-scene-schedule geometry=3x(pos-normal-cube/24v/36i) gpu_transform=1 transform_secondaries=1 cpu_matrix_expansion=0 instance_index=starting_instance+instance_id sgvs=E0024002/B0020002/3 component_packing=0xA77 render_submits=1 target={}x{}\n",
+                "resident-scene: native Churn online path=helioa-churn-forward-v1->retained-transform-simd16(prep+rows+expanded-position)->gpu-float3+indexed-indirect->storage-free-pass-through-vs+constant-ps->12-indexed-indirect-secondaries->one-guc-scene-schedule geometry=24-float3+36-indices-per-compacted-slot gpu_transform=1 transform_secondaries=1 cpu_matrix_expansion=0 vs_storage_bindings=0 synthetic_instance_id=0 render_submits=1 target={}x{}\n",
                 target_width,
                 target_height,
             );

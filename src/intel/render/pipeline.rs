@@ -652,10 +652,11 @@ fn write_triangle_raw_buffer_surface_state(
     surface[1] = RENDER_MOCS << 24;
     surface[2] = (height_minus_1 << 16) | width_minus_1;
     surface[3] = depth_minus_1 << 21;
-    surface[7] = (SHADER_CHANNEL_ALPHA << 16)
-        | (SHADER_CHANNEL_BLUE << 19)
-        | (SHADER_CHANNEL_GREEN << 22)
-        | (SHADER_CHANNEL_RED << 25);
+    // Mesa/ISL composes RAW's missing color channels with the identity view
+    // swizzle: RGB select zero while alpha selects one.  The alpha field is
+    // still part of the exact RENDER_SURFACE_STATE contract even though the
+    // shader reaches this buffer through untyped HDC reads.
+    surface[7] = SHADER_CHANNEL_ONE << 16;
     surface[8] = binding.gpu_addr as u32;
     surface[9] = (binding.gpu_addr >> 32) as u32;
     // gfx12 ISL carries the exact byte range in the high auxiliary-address
@@ -692,13 +693,7 @@ mod churn_raw_surface_tests {
         assert_eq!(surface[3], ((extent >> 21) & 0x7ff) << 21);
         assert_eq!(surface[8], 0x5678_9000);
         assert_eq!(surface[9], 0x0000_1234);
-        assert_eq!(
-            surface[7],
-            (super::SHADER_CHANNEL_ALPHA << 16)
-                | (super::SHADER_CHANNEL_BLUE << 19)
-                | (super::SHADER_CHANNEL_GREEN << 22)
-                | (super::SHADER_CHANNEL_RED << 25)
-        );
+        assert_eq!(surface[7], super::SHADER_CHANNEL_ONE << 16);
         assert_eq!(surface[10], 0);
         assert_eq!(surface[11], binding.byte_len);
         assert!(surface[4..7].iter().chain(&surface[12..]).all(|&word| word == 0));
@@ -905,7 +900,11 @@ fn encode_triangle_probe_batch(
     let mut cursor = 0usize;
     if let Some(native) = draw.native {
         validate_triangle_native_draw_contract(draw, native)?;
-        if !device_supports_churn_forward_native(warm.device_id, warm.revision_id) {
+        if !device_admits_churn_forward_native(
+            native.hardware_admission,
+            warm.device_id,
+            warm.revision_id,
+        ) {
             return Err("probe-native-device-mismatch");
         }
     }
@@ -1775,7 +1774,12 @@ fn encode_triangle_probe_batch(
     batch_dwords.fill(0);
 
     log_batch_offset(cursor, "PIPE_CONTROL flush");
-    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_FLUSH_BITS)?;
+    push_pipe_control_full(
+        batch_dwords,
+        &mut cursor,
+        PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
+        PIPE_CONTROL_FLUSH_BITS,
+    )?;
     log_batch_offset(cursor, "PIPE_CONTROL invalidate");
     push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
 

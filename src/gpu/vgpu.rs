@@ -157,9 +157,9 @@ impl KernelClient {
 
     const fn physical_priority(self) -> PhysicalContextPriority {
         match self {
-            // This context feeds a visible video frame into UI4.  It must be
-            // able to preempt ordinary persistent GPGPU work instead of
-            // waiting through an entire GuC scheduler rotation.
+            // UI4 is the finite downstream scanout combiner. Ordinary
+            // composition admits one pending job, so it may preempt producers
+            // without manufacturing an unbounded high-priority queue.
             //
             // LFM submissions are likewise bounded interactive batches. A
             // normal-priority context added one repeatable scheduler quantum
@@ -172,15 +172,20 @@ impl KernelClient {
             // and GPU fonts), so leaving them at normal priority adds one
             // complete GuC scheduler quantum to every copy/coverage/release
             // stage while UI4 window motion itself remains crisp.
-            // The execution lane is currently exclusive to Spirit VFX and
-            // Lab256. Both are bounded 256x256, single-pending producers; the
-            // GuC policy gives every context a 1 ms execution quantum, so this
-            // scanout-facing lane can be high priority without admitting an
-            // unbounded high-priority queue.
-            Self::GpgpuSystem | Self::GpgpuExecution | Self::Ui4Compositor | Self::Lfm25 => {
+            Self::GpgpuSystem | Self::Ui4Compositor | Self::Lfm25 => {
                 PhysicalContextPriority::KernelHigh
             }
-            _ => PhysicalContextPriority::KernelNormal,
+            // Retained Render carriers and the Spirit/Lab256 execution lane
+            // are independent producers. Both can remain continuously
+            // runnable even though each request is bounded. Keep them as
+            // normal-priority peers so neither side consumer can invert the
+            // other, while the downstream compositor can drain a completed
+            // frame promptly. The copy-only blitter is not scanout-critical.
+            Self::Render
+            | Self::Render1
+            | Self::Render2
+            | Self::GpgpuExecution
+            | Self::Ui4Blitter => PhysicalContextPriority::KernelNormal,
         }
     }
 
@@ -215,12 +220,20 @@ const _: () = {
         PhysicalContextPriority::KernelNormal
     ));
     assert!(matches!(
+        KernelClient::Render1.physical_priority(),
+        PhysicalContextPriority::KernelNormal
+    ));
+    assert!(matches!(
+        KernelClient::Render2.physical_priority(),
+        PhysicalContextPriority::KernelNormal
+    ));
+    assert!(matches!(
         KernelClient::GpgpuSystem.physical_priority(),
         PhysicalContextPriority::KernelHigh
     ));
     assert!(matches!(
         KernelClient::GpgpuExecution.physical_priority(),
-        PhysicalContextPriority::KernelHigh
+        PhysicalContextPriority::KernelNormal
     ));
     assert!(matches!(KernelClient::Lfm25.physical_priority(), PhysicalContextPriority::KernelHigh));
     assert!(matches!(
@@ -228,6 +241,43 @@ const _: () = {
         PhysicalContextPriority::KernelNormal
     ));
 };
+
+#[cfg(test)]
+mod kernel_client_priority_tests {
+    use super::{KernelClient, PhysicalContextPriority};
+
+    #[test]
+    fn retained_render_and_side_execution_are_peer_producers() {
+        for client in KernelClient::RENDER_CARRIERS {
+            assert_eq!(
+                client.physical_priority(),
+                PhysicalContextPriority::KernelNormal,
+                "{} must remain a fair producer peer",
+                client.name(),
+            );
+        }
+        assert_eq!(
+            KernelClient::GpgpuExecution.physical_priority(),
+            PhysicalContextPriority::KernelNormal,
+        );
+    }
+
+    #[test]
+    fn ui4_compositor_is_downstream_priority() {
+        assert_eq!(
+            KernelClient::Ui4Compositor.physical_priority(),
+            PhysicalContextPriority::KernelHigh,
+        );
+    }
+
+    #[test]
+    fn copy_only_ui4_blitter_remains_normal_priority() {
+        assert_eq!(
+            KernelClient::Ui4Blitter.physical_priority(),
+            PhysicalContextPriority::KernelNormal,
+        );
+    }
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Principal {

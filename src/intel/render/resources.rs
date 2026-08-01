@@ -1217,14 +1217,109 @@ fn build_churn_forward_geometry(
     Ok((vertices, indices))
 }
 
+/// Build one immutable indexed cube topology for every compacted output slot.
+///
+/// The transformer authors 24 unique Float32x3 positions per slot.  Repeating
+/// the six-face index pattern lets its 20-byte output records remain exact
+/// WGPU `DrawIndexedIndirectArgs`: a group selects a contiguous slot range via
+/// `first_index = first_slot * 36` and `index_count = slot_count * 36`.
+fn build_churn_expanded_indices(max_instances: usize) -> Result<Vec<u8>, &'static str> {
+    const FACE_INDICES: [u32; 6] = [0, 1, 2, 0, 2, 3];
+    let index_count = max_instances
+        .checked_mul(CHURN_FORWARD_INDICES_PER_MESH)
+        .ok_or("churn-expanded-index-capacity")?;
+    let mut indices = Vec::with_capacity(
+        index_count
+            .checked_mul(core::mem::size_of::<u32>())
+            .ok_or("churn-expanded-index-capacity")?,
+    );
+    for slot in 0..max_instances {
+        let slot_vertex = slot
+            .checked_mul(CHURN_FORWARD_VERTICES_PER_MESH)
+            .ok_or("churn-expanded-index-capacity")?;
+        let slot_vertex = u32::try_from(slot_vertex)
+            .map_err(|_| "churn-expanded-index-capacity")?;
+        for face in 0..6u32 {
+            let face_vertex = slot_vertex
+                .checked_add(face * 4)
+                .ok_or("churn-expanded-index-capacity")?;
+            for index in FACE_INDICES {
+                indices.extend_from_slice(
+                    &face_vertex
+                        .checked_add(index)
+                        .ok_or("churn-expanded-index-capacity")?
+                        .to_le_bytes(),
+                );
+            }
+        }
+    }
+    Ok(indices)
+}
+
+fn churn_material_srgba8(
+    material: trueos_helio_runtime::churn::GpuMaterial,
+) -> Option<[u8; 4]> {
+    let [r, g, b, alpha] = material.base_color;
+    if [r, g, b, alpha]
+        .iter()
+        .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
+    {
+        return None;
+    }
+    let encode = |linear: f32| {
+        let srgb = if linear <= 0.003_130_8 {
+            linear * 12.92
+        } else {
+            1.055 * libm::powf(linear, 1.0 / 2.4) - 0.055
+        };
+        ((srgb * alpha * 255.0) + 0.5).clamp(0.0, 255.0) as u8
+    };
+    Some([
+        encode(r),
+        encode(g),
+        encode(b),
+        ((alpha * 255.0) + 0.5).clamp(0.0, 255.0) as u8,
+    ])
+}
+
+fn publish_churn_material_rgba(
+    resident: &ResidentChurnForward,
+    materials: &[trueos_helio_runtime::churn::GpuMaterial;
+        trueos_helio_runtime::churn::MATERIAL_COUNT],
+) -> Result<(), &'static str> {
+    const FALLBACK_RGBA: [[u8; 4]; trueos_helio_runtime::churn::MATERIAL_COUNT] = [
+        [64, 179, 255, 255],
+        [255, 82, 158, 255],
+        [82, 255, 148, 255],
+        [255, 199, 64, 255],
+    ];
+    for (index, (target, material)) in resident.material_rgba.iter().zip(materials).enumerate() {
+        // Some retained side demos intentionally carry no forward-material
+        // payload because the old native shader supplied its own four-color
+        // palette. Preserve that visible contract on the storage-free path.
+        let rgba = if material.base_color == [0.0; 4] {
+            FALLBACK_RGBA[index]
+        } else {
+            churn_material_srgba8(*material).ok_or("churn-expanded-material")?
+        };
+        target.store(u32::from_le_bytes(rgba), Ordering::Release);
+    }
+    Ok(())
+}
+
 fn create_resident_churn_transform(
     max_instances: usize,
+    hardware_admission: ChurnHardwareAdmission,
 ) -> Result<ResidentChurnTransform, &'static str> {
     if max_instances == 0 || max_instances > crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize {
         return Err("churn-transform-row-capacity");
     }
     let dev = crate::intel::claimed_device().ok_or("no-device")?;
-    if !device_supports_churn_retained_transform(dev.device_id, dev.revision_id) {
+    if !device_admits_churn_retained_transform(
+        hardware_admission,
+        dev.device_id,
+        dev.revision_id,
+    ) {
         return Err("churn-transform-hardware-unvalidated");
     }
     let artifact = resident_helio_transform_artifact()?;
@@ -1256,6 +1351,33 @@ pub(crate) fn create_resident_churn_forward(
     artifact_bytes: &'static [u8],
     max_instances: usize,
     meshes: &[trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
+) -> Result<ResidentChurnForward, &'static str> {
+    create_resident_churn_forward_with_admission(
+        artifact_bytes,
+        max_instances,
+        meshes,
+        ChurnHardwareAdmission::ValidatedProduction,
+    )
+}
+
+pub(crate) fn create_resident_churn_forward_adls_retained_probe(
+    artifact_bytes: &'static [u8],
+    max_instances: usize,
+    meshes: &[trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
+) -> Result<ResidentChurnForward, &'static str> {
+    create_resident_churn_forward_with_admission(
+        artifact_bytes,
+        max_instances,
+        meshes,
+        ChurnHardwareAdmission::Adls4680Rev0cPhysicalProbe,
+    )
+}
+
+fn create_resident_churn_forward_with_admission(
+    artifact_bytes: &'static [u8],
+    max_instances: usize,
+    meshes: &[trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
+    hardware_admission: ChurnHardwareAdmission,
 ) -> Result<ResidentChurnForward, &'static str> {
     if max_instances == 0 {
         return Err("churn-native-instance-capacity");
@@ -1299,7 +1421,11 @@ pub(crate) fn create_resident_churn_forward(
     // Reject unvalidated devices before allocating or mutating any Render
     // context state. Capability admission must be side-effect free so a
     // compatibility fallback cannot disturb an unrelated live GuC client.
-    if !device_supports_churn_forward_native(dev.device_id, dev.revision_id) {
+    if !device_admits_churn_forward_native(
+        hardware_admission,
+        dev.device_id,
+        dev.revision_id,
+    ) {
         return Err("churn-native-device-mismatch");
     }
     // Validate and cache the immutable native code before acquiring any
@@ -1307,6 +1433,7 @@ pub(crate) fn create_resident_churn_forward(
     // service retries cannot leak another VS/PS pair.
     let pipeline = churn_forward_pipeline(artifact, program)?;
     let (vertex_bytes, index_bytes) = build_churn_forward_geometry(meshes)?;
+    let expanded_index_blob = build_churn_expanded_indices(max_instances)?;
     let index_offset = crate::intel::align_up(vertex_bytes.len(), 64)
         .ok_or("churn-native-geometry-layout")?;
     let geometry_bytes = index_offset
@@ -1321,6 +1448,15 @@ pub(crate) fn create_resident_churn_forward(
     let indirect_bytes = CHURN_FORWARD_DRAW_COUNT
         .checked_mul(trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN)
         .ok_or("churn-native-indirect-capacity")?;
+    let expanded_vertex_count = max_instances
+        .checked_mul(CHURN_FORWARD_VERTICES_PER_MESH)
+        .ok_or("churn-expanded-vertex-capacity")?;
+    let expanded_vertex_bytes = expanded_vertex_count
+        .checked_mul(core::mem::size_of::<[f32; 3]>())
+        .ok_or("churn-expanded-vertex-capacity")?;
+    let expanded_index_count = max_instances
+        .checked_mul(CHURN_FORWARD_INDICES_PER_MESH)
+        .ok_or("churn-expanded-index-capacity")?;
     let vertex_byte_len =
         u32::try_from(vertex_bytes.len()).map_err(|_| "churn-native-geometry-layout")?;
     let index_byte_len =
@@ -1329,13 +1465,38 @@ pub(crate) fn create_resident_churn_forward(
         u32::try_from(instance_bytes).map_err(|_| "churn-native-instance-capacity")?;
     let compacted_byte_len =
         u32::try_from(compacted_bytes).map_err(|_| "churn-native-instance-capacity")?;
+    let expanded_vertex_count_u32 = u32::try_from(expanded_vertex_count)
+        .map_err(|_| "churn-expanded-vertex-capacity")?;
+    let expanded_vertex_byte_len = u32::try_from(expanded_vertex_bytes)
+        .map_err(|_| "churn-expanded-vertex-capacity")?;
+    let expanded_index_count_u32 = u32::try_from(expanded_index_count)
+        .map_err(|_| "churn-expanded-index-capacity")?;
+    let expanded_index_byte_len = u32::try_from(expanded_index_blob.len())
+        .map_err(|_| "churn-expanded-index-capacity")?;
 
     let geometry = allocate_resident_render_buffer(geometry_bytes)?;
+    let expanded_positions = match allocate_resident_render_buffer(expanded_vertex_bytes) {
+        Ok(buffer) => buffer,
+        Err(error) => {
+            let _ = release_resident_render_buffer(&geometry);
+            return Err(error);
+        }
+    };
+    let expanded_indices = match allocate_resident_render_buffer(expanded_index_blob.len()) {
+        Ok(buffer) => buffer,
+        Err(error) => {
+            let _ = release_resident_render_buffer(&expanded_positions);
+            let _ = release_resident_render_buffer(&geometry);
+            return Err(error);
+        }
+    };
     let camera = match allocate_resident_render_buffer(
         trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN,
     ) {
         Ok(buffer) => buffer,
         Err(error) => {
+            let _ = release_resident_render_buffer(&expanded_indices);
+            let _ = release_resident_render_buffer(&expanded_positions);
             let _ = release_resident_render_buffer(&geometry);
             return Err(error);
         }
@@ -1344,6 +1505,8 @@ pub(crate) fn create_resident_churn_forward(
         Ok(buffer) => buffer,
         Err(error) => {
             let _ = release_resident_render_buffer(&camera);
+            let _ = release_resident_render_buffer(&expanded_indices);
+            let _ = release_resident_render_buffer(&expanded_positions);
             let _ = release_resident_render_buffer(&geometry);
             return Err(error);
         }
@@ -1353,6 +1516,8 @@ pub(crate) fn create_resident_churn_forward(
         Err(error) => {
             let _ = release_resident_render_buffer(&instances);
             let _ = release_resident_render_buffer(&camera);
+            let _ = release_resident_render_buffer(&expanded_indices);
+            let _ = release_resident_render_buffer(&expanded_positions);
             let _ = release_resident_render_buffer(&geometry);
             return Err(error);
         }
@@ -1363,20 +1528,29 @@ pub(crate) fn create_resident_churn_forward(
             let _ = release_resident_render_buffer(&compacted_indices);
             let _ = release_resident_render_buffer(&instances);
             let _ = release_resident_render_buffer(&camera);
+            let _ = release_resident_render_buffer(&expanded_indices);
+            let _ = release_resident_render_buffer(&expanded_positions);
             let _ = release_resident_render_buffer(&geometry);
             return Err(error);
         }
     };
-    if !geometry.write(0, &vertex_bytes) || !geometry.write(index_offset, &index_bytes) {
+    if !geometry.write(0, &vertex_bytes)
+        || !geometry.write(index_offset, &index_bytes)
+        || !expanded_indices.write(0, &expanded_index_blob)
+    {
         let _ = release_resident_render_buffer(&indirect_args);
         let _ = release_resident_render_buffer(&compacted_indices);
         let _ = release_resident_render_buffer(&instances);
         let _ = release_resident_render_buffer(&camera);
+        let _ = release_resident_render_buffer(&expanded_indices);
+        let _ = release_resident_render_buffer(&expanded_positions);
         let _ = release_resident_render_buffer(&geometry);
-        return Err("churn-native-geometry-upload");
+        return Err("churn-expanded-geometry-upload");
     }
     geometry.flush();
+    expanded_indices.flush();
     let native_vf = TriangleNativeDrawContract {
+        hardware_admission,
         vs_storage_bindings: [
             TriangleStorageBufferBinding {
                 gpu_addr: camera.gpu_base(),
@@ -1401,8 +1575,8 @@ pub(crate) fn create_resident_churn_forward(
             step_rate: instancing[index].step_rate,
         }),
     };
-    let (transform, transform_unavailable_reason) = match create_resident_churn_transform(max_instances)
-    {
+    let (transform, transform_unavailable_reason) =
+        match create_resident_churn_transform(max_instances, hardware_admission) {
         Ok(transform) => (Some(transform), None),
         Err(reason) => {
             crate::log_warn!(
@@ -1420,6 +1594,13 @@ pub(crate) fn create_resident_churn_forward(
         index_gpu_addr: geometry.gpu_base() + index_offset as u64,
         index_count: (CHURN_FORWARD_MESH_COUNT * CHURN_FORWARD_INDICES_PER_MESH) as u32,
         index_bytes: index_byte_len,
+        expanded_vertex_count: expanded_vertex_count_u32,
+        expanded_vertex_bytes: expanded_vertex_byte_len,
+        expanded_index_count: expanded_index_count_u32,
+        expanded_index_bytes: expanded_index_byte_len,
+        material_rgba: core::array::from_fn(|_| AtomicU32::new(u32::from_le_bytes([
+            255, 255, 255, 255,
+        ]))),
         pipeline,
         native_vf,
         front_end_contract: TriangleFrontEndContract {
@@ -1432,6 +1613,8 @@ pub(crate) fn create_resident_churn_forward(
             force_vs_with_vf_synthesized_vue: false,
         },
         geometry,
+        expanded_positions,
+        expanded_indices,
         camera,
         instances,
         compacted_indices,
@@ -1453,6 +1636,7 @@ pub(crate) fn update_resident_churn_forward_frame(
     {
         return Err("churn-native-frame-capacity");
     }
+    publish_churn_material_rgba(resident, frame.materials)?;
     let instance_first = frame.instance_dirty.first as usize;
     let instance_count = frame.instance_dirty.count as usize;
     let instance_end = instance_first
@@ -1543,6 +1727,7 @@ pub(crate) fn update_resident_churn_forward_transform_frame(
     {
         return Err("churn-transform-capacity");
     }
+    publish_churn_material_rgba(resident, frame.materials)?;
 
     let seed_first = frame.seed_dirty.first as usize;
     let seed_count = frame.seed_dirty.count as usize;
@@ -1684,6 +1869,52 @@ fn prepare_resident_churn_forward_draw(
     })
 }
 
+/// Storage-free graphics half of the retained transformer path.
+///
+/// Positions and indexed-indirect records are authored by the preceding GPU
+/// secondary.  The VS sees only one ordinary Float32x3 VF element; there are
+/// deliberately no camera/instance/compaction storage surface bindings and no
+/// synthetic instance-ID element on this path.
+fn prepare_resident_churn_expanded_draw(
+    _warm: RenderWarmState,
+    resident: &ResidentChurnForward,
+    group: usize,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    width: usize,
+    height: usize,
+) -> Option<TriangleDrawPrep> {
+    if group >= CHURN_FORWARD_DRAW_COUNT
+        || resident.expanded_vertex_count == 0
+        || resident.expanded_index_count == 0
+    {
+        return None;
+    }
+    Some(TriangleDrawPrep {
+        vertex_count: resident.expanded_index_count,
+        vertex_stride: core::mem::size_of::<[f32; 3]>() as u32,
+        vertex_buffer_bytes: resident.expanded_vertex_bytes,
+        vertex_format: TriangleVertexFormat::Float3,
+        vertex_gpu_addr: resident.expanded_positions.gpu_base(),
+        index_buffer: Some(TriangleIndexBufferPrep {
+            index_count: resident.expanded_index_count,
+            byte_len: resident.expanded_index_bytes,
+            gpu_addr: resident.expanded_indices.gpu_base(),
+        }),
+        indirect_args_gpu_addr: Some(
+            resident.indirect_args.gpu_base()
+                + (group * trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
+        ),
+        native: None,
+        state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
+        rt_gpu_addr: dst_gpu_addr,
+        rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
+        rt_pitch: u32::try_from(pitch).ok()?,
+        target_w: u32::try_from(width).ok()?,
+        target_h: u32::try_from(height).ok()?,
+    })
+}
+
 pub(crate) fn release_resident_churn_forward(resident: &ResidentChurnForward) -> bool {
     let mut released = true;
     released &= release_resident_render_buffer(&resident.indirect_args);
@@ -1694,6 +1925,8 @@ pub(crate) fn release_resident_churn_forward(resident: &ResidentChurnForward) ->
         released &= release_resident_render_buffer(&transform.seeds);
     }
     released &= release_resident_render_buffer(&resident.camera);
+    released &= release_resident_render_buffer(&resident.expanded_indices);
+    released &= release_resident_render_buffer(&resident.expanded_positions);
     released &= release_resident_render_buffer(&resident.geometry);
     // `transform_artifact` is a boot-lifetime shared Render-PPGTT mapping.
     // Releasing one pooled Helio instance must not unmap it for another.
@@ -1704,7 +1937,8 @@ pub(crate) fn release_resident_churn_forward(resident: &ResidentChurnForward) ->
 mod churn_forward_geometry_tests {
     use super::{
         CHURN_FORWARD_INDICES_PER_MESH, CHURN_FORWARD_MESH_COUNT,
-        CHURN_FORWARD_VERTICES_PER_MESH, build_churn_forward_geometry,
+        CHURN_FORWARD_VERTICES_PER_MESH, build_churn_expanded_indices,
+        build_churn_forward_geometry,
     };
 
     #[test]
@@ -1749,6 +1983,30 @@ mod churn_forward_geometry_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn repeats_expanded_indices_over_disjoint_float3_slots() {
+        let bytes = build_churn_expanded_indices(2).unwrap();
+        let words = bytes
+            .chunks_exact(4)
+            .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(words.len(), 2 * CHURN_FORWARD_INDICES_PER_MESH);
+        assert_eq!(&words[..6], &[0, 1, 2, 0, 2, 3]);
+        assert_eq!(
+            &words[CHURN_FORWARD_INDICES_PER_MESH..CHURN_FORWARD_INDICES_PER_MESH + 6],
+            &[24, 25, 26, 24, 26, 27]
+        );
+        assert!(words[..CHURN_FORWARD_INDICES_PER_MESH]
+            .iter()
+            .all(|index| *index < CHURN_FORWARD_VERTICES_PER_MESH as u32));
+        assert!(words[CHURN_FORWARD_INDICES_PER_MESH..]
+            .iter()
+            .all(|index| {
+                *index >= CHURN_FORWARD_VERTICES_PER_MESH as u32
+                    && *index < (CHURN_FORWARD_VERTICES_PER_MESH * 2) as u32
+            }));
     }
 }
 

@@ -1,11 +1,13 @@
 // Helio retained-geometry transform/compaction pass for TRUEOS Xe-LP.
 // Canonical source language: C++ for OpenCL.
 //
-// The pass deliberately never touches vertex or index data. It expands one
-// compact, positive-scale quaternion transform into Helio's 208-byte
-// GpuInstanceData ABI, scatters instance IDs into fixed per-draw compact
-// slices, and writes WGPU's exact 20-byte DrawIndexedIndirectArgs records.
-// The following vertex draw can therefore consume every output in-place.
+// The pass expands one compact, positive-scale quaternion transform into
+// Helio's 208-byte GpuInstanceData ABI, scatters instance IDs into fixed
+// per-draw compact slices, and writes WGPU's exact 20-byte
+// DrawIndexedIndirectArgs records. Its alternate expanded modes additionally
+// project each retained mesh's 24 immutable PosNormal vertices into a compact,
+// GPU-authored Float3 NDC stream. A storage-free pass-through vertex shader can
+// consume that stream with a repeated immutable cube-index buffer.
 //
 // The command encoder invokes this entrypoint twice. PREPARE publishes the
 // exact indirect records, then an ordered TRANSFORM dispatch fans rows across
@@ -17,10 +19,24 @@ enum : uint {
     HELIO_DRAW_TEMPLATE_WORDS = 6,
     HELIO_INSTANCE_WORDS = 52,
     HELIO_INDIRECT_WORDS = 5,
+    HELIO_CAMERA_VIEW_PROJ_WORD = 32,
+    HELIO_SOURCE_VERTEX_WORDS = 6,
+    HELIO_VERTICES_PER_MESH = 24,
+    HELIO_INDICES_PER_MESH = 36,
+    HELIO_EXPANDED_POSITION_WORDS = 3,
     HELIO_DISABLED_DRAW_GROUP = 0xFFFFFFFFu,
     HELIO_MODE_PREPARE = 0u,
     HELIO_MODE_TRANSFORM = 1u,
+    HELIO_MODE_PREPARE_EXPANDED = 2u,
+    HELIO_MODE_TRANSFORM_EXPANDED = 3u,
 };
+
+static_assert(HELIO_CAMERA_VIEW_PROJ_WORD * sizeof(uint) == 128u,
+    "GpuCameraUniforms.view_proj ABI changed");
+static_assert(HELIO_SOURCE_VERTEX_WORDS * sizeof(uint) == 24u,
+    "PosNormal vertex stride changed");
+static_assert(HELIO_EXPANDED_POSITION_WORDS * sizeof(uint) == 12u,
+    "Float3 expanded-position stride changed");
 
 static inline void helio_store_float(__global uint *dst, uint word, float value)
 {
@@ -36,10 +52,13 @@ __kernel void helio_retained_transform(
     __global uint *indirect_args,
     uint row_count,
     uint draw_count,
-    uint mode)
+    uint mode,
+    __global const uint *camera,
+    __global const uint *source_vertices,
+    __global uint *expanded_positions)
 {
     uint item = get_global_id(0);
-    if (mode == HELIO_MODE_PREPARE) {
+    if (mode == HELIO_MODE_PREPARE || mode == HELIO_MODE_PREPARE_EXPANDED) {
         if (item >= draw_count) {
             return;
         }
@@ -48,14 +67,28 @@ __kernel void helio_retained_transform(
         //   compacted capacity, packed mesh/material IDs.
         uint src = item * HELIO_DRAW_TEMPLATE_WORDS;
         uint dst = item * HELIO_INDIRECT_WORDS;
-        indirect_args[dst + 0u] = draw_templates[src + 0u];
-        indirect_args[dst + 1u] = draw_templates[src + 4u];
-        indirect_args[dst + 2u] = draw_templates[src + 1u];
-        indirect_args[dst + 3u] = draw_templates[src + 2u];
-        indirect_args[dst + 4u] = draw_templates[src + 3u];
+        if (mode == HELIO_MODE_PREPARE_EXPANDED) {
+            // One expanded indexed draw per retained group. The companion
+            // immutable index buffer repeats the local 36-index cube pattern
+            // for every global compact slot, already biased by slot * 24.
+            uint capacity = draw_templates[src + 4u];
+            uint first_slot = draw_templates[src + 3u];
+            indirect_args[dst + 0u] = capacity * HELIO_INDICES_PER_MESH;
+            indirect_args[dst + 1u] = capacity != 0u ? 1u : 0u;
+            indirect_args[dst + 2u] = first_slot * HELIO_INDICES_PER_MESH;
+            indirect_args[dst + 3u] = 0u;
+            indirect_args[dst + 4u] = 0u;
+        } else {
+            indirect_args[dst + 0u] = draw_templates[src + 0u];
+            indirect_args[dst + 1u] = draw_templates[src + 4u];
+            indirect_args[dst + 2u] = draw_templates[src + 1u];
+            indirect_args[dst + 3u] = draw_templates[src + 2u];
+            indirect_args[dst + 4u] = draw_templates[src + 3u];
+        }
         return;
     }
-    if (mode != HELIO_MODE_TRANSFORM || item >= row_count) {
+    bool expand_positions = mode == HELIO_MODE_TRANSFORM_EXPANDED;
+    if ((mode != HELIO_MODE_TRANSFORM && !expand_positions) || item >= row_count) {
         return;
     }
 
@@ -187,5 +220,61 @@ __kernel void helio_retained_transform(
         instances[dst + 51u] = 0xFFFFFFFFu;
 
         uint first_instance = draw_templates[draw_src + 3u];
-        compacted_indices[first_instance + slot] = row;
+        uint compacted_slot = first_instance + slot;
+        compacted_indices[compacted_slot] = row;
+
+        if (!expand_positions) {
+            return;
+        }
+
+        // GpuCameraUniforms is column-major; view_proj begins at byte 128.
+        uint vp = HELIO_CAMERA_VIEW_PROJ_WORD;
+        float vp00 = as_float(camera[vp + 0u]);
+        float vp10 = as_float(camera[vp + 1u]);
+        float vp20 = as_float(camera[vp + 2u]);
+        float vp30 = as_float(camera[vp + 3u]);
+        float vp01 = as_float(camera[vp + 4u]);
+        float vp11 = as_float(camera[vp + 5u]);
+        float vp21 = as_float(camera[vp + 6u]);
+        float vp31 = as_float(camera[vp + 7u]);
+        float vp02 = as_float(camera[vp + 8u]);
+        float vp12 = as_float(camera[vp + 9u]);
+        float vp22 = as_float(camera[vp + 10u]);
+        float vp32 = as_float(camera[vp + 11u]);
+        float vp03 = as_float(camera[vp + 12u]);
+        float vp13 = as_float(camera[vp + 13u]);
+        float vp23 = as_float(camera[vp + 14u]);
+        float vp33 = as_float(camera[vp + 15u]);
+
+        uint mesh = draw_templates[draw_src + 5u] & 0xFFFFu;
+        uint mesh_vertex = mesh * HELIO_VERTICES_PER_MESH;
+        uint expanded_vertex = compacted_slot * HELIO_VERTICES_PER_MESH;
+        for (uint vertex = 0u; vertex < HELIO_VERTICES_PER_MESH; ++vertex) {
+            uint source = (mesh_vertex + vertex) * HELIO_SOURCE_VERTEX_WORDS;
+            float lx = as_float(source_vertices[source + 0u]);
+            float ly = as_float(source_vertices[source + 1u]);
+            float lz = as_float(source_vertices[source + 2u]);
+
+            float wx = r00 * sx * lx + r01 * sy * ly + r02 * sz * lz + tx;
+            float wy = r10 * sx * lx + r11 * sy * ly + r12 * sz * lz + ty;
+            float wz = r20 * sx * lx + r21 * sy * ly + r22 * sz * lz + tz;
+            float cx = vp00 * wx + vp01 * wy + vp02 * wz + vp03;
+            float cy = vp10 * wx + vp11 * wy + vp12 * wz + vp13;
+            float cz = vp20 * wx + vp21 * wy + vp22 * wz + vp23;
+            float cw = vp30 * wx + vp31 * wy + vp32 * wz + vp33;
+
+            uint output = (expanded_vertex + vertex) * HELIO_EXPANDED_POSITION_WORDS;
+            if (isfinite(cx) && isfinite(cy) && isfinite(cz) && isfinite(cw)
+                && cw > 1.0e-8f) {
+                float inverse_w = 1.0f / cw;
+                helio_store_float(expanded_positions, output + 0u, cx * inverse_w);
+                helio_store_float(expanded_positions, output + 1u, cy * inverse_w);
+                helio_store_float(expanded_positions, output + 2u, cz * inverse_w);
+            } else {
+                // Keep invalid/behind-camera vertices finite and clipped.
+                helio_store_float(expanded_positions, output + 0u, 2.0f);
+                helio_store_float(expanded_positions, output + 1u, 2.0f);
+                helio_store_float(expanded_positions, output + 2u, 0.999f);
+            }
+        }
 }

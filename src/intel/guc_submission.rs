@@ -231,6 +231,10 @@ struct GucContextState {
     pending_enable: bool,
     pending_disable: bool,
     pending_deregister: bool,
+    /// An exactly attributed CAT/reset must remove this context from GuC's
+    /// runnable set even though its registration and backing stay pinned.
+    /// Cleared only by the matching DISABLE mode-done event.
+    fault_disable_required: bool,
     faulted: bool,
     owner_fault_reported: bool,
     owner_handoff_pending: bool,
@@ -256,6 +260,7 @@ impl GucContextState {
         pending_enable: false,
         pending_disable: false,
         pending_deregister: false,
+        fault_disable_required: false,
         faulted: false,
         owner_fault_reported: false,
         owner_handoff_pending: false,
@@ -556,6 +561,7 @@ pub(crate) fn register_context(
         pending_enable: false,
         pending_disable: false,
         pending_deregister: false,
+        fault_disable_required: false,
         faulted: false,
         owner_fault_reported: false,
         owner_handoff_pending: false,
@@ -799,10 +805,10 @@ pub(crate) fn destroy_context(
     if !context.registered {
         return Ok(());
     }
-    // A CAT/reset notification means firmware lifecycle state is no longer
-    // trustworthy. Do not compound the fault with a blind mode-set or
-    // deregister request. The generation-tagged ID and all backing remain
-    // quarantined until a real GT reset/reboot establishes a new boundary.
+    // Exact CAT/reset containment owns its narrowly scoped DISABLE in the G2H
+    // drain path. Destruction must never follow that with DEREGISTER: the
+    // generation-tagged ID and all backing remain quarantined until a real GT
+    // reset/reboot establishes a new boundary.
     if fault_requires_retention(&state, slot) {
         state.contexts[slot].destroy_requested = true;
         return Err(GucSubmissionError::DeviceFaulted);
@@ -949,11 +955,17 @@ pub(crate) fn destroy_context(
 }
 
 fn fault_requires_retention(state: &GucSubmissionState, slot: usize) -> bool {
-    state.gt_faulted
-        || state
+    context_fault_requires_retention(
+        state.gt_faulted,
+        state
             .contexts
             .get(slot)
-            .is_some_and(|context| context.faulted)
+            .is_some_and(|context| context.faulted),
+    )
+}
+
+const fn context_fault_requires_retention(gt_faulted: bool, context_faulted: bool) -> bool {
+    gt_faulted || context_faulted
 }
 
 #[derive(Copy, Clone)]
@@ -1066,6 +1078,15 @@ fn drain_g2h_events(state: &mut GucSubmissionState) {
             state.gt_faulted as u8,
         );
     }
+    // An exact CAT/reset does not authorize a whole-GT fence. It does require
+    // one narrowly scoped lifecycle action: order a DISABLE for that exact
+    // GuC id before a clean peer is admitted again. This runs after the G2H
+    // queue lock has been released, so publishing the H2G cannot invert CTB
+    // lock order. Rejected publications remain required and are retried by
+    // the boot-owned fault pump or the next scheduler boundary.
+    if let Some(dev) = crate::intel::claimed_device() {
+        enqueue_exact_fault_disables(dev, state);
+    }
     if !context_registry_invariants_hold(state) {
         state.async_event_errors = state.async_event_errors.saturating_add(1);
         state.failures = state.failures.saturating_add(1);
@@ -1126,7 +1147,25 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
                     ) =>
                 {
                     state.contexts[slot].pending_disable = false;
+                    if context.faulted {
+                        state.contexts[slot].fault_disable_required = false;
+                    }
                     "disable"
+                }
+                GUC_CONTEXT_ENABLE if context.faulted && !context.pending_enable => {
+                    // An exact CAT/reset supersedes any ENABLE that had
+                    // already reached the CTB. GuC mode-done carries no
+                    // request sequence, so consume this late completion as
+                    // stale while keeping the local context non-runnable and
+                    // its exact DISABLE required/pending.
+                    crate::log_trace!(
+                        target: "gpgpu";
+                        "intel/guc-submit: lifecycle stale=1 context_id={} transition=enable faulted=1 runnable_local=0 containment_disable_required={} pending_disable={} action=ignore-superseded-mode-done\n",
+                        context_id,
+                        context.fault_disable_required as u8,
+                        context.pending_disable as u8,
+                    );
+                    return;
                 }
                 _ => {
                     // Do not clear either transition on a contradictory event.
@@ -1148,6 +1187,15 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
                 runnable_state,
                 event.action,
             );
+            if runnable_state == GUC_CONTEXT_DISABLE && context.faulted {
+                crate::log_error!(
+                    target: "gpgpu";
+                    "intel/guc-submit: exact-context containment_complete=1 context_id={} token=0x{:X} runnable=0 registered=1 id_retained=1 backing_retained=1 deregister=0 gt_faulted={}\n",
+                    context_id,
+                    context.token(slot).raw(),
+                    state.gt_faulted as u8,
+                );
+            }
         }
         INTEL_GUC_ACTION_DEREGISTER_CONTEXT_DONE => {
             if event.payload_len != 1 || event.truncated() {
@@ -1378,9 +1426,21 @@ fn mark_exact_context_fault(
     let newly_reported = !state.contexts[slot].owner_fault_reported;
     {
         let context = &mut state.contexts[slot];
+        let first_exact_fault = !context.faulted;
         context.faulted = true;
         context.destroy_requested = true;
         context.owner_fault_reported = true;
+        // A pending DEREGISTER is reachable only after a completed DISABLE,
+        // so no second mode change is needed at that already non-runnable
+        // boundary. Its local registration is still retained below.
+        if first_exact_fault && !context.pending_deregister {
+            context.fault_disable_required = true;
+        }
+        // DISABLE supersedes an outstanding ENABLE after exact attribution.
+        // GuC mode-done has no request sequence, so a delayed ENABLE event is
+        // accepted below as stale without ever making the context runnable in
+        // local state again.
+        context.pending_enable = false;
         if newly_reported {
             context.owner_handoff_pending = true;
         }
@@ -1395,6 +1455,59 @@ fn mark_exact_context_fault(
         state.failures = state.failures.saturating_add(1);
     }
     newly_reported
+}
+
+const fn exact_fault_disable_should_enqueue(gt_faulted: bool, context: GucContextState) -> bool {
+    !gt_faulted
+        && context.registered
+        && context.faulted
+        && context.fault_disable_required
+        && !context.pending_disable
+        && !context.pending_deregister
+}
+
+/// Publish the only H2G operation permitted for an exactly faulted context.
+///
+/// This deliberately does not deregister, release, or mutate the generation,
+/// HWLRCA, PPGTT ownership, or backing. A clean peer stays independently
+/// schedulable because exact attribution never sets `gt_faulted`.
+fn enqueue_exact_fault_disables(dev: crate::intel::Dev, state: &mut GucSubmissionState) {
+    for slot in 0..state.contexts.len() {
+        let context = state.contexts[slot];
+        if !exact_fault_disable_should_enqueue(state.gt_faulted, context) {
+            continue;
+        }
+        let Some(engine_abi) = guc_engine_abi(dev, context.engine) else {
+            continue;
+        };
+        let context_id = context_id(slot);
+        let disabled = crate::intel::guc_ctb::send_hxg_fast_action(
+            dev,
+            INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_SET,
+            &[context_id, GUC_CONTEXT_DISABLE],
+        );
+        if !disabled.accepted {
+            note_lifecycle_rejection(
+                state,
+                slot,
+                engine_abi.name,
+                context_id,
+                "fault-containment-disable",
+                REPORT_DISABLE_REJECTED,
+            );
+            continue;
+        }
+        state.contexts[slot].enabled = false;
+        state.contexts[slot].pending_disable = true;
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/guc-submit: exact-context containment_enqueued=1 engine={} context_id={} token=0x{:X} pending_disable=1 completion_event=sched-context-mode-done registration_retained=1 backing_retained=1 deregister=0 gt_faulted=0 h2g_publish_sequence={}\n",
+            engine_abi.name,
+            context_id,
+            context.token(slot).raw(),
+            disabled.h2g_publish_sequence,
+        );
+    }
 }
 
 fn note_exact_lifecycle_fault(
@@ -1462,6 +1575,7 @@ fn context_registry_invariants_hold(state: &GucSubmissionState) -> bool {
                 && !context.pending_enable
                 && !context.pending_disable
                 && !context.pending_deregister
+                && !context.fault_disable_required
                 && !context.faulted
                 && !context.owner_fault_reported
                 && !context.owner_handoff_pending
@@ -1477,6 +1591,11 @@ fn context_registry_invariants_hold(state: &GucSubmissionState) -> bool {
                 && context.faulted
                 && context.destroy_requested
                 && context.fault_kind.is_some());
+        let fault_disable_is_scoped = !context.fault_disable_required
+            || (context.registered
+                && context.faulted
+                && context.destroy_requested
+                && !context.pending_deregister);
         let fault_telemetry_matches = context.cat_hw_type.is_none()
             || matches!(context.fault_kind, Some(GucContextFaultKind::MemoryCat));
         let lifecycle_reports_are_teardown_only = (context.lifecycle_timeout_reported == 0
@@ -1486,6 +1605,7 @@ fn context_registry_invariants_hold(state: &GucSubmissionState) -> bool {
             && empty_is_inert
             && teardown_is_quarantined
             && containment_is_quarantined
+            && fault_disable_is_scoped
             && fault_telemetry_matches
             && lifecycle_reports_are_teardown_only
     })
@@ -1754,6 +1874,26 @@ const _: () = {
     assert!(!pending_mode_matches(false, false, GUC_CONTEXT_ENABLE));
     assert!(!pending_mode_matches(true, true, GUC_CONTEXT_ENABLE));
     assert!(!pending_mode_matches(true, false, 2));
+
+    // Exact-context containment is local: the offender receives DISABLE,
+    // while a clean peer remains schedulable and the GT stays live.
+    let mut exact_fault = GucContextState::EMPTY;
+    exact_fault.registered = true;
+    exact_fault.faulted = true;
+    exact_fault.destroy_requested = true;
+    exact_fault.fault_disable_required = true;
+    assert!(exact_fault_disable_should_enqueue(false, exact_fault));
+    assert!(context_fault_requires_retention(false, true));
+    assert!(!context_fault_requires_retention(false, false));
+    assert!(context_fault_requires_retention(true, false));
+
+    exact_fault.pending_disable = true;
+    assert!(!exact_fault_disable_should_enqueue(false, exact_fault));
+    exact_fault.pending_disable = false;
+    exact_fault.pending_deregister = true;
+    assert!(!exact_fault_disable_should_enqueue(false, exact_fault));
+    exact_fault.pending_deregister = false;
+    assert!(!exact_fault_disable_should_enqueue(true, exact_fault));
 };
 
 fn program_context_priority(

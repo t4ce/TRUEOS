@@ -643,28 +643,49 @@ fn direct_rcs_push_gpgpu_dispatch_prologue(
     upload: UploadedKernelArtifact,
     batch_gpu: u64,
 ) -> bool {
+    direct_rcs_push_gpgpu_dispatch_prologue_with_vfe_dw5(
+        batch,
+        cursor,
+        upload,
+        batch_gpu,
+        GPGPU_VFE_DW5_UOS,
+    )
+}
+
+fn direct_rcs_push_gpgpu_dispatch_prologue_with_vfe_dw5(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    upload: UploadedKernelArtifact,
+    batch_gpu: u64,
+    vfe_dw5: u32,
+) -> bool {
     direct_rcs_push_pipe_control_full(
         batch,
         cursor,
-        (1 << 9) | (1 << 11),
-        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+        PIPE_CONTROL_HDC_PIPELINE_FLUSH,
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
+            | PIPE_CONTROL_DEPTH_CACHE_FLUSH
+            | PIPE_CONTROL_DEPTH_STALL
+            | PIPE_CONTROL_CS_STALL,
     ) && direct_rcs_push(batch, cursor, PIPELINE_SELECT_GPGPU)
-        // Gfx12 substitutes an untyped-dataport drain for the PRM's Generic
-        // Media State Clear, which Mesa documents as hang-prone.  Keep both
-        // HDC and untyped writes drained before the temporary GPGPU -> 3D
-        // transition in this shared prologue.
+        // Mesa deliberately omits Generic Media State Clear because it hangs
+        // gfx12. Gen12.0 also has no DW0 bit11 untyped-flush field, so the
+        // supported transition is HDC+CS only.
         && direct_rcs_push_pipe_control_full(
             batch,
             cursor,
-            (1 << 9) | (1 << 11),
+            PIPE_CONTROL_HDC_PIPELINE_FLUSH,
             PIPE_CONTROL_CS_STALL,
         )
         && direct_rcs_push(batch, cursor, PIPELINE_SELECT_3D)
         && direct_rcs_push_pipe_control_full(
             batch,
             cursor,
-            (1 << 9) | (1 << 11),
-            PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+            PIPE_CONTROL_HDC_PIPELINE_FLUSH,
+            PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
+                | PIPE_CONTROL_DEPTH_CACHE_FLUSH
+                | PIPE_CONTROL_DEPTH_STALL
+                | PIPE_CONTROL_CS_STALL,
         )
         && direct_rcs_push_state_base_address(batch, cursor, batch_gpu, batch_gpu, upload.gpu)
         && direct_rcs_push_pipe_control(batch, cursor, PIPE_CONTROL_INVALIDATE_BITS)
@@ -675,7 +696,7 @@ fn direct_rcs_push_gpgpu_dispatch_prologue(
         && direct_rcs_push(batch, cursor, 0)
         && direct_rcs_push(batch, cursor, GPGPU_VFE_DW3_UOS)
         && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, GPGPU_VFE_DW5_UOS)
+        && direct_rcs_push(batch, cursor, vfe_dw5)
         && direct_rcs_push(batch, cursor, 0)
         && direct_rcs_push(batch, cursor, 0)
         && direct_rcs_push(batch, cursor, 0)

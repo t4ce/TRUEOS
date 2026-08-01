@@ -111,6 +111,7 @@ struct TriangleVfInstancingState {
 /// native path cold rather than falling through to 3DPRIMITIVE.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct TriangleNativeDrawContract {
+    hardware_admission: ChurnHardwareAdmission,
     vs_storage_bindings: [TriangleStorageBufferBinding; 3],
     vf_sgvs_dw1: u32,
     vf_sgvs_2_dw1: u32,
@@ -303,6 +304,15 @@ struct ResidentChurnTransform {
 
 pub(crate) struct ResidentChurnForward {
     geometry: ResidentRenderBuffer,
+    /// GPU-authored clip/NDC-space Float32x3 positions.  The retained
+    /// transformer writes 24 unique face vertices into each compacted object
+    /// slot; the storage-free graphics fallback consumes this allocation as
+    /// an ordinary VF vertex buffer.
+    expanded_positions: ResidentRenderBuffer,
+    /// Immutable cube topology repeated once for every expanded object slot.
+    /// This keeps the existing 20-byte WGPU indexed-indirect records and the
+    /// already-proven indexed draw command path unchanged.
+    expanded_indices: ResidentRenderBuffer,
     camera: ResidentRenderBuffer,
     instances: ResidentRenderBuffer,
     compacted_indices: ResidentRenderBuffer,
@@ -318,6 +328,11 @@ pub(crate) struct ResidentChurnForward {
     index_gpu_addr: u64,
     index_count: u32,
     index_bytes: u32,
+    expanded_vertex_count: u32,
+    expanded_vertex_bytes: u32,
+    expanded_index_count: u32,
+    expanded_index_bytes: u32,
+    material_rgba: [AtomicU32; trueos_helio_runtime::churn::MATERIAL_COUNT],
     max_instances: usize,
 }
 
@@ -339,6 +354,33 @@ impl ResidentChurnForward {
 
     pub(crate) const fn retained_transform_unavailable_reason(&self) -> Option<&'static str> {
         self.transform_unavailable_reason
+    }
+
+    /// Exact immutable PosNormal source range consumed by the expanded-
+    /// position transformer pass.
+    pub(crate) fn retained_geometry_vertices(
+        &self,
+    ) -> crate::intel::gpgpu::GpgpuHelioBufferSlice {
+        crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            self.vertex_gpu_addr,
+            self.vertex_bytes as usize,
+        )
+    }
+
+    /// Exact GPU-owned Float32x3 output range consumed directly by VF.
+    pub(crate) fn expanded_position_vertices(
+        &self,
+    ) -> crate::intel::gpgpu::GpgpuHelioBufferSlice {
+        crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            self.expanded_positions.gpu_base(),
+            self.expanded_positions.storage_bytes(),
+        )
+    }
+
+    fn material_rgba(&self, material: usize) -> [u8; 4] {
+        self.material_rgba[material]
+            .load(Ordering::Acquire)
+            .to_le_bytes()
     }
 
     pub(crate) fn disable_retained_transform_dispatch(&self) {
@@ -384,6 +426,12 @@ impl ResidentChurnForward {
                 self.indirect_args.gpu_base(),
                 self.indirect_args.storage_bytes(),
             ),
+            camera: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+                self.camera.gpu_base(),
+                self.camera.storage_bytes(),
+            ),
+            source_vertices: self.retained_geometry_vertices(),
+            expanded_positions: self.expanded_position_vertices(),
             row_count,
             draw_count: trueos_helio_runtime::churn::DRAW_GROUP_COUNT as u32,
         })
@@ -640,7 +688,7 @@ enum PostDrawSyncVariant {
     FlushBit7,
     FlushBit12Rt,
     FlushBit20Cs,
-    FlushBit26Hdc,
+    FlushBit26Llc,
 }
 
 const POST_DRAW_PC_RETIRE_SPECTRUM: [PostDrawSyncVariant; 3] = [
@@ -660,7 +708,7 @@ impl PostDrawSyncVariant {
             Self::FlushBit7 => "bit7-flush-enable",
             Self::FlushBit12Rt => "bit12-rt-flush",
             Self::FlushBit20Cs => "bit20-cs-stall",
-            Self::FlushBit26Hdc => "bit26-hdc-flush",
+            Self::FlushBit26Llc => "bit26-llc-flush",
         }
     }
 
@@ -674,7 +722,7 @@ impl PostDrawSyncVariant {
             Self::FlushBit7 => "postdraw-flush-bit7",
             Self::FlushBit12Rt => "postdraw-flush-bit12",
             Self::FlushBit20Cs => "postdraw-flush-bit20",
-            Self::FlushBit26Hdc => "postdraw-flush-bit26",
+            Self::FlushBit26Llc => "postdraw-flush-bit26",
         }
     }
 
@@ -687,7 +735,7 @@ impl PostDrawSyncVariant {
             "postdraw-flush-bit7" => Some(Self::FlushBit7),
             "postdraw-flush-bit12" => Some(Self::FlushBit12Rt),
             "postdraw-flush-bit20" => Some(Self::FlushBit20Cs),
-            "postdraw-flush-bit26" => Some(Self::FlushBit26Hdc),
+            "postdraw-flush-bit26" => Some(Self::FlushBit26Llc),
             _ => None,
         }
     }
@@ -725,7 +773,9 @@ impl PostDrawSyncVariant {
                 PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS | PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
             }
             Self::FlushBit20Cs => PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS,
-            Self::FlushBit26Hdc => PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS | PIPE_CONTROL_FLUSH_HDC,
+            // This diagnostic includes the mandatory post-sync immediate, so
+            // exercising Gen12 Flush LLC here is legal.
+            Self::FlushBit26Llc => PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS | PIPE_CONTROL_FLUSH_LLC,
         };
         Some(flags)
     }
@@ -2549,6 +2599,78 @@ pub(crate) fn latest_render_frontier_summary() -> RenderFrontierSummary {
         fragment_candidate_ready: fragment_candidate_ready(),
         fragment_observed: fragment_boundary_observed(),
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct HelioRetainedTransformBreadcrumbs {
+    pub(crate) pre_3dprimitive: u32,
+    pub(crate) final_marker: u32,
+    pub(crate) post_vf_state: u32,
+    pub(crate) post_vs_state: u32,
+    pub(crate) post_ps_state: u32,
+    pub(crate) post_clip_state: u32,
+    pub(crate) post_raster_state: u32,
+    pub(crate) pre_postdraw_sync: u32,
+    pub(crate) secondary_entry: u32,
+    pub(crate) post_opening_pipe_controls: u32,
+    pub(crate) scene_release_lo: u32,
+    pub(crate) scene_release_hi: u32,
+    pub(crate) transform_prologue: u32,
+    pub(crate) transform_prepare: u32,
+    pub(crate) transform_rows: u32,
+    pub(crate) transform_handoff_3d: u32,
+    pub(crate) secondary_return: u32,
+}
+
+pub(crate) fn latest_helio_retained_transform_breadcrumbs()
+-> Option<HelioRetainedTransformBreadcrumbs> {
+    const PRE_3DPRIMITIVE: usize = 0;
+    const FINAL_MARKER: usize = 2;
+    const POST_VF_STATE: usize = 3;
+    const POST_VS_STATE: usize = 4;
+    const POST_PS_STATE: usize = 5;
+    const POST_CLIP_STATE: usize = 6;
+    const POST_RASTER_STATE: usize = 7;
+    const PRE_POSTDRAW_SYNC: usize = 13;
+    const SECONDARY_ENTRY: usize = 14;
+    const POST_OPENING_PIPE_CONTROLS: usize = 15;
+    const SCENE_RELEASE_LO: usize = 24;
+    const SCENE_RELEASE_HI: usize = 25;
+    const TRANSFORM_PROLOGUE: usize = 26;
+    const TRANSFORM_PREPARE: usize = 27;
+    const TRANSFORM_ROWS: usize = 28;
+    const TRANSFORM_HANDOFF_3D: usize = 29;
+    const SECONDARY_RETURN: usize = 30;
+
+    let warm = (*WARM_STATE.lock())?;
+    if warm.result_virt.is_null()
+        || warm.result_len < (SECONDARY_RETURN + 1) * core::mem::size_of::<u32>()
+    {
+        return None;
+    }
+    core::sync::atomic::fence(Ordering::Acquire);
+    let read = |slot: usize| unsafe {
+        core::ptr::read_volatile((warm.result_virt as *const u32).add(slot))
+    };
+    Some(HelioRetainedTransformBreadcrumbs {
+        pre_3dprimitive: read(PRE_3DPRIMITIVE),
+        final_marker: read(FINAL_MARKER),
+        post_vf_state: read(POST_VF_STATE),
+        post_vs_state: read(POST_VS_STATE),
+        post_ps_state: read(POST_PS_STATE),
+        post_clip_state: read(POST_CLIP_STATE),
+        post_raster_state: read(POST_RASTER_STATE),
+        pre_postdraw_sync: read(PRE_POSTDRAW_SYNC),
+        secondary_entry: read(SECONDARY_ENTRY),
+        post_opening_pipe_controls: read(POST_OPENING_PIPE_CONTROLS),
+        scene_release_lo: read(SCENE_RELEASE_LO),
+        scene_release_hi: read(SCENE_RELEASE_HI),
+        transform_prologue: read(TRANSFORM_PROLOGUE),
+        transform_prepare: read(TRANSFORM_PREPARE),
+        transform_rows: read(TRANSFORM_ROWS),
+        transform_handoff_3d: read(TRANSFORM_HANDOFF_3D),
+        secondary_return: read(SECONDARY_RETURN),
+    })
 }
 
 fn fragment_candidate_ready() -> bool {

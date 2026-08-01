@@ -67,6 +67,32 @@ fn print_status(io: &'static dyn ShellBackend2) {
         )
         .as_str(),
     );
+    if let Some(crumbs) = crate::intel::render::latest_helio_retained_transform_breadcrumbs() {
+        print_shell_line(
+            io,
+            format!(
+                "vgpu: helio-retained entry=0x{:08X} opening=0x{:08X} vf=0x{:08X} vs=0x{:08X} ps=0x{:08X} clip=0x{:08X} raster=0x{:08X} pre3d=0x{:08X} postdraw=0x{:08X} final=0x{:08X} transform=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} returned=0x{:08X} release=0x{:08X}:0x{:08X}",
+                crumbs.secondary_entry,
+                crumbs.post_opening_pipe_controls,
+                crumbs.post_vf_state,
+                crumbs.post_vs_state,
+                crumbs.post_ps_state,
+                crumbs.post_clip_state,
+                crumbs.post_raster_state,
+                crumbs.pre_3dprimitive,
+                crumbs.pre_postdraw_sync,
+                crumbs.final_marker,
+                crumbs.transform_prologue,
+                crumbs.transform_prepare,
+                crumbs.transform_rows,
+                crumbs.transform_handoff_3d,
+                crumbs.secondary_return,
+                crumbs.scene_release_hi,
+                crumbs.scene_release_lo,
+            )
+            .as_str(),
+        );
+    }
     let boundaries = status.kernel_context_boundaries;
     print_shell_line(
         io,

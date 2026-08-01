@@ -37,6 +37,7 @@ fn print_list(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "  2  churn-benchmark   live retained-batch stress scene");
     print_shell_line(io, "  3  shape-battle-royale   physics arena scene");
     print_shell_line(io, "  4  pendulum-bigcloth     linked-cloth physics scene");
+    print_shell_line(io, "  probe 2|4             one launch-scoped ADL-S retained-GPU proof");
     print_shell_line(io, "  stop INSTANCE_ID        close one generated instance");
     print_shell_line(io, "  stop all                close every Helio instance");
     print_shell_line(
@@ -110,12 +111,13 @@ fn print_status(io: &'static dyn ShellBackend2) {
         print_shell_line(
             io,
             format!(
-                "helio: instance={} slot={} state={} example={}:{} cpu_carrier={} worker_slot={} core_kind={} gpu_principal=render0 gpu_context=shared-single-render-runtime last_error={} artifact=embedded:{} bytes={}",
+                "helio: instance={} slot={} state={} example={}:{} retained_probe={} cpu_carrier={} worker_slot={} core_kind={} gpu_principal=render0 gpu_context=shared-single-render-runtime last_error={} artifact=embedded:{} bytes={}",
                 instance.instance_id,
                 slot,
                 instance.state.label(),
                 instance.example_id,
                 example_name(instance.example_id),
+                instance.retained_probe as u8,
                 cpu_carrier,
                 worker_slot,
                 core_kind,
@@ -247,6 +249,51 @@ fn launch(io: &'static dyn ShellBackend2, id: u8) {
         LaunchRequest::Reserved => {
             print_shell_line(io, format!("helio: example {} is reserved", id).as_str())
         }
+        LaunchRequest::ProbeUnsupported | LaunchRequest::ProbeBusy { .. } => {
+            print_shell_line(io, "helio: internal launch-mode mismatch")
+        }
+    }
+}
+
+fn launch_probe(io: &'static dyn ShellBackend2, id: u8) {
+    match helio_game::request_retained_probe_launch(id) {
+        LaunchRequest::Queued { instance_id } => print_shell_line(
+            io,
+            format!(
+                "helio: instance={} example={}:{} retained ADL-S GPU probe queued; launch-scoped; no production admission change",
+                instance_id,
+                id,
+                example_name(id),
+            )
+            .as_str(),
+        ),
+        LaunchRequest::Replacing {
+            instance_id,
+            stopping_instance_id,
+        } => {
+            print_shell_line(io, eviction_message(instance_id, stopping_instance_id).as_str());
+            print_shell_line(
+                io,
+                format!(
+                    "helio: instance={} example={}:{} retained ADL-S GPU probe queued; launch-scoped",
+                    instance_id,
+                    id,
+                    example_name(id),
+                )
+                .as_str(),
+            );
+        }
+        LaunchRequest::ProbeBusy { instance_id } => print_shell_line(
+            io,
+            format!(
+                "helio: retained GPU probe already active or stopping instance={}",
+                instance_id,
+            )
+            .as_str(),
+        ),
+        LaunchRequest::ProbeUnsupported | LaunchRequest::Reserved => {
+            print_shell_line(io, "helio: retained GPU probe supports only examples 2 and 4")
+        }
     }
 }
 
@@ -307,7 +354,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         (Some("help" | "-h" | "--help"), None, None) => {
             print_shell_line(
                 io,
-                "helio: usage `helio [1|2|3|4|list|status|stop INSTANCE_ID|stop all|monitor [SECONDS|status|off]]`",
+                "helio: usage `helio [1|2|3|4|probe 2|probe 4|list|status|stop INSTANCE_ID|stop all|monitor [SECONDS|status|off]]`",
             );
             print_shell_line(
                 io,
@@ -341,6 +388,12 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         (Some("stop"), _, _) => {
             print_shell_line(io, "helio: usage `helio stop INSTANCE_ID` or `helio stop all`")
         }
+        (Some("probe"), Some(id), None) if matches!(parse_id(id), Some(2 | 4)) => {
+            launch_probe(io, parse_id(id).unwrap());
+        }
+        (Some("probe"), _, _) => {
+            print_shell_line(io, "helio: usage `helio probe 2` or `helio probe 4`")
+        }
         (Some("start" | "run"), None, None) => launch(io, 1),
         (Some("start" | "run"), Some(id), None) if parse_id(id).is_some() => {
             launch(io, parse_id(id).unwrap());
@@ -348,7 +401,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         (Some(id), None, None) if parse_id(id).is_some() => launch(io, parse_id(id).unwrap()),
         _ => print_shell_line(
             io,
-            "helio: expected 1, 2, 3, 4, list, status, stop, or monitor/perf/logger",
+            "helio: expected 1, 2, 3, 4, probe, list, status, stop, or monitor/perf/logger",
         ),
     }
     ParseOutcome::Handled

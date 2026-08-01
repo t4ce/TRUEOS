@@ -370,6 +370,14 @@ fn render_ppgtt_pml4_phys() -> u64 {
 }
 
 pub(crate) fn map_render_ppgtt_range(gpu: u64, phys: u64, bytes: usize) -> bool {
+    // Render0 has one boot-lifetime PPGTT root.  Resident resources may be
+    // created by Helio tasks on other CPU carriers while GuC is executing a
+    // frame, so the page-table mutex alone is not sufficient: it only
+    // serializes CPU writers and says nothing about the live GPU page walker.
+    // RENDER_SUBMIT_RUNTIME is held from ring publication through the exact
+    // saved-HEAD retirement proof. Taking it here therefore makes every PPGTT
+    // mutation part of the same Render0 storage lease as submission.
+    let _render0_quiescent = RENDER_SUBMIT_RUNTIME.lock();
     let mut guard = RENDER_PPGTT.lock();
     let Some(ppgtt) = guard.as_mut() else {
         return false;
@@ -380,6 +388,7 @@ pub(crate) fn map_render_ppgtt_range(gpu: u64, phys: u64, bytes: usize) -> bool 
 }
 
 pub(crate) fn map_render_ppgtt_scanout_range(gpu: u64, phys: u64, bytes: usize) -> bool {
+    let _render0_quiescent = RENDER_SUBMIT_RUNTIME.lock();
     let mut guard = RENDER_PPGTT.lock();
     let Some(ppgtt) = guard.as_mut() else {
         return false;
@@ -390,6 +399,7 @@ pub(crate) fn map_render_ppgtt_scanout_range(gpu: u64, phys: u64, bytes: usize) 
 }
 
 pub(crate) fn unmap_render_ppgtt_range(gpu: u64, bytes: usize) -> bool {
+    let _render0_quiescent = RENDER_SUBMIT_RUNTIME.lock();
     let mut guard = RENDER_PPGTT.lock();
     let Some(ppgtt) = guard.as_mut() else {
         return false;

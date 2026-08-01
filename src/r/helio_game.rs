@@ -20,6 +20,10 @@ const HELIO_OWNER_BASE: u8 = 8;
 pub(crate) const INSTANCE_CAPACITY: usize = 10;
 const PENDING_CAPACITY: usize = INSTANCE_CAPACITY;
 pub(crate) const CPU_CARRIER_CAPACITY: usize = 3;
+const _: () = assert!(
+    crate::intel::render::RESIDENT_UI4_DIRECT_MAPPING_COUNT
+        == INSTANCE_CAPACITY * crate::ui4::FrameBuffering::Triple.count()
+);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CpuCarrier {
@@ -200,6 +204,18 @@ impl InstanceState {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum LaunchMode {
+    Normal,
+    AdlsRetainedProbe,
+}
+
+impl LaunchMode {
+    const fn is_probe(self) -> bool {
+        matches!(self, Self::AdlsRetainedProbe)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum LaunchRequest {
     Queued {
         instance_id: u32,
@@ -209,6 +225,10 @@ pub(crate) enum LaunchRequest {
         stopping_instance_id: u32,
     },
     Reserved,
+    ProbeUnsupported,
+    ProbeBusy {
+        instance_id: u32,
+    },
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -228,6 +248,7 @@ pub(crate) struct InstanceStatus {
     pub(crate) core_kind: Option<u8>,
     pub(crate) state: InstanceState,
     pub(crate) example_id: u8,
+    pub(crate) retained_probe: bool,
     pub(crate) artifact_name: &'static str,
     pub(crate) artifact_bytes: usize,
     pub(crate) last_error: Option<&'static str>,
@@ -245,12 +266,14 @@ pub(crate) struct PoolStatus {
 struct LaunchJob {
     instance_id: u32,
     example_id: u8,
+    mode: LaunchMode,
 }
 
 #[derive(Copy, Clone)]
 struct InstanceRecord {
     instance_id: u32,
     example_id: u8,
+    mode: LaunchMode,
     cpu_carrier: CpuCarrier,
     state: InstanceState,
     last_error: Option<&'static str>,
@@ -292,11 +315,38 @@ const fn artifact_for(example_id: u8) -> (&'static str, usize) {
 /// Once all ten task slots are occupied, the oldest instance is asked to stop
 /// at its next safe frame boundary and this newest request remains queued.
 pub(crate) fn request_launch(example_id: u8) -> LaunchRequest {
+    request_launch_mode(example_id, LaunchMode::Normal)
+}
+
+pub(crate) fn request_retained_probe_launch(example_id: u8) -> LaunchRequest {
+    request_launch_mode(example_id, LaunchMode::AdlsRetainedProbe)
+}
+
+fn request_launch_mode(example_id: u8, mode: LaunchMode) -> LaunchRequest {
     if !(1..=4).contains(&example_id) {
         return LaunchRequest::Reserved;
     }
+    if mode.is_probe() && !matches!(example_id, 2 | 4) {
+        return LaunchRequest::ProbeUnsupported;
+    }
     let (instance_id, stopping_instance_id, dropped_instance_id) = {
         let mut pool = GAME_POOL.lock();
+        if mode.is_probe()
+            && let Some(instance_id) = pool
+                .slots
+                .iter()
+                .flatten()
+                .find(|record| record.mode.is_probe())
+                .map(|record| record.instance_id)
+                .or_else(|| {
+                    pool.pending
+                        .iter()
+                        .find(|job| job.mode.is_probe())
+                        .map(|job| job.instance_id)
+                })
+        {
+            return LaunchRequest::ProbeBusy { instance_id };
+        }
         let instance_id = pool.allocate_instance_id();
         // Slots already in Stopping are capacity which is on its way back to
         // the queue. Count only continuing instances here so a manual stop
@@ -338,6 +388,7 @@ pub(crate) fn request_launch(example_id: u8) -> LaunchRequest {
         pool.pending.push_back(LaunchJob {
             instance_id,
             example_id,
+            mode,
         });
         (instance_id, stopping_instance_id, dropped_instance_id)
     };
@@ -419,6 +470,7 @@ pub(crate) fn status() -> PoolStatus {
             core_kind: Some(record.cpu_carrier.core_kind),
             state: record.state,
             example_id: record.example_id,
+            retained_probe: record.mode.is_probe(),
             artifact_name,
             artifact_bytes,
             last_error: record.last_error,
@@ -435,6 +487,7 @@ pub(crate) fn status() -> PoolStatus {
             core_kind: cpu_carrier.map(|carrier| carrier.core_kind),
             state: InstanceState::Queued,
             example_id: job.example_id,
+            retained_probe: job.mode.is_probe(),
             artifact_name,
             artifact_bytes,
             last_error: None,
@@ -494,11 +547,16 @@ struct InstanceContext {
     slot: usize,
     instance_id: u32,
     example_id: u8,
+    mode: LaunchMode,
     cpu_carrier: CpuCarrier,
     owner: crate::ui4::WindowOwner,
 }
 
 impl InstanceContext {
+    const fn is_probe(self) -> bool {
+        self.mode.is_probe()
+    }
+
     fn is_stopping(self) -> bool {
         let pool = GAME_POOL.lock();
         !matches!(
@@ -603,6 +661,7 @@ fn claim_next_launch(cpu_carrier: CpuCarrier, carrier_count: u8) -> Option<Insta
     pool.slots[slot] = Some(InstanceRecord {
         instance_id: job.instance_id,
         example_id: job.example_id,
+        mode: job.mode,
         cpu_carrier,
         state: InstanceState::Starting,
         last_error: None,
@@ -611,6 +670,7 @@ fn claim_next_launch(cpu_carrier: CpuCarrier, carrier_count: u8) -> Option<Insta
         slot,
         instance_id: job.instance_id,
         example_id: job.example_id,
+        mode: job.mode,
         cpu_carrier,
         owner: crate::ui4::WindowOwner::KernelApp(HELIO_OWNER_BASE + slot as u8),
     })
@@ -637,6 +697,7 @@ fn requeue_failed_spawn(context: InstanceContext) {
     pool.pending.push_front(LaunchJob {
         instance_id: context.instance_id,
         example_id: context.example_id,
+        mode: context.mode,
     });
 }
 
@@ -1842,11 +1903,20 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
                 return Err(GameError::Artifact(error));
             }
         };
-        let resident = match crate::intel::render::create_resident_churn_forward(
-            CHURN_FORWARD_ARTIFACT,
-            max_instances,
-            initial.meshes,
-        ) {
+        let resident_result = if context.is_probe() {
+            crate::intel::render::create_resident_churn_forward_adls_retained_probe(
+                CHURN_FORWARD_ARTIFACT,
+                max_instances,
+                initial.meshes,
+            )
+        } else {
+            crate::intel::render::create_resident_churn_forward(
+                CHURN_FORWARD_ARTIFACT,
+                max_instances,
+                initial.meshes,
+            )
+        };
+        let resident = match resident_result {
             Ok(resident) => resident,
             Err(reason) => {
                 destroy_unpublished_surface(surface);
@@ -1867,6 +1937,11 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
         match initial_transform {
             Ok(triangles) => (true, None, triangles),
             Err(reason) => {
+                if context.is_probe() {
+                    let _ = crate::intel::render::release_resident_churn_forward(&resident);
+                    destroy_unpublished_surface(surface);
+                    return Err(GameError::NativeUnavailable(reason));
+                }
                 crate::log_warn!(
                     target: "helio";
                     "helio instance={} example=2 retained transform unavailable reason={} boundary=pre-window action=native-cpu-expanded-fallback artifact_native_vs_ps=preserved\n",
@@ -1972,6 +2047,9 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
                 };
                 match transform_update {
                     Ok(triangles) => prepared_triangles = triangles,
+                    Err(reason) if retained_transform_setup_error(reason) && context.is_probe() => {
+                        break Err(GameError::NativeUnavailable(reason));
+                    }
                     Err(reason) if retained_transform_setup_error(reason) => {
                         gpu_transform_enabled = false;
                         transform_fallback_reason = Some(reason);
@@ -2083,6 +2161,13 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
                 continue;
             }
             Err(GameError::Render(reason))
+                if gpu_transform_enabled
+                    && retained_transform_setup_error(reason)
+                    && context.is_probe() =>
+            {
+                break Err(GameError::NativeUnavailable(reason));
+            }
+            Err(GameError::Render(reason))
                 if gpu_transform_enabled && retained_transform_setup_error(reason) =>
             {
                 // Transform state/encoding fails before the primary batch is
@@ -2117,7 +2202,10 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
             }
             Err(GameError::Render("helio-incomplete-native-instanced-frame")) => {
                 incomplete_retries = incomplete_retries.saturating_add(1);
-                if first_frame && incomplete_retries >= NATIVE_FIRST_FRAME_INCOMPLETE_RETRY_LIMIT {
+                if context.is_probe()
+                    || (first_frame
+                        && incomplete_retries >= NATIVE_FIRST_FRAME_INCOMPLETE_RETRY_LIMIT)
+                {
                     break Err(GameError::NativeUnavailable("helio-native-first-frame-nonretired"));
                 }
                 if let Some(mut sample) = last_sample {
@@ -2147,7 +2235,7 @@ async fn run_churn_native(context: InstanceContext) -> Result<(), GameError> {
             if gpu_transform_enabled {
                 crate::log_info!(
                     target: "helio";
-                    "helio instance={} example=2 name=churn-benchmark native=1 online artifact_bytes={} active_objects={} max_instances={} draw_groups=12 geometry=3x-posnormal-cube frame={} window={} extent={}x{} plane={} background=transparent-rgba controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=absolute-deadline period_us=16667 target_fps=60 missed_deadline=skip-extra-delay path=helioa-churn-forward-v1->gpu-retained-transform+compaction->artifact-native-vs+ps->12-indexed-indirect->one-guc-schedule->ui4-triple-direct cpu_vertex_projection=0 cpu_matrix_expansion=0 mutable_upload=camera+64b-transform-seeds+24b-draw-templates gpu_outputs=208b-instances+compacted-indices+20b-indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
+                    "helio instance={} example=2 name=churn-benchmark native=1 online artifact_bytes={} active_objects={} max_instances={} draw_groups=12 geometry=3x-posnormal-cube frame={} window={} extent={}x{} plane={} background=transparent-rgba controls=WASD+Space+Shift,left-drag-look,+/-,C-collision-burst producer_pacing=absolute-deadline period_us=16667 target_fps=60 missed_deadline=skip-extra-delay path=helioa-churn-forward-v1->gpu-retained-transform+compaction+clip-position-expansion->storage-free-vf+pass-through-vs+constant-ps->12-indexed-indirect->one-guc-schedule->ui4-triple-direct cpu_vertex_projection=0 cpu_matrix_expansion=0 mutable_upload=camera+64b-transform-seeds+24b-draw-templates gpu_outputs=208b-instances+compacted-indices+24x12b-float3-position-per-object+20b-indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
                     context.instance_id,
                     CHURN_FORWARD_ARTIFACT.len(),
                     engine.active_objects(),
@@ -2215,11 +2303,20 @@ async fn run_pendulum_native(context: InstanceContext) -> Result<(), GameError> 
         }
     };
     let max_instances = initial.seeds.len();
-    let resident = match crate::intel::render::create_resident_churn_forward(
-        CHURN_FORWARD_ARTIFACT,
-        max_instances,
-        initial.meshes,
-    ) {
+    let resident_result = if context.is_probe() {
+        crate::intel::render::create_resident_churn_forward_adls_retained_probe(
+            CHURN_FORWARD_ARTIFACT,
+            max_instances,
+            initial.meshes,
+        )
+    } else {
+        crate::intel::render::create_resident_churn_forward(
+            CHURN_FORWARD_ARTIFACT,
+            max_instances,
+            initial.meshes,
+        )
+    };
+    let resident = match resident_result {
         Ok(resident) => resident,
         Err(reason) => {
             destroy_unpublished_surface(surface);
@@ -2401,7 +2498,10 @@ async fn run_pendulum_native(context: InstanceContext) -> Result<(), GameError> 
             }
             Err(GameError::Render("helio-incomplete-native-instanced-frame")) => {
                 incomplete_retries = incomplete_retries.saturating_add(1);
-                if first_frame && incomplete_retries >= NATIVE_FIRST_FRAME_INCOMPLETE_RETRY_LIMIT {
+                if context.is_probe()
+                    || (first_frame
+                        && incomplete_retries >= NATIVE_FIRST_FRAME_INCOMPLETE_RETRY_LIMIT)
+                {
                     break Err(GameError::NativeUnavailable("helio-native-first-frame-nonretired"));
                 }
                 if let Some(mut sample) = last_sample {
@@ -2430,7 +2530,7 @@ async fn run_pendulum_native(context: InstanceContext) -> Result<(), GameError> 
             }
             crate::log_info!(
                 target: "helio";
-                "helio instance={} example=4 name=pendulum-bigcloth native=1 online artifact_bytes={} segments={} instances={} draw_groups=12 geometry=one-retained-posnormal-box frame={} window={} extent={}x{} plane={} controls=WASD+Space+Shift,left-drag-look,C-pause,R-reset producer_pacing=absolute-deadline period_us={} path=helioa-pendulum-v1->gpu-retained-transform+compaction->artifact-native-vs-local-to-world-to-clip->gpu-indexed-indirect->one-guc-schedule->ui4-triple-direct cpu_vertex_projection=0 cpu_matrix_expansion=0 cpu_winding_repair=0 mutable_upload=camera+337x64b-transform-seeds+12x24b-draw-templates gpu_outputs=208b-instances+compacted-indices+20b-indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
+                "helio instance={} example=4 name=pendulum-bigcloth native=1 online artifact_bytes={} segments={} instances={} draw_groups=12 geometry=one-retained-posnormal-box frame={} window={} extent={}x{} plane={} controls=WASD+Space+Shift,left-drag-look,C-pause,R-reset producer_pacing=absolute-deadline period_us={} path=helioa-pendulum-v1->gpu-retained-transform+compaction+clip-position-expansion->storage-free-vf+pass-through-vs+constant-ps->gpu-indexed-indirect->one-guc-schedule->ui4-triple-direct cpu_vertex_projection=0 cpu_matrix_expansion=0 cpu_winding_repair=0 mutable_upload=camera+337x64b-transform-seeds+12x24b-draw-templates gpu_outputs=208b-instances+compacted-indices+24x12b-float3-position-per-object+20b-indirect immutable_geometry=retained cpu_readback=0 cpu_frame_copy=0\n",
                 context.instance_id,
                 CHURN_FORWARD_ARTIFACT.len(),
                 engine.segment_count(),
@@ -2462,6 +2562,7 @@ async fn run_pendulum_native(context: InstanceContext) -> Result<(), GameError> 
 async fn run_pendulum(context: InstanceContext) -> Result<(), GameError> {
     match run_pendulum_native(context).await {
         Ok(()) => Ok(()),
+        Err(error @ GameError::NativeUnavailable(_)) if context.is_probe() => Err(error),
         Err(GameError::NativeUnavailable(reason)) => {
             crate::log_warn!(
                 target: "helio";
@@ -2479,6 +2580,7 @@ async fn run_pendulum(context: InstanceContext) -> Result<(), GameError> {
 async fn run_churn(context: InstanceContext) -> Result<(), GameError> {
     match run_churn_native(context).await {
         Ok(()) => return Ok(()),
+        Err(error @ GameError::NativeUnavailable(_)) if context.is_probe() => return Err(error),
         Err(GameError::NativeUnavailable(reason)) => {
             crate::log_warn!(
                 target: "helio";
@@ -2985,6 +3087,16 @@ async fn helio_game_instance_task(context: InstanceContext) {
             Ok(()) => break,
             Err(error) => {
                 if !context.mark_starting_error(error.label()) {
+                    break;
+                }
+                if context.is_probe() {
+                    crate::log_warn!(
+                        target: "helio";
+                        "helio instance={} example={} retained probe terminated error={:?} action=no-retry\n",
+                        context.instance_id,
+                        context.example_id,
+                        error,
+                    );
                     break;
                 }
                 if last_error != Some(core::mem::discriminant(&error)) {

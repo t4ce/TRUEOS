@@ -199,8 +199,11 @@ fn direct_rcs_encode_spirit_vfx_batch(
     ok &= direct_rcs_push_pipe_control_full(
         batch,
         &mut cursor,
-        (1 << 9) | (1 << 11),
-        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+        PIPE_CONTROL_HDC_PIPELINE_FLUSH,
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
+            | PIPE_CONTROL_DEPTH_CACHE_FLUSH
+            | PIPE_CONTROL_DEPTH_STALL
+            | PIPE_CONTROL_CS_STALL,
     );
     ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
     ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
@@ -208,8 +211,11 @@ fn direct_rcs_encode_spirit_vfx_batch(
     ok &= direct_rcs_push_pipe_control_full(
         batch,
         &mut cursor,
-        (1 << 9) | (1 << 11),
-        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+        PIPE_CONTROL_HDC_PIPELINE_FLUSH,
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
+            | PIPE_CONTROL_DEPTH_CACHE_FLUSH
+            | PIPE_CONTROL_DEPTH_STALL
+            | PIPE_CONTROL_CS_STALL,
     );
     let instruction_base = background_upload
         .map(|upload| upload.gpu)

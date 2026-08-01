@@ -34,6 +34,9 @@ pub(crate) struct GpgpuHelioRetainedTransformDispatch {
     pub(crate) instances: GpgpuHelioBufferSlice,
     pub(crate) compacted_indices: GpgpuHelioBufferSlice,
     pub(crate) indirect_args: GpgpuHelioBufferSlice,
+    pub(crate) camera: GpgpuHelioBufferSlice,
+    pub(crate) source_vertices: GpgpuHelioBufferSlice,
+    pub(crate) expanded_positions: GpgpuHelioBufferSlice,
     pub(crate) row_count: u32,
     pub(crate) draw_count: u32,
 }
@@ -49,6 +52,9 @@ pub(crate) enum GpgpuHelioTransformError {
     InstanceBuffer,
     CompactedBuffer,
     IndirectBuffer,
+    CameraBuffer,
+    SourceVertexBuffer,
+    ExpandedPositionBuffer,
     DrawTemplate,
     BatchBuffer,
     Artifact,
@@ -57,6 +63,13 @@ pub(crate) enum GpgpuHelioTransformError {
 pub(crate) const GPGPU_HELIO_INSTANCE_BYTES: usize = 208;
 pub(crate) const GPGPU_HELIO_COMPACTED_INDEX_BYTES: usize = 4;
 pub(crate) const GPGPU_HELIO_INDIRECT_BYTES: usize = 20;
+pub(crate) const GPGPU_HELIO_CAMERA_BYTES: usize =
+    trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN;
+pub(crate) const GPGPU_HELIO_SOURCE_VERTICES_PER_MESH: usize = 24;
+pub(crate) const GPGPU_HELIO_SOURCE_VERTEX_BYTES: usize = 24;
+pub(crate) const GPGPU_HELIO_INDICES_PER_MESH: u32 = 36;
+pub(crate) const GPGPU_HELIO_EXPANDED_VERTICES_PER_ROW: usize = 24;
+pub(crate) const GPGPU_HELIO_EXPANDED_POSITION_BYTES: usize = 12;
 pub(crate) const GPGPU_HELIO_MAX_ROWS: u32 = 4_096;
 pub(crate) const GPGPU_HELIO_MAX_DRAWS: u32 = 64;
 pub(crate) const GPGPU_HELIO_TRANSFORM_STATE_BLOB_BYTES: usize = 0x2000;
@@ -74,6 +87,7 @@ const _: () = {
         GPGPU_HELIO_MAX_ROWS as usize == trueos_helio_runtime::churn::MAX_RETAINED_TRANSFORM_ROWS
     );
     assert!(GPGPU_HELIO_MAX_ROWS <= GpgpuHelioRetainedTransform::MAX_COMPACT_SLOT);
+    assert!(GPGPU_HELIO_CAMERA_BYTES == 368);
 };
 
 /// Authenticated native artifact mapping for a caller-owned Render PPGTT.
@@ -186,6 +200,14 @@ impl GpgpuHelioRetainedTransformDispatch {
         let indirect_bytes = draws
             .checked_mul(GPGPU_HELIO_INDIRECT_BYTES)
             .ok_or(Error::IndirectBuffer)?;
+        let source_vertex_bytes = trueos_helio_runtime::churn::SHAPE_COUNT
+            .checked_mul(GPGPU_HELIO_SOURCE_VERTICES_PER_MESH)
+            .and_then(|vertices| vertices.checked_mul(GPGPU_HELIO_SOURCE_VERTEX_BYTES))
+            .ok_or(Error::SourceVertexBuffer)?;
+        let expanded_position_bytes = rows
+            .checked_mul(GPGPU_HELIO_EXPANDED_VERTICES_PER_ROW)
+            .and_then(|vertices| vertices.checked_mul(GPGPU_HELIO_EXPANDED_POSITION_BYTES))
+            .ok_or(Error::ExpandedPositionBuffer)?;
         if !self.transforms.covers(transform_bytes) {
             return Err(Error::TransformBuffer);
         }
@@ -201,6 +223,15 @@ impl GpgpuHelioRetainedTransformDispatch {
         if !self.indirect_args.covers(indirect_bytes) {
             return Err(Error::IndirectBuffer);
         }
+        if !self.camera.covers(GPGPU_HELIO_CAMERA_BYTES) {
+            return Err(Error::CameraBuffer);
+        }
+        if !self.source_vertices.covers(source_vertex_bytes) {
+            return Err(Error::SourceVertexBuffer);
+        }
+        if !self.expanded_positions.covers(expanded_position_bytes) {
+            return Err(Error::ExpandedPositionBuffer);
+        }
 
         let ranges = [
             (self.transforms.gpu, transform_bytes),
@@ -208,6 +239,9 @@ impl GpgpuHelioRetainedTransformDispatch {
             (self.instances.gpu, instance_bytes),
             (self.compacted_indices.gpu, compacted_bytes),
             (self.indirect_args.gpu, indirect_bytes),
+            (self.camera.gpu, GPGPU_HELIO_CAMERA_BYTES),
+            (self.source_vertices.gpu, source_vertex_bytes),
+            (self.expanded_positions.gpu, expanded_position_bytes),
         ];
         for left in 0..ranges.len() {
             for right in left + 1..ranges.len() {
@@ -232,7 +266,9 @@ impl GpgpuHelioRetainedTransformDispatch {
             return Err(Error::DrawTemplate);
         }
         for template in templates {
-            if template.index_count == 0 {
+            if template.index_count != GPGPU_HELIO_INDICES_PER_MESH
+                || template.mesh_id() as usize >= trueos_helio_runtime::churn::SHAPE_COUNT
+            {
                 return Err(Error::DrawTemplate);
             }
             let end = template
@@ -281,6 +317,9 @@ mod tests {
             instances: GpgpuHelioBufferSlice::new(0x3000, 2 * 208),
             compacted_indices: GpgpuHelioBufferSlice::new(0x4000, 2 * 4),
             indirect_args: GpgpuHelioBufferSlice::new(0x5000, 2 * 20),
+            camera: GpgpuHelioBufferSlice::new(0x6000, GPGPU_HELIO_CAMERA_BYTES),
+            source_vertices: GpgpuHelioBufferSlice::new(0x7000, 3 * 24 * 24),
+            expanded_positions: GpgpuHelioBufferSlice::new(0x8000, 2 * 24 * 12),
             row_count: 2,
             draw_count: 2,
         }
@@ -322,7 +361,7 @@ mod tests {
                 ..GpgpuHelioRetainedDrawTemplate::default()
             },
             GpgpuHelioRetainedDrawTemplate {
-                index_count: 6,
+                index_count: 36,
                 first_instance: 1,
                 capacity: 1,
                 ..GpgpuHelioRetainedDrawTemplate::default()
@@ -341,7 +380,7 @@ mod tests {
                 ..GpgpuHelioRetainedDrawTemplate::default()
             },
             GpgpuHelioRetainedDrawTemplate {
-                index_count: 6,
+                index_count: 36,
                 first_instance: 1,
                 capacity: 1,
                 ..GpgpuHelioRetainedDrawTemplate::default()

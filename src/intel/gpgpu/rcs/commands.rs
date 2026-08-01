@@ -717,7 +717,7 @@ fn direct_rcs_append_ring_batch_start(
     let start = ring_tail_bytes / core::mem::size_of::<u32>();
     unsafe {
         let dwords = state.ring_virt as *mut u32;
-        core::ptr::write_volatile(dwords.add(start), MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT);
+        core::ptr::write_volatile(dwords.add(start), MI_BATCH_BUFFER_START_GEN8);
         core::ptr::write_volatile(dwords.add(start + 1), batch_gpu_addr as u32);
         core::ptr::write_volatile(dwords.add(start + 2), (batch_gpu_addr >> 32) as u32);
         core::ptr::write_volatile(dwords.add(start + 3), MI_NOOP);

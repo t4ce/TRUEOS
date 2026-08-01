@@ -1102,6 +1102,11 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
     let mut retained_gpu_logger: Option<QueuedFrame> = None;
     let mut inflight: Option<Inflight> = None;
     let mut gpu_inflight: Option<GpuInflight> = None;
+    // When a Render peer faults, the hidden member targeted by an incomplete
+    // Spirit job can never be reused safely. Keep its exact lease represented
+    // for the lifetime of this worker and preserve the other, already-visible
+    // member as Spirit's last-known-good presentation.
+    let mut peer_fault_frozen_gpu: Option<GpuInflight> = None;
     let mut rearm_retry: Option<QueuedFrame> = None;
     let mut stream_queued_frames = 0u64;
     let mut stream_next_deadline = Instant::now();
@@ -1216,6 +1221,23 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                             producing.polls,
                         );
                     }
+                    gpu_inflight = None;
+                    continue;
+                }
+                crate::intel::gpgpu::SpiritVfxCompletion::PeerFaultFrozen => {
+                    stream_aborted = true;
+                    crate::log_error!(
+                        target: "gfx";
+                        "trueos-spirit: vfx peer-fault freeze frame={} shader_frame={} tag={} fence={} sequence={} polls={} destination_buffer={} producer_lease=permanently-retained mailbox_pending=retained execution_context_quarantined=0 gpu_submissions=stopped presentation=last-known-good-surflive\n",
+                        stream_queued_frames,
+                        producing.submission.frame(),
+                        producing.submission.tag(),
+                        fence_index,
+                        producing.lease.fence.sequence,
+                        producing.polls,
+                        producing.lease.surface.surface,
+                    );
+                    peer_fault_frozen_gpu = Some(producing);
                     gpu_inflight = None;
                     continue;
                 }
@@ -1475,6 +1497,15 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
         };
 
         let Some((frame, completes_fence)) = candidate else {
+            if peer_fault_frozen_gpu.is_some() {
+                // The other double-buffer member remains potentially writable
+                // by a late GPU request. With no third cursor buffer, neither
+                // GPU nor CPU may author another frame; retain the currently
+                // visible member and keep servicing the independent cursor
+                // position task.
+                Timer::after(Duration::from_millis(SPIRIT_IDLE_POLL_MS)).await;
+                continue;
+            }
             if let Some(snapshot) = gpu_logger_snapshot {
                 if Instant::now() < gpu_logger_next_deadline {
                     Timer::at(gpu_logger_next_deadline).await;
