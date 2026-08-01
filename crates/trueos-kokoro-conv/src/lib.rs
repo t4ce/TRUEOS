@@ -727,7 +727,15 @@ fn conv_transpose_element(problem: Problem<'_>, output_channel: usize, output_ti
 unsafe fn convolve_avx2_fma(problem: Problem<'_>, output: &mut [f32], tile: Tile) {
     match problem.parameters.kind {
         OperatorKind::Conv => unsafe { conv_avx2_fma(problem, output, tile) },
-        OperatorKind::ConvTranspose => unsafe { conv_transpose_avx2_fma(problem, output, tile) },
+        OperatorKind::ConvTranspose => match problem.profile {
+            Profile::Upsample512To256 { .. } => unsafe {
+                conv_transpose_dense_avx2_fma::<10>(problem, output, tile)
+            },
+            Profile::Upsample256To128 { .. } => unsafe {
+                conv_transpose_dense_avx2_fma::<6>(problem, output, tile)
+            },
+            _ => unsafe { conv_transpose_avx2_fma(problem, output, tile) },
+        },
     }
     core::arch::x86_64::_mm256_zeroupper();
 }
@@ -892,6 +900,90 @@ unsafe fn conv_transpose_avx2_fma(problem: Problem<'_>, output: &mut [f32], tile
             }
             output_time += SIMD_TIME_TILE;
         }
+        while output_time < time_end {
+            output[output_row + output_time] =
+                conv_transpose_element(problem, output_channel, output_time);
+            output_time += 1;
+        }
+    }
+}
+
+/// Dense Kokoro upsamplers have `kernel_width == 2 * stride`.  Evaluating
+/// adjacent output times needs two input and two weight gathers for every
+/// input channel.  Eight outputs separated by `STRIDE` instead consume
+/// contiguous input vectors and reuse each scalar weight across all lanes.
+///
+/// The loop order for any individual output remains input-channel first and
+/// then ascending kernel, so this is bit-identical to the scalar contract.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn conv_transpose_dense_avx2_fma<const STRIDE: usize>(
+    problem: Problem<'_>,
+    output: &mut [f32],
+    tile: Tile,
+) {
+    use core::arch::x86_64::{_mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_storeu_ps};
+
+    let dimensions = problem.dimensions;
+    debug_assert_eq!(dimensions.groups, 1);
+    debug_assert_eq!(dimensions.stride, STRIDE);
+    debug_assert_eq!(dimensions.kernel_width, 2 * STRIDE);
+    let (channel_end, time_end) = tile.checked_ends(dimensions).unwrap();
+    let vector_time_block = STRIDE * SIMD_TIME_TILE;
+
+    for output_channel in tile.channel_start..channel_end {
+        let output_row = output_channel * dimensions.output_width;
+        let bias = problem.bias.map_or(0.0, |values| values[output_channel]);
+        let mut output_time = tile.time_start;
+
+        // Align a phase block so `(output_time + pad_left) / STRIDE` is the
+        // first input time shared by all kernel residues.
+        let remainder = (output_time + dimensions.pad_left) % STRIDE;
+        let scalar_prefix = if remainder == 0 {
+            0
+        } else {
+            STRIDE - remainder
+        };
+        let prefix_end = time_end.min(output_time + scalar_prefix);
+        while output_time < prefix_end {
+            output[output_row + output_time] =
+                conv_transpose_element(problem, output_channel, output_time);
+            output_time += 1;
+        }
+
+        while time_end - output_time >= vector_time_block {
+            let base_input_time = (output_time + dimensions.pad_left) / STRIDE;
+            // Both kernel layers must provide eight in-bounds contiguous
+            // input samples.  Only the small model boundary remains scalar.
+            if base_input_time == 0 || base_input_time + SIMD_TIME_TILE > dimensions.input_width {
+                break;
+            }
+
+            for phase in 0..STRIDE {
+                let mut accumulator = _mm256_set1_ps(bias);
+                for input_channel in 0..dimensions.input_channels {
+                    let input_row = input_channel * dimensions.input_width;
+                    let weight_row = (input_channel * dimensions.output_channels + output_channel)
+                        * dimensions.kernel_width;
+                    for layer in 0..2 {
+                        let input_start = input_row + base_input_time - layer;
+                        let input_values =
+                            unsafe { _mm256_loadu_ps(problem.input.as_ptr().add(input_start)) };
+                        let weight =
+                            _mm256_set1_ps(problem.weights[weight_row + phase + layer * STRIDE]);
+                        accumulator = _mm256_fmadd_ps(input_values, weight, accumulator);
+                    }
+                }
+
+                let mut lanes = [0.0_f32; SIMD_TIME_TILE];
+                unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), accumulator) };
+                for (lane, value) in lanes.into_iter().enumerate() {
+                    output[output_row + output_time + phase + lane * STRIDE] = value;
+                }
+            }
+            output_time += vector_time_block;
+        }
+
         while output_time < time_end {
             output[output_row + output_time] =
                 conv_transpose_element(problem, output_channel, output_time);
@@ -1189,6 +1281,65 @@ mod tests {
                 .map(|value| value.to_bits())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn dense_transpose_phase_blocks_preserve_partial_tile_results() {
+        let dispatcher = Dispatcher::detect();
+        if !dispatcher.supports(Lane::Avx2Fma) {
+            return;
+        }
+        for profile in [
+            Profile::Upsample512To256 { input_width: 9 },
+            Profile::Upsample256To128 { input_width: 15 },
+        ] {
+            let dimensions = profile.dimensions().unwrap();
+            let (input, weights, bias) = fixture_tensors(profile, 10.0);
+            let problem = Problem::new(profile, &input, &weights, bias.as_deref()).unwrap();
+            let output_channel = 3;
+            let split = dimensions.output_width - 3;
+            let mut scalar = vec![f32::NAN; dimensions.output_elements().unwrap()];
+            let mut vector = vec![f32::NAN; scalar.len()];
+            dispatcher
+                .convolve_tile_with_lane(
+                    problem,
+                    &mut scalar,
+                    Tile {
+                        channel_start: output_channel,
+                        channel_count: 1,
+                        time_start: 0,
+                        time_count: dimensions.output_width,
+                    },
+                    Lane::Scalar,
+                )
+                .unwrap();
+            for (time_start, time_count) in [(0, split), (split, 3)] {
+                dispatcher
+                    .convolve_tile_with_lane(
+                        problem,
+                        &mut vector,
+                        Tile {
+                            channel_start: output_channel,
+                            channel_count: 1,
+                            time_start,
+                            time_count,
+                        },
+                        Lane::Avx2Fma,
+                    )
+                    .unwrap();
+            }
+            let row = output_channel * dimensions.output_width;
+            assert_eq!(
+                vector[row..row + dimensions.output_width]
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                scalar[row..row + dimensions.output_width]
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

@@ -344,9 +344,7 @@ impl RetainedGraphicsHandoff {
     }
 }
 
-impl From<crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput>
-    for RetainedGraphicsHandoff
-{
+impl From<crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput> for RetainedGraphicsHandoff {
     fn from(output: crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput) -> Self {
         match output {
             crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput::InstanceMatrices => {
@@ -415,9 +413,7 @@ impl ResidentChurnForward {
 
     /// Exact immutable PosNormal source range consumed by the expanded-
     /// position transformer pass.
-    pub(crate) fn retained_geometry_vertices(
-        &self,
-    ) -> crate::intel::gpgpu::GpgpuHelioBufferSlice {
+    pub(crate) fn retained_geometry_vertices(&self) -> crate::intel::gpgpu::GpgpuHelioBufferSlice {
         crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
             self.vertex_gpu_addr,
             self.vertex_bytes as usize,
@@ -425,9 +421,7 @@ impl ResidentChurnForward {
     }
 
     /// Exact GPU-owned Float32x3 output range consumed directly by VF.
-    pub(crate) fn expanded_position_vertices(
-        &self,
-    ) -> crate::intel::gpgpu::GpgpuHelioBufferSlice {
+    pub(crate) fn expanded_position_vertices(&self) -> crate::intel::gpgpu::GpgpuHelioBufferSlice {
         crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
             self.expanded_positions.gpu_base(),
             self.expanded_positions.storage_bytes(),
@@ -464,8 +458,8 @@ impl ResidentChurnForward {
         let transform = self.transform.as_ref()?;
         let hierarchy = &transform.hierarchy;
         let node_count = hierarchy.node_count.load(Ordering::Acquire);
-        let hierarchy = (node_count != 0).then(|| {
-            crate::intel::gpgpu::GpgpuHelioRetainedHierarchyDispatch {
+        let hierarchy =
+            (node_count != 0).then(|| crate::intel::gpgpu::GpgpuHelioRetainedHierarchyDispatch {
                 nodes: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
                     hierarchy.nodes.gpu_base(),
                     hierarchy.nodes.storage_bytes(),
@@ -503,8 +497,7 @@ impl ResidentChurnForward {
                 dirty_world_count: hierarchy.dirty_world_count.load(Ordering::Acquire),
                 dirty_row_count: hierarchy.dirty_row_count.load(Ordering::Acquire),
                 max_depth: hierarchy.max_depth.load(Ordering::Acquire),
-            }
-        });
+            });
         self.transform_dispatch_for_rows_with_hierarchy(row_count, hierarchy)
     }
 

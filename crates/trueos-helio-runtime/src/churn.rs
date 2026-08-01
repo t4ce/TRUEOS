@@ -3,7 +3,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::retained_transform::{RetainedTransformProgram, TransformHierarchyFrame};
+use crate::retained_transform::{
+    RetainedTransformProgram, RetainedTransformTemplate, TransformHierarchyFrame,
+};
 use crate::{Camera, DrawIndexedIndirectArgs, Error, Projector, linear_rgba_to_srgba8};
 
 pub const SECTION_NAME: &str = "scene/churn-v1.bin";
@@ -526,12 +528,14 @@ pub struct Spec {
     rotation_scale: f32,
     scale_range: [f32; 2],
     speed_range: [f32; 2],
+    retained_transform_template: RetainedTransformTemplate,
 }
 
 impl Spec {
     pub fn decode_artifact(bytes: &[u8]) -> Result<Self, Error> {
         let artifact =
             trueos_helio_artifact::Artifact::parse(bytes).map_err(|_| Error::Artifact)?;
+        let retained_transform_template = RetainedTransformTemplate::decode(&artifact)?;
         let bytes = artifact
             .section(SECTION_NAME)
             .ok_or(Error::MissingChurnScene)?
@@ -641,6 +645,7 @@ impl Spec {
             rotation_scale: read_f32(bytes, 256)?,
             scale_range: [read_f32(bytes, 276)?, read_f32(bytes, 280)?],
             speed_range: [read_f32(bytes, 284)?, read_f32(bytes, 288)?],
+            retained_transform_template,
         };
         if !spec.floor_extent.is_finite()
             || spec.floor_extent <= 0.0
@@ -807,6 +812,7 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(spec: Spec) -> Result<Self, Error> {
+        let retained_transform_template = spec.retained_transform_template;
         let slots_per_batch = spec.max_objects.div_ceil(MATERIAL_COUNT);
         let mut batches = Vec::with_capacity(BATCH_COUNT);
         for material in 0..MATERIAL_COUNT {
@@ -907,8 +913,11 @@ impl Engine {
             gpu_draws,
             gpu_transform_seeds: Vec::with_capacity(max_objects),
             gpu_draw_templates: [GpuRetainedDrawTemplate::default(); DRAW_GROUP_COUNT],
-            gpu_transform_hierarchy: RetainedTransformProgram::compile_rooted_dynamic_rows(0)
-                .map_err(|_| Error::InvalidChurnScene)?,
+            gpu_transform_hierarchy: RetainedTransformProgram::from_template(
+                retained_transform_template,
+                0,
+            )
+            .map_err(|_| Error::InvalidChurnScene)?,
             previous_view_proj: None,
         })
     }
@@ -1167,9 +1176,11 @@ impl Engine {
         // worklists directly; this avoids bumping a never-emitted row to
         // generation 2. Ordinary frames only mark their changing TRS rows.
         if self.gpu_transform_hierarchy.authored_leaf_nodes.len() != object_count + 1 {
-            self.gpu_transform_hierarchy =
-                RetainedTransformProgram::compile_rooted_dynamic_rows(object_count)
-                    .map_err(|_| Error::InvalidChurnScene)?;
+            self.gpu_transform_hierarchy = RetainedTransformProgram::from_template(
+                self.spec.retained_transform_template,
+                object_count,
+            )
+            .map_err(|_| Error::InvalidChurnScene)?;
         } else {
             self.gpu_transform_hierarchy.begin_update();
             for row in 0..object_count_u32 {

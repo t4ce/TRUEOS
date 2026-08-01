@@ -1118,13 +1118,98 @@ fn gather_qconv1d_cache_f32(
             cache_column.fill(RTEN_U8_IM2COL_PADDING);
             continue;
         }
-        for (input_channel, value) in cache_column.iter_mut().enumerate() {
-            let input_index =
-                (batch * params.input_channels + input_channel) * params.input_width + input_x;
-            *value = quant::quantize_value_u8(input_ncl[input_index], quantization);
+        let input_start = batch * params.input_channels * params.input_width + input_x;
+        // SAFETY: this cache path is admitted only for the runtime-checked
+        // AVX-VNNI lane, which necessarily includes AVX2 and enabled YMM
+        // state. Complete-tensor validation already proved every source
+        // value finite and the shape proof bounds all strided gathers.
+        unsafe {
+            quantize_qconv1d_column_avx2(
+                input_ncl,
+                cache_column,
+                input_start,
+                params.input_width,
+                quantization,
+            );
         }
     }
     Ok(())
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn quantize_qconv1d_column_avx2(
+    input_ncl: &[f32],
+    output: &mut [u8],
+    input_start: usize,
+    input_stride: usize,
+    quantization: DynamicQuantization,
+) {
+    use core::arch::x86_64::{
+        _MM_FROUND_NO_EXC, _MM_FROUND_TO_NEAREST_INT, _mm256_add_epi32, _mm256_add_ps,
+        _mm256_div_ps, _mm256_i32gather_ps, _mm256_max_ps, _mm256_min_ps, _mm256_round_ps,
+        _mm256_set_epi32, _mm256_set1_epi32, _mm256_set1_ps, _mm256_storeu_ps,
+    };
+
+    if output.is_empty() {
+        return;
+    }
+    let maximum_offset = (output.len() - 1).checked_mul(input_stride);
+    if output.len() < 8
+        || input_stride > i32::MAX as usize / 8
+        || maximum_offset.is_none_or(|offset| offset > i32::MAX as usize)
+    {
+        for (input_channel, value) in output.iter_mut().enumerate() {
+            *value = quant::quantize_value_u8(
+                input_ncl[input_start + input_channel * input_stride],
+                quantization,
+            );
+        }
+        return;
+    }
+
+    let stride = input_stride as i32;
+    let mut offsets = _mm256_set_epi32(
+        stride * 7,
+        stride * 6,
+        stride * 5,
+        stride * 4,
+        stride * 3,
+        stride * 2,
+        stride,
+        0,
+    );
+    let offset_step = _mm256_set1_epi32(stride * 8);
+    let scale = _mm256_set1_ps(quantization.scale);
+    let zero_point = _mm256_set1_ps(f32::from(quantization.zero_point));
+    let minimum = _mm256_set1_ps(0.0);
+    let maximum = _mm256_set1_ps(255.0);
+    let base = unsafe { input_ncl.as_ptr().add(input_start) };
+    let mut input_channel = 0usize;
+    while input_channel + 8 <= output.len() {
+        let values = unsafe { _mm256_i32gather_ps::<4>(base, offsets) };
+        let scaled = _mm256_div_ps(values, scale);
+        let rounded = _mm256_round_ps::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(scaled);
+        let shifted = _mm256_add_ps(rounded, zero_point);
+        let clamped = _mm256_min_ps(maximum, _mm256_max_ps(minimum, shifted));
+        let mut lanes = [0.0_f32; 8];
+        unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), clamped) };
+        for (destination, value) in output[input_channel..input_channel + 8]
+            .iter_mut()
+            .zip(lanes)
+        {
+            *destination = value as u8;
+        }
+        offsets = _mm256_add_epi32(offsets, offset_step);
+        input_channel += 8;
+    }
+    for (tail_channel, value) in output[input_channel..].iter_mut().enumerate() {
+        let input_channel = input_channel + tail_channel;
+        *value = quant::quantize_value_u8(
+            input_ncl[input_start + input_channel * input_stride],
+            quantization,
+        );
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -2383,6 +2468,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn avx2_strided_column_quantization_matches_scalar_ties_and_tail() {
+        const BATCH: usize = 2;
+        const CHANNELS: usize = 19;
+        const WIDTH: usize = 13;
+        const BATCH_INDEX: usize = 1;
+        const INPUT_X: usize = 5;
+
+        let dispatcher = Dispatcher::detect();
+        if !dispatcher.supports(Lane::Avx2) {
+            return;
+        }
+        let mut input = vec![0.0_f32; BATCH * CHANNELS * WIDTH];
+        let samples = [
+            -127.0, 128.0, -2.5, -1.5, -0.5, 0.5, 1.5, 2.5, -0.0, 0.0, 3.49, 3.5, 3.51, -3.49,
+            -3.5, -3.51, 127.49, -126.5, 42.25,
+        ];
+        for (channel, sample) in samples.into_iter().enumerate() {
+            input[(BATCH_INDEX * CHANNELS + channel) * WIDTH + INPUT_X] = sample;
+        }
+        let quantization = dynamic_quantization_parameters(&input).unwrap();
+        assert_eq!(quantization.scale.to_bits(), 1.0_f32.to_bits());
+        assert_eq!(quantization.zero_point, 127);
+        let input_start = BATCH_INDEX * CHANNELS * WIDTH + INPUT_X;
+        let expected = core::array::from_fn(|channel| {
+            quant::quantize_value_u8(input[input_start + channel * WIDTH], quantization)
+        });
+        let mut observed = [0_u8; CHANNELS];
+        unsafe {
+            quantize_qconv1d_column_avx2(&input, &mut observed, input_start, WIDTH, quantization);
+        }
+        assert_eq!(observed, expected);
     }
 
     #[test]

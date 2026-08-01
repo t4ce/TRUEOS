@@ -6,9 +6,11 @@
 //! validated slices and use unaligned loads/stores.
 
 use core::arch::x86_64::{
-    __cpuid, __cpuid_count, __m256, _mm256_add_ps, _mm256_and_si256, _mm256_castps_si256,
-    _mm256_castsi256_ps, _mm256_cmpeq_epi32, _mm256_div_ps, _mm256_loadu_ps, _mm256_movemask_ps,
-    _mm256_mul_ps, _mm256_set1_epi32, _mm256_set1_ps, _mm256_storeu_ps, _mm256_sub_ps, _xgetbv,
+    __cpuid, __cpuid_count, __m256, __m256d, _mm_storeu_ps, _mm256_add_pd, _mm256_add_ps,
+    _mm256_and_si256, _mm256_castps_si256, _mm256_castsi256_ps, _mm256_cmpeq_epi32,
+    _mm256_cvtpd_ps, _mm256_div_ps, _mm256_loadu_pd, _mm256_loadu_ps, _mm256_movemask_ps,
+    _mm256_mul_pd, _mm256_mul_ps, _mm256_set1_epi32, _mm256_set1_pd, _mm256_set1_ps,
+    _mm256_storeu_ps, _mm256_sub_ps, _xgetbv,
 };
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -149,6 +151,21 @@ pub(super) fn square(input: &[f32], output: &mut [f32]) -> Result<(), Error> {
     }
     // SAFETY: availability and all slice bounds are proven above.
     unsafe { square_avx2(input, output) }
+}
+
+pub(super) fn sin(input: &[f32], output: &mut [f32]) -> Result<(), Error> {
+    if input.len() != output.len() {
+        return Err(Error::BufferTooSmall);
+    }
+    if !is_available() {
+        return Err(Error::UnsupportedLane);
+    }
+    if input.iter().any(|value| !value.is_finite()) {
+        return Err(Error::NonFiniteInput);
+    }
+    // SAFETY: availability, complete slice bounds, and finite input are proven
+    // above. Large arguments retain the scalar libm fallback lane by lane.
+    unsafe { sin_avx2(input, output) }
 }
 
 #[target_feature(enable = "avx2")]
@@ -354,6 +371,222 @@ unsafe fn binary_rhs_row_scalar_avx2(
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct ReducedSin {
+    argument: f64,
+    cosine: bool,
+    negate: bool,
+    direct: Option<f32>,
+}
+
+fn reduce_sin(value: f32) -> ReducedSin {
+    use core::f64::consts::FRAC_PI_2;
+
+    const TOINT: f64 = 1.5 / f64::EPSILON;
+    const INV_PIO2: f64 = core::f64::consts::FRAC_2_PI;
+    const PIO2_1: f64 = 1.570_796_310_901_641_8;
+    const PIO2_1T: f64 = 1.589_325_477_352_819_6e-8;
+
+    let value64 = value as f64;
+    let bits = value.to_bits();
+    let sign = bits >> 31 != 0;
+    let magnitude = bits & 0x7fff_ffff;
+    if magnitude <= 0x3f49_0fda {
+        if magnitude < 0x3980_0000 {
+            return ReducedSin {
+                argument: 0.0,
+                cosine: false,
+                negate: false,
+                direct: Some(value),
+            };
+        }
+        return ReducedSin {
+            argument: value64,
+            cosine: false,
+            negate: false,
+            direct: None,
+        };
+    }
+    if magnitude <= 0x407b_53d1 {
+        if magnitude <= 0x4016_cbe3 {
+            return ReducedSin {
+                argument: if sign {
+                    value64 + FRAC_PI_2
+                } else {
+                    value64 - FRAC_PI_2
+                },
+                cosine: true,
+                negate: sign,
+                direct: None,
+            };
+        }
+        return ReducedSin {
+            argument: if sign {
+                -(value64 + 2.0 * FRAC_PI_2)
+            } else {
+                -(value64 - 2.0 * FRAC_PI_2)
+            },
+            cosine: false,
+            negate: false,
+            direct: None,
+        };
+    }
+    if magnitude <= 0x40e2_31d5 {
+        if magnitude <= 0x40af_eddf {
+            return ReducedSin {
+                argument: if sign {
+                    value64 + 3.0 * FRAC_PI_2
+                } else {
+                    value64 - 3.0 * FRAC_PI_2
+                },
+                cosine: true,
+                negate: !sign,
+                direct: None,
+            };
+        }
+        return ReducedSin {
+            argument: if sign {
+                value64 + 4.0 * FRAC_PI_2
+            } else {
+                value64 - 4.0 * FRAC_PI_2
+            },
+            cosine: false,
+            negate: false,
+            direct: None,
+        };
+    }
+
+    // This is the complete medium-size reduction used by libm::sinf. Values
+    // beyond it require the scalar Payne-Hanek reducer and are uncommon in the
+    // pinned graph, so retain libm exactly for those individual lanes.
+    if magnitude >= 0x4dc9_0fdb {
+        return ReducedSin {
+            argument: 0.0,
+            cosine: false,
+            negate: false,
+            direct: Some(libm::sinf(value)),
+        };
+    }
+    let temporary = value64 * INV_PIO2 + TOINT;
+    let quadrant_value = temporary - TOINT;
+    let quadrant = quadrant_value as i32;
+    let remainder = value64 - quadrant_value * PIO2_1 - quadrant_value * PIO2_1T;
+    match quadrant & 3 {
+        0 => ReducedSin {
+            argument: remainder,
+            cosine: false,
+            negate: false,
+            direct: None,
+        },
+        1 => ReducedSin {
+            argument: remainder,
+            cosine: true,
+            negate: false,
+            direct: None,
+        },
+        2 => ReducedSin {
+            argument: -remainder,
+            cosine: false,
+            negate: false,
+            direct: None,
+        },
+        _ => ReducedSin {
+            argument: remainder,
+            cosine: true,
+            negate: true,
+            direct: None,
+        },
+    }
+}
+
+#[target_feature(enable = "avx2")]
+unsafe fn sin_avx2(input: &[f32], output: &mut [f32]) -> Result<(), Error> {
+    const DOUBLE_LANES: usize = 4;
+    let vector_end = input.len() / DOUBLE_LANES * DOUBLE_LANES;
+    let mut index = 0usize;
+    while index < vector_end {
+        let reduced = [
+            reduce_sin(input[index]),
+            reduce_sin(input[index + 1]),
+            reduce_sin(input[index + 2]),
+            reduce_sin(input[index + 3]),
+        ];
+        let arguments = [
+            reduced[0].argument,
+            reduced[1].argument,
+            reduced[2].argument,
+            reduced[3].argument,
+        ];
+        let values = unsafe { _mm256_loadu_pd(arguments.as_ptr()) };
+        let sine = unsafe { kernel_sin_f64(values) };
+        let cosine = unsafe { kernel_cos_f64(values) };
+        let mut sine_f32 = [0.0_f32; DOUBLE_LANES];
+        let mut cosine_f32 = [0.0_f32; DOUBLE_LANES];
+        unsafe {
+            _mm_storeu_ps(sine_f32.as_mut_ptr(), _mm256_cvtpd_ps(sine));
+            _mm_storeu_ps(cosine_f32.as_mut_ptr(), _mm256_cvtpd_ps(cosine));
+        }
+        for lane in 0..DOUBLE_LANES {
+            let mut result = if let Some(direct) = reduced[lane].direct {
+                direct
+            } else if reduced[lane].cosine {
+                cosine_f32[lane]
+            } else {
+                sine_f32[lane]
+            };
+            if reduced[lane].negate {
+                result = -result;
+            }
+            output[index + lane] = result;
+        }
+        index += DOUBLE_LANES;
+    }
+    for index in vector_end..input.len() {
+        output[index] = libm::sinf(input[index]);
+    }
+    Ok(())
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+unsafe fn kernel_sin_f64(value: __m256d) -> __m256d {
+    const S1: f64 = -0.166_666_666_416_265_24;
+    const S2: f64 = 0.008_333_329_385_889_463;
+    const S3: f64 = -0.000_198_393_348_360_966_32;
+    const S4: f64 = 0.000_002_718_311_493_989_822;
+
+    let squared = _mm256_mul_pd(value, value);
+    let fourth = _mm256_mul_pd(squared, squared);
+    let remainder = _mm256_add_pd(_mm256_set1_pd(S3), _mm256_mul_pd(squared, _mm256_set1_pd(S4)));
+    let cubic = _mm256_mul_pd(squared, value);
+    let leading = _mm256_add_pd(
+        value,
+        _mm256_mul_pd(
+            cubic,
+            _mm256_add_pd(_mm256_set1_pd(S1), _mm256_mul_pd(squared, _mm256_set1_pd(S2))),
+        ),
+    );
+    _mm256_add_pd(leading, _mm256_mul_pd(_mm256_mul_pd(cubic, fourth), remainder))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+unsafe fn kernel_cos_f64(value: __m256d) -> __m256d {
+    const C0: f64 = -0.499_999_997_251_031;
+    const C1: f64 = 0.041_666_623_323_739_06;
+    const C2: f64 = -0.001_388_676_377_460_993;
+    const C3: f64 = 0.000_024_390_448_796_277_41;
+
+    let squared = _mm256_mul_pd(value, value);
+    let fourth = _mm256_mul_pd(squared, squared);
+    let remainder = _mm256_add_pd(_mm256_set1_pd(C2), _mm256_mul_pd(squared, _mm256_set1_pd(C3)));
+    let leading = _mm256_add_pd(
+        _mm256_add_pd(_mm256_set1_pd(1.0), _mm256_mul_pd(squared, _mm256_set1_pd(C0))),
+        _mm256_mul_pd(fourth, _mm256_set1_pd(C1)),
+    );
+    _mm256_add_pd(leading, _mm256_mul_pd(_mm256_mul_pd(fourth, squared), remainder))
 }
 
 #[target_feature(enable = "avx2")]

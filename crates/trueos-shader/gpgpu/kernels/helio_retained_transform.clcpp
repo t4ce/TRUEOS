@@ -342,15 +342,31 @@ __kernel void helio_retained_transform(
         float inverse_determinant = 1.0f / determinant;
         uint dst = row * HELIO_INSTANCE_WORDS;
 
-        bool first_world = hierarchy_nodes[
-            leaf * HELIO_HIERARCHY_NODE_WORDS + 3u] <= 1u
-            || instances[dst + 51u] != 0xFFFFFFFFu;
+        bool first_world = instances[dst + 51u] != 0xFFFFFFFFu;
+        bool model_changed =
+            instances[dst + 0u] != as_uint(m00)
+            || instances[dst + 1u] != as_uint(m10)
+            || instances[dst + 2u] != as_uint(m20)
+            || instances[dst + 3u] != as_uint(0.0f)
+            || instances[dst + 4u] != as_uint(m01)
+            || instances[dst + 5u] != as_uint(m11)
+            || instances[dst + 6u] != as_uint(m21)
+            || instances[dst + 7u] != as_uint(0.0f)
+            || instances[dst + 8u] != as_uint(m02)
+            || instances[dst + 9u] != as_uint(m12)
+            || instances[dst + 10u] != as_uint(m22)
+            || instances[dst + 11u] != as_uint(0.0f)
+            || instances[dst + 12u] != as_uint(tx)
+            || instances[dst + 13u] != as_uint(ty)
+            || instances[dst + 14u] != as_uint(tz)
+            || instances[dst + 15u] != as_uint(1.0f);
         // Preserve the preceding retained world transform for temporal use.
-        // The initial generation has no preceding value, so it is initialized
-        // to the just-resolved world below rather than an allocation remnant.
-        // The lightmap sentinel also recognizes a zeroed fresh instance even
-        // if its graph generation advanced twice before the first submission.
-        if (!first_world) {
+        // A cold/topology upload deliberately does not rewrite generation
+        // words on stable frames. The persistent lightmap sentinel therefore
+        // owns this temporal decision: a zeroed/fresh row initializes previous
+        // to current. Comparing the stored model makes replay of an incomplete
+        // secondary idempotent: only a genuinely new model advances history.
+        if (!first_world && model_changed) {
             for (uint word = 0u; word < 16u; ++word) {
                 instances[dst + 32u + word] = instances[dst + word];
             }

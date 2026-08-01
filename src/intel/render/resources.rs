@@ -1115,8 +1115,8 @@ fn churn_forward_pipeline(
         .ok_or("churn-native-ps-section")?;
     let vs_code = churn_forward_stage_words(vs_section.data)?;
     let ps_code = churn_forward_stage_words(ps_section.data)?;
-    let ps_offset = crate::intel::align_up(vs_section.data.len(), 64)
-        .ok_or("churn-native-shader-layout")?;
+    let ps_offset =
+        crate::intel::align_up(vs_section.data.len(), 64).ok_or("churn-native-shader-layout")?;
     let ps_offset = u32::try_from(ps_offset).map_err(|_| "churn-native-shader-layout")?;
 
     let kernel = |stage: trueos_helio_artifact::churn_forward::StageRef<'_>, offset| {
@@ -1128,8 +1128,7 @@ fn churn_forward_pipeline(
             dispatch_mode: DispatchMode::Simd8,
             grf_start_register: u8::try_from(stage.grf_start_register)
                 .map_err(|_| "churn-native-stage-metadata")?,
-            grf_used: u8::try_from(stage.grf_used)
-                .map_err(|_| "churn-native-stage-metadata")?,
+            grf_used: u8::try_from(stage.grf_used).map_err(|_| "churn-native-stage-metadata")?,
             push_constant_bytes: stage.push_constant_bytes,
             binding_table_entry_count: u8::try_from(stage.binding_table_entry_count)
                 .map_err(|_| "churn-native-stage-metadata")?,
@@ -1174,9 +1173,7 @@ fn build_churn_forward_geometry(
             * trueos_helio_artifact::churn_forward::VERTEX_STRIDE as usize,
     );
     let mut indices = Vec::with_capacity(
-        CHURN_FORWARD_MESH_COUNT
-            * CHURN_FORWARD_INDICES_PER_MESH
-            * core::mem::size_of::<u32>(),
+        CHURN_FORWARD_MESH_COUNT * CHURN_FORWARD_INDICES_PER_MESH * core::mem::size_of::<u32>(),
     );
     const FACE_INDICES: [u32; 6] = [0, 1, 2, 0, 2, 3];
     for (mesh_index, mesh) in meshes.iter().enumerate() {
@@ -1237,8 +1234,8 @@ fn build_churn_expanded_indices(max_instances: usize) -> Result<Vec<u8>, &'stati
         let slot_vertex = slot
             .checked_mul(CHURN_FORWARD_VERTICES_PER_MESH)
             .ok_or("churn-expanded-index-capacity")?;
-        let slot_vertex = u32::try_from(slot_vertex)
-            .map_err(|_| "churn-expanded-index-capacity")?;
+        let slot_vertex =
+            u32::try_from(slot_vertex).map_err(|_| "churn-expanded-index-capacity")?;
         for face in 0..6u32 {
             let face_vertex = slot_vertex
                 .checked_add(face * 4)
@@ -1256,9 +1253,7 @@ fn build_churn_expanded_indices(max_instances: usize) -> Result<Vec<u8>, &'stati
     Ok(indices)
 }
 
-fn churn_material_srgba8(
-    material: trueos_helio_runtime::churn::GpuMaterial,
-) -> Option<[u8; 4]> {
+fn churn_material_srgba8(material: trueos_helio_runtime::churn::GpuMaterial) -> Option<[u8; 4]> {
     let [r, g, b, alpha] = material.base_color;
     if [r, g, b, alpha]
         .iter()
@@ -1285,7 +1280,7 @@ fn churn_material_srgba8(
 fn publish_churn_material_rgba(
     resident: &ResidentChurnForward,
     materials: &[trueos_helio_runtime::churn::GpuMaterial;
-        trueos_helio_runtime::churn::MATERIAL_COUNT],
+         trueos_helio_runtime::churn::MATERIAL_COUNT],
 ) -> Result<(), &'static str> {
     const FALLBACK_RGBA: [[u8; 4]; trueos_helio_runtime::churn::MATERIAL_COUNT] = [
         [64, 179, 255, 255],
@@ -1321,9 +1316,8 @@ const _: () = {
 fn encode_churn_hierarchy_nodes(
     nodes: &[trueos_helio_runtime::retained_transform::RetainedTransformNode],
 ) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(
-        nodes.len() * crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_NODE_BYTES,
-    );
+    let mut bytes =
+        Vec::with_capacity(nodes.len() * crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_NODE_BYTES);
     for node in nodes {
         bytes.extend_from_slice(&node.to_le_bytes());
     }
@@ -1342,9 +1336,8 @@ fn encode_churn_affines(
 }
 
 fn encode_churn_hierarchy_indices(indices: &[u32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(
-        indices.len() * crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_INDEX_BYTES,
-    );
+    let mut bytes =
+        Vec::with_capacity(indices.len() * crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_INDEX_BYTES);
     for index in indices {
         bytes.extend_from_slice(&index.to_le_bytes());
     }
@@ -1363,12 +1356,13 @@ fn stage_resident_churn_hierarchy_inputs(
         .map_err(|_| "churn-hierarchy-dirty-capacity")?;
     let dirty_world_count = u32::try_from(frame.dirty_world_nodes.len())
         .map_err(|_| "churn-hierarchy-dirty-capacity")?;
-    let dirty_row_count = u32::try_from(frame.dirty_rows.len())
-        .map_err(|_| "churn-hierarchy-dirty-capacity")?;
+    let dirty_row_count =
+        u32::try_from(frame.dirty_rows.len()).map_err(|_| "churn-hierarchy-dirty-capacity")?;
     let max_depth = frame.report.max_depth;
-    let level_node_count = frame.levels.iter().try_fold(0u32, |total, level| {
-        total.checked_add(level.count)
-    });
+    let level_node_count = frame
+        .levels
+        .iter()
+        .try_fold(0u32, |total, level| total.checked_add(level.count));
     if node_count == 0
         || frame.nodes.len() > resident.node_capacity
         || frame.local_affines.len() != frame.nodes.len()
@@ -1402,33 +1396,46 @@ fn stage_resident_churn_hierarchy_inputs(
         return Err("churn-hierarchy-frame-contract");
     }
 
-    let topology_changed = resident.node_count.load(Ordering::Acquire) != node_count;
-    if topology_changed {
-        let node_bytes = encode_churn_hierarchy_nodes(frame.nodes);
-        let binding_bytes = encode_churn_hierarchy_indices(frame.dynamic_bindings);
-        let local_bytes = encode_churn_affines(frame.local_affines);
-        let row_leaf_bytes = encode_churn_hierarchy_indices(frame.row_leaf_nodes);
-        if !resident.nodes.write_and_flush(0, &node_bytes) {
-            return Err("churn-hierarchy-node-upload");
+    // These compact CPU-authored tables are exact frame inputs, not a cache
+    // keyed only by node count. Uploading them each frame makes same-sized
+    // reparenting, rebinding, and row remapping visible without a lossy hash.
+    let node_bytes = encode_churn_hierarchy_nodes(frame.nodes);
+    let binding_bytes = encode_churn_hierarchy_indices(frame.dynamic_bindings);
+    let row_leaf_bytes = encode_churn_hierarchy_indices(frame.row_leaf_nodes);
+    if !resident.nodes.write_and_flush(0, &node_bytes) {
+        return Err("churn-hierarchy-node-upload");
+    }
+    if !resident.dynamic_bindings.write_and_flush(0, &binding_bytes) {
+        return Err("churn-hierarchy-binding-upload");
+    }
+    if !resident.row_leaf_nodes.write_and_flush(0, &row_leaf_bytes) {
+        return Err("churn-hierarchy-row-leaf-upload");
+    }
+
+    // Never overwrite a clean GPU-authored dynamic local with its CPU identity
+    // placeholder. Folded constants are the only authoritative CPU locals, so
+    // upload their contiguous runs exactly (normally one 48-byte root row).
+    let mut first = 0usize;
+    while first < frame.dynamic_bindings.len() {
+        if frame.dynamic_bindings[first] != CONSTANT_NODE {
+            first += 1;
+            continue;
         }
+        let mut end = first + 1;
+        while end < frame.dynamic_bindings.len() && frame.dynamic_bindings[end] == CONSTANT_NODE {
+            end += 1;
+        }
+        let local_bytes = encode_churn_affines(&frame.local_affines[first..end]);
+        let local_offset = first
+            .checked_mul(crate::intel::gpgpu::GPGPU_HELIO_AFFINE_BYTES)
+            .ok_or("churn-hierarchy-local-upload")?;
         if !resident
-            .dynamic_bindings
-            .write_and_flush(0, &binding_bytes)
+            .local_affines
+            .write_and_flush(local_offset, &local_bytes)
         {
-            return Err("churn-hierarchy-binding-upload");
-        }
-        // Dynamic entries are identity placeholders on the CPU. Upload them
-        // only with a new topology; rewriting an unchanged graph would erase
-        // clean GPU-authored locals retained from the preceding frame.
-        if !resident.local_affines.write_and_flush(0, &local_bytes) {
             return Err("churn-hierarchy-local-upload");
         }
-        if !resident
-            .row_leaf_nodes
-            .write_and_flush(0, &row_leaf_bytes)
-        {
-            return Err("churn-hierarchy-row-leaf-upload");
-        }
+        first = end;
     }
 
     for (buffer, indices, error) in [
@@ -1442,11 +1449,7 @@ fn stage_resident_churn_hierarchy_inputs(
             frame.dirty_world_nodes,
             "churn-hierarchy-dirty-world-upload",
         ),
-        (
-            &resident.dirty_rows,
-            frame.dirty_rows,
-            "churn-hierarchy-dirty-row-upload",
-        ),
+        (&resident.dirty_rows, frame.dirty_rows, "churn-hierarchy-dirty-row-upload"),
     ] {
         if !indices.is_empty() {
             let bytes = encode_churn_hierarchy_indices(indices);
@@ -1618,11 +1621,7 @@ fn create_resident_churn_transform(
         return Err("churn-transform-row-capacity");
     }
     let dev = crate::intel::claimed_device().ok_or("no-device")?;
-    if !device_admits_churn_retained_transform(
-        hardware_admission,
-        dev.device_id,
-        dev.revision_id,
-    ) {
+    if !device_admits_churn_retained_transform(hardware_admission, dev.device_id, dev.revision_id) {
         return Err("churn-transform-hardware-unvalidated");
     }
     let artifact = resident_helio_transform_artifact()?;
@@ -1718,12 +1717,9 @@ fn create_resident_churn_forward_with_admission(
         || sgvs.vf_sgvs_dw1 != 0xE002_4002
         || sgvs.vf_sgvs_2_dw1 != 0xB002_0002
         || sgvs.vf_sgvs_2_dw2 != 3
-        || instancing
-            .iter()
-            .enumerate()
-            .any(|(index, state)| {
-                state.element_index != index as u16 || state.enabled || state.step_rate != 0
-            })
+        || instancing.iter().enumerate().any(|(index, state)| {
+            state.element_index != index as u16 || state.enabled || state.step_rate != 0
+        })
     {
         return Err("churn-native-fixed-function-contract");
     }
@@ -1733,11 +1729,7 @@ fn create_resident_churn_forward_with_admission(
     // Reject unvalidated devices before allocating or mutating any Render
     // context state. Capability admission must be side-effect free so a
     // compatibility fallback cannot disturb an unrelated live GuC client.
-    if !device_admits_churn_forward_native(
-        hardware_admission,
-        dev.device_id,
-        dev.revision_id,
-    ) {
+    if !device_admits_churn_forward_native(hardware_admission, dev.device_id, dev.revision_id) {
         return Err("churn-native-device-mismatch");
     }
     // Validate and cache the immutable native code before acquiring any
@@ -1746,8 +1738,8 @@ fn create_resident_churn_forward_with_admission(
     let pipeline = churn_forward_pipeline(artifact, program)?;
     let (vertex_bytes, index_bytes) = build_churn_forward_geometry(meshes)?;
     let expanded_index_blob = build_churn_expanded_indices(max_instances)?;
-    let index_offset = crate::intel::align_up(vertex_bytes.len(), 64)
-        .ok_or("churn-native-geometry-layout")?;
+    let index_offset =
+        crate::intel::align_up(vertex_bytes.len(), 64).ok_or("churn-native-geometry-layout")?;
     let geometry_bytes = index_offset
         .checked_add(index_bytes.len())
         .ok_or("churn-native-geometry-layout")?;
@@ -1777,14 +1769,14 @@ fn create_resident_churn_forward_with_admission(
         u32::try_from(instance_bytes).map_err(|_| "churn-native-instance-capacity")?;
     let compacted_byte_len =
         u32::try_from(compacted_bytes).map_err(|_| "churn-native-instance-capacity")?;
-    let expanded_vertex_count_u32 = u32::try_from(expanded_vertex_count)
-        .map_err(|_| "churn-expanded-vertex-capacity")?;
-    let expanded_vertex_byte_len = u32::try_from(expanded_vertex_bytes)
-        .map_err(|_| "churn-expanded-vertex-capacity")?;
-    let expanded_index_count_u32 = u32::try_from(expanded_index_count)
-        .map_err(|_| "churn-expanded-index-capacity")?;
-    let expanded_index_byte_len = u32::try_from(expanded_index_blob.len())
-        .map_err(|_| "churn-expanded-index-capacity")?;
+    let expanded_vertex_count_u32 =
+        u32::try_from(expanded_vertex_count).map_err(|_| "churn-expanded-vertex-capacity")?;
+    let expanded_vertex_byte_len =
+        u32::try_from(expanded_vertex_bytes).map_err(|_| "churn-expanded-vertex-capacity")?;
+    let expanded_index_count_u32 =
+        u32::try_from(expanded_index_count).map_err(|_| "churn-expanded-index-capacity")?;
+    let expanded_index_byte_len =
+        u32::try_from(expanded_index_blob.len()).map_err(|_| "churn-expanded-index-capacity")?;
 
     let geometry = allocate_resident_render_buffer(geometry_bytes)?;
     let expanded_positions = match allocate_resident_render_buffer(expanded_vertex_bytes) {
@@ -1887,8 +1879,10 @@ fn create_resident_churn_forward_with_admission(
             step_rate: instancing[index].step_rate,
         }),
     };
-    let (transform, transform_unavailable_reason) =
-        match create_resident_churn_transform(max_instances, hardware_admission) {
+    let (transform, transform_unavailable_reason) = match create_resident_churn_transform(
+        max_instances,
+        hardware_admission,
+    ) {
         Ok(transform) => (Some(transform), None),
         Err(reason) => {
             crate::log_warn!(
@@ -1910,9 +1904,9 @@ fn create_resident_churn_forward_with_admission(
         expanded_vertex_bytes: expanded_vertex_byte_len,
         expanded_index_count: expanded_index_count_u32,
         expanded_index_bytes: expanded_index_byte_len,
-        material_rgba: core::array::from_fn(|_| AtomicU32::new(u32::from_le_bytes([
-            255, 255, 255, 255,
-        ]))),
+        material_rgba: core::array::from_fn(|_| {
+            AtomicU32::new(u32::from_le_bytes([255, 255, 255, 255]))
+        }),
         pipeline,
         native_vf,
         front_end_contract: TriangleFrontEndContract {
@@ -1962,12 +1956,14 @@ pub(crate) fn update_resident_churn_forward_frame(
     if instance_end > frame.instances.len() || compacted_end > frame.compacted_indices.len() {
         return Err("churn-native-dirty-range");
     }
-    if !resident.camera.write_and_flush(0, &frame.camera.to_le_bytes()) {
+    if !resident
+        .camera
+        .write_and_flush(0, &frame.camera.to_le_bytes())
+    {
         return Err("churn-native-camera-upload");
     }
-    let mut instance_bytes = Vec::with_capacity(
-        instance_count * trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN,
-    );
+    let mut instance_bytes =
+        Vec::with_capacity(instance_count * trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN);
     for instance in &frame.instances[instance_first..instance_end] {
         instance_bytes.extend_from_slice(&instance.to_le_bytes());
     }
@@ -2270,24 +2266,21 @@ pub(crate) fn release_resident_churn_forward(resident: &ResidentChurnForward) ->
 #[cfg(test)]
 mod churn_forward_geometry_tests {
     use super::{
-        CHURN_FORWARD_INDICES_PER_MESH, CHURN_FORWARD_MESH_COUNT,
-        CHURN_FORWARD_VERTICES_PER_MESH, build_churn_expanded_indices,
-        build_churn_forward_geometry, churn_hierarchy_node_capacity, encode_churn_affines,
-        encode_churn_hierarchy_indices, encode_churn_hierarchy_nodes,
+        CHURN_FORWARD_INDICES_PER_MESH, CHURN_FORWARD_MESH_COUNT, CHURN_FORWARD_VERTICES_PER_MESH,
+        build_churn_expanded_indices, build_churn_forward_geometry, churn_hierarchy_node_capacity,
+        encode_churn_affines, encode_churn_hierarchy_indices, encode_churn_hierarchy_nodes,
     };
 
     #[test]
     fn encodes_three_local_indexed_pos_normal_cubes() {
-        let meshes = core::array::from_fn(|mesh| {
-            trueos_helio_runtime::churn::MeshDescriptor {
-                mesh_id: mesh as u32,
-                half_extents: [1.0 + mesh as f32, 2.0, 3.0],
-                first_vertex: (mesh * CHURN_FORWARD_VERTICES_PER_MESH) as u32,
-                vertex_count: CHURN_FORWARD_VERTICES_PER_MESH as u32,
-                first_index: (mesh * CHURN_FORWARD_INDICES_PER_MESH) as u32,
-                index_count: CHURN_FORWARD_INDICES_PER_MESH as u32,
-                base_vertex: (mesh * CHURN_FORWARD_VERTICES_PER_MESH) as i32,
-            }
+        let meshes = core::array::from_fn(|mesh| trueos_helio_runtime::churn::MeshDescriptor {
+            mesh_id: mesh as u32,
+            half_extents: [1.0 + mesh as f32, 2.0, 3.0],
+            first_vertex: (mesh * CHURN_FORWARD_VERTICES_PER_MESH) as u32,
+            vertex_count: CHURN_FORWARD_VERTICES_PER_MESH as u32,
+            first_index: (mesh * CHURN_FORWARD_INDICES_PER_MESH) as u32,
+            index_count: CHURN_FORWARD_INDICES_PER_MESH as u32,
+            base_vertex: (mesh * CHURN_FORWARD_VERTICES_PER_MESH) as i32,
         });
         let (vertices, indices) = build_churn_forward_geometry(&meshes).unwrap();
         assert_eq!(
@@ -2298,9 +2291,7 @@ mod churn_forward_geometry_tests {
         );
         assert_eq!(
             indices.len(),
-            CHURN_FORWARD_MESH_COUNT
-                * CHURN_FORWARD_INDICES_PER_MESH
-                * core::mem::size_of::<u32>()
+            CHURN_FORWARD_MESH_COUNT * CHURN_FORWARD_INDICES_PER_MESH * core::mem::size_of::<u32>()
         );
         for mesh in 0..CHURN_FORWARD_MESH_COUNT {
             let start = mesh * CHURN_FORWARD_INDICES_PER_MESH * 4;
@@ -2308,7 +2299,11 @@ mod churn_forward_geometry_tests {
                 .chunks_exact(4)
                 .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
                 .collect::<Vec<_>>();
-            assert!(words.iter().all(|&index| index < CHURN_FORWARD_VERTICES_PER_MESH as u32));
+            assert!(
+                words
+                    .iter()
+                    .all(|&index| index < CHURN_FORWARD_VERTICES_PER_MESH as u32)
+            );
             assert_eq!(words.len(), CHURN_FORWARD_INDICES_PER_MESH);
             for face in 0..6 {
                 let base = face as u32 * 4;
@@ -2333,15 +2328,15 @@ mod churn_forward_geometry_tests {
             &words[CHURN_FORWARD_INDICES_PER_MESH..CHURN_FORWARD_INDICES_PER_MESH + 6],
             &[24, 25, 26, 24, 26, 27]
         );
-        assert!(words[..CHURN_FORWARD_INDICES_PER_MESH]
-            .iter()
-            .all(|index| *index < CHURN_FORWARD_VERTICES_PER_MESH as u32));
-        assert!(words[CHURN_FORWARD_INDICES_PER_MESH..]
-            .iter()
-            .all(|index| {
-                *index >= CHURN_FORWARD_VERTICES_PER_MESH as u32
-                    && *index < (CHURN_FORWARD_VERTICES_PER_MESH * 2) as u32
-            }));
+        assert!(
+            words[..CHURN_FORWARD_INDICES_PER_MESH]
+                .iter()
+                .all(|index| *index < CHURN_FORWARD_VERTICES_PER_MESH as u32)
+        );
+        assert!(words[CHURN_FORWARD_INDICES_PER_MESH..].iter().all(|index| {
+            *index >= CHURN_FORWARD_VERTICES_PER_MESH as u32
+                && *index < (CHURN_FORWARD_VERTICES_PER_MESH * 2) as u32
+        }));
     }
 
     #[test]
@@ -2349,15 +2344,11 @@ mod churn_forward_geometry_tests {
         assert_eq!(churn_hierarchy_node_capacity(0), None);
         assert_eq!(churn_hierarchy_node_capacity(1), Some(2));
         assert_eq!(
-            churn_hierarchy_node_capacity(
-                crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize
-            ),
+            churn_hierarchy_node_capacity(crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize),
             Some(crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize + 1)
         );
         assert_eq!(
-            churn_hierarchy_node_capacity(
-                crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize + 1
-            ),
+            churn_hierarchy_node_capacity(crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize + 1),
             None
         );
     }

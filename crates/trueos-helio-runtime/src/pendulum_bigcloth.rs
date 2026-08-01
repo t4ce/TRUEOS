@@ -14,7 +14,9 @@ use crate::churn::{
     INSTANCE_FLAG_CASTS_SHADOW, INSTANCE_FLAG_RECEIVES_SHADOW, InstanceFrame, LIGHT_COUNT,
     MATERIAL_COUNT, MeshDescriptor, SHAPE_COUNT, TransformFrame, gpu_camera_uniforms,
 };
-use crate::retained_transform::{RetainedTransformProgram, TransformHierarchyFrame};
+use crate::retained_transform::{
+    RetainedTransformProgram, RetainedTransformTemplate, TransformHierarchyFrame,
+};
 use crate::{
     Camera, DrawIndexedIndirectArgs, Error, Projector, churn::Batch, linear_rgba_to_srgba8,
 };
@@ -55,19 +57,23 @@ pub struct Spec {
     collider_radius: f32,
     restitution: f32,
     constraint_iterations: usize,
+    retained_transform_template: RetainedTransformTemplate,
 }
 
 impl Spec {
     pub fn decode_artifact(bytes: &[u8]) -> Result<Self, Error> {
         let artifact =
             trueos_helio_artifact::Artifact::parse(bytes).map_err(|_| Error::Artifact)?;
+        let retained_transform_template = RetainedTransformTemplate::decode(&artifact)?;
         let section = artifact
             .section(SECTION_NAME)
             .ok_or(Error::MissingPendulumScene)?;
         if section.kind != SectionKind::Unknown(u16::MAX) {
             return Err(Error::InvalidPendulumScene);
         }
-        Self::decode(section.data)
+        let mut spec = Self::decode(section.data)?;
+        spec.retained_transform_template = retained_transform_template;
+        Ok(spec)
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, Error> {
@@ -128,6 +134,7 @@ impl Spec {
             floor_extent: read_f32(bytes, 136)?,
             clear_rgba: linear_rgba_to_srgba8(read_f32s(bytes, 140)?)?,
             constraint_iterations,
+            retained_transform_template: RetainedTransformTemplate::CANONICAL,
         };
         if spec.constraint_iterations == 0
             || spec.constraint_iterations > 32
@@ -175,6 +182,7 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(spec: Spec) -> Result<Self, Error> {
+        let retained_transform_template = spec.retained_transform_template;
         let vertex_count = SEGMENT_COUNT
             .checked_mul(VERTICES_PER_SEGMENT)
             .ok_or(Error::InvalidPendulumScene)?;
@@ -236,7 +244,8 @@ impl Engine {
             }),
             gpu_transform_seeds: Vec::with_capacity(NATIVE_INSTANCE_COUNT),
             gpu_draw_templates: [GpuRetainedDrawTemplate::default(); DRAW_GROUP_COUNT],
-            gpu_transform_hierarchy: RetainedTransformProgram::compile_rooted_dynamic_rows(
+            gpu_transform_hierarchy: RetainedTransformProgram::from_template(
+                retained_transform_template,
                 NATIVE_INSTANCE_COUNT,
             )
             .map_err(|_| Error::InvalidPendulumScene)?,
