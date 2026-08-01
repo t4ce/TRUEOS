@@ -1223,6 +1223,10 @@ fn create_resident_churn_transform(
     if max_instances == 0 || max_instances > crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize {
         return Err("churn-transform-row-capacity");
     }
+    let dev = crate::intel::claimed_device().ok_or("no-device")?;
+    if !device_supports_churn_retained_transform(dev.device_id, dev.revision_id) {
+        return Err("churn-transform-hardware-unvalidated");
+    }
     let artifact = resident_helio_transform_artifact()?;
     let seed_bytes = max_instances
         .checked_mul(trueos_helio_runtime::churn::GpuRetainedTransformSeed::BYTE_LEN)

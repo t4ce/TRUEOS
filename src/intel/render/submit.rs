@@ -2063,9 +2063,33 @@ fn seed_result_debug_slots(warm: RenderWarmState) {
     }
 }
 
-fn recover_render_engine_after_nonretired_submit(
+/// Capture the shared-engine frontier after a failed Render submission.
+///
+/// `submit_warm_render_batch` owns the publish boundary and therefore owns the
+/// one context-isolation request for every ambiguous or non-retired publish.
+/// Callers must remain diagnostic-only: a second disable request races GuC's
+/// first transition and obscures which containment event belongs to the fault.
+fn record_render_engine_after_nonretired_submit(
     dev: crate::intel::Dev,
-    _warm: RenderWarmState,
+    submit_name: &'static str,
+) {
+    let el_pre = crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO);
+    let mi_mode_pre = crate::intel::mmio_read(dev, RCS_RING_MI_MODE);
+    let acthd_pre = crate::intel::mmio_read(dev, RCS_RING_ACTHD);
+    intel_render_focus_log!(
+        "{} nonretired-frontier execlist_lo=0x{:08X} mi_mode=0x{:08X} acthd=0x{:08X} client=kernel-render-0 direct-engine-reset=0 action=diagnose-only containment_owner=submit-publish-boundary\n",
+        submit_name,
+        el_pre,
+        mi_mode_pre,
+        acthd_pre,
+    );
+}
+
+/// Diagnostic spectra deliberately stop Render between completed variants so
+/// that one probe cannot carry live context state into the next experiment.
+/// Keep that policy explicit and separate from failed-submit containment.
+fn isolate_render_context_after_completed_probe(
+    dev: crate::intel::Dev,
     submit_name: &'static str,
 ) {
     let el_pre = crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO);
@@ -2074,7 +2098,7 @@ fn recover_render_engine_after_nonretired_submit(
     let isolation =
         crate::gpu::vgpu::isolate_kernel_context(crate::gpu::vgpu::KernelClient::Render);
     intel_render_focus_log!(
-        "{} recovery scoped execlist_lo=0x{:08X} mi_mode=0x{:08X} acthd=0x{:08X} client=kernel-render-0 device_found={} contexts_disabled={} contexts_retained={} direct-engine-reset=0 action=isolate-render-context\n",
+        "{} completed-probe-isolation execlist_lo=0x{:08X} mi_mode=0x{:08X} acthd=0x{:08X} client=kernel-render-0 device_found={} contexts_disabled={} contexts_retained={} direct-engine-reset=0 action=isolate-render-context\n",
         submit_name,
         el_pre,
         mi_mode_pre,

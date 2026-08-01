@@ -289,25 +289,43 @@ const COMPARE_FUNCTION_ALWAYS: u8 = 0;
 const COMPARE_FUNCTION_LESS: u8 = 2;
 const COMPARE_FUNCTION_LEQUAL: u8 = 4;
 
-/// The checked-in Churn ISA targets RPL-S 0xA780 and the exact ADL-S 0x4680
-/// stepping used by the bare-metal coexistence rig. ADL admission is restored
-/// only after GT-global setup moved to boot and Render0 gained an immutable
-/// context identity plus exact-retirement storage ownership.
-const fn device_supports_churn_forward_native(device_id: u16, revision_id: u8) -> bool {
-    device_id == 0xA780 || (device_id == 0x4680 && revision_id == 0x0C)
+/// The checked-in Churn ISA was physically validated on RPL-S 0xA780.
+///
+/// ADL-S 0x4680 previously reached this path through a stepping-only software
+/// admission check. That was not sufficient validation: activating the cold
+/// native renderer while another GuC context was resident stopped Spirit's
+/// marker retirement. Keep ADL-S on the proven compatibility renderer until
+/// concurrent native Render/GPGPU context switching passes the bare-metal
+/// coexistence gate.
+const fn device_supports_churn_forward_native(device_id: u16, _revision_id: u8) -> bool {
+    device_id == 0xA780
+}
+
+/// The retained-transform compute span is a separate hardware capability from
+/// the native VS/PS path. Its artifact and command stream remain available for
+/// an isolated probe, but no production scene may submit it merely because the
+/// native renderer was admitted on that device.
+const fn device_supports_churn_retained_transform(_device_id: u16, _revision_id: u8) -> bool {
+    false
 }
 
 #[cfg(test)]
 mod churn_forward_device_admission_tests {
-    use super::device_supports_churn_forward_native;
+    use super::{device_supports_churn_forward_native, device_supports_churn_retained_transform};
 
     #[test]
-    fn admits_only_the_native_targets_and_exact_adl_stepping() {
+    fn admits_only_physically_validated_native_targets() {
         assert!(device_supports_churn_forward_native(0xA780, 0x00));
-        assert!(device_supports_churn_forward_native(0x4680, 0x0C));
+        assert!(!device_supports_churn_forward_native(0x4680, 0x0C));
         assert!(!device_supports_churn_forward_native(0x4680, 0x0B));
         assert!(!device_supports_churn_forward_native(0x4680, 0x0D));
         assert!(!device_supports_churn_forward_native(0x56A0, 0x08));
+    }
+
+    #[test]
+    fn retained_transform_requires_its_own_hardware_proof() {
+        assert!(!device_supports_churn_retained_transform(0xA780, 0x00));
+        assert!(!device_supports_churn_retained_transform(0x4680, 0x0C));
     }
 }
 const SURFACE_HALIGN_4: u32 = 1;

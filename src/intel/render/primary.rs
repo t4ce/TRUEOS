@@ -1346,7 +1346,7 @@ fn submit_resident_scene_geometry_batched(
         "resident-scene",
     );
     if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, "resident-scene");
+        record_render_engine_after_nonretired_submit(dev, "resident-scene");
     }
     let (gpu_poll_us, gpu_poll_iters) = resident_scene_last_gpu_poll_profile();
     Ok(ResidentSceneGeometryResult {
@@ -1489,7 +1489,7 @@ fn submit_resident_churn_forward_geometry_batched(
         "helio-churn-forward",
     );
     if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, "helio-churn-forward");
+        record_render_engine_after_nonretired_submit(dev, "helio-churn-forward");
     }
     let (gpu_poll_us, gpu_poll_iters) = resident_scene_last_gpu_poll_profile();
     Ok(ResidentSceneGeometryResult {
@@ -4867,7 +4867,7 @@ fn submit_render_artificial_fragment_sentinel_locked()
         "artificial-fragment-sentinel",
     );
     if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, "artificial-fragment-sentinel");
+        record_render_engine_after_nonretired_submit(dev, "artificial-fragment-sentinel");
     }
 
     crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
@@ -5396,7 +5396,7 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
             observed as u8,
         );
         if completed {
-            recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
+            isolate_render_context_after_completed_probe(dev, submit_name);
         }
         if observed {
             return true;
@@ -5430,7 +5430,7 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
             observed as u8,
         );
         if completed {
-            recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
+            isolate_render_context_after_completed_probe(dev, submit_name);
         }
         if observed {
             return true;
@@ -5474,7 +5474,7 @@ fn run_postdraw_pc_retire_spectrum(
                 submit_name,
                 variant.label(),
             );
-            recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
+            isolate_render_context_after_completed_probe(dev, submit_name);
         }
     }
 }
@@ -5582,7 +5582,7 @@ fn submit_triangle_vf_streamout_proof(
         experiment,
     );
     if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, "vf-streamout-proof");
+        record_render_engine_after_nonretired_submit(dev, "vf-streamout-proof");
     }
     accepted
 }
@@ -6047,7 +6047,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
         disable_raster_wm_oa_context(dev, submit_name);
     }
     if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
+        record_render_engine_after_nonretired_submit(dev, submit_name);
     }
     completed
 }
@@ -6385,7 +6385,7 @@ fn submit_triangle_vs_streamout_proof(
         experiment,
     );
     if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, "vs-streamout-proof");
+        record_render_engine_after_nonretired_submit(dev, "vs-streamout-proof");
     }
     accepted
 }
@@ -6515,7 +6515,7 @@ fn submit_triangle_streamout_proof(
         experiment,
     );
     if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, "streamout-proof");
+        record_render_engine_after_nonretired_submit(dev, "streamout-proof");
     }
     accepted
 }
@@ -7127,7 +7127,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         submit_name,
     );
     if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
+        record_render_engine_after_nonretired_submit(dev, submit_name);
     }
     if let (
         Some((scratch_before, center_before, post_before, center_offset, post_offset)),
@@ -7720,7 +7720,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         }
     }
     if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
+        record_render_engine_after_nonretired_submit(dev, submit_name);
     }
     completed
 }
