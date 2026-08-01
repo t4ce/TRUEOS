@@ -6,18 +6,47 @@
 //! The graph contains one Conv1d and six ConvTranspose1d nodes in six exact
 //! parameter families. Tensors use contiguous NCW layout with batch one.
 //! ConvTranspose weights retain ONNX layout `[C_in, C_out / group, K]`; Conv
-//! weights use `[C_out, C_in / group, K]`. Every dot product visits input
-//! channels and then kernel taps in ascending order. The decoder's depthwise
-//! pool additionally mirrors ORT's GEMM -> Col2im -> bias arithmetic: products
-//! are rounded before zero-seeded additions and bias is added last. The AVX2
-//! lane only evaluates eight adjacent output times in parallel, preserving the
-//! profile-specific arithmetic order.
+//! weights use `[C_out, C_in / group, K]`. Most profiles visit input channels
+//! and then kernel taps in ascending order. The decoder pool, dense
+//! upsamplers, generator post-convolution, and ISTFT synthesis instead mirror
+//! their exact ORT MLAS GEMM/Col2im/bias arithmetic. The AVX2 lane only
+//! evaluates eight output times in parallel, preserving each profile's
+//! arithmetic order.
 
 pub const PINNED_NODE_COVERAGE: usize = 7;
 pub const SIMD_TIME_TILE: usize = 8;
 pub const DEFAULT_CHANNEL_TILE: usize = 8;
 pub const DEFAULT_TIME_TILE: usize = 64;
 const MAX_TRANSPOSE_TAP_LAYERS: usize = 4;
+const ORT_SGEMM_K_PANEL: usize = 128;
+
+/// Reproduce the adaptive `StrideK` selected by ORT 1.28's non-packed,
+/// single-thread `MlasSgemmOperation` for PostConv's non-transposed A and
+/// pinned K=896 reduction. The one-thread oracle passes the whole sequence
+/// width as `N`: `N > 64` keeps K=128, `N=33..=64` uses K=256,
+/// `N=17..=32` uses K=512, and K fits in one panel for `N <= 16`.
+///
+/// This is deliberately not a claim of parity with a threaded ORT session:
+/// ORT can partition N first and select `StrideK` from each worker's
+/// `RangeCountN`. Also, at `N == 1`, contiguous B/C matrices can bypass this
+/// loop through MLAS's platform-specific M1 kernel. Our scalar contract keeps
+/// the one-panel, zero-seeded ascending-K reduction at that degenerate width.
+/// ConvTranspose supplies transposed A, so its dense upsamplers must retain
+/// fixed K=128 panels and must not use this selector.
+#[inline]
+const fn ort_post_conv_panel_width(input_width: usize, reduction_width: usize) -> usize {
+    let panel_limit = match input_width {
+        0..=16 => reduction_width,
+        17..=32 => 4 * ORT_SGEMM_K_PANEL,
+        33..=64 => 2 * ORT_SGEMM_K_PANEL,
+        _ => ORT_SGEMM_K_PANEL,
+    };
+    if panel_limit < reduction_width {
+        panel_limit
+    } else {
+        reduction_width
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -660,6 +689,10 @@ fn output_element(problem: Problem<'_>, output_channel: usize, output_time: usiz
 
 #[inline]
 fn conv_element(problem: Problem<'_>, output_channel: usize, output_time: usize) -> f32 {
+    if matches!(problem.profile, Profile::PostConv128To22 { .. }) {
+        return conv_post_128_to_22_element(problem, output_channel, output_time);
+    }
+
     let dimensions = problem.dimensions;
     let input_per_group = dimensions.input_channels_per_group();
     let output_per_group = dimensions.output_channels_per_group();
@@ -689,10 +722,81 @@ fn conv_element(problem: Problem<'_>, output_channel: usize, output_time: usize)
     accumulator
 }
 
+/// Match ORT's generator post-convolution exactly. MLAS flattens the K=896
+/// reduction as input-channel then kernel tap. At live widths it evaluates
+/// seven independent ascending K=128 FMA panels and folds them low to high.
+/// The single-thread oracle widens those panels to K=256 for `N=33..=64`,
+/// K=512 for `N=17..=32`, and full K for `N<=16`; final panels may be short.
+/// Im2col padding contributes explicit +0.0 values, and Eigen broadcasts the
+/// bias only after the fold.
+#[inline]
+fn conv_post_128_to_22_element(
+    problem: Problem<'_>,
+    output_channel: usize,
+    output_time: usize,
+) -> f32 {
+    debug_assert!(matches!(problem.profile, Profile::PostConv128To22 { .. }));
+    let dimensions = problem.dimensions;
+    debug_assert_eq!(dimensions.groups, 1);
+    let reduction_width = dimensions.input_channels * dimensions.kernel_width;
+    debug_assert_eq!(reduction_width, 7 * ORT_SGEMM_K_PANEL);
+    let panel_width = ort_post_conv_panel_width(dimensions.input_width, reduction_width);
+    let weight_row = output_channel * reduction_width;
+
+    let mut folded = 0.0_f32;
+    for panel_start in (0..reduction_width).step_by(panel_width) {
+        let mut panel = 0.0_f32;
+        let panel_end = reduction_width.min(panel_start + panel_width);
+        for flat in panel_start..panel_end {
+            let input_channel = flat / dimensions.kernel_width;
+            let kernel = flat % dimensions.kernel_width;
+            let padded_position = output_time * dimensions.stride + kernel;
+            let value = if padded_position < dimensions.pad_left {
+                0.0
+            } else {
+                let input_time = padded_position - dimensions.pad_left;
+                if input_time < dimensions.input_width {
+                    problem.input[input_channel * dimensions.input_width + input_time]
+                } else {
+                    0.0
+                }
+            };
+            panel = libm::fmaf(value, problem.weights[weight_row + flat], panel);
+        }
+        if panel_start == 0 {
+            folded = panel;
+        } else {
+            folded += panel;
+        }
+    }
+
+    folded + problem.bias.expect("generator post-convolution has bias")[output_channel]
+}
+
 #[inline]
 fn conv_transpose_element(problem: Problem<'_>, output_channel: usize, output_time: usize) -> f32 {
-    if matches!(problem.profile, Profile::DecoderDepthwise1090 { .. }) {
-        return conv_transpose_decoder_depthwise_element(problem, output_channel, output_time);
+    match problem.profile {
+        Profile::DecoderDepthwise1090 { .. } => {
+            return conv_transpose_decoder_depthwise_element(problem, output_channel, output_time);
+        }
+        Profile::Upsample512To256 { .. } => {
+            return conv_transpose_upsample_512_to_256_element(
+                problem,
+                output_channel,
+                output_time,
+            );
+        }
+        Profile::Upsample256To128 { .. } => {
+            return conv_transpose_upsample_256_to_128_element(
+                problem,
+                output_channel,
+                output_time,
+            );
+        }
+        Profile::Istft22To1 { .. } => {
+            return conv_transpose_istft_22_to_1_element(problem, output_channel, output_time);
+        }
+        _ => {}
     }
 
     let dimensions = problem.dimensions;
@@ -727,6 +831,164 @@ fn conv_transpose_element(problem: Problem<'_>, output_channel: usize, output_ti
         }
     }
     accumulator
+}
+
+/// Match ORT's ISTFT synthesis transpose convolution exactly. MLAS computes
+/// one zero-seeded ascending K=22 channel dot for every kernel row. Col2im
+/// then adds the materialized tap dots in ascending kernel order from +0.0.
+/// This profile has no bias.
+#[inline]
+fn conv_transpose_istft_22_to_1_element(
+    problem: Problem<'_>,
+    output_channel: usize,
+    output_time: usize,
+) -> f32 {
+    debug_assert!(matches!(problem.profile, Profile::Istft22To1 { .. }));
+    let dimensions = problem.dimensions;
+    debug_assert_eq!(dimensions.groups, 1);
+    debug_assert_eq!(dimensions.input_channels, 22);
+    debug_assert_eq!(dimensions.output_channels, 1);
+    debug_assert!(problem.bias.is_none());
+
+    let padded_output_time = output_time + dimensions.pad_left;
+    let mut col2im = 0.0_f32;
+    for kernel in 0..dimensions.kernel_width {
+        if padded_output_time < kernel {
+            continue;
+        }
+        let expanded_input_time = padded_output_time - kernel;
+        if !expanded_input_time.is_multiple_of(dimensions.stride) {
+            continue;
+        }
+        let input_time = expanded_input_time / dimensions.stride;
+        if input_time >= dimensions.input_width {
+            continue;
+        }
+
+        let mut dot = 0.0_f32;
+        for input_channel in 0..dimensions.input_channels {
+            let input_index = input_channel * dimensions.input_width + input_time;
+            let weight_index = (input_channel * dimensions.output_channels + output_channel)
+                * dimensions.kernel_width
+                + kernel;
+            dot = libm::fmaf(problem.input[input_index], problem.weights[weight_index], dot);
+        }
+        col2im += dot;
+    }
+    col2im
+}
+
+/// Match ORT's first dense upsampler exactly. At live widths MLAS evaluates
+/// every `(output-channel, kernel, input-time)` dot as four independent K=128
+/// FMA panels, folds those panels from low to high K, and materializes the
+/// result in a column buffer. ConvTranspose supplies transposed A to MLAS, so
+/// these four panels remain K=128 at every sequence width. Col2im adds valid
+/// kernel rows from +0.0 before the bias broadcast.
+#[inline]
+fn conv_transpose_upsample_512_to_256_element(
+    problem: Problem<'_>,
+    output_channel: usize,
+    output_time: usize,
+) -> f32 {
+    debug_assert!(matches!(problem.profile, Profile::Upsample512To256 { .. }));
+    let dimensions = problem.dimensions;
+    debug_assert_eq!(dimensions.groups, 1);
+    debug_assert_eq!(dimensions.input_channels, 4 * ORT_SGEMM_K_PANEL);
+    let panel_width = ORT_SGEMM_K_PANEL;
+
+    let padded_output_time = output_time + dimensions.pad_left;
+    let mut col2im = 0.0_f32;
+    for kernel in 0..dimensions.kernel_width {
+        if padded_output_time < kernel {
+            continue;
+        }
+        let expanded_input_time = padded_output_time - kernel;
+        if !expanded_input_time.is_multiple_of(dimensions.stride) {
+            continue;
+        }
+        let input_time = expanded_input_time / dimensions.stride;
+        if input_time >= dimensions.input_width {
+            continue;
+        }
+
+        let mut dot = 0.0_f32;
+        for panel_start in (0..dimensions.input_channels).step_by(panel_width) {
+            let mut panel = 0.0_f32;
+            let panel_end = dimensions.input_channels.min(panel_start + panel_width);
+            for input_channel in panel_start..panel_end {
+                let input_index = input_channel * dimensions.input_width + input_time;
+                let weight_index = (input_channel * dimensions.output_channels + output_channel)
+                    * dimensions.kernel_width
+                    + kernel;
+                panel =
+                    libm::fmaf(problem.input[input_index], problem.weights[weight_index], panel);
+            }
+            if panel_start == 0 {
+                dot = panel;
+            } else {
+                dot += panel;
+            }
+        }
+        col2im += dot;
+    }
+
+    col2im + problem.bias.expect("first dense upsampler has bias")[output_channel]
+}
+
+/// Match ORT's second dense upsampler exactly. At live widths its K=256 MLAS
+/// GEMM evaluates every kernel row as two independent ascending K=128 FMA
+/// panels. ConvTranspose supplies transposed A, so both K=128 panels remain at
+/// every sequence width. Col2im accumulates the materialized dots from +0.0,
+/// and Eigen broadcasts the bias last.
+#[inline]
+fn conv_transpose_upsample_256_to_128_element(
+    problem: Problem<'_>,
+    output_channel: usize,
+    output_time: usize,
+) -> f32 {
+    debug_assert!(matches!(problem.profile, Profile::Upsample256To128 { .. }));
+    let dimensions = problem.dimensions;
+    debug_assert_eq!(dimensions.groups, 1);
+    debug_assert_eq!(dimensions.input_channels, 2 * ORT_SGEMM_K_PANEL);
+    let panel_width = ORT_SGEMM_K_PANEL;
+
+    let padded_output_time = output_time + dimensions.pad_left;
+    let mut col2im = 0.0_f32;
+    for kernel in 0..dimensions.kernel_width {
+        if padded_output_time < kernel {
+            continue;
+        }
+        let expanded_input_time = padded_output_time - kernel;
+        if !expanded_input_time.is_multiple_of(dimensions.stride) {
+            continue;
+        }
+        let input_time = expanded_input_time / dimensions.stride;
+        if input_time >= dimensions.input_width {
+            continue;
+        }
+
+        let mut dot = 0.0_f32;
+        for panel_start in (0..dimensions.input_channels).step_by(panel_width) {
+            let mut panel = 0.0_f32;
+            let panel_end = dimensions.input_channels.min(panel_start + panel_width);
+            for input_channel in panel_start..panel_end {
+                let input_index = input_channel * dimensions.input_width + input_time;
+                let weight_index = (input_channel * dimensions.output_channels + output_channel)
+                    * dimensions.kernel_width
+                    + kernel;
+                panel =
+                    libm::fmaf(problem.input[input_index], problem.weights[weight_index], panel);
+            }
+            if panel_start == 0 {
+                dot = panel;
+            } else {
+                dot += panel;
+            }
+        }
+        col2im += dot;
+    }
+
+    col2im + problem.bias.expect("second dense upsampler has bias")[output_channel]
 }
 
 /// Match ORT's depthwise decoder pool exactly. Its K=1 MLAS GEMM first writes
@@ -769,18 +1031,99 @@ fn conv_transpose_decoder_depthwise_element(
 #[target_feature(enable = "avx2,fma")]
 unsafe fn convolve_avx2_fma(problem: Problem<'_>, output: &mut [f32], tile: Tile) {
     match problem.parameters.kind {
-        OperatorKind::Conv => unsafe { conv_avx2_fma(problem, output, tile) },
+        OperatorKind::Conv => match problem.profile {
+            Profile::PostConv128To22 { .. } => unsafe {
+                conv_post_128_to_22_avx2_fma(problem, output, tile)
+            },
+            _ => unsafe { conv_avx2_fma(problem, output, tile) },
+        },
         OperatorKind::ConvTranspose => match problem.profile {
             Profile::Upsample512To256 { .. } => unsafe {
-                conv_transpose_dense_avx2_fma::<10>(problem, output, tile)
+                conv_transpose_upsample_512_to_256_avx2_fma(problem, output, tile)
             },
             Profile::Upsample256To128 { .. } => unsafe {
-                conv_transpose_dense_avx2_fma::<6>(problem, output, tile)
+                conv_transpose_upsample_256_to_128_avx2_fma(problem, output, tile)
+            },
+            Profile::Istft22To1 { .. } => unsafe {
+                conv_transpose_istft_22_to_1_avx2_fma(problem, output, tile)
             },
             _ => unsafe { conv_transpose_avx2_fma(problem, output, tile) },
         },
     }
     core::arch::x86_64::_mm256_zeroupper();
+}
+
+/// Vectorize eight post-convolution output times while preserving MLAS's
+/// flattened K order and panel tree in every lane. Boundary blocks use the
+/// scalar contract so explicit Im2col padding zeros remain exact.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn conv_post_128_to_22_avx2_fma(problem: Problem<'_>, output: &mut [f32], tile: Tile) {
+    use core::arch::x86_64::{
+        _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps,
+        _mm256_storeu_ps,
+    };
+
+    let dimensions = problem.dimensions;
+    debug_assert_eq!(dimensions.groups, 1);
+    debug_assert_eq!(dimensions.stride, 1);
+    let reduction_width = dimensions.input_channels * dimensions.kernel_width;
+    debug_assert_eq!(reduction_width, 7 * ORT_SGEMM_K_PANEL);
+    let panel_width = ort_post_conv_panel_width(dimensions.input_width, reduction_width);
+    let (channel_end, time_end) = tile.checked_ends(dimensions).unwrap();
+
+    for output_channel in tile.channel_start..channel_end {
+        let output_row = output_channel * dimensions.output_width;
+        let weight_row = output_channel * reduction_width;
+        let bias = problem.bias.expect("generator post-convolution has bias")[output_channel];
+        let mut output_time = tile.time_start;
+        while output_time + SIMD_TIME_TILE <= time_end {
+            let interior = output_time >= dimensions.pad_left
+                && output_time + SIMD_TIME_TILE - 1 + dimensions.kernel_width - 1
+                    < dimensions.input_width + dimensions.pad_left;
+            if !interior {
+                for time in output_time..output_time + SIMD_TIME_TILE {
+                    output[output_row + time] =
+                        conv_post_128_to_22_element(problem, output_channel, time);
+                }
+                output_time += SIMD_TIME_TILE;
+                continue;
+            }
+
+            let mut folded = _mm256_setzero_ps();
+            for panel_start in (0..reduction_width).step_by(panel_width) {
+                let mut panel = _mm256_setzero_ps();
+                let panel_end = reduction_width.min(panel_start + panel_width);
+                for flat in panel_start..panel_end {
+                    let input_channel = flat / dimensions.kernel_width;
+                    let kernel = flat % dimensions.kernel_width;
+                    let input_row = input_channel * dimensions.input_width;
+                    let input_time = output_time + kernel - dimensions.pad_left;
+                    let values = unsafe {
+                        _mm256_loadu_ps(problem.input.as_ptr().add(input_row + input_time))
+                    };
+                    let weight = _mm256_set1_ps(problem.weights[weight_row + flat]);
+                    panel = _mm256_fmadd_ps(values, weight, panel);
+                }
+                folded = if panel_start == 0 {
+                    panel
+                } else {
+                    _mm256_add_ps(folded, panel)
+                };
+            }
+            folded = _mm256_add_ps(folded, _mm256_set1_ps(bias));
+            unsafe {
+                _mm256_storeu_ps(output.as_mut_ptr().add(output_row + output_time), folded);
+            }
+            output_time += SIMD_TIME_TILE;
+        }
+
+        while output_time < time_end {
+            output[output_row + output_time] =
+                conv_post_128_to_22_element(problem, output_channel, output_time);
+            output_time += 1;
+        }
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -965,36 +1308,39 @@ unsafe fn conv_transpose_avx2_fma(problem: Problem<'_>, output: &mut [f32], tile
     }
 }
 
-/// Dense Kokoro upsamplers have `kernel_width == 2 * stride`.  Evaluating
-/// adjacent output times needs two input and two weight gathers for every
-/// input channel.  Eight outputs separated by `STRIDE` instead consume
-/// contiguous input vectors and reuse each scalar weight across all lanes.
-///
-/// The loop order for any individual output remains input-channel first and
-/// then ascending kernel, so this is bit-identical to the scalar contract.
+/// Vectorize the exact ORT first-upsample arithmetic across eight input-time
+/// positions. Each lane retains the four fixed K=128 panels, kernel-row
+/// Col2im order, and final bias addition of the scalar contract without a
+/// column buffer.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
-unsafe fn conv_transpose_dense_avx2_fma<const STRIDE: usize>(
+unsafe fn conv_transpose_upsample_512_to_256_avx2_fma(
     problem: Problem<'_>,
     output: &mut [f32],
     tile: Tile,
 ) {
-    use core::arch::x86_64::{_mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_storeu_ps};
+    use core::arch::x86_64::{
+        _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps,
+        _mm256_storeu_ps,
+    };
+
+    const STRIDE: usize = 10;
+    const KERNEL_LAYERS: usize = 2;
 
     let dimensions = problem.dimensions;
     debug_assert_eq!(dimensions.groups, 1);
+    debug_assert_eq!(dimensions.input_channels, 4 * ORT_SGEMM_K_PANEL);
     debug_assert_eq!(dimensions.stride, STRIDE);
-    debug_assert_eq!(dimensions.kernel_width, 2 * STRIDE);
+    debug_assert_eq!(dimensions.kernel_width, KERNEL_LAYERS * STRIDE);
+    let panel_width = ORT_SGEMM_K_PANEL;
     let (channel_end, time_end) = tile.checked_ends(dimensions).unwrap();
     let vector_time_block = STRIDE * SIMD_TIME_TILE;
 
     for output_channel in tile.channel_start..channel_end {
         let output_row = output_channel * dimensions.output_width;
-        let bias = problem.bias.map_or(0.0, |values| values[output_channel]);
+        let bias = problem.bias.expect("first dense upsampler has bias")[output_channel];
         let mut output_time = tile.time_start;
 
-        // Align a phase block so `(output_time + pad_left) / STRIDE` is the
-        // first input time shared by all kernel residues.
         let remainder = (output_time + dimensions.pad_left) % STRIDE;
         let scalar_prefix = if remainder == 0 {
             0
@@ -1004,36 +1350,49 @@ unsafe fn conv_transpose_dense_avx2_fma<const STRIDE: usize>(
         let prefix_end = time_end.min(output_time + scalar_prefix);
         while output_time < prefix_end {
             output[output_row + output_time] =
-                conv_transpose_element(problem, output_channel, output_time);
+                conv_transpose_upsample_512_to_256_element(problem, output_channel, output_time);
             output_time += 1;
         }
 
         while time_end - output_time >= vector_time_block {
             let base_input_time = (output_time + dimensions.pad_left) / STRIDE;
-            // Both kernel layers must provide eight in-bounds contiguous
-            // input samples.  Only the small model boundary remains scalar.
             if base_input_time == 0 || base_input_time + SIMD_TIME_TILE > dimensions.input_width {
                 break;
             }
 
             for phase in 0..STRIDE {
-                let mut accumulator = _mm256_set1_ps(bias);
-                for input_channel in 0..dimensions.input_channels {
-                    let input_row = input_channel * dimensions.input_width;
-                    let weight_row = (input_channel * dimensions.output_channels + output_channel)
-                        * dimensions.kernel_width;
-                    for layer in 0..2 {
-                        let input_start = input_row + base_input_time - layer;
-                        let input_values =
-                            unsafe { _mm256_loadu_ps(problem.input.as_ptr().add(input_start)) };
-                        let weight =
-                            _mm256_set1_ps(problem.weights[weight_row + phase + layer * STRIDE]);
-                        accumulator = _mm256_fmadd_ps(input_values, weight, accumulator);
+                let mut col2im = _mm256_setzero_ps();
+                for layer in 0..KERNEL_LAYERS {
+                    let kernel = phase + layer * STRIDE;
+                    let input_time = base_input_time - layer;
+                    let mut dot = _mm256_setzero_ps();
+                    for panel_start in (0..dimensions.input_channels).step_by(panel_width) {
+                        let mut panel = _mm256_setzero_ps();
+                        let panel_end = dimensions.input_channels.min(panel_start + panel_width);
+                        for input_channel in panel_start..panel_end {
+                            let input_row = input_channel * dimensions.input_width;
+                            let weight_index = (input_channel * dimensions.output_channels
+                                + output_channel)
+                                * dimensions.kernel_width
+                                + kernel;
+                            let input_values = unsafe {
+                                _mm256_loadu_ps(problem.input.as_ptr().add(input_row + input_time))
+                            };
+                            let weight = _mm256_set1_ps(problem.weights[weight_index]);
+                            panel = _mm256_fmadd_ps(input_values, weight, panel);
+                        }
+                        dot = if panel_start == 0 {
+                            panel
+                        } else {
+                            _mm256_add_ps(dot, panel)
+                        };
                     }
+                    col2im = _mm256_add_ps(col2im, dot);
                 }
+                col2im = _mm256_add_ps(col2im, _mm256_set1_ps(bias));
 
                 let mut lanes = [0.0_f32; SIMD_TIME_TILE];
-                unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), accumulator) };
+                unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), col2im) };
                 for (lane, value) in lanes.into_iter().enumerate() {
                     output[output_row + output_time + phase + lane * STRIDE] = value;
                 }
@@ -1043,7 +1402,203 @@ unsafe fn conv_transpose_dense_avx2_fma<const STRIDE: usize>(
 
         while output_time < time_end {
             output[output_row + output_time] =
-                conv_transpose_element(problem, output_channel, output_time);
+                conv_transpose_upsample_512_to_256_element(problem, output_channel, output_time);
+            output_time += 1;
+        }
+    }
+}
+
+/// Vectorize the exact ORT second-upsample arithmetic across eight input-time
+/// positions. The two fixed K=128 accumulators and eight-lane staging remain
+/// bounded regardless of the runtime sequence width.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn conv_transpose_upsample_256_to_128_avx2_fma(
+    problem: Problem<'_>,
+    output: &mut [f32],
+    tile: Tile,
+) {
+    use core::arch::x86_64::{
+        _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps,
+        _mm256_storeu_ps,
+    };
+
+    const STRIDE: usize = 6;
+    const KERNEL_LAYERS: usize = 2;
+
+    let dimensions = problem.dimensions;
+    debug_assert_eq!(dimensions.groups, 1);
+    debug_assert_eq!(dimensions.input_channels, 2 * ORT_SGEMM_K_PANEL);
+    debug_assert_eq!(dimensions.stride, STRIDE);
+    debug_assert_eq!(dimensions.kernel_width, KERNEL_LAYERS * STRIDE);
+    let panel_width = ORT_SGEMM_K_PANEL;
+    let (channel_end, time_end) = tile.checked_ends(dimensions).unwrap();
+    let vector_time_block = STRIDE * SIMD_TIME_TILE;
+
+    for output_channel in tile.channel_start..channel_end {
+        let output_row = output_channel * dimensions.output_width;
+        let bias = problem.bias.expect("second dense upsampler has bias")[output_channel];
+        let mut output_time = tile.time_start;
+
+        let remainder = (output_time + dimensions.pad_left) % STRIDE;
+        let scalar_prefix = if remainder == 0 {
+            0
+        } else {
+            STRIDE - remainder
+        };
+        let prefix_end = time_end.min(output_time + scalar_prefix);
+        while output_time < prefix_end {
+            output[output_row + output_time] =
+                conv_transpose_upsample_256_to_128_element(problem, output_channel, output_time);
+            output_time += 1;
+        }
+
+        while time_end - output_time >= vector_time_block {
+            let base_input_time = (output_time + dimensions.pad_left) / STRIDE;
+            if base_input_time == 0 || base_input_time + SIMD_TIME_TILE > dimensions.input_width {
+                break;
+            }
+
+            for phase in 0..STRIDE {
+                let mut col2im = _mm256_setzero_ps();
+                for layer in 0..KERNEL_LAYERS {
+                    let kernel = phase + layer * STRIDE;
+                    let input_time = base_input_time - layer;
+                    let mut dot = _mm256_setzero_ps();
+                    for panel_start in (0..dimensions.input_channels).step_by(panel_width) {
+                        let mut panel = _mm256_setzero_ps();
+                        let panel_end = dimensions.input_channels.min(panel_start + panel_width);
+                        for input_channel in panel_start..panel_end {
+                            let input_row = input_channel * dimensions.input_width;
+                            let weight_index = (input_channel * dimensions.output_channels
+                                + output_channel)
+                                * dimensions.kernel_width
+                                + kernel;
+                            let input_values = unsafe {
+                                _mm256_loadu_ps(problem.input.as_ptr().add(input_row + input_time))
+                            };
+                            let weight = _mm256_set1_ps(problem.weights[weight_index]);
+                            panel = _mm256_fmadd_ps(input_values, weight, panel);
+                        }
+                        dot = if panel_start == 0 {
+                            panel
+                        } else {
+                            _mm256_add_ps(dot, panel)
+                        };
+                    }
+                    col2im = _mm256_add_ps(col2im, dot);
+                }
+                col2im = _mm256_add_ps(col2im, _mm256_set1_ps(bias));
+
+                let mut lanes = [0.0_f32; SIMD_TIME_TILE];
+                unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), col2im) };
+                for (lane, value) in lanes.into_iter().enumerate() {
+                    output[output_row + output_time + phase + lane * STRIDE] = value;
+                }
+            }
+            output_time += vector_time_block;
+        }
+
+        while output_time < time_end {
+            output[output_row + output_time] =
+                conv_transpose_upsample_256_to_128_element(problem, output_channel, output_time);
+            output_time += 1;
+        }
+    }
+}
+
+/// Vectorize the exact ISTFT transpose-convolution tree across eight input
+/// times. Each tap keeps its independent K=22 dot and Col2im add; the only
+/// bounded staging is eight output lanes used for the strided stores.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn conv_transpose_istft_22_to_1_avx2_fma(
+    problem: Problem<'_>,
+    output: &mut [f32],
+    tile: Tile,
+) {
+    use core::arch::x86_64::{
+        _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps,
+        _mm256_storeu_ps,
+    };
+
+    const STRIDE: usize = 5;
+    const KERNEL_LAYERS: usize = 4;
+
+    let dimensions = problem.dimensions;
+    debug_assert_eq!(dimensions.groups, 1);
+    debug_assert_eq!(dimensions.input_channels, 22);
+    debug_assert_eq!(dimensions.output_channels, 1);
+    debug_assert_eq!(dimensions.stride, STRIDE);
+    debug_assert_eq!(dimensions.kernel_width, KERNEL_LAYERS * STRIDE);
+    debug_assert!(problem.bias.is_none());
+    let (channel_end, time_end) = tile.checked_ends(dimensions).unwrap();
+    let vector_time_block = STRIDE * SIMD_TIME_TILE;
+
+    for output_channel in tile.channel_start..channel_end {
+        let output_row = output_channel * dimensions.output_width;
+        let mut output_time = tile.time_start;
+
+        let remainder = (output_time + dimensions.pad_left) % STRIDE;
+        let scalar_prefix = if remainder == 0 {
+            0
+        } else {
+            STRIDE - remainder
+        };
+        let prefix_end = time_end.min(output_time + scalar_prefix);
+        while output_time < prefix_end {
+            output[output_row + output_time] =
+                conv_transpose_istft_22_to_1_element(problem, output_channel, output_time);
+            output_time += 1;
+        }
+
+        let fully_overlapped_start = (KERNEL_LAYERS - 1) * STRIDE - dimensions.pad_left;
+        let leading_end = time_end.min(fully_overlapped_start);
+        while output_time < leading_end {
+            output[output_row + output_time] =
+                conv_transpose_istft_22_to_1_element(problem, output_channel, output_time);
+            output_time += 1;
+        }
+
+        while time_end - output_time >= vector_time_block {
+            let base_input_time = (output_time + dimensions.pad_left) / STRIDE;
+            if base_input_time + SIMD_TIME_TILE > dimensions.input_width {
+                break;
+            }
+
+            for phase in 0..STRIDE {
+                let mut col2im = _mm256_setzero_ps();
+                for layer in 0..KERNEL_LAYERS {
+                    let kernel = phase + layer * STRIDE;
+                    let input_time = base_input_time - layer;
+                    let mut dot = _mm256_setzero_ps();
+                    for input_channel in 0..dimensions.input_channels {
+                        let input_row = input_channel * dimensions.input_width;
+                        let weight_index = (input_channel * dimensions.output_channels
+                            + output_channel)
+                            * dimensions.kernel_width
+                            + kernel;
+                        let input_values = unsafe {
+                            _mm256_loadu_ps(problem.input.as_ptr().add(input_row + input_time))
+                        };
+                        let weight = _mm256_set1_ps(problem.weights[weight_index]);
+                        dot = _mm256_fmadd_ps(input_values, weight, dot);
+                    }
+                    col2im = _mm256_add_ps(col2im, dot);
+                }
+
+                let mut lanes = [0.0_f32; SIMD_TIME_TILE];
+                unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), col2im) };
+                for (lane, value) in lanes.into_iter().enumerate() {
+                    output[output_row + output_time + phase + lane * STRIDE] = value;
+                }
+            }
+            output_time += vector_time_block;
+        }
+
+        while output_time < time_end {
+            output[output_row + output_time] =
+                conv_transpose_istft_22_to_1_element(problem, output_channel, output_time);
             output_time += 1;
         }
     }
@@ -1392,7 +1947,495 @@ mod tests {
     }
 
     #[test]
-    fn avx_preserves_scalar_fma_order_for_nonexact_dense_transpose() {
+    fn post_conv_adapts_single_thread_panels_and_preserves_partial_tails() {
+        assert_eq!(ort_post_conv_panel_width(65, 896), 128);
+        assert_eq!(ort_post_conv_panel_width(64, 896), 256);
+        assert_eq!(ort_post_conv_panel_width(33, 896), 256);
+        assert_eq!(ort_post_conv_panel_width(32, 896), 512);
+        assert_eq!(ort_post_conv_panel_width(17, 896), 512);
+        assert_eq!(ort_post_conv_panel_width(16, 896), 896);
+
+        for (input_width, terms, expected) in [
+            (
+                33,
+                [
+                    [(0, 100_000_000.0), (256, -100_000_000.0), (257, 1.0)],
+                    [(512, 100_000_000.0), (768, -100_000_000.0), (769, 1.0)],
+                    [(0, 100_000_000.0), (128, -100_000_000.0), (129, 1.0)],
+                ],
+                [0.0_f32, 0.0, 1.0],
+            ),
+            (
+                17,
+                [
+                    [(0, 100_000_000.0), (512, -100_000_000.0), (513, 1.0)],
+                    [(512, 100_000_000.0), (768, -100_000_000.0), (769, 1.0)],
+                    [(0, 100_000_000.0), (256, -100_000_000.0), (257, 1.0)],
+                ],
+                [0.0_f32, 1.0, 1.0],
+            ),
+        ] {
+            let profile = Profile::PostConv128To22 { input_width };
+            let dimensions = profile.dimensions().unwrap();
+            let reduction_width = dimensions.input_channels * dimensions.kernel_width;
+            let mut input = vec![0.0; dimensions.input_elements().unwrap()];
+            let mut weights = vec![0.0; dimensions.weight_elements(OperatorKind::Conv).unwrap()];
+            let bias = vec![0.0; dimensions.output_channels];
+
+            // At output time three, flattened K maps each tap directly to an
+            // input time. The first two channels prove the requested panel
+            // reset and the exact short final-panel boundary; the third rules
+            // out accidentally retaining the live K=128 schedule.
+            for (output_channel, channel_terms) in terms.into_iter().enumerate() {
+                for (flat, weight) in channel_terms {
+                    let input_channel = flat / dimensions.kernel_width;
+                    let kernel = flat % dimensions.kernel_width;
+                    input[input_channel * dimensions.input_width + kernel] = 1.0;
+                    weights[output_channel * reduction_width + flat] = weight;
+                }
+            }
+
+            let problem = Problem::new(profile, &input, &weights, Some(&bias)).unwrap();
+            let dispatcher = Dispatcher::detect();
+            let tile = Tile {
+                channel_start: 0,
+                channel_count: expected.len(),
+                time_start: 3,
+                time_count: (dimensions.output_width - 3).min(16),
+            };
+            let mut scalar = vec![f32::NAN; dimensions.output_elements().unwrap()];
+            dispatcher
+                .convolve_tile_with_lane(problem, &mut scalar, tile, Lane::Scalar)
+                .unwrap();
+
+            for (output_channel, value) in expected.into_iter().enumerate() {
+                let index = output_channel * dimensions.output_width + 3;
+                assert_eq!(scalar[index].to_bits(), value.to_bits());
+            }
+
+            if dispatcher.supports(Lane::Avx2Fma) {
+                let mut vector = vec![f32::NAN; scalar.len()];
+                dispatcher
+                    .convolve_tile_with_lane(problem, &mut vector, tile, Lane::Avx2Fma)
+                    .unwrap();
+                for output_channel in 0..expected.len() {
+                    let row = output_channel * dimensions.output_width;
+                    let range = row + tile.time_start..row + tile.time_start + tile.time_count;
+                    assert_eq!(
+                        vector[range.clone()]
+                            .iter()
+                            .map(|value| value.to_bits())
+                            .collect::<Vec<_>>(),
+                        scalar[range]
+                            .iter()
+                            .map(|value| value.to_bits())
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dense_upsamplers_width_33_retain_k128_panels() {
+        for (profile, time_start, time_count) in [
+            (Profile::Upsample512To256 { input_width: 33 }, 5, 80),
+            (Profile::Upsample256To128 { input_width: 33 }, 3, 48),
+        ] {
+            let dimensions = profile.dimensions().unwrap();
+            let mut input = vec![0.0; dimensions.input_elements().unwrap()];
+            let mut weights = vec![
+                0.0;
+                dimensions
+                    .weight_elements(OperatorKind::ConvTranspose)
+                    .unwrap()
+            ];
+            let bias = vec![0.0; dimensions.output_channels];
+            let input_index = |channel: usize, time: usize| channel * dimensions.input_width + time;
+            let weight_index = |input_channel: usize, output_channel: usize| {
+                (input_channel * dimensions.output_channels + output_channel)
+                    * dimensions.kernel_width
+            };
+            let final_input_channel = dimensions.input_channels - 1;
+
+            for input_channel in [0, 128, 129, final_input_channel] {
+                input[input_index(input_channel, 1)] = 1.0;
+            }
+
+            // ConvTranspose uses transposed A, so shrinking N must not widen
+            // StrideK. The independently zero-seeded second K=128 panel loses
+            // +1 after -1e8; one K=256 panel would instead retain it.
+            weights[weight_index(0, 0)] = 100_000_000.0;
+            weights[weight_index(128, 0)] = -100_000_000.0;
+            weights[weight_index(129, 0)] = 1.0;
+            weights[weight_index(final_input_channel, 1)] = 3.0;
+
+            let problem = Problem::new(profile, &input, &weights, Some(&bias)).unwrap();
+            let dispatcher = Dispatcher::detect();
+            let tile = Tile {
+                channel_start: 0,
+                channel_count: 2,
+                time_start,
+                time_count,
+            };
+            let mut scalar = vec![f32::NAN; dimensions.output_elements().unwrap()];
+            dispatcher
+                .convolve_tile_with_lane(problem, &mut scalar, tile, Lane::Scalar)
+                .unwrap();
+            for (output_channel, expected) in [(0, 0.0_f32), (1, 3.0)] {
+                let index = output_channel * dimensions.output_width + tile.time_start;
+                assert_eq!(scalar[index].to_bits(), expected.to_bits());
+            }
+
+            if dispatcher.supports(Lane::Avx2Fma) {
+                let mut vector = vec![f32::NAN; scalar.len()];
+                dispatcher
+                    .convolve_tile_with_lane(problem, &mut vector, tile, Lane::Avx2Fma)
+                    .unwrap();
+                for output_channel in 0..tile.channel_count {
+                    let row = output_channel * dimensions.output_width;
+                    let range = row + tile.time_start..row + tile.time_start + tile.time_count;
+                    assert_eq!(
+                        vector[range.clone()]
+                            .iter()
+                            .map(|value| value.to_bits())
+                            .collect::<Vec<_>>(),
+                        scalar[range]
+                            .iter()
+                            .map(|value| value.to_bits())
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn upsample_512_uses_ort_k128_panels_col2im_and_bias_order() {
+        let profile = Profile::Upsample512To256 { input_width: 65 };
+        let dimensions = profile.dimensions().unwrap();
+        let mut input = vec![0.0; dimensions.input_elements().unwrap()];
+        let mut weights = vec![
+            0.0;
+            dimensions
+                .weight_elements(OperatorKind::ConvTranspose)
+                .unwrap()
+        ];
+        let mut bias = vec![0.0; dimensions.output_channels];
+        let input_index = |channel: usize, time: usize| channel * dimensions.input_width + time;
+        let weight_index = |input_channel: usize, output_channel: usize, kernel: usize| {
+            (input_channel * dimensions.output_channels + output_channel) * dimensions.kernel_width
+                + kernel
+        };
+
+        // At output time five, kernel zero reads input time one and kernel ten
+        // reads input time zero. Channel zero makes the first K=128 panel
+        // +1e8. The next panel evaluates -1e8 then +1 from a zero seed, losing
+        // the +1 before the two panel results cancel. One continuous FMA chain
+        // instead cancels first and retains +1.
+        input[input_index(0, 1)] = 1.0;
+        input[input_index(128, 1)] = 1.0;
+        input[input_index(129, 1)] = 1.0;
+        weights[weight_index(0, 0, 0)] = 100_000_000.0;
+        weights[weight_index(128, 0, 0)] = -100_000_000.0;
+        weights[weight_index(129, 0, 0)] = 1.0;
+
+        // Output channel one distinguishes ORT's independently materialized
+        // kernel dots from the old input-channel/kernel-interleaved chain.
+        input[input_index(0, 0)] = 1.0;
+        input[input_index(1, 0)] = 1.0;
+        weights[weight_index(0, 1, 0)] = 100_000_000.0;
+        weights[weight_index(0, 1, 10)] = -100_000_000.0;
+        weights[weight_index(1, 1, 10)] = 1.0;
+
+        // Output channel two proves that Eigen's final bias broadcast follows
+        // zero-seeded Col2im cancellation instead of seeding the FMA chain.
+        weights[weight_index(0, 2, 0)] = 100_000_000.0;
+        weights[weight_index(0, 2, 10)] = -100_000_000.0;
+        bias[2] = 1.0;
+
+        let panel_zero = libm::fmaf(1.0, 100_000_000.0, 0.0);
+        let panel_one = libm::fmaf(1.0, 1.0, libm::fmaf(1.0, -100_000_000.0, 0.0));
+        assert_eq!((panel_zero + panel_one).to_bits(), 0.0_f32.to_bits());
+        let continuous = libm::fmaf(1.0, 1.0, libm::fmaf(1.0, -100_000_000.0, panel_zero));
+        assert_eq!(continuous.to_bits(), 1.0_f32.to_bits());
+
+        let problem = Problem::new(profile, &input, &weights, Some(&bias)).unwrap();
+        let dispatcher = Dispatcher::detect();
+        let tile = Tile {
+            channel_start: 0,
+            channel_count: 3,
+            time_start: 5,
+            time_count: 80,
+        };
+        let mut scalar = vec![f32::NAN; dimensions.output_elements().unwrap()];
+        dispatcher
+            .convolve_tile_with_lane(problem, &mut scalar, tile, Lane::Scalar)
+            .unwrap();
+
+        for (output_channel, expected) in [(0, 0.0_f32), (1, 0.0), (2, 1.0)] {
+            let index = output_channel * dimensions.output_width + 5;
+            assert_eq!(scalar[index].to_bits(), expected.to_bits());
+        }
+
+        if dispatcher.supports(Lane::Avx2Fma) {
+            let mut vector = vec![f32::NAN; scalar.len()];
+            dispatcher
+                .convolve_tile_with_lane(problem, &mut vector, tile, Lane::Avx2Fma)
+                .unwrap();
+            for output_channel in 0..3 {
+                let row = output_channel * dimensions.output_width;
+                assert_eq!(
+                    vector[row + 5..row + 85]
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>(),
+                    scalar[row + 5..row + 85]
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn upsample_256_uses_ort_k128_panels_col2im_and_bias_order() {
+        let profile = Profile::Upsample256To128 { input_width: 65 };
+        let dimensions = profile.dimensions().unwrap();
+        let mut input = vec![0.0; dimensions.input_elements().unwrap()];
+        let mut weights = vec![
+            0.0;
+            dimensions
+                .weight_elements(OperatorKind::ConvTranspose)
+                .unwrap()
+        ];
+        let mut bias = vec![0.0; dimensions.output_channels];
+        let input_index = |channel: usize, time: usize| channel * dimensions.input_width + time;
+        let weight_index = |input_channel: usize, output_channel: usize, kernel: usize| {
+            (input_channel * dimensions.output_channels + output_channel) * dimensions.kernel_width
+                + kernel
+        };
+
+        // At output time three, kernel zero reads input time one. Its low
+        // panel produces +1e8 while the independently zero-seeded high panel
+        // evaluates -1e8 then +1 and loses the +1. Folding low + high gives
+        // zero; one continuous K=256 chain instead retains +1.
+        input[input_index(0, 1)] = 1.0;
+        input[input_index(128, 1)] = 1.0;
+        input[input_index(129, 1)] = 1.0;
+        weights[weight_index(0, 0, 0)] = 100_000_000.0;
+        weights[weight_index(128, 0, 0)] = -100_000_000.0;
+        weights[weight_index(129, 0, 0)] = 1.0;
+
+        // Output channel one distinguishes independently materialized kernel
+        // zero and kernel six dots from an input-channel/interleaved chain.
+        input[input_index(0, 0)] = 1.0;
+        input[input_index(1, 0)] = 1.0;
+        weights[weight_index(0, 1, 0)] = 100_000_000.0;
+        weights[weight_index(0, 1, 6)] = -100_000_000.0;
+        weights[weight_index(1, 1, 6)] = 1.0;
+
+        // Output channel two proves bias is added after Col2im cancellation.
+        weights[weight_index(0, 2, 0)] = 100_000_000.0;
+        weights[weight_index(0, 2, 6)] = -100_000_000.0;
+        bias[2] = 1.0;
+
+        let low = libm::fmaf(1.0, 100_000_000.0, 0.0);
+        let high = libm::fmaf(1.0, 1.0, libm::fmaf(1.0, -100_000_000.0, 0.0));
+        assert_eq!((low + high).to_bits(), 0.0_f32.to_bits());
+        let continuous = libm::fmaf(1.0, 1.0, libm::fmaf(1.0, -100_000_000.0, low));
+        assert_eq!(continuous.to_bits(), 1.0_f32.to_bits());
+
+        let problem = Problem::new(profile, &input, &weights, Some(&bias)).unwrap();
+        let dispatcher = Dispatcher::detect();
+        let tile = Tile {
+            channel_start: 0,
+            channel_count: 3,
+            time_start: 3,
+            time_count: 48,
+        };
+        let mut scalar = vec![f32::NAN; dimensions.output_elements().unwrap()];
+        dispatcher
+            .convolve_tile_with_lane(problem, &mut scalar, tile, Lane::Scalar)
+            .unwrap();
+
+        for (output_channel, expected) in [(0, 0.0_f32), (1, 0.0), (2, 1.0)] {
+            let index = output_channel * dimensions.output_width + 3;
+            assert_eq!(scalar[index].to_bits(), expected.to_bits());
+        }
+
+        if dispatcher.supports(Lane::Avx2Fma) {
+            let mut vector = vec![f32::NAN; scalar.len()];
+            dispatcher
+                .convolve_tile_with_lane(problem, &mut vector, tile, Lane::Avx2Fma)
+                .unwrap();
+            for output_channel in 0..3 {
+                let row = output_channel * dimensions.output_width;
+                assert_eq!(
+                    vector[row + 3..row + 51]
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>(),
+                    scalar[row + 3..row + 51]
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn post_conv_uses_ort_flat_k128_panels_padding_and_bias_order() {
+        let profile = Profile::PostConv128To22 { input_width: 65 };
+        let dimensions = profile.dimensions().unwrap();
+        let mut input = vec![0.0; dimensions.input_elements().unwrap()];
+        let mut weights = vec![0.0; dimensions.weight_elements(OperatorKind::Conv).unwrap()];
+        let mut bias = vec![0.0; dimensions.output_channels];
+        let input_index = |channel: usize, time: usize| channel * dimensions.input_width + time;
+        let weight_index = |output_channel: usize, input_channel: usize, kernel: usize| {
+            (output_channel * dimensions.input_channels + input_channel) * dimensions.kernel_width
+                + kernel
+        };
+
+        // Flattened K index 0 starts the first panel. Indices 128 and 129
+        // start the second panel at (input channel 18, taps 2 and 3). The
+        // second zero-seeded panel loses +1 after -1e8, so its fold with the
+        // +1e8 first panel is zero. One continuous K=896 chain retains +1.
+        input[input_index(0, 0)] = 1.0;
+        input[input_index(18, 2)] = 1.0;
+        input[input_index(18, 3)] = 1.0;
+        weights[weight_index(0, 0, 0)] = 100_000_000.0;
+        weights[weight_index(0, 18, 2)] = -100_000_000.0;
+        weights[weight_index(0, 18, 3)] = 1.0;
+
+        // Output channel one distinguishes bias-last from a bias-seeded FMA
+        // chain after exact cancellation inside the first panel.
+        input[input_index(0, 1)] = 1.0;
+        weights[weight_index(1, 0, 0)] = 100_000_000.0;
+        weights[weight_index(1, 0, 1)] = -100_000_000.0;
+        bias[1] = 1.0;
+
+        // Output channel two checks both left and right explicit zero padding.
+        input[input_index(2, 0)] = 3.0;
+        input[input_index(2, 64)] = 5.0;
+        weights[weight_index(2, 2, 0)] = 100_000_000.0;
+        weights[weight_index(2, 2, 3)] = 2.0;
+        weights[weight_index(2, 2, 6)] = -100_000_000.0;
+
+        let panel_zero = libm::fmaf(1.0, 100_000_000.0, 0.0);
+        let panel_one = libm::fmaf(1.0, 1.0, libm::fmaf(1.0, -100_000_000.0, 0.0));
+        assert_eq!((panel_zero + panel_one).to_bits(), 0.0_f32.to_bits());
+        let continuous = libm::fmaf(1.0, 1.0, libm::fmaf(1.0, -100_000_000.0, panel_zero));
+        assert_eq!(continuous.to_bits(), 1.0_f32.to_bits());
+
+        let problem = Problem::new(profile, &input, &weights, Some(&bias)).unwrap();
+        let dispatcher = Dispatcher::detect();
+        let tile = Tile {
+            channel_start: 0,
+            channel_count: 3,
+            time_start: 0,
+            time_count: dimensions.output_width,
+        };
+        let mut scalar = vec![f32::NAN; dimensions.output_elements().unwrap()];
+        dispatcher
+            .convolve_tile_with_lane(problem, &mut scalar, tile, Lane::Scalar)
+            .unwrap();
+
+        assert_eq!(scalar[3].to_bits(), 0.0_f32.to_bits());
+        assert_eq!(scalar[dimensions.output_width + 3].to_bits(), 1.0_f32.to_bits());
+        assert_eq!(scalar[2 * dimensions.output_width].to_bits(), 6.0_f32.to_bits());
+        assert_eq!(scalar[2 * dimensions.output_width + 64].to_bits(), 10.0_f32.to_bits());
+
+        if dispatcher.supports(Lane::Avx2Fma) {
+            let mut vector = vec![f32::NAN; scalar.len()];
+            dispatcher
+                .convolve_tile_with_lane(problem, &mut vector, tile, Lane::Avx2Fma)
+                .unwrap();
+            for output_channel in 0..3 {
+                let row = output_channel * dimensions.output_width;
+                assert_eq!(
+                    vector[row..row + dimensions.output_width]
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>(),
+                    scalar[row..row + dimensions.output_width]
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn istft_uses_ort_per_tap_k22_dots_and_col2im_order() {
+        let profile = Profile::Istft22To1 { input_width: 11 };
+        let dimensions = profile.dimensions().unwrap();
+        let mut input = vec![0.0; dimensions.input_elements().unwrap()];
+        let mut weights = vec![
+            0.0;
+            dimensions
+                .weight_elements(OperatorKind::ConvTranspose)
+                .unwrap()
+        ];
+        let input_index = |channel: usize, time: usize| channel * dimensions.input_width + time;
+        let weight_index =
+            |input_channel: usize, kernel: usize| input_channel * dimensions.kernel_width + kernel;
+
+        // Output time fifteen receives tap zero from input time three and tap
+        // five from input time two. ORT completes the +1e8 tap-zero dot first,
+        // then completes the independently zero-seeded (-1e8 + 1) tap-five
+        // dot, which loses +1 before Col2im cancels the two dots to zero. The
+        // old channel/tap-interleaved chain cancels first and retains +1.
+        input[input_index(0, 3)] = 1.0;
+        input[input_index(0, 2)] = 1.0;
+        input[input_index(1, 2)] = 1.0;
+        weights[weight_index(0, 0)] = 100_000_000.0;
+        weights[weight_index(0, 5)] = -100_000_000.0;
+        weights[weight_index(1, 5)] = 1.0;
+
+        let tap_zero = libm::fmaf(1.0, 100_000_000.0, 0.0);
+        let tap_five = libm::fmaf(1.0, 1.0, libm::fmaf(1.0, -100_000_000.0, 0.0));
+        assert_eq!((tap_zero + tap_five).to_bits(), 0.0_f32.to_bits());
+        let interleaved = libm::fmaf(1.0, 1.0, libm::fmaf(1.0, -100_000_000.0, tap_zero));
+        assert_eq!(interleaved.to_bits(), 1.0_f32.to_bits());
+
+        let problem = Problem::new(profile, &input, &weights, None).unwrap();
+        let dispatcher = Dispatcher::detect();
+        let tile = Tile {
+            channel_start: 0,
+            channel_count: 1,
+            time_start: 15,
+            time_count: 40,
+        };
+        let mut scalar = vec![f32::NAN; dimensions.output_elements().unwrap()];
+        dispatcher
+            .convolve_tile_with_lane(problem, &mut scalar, tile, Lane::Scalar)
+            .unwrap();
+        assert_eq!(scalar[15].to_bits(), 0.0_f32.to_bits());
+
+        if dispatcher.supports(Lane::Avx2Fma) {
+            let mut vector = vec![f32::NAN; scalar.len()];
+            dispatcher
+                .convolve_tile_with_lane(problem, &mut vector, tile, Lane::Avx2Fma)
+                .unwrap();
+            assert_eq!(
+                vector[15..55]
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                scalar[15..55]
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn upsample_256_avx_preserves_scalar_contract() {
         let dispatcher = Dispatcher::detect();
         if !dispatcher.supports(Lane::Avx2Fma) {
             return;

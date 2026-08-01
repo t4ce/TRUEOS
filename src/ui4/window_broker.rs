@@ -377,6 +377,7 @@ pub(crate) enum WindowBrokerError {
     InvalidHandle,
     OwnerMismatch,
     SessionClosed,
+    Busy,
     EmptyExtent,
     EmptyDamage,
     InvalidPlane,
@@ -968,6 +969,20 @@ impl WindowBroker {
         snapshots
     }
 
+    fn live_resource_counts(&self) -> (usize, usize) {
+        let active_sessions = self
+            .sessions
+            .iter()
+            .filter(|session| session.active)
+            .count();
+        let live_windows = self
+            .windows
+            .iter()
+            .filter(|window| window.state != WindowState::Closed)
+            .count();
+        (active_sessions, live_windows)
+    }
+
     fn published_snapshot(&self, update_count: u64, published_at_ms: u64) -> WindowBrokerSnapshot {
         let mut stats = WindowBrokerSnapshotStats {
             registry_window_slots: self.windows.len(),
@@ -1109,6 +1124,13 @@ pub(crate) fn latest_window_broker_snapshot() -> WindowBrokerSnapshot {
         .unwrap_or_else(WindowBrokerSnapshot::empty)
 }
 
+/// Return fresh broker ownership counts without waiting for the diagnostic
+/// snapshot publisher. Pending and hidden windows remain live resources; only
+/// generation-safe Closed registry slots are excluded.
+pub(super) fn live_resource_counts() -> (usize, usize) {
+    WINDOW_BROKER.lock().live_resource_counts()
+}
+
 /// Optionally subscribe to future diagnostic publications.
 pub(crate) fn subscribe_window_broker_snapshots() -> Option<WindowBrokerSnapshotReceiver<'static>> {
     WINDOW_BROKER_SNAPSHOT.receiver()
@@ -1140,6 +1162,19 @@ pub(crate) async fn ui4_window_broker_snapshot_service_task() {
 pub(crate) fn begin_window_session(
     owner: WindowOwner,
 ) -> Result<WindowSessionId, WindowBrokerError> {
+    let _admission = super::lock_ui4_resource_creation().map_err(|()| WindowBrokerError::Busy)?;
+    begin_window_session_admitted(owner)
+}
+
+/// Begin a session while the caller owns UI4's exclusive resource admission.
+pub(super) fn begin_window_session_with_exclusive_admission(
+    owner: WindowOwner,
+    _admission: &super::Ui4ExclusiveResourceAdmission,
+) -> Result<WindowSessionId, WindowBrokerError> {
+    begin_window_session_admitted(owner)
+}
+
+fn begin_window_session_admitted(owner: WindowOwner) -> Result<WindowSessionId, WindowBrokerError> {
     let (result, retirements) = WINDOW_BROKER.lock().begin_session(owner);
     complete_transition_retirements(retirements);
     super::cursor_frame_inout::owner_closed(owner);
@@ -1149,6 +1184,7 @@ pub(crate) fn begin_window_session(
 pub(crate) fn begin_additional_window_session(
     owner: WindowOwner,
 ) -> Result<WindowSessionId, WindowBrokerError> {
+    let _admission = super::lock_ui4_resource_creation().map_err(|()| WindowBrokerError::Busy)?;
     WINDOW_BROKER.lock().begin_additional_session(owner)
 }
 
@@ -1879,6 +1915,30 @@ mod tests {
         assert_eq!(WindowOwner::Vm(9).name(), "blueprint-vm");
         assert_ne!(WindowOwner::KernelApp(42), WindowOwner::KernelApp(43));
         assert_ne!(WindowOwner::Vm(9), WindowOwner::Vm(10));
+    }
+
+    #[test]
+    fn live_resource_counts_include_pending_windows_and_active_empty_sessions() {
+        let owner = WindowOwner::GPGPU_PREVIEW;
+        let mut broker = WindowBroker::new();
+        assert_eq!(broker.live_resource_counts(), (0, 0));
+
+        let session = broker.begin_additional_session(owner).unwrap();
+        assert_eq!(broker.live_resource_counts(), (1, 0));
+
+        let window = broker
+            .create(test_window(owner, session, 1, 0, 0, false), FrameBuffering::Single)
+            .unwrap();
+        assert_eq!(broker.live_resource_counts(), (1, 1));
+
+        let (slot, _) = unpack_handle(window.raw()).unwrap();
+        broker.windows[slot].state = WindowState::Closed;
+        assert_eq!(broker.live_resource_counts(), (1, 0));
+
+        broker
+            .finish_session(owner, session, false, false, false, false, false, 0)
+            .unwrap();
+        assert_eq!(broker.live_resource_counts(), (0, 0));
     }
 
     #[test]

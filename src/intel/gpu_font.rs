@@ -3042,6 +3042,57 @@ pub(crate) fn gpu_font_entries_use_analytical_coverage(
         })
 }
 
+/// Exact per-entry work estimate used by callers which assemble one combined
+/// analytical scene. FontKernel can partition origin-positioned scenes after
+/// admission, but visual-bounds-centered grids must keep their complete batch
+/// below this same direct-RCS latency ceiling before submission.
+pub(crate) fn gpu_font_analytical_text_work_estimate(
+    text: &str,
+    font: GpuFontFace,
+    font_pixels: f32,
+    viewport_width: u32,
+    viewport_height: u32,
+    raster_width: u32,
+    raster_height: u32,
+) -> Result<u64, &'static str> {
+    let quality =
+        gpu_font_raster_quality(viewport_width, viewport_height, raster_width, raster_height)
+            .ok_or("font-raster-empty")?;
+    let ppem = analytical_coverage_ppem(font_pixels, quality).ok_or("font-coverage-ineligible")?;
+    ensure_font_face_available(font)?;
+    let outline = crate::graphics::font::gpu_outline_for_text(font.registry_name(), text)?;
+    let entry = GpuFontJobEntry {
+        text: GpuFontTextRequest::SingleLine(text),
+        position: [0.0, 0.0],
+        font_pixels,
+        slant: 0.0,
+    };
+    let (_, bounds, _) = transform_outline_to_raster(
+        outline.ops.as_slice(),
+        outline.units_per_em,
+        entry,
+        quality,
+        ppem,
+        GpuFontJobPositioning::VisualBoundsCenter,
+    )?;
+    let rect = coverage_integer_rect(bounds, small_font_optical_bias_px(ppem))?;
+    let width = u64::try_from(i64::from(rect.2) - i64::from(rect.0))
+        .map_err(|_| "font-coverage-workload")?;
+    let height = u64::try_from(i64::from(rect.3) - i64::from(rect.1))
+        .map_err(|_| "font-coverage-workload")?;
+    let per_pixel = (outline.ops.len() as u64)
+        .checked_mul(u64::from(ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS))
+        .ok_or("font-coverage-workload")?;
+    width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(per_pixel))
+        .ok_or("font-coverage-workload")
+}
+
+pub(crate) const fn gpu_font_analytical_work_limit() -> u64 {
+    ANALYTICAL_COVERAGE_MAX_SEGMENT_EVALUATIONS
+}
+
 fn small_font_optical_bias_px(ppem: f32) -> f32 {
     let low_scale = ((SMALL_FONT_HINT_MAX_RASTER_PX - ppem)
         / (SMALL_FONT_HINT_MAX_RASTER_PX - SMALL_FONT_HINT_MIN_RASTER_PX))

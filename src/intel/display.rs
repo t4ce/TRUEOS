@@ -3464,8 +3464,23 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     for surface in overlay_surfaces.iter().flatten().copied() {
         mark_overlay_surface_front(surface);
     }
+    // Publish the driver-local readiness stores before UI4's hardware-neutral
+    // descriptor. Consumers use that descriptor as the final cross-subsystem
+    // readiness signal, so observing it must imply the display stack is ready.
     UI4_RGBA8_PLANE_STACK_PIPE_SLOT.store(pipe.slot as u32, Ordering::Release);
     UI4_RGBA8_PLANE_STACK_STATE.store(UI4_RGBA8_PLANE_STACK_READY, Ordering::Release);
+    let output = crate::ui4::OutputId::from_slot(0).expect("static UI4 D01 output");
+    let application_plane_mask = (1u8 << crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT) - 1;
+    if let Err(reason) =
+        crate::ui4::publish_ui4_output_capabilities(crate::ui4::Ui4OutputCapabilities {
+            output,
+            width: primary.width,
+            height: primary.height,
+            application_plane_mask,
+        })
+    {
+        return fail(reason);
+    }
     crate::log!(
         "intel/display: ui4-rgba8-plane-stack bootstrap ok=1 pipe={} slots=0-3-composition+4-interaction size={}x{} slot0=xrgb8-opaque slots1-4=premultiplied-rgba8-linear contracts=once bootstrap_surf_writes=one-per-slot runtime=surf-flips-only dbuf_blocks={}/{}/{}/{}/{} commit_frame={}=>{} commit_wait={} live_iters={} live_mask=0x{:X}\n",
         pipe.name,

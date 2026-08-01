@@ -400,6 +400,9 @@ struct BlueprintRetainedTextDescription {
 enum BlueprintRetainedTextState {
     Pending(PendingRetainScene),
     Ready(FontKernelRetainedScene),
+    /// The face was available, but none of the row's scalars had an outline.
+    /// Keep the logical layer so later rows retain stable cursor indexes.
+    NoCoverage,
 }
 
 struct BlueprintStampedTextLayer {
@@ -2831,14 +2834,15 @@ fn retain_scene_entries_for_surface(
     let layer = &mut surface.retained_text_layers[layer_index];
     let completion = match &mut layer.state {
         BlueprintRetainedTextState::Pending(pending) => pending.try_take(),
-        BlueprintRetainedTextState::Ready(_) => None,
+        BlueprintRetainedTextState::Ready(_) | BlueprintRetainedTextState::NoCoverage => None,
     };
     if let Some(completion) = completion {
         match completion {
             Ok(scene) => {
                 let ticket = match &layer.state {
                     BlueprintRetainedTextState::Pending(pending) => pending.ticket().raw(),
-                    BlueprintRetainedTextState::Ready(_) => 0,
+                    BlueprintRetainedTextState::Ready(_)
+                    | BlueprintRetainedTextState::NoCoverage => 0,
                 };
                 let mask_count = scene.mask_count();
                 layer.state = BlueprintRetainedTextState::Ready(scene);
@@ -2852,6 +2856,26 @@ fn retain_scene_entries_for_surface(
                     font.registry_name(),
                     layer.description.runs.len(),
                     mask_count,
+                    viewport_width,
+                    viewport_height,
+                );
+            }
+            Err(error) if retained_text_error_is_no_coverage(error) => {
+                let ticket = match &layer.state {
+                    BlueprintRetainedTextState::Pending(pending) => pending.ticket().raw(),
+                    BlueprintRetainedTextState::Ready(_)
+                    | BlueprintRetainedTextState::NoCoverage => 0,
+                };
+                layer.state = BlueprintRetainedTextState::NoCoverage;
+                crate::log_info!(
+                    target: "ui4/solara-text";
+                    "FontKernel retained no-coverage owner={:?} window={} layer={} ticket={} font={} runs={} target={}x{} action=transparent-noop\n",
+                    owner,
+                    window_id,
+                    layer_index,
+                    ticket,
+                    font.registry_name(),
+                    layer.description.runs.len(),
                     viewport_width,
                     viewport_height,
                 );
@@ -2904,6 +2928,20 @@ fn log_font_kernel_error(
     );
 }
 
+fn retained_text_error_is_no_coverage(error: FontKernelError) -> bool {
+    matches!(error, FontKernelError::Unavailable("font-coverage-empty"))
+}
+
+fn retained_text_scene(
+    state: &BlueprintRetainedTextState,
+) -> Result<Option<&FontKernelRetainedScene>, i32> {
+    match state {
+        BlueprintRetainedTextState::Pending(_) => Err(ERROR_BUSY),
+        BlueprintRetainedTextState::Ready(scene) => Ok(Some(scene)),
+        BlueprintRetainedTextState::NoCoverage => Ok(None),
+    }
+}
+
 fn render_retained_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
@@ -2931,11 +2969,15 @@ fn render_retained_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
         .iter()
         .take(surface.retained_text_cursor)
     {
-        let BlueprintRetainedTextState::Ready(scene) = &layer.state else {
-            if mark_frame_buffer_cpu_authored(lease).is_err() {
-                return ERROR_UI4;
+        let scene = match retained_text_scene(&layer.state) {
+            Ok(Some(scene)) => scene,
+            Ok(None) => continue,
+            Err(error) => {
+                if mark_frame_buffer_cpu_authored(lease).is_err() {
+                    return ERROR_UI4;
+                }
+                return error;
             }
-            return ERROR_BUSY;
         };
         for retained_mask in scene.masks() {
             let Some((mask, origin)) = retained_mask else {
@@ -2953,12 +2995,6 @@ fn render_retained_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
                 ),
                 color_rgba: layer.color_rgba,
             });
-        }
-        if scene.mask_count() == 0 {
-            if mark_frame_buffer_cpu_authored(lease).is_err() {
-                return ERROR_UI4;
-            }
-            return ERROR_FONT;
         }
     }
 
@@ -3060,8 +3096,10 @@ fn render_retained_text_backbuffer_for_surface(owner: WindowOwner, window_id: u3
         .iter()
         .take(surface.retained_text_cursor)
     {
-        let BlueprintRetainedTextState::Ready(scene) = &layer.state else {
-            return ERROR_BUSY;
+        let scene = match retained_text_scene(&layer.state) {
+            Ok(Some(scene)) => scene,
+            Ok(None) => continue,
+            Err(error) => return error,
         };
         for retained_mask in scene.masks() {
             let Some((mask, origin)) = retained_mask else {
@@ -3075,10 +3113,6 @@ fn render_retained_text_backbuffer_for_surface(owner: WindowOwner, window_id: u3
             });
         }
     }
-    if masks.is_empty() {
-        return ERROR_FONT;
-    }
-
     let Some(clear_rgba) = surface.sprite_clear_rgba else {
         return ERROR_STATE;
     };
@@ -5049,6 +5083,21 @@ fn surface_mut(
         .find(|surface| surface.owner == owner && surface.window.raw() == window_id)
 }
 
+fn blueprint_surface_close_request(
+    release: BlueprintSurfaceRelease,
+) -> WindowSessionCloseRequest<'static> {
+    match release {
+        BlueprintSurfaceRelease::Animated => {
+            WindowSessionCloseRequest::default().direct_plane_animate_and_retire_frames()
+        }
+        BlueprintSurfaceRelease::AnimatedAndPersistFinalFrame => {
+            WindowSessionCloseRequest::default()
+                .persist_final_frame()
+                .direct_plane_animate_and_retire_frames()
+        }
+    }
+}
+
 fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurfaceRelease) {
     if surface.gpu_submission_unretired {
         let _ = finish_window_session(surface.owner, surface.session);
@@ -5061,16 +5110,7 @@ fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurface
         QUARANTINED_SURFACES.lock().push(surface);
         return;
     }
-    let request = match release {
-        BlueprintSurfaceRelease::Animated => {
-            WindowSessionCloseRequest::default().animate_and_retire_frames()
-        }
-        BlueprintSurfaceRelease::AnimatedAndPersistFinalFrame => {
-            WindowSessionCloseRequest::default()
-                .persist_final_frame()
-                .animate_and_retire_frames()
-        }
-    };
+    let request = blueprint_surface_close_request(release);
     let pending_immutable_frame = surface
         .write_lease
         .filter(|lease| lease.frame != surface.frame)
@@ -5255,6 +5295,41 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn retained_text_treats_only_empty_coverage_as_a_transparent_noop() {
+        assert!(retained_text_error_is_no_coverage(FontKernelError::Unavailable(
+            "font-coverage-empty"
+        )));
+        assert!(!retained_text_error_is_no_coverage(FontKernelError::Unavailable(
+            "font-coverage-workload"
+        )));
+        assert!(!retained_text_error_is_no_coverage(FontKernelError::SubmittedIncomplete(
+            "font-coverage-submit-incomplete"
+        )));
+
+        let layer = BlueprintRetainedTextLayer {
+            description: retained_description(40.0),
+            color_rgba: u32::MAX,
+            translation_px: [12, 18],
+            state: BlueprintRetainedTextState::NoCoverage,
+        };
+        assert!(matches!(retained_text_scene(&layer.state), Ok(None)));
+    }
+
+    #[test]
+    fn blueprint_surface_close_uses_direct_plane_scaling_and_preserves_capture() {
+        assert_eq!(
+            blueprint_surface_close_request(BlueprintSurfaceRelease::Animated),
+            WindowSessionCloseRequest::default().direct_plane_animate_and_retire_frames(),
+        );
+        assert_eq!(
+            blueprint_surface_close_request(BlueprintSurfaceRelease::AnimatedAndPersistFinalFrame,),
+            WindowSessionCloseRequest::default()
+                .persist_final_frame()
+                .direct_plane_animate_and_retire_frames(),
+        );
     }
 
     #[test]

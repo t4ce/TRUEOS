@@ -214,6 +214,10 @@ impl FramePool {
         Self { frames: Vec::new() }
     }
 
+    fn active_count(&self) -> usize {
+        self.frames.iter().filter(|frame| frame.active).count()
+    }
+
     fn checked(&self, handle: FrameHandle) -> Result<&FrameRecord, FramePoolError> {
         let (slot, generation) = unpack_handle(handle)?;
         let frame = self.frames.get(slot).ok_or(FramePoolError::InvalidHandle)?;
@@ -238,7 +242,28 @@ impl FramePool {
 
 static FRAME_POOL: Mutex<FramePool> = Mutex::new(FramePool::new());
 
+/// Count producer-owned frame allocations which have not completed teardown.
+/// Inactive registry slots are retained for generation-safe handle reuse and
+/// therefore do not contribute to this live count.
+pub(super) fn active_frame_count() -> usize {
+    FRAME_POOL.lock().active_count()
+}
+
 pub(crate) fn create_frame(spec: FrameSpec) -> Result<FrameHandle, FramePoolError> {
+    let _admission = super::lock_ui4_resource_creation().map_err(|()| FramePoolError::Busy)?;
+    create_frame_admitted(spec)
+}
+
+/// Create a frame while the caller owns UI4's exclusive resource admission.
+/// The borrow keeps that reservation alive for the complete allocation.
+pub(super) fn create_frame_with_exclusive_admission(
+    spec: FrameSpec,
+    _admission: &super::Ui4ExclusiveResourceAdmission,
+) -> Result<FrameHandle, FramePoolError> {
+    create_frame_admitted(spec)
+}
+
+fn create_frame_admitted(spec: FrameSpec) -> Result<FrameHandle, FramePoolError> {
     let plan = FramePlan::from_spec(spec).map_err(FramePoolError::InvalidPlan)?;
     let format = surface_format(plan.format).ok_or(FramePoolError::UnsupportedFormat)?;
     let count = plan.buffering.count();
@@ -327,7 +352,20 @@ fn release_resident_scene_direct_imports(frame: &FrameRecord) -> bool {
 
 #[cfg(test)]
 mod resident_scene_frame_destroy_tests {
-    use super::{AcquiredBuffer, FRAME_BUFFER_CAPACITY, buffer_owners_live};
+    use super::{
+        AcquiredBuffer, FRAME_BUFFER_CAPACITY, FramePool, FrameRecord, buffer_owners_live,
+    };
+
+    #[test]
+    fn active_count_ignores_inactive_generation_slots() {
+        let mut pool = FramePool::new();
+        pool.frames.push(FrameRecord::inactive(3));
+        pool.frames.push(FrameRecord::inactive(7));
+        assert_eq!(pool.active_count(), 0);
+
+        pool.frames[1].active = true;
+        assert_eq!(pool.active_count(), 1);
+    }
 
     #[test]
     fn render_alias_release_requires_every_owner_to_be_gone() {

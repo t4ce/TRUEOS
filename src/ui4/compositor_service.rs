@@ -837,7 +837,13 @@ fn queue_async_plane(
     } else {
         None
     };
-    if let Some((window, view)) = local_direct {
+    // Slot 0 owns the display's primary swap chain and cannot use the
+    // universal-overlay direct-import contract. Primary broker windows always
+    // pass through the primary compositor below; slots 1-3 retain the proven
+    // direct path for one eligible producer.
+    if !matches!(plan.target, CompositionTarget::Primary)
+        && let Some((window, view)) = local_direct
+    {
         let slot = target_plane_slot(plan.target);
         if direct_overlay_eligible(window, view) {
             if let Some(release) = view.gpu_release {
@@ -956,45 +962,51 @@ fn queue_async_plane(
         .collect();
     let slot = target_plane_slot(plan.target);
     let reason = overlay_async_reason(slot);
-    let queued = if sparse_static_painter && STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED {
-        let bcs = crate::intel::queue_ui4_static_overlay_composition_bcs0(
-            slot,
-            &tiles,
-            plan.damage,
-            reason,
-        );
-        match bcs {
-            Ok(composition) => {
-                if !STATIC_SINGLE_BCS0_BASELINE_LOGGED.swap(true, Ordering::AcqRel) {
-                    crate::log_info!(target: "ui4";
-                        "ui4/static-painter: backend=guc-bcs0-fast-copy buffering=single plane_isolation=slot-local batch=one-per-changed-plane completion=mi-flush-dw-post-sync flip=after-retire cpu_pixel_copy=0 shader_dispatches=0 clear=fresh-transparent-only log=once\n"
-                    );
-                }
-                Ok(composition)
-            }
-            Err(crate::intel::Ui4AsyncCompositionError::Unavailable) => {
-                if !STATIC_SINGLE_CPU_BASELINE_LOGGED.swap(true, Ordering::AcqRel) {
-                    crate::log_warn!(target: "ui4";
-                        "ui4/static-painter-fallback: backend=cpu-sparse-copy reason=non-pristine-or-bcs-unavailable buffering=single plane_isolation=slot-local guc_jobs=0 shader_dispatches=0 damage=old+new-placement flip=ui4-batched log=once\n"
-                    );
-                }
-                crate::intel::queue_ui4_static_overlay_composition_cpu(
-                    slot,
-                    &tiles,
-                    plan.damage,
-                    reason,
-                )
-            }
-            Err(error) => Err(error),
+    let queued = match plan.target {
+        CompositionTarget::Primary => {
+            crate::intel::queue_ui4_primary_composition(&tiles, plan.damage, reason)
         }
-    } else {
-        crate::intel::queue_ui4_overlay_composition(
+        CompositionTarget::Overlay(_)
+            if sparse_static_painter && STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED =>
+        {
+            let bcs = crate::intel::queue_ui4_static_overlay_composition_bcs0(
+                slot,
+                &tiles,
+                plan.damage,
+                reason,
+            );
+            match bcs {
+                Ok(composition) => {
+                    if !STATIC_SINGLE_BCS0_BASELINE_LOGGED.swap(true, Ordering::AcqRel) {
+                        crate::log_info!(target: "ui4";
+                            "ui4/static-painter: backend=guc-bcs0-fast-copy buffering=single plane_isolation=slot-local batch=one-per-changed-plane completion=mi-flush-dw-post-sync flip=after-retire cpu_pixel_copy=0 shader_dispatches=0 clear=fresh-transparent-only log=once\n"
+                        );
+                    }
+                    Ok(composition)
+                }
+                Err(crate::intel::Ui4AsyncCompositionError::Unavailable) => {
+                    if !STATIC_SINGLE_CPU_BASELINE_LOGGED.swap(true, Ordering::AcqRel) {
+                        crate::log_warn!(target: "ui4";
+                            "ui4/static-painter-fallback: backend=cpu-sparse-copy reason=non-pristine-or-bcs-unavailable buffering=single plane_isolation=slot-local guc_jobs=0 shader_dispatches=0 damage=old+new-placement flip=ui4-batched log=once\n"
+                        );
+                    }
+                    crate::intel::queue_ui4_static_overlay_composition_cpu(
+                        slot,
+                        &tiles,
+                        plan.damage,
+                        reason,
+                    )
+                }
+                Err(error) => Err(error),
+            }
+        }
+        CompositionTarget::Overlay(_) => crate::intel::queue_ui4_overlay_composition(
             slot,
             &tiles,
             plan.damage,
             sparse_static_painter,
             reason,
-        )
+        ),
     };
     queued.map_err(|_| Ui4CompositorError::PresentFailed)
 }
@@ -1122,7 +1134,7 @@ const fn half_scale_backing_matches(
 
 const fn overlay_async_reason(slot: usize) -> &'static str {
     match slot {
-        super::PRIMARY_PLANE_SLOT => "ui4-rgba-slot0-direct",
+        super::PRIMARY_PLANE_SLOT => "ui4-primary-slot0-async",
         super::ALPHA_OVERLAY_PLANE_SLOT => "ui4-alpha-slot1-async",
         super::RGB_OVERLAY_PLANE_SLOT_2 => "ui4-rgb-slot2-async",
         super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-rgb-slot3-async",

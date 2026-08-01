@@ -85,9 +85,9 @@ pub(crate) use frame_pool::{
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_DURATION_MS,
     GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewConfig, GpgpuPreviewPreset,
-    gpgpu_preview_consumer_service_task, gpgpu_preview_status, request_cpp_font_go_start,
-    request_cpp_font_preview_start, request_gpgpu_lab256_startup, request_gpgpu_preview_start,
-    request_gpgpu_preview_stop,
+    gpgpu_preview_consumer_service_task, gpgpu_preview_status, request_cpp_font_preview_start,
+    request_cpp_font_rush_start, request_cpp_font_rush_stop, request_gpgpu_lab256_startup,
+    request_gpgpu_preview_start, request_gpgpu_preview_stop,
 };
 pub(crate) use gpgpu_svg_probe_consumer::{
     GpgpuSvgProbeConfig, gpgpu_svg_probe_consumer_service_task, gpgpu_svg_probe_status,
@@ -133,6 +133,123 @@ pub(crate) struct OwnerReleaseSummary {
     pub(crate) input_routes: usize,
     pub(crate) input_events: usize,
     pub(crate) context_menus: usize,
+}
+
+/// One fresh, producer-resource view of UI4.
+///
+/// The compositor service and its transparent parking surfaces are permanent
+/// infrastructure and are intentionally not counted. A frame remains active
+/// until its frame-pool allocation is destroyed, even after its broker window
+/// has closed, so callers can distinguish a visually empty broker from a fully
+/// retired UI4 producer set.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Ui4LiveResourceUsage {
+    pub(crate) active_frames: usize,
+    pub(crate) active_sessions: usize,
+    pub(crate) live_windows: usize,
+}
+
+impl Ui4LiveResourceUsage {
+    pub(crate) const fn is_idle(self) -> bool {
+        self.active_frames == 0 && self.active_sessions == 0 && self.live_windows == 0
+    }
+}
+
+struct Ui4ResourceAdmissionState {
+    active_exclusive_token: u64,
+    next_token: u64,
+}
+
+impl Ui4ResourceAdmissionState {
+    const fn new() -> Self {
+        Self {
+            active_exclusive_token: 0,
+            next_token: 0,
+        }
+    }
+}
+
+static UI4_RESOURCE_ADMISSION: spin::Mutex<Ui4ResourceAdmissionState> =
+    spin::Mutex::new(Ui4ResourceAdmissionState::new());
+
+/// A non-forgeable reservation which blocks new UI4 frame and session
+/// creation. Existing resources may continue retiring while the reservation is
+/// held. Font Rush keeps this alive for its whole run so no later producer can
+/// take one of its display planes.
+pub(crate) struct Ui4ExclusiveResourceAdmission {
+    token: u64,
+}
+
+impl Drop for Ui4ExclusiveResourceAdmission {
+    fn drop(&mut self) {
+        let mut admission = UI4_RESOURCE_ADMISSION.lock();
+        if admission.active_exclusive_token == self.token {
+            admission.active_exclusive_token = 0;
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Ui4ExclusiveAdmissionFailure {
+    pub(crate) reason: &'static str,
+    pub(crate) usage: Ui4LiveResourceUsage,
+}
+
+/// Serialize an ordinary resource creation against exclusive admission.
+/// Holding the returned guard through allocation closes the otherwise-open
+/// window between an idle snapshot and a newly registered frame/session.
+fn lock_ui4_resource_creation() -> Result<spin::MutexGuard<'static, Ui4ResourceAdmissionState>, ()>
+{
+    let admission = UI4_RESOURCE_ADMISSION.lock();
+    if admission.active_exclusive_token != 0 {
+        Err(())
+    } else {
+        Ok(admission)
+    }
+}
+
+/// Atomically reserve an idle UI4 producer set.
+///
+/// Ordinary frame and session creation take the same admission lock before
+/// they allocate or register anything. Once this returns, no competing
+/// producer can become live until the reservation is dropped.
+fn try_acquire_ui4_exclusive_resource_admission()
+-> Result<Ui4ExclusiveResourceAdmission, Ui4ExclusiveAdmissionFailure> {
+    let mut admission = UI4_RESOURCE_ADMISSION.lock();
+    if admission.active_exclusive_token != 0 {
+        return Err(Ui4ExclusiveAdmissionFailure {
+            reason: "ui4-exclusive-admission-busy",
+            usage: ui4_live_resource_usage(),
+        });
+    }
+    let usage = ui4_live_resource_usage();
+    if !usage.is_idle() {
+        return Err(Ui4ExclusiveAdmissionFailure {
+            reason: "ui4-not-idle",
+            usage,
+        });
+    }
+    let mut token = admission.next_token.wrapping_add(1);
+    if token == 0 {
+        token = 1;
+    }
+    admission.next_token = token;
+    admission.active_exclusive_token = token;
+    Ok(Ui4ExclusiveResourceAdmission { token })
+}
+
+/// Read live ownership state rather than the low-frequency diagnostic watch.
+///
+/// This is an observation, not a reservation: a producer can begin a session
+/// after the function returns. Admission paths which require strict
+/// exclusivity must use `try_acquire_ui4_exclusive_resource_admission`.
+pub(crate) fn ui4_live_resource_usage() -> Ui4LiveResourceUsage {
+    let (active_sessions, live_windows) = window_broker::live_resource_counts();
+    Ui4LiveResourceUsage {
+        active_frames: frame_pool::active_frame_count(),
+        active_sessions,
+        live_windows,
+    }
 }
 
 /// Release all UI4 resources belonging to an application owner.
@@ -202,6 +319,72 @@ impl OutputId {
             _ => "D-invalid",
         }
     }
+}
+
+/// Hardware-neutral capabilities published by the display owner for one UI4
+/// logical output.
+///
+/// `application_plane_mask` uses UI4's stable pipe-local plane slot numbers.
+/// Reserved interaction/cursor carriers are deliberately absent, even when the
+/// physical display engine exposes them.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Ui4OutputCapabilities {
+    pub(crate) output: OutputId,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) application_plane_mask: u8,
+}
+
+impl Ui4OutputCapabilities {
+    pub(crate) const fn application_plane_count(self) -> usize {
+        self.application_plane_mask.count_ones() as usize
+    }
+
+    pub(crate) const fn supports_application_plane(self, slot: usize) -> bool {
+        slot < u8::BITS as usize && self.application_plane_mask & (1u8 << slot) != 0
+    }
+}
+
+const UI4_APPLICATION_PLANE_MASK: u8 = (1u8 << INTERACTION_OVERLAY_PLANE_SLOT) - 1;
+static UI4_OUTPUT_CAPABILITIES: spin::Mutex<[Option<Ui4OutputCapabilities>; OUTPUT_COUNT]> =
+    spin::Mutex::new([None; OUTPUT_COUNT]);
+
+/// Publish one immutable display-owner capability descriptor into UI4.
+///
+/// The display driver calls this only after it has proved the complete plane
+/// stack live. Repeating the same proof is idempotent; a conflicting descriptor
+/// fails closed instead of silently changing the meaning of live plane slots.
+pub(crate) fn publish_ui4_output_capabilities(
+    capabilities: Ui4OutputCapabilities,
+) -> Result<(), &'static str> {
+    publish_output_capabilities_into(&mut UI4_OUTPUT_CAPABILITIES.lock(), capabilities)
+}
+
+fn publish_output_capabilities_into(
+    outputs: &mut [Option<Ui4OutputCapabilities>; OUTPUT_COUNT],
+    capabilities: Ui4OutputCapabilities,
+) -> Result<(), &'static str> {
+    if capabilities.width == 0 || capabilities.height == 0 {
+        return Err("ui4-output-capabilities-empty-extent");
+    }
+    if capabilities.application_plane_mask == 0
+        || capabilities.application_plane_mask & !UI4_APPLICATION_PLANE_MASK != 0
+    {
+        return Err("ui4-output-capabilities-invalid-application-plane-mask");
+    }
+    let slot = capabilities.output.slot();
+    match outputs[slot] {
+        None => {
+            outputs[slot] = Some(capabilities);
+            Ok(())
+        }
+        Some(current) if current == capabilities => Ok(()),
+        Some(_) => Err("ui4-output-capabilities-conflict"),
+    }
+}
+
+pub(crate) fn ui4_output_capabilities(output: OutputId) -> Option<Ui4OutputCapabilities> {
+    UI4_OUTPUT_CAPABILITIES.lock()[output.slot()]
 }
 
 /// The producer which will write a frame. This does not imply update cadence.
@@ -589,3 +772,94 @@ const _: () = {
     };
     assert!(!frame_plan_shares_compositor_plane(isolated_image));
 };
+
+#[cfg(test)]
+mod live_resource_and_output_capability_tests {
+    use super::*;
+
+    #[test]
+    fn live_resource_usage_is_idle_only_when_every_producer_count_is_zero() {
+        assert!(Ui4LiveResourceUsage::default().is_idle());
+        for usage in [
+            Ui4LiveResourceUsage {
+                active_frames: 1,
+                ..Ui4LiveResourceUsage::default()
+            },
+            Ui4LiveResourceUsage {
+                active_sessions: 1,
+                ..Ui4LiveResourceUsage::default()
+            },
+            Ui4LiveResourceUsage {
+                live_windows: 1,
+                ..Ui4LiveResourceUsage::default()
+            },
+        ] {
+            assert!(!usage.is_idle());
+        }
+    }
+
+    #[test]
+    fn output_capabilities_count_and_test_sparse_application_planes() {
+        let capabilities = Ui4OutputCapabilities {
+            output: OutputId::from_slot(0).unwrap(),
+            width: 2_560,
+            height: 1_440,
+            application_plane_mask: 0b1011,
+        };
+        assert_eq!(capabilities.application_plane_count(), 3);
+        assert!(capabilities.supports_application_plane(0));
+        assert!(capabilities.supports_application_plane(1));
+        assert!(!capabilities.supports_application_plane(2));
+        assert!(capabilities.supports_application_plane(3));
+        assert!(!capabilities.supports_application_plane(4));
+        assert!(!capabilities.supports_application_plane(usize::MAX));
+    }
+
+    #[test]
+    fn capability_publication_is_idempotent_and_rejects_invalid_or_conflicting_state() {
+        let output = OutputId::from_slot(0).unwrap();
+        let capabilities = Ui4OutputCapabilities {
+            output,
+            width: 2_560,
+            height: 1_440,
+            application_plane_mask: UI4_APPLICATION_PLANE_MASK,
+        };
+        let mut outputs = [None; OUTPUT_COUNT];
+
+        assert_eq!(publish_output_capabilities_into(&mut outputs, capabilities), Ok(()));
+        assert_eq!(outputs[0], Some(capabilities));
+        assert_eq!(publish_output_capabilities_into(&mut outputs, capabilities), Ok(()));
+        assert_eq!(
+            publish_output_capabilities_into(
+                &mut outputs,
+                Ui4OutputCapabilities {
+                    width: 1_920,
+                    ..capabilities
+                },
+            ),
+            Err("ui4-output-capabilities-conflict")
+        );
+
+        let mut empty = [None; OUTPUT_COUNT];
+        assert_eq!(
+            publish_output_capabilities_into(
+                &mut empty,
+                Ui4OutputCapabilities {
+                    width: 0,
+                    ..capabilities
+                },
+            ),
+            Err("ui4-output-capabilities-empty-extent")
+        );
+        assert_eq!(
+            publish_output_capabilities_into(
+                &mut empty,
+                Ui4OutputCapabilities {
+                    application_plane_mask: 1 << INTERACTION_OVERLAY_PLANE_SLOT,
+                    ..capabilities
+                },
+            ),
+            Err("ui4-output-capabilities-invalid-application-plane-mask")
+        );
+    }
+}
