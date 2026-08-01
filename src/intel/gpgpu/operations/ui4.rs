@@ -1004,25 +1004,28 @@ pub(crate) fn poll_ui4_compositor_submission(
         .copied()
         .expect("position zero requires a front submission");
     let Some(shared_state) = *UI4_COMPOSITOR_RCS_STATE.lock() else {
-        let _ = runtime.pending.pop_front();
-        let completion = Ui4CompositorCompletion::Failed;
-        remember_ui4_compositor_completion(&mut runtime, submission, completion);
         drop(runtime);
-        let _ = crate::gpu::executor::complete_kernel_submission(submission.gpu, false);
-        return completion;
+        quarantine_ui4_compositor_rcs_context("pending-submission-state-missing");
+        return Ui4CompositorCompletion::Pending;
     };
     let Some(state) = direct_rcs_job_slot(shared_state, pending.job_slot) else {
-        let _ = runtime.pending.pop_front();
-        let completion = Ui4CompositorCompletion::Failed;
-        remember_ui4_compositor_completion(&mut runtime, submission, completion);
         drop(runtime);
-        let _ = crate::gpu::executor::complete_kernel_submission(submission.gpu, false);
-        return completion;
+        quarantine_ui4_compositor_rcs_context("pending-submission-job-slot-invalid");
+        return Ui4CompositorCompletion::Pending;
     };
     pending.stats.probe.completion_polls = pending.stats.probe.completion_polls.saturating_add(1);
     observe_ui4_pending_h2g_consumption(&mut pending);
     let observed = direct_rcs_read_result_slot(state, pending.marker_slot);
-    if observed == pending.marker_value {
+    // UI4 can queue several persistent-ring entries. Requiring the saved HEAD
+    // to equal the latest published tail is conservative for the front entry,
+    // and proves every accepted predecessor/follower has passed BBE and the
+    // context save boundary before any job slot or PPGTT mapping is reusable.
+    let proof = DirectRcsRetirementProof {
+        marker_observed: observed == pending.marker_value,
+        saved_head_bytes: direct_rcs_read_lrc_ring_head(state) & (DIRECT_RCS_RING_BYTES as u32 - 1),
+        published_tail_bytes: runtime.submit.ring_tail_bytes,
+    };
+    if proof.complete() {
         let host_observe = super::claimed_device()
             .map(direct_rcs_read_render_timestamp)
             .unwrap_or(0);
@@ -1132,11 +1135,13 @@ pub(crate) fn poll_ui4_compositor_submission(
         drop(runtime);
         let _ = crate::gpu::executor::complete_kernel_submission(submission.gpu, true);
         crate::log_trace!(target: "ui4";
-            "ui4/guc-compositor: complete serial={} job_slot={} admission_queue_depth={} remaining_queue_depth={} kernel={} descs={} walkers={} elapsed_ms={} gpu_phase_us=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_phase_ticks=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_timestamps=host_pre_submit:{},h2g_consumed_observe:{},batch_enter:{},pre_walker:{},post_walker:{},post_release:{},host_observe:{} guc_h2g_publish_sequence={} gpu_timestamp_hz={} gpu_walker_valid={} gpu_phase_valid={} gpu_h2g_split_valid={} h2g_split_bounds=consume-upper+dispatch-lower poll=ordered-ring\n",
+            "ui4/guc-compositor: complete serial={} job_slot={} admission_queue_depth={} remaining_queue_depth={} saved_head={} published_tail={} retirement=marker-plus-context-save kernel={} descs={} walkers={} elapsed_ms={} gpu_phase_us=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_phase_ticks=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_timestamps=host_pre_submit:{},h2g_consumed_observe:{},batch_enter:{},pre_walker:{},post_walker:{},post_release:{},host_observe:{} guc_h2g_publish_sequence={} gpu_timestamp_hz={} gpu_walker_valid={} gpu_phase_valid={} gpu_h2g_split_valid={} h2g_split_bounds=consume-upper+dispatch-lower poll=ordered-ring\n",
             pending.submission.serial,
             pending.job_slot,
             pending.queue_depth_at_admission,
             remaining_depth,
+            proof.saved_head_bytes,
+            proof.published_tail_bytes,
             pending.kernel,
             pending.stats.descs,
             pending.stats.walkers,
@@ -1185,11 +1190,20 @@ pub(crate) fn poll_ui4_compositor_submission(
                 *front = pending;
             }
             drop(runtime);
+            let reason = if proof.marker_observed {
+                "completion-marker-observed-context-save-timeout"
+            } else {
+                "completion-marker-timeout"
+            };
+            quarantine_ui4_compositor_rcs_context(reason);
             crate::log_error!(target: "ui4";
-                "ui4/guc-compositor: completion overdue serial={} observed=0x{:08X} want=0x{:08X} threshold_ms={} action=keep-pending-no-reuse cancellation=unavailable log=once\n",
+                "ui4/guc-compositor: completion overdue serial={} observed=0x{:08X} want=0x{:08X} marker_observed={} saved_head={} published_tail={} threshold_ms={} action=quarantine-keep-pending-no-reuse cancellation=unavailable log=once\n",
                 pending.submission.serial,
                 observed,
                 pending.marker_value,
+                proof.marker_observed as u8,
+                proof.saved_head_bytes,
+                proof.published_tail_bytes,
                 FAILURE_TIMEOUT_MS,
             );
         }

@@ -483,11 +483,8 @@ pub(crate) fn upload_kokoro_qgemm_u8_i8_kernel() -> Option<UploadedKernelArtifac
         return None;
     };
 
-    let upload = upload_artifact(
-        dev,
-        KOKORO_QGEMM_U8_I8_ADLS_ARTIFACT,
-        KOKORO_QGEMM_U8_I8_ADLS_GPU,
-    )?;
+    let upload =
+        upload_artifact(dev, KOKORO_QGEMM_U8_I8_ADLS_ARTIFACT, KOKORO_QGEMM_U8_I8_ADLS_GPU)?;
     *KOKORO_QGEMM_U8_I8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
@@ -505,11 +502,8 @@ pub(crate) fn upload_kokoro_conv1d_u8_u8_kernel() -> Option<UploadedKernelArtifa
         return None;
     };
 
-    let upload = upload_artifact(
-        dev,
-        KOKORO_CONV1D_U8_U8_ADLS_ARTIFACT,
-        KOKORO_CONV1D_U8_U8_ADLS_GPU,
-    )?;
+    let upload =
+        upload_artifact(dev, KOKORO_CONV1D_U8_U8_ADLS_ARTIFACT, KOKORO_CONV1D_U8_U8_ADLS_GPU)?;
     *KOKORO_CONV1D_U8_U8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
@@ -551,7 +545,7 @@ pub(crate) fn upload_helio_retained_transform_kernel() -> Option<UploadedKernelA
         return Some(upload);
     }
     let dev = super::claimed_device()?;
-    let upload = upload_artifact(
+    let upload = upload_ppgtt_resident_artifact(
         dev,
         HELIO_RETAINED_TRANSFORM_ADLS_ARTIFACT,
         HELIO_RETAINED_TRANSFORM_ADLS_GPU,
@@ -678,9 +672,19 @@ pub(crate) fn reload_known_kernel_artifact(
     };
 
     let reusable_upload = *slot.upload.lock();
-    let Some(upload) =
-        upload_artifact_from_sources(dev, slot.artifact, slot.gpu, true, reusable_upload)
-    else {
+    let address_space = if slot.artifact.name == HELIO_RETAINED_TRANSFORM_KERNEL_NAME {
+        GpgpuArtifactAddressSpace::CallerPpgtt
+    } else {
+        GpgpuArtifactAddressSpace::GlobalGgtt
+    };
+    let Some(upload) = upload_artifact_from_sources(
+        dev,
+        slot.artifact,
+        slot.gpu,
+        address_space,
+        true,
+        reusable_upload,
+    ) else {
         crate::log_info!(
             target: "gpgpu";
             "intel/gpgpu: {} reload failed reason=upload-failed previous=kept\n",

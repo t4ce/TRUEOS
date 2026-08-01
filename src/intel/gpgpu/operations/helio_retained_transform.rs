@@ -77,6 +77,9 @@ pub(crate) struct GpgpuHelioRetainedTransformArtifactMapping {
 pub(crate) fn prepare_helio_retained_transform_artifact()
 -> Option<GpgpuHelioRetainedTransformArtifactMapping> {
     let upload = upload_helio_retained_transform_kernel()?;
+    if upload.address_space != GpgpuArtifactAddressSpace::CallerPpgtt {
+        return None;
+    }
     Some(GpgpuHelioRetainedTransformArtifactMapping {
         gpu: upload.gpu,
         phys: upload.phys,

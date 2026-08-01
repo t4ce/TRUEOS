@@ -62,10 +62,31 @@ pub(crate) struct UploadedKernelArtifact {
     pub(crate) device_id: u16,
     pub(crate) revision_id: u8,
     pub(crate) abi_schema_version: Option<u16>,
+    pub(crate) address_space: GpgpuArtifactAddressSpace,
 }
 
 unsafe impl Send for UploadedKernelArtifact {}
 unsafe impl Sync for UploadedKernelArtifact {}
+
+/// Address-space ownership established by the artifact upload.
+///
+/// `CallerPpgtt` deliberately means the upload owns authenticated, flushed
+/// DMA pages but has not installed a global GGTT alias. The consuming context
+/// must map those pages into its own PPGTT before encoding the instruction VA.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GpgpuArtifactAddressSpace {
+    GlobalGgtt,
+    CallerPpgtt,
+}
+
+impl GpgpuArtifactAddressSpace {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::GlobalGgtt => "global-ggtt",
+            Self::CallerPpgtt => "caller-ppgtt",
+        }
+    }
+}
 
 pub(crate) const COPY_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
@@ -234,25 +255,23 @@ pub(crate) const LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT: GpgpuKernelArtifact =
         Some(&LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT),
     );
 
-pub(crate) const KOKORO_QGEMM_U8_I8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::new(
-        KOKORO_QGEMM_U8_I8_KERNEL_NAME,
-        KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.target,
-        KOKORO_QGEMM_U8_I8_ADLS_BIN,
-        KOKORO_QGEMM_U8_I8_ADLS_SPV,
-        KOKORO_QGEMM_U8_I8_ADLS_BIN_SHA256,
-        Some(&KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT),
-    );
+pub(crate) const KOKORO_QGEMM_U8_I8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::new(
+    KOKORO_QGEMM_U8_I8_KERNEL_NAME,
+    KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.target,
+    KOKORO_QGEMM_U8_I8_ADLS_BIN,
+    KOKORO_QGEMM_U8_I8_ADLS_SPV,
+    KOKORO_QGEMM_U8_I8_ADLS_BIN_SHA256,
+    Some(&KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT),
+);
 
-pub(crate) const KOKORO_CONV1D_U8_U8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::new(
-        KOKORO_CONV1D_U8_U8_KERNEL_NAME,
-        KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT.target,
-        KOKORO_CONV1D_U8_U8_ADLS_BIN,
-        KOKORO_CONV1D_U8_U8_ADLS_SPV,
-        KOKORO_CONV1D_U8_U8_ADLS_BIN_SHA256,
-        Some(&KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT),
-    );
+pub(crate) const KOKORO_CONV1D_U8_U8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::new(
+    KOKORO_CONV1D_U8_U8_KERNEL_NAME,
+    KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT.target,
+    KOKORO_CONV1D_U8_U8_ADLS_BIN,
+    KOKORO_CONV1D_U8_U8_ADLS_SPV,
+    KOKORO_CONV1D_U8_U8_ADLS_BIN_SHA256,
+    Some(&KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT),
+);
 
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(

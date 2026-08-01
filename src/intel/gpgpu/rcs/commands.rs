@@ -475,6 +475,7 @@ fn direct_rcs_submit_batch_with_runtime(
     client: crate::gpu::vgpu::KernelClient,
     allow_queued: bool,
 ) -> Option<crate::gpu::executor::KernelSubmission> {
+    debug_assert_eq!(client, crate::gpu::vgpu::KernelClient::Ui4Compositor);
     if ui4_compositor_rcs_context_is_quarantined() {
         return None;
     }
@@ -495,9 +496,7 @@ fn direct_rcs_submit_batch_with_runtime(
                 published_tail_bytes,
                 submission_sequence,
             );
-            quarantine_ui4_compositor_rcs_context(
-                "submit-result-ambiguous-after-tail-publication",
-            );
+            quarantine_ui4_compositor_rcs_context("submit-result-ambiguous-after-tail-publication");
             None
         }
     }

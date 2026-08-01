@@ -2173,8 +2173,12 @@ fn destroy_device_resources(
     {
         return Err(VgpuError::Busy);
     }
-    while let Some(binding) = device.contexts.pop() {
-        physical.destroy_context(binding.context)?;
+    while let Some(context) = device.contexts.last().map(|binding| binding.context) {
+        // GuC destruction is complete only after DEREGISTER_CONTEXT_DONE. If
+        // that event is still pending, retain the binding and all backing so a
+        // late firmware access can never target recycled storage.
+        physical.destroy_context(context)?;
+        device.contexts.pop();
     }
     let vm = match device.gpuvm {
         GpuVmBinding::Owned(vm) => Some(vm),

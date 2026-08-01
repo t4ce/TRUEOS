@@ -548,7 +548,15 @@ pub(crate) fn destroy_context(
         return Err(GucSubmissionError::InvalidContext);
     };
     if context.generation != generation {
-        return Err(GucSubmissionError::InvalidContext);
+        // Allocation of a newer generation is only possible after GuC sent
+        // DEREGISTER_CONTEXT_DONE for every preceding generation. A delayed
+        // owner retry may therefore acknowledge its older token safely even
+        // when this slot already serves another context.
+        return if generation_precedes(generation, context.generation) {
+            Ok(())
+        } else {
+            Err(GucSubmissionError::InvalidContext)
+        };
     }
     // A matching token can be destroyed repeatedly after its completion. This
     // is required when a previous call returned pending and its G2H arrived
@@ -564,12 +572,7 @@ pub(crate) fn destroy_context(
         if wait_for_transition(&mut state, slot, GucPendingTransition::Deregister) {
             return Ok(());
         }
-        note_lifecycle_timeout(
-            &mut state,
-            engine_abi.name,
-            context_id,
-            "deregister-done",
-        );
+        note_lifecycle_timeout(&mut state, engine_abi.name, context_id, "deregister-done");
         return Err(GucSubmissionError::DeregisterPending);
     }
 
@@ -626,12 +629,7 @@ pub(crate) fn destroy_context(
     if wait_for_transition(&mut state, slot, GucPendingTransition::Deregister) {
         Ok(())
     } else {
-        note_lifecycle_timeout(
-            &mut state,
-            engine_abi.name,
-            context_id,
-            "deregister-done",
-        );
+        note_lifecycle_timeout(&mut state, engine_abi.name, context_id, "deregister-done");
         Err(GucSubmissionError::DeregisterPending)
     }
 }
@@ -713,10 +711,7 @@ fn drain_g2h_events(state: &mut GucSubmissionState) {
     }
 }
 
-fn process_g2h_event(
-    state: &mut GucSubmissionState,
-    event: crate::intel::guc_ctb::CtbG2hEvent,
-) {
+fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ctb::CtbG2hEvent) {
     match event.action {
         INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_DONE => {
             let (Some(context_id), Some(mode_status)) = (event.payload(0), event.payload(1)) else {
@@ -729,7 +724,11 @@ fn process_g2h_event(
             };
             let context = state.contexts[slot];
             if !context.registered {
-                note_malformed_lifecycle_event(state, event, "sched-context-mode-done-unregistered");
+                note_malformed_lifecycle_event(
+                    state,
+                    event,
+                    "sched-context-mode-done-unregistered",
+                );
                 return;
             }
             let transition = if context.pending_enable {
@@ -852,6 +851,11 @@ const fn context_slot(context_id: u32) -> Option<usize> {
     }
 }
 
+const fn generation_precedes(candidate: u32, current: u32) -> bool {
+    let distance = current.wrapping_sub(candidate);
+    candidate != 0 && current != 0 && distance != 0 && distance < (1u32 << 31)
+}
+
 fn context_registry_invariants_hold(state: &GucSubmissionState) -> bool {
     state.contexts.iter().all(|context| {
         let mutually_exclusive = !(context.pending_enable && context.pending_disable)
@@ -935,6 +939,32 @@ const fn context_id(slot: usize) -> u32 {
     (slot + 1) as u32
 }
 
+/// Add the Gen12 RCS descriptor priority that is separate from GuC's policy
+/// KLV. Bits 10:9 are available because HWLRCA is 4 KiB aligned. Copy and media
+/// engines do not advertise the EU-priority descriptor capability, so their
+/// descriptors are preserved byte-for-byte.
+const fn guc_hwlrca_descriptor(
+    engine: crate::gpu::physical::PhysicalEngineId,
+    priority: crate::gpu::physical::PhysicalContextPriority,
+    hwlrca_lo: u32,
+) -> u32 {
+    match engine.class {
+        crate::gpu::physical::EngineClass::RenderCompute => {
+            let descriptor_priority = match priority {
+                crate::gpu::physical::PhysicalContextPriority::KernelHigh => {
+                    GEN12_HW_CONTEXT_PRIORITY_HIGH
+                }
+                crate::gpu::physical::PhysicalContextPriority::KernelNormal => {
+                    GEN12_HW_CONTEXT_PRIORITY_NORMAL
+                }
+            };
+            (hwlrca_lo & !GEN12_HW_CONTEXT_PRIORITY_MASK) | descriptor_priority
+        }
+        crate::gpu::physical::EngineClass::VideoDecode
+        | crate::gpu::physical::EngineClass::Copy => hwlrca_lo,
+    }
+}
+
 const fn guc_priority_abi(priority: crate::gpu::physical::PhysicalContextPriority) -> u32 {
     match priority {
         crate::gpu::physical::PhysicalContextPriority::KernelHigh => GUC_CLIENT_PRIORITY_KMD_HIGH,
@@ -989,6 +1019,22 @@ const _: () = {
     assert!(normal[4] == high[4]);
     assert!(normal[5] == high[5]);
     assert!(normal[6] == high[6]);
+    assert!(
+        guc_hwlrca_descriptor(crate::gpu::physical::PhysicalEngineId::RCS0, KernelHigh, 0x8000)
+            == 0x8400
+    );
+    assert!(
+        guc_hwlrca_descriptor(crate::gpu::physical::PhysicalEngineId::RCS0, KernelNormal, 0x8000)
+            == 0x8200
+    );
+    assert!(
+        guc_hwlrca_descriptor(crate::gpu::physical::PhysicalEngineId::BCS0, KernelHigh, 0x8000)
+            == 0x8000
+    );
+    assert!(generation_precedes(1, 2));
+    assert!(generation_precedes(u32::MAX, 1));
+    assert!(!generation_precedes(2, 1));
+    assert!(!generation_precedes(1, 1));
 };
 
 fn program_context_priority(

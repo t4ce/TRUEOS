@@ -3,13 +3,38 @@ fn upload_artifact(
     artifact: GpgpuKernelArtifact,
     gpu: u64,
 ) -> Option<UploadedKernelArtifact> {
-    upload_artifact_from_sources(dev, artifact, gpu, false, None)
+    upload_artifact_from_sources(
+        dev,
+        artifact,
+        gpu,
+        GpgpuArtifactAddressSpace::GlobalGgtt,
+        false,
+        None,
+    )
+}
+
+/// Allocate authenticated, DMA-flushed artifact pages for a caller-owned
+/// PPGTT. This function never installs or invalidates a global GGTT mapping.
+fn upload_ppgtt_resident_artifact(
+    dev: super::Dev,
+    artifact: GpgpuKernelArtifact,
+    gpu: u64,
+) -> Option<UploadedKernelArtifact> {
+    upload_artifact_from_sources(
+        dev,
+        artifact,
+        gpu,
+        GpgpuArtifactAddressSpace::CallerPpgtt,
+        false,
+        None,
+    )
 }
 
 fn upload_artifact_from_sources(
     dev: super::Dev,
     artifact: GpgpuKernelArtifact,
     gpu: u64,
+    address_space: GpgpuArtifactAddressSpace,
     strict_runtime_artifact: bool,
     reusable_upload: Option<UploadedKernelArtifact>,
 ) -> Option<UploadedKernelArtifact> {
@@ -40,6 +65,7 @@ fn upload_artifact_from_sources(
                     "fs",
                     path.as_str(),
                     spv_bytes,
+                    address_space,
                     reusable_upload,
                 );
             }
@@ -116,6 +142,7 @@ fn upload_artifact_from_sources(
         "embedded",
         source_path,
         artifact.spv.len(),
+        address_space,
         None,
     )
 }
@@ -128,6 +155,7 @@ fn upload_artifact_bytes(
     source: &'static str,
     source_path: &str,
     spv_bytes: usize,
+    address_space: GpgpuArtifactAddressSpace,
     reusable_upload: Option<UploadedKernelArtifact>,
 ) -> Option<UploadedKernelArtifact> {
     let actual_sha256 = match admit_kernel_artifact_bytes(
@@ -170,7 +198,15 @@ fn upload_artifact_bytes(
         // Reuse it instead of remapping the same GPU VA and leaking the prior
         // DMA allocation. A metadata mismatch fails closed until a future
         // quiescent replacement protocol can retire the old mapping safely.
-        if !resident_upload_matches(upload, artifact, dev, gpu, bin.len(), actual_sha256) {
+        if !resident_upload_matches(
+            upload,
+            artifact,
+            dev,
+            gpu,
+            bin.len(),
+            actual_sha256,
+            address_space,
+        ) {
             crate::log_error!(
                 target: "gpgpu";
                 "intel/gpgpu: {} reload rejected reason=resident-metadata-mismatch source={} path={} resident_source={} resident_gpu=0x{:X} resident_phys=0x{:X} resident_bytes=0x{:X}\n",
@@ -225,21 +261,23 @@ fn upload_artifact_bytes(
         return None;
     }
 
-    if !super::map_ggtt(dev, phys, mapped_bytes, gpu) {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: {} upload failed reason=ggtt-map source={} path={} phys=0x{:X} gpu=0x{:X} bytes=0x{:X}\n",
-            artifact.name,
-            source,
-            source_path,
-            phys,
-            gpu,
-            mapped_bytes
-        );
-        crate::dma::dealloc(virt, mapped_bytes);
-        return None;
+    if address_space == GpgpuArtifactAddressSpace::GlobalGgtt {
+        if !super::map_ggtt(dev, phys, mapped_bytes, gpu) {
+            crate::log_info!(
+                target: "gpgpu";
+                "intel/gpgpu: {} upload failed reason=ggtt-map source={} path={} phys=0x{:X} gpu=0x{:X} bytes=0x{:X}\n",
+                artifact.name,
+                source,
+                source_path,
+                phys,
+                gpu,
+                mapped_bytes
+            );
+            crate::dma::dealloc(virt, mapped_bytes);
+            return None;
+        }
+        super::ggtt_invalidate(dev);
     }
-    super::ggtt_invalidate(dev);
 
     let upload = UploadedKernelArtifact {
         name: artifact.name,
@@ -256,6 +294,7 @@ fn upload_artifact_bytes(
         abi_schema_version: artifact
             .abi_contract
             .map(|contract| contract.schema_version),
+        address_space,
     };
     let source_bytes = kernel_opencl_source(artifact.name)
         .map(|source| source.len())
@@ -287,7 +326,7 @@ fn upload_artifact_bytes(
         .unwrap_or(0);
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: {} upload ok=1 target={} device=0x{:04X} revision=0x{:02X} abi_schema={} entry=0x{:X} simd={} grfs={} cross_thread={} per_thread={} bindings={} source={} path={} source_bytes=0x{:X} spv_bytes=0x{:X} phys=0x{:X} gpu=0x{:X} bytes=0x{:X} mapped=0x{:X} sha256={}\n",
+        "intel/gpgpu: {} upload ok=1 target={} device=0x{:04X} revision=0x{:02X} abi_schema={} entry=0x{:X} simd={} grfs={} cross_thread={} per_thread={} bindings={} source={} path={} source_bytes=0x{:X} spv_bytes=0x{:X} phys=0x{:X} gpu=0x{:X} bytes=0x{:X} mapped=0x{:X} address_space={} sha256={}\n",
         artifact.name,
         upload.target,
         upload.device_id,
@@ -307,6 +346,7 @@ fn upload_artifact_bytes(
         upload.gpu,
         upload.bytes,
         upload.mapped_bytes,
+        upload.address_space.label(),
         sha256.as_str(),
     );
     Some(upload)
@@ -319,6 +359,7 @@ fn resident_upload_matches(
     gpu: u64,
     bin_bytes: usize,
     admitted_sha256: [u8; 32],
+    address_space: GpgpuArtifactAddressSpace,
 ) -> bool {
     upload.name == artifact.name
         && upload.target == artifact.target
@@ -334,6 +375,7 @@ fn resident_upload_matches(
             == artifact
                 .abi_contract
                 .map(|contract| contract.schema_version)
+        && upload.address_space == address_space
 }
 
 fn runtime_artifact_rel_path(artifact: GpgpuKernelArtifact, ext: &str) -> String {
@@ -558,6 +600,7 @@ mod runtime_admission_tests {
             abi_schema_version: artifact
                 .abi_contract
                 .map(|contract| contract.schema_version),
+            address_space: GpgpuArtifactAddressSpace::GlobalGgtt,
         }
     }
 
@@ -676,6 +719,7 @@ mod runtime_admission_tests {
             upload.gpu,
             artifact.bin.len(),
             artifact.bin_sha256,
+            GpgpuArtifactAddressSpace::GlobalGgtt,
         ));
         assert!(!resident_upload_matches(
             UploadedKernelArtifact {
@@ -687,6 +731,7 @@ mod runtime_admission_tests {
             upload.gpu,
             artifact.bin.len(),
             artifact.bin_sha256,
+            GpgpuArtifactAddressSpace::GlobalGgtt,
         ));
         assert!(!resident_upload_matches(
             upload,
@@ -695,6 +740,7 @@ mod runtime_admission_tests {
             upload.gpu,
             artifact.bin.len(),
             artifact.bin_sha256,
+            GpgpuArtifactAddressSpace::GlobalGgtt,
         ));
         assert!(!resident_upload_matches(
             UploadedKernelArtifact {
@@ -706,6 +752,16 @@ mod runtime_admission_tests {
             upload.gpu,
             artifact.bin.len(),
             artifact.bin_sha256,
+            GpgpuArtifactAddressSpace::GlobalGgtt,
+        ));
+        assert!(!resident_upload_matches(
+            upload,
+            artifact,
+            dev,
+            upload.gpu,
+            artifact.bin.len(),
+            artifact.bin_sha256,
+            GpgpuArtifactAddressSpace::CallerPpgtt,
         ));
     }
 
@@ -737,12 +793,7 @@ mod runtime_admission_tests {
             ..artifact
         };
         assert_eq!(
-            admit_kernel_artifact_bytes(
-                wrong_name,
-                0x4680,
-                SELECTED_ADLS_REVISION,
-                wrong_name.bin,
-            ),
+            admit_kernel_artifact_bytes(wrong_name, 0x4680, SELECTED_ADLS_REVISION, wrong_name.bin,),
             Err(GpgpuArtifactAdmissionError::ContractKernelNameMismatch)
         );
 

@@ -311,9 +311,7 @@ pub(crate) fn h2g_sequence_consumed(target_sequence: u64) -> bool {
 /// one-way. Events consumed while a synchronous response was being awaited are
 /// delivered through the same queue, so they are never mistaken for fenced
 /// responses or silently discarded.
-pub(crate) fn poll_g2h_events(
-    mut visit: impl FnMut(CtbG2hEvent),
-) -> CtbG2hPollResult {
+pub(crate) fn poll_g2h_events(mut visit: impl FnMut(CtbG2hEvent)) -> CtbG2hPollResult {
     {
         let mut guard = STATE.lock();
         if let Some(mut state) = *guard {
@@ -569,20 +567,13 @@ fn drain_available_g2h(state: &mut CtbState) {
             break;
         }
 
-        let hxg = read_ct_dw(
-            *state,
-            CT_G2H_OFFSET,
-            (msg_head + 1) % CT_G2H_RING_DWORDS,
-        );
+        let hxg = read_ct_dw(*state, CT_G2H_OFFSET, (msg_head + 1) % CT_G2H_RING_DWORDS);
         let origin = hxg_origin(hxg);
         let message_type = hxg_type(hxg);
         if origin == GUC_HXG_ORIGIN_GUC && message_type == GUC_HXG_TYPE_EVENT {
             queue_g2h_event(*state, msg_head, msg_len, hxg);
         } else if origin == GUC_HXG_ORIGIN_GUC
-            && matches!(
-                message_type,
-                GUC_HXG_TYPE_RESPONSE_FAILURE | GUC_HXG_TYPE_RESPONSE_SUCCESS
-            )
+            && matches!(message_type, GUC_HXG_TYPE_RESPONSE_FAILURE | GUC_HXG_TYPE_RESPONSE_SUCCESS)
         {
             let mut queue = G2H_EVENTS.lock();
             queue.unsolicited_responses = queue.unsolicited_responses.saturating_add(1);
@@ -606,11 +597,7 @@ fn queue_g2h_event(state: CtbState, msg_head: usize, msg_len: usize, hxg: u32) {
     let payload_len = msg_len.saturating_sub(1);
     let mut payload = [0u32; CT_G2H_EVENT_PAYLOAD_DWORDS];
     for (index, value) in payload.iter_mut().enumerate().take(payload_len) {
-        *value = read_ct_dw(
-            state,
-            CT_G2H_OFFSET,
-            (msg_head + 2 + index) % CT_G2H_RING_DWORDS,
-        );
+        *value = read_ct_dw(state, CT_G2H_OFFSET, (msg_head + 2 + index) % CT_G2H_RING_DWORDS);
     }
     G2H_EVENTS.lock().push(CtbG2hEvent {
         action: hxg & 0xFFFF,

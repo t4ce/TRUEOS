@@ -354,6 +354,7 @@ mod helio_transform_encoder_tests {
             device_id: 0x4680,
             revision_id: 0x0C,
             abi_schema_version: Some(GPGPU_KERNEL_ABI_SCHEMA_VERSION),
+            address_space: GpgpuArtifactAddressSpace::CallerPpgtt,
         };
         GpgpuHelioRetainedTransformArtifactMapping {
             gpu: upload.gpu,

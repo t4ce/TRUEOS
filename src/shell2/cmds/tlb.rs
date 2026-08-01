@@ -2741,14 +2741,19 @@ fn append_intel_gpu_dump(out: &mut String) {
     let status = crate::intel::guc_submission::scheduler_status();
     writeln!(
         out,
-        "capacity={} registered={} enabled={} submissions={} registrations={} deregistrations={} failures={}",
+        "capacity={} registered={} enabled={} pending_enable={} pending_disable={} pending_deregister={} submissions={} registrations={} deregistrations={} failures={} async_events={} async_event_errors={}",
         status.capacity,
         status.registered,
         status.enabled,
+        status.pending_enable,
+        status.pending_disable,
+        status.pending_deregister,
         status.submissions,
         status.registrations,
         status.deregistrations,
-        status.failures
+        status.failures,
+        status.async_events,
+        status.async_event_errors,
     )
     .unwrap();
     let contexts = crate::intel::guc_submission::context_status();
@@ -2758,13 +2763,16 @@ fn append_intel_gpu_dump(out: &mut String) {
         for context in contexts {
             writeln!(
                 out,
-                "context id={} token=0x{:016X} engine={:?} priority={:?} policy_enqueued={} enabled={} hwlrca=0x{:08X}:0x{:08X} submissions={}",
+                "context id={} token=0x{:016X} engine={:?} priority={:?} policy_enqueued={} enabled={} pending_enable={} pending_disable={} pending_deregister={} hwlrca=0x{:08X}:0x{:08X} submissions={}",
                 context.context_id,
                 context.token.raw(),
                 context.engine,
                 context.priority,
                 yes_no(context.policy_enqueued),
                 yes_no(context.enabled),
+                yes_no(context.pending_enable),
+                yes_no(context.pending_disable),
+                yes_no(context.pending_deregister),
                 context.hwlrca_hi,
                 context.hwlrca_lo,
                 context.submissions
