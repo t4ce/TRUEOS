@@ -1251,9 +1251,10 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                         if !boot_move_queued {
                             boot_move_queued = true;
                             match crate::intel::complete_scanout_pipeline_dimensions(id.index()) {
-                                Some((width, _)) if width > 1 => {
+                                Some((width, _)) if width > intel_cursor::SPIRIT_CURSOR_DIM => {
+                                    let movable_width = width - intel_cursor::SPIRIT_CURSOR_DIM;
                                     let delta_x = f64::from(SPIRIT_BOOT_MOVE_RIGHT_PIXELS)
-                                        / f64::from(width - 1);
+                                        / f64::from(movable_width);
                                     match move_by(id, delta_x, 0.0) {
                                         Ok(move_fence) => crate::log_info!(
                                             target: "gfx";

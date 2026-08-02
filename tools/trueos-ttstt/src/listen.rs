@@ -134,7 +134,7 @@ impl LiveSession {
         let complete = self.pending_samples.len() / FRAME_SAMPLES * FRAME_SAMPLES;
         let remainder = self.pending_samples.split_off(complete);
         let samples = std::mem::replace(&mut self.pending_samples, remainder);
-        for frame in samples.chunks_exact(FRAME_SAMPLES) {
+        for frame in samples.as_chunks::<FRAME_SAMPLES>().0 {
             if let Some(window) = self.segmenter.push_frame(frame)? {
                 self.emit_window(engine, window, emit)?;
             }
@@ -482,7 +482,9 @@ fn lowest_energy_boundary(samples: &[f32]) -> usize {
     let mut boundary = samples.len();
 
     for (index, frame) in samples[search_start..]
-        .chunks_exact(FRAME_SAMPLES)
+        .as_chunks::<FRAME_SAMPLES>()
+        .0
+        .iter()
         .enumerate()
     {
         let energy = frame

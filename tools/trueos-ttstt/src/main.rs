@@ -366,7 +366,10 @@ fn default_tts_model_dir() -> PathBuf {
     if nonempty_env_path("TTSTT_HOME").is_some() {
         return default_model_root().join("kokoro");
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ttstt/models/kokoro")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the package manifest directory has a tools parent")
+        .join("ttstt/models/kokoro")
 }
 
 fn default_stt_model() -> PathBuf {

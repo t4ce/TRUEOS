@@ -726,9 +726,22 @@ fn cursor_ddb_cfg(channel: usize) -> u32 {
     (u32::from(end - 1) << 16) | u32::from(start)
 }
 
-fn normalized_cursor_to_px(normalized: f64, extent: u32) -> i32 {
-    normalized_screen_point_to_px(normalized, extent) - SPIRIT_CURSOR_HOTSPOT
+const fn normalized_cursor_to_px(normalized: f64, extent: u32) -> i32 {
+    // CUR_POS is the surface's top-left corner, not its hotspot. Map the
+    // public normalized position across only the origins for which the whole
+    // fixed-size cursor surface remains inside the scanout.
+    let last_visible_origin = extent.saturating_sub(SPIRIT_CURSOR_DIM) as f64;
+    (normalized.clamp(0.0, 1.0) * last_visible_origin + 0.5) as i32
 }
+
+const _: () = {
+    assert!(normalized_cursor_to_px(0.0, 1920) == 0);
+    assert!(normalized_cursor_to_px(0.5, 1920) == 832);
+    assert!(normalized_cursor_to_px(1.0, 1920) == 1664);
+    assert!(normalized_cursor_to_px(1.0, 1080) == 824);
+    assert!(normalized_cursor_to_px(1.0, SPIRIT_CURSOR_DIM) == 0);
+    assert!(normalized_cursor_to_px(1.0, 128) == 0);
+};
 
 fn normalized_screen_point_to_px(normalized: f64, extent: u32) -> i32 {
     let last_pixel = extent.saturating_sub(1) as f64;

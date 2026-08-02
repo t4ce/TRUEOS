@@ -56,14 +56,20 @@ tools/trueos-ttstt/target/x86_64-unknown-linux-gnu/release/trueos-ttstt --versio
 
 This passes `--target x86_64-unknown-linux-gnu` deliberately, overriding the
 TRUEOS root Cargo configuration whose default is the bare-metal kernel target.
+The recipe also starts Cargo from `${TMPDIR:-/tmp}` because Cargo discovers
+configuration from its current directory; an explicit target alone does not
+disable the root configuration's kernel-only `build-std` setting.
 For the current host triple on another supported platform, run
 `make trueos-ttstt-host`. Both targets keep output below the ignored
 `tools/trueos-ttstt/target/` directory. A global-style install remains
 possible when its target is equally explicit:
 
 ```sh
-cargo install --path tools/trueos-ttstt --locked \
-  --target x86_64-unknown-linux-gnu
+TRUEOS_REPO="$PWD"
+(cd "${TMPDIR:-/tmp}" && cargo install \
+  --path "$TRUEOS_REPO/tools/trueos-ttstt" --locked \
+  --target x86_64-unknown-linux-gnu \
+  --target-dir "$TRUEOS_REPO/tools/trueos-ttstt/target")
 ```
 
 The examples below use `trueos-ttstt` for readability. Without an install, use
@@ -234,7 +240,7 @@ started and stopped with:
 
 ```sh
 systemd-run --user --unit=trueos-ttstt --collect --property=Restart=on-failure \
-  "$PWD/target/release/trueos-ttstt" serve
+  "$PWD/tools/trueos-ttstt/target/x86_64-unknown-linux-gnu/release/trueos-ttstt" serve
 systemctl --user stop trueos-ttstt
 ```
 
@@ -439,13 +445,18 @@ Run `trueos-ttstt --help`, `trueos-ttstt tts --help`, `trueos-ttstt stt --help`,
 ## Development
 
 ```sh
-cargo fmt --manifest-path tools/trueos-ttstt/Cargo.toml --all -- --check
-cargo test --manifest-path tools/trueos-ttstt/Cargo.toml \
+TRUEOS_REPO="$PWD"
+(cd "${TMPDIR:-/tmp}" && cargo fmt \
+  --manifest-path "$TRUEOS_REPO/tools/trueos-ttstt/Cargo.toml" \
+  --all -- --check)
+(cd "${TMPDIR:-/tmp}" && cargo test \
+  --manifest-path "$TRUEOS_REPO/tools/trueos-ttstt/Cargo.toml" \
   --workspace --all-targets --target x86_64-unknown-linux-gnu \
-  --target-dir tools/trueos-ttstt/target
-cargo clippy --manifest-path tools/trueos-ttstt/Cargo.toml \
+  --target-dir "$TRUEOS_REPO/tools/trueos-ttstt/target")
+(cd "${TMPDIR:-/tmp}" && cargo clippy \
+  --manifest-path "$TRUEOS_REPO/tools/trueos-ttstt/Cargo.toml" \
   --workspace --all-targets --target x86_64-unknown-linux-gnu \
-  --target-dir tools/trueos-ttstt/target -- -D warnings
+  --target-dir "$TRUEOS_REPO/tools/trueos-ttstt/target" -- -D warnings)
 ```
 
 Unit and CLI tests do not require model downloads.
@@ -463,7 +474,8 @@ hash -r
 ```
 
 Unix shells also do not search the current directory for executables. Inside
-`target/release`, use `./trueos-ttstt`, not just `trueos-ttstt`.
+`tools/trueos-ttstt/target/<host>/release`, use `./trueos-ttstt`, not just
+`trueos-ttstt`.
 
 ### `Kokoro model directory ... does not exist`
 

@@ -266,7 +266,7 @@ pub(super) fn queue_window_outline(
 
 /// Queue one atomic approach-plus-outline program after Spirit's first real
 /// hardware move. `(spirit_left, spirit_top)` are the exact CUR_POS screen
-/// coordinates, including possible negative cursor-plane coordinates.
+/// coordinates produced by Spirit's bounded cursor-plane mapping.
 pub(super) fn queue_initial_outline_once(
     spirit_left: i32,
     spirit_top: i32,

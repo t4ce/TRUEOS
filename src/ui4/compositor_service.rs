@@ -957,9 +957,9 @@ fn queue_async_plane(
         }
     }
     // Preserve the existing direct-only lifecycle for a lone isolated
-    // producer. The compose-all change applies to mixed slots; immutable
-    // single-buffer frames (including image-viewer) are shareable and may
-    // still use the domain-safe compositor fallback below.
+    // producer. Immutable single-buffer frames are shareable; released-compute
+    // Blueprint snapshots (including image-viewer) deliberately continue
+    // through the domain-safe static compositor below.
     if selected.len() == 1 && !all_shared_composable {
         return Err(Ui4CompositorError::PresentFailed);
     }
@@ -1155,6 +1155,9 @@ const fn compute_release_direct_contract(
     cadence: super::FrameCadence,
     buffering: super::FrameBuffering,
 ) -> bool {
+    // A released immutable/single Blueprint snapshot uses the same
+    // display-owned static composition path as Static30. Keep direct import for
+    // streaming Blueprint scenes and the established dynamic producer plans.
     matches!(
         (content, buffering),
         (FrameContent::Image, super::FrameBuffering::Double)
@@ -1162,16 +1165,12 @@ const fn compute_release_direct_contract(
             | (FrameContent::Video, super::FrameBuffering::Quad)
     ) || matches!(
         (content, cadence, buffering),
-        (
-            FrameContent::BlueprintScene,
-            super::FrameCadence::Immutable,
-            super::FrameBuffering::Single,
-        ) | (FrameContent::FontScene2d, super::FrameCadence::Dirty, super::FrameBuffering::Double,)
+        (FrameContent::FontScene2d, super::FrameCadence::Dirty, super::FrameBuffering::Double,)
     )
 }
 
 const _: () = {
-    assert!(compute_release_direct_contract(
+    assert!(!compute_release_direct_contract(
         FrameContent::BlueprintScene,
         super::FrameCadence::Immutable,
         super::FrameBuffering::Single,
@@ -1588,8 +1587,8 @@ mod damage_tests {
     use super::*;
 
     #[test]
-    fn released_compute_frame_direct_contracts_are_explicit() {
-        assert!(compute_release_direct_contract(
+    fn released_compute_frame_direct_contracts_keep_static_blueprints_composed() {
+        assert!(!compute_release_direct_contract(
             FrameContent::BlueprintScene,
             super::super::FrameCadence::Immutable,
             super::super::FrameBuffering::Single,

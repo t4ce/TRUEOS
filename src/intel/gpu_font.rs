@@ -1047,6 +1047,21 @@ impl GpuFontGlyphRecipe {
         (self.mask_width, self.mask_height)
     }
 
+    /// Flattened-edge span expected to contain nonzero analytical coverage.
+    /// Coordinates are local to the immutable recipe mask.
+    pub(crate) fn local_audit_rect(&self) -> crate::intel::gpgpu::GpgpuRect {
+        crate::intel::gpgpu::GpgpuRect::new(
+            self.audit_rect.0,
+            self.audit_rect.1,
+            self.audit_rect.2.saturating_sub(self.audit_rect.0) as u32,
+            self.audit_rect.3.saturating_sub(self.audit_rect.1) as u32,
+        )
+    }
+
+    pub(crate) const fn coverage_subdivisions(&self) -> u32 {
+        ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS
+    }
+
     pub(crate) const fn optical_bias_px(&self) -> f32 {
         self.optical_bias_px
     }
@@ -1206,7 +1221,7 @@ impl GpuFontPreparedPlacementClassification {
 pub(crate) fn classify_gpu_font_prepared_placements(
     prepared: &[GpuFontPreparedCenteredGlyph],
 ) -> GpuFontPreparedPlacementClassification {
-    let mut unique_indices = Vec::with_capacity(prepared.len());
+    let mut unique_indices: Vec<usize> = Vec::with_capacity(prepared.len());
     let mut requires_union_coverage = false;
 
     for (candidate_index, candidate) in prepared.iter().enumerate() {

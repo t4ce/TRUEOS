@@ -599,12 +599,16 @@ pub(crate) fn font_outline_coverage_atlas_tile_r8(
     );
     match retirement {
         GpgpuDispatchRetirement::Complete => {
+            let audit_started_ms = embassy_time::Instant::now().as_millis();
             let audit = reservation
                 .nonzero_audit()
-                .ok_or(GpgpuDispatchRetirement::NotSubmitted)?;
+                .ok_or(GpgpuDispatchRetirement::Complete)?;
+            let coverage_audit_ms = embassy_time::Instant::now()
+                .as_millis()
+                .saturating_sub(audit_started_ms);
             reservation
-                .publish(audit)
-                .ok_or(GpgpuDispatchRetirement::NotSubmitted)
+                .publish(audit, coverage_audit_ms)
+                .ok_or(GpgpuDispatchRetirement::Complete)
         }
         GpgpuDispatchRetirement::NotSubmitted => Err(GpgpuDispatchRetirement::NotSubmitted),
         GpgpuDispatchRetirement::SubmittedIncomplete => {

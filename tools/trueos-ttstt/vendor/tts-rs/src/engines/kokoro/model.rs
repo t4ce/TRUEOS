@@ -91,6 +91,9 @@ pub enum KokoroStreamError<E> {
     Callback(#[source] E),
 }
 
+// This is long-lived model state, constructed once per loaded engine. Keeping
+// the RTen state inline avoids an allocation and indirection on every run.
+#[allow(clippy::large_enum_variant)]
 enum InferenceRuntime {
     OnnxRuntime(Session),
     #[cfg(feature = "kokoro-rten")]

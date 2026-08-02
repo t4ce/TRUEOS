@@ -198,6 +198,8 @@ pub(crate) struct FontPlanCellRequest {
     slant: f32,
     max_work: u64,
     rng_seed: u64,
+    fixed_scalar: Option<char>,
+    worker_affinity: Option<u8>,
 }
 
 impl FontPlanCellRequest {
@@ -214,7 +216,36 @@ impl FontPlanCellRequest {
             slant,
             max_work,
             rng_seed,
+            fixed_scalar: None,
+            worker_affinity: None,
         }
+    }
+
+    /// Describe one exact character while retaining the same shared recipe
+    /// cache and worker-pool path as rolled demo glyphs.
+    pub(crate) const fn fixed(
+        position: [f32; 2],
+        font_pixels: f32,
+        slant: f32,
+        max_work: u64,
+        scalar: char,
+    ) -> Self {
+        Self {
+            position,
+            font_pixels,
+            slant,
+            max_work,
+            rng_seed: 0,
+            fixed_scalar: Some(scalar),
+            worker_affinity: None,
+        }
+    }
+
+    /// Reserve this cell for one stable member of the 32-task producer pool.
+    /// Ordinary callers remain affinity-free and preserve work stealing.
+    pub(crate) const fn with_worker_affinity(mut self, worker_id: u8) -> Self {
+        self.worker_affinity = Some(worker_id);
+        self
     }
 
     pub(crate) const fn position(self) -> [f32; 2] {
@@ -231,6 +262,14 @@ impl FontPlanCellRequest {
 
     pub(crate) const fn rng_seed(self) -> u64 {
         self.rng_seed
+    }
+
+    pub(crate) const fn fixed_scalar(self) -> Option<char> {
+        self.fixed_scalar
+    }
+
+    pub(crate) const fn worker_affinity(self) -> Option<u8> {
+        self.worker_affinity
     }
 }
 
@@ -318,6 +357,12 @@ impl FontPlanBatchRequest {
                 || cell.font_pixels <= 0.0
                 || cell.slant.abs() > 1.0
                 || cell.max_work == 0
+                || cell
+                    .fixed_scalar
+                    .is_some_and(|scalar| scalar.is_control() || scalar.is_whitespace())
+                || cell
+                    .worker_affinity
+                    .is_some_and(|worker| usize::from(worker) >= self.parallelism)
         }) {
             return Err(FontPlanError::InvalidRequest("font-plan-cell"));
         }
@@ -554,6 +599,7 @@ pub(crate) struct FontPlanBuildStats {
     worker_slices: u64,
     cooperative_yields: u64,
     parallelism: usize,
+    participant_mask: u32,
     reserved_ops_bytes: usize,
 }
 
@@ -588,6 +634,14 @@ impl FontPlanBuildStats {
 
     pub(crate) const fn parallelism(self) -> usize {
         self.parallelism
+    }
+
+    pub(crate) const fn participant_mask(self) -> u32 {
+        self.participant_mask
+    }
+
+    pub(crate) const fn participants(self) -> usize {
+        self.participant_mask.count_ones() as usize
     }
 
     pub(crate) const fn reserved_ops_bytes(self) -> usize {
@@ -698,6 +752,7 @@ impl FontPlanBatchBorrow {
             rejected_candidates: AtomicU64::new(0),
             worker_slices: AtomicU64::new(0),
             cooperative_yields: AtomicU64::new(0),
+            participant_mask: AtomicU32::new(0),
             state: Mutex::new(FontPlanBatchState {
                 cells,
                 logical_ops_bytes: 0,
@@ -774,6 +829,7 @@ struct FontPlanBatch {
     rejected_candidates: AtomicU64,
     worker_slices: AtomicU64,
     cooperative_yields: AtomicU64,
+    participant_mask: AtomicU32,
     state: Mutex<FontPlanBatchState>,
     completion: crate::wait::CompletionCell<Result<PreparedGlyphPlanOutput, FontPlanError>>,
 }
@@ -796,7 +852,11 @@ struct PlanCell {
 impl PlanCell {
     fn new(request: FontPlanCellRequest) -> Self {
         Self {
-            selection: GlyphSelectionState::new(request.rng_seed, request.font_pixels),
+            selection: GlyphSelectionState::new(
+                request.rng_seed,
+                request.font_pixels,
+                request.fixed_scalar,
+            ),
             request,
             retry_candidate: None,
             status: PlanCellStatus::Pending,
@@ -817,6 +877,8 @@ struct PreparedPlanCell {
 
 struct GlyphSelectionState {
     rng: crate::tyche::SoftRng,
+    fixed_scalar: Option<char>,
+    fixed_claimed: bool,
     random_attempts: u8,
     fallback_start: Option<usize>,
     fallback_offset: usize,
@@ -824,9 +886,11 @@ struct GlyphSelectionState {
 }
 
 impl GlyphSelectionState {
-    fn new(seed: u64, font_pixels: f32) -> Self {
+    fn new(seed: u64, font_pixels: f32, fixed_scalar: Option<char>) -> Self {
         Self {
             rng: crate::tyche::SoftRng::from_seed(seed),
+            fixed_scalar,
+            fixed_claimed: false,
             random_attempts: 0,
             fallback_start: None,
             fallback_offset: 0,
@@ -835,6 +899,13 @@ impl GlyphSelectionState {
     }
 
     fn next_candidate(&mut self) -> Option<(char, f32)> {
+        if let Some(scalar) = self.fixed_scalar {
+            if self.fixed_claimed {
+                return None;
+            }
+            self.fixed_claimed = true;
+            return Some((scalar, self.fallback_font_pixels));
+        }
         const SHARED_DENSE_RANGE: (u32, u32) = (0x0021, 0x007E);
         const RANGES: &[(u32, u32)] = &[
             SHARED_DENSE_RANGE,
@@ -917,7 +988,7 @@ fn next_batch_id() -> u64 {
     }
 }
 
-fn claim_plan_work() -> Option<FontPlanClaimResult> {
+fn claim_plan_work(worker_id: usize) -> Option<FontPlanClaimResult> {
     let batches = FONT_PLAN_BATCHES.lock();
     if batches.is_empty() {
         return None;
@@ -935,12 +1006,13 @@ fn claim_plan_work() -> Option<FontPlanClaimResult> {
             continue;
         }
         let mut state = batch.state.lock();
-        let Some((cell_index, cell)) = state
-            .cells
-            .iter_mut()
-            .enumerate()
-            .find(|(_, cell)| matches!(cell.status, PlanCellStatus::Pending))
-        else {
+        let Some((cell_index, cell)) = state.cells.iter_mut().enumerate().find(|(_, cell)| {
+            matches!(cell.status, PlanCellStatus::Pending)
+                && cell
+                    .request
+                    .worker_affinity
+                    .is_none_or(|affinity| usize::from(affinity) == worker_id)
+        }) else {
             continue;
         };
         let candidate = cell
@@ -990,8 +1062,11 @@ enum FontPlanAttemptResult {
     Rejected,
 }
 
-fn run_plan_attempt(claim: FontPlanClaim) {
+fn run_plan_attempt(claim: FontPlanClaim, worker_id: usize) {
     let batch = &claim.batch;
+    batch
+        .participant_mask
+        .fetch_or(1u32 << worker_id, Ordering::AcqRel);
     batch.worker_slices.fetch_add(1, Ordering::AcqRel);
     batch.candidate_attempts.fetch_add(1, Ordering::AcqRel);
     FONT_PLAN_CANDIDATE_ATTEMPTS.fetch_add(1, Ordering::AcqRel);
@@ -1255,6 +1330,7 @@ fn finish_batch_success(batch: &Arc<FontPlanBatch>) {
         worker_slices: batch.worker_slices.load(Ordering::Acquire),
         cooperative_yields: batch.cooperative_yields.load(Ordering::Acquire),
         parallelism: batch.parallelism,
+        participant_mask: batch.participant_mask.load(Ordering::Acquire),
         reserved_ops_bytes,
     };
     FONT_PLAN_COMPLETED.fetch_add(1, Ordering::AcqRel);
@@ -1265,11 +1341,13 @@ fn finish_batch_success(batch: &Arc<FontPlanBatch>) {
         .complete(Ok(PreparedGlyphPlanOutput { plan, stats }));
     crate::log_info!(
         target: "render";
-        "font-plan-service: batch ready id={} producer={} glyphs={} parallelism={} queue_wait_ms={} build_ms={} attempts={} rejected={} worker_slices={} yields={} ops_bytes={} reserved_ops_bytes={} estimated_work={} glyph_hash=0x{:016X} request_rebuild=0 prepared_replay=0 recipe_cache=shared-sharded-single-flight cache_hits={} cache_misses={} cache_coalesced={} cache_builds={} cache_failures={} cache_evictions={} cache_entries={} cache_bytes={}\n",
+        "font-plan-service: batch ready id={} producer={} glyphs={} parallelism={} participants={} participant_mask=0x{:08X} queue_wait_ms={} build_ms={} attempts={} rejected={} worker_slices={} yields={} ops_bytes={} reserved_ops_bytes={} estimated_work={} glyph_hash=0x{:016X} request_rebuild=0 prepared_replay=0 recipe_cache=shared-sharded-single-flight cache_hits={} cache_misses={} cache_coalesced={} cache_builds={} cache_failures={} cache_evictions={} cache_entries={} cache_bytes={}\n",
         batch.id,
         batch.producer,
         glyphs,
         stats.parallelism,
+        stats.participants(),
+        stats.participant_mask,
         stats.queue_wait_ms,
         stats.build_ms,
         stats.candidate_attempts,
@@ -1372,10 +1450,10 @@ async fn font_plan_worker_task(worker_id: usize, expected_slot: u32, expected_ki
 
     loop {
         let observed = FONT_PLAN_WAIT.observe();
-        match claim_plan_work() {
+        match claim_plan_work(worker_id) {
             Some(FontPlanClaimResult::Attempt(claim)) => {
                 let batch = Arc::clone(&claim.batch);
-                run_plan_attempt(claim);
+                run_plan_attempt(claim, worker_id);
                 batch.cooperative_yields.fetch_add(1, Ordering::AcqRel);
                 FONT_PLAN_COOPERATIVE_YIELDS.fetch_add(1, Ordering::AcqRel);
                 // A zero-duration timer is an explicit executor turn boundary.
@@ -1455,4 +1533,27 @@ pub(crate) fn start_font_plan_workers() -> Result<bool, SpawnError> {
         if ecore_policy { "ecore-strict" } else { "background-fallback-no-ecore" },
     );
     Ok(admitted == FONT_PLAN_WORKER_COUNT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FontPlanCellRequest, GlyphSelectionState};
+
+    #[test]
+    fn exact_scalar_is_attempted_once_without_random_fallback() {
+        let mut selection = GlyphSelectionState::new(7, 42.0, Some('§'));
+        assert_eq!(selection.next_candidate(), Some(('§', 42.0)));
+        assert_eq!(selection.next_candidate(), None);
+    }
+
+    #[test]
+    fn worker_affinity_is_explicit_and_optional() {
+        let rolled = FontPlanCellRequest::new([1.0, 2.0], 16.0, 0.0, 10, 11);
+        assert_eq!(rolled.worker_affinity(), None);
+        assert_eq!(rolled.fixed_scalar(), None);
+        let exact = FontPlanCellRequest::fixed([1.0, 2.0], 16.0, 0.0, 10, 'T')
+            .with_worker_affinity(31);
+        assert_eq!(exact.worker_affinity(), Some(31));
+        assert_eq!(exact.fixed_scalar(), Some('T'));
+    }
 }

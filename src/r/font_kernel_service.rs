@@ -2,11 +2,14 @@
 //!
 //! `RetainScene` yields GPU-VM-resident Skrifa coverage that a caller may
 //! restamp repeatedly. `Stamp` is the one-shot path: the worker creates the
-//! same retained representation temporarily, composites ordered font/color
-//! layers into either a new GPU-visible premultiplied RGBA8 buffer or a leased
-//! UI4 frame, and returns the owned buffer or exact producer-release proof
-//! asynchronously. Stamp callers may preserve a canvas or request an exact
-//! coverage-union crop; both obey the UHD/4K pixel and 4096-glyph soft caps.
+//! same retained representation temporarily. Sealed single-glyph plans take a
+//! shorter route through the shared Font-VM outline and immutable R8 tile
+//! caches; overlapping placements retain the proven max-union representation.
+//! The service composites ordered font/color layers into either a new
+//! GPU-visible premultiplied RGBA8 buffer or a leased UI4 frame, and returns
+//! the owned buffer or exact producer-release proof asynchronously. Stamp
+//! callers may preserve a canvas or request an exact coverage-union crop; both
+//! obey the UHD/4K pixel and 4096-glyph soft caps.
 //! The lane is deliberately local to real font retain/stamp work. Unrelated
 //! GPU clients own admission through the GPU executor and GuC contexts.
 
@@ -19,9 +22,10 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 use crate::intel::gpu_font::{
-    GpuFontFace, GpuFontJobEntry, GpuFontRetainedScene, GpuFontRetainedSceneError, GpuFontRgba,
-    GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS, ensure_font_face_available,
-    font_face_supports_text, retain_gpu_font_centered_scene_at_raster,
+    GpuFontFace, GpuFontGlyphRecipe, GpuFontGlyphRecipeKey, GpuFontJobEntry,
+    GpuFontPreparedCenteredGlyph, GpuFontRetainedScene, GpuFontRetainedSceneError, GpuFontRgba,
+    GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS, classify_gpu_font_prepared_placements,
+    ensure_font_face_available, font_face_supports_text, retain_gpu_font_centered_scene_at_raster,
     retain_gpu_font_prepared_centered_scene, retain_gpu_font_scene_at_raster,
 };
 use crate::r::font_plan_service::PreparedGlyphPlan;
@@ -35,6 +39,13 @@ pub(crate) const FONT_STAMP_MAX_GLYPHS: usize = 4096;
 const FONT_KERNEL_LANE_RETRY_MS: u64 = 2;
 const FONT_KERNEL_GPU_RETRY_MS: u64 = 2;
 const FONT_KERNEL_GPU_WAITERS: usize = 32;
+// Fourteen MiB leaves one contiguous 32 MiB extent in each Font-VA region for
+// two worst-case legacy masks. Oversized individual glyphs simply retain the
+// proven union path instead of growing the shared cache backing.
+const FONT_GPU_CACHE_MAX_ENTRIES: usize = 4096;
+const FONT_GPU_CACHE_ATLAS_WIDTH: u32 = 4096;
+const FONT_GPU_CACHE_ATLAS_HEIGHT: u32 = 2560;
+const FONT_GPU_CACHE_OUTLINE_BYTES: usize = 4 * 1024 * 1024;
 
 static NEXT_TICKET: AtomicU64 = AtomicU64::new(1);
 static ONLINE: AtomicBool = AtomicBool::new(false);
@@ -45,8 +56,135 @@ static LAST_STAMP_PARTITION_LOG_TICKET: AtomicU64 = AtomicU64::new(0);
 static WORK_AVAILABLE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static REQUESTS: Mutex<VecDeque<QueuedFontRequest>> = Mutex::new(VecDeque::new());
 static STATUS: Mutex<FontKernelServiceStatus> = Mutex::new(FontKernelServiceStatus::new());
+static FONT_GPU_CACHE: Mutex<FontGpuCache> = Mutex::new(FontGpuCache::new());
 static GPU_LANE: FairSemaphore<crate::wait::EmbassySpinRawMutex, FONT_KERNEL_GPU_WAITERS> =
     FairSemaphore::new(1);
+
+struct FontGpuResidentOutline {
+    key: GpuFontGlyphRecipeKey,
+    ops: crate::intel::gpgpu::GpgpuFontOutlineOps,
+    last_touch: u64,
+}
+
+struct FontGpuResidentTile {
+    key: GpuFontGlyphRecipeKey,
+    tile: crate::intel::gpgpu::GpgpuMask8AtlasTile,
+    last_touch: u64,
+}
+
+struct FontGpuCache {
+    outline_arena: Option<crate::intel::gpgpu::GpgpuOwnedFontOutlineOpsArena>,
+    coverage_atlas: Option<crate::intel::gpgpu::GpgpuOwnedMask8Atlas>,
+    outlines: Vec<FontGpuResidentOutline>,
+    tiles: Vec<FontGpuResidentTile>,
+    touch: u64,
+    outline_hits: u64,
+    outline_misses: u64,
+    tile_hits: u64,
+    tile_misses: u64,
+    evictions: u64,
+    poisoned: bool,
+}
+
+impl FontGpuCache {
+    const fn new() -> Self {
+        Self {
+            outline_arena: None,
+            coverage_atlas: None,
+            outlines: Vec::new(),
+            tiles: Vec::new(),
+            touch: 0,
+            outline_hits: 0,
+            outline_misses: 0,
+            tile_hits: 0,
+            tile_misses: 0,
+            evictions: 0,
+            poisoned: false,
+        }
+    }
+
+    fn next_touch(&mut self) -> u64 {
+        self.touch = self.touch.wrapping_add(1).max(1);
+        self.touch
+    }
+
+    fn evict_oldest_outline(&mut self) -> bool {
+        let Some(index) = self
+            .outlines
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, entry)| entry.last_touch)
+            .map(|(index, _)| index)
+        else {
+            return false;
+        };
+        self.outlines.swap_remove(index);
+        self.evictions = self.evictions.saturating_add(1);
+        true
+    }
+
+    fn evict_oldest_tile_except(&mut self, protected: &[CachedPreparedGlyph]) -> bool {
+        let Some(index) = self
+            .tiles
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| !protected.iter().any(|used| used.key == entry.key))
+            .min_by_key(|(_, entry)| entry.last_touch)
+            .map(|(index, _)| index)
+        else {
+            return false;
+        };
+        self.tiles.swap_remove(index);
+        self.evictions = self.evictions.saturating_add(1);
+        true
+    }
+
+    fn poison_coverage_build(&mut self) {
+        self.poisoned = true;
+        self.tiles.clear();
+        self.outlines.clear();
+        self.coverage_atlas = None;
+        self.outline_arena = None;
+    }
+
+    fn quarantine_atlas_after_ambiguous_read(&mut self, used_tiles: &[CachedPreparedGlyph]) {
+        self.poisoned = true;
+        for used in used_tiles {
+            used.tile.quarantine();
+        }
+        self.tiles.clear();
+        self.coverage_atlas = None;
+    }
+
+    fn mark_poisoned(&mut self) {
+        self.poisoned = true;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FontGpuFrameCacheStats {
+    outline_hits: usize,
+    outline_misses: usize,
+    tile_hits: usize,
+    tile_misses: usize,
+    evictions: usize,
+    resident_outlines: usize,
+    resident_tiles: usize,
+    coverage_build_ms: u64,
+    coverage_audit_ms: u64,
+    coverage_submits: usize,
+}
+
+struct FontGpuCachePreparationError {
+    error: FontKernelError,
+    stats: FontGpuFrameCacheStats,
+}
+
+struct CachedPreparedGlyph {
+    key: GpuFontGlyphRecipeKey,
+    tile: crate::intel::gpgpu::GpgpuMask8AtlasTile,
+    destination_xy: [i32; 2],
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FontKernelTicket(u64);
@@ -323,6 +461,13 @@ pub(crate) struct FontFrameStamp {
     coverage_build_ms: u64,
     coverage_audit_ms: u64,
     coverage_submits: usize,
+    gpu_outline_cache_hits: usize,
+    gpu_outline_cache_misses: usize,
+    gpu_tile_cache_hits: usize,
+    gpu_tile_cache_misses: usize,
+    gpu_cache_evictions: usize,
+    gpu_resident_outlines: usize,
+    gpu_resident_tiles: usize,
     instance_release_ms: u64,
     total_service_ms: u64,
     release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
@@ -376,6 +521,34 @@ impl FontFrameStamp {
 
     pub(crate) const fn coverage_submits(&self) -> usize {
         self.coverage_submits
+    }
+
+    pub(crate) const fn gpu_outline_cache_hits(&self) -> usize {
+        self.gpu_outline_cache_hits
+    }
+
+    pub(crate) const fn gpu_outline_cache_misses(&self) -> usize {
+        self.gpu_outline_cache_misses
+    }
+
+    pub(crate) const fn gpu_tile_cache_hits(&self) -> usize {
+        self.gpu_tile_cache_hits
+    }
+
+    pub(crate) const fn gpu_tile_cache_misses(&self) -> usize {
+        self.gpu_tile_cache_misses
+    }
+
+    pub(crate) const fn gpu_cache_evictions(&self) -> usize {
+        self.gpu_cache_evictions
+    }
+
+    pub(crate) const fn gpu_resident_outlines(&self) -> usize {
+        self.gpu_resident_outlines
+    }
+
+    pub(crate) const fn gpu_resident_tiles(&self) -> usize {
+        self.gpu_resident_tiles
     }
 
     pub(crate) const fn instance_release_ms(&self) -> u64 {
@@ -702,6 +875,26 @@ pub(crate) fn submit_prepared_frame_stamp_with_clear(
     )
 }
 
+/// Queue a sealed prepared plan over the destination's existing pixels.
+///
+/// This is intentionally separate from the ordinary clear-and-stamp entry:
+/// callers must own a dirty/double-buffer history and mirror accumulated
+/// waves across both buffers themselves. Rejection returns the exact plan.
+pub(crate) fn submit_prepared_frame_stamp(
+    plan: PreparedGlyphPlan,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> Result<PendingFontFrameStamp, PreparedFrameStampRejection> {
+    queue_frame_stamp(FrameStampInput::Prepared(plan), destination, None).map_err(|rejection| {
+        let FrameStampInput::Prepared(plan) = rejection.input else {
+            unreachable!("prepared frame admission returned a request input")
+        };
+        PreparedFrameStampRejection {
+            error: rejection.error,
+            plan,
+        }
+    })
+}
+
 fn queue_frame_stamp(
     input: FrameStampInput,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
@@ -849,10 +1042,19 @@ fn set_active_stage(ticket: FontKernelTicket, stage: &'static str) {
     status.active_stage = stage;
 }
 
+fn ensure_font_rcs_lane_available() -> Result<(), FontKernelError> {
+    if crate::intel::gpgpu::font_rcs_context_is_quarantined() {
+        Err(FontKernelError::Unavailable("font-rcs-context-quarantined"))
+    } else {
+        Ok(())
+    }
+}
+
 fn process_retain_scene(
     ticket: FontKernelTicket,
     request: &RetainSceneRequest,
 ) -> Result<FontKernelRetainedScene, FontKernelError> {
+    ensure_font_rcs_lane_available()?;
     let glyph_runs = expand_origin_runs(ticket, request)?;
     let mut masks = Vec::new();
     process_retain_scene_partition(ticket, request, glyph_runs.as_slice(), &mut masks)?;
@@ -1083,6 +1285,7 @@ fn process_stamp(
     ticket: FontKernelTicket,
     request: &FontStampRequest,
 ) -> Result<FontStampedBuffer, FontKernelError> {
+    ensure_font_rcs_lane_available()?;
     let (scenes, glyphs) = prepare_stamp_scenes(ticket, request)?;
     let (origin_px, width, height) = match request.fit {
         FontStampFit::Canvas => {
@@ -1146,6 +1349,299 @@ fn validate_frame_clear_outcome(
     }
 }
 
+fn font_gpu_tile_audit_covers_recipe(
+    recipe: &GpuFontGlyphRecipe,
+    tile: &crate::intel::gpgpu::GpgpuMask8AtlasTile,
+) -> bool {
+    let expected = recipe.local_audit_rect();
+    let actual = tile.audit();
+    if expected.is_empty() || actual.nonzero_pixels == 0 || actual.bounds.is_empty() {
+        return false;
+    }
+    let expected_right = i64::from(expected.x) + i64::from(expected.width);
+    let expected_bottom = i64::from(expected.y) + i64::from(expected.height);
+    let actual_right = i64::from(actual.bounds.x) + i64::from(actual.bounds.width);
+    let actual_bottom = i64::from(actual.bounds.y) + i64::from(actual.bounds.height);
+    const EDGE_AUDIT_SLOP_PX: i64 = 2;
+    i64::from(actual.bounds.x) <= i64::from(expected.x) + EDGE_AUDIT_SLOP_PX
+        && i64::from(actual.bounds.y) <= i64::from(expected.y) + EDGE_AUDIT_SLOP_PX
+        && actual_right + EDGE_AUDIT_SLOP_PX >= expected_right
+        && actual_bottom + EDGE_AUDIT_SLOP_PX >= expected_bottom
+}
+
+fn acquire_font_gpu_resident_outline(
+    cache: &mut FontGpuCache,
+    recipe: &GpuFontGlyphRecipe,
+) -> Result<crate::intel::gpgpu::GpgpuFontOutlineOps, FontKernelError> {
+    let key = recipe.key();
+    if let Some(index) = cache.outlines.iter().position(|entry| entry.key == key) {
+        let touch = cache.next_touch();
+        cache.outlines[index].last_touch = touch;
+        cache.outline_hits = cache.outline_hits.saturating_add(1);
+        return Ok(cache.outlines[index].ops.clone());
+    }
+    cache.outline_misses = cache.outline_misses.saturating_add(1);
+    if cache.outline_arena.is_none() {
+        cache.outline_arena = crate::intel::gpgpu::allocate_font_outline_ops_arena(
+            FONT_GPU_CACHE_OUTLINE_BYTES,
+            FONT_GPU_CACHE_MAX_ENTRIES,
+        );
+    }
+    let arena = cache
+        .outline_arena
+        .as_ref()
+        .cloned()
+        .ok_or(FontKernelError::Unavailable("font-gpu-outline-arena"))?;
+    while cache.outlines.len() >= FONT_GPU_CACHE_MAX_ENTRIES {
+        if !cache.evict_oldest_outline() {
+            return Err(FontKernelError::Unavailable("font-gpu-outline-cache-cap"));
+        }
+    }
+    let mut eviction_budget = cache.outlines.len();
+    let ops = loop {
+        if let Some(ops) = arena.insert(recipe.outline_ops()) {
+            break ops;
+        }
+        if eviction_budget == 0 || !cache.evict_oldest_outline() {
+            return Err(FontKernelError::Unavailable("font-gpu-outline-cache-space"));
+        }
+        eviction_budget -= 1;
+    };
+    let touch = cache.next_touch();
+    cache.outlines.push(FontGpuResidentOutline {
+        key,
+        ops: ops.clone(),
+        last_touch: touch,
+    });
+    Ok(ops)
+}
+
+fn acquire_font_gpu_coverage_tile(
+    recipe: &GpuFontGlyphRecipe,
+    stats: &mut FontGpuFrameCacheStats,
+    protected: &[CachedPreparedGlyph],
+) -> Result<crate::intel::gpgpu::GpgpuMask8AtlasTile, FontKernelError> {
+    let acquire_started_ms = Instant::now().as_millis();
+    let key = recipe.key();
+    let (width, height) = recipe.mask_extent();
+    let (resident_ops, reservation) = {
+        let mut cache = FONT_GPU_CACHE.lock();
+        if cache.poisoned {
+            return Err(FontKernelError::Unavailable("font-gpu-cache-poisoned"));
+        }
+        if let Some(index) = cache.tiles.iter().position(|entry| entry.key == key) {
+            let touch = cache.next_touch();
+            cache.tiles[index].last_touch = touch;
+            cache.tile_hits = cache.tile_hits.saturating_add(1);
+            stats.tile_hits = stats.tile_hits.saturating_add(1);
+            return Ok(cache.tiles[index].tile.clone());
+        }
+        cache.tile_misses = cache.tile_misses.saturating_add(1);
+        stats.tile_misses = stats.tile_misses.saturating_add(1);
+
+        let outline_hits_before = cache.outline_hits;
+        let outline_misses_before = cache.outline_misses;
+        let resident_ops_result = acquire_font_gpu_resident_outline(&mut cache, recipe);
+        stats.outline_hits = stats
+            .outline_hits
+            .saturating_add(cache.outline_hits.saturating_sub(outline_hits_before) as usize);
+        stats.outline_misses = stats
+            .outline_misses
+            .saturating_add(cache.outline_misses.saturating_sub(outline_misses_before) as usize);
+        let resident_ops = resident_ops_result?;
+
+        if cache.coverage_atlas.is_none() {
+            cache.coverage_atlas = crate::intel::gpgpu::allocate_font_coverage_atlas(
+                FONT_GPU_CACHE_ATLAS_WIDTH,
+                FONT_GPU_CACHE_ATLAS_HEIGHT,
+                FONT_GPU_CACHE_MAX_ENTRIES,
+            );
+        }
+        let atlas = cache
+            .coverage_atlas
+            .as_ref()
+            .cloned()
+            .ok_or(FontKernelError::Unavailable("font-gpu-coverage-atlas"))?;
+        while cache.tiles.len() >= FONT_GPU_CACHE_MAX_ENTRIES {
+            if !cache.evict_oldest_tile_except(protected) {
+                return Err(FontKernelError::Unavailable("font-gpu-tile-cache-cap"));
+            }
+        }
+        let mut eviction_budget = cache.tiles.len();
+        let reservation = loop {
+            if let Some(reservation) = atlas.reserve(width, height) {
+                break reservation;
+            }
+            if eviction_budget == 0 || !cache.evict_oldest_tile_except(protected) {
+                return Err(FontKernelError::Unavailable("font-gpu-tile-cache-space"));
+            }
+            eviction_budget -= 1;
+        };
+        (resident_ops, reservation)
+    };
+
+    // The cache spin lock is deliberately released before the bounded GPU
+    // wait and one-time CPU audit. FontKernel serializes builders already.
+    let local_rect = crate::intel::gpgpu::GpgpuRect::new(0, 0, width, height);
+    let tile = match crate::intel::gpgpu::font_outline_coverage_atlas_tile_r8(
+        reservation,
+        &resident_ops,
+        local_rect,
+        recipe.coverage_subdivisions(),
+        recipe.optical_bias_px(),
+    ) {
+        Ok(tile) => tile,
+        Err(crate::intel::gpgpu::GpgpuDispatchRetirement::SubmittedIncomplete) => {
+            FONT_GPU_CACHE.lock().poison_coverage_build();
+            return Err(FontKernelError::SubmittedIncomplete("font-gpu-tile-coverage-incomplete"));
+        }
+        Err(crate::intel::gpgpu::GpgpuDispatchRetirement::NotSubmitted) => {
+            return Err(FontKernelError::Unavailable("font-gpu-tile-coverage"));
+        }
+        Err(crate::intel::gpgpu::GpgpuDispatchRetirement::Complete) => {
+            stats.coverage_build_ms = stats.coverage_build_ms.saturating_add(
+                Instant::now()
+                    .as_millis()
+                    .saturating_sub(acquire_started_ms),
+            );
+            stats.coverage_submits = stats.coverage_submits.saturating_add(1);
+            return Err(FontKernelError::Unavailable("font-gpu-tile-audit"));
+        }
+    };
+    let total_build_ms = Instant::now()
+        .as_millis()
+        .saturating_sub(acquire_started_ms);
+    let audit_ms = tile.coverage_audit_ms();
+    stats.coverage_build_ms = stats
+        .coverage_build_ms
+        .saturating_add(total_build_ms.saturating_sub(audit_ms));
+    stats.coverage_audit_ms = stats.coverage_audit_ms.saturating_add(audit_ms);
+    stats.coverage_submits = stats.coverage_submits.saturating_add(1);
+    if !font_gpu_tile_audit_covers_recipe(recipe, &tile) {
+        return Err(FontKernelError::Unavailable("font-gpu-tile-audit"));
+    }
+    let mut cache = FONT_GPU_CACHE.lock();
+    let touch = cache.next_touch();
+    cache.tiles.push(FontGpuResidentTile {
+        key,
+        tile: tile.clone(),
+        last_touch: touch,
+    });
+    Ok(tile)
+}
+
+fn prepare_cached_font_gpu_glyphs(
+    prepared: &[GpuFontPreparedCenteredGlyph],
+    unique_indices: &[usize],
+) -> Result<(Vec<CachedPreparedGlyph>, FontGpuFrameCacheStats), FontGpuCachePreparationError> {
+    let evictions_before = FONT_GPU_CACHE.lock().evictions;
+    let mut stats = FontGpuFrameCacheStats::default();
+    let mut cached = Vec::with_capacity(unique_indices.len());
+    for &index in unique_indices {
+        let Some(glyph) = prepared.get(index) else {
+            snapshot_font_gpu_cache_stats(&mut stats, evictions_before);
+            return Err(FontGpuCachePreparationError {
+                error: FontKernelError::InvalidRequest("font-prepared-index"),
+                stats,
+            });
+        };
+        let tile =
+            match acquire_font_gpu_coverage_tile(glyph.recipe(), &mut stats, cached.as_slice()) {
+                Ok(tile) => tile,
+                Err(error) => {
+                    snapshot_font_gpu_cache_stats(&mut stats, evictions_before);
+                    return Err(FontGpuCachePreparationError { error, stats });
+                }
+            };
+        cached.push(CachedPreparedGlyph {
+            key: glyph.recipe().key(),
+            tile,
+            destination_xy: glyph.destination_xy(),
+        });
+    }
+    snapshot_font_gpu_cache_stats(&mut stats, evictions_before);
+    Ok((cached, stats))
+}
+
+fn snapshot_font_gpu_cache_stats(stats: &mut FontGpuFrameCacheStats, evictions_before: u64) {
+    let cache = FONT_GPU_CACHE.lock();
+    stats.evictions = cache.evictions.saturating_sub(evictions_before) as usize;
+    stats.resident_outlines = cache.outlines.len();
+    stats.resident_tiles = cache.tiles.len();
+}
+
+fn stamp_cached_font_gpu_glyphs(
+    cached: &[CachedPreparedGlyph],
+    foreground: GpuFontRgba,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    frame_already_irreversible: bool,
+) -> Result<(usize, usize, crate::intel::gpgpu::GpgpuRgba8ReleaseFence), FontKernelError> {
+    let color_rgba = u32::from_le_bytes([foreground.r, foreground.g, foreground.b, foreground.a]);
+    let layers = cached
+        .iter()
+        .map(|glyph| crate::intel::gpgpu::GpgpuGlyphMaskLayer {
+            mask: glyph.tile.surface(),
+            mask_rect: glyph.tile.rect(),
+            dst_xy: crate::intel::gpgpu::GpgpuPoint::new(
+                glyph.destination_xy[0],
+                glyph.destination_xy[1],
+            ),
+            color_rgba,
+        })
+        .collect::<Vec<_>>();
+    let mut submits = 0usize;
+    let mut active_walkers = 0usize;
+    let mut release = None;
+    for chunk in layers.chunks(crate::intel::gpgpu::GLYPH_MASK_BATCH_MAX_LAYERS) {
+        let rendered =
+            crate::intel::gpgpu::glyph_mask_layers_rgba8_2d_mode(chunk, destination, true);
+        if !rendered.ok {
+            if rendered.submitted {
+                FONT_GPU_CACHE
+                    .lock()
+                    .quarantine_atlas_after_ambiguous_read(cached);
+                return Err(FontKernelError::SubmittedIncomplete("font-gpu-tile-stamp-incomplete"));
+            }
+            return Err(if frame_already_irreversible || submits != 0 {
+                FontKernelError::SubmittedIncomplete("font-gpu-tile-frame-partial")
+            } else {
+                FontKernelError::Unavailable("font-gpu-tile-stamp")
+            });
+        }
+        submits = submits.saturating_add(rendered.submits);
+        active_walkers = active_walkers.saturating_add(rendered.active_walkers);
+        if rendered.release.is_some() {
+            release = rendered.release;
+        }
+    }
+    if release.is_none() {
+        let finalized = crate::intel::gpgpu::font_release_rgba8_surface_for_scanout(destination);
+        if !finalized.ok {
+            if finalized.submitted || crate::intel::gpgpu::font_rcs_context_is_quarantined() {
+                FONT_GPU_CACHE.lock().mark_poisoned();
+            }
+            return Err(if finalized.submitted || frame_already_irreversible || submits != 0 {
+                FontKernelError::SubmittedIncomplete("font-gpu-tile-release-incomplete")
+            } else {
+                FontKernelError::Unavailable("font-gpu-tile-release")
+            });
+        }
+        submits = submits.saturating_add(usize::from(finalized.submitted));
+        release = finalized.release;
+    }
+    let release =
+        release.ok_or(FontKernelError::SubmittedIncomplete("font-gpu-tile-release-missing"))?;
+    Ok((submits, active_walkers, release))
+}
+
+enum FontFrameCoverage {
+    Retained(Vec<(GpuFontRetainedScene, GpuFontRgba)>),
+    Cached {
+        glyphs: Vec<CachedPreparedGlyph>,
+        foreground: GpuFontRgba,
+    },
+}
+
 fn process_frame_stamp(
     ticket: FontKernelTicket,
     input: FrameStampInput,
@@ -1157,38 +1653,104 @@ fn process_frame_stamp(
 
     let service_started_ms = Instant::now().as_millis();
     let pre_service_ms = service_started_ms.saturating_sub(enqueued_ms);
+    ensure_font_rcs_lane_available()?;
     set_active_stage(ticket, "frame-prepare-coverage");
     let prepare_started_ms = Instant::now().as_millis();
-    let (scenes, glyphs, coverage_input) = match input {
+    let (coverage, glyphs, coverage_input, cache_stats) = match input {
         FrameStampInput::Prepared(plan) => {
             let glyphs = plan.glyph_count();
             let foreground = plan.foreground();
             let prepared = plan.into_prepared();
-            let scene = retain_gpu_font_prepared_centered_scene(prepared)
-                .map_err(FontKernelError::Unavailable)?;
-            (alloc::vec![(scene, foreground)], glyphs, "prepared-plan")
+            let classification = classify_gpu_font_prepared_placements(prepared.as_slice());
+            if classification.requires_union_coverage() {
+                let scene = retain_gpu_font_prepared_centered_scene(prepared)
+                    .map_err(FontKernelError::Unavailable)?;
+                (
+                    FontFrameCoverage::Retained(alloc::vec![(scene, foreground)]),
+                    glyphs,
+                    "prepared-plan-overlap-union",
+                    FontGpuFrameCacheStats::default(),
+                )
+            } else {
+                match prepare_cached_font_gpu_glyphs(
+                    prepared.as_slice(),
+                    classification.unique_indices(),
+                ) {
+                    Ok((cached, cache_stats)) => (
+                        FontFrameCoverage::Cached {
+                            glyphs: cached,
+                            foreground,
+                        },
+                        glyphs,
+                        "prepared-plan-resident-cache",
+                        cache_stats,
+                    ),
+                    Err(failure) => {
+                        if matches!(failure.error, FontKernelError::SubmittedIncomplete(_)) {
+                            return Err(failure.error);
+                        }
+                        let error = failure.error;
+                        crate::log_info!(
+                            target: "render";
+                            "font-kernel-service: resident-cache fallback ticket={} glyphs={} reason={:?} action=prepared-union-before-clear\n",
+                            ticket.raw(),
+                            glyphs,
+                            error,
+                        );
+                        let scene = retain_gpu_font_prepared_centered_scene(prepared)
+                            .map_err(FontKernelError::Unavailable)?;
+                        (
+                            FontFrameCoverage::Retained(alloc::vec![(scene, foreground)]),
+                            glyphs,
+                            "prepared-plan-cache-fallback",
+                            failure.stats,
+                        )
+                    }
+                }
+            }
         }
         FrameStampInput::Request(request) => {
             let (scenes, glyphs) = prepare_stamp_scenes(ticket, &request)?;
-            (scenes, glyphs, "request-outline")
+            (
+                FontFrameCoverage::Retained(scenes),
+                glyphs,
+                "request-outline",
+                FontGpuFrameCacheStats::default(),
+            )
         }
     };
     let prepare_coverage_ms = Instant::now()
         .as_millis()
         .saturating_sub(prepare_started_ms);
-    let coverage_build_ms = scenes
-        .iter()
-        .fold(0u64, |total, (scene, _)| total.saturating_add(scene.coverage_build_ms()));
-    let coverage_audit_ms = scenes
-        .iter()
-        .fold(0u64, |total, (scene, _)| total.saturating_add(scene.coverage_audit_ms()));
-    let coverage_submits = scenes
-        .iter()
-        .fold(0usize, |total, (scene, _)| total.saturating_add(scene.coverage_submits()));
-    let scene_count = scenes.len();
+    let (coverage_build_ms, coverage_audit_ms, coverage_submits, scene_count) = match &coverage {
+        FontFrameCoverage::Retained(scenes) => (
+            scenes
+                .iter()
+                .fold(cache_stats.coverage_build_ms, |total, (scene, _)| {
+                    total.saturating_add(scene.coverage_build_ms())
+                }),
+            scenes
+                .iter()
+                .fold(cache_stats.coverage_audit_ms, |total, (scene, _)| {
+                    total.saturating_add(scene.coverage_audit_ms())
+                }),
+            scenes
+                .iter()
+                .fold(cache_stats.coverage_submits, |total, (scene, _)| {
+                    total.saturating_add(scene.coverage_submits())
+                }),
+            scenes.len(),
+        ),
+        FontFrameCoverage::Cached { glyphs, .. } => (
+            cache_stats.coverage_build_ms,
+            cache_stats.coverage_audit_ms,
+            cache_stats.coverage_submits,
+            glyphs.len(),
+        ),
+    };
     crate::log_info!(
         target: "render";
-        "font-kernel-service: frame coverage ticket={} input={} glyphs={} scenes={} prepare_coverage_ms={} coverage_build_ms={} coverage_audit_ms={} coverage_submits={} cache=none\n",
+        "font-kernel-service: frame coverage ticket={} input={} glyphs={} scenes={} prepare_coverage_ms={} coverage_build_ms={} coverage_audit_ms={} coverage_submits={} outline_cache_hits={} outline_cache_misses={} tile_cache_hits={} tile_cache_misses={} cache_evictions={} resident_outlines={} resident_tiles={} cache=shared-font-vm-bounded\n",
         ticket.raw(),
         coverage_input,
         glyphs,
@@ -1197,6 +1759,13 @@ fn process_frame_stamp(
         coverage_build_ms,
         coverage_audit_ms,
         coverage_submits,
+        cache_stats.outline_hits,
+        cache_stats.outline_misses,
+        cache_stats.tile_hits,
+        cache_stats.tile_misses,
+        cache_stats.evictions,
+        cache_stats.resident_outlines,
+        cache_stats.resident_tiles,
     );
 
     // Coverage admission is still reversible: until every mask exists, the
@@ -1225,18 +1794,52 @@ fn process_frame_stamp(
     let mut active_walkers = 0usize;
     let mut release = None;
     let instance_started_ms = Instant::now().as_millis();
-    for (index, (scene, foreground)) in scenes.into_iter().enumerate() {
-        set_active_stage(ticket, "frame-instance");
-        let rendered =
-            scene.restamp_identity(destination, [0, 0], foreground, index + 1 == scene_count)?;
-        submits = submits.saturating_add(rendered.submits);
-        active_walkers = active_walkers.saturating_add(rendered.active_walkers);
-        if rendered.release.is_some() {
-            release = rendered.release;
+    match coverage {
+        FontFrameCoverage::Retained(scenes) => {
+            for (scene, foreground) in scenes {
+                set_active_stage(ticket, "frame-instance");
+                let rendered = match scene.restamp_identity(destination, [0, 0], foreground, true) {
+                    Ok(rendered) => rendered,
+                    Err(error) => {
+                        let error = FontKernelError::from(error);
+                        if (clear_rgba.is_some() || submits != 0)
+                            && matches!(error, FontKernelError::Unavailable(_))
+                        {
+                            return Err(FontKernelError::SubmittedIncomplete(
+                                "font-frame-after-clear-partial",
+                            ));
+                        }
+                        return Err(error);
+                    }
+                };
+                submits = submits.saturating_add(rendered.submits);
+                active_walkers = active_walkers.saturating_add(rendered.active_walkers);
+                if rendered.release.is_some() {
+                    release = rendered.release;
+                }
+            }
+        }
+        FontFrameCoverage::Cached {
+            glyphs: cached,
+            foreground,
+        } => {
+            set_active_stage(ticket, "frame-instance-cached");
+            let rendered = stamp_cached_font_gpu_glyphs(
+                cached.as_slice(),
+                foreground,
+                destination,
+                clear_rgba.is_some(),
+            )?;
+            submits = rendered.0;
+            active_walkers = rendered.1;
+            release = Some(rendered.2);
         }
     }
-    let release =
-        release.ok_or(FontKernelError::Unavailable("font-frame-stamp-release-missing"))?;
+    let release = release.ok_or(if clear_rgba.is_some() || submits != 0 {
+        FontKernelError::SubmittedIncomplete("font-frame-stamp-release-missing")
+    } else {
+        FontKernelError::Unavailable("font-frame-stamp-release-missing")
+    })?;
     let completed_ms = Instant::now().as_millis();
     Ok(FontFrameStamp {
         ticket,
@@ -1250,6 +1853,13 @@ fn process_frame_stamp(
         coverage_build_ms,
         coverage_audit_ms,
         coverage_submits,
+        gpu_outline_cache_hits: cache_stats.outline_hits,
+        gpu_outline_cache_misses: cache_stats.outline_misses,
+        gpu_tile_cache_hits: cache_stats.tile_hits,
+        gpu_tile_cache_misses: cache_stats.tile_misses,
+        gpu_cache_evictions: cache_stats.evictions,
+        gpu_resident_outlines: cache_stats.resident_outlines,
+        gpu_resident_tiles: cache_stats.resident_tiles,
         instance_release_ms: completed_ms.saturating_sub(instance_started_ms),
         total_service_ms: completed_ms.saturating_sub(service_started_ms),
         release,

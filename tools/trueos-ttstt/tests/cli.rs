@@ -104,3 +104,24 @@ fn paths_uses_the_configured_project_state_directory() {
     assert!(stdout.contains("/tmp/ttstt-test-state/models/kokoro"));
     assert!(stdout.contains("/tmp/ttstt-test-state/models/whisper/ggml-base.bin"));
 }
+
+#[test]
+fn paths_uses_the_migrated_trueos_model_layout_by_default() {
+    let output = trueos_ttstt()
+        .arg("paths")
+        .env_remove("TTSTT_HOME")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let tools_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    assert!(stdout.contains(tools_dir.join("ttstt/models/kokoro").to_str().unwrap()));
+    assert!(stdout.contains(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(".ttstt/models/whisper/ggml-base.bin")
+            .to_str()
+            .unwrap()
+    ));
+}

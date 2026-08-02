@@ -1004,7 +1004,11 @@ impl GpgpuMask8AtlasReservation {
         self.inner.storage.nonzero_audit_rect(self.content_rect)
     }
 
-    fn publish(mut self, audit: GpgpuMask8Audit) -> Option<GpgpuMask8AtlasTile> {
+    fn publish(
+        mut self,
+        audit: GpgpuMask8Audit,
+        coverage_audit_ms: u64,
+    ) -> Option<GpgpuMask8AtlasTile> {
         if !self.active || !self.inner.allocator.lock().publish(self.key) {
             return None;
         }
@@ -1014,6 +1018,7 @@ impl GpgpuMask8AtlasReservation {
             key: self.key,
             rect: self.content_rect,
             audit,
+            coverage_audit_ms,
         })
     }
 
@@ -1040,6 +1045,7 @@ pub(crate) struct GpgpuMask8AtlasTile {
     key: GpgpuFontCacheEntryKey,
     rect: GpgpuRect,
     audit: GpgpuMask8Audit,
+    coverage_audit_ms: u64,
 }
 
 impl GpgpuMask8AtlasTile {
@@ -1057,6 +1063,10 @@ impl GpgpuMask8AtlasTile {
     /// subsequent frame needs to read this immutable coverage back to the CPU.
     pub(crate) const fn audit(&self) -> GpgpuMask8Audit {
         self.audit
+    }
+
+    pub(crate) const fn coverage_audit_ms(&self) -> u64 {
+        self.coverage_audit_ms
     }
 
     /// Pin this tile and its complete backing after an accepted source-read or
@@ -1078,6 +1088,7 @@ impl Clone for GpgpuMask8AtlasTile {
             key: self.key,
             rect: self.rect,
             audit: self.audit,
+            coverage_audit_ms: self.coverage_audit_ms,
         }
     }
 }

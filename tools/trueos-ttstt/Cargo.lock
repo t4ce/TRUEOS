@@ -1393,6 +1393,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "trueos-ttstt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hound",
+ "ort",
+ "rubato",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "tempfile",
+ "transcribe-rs",
+ "trueos-ttstt-protocol",
+ "tts-rs",
+ "whisper-rs",
+]
+
+[[package]]
+name = "trueos-ttstt-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "tts-rs"
 version = "2026.2.3"
 dependencies = [
@@ -1408,33 +1435,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "zip",
-]
-
-[[package]]
-name = "ttstt"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "hound",
- "ort",
- "rubato",
- "serde",
- "serde_json",
- "signal-hook",
- "tempfile",
- "transcribe-rs",
- "tts-rs",
- "ttstt-protocol",
- "whisper-rs",
-]
-
-[[package]]
-name = "ttstt-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]
