@@ -54,6 +54,24 @@ pub const LUMEN_PHASE_RESTORE_UPLOAD: u32 = 7;
 pub const LUMEN_PHASE_RESTORING: u32 = 8;
 pub const LUMEN_PHASE_ERROR: u32 = 9;
 
+pub const DOBBY_UI4_POINTER_MOVE: u32 = 0;
+pub const DOBBY_UI4_POINTER_PRIMARY_CLICK: u32 = 1;
+
+pub const DOBBY_UI4_KEY_ENTER: u32 = 1;
+pub const DOBBY_UI4_KEY_ESCAPE: u32 = 2;
+pub const DOBBY_UI4_KEY_BACKSPACE: u32 = 3;
+pub const DOBBY_UI4_KEY_TAB: u32 = 4;
+pub const DOBBY_UI4_KEY_SPACE: u32 = 5;
+pub const DOBBY_UI4_KEY_ARROW_RIGHT: u32 = 6;
+pub const DOBBY_UI4_KEY_ARROW_LEFT: u32 = 7;
+pub const DOBBY_UI4_KEY_ARROW_DOWN: u32 = 8;
+pub const DOBBY_UI4_KEY_ARROW_UP: u32 = 9;
+pub const DOBBY_UI4_KEY_DELETE: u32 = 10;
+pub const DOBBY_UI4_KEY_HOME: u32 = 11;
+pub const DOBBY_UI4_KEY_END: u32 = 12;
+pub const DOBBY_UI4_KEY_PAGE_UP: u32 = 13;
+pub const DOBBY_UI4_KEY_PAGE_DOWN: u32 = 14;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct TrueosLumenStatus {
@@ -308,6 +326,21 @@ unsafe extern "C" {
         text_len: usize,
     ) -> i32;
     pub fn trueos_cabi_spirit_move(x_normalized: f32, y_normalized: f32) -> i32;
+    pub fn trueos_cabi_dobby_ui4_windows(out_ptr: *mut u8, out_cap: usize) -> isize;
+    pub fn trueos_cabi_dobby_ui4_focus(window_id: u64) -> i32;
+    pub fn trueos_cabi_dobby_ui4_observe_prepare() -> isize;
+    pub fn trueos_cabi_dobby_ui4_observe_metadata(
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
+    pub fn trueos_cabi_dobby_ui4_observe_read(
+        offset: usize,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
+    pub fn trueos_cabi_dobby_ui4_pointer(x: u16, y: u16, action: u32) -> i32;
+    pub fn trueos_cabi_dobby_ui4_type(text_ptr: *const u8, text_len: usize) -> i32;
+    pub fn trueos_cabi_dobby_ui4_key(key: u32) -> i32;
 
     pub fn trueos_cabi_gridpaper_snapshot_submit(
         generation: u64,

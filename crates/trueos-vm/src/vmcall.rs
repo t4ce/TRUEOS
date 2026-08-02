@@ -149,6 +149,14 @@ pub const OP_BP_SPIRIT_TEXT_PRESENT_SILENT: u32 = 0x112;
 /// low 32 bits and bearer length in the high 32 bits. The request payload is
 /// exactly `URL || bearer || JSON body`; the body is the non-empty remainder.
 pub const OP_BP_FETCH_POST_JSON_BYTES_START: u32 = 0x113;
+pub const OP_BP_DOBBY_UI4_WINDOWS: u32 = 0x114;
+pub const OP_BP_DOBBY_UI4_FOCUS: u32 = 0x115;
+pub const OP_BP_DOBBY_UI4_OBSERVE_PREPARE: u32 = 0x116;
+pub const OP_BP_DOBBY_UI4_OBSERVE_METADATA: u32 = 0x117;
+pub const OP_BP_DOBBY_UI4_OBSERVE_READ: u32 = 0x118;
+pub const OP_BP_DOBBY_UI4_POINTER: u32 = 0x119;
+pub const OP_BP_DOBBY_UI4_TYPE: u32 = 0x11A;
+pub const OP_BP_DOBBY_UI4_KEY: u32 = 0x11B;
 pub const OP_NET_TCP_WRITE: u32 = 0x10;
 pub const OP_NET_TCP_READ: u32 = 0x11;
 pub const OP_BP_NET_OPEN: u32 = 0x20;

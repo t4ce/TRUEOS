@@ -8,13 +8,18 @@ use github_copilot_sdk::session_events::{
     AssistantMessageData, ExternalToolRequestedData, SessionEventType,
 };
 use github_copilot_sdk::types::{
-    DeferMode, MessageOptions, SessionConfig, SystemMessageConfig, Tool,
+    Attachment, DeferMode, MessageOptions, SessionConfig, SystemMessageConfig, Tool,
 };
 use github_copilot_sdk::{Client, ClientMode, ClientOptions, LogLevel};
 use serde_json::Value;
 use tokio::sync::{Semaphore, TryAcquireError, oneshot};
 
 use crate::openai::{NormalizedChat, OpenAiTool};
+
+pub const MAX_ORDERED_TOOL_CALLS: usize = 8;
+const BATCH_TOOL_NAME: &str = "remoteai_ordered_tool_batch_v1";
+const MAX_TOOL_ARGUMENT_BYTES: usize = 4 * 1024;
+const MAX_BATCH_ARGUMENT_BYTES: usize = MAX_ORDERED_TOOL_CALLS * MAX_TOOL_ARGUMENT_BYTES + 4 * 1024;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CapturedToolCall {
@@ -27,6 +32,7 @@ pub struct CapturedToolCall {
 pub enum BackendReply {
     Text(String),
     Tool(CapturedToolCall),
+    Tools(Vec<CapturedToolCall>),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -145,12 +151,15 @@ async fn complete_one(
     chat: NormalizedChat,
     mut cancellation: oneshot::Receiver<()>,
 ) -> Result<BackendReply, BackendError> {
-    let tools = copilot_tools(&chat.tools);
-    let available_tools: Vec<String> = chat
-        .tools
-        .iter()
-        .map(|tool| format!("custom:{}", tool.function.name))
-        .collect();
+    let tools = copilot_tools(&chat);
+    let available_tools = if chat.parallel_tool_calls {
+        vec![format!("custom:{BATCH_TOOL_NAME}")]
+    } else {
+        chat.tools
+            .iter()
+            .map(|tool| format!("custom:{}", tool.function.name))
+            .collect()
+    };
     let system_prompt = if chat.system_prompt.trim().is_empty() {
         "Follow the user's request precisely. Do not use host capabilities.".to_string()
     } else {
@@ -196,7 +205,7 @@ async fn complete_one(
             }
         } => result,
     };
-    if result.is_err() || matches!(result, Ok(BackendReply::Tool(_))) {
+    if result.is_err() || matches!(result, Ok(BackendReply::Tool(_) | BackendReply::Tools(_))) {
         let _ = session.abort().await;
     }
     let disconnect_result = session.disconnect().await;
@@ -230,8 +239,9 @@ async fn complete_summary(
     chat: &NormalizedChat,
     timeout: Duration,
 ) -> Result<BackendReply, BackendError> {
+    let options = message_options(chat).with_wait_timeout(timeout);
     let event = session
-        .send_and_wait(MessageOptions::new(chat.prompt.clone()).with_wait_timeout(timeout))
+        .send_and_wait(options)
         .await
         .map_err(|error| BackendError::Session(error.to_string()))?
         .ok_or(BackendError::Empty)?;
@@ -249,8 +259,9 @@ async fn complete_tool_turn(
     timeout: Duration,
 ) -> Result<BackendReply, BackendError> {
     let mut events = session.subscribe();
+    let options = message_options(chat);
     session
-        .send(chat.prompt.clone())
+        .send(options)
         .await
         .map_err(|error| BackendError::Session(error.to_string()))?;
 
@@ -269,7 +280,7 @@ async fn complete_tool_turn(
                             .ok_or_else(|| {
                                 BackendError::Session("malformed external tool request".to_string())
                             })?;
-                    break sanitize_tool_call(&chat.tools, data).map(BackendReply::Tool);
+                    break sanitize_tool_reply(chat, data);
                 }
                 SessionEventType::AssistantMessage => {
                     assistant_text = event
@@ -280,7 +291,13 @@ async fn complete_tool_turn(
                     let fallback = assistant_text
                         .as_deref()
                         .and_then(|text| fallback_text_tool(&chat.tools, text))
-                        .map(BackendReply::Tool)
+                        .map(|call| {
+                            if chat.parallel_tool_calls {
+                                BackendReply::Tools(vec![call])
+                            } else {
+                                BackendReply::Tool(call)
+                            }
+                        })
                         .ok_or(BackendError::Empty);
                     break fallback;
                 }
@@ -313,8 +330,28 @@ async fn complete_tool_turn(
     result
 }
 
-fn copilot_tools(definitions: &[OpenAiTool]) -> Vec<Tool> {
-    definitions
+fn message_options(chat: &NormalizedChat) -> MessageOptions {
+    let mut options = MessageOptions::new(chat.prompt.clone());
+    if !chat.attachments.is_empty() {
+        options = options.with_attachments(
+            chat.attachments
+                .iter()
+                .map(|attachment| Attachment::Blob {
+                    data: attachment.data_base64.clone(),
+                    mime_type: "image/png".to_string(),
+                    display_name: Some(attachment.display_name.clone()),
+                })
+                .collect(),
+        );
+    }
+    options
+}
+
+fn copilot_tools(chat: &NormalizedChat) -> Vec<Tool> {
+    if chat.parallel_tool_calls {
+        return vec![batch_tool(&chat.tools)];
+    }
+    chat.tools
         .iter()
         .map(|definition| {
             Tool::new(definition.function.name.as_str())
@@ -326,34 +363,76 @@ fn copilot_tools(definitions: &[OpenAiTool]) -> Vec<Tool> {
         .collect()
 }
 
+fn batch_tool(definitions: &[OpenAiTool]) -> Tool {
+    let variants: Vec<Value> = definitions
+        .iter()
+        .map(|definition| {
+            serde_json::json!({
+                "type": "object",
+                "description": definition.function.description,
+                "properties": {
+                    "name": { "type": "string", "const": definition.function.name },
+                    "arguments": definition.function.parameters,
+                },
+                "required": ["name", "arguments"],
+                "additionalProperties": false,
+            })
+        })
+        .collect();
+    let parameters = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "calls": {
+                "type": "array",
+                "description": "Original custom-tool calls in the exact order they must execute.",
+                "minItems": 1,
+                "maxItems": MAX_ORDERED_TOOL_CALLS,
+                "items": { "oneOf": variants },
+            }
+        },
+        "required": ["calls"],
+        "additionalProperties": false,
+    });
+    Tool::new(BATCH_TOOL_NAME)
+        .with_description(
+            "Submit one bounded ordered batch of the caller's custom tools. This relay never executes them.",
+        )
+        .with_parameters(parameters)
+        .with_skip_permission(true)
+        .with_defer(DeferMode::Never)
+}
+
+fn sanitize_tool_reply(
+    chat: &NormalizedChat,
+    data: ExternalToolRequestedData,
+) -> Result<BackendReply, BackendError> {
+    if chat.parallel_tool_calls {
+        if data.tool_name != BATCH_TOOL_NAME {
+            return Err(BackendError::Session(
+                "Copilot requested a tool outside the internal batch boundary".to_string(),
+            ));
+        }
+        let calls = expand_batch_calls(
+            &chat.tools,
+            data.tool_call_id.as_str(),
+            data.arguments
+                .unwrap_or_else(|| Value::Object(serde_json::Map::new())),
+        )?;
+        return Ok(BackendReply::Tools(calls));
+    }
+    sanitize_tool_call(&chat.tools, data).map(BackendReply::Tool)
+}
+
 fn sanitize_tool_call(
     definitions: &[OpenAiTool],
     data: ExternalToolRequestedData,
 ) -> Result<CapturedToolCall, BackendError> {
-    if !definitions
-        .iter()
-        .any(|tool| tool.function.name == data.tool_name)
-    {
-        return Err(BackendError::Session(
-            "Copilot requested a tool outside the request allowlist".to_string(),
-        ));
-    }
-    let mut arguments = data
+    let arguments = data
         .arguments
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-    if data.tool_name == "text"
-        && let Some(text) = arguments.get_mut("text")
-        && let Some(raw) = text.as_str()
-    {
-        *text = Value::String(truncate_utf8(raw.trim(), 96));
-    }
-    let argument_bytes =
-        serde_json::to_vec(&arguments).map_err(|error| BackendError::Session(error.to_string()))?;
-    if argument_bytes.len() > 4 * 1024 {
-        return Err(BackendError::Session(
-            "Copilot tool arguments exceed Dobby's 4 KiB limit".to_string(),
-        ));
-    }
+    let arguments = sanitize_arguments(definitions, data.tool_name.as_str(), arguments, false)?;
+    // Keep the original one-tool response contract byte-for-byte when batch
+    // mode was not requested.
     let id = if data.tool_call_id.is_empty() || data.tool_call_id.len() > 256 {
         "call_remoteai_1".to_string()
     } else {
@@ -364,6 +443,105 @@ fn sanitize_tool_call(
         name: data.tool_name,
         arguments,
     })
+}
+
+fn expand_batch_calls(
+    definitions: &[OpenAiTool],
+    batch_id: &str,
+    arguments: Value,
+) -> Result<Vec<CapturedToolCall>, BackendError> {
+    let batch_bytes =
+        serde_json::to_vec(&arguments).map_err(|error| BackendError::Session(error.to_string()))?;
+    if batch_bytes.len() > MAX_BATCH_ARGUMENT_BYTES {
+        return Err(BackendError::Session("Copilot ordered tool batch is too large".to_string()));
+    }
+    let object = arguments.as_object().ok_or_else(|| {
+        BackendError::Session("Copilot ordered tool batch must be an object".to_string())
+    })?;
+    if object.len() != 1 {
+        return Err(BackendError::Session(
+            "Copilot ordered tool batch has unexpected fields".to_string(),
+        ));
+    }
+    let calls = object
+        .get("calls")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            BackendError::Session("Copilot ordered tool batch has no calls array".to_string())
+        })?;
+    if calls.is_empty() || calls.len() > MAX_ORDERED_TOOL_CALLS {
+        return Err(BackendError::Session(format!(
+            "Copilot ordered tool batch must contain 1..={MAX_ORDERED_TOOL_CALLS} calls"
+        )));
+    }
+
+    let base_id = bounded_call_id(batch_id, "call_remoteai_batch");
+    let mut expanded = Vec::with_capacity(calls.len());
+    for (index, call) in calls.iter().enumerate() {
+        let call = call.as_object().ok_or_else(|| {
+            BackendError::Session("Copilot ordered batch call must be an object".to_string())
+        })?;
+        if call.len() != 2 {
+            return Err(BackendError::Session(
+                "Copilot ordered batch call has unexpected fields".to_string(),
+            ));
+        }
+        let name = call.get("name").and_then(Value::as_str).ok_or_else(|| {
+            BackendError::Session("Copilot ordered batch call has no name".to_string())
+        })?;
+        let arguments = call.get("arguments").cloned().ok_or_else(|| {
+            BackendError::Session("Copilot ordered batch call has no arguments".to_string())
+        })?;
+        let arguments = sanitize_arguments(definitions, name, arguments, true)?;
+        let suffix = index + 1;
+        expanded.push(CapturedToolCall {
+            id: format!("{}_{suffix}", truncate_utf8(base_id.as_str(), 240)),
+            name: name.to_string(),
+            arguments,
+        });
+    }
+    Ok(expanded)
+}
+
+fn sanitize_arguments(
+    definitions: &[OpenAiTool],
+    name: &str,
+    mut arguments: Value,
+    require_object: bool,
+) -> Result<Value, BackendError> {
+    if !definitions.iter().any(|tool| tool.function.name == name) {
+        return Err(BackendError::Session(
+            "Copilot requested a tool outside the request allowlist".to_string(),
+        ));
+    }
+    if require_object && !arguments.is_object() {
+        return Err(BackendError::Session(
+            "Copilot ordered batch tool arguments must be an object".to_string(),
+        ));
+    }
+    if name == "text"
+        && let Some(text) = arguments.get_mut("text")
+        && let Some(raw) = text.as_str()
+    {
+        *text = Value::String(truncate_utf8(raw.trim(), 96));
+    }
+    let argument_bytes =
+        serde_json::to_vec(&arguments).map_err(|error| BackendError::Session(error.to_string()))?;
+    if argument_bytes.len() > MAX_TOOL_ARGUMENT_BYTES {
+        return Err(BackendError::Session(
+            "Copilot tool arguments exceed Dobby's 4 KiB limit".to_string(),
+        ));
+    }
+    Ok(arguments)
+}
+
+fn bounded_call_id(raw: &str, fallback: &str) -> String {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        fallback.to_string()
+    } else {
+        truncate_utf8(raw, 256)
+    }
 }
 
 fn fallback_text_tool(tools: &[OpenAiTool], text: &str) -> Option<CapturedToolCall> {
@@ -409,6 +587,35 @@ fn secure_directory(_path: &std::path::Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::openai::{FunctionDefinition, PngAttachment};
+
+    fn tool(name: &str) -> OpenAiTool {
+        OpenAiTool {
+            kind: "function".to_string(),
+            function: FunctionDefinition {
+                name: name.to_string(),
+                description: format!("Use {name}."),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "additionalProperties": false
+                }),
+                strict: Some(true),
+            },
+        }
+    }
+
+    fn chat(parallel_tool_calls: bool) -> NormalizedChat {
+        NormalizedChat {
+            requested_model: "auto".to_string(),
+            system_prompt: "Be Dobby.".to_string(),
+            prompt: "USER: Act.\n".to_string(),
+            tools: vec![tool("move"), tool("text")],
+            attachments: Vec::new(),
+            parallel_tool_calls,
+            max_completion_tokens: 256,
+            reasoning_effort: None,
+        }
+    }
 
     #[tokio::test]
     async fn dropping_request_guard_signals_background_cleanup() {
@@ -421,5 +628,97 @@ mod tests {
             .await
             .expect("cancellation signal timed out")
             .expect("cancellation sender dropped without signaling");
+    }
+
+    #[test]
+    fn pngs_become_sdk_blob_attachments() {
+        let mut chat = chat(false);
+        chat.attachments.push(PngAttachment {
+            data_base64: "iVBORw0KGgo=".to_string(),
+            display_name: "selected-window.png".to_string(),
+            decoded_bytes: 8,
+        });
+
+        let options = message_options(&chat);
+        let attachments = options.attachments.expect("one attachment");
+        assert_eq!(attachments.len(), 1);
+        match &attachments[0] {
+            Attachment::Blob {
+                data,
+                mime_type,
+                display_name,
+            } => {
+                assert_eq!(data, "iVBORw0KGgo=");
+                assert_eq!(mime_type, "image/png");
+                assert_eq!(display_name.as_deref(), Some("selected-window.png"));
+            }
+            _ => panic!("PNG was not forwarded as a blob attachment"),
+        }
+    }
+
+    #[test]
+    fn parallel_mode_exposes_only_the_synthetic_batch_tool() {
+        let chat = chat(true);
+        let tools = copilot_tools(&chat);
+
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, BATCH_TOOL_NAME);
+        let schema = serde_json::to_value(&tools[0].parameters).unwrap();
+        assert_eq!(schema["properties"]["calls"]["maxItems"], MAX_ORDERED_TOOL_CALLS);
+        assert_eq!(
+            schema["properties"]["calls"]["items"]["oneOf"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn ordered_batch_expands_allowlisted_calls_in_order() {
+        let definitions = vec![tool("move"), tool("text")];
+        let calls = expand_batch_calls(
+            definitions.as_slice(),
+            "batch_7",
+            serde_json::json!({
+                "calls": [
+                    {"name":"move", "arguments":{"x":0.25,"y":0.75}},
+                    {"name":"text", "arguments":{"text":"  hello from Dobby  "}}
+                ]
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "batch_7_1");
+        assert_eq!(calls[0].name, "move");
+        assert_eq!(calls[1].id, "batch_7_2");
+        assert_eq!(calls[1].name, "text");
+        assert_eq!(calls[1].arguments["text"], "hello from Dobby");
+    }
+
+    #[test]
+    fn ordered_batch_rejects_unknown_and_more_than_eight_calls() {
+        let definitions = vec![tool("move")];
+        assert!(
+            expand_batch_calls(
+                definitions.as_slice(),
+                "batch",
+                serde_json::json!({"calls":[{"name":"shell", "arguments":{}}]}),
+            )
+            .is_err()
+        );
+
+        let calls: Vec<Value> = (0..=MAX_ORDERED_TOOL_CALLS)
+            .map(|_| serde_json::json!({"name":"move", "arguments":{}}))
+            .collect();
+        assert!(
+            expand_batch_calls(
+                definitions.as_slice(),
+                "batch",
+                serde_json::json!({"calls":calls}),
+            )
+            .is_err()
+        );
     }
 }

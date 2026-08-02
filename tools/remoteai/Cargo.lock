@@ -1091,6 +1091,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64",
  "getrandom 0.4.3",
  "github-copilot-sdk",
  "serde",

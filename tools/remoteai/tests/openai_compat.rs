@@ -51,6 +51,19 @@ impl ChatBackend for FakeBackend {
     ) -> Result<BackendReply, BackendError> {
         if chat.tools.is_empty() {
             Ok(BackendReply::Text("Dobby moved, felt joy, and greeted the user.".to_string()))
+        } else if chat.parallel_tool_calls {
+            Ok(BackendReply::Tools(vec![
+                CapturedToolCall {
+                    id: "call_dobby_batch_1".to_string(),
+                    name: "move".to_string(),
+                    arguments: json!({"x": 0.25, "y": 0.75}),
+                },
+                CapturedToolCall {
+                    id: "call_dobby_batch_2".to_string(),
+                    name: "play_emotion".to_string(),
+                    arguments: json!({"idea": "joy"}),
+                },
+            ]))
         } else {
             Ok(BackendReply::Tool(CapturedToolCall {
                 id: "call_dobby_1".to_string(),
@@ -139,6 +152,33 @@ async fn exact_dobby_tool_shape_is_returned() {
         .as_str()
         .unwrap();
     assert_eq!(serde_json::from_str::<Value>(arguments).unwrap()["x"], 0.25);
+}
+
+#[tokio::test]
+async fn ordered_parallel_batch_is_returned_as_openai_tool_calls() {
+    let (status, response) = post(
+        json!({
+            "model":"auto",
+            "messages":[{"role":"user","content":"Move and react."}],
+            "tools":dobby_tools(),
+            "tool_choice":"required",
+            "parallel_tool_calls":true,
+            "stream":false
+        }),
+        TOKEN,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["choices"][0]["finish_reason"], "tool_calls");
+    let calls = response["choices"][0]["message"]["tool_calls"]
+        .as_array()
+        .unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["id"], "call_dobby_batch_1");
+    assert_eq!(calls[0]["function"]["name"], "move");
+    assert_eq!(calls[1]["id"], "call_dobby_batch_2");
+    assert_eq!(calls[1]["function"]["name"], "play_emotion");
 }
 
 #[tokio::test]

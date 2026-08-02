@@ -1,9 +1,16 @@
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const MAX_MESSAGES: usize = 64;
 pub const MAX_TOOLS: usize = 16;
 pub const MAX_PROMPT_BYTES: usize = 96 * 1024;
+pub const MAX_IMAGE_ATTACHMENTS: usize = 2;
+/// Aggregate decoded PNG bytes accepted across one request. The base64 form is
+/// deliberately small enough to coexist with Dobby's transcript in the
+/// current bounded TRUEOS JSON-POST transport.
+pub const MAX_IMAGE_BYTES: usize = 80 * 1024;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ChatCompletionRequest {
@@ -62,14 +69,18 @@ pub enum ValidationError {
     Model,
     #[error("streaming chat completions are not supported")]
     Streaming,
-    #[error("parallel tool calls are not supported")]
-    ParallelTools,
     #[error("request must contain between 1 and {MAX_MESSAGES} messages")]
     Messages,
     #[error("request transcript exceeds {MAX_PROMPT_BYTES} bytes")]
     PromptTooLarge,
     #[error("message role or content is invalid")]
     Message,
+    #[error("only bounded data:image/png;base64 image_url parts are supported")]
+    Image,
+    #[error(
+        "request images exceed {MAX_IMAGE_ATTACHMENTS} attachments or {MAX_IMAGE_BYTES} decoded bytes"
+    )]
+    ImageTooLarge,
     #[error("request contains too many tools")]
     TooManyTools,
     #[error("only function tools are supported")]
@@ -92,8 +103,23 @@ pub struct NormalizedChat {
     pub system_prompt: String,
     pub prompt: String,
     pub tools: Vec<OpenAiTool>,
+    pub attachments: Vec<PngAttachment>,
+    pub parallel_tool_calls: bool,
     pub max_completion_tokens: u32,
     pub reasoning_effort: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PngAttachment {
+    pub data_base64: String,
+    pub display_name: String,
+    pub decoded_bytes: usize,
+}
+
+#[derive(Default)]
+struct ContentImages {
+    attachments: Vec<PngAttachment>,
+    decoded_bytes: usize,
 }
 
 impl ChatCompletionRequest {
@@ -108,15 +134,13 @@ impl ChatCompletionRequest {
         if self.stream.unwrap_or(false) {
             return Err(ValidationError::Streaming);
         }
-        if self.parallel_tool_calls.unwrap_or(false) {
-            return Err(ValidationError::ParallelTools);
-        }
         if self.messages.is_empty() || self.messages.len() > MAX_MESSAGES {
             return Err(ValidationError::Messages);
         }
 
         let tools = self.tools.unwrap_or_default();
         validate_tools(&tools)?;
+        let parallel_tool_calls = self.parallel_tool_calls.unwrap_or(false) && !tools.is_empty();
         if !tools.is_empty()
             && self
                 .tool_choice
@@ -129,12 +153,13 @@ impl ChatCompletionRequest {
 
         let mut system_parts = Vec::new();
         let mut transcript = String::new();
+        let mut images = ContentImages::default();
         for message in self.messages {
             let role = message.role.trim();
             if !matches!(role, "system" | "developer" | "user" | "assistant" | "tool") {
                 return Err(ValidationError::Message);
             }
-            let content = content_text(message.content.as_ref())?;
+            let content = content_text(message.content.as_ref(), &mut images)?;
             if matches!(role, "system" | "developer") {
                 if !content.is_empty() {
                     system_parts.push(content);
@@ -178,9 +203,16 @@ impl ChatCompletionRequest {
             });
         }
         if !tools.is_empty() {
-            transcript.push_str(
-                "\nINSTRUCTION: Continue the transcript. Call exactly one available custom tool now; do not call a second tool.\n",
-            );
+            if parallel_tool_calls {
+                transcript.push_str(concat!(
+                    "\nINSTRUCTION: Continue the transcript. Call the one available batch tool exactly once. ",
+                    "Put between one and eight intended custom-tool calls in execution order in its calls array.\n",
+                ));
+            } else {
+                transcript.push_str(
+                    "\nINSTRUCTION: Continue the transcript. Call exactly one available custom tool now; do not call a second tool.\n",
+                );
+            }
         }
         if transcript.len() > MAX_PROMPT_BYTES {
             return Err(ValidationError::PromptTooLarge);
@@ -201,6 +233,8 @@ impl ChatCompletionRequest {
             system_prompt: system_parts.join("\n\n"),
             prompt: transcript,
             tools,
+            attachments: images.attachments,
+            parallel_tool_calls,
             max_completion_tokens: self.max_completion_tokens.unwrap_or(500).clamp(1, 2_048),
             reasoning_effort,
         })
@@ -236,28 +270,98 @@ fn validate_tools(tools: &[OpenAiTool]) -> Result<(), ValidationError> {
     Ok(())
 }
 
-fn content_text(content: Option<&Value>) -> Result<String, ValidationError> {
+fn content_text(
+    content: Option<&Value>,
+    images: &mut ContentImages,
+) -> Result<String, ValidationError> {
     match content {
         None | Some(Value::Null) => Ok(String::new()),
         Some(Value::String(text)) if text.len() <= MAX_PROMPT_BYTES => Ok(text.clone()),
         Some(Value::Array(parts)) => {
             let mut out = String::new();
             for part in parts {
-                let Some(text) = part.get("text").and_then(Value::as_str) else {
-                    return Err(ValidationError::Message);
-                };
-                if !out.is_empty() {
-                    out.push('\n');
-                }
-                out.push_str(text);
-                if out.len() > MAX_PROMPT_BYTES {
-                    return Err(ValidationError::PromptTooLarge);
+                match part.get("type").and_then(Value::as_str) {
+                    None | Some("text") => {
+                        let Some(text) = part.get("text").and_then(Value::as_str) else {
+                            return Err(ValidationError::Message);
+                        };
+                        append_content_line(&mut out, text)?;
+                    }
+                    Some("image_url") => {
+                        let url = part
+                            .get("image_url")
+                            .and_then(Value::as_object)
+                            .and_then(|image| image.get("url"))
+                            .and_then(Value::as_str)
+                            .ok_or(ValidationError::Image)?;
+                        let attachment = decode_png_data_url(url, images)?;
+                        let marker = format!("[attached PNG: {}]", attachment.display_name);
+                        append_content_line(&mut out, marker.as_str())?;
+                        images.decoded_bytes = images
+                            .decoded_bytes
+                            .saturating_add(attachment.decoded_bytes);
+                        images.attachments.push(attachment);
+                    }
+                    _ => return Err(ValidationError::Message),
                 }
             }
             Ok(out)
         }
         _ => Err(ValidationError::Message),
     }
+}
+
+fn append_content_line(out: &mut String, text: &str) -> Result<(), ValidationError> {
+    let separator = usize::from(!out.is_empty());
+    if out
+        .len()
+        .saturating_add(separator)
+        .saturating_add(text.len())
+        > MAX_PROMPT_BYTES
+    {
+        return Err(ValidationError::PromptTooLarge);
+    }
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(text);
+    Ok(())
+}
+
+fn decode_png_data_url(
+    url: &str,
+    images: &ContentImages,
+) -> Result<PngAttachment, ValidationError> {
+    const PREFIX: &str = "data:image/png;base64,";
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+
+    if images.attachments.len() >= MAX_IMAGE_ATTACHMENTS {
+        return Err(ValidationError::ImageTooLarge);
+    }
+    let encoded = url.strip_prefix(PREFIX).ok_or(ValidationError::Image)?;
+    let maximum_encoded_len = MAX_IMAGE_BYTES.div_ceil(3).saturating_mul(4);
+    if encoded.is_empty() || encoded.len() > maximum_encoded_len {
+        return Err(ValidationError::ImageTooLarge);
+    }
+    let decoded = BASE64_STANDARD
+        .decode(encoded)
+        .map_err(|_| ValidationError::Image)?;
+    if !decoded.starts_with(PNG_SIGNATURE) {
+        return Err(ValidationError::Image);
+    }
+    let total = images
+        .decoded_bytes
+        .checked_add(decoded.len())
+        .ok_or(ValidationError::ImageTooLarge)?;
+    if total > MAX_IMAGE_BYTES {
+        return Err(ValidationError::ImageTooLarge);
+    }
+    let index = images.attachments.len() + 1;
+    Ok(PngAttachment {
+        data_base64: encoded.to_string(),
+        display_name: format!("remoteai-image-{index:02}.png"),
+        decoded_bytes: decoded.len(),
+    })
 }
 
 fn push_transcript(out: &mut String, label: &str, content: &str) {
@@ -373,5 +477,74 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(request.normalize(), Err(ValidationError::ReasoningEffort)));
+    }
+
+    #[test]
+    fn normalizes_text_and_bounded_png_content_parts() {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "auto",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type":"text", "text":"Inspect the selected window."},
+                    {"type":"image_url", "image_url":{"url":format!("data:image/png;base64,{png}"), "detail":"low"}}
+                ]
+            }]
+        }))
+        .unwrap();
+
+        let normalized = request.normalize().unwrap();
+        assert!(normalized.prompt.contains("Inspect the selected window."));
+        assert!(
+            normalized
+                .prompt
+                .contains("[attached PNG: remoteai-image-01.png]")
+        );
+        assert_eq!(normalized.attachments.len(), 1);
+        assert_eq!(normalized.attachments[0].data_base64, png);
+        assert_eq!(normalized.attachments[0].decoded_bytes, 70);
+    }
+
+    #[test]
+    fn rejects_remote_non_png_and_oversized_image_parts() {
+        for url in [
+            "https://example.test/window.png".to_string(),
+            "data:image/png;base64,SGVsbG8=".to_string(),
+            format!("data:image/png;base64,{}", "A".repeat(MAX_IMAGE_BYTES.div_ceil(3) * 4 + 1)),
+        ] {
+            let request: ChatCompletionRequest = serde_json::from_value(json!({
+                "model": "auto",
+                "messages": [{"role":"user", "content":[
+                    {"type":"image_url", "image_url":{"url":url}}
+                ]}]
+            }))
+            .unwrap();
+            assert!(request.normalize().is_err());
+        }
+    }
+
+    #[test]
+    fn parallel_tool_mode_requests_one_ordered_batch() {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "auto",
+            "messages": [{"role":"user","content":"Move and react."}],
+            "tools": [
+                {"type":"function","function":{"name":"move","parameters":{"type":"object"}}},
+                {"type":"function","function":{"name":"play_emotion","parameters":{"type":"object"}}}
+            ],
+            "tool_choice": "required",
+            "parallel_tool_calls": true
+        }))
+        .unwrap();
+
+        let normalized = request.normalize().unwrap();
+        assert!(normalized.parallel_tool_calls);
+        assert!(
+            normalized
+                .prompt
+                .contains("one available batch tool exactly once")
+        );
+        assert_eq!(normalized.tools.len(), 2);
     }
 }

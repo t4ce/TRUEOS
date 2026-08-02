@@ -29,6 +29,24 @@ const ROOT_RETRY_PERIOD_MS: u64 = 500;
 const SCREENSHOT_DIRECTORY: &str = "screenshots";
 const FINAL_FRAME_DIRECTORY: &str = "finalframes";
 
+/// Maximum encoded payload returned by one compact selected-window capture.
+///
+/// Keeping the image itself at 64 KiB leaves room for base64 expansion and
+/// request metadata in transports with a substantially smaller limit than a
+/// normal HTTP client.
+pub(crate) const COMPACT_WINDOW_OBSERVATION_MAX_PNG_BYTES: usize = 64 * 1024;
+/// Window-local coordinate extent painted into compact observations.
+pub(crate) const COMPACT_WINDOW_GRID_EXTENT: u16 = 1_000;
+/// Distance between the major coordinate lines painted into observations.
+pub(crate) const COMPACT_WINDOW_GRID_MAJOR_STEP: u16 = 100;
+
+const COMPACT_WINDOW_INITIAL_MAX_EDGE: u32 = 512;
+const COMPACT_WINDOW_SHRINK_NUMERATOR: u32 = 3;
+const COMPACT_WINDOW_SHRINK_DENOMINATOR: u32 = 4;
+const COMPACT_WINDOW_BACKGROUND: [u8; 3] = [24, 24, 28];
+const COMPACT_WINDOW_GRID_ALPHA: u8 = 72;
+const COMPACT_WINDOW_LABEL_ALPHA: u8 = 184;
+
 static CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CAPTURE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static CAPTURE_REQUESTS: Mutex<VecDeque<CaptureRequest>> = Mutex::new(VecDeque::new());
@@ -40,6 +58,82 @@ pub(super) enum CaptureError {
     InvalidFrameLayout,
     WindowUnavailable(super::WindowId),
     Frame(FramePoolError),
+}
+
+/// One transport-sized, vision-ready observation of an exact UI4 window.
+///
+/// `placement` is the presentation rectangle associated with the broker
+/// snapshot. The PNG depicts the complete native buffer with its aspect ratio
+/// intact, so normalized `0..=grid_extent` coordinates map directly across the
+/// placement even when UI4 scales the native buffer for presentation.
+pub(crate) struct CompactWindowObservation {
+    pub(crate) window_id: super::WindowId,
+    pub(crate) native_width: u32,
+    pub(crate) native_height: u32,
+    pub(crate) capture_width: u32,
+    pub(crate) capture_height: u32,
+    pub(crate) placement: super::WindowPlacement,
+    /// Broker metadata copied from the supplied snapshot. The frame lease
+    /// makes the pixels coherent; callers should still treat these identifiers
+    /// as the freshness token for the observation they requested.
+    pub(crate) revision: u64,
+    pub(crate) publish_serial: u64,
+    pub(crate) grid_extent: u16,
+    pub(crate) grid_major_step: u16,
+    pub(crate) png: Vec<u8>,
+}
+
+impl fmt::Debug for CompactWindowObservation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompactWindowObservation")
+            .field("window_id", &self.window_id)
+            .field("native_width", &self.native_width)
+            .field("native_height", &self.native_height)
+            .field("capture_width", &self.capture_width)
+            .field("capture_height", &self.capture_height)
+            .field("placement", &self.placement)
+            .field("revision", &self.revision)
+            .field("publish_serial", &self.publish_serial)
+            .field("grid_extent", &self.grid_extent)
+            .field("grid_major_step", &self.grid_major_step)
+            .field("png_bytes", &self.png.len())
+            .finish()
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CompactWindowObservationError {
+    NoScanout,
+    DimensionTooLarge,
+    InvalidFrameLayout,
+    WindowUnavailable(super::WindowId),
+    Frame(FramePoolError),
+    Png(crate::graphics::encoder::png::PngEncodeError),
+    PngTooLarge {
+        width: u32,
+        height: u32,
+        bytes: usize,
+        limit: usize,
+    },
+}
+
+impl From<CaptureError> for CompactWindowObservationError {
+    fn from(error: CaptureError) -> Self {
+        match error {
+            CaptureError::NoScanout => Self::NoScanout,
+            CaptureError::DimensionTooLarge => Self::DimensionTooLarge,
+            CaptureError::InvalidFrameLayout => Self::InvalidFrameLayout,
+            CaptureError::WindowUnavailable(window) => Self::WindowUnavailable(window),
+            CaptureError::Frame(error) => Self::Frame(error),
+        }
+    }
+}
+
+impl From<crate::graphics::encoder::png::PngEncodeError> for CompactWindowObservationError {
+    fn from(error: crate::graphics::encoder::png::PngEncodeError) -> Self {
+        Self::Png(error)
+    }
 }
 
 impl fmt::Debug for CaptureError {
@@ -106,6 +200,15 @@ struct CapturedComposition {
     release_interactive_gate: bool,
     slot0_scanout_pixels: usize,
     spirit_overlay_pixels: usize,
+}
+
+/// Tight native premultiplied RGBA copied while holding one published-frame
+/// read lease. Keeping this representation until the consumer chooses an
+/// output avoids an unnecessary unpremultiply/re-premultiply round trip.
+struct CapturedWindowRgba {
+    width: u32,
+    height: u32,
+    rgba_premultiplied: Vec<u8>,
 }
 
 /// One immutable logical snapshot of D01, composed in the same hardware-plane
@@ -513,7 +616,41 @@ fn capture_windows(
     })
 }
 
-fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, CaptureError> {
+/// Capture and encode one exact broker window as a compact RGB PNG carrying a
+/// light normalized coordinate grid.
+///
+/// The first attempt preserves the native aspect ratio within a 512-pixel long
+/// edge. If the encoded PNG is larger than the hard payload budget, each retry
+/// reduces that edge to 75 percent and redraws the grid at the new resolution.
+/// No oversized image is ever returned.
+pub(crate) fn capture_compact_window_observation(
+    window: WindowSnapshot,
+) -> Result<CompactWindowObservation, CompactWindowObservationError> {
+    let captured = capture_window_rgba(window)?;
+    let native_width = captured.width;
+    let native_height = captured.height;
+    let (capture_width, capture_height, png) = encode_compact_window_png(
+        native_width,
+        native_height,
+        captured.rgba_premultiplied.as_slice(),
+    )?;
+
+    Ok(CompactWindowObservation {
+        window_id: window.id,
+        native_width,
+        native_height,
+        capture_width,
+        capture_height,
+        placement: window.placement,
+        revision: window.revision,
+        publish_serial: window.publish_serial,
+        grid_extent: COMPACT_WINDOW_GRID_EXTENT,
+        grid_major_step: COMPACT_WINDOW_GRID_MAJOR_STEP,
+        png,
+    })
+}
+
+fn capture_window_rgba(window: WindowSnapshot) -> Result<CapturedWindowRgba, CaptureError> {
     let lease = acquire_published_frame(window.frame)?;
     let result = (|| {
         let view = published_rgba_view(lease)?;
@@ -540,18 +677,27 @@ fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, Capture
                 .ok_or(CaptureError::InvalidFrameLayout)?;
             rgba[destination_offset..destination_offset + row_bytes].copy_from_slice(source_row);
         }
-        unpremultiply_rgba(&mut rgba);
-        Ok::<_, CaptureError>((view.width, view.height, rgba))
+        Ok::<_, CaptureError>(CapturedWindowRgba {
+            width: view.width,
+            height: view.height,
+            rgba_premultiplied: rgba,
+        })
     })();
     let _ = release_published_frame(lease);
-    let (width, height, rgba) = result?;
+    result
+}
+
+fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, CaptureError> {
+    let captured = capture_window_rgba(window)?;
+    let mut rgba = captured.rgba_premultiplied;
+    unpremultiply_rgba(&mut rgba);
 
     Ok(CapturedComposition {
         sequence: CAPTURE_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1,
         unix_seconds: crate::chronos::best_effort_unix_time_seconds(),
         monotonic_ms: crate::chronos::monotonic_nanos() / 1_000_000,
-        width,
-        height,
+        width: captured.width,
+        height: captured.height,
         rgba,
         scope: CaptureScope::Window {
             id: window.id,
@@ -562,6 +708,295 @@ fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, Capture
         slot0_scanout_pixels: 0,
         spirit_overlay_pixels: 0,
     })
+}
+
+fn encode_compact_window_png(
+    native_width: u32,
+    native_height: u32,
+    rgba_premultiplied: &[u8],
+) -> Result<(u32, u32, Vec<u8>), CompactWindowObservationError> {
+    let native_long_edge = native_width.max(native_height);
+    if native_long_edge == 0 {
+        return Err(CompactWindowObservationError::InvalidFrameLayout);
+    }
+    let mut max_edge = native_long_edge.min(COMPACT_WINDOW_INITIAL_MAX_EDGE);
+
+    loop {
+        let (width, height) = compact_dimensions(native_width, native_height, max_edge)?;
+        let mut rgb = resample_premultiplied_rgba_to_rgb(
+            native_width,
+            native_height,
+            rgba_premultiplied,
+            width,
+            height,
+        )?;
+        overlay_normalized_grid(rgb.as_mut_slice(), width, height)?;
+        let stride = usize::try_from(width)
+            .ok()
+            .and_then(|width| width.checked_mul(3))
+            .ok_or(CompactWindowObservationError::DimensionTooLarge)?;
+        let png =
+            crate::graphics::encoder::png::encode_rgb8_png(width, height, rgb.as_slice(), stride)?;
+        if png.len() <= COMPACT_WINDOW_OBSERVATION_MAX_PNG_BYTES {
+            return Ok((width, height, png));
+        }
+        if max_edge == 1 {
+            return Err(CompactWindowObservationError::PngTooLarge {
+                width,
+                height,
+                bytes: png.len(),
+                limit: COMPACT_WINDOW_OBSERVATION_MAX_PNG_BYTES,
+            });
+        }
+        let reduced = max_edge.saturating_mul(COMPACT_WINDOW_SHRINK_NUMERATOR)
+            / COMPACT_WINDOW_SHRINK_DENOMINATOR;
+        max_edge = reduced.clamp(1, max_edge - 1);
+    }
+}
+
+fn compact_dimensions(
+    native_width: u32,
+    native_height: u32,
+    max_edge: u32,
+) -> Result<(u32, u32), CompactWindowObservationError> {
+    if native_width == 0 || native_height == 0 || max_edge == 0 {
+        return Err(CompactWindowObservationError::InvalidFrameLayout);
+    }
+    let native_long_edge = native_width.max(native_height);
+    if native_long_edge <= max_edge {
+        return Ok((native_width, native_height));
+    }
+
+    let scale_dimension = |dimension: u32| {
+        let numerator = u64::from(dimension)
+            .saturating_mul(u64::from(max_edge))
+            .saturating_add(u64::from(native_long_edge / 2));
+        u32::try_from(numerator / u64::from(native_long_edge))
+            .unwrap_or(u32::MAX)
+            .max(1)
+    };
+    if native_width >= native_height {
+        Ok((max_edge, scale_dimension(native_height)))
+    } else {
+        Ok((scale_dimension(native_width), max_edge))
+    }
+}
+
+fn resample_premultiplied_rgba_to_rgb(
+    source_width: u32,
+    source_height: u32,
+    source: &[u8],
+    destination_width: u32,
+    destination_height: u32,
+) -> Result<Vec<u8>, CompactWindowObservationError> {
+    let source_width_usize = usize::try_from(source_width)
+        .map_err(|_| CompactWindowObservationError::DimensionTooLarge)?;
+    let source_height_usize = usize::try_from(source_height)
+        .map_err(|_| CompactWindowObservationError::DimensionTooLarge)?;
+    let source_stride = source_width_usize
+        .checked_mul(4)
+        .ok_or(CompactWindowObservationError::DimensionTooLarge)?;
+    let source_len = source_stride
+        .checked_mul(source_height_usize)
+        .ok_or(CompactWindowObservationError::DimensionTooLarge)?;
+    if source_width == 0
+        || source_height == 0
+        || destination_width == 0
+        || destination_height == 0
+        || source.len() < source_len
+    {
+        return Err(CompactWindowObservationError::InvalidFrameLayout);
+    }
+
+    let destination_width_usize = usize::try_from(destination_width)
+        .map_err(|_| CompactWindowObservationError::DimensionTooLarge)?;
+    let destination_height_usize = usize::try_from(destination_height)
+        .map_err(|_| CompactWindowObservationError::DimensionTooLarge)?;
+    let destination_stride = destination_width_usize
+        .checked_mul(3)
+        .ok_or(CompactWindowObservationError::DimensionTooLarge)?;
+    let destination_len = destination_stride
+        .checked_mul(destination_height_usize)
+        .ok_or(CompactWindowObservationError::DimensionTooLarge)?;
+    let mut destination = alloc::vec![0u8; destination_len];
+
+    let source_width_u64 = u64::from(source_width);
+    let source_height_u64 = u64::from(source_height);
+    let destination_width_u64 = u64::from(destination_width);
+    let destination_height_u64 = u64::from(destination_height);
+    for destination_y in 0..destination_height_usize {
+        let source_y = ((2 * destination_y as u64 + 1) * source_height_u64
+            / (2 * destination_height_u64))
+            .min(source_height_u64 - 1) as usize;
+        for destination_x in 0..destination_width_usize {
+            let source_x = ((2 * destination_x as u64 + 1) * source_width_u64
+                / (2 * destination_width_u64))
+                .min(source_width_u64 - 1) as usize;
+            let source_offset = source_y * source_stride + source_x * 4;
+            let destination_offset = destination_y * destination_stride + destination_x * 3;
+            let alpha = source[source_offset + 3];
+            let inverse_alpha = u8::MAX - alpha;
+            for channel in 0..3 {
+                destination[destination_offset + channel] =
+                    u16::from(source[source_offset + channel])
+                        .saturating_add(u16::from(multiply_u8(
+                            COMPACT_WINDOW_BACKGROUND[channel],
+                            inverse_alpha,
+                        )))
+                        .min(255) as u8;
+            }
+        }
+    }
+    Ok(destination)
+}
+
+fn overlay_normalized_grid(
+    rgb: &mut [u8],
+    width: u32,
+    height: u32,
+) -> Result<(), CompactWindowObservationError> {
+    let width_usize =
+        usize::try_from(width).map_err(|_| CompactWindowObservationError::DimensionTooLarge)?;
+    let height_usize =
+        usize::try_from(height).map_err(|_| CompactWindowObservationError::DimensionTooLarge)?;
+    let expected_len = width_usize
+        .checked_mul(height_usize)
+        .and_then(|pixels| pixels.checked_mul(3))
+        .ok_or(CompactWindowObservationError::DimensionTooLarge)?;
+    if width == 0 || height == 0 || rgb.len() < expected_len {
+        return Err(CompactWindowObservationError::InvalidFrameLayout);
+    }
+
+    let divisions = u32::from(COMPACT_WINDOW_GRID_EXTENT / COMPACT_WINDOW_GRID_MAJOR_STEP);
+    for division in 0..=divisions {
+        let x = grid_coordinate(division, divisions, width);
+        for y in 0..height {
+            blend_contrast_rgb_pixel(rgb, width, height, x, y, COMPACT_WINDOW_GRID_ALPHA);
+        }
+        let y = grid_coordinate(division, divisions, height);
+        for x in 0..width {
+            blend_contrast_rgb_pixel(rgb, width, height, x, y, COMPACT_WINDOW_GRID_ALPHA);
+        }
+    }
+
+    // Tiny labels are useful at ordinary observation sizes but become more
+    // occlusion than guidance after adaptive shrinking.
+    if width >= 240 && height >= 7 {
+        let mut digits = [0u8; 4];
+        for division in 0..=divisions {
+            let value = division * u32::from(COMPACT_WINDOW_GRID_MAJOR_STEP);
+            let label = decimal_label(value, &mut digits);
+            let text_width = compact_text_width(label.len());
+            let center = grid_coordinate(division, divisions, width);
+            let x = center
+                .saturating_sub(text_width / 2)
+                .min(width.saturating_sub(text_width));
+            draw_compact_text(rgb, width, height, x, 2, label);
+        }
+    }
+    if height >= 100 && width >= 17 {
+        let mut digits = [0u8; 4];
+        for division in 0..=divisions {
+            let value = division * u32::from(COMPACT_WINDOW_GRID_MAJOR_STEP);
+            let label = decimal_label(value, &mut digits);
+            let center = grid_coordinate(division, divisions, height);
+            let y = center.saturating_sub(2).min(height.saturating_sub(5));
+            draw_compact_text(rgb, width, height, 2, y, label);
+        }
+    }
+    Ok(())
+}
+
+fn grid_coordinate(division: u32, divisions: u32, extent: u32) -> u32 {
+    if divisions == 0 || extent <= 1 {
+        return 0;
+    }
+    division
+        .saturating_mul(extent - 1)
+        .saturating_add(divisions / 2)
+        / divisions
+}
+
+fn decimal_label<'a>(mut value: u32, buffer: &'a mut [u8; 4]) -> &'a [u8] {
+    let mut cursor = buffer.len();
+    loop {
+        cursor -= 1;
+        buffer[cursor] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            return &buffer[cursor..];
+        }
+    }
+}
+
+fn compact_text_width(byte_len: usize) -> u32 {
+    if byte_len == 0 {
+        0
+    } else {
+        (byte_len as u32).saturating_mul(4).saturating_sub(1)
+    }
+}
+
+fn draw_compact_text(rgb: &mut [u8], width: u32, height: u32, x: u32, y: u32, text: &[u8]) {
+    for (character_index, character) in text.iter().copied().enumerate() {
+        let glyph_x = x.saturating_add((character_index as u32).saturating_mul(4));
+        for (row, bits) in compact_digit_glyph(character).into_iter().enumerate() {
+            for column in 0..3u32 {
+                if bits & (1 << (2 - column)) != 0 {
+                    blend_contrast_rgb_pixel(
+                        rgb,
+                        width,
+                        height,
+                        glyph_x.saturating_add(column),
+                        y.saturating_add(row as u32),
+                        COMPACT_WINDOW_LABEL_ALPHA,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn compact_digit_glyph(character: u8) -> [u8; 5] {
+    match character {
+        b'0' => [0b111, 0b101, 0b101, 0b101, 0b111],
+        b'1' => [0b010, 0b110, 0b010, 0b010, 0b111],
+        b'2' => [0b111, 0b001, 0b111, 0b100, 0b111],
+        b'3' => [0b111, 0b001, 0b111, 0b001, 0b111],
+        b'4' => [0b101, 0b101, 0b111, 0b001, 0b001],
+        b'5' => [0b111, 0b100, 0b111, 0b001, 0b111],
+        b'6' => [0b111, 0b100, 0b111, 0b101, 0b111],
+        b'7' => [0b111, 0b001, 0b010, 0b010, 0b010],
+        b'8' => [0b111, 0b101, 0b111, 0b101, 0b111],
+        b'9' => [0b111, 0b101, 0b111, 0b001, 0b111],
+        _ => [0; 5],
+    }
+}
+
+fn blend_contrast_rgb_pixel(rgb: &mut [u8], width: u32, height: u32, x: u32, y: u32, alpha: u8) {
+    if x >= width || y >= height {
+        return;
+    }
+    let Some(offset) = (y as usize)
+        .checked_mul(width as usize)
+        .and_then(|pixel| pixel.checked_add(x as usize))
+        .and_then(|pixel| pixel.checked_mul(3))
+    else {
+        return;
+    };
+    let Some(pixel) = rgb.get_mut(offset..offset + 3) else {
+        return;
+    };
+    let luminance =
+        (u32::from(pixel[0]) * 77 + u32::from(pixel[1]) * 150 + u32::from(pixel[2]) * 29) >> 8;
+    let target = if luminance < 128 { u8::MAX } else { 0 };
+    let inverse_alpha = u8::MAX - alpha;
+    for channel in pixel {
+        *channel = ((u16::from(*channel) * u16::from(inverse_alpha)
+            + u16::from(target) * u16::from(alpha)
+            + 127)
+            / 255) as u8;
+    }
 }
 
 /// Copy the last published frames after the broker has atomically detached the
@@ -999,7 +1434,11 @@ fn release_interactive_capture_gate(capture: &CapturedComposition) {
 
 #[cfg(test)]
 mod tests {
-    use super::{final_frame_path, sanitize_final_frame_identity};
+    use super::{
+        COMPACT_WINDOW_BACKGROUND, COMPACT_WINDOW_OBSERVATION_MAX_PNG_BYTES, compact_dimensions,
+        encode_compact_window_png, final_frame_path, overlay_normalized_grid,
+        resample_premultiplied_rgba_to_rgb, sanitize_final_frame_identity,
+    };
 
     #[test]
     fn final_frame_identity_is_stable_and_path_safe() {
@@ -1014,5 +1453,46 @@ mod tests {
             final_frame_path("dummy-kernel-app-1", 1, 3),
             "finalframes/dummy-kernel-app-1-window-02.png"
         );
+    }
+
+    #[test]
+    fn compact_dimensions_preserve_aspect_ratio_and_never_empty_an_axis() {
+        assert_eq!(compact_dimensions(768, 512, 512).unwrap(), (512, 341));
+        assert_eq!(compact_dimensions(1, 4_096, 128).unwrap(), (1, 128));
+        assert!(compact_dimensions(0, 512, 512).is_err());
+    }
+
+    #[test]
+    fn compact_rgb_composites_transparency_before_encoding() {
+        let rgb = resample_premultiplied_rgba_to_rgb(1, 1, &[0, 0, 0, 0], 1, 1).unwrap();
+        assert_eq!(rgb.as_slice(), COMPACT_WINDOW_BACKGROUND.as_slice());
+    }
+
+    #[test]
+    fn normalized_grid_reaches_both_edges_and_major_coordinates() {
+        let mut rgb = alloc::vec![64u8; 101 * 101 * 3];
+        overlay_normalized_grid(rgb.as_mut_slice(), 101, 101).unwrap();
+        let pixel = |x: usize, y: usize| &rgb[(y * 101 + x) * 3..(y * 101 + x) * 3 + 3];
+        assert_ne!(pixel(0, 50), &[64, 64, 64]);
+        assert_ne!(pixel(10, 50), &[64, 64, 64]);
+        assert_ne!(pixel(100, 50), &[64, 64, 64]);
+        assert_eq!(pixel(5, 5), &[64, 64, 64]);
+    }
+
+    #[test]
+    fn incompressible_capture_is_adapted_below_the_hard_png_limit() {
+        let mut rgba = alloc::vec![0u8; 512 * 512 * 4];
+        let mut state = 0x1234_5678u32;
+        for pixel in rgba.chunks_exact_mut(4) {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            pixel[0] = state as u8;
+            pixel[1] = (state >> 8) as u8;
+            pixel[2] = (state >> 16) as u8;
+            pixel[3] = u8::MAX;
+        }
+        let (width, height, png) = encode_compact_window_png(512, 512, rgba.as_slice()).unwrap();
+        assert!(width < 512 && height < 512);
+        assert!(png.len() <= COMPACT_WINDOW_OBSERVATION_MAX_PNG_BYTES);
+        assert_eq!(&png[..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
     }
 }

@@ -3,6 +3,8 @@
 `remoteai` is a Linux-hosted Rust facade for the GitHub Copilot CLI runtime.
 It accepts the small OpenAI Chat Completions subset used by the Dobby
 Blueprint and returns either one function tool call or a plain summary.
+With `parallel_tool_calls: true`, it can return one ordered batch of up to eight
+function calls while preserving the original OpenAI tool-call shape.
 
 The Rust Copilot SDK bundles the matching CLI runtime, so TRUEOS does not need
 Node, Python, the Copilot CLI, or GitHub credentials. The host process starts
@@ -85,9 +87,22 @@ unlimited background loop.
 - `GET /v1/models` requires the bearer token.
 - `POST /v1/chat/completions` requires the bearer token and non-streaming JSON.
 
+Message `content` may be a string or an OpenAI-style content-parts array. Text
+parts and at most two `image_url` parts are accepted. Images must be inline
+`data:image/png;base64,...` URLs; remote URLs and other media types are
+rejected. Decoded PNG data is capped at 80 KiB in aggregate so the request
+remains compatible with TRUEOS's bounded JSON-POST path. The facade forwards
+accepted images only as in-memory Copilot SDK blob attachments and never
+writes them to the host filesystem.
+
 Each completion uses an ephemeral Copilot session. Dobby remains responsible
 for its serialized queue, ten ordinary turns, rollover summary, reset logic,
-and execution of the three screen-spirit tools. On ordinary turns the facade
-captures the first external tool request and immediately aborts the Copilot
-turn; it never executes the tool and does not spend a second inference call on
-a tool result.
+and execution of screen-spirit or UI tools. With `parallel_tool_calls: false`,
+the facade preserves the original behavior: it captures one external tool
+request and immediately aborts the Copilot turn. With
+`parallel_tool_calls: true`, only one private synthetic batch tool is exposed
+to Copilot; the facade validates and expands its ordered `calls` array into one
+to eight calls using only the caller's original allowlist. The synthetic tool
+name never appears in the OpenAI response. In both modes the facade never
+executes a tool. Tool results and any follow-up inference request remain owned
+by Dobby.

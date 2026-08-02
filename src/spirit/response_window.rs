@@ -1173,6 +1173,7 @@ async fn present_claimed_response(
 pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
     let lease = request_spirit_grid().await;
     let keyboard = request_spirit_keyboard().await;
+    super::dobby_ui::register_lilly_keyboard(keyboard);
     crate::log_info!(
         target: "gfx";
         "trueos-spirit: response Gridpaper service online assigned_slot={} current_slot={} frame_grid={}x{} response_grid={}x{} cells={} scale={} ownership=kernel-dedicated cursor=Spirit/Lilly keyboard_slot={} input=cell-zero-click+paired-vkeyboard ingress=completed+coalesced-live-prefix wrap=whitespace-before-word style=rainbow-palette+cpp-scale-0.85..1.15 response_hide_after_ms={} startup=visible-type+backspace startup_text={:?} startup_visible_ms={} post_startup=hidden-retained no-blueprint-vm=1\n",
@@ -1189,7 +1190,10 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
         STARTUP_WARMUP_TEXT,
         STARTUP_WARMUP_VISIBLE_MS,
     );
-    if let Err(reason) = run_visible_startup_warmup(lease, keyboard).await {
+    super::dobby_ui::acquire_response_io(keyboard).await;
+    let startup_result = run_visible_startup_warmup(lease, keyboard).await;
+    super::dobby_ui::release_response_io(keyboard);
+    if let Err(reason) = startup_result {
         cancel_response_keyboard(keyboard);
         let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
         crate::log_warn!(
@@ -1207,7 +1211,9 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
                 continue;
             }
         };
+        super::dobby_ui::acquire_response_io(keyboard).await;
         let completed = present_claimed_response(lease, keyboard, request).await;
+        super::dobby_ui::release_response_io(keyboard);
         retire_response(request.id);
         if !completed {
             continue;

@@ -385,7 +385,7 @@ fn print_list(io: &'static dyn ShellBackend2) {
     );
     print_shell_line(
         io,
-        "cpp font rush: Lucida-only finite plane probe; runs four base and four expanded 3-second stages once, reveals TRUEOS at 150 ms, holds TrueOS for one second, pulses three section signs at 50 ms for three seconds, then mirrors a no-clear 32-producer storm until stopped",
+        "cpp font rush: Lucida-only finite plane probe; transparent premultiplied canvases expose Pipe-A bottom color throughout four base and four expanded 3-second stages, TRUEOS reveal, TrueOS hold, section-sign pulse, and the terminal no-clear 32-producer storm",
     );
     print_shell_line(
         io,
@@ -1269,7 +1269,7 @@ fn queue_font_service_rush(io: &'static dyn ShellBackend2) {
         Ok(serial) => print_shell_line(
             io,
             alloc::format!(
-                "cpp font rush: queued=1 request={} font=1 font_name=lucida-sans-unicode font_policy=pinned-warm-required base_cadence_ms=250 stage_ms=3000 stages=base-ranks-0..3+expanded-ranks-0..3-once+title-reveal-150ms+TrueOS-hold-1000ms+section-pulse-50msx3000ms+producer-storm terminal_stage=producer-storm glyph_layout_base=1+2+4+16 glyph_layout_expanded=4+8+16+64 producer_storm=64-cells/32-workers/32-regions/8x4/two-anchors-each load_policy=quarter-active-cell-cap analytical_work_policy=quarter-cap buffer_history=deterministic-mirrored-double clear_policy=all-prestorm+storm-prime/no-clear-storm planes=ui4-display-capability-enumerated-then-primary-only consumer_pending_limit=1 service_model=plan-pool-32+font-fifo-32+one-font-context-in-flight path=optional-gpu-clear->shared-font-vm-cache->guc-font-rcs->ui4-rgba8->display-plane-direct compositor_jobs=0 rgba_cpu_readback=0 coverage_audit_cpu_readback=miss-only duration=until-stopped stop=\"cpp font rush stop\"",
+                "cpp font rush: queued=1 request={} font=1 font_name=lucida-sans-unicode font_policy=pinned-warm-required base_cadence_ms=250 stage_ms=3000 stages=base-ranks-0..3+expanded-ranks-0..3-once+title-reveal-150ms+TrueOS-hold-1000ms+section-pulse-50msx3000ms+producer-storm terminal_stage=producer-storm glyph_layout_base=1+2+4+16 glyph_layout_expanded=4+8+16+64 producer_storm=64-cells/32-workers/32-regions/8x4/two-anchors-each load_policy=quarter-active-cell-cap analytical_work_policy=quarter-cap buffer_history=deterministic-mirrored-double clear_policy=transparent-prestorm+transparent-storm-prime/no-clear-storm backdrop=pipe-a-bottom-color pixel_alpha=premultiplied planes=ui4-display-capability-enumerated-then-primary-only consumer_pending_limit=1 service_model=plan-pool-32+font-fifo-32+one-font-context-in-flight path=optional-transparent-gpu-clear->shared-font-vm-cache->guc-font-rcs->ui4-rgba8->display-plane-direct compositor_jobs=0 rgba_cpu_readback=0 coverage_audit_cpu_readback=miss-only duration=until-stopped stop=\"cpp font rush stop\"",
                 serial,
             )
             .as_str(),

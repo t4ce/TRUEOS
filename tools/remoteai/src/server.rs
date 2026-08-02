@@ -14,7 +14,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-use crate::copilot::{BackendError, BackendReply, ChatBackend};
+use crate::copilot::{BackendError, BackendReply, ChatBackend, MAX_ORDERED_TOOL_CALLS};
 use crate::openai::{
     AssistantFunctionCall, AssistantMessage, AssistantToolCall, ChatCompletionRequest,
     ChatCompletionResponse, Choice, Usage, ValidationError,
@@ -124,20 +124,28 @@ async fn chat_completions(
             AssistantMessage {
                 role: "assistant",
                 content: None,
-                tool_calls: Some(vec![AssistantToolCall {
-                    id: call.id,
-                    kind: "function",
-                    function: AssistantFunctionCall {
-                        name: call.name,
-                        arguments: serde_json::to_string(&call.arguments).map_err(|_| {
-                            trace.failed();
-                            ApiError::internal()
-                        })?,
-                    },
-                }]),
+                tool_calls: Some(serialize_tool_calls(vec![call]).inspect_err(|_| {
+                    trace.failed();
+                })?),
             },
             "tool_calls",
         ),
+        BackendReply::Tools(calls) => {
+            if calls.is_empty() || calls.len() > MAX_ORDERED_TOOL_CALLS {
+                trace.failed();
+                return Err(ApiError::internal());
+            }
+            (
+                AssistantMessage {
+                    role: "assistant",
+                    content: None,
+                    tool_calls: Some(serialize_tool_calls(calls).inspect_err(|_| {
+                        trace.failed();
+                    })?),
+                },
+                "tool_calls",
+            )
+        }
     };
     let response = ChatCompletionResponse {
         id: request_id,
@@ -157,6 +165,25 @@ async fn chat_completions(
     };
     trace.completed();
     Ok(Json(response))
+}
+
+fn serialize_tool_calls(
+    calls: Vec<crate::copilot::CapturedToolCall>,
+) -> Result<Vec<AssistantToolCall>, ApiError> {
+    calls
+        .into_iter()
+        .map(|call| {
+            Ok(AssistantToolCall {
+                id: call.id,
+                kind: "function",
+                function: AssistantFunctionCall {
+                    name: call.name,
+                    arguments: serde_json::to_string(&call.arguments)
+                        .map_err(|_| ApiError::internal())?,
+                },
+            })
+        })
+        .collect()
 }
 
 struct CompletionTrace {

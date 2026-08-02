@@ -8,6 +8,7 @@ license = "MIT"
 [dependencies]
 async-trait = "0.1"
 axum = { version = "0.8", features = ["http1", "json", "tokio"] }
+base64 = "0.22"
 github-copilot-sdk = "=1.0.9-preview.2"
 getrandom = "0.4"
 serde = { version = "1", features = ["derive"] }

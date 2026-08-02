@@ -104,7 +104,11 @@ pub(crate) use input_broker::{
     focused_keyboard_state, select_window_for_cursor, show_context_menu, software_cursor_visuals,
     take_owner_input_events, ui4_input_service_task, window_input_routes,
 };
-pub(crate) use screenshot::ui4_screenshot_service_task;
+pub(crate) use screenshot::{
+    COMPACT_WINDOW_GRID_EXTENT, COMPACT_WINDOW_GRID_MAJOR_STEP,
+    COMPACT_WINDOW_OBSERVATION_MAX_PNG_BYTES, CompactWindowObservation,
+    CompactWindowObservationError, capture_compact_window_observation, ui4_screenshot_service_task,
+};
 pub(crate) use slot4_service::ui4_slot4_service_task;
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedVideoConversionProbeReport, DecodedVideoConversionReport,

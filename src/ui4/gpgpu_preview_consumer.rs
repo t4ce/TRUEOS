@@ -447,7 +447,8 @@ enum CppFontRushLayerStage {
     TitleHold,
     /// Three large section signs with a foreground color step every 50 ms.
     SectionPulse,
-    /// Clear both double-buffer members to the same final section-sign base.
+    /// Clear both double-buffer members to transparent and stamp the same
+    /// final section-sign base before no-clear accumulation begins.
     StormPrime {
         mirror: u8,
     },
@@ -485,8 +486,11 @@ impl CppFontRushLayerStage {
         }
     }
 
-    const fn clears_destination(self) -> bool {
-        !matches!(self, Self::ProducerStorm { .. } | Self::Dormant)
+    const fn clear_color(self) -> Option<PremultipliedRgba8> {
+        match self {
+            Self::ProducerStorm { .. } | Self::Dormant => None,
+            _ => Some(PremultipliedRgba8::TRANSPARENT),
+        }
     }
 
     const fn produces_frames(self) -> bool {
@@ -1190,7 +1194,7 @@ fn create_cpp_font_rush_preview(
         return Err("font-rush-plane-unsupported");
     }
     let plane_slot = topology.plane_slots[usize::from(rank)];
-    let frame = create_cpp_font_rush_frame(output, topology.width, topology.height, rank)
+    let frame = create_cpp_font_rush_frame(output, topology.width, topology.height)
         .map_err(preview_frame_create_error_label)?;
     let plane = if usize::from(plane_slot) == super::PRIMARY_PLANE_SLOT {
         WindowPlane::Primary
@@ -1551,9 +1555,10 @@ fn begin_cpp_font_rush_showcase(
     set_cpp_font_rush_stage(&mut previews[0], CppFontRushLayerStage::TitleReveal(1), now)?;
     crate::log_info!(
         target: "ui4";
-        "ui4 cpp-font-rush showcase started request={} elapsed_ms={} retired_layers={} active_planes=1 font={} font_id={} first_stage=title-reveal reveal_ms={} action=hide-hardware-layers-1to3+retain-primary\n",
+        "ui4 cpp-font-rush showcase started request={} elapsed_ms={} hidden_layers={} dormant_consumers={} active_planes=1 font={} font_id={} first_stage=title-reveal reveal_ms={} action=hide-hardware-layers-1to3+retain-primary\n",
         request_serial,
         now.saturating_duration_since(started).as_millis(),
+        hidden_windows.len(),
         hidden_windows.len(),
         crate::intel::gpu_font::GpuFontFace::Default.registry_name(),
         crate::intel::gpu_font::GpuFontFace::Default.id(),
@@ -1622,13 +1627,17 @@ fn advance_cpp_font_rush_showcase(
     set_cpp_font_rush_stage(&mut previews[0], next, now)?;
     crate::log_info!(
         target: "ui4";
-        "ui4 cpp-font-rush showcase advanced request={} elapsed_ms={} previous={} next={} cadence_ms={} clear={} font={} font_id={}\n",
+        "ui4 cpp-font-rush showcase advanced request={} elapsed_ms={} previous={} next={} cadence_ms={} clear={} backdrop=pipe-a-bottom-color font={} font_id={}\n",
         request_serial,
         elapsed_ms,
         stage.label(),
         next.label(),
         next.cadence_ms(),
-        u8::from(next.clears_destination()),
+        if next.clear_color().is_some() {
+            "transparent"
+        } else {
+            "none"
+        },
         crate::intel::gpu_font::GpuFontFace::Default.registry_name(),
         crate::intel::gpu_font::GpuFontFace::Default.id(),
     );
@@ -2003,7 +2012,6 @@ fn create_cpp_font_rush_frame(
     output: OutputId,
     width: u32,
     height: u32,
-    rank: u8,
 ) -> Result<FrameHandle, FramePoolError> {
     create_frame(FrameSpec {
         output,
@@ -2013,7 +2021,10 @@ fn create_cpp_font_rush_frame(
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
-        base_color: Some(cpp_font_rush_background(rank, 0, CppFontRushLayerStage::Base)),
+        // UiSurface creation already zeroes both ring members. Do not paint a
+        // second authored backdrop: transparent RGBA exposes Pipe A's
+        // persistent ColorPicker-selected bottom color from the outset.
+        base_color: None,
     })
 }
 
@@ -2309,6 +2320,22 @@ fn poll_cpp_font_rush_plan(preview: &mut ActivePreview) -> Result<(), &'static s
             preview.metrics.failed = preview.metrics.failed.saturating_add(1);
             return Err("font-rush-plan-contract-mismatch");
         }
+        if matches!(pending.stage, CppFontRushLayerStage::ProducerStorm { .. })
+            && stats.participant_mask() != u32::MAX
+        {
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            crate::log_error!(
+                target: "ui4";
+                "ui4 cpp-font-rush producer-storm participation mismatch request={} sequence={} batch={} participants={} participant_mask=0x{:08X} expected_participants={} expected_mask=0xFFFFFFFF action=reject-plan-before-frame-lease\n",
+                preview.request_serial,
+                pending.sequence,
+                stats.batch_id(),
+                stats.participants(),
+                stats.participant_mask(),
+                crate::r::font_plan_service::FONT_PLAN_WORKER_COUNT,
+            );
+            return Err("font-rush-producer-participation-mismatch");
+        }
         let diagnostics = plan.diagnostics();
         crate::log_info!(
             target: "ui4";
@@ -2425,9 +2452,8 @@ fn try_submit_cpp_font_rush_ready_plan(preview: &mut ActivePreview) -> Result<()
     let prepared_ops_bytes = plan.ops_bytes();
     let prepared_work = plan.estimated_work();
     let submit_started_at = Instant::now();
-    let submitted = if stage.clears_destination() {
-        let clear_rgba =
-            u32::from_le_bytes(cpp_font_rush_background(rank, sequence, stage).to_native_bytes());
+    let submitted = if let Some(clear_color) = stage.clear_color() {
+        let clear_rgba = u32::from_le_bytes(clear_color.to_native_bytes());
         crate::r::font_kernel_service::submit_prepared_frame_stamp_with_clear(
             plan,
             destination,
@@ -2738,7 +2764,7 @@ fn poll_cpp_font_rush_frame(preview: &mut ActivePreview) -> Result<(), &'static 
     let service = crate::r::font_kernel_service::status();
     crate::log_info!(
         target: "ui4";
-        "ui4 cpp-font-rush frame-ready request={} consumer={} rank={} slot={} sequence={} publication={} ticket={} elapsed_ms={} scheduled_ms={} plan_batch={} plan_enqueue_delay_ms={} plan_queue_wait_ms={} plan_build_ms={} plan_total_ms={} plan_candidate_attempts={} plan_rejected_candidates={} plan_worker_slices={} plan_yields={} plan_parallelism={} deadline_to_submit_ms={} submit_call_us={} prepared_ops_bytes={} prepared_reserved_ops_bytes={} prepared_segment_evaluations={} gpu_wait_ms={} pre_service_ms={} clear_ms={} prepare_coverage_ms={} coverage_build_ms={} coverage_audit_ms={} gpu_outline_cache_hits={} gpu_outline_cache_misses={} gpu_tile_cache_hits={} gpu_tile_cache_misses={} gpu_cache_evictions={} gpu_resident_outlines={} gpu_resident_tiles={} instance_release_ms={} service_ms={} fifo_queued_ahead={} service_queue_at_complete={} completion_to_publish_us={} frame={} producer_buffer={} frame_publish_serial={} window_publish_serial={} layout={} glyph_hash=0x{:016X} glyph_ids_sample={} glyph_ids_sample_limit={} extent={}x{} cadence_ms={} requested_glyphs={} rendered_glyphs={} grid={}x{} font={} font_id={} application_plane_mask=0x{:02X} usable_planes={} clear_submits={} coverage_submits={} instance_release_submits={} known_gpu_submits={} walkers={} release={} consumer_in_flight=0 context=kernel-gpgpu-font path=registered-skrifa->ecore-plan-pool[shared-recipe-cache]->sealed-plan->font-service-fifo[shared-font-vm-outline+resident-r8-tile-cache->optional-gpu-clear->cpp-igc->guc-font-rcs]->ui4-font-scene->display-plane-direct prepared_replay=exact-plan prepared_cache=shared-recipe-sharded gpu_cache=shared-font-vm-outline+resident-r8-tile compositor_jobs=0 rgba_cpu_readback=0 coverage_audit_cpu_readback=miss-only cpu_frame_copy=0\n",
+        "ui4 cpp-font-rush frame-ready request={} consumer={} rank={} slot={} sequence={} publication={} ticket={} elapsed_ms={} scheduled_ms={} plan_batch={} plan_enqueue_delay_ms={} plan_queue_wait_ms={} plan_build_ms={} plan_total_ms={} plan_candidate_attempts={} plan_rejected_candidates={} plan_worker_slices={} plan_yields={} plan_parallelism={} deadline_to_submit_ms={} submit_call_us={} prepared_ops_bytes={} prepared_reserved_ops_bytes={} prepared_segment_evaluations={} gpu_wait_ms={} pre_service_ms={} clear_ms={} prepare_coverage_ms={} coverage_build_ms={} coverage_audit_ms={} gpu_outline_cache_hits={} gpu_outline_cache_misses={} gpu_tile_cache_hits={} gpu_tile_cache_misses={} gpu_cache_evictions={} gpu_resident_outlines={} gpu_resident_tiles={} instance_release_ms={} service_ms={} fifo_queued_ahead={} service_queue_at_complete={} completion_to_publish_us={} frame={} producer_buffer={} frame_publish_serial={} window_publish_serial={} layout={} glyph_hash=0x{:016X} glyph_ids_sample={} glyph_ids_sample_limit={} extent={}x{} cadence_ms={} requested_glyphs={} rendered_glyphs={} grid={}x{} font={} font_id={} application_plane_mask=0x{:02X} usable_planes={} clear_submits={} coverage_submits={} instance_release_submits={} known_gpu_submits={} walkers={} release={} consumer_in_flight=0 context=kernel-gpgpu-font path=registered-skrifa->ecore-plan-pool[shared-recipe-cache]->sealed-plan->font-service-fifo[shared-font-vm-outline+resident-r8-tile-cache->optional-transparent-gpu-clear->cpp-igc->guc-font-rcs]->ui4-font-scene->display-plane-direct backdrop=pipe-a-bottom-color pixel_alpha=premultiplied prepared_replay=exact-plan prepared_cache=shared-recipe-sharded gpu_cache=shared-font-vm-outline+resident-r8-tile compositor_jobs=0 rgba_cpu_readback=0 coverage_audit_cpu_readback=miss-only cpu_frame_copy=0\n",
         preview.request_serial,
         rank,
         rank,
@@ -2846,9 +2872,12 @@ fn queue_due_cpp_font_rush_consumers(
             .as_ref()
             .ok_or("font-rush-plane-state-missing")?;
         let stage = state.stage;
+        // Preserve one publication -> one SURFLIVE proof.  Replacing the
+        // sole scanout token before the display observes it can otherwise
+        // starve a repeating stage's first_scanout_at clock indefinitely.
         if !stage.produces_frames()
-            || (!stage.repeats_while_live()
-                && (state.first_scanout_at.is_some() || state.scanout_pending.is_some()))
+            || state.scanout_pending.is_some()
+            || (!stage.repeats_while_live() && state.first_scanout_at.is_some())
         {
             continue;
         }
@@ -3070,13 +3099,18 @@ fn queue_cpp_font_rush_plan(
     if let CppFontRushLayerStage::ProducerStorm { wave, mirror } = stage {
         crate::log_info!(
             target: "ui4";
-            "ui4 cpp-font-rush producer-storm request={} wave={} mirror={} workers_borrowed={} regions={} region_grid={}x{} glyphs={} active_cell_cap={} load_policy=quarter-active-cell-cap analytical_work_policy=quarter-cap no_clear=1 buffer_history=deterministic-mirrored-double source_overlap=across-waves-only\n",
+            "ui4 cpp-font-rush producer-storm request={} wave={} mirror={} workers_borrowed={} regions={} region_grid={}x{} anchors_per_region={} physical_grid={}x{} glyphs={} active_cell_cap={} load_policy=quarter-active-cell-cap analytical_work_policy=quarter-cap no_clear=1 primed_canvas=transparent+section-signs backdrop=pipe-a-bottom-color buffer_history=deterministic-mirrored-double source_overlap=across-waves-only\n",
             preview.request_serial,
             wave,
             mirror,
             crate::r::font_plan_service::FONT_PLAN_WORKER_COUNT,
             crate::r::font_plan_service::FONT_PLAN_WORKER_COUNT,
             CPP_FONT_RUSH_STORM_COLUMNS,
+            CPP_FONT_RUSH_STORM_ROWS,
+            CPP_FONT_RUSH_STORM_GLYPHS_PER_PRODUCER,
+            CPP_FONT_RUSH_STORM_COLUMNS.saturating_mul(
+                CPP_FONT_RUSH_STORM_GLYPHS_PER_PRODUCER as u8,
+            ),
             CPP_FONT_RUSH_STORM_ROWS,
             requested_glyphs,
             crate::r::font_plan_service::FONT_PLAN_MAX_ACTIVE_CELLS,
@@ -3218,23 +3252,6 @@ async fn drain_cpp_font_rush_pending(previews: &mut [ActivePreview]) {
                 );
             }
         }
-    }
-}
-
-fn cpp_font_rush_background(
-    rank: u8,
-    sequence: u64,
-    stage: CppFontRushLayerStage,
-) -> PremultipliedRgba8 {
-    if rank != 0 || stage == CppFontRushLayerStage::Dormant {
-        return PremultipliedRgba8::TRANSPARENT;
-    }
-    match stage {
-        CppFontRushLayerStage::Base | CppFontRushLayerStage::Expanded => {
-            let pulse = (sequence as u8).wrapping_mul(3) % 18;
-            PremultipliedRgba8::from_straight_rgba(5, 11 + pulse, 25 + pulse / 2, u8::MAX)
-        }
-        _ => PremultipliedRgba8::from_straight_rgba(3, 6, 18, u8::MAX),
     }
 }
 
@@ -3441,8 +3458,8 @@ fn cpp_font_rush_plan_request(
             (
                 cells,
                 CPP_FONT_RUSH_STORM_GLYPHS,
-                columns,
-                rows.saturating_mul(CPP_FONT_RUSH_STORM_GLYPHS_PER_PRODUCER as u8),
+                columns.saturating_mul(CPP_FONT_RUSH_STORM_GLYPHS_PER_PRODUCER as u8),
+                rows,
                 crate::r::font_plan_service::FONT_PLAN_WORKER_COUNT,
             )
         }
@@ -4717,6 +4734,30 @@ mod tests {
     }
 
     #[test]
+    fn cpp_font_rush_clears_to_transparent_over_pipe_bottom_color() {
+        let cleared = [
+            CppFontRushLayerStage::Base,
+            CppFontRushLayerStage::Expanded,
+            CppFontRushLayerStage::TitleReveal(1),
+            CppFontRushLayerStage::TitleHold,
+            CppFontRushLayerStage::SectionPulse,
+            CppFontRushLayerStage::StormPrime { mirror: 0 },
+        ];
+        for stage in cleared {
+            assert_eq!(
+                stage.clear_color().map(|color| color.to_native_bytes()),
+                Some([0, 0, 0, 0]),
+            );
+        }
+        assert!(
+            CppFontRushLayerStage::ProducerStorm { wave: 0, mirror: 0 }
+                .clear_color()
+                .is_none()
+        );
+        assert!(CppFontRushLayerStage::Dormant.clear_color().is_none());
+    }
+
+    #[test]
     fn cpp_font_rush_due_ticks_remain_phase_anchored() {
         assert_eq!(cpp_font_rush_due_tick_count(249, 250, 250), 0);
         assert_eq!(cpp_font_rush_due_tick_count(250, 250, 250), 1);
@@ -4844,7 +4885,7 @@ mod tests {
         .unwrap();
         assert_eq!(glyphs, CPP_FONT_RUSH_STORM_GLYPHS);
         assert_eq!(glyphs, crate::r::font_plan_service::FONT_PLAN_MAX_ACTIVE_CELLS / 4);
-        assert_eq!(grid, (8, 8));
+        assert_eq!(grid, (16, 4));
         assert_eq!(request.parallelism(), crate::r::font_plan_service::FONT_PLAN_WORKER_COUNT);
         assert_eq!(request.cells().len(), glyphs);
         for worker in 0..crate::r::font_plan_service::FONT_PLAN_WORKER_COUNT {

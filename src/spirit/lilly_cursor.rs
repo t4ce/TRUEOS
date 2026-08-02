@@ -22,6 +22,8 @@ const LILLY_INITIAL_APPROACH_MS: u32 = 420;
 const LILLY_OUTLINE_EDGE_MS: u32 = 240;
 const LILLY_WINDOW_APPROACH_MIN_MS: u32 = 260;
 const LILLY_WINDOW_APPROACH_MAX_MS: u32 = 900;
+const LILLY_DOBBY_MOVE_MIN_MS: u32 = 80;
+const LILLY_DOBBY_MOVE_MAX_MS: u32 = 640;
 
 struct LillyCursorState {
     cursor: Option<MouseControlCursor>,
@@ -211,6 +213,76 @@ pub(super) fn queue_primary_click() -> Result<(), MouseControlError> {
         cursor.handle,
         &program,
     )
+}
+
+/// Replace Lilly's pending choreography with one bounded pointer action.
+///
+/// The motion and optional primary click are submitted as one station program,
+/// so Dobby cannot expose a button-down half gesture or interleave another
+/// producer between the approach and click.
+pub(super) fn queue_pointer_action(
+    target_x: i32,
+    target_y: i32,
+    primary_click: bool,
+) -> Result<u32, MouseControlError> {
+    let (screen_width, screen_height) =
+        crate::intel::active_scanout_dimensions().ok_or(MouseControlError::Invalid)?;
+    if screen_width == 0 || screen_height == 0 {
+        return Err(MouseControlError::Invalid);
+    }
+    let cursor = register_once()?;
+    let (from_x, from_y) = crate::r::mouse_motion_service::cursor_position(
+        MouseControlPrincipal::Kernel,
+        cursor.handle,
+    )?;
+    let last_x = i64::from(screen_width.saturating_sub(1)).min(i64::from(i32::MAX));
+    let last_y = i64::from(screen_height.saturating_sub(1)).min(i64::from(i32::MAX));
+    let target_x = i64::from(target_x).clamp(0, last_x) as i32;
+    let target_y = i64::from(target_y).clamp(0, last_y) as i32;
+    let distance = i64::from(target_x)
+        .saturating_sub(i64::from(from_x))
+        .unsigned_abs()
+        .max(
+            i64::from(target_y)
+                .saturating_sub(i64::from(from_y))
+                .unsigned_abs(),
+        );
+    let duration_ms = u32::try_from(distance / 3)
+        .unwrap_or(LILLY_DOBBY_MOVE_MAX_MS)
+        .clamp(LILLY_DOBBY_MOVE_MIN_MS, LILLY_DOBBY_MOVE_MAX_MS);
+    let program = [
+        MouseControlCommand {
+            opcode: MOUSE_CONTROL_OPCODE_STROKE,
+            path: MOUSE_CONTROL_PATH_LINE,
+            easing: MOUSE_CONTROL_EASING_NATURAL,
+            flags: MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
+            duration_ms,
+            x: target_x,
+            y: target_y,
+            ..MouseControlCommand::default()
+        },
+        MouseControlCommand {
+            opcode: MOUSE_CONTROL_OPCODE_BUTTONS,
+            buttons_set: PRIMARY_BUTTON_MASK,
+            ..MouseControlCommand::default()
+        },
+        MouseControlCommand {
+            opcode: MOUSE_CONTROL_OPCODE_BUTTONS,
+            buttons_clear: PRIMARY_BUTTON_MASK,
+            ..MouseControlCommand::default()
+        },
+    ];
+    let commands = if primary_click {
+        &program[..]
+    } else {
+        &program[..1]
+    };
+    crate::r::mouse_motion_service::submit_program(
+        MouseControlPrincipal::Kernel,
+        cursor.handle,
+        commands,
+    )?;
+    Ok(duration_ms)
 }
 
 /// Enqueue one complete clockwise trace of a brokered UI4 frame. The first

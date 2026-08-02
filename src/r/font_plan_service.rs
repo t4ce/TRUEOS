@@ -1551,8 +1551,8 @@ mod tests {
         let rolled = FontPlanCellRequest::new([1.0, 2.0], 16.0, 0.0, 10, 11);
         assert_eq!(rolled.worker_affinity(), None);
         assert_eq!(rolled.fixed_scalar(), None);
-        let exact = FontPlanCellRequest::fixed([1.0, 2.0], 16.0, 0.0, 10, 'T')
-            .with_worker_affinity(31);
+        let exact =
+            FontPlanCellRequest::fixed([1.0, 2.0], 16.0, 0.0, 10, 'T').with_worker_affinity(31);
         assert_eq!(exact.worker_affinity(), Some(31));
         assert_eq!(exact.fixed_scalar(), Some('T'));
     }
