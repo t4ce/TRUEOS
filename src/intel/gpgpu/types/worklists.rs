@@ -85,6 +85,17 @@ pub(crate) struct GpgpuSpriteQuadWorklistRun<'a> {
     pub(crate) descs: &'a [GpgpuSpriteQuadWorklistDesc],
 }
 
+/// Result of one Font-owned ordered RGBA sprite worklist.
+///
+/// `release` is present only when the final cache-draining marker and the
+/// Font HW context-save boundary both retired for the exact destination.
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuSpriteQuadWorklistResult {
+    pub(crate) stats: GpgpuWorklistSubmitStats,
+    pub(crate) outcome: GpgpuSubmissionOutcome,
+    pub(crate) release: Option<GpgpuRgba8ReleaseFence>,
+}
+
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER: u32 = 1 << 0;
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC: u32 = 1 << 1;
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_CLEAR: u32 = 1 << 2;

@@ -871,11 +871,12 @@ pub(crate) fn retire_font_rcs_ppgtt_range(gpu: u64, phys: u64, len: usize) -> bo
         && end <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_PRIMARY_LIMIT;
     let in_secondary = gpu >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE
         && end <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT;
+    let is_rush_atlas = is_exact_font_rush_rgba8_atlas_range(gpu, len);
     if len == 0
         || !gpu.is_multiple_of(4096)
         || !phys.is_multiple_of(4096)
         || !len.is_multiple_of(4096)
-        || (!in_primary && !in_secondary)
+        || (!in_primary && !in_secondary && !is_rush_atlas)
     {
         return false;
     }

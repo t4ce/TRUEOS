@@ -76,4 +76,8 @@
 # The UI4 keyboard-event take call is strictly additive. It exposes the input
 # broker's existing owner/window route and leaves global keyboard-ring readers
 # and older Blueprint input contracts unchanged.
-e4f6694c6270d99553bb76fe16ba33c6f238ccd23aa8e84d0e5c5632b808f0db
+# The Dobby UI4 inventory, focus, observation, pointer, and keyboard calls are
+# strictly additive and restricted to the Dobby Blueprint owner. They lend the
+# existing Spirit/Lilly input pair through bounded serialized operations; older
+# v2 artifacts import none of these symbols and retain their prior authority.
+6bddb799bcf80d674ad760f7d63ffd5ac0a0d3d2e3388e7e318f2f2598676691

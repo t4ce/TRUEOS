@@ -33,6 +33,12 @@ static LAB256_RUNTIME: Mutex<Option<Lab256Runtime>> = Mutex::new(None);
 static FONT_COVERAGE_GPU_VA_CURSOR: AtomicU64 =
     AtomicU64::new(DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE);
 static FONT_COVERAGE_GPU_VA_FREE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+// `None` is available, `Some(u64::MAX)` is reserved while DMA allocation is
+// being constructed, and every other value is the owning physical base. A
+// fixed Font Rush VA is not reusable until the exact owner retires its Font
+// PPGTT leaves and returns the matching physical token.
+static FONT_RUSH_RGBA8_ATLAS_SLOTS: Mutex<[Option<u64>; GPGPU_FONT_RUSH_RGBA8_ATLAS_COUNT]> =
+    Mutex::new([None; GPGPU_FONT_RUSH_RGBA8_ATLAS_COUNT]);
 static PARTICLE_CRAFT_GPU_VA_CURSOR: AtomicU64 =
     AtomicU64::new(DIRECT_RCS_GPU_VA_PARTICLE_CRAFT_BASE);
 static PARTICLE_CRAFT_GPU_VA_FREE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
@@ -62,6 +68,12 @@ static SCENE_AABB_QUARANTINED: AtomicBool = AtomicBool::new(false);
 static GPGPU_RECT_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mutex::new(None);
 static GPGPU_MANDEL64_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mutex::new(None);
 static GPGPU_SPRITE_QUAD_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> =
+    Mutex::new(None);
+// Font owns a separate descriptor allocation even though its private PPGTT can
+// reuse the ordinary sprite descriptor VA.  An ambiguous Font submission pins
+// these exact bytes without preventing UI4 or the system-service context from
+// preparing their own worklists.
+static FONT_SPRITE_QUAD_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> =
     Mutex::new(None);
 static UI4_COMPOSITOR_SPRITE_QUAD_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> =
     Mutex::new(None);
@@ -115,6 +127,7 @@ static FILL_RECT_WORKLIST_OK: AtomicBool = AtomicBool::new(false);
 static SPRITE_QUAD_WORKLIST_OK: AtomicBool = AtomicBool::new(false);
 
 static SPRITE_QUAD_WORKLIST_SUBMIT_FAIL_LOGS: AtomicU32 = AtomicU32::new(0);
+static FONT_SPRITE_QUAD_WORKLIST_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 static DIRECT_RCS_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(0);
 static DIRECT_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);

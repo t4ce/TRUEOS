@@ -10,16 +10,13 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU8, Ordering};
-
 use embassy_time::{Duration, Timer};
 use serde::Serialize;
 use spin::Mutex;
 
 use crate::r::keyboard_control_service::{
     KEYBOARD_CONTROL_FLAG_CLEAR_QUEUE, KEYBOARD_CONTROL_OPCODE_STROKE, KeyboardControlCommand,
-    KeyboardControlDevice, KeyboardControlPrincipal, keyboard_is_idle, submit_command,
-    submit_text,
+    KeyboardControlDevice, KeyboardControlPrincipal, keyboard_is_idle, submit_command, submit_text,
 };
 use crate::ui4::{
     CursorFrameKey, OutputId, WindowId, WindowOwner, WindowPlacement, WindowSnapshot, WindowState,
@@ -81,6 +78,8 @@ impl LillyIoState {
 static LILLY_IO: Mutex<LillyIoState> = Mutex::new(LillyIoState::new());
 
 struct ObservationCache {
+    owner_instance: [u8; 16],
+    owner_generation: u64,
     window_id: u32,
     placement: Option<WindowPlacement>,
     metadata: Vec<u8>,
@@ -90,6 +89,8 @@ struct ObservationCache {
 impl ObservationCache {
     const fn new() -> Self {
         Self {
+            owner_instance: [0; 16],
+            owner_generation: 0,
             window_id: 0,
             placement: None,
             metadata: Vec::new(),
@@ -98,6 +99,8 @@ impl ObservationCache {
     }
 
     fn clear(&mut self) {
+        self.owner_instance = [0; 16];
+        self.owner_generation = 0;
         self.window_id = 0;
         self.placement = None;
         self.metadata.clear();
@@ -132,8 +135,8 @@ struct ObservationMetadata {
     native: [u32; 2],
     capture: [u32; 2],
     rect: [i64; 4],
-    grid_extent: u32,
-    grid_major_step: u32,
+    grid_extent: u16,
+    grid_major_step: u16,
     png_bytes: usize,
     revision: u64,
     publish_serial: u64,
@@ -158,6 +161,17 @@ fn require_authorized(owner: u8) -> Result<(), i32> {
     authorized(owner).then_some(()).ok_or(ERROR_DENIED)
 }
 
+fn owner_identity(owner: u8) -> Result<([u8; 16], u64), i32> {
+    let identity = crate::hv::blueprint_instance_identity(owner).ok_or(ERROR_DENIED)?;
+    Ok((identity.instance, identity.generation))
+}
+
+fn cache_belongs_to(cache: &ObservationCache, owner: u8) -> bool {
+    owner_identity(owner).is_ok_and(|(instance, generation)| {
+        cache.owner_instance == instance && cache.owner_generation == generation
+    })
+}
+
 fn compact_name(window: WindowSnapshot) -> String {
     let name = match window.owner {
         WindowOwner::Vm(vm_id) => crate::hv::app_vm_display_label(vm_id)
@@ -177,9 +191,8 @@ fn compact_name(window: WindowSnapshot) -> String {
 fn live_windows() -> Result<Vec<WindowSnapshot>, i32> {
     let output = OutputId::from_slot(0).ok_or(ERROR_UNAVAILABLE)?;
     let mut windows = crate::ui4::visible_windows_for_output(output);
-    windows.sort_unstable_by_key(|window| {
-        (window.plane.slot(), window.placement.z, window.id.raw())
-    });
+    windows
+        .sort_unstable_by_key(|window| (window.plane.slot(), window.placement.z, window.id.raw()));
     Ok(windows)
 }
 
@@ -336,10 +349,7 @@ pub(crate) fn focus(owner: u8, window_id: u64) -> i32 {
         crate::ui4::select_window_for_cursor(source, window.owner, window.id)
             .map_err(|_| ERROR_BAD_STATE)?;
         if let Ok(slot) = observation_slot(owner) {
-            let mut cache = slot.lock();
-            if cache.window_id != window.id.raw() {
-                cache.clear();
-            }
+            slot.lock().clear();
         }
         Ok::<(), i32>(())
     })();
@@ -381,6 +391,9 @@ pub(crate) fn observe_prepare(owner: u8) -> isize {
         .map_err(|_| ERROR_UNAVAILABLE)?;
         let png_len = isize::try_from(observation.png.len()).map_err(|_| ERROR_UNAVAILABLE)?;
         let mut cache = slot.lock();
+        let (owner_instance, owner_generation) = owner_identity(owner)?;
+        cache.owner_instance = owner_instance;
+        cache.owner_generation = owner_generation;
         cache.window_id = observation.window_id.raw();
         cache.placement = Some(observation.placement);
         cache.metadata = metadata;
@@ -400,7 +413,7 @@ pub(crate) fn observe_metadata(owner: u8, out: &mut [u8]) -> isize {
         Err(error) => return error as isize,
     };
     let cache = slot.lock();
-    if cache.window_id == 0 || cache.metadata.is_empty() {
+    if !cache_belongs_to(&cache, owner) || cache.window_id == 0 || cache.metadata.is_empty() {
         return ERROR_BAD_STATE as isize;
     }
     copy_complete(cache.metadata.as_slice(), out)
@@ -415,7 +428,7 @@ pub(crate) fn observe_read(owner: u8, offset: usize, out: &mut [u8]) -> isize {
         Err(error) => return error as isize,
     };
     let cache = slot.lock();
-    if cache.window_id == 0 || cache.png.is_empty() {
+    if !cache_belongs_to(&cache, owner) || cache.window_id == 0 || cache.png.is_empty() {
         return ERROR_BAD_STATE as isize;
     }
     if offset > cache.png.len() {
@@ -453,11 +466,15 @@ pub(crate) fn pointer(owner: u8, x: u16, y: u16, action: u32) -> i32 {
     };
     let result = (|| {
         let window = selected_lilly_window()?;
-        let placement = observation_slot(owner)?
-            .lock()
-            .placement
-            .filter(|_| observation_slot(owner).is_ok_and(|slot| slot.lock().window_id == window.id.raw()))
-            .unwrap_or(window.placement);
+        let placement = {
+            let cache = observation_slot(owner)?.lock();
+            if cache_belongs_to(&cache, owner) && cache.window_id == window.id.raw() {
+                cache.placement
+            } else {
+                None
+            }
+        }
+        .ok_or(ERROR_BAD_STATE)?;
         let target_x = normalized_axis(placement.x, placement.width, x)?;
         let target_y = normalized_axis(placement.y, placement.height, y)?;
         let source = super::lilly_cursor::selection_source().map_err(|_| ERROR_UNAVAILABLE)?;
@@ -573,10 +590,7 @@ fn guest_result(status: u32, data: u64) -> isize {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_dobby_ui4_windows(
-    out_ptr: *mut u8,
-    out_cap: usize,
-) -> isize {
+pub unsafe extern "C" fn trueos_cabi_dobby_ui4_windows(out_ptr: *mut u8, out_cap: usize) -> isize {
     let out = match unsafe { output_slice(out_ptr, out_cap) } {
         Ok(out) => out,
         Err(error) => return error as isize,
@@ -599,11 +613,8 @@ pub unsafe extern "C" fn trueos_cabi_dobby_ui4_windows(
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_dobby_ui4_focus(window_id: u64) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call(
-            trueos_vm::vmcall::OP_BP_DOBBY_UI4_FOCUS,
-            window_id,
-            0,
-        );
+        let (status, data) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_DOBBY_UI4_FOCUS, window_id, 0);
         return guest_result(status, data) as i32;
     }
     current_direct_owner()
@@ -614,11 +625,8 @@ pub extern "C" fn trueos_cabi_dobby_ui4_focus(window_id: u64) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_dobby_ui4_observe_prepare() -> isize {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call(
-            trueos_vm::vmcall::OP_BP_DOBBY_UI4_OBSERVE_PREPARE,
-            0,
-            0,
-        );
+        let (status, data) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_DOBBY_UI4_OBSERVE_PREPARE, 0, 0);
         return guest_result(status, data);
     }
     current_direct_owner()
@@ -692,10 +700,7 @@ pub extern "C" fn trueos_cabi_dobby_ui4_pointer(x: u16, y: u16, action: u32) -> 
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_dobby_ui4_type(
-    text_ptr: *const u8,
-    text_len: usize,
-) -> i32 {
+pub unsafe extern "C" fn trueos_cabi_dobby_ui4_type(text_ptr: *const u8, text_len: usize) -> i32 {
     if text_ptr.is_null() || text_len == 0 || text_len > MAX_DOBBY_TYPE_BYTES {
         return ERROR_BAD_INPUT;
     }
@@ -718,11 +723,8 @@ pub unsafe extern "C" fn trueos_cabi_dobby_ui4_type(
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_dobby_ui4_key(key_code: u32) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call(
-            trueos_vm::vmcall::OP_BP_DOBBY_UI4_KEY,
-            u64::from(key_code),
-            0,
-        );
+        let (status, data) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_DOBBY_UI4_KEY, u64::from(key_code), 0);
         return guest_result(status, data) as i32;
     }
     current_direct_owner()

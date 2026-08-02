@@ -184,6 +184,111 @@ fn submit_sprite_quad_worklist_runs(
     }
 }
 
+/// Submit an ordered sprite-run batch on the Font lane. The caller holds
+/// `FONT_RCS_SUBMIT_LOCK` from descriptor publication through this retirement
+/// result, so this helper must not acquire that lock recursively.
+fn submit_font_sprite_quad_worklist_runs(
+    dst: GpgpuRgba8Surface,
+    desc: GpgpuRectWorklistDescBuffer,
+    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
+) -> GpgpuSubmissionOutcome {
+    let total_descs = runs
+        .iter()
+        .try_fold(0usize, |total, run| total.checked_add(run.descs.len()));
+    let Some(total_descs) = total_descs else {
+        return GpgpuSubmissionOutcome::Unavailable;
+    };
+    if runs.is_empty()
+        || total_descs == 0
+        || total_descs > SPRITE_QUAD_WORKLIST_MAX_DESCS
+        || runs.iter().any(|run| run.descs.is_empty())
+        || font_rcs_context_is_quarantined()
+    {
+        return GpgpuSubmissionOutcome::Unavailable;
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        return GpgpuSubmissionOutcome::Unavailable;
+    };
+    let Some(upload) = upload_sprite_quad_worklist_rgba8_kernel() else {
+        return GpgpuSubmissionOutcome::Unavailable;
+    };
+    let Some(state) = font_rcs_state_once(dev) else {
+        return GpgpuSubmissionOutcome::Unavailable;
+    };
+
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && font_rcs_init_ppgtt_once(state);
+    let kernel_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ok =
+        kernel_ok && direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, true);
+    let desc_ok = dst_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
+    let mut sources_ok = desc_ok;
+    for run in runs {
+        if !sources_ok {
+            break;
+        }
+        sources_ok = direct_rcs_map_ppgtt_kernel(state, run.src.gpu, run.src.phys, run.src.bytes);
+    }
+    let batch_ok = sources_ok
+        && direct_rcs_encode_sprite_quad_worklist_runs_batch(state, upload, dst, desc, runs);
+    let submission = if batch_ok {
+        font_rcs_submit_batch_state(dev, state)
+    } else {
+        DirectRcsSubmissionState::Rejected
+    };
+    let submitted = submission.may_have_submitted();
+    let observed = if submission.can_poll() {
+        font_rcs_poll_result_slot_timeout_ms(
+            state,
+            SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
+            SPRITE_QUAD_WORKLIST_POST_MARKER,
+            UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
+        )
+    } else {
+        0
+    };
+    if observed == SPRITE_QUAD_WORKLIST_POST_MARKER {
+        return GpgpuSubmissionOutcome::Complete;
+    }
+
+    if submitted {
+        // The lane submit helper quarantines ambiguous admissions, and the
+        // bounded marker poll quarantines accepted work without a retirement
+        // proof. Preserve a local fail-closed assertion for future refactors.
+        if !font_rcs_context_is_quarantined() {
+            quarantine_font_rcs_context("font-sprite-worklist-retirement-unproven");
+        }
+        let occurrence = FONT_SPRITE_QUAD_WORKLIST_INCOMPLETE_SEQ
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        if occurrence <= 8 || occurrence.is_power_of_two() {
+            crate::log_warn!(target: "intel-gpgpu";
+                "font sprite-quad worklist incomplete occurrence={} runs={} descs={} forcewake={} mapped={} ppgtt={} kernel={} dst={} desc={} sources={} batch={} submitted={} post=0x{:08X} expected=0x{:08X} action=quarantine-font-lane+retain-descriptors-and-surfaces\n",
+                occurrence,
+                runs.len(),
+                total_descs,
+                forcewake_ok as u8,
+                mapped_ok as u8,
+                ppgtt_ok as u8,
+                kernel_ok as u8,
+                dst_ok as u8,
+                desc_ok as u8,
+                sources_ok as u8,
+                batch_ok as u8,
+                submitted as u8,
+                observed,
+                SPRITE_QUAD_WORKLIST_POST_MARKER,
+            );
+        }
+        GpgpuSubmissionOutcome::SubmittedIncomplete
+    } else {
+        GpgpuSubmissionOutcome::Unavailable
+    }
+}
+
 fn submit_fill_rect_worklist(
     dst: GpgpuRgba8Surface,
     desc: GpgpuRectWorklistDescBuffer,

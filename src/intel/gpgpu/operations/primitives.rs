@@ -176,6 +176,113 @@ fn recycle_font_coverage_gpu_va(gpu: u64, bytes: usize) {
     free.truncate(write);
 }
 
+const FONT_RUSH_RGBA8_ATLAS_SLOT_RESERVED: u64 = u64::MAX;
+
+fn reserve_font_rush_rgba8_atlas_slot(class: u8) -> bool {
+    let mut slots = FONT_RUSH_RGBA8_ATLAS_SLOTS.lock();
+    let Some(slot) = slots.get_mut(class as usize) else {
+        return false;
+    };
+    if slot.is_some() {
+        return false;
+    }
+    *slot = Some(FONT_RUSH_RGBA8_ATLAS_SLOT_RESERVED);
+    true
+}
+
+fn bind_font_rush_rgba8_atlas_slot(class: u8, phys: u64) -> bool {
+    if phys == FONT_RUSH_RGBA8_ATLAS_SLOT_RESERVED || !phys.is_multiple_of(4096) {
+        return false;
+    }
+    let mut slots = FONT_RUSH_RGBA8_ATLAS_SLOTS.lock();
+    let Some(slot) = slots.get_mut(class as usize) else {
+        return false;
+    };
+    if *slot != Some(FONT_RUSH_RGBA8_ATLAS_SLOT_RESERVED) {
+        return false;
+    }
+    *slot = Some(phys);
+    true
+}
+
+fn abandon_font_rush_rgba8_atlas_slot(class: u8) -> bool {
+    let mut slots = FONT_RUSH_RGBA8_ATLAS_SLOTS.lock();
+    let Some(slot) = slots.get_mut(class as usize) else {
+        return false;
+    };
+    if *slot != Some(FONT_RUSH_RGBA8_ATLAS_SLOT_RESERVED) {
+        return false;
+    }
+    *slot = None;
+    true
+}
+
+fn font_rush_rgba8_atlas_slot_is_owned(class: u8, phys: u64) -> bool {
+    FONT_RUSH_RGBA8_ATLAS_SLOTS
+        .lock()
+        .get(class as usize)
+        .is_some_and(|slot| *slot == Some(phys))
+}
+
+fn release_font_rush_rgba8_atlas_slot(class: u8, phys: u64) -> bool {
+    let mut slots = FONT_RUSH_RGBA8_ATLAS_SLOTS.lock();
+    let Some(slot) = slots.get_mut(class as usize) else {
+        return false;
+    };
+    if *slot != Some(phys) {
+        return false;
+    }
+    *slot = None;
+    true
+}
+
+/// Allocate one transparent, fixed-address Font Rush RGBA8 atlas.
+///
+/// Classes 0..=3 map respectively to Font-private PPGTT addresses
+/// 0x1000_0000, 0x1080_0000, 0x1100_0000, and 0x1180_0000. A live class has a
+/// single owner; allocation fails instead of remapping that VA underneath it.
+pub(crate) fn allocate_font_rush_rgba8_atlas(class: u8) -> Option<GpgpuOwnedFontRushRgba8Atlas> {
+    let gpu = font_rush_rgba8_atlas_gpu(class)?;
+    if !reserve_font_rush_rgba8_atlas_slot(class) {
+        return None;
+    }
+
+    let Some((phys, virt)) =
+        crate::dma::alloc(GPGPU_FONT_RUSH_RGBA8_ATLAS_BYTES, super::WARM_ALIGN)
+    else {
+        let _ = abandon_font_rush_rgba8_atlas_slot(class);
+        return None;
+    };
+    unsafe {
+        core::ptr::write_bytes(virt, 0, GPGPU_FONT_RUSH_RGBA8_ATLAS_BYTES);
+    }
+    super::dma_flush(virt, GPGPU_FONT_RUSH_RGBA8_ATLAS_BYTES);
+
+    let Some(surface) = GpgpuRgba8Surface::new(
+        phys,
+        gpu,
+        GPGPU_FONT_RUSH_RGBA8_ATLAS_BYTES,
+        GPGPU_FONT_RUSH_RGBA8_ATLAS_WIDTH,
+        GPGPU_FONT_RUSH_RGBA8_ATLAS_HEIGHT,
+        GPGPU_FONT_RUSH_RGBA8_ATLAS_PITCH_BYTES,
+    ) else {
+        crate::dma::dealloc(virt, GPGPU_FONT_RUSH_RGBA8_ATLAS_BYTES);
+        let _ = abandon_font_rush_rgba8_atlas_slot(class);
+        return None;
+    };
+    if !bind_font_rush_rgba8_atlas_slot(class, phys) {
+        crate::dma::dealloc(virt, GPGPU_FONT_RUSH_RGBA8_ATLAS_BYTES);
+        let _ = abandon_font_rush_rgba8_atlas_slot(class);
+        return None;
+    }
+
+    Some(GpgpuOwnedFontRushRgba8Atlas {
+        surface,
+        virt,
+        class,
+    })
+}
+
 /// Allocate one persistent linear R8 mask with its own PPGTT virtual range.
 /// Distinct simultaneously-live masks are never remapped over one another.
 pub(crate) fn allocate_font_coverage_mask(

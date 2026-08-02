@@ -803,6 +803,89 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_DOBBY_UI4_WINDOWS => {
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let cap = (arg0 as usize).min(PAYLOAD_CAP);
+            let rc = unsafe {
+                crate::spirit::dobby_ui::windows(vm_id, &mut (&mut (*page).payload)[..cap])
+            };
+            let response_len = usize::try_from(rc)
+                .ok()
+                .filter(|len| *len <= cap)
+                .unwrap_or(0);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, response_len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_DOBBY_UI4_FOCUS => {
+            let rc = crate::spirit::dobby_ui::focus(vm_id, arg0);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_DOBBY_UI4_OBSERVE_PREPARE => {
+            let rc = crate::spirit::dobby_ui::observe_prepare(vm_id);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_DOBBY_UI4_OBSERVE_METADATA => {
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let cap = (arg0 as usize).min(PAYLOAD_CAP);
+            let rc = unsafe {
+                crate::spirit::dobby_ui::observe_metadata(vm_id, &mut (&mut (*page).payload)[..cap])
+            };
+            let response_len = usize::try_from(rc)
+                .ok()
+                .filter(|len| *len <= cap)
+                .unwrap_or(0);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, response_len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_DOBBY_UI4_OBSERVE_READ => {
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let cap = (arg1 as usize).min(PAYLOAD_CAP);
+            let rc = unsafe {
+                crate::spirit::dobby_ui::observe_read(
+                    vm_id,
+                    arg0 as usize,
+                    &mut (&mut (*page).payload)[..cap],
+                )
+            };
+            let response_len = usize::try_from(rc)
+                .ok()
+                .filter(|len| *len <= cap)
+                .unwrap_or(0);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, response_len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_DOBBY_UI4_POINTER => {
+            let x = (arg0 & 0xFFFF) as u16;
+            let y = ((arg0 >> 16) & 0xFFFF) as u16;
+            let rc = crate::spirit::dobby_ui::pointer(vm_id, x, y, arg1 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_DOBBY_UI4_TYPE => {
+            let rc = request_payload(vm_id, req_len)
+                .map(|text| crate::spirit::dobby_ui::type_text(vm_id, text))
+                .unwrap_or(crate::spirit::dobby_ui::ERROR_BAD_INPUT);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_DOBBY_UI4_KEY => {
+            let rc = u32::try_from(arg0)
+                .map(|key| crate::spirit::dobby_ui::key(vm_id, key))
+                .unwrap_or(crate::spirit::dobby_ui::ERROR_BAD_INPUT);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_SHELL2_FRONTEND_ATTACH_V1 => {
             let rc =
                 crate::shell2::backends::session_pool::attach(vm_id, arg0 as usize, arg1 as usize);

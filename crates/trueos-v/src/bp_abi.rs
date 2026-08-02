@@ -329,10 +329,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_dobby_ui4_windows(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_dobby_ui4_focus(window_id: u64) -> i32;
     pub fn trueos_cabi_dobby_ui4_observe_prepare() -> isize;
-    pub fn trueos_cabi_dobby_ui4_observe_metadata(
-        out_ptr: *mut u8,
-        out_cap: usize,
-    ) -> isize;
+    pub fn trueos_cabi_dobby_ui4_observe_metadata(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_dobby_ui4_observe_read(
         offset: usize,
         out_ptr: *mut u8,

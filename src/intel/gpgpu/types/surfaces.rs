@@ -188,6 +188,66 @@ impl Drop for GpgpuOwnedRgba8Surface {
     }
 }
 
+/// One fixed-address, run-owned RGBA8 atlas for the Font Rush producer pool.
+///
+/// The owner is deliberately non-cloneable. Sharing belongs above this layer
+/// (for example through `Arc`), so its final drop remains the single lifetime
+/// boundary for both the DMA backing and its Font-private PPGTT VA class.
+pub(crate) struct GpgpuOwnedFontRushRgba8Atlas {
+    surface: GpgpuRgba8Surface,
+    virt: *mut u8,
+    class: u8,
+}
+
+unsafe impl Send for GpgpuOwnedFontRushRgba8Atlas {}
+unsafe impl Sync for GpgpuOwnedFontRushRgba8Atlas {}
+
+impl GpgpuOwnedFontRushRgba8Atlas {
+    pub(crate) const fn surface(&self) -> GpgpuRgba8Surface {
+        self.surface
+    }
+
+    pub(crate) const fn class(&self) -> u8 {
+        self.class
+    }
+}
+
+impl Drop for GpgpuOwnedFontRushRgba8Atlas {
+    fn drop(&mut self) {
+        if !font_rush_rgba8_atlas_slot_is_owned(self.class, self.surface.phys) {
+            crate::log_error!(
+                target: "gpgpu";
+                "intel/gpgpu: font-rush RGBA8 atlas ownership mismatch class={} phys=0x{:X} gpu=0x{:X} action=no-unmap-no-free-no-slot-release\n",
+                self.class,
+                self.surface.phys,
+                self.surface.gpu,
+            );
+            return;
+        }
+        if !retire_font_rcs_ppgtt_range(self.surface.gpu, self.surface.phys, self.surface.bytes) {
+            crate::log_error!(
+                target: "gpgpu";
+                "intel/gpgpu: font-rush RGBA8 atlas retirement refused class={} phys=0x{:X} gpu=0x{:X} bytes={} action=no-unmap-no-free-no-slot-release\n",
+                self.class,
+                self.surface.phys,
+                self.surface.gpu,
+                self.surface.bytes,
+            );
+            return;
+        }
+        crate::dma::dealloc(self.virt, self.surface.bytes);
+        if !release_font_rush_rgba8_atlas_slot(self.class, self.surface.phys) {
+            crate::log_error!(
+                target: "gpgpu";
+                "intel/gpgpu: font-rush RGBA8 atlas slot release refused class={} phys=0x{:X} gpu=0x{:X} action=slot-remains-reserved\n",
+                self.class,
+                self.surface.phys,
+                self.surface.gpu,
+            );
+        }
+    }
+}
+
 /// Decoder-owned Xe media Tile64 NV12 storage mapped read-only by convention into the
 /// compositor's private PPGTT.  The media engine's VA is only an opaque alias;
 /// direct RCS installs its own PTEs for the same physical picture.

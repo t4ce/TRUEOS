@@ -672,10 +672,19 @@ fn capture_window_rgba(window: WindowSnapshot) -> Result<CapturedWindowRgba, Cap
             let destination_offset = row
                 .checked_mul(row_bytes)
                 .ok_or(CaptureError::DimensionTooLarge)?;
+            let source_end = source_offset
+                .checked_add(row_bytes)
+                .ok_or(CaptureError::DimensionTooLarge)?;
+            let destination_end = destination_offset
+                .checked_add(row_bytes)
+                .ok_or(CaptureError::DimensionTooLarge)?;
             let source_row = source
-                .get(source_offset..source_offset + row_bytes)
+                .get(source_offset..source_end)
                 .ok_or(CaptureError::InvalidFrameLayout)?;
-            rgba[destination_offset..destination_offset + row_bytes].copy_from_slice(source_row);
+            let destination_row = rgba
+                .get_mut(destination_offset..destination_end)
+                .ok_or(CaptureError::InvalidFrameLayout)?;
+            destination_row.copy_from_slice(source_row);
         }
         Ok::<_, CaptureError>(CapturedWindowRgba {
             width: view.width,

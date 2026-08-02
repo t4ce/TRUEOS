@@ -17,8 +17,8 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
-pub(crate) mod gpu_logger;
 pub(crate) mod dobby_ui;
+pub(crate) mod gpu_logger;
 mod intel_cursor;
 mod lilly;
 mod lilly_cursor;
