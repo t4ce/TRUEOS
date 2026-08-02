@@ -257,13 +257,27 @@ pub(crate) struct FontStampedBuffer {
 /// frame. The release is bound to that exact allocation and is the only token
 /// accepted by the frame pool for GPU-authored publication.
 pub(crate) struct FontFrameStamp {
+    ticket: FontKernelTicket,
     glyphs: usize,
     submits: usize,
+    clear_submits: usize,
     active_walkers: usize,
+    pre_service_ms: u64,
+    clear_ms: u64,
+    prepare_coverage_ms: u64,
+    coverage_build_ms: u64,
+    coverage_audit_ms: u64,
+    coverage_submits: usize,
+    instance_release_ms: u64,
+    total_service_ms: u64,
     release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
 }
 
 impl FontFrameStamp {
+    pub(crate) const fn ticket(&self) -> FontKernelTicket {
+        self.ticket
+    }
+
     pub(crate) const fn glyphs(&self) -> usize {
         self.glyphs
     }
@@ -272,8 +286,51 @@ impl FontFrameStamp {
         self.submits
     }
 
+    pub(crate) const fn clear_submits(&self) -> usize {
+        self.clear_submits
+    }
+
     pub(crate) const fn active_walkers(&self) -> usize {
         self.active_walkers
+    }
+
+    /// Time from FIFO insertion until the blocking service worker began. This
+    /// deliberately includes FIFO backlog, GPU-lane admission, and blocking
+    /// worker dispatch; it is not presented as a pure queue measurement.
+    pub(crate) const fn pre_service_ms(&self) -> u64 {
+        self.pre_service_ms
+    }
+
+    pub(crate) const fn clear_ms(&self) -> u64 {
+        self.clear_ms
+    }
+
+    pub(crate) const fn prepare_coverage_ms(&self) -> u64 {
+        self.prepare_coverage_ms
+    }
+
+    /// Outline preparation, allocation, and analytical R8 GPU generation.
+    pub(crate) const fn coverage_build_ms(&self) -> u64 {
+        self.coverage_build_ms
+    }
+
+    /// CPU cache flush and full-mask nonzero integrity scan.
+    pub(crate) const fn coverage_audit_ms(&self) -> u64 {
+        self.coverage_audit_ms
+    }
+
+    pub(crate) const fn coverage_submits(&self) -> usize {
+        self.coverage_submits
+    }
+
+    pub(crate) const fn instance_release_ms(&self) -> u64 {
+        self.instance_release_ms
+    }
+
+    /// Worker time from optional clear admission through exact release proof.
+    /// Pre-service delay is reported separately and is not included here.
+    pub(crate) const fn total_service_ms(&self) -> u64 {
+        self.total_service_ms
     }
 
     pub(crate) const fn release(&self) -> crate::intel::gpgpu::GpgpuRgba8ReleaseFence {
@@ -345,10 +402,23 @@ pub(crate) struct PendingFontStamp {
 }
 
 pub(crate) struct PendingFontFrameStamp {
+    ticket: FontKernelTicket,
+    queued_ahead: usize,
     reply: Arc<Signal<crate::wait::EmbassySpinRawMutex, Result<FontFrameStamp, FontKernelError>>>,
 }
 
 impl PendingFontFrameStamp {
+    pub(crate) const fn ticket(&self) -> FontKernelTicket {
+        self.ticket
+    }
+
+    /// Exact number of requests already resident in the service FIFO while
+    /// this request was inserted. A separately dequeued active request is not
+    /// included.
+    pub(crate) const fn queued_ahead(&self) -> usize {
+        self.queued_ahead
+    }
+
     /// Take a completed direct-frame stamp without blocking the caller.
     ///
     /// Blueprint publishers use this as a cooperative submit/poll boundary
@@ -454,6 +524,8 @@ enum QueuedFontRequest {
         ticket: FontKernelTicket,
         request: FontStampRequest,
         destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+        clear_rgba: Option<u32>,
+        enqueued_ms: u64,
         reply:
             Arc<Signal<crate::wait::EmbassySpinRawMutex, Result<FontFrameStamp, FontKernelError>>>,
     },
@@ -541,6 +613,26 @@ pub(crate) fn submit_frame_stamp(
     request: FontStampRequest,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> Result<PendingFontFrameStamp, FontKernelError> {
+    queue_frame_stamp(request, destination, None)
+}
+
+/// Queue a full-surface clear followed by an ordered stamp into one caller-owned
+/// RGBA8 surface. Both operations execute while the same font GPU-lane lease is
+/// held. A submitted-but-incomplete clear is reported as `SubmittedIncomplete`
+/// so the caller can quarantine the exact destination instead of cancelling it.
+pub(crate) fn submit_frame_stamp_with_clear(
+    request: FontStampRequest,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    clear_rgba: u32,
+) -> Result<PendingFontFrameStamp, FontKernelError> {
+    queue_frame_stamp(request, destination, Some(clear_rgba))
+}
+
+fn queue_frame_stamp(
+    request: FontStampRequest,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    clear_rgba: Option<u32>,
+) -> Result<PendingFontFrameStamp, FontKernelError> {
     validate_stamp_request(&request)?;
     let scene = &request.layers[0].scene;
     if request.fit != FontStampFit::Canvas
@@ -552,24 +644,32 @@ pub(crate) fn submit_frame_stamp(
     }
     let ticket = next_ticket();
     let reply = Arc::new(Signal::new());
-    {
+    let queued_ahead = {
         let mut queue = REQUESTS.lock();
         if queue.len() >= FONT_KERNEL_QUEUE_CAPACITY {
             return Err(FontKernelError::QueueFull);
         }
+        let queued_ahead = queue.len();
         queue.push_back(QueuedFontRequest::FrameStamp {
             ticket,
             request,
             destination,
+            clear_rgba,
+            enqueued_ms: Instant::now().as_millis(),
             reply: Arc::clone(&reply),
         });
-    }
+        queued_ahead
+    };
     {
         let mut status = STATUS.lock();
         status.submitted_stamp = status.submitted_stamp.saturating_add(1);
     }
     WORK_AVAILABLE.signal(());
-    Ok(PendingFontFrameStamp { reply })
+    Ok(PendingFontFrameStamp {
+        ticket,
+        queued_ahead,
+        reply,
+    })
 }
 
 fn next_ticket() -> FontKernelTicket {
@@ -949,16 +1049,71 @@ fn process_stamp(
     })
 }
 
+fn validate_frame_clear_outcome(
+    outcome: crate::intel::gpgpu::GpgpuSubmissionOutcome,
+) -> Result<(), FontKernelError> {
+    match outcome {
+        crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete => Ok(()),
+        crate::intel::gpgpu::GpgpuSubmissionOutcome::SubmittedIncomplete => {
+            Err(FontKernelError::SubmittedIncomplete("font-frame-clear-submit-incomplete"))
+        }
+        crate::intel::gpgpu::GpgpuSubmissionOutcome::Unavailable => {
+            Err(FontKernelError::Unavailable("font-frame-clear-unavailable"))
+        }
+    }
+}
+
 fn process_frame_stamp(
     ticket: FontKernelTicket,
     request: &FontStampRequest,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    clear_rgba: Option<u32>,
+    enqueued_ms: u64,
 ) -> Result<FontFrameStamp, FontKernelError> {
+    use crate::intel::gpgpu::GpgpuSolidRect;
+
+    let service_started_ms = Instant::now().as_millis();
+    let pre_service_ms = service_started_ms.saturating_sub(enqueued_ms);
+    let mut clear_submits = 0usize;
+    let clear_ms = if let Some(color_rgba) = clear_rgba {
+        set_active_stage(ticket, "frame-clear");
+        let clear_started_ms = Instant::now().as_millis();
+        let clear = GpgpuSolidRect {
+            rect: destination.bounds(),
+            color_rgba,
+        };
+        let cleared = crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(
+            destination,
+            core::slice::from_ref(&clear),
+        );
+        clear_submits = cleared.stats.submits;
+        let elapsed_ms = Instant::now().as_millis().saturating_sub(clear_started_ms);
+        validate_frame_clear_outcome(cleared.outcome)?;
+        elapsed_ms
+    } else {
+        0
+    };
+
+    set_active_stage(ticket, "frame-prepare-coverage");
+    let prepare_started_ms = Instant::now().as_millis();
     let (scenes, glyphs) = prepare_stamp_scenes(ticket, request)?;
+    let prepare_coverage_ms = Instant::now()
+        .as_millis()
+        .saturating_sub(prepare_started_ms);
+    let coverage_build_ms = scenes
+        .iter()
+        .fold(0u64, |total, (scene, _)| total.saturating_add(scene.coverage_build_ms()));
+    let coverage_audit_ms = scenes
+        .iter()
+        .fold(0u64, |total, (scene, _)| total.saturating_add(scene.coverage_audit_ms()));
+    let coverage_submits = scenes
+        .iter()
+        .fold(0usize, |total, (scene, _)| total.saturating_add(scene.coverage_submits()));
     let scene_count = scenes.len();
     let mut submits = 0usize;
     let mut active_walkers = 0usize;
     let mut release = None;
+    let instance_started_ms = Instant::now().as_millis();
     for (index, (scene, foreground)) in scenes.into_iter().enumerate() {
         set_active_stage(ticket, "frame-instance");
         let rendered = scene.restamp_instance(
@@ -975,10 +1130,21 @@ fn process_frame_stamp(
     }
     let release =
         release.ok_or(FontKernelError::Unavailable("font-frame-stamp-release-missing"))?;
+    let completed_ms = Instant::now().as_millis();
     Ok(FontFrameStamp {
+        ticket,
         glyphs,
         submits,
+        clear_submits,
         active_walkers,
+        pre_service_ms,
+        clear_ms,
+        prepare_coverage_ms,
+        coverage_build_ms,
+        coverage_audit_ms,
+        coverage_submits,
+        instance_release_ms: completed_ms.saturating_sub(instance_started_ms),
+        total_service_ms: completed_ms.saturating_sub(service_started_ms),
         release,
     })
 }
@@ -1124,10 +1290,13 @@ fn process_queued_request(request: QueuedFontRequest) {
             ticket,
             request,
             destination,
+            clear_rgba,
+            enqueued_ms,
             reply,
         } => {
             set_active_stage(ticket, "dispatch");
-            let result = process_frame_stamp(ticket, &request, destination);
+            let result =
+                process_frame_stamp(ticket, &request, destination, clear_rgba, enqueued_ms);
             // A destination stamp is not replayed: an earlier ordered layer
             // may already have retired into the leased frame, so retrying the
             // whole source-over sequence would composite it twice.
@@ -1294,6 +1463,21 @@ mod tests {
         assert!(!retryable_gpu_error(&FontKernelError::SubmittedIncomplete(
             "font-retained-instance-submit-incomplete"
         )));
+    }
+
+    #[test]
+    fn frame_clear_preserves_submission_boundary_failures() {
+        use crate::intel::gpgpu::GpgpuSubmissionOutcome;
+
+        assert_eq!(validate_frame_clear_outcome(GpgpuSubmissionOutcome::Complete), Ok(()));
+        assert_eq!(
+            validate_frame_clear_outcome(GpgpuSubmissionOutcome::Unavailable),
+            Err(FontKernelError::Unavailable("font-frame-clear-unavailable"))
+        );
+        assert_eq!(
+            validate_frame_clear_outcome(GpgpuSubmissionOutcome::SubmittedIncomplete),
+            Err(FontKernelError::SubmittedIncomplete("font-frame-clear-submit-incomplete"))
+        );
     }
 
     #[test]

@@ -223,6 +223,9 @@ fn mandel64_worklist_surface_with_policy(
     let mut desc_count = 0usize;
     let mut drawn_pixels = 0usize;
     let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
+    if direct_rcs_context_is_quarantined() {
+        return None;
+    }
     unsafe {
         core::ptr::write_bytes(desc.virt, 0, desc.bytes);
         let descs = desc.virt as *mut Mandel64WorklistRgba8Desc;

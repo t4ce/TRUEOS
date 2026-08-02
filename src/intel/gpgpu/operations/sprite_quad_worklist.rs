@@ -23,6 +23,9 @@ pub(crate) fn sprite_quad_worklist_rgba8_runs_over_result(
 
     let mut stats = GpgpuWorklistSubmitStats::default();
     let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
+    if direct_rcs_context_is_quarantined() {
+        return GpgpuWorklistSubmitResult::default();
+    }
     unsafe {
         core::ptr::write_bytes(desc_buffer.virt, 0, desc_buffer.bytes);
         let out = desc_buffer.virt as *mut GpgpuSpriteQuadWorklistDesc;

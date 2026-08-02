@@ -215,13 +215,17 @@ fn submit_fill_rect_worklist(
         dst_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
     let batch_ok = desc_ppgtt_ok
         && direct_rcs_encode_fill_rect_worklist_batch(state, upload, params, dst.bytes, desc.bytes);
-    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let submission = if batch_ok {
+        direct_rcs_submit_batch_state(dev, state)
+    } else {
+        DirectRcsSubmissionState::Rejected
+    };
     // Mapping policy and retirement budget are independent. Retained UI
     // surfaces deliberately use PAT0/WB, but their scene-sized worklists need
     // the same bounded 1 s service budget as a direct scanout destination.
     // Falling back to the smoke-test spin count here can quarantine the shared
     // producer merely because a larger Gridpaper page takes longer to retire.
-    let observed = if submitted {
+    let observed = if submission.can_poll() {
         direct_rcs_poll_result_slot_timeout_ms(
             state,
             RECT_WORKLIST_POST_MARKER_SLOT,
@@ -233,7 +237,7 @@ fn submit_fill_rect_worklist(
     };
     if observed == FILL_RECT_WORKLIST_POST_MARKER {
         GpgpuSubmissionOutcome::Complete
-    } else if submitted {
+    } else if submission.may_have_submitted() {
         GpgpuSubmissionOutcome::SubmittedIncomplete
     } else {
         GpgpuSubmissionOutcome::Unavailable

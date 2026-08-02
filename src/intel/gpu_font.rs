@@ -489,6 +489,9 @@ struct GpuFontRasterQuality {
 pub(crate) struct GpuFontCoverageMask {
     storage: crate::intel::gpgpu::GpgpuOwnedMask8Surface,
     origin_px: [i32; 2],
+    coverage_build_ms: u64,
+    coverage_audit_ms: u64,
+    coverage_submits: usize,
 }
 
 impl GpuFontCoverageMask {
@@ -498,6 +501,18 @@ impl GpuFontCoverageMask {
 
     pub(crate) const fn origin_px(&self) -> [i32; 2] {
         self.origin_px
+    }
+
+    pub(crate) const fn coverage_build_ms(&self) -> u64 {
+        self.coverage_build_ms
+    }
+
+    pub(crate) const fn coverage_audit_ms(&self) -> u64 {
+        self.coverage_audit_ms
+    }
+
+    pub(crate) const fn coverage_submits(&self) -> usize {
+        self.coverage_submits
     }
 
     pub(crate) fn full_rect(&self) -> crate::intel::gpgpu::GpgpuRect {
@@ -611,6 +626,24 @@ impl GpuFontRetainedScene {
 
     pub(crate) fn quarantined(&self) -> bool {
         self.quarantined.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn coverage_build_ms(&self) -> u64 {
+        self.coverage
+            .as_ref()
+            .map_or(0, GpuFontCoverageMask::coverage_build_ms)
+    }
+
+    pub(crate) fn coverage_audit_ms(&self) -> u64 {
+        self.coverage
+            .as_ref()
+            .map_or(0, GpuFontCoverageMask::coverage_audit_ms)
+    }
+
+    pub(crate) fn coverage_submits(&self) -> usize {
+        self.coverage
+            .as_ref()
+            .map_or(0, GpuFontCoverageMask::coverage_submits)
     }
 
     /// Restamp without affine transformation through the stable mask batch.
@@ -3449,6 +3482,7 @@ fn create_gpu_font_coverage_mask_at_raster(
     raster_height: u32,
     positioning: GpuFontJobPositioning,
 ) -> Result<GpuFontCoverageMask, &'static str> {
+    let coverage_started_ms = Instant::now().as_millis();
     let quality =
         gpu_font_raster_quality(viewport_width, viewport_height, raster_width, raster_height)
             .ok_or("font-raster-empty")?;
@@ -3579,9 +3613,12 @@ fn create_gpu_font_coverage_mask_at_raster(
         }
     }
 
+    let audit_started_ms = Instant::now().as_millis();
+    let coverage_build_ms = audit_started_ms.saturating_sub(coverage_started_ms);
     let audit = storage
         .nonzero_audit()
         .ok_or("font-coverage-empty-output")?;
+    let coverage_audit_ms = Instant::now().as_millis().saturating_sub(audit_started_ms);
     let expected = audit_union_rect.ok_or("font-coverage-empty")?;
     let expected_local = (
         i64::from(expected.0) - i64::from(union.0),
@@ -3606,7 +3643,7 @@ fn create_gpu_font_coverage_mask_at_raster(
 
     crate::log_info!(
         target: "render";
-        "intel/gpu-font: analytical-coverage font={} entries={} positioning={} mask={}x{} mask_gpu=0x{:X} origin={},{} occupied={},{},{}x{} expected_local={},{},{},{} nonzero={} ppem_range={:.2}..={:.2} bias_max_px={:.3} outline=skrifa-warm-ops fill=gpgpu-nonzero-winding edge=signed-distance-r8 subdivisions={} va=unique-resident audit=flattened-edge-span fallback=resident-triangles\n",
+        "intel/gpu-font: analytical-coverage font={} entries={} positioning={} mask={}x{} mask_gpu=0x{:X} origin={},{} occupied={},{},{}x{} expected_local={},{},{},{} nonzero={} ppem_range={:.2}..={:.2} bias_max_px={:.3} coverage_build_ms={} coverage_audit_ms={} outline=skrifa-warm-ops fill=gpgpu-nonzero-winding edge=signed-distance-r8 subdivisions={} va=unique-resident audit=flattened-edge-span audit_cpu_readback=1 fallback=resident-triangles\n",
         font.registry_name(),
         prepared.len(),
         match positioning {
@@ -3630,11 +3667,16 @@ fn create_gpu_font_coverage_mask_at_raster(
         ppem_min,
         ppem_max,
         optical_bias_max_px,
+        coverage_build_ms,
+        coverage_audit_ms,
         ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS,
     );
     Ok(GpuFontCoverageMask {
         storage,
         origin_px: [union.0, union.1],
+        coverage_build_ms,
+        coverage_audit_ms,
+        coverage_submits: prepared.len(),
     })
 }
 

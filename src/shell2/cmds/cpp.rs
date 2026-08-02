@@ -385,7 +385,7 @@ fn print_list(io: &'static dyn ShellBackend2) {
     );
     print_shell_line(
         io,
-        "cpp font rush: exclusive fullscreen FontKernel glyph rush; adds one hardware-backed UI4 plane every 3 seconds, rerolls font=0 Unicode glyphs every second, and stops with \"cpp font rush stop\"",
+        "cpp font rush: exclusive fullscreen FontKernel multi-consumer probe; adds one hardware-backed UI4 plane every 3 seconds, rerolls font=0 Unicode glyphs independently every second, and stops with \"cpp font rush stop\"",
     );
     print_shell_line(
         io,
@@ -455,18 +455,36 @@ fn particle_list_detail() -> String {
 }
 
 fn font_rush_status_detail(
-    members: impl IntoIterator<Item = (u8, Option<u64>, Option<u32>)>,
+    members: impl IntoIterator<Item = (u8, Option<u64>, Option<u32>, crate::ui4::GpgpuPreviewMetrics)>,
 ) -> String {
     let mut detail = String::from(" rush_slots=");
     let mut active = 0usize;
-    for (plane_slot, frame, window) in members {
+    for (plane_slot, frame, window, metrics) in members {
         let (Some(frame), Some(window)) = (frame, window) else {
             continue;
         };
         if active != 0 {
             detail.push(',');
         }
-        let _ = write!(detail, "{}:frame{}:window{}", plane_slot, frame, window,);
+        let _ = write!(
+            detail,
+            "{}:frame{}:window{}:attempted{}:submitted{}:completed{}:published{}:scanout_live{}:scanout_superseded{}:drop_frame{}:drop_queue{}:drop_inflight{}:drop_cadence{}:late{}:font_wait_ms{}",
+            plane_slot,
+            frame,
+            window,
+            metrics.attempted,
+            metrics.submitted,
+            metrics.completed,
+            metrics.published,
+            metrics.scanout_live,
+            metrics.scanout_superseded,
+            metrics.dropped_frame_busy,
+            metrics.dropped_queue_full,
+            metrics.dropped_in_flight,
+            metrics.dropped_cadence,
+            metrics.late,
+            metrics.last_submit_ms,
+        );
         active = active.saturating_add(1);
     }
     if active == 0 {
@@ -521,16 +539,22 @@ fn print_status(io: &'static dyn ShellBackend2) {
                         member.plane_slot,
                         member.frame.map(|frame| frame.raw()),
                         member.window.map(|window| window.raw()),
+                        member.metrics,
                     )
                 }),
         )
     } else {
         String::new()
     };
+    let timing_label = if font_rush {
+        "font_wait_ms"
+    } else {
+        "submit_ms"
+    };
     print_shell_line(
         io,
         alloc::format!(
-            "cpp status: active={} online={} phase={} request={} applied={} mode={} frame={} window={} extent={}x{} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} marker=0x{:08X} submit_ms={} artifact={} resident={} verified={} gpu=0x{:X} zebin_sha256={} runtime_compiler=0 maximize={} pcm_tap={} pcm_sequence={} pcm_frames={} signal={} rms={:.4} peak={:.4} low={:.3} mid={:.3} high={:.3} beat={:.3} error={}{}",
+            "cpp status: active={} online={} phase={} request={} applied={} mode={} frame={} window={} extent={}x{} attempted={} submitted={} completed={} published={} scanout_live={} scanout_superseded={} dropped_busy={} dropped_frame_busy={} dropped_queue_full={} dropped_in_flight={} dropped_cadence={} failed={} late={} elapsed_ms={} marker=0x{:08X} {}={} artifact={} resident={} verified={} gpu=0x{:X} zebin_sha256={} runtime_compiler=0 maximize={} pcm_tap={} pcm_sequence={} pcm_frames={} signal={} rms={:.4} peak={:.4} low={:.3} mid={:.3} high={:.3} beat={:.3} error={}{}",
             active_cpp as u8,
             status.online as u8,
             status.phase.label(),
@@ -549,11 +573,18 @@ fn print_status(io: &'static dyn ShellBackend2) {
             status.metrics.submitted,
             status.metrics.completed,
             status.metrics.published,
+            status.metrics.scanout_live,
+            status.metrics.scanout_superseded,
             status.metrics.dropped_busy,
+            status.metrics.dropped_frame_busy,
+            status.metrics.dropped_queue_full,
+            status.metrics.dropped_in_flight,
+            status.metrics.dropped_cadence,
             status.metrics.failed,
             status.metrics.late,
             status.metrics.elapsed_ms,
             status.metrics.last_marker,
+            timing_label,
             status.metrics.last_submit_ms,
             artifact_name(status.config.preset),
             upload.is_some() as u8,
@@ -1234,7 +1265,7 @@ fn queue_font_service_rush(io: &'static dyn ShellBackend2) {
         Ok(serial) => print_shell_line(
             io,
             alloc::format!(
-                "cpp font rush: queued=1 request={} font=0 cadence_ms=1000 slot_add_ms=3000 glyph_layout=1+2+4+16 planes=ui4-display-capability-bounded duration=until-stopped output=ui4-font-scene path=gpu-clear->skrifa->gpu-vm-r8->cpp-igc->guc-rcs->ui4-rgba8->display-plane-direct compositor_jobs=0 stop=\"cpp font rush stop\"",
+                "cpp font rush: queued=1 request={} font=0 cadence_ms=1000 slot_add_ms=3000 glyph_layout=1+2+4+16 planes=ui4-display-capability-bounded consumers=independent-per-plane consumer_pending_limit=1 service_model=fifo-32+one-global-in-flight per_plane_batch=single-instance path=gpu-clear->skrifa->gpu-vm-r8->coverage-audit->cpp-igc->guc-rcs->ui4-rgba8->display-plane-direct compositor_jobs=0 rgba_cpu_readback=0 coverage_audit_cpu_readback=1 duration=until-stopped stop=\"cpp font rush stop\"",
                 serial,
             )
             .as_str(),
@@ -1517,16 +1548,17 @@ mod tests {
 
     #[test]
     fn font_rush_status_reports_every_active_plane_member() {
+        let metrics = crate::ui4::GpgpuPreviewMetrics::default();
         let members = [
-            (0, Some(10), Some(20)),
-            (1, Some(11), Some(21)),
-            (2, Some(12), Some(22)),
-            (3, Some(13), Some(23)),
+            (0, Some(10), Some(20), metrics),
+            (1, Some(11), Some(21), metrics),
+            (2, Some(12), Some(22), metrics),
+            (3, Some(13), Some(23), metrics),
         ];
 
         assert_eq!(
             font_rush_status_detail(members),
-            " rush_slots=0:frame10:window20,1:frame11:window21,2:frame12:window22,3:frame13:window23 rush_active_planes=4",
+            " rush_slots=0:frame10:window20:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,1:frame11:window21:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,2:frame12:window22:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,3:frame13:window23:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0 rush_active_planes=4",
         );
     }
 

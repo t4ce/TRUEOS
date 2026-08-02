@@ -319,12 +319,42 @@ enum DirectRcsSubmitAttempt {
     },
 }
 
+/// Observable ownership boundary for callers that must decide whether GPU
+/// referenced storage can be recycled. `Ambiguous` means the LRC tail was
+/// published but GuC did not provide a conclusive acceptance result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DirectRcsSubmissionState {
+    Rejected,
+    Submitted,
+    Ambiguous,
+}
+
+impl DirectRcsSubmissionState {
+    const fn may_have_submitted(self) -> bool {
+        !matches!(self, Self::Rejected)
+    }
+
+    const fn can_poll(self) -> bool {
+        matches!(self, Self::Submitted)
+    }
+}
+
 fn direct_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
-    direct_rcs_submit_batch_on_lane(dev, state, DirectRcsLane::SystemService)
+    matches!(direct_rcs_submit_batch_state(dev, state), DirectRcsSubmissionState::Submitted)
+}
+
+fn direct_rcs_submit_batch_state(
+    dev: super::Dev,
+    state: DirectRcsState,
+) -> DirectRcsSubmissionState {
+    direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::SystemService)
 }
 
 fn execution_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
-    direct_rcs_submit_batch_on_lane(dev, state, DirectRcsLane::Execution)
+    matches!(
+        direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::Execution),
+        DirectRcsSubmissionState::Submitted
+    )
 }
 
 fn lfm25_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
@@ -332,14 +362,17 @@ fn lfm25_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
         quarantine_lfm25_rcs_context("lumen-mocs-not-ready");
         return false;
     }
-    direct_rcs_submit_batch_on_lane(dev, state, DirectRcsLane::Lfm25)
+    matches!(
+        direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::Lfm25),
+        DirectRcsSubmissionState::Submitted
+    )
 }
 
-fn direct_rcs_submit_batch_on_lane(
+fn direct_rcs_submit_batch_on_lane_state(
     dev: super::Dev,
     state: DirectRcsState,
     lane: DirectRcsLane,
-) -> bool {
+) -> DirectRcsSubmissionState {
     let (quarantined, runtime, client) = match lane {
         DirectRcsLane::SystemService => (
             &DIRECT_RCS_CONTEXT_QUARANTINED,
@@ -358,15 +391,15 @@ fn direct_rcs_submit_batch_on_lane(
         ),
     };
     if quarantined.load(Ordering::Acquire) {
-        return false;
+        return DirectRcsSubmissionState::Rejected;
     }
     let attempt = {
         let mut runtime = runtime.lock();
         direct_rcs_submit_batch_with_runtime_inner(dev, state, &mut runtime, client, false)
     };
     match attempt {
-        DirectRcsSubmitAttempt::Submitted(_) => true,
-        DirectRcsSubmitAttempt::Rejected => false,
+        DirectRcsSubmitAttempt::Submitted(_) => DirectRcsSubmissionState::Submitted,
+        DirectRcsSubmitAttempt::Rejected => DirectRcsSubmissionState::Rejected,
         DirectRcsSubmitAttempt::Ambiguous {
             error,
             old_tail_bytes,
@@ -383,7 +416,7 @@ fn direct_rcs_submit_batch_on_lane(
                 submission_sequence,
             );
             quarantine_direct_rcs_lane(lane, "submit-result-ambiguous-after-tail-publication");
-            false
+            DirectRcsSubmissionState::Ambiguous
         }
     }
 }

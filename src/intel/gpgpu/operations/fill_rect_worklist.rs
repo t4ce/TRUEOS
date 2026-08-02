@@ -20,6 +20,13 @@ fn fill_rect_worklist_rgba8_result_mode(
             continue;
         }
         let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
+        // An ambiguous submit publishes the system-lane quarantine before it
+        // releases this descriptor lock. Preserve the exact descriptor bytes
+        // that a late batch may still fetch; a later request never reached
+        // submission and may report ordinary unavailability.
+        if direct_rcs_context_is_quarantined() {
+            return GpgpuWorklistSubmitResult { stats, outcome };
+        }
         unsafe {
             core::ptr::write_bytes(desc_buffer.virt, 0, desc_buffer.bytes);
             let out = desc_buffer.virt as *mut FillRectWorklistRgba8Desc;

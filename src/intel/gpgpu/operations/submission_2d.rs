@@ -443,8 +443,13 @@ fn submit_font_outline_coverage_r8_2d(
         && direct_rcs_encode_font_outline_coverage_r8_2d_batch(
             state, upload, params, ops_bytes, mask.bytes,
         );
-    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let observed = if submitted {
+    let submission = if batch_ok {
+        direct_rcs_submit_batch_state(dev, state)
+    } else {
+        DirectRcsSubmissionState::Rejected
+    };
+    let submitted = submission.may_have_submitted();
+    let observed = if submission.can_poll() {
         direct_rcs_poll_result_slot_timeout_ms(
             state,
             COPY_RECT_POST_MARKER_SLOT,
@@ -602,13 +607,14 @@ fn submit_glyph_mask_layers_2d(
     if !direct_rcs_encode_glyph_mask_layers_2d_batch(state, upload, layers, dst) {
         return (false, false);
     }
-    let submitted = direct_rcs_submit_batch(dev, state);
+    let submission = direct_rcs_submit_batch_state(dev, state);
+    let submitted = submission.may_have_submitted();
     let completion_timeout_ms = if direct_scanout {
         UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS
     } else {
         RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS
     };
-    let observed = if submitted {
+    let observed = if submission.can_poll() {
         direct_rcs_poll_result_slot_timeout_ms(
             state,
             COPY_RECT_POST_MARKER_SLOT,
@@ -715,13 +721,14 @@ fn submit_font_instance_layers_2d(
     ) {
         return (false, false);
     }
-    let submitted = direct_rcs_submit_batch(dev, state);
+    let submission = direct_rcs_submit_batch_state(dev, state);
+    let submitted = submission.may_have_submitted();
     let completion_timeout_ms = if direct_scanout {
         UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS
     } else {
         RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS
     };
-    let observed = if submitted {
+    let observed = if submission.can_poll() {
         direct_rcs_poll_result_slot_timeout_ms(
             state,
             COPY_RECT_POST_MARKER_SLOT,

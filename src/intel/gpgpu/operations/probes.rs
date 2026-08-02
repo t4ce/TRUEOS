@@ -670,6 +670,9 @@ fn submit_fill_rect_worklist_rgba8_probe(force: bool) -> bool {
     };
 
     let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
+    if direct_rcs_context_is_quarantined() {
+        return false;
+    }
     unsafe {
         core::ptr::write_bytes(state.clear_test_virt, 0, CLEAR_RECT_TEST_BYTES);
         core::ptr::write_bytes(desc.virt, 0, desc.bytes);
@@ -812,6 +815,9 @@ fn submit_sprite_quad_worklist_rgba8_probe(force: bool) -> bool {
     };
 
     let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
+    if direct_rcs_context_is_quarantined() {
+        return false;
+    }
     let src00 = 0xFF00_00FF;
     let src01 = 0xFF00_FF00;
     let src10 = 0xFFFF_0000;

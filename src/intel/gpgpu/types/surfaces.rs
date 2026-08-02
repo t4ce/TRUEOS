@@ -150,8 +150,7 @@ impl GpgpuOwnedRgba8Surface {
         if !self.surface.is_valid() || self.virt.is_null() {
             return None;
         }
-        let row_bytes = (self.surface.width as usize)
-            .checked_mul(core::mem::size_of::<u32>())?;
+        let row_bytes = (self.surface.width as usize).checked_mul(core::mem::size_of::<u32>())?;
         let pitch_bytes = self.surface.pitch_bytes as usize;
         if pitch_bytes < row_bytes {
             return None;
@@ -165,8 +164,7 @@ impl GpgpuOwnedRgba8Surface {
             if end > self.surface.bytes {
                 return None;
             }
-            let source =
-                unsafe { core::slice::from_raw_parts(self.virt.add(offset), row_bytes) };
+            let source = unsafe { core::slice::from_raw_parts(self.virt.add(offset), row_bytes) };
             rgba.extend_from_slice(source);
         }
         Some(rgba)
@@ -958,8 +956,13 @@ pub(crate) fn release_rgba8_surface_for_scanout(dst: GpgpuRgba8Surface) -> Gpgpu
         && direct_rcs_init_ppgtt(state)
         && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes)
         && direct_rcs_encode_rgba8_scanout_release_batch(state);
-    let submitted = prepared && direct_rcs_submit_batch(dev, state);
-    let marker = if submitted {
+    let submission = if prepared {
+        direct_rcs_submit_batch_state(dev, state)
+    } else {
+        DirectRcsSubmissionState::Rejected
+    };
+    let submitted = submission.may_have_submitted();
+    let marker = if submission.can_poll() {
         direct_rcs_poll_result_slot_timeout_ms(
             state,
             RGBA8_SCANOUT_RELEASE_MARKER_SLOT,
