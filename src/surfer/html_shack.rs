@@ -1275,7 +1275,7 @@ async fn fetch_https_body_once(
 
     cmds.push(TlsCommand::OpenTcpConnect {
         remote: api::EndpointV4::new(ip, target.port),
-        server_name: leak_str(target.host.clone()),
+        server_name: target.host.clone(),
         cfg: TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]),
         roots: TlsRoots::mozilla(),
         timeouts: TlsTimeouts {

@@ -59,6 +59,7 @@ define_started_flags!(
     NET_CACHE_SERVICE_STARTED,
     NET_THROUGHPUT_BENCH_STARTED,
     TLS_SOCKET_SERVICE_STARTED,
+    REMOTE_AI_SERVICE_STARTED,
     NTP_SYNC_STARTED,
     SNTP_SERVICE_STARTED,
     NET_SHELL_STARTED,
@@ -521,6 +522,10 @@ fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_eff_worker(spawner, |_worker_spawner| {
         crate::net::tls_socket::tls_socket_service_task()
     })
+}
+
+fn spawn_remote_ai_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::remote_ai_service::service_task())
 }
 
 fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
@@ -1629,7 +1634,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 72
+const TASK_COUNT: usize = 73
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
@@ -1745,6 +1750,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &TLS_SOCKET_SERVICE_STARTED,
         spawn_tls_socket_service,
+    ),
+    TaskSpec::enabled(
+        "remote-ai-service",
+        crate::r::readiness::NET_ANY_CONFIGURED
+            | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
+        &REMOTE_AI_SERVICE_STARTED,
+        spawn_remote_ai_service,
     ),
     TaskSpec::enabled(
         "ntp-sync",

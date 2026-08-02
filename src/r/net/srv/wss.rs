@@ -123,7 +123,7 @@ impl WssConnection {
 
         cmds.push(TlsCommand::OpenTcpConnect {
             remote: vnet::EndpointV4::new(api_ip, port),
-            server_name: Box::leak(host.clone().into_boxed_str()),
+            server_name: host.clone(),
             cfg,
             roots,
             timeouts: crate::net::tls_socket::TlsTimeouts {

@@ -9,8 +9,7 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
-use alloc::string::ToString;
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -148,10 +147,6 @@ pub fn ensure_rustls_provider_installed() {
     });
 }
 
-fn leak_str(s: alloc::string::String) -> &'static str {
-    Box::leak(s.into_boxed_str())
-}
-
 fn pump(
     conn: &mut rustls::client::UnbufferedClientConnection,
     incoming_tls: &mut Vec<u8>,
@@ -266,8 +261,7 @@ impl TlsClient {
         let mut probe = [0u8; 1];
         rng.fill(&mut probe)?;
 
-        let server_name_static = leak_str(server_name.to_string());
-        let server_name = rustls::pki_types::ServerName::try_from(server_name_static)
+        let server_name = rustls::pki_types::ServerName::try_from(String::from(server_name))
             .map_err(|_| TlsError::InvalidConfig)?;
 
         let time_provider = Arc::new(TimeProviderAdapter {

@@ -20,6 +20,9 @@ use crate::r::net::{NetProfile, Queue};
 static CABI_NET_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 static HTTPS_FETCH_TLS_SEQ: AtomicU32 = AtomicU32::new(1);
 const HTTPS_EVENT_DRAIN_MAX: usize = 512;
+const HTTPS_COMMAND_QUEUE_DEPTH: usize = 128;
+const HTTPS_EVENT_QUEUE_DEPTH: usize = 1024;
+const HTTPS_RESPONSE_OVERHEAD_MAX: usize = 4096;
 const HTTPS_IDLE_SLEEP_MS: u64 = 100;
 static CABI_NET_FETCH_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMap::new());
 static CABI_NET_FETCH_BYTES_RESULTS: Mutex<BTreeMap<u32, CabiNetFetchBytesResult>> =
@@ -73,11 +76,219 @@ struct HttpsRequest<'a> {
     body: &'a [u8],
 }
 
+/// A bounded HTTP response returned by [`HttpsJsonClient`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HttpsJsonResponse {
+    pub status: u16,
+    pub body: Vec<u8>,
+}
+
+#[derive(Clone, Copy)]
+struct HttpsClientQueues {
+    device_index: usize,
+    cmds: &'static Queue<TlsCommand>,
+    events: &'static Queue<TlsEvent>,
+}
+
+/// Reusable HTTPS/1.1 JSON client for a long-lived service task.
+///
+/// Its TLS command/event queues are allocated and registered lazily on the
+/// first request, then reused for every subsequent request. Keep one client
+/// for the lifetime of the service instead of constructing one per request.
+pub struct HttpsJsonClient {
+    queues: Option<HttpsClientQueues>,
+    tls_config: TlsClientConfig,
+    roots: TlsRoots,
+}
+
+impl Default for HttpsJsonClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HttpsJsonClient {
+    pub fn new() -> Self {
+        Self {
+            queues: None,
+            tls_config: TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]),
+            roots: TlsRoots::mozilla(),
+        }
+    }
+
+    fn queues_for_device(&mut self, requested_device_index: usize) -> HttpsClientQueues {
+        if let Some(queues) = self.queues {
+            return queues;
+        }
+
+        let seq = HTTPS_FETCH_TLS_SEQ.fetch_add(1, Ordering::Relaxed);
+        let owner = leak_str(format!("https-json-client-{}@{}", seq, requested_device_index));
+        let cmds = Queue::new_leaked(leak_str(format!("{}-cmd", owner)), HTTPS_COMMAND_QUEUE_DEPTH);
+        let events = Queue::new_leaked(leak_str(format!("{}-evt", owner)), HTTPS_EVENT_QUEUE_DEPTH);
+        register_tls_app_queues(owner, cmds, events);
+
+        let queues = HttpsClientQueues {
+            device_index: requested_device_index,
+            cmds,
+            events,
+        };
+        self.queues = Some(queues);
+        queues
+    }
+
+    /// POST a JSON body and preserve both the HTTP status and bounded body.
+    pub async fn post_json(
+        &mut self,
+        url: &str,
+        body: &[u8],
+        bearer: Option<&str>,
+        timeout_ms: u32,
+        max_bytes: usize,
+    ) -> Result<HttpsJsonResponse, String> {
+        let target = parse_fetch_url(url).map_err(String::from)?;
+        if target.scheme != "https" {
+            return Err(String::from("unsupported scheme"));
+        }
+
+        let mut headers = vec![(String::from("Accept"), String::from("application/json"))];
+        if let Some(token) = bearer {
+            if !valid_header_value(token) {
+                return Err(String::from("bad bearer token"));
+            }
+            headers.push((String::from("Authorization"), format!("Bearer {}", token)));
+        }
+        let request = HttpsRequest {
+            method: "POST",
+            content_type: Some("application/json"),
+            headers,
+            body,
+        };
+
+        crate::r::readiness::wait_for(
+            crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
+        )
+        .await;
+        let requested_device_index = NetProfile::default()
+            .resolve_device_index()
+            .ok_or_else(|| String::from("no nic"))?;
+        let queues = self.queues_for_device(requested_device_index);
+        request_https_response(
+            &target,
+            queues.device_index,
+            queues.cmds,
+            queues.events,
+            &request,
+            &self.tls_config,
+            &self.roots,
+            timeout_ms.max(1),
+            max_bytes,
+        )
+        .await
+    }
+
+    /// Convenience JSON POST that requires a successful (2xx) status.
+    pub async fn post_json_bearer(
+        &mut self,
+        url: &str,
+        body: &[u8],
+        bearer: &str,
+        timeout_ms: u32,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, String> {
+        success_body(
+            self.post_json(url, body, Some(bearer), timeout_ms, max_bytes)
+                .await?,
+        )
+    }
+}
+
 fn request_has_header(request: &HttpsRequest<'_>, name: &str) -> bool {
     request
         .headers
         .iter()
         .any(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
+}
+
+fn valid_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+fn valid_header_value(value: &str) -> bool {
+    !value
+        .bytes()
+        .any(|byte| byte == b'\r' || byte == b'\n' || byte == 0)
+}
+
+fn build_http_request(target: &FetchTarget, request: &HttpsRequest<'_>) -> Result<Vec<u8>, String> {
+    if target.host.is_empty()
+        || !valid_header_value(target.host.as_str())
+        || target.path_and_query.is_empty()
+        || !valid_header_value(target.path_and_query.as_str())
+        || !valid_header_name(request.method)
+    {
+        return Err(String::from("bad http request"));
+    }
+
+    let default_port = match target.scheme {
+        "https" => 443,
+        "http" => 80,
+        _ => target.port,
+    };
+    let host_header = if target.port == default_port {
+        target.host.clone()
+    } else {
+        format!("{}:{}", target.host, target.port)
+    };
+    let mut req = format!(
+        "{} {} HTTP/1.1\r\nHost: {}\r\n",
+        request.method, target.path_and_query, host_header
+    );
+    if !request_has_header(request, "User-Agent") {
+        req.push_str("User-Agent: TRUEOS net-fetch\r\n");
+    }
+    if !request_has_header(request, "Accept") {
+        req.push_str("Accept: */*\r\n");
+    }
+    if !request_has_header(request, "Accept-Encoding") {
+        req.push_str("Accept-Encoding: identity\r\n");
+    }
+    if !request_has_header(request, "Connection") {
+        req.push_str("Connection: close\r\n");
+    }
+    if let Some(content_type) = request.content_type {
+        if !valid_header_value(content_type) {
+            return Err(String::from("bad content type"));
+        }
+        if !request_has_header(request, "Content-Type") {
+            req.push_str("Content-Type: ");
+            req.push_str(content_type);
+            req.push_str("\r\n");
+        }
+    }
+    if (!request.body.is_empty() || request.method != "GET")
+        && !request_has_header(request, "Content-Length")
+    {
+        req.push_str("Content-Length: ");
+        req.push_str(format!("{}", request.body.len()).as_str());
+        req.push_str("\r\n");
+    }
+    for (name, value) in &request.headers {
+        if !valid_header_name(name.as_str()) || !valid_header_value(value.as_str()) {
+            return Err(String::from("bad http header"));
+        }
+        req.push_str(name.as_str());
+        req.push_str(": ");
+        req.push_str(value.as_str());
+        req.push_str("\r\n");
+    }
+    req.push_str("\r\n");
+
+    let mut data = req.into_bytes();
+    data.extend_from_slice(request.body);
+    Ok(data)
 }
 
 fn parse_fetch_url(url: &str) -> Result<FetchTarget, &'static str> {
@@ -237,24 +448,21 @@ fn bad_response_message(response: &[u8]) -> String {
     format!("bad response len={} first={}", response.len(), preview)
 }
 
-fn complete_http_body_from_response(
+fn complete_http_response(
     response: &[u8],
     max_bytes: usize,
-) -> Result<Option<Vec<u8>>, String> {
+) -> Result<Option<HttpsJsonResponse>, String> {
     let Some(hdr_end) = find_http_header_end(response) else {
         return Ok(None);
     };
     let status = parse_http_status(response).ok_or_else(|| String::from("bad status"))?;
-    if !(200..300).contains(&status) {
-        return Err(format!("http status {}", status));
-    }
 
     let headers = &response[..hdr_end];
     let body = &response[hdr_end..];
     if let Some(te) = header_value(headers, b"transfer-encoding")
         && header_value_has_token(te, b"chunked")
     {
-        return Ok(decode_chunked(body, max_bytes));
+        return Ok(decode_chunked(body, max_bytes).map(|body| HttpsJsonResponse { status, body }));
     }
 
     if let Some(len_text) = header_value(headers, b"content-length")
@@ -268,25 +476,34 @@ fn complete_http_body_from_response(
         if body.len() < len {
             return Ok(None);
         }
-        return Ok(Some(body[..len].to_vec()));
+        return Ok(Some(HttpsJsonResponse {
+            status,
+            body: body[..len].to_vec(),
+        }));
     }
 
     Ok(None)
 }
 
-fn http_body_from_response(response: &[u8], max_bytes: usize) -> Result<Vec<u8>, String> {
-    if let Some(body) = complete_http_body_from_response(response, max_bytes)? {
-        return Ok(body);
+fn http_response_from_bytes(
+    response: &[u8],
+    max_bytes: usize,
+) -> Result<HttpsJsonResponse, String> {
+    if let Some(response) = complete_http_response(response, max_bytes)? {
+        return Ok(response);
     }
 
     let hdr_end = find_http_header_end(response).ok_or_else(|| bad_response_message(response))?;
+    let status = parse_http_status(response).ok_or_else(|| String::from("bad status"))?;
 
     let headers = &response[..hdr_end];
     let body = &response[hdr_end..];
     if let Some(te) = header_value(headers, b"transfer-encoding")
         && header_value_has_token(te, b"chunked")
     {
-        return decode_chunked(body, max_bytes).ok_or_else(|| String::from("bad chunked body"));
+        let body =
+            decode_chunked(body, max_bytes).ok_or_else(|| String::from("bad chunked body"))?;
+        return Ok(HttpsJsonResponse { status, body });
     }
 
     if let Some(len_text) = header_value(headers, b"content-length")
@@ -297,13 +514,30 @@ fn http_body_from_response(response: &[u8], max_bytes: usize) -> Result<Vec<u8>,
         if len > max_bytes {
             return Err(format!("too large content_length={} max={}", len, max_bytes));
         }
-        return Ok(body.get(..len).unwrap_or(body).to_vec());
+        if body.len() < len {
+            return Err(format!("incomplete body received={} expected={}", body.len(), len));
+        }
+        return Ok(HttpsJsonResponse {
+            status,
+            body: body[..len].to_vec(),
+        });
     }
 
     if body.len() > max_bytes {
         return Err(String::from("too large"));
     }
-    Ok(body.to_vec())
+    Ok(HttpsJsonResponse {
+        status,
+        body: body.to_vec(),
+    })
+}
+
+fn success_body(response: HttpsJsonResponse) -> Result<Vec<u8>, String> {
+    if (200..300).contains(&response.status) {
+        Ok(response.body)
+    } else {
+        Err(format!("http status {}", response.status))
+    }
 }
 
 async fn fetch_https_bytes(
@@ -334,31 +568,67 @@ async fn request_https_bytes(
     let device_index = NetProfile::default()
         .resolve_device_index()
         .ok_or_else(|| String::from("no nic"))?;
+
+    let seq = HTTPS_FETCH_TLS_SEQ.fetch_add(1, Ordering::Relaxed);
+    let owner = leak_str(format!("https-fetch-{}@{}", seq, device_index));
+    let cmds = Queue::new_leaked(leak_str(format!("{}-cmd", owner)), HTTPS_COMMAND_QUEUE_DEPTH);
+    let events = Queue::new_leaked(leak_str(format!("{}-evt", owner)), HTTPS_EVENT_QUEUE_DEPTH);
+    register_tls_app_queues(owner, cmds, events);
+    let tls_config = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+    let roots = TlsRoots::mozilla();
+
+    success_body(
+        request_https_response(
+            target,
+            device_index,
+            cmds,
+            events,
+            request,
+            &tls_config,
+            &roots,
+            timeout_ms,
+            max_bytes,
+        )
+        .await?,
+    )
+}
+
+async fn request_https_response(
+    target: &FetchTarget,
+    device_index: usize,
+    cmds: &'static Queue<TlsCommand>,
+    events: &'static Queue<TlsEvent>,
+    request: &HttpsRequest<'_>,
+    tls_config: &TlsClientConfig,
+    roots: &TlsRoots,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<HttpsJsonResponse, String> {
+    let request_data = build_http_request(target, request)?;
     let ip = crate::r::net::dns::resolve_ipv4_for_device(
         device_index,
         target.host.as_str(),
-        crate::r::net::dns::DnsConfig::default().with_timeout_ms(timeout_ms as u64),
+        crate::r::net::dns::DnsConfig::for_device(device_index).with_timeout_ms(timeout_ms as u64),
     )
     .await
     .map_err(|err| format!("dns {:?}", err))?;
 
-    let seq = HTTPS_FETCH_TLS_SEQ.fetch_add(1, Ordering::Relaxed);
-    let owner = leak_str(format!("https-fetch-{}@{}", seq, device_index));
-    let cmds = Queue::new_leaked(leak_str(format!("{}-cmd", owner)), 128);
-    let events = Queue::new_leaked(leak_str(format!("{}-evt", owner)), 1024);
-    register_tls_app_queues(owner, cmds, events);
+    // A reusable client can have a final Closed event left over after it has
+    // already consumed a complete length-delimited response. No connection is
+    // active for this client here, so discard such stale events before opening.
+    let _ = events.drain(HTTPS_EVENT_QUEUE_DEPTH);
 
     cmds.push(TlsCommand::OpenTcpConnect {
         remote: vnet::EndpointV4 {
             addr: ip,
             port: target.port,
         },
-        server_name: leak_str(target.host.clone()),
-        cfg: TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]),
-        roots: TlsRoots::mozilla(),
+        server_name: target.host.clone(),
+        cfg: tls_config.clone(),
+        roots: roots.clone(),
         timeouts: TlsTimeouts {
-            connect_ms: 20_000,
-            tls_ms: 30_000,
+            connect_ms: timeout_ms,
+            tls_ms: timeout_ms,
             idle_ms: timeout_ms,
         },
     })
@@ -382,52 +652,20 @@ async fn request_https_bytes(
                     if tls_handle != Some(handle) || sent_request {
                         continue;
                     }
-                    let mut req = format!(
-                        "{} {} HTTP/1.1\r\nHost: {}\r\n",
-                        request.method, target.path_and_query, target.host
-                    );
-                    if !request_has_header(request, "User-Agent") {
-                        req.push_str("User-Agent: TRUEOS net-fetch\r\n");
-                    }
-                    if !request_has_header(request, "Accept") {
-                        req.push_str("Accept: */*\r\n");
-                    }
-                    if !request_has_header(request, "Accept-Encoding") {
-                        req.push_str("Accept-Encoding: identity\r\n");
-                    }
-                    if !request_has_header(request, "Connection") {
-                        req.push_str("Connection: close\r\n");
-                    }
-                    if let Some(content_type) = request.content_type {
-                        req.push_str("Content-Type: ");
-                        req.push_str(content_type);
-                        req.push_str("\r\n");
-                    }
-                    if !request.body.is_empty() {
-                        req.push_str("Content-Length: ");
-                        req.push_str(format!("{}", request.body.len()).as_str());
-                        req.push_str("\r\n");
-                    }
-                    for (name, value) in &request.headers {
-                        if !name.is_empty() && !value.is_empty() {
-                            req.push_str(name.as_str());
-                            req.push_str(": ");
-                            req.push_str(value.as_str());
-                            req.push_str("\r\n");
-                        }
-                    }
-                    req.push_str("\r\n");
-                    let mut data = req.into_bytes();
-                    data.extend_from_slice(request.body);
-                    cmds.push(TlsCommand::Send { handle, data })
-                        .map_err(|_| String::from("tls send queue full"))?;
+                    cmds.push(TlsCommand::Send {
+                        handle,
+                        data: request_data.clone(),
+                    })
+                    .map_err(|_| String::from("tls send queue full"))?;
                     sent_request = true;
                 }
                 TlsEvent::Data { handle, data } => {
                     if tls_handle != Some(handle) {
                         continue;
                     }
-                    if response.len().saturating_add(data.len()) > max_bytes.saturating_add(4096) {
+                    if response.len().saturating_add(data.len())
+                        > max_bytes.saturating_add(HTTPS_RESPONSE_OVERHEAD_MAX)
+                    {
                         let _ = cmds.push(TlsCommand::Close { handle });
                         return Err(format!(
                             "too large received={} next={} max={}",
@@ -437,20 +675,35 @@ async fn request_https_bytes(
                         ));
                     }
                     response.extend_from_slice(data.as_slice());
-                    if let Some(body) =
-                        complete_http_body_from_response(response.as_slice(), max_bytes)?
-                    {
-                        let _ = cmds.push(TlsCommand::Close { handle });
-                        return Ok(body);
+                    match complete_http_response(response.as_slice(), max_bytes) {
+                        Ok(Some(response)) => {
+                            let _ = cmds.push(TlsCommand::Close { handle });
+                            return Ok(response);
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            let _ = cmds.push(TlsCommand::Close { handle });
+                            return Err(err);
+                        }
                     }
                 }
                 TlsEvent::Closed { handle } => {
                     if tls_handle == Some(handle) {
-                        return http_body_from_response(response.as_slice(), max_bytes);
+                        return http_response_from_bytes(response.as_slice(), max_bytes);
                     }
                 }
-                TlsEvent::Error { msg } => return Err(String::from(msg)),
-                TlsEvent::TlsError { err } => return Err(format!("tls {:?}", err)),
+                TlsEvent::Error { msg } => {
+                    if let Some(handle) = tls_handle {
+                        let _ = cmds.push(TlsCommand::Close { handle });
+                    }
+                    return Err(String::from(msg));
+                }
+                TlsEvent::TlsError { err } => {
+                    if let Some(handle) = tls_handle {
+                        let _ = cmds.push(TlsCommand::Close { handle });
+                    }
+                    return Err(format!("tls {:?}", err));
+                }
             }
         }
 
@@ -1025,5 +1278,71 @@ pub extern "C" fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32
             return FS_ERR_TIMEOUT;
         }
         crate::wait::spin_step();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_request_contains_auth_length_and_exact_body() {
+        let target = parse_fetch_url("https://api.taalas.com:8443/v1/chat/completions").unwrap();
+        let body = br#"{"model":"chatjimmy"}"#;
+        let request = HttpsRequest {
+            method: "POST",
+            content_type: Some("application/json"),
+            headers: vec![
+                (String::from("Accept"), String::from("application/json")),
+                (String::from("Authorization"), String::from("Bearer test-token")),
+            ],
+            body,
+        };
+
+        let encoded = build_http_request(&target, &request).unwrap();
+        let header_end = find_http_header_end(encoded.as_slice()).unwrap();
+        let headers = core::str::from_utf8(&encoded[..header_end]).unwrap();
+        assert!(headers.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"));
+        assert!(headers.contains("Host: api.taalas.com:8443\r\n"));
+        assert!(headers.contains("Authorization: Bearer test-token\r\n"));
+        assert!(headers.contains("Content-Type: application/json\r\n"));
+        assert!(headers.contains(format!("Content-Length: {}\r\n", body.len()).as_str()));
+        assert_eq!(&encoded[header_end..], body);
+    }
+
+    #[test]
+    fn response_preserves_non_success_status_and_body() {
+        let bytes = b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 6\r\n\r\ndenied";
+        let response = complete_http_response(bytes, 64).unwrap().unwrap();
+        assert_eq!(response.status, 401);
+        assert_eq!(response.body.as_slice(), b"denied");
+        assert_eq!(success_body(response).unwrap_err(), "http status 401");
+    }
+
+    #[test]
+    fn response_body_limit_is_enforced_from_content_length() {
+        let bytes = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+        let err = complete_http_response(bytes, 4).unwrap_err();
+        assert!(err.contains("content_length=5"));
+    }
+
+    #[test]
+    fn closed_truncated_response_is_rejected() {
+        let bytes = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhey";
+        let err = http_response_from_bytes(bytes, 5).unwrap_err();
+        assert!(err.contains("received=3 expected=5"));
+    }
+
+    #[test]
+    fn chunked_response_is_decoded() {
+        let bytes = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
+        let response = complete_http_response(bytes, 5).unwrap().unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body.as_slice(), b"hello");
+    }
+
+    #[test]
+    fn header_line_injection_is_rejected() {
+        assert!(!valid_header_value("token\r\nInjected: yes"));
     }
 }

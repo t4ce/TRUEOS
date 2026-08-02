@@ -528,7 +528,7 @@ async fn dns_tls_exchange_v4(
     };
     cmds.push(TlsCommand::OpenTcpConnect {
         remote: vnet::EndpointV4 { addr, port },
-        server_name,
+        server_name: String::from(server_name),
         cfg,
         roots: TlsRoots::mozilla(),
         timeouts,

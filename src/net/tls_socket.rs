@@ -1,6 +1,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -99,7 +100,7 @@ pub enum TlsCommand {
     /// Open a TCP connection and layer TLS over it.
     OpenTcpConnect {
         remote: vnet::EndpointV4,
-        server_name: &'static str,
+        server_name: String,
         cfg: TlsClientConfig,
         roots: TlsRoots,
         timeouts: TlsTimeouts,
@@ -312,7 +313,7 @@ fn tls_socket_tick_once() -> bool {
                     let tls = match TlsClient::new(
                         &cfg,
                         &roots,
-                        server_name,
+                        server_name.as_str(),
                         &mut rng,
                         &KERNEL_TIME,
                     ) {

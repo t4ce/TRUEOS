@@ -77,7 +77,7 @@ impl Pop3Client {
 
         cmds.push(TlsCommand::OpenTcpConnect {
             remote: EndpointV4::new(ip, POP3_PORT),
-            server_name: POP3_HOST,
+            server_name: String::from(POP3_HOST),
             cfg: TlsClientConfig::new(),
             roots: TlsRoots::mozilla(),
             timeouts: TlsTimeouts {
