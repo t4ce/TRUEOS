@@ -6,7 +6,7 @@
 //! C++/IGC demos reuse the same exact-surface publication lifecycle on slot 1.
 //! Display pipe programming remains exclusively compositor-owned.
 
-use alloc::{string::String, vec::Vec};
+use alloc::{string::String, sync::Arc, vec::Vec};
 
 use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
@@ -46,6 +46,7 @@ const CPP_FONT_RUSH_TITLE_REVEAL_MS: u64 = 150;
 const CPP_FONT_RUSH_TITLE_HOLD_MS: u64 = 1_000;
 const CPP_FONT_RUSH_SECTION_CADENCE_MS: u64 = 50;
 const CPP_FONT_RUSH_SECTION_DURATION_MS: u64 = 3_000;
+const CPP_FONT_RUSH_CACHE_CHARGE_CADENCE_MS: u64 = 1;
 const CPP_FONT_RUSH_STORM_CADENCE_MS: u64 = 250;
 const CPP_FONT_RUSH_STORM_COLUMNS: u8 = 8;
 const CPP_FONT_RUSH_STORM_ROWS: u8 = 4;
@@ -55,6 +56,8 @@ const CPP_FONT_RUSH_STORM_GLYPHS: usize =
 const CPP_FONT_RUSH_GLYPH_ID_LOG_LIMIT: usize = 16;
 const CPP_FONT_RUSH_VIEWPORT_SCALE: u32 = 4;
 const CPP_FONT_RUSH_GLYPHS: [usize; CPP_FONT_RUSH_MAX_PLANES] = [1, 2, 4, 16];
+const CPP_FONT_RUSH_CACHE_FONT_PIXELS: [f32;
+    crate::r::font_kernel_service::FONT_RUSH_RGBA8_CACHE_CLASSES] = [8.0, 12.0, 16.0, 20.0];
 
 pub(crate) const GPGPU_PREVIEW_DEFAULT_DURATION_MS: u64 = 5_000;
 pub(crate) const GPGPU_PREVIEW_DEFAULT_CADENCE_MS: u64 = 33;
@@ -432,8 +435,10 @@ struct CppFontRushPlaneState {
     rng: crate::tyche::SoftRng,
     planning: Option<CppFontRushPendingPlan>,
     ready_plan: Option<CppFontRushReadyPlan>,
+    cache_charge: Option<CppFontRushPendingCacheCharge>,
     pending: Option<CppFontRushPendingFrame>,
     scanout_pending: Option<CppFontRushPendingScanout>,
+    rgba8_cache: Option<Arc<crate::r::font_kernel_service::FontRushRgba8Cache>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -447,6 +452,11 @@ enum CppFontRushLayerStage {
     TitleHold,
     /// Three large section signs with a foreground color step every 50 ms.
     SectionPulse,
+    /// Build one fixed 32-glyph slice of the run-owned final RGBA8 cache.
+    CacheCharge {
+        class: u8,
+        batch: u8,
+    },
     /// Clear both double-buffer members to transparent and stamp the same
     /// final section-sign base before no-clear accumulation begins.
     StormPrime {
@@ -469,6 +479,7 @@ impl CppFontRushLayerStage {
             Self::TitleReveal(_) => "title-reveal-150ms",
             Self::TitleHold => "title-hold-1s",
             Self::SectionPulse => "section-pulse-50ms",
+            Self::CacheCharge { .. } => "rgba8-cache-charge",
             Self::StormPrime { .. } => "producer-storm-prime",
             Self::ProducerStorm { .. } => "producer-storm-32x2",
             Self::Dormant => "dormant",
@@ -479,6 +490,7 @@ impl CppFontRushLayerStage {
         match self {
             Self::TitleReveal(_) => CPP_FONT_RUSH_TITLE_REVEAL_MS,
             Self::SectionPulse | Self::StormPrime { .. } => CPP_FONT_RUSH_SECTION_CADENCE_MS,
+            Self::CacheCharge { .. } => CPP_FONT_RUSH_CACHE_CHARGE_CADENCE_MS,
             Self::ProducerStorm { .. } => CPP_FONT_RUSH_STORM_CADENCE_MS,
             Self::Base | Self::Expanded | Self::TitleHold | Self::Dormant => {
                 CPP_FONT_RUSH_CADENCE_MS
@@ -488,7 +500,7 @@ impl CppFontRushLayerStage {
 
     const fn clear_color(self) -> Option<PremultipliedRgba8> {
         match self {
-            Self::ProducerStorm { .. } | Self::Dormant => None,
+            Self::CacheCharge { .. } | Self::ProducerStorm { .. } | Self::Dormant => None,
             _ => Some(PremultipliedRgba8::TRANSPARENT),
         }
     }
@@ -527,6 +539,23 @@ struct CppFontRushReadyPlan {
     stage: CppFontRushLayerStage,
     font: crate::intel::gpu_font::GpuFontFace,
     submit_attempts: u32,
+}
+
+struct CppFontRushPendingCacheCharge {
+    completion: crate::r::font_kernel_service::PendingFontRushCacheCharge,
+    ticket: crate::r::font_kernel_service::FontKernelTicket,
+    sequence: u64,
+    scheduled_at: Instant,
+    accepted_at: Instant,
+    class: u8,
+    batch: u8,
+    cache_id: u64,
+    plan_batch_id: u64,
+    plan_build_ms: u64,
+    plan_worker_slices: u64,
+    plan_cooperative_yields: u64,
+    plan_participant_mask: u32,
+    fifo_queued_ahead: usize,
 }
 
 struct CppFontRushPendingFrame {
@@ -1259,8 +1288,10 @@ fn create_cpp_font_rush_preview(
             rng: crate::tyche::soft_rng(),
             planning: None,
             ready_plan: None,
+            cache_charge: None,
             pending: None,
             scanout_pending: None,
+            rgba8_cache: None,
         }),
         metrics: GpgpuPreviewMetrics::default(),
     })
@@ -1459,6 +1490,7 @@ fn expand_next_cpp_font_rush_grid(
 fn cpp_font_rush_state_quiescent(state: &CppFontRushPlaneState) -> bool {
     state.planning.is_none()
         && state.ready_plan.is_none()
+        && state.cache_charge.is_none()
         && state.pending.is_none()
         && state.scanout_pending.is_none()
 }

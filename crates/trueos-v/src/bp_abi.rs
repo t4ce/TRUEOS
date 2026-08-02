@@ -57,6 +57,14 @@ pub const LUMEN_PHASE_ERROR: u32 = 9;
 pub const DOBBY_UI4_POINTER_MOVE: u32 = 0;
 pub const DOBBY_UI4_POINTER_PRIMARY_CLICK: u32 = 1;
 
+pub const DOBBY_UI4_ERROR_DENIED: i32 = -1;
+pub const DOBBY_UI4_ERROR_BAD_STATE: i32 = -2;
+pub const DOBBY_UI4_ERROR_BAD_INPUT: i32 = -3;
+pub const DOBBY_UI4_ERROR_BUSY: i32 = -4;
+pub const DOBBY_UI4_ERROR_UNAVAILABLE: i32 = -5;
+pub const DOBBY_UI4_ERROR_NOT_FOUND: i32 = -6;
+pub const DOBBY_UI4_ERROR_TRANSPORT: i32 = -7;
+
 pub const DOBBY_UI4_KEY_ENTER: u32 = 1;
 pub const DOBBY_UI4_KEY_ESCAPE: u32 = 2;
 pub const DOBBY_UI4_KEY_BACKSPACE: u32 = 3;

@@ -62,10 +62,12 @@ pub(super) enum CaptureError {
 
 /// One transport-sized, vision-ready observation of an exact UI4 window.
 ///
-/// `placement` is the presentation rectangle associated with the broker
-/// snapshot. The PNG depicts the complete native buffer with its aspect ratio
-/// intact, so normalized `0..=grid_extent` coordinates map directly across the
-/// placement even when UI4 scales the native buffer for presentation.
+/// `placement` is the compositor's exact presentation rectangle resolved from
+/// the captured backing dimensions, including temporary centered 1:1 geometry
+/// while a maximized producer replaces its frame ring. The PNG depicts the
+/// complete native buffer with its aspect ratio intact, so normalized
+/// `0..=grid_extent` coordinates map directly across that rectangle even when
+/// UI4 deliberately scales the backing for presentation.
 pub(crate) struct CompactWindowObservation {
     pub(crate) window_id: super::WindowId,
     pub(crate) native_width: u32,
@@ -629,6 +631,8 @@ pub(crate) fn capture_compact_window_observation(
     let captured = capture_window_rgba(window)?;
     let native_width = captured.width;
     let native_height = captured.height;
+    let placement =
+        super::compositor_service::presentation_placement(window, native_width, native_height);
     let (capture_width, capture_height, png) = encode_compact_window_png(
         native_width,
         native_height,
@@ -641,7 +645,7 @@ pub(crate) fn capture_compact_window_observation(
         native_height,
         capture_width,
         capture_height,
-        placement: window.placement,
+        placement,
         revision: window.revision,
         publish_serial: window.publish_serial,
         grid_extent: COMPACT_WINDOW_GRID_EXTENT,

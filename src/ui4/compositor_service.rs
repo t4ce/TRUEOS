@@ -595,7 +595,8 @@ fn build_plane_plan(
         .enumerate()
         .filter(|(_, window)| window.plane.slot() == plane_slot)
     {
-        let placement = presentation_placement(window, views[global_slot]);
+        let view = views[global_slot];
+        let placement = presentation_placement(window, view.width, view.height);
         let current = CompositionWindowStamp {
             id: window.id,
             frame: window.frame,
@@ -782,7 +783,7 @@ fn queue_async_plane(
         .zip(views.iter().copied())
         .filter(|(window, _)| window.plane.slot() == target_plane_slot(plan.target))
         .map(|(mut window, view)| {
-            window.placement = presentation_placement(window, view);
+            window.placement = presentation_placement(window, view.width, view.height);
             (window, view)
         })
         .collect();
@@ -1222,26 +1223,35 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
 /// complete Frame ring after maximize. A deliberate half-resolution backing
 /// is scaled to the logical extent by the direct display plane. Any other old
 /// allocation remains centered at 1:1 until the replacement arrives.
-fn presentation_placement(window: WindowSnapshot, view: FrameRgbaView) -> WindowPlacement {
+pub(super) fn presentation_placement(
+    window: WindowSnapshot,
+    backing_width: u32,
+    backing_height: u32,
+) -> WindowPlacement {
     let placement = window.placement;
     if !window.maximized
         || !window.interaction.resize_on_maximize
-        || (placement.width == view.width && placement.height == view.height)
-        || half_scale_backing_matches(placement.width, placement.height, view.width, view.height)
-        || view.width > placement.width
-        || view.height > placement.height
+        || (placement.width == backing_width && placement.height == backing_height)
+        || half_scale_backing_matches(
+            placement.width,
+            placement.height,
+            backing_width,
+            backing_height,
+        )
+        || backing_width > placement.width
+        || backing_height > placement.height
     {
         return placement;
     }
     WindowPlacement {
         x: placement
             .x
-            .saturating_add(placement.width.saturating_sub(view.width) as i32 / 2),
+            .saturating_add(placement.width.saturating_sub(backing_width) as i32 / 2),
         y: placement
             .y
-            .saturating_add(placement.height.saturating_sub(view.height) as i32 / 2),
-        width: view.width,
-        height: view.height,
+            .saturating_add(placement.height.saturating_sub(backing_height) as i32 / 2),
+        width: backing_width,
+        height: backing_height,
         ..placement
     }
 }

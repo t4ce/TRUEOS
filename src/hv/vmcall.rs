@@ -866,9 +866,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_DOBBY_UI4_POINTER => {
-            let x = (arg0 & 0xFFFF) as u16;
-            let y = ((arg0 >> 16) & 0xFFFF) as u16;
-            let rc = crate::spirit::dobby_ui::pointer(vm_id, x, y, arg1 as u32);
+            let rc = if arg0 >> 32 != 0 || arg1 > u64::from(u32::MAX) {
+                crate::spirit::dobby_ui::ERROR_BAD_INPUT
+            } else {
+                let x = (arg0 & 0xFFFF) as u16;
+                let y = ((arg0 >> 16) & 0xFFFF) as u16;
+                crate::spirit::dobby_ui::pointer(vm_id, x, y, arg1 as u32)
+            };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

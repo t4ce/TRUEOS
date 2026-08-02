@@ -1171,9 +1171,12 @@ async fn present_claimed_response(
 
 #[embassy_executor::task]
 pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
-    let lease = request_spirit_grid().await;
     let keyboard = request_spirit_keyboard().await;
     super::dobby_ui::register_lilly_keyboard(keyboard);
+    // Publish Lilly's paired keyboard before waiting on the retained response
+    // Gridpaper lease. Dobby's UI4 capability is independent of whether that
+    // presentation service is temporarily at capacity.
+    let lease = request_spirit_grid().await;
     crate::log_info!(
         target: "gfx";
         "trueos-spirit: response Gridpaper service online assigned_slot={} current_slot={} frame_grid={}x{} response_grid={}x{} cells={} scale={} ownership=kernel-dedicated cursor=Spirit/Lilly keyboard_slot={} input=cell-zero-click+paired-vkeyboard ingress=completed+coalesced-live-prefix wrap=whitespace-before-word style=rainbow-palette+cpp-scale-0.85..1.15 response_hide_after_ms={} startup=visible-type+backspace startup_text={:?} startup_visible_ms={} post_startup=hidden-retained no-blueprint-vm=1\n",

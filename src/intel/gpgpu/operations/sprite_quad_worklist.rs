@@ -102,6 +102,16 @@ fn font_sprite_quad_descriptor_is_valid(desc: GpgpuSpriteQuadWorklistDesc) -> bo
     determinant.is_finite() && determinant.abs() >= 0.00001
 }
 
+fn font_sprite_quad_same_source(left: GpgpuRgba8Surface, right: GpgpuRgba8Surface) -> bool {
+    left.phys == right.phys
+        && left.gpu == right.gpu
+        && left.bytes == right.bytes
+        && left.width == right.width
+        && left.height == right.height
+        && left.pitch_bytes == right.pitch_bytes
+        && left.storage_order == right.storage_order
+}
+
 fn font_sprite_quad_worklist_request_descs(
     dst: GpgpuRgba8Surface,
     runs: &[GpgpuSpriteQuadWorklistRun<'_>],
@@ -115,7 +125,7 @@ fn font_sprite_quad_worklist_request_descs(
     if total_descs == 0 || total_descs > SPRITE_QUAD_WORKLIST_MAX_DESCS {
         return None;
     }
-    for run in runs {
+    for (run_index, run) in runs.iter().enumerate() {
         if !run.src.is_valid()
             || run.src.storage_order != GpgpuRgba8StorageOrder::Rgba
             || run.descs.is_empty()
@@ -127,6 +137,16 @@ fn font_sprite_quad_worklist_request_descs(
                 .copied()
                 .any(|desc| !font_sprite_quad_descriptor_is_valid(desc))
         {
+            return None;
+        }
+
+        // Reusing the exact immutable source in multiple ordered runs is safe.
+        // Two distinct allocations may not occupy intersecting Font PPGTT VAs:
+        // the later map would silently redirect the earlier run's binding.
+        if runs[..run_index].iter().any(|previous| {
+            gpu_ranges_overlap(previous.src.gpu, previous.src.bytes, run.src.gpu, run.src.bytes)
+                && !font_sprite_quad_same_source(previous.src, run.src)
+        }) {
             return None;
         }
     }
@@ -162,8 +182,15 @@ pub(crate) fn font_sprite_quad_worklist_rgba8_runs_over_result(
     let _font_guard = FONT_RCS_SUBMIT_LOCK.lock();
     if font_rcs_context_is_quarantined()
         || gpu_ranges_overlap(desc_buffer.gpu, desc_buffer.bytes, dst.gpu, dst.bytes)
+        || gpu_ranges_overlap(desc_buffer.phys, desc_buffer.bytes, dst.phys, dst.bytes)
         || runs.iter().any(|run| {
             gpu_ranges_overlap(desc_buffer.gpu, desc_buffer.bytes, run.src.gpu, run.src.bytes)
+                || gpu_ranges_overlap(
+                    desc_buffer.phys,
+                    desc_buffer.bytes,
+                    run.src.phys,
+                    run.src.bytes,
+                )
         })
     {
         return GpgpuSpriteQuadWorklistResult::default();
@@ -287,5 +314,36 @@ mod font_sprite_quad_worklist_tests {
         }];
         let dst = surface(0x3000, 0x0A01_0000);
         assert_eq!(font_sprite_quad_worklist_request_descs(dst, &runs), None);
+    }
+
+    #[test]
+    fn font_sprite_request_rejects_distinct_sources_with_overlapping_gpu_va() {
+        let first = surface(0x1000, 0x0A00_0000);
+        let second = surface(0x3000, 0x0A00_0000);
+        let dst = surface(0x5000, 0x0A01_0000);
+        let descriptors = [descriptor(SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER)];
+        let runs = [
+            GpgpuSpriteQuadWorklistRun {
+                src: first,
+                descs: &descriptors,
+            },
+            GpgpuSpriteQuadWorklistRun {
+                src: second,
+                descs: &descriptors,
+            },
+        ];
+        assert_eq!(font_sprite_quad_worklist_request_descs(dst, &runs), None);
+
+        let same_source_runs = [
+            GpgpuSpriteQuadWorklistRun {
+                src: first,
+                descs: &descriptors,
+            },
+            GpgpuSpriteQuadWorklistRun {
+                src: first,
+                descs: &descriptors,
+            },
+        ];
+        assert_eq!(font_sprite_quad_worklist_request_descs(dst, &same_source_runs), Some(2));
     }
 }

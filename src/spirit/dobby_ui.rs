@@ -22,13 +22,13 @@ use crate::ui4::{
     CursorFrameKey, OutputId, WindowId, WindowOwner, WindowPlacement, WindowSnapshot, WindowState,
 };
 
-pub(crate) const ERROR_DENIED: i32 = -1;
-pub(crate) const ERROR_BAD_STATE: i32 = -2;
-pub(crate) const ERROR_BAD_INPUT: i32 = -3;
-pub(crate) const ERROR_BUSY: i32 = -4;
-pub(crate) const ERROR_UNAVAILABLE: i32 = -5;
-pub(crate) const ERROR_NOT_FOUND: i32 = -6;
-const ERROR_TRANSPORT: i32 = -7;
+pub(crate) const ERROR_DENIED: i32 = v::bp_abi::DOBBY_UI4_ERROR_DENIED;
+pub(crate) const ERROR_BAD_STATE: i32 = v::bp_abi::DOBBY_UI4_ERROR_BAD_STATE;
+pub(crate) const ERROR_BAD_INPUT: i32 = v::bp_abi::DOBBY_UI4_ERROR_BAD_INPUT;
+pub(crate) const ERROR_BUSY: i32 = v::bp_abi::DOBBY_UI4_ERROR_BUSY;
+pub(crate) const ERROR_UNAVAILABLE: i32 = v::bp_abi::DOBBY_UI4_ERROR_UNAVAILABLE;
+pub(crate) const ERROR_NOT_FOUND: i32 = v::bp_abi::DOBBY_UI4_ERROR_NOT_FOUND;
+const ERROR_TRANSPORT: i32 = v::bp_abi::DOBBY_UI4_ERROR_TRANSPORT;
 
 const INVENTORY_WINDOW_LIMIT: usize = 64;
 const INVENTORY_NAME_BYTES: usize = 96;
@@ -37,23 +37,23 @@ const MAX_DOBBY_TYPE_SCALARS: usize = 64;
 const DOBBY_KEY_STROKE_MS: u32 = 48;
 const IO_RETRY_MS: u64 = 8;
 
-pub(crate) const POINTER_ACTION_MOVE: u32 = 0;
-pub(crate) const POINTER_ACTION_PRIMARY_CLICK: u32 = 1;
+pub(crate) const POINTER_ACTION_MOVE: u32 = v::bp_abi::DOBBY_UI4_POINTER_MOVE;
+pub(crate) const POINTER_ACTION_PRIMARY_CLICK: u32 = v::bp_abi::DOBBY_UI4_POINTER_PRIMARY_CLICK;
 
-pub(crate) const KEY_ENTER: u32 = 1;
-pub(crate) const KEY_ESCAPE: u32 = 2;
-pub(crate) const KEY_BACKSPACE: u32 = 3;
-pub(crate) const KEY_TAB: u32 = 4;
-pub(crate) const KEY_SPACE: u32 = 5;
-pub(crate) const KEY_ARROW_RIGHT: u32 = 6;
-pub(crate) const KEY_ARROW_LEFT: u32 = 7;
-pub(crate) const KEY_ARROW_DOWN: u32 = 8;
-pub(crate) const KEY_ARROW_UP: u32 = 9;
-pub(crate) const KEY_DELETE: u32 = 10;
-pub(crate) const KEY_HOME: u32 = 11;
-pub(crate) const KEY_END: u32 = 12;
-pub(crate) const KEY_PAGE_UP: u32 = 13;
-pub(crate) const KEY_PAGE_DOWN: u32 = 14;
+pub(crate) const KEY_ENTER: u32 = v::bp_abi::DOBBY_UI4_KEY_ENTER;
+pub(crate) const KEY_ESCAPE: u32 = v::bp_abi::DOBBY_UI4_KEY_ESCAPE;
+pub(crate) const KEY_BACKSPACE: u32 = v::bp_abi::DOBBY_UI4_KEY_BACKSPACE;
+pub(crate) const KEY_TAB: u32 = v::bp_abi::DOBBY_UI4_KEY_TAB;
+pub(crate) const KEY_SPACE: u32 = v::bp_abi::DOBBY_UI4_KEY_SPACE;
+pub(crate) const KEY_ARROW_RIGHT: u32 = v::bp_abi::DOBBY_UI4_KEY_ARROW_RIGHT;
+pub(crate) const KEY_ARROW_LEFT: u32 = v::bp_abi::DOBBY_UI4_KEY_ARROW_LEFT;
+pub(crate) const KEY_ARROW_DOWN: u32 = v::bp_abi::DOBBY_UI4_KEY_ARROW_DOWN;
+pub(crate) const KEY_ARROW_UP: u32 = v::bp_abi::DOBBY_UI4_KEY_ARROW_UP;
+pub(crate) const KEY_DELETE: u32 = v::bp_abi::DOBBY_UI4_KEY_DELETE;
+pub(crate) const KEY_HOME: u32 = v::bp_abi::DOBBY_UI4_KEY_HOME;
+pub(crate) const KEY_END: u32 = v::bp_abi::DOBBY_UI4_KEY_END;
+pub(crate) const KEY_PAGE_UP: u32 = v::bp_abi::DOBBY_UI4_KEY_PAGE_UP;
+pub(crate) const KEY_PAGE_DOWN: u32 = v::bp_abi::DOBBY_UI4_KEY_PAGE_DOWN;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum LillyIoLease {
@@ -382,8 +382,8 @@ pub(crate) fn observe_prepare(owner: u8) -> isize {
                 i64::from(observation.placement.width),
                 i64::from(observation.placement.height),
             ],
-            grid_extent: crate::ui4::COMPACT_WINDOW_GRID_EXTENT,
-            grid_major_step: crate::ui4::COMPACT_WINDOW_GRID_MAJOR_STEP,
+            grid_extent: observation.grid_extent,
+            grid_major_step: observation.grid_major_step,
             png_bytes: observation.png.len(),
             revision: observation.revision,
             publish_serial: observation.publish_serial,
@@ -466,6 +466,9 @@ pub(crate) fn pointer(owner: u8, x: u16, y: u16, action: u32) -> i32 {
     };
     let result = (|| {
         let window = selected_lilly_window()?;
+        if action == POINTER_ACTION_PRIMARY_CLICK && !window.interaction.receives_input {
+            return Err(ERROR_BAD_STATE);
+        }
         let placement = {
             let cache = observation_slot(owner)?.lock();
             if cache_belongs_to(&cache, owner) && cache.window_id == window.id.raw() {
@@ -509,6 +512,10 @@ pub(crate) fn type_text(owner: u8, bytes: &[u8]) -> i32 {
         Ok(keyboard) => keyboard,
         Err(error) => return error,
     };
+    if !selected_lilly_window().is_ok_and(|window| window.interaction.receives_input) {
+        release_dobby_io(owner);
+        return ERROR_BAD_STATE;
+    }
     match submit_text(
         KeyboardControlPrincipal::Kernel,
         keyboard.handle,
@@ -552,6 +559,10 @@ pub(crate) fn key(owner: u8, key: u32) -> i32 {
         Ok(keyboard) => keyboard,
         Err(error) => return error,
     };
+    if !selected_lilly_window().is_ok_and(|window| window.interaction.receives_input) {
+        release_dobby_io(owner);
+        return ERROR_BAD_STATE;
+    }
     let command = KeyboardControlCommand {
         opcode: KEYBOARD_CONTROL_OPCODE_STROKE,
         flags: KEYBOARD_CONTROL_FLAG_CLEAR_QUEUE,
@@ -575,7 +586,7 @@ unsafe fn output_slice<'a>(out_ptr: *mut u8, out_cap: usize) -> Result<&'a mut [
     if out_cap == 0 {
         return Ok(&mut []);
     }
-    if out_ptr.is_null() {
+    if out_ptr.is_null() || out_cap > isize::MAX as usize {
         return Err(ERROR_BAD_INPUT);
     }
     Ok(unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) })
