@@ -97,7 +97,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         format!(
-            "vgpu: context-boundaries valid={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} lost_bound={} helio_render_live={} spirit_execution_live={} helio_spirit_hwlrca_distinct={} helio_spirit_ppgtt_distinct={} helio_spirit_coexistence={} render_principals_declared={}",
+            "vgpu: context-boundaries valid={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} lost_bound={} helio_render_live={} spirit_execution_live={} font_engine_live={} helio_spirit_hwlrca_distinct={} helio_spirit_ppgtt_distinct={} helio_spirit_coexistence={} font_helio_hwlrca_distinct={} font_helio_ppgtt_distinct={} font_spirit_hwlrca_distinct={} font_spirit_ppgtt_distinct={} font_helio_spirit_coexistence={} render_principals_declared={}",
             boundaries.valid() as u8,
             boundaries.coherent as u8,
             boundaries.unique_hwlrcas as u8,
@@ -107,9 +107,15 @@ fn print_status(io: &'static dyn ShellBackend2) {
             boundaries.lost_bound,
             boundaries.helio_render_live as u8,
             boundaries.spirit_execution_live as u8,
+            boundaries.font_engine_live as u8,
             boundaries.helio_spirit_distinct_hwlrca as u8,
             boundaries.helio_spirit_distinct_ppgtt_root as u8,
             boundaries.helio_spirit_valid() as u8,
+            boundaries.font_helio_distinct_hwlrca as u8,
+            boundaries.font_helio_distinct_ppgtt_root as u8,
+            boundaries.font_spirit_distinct_hwlrca as u8,
+            boundaries.font_spirit_distinct_ppgtt_root as u8,
+            boundaries.font_helio_spirit_valid() as u8,
             KernelClient::RENDER_CARRIERS.len(),
         )
         .as_str(),
@@ -173,6 +179,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_kernel_timeline(io, "render-graphics-1", KernelClient::Render1);
     print_kernel_timeline(io, "render-graphics-2", KernelClient::Render2);
     print_kernel_timeline(io, "gpgpu-system", KernelClient::GpgpuSystem);
+    print_kernel_timeline(io, "gpgpu-font", KernelClient::GpgpuFont);
     print_kernel_timeline(io, "gpgpu-execution", KernelClient::GpgpuExecution);
     print_kernel_timeline(io, "ui4-compositor", KernelClient::Ui4Compositor);
     print_kernel_timeline(io, "ui4-blitter", KernelClient::Ui4Blitter);
@@ -286,7 +293,7 @@ fn test_guc(io: &'static dyn ShellBackend2) -> bool {
     print_shell_line(
         io,
         format!(
-            "vgpu guc: ready={} physical_lost={} guc={} registered={} enabled={} capacity={} submissions={} registrations={} failures={} faulted_contexts={} owner_handoffs_pending={} gt_faulted={} context_boundaries={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} lost_bound={} helio_render_live={} spirit_execution_live={} helio_spirit_hwlrca_distinct={} helio_spirit_ppgtt_distinct={} helio_spirit_coexistence={}",
+            "vgpu guc: ready={} physical_lost={} guc={} registered={} enabled={} capacity={} submissions={} registrations={} failures={} faulted_contexts={} owner_handoffs_pending={} gt_faulted={} context_boundaries={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} lost_bound={} helio_render_live={} spirit_execution_live={} font_engine_live={} helio_spirit_hwlrca_distinct={} helio_spirit_ppgtt_distinct={} helio_spirit_coexistence={} font_helio_hwlrca_distinct={} font_helio_ppgtt_distinct={} font_spirit_hwlrca_distinct={} font_spirit_ppgtt_distinct={} font_helio_spirit_coexistence={}",
             status.physical_ready as u8,
             status.physical_lost as u8,
             status.guc_submission as u8,
@@ -308,9 +315,15 @@ fn test_guc(io: &'static dyn ShellBackend2) -> bool {
             boundaries.lost_bound,
             boundaries.helio_render_live as u8,
             boundaries.spirit_execution_live as u8,
+            boundaries.font_engine_live as u8,
             boundaries.helio_spirit_distinct_hwlrca as u8,
             boundaries.helio_spirit_distinct_ppgtt_root as u8,
             boundaries.helio_spirit_valid() as u8,
+            boundaries.font_helio_distinct_hwlrca as u8,
+            boundaries.font_helio_distinct_ppgtt_root as u8,
+            boundaries.font_spirit_distinct_hwlrca as u8,
+            boundaries.font_spirit_distinct_ppgtt_root as u8,
+            boundaries.font_helio_spirit_valid() as u8,
         )
         .as_str(),
     );

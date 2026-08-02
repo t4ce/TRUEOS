@@ -942,7 +942,7 @@ fn retained_font_scanout_release(
     if !direct_scanout {
         return Ok(None);
     }
-    let finalizer = crate::intel::gpgpu::release_rgba8_surface_for_scanout(destination);
+    let finalizer = crate::intel::gpgpu::font_release_rgba8_surface_for_scanout(destination);
     if !finalizer.ok {
         return Err(if finalizer.submitted {
             GpuFontRetainedSceneError::SubmittedIncomplete("font-retained-release-incomplete")

@@ -80,9 +80,13 @@ pub(crate) enum KernelClient {
     /// allocated LRC/ring/batch/result storage and a distinct PPGTT root.
     Render1,
     Render2,
-    /// Ordered compute lane for kernel system services such as fonts, retained
-    /// UI producers, and general-purpose synchronous operations.
+    /// Ordered compute lane for retained UI producers and general-purpose
+    /// synchronous operations. Font Engine work has its own client below.
     GpgpuSystem,
+    /// Font Engine lane with its own persistent HWLRCA, ring, PPGTT root, GuC
+    /// registration, and exact timeline. Font work must never rewrite or
+    /// quarantine the general system-service context.
+    GpgpuFont,
     /// Independent compute lane for continuously executing GPU programs. Its
     /// context may remain in flight without blocking system-service compute.
     GpgpuExecution,
@@ -90,8 +94,8 @@ pub(crate) enum KernelClient {
     Lfm25,
     /// Persistent UI4 composition queue.  This is deliberately a separate
     /// virtual device/principal from general kernel GPGPU: UI4 may leave one
-    /// frame in flight while video conversion, fonts, and application compute
-    /// continue to submit through `GpgpuSystem`.
+    /// frame in flight while video conversion and application compute continue
+    /// through `GpgpuSystem`, and Font Engine work through `GpgpuFont`.
     Ui4Compositor,
     /// Persistent GuC-owned BCS0 lane for UI4 copies and composition staging.
     /// Keeping it separate from the RCS compositor lane gives copy work its
@@ -126,6 +130,7 @@ impl KernelClient {
             Self::Render1 => "kernel-render-1",
             Self::Render2 => "kernel-render-2",
             Self::GpgpuSystem => "kernel-gpgpu-system",
+            Self::GpgpuFont => "kernel-gpgpu-font",
             Self::GpgpuExecution => "kernel-gpgpu-execution",
             Self::Lfm25 => "kernel-lfm25",
             Self::Ui4Compositor => "kernel-ui4-compositor",
@@ -139,6 +144,7 @@ impl KernelClient {
             Self::Render1 => Principal::KernelRender1,
             Self::Render2 => Principal::KernelRender2,
             Self::GpgpuSystem => Principal::KernelGpgpuSystem,
+            Self::GpgpuFont => Principal::KernelGpgpuFont,
             Self::GpgpuExecution => Principal::KernelGpgpuExecution,
             Self::Lfm25 => Principal::KernelLfm25,
             Self::Ui4Compositor => Principal::KernelUi4Compositor,
@@ -149,7 +155,9 @@ impl KernelClient {
     const fn queue_class(self) -> QueueClass {
         match self {
             Self::Render | Self::Render1 | Self::Render2 => QueueClass::Render,
-            Self::GpgpuSystem | Self::GpgpuExecution | Self::Lfm25 => QueueClass::Compute,
+            Self::GpgpuSystem | Self::GpgpuFont | Self::GpgpuExecution | Self::Lfm25 => {
+                QueueClass::Compute
+            }
             Self::Ui4Compositor => QueueClass::Compute,
             Self::Ui4Blitter => QueueClass::Copy,
         }
@@ -167,12 +175,11 @@ impl KernelClient {
             // kernel time. Each LFM batch remains bounded to at most three
             // projection walkers, so it cannot turn into a persistent
             // high-priority program.
-            // GPGPU system submissions are likewise bounded synchronous
-            // kernels. They produce visible retained UI surfaces (Gridpaper
-            // and GPU fonts), so leaving them at normal priority adds one
-            // complete GuC scheduler quantum to every copy/coverage/release
-            // stage while UI4 window motion itself remains crisp.
-            Self::GpgpuSystem | Self::Ui4Compositor | Self::Lfm25 => {
+            // GPGPU system and Font Engine submissions are likewise bounded
+            // synchronous kernels. They produce visible retained UI surfaces,
+            // so normal priority adds one complete GuC scheduler quantum to
+            // every copy/coverage/release stage while UI4 motion remains crisp.
+            Self::GpgpuSystem | Self::GpgpuFont | Self::Ui4Compositor | Self::Lfm25 => {
                 PhysicalContextPriority::KernelHigh
             }
             // Retained Render carriers and the Spirit/Lab256 execution lane
@@ -200,6 +207,7 @@ impl KernelClient {
             | Self::Render1
             | Self::Render2
             | Self::GpgpuSystem
+            | Self::GpgpuFont
             | Self::GpgpuExecution
             | Self::Lfm25
             | Self::Ui4Compositor => {
@@ -229,6 +237,10 @@ const _: () = {
     ));
     assert!(matches!(
         KernelClient::GpgpuSystem.physical_priority(),
+        PhysicalContextPriority::KernelHigh
+    ));
+    assert!(matches!(
+        KernelClient::GpgpuFont.physical_priority(),
         PhysicalContextPriority::KernelHigh
     ));
     assert!(matches!(
@@ -285,6 +297,7 @@ pub(crate) enum Principal {
     KernelRender1,
     KernelRender2,
     KernelGpgpuSystem,
+    KernelGpgpuFont,
     KernelGpgpuExecution,
     KernelLfm25,
     KernelUi4Compositor,
@@ -301,6 +314,7 @@ impl Principal {
             Self::KernelRender1 => "kernel-render-1",
             Self::KernelRender2 => "kernel-render-2",
             Self::KernelGpgpuSystem => "kernel-gpgpu-system",
+            Self::KernelGpgpuFont => "kernel-gpgpu-font",
             Self::KernelGpgpuExecution => "kernel-gpgpu-execution",
             Self::KernelLfm25 => "kernel-lfm25",
             Self::KernelUi4Compositor => "kernel-ui4-compositor",
@@ -715,8 +729,13 @@ pub(crate) struct KernelContextBoundaryStatus {
     pub(crate) unique_ppgtt_roots: bool,
     pub(crate) helio_render_live: bool,
     pub(crate) spirit_execution_live: bool,
+    pub(crate) font_engine_live: bool,
     pub(crate) helio_spirit_distinct_hwlrca: bool,
     pub(crate) helio_spirit_distinct_ppgtt_root: bool,
+    pub(crate) font_helio_distinct_hwlrca: bool,
+    pub(crate) font_helio_distinct_ppgtt_root: bool,
+    pub(crate) font_spirit_distinct_hwlrca: bool,
+    pub(crate) font_spirit_distinct_ppgtt_root: bool,
 }
 
 impl KernelContextBoundaryStatus {
@@ -734,6 +753,15 @@ impl KernelContextBoundaryStatus {
             && self.spirit_execution_live
             && self.helio_spirit_distinct_hwlrca
             && self.helio_spirit_distinct_ppgtt_root
+    }
+
+    pub(crate) const fn font_helio_spirit_valid(self) -> bool {
+        self.font_engine_live
+            && self.helio_spirit_valid()
+            && self.font_helio_distinct_hwlrca
+            && self.font_helio_distinct_ppgtt_root
+            && self.font_spirit_distinct_hwlrca
+            && self.font_spirit_distinct_ppgtt_root
     }
 }
 
@@ -2104,6 +2132,7 @@ const fn kernel_client_for_principal(principal: Principal) -> Option<KernelClien
         Principal::KernelRender1 => Some(KernelClient::Render1),
         Principal::KernelRender2 => Some(KernelClient::Render2),
         Principal::KernelGpgpuSystem => Some(KernelClient::GpgpuSystem),
+        Principal::KernelGpgpuFont => Some(KernelClient::GpgpuFont),
         Principal::KernelGpgpuExecution => Some(KernelClient::GpgpuExecution),
         Principal::KernelLfm25 => Some(KernelClient::Lfm25),
         Principal::KernelUi4Compositor => Some(KernelClient::Ui4Compositor),
@@ -2598,14 +2627,30 @@ fn kernel_context_boundary_status(broker: &Broker) -> KernelContextBoundaryStatu
     }
     let helio = live_kernel_context_descriptor(broker, Principal::KernelRender);
     let spirit = live_kernel_context_descriptor(broker, Principal::KernelGpgpuExecution);
+    let font = live_kernel_context_descriptor(broker, Principal::KernelGpgpuFont);
     report.helio_render_live = helio.is_some();
     report.spirit_execution_live = spirit.is_some();
+    report.font_engine_live = font.is_some();
     if let (Some(helio), Some(spirit)) = (helio, spirit) {
         report.helio_spirit_distinct_hwlrca =
             hwlrca_backing_identity(helio) != hwlrca_backing_identity(spirit);
         report.helio_spirit_distinct_ppgtt_root = helio.gpuvm_root_phys != 0
             && spirit.gpuvm_root_phys != 0
             && helio.gpuvm_root_phys != spirit.gpuvm_root_phys;
+    }
+    if let (Some(font), Some(helio)) = (font, helio) {
+        report.font_helio_distinct_hwlrca =
+            hwlrca_backing_identity(font) != hwlrca_backing_identity(helio);
+        report.font_helio_distinct_ppgtt_root = font.gpuvm_root_phys != 0
+            && helio.gpuvm_root_phys != 0
+            && font.gpuvm_root_phys != helio.gpuvm_root_phys;
+    }
+    if let (Some(font), Some(spirit)) = (font, spirit) {
+        report.font_spirit_distinct_hwlrca =
+            hwlrca_backing_identity(font) != hwlrca_backing_identity(spirit);
+        report.font_spirit_distinct_ppgtt_root = font.gpuvm_root_phys != 0
+            && spirit.gpuvm_root_phys != 0
+            && font.gpuvm_root_phys != spirit.gpuvm_root_phys;
     }
     report
 }
@@ -2763,6 +2808,7 @@ fn allowed_capabilities(
         | Principal::KernelRender1
         | Principal::KernelRender2
         | Principal::KernelGpgpuSystem
+        | Principal::KernelGpgpuFont
         | Principal::KernelGpgpuExecution
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
@@ -2779,6 +2825,7 @@ const fn quota_for(principal: Principal) -> Quota {
         | Principal::KernelRender1
         | Principal::KernelRender2
         | Principal::KernelGpgpuSystem
+        | Principal::KernelGpgpuFont
         | Principal::KernelGpgpuExecution
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor

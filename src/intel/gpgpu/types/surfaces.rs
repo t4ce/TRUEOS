@@ -988,6 +988,54 @@ pub(crate) fn release_rgba8_surface_for_scanout(dst: GpgpuRgba8Surface) -> Gpgpu
     }
 }
 
+/// Font Engine equivalent of the scanout release packet. The packet encoding
+/// is shared, but every mutable execution object and retirement proof belongs
+/// to the Font GuC context.
+pub(crate) fn font_release_rgba8_surface_for_scanout(
+    dst: GpgpuRgba8Surface,
+) -> GpgpuRgba8KernelResult {
+    let started = direct_rcs_now_tick();
+    if !dst.is_valid() {
+        return GpgpuRgba8KernelResult::default();
+    }
+    let _guard = FONT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return GpgpuRgba8KernelResult::default();
+    };
+    let Some(state) = font_rcs_state_once(dev) else {
+        return GpgpuRgba8KernelResult::default();
+    };
+    let prepared = direct_rcs_forcewake(dev)
+        && direct_rcs_map_state(dev, state)
+        && direct_rcs_init_ppgtt(state)
+        && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes)
+        && direct_rcs_encode_rgba8_scanout_release_batch(state);
+    let submission = if prepared {
+        font_rcs_submit_batch_state(dev, state)
+    } else {
+        DirectRcsSubmissionState::Rejected
+    };
+    let submitted = submission.may_have_submitted();
+    let marker = if submission.can_poll() {
+        font_rcs_poll_result_slot_timeout_ms(
+            state,
+            RGBA8_SCANOUT_RELEASE_MARKER_SLOT,
+            RGBA8_SCANOUT_RELEASE_MARKER,
+            UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
+        )
+    } else {
+        0
+    };
+    let ok = marker == RGBA8_SCANOUT_RELEASE_MARKER;
+    GpgpuRgba8KernelResult {
+        ok,
+        submitted,
+        marker,
+        submit_ms: direct_rcs_elapsed_ms_since(started),
+        release: ok.then(|| gpgpu_rgba8_release(dst)),
+    }
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuMandel64Placement {
     pub(crate) src_x: i32,

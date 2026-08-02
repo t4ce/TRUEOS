@@ -86,7 +86,7 @@ impl FontKernelConsumer {
 type FontKernelGpuSemaphore =
     FairSemaphore<crate::wait::EmbassySpinRawMutex, FONT_KERNEL_GPU_WAITERS>;
 
-/// Exclusive, FIFO admission to direct-RCS font and composition work.
+/// Exclusive, FIFO admission to Font Engine direct-RCS work.
 ///
 /// The hardware path remains deliberately single-submit. Dropping the lease
 /// hands the lane to the oldest asynchronous waiter.
@@ -1082,10 +1082,8 @@ fn process_frame_stamp(
             rect: destination.bounds(),
             color_rgba,
         };
-        let cleared = crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(
-            destination,
-            core::slice::from_ref(&clear),
-        );
+        let cleared =
+            crate::intel::gpgpu::font_fill_solid_rect_rgba8_scanout_result(destination, clear);
         clear_submits = cleared.stats.submits;
         let elapsed_ms = Instant::now().as_millis().saturating_sub(clear_started_ms);
         validate_frame_clear_outcome(cleared.outcome)?;
@@ -1181,7 +1179,7 @@ fn log_failure(ticket: FontKernelTicket, operation: &'static str, error: &FontKe
 }
 
 fn retryable_gpu_error(error: &FontKernelError) -> bool {
-    !crate::intel::gpgpu::direct_rcs_context_is_quarantined()
+    !crate::intel::gpgpu::font_rcs_context_is_quarantined()
         && matches!(
             error,
             FontKernelError::Unavailable(
@@ -1347,7 +1345,7 @@ pub(crate) async fn font_kernel_service_task() {
     ONLINE.store(true, Ordering::Release);
     crate::log_info!(
         target: "render";
-        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only queue_capacity={} retained_storage=gpu-vm-r8 stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
+        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only gpu_context=kernel-gpgpu-font queue_capacity={} retained_storage=gpu-vm-r8 stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
         FONT_KERNEL_QUEUE_CAPACITY,
     );
     loop {

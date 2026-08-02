@@ -9,6 +9,32 @@ pub(crate) fn fill_rect_rgba8_stats(
     submit_fill_rect_2d_with_stats(dst, params)
 }
 
+/// Clear one Font Engine destination through the Font-owned GuC context.
+/// This deliberately bypasses the general system-service worklist and its
+/// mutable descriptor page so a font frame cannot serialize or quarantine an
+/// unrelated GPU producer.
+pub(crate) fn font_fill_solid_rect_rgba8_scanout_result(
+    dst: GpgpuRgba8Surface,
+    solid: GpgpuSolidRect,
+) -> GpgpuWorklistSubmitResult {
+    let Some(params) = lower_fill_rect(dst, solid.rect, solid.color_rgba) else {
+        return GpgpuWorklistSubmitResult::default();
+    };
+    let started = direct_rcs_now_tick();
+    let outcome = submit_font_fill_rect_2d(dst, params, true);
+    let complete = outcome == GpgpuSubmissionOutcome::Complete;
+    GpgpuWorklistSubmitResult {
+        stats: GpgpuWorklistSubmitStats {
+            descs: usize::from(complete),
+            walkers: usize::from(complete),
+            submits: usize::from(complete),
+            submit_ms: direct_rcs_elapsed_ms_since(started),
+            ..GpgpuWorklistSubmitStats::default()
+        },
+        outcome,
+    }
+}
+
 /// Copy one rectangle with one two-dimensional submission and report success
 /// only after that dispatch retired.
 pub(crate) fn copy_rect_rgba8_complete(

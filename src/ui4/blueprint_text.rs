@@ -2661,7 +2661,7 @@ fn retain_font_canvas_for_surface(
             canvas.ready = Some(buffer);
             crate::log_info!(
                 target: "ui4/font-canvas";
-                "FontKernel RGBA canvas ready owner={:?} window={} ticket={} rows={} internal_layers={} extent={}x{} glyphs={} submits={} walkers={} build_ms={} storage=gpu-vm-rgba8 alpha=premultiplied-coverage path=skrifa->gpu-vm-r8->cpp-igc->guc-rcs->owned-rgba8 cpu_readback=0 cpu_frame_copy=0\n",
+                "FontKernel RGBA canvas ready owner={:?} window={} ticket={} rows={} internal_layers={} extent={}x{} glyphs={} submits={} walkers={} build_ms={} storage=gpu-vm-rgba8 alpha=premultiplied-coverage context=kernel-gpgpu-font path=skrifa->gpu-vm-r8->cpp-igc->guc-font-rcs->owned-rgba8 cpu_readback=0 cpu_frame_copy=0\n",
                 owner,
                 window_id,
                 ticket,
@@ -3269,7 +3269,7 @@ fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
     surface.stamped_text_rendered = true;
     crate::log_info!(
         target: "ui4/solara-text";
-        "FontKernel frame stamped owner={:?} window={} layers={} glyphs={} submits={} walkers={} target={}x{} path=skrifa->gpu-vm-r8->cpp-igc->guc-rcs->ui4-frame-rgba8 cpu_readback=0 cpu_frame_copy=0 staging_rgba=0\n",
+        "FontKernel frame stamped owner={:?} window={} layers={} glyphs={} submits={} walkers={} target={}x{} context=kernel-gpgpu-font path=skrifa->gpu-vm-r8->cpp-igc->guc-font-rcs->ui4-frame-rgba8 cpu_readback=0 cpu_frame_copy=0 staging_rgba=0\n",
         owner,
         window_id,
         surface.stamped_text_cursor,

@@ -321,6 +321,61 @@ fn submit_fill_rect_2d(dst: GpgpuRgba8Surface, params: FillRectRgba8Params) -> b
     completed
 }
 
+fn submit_font_fill_rect_2d(
+    dst: GpgpuRgba8Surface,
+    params: FillRectRgba8Params,
+    direct_scanout: bool,
+) -> GpgpuSubmissionOutcome {
+    if params.width == 0 || params.height == 0 || fill_rect_2d_dispatch(params.width, params.height).is_none() {
+        return GpgpuSubmissionOutcome::Unavailable;
+    }
+    let _guard = FONT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return GpgpuSubmissionOutcome::Unavailable;
+    };
+    let Some(upload) = upload_fill_rect_rgba8_kernel() else {
+        return GpgpuSubmissionOutcome::Unavailable;
+    };
+    let Some(state) = font_rcs_state_once(dev) else {
+        return GpgpuSubmissionOutcome::Unavailable;
+    };
+
+    let prepared = direct_rcs_forcewake(dev)
+        && direct_rcs_map_state(dev, state)
+        && direct_rcs_init_ppgtt(state)
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
+        && direct_rcs_map_ppgtt_destination(
+            state,
+            dst.gpu,
+            dst.phys,
+            dst.bytes,
+            direct_scanout,
+        )
+        && direct_rcs_encode_fill_rect_2d_batch(state, upload, params, dst.bytes);
+    let submission = if prepared {
+        font_rcs_submit_batch_state(dev, state)
+    } else {
+        DirectRcsSubmissionState::Rejected
+    };
+    let observed = if submission.can_poll() {
+        font_rcs_poll_result_slot_timeout_ms(
+            state,
+            CLEAR_RECT_POST_MARKER_SLOT,
+            CLEAR_RECT_POST_MARKER,
+            FILL_RECT_2D_COMPLETION_TIMEOUT_MS,
+        )
+    } else {
+        0
+    };
+    if observed == CLEAR_RECT_POST_MARKER {
+        GpgpuSubmissionOutcome::Complete
+    } else if submission.may_have_submitted() {
+        GpgpuSubmissionOutcome::SubmittedIncomplete
+    } else {
+        GpgpuSubmissionOutcome::Unavailable
+    }
+}
+
 fn submit_resolve_tile64_msaa4_2d(
     src: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
@@ -447,7 +502,7 @@ fn submit_font_outline_coverage_runs_r8_2d(
     // Font coverage is requested by asynchronous kernel/UI services. Never
     // spin a cooperative executor while another direct-RCS producer owns the
     // lane; the caller can preserve its resident fallback and retry later.
-    let Some(_guard) = DIRECT_RCS_SUBMIT_LOCK.try_lock() else {
+    let Some(_guard) = FONT_RCS_SUBMIT_LOCK.try_lock() else {
         return GpgpuDispatchRetirement::NotSubmitted;
     };
     let Some(dev) = super::claimed_device() else {
@@ -456,7 +511,7 @@ fn submit_font_outline_coverage_runs_r8_2d(
     let Some(upload) = upload_font_outline_coverage_r8_kernel() else {
         return GpgpuDispatchRetirement::NotSubmitted;
     };
-    let Some(state) = direct_rcs_state_once(dev) else {
+    let Some(state) = font_rcs_state_once(dev) else {
         return GpgpuDispatchRetirement::NotSubmitted;
     };
     let forcewake_ok = direct_rcs_forcewake(dev);
@@ -481,13 +536,13 @@ fn submit_font_outline_coverage_runs_r8_2d(
             mask.bytes,
         );
     let submission = if batch_ok {
-        direct_rcs_submit_batch_state(dev, state)
+        font_rcs_submit_batch_state(dev, state)
     } else {
         DirectRcsSubmissionState::Rejected
     };
     let submitted = submission.may_have_submitted();
     let observed = if submission.can_poll() {
-        direct_rcs_poll_result_slot_timeout_ms(
+        font_rcs_poll_result_slot_timeout_ms(
             state,
             COPY_RECT_POST_MARKER_SLOT,
             COPY_RECT_POST_MARKER,
@@ -522,7 +577,7 @@ fn submit_font_outline_coverage_runs_r8_2d(
     if completed {
         GpgpuDispatchRetirement::Complete
     } else if submitted {
-        quarantine_direct_rcs_context("font-outline-coverage-marker-timeout");
+        quarantine_font_rcs_context("font-outline-coverage-marker-timeout");
         GpgpuDispatchRetirement::SubmittedIncomplete
     } else {
         GpgpuDispatchRetirement::NotSubmitted
@@ -539,14 +594,14 @@ fn submit_glyph_mask_2d(
     if fill_rect_2d_dispatch(params.width, params.height).is_none() {
         return false;
     }
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let _guard = FONT_RCS_SUBMIT_LOCK.lock();
     let Some(dev) = super::claimed_device() else {
         return false;
     };
     let Some(upload) = upload_glyph_mask_rgba8_kernel() else {
         return false;
     };
-    let Some(state) = direct_rcs_state_once(dev) else {
+    let Some(state) = font_rcs_state_once(dev) else {
         return false;
     };
     let forcewake_ok = direct_rcs_forcewake(dev);
@@ -568,9 +623,9 @@ fn submit_glyph_mask_2d(
         && direct_rcs_encode_glyph_mask_2d_batch(
             state, upload, params, color_rgba, mask.bytes, dst.bytes,
         );
-    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let submitted = batch_ok && font_rcs_submit_batch(dev, state);
     let observed = if submitted {
-        direct_rcs_poll_result_slot_timeout_ms(
+        font_rcs_poll_result_slot_timeout_ms(
             state,
             COPY_RECT_POST_MARKER_SLOT,
             COPY_RECT_POST_MARKER,
@@ -590,14 +645,14 @@ fn submit_glyph_mask_layers_2d(
     if layers.is_empty() || layers.len() > GLYPH_MASK_BATCH_MAX_LAYERS {
         return (false, false);
     }
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let _guard = FONT_RCS_SUBMIT_LOCK.lock();
     let Some(dev) = super::claimed_device() else {
         return (false, false);
     };
     let Some(upload) = upload_glyph_mask_rgba8_kernel() else {
         return (false, false);
     };
-    let Some(state) = direct_rcs_state_once(dev) else {
+    let Some(state) = font_rcs_state_once(dev) else {
         return (false, false);
     };
     if !direct_rcs_forcewake(dev)
@@ -642,7 +697,7 @@ fn submit_glyph_mask_layers_2d(
     if !direct_rcs_encode_glyph_mask_layers_2d_batch(state, upload, layers, dst) {
         return (false, false);
     }
-    let submission = direct_rcs_submit_batch_state(dev, state);
+    let submission = font_rcs_submit_batch_state(dev, state);
     let submitted = submission.may_have_submitted();
     let completion_timeout_ms = if direct_scanout {
         UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS
@@ -650,7 +705,7 @@ fn submit_glyph_mask_layers_2d(
         RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS
     };
     let observed = if submission.can_poll() {
-        direct_rcs_poll_result_slot_timeout_ms(
+        font_rcs_poll_result_slot_timeout_ms(
             state,
             COPY_RECT_POST_MARKER_SLOT,
             COPY_RECT_POST_MARKER,
@@ -693,7 +748,7 @@ fn submit_font_instance_layers_2d(
     }
     // Retained font restamps are opportunistic producers. Contention is an
     // admission failure, not permission to monopolize a cooperative worker.
-    let Some(_guard) = DIRECT_RCS_SUBMIT_LOCK.try_lock() else {
+    let Some(_guard) = FONT_RCS_SUBMIT_LOCK.try_lock() else {
         return (false, false);
     };
     let Some(dev) = super::claimed_device() else {
@@ -702,7 +757,7 @@ fn submit_font_instance_layers_2d(
     let Some(upload) = upload_font_instance_rgba8_kernel() else {
         return (false, false);
     };
-    let Some(state) = direct_rcs_state_once(dev) else {
+    let Some(state) = font_rcs_state_once(dev) else {
         return (false, false);
     };
     if !direct_rcs_forcewake(dev)
@@ -756,7 +811,7 @@ fn submit_font_instance_layers_2d(
     ) {
         return (false, false);
     }
-    let submission = direct_rcs_submit_batch_state(dev, state);
+    let submission = font_rcs_submit_batch_state(dev, state);
     let submitted = submission.may_have_submitted();
     let completion_timeout_ms = if direct_scanout {
         UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS
@@ -764,7 +819,7 @@ fn submit_font_instance_layers_2d(
         RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS
     };
     let observed = if submission.can_poll() {
-        direct_rcs_poll_result_slot_timeout_ms(
+        font_rcs_poll_result_slot_timeout_ms(
             state,
             COPY_RECT_POST_MARKER_SLOT,
             COPY_RECT_POST_MARKER,

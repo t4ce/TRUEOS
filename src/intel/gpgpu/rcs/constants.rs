@@ -1239,6 +1239,13 @@ const LFM25_RCS_GPU_VA_RING_BASE: u64 = 0x0820_0000;
 const LFM25_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x0821_0000;
 const LFM25_RCS_GPU_VA_RESULT_BASE: u64 = 0x0824_0000;
 const LFM25_RCS_GPU_VA_BATCH_BASE: u64 = 0x0830_0000;
+// Font Engine owns a separate GuC client and control window. Its PPGTT may
+// reuse the font resource virtual addresses below because no other client can
+// mutate this root or its ring/batch/result storage.
+const FONT_RCS_GPU_VA_RING_BASE: u64 = 0x0840_0000;
+const FONT_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x0841_0000;
+const FONT_RCS_GPU_VA_RESULT_BASE: u64 = 0x0844_0000;
+const FONT_RCS_GPU_VA_BATCH_BASE: u64 = 0x0850_0000;
 const _: () = assert!(
     EXECUTION_RCS_GPU_VA_RESULT_BASE + (EXECUTION_RCS_JOB_SLOTS * DIRECT_RCS_RESULT_BYTES) as u64
         <= EXECUTION_RCS_GPU_VA_BATCH_BASE
@@ -1246,6 +1253,13 @@ const _: () = assert!(
 const _: () = assert!(
     EXECUTION_RCS_GPU_VA_BATCH_BASE + (EXECUTION_RCS_JOB_SLOTS * DIRECT_RCS_BATCH_BYTES) as u64
         <= LFM25_RCS_GPU_VA_RING_BASE
+);
+const _: () = assert!(
+    LFM25_RCS_GPU_VA_BATCH_BASE + DIRECT_RCS_BATCH_BYTES as u64 <= FONT_RCS_GPU_VA_RING_BASE
+);
+const _: () = assert!(
+    FONT_RCS_GPU_VA_BATCH_BASE + DIRECT_RCS_BATCH_BYTES as u64
+        <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
 );
 const SCENE_AABB_RCS_GPU_VA_RING_BASE: u64 = 0x01F0_0000;
 const SCENE_AABB_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x01F1_0000;

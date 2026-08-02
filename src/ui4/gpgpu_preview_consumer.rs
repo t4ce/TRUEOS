@@ -1,4 +1,4 @@
-//! Shell-controlled GPGPU live previews backed by UI4 frames.
+//! Shell-controlled GPGPU live previews backed exclusively by UI4 frames.
 //!
 //! This is a trusted kernel app beside the permanent UI4 compositor. It
 //! owns frame/window lifetime and compute cadence. The compute trio is admitted
@@ -39,11 +39,11 @@ const STATIC30_COLUMNS: u32 = 6;
 const STATIC30_ROWS: u32 = 5;
 const STATIC30_MAX_WIDTH: u32 = 320;
 const STATIC30_MAX_HEIGHT: u32 = 180;
-const CPP_FONT_RUSH_MAX_CONSUMERS: usize = 4;
+const CPP_FONT_RUSH_MAX_PLANES: usize = 4;
 const CPP_FONT_RUSH_CADENCE_MS: u64 = 1_000;
-const CPP_FONT_RUSH_ADD_CONSUMER_MS: u64 = 3_000;
+const CPP_FONT_RUSH_ADD_PLANE_MS: u64 = 3_000;
 const CPP_FONT_RUSH_VIEWPORT_SCALE: u32 = 4;
-const CPP_FONT_RUSH_GLYPHS: [usize; CPP_FONT_RUSH_MAX_CONSUMERS] = [1, 2, 4, 16];
+const CPP_FONT_RUSH_GLYPHS: [usize; CPP_FONT_RUSH_MAX_PLANES] = [1, 2, 4, 16];
 
 pub(crate) const GPGPU_PREVIEW_DEFAULT_DURATION_MS: u64 = 5_000;
 pub(crate) const GPGPU_PREVIEW_DEFAULT_CADENCE_MS: u64 = 33;
@@ -119,7 +119,7 @@ impl GpgpuPreviewPreset {
         match self {
             Self::All => "double-per-frame",
             Self::Static30 | Self::CppFont => "single",
-            Self::CppFontRush => "double-per-consumer",
+            Self::CppFontRush => "double-per-plane",
             _ => "double",
         }
     }
@@ -142,7 +142,7 @@ impl GpgpuPreviewPreset {
             | Self::CppAudio
             | Self::CppParticle
             | Self::CppFont => "slot1-direct",
-            Self::CppFontRush => "slot1-shared",
+            Self::CppFontRush => "slots0+1+2+3-direct-capability-bounded",
         }
     }
 }
@@ -397,7 +397,7 @@ struct ActivePreview {
     extra_surfaces: Vec<StaticPreviewSurface>,
     particle_craft: Option<crate::intel::gpgpu::GpgpuOwnedParticleCraftState>,
     font_stamp: Option<crate::r::font_kernel_service::FontStampRequest>,
-    font_rush: Option<CppFontRushConsumerState>,
+    font_rush: Option<CppFontRushPlaneState>,
     metrics: GpgpuPreviewMetrics,
 }
 
@@ -406,19 +406,22 @@ struct CppFontRushTopology {
     width: u32,
     height: u32,
     plane_mask: u8,
-    consumer_count: u8,
+    plane_slots: [u8; CPP_FONT_RUSH_MAX_PLANES],
+    plane_count: u8,
 }
 
-struct CppFontRushConsumerState {
+struct CppFontRushPlaneState {
     rank: u8,
+    plane_slot: u8,
     topology: CppFontRushTopology,
-    /// The 3-second consumer-growth cadence begins only once rank 0 has
+    /// The 3-second plane-growth cadence begins only once Slot0 has actually
     /// published its first generated frame. Service-lane admission may delay
     /// that first frame during boot and must not make all later planes catch up
     /// in one burst.
     growth_started: Option<Instant>,
     rng: crate::tyche::SoftRng,
     pending: Option<CppFontRushPendingFrame>,
+    scanout_pending: Option<CppFontRushPendingScanout>,
 }
 
 struct CppFontRushPendingFrame {
@@ -436,6 +439,18 @@ struct CppFontRushPendingFrame {
     glyph_ids: String,
     fifo_queued_ahead: usize,
     request_build_ms: u64,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct CppFontRushPendingScanout {
+    ticket: crate::r::font_kernel_service::FontKernelTicket,
+    sequence: u64,
+    producer_buffer: u8,
+    frame_publish_serial: u64,
+    window_publish_serial: u64,
+    release_sequence: u64,
+    published_at: Instant,
+    glyph_fingerprint: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -490,6 +505,7 @@ pub(crate) fn request_cpp_font_rush_start() -> Result<u64, &'static str> {
     crate::intel::gpu_font::ensure_font_face_available(
         crate::intel::gpu_font::GpuFontFace::Default,
     )?;
+    ensure_cpp_font_rush_ui4_idle("request")?;
     let (_, topology) = cpp_font_rush_topology()?;
     log_cpp_font_rush_capabilities("request", 0, topology);
     let config = GpgpuPreviewConfig {
@@ -537,16 +553,55 @@ pub(crate) fn request_cpp_font_rush_stop() -> Result<u64, &'static str> {
     Ok(serial)
 }
 
-const fn cpp_font_rush_target_consumer_count(elapsed_ms: u64, available_consumers: u8) -> usize {
-    let timed_consumers =
-        1usize.saturating_add((elapsed_ms / CPP_FONT_RUSH_ADD_CONSUMER_MS) as usize);
-    let available = if available_consumers as usize > CPP_FONT_RUSH_MAX_CONSUMERS {
-        CPP_FONT_RUSH_MAX_CONSUMERS
+fn ensure_cpp_font_rush_ui4_idle(stage: &'static str) -> Result<(), &'static str> {
+    let usage = super::ui4_live_resource_usage();
+    if usage.is_display_idle() {
+        if usage.active_frames != 0 {
+            crate::log_info!(
+                target: "ui4";
+                "ui4 cpp-font-rush admission accepted stage={} display_idle=1 detached_active_frames={} active_sessions=0 live_windows=0 detached_policy=not-display-live\n",
+                stage,
+                usage.active_frames,
+            );
+        }
+        return Ok(());
+    }
+    crate::log_warn!(
+        target: "ui4";
+        "ui4 cpp-font-rush admission rejected stage={} reason=ui4-not-idle active_frames={} active_sessions={} live_windows={}\n",
+        stage,
+        usage.active_frames,
+        usage.active_sessions,
+        usage.live_windows,
+    );
+    Err("ui4-not-idle")
+}
+
+fn cpp_font_rush_plane_slots(application_plane_mask: u8) -> ([u8; CPP_FONT_RUSH_MAX_PLANES], u8) {
+    let mut slots = [0u8; CPP_FONT_RUSH_MAX_PLANES];
+    let mut count = 0u8;
+    let mut slot = 0usize;
+    while slot < super::INTERACTION_OVERLAY_PLANE_SLOT
+        && usize::from(count) < CPP_FONT_RUSH_MAX_PLANES
+    {
+        if application_plane_mask & (1u8 << slot) != 0 {
+            slots[usize::from(count)] = slot as u8;
+            count += 1;
+        }
+        slot += 1;
+    }
+    (slots, count)
+}
+
+const fn cpp_font_rush_target_plane_count(elapsed_ms: u64, available_planes: u8) -> usize {
+    let timed_planes = 1usize.saturating_add((elapsed_ms / CPP_FONT_RUSH_ADD_PLANE_MS) as usize);
+    let available = if available_planes as usize > CPP_FONT_RUSH_MAX_PLANES {
+        CPP_FONT_RUSH_MAX_PLANES
     } else {
-        available_consumers as usize
+        available_planes as usize
     };
-    if timed_consumers < available {
-        timed_consumers
+    if timed_planes < available {
+        timed_planes
     } else {
         available
     }
@@ -556,8 +611,9 @@ fn cpp_font_rush_topology() -> Result<(OutputId, CppFontRushTopology), &'static 
     let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
     let capabilities =
         super::ui4_output_capabilities(output).ok_or("ui4-output-capabilities-unavailable")?;
-    if !capabilities.supports_application_plane(super::ALPHA_OVERLAY_PLANE_SLOT) {
-        return Err("font-rush-shared-plane-unavailable");
+    let (plane_slots, plane_count) = cpp_font_rush_plane_slots(capabilities.application_plane_mask);
+    if plane_count == 0 {
+        return Err("font-rush-primary-plane-unavailable");
     }
     if capabilities.width == 0
         || capabilities.height == 0
@@ -574,27 +630,29 @@ fn cpp_font_rush_topology() -> Result<(OutputId, CppFontRushTopology), &'static 
             width: capabilities.width,
             height: capabilities.height,
             plane_mask: capabilities.application_plane_mask,
-            consumer_count: CPP_FONT_RUSH_MAX_CONSUMERS as u8,
+            plane_slots,
+            plane_count,
         },
     ))
 }
 
 fn log_cpp_font_rush_capabilities(
     stage: &'static str,
-    active_consumers: usize,
+    active_planes: usize,
     topology: CppFontRushTopology,
 ) {
     crate::log_info!(
         target: "ui4";
-        "ui4 cpp-font-rush capabilities stage={} extent={}x{} application_plane_mask=0x{:02X} reported_planes={} shared_slot={} active_consumers={} max_consumers={} policy=independent-consumers-shared-compositor-plane\n",
+        "ui4 cpp-font-rush capabilities stage={} extent={}x{} application_plane_mask=0x{:02X} reported_planes={} enumerated_slots={:?} usable_planes={} active_planes={} max_planes={} policy=one-consumer-per-enumerated-application-plane\n",
         stage,
         topology.width,
         topology.height,
         topology.plane_mask,
         topology.plane_mask.count_ones(),
-        super::ALPHA_OVERLAY_PLANE_SLOT,
-        active_consumers,
-        CPP_FONT_RUSH_MAX_CONSUMERS,
+        &topology.plane_slots[..usize::from(topology.plane_count)],
+        topology.plane_count,
+        active_planes,
+        CPP_FONT_RUSH_MAX_PLANES,
     );
 }
 
@@ -967,6 +1025,11 @@ fn abandon_compute_preview_initialization(session: WindowSessionId, previews: &[
 fn initialize_cpp_font_rush_set(
     desired: DesiredPreview,
 ) -> Result<Vec<ActivePreview>, &'static str> {
+    // Recheck at the service boundary so a stale shell request cannot start a
+    // hardware-plane probe over an already live UI4 scene. The probe itself
+    // owns no global UI4 admission token; its enumerated planes are the only
+    // display resources it requests.
+    ensure_cpp_font_rush_ui4_idle("initialize")?;
     let (output, topology) = cpp_font_rush_topology()?;
     log_cpp_font_rush_capabilities("start", 1, topology);
     let session =
@@ -993,12 +1056,17 @@ fn create_cpp_font_rush_preview(
     started: Instant,
     activated: Instant,
 ) -> Result<ActivePreview, &'static str> {
-    if rank >= topology.consumer_count {
-        return Err("font-rush-consumer-unsupported");
+    if rank >= topology.plane_count {
+        return Err("font-rush-plane-unsupported");
     }
+    let plane_slot = topology.plane_slots[usize::from(rank)];
     let frame = create_cpp_font_rush_frame(output, topology.width, topology.height, rank)
         .map_err(preview_frame_create_error_label)?;
-    let plane = WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8);
+    let plane = if usize::from(plane_slot) == super::PRIMARY_PLANE_SLOT {
+        WindowPlane::Primary
+    } else {
+        WindowPlane::Universal(plane_slot)
+    };
     let window = match create_window(WindowCreate {
         owner: PREVIEW_OWNER,
         session,
@@ -1041,18 +1109,21 @@ fn create_cpp_font_rush_preview(
         resize_retry_height: 0,
         resize_retry_at: started,
         started,
-        // Each newly added consumer has its own cadence anchored at join time.
+        // Each newly added plane is an independent consumer whose cadence
+        // begins when that consumer joins, not at Slot0's older start time.
         next_render: activated,
         static_needs_publish: true,
         extra_surfaces: Vec::new(),
         particle_craft: None,
         font_stamp: None,
-        font_rush: Some(CppFontRushConsumerState {
+        font_rush: Some(CppFontRushPlaneState {
             rank,
+            plane_slot,
             topology,
             growth_started: None,
             rng: crate::tyche::soft_rng(),
             pending: None,
+            scanout_pending: None,
         }),
         metrics: GpgpuPreviewMetrics::default(),
     })
@@ -1068,15 +1139,14 @@ fn grow_cpp_font_rush(previews: &mut Vec<ActivePreview>, now: Instant) -> Result
     let state = first
         .font_rush
         .as_ref()
-        .ok_or("font-rush-consumer-state-missing")?;
+        .ok_or("font-rush-plane-state-missing")?;
     let Some(growth_started) = state.growth_started else {
         return Ok(());
     };
     let elapsed_ms = now.saturating_duration_since(growth_started).as_millis();
-    let threshold_consumers =
-        cpp_font_rush_target_consumer_count(elapsed_ms, state.topology.consumer_count);
-    if previews.len() >= threshold_consumers
-        || previews.len() >= usize::from(state.topology.consumer_count)
+    let threshold_planes = cpp_font_rush_target_plane_count(elapsed_ms, state.topology.plane_count);
+    if previews.len() >= threshold_planes
+        || previews.len() >= usize::from(state.topology.plane_count)
     {
         return Ok(());
     }
@@ -1086,11 +1156,11 @@ fn grow_cpp_font_rush(previews: &mut Vec<ActivePreview>, now: Instant) -> Result
     // Rush simply stops growing at that descriptor instead of reaching into a
     // driver-specific engine table.
     let (output, topology) = cpp_font_rush_topology()?;
-    let target_consumers = cpp_font_rush_target_consumer_count(elapsed_ms, topology.consumer_count);
-    if previews.len() >= target_consumers {
+    let target_planes = cpp_font_rush_target_plane_count(elapsed_ms, topology.plane_count);
+    if previews.len() >= target_planes {
         return Ok(());
     }
-    if topology.width != state.topology.width || topology.height != state.topology.height {
+    if topology != state.topology {
         return Err("font-rush-output-topology-changed");
     }
 
@@ -1102,22 +1172,25 @@ fn grow_cpp_font_rush(previews: &mut Vec<ActivePreview>, now: Instant) -> Result
     };
     let session = first.session;
     let started = first.started;
-    while previews.len() < target_consumers {
+    while previews.len() < target_planes {
         let rank = previews.len() as u8;
         log_cpp_font_rush_capabilities("expand", previews.len(), topology);
         let preview =
             create_cpp_font_rush_preview(desired, output, session, topology, rank, started, now)?;
         crate::log_info!(
             target: "ui4";
-            "ui4 cpp-font-rush consumer added request={} elapsed_ms={} rank={} slot={} frame={} window={} active_consumers={} max_consumers={} application_plane_mask=0x{:02X} glyphs={} grid={}x{} cadence_ms={}\n",
+            "ui4 cpp-font-rush plane added request={} elapsed_ms={} rank={} slot={} frame={} window={} active_planes={} usable_planes={} application_plane_mask=0x{:02X} glyphs={} grid={}x{} cadence_ms={}\n",
             desired.serial,
             elapsed_ms,
+            preview
+                .font_rush
+                .as_ref()
+                .map_or(u8::MAX, |state| state.plane_slot),
             rank,
-            active_preview_plane_slot(&preview),
             preview.frame.raw(),
             preview.window.raw(),
             previews.len() + 1,
-            topology.consumer_count,
+            topology.plane_count,
             topology.plane_mask,
             cpp_font_rush_glyph_count(rank),
             cpp_font_rush_grid(rank).0,
@@ -1732,7 +1805,7 @@ async fn render_cpp_font_frame(preview: &mut ActivePreview) -> Result<(), &'stat
     preview.static_needs_publish = false;
     crate::log_info!(
         target: "ui4";
-        "ui4 cpp-font preview ready request={} frame={} window={} extent={}x{} glyphs={} submits={} walkers={} release={} path=skrifa->gpu-vm-r8->cpp-igc->guc-rcs->ui4-font-scene\n",
+        "ui4 cpp-font preview ready request={} frame={} window={} extent={}x{} glyphs={} submits={} walkers={} release={} context=kernel-gpgpu-font path=skrifa->gpu-vm-r8->cpp-igc->guc-font-rcs->ui4-font-scene\n",
         preview.request_serial,
         preview.frame.raw(),
         preview.window.raw(),
@@ -1748,8 +1821,45 @@ async fn render_cpp_font_frame(preview: &mut ActivePreview) -> Result<(), &'stat
 
 fn poll_cpp_font_rush_consumers(previews: &mut [ActivePreview]) -> Result<(), &'static str> {
     for preview in previews {
+        poll_cpp_font_rush_scanout(preview)?;
         poll_cpp_font_rush_frame(preview)?;
     }
+    Ok(())
+}
+
+fn poll_cpp_font_rush_scanout(preview: &mut ActivePreview) -> Result<(), &'static str> {
+    let state = preview
+        .font_rush
+        .as_mut()
+        .ok_or("font-rush-plane-state-missing")?;
+    let Some(pending) = state.scanout_pending else {
+        return Ok(());
+    };
+    let ready_serial = crate::intel::ui4_direct_scanout_ready_for_frame(preview.frame.raw());
+    if !ready_serial.is_some_and(|serial| serial >= pending.frame_publish_serial) {
+        return Ok(());
+    }
+    state.scanout_pending = None;
+    preview.metrics.scanout_live = preview.metrics.scanout_live.saturating_add(1);
+    crate::log_info!(
+        target: "ui4";
+        "ui4 cpp-font-rush scanout-live request={} rank={} slot={} sequence={} ticket={} frame={} producer_buffer={} frame_publish_serial={} window_publish_serial={} release={} glyph_hash=0x{:016X} publish_to_surflive_us={} proof_serial={} path=ui4-font-scene->display-plane-direct compositor_jobs=0\n",
+        preview.request_serial,
+        state.rank,
+        state.plane_slot,
+        pending.sequence,
+        pending.ticket.raw(),
+        preview.frame.raw(),
+        pending.producer_buffer,
+        pending.frame_publish_serial,
+        pending.window_publish_serial,
+        pending.release_sequence,
+        pending.glyph_fingerprint,
+        Instant::now()
+            .saturating_duration_since(pending.published_at)
+            .as_micros(),
+        ready_serial.unwrap_or(0),
+    );
     Ok(())
 }
 
@@ -1760,7 +1870,7 @@ fn poll_cpp_font_rush_frame(preview: &mut ActivePreview) -> Result<(), &'static 
         let state = preview
             .font_rush
             .as_mut()
-            .ok_or("font-rush-consumer-state-missing")?;
+            .ok_or("font-rush-plane-state-missing")?;
         state
             .pending
             .as_mut()
@@ -1841,21 +1951,44 @@ fn poll_cpp_font_rush_frame(preview: &mut ActivePreview) -> Result<(), &'static 
         .saturating_duration_since(pending.submit_started_at)
         .as_millis();
 
-    let (rank, topology) = {
+    let (rank, plane_slot, topology, replaced_scanout) = {
         let state = preview
             .font_rush
             .as_mut()
-            .ok_or("font-rush-consumer-state-missing")?;
+            .ok_or("font-rush-plane-state-missing")?;
         if state.rank == 0 && preview.metrics.published == 1 {
             state.growth_started = Some(published_at);
         }
-        (state.rank, state.topology)
+        let replaced = state.scanout_pending.replace(CppFontRushPendingScanout {
+            ticket: pending.ticket,
+            sequence: pending.sequence,
+            producer_buffer: published.buffer_index,
+            frame_publish_serial: published.publish_serial,
+            window_publish_serial,
+            release_sequence: release.sequence(),
+            published_at,
+            glyph_fingerprint: pending.glyph_fingerprint,
+        });
+        (state.rank, state.plane_slot, state.topology, replaced)
     };
+    if let Some(replaced) = replaced_scanout {
+        preview.metrics.scanout_superseded = preview.metrics.scanout_superseded.saturating_add(1);
+        crate::log_warn!(
+            target: "ui4";
+            "ui4 cpp-font-rush scanout proof superseded request={} rank={} old_sequence={} old_frame_publish_serial={} new_sequence={} new_frame_publish_serial={} scanout_superseded={} action=count-present-drop-candidate\n",
+            preview.request_serial,
+            rank,
+            replaced.sequence,
+            replaced.frame_publish_serial,
+            pending.sequence,
+            published.publish_serial,
+            preview.metrics.scanout_superseded,
+        );
+    }
     let service = crate::r::font_kernel_service::status();
-    let plane_slot = active_preview_plane_slot(preview);
     crate::log_info!(
         target: "ui4";
-        "ui4 cpp-font-rush frame-ready request={} consumer={} rank={} slot={} sequence={} publication={} ticket={} elapsed_ms={} scheduled_ms={} deadline_to_submit_ms={} submit_call_us={} request_build_ms={} font_wait_ms={} pre_service_ms={} clear_ms={} prepare_coverage_ms={} coverage_build_ms={} coverage_audit_ms={} presentation_release_ms={} service_ms={} fifo_queued_ahead={} service_queue_at_complete={} completion_to_publish_us={} frame={} producer_buffer={} frame_publish_serial={} window_publish_serial={} glyph_hash=0x{:016X} glyph_ids={} extent={}x{} cadence_ms={} requested_glyphs={} rendered_glyphs={} grid={}x{} font=0 application_plane_mask=0x{:02X} max_consumers={} clear_submits={} coverage_submits={} presentation_submits={} known_gpu_submits={} walkers={} release={} consumer_in_flight=0 path=font-service-fifo[gpu-clear->skrifa->gpu-vm-r8->coverage-audit->glyph-mask-batch->guc-rcs]->ui4-shared-font-scene-slot1 compositor=shared-when-multiple rgba_cpu_readback=0 coverage_audit_cpu_readback=1 cpu_frame_copy=0\n",
+        "ui4 cpp-font-rush frame-ready request={} consumer={} rank={} slot={} sequence={} publication={} ticket={} elapsed_ms={} scheduled_ms={} deadline_to_submit_ms={} submit_call_us={} request_build_ms={} font_wait_ms={} pre_service_ms={} clear_ms={} prepare_coverage_ms={} coverage_build_ms={} coverage_audit_ms={} instance_release_ms={} service_ms={} fifo_queued_ahead={} service_queue_at_complete={} completion_to_publish_us={} frame={} producer_buffer={} frame_publish_serial={} window_publish_serial={} glyph_hash=0x{:016X} glyph_ids={} extent={}x{} cadence_ms={} requested_glyphs={} rendered_glyphs={} grid={}x{} font=0 application_plane_mask=0x{:02X} usable_planes={} clear_submits={} coverage_submits={} instance_release_submits={} known_gpu_submits={} walkers={} release={} consumer_in_flight=0 context=kernel-gpgpu-font path=font-service-fifo[gpu-clear->skrifa->gpu-vm-r8->coverage-audit->cpp-igc->guc-font-rcs]->ui4-font-scene->display-plane-direct compositor_jobs=0 rgba_cpu_readback=0 coverage_audit_cpu_readback=1 cpu_frame_copy=0\n",
         preview.request_serial,
         rank,
         rank,
@@ -1903,7 +2036,7 @@ fn poll_cpp_font_rush_frame(preview: &mut ActivePreview) -> Result<(), &'static 
         pending.columns,
         pending.rows,
         topology.plane_mask,
-        topology.consumer_count,
+        topology.plane_count,
         stamped.clear_submits(),
         stamped.coverage_submits(),
         stamped.submits(),
@@ -1925,10 +2058,11 @@ fn queue_due_cpp_font_rush_consumers(
         if !preview_needs_render(preview) {
             continue;
         }
+        let rank = cpp_font_rush_rank(preview)?;
+        let plane_slot = cpp_font_rush_plane_slot(preview)?;
         let Some((due_ticks, scheduled_at)) = take_cpp_font_rush_due_ticks(preview, now) else {
             continue;
         };
-        let plane_slot = active_preview_plane_slot(preview);
         preview.metrics.attempted = preview.metrics.attempted.saturating_add(due_ticks);
         let superseded = due_ticks.saturating_sub(1);
         if superseded != 0 {
@@ -1940,7 +2074,7 @@ fn queue_due_cpp_font_rush_consumers(
                 target: "ui4";
                 "ui4 cpp-font-rush consumer backpressure request={} rank={} slot={} sequence={} due_ticks={} drop=cadence-superseded dropped_intervals={} service_queued={} cadence_ms={} policy=keep-latest-tick+preserve-phase\n",
                 preview.request_serial,
-                cpp_font_rush_rank(preview)?,
+                rank,
                 plane_slot,
                 preview.metrics.attempted,
                 due_ticks,
@@ -1953,7 +2087,7 @@ fn queue_due_cpp_font_rush_consumers(
         let pending = preview
             .font_rush
             .as_ref()
-            .ok_or("font-rush-consumer-state-missing")?
+            .ok_or("font-rush-plane-state-missing")?
             .pending
             .as_ref();
         if let Some(pending) = pending {
@@ -1964,7 +2098,7 @@ fn queue_due_cpp_font_rush_consumers(
                 target: "ui4";
                 "ui4 cpp-font-rush consumer backpressure request={} rank={} slot={} sequence={} due_ticks={} drop=in-flight active_ticket={} active_sequence={} in_flight_ms={} service_queued={} cadence_ms={} next_deadline_ms={}\n",
                 preview.request_serial,
-                cpp_font_rush_rank(preview)?,
+                rank,
                 plane_slot,
                 sequence,
                 due_ticks,
@@ -1990,7 +2124,7 @@ fn queue_cpp_font_rush_frame(
     use crate::r::font_kernel_service::FontKernelError;
 
     let rank = cpp_font_rush_rank(preview)?;
-    let plane_slot = active_preview_plane_slot(preview);
+    let plane_slot = cpp_font_rush_plane_slot(preview)?;
     let lease = match acquire_frame_buffer(preview.frame) {
         Ok(lease) => lease,
         Err(FramePoolError::Busy) => {
@@ -2027,7 +2161,7 @@ fn queue_cpp_font_rush_frame(
         let state = preview
             .font_rush
             .as_mut()
-            .ok_or("font-rush-consumer-state-missing")?;
+            .ok_or("font-rush-plane-state-missing")?;
         match cpp_font_rush_stamp_request(preview.width, preview.height, rank, &mut state.rng) {
             Ok(request) => request,
             Err(_) => {
@@ -2080,7 +2214,7 @@ fn queue_cpp_font_rush_frame(
     let state = preview
         .font_rush
         .as_mut()
-        .ok_or("font-rush-consumer-state-missing")?;
+        .ok_or("font-rush-plane-state-missing")?;
     state.pending = Some(CppFontRushPendingFrame {
         lease,
         completion,
@@ -2160,7 +2294,15 @@ fn cpp_font_rush_rank(preview: &ActivePreview) -> Result<u8, &'static str> {
         .font_rush
         .as_ref()
         .map(|state| state.rank)
-        .ok_or("font-rush-consumer-state-missing")
+        .ok_or("font-rush-plane-state-missing")
+}
+
+fn cpp_font_rush_plane_slot(preview: &ActivePreview) -> Result<u8, &'static str> {
+    preview
+        .font_rush
+        .as_ref()
+        .map(|state| state.plane_slot)
+        .ok_or("font-rush-plane-state-missing")
 }
 
 fn cpp_font_rush_glyph_fingerprint(
@@ -2271,10 +2413,10 @@ fn cpp_font_rush_background(rank: u8, sequence: u64) -> PremultipliedRgba8 {
 }
 
 const fn cpp_font_rush_glyph_count(rank: u8) -> usize {
-    CPP_FONT_RUSH_GLYPHS[if rank < CPP_FONT_RUSH_MAX_CONSUMERS as u8 {
+    CPP_FONT_RUSH_GLYPHS[if rank < CPP_FONT_RUSH_MAX_PLANES as u8 {
         rank as usize
     } else {
-        CPP_FONT_RUSH_MAX_CONSUMERS - 1
+        CPP_FONT_RUSH_MAX_PLANES - 1
     }]
 }
 
@@ -2966,9 +3108,7 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle
         | GpgpuPreviewPreset::CppFont => WindowPlane::Universal(preview_plane_slot(preset) as u8),
-        GpgpuPreviewPreset::CppFontRush => {
-            WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8)
-        }
+        GpgpuPreviewPreset::CppFontRush => WindowPlane::Primary,
         GpgpuPreviewPreset::Lab256 => WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
     }
 }
@@ -2989,7 +3129,7 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "ui4-cpp-resizable-slot1",
         GpgpuPreviewPreset::CppFont => "ui4-font-scene-slot1",
-        GpgpuPreviewPreset::CppFontRush => "ui4-shared-font-scene-slot1",
+        GpgpuPreviewPreset::CppFontRush => "ui4-direct-font-scene-slots0+1+2+3",
         GpgpuPreviewPreset::Static => "ui4-overlay",
         GpgpuPreviewPreset::Static30 => "ui4-font-scene-slots1+2+3",
     }
@@ -3043,7 +3183,7 @@ fn next_poll_ms(preview: &ActivePreview) -> u64 {
     if preview
         .font_rush
         .as_ref()
-        .is_some_and(|state| state.pending.is_some())
+        .is_some_and(|state| state.pending.is_some() || state.scanout_pending.is_some())
     {
         return 1;
     }
@@ -3555,7 +3695,7 @@ const fn compute_preview_index(preset: GpgpuPreviewPreset) -> Option<usize> {
 
 const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
     if matches!(preset, GpgpuPreviewPreset::CppFontRush) {
-        return super::ALPHA_OVERLAY_PLANE_SLOT;
+        return 0;
     }
     if matches!(
         preset,
@@ -3579,7 +3719,12 @@ const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
 fn active_preview_plane_slot(preview: &ActivePreview) -> usize {
     super::window_broker::window_snapshot(PREVIEW_OWNER, preview.window)
         .map(|window| window.plane.slot())
-        .unwrap_or_else(|| preview_plane_slot(preview.config.preset))
+        .unwrap_or_else(|| {
+            preview.font_rush.as_ref().map_or_else(
+                || preview_plane_slot(preview.config.preset),
+                |state| state.plane_slot as usize,
+            )
+        })
 }
 
 fn next_preview_group_poll_ms(previews: &[ActivePreview]) -> u64 {
@@ -3608,8 +3753,9 @@ mod tests {
         FramePlanError, FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig,
         GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH,
         cpp_font_rush_due_tick_count, cpp_font_rush_glyph_count, cpp_font_rush_grid,
-        cpp_font_rush_stamp_request, cpp_font_rush_target_consumer_count, preview_extent,
-        preview_frame_create_error_label, preview_plane_slot, static30_font_stamp_request,
+        cpp_font_rush_plane_slots, cpp_font_rush_stamp_request, cpp_font_rush_target_plane_count,
+        preview_extent, preview_frame_create_error_label, preview_plane_slot,
+        static30_font_stamp_request,
     };
 
     #[test]
@@ -3655,15 +3801,27 @@ mod tests {
     }
 
     #[test]
-    fn cpp_font_rush_adds_one_consumer_every_three_seconds() {
-        assert_eq!(cpp_font_rush_target_consumer_count(0, 4), 1);
-        assert_eq!(cpp_font_rush_target_consumer_count(2_999, 4), 1);
-        assert_eq!(cpp_font_rush_target_consumer_count(3_000, 4), 2);
-        assert_eq!(cpp_font_rush_target_consumer_count(5_999, 4), 2);
-        assert_eq!(cpp_font_rush_target_consumer_count(6_000, 4), 3);
-        assert_eq!(cpp_font_rush_target_consumer_count(9_000, 4), 4);
-        assert_eq!(cpp_font_rush_target_consumer_count(u64::MAX, 2), 2);
-        assert_eq!(cpp_font_rush_target_consumer_count(0, 0), 0);
+    fn cpp_font_rush_enumerates_sparse_application_plane_masks() {
+        assert_eq!(cpp_font_rush_plane_slots(0b0000), ([0, 0, 0, 0], 0));
+        assert_eq!(cpp_font_rush_plane_slots(0b0001), ([0, 0, 0, 0], 1));
+        assert_eq!(cpp_font_rush_plane_slots(0b0011), ([0, 1, 0, 0], 2));
+        assert_eq!(cpp_font_rush_plane_slots(0b0111), ([0, 1, 2, 0], 3));
+        assert_eq!(cpp_font_rush_plane_slots(0b1111), ([0, 1, 2, 3], 4));
+        assert_eq!(cpp_font_rush_plane_slots(0b1101), ([0, 2, 3, 0], 3));
+        assert_eq!(cpp_font_rush_plane_slots(0b1110), ([1, 2, 3, 0], 3));
+        assert_eq!(cpp_font_rush_plane_slots(u8::MAX), ([0, 1, 2, 3], 4));
+    }
+
+    #[test]
+    fn cpp_font_rush_adds_one_capability_bounded_plane_every_three_seconds() {
+        assert_eq!(cpp_font_rush_target_plane_count(0, 4), 1);
+        assert_eq!(cpp_font_rush_target_plane_count(2_999, 4), 1);
+        assert_eq!(cpp_font_rush_target_plane_count(3_000, 4), 2);
+        assert_eq!(cpp_font_rush_target_plane_count(5_999, 4), 2);
+        assert_eq!(cpp_font_rush_target_plane_count(6_000, 4), 3);
+        assert_eq!(cpp_font_rush_target_plane_count(9_000, 4), 4);
+        assert_eq!(cpp_font_rush_target_plane_count(u64::MAX, 2), 2);
+        assert_eq!(cpp_font_rush_target_plane_count(0, 0), 0);
     }
 
     #[test]
@@ -3720,11 +3878,11 @@ mod tests {
     }
 
     #[test]
-    fn cpp_font_rush_consumers_share_slot1() {
+    fn cpp_font_rush_uses_primary_as_its_first_plane() {
         let mode = GpgpuPreviewPreset::CppFontRush;
-        assert_eq!(preview_plane_slot(mode), 1);
-        assert_eq!(mode.buffering_label(), "double-per-consumer");
-        assert_eq!(mode.plane_layout_label(), "slot1-shared");
+        assert_eq!(preview_plane_slot(mode), 0);
+        assert_eq!(mode.buffering_label(), "double-per-plane");
+        assert_eq!(mode.plane_layout_label(), "slots0+1+2+3-direct-capability-bounded");
     }
 
     #[test]

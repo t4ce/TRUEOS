@@ -334,8 +334,8 @@ fn direct_rcs_encode_resolve_tile64_msaa4_2d_batch(
     ok &= direct_rcs_push_state_base_address(
         batch,
         &mut cursor,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        state.gpu_va.batch,
+        state.gpu_va.batch,
         upload.gpu,
     );
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
@@ -354,7 +354,8 @@ fn direct_rcs_encode_resolve_tile64_msaa4_2d_batch(
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
     ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_BATCH_IDD_OFFSET_BYTES as u32);
-    ok &= direct_rcs_push_store_marker(
+    ok &= direct_rcs_push_store_marker_for_state(
+        state,
         batch,
         &mut cursor,
         COPY_RECT_PRE_MARKER_SLOT,
@@ -444,7 +445,8 @@ fn direct_rcs_encode_font_outline_coverage_runs_r8_2d_batch(
     let mut cursor = 0usize;
     let mut ok =
         direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload, state.gpu_va.batch);
-    ok &= direct_rcs_push_store_marker(
+    ok &= direct_rcs_push_store_marker_for_state(
+        state,
         batch,
         &mut cursor,
         COPY_RECT_PRE_MARKER_SLOT,
@@ -640,7 +642,8 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
     let mut cursor = 0usize;
     let mut ok = true;
     ok &= direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload, state.gpu_va.batch);
-    ok &= direct_rcs_push_store_marker(
+    ok &= direct_rcs_push_store_marker_for_state(
+        state,
         batch,
         &mut cursor,
         COPY_RECT_PRE_MARKER_SLOT,
@@ -806,7 +809,8 @@ fn direct_rcs_encode_font_instance_layers_2d_batch(
     let mut cursor = 0usize;
     let mut ok =
         direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload, state.gpu_va.batch);
-    ok &= direct_rcs_push_store_marker(
+    ok &= direct_rcs_push_store_marker_for_state(
+        state,
         batch,
         &mut cursor,
         COPY_RECT_PRE_MARKER_SLOT,
@@ -924,8 +928,8 @@ fn direct_rcs_finish_two_buffer_dispatch_batch(
     ok &= direct_rcs_push_state_base_address(
         batch,
         &mut cursor,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        state.gpu_va.batch,
+        state.gpu_va.batch,
         upload.gpu,
     );
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
@@ -944,7 +948,8 @@ fn direct_rcs_finish_two_buffer_dispatch_batch(
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
     ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_BATCH_IDD_OFFSET_BYTES as u32);
-    ok &= direct_rcs_push_store_marker(
+    ok &= direct_rcs_push_store_marker_for_state(
+        state,
         batch,
         &mut cursor,
         COPY_RECT_PRE_MARKER_SLOT,

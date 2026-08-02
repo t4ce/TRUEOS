@@ -52,8 +52,8 @@ fn direct_rcs_encode_fill_rect_2d_batch(
     ok &= direct_rcs_push_state_base_address(
         batch,
         &mut cursor,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        state.gpu_va.batch,
+        state.gpu_va.batch,
         upload.gpu,
     );
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
@@ -72,7 +72,8 @@ fn direct_rcs_encode_fill_rect_2d_batch(
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, CLEAR_RECT_IDD_BYTES as u32);
     ok &= direct_rcs_push(batch, &mut cursor, CLEAR_RECT_IDD_OFFSET_BYTES as u32);
-    ok &= direct_rcs_push_store_marker(
+    ok &= direct_rcs_push_store_marker_for_state(
+        state,
         batch,
         &mut cursor,
         CLEAR_RECT_PRE_MARKER_SLOT,
@@ -90,7 +91,8 @@ fn direct_rcs_encode_fill_rect_2d_batch(
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
-    ok &= direct_rcs_push_store_marker(
+    ok &= direct_rcs_push_store_marker_for_state(
+        state,
         batch,
         &mut cursor,
         CLEAR_RECT_POST_MARKER_SLOT,

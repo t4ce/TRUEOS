@@ -91,6 +91,16 @@ fn direct_rcs_push_store_marker(
     direct_rcs_push_store_marker_at(batch, cursor, DIRECT_RCS_GPU_VA_RESULT_BASE, slot, value)
 }
 
+fn direct_rcs_push_store_marker_for_state(
+    state: DirectRcsState,
+    batch: &mut [u32],
+    cursor: &mut usize,
+    slot: usize,
+    value: u32,
+) -> bool {
+    direct_rcs_push_store_marker_at(batch, cursor, state.gpu_va.result, slot, value)
+}
+
 fn direct_rcs_push_store_marker_at(
     batch: &mut [u32],
     cursor: &mut usize,
@@ -279,6 +289,7 @@ fn direct_rcs_push_sba_size(
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum DirectRcsLane {
     SystemService,
+    Font,
     Execution,
     Lfm25,
 }
@@ -287,6 +298,7 @@ impl DirectRcsLane {
     const fn name(self) -> &'static str {
         match self {
             Self::SystemService => "system-service",
+            Self::Font => "font",
             Self::Execution => "execution",
             Self::Lfm25 => "lfm25",
         }
@@ -350,6 +362,20 @@ fn direct_rcs_submit_batch_state(
     direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::SystemService)
 }
 
+fn font_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
+    matches!(
+        font_rcs_submit_batch_state(dev, state),
+        DirectRcsSubmissionState::Submitted
+    )
+}
+
+fn font_rcs_submit_batch_state(
+    dev: super::Dev,
+    state: DirectRcsState,
+) -> DirectRcsSubmissionState {
+    direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::Font)
+}
+
 fn execution_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
     matches!(
         direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::Execution),
@@ -378,6 +404,11 @@ fn direct_rcs_submit_batch_on_lane_state(
             &DIRECT_RCS_CONTEXT_QUARANTINED,
             &DIRECT_RCS_SUBMIT_RUNTIME,
             crate::gpu::vgpu::KernelClient::GpgpuSystem,
+        ),
+        DirectRcsLane::Font => (
+            &FONT_RCS_CONTEXT_QUARANTINED,
+            &FONT_RCS_SUBMIT_RUNTIME,
+            crate::gpu::vgpu::KernelClient::GpgpuFont,
         ),
         DirectRcsLane::Execution => (
             &EXECUTION_RCS_CONTEXT_QUARANTINED,
@@ -433,6 +464,10 @@ pub(crate) fn direct_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&DIRECT_RCS_CONTEXT_QUARANTINED)
 }
 
+pub(crate) fn font_rcs_context_is_quarantined() -> bool {
+    !direct_rcs_state_reuse_permitted(&FONT_RCS_CONTEXT_QUARANTINED)
+}
+
 fn execution_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&EXECUTION_RCS_CONTEXT_QUARANTINED)
 }
@@ -447,6 +482,10 @@ fn ui4_compositor_rcs_context_is_quarantined() -> bool {
 
 fn quarantine_execution_rcs_context(reason: &'static str) {
     quarantine_direct_rcs_lane(DirectRcsLane::Execution, reason);
+}
+
+fn quarantine_font_rcs_context(reason: &'static str) {
+    quarantine_direct_rcs_lane(DirectRcsLane::Font, reason);
 }
 
 fn quarantine_lfm25_rcs_context(reason: &'static str) {
@@ -475,6 +514,9 @@ fn quarantine_direct_rcs_lane(lane: DirectRcsLane, reason: &'static str) {
     let (quarantined, client) = match lane {
         DirectRcsLane::SystemService => {
             (&DIRECT_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::GpgpuSystem)
+        }
+        DirectRcsLane::Font => {
+            (&FONT_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::GpgpuFont)
         }
         DirectRcsLane::Execution => {
             (&EXECUTION_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::GpgpuExecution)
@@ -673,6 +715,7 @@ fn direct_rcs_submit_batch_with_runtime_inner(
 fn direct_rcs_submit_runtime(lane: DirectRcsLane) -> &'static Mutex<DirectRcsSubmitRuntime> {
     match lane {
         DirectRcsLane::SystemService => &DIRECT_RCS_SUBMIT_RUNTIME,
+        DirectRcsLane::Font => &FONT_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Execution => &EXECUTION_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Lfm25 => &LFM25_RCS_SUBMIT_RUNTIME,
     }
@@ -827,6 +870,21 @@ fn direct_rcs_poll_result_slot_timeout_ms(
     )
 }
 
+fn font_rcs_poll_result_slot_timeout_ms(
+    state: DirectRcsState,
+    slot: usize,
+    expected: u32,
+    timeout_ms: u64,
+) -> u32 {
+    direct_rcs_poll_result_slot_timeout_ms_on_lane(
+        state,
+        slot,
+        expected,
+        timeout_ms,
+        DirectRcsLane::Font,
+    )
+}
+
 fn execution_rcs_poll_result_slot_timeout_ms(
     state: DirectRcsState,
     slot: usize,
@@ -899,6 +957,7 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
     let deadline = started.saturating_add(direct_rcs_ticks_from_ms(timeout_ms));
     let probe_logged = match lane {
         DirectRcsLane::SystemService => &DIRECT_RCS_TIMEOUT_POLL_PROBE_LOGGED,
+        DirectRcsLane::Font => &FONT_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Execution => &EXECUTION_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Lfm25 => &LFM25_RCS_TIMEOUT_POLL_PROBE_LOGGED,
     };

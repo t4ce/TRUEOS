@@ -37,6 +37,7 @@ static PARTICLE_CRAFT_GPU_VA_CURSOR: AtomicU64 =
     AtomicU64::new(DIRECT_RCS_GPU_VA_PARTICLE_CRAFT_BASE);
 static PARTICLE_CRAFT_GPU_VA_FREE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
+static FONT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static EXECUTION_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static LFM25_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static UI4_COMPOSITOR_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
@@ -46,6 +47,7 @@ static SCENE_AABB_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 // can never trigger a second installation or repair a partial mapping in
 // place. Failed lanes are quarantined by `direct_rcs_map_state`.
 static DIRECT_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
+static FONT_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 static EXECUTION_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 static LFM25_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 static UI4_COMPOSITOR_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
@@ -63,6 +65,11 @@ static RECT_WORKLIST_DESC_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 
 static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static DIRECT_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
+// Font Engine is an independently scheduled GuC client. This lock protects
+// only its own encoder state; it never serializes Helio, Spirit, UI4, or the
+// general system-service lane.
+static FONT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
+static FONT_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
 // The execution lane permits one accepted program to outlive its issuer turn.
 // Its tag, lock, state, batch, result page, PPGTT, and quarantine state are all
 // independent from system-service direct-RCS work.
@@ -76,6 +83,8 @@ static DIRECT_RCS_SCANOUT_PPGTT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_PPGTT_POLICY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
 static UI4_VIDEO_FRAME_SUBMIT_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 static DIRECT_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
+    Mutex::new(DirectRcsSubmitRuntime::new());
+static FONT_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
     Mutex::new(DirectRcsSubmitRuntime::new());
 static EXECUTION_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
     Mutex::new(DirectRcsSubmitRuntime::new());
@@ -105,5 +114,6 @@ static SPRITE_QUAD_WORKLIST_SUBMIT_FAIL_LOGS: AtomicU32 = AtomicU32::new(0);
 
 static DIRECT_RCS_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(0);
 static DIRECT_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);
+static FONT_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);
 static EXECUTION_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);
 static LFM25_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);
