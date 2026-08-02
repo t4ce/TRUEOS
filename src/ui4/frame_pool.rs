@@ -250,16 +250,6 @@ pub(super) fn active_frame_count() -> usize {
 }
 
 pub(crate) fn create_frame(spec: FrameSpec) -> Result<FrameHandle, FramePoolError> {
-    let _admission = super::lock_ui4_resource_creation().map_err(|()| FramePoolError::Busy)?;
-    create_frame_admitted(spec)
-}
-
-/// Create a frame while the caller owns UI4's exclusive resource admission.
-/// The borrow keeps that reservation alive for the complete allocation.
-pub(super) fn create_frame_with_exclusive_admission(
-    spec: FrameSpec,
-    _admission: &super::Ui4ExclusiveResourceAdmission,
-) -> Result<FrameHandle, FramePoolError> {
     create_frame_admitted(spec)
 }
 

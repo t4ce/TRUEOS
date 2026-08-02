@@ -489,6 +489,9 @@ struct GpuFontRasterQuality {
 pub(crate) struct GpuFontCoverageMask {
     storage: crate::intel::gpgpu::GpgpuOwnedMask8Surface,
     origin_px: [i32; 2],
+    /// Pairwise-disjoint local regions which contain analytical coverage.
+    /// Identity stamps walk these regions instead of the sparse union mask.
+    stamp_rects: Vec<crate::intel::gpgpu::GpgpuRect>,
     coverage_build_ms: u64,
     coverage_audit_ms: u64,
     coverage_submits: usize,
@@ -518,6 +521,10 @@ impl GpuFontCoverageMask {
     pub(crate) fn full_rect(&self) -> crate::intel::gpgpu::GpgpuRect {
         let surface = self.surface();
         crate::intel::gpgpu::GpgpuRect::new(0, 0, surface.width, surface.height)
+    }
+
+    fn stamp_rects(&self) -> &[crate::intel::gpgpu::GpgpuRect] {
+        self.stamp_rects.as_slice()
     }
 }
 
@@ -646,27 +653,33 @@ impl GpuFontRetainedScene {
             .map_or(0, GpuFontCoverageMask::coverage_submits)
     }
 
-    /// Restamp without affine transformation through the stable mask batch.
-    pub(crate) fn restamp_identity(
+    fn restamp_mask_regions(
         &self,
+        coverage: &GpuFontCoverageMask,
         destination: crate::intel::gpgpu::GpgpuRgba8Surface,
         translation_px: [i32; 2],
         foreground: GpuFontRgba,
         direct_scanout: bool,
     ) -> Result<GpuFontRetainedDrawResult, GpuFontRetainedSceneError> {
-        let coverage = self.coverage()?;
         let origin = coverage.origin_px();
-        let layer = crate::intel::gpgpu::GpgpuGlyphMaskLayer {
-            mask: coverage.surface(),
-            mask_rect: coverage.full_rect(),
-            dst_xy: crate::intel::gpgpu::GpgpuPoint::new(
-                origin[0].saturating_add(translation_px[0]),
-                origin[1].saturating_add(translation_px[1]),
-            ),
-            color_rgba: gpu_font_rgba_u32(foreground),
-        };
+        let mut layers = Vec::with_capacity(coverage.stamp_rects().len());
+        for &mask_rect in coverage.stamp_rects() {
+            layers.push(crate::intel::gpgpu::GpgpuGlyphMaskLayer {
+                mask: coverage.surface(),
+                mask_rect,
+                dst_xy: crate::intel::gpgpu::GpgpuPoint::new(
+                    origin[0]
+                        .saturating_add(mask_rect.x)
+                        .saturating_add(translation_px[0]),
+                    origin[1]
+                        .saturating_add(mask_rect.y)
+                        .saturating_add(translation_px[1]),
+                ),
+                color_rgba: gpu_font_rgba_u32(foreground),
+            });
+        }
         let rendered = crate::intel::gpgpu::glyph_mask_layers_rgba8_2d_mode(
-            core::slice::from_ref(&layer),
+            layers.as_slice(),
             destination,
             direct_scanout,
         );
@@ -681,12 +694,31 @@ impl GpuFontRetainedScene {
                 "font-retained-identity-restamp-unavailable",
             ));
         }
-        let release = retained_font_scanout_release(destination, direct_scanout)?;
+        let release = if direct_scanout {
+            match rendered.release {
+                Some(release) => Some(release),
+                None => retained_font_scanout_release(destination, true)?,
+            }
+        } else {
+            None
+        };
         Ok(GpuFontRetainedDrawResult {
-            submits: rendered.submits + usize::from(direct_scanout),
+            submits: rendered.submits + usize::from(direct_scanout && rendered.release.is_none()),
             active_walkers: rendered.active_walkers,
             release,
         })
+    }
+
+    /// Restamp without affine transformation through the stable mask batch.
+    pub(crate) fn restamp_identity(
+        &self,
+        destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+        translation_px: [i32; 2],
+        foreground: GpuFontRgba,
+        direct_scanout: bool,
+    ) -> Result<GpuFontRetainedDrawResult, GpuFontRetainedSceneError> {
+        let coverage = self.coverage()?;
+        self.restamp_mask_regions(coverage, destination, translation_px, foreground, direct_scanout)
     }
 
     /// Restamp through the C++/IGC font-instance kernel.
@@ -704,6 +736,15 @@ impl GpuFontRetainedScene {
             return Err(GpuFontRetainedSceneError::Unavailable("font-retained-style-invalid"));
         }
         let coverage = self.coverage()?;
+        if let Some(translation_px) = retained_font_identity_translation(style) {
+            return self.restamp_mask_regions(
+                coverage,
+                destination,
+                translation_px,
+                style.foreground,
+                direct_scanout,
+            );
+        }
         let state = self
             .instance_state
             .as_ref()
@@ -764,9 +805,16 @@ impl GpuFontRetainedScene {
                 "font-retained-instance-restamp-unavailable",
             ));
         }
-        let release = retained_font_scanout_release(destination, direct_scanout)?;
+        let release = if direct_scanout {
+            match rendered.release {
+                Some(release) => Some(release),
+                None => retained_font_scanout_release(destination, true)?,
+            }
+        } else {
+            None
+        };
         Ok(GpuFontRetainedDrawResult {
-            submits: rendered.submits + usize::from(direct_scanout),
+            submits: rendered.submits + usize::from(direct_scanout && rendered.release.is_none()),
             active_walkers: rendered.active_walkers,
             release,
         })
@@ -810,6 +858,31 @@ fn retained_font_style_valid(style: GpuFontRetainedStyle) -> bool {
         && style.scale > 0.0
         && (0.0..=1.0).contains(&style.opacity)
         && (!style.motion.is_active() || style.motion.period_seconds > 0.0)
+}
+
+/// Return the integer translation for styles whose C++ instance result is
+/// exactly the same pixel-for-pixel mask-over operation as the smaller glyph
+/// batch. Keeping this gate exact avoids silently dropping affine/background
+/// semantics when future retained-scene callers use them.
+fn retained_font_identity_translation(style: GpuFontRetainedStyle) -> Option<[i32; 2]> {
+    if style.scale != 1.0
+        || style.rotation_radians != 0.0
+        || style.opacity != 1.0
+        || style.background.a != 0
+        || style.motion.is_active()
+    {
+        return None;
+    }
+
+    let mut translation = [0i32; 2];
+    for (index, value) in style.translation_px.into_iter().enumerate() {
+        let rounded = libm::roundf(value);
+        if value != rounded || rounded < i32::MIN as f32 || rounded >= 2_147_483_648.0 {
+            return None;
+        }
+        translation[index] = rounded as i32;
+    }
+    Some(translation)
 }
 
 fn retained_font_dispatch_rect(
@@ -887,6 +960,88 @@ struct PreparedGpuFontCoverageEntry {
     ops: Vec<[u32; 8]>,
     rect: (i32, i32, i32, i32),
     optical_bias_px: f32,
+}
+
+fn local_coverage_rect(
+    rect: (i32, i32, i32, i32),
+    union: (i32, i32, i32, i32),
+) -> Result<crate::intel::gpgpu::GpgpuRect, &'static str> {
+    let x = i32::try_from(i64::from(rect.0) - i64::from(union.0))
+        .map_err(|_| "font-coverage-rect-range")?;
+    let y = i32::try_from(i64::from(rect.1) - i64::from(union.1))
+        .map_err(|_| "font-coverage-rect-range")?;
+    let width = u32::try_from(i64::from(rect.2) - i64::from(rect.0))
+        .map_err(|_| "font-coverage-rect-range")?;
+    let height = u32::try_from(i64::from(rect.3) - i64::from(rect.1))
+        .map_err(|_| "font-coverage-rect-range")?;
+    if x < 0 || y < 0 || width == 0 || height == 0 {
+        return Err("font-coverage-rect-range");
+    }
+    Ok(crate::intel::gpgpu::GpgpuRect::new(x, y, width, height))
+}
+
+fn coverage_rects_overlap(
+    left: crate::intel::gpgpu::GpgpuRect,
+    right: crate::intel::gpgpu::GpgpuRect,
+) -> bool {
+    let left_right = i64::from(left.x) + i64::from(left.width);
+    let left_bottom = i64::from(left.y) + i64::from(left.height);
+    let right_right = i64::from(right.x) + i64::from(right.width);
+    let right_bottom = i64::from(right.y) + i64::from(right.height);
+    i64::from(left.x) < right_right
+        && i64::from(right.x) < left_right
+        && i64::from(left.y) < right_bottom
+        && i64::from(right.y) < left_bottom
+}
+
+fn coverage_rect_union(
+    left: crate::intel::gpgpu::GpgpuRect,
+    right: crate::intel::gpgpu::GpgpuRect,
+) -> crate::intel::gpgpu::GpgpuRect {
+    let x = left.x.min(right.x);
+    let y = left.y.min(right.y);
+    let right_edge = (i64::from(left.x) + i64::from(left.width))
+        .max(i64::from(right.x) + i64::from(right.width));
+    let bottom_edge = (i64::from(left.y) + i64::from(left.height))
+        .max(i64::from(right.y) + i64::from(right.height));
+    crate::intel::gpgpu::GpgpuRect::new(
+        x,
+        y,
+        u32::try_from(right_edge - i64::from(x)).unwrap_or(u32::MAX),
+        u32::try_from(bottom_edge - i64::from(y)).unwrap_or(u32::MAX),
+    )
+}
+
+/// Collapse intersecting conservative glyph rectangles into disjoint groups.
+/// Each final pixel is then source-over blended exactly once from the shared
+/// max-combined mask, while distant glyphs avoid the empty union span.
+fn coalesced_coverage_stamp_rects(
+    prepared: &[PreparedGpuFontCoverageEntry],
+    union: (i32, i32, i32, i32),
+    full_rect: crate::intel::gpgpu::GpgpuRect,
+) -> Result<Vec<crate::intel::gpgpu::GpgpuRect>, &'static str> {
+    let mut rects = Vec::with_capacity(prepared.len());
+    for entry in prepared {
+        let mut candidate = local_coverage_rect(entry.rect, union)?;
+        let mut index = 0usize;
+        while index < rects.len() {
+            if coverage_rects_overlap(candidate, rects[index]) {
+                candidate = coverage_rect_union(candidate, rects.swap_remove(index));
+                index = 0;
+            } else {
+                index += 1;
+            }
+        }
+        rects.push(candidate);
+    }
+    if rects.is_empty() {
+        return Err("font-coverage-empty");
+    }
+    if rects.len() > crate::intel::gpgpu::GLYPH_MASK_BATCH_MAX_LAYERS {
+        rects.clear();
+        rects.push(full_rect);
+    }
+    Ok(rects)
 }
 
 const ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS: u32 = 8;
@@ -3584,29 +3739,62 @@ fn create_gpu_font_coverage_mask_at_raster(
     }
     let storage = crate::intel::gpgpu::allocate_font_coverage_mask(width, height)
         .ok_or("font-coverage-mask-alloc")?;
+    let full_rect = crate::intel::gpgpu::GpgpuRect::new(0, 0, width, height);
+    let stamp_rects = coalesced_coverage_stamp_rects(&prepared, union, full_rect)?;
     for entry in &mut prepared {
         translate_coverage_ops(entry.ops.as_mut_slice(), -(union.0 as f32), -(union.1 as f32));
-        let rect = crate::intel::gpgpu::GpgpuRect::new(
-            entry.rect.0 - union.0,
-            entry.rect.1 - union.1,
-            u32::try_from(entry.rect.2 - entry.rect.0).map_err(|_| "font-coverage-rect-range")?,
-            u32::try_from(entry.rect.3 - entry.rect.1).map_err(|_| "font-coverage-rect-range")?,
-        );
-        match crate::intel::gpgpu::font_outline_coverage_r8(
-            &storage,
-            entry.ops.as_slice(),
-            rect,
-            ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS,
-            entry.optical_bias_px,
-        ) {
-            crate::intel::gpgpu::GpgpuDispatchRetirement::Complete => {}
+    }
+
+    let mut coverage_submits = 0usize;
+    for chunk in prepared.chunks(crate::intel::gpgpu::FONT_OUTLINE_COVERAGE_BATCH_MAX_RUNS) {
+        let mut runs = Vec::with_capacity(chunk.len());
+        for entry in chunk {
+            runs.push(crate::intel::gpgpu::GpgpuFontOutlineCoverageRun {
+                outline_ops: entry.ops.as_slice(),
+                rect: local_coverage_rect(entry.rect, union)?,
+                subdivisions: ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS,
+                optical_bias_px: entry.optical_bias_px,
+            });
+        }
+        let mut retirement =
+            crate::intel::gpgpu::font_outline_coverage_runs_r8(&storage, runs.as_slice());
+        if retirement == crate::intel::gpgpu::GpgpuDispatchRetirement::NotSubmitted
+            && runs.len() > 1
+        {
+            // Preserve the generic large-scene behavior if one packed chunk
+            // exceeds the fixed 4 MiB ops window. No hardware submission was
+            // crossed, so falling back to the proven one-run path is safe.
+            for run in &runs {
+                retirement = crate::intel::gpgpu::font_outline_coverage_r8(
+                    &storage,
+                    run.outline_ops,
+                    run.rect,
+                    run.subdivisions,
+                    run.optical_bias_px,
+                );
+                match retirement {
+                    crate::intel::gpgpu::GpgpuDispatchRetirement::Complete => {
+                        coverage_submits = coverage_submits.saturating_add(1);
+                    }
+                    crate::intel::gpgpu::GpgpuDispatchRetirement::NotSubmitted => {
+                        return Err("font-coverage-dispatch");
+                    }
+                    crate::intel::gpgpu::GpgpuDispatchRetirement::SubmittedIncomplete => {
+                        core::mem::forget(storage);
+                        return Err("font-coverage-retirement-uncertain");
+                    }
+                }
+            }
+            continue;
+        }
+        match retirement {
+            crate::intel::gpgpu::GpgpuDispatchRetirement::Complete => {
+                coverage_submits = coverage_submits.saturating_add(1);
+            }
             crate::intel::gpgpu::GpgpuDispatchRetirement::NotSubmitted => {
                 return Err("font-coverage-dispatch");
             }
             crate::intel::gpgpu::GpgpuDispatchRetirement::SubmittedIncomplete => {
-                // Hardware can still reference this mask. Its unique PPGTT VA
-                // and DMA pages stay quarantined together with the direct-RCS
-                // context until reboot.
                 core::mem::forget(storage);
                 return Err("font-coverage-retirement-uncertain");
             }
@@ -3674,9 +3862,10 @@ fn create_gpu_font_coverage_mask_at_raster(
     Ok(GpuFontCoverageMask {
         storage,
         origin_px: [union.0, union.1],
+        stamp_rects,
         coverage_build_ms,
         coverage_audit_ms,
-        coverage_submits: prepared.len(),
+        coverage_submits,
     })
 }
 
@@ -4459,11 +4648,68 @@ pub(crate) fn rebuild_default_font(reason: &str) -> Result<GpuFontWarmResult, &'
 #[cfg(test)]
 mod tests {
     use super::{
-        GpuFontJobEntry, GpuFontJobPositioning, GpuFontRasterQuality, GpuFontTextRequest,
+        GpuFontJobEntry, GpuFontJobPositioning, GpuFontRasterQuality, GpuFontRetainedStyle,
+        GpuFontRgba, GpuFontTextRequest, PreparedGpuFontCoverageEntry,
         SMALL_FONT_HINT_MAX_RASTER_PX, SMALL_FONT_HINT_MIN_RASTER_PX,
-        gpu_font_entries_use_analytical_coverage, small_font_hint_ppem, small_font_optical_bias_px,
-        transform_outline_to_raster,
+        coalesced_coverage_stamp_rects, coverage_rects_overlap,
+        gpu_font_entries_use_analytical_coverage, retained_font_identity_translation,
+        small_font_hint_ppem, small_font_optical_bias_px, transform_outline_to_raster,
     };
+
+    fn prepared_rect(rect: (i32, i32, i32, i32)) -> PreparedGpuFontCoverageEntry {
+        PreparedGpuFontCoverageEntry {
+            ops: Vec::new(),
+            rect,
+            optical_bias_px: 0.0,
+        }
+    }
+
+    #[test]
+    fn coverage_stamp_rects_merge_overlaps_without_joining_touching_glyphs() {
+        let prepared = [
+            prepared_rect((10, 20, 20, 30)),
+            prepared_rect((20, 20, 30, 30)),
+            prepared_rect((29, 20, 40, 30)),
+            prepared_rect((60, 25, 70, 35)),
+        ];
+        let full = crate::intel::gpgpu::GpgpuRect::new(0, 0, 60, 15);
+        let rects = coalesced_coverage_stamp_rects(&prepared, (10, 20, 70, 35), full)
+            .expect("valid local coverage rectangles");
+
+        assert_eq!(rects.len(), 3);
+        assert!(rects.contains(&crate::intel::gpgpu::GpgpuRect::new(0, 0, 10, 10)));
+        assert!(rects.contains(&crate::intel::gpgpu::GpgpuRect::new(10, 0, 20, 10)));
+        assert!(rects.contains(&crate::intel::gpgpu::GpgpuRect::new(50, 5, 10, 10)));
+        for (index, &left) in rects.iter().enumerate() {
+            for &right in &rects[index + 1..] {
+                assert!(!coverage_rects_overlap(left, right));
+            }
+        }
+    }
+
+    #[test]
+    fn identity_stamp_gate_preserves_instance_only_semantics() {
+        let mut style = GpuFontRetainedStyle::identity(GpuFontRgba::new(1, 2, 3, 200));
+        style.translation_px = [7.0, -3.0];
+        style.background = GpuFontRgba::new(12, 34, 56, 0);
+        assert_eq!(retained_font_identity_translation(style), Some([7, -3]));
+
+        let mut changed = style;
+        changed.translation_px[0] = 7.25;
+        assert_eq!(retained_font_identity_translation(changed), None);
+        changed = style;
+        changed.background.a = 1;
+        assert_eq!(retained_font_identity_translation(changed), None);
+        changed = style;
+        changed.opacity = 0.99;
+        assert_eq!(retained_font_identity_translation(changed), None);
+        changed = style;
+        changed.rotation_radians = 0.01;
+        assert_eq!(retained_font_identity_translation(changed), None);
+        changed = style;
+        changed.motion.translation_amplitude_px[0] = 1.0;
+        assert_eq!(retained_font_identity_translation(changed), None);
+    }
 
     #[test]
     fn small_font_hint_policy_uses_final_raster_ppem() {

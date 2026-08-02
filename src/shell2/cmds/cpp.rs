@@ -385,7 +385,7 @@ fn print_list(io: &'static dyn ShellBackend2) {
     );
     print_shell_line(
         io,
-        "cpp font rush: exclusive fullscreen FontKernel multi-consumer probe; adds one hardware-backed UI4 plane every 3 seconds, rerolls font=0 Unicode glyphs independently every second, and stops with \"cpp font rush stop\"",
+        "cpp font rush: FontKernel multi-consumer probe; adds one independent consumer every 3 seconds on shared UI4 slot 1, rerolls font=0 Unicode glyphs independently every second, and stops with \"cpp font rush stop\"",
     );
     print_shell_line(
         io,
@@ -490,7 +490,7 @@ fn font_rush_status_detail(
     if active == 0 {
         detail.push_str("none");
     }
-    let _ = write!(detail, " rush_active_planes={active}");
+    let _ = write!(detail, " rush_active_consumers={active}");
     detail
 }
 
@@ -1265,7 +1265,7 @@ fn queue_font_service_rush(io: &'static dyn ShellBackend2) {
         Ok(serial) => print_shell_line(
             io,
             alloc::format!(
-                "cpp font rush: queued=1 request={} font=0 cadence_ms=1000 slot_add_ms=3000 glyph_layout=1+2+4+16 planes=ui4-display-capability-bounded consumers=independent-per-plane consumer_pending_limit=1 service_model=fifo-32+one-global-in-flight per_plane_batch=single-instance path=gpu-clear->skrifa->gpu-vm-r8->coverage-audit->cpp-igc->guc-rcs->ui4-rgba8->display-plane-direct compositor_jobs=0 rgba_cpu_readback=0 coverage_audit_cpu_readback=1 duration=until-stopped stop=\"cpp font rush stop\"",
+                "cpp font rush: queued=1 request={} font=0 cadence_ms=1000 consumer_add_ms=3000 glyph_layout=1+2+4+16 consumers=independent-shared-slot1 consumer_pending_limit=1 service_model=fifo-32+one-global-in-flight per_consumer_batch=clear+batched-coverage+batched-region-stamp path=gpu-clear->skrifa->gpu-vm-r8->coverage-audit->guc-rcs->ui4-shared-font-scene rgba_cpu_readback=0 coverage_audit_cpu_readback=1 duration=until-stopped stop=\"cpp font rush stop\"",
                 serial,
             )
             .as_str(),
@@ -1547,18 +1547,18 @@ mod tests {
     }
 
     #[test]
-    fn font_rush_status_reports_every_active_plane_member() {
+    fn font_rush_status_reports_every_shared_slot_consumer() {
         let metrics = crate::ui4::GpgpuPreviewMetrics::default();
         let members = [
-            (0, Some(10), Some(20), metrics),
+            (1, Some(10), Some(20), metrics),
             (1, Some(11), Some(21), metrics),
-            (2, Some(12), Some(22), metrics),
-            (3, Some(13), Some(23), metrics),
+            (1, Some(12), Some(22), metrics),
+            (1, Some(13), Some(23), metrics),
         ];
 
         assert_eq!(
             font_rush_status_detail(members),
-            " rush_slots=0:frame10:window20:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,1:frame11:window21:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,2:frame12:window22:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,3:frame13:window23:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0 rush_active_planes=4",
+            " rush_slots=1:frame10:window20:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,1:frame11:window21:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,1:frame12:window22:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,1:frame13:window23:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0 rush_active_consumers=4",
         );
     }
 

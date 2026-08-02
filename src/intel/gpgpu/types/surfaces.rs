@@ -659,6 +659,9 @@ pub(crate) struct GpgpuFontInstanceBatchResult {
     pub(crate) requested_layers: usize,
     pub(crate) active_walkers: usize,
     pub(crate) submits: usize,
+    /// Exact destination ownership minted from the final cache-draining
+    /// completion packet when this batch targets direct scanout.
+    pub(crate) release: Option<GpgpuRgba8ReleaseFence>,
 }
 
 impl GpgpuMask8Surface {
@@ -729,6 +732,9 @@ pub(crate) struct GpgpuGlyphMaskBatchResult {
     pub(crate) requested_layers: usize,
     pub(crate) active_walkers: usize,
     pub(crate) submits: usize,
+    /// Exact destination ownership minted from the final cache-draining
+    /// completion packet when this batch targets direct scanout.
+    pub(crate) release: Option<GpgpuRgba8ReleaseFence>,
 }
 
 #[derive(Copy, Clone, Debug, Default)]

@@ -332,6 +332,12 @@ struct FontOutlineCoverageR8Params {
     optical_bias_px: f32,
 }
 
+#[derive(Copy, Clone, Debug)]
+struct FontOutlineCoverageR8BatchRun {
+    params: FontOutlineCoverageR8Params,
+    ops_bytes: usize,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct FillRectRgba8Params {

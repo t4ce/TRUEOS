@@ -265,6 +265,17 @@ pub(crate) enum GpgpuDispatchRetirement {
     SubmittedIncomplete,
 }
 
+/// One independently bounded analytical-outline walker. All runs in one
+/// call share the destination mask but retain their own stateful ops binding,
+/// payload, rectangle, and optical-bias policy.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuFontOutlineCoverageRun<'a> {
+    pub(crate) outline_ops: &'a [[u32; 8]],
+    pub(crate) rect: GpgpuRect,
+    pub(crate) subdivisions: u32,
+    pub(crate) optical_bias_px: f32,
+}
+
 /// Add one positioned Skrifa outline stream into a persistent R8 mask.
 /// Existing coverage is retained with `max`, allowing bold duplicate runs and
 /// multiple glyphs to share one color-layer mask without CPU mask blending.
@@ -275,61 +286,112 @@ pub(crate) fn font_outline_coverage_r8(
     subdivisions: u32,
     optical_bias_px: f32,
 ) -> GpgpuDispatchRetirement {
+    font_outline_coverage_runs_r8(
+        mask,
+        core::slice::from_ref(&GpgpuFontOutlineCoverageRun {
+            outline_ops,
+            rect,
+            subdivisions,
+            optical_bias_px,
+        }),
+    )
+}
+
+/// Submit several independent outline walkers as one GuC-owned RCS batch.
+///
+/// Each stateful ops binding receives a page-aligned slice of one combined DMA
+/// allocation. The allocation stays live until the batch's single final
+/// cache-draining completion marker retires.
+pub(crate) fn font_outline_coverage_runs_r8(
+    mask: &GpgpuOwnedMask8Surface,
+    runs: &[GpgpuFontOutlineCoverageRun<'_>],
+) -> GpgpuDispatchRetirement {
     let surface = mask.surface();
-    if outline_ops.is_empty()
-        || outline_ops.len() > u32::MAX as usize
-        || rect.x < 0
-        || rect.y < 0
-        || !rect_is_inside_mask(surface, rect)
-        || !(1..=16).contains(&subdivisions)
-        || !optical_bias_px.is_finite()
-        || !(0.0..=0.35).contains(&optical_bias_px)
+    if runs.is_empty() || runs.len() > FONT_OUTLINE_COVERAGE_BATCH_MAX_RUNS
     {
         return GpgpuDispatchRetirement::NotSubmitted;
     }
-    let input_bytes = match outline_ops
-        .len()
-        .checked_mul(core::mem::size_of::<[u32; 8]>())
-    {
-        Some(bytes) => bytes,
-        None => return GpgpuDispatchRetirement::NotSubmitted,
-    };
-    let mapped_bytes = match align_up(input_bytes, super::WARM_ALIGN) {
-        Some(bytes) => bytes,
-        None => return GpgpuDispatchRetirement::NotSubmitted,
-    };
-    if mapped_bytes > DIRECT_RCS_FONT_COVERAGE_OPS_WINDOW_BYTES {
-        return GpgpuDispatchRetirement::NotSubmitted;
+
+    let mut batch_runs = Vec::with_capacity(runs.len());
+    let mut mapped_bytes = 0usize;
+    for run in runs {
+        if run.outline_ops.is_empty()
+            || run.outline_ops.len() > u32::MAX as usize
+            || run.rect.x < 0
+            || run.rect.y < 0
+            || !rect_is_inside_mask(surface, run.rect)
+            || !(1..=16).contains(&run.subdivisions)
+            || !run.optical_bias_px.is_finite()
+            || !(0.0..=0.35).contains(&run.optical_bias_px)
+        {
+            return GpgpuDispatchRetirement::NotSubmitted;
+        }
+        let Some(input_bytes) = run
+            .outline_ops
+            .len()
+            .checked_mul(core::mem::size_of::<[u32; 8]>())
+        else {
+            return GpgpuDispatchRetirement::NotSubmitted;
+        };
+        let Some(slice_bytes) = align_up(input_bytes, super::WARM_ALIGN) else {
+            return GpgpuDispatchRetirement::NotSubmitted;
+        };
+        let Some(next_mapped_bytes) = mapped_bytes.checked_add(slice_bytes) else {
+            return GpgpuDispatchRetirement::NotSubmitted;
+        };
+        if next_mapped_bytes > DIRECT_RCS_FONT_COVERAGE_OPS_WINDOW_BYTES {
+            return GpgpuDispatchRetirement::NotSubmitted;
+        }
+        batch_runs.push(FontOutlineCoverageR8BatchRun {
+            params: FontOutlineCoverageR8Params {
+                ops_gpu: DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE + mapped_bytes as u64,
+                mask_gpu: surface.gpu,
+                op_count: run.outline_ops.len() as u32,
+                subdivisions: run.subdivisions,
+                mask_pitch_bytes: surface.pitch_bytes,
+                mask_width: surface.width,
+                mask_height: surface.height,
+                rect_x: run.rect.x as u32,
+                rect_y: run.rect.y as u32,
+                rect_width: run.rect.width,
+                rect_height: run.rect.height,
+                optical_bias_px: run.optical_bias_px,
+            },
+            ops_bytes: slice_bytes,
+        });
+        mapped_bytes = next_mapped_bytes;
     }
+
     let Some((ops_phys, ops_virt)) = crate::dma::alloc(mapped_bytes, super::WARM_ALIGN) else {
         return GpgpuDispatchRetirement::NotSubmitted;
     };
     unsafe {
         core::ptr::write_bytes(ops_virt, 0, mapped_bytes);
-        core::ptr::copy_nonoverlapping(outline_ops.as_ptr().cast::<u8>(), ops_virt, input_bytes);
+        for (run, batch_run) in runs.iter().zip(batch_runs.iter()) {
+            let offset = (batch_run.params.ops_gpu - DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE)
+                as usize;
+            let input_bytes = run.outline_ops.len() * core::mem::size_of::<[u32; 8]>();
+            core::ptr::copy_nonoverlapping(
+                run.outline_ops.as_ptr().cast::<u8>(),
+                ops_virt.add(offset),
+                input_bytes,
+            );
+        }
     }
     super::dma_flush(ops_virt, mapped_bytes);
-    let params = FontOutlineCoverageR8Params {
-        ops_gpu: DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE,
-        mask_gpu: surface.gpu,
-        op_count: outline_ops.len() as u32,
-        subdivisions,
-        mask_pitch_bytes: surface.pitch_bytes,
-        mask_width: surface.width,
-        mask_height: surface.height,
-        rect_x: rect.x as u32,
-        rect_y: rect.y as u32,
-        rect_width: rect.width,
-        rect_height: rect.height,
-        optical_bias_px,
-    };
-    let retirement = submit_font_outline_coverage_r8_2d(ops_phys, mapped_bytes, surface, params);
+    let retirement = submit_font_outline_coverage_runs_r8_2d(
+        ops_phys,
+        mapped_bytes,
+        surface,
+        batch_runs.as_slice(),
+    );
     if retirement == GpgpuDispatchRetirement::SubmittedIncomplete {
         crate::log_error!(
             target: "gpgpu";
-            "intel/gpgpu: font-outline input quarantined phys=0x{:X} bytes={} reason=retirement-uncertain action=no-unmap-no-free\n",
+            "intel/gpgpu: font-outline batch input quarantined phys=0x{:X} bytes={} runs={} reason=retirement-uncertain action=no-unmap-no-free\n",
             ops_phys,
             mapped_bytes,
+            runs.len(),
         );
     } else {
         crate::dma::dealloc(ops_virt, mapped_bytes);
@@ -404,6 +466,7 @@ pub(crate) fn glyph_mask_layers_rgba8_2d_mode(
     result.submitted = submitted;
     result.ok = completed;
     result.submits = usize::from(submitted);
+    result.release = (completed && direct_scanout).then(|| gpgpu_rgba8_release(dst));
     result
 }
 
@@ -473,5 +536,6 @@ pub(crate) fn font_instance_layers_rgba8_2d_mode(
     result.submitted = submitted;
     result.ok = completed;
     result.submits = usize::from(submitted);
+    result.release = (completed && direct_scanout).then(|| gpgpu_rgba8_release(dst));
     result
 }

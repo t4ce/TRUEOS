@@ -154,9 +154,8 @@ impl Ui4LiveResourceUsage {
     ///
     /// Detached frame allocations are intentionally allowed. Gridpaper keeps
     /// one retained, offscreen frame warm at boot even when it has no session
-    /// or window. Exclusive admission blocks that producer from opening a new
-    /// session while Font Rush runs, so the detached allocation cannot become
-    /// display-live and does not make the UI4 output busy.
+    /// or window, so a detached allocation alone does not make the UI4 output
+    /// busy.
     pub(crate) const fn is_display_idle(self) -> bool {
         self.active_sessions == 0 && self.live_windows == 0
     }
@@ -166,95 +165,10 @@ impl Ui4LiveResourceUsage {
     }
 }
 
-struct Ui4ResourceAdmissionState {
-    active_exclusive_token: u64,
-    next_token: u64,
-}
-
-impl Ui4ResourceAdmissionState {
-    const fn new() -> Self {
-        Self {
-            active_exclusive_token: 0,
-            next_token: 0,
-        }
-    }
-}
-
-static UI4_RESOURCE_ADMISSION: spin::Mutex<Ui4ResourceAdmissionState> =
-    spin::Mutex::new(Ui4ResourceAdmissionState::new());
-
-/// A non-forgeable reservation which blocks new UI4 frame and session
-/// creation. Existing resources may continue retiring while the reservation is
-/// held. Font Rush keeps this alive for its whole run so no later producer can
-/// take one of its display planes.
-pub(crate) struct Ui4ExclusiveResourceAdmission {
-    token: u64,
-}
-
-impl Drop for Ui4ExclusiveResourceAdmission {
-    fn drop(&mut self) {
-        let mut admission = UI4_RESOURCE_ADMISSION.lock();
-        if admission.active_exclusive_token == self.token {
-            admission.active_exclusive_token = 0;
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Ui4ExclusiveAdmissionFailure {
-    pub(crate) reason: &'static str,
-    pub(crate) usage: Ui4LiveResourceUsage,
-}
-
-/// Serialize an ordinary resource creation against exclusive admission.
-/// Holding the returned guard through allocation closes the otherwise-open
-/// window between an idle snapshot and a newly registered frame/session.
-fn lock_ui4_resource_creation() -> Result<spin::MutexGuard<'static, Ui4ResourceAdmissionState>, ()>
-{
-    let admission = UI4_RESOURCE_ADMISSION.lock();
-    if admission.active_exclusive_token != 0 {
-        Err(())
-    } else {
-        Ok(admission)
-    }
-}
-
-/// Atomically reserve an idle UI4 display-attachment set.
-///
-/// Ordinary frame and session creation take the same admission lock before
-/// they allocate or register anything. Existing detached frames may continue
-/// rendering, but cannot open a session or become visible. Once this returns,
-/// no competing producer can become display-live until the reservation drops.
-fn try_acquire_ui4_exclusive_resource_admission()
--> Result<Ui4ExclusiveResourceAdmission, Ui4ExclusiveAdmissionFailure> {
-    let mut admission = UI4_RESOURCE_ADMISSION.lock();
-    if admission.active_exclusive_token != 0 {
-        return Err(Ui4ExclusiveAdmissionFailure {
-            reason: "ui4-exclusive-admission-busy",
-            usage: ui4_live_resource_usage(),
-        });
-    }
-    let usage = ui4_live_resource_usage();
-    if !usage.is_display_idle() {
-        return Err(Ui4ExclusiveAdmissionFailure {
-            reason: "ui4-not-idle",
-            usage,
-        });
-    }
-    let mut token = admission.next_token.wrapping_add(1);
-    if token == 0 {
-        token = 1;
-    }
-    admission.next_token = token;
-    admission.active_exclusive_token = token;
-    Ok(Ui4ExclusiveResourceAdmission { token })
-}
-
 /// Read live ownership state rather than the low-frequency diagnostic watch.
 ///
 /// This is an observation, not a reservation: a producer can begin a session
-/// after the function returns. Admission paths which require strict
-/// exclusivity must use `try_acquire_ui4_exclusive_resource_admission`.
+/// after the function returns.
 pub(crate) fn ui4_live_resource_usage() -> Ui4LiveResourceUsage {
     let (active_sessions, live_windows) = window_broker::live_resource_counts();
     Ui4LiveResourceUsage {

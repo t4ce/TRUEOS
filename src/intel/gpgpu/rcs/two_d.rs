@@ -388,17 +388,13 @@ fn direct_rcs_encode_resolve_tile64_msaa4_2d_batch(
     true
 }
 
-fn direct_rcs_encode_font_outline_coverage_r8_2d_batch(
+fn direct_rcs_encode_font_outline_coverage_runs_r8_2d_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
-    params: FontOutlineCoverageR8Params,
-    ops_bytes: usize,
+    runs: &[FontOutlineCoverageR8BatchRun],
     mask_bytes: usize,
 ) -> bool {
-    if params.rect_width == 0
-        || params.rect_height == 0
-        || COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES + FONT_OUTLINE_COVERAGE_R8_INDIRECT_BYTES
-            > DIRECT_RCS_BATCH_BYTES
+    if runs.is_empty() || runs.len() > FONT_OUTLINE_COVERAGE_BATCH_MAX_RUNS
     {
         return false;
     }
@@ -406,36 +402,104 @@ fn direct_rcs_encode_font_outline_coverage_r8_2d_batch(
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
-    if !direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
-        state,
-        COPY_RECT_BATCH_IDD_OFFSET_BYTES,
-        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
-        FONT_OUTLINE_COVERAGE_R8_TEXT_OFFSET_BYTES,
-        4,
-    ) || !direct_rcs_write_copy_rect_surface_states_at(
-        state,
-        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
-        COPY_RECT_BATCH_SRC_SURFACE_STATE_OFFSET_BYTES,
-        COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES,
-        params.ops_gpu,
-        ops_bytes,
-        params.mask_gpu,
-        mask_bytes,
-    ) || !direct_rcs_write_font_outline_coverage_r8_payload_at(
-        state,
-        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES,
-        params,
-    ) {
+    for (index, run) in runs.iter().enumerate() {
+        let state_block = FONT_OUTLINE_COVERAGE_BATCH_STATE_BASE_OFFSET_BYTES
+            + index * FONT_OUTLINE_COVERAGE_BATCH_STATE_BLOCK_BYTES;
+        let idd_offset =
+            state_block + FONT_OUTLINE_COVERAGE_BATCH_IDD_OFFSET_IN_BLOCK_BYTES;
+        let binding_table_offset = state_block
+            + FONT_OUTLINE_COVERAGE_BATCH_BINDING_TABLE_OFFSET_IN_BLOCK_BYTES;
+        let ops_surface_offset =
+            state_block + FONT_OUTLINE_COVERAGE_BATCH_OPS_SURFACE_OFFSET_IN_BLOCK_BYTES;
+        let mask_surface_offset =
+            state_block + FONT_OUTLINE_COVERAGE_BATCH_MASK_SURFACE_OFFSET_IN_BLOCK_BYTES;
+        let payload_offset = FONT_OUTLINE_COVERAGE_BATCH_PAYLOAD_BASE_OFFSET_BYTES
+            + index * FONT_OUTLINE_COVERAGE_BATCH_PAYLOAD_STRIDE_BYTES;
+        if !direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
+            state,
+            idd_offset,
+            binding_table_offset,
+            FONT_OUTLINE_COVERAGE_R8_TEXT_OFFSET_BYTES,
+            4,
+        ) || !direct_rcs_write_copy_rect_surface_states_at(
+            state,
+            binding_table_offset,
+            ops_surface_offset,
+            mask_surface_offset,
+            run.params.ops_gpu,
+            run.ops_bytes,
+            run.params.mask_gpu,
+            mask_bytes,
+        ) || !direct_rcs_write_font_outline_coverage_r8_payload_at(
+            state,
+            payload_offset,
+            run.params,
+        ) {
+            return false;
+        }
+    }
+
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok =
+        direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload, state.gpu_va.batch);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        COPY_RECT_PRE_MARKER_SLOT,
+        COPY_RECT_PRE_MARKER,
+    );
+    for (index, run) in runs.iter().enumerate() {
+        let Some(dispatch) =
+            fill_rect_2d_dispatch(run.params.rect_width, run.params.rect_height)
+        else {
+            return false;
+        };
+        let state_block = FONT_OUTLINE_COVERAGE_BATCH_STATE_BASE_OFFSET_BYTES
+            + index * FONT_OUTLINE_COVERAGE_BATCH_STATE_BLOCK_BYTES;
+        let idd_offset =
+            state_block + FONT_OUTLINE_COVERAGE_BATCH_IDD_OFFSET_IN_BLOCK_BYTES;
+        let payload_offset = FONT_OUTLINE_COVERAGE_BATCH_PAYLOAD_BASE_OFFSET_BYTES
+            + index * FONT_OUTLINE_COVERAGE_BATCH_PAYLOAD_STRIDE_BYTES;
+        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, 0);
+        ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
+        ok &= direct_rcs_push(batch, &mut cursor, idd_offset as u32);
+        ok &= direct_rcs_push_gpgpu_walker_2d(
+            batch,
+            &mut cursor,
+            payload_offset,
+            FONT_OUTLINE_COVERAGE_R8_INDIRECT_BYTES,
+            dispatch.group_x,
+            dispatch.group_y,
+            dispatch.right_mask,
+        );
+        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, 0);
+        if index + 1 < runs.len() {
+            // Every walker performs max(existing, coverage) against the same
+            // R8 mask. Retire those read/modify/write operations before the
+            // next stateful ops binding begins.
+            ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+        }
+    }
+    ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
+        batch,
+        &mut cursor,
+        state.gpu_va.result,
+        COPY_RECT_POST_MARKER_SLOT,
+        COPY_RECT_POST_MARKER,
+    );
+    if !ok
+        || cursor.saturating_mul(core::mem::size_of::<u32>())
+            > FONT_OUTLINE_COVERAGE_BATCH_STATE_BASE_OFFSET_BYTES
+    {
         return false;
     }
-    direct_rcs_finish_two_buffer_2d_batch(
-        state,
-        upload,
-        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES,
-        FONT_OUTLINE_COVERAGE_R8_INDIRECT_BYTES,
-        params.rect_width,
-        params.rect_height,
-    )
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
 }
 
 fn direct_rcs_encode_glyph_mask_2d_batch(

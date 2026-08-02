@@ -406,15 +406,44 @@ fn submit_resolve_tile64_msaa4_2d(
     completed
 }
 
-fn submit_font_outline_coverage_r8_2d(
+fn submit_font_outline_coverage_runs_r8_2d(
     ops_phys: u64,
     ops_bytes: usize,
     mask: GpgpuMask8Surface,
-    params: FontOutlineCoverageR8Params,
+    runs: &[FontOutlineCoverageR8BatchRun],
 ) -> GpgpuDispatchRetirement {
-    let Some(dispatch) = fill_rect_2d_dispatch(params.rect_width, params.rect_height) else {
+    if runs.is_empty() || runs.len() > FONT_OUTLINE_COVERAGE_BATCH_MAX_RUNS {
         return GpgpuDispatchRetirement::NotSubmitted;
-    };
+    }
+    let mut total_ops = 0usize;
+    let mut total_groups = 0u64;
+    for run in runs {
+        let params = run.params;
+        let Some(dispatch) = fill_rect_2d_dispatch(params.rect_width, params.rect_height) else {
+            return GpgpuDispatchRetirement::NotSubmitted;
+        };
+        let Some(offset) = params
+            .ops_gpu
+            .checked_sub(DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE)
+            .and_then(|offset| usize::try_from(offset).ok())
+        else {
+            return GpgpuDispatchRetirement::NotSubmitted;
+        };
+        if params.mask_gpu != mask.gpu
+            || params.mask_pitch_bytes != mask.pitch_bytes
+            || params.mask_width != mask.width
+            || params.mask_height != mask.height
+            || offset
+                .checked_add(run.ops_bytes)
+                .is_none_or(|end| end > ops_bytes)
+        {
+            return GpgpuDispatchRetirement::NotSubmitted;
+        }
+        total_ops = total_ops.saturating_add(params.op_count as usize);
+        total_groups = total_groups.saturating_add(
+            u64::from(dispatch.group_x).saturating_mul(u64::from(dispatch.group_y)),
+        );
+    }
     // Font coverage is requested by asynchronous kernel/UI services. Never
     // spin a cooperative executor while another direct-RCS producer owns the
     // lane; the caller can preserve its resident fallback and retry later.
@@ -435,13 +464,21 @@ fn submit_font_outline_coverage_r8_2d(
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
     let kernel_ppgtt_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let ops_ppgtt_ok =
-        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, params.ops_gpu, ops_phys, ops_bytes);
-    let mask_ppgtt_ok =
-        ops_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, params.mask_gpu, mask.phys, mask.bytes);
+    let ops_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE,
+            ops_phys,
+            ops_bytes,
+        );
+    let mask_ppgtt_ok = ops_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, mask.gpu, mask.phys, mask.bytes);
     let batch_ok = mask_ppgtt_ok
-        && direct_rcs_encode_font_outline_coverage_r8_2d_batch(
-            state, upload, params, ops_bytes, mask.bytes,
+        && direct_rcs_encode_font_outline_coverage_runs_r8_2d_batch(
+            state,
+            upload,
+            runs,
+            mask.bytes,
         );
     let submission = if batch_ok {
         direct_rcs_submit_batch_state(dev, state)
@@ -466,13 +503,11 @@ fn submit_font_outline_coverage_r8_2d(
         if occurrence <= 8 || occurrence.is_multiple_of(20) {
             crate::log_warn!(
                 target: "intel-gpgpu";
-                "font_outline_coverage_r8 incomplete occurrence={} ops={} rect={}x{} groups={}x{} submitted={} post=0x{:08X} timeout_ms={} action={}\n",
+                "font_outline_coverage_r8 batch incomplete occurrence={} runs={} ops={} groups={} submitted={} post=0x{:08X} timeout_ms={} action={}\n",
                 occurrence,
-                params.op_count,
-                params.rect_width,
-                params.rect_height,
-                dispatch.group_x,
-                dispatch.group_y,
+                runs.len(),
+                total_ops,
+                total_groups,
                 submitted as u8,
                 observed,
                 FONT_OUTLINE_COVERAGE_R8_COMPLETION_TIMEOUT_MS,

@@ -21,12 +21,9 @@ pub(super) const MAX_WINDOWS: usize = 256;
 // MAX_WINDOWS remains only the broker registry's hard storage bound.
 const MAX_WINDOWS_PER_SESSION: usize = 32;
 const MAX_SESSIONS: usize = 64;
-/// Temporary direct-scanout admission boundary. Non-shareable double- and
-/// triple-buffered windows each own one of the four application planes.
-/// Single-buffered windows, dirty/double FontScene members, and
-/// streaming/triple RenderScene members remain unrestricted by this soft cap
-/// and may share a requested plane through UI4 composition.
-pub(super) const MAX_EXPENSIVE_WINDOWS: usize = super::INTERACTION_OVERLAY_PLANE_SLOT;
+/// Stable application-plane namespace. Shareable frame plans may coalesce in
+/// one slot; non-shareable plans require an otherwise empty slot.
+pub(super) const APPLICATION_PLANE_COUNT: usize = super::INTERACTION_OVERLAY_PLANE_SLOT;
 pub(crate) const WINDOW_BROKER_SNAPSHOT_PERIOD_MS: u64 = 3_000;
 const WINDOW_BROKER_SNAPSHOT_RECEIVERS: usize = 8;
 const WINDOW_FIRST_PRESENTATION_QUEUE_CAP: usize = 32;
@@ -377,13 +374,32 @@ pub(crate) enum WindowBrokerError {
     InvalidHandle,
     OwnerMismatch,
     SessionClosed,
-    Busy,
     EmptyExtent,
     EmptyDamage,
     InvalidPlane,
     InteractionDenied,
     Capacity,
     Closed,
+}
+
+#[derive(Copy, Clone)]
+enum WindowPlaneClass {
+    SharedComposable,
+    IsolatedDirect,
+}
+
+impl WindowPlaneClass {
+    const fn from_shares_compositor_plane(shares: bool) -> Self {
+        if shares {
+            Self::SharedComposable
+        } else {
+            Self::IsolatedDirect
+        }
+    }
+
+    const fn is_shared(self) -> bool {
+        matches!(self, Self::SharedComposable)
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -395,6 +411,10 @@ struct WindowRecord {
     buffering: FrameBuffering,
     output: OutputId,
     plane: WindowPlane,
+    /// Broker-owned plane class derived from the frame plan. A physical slot
+    /// may contain shared composable windows or one isolated direct window,
+    /// never both.
+    plane_class: WindowPlaneClass,
     placement: WindowPlacement,
     interaction: WindowInteraction,
     state: WindowState,
@@ -578,50 +598,73 @@ impl WindowBroker {
 
     fn select_plane(
         &self,
+        output: OutputId,
         requested: WindowPlane,
         buffering: FrameBuffering,
-        share_requested_plane: bool,
+        plane_class: WindowPlaneClass,
         replacing_slot: Option<usize>,
         owner: WindowOwner,
         session: WindowSessionId,
     ) -> Result<WindowPlane, WindowBrokerError> {
-        if share_requested_plane {
-            return Ok(requested);
-        }
-
-        let mut occupied = [false; MAX_EXPENSIVE_WINDOWS];
-        let mut active = 0usize;
+        let application_plane_mask = super::ui4_output_capabilities(output)
+            .map_or(super::UI4_APPLICATION_PLANE_MASK, |capabilities| {
+                capabilities.application_plane_mask
+            })
+            & super::UI4_APPLICATION_PLANE_MASK;
+        let mut shared = [false; APPLICATION_PLANE_COUNT];
+        let mut isolated = [false; APPLICATION_PLANE_COUNT];
         for (slot, window) in self.windows.iter().enumerate() {
-            let shares_compositor_plane = super::frame_snapshot(window.frame)
-                .is_ok_and(|snapshot| super::frame_plan_shares_compositor_plane(snapshot.plan));
             if Some(slot) != replacing_slot
                 && window.state != WindowState::Closed
-                && !shares_compositor_plane
+                && window.output == output
             {
-                active = active.saturating_add(1);
-                occupied[window.plane.slot()] = true;
+                if window.plane_class.is_shared() {
+                    shared[window.plane.slot()] = true;
+                } else {
+                    isolated[window.plane.slot()] = true;
+                }
             }
-        }
-        if active >= MAX_EXPENSIVE_WINDOWS {
-            crate::log_error!(
-                target: "ui4";
-                "ui4 expensive-window soft-cap reached requested={} cap={} buffering={:?} owner={:?} session={} policy=temporary-soft-cap action=reject-expensive-admission\n",
-                active.saturating_add(1),
-                MAX_EXPENSIVE_WINDOWS,
-                buffering,
-                owner,
-                session.raw(),
-            );
-            return Err(WindowBrokerError::Capacity);
         }
 
         let requested_slot = requested.slot();
-        for offset in 0..MAX_EXPENSIVE_WINDOWS {
-            let slot = (requested_slot + offset) % MAX_EXPENSIVE_WINDOWS;
-            if !occupied[slot] {
+        let supported = |slot: usize| application_plane_mask & (1u8 << slot) != 0;
+        let shares_compositor_plane = plane_class.is_shared();
+        if shares_compositor_plane && supported(requested_slot) && !isolated[requested_slot] {
+            return Ok(requested);
+        }
+
+        // A displaced shared producer first joins an existing shared-only
+        // slot. This keeps independently owned FontScene windows composable
+        // without consuming one hardware plane apiece.
+        if shares_compositor_plane {
+            for offset in 0..APPLICATION_PLANE_COUNT {
+                let slot = (requested_slot + offset) % APPLICATION_PLANE_COUNT;
+                if supported(slot) && shared[slot] && !isolated[slot] {
+                    return WindowPlane::from_slot(slot).ok_or(WindowBrokerError::InvalidPlane);
+                }
+            }
+        }
+
+        // Isolated/direct frames and a shared class without an existing home
+        // may enter only an empty physical slot.
+        for offset in 0..APPLICATION_PLANE_COUNT {
+            let slot = (requested_slot + offset) % APPLICATION_PLANE_COUNT;
+            if supported(slot) && !shared[slot] && !isolated[slot] {
                 return WindowPlane::from_slot(slot).ok_or(WindowBrokerError::InvalidPlane);
             }
         }
+
+        crate::log_error!(
+            target: "ui4";
+            "ui4 plane-class capacity reached output={} requested_slot={} class={} application_plane_mask=0x{:02X} buffering={:?} owner={:?} session={} action=reject-mixed-or-full-admission\n",
+            output.name(),
+            requested_slot,
+            if shares_compositor_plane { "shared" } else { "isolated" },
+            application_plane_mask,
+            buffering,
+            owner,
+            session.raw(),
+        );
         Err(WindowBrokerError::Capacity)
     }
 
@@ -637,7 +680,7 @@ impl WindowBroker {
         &mut self,
         mut request: WindowCreate,
         buffering: FrameBuffering,
-        share_requested_plane: bool,
+        shares_compositor_plane: bool,
     ) -> Result<WindowId, WindowBrokerError> {
         self.checked_session(request.owner, request.session)?;
         if !request.placement.valid() {
@@ -656,11 +699,13 @@ impl WindowBroker {
         if count >= MAX_WINDOWS_PER_SESSION {
             return Err(WindowBrokerError::Capacity);
         }
+        let plane_class = WindowPlaneClass::from_shares_compositor_plane(shares_compositor_plane);
         let requested_plane = request.plane;
         request.plane = self.select_plane(
+            request.output,
             request.plane,
             buffering,
-            share_requested_plane,
+            plane_class,
             None,
             request.owner,
             request.session,
@@ -683,7 +728,7 @@ impl WindowBroker {
             .find(|(_, window)| window.state == WindowState::Closed)
         {
             let generation = next_generation(window.generation);
-            *window = WindowRecord::new(generation, request, buffering);
+            *window = WindowRecord::new(generation, request, buffering, plane_class);
             let id = WindowId(pack_handle(slot, generation)?);
             self.mark_composition_changed();
             return Ok(id);
@@ -692,7 +737,8 @@ impl WindowBroker {
             return Err(WindowBrokerError::Capacity);
         }
         let slot = self.windows.len();
-        self.windows.push(WindowRecord::new(1, request, buffering));
+        self.windows
+            .push(WindowRecord::new(1, request, buffering, plane_class));
         let id = WindowId(pack_handle(slot, 1)?);
         self.mark_composition_changed();
         Ok(id)
@@ -704,7 +750,7 @@ impl WindowBroker {
         id: WindowId,
         frame: FrameHandle,
         buffering: FrameBuffering,
-        share_requested_plane: bool,
+        shares_compositor_plane: bool,
     ) -> Result<(), WindowBrokerError> {
         let (slot, generation) = unpack_handle(id.0)?;
         let current = self
@@ -723,10 +769,12 @@ impl WindowBroker {
             WindowState::Pending | WindowState::Ready => {}
         }
         let previous_plane = current.plane;
+        let plane_class = WindowPlaneClass::from_shares_compositor_plane(shares_compositor_plane);
         let plane = self.select_plane(
+            current.output,
             current.plane,
             buffering,
-            share_requested_plane,
+            plane_class,
             Some(slot),
             current.owner,
             current.session,
@@ -746,6 +794,7 @@ impl WindowBroker {
         window.frame = frame;
         window.buffering = buffering;
         window.plane = plane;
+        window.plane_class = plane_class;
         window.state = WindowState::Pending;
         window.publish_serial = 0;
         window.damage = None;
@@ -1059,7 +1108,12 @@ impl WindowBroker {
 }
 
 impl WindowRecord {
-    fn new(generation: u16, request: WindowCreate, buffering: FrameBuffering) -> Self {
+    fn new(
+        generation: u16,
+        request: WindowCreate,
+        buffering: FrameBuffering,
+        plane_class: WindowPlaneClass,
+    ) -> Self {
         Self {
             generation,
             owner: request.owner,
@@ -1068,6 +1122,7 @@ impl WindowRecord {
             buffering,
             output: request.output,
             plane: request.plane,
+            plane_class,
             placement: request.placement,
             interaction: request.interaction,
             state: WindowState::Pending,
@@ -1162,15 +1217,6 @@ pub(crate) async fn ui4_window_broker_snapshot_service_task() {
 pub(crate) fn begin_window_session(
     owner: WindowOwner,
 ) -> Result<WindowSessionId, WindowBrokerError> {
-    let _admission = super::lock_ui4_resource_creation().map_err(|()| WindowBrokerError::Busy)?;
-    begin_window_session_admitted(owner)
-}
-
-/// Begin a session while the caller owns UI4's exclusive resource admission.
-pub(super) fn begin_window_session_with_exclusive_admission(
-    owner: WindowOwner,
-    _admission: &super::Ui4ExclusiveResourceAdmission,
-) -> Result<WindowSessionId, WindowBrokerError> {
     begin_window_session_admitted(owner)
 }
 
@@ -1184,7 +1230,6 @@ fn begin_window_session_admitted(owner: WindowOwner) -> Result<WindowSessionId, 
 pub(crate) fn begin_additional_window_session(
     owner: WindowOwner,
 ) -> Result<WindowSessionId, WindowBrokerError> {
-    let _admission = super::lock_ui4_resource_creation().map_err(|()| WindowBrokerError::Busy)?;
     WINDOW_BROKER.lock().begin_additional_session(owner)
 }
 
@@ -1999,7 +2044,7 @@ mod tests {
         let mut sessions = Vec::new();
         let mut windows = Vec::new();
 
-        for frame in 1..=MAX_EXPENSIVE_WINDOWS as u64 {
+        for frame in 1..=APPLICATION_PLANE_COUNT as u64 {
             let session = broker.begin_additional_session(owner).unwrap();
             let mut request = test_window(owner, session, frame, 0, frame as i32, true);
             request.plane = WindowPlane::Universal(super::super::RGB_OVERLAY_PLANE_SLOT_2 as u8);
@@ -2040,5 +2085,116 @@ mod tests {
             .expect("released application plane admits the waiting session");
         let (slot, _) = unpack_handle(admitted.raw()).unwrap();
         assert_eq!(broker.windows[slot].plane.slot(), 2);
+    }
+
+    #[test]
+    fn four_shared_consumers_coalesce_without_mixing_an_isolated_window() {
+        let owner = WindowOwner::GPGPU_PREVIEW;
+        let mut broker = WindowBroker::new();
+        let session = broker.begin_additional_session(owner).unwrap();
+        let mut shared_windows = Vec::new();
+        for frame in 1..=4u64 {
+            let mut request = test_window(owner, session, frame, 0, frame as i32, true);
+            request.plane = WindowPlane::Universal(super::super::ALPHA_OVERLAY_PLANE_SLOT as u8);
+            shared_windows.push(
+                broker
+                    .create_with_plane_policy(request, FrameBuffering::Double, true)
+                    .expect("shared FontScene consumer"),
+            );
+        }
+        for window in shared_windows {
+            let (slot, _) = unpack_handle(window.raw()).unwrap();
+            assert_eq!(broker.windows[slot].plane.slot(), 1);
+            assert!(broker.windows[slot].plane_class.is_shared());
+        }
+
+        let isolated_session = broker.begin_additional_session(owner).unwrap();
+        let mut isolated = test_window(owner, isolated_session, 5, 0, 10, true);
+        isolated.plane = WindowPlane::Universal(super::super::ALPHA_OVERLAY_PLANE_SLOT as u8);
+        let isolated = broker
+            .create_with_plane_policy(isolated, FrameBuffering::Double, false)
+            .expect("isolated window moves away from shared slot");
+        let (slot, _) = unpack_handle(isolated.raw()).unwrap();
+        assert_eq!(broker.windows[slot].plane.slot(), 2);
+        assert!(!broker.windows[slot].plane_class.is_shared());
+    }
+
+    #[test]
+    fn displaced_shared_consumers_join_a_shared_only_slot() {
+        let owner = WindowOwner::GPGPU_PREVIEW;
+        let mut broker = WindowBroker::new();
+        let isolated_session = broker.begin_additional_session(owner).unwrap();
+        let mut isolated = test_window(owner, isolated_session, 1, 0, 1, true);
+        isolated.plane = WindowPlane::Universal(1);
+        broker
+            .create_with_plane_policy(isolated, FrameBuffering::Double, false)
+            .unwrap();
+
+        let shared_session = broker.begin_additional_session(owner).unwrap();
+        let mut first = test_window(owner, shared_session, 2, 0, 2, true);
+        first.plane = WindowPlane::Universal(1);
+        let first = broker
+            .create_with_plane_policy(first, FrameBuffering::Double, true)
+            .unwrap();
+        let mut second = test_window(owner, shared_session, 3, 0, 3, true);
+        second.plane = WindowPlane::Universal(1);
+        let second = broker
+            .create_with_plane_policy(second, FrameBuffering::Double, true)
+            .unwrap();
+
+        for window in [first, second] {
+            let (slot, _) = unpack_handle(window.raw()).unwrap();
+            assert_eq!(broker.windows[slot].plane.slot(), 2);
+            assert!(broker.windows[slot].plane_class.is_shared());
+        }
+    }
+
+    #[test]
+    fn plane_occupancy_is_independent_per_output() {
+        let owner = WindowOwner::GPGPU_PREVIEW;
+        let mut broker = WindowBroker::new();
+        for output in 0..=1usize {
+            let session = broker.begin_additional_session(owner).unwrap();
+            let mut request = test_window(owner, session, output as u64 + 1, output, 1, true);
+            request.plane = WindowPlane::Universal(1);
+            let window = broker
+                .create_with_plane_policy(request, FrameBuffering::Double, false)
+                .unwrap();
+            let (slot, _) = unpack_handle(window.raw()).unwrap();
+            assert_eq!(broker.windows[slot].plane.slot(), 1);
+            assert_eq!(broker.windows[slot].output.slot(), output);
+        }
+    }
+
+    #[test]
+    fn replacement_reclassifies_without_creating_a_mixed_slot() {
+        let owner = WindowOwner::GPGPU_PREVIEW;
+        let mut broker = WindowBroker::new();
+        let session = broker.begin_additional_session(owner).unwrap();
+        let mut request = test_window(owner, session, 1, 0, 1, true);
+        request.plane = WindowPlane::Universal(1);
+        let first = broker
+            .create_with_plane_policy(request, FrameBuffering::Double, true)
+            .unwrap();
+        request.frame = FrameHandle::from_raw(2).unwrap();
+        let peer = broker
+            .create_with_plane_policy(request, FrameBuffering::Double, true)
+            .unwrap();
+
+        broker
+            .replace_frame(
+                owner,
+                first,
+                FrameHandle::from_raw(3).unwrap(),
+                FrameBuffering::Double,
+                false,
+            )
+            .expect("isolated replacement moves off the shared slot");
+        let (first_slot, _) = unpack_handle(first.raw()).unwrap();
+        let (peer_slot, _) = unpack_handle(peer.raw()).unwrap();
+        assert_eq!(broker.windows[peer_slot].plane.slot(), 1);
+        assert!(broker.windows[peer_slot].plane_class.is_shared());
+        assert_eq!(broker.windows[first_slot].plane.slot(), 2);
+        assert!(!broker.windows[first_slot].plane_class.is_shared());
     }
 }

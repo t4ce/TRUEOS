@@ -11,7 +11,11 @@ pub(crate) const PARTICLE_CRAFT_SAMPLE_WIDTH: u32 =
 pub(crate) const PARTICLE_CRAFT_SAMPLE_HEIGHT: u32 =
     PARTICLE_CRAFT_FRAME_HEIGHT / PARTICLE_CRAFT_RENDER_DIVISOR;
 pub(crate) const PARTICLE_CRAFT_DEFAULT_PARTICLES: u32 = 128;
-pub(crate) const PARTICLE_CRAFT_MAX_PARTICLES: u32 = 1256;
+// Particle state is 32 bytes/entry and the following parameter surface must
+// start on a 4 KiB boundary. Keep the requested ~1.25K ceiling rounded up to
+// the next 128-entry page so every independently mapped GPU subregion remains
+// page aligned.
+pub(crate) const PARTICLE_CRAFT_MAX_PARTICLES: u32 = 1280;
 pub(crate) const PARTICLE_CRAFT_TILE_SAMPLE_WIDTH: u32 = 32;
 pub(crate) const PARTICLE_CRAFT_TILE_SAMPLE_HEIGHT: u32 = 32;
 pub(crate) const PARTICLE_CRAFT_TILE_MASK_WORDS: u32 =
@@ -45,7 +49,9 @@ const _: () = assert!(
         && PARTICLE_CRAFT_FRAME_WIDTH.is_multiple_of(PARTICLE_CRAFT_RENDER_DIVISOR)
         && PARTICLE_CRAFT_FRAME_HEIGHT.is_multiple_of(PARTICLE_CRAFT_RENDER_DIVISOR)
         && PARTICLE_CRAFT_MAX_PARTICLES.is_multiple_of(u32::BITS)
-        && PARTICLE_CRAFT_TILE_MASK_WORDS == 8
+        && PARTICLE_CRAFT_TILE_MASK_WORDS == 40
+        && PARTICLE_CRAFT_STATE_BYTES.is_multiple_of(4096)
+        && (PARTICLE_CRAFT_STATE_BYTES + PARTICLE_CRAFT_PARAMS_BYTES).is_multiple_of(4096)
         && PARTICLE_CRAFT_ALLOCATION_BYTES.is_multiple_of(4096)
 );
 const _: () = assert!(
@@ -386,7 +392,7 @@ mod tests {
             ),
             117_760,
         );
-        assert_eq!(PARTICLE_CRAFT_TILE_MASK_BYTES, 115_200);
+        assert_eq!(PARTICLE_CRAFT_TILE_MASK_BYTES, 576_000);
     }
 }
 
