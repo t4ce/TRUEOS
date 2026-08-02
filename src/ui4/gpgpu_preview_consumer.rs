@@ -63,9 +63,8 @@ const CPP_FONT_RUSH_TITLE_WORD_WIDTH_FRACTION: f32 = 0.75;
 // Lucida's visual bounds are deliberately packed more tightly than its text
 // advances.  The one-time source remains comfortably below Font's analytical
 // admission limit; its finished RGBA pixels are enlarged at presentation.
-const CPP_FONT_RUSH_TITLE_WORD_X_FRACTIONS: [f32; 6] = [
-    0.281_72, 0.368_89, 0.439_55, 0.522_91, 0.628_20, 0.734_14,
-];
+const CPP_FONT_RUSH_TITLE_WORD_X_FRACTIONS: [f32; 6] =
+    [0.281_72, 0.368_89, 0.439_55, 0.522_91, 0.628_20, 0.734_14];
 const CPP_FONT_RUSH_TITLE_WORD_PRESENTATION_SCALE: f32 = 1.8;
 const CPP_FONT_RUSH_SECTION_PRESENTATION_SCALE: f32 = 3.0;
 const CPP_FONT_RUSH_CACHE_FONT_PIXELS: [f32;
@@ -526,9 +525,7 @@ impl CppFontRushLayerStage {
             | Self::TitleHold
             | Self::BlankPrime
             | Self::BlankHold
-            | Self::Dormant => {
-                CPP_FONT_RUSH_CADENCE_MS
-            }
+            | Self::Dormant => CPP_FONT_RUSH_CADENCE_MS,
         }
     }
 
@@ -552,10 +549,7 @@ impl CppFontRushLayerStage {
     }
 
     const fn uses_showcase_sprite(self) -> bool {
-        matches!(
-            self,
-            Self::TitleHold | Self::SectionPulse | Self::StormPrime { .. }
-        )
+        matches!(self, Self::TitleHold | Self::SectionPulse | Self::StormPrime { .. })
     }
 }
 
@@ -1606,12 +1600,16 @@ fn begin_cpp_font_rush_showcase(
 ) -> Result<(), &'static str> {
     if previews.len() != usize::from(topology.plane_count)
         || previews.iter().any(|preview| {
-            preview
-                .font_rush
-                .as_ref()
-                .is_none_or(|state| !cpp_font_rush_state_quiescent(state))
+            preview.font_rush.as_ref().is_none_or(|state| {
+                !cpp_font_rush_state_quiescent(state)
+                    || state.showcase_sources.title_pending.is_some()
+                    || state.showcase_sources.section_pending.is_some()
+            })
         })
     {
+        // The one-time source jobs share Font's FIFO/GPU lane.  Let charge-up
+        // retire completely before starting the cadence-critical 150ms title
+        // cards, so no old preparation can sit in front of `T` through `S`.
         return Ok(());
     }
 
@@ -1645,6 +1643,60 @@ fn begin_cpp_font_rush_showcase(
         CPP_FONT_RUSH_TITLE_HOLD_MS,
     );
     Ok(())
+}
+
+fn cpp_font_rush_showcase_next_stage(
+    stage: CppFontRushLayerStage,
+) -> Result<CppFontRushLayerStage, &'static str> {
+    Ok(match stage {
+        CppFontRushLayerStage::TitleLetter(index)
+            if usize::from(index) + 1 < CPP_FONT_RUSH_TITLE_LETTERS.len() =>
+        {
+            CppFontRushLayerStage::TitleLetter(index + 1)
+        }
+        CppFontRushLayerStage::TitleLetter(_) => CppFontRushLayerStage::TitleHold,
+        CppFontRushLayerStage::TitleHold => CppFontRushLayerStage::BlankPrime,
+        CppFontRushLayerStage::BlankPrime => {
+            CppFontRushLayerStage::CacheCharge { class: 0, batch: 0 }
+        }
+        CppFontRushLayerStage::CacheCharge { class, batch }
+            if usize::from(batch) + 1
+                < crate::r::font_kernel_service::FONT_RUSH_RGBA8_CACHE_BATCHES_PER_CLASS =>
+        {
+            CppFontRushLayerStage::CacheCharge {
+                class,
+                batch: batch + 1,
+            }
+        }
+        CppFontRushLayerStage::CacheCharge { class, .. }
+            if usize::from(class) + 1
+                < crate::r::font_kernel_service::FONT_RUSH_RGBA8_CACHE_CLASSES =>
+        {
+            CppFontRushLayerStage::CacheCharge {
+                class: class + 1,
+                batch: 0,
+            }
+        }
+        CppFontRushLayerStage::CacheCharge { .. } => CppFontRushLayerStage::BlankHold,
+        CppFontRushLayerStage::BlankHold => CppFontRushLayerStage::SectionPulse,
+        CppFontRushLayerStage::SectionPulse => CppFontRushLayerStage::StormPrime { mirror: 0 },
+        CppFontRushLayerStage::StormPrime { mirror: 0 } => {
+            CppFontRushLayerStage::StormPrime { mirror: 1 }
+        }
+        CppFontRushLayerStage::StormPrime { .. } => {
+            CppFontRushLayerStage::ProducerStorm { wave: 0, mirror: 0 }
+        }
+        CppFontRushLayerStage::ProducerStorm { wave, mirror: 0 } => {
+            CppFontRushLayerStage::ProducerStorm { wave, mirror: 1 }
+        }
+        CppFontRushLayerStage::ProducerStorm { wave, .. } => CppFontRushLayerStage::ProducerStorm {
+            wave: wave.saturating_add(1),
+            mirror: 0,
+        },
+        CppFontRushLayerStage::Base
+        | CppFontRushLayerStage::Expanded
+        | CppFontRushLayerStage::Dormant => return Err("font-rush-showcase-stage"),
+    })
 }
 
 fn advance_cpp_font_rush_showcase(
@@ -1706,55 +1758,7 @@ fn advance_cpp_font_rush_showcase(
         return Ok(());
     }
 
-    let next = match stage {
-        CppFontRushLayerStage::TitleLetter(index)
-            if usize::from(index) + 1 < CPP_FONT_RUSH_TITLE_LETTERS.len() =>
-        {
-            CppFontRushLayerStage::TitleLetter(index + 1)
-        }
-        CppFontRushLayerStage::TitleLetter(_) => CppFontRushLayerStage::TitleHold,
-        CppFontRushLayerStage::TitleHold => CppFontRushLayerStage::BlankPrime,
-        CppFontRushLayerStage::BlankPrime => {
-            CppFontRushLayerStage::CacheCharge { class: 0, batch: 0 }
-        }
-        CppFontRushLayerStage::CacheCharge { class, batch }
-            if usize::from(batch) + 1
-                < crate::r::font_kernel_service::FONT_RUSH_RGBA8_CACHE_BATCHES_PER_CLASS =>
-        {
-            CppFontRushLayerStage::CacheCharge {
-                class,
-                batch: batch + 1,
-            }
-        }
-        CppFontRushLayerStage::CacheCharge { class, .. }
-            if usize::from(class) + 1
-                < crate::r::font_kernel_service::FONT_RUSH_RGBA8_CACHE_CLASSES =>
-        {
-            CppFontRushLayerStage::CacheCharge {
-                class: class + 1,
-                batch: 0,
-            }
-        }
-        CppFontRushLayerStage::CacheCharge { .. } => CppFontRushLayerStage::BlankHold,
-        CppFontRushLayerStage::BlankHold => CppFontRushLayerStage::SectionPulse,
-        CppFontRushLayerStage::SectionPulse => CppFontRushLayerStage::StormPrime { mirror: 0 },
-        CppFontRushLayerStage::StormPrime { mirror: 0 } => {
-            CppFontRushLayerStage::StormPrime { mirror: 1 }
-        }
-        CppFontRushLayerStage::StormPrime { .. } => {
-            CppFontRushLayerStage::ProducerStorm { wave: 0, mirror: 0 }
-        }
-        CppFontRushLayerStage::ProducerStorm { wave, mirror: 0 } => {
-            CppFontRushLayerStage::ProducerStorm { wave, mirror: 1 }
-        }
-        CppFontRushLayerStage::ProducerStorm { wave, .. } => CppFontRushLayerStage::ProducerStorm {
-            wave: wave.saturating_add(1),
-            mirror: 0,
-        },
-        CppFontRushLayerStage::Base
-        | CppFontRushLayerStage::Expanded
-        | CppFontRushLayerStage::Dormant => return Err("font-rush-showcase-stage"),
-    };
+    let next = cpp_font_rush_showcase_next_stage(stage)?;
     let request_serial = first.request_serial;
     let run_started = first.started;
     let elapsed_ms = now.saturating_duration_since(run_started).as_millis();
@@ -1798,6 +1802,36 @@ fn advance_cpp_font_rush_showcase(
             .map_err(|_| "font-rush-rgba8-cache-seal")?;
     }
     set_cpp_font_rush_stage(&mut previews[0], next, now)?;
+    let released_showcase_source = {
+        let sources = &mut previews[0]
+            .font_rush
+            .as_mut()
+            .ok_or("font-rush-plane-state-missing")?
+            .showcase_sources;
+        match stage {
+            CppFontRushLayerStage::TitleHold => sources
+                .title
+                .take()
+                .map(|source| ("TrueOS", source.surface().width, source.surface().height)),
+            CppFontRushLayerStage::StormPrime { mirror: 1 } => sources
+                .section
+                .take()
+                .map(|source| ("section-sign", source.surface().width, source.surface().height)),
+            _ => None,
+        }
+    };
+    if let Some((source, width, height)) = released_showcase_source {
+        crate::log_info!(
+            target: "ui4";
+            "ui4 cpp-font-rush showcase source released request={} source={} extent={}x{} previous={} next={} policy=drop-immediately-after-last-proven-presentation\n",
+            request_serial,
+            source,
+            width,
+            height,
+            stage.label(),
+            next.label(),
+        );
+    }
     if next == CppFontRushLayerStage::BlankHold {
         let blank_started_at = previews[0]
             .font_rush
@@ -2451,6 +2485,320 @@ fn poll_cpp_font_rush_consumers(previews: &mut [ActivePreview]) -> Result<(), &'
         poll_cpp_font_rush_frame(preview)?;
         poll_cpp_font_rush_cache_charge(preview)?;
         poll_cpp_font_rush_plan(preview)?;
+        poll_cpp_font_rush_showcase_source(preview, CppFontRushShowcaseSource::Title)?;
+        poll_cpp_font_rush_showcase_source(preview, CppFontRushShowcaseSource::Section)?;
+        maintain_cpp_font_rush_showcase_sources(preview)?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CppFontRushShowcaseSource {
+    Title,
+    Section,
+}
+
+impl CppFontRushShowcaseSource {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Title => "TrueOS",
+            Self::Section => "section-sign",
+        }
+    }
+
+    const fn glyphs(self) -> usize {
+        match self {
+            Self::Title => CPP_FONT_RUSH_TITLE_WORD.len(),
+            Self::Section => 1,
+        }
+    }
+}
+
+fn cpp_font_rush_showcase_source_request(
+    kind: CppFontRushShowcaseSource,
+    width: u32,
+    height: u32,
+) -> crate::r::font_kernel_service::FontStampRequest {
+    use crate::r::font_kernel_service::{
+        FontStampFit, FontStampLayer, FontStampRequest, RetainSceneRequest,
+        RetainedFontPositioning, RetainedFontRun,
+    };
+
+    let viewport_width = width.div_ceil(CPP_FONT_RUSH_VIEWPORT_SCALE).max(1);
+    let viewport_height = height.div_ceil(CPP_FONT_RUSH_VIEWPORT_SCALE).max(1);
+    let viewport_width_f = viewport_width as f32;
+    let viewport_height_f = viewport_height as f32;
+    let runs = match kind {
+        CppFontRushShowcaseSource::Title => {
+            let step = viewport_width_f * CPP_FONT_RUSH_TITLE_WORD_WIDTH_FRACTION
+                / CPP_FONT_RUSH_TITLE_WORD.len() as f32;
+            let font_pixels = (step * 1.50)
+                .min(viewport_height_f * 0.90)
+                .clamp(8.0, CPP_FONT_RUSH_TITLE_WORD_MAX_FONT_PIXELS);
+            let runs = CPP_FONT_RUSH_TITLE_WORD
+                .iter()
+                .copied()
+                .zip(CPP_FONT_RUSH_TITLE_WORD_X_FRACTIONS)
+                .map(|(scalar, fraction)| {
+                    let mut text = String::new();
+                    text.push(scalar);
+                    RetainedFontRun {
+                        text,
+                        position: [viewport_width_f * fraction, viewport_height_f * 0.5],
+                        font_pixels,
+                        slant: 0.0,
+                    }
+                })
+                .collect::<Vec<_>>();
+            runs
+        }
+        CppFontRushShowcaseSource::Section => {
+            let font_pixels = (viewport_width_f * 0.16)
+                .min(viewport_height_f * 0.48)
+                .clamp(12.0, 196.0);
+            alloc::vec![RetainedFontRun {
+                text: String::from("§"),
+                position: [viewport_width_f * 0.5, viewport_height_f * 0.52],
+                font_pixels,
+                slant: 0.0,
+            }]
+        }
+    };
+    FontStampRequest {
+        layers: alloc::vec![FontStampLayer {
+            scene: RetainSceneRequest {
+                runs,
+                font: crate::intel::gpu_font::GpuFontFace::Default,
+                viewport_width,
+                viewport_height,
+                raster_width: width,
+                raster_height: height,
+                positioning: RetainedFontPositioning::VisualBoundsCenter,
+            },
+            // A white premultiplied source lets the sprite worklist apply the
+            // stage color without regenerating coverage.
+            foreground: crate::intel::gpu_font::GpuFontRgba::new(
+                u8::MAX,
+                u8::MAX,
+                u8::MAX,
+                u8::MAX,
+            ),
+        }],
+        fit: FontStampFit::Tight,
+    }
+}
+
+fn queue_cpp_font_rush_showcase_source(
+    preview: &mut ActivePreview,
+    kind: CppFontRushShowcaseSource,
+) -> Result<(), &'static str> {
+    use crate::r::font_kernel_service::FontKernelError;
+
+    let already_owned = {
+        let sources = &preview
+            .font_rush
+            .as_ref()
+            .ok_or("font-rush-plane-state-missing")?
+            .showcase_sources;
+        match kind {
+            CppFontRushShowcaseSource::Title => {
+                sources.title.is_some() || sources.title_pending.is_some()
+            }
+            CppFontRushShowcaseSource::Section => {
+                sources.section.is_some() || sources.section_pending.is_some()
+            }
+        }
+    };
+    if already_owned {
+        return Ok(());
+    }
+    let request = cpp_font_rush_showcase_source_request(kind, preview.width, preview.height);
+    let completion = match crate::r::font_kernel_service::submit_stamp(request) {
+        Ok(completion) => completion,
+        Err(FontKernelError::QueueFull) => return Ok(()),
+        Err(error) => {
+            crate::log_warn!(
+                target: "ui4";
+                "ui4 cpp-font-rush showcase source rejected request={} source={} reason={:?} action=stop-before-use\n",
+                preview.request_serial,
+                kind.label(),
+                error,
+            );
+            return Err("font-rush-showcase-source-submit");
+        }
+    };
+    let ticket = completion.ticket();
+    let sources = &mut preview
+        .font_rush
+        .as_mut()
+        .ok_or("font-rush-plane-state-missing")?
+        .showcase_sources;
+    match kind {
+        CppFontRushShowcaseSource::Title => sources.title_pending = Some(completion),
+        CppFontRushShowcaseSource::Section => sources.section_pending = Some(completion),
+    }
+    crate::log_info!(
+        target: "ui4";
+        "ui4 cpp-font-rush showcase source enqueued request={} source={} ticket={} glyphs={} fit=tight foreground=white lifecycle=run-owned-until-last-presentation completion=cooperative-signal-try-take\n",
+        preview.request_serial,
+        kind.label(),
+        ticket.raw(),
+        kind.glyphs(),
+    );
+    Ok(())
+}
+
+fn poll_cpp_font_rush_showcase_source(
+    preview: &mut ActivePreview,
+    kind: CppFontRushShowcaseSource,
+) -> Result<(), &'static str> {
+    let completion = {
+        let sources = &mut preview
+            .font_rush
+            .as_mut()
+            .ok_or("font-rush-plane-state-missing")?
+            .showcase_sources;
+        match kind {
+            CppFontRushShowcaseSource::Title => sources
+                .title_pending
+                .as_mut()
+                .and_then(|pending| pending.try_take()),
+            CppFontRushShowcaseSource::Section => sources
+                .section_pending
+                .as_mut()
+                .and_then(|pending| pending.try_take()),
+        }
+    };
+    let Some(completion) = completion else {
+        return Ok(());
+    };
+    let pending = {
+        let sources = &mut preview
+            .font_rush
+            .as_mut()
+            .ok_or("font-rush-plane-state-missing")?
+            .showcase_sources;
+        match kind {
+            CppFontRushShowcaseSource::Title => sources.title_pending.take(),
+            CppFontRushShowcaseSource::Section => sources.section_pending.take(),
+        }
+    }
+    .ok_or("font-rush-showcase-source-state")?;
+    let ticket = pending.ticket();
+    let stamped = match completion {
+        Ok(stamped) => stamped,
+        Err(error) => {
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            crate::log_warn!(
+                target: "ui4";
+                "ui4 cpp-font-rush showcase source failed request={} source={} ticket={} reason={:?} action=stop-before-sprite-use\n",
+                preview.request_serial,
+                kind.label(),
+                ticket.raw(),
+                error,
+            );
+            return Err("font-rush-showcase-source-failed");
+        }
+    };
+    let surface = stamped.surface();
+    if stamped.ticket() != ticket
+        || stamped.glyphs() != kind.glyphs()
+        || !surface.is_valid()
+        || surface.width == 0
+        || surface.height == 0
+    {
+        preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+        return Err("font-rush-showcase-source-contract");
+    }
+    let origin = stamped.origin_px();
+    let source = Arc::new(stamped);
+    let sources = &mut preview
+        .font_rush
+        .as_mut()
+        .ok_or("font-rush-plane-state-missing")?
+        .showcase_sources;
+    match kind {
+        CppFontRushShowcaseSource::Title => sources.title = Some(source),
+        CppFontRushShowcaseSource::Section => sources.section = Some(source),
+    }
+    let stage = preview
+        .font_rush
+        .as_ref()
+        .ok_or("font-rush-plane-state-missing")?
+        .stage;
+    if stage.uses_showcase_sprite() {
+        preview.cadence_phase = 0;
+        preview.next_render = Instant::now();
+    }
+    crate::log_info!(
+        target: "ui4";
+        "ui4 cpp-font-rush showcase source ready request={} source={} ticket={} glyphs={} extent={}x{} origin={},{} submits={} walkers={} storage=private-font-rgba8 reuse=sprite-only rgba_cpu_readback=0\n",
+        preview.request_serial,
+        kind.label(),
+        ticket.raw(),
+        kind.glyphs(),
+        surface.width,
+        surface.height,
+        origin[0],
+        origin[1],
+        match kind {
+            CppFontRushShowcaseSource::Title => preview
+                .font_rush
+                .as_ref()
+                .and_then(|state| state.showcase_sources.title.as_ref())
+                .map_or(0, |source| source.submits()),
+            CppFontRushShowcaseSource::Section => preview
+                .font_rush
+                .as_ref()
+                .and_then(|state| state.showcase_sources.section.as_ref())
+                .map_or(0, |source| source.submits()),
+        },
+        match kind {
+            CppFontRushShowcaseSource::Title => preview
+                .font_rush
+                .as_ref()
+                .and_then(|state| state.showcase_sources.title.as_ref())
+                .map_or(0, |source| source.active_walkers()),
+            CppFontRushShowcaseSource::Section => preview
+                .font_rush
+                .as_ref()
+                .and_then(|state| state.showcase_sources.section.as_ref())
+                .map_or(0, |source| source.active_walkers()),
+        },
+    );
+    Ok(())
+}
+
+fn maintain_cpp_font_rush_showcase_sources(
+    preview: &mut ActivePreview,
+) -> Result<(), &'static str> {
+    let (rank, stage) = preview
+        .font_rush
+        .as_ref()
+        .map(|state| (state.rank, state.stage))
+        .ok_or("font-rush-plane-state-missing")?;
+    // The primary expanded experiment is the showcase charge-up.  Its later
+    // sibling stages leave several seconds to materialize both tiny private
+    // sources without inserting a cold build between the 150ms title cards.
+    let precursor_charge = rank == 0 && stage == CppFontRushLayerStage::Expanded;
+    // Never inject this relatively large source build between the six 150ms
+    // title-letter frames. If the early charge could not finish, TitleHold
+    // waits and performs the fallback only after every letter was presented.
+    let needs_title = stage == CppFontRushLayerStage::TitleHold || precursor_charge;
+    let needs_section = match stage {
+        CppFontRushLayerStage::TitleHold
+        | CppFontRushLayerStage::BlankPrime
+        | CppFontRushLayerStage::BlankHold
+        | CppFontRushLayerStage::CacheCharge { .. }
+        | CppFontRushLayerStage::SectionPulse
+        | CppFontRushLayerStage::StormPrime { .. } => true,
+        _ => precursor_charge,
+    };
+    if needs_title {
+        queue_cpp_font_rush_showcase_source(preview, CppFontRushShowcaseSource::Title)?;
+    }
+    if needs_section {
+        queue_cpp_font_rush_showcase_source(preview, CppFontRushShowcaseSource::Section)?;
     }
     Ok(())
 }
@@ -3068,6 +3416,9 @@ fn poll_cpp_font_rush_scanout(preview: &mut ActivePreview) -> Result<(), &'stati
             CppFontRushLayerStage::ProducerStorm { .. } => {
                 "sealed-rgba8-cache->font-sprite-worklist->display-plane-direct"
             }
+            stage if stage.uses_showcase_sprite() => {
+                "tight-font-rgba8->scaled-font-sprite-worklist->display-plane-direct"
+            }
             _ => "ui4-font-scene->display-plane-direct",
         },
     );
@@ -3263,6 +3614,31 @@ fn poll_cpp_font_rush_frame(preview: &mut ActivePreview) -> Result<(), &'static 
         );
         return Ok(());
     }
+    if pending.stage.uses_showcase_sprite() {
+        crate::log_info!(
+            target: "ui4";
+            "ui4 cpp-font-rush showcase sprite frame-ready request={} sequence={} ticket={} frame={} producer_buffer={} frame_publish_serial={} window_publish_serial={} layout={} glyphs={} clear_submits={} sprite_submits={} walkers={} release={} pre_service_ms={} clear_ms={} service_ms={} fifo_queued_ahead={} cadence_ms={} planning=0 skrifa=0 tessellation=0 coverage=0 rgba_cpu_readback=0 compositor_jobs=0 path=tight-font-rgba8->guc-font-rcs-scaled-tinted-sprite->ui4-rgba8->display-plane-direct\n",
+            preview.request_serial,
+            pending.sequence,
+            pending.ticket.raw(),
+            preview.frame.raw(),
+            published.buffer_index,
+            published.publish_serial,
+            window_publish_serial,
+            pending.stage.label(),
+            stamped.glyphs(),
+            stamped.clear_submits(),
+            stamped.submits(),
+            stamped.active_walkers(),
+            release.sequence(),
+            stamped.pre_service_ms(),
+            stamped.clear_ms(),
+            stamped.total_service_ms(),
+            pending.fifo_queued_ahead,
+            pending.stage.cadence_ms(),
+        );
+        return Ok(());
+    }
     crate::log_info!(
         target: "ui4";
         "ui4 cpp-font-rush frame-ready request={} consumer={} rank={} slot={} sequence={} publication={} ticket={} elapsed_ms={} scheduled_ms={} plan_batch={} plan_enqueue_delay_ms={} plan_queue_wait_ms={} plan_build_ms={} plan_total_ms={} plan_candidate_attempts={} plan_rejected_candidates={} plan_worker_slices={} plan_yields={} plan_parallelism={} deadline_to_submit_ms={} submit_call_us={} prepared_ops_bytes={} prepared_reserved_ops_bytes={} prepared_segment_evaluations={} gpu_wait_ms={} pre_service_ms={} clear_ms={} prepare_coverage_ms={} coverage_build_ms={} coverage_audit_ms={} gpu_outline_cache_hits={} gpu_outline_cache_misses={} gpu_tile_cache_hits={} gpu_tile_cache_misses={} gpu_cache_evictions={} gpu_resident_outlines={} gpu_resident_tiles={} instance_release_ms={} service_ms={} fifo_queued_ahead={} service_queue_at_complete={} completion_to_publish_us={} frame={} producer_buffer={} frame_publish_serial={} window_publish_serial={} layout={} glyph_hash=0x{:016X} glyph_ids_sample={} glyph_ids_sample_limit={} extent={}x{} cadence_ms={} requested_glyphs={} rendered_glyphs={} grid={}x{} font={} font_id={} application_plane_mask=0x{:02X} usable_planes={} clear_submits={} coverage_submits={} instance_release_submits={} known_gpu_submits={} walkers={} release={} consumer_in_flight=0 context=kernel-gpgpu-font path=registered-skrifa->ecore-plan-pool[shared-recipe-cache]->sealed-plan->font-service-fifo[shared-font-vm-outline+resident-r8-tile-cache->optional-transparent-gpu-clear->cpp-igc->guc-font-rcs]->ui4-font-scene->display-plane-direct backdrop=pipe-a-bottom-color pixel_alpha=premultiplied prepared_replay=exact-plan prepared_cache=shared-recipe-sharded gpu_cache=shared-font-vm-outline+resident-r8-tile compositor_jobs=0 rgba_cpu_readback=0 coverage_audit_cpu_readback=miss-only cpu_frame_copy=0\n",
@@ -3382,6 +3758,14 @@ fn queue_due_cpp_font_rush_consumers(
         {
             continue;
         }
+        if stage.uses_showcase_sprite() && !cpp_font_rush_showcase_source_ready(state, stage) {
+            // Completion is observed cooperatively through Signal::try_take.
+            // Defer this overdue frame instead of turning source readiness
+            // into a 1ms UI polling loop; the completion path pulls the
+            // deadline back to `now` as soon as the source is available.
+            preview.next_render = now + Duration::from_millis(COMMAND_POLL_MAX_MS);
+            continue;
+        }
         if matches!(stage, CppFontRushLayerStage::CacheCharge { .. })
             && (state.planning.is_some()
                 || state.ready_plan.is_some()
@@ -3478,12 +3862,335 @@ fn queue_due_cpp_font_rush_consumers(
             queue_cpp_font_rush_blank(preview, sequence, scheduled_at)?;
             continue;
         }
+        if stage.uses_showcase_sprite() {
+            queue_cpp_font_rush_showcase_sprite(preview, sequence, scheduled_at)?;
+            continue;
+        }
         if matches!(stage, CppFontRushLayerStage::ProducerStorm { .. }) {
             queue_cpp_font_rush_cached_blast(preview, sequence, scheduled_at)?;
             continue;
         }
         queue_cpp_font_rush_plan(preview, sequence, scheduled_at, font)?;
     }
+    Ok(())
+}
+
+fn cpp_font_rush_showcase_source_ready(
+    state: &CppFontRushPlaneState,
+    stage: CppFontRushLayerStage,
+) -> bool {
+    match stage {
+        CppFontRushLayerStage::TitleHold => state.showcase_sources.title.is_some(),
+        CppFontRushLayerStage::SectionPulse | CppFontRushLayerStage::StormPrime { .. } => {
+            state.showcase_sources.section.is_some()
+        }
+        _ => true,
+    }
+}
+
+struct CppFontRushShowcaseSpriteLayout {
+    descriptors: Vec<crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc>,
+    scale: f32,
+    glyphs: usize,
+    columns: u8,
+    color_rgba: u32,
+}
+
+fn cpp_font_rush_section_foreground(sequence: u64) -> crate::intel::gpu_font::GpuFontRgba {
+    match sequence % 6 {
+        0 => crate::intel::gpu_font::GpuFontRgba::new(255, 67, 173, u8::MAX),
+        1 => crate::intel::gpu_font::GpuFontRgba::new(255, 180, 49, u8::MAX),
+        2 => crate::intel::gpu_font::GpuFontRgba::new(93, 245, 255, u8::MAX),
+        3 => crate::intel::gpu_font::GpuFontRgba::new(146, 102, 255, u8::MAX),
+        4 => crate::intel::gpu_font::GpuFontRgba::new(78, 255, 142, u8::MAX),
+        _ => crate::intel::gpu_font::GpuFontRgba::new(255, 245, 116, u8::MAX),
+    }
+}
+
+fn cpp_font_rush_sprite_descriptor(
+    source_width: u32,
+    source_height: u32,
+    center: [f32; 2],
+    scale: f32,
+    color_rgba: u32,
+) -> crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
+    let source_width_f = source_width as f32;
+    let source_height_f = source_height as f32;
+    let half_width = source_width_f * scale * 0.5;
+    let half_height = source_height_f * scale * 0.5;
+    let left = center[0] - half_width;
+    let top = center[1] - half_height;
+    let right = center[0] + half_width;
+    let bottom = center[1] + half_height;
+    let u0 = -0.5 / source_width_f;
+    let v0 = -0.5 / source_height_f;
+    let u1 = (source_width_f - 0.5) / source_width_f;
+    let v1 = (source_height_f - 0.5) / source_height_f;
+    crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
+        c0_x: left,
+        c0_y: top,
+        c0_u: u0,
+        c0_v: v0,
+        c1_x: right,
+        c1_y: top,
+        c1_u: u1,
+        c1_v: v0,
+        c2_x: right,
+        c2_y: bottom,
+        c2_u: u1,
+        c2_v: v1,
+        c3_x: left,
+        c3_y: bottom,
+        c3_u: u0,
+        c3_v: v1,
+        color_rgba,
+        flags: crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER
+            | crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
+    }
+}
+
+fn cpp_font_rush_showcase_descriptors_are_contained(
+    descriptors: &[crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc],
+    destination_width: u32,
+    destination_height: u32,
+) -> bool {
+    let max_x = destination_width as f32;
+    let max_y = destination_height as f32;
+    !descriptors.is_empty()
+        && descriptors.iter().all(|descriptor| {
+            [
+                descriptor.c0_x,
+                descriptor.c1_x,
+                descriptor.c2_x,
+                descriptor.c3_x,
+            ]
+            .into_iter()
+            .all(|x| x.is_finite() && x >= 0.0 && x <= max_x)
+                && [
+                    descriptor.c0_y,
+                    descriptor.c1_y,
+                    descriptor.c2_y,
+                    descriptor.c3_y,
+                ]
+                .into_iter()
+                .all(|y| y.is_finite() && y >= 0.0 && y <= max_y)
+        })
+}
+
+fn cpp_font_rush_showcase_sprite_layout(
+    stage: CppFontRushLayerStage,
+    sequence: u64,
+    source_width: u32,
+    source_height: u32,
+    destination_width: u32,
+    destination_height: u32,
+) -> Result<CppFontRushShowcaseSpriteLayout, &'static str> {
+    if source_width == 0 || source_height == 0 || destination_width == 0 || destination_height == 0
+    {
+        return Err("font-rush-showcase-sprite-empty-extent");
+    }
+    let source_width_f = source_width as f32;
+    let source_height_f = source_height as f32;
+    let destination_width_f = destination_width as f32;
+    let destination_height_f = destination_height as f32;
+    let (scale, centers, foreground, glyphs, columns) = match stage {
+        CppFontRushLayerStage::TitleHold => {
+            let scale = CPP_FONT_RUSH_TITLE_WORD_PRESENTATION_SCALE
+                .min(destination_width_f * 0.97 / source_width_f)
+                .min(destination_height_f * 0.88 / source_height_f);
+            (
+                scale,
+                alloc::vec![[destination_width_f * 0.5, destination_height_f * 0.5]],
+                crate::intel::gpu_font::GpuFontRgba::new(91, 232, 255, u8::MAX),
+                CPP_FONT_RUSH_TITLE_WORD.len(),
+                CPP_FONT_RUSH_TITLE_WORD.len() as u8,
+            )
+        }
+        CppFontRushLayerStage::SectionPulse | CppFontRushLayerStage::StormPrime { .. } => {
+            // The proven 102.4px Lucida source is 176x370 physical pixels at
+            // 2560x1440.  A literal 3x presentation leaves visible gaps and
+            // remains inside scanout, so do not silently shrink this request.
+            let scale = CPP_FONT_RUSH_SECTION_PRESENTATION_SCALE;
+            let foreground = if matches!(stage, CppFontRushLayerStage::StormPrime { .. }) {
+                crate::intel::gpu_font::GpuFontRgba::new(255, 67, 173, u8::MAX)
+            } else {
+                cpp_font_rush_section_foreground(sequence)
+            };
+            (
+                scale,
+                [0.25f32, 0.5, 0.75]
+                    .into_iter()
+                    .map(|fraction| [destination_width_f * fraction, destination_height_f * 0.52])
+                    .collect::<Vec<_>>(),
+                foreground,
+                3,
+                3,
+            )
+        }
+        _ => return Err("font-rush-showcase-sprite-stage"),
+    };
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err("font-rush-showcase-sprite-scale");
+    }
+    let color_rgba = u32::from_le_bytes([foreground.r, foreground.g, foreground.b, foreground.a]);
+    let descriptors = centers
+        .into_iter()
+        .map(|center| {
+            cpp_font_rush_sprite_descriptor(source_width, source_height, center, scale, color_rgba)
+        })
+        .collect::<Vec<_>>();
+    if !cpp_font_rush_showcase_descriptors_are_contained(
+        descriptors.as_slice(),
+        destination_width,
+        destination_height,
+    ) {
+        // Exact 3x is intentional for the section signs. Refuse an output or
+        // changed-font geometry that cannot honor it instead of clipping or
+        // silently shrinking the requested presentation.
+        return Err("font-rush-showcase-sprite-out-of-bounds");
+    }
+    Ok(CppFontRushShowcaseSpriteLayout {
+        descriptors,
+        scale,
+        glyphs,
+        columns,
+        color_rgba,
+    })
+}
+
+fn queue_cpp_font_rush_showcase_sprite(
+    preview: &mut ActivePreview,
+    sequence: u64,
+    scheduled_at: Instant,
+) -> Result<(), &'static str> {
+    use crate::r::font_kernel_service::FontKernelError;
+
+    let (stage, source) = {
+        let state = preview
+            .font_rush
+            .as_ref()
+            .ok_or("font-rush-plane-state-missing")?;
+        let source = match state.stage {
+            CppFontRushLayerStage::TitleHold => state.showcase_sources.title.as_ref(),
+            CppFontRushLayerStage::SectionPulse | CppFontRushLayerStage::StormPrime { .. } => {
+                state.showcase_sources.section.as_ref()
+            }
+            _ => return Err("font-rush-showcase-sprite-stage"),
+        }
+        .ok_or("font-rush-showcase-source-missing")?;
+        (state.stage, Arc::clone(source))
+    };
+    let source_surface = source.surface();
+    let layout = cpp_font_rush_showcase_sprite_layout(
+        stage,
+        sequence,
+        source_surface.width,
+        source_surface.height,
+        preview.width,
+        preview.height,
+    )?;
+    let lease = match acquire_frame_buffer(preview.frame) {
+        Ok(lease) => lease,
+        Err(FramePoolError::Busy) => {
+            preview.metrics.dropped_busy = preview.metrics.dropped_busy.saturating_add(1);
+            preview.metrics.dropped_frame_busy =
+                preview.metrics.dropped_frame_busy.saturating_add(1);
+            return Ok(());
+        }
+        Err(_) => return Err("font-rush-showcase-frame-acquire"),
+    };
+    let destination = match gpgpu_rgba_surface(lease) {
+        Ok(destination) => destination,
+        Err(_) => {
+            let _ = cancel_frame_buffer(lease);
+            return Err("font-rush-showcase-surface");
+        }
+    };
+    let submit_started_at = Instant::now();
+    let completion = match crate::r::font_kernel_service::submit_font_rush_showcase_sprite_frame(
+        source,
+        layout.descriptors,
+        layout.glyphs,
+        destination,
+        u32::from_le_bytes(PremultipliedRgba8::TRANSPARENT.to_native_bytes()),
+    ) {
+        Ok(completion) => completion,
+        Err(FontKernelError::QueueFull) => {
+            let _ = cancel_frame_buffer(lease);
+            preview.metrics.dropped_busy = preview.metrics.dropped_busy.saturating_add(1);
+            preview.metrics.dropped_queue_full =
+                preview.metrics.dropped_queue_full.saturating_add(1);
+            return Ok(());
+        }
+        Err(_) => {
+            let _ = cancel_frame_buffer(lease);
+            return Err("font-rush-showcase-submit");
+        }
+    };
+    let accepted_at = Instant::now();
+    let ticket = completion.ticket();
+    let fifo_queued_ahead = completion.queued_ahead();
+    preview.metrics.submitted = preview.metrics.submitted.saturating_add(1);
+    preview
+        .font_rush
+        .as_mut()
+        .ok_or("font-rush-plane-state-missing")?
+        .pending = Some(CppFontRushPendingFrame {
+        lease,
+        completion,
+        ticket,
+        sequence,
+        scheduled_at,
+        submit_started_at,
+        accepted_at,
+        requested_glyphs: layout.glyphs,
+        columns: layout.columns,
+        rows: 1,
+        stage,
+        font: crate::intel::gpu_font::GpuFontFace::Default,
+        glyph_fingerprint: match stage {
+            CppFontRushLayerStage::TitleHold => 0x5472_7565_4F53,
+            _ => 0x00A7_00A7_00A7 ^ sequence,
+        },
+        glyph_ids_sample: match stage {
+            CppFontRushLayerStage::TitleHold => String::from("T/r/u/e/O/S"),
+            _ => String::from("section-sign-x3"),
+        },
+        fifo_queued_ahead,
+        plan_batch_id: 0,
+        plan_enqueue_delay_ms: 0,
+        plan_queue_wait_ms: 0,
+        plan_build_ms: 0,
+        plan_total_ms: 0,
+        plan_candidate_attempts: 0,
+        plan_rejected_candidates: 0,
+        plan_worker_slices: 0,
+        plan_cooperative_yields: 0,
+        plan_parallelism: 0,
+        prepared_ops_bytes: 0,
+        prepared_reserved_ops_bytes: 0,
+        prepared_work: 0,
+    });
+    crate::log_info!(
+        target: "ui4";
+        "ui4 cpp-font-rush showcase sprite enqueued request={} sequence={} ticket={} frame={} buffer={} layout={} glyphs={} source={}x{} destination={}x{} scale_milli={} tint=0x{:08X} cadence_ms={} fifo_queued_ahead={} submit_call_us={} clear=transparent source_lifecycle=run-owned planning=0 skrifa=0 tessellation=0 coverage=0 rgba_cpu_readback=0 path=tight-font-rgba8->guc-font-rcs-sprite-worklist->ui4-rgba8\n",
+        preview.request_serial,
+        sequence,
+        ticket.raw(),
+        lease.frame.raw(),
+        lease.buffer_index,
+        stage.label(),
+        layout.glyphs,
+        source_surface.width,
+        source_surface.height,
+        preview.width,
+        preview.height,
+        (layout.scale * 1_000.0) as u32,
+        layout.color_rgba,
+        stage.cadence_ms(),
+        fifo_queued_ahead,
+        accepted_at.saturating_duration_since(submit_started_at).as_micros(),
+    );
     Ok(())
 }
 
@@ -3899,7 +4606,14 @@ async fn drain_cpp_font_rush_pending(previews: &mut [ActivePreview]) {
     use crate::r::font_kernel_service::FontKernelError;
 
     for preview in previews {
-        let (planning, ready_plan, cache_charge, pending) = preview
+        let (
+            planning,
+            ready_plan,
+            cache_charge,
+            pending,
+            title_source_pending,
+            section_source_pending,
+        ) = preview
             .font_rush
             .as_mut()
             .map(|state| {
@@ -3908,9 +4622,11 @@ async fn drain_cpp_font_rush_pending(previews: &mut [ActivePreview]) {
                     state.ready_plan.take(),
                     state.cache_charge.take(),
                     state.pending.take(),
+                    state.showcase_sources.title_pending.take(),
+                    state.showcase_sources.section_pending.take(),
                 )
             })
-            .unwrap_or((None, None, None, None));
+            .unwrap_or((None, None, None, None, None, None));
         if let Some(planning) = planning {
             crate::log_info!(
                 target: "ui4";
@@ -3934,6 +4650,58 @@ async fn drain_cpp_font_rush_pending(previews: &mut [ActivePreview]) {
                 ready.plan.ops_bytes(),
             );
             drop(ready);
+        }
+        for (source_label, source_pending) in [
+            ("TrueOS", title_source_pending),
+            ("section-sign", section_source_pending),
+        ] {
+            let Some(source_pending) = source_pending else {
+                continue;
+            };
+            let ticket = source_pending.ticket();
+            crate::log_info!(
+                target: "ui4";
+                "ui4 cpp-font-rush showcase source drain request={} source={} ticket={} action=await-private-rgba8-retirement-before-teardown\n",
+                preview.request_serial,
+                source_label,
+                ticket.raw(),
+            );
+            match source_pending.wait().await {
+                Ok(source) => {
+                    let surface = source.surface();
+                    crate::log_info!(
+                        target: "ui4";
+                        "ui4 cpp-font-rush showcase source drained request={} source={} ticket={} extent={}x{} result=complete action=release-unused-private-rgba8\n",
+                        preview.request_serial,
+                        source_label,
+                        ticket.raw(),
+                        surface.width,
+                        surface.height,
+                    );
+                }
+                Err(FontKernelError::SubmittedIncomplete(reason)) => {
+                    preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+                    crate::log_error!(
+                        target: "ui4";
+                        "ui4 cpp-font-rush showcase source drain quarantined request={} source={} ticket={} reason={} action=service-retains-ambiguous-storage\n",
+                        preview.request_serial,
+                        source_label,
+                        ticket.raw(),
+                        reason,
+                    );
+                }
+                Err(error) => {
+                    preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+                    crate::log_warn!(
+                        target: "ui4";
+                        "ui4 cpp-font-rush showcase source drained request={} source={} ticket={} result={:?} action=no-live-source-storage\n",
+                        preview.request_serial,
+                        source_label,
+                        ticket.raw(),
+                        error,
+                    );
+                }
+            }
         }
         if let Some(charge) = cache_charge {
             crate::log_info!(
@@ -4056,7 +4824,7 @@ fn cpp_font_rush_plan_request(
     height: u32,
     rank: u8,
     stage: CppFontRushLayerStage,
-    sequence: u64,
+    _sequence: u64,
     font: crate::intel::gpu_font::GpuFontFace,
     rng: &mut crate::tyche::SoftRng,
 ) -> Result<(crate::r::font_plan_service::FontPlanBatchRequest, usize, (u8, u8)), &'static str> {
@@ -4064,6 +4832,9 @@ fn cpp_font_rush_plan_request(
 
     if matches!(stage, CppFontRushLayerStage::ProducerStorm { .. }) {
         return Err("font-rush-terminal-is-sealed-rgba8-cache-only");
+    }
+    if stage.uses_showcase_sprite() {
+        return Err("font-rush-showcase-is-resident-rgba8-sprite-only");
     }
     if let CppFontRushLayerStage::CacheCharge { class, batch } = stage {
         let class_index = usize::from(class);
@@ -4153,19 +4924,10 @@ fn cpp_font_rush_plan_request(
         CppFontRushLayerStage::TitleLetter(_) => {
             crate::intel::gpu_font::GpuFontRgba::new(238, 247, 255, u8::MAX)
         }
-        CppFontRushLayerStage::TitleHold => {
-            crate::intel::gpu_font::GpuFontRgba::new(91, 232, 255, u8::MAX)
-        }
-        CppFontRushLayerStage::SectionPulse => match sequence % 6 {
-            0 => crate::intel::gpu_font::GpuFontRgba::new(255, 67, 173, u8::MAX),
-            1 => crate::intel::gpu_font::GpuFontRgba::new(255, 180, 49, u8::MAX),
-            2 => crate::intel::gpu_font::GpuFontRgba::new(93, 245, 255, u8::MAX),
-            3 => crate::intel::gpu_font::GpuFontRgba::new(146, 102, 255, u8::MAX),
-            4 => crate::intel::gpu_font::GpuFontRgba::new(78, 255, 142, u8::MAX),
-            _ => crate::intel::gpu_font::GpuFontRgba::new(255, 245, 116, u8::MAX),
-        },
-        CppFontRushLayerStage::StormPrime { .. } => {
-            crate::intel::gpu_font::GpuFontRgba::new(255, 67, 173, u8::MAX)
+        CppFontRushLayerStage::TitleHold
+        | CppFontRushLayerStage::SectionPulse
+        | CppFontRushLayerStage::StormPrime { .. } => {
+            return Err("font-rush-showcase-is-resident-rgba8-sprite-only");
         }
         CppFontRushLayerStage::BlankPrime
         | CppFontRushLayerStage::BlankHold
@@ -4217,50 +4979,10 @@ fn cpp_font_rush_plan_request(
             )];
             (cells, 1, 1, 1, 1)
         }
-        CppFontRushLayerStage::TitleHold => {
-            let step = viewport_width_f * CPP_FONT_RUSH_TITLE_WORD_WIDTH_FRACTION
-                / CPP_FONT_RUSH_TITLE_WORD.len() as f32;
-            let start_x = (viewport_width_f - step * CPP_FONT_RUSH_TITLE_WORD.len() as f32) * 0.5;
-            let font_pixels = (step * 1.50)
-                .min(viewport_height_f * 0.90)
-                .clamp(8.0, CPP_FONT_RUSH_TITLE_WORD_MAX_FONT_PIXELS);
-            let cells = CPP_FONT_RUSH_TITLE_WORD
-                .iter()
-                .copied()
-                .enumerate()
-                .map(|(index, scalar)| {
-                    FontPlanCellRequest::fixed(
-                        [
-                            start_x + (index as f32 + 0.5) * step,
-                            viewport_height_f * 0.5,
-                        ],
-                        font_pixels,
-                        0.0,
-                        work_limit,
-                        scalar,
-                    )
-                })
-                .collect::<Vec<_>>();
-            (cells, CPP_FONT_RUSH_TITLE_WORD.len(), CPP_FONT_RUSH_TITLE_WORD.len() as u8, 1, 1)
-        }
-        CppFontRushLayerStage::SectionPulse | CppFontRushLayerStage::StormPrime { .. } => {
-            let font_pixels = (viewport_width_f * 0.16)
-                .min(viewport_height_f * 0.48)
-                .clamp(12.0, 196.0);
-            let glyph_work_limit = work_limit / 3;
-            let cells = [0.25f32, 0.5, 0.75]
-                .into_iter()
-                .map(|fraction| {
-                    FontPlanCellRequest::fixed(
-                        [viewport_width_f * fraction, viewport_height_f * 0.52],
-                        font_pixels,
-                        0.0,
-                        glyph_work_limit,
-                        '§',
-                    )
-                })
-                .collect::<Vec<_>>();
-            (cells, 3, 3, 1, 1)
+        CppFontRushLayerStage::TitleHold
+        | CppFontRushLayerStage::SectionPulse
+        | CppFontRushLayerStage::StormPrime { .. } => {
+            return Err("font-rush-showcase-is-resident-rgba8-sprite-only");
         }
         CppFontRushLayerStage::BlankPrime
         | CppFontRushLayerStage::BlankHold
@@ -4874,6 +5596,18 @@ fn next_poll_ms(preview: &ActivePreview) -> u64 {
     }) {
         return 1;
     }
+    if preview.font_rush.as_ref().is_some_and(|state| {
+        state.showcase_sources.title_pending.is_some()
+            || state.showcase_sources.section_pending.is_some()
+    }) {
+        return COMMAND_POLL_MAX_MS;
+    }
+    if preview.font_rush.as_ref().is_some_and(|state| {
+        state.stage.uses_showcase_sprite()
+            && !cpp_font_rush_showcase_source_ready(state, state.stage)
+    }) {
+        return COMMAND_POLL_MAX_MS;
+    }
     let now = Instant::now();
     if preview.next_render <= now {
         return 1;
@@ -5440,14 +6174,17 @@ const fn next_serial(serial: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        CPP_FONT_RUSH_CACHE_FONT_PIXELS, CPP_FONT_RUSH_CADENCE_MS,
-        CPP_FONT_RUSH_SECTION_CADENCE_MS, CPP_FONT_RUSH_TITLE_LETTER_MAX_FONT_PIXELS,
-        CPP_FONT_RUSH_TITLE_LETTERS, CPP_FONT_RUSH_TITLE_WORD,
-        CPP_FONT_RUSH_TITLE_WORD_MAX_FONT_PIXELS, CppFontRushLayerStage, FramePlanError,
-        FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig, GpgpuPreviewPreset,
-        LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH, cpp_font_rush_due_tick_count,
-        cpp_font_rush_glyph_count, cpp_font_rush_grid, cpp_font_rush_plan_request,
-        cpp_font_rush_plane_slots, cpp_font_rush_target_plane_count, preview_extent,
+        CPP_FONT_RUSH_BLANK_MIN_MS, CPP_FONT_RUSH_CACHE_FONT_PIXELS, CPP_FONT_RUSH_CADENCE_MS,
+        CPP_FONT_RUSH_SECTION_CADENCE_MS, CPP_FONT_RUSH_SECTION_PRESENTATION_SCALE,
+        CPP_FONT_RUSH_TITLE_LETTER_MAX_FONT_PIXELS, CPP_FONT_RUSH_TITLE_LETTERS,
+        CPP_FONT_RUSH_TITLE_WORD, CPP_FONT_RUSH_TITLE_WORD_MAX_FONT_PIXELS,
+        CPP_FONT_RUSH_TITLE_WORD_PRESENTATION_SCALE, CPP_FONT_RUSH_TITLE_WORD_X_FRACTIONS,
+        CppFontRushLayerStage, CppFontRushShowcaseSource, FramePlanError, FramePoolError,
+        GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig, GpgpuPreviewPreset, LAB256_PREVIEW_SIZE,
+        PREVIEW_HEIGHT, PREVIEW_WIDTH, cpp_font_rush_due_tick_count, cpp_font_rush_glyph_count,
+        cpp_font_rush_grid, cpp_font_rush_plan_request, cpp_font_rush_plane_slots,
+        cpp_font_rush_showcase_next_stage, cpp_font_rush_showcase_source_request,
+        cpp_font_rush_showcase_sprite_layout, cpp_font_rush_target_plane_count, preview_extent,
         preview_frame_create_error_label, preview_plane_slot, static30_font_stamp_request,
     };
 
@@ -5537,8 +6274,38 @@ mod tests {
 
         assert_eq!(GpuFontFace::Default.id(), 1);
         assert_eq!(GpuFontFace::Default.registry_name(), "font");
-        assert_eq!(CppFontRushLayerStage::SectionPulse.cadence_ms(), 50);
-        assert_eq!(CPP_FONT_RUSH_SECTION_CADENCE_MS, 50);
+        assert_eq!(CppFontRushLayerStage::SectionPulse.cadence_ms(), 100);
+        assert_eq!(CPP_FONT_RUSH_SECTION_CADENCE_MS, 100);
+    }
+
+    #[test]
+    fn cpp_font_rush_blanks_and_charges_before_section_pulse() {
+        assert_eq!(CPP_FONT_RUSH_BLANK_MIN_MS, 2_000);
+        assert_eq!(
+            cpp_font_rush_showcase_next_stage(CppFontRushLayerStage::TitleHold),
+            Ok(CppFontRushLayerStage::BlankPrime),
+        );
+        let mut stage =
+            cpp_font_rush_showcase_next_stage(CppFontRushLayerStage::BlankPrime).unwrap();
+        let mut charges = 0usize;
+        while matches!(stage, CppFontRushLayerStage::CacheCharge { .. }) {
+            charges += 1;
+            stage = cpp_font_rush_showcase_next_stage(stage).unwrap();
+        }
+        assert_eq!(
+            charges,
+            crate::r::font_kernel_service::FONT_RUSH_RGBA8_CACHE_CLASSES
+                * crate::r::font_kernel_service::FONT_RUSH_RGBA8_CACHE_BATCHES_PER_CLASS,
+        );
+        assert_eq!(stage, CppFontRushLayerStage::BlankHold);
+        assert_eq!(
+            cpp_font_rush_showcase_next_stage(stage),
+            Ok(CppFontRushLayerStage::SectionPulse),
+        );
+        assert_eq!(
+            cpp_font_rush_showcase_next_stage(CppFontRushLayerStage::SectionPulse),
+            Ok(CppFontRushLayerStage::StormPrime { mirror: 0 }),
+        );
     }
 
     #[test]
@@ -5567,6 +6334,8 @@ mod tests {
                 .clear_color()
                 .is_none()
         );
+        assert!(CppFontRushLayerStage::BlankPrime.clear_color().is_none());
+        assert!(CppFontRushLayerStage::BlankHold.clear_color().is_none());
         assert!(CppFontRushLayerStage::Dormant.clear_color().is_none());
     }
 
@@ -5637,7 +6406,7 @@ mod tests {
     }
 
     #[test]
-    fn cpp_font_rush_exact_showcase_stays_on_the_prepared_pool_path() {
+    fn cpp_font_rush_title_letters_stay_on_the_prepared_pool_path() {
         let mut rng = crate::tyche::SoftRng::from_seed(7);
         let work_limit = crate::intel::gpu_font::gpu_font_analytical_work_limit();
         for (index, expected) in CPP_FONT_RUSH_TITLE_LETTERS.iter().copied().enumerate() {
@@ -5675,58 +6444,117 @@ mod tests {
             Err("font-rush-title-letter-index")
         ));
 
-        let (request, glyphs, grid) = cpp_font_rush_plan_request(
-            2_560,
-            1_440,
-            0,
+        for stage in [
             CppFontRushLayerStage::TitleHold,
-            1,
-            crate::intel::gpu_font::GpuFontFace::Default,
-            &mut rng,
-        )
-        .unwrap();
-        assert_eq!(glyphs, 6);
-        assert_eq!(grid, (6, 1));
-        assert_eq!(request.parallelism(), 1);
+            CppFontRushLayerStage::SectionPulse,
+            CppFontRushLayerStage::StormPrime { mirror: 0 },
+        ] {
+            assert!(matches!(
+                cpp_font_rush_plan_request(
+                    2_560,
+                    1_440,
+                    0,
+                    stage,
+                    2,
+                    crate::intel::gpu_font::GpuFontFace::Default,
+                    &mut rng,
+                ),
+                Err("font-rush-showcase-is-resident-rgba8-sprite-only")
+            ));
+        }
+    }
+
+    #[test]
+    fn cpp_font_rush_showcase_builds_each_exact_white_source_once() {
+        use crate::r::font_kernel_service::{FontStampFit, RetainedFontPositioning};
+
+        let title =
+            cpp_font_rush_showcase_source_request(CppFontRushShowcaseSource::Title, 2_560, 1_440);
+        assert_eq!(title.fit, FontStampFit::Tight);
+        assert_eq!(title.layers.len(), 1);
+        assert_eq!(title.layers[0].scene.positioning, RetainedFontPositioning::VisualBoundsCenter);
+        assert_eq!(title.layers[0].scene.viewport_width, 640);
+        assert_eq!(title.layers[0].scene.viewport_height, 360);
+        assert_eq!(title.layers[0].scene.runs.len(), CPP_FONT_RUSH_TITLE_WORD.len());
         assert_eq!(
-            request
-                .cells()
+            title.layers[0]
+                .scene
+                .runs
                 .iter()
-                .filter_map(|cell| cell.fixed_scalar())
+                .flat_map(|run| run.text.chars())
                 .collect::<alloc::vec::Vec<_>>(),
             CPP_FONT_RUSH_TITLE_WORD,
         );
-        assert!(
-            request
-                .cells()
-                .windows(2)
-                .all(|pair| { pair[0].position()[0] < pair[1].position()[0] })
-        );
-        assert!(request.cells().iter().all(|cell| {
-            cell.position()[1] == 180.0
-                && cell.font_pixels() == CPP_FONT_RUSH_TITLE_WORD_MAX_FONT_PIXELS
-                && cell.max_work() == work_limit
-        }));
-        let endpoint_sum = request.cells()[0].position()[0] + request.cells()[5].position()[0];
-        assert!((endpoint_sum - 640.0).abs() < 0.001);
+        for (run, fraction) in title.layers[0]
+            .scene
+            .runs
+            .iter()
+            .zip(CPP_FONT_RUSH_TITLE_WORD_X_FRACTIONS)
+        {
+            assert!((run.position[0] - 640.0 * fraction).abs() < 0.01);
+            assert_eq!(run.position[1], 180.0);
+            assert_eq!(run.font_pixels, CPP_FONT_RUSH_TITLE_WORD_MAX_FONT_PIXELS);
+        }
 
-        let (sections, glyphs, _) = cpp_font_rush_plan_request(
+        let section =
+            cpp_font_rush_showcase_source_request(CppFontRushShowcaseSource::Section, 2_560, 1_440);
+        assert_eq!(section.fit, FontStampFit::Tight);
+        assert_eq!(section.layers.len(), 1);
+        assert_eq!(section.layers[0].scene.runs.len(), 1);
+        assert_eq!(section.layers[0].scene.runs[0].text, "§");
+        assert_eq!(section.layers[0].scene.runs[0].position, [320.0, 187.2]);
+        assert_eq!(section.layers[0].scene.runs[0].font_pixels, 102.4);
+    }
+
+    #[test]
+    fn cpp_font_rush_showcase_scales_cached_pixels_without_clipping() {
+        // Representative Lucida tight bounds at the proven source sizes.
+        let title = cpp_font_rush_showcase_sprite_layout(
+            CppFontRushLayerStage::TitleHold,
+            1,
+            1_400,
+            352,
             2_560,
             1_440,
-            0,
-            CppFontRushLayerStage::SectionPulse,
-            2,
-            crate::intel::gpu_font::GpuFontFace::Default,
-            &mut rng,
         )
         .unwrap();
-        assert_eq!(glyphs, 3);
-        assert!(
-            sections
-                .cells()
-                .iter()
-                .all(|cell| cell.fixed_scalar() == Some('§'))
-        );
+        assert_eq!(title.glyphs, 6);
+        assert_eq!(title.descriptors.len(), 1);
+        assert!(title.scale > 1.7);
+        assert!(title.scale <= CPP_FONT_RUSH_TITLE_WORD_PRESENTATION_SCALE);
+        assert!(title.scale * title.scale > 3.0);
+        let word = title.descriptors[0];
+        assert!(word.c0_x >= 0.0 && word.c1_x <= 2_560.0);
+        assert!(word.c0_y >= 0.0 && word.c3_y <= 1_440.0);
+
+        let sections = cpp_font_rush_showcase_sprite_layout(
+            CppFontRushLayerStage::SectionPulse,
+            2,
+            176,
+            370,
+            2_560,
+            1_440,
+        )
+        .unwrap();
+        assert_eq!(sections.glyphs, 3);
+        assert_eq!(sections.descriptors.len(), 3);
+        assert_eq!(sections.scale, CPP_FONT_RUSH_SECTION_PRESENTATION_SCALE);
+        for descriptor in sections.descriptors {
+            assert!(descriptor.c0_x >= 0.0 && descriptor.c1_x <= 2_560.0);
+            assert!(descriptor.c0_y >= 0.0 && descriptor.c3_y <= 1_440.0);
+        }
+
+        assert!(matches!(
+            cpp_font_rush_showcase_sprite_layout(
+                CppFontRushLayerStage::SectionPulse,
+                3,
+                500,
+                500,
+                800,
+                600,
+            ),
+            Err("font-rush-showcase-sprite-out-of-bounds")
+        ));
     }
 
     #[test]
