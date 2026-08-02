@@ -385,7 +385,7 @@ fn print_list(io: &'static dyn ShellBackend2) {
     );
     print_shell_line(
         io,
-        "cpp font rush: isolated FontKernel hardware-plane probe; adds one enumerated application plane every 3 seconds, rerolls font=0 Unicode glyphs independently every second, and stops with \"cpp font rush stop\"",
+        "cpp font rush: staged FontKernel plane probe; adds one layer every 3 seconds, runs 1000/500/250 ms update passes, cycles fonts 1/2/3 every minute, and stops with \"cpp font rush stop\"",
     );
     print_shell_line(
         io,
@@ -455,11 +455,13 @@ fn particle_list_detail() -> String {
 }
 
 fn font_rush_status_detail(
-    members: impl IntoIterator<Item = (u8, Option<u64>, Option<u32>, crate::ui4::GpgpuPreviewMetrics)>,
+    members: impl IntoIterator<
+        Item = (u8, bool, Option<u64>, Option<u32>, crate::ui4::GpgpuPreviewMetrics),
+    >,
 ) -> String {
     let mut detail = String::from(" rush_slots=");
     let mut active = 0usize;
-    for (plane_slot, frame, window, metrics) in members {
+    for (plane_slot, is_active, frame, window, metrics) in members {
         let (Some(frame), Some(window)) = (frame, window) else {
             continue;
         };
@@ -468,8 +470,9 @@ fn font_rush_status_detail(
         }
         let _ = write!(
             detail,
-            "{}:frame{}:window{}:attempted{}:submitted{}:completed{}:published{}:scanout_live{}:scanout_superseded{}:drop_frame{}:drop_queue{}:drop_inflight{}:drop_cadence{}:late{}:font_wait_ms{}",
+            "{}:active{}:frame{}:window{}:attempted{}:submitted{}:completed{}:published{}:scanout_live{}:scanout_superseded{}:drop_frame{}:drop_queue{}:drop_inflight{}:drop_cadence{}:late{}:font_wait_ms{}",
             plane_slot,
+            is_active as u8,
             frame,
             window,
             metrics.attempted,
@@ -485,7 +488,7 @@ fn font_rush_status_detail(
             metrics.late,
             metrics.last_submit_ms,
         );
-        active = active.saturating_add(1);
+        active = active.saturating_add(usize::from(is_active));
     }
     if active == 0 {
         detail.push_str("none");
@@ -537,6 +540,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
                 .map(|member| {
                     (
                         member.plane_slot,
+                        member.active,
                         member.frame.map(|frame| frame.raw()),
                         member.window.map(|window| window.raw()),
                         member.metrics,
@@ -1265,7 +1269,7 @@ fn queue_font_service_rush(io: &'static dyn ShellBackend2) {
         Ok(serial) => print_shell_line(
             io,
             alloc::format!(
-                "cpp font rush: queued=1 request={} font=0 cadence_ms=1000 plane_add_ms=3000 glyph_layout=1+2+4+16 planes=ui4-display-capability-enumerated consumers=independent-per-plane consumer_pending_limit=1 service_model=fifo-32+one-font-context-in-flight per_plane_batch=clear+batched-coverage+batched-region-stamp path=gpu-clear->skrifa->gpu-vm-r8->coverage-audit->guc-font-rcs->ui4-rgba8->display-plane-direct compositor_jobs=0 rgba_cpu_readback=0 coverage_audit_cpu_readback=1 duration=until-stopped stop=\"cpp font rush stop\"",
+                "cpp font rush: queued=1 request={} fonts=1,2,3 font_cycle_ms=60000 cadence_passes_ms=1000,500,250 cadence_final_ms=250 layer_add_ms=3000 pass_boundary=all-4-layers-scanout-live-for-3000ms glyph_layout=1+2+4+16 planes=ui4-display-capability-enumerated consumers=independent-per-plane consumer_pending_limit=1 service_model=fifo-32+one-font-context-in-flight per_plane_batch=clear+batched-coverage+batched-region-stamp path=gpu-clear->skrifa->gpu-vm-r8->coverage-audit->guc-font-rcs->ui4-rgba8->display-plane-direct compositor_jobs=0 rgba_cpu_readback=0 coverage_audit_cpu_readback=1 duration=until-stopped stop=\"cpp font rush stop\"",
                 serial,
             )
             .as_str(),
@@ -1550,15 +1554,15 @@ mod tests {
     fn font_rush_status_reports_every_hardware_plane_consumer() {
         let metrics = crate::ui4::GpgpuPreviewMetrics::default();
         let members = [
-            (0, Some(10), Some(20), metrics),
-            (1, Some(11), Some(21), metrics),
-            (2, Some(12), Some(22), metrics),
-            (3, Some(13), Some(23), metrics),
+            (0, true, Some(10), Some(20), metrics),
+            (1, true, Some(11), Some(21), metrics),
+            (2, false, Some(12), Some(22), metrics),
+            (3, false, Some(13), Some(23), metrics),
         ];
 
         assert_eq!(
             font_rush_status_detail(members),
-            " rush_slots=0:frame10:window20:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,1:frame11:window21:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,2:frame12:window22:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,3:frame13:window23:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0 rush_active_planes=4",
+            " rush_slots=0:active1:frame10:window20:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,1:active1:frame11:window21:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,2:active0:frame12:window22:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,3:active0:frame13:window23:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0 rush_active_planes=2",
         );
     }
 

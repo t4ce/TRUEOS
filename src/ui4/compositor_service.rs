@@ -32,6 +32,12 @@ static DIRTY_FONT_SHARED_COMPOSITION_LOGGED: AtomicBool = AtomicBool::new(false)
 static DIRTY_FONT_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_DIRECT_ADMISSION_WARNED: AtomicBool = AtomicBool::new(false);
 static VIDEO_SURFLIVE_RELEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+/// Latest broker snapshot whose complete plane batch reached SURFLIVE.
+static PRESENTED_BROKER_REVISION: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn ui4_compositor_presented_revision() -> u64 {
+    PRESENTED_BROKER_REVISION.load(Ordering::Acquire)
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui4CompositorError {
@@ -516,6 +522,10 @@ fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui
     if !plans.iter().any(|plan| plan.changed) {
         runtime.profile.no_change_turns = runtime.profile.no_change_turns.saturating_add(1);
         runtime.observed_broker_revision = Some(broker_revision);
+        // No plane update is required because the currently presented state
+        // already matches this broker snapshot. Publish the revision so a
+        // caller waiting on a coalesced/no-op transaction cannot stall.
+        PRESENTED_BROKER_REVISION.store(broker_revision, Ordering::Release);
         release_leases(&leases);
         return Ok(None);
     }
@@ -1240,6 +1250,7 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
     // out of the only supported present path also makes the no-CPU-pixel-read
     // contract structural rather than dependent on an empty request queue.
     runtime.observed_broker_revision = Some(pending.broker_revision);
+    PRESENTED_BROKER_REVISION.store(pending.broker_revision, Ordering::Release);
     commit_direct_leases(runtime, pending);
     release_leases(&pending.leases);
     let elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(pending.started_ns) / 1_000;

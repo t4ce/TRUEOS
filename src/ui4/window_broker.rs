@@ -1406,6 +1406,59 @@ pub(crate) fn set_window_placement(
     Ok(())
 }
 
+/// Change several windows' visibility as one broker transaction. The complete
+/// set is validated before any record changes, so compositor snapshots cannot
+/// observe a prefix of a multi-window pass transition.
+pub(crate) fn set_windows_visible(
+    owner: WindowOwner,
+    ids: &[WindowId],
+    visible: bool,
+) -> Result<u64, WindowBrokerError> {
+    let mut broker = WINDOW_BROKER.lock();
+    let mut changed_ids = Vec::with_capacity(ids.len());
+    for (index, id) in ids.iter().copied().enumerate() {
+        if ids[..index].contains(&id) {
+            return Err(WindowBrokerError::InvalidHandle);
+        }
+        let (slot, generation) = unpack_handle(id.0)?;
+        let window = broker
+            .windows
+            .get(slot)
+            .ok_or(WindowBrokerError::InvalidHandle)?;
+        if window.generation != generation {
+            return Err(WindowBrokerError::InvalidHandle);
+        }
+        if window.owner != owner {
+            return Err(WindowBrokerError::OwnerMismatch);
+        }
+        match window.state {
+            WindowState::Pending | WindowState::Ready => {}
+            WindowState::Closing => return Err(WindowBrokerError::SessionClosed),
+            WindowState::Closed => return Err(WindowBrokerError::Closed),
+        }
+        if window.placement.visible != visible {
+            changed_ids.push(id);
+        }
+    }
+
+    for id in changed_ids.iter().copied() {
+        let (slot, _) = unpack_handle(id.0)?;
+        let window = &mut broker.windows[slot];
+        window.placement.visible = visible;
+        window.revision = next_serial(window.revision);
+    }
+    if !changed_ids.is_empty() {
+        broker.mark_composition_changed();
+    }
+    let composition_revision = broker.composition_revision;
+    drop(broker);
+
+    for id in changed_ids {
+        super::cursor_frame_inout::frame_visual_changed(owner, id);
+    }
+    Ok(composition_revision)
+}
+
 /// Translate a window through UI4's frame interaction policy.
 ///
 /// Unlike the owner-facing placement setter, this entry point cannot resize a
