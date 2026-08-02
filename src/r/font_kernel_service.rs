@@ -55,6 +55,10 @@ pub(crate) const FONT_RUSH_RGBA8_CACHE_TILE_PX: u32 = 128;
 pub(crate) const FONT_RUSH_RGBA8_CACHE_COLUMNS: u32 = 16;
 pub(crate) const FONT_RUSH_RGBA8_CACHE_ROWS: u32 = 8;
 pub(crate) const FONT_RUSH_RGBA8_BLAST_GLYPHS: usize = 64;
+const _: () = assert!(
+    FONT_RUSH_RGBA8_CACHE_COLUMNS as usize * FONT_RUSH_RGBA8_CACHE_ROWS as usize
+        == FONT_RUSH_RGBA8_CACHE_GLYPHS_PER_CLASS
+);
 
 static NEXT_TICKET: AtomicU64 = AtomicU64::new(1);
 static NEXT_FONT_RUSH_RGBA8_CACHE_ID: AtomicU64 = AtomicU64::new(1);
@@ -204,8 +208,7 @@ struct CachedPreparedGlyph {
 /// 32 MiB object when that one demo run ends.
 pub(crate) struct FontRushRgba8Cache {
     id: u64,
-    atlases: [crate::intel::gpgpu::GpgpuOwnedFontRushRgba8Atlas;
-        FONT_RUSH_RGBA8_CACHE_CLASSES],
+    atlases: [crate::intel::gpgpu::GpgpuOwnedFontRushRgba8Atlas; FONT_RUSH_RGBA8_CACHE_CLASSES],
     ready_batches: AtomicU32,
     sealed: AtomicBool,
 }
@@ -226,7 +229,9 @@ impl FontRushRgba8Cache {
         &self,
         class: u8,
     ) -> Option<crate::intel::gpgpu::GpgpuRgba8Surface> {
-        self.atlases.get(usize::from(class)).map(|atlas| atlas.surface())
+        self.atlases
+            .get(usize::from(class))
+            .map(|atlas| atlas.surface())
     }
 
     fn batch_bit(class: u8, batch: u8) -> Option<u32> {
@@ -241,9 +246,8 @@ impl FontRushRgba8Cache {
     }
 
     pub(crate) fn batch_ready(&self, class: u8, batch: u8) -> bool {
-        Self::batch_bit(class, batch).is_some_and(|bit| {
-            self.ready_batches.load(Ordering::Acquire) & bit != 0
-        })
+        Self::batch_bit(class, batch)
+            .is_some_and(|bit| self.ready_batches.load(Ordering::Acquire) & bit != 0)
     }
 
     fn mark_batch_ready(&self, class: u8, batch: u8) -> Result<(), FontKernelError> {
@@ -260,9 +264,8 @@ impl FontRushRgba8Cache {
     }
 
     pub(crate) fn seal(&self) -> Result<(), FontKernelError> {
-        let expected = (1u32
-            << (FONT_RUSH_RGBA8_CACHE_CLASSES * FONT_RUSH_RGBA8_CACHE_BATCHES_PER_CLASS))
-            - 1;
+        let expected =
+            (1u32 << (FONT_RUSH_RGBA8_CACHE_CLASSES * FONT_RUSH_RGBA8_CACHE_BATCHES_PER_CLASS)) - 1;
         if self.ready_batches.load(Ordering::Acquire) != expected {
             return Err(FontKernelError::InvalidRequest("font-rush-cache-incomplete"));
         }
@@ -275,8 +278,7 @@ impl FontRushRgba8Cache {
     }
 }
 
-pub(crate) fn allocate_font_rush_rgba8_cache(
-) -> Result<Arc<FontRushRgba8Cache>, FontKernelError> {
+pub(crate) fn allocate_font_rush_rgba8_cache() -> Result<Arc<FontRushRgba8Cache>, FontKernelError> {
     let atlases = [
         crate::intel::gpgpu::allocate_font_rush_rgba8_atlas(0),
         crate::intel::gpgpu::allocate_font_rush_rgba8_atlas(1),
@@ -822,9 +824,8 @@ pub(crate) struct PendingFontFrameStamp {
 pub(crate) struct PendingFontRushCacheCharge {
     ticket: FontKernelTicket,
     queued_ahead: usize,
-    reply: Arc<
-        Signal<crate::wait::EmbassySpinRawMutex, Result<FontRushCacheCharge, FontKernelError>>,
-    >,
+    reply:
+        Arc<Signal<crate::wait::EmbassySpinRawMutex, Result<FontRushCacheCharge, FontKernelError>>>,
 }
 
 impl PendingFontRushCacheCharge {
@@ -975,10 +976,7 @@ enum QueuedFontRequest {
         batch: u8,
         enqueued_ms: u64,
         reply: Arc<
-            Signal<
-                crate::wait::EmbassySpinRawMutex,
-                Result<FontRushCacheCharge, FontKernelError>,
-            >,
+            Signal<crate::wait::EmbassySpinRawMutex, Result<FontRushCacheCharge, FontKernelError>>,
         >,
     },
 }
@@ -996,9 +994,9 @@ impl QueuedFontRequest {
     const fn consumer(&self) -> FontKernelConsumer {
         let path = match self {
             Self::Retain { .. } => FontKernelConsumerPath::RetainScene,
-            Self::Stamp { .. }
-            | Self::FrameStamp { .. }
-            | Self::FontRushCacheCharge { .. } => FontKernelConsumerPath::Stamp,
+            Self::Stamp { .. } | Self::FrameStamp { .. } | Self::FontRushCacheCharge { .. } => {
+                FontKernelConsumerPath::Stamp
+            }
         };
         FontKernelConsumer::new(path, self.ticket().raw())
     }
@@ -1135,10 +1133,7 @@ pub(crate) fn submit_prepared_font_rush_cache_charge(
 ) -> Result<PendingFontRushCacheCharge, PreparedFontRushCacheChargeRejection> {
     let reject = |error, plan| PreparedFontRushCacheChargeRejection { error, plan };
     let Some(destination) = cache.atlas_surface(class) else {
-        return Err(reject(
-            FontKernelError::InvalidRequest("font-rush-cache-class"),
-            plan,
-        ));
+        return Err(reject(FontKernelError::InvalidRequest("font-rush-cache-class"), plan));
     };
     if cache.is_sealed()
         || cache.batch_ready(class, batch)
@@ -2025,11 +2020,9 @@ fn process_font_rush_cache_charge(
     {
         return Err(FontKernelError::InvalidRequest("font-rush-cache-cell-overlap"));
     }
-    let (cached, _) = prepare_cached_font_gpu_glyphs(
-        prepared.as_slice(),
-        classification.unique_indices(),
-    )
-    .map_err(|failure| failure.error)?;
+    let (cached, _) =
+        prepare_cached_font_gpu_glyphs(prepared.as_slice(), classification.unique_indices())
+            .map_err(|failure| failure.error)?;
 
     set_active_stage(ticket, "font-rush-cache-rgba8-materialize");
     let (submits, active_walkers) =
@@ -2095,10 +2088,10 @@ fn font_rush_cache_sprite_descriptor(
             ^ class as u64,
     );
     let entry = (seed as usize) % FONT_RUSH_RGBA8_CACHE_GLYPHS_PER_CLASS;
-    let source_x = (entry % FONT_RUSH_RGBA8_CACHE_COLUMNS as usize) as u32
-        * FONT_RUSH_RGBA8_CACHE_TILE_PX;
-    let source_y = (entry / FONT_RUSH_RGBA8_CACHE_COLUMNS as usize) as u32
-        * FONT_RUSH_RGBA8_CACHE_TILE_PX;
+    let source_x =
+        (entry % FONT_RUSH_RGBA8_CACHE_COLUMNS as usize) as u32 * FONT_RUSH_RGBA8_CACHE_TILE_PX;
+    let source_y =
+        (entry / FONT_RUSH_RGBA8_CACHE_COLUMNS as usize) as u32 * FONT_RUSH_RGBA8_CACHE_TILE_PX;
     let source_width = crate::intel::gpgpu::GPGPU_FONT_RUSH_RGBA8_ATLAS_WIDTH as f32;
     let source_height = crate::intel::gpgpu::GPGPU_FONT_RUSH_RGBA8_ATLAS_HEIGHT as f32;
     let u0 = (source_x as f32 - 0.5) / source_width;
@@ -2204,22 +2197,18 @@ fn process_font_rush_rgba8_cache_blast(
     );
     match rendered.outcome {
         crate::intel::gpgpu::GpgpuSubmissionOutcome::SubmittedIncomplete => {
-            return Err(FontKernelError::SubmittedIncomplete(
-                "font-rush-cache-blit-incomplete",
-            ));
+            return Err(FontKernelError::SubmittedIncomplete("font-rush-cache-blit-incomplete"));
         }
         crate::intel::gpgpu::GpgpuSubmissionOutcome::Unavailable => {
             return Err(FontKernelError::Unavailable("font-rush-cache-blit"));
         }
         crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete => {}
     }
-    let release = rendered.release.ok_or(FontKernelError::SubmittedIncomplete(
-        "font-rush-cache-blit-release-missing",
-    ))?;
+    let release = rendered
+        .release
+        .ok_or(FontKernelError::SubmittedIncomplete("font-rush-cache-blit-release-missing"))?;
     if rendered.stats.descs != FONT_RUSH_RGBA8_BLAST_GLYPHS {
-        return Err(FontKernelError::SubmittedIncomplete(
-            "font-rush-cache-blit-count-mismatch",
-        ));
+        return Err(FontKernelError::SubmittedIncomplete("font-rush-cache-blit-count-mismatch"));
     }
     let completed_ms = Instant::now().as_millis();
     crate::log_info!(
@@ -2731,7 +2720,7 @@ pub(crate) async fn font_kernel_service_task() {
     ONLINE.store(true, Ordering::Release);
     crate::log_info!(
         target: "render";
-        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp+prepared-frame-stamp controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only gpu_context=kernel-gpgpu-font queue_capacity={} retained_storage=gpu-vm-r8 prepared_storage=bounded-transient-move-once stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
+        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp+prepared-frame-stamp+font-rush-rgba8-charge+sealed-rgba8-cache-blast controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only gpu_context=kernel-gpgpu-font queue_capacity={} retained_storage=gpu-vm-r8 prepared_storage=bounded-transient-move-once rush_cache=run-owned-4x8MiB-pat0-final-rgba8 rush_terminal=ordered-source-over-copy-only stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
         FONT_KERNEL_QUEUE_CAPACITY,
     );
     loop {
