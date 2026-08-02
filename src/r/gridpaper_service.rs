@@ -263,6 +263,8 @@ struct KernelGridPresentationRecord {
     owner: KernelGridOwner,
     presentation: KernelGridPresentation,
     accepted_text_cells: u64,
+    accepted_keyboard_edits: u64,
+    published_keyboard_edits: u64,
 }
 
 struct SnapshotStore {
@@ -620,6 +622,24 @@ pub(crate) fn kernel_grid_accepted_text_cells(lease: KernelGridLease) -> Option<
         .map(|record| record.accepted_text_cells)
 }
 
+pub(crate) fn kernel_grid_accepted_keyboard_edits(lease: KernelGridLease) -> Option<u64> {
+    KERNEL_GRID_PRESENTATIONS
+        .lock()
+        .iter()
+        .flatten()
+        .find(|record| record.owner == lease.owner)
+        .map(|record| record.accepted_keyboard_edits)
+}
+
+pub(crate) fn kernel_grid_published_keyboard_edits(lease: KernelGridLease) -> Option<u64> {
+    KERNEL_GRID_PRESENTATIONS
+        .lock()
+        .iter()
+        .flatten()
+        .find(|record| record.owner == lease.owner)
+        .map(|record| record.published_keyboard_edits)
+}
+
 pub(crate) fn is_spirit_response_grid_window(window: crate::ui4::WindowId) -> bool {
     KERNEL_GRID_PRESENTATIONS
         .lock()
@@ -635,6 +655,13 @@ fn mark_kernel_grid_generation_published(pool_slot: usize, generation: u64) {
     let mut presentations = KERNEL_GRID_PRESENTATIONS.lock();
     if let Some(record) = presentations[pool_slot].as_mut() {
         record.presentation.published_generation = generation;
+    }
+}
+
+fn mark_kernel_grid_keyboard_edits_published(pool_slot: usize, edits: u64) {
+    let mut presentations = KERNEL_GRID_PRESENTATIONS.lock();
+    if let Some(record) = presentations[pool_slot].as_mut() {
+        record.published_keyboard_edits = record.published_keyboard_edits.max(edits);
     }
 }
 
@@ -2053,6 +2080,8 @@ fn attach_presentation(
                 published_generation: 0,
             },
             accepted_text_cells: 0,
+            accepted_keyboard_edits: 0,
+            published_keyboard_edits: 0,
         });
     }
     Ok(presentation)
@@ -2527,13 +2556,14 @@ fn build_resident_page(
 ) -> Result<ResidentPage, &'static str> {
     use crate::intel::gpu_font::{
         GpuFontJobEntry, GpuFontTextRequest, create_gpu_font_centered_coverage_mask_at_raster,
-        create_resident_font_centered_scene_mesh_at_raster, ensure_font_face_available,
+        create_resident_font_centered_scene_mesh_at_raster,
         gpu_font_entries_use_analytical_coverage,
     };
 
-    ensure_font_face_available(GpuFontFace::Default)?;
-    ensure_font_face_available(GpuFontFace::Inconsolata)?;
-    ensure_font_face_available(GpuFontFace::NotoSansSc)?;
+    // Only glyphs present in this snapshot consult the already-registered
+    // fallback faces below. A geometry-only page must not preflight a future
+    // filesystem face merely because that face is in Gridpaper's fallback
+    // order.
     let mut layers = Vec::new();
 
     let mut backgrounds: Vec<(u8, Geometry)> = Vec::new();
@@ -4832,11 +4862,12 @@ fn edit_gridpaper_cell(
         return;
     }
     runtime.keyboard_edits = runtime.keyboard_edits.saturating_add(1);
-    if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT {
-        let mut presentations = KERNEL_GRID_PRESENTATIONS.lock();
-        if let Some(record) = presentations[runtime.surface.pool_slot].as_mut()
-            && record.owner.client == KernelGridClient::SpiritResponse
-        {
+    let mut presentations = KERNEL_GRID_PRESENTATIONS.lock();
+    if let Some(record) = presentations[runtime.surface.pool_slot].as_mut()
+        && record.owner.client == KernelGridClient::SpiritResponse
+    {
+        record.accepted_keyboard_edits = record.accepted_keyboard_edits.saturating_add(1);
+        if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT {
             record.accepted_text_cells = record.accepted_text_cells.saturating_add(1);
         }
     }
@@ -5416,6 +5447,15 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                 runtime.cursor_dirty = false;
                 runtime.cursor_damage_cells.clear();
                 runtime.presented_cell_patch_serial = published_cell_patch_serial;
+                if runtime.dirty_cells.is_empty()
+                    && runtime.queued_snapshot.is_none()
+                    && runtime.pending.is_none()
+                {
+                    mark_kernel_grid_keyboard_edits_published(
+                        runtime.surface.pool_slot,
+                        runtime.keyboard_edits,
+                    );
+                }
                 published_page_this_tick = true;
                 runtime.last_render_error = None;
             }
@@ -5524,6 +5564,15 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                 );
             }
             runtime.presented_cell_patch_serial = page.cell_patch_serial;
+            if runtime.dirty_cells.is_empty()
+                && runtime.queued_snapshot.is_none()
+                && runtime.pending.is_none()
+            {
+                mark_kernel_grid_keyboard_edits_published(
+                    runtime.surface.pool_slot,
+                    runtime.keyboard_edits,
+                );
+            }
             if hot_pan_frame {
                 runtime.hot_pan_frames = runtime.hot_pan_frames.saturating_add(1);
                 if runtime.hot_pan_frames <= 8 || runtime.hot_pan_frames.is_multiple_of(120) {

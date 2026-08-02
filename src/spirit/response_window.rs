@@ -4,8 +4,9 @@
 //! or as a coalesced live prefix. This service reveals Spirit's dedicated
 //! Gridpaper lease, flies Lilly's software cursor to cell zero, clicks it, and
 //! types through her paired virtual keyboard while inference continues.
-//! Hiding the UI4 session after the reading interval retains the Gridpaper GPU
-//! scene and document allocation for the next response.
+//! At boot the same real cursor/keyboard path visibly types and erases one
+//! short greeting before hiding the session. Hiding after that exercise or a
+//! response retains the Gridpaper GPU scene and document allocation.
 
 use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -36,6 +37,9 @@ const SPIRIT_FRAME_COLUMNS: u32 =
 const SPIRIT_FRAME_ROWS: u32 = (SPIRIT_GRID_ROWS * SPIRIT_GRID_SCALE_PERCENT as u32).div_ceil(100);
 const RESPONSE_SERVICE_POLL_MS: u64 = 16;
 const RESPONSE_READ_MS: u64 = 30_000;
+const STARTUP_WARMUP_VISIBLE_MS: u64 = 5_000;
+const STARTUP_WARMUP_READY_TIMEOUT_MS: u64 = 30_000;
+const STARTUP_WARMUP_TEXT: &str = "Hello from TrueOS §";
 const INPUT_BROKER_SETTLE_MS: u64 = 32;
 const CURSOR_SETTLE_GRACE_MS: u64 = 250;
 const GRID_PRESENTATION_READY_TIMEOUT_MS: u64 = 5_000;
@@ -74,6 +78,28 @@ struct ResponseSnapshot {
     revision: u64,
     finished: bool,
     aborted: bool,
+}
+
+#[derive(Copy, Clone)]
+enum SpiritGridInputRun {
+    StartupWarmup,
+    Response(u64),
+}
+
+impl SpiritGridInputRun {
+    fn is_live(self) -> bool {
+        match self {
+            Self::StartupWarmup => true,
+            Self::Response(id) => response_stream_is_live(id),
+        }
+    }
+
+    const fn ready_timeout_ms(self) -> u64 {
+        match self {
+            Self::StartupWarmup => STARTUP_WARMUP_READY_TIMEOUT_MS,
+            Self::Response(_) => GRID_PRESENTATION_READY_TIMEOUT_MS,
+        }
+    }
 }
 
 /// Owned producer handle for one live reasoning response.
@@ -517,28 +543,67 @@ async fn wait_for_pending_response(timeout: Duration) -> bool {
 }
 
 fn presentation_is_ready(presentation: KernelGridPresentation) -> bool {
+    grid_window_publish_serial(presentation.window).is_some()
+}
+
+fn grid_window_publish_serial(window: crate::ui4::WindowId) -> Option<u64> {
     let Some(output) = crate::ui4::OutputId::from_slot(0) else {
-        return false;
+        return None;
     };
     crate::ui4::visible_windows_for_output(output)
         .into_iter()
-        .any(|window| {
-            window.owner == crate::ui4::WindowOwner::GRIDPAPER_SERVICE
-                && window.id == presentation.window
-                && window.state == crate::ui4::WindowState::Ready
-                && window.publish_serial != 0
-                && window.placement.visible
+        .find_map(|snapshot| {
+            (snapshot.owner == crate::ui4::WindowOwner::GRIDPAPER_SERVICE
+                && snapshot.id == window
+                && snapshot.state == crate::ui4::WindowState::Ready
+                && snapshot.publish_serial != 0
+                && snapshot.damage.is_none()
+                && snapshot.placement.visible)
+                .then_some(snapshot.publish_serial)
         })
+}
+
+async fn wait_for_grid_window_publish_after(
+    window: crate::ui4::WindowId,
+    previous_serial: u64,
+) -> Result<u64, &'static str> {
+    let deadline = Instant::now() + Duration::from_millis(STARTUP_WARMUP_READY_TIMEOUT_MS);
+    loop {
+        if let Some(serial) = grid_window_publish_serial(window)
+            && serial != previous_serial
+        {
+            return Ok(serial);
+        }
+        if Instant::now() >= deadline {
+            return Err("gridpaper-startup-publish-timeout");
+        }
+        Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await;
+    }
+}
+
+async fn wait_for_grid_window_acknowledged(
+    window: crate::ui4::WindowId,
+) -> Result<u64, &'static str> {
+    let deadline = Instant::now() + Duration::from_millis(STARTUP_WARMUP_READY_TIMEOUT_MS);
+    loop {
+        if let Some(serial) = grid_window_publish_serial(window) {
+            return Ok(serial);
+        }
+        if Instant::now() >= deadline {
+            return Err("gridpaper-startup-ack-timeout");
+        }
+        Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await;
+    }
 }
 
 async fn wait_for_ready_presentation(
     lease: KernelGridLease,
     generation: u64,
-    response_id: u64,
+    input_run: SpiritGridInputRun,
 ) -> Result<KernelGridPresentation, &'static str> {
-    let deadline = Instant::now() + Duration::from_millis(GRID_PRESENTATION_READY_TIMEOUT_MS);
+    let deadline = Instant::now() + Duration::from_millis(input_run.ready_timeout_ms());
     loop {
-        if !response_stream_is_live(response_id) {
+        if !input_run.is_live() {
             return Err("response-aborted");
         }
         if let Some(presentation) = crate::r::gridpaper_service::kernel_grid_presentation(lease)
@@ -556,7 +621,7 @@ async fn wait_for_ready_presentation(
 
 async fn focus_and_click_cell_zero(
     presentation: KernelGridPresentation,
-    response_id: u64,
+    input_run: SpiritGridInputRun,
 ) -> Result<(), &'static str> {
     let (screen_width, screen_height) =
         crate::intel::active_scanout_dimensions().ok_or("no-active-scanout")?;
@@ -570,7 +635,7 @@ async fn focus_and_click_cell_zero(
     let deadline = Instant::now()
         + Duration::from_millis(u64::from(approach_ms).saturating_add(CURSOR_SETTLE_GRACE_MS));
     loop {
-        if !response_stream_is_live(response_id) {
+        if !input_run.is_live() {
             return Err("response-aborted");
         }
         match super::lilly_cursor::window_approach_complete() {
@@ -584,7 +649,7 @@ async fn focus_and_click_cell_zero(
     }
 
     Timer::after(Duration::from_millis(INPUT_BROKER_SETTLE_MS)).await;
-    if !response_stream_is_live(response_id) {
+    if !input_run.is_live() {
         return Err("response-aborted");
     }
     let source = super::lilly_cursor::selection_source().map_err(|_| "lilly-cursor-source")?;
@@ -597,7 +662,7 @@ async fn focus_and_click_cell_zero(
     super::lilly_cursor::queue_primary_click().map_err(|_| "gridpaper-cell-zero-click")?;
     let click_deadline = Instant::now() + Duration::from_millis(CURSOR_SETTLE_GRACE_MS);
     loop {
-        if !response_stream_is_live(response_id) {
+        if !input_run.is_live() {
             return Err("response-aborted");
         }
         match super::lilly_cursor::window_approach_complete() {
@@ -640,16 +705,23 @@ fn cancel_response_keyboard(keyboard: KeyboardControlDevice) {
 
 async fn wait_for_keyboard_idle(
     keyboard: KeyboardControlDevice,
-    response_id: u64,
+    input_run: SpiritGridInputRun,
 ) -> Result<(), &'static str> {
+    let deadline = Instant::now() + Duration::from_millis(input_run.ready_timeout_ms());
     loop {
-        if !response_stream_is_live(response_id) {
+        if !input_run.is_live() {
             cancel_response_keyboard(keyboard);
             return Err("response-aborted");
         }
         match keyboard_is_idle(KeyboardControlPrincipal::Kernel, keyboard.handle) {
             Ok(true) => return Ok(()),
-            Ok(false) => Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await,
+            Ok(false) if Instant::now() < deadline => {
+                Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await;
+            }
+            Ok(false) => {
+                cancel_response_keyboard(keyboard);
+                return Err("lilly-keyboard-timeout");
+            }
             Err(_) => return Err("lilly-keyboard-status"),
         }
     }
@@ -657,14 +729,14 @@ async fn wait_for_keyboard_idle(
 
 async fn type_response(
     keyboard: KeyboardControlDevice,
-    response_id: u64,
+    input_run: SpiritGridInputRun,
     text: &str,
     clear_queue: bool,
 ) -> Result<usize, &'static str> {
     let scalars = text.chars().collect::<Vec<_>>();
     let mut typed = 0usize;
     for (chunk_index, chunk) in scalars.chunks(KEYBOARD_CHUNK_SCALARS).enumerate() {
-        wait_for_keyboard_idle(keyboard, response_id).await?;
+        wait_for_keyboard_idle(keyboard, input_run).await?;
         let text = chunk.iter().collect::<String>();
         submit_text(
             KeyboardControlPrincipal::Kernel,
@@ -676,7 +748,7 @@ async fn type_response(
         .map_err(|_| "lilly-keyboard-submit")?;
         typed = typed.saturating_add(chunk.iter().filter(|ch| !matches!(ch, '\n' | '\r')).count());
     }
-    wait_for_keyboard_idle(keyboard, response_id).await?;
+    wait_for_keyboard_idle(keyboard, input_run).await?;
     Ok(typed)
 }
 
@@ -695,6 +767,46 @@ async fn wait_for_grid_text_acceptance(
                 Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await;
             }
             Some(_) => return Err("gridpaper-text-accept-timeout"),
+            None => return Err("gridpaper-presentation-lost"),
+        }
+    }
+}
+
+async fn wait_for_grid_keyboard_edits(
+    lease: KernelGridLease,
+    accepted_base: u64,
+    edits: usize,
+) -> Result<(), &'static str> {
+    let edits = u64::try_from(edits).map_err(|_| "gridpaper-edit-count-range")?;
+    let expected_edits = accepted_base.saturating_add(edits);
+    let deadline = Instant::now() + Duration::from_millis(STARTUP_WARMUP_READY_TIMEOUT_MS);
+    loop {
+        match crate::r::gridpaper_service::kernel_grid_accepted_keyboard_edits(lease) {
+            Some(accepted) if accepted >= expected_edits => return Ok(()),
+            Some(_) if Instant::now() < deadline => {
+                Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await;
+            }
+            Some(_) => return Err("gridpaper-edit-accept-timeout"),
+            None => return Err("gridpaper-presentation-lost"),
+        }
+    }
+}
+
+async fn wait_for_grid_published_keyboard_edits(
+    lease: KernelGridLease,
+    published_base: u64,
+    edits: usize,
+) -> Result<(), &'static str> {
+    let edits = u64::try_from(edits).map_err(|_| "gridpaper-edit-count-range")?;
+    let expected_edits = published_base.saturating_add(edits);
+    let deadline = Instant::now() + Duration::from_millis(STARTUP_WARMUP_READY_TIMEOUT_MS);
+    loop {
+        match crate::r::gridpaper_service::kernel_grid_published_keyboard_edits(lease) {
+            Some(published) if published >= expected_edits => return Ok(()),
+            Some(_) if Instant::now() < deadline => {
+                Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await;
+            }
+            Some(_) => return Err("gridpaper-edit-publish-timeout"),
             None => return Err("gridpaper-presentation-lost"),
         }
     }
@@ -763,6 +875,101 @@ async fn request_spirit_keyboard() -> KeyboardControlDevice {
     }
 }
 
+async fn wait_for_hidden_grid(
+    lease: KernelGridLease,
+    window: crate::ui4::WindowId,
+) -> Result<(), &'static str> {
+    let deadline = Instant::now() + Duration::from_millis(GRID_PRESENTATION_READY_TIMEOUT_MS);
+    loop {
+        let broker_window_live = crate::ui4::OutputId::from_slot(0).is_some_and(|output| {
+            crate::ui4::visible_windows_for_output(output)
+                .iter()
+                .any(|snapshot| snapshot.id == window)
+        });
+        if crate::r::gridpaper_service::kernel_grid_presentation(lease).is_none()
+            && !broker_window_live
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("gridpaper-hide-timeout");
+        }
+        Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await;
+    }
+}
+
+async fn run_visible_startup_warmup(
+    lease: KernelGridLease,
+    keyboard: KeyboardControlDevice,
+) -> Result<(), &'static str> {
+    use crate::intel::gpu_font::GpuFontFace;
+
+    // The greeting uses the embedded baseline face. Filesystem-backed future
+    // faces warm independently and are not an admission dependency here.
+    crate::intel::gpu_font::ensure_font_face_available(GpuFontFace::Default)?;
+    let generation = crate::r::gridpaper_service::reset_and_show_kernel_grid(lease)
+        .map_err(|_| "gridpaper-startup-reset")?;
+    let input_run = SpiritGridInputRun::StartupWarmup;
+    let presentation = wait_for_ready_presentation(lease, generation, input_run).await?;
+    let greeting_publish_base = grid_window_publish_serial(presentation.window)
+        .ok_or("gridpaper-startup-window-not-ready")?;
+    focus_and_click_cell_zero(presentation, input_run).await?;
+    let text_accepted_base = crate::r::gridpaper_service::kernel_grid_accepted_text_cells(lease)
+        .ok_or("gridpaper-startup-accept-counter-missing")?;
+    let edit_accepted_base =
+        crate::r::gridpaper_service::kernel_grid_accepted_keyboard_edits(lease)
+            .ok_or("gridpaper-startup-edit-counter-missing")?;
+    let edit_published_base =
+        crate::r::gridpaper_service::kernel_grid_published_keyboard_edits(lease)
+            .ok_or("gridpaper-startup-publish-counter-missing")?;
+    let typed = type_response(keyboard, input_run, STARTUP_WARMUP_TEXT, true).await?;
+    wait_for_grid_text_acceptance(lease, text_accepted_base, typed).await?;
+    wait_for_grid_keyboard_edits(lease, edit_accepted_base, typed).await?;
+    wait_for_grid_published_keyboard_edits(lease, edit_published_base, typed).await?;
+    let greeting_publish_serial =
+        wait_for_grid_window_publish_after(presentation.window, greeting_publish_base).await?;
+    crate::log_info!(
+        target: "gfx";
+        "trueos-spirit: startup Gridpaper greeting typed window={} generation={} publish_serial={} text={:?} scalars={} dwell_ms={} path=lilly-cursor+paired-vkeyboard->ui4->gridpaper action=visible-warmup\n",
+        presentation.window.raw(),
+        generation,
+        greeting_publish_serial,
+        STARTUP_WARMUP_TEXT,
+        typed,
+        STARTUP_WARMUP_VISIBLE_MS,
+    );
+
+    Timer::after(Duration::from_millis(STARTUP_WARMUP_VISIBLE_MS)).await;
+    let mut backspaces = String::new();
+    for _ in STARTUP_WARMUP_TEXT.chars() {
+        backspaces.push('\u{0008}');
+    }
+    let erase_edit_base = crate::r::gridpaper_service::kernel_grid_accepted_keyboard_edits(lease)
+        .ok_or("gridpaper-startup-edit-counter-missing")?;
+    let erase_published_base =
+        crate::r::gridpaper_service::kernel_grid_published_keyboard_edits(lease)
+            .ok_or("gridpaper-startup-publish-counter-missing")?;
+    let erase_publish_base = wait_for_grid_window_acknowledged(presentation.window).await?;
+    let backspace_count = type_response(keyboard, input_run, backspaces.as_str(), false).await?;
+    wait_for_grid_keyboard_edits(lease, erase_edit_base, backspace_count).await?;
+    wait_for_grid_published_keyboard_edits(lease, erase_published_base, backspace_count).await?;
+    let erase_publish_serial =
+        wait_for_grid_window_publish_after(presentation.window, erase_publish_base).await?;
+    crate::r::gridpaper_service::hide_kernel_grid(lease).map_err(|_| "gridpaper-startup-hide")?;
+    wait_for_hidden_grid(lease, presentation.window).await?;
+    crate::log_info!(
+        target: "gfx";
+        "trueos-spirit: startup Gridpaper warm complete window={} typed_scalars={} backspaces={} greeting_publish_serial={} erase_publish_serial={} visible_ms={} post_warm=hidden-retained display_session=none display_window=none display_plane=none gpu_frame=retained gpu_scene=retained\n",
+        presentation.window.raw(),
+        typed,
+        backspace_count,
+        greeting_publish_serial,
+        erase_publish_serial,
+        STARTUP_WARMUP_VISIBLE_MS,
+    );
+    Ok(())
+}
+
 async fn present_claimed_response(
     lease: KernelGridLease,
     keyboard: KeyboardControlDevice,
@@ -782,7 +989,8 @@ async fn present_claimed_response(
         }
     };
 
-    let presentation = match wait_for_ready_presentation(lease, generation, request.id).await {
+    let input_run = SpiritGridInputRun::Response(request.id);
+    let presentation = match wait_for_ready_presentation(lease, generation, input_run).await {
         Ok(presentation) => presentation,
         Err(reason) => {
             crate::log_warn!(
@@ -802,7 +1010,7 @@ async fn present_claimed_response(
         let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
         return false;
     }
-    if let Err(reason) = focus_and_click_cell_zero(presentation, request.id).await {
+    if let Err(reason) = focus_and_click_cell_zero(presentation, input_run).await {
         crate::log_warn!(
             target: "gfx";
             "trueos-spirit: response dropped id={} turn={} window={} reason={}\n",
@@ -900,7 +1108,7 @@ async fn present_claimed_response(
                     snapshot.revision,
                 );
             }
-            match type_response(keyboard, request.id, delta, typed == 0).await {
+            match type_response(keyboard, input_run, delta, typed == 0).await {
                 Ok(chunk_typed) => {
                     typed = typed.saturating_add(chunk_typed);
                     emitted = formatted;
@@ -967,7 +1175,7 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
     let keyboard = request_spirit_keyboard().await;
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: response Gridpaper service online assigned_slot={} current_slot={} frame_grid={}x{} response_grid={}x{} cells={} scale={} ownership=kernel-dedicated cursor=Spirit/Lilly keyboard_slot={} input=cell-zero-click+paired-vkeyboard ingress=completed+coalesced-live-prefix wrap=whitespace-before-word style=rainbow-palette+cpp-scale-0.85..1.15 hide_after_ms={} residency=warm-hidden no-blueprint-vm=1\n",
+        "trueos-spirit: response Gridpaper service online assigned_slot={} current_slot={} frame_grid={}x{} response_grid={}x{} cells={} scale={} ownership=kernel-dedicated cursor=Spirit/Lilly keyboard_slot={} input=cell-zero-click+paired-vkeyboard ingress=completed+coalesced-live-prefix wrap=whitespace-before-word style=rainbow-palette+cpp-scale-0.85..1.15 response_hide_after_ms={} startup=visible-type+backspace startup_text={:?} startup_visible_ms={} post_startup=hidden-retained no-blueprint-vm=1\n",
         expected_slot,
         crate::percpu::current_slot(),
         SPIRIT_FRAME_COLUMNS,
@@ -978,7 +1186,18 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
         SPIRIT_GRID_SCALE_PERCENT,
         keyboard.slot_id,
         RESPONSE_READ_MS,
+        STARTUP_WARMUP_TEXT,
+        STARTUP_WARMUP_VISIBLE_MS,
     );
+    if let Err(reason) = run_visible_startup_warmup(lease, keyboard).await {
+        cancel_response_keyboard(keyboard);
+        let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+        crate::log_warn!(
+            target: "gfx";
+            "trueos-spirit: startup Gridpaper warm incomplete reason={} action=hide+continue-response-service\n",
+            reason,
+        );
+    }
 
     loop {
         let request = match claim_latest_response() {
@@ -1014,6 +1233,19 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_warmup_uses_one_exact_grid_row_and_one_backspace_per_scalar() {
+        assert_eq!(STARTUP_WARMUP_TEXT, "Hello from TrueOS §");
+        assert_eq!(STARTUP_WARMUP_TEXT.chars().count(), 19);
+        assert_eq!(sanitize_response(STARTUP_WARMUP_TEXT), STARTUP_WARMUP_TEXT);
+        assert!(STARTUP_WARMUP_TEXT.chars().count() <= SPIRIT_GRID_COLUMNS as usize);
+        let backspaces = STARTUP_WARMUP_TEXT
+            .chars()
+            .map(|_| '\u{0008}')
+            .collect::<String>();
+        assert_eq!(backspaces.chars().count(), STARTUP_WARMUP_TEXT.chars().count());
+    }
 
     #[test]
     fn response_is_bounded_by_grid_cells_and_wraps_whitespace() {

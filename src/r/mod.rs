@@ -30,7 +30,6 @@ pub mod platform;
 pub mod print2d;
 pub mod rdp;
 pub mod readiness;
-pub mod remote_ai_service;
 pub mod spawn_service;
 pub mod spawn_spec;
 pub mod static_map;

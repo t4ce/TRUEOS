@@ -23,6 +23,7 @@ const HTTPS_EVENT_DRAIN_MAX: usize = 512;
 const HTTPS_COMMAND_QUEUE_DEPTH: usize = 128;
 const HTTPS_EVENT_QUEUE_DEPTH: usize = 1024;
 const HTTPS_RESPONSE_OVERHEAD_MAX: usize = 4096;
+const HTTPS_RESOLVED_HOST_CACHE_MAX: usize = 8;
 const HTTPS_IDLE_SLEEP_MS: u64 = 100;
 static CABI_NET_FETCH_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMap::new());
 static CABI_NET_FETCH_BYTES_RESULTS: Mutex<BTreeMap<u32, CabiNetFetchBytesResult>> =
@@ -90,13 +91,20 @@ struct HttpsClientQueues {
     events: &'static Queue<TlsEvent>,
 }
 
-/// Reusable HTTPS/1.1 JSON client for a long-lived service task.
+struct HttpsResolvedHost {
+    device_index: usize,
+    host: String,
+    ip: [u8; 4],
+}
+
+/// Reusable HTTPS/1.1 JSON client for a long-lived kernel-side caller.
 ///
 /// Its TLS command/event queues are allocated and registered lazily on the
 /// first request, then reused for every subsequent request. Keep one client
-/// for the lifetime of the service instead of constructing one per request.
+/// for the lifetime of the workload instead of constructing one per request.
 pub struct HttpsJsonClient {
     queues: Option<HttpsClientQueues>,
+    resolved_hosts: Vec<HttpsResolvedHost>,
     tls_config: TlsClientConfig,
     roots: TlsRoots,
 }
@@ -111,6 +119,7 @@ impl HttpsJsonClient {
     pub fn new() -> Self {
         Self {
             queues: None,
+            resolved_hosts: Vec::new(),
             tls_config: TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]),
             roots: TlsRoots::mozilla(),
         }
@@ -134,6 +143,33 @@ impl HttpsJsonClient {
         };
         self.queues = Some(queues);
         queues
+    }
+
+    async fn resolve_host(
+        &mut self,
+        device_index: usize,
+        host: &str,
+        timeout_ms: u32,
+    ) -> Result<[u8; 4], String> {
+        if let Some(index) = self.resolved_hosts.iter().position(|cached| {
+            cached.device_index == device_index && cached.host.eq_ignore_ascii_case(host)
+        }) {
+            let cached = self.resolved_hosts.remove(index);
+            let ip = cached.ip;
+            self.resolved_hosts.push(cached);
+            return Ok(ip);
+        }
+
+        let ip = resolve_https_host(device_index, host, timeout_ms).await?;
+        if self.resolved_hosts.len() >= HTTPS_RESOLVED_HOST_CACHE_MAX {
+            self.resolved_hosts.remove(0);
+        }
+        self.resolved_hosts.push(HttpsResolvedHost {
+            device_index,
+            host: String::from(host),
+            ip,
+        });
+        Ok(ip)
     }
 
     /// POST a JSON body and preserve both the HTTP status and bounded body.
@@ -172,9 +208,12 @@ impl HttpsJsonClient {
             .resolve_device_index()
             .ok_or_else(|| String::from("no nic"))?;
         let queues = self.queues_for_device(requested_device_index);
+        let ip = self
+            .resolve_host(queues.device_index, target.host.as_str(), timeout_ms.max(1))
+            .await?;
         request_https_response(
             &target,
-            queues.device_index,
+            ip,
             queues.cmds,
             queues.events,
             &request,
@@ -200,6 +239,41 @@ impl HttpsJsonClient {
                 .await?,
         )
     }
+}
+
+struct CabiHttpsJsonClientState {
+    client: Option<HttpsJsonClient>,
+    busy: bool,
+}
+
+static CABI_HTTPS_JSON_CLIENT: Mutex<CabiHttpsJsonClientState> =
+    Mutex::new(CabiHttpsJsonClientState {
+        client: None,
+        busy: false,
+    });
+
+async fn take_cabi_https_json_client() -> HttpsJsonClient {
+    loop {
+        let acquired = {
+            let mut state = CABI_HTTPS_JSON_CLIENT.lock();
+            if state.busy {
+                None
+            } else {
+                state.busy = true;
+                Some(state.client.take())
+            }
+        };
+        if let Some(client) = acquired {
+            return client.unwrap_or_default();
+        }
+        Timer::after(EmbassyDuration::from_millis(HTTPS_IDLE_SLEEP_MS)).await;
+    }
+}
+
+fn return_cabi_https_json_client(client: HttpsJsonClient) {
+    let mut state = CABI_HTTPS_JSON_CLIENT.lock();
+    state.client = Some(client);
+    state.busy = false;
 }
 
 fn request_has_header(request: &HttpsRequest<'_>, name: &str) -> bool {
@@ -568,6 +642,7 @@ async fn request_https_bytes(
     let device_index = NetProfile::default()
         .resolve_device_index()
         .ok_or_else(|| String::from("no nic"))?;
+    let ip = resolve_https_host(device_index, target.host.as_str(), timeout_ms).await?;
 
     let seq = HTTPS_FETCH_TLS_SEQ.fetch_add(1, Ordering::Relaxed);
     let owner = leak_str(format!("https-fetch-{}@{}", seq, device_index));
@@ -580,7 +655,7 @@ async fn request_https_bytes(
     success_body(
         request_https_response(
             target,
-            device_index,
+            ip,
             cmds,
             events,
             request,
@@ -593,9 +668,23 @@ async fn request_https_bytes(
     )
 }
 
+async fn resolve_https_host(
+    device_index: usize,
+    host: &str,
+    timeout_ms: u32,
+) -> Result<[u8; 4], String> {
+    crate::r::net::dns::resolve_ipv4_for_device(
+        device_index,
+        host,
+        crate::r::net::dns::DnsConfig::for_device(device_index).with_timeout_ms(timeout_ms as u64),
+    )
+    .await
+    .map_err(|err| format!("dns {:?}", err))
+}
+
 async fn request_https_response(
     target: &FetchTarget,
-    device_index: usize,
+    ip: [u8; 4],
     cmds: &'static Queue<TlsCommand>,
     events: &'static Queue<TlsEvent>,
     request: &HttpsRequest<'_>,
@@ -605,13 +694,6 @@ async fn request_https_response(
     max_bytes: usize,
 ) -> Result<HttpsJsonResponse, String> {
     let request_data = build_http_request(target, request)?;
-    let ip = crate::r::net::dns::resolve_ipv4_for_device(
-        device_index,
-        target.host.as_str(),
-        crate::r::net::dns::DnsConfig::for_device(device_index).with_timeout_ms(timeout_ms as u64),
-    )
-    .await
-    .map_err(|err| format!("dns {:?}", err))?;
 
     // A reusable client can have a final Closed event left over after it has
     // already consumed a complete length-delimited response. No connection is
@@ -870,29 +952,16 @@ async fn post_json_bytes(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<Vec<u8>, i32> {
-    let auth_header = bearer.map(|token| format!("Bearer {}", token));
-    let headers_with_auth = [
-        ("Accept", "application/json"),
-        ("Authorization", auth_header.as_deref().unwrap_or_default()),
-    ];
-    let headers_without_auth = [("Accept", "application/json")];
-    let headers = if auth_header.is_some() {
-        &headers_with_auth[..]
-    } else {
-        &headers_without_auth[..]
-    };
-
-    crate::surfer::html_shack::post_bytes_via_pool(
-        url,
-        "application/json",
-        headers,
-        body_json.as_bytes(),
-        timeout_ms as u64,
-        max_bytes,
-    )
-    .await
-    .map(|fetch| fetch.bytes)
-    .map_err(|err| fetch_error_to_code(err.as_str()))
+    // Blueprint callers use an operation id per request, but the kernel-side
+    // HTTPS client is retained across operations. This keeps one registered
+    // TLS queue pair and one bounded DNS cache for a long-running app loop.
+    let mut client = take_cabi_https_json_client().await;
+    let result = client
+        .post_json(url.as_str(), body_json.as_bytes(), bearer.as_deref(), timeout_ms, max_bytes)
+        .await
+        .and_then(success_body);
+    return_cabi_https_json_client(client);
+    result.map_err(|err| fetch_error_to_code(err.as_str()))
 }
 
 fn spawn_fetch_file(op_id: u32, url: String, path: String, timeout_ms: u32, max_bytes: usize) {

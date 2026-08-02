@@ -153,10 +153,6 @@ fn dispatch_disc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
     super::cmds::disc::try_parse(io, &mut args)
 }
 
-fn dispatch_dobby(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::dobby::try_parse(io, rest)
-}
-
 fn dispatch_fslog(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::fslog::try_parse(io, rest)
 }
@@ -275,15 +271,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
             "List top-level disk devices, format a disk, create a ramdisc, or print raw TRUEOSFS log records.",
         ),
         tool_parameters_json: Some(TOOL_JSON_DISC),
-    },
-    BuiltinShell2CmdEntry {
-        name: "dobby",
-        mode: "cmd",
-        color: Some(STATUS_NETWORK_RGB),
-        advertised: true,
-        handler: dispatch_dobby,
-        tool_description: None,
-        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "fslog",
@@ -658,14 +645,6 @@ mod tests {
                 .contains("\"rush_action\":{\"type\":\"string\",\"enum\":[\"start\",\"stop\"]")
         );
         assert!(command_registry_json().contains("staged Unicode glyph rush"));
-    }
-
-    #[test]
-    fn dobby_is_registered_without_becoming_a_local_model_tool() {
-        let registry = command_registry_json();
-
-        assert!(registry.contains("{\"name\":\"dobby\",\"mode\":\"cmd\"}"));
-        assert!(!registry.contains("{\"name\":\"dobby\",\"mode\":\"cmd\",\"tool\""));
     }
 }
 

@@ -385,7 +385,7 @@ fn print_list(io: &'static dyn ShellBackend2) {
     );
     print_shell_line(
         io,
-        "cpp font rush: staged FontKernel plane probe; adds one layer every 3 seconds, runs 1000/500/250 ms update passes, cycles fonts 1/2/3 every minute, and stops with \"cpp font rush stop\"",
+        "cpp font rush: staged FontKernel plane probe; adds four base layers, expands each layer to 2x2 glyph subcells in four more 3-second stages, runs 1000/500/250 ms update passes, cycles fonts 1/2/3 every minute, and stops with \"cpp font rush stop\"",
     );
     print_shell_line(
         io,
@@ -1269,7 +1269,7 @@ fn queue_font_service_rush(io: &'static dyn ShellBackend2) {
         Ok(serial) => print_shell_line(
             io,
             alloc::format!(
-                "cpp font rush: queued=1 request={} fonts=1,2,3 font_cycle_ms=60000 cadence_passes_ms=1000,500,250 cadence_final_ms=250 layer_add_ms=3000 pass_boundary=all-4-layers-scanout-live-for-3000ms glyph_layout=1+2+4+16 planes=ui4-display-capability-enumerated consumers=independent-per-plane consumer_pending_limit=1 service_model=fifo-32+one-font-context-in-flight per_plane_batch=clear+batched-coverage+batched-region-stamp path=gpu-clear->skrifa->gpu-vm-r8->coverage-audit->guc-font-rcs->ui4-rgba8->display-plane-direct compositor_jobs=0 rgba_cpu_readback=0 coverage_audit_cpu_readback=1 duration=until-stopped stop=\"cpp font rush stop\"",
+                "cpp font rush: queued=1 request={} fonts=1,2,3 font_cycle_ms=60000 font_warm_policy=default-required+future-face-retain-and-retry cadence_passes_ms=1000,500,250 cadence_final_ms=250 stage_ms=3000 stages=base-ranks-0..3+expanded-ranks-0..3 pass_boundary=expanded-rank3-scanout-live-for-3000ms glyph_layout_base=1+2+4+16 glyph_layout_expanded=4+8+16+64 planes=ui4-display-capability-enumerated consumers=independent-per-plane consumer_pending_limit=1 service_model=fifo-32+one-font-context-in-flight per_plane_batch=clear+batched-coverage+batched-region-stamp path=gpu-clear->skrifa->gpu-vm-r8->coverage-audit->guc-font-rcs->ui4-rgba8->display-plane-direct compositor_jobs=0 rgba_cpu_readback=0 coverage_audit_cpu_readback=1 duration=until-stopped stop=\"cpp font rush stop\"",
                 serial,
             )
             .as_str(),

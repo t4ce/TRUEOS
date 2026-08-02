@@ -5,7 +5,6 @@ pub(crate) mod aud;
 pub(crate) mod cpp;
 pub(crate) mod cry;
 pub(crate) mod disc;
-pub(crate) mod dobby;
 pub(crate) mod format;
 pub(crate) mod fslog;
 pub(crate) mod grid;
