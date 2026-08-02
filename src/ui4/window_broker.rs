@@ -101,12 +101,15 @@ pub(crate) enum WindowState {
     Closed,
 }
 
-/// Fixed hardware-composition target selected when a broker window is
-/// created. Runtime migration is deliberately not part of this contract yet.
+/// Fixed presentation target selected when a broker window is created.
+/// Runtime migration is deliberately not part of this contract.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WindowPlane {
     Primary,
     Universal(u8),
+    /// UI4's topmost software-cursor/interaction plane. The slot-4 service,
+    /// rather than the application compositor, paints this window.
+    Interaction,
 }
 
 impl WindowPlane {
@@ -114,17 +117,21 @@ impl WindowPlane {
         match self {
             Self::Primary => super::PRIMARY_PLANE_SLOT,
             Self::Universal(slot) => slot as usize,
+            Self::Interaction => super::INTERACTION_OVERLAY_PLANE_SLOT,
         }
+    }
+
+    pub(crate) const fn is_application(self) -> bool {
+        !matches!(self, Self::Interaction)
     }
 
     const fn valid(self) -> bool {
         match self {
             Self::Primary => true,
-            // Slot 4 is deliberately not a broker-window target: UI4 owns it
-            // as the topmost per-vCursor interaction plane.
             Self::Universal(slot) => {
                 slot > 0 && (slot as usize) < super::INTERACTION_OVERLAY_PLANE_SLOT
             }
+            Self::Interaction => true,
         }
     }
 
@@ -584,6 +591,21 @@ impl WindowBroker {
         owner: WindowOwner,
         session: WindowSessionId,
     ) -> Result<WindowPlane, WindowBrokerError> {
+        // Interaction windows are permanently owned by slot 4. They neither
+        // consume an application-plane admission slot nor fall back to one.
+        if requested == WindowPlane::Interaction {
+            if owner != WindowOwner::COLOR_PICKER_SERVICE {
+                return Err(WindowBrokerError::InvalidPlane);
+            }
+            if self.windows.iter().enumerate().any(|(slot, window)| {
+                Some(slot) != replacing_slot
+                    && window.state != WindowState::Closed
+                    && window.plane == WindowPlane::Interaction
+            }) {
+                return Err(WindowBrokerError::Capacity);
+            }
+            return Ok(requested);
+        }
         if share_requested_plane {
             return Ok(requested);
         }
@@ -595,6 +617,7 @@ impl WindowBroker {
                 .is_ok_and(|snapshot| super::frame_plan_shares_compositor_plane(snapshot.plan));
             if Some(slot) != replacing_slot
                 && window.state != WindowState::Closed
+                && window.plane.is_application()
                 && !shares_compositor_plane
             {
                 active = active.saturating_add(1);
@@ -891,6 +914,7 @@ impl WindowBroker {
     fn advance_close_transitions(&mut self, now_ms: u64) -> Vec<WindowTransitionRetirement> {
         let mut retirements = Vec::new();
         let mut composition_changed = false;
+        let mut interaction_changed = false;
         for window in &mut self.windows {
             let Some(transition) = window.close_transition else {
                 continue;
@@ -916,6 +940,7 @@ impl WindowBroker {
                         window.damage = Some(DamageRegion::FULL);
                         window.revision = next_serial(window.revision);
                         composition_changed = true;
+                        interaction_changed |= window.plane == WindowPlane::Interaction;
                     }
                     continue;
                 }
@@ -924,6 +949,7 @@ impl WindowBroker {
                 window.damage = None;
                 window.revision = next_serial(window.revision);
                 composition_changed = true;
+                interaction_changed |= window.plane == WindowPlane::Interaction;
                 retirements.push(WindowTransitionRetirement {
                     lease: transition.lease,
                     frame: window.frame,
@@ -944,10 +970,14 @@ impl WindowBroker {
                 window.damage = Some(DamageRegion::FULL);
                 window.revision = next_serial(window.revision);
                 composition_changed = true;
+                interaction_changed |= window.plane == WindowPlane::Interaction;
             }
         }
         if composition_changed {
             self.mark_composition_changed();
+        }
+        if interaction_changed {
+            super::input_broker::notify_slot4_visual_change();
         }
         retirements
     }
@@ -1054,6 +1084,20 @@ impl WindowBroker {
         }
         window.damage = None;
         true
+    }
+
+    fn acknowledge_revision(&mut self, id: WindowId, publish_serial: u64, revision: u64) -> bool {
+        let Ok((slot, generation)) = unpack_handle(id.0) else {
+            return false;
+        };
+        if !self
+            .windows
+            .get(slot)
+            .is_some_and(|window| window.generation == generation && window.revision == revision)
+        {
+            return false;
+        }
+        self.acknowledge(id, publish_serial)
     }
 }
 
@@ -1702,8 +1746,33 @@ pub(crate) fn visible_windows_for_output_with_revision(
     (broker.composition_revision, broker.snapshots(output))
 }
 
+/// Snapshot only broker windows consumed by the slot 0-3 application
+/// compositor. Slot-4 interaction windows retain the same broker lifecycle
+/// and input routing but are presented exclusively by the slot-4 service.
+pub(crate) fn application_windows_for_output_with_revision(
+    output: OutputId,
+) -> (u64, Vec<WindowSnapshot>) {
+    let broker = WINDOW_BROKER.lock();
+    let revision = broker.composition_revision;
+    let windows = broker
+        .snapshots(output)
+        .into_iter()
+        .filter(|window| window.plane.is_application())
+        .collect();
+    (revision, windows)
+}
+
 pub(crate) fn visible_windows_for_output(output: OutputId) -> Vec<WindowSnapshot> {
     WINDOW_BROKER.lock().snapshots(output)
+}
+
+pub(super) fn interaction_windows_for_output(output: OutputId) -> Vec<WindowSnapshot> {
+    WINDOW_BROKER
+        .lock()
+        .snapshots(output)
+        .into_iter()
+        .filter(|window| window.plane == WindowPlane::Interaction)
+        .collect()
 }
 
 pub(super) fn window_snapshot(owner: WindowOwner, id: WindowId) -> Option<WindowSnapshot> {
@@ -1720,6 +1789,25 @@ pub(super) fn window_snapshot(owner: WindowOwner, id: WindowId) -> Option<Window
 /// If the producer published again meanwhile, the serial differs and its new
 /// damage remains pending.
 pub(crate) fn acknowledge_window_frame(id: WindowId, publish_serial: u64) -> bool {
+    acknowledge_window_frame_inner(id, publish_serial, None)
+}
+
+/// Slot 4 advances independently from the application compositor. Require the
+/// exact broker revision copied into its pending scene so an older SURFLIVE
+/// completion cannot clear damage for a newer placement or opacity sample.
+pub(super) fn acknowledge_window_frame_revision(
+    id: WindowId,
+    publish_serial: u64,
+    revision: u64,
+) -> bool {
+    acknowledge_window_frame_inner(id, publish_serial, Some(revision))
+}
+
+fn acknowledge_window_frame_inner(
+    id: WindowId,
+    publish_serial: u64,
+    required_revision: Option<u64>,
+) -> bool {
     let (acknowledged, first_presentation) = {
         let mut broker = WINDOW_BROKER.lock();
         let first_presentation = {
@@ -1744,7 +1832,11 @@ pub(crate) fn acknowledge_window_frame(id: WindowId, publish_serial: u64) -> boo
                 window.snapshot(slot)
             }
         };
-        let acknowledged = broker.acknowledge(id, publish_serial);
+        let acknowledged = if let Some(revision) = required_revision {
+            broker.acknowledge_revision(id, publish_serial, revision)
+        } else {
+            broker.acknowledge(id, publish_serial)
+        };
         (acknowledged, first_presentation)
     };
     if let Some(window) = first_presentation {
@@ -2082,5 +2174,67 @@ mod tests {
             .expect("released application plane admits the waiting session");
         let (slot, _) = unpack_handle(admitted.raw()).unwrap();
         assert_eq!(broker.windows[slot].plane.slot(), 2);
+    }
+
+    #[test]
+    fn color_picker_interaction_plane_is_fixed_and_never_falls_back() {
+        let mut broker = WindowBroker::new();
+        for frame in 1..=MAX_EXPENSIVE_WINDOWS as u64 {
+            let owner = WindowOwner::GPGPU_PREVIEW;
+            let session = broker.begin_additional_session(owner).unwrap();
+            let mut request = test_window(owner, session, frame, 0, frame as i32, true);
+            request.plane = WindowPlane::Universal(super::super::RGB_OVERLAY_PLANE_SLOT_2 as u8);
+            broker
+                .create(request, FrameBuffering::Triple)
+                .expect("fill one isolated application plane");
+        }
+
+        let owner = WindowOwner::COLOR_PICKER_SERVICE;
+        let session = broker.begin_additional_session(owner).unwrap();
+        let mut request = test_window(owner, session, 10, 0, 100, true);
+        request.plane = WindowPlane::Interaction;
+        let picker = broker
+            .create(request, FrameBuffering::Double)
+            .expect("slot 4 remains independent of full application-plane admission");
+        let (slot, _) = unpack_handle(picker.raw()).unwrap();
+        assert_eq!(broker.windows[slot].plane, WindowPlane::Interaction);
+        assert_eq!(broker.windows[slot].plane.slot(), super::super::INTERACTION_OVERLAY_PLANE_SLOT);
+        assert_eq!(WindowPlane::from_slot(super::super::INTERACTION_OVERLAY_PLANE_SLOT), None);
+
+        broker
+            .replace_frame(
+                owner,
+                picker,
+                FrameHandle::from_raw(11).unwrap(),
+                FrameBuffering::Double,
+                false,
+            )
+            .expect("replacement remains on the fixed interaction plane");
+        assert_eq!(broker.windows[slot].plane, WindowPlane::Interaction);
+
+        let second_session = broker.begin_additional_session(owner).unwrap();
+        let mut second = test_window(owner, second_session, 12, 0, 101, true);
+        second.plane = WindowPlane::Interaction;
+        assert_eq!(broker.create(second, FrameBuffering::Double), Err(WindowBrokerError::Capacity));
+    }
+
+    #[test]
+    fn revision_ack_cannot_clear_newer_interaction_damage() {
+        let owner = WindowOwner::COLOR_PICKER_SERVICE;
+        let mut broker = WindowBroker::new();
+        let session = broker.begin_additional_session(owner).unwrap();
+        let mut request = test_window(owner, session, 21, 0, 0, true);
+        request.plane = WindowPlane::Interaction;
+        let window = broker.create(request, FrameBuffering::Double).unwrap();
+        let (slot, _) = unpack_handle(window.raw()).unwrap();
+        broker.windows[slot].state = WindowState::Closing;
+        broker.windows[slot].publish_serial = 4;
+        broker.windows[slot].revision = 9;
+        broker.windows[slot].damage = Some(DamageRegion::FULL);
+
+        assert!(!broker.acknowledge_revision(window, 4, 8));
+        assert_eq!(broker.windows[slot].damage, Some(DamageRegion::FULL));
+        assert!(broker.acknowledge_revision(window, 4, 9));
+        assert_eq!(broker.windows[slot].damage, None);
     }
 }

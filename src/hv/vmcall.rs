@@ -166,6 +166,7 @@ pub const OP_BP_SHELL2_FRONTEND_READ_V1: u32 = 0x10E;
 pub const OP_BP_SHELL2_FRONTEND_SUBMIT_INPUT_V1: u32 = 0x10F;
 pub const OP_BP_SHELL2_FRONTEND_DETACH_V1: u32 = 0x110;
 pub const OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE: u32 = 0x111; // arg0 window -> rc + routed KeyboardOutputEvent payload
+pub const OP_BP_SPIRIT_TEXT_PRESENT_SILENT: u32 = 0x112; // arg0 turn,payload display-safe UTF-8 -> rc
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -775,6 +776,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_SPIRIT_RESPONSE_PRESENT => {
             let rc = request_payload(vm_id, req_len)
                 .map(|text| crate::r::lumen_service::spirit_response_present(vm_id, arg0, text))
+                .unwrap_or(-3);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SPIRIT_TEXT_PRESENT_SILENT => {
+            let rc = request_payload(vm_id, req_len)
+                .map(|text| crate::r::lumen_service::spirit_text_present_silent(arg0, text))
                 .unwrap_or(-3);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume

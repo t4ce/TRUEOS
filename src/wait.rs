@@ -120,6 +120,46 @@ impl WaitQueue {
         }
     }
 
+    /// Observe the current notification generation before checking the state
+    /// protected by this wait queue.
+    ///
+    /// Queue consumers must take this snapshot *before* checking for work and
+    /// pass it to [`Self::wait_after`] only when that check is empty. A notify
+    /// racing anywhere between those two operations then changes the
+    /// generation and prevents a lost wake.
+    #[inline]
+    pub fn observe(&self) -> u32 {
+        self.seq.load(Ordering::Acquire)
+    }
+
+    /// Wait until a notification newer than `observed` exists.
+    ///
+    /// Notifications are generation changes rather than reserved permits, so
+    /// callers must always loop and recheck their own queue after this returns.
+    #[inline]
+    pub async fn wait_after(&self, observed: u32) {
+        core::future::poll_fn(|cx: &mut Context<'_>| {
+            if self.seq.load(Ordering::Acquire) != observed {
+                return Poll::Ready(());
+            }
+
+            {
+                let mut wakers = self.wakers.lock();
+                if self.seq.load(Ordering::Acquire) != observed {
+                    return Poll::Ready(());
+                }
+                register_waker_list(&mut wakers, cx.waker());
+            }
+
+            if self.seq.load(Ordering::Acquire) != observed {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
     #[inline]
     pub fn notify_one(&self) -> bool {
         self.seq.fetch_add(1, Ordering::Release);
@@ -154,7 +194,8 @@ impl WaitQueue {
 
     #[inline]
     pub async fn wait_for_event(&self) {
-        let _ = self.wait_for_event_timeout(0).await;
+        let observed = self.observe();
+        self.wait_after(observed).await;
     }
 
     #[inline]

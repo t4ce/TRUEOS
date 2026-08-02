@@ -4,7 +4,7 @@
 //! plus size-independent outline commands resident, while leaving
 //! tessellation, raster masks, and GPU coverage as later consumers.
 
-use alloc::{string::String, vec::Vec};
+use alloc::{string::String, sync::Arc, vec::Vec};
 use core::{
     mem::size_of,
     sync::atomic::{AtomicBool, AtomicU8, Ordering},
@@ -185,13 +185,7 @@ struct TransientGlyphMesh {
 /// units. Scale, baseline/Y orientation, curve flattening, and mesh generation
 /// are deliberately left to the compute artifact.
 pub(crate) struct FontGpuOutline {
-    pub(crate) text: String,
-    pub(crate) font_name: &'static str,
-    pub(crate) font_file: &'static str,
     pub(crate) units_per_em: u16,
-    pub(crate) glyphs: usize,
-    pub(crate) contours: usize,
-    pub(crate) checksum: u32,
     pub(crate) ops: Vec<[u32; FONT_GPU_OUTLINE_OP_WORDS]>,
 }
 
@@ -203,12 +197,43 @@ pub(crate) fn gpu_outline_for_text(
     name: &'static str,
     text: &str,
 ) -> Result<FontGpuOutline, &'static str> {
+    // The overwhelmingly common path is already warm. Take one immutable
+    // record lease so availability does not first manufacture a full
+    // diagnostic summary, and release the registry lock before doing work.
+    if let Some(outline) = gpu_outline_for_registered_font(name, text) {
+        return outline;
+    }
+
     match warm_embedded_font_by_name(name).map_err(|_| "font-warm-failed")? {
         Some(_) => {}
         None => return Err("font-not-registered"),
     }
-    let registry = FONT_REGISTRY.lock();
-    let font_record = registry.font_by_name(name).ok_or("font-not-registered")?;
+    gpu_outline_for_registered_font(name, text).ok_or("font-not-registered")?
+}
+
+/// Read a GPU outline only from an already-published warm face.
+///
+/// Post-warm producer pools use this boundary so a missed registration can
+/// never silently turn an E-core planning task into a raw TTF warm task.
+pub(crate) fn gpu_outline_for_registered_text(
+    name: &'static str,
+    text: &str,
+) -> Result<FontGpuOutline, &'static str> {
+    gpu_outline_for_registered_font(name, text).ok_or("font-not-registered")?
+}
+
+fn gpu_outline_for_registered_font(
+    name: &'static str,
+    text: &str,
+) -> Option<Result<FontGpuOutline, &'static str>> {
+    let font_record = registered_font(name)?;
+    Some(gpu_outline_from_registered_font(&font_record, text))
+}
+
+fn gpu_outline_from_registered_font(
+    font_record: &RegisteredFont,
+    text: &str,
+) -> Result<FontGpuOutline, &'static str> {
     let FontWarmEndState::Outline(outline) = font_record
         .outline_endstate()
         .ok_or("outline-cache-missing")?;
@@ -222,8 +247,6 @@ pub(crate) fn gpu_outline_for_text(
         .unwrap_or(fallback_advance);
     let mut ops = Vec::new();
     let mut pen_x = 0.0f32;
-    let mut glyphs = 0usize;
-    let mut contours = 0usize;
     for ch in text.chars() {
         if ch.is_whitespace() {
             pen_x += space_advance;
@@ -233,35 +256,16 @@ pub(crate) fn gpu_outline_for_text(
             pen_x += fallback_advance;
             continue;
         };
-        glyphs = glyphs.saturating_add(1);
-        contours = contours.saturating_add(outline.append_glyph_gpu_ops(glyph_id, pen_x, &mut ops));
+        outline.append_glyph_gpu_ops(glyph_id, pen_x, &mut ops);
         pen_x += metrics.advance_width(glyph_id).unwrap_or(fallback_advance);
     }
     if ops.is_empty() {
         return Err("outline-empty");
     }
-    let checksum = outline_words_checksum(ops.as_slice());
     Ok(FontGpuOutline {
-        text: String::from(text),
-        font_name: font_record.name,
-        font_file: font_record.file_name,
         units_per_em: font_record.units_per_em,
-        glyphs,
-        contours,
-        checksum,
         ops,
     })
-}
-
-fn outline_words_checksum(ops: &[[u32; FONT_GPU_OUTLINE_OP_WORDS]]) -> u32 {
-    let mut hash = 0x811C_9DC5u32;
-    for op in ops {
-        for word in op {
-            hash ^= *word;
-            hash = hash.wrapping_mul(0x0100_0193);
-        }
-    }
-    hash
 }
 
 impl FontTesselMesh {
@@ -335,12 +339,11 @@ pub(crate) fn default_font_summary() -> Option<FontWarmSummary> {
 }
 
 pub(crate) fn font_summary(name: &str) -> Option<FontWarmSummary> {
-    let registry = FONT_REGISTRY.lock();
-    registry.font_by_name(name).and_then(|font| {
+    registered_font(name).and_then(|font| {
         font.endstates
             .iter()
             .find(|endstate| endstate.name() == FONT_ENDSTATE_OUTLINE_COMMANDS)
-            .map(|endstate| endstate.summary(font, "registered", 0, 0, 0))
+            .map(|endstate| endstate.summary(&font, "registered", 0, 0, 0))
     })
 }
 
@@ -348,8 +351,7 @@ pub(crate) fn font_summary(name: &str) -> Option<FontWarmSummary> {
 /// face. This lets retained scenes choose a compact primary face per text run
 /// while keeping a broad Unicode face as a transparent fallback.
 pub(crate) fn font_supports_text(name: &str, text: &str) -> bool {
-    let registry = FONT_REGISTRY.lock();
-    let Some(font_record) = registry.font_by_name(name) else {
+    let Some(font_record) = registered_font(name) else {
         return false;
     };
     let Ok(font) = FontRef::new(font_record.bytes.as_slice()) else {
@@ -376,8 +378,7 @@ pub(crate) fn text_advance_width(
         Some(_) => {}
         None => return Err("font-not-registered"),
     }
-    let registry = FONT_REGISTRY.lock();
-    let font_record = registry.font_by_name(name).ok_or("font-not-registered")?;
+    let font_record = registered_font(name).ok_or("font-not-registered")?;
     let font = FontRef::new(font_record.bytes.as_slice()).map_err(|_| "font-parse-failed")?;
     let charmap = font.charmap();
     let metrics = font.glyph_metrics(Size::unscaled(), LocationRef::default());
@@ -404,10 +405,10 @@ pub(crate) fn text_advance_width(
 }
 
 pub(crate) fn registry_summary() -> FontRegistrySummary {
-    let registry = FONT_REGISTRY.lock();
+    let fonts = FONT_REGISTRY.lock().fonts.clone();
     let mut endstates = 0usize;
     let mut resident_bytes = 0usize;
-    for font in &registry.fonts {
+    for font in &fonts {
         for endstate in &font.endstates {
             endstates = endstates.saturating_add(1);
             resident_bytes = resident_bytes.saturating_add(font.bytes.len());
@@ -415,7 +416,7 @@ pub(crate) fn registry_summary() -> FontRegistrySummary {
         }
     }
     FontRegistrySummary {
-        fonts: registry.fonts.len(),
+        fonts: fonts.len(),
         endstates,
         resident_bytes,
     }
@@ -536,8 +537,7 @@ fn tessellate_text_mesh_grouped(
         }
     }
 
-    let registry = FONT_REGISTRY.lock();
-    let Some(font_record) = registry.font_by_name(name) else {
+    let Some(font_record) = registered_font(name) else {
         return FontTesselMesh::failed("font-not-registered", name, "", text, px_size, total_start);
     };
     let Some(FontWarmEndState::Outline(outline)) = font_record.outline_endstate() else {
@@ -818,7 +818,29 @@ pub(crate) fn warm_embedded_fonts_once() -> Result<Vec<FontWarmSummary>, skrifa:
 /// Embedded faces are warmed synchronously on first use. Filesystem-backed
 /// faces report unavailable until the background loader has registered them.
 pub(crate) fn ensure_font_available(name: &str) -> Result<bool, skrifa::raw::ReadError> {
-    Ok(warm_embedded_font_by_name(name)?.is_some())
+    if registered_font(name)
+        .as_deref()
+        .and_then(RegisteredFont::outline_endstate)
+        .is_some()
+    {
+        return Ok(true);
+    }
+    let Some(index) = EMBEDDED_FONTS.iter().position(|spec| spec.name == name) else {
+        return Ok(false);
+    };
+    warm_embedded_font_once(index).map(|_| true)
+}
+
+/// Query only the append-only warmed registry.
+///
+/// UI cadence and post-warm producer paths use this so observing readiness can
+/// never turn into an inline TTF load.  Raw font publication remains owned by
+/// the existing warm pool (or an explicit legacy ensure call).
+pub(crate) fn font_is_available(name: &str) -> bool {
+    registered_font(name)
+        .as_deref()
+        .and_then(RegisteredFont::outline_endstate)
+        .is_some()
 }
 
 fn warm_embedded_font_by_name(
@@ -940,7 +962,7 @@ fn register_warmed_font(
     {
         return endstate.summary(existing, "warm-cache", 0, 0, 0);
     }
-    registry.fonts.push(prepared);
+    registry.fonts.push(Arc::new(prepared));
     summary
 }
 
@@ -1270,7 +1292,7 @@ pub(crate) fn spawn_font_warm_pool() -> Result<bool, SpawnError> {
 }
 
 struct FontRegistry {
-    fonts: Vec<RegisteredFont>,
+    fonts: Vec<Arc<RegisteredFont>>,
 }
 
 impl FontRegistry {
@@ -1278,9 +1300,19 @@ impl FontRegistry {
         Self { fonts: Vec::new() }
     }
 
-    fn font_by_name(&self, name: &str) -> Option<&RegisteredFont> {
+    fn font_by_name(&self, name: &str) -> Option<&Arc<RegisteredFont>> {
         self.fonts.iter().find(|font| font.name == name)
     }
+}
+
+/// Borrow one immutable warmed face without retaining the registry spin lock.
+///
+/// Registration is append-only after a face has been completely prepared, so
+/// an `Arc` snapshot gives readers stable bytes and outline ranges while a
+/// different warm worker publishes another face.
+fn registered_font(name: &str) -> Option<Arc<RegisteredFont>> {
+    let registry = FONT_REGISTRY.lock();
+    registry.font_by_name(name).map(Arc::clone)
 }
 
 struct RegisteredFont {
@@ -1418,6 +1450,7 @@ struct FontOutlineCache {
     name: &'static str,
     ranges: Vec<WarmGlyphRange>,
     ops: Vec<WarmOutlineOp>,
+    range_max_ops: u32,
     outline_glyphs: usize,
     outline_success: usize,
     outline_failures: usize,
@@ -1440,6 +1473,7 @@ impl FontOutlineCache {
             name,
             ranges: Vec::with_capacity(glyphs as usize),
             ops: Vec::new(),
+            range_max_ops: 0,
             outline_glyphs: 0,
             outline_success: 0,
             outline_failures: 0,
@@ -1459,6 +1493,13 @@ impl FontOutlineCache {
 
     fn merge_pen(&mut self, glyph_index: u16, start: u32, pen: WarmOutlinePen) {
         let len = pen.ops.len() as u32;
+        debug_assert!(
+            self.ranges
+                .last()
+                .is_none_or(|range| range.glyph_index < glyph_index),
+            "warmed glyph ranges must remain sorted"
+        );
+        self.range_max_ops = self.range_max_ops.max(len);
         self.move_to = self.move_to.saturating_add(pen.move_to);
         self.line_to = self.line_to.saturating_add(pen.line_to);
         self.quad_to = self.quad_to.saturating_add(pen.quad_to);
@@ -1497,6 +1538,14 @@ impl FontOutlineCache {
             .saturating_add(self.ops.len().saturating_mul(size_of::<WarmOutlineOp>()))
     }
 
+    fn glyph_range(&self, glyph_id: GlyphId) -> Option<&WarmGlyphRange> {
+        let glyph_index = u16::try_from(glyph_id.to_u32()).ok()?;
+        self.ranges
+            .binary_search_by_key(&glyph_index, |range| range.glyph_index)
+            .ok()
+            .and_then(|index| self.ranges.get(index))
+    }
+
     fn append_glyph_path(
         &self,
         glyph_id: GlyphId,
@@ -1506,12 +1555,7 @@ impl FontOutlineCache {
         scale: f32,
         bounds: &mut TesselBounds,
     ) -> usize {
-        let glyph_index = glyph_id.to_u32();
-        let Some(range) = self
-            .ranges
-            .iter()
-            .find(|range| u32::from(range.glyph_index) == glyph_index)
-        else {
+        let Some(range) = self.glyph_range(glyph_id) else {
             return 0;
         };
         let start = range.op_start as usize;
@@ -1539,30 +1583,21 @@ impl FontOutlineCache {
         glyph_id: GlyphId,
         pen_x: f32,
         output: &mut Vec<[u32; FONT_GPU_OUTLINE_OP_WORDS]>,
-    ) -> usize {
-        let glyph_index = glyph_id.to_u32();
-        let Some(range) = self
-            .ranges
-            .iter()
-            .find(|range| u32::from(range.glyph_index) == glyph_index)
-        else {
-            return 0;
+    ) {
+        let Some(range) = self.glyph_range(glyph_id) else {
+            return;
         };
         let start = range.op_start as usize;
         let end = start
             .saturating_add(range.op_len as usize)
             .min(self.ops.len());
         if start >= end {
-            return 0;
+            return;
         }
-        let mut contours = 0usize;
+        output.reserve(end - start);
         for op in &self.ops[start..end] {
-            if matches!(op, WarmOutlineOp::MoveTo(..)) {
-                contours = contours.saturating_add(1);
-            }
             output.push(op.gpu_words(pen_x));
         }
-        contours
     }
 
     fn summary(
@@ -1579,18 +1614,8 @@ impl FontOutlineCache {
             .saturating_mul(size_of::<WarmGlyphRange>());
         let op_bytes = self.ops.len().saturating_mul(size_of::<WarmOutlineOp>());
         let cache_bytes = range_bytes.saturating_add(op_bytes);
-        let mut range_first_glyph = 0u16;
-        let mut range_last_glyph = 0u16;
-        let mut range_max_ops = 0u32;
-        let mut range_high_end = 0u32;
-        for (index, range) in self.ranges.iter().enumerate() {
-            if index == 0 {
-                range_first_glyph = range.glyph_index;
-            }
-            range_last_glyph = range.glyph_index;
-            range_max_ops = range_max_ops.max(range.op_len);
-            range_high_end = range_high_end.max(range.op_start.saturating_add(range.op_len));
-        }
+        let range_first_glyph = self.ranges.first().map_or(0, |range| range.glyph_index);
+        let range_last_glyph = self.ranges.last().map_or(0, |range| range.glyph_index);
         FontWarmSummary {
             status,
             name: font.name,
@@ -1606,7 +1631,7 @@ impl FontOutlineCache {
             resident_bytes: font.bytes.len().saturating_add(cache_bytes),
             range_first_glyph,
             range_last_glyph,
-            range_max_ops: range_max_ops.min(range_high_end),
+            range_max_ops: self.range_max_ops,
             outline_glyphs: self.outline_glyphs,
             outline_success: self.outline_success,
             outline_failures: self.outline_failures,
@@ -1881,5 +1906,81 @@ fn elapsed_ms_since(start: u64) -> u64 {
         0
     } else {
         ticks.saturating_mul(1000) / hz
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn append_test_glyph(cache: &mut FontOutlineCache, glyph_index: u16, lines: usize) {
+        let start = cache.ops.len() as u32;
+        let mut pen = WarmOutlinePen::default();
+        pen.move_to(0.0, 0.0);
+        for index in 0..lines {
+            pen.line_to(index as f32 + 1.0, index as f32 + 2.0);
+        }
+        pen.close();
+        cache.merge_pen(glyph_index, start, pen);
+    }
+
+    #[test]
+    fn sparse_warm_glyph_ranges_use_exact_binary_lookup() {
+        let mut cache = FontOutlineCache::new(FONT_ENDSTATE_OUTLINE_COMMANDS, 16);
+        append_test_glyph(&mut cache, 2, 1);
+        append_test_glyph(&mut cache, 7, 3);
+        append_test_glyph(&mut cache, 13, 2);
+
+        assert_eq!(cache.glyph_range(GlyphId::new(2)).unwrap().glyph_index, 2);
+        assert_eq!(cache.glyph_range(GlyphId::new(7)).unwrap().glyph_index, 7);
+        assert_eq!(cache.glyph_range(GlyphId::new(13)).unwrap().glyph_index, 13);
+        assert!(cache.glyph_range(GlyphId::new(0)).is_none());
+        assert!(cache.glyph_range(GlyphId::new(6)).is_none());
+        assert!(
+            cache
+                .glyph_range(GlyphId::new(u32::from(u16::MAX) + 1))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn warm_summary_reuses_incremental_range_aggregates() {
+        let mut cache = FontOutlineCache::new(FONT_ENDSTATE_OUTLINE_COMMANDS, 16);
+        append_test_glyph(&mut cache, 2, 1);
+        append_test_glyph(&mut cache, 7, 4);
+        append_test_glyph(&mut cache, 13, 2);
+        let expected_max_ops = cache.glyph_range(GlyphId::new(7)).unwrap().op_len;
+
+        let mut font =
+            RegisteredFont::new("test", "test.ttf", FontBytes::Embedded(&[]), 0, 16, 1_000);
+        font.endstates.push(FontWarmEndState::Outline(cache));
+        let summary = font
+            .outline_endstate()
+            .unwrap()
+            .summary(&font, "registered", 0, 0, 0);
+
+        assert_eq!(summary.range_first_glyph, 2);
+        assert_eq!(summary.range_last_glyph, 13);
+        assert_eq!(summary.range_max_ops, expected_max_ops);
+        assert_eq!(summary.commands, 13);
+    }
+
+    #[test]
+    fn registered_font_arc_lease_survives_registry_mutation() {
+        let mut registry = FontRegistry::new();
+        registry.fonts.push(Arc::new(RegisteredFont::new(
+            "leased",
+            "leased.ttf",
+            FontBytes::Embedded(&[]),
+            0,
+            1,
+            1_000,
+        )));
+
+        let leased = Arc::clone(registry.font_by_name("leased").unwrap());
+        registry.fonts.clear();
+
+        assert_eq!(leased.name, "leased");
+        assert_eq!(leased.units_per_em, 1_000);
     }
 }

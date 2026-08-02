@@ -1,0 +1,21 @@
+[Unit]
+Description=remoteAI GitHub Copilot OpenAI-compatible facade
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/remoteai/remoteai.env
+ExecStart=%h/.local/bin/remoteai serve
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=40
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/remoteai
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=default.target

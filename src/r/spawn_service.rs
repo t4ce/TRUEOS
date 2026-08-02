@@ -42,6 +42,7 @@ define_started_flags!(
     DNS_REQUEST_BROKER_STARTED,
     BLOCKING_JOB_DISPATCHER_STARTED,
     FONT_WARM_POOL_STARTED,
+    FONT_PLAN_SERVICE_STARTED,
     FONT_KERNEL_SERVICE_STARTED,
     TTSTT_CPU_SERVICE_STARTED,
     TTSTT_CAPTURE_WRITER_STARTED,
@@ -303,6 +304,23 @@ fn font_warm_pool_gate() -> bool {
 fn spawn_font_warm_pool(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     spawn_bool_result_to_attempt(crate::graphics::font::spawn_font_warm_pool())
+}
+
+fn font_plan_pool_gate() -> bool {
+    // E-core preference can only be resolved once the complete topology has
+    // registered. Starting after the first AP would incorrectly conclude that
+    // a later-registering efficiency core does not exist.
+    crate::workers::all_topology_spawners_registered()
+        && crate::workers::has_background_worker_slot()
+}
+
+fn spawn_font_plan_pool(spawner: Spawner) -> SpawnAttempt {
+    let _ = spawner;
+    spawn_bool_result_to_attempt(crate::r::font_plan_service::start_font_plan_workers())
+}
+
+pub(crate) fn retry_font_plan_pool_autostart() {
+    FONT_PLAN_SERVICE_STARTED.store(false, Ordering::Release);
 }
 
 fn spawn_font_kernel_service(spawner: Spawner) -> SpawnAttempt {
@@ -1629,7 +1647,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 72
+const TASK_COUNT: usize = 73
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
@@ -1670,6 +1688,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         font_warm_pool_gate,
         &FONT_WARM_POOL_STARTED,
         spawn_font_warm_pool,
+    ),
+    TaskSpec::enabled_gated(
+        "font-plan-producer-pool",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        font_plan_pool_gate,
+        &FONT_PLAN_SERVICE_STARTED,
+        spawn_font_plan_pool,
     ),
     TaskSpec::enabled_gated(
         "font-kernel-service",

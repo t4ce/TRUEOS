@@ -789,14 +789,15 @@ pub(crate) fn capture_primary_surface_bgra8() -> Option<self::display::PrimarySu
     self::display::capture_primary_surface_bgra8()
 }
 
-pub(crate) fn queue_ui4_live_overlay_rects_on_slot_damage_region(
+pub(crate) fn queue_ui4_live_overlay_scene_on_slot_damage_region(
     plane_slot: usize,
+    tiles: &[RgbaOverlayTile<'_>],
     rects: &[LiveOverlayRect],
     damage: CompositionDamageRegion,
     reason: &'static str,
 ) -> Option<Ui4LiveOverlayFlip> {
-    self::display::queue_ui4_live_overlay_rects_on_slot_damage_region(
-        plane_slot, rects, damage, reason,
+    self::display::queue_ui4_live_overlay_scene_on_slot_damage_region(
+        plane_slot, tiles, rects, damage, reason,
     )
 }
 

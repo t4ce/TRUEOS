@@ -434,6 +434,12 @@ pub(crate) fn ensure_font_face_available(font: GpuFontFace) -> Result<(), &'stat
     }
 }
 
+/// Observe a face already published by the raw-font warm stage without
+/// synchronously parsing or warming anything on the caller's executor.
+pub(crate) fn font_face_is_available(font: GpuFontFace) -> bool {
+    crate::graphics::font::font_is_available(font.registry_name())
+}
+
 pub(crate) fn font_face_supports_text(font: GpuFontFace, text: &str) -> bool {
     crate::graphics::font::font_supports_text(font.registry_name(), text)
 }
@@ -603,13 +609,13 @@ pub(crate) struct GpuFontRetainedDrawResult {
 
 /// One GPU-VM-resident font scene which may be restamped repeatedly.
 ///
-/// The scene owns its analytical R8 mask and C++ instance descriptor pages.
-/// An uncertain instance submission poisons the scene: its allocations are
-/// then deliberately leaked until reboot because hardware may still hold
-/// their GPU virtual addresses.
+/// The scene owns its analytical R8 mask and lazily allocates a C++ instance
+/// descriptor only for the first affine draw. An uncertain instance
+/// submission poisons the scene: its allocations are then deliberately leaked
+/// until reboot because hardware may still hold their GPU virtual addresses.
 pub(crate) struct GpuFontRetainedScene {
     coverage: Option<GpuFontCoverageMask>,
-    instance_state: Option<crate::intel::gpgpu::GpgpuOwnedFontInstanceState>,
+    instance_state: Mutex<Option<crate::intel::gpgpu::GpgpuOwnedFontInstanceState>>,
     quarantined: AtomicBool,
 }
 
@@ -745,8 +751,16 @@ impl GpuFontRetainedScene {
                 direct_scanout,
             );
         }
-        let state = self
-            .instance_state
+        let mut instance_state = self.instance_state.lock();
+        if instance_state.is_none() {
+            *instance_state = Some(crate::intel::gpgpu::allocate_font_instance_state(1).ok_or(
+                GpuFontRetainedSceneError::Unavailable("font-retained-instance-state-allocation"),
+            )?);
+        }
+        // Keep the scene-local lock through descriptor publication and the
+        // synchronous retirement proof so concurrent affine users cannot
+        // rewrite the one descriptor beneath an active submission.
+        let state = instance_state
             .as_ref()
             .ok_or(GpuFontRetainedSceneError::Unavailable(
                 "font-retained-instance-state-missing",
@@ -829,7 +843,7 @@ impl Drop for GpuFontRetainedScene {
         if let Some(coverage) = self.coverage.take() {
             core::mem::forget(coverage);
         }
-        if let Some(state) = self.instance_state.take() {
+        if let Some(state) = self.instance_state.get_mut().take() {
             core::mem::forget(state);
         }
     }
@@ -959,7 +973,86 @@ fn retained_font_scanout_release(
 struct PreparedGpuFontCoverageEntry {
     ops: Vec<[u32; 8]>,
     rect: (i32, i32, i32, i32),
+    audit_rect: (i32, i32, i32, i32),
     optical_bias_px: f32,
+    ppem: f32,
+    estimated_segment_evaluations: u64,
+}
+
+/// One accepted, centered glyph whose warmed outline has already been
+/// transformed into its exact physical-raster contract.
+///
+/// This is deliberately transient rather than resident cache state. Font
+/// producers may move it through their bounded service queue, and the coverage
+/// builder consumes it when allocating the request-local R8 mask.
+pub(crate) struct GpuFontPreparedCenteredGlyph {
+    scalar: char,
+    font: GpuFontFace,
+    position_bits: [u32; 2],
+    font_pixels_bits: u32,
+    slant_bits: u32,
+    viewport_width: u32,
+    viewport_height: u32,
+    raster_width: u32,
+    raster_height: u32,
+    prepared: PreparedGpuFontCoverageEntry,
+}
+
+impl GpuFontPreparedCenteredGlyph {
+    pub(crate) const fn estimated_segment_evaluations(&self) -> u64 {
+        self.prepared.estimated_segment_evaluations
+    }
+
+    pub(crate) fn ops_bytes(&self) -> usize {
+        self.prepared
+            .ops
+            .len()
+            .saturating_mul(core::mem::size_of::<[u32; 8]>())
+    }
+
+    /// Heap bytes reserved by the transient outline vector, including spare
+    /// capacity. Plan-pool admission uses this value so allocator growth cannot
+    /// hide beyond the nominal serialized-op length.
+    pub(crate) fn allocated_ops_bytes(&self) -> usize {
+        self.prepared
+            .ops
+            .capacity()
+            .saturating_mul(core::mem::size_of::<[u32; 8]>())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn matches_request(
+        &self,
+        text: &str,
+        font: GpuFontFace,
+        position: [f32; 2],
+        font_pixels: f32,
+        slant: f32,
+        viewport_width: u32,
+        viewport_height: u32,
+        raster_width: u32,
+        raster_height: u32,
+    ) -> bool {
+        let mut chars = text.chars();
+        chars.next() == Some(self.scalar)
+            && chars.next().is_none()
+            && font == self.font
+            && position.map(f32::to_bits) == self.position_bits
+            && font_pixels.to_bits() == self.font_pixels_bits
+            && slant.to_bits() == self.slant_bits
+            && viewport_width == self.viewport_width
+            && viewport_height == self.viewport_height
+            && raster_width == self.raster_width
+            && raster_height == self.raster_height
+    }
+
+    fn shares_scene_contract(&self, other: &Self) -> bool {
+        self.font == other.font
+            && self.viewport_width == other.viewport_width
+            && self.viewport_height == other.viewport_height
+            && self.raster_width == other.raster_width
+            && self.raster_height == other.raster_height
+    }
 }
 
 fn local_coverage_rect(
@@ -3230,51 +3323,57 @@ pub(crate) fn gpu_font_entries_use_analytical_coverage(
         })
 }
 
-/// Exact per-entry work estimate used by callers which assemble one combined
-/// analytical scene. FontKernel can partition origin-positioned scenes after
-/// admission, but visual-bounds-centered grids must keep their complete batch
-/// below this same direct-RCS latency ceiling before submission.
-pub(crate) fn gpu_font_analytical_text_work_estimate(
-    text: &str,
+/// Prepare one centered glyph and its exact analytical work admission in a
+/// single warmed-outline pass. The owned result can move to FontKernel without
+/// parsing or transforming the accepted glyph a second time.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_gpu_font_centered_glyph_at_raster(
+    scalar: char,
     font: GpuFontFace,
+    position: [f32; 2],
     font_pixels: f32,
+    slant: f32,
     viewport_width: u32,
     viewport_height: u32,
     raster_width: u32,
     raster_height: u32,
-) -> Result<u64, &'static str> {
+) -> Result<GpuFontPreparedCenteredGlyph, &'static str> {
+    if scalar.is_control() || scalar.is_whitespace() {
+        return Err("font-coverage-glyph");
+    }
     let quality =
         gpu_font_raster_quality(viewport_width, viewport_height, raster_width, raster_height)
             .ok_or("font-raster-empty")?;
     let ppem = analytical_coverage_ppem(font_pixels, quality).ok_or("font-coverage-ineligible")?;
-    ensure_font_face_available(font)?;
-    let outline = crate::graphics::font::gpu_outline_for_text(font.registry_name(), text)?;
+    let mut utf8 = [0u8; 4];
+    let text = scalar.encode_utf8(&mut utf8);
     let entry = GpuFontJobEntry {
         text: GpuFontTextRequest::SingleLine(text),
-        position: [0.0, 0.0],
+        position,
         font_pixels,
-        slant: 0.0,
+        slant,
     };
-    let (_, bounds, _) = transform_outline_to_raster(
-        outline.ops.as_slice(),
-        outline.units_per_em,
+    let prepared = prepare_gpu_font_coverage_entry(
+        text,
+        font,
         entry,
         quality,
         ppem,
         GpuFontJobPositioning::VisualBoundsCenter,
+        GpuFontOutlineAccess::RegisteredOnly,
     )?;
-    let rect = coverage_integer_rect(bounds, small_font_optical_bias_px(ppem))?;
-    let width = u64::try_from(i64::from(rect.2) - i64::from(rect.0))
-        .map_err(|_| "font-coverage-workload")?;
-    let height = u64::try_from(i64::from(rect.3) - i64::from(rect.1))
-        .map_err(|_| "font-coverage-workload")?;
-    let per_pixel = (outline.ops.len() as u64)
-        .checked_mul(u64::from(ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS))
-        .ok_or("font-coverage-workload")?;
-    width
-        .checked_mul(height)
-        .and_then(|pixels| pixels.checked_mul(per_pixel))
-        .ok_or("font-coverage-workload")
+    Ok(GpuFontPreparedCenteredGlyph {
+        scalar,
+        font,
+        position_bits: position.map(f32::to_bits),
+        font_pixels_bits: font_pixels.to_bits(),
+        slant_bits: slant.to_bits(),
+        viewport_width,
+        viewport_height,
+        raster_width,
+        raster_height,
+        prepared,
+    })
 }
 
 pub(crate) const fn gpu_font_analytical_work_limit() -> u64 {
@@ -3401,15 +3500,15 @@ fn flattened_outline_bounds(
     bounds.ok_or("font-coverage-outline-bounds")
 }
 
-fn transform_outline_to_raster(
-    source: &[[u32; 8]],
+fn transform_owned_outline_to_raster(
+    mut transformed: Vec<[u32; 8]>,
     units_per_em: u16,
     entry: GpuFontJobEntry<'_>,
     quality: GpuFontRasterQuality,
     ppem: f32,
     positioning: GpuFontJobPositioning,
 ) -> Result<(Vec<[u32; 8]>, (f32, f32, f32, f32), (f32, f32, f32, f32)), &'static str> {
-    if source.is_empty() || units_per_em == 0 {
+    if transformed.is_empty() || units_per_em == 0 {
         return Err("font-coverage-outline-empty");
     }
     let scale = ppem / f32::from(units_per_em);
@@ -3418,7 +3517,7 @@ fn transform_outline_to_raster(
         GpuFontJobPositioning::VisualBoundsCenter => 0.0,
     };
     let mut scaled_bounds = None;
-    for op in source {
+    for op in &transformed {
         let point_words = outline_point_x_words(op[0]).ok_or("font-coverage-outline-op")?;
         for &x_word in point_words {
             let x = f32::from_bits(op[x_word]) * scale;
@@ -3432,20 +3531,17 @@ fn transform_outline_to_raster(
     let scaled_bounds = scaled_bounds.ok_or("font-coverage-outline-bounds")?;
     let shear_center_y = (scaled_bounds.1 + scaled_bounds.3) * 0.5;
     let shear_aspect = quality.pixels_per_unit_x / quality.pixels_per_unit_y;
-    let mut transformed = Vec::with_capacity(source.len());
     let mut local_bounds = None;
-    for source_op in source {
-        let point_words = outline_point_x_words(source_op[0]).ok_or("font-coverage-outline-op")?;
-        let mut op = *source_op;
+    for op in &mut transformed {
+        let point_words = outline_point_x_words(op[0]).ok_or("font-coverage-outline-op")?;
         for &x_word in point_words {
-            let y = baseline_y - f32::from_bits(source_op[x_word + 1]) * scale;
-            let x = f32::from_bits(source_op[x_word]) * scale
+            let y = baseline_y - f32::from_bits(op[x_word + 1]) * scale;
+            let x = f32::from_bits(op[x_word]) * scale
                 + entry.slant * shear_aspect * (shear_center_y - y);
             op[x_word] = x.to_bits();
             op[x_word + 1] = y.to_bits();
             include_coverage_point(&mut local_bounds, x, y);
         }
-        transformed.push(op);
     }
     let local_bounds = local_bounds.ok_or("font-coverage-outline-bounds")?;
     let position_px = [
@@ -3502,6 +3598,71 @@ fn coverage_integer_rect(
     (rect.2 > rect.0 && rect.3 > rect.1)
         .then_some(rect)
         .ok_or("font-coverage-rect-empty")
+}
+
+#[derive(Clone, Copy)]
+enum GpuFontOutlineAccess {
+    EnsureAvailable,
+    RegisteredOnly,
+}
+
+fn prepare_gpu_font_coverage_entry(
+    text: &str,
+    font: GpuFontFace,
+    entry: GpuFontJobEntry<'_>,
+    quality: GpuFontRasterQuality,
+    ppem: f32,
+    positioning: GpuFontJobPositioning,
+    outline_access: GpuFontOutlineAccess,
+) -> Result<PreparedGpuFontCoverageEntry, &'static str> {
+    if text.is_empty()
+        || !entry.position[0].is_finite()
+        || !entry.position[1].is_finite()
+        || !entry.font_pixels.is_finite()
+        || !entry.slant.is_finite()
+        || entry.font_pixels <= 0.0
+        || entry.slant.abs() > 1.0
+    {
+        return Err("font-job-position");
+    }
+    let outline = match outline_access {
+        GpuFontOutlineAccess::EnsureAvailable => {
+            crate::graphics::font::gpu_outline_for_text(font.registry_name(), text)?
+        }
+        GpuFontOutlineAccess::RegisteredOnly => {
+            crate::graphics::font::gpu_outline_for_registered_text(font.registry_name(), text)?
+        }
+    };
+    let (ops, bounds, flattened_bounds) = transform_owned_outline_to_raster(
+        outline.ops,
+        outline.units_per_em,
+        entry,
+        quality,
+        ppem,
+        positioning,
+    )?;
+    let optical_bias_px = small_font_optical_bias_px(ppem);
+    let rect = coverage_integer_rect(bounds, optical_bias_px)?;
+    let audit_rect = coverage_integer_rect(flattened_bounds, optical_bias_px)?;
+    let width = u64::try_from(i64::from(rect.2) - i64::from(rect.0))
+        .map_err(|_| "font-coverage-workload")?;
+    let height = u64::try_from(i64::from(rect.3) - i64::from(rect.1))
+        .map_err(|_| "font-coverage-workload")?;
+    let per_pixel = (ops.len() as u64)
+        .checked_mul(u64::from(ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS))
+        .ok_or("font-coverage-workload")?;
+    let estimated_segment_evaluations = width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(per_pixel))
+        .ok_or("font-coverage-workload")?;
+    Ok(PreparedGpuFontCoverageEntry {
+        ops,
+        rect,
+        audit_rect,
+        optical_bias_px,
+        ppem,
+        estimated_segment_evaluations,
+    })
 }
 
 fn translate_coverage_ops(ops: &mut [[u32; 8]], dx: f32, dy: f32) {
@@ -3601,6 +3762,33 @@ pub(crate) fn retain_gpu_font_centered_scene_at_raster(
     )
 }
 
+/// Consume request-local centered glyph preparation and retain only the
+/// resulting analytical mask plus the existing draw-time instance state.
+/// Prepared outline vectors do not survive this call.
+pub(crate) fn retain_gpu_font_prepared_centered_scene(
+    entries: Vec<GpuFontPreparedCenteredGlyph>,
+) -> Result<GpuFontRetainedScene, &'static str> {
+    let first = entries.first().ok_or("font-coverage-empty")?;
+    if entries
+        .iter()
+        .any(|entry| !entry.shares_scene_contract(first))
+    {
+        return Err("font-coverage-prepared-contract");
+    }
+    let font = first.font;
+    let prepared = entries
+        .into_iter()
+        .map(|entry| entry.prepared)
+        .collect::<Vec<_>>();
+    let coverage = create_gpu_font_coverage_mask_from_prepared(
+        prepared,
+        font,
+        GpuFontJobPositioning::VisualBoundsCenter,
+        Instant::now().as_millis(),
+    )?;
+    Ok(retain_gpu_font_coverage(coverage))
+}
+
 fn retain_gpu_font_scene_at_raster_with_positioning(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,
@@ -3619,13 +3807,15 @@ fn retain_gpu_font_scene_at_raster_with_positioning(
         raster_height,
         positioning,
     )?;
-    let instance_state = crate::intel::gpgpu::allocate_font_instance_state(1)
-        .ok_or("font-retained-instance-state-allocation")?;
-    Ok(GpuFontRetainedScene {
+    Ok(retain_gpu_font_coverage(coverage))
+}
+
+fn retain_gpu_font_coverage(coverage: GpuFontCoverageMask) -> GpuFontRetainedScene {
+    GpuFontRetainedScene {
         coverage: Some(coverage),
-        instance_state: Some(instance_state),
+        instance_state: Mutex::new(None),
         quarantined: AtomicBool::new(false),
-    })
+    }
 }
 
 fn create_gpu_font_coverage_mask_at_raster(
@@ -3641,50 +3831,40 @@ fn create_gpu_font_coverage_mask_at_raster(
     let quality =
         gpu_font_raster_quality(viewport_width, viewport_height, raster_width, raster_height)
             .ok_or("font-raster-empty")?;
-    if !gpu_font_entries_use_analytical_coverage(
-        entries,
-        viewport_width,
-        viewport_height,
-        raster_width,
-        raster_height,
-    ) {
-        return Err("font-coverage-ineligible");
-    }
-    ensure_font_face_available(font)?;
-
     let mut prepared = Vec::with_capacity(entries.len());
-    let mut union_rect: Option<(i32, i32, i32, i32)> = None;
-    let mut audit_union_rect: Option<(i32, i32, i32, i32)> = None;
-    let mut ppem_min = f32::MAX;
-    let mut ppem_max = 0.0f32;
-    let mut optical_bias_max_px = 0.0f32;
     for &entry in entries {
-        if !entry.position[0].is_finite()
-            || !entry.position[1].is_finite()
-            || !entry.font_pixels.is_finite()
-            || !entry.slant.is_finite()
-            || entry.font_pixels <= 0.0
-            || entry.slant.abs() > 1.0
-        {
-            return Err("font-job-position");
-        }
         let GpuFontTextRequest::SingleLine(text) = entry.text else {
             return Err("font-coverage-layout");
         };
         let ppem = analytical_coverage_ppem(entry.font_pixels, quality)
             .ok_or("font-coverage-ineligible")?;
-        let optical_bias_px = small_font_optical_bias_px(ppem);
-        let outline = crate::graphics::font::gpu_outline_for_text(font.registry_name(), text)?;
-        let (ops, bounds, flattened_bounds) = transform_outline_to_raster(
-            outline.ops.as_slice(),
-            outline.units_per_em,
+        prepared.push(prepare_gpu_font_coverage_entry(
+            text,
+            font,
             entry,
             quality,
             ppem,
             positioning,
-        )?;
-        let rect = coverage_integer_rect(bounds, optical_bias_px)?;
-        let audit_rect = coverage_integer_rect(flattened_bounds, optical_bias_px)?;
+            GpuFontOutlineAccess::EnsureAvailable,
+        )?);
+    }
+    create_gpu_font_coverage_mask_from_prepared(prepared, font, positioning, coverage_started_ms)
+}
+
+fn create_gpu_font_coverage_mask_from_prepared(
+    mut prepared: Vec<PreparedGpuFontCoverageEntry>,
+    font: GpuFontFace,
+    positioning: GpuFontJobPositioning,
+    coverage_started_ms: u64,
+) -> Result<GpuFontCoverageMask, &'static str> {
+    let mut union_rect: Option<(i32, i32, i32, i32)> = None;
+    let mut audit_union_rect: Option<(i32, i32, i32, i32)> = None;
+    let mut ppem_min = f32::MAX;
+    let mut ppem_max = 0.0f32;
+    let mut optical_bias_max_px = 0.0f32;
+    for entry in &prepared {
+        let rect = entry.rect;
+        let audit_rect = entry.audit_rect;
         union_rect = Some(match union_rect {
             Some(union) => {
                 (union.0.min(rect.0), union.1.min(rect.1), union.2.max(rect.2), union.3.max(rect.3))
@@ -3700,14 +3880,9 @@ fn create_gpu_font_coverage_mask_at_raster(
             ),
             None => audit_rect,
         });
-        ppem_min = ppem_min.min(ppem);
-        ppem_max = ppem_max.max(ppem);
-        optical_bias_max_px = optical_bias_max_px.max(optical_bias_px);
-        prepared.push(PreparedGpuFontCoverageEntry {
-            ops,
-            rect,
-            optical_bias_px,
-        });
+        ppem_min = ppem_min.min(entry.ppem);
+        ppem_max = ppem_max.max(entry.ppem);
+        optical_bias_max_px = optical_bias_max_px.max(entry.optical_bias_px);
     }
 
     let union = union_rect.ok_or("font-coverage-empty")?;
@@ -3715,16 +3890,10 @@ fn create_gpu_font_coverage_mask_at_raster(
         .map_err(|_| "font-coverage-mask-range")?;
     let height = u32::try_from(i64::from(union.3) - i64::from(union.1))
         .map_err(|_| "font-coverage-mask-range")?;
-    let estimated_segment_evaluations = prepared.iter().try_fold(0u64, |total, entry| {
-        let width = u64::try_from(i64::from(entry.rect.2) - i64::from(entry.rect.0)).ok()?;
-        let height = u64::try_from(i64::from(entry.rect.3) - i64::from(entry.rect.1)).ok()?;
-        let per_pixel = (entry.ops.len() as u64)
-            .checked_mul(u64::from(ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS))?;
-        total.checked_add(width.checked_mul(height)?.checked_mul(per_pixel)?)
-    });
-    let Some(estimated_segment_evaluations) = estimated_segment_evaluations else {
-        return Err("font-coverage-workload");
-    };
+    let estimated_segment_evaluations = prepared
+        .iter()
+        .try_fold(0u64, |total, entry| total.checked_add(entry.estimated_segment_evaluations))
+        .ok_or("font-coverage-workload")?;
     if estimated_segment_evaluations > ANALYTICAL_COVERAGE_MAX_SEGMENT_EVALUATIONS {
         crate::log_info!(
             target: "render";
@@ -4648,20 +4817,142 @@ pub(crate) fn rebuild_default_font(reason: &str) -> Result<GpuFontWarmResult, &'
 #[cfg(test)]
 mod tests {
     use super::{
-        GpuFontJobEntry, GpuFontJobPositioning, GpuFontRasterQuality, GpuFontRetainedStyle,
-        GpuFontRgba, GpuFontTextRequest, PreparedGpuFontCoverageEntry,
-        SMALL_FONT_HINT_MAX_RASTER_PX, SMALL_FONT_HINT_MIN_RASTER_PX,
+        GpuFontFace, GpuFontJobEntry, GpuFontJobPositioning, GpuFontPreparedCenteredGlyph,
+        GpuFontRasterQuality, GpuFontRetainedStyle, GpuFontRgba, GpuFontTextRequest,
+        PreparedGpuFontCoverageEntry, SMALL_FONT_HINT_MAX_RASTER_PX, SMALL_FONT_HINT_MIN_RASTER_PX,
         coalesced_coverage_stamp_rects, coverage_rects_overlap,
         gpu_font_entries_use_analytical_coverage, retained_font_identity_translation,
-        small_font_hint_ppem, small_font_optical_bias_px, transform_outline_to_raster,
+        small_font_hint_ppem, small_font_optical_bias_px, transform_owned_outline_to_raster,
     };
 
     fn prepared_rect(rect: (i32, i32, i32, i32)) -> PreparedGpuFontCoverageEntry {
         PreparedGpuFontCoverageEntry {
             ops: Vec::new(),
             rect,
+            audit_rect: rect,
             optical_bias_px: 0.0,
+            ppem: 16.0,
+            estimated_segment_evaluations: 0,
         }
+    }
+
+    fn prepared_glyph(scalar: char) -> GpuFontPreparedCenteredGlyph {
+        GpuFontPreparedCenteredGlyph {
+            scalar,
+            font: GpuFontFace::Default,
+            position_bits: [10.0f32.to_bits(), 20.0f32.to_bits()],
+            font_pixels_bits: 24.0f32.to_bits(),
+            slant_bits: 0.0f32.to_bits(),
+            viewport_width: 640,
+            viewport_height: 360,
+            raster_width: 2_560,
+            raster_height: 1_440,
+            prepared: PreparedGpuFontCoverageEntry {
+                ops: alloc::vec![[0; 8], [4, 0, 0, 0, 0, 0, 0, 0]],
+                rect: (1, 2, 11, 22),
+                audit_rect: (1, 2, 11, 22),
+                optical_bias_px: 0.1,
+                ppem: 96.0,
+                estimated_segment_evaluations: 3_200,
+            },
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct PreparedRequestContract {
+        text: &'static str,
+        font: GpuFontFace,
+        position: [f32; 2],
+        font_pixels: f32,
+        slant: f32,
+        viewport: (u32, u32),
+        raster: (u32, u32),
+    }
+
+    impl PreparedRequestContract {
+        const EXACT: Self = Self {
+            text: "A",
+            font: GpuFontFace::Default,
+            position: [10.0, 20.0],
+            font_pixels: 24.0,
+            slant: 0.0,
+            viewport: (640, 360),
+            raster: (2_560, 1_440),
+        };
+
+        fn matches(self, prepared: &GpuFontPreparedCenteredGlyph) -> bool {
+            prepared.matches_request(
+                self.text,
+                self.font,
+                self.position,
+                self.font_pixels,
+                self.slant,
+                self.viewport.0,
+                self.viewport.1,
+                self.raster.0,
+                self.raster.1,
+            )
+        }
+    }
+
+    #[test]
+    fn prepared_centered_glyph_matches_only_its_exact_request_contract() {
+        let prepared = prepared_glyph('A');
+        assert!(PreparedRequestContract::EXACT.matches(&prepared));
+        for mismatch in [
+            PreparedRequestContract {
+                text: "B",
+                ..PreparedRequestContract::EXACT
+            },
+            PreparedRequestContract {
+                text: "AA",
+                ..PreparedRequestContract::EXACT
+            },
+            PreparedRequestContract {
+                font: GpuFontFace::Inconsolata,
+                ..PreparedRequestContract::EXACT
+            },
+            PreparedRequestContract {
+                position: [10.5, 20.0],
+                ..PreparedRequestContract::EXACT
+            },
+            PreparedRequestContract {
+                font_pixels: 25.0,
+                ..PreparedRequestContract::EXACT
+            },
+            PreparedRequestContract {
+                slant: 0.1,
+                ..PreparedRequestContract::EXACT
+            },
+            PreparedRequestContract {
+                viewport: (641, 360),
+                ..PreparedRequestContract::EXACT
+            },
+            PreparedRequestContract {
+                raster: (2_560, 1_441),
+                ..PreparedRequestContract::EXACT
+            },
+        ] {
+            assert!(!mismatch.matches(&prepared));
+        }
+        assert_eq!(prepared.scalar, 'A');
+        assert_eq!(prepared.estimated_segment_evaluations(), 3_200);
+        assert_eq!(prepared.ops_bytes(), 2 * core::mem::size_of::<[u32; 8]>());
+    }
+
+    #[test]
+    fn prepared_centered_scene_contract_allows_per_glyph_transforms_only() {
+        let first = prepared_glyph('A');
+        let mut next = prepared_glyph('B');
+        next.position_bits = [30.0f32.to_bits(), 40.0f32.to_bits()];
+        next.font_pixels_bits = 18.0f32.to_bits();
+        assert!(next.shares_scene_contract(&first));
+
+        next.raster_height = 1_441;
+        assert!(!next.shares_scene_contract(&first));
+        next.raster_height = 1_440;
+        next.font = GpuFontFace::Inconsolata;
+        assert!(!next.shares_scene_contract(&first));
     }
 
     #[test]
@@ -4807,8 +5098,8 @@ mod tests {
             font_pixels: 20.0,
             slant: 0.0,
         };
-        let (_ops, bounds, flattened_bounds) = transform_outline_to_raster(
-            &source,
+        let (_ops, bounds, flattened_bounds) = transform_owned_outline_to_raster(
+            source.to_vec(),
             1_000,
             entry,
             GpuFontRasterQuality {

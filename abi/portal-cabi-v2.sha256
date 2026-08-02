@@ -58,6 +58,9 @@
 # Spirit response presentation is strictly additive. It accepts only the
 # Blueprint adapter's display-safe text after tool-control spans are handled;
 # existing Lumen and non-Lumen Blueprints do not import it and remain unchanged.
+# Silent Spirit text presentation is strictly additive. It queues validated
+# display-safe text without requiring a Lumen session or entering a text-to-voice
+# path; existing response-presentation behavior and imports remain unchanged.
 # Spirit movement is strictly additive. It accepts only finite normalized
 # scanout coordinates and queues them through Spirit's existing bounded,
 # latest-wins movement capability; older Blueprints import no such authority.
@@ -73,4 +76,4 @@
 # The UI4 keyboard-event take call is strictly additive. It exposes the input
 # broker's existing owner/window route and leaves global keyboard-ring readers
 # and older Blueprint input contracts unchanged.
-27bf9d518d6919aaafda91013fc865de543fb502ccd233ff43da196911afb925
+e4f6694c6270d99553bb76fe16ba33c6f238ccd23aa8e84d0e5c5632b808f0db

@@ -326,7 +326,10 @@ fn submit_font_fill_rect_2d(
     params: FillRectRgba8Params,
     direct_scanout: bool,
 ) -> GpgpuSubmissionOutcome {
-    if params.width == 0 || params.height == 0 || fill_rect_2d_dispatch(params.width, params.height).is_none() {
+    if params.width == 0
+        || params.height == 0
+        || fill_rect_2d_dispatch(params.width, params.height).is_none()
+    {
         return GpgpuSubmissionOutcome::Unavailable;
     }
     let _guard = FONT_RCS_SUBMIT_LOCK.lock();
@@ -344,13 +347,7 @@ fn submit_font_fill_rect_2d(
         && direct_rcs_map_state(dev, state)
         && direct_rcs_init_ppgtt(state)
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
-        && direct_rcs_map_ppgtt_destination(
-            state,
-            dst.gpu,
-            dst.phys,
-            dst.bytes,
-            direct_scanout,
-        )
+        && direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, direct_scanout)
         && direct_rcs_encode_fill_rect_2d_batch(state, upload, params, dst.bytes);
     let submission = if prepared {
         font_rcs_submit_batch_state(dev, state)
@@ -526,14 +523,11 @@ fn submit_font_outline_coverage_runs_r8_2d(
             ops_phys,
             ops_bytes,
         );
-    let mask_ppgtt_ok = ops_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, mask.gpu, mask.phys, mask.bytes);
+    let mask_ppgtt_ok =
+        ops_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, mask.gpu, mask.phys, mask.bytes);
     let batch_ok = mask_ppgtt_ok
         && direct_rcs_encode_font_outline_coverage_runs_r8_2d_batch(
-            state,
-            upload,
-            runs,
-            mask.bytes,
+            state, upload, runs, mask.bytes,
         );
     let submission = if batch_ok {
         font_rcs_submit_batch_state(dev, state)
@@ -658,17 +652,13 @@ fn submit_glyph_mask_layers_2d(
     if !direct_rcs_forcewake(dev)
         || !direct_rcs_map_state(dev, state)
         || !direct_rcs_init_ppgtt(state)
-        || !direct_rcs_map_ppgtt_region(
-            state,
-            upload.gpu,
-            upload.phys,
-            upload.mapped_bytes,
-            direct_rcs_ppgtt_pte_flags(),
-        )
+        || !direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
         || !direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, direct_scanout)
     {
         return (false, false);
     }
+    let mut mapped_masks = [(0u64, 0u64, 0usize); GLYPH_MASK_BATCH_MAX_LAYERS];
+    let mut mapped_mask_count = 0usize;
     for layer in layers {
         let blit = GpgpuGlyphMaskBlit {
             mask: layer.mask,
@@ -680,20 +670,18 @@ fn submit_glyph_mask_layers_2d(
         if lower_glyph_mask_blit(blit).is_none() {
             continue;
         }
-        if !direct_rcs_map_ppgtt_region(
-            state,
-            layer.mask.gpu,
-            layer.mask.phys,
-            layer.mask.bytes,
-            direct_rcs_ppgtt_pte_flags(),
-        ) {
+        let identity = (layer.mask.gpu, layer.mask.phys, layer.mask.bytes);
+        if mapped_masks[..mapped_mask_count].contains(&identity) {
+            continue;
+        }
+        if !direct_rcs_map_ppgtt_kernel(state, layer.mask.gpu, layer.mask.phys, layer.mask.bytes) {
             return (false, false);
         }
+        mapped_masks[mapped_mask_count] = identity;
+        mapped_mask_count += 1;
     }
-    // All scene masks share one address space and one submission. Publishing
-    // their PTEs together avoids flushing the complete 2 MiB page table once
-    // per layer.
-    super::dma_flush(state.ppgtt_virt, DIRECT_RCS_PPGTT_BYTES);
+    // Every unique dynamic leaf range was published once by its mapping
+    // helper; there is no second whole-PPGTT boundary to perform here.
     if !direct_rcs_encode_glyph_mask_layers_2d_batch(state, upload, layers, dst) {
         return (false, false);
     }
@@ -763,24 +751,19 @@ fn submit_font_instance_layers_2d(
     if !direct_rcs_forcewake(dev)
         || !direct_rcs_map_state(dev, state)
         || !direct_rcs_init_ppgtt(state)
-        || !direct_rcs_map_ppgtt_region(
-            state,
-            upload.gpu,
-            upload.phys,
-            upload.mapped_bytes,
-            direct_rcs_ppgtt_pte_flags(),
-        )
+        || !direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
         || !direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, direct_scanout)
-        || !direct_rcs_map_ppgtt_region(
+        || !direct_rcs_map_ppgtt_kernel(
             state,
             descriptor_state.gpu(),
             descriptor_state.phys(),
             descriptor_state.bytes(),
-            direct_rcs_ppgtt_pte_flags(),
         )
     {
         return (false, false);
     }
+    let mut mapped_masks = [(0u64, 0u64, 0usize); FONT_INSTANCE_BATCH_MAX_LAYERS];
+    let mut mapped_mask_count = 0usize;
     for &layer in layers {
         let Some(dispatch) = lower_font_instance_layer(layer, descriptor_state, dst) else {
             return (false, false);
@@ -788,19 +771,18 @@ fn submit_font_instance_layers_2d(
         if dispatch.is_empty() {
             continue;
         }
-        if !direct_rcs_map_ppgtt_region(
-            state,
-            layer.mask.gpu,
-            layer.mask.phys,
-            layer.mask.bytes,
-            direct_rcs_ppgtt_pte_flags(),
-        ) {
+        let identity = (layer.mask.gpu, layer.mask.phys, layer.mask.bytes);
+        if mapped_masks[..mapped_mask_count].contains(&identity) {
+            continue;
+        }
+        if !direct_rcs_map_ppgtt_kernel(state, layer.mask.gpu, layer.mask.phys, layer.mask.bytes) {
             return (false, false);
         }
+        mapped_masks[mapped_mask_count] = identity;
+        mapped_mask_count += 1;
     }
-    // Publish the complete retained scene address space once before encoding
-    // its ordered walkers.
-    super::dma_flush(state.ppgtt_virt, DIRECT_RCS_PPGTT_BYTES);
+    // Kernel, destination, descriptor, and unique mask leaves are visible;
+    // encoding does not require another whole-PPGTT cache flush.
     if !direct_rcs_encode_font_instance_layers_2d_batch(
         state,
         upload,

@@ -6,15 +6,21 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::{vec, vec::Vec};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::future::Future;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::task::{Context, Poll};
 
+use atomic_waker::AtomicWaker;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 use v::vnet;
 
 use crate::net::tls::{TlsClientConfig, TlsRoots};
-use crate::net::tls_socket::{TlsCommand, TlsEvent, TlsTimeouts, register_tls_app_queues};
+use crate::net::tls_socket::{
+    TlsCancelCompletion, TlsCommand, TlsEvent, TlsTimeouts, register_tls_app_queues,
+};
 use crate::r::net::{NetProfile, Queue};
 
 static CABI_NET_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -25,9 +31,91 @@ const HTTPS_EVENT_QUEUE_DEPTH: usize = 1024;
 const HTTPS_RESPONSE_OVERHEAD_MAX: usize = 4096;
 const HTTPS_RESOLVED_HOST_CACHE_MAX: usize = 8;
 const HTTPS_IDLE_SLEEP_MS: u64 = 100;
+const HTTPS_CLIENT_WAIT_MS: u64 = 10;
+const HTTPS_CLIENT_FENCE_TIMEOUT_MS: u64 = 1_000;
+const HTTPS_REQUEST_CANCELLED: &str = "cancelled";
 static CABI_NET_FETCH_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMap::new());
 static CABI_NET_FETCH_BYTES_RESULTS: Mutex<BTreeMap<u32, CabiNetFetchBytesResult>> =
     Mutex::new(BTreeMap::new());
+static CABI_JSON_POST_CANCELLATIONS: Mutex<BTreeMap<u32, Arc<JsonPostCancellation>>> =
+    Mutex::new(BTreeMap::new());
+
+struct JsonPostCancellation {
+    cancelled: AtomicBool,
+    waker: AtomicWaker,
+}
+
+impl JsonPostCancellation {
+    fn new() -> Self {
+        Self {
+            cancelled: AtomicBool::new(false),
+            waker: AtomicWaker::new(),
+        }
+    }
+
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+        self.waker.wake();
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    fn poll_cancelled(&self, cx: &Context<'_>) -> bool {
+        if self.is_cancelled() {
+            return true;
+        }
+        self.waker.register(cx.waker());
+        self.is_cancelled()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct JsonPostCancelled;
+
+async fn await_json_post_or_cancel<F>(
+    future: F,
+    cancellation: &JsonPostCancellation,
+) -> Result<F::Output, JsonPostCancelled>
+where
+    F: Future,
+{
+    let mut future = core::pin::pin!(future);
+    core::future::poll_fn(|cx| {
+        if cancellation.poll_cancelled(cx) {
+            return Poll::Ready(Err(JsonPostCancelled));
+        }
+        if let Poll::Ready(output) = future.as_mut().poll(cx) {
+            return Poll::Ready(Ok(output));
+        }
+        if cancellation.poll_cancelled(cx) {
+            Poll::Ready(Err(JsonPostCancelled))
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
+}
+
+fn register_json_post_cancellation(op_id: u32) -> Arc<JsonPostCancellation> {
+    let cancellation = Arc::new(JsonPostCancellation::new());
+    CABI_JSON_POST_CANCELLATIONS
+        .lock()
+        .insert(op_id, cancellation.clone());
+    cancellation
+}
+
+fn cancel_json_post_operation(op_id: u32) {
+    let cancellation = CABI_JSON_POST_CANCELLATIONS.lock().remove(&op_id);
+    if let Some(cancellation) = cancellation {
+        cancellation.cancel();
+    }
+}
+
+fn finish_json_post_operation(op_id: u32) {
+    CABI_JSON_POST_CANCELLATIONS.lock().remove(&op_id);
+}
 
 #[derive(Default)]
 struct CabiNetFetchBytesResult {
@@ -60,6 +148,60 @@ async fn write_bytes_to_file(path: &str, bytes: &[u8]) -> i32 {
     match crate::r::fs::trueosfs::file_write_all_async(disk, path, bytes).await {
         Ok(true) => 0,
         Ok(false) | Err(_) => FS_ERR_IO,
+    }
+}
+
+async fn write_bytes_to_file_cancellable(
+    path: &str,
+    bytes: &[u8],
+    cancellation: &JsonPostCancellation,
+) -> i32 {
+    if cancellation.is_cancelled() {
+        return fetch_error_to_code(HTTPS_REQUEST_CANCELLED);
+    }
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+        return FS_ERR_IO;
+    };
+    let handle = match crate::r::fs::trueosfs::file_write_begin_async(
+        disk,
+        path,
+        bytes.len() as u64,
+    )
+    .await
+    {
+        Ok(Some(handle)) => handle,
+        Ok(None) | Err(_) => return FS_ERR_IO,
+    };
+
+    for chunk in bytes.chunks(64 * 1024) {
+        if cancellation.is_cancelled() {
+            let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
+            return fetch_error_to_code(HTTPS_REQUEST_CANCELLED);
+        }
+        if crate::r::fs::trueosfs::file_write_chunk_async(handle, chunk)
+            .await
+            .is_err()
+        {
+            let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
+            return FS_ERR_IO;
+        }
+    }
+    if cancellation.is_cancelled() {
+        let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
+        return fetch_error_to_code(HTTPS_REQUEST_CANCELLED);
+    }
+
+    // Finishing publishes the stream atomically and is deliberately an
+    // uncancellable commit section. A discard racing with this await can hide
+    // the operation result, but cannot safely roll back a completed publish.
+    let rc = match crate::r::fs::trueosfs::file_write_finish_async(handle).await {
+        Ok(()) => 0,
+        Err(_) => FS_ERR_IO,
+    };
+    if cancellation.is_cancelled() {
+        fetch_error_to_code(HTTPS_REQUEST_CANCELLED)
+    } else {
+        rc
     }
 }
 
@@ -181,6 +323,35 @@ impl HttpsJsonClient {
         timeout_ms: u32,
         max_bytes: usize,
     ) -> Result<HttpsJsonResponse, String> {
+        self.post_json_inner(url, body, bearer, timeout_ms, max_bytes, None)
+            .await
+    }
+
+    async fn post_json_cancellable(
+        &mut self,
+        url: &str,
+        body: &[u8],
+        bearer: Option<&str>,
+        timeout_ms: u32,
+        max_bytes: usize,
+        cancellation: &JsonPostCancellation,
+    ) -> Result<HttpsJsonResponse, String> {
+        self.post_json_inner(url, body, bearer, timeout_ms, max_bytes, Some(cancellation))
+            .await
+    }
+
+    async fn post_json_inner(
+        &mut self,
+        url: &str,
+        body: &[u8],
+        bearer: Option<&str>,
+        timeout_ms: u32,
+        max_bytes: usize,
+        cancellation: Option<&JsonPostCancellation>,
+    ) -> Result<HttpsJsonResponse, String> {
+        if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
+            return Err(String::from(HTTPS_REQUEST_CANCELLED));
+        }
         let target = parse_fetch_url(url).map_err(String::from)?;
         if target.scheme != "https" {
             return Err(String::from("unsupported scheme"));
@@ -200,18 +371,36 @@ impl HttpsJsonClient {
             body,
         };
 
-        crate::r::readiness::wait_for(
+        let readiness = crate::r::readiness::wait_for(
             crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
-        )
-        .await;
+        );
+        if let Some(cancellation) = cancellation {
+            await_json_post_or_cancel(readiness, cancellation)
+                .await
+                .map_err(|_| String::from(HTTPS_REQUEST_CANCELLED))?;
+        } else {
+            readiness.await;
+        }
+        if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
+            return Err(String::from(HTTPS_REQUEST_CANCELLED));
+        }
         let requested_device_index = NetProfile::default()
             .resolve_device_index()
             .ok_or_else(|| String::from("no nic"))?;
         let queues = self.queues_for_device(requested_device_index);
-        let ip = self
-            .resolve_host(queues.device_index, target.host.as_str(), timeout_ms.max(1))
-            .await?;
-        request_https_response(
+        let resolve =
+            self.resolve_host(queues.device_index, target.host.as_str(), timeout_ms.max(1));
+        let ip = if let Some(cancellation) = cancellation {
+            await_json_post_or_cancel(resolve, cancellation)
+                .await
+                .map_err(|_| String::from(HTTPS_REQUEST_CANCELLED))??
+        } else {
+            resolve.await?
+        };
+        if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
+            return Err(String::from(HTTPS_REQUEST_CANCELLED));
+        }
+        let result = request_https_response(
             &target,
             ip,
             queues.cmds,
@@ -221,8 +410,17 @@ impl HttpsJsonClient {
             &self.roots,
             timeout_ms.max(1),
             max_bytes,
+            cancellation,
         )
-        .await
+        .await;
+        // The queue pair and DNS cache are reusable, but the HTTP connection
+        // is not. Fence the owner on every exit so an unscoped late TLS error
+        // from this request cannot be mistaken for the next one. A failed
+        // fence retires only the queue owner; cached DNS data remains useful.
+        if !fence_https_owner(queues.cmds).await {
+            self.queues = None;
+        }
+        result
     }
 
     /// Convenience JSON POST that requires a successful (2xx) status.
@@ -252,8 +450,13 @@ static CABI_HTTPS_JSON_CLIENT: Mutex<CabiHttpsJsonClientState> =
         busy: false,
     });
 
-async fn take_cabi_https_json_client() -> HttpsJsonClient {
+async fn take_cabi_https_json_client(
+    cancellation: &JsonPostCancellation,
+) -> Option<HttpsJsonClient> {
     loop {
+        if cancellation.is_cancelled() {
+            return None;
+        }
         let acquired = {
             let mut state = CABI_HTTPS_JSON_CLIENT.lock();
             if state.busy {
@@ -264,9 +467,22 @@ async fn take_cabi_https_json_client() -> HttpsJsonClient {
             }
         };
         if let Some(client) = acquired {
-            return client.unwrap_or_default();
+            let client = client.unwrap_or_default();
+            if cancellation.is_cancelled() {
+                return_cabi_https_json_client(client);
+                return None;
+            }
+            return Some(client);
         }
-        Timer::after(EmbassyDuration::from_millis(HTTPS_IDLE_SLEEP_MS)).await;
+        if await_json_post_or_cancel(
+            Timer::after(EmbassyDuration::from_millis(HTTPS_CLIENT_WAIT_MS)),
+            cancellation,
+        )
+        .await
+        .is_err()
+        {
+            return None;
+        }
     }
 }
 
@@ -663,6 +879,7 @@ async fn request_https_bytes(
             &roots,
             timeout_ms,
             max_bytes,
+            None,
         )
         .await?,
     )
@@ -682,6 +899,27 @@ async fn resolve_https_host(
     .map_err(|err| format!("dns {:?}", err))
 }
 
+async fn fence_https_owner(cmds: &'static Queue<TlsCommand>) -> bool {
+    embassy_time::with_timeout(EmbassyDuration::from_millis(HTTPS_CLIENT_FENCE_TIMEOUT_MS), async {
+        let completion = Arc::new(TlsCancelCompletion::new());
+        let mut command = TlsCommand::CancelOwner {
+            completion: completion.clone(),
+        };
+        loop {
+            match cmds.try_push(command) {
+                Ok(()) => break,
+                Err(returned) => {
+                    command = returned;
+                    Timer::after(EmbassyDuration::from_millis(HTTPS_CLIENT_WAIT_MS)).await;
+                }
+            }
+        }
+        completion.wait().await;
+    })
+    .await
+    .is_ok()
+}
+
 async fn request_https_response(
     target: &FetchTarget,
     ip: [u8; 4],
@@ -692,8 +930,13 @@ async fn request_https_response(
     roots: &TlsRoots,
     timeout_ms: u32,
     max_bytes: usize,
+    cancellation: Option<&JsonPostCancellation>,
 ) -> Result<HttpsJsonResponse, String> {
     let request_data = build_http_request(target, request)?;
+
+    if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
+        return Err(String::from(HTTPS_REQUEST_CANCELLED));
+    }
 
     // A reusable client can have a final Closed event left over after it has
     // already consumed a complete length-delimited response. No connection is
@@ -716,15 +959,25 @@ async fn request_https_response(
     })
     .map_err(|_| String::from("tls queue full"))?;
 
+    if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
+        return Err(String::from(HTTPS_REQUEST_CANCELLED));
+    }
+
     let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
     let mut tls_handle = None;
     let mut sent_request = false;
     let mut response = Vec::new();
 
     loop {
+        if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
+            return Err(String::from(HTTPS_REQUEST_CANCELLED));
+        }
         let drained = events.drain(HTTPS_EVENT_DRAIN_MAX);
         let drained_any = !drained.is_empty();
         for ev in drained {
+            if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
+                return Err(String::from(HTTPS_REQUEST_CANCELLED));
+            }
             match ev {
                 TlsEvent::Opened { handle } => tls_handle = Some(handle),
                 TlsEvent::Connected { handle } => {
@@ -733,6 +986,9 @@ async fn request_https_response(
                     }
                     if tls_handle != Some(handle) || sent_request {
                         continue;
+                    }
+                    if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
+                        return Err(String::from(HTTPS_REQUEST_CANCELLED));
                     }
                     cmds.push(TlsCommand::Send {
                         handle,
@@ -795,10 +1051,20 @@ async fn request_https_response(
             }
             return Err(String::from("timeout"));
         }
-        if drained_any {
-            Timer::after(EmbassyDuration::from_micros(0)).await;
+        let sleep = if drained_any {
+            Timer::after(EmbassyDuration::from_micros(0))
         } else {
-            Timer::after(EmbassyDuration::from_millis(HTTPS_IDLE_SLEEP_MS)).await;
+            Timer::after(EmbassyDuration::from_millis(HTTPS_IDLE_SLEEP_MS))
+        };
+        if let Some(cancellation) = cancellation {
+            if await_json_post_or_cancel(sleep, cancellation)
+                .await
+                .is_err()
+            {
+                return Err(String::from(HTTPS_REQUEST_CANCELLED));
+            }
+        } else {
+            sleep.await;
         }
     }
 }
@@ -951,13 +1217,60 @@ async fn post_json_bytes(
     bearer: Option<String>,
     timeout_ms: u32,
     max_bytes: usize,
+    cancellation: &JsonPostCancellation,
 ) -> Result<Vec<u8>, i32> {
+    let target = parse_fetch_url(url.as_str()).map_err(fetch_error_to_code)?;
+    if target.scheme == "http" {
+        if cancellation.is_cancelled() {
+            return Err(fetch_error_to_code(HTTPS_REQUEST_CANCELLED));
+        }
+
+        let authorization = if let Some(token) = bearer.as_deref() {
+            if !valid_header_value(token) {
+                return Err(fetch_error_to_code("bad bearer token"));
+            }
+            Some(format!("Bearer {}", token))
+        } else {
+            None
+        };
+        let mut headers = vec![("Accept", "application/json")];
+        if let Some(value) = authorization.as_deref() {
+            headers.push(("Authorization", value));
+        }
+
+        let post = crate::surfer::html_shack::post_bytes_via_pool(
+            url,
+            "application/json",
+            headers.as_slice(),
+            body_json.as_bytes(),
+            timeout_ms as u64,
+            max_bytes,
+        );
+        let fetch = await_json_post_or_cancel(post, cancellation)
+            .await
+            .map_err(|_| fetch_error_to_code(HTTPS_REQUEST_CANCELLED))?
+            .map_err(|err| fetch_error_to_code(err.as_str()))?;
+        if cancellation.is_cancelled() {
+            return Err(fetch_error_to_code(HTTPS_REQUEST_CANCELLED));
+        }
+        return Ok(fetch.bytes);
+    }
+
     // Blueprint callers use an operation id per request, but the kernel-side
     // HTTPS client is retained across operations. This keeps one registered
     // TLS queue pair and one bounded DNS cache for a long-running app loop.
-    let mut client = take_cabi_https_json_client().await;
+    let Some(mut client) = take_cabi_https_json_client(cancellation).await else {
+        return Err(fetch_error_to_code(HTTPS_REQUEST_CANCELLED));
+    };
     let result = client
-        .post_json(url.as_str(), body_json.as_bytes(), bearer.as_deref(), timeout_ms, max_bytes)
+        .post_json_cancellable(
+            url.as_str(),
+            body_json.as_bytes(),
+            bearer.as_deref(),
+            timeout_ms,
+            max_bytes,
+            cancellation,
+        )
         .await
         .and_then(success_body);
     return_cabi_https_json_client(client);
@@ -997,13 +1310,34 @@ fn spawn_post_json_file(
     bearer: Option<String>,
     timeout_ms: u32,
     max_bytes: usize,
+    cancellation: Arc<JsonPostCancellation>,
 ) {
     crate::wait::spawn_local_detached(async move {
-        let rc = match post_json_bytes(url, body_json, bearer, timeout_ms, max_bytes).await {
-            Ok(bytes) => write_bytes_to_file(path.as_str(), bytes.as_slice()).await,
+        let rc = match post_json_bytes(
+            url,
+            body_json,
+            bearer,
+            timeout_ms,
+            max_bytes,
+            cancellation.as_ref(),
+        )
+        .await
+        {
+            Ok(bytes) if !cancellation.is_cancelled() => {
+                write_bytes_to_file_cancellable(
+                    path.as_str(),
+                    bytes.as_slice(),
+                    cancellation.as_ref(),
+                )
+                .await
+            }
+            Ok(_) => fetch_error_to_code(HTTPS_REQUEST_CANCELLED),
             Err(rc) => rc,
         };
-        if let Some(slot) = CABI_NET_FETCH_RESULTS.lock().get_mut(&op_id) {
+        finish_json_post_operation(op_id);
+        if !cancellation.is_cancelled()
+            && let Some(slot) = CABI_NET_FETCH_RESULTS.lock().get_mut(&op_id)
+        {
             *slot = Some(rc);
         }
     });
@@ -1016,14 +1350,26 @@ fn spawn_post_json_bytes(
     bearer: Option<String>,
     timeout_ms: u32,
     max_bytes: usize,
+    cancellation: Arc<JsonPostCancellation>,
 ) {
     crate::wait::spawn_local_detached(async move {
-        let (rc, body) = match post_json_bytes(url, body_json, bearer, timeout_ms, max_bytes).await
+        let (rc, body) = match post_json_bytes(
+            url,
+            body_json,
+            bearer,
+            timeout_ms,
+            max_bytes,
+            cancellation.as_ref(),
+        )
+        .await
         {
             Ok(bytes) => (0, bytes),
             Err(rc) => (rc, Vec::new()),
         };
-        if let Some(slot) = CABI_NET_FETCH_BYTES_RESULTS.lock().get_mut(&op_id) {
+        finish_json_post_operation(op_id);
+        if !cancellation.is_cancelled()
+            && let Some(slot) = CABI_NET_FETCH_BYTES_RESULTS.lock().get_mut(&op_id)
+        {
             slot.rc = Some(rc);
             slot.body = body;
         }
@@ -1059,6 +1405,7 @@ pub(crate) fn cabi_net_fetch_result_host(op_id: u32) -> i32 {
 }
 
 pub(crate) fn cabi_net_fetch_discard_host(op_id: u32) -> i32 {
+    cancel_json_post_operation(op_id);
     CABI_NET_FETCH_RESULTS.lock().remove(&op_id);
     0
 }
@@ -1120,6 +1467,7 @@ pub(crate) fn cabi_net_fetch_bytes_read_chunk_host(
 }
 
 pub(crate) fn cabi_net_fetch_bytes_discard_host(op_id: u32) -> i32 {
+    cancel_json_post_operation(op_id);
     CABI_NET_FETCH_BYTES_RESULTS.lock().remove(&op_id);
     0
 }
@@ -1221,6 +1569,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start_with_timeout(
     let bearer = unsafe { optional_abi_string(bearer_ptr, bearer_len) };
     let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
     CABI_NET_FETCH_RESULTS.lock().insert(op_id, None);
+    let cancellation = register_json_post_cancellation(op_id);
     spawn_post_json_file(
         op_id,
         String::from(url),
@@ -1229,6 +1578,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start_with_timeout(
         bearer,
         timeout_ms.max(1),
         4 * 1024 * 1024,
+        cancellation,
     );
     op_id
 }
@@ -1270,6 +1620,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_bytes_start_with_timeou
     CABI_NET_FETCH_BYTES_RESULTS
         .lock()
         .insert(op_id, CabiNetFetchBytesResult::default());
+    let cancellation = register_json_post_cancellation(op_id);
     spawn_post_json_bytes(
         op_id,
         String::from(url),
@@ -1277,6 +1628,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_bytes_start_with_timeou
         bearer,
         timeout_ms.max(1),
         4 * 1024 * 1024,
+        cancellation,
     );
     op_id
 }
@@ -1413,5 +1765,43 @@ mod tests {
     #[test]
     fn header_line_injection_is_rejected() {
         assert!(!valid_header_value("token\r\nInjected: yes"));
+    }
+
+    #[test]
+    fn bytes_discard_signals_registered_json_post_cancellation() {
+        const OP_ID: u32 = u32::MAX - 16;
+
+        finish_json_post_operation(OP_ID);
+        CABI_NET_FETCH_BYTES_RESULTS.lock().remove(&OP_ID);
+        CABI_NET_FETCH_BYTES_RESULTS
+            .lock()
+            .insert(OP_ID, CabiNetFetchBytesResult::default());
+        let cancellation = register_json_post_cancellation(OP_ID);
+
+        assert_eq!(cabi_net_fetch_bytes_discard_host(OP_ID), 0);
+        assert!(cancellation.is_cancelled());
+        assert!(!CABI_NET_FETCH_BYTES_RESULTS.lock().contains_key(&OP_ID));
+        assert!(!CABI_JSON_POST_CANCELLATIONS.lock().contains_key(&OP_ID));
+    }
+
+    #[test]
+    fn ordinary_fetch_discard_does_not_cancel_another_json_post() {
+        const JSON_OP_ID: u32 = u32::MAX - 17;
+        const GET_OP_ID: u32 = u32::MAX - 18;
+
+        finish_json_post_operation(JSON_OP_ID);
+        CABI_NET_FETCH_RESULTS.lock().remove(&GET_OP_ID);
+        let cancellation = register_json_post_cancellation(JSON_OP_ID);
+        CABI_NET_FETCH_RESULTS.lock().insert(GET_OP_ID, None);
+
+        assert_eq!(cabi_net_fetch_discard_host(GET_OP_ID), 0);
+        assert!(!cancellation.is_cancelled());
+        assert!(
+            CABI_JSON_POST_CANCELLATIONS
+                .lock()
+                .contains_key(&JSON_OP_ID)
+        );
+
+        finish_json_post_operation(JSON_OP_ID);
     }
 }

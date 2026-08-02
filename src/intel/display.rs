@@ -2351,6 +2351,7 @@ pub(crate) struct Ui4LiveOverlayFlip {
     surface_reg: u32,
     change: CompositionDamageRegion,
     effective: CompositionDamageRegion,
+    tile_count: usize,
     rect_count: usize,
     submitted_ns: u64,
     reason: &'static str,
@@ -2363,11 +2364,12 @@ pub(crate) enum Ui4LiveOverlayFlipPoll {
     Failed,
 }
 
-/// Draw sparse interaction rectangles into the next slot-local swap surface,
-/// flush only their accumulated damage, publish SURF once, and return without
-/// waiting for vblank/SURFLIVE.
-pub(crate) fn queue_ui4_live_overlay_rects_on_slot_damage_region(
+/// Draw interaction bitmaps followed by sparse chrome rectangles into the
+/// next slot-local swap surface, flush only their accumulated damage, publish
+/// SURF once, and return without waiting for vblank/SURFLIVE.
+pub(crate) fn queue_ui4_live_overlay_scene_on_slot_damage_region(
     plane_slot: usize,
+    tiles: &[RgbaOverlayTile<'_>],
     rects: &[LiveOverlayRect],
     damage: CompositionDamageRegion,
     reason: &'static str,
@@ -2398,8 +2400,11 @@ pub(crate) fn queue_ui4_live_overlay_rects_on_slot_damage_region(
 
     for damaged in effective.rects() {
         fill_overlay_rect(surface, damaged.x, damaged.y, damaged.width, damaged.height, 0);
+        for tile in tiles {
+            copy_premultiplied_rgba_tile_into_overlay_clipped(surface, tile, *damaged)?;
+        }
         for rect in rects {
-            fill_overlay_rect_rgba_clipped(surface, *rect, *damaged);
+            blend_overlay_rect_rgba_clipped(surface, *rect, *damaged);
         }
     }
     if !dma_flush_overlay_region(surface, effective) {
@@ -2425,6 +2430,7 @@ pub(crate) fn queue_ui4_live_overlay_rects_on_slot_damage_region(
         surface_reg,
         change,
         effective,
+        tile_count: tiles.len(),
         rect_count: rects.len(),
         submitted_ns: crate::chronos::monotonic_nanos(),
         reason,
@@ -2462,12 +2468,13 @@ pub(crate) fn poll_ui4_live_overlay_flip(flip: Ui4LiveOverlayFlip) -> Ui4LiveOve
         let change_bounds = flip.change.bounding_rect().unwrap_or_default();
         let effective_bounds = flip.effective.bounding_rect().unwrap_or_default();
         crate::log!(
-            "intel/display: live-overlay-damage-present seq={} reason={} pipe={} slot={} buffer={} path=surf-only-async rects={} damage_rects={} damage_bounds={}x{}@{},{} effective_rects={} effective_bounds={}x{}@{},{} wait_ns={}\n",
+            "intel/display: live-overlay-damage-present seq={} reason={} pipe={} slot={} buffer={} path=surf-only-async tiles={} rects={} damage_rects={} damage_bounds={}x{}@{},{} effective_rects={} effective_bounds={}x{}@{},{} wait_ns={}\n",
             seq,
             flip.reason,
             flip.surface.pipe.name,
             flip.surface.plane_slot,
             flip.surface.buffer_index,
+            flip.tile_count,
             flip.rect_count,
             flip.change.len(),
             change_bounds.width,
@@ -6651,7 +6658,7 @@ fn fill_overlay_rect_rgba(surface: OverlaySurface, rect: LiveOverlayRect) {
     );
 }
 
-fn fill_overlay_rect_rgba_clipped(
+fn blend_overlay_rect_rgba_clipped(
     surface: OverlaySurface,
     rect: LiveOverlayRect,
     clip: CompositionDamageRect,
@@ -6663,14 +6670,38 @@ fn fill_overlay_rect_rgba_clipped(
     let Some(draw) = intersect_composition_damage(rect_damage, clip) else {
         return;
     };
-    fill_overlay_rect(
-        surface,
-        draw.x,
-        draw.y,
-        draw.width,
-        draw.height,
-        overlay_scanout_pixel_rgba_premul(rect.color.r, rect.color.g, rect.color.b, rect.color.a),
-    );
+    let source =
+        overlay_scanout_pixel_rgba_premul(rect.color.r, rect.color.g, rect.color.b, rect.color.a);
+    if rect.color.a == u8::MAX {
+        fill_overlay_rect(surface, draw.x, draw.y, draw.width, draw.height, source);
+        return;
+    }
+    if surface.virt.is_null() || surface.pitch_bytes < surface.width.saturating_mul(4) {
+        return;
+    }
+    let source = source.to_le_bytes();
+    let inverse_alpha = u16::from(u8::MAX - source[3]);
+    let pitch_pixels = surface.pitch_bytes as usize / 4;
+    for row_index in draw.y as usize..draw.y.saturating_add(draw.height) as usize {
+        let row = unsafe { (surface.virt as *mut u32).add(row_index.saturating_mul(pitch_pixels)) };
+        for column_index in draw.x as usize..draw.x.saturating_add(draw.width) as usize {
+            let destination =
+                unsafe { core::ptr::read_volatile(row.add(column_index)) }.to_le_bytes();
+            let blend = |source: u8, destination: u8| -> u8 {
+                let destination = (u16::from(destination) * inverse_alpha + 127) / 255;
+                u16::from(source).saturating_add(destination).min(255) as u8
+            };
+            let pixel = u32::from_le_bytes([
+                blend(source[0], destination[0]),
+                blend(source[1], destination[1]),
+                blend(source[2], destination[2]),
+                blend(source[3], destination[3]),
+            ]);
+            unsafe {
+                core::ptr::write_volatile(row.add(column_index), pixel);
+            }
+        }
+    }
 }
 
 fn dma_flush_overlay_region(surface: OverlaySurface, damage: CompositionDamageRegion) -> bool {

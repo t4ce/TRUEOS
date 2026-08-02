@@ -12,8 +12,9 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use super::{
     DamageRect, FrameContent, FrameGpuRelease, FrameHandle, FramePoolError, FrameReadLease,
     FrameRgbaView, OutputId, WindowId, WindowPlacement, WindowSnapshot, acknowledge_window_frame,
-    acquire_published_frame, frame_snapshot, published_rgba_view, release_published_frame,
-    retain_published_frame, visible_windows_for_output_with_revision, window_composition_revision,
+    acquire_published_frame, application_windows_for_output_with_revision, frame_snapshot,
+    published_rgba_view, release_published_frame, retain_published_frame,
+    window_composition_revision,
 };
 
 const CLOSE_TRANSITION_PERIOD_MS: u64 = 16;
@@ -28,11 +29,15 @@ static COMPUTE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_CPU_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_BCS0_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
+static STATIC_SINGLE_GPU_RCS_LOGGED: AtomicBool = AtomicBool::new(false);
+static MIXED_SLOT_COMPOSITION_LOGGED: AtomicBool = AtomicBool::new(false);
+static GPU_SOURCE_RELEASE_INVALID_WARNED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_SHARED_COMPOSITION_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_DIRECT_ADMISSION_WARNED: AtomicBool = AtomicBool::new(false);
 static VIDEO_SURFLIVE_RELEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-/// Latest broker snapshot whose complete plane batch reached SURFLIVE.
+/// Latest broker revision whose slot 0-3 application state reached SURFLIVE
+/// or required no plane update. Slot 4 advances and acknowledges separately.
 static PRESENTED_BROKER_REVISION: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn ui4_compositor_presented_revision() -> u64 {
@@ -205,9 +210,6 @@ enum CompositionTarget {
 struct PlanePlan {
     target: CompositionTarget,
     changed: bool,
-    /// Most recently changed window in broker/z order. Mixed buffering uses
-    /// this one local winner without reconstructing other same-slot pixels.
-    selected: Option<WindowId>,
     next_windows: Vec<CompositionWindowStamp>,
     damage: crate::intel::CompositionDamageRegion,
 }
@@ -217,7 +219,6 @@ impl PlanePlan {
         Self {
             target,
             changed: false,
-            selected: None,
             next_windows: Vec::with_capacity(window_capacity),
             damage: crate::intel::CompositionDamageRegion::EMPTY,
         }
@@ -226,7 +227,6 @@ impl PlanePlan {
     const fn queue_plan(&self) -> PlaneQueuePlan {
         PlaneQueuePlan {
             target: self.target,
-            selected: self.selected,
             damage: self.damage,
         }
     }
@@ -235,7 +235,6 @@ impl PlanePlan {
 #[derive(Copy, Clone)]
 struct PlaneQueuePlan {
     target: CompositionTarget,
-    selected: Option<WindowId>,
     damage: crate::intel::CompositionDamageRegion,
 }
 
@@ -284,7 +283,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand expensive=nonshared-double+triple/one-per-slot/soft-cap-4 shared=single+dirty-font-double+streaming-render-scene-triple/slot-local-composition lone-shared=direct-scanout-when-eligible mixed_slot=local-winner/placement-old+new-repair static_single=shared-slot-composition slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
+        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand expensive=nonshared-double+triple/one-per-slot/soft-cap-4 shared=single+dirty-font-double+streaming-render-scene-triple/slot-local-composition lone-source=direct-scanout-when-eligible mixed_slot=guc-rcs-all-sources/placement-old+new-repair static_single=released-gpu-rcs+cpu-bcs0/cpu-fallback slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
         CLOSE_TRANSITION_PERIOD_MS,
         PENDING_POLL_PERIOD_MS,
     );
@@ -441,7 +440,7 @@ fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui
     }
 
     let phase_started_ns = crate::chronos::monotonic_nanos();
-    let (broker_revision, windows) = visible_windows_for_output_with_revision(output);
+    let (broker_revision, windows) = application_windows_for_output_with_revision(output);
     validate_window_snapshot(output, &windows)?;
     runtime.profile.snapshot_ns = runtime
         .profile
@@ -610,9 +609,6 @@ fn build_plane_plan(
             .find(|previous| previous.id == current.id);
         let changed = !state.initialized || previous != Some(&current);
         composition_changed |= changed;
-        if changed {
-            plan.selected = Some(current.id);
-        }
         match previous {
             None => {
                 add_placement_damage(
@@ -790,14 +786,12 @@ fn queue_async_plane(
             (window, view)
         })
         .collect();
-    // Explicitly shareable frames compose into one broker plane instead of
-    // consuming one hardware plane per window. Immutable/single sources use
-    // the sparse BCS/CPU painter. Dirty/double FontScene and streaming/triple
-    // RenderScene sources keep a stable published front while their producer
-    // writes another buffer, then use the ordinary GPU compositor. A lone
-    // eligible member still takes the direct path below. Plane slots are
-    // independent scanout inputs, so overlap is considered only inside this
-    // already slot-filtered set.
+    // A lone eligible source may be imported directly. Two or more sources
+    // always retain their complete broker/z order and compose into one
+    // display-owned plane surface, regardless of producer cadence or buffer
+    // count. The read leases above make every selected front stable for the
+    // transaction; buffering controls producer backpressure, not whether UI4
+    // may sample the published generation.
     let all_shared_composable = !selected.is_empty()
         && selected.iter().all(|(window, _)| {
             frame_snapshot(window.frame)
@@ -835,13 +829,19 @@ fn queue_async_plane(
     }
     let local_direct = if selected.len() == 1 {
         selected.first().copied()
-    } else if !all_shared_composable {
-        plan.selected
-            .and_then(|id| selected.iter().copied().find(|(window, _)| window.id == id))
-            .or_else(|| selected.last().copied())
     } else {
         None
     };
+    if selected.len() > 1
+        && !all_shared_composable
+        && !MIXED_SLOT_COMPOSITION_LOGGED.swap(true, Ordering::AcqRel)
+    {
+        crate::log_info!(target: "ui4";
+            "ui4/mixed-slot-composition: slot={} windows={} backend=guc-rcs-rgba8-layers source_ownership=published-read-leases policy=compose-all-in-broker-z-order local_winner=0 cpu_frame_copy=0 log=once\n",
+            target_plane_slot(plan.target),
+            selected.len(),
+        );
+    }
     // Slot0 joins the same premultiplied-RGBA application-plane contract at
     // compositor startup and has its own direct-scanout alias pool. Keep the
     // ordinary primary swap chain for real composition, but let a lone
@@ -956,6 +956,13 @@ fn queue_async_plane(
             return Err(Ui4CompositorError::PresentFailed);
         }
     }
+    // Preserve the existing direct-only lifecycle for a lone isolated
+    // producer. The compose-all change applies to mixed slots; immutable
+    // single-buffer frames (including image-viewer) are shareable and may
+    // still use the domain-safe compositor fallback below.
+    if selected.len() == 1 && !all_shared_composable {
+        return Err(Ui4CompositorError::PresentFailed);
+    }
     if all_dirty_double_font && !DIRTY_FONT_SHARED_COMPOSITION_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(target: "ui4";
             "ui4/font-composition: mode=shared-slot plane={} windows={} buffering=dirty/double backend=guc-rcs-rgba8-batch source_ownership=stable-front+producer-back direct_scanout=0 cpu_frame_copy=0 log=once\n",
@@ -963,16 +970,43 @@ fn queue_async_plane(
             selected.len(),
         );
     }
-    if !all_shared_composable && !selected.is_empty() {
+    if let Some((window, view)) = selected.iter().find(|(_, view)| {
+        view.gpu_authored
+            && !view
+                .gpu_release
+                .is_some_and(|release| release.matches(view.phys, view.byte_len))
+    }) {
+        if !GPU_SOURCE_RELEASE_INVALID_WARNED.swap(true, Ordering::AcqRel) {
+            crate::log_warn!(target: "ui4";
+                "ui4/composition-source-rejected: slot={} frame={} gpu_authored=1 release={} exact_allocation={} action=preserve-live-plane-and-retry cpu_read=0 pat0_import=0 log=once\n",
+                target_plane_slot(plan.target),
+                window.frame.raw(),
+                view.gpu_release.is_some() as u8,
+                view.gpu_release
+                    .is_some_and(|release| release.matches(view.phys, view.byte_len)) as u8,
+            );
+        }
         return Err(Ui4CompositorError::PresentFailed);
     }
     let pixels: Vec<&[u8]> = selected
         .iter()
-        .map(|(_, view)| unsafe {
-            core::slice::from_raw_parts(
-                view.virt.cast_const(),
-                (view.pitch as usize).saturating_mul(view.height as usize),
-            )
+        .map(|(_, view)| {
+            if view.gpu_authored {
+                // A released GPU allocation is sampled only through its
+                // cache-aware GPU layer descriptor. An empty CPU view makes an
+                // accidental raw CPU fallback fail closed instead of reading
+                // a PAT3-authored generation through a stale WB alias.
+                &[][..]
+            } else {
+                // SAFETY: the compositor read lease pins this CPU-authored
+                // allocation through completion of the selected backend.
+                unsafe {
+                    core::slice::from_raw_parts(
+                        view.virt.cast_const(),
+                        (view.pitch as usize).saturating_mul(view.height as usize),
+                    )
+                }
+            }
         })
         .collect();
     let tiles: Vec<_> = selected
@@ -1005,9 +1039,18 @@ fn queue_async_plane(
         .collect();
     let slot = target_plane_slot(plan.target);
     let reason = overlay_async_reason(slot);
+    let has_released_gpu_source = tiles.iter().any(|tile| tile.gpgpu_scanout_cache);
     let queued = match plan.target {
         CompositionTarget::Primary => {
             crate::intel::queue_ui4_primary_composition(&tiles, plan.damage, reason)
+        }
+        CompositionTarget::Overlay(_) if sparse_static_painter && has_released_gpu_source => {
+            if !STATIC_SINGLE_GPU_RCS_LOGGED.swap(true, Ordering::AcqRel) {
+                crate::log_info!(target: "ui4";
+                    "ui4/static-painter-route: backend=guc-rcs-rgba8-layers reason=released-gpu-source source_domain=gpu-released-pat3 buffering=single plane_isolation=slot-local bcs_source_import=0 cpu_source_read=0 damage=old+new-placement flip=ui4-batched log=once\n"
+                );
+            }
+            crate::intel::queue_ui4_overlay_composition(slot, &tiles, plan.damage, false, reason)
         }
         CompositionTarget::Overlay(_)
             if sparse_static_painter && STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED =>
@@ -1022,7 +1065,7 @@ fn queue_async_plane(
                 Ok(composition) => {
                     if !STATIC_SINGLE_BCS0_BASELINE_LOGGED.swap(true, Ordering::AcqRel) {
                         crate::log_info!(target: "ui4";
-                            "ui4/static-painter: backend=guc-bcs0-fast-copy buffering=single plane_isolation=slot-local batch=one-per-changed-plane completion=mi-flush-dw-post-sync flip=after-retire cpu_pixel_copy=0 shader_dispatches=0 clear=fresh-transparent-only log=once\n"
+                            "ui4/static-painter: backend=guc-bcs0-fast-copy source_domain=cpu-authored buffering=single plane_isolation=slot-local batch=one-per-changed-plane completion=mi-flush-dw-post-sync flip=after-retire cpu_pixel_copy=0 shader_dispatches=0 clear=fresh-transparent-only log=once\n"
                         );
                     }
                     Ok(composition)
@@ -1030,7 +1073,7 @@ fn queue_async_plane(
                 Err(crate::intel::Ui4AsyncCompositionError::Unavailable) => {
                     if !STATIC_SINGLE_CPU_BASELINE_LOGGED.swap(true, Ordering::AcqRel) {
                         crate::log_warn!(target: "ui4";
-                            "ui4/static-painter-fallback: backend=cpu-sparse-copy reason=non-pristine-or-bcs-unavailable buffering=single plane_isolation=slot-local guc_jobs=0 shader_dispatches=0 damage=old+new-placement flip=ui4-batched log=once\n"
+                            "ui4/static-painter-fallback: backend=cpu-sparse-copy reason=non-pristine-or-bcs-unavailable source_domain=cpu-authored buffering=single plane_isolation=slot-local guc_jobs=0 shader_dispatches=0 damage=old+new-placement flip=ui4-batched log=once\n"
                         );
                     }
                     crate::intel::queue_ui4_static_overlay_composition_cpu(
@@ -1119,9 +1162,26 @@ const fn compute_release_direct_contract(
             | (FrameContent::Video, super::FrameBuffering::Quad)
     ) || matches!(
         (content, cadence, buffering),
-        (FrameContent::FontScene2d, super::FrameCadence::Dirty, super::FrameBuffering::Double,)
+        (
+            FrameContent::BlueprintScene,
+            super::FrameCadence::Immutable,
+            super::FrameBuffering::Single,
+        ) | (FrameContent::FontScene2d, super::FrameCadence::Dirty, super::FrameBuffering::Double,)
     )
 }
+
+const _: () = {
+    assert!(compute_release_direct_contract(
+        FrameContent::BlueprintScene,
+        super::FrameCadence::Immutable,
+        super::FrameBuffering::Single,
+    ));
+    assert!(!compute_release_direct_contract(
+        FrameContent::BlueprintScene,
+        super::FrameCadence::Dirty,
+        super::FrameBuffering::Single,
+    ));
+};
 
 fn dirty_double_font_scene(window: WindowSnapshot) -> bool {
     frame_snapshot(window.frame).is_ok_and(|snapshot| {
@@ -1528,7 +1588,17 @@ mod damage_tests {
     use super::*;
 
     #[test]
-    fn dirty_double_font_scene_is_a_direct_compute_release_contract() {
+    fn released_compute_frame_direct_contracts_are_explicit() {
+        assert!(compute_release_direct_contract(
+            FrameContent::BlueprintScene,
+            super::super::FrameCadence::Immutable,
+            super::super::FrameBuffering::Single,
+        ));
+        assert!(!compute_release_direct_contract(
+            FrameContent::BlueprintScene,
+            super::super::FrameCadence::Dirty,
+            super::super::FrameBuffering::Single,
+        ));
         assert!(compute_release_direct_contract(
             FrameContent::FontScene2d,
             super::super::FrameCadence::Dirty,

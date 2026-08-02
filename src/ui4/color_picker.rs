@@ -106,7 +106,7 @@ fn capture_escape(
 #[embassy_executor::task]
 pub(crate) async fn ui4_color_picker_service_task() {
     crate::log_info!(target: "ui4/color-picker";
-        "ui4/color-picker: service online lifecycle=context-menu-open+escape-close owner=kernel-internal controls=sv256+hue+alpha commit=button-release target=pipe-a-bottom-color alpha=ui-only\n"
+        "ui4/color-picker: service online lifecycle=context-menu-open+escape-close owner=kernel-internal presentation=slot4-software-cursor-plane/fixed/no-application-plane-fallback controls=sv256+hue+alpha commit=button-release target=pipe-a-bottom-color alpha=ui-only\n"
     );
     let mut active = None;
     loop {
@@ -183,7 +183,7 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
         session,
         frame: picker_frame,
         output,
-        plane: WindowPlane::Universal(super::RGB_OVERLAY_PLANE_SLOT_2 as u8),
+        plane: WindowPlane::Interaction,
         placement: WindowPlacement {
             x: picker_x as i32,
             y: picker_y as i32,
@@ -239,7 +239,7 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
 
     let rgba = picker.color.straight_rgba();
     crate::log_info!(target: "ui4/color-picker";
-        "ui4/color-picker: opened session={} picker_frame={} picker_window={} picker={}x{}@{},{} rgba={},{},{},{} target=pipe-a-bottom-color alpha_unmapped=1 commit=release\n",
+        "ui4/color-picker: opened session={} picker_frame={} picker_window={} plane=slot4-software-cursor/fixed picker={}x{}@{},{} rgba={},{},{},{} target=pipe-a-bottom-color alpha_unmapped=1 commit=release fallback_application_plane=0\n",
         session.raw(),
         picker_frame.raw(),
         picker_window.raw(),
@@ -278,10 +278,11 @@ fn cleanup_failed_open(session: WindowSessionId, picker: FrameHandle) {
 }
 
 fn close_picker(picker: &ActiveColorPicker, reason: &'static str) -> bool {
-    let close = WindowSessionCloseRequest::default().direct_plane_animate_and_retire_frames();
+    let close = WindowSessionCloseRequest::default().animate_and_retire_frames();
     match finish_window_session_with_request(OWNER, picker.session, close) {
         Ok(closed) => {
             let _ = super::unregister_global_keyboard_hook(picker.escape_hook);
+            super::input_broker::notify_slot4_visual_change();
             crate::log_info!(target: "ui4/color-picker";
                 "ui4/color-picker: closed reason={} session={} windows={} frame_retirement=ui4-owned\n",
                 reason,
@@ -462,6 +463,7 @@ fn render_and_publish(
     crate::intel::dma_flush(view.virt, view.byte_len);
     publish_frame_buffer(lease).map_err(|_| ())?;
     publish_window_frame(OWNER, window, DamageRect::FULL).map_err(|_| ())?;
+    super::input_broker::notify_slot4_visual_change();
     Ok(())
 }
 

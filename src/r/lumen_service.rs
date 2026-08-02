@@ -382,6 +382,31 @@ pub(crate) fn spirit_response_present(owner: u8, turn: u64, text: &[u8]) -> i32 
     0
 }
 
+fn validate_silent_spirit_text(turn: u64, text: &[u8]) -> Result<&str, i32> {
+    if turn == 0 || text.is_empty() || text.len() > MAX_SPIRIT_RESPONSE_BYTES {
+        return Err(ERROR_BAD_INPUT);
+    }
+    let text = core::str::from_utf8(text).map_err(|_| ERROR_BAD_INPUT)?;
+    if text.trim().is_empty() {
+        return Err(ERROR_BAD_INPUT);
+    }
+    Ok(text)
+}
+
+/// Present remote or otherwise externally generated text through Spirit's
+/// bounded visual ingress. This capability is deliberately independent of a
+/// live Lumen session and never enters the local text-to-voice path.
+pub(crate) fn spirit_text_present_silent(turn: u64, text: &[u8]) -> i32 {
+    let text = match validate_silent_spirit_text(turn, text) {
+        Ok(text) => text,
+        Err(error) => return error,
+    };
+    if !crate::spirit::enqueue_reasoning_response(turn, text) {
+        return ERROR_UNAVAILABLE;
+    }
+    0
+}
+
 #[embassy_executor::task(pool_size = TASK_POOL_SIZE)]
 async fn lumen_blueprint_worker(owner: u8) {
     let initial = slot(owner).and_then(|slot| slot.lock().request.take());
@@ -930,6 +955,33 @@ pub unsafe extern "C" fn trueos_cabi_spirit_emotion_play(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_spirit_text_present_silent(
+    turn: u64,
+    text_ptr: *const u8,
+    text_len: usize,
+) -> i32 {
+    if text_ptr.is_null() || text_len == 0 || text_len > MAX_SPIRIT_RESPONSE_BYTES {
+        return ERROR_BAD_INPUT;
+    }
+    let text = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SPIRIT_TEXT_PRESENT_SILENT,
+            turn,
+            0,
+            text,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            data as i64 as i32
+        } else {
+            ERROR_TRANSPORT
+        };
+    }
+    spirit_text_present_silent(turn, text)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_spirit_response_present(
     turn: u64,
     text_ptr: *const u8,
@@ -986,4 +1038,20 @@ pub extern "C" fn trueos_cabi_spirit_move(x_normalized: f32, y_normalized: f32) 
         };
     }
     spirit_move(x_normalized, y_normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ERROR_BAD_INPUT, MAX_SPIRIT_RESPONSE_BYTES, validate_silent_spirit_text};
+
+    #[test]
+    fn silent_spirit_text_validation_is_bounded_and_displayable() {
+        assert_eq!(validate_silent_spirit_text(0, b"hello"), Err(ERROR_BAD_INPUT));
+        assert_eq!(validate_silent_spirit_text(1, b""), Err(ERROR_BAD_INPUT));
+        assert_eq!(validate_silent_spirit_text(1, b" \n\t"), Err(ERROR_BAD_INPUT));
+        assert_eq!(validate_silent_spirit_text(1, &[0xff]), Err(ERROR_BAD_INPUT));
+        let oversized = [b'x'; MAX_SPIRIT_RESPONSE_BYTES + 1];
+        assert_eq!(validate_silent_spirit_text(1, &oversized), Err(ERROR_BAD_INPUT));
+        assert_eq!(validate_silent_spirit_text(7, b"hello"), Ok("hello"));
+    }
 }

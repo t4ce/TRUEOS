@@ -118,10 +118,11 @@ pub(crate) use window_broker::{
     WindowBrokerSnapshotReceiver, WindowBrokerSnapshotStats, WindowCreate, WindowId,
     WindowInteraction, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
     WindowSessionId, WindowSnapshot, WindowState, acknowledge_window_frame,
-    advance_window_close_transitions, begin_additional_window_session, begin_window_session,
-    close_window, create_window, finish_window_session, finish_window_session_with_request,
-    latest_window_broker_snapshot, move_window, publish_window_frame, publish_window_frames,
-    replace_window_frame, retire_frame_when_released, set_window_placement, set_windows_visible,
+    advance_window_close_transitions, application_windows_for_output_with_revision,
+    begin_additional_window_session, begin_window_session, close_window, create_window,
+    finish_window_session, finish_window_session_with_request, latest_window_broker_snapshot,
+    move_window, publish_window_frame, publish_window_frames, replace_window_frame,
+    retire_frame_when_released, set_window_placement, set_windows_visible,
     subscribe_window_broker_snapshots, take_window_first_presentation, toggle_window_maximized,
     ui4_window_broker_snapshot_service_task, visible_windows_for_output,
     visible_windows_for_output_with_revision, wait_for_window_composition_change,
@@ -210,9 +211,9 @@ pub(crate) const PRIMARY_PLANE_SLOT: usize = 0;
 pub(crate) const ALPHA_OVERLAY_PLANE_SLOT: usize = 1;
 pub(crate) const RGB_OVERLAY_PLANE_SLOT_2: usize = 2;
 pub(crate) const RGB_OVERLAY_PLANE_SLOT_3: usize = 3;
-/// Highest universal plane. UI4 reserves it for input chrome rather than
-/// broker windows so cursors, selection outlines and context menus never
-/// become part of an application composition surface.
+/// Highest universal plane. UI4 reserves it for input chrome and the trusted
+/// kernel color picker; neither participates in an application composition
+/// surface.
 pub(crate) const INTERACTION_OVERLAY_PLANE_SLOT: usize = 4;
 // Compatibility aliases for the parked linked-NV12 display-plane experiment.
 // Normal UI4 video is converted by the GuC into an ordinary streaming RGBA

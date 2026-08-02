@@ -113,6 +113,12 @@ enum ByteFetchMethod {
     },
 }
 
+impl ByteFetchMethod {
+    fn follows_redirects(&self) -> bool {
+        matches!(self, Self::Get)
+    }
+}
+
 pub struct ByteFetch {
     pub url: String,
     pub bytes: Vec<u8>,
@@ -141,6 +147,8 @@ pub struct HtmlShack {
     ready_html_queue: VecDeque<Html>,
     byte_request_queue: VecDeque<ByteFetchRequest>,
     ready_byte_queue: VecDeque<ByteFetchCompletion>,
+    active_byte_fetches: BTreeSet<u32>,
+    abandoned_byte_fetches: BTreeSet<u32>,
 }
 
 impl HtmlShack {
@@ -199,7 +207,9 @@ impl HtmlShack {
     }
 
     fn pop_byte_fetch(&mut self) -> Option<ByteFetchRequest> {
-        self.byte_request_queue.pop_front()
+        let request = self.byte_request_queue.pop_front()?;
+        self.active_byte_fetches.insert(request.id);
+        Some(request)
     }
 
     fn remove_byte_fetch(&mut self, id: u32) -> bool {
@@ -216,6 +226,10 @@ impl HtmlShack {
     }
 
     fn put_byte_fetch_result(&mut self, completion: ByteFetchCompletion) -> usize {
+        self.active_byte_fetches.remove(&completion.id);
+        if self.abandoned_byte_fetches.remove(&completion.id) {
+            return self.ready_byte_queue.len();
+        }
         self.ready_byte_queue.push_back(completion);
         self.ready_byte_queue.len()
     }
@@ -228,6 +242,23 @@ impl HtmlShack {
         self.ready_byte_queue
             .remove(idx)
             .map(|completion| completion.result)
+    }
+
+    fn abandon_byte_fetch(&mut self, id: u32) {
+        if self.remove_byte_fetch(id) {
+            return;
+        }
+        if let Some(idx) = self
+            .ready_byte_queue
+            .iter()
+            .position(|completion| completion.id == id)
+        {
+            self.ready_byte_queue.remove(idx);
+            return;
+        }
+        if self.active_byte_fetches.contains(&id) {
+            self.abandoned_byte_fetches.insert(id);
+        }
     }
 
     pub fn put_ready_html(&mut self, html: Html) -> usize {
@@ -250,6 +281,84 @@ impl HtmlShack {
 
         let html = String::from_utf8_lossy(bytes.as_slice()).into_owned();
         Ok(self.put_ready_html(Html::new(alloc::format!("file://{}", path), html)))
+    }
+}
+
+#[cfg(test)]
+mod byte_fetch_lifecycle_tests {
+    use super::*;
+
+    fn request(id: u32) -> ByteFetchRequest {
+        ByteFetchRequest {
+            id,
+            url: String::from("http://127.0.0.1/test"),
+            timeout_ms: 100,
+            max_bytes: 1024,
+            method: ByteFetchMethod::Get,
+        }
+    }
+
+    fn completion(id: u32) -> ByteFetchCompletion {
+        ByteFetchCompletion {
+            id,
+            result: Ok(ByteFetch {
+                url: String::from("http://127.0.0.1/test"),
+                bytes: vec![1, 2, 3],
+            }),
+        }
+    }
+
+    #[test]
+    fn abandoning_queued_byte_fetch_removes_request() {
+        let mut shack = HtmlShack::new();
+        shack.push_byte_fetch(request(1));
+
+        shack.abandon_byte_fetch(1);
+
+        assert!(shack.byte_request_queue.is_empty());
+        assert!(shack.active_byte_fetches.is_empty());
+        assert!(shack.abandoned_byte_fetches.is_empty());
+    }
+
+    #[test]
+    fn abandoning_active_byte_fetch_discards_late_completion() {
+        let mut shack = HtmlShack::new();
+        shack.push_byte_fetch(request(2));
+        assert!(shack.pop_byte_fetch().is_some());
+
+        shack.abandon_byte_fetch(2);
+        shack.put_byte_fetch_result(completion(2));
+
+        assert!(shack.ready_byte_queue.is_empty());
+        assert!(shack.active_byte_fetches.is_empty());
+        assert!(shack.abandoned_byte_fetches.is_empty());
+    }
+
+    #[test]
+    fn abandoning_ready_byte_fetch_removes_completion() {
+        let mut shack = HtmlShack::new();
+        shack.push_byte_fetch(request(3));
+        assert!(shack.pop_byte_fetch().is_some());
+        shack.put_byte_fetch_result(completion(3));
+
+        shack.abandon_byte_fetch(3);
+
+        assert!(shack.ready_byte_queue.is_empty());
+        assert!(shack.active_byte_fetches.is_empty());
+        assert!(shack.abandoned_byte_fetches.is_empty());
+    }
+
+    #[test]
+    fn redirects_are_get_only() {
+        assert!(ByteFetchMethod::Get.follows_redirects());
+        assert!(
+            !ByteFetchMethod::Post {
+                content_type: String::from("application/json"),
+                headers: vec![(String::from("Authorization"), String::from("Bearer secret"))],
+                body: vec![b'{', b'}'],
+            }
+            .follows_redirects()
+        );
     }
 }
 
@@ -298,6 +407,29 @@ fn pop_byte_fetch_request() -> Option<ByteFetchRequest> {
 
 fn put_byte_fetch_result(id: u32, result: Result<ByteFetch, String>) -> usize {
     with_html_shack(|shack| shack.put_byte_fetch_result(ByteFetchCompletion { id, result }))
+}
+
+struct ByteFetchWaitGuard {
+    id: u32,
+    armed: bool,
+}
+
+impl ByteFetchWaitGuard {
+    fn new(id: u32) -> Self {
+        Self { id, armed: true }
+    }
+
+    fn complete(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ByteFetchWaitGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            with_html_shack(|shack| shack.abandon_byte_fetch(self.id));
+        }
+    }
 }
 
 pub async fn fetch_bytes_via_pool(
@@ -372,18 +504,19 @@ async fn fetch_bytes_via_pool_method(
             method,
         })
     });
+    // The caller owns this pool slot until it consumes the completion. If its
+    // future is cancelled or dropped, remove queued/ready work immediately or
+    // mark an in-flight request so the worker discards its late completion.
+    let mut wait_guard = ByteFetchWaitGuard::new(id);
 
     let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms);
     loop {
         if let Some(result) = with_html_shack(|shack| shack.take_byte_fetch_result(id)) {
+            wait_guard.complete();
             return result;
         }
         if Instant::now() >= deadline {
-            let removed = with_html_shack(|shack| shack.remove_byte_fetch(id));
-            if removed {
-                return Err(String::from("timed out"));
-            }
-            return Err(String::from("timed out waiting for result"));
+            return Err(String::from("timed out"));
         }
         Timer::after(EmbassyDuration::from_millis(25)).await;
     }
@@ -1118,8 +1251,13 @@ async fn fetch_http_body_once(
         .uri(target.path_and_query.as_str())
         .header(hyper::header::HOST, target.host.as_str())
         .header(hyper::header::USER_AGENT, "TRUEOS/html_shack")
-        .header(hyper::header::ACCEPT, "text/html,*/*;q=0.8")
         .header(hyper::header::CONNECTION, "close");
+    if !extra_headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("Accept"))
+    {
+        builder = builder.header(hyper::header::ACCEPT, "text/html,*/*;q=0.8");
+    }
     if let Some(content_type) = content_type {
         builder = builder.header(hyper::header::CONTENT_TYPE, content_type);
     }
@@ -1138,7 +1276,7 @@ async fn fetch_http_body_once(
         .await
         .map_err(|_| HttpFetchError::Hyper)?;
     let status = response.status();
-    if status.is_redirection() {
+    if status.is_redirection() && method.follows_redirects() {
         if let Some(location) = response
             .headers()
             .get(hyper::header::LOCATION)
@@ -1232,7 +1370,9 @@ async fn fetch_http_body_hyper(
         let target = parse_http_url(current.as_str())?;
         match fetch_http_body_once(&target, max_bytes, method).await {
             Ok(body) => return Ok((target.url, body)),
-            Err(HttpFetchError::Redirect(next)) if hop < HTML_FETCH_MAX_REDIRECTS => {
+            Err(HttpFetchError::Redirect(next))
+                if method.follows_redirects() && hop < HTML_FETCH_MAX_REDIRECTS =>
+            {
                 let next = resolve_redirect(&target, next.as_str())?;
                 crate::log!("html_shack: redirect hop={} {} -> {}\n", hop + 1, target.url, next);
                 current = next;

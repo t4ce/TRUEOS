@@ -2,10 +2,13 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::task::{Context, Poll};
 
+use atomic_waker::AtomicWaker;
 use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
@@ -87,12 +90,54 @@ fn push_tls_event(target: &'static str, event: TlsEvent) -> bool {
     }
 }
 
+fn discard_tls_events(target: &'static str) {
+    let guard = TLS_APP_QUEUES.lock();
+    if let Some(entry) = guard.iter().find(|entry| entry.name == target) {
+        let _ = entry.events.drain(usize::MAX);
+    }
+}
+
 fn leak_str(s: alloc::string::String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
 fn owner_device_index(owner: &str) -> Option<usize> {
     crate::net::device_index_from_owner(owner)
+}
+
+/// Completion signal for an owner-level TLS cancellation.
+pub struct TlsCancelCompletion {
+    complete: AtomicBool,
+    waker: AtomicWaker,
+}
+
+impl TlsCancelCompletion {
+    pub fn new() -> Self {
+        Self {
+            complete: AtomicBool::new(false),
+            waker: AtomicWaker::new(),
+        }
+    }
+
+    pub async fn wait(&self) {
+        core::future::poll_fn(|cx: &mut Context<'_>| {
+            if self.complete.load(Ordering::Acquire) {
+                return Poll::Ready(());
+            }
+            self.waker.register(cx.waker());
+            if self.complete.load(Ordering::Acquire) {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
+    fn finish(&self) {
+        self.complete.store(true, Ordering::Release);
+        self.waker.wake();
+    }
 }
 
 #[derive(Clone)]
@@ -109,6 +154,14 @@ pub enum TlsCommand {
     Send {
         handle: vnet::NetHandle,
         data: Vec<u8>,
+    },
+    /// Cancel every connection currently owned by this command queue.
+    ///
+    /// Pending opens remain tracked until a handle arrives so they can be
+    /// closed without emitting stale events to a caller that has reused the
+    /// same queue pair for a newer request.
+    CancelOwner {
+        completion: Arc<TlsCancelCompletion>,
     },
     Close {
         handle: vnet::NetHandle,
@@ -212,6 +265,7 @@ struct TlsConn {
     handle: Option<vnet::NetHandle>,
     tls: TlsClient,
     connected_notified: bool,
+    cancelled: bool,
     closed: bool,
 
     created_at: Instant,
@@ -331,6 +385,7 @@ fn tls_socket_tick_once() -> bool {
                         handle: None,
                         tls,
                         connected_notified: false,
+                        cancelled: false,
                         closed: false,
                         created_at: Instant::now(),
                         last_activity: Instant::now(),
@@ -344,7 +399,10 @@ fn tls_socket_tick_once() -> bool {
                     if let Some(conn) = conns.iter_mut().find(|c| c.matches_handle(handle)) {
                         conn.last_activity = Instant::now();
                         if conn.closed {
-                            let _ = push_tls_event(conn.user_owner, TlsEvent::Closed { handle });
+                            if !conn.cancelled {
+                                let _ =
+                                    push_tls_event(conn.user_owner, TlsEvent::Closed { handle });
+                            }
                             continue;
                         }
                         if let Err(e) = conn.tls.write_plaintext(&data) {
@@ -356,6 +414,17 @@ fn tls_socket_tick_once() -> bool {
                         flush_outgoing_tls(conn);
                         maybe_notify_connected(conn);
                     }
+                }
+                TlsCommand::CancelOwner { completion } => {
+                    for conn in conns.iter_mut().filter(|conn| conn.user_owner == owner) {
+                        conn.cancelled = true;
+                        conn.closed = true;
+                        if let Some(handle) = conn.handle {
+                            let _ = conn.net.submit(vnet::Command::Close { handle });
+                        }
+                    }
+                    discard_tls_events(owner);
+                    completion.finish();
                 }
                 TlsCommand::Close { handle } => {
                     if let Some(conn) = conns.iter_mut().find(|c| c.matches_handle(handle)) {
@@ -389,11 +458,13 @@ fn tls_socket_tick_once() -> bool {
                 .saturating_duration_since(conns[idx].created_at)
                 .as_millis();
             if elapsed >= t.connect_ms as u64 {
-                let msg = leak_str(alloc::format!(
-                    "tls-socket: connect timeout owner={}",
-                    conns[idx].user_owner
-                ));
-                let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                if !conns[idx].cancelled {
+                    let msg = leak_str(alloc::format!(
+                        "tls-socket: connect timeout owner={}",
+                        conns[idx].user_owner
+                    ));
+                    let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                }
                 remove = true;
             }
         }
@@ -408,11 +479,13 @@ fn tls_socket_tick_once() -> bool {
                 if let Some(handle) = conns[idx].handle {
                     let _ = conns[idx].net.submit(vnet::Command::Close { handle });
                 }
-                let msg = leak_str(alloc::format!(
-                    "tls-socket: tls timeout owner={}",
-                    conns[idx].user_owner
-                ));
-                let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                if !conns[idx].cancelled {
+                    let msg = leak_str(alloc::format!(
+                        "tls-socket: tls timeout owner={}",
+                        conns[idx].user_owner
+                    ));
+                    let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                }
                 remove = true;
             }
         }
@@ -426,11 +499,13 @@ fn tls_socket_tick_once() -> bool {
                 if let Some(handle) = conns[idx].handle {
                     let _ = conns[idx].net.submit(vnet::Command::Close { handle });
                 }
-                let msg = leak_str(alloc::format!(
-                    "tls-socket: idle timeout owner={}",
-                    conns[idx].user_owner
-                ));
-                let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                if !conns[idx].cancelled {
+                    let msg = leak_str(alloc::format!(
+                        "tls-socket: idle timeout owner={}",
+                        conns[idx].user_owner
+                    ));
+                    let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                }
                 remove = true;
             }
         }
@@ -459,12 +534,21 @@ fn tls_socket_tick_once() -> bool {
                     if kind == vnet::SocketKind::Tcp {
                         conns[idx].handle = Some(handle);
                         conns[idx].last_activity = Instant::now();
-                        let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Opened { handle });
+                        if conns[idx].cancelled {
+                            let _ = conns[idx].net.submit(vnet::Command::Close { handle });
+                        } else {
+                            let _ =
+                                push_tls_event(conns[idx].user_owner, TlsEvent::Opened { handle });
+                        }
                     }
                 }
                 vnet::Event::TcpEstablished { handle, .. } => {
                     if conns[idx].handle == Some(handle) {
                         conns[idx].last_activity = Instant::now();
+                        if conns[idx].cancelled {
+                            let _ = conns[idx].net.submit(vnet::Command::Close { handle });
+                            continue;
+                        }
                         crate::log_info!(target: "net";
                             "tls-socket: tcp established owner={} handle={}\n",
                             conns[idx].user_owner,
@@ -476,6 +560,10 @@ fn tls_socket_tick_once() -> bool {
                 }
                 vnet::Event::TcpData { handle, data } => {
                     if conns[idx].handle != Some(handle) {
+                        continue;
+                    }
+                    if conns[idx].cancelled {
+                        let _ = conns[idx].net.submit(vnet::Command::Close { handle });
                         continue;
                     }
 
@@ -510,7 +598,10 @@ fn tls_socket_tick_once() -> bool {
                 vnet::Event::Closed { handle } => {
                     if conns[idx].handle == Some(handle) {
                         conns[idx].closed = true;
-                        let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Closed { handle });
+                        if !conns[idx].cancelled {
+                            let _ =
+                                push_tls_event(conns[idx].user_owner, TlsEvent::Closed { handle });
+                        }
                         remove = true;
                     }
                 }
@@ -521,7 +612,9 @@ fn tls_socket_tick_once() -> bool {
                         conns[idx].handle.map(|h| h.0),
                         msg
                     );
-                    let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                    if !conns[idx].cancelled {
+                        let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                    }
                 }
                 vnet::Event::TcpSent { .. } => {}
                 vnet::Event::IpPacket { .. } => {}

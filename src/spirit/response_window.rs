@@ -959,7 +959,7 @@ async fn run_visible_startup_warmup(
     wait_for_hidden_grid(lease, presentation.window).await?;
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: startup Gridpaper warm complete window={} typed_scalars={} backspaces={} greeting_publish_serial={} erase_publish_serial={} visible_ms={} post_warm=hidden-retained display_session=none display_window=none display_plane=none gpu_frame=retained gpu_scene=retained\n",
+        "trueos-spirit: startup Gridpaper warm complete window={} typed_scalars={} backspaces={} greeting_publish_serial={} erase_publish_serial={} visible_ms={} post_warm=hidden-retained display_session=none display_window=none display_visible=0 plane_release=pending-or-parked gpu_frame=retained gpu_scene=retained\n",
         presentation.window.raw(),
         typed,
         backspace_count,

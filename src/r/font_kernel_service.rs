@@ -19,11 +19,12 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 use crate::intel::gpu_font::{
-    GpuFontFace, GpuFontJobEntry, GpuFontRetainedScene, GpuFontRetainedSceneError,
-    GpuFontRetainedStyle, GpuFontRgba, GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS,
-    ensure_font_face_available, font_face_supports_text, retain_gpu_font_centered_scene_at_raster,
-    retain_gpu_font_scene_at_raster,
+    GpuFontFace, GpuFontJobEntry, GpuFontRetainedScene, GpuFontRetainedSceneError, GpuFontRgba,
+    GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS, ensure_font_face_available,
+    font_face_supports_text, retain_gpu_font_centered_scene_at_raster,
+    retain_gpu_font_prepared_centered_scene, retain_gpu_font_scene_at_raster,
 };
+use crate::r::font_plan_service::PreparedGlyphPlan;
 
 const FONT_KERNEL_QUEUE_CAPACITY: usize = 32;
 const FONT_KERNEL_MAX_RUNS: usize = 64;
@@ -219,6 +220,60 @@ pub(crate) enum FontStampFit {
 pub(crate) struct FontStampRequest {
     pub(crate) layers: Vec<FontStampLayer>,
     pub(crate) fit: FontStampFit,
+}
+
+/// Ownership carried by a direct-frame request after admission.
+///
+/// A normal request still performs its generic validation before this value is
+/// constructed. A prepared plan is already sealed by the plan service, so the
+/// font kernel only inspects its O(1) frame contract before moving it into the
+/// FIFO.
+enum FrameStampInput {
+    Request(FontStampRequest),
+    Prepared(PreparedGlyphPlan),
+}
+
+impl FrameStampInput {
+    fn fit(&self) -> FontStampFit {
+        match self {
+            Self::Request(request) => request.fit,
+            Self::Prepared(plan) => plan.fit(),
+        }
+    }
+
+    fn raster_extent(&self) -> Option<(u32, u32)> {
+        match self {
+            Self::Request(request) => request
+                .layers
+                .first()
+                .map(|layer| (layer.scene.raster_width, layer.scene.raster_height)),
+            Self::Prepared(plan) => Some((plan.raster_width(), plan.raster_height())),
+        }
+    }
+}
+
+/// A prepared frame was not admitted, with its exact sealed plan returned.
+///
+/// Admission has not transferred ownership on this path. The producer may
+/// retain the plan for backpressure retry or drop it to release its bounded
+/// plan-service storage.
+pub(crate) struct PreparedFrameStampRejection {
+    error: FontKernelError,
+    plan: PreparedGlyphPlan,
+}
+
+impl PreparedFrameStampRejection {
+    pub(crate) const fn error(&self) -> FontKernelError {
+        self.error
+    }
+
+    pub(crate) const fn plan(&self) -> &PreparedGlyphPlan {
+        &self.plan
+    }
+
+    pub(crate) fn into_parts(self) -> (FontKernelError, PreparedGlyphPlan) {
+        (self.error, self.plan)
+    }
 }
 
 /// One logical retained scene backed by bounded analytical coverage masks.
@@ -522,7 +577,7 @@ enum QueuedFontRequest {
     },
     FrameStamp {
         ticket: FontKernelTicket,
-        request: FontStampRequest,
+        input: FrameStampInput,
         destination: crate::intel::gpgpu::GpgpuRgba8Surface,
         clear_rgba: Option<u32>,
         enqueued_ms: u64,
@@ -547,6 +602,11 @@ impl QueuedFontRequest {
         };
         FontKernelConsumer::new(path, self.ticket().raw())
     }
+}
+
+struct FrameStampQueueRejection {
+    error: FontKernelError,
+    input: FrameStampInput,
 }
 
 pub(crate) fn status() -> FontKernelServiceStatus {
@@ -613,46 +673,64 @@ pub(crate) fn submit_frame_stamp(
     request: FontStampRequest,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> Result<PendingFontFrameStamp, FontKernelError> {
-    queue_frame_stamp(request, destination, None)
+    validate_stamp_request(&request)?;
+    queue_frame_stamp(FrameStampInput::Request(request), destination, None)
+        .map_err(|rejection| rejection.error)
 }
 
-/// Queue a full-surface clear followed by an ordered stamp into one caller-owned
-/// RGBA8 surface. Both operations execute while the same font GPU-lane lease is
-/// held. A submitted-but-incomplete clear is reported as `SubmittedIncomplete`
-/// so the caller can quarantine the exact destination instead of cancelling it.
-pub(crate) fn submit_frame_stamp_with_clear(
-    request: FontStampRequest,
+/// Queue a frame whose exact centered glyph plan was sealed during admission.
+///
+/// The plan service has already validated the request/entry relationship and
+/// bounded its work and storage. This boundary performs only constant-time
+/// fit, extent, destination, and FIFO-capacity checks. Rejection returns the
+/// same plan so ownership never becomes ambiguous under backpressure.
+pub(crate) fn submit_prepared_frame_stamp_with_clear(
+    plan: PreparedGlyphPlan,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
     clear_rgba: u32,
-) -> Result<PendingFontFrameStamp, FontKernelError> {
-    queue_frame_stamp(request, destination, Some(clear_rgba))
+) -> Result<PendingFontFrameStamp, PreparedFrameStampRejection> {
+    queue_frame_stamp(FrameStampInput::Prepared(plan), destination, Some(clear_rgba)).map_err(
+        |rejection| {
+            let FrameStampInput::Prepared(plan) = rejection.input else {
+                unreachable!("prepared frame admission returned a request input")
+            };
+            PreparedFrameStampRejection {
+                error: rejection.error,
+                plan,
+            }
+        },
+    )
 }
 
 fn queue_frame_stamp(
-    request: FontStampRequest,
+    input: FrameStampInput,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
     clear_rgba: Option<u32>,
-) -> Result<PendingFontFrameStamp, FontKernelError> {
-    validate_stamp_request(&request)?;
-    let scene = &request.layers[0].scene;
-    if request.fit != FontStampFit::Canvas
+) -> Result<PendingFontFrameStamp, FrameStampQueueRejection> {
+    let extent = input.raster_extent();
+    if input.fit() != FontStampFit::Canvas
         || !destination.is_valid()
-        || destination.width != scene.raster_width
-        || destination.height != scene.raster_height
+        || extent != Some((destination.width, destination.height))
     {
-        return Err(FontKernelError::InvalidRequest("font-frame-stamp-destination"));
+        return Err(FrameStampQueueRejection {
+            error: FontKernelError::InvalidRequest("font-frame-stamp-destination"),
+            input,
+        });
     }
     let ticket = next_ticket();
     let reply = Arc::new(Signal::new());
     let queued_ahead = {
         let mut queue = REQUESTS.lock();
         if queue.len() >= FONT_KERNEL_QUEUE_CAPACITY {
-            return Err(FontKernelError::QueueFull);
+            return Err(FrameStampQueueRejection {
+                error: FontKernelError::QueueFull,
+                input,
+            });
         }
         let queued_ahead = queue.len();
         queue.push_back(QueuedFontRequest::FrameStamp {
             ticket,
-            request,
+            input,
             destination,
             clear_rgba,
             enqueued_ms: Instant::now().as_millis(),
@@ -1019,14 +1097,19 @@ fn process_stamp(
     let surface = storage.surface();
     // The owned RGBA allocation is zeroed and DMA-flushed before return.
     // Dispatching another GPU clear here only adds direct-RCS contention.
-    let translation = [-origin_px[0] as f32, -origin_px[1] as f32];
+    let translation = [
+        origin_px[0]
+            .checked_neg()
+            .ok_or(FontKernelError::InvalidRequest("font-stamp-origin-range"))?,
+        origin_px[1]
+            .checked_neg()
+            .ok_or(FontKernelError::InvalidRequest("font-stamp-origin-range"))?,
+    ];
     let mut submits = 0usize;
     let mut active_walkers = 0usize;
     for (scene, foreground) in scenes {
         set_active_stage(ticket, "instance");
-        let mut style = GpuFontRetainedStyle::identity(foreground);
-        style.translation_px = translation;
-        let rendered = match scene.restamp_instance(surface, style, false, 0.0) {
+        let rendered = match scene.restamp_identity(surface, translation, foreground, false) {
             Ok(rendered) => rendered,
             Err(error) => {
                 let error = FontKernelError::from(error);
@@ -1065,7 +1148,7 @@ fn validate_frame_clear_outcome(
 
 fn process_frame_stamp(
     ticket: FontKernelTicket,
-    request: &FontStampRequest,
+    input: FrameStampInput,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
     clear_rgba: Option<u32>,
     enqueued_ms: u64,
@@ -1074,9 +1157,55 @@ fn process_frame_stamp(
 
     let service_started_ms = Instant::now().as_millis();
     let pre_service_ms = service_started_ms.saturating_sub(enqueued_ms);
+    set_active_stage(ticket, "frame-prepare-coverage");
+    let prepare_started_ms = Instant::now().as_millis();
+    let (scenes, glyphs, coverage_input) = match input {
+        FrameStampInput::Prepared(plan) => {
+            let glyphs = plan.glyph_count();
+            let foreground = plan.foreground();
+            let prepared = plan.into_prepared();
+            let scene = retain_gpu_font_prepared_centered_scene(prepared)
+                .map_err(FontKernelError::Unavailable)?;
+            (alloc::vec![(scene, foreground)], glyphs, "prepared-plan")
+        }
+        FrameStampInput::Request(request) => {
+            let (scenes, glyphs) = prepare_stamp_scenes(ticket, &request)?;
+            (scenes, glyphs, "request-outline")
+        }
+    };
+    let prepare_coverage_ms = Instant::now()
+        .as_millis()
+        .saturating_sub(prepare_started_ms);
+    let coverage_build_ms = scenes
+        .iter()
+        .fold(0u64, |total, (scene, _)| total.saturating_add(scene.coverage_build_ms()));
+    let coverage_audit_ms = scenes
+        .iter()
+        .fold(0u64, |total, (scene, _)| total.saturating_add(scene.coverage_audit_ms()));
+    let coverage_submits = scenes
+        .iter()
+        .fold(0usize, |total, (scene, _)| total.saturating_add(scene.coverage_submits()));
+    let scene_count = scenes.len();
+    crate::log_info!(
+        target: "render";
+        "font-kernel-service: frame coverage ticket={} input={} glyphs={} scenes={} prepare_coverage_ms={} coverage_build_ms={} coverage_audit_ms={} coverage_submits={} cache=none\n",
+        ticket.raw(),
+        coverage_input,
+        glyphs,
+        scene_count,
+        prepare_coverage_ms,
+        coverage_build_ms,
+        coverage_audit_ms,
+        coverage_submits,
+    );
+
+    // Coverage admission is still reversible: until every mask exists, the
+    // caller's leased destination must remain byte-for-byte untouched.  Clear
+    // only after preparation succeeds so an unsupported/over-budget glyph
+    // cannot consume the frame and strand an unreplayable partial request.
     let mut clear_submits = 0usize;
     let clear_ms = if let Some(color_rgba) = clear_rgba {
-        set_active_stage(ticket, "frame-clear");
+        set_active_stage(ticket, "frame-clear-irreversible");
         let clear_started_ms = Instant::now().as_millis();
         let clear = GpgpuSolidRect {
             rect: destination.bounds(),
@@ -1092,34 +1221,14 @@ fn process_frame_stamp(
         0
     };
 
-    set_active_stage(ticket, "frame-prepare-coverage");
-    let prepare_started_ms = Instant::now().as_millis();
-    let (scenes, glyphs) = prepare_stamp_scenes(ticket, request)?;
-    let prepare_coverage_ms = Instant::now()
-        .as_millis()
-        .saturating_sub(prepare_started_ms);
-    let coverage_build_ms = scenes
-        .iter()
-        .fold(0u64, |total, (scene, _)| total.saturating_add(scene.coverage_build_ms()));
-    let coverage_audit_ms = scenes
-        .iter()
-        .fold(0u64, |total, (scene, _)| total.saturating_add(scene.coverage_audit_ms()));
-    let coverage_submits = scenes
-        .iter()
-        .fold(0usize, |total, (scene, _)| total.saturating_add(scene.coverage_submits()));
-    let scene_count = scenes.len();
     let mut submits = 0usize;
     let mut active_walkers = 0usize;
     let mut release = None;
     let instance_started_ms = Instant::now().as_millis();
     for (index, (scene, foreground)) in scenes.into_iter().enumerate() {
         set_active_stage(ticket, "frame-instance");
-        let rendered = scene.restamp_instance(
-            destination,
-            GpuFontRetainedStyle::identity(foreground),
-            index + 1 == scene_count,
-            0.0,
-        )?;
+        let rendered =
+            scene.restamp_identity(destination, [0, 0], foreground, index + 1 == scene_count)?;
         submits = submits.saturating_add(rendered.submits);
         active_walkers = active_walkers.saturating_add(rendered.active_walkers);
         if rendered.release.is_some() {
@@ -1286,15 +1395,14 @@ fn process_queued_request(request: QueuedFontRequest) {
         }
         QueuedFontRequest::FrameStamp {
             ticket,
-            request,
+            input,
             destination,
             clear_rgba,
             enqueued_ms,
             reply,
         } => {
             set_active_stage(ticket, "dispatch");
-            let result =
-                process_frame_stamp(ticket, &request, destination, clear_rgba, enqueued_ms);
+            let result = process_frame_stamp(ticket, input, destination, clear_rgba, enqueued_ms);
             // A destination stamp is not replayed: an earlier ordered layer
             // may already have retired into the leased frame, so retrying the
             // whole source-over sequence would composite it twice.
@@ -1345,7 +1453,7 @@ pub(crate) async fn font_kernel_service_task() {
     ONLINE.store(true, Ordering::Release);
     crate::log_info!(
         target: "render";
-        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only gpu_context=kernel-gpgpu-font queue_capacity={} retained_storage=gpu-vm-r8 stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
+        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp+prepared-frame-stamp controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only gpu_context=kernel-gpgpu-font queue_capacity={} retained_storage=gpu-vm-r8 prepared_storage=bounded-transient-move-once stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
         FONT_KERNEL_QUEUE_CAPACITY,
     );
     loop {
