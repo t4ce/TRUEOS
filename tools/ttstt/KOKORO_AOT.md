@@ -37,17 +37,17 @@ Then run:
 
 ```sh
 .venv-kokoro-aot/bin/python tools/ttstt/compile_kokoro_aot.py analyze \
-  crates/ttstt/.ttstt/models/kokoro/kokoro-rten.onnx \
-  --voices crates/ttstt/.ttstt/models/kokoro/voices-v1.0.bin
+  tools/ttstt/models/kokoro/kokoro-rten.onnx \
+  --voices tools/ttstt/models/kokoro/voices-v1.0.bin
 ```
 
 Emit the runtime artifact and its canonical report:
 
 ```sh
 .venv-kokoro-aot/bin/python tools/ttstt/compile_kokoro_aot.py compile \
-  crates/ttstt/.ttstt/models/kokoro/kokoro-rten.onnx \
-  crates/ttstt/.ttstt/models/kokoro/kokoro.kkaot \
-  --voices crates/ttstt/.ttstt/models/kokoro/voices-v1.0.bin \
+  tools/ttstt/models/kokoro/kokoro-rten.onnx \
+  tools/trueos-ttstt/.ttstt/models/kokoro/kokoro.kkaot \
+  --voices tools/ttstt/models/kokoro/voices-v1.0.bin \
   --report tools/ttstt/kokoro_aot_analysis.json --force
 ```
 
@@ -65,6 +65,12 @@ The pinned inputs are:
 Both hashes are independent fields in the sealed header. A matching graph
 with a different voice archive is rejected because the style tensor's meaning
 depends on that archive.
+
+These two large inputs are intentionally ignored runtime assets. Their
+canonical local location is `tools/ttstt/models/kokoro/`; verify both hashes
+above after obtaining or replacing them. The generated KKAOT program, G2P
+model, lexicon, and Whisper model remain in the ignored
+`tools/trueos-ttstt/.ttstt/models/` host-tool cache.
 
 ## Native waveform acceptance
 
@@ -91,10 +97,11 @@ its 988,800-byte f32 payload hashes to
 
 The current reference remains a host-generated runtime asset at
 `/tmp/trueos-kokoro-rten-baseline.wav`; it is not committed. Reproduce it from
-the exact prepared graph from `crates/ttstt` with:
+the exact prepared graph with the explicitly built host compatibility tool:
 
 ```sh
-./target/release/ttstt tts --backend rten --threads 10 \
+tools/trueos-ttstt/target/x86_64-unknown-linux-gnu/release/trueos-ttstt \
+  tts --backend rten --threads 10 \
   --voice af_heart --speed 1.0 --phonemes \
   --output /tmp/trueos-kokoro-rten-baseline.wav \
   "həlˈoʊ fɹʌm tɹu oʊ ɛs. ðə kwɪk bɹaʊn fɑks dʒʌmps oʊvɚ ðə leɪzi dɔɡ. spɪtʃ sɪnθəsɪs ɪz naʊ ɹʌnɪŋ ɪn ðə kɜɹnəl, wɪð ə sɪɹiəlaɪzd eɪsɪŋk kju fɔɹ ðə ʃɛl."
@@ -104,16 +111,16 @@ The accepted native vector resolves to `F=416`, or 249,600 samples. Once the
 host harness emits two independent runs, generate its transcript and run:
 
 ```sh
-crates/ttstt/target/release/ttstt --quiet stt \
+tools/trueos-ttstt/target/x86_64-unknown-linux-gnu/release/trueos-ttstt --quiet stt \
   /tmp/trueos-kokoro-native-1.wav \
-  --model crates/ttstt/.ttstt/models/whisper/ggml-base.bin \
+  --model tools/trueos-ttstt/.ttstt/models/whisper/ggml-base.bin \
   --language en --output /tmp/trueos-kokoro-native-transcript.txt
 
 python3 tools/ttstt/verify_kokoro_waveform.py --native-acceptance \
   --native /tmp/trueos-kokoro-native-1.wav \
   --native-repeat /tmp/trueos-kokoro-native-2.wav \
   --transcript /tmp/trueos-kokoro-native-transcript.txt \
-  --kkaot crates/ttstt/.ttstt/models/kokoro/kokoro.kkaot \
+  --kkaot tools/trueos-ttstt/.ttstt/models/kokoro/kokoro.kkaot \
   --print-contract
 ```
 

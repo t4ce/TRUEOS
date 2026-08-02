@@ -1,0 +1,39 @@
+[package]
+name = "tts-rs"
+version = "2026.2.3"
+edition = "2021"
+description = "A Rust library for text-to-speech synthesis using the Kokoro engine"
+license = "MIT"
+repository = "https://github.com/rishiskhare/tts-rs"
+
+[features]
+default = []
+
+# TTS engines
+kokoro = ["dep:ort", "dep:ndarray", "dep:zip"]
+kokoro-rten = ["kokoro", "dep:rten", "dep:rten-tensor"]
+
+[dependencies]
+# Always required
+hound = "3.5.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4.28"
+env_logger = "0.10.0"
+thiserror = "2.0.16"
+derive_builder = { version = "0.20.2" }
+
+# Kokoro (ONNX-based)
+ort = { version = "2.0.0-rc.10", optional = true }
+ndarray = { version = "0.17", optional = true }
+zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
+
+# Pin RTen because the ONNX Runtime contrib operators used by the quantized
+# Kokoro graph landed after the 0.24.0 crates.io release. The only remaining
+# unsupported operator is bridged deterministically by tools/prepare_kokoro_rten.py.
+rten = { git = "https://github.com/robertknight/rten.git", rev = "7be5539edf37012eea7b79f582652fe536d7d087", optional = true, default-features = false, features = ["contrib", "fft", "onnx_format"] }
+rten-tensor = { git = "https://github.com/robertknight/rten.git", rev = "7be5539edf37012eea7b79f582652fe536d7d087", optional = true }
+
+[[example]]
+name = "kokoro"
+required-features = ["kokoro"]

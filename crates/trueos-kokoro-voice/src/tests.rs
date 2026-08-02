@@ -12,7 +12,8 @@ const SECOND_CENTRAL_OFFSET: usize = FIRST_CENTRAL_NAME_OFFSET + FIRST_FILE_NAME
 const SECOND_CENTRAL_NAME_OFFSET: usize = SECOND_CENTRAL_OFFSET + CENTRAL_FIXED_BYTES;
 
 fn pinned_archive_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ttstt/.ttstt/models/kokoro/voices-v1.0.bin")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/ttstt/models/kokoro/voices-v1.0.bin")
 }
 
 fn pinned_archive_bytes() -> Option<&'static [u8]> {

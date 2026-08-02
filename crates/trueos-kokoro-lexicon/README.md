@@ -39,13 +39,13 @@ python3 tools/ttstt/compile_misaki_lexicon.py \
   --silver /path/to/misaki-rs/data/us_silver.json \
   --gold /path/to/misaki-rs/data/us_gold.json \
   --license /path/to/misaki-rs/LICENSE \
-  --output crates/ttstt/.ttstt/models/kokoro/misaki-us.klex
+  --output tools/trueos-ttstt/.ttstt/models/kokoro/misaki-us.klex
 
 python3 tools/ttstt/compile_misaki_lexicon.py \
   --silver /path/to/misaki-rs/data/us_silver.json \
   --gold /path/to/misaki-rs/data/us_gold.json \
   --license /path/to/misaki-rs/LICENSE \
-  --output crates/ttstt/.ttstt/models/kokoro/misaki-us.klex --check
+  --output tools/trueos-ttstt/.ttstt/models/kokoro/misaki-us.klex --check
 ```
 
 ## Format and validation

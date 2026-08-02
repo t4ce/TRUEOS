@@ -20,8 +20,8 @@ TOOL = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = TOOL
 SPEC.loader.exec_module(TOOL)
 
-MODEL = ROOT / "crates/ttstt/.ttstt/models/kokoro/kokoro-rten.onnx"
-VOICES = ROOT / "crates/ttstt/.ttstt/models/kokoro/voices-v1.0.bin"
+MODEL = ROOT / "tools/ttstt/models/kokoro/kokoro-rten.onnx"
+VOICES = ROOT / "tools/ttstt/models/kokoro/voices-v1.0.bin"
 RUST_MANIFEST = ROOT / "crates/trueos-kokoro-aot/Cargo.toml"
 RUST_INSPECTOR = ROOT / "crates/trueos-kokoro-aot/examples/inspect.rs"
 RUST_TARGET_DIR = ROOT / "target/kokoro-aot-host-test"

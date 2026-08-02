@@ -1655,12 +1655,14 @@ fn cabi_net_fetch_bytes_result_len_guest(op_id: u32) -> isize {
 }
 
 fn cabi_net_fetch_bytes_read_guest(op_id: u32, out: &mut [u8]) -> isize {
+    let available = cabi_net_fetch_bytes_result_len_guest(op_id);
+    if available < 0 {
+        return available;
+    }
+    let target = core::cmp::min(out.len(), available as usize);
     let mut copied = 0usize;
-    while copied < out.len() {
-        let want = core::cmp::min(
-            out.len().saturating_sub(copied),
-            trueos_vm::vmcall::PAYLOAD_CAP,
-        );
+    while copied < target {
+        let want = core::cmp::min(target - copied, trueos_vm::vmcall::PAYLOAD_CAP);
         let Some(packed_read) = pack_fetch_bytes_vm_read(copied, want) else {
             return FS_ERR_TOO_LARGE as isize;
         };
@@ -1694,11 +1696,8 @@ fn cabi_net_fetch_bytes_read_guest(op_id: u32, out: &mut [u8]) -> isize {
 }
 
 fn cabi_net_fetch_bytes_discard_guest(op_id: u32) -> i32 {
-    let (status, value) = trueos_vm::vmcall::call(
-        trueos_vm::vmcall::OP_BP_FETCH_BYTES_DISCARD,
-        u64::from(op_id),
-        0,
-    );
+    let (status, value) =
+        trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_FETCH_BYTES_DISCARD, u64::from(op_id), 0);
     if status == trueos_vm::vmcall::STATUS_OK {
         (value as i64) as i32
     } else {
@@ -1845,12 +1844,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_bytes_start_with_timeou
     };
     let bearer = unsafe { optional_abi_string(bearer_ptr, bearer_len) };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        cabi_net_fetch_post_json_bytes_start_guest(
-            url,
-            body,
-            bearer.as_deref(),
-            timeout_ms,
-        )
+        cabi_net_fetch_post_json_bytes_start_guest(url, body, bearer.as_deref(), timeout_ms)
     } else {
         cabi_net_fetch_post_json_bytes_start_host(
             url,
@@ -1966,6 +1960,100 @@ pub extern "C" fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn post_json_vm_payload_round_trips_documented_order() {
+        let url = "http://remoteai/v1/chat/completions";
+        let bearer = "test-token";
+        let body = r#"{"model":"dobby"}"#;
+        let (payload, packed) = pack_post_json_bytes_vm_request(url, body, Some(bearer)).unwrap();
+
+        assert_eq!(packed as u32 as usize, url.len());
+        assert_eq!((packed >> 32) as u32 as usize, bearer.len());
+        assert_eq!(
+            payload.as_slice(),
+            [url.as_bytes(), bearer.as_bytes(), body.as_bytes()].concat()
+        );
+        let decoded = decode_post_json_bytes_vm_request(payload.as_slice(), packed).unwrap();
+        assert_eq!(decoded.url, url);
+        assert_eq!(decoded.bearer, Some(bearer));
+        assert_eq!(decoded.body, body);
+    }
+
+    #[test]
+    fn post_json_vm_payload_accepts_exact_cap_without_bearer() {
+        let url = "u";
+        let body = vec![b'x'; trueos_vm::vmcall::PAYLOAD_CAP - url.len()];
+        let body = core::str::from_utf8(body.as_slice()).unwrap();
+        let (payload, packed) = pack_post_json_bytes_vm_request(url, body, None).unwrap();
+
+        assert_eq!(payload.len(), trueos_vm::vmcall::PAYLOAD_CAP);
+        let decoded = decode_post_json_bytes_vm_request(payload.as_slice(), packed).unwrap();
+        assert_eq!(decoded.url, url);
+        assert_eq!(decoded.bearer, None);
+        assert_eq!(decoded.body.len(), body.len());
+    }
+
+    #[test]
+    fn post_json_vm_payload_rejects_truncation_and_bad_boundaries() {
+        let oversized_body = vec![b'x'; trueos_vm::vmcall::PAYLOAD_CAP];
+        let oversized_body = core::str::from_utf8(oversized_body.as_slice()).unwrap();
+        assert_eq!(
+            pack_post_json_bytes_vm_request("u", oversized_body, None).unwrap_err(),
+            FS_ERR_TOO_LARGE
+        );
+        assert_eq!(pack_post_json_bytes_vm_request("u", "", None).unwrap_err(), FS_ERR_BAD_PARAM);
+
+        let over_cap = vec![b'x'; trueos_vm::vmcall::PAYLOAD_CAP + 1];
+        assert!(decode_post_json_bytes_vm_request(over_cap.as_slice(), 1).is_none());
+        assert!(decode_post_json_bytes_vm_request(b"url", 3).is_none());
+        assert!(decode_post_json_bytes_vm_request(b"body", 0).is_none());
+        let impossible_lengths = u64::from(u32::MAX) | (u64::from(u32::MAX) << 32);
+        assert!(decode_post_json_bytes_vm_request(b"urlbody", impossible_lengths).is_none());
+    }
+
+    #[test]
+    fn fetch_bytes_vm_read_packing_enforces_chunk_boundaries() {
+        let cap = trueos_vm::vmcall::PAYLOAD_CAP;
+        let packed = pack_fetch_bytes_vm_read(17, cap).unwrap();
+        assert_eq!(decode_fetch_bytes_vm_read(packed), Some((17, cap)));
+        assert_eq!(pack_fetch_bytes_vm_read(0, 0), None);
+        assert_eq!(pack_fetch_bytes_vm_read(0, cap + 1), None);
+        assert_eq!(decode_fetch_bytes_vm_read(0), None);
+        assert_eq!(decode_fetch_bytes_vm_read((cap as u64 + 1) & u64::from(u32::MAX)), None);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(pack_fetch_bytes_vm_read(u32::MAX as usize + 1, 1), None);
+    }
+
+    #[test]
+    fn fetch_bytes_host_result_reads_across_payload_boundary() {
+        const OP_ID: u32 = u32::MAX - 19;
+        let cap = trueos_vm::vmcall::PAYLOAD_CAP;
+        let body = (0..cap + 17).map(|index| index as u8).collect::<Vec<_>>();
+        CABI_NET_FETCH_BYTES_RESULTS.lock().insert(
+            OP_ID,
+            CabiNetFetchBytesResult {
+                rc: Some(0),
+                body: body.clone(),
+            },
+        );
+
+        let mut first = vec![0u8; cap];
+        assert_eq!(
+            cabi_net_fetch_bytes_read_chunk_host(OP_ID, 0, first.as_mut_slice()),
+            cap as isize
+        );
+        assert_eq!(first.as_slice(), &body[..cap]);
+        assert!(CABI_NET_FETCH_BYTES_RESULTS.lock().contains_key(&OP_ID));
+
+        let mut tail = [0u8; 17];
+        assert_eq!(
+            cabi_net_fetch_bytes_read_chunk_host(OP_ID, cap, &mut tail),
+            tail.len() as isize
+        );
+        assert_eq!(tail.as_slice(), &body[cap..]);
+        assert!(!CABI_NET_FETCH_BYTES_RESULTS.lock().contains_key(&OP_ID));
+    }
 
     #[test]
     fn json_request_contains_auth_length_and_exact_body() {

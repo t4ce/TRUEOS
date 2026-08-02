@@ -8,6 +8,7 @@ virglrenderer-1.0.0/
 Cargo.lock
 !tools/wgpu-video-mesh/Cargo.lock
 !tools/remoteai/Cargo.lock
+!tools/trueos-ttstt/Cargo.lock
 node_modules
 package.json
 package-lock.json

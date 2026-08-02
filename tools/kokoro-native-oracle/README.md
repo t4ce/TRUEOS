@@ -19,8 +19,10 @@ cargo run --offline --release \
   --manifest-path /path/to/TRUEOS/tools/kokoro-native-oracle/Cargo.toml --
 ```
 
-The default assets are read from
-`crates/ttstt/.ttstt/models/kokoro`. The runner writes
+The generated KKAOT/G2P/lexicon assets are read from
+`tools/trueos-ttstt/.ttstt/models/kokoro`; the pinned voice archive is read
+from `tools/ttstt/models/kokoro/voices-v1.0.bin`. Override these independently
+with `--model-dir` and `--voices`. The runner writes
 `/tmp/trueos-kokoro-native-oracle.f32le` and
 `/tmp/trueos-kokoro-native-oracle.wav` without altering the accepted raw/f32
 contract. It also passes that waveform through the shared TRUEOS presentation

@@ -1416,10 +1416,7 @@ impl RegisteredFont {
             .map(scalar)
             .and_then(|glyph_id| u16::try_from(glyph_id.to_u32()).ok());
         let mut glyph_ids = self.glyph_ids.lock();
-        if let Some((_, glyph_id)) = glyph_ids
-            .iter()
-            .find(|(candidate, _)| *candidate == scalar)
-        {
+        if let Some((_, glyph_id)) = glyph_ids.iter().find(|(candidate, _)| *candidate == scalar) {
             return Ok(glyph_id.map(|glyph_id| GlyphId::new(u32::from(glyph_id))));
         }
         glyph_ids.push((scalar, resolved));

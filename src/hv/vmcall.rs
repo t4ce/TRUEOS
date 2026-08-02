@@ -167,7 +167,7 @@ pub const OP_BP_SHELL2_FRONTEND_SUBMIT_INPUT_V1: u32 = 0x10F;
 pub const OP_BP_SHELL2_FRONTEND_DETACH_V1: u32 = 0x110;
 pub const OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE: u32 = 0x111; // arg0 window -> rc + routed KeyboardOutputEvent payload
 pub const OP_BP_SPIRIT_TEXT_PRESENT_SILENT: u32 = 0x112; // arg0 turn,payload display-safe UTF-8 -> rc
-pub const OP_BP_FETCH_POST_JSON_BYTES_START: u32 = 0x113; // arg0 timeout,arg1 bearer:url lengths,payload URL||bearer||JSON
+pub const OP_BP_FETCH_POST_JSON_BYTES_START: u32 = 0x113; // arg0 timeout,arg1 hi32 bearer/lo32 URL,payload URL||bearer||JSON
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -2535,7 +2535,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_FETCH_BYTES_START => {
-            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let n = req_len as usize;
+            if n == 0 || n > PAYLOAD_CAP {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
@@ -2556,30 +2560,80 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             DispatchOutcome::Resume
         }
+        OP_BP_FETCH_POST_JSON_BYTES_START => {
+            let n = req_len as usize;
+            if arg0 > u64::from(u32::MAX) || n == 0 || n > PAYLOAD_CAP {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let payload = unsafe { &(&(*p).payload)[..n] };
+            let Some(request) =
+                crate::r::net::https::decode_post_json_bytes_vm_request(payload, arg1)
+            else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            const MAX_BYTES: usize = 4 * 1024 * 1024;
+            let op_id = crate::r::net::https::cabi_net_fetch_post_json_bytes_start_host(
+                request.url,
+                request.body,
+                request.bearer,
+                arg0 as u32,
+                MAX_BYTES,
+            );
+            if op_id == 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, u64::from(op_id), 0);
+            }
+            DispatchOutcome::Resume
+        }
         OP_BP_FETCH_BYTES_RESULT_LEN => {
+            if arg0 > u64::from(u32::MAX) {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
             let rc = crate::r::net::https::cabi_net_fetch_bytes_result_len_host(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_FETCH_BYTES_READ => {
+            if arg0 > u64::from(u32::MAX) {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some((offset, want)) = crate::r::net::https::decode_fetch_bytes_vm_read(arg1)
+            else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
+            let out = unsafe { &mut (&mut (*p).payload)[..want] };
             let rc = crate::r::net::https::cabi_net_fetch_bytes_read_chunk_host(
                 arg0 as u32,
-                arg1 as usize,
+                offset,
                 out,
             );
-            if rc < 0 {
-                write_response(vm_id, seq, STATUS_BAD_ARG, (rc as i64) as u64, 0);
-            } else {
-                write_response(vm_id, seq, STATUS_OK, rc as u64, rc as u32);
+            if rc > want as isize {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
             }
+            let out_len = if rc > 0 { rc as u32 } else { 0 };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, out_len);
             DispatchOutcome::Resume
         }
         OP_BP_FETCH_BYTES_DISCARD => {
+            if arg0 > u64::from(u32::MAX) {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
             let rc = crate::r::net::https::cabi_net_fetch_bytes_discard_host(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume

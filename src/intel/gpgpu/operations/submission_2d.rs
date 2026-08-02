@@ -464,7 +464,43 @@ fn submit_font_outline_coverage_runs_r8_2d(
     mask: GpgpuMask8Surface,
     runs: &[FontOutlineCoverageR8BatchRun],
 ) -> GpgpuDispatchRetirement {
+    submit_font_outline_coverage_runs_r8_mapped_2d(
+        DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE,
+        ops_phys,
+        ops_bytes,
+        mask,
+        mask.gpu,
+        mask.bytes,
+        runs,
+    )
+}
+
+/// Submit analytical coverage from an already resident immutable ops slice.
+/// `ops_mapping_*` and `mask_mapping` are page-aligned PPGTT backings, while
+/// each RAW surface binding may start at a 64-byte aligned suballocation.
+fn submit_font_outline_coverage_runs_r8_mapped_2d(
+    ops_mapping_gpu: u64,
+    ops_phys: u64,
+    ops_bytes: usize,
+    mask_mapping: GpgpuMask8Surface,
+    mask_binding_gpu: u64,
+    mask_binding_bytes: usize,
+    runs: &[FontOutlineCoverageR8BatchRun],
+) -> GpgpuDispatchRetirement {
     if runs.is_empty() || runs.len() > FONT_OUTLINE_COVERAGE_BATCH_MAX_RUNS {
+        return GpgpuDispatchRetirement::NotSubmitted;
+    }
+    let Some(mask_binding_offset) = mask_binding_gpu
+        .checked_sub(mask_mapping.gpu)
+        .and_then(|offset| usize::try_from(offset).ok())
+    else {
+        return GpgpuDispatchRetirement::NotSubmitted;
+    };
+    if mask_binding_bytes == 0
+        || mask_binding_offset
+            .checked_add(mask_binding_bytes)
+            .is_none_or(|end| end > mask_mapping.bytes)
+    {
         return GpgpuDispatchRetirement::NotSubmitted;
     }
     let mut total_ops = 0usize;
@@ -476,15 +512,23 @@ fn submit_font_outline_coverage_runs_r8_2d(
         };
         let Some(offset) = params
             .ops_gpu
-            .checked_sub(DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE)
+            .checked_sub(ops_mapping_gpu)
             .and_then(|offset| usize::try_from(offset).ok())
         else {
             return GpgpuDispatchRetirement::NotSubmitted;
         };
-        if params.mask_gpu != mask.gpu
-            || params.mask_pitch_bytes != mask.pitch_bytes
-            || params.mask_width != mask.width
-            || params.mask_height != mask.height
+        let Some(required_mask_bytes) = (params.mask_height as usize)
+            .checked_sub(1)
+            .and_then(|rows| rows.checked_mul(params.mask_pitch_bytes as usize))
+            .and_then(|bytes| bytes.checked_add(params.mask_width as usize))
+        else {
+            return GpgpuDispatchRetirement::NotSubmitted;
+        };
+        if params.mask_gpu != mask_binding_gpu
+            || params.mask_pitch_bytes != mask_mapping.pitch_bytes
+            || params.mask_width == 0
+            || params.mask_height == 0
+            || required_mask_bytes > mask_binding_bytes
             || offset
                 .checked_add(run.ops_bytes)
                 .is_none_or(|end| end > ops_bytes)
@@ -516,18 +560,21 @@ fn submit_font_outline_coverage_runs_r8_2d(
     let ppgtt_ok = mapped_ok && font_rcs_init_ppgtt_once(state);
     let kernel_ppgtt_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let ops_ppgtt_ok = kernel_ppgtt_ok
+    let ops_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, ops_mapping_gpu, ops_phys, ops_bytes);
+    let mask_ppgtt_ok = ops_ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(
             state,
-            DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE,
-            ops_phys,
-            ops_bytes,
+            mask_mapping.gpu,
+            mask_mapping.phys,
+            mask_mapping.bytes,
         );
-    let mask_ppgtt_ok =
-        ops_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, mask.gpu, mask.phys, mask.bytes);
     let batch_ok = mask_ppgtt_ok
         && direct_rcs_encode_font_outline_coverage_runs_r8_2d_batch(
-            state, upload, runs, mask.bytes,
+            state,
+            upload,
+            runs,
+            mask_binding_bytes,
         );
     let submission = if batch_ok {
         font_rcs_submit_batch_state(dev, state)

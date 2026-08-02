@@ -71,6 +71,7 @@ enum Input {
 #[derive(Debug)]
 struct Config {
     model_dir: PathBuf,
+    voices: PathBuf,
     input: Input,
     voice: String,
     speed: f32,
@@ -93,7 +94,8 @@ impl Config {
             .and_then(Path::parent)
             .ok_or("oracle manifest is not nested below the repository")?;
         let mut config = Self {
-            model_dir: repository.join("crates/ttstt/.ttstt/models/kokoro"),
+            model_dir: repository.join("tools/trueos-ttstt/.ttstt/models/kokoro"),
+            voices: repository.join("tools/ttstt/models/kokoro/voices-v1.0.bin"),
             input: Input::Ipa(REFERENCE_IPA.to_owned()),
             voice: "af_heart".to_owned(),
             speed: 1.0,
@@ -124,6 +126,9 @@ impl Config {
                 }
                 "--model-dir" => {
                     config.model_dir = PathBuf::from(next_value(&mut args, &argument)?)
+                }
+                "--voices" => {
+                    config.voices = PathBuf::from(next_value(&mut args, &argument)?)
                 }
                 "--ipa" => {
                     config.input = Input::Ipa(next_value(&mut args, &argument)?);
@@ -224,7 +229,8 @@ fn usage(code: i32) -> ! {
            --text-file PATH            read English text from a file\n\
          \n\
          Assets and inference:\n\
-           --model-dir PATH            directory containing Kokoro assets\n\
+           --model-dir PATH            directory containing KKAOT/G2P/lexicon assets\n\
+           --voices PATH               Kokoro voices-v1.0.bin archive\n\
            --voice NAME                default: af_heart\n\
            --speed FLOAT               sealed range 0.5..=2.0; default: 1\n\
            --phase0-only               stop after and report duration admission\n\
@@ -1526,8 +1532,8 @@ fn run() -> Result<(), String> {
     let total_start = Instant::now();
     let load_start = Instant::now();
     let artifact = AlignedBytes::read(&config.model_dir.join("kokoro.kkaot"))?;
-    let voices_bytes = fs::read(config.model_dir.join("voices-v1.0.bin"))
-        .map_err(|error| format!("cannot read voices-v1.0.bin: {error}"))?;
+    let voices_bytes = fs::read(&config.voices)
+        .map_err(|error| format!("cannot read {}: {error}", config.voices.display()))?;
     let program = parse_program(artifact.as_slice())?;
     let voices = VoiceArchive::parse(&voices_bytes)
         .map_err(|error| format!("voice archive rejected: {error:?}"))?;

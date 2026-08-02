@@ -510,7 +510,9 @@ fn prewarm_direct_rcs_control_ggtt(
 
 /// Install every persistent RCS control window while physical GT bring-up owns
 /// the global GGTT boundary. Consumer launch may populate only its private
-/// PPGTT; it can neither install nor repair a global ring/HWLRCA mapping.
+/// PPGTT; it can neither install nor repair a global ring/HWLRCA mapping. The
+/// Font topology is also installed here because its persistent VM cache must
+/// exist before any Font consumer starts adding dynamic leaves.
 pub(crate) fn prewarm_direct_rcs_controls_ggtt(
     dev: super::Dev,
 ) -> DirectRcsControlGgttPrewarmReport {
@@ -520,7 +522,11 @@ pub(crate) fn prewarm_direct_rcs_controls_ggtt(
             DIRECT_RCS_GPU_VA,
             direct_rcs_state_once(dev),
         ),
-        font: prewarm_direct_rcs_control_ggtt(dev, FONT_RCS_GPU_VA, font_rcs_state_once(dev)),
+        font: {
+            let state = font_rcs_state_once(dev);
+            prewarm_direct_rcs_control_ggtt(dev, FONT_RCS_GPU_VA, state)
+                && state.is_some_and(font_rcs_init_ppgtt_once)
+        },
         execution: prewarm_direct_rcs_control_ggtt(
             dev,
             EXECUTION_RCS_GPU_VA,
@@ -561,7 +567,12 @@ fn font_rcs_init_ppgtt_once(state: DirectRcsState) -> bool {
 
     let mut runtime = FONT_RCS_PPGTT_RUNTIME.lock();
     if runtime.initialized {
-        return runtime.root_phys == state.ppgtt_phys;
+        let same_generation = runtime.root_phys == state.ppgtt_phys;
+        drop(runtime);
+        if !same_generation {
+            quarantine_font_rcs_context("font-ppgtt-root-generation-mismatch");
+        }
+        return same_generation;
     }
     if runtime.initialization_attempted {
         return false;
@@ -641,13 +652,7 @@ fn direct_rcs_rebuild_ppgtt(state: DirectRcsState) -> bool {
 }
 
 fn direct_rcs_map_ppgtt_kernel(state: DirectRcsState, gpu: u64, phys: u64, len: usize) -> bool {
-    direct_rcs_map_ppgtt_region_and_publish(
-        state,
-        gpu,
-        phys,
-        len,
-        direct_rcs_ppgtt_pte_flags(),
-    )
+    direct_rcs_map_ppgtt_region_and_publish(state, gpu, phys, len, direct_rcs_ppgtt_pte_flags())
 }
 
 fn direct_rcs_map_ppgtt_destination(
@@ -672,13 +677,7 @@ fn direct_rcs_map_ppgtt_scanout(state: DirectRcsState, gpu: u64, phys: u64, len:
         return false;
     }
     let pte_present_rw_pat3_uc = direct_rcs_ppgtt_pte_flags() | GEN8_PAGE_PWT | GEN8_PAGE_PCD;
-    let ok = direct_rcs_map_ppgtt_region_and_publish(
-        state,
-        gpu,
-        phys,
-        len,
-        pte_present_rw_pat3_uc,
-    );
+    let ok = direct_rcs_map_ppgtt_region_and_publish(state, gpu, phys, len, pte_present_rw_pat3_uc);
     if ok && !DIRECT_RCS_SCANOUT_PPGTT_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "gpgpu";
@@ -875,6 +874,7 @@ pub(crate) fn retire_font_rcs_ppgtt_range(gpu: u64, phys: u64, len: usize) -> bo
     if len == 0
         || !gpu.is_multiple_of(4096)
         || !phys.is_multiple_of(4096)
+        || !len.is_multiple_of(4096)
         || (!in_primary && !in_secondary)
     {
         return false;
@@ -915,7 +915,7 @@ pub(crate) fn retire_font_rcs_ppgtt_range(gpu: u64, phys: u64, len: usize) -> bo
     drop(runtime);
     if retired_ranges == 1 || retired_ranges.is_power_of_two() {
         crate::log_info!(target: "gpgpu";
-            "intel/gpgpu: font-ppgtt range-retired generation={} retired_ranges={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} ownership=font-context-only pte_flush=range next-submit-tlb-invalidate=context-local\n",
+            "intel/gpgpu: font-ppgtt range-retired generation={} retired_ranges={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} ownership=font-context-only pte_flush=range tlb=next-font-batch-prologue\n",
             generation,
             retired_ranges,
             gpu,
@@ -932,7 +932,11 @@ fn direct_rcs_unmap_ppgtt_region_exact(
     phys: u64,
     len: usize,
 ) -> bool {
-    if len == 0 || !gpu.is_multiple_of(4096) || !phys.is_multiple_of(4096) {
+    if len == 0
+        || !gpu.is_multiple_of(4096)
+        || !phys.is_multiple_of(4096)
+        || !len.is_multiple_of(4096)
+    {
         return false;
     }
     let Some(end) = u64::try_from(len).ok().and_then(|len| gpu.checked_add(len)) else {

@@ -1,0 +1,289 @@
+{
+  "compact_fixture": {
+    "description": "Actual receptive fields for left edge, center and right edge; out-of-bounds taps are materialized as x_zero_point and therefore add zero.",
+    "expected_i32": {
+      "bytes": {
+        "byte_length": 24,
+        "data": "99f//zETAAA1b///ZSUAAD3v//8XDwAA",
+        "encoding": "base64",
+        "sha256": "9b488798fe4a984f386297d3d556a9aee675e5c23c5f946e4a1ab0f5a88ddb02"
+      },
+      "dtype": "int32-le",
+      "layout": "position,selected_output_channel",
+      "shape": [
+        3,
+        2
+      ],
+      "values": [
+        [
+          -10249,
+          4913
+        ],
+        [
+          -37067,
+          9573
+        ],
+        [
+          -4291,
+          3863
+        ]
+      ]
+    },
+    "output_channels": [
+      0,
+      127
+    ],
+    "patches": {
+      "bytes": {
+        "byte_length": 4224,
+        "data": "YGBgYGCeoKCgoKBgYGBgYFpbYGFiY2BgYGBgXF1cW1tbYGBgYGBmYFtaWlpgYGBgYJ5lZWJoZ2BgYGBghmNeXV1eYGBgYGCPb2xvb3BgYGBgYHiFhYWEhGBgYGBgfF9oYWNkYGBgYGBVUVBPT09gYGBgYHJ4e4SEhWBgYGBge2p0e3p6YGBgYGB/Xl5cXFxgYGBgYFtbW1tbW2BgYGBgh15fXV1dYGBgYGCSYGJfYWFgYGBgYJ1eW1tbW2BgYGBgamJdXF1dYGBgYGCFg4WGh4dgYGBgYIdqY2ZmZ2BgYGBgfZCCgIiIYGBgYGBre3t8fHtgYGBgYICJX1dWVmBgYGBgg2ppZmNlYGBgYGBeYV5dW1xgYGBgYFxXV1dXV2BgYGBgYV1bW1tbYGBgYGBcXV1cXFxgYGBgYHNzcXN2dmBgYGBggWFkZGhnYGBgYGBbWltbXFxgYGBgYGBbWVRXVmBgYGBghVpcXFtbYGBgYGCEfHp+fX5gYGBgYIptbXFucGBgYGBggXRzc3NzYGBgYGBdZGJjZGNgYGBgYFpaWlpaWmBgYGBgc1pcW11cYGBgYGBnd42Lj5FgYGBgYGldXFxcXGBgYGBgcmJfXl1dYGBgYGBfYmFgYGBgYGBgYFtbbHZ9fWBgYGBggltiYmZlYGBgYGCxXFtbWlpgYGBgYHiBaWprbGBgYGBgcXFxcXFxYGBgYGBcW1xcXFxgYGBgYIhhaWJgYGBgYGBgTlZPS0dHYGBgYGCKZF5jZGRgYGBgYF1dXV1dXWBgYGBgamhoampqYGBgYGCEXFpaW1tgYGBgYHNhXlxdXGBgYGBgXmJiYGBgYGBgYGCEhISEhIRgYGBgYFxcXFtcW2BgYGBgXFxcXFxcYGBgYGBnWFpaWlpgYGBgYIZiZ2JkZGBgYGBgiIiIiIiIYGBgYGA4dE9LUFFgYGBgYHJlZGJjY2BgYGBgeFxbW1tbYGBgYGBqX15eXV1gYGBgYIaGhoaGhmBgYGBgZF5pbXFwYGBgYGBYWl1cWltgYGBgYGBYWFhYWGBgYGBgh3NkXF5eYGBgYGCoXlxdXl5gYGBgYH5ucnd9fGBgYGBghG9vb3JxYGBgYGCBXFxcXFxgYGBgYHFfXl1dXWBgYGBgpV5cY2FhYGBgYGBYoJyclZxgYGBgYF1dXV1dXWBgYGBgcGtrampqYGBgYGBeZmxtZWdgYGBgYFtcXFxcXGBgYGBg0lpbXFxcYGBgYGBfX19fX19gYGBgYFxcXFxcXGBgYGBgXV1dXV1dYGBgYGCwXF1hYWBgYGBgYFtoaW1tb2BgYGBgXFxcXFxcYGBgYGBzWltaW1tgYGBgYFtdXFxcW2BgYGBgjGBnZWdmYGBgYGBljoaUi49gYGBgYJRbW1tbW2BgYGBgtIeGgHp7YGBgYGCCgX19e3tgYGBgYF1cW1xcXGBgYGBgZmRkZGRkYGBgYGB7V1dXWFhgYGBgYHdbW11cW2BgYGBgdF9iYmNjYGBgYGCAXFxcXV1gYGBgYLZsZXFtbmBgYGBghX18e3l5YGBgYGCHjYWAgYFgYGBgYFtbW1tbW2BgYGBgd2lkZWZmYGBgYGCDg4ODg4NgYGBgYHNZW2BdXmBgYGBghV9iZWJiYGBgYGCKc4KAfn9gYGBgYG1cXFxcXGBgYGBgamVjY2NjYGBgYGCGhYODg4JgYGBgYJJ0cnh0dGBgYGBgpZVuXFtcYGBgYGB3bWxucHBgYGBgYF9cXFxcXGBgYGBgYWJeXl1dYGBgYGBcXFxcXFxgYGBgYKZrY2BgYGBgYGBgg2ZkY2JjYGBgYGCLYF9eX19gYGBgYGZxcG1wcGBgYGBgpFpcXl9fYGBgYGB3cnJ0dHVgYGBgYFVXVVRUVJ+gnqCgoKCfoKCgflxbWoZae1xaZWVbW1tbXFxbWFtbXFhbWVhZWFhYWVlZWlWZX2NaZlpaXmFbXWtjXFxbXWheXFxNa3BmZlxcampohoaGhYWGhoWEhYRXVFZeVZ9UWVloXlBQVlFPVVNWcE5RmJKTjoiPgoyIk4Jxel58dmVxa16IbltbZltbW1taXltbW2FcXFtbW2RbW1uGXV1oXGuHXF5kXVhXemZcWlxaWl9bXFyRbmd2W1ySZYN5XmdpW1uQW2tjW4eBiIeIhol6iYiGXH9dXWhjXIdcYGWpkpajaqJ5sGyocZB2i5Obj4uemX6FVFS4VVRUVVaJWFRRTmhdZ2NBn2NeaFpdWlpZW1paWVpaV1pXV1dXV1pXV1dcbmBoXltccF1gXFxcXFxdXF1eXFxci4eLj3uDgHF+kYlcX3xyXlpcZ4ViXlpcYFpaWlpdW1paSzNcVlxbRVBcWVxaXVpaX2NablZdXG+Dgn6BgXaDgX2CbXJgX11caYpdYV52X3h1antxYoBuc11cX15eXGNcaFxcWlpaWlpaWlpaWlpsWmBqWlpyWV9lWpymb5uOlJd4iZGcXltdYVxcY1toXVtcXFxdXl9cXF5dYmNjX2NfX19iXmNjcoxxYYttgG2KXXtZX3RdWVdaZXRaWVtiW05bU1plTFtchHqAi25+fHZ0hntxcXFxcXFxcXFxcVhbXFteZFlbW1xeg4Nbf4BciF5ciGVSRlBIPEVUMkxDO2Bcfl1rYl1ebmFpXVxdXV1eXlxdXV5ucm9oa3RodWtpb1xSXFxfXVxTXFxeV1phbWR3d05aY2NlZmdiYWpgZ2RiaoSEhISEhISEhISEW1xbXFtbXFxbW1xcXFxcXFxbXFxcXFmbc1pZWFqlWVhYXVxcdWFcfWRdY2OIhYWHiYmJiYmJiIVeTUtLS4dtZEtKYl9yYF9eeVxvX19bcl5cXVtbjltgXF1fXGBcXV5cXV9dhoaGhoaGhoaGhoZ7aoR2bnV9d3Z4cJxVV1dcVq5RV1lWWGJYWFhYV3VYWFhcWltfXFpjWWtaWlZZWVpbWVlZWVlcendzd3Nod21yeX55fH1tcnV0gnBrc1lcW1xbQFxcVlxXXVxeXV5dXVxfXWBZg21Zdl5ZcmJZcYfPm7akz5DJhpm7XV5dXVxdXFxdXV1laGZkZmdjaWNmaFuMWVtbW1qSWltbXFxcXFxcXFxcXFyBVlpcWWZrWlpaWl5iX15mX2FvYV9eXFxcXFxcXFxdXFxdXV1dXV1dXV1dXVtfb1uEcVpqZlqTZnF7a2tscId9dWtcXFxcXFxcXFxcW1pcXFpbWlpfW1paXGFcW1tcWmNbXFyOXGN8bXWLZGiKZKdwlXOOkK2XgVprW1teV2JdWlxgV3Jnb4d3fnlngoVzfoGCeHNxgoF9dG56XV5eXVxcXF5dXFxkY2ZkZWVjZGVkZVhXXXpdV1lXX4Nba5RTXWFeYWZ/W2JeXV1fYVxmXWBfXV2JiVxdXF6IiVxcaHZgYX1id3BiXXdgXF9chIFcXWNeg4p6hY2Mfo6Kkot8W1tbW1tbW1tbW1tdY2BgXV5eYGFhX4ODg4ODg4ODg4ODX2dZWVtZU6NZW1t8bVxig39zY1xuemNzgYSGdmVniYaJW1xcXFxcW1tcXFxdXV5dbWZdXWBdcYKEhIOFg4GGhIOEf2VbW5KNbl1bbZFaWlqPX1paWlqFXHRyb3B8c3uEfHJ9XFhcXFxcXFRcW1xdXV1dXl1fX15cXVxcXFxcXFxcXFxcWlliWVpiW1diWV9cXFxdYGFcW11dYV9hYGF1XmVeXmhudHJ5d2h4aHh2dmhZWVlbXVtZWVtaXnZmeXB6dXZue3p2VVZVVlRUVVVWVlWgoKCgoJ5gYGBgYGJfYIN7WmBgYGBgW1tcXFtbYGBgYGBaWlpbWmdgYGBgYGdocGtvnGBgYGBgXl5fXl2OYGBgYGBwc3VpXotgYGBgYISEhIWFfWBgYGBgY2B5f33SYGBgYGBPT09QT1lgYGBgYISDgIJ+fGBgYGBgeXl4gXmOYGBgYGBcXWBhX4hgYGBgYFtbW1tbW2BgYGBgXV1dXmOCYGBgYGBhYmVkZJxgYGBgYFtbXFtmgWBgYGBgXV1bXFyPYGBgYGCHh4eGhoZgYGBgYGdmZGNthmBgYGBgh4N5gHd+YGBgYGB7eYCLn2lgYGBgYFZYfWxsxWBgYGBgZWNnYV6AYGBgYGBcXF1aW19gYGBgYFdXV1dXZ2BgYGBgW1tbXFxiYGBgYGBcXFxcXFxgYGBgYHZ0d4OMbWBgYGBgZ2hqYGF4YGBgYGBcXFtaWl1gYGBgYFZXWVpaXWBgYGBgW1xaWmGRYGBgYGB+f311eIRgYGBgYG9va2hkimBgYGBgc3R2c3WCYGBgYGBjYmNpZFxgYGBgYFpaWlpaWmBgYGBgXFxaYGKHYGBgYGCQkYh7YoxgYGBgYFxdXWBdc2BgYGBgXV5dXV5tYGBgYGBgYWFhYGBgYGBgYH18fHNmWmBgYGBgZmlqW1mGYGBgYGBaWltdb7JgYGBgYGtoaHSJa2BgYGBgcXFxcXFxYGBgYGBcXF1dXV5gYGBgYGBiY2hgh2BgYGBgR0hHUVFYYGBgYGBkY15dYopgYGBgYF1dXVxdXWBgYGBgampra2pyYGBgYGBbWlpcXIBgYGBgYFxcWltfhmBgYGBgYGBiYWFgYGBgYGCEhISEhINgYGBgYFtbXFxcXGBgYGBgXFxcXFxcYGBgYGBaWVhYW3NgYGBgYGRlamNngGBgYGBgiIiIiIiHYGBgYGBPS0pCRQ1gYGBgYGNjYWBgb2BgYGBgW1xdXl+CYGBgYGBdXV5fX2pgYGBgYIaGhoaGhmBgYGBgcXJ2d3KAYGBgYGBbWllcXG9gYGBgYFhYWFhYeGBgYGBgXl9gW1x+YGBgYGBdXmFaWahgYGBgYH57e4GGbWBgYGBgcXBvbnaDYGBgYGBcXFxcW2JgYGBgYF1dXV1fa2BgYGBgYWBaWlujYGBgYGCcmZqPgYBgYGBgYF1dXV1dXmBgYGBgampramltYGBgYGBnaG5hZmJgYGBgYFxcXFxcW2BgYGBgW1tdWlqjYGBgYGBfX15eXmFgYGBgYFxcXFxcXGBgYGBgXV1dXV1dYGBgYGBgYmBbXpFgYGBgYG5wa2xwkmBgYGBgXFxcW1xcYGBgYGBbW1taWn1gYGBgYFxcW1tcW2BgYGBgZWVqdGaRYGBgYGCQiISWlmRgYGBgYFtbW1tek2BgYGBge3t8d2+xYGBgYGB7enZ4e4JgYGBgYFxcXF1eX2BgYGBgZGRkZGVmYGBgYGBYWFhdWX1gYGBgYFtbWVpbYGBgYGBgY2NiYmBvYGBgYGBdXFxcW4NgYGBgYG1sZ2FotmBgYGBgeXd7fXuFYGBgYGCBgYOQkYhgYGBgYFtbW1tbW2BgYGBgZmZlY2N7YGBgYGCDg4ODg4NgYGBgYF5fYWFoj2BgYGBgYmJhY2OKYGBgYGB/fn57eIpgYGBgYFxcXFxbZGBgYGBgY2NkYWZnYGBgYGCCgoOCgoZgYGBgYHRzbHF5kmBgYGBgXFtdWlqZYGBgYGBvbm9yd3BgYGBgYFxcXFxbXWBgYGBgXV1dXF1fYGBgYGBcXFxcXFxgYGBgYGBhZGBnkGBgYGBgYmJiZWaEYGBgYGBfX2FcXIpgYGBgYHBub3ZzcmBgYGBgX15dX1ugYGBgYGB0dXN0b3lgYGBgYFRUVFVWVGBgYGBg",
+        "encoding": "base64",
+        "sha256": "6b40a229128570604bfeb07a3deeb1b72ebf5cacb6f649db58acf85c5ecd57f1"
+      },
+      "dtype": "uint8",
+      "layout": "position,input_channel,kernel_index",
+      "shape": [
+        3,
+        128,
+        11
+      ]
+    },
+    "positions": [
+      0,
+      4140,
+      8280
+    ],
+    "tolerance": {
+      "absolute": 0,
+      "relative": 0,
+      "require_bit_exact": true
+    },
+    "valid_kernel_indices": [
+      [
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    ],
+    "weights": {
+      "bytes": {
+        "byte_length": 2816,
+        "data": "Lz1ERTJBQjs3PhxDQj8wOC03OEQ8Nj8+Pj5EO1w+QUg7Lzc3KzouT0Q0PE4/MjQ1RBtKLztFOkU9MzsoMDooNzc9QDtBPTE1LlAzOzMxLS47Ojk7OzU6OTspNUg2MD07REROMj5FQzsyRkMrKVc9PT4+OD08Q0U6PEI4PC1OSRxPPkBDOj5DQDYxUTY2RUdCNTE1L1Q3OyoyPzU9OjJZIjBAPjM7PTk2NjkrOzo9Rz5BQT5BORV/NTAwSD9ANiI4Jkk2NDw2Ozo7M0A3PDY6NjVIPkFEMWkWR0E2Q0VBQjo9RTo+Pzg8QT87Oz4zOzo9Qj4+QTsyOTthTDBHUkQ+PzlKPC0wQUBGQkRASSVQNzVaMTkhLzQ0O0o/Kz82Ijg0OzoWSUNKOTc3Nzs7NTw5QkZCNUE7QDU6PzhFPD9GPzVASSw9M1UnLzk9ODI2MS1KMjY4NEo0OUlGPTlnPzw3NzxGL1EzRCxVMDlWQDZJQiFdPkFDODw6RDc5TmokNTQ7QTQ+NztOK1AxRD47OT0zOkRBRDs1PjQ5UUVJQUk9QzY/SEVANTlQLUY8OTpPOjs+PDk4QUI7PTw8QTdBQzg/QjE+Qzg6TEEwSD02Oz9IMDQ2MT8zPEc4Njc9PThAQDhEODc/ND47QTM7WEElPTY8SEk4OjlZQURNTEg9QT06Pz87Pz4/OTxGQz9BSD9AQz9AQ006RSVLP0FGSEc2PDw2PEYgTDs1Ojk3OTw3OEY5REQ2QkA/TkBDSSg4My9EMTEzO0cxMDI4NE1KSkozPDEuPTw0REVKSkY6OUU1QU5APj9IPiRMMjI6RD45P0BHMkstQUJFPi43PEc2SUJANS9AS0BGPjVPOj5EQEA1PkNBNzdATDo7QisZGzNeOz0YMDU4OjgvWD8XQS44QDE1QDc6MTg9K0IzPj5BOT47Pj06OTQ7PD4uOjBJIj47Pj4+PjUyVTUrOzw7MD9LRDNBSEY5QUQtNjVDPT0yNzs3Ljw7N0BBMTBDOz9EMDI9OEcuPDgrQE80HDY0QFg+Ky8wKUE9QD81N1RENDVRJT8/OTg3N0BBFDM+OjdDOz84N0BBOUBDOjdCPDtFNEVESUFBPDlPQTdAMTVCOkI9PC5JO0VFST4/REAyKE83RDQ7NTk6OUBDOjw7PD84PkZAQUBKQDs0RUY6QjZANjI/PEY5PkA4PR5vJDA+OztDN0Y3PUc/MTg5QUBDPz1VJEg/Oj1CODo6NSg0PjZHPjo1Nz06PjhXNEM2NjYzNS47RUE+O0E4QUY1QzQ8RT5KKzg6Oz49PDE/QTs6QzQ/TD5FRztGPTA3OkJCN0ZVNjcZSFg0PT5DQD4+PUBFPT44PzxIUDY5QERQPz47PTE4Nj49PzU+QjVCPiVWMTxBMjw9STg7SEI4MTdFNUc/SFFWHzJJRUNEPTkzQUREOEA/QDY0Oz02QEsqPzQ6QTlGRik7TkY4PEE8QUA8MVZaODQ4PzM5PDk3PjZLOTw9P0M1FzR9TiImM0k9R1BCNEA5OUM5QDQsPEc4ND0yRzclPTs1N0c6Pzs+OTs9PkFFNUU3RUIsJTo9Ozo9QzA4Nzg9ODwyQEYuOkIyPzM6PywvNWMvOjE+PysxRj9DPjtHREVFRDtAQ0A8VTI2MDZOQEZERUpALkRCPjY5PEozKj1DQUE1MkVAOjhWPEU9Qzw8Rj9CRTsfREVDQUc/TjRIPR9SOzZBPTs5OTY3Ozk1PDk5OTw0RiFSPzsuP0I2NTo0Oj1ARDU5XDZGPj44RT82SUQ0SEdCSTNTKkVDOjhARkNFM1JGQkNJMkU3QUBQKkY3QjM9Pzk7ODE9OjU0OzpHQUBBTDZBREFTOzI7NzNFQ0EyMzREQD04Pzc8QEM7RTw+NDo5Oz06ODxAPzk4NT9APzg2Pzk7QTo6QD5CQDo6Qzc8Ojs+QD05Oj88Ojs7PEBAQzpDPzQ9PEI5PkhDPz47Pj83Pj1BQD88NT48QD03PDc6PD87PDo/NjtBQkZBPz47NDo9QDo7Qzw/Ojo+PjlBPTw/Pj0+Rz44Ojw8Pzo9OThBPDw9RD5DPUI9Pz07QkFCPTY5OEI6PEBBODs7Pj09Ojw5OEA6PDtDP0A7QT87Ojo7QDo8PT08PUJAQDo9QEhCPD44OkNCRT48QTxAQUE+Pz1AOjg3PEU2PD1AOz88QDo7QUZAPjpBOjw9Qjs4Oz48N0E/PjtAOzlDPjc/NkI6Qzw+OTdDRDw8PDxBOUA/Pj87Pz49PTs8PDs3PDo8QEY+PD08PDVBPzk3Pz5CPD9APDk9OkA9QEA/PDs9OTo/PkE9PT09OT08ODs2QERAOz4/NjpBPjg/QEU8PDs5P0ZCNz48PjlBQDY7QTs3Pj49OUE+OTpCQ0NCOT47Qj86QT87OT87Oz9DQz46OkJCQUBBQkJCRkE+QDtAPzs4Pz9EQD03Q0FDQkZBPkU+NUE5PD48PDdBQTo9Njk5NDU6QDo5OzhFQj45Qz9BRD88Qj0+PjU8OTlAOkBAP0Q6Qz49Ojs6Q0Y+PkE9Pj07OUA5OTo8PztDPT08PEA8Pzs3Pjg9Pjg7Oz5CQD0+Ozg8QkI8QTo5OzdAOz89OTVDQEM+PEFGQT0/Pj45Pj02PEFBPUA5NEM8Q0I7Ozs+Pzs+Qz83OTw/Pjo8Ozw+PD48PDk+Pjo5Pj07Qjo9PEA7PUBGOzc3OjI4PTw/OD88QEI/Pj9AQEA+PTw8OTs5OTg9QDo/Ozk/OT87Nzg+NzpBPjxDPj89RT87Qz9BRj89PD4/Njs6Q0E9PTw6PDY6QEBCOkM4PDg5PEM+Pjw8Pzo7OD42PkY6OTs5QDc3PT9BODk/PjsyPEA7Pz0/OD46RDc/RD06NTpAOjo6Oz5APzk7PTg8PztCOzo2PEA+PENEOzw6O0A1QTg1QT5FPDg7Oz40OkA2OUFAPTs9Pzk+Pzk/Oz47Pjs+Pzk0PD43RERGQTg8QUNAODo6QUI+PDw2OT5BPj05QTs8Q0A8QD5CPTs7RT0/RTw9P0A/O0ZBQj05QT4/PD9BOzxBPDk+PD0+Pjs9O0A+P0A1Nj04OkA6Ojo/PUFCQz4+OjtAPUI+OTw6Oz9EPkA+PTlGPDc/Pz08PUA8Pj46Pz8/PkA+Ozs+PkM/OTQyODs9Ozo6QzxAREVDQT89Pz42Qzk9OTpFQTg9OTxAPzs9PTo9QTxCPz45QTo/QD88N0ZCQDk+Oz8+PEI/QjxEQT0/QERDQjk/RDo+Pj09PD5FOkA7OUFBPDw4OD5CNDg8P0tAOUA0NEI4PUE6PkFDQDg+QUQ6OjU5QD1BOj5BQTtDPzw+QD41Oj09RUM7Pj4+Oj1AQjc+Pz48PD85OEFAPzs+OTY+P0EzOT8+QD5FPT8+P0M+RTxER0A+Oz4+QD05Qjo4Ozs9PUA9ODtBOjk4Qj48Pzk5Qj07Pj05Pjs9PEBCOzg6PTY8PTdAPTtDQkA9Nzg7QEFBOzg5OTc/QDk2PEJCPERIPDs9PD84Pz9CMzs5Qj49PDpDPzc9RUZCQTo7Pz1DPztAPz0+PUFCQz4/Nz87QD08QTs1QkA9Qz49Pj09PUFGPzw4Oj8/Pj8/P0NEPD0/PkE/QD8+OjxAPzw6Pjs9Oz9CPT49Qj1APD06OD8+QDg7PD09QUI7QTk5OTdCPz49Pz48OTxDOkA7P0BEOzw/PkNDO0A9PkFBPj5EREJBRD8+QkI6O0A7Pz9AOTs6NkI+Pz07Pjw/Pj89OEM7Pj04PTo7PDw8Oj07OTs/OTc8QT4=",
+        "encoding": "base64",
+        "sha256": "59b08989dc4914876ec128977306c8fe8952e81902109e94b2953b5245d02543"
+      },
+      "dtype": "uint8",
+      "layout": "selected_output_channel,input_channel,kernel_index",
+      "shape": [
+        2,
+        128,
+        11
+      ]
+    }
+  },
+  "inference_input": {
+    "phonemes": "h\u0259l\u02c8o\u028a f\u0279\u028cm \u0279\u028cst",
+    "speed": 1.0,
+    "style": {
+      "byte_length": 1024,
+      "dtype": "float32",
+      "max": 0.7199400067329407,
+      "min": -0.641912043094635,
+      "sha256": "e5ae5f98137e45e2c94452d482f2e43fb14b71079830e50226dc2076d3d0dce4",
+      "shape": [
+        1,
+        256
+      ]
+    },
+    "style_index": 16,
+    "token_ids_without_bos_eos": [
+      50,
+      83,
+      54,
+      156,
+      57,
+      135,
+      16,
+      48,
+      123,
+      138,
+      55,
+      16,
+      123,
+      138,
+      61,
+      62
+    ],
+    "tokens": {
+      "byte_length": 144,
+      "dtype": "int64",
+      "max": 156,
+      "min": 0,
+      "sha256": "e35af5ef1754821335bc1fca606fea6d88fc3702c823b5f7e1ccf80e849127b0",
+      "shape": [
+        1,
+        18
+      ],
+      "values": [
+        0,
+        50,
+        83,
+        54,
+        156,
+        57,
+        135,
+        16,
+        48,
+        123,
+        138,
+        55,
+        16,
+        123,
+        138,
+        61,
+        62,
+        0
+      ]
+    },
+    "voice": "af_heart"
+  },
+  "operator": {
+    "accumulator_output": {
+      "byte_length": 4239872,
+      "dtype": "int32",
+      "max": 59750,
+      "min": -55998,
+      "sha256": "a04073506eab3fd4adc97eef7c742fab58be373c73825bf1b42ef39b563c1d43",
+      "shape": [
+        1,
+        128,
+        8281
+      ]
+    },
+    "activation": {
+      "byte_length": 1059968,
+      "dtype": "uint8",
+      "max": 255,
+      "min": 0,
+      "sha256": "89bae52e0f9d2ce686c6549804dd3c6c17c4d91069b4d335dca651809e0e6828",
+      "shape": [
+        1,
+        128,
+        8281
+      ]
+    },
+    "attributes": {
+      "auto_pad": "NOTSET",
+      "dilations": [
+        5
+      ],
+      "group": 1,
+      "kernel_shape": [
+        11
+      ],
+      "pads": [
+        25,
+        25
+      ],
+      "strides": [
+        1
+      ]
+    },
+    "equation": "sum_c,k ((x_q - x_zero_point) * (w_q - w_zero_point))",
+    "graph_index": 2570,
+    "inputs": [
+      "/decoder/decoder/generator/noise_res.1/Add_6_output_0_dynamic_quantized",
+      "/decoder/decoder/generator/noise_res.1/Mul_14_output_0_quantized",
+      "/decoder/decoder/generator/noise_res.1/Add_6_output_0_zero_point",
+      "/encoder/N.2/Mul_1_output_0_zero_point"
+    ],
+    "layout": {
+      "input": "NCW",
+      "output": "NMW",
+      "weight": "MCK"
+    },
+    "name": "/decoder/decoder/generator/noise_res.1/convs1.2/Conv_quant",
+    "op_type": "ConvInteger",
+    "output": "/decoder/decoder/generator/noise_res.1/convs1.2/Conv_output_0_output_quantized",
+    "padding_integer_value": 96,
+    "w_zero_point": {
+      "broadcast": "scalar",
+      "dtype": "uint8",
+      "shape": [],
+      "value": 61
+    },
+    "weight": {
+      "byte_length": 180224,
+      "dtype": "uint8",
+      "max": 127,
+      "min": 0,
+      "sha256": "55a147ca3b803506c7fc2d8164df630bc6048fbcbecb05dabb93faa4e0440c91",
+      "shape": [
+        128,
+        128,
+        11
+      ]
+    },
+    "x_scale_for_downstream_dequantization": {
+      "byte_length": 4,
+      "dtype": "float32",
+      "max": 0.07121484726667404,
+      "min": 0.07121484726667404,
+      "sha256": "4c0409dfe06622c257cb502955ba8bac254ad825c136cc05a283874b072f77a4",
+      "shape": []
+    },
+    "x_zero_point": {
+      "broadcast": "scalar",
+      "byte_length": 1,
+      "dtype": "uint8",
+      "max": 96,
+      "min": 96,
+      "sha256": "8d33f520a3c4cef80d2453aef81b612bfe1cb44c8b2025630ad38662763f13d3",
+      "shape": [],
+      "value": 96
+    }
+  },
+  "schema": "trueos.ttstt.kokoro-convinteger-oracle.v1",
+  "source": {
+    "model_file": "kokoro-quant-convinteger.onnx",
+    "model_sha256": "6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb",
+    "ort_capture": {
+      "execution": "sequential",
+      "graph_optimization": "disabled",
+      "inter_threads": 1,
+      "intra_threads": 1,
+      "provider": "CPUExecutionProvider"
+    },
+    "tools": {
+      "numpy": "2.5.1",
+      "onnx": "1.22.0",
+      "onnxruntime": "1.28.0"
+    },
+    "voices_file": "voices-v1.0.bin",
+    "voices_sha256": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"
+  }
+}

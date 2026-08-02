@@ -1,0 +1,5 @@
+/target/
+/.ttstt/
+/models/
+/*.wav
+__pycache__/

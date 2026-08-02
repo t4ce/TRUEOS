@@ -1,0 +1,37 @@
+[package]
+name = "trueos-ttstt"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+description = "TRUEOS host text-to-speech and speech-to-text compatibility tool"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive", "env"] }
+hound = "3.5"
+# tts-rs has a loose prerelease range; rc.11 is the release compatible with
+# its ndarray 0.17 API. Pin it so a fresh resolution remains buildable.
+ort = "=2.0.0-rc.11"
+rubato = "4.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+signal-hook = "0.3"
+transcribe-rs = { version = "=0.3.11", default-features = false, features = ["whisper-cpp"] }
+# The local tts-rs patch exposes owned, crossfaded Kokoro model chunks so the
+# CLI can overlap long-text inference with playback without a temporary file.
+tts-rs = { version = "=2026.2.3", path = "vendor/tts-rs", default-features = false, features = ["kokoro", "kokoro-rten"] }
+trueos-ttstt-protocol = { path = "protocol" }
+whisper-rs = { version = "=0.16.0", default-features = false }
+
+[profile.release]
+lto = "thin"
+strip = true
+opt-level = 2
+
+[dev-dependencies]
+tempfile = "3"
+
+[workspace]
+members = ["protocol", "vendor/tts-rs"]
+resolver = "3"

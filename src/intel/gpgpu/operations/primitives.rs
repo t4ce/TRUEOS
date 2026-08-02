@@ -205,7 +205,58 @@ pub(crate) fn allocate_font_coverage_mask(
         recycle_font_coverage_gpu_va(gpu, bytes);
         return None;
     };
-    Some(GpgpuOwnedMask8Surface { surface, virt })
+    Some(GpgpuOwnedMask8Surface {
+        surface,
+        virt,
+        quarantined: AtomicBool::new(false),
+    })
+}
+
+/// Allocate one packed persistent R8 atlas. Width is rounded to the RAW
+/// buffer-surface alignment so every tile can expose an aligned glyph-local
+/// GPU binding while consumers continue to map the one page-aligned backing.
+pub(crate) fn allocate_font_coverage_atlas(
+    width: u32,
+    height: u32,
+    max_entries: usize,
+) -> Option<GpgpuOwnedMask8Atlas> {
+    let width =
+        u32::try_from(align_up(width as usize, GPGPU_FONT_CACHE_SUBALLOCATION_ALIGN)?).ok()?;
+    let storage = allocate_font_coverage_mask(width, height)?;
+    GpgpuOwnedMask8Atlas::from_storage(storage, max_entries)
+}
+
+/// Allocate packed immutable recipe storage in the Font GPU-VA range.
+/// Individual recipes use 64-byte suballocations; the PPGTT maps only this
+/// page-aligned arena backing and coverage dispatches bind the exact slice.
+pub(crate) fn allocate_font_outline_ops_arena(
+    capacity_bytes: usize,
+    max_entries: usize,
+) -> Option<GpgpuOwnedFontOutlineOpsArena> {
+    if capacity_bytes == 0 || max_entries == 0 || max_entries > GPGPU_FONT_CACHE_MAX_ENTRIES {
+        return None;
+    }
+    let bytes = align_up(capacity_bytes, super::WARM_ALIGN)?;
+    if bytes > DIRECT_RCS_FONT_COVERAGE_MASK_MAX_BYTES {
+        return None;
+    }
+    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+    let Some(gpu) = reserve_font_coverage_gpu_va(bytes) else {
+        crate::dma::dealloc(virt, bytes);
+        return None;
+    };
+    unsafe {
+        core::ptr::write_bytes(virt, 0, bytes);
+    }
+    super::dma_flush(virt, bytes);
+    let Some(arena) =
+        GpgpuOwnedFontOutlineOpsArena::from_allocation(phys, gpu, bytes, virt, max_entries)
+    else {
+        crate::dma::dealloc(virt, bytes);
+        recycle_font_coverage_gpu_va(gpu, bytes);
+        return None;
+    };
+    Some(arena)
 }
 
 /// Allocate the persistent RGBA base consumed by the font-instance engine.
@@ -333,8 +384,7 @@ pub(crate) fn font_outline_coverage_runs_r8(
     runs: &[GpgpuFontOutlineCoverageRun<'_>],
 ) -> GpgpuDispatchRetirement {
     let surface = mask.surface();
-    if runs.is_empty() || runs.len() > FONT_OUTLINE_COVERAGE_BATCH_MAX_RUNS
-    {
+    if runs.is_empty() || runs.len() > FONT_OUTLINE_COVERAGE_BATCH_MAX_RUNS {
         return GpgpuDispatchRetirement::NotSubmitted;
     }
 
@@ -394,8 +444,8 @@ pub(crate) fn font_outline_coverage_runs_r8(
     unsafe {
         core::ptr::write_bytes(ops_virt, 0, mapped_bytes);
         for (run, batch_run) in runs.iter().zip(batch_runs.iter()) {
-            let offset = (batch_run.params.ops_gpu - DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE)
-                as usize;
+            let offset =
+                (batch_run.params.ops_gpu - DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE) as usize;
             let input_bytes = run.outline_ops.len() * core::mem::size_of::<[u32; 8]>();
             core::ptr::copy_nonoverlapping(
                 run.outline_ops.as_ptr().cast::<u8>(),
@@ -412,6 +462,7 @@ pub(crate) fn font_outline_coverage_runs_r8(
         batch_runs.as_slice(),
     );
     if retirement == GpgpuDispatchRetirement::SubmittedIncomplete {
+        mask.quarantine_backing();
         crate::log_error!(
             target: "gpgpu";
             "intel/gpgpu: font-outline batch input quarantined phys=0x{:X} bytes={} runs={} reason=retirement-uncertain action=no-unmap-no-free\n",
@@ -423,6 +474,145 @@ pub(crate) fn font_outline_coverage_runs_r8(
         crate::dma::dealloc(ops_virt, mapped_bytes);
     }
     retirement
+}
+
+/// Render one immutable resident outline recipe into an ordinary persistent
+/// R8 mask without allocating or copying a transient ops upload.
+///
+/// The recipe is expected to use the mask's coordinate space, exactly like
+/// the existing transient API. A lost retirement proof pins both persistent
+/// backings automatically.
+pub(crate) fn font_outline_coverage_resident_r8(
+    mask: &GpgpuOwnedMask8Surface,
+    outline_ops: &GpgpuFontOutlineOps,
+    rect: GpgpuRect,
+    subdivisions: u32,
+    optical_bias_px: f32,
+) -> GpgpuDispatchRetirement {
+    let surface = mask.surface();
+    let Some(binding) = outline_ops.binding() else {
+        return GpgpuDispatchRetirement::NotSubmitted;
+    };
+    if rect.x < 0
+        || rect.y < 0
+        || !rect_is_inside_mask(surface, rect)
+        || !(1..=16).contains(&subdivisions)
+        || !optical_bias_px.is_finite()
+        || !(0.0..=0.35).contains(&optical_bias_px)
+    {
+        return GpgpuDispatchRetirement::NotSubmitted;
+    }
+    let run = FontOutlineCoverageR8BatchRun {
+        params: FontOutlineCoverageR8Params {
+            ops_gpu: binding.binding_gpu,
+            mask_gpu: surface.gpu,
+            op_count: binding.op_count,
+            subdivisions,
+            mask_pitch_bytes: surface.pitch_bytes,
+            mask_width: surface.width,
+            mask_height: surface.height,
+            rect_x: rect.x as u32,
+            rect_y: rect.y as u32,
+            rect_width: rect.width,
+            rect_height: rect.height,
+            optical_bias_px,
+        },
+        ops_bytes: binding.binding_bytes,
+    };
+    let retirement = submit_font_outline_coverage_runs_r8_mapped_2d(
+        binding.mapping_gpu,
+        binding.mapping_phys,
+        binding.mapping_bytes,
+        surface,
+        surface.gpu,
+        surface.bytes,
+        core::slice::from_ref(&run),
+    );
+    if retirement == GpgpuDispatchRetirement::SubmittedIncomplete {
+        outline_ops.quarantine_backing();
+        mask.quarantine_backing();
+    }
+    retirement
+}
+
+/// Build one immutable glyph-local atlas tile directly from a resident recipe.
+///
+/// `local_rect` and every coordinate in `outline_ops` are relative to the
+/// glyph tile, not to the atlas. The dispatch binds the tile's aligned GPU-VA
+/// subrange as a RAW surface while mapping the complete page-aligned atlas
+/// allocation. This preserves the current coverage-kernel ABI and makes a
+/// ready tile position/color/layer independent.
+pub(crate) fn font_outline_coverage_atlas_tile_r8(
+    reservation: GpgpuMask8AtlasReservation,
+    outline_ops: &GpgpuFontOutlineOps,
+    local_rect: GpgpuRect,
+    subdivisions: u32,
+    optical_bias_px: f32,
+) -> Result<GpgpuMask8AtlasTile, GpgpuDispatchRetirement> {
+    let Some(target) = reservation.coverage_target() else {
+        return Err(GpgpuDispatchRetirement::NotSubmitted);
+    };
+    let Some(binding) = outline_ops.binding() else {
+        return Err(GpgpuDispatchRetirement::NotSubmitted);
+    };
+    if local_rect.x < 0
+        || local_rect.y < 0
+        || local_rect.width == 0
+        || local_rect.height == 0
+        || (local_rect.x as u32)
+            .checked_add(local_rect.width)
+            .is_none_or(|right| right > target.width)
+        || (local_rect.y as u32)
+            .checked_add(local_rect.height)
+            .is_none_or(|bottom| bottom > target.height)
+        || !(1..=16).contains(&subdivisions)
+        || !optical_bias_px.is_finite()
+        || !(0.0..=0.35).contains(&optical_bias_px)
+    {
+        return Err(GpgpuDispatchRetirement::NotSubmitted);
+    }
+    let run = FontOutlineCoverageR8BatchRun {
+        params: FontOutlineCoverageR8Params {
+            ops_gpu: binding.binding_gpu,
+            mask_gpu: target.binding_gpu,
+            op_count: binding.op_count,
+            subdivisions,
+            mask_pitch_bytes: target.pitch_bytes,
+            mask_width: target.width,
+            mask_height: target.height,
+            rect_x: local_rect.x as u32,
+            rect_y: local_rect.y as u32,
+            rect_width: local_rect.width,
+            rect_height: local_rect.height,
+            optical_bias_px,
+        },
+        ops_bytes: binding.binding_bytes,
+    };
+    let retirement = submit_font_outline_coverage_runs_r8_mapped_2d(
+        binding.mapping_gpu,
+        binding.mapping_phys,
+        binding.mapping_bytes,
+        target.mapping,
+        target.binding_gpu,
+        target.binding_bytes,
+        core::slice::from_ref(&run),
+    );
+    match retirement {
+        GpgpuDispatchRetirement::Complete => {
+            let audit = reservation
+                .nonzero_audit()
+                .ok_or(GpgpuDispatchRetirement::NotSubmitted)?;
+            reservation
+                .publish(audit)
+                .ok_or(GpgpuDispatchRetirement::NotSubmitted)
+        }
+        GpgpuDispatchRetirement::NotSubmitted => Err(GpgpuDispatchRetirement::NotSubmitted),
+        GpgpuDispatchRetirement::SubmittedIncomplete => {
+            outline_ops.quarantine_backing();
+            reservation.quarantine();
+            Err(GpgpuDispatchRetirement::SubmittedIncomplete)
+        }
+    }
 }
 
 /// Composite one R8 glyph layer in a single native two-dimensional dispatch.

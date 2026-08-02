@@ -416,7 +416,7 @@ def main() -> None:
     parser.add_argument(
         "--model",
         type=Path,
-        default=repo_root / "crates/ttstt/.ttstt/models/kokoro/kokoro-rten.onnx",
+        default=repo_root / "tools/ttstt/models/kokoro/kokoro-rten.onnx",
     )
     args = parser.parse_args()
 

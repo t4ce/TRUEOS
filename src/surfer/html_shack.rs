@@ -3,8 +3,8 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
 use alloc::collections::VecDeque;
-use alloc::sync::Arc;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::convert::Infallible;
 use core::pin::Pin;
@@ -24,6 +24,7 @@ use crate::r::net::{NetProfile, Queue, VNet};
 pub(crate) const HTML_FETCH_WORKERS: usize = 10;
 const HTML_FETCH_IDLE_MS: u64 = 250;
 const HTML_FETCH_CONNECT_TIMEOUT_MS: u64 = 10_000;
+const HTML_FETCH_VNET_FENCE_TIMEOUT_MS: u64 = 10_000;
 const HTML_FETCH_DNS_TIMEOUT_MS: u64 = 5_000;
 const HTML_FETCH_BODY_TIMEOUT_MS: u64 = 35_000;
 const HTML_FETCH_MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -636,9 +637,21 @@ impl Body for RequestBody {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HttpWorkerNetState {
+    Idle,
+    Opening,
+    Open(api::NetHandle),
+    Closing {
+        handle: api::NetHandle,
+        submitted: bool,
+    },
+}
+
 struct HttpWorkerTransport {
     worker_id: u32,
     net: Option<Arc<VNet>>,
+    state: Arc<Mutex<HttpWorkerNetState>>,
 }
 
 impl HttpWorkerTransport {
@@ -646,6 +659,7 @@ impl HttpWorkerTransport {
         Self {
             worker_id,
             net: None,
+            state: Arc::new(Mutex::new(HttpWorkerNetState::Idle)),
         }
     }
 
@@ -663,19 +677,117 @@ impl HttpWorkerTransport {
         self.net = Some(net.clone());
         Ok(net)
     }
+
+    async fn prepare_open(&mut self) -> Result<Arc<VNet>, HttpFetchError> {
+        let net = self.net()?;
+        let deadline =
+            Instant::now() + EmbassyDuration::from_millis(HTML_FETCH_VNET_FENCE_TIMEOUT_MS);
+
+        loop {
+            let state = { *self.state.lock() };
+            match state {
+                HttpWorkerNetState::Idle => {
+                    let mut stale_handle = None;
+                    while let Some(event) = net.pop_event() {
+                        stale_handle = match event {
+                            api::Event::Opened {
+                                handle,
+                                kind: api::SocketKind::Tcp,
+                            }
+                            | api::Event::TcpEstablished { handle, .. }
+                            | api::Event::TcpData { handle, .. } => Some(handle),
+                            _ => None,
+                        };
+                        if stale_handle.is_some() {
+                            break;
+                        }
+                    }
+
+                    let Some(handle) = stale_handle else {
+                        *self.state.lock() = HttpWorkerNetState::Opening;
+                        return Ok(net);
+                    };
+                    *self.state.lock() = HttpWorkerNetState::Open(handle);
+                }
+                HttpWorkerNetState::Opening => {
+                    while let Some(event) = net.pop_event() {
+                        match event {
+                            api::Event::Opened {
+                                handle,
+                                kind: api::SocketKind::Tcp,
+                            }
+                            | api::Event::TcpEstablished { handle, .. }
+                            | api::Event::TcpData { handle, .. } => {
+                                *self.state.lock() = HttpWorkerNetState::Open(handle);
+                                break;
+                            }
+                            api::Event::Closed { .. } | api::Event::Error { .. } => {
+                                *self.state.lock() = HttpWorkerNetState::Idle;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                HttpWorkerNetState::Open(handle) => {
+                    let submitted = net.submit(api::Command::Close { handle }).is_ok();
+                    *self.state.lock() = HttpWorkerNetState::Closing { handle, submitted };
+                }
+                HttpWorkerNetState::Closing {
+                    handle,
+                    submitted: false,
+                } => {
+                    if net.submit(api::Command::Close { handle }).is_ok() {
+                        *self.state.lock() = HttpWorkerNetState::Closing {
+                            handle,
+                            submitted: true,
+                        };
+                    }
+                }
+                HttpWorkerNetState::Closing {
+                    handle,
+                    submitted: true,
+                } => {
+                    while let Some(event) = net.pop_event() {
+                        if matches!(event, api::Event::Closed { handle: closed } if closed == handle)
+                        {
+                            *self.state.lock() = HttpWorkerNetState::Idle;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if Instant::now() >= deadline {
+                crate::log!(
+                    "html_shack: worker transport fence timeout worker={} state={:?}\n",
+                    self.worker_id,
+                    *self.state.lock()
+                );
+                return Err(HttpFetchError::Connect);
+            }
+            Timer::after(EmbassyDuration::from_micros(100)).await;
+        }
+    }
+
+    fn open_failed(&self) {
+        *self.state.lock() = HttpWorkerNetState::Idle;
+    }
 }
 
 struct HyperVnetIo {
     net: Arc<VNet>,
+    state: Arc<Mutex<HttpWorkerNetState>>,
     handle: api::NetHandle,
     rx: VecDeque<Vec<u8>>,
     closed: bool,
 }
 
 impl HyperVnetIo {
-    fn new(net: Arc<VNet>, handle: api::NetHandle) -> Self {
+    fn new(net: Arc<VNet>, state: Arc<Mutex<HttpWorkerNetState>>, handle: api::NetHandle) -> Self {
         Self {
             net,
+            state,
             handle,
             rx: VecDeque::new(),
             closed: false,
@@ -699,11 +811,30 @@ impl HyperVnetIo {
         if self.closed {
             return Ok(());
         }
-        self.net.submit(api::Command::Close {
+        let submitted = self.net.submit(api::Command::Close {
             handle: self.handle,
-        })?;
+        });
+        *self.state.lock() = HttpWorkerNetState::Closing {
+            handle: self.handle,
+            submitted: submitted.is_ok(),
+        };
+        if submitted.is_ok() {
+            self.closed = true;
+        }
+        submitted
+    }
+
+    fn observe_closed(&mut self) {
         self.closed = true;
-        Ok(())
+        let mut state = self.state.lock();
+        if matches!(
+            *state,
+            HttpWorkerNetState::Open(handle)
+                | HttpWorkerNetState::Closing { handle, .. }
+                if handle == self.handle
+        ) {
+            *state = HttpWorkerNetState::Idle;
+        }
     }
 }
 
@@ -735,7 +866,7 @@ impl Read for HyperVnetIo {
                     return Poll::Ready(Ok(()));
                 }
                 api::Event::Closed { handle } if handle == self.handle => {
-                    self.closed = true;
+                    self.observe_closed();
                     return Poll::Ready(Ok(()));
                 }
                 api::Event::Error { .. } => return Poll::Ready(Err(io::other("vnet error"))),
@@ -1178,12 +1309,22 @@ async fn resolve_ipv4(host: &str) -> Result<[u8; 4], HttpFetchError> {
     }
 }
 
-async fn connect_tcp(ip: [u8; 4], port: u16) -> Result<HyperVnetIo, HttpFetchError> {
-    let net = crate::r::net::VNet::open_primary().ok_or(HttpFetchError::Connect)?;
-    net.submit(api::Command::OpenTcpConnect {
-        remote: api::EndpointV4::new(ip, port),
-    })
-    .map_err(|_| HttpFetchError::Connect)?;
+async fn connect_tcp(
+    worker_transport: &mut HttpWorkerTransport,
+    ip: [u8; 4],
+    port: u16,
+) -> Result<HyperVnetIo, HttpFetchError> {
+    let net = worker_transport.prepare_open().await?;
+    let state = worker_transport.state.clone();
+    if net
+        .submit(api::Command::OpenTcpConnect {
+            remote: api::EndpointV4::new(ip, port),
+        })
+        .is_err()
+    {
+        worker_transport.open_failed();
+        return Err(HttpFetchError::Connect);
+    }
 
     let mut opened = None;
     let handle = wait_for_vnet_event(&net, HTML_FETCH_CONNECT_TIMEOUT_MS, |ev| match ev {
@@ -1192,20 +1333,26 @@ async fn connect_tcp(ip: [u8; 4], port: u16) -> Result<HyperVnetIo, HttpFetchErr
             kind: api::SocketKind::Tcp,
         } => {
             opened = Some(handle);
+            *state.lock() = HttpWorkerNetState::Open(handle);
             None
         }
         api::Event::TcpEstablished { handle, .. } if opened.is_none() || opened == Some(handle) => {
+            *state.lock() = HttpWorkerNetState::Open(handle);
             Some(Ok(handle))
         }
         api::Event::Closed { handle } if opened == Some(handle) => {
+            *state.lock() = HttpWorkerNetState::Idle;
             Some(Err(HttpFetchError::Connect))
         }
-        api::Event::Error { .. } => Some(Err(HttpFetchError::Connect)),
+        api::Event::Error { .. } => {
+            *state.lock() = HttpWorkerNetState::Idle;
+            Some(Err(HttpFetchError::Connect))
+        }
         _ => None,
     })
     .await?;
 
-    Ok(HyperVnetIo::new(net, handle))
+    Ok(HyperVnetIo::new(net, state, handle))
 }
 
 async fn with_timeout_or_none<F: core::future::Future>(
@@ -1228,6 +1375,7 @@ async fn with_timeout_or_none<F: core::future::Future>(
 }
 
 async fn fetch_http_body_once(
+    worker_transport: &mut HttpWorkerTransport,
     target: &HttpTarget,
     max_bytes: usize,
     method: &ByteFetchMethod,
@@ -1244,15 +1392,10 @@ async fn fetch_http_body_once(
         target.path_and_query
     );
 
-    let io = connect_tcp(ip, target.port).await?;
+    let io = connect_tcp(worker_transport, ip, target.port).await?;
     let (mut sender, connection) = hyper::client::conn::http1::handshake::<_, RequestBody>(io)
         .await
         .map_err(|_| HttpFetchError::Hyper)?;
-    let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
-    let token = html_hyper_connection_task(connection).map_err(|_| HttpFetchError::Hyper)?;
-    spawner.spawn(token);
-
-    sender.ready().await.map_err(|_| HttpFetchError::Hyper)?;
     let (http_method, request_body, content_type, extra_headers, content_len) = match method {
         ByteFetchMethod::Get => (hyper::Method::GET, RequestBody::empty(), None, &[][..], 0usize),
         ByteFetchMethod::Post {
@@ -1297,43 +1440,80 @@ async fn fetch_http_body_once(
         .body(request_body)
         .map_err(|_| HttpFetchError::Hyper)?;
 
-    let mut response = sender
-        .send_request(request)
-        .await
-        .map_err(|_| HttpFetchError::Hyper)?;
-    let status = response.status();
-    if status.is_redirection() && method.follows_redirects() {
-        if let Some(location) = response
-            .headers()
-            .get(hyper::header::LOCATION)
-            .and_then(|value| value.to_str().ok())
-        {
-            return Err(HttpFetchError::Redirect(String::from(location)));
-        }
-    }
-    if !status.is_success() {
-        return Err(HttpFetchError::Body);
-    }
-
-    let mut out = Vec::new();
-    let body = response.body_mut();
-    loop {
-        let frame = core::future::poll_fn(|cx| Pin::new(&mut *body).poll_frame(cx)).await;
-        match frame {
-            Some(Ok(frame)) => {
-                if let Ok(data) = frame.into_data() {
-                    if out.len().saturating_add(data.len()) > max_bytes {
-                        return Err(HttpFetchError::TooLarge);
-                    }
-                    out.extend_from_slice(&data);
-                }
+    // Keep the request exchange and Hyper connection in this worker future.
+    // Dropping an outer timeout now drops the connection synchronously, so a
+    // worker can safely reuse its one VNet event domain for the next request.
+    let exchange = async {
+        sender.ready().await.map_err(|_| HttpFetchError::Hyper)?;
+        let mut response = sender
+            .send_request(request)
+            .await
+            .map_err(|_| HttpFetchError::Hyper)?;
+        let status = response.status();
+        if status.is_redirection() && method.follows_redirects() {
+            if let Some(location) = response
+                .headers()
+                .get(hyper::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+            {
+                return Err(HttpFetchError::Redirect(String::from(location)));
             }
-            Some(Err(_)) => return Err(HttpFetchError::Body),
-            None => break,
+        }
+        if !status.is_success() {
+            return Err(HttpFetchError::Body);
+        }
+
+        let mut out = Vec::new();
+        let body = response.body_mut();
+        loop {
+            let frame = core::future::poll_fn(|cx| Pin::new(&mut *body).poll_frame(cx)).await;
+            match frame {
+                Some(Ok(frame)) => {
+                    if let Ok(data) = frame.into_data() {
+                        if out.len().saturating_add(data.len()) > max_bytes {
+                            return Err(HttpFetchError::TooLarge);
+                        }
+                        out.extend_from_slice(&data);
+                    }
+                }
+                Some(Err(_)) => return Err(HttpFetchError::Body),
+                None => break,
+            }
+        }
+        Ok(out)
+    };
+
+    let mut exchange = core::pin::pin!(exchange);
+    let mut connection = core::pin::pin!(connection);
+    loop {
+        let step = with_timeout_or_none(
+            core::future::poll_fn(|cx| {
+                if let Poll::Ready(result) = core::future::Future::poll(exchange.as_mut(), cx) {
+                    return Poll::Ready(result);
+                }
+
+                match core::future::Future::poll(connection.as_mut(), cx) {
+                    Poll::Pending => Poll::Pending,
+                    Poll::Ready(connection_result) => {
+                        if let Poll::Ready(result) =
+                            core::future::Future::poll(exchange.as_mut(), cx)
+                        {
+                            return Poll::Ready(result);
+                        }
+                        if let Err(err) = connection_result {
+                            crate::log!("html_shack: hyper connection ended err={:?}\n", err);
+                        }
+                        Poll::Ready(Err(HttpFetchError::Hyper))
+                    }
+                }
+            }),
+            1,
+        )
+        .await;
+        if let Some(result) = step {
+            return result;
         }
     }
-
-    Ok(out)
 }
 
 fn resolve_redirect(current: &HttpTarget, location: &str) -> Result<String, HttpFetchError> {
@@ -1359,6 +1539,7 @@ fn resolve_redirect(current: &HttpTarget, location: &str) -> Result<String, Http
 }
 
 async fn fetch_http_body_hyper(
+    worker_transport: &mut HttpWorkerTransport,
     url: &str,
     max_bytes: usize,
     method: &ByteFetchMethod,
@@ -1394,7 +1575,7 @@ async fn fetch_http_body_hyper(
             return Ok((https_url, bytes));
         }
         let target = parse_http_url(current.as_str())?;
-        match fetch_http_body_once(&target, max_bytes, method).await {
+        match fetch_http_body_once(worker_transport, &target, max_bytes, method).await {
             Ok(body) => return Ok((target.url, body)),
             Err(HttpFetchError::Redirect(next))
                 if method.follows_redirects() && hop < HTML_FETCH_MAX_REDIRECTS =>
@@ -1530,6 +1711,7 @@ async fn fetch_https_body_once(
 }
 
 async fn fetch_html_body_for_navigation(
+    worker_transport: &mut HttpWorkerTransport,
     url: &str,
     max_bytes: usize,
     timeout_ms: u64,
@@ -1549,7 +1731,9 @@ async fn fetch_html_body_for_navigation(
         }
 
         let target = parse_http_url(current.as_str())?;
-        match fetch_http_body_once(&target, max_bytes, &ByteFetchMethod::Get).await {
+        match fetch_http_body_once(worker_transport, &target, max_bytes, &ByteFetchMethod::Get)
+            .await
+        {
             Ok(body) => return Ok((target.url, body)),
             Err(HttpFetchError::Redirect(next)) if hop < HTML_FETCH_MAX_REDIRECTS => {
                 let next = resolve_redirect(&target, next.as_str())?;
@@ -1562,10 +1746,15 @@ async fn fetch_html_body_for_navigation(
     Err(HttpFetchError::Body)
 }
 
-async fn handle_byte_fetch_request(worker_id: u32, request: ByteFetchRequest) {
+async fn handle_byte_fetch_request(
+    worker_id: u32,
+    worker_transport: &mut HttpWorkerTransport,
+    request: ByteFetchRequest,
+) {
     let started_at = Instant::now();
     let result = with_timeout_or_none(
         fetch_http_body_hyper(
+            worker_transport,
             request.url.as_str(),
             request.max_bytes,
             &request.method,
@@ -1618,6 +1807,7 @@ async fn handle_byte_fetch_request(worker_id: u32, request: ByteFetchRequest) {
 
 async fn handle_html_fetch_request(
     worker_id: u32,
+    worker_transport: &mut HttpWorkerTransport,
     mut request: HtmlRequest,
     dropped_requests: usize,
 ) {
@@ -1643,6 +1833,7 @@ async fn handle_html_fetch_request(
     let started_at = Instant::now();
     let result = with_timeout_or_none(
         fetch_html_body_for_navigation(
+            worker_transport,
             fetch_url.as_str(),
             HTML_FETCH_MAX_BYTES,
             HTML_FETCH_BODY_TIMEOUT_MS,
@@ -1715,10 +1906,11 @@ pub async fn html_fetch_worker_task() {
             .map(|profile| profile.core_kind_name())
             .unwrap_or("unknown")
     );
+    let mut worker_transport = HttpWorkerTransport::new(worker_id);
 
     loop {
         if let Some(request) = pop_byte_fetch_request() {
-            handle_byte_fetch_request(worker_id, request).await;
+            handle_byte_fetch_request(worker_id, &mut worker_transport, request).await;
             continue;
         }
 
@@ -1733,6 +1925,7 @@ pub async fn html_fetch_worker_task() {
             continue;
         };
 
-        handle_html_fetch_request(worker_id, request, dropped_requests).await;
+        handle_html_fetch_request(worker_id, &mut worker_transport, request, dropped_requests)
+            .await;
     }
 }
