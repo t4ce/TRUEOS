@@ -101,6 +101,27 @@ impl DirectRcsSubmitRuntime {
 }
 
 #[derive(Copy, Clone, Debug)]
+struct FontRcsPpgttRuntime {
+    root_phys: u64,
+    generation: u64,
+    initialization_attempted: bool,
+    initialized: bool,
+    retired_ranges: u64,
+}
+
+impl FontRcsPpgttRuntime {
+    const fn new() -> Self {
+        Self {
+            root_phys: 0,
+            generation: 0,
+            initialization_attempted: false,
+            initialized: false,
+            retired_ranges: 0,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
 struct Ui4CompositorPending {
     submission: Ui4CompositorSubmission,
     job_slot: usize,
@@ -520,6 +541,53 @@ pub(crate) fn prewarm_direct_rcs_controls_ggtt(
 }
 
 fn direct_rcs_init_ppgtt(state: DirectRcsState) -> bool {
+    // A few Font-owned operations live outside submission_2d (notably the
+    // final scanout release packet).  Dispatch on the immutable lane identity
+    // here as well as using the explicit helper at Font call sites so none of
+    // them can accidentally restore the old whole-PPGTT reset behavior.
+    if state.gpu_va == FONT_RCS_GPU_VA {
+        return font_rcs_init_ppgtt_once(state);
+    }
+    direct_rcs_rebuild_ppgtt(state)
+}
+
+/// Install the Font context's page-table topology and immutable control leaves
+/// exactly once.  Dynamic glyph, recipe, destination, and kernel leaves are
+/// incrementally mapped afterwards and remain valid across Font submissions.
+fn font_rcs_init_ppgtt_once(state: DirectRcsState) -> bool {
+    if state.gpu_va != FONT_RCS_GPU_VA || font_rcs_context_is_quarantined() {
+        return false;
+    }
+
+    let mut runtime = FONT_RCS_PPGTT_RUNTIME.lock();
+    if runtime.initialized {
+        return runtime.root_phys == state.ppgtt_phys;
+    }
+    if runtime.initialization_attempted {
+        return false;
+    }
+
+    runtime.initialization_attempted = true;
+    runtime.root_phys = state.ppgtt_phys;
+    runtime.generation = runtime.generation.saturating_add(1);
+    let generation = runtime.generation;
+    let initialized = direct_rcs_rebuild_ppgtt(state);
+    runtime.initialized = initialized;
+    drop(runtime);
+
+    if initialized {
+        crate::log_info!(target: "gpgpu";
+            "intel/gpgpu: font-ppgtt initialized=1 generation={} root=0x{:X} topology=exact-once dynamic-leaves=incremental whole-table-reset-per-submit=0 isolation=font-context-only\n",
+            generation,
+            state.ppgtt_phys,
+        );
+    } else {
+        quarantine_font_rcs_context("font-ppgtt-initialization-failed");
+    }
+    initialized
+}
+
+fn direct_rcs_rebuild_ppgtt(state: DirectRcsState) -> bool {
     let pml4_off = 0usize;
     let pdp_off = 4096usize;
     let pd_off = 8192usize;
@@ -573,8 +641,13 @@ fn direct_rcs_init_ppgtt(state: DirectRcsState) -> bool {
 }
 
 fn direct_rcs_map_ppgtt_kernel(state: DirectRcsState, gpu: u64, phys: u64, len: usize) -> bool {
-    let ok = direct_rcs_map_ppgtt_region(state, gpu, phys, len, direct_rcs_ppgtt_pte_flags());
-    ok && direct_rcs_flush_ppgtt_pte_range(state, gpu, len)
+    direct_rcs_map_ppgtt_region_and_publish(
+        state,
+        gpu,
+        phys,
+        len,
+        direct_rcs_ppgtt_pte_flags(),
+    )
 }
 
 fn direct_rcs_map_ppgtt_destination(
@@ -599,8 +672,13 @@ fn direct_rcs_map_ppgtt_scanout(state: DirectRcsState, gpu: u64, phys: u64, len:
         return false;
     }
     let pte_present_rw_pat3_uc = direct_rcs_ppgtt_pte_flags() | GEN8_PAGE_PWT | GEN8_PAGE_PCD;
-    let ok = direct_rcs_map_ppgtt_region(state, gpu, phys, len, pte_present_rw_pat3_uc)
-        && direct_rcs_flush_ppgtt_pte_range(state, gpu, len);
+    let ok = direct_rcs_map_ppgtt_region_and_publish(
+        state,
+        gpu,
+        phys,
+        len,
+        pte_present_rw_pat3_uc,
+    );
     if ok && !DIRECT_RCS_SCANOUT_PPGTT_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "gpgpu";
@@ -658,6 +736,33 @@ fn direct_rcs_ppgtt_limit_bytes() -> u64 {
     DIRECT_RCS_PPGTT_LIMIT_BYTES
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum DirectRcsPpgttMapResult {
+    Unchanged,
+    Updated,
+    Rejected,
+}
+
+impl DirectRcsPpgttMapResult {
+    const fn accepted(self) -> bool {
+        !matches!(self, Self::Rejected)
+    }
+}
+
+fn direct_rcs_map_ppgtt_region_and_publish(
+    state: DirectRcsState,
+    gpu: u64,
+    phys: u64,
+    len: usize,
+    entry_flags: u64,
+) -> bool {
+    match direct_rcs_update_ppgtt_region(state, gpu, phys, len, entry_flags) {
+        DirectRcsPpgttMapResult::Unchanged => true,
+        DirectRcsPpgttMapResult::Updated => direct_rcs_flush_ppgtt_pte_range(state, gpu, len),
+        DirectRcsPpgttMapResult::Rejected => false,
+    }
+}
+
 fn direct_rcs_map_ppgtt_region(
     state: DirectRcsState,
     gpu: u64,
@@ -665,19 +770,30 @@ fn direct_rcs_map_ppgtt_region(
     len: usize,
     entry_flags: u64,
 ) -> bool {
+    direct_rcs_update_ppgtt_region(state, gpu, phys, len, entry_flags).accepted()
+}
+
+fn direct_rcs_update_ppgtt_region(
+    state: DirectRcsState,
+    gpu: u64,
+    phys: u64,
+    len: usize,
+    entry_flags: u64,
+) -> DirectRcsPpgttMapResult {
     if len == 0 || !gpu.is_multiple_of(4096) || !phys.is_multiple_of(4096) {
-        return false;
+        return DirectRcsPpgttMapResult::Rejected;
     }
     let Some(end) = u64::try_from(len).ok().and_then(|len| gpu.checked_add(len)) else {
-        return false;
+        return DirectRcsPpgttMapResult::Rejected;
     };
     if end > DIRECT_RCS_PPGTT_LIMIT_BYTES {
-        return false;
+        return DirectRcsPpgttMapResult::Rejected;
     }
 
     let pt_off = 12288usize;
     let pages = len.div_ceil(4096);
     let cache_policy_mask = GEN8_PAGE_PWT | GEN8_PAGE_PCD;
+    let mut changed = false;
     // Preflight the entire range before changing any leaf. A rejected policy
     // transition must not leave a partially rewritten mapping behind.
     for page in 0..pages {
@@ -685,7 +801,7 @@ fn direct_rcs_map_ppgtt_region(
         let pd_index = (va_page >> 9) as usize;
         let pt_index = (va_page & 0x1FF) as usize;
         if pd_index >= DIRECT_RCS_PPGTT_PT_COUNT {
-            return false;
+            return DirectRcsPpgttMapResult::Rejected;
         }
         let pte_off = pt_off + pd_index * 4096 + pt_index * core::mem::size_of::<u64>();
         let pte_ptr = unsafe { state.ppgtt_virt.add(pte_off) as *mut u64 };
@@ -706,8 +822,19 @@ fn direct_rcs_map_ppgtt_region(
                     (entry_flags & cache_policy_mask) >> 3,
                 );
             }
-            return false;
+            return DirectRcsPpgttMapResult::Rejected;
         }
+        let Some(expected) = (page as u64)
+            .checked_mul(4096)
+            .and_then(|offset| phys.checked_add(offset))
+            .map(|address| (address & !0xFFF) | entry_flags)
+        else {
+            return DirectRcsPpgttMapResult::Rejected;
+        };
+        changed |= previous != expected;
+    }
+    if !changed {
+        return DirectRcsPpgttMapResult::Unchanged;
     }
     for page in 0..pages {
         let va_page = (gpu >> 12) + page as u64;
@@ -719,11 +846,137 @@ fn direct_rcs_map_ppgtt_region(
             .and_then(|offset| phys.checked_add(offset))
             .map(|address| address & !0xFFF)
         else {
-            return false;
+            return DirectRcsPpgttMapResult::Rejected;
         };
         let pte_ptr = unsafe { state.ppgtt_virt.add(pte_off) as *mut u64 };
+        if unsafe { core::ptr::read_volatile(pte_ptr) } != pte | entry_flags {
+            unsafe {
+                core::ptr::write_volatile(pte_ptr, pte | entry_flags);
+            }
+        }
+    }
+    DirectRcsPpgttMapResult::Updated
+}
+
+/// Retire an exact persistent Font VM range after all Font work referencing it
+/// has completed.  The expected physical base prevents a stale owner from
+/// unmapping a VA already recycled to another allocation.  This touches only
+/// the Font context's private PPGTT leaves: no GGTT write, global invalidate,
+/// engine reset, or other RCS/Spirit state is involved.
+#[allow(dead_code)]
+pub(crate) fn retire_font_rcs_ppgtt_range(gpu: u64, phys: u64, len: usize) -> bool {
+    let Some(end) = u64::try_from(len).ok().and_then(|len| gpu.checked_add(len)) else {
+        return false;
+    };
+    let in_primary = gpu >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
+        && end <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_PRIMARY_LIMIT;
+    let in_secondary = gpu >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE
+        && end <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT;
+    if len == 0
+        || !gpu.is_multiple_of(4096)
+        || !phys.is_multiple_of(4096)
+        || (!in_primary && !in_secondary)
+    {
+        return false;
+    }
+
+    // Every current Font submission keeps this lock through its retirement
+    // proof.  Acquiring it therefore excludes both page-table writers and any
+    // batch which could still dereference the retired range.
+    let _guard = FONT_RCS_SUBMIT_LOCK.lock();
+    if font_rcs_context_is_quarantined() || FONT_RCS_SUBMIT_RUNTIME.lock().pending.is_some() {
+        return false;
+    }
+    let Some(state) = *FONT_RCS_STATE.lock() else {
+        // No Font PPGTT has ever existed, so this VA has no translation to
+        // retire.  Treat teardown as idempotently complete.
+        return true;
+    };
+    let runtime = FONT_RCS_PPGTT_RUNTIME.lock();
+    if !runtime.initialization_attempted {
+        return true;
+    }
+    if !runtime.initialized || runtime.root_phys != state.ppgtt_phys {
+        return false;
+    }
+    drop(runtime);
+
+    if !direct_rcs_unmap_ppgtt_region_exact(state, gpu, phys, len)
+        || !direct_rcs_flush_ppgtt_pte_range(state, gpu, len)
+    {
+        return false;
+    }
+    core::sync::atomic::fence(Ordering::SeqCst);
+
+    let mut runtime = FONT_RCS_PPGTT_RUNTIME.lock();
+    runtime.retired_ranges = runtime.retired_ranges.saturating_add(1);
+    let retired_ranges = runtime.retired_ranges;
+    let generation = runtime.generation;
+    drop(runtime);
+    if retired_ranges == 1 || retired_ranges.is_power_of_two() {
+        crate::log_info!(target: "gpgpu";
+            "intel/gpgpu: font-ppgtt range-retired generation={} retired_ranges={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} ownership=font-context-only pte_flush=range next-submit-tlb-invalidate=context-local\n",
+            generation,
+            retired_ranges,
+            gpu,
+            phys,
+            len,
+        );
+    }
+    true
+}
+
+fn direct_rcs_unmap_ppgtt_region_exact(
+    state: DirectRcsState,
+    gpu: u64,
+    phys: u64,
+    len: usize,
+) -> bool {
+    if len == 0 || !gpu.is_multiple_of(4096) || !phys.is_multiple_of(4096) {
+        return false;
+    }
+    let Some(end) = u64::try_from(len).ok().and_then(|len| gpu.checked_add(len)) else {
+        return false;
+    };
+    if end > DIRECT_RCS_PPGTT_LIMIT_BYTES {
+        return false;
+    }
+
+    let pt_off = 12288usize;
+    let pages = len.div_ceil(4096);
+    for page in 0..pages {
+        let va_page = (gpu >> 12) + page as u64;
+        let pd_index = (va_page >> 9) as usize;
+        let pt_index = (va_page & 0x1FF) as usize;
+        if pd_index >= DIRECT_RCS_PPGTT_PT_COUNT {
+            return false;
+        }
+        let pte_off = pt_off + pd_index * 4096 + pt_index * core::mem::size_of::<u64>();
+        let pte_ptr = unsafe { state.ppgtt_virt.add(pte_off) as *mut u64 };
+        let previous = unsafe { core::ptr::read_volatile(pte_ptr) };
+        if previous & super::GEN8_PAGE_PRESENT == 0 {
+            continue;
+        }
+        let Some(expected_phys) = (page as u64)
+            .checked_mul(4096)
+            .and_then(|offset| phys.checked_add(offset))
+            .map(|address| address & !0xFFF)
+        else {
+            return false;
+        };
+        if previous & !0xFFF != expected_phys {
+            return false;
+        }
+    }
+
+    for page in 0..pages {
+        let va_page = (gpu >> 12) + page as u64;
+        let pd_index = (va_page >> 9) as usize;
+        let pt_index = (va_page & 0x1FF) as usize;
+        let pte_off = pt_off + pd_index * 4096 + pt_index * core::mem::size_of::<u64>();
+        let pte_ptr = unsafe { state.ppgtt_virt.add(pte_off) as *mut u64 };
         unsafe {
-            core::ptr::write_volatile(pte_ptr, pte | entry_flags);
+            core::ptr::write_volatile(pte_ptr, 0);
         }
     }
     true

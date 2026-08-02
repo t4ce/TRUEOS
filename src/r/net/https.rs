@@ -123,6 +123,95 @@ struct CabiNetFetchBytesResult {
     body: Vec<u8>,
 }
 
+/// Decoded `OP_BP_FETCH_POST_JSON_BYTES_START` request.
+///
+/// The shared payload ordering is deliberately fixed as
+/// `URL || bearer || JSON body`. The URL and bearer lengths are carried in the
+/// low and high 32 bits of `arg1`, respectively, and the non-empty remainder
+/// is the JSON body. Keeping the token between the two required fields makes
+/// an absent bearer unambiguous without putting credentials in metadata or
+/// logs.
+pub(crate) struct CabiNetPostJsonBytesVmRequest<'a> {
+    pub(crate) url: &'a str,
+    pub(crate) bearer: Option<&'a str>,
+    pub(crate) body: &'a str,
+}
+
+fn pack_post_json_bytes_vm_request(
+    url: &str,
+    body: &str,
+    bearer: Option<&str>,
+) -> Result<(Vec<u8>, u64), i32> {
+    if url.is_empty() || body.is_empty() {
+        return Err(FS_ERR_BAD_PARAM);
+    }
+    let bearer = bearer.unwrap_or("");
+    let url_len = u32::try_from(url.len()).map_err(|_| FS_ERR_TOO_LARGE)?;
+    let bearer_len = u32::try_from(bearer.len()).map_err(|_| FS_ERR_TOO_LARGE)?;
+    let total = url
+        .len()
+        .checked_add(bearer.len())
+        .and_then(|prefix| prefix.checked_add(body.len()))
+        .ok_or(FS_ERR_TOO_LARGE)?;
+    if total > trueos_vm::vmcall::PAYLOAD_CAP {
+        return Err(FS_ERR_TOO_LARGE);
+    }
+
+    let mut payload = Vec::new();
+    payload
+        .try_reserve_exact(total)
+        .map_err(|_| FS_ERR_NO_SPACE)?;
+    payload.extend_from_slice(url.as_bytes());
+    payload.extend_from_slice(bearer.as_bytes());
+    payload.extend_from_slice(body.as_bytes());
+    let packed_lengths = u64::from(url_len) | (u64::from(bearer_len) << 32);
+    Ok((payload, packed_lengths))
+}
+
+pub(crate) fn decode_post_json_bytes_vm_request(
+    payload: &[u8],
+    packed_lengths: u64,
+) -> Option<CabiNetPostJsonBytesVmRequest<'_>> {
+    if payload.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+        return None;
+    }
+    let url_len = packed_lengths as u32 as usize;
+    let bearer_len = (packed_lengths >> 32) as u32 as usize;
+    let body_offset = url_len.checked_add(bearer_len)?;
+    if url_len == 0 || body_offset >= payload.len() {
+        return None;
+    }
+
+    let url = core::str::from_utf8(&payload[..url_len]).ok()?;
+    let bearer_bytes = &payload[url_len..body_offset];
+    let bearer = if bearer_bytes.is_empty() {
+        None
+    } else {
+        Some(core::str::from_utf8(bearer_bytes).ok()?)
+    };
+    let body = core::str::from_utf8(&payload[body_offset..]).ok()?;
+    Some(CabiNetPostJsonBytesVmRequest { url, bearer, body })
+}
+
+fn pack_fetch_bytes_vm_read(offset: usize, want: usize) -> Option<u64> {
+    if want == 0 || want > trueos_vm::vmcall::PAYLOAD_CAP {
+        return None;
+    }
+    let offset = u32::try_from(offset).ok()?;
+    let want = u32::try_from(want).ok()?;
+    Some((u64::from(offset) << 32) | u64::from(want))
+}
+
+pub(crate) fn decode_fetch_bytes_vm_read(packed: u64) -> Option<(usize, usize)> {
+    let offset = (packed >> 32) as u32 as usize;
+    let want = packed as u32 as usize;
+    if want == 0 || want > trueos_vm::vmcall::PAYLOAD_CAP {
+        None
+    } else {
+        Some((offset, want))
+    }
+}
+
 fn monotonic_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
     embassy_time_driver::now().saturating_mul(1000) / hz
@@ -1426,6 +1515,30 @@ pub(crate) fn cabi_net_fetch_bytes_start_host(
     op_id
 }
 
+pub(crate) fn cabi_net_fetch_post_json_bytes_start_host(
+    url_s: &str,
+    body_s: &str,
+    bearer: Option<&str>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> u32 {
+    let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
+    CABI_NET_FETCH_BYTES_RESULTS
+        .lock()
+        .insert(op_id, CabiNetFetchBytesResult::default());
+    let cancellation = register_json_post_cancellation(op_id);
+    spawn_post_json_bytes(
+        op_id,
+        String::from(url_s),
+        String::from(body_s),
+        bearer.map(String::from),
+        timeout_ms.max(1),
+        max_bytes,
+        cancellation,
+    );
+    op_id
+}
+
 pub(crate) fn cabi_net_fetch_bytes_result_len_host(op_id: u32) -> isize {
     match CABI_NET_FETCH_BYTES_RESULTS.lock().get(&op_id) {
         Some(entry) => match entry.rc {
@@ -1487,6 +1600,117 @@ unsafe fn optional_abi_string(ptr: *const u8, len: usize) -> Option<String> {
     }
 }
 
+fn guest_vmcall_op_id(status: u32, value: u64) -> u32 {
+    if status != trueos_vm::vmcall::STATUS_OK || value == 0 || value > u64::from(u32::MAX) {
+        0
+    } else {
+        value as u32
+    }
+}
+
+fn cabi_net_fetch_bytes_start_guest(url: &str) -> u32 {
+    if url.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+        return 0;
+    }
+    let (status, value) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_FETCH_BYTES_START,
+        0,
+        0,
+        url.as_bytes(),
+        &mut [],
+    );
+    guest_vmcall_op_id(status, value)
+}
+
+fn cabi_net_fetch_post_json_bytes_start_guest(
+    url: &str,
+    body: &str,
+    bearer: Option<&str>,
+    timeout_ms: u32,
+) -> u32 {
+    let Ok((payload, packed_lengths)) = pack_post_json_bytes_vm_request(url, body, bearer) else {
+        return 0;
+    };
+    let (status, value) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_FETCH_POST_JSON_BYTES_START,
+        u64::from(timeout_ms),
+        packed_lengths,
+        payload.as_slice(),
+        &mut [],
+    );
+    guest_vmcall_op_id(status, value)
+}
+
+fn cabi_net_fetch_bytes_result_len_guest(op_id: u32) -> isize {
+    let (status, value) = trueos_vm::vmcall::call(
+        trueos_vm::vmcall::OP_BP_FETCH_BYTES_RESULT_LEN,
+        u64::from(op_id),
+        0,
+    );
+    if status == trueos_vm::vmcall::STATUS_OK {
+        (value as i64) as isize
+    } else {
+        FS_ERR_BAD_PARAM as isize
+    }
+}
+
+fn cabi_net_fetch_bytes_read_guest(op_id: u32, out: &mut [u8]) -> isize {
+    let mut copied = 0usize;
+    while copied < out.len() {
+        let want = core::cmp::min(
+            out.len().saturating_sub(copied),
+            trueos_vm::vmcall::PAYLOAD_CAP,
+        );
+        let Some(packed_read) = pack_fetch_bytes_vm_read(copied, want) else {
+            return FS_ERR_TOO_LARGE as isize;
+        };
+        let (status, value) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_FETCH_BYTES_READ,
+            u64::from(op_id),
+            packed_read,
+            &[],
+            &mut out[copied..copied + want],
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return FS_ERR_BAD_PARAM as isize;
+        }
+        let rc = (value as i64) as isize;
+        if rc < 0 {
+            return rc;
+        }
+        let count = rc as usize;
+        if count > want {
+            return FS_ERR_BAD_PARAM as isize;
+        }
+        copied = match copied.checked_add(count) {
+            Some(copied) => copied,
+            None => return FS_ERR_TOO_LARGE as isize,
+        };
+        if count < want {
+            break;
+        }
+    }
+    isize::try_from(copied).unwrap_or(FS_ERR_TOO_LARGE as isize)
+}
+
+fn cabi_net_fetch_bytes_discard_guest(op_id: u32) -> i32 {
+    let (status, value) = trueos_vm::vmcall::call(
+        trueos_vm::vmcall::OP_BP_FETCH_BYTES_DISCARD,
+        u64::from(op_id),
+        0,
+    );
+    if status == trueos_vm::vmcall::STATUS_OK {
+        (value as i64) as i32
+    } else {
+        FS_ERR_BAD_PARAM
+    }
+}
+
+fn guest_monotonic_ms() -> Option<u64> {
+    let (status, nanos) = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_MONOTONIC_NANOS, 0, 0);
+    (status == trueos_vm::vmcall::STATUS_OK).then_some(nanos / 1_000_000)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
     url_ptr: *const u8,
@@ -1511,7 +1735,11 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_bytes_start(
     let Some(url) = (unsafe { abi_str(url_ptr, url_len) }) else {
         return 0;
     };
-    cabi_net_fetch_bytes_start_host(url, 45_000, 8 * 1024 * 1024)
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        cabi_net_fetch_bytes_start_guest(url)
+    } else {
+        cabi_net_fetch_bytes_start_host(url, 45_000, 8 * 1024 * 1024)
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1616,21 +1844,22 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_bytes_start_with_timeou
         return 0;
     };
     let bearer = unsafe { optional_abi_string(bearer_ptr, bearer_len) };
-    let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
-    CABI_NET_FETCH_BYTES_RESULTS
-        .lock()
-        .insert(op_id, CabiNetFetchBytesResult::default());
-    let cancellation = register_json_post_cancellation(op_id);
-    spawn_post_json_bytes(
-        op_id,
-        String::from(url),
-        String::from(body),
-        bearer,
-        timeout_ms.max(1),
-        4 * 1024 * 1024,
-        cancellation,
-    );
-    op_id
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        cabi_net_fetch_post_json_bytes_start_guest(
+            url,
+            body,
+            bearer.as_deref(),
+            timeout_ms,
+        )
+    } else {
+        cabi_net_fetch_post_json_bytes_start_host(
+            url,
+            body,
+            bearer.as_deref(),
+            timeout_ms,
+            4 * 1024 * 1024,
+        )
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1645,7 +1874,11 @@ pub extern "C" fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_net_fetch_bytes_result_len(op_id: u32) -> isize {
-    cabi_net_fetch_bytes_result_len_host(op_id)
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        cabi_net_fetch_bytes_result_len_guest(op_id)
+    } else {
+        cabi_net_fetch_bytes_result_len_host(op_id)
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1655,21 +1888,49 @@ pub extern "C" fn trueos_cabi_net_fetch_bytes_read(
     out_cap: usize,
 ) -> isize {
     if out_ptr.is_null() || out_cap == 0 {
-        return cabi_net_fetch_bytes_result_len_host(op_id);
+        return trueos_cabi_net_fetch_bytes_result_len(op_id);
     }
     let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) };
-    cabi_net_fetch_bytes_read_chunk_host(op_id, 0, out)
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        cabi_net_fetch_bytes_read_guest(op_id, out)
+    } else {
+        cabi_net_fetch_bytes_read_chunk_host(op_id, 0, out)
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_net_fetch_bytes_discard(op_id: u32) -> i32 {
-    cabi_net_fetch_bytes_discard_host(op_id)
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        cabi_net_fetch_bytes_discard_guest(op_id)
+    } else {
+        cabi_net_fetch_bytes_discard_host(op_id)
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_net_fetch_bytes_wait(op_id: u32, timeout_ms: u64) -> i32 {
     if op_id == 0 {
         return FS_ERR_BAD_PARAM;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let Some(start) = guest_monotonic_ms() else {
+            return FS_ERR_BAD_PARAM;
+        };
+        loop {
+            let rc = cabi_net_fetch_bytes_result_len_guest(op_id);
+            if rc != FS_ERR_NOT_FOUND as isize {
+                return if rc < 0 { rc as i32 } else { 0 };
+            }
+            let Some(now) = guest_monotonic_ms() else {
+                return FS_ERR_BAD_PARAM;
+            };
+            if timeout_ms == 0 || now.saturating_sub(start) >= timeout_ms {
+                return FS_ERR_TIMEOUT;
+            }
+            // Yield the Hull lane to the host. `spin_step()` polls a host
+            // per-CPU executor and is never valid from this guest context.
+            trueos_vm::vmcall::sleep_ms(1);
+        }
     }
     let start = monotonic_ms();
     loop {

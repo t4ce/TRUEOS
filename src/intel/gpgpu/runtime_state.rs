@@ -38,6 +38,11 @@ static PARTICLE_CRAFT_GPU_VA_CURSOR: AtomicU64 =
 static PARTICLE_CRAFT_GPU_VA_FREE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static FONT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
+// The Font lane retains its private page-table topology and leaf mappings for
+// the lifetime of its GuC context.  This state is deliberately separate from
+// the system-service, execution, and UI4 page-table lifetimes.
+static FONT_RCS_PPGTT_RUNTIME: Mutex<FontRcsPpgttRuntime> =
+    Mutex::new(FontRcsPpgttRuntime::new());
 static EXECUTION_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static LFM25_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static UI4_COMPOSITOR_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);

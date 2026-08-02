@@ -8,7 +8,7 @@
 //! geometry upload. Native size, row grouping, and eventual color remain draw
 //! properties.
 
-use alloc::{string::String, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_time::Instant;
@@ -979,12 +979,119 @@ struct PreparedGpuFontCoverageEntry {
     estimated_segment_evaluations: u64,
 }
 
-/// One accepted, centered glyph whose warmed outline has already been
-/// transformed into its exact physical-raster contract.
+const GPU_FONT_RECIPE_POLICY_VERSION: u16 = 1;
+
+/// Canonical identity of one position-independent raster recipe.
 ///
-/// This is deliberately transient rather than resident cache state. Font
-/// producers may move it through their bounded service queue, and the coverage
-/// builder consumes it when allocating the request-local R8 mask.
+/// Destination position, color, layer, frame, and display plane are excluded:
+/// none of them changes the glyph's analytical coverage. The effective shear
+/// already contains the raster X/Y aspect, so equivalent scene contracts share
+/// one entry even when their logical viewport dimensions differ.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GpuFontGlyphRecipeKey {
+    font: GpuFontFace,
+    glyph_id: u32,
+    ppem_bits: u32,
+    effective_shear_bits: u32,
+    policy_version: u16,
+}
+
+impl GpuFontGlyphRecipeKey {
+    pub(crate) const fn font(self) -> GpuFontFace {
+        self.font
+    }
+
+    pub(crate) const fn glyph_id(self) -> u32 {
+        self.glyph_id
+    }
+
+    pub(crate) const fn fingerprint(self) -> u64 {
+        let mut value = 0xCBF2_9CE4_8422_2325u64;
+        value = (value ^ self.font.id() as u64).wrapping_mul(0x0000_0100_0000_01B3);
+        value = (value ^ self.glyph_id as u64).wrapping_mul(0x0000_0100_0000_01B3);
+        value = (value ^ self.ppem_bits as u64).wrapping_mul(0x0000_0100_0000_01B3);
+        value = (value ^ self.effective_shear_bits as u64)
+            .wrapping_mul(0x0000_0100_0000_01B3);
+        (value ^ self.policy_version as u64).wrapping_mul(0x0000_0100_0000_01B3)
+    }
+}
+
+/// Immutable glyph-local recipe shared by every post-warm producer.
+///
+/// Operations are already scaled, Y-oriented, sheared, and translated into
+/// the recipe's local R8 mask coordinates. A GPU coverage miss can therefore
+/// consume this exact stream without rebuilding absolute scene geometry.
+pub(crate) struct GpuFontGlyphRecipe {
+    key: GpuFontGlyphRecipeKey,
+    ops: Box<[[u32; 8]]>,
+    mask_width: u32,
+    mask_height: u32,
+    audit_rect: (i32, i32, i32, i32),
+    /// Offset from the glyph-local visual origin to the mask's upper-left.
+    mask_offset_px: [i32; 2],
+    visual_center_px: [f32; 2],
+    optical_bias_px: f32,
+    ppem: f32,
+    estimated_segment_evaluations: u64,
+}
+
+impl GpuFontGlyphRecipe {
+    pub(crate) const fn key(&self) -> GpuFontGlyphRecipeKey {
+        self.key
+    }
+
+    pub(crate) fn outline_ops(&self) -> &[[u32; 8]] {
+        &self.ops
+    }
+
+    pub(crate) const fn mask_extent(&self) -> (u32, u32) {
+        (self.mask_width, self.mask_height)
+    }
+
+    pub(crate) const fn optical_bias_px(&self) -> f32 {
+        self.optical_bias_px
+    }
+
+    pub(crate) const fn ppem(&self) -> f32 {
+        self.ppem
+    }
+
+    pub(crate) const fn estimated_segment_evaluations(&self) -> u64 {
+        self.estimated_segment_evaluations
+    }
+
+    pub(crate) fn ops_bytes(&self) -> usize {
+        self.ops
+            .len()
+            .saturating_mul(core::mem::size_of::<[u32; 8]>())
+    }
+
+    fn local_prepared_entry(&self, destination_xy: [i32; 2]) -> PreparedGpuFontCoverageEntry {
+        let mut ops = self.ops.to_vec();
+        translate_coverage_ops(
+            ops.as_mut_slice(),
+            destination_xy[0] as f32,
+            destination_xy[1] as f32,
+        );
+        let right = destination_xy[0].saturating_add_unsigned(self.mask_width);
+        let bottom = destination_xy[1].saturating_add_unsigned(self.mask_height);
+        PreparedGpuFontCoverageEntry {
+            ops,
+            rect: (destination_xy[0], destination_xy[1], right, bottom),
+            audit_rect: (
+                self.audit_rect.0.saturating_add(destination_xy[0]),
+                self.audit_rect.1.saturating_add(destination_xy[1]),
+                self.audit_rect.2.saturating_add(destination_xy[0]),
+                self.audit_rect.3.saturating_add(destination_xy[1]),
+            ),
+            optical_bias_px: self.optical_bias_px,
+            ppem: self.ppem,
+            estimated_segment_evaluations: self.estimated_segment_evaluations,
+        }
+    }
+}
+
+/// One request-local placement of a shared glyph recipe.
 pub(crate) struct GpuFontPreparedCenteredGlyph {
     scalar: char,
     font: GpuFontFace,
@@ -995,29 +1102,46 @@ pub(crate) struct GpuFontPreparedCenteredGlyph {
     viewport_height: u32,
     raster_width: u32,
     raster_height: u32,
-    prepared: PreparedGpuFontCoverageEntry,
+    destination_xy: [i32; 2],
+    recipe: Arc<GpuFontGlyphRecipe>,
 }
 
 impl GpuFontPreparedCenteredGlyph {
     pub(crate) const fn estimated_segment_evaluations(&self) -> u64 {
-        self.prepared.estimated_segment_evaluations
+        self.recipe.estimated_segment_evaluations
     }
 
     pub(crate) fn ops_bytes(&self) -> usize {
-        self.prepared
-            .ops
-            .len()
-            .saturating_mul(core::mem::size_of::<[u32; 8]>())
+        self.recipe.ops_bytes()
     }
 
     /// Heap bytes reserved by the transient outline vector, including spare
     /// capacity. Plan-pool admission uses this value so allocator growth cannot
     /// hide beyond the nominal serialized-op length.
     pub(crate) fn allocated_ops_bytes(&self) -> usize {
-        self.prepared
-            .ops
-            .capacity()
-            .saturating_mul(core::mem::size_of::<[u32; 8]>())
+        self.recipe.ops_bytes()
+    }
+
+    pub(crate) fn recipe(&self) -> &Arc<GpuFontGlyphRecipe> {
+        &self.recipe
+    }
+
+    pub(crate) const fn destination_xy(&self) -> [i32; 2] {
+        self.destination_xy
+    }
+
+    pub(crate) fn destination_rect(&self) -> crate::intel::gpgpu::GpgpuRect {
+        let (width, height) = self.recipe.mask_extent();
+        crate::intel::gpgpu::GpgpuRect::new(
+            self.destination_xy[0],
+            self.destination_xy[1],
+            width,
+            height,
+        )
+    }
+
+    fn into_positioned_entry(self) -> PreparedGpuFontCoverageEntry {
+        self.recipe.local_prepared_entry(self.destination_xy)
     }
 
     #[allow(clippy::too_many_arguments)]

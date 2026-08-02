@@ -3,13 +3,13 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
 use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::convert::Infallible;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::{Context, Poll};
-use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use hyper::body::{Body, Bytes, Frame, SizeHint};
 use hyper::io;
@@ -19,7 +19,7 @@ use v::vnet as api;
 
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, TlsTimeouts, register_tls_app_queues};
-use crate::r::net::{NetProfile, Queue};
+use crate::r::net::{NetProfile, Queue, VNet};
 
 pub(crate) const HTML_FETCH_WORKERS: usize = 10;
 const HTML_FETCH_IDLE_MS: u64 = 250;
@@ -636,15 +636,44 @@ impl Body for RequestBody {
     }
 }
 
+struct HttpWorkerTransport {
+    worker_id: u32,
+    net: Option<Arc<VNet>>,
+}
+
+impl HttpWorkerTransport {
+    fn new(worker_id: u32) -> Self {
+        Self {
+            worker_id,
+            net: None,
+        }
+    }
+
+    fn net(&mut self) -> Result<Arc<VNet>, HttpFetchError> {
+        if let Some(net) = self.net.as_ref() {
+            return Ok(net.clone());
+        }
+
+        let net = Arc::new(VNet::open_primary().ok_or(HttpFetchError::Connect)?);
+        crate::log!(
+            "html_shack: worker transport ready worker={} owner={} lifetime=worker\n",
+            self.worker_id,
+            net.owner()
+        );
+        self.net = Some(net.clone());
+        Ok(net)
+    }
+}
+
 struct HyperVnetIo {
-    net: crate::r::net::VNet,
+    net: Arc<VNet>,
     handle: api::NetHandle,
     rx: VecDeque<Vec<u8>>,
     closed: bool,
 }
 
 impl HyperVnetIo {
-    fn new(net: crate::r::net::VNet, handle: api::NetHandle) -> Self {
+    fn new(net: Arc<VNet>, handle: api::NetHandle) -> Self {
         Self {
             net,
             handle,
@@ -653,7 +682,7 @@ impl HyperVnetIo {
         }
     }
 
-    fn pop_into(&mut self, mut buf: ReadBufCursor<'_>) -> bool {
+    fn pop_into(&mut self, buf: &mut ReadBufCursor<'_>) -> bool {
         let Some(chunk) = self.rx.pop_front() else {
             return false;
         };
@@ -665,15 +694,32 @@ impl HyperVnetIo {
         }
         true
     }
+
+    fn request_close(&mut self) -> Result<(), ()> {
+        if self.closed {
+            return Ok(());
+        }
+        self.net.submit(api::Command::Close {
+            handle: self.handle,
+        })?;
+        self.closed = true;
+        Ok(())
+    }
+}
+
+impl Drop for HyperVnetIo {
+    fn drop(&mut self) {
+        let _ = self.request_close();
+    }
 }
 
 impl Read for HyperVnetIo {
     fn poll_read(
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
-        buf: ReadBufCursor<'_>,
+        mut buf: ReadBufCursor<'_>,
     ) -> Poll<Result<(), io::Error>> {
-        if self.pop_into(buf) {
+        if self.pop_into(&mut buf) {
             return Poll::Ready(Ok(()));
         }
         if self.closed {
@@ -684,7 +730,9 @@ impl Read for HyperVnetIo {
             match ev {
                 api::Event::TcpData { handle, data } if handle == self.handle => {
                     self.rx.push_back(Vec::from(data.as_slice()));
-                    return Poll::Pending;
+                    let copied = self.pop_into(&mut buf);
+                    debug_assert!(copied);
+                    return Poll::Ready(Ok(()));
                 }
                 api::Event::Closed { handle } if handle == self.handle => {
                     self.closed = true;
@@ -725,32 +773,10 @@ impl Write for HyperVnetIo {
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
     ) -> Poll<Result<(), io::Error>> {
-        let _ = self.net.submit(api::Command::Close {
-            handle: self.handle,
-        });
-        self.closed = true;
-        Poll::Ready(Ok(()))
-    }
-}
-
-#[embassy_executor::task(pool_size = 10)]
-async fn html_hyper_connection_task(
-    connection: hyper::client::conn::http1::Connection<HyperVnetIo, RequestBody>,
-) {
-    let mut connection = core::pin::pin!(connection);
-    loop {
-        let result = with_timeout_or_none(
-            core::future::poll_fn(|cx| core::future::Future::poll(connection.as_mut(), cx)),
-            1,
+        Poll::Ready(
+            self.request_close()
+                .map_err(|()| io::other("vnet tcp close")),
         )
-        .await;
-        let Some(result) = result else {
-            continue;
-        };
-        if let Err(err) = result {
-            crate::log!("html_shack: hyper connection ended err={:?}\n", err);
-        }
-        break;
     }
 }
 

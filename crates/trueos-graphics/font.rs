@@ -189,6 +189,17 @@ pub(crate) struct FontGpuOutline {
     pub(crate) ops: Vec<[u32; FONT_GPU_OUTLINE_OP_WORDS]>,
 }
 
+/// One canonical warmed glyph outline identified by the font's glyph ID.
+///
+/// Post-warm caches key derived raster work by `glyph_id`, rather than by the
+/// Unicode scalar which happened to select it. Several scalars may resolve to
+/// the same glyph and must not manufacture duplicate GPU-resident recipes.
+pub(crate) struct FontGpuGlyphOutline {
+    pub(crate) units_per_em: u16,
+    pub(crate) glyph_id: u32,
+    pub(crate) ops: Vec<[u32; FONT_GPU_OUTLINE_OP_WORDS]>,
+}
+
 pub(crate) fn default_gpu_outline() -> Result<FontGpuOutline, &'static str> {
     gpu_outline_for_text("font", FONT_TESSEL_SAMPLE_TEXT)
 }
@@ -220,6 +231,43 @@ pub(crate) fn gpu_outline_for_registered_text(
     text: &str,
 ) -> Result<FontGpuOutline, &'static str> {
     gpu_outline_for_registered_font(name, text).ok_or("font-not-registered")?
+}
+
+/// Resolve one scalar through an already-warm face and retain the result in a
+/// tiny face-local scalar map. This never warms or reparses outline tables.
+pub(crate) fn gpu_glyph_id_for_registered_scalar(
+    name: &'static str,
+    scalar: char,
+) -> Result<u32, &'static str> {
+    let font_record = registered_font(name).ok_or("font-not-registered")?;
+    font_record
+        .glyph_id_for_scalar(scalar)?
+        .map(GlyphId::to_u32)
+        .ok_or("glyph-unavailable")
+}
+
+/// Copy one canonical glyph from the size-independent warm outline store.
+/// Character mapping is deliberately separate so derived caches can probe by
+/// glyph ID before allocating or transforming another command stream.
+pub(crate) fn gpu_outline_for_registered_glyph(
+    name: &'static str,
+    glyph_id: u32,
+) -> Result<FontGpuGlyphOutline, &'static str> {
+    let font_record = registered_font(name).ok_or("font-not-registered")?;
+    let FontWarmEndState::Outline(outline) = font_record
+        .outline_endstate()
+        .ok_or("outline-cache-missing")?;
+    let glyph_id = GlyphId::new(glyph_id);
+    let mut ops = Vec::new();
+    outline.append_glyph_gpu_ops(glyph_id, 0.0, &mut ops);
+    if ops.is_empty() {
+        return Err("outline-empty");
+    }
+    Ok(FontGpuGlyphOutline {
+        units_per_em: font_record.units_per_em,
+        glyph_id: glyph_id.to_u32(),
+        ops,
+    })
 }
 
 fn gpu_outline_for_registered_font(
@@ -1323,6 +1371,9 @@ struct RegisteredFont {
     glyphs: u16,
     units_per_em: u16,
     endstates: Vec<FontWarmEndState>,
+    /// Demand-built scalar aliases for post-warm clients. The raw warm stage
+    /// remains unchanged; a face only learns mappings that consumers use.
+    glyph_ids: Mutex<Vec<(char, Option<u16>)>>,
 }
 
 impl RegisteredFont {
@@ -1342,7 +1393,37 @@ impl RegisteredFont {
             glyphs,
             units_per_em,
             endstates: Vec::with_capacity(1),
+            glyph_ids: Mutex::new(Vec::new()),
         }
+    }
+
+    fn glyph_id_for_scalar(&self, scalar: char) -> Result<Option<GlyphId>, &'static str> {
+        if let Some((_, glyph_id)) = self
+            .glyph_ids
+            .lock()
+            .iter()
+            .find(|(candidate, _)| *candidate == scalar)
+        {
+            return Ok(glyph_id.map(|glyph_id| GlyphId::new(u32::from(glyph_id))));
+        }
+
+        // Parsing a FontRef is a cold alias miss. Do it without holding the
+        // face-local lock so independent planner workers can resolve different
+        // scalars concurrently.
+        let font = FontRef::new(self.bytes.as_slice()).map_err(|_| "font-parse-failed")?;
+        let resolved = font
+            .charmap()
+            .map(scalar)
+            .and_then(|glyph_id| u16::try_from(glyph_id.to_u32()).ok());
+        let mut glyph_ids = self.glyph_ids.lock();
+        if let Some((_, glyph_id)) = glyph_ids
+            .iter()
+            .find(|(candidate, _)| *candidate == scalar)
+        {
+            return Ok(glyph_id.map(|glyph_id| GlyphId::new(u32::from(glyph_id))));
+        }
+        glyph_ids.push((scalar, resolved));
+        Ok(resolved.map(|glyph_id| GlyphId::new(u32::from(glyph_id))))
     }
 
     fn outline_endstate(&self) -> Option<&FontWarmEndState> {

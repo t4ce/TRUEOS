@@ -345,7 +345,7 @@ fn submit_font_fill_rect_2d(
 
     let prepared = direct_rcs_forcewake(dev)
         && direct_rcs_map_state(dev, state)
-        && direct_rcs_init_ppgtt(state)
+        && font_rcs_init_ppgtt_once(state)
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
         && direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, direct_scanout)
         && direct_rcs_encode_fill_rect_2d_batch(state, upload, params, dst.bytes);
@@ -513,7 +513,7 @@ fn submit_font_outline_coverage_runs_r8_2d(
     };
     let forcewake_ok = direct_rcs_forcewake(dev);
     let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let ppgtt_ok = mapped_ok && font_rcs_init_ppgtt_once(state);
     let kernel_ppgtt_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
     let ops_ppgtt_ok = kernel_ppgtt_ok
@@ -600,7 +600,7 @@ fn submit_glyph_mask_2d(
     };
     let forcewake_ok = direct_rcs_forcewake(dev);
     let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let ppgtt_ok = mapped_ok && font_rcs_init_ppgtt_once(state);
     let kernel_ppgtt_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
     let mask_ppgtt_ok = kernel_ppgtt_ok
@@ -651,7 +651,7 @@ fn submit_glyph_mask_layers_2d(
     };
     if !direct_rcs_forcewake(dev)
         || !direct_rcs_map_state(dev, state)
-        || !direct_rcs_init_ppgtt(state)
+        || !font_rcs_init_ppgtt_once(state)
         || !direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
         || !direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, direct_scanout)
     {
@@ -750,7 +750,7 @@ fn submit_font_instance_layers_2d(
     };
     if !direct_rcs_forcewake(dev)
         || !direct_rcs_map_state(dev, state)
-        || !direct_rcs_init_ppgtt(state)
+        || !font_rcs_init_ppgtt_once(state)
         || !direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
         || !direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, direct_scanout)
         || !direct_rcs_map_ppgtt_kernel(

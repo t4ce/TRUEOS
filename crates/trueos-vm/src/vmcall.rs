@@ -143,6 +143,12 @@ pub const OP_BP_SHELL2_FRONTEND_SUBMIT_INPUT_V1: u32 = 0x10F;
 pub const OP_BP_SHELL2_FRONTEND_DETACH_V1: u32 = 0x110;
 pub const OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE: u32 = 0x111;
 pub const OP_BP_SPIRIT_TEXT_PRESENT_SILENT: u32 = 0x112;
+/// Start a host-owned JSON POST returning bytes.
+///
+/// `arg0` is the timeout in milliseconds. `arg1` packs the URL length in the
+/// low 32 bits and bearer length in the high 32 bits. The request payload is
+/// exactly `URL || bearer || JSON body`; the body is the non-empty remainder.
+pub const OP_BP_FETCH_POST_JSON_BYTES_START: u32 = 0x113;
 pub const OP_NET_TCP_WRITE: u32 = 0x10;
 pub const OP_NET_TCP_READ: u32 = 0x11;
 pub const OP_BP_NET_OPEN: u32 = 0x20;
