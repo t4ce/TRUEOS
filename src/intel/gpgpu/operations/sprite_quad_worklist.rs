@@ -153,6 +153,41 @@ fn font_sprite_quad_worklist_request_descs(
     Some(total_descs)
 }
 
+/// Prepare every Font-owned immutable object needed by the cached sprite path.
+///
+/// Font Rush calls this while its blank cache-charge interval is active. The
+/// terminal wave therefore cannot be the first allocation/upload/map of the
+/// descriptor page or sprite kernel. No batch is submitted and no destination
+/// is touched here.
+pub(crate) fn prepare_font_sprite_quad_worklist_rgba8() -> bool {
+    let Some(desc_buffer) = font_sprite_quad_worklist_desc_buffer_once() else {
+        return false;
+    };
+    let _font_guard = FONT_RCS_SUBMIT_LOCK.lock();
+    if font_rcs_context_is_quarantined() {
+        return false;
+    }
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    let Some(upload) = upload_sprite_quad_worklist_rgba8_kernel() else {
+        return false;
+    };
+    let Some(state) = font_rcs_state_once(dev) else {
+        return false;
+    };
+    direct_rcs_forcewake(dev)
+        && direct_rcs_map_state(dev, state)
+        && font_rcs_init_ppgtt_once(state)
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            desc_buffer.gpu,
+            desc_buffer.phys,
+            desc_buffer.bytes,
+        )
+}
+
 /// Stamp one ordered set of immutable linear-RGBA tiles over an exact UI4
 /// destination through the Font GuC context.
 ///

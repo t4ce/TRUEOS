@@ -209,7 +209,10 @@ struct CachedPreparedGlyph {
 pub(crate) struct FontRushRgba8Cache {
     id: u64,
     atlases: [crate::intel::gpgpu::GpgpuOwnedFontRushRgba8Atlas; FONT_RUSH_RGBA8_CACHE_CLASSES],
+    reserved_batches: AtomicU32,
     ready_batches: AtomicU32,
+    poisoned: AtomicBool,
+    terminal_path_warm: AtomicBool,
     sealed: AtomicBool,
 }
 
@@ -250,23 +253,90 @@ impl FontRushRgba8Cache {
             .is_some_and(|bit| self.ready_batches.load(Ordering::Acquire) & bit != 0)
     }
 
-    fn mark_batch_ready(&self, class: u8, batch: u8) -> Result<(), FontKernelError> {
-        if self.sealed.load(Ordering::Acquire) {
-            return Err(FontKernelError::InvalidRequest("font-rush-cache-sealed"));
+    fn reserve_batch(&self, class: u8, batch: u8) -> Result<(), FontKernelError> {
+        let bit = Self::batch_bit(class, batch)
+            .ok_or(FontKernelError::InvalidRequest("font-rush-cache-batch"))?;
+        if self.sealed.load(Ordering::Acquire) || self.poisoned.load(Ordering::Acquire) {
+            return Err(FontKernelError::InvalidRequest("font-rush-cache-closed"));
+        }
+        if self.ready_batches.load(Ordering::Acquire) & bit != 0 {
+            return Err(FontKernelError::InvalidRequest("font-rush-cache-batch-ready"));
+        }
+        let mut reserved = self.reserved_batches.load(Ordering::Acquire);
+        loop {
+            if reserved & bit != 0 {
+                return Err(FontKernelError::InvalidRequest("font-rush-cache-batch-in-flight"));
+            }
+            match self.reserved_batches.compare_exchange_weak(
+                reserved,
+                reserved | bit,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(current) => reserved = current,
+            }
+        }
+        if self.sealed.load(Ordering::Acquire) || self.poisoned.load(Ordering::Acquire) {
+            self.reserved_batches.fetch_and(!bit, Ordering::AcqRel);
+            return Err(FontKernelError::InvalidRequest("font-rush-cache-closed"));
+        }
+        Ok(())
+    }
+
+    fn batch_reserved(&self, class: u8, batch: u8) -> bool {
+        Self::batch_bit(class, batch)
+            .is_some_and(|bit| self.reserved_batches.load(Ordering::Acquire) & bit != 0)
+    }
+
+    fn release_batch_reservation(&self, class: u8, batch: u8) {
+        if let Some(bit) = Self::batch_bit(class, batch) {
+            self.reserved_batches.fetch_and(!bit, Ordering::AcqRel);
+        }
+    }
+
+    fn commit_batch(&self, class: u8, batch: u8) -> Result<(), FontKernelError> {
+        if self.sealed.load(Ordering::Acquire) || self.poisoned.load(Ordering::Acquire) {
+            return Err(FontKernelError::InvalidRequest("font-rush-cache-closed"));
         }
         let bit = Self::batch_bit(class, batch)
             .ok_or(FontKernelError::InvalidRequest("font-rush-cache-batch"))?;
-        let previous = self.ready_batches.fetch_or(bit, Ordering::AcqRel);
-        if previous & bit != 0 {
-            return Err(FontKernelError::InvalidRequest("font-rush-cache-batch-duplicate"));
+        if self.reserved_batches.load(Ordering::Acquire) & bit == 0
+            || self.ready_batches.load(Ordering::Acquire) & bit != 0
+        {
+            return Err(FontKernelError::InvalidRequest("font-rush-cache-batch-state"));
         }
+        self.ready_batches.fetch_or(bit, Ordering::AcqRel);
+        self.reserved_batches.fetch_and(!bit, Ordering::AcqRel);
         Ok(())
+    }
+
+    fn fail_batch(&self, class: u8, batch: u8, error: FontKernelError) {
+        if matches!(error, FontKernelError::SubmittedIncomplete(_)) {
+            // An accepted GPU request may still address this atlas. Keep its
+            // reservation visible and close the complete cache permanently.
+            self.poisoned.store(true, Ordering::Release);
+        } else {
+            self.release_batch_reservation(class, batch);
+        }
+    }
+
+    fn mark_terminal_path_warm(&self) {
+        self.terminal_path_warm.store(true, Ordering::Release);
+    }
+
+    fn terminal_path_is_warm(&self) -> bool {
+        self.terminal_path_warm.load(Ordering::Acquire)
     }
 
     pub(crate) fn seal(&self) -> Result<(), FontKernelError> {
         let expected =
             (1u32 << (FONT_RUSH_RGBA8_CACHE_CLASSES * FONT_RUSH_RGBA8_CACHE_BATCHES_PER_CLASS)) - 1;
-        if self.ready_batches.load(Ordering::Acquire) != expected {
+        if self.ready_batches.load(Ordering::Acquire) != expected
+            || self.reserved_batches.load(Ordering::Acquire) != 0
+            || self.poisoned.load(Ordering::Acquire)
+            || !self.terminal_path_is_warm()
+        {
             return Err(FontKernelError::InvalidRequest("font-rush-cache-incomplete"));
         }
         self.sealed.store(true, Ordering::Release);
@@ -297,7 +367,10 @@ pub(crate) fn allocate_font_rush_rgba8_cache() -> Result<Arc<FontRushRgba8Cache>
     Ok(Arc::new(FontRushRgba8Cache {
         id,
         atlases: [atlas0, atlas1, atlas2, atlas3],
+        reserved_batches: AtomicU32::new(0),
         ready_batches: AtomicU32::new(0),
+        poisoned: AtomicBool::new(false),
+        terminal_path_warm: AtomicBool::new(false),
         sealed: AtomicBool::new(false),
     }))
 }
@@ -485,6 +558,11 @@ pub(crate) struct FontStampRequest {
 enum FrameStampInput {
     Request(FontStampRequest),
     Prepared(PreparedGlyphPlan),
+    FontRushClear {
+        color_rgba: u32,
+        raster_width: u32,
+        raster_height: u32,
+    },
     FontRushRgba8Blast {
         cache: Arc<FontRushRgba8Cache>,
         wave: u64,
@@ -498,7 +576,7 @@ impl FrameStampInput {
         match self {
             Self::Request(request) => request.fit,
             Self::Prepared(plan) => plan.fit(),
-            Self::FontRushRgba8Blast { .. } => FontStampFit::Canvas,
+            Self::FontRushClear { .. } | Self::FontRushRgba8Blast { .. } => FontStampFit::Canvas,
         }
     }
 
@@ -509,7 +587,12 @@ impl FrameStampInput {
                 .first()
                 .map(|layer| (layer.scene.raster_width, layer.scene.raster_height)),
             Self::Prepared(plan) => Some((plan.raster_width(), plan.raster_height())),
-            Self::FontRushRgba8Blast {
+            Self::FontRushClear {
+                raster_width,
+                raster_height,
+                ..
+            }
+            | Self::FontRushRgba8Blast {
                 raster_width,
                 raster_height,
                 ..
@@ -1147,12 +1230,16 @@ pub(crate) fn submit_prepared_font_rush_cache_charge(
             plan,
         ));
     }
+    if let Err(error) = cache.reserve_batch(class, batch) {
+        return Err(reject(error, plan));
+    }
 
     let ticket = next_ticket();
     let reply = Arc::new(Signal::new());
     let queued_ahead = {
         let mut queue = REQUESTS.lock();
         if queue.len() >= FONT_KERNEL_QUEUE_CAPACITY {
+            cache.release_batch_reservation(class, batch);
             return Err(reject(FontKernelError::QueueFull, plan));
         }
         let queued_ahead = queue.len();
@@ -1179,6 +1266,55 @@ pub(crate) fn submit_prepared_font_rush_cache_charge(
     })
 }
 
+/// Queue one Font-owned full-frame clear and return the exact scanout fence.
+///
+/// This is the blank transition between the title and the cache charge.  It
+/// deliberately carries no glyph plan: a visually empty frame must not pay
+/// Skrifa, tessellation, coverage, or shading work for a dummy character.
+pub(crate) fn submit_font_rush_frame_clear(
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    color_rgba: u32,
+) -> Result<PendingFontFrameStamp, FontKernelError> {
+    queue_frame_stamp(
+        FrameStampInput::FontRushClear {
+            color_rgba,
+            raster_width: destination.width,
+            raster_height: destination.height,
+        },
+        destination,
+        None,
+    )
+    .map_err(|rejection| rejection.error)
+}
+
+/// Clear one caller-owned frame, then scale/tint an immutable Font-owned RGBA8
+/// stamp into it through the proven Font sprite worklist.
+///
+/// The source allocation remains owned by the queued request until the exact
+/// destination release is proven. `clear_rgba == 0` gives the Font Rush
+/// showcase its transparent base without rebuilding Skrifa coverage for every
+/// presentation-size or color change.
+pub(crate) fn submit_font_rush_rgba8_sprite_frame(
+    source: Arc<FontStampedBuffer>,
+    descriptors: Vec<crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc>,
+    logical_glyphs: usize,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    clear_rgba: u32,
+) -> Result<PendingFontFrameStamp, FontKernelError> {
+    queue_frame_stamp(
+        FrameStampInput::FontRushRgba8Sprites {
+            source,
+            descriptors,
+            logical_glyphs,
+            raster_width: destination.width,
+            raster_height: destination.height,
+        },
+        destination,
+        Some(clear_rgba),
+    )
+    .map_err(|rejection| rejection.error)
+}
+
 /// Queue one terminal Font Rush wave using only sealed RGBA8 tiles.
 pub(crate) fn submit_font_rush_rgba8_cache_blast(
     cache: Arc<FontRushRgba8Cache>,
@@ -1201,15 +1337,127 @@ pub(crate) fn submit_font_rush_rgba8_cache_blast(
     .map_err(|rejection| rejection.error)
 }
 
+fn font_frame_gpu_ranges_overlap(
+    left: u64,
+    left_bytes: usize,
+    right: u64,
+    right_bytes: usize,
+) -> bool {
+    let Some(left_end) = left.checked_add(left_bytes as u64) else {
+        return true;
+    };
+    let Some(right_end) = right.checked_add(right_bytes as u64) else {
+        return true;
+    };
+    left < right_end && right < left_end
+}
+
+fn font_rush_rgba8_sprite_descriptor_is_valid(
+    descriptor: crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc,
+) -> bool {
+    const VALID_FLAGS: u32 = crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER
+        | crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC;
+    let coordinates = [
+        descriptor.c0_x,
+        descriptor.c0_y,
+        descriptor.c0_u,
+        descriptor.c0_v,
+        descriptor.c1_x,
+        descriptor.c1_y,
+        descriptor.c1_u,
+        descriptor.c1_v,
+        descriptor.c2_x,
+        descriptor.c2_y,
+        descriptor.c2_u,
+        descriptor.c2_v,
+        descriptor.c3_x,
+        descriptor.c3_y,
+        descriptor.c3_u,
+        descriptor.c3_v,
+    ];
+    if coordinates.iter().any(|coordinate| !coordinate.is_finite())
+        || descriptor.flags & !VALID_FLAGS != 0
+        || (descriptor.flags & crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC != 0
+            && descriptor.flags & crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER == 0)
+    {
+        return false;
+    }
+
+    let edge_x = [
+        descriptor.c1_x - descriptor.c0_x,
+        descriptor.c1_y - descriptor.c0_y,
+    ];
+    let edge_y = [
+        descriptor.c3_x - descriptor.c0_x,
+        descriptor.c3_y - descriptor.c0_y,
+    ];
+    let determinant = edge_x[0] * edge_y[1] - edge_x[1] * edge_y[0];
+    determinant.is_finite() && determinant.abs() >= 0.00001
+}
+
+fn font_rush_rgba8_sprite_frame_is_valid(
+    source: &FontStampedBuffer,
+    descriptors: &[crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc],
+    logical_glyphs: usize,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> bool {
+    let source = source.surface();
+    if logical_glyphs == 0
+        || logical_glyphs > FONT_STAMP_MAX_GLYPHS
+        || descriptors.is_empty()
+        || descriptors.len() > crate::intel::gpgpu::sprite_quad_worklist_max_descs()
+        || !source.is_valid()
+        || source.storage_order != crate::intel::gpgpu::GpgpuRgba8StorageOrder::Rgba
+        || !destination.is_valid()
+        || destination.storage_order != crate::intel::gpgpu::GpgpuRgba8StorageOrder::Rgba
+        || font_frame_gpu_ranges_overlap(
+            source.gpu,
+            source.bytes,
+            destination.gpu,
+            destination.bytes,
+        )
+        || font_frame_gpu_ranges_overlap(
+            source.phys,
+            source.bytes,
+            destination.phys,
+            destination.bytes,
+        )
+    {
+        return false;
+    }
+    descriptors
+        .iter()
+        .copied()
+        .all(font_rush_rgba8_sprite_descriptor_is_valid)
+}
+
 fn queue_frame_stamp(
     input: FrameStampInput,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
     clear_rgba: Option<u32>,
 ) -> Result<PendingFontFrameStamp, FrameStampQueueRejection> {
     let extent = input.raster_extent();
+    let input_is_valid = match &input {
+        FrameStampInput::FontRushRgba8Sprites {
+            source,
+            descriptors,
+            logical_glyphs,
+            ..
+        } => {
+            clear_rgba.is_some()
+                && font_rush_rgba8_sprite_frame_is_valid(
+                    source,
+                    descriptors.as_slice(),
+                    *logical_glyphs,
+                    destination,
+                )
+        }
+        _ => true,
+    };
     if input.fit() != FontStampFit::Canvas
         || !destination.is_valid()
         || extent != Some((destination.width, destination.height))
+        || !input_is_valid
     {
         return Err(FrameStampQueueRejection {
             error: FontKernelError::InvalidRequest("font-frame-stamp-destination"),
@@ -1987,6 +2235,37 @@ fn materialize_cached_font_gpu_glyphs(
     Ok((submits, active_walkers))
 }
 
+fn font_rush_cache_plan_cells_are_contained(
+    prepared: &[GpuFontPreparedCenteredGlyph],
+    batch: u8,
+) -> bool {
+    if prepared.len() != FONT_RUSH_RGBA8_CACHE_GLYPHS_PER_BATCH
+        || usize::from(batch) >= FONT_RUSH_RGBA8_CACHE_BATCHES_PER_CLASS
+    {
+        return false;
+    }
+    let first_entry = usize::from(batch) * FONT_RUSH_RGBA8_CACHE_GLYPHS_PER_BATCH;
+    prepared.iter().enumerate().all(|(local, glyph)| {
+        let entry = first_entry + local;
+        let column = entry % FONT_RUSH_RGBA8_CACHE_COLUMNS as usize;
+        let row = entry / FONT_RUSH_RGBA8_CACHE_COLUMNS as usize;
+        let cell_left = (column as i64) * i64::from(FONT_RUSH_RGBA8_CACHE_TILE_PX);
+        let cell_top = (row as i64) * i64::from(FONT_RUSH_RGBA8_CACHE_TILE_PX);
+        let cell_right = cell_left + i64::from(FONT_RUSH_RGBA8_CACHE_TILE_PX);
+        let cell_bottom = cell_top + i64::from(FONT_RUSH_RGBA8_CACHE_TILE_PX);
+        let rect = glyph.destination_rect();
+        let left = i64::from(rect.x);
+        let top = i64::from(rect.y);
+        let right = left + i64::from(rect.width);
+        let bottom = top + i64::from(rect.height);
+        !rect.is_empty()
+            && left >= cell_left
+            && top >= cell_top
+            && right <= cell_right
+            && bottom <= cell_bottom
+    })
+}
+
 fn process_font_rush_cache_charge(
     ticket: FontKernelTicket,
     plan: PreparedGlyphPlan,
@@ -1997,8 +2276,17 @@ fn process_font_rush_cache_charge(
 ) -> Result<FontRushCacheCharge, FontKernelError> {
     let service_started_ms = Instant::now().as_millis();
     ensure_font_rcs_lane_available()?;
-    if cache.is_sealed() || cache.batch_ready(class, batch) {
+    if cache.is_sealed()
+        || cache.batch_ready(class, batch)
+        || !cache.batch_reserved(class, batch)
+    {
         return Err(FontKernelError::InvalidRequest("font-rush-cache-charge-state"));
+    }
+    if !cache.terminal_path_is_warm() {
+        if !crate::intel::gpgpu::prepare_font_sprite_quad_worklist_rgba8() {
+            return Err(FontKernelError::Unavailable("font-rush-cache-terminal-warm"));
+        }
+        cache.mark_terminal_path_warm();
     }
     let destination = cache
         .atlas_surface(class)
@@ -2014,6 +2302,11 @@ fn process_font_rush_cache_charge(
     let glyphs = plan.glyph_count();
     let foreground = plan.foreground();
     let prepared = plan.into_prepared();
+    if !font_rush_cache_plan_cells_are_contained(prepared.as_slice(), batch) {
+        return Err(FontKernelError::InvalidRequest(
+            "font-rush-cache-cell-containment",
+        ));
+    }
     let classification = classify_gpu_font_prepared_placements(prepared.as_slice());
     if classification.requires_union_coverage()
         || classification.unique_indices().len() != FONT_RUSH_RGBA8_CACHE_GLYPHS_PER_BATCH
@@ -2027,7 +2320,7 @@ fn process_font_rush_cache_charge(
     set_active_stage(ticket, "font-rush-cache-rgba8-materialize");
     let (submits, active_walkers) =
         materialize_cached_font_gpu_glyphs(cached.as_slice(), foreground, destination)?;
-    cache.mark_batch_ready(class, batch)?;
+    cache.commit_batch(class, batch)?;
     let completed_ms = Instant::now().as_millis();
     crate::log_info!(
         target: "render";
@@ -2074,6 +2367,13 @@ fn font_rush_cache_mix(mut value: u64) -> u64 {
     value ^ (value >> 31)
 }
 
+fn font_rush_cache_bounded_offset(seed: u64, extent: u32) -> u32 {
+    if extent == 0 {
+        return 0;
+    }
+    ((u128::from(seed) * u128::from(extent)) >> 64) as u32
+}
+
 fn font_rush_cache_sprite_descriptor(
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
     class: usize,
@@ -2081,13 +2381,18 @@ fn font_rush_cache_sprite_descriptor(
     anchor: usize,
     wave: u64,
 ) -> crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
-    let seed = font_rush_cache_mix(
+    let placement_seed = font_rush_cache_mix(
         wave.wrapping_mul(0x9E37_79B9_7F4A_7C15)
             ^ ((worker as u64) << 17)
-            ^ ((anchor as u64) << 9)
             ^ class as u64,
     );
-    let entry = (seed as usize) % FONT_RUSH_RGBA8_CACHE_GLYPHS_PER_CLASS;
+    let source_seed = font_rush_cache_mix(
+        placement_seed
+            ^ (anchor as u64)
+                .wrapping_add(1)
+                .wrapping_mul(0xD6E8_FEB8_6659_FD93),
+    );
+    let entry = (source_seed as usize) % FONT_RUSH_RGBA8_CACHE_GLYPHS_PER_CLASS;
     let source_x =
         (entry % FONT_RUSH_RGBA8_CACHE_COLUMNS as usize) as u32 * FONT_RUSH_RGBA8_CACHE_TILE_PX;
     let source_y =
@@ -2101,18 +2406,41 @@ fn font_rush_cache_sprite_descriptor(
 
     let column = worker % 8;
     let row = worker / 8;
-    let region_width = destination.width as f32 / 8.0;
-    let region_height = destination.height as f32 / 4.0;
-    let jitter_x = (((seed >> 16) & 0xFF) as f32 / 255.0 - 0.5) * region_width * 0.22;
-    let jitter_y = (((seed >> 24) & 0xFF) as f32 / 255.0 - 0.5) * region_height * 0.22;
-    let anchor_offset = if anchor == 0 { -0.08 } else { 0.08 } * region_width;
-    let center_x = (column as f32 + 0.5) * region_width + jitter_x + anchor_offset;
-    let center_y = (row as f32 + 0.5) * region_height + jitter_y;
-    let half = FONT_RUSH_RGBA8_CACHE_TILE_PX as f32 * 0.5;
-    let left = center_x - half;
-    let top = center_y - half;
-    let right = center_x + half;
-    let bottom = center_y + half;
+    let region_x0 = (u64::from(destination.width) * column as u64 / 8) as i32;
+    let region_x1 = (u64::from(destination.width) * (column + 1) as u64 / 8) as i32;
+    let region_y0 = (u64::from(destination.height) * row as u64 / 4) as i32;
+    let region_y1 = (u64::from(destination.height) * (row + 1) as u64 / 4) as i32;
+    let region_width = region_x1.saturating_sub(region_x0) as u32;
+    let region_height = region_y1.saturating_sub(region_y0) as u32;
+    // A worker owns one 8x4 region, but its cached glyphs may spill across the
+    // region edge on this intentionally exotic single-plane stage.  Sample
+    // the complete region instead of jittering around its center: small glyph
+    // faces then explore the same full placement area as large faces. Anchor
+    // one is a half-region torus shift from anchor zero, guaranteeing useful
+    // separation without excluding any position over later waves.
+    let base_x = font_rush_cache_bounded_offset(
+        font_rush_cache_mix(placement_seed ^ 0xA076_1D64_78BD_642F),
+        region_width,
+    );
+    let base_y = font_rush_cache_bounded_offset(
+        font_rush_cache_mix(placement_seed ^ 0xE703_7ED1_A0B4_28DB),
+        region_height,
+    );
+    let offset_x = if anchor == 0 {
+        base_x
+    } else {
+        (base_x + region_width.div_ceil(2)) % region_width.max(1)
+    };
+    let offset_y = if anchor == 0 {
+        base_y
+    } else {
+        (base_y + region_height.div_ceil(2)) % region_height.max(1)
+    };
+    let half = (FONT_RUSH_RGBA8_CACHE_TILE_PX / 2) as i32;
+    let left = region_x0.saturating_add(offset_x as i32).saturating_sub(half) as f32;
+    let top = region_y0.saturating_add(offset_y as i32).saturating_sub(half) as f32;
+    let right = left + FONT_RUSH_RGBA8_CACHE_TILE_PX as f32;
+    let bottom = top + FONT_RUSH_RGBA8_CACHE_TILE_PX as f32;
     crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
         c0_x: left,
         c0_y: top,
@@ -2134,6 +2462,83 @@ fn font_rush_cache_sprite_descriptor(
         flags: crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER
             | crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
     }
+}
+
+fn process_font_rush_frame_clear(
+    ticket: FontKernelTicket,
+    color_rgba: u32,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    enqueued_ms: u64,
+) -> Result<FontFrameStamp, FontKernelError> {
+    let service_started_ms = Instant::now().as_millis();
+    ensure_font_rcs_lane_available()?;
+    if !destination.is_valid() {
+        return Err(FontKernelError::InvalidRequest("font-rush-clear-destination"));
+    }
+
+    set_active_stage(ticket, "font-rush-blank-clear");
+    let clear_started_ms = Instant::now().as_millis();
+    let cleared = crate::intel::gpgpu::font_fill_solid_rect_rgba8_scanout_result(
+        destination,
+        crate::intel::gpgpu::GpgpuSolidRect {
+            rect: destination.bounds(),
+            color_rgba,
+        },
+    );
+    validate_frame_clear_outcome(cleared.outcome)?;
+    let clear_ms = Instant::now().as_millis().saturating_sub(clear_started_ms);
+
+    // The clear has already changed the leased frame.  If the release packet
+    // cannot be proven, report an irreversible completion so UI4 retains the
+    // exact write lease rather than recycling a possibly live destination.
+    set_active_stage(ticket, "font-rush-blank-release");
+    let finalized = crate::intel::gpgpu::font_release_rgba8_surface_for_scanout(destination);
+    if !finalized.ok {
+        return Err(FontKernelError::SubmittedIncomplete(
+            "font-rush-clear-release-incomplete",
+        ));
+    }
+    let release = finalized.release.ok_or(FontKernelError::SubmittedIncomplete(
+        "font-rush-clear-release-missing",
+    ))?;
+    let completed_ms = Instant::now().as_millis();
+    crate::log_info!(
+        target: "render";
+        "font-kernel-service: font-rush blank complete ticket={} clear=0x{:08X} extent={}x{} clear_submits={} release_submits={} release={} pre_service_ms={} clear_ms={} service_ms={} planning=0 skrifa=0 tessellation=0 coverage=0 shading=0\n",
+        ticket.raw(),
+        color_rgba,
+        destination.width,
+        destination.height,
+        cleared.stats.submits,
+        usize::from(finalized.submitted),
+        release.sequence(),
+        service_started_ms.saturating_sub(enqueued_ms),
+        clear_ms,
+        completed_ms.saturating_sub(service_started_ms),
+    );
+    Ok(FontFrameStamp {
+        ticket,
+        glyphs: 0,
+        submits: usize::from(finalized.submitted),
+        clear_submits: cleared.stats.submits,
+        active_walkers: cleared.stats.walkers,
+        pre_service_ms: service_started_ms.saturating_sub(enqueued_ms),
+        clear_ms,
+        prepare_coverage_ms: 0,
+        coverage_build_ms: 0,
+        coverage_audit_ms: 0,
+        coverage_submits: 0,
+        gpu_outline_cache_hits: 0,
+        gpu_outline_cache_misses: 0,
+        gpu_tile_cache_hits: 0,
+        gpu_tile_cache_misses: 0,
+        gpu_cache_evictions: 0,
+        gpu_resident_outlines: 0,
+        gpu_resident_tiles: 0,
+        instance_release_ms: completed_ms.saturating_sub(clear_started_ms),
+        total_service_ms: completed_ms.saturating_sub(service_started_ms),
+        release,
+    })
 }
 
 fn process_font_rush_rgba8_cache_blast(
@@ -2257,6 +2662,14 @@ fn process_frame_stamp(
     enqueued_ms: u64,
 ) -> Result<FontFrameStamp, FontKernelError> {
     let input = match input {
+        FrameStampInput::FontRushClear { color_rgba, .. } => {
+            return process_font_rush_frame_clear(
+                ticket,
+                color_rgba,
+                destination,
+                enqueued_ms,
+            );
+        }
         FrameStampInput::FontRushRgba8Blast { cache, wave, .. } => {
             return process_font_rush_rgba8_cache_blast(
                 ticket,
@@ -2338,8 +2751,8 @@ fn process_frame_stamp(
                 FontGpuFrameCacheStats::default(),
             )
         }
-        FrameStampInput::FontRushRgba8Blast { .. } => {
-            unreachable!("font-rush cache blast was dispatched before coverage preparation")
+        FrameStampInput::FontRushClear { .. } | FrameStampInput::FontRushRgba8Blast { .. } => {
+            unreachable!("font-rush special frame was dispatched before coverage preparation")
         }
     };
     let prepare_coverage_ms = Instant::now()
@@ -2671,6 +3084,7 @@ fn process_queued_request(request: QueuedFontRequest) {
                 enqueued_ms,
             );
             if let Err(error) = &result {
+                cache.fail_batch(class, batch, *error);
                 log_failure(ticket, "font-rush-cache-charge", error);
             }
             complete_status(ticket, false, result.is_ok());
