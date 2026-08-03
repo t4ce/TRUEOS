@@ -112,21 +112,15 @@ submodule/gitlink, or replaced ISO breaks the chain. Release assets also include
 `.trueos-sig.json` Ed25519 signatures and `TRUEOS-release-public-key.json`.
 
 
-### C Tools
+### Tools
 ```
-sudo apt update && sudo apt upgrade
-sudo apt install graphviz npm git gh make rustup autoconf automake mtools nasm xorriso qemu-system gdb build-essential konsole
+sudo apt install git make 7zip nodejs libigc2-tools rustup npm autoconf automake mtools nasm xorriso
+rustup toolchain install nightly-2026-07-10
+
+vs-code
+npm install express
 ```
 
-### Rust Tools 
-```
-cargo install fmt cargo-outdated cargo-edit --locked
-rustup component add clippy
-rustup toolchain install nightly-2026-07-10 --profile minimal --component rust-src --component rustfmt --component rust-analyzer --component clippy --component llvm-tools-preview
-cargo install cargo-edit --locked
-cargo install cargo-depgraph
-
-```
 ## on MAC
 > [!TIP]
 > We were able to build, with a MAC Laptop aswell.
