@@ -15,46 +15,36 @@ The SDK and bundled runtime retain their separate terms; see
 
 ## Build and run
 
-The host must already be eligible for a GitHub Copilot plan. `remoteai` can use
-the active `gh` account directly. If that account is not picked up, run the
-bundled runtime's device flow without installing another CLI:
-
-```sh
-cargo run --release -- login
-```
-
-Then build and serve:
+Build and run one command from the repo:
 
 ```sh
 cd tools/remoteai
 cargo build --release
-export REMOTEAI_BIND=127.0.0.1:3042
-export REMOTEAI_BEARER_TOKEN='replace-with-a-long-random-secret'
-./target/x86_64-unknown-linux-gnu/release/remoteai serve
+./target/x86_64-unknown-linux-gnu/release/remoteai
 ```
+`cargo run --release` also uses the same flow.
 
 For TRUEOS LAN testing, bind the host's private address (for this machine,
-`192.168.178.111:3042`). This path is plaintext HTTP and is deliberately
-test-only: keep it on a trusted LAN and use a unique bearer token. HTTPS
-remains Dobby's default.
+`192.168.178.111:3042`) and host the HTTP facade on this LAN.
+This path is plaintext HTTP and is deliberately test-only.
 
 The tracked [Dobby template](examples/dobby-config.remoteai.json) can be
-uploaded as `apps/dobby/config.json` after replacing its bearer placeholder.
+uploaded as `apps/dobby/config.json` and uses the local `192.168.178.111:3042`
+endpoint by default. Leave `api_key` empty for local private HTTP usage.
+
 The real Dobby config is ignored by git.
 
 ## User service
 
-Install the binary and service template, then let the Rust binary create a
-fresh untracked bearer secret without printing it:
+Install the binary and service template; each start prints:
 
 ```sh
 install -d -m700 ~/.local/state/remoteai
 install -Dm755 target/x86_64-unknown-linux-gnu/release/remoteai ~/.local/bin/remoteai
 install -Dm644 systemd/remoteai.service ~/.config/systemd/user/remoteai.service
-REMOTEAI_BIND=192.168.178.111:3042 ~/.local/bin/remoteai init
 systemctl --user daemon-reload
 systemctl --user enable --now remoteai.service
-loginctl enable-linger "$USER"
+systemctl --user status --no-pager remoteai.service
 ```
 
 The linger setting keeps the user service running across logout and starts it
@@ -72,20 +62,15 @@ Build and publish the Dobby Blueprint from the Blueprint repository with
 `cargo bp dobby`. On TRUEOS, invoke it with `online dobby` or `§§dobby`; the
 VMX minishell is supplied automatically.
 
-Copy only the generated `REMOTEAI_BEARER_TOKEN` value into Dobby's `api_key`.
-Do not put a GitHub token in the Dobby file; it stays on the Linux host only.
-`init` refuses to overwrite an existing environment file.
-
 GitHub Copilot Free supports only automatic model selection, so leave
-`REMOTEAI_MODEL=auto`. The five-second autonomous mode consumes GitHub AI
-credits continuously; it is intended for bounded bring-up tests rather than an
-unlimited background loop.
+`model=auto`. The five-second autonomous mode consumes GitHub AI credits continuously;
+it is intended for bounded bring-up tests rather than an unlimited background loop.
 
 ## HTTP contract
 
 - `GET /healthz` is unauthenticated and returns service liveness.
-- `GET /v1/models` requires the bearer token.
-- `POST /v1/chat/completions` requires the bearer token and non-streaming JSON.
+- `GET /v1/models` is available on LAN and requires no token in anonymous mode.
+- `POST /v1/chat/completions` is available on LAN and accepts non-streaming JSON.
 
 Message `content` may be a string or an OpenAI-style content-parts array. Text
 parts and at most two `image_url` parts are accepted. Images must be inline

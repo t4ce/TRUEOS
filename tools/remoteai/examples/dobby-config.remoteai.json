@@ -1,9 +1,8 @@
 {
-  "api_key": "REPLACE_WITH_THE_SAME_REMOTEAI_BEARER_TOKEN",
+  "api_key": "",
   "endpoint": "http://192.168.178.111:3042/v1/chat/completions",
   "model": "auto",
   "reasoning_effort": null,
   "loop_interval_ms": 5000,
   "allow_insecure_http": true
 }
-

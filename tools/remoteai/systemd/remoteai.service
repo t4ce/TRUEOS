@@ -5,8 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=%h/.config/remoteai/remoteai.env
-ExecStart=%h/.local/bin/remoteai serve
+ExecStart=%h/.local/bin/remoteai
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=40
@@ -14,7 +13,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.local/state/remoteai
+ReadWritePaths=%h/.local/bin %h/.local/state/remoteai
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]
