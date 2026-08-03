@@ -840,12 +840,6 @@ unsafe extern "C" {
         queue: u64,
         out_point: *mut crate::vgpu::TimelinePoint,
     ) -> i32;
-    pub fn trueos_cabi_vgpu_submit_scene_aabb(
-        device: u64,
-        queue: u64,
-        dispatch: *const crate::vgpu::SceneAabbDispatch,
-        out_result: *mut crate::vgpu::SceneAabbResult,
-    ) -> i32;
     pub fn trueos_cabi_vgpu_timeline(
         device: u64,
         queue: u64,

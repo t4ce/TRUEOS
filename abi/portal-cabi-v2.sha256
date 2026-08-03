@@ -8,8 +8,10 @@
 # calls plus async filesystem write, mkdir, stat, and directory-list calls are
 # strictly additive v2 extensions; older v2 artifacts do not import them and
 # remain compatible. The vGPU vVideoMem create/cache-maintenance operations
-# and fixed SceneDB AABB dispatch are likewise strictly additive. The vGPU
-# diagnostics record reports zero-copy counters and opaque mapping proof data.
+# remain additive. The unsupported SceneDB AABB dispatch was intentionally
+# removed from both kernel and Blueprint surfaces; artifacts importing it are
+# rejected. The vGPU diagnostics record reports zero-copy counters and opaque
+# mapping proof data.
 # The UI4 retained-sprite upload, GPU-cleared sprite-frame begin, and ordered
 # sprite-quad submission calls are strictly additive; existing v2 artifacts do
 # not import them and retain their previous frame-write behavior.
@@ -80,4 +82,4 @@
 # strictly additive and restricted to the Dobby Blueprint owner. They lend the
 # existing Spirit/Lilly input pair through bounded serialized operations; older
 # v2 artifacts import none of these symbols and retain their prior authority.
-6bddb799bcf80d674ad760f7d63ffd5ac0a0d3d2e3388e7e318f2f2598676691
+da003c646ec1b2691438ec91054f90fe15a32ea3f96654ae8b9de547a72e74bf

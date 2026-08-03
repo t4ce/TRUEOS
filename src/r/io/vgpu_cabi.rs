@@ -662,16 +662,6 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_submit_control_nop(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_vgpu_submit_scene_aabb(
-    _device: u64,
-    _queue: u64,
-    _dispatch: *const v::vgpu::SceneAabbDispatch,
-    _out_result: *mut v::vgpu::SceneAabbResult,
-) -> i32 {
-    -95
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_vgpu_timeline(
     device: u64,
     queue: u64,

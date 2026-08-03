@@ -145,26 +145,6 @@ pub struct BufferSlice {
     pub bytes: u64,
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq)]
-#[repr(C)]
-pub struct SceneAabbDispatch {
-    pub bounds: [BufferSlice; 6],
-    pub liveness: BufferSlice,
-    pub output: BufferSlice,
-    pub rows: u32,
-    pub reserved: u32,
-    pub query_min: [f32; 4],
-    pub query_max: [f32; 4],
-}
-
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-#[repr(C)]
-pub struct SceneAabbResult {
-    pub point: TimelinePoint,
-    pub hits: u32,
-    pub reserved: u32,
-}
-
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[repr(C)]
 pub struct TimelinePoint {
@@ -520,8 +500,6 @@ mod tests {
         assert_eq!(core::mem::size_of::<DeviceDiagnostics>(), 32);
         assert_eq!(core::mem::size_of::<BufferInfo>(), 16);
         assert_eq!(core::mem::size_of::<BufferSlice>(), 24);
-        assert_eq!(core::mem::size_of::<SceneAabbDispatch>(), 232);
-        assert_eq!(core::mem::size_of::<SceneAabbResult>(), 24);
         assert_eq!(core::mem::size_of::<TimelinePoint>(), 16);
         assert_eq!(core::mem::size_of::<TimelineStatus>(), 32);
     }

@@ -150,6 +150,12 @@ pub(crate) enum PhysicalGpuFault {
     },
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PhysicalBufferSlice {
+    pub(crate) gpu: u64,
+    pub(crate) bytes: usize,
+}
+
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PhysicalSchedulerStatus {
     pub(crate) context_capacity: usize,
