@@ -215,8 +215,18 @@ def translate_body(source: str) -> str:
     significant = _significant(tokens)
     parens = _matching_parens(tokens, significant)
     function_names, definition_openings = _function_sites(tokens, significant, parens)
-    if "mainImage" not in function_names:
+    main_image_definitions = sum(
+        1
+        for opening in definition_openings
+        if tokens[significant[opening - 1]].text == "mainImage"
+    )
+    if main_image_definitions == 0:
         raise AdapterError("mainImage must be a top-level function definition")
+    if main_image_definitions != 1:
+        raise AdapterError(
+            f"found {main_image_definitions} top-level mainImage definitions; "
+            "replace the existing editor source before pasting a new shader"
+        )
 
     before: dict[int, list[str]] = {}
     after: dict[int, list[str]] = {}

@@ -137,6 +137,7 @@ typedef struct {
 typedef struct {
     Display *display;
     Window window;
+    Pixmap backbuffer;
     GC gc;
     XFontStruct *font;
     XImage *preview_image;
@@ -150,6 +151,7 @@ typedef struct {
     unsigned long foreground;
     unsigned long muted;
     unsigned long accent;
+    unsigned long selection;
     unsigned long error;
 
     char *source;
@@ -253,6 +255,85 @@ static void replace_selection(App *app, const char *text, size_t length) {
     app->selection_anchor = app->cursor;
     app->selection_end = app->cursor;
     app->dirty = 1;
+}
+
+static char *normalize_pasted_text(App *app, const unsigned char *text,
+                                   size_t length, size_t *normalized_length) {
+    char *normalized = malloc(MAX_SHADER_BYTES + 1);
+    if (normalized == NULL) {
+        set_status(app, "Out of host memory while normalizing clipboard text");
+        return NULL;
+    }
+    size_t begin;
+    size_t end;
+    selection_bounds(app, &begin, &end);
+    (void)end;
+    size_t column = begin - line_start(app, begin);
+    size_t output = 0;
+
+#define APPEND_PASTED_BYTE(value) \
+    do { \
+        if (output >= MAX_SHADER_BYTES) { \
+            free(normalized); \
+            set_status(app, "Normalized clipboard text exceeds the 1 MiB source limit"); \
+            return NULL; \
+        } \
+        normalized[output++] = (char)(value); \
+    } while (0)
+
+    for (size_t input = 0; input < length; ++input) {
+        unsigned char byte = text[input];
+        if (byte == '\r') {
+            if (input + 1 < length && text[input + 1] == '\n') {
+                ++input;
+            }
+            APPEND_PASTED_BYTE('\n');
+            column = 0;
+            continue;
+        }
+        if (byte == '\n') {
+            APPEND_PASTED_BYTE('\n');
+            column = 0;
+            continue;
+        }
+        if (byte == '\t') {
+            size_t spaces = 4 - column % 4;
+            for (size_t index = 0; index < spaces; ++index) {
+                APPEND_PASTED_BYTE(' ');
+            }
+            column += spaces;
+            continue;
+        }
+        /* UTF-8 NBSP is visually whitespace but is not GLSL whitespace. */
+        if (byte == 0xC2 && input + 1 < length && text[input + 1] == 0xA0) {
+            APPEND_PASTED_BYTE(' ');
+            ++input;
+            ++column;
+            continue;
+        }
+        /* Remove BOM and common zero-width formatting marks from web copies. */
+        if (byte == 0xEF && input + 2 < length
+            && text[input + 1] == 0xBB && text[input + 2] == 0xBF) {
+            input += 2;
+            continue;
+        }
+        if (byte == 0xE2 && input + 2 < length && text[input + 1] == 0x80
+            && text[input + 2] >= 0x8B && text[input + 2] <= 0x8D) {
+            input += 2;
+            continue;
+        }
+        if (byte < 0x20 || byte == 0x7F) {
+            continue;
+        }
+        APPEND_PASTED_BYTE(byte);
+        if ((byte & 0xC0) != 0x80) {
+            ++column;
+        }
+    }
+#undef APPEND_PASTED_BYTE
+    normalized[output] = '\0';
+    *normalized_length = output;
+    return normalized;
 }
 
 static size_t line_start(const App *app, size_t position) {
@@ -710,41 +791,62 @@ static void draw_text_clipped(App *app, int x, int y, const char *text, size_t l
         length = maximum;
     }
     if (length > 0) {
-        XDrawString(app->display, app->window, app->gc, x, y, text, (int)length);
+        XDrawString(app->display, app->backbuffer, app->gc, x, y, text, (int)length);
     }
 }
 
 static void draw(App *app) {
     XSetForeground(app->display, app->gc, app->background);
-    XFillRectangle(app->display, app->window, app->gc, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+    XFillRectangle(app->display, app->backbuffer, app->gc, 0, 0,
+                   WINDOW_WIDTH, WINDOW_HEIGHT);
 
     XSetForeground(app->display, app->gc, app->accent);
-    XFillRectangle(app->display, app->window, app->gc, BUTTON_X, BUTTON_Y,
+    XFillRectangle(app->display, app->backbuffer, app->gc, BUTTON_X, BUTTON_Y,
                    BUTTON_WIDTH, BUTTON_HEIGHT);
     XSetForeground(app->display, app->gc, app->background);
-    XDrawString(app->display, app->window, app->gc, BUTTON_X + 14, BUTTON_Y + 20,
+    XDrawString(app->display, app->backbuffer, app->gc, BUTTON_X + 14, BUTTON_Y + 20,
                 "RUN  Ctrl+Enter", 15);
     XSetForeground(app->display, app->gc, app->foreground);
-    XDrawString(app->display, app->window, app->gc, 188, 29,
+    XDrawString(app->display, app->backbuffer, app->gc, 188, 29,
                 "ShaderToy Image -> TRUEOS C++ / SPIR-V / ADL-S", 45);
 
     XSetForeground(app->display, app->gc, app->editor_background);
-    XFillRectangle(app->display, app->window, app->gc, 0, TOOLBAR_HEIGHT,
+    XFillRectangle(app->display, app->backbuffer, app->gc, 0, TOOLBAR_HEIGHT,
                    EDITOR_WIDTH, WINDOW_HEIGHT - TOOLBAR_HEIGHT - STATUS_HEIGHT);
     int line_height = app->font->ascent + app->font->descent + 2;
     int baseline = TOOLBAR_HEIGHT + EDITOR_MARGIN + app->font->ascent;
     size_t position = line_at(app, app->scroll_line);
     size_t line_number = app->scroll_line;
+    size_t selection_begin;
+    size_t selection_end;
+    selection_bounds(app, &selection_begin, &selection_end);
+    int char_width = app->font->max_bounds.width > 0 ? app->font->max_bounds.width : 8;
     while (position <= app->source_length
            && baseline < WINDOW_HEIGHT - STATUS_HEIGHT - app->font->descent) {
         size_t end = line_end(app, position);
         char number[16];
         snprintf(number, sizeof(number), "%4zu", line_number + 1);
         XSetForeground(app->display, app->gc, app->muted);
-        XDrawString(app->display, app->window, app->gc, 5, baseline, number, 4);
+        XDrawString(app->display, app->backbuffer, app->gc, 5, baseline, number, 4);
         size_t visible_start = position + app->horizontal_scroll;
         if (visible_start > end) {
             visible_start = end;
+        }
+        size_t selected_start = selection_begin > visible_start ? selection_begin : visible_start;
+        size_t selected_end = selection_end < end ? selection_end : end;
+        if (selected_start < selected_end) {
+            int selected_x = 45 + (int)(selected_start - visible_start) * char_width;
+            unsigned selected_width = (unsigned)(selected_end - selected_start) * (unsigned)char_width;
+            if (selected_x < EDITOR_WIDTH - 4) {
+                unsigned maximum_width = (unsigned)(EDITOR_WIDTH - 4 - selected_x);
+                if (selected_width > maximum_width) {
+                    selected_width = maximum_width;
+                }
+                XSetForeground(app->display, app->gc, app->selection);
+                XFillRectangle(app->display, app->backbuffer, app->gc, selected_x,
+                               baseline - app->font->ascent, selected_width,
+                               (unsigned)line_height);
+            }
         }
         XSetForeground(app->display, app->gc, app->foreground);
         draw_text_clipped(app, 45, baseline, app->source + visible_start,
@@ -752,11 +854,10 @@ static void draw(App *app) {
         if (app->editor_focus && app->cursor >= position && app->cursor <= end) {
             size_t column = app->cursor - position;
             if (column >= app->horizontal_scroll) {
-                int char_width = app->font->max_bounds.width > 0 ? app->font->max_bounds.width : 8;
                 int cursor_x = 45 + (int)(column - app->horizontal_scroll) * char_width;
                 if (cursor_x < EDITOR_WIDTH - 4) {
                     XSetForeground(app->display, app->gc, app->accent);
-                    XDrawLine(app->display, app->window, app->gc, cursor_x,
+                    XDrawLine(app->display, app->backbuffer, app->gc, cursor_x,
                               baseline - app->font->ascent, cursor_x,
                               baseline + app->font->descent);
                 }
@@ -771,30 +872,32 @@ static void draw(App *app) {
     }
 
     XSetForeground(app->display, app->gc, app->panel);
-    XFillRectangle(app->display, app->window, app->gc, EDITOR_WIDTH, TOOLBAR_HEIGHT,
+    XFillRectangle(app->display, app->backbuffer, app->gc, EDITOR_WIDTH, TOOLBAR_HEIGHT,
                    WINDOW_WIDTH - EDITOR_WIDTH, WINDOW_HEIGHT - TOOLBAR_HEIGHT - STATUS_HEIGHT);
     XSetForeground(app->display, app->gc, app->muted);
-    XDrawString(app->display, app->window, app->gc, PREVIEW_X, 91,
+    XDrawString(app->display, app->backbuffer, app->gc, PREVIEW_X, 91,
                 "OUTPUT  640 x 360", 17);
     if (app->runtime.ready) {
-        XPutImage(app->display, app->window, app->gc, app->preview_image,
+        XPutImage(app->display, app->backbuffer, app->gc, app->preview_image,
                   0, 0, PREVIEW_X, PREVIEW_Y, PREVIEW_WIDTH, PREVIEW_HEIGHT);
     } else {
         XSetForeground(app->display, app->gc, app->editor_background);
-        XFillRectangle(app->display, app->window, app->gc, PREVIEW_X, PREVIEW_Y,
+        XFillRectangle(app->display, app->backbuffer, app->gc, PREVIEW_X, PREVIEW_Y,
                        PREVIEW_WIDTH, PREVIEW_HEIGHT);
         XSetForeground(app->display, app->gc, app->muted);
         const char *message = app->compiler_pid > 0 ? "BAKING..." : "PASTE SHADER, THEN RUN";
-        XDrawString(app->display, app->window, app->gc, PREVIEW_X + 220,
+        XDrawString(app->display, app->backbuffer, app->gc, PREVIEW_X + 220,
                     PREVIEW_Y + PREVIEW_HEIGHT / 2, message, (int)strlen(message));
     }
     XSetForeground(app->display, app->gc, app->background);
-    XFillRectangle(app->display, app->window, app->gc, 0,
+    XFillRectangle(app->display, app->backbuffer, app->gc, 0,
                    WINDOW_HEIGHT - STATUS_HEIGHT, WINDOW_WIDTH, STATUS_HEIGHT);
     XSetForeground(app->display, app->gc,
                    app->compile_result > 0 ? app->error : app->foreground);
     draw_text_clipped(app, 12, WINDOW_HEIGHT - 16, app->status, strlen(app->status),
                       WINDOW_WIDTH - 24);
+    XCopyArea(app->display, app->backbuffer, app->window, app->gc,
+              0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, 0, 0);
     XFlush(app->display);
 }
 
@@ -839,7 +942,14 @@ static void handle_selection(App *app, XSelectionEvent *event) {
         set_status(app, "Clipboard paste failed or exceeds 1 MiB");
         return;
     }
-    replace_selection(app, (const char *)data, (size_t)items);
+    size_t normalized_length = 0;
+    char *normalized = normalize_pasted_text(
+        app, data, (size_t)items, &normalized_length);
+    if (normalized != NULL) {
+        replace_selection(app, normalized, normalized_length);
+        free(normalized);
+        set_status(app, "Pasted source; tabs and web clipboard whitespace normalized");
+    }
     XFree(data);
     keep_cursor_visible(app);
 }
@@ -1000,6 +1110,7 @@ static int initialize_window(App *app) {
     app->foreground = color(app->display, screen, "#e6eaf2", white);
     app->muted = color(app->display, screen, "#7f8999", white);
     app->accent = color(app->display, screen, "#6ee7c8", white);
+    app->selection = color(app->display, screen, "#264d51", black);
     app->error = color(app->display, screen, "#ff7a90", white);
     int x = (DisplayWidth(app->display, screen) - WINDOW_WIDTH) / 2;
     int y = (DisplayHeight(app->display, screen) - WINDOW_HEIGHT) / 2;
@@ -1021,12 +1132,15 @@ static int initialize_window(App *app) {
     app->clipboard = XInternAtom(app->display, "CLIPBOARD", False);
     app->utf8_string = XInternAtom(app->display, "UTF8_STRING", False);
     app->clipboard_property = XInternAtom(app->display, "TRUEOS_SHADER_SOURCE", False);
+    app->backbuffer = XCreatePixmap(app->display, app->window,
+                                     WINDOW_WIDTH, WINDOW_HEIGHT,
+                                     (unsigned)DefaultDepth(app->display, screen));
     app->gc = XCreateGC(app->display, app->window, 0, NULL);
     app->font = XLoadQueryFont(app->display, "-misc-fixed-medium-r-normal--13-*-*-*-*-*-iso10646-1");
     if (app->font == NULL) {
         app->font = XLoadQueryFont(app->display, "fixed");
     }
-    if (app->gc == NULL || app->font == NULL) {
+    if (app->backbuffer == 0 || app->gc == NULL || app->font == NULL) {
         fprintf(stderr, "shadertoy-cpp-offline: cannot create X11 drawing resources\n");
         return 0;
     }
@@ -1077,6 +1191,9 @@ static void destroy_app(App *app) {
     if (app->gc != NULL) {
         XFreeGC(app->display, app->gc);
     }
+    if (app->backbuffer != 0) {
+        XFreePixmap(app->display, app->backbuffer);
+    }
     if (app->window != 0) {
         XDestroyWindow(app->display, app->window);
     }
@@ -1115,11 +1232,14 @@ int main(int argc, char **argv) {
         destroy_app(&app);
         return EXIT_FAILURE;
     }
-    app.cursor = app.source_length;
-    app.selection_anchor = app.selection_end = app.cursor;
+    /* Paste-first workflow: the loaded/default source starts selected, so the
+     * first Ctrl+V replaces it instead of creating two mainImage functions. */
+    app.cursor = 0;
+    app.selection_anchor = 0;
+    app.selection_end = app.source_length;
     app.editor_focus = 1;
     app.running = 1;
-    set_status(&app, "Paste ShaderToy Image code with Ctrl+V, then Ctrl+Enter");
+    set_status(&app, "Source selected: Ctrl+V replaces it | Ctrl+Enter runs it");
     if (!initialize_window(&app)) {
         destroy_app(&app);
         return EXIT_FAILURE;

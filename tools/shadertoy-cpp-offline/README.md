@@ -54,6 +54,16 @@ Controls are `Ctrl+V` paste, `Ctrl+A` replace all, `Ctrl+S` save the session,
 `Ctrl+Enter` bake/run, and `Esc` close. Pointer input over the preview supplies
 ShaderToy-compatible `iMouse` coordinates.
 
+The complete source is selected when the tool opens, so the first `Ctrl+V`
+replaces the sample or previous session instead of appending a second
+`mainImage`. If two entry points are pasted intentionally, the adapter reports
+that directly.
+
+Clipboard input is normalized for shader source: CRLF becomes LF, tabs expand
+to four-column spaces, non-breaking spaces become ordinary spaces, and BOM or
+zero-width web formatting marks are removed. This prevents X11 control glyphs
+and compiler errors from otherwise invisible browser clipboard characters.
+
 ## Compatibility boundary
 
 The first slice accepts a single, texture-free `mainImage` pass and supplies:

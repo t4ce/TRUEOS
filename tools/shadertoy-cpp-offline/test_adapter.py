@@ -54,6 +54,33 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(AdapterError, "mainImage"):
             adapt("float f(float x) { return x; }")
 
+    def test_duplicate_image_entrypoint_explains_paste_mistake(self) -> None:
+        shader = "void mainImage(out vec4 c, vec2 p) { c=vec4(1.); }"
+        with self.assertRaisesRegex(AdapterError, "found 2.*replace"):
+            adapt(shader + "\n" + shader)
+
+    def test_macro_mandelbrot_shader_translates(self) -> None:
+        body = translate_body(
+            """
+            #define mul(a,b) vec2(a.x*b.x-a.y*b.y,a.x*b.y+a.y*b.x)
+            void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+                float z = 1.0 - float(iTime) / 10.0;
+                vec2 coord = fragCoord / iResolution.xy * z;
+                vec2 cm = vec2(0, 0);
+                int j = 0;
+                for (int i=0; i<25; i++) {
+                    j++;
+                    cm = mul(cm, cm) + coord;
+                    if (dot(cm,cm) > 4.0) break;
+                }
+                fragColor = vec4(j) / 24.0;
+            }
+            """
+        )
+        self.assertIn("#define mul(a,b) st_vec2", body)
+        self.assertIn("float((st->resolution_time.w))", body)
+        self.assertIn("fragColor = st_vec4(j) / 24.0f", body)
+
 
 if __name__ == "__main__":
     unittest.main()
