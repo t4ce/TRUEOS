@@ -13,14 +13,14 @@ use spin::Mutex;
 
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePlanError, FramePoolError, FrameSpec,
-    FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4InputEvent, WindowCreate,
-    WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
+    FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4CursorSource, Ui4InputEvent,
+    WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
     WindowSessionId, acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame,
     create_window, destroy_frame, finish_window_session, finish_window_session_with_request,
     gpgpu_rgba_surface, publish_frame_buffer, publish_gpgpu_frame_buffer,
     publish_gpu_font_frame_buffer, publish_window_frame, publish_window_frames,
-    replace_window_frame, set_windows_visible, take_owner_input_events, window_placement,
-    writable_rgba_view,
+    replace_window_frame, reselect_window_for_cursor, set_windows_visible, take_owner_input_events,
+    window_placement, writable_rgba_view,
 };
 
 const PREVIEW_OWNER: WindowOwner = WindowOwner::GPGPU_PREVIEW;
@@ -67,6 +67,17 @@ const CPP_FONT_RUSH_TITLE_WORD_X_FRACTIONS: [f32; 6] =
     [0.281_72, 0.368_89, 0.439_55, 0.522_91, 0.628_20, 0.734_14];
 const CPP_FONT_RUSH_TITLE_WORD_PRESENTATION_SCALE: f32 = 1.8;
 const CPP_FONT_RUSH_SECTION_PRESENTATION_SCALE: f32 = 3.0;
+const CPP_GALLERY_PRESETS: [GpgpuPreviewPreset; 9] = [
+    GpgpuPreviewPreset::CppGallery,
+    GpgpuPreviewPreset::CppAurora,
+    GpgpuPreviewPreset::CppJulia,
+    GpgpuPreviewPreset::CppSdf,
+    GpgpuPreviewPreset::CppVoronoi,
+    GpgpuPreviewPreset::CppRetroSun,
+    GpgpuPreviewPreset::CppAudio,
+    GpgpuPreviewPreset::CppParticle,
+    GpgpuPreviewPreset::Static30,
+];
 const CPP_FONT_RUSH_CACHE_FONT_PIXELS: [f32;
     crate::r::font_kernel_service::FONT_RUSH_RGBA8_CACHE_CLASSES] = [8.0, 12.0, 16.0, 20.0];
 
@@ -373,12 +384,23 @@ struct DesiredPreview {
 struct PreviewRunPolicy {
     frame_limit: u64,
     target_hz: u64,
+    interactive_cpp_gallery: bool,
+    refocus_source: Option<Ui4CursorSource>,
 }
 
 impl PreviewRunPolicy {
     const SHELL: Self = Self {
         frame_limit: 0,
         target_hz: 0,
+        interactive_cpp_gallery: false,
+        refocus_source: None,
+    };
+
+    const CPP_GALLERY: Self = Self {
+        frame_limit: 0,
+        target_hz: 0,
+        interactive_cpp_gallery: true,
+        refocus_source: None,
     };
 }
 
@@ -652,8 +674,16 @@ struct StaticPreviewSurface {
     scheme: u8,
 }
 
-pub(crate) fn request_gpgpu_preview_start(config: GpgpuPreviewConfig) -> Result<u64, &'static str> {
-    request_gpgpu_preview_start_with_policy(config, PreviewRunPolicy::SHELL)
+pub(crate) fn request_cpp_gallery_start() -> Result<u64, &'static str> {
+    request_gpgpu_preview_start_with_policy(
+        GpgpuPreviewConfig {
+            preset: GpgpuPreviewPreset::CppGallery,
+            duration_ms: 0,
+            cadence_ms: GPGPU_PREVIEW_DEFAULT_CADENCE_MS,
+            publish_every: GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY,
+        },
+        PreviewRunPolicy::CPP_GALLERY,
+    )
 }
 
 pub(crate) fn request_cpp_font_preview_start(
@@ -878,6 +908,8 @@ pub(crate) fn request_gpgpu_lab256_startup(
         PreviewRunPolicy {
             frame_limit,
             target_hz,
+            interactive_cpp_gallery: false,
+            refocus_source: None,
         },
     )
 }
@@ -1069,6 +1101,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                 }
             }
         }
+        restore_interactive_cpp_focus(&mut active);
         if !active.is_empty() && render_fault.is_none() && !duration_expired {
             publish_active_status(&active, GpgpuPreviewPhase::Running, "none");
         }
@@ -2076,7 +2109,11 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
                 opacity: u8::MAX,
                 visible: true,
             },
-            interaction: super::WindowInteraction::MOVABLE_FRAME,
+            interaction: if desired.policy.interactive_cpp_gallery {
+                super::WindowInteraction::APPLICATION_FIXED_FRAME
+            } else {
+                super::WindowInteraction::MOVABLE_FRAME
+            },
         }) {
             Ok(window) => window,
             Err(error) => {
@@ -5621,19 +5658,138 @@ fn next_poll_ms(preview: &ActivePreview) -> u64 {
 
 fn drain_preview_input(active: &mut [ActivePreview], retired_frames: &mut Vec<FrameHandle>) {
     for event in take_owner_input_events(PREVIEW_OWNER) {
-        let Ui4InputEvent::Resize(event) = event else {
-            continue;
-        };
-        let Some(preview) = active
-            .iter_mut()
-            .find(|preview| event.window == preview.window)
-        else {
-            continue;
-        };
-        if event.width == 0 || event.height == 0 {
-            continue;
+        match event {
+            Ui4InputEvent::Resize(event) => {
+                let Some(preview) = active
+                    .iter_mut()
+                    .find(|preview| event.window == preview.window)
+                else {
+                    continue;
+                };
+                if event.width == 0 || event.height == 0 {
+                    continue;
+                }
+                try_resize_preview(
+                    preview,
+                    event.width,
+                    event.height,
+                    retired_frames,
+                    "input-event",
+                );
+            }
+            Ui4InputEvent::Keyboard(event) => {
+                let Some(preview) = active.iter().find(|preview| {
+                    event.window == preview.window
+                        || preview
+                            .extra_surfaces
+                            .iter()
+                            .any(|surface| event.window == surface.window)
+                }) else {
+                    continue;
+                };
+                if !preview.policy.interactive_cpp_gallery
+                    || event.event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+                {
+                    continue;
+                }
+                match event.event.key_code {
+                    crate::r::keyboard::KEYBOARD_KEY_ARROW_LEFT => {
+                        queue_interactive_cpp_cycle(-1, event.source);
+                    }
+                    crate::r::keyboard::KEYBOARD_KEY_ARROW_RIGHT => {
+                        queue_interactive_cpp_cycle(1, event.source);
+                    }
+                    crate::r::keyboard::KEYBOARD_KEY_ESCAPE => {
+                        queue_interactive_cpp_stop();
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
         }
-        try_resize_preview(preview, event.width, event.height, retired_frames, "input-event");
+    }
+}
+
+fn cycled_cpp_gallery_preset(preset: GpgpuPreviewPreset, direction: i8) -> GpgpuPreviewPreset {
+    let index = CPP_GALLERY_PRESETS
+        .iter()
+        .position(|candidate| *candidate == preset)
+        .unwrap_or(0);
+    let next = if direction < 0 {
+        index
+            .checked_sub(1)
+            .unwrap_or(CPP_GALLERY_PRESETS.len() - 1)
+    } else {
+        (index + 1) % CPP_GALLERY_PRESETS.len()
+    };
+    CPP_GALLERY_PRESETS[next]
+}
+
+fn queue_interactive_cpp_cycle(direction: i8, source: Ui4CursorSource) {
+    let (serial, previous, next) = {
+        let mut control = PREVIEW_CONTROL.lock();
+        if !control.desired.running || !control.desired.policy.interactive_cpp_gallery {
+            return;
+        }
+        let previous = control.desired.config.preset;
+        let next = cycled_cpp_gallery_preset(previous, direction);
+        let serial = next_serial(control.desired.serial);
+        control.desired.serial = serial;
+        control.desired.config.preset = next;
+        control.desired.policy.refocus_source = Some(source);
+        control.status.desired_running = true;
+        control.status.phase = GpgpuPreviewPhase::Starting;
+        control.status.request_serial = serial;
+        control.status.config = control.desired.config;
+        control.status.last_error = "none";
+        (serial, previous, next)
+    };
+    crate::log_info!(target: "ui4";
+        "ui4 cpp-gallery cycle request={} previous={} next={} direction={} input=keyboard-arrow refocus={}:{}:{}\n",
+        serial,
+        previous.label(),
+        next.label(),
+        if direction < 0 { "left" } else { "right" },
+        source.controller_id,
+        source.slot_id,
+        source.ep_target,
+    );
+}
+
+fn queue_interactive_cpp_stop() {
+    let serial = {
+        let mut control = PREVIEW_CONTROL.lock();
+        if !control.desired.running || !control.desired.policy.interactive_cpp_gallery {
+            return;
+        }
+        let serial = next_serial(control.desired.serial);
+        control.desired.serial = serial;
+        control.desired.running = false;
+        control.desired.policy.refocus_source = None;
+        control.status.desired_running = false;
+        control.status.request_serial = serial;
+        CPP_FONT_REQUEST.lock().take();
+        serial
+    };
+    crate::log_info!(target: "ui4";
+        "ui4 cpp-gallery stop request={} input=keyboard-escape\n",
+        serial,
+    );
+}
+
+fn restore_interactive_cpp_focus(active: &mut [ActivePreview]) {
+    let Some(source) = active
+        .first()
+        .filter(|preview| preview.policy.interactive_cpp_gallery)
+        .and_then(|preview| preview.policy.refocus_source)
+    else {
+        return;
+    };
+    let window = active[0].window;
+    if reselect_window_for_cursor(source, PREVIEW_OWNER, window).is_ok() {
+        for preview in active {
+            preview.policy.refocus_source = None;
+        }
     }
 }
 
@@ -6179,12 +6335,13 @@ mod tests {
         CPP_FONT_RUSH_TITLE_LETTER_MAX_FONT_PIXELS, CPP_FONT_RUSH_TITLE_LETTERS,
         CPP_FONT_RUSH_TITLE_WORD, CPP_FONT_RUSH_TITLE_WORD_MAX_FONT_PIXELS,
         CPP_FONT_RUSH_TITLE_WORD_PRESENTATION_SCALE, CPP_FONT_RUSH_TITLE_WORD_X_FRACTIONS,
-        CppFontRushLayerStage, CppFontRushShowcaseSource, FramePlanError, FramePoolError,
-        GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig, GpgpuPreviewPreset, LAB256_PREVIEW_SIZE,
-        PREVIEW_HEIGHT, PREVIEW_WIDTH, cpp_font_rush_due_tick_count, cpp_font_rush_glyph_count,
-        cpp_font_rush_grid, cpp_font_rush_plan_request, cpp_font_rush_plane_slots,
-        cpp_font_rush_showcase_next_stage, cpp_font_rush_showcase_source_request,
-        cpp_font_rush_showcase_sprite_layout, cpp_font_rush_target_plane_count, preview_extent,
+        CPP_GALLERY_PRESETS, CppFontRushLayerStage, CppFontRushShowcaseSource, FramePlanError,
+        FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig, GpgpuPreviewPreset,
+        LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH, cpp_font_rush_due_tick_count,
+        cpp_font_rush_glyph_count, cpp_font_rush_grid, cpp_font_rush_plan_request,
+        cpp_font_rush_plane_slots, cpp_font_rush_showcase_next_stage,
+        cpp_font_rush_showcase_source_request, cpp_font_rush_showcase_sprite_layout,
+        cpp_font_rush_target_plane_count, cycled_cpp_gallery_preset, preview_extent,
         preview_frame_create_error_label, preview_plane_slot, static30_font_stamp_request,
     };
 
@@ -6639,6 +6796,23 @@ mod tests {
             assert_eq!(mode.buffering_label(), "double");
             assert_eq!(mode.plane_layout_label(), "slot1-direct");
         }
+    }
+
+    #[test]
+    fn interactive_cpp_gallery_cycles_both_directions_and_wraps() {
+        assert_eq!(
+            cycled_cpp_gallery_preset(GpgpuPreviewPreset::CppGallery, 1),
+            GpgpuPreviewPreset::CppAurora,
+        );
+        assert_eq!(
+            cycled_cpp_gallery_preset(GpgpuPreviewPreset::CppGallery, -1),
+            GpgpuPreviewPreset::Static30,
+        );
+        assert_eq!(
+            cycled_cpp_gallery_preset(GpgpuPreviewPreset::Static30, 1),
+            GpgpuPreviewPreset::CppGallery,
+        );
+        assert_eq!(CPP_GALLERY_PRESETS.len(), 9);
     }
 
     #[test]

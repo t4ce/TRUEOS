@@ -257,6 +257,8 @@ static void replace_selection(App *app, const char *text, size_t length) {
     app->dirty = 1;
 }
 
+static size_t line_start(const App *app, size_t position);
+
 static char *normalize_pasted_text(App *app, const unsigned char *text,
                                    size_t length, size_t *normalized_length) {
     char *normalized = malloc(MAX_SHADER_BYTES + 1);
@@ -596,12 +598,14 @@ static int load_program(App *app) {
     }
     cl_uint width = PREVIEW_WIDTH;
     cl_uint height = PREVIEW_HEIGHT;
+    cl_uint pitch_bytes = PREVIEW_WIDTH * (cl_uint)sizeof(uint32_t);
     if (clSetKernelArg(runtime->kernel, 0, sizeof(runtime->output_buffer), &runtime->output_buffer)
             != CL_SUCCESS
         || clSetKernelArg(runtime->kernel, 1, sizeof(runtime->uniform_buffer), &runtime->uniform_buffer)
             != CL_SUCCESS
         || clSetKernelArg(runtime->kernel, 2, sizeof(width), &width) != CL_SUCCESS
-        || clSetKernelArg(runtime->kernel, 3, sizeof(height), &height) != CL_SUCCESS) {
+        || clSetKernelArg(runtime->kernel, 3, sizeof(height), &height) != CL_SUCCESS
+        || clSetKernelArg(runtime->kernel, 4, sizeof(pitch_bytes), &pitch_bytes) != CL_SUCCESS) {
         set_status(app, "OpenCL: generated kernel ABI does not match the preview");
         return 0;
     }
@@ -780,7 +784,11 @@ static void render_frame(App *app) {
     }
     ++app->frame_number;
     for (size_t i = 0; i < (size_t)PREVIEW_WIDTH * PREVIEW_HEIGHT; ++i) {
-        ((uint32_t *)app->preview_image->data)[i] = app->frame_pixels[i] & 0x00FFFFFFU;
+        uint32_t rgba = app->frame_pixels[i];
+        uint32_t xrgb = ((rgba & 0x000000FFU) << 16)
+                      |  (rgba & 0x0000FF00U)
+                      | ((rgba & 0x00FF0000U) >> 16);
+        ((uint32_t *)app->preview_image->data)[i] = xrgb;
     }
 }
 

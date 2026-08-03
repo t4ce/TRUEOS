@@ -386,6 +386,32 @@ pub(crate) fn upload_cpp_demo_rgba8_kernel() -> Option<UploadedKernelArtifact> {
     Some(upload)
 }
 
+pub(crate) fn upload_shadertoy_kernel(shader_id: u32) -> Option<UploadedKernelArtifact> {
+    let (artifact, gpu, slot) = match shader_id {
+        SHADERTOY_SHADER_MANDELBROT => (
+            SHADERTOY_MANDELBROT_ADLS_ARTIFACT,
+            SHADERTOY_MANDELBROT_ADLS_GPU,
+            &SHADERTOY_MANDELBROT_UPLOAD,
+        ),
+        SHADERTOY_SHADER_CUBE_FIELD => (
+            SHADERTOY_CUBE_FIELD_ADLS_ARTIFACT,
+            SHADERTOY_CUBE_FIELD_ADLS_GPU,
+            &SHADERTOY_CUBE_FIELD_UPLOAD,
+        ),
+        SHADERTOY_SHADER_NGUYEN => {
+            (SHADERTOY_NGUYEN_ADLS_ARTIFACT, SHADERTOY_NGUYEN_ADLS_GPU, &SHADERTOY_NGUYEN_UPLOAD)
+        }
+        _ => return None,
+    };
+    if let Some(upload) = *slot.lock() {
+        return Some(upload);
+    }
+    let dev = super::claimed_device()?;
+    let upload = upload_ppgtt_resident_artifact(dev, artifact, gpu)?;
+    *slot.lock() = Some(upload);
+    Some(upload)
+}
+
 pub(crate) fn upload_cpp_audio_visualizer_rgba8_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD.lock() {
         return Some(upload);
@@ -615,6 +641,9 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     CHART_SINE_RGBA8_KERNEL_NAME,
     PIXEL_PLASMA_RGBA8_KERNEL_NAME,
     CPP_DEMO_RGBA8_KERNEL_NAME,
+    SHADERTOY_MANDELBROT_KERNEL_NAME,
+    SHADERTOY_CUBE_FIELD_KERNEL_NAME,
+    SHADERTOY_NGUYEN_KERNEL_NAME,
     PARTICLE_CRAFT_KERNEL_NAME,
     FONT_INSTANCE_RGBA8_KERNEL_NAME,
     LFM25_Q8_PROJECT_PACKED_KERNEL_NAME,
@@ -695,6 +724,9 @@ fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
         | CHART_SINE_RGBA8_KERNEL_NAME
         | PIXEL_PLASMA_RGBA8_KERNEL_NAME
         | CPP_DEMO_RGBA8_KERNEL_NAME
+        | SHADERTOY_MANDELBROT_KERNEL_NAME
+        | SHADERTOY_CUBE_FIELD_KERNEL_NAME
+        | SHADERTOY_NGUYEN_KERNEL_NAME
         | CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME
         | PARTICLE_CRAFT_KERNEL_NAME
         | LFM25_Q8_PROJECT_PACKED_KERNEL_NAME
@@ -817,6 +849,21 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: CPP_DEMO_RGBA8_ADLS_ARTIFACT,
             gpu: CPP_DEMO_RGBA8_ADLS_GPU,
             upload: &CPP_DEMO_RGBA8_UPLOAD,
+        }),
+        SHADERTOY_MANDELBROT_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: SHADERTOY_MANDELBROT_ADLS_ARTIFACT,
+            gpu: SHADERTOY_MANDELBROT_ADLS_GPU,
+            upload: &SHADERTOY_MANDELBROT_UPLOAD,
+        }),
+        SHADERTOY_CUBE_FIELD_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: SHADERTOY_CUBE_FIELD_ADLS_ARTIFACT,
+            gpu: SHADERTOY_CUBE_FIELD_ADLS_GPU,
+            upload: &SHADERTOY_CUBE_FIELD_UPLOAD,
+        }),
+        SHADERTOY_NGUYEN_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: SHADERTOY_NGUYEN_ADLS_ARTIFACT,
+            gpu: SHADERTOY_NGUYEN_ADLS_GPU,
+            upload: &SHADERTOY_NGUYEN_UPLOAD,
         }),
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT,

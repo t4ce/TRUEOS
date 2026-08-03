@@ -19,7 +19,7 @@ allocating full scanout-sized rings.
 Particles have soft cores, velocity-aligned tails, bloom, and bounded
 attractor/swirl physics over a procedural dark field. The Blueprint particle
 app follows live UI4 pointer input for two seconds after each event, then
-returns to the scripted orbit used by `cpp particle`.
+returns to the scripted orbit used by the interactive `cpp` particle view.
 The broad-phase particle bounds affect work rejection only. Separate smooth
 round masks drive the head sphere and tail capsule to zero before those bounds,
 preventing rectangular glow cutoffs during spawn and fade.
@@ -73,8 +73,8 @@ make intel-gpu-verify-cpp-artifacts
 Run on the TestRig:
 
 ```text
-cpp particle
-cpp start particle 0 33 1
+cpp
+Left / Right until particle
 cpp status
 cpp stop
 ```

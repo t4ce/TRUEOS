@@ -175,6 +175,8 @@ pub const OP_BP_DOBBY_UI4_OBSERVE_READ: u32 = 0x118; // arg0 offset,arg1 cap -> 
 pub const OP_BP_DOBBY_UI4_POINTER: u32 = 0x119; // arg0 x:u16|y:u16,arg1 action -> rc
 pub const OP_BP_DOBBY_UI4_TYPE: u32 = 0x11A; // payload UTF-8 -> rc
 pub const OP_BP_DOBBY_UI4_KEY: u32 = 0x11B; // arg0 named key -> rc
+pub const OP_BP_UI4_SCENE_FRAME_OPEN_VISUAL: u32 = 0x11C; // arg0 x/y,arg1 width/height,payload target_hz -> window
+pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D; // arg0 window,payload ShadertoyParamsV1 -> rc
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1727,6 +1729,46 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_UI4_SCENE_SHADERTOY_RENDER => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let mut words = [0u32; 16];
+            if payload.len() != words.len() * core::mem::size_of::<u32>() {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            for (word, bytes) in words.iter_mut().zip(payload.chunks_exact(4)) {
+                *word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+            }
+            let params = crate::ui4::blueprint_text::TrueosUi4ShadertoyParamsV1 {
+                version: words[0],
+                shader_id: words[1],
+                frame: words[2],
+                flags: words[3],
+                time_seconds: f32::from_bits(words[4]),
+                delta_seconds: f32::from_bits(words[5]),
+                frame_rate: f32::from_bits(words[6]),
+                sample_rate: f32::from_bits(words[7]),
+                mouse_x: f32::from_bits(words[8]),
+                mouse_y: f32::from_bits(words[9]),
+                click_x: f32::from_bits(words[10]),
+                click_y: f32::from_bits(words[11]),
+                date_year: f32::from_bits(words[12]),
+                date_month: f32::from_bits(words[13]),
+                date_day: f32::from_bits(words[14]),
+                date_seconds: f32::from_bits(words[15]),
+            };
+            let rc = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_shadertoy_render(
+                    arg0 as u32,
+                    &params,
+                )
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_UI4_SCENE_WRITE_OPAQUE_RGBA8 => {
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -1766,6 +1808,24 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let (width, height) = unpack_u32_pair(arg1);
             let window = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_open_streaming(
                 x, y, width, height,
+            );
+            write_response(vm_id, seq, STATUS_OK, window as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_FRAME_OPEN_VISUAL => {
+            let (x, y) = unpack_i32_pair(arg0);
+            let (width, height) = unpack_u32_pair(arg1);
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            if payload.len() != core::mem::size_of::<u32>() {
+                write_response(vm_id, seq, STATUS_OK, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let target_hz = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+            let window = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_open_visual(
+                x, y, width, height, target_hz,
             );
             write_response(vm_id, seq, STATUS_OK, window as u64, 0);
             DispatchOutcome::Resume

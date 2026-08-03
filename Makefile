@@ -121,7 +121,7 @@ CARGO_EFFECTIVE_FLAGS = $(strip $(CARGO_BUILD_FLAGS))
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel trueos-ttstt-host trueos-ttstt-ubuntu cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-packed-verify intel-gpu-bake-migrated-cpp intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp helio-build-simple-cube helio-build-churn-forward helio-refresh-artifacts helio-verify-artifacts artifacts limine testrig-physical-reset-log baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: images empty-libs kernel trueos-ttstt-host trueos-ttstt-ubuntu cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-packed-verify intel-gpu-bake-migrated-cpp intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-shadertoy-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp helio-build-simple-cube helio-build-churn-forward helio-refresh-artifacts helio-verify-artifacts artifacts limine testrig-physical-reset-log baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -174,6 +174,9 @@ intel-gpu-bake-audio-visualizer-cpp:
 intel-gpu-bake-particle-craft-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_particle_craft.sh"
 
+intel-gpu-bake-shadertoy-cpp:
+	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_shadertoy.sh"
+
 intel-gpu-bake-font-instance-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_font_instance.sh"
 
@@ -189,6 +192,7 @@ intel-gpu-bake-cpp-artifacts:
 	$(MAKE) --no-print-directory intel-gpu-bake-cpp-demo
 	$(MAKE) --no-print-directory intel-gpu-bake-audio-visualizer-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-particle-craft-cpp
+	$(MAKE) --no-print-directory intel-gpu-bake-shadertoy-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-font-instance-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-lfm25-q8-packed-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-spirit-cpp

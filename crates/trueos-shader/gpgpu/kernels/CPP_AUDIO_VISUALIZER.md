@@ -11,19 +11,13 @@ instrument from the final stereo stream accepted by the HDA output path:
 - bass bloom, onset rings, and high-frequency particles;
 - restrained scan texture, peak light, and audio-driven palette motion.
 
-The default Shell2 launch is continuous at 20 Hz:
+The view is reached from the interactive Shell2 gallery:
 
 ```text
-cpp audio
+cpp
+Left / Right until audio
 cpp status
 cpp stop
-```
-
-`av` and `visualizer` are accepted aliases. The long form is:
-
-```text
-cpp start audio [duration_ms] [cadence_ms] [publish_every]
-cpp start audio 0 50 1
 ```
 
 The UI4 window starts at the ordinary C++ demo extent. All C++ demo windows
@@ -139,10 +133,8 @@ PNG and never presents that fallback as GPU or performance evidence.
 Boot `bld/trueos.iso` on the i5-14500T TestRig at `00:02.0`,
 `8086:4680`, revision `0x0c`, leave the normal audio playback active, then:
 
-```text
-cpp audio
-cpp status
-```
+Run `cpp`, focus its UI4 frame, and cycle with Left or Right until the audio
+view is active. Then use `cpp status` for promotion evidence.
 
 Maximize and restore the UI4 window. Promotion evidence should include:
 

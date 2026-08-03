@@ -566,7 +566,7 @@ const CPP_AUDIO_VISUALIZER_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_2d(Some(2)),
     consumers: &[
-        "shell2:cpp audio",
+        "shell2:cpp interactive-gallery/audio",
         "ui4::gpgpu_preview_consumer_service_task",
     ],
 };

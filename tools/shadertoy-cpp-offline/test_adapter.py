@@ -81,6 +81,83 @@ class AdapterTests(unittest.TestCase):
         self.assertIn("float((st->resolution_time.w))", body)
         self.assertIn("fragColor = st_vec4(j) / 24.0f", body)
 
+    def test_mat3_and_reflection_translate(self) -> None:
+        body = translate_body(
+            """
+            mat3 camera(vec3 x, vec3 y, vec3 z) { return mat3(x,y,z); }
+            void mainImage(out vec4 color, in vec2 coord) {
+                vec3 unused = vec3(coord, 0.0);
+                vec3 ray = reflect(vec3(0.0,0.0,1.0), vec3(0.0,1.0,0.0));
+                color = vec4(ray, 1.0);
+            }
+            """
+        )
+        self.assertIn("mat3 camera(float3 x, float3 y, float3 z", body)
+        self.assertIn("return mat3(x,y,z)", body)
+        self.assertIn("st_reflect(st_vec3", body)
+
+    def test_mat2_accepts_four_component_vector(self) -> None:
+        generated = adapt(
+            """
+            void mainImage(out vec4 color, in vec2 coord) {
+                vec4 angles = vec4(coord, -coord);
+                coord *= mat2(cos(angles));
+                color = vec4(coord, 0.0, 1.0);
+            }
+            """
+        )
+        self.assertIn("inline mat2(float4 v) : c0(v.xy), c1(v.zw)", generated)
+        self.assertIn("coord *= mat2(cos(angles))", generated)
+
+    def test_uninitialized_scalar_in_comma_declaration_starts_at_zero(self) -> None:
+        body = translate_body(
+            """
+            void mainImage(out vec4 color, in vec2 coord) {
+                for (float scale = .5, clock = iTime, index;
+                     ++index < 3.; scale += .1) {
+                    coord += scale + clock + index;
+                }
+                color = vec4(coord, 0., 1.);
+            }
+            """
+        )
+        self.assertIn("clock = (st->resolution_time.w), index = 0;", body)
+
+    def test_export_can_assign_a_catalog_kernel_name(self) -> None:
+        generated = adapt(
+            "void mainImage(out vec4 color, vec2 coord) { color = vec4(coord, 0., 1.); }",
+            kernel_name="shadertoy_nguyen",
+        )
+        self.assertIn("void shadertoy_nguyen(", generated)
+        self.assertNotIn("void shadertoy_image(", generated)
+
+    def test_export_rejects_non_identifier_kernel_name(self) -> None:
+        with self.assertRaisesRegex(AdapterError, "kernel name"):
+            adapt(
+                "void mainImage(out vec4 color, vec2 coord) { color = vec4(coord, 0., 1.); }",
+                kernel_name="shadertoy-image",
+            )
+
+    def test_kernel_uses_ui4_pitch_and_opaque_rgba_storage(self) -> None:
+        generated = adapt(
+            "void mainImage(out vec4 color, vec2 coord) { color = vec4(coord, 0., .25); }"
+        )
+        self.assertIn("uint pitch_bytes)", generated)
+        self.assertIn("pitch_bytes / sizeof(uint)", generated)
+        self.assertIn("return 0xFF000000u | (b << 16) | (g << 8) | r", generated)
+
+    def test_initialized_scalar_global_becomes_macro(self) -> None:
+        body = translate_body(
+            """
+            float repeatSize = .04;
+            float scene(vec2 p) { return length(p / repeatSize); }
+            void mainImage(out vec4 color, in vec2 coord) {
+                color = vec4(scene(coord));
+            }
+            """
+        )
+        self.assertRegex(body, r"#define\s+repeatSize\s+\(\s*\.04f\)")
+
 
 if __name__ == "__main__":
     unittest.main()

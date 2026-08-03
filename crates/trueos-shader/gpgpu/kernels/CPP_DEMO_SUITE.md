@@ -13,38 +13,23 @@ output ABI, one resident upload, and six scalar-selected workloads:
 | `voronoi` | 4 | integer hashing, neighbour search, procedural cells |
 | `retro-sun` | 5 | layered synthwave scene, animated cutout bands, reflection, CRT post |
 
-`gallery` is the default and divides one UI4 surface into four panels. The
-other commands give each workload the complete resizable window. Retro Sun is
-intentionally standalone and is not added to the gallery.
-The separate `cpp audio` mode uses its own single audiovisual artifact and the
+Plain `cpp` opens `gallery`, which divides one UI4 surface into four panels.
+With that UI4 frame focused, Left and Right cycle through every C++ mode and
+Escape closes the gallery. Retro Sun remains a standalone view rather than a
+gallery panel. The audio view uses its own single audiovisual artifact and the
 same resize lifecycle; see
 [`CPP_AUDIO_VISUALIZER.md`](CPP_AUDIO_VISUALIZER.md).
 
 ```text
 cpp
-cpp aurora
-cpp julia
-cpp sdf
-cpp voronoi
-cpp retro-sun
-cpp audio
 cpp list
 cpp status
 cpp stop
 ```
 
-The longer form controls lifetime and publication cadence:
-
-```text
-cpp start [gallery|aurora|julia|sdf|voronoi|retro-sun|audio] [duration_ms] [cadence_ms] [publish_every]
-cpp start gallery 0 33 1
-cpp start retro-sun 0 33 1
-cpp start audio 0 50 1
-```
-
-The default lifetime is 30 seconds. A duration of zero runs until `cpp stop`.
-Starting a mode replaces the current Shell-controlled GPGPU preview because
-the producer uses that service's existing window/session lifecycle.
+The interactive session runs until focused Escape or `cpp stop`. Switching a
+mode replaces the current Shell-controlled GPGPU preview through the service's
+existing window/session lifecycle and restores focus to the replacement frame.
 
 ## Runtime boundary
 
@@ -127,10 +112,8 @@ boot `bld/trueos.iso` and run:
 ```text
 cpp
 cpp status
-cpp julia
-cpp sdf
-cpp voronoi
-cpp retro-sun
+Left / Right
+Escape
 cpp stop
 ```
 

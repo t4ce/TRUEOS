@@ -71,13 +71,15 @@ The first slice accepts a single, texture-free `mainImage` pass and supplies:
 - `iResolution`, `iTime`, `iTimeDelta`, `iFrame`, and `iFrameRate`
 - `iMouse`, `iDate`, and `iSampleRate`
 - scalar/vector GLSL constructors and common math helpers
-- `mat2` construction and vector/matrix multiplication
+- `mat2`/`mat3` construction and vector/matrix multiplication
+- GLSL `reflect`, `refract`, and `faceforward` geometric helpers
+- deterministic zero initialization for omitted local scalar initializers
 
 The adapter rejects `iChannel*`, samplers/texture calls, sound passes, and
 screen-space derivatives with a direct diagnostic. Those features require
 new, audited TRUEOS resource, multipass, or quad-derivative ABIs; silently
-running them through WebGL would no longer test the custom stack. `mat3` and
-`mat4` are also not part of this initial adapter. If a source uses a GLSL form
+running them through WebGL would no longer test the custom stack. `mat4` is not
+part of this initial adapter. If a source uses a GLSL form
 outside the adapter subset, the exact generated `.clcpp` and compiler error
 remain in `bld/shadertoy-cpp-offline/session/` for a focused compatibility
 addition.

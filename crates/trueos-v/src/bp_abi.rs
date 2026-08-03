@@ -275,6 +275,29 @@ pub struct TrueosUi4ParticleCraftParamsV1 {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4ShadertoyParamsV1 {
+    pub version: u32,
+    pub shader_id: u32,
+    pub frame: u32,
+    pub flags: u32,
+    pub time_seconds: f32,
+    pub delta_seconds: f32,
+    pub frame_rate: f32,
+    pub sample_rate: f32,
+    pub mouse_x: f32,
+    pub mouse_y: f32,
+    pub click_x: f32,
+    pub click_y: f32,
+    pub date_year: f32,
+    pub date_month: f32,
+    pub date_day: f32,
+    pub date_seconds: f32,
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4ShadertoyParamsV1>() == 16 * 4);
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4SpriteQuad {
     pub sprite_id: u32,
     pub c0_x: f32,
@@ -411,6 +434,13 @@ unsafe extern "C" {
         width: u32,
         height: u32,
     ) -> u32;
+    pub fn trueos_cabi_ui4_scene_frame_open_visual(
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        target_hz: u32,
+    ) -> u32;
     pub fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_pan_event_take(window_id: u32, out: *mut TrueosUi4PanEvent)
     -> i32;
@@ -514,6 +544,10 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_scene_particle_craft_render(
         window_id: u32,
         params: *const TrueosUi4ParticleCraftParamsV1,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_shadertoy_render(
+        window_id: u32,
+        params: *const TrueosUi4ShadertoyParamsV1,
     ) -> i32;
 
     pub fn trueos_cabi_poll_once();

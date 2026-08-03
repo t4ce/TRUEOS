@@ -1371,6 +1371,29 @@ pub(crate) fn select_window_for_cursor(
     Ok(broker.select_frame(index, Some(WindowTarget { owner, window }), combo_id, vcursor))
 }
 
+/// Transfer an existing cursor's selection to a replacement application frame
+/// without moving the cursor. Preview applications use this after an input-
+/// driven mode switch closes one broker session and opens the next.
+pub(crate) fn reselect_window_for_cursor(
+    source: Ui4CursorSource,
+    owner: WindowOwner,
+    window: WindowId,
+) -> Result<bool, Ui4ProgrammaticSelectionError> {
+    let snapshot = super::window_broker::window_snapshot(owner, window)
+        .ok_or(Ui4ProgrammaticSelectionError::NotFound)?;
+    if snapshot.state != WindowState::Ready || !snapshot.placement.visible {
+        return Err(Ui4ProgrammaticSelectionError::NotReady);
+    }
+    let (combo_id, vcursor) = cursor_hut_metadata(source);
+    let mut broker = INPUT_BROKER.lock();
+    let index = broker
+        .cursors
+        .iter()
+        .position(|route| route.source == source)
+        .ok_or(Ui4ProgrammaticSelectionError::NotFound)?;
+    Ok(broker.select_frame(index, Some(WindowTarget { owner, window }), combo_id, vcursor))
+}
+
 /// Programmatically focus a ready frame while retaining a known cursor
 /// position. Context-menu actions use their captured anchor so opening a
 /// service frame never teleports the software cursor to the frame origin.

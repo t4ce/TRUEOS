@@ -16,14 +16,15 @@ use crate::intel::gpgpu::{
     GpgpuAlphaBlendWorklistDesc, GpgpuGlyphMaskLayer, GpgpuOwnedParticleCraftState,
     GpgpuOwnedRgba8Surface, GpgpuPoint, GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence,
     GpgpuRgba8Surface, GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun,
-    ParticleCraftParamsV1, SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
-    SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, SkyboxSampleRgb565Params, Ui4CompositorCompletion,
-    Ui4CompositorSubmission, Ui4CompositorSubmitError, Ui4SpriteSceneCompletion,
-    allocate_font_instance_rgba8_surface_cleared, alpha_blend_worklist_max_descs,
-    glyph_mask_layers_rgba8_2d_mode, particle_craft_rgba8_frame, poll_ui4_blueprint_sprite_scene,
-    poll_ui4_compositor_submission, queue_ui4_blueprint_alpha_rects,
-    queue_ui4_blueprint_sprite_scene, release_rgba8_surface_for_scanout,
-    skybox_sample_rgb565_to_rgba8, sprite_quad_worklist_max_descs,
+    ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION, SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
+    SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, ShaderToyFrameParams, SkyboxSampleRgb565Params,
+    Ui4CompositorCompletion, Ui4CompositorSubmission, Ui4CompositorSubmitError,
+    Ui4SpriteSceneCompletion, allocate_font_instance_rgba8_surface_cleared,
+    alpha_blend_worklist_max_descs, glyph_mask_layers_rgba8_2d_mode, particle_craft_rgba8_frame,
+    poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
+    queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
+    release_rgba8_surface_for_scanout, shadertoy_rgba8_surface_full, skybox_sample_rgb565_to_rgba8,
+    sprite_quad_worklist_max_descs,
 };
 use crate::intel::gpu_font::{
     GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontRgba, GpuFontTextRequest,
@@ -105,6 +106,7 @@ const TEXT_BACKBUFFER_MAX_EXTENT: u32 = 4_096;
 const TEXT_BACKBUFFER_MAX_GLYPHS: usize = 4_096;
 const CLOSE_PERSIST_FINAL_FRAME: u32 = 1 << 0;
 const CLOSE_VALID_FLAGS: u32 = CLOSE_PERSIST_FINAL_FRAME;
+pub const UI4_VISUAL_SOFT_CAP_HZ: u32 = 60;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -317,6 +319,32 @@ pub struct TrueosUi4ParticleCraftParamsV1 {
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4ParticleCraftParamsV1>() == 16 * 4);
 
+/// Versioned, pointer-free controls for one kernel-reviewed ShaderToy image.
+/// `shader_id` selects an immutable catalog entry; source, binaries, and GPU
+/// addresses are deliberately absent from this provisional ABI.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4ShadertoyParamsV1 {
+    pub version: u32,
+    pub shader_id: u32,
+    pub frame: u32,
+    pub flags: u32,
+    pub time_seconds: f32,
+    pub delta_seconds: f32,
+    pub frame_rate: f32,
+    pub sample_rate: f32,
+    pub mouse_x: f32,
+    pub mouse_y: f32,
+    pub click_x: f32,
+    pub click_y: f32,
+    pub date_year: f32,
+    pub date_month: f32,
+    pub date_day: f32,
+    pub date_seconds: f32,
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4ShadertoyParamsV1>() == 16 * 4);
+
 /// One ordered, straight-alpha RGBA sprite operation. Sprite id zero selects
 /// the frame-owned one-pixel white source and therefore represents a solid
 /// rectangle when every UV is zero.
@@ -354,6 +382,7 @@ struct BlueprintSceneSurface {
     width: u32,
     height: u32,
     cadence: FrameCadence,
+    visual_cadence: Option<BlueprintVisualCadence>,
     write_lease: Option<FrameWriteLease>,
     pending_gpu_release: Option<GpgpuRgba8ReleaseFence>,
     gpu_submission_unretired: bool,
@@ -381,6 +410,42 @@ struct BlueprintSceneSurface {
     stamped_text_cursor: usize,
     stamped_text_pending: Option<PendingFontFrameStamp>,
     stamped_text_rendered: bool,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct BlueprintVisualCadence {
+    target_hz: u32,
+    next_tick: u64,
+    remainder: u64,
+}
+
+impl BlueprintVisualCadence {
+    fn new(target_hz: u32) -> Self {
+        Self {
+            target_hz,
+            next_tick: Instant::now().as_ticks(),
+            remainder: 0,
+        }
+    }
+
+    fn admit(&mut self) -> bool {
+        let now = Instant::now().as_ticks();
+        if now < self.next_tick {
+            return false;
+        }
+        if self.next_tick < now {
+            self.next_tick = now;
+            self.remainder = 0;
+        }
+        let hz = self.target_hz as u64;
+        let tick_hz = embassy_time::TICK_HZ;
+        let mut period = tick_hz / hz;
+        self.remainder = self.remainder.saturating_add(tick_hz % hz);
+        period = period.saturating_add(self.remainder / hz);
+        self.remainder %= hz;
+        self.next_tick = self.next_tick.saturating_add(period.max(1));
+        true
+    }
 }
 
 struct BlueprintRetainedTextLayer {
@@ -630,7 +695,7 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
             0
         };
     }
-    open_blueprint_frame(x, y, width, height, FrameCadence::Dirty)
+    open_blueprint_frame(x, y, width, height, FrameCadence::Dirty, None)
 }
 
 /// Create one single-buffered Blueprint snapshot frame for an active VM.
@@ -659,7 +724,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_open_immutable(
             0
         };
     }
-    open_blueprint_frame(x, y, width, height, FrameCadence::Immutable)
+    open_blueprint_frame(x, y, width, height, FrameCadence::Immutable, None)
 }
 
 /// Create one streaming/triple-buffered UI4 scene frame for an active VM.
@@ -684,10 +749,53 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_open_streaming(
             0
         };
     }
-    open_blueprint_frame(x, y, width, height, FrameCadence::Streaming)
+    open_blueprint_frame(x, y, width, height, FrameCadence::Streaming, None)
 }
 
-fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameCadence) -> u32 {
+/// Create a visual-mode UI4 frame. The requested target is brokered by the
+/// kernel and cannot exceed the provisional 60 Hz policy ceiling.
+pub extern "C" fn trueos_cabi_ui4_scene_frame_open_visual(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    target_hz: u32,
+) -> u32 {
+    if width == 0
+        || height == 0
+        || width > MAX_FRAME_WIDTH
+        || height > MAX_FRAME_HEIGHT
+        || target_hz == 0
+        || target_hz > UI4_VISUAL_SOFT_CAP_HZ
+    {
+        return 0;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let payload = target_hz.to_le_bytes();
+        let (status, window) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_OPEN_VISUAL,
+            pack_i32_pair(x, y),
+            pack_u32_pair(width, height),
+            &payload,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            window as u32
+        } else {
+            0
+        };
+    }
+    open_blueprint_frame(x, y, width, height, FrameCadence::Streaming, Some(target_hz))
+}
+
+fn open_blueprint_frame(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    cadence: FrameCadence,
+    visual_target_hz: Option<u32>,
+) -> u32 {
     reap_retired_frames();
     let Some(owner) = blueprint_owner() else {
         return 0;
@@ -766,6 +874,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
                 width,
                 height,
                 cadence,
+                visual_cadence: visual_target_hz.map(BlueprintVisualCadence::new),
                 write_lease: None,
                 pending_gpu_release: None,
                 gpu_submission_unretired: false,
@@ -806,6 +915,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         width,
         height,
         cadence,
+        visual_cadence: visual_target_hz.map(BlueprintVisualCadence::new),
         write_lease: None,
         pending_gpu_release: None,
         gpu_submission_unretired: false,
@@ -839,7 +949,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         FrameCadence::Streaming => ("streaming", 3),
         FrameCadence::Immutable => ("immutable", 1),
     };
-    crate::log_info!(target: "ui4/blueprint-frame"; "frame open owner={:?} window={} extent={}x{} cadence={} buffers={} plane=slot{} scene=text+shader\n", owner, window.raw(), width, height, cadence_name, buffer_count, plane_slot);
+    crate::log_info!(target: "ui4/blueprint-frame"; "frame open owner={:?} window={} extent={}x{} cadence={} visual_hz={} visual_soft_cap_hz={} buffers={} plane=slot{} scene=text+shader\n", owner, window.raw(), width, height, cadence_name, visual_target_hz.unwrap_or(0), UI4_VISUAL_SOFT_CAP_HZ, buffer_count, plane_slot);
     window.raw()
 }
 
@@ -892,6 +1002,11 @@ pub(crate) fn begin_blueprint_frame(
         return ERROR_STATE;
     }
     if surface.gpu_submission_unretired {
+        return ERROR_BUSY;
+    }
+    if let Some(cadence) = surface.visual_cadence.as_mut()
+        && !cadence.admit()
+    {
         return ERROR_BUSY;
     }
     let lease = match acquire_frame_buffer(surface.frame) {
@@ -2222,6 +2337,107 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_particle_craft_render(
         ERROR_BUSY
     } else {
         let _ = mark_frame_buffer_cpu_authored(lease);
+        ERROR_UI4
+    }
+}
+
+/// Execute one reviewed ShaderToy artifact over the complete visual-mode UI4
+/// back buffer. This provisional boundary intentionally accepts no source,
+/// SPIR-V, Zebin, pointers, or GPU virtual addresses from the Blueprint.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
+    window_id: u32,
+    params: *const TrueosUi4ShadertoyParamsV1,
+) -> i32 {
+    if params.is_null() {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let payload = unsafe {
+            core::slice::from_raw_parts(
+                params.cast::<u8>(),
+                core::mem::size_of::<TrueosUi4ShadertoyParamsV1>(),
+            )
+        };
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SHADERTOY_RENDER,
+            window_id as u64,
+            0,
+            payload,
+        );
+    }
+    let wire = unsafe { *params };
+    let params = ShaderToyFrameParams {
+        version: wire.version,
+        shader_id: wire.shader_id,
+        frame: wire.frame,
+        flags: wire.flags,
+        time_seconds: wire.time_seconds,
+        delta_seconds: wire.delta_seconds,
+        frame_rate: wire.frame_rate,
+        sample_rate: wire.sample_rate,
+        mouse_x: wire.mouse_x,
+        mouse_y: wire.mouse_y,
+        click_x: wire.click_x,
+        click_y: wire.click_y,
+        date_year: wire.date_year,
+        date_month: wire.date_month,
+        date_day: wire.date_day,
+        date_seconds: wire.date_seconds,
+    };
+    if params.version != SHADERTOY_PARAMS_VERSION || !params.is_valid() {
+        return ERROR_INVALID;
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let lease = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.visual_cadence.is_none() {
+            return ERROR_INVALID;
+        }
+        if surface.gpu_submission_unretired {
+            return ERROR_BUSY;
+        }
+        let Some(lease) = surface.write_lease else {
+            return ERROR_STATE;
+        };
+        lease
+    };
+    let Ok(destination) = gpgpu_rgba_surface(lease) else {
+        return ERROR_UI4;
+    };
+    let rendered = shadertoy_rgba8_surface_full(destination, params);
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    if surface.write_lease != Some(lease) {
+        return ERROR_STATE;
+    }
+    if rendered.ok {
+        let Some(release) = rendered.release else {
+            return ERROR_UI4;
+        };
+        surface.pending_gpu_release = Some(release);
+        return 0;
+    }
+    if rendered.submitted {
+        surface.gpu_submission_unretired = true;
+        crate::log_error!(target: "ui4/blueprint-frame";
+            "ShaderToy producer quarantined owner={:?} window={} shader={} frame={} buffer={} marker=0x{:08X} submit_ms={} reason=accepted-submission-not-retired action=no-cpu-fallback+retain-ring\n",
+            owner,
+            window_id,
+            params.shader_id,
+            lease.frame.raw(),
+            lease.buffer_index,
+            rendered.marker,
+            rendered.submit_ms,
+        );
+        ERROR_BUSY
+    } else {
         ERROR_UI4
     }
 }

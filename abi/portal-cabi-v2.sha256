@@ -35,6 +35,11 @@
 # ParticleCraft render is likewise strictly additive. It accepts one versioned,
 # pointer-free 64-byte control block; retained state and GPU addresses stay
 # kernel-owned and existing UI4 producers retain their prior frame lifecycle.
+# UI4 visual-frame open and ShaderToy render are strictly additive. Visual open
+# adds a kernel-enforced 60 Hz ceiling to streaming frames, while ShaderToy
+# render accepts only a versioned pointer-free 64-byte uniform block and an
+# immutable reviewed catalog id; executable bytes and GPU addresses stay
+# kernel-owned.
 # The capability-backed mouse-motion, keyboard-control, and gamepad-control
 # calls are strictly additive. They expose mediated high-level programs without
 # changing the existing raw HID or selected-frame input contracts.
@@ -82,4 +87,4 @@
 # strictly additive and restricted to the Dobby Blueprint owner. They lend the
 # existing Spirit/Lilly input pair through bounded serialized operations; older
 # v2 artifacts import none of these symbols and retain their prior authority.
-da003c646ec1b2691438ec91054f90fe15a32ea3f96654ae8b9de547a72e74bf
+52162348ab15fdd92c42df4e03fc016ef41281e934d6921e0e37402a63aab36e

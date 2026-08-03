@@ -89,7 +89,7 @@ pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewConfig, GpgpuPreviewMetrics,
     GpgpuPreviewPreset, gpgpu_preview_consumer_service_task, gpgpu_preview_status,
     request_cpp_font_preview_start, request_cpp_font_rush_start, request_cpp_font_rush_stop,
-    request_gpgpu_lab256_startup, request_gpgpu_preview_start, request_gpgpu_preview_stop,
+    request_cpp_gallery_start, request_gpgpu_lab256_startup, request_gpgpu_preview_stop,
 };
 pub(crate) use gpgpu_svg_probe_consumer::{
     GpgpuSvgProbeConfig, gpgpu_svg_probe_consumer_service_task, gpgpu_svg_probe_status,
@@ -101,8 +101,9 @@ pub(crate) use h264_encode_stream::{ui4_h264_encode_prepare_task, ui4_h264_encod
 pub(crate) use h264_encode_udp::ui4_h264_encode_udp_egress_task;
 pub(crate) use input_broker::{
     Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase, Ui4VisualRect,
-    focused_keyboard_state, select_window_for_cursor, show_context_menu, software_cursor_visuals,
-    take_owner_input_events, ui4_input_service_task, window_input_routes,
+    focused_keyboard_state, reselect_window_for_cursor, select_window_for_cursor,
+    show_context_menu, software_cursor_visuals, take_owner_input_events, ui4_input_service_task,
+    window_input_routes,
 };
 pub(crate) use screenshot::{
     COMPACT_WINDOW_GRID_EXTENT, COMPACT_WINDOW_GRID_MAJOR_STEP,

@@ -17,9 +17,6 @@ use crate::r::font_kernel_service::{
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
 
-const CPP_DEMO_DEFAULT_DURATION_MS: u64 = 30_000;
-const CPP_AUDIO_DEFAULT_DURATION_MS: u64 = 0;
-const CPP_AUDIO_DEFAULT_CADENCE_MS: u64 = 50;
 const CPP_FONT_OUTPUT_CAPACITY: usize = 8;
 const CPP_FONT_DEFAULT_PIXELS: f32 = 36.0;
 const CPP_FONT_DEFAULT_LINE_HEIGHT: f32 = 1.25;
@@ -28,14 +25,8 @@ static CPP_FONT_OUTPUTS: Mutex<VecDeque<FontStampedBuffer>> = Mutex::new(VecDequ
 static CPP_FONT_OUTPUT_RESERVATIONS: AtomicUsize = AtomicUsize::new(0);
 
 fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(
-        io,
-        "cpp [gallery|aurora|julia|sdf|voronoi|retro-sun|audio|particle|static30]",
-    );
-    print_shell_line(
-        io,
-        "cpp start [gallery|aurora|julia|sdf|voronoi|retro-sun|audio|particle|static30] [duration_ms] [cadence_ms] [publish_every]",
-    );
+    print_shell_line(io, "cpp");
+    print_shell_line(io, "  focused Left/Right cycles modes; Escape stops");
     print_shell_line(io, "cpp list");
     print_shell_line(io, "cpp status");
     print_shell_line(io, "cpp stop");
@@ -54,41 +45,6 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "cpp svg start [basic|curves|holes]");
     print_shell_line(io, "cpp svg status");
     print_shell_line(io, "cpp svg stop");
-}
-
-fn parse_mode(raw: &str) -> Option<crate::ui4::GpgpuPreviewPreset> {
-    if raw.eq_ignore_ascii_case("gallery") || raw.eq_ignore_ascii_case("all") {
-        Some(crate::ui4::GpgpuPreviewPreset::CppGallery)
-    } else if raw.eq_ignore_ascii_case("aurora") {
-        Some(crate::ui4::GpgpuPreviewPreset::CppAurora)
-    } else if raw.eq_ignore_ascii_case("julia") {
-        Some(crate::ui4::GpgpuPreviewPreset::CppJulia)
-    } else if raw.eq_ignore_ascii_case("sdf") {
-        Some(crate::ui4::GpgpuPreviewPreset::CppSdf)
-    } else if raw.eq_ignore_ascii_case("voronoi") {
-        Some(crate::ui4::GpgpuPreviewPreset::CppVoronoi)
-    } else if raw.eq_ignore_ascii_case("retro")
-        || raw.eq_ignore_ascii_case("sun")
-        || raw.eq_ignore_ascii_case("retro-sun")
-        || raw.eq_ignore_ascii_case("retrosun")
-    {
-        Some(crate::ui4::GpgpuPreviewPreset::CppRetroSun)
-    } else if raw.eq_ignore_ascii_case("audio")
-        || raw.eq_ignore_ascii_case("av")
-        || raw.eq_ignore_ascii_case("visualizer")
-    {
-        Some(crate::ui4::GpgpuPreviewPreset::CppAudio)
-    } else if raw.eq_ignore_ascii_case("particle")
-        || raw.eq_ignore_ascii_case("particles")
-        || raw.eq_ignore_ascii_case("arc-forge")
-        || raw.eq_ignore_ascii_case("particle-craft")
-    {
-        Some(crate::ui4::GpgpuPreviewPreset::CppParticle)
-    } else if raw.eq_ignore_ascii_case("static30") {
-        Some(crate::ui4::GpgpuPreviewPreset::Static30)
-    } else {
-        None
-    }
 }
 
 const fn is_cpp_preset(preset: crate::ui4::GpgpuPreviewPreset) -> bool {
@@ -203,131 +159,29 @@ fn svg(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     }
 }
 
-fn parse_u64(
-    io: &'static dyn ShellBackend2,
-    args: &mut SplitWhitespace<'_>,
-    default: u64,
-) -> Option<u64> {
-    match args.next() {
-        Some(raw) => match raw.parse::<u64>() {
-            Ok(value) => Some(value),
-            Err(_) => {
-                usage(io);
-                None
-            }
-        },
-        None => Some(default),
-    }
-}
-
-fn parse_u32(
-    io: &'static dyn ShellBackend2,
-    args: &mut SplitWhitespace<'_>,
-    default: u32,
-) -> Option<u32> {
-    match args.next() {
-        Some(raw) => match raw.parse::<u32>() {
-            Ok(value) => Some(value),
-            Err(_) => {
-                usage(io);
-                None
-            }
-        },
-        None => Some(default),
-    }
-}
-
-fn start(
-    io: &'static dyn ShellBackend2,
-    preset: crate::ui4::GpgpuPreviewPreset,
-    args: &mut SplitWhitespace<'_>,
-) {
-    let audio = preset == crate::ui4::GpgpuPreviewPreset::CppAudio;
-    let particle = preset == crate::ui4::GpgpuPreviewPreset::CppParticle;
-    let static30 = preset == crate::ui4::GpgpuPreviewPreset::Static30;
-    let default_duration_ms = if audio {
-        CPP_AUDIO_DEFAULT_DURATION_MS
-    } else {
-        CPP_DEMO_DEFAULT_DURATION_MS
-    };
-    let default_cadence_ms = if audio {
-        CPP_AUDIO_DEFAULT_CADENCE_MS
-    } else {
-        crate::ui4::GPGPU_PREVIEW_DEFAULT_CADENCE_MS
-    };
-    let Some(duration_ms) = parse_u64(io, args, default_duration_ms) else {
-        return;
-    };
-    let Some(cadence_ms) = parse_u64(io, args, default_cadence_ms) else {
-        return;
-    };
-    let Some(publish_every) = parse_u32(io, args, crate::ui4::GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY)
-    else {
-        return;
-    };
-    if !expect_no_more(io, args) {
-        return;
-    }
-
-    let config = crate::ui4::GpgpuPreviewConfig {
-        preset,
-        duration_ms,
-        cadence_ms,
-        publish_every,
-    };
-    let detail = if static30 {
-        String::from(
-            " windows=30 layout=6x5 plane_slots=1+2+3/10-each buffering=immutable-single publish_passes=1",
-        )
-    } else if audio {
-        String::from(
-            " pcm=post-mix/pre-hda-s16le-stereo-48k fft=2048-mid-side bands=64 walker=horizontal-pairs/50pct",
-        )
-    } else if particle {
-        particle_work_detail(
-            crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_WIDTH,
-            crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_HEIGHT,
-        )
-    } else {
-        String::new()
-    };
-    match crate::ui4::request_gpgpu_preview_start(config) {
+fn start(io: &'static dyn ShellBackend2) {
+    let preset = crate::ui4::GpgpuPreviewPreset::CppGallery;
+    match crate::ui4::request_cpp_gallery_start() {
         Ok(serial) => {
             let status = crate::ui4::gpgpu_preview_status();
             print_shell_line(
                 io,
                 alloc::format!(
-                    "cpp start: queued=1 request={} mode={} service_online={} duration_ms={} cadence_ms={} publish_every={} frontend=cpp-for-opencl backend=intel-igc-aot runtime_compiler=0 artifact={} zebin_sha256={} target=8086:4680-r0C kernel={} simd=16 ui4_windows={} buffering={} plane={} maximize={}{} stop=\"cpp stop\"",
+                    "cpp: queued=1 request={} mode=gallery service_online={} duration=until-escape-or-cpp-stop cadence_ms={} publish_every={} frontend=cpp-for-opencl backend=intel-igc-aot runtime_compiler=0 artifact={} zebin_sha256={} target=8086:4680-r0C kernel={} simd=16 ui4_windows=1 buffering=double plane=slot1-direct maximize=dynamic-frame/reconciled controls=left/right/escape stop=\"cpp stop\"",
                     serial,
-                    cpp_mode_label(preset),
                     status.online as u8,
-                    duration_ms,
-                    cadence_ms,
-                    publish_every,
+                    crate::ui4::GPGPU_PREVIEW_DEFAULT_CADENCE_MS,
+                    crate::ui4::GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY,
                     artifact_name(preset),
                     artifact_hash(preset),
                     kernel_name(preset),
-                    if static30 { 30 } else { 1 },
-                    if static30 { "single" } else { "double" },
-                    if static30 {
-                        "slots1+2+3/10-each"
-                    } else {
-                        "slot1-direct"
-                    },
-                    if static30 {
-                        "movable-fixed-canvas"
-                    } else {
-                        "dynamic-frame/reconciled"
-                    },
-                    detail,
                 )
                 .as_str(),
             );
         }
         Err(reason) => print_shell_line(
             io,
-            alloc::format!("cpp start: queued=0 mode={} reason={reason}", cpp_mode_label(preset))
-                .as_str(),
+            alloc::format!("cpp: queued=0 mode=gallery reason={reason}").as_str(),
         ),
     }
 }
@@ -350,6 +204,10 @@ const fn cpp_mode_label(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str 
 }
 
 fn print_list(io: &'static dyn ShellBackend2) {
+    print_shell_line(
+        io,
+        "cpp controls: launch=cpp cycle=focused-left/right stop=focused-escape-or-cpp-stop",
+    );
     print_shell_line(
         io,
         "cpp demo: mode=gallery id=0 explores=multi-mode-dispatch/one-stable-ABI panels=aurora+julia+sdf+voronoi",
@@ -1438,20 +1296,11 @@ pub(crate) fn try_parse(
     let input = input.trim();
     let mut args = input.split_whitespace();
     let Some(command) = args.next() else {
-        start(io, crate::ui4::GpgpuPreviewPreset::CppGallery, &mut args);
+        start(io);
         return ParseOutcome::Handled;
     };
 
-    if command.eq_ignore_ascii_case("start") {
-        let preset = match args.clone().next().and_then(parse_mode) {
-            Some(preset) => {
-                let _ = args.next();
-                preset
-            }
-            None => crate::ui4::GpgpuPreviewPreset::CppGallery,
-        };
-        start(io, preset, &mut args);
-    } else if command.eq_ignore_ascii_case("list") {
+    if command.eq_ignore_ascii_case("list") {
         if expect_no_more(io, &mut args) {
             print_list(io);
         }
@@ -1479,8 +1328,6 @@ pub(crate) fn try_parse(
         spirit(io, &mut args);
     } else if command.eq_ignore_ascii_case("svg") {
         svg(io, &mut args);
-    } else if let Some(preset) = parse_mode(command) {
-        start(io, preset, &mut args);
     } else {
         usage(io);
     }
@@ -1492,31 +1339,8 @@ pub(crate) fn try_parse(
 mod tests {
     use super::{
         FontRushAction, FontStampFit, font_rush_status_detail, parse_font_rush_action,
-        parse_font_stamp, parse_mode, parse_svg_demo, particle_naive_candidate_tests,
+        parse_font_stamp, parse_svg_demo, particle_naive_candidate_tests,
     };
-
-    #[test]
-    fn retro_sun_aliases_select_the_standalone_preset() {
-        for alias in ["retro-sun", "retro", "sun", "retrosun"] {
-            assert_eq!(parse_mode(alias), Some(crate::ui4::GpgpuPreviewPreset::CppRetroSun),);
-        }
-    }
-
-    #[test]
-    fn particle_aliases_select_the_stateful_two_pass_preset() {
-        for alias in ["particle", "particles", "particle-craft", "arc-forge"] {
-            assert_eq!(parse_mode(alias), Some(crate::ui4::GpgpuPreviewPreset::CppParticle),);
-        }
-    }
-
-    #[test]
-    fn static30_selects_the_font_kernel_window_grid_preset() {
-        for spelling in ["static30", "STATIC30", "Static30"] {
-            assert_eq!(parse_mode(spelling), Some(crate::ui4::GpgpuPreviewPreset::Static30),);
-        }
-        assert!(super::is_cpp_preset(crate::ui4::GpgpuPreviewPreset::Static30));
-        assert_eq!(super::cpp_mode_label(crate::ui4::GpgpuPreviewPreset::Static30), "static30",);
-    }
 
     #[test]
     fn particle_default_reports_the_reduced_candidate_work() {

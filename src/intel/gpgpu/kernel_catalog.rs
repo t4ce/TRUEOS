@@ -49,6 +49,21 @@ pub(crate) const CPP_DEMO_RGBA8_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/cpp_demo_rgba8.clcpp");
 pub(crate) const CPP_DEMO_RGBA8_SOURCE_PATH: &str =
     "crates/trueos-shader/gpgpu/kernels/cpp_demo_rgba8.clcpp";
+pub(crate) const SHADERTOY_MANDELBROT_KERNEL_NAME: &str = "shadertoy_mandelbrot";
+pub(crate) const SHADERTOY_CUBE_FIELD_KERNEL_NAME: &str = "shadertoy_cube_field";
+pub(crate) const SHADERTOY_NGUYEN_KERNEL_NAME: &str = "shadertoy_nguyen";
+pub(crate) const SHADERTOY_MANDELBROT_OPENCL_SOURCE: &str =
+    include_str!("../../../crates/trueos-shader/gpgpu/kernels/shadertoy_mandelbrot.clcpp");
+pub(crate) const SHADERTOY_CUBE_FIELD_OPENCL_SOURCE: &str =
+    include_str!("../../../crates/trueos-shader/gpgpu/kernels/shadertoy_cube_field.clcpp");
+pub(crate) const SHADERTOY_NGUYEN_OPENCL_SOURCE: &str =
+    include_str!("../../../crates/trueos-shader/gpgpu/kernels/shadertoy_nguyen.clcpp");
+pub(crate) const SHADERTOY_MANDELBROT_SOURCE_PATH: &str =
+    "crates/trueos-shader/gpgpu/kernels/shadertoy_mandelbrot.clcpp";
+pub(crate) const SHADERTOY_CUBE_FIELD_SOURCE_PATH: &str =
+    "crates/trueos-shader/gpgpu/kernels/shadertoy_cube_field.clcpp";
+pub(crate) const SHADERTOY_NGUYEN_SOURCE_PATH: &str =
+    "crates/trueos-shader/gpgpu/kernels/shadertoy_nguyen.clcpp";
 pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME: &str = "cpp_audio_visualizer_rgba8";
 pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/cpp_audio_visualizer_rgba8.clcpp");
@@ -125,6 +140,9 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         CHART_SINE_RGBA8_KERNEL_NAME => Some(CHART_SINE_RGBA8_OPENCL_SOURCE),
         PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some(PIXEL_PLASMA_RGBA8_OPENCL_SOURCE),
         CPP_DEMO_RGBA8_KERNEL_NAME => Some(CPP_DEMO_RGBA8_OPENCL_SOURCE),
+        SHADERTOY_MANDELBROT_KERNEL_NAME => Some(SHADERTOY_MANDELBROT_OPENCL_SOURCE),
+        SHADERTOY_CUBE_FIELD_KERNEL_NAME => Some(SHADERTOY_CUBE_FIELD_OPENCL_SOURCE),
+        SHADERTOY_NGUYEN_KERNEL_NAME => Some(SHADERTOY_NGUYEN_OPENCL_SOURCE),
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(CPP_AUDIO_VISUALIZER_RGBA8_OPENCL_SOURCE),
         PARTICLE_CRAFT_KERNEL_NAME
         | PARTICLE_CRAFT_STEP_KERNEL_NAME
@@ -178,6 +196,9 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         CHART_SINE_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/chart_sine_rgba8.clcpp"),
         PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/pixel_plasma_rgba8.clcpp"),
         CPP_DEMO_RGBA8_KERNEL_NAME => Some(CPP_DEMO_RGBA8_SOURCE_PATH),
+        SHADERTOY_MANDELBROT_KERNEL_NAME => Some(SHADERTOY_MANDELBROT_SOURCE_PATH),
+        SHADERTOY_CUBE_FIELD_KERNEL_NAME => Some(SHADERTOY_CUBE_FIELD_SOURCE_PATH),
+        SHADERTOY_NGUYEN_KERNEL_NAME => Some(SHADERTOY_NGUYEN_SOURCE_PATH),
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(CPP_AUDIO_VISUALIZER_RGBA8_SOURCE_PATH),
         PARTICLE_CRAFT_KERNEL_NAME
         | PARTICLE_CRAFT_STEP_KERNEL_NAME
@@ -384,6 +405,60 @@ const _: () = {
     assert!(contract.bindings[0].arg_index == 0);
     assert!(contract.bindings[0].bti == 0);
     assert!(contract.payload_args.len() == 12);
+};
+include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_mandelbrot.contract.rs"
+);
+include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_cube_field.contract.rs"
+);
+include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_nguyen.contract.rs"
+);
+pub(crate) const SHADERTOY_MANDELBROT_ADLS_BIN: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_mandelbrot.bin"
+);
+pub(crate) const SHADERTOY_MANDELBROT_ADLS_SPV: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_mandelbrot.spv"
+);
+pub(crate) const SHADERTOY_CUBE_FIELD_ADLS_BIN: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_cube_field.bin"
+);
+pub(crate) const SHADERTOY_CUBE_FIELD_ADLS_SPV: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_cube_field.spv"
+);
+pub(crate) const SHADERTOY_NGUYEN_ADLS_BIN: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_nguyen.bin"
+);
+pub(crate) const SHADERTOY_NGUYEN_ADLS_SPV: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_nguyen.spv"
+);
+const _: () = {
+    let contracts = [
+        SHADERTOY_MANDELBROT_ADLS_CPP_ABI_CONTRACT,
+        SHADERTOY_CUBE_FIELD_ADLS_CPP_ABI_CONTRACT,
+        SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT,
+    ];
+    let mut index = 0;
+    while index < contracts.len() {
+        let contract = contracts[index];
+        assert!(matches!(contract.validate(), Ok(())));
+        assert!(contract.target.pci_device_ids.len() == 1);
+        assert!(contract.target.pci_device_ids[0] == 0x4680);
+        assert!(contract.target.revision_min == 0x0C);
+        assert!(contract.target.revision_max == 0x0C);
+        assert!(contract.simd_width == 16);
+        assert!(contract.grf_count == 128);
+        assert!(contract.scratch_bytes == 0);
+        assert!(contract.slm_bytes == 0);
+        assert!(contract.cross_thread_data_bytes == 96);
+        assert!(contract.per_thread_data_bytes == 96);
+        assert!(contract.payload_args.len() == 5);
+        index += 1;
+    }
+    assert!(SHADERTOY_MANDELBROT_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
+    assert!(SHADERTOY_CUBE_FIELD_ADLS_CPP_ABI_CONTRACT.bindings.len() == 2);
+    assert!(SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
 };
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_audio_visualizer_rgba8.contract.rs"
