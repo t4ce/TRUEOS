@@ -525,6 +525,7 @@ unsafe extern "C" {
         data_len: usize,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_sprite_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
+    pub fn trueos_cabi_ui4_scene_visual_frame_begin(window_id: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_sprite_quads(
         window_id: u32,
         quads: *const TrueosUi4SpriteQuad,

@@ -96,6 +96,29 @@ static PRODUCER_VA_CAPACITY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
 static DMA_CAPACITY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
 
 pub fn create_surface(width: u32, height: u32, format: UiSurfaceFormat) -> Result<UiSurfaceHandle> {
+    create_surface_with_initialization(width, height, format, true)
+}
+
+/// Allocate a producer-only surface without touching its pixels on the CPU.
+///
+/// The caller must keep the allocation unpublished until a trusted GPU
+/// producer has overwritten the complete surface and supplied its exact
+/// release fence. `ui4::frame_pool` records and enforces that requirement for
+/// every frame created through its GPU-full-overwrite constructor.
+pub(crate) fn create_gpu_full_overwrite_surface(
+    width: u32,
+    height: u32,
+    format: UiSurfaceFormat,
+) -> Result<UiSurfaceHandle> {
+    create_surface_with_initialization(width, height, format, false)
+}
+
+fn create_surface_with_initialization(
+    width: u32,
+    height: u32,
+    format: UiSurfaceFormat,
+    initialize_cpu: bool,
+) -> Result<UiSurfaceHandle> {
     if width == 0 || height == 0 {
         return Err(Error::Invalid);
     }
@@ -128,10 +151,12 @@ pub fn create_surface(width: u32, height: u32, format: UiSurfaceFormat) -> Resul
         log_allocation_rejected("dma-capacity", active, width, height, pitch, byte_len);
         return Err(Error::OutOfMemory);
     };
-    unsafe {
-        core::ptr::write_bytes(virt, 0, byte_len);
+    if initialize_cpu {
+        unsafe {
+            core::ptr::write_bytes(virt, 0, byte_len);
+        }
+        crate::intel::dma_flush(virt, byte_len);
     }
-    crate::intel::dma_flush(virt, byte_len);
 
     // This is a producer address, not a display-plane slot. Render/compute
     // submission maps the DMA allocation into its PPGTT before use. A future

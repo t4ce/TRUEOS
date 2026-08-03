@@ -43,11 +43,12 @@ use super::{
     FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4CursorIcon, Ui4CursorSource,
     Ui4InputEvent, WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowPlane,
     WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer,
-    begin_additional_window_session, cancel_frame_buffer, create_frame, create_window,
-    destroy_frame, finish_window_session, finish_window_session_with_request,
-    focused_keyboard_state, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored,
-    publish_frame_buffer, publish_gpgpu_scene_frame_buffer, publish_window_frame,
-    replace_window_frame, set_window_cursor_icon, set_window_custom_cursor, set_window_placement,
+    begin_additional_window_session, cancel_frame_buffer, commit_window_frame_replacement,
+    create_frame, create_gpu_full_overwrite_frame, create_window, destroy_frame,
+    finish_window_session, finish_window_session_with_request, focused_keyboard_state,
+    gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, publish_frame_buffer,
+    publish_gpgpu_scene_frame_buffer, publish_window_frame, replace_window_frame,
+    set_window_cursor_icon, set_window_custom_cursor, set_window_placement,
     take_owner_input_events, take_window_first_presentation, window_input_routes, window_placement,
     writable_rgba_view,
 };
@@ -383,6 +384,7 @@ struct BlueprintSceneSurface {
     height: u32,
     cadence: FrameCadence,
     visual_cadence: Option<BlueprintVisualCadence>,
+    pending_resize: Option<BlueprintPendingResize>,
     write_lease: Option<FrameWriteLease>,
     pending_gpu_release: Option<GpgpuRgba8ReleaseFence>,
     gpu_submission_unretired: bool,
@@ -413,6 +415,14 @@ struct BlueprintSceneSurface {
 }
 
 #[derive(Copy, Clone, Debug)]
+struct BlueprintPendingResize {
+    /// The broker continues presenting this frame until `frame` has a
+    /// released front and both frame and placement can be committed together.
+    previous_frame: FrameHandle,
+    placement: WindowPlacement,
+}
+
+#[derive(Copy, Clone, Debug)]
 struct BlueprintVisualCadence {
     target_hz: u32,
     next_tick: u64,
@@ -428,11 +438,17 @@ impl BlueprintVisualCadence {
         }
     }
 
-    fn admit(&mut self) -> bool {
+    fn wait_ms(&self) -> u64 {
         let now = Instant::now().as_ticks();
-        if now < self.next_tick {
-            return false;
-        }
+        let remaining_ticks = self.next_tick.saturating_sub(now);
+        remaining_ticks
+            .saturating_mul(1_000)
+            .saturating_add(embassy_time::TICK_HZ.saturating_sub(1))
+            / embassy_time::TICK_HZ
+    }
+
+    fn consume_admission(&mut self) {
+        let now = Instant::now().as_ticks();
         if self.next_tick < now {
             self.next_tick = now;
             self.remainder = 0;
@@ -444,7 +460,6 @@ impl BlueprintVisualCadence {
         period = period.saturating_add(self.remainder / hz);
         self.remainder %= hz;
         self.next_tick = self.next_tick.saturating_add(period.max(1));
-        true
     }
 }
 
@@ -802,11 +817,19 @@ fn open_blueprint_frame(
     };
 
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
-    let frame = match create_frame(FrameSpec {
+    // Visual compute is a synchronous full-frame producer. It needs one live
+    // front and one producer back, not the generic streaming scene's third
+    // queued allocation.
+    let frame_cadence = if visual_target_hz.is_some() {
+        FrameCadence::Dirty
+    } else {
+        cadence
+    };
+    let frame_spec = FrameSpec {
         output,
         content: FrameContent::BlueprintScene,
-        cadence,
-        buffering: match cadence {
+        cadence: frame_cadence,
+        buffering: match frame_cadence {
             FrameCadence::Immutable => super::FrameBuffering::Single,
             FrameCadence::Dirty => super::FrameBuffering::Double,
             FrameCadence::Streaming => super::FrameBuffering::Triple,
@@ -814,8 +837,15 @@ fn open_blueprint_frame(
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
-        base_color: Some(PremultipliedRgba8::TRANSPARENT),
-    }) {
+        base_color: visual_target_hz
+            .is_none()
+            .then_some(PremultipliedRgba8::TRANSPARENT),
+    };
+    let frame = match if visual_target_hz.is_some() {
+        create_gpu_full_overwrite_frame(frame_spec)
+    } else {
+        create_frame(frame_spec)
+    } {
         Ok(frame) => frame,
         Err(error) => {
             crate::log_error!(target: "ui4/solara-text"; "frame open allocation failed owner={:?} error={:?}\n", owner, error);
@@ -839,7 +869,7 @@ fn open_blueprint_frame(
         opacity: u8::MAX,
         visible: true,
     };
-    let plane_slot = if cadence == FrameCadence::Streaming {
+    let plane_slot = if cadence == FrameCadence::Streaming || visual_target_hz.is_some() {
         super::ALPHA_OVERLAY_PLANE_SLOT
     } else {
         super::RGB_OVERLAY_PLANE_SLOT_2
@@ -873,8 +903,9 @@ fn open_blueprint_frame(
                 window,
                 width,
                 height,
-                cadence,
+                cadence: frame_cadence,
                 visual_cadence: visual_target_hz.map(BlueprintVisualCadence::new),
+                pending_resize: None,
                 write_lease: None,
                 pending_gpu_release: None,
                 gpu_submission_unretired: false,
@@ -914,8 +945,9 @@ fn open_blueprint_frame(
         window,
         width,
         height,
-        cadence,
+        cadence: frame_cadence,
         visual_cadence: visual_target_hz.map(BlueprintVisualCadence::new),
+        pending_resize: None,
         write_lease: None,
         pending_gpu_release: None,
         gpu_submission_unretired: false,
@@ -944,7 +976,7 @@ fn open_blueprint_frame(
         stamped_text_pending: None,
         stamped_text_rendered: false,
     });
-    let (cadence_name, buffer_count) = match cadence {
+    let (cadence_name, buffer_count) = match frame_cadence {
         FrameCadence::Dirty => ("dirty", 2),
         FrameCadence::Streaming => ("streaming", 3),
         FrameCadence::Immutable => ("immutable", 1),
@@ -988,6 +1020,39 @@ pub extern "C" fn trueos_cabi_ui4_scene_sprite_frame_begin(window_id: u32, clear
     begin_blueprint_frame(owner, window_id, clear_rgba, false)
 }
 
+/// Wait in the kernel for one visual cadence ticket, then acquire its exact
+/// GPU-only back buffer. VM dispatch keeps this request pending across the
+/// deadline; callers do not need a millisecond retry loop.
+pub extern "C" fn trueos_cabi_ui4_scene_visual_frame_begin(window_id: u32) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN,
+            window_id as u64,
+            0,
+            &[],
+        );
+    }
+    reap_retired_frames();
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    if visual_frame_retry_ms(owner, window_id).is_none() {
+        return ERROR_STATE;
+    }
+    begin_blueprint_frame(owner, window_id, 0, false)
+}
+
+/// Return the exact remaining visual deadline, or one scheduler tick when the
+/// cadence is ready but frame/display ownership still applies backpressure.
+pub(crate) fn visual_frame_retry_ms(owner: WindowOwner, window_id: u32) -> Option<u64> {
+    let mut surfaces = SURFACES.lock();
+    let surface = surface_mut(&mut surfaces, owner, window_id)?;
+    surface
+        .visual_cadence
+        .as_ref()
+        .map(|cadence| cadence.wait_ms().max(1))
+}
+
 pub(crate) fn begin_blueprint_frame(
     owner: WindowOwner,
     window_id: u32,
@@ -1004,8 +1069,8 @@ pub(crate) fn begin_blueprint_frame(
     if surface.gpu_submission_unretired {
         return ERROR_BUSY;
     }
-    if let Some(cadence) = surface.visual_cadence.as_mut()
-        && !cadence.admit()
+    if let Some(cadence) = surface.visual_cadence.as_ref()
+        && cadence.wait_ms() != 0
     {
         return ERROR_BUSY;
     }
@@ -1081,6 +1146,9 @@ pub(crate) fn begin_blueprint_frame(
     surface.stamped_text_pending = None;
     surface.stamped_text_rendered = false;
     surface.write_lease = Some(lease);
+    if let Some(cadence) = surface.visual_cadence.as_mut() {
+        cadence.consume_admission();
+    }
     0
 }
 
@@ -1714,7 +1782,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
-    let (cadence, window, particle_craft) = {
+    let (cadence, window, particle_craft, visual, current_frame, previous_frame) = {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
             return ERROR_NOT_FOUND;
@@ -1722,7 +1790,16 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         if surface.write_lease.is_some() {
             return ERROR_STATE;
         }
-        (surface.cadence, surface.window, surface.particle_craft.is_some())
+        (
+            surface.cadence,
+            surface.window,
+            surface.particle_craft.is_some(),
+            surface.visual_cadence.is_some(),
+            surface.frame,
+            surface
+                .pending_resize
+                .map_or(surface.frame, |pending| pending.previous_frame),
+        )
     };
     let (backing_width, backing_height) = if particle_craft {
         crate::intel::gpgpu::particle_craft_backing_extent(width, height)
@@ -1730,7 +1807,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         (width, height)
     };
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
-    let replacement = match create_frame(FrameSpec {
+    let replacement_spec = FrameSpec {
         output,
         content: FrameContent::BlueprintScene,
         cadence,
@@ -1742,8 +1819,13 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         format: ScanoutFormat::Rgba8888Premultiplied,
         width: backing_width,
         height: backing_height,
-        base_color: Some(PremultipliedRgba8::TRANSPARENT),
-    }) {
+        base_color: (!visual).then_some(PremultipliedRgba8::TRANSPARENT),
+    };
+    let replacement = match if visual {
+        create_gpu_full_overwrite_frame(replacement_spec)
+    } else {
+        create_frame(replacement_spec)
+    } {
         Ok(frame) => frame,
         Err(error) => {
             crate::log_error!(
@@ -1776,52 +1858,30 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
             return ERROR_UI4;
         }
     };
-    let previous = {
+    let superseded = {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
             let _ = destroy_frame(replacement);
             return ERROR_NOT_FOUND;
         };
-        if surface.write_lease.is_some() {
+        if surface.write_lease.is_some() || surface.frame != current_frame {
             let _ = destroy_frame(replacement);
             return ERROR_STATE;
-        }
-        let previous = surface.frame;
-        if let Err(error) = replace_window_frame(owner, surface.window, replacement) {
-            let _ = destroy_frame(replacement);
-            crate::log_error!(
-                target: "ui4/blueprint-frame";
-                "frame resize broker swap failed owner={:?} window={} replacement_frame={} error={:?}\n",
-                owner,
-                window_id,
-                replacement.raw(),
-                error,
-            );
-            return ERROR_UI4;
         }
         let placement = WindowPlacement {
             width,
             height,
             ..live_placement
         };
-        if let Err(error) = set_window_placement(owner, surface.window, placement) {
-            let _ = replace_window_frame(owner, surface.window, previous);
-            let _ = destroy_frame(replacement);
-            crate::log_error!(
-                target: "ui4/blueprint-frame";
-                "frame resize placement commit failed owner={:?} window={} logical_extent={}x{} error={:?}\n",
-                owner,
-                window_id,
-                width,
-                height,
-                error,
-            );
-            return ERROR_UI4;
-        }
+        let superseded = surface.pending_resize.map(|_| surface.frame);
         surface.frame = replacement;
         surface.width = backing_width;
         surface.height = backing_height;
         surface.placement = placement;
+        surface.pending_resize = Some(BlueprintPendingResize {
+            previous_frame,
+            placement,
+        });
         surface.retained_text_layers.clear();
         surface.retained_text_cursor = 0;
         surface.retained_text_rendered = false;
@@ -1832,17 +1892,18 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         surface.stamped_text_cursor = 0;
         surface.stamped_text_pending = None;
         surface.stamped_text_rendered = false;
-        previous
+        superseded
     };
 
-    if let Err(error) = destroy_frame(previous) {
-        if error == FramePoolError::Busy {
-            RETIRED_FRAMES.lock().push(previous);
-        }
+    if let Some(superseded) = superseded
+        && let Err(error) = destroy_frame(superseded)
+        && error == FramePoolError::Busy
+    {
+        RETIRED_FRAMES.lock().push(superseded);
     }
     crate::log_info!(
         target: "ui4/blueprint-frame";
-        "frame resize owner={:?} window={} logical_extent={}x{} backing_extent={}x{} presentation={} frame={}\n",
+        "frame resize staged owner={:?} window={} logical_extent={}x{} backing_extent={}x{} presentation={} old_frame={} replacement_frame={} commit=after-first-released-publish\n",
         owner,
         window_id,
         width,
@@ -1854,6 +1915,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         } else {
             "direct-plane-2x"
         },
+        previous_frame.raw(),
         replacement.raw(),
     );
     0
@@ -3572,35 +3634,58 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
         surface.pending_gpu_release = release;
         return ERROR_UI4;
     }
-    let immutable_replacement =
-        (lease.frame != surface.frame).then_some((surface.frame, lease.frame));
-    if let Some((previous, replacement)) = immutable_replacement
-        && replace_window_frame(owner, surface.window, replacement).is_err()
-    {
-        let _ = destroy_frame(replacement);
-        crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh broker swap failed owner={:?} window={} old_frame={} replacement_frame={} action=retain-surflive-front\n", owner, window_id, previous.raw(), replacement.raw());
-        return ERROR_UI4;
-    }
-    if damage.width == 0
-        || damage.height == 0
-        || publish_window_frame(owner, surface.window, damage).is_err()
-    {
-        if let Some((previous, replacement)) = immutable_replacement {
-            let _ = replace_window_frame(owner, surface.window, previous);
-            let _ = publish_window_frame(owner, surface.window, DamageRect::FULL);
+    if let Some(pending) = surface.pending_resize {
+        if lease.frame != surface.frame
+            || commit_window_frame_replacement(
+                owner,
+                surface.window,
+                surface.frame,
+                pending.placement,
+                damage,
+            )
+            .is_err()
+        {
+            crate::log_warn!(target: "ui4/blueprint-frame"; "frame resize commit failed owner={:?} window={} old_frame={} replacement_frame={} action=retain-old-surflive-front\n", owner, window_id, pending.previous_frame.raw(), surface.frame.raw());
+            return ERROR_UI4;
+        }
+        surface.pending_resize = None;
+        if let Err(error) = destroy_frame(pending.previous_frame)
+            && error == FramePoolError::Busy
+        {
+            RETIRED_FRAMES.lock().push(pending.previous_frame);
+        }
+        crate::log_info!(target: "ui4/blueprint-frame"; "frame resize committed owner={:?} window={} old_frame={} frame={} extent={}x{} action=atomic-frame+placement+first-publish old_release=surflive\n", owner, window_id, pending.previous_frame.raw(), surface.frame.raw(), surface.width, surface.height);
+    } else {
+        let immutable_replacement =
+            (lease.frame != surface.frame).then_some((surface.frame, lease.frame));
+        if let Some((previous, replacement)) = immutable_replacement
+            && replace_window_frame(owner, surface.window, replacement).is_err()
+        {
             let _ = destroy_frame(replacement);
-            crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh publish failed owner={:?} window={} old_frame={} replacement_frame={} action=old-front-restored\n", owner, window_id, previous.raw(), replacement.raw());
+            crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh broker swap failed owner={:?} window={} old_frame={} replacement_frame={} action=retain-surflive-front\n", owner, window_id, previous.raw(), replacement.raw());
+            return ERROR_UI4;
         }
-        return ERROR_UI4;
-    }
-    if let Some((previous, replacement)) = immutable_replacement {
-        surface.frame = replacement;
-        if let Err(error) = destroy_frame(previous) {
-            if error == FramePoolError::Busy {
-                RETIRED_FRAMES.lock().push(previous);
+        if damage.width == 0
+            || damage.height == 0
+            || publish_window_frame(owner, surface.window, damage).is_err()
+        {
+            if let Some((previous, replacement)) = immutable_replacement {
+                let _ = replace_window_frame(owner, surface.window, previous);
+                let _ = publish_window_frame(owner, surface.window, DamageRect::FULL);
+                let _ = destroy_frame(replacement);
+                crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh publish failed owner={:?} window={} old_frame={} replacement_frame={} action=old-front-restored\n", owner, window_id, previous.raw(), replacement.raw());
             }
+            return ERROR_UI4;
         }
-        crate::log_info!(target: "ui4/blueprint-frame"; "immutable refresh committed owner={:?} window={} old_frame={} frame={} extent={}x{} action=broker-swap-after-complete-publish old_release=surflive\n", owner, window_id, previous.raw(), replacement.raw(), surface.width, surface.height);
+        if let Some((previous, replacement)) = immutable_replacement {
+            surface.frame = replacement;
+            if let Err(error) = destroy_frame(previous) {
+                if error == FramePoolError::Busy {
+                    RETIRED_FRAMES.lock().push(previous);
+                }
+            }
+            crate::log_info!(target: "ui4/blueprint-frame"; "immutable refresh committed owner={:?} window={} old_frame={} frame={} extent={}x{} action=broker-swap-after-complete-publish old_release=surflive\n", owner, window_id, previous.raw(), replacement.raw(), surface.width, surface.height);
+        }
     }
     surface
         .retained_text_layers
@@ -5333,6 +5418,15 @@ fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurface
         .map(|lease| lease.frame);
     if let Some(lease) = surface.write_lease.take() {
         let _ = cancel_frame_buffer(lease);
+    }
+    if let Some(pending) = surface.pending_resize.take() {
+        let staged_replacement = surface.frame;
+        surface.frame = pending.previous_frame;
+        if let Err(error) = destroy_frame(staged_replacement)
+            && error == FramePoolError::Busy
+        {
+            RETIRED_FRAMES.lock().push(staged_replacement);
+        }
     }
     if let Some(frame) = pending_immutable_frame
         && let Err(error) = destroy_frame(frame)

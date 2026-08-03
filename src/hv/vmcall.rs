@@ -177,6 +177,7 @@ pub const OP_BP_DOBBY_UI4_TYPE: u32 = 0x11A; // payload UTF-8 -> rc
 pub const OP_BP_DOBBY_UI4_KEY: u32 = 0x11B; // arg0 named key -> rc
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_VISUAL: u32 = 0x11C; // arg0 x/y,arg1 width/height,payload target_hz -> window
 pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D; // arg0 window,payload ShadertoyParamsV1 -> rc
+pub const OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN: u32 = 0x11E; // arg0 window -> kernel-deadline wait + acquired back buffer
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -306,6 +307,9 @@ pub enum DispatchOutcome {
     Preserve,
     Yield,
     SleepMs(u64),
+    /// Keep the current VMCALL pending, sleep in the host, then dispatch the
+    /// unchanged request again before the guest resumes.
+    RetryAfterMs(u64),
 }
 
 static GUEST_CABI_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -1893,6 +1897,19 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg1 as u32,
                 false,
             );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN => {
+            let owner = crate::ui4::WindowOwner::Vm(vm_id);
+            let rc =
+                crate::ui4::blueprint_text::begin_blueprint_frame(owner, arg0 as u32, 0, false);
+            if rc == crate::ui4::blueprint_text::ERROR_BUSY
+                && let Some(wait_ms) =
+                    crate::ui4::blueprint_text::visual_frame_retry_ms(owner, arg0 as u32)
+            {
+                return DispatchOutcome::RetryAfterMs(wait_ms);
+            }
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

@@ -1401,6 +1401,94 @@ pub(crate) fn replace_window_frame(
     Ok(())
 }
 
+/// Commit an already-published replacement frame, its logical geometry, and
+/// its first damage as one broker transaction. The compositor therefore sees
+/// either the old ready front or the complete replacement; it cannot observe
+/// the replacement in `Pending` state between separate API calls.
+pub(crate) fn commit_window_frame_replacement(
+    owner: WindowOwner,
+    id: WindowId,
+    frame: FrameHandle,
+    placement: WindowPlacement,
+    damage: DamageRect,
+) -> Result<u64, WindowBrokerError> {
+    if !placement.valid() {
+        return Err(WindowBrokerError::EmptyExtent);
+    }
+    if !damage.valid() {
+        return Err(WindowBrokerError::EmptyDamage);
+    }
+    let plan = super::frame_snapshot(frame)
+        .map_err(|_| WindowBrokerError::InvalidHandle)?
+        .plan;
+    let mut broker = WINDOW_BROKER.lock();
+    let (slot, generation) = unpack_handle(id.0)?;
+    let current = broker
+        .windows
+        .get(slot)
+        .ok_or(WindowBrokerError::InvalidHandle)?;
+    if current.generation != generation {
+        return Err(WindowBrokerError::InvalidHandle);
+    }
+    if current.owner != owner {
+        return Err(WindowBrokerError::OwnerMismatch);
+    }
+    match current.state {
+        WindowState::Closing => return Err(WindowBrokerError::SessionClosed),
+        WindowState::Closed => return Err(WindowBrokerError::Closed),
+        WindowState::Pending | WindowState::Ready => {}
+    }
+    let previous_placement = current.placement;
+    let previous_plane = current.plane;
+    let plane = broker.select_plane(
+        current.plane,
+        plan.buffering,
+        super::frame_plan_shares_compositor_plane(plan),
+        Some(slot),
+        current.owner,
+        current.session,
+    )?;
+    if plane != previous_plane {
+        crate::log_info!(
+            target: "ui4";
+            "ui4 replacement-frame plane isolated previous_slot={} assigned_slot={} buffering={:?} owner={:?} window={} commit=published\n",
+            previous_plane.slot(),
+            plane.slot(),
+            plan.buffering,
+            owner,
+            id.raw(),
+        );
+    }
+    let window = &mut broker.windows[slot];
+    window.frame = frame;
+    window.buffering = plan.buffering;
+    window.plane = plane;
+    window.placement = placement;
+    window.state = WindowState::Ready;
+    window.publish_serial = next_serial(window.publish_serial);
+    window.revision = next_serial(window.revision);
+    let pending = window.damage.get_or_insert(DamageRegion::EMPTY);
+    pending.add(damage);
+    let publish_serial = window.publish_serial;
+    let notify_resize = window.interaction.receives_input
+        && (previous_placement.width != placement.width
+            || previous_placement.height != placement.height);
+    broker.mark_composition_changed();
+    drop(broker);
+    if notify_resize {
+        super::input_broker::enqueue_window_resize(
+            owner,
+            id,
+            previous_placement.width,
+            previous_placement.height,
+            placement.width,
+            placement.height,
+        );
+    }
+    super::cursor_frame_inout::frame_visual_changed(owner, id);
+    Ok(publish_serial)
+}
+
 /// Read the broker's live geometry for a producer which is about to replace
 /// its backing frame. This preserves maximize/restore position changes that
 /// are newer than a producer's own cached scene placement.
@@ -1575,6 +1663,7 @@ pub(crate) fn toggle_window_maximized(
     output_width: u32,
     output_height: u32,
     restore_placement: Option<WindowPlacement>,
+    restore_center: Option<(u32, u32)>,
 ) -> Result<WindowPlacementTransition, WindowBrokerError> {
     if output_width == 0 || output_height == 0 {
         return Err(WindowBrokerError::EmptyExtent);
@@ -1586,7 +1675,18 @@ pub(crate) fn toggle_window_maximized(
     }
     let previous = window.placement;
     let (placement, maximized) = if let Some(restore) = window.restore_placement.take() {
-        (restore, false)
+        (
+            restore_center.map_or(restore, |(cursor_x, cursor_y)| {
+                center_restored_window_on_cursor(
+                    restore,
+                    cursor_x,
+                    cursor_y,
+                    output_width,
+                    output_height,
+                )
+            }),
+            false,
+        )
     } else {
         window.restore_placement = Some(restore_placement.unwrap_or(previous));
         (
@@ -1624,6 +1724,20 @@ pub(crate) fn toggle_window_maximized(
         placement,
         maximized,
     })
+}
+
+fn center_restored_window_on_cursor(
+    restore: WindowPlacement,
+    cursor_x: u32,
+    cursor_y: u32,
+    output_width: u32,
+    output_height: u32,
+) -> WindowPlacement {
+    let max_x = i64::from(output_width.saturating_sub(restore.width));
+    let max_y = i64::from(output_height.saturating_sub(restore.height));
+    let x = (i64::from(cursor_x) - i64::from(restore.width / 2)).clamp(0, max_x) as i32;
+    let y = (i64::from(cursor_y) - i64::from(restore.height / 2)).clamp(0, max_y) as i32;
+    WindowPlacement { x, y, ..restore }
 }
 
 pub(crate) fn publish_window_frame(
@@ -2049,6 +2163,28 @@ mod tests {
         assert_eq!(WindowOwner::Vm(9).name(), "blueprint-vm");
         assert_ne!(WindowOwner::KernelApp(42), WindowOwner::KernelApp(43));
         assert_ne!(WindowOwner::Vm(9), WindowOwner::Vm(10));
+    }
+
+    #[test]
+    fn drag_restore_centers_saved_extent_on_cursor_and_clamps_to_output() {
+        let restore = WindowPlacement {
+            x: 80,
+            y: 60,
+            width: 640,
+            height: 360,
+            z: 40,
+            opacity: u8::MAX,
+            visible: true,
+        };
+        let centered = center_restored_window_on_cursor(restore, 1_200, 700, 2_560, 1_440);
+        assert_eq!((centered.x, centered.y), (880, 520));
+        assert_eq!((centered.width, centered.height), (640, 360));
+
+        let top_left = center_restored_window_on_cursor(restore, 10, 8, 2_560, 1_440);
+        assert_eq!((top_left.x, top_left.y), (0, 0));
+
+        let bottom_right = center_restored_window_on_cursor(restore, 2_550, 1_430, 2_560, 1_440);
+        assert_eq!((bottom_right.x, bottom_right.y), (1_920, 1_080));
     }
 
     #[test]

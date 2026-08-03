@@ -1162,6 +1162,7 @@ const fn compute_release_direct_contract(
     matches!(
         (content, buffering),
         (FrameContent::Image, super::FrameBuffering::Double)
+            | (FrameContent::BlueprintScene, super::FrameBuffering::Double)
             | (FrameContent::BlueprintScene, super::FrameBuffering::Triple)
             | (FrameContent::Video, super::FrameBuffering::Quad)
     ) || matches!(
@@ -1180,6 +1181,11 @@ const _: () = {
         FrameContent::BlueprintScene,
         super::FrameCadence::Dirty,
         super::FrameBuffering::Single,
+    ));
+    assert!(compute_release_direct_contract(
+        FrameContent::BlueprintScene,
+        super::FrameCadence::Dirty,
+        super::FrameBuffering::Double,
     ));
 };
 

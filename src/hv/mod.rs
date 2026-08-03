@@ -4174,7 +4174,7 @@ async fn vmx_launch_once_with_ept(
     let mut cpuid_leaf1_count = 0u32;
     let mut cpuid_other_count = 0u32;
     let mut first = true;
-    loop {
+    'vmexit: loop {
         crate::smp::poll();
         if vm
             .map(|vm| vm.stop_req.load(Ordering::Acquire))
@@ -4379,36 +4379,58 @@ async fn vmx_launch_once_with_ept(
             VMEXIT_REASON_VMCALL => {
                 let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len")?;
                 vmwrite(VMCS_GUEST_RIP, lr.guest_rip + len)?;
-                match crate::hv::vmcall::dispatch(vm_id) {
-                    crate::hv::vmcall::DispatchOutcome::Resume => {}
-                    crate::hv::vmcall::DispatchOutcome::Stop => break,
-                    crate::hv::vmcall::DispatchOutcome::Pause => {
-                        hvlogf(format_args!(
-                            "hv: vm{} reporting: cooperative pause retained at rip=0x{:016X}",
-                            vm_id, lr.guest_rip
-                        ));
-                        break;
-                    }
-                    crate::hv::vmcall::DispatchOutcome::Preserve => {
-                        preserve_requested = true;
-                        if let Some(vm) = vm {
-                            vm.preserve_exit.store(true, Ordering::Release);
+                let mut outcome = crate::hv::vmcall::dispatch(vm_id);
+                'vmcall: loop {
+                    match outcome {
+                        crate::hv::vmcall::DispatchOutcome::Resume => break 'vmcall,
+                        crate::hv::vmcall::DispatchOutcome::Stop => break 'vmexit,
+                        crate::hv::vmcall::DispatchOutcome::Pause => {
+                            hvlogf(format_args!(
+                                "hv: vm{} reporting: cooperative pause retained at rip=0x{:016X}",
+                                vm_id, lr.guest_rip
+                            ));
+                            break 'vmexit;
                         }
-                        break;
-                    }
-                    crate::hv::vmcall::DispatchOutcome::Yield => {
-                        clear_current_vm_id();
-                        Timer::after(EmbassyDuration::from_millis(1)).await;
-                        set_current_vm_id(vm_id);
-                    }
-                    crate::hv::vmcall::DispatchOutcome::SleepMs(ms) => {
-                        clear_current_vm_id();
-                        if ms == 0 {
+                        crate::hv::vmcall::DispatchOutcome::Preserve => {
+                            preserve_requested = true;
+                            if let Some(vm) = vm {
+                                vm.preserve_exit.store(true, Ordering::Release);
+                            }
+                            break 'vmexit;
+                        }
+                        crate::hv::vmcall::DispatchOutcome::Yield => {
+                            clear_current_vm_id();
                             Timer::after(EmbassyDuration::from_millis(1)).await;
-                        } else {
-                            Timer::after(EmbassyDuration::from_millis(ms)).await;
+                            set_current_vm_id(vm_id);
+                            break 'vmcall;
                         }
-                        set_current_vm_id(vm_id);
+                        crate::hv::vmcall::DispatchOutcome::SleepMs(ms) => {
+                            clear_current_vm_id();
+                            if ms == 0 {
+                                Timer::after(EmbassyDuration::from_millis(1)).await;
+                            } else {
+                                Timer::after(EmbassyDuration::from_millis(ms)).await;
+                            }
+                            set_current_vm_id(vm_id);
+                            break 'vmcall;
+                        }
+                        crate::hv::vmcall::DispatchOutcome::RetryAfterMs(ms) => {
+                            clear_current_vm_id();
+                            Timer::after(EmbassyDuration::from_millis(ms.max(1))).await;
+                            set_current_vm_id(vm_id);
+                            crate::smp::poll();
+                            if vm
+                                .map(|vm| vm.stop_req.load(Ordering::Acquire))
+                                .unwrap_or(false)
+                            {
+                                hvlogf(format_args!(
+                                    "hv: vm{} reporting: host stop request consumed during pending vmcall",
+                                    vm_id
+                                ));
+                                break 'vmexit;
+                            }
+                            outcome = crate::hv::vmcall::dispatch(vm_id);
+                        }
                     }
                 }
                 // service vmcall — loop → vmresume

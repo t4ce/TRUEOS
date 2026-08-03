@@ -634,15 +634,24 @@ impl InputBroker {
                 })
             });
         if let Some(mut target) = target {
+            let mut restored_this_event = false;
             if target.maximized
                 && buttons_down & SECONDARY_BUTTON_MASK != 0
                 && self.cursors[index].secondary_dragged
             {
-                match super::toggle_window_maximized(target.owner, target.id, width, height, None) {
+                match super::toggle_window_maximized(
+                    target.owner,
+                    target.id,
+                    width,
+                    height,
+                    None,
+                    Some((x, y)),
+                ) {
                     Ok(transition) => {
                         target.placement = transition.placement;
                         target.maximized = transition.maximized;
                         self.cursors[index].secondary_restored_from_maximize = true;
+                        restored_this_event = true;
                         crate::log_info!(target: "ui4";
                             "ui4/input: frame-maximize-toggle owner={:?} window={} plane={} state=restored old={}x{}@{},{} new={}x{}@{},{} cursor={}:{}:{} trigger=secondary-drag-begin\n",
                             target.owner,
@@ -675,6 +684,7 @@ impl InputBroker {
                 && buttons_down & SECONDARY_BUTTON_MASK != 0
                 && self.cursors[index].secondary_dragged
                 && (dx != 0 || dy != 0)
+                && !restored_this_event
             {
                 if let Some(next) =
                     translated_frame_placement(target.placement, dx, dy, width, height)
@@ -735,6 +745,7 @@ impl InputBroker {
                     width,
                     height,
                     self.cursors[index].secondary_start_placement,
+                    None,
                 ) {
                     Ok(transition) => {
                         target.placement = transition.placement;

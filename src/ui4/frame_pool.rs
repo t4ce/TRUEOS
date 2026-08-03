@@ -148,6 +148,9 @@ struct FrameRecord {
     readers: [u16; FRAME_BUFFER_CAPACITY],
     gpu_authored: [bool; FRAME_BUFFER_CAPACITY],
     gpu_release: [Option<FrameGpuRelease>; FRAME_BUFFER_CAPACITY],
+    /// Pixels are intentionally uninitialized until a full-frame GPU write.
+    /// Ordinary CPU publication is forbidden for every lease in this frame.
+    gpu_full_overwrite_required: bool,
     next_token: u64,
     publish_serial: u64,
 }
@@ -166,6 +169,7 @@ impl FrameRecord {
             readers: [0; FRAME_BUFFER_CAPACITY],
             gpu_authored: [false; FRAME_BUFFER_CAPACITY],
             gpu_release: [None; FRAME_BUFFER_CAPACITY],
+            gpu_full_overwrite_required: false,
             next_token: 0,
             publish_serial: 0,
         }
@@ -175,6 +179,7 @@ impl FrameRecord {
         &mut self,
         plan: FramePlan,
         surfaces: [Option<UiSurfaceHandle>; FRAME_BUFFER_CAPACITY],
+        gpu_full_overwrite_required: bool,
     ) {
         self.generation = next_generation(self.generation);
         self.active = true;
@@ -187,6 +192,7 @@ impl FrameRecord {
         self.readers = [0; FRAME_BUFFER_CAPACITY];
         self.gpu_authored = [false; FRAME_BUFFER_CAPACITY];
         self.gpu_release = [None; FRAME_BUFFER_CAPACITY];
+        self.gpu_full_overwrite_required = gpu_full_overwrite_required;
         self.next_token = 0;
         self.publish_serial = 0;
     }
@@ -250,16 +256,45 @@ pub(super) fn active_frame_count() -> usize {
 }
 
 pub(crate) fn create_frame(spec: FrameSpec) -> Result<FrameHandle, FramePoolError> {
-    create_frame_admitted(spec)
+    create_frame_admitted(spec, false)
 }
 
-fn create_frame_admitted(spec: FrameSpec) -> Result<FrameHandle, FramePoolError> {
+/// Create a dirty/double Blueprint frame whose allocations are never CPU
+/// initialized. Publication remains impossible until a full-surface compute
+/// release is attached to the exact acquired allocation.
+pub(crate) fn create_gpu_full_overwrite_frame(
+    spec: FrameSpec,
+) -> Result<FrameHandle, FramePoolError> {
+    if !matches!(
+        (spec.content, spec.cadence, spec.buffering, spec.format),
+        (
+            FrameContent::BlueprintScene,
+            super::FrameCadence::Dirty,
+            super::FrameBuffering::Double,
+            ScanoutFormat::Rgba8888Premultiplied,
+        )
+    ) || spec.base_color.is_some()
+    {
+        return Err(FramePoolError::UnsupportedFormat);
+    }
+    create_frame_admitted(spec, true)
+}
+
+fn create_frame_admitted(
+    spec: FrameSpec,
+    gpu_full_overwrite_required: bool,
+) -> Result<FrameHandle, FramePoolError> {
     let plan = FramePlan::from_spec(spec).map_err(FramePoolError::InvalidPlan)?;
     let format = surface_format(plan.format).ok_or(FramePoolError::UnsupportedFormat)?;
     let count = plan.buffering.count();
     let mut surfaces = [None; FRAME_BUFFER_CAPACITY];
     for surface in surfaces.iter_mut().take(count) {
-        match ui_surface::create_surface(plan.width, plan.height, format) {
+        let allocation = if gpu_full_overwrite_required {
+            ui_surface::create_gpu_full_overwrite_surface(plan.width, plan.height, format)
+        } else {
+            ui_surface::create_surface(plan.width, plan.height, format)
+        };
+        match allocation {
             Ok(handle) => *surface = Some(handle),
             Err(error) => {
                 destroy_surfaces(surfaces);
@@ -287,7 +322,7 @@ fn create_frame_admitted(spec: FrameSpec) -> Result<FrameHandle, FramePoolError>
         pool.frames.push(FrameRecord::inactive(0));
         slot
     };
-    pool.frames[slot].activate(plan, surfaces);
+    pool.frames[slot].activate(plan, surfaces, gpu_full_overwrite_required);
     let generation = pool.frames[slot].generation;
     pack_handle(slot, generation)
 }
@@ -564,6 +599,9 @@ pub(crate) fn publish_frame_buffer(
     let mut pool = FRAME_POOL.lock();
     let frame = pool.checked_mut(lease.frame)?;
     checked_lease(frame, lease)?;
+    if frame.gpu_full_overwrite_required {
+        return Err(FramePoolError::ProducerReleaseRequired);
+    }
     if matches!(
         frame.plan.content,
         FrameContent::FontScene2d
@@ -584,6 +622,9 @@ pub(crate) fn mark_frame_buffer_cpu_authored(lease: FrameWriteLease) -> Result<(
     let mut pool = FRAME_POOL.lock();
     let frame = pool.checked_mut(lease.frame)?;
     checked_lease(frame, lease)?;
+    if frame.gpu_full_overwrite_required {
+        return Err(FramePoolError::ProducerReleaseRequired);
+    }
     let index = lease.buffer_index as usize;
     frame.gpu_authored[index] = false;
     frame.gpu_release[index] = None;
