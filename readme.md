@@ -119,6 +119,8 @@ rustup toolchain install nightly-2026-07-10
 
 vs-code
 npm install express
+
+git submodule update --init --recursive
 ```
 
 ## on MAC
