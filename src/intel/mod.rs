@@ -107,7 +107,6 @@ const PCI_DEVICE_ALDER_LAKE_N_N100_UHD: u16 = 0x46D1;
 const PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770: u16 = 0xA780;
 const GEN11_GT_VEBOX_VDBOX_DISABLE: usize = 0x9140;
 const GEN12_S_GT_PLATFORM_VDBOX_MASK: u8 = (1 << 0) | (1 << 2);
-static INIT: AtomicBool = AtomicBool::new(false);
 static GEN12_INTEGRATED_PAT_READY: AtomicBool = AtomicBool::new(false);
 static GEN12_LUMEN_MOCS_READY: AtomicBool = AtomicBool::new(false);
 static DISPLAY_GGTT_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -175,94 +174,6 @@ pub(crate) struct Buf {
     pub(crate) private_data_size: usize,
     pub(crate) rsa_offset: usize,
     pub(crate) rsa_size: usize,
-}
-
-pub fn init_once() {
-    if INIT.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    let Some(dev) = find_dev() else {
-        crate::log!("intel: no Intel display-class PCI device claimed\n");
-        return;
-    };
-    let guc_boot = guc_boot_enabled_for_device(dev.device_id);
-    crate::log!(
-        "intel: claimed {:02X}:{:02X}.{} device=0x{:04X} name={} rev=0x{:02X} mmio_len=0x{:X} guc_boot={} media_decode={}\n",
-        dev.bus,
-        dev.slot,
-        dev.function,
-        dev.device_id,
-        display_device_name(dev.device_id),
-        dev.revision_id,
-        dev.mmio_len,
-        guc_boot as u8,
-        media_decode_enabled_for_device(dev.device_id) as u8
-    );
-    CLAIMED_DEVICE.call_once(|| dev);
-    let physical_gt = init_physical_gt_once(dev);
-    let forcewake_ready =
-        device_uses_gen12_integrated_pat(dev.device_id) && physical_gt.forcewake_ready();
-    let lumen_mocs = if forcewake_ready {
-        self::gt_state::init_lumen_mocs(dev)
-    } else {
-        self::gt_state::Gen12LumenMocsInitReport::default()
-    };
-    GEN12_LUMEN_MOCS_BOOT_REPORT.call_once(|| lumen_mocs);
-    let pat_ready = forcewake_ready && init_gen12_integrated_pat(dev);
-    GEN12_INTEGRATED_PAT_READY.store(pat_ready, Ordering::Release);
-    GEN12_LUMEN_MOCS_READY.store(pat_ready && lumen_mocs.accepted, Ordering::Release);
-    log_gen12_lumen_mocs_init(dev, lumen_mocs);
-    let media_fuse = media_vdbox_fuse_raw(dev);
-    let media_platform_mask = media_platform_vdbox_mask(dev.device_id);
-    let media_enabled_mask = media_vdbox_mask(dev);
-    crate::log!(
-        "intel/media-topology: device=0x{:04X} fuse_reg=0x{:X} fuse_raw=0x{:08X} semantics=disable platform_vdbox_mask=0x{:X} enabled_vdbox_mask=0x{:X} physical_instances=vcs0+vcs2 logical_map=0->0,1->2\n",
-        dev.device_id,
-        GEN11_GT_VEBOX_VDBOX_DISABLE,
-        media_fuse,
-        media_platform_mask,
-        media_enabled_mask,
-    );
-    crate::log!(
-        "intel/cache-policy: accepted={} platform={} device=0x{:04X} forcewake={} pat={} lumen_mocs={} lumen_mocs_index={} lumen_mocs_command_value={} lumen_mocs_ownership=upper-half ppgtt_default=pat0-wb ppgtt_scanout=pat3-uc ggtt=system-memory-address-only pat_table=[wb,wc,wt,uc,wb,wb,wb,wb] readiness_scope=pat-global+mocs-lumen-only\n",
-        pat_ready as u8,
-        display_device_name(dev.device_id),
-        dev.device_id,
-        forcewake_ready as u8,
-        pat_ready as u8,
-        lumen_mocs.accepted as u8,
-        self::gt_state::GEN12_LUMEN_MOCS_INDEX,
-        self::gt_state::GEN12_LUMEN_MOCS_INDEX << 1,
-    );
-    let guc_ready = if guc_boot {
-        let ready = init_required_guc_transport(dev);
-        if forcewake_ready {
-            let _ = validate_gen12_lumen_mocs_for_dev(dev, "post-guc");
-        }
-        ready
-    } else {
-        crate::log!(
-            "intel/uc-fw: firmware bring-up skipped device=0x{:04X} name={} reason=unsupported-device-policy\n",
-            dev.device_id,
-            display_device_name(dev.device_id)
-        );
-        false
-    };
-    let fixed_render_ggtt_ready =
-        guc_ready && physical_gt.accepted() && self::render::init_fixed_render_ggtt_for_boot(dev);
-    crate::log_info!(
-        target: "render";
-        "intel/gt-global-init: fixed_render_ggtt={} ownership=boot-only guc_ready={} client_remap=forbidden\n",
-        fixed_render_ggtt_ready as u8,
-        guc_ready as u8,
-    );
-    self::display::log_bsp_display_metrics_probe(dev);
-    if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
-        self::display::init_primary_boot_surface(dev);
-    } else {
-        crate::log!("intel/display: plane1 boot demo disabled\n");
-    }
-    crate::log!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
 }
 
 fn init_required_guc_transport(dev: Dev) -> bool {
@@ -343,7 +254,7 @@ fn init_required_guc_transport(dev: Dev) -> bool {
         .unwrap_or_default();
     let bcs0_control_ready = registered && self::blt::prewarm_guc_bcs0_control_ggtt(dev);
     crate::log!(
-        "intel/guc: admission accepted={} firmware_ready=1 ctb_ready={} physical_gpu_registered={} rcs_controls={} system_rcs_control={} font_rcs_control={} execution_rcs_control={} lfm25_rcs_control={} ui4_rcs_control={} scene_aabb_rcs_control={} bcs0_control={} control_mapping=boot-exact-once submission_owner=guc fallback=none next=context-register-on-first-submit\n",
+        "intel/guc: admission accepted={} firmware_ready=1 ctb_ready={} physical_gpu_registered={} rcs_controls={} system_rcs_control={} font_rcs_control={} execution_rcs_control={} lfm25_rcs_control={} ui4_rcs_control={} bcs0_control={} control_mapping=boot-exact-once submission_owner=guc fallback=none next=context-register-on-first-submit\n",
         ctb_ready as u8,
         ctb_ready as u8,
         registered as u8,
@@ -353,7 +264,6 @@ fn init_required_guc_transport(dev: Dev) -> bool {
         rcs_controls.execution as u8,
         rcs_controls.lfm25 as u8,
         rcs_controls.ui4_compositor as u8,
-        rcs_controls.scene_aabb as u8,
         bcs0_control_ready as u8,
     );
     ctb_ready

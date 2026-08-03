@@ -70,15 +70,6 @@ const UI4_COMPOSITOR_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     map_general_auxiliary: false,
 };
 
-const SCENE_AABB_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
-    ring: SCENE_AABB_RCS_GPU_VA_RING_BASE,
-    context: SCENE_AABB_RCS_GPU_VA_CONTEXT_BASE,
-    batch: SCENE_AABB_RCS_GPU_VA_BATCH_BASE,
-    result: SCENE_AABB_RCS_GPU_VA_RESULT_BASE,
-    job_slots: 1,
-    map_general_auxiliary: false,
-};
-
 #[derive(Copy, Clone, Debug)]
 struct DirectRcsSubmitRuntime {
     context_initialized: bool,
@@ -262,18 +253,6 @@ fn ui4_compositor_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
     Some(state)
 }
 
-fn scene_aabb_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
-    if SCENE_AABB_QUARANTINED.load(Ordering::Acquire) {
-        return None;
-    }
-    if let Some(state) = *SCENE_AABB_RCS_STATE.lock() {
-        return Some(state);
-    }
-    let state = allocate_direct_rcs_state(SCENE_AABB_RCS_GPU_VA)?;
-    *SCENE_AABB_RCS_STATE.lock() = Some(state);
-    Some(state)
-}
-
 fn allocate_direct_rcs_state(gpu_va: DirectRcsGpuVa) -> Option<DirectRcsState> {
     let (ring_phys, ring_virt) = crate::dma::alloc(DIRECT_RCS_RING_BYTES, super::WARM_ALIGN)?;
     let (context_phys, context_virt) =
@@ -413,7 +392,6 @@ fn direct_rcs_ggtt_mapping(gpu_va: DirectRcsGpuVa) -> Option<&'static spin::Once
         EXECUTION_RCS_GPU_VA => Some(&EXECUTION_RCS_GGTT_MAPPING),
         LFM25_RCS_GPU_VA => Some(&LFM25_RCS_GGTT_MAPPING),
         UI4_COMPOSITOR_RCS_GPU_VA => Some(&UI4_COMPOSITOR_RCS_GGTT_MAPPING),
-        SCENE_AABB_RCS_GPU_VA => Some(&SCENE_AABB_RCS_GGTT_MAPPING),
         _ => None,
     }
 }
@@ -425,7 +403,6 @@ fn direct_rcs_mapping_name(gpu_va: DirectRcsGpuVa) -> &'static str {
         EXECUTION_RCS_GPU_VA => "execution",
         LFM25_RCS_GPU_VA => "lfm25",
         UI4_COMPOSITOR_RCS_GPU_VA => "ui4-compositor",
-        SCENE_AABB_RCS_GPU_VA => "scene-aabb",
         _ => "invalid",
     }
 }
@@ -439,7 +416,6 @@ fn direct_rcs_control_ggtt_ready(state: DirectRcsState) -> bool {
         EXECUTION_RCS_GPU_VA_RING_BASE => &EXECUTION_RCS_GGTT_MAPPING,
         LFM25_RCS_GPU_VA_RING_BASE => &LFM25_RCS_GGTT_MAPPING,
         UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE => &UI4_COMPOSITOR_RCS_GGTT_MAPPING,
-        SCENE_AABB_RCS_GPU_VA_RING_BASE => &SCENE_AABB_RCS_GGTT_MAPPING,
         _ => return false,
     };
     mapping.get().copied() == Some(true)
@@ -452,14 +428,6 @@ fn quarantine_direct_rcs_mapping_failure(gpu_va: DirectRcsGpuVa, reason: &'stati
         EXECUTION_RCS_GPU_VA => quarantine_execution_rcs_context(reason),
         LFM25_RCS_GPU_VA => quarantine_lfm25_rcs_context(reason),
         UI4_COMPOSITOR_RCS_GPU_VA => quarantine_ui4_compositor_rcs_context(reason),
-        SCENE_AABB_RCS_GPU_VA => {
-            if !SCENE_AABB_QUARANTINED.swap(true, Ordering::AcqRel) {
-                crate::log_error!(target: "gpgpu";
-                    "intel/gpgpu: scene-aabb control mapping accepted=0 reason={} action=quarantine-scene-aabb-until-reboot retry-map=forbidden backing=retained\n",
-                    reason,
-                );
-            }
-        }
         _ => {}
     }
 }
@@ -471,7 +439,6 @@ pub(crate) struct DirectRcsControlGgttPrewarmReport {
     pub(crate) execution: bool,
     pub(crate) lfm25: bool,
     pub(crate) ui4_compositor: bool,
-    pub(crate) scene_aabb: bool,
 }
 
 impl DirectRcsControlGgttPrewarmReport {
@@ -481,7 +448,6 @@ impl DirectRcsControlGgttPrewarmReport {
             && self.execution
             && self.lfm25
             && self.ui4_compositor
-            && self.scene_aabb
     }
 }
 
@@ -537,11 +503,6 @@ pub(crate) fn prewarm_direct_rcs_controls_ggtt(
             dev,
             UI4_COMPOSITOR_RCS_GPU_VA,
             ui4_compositor_rcs_state_once(dev),
-        ),
-        scene_aabb: prewarm_direct_rcs_control_ggtt(
-            dev,
-            SCENE_AABB_RCS_GPU_VA,
-            scene_aabb_rcs_state_once(dev),
         ),
     }
 }

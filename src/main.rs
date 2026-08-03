@@ -182,7 +182,6 @@ pub extern "C" fn kmain() -> ! {
     dma::init_from_limine();
     pci::enumerate_impl();
     log_os::set_emulator_uart_logging(intel::is_emulator_environment());
-    intel::init_once();
     if intel::has_claimed_device() {
         let _ = hda::boot_probe_once();
     }

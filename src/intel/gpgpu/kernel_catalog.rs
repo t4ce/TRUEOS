@@ -4,9 +4,6 @@ pub(crate) const COPY_RECT_RGBA8_OPENCL_SOURCE: &str =
 pub(crate) const COPY_RECT_RGBA8_SOURCE_PATH: &str =
     "src/intel/gpgpu/kernels/copy_rect_rgba8.clcpp";
 pub(crate) const COPY_RECT_RGBA8_ARTIFACT_FRONTEND: &str = "cpp-for-opencl";
-pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_KERNEL_NAME: &str = "resolve_tile64_msaa4_rgba8";
-pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("kernels/resolve_tile64_msaa4_rgba8.clcpp");
 pub(crate) const FILL_RECT_RGBA8_KERNEL_NAME: &str = "fill_rect_rgba8";
 pub(crate) const FILL_RECT_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/fill_rect_rgba8.clcpp");
@@ -88,8 +85,6 @@ pub(crate) const KOKORO_CONV1D_U8_U8_SOURCE_PATH: &str =
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME: &str = "font_outline_coverage_r8";
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_OPENCL_SOURCE: &str =
     include_str!("kernels/font_outline_coverage_r8.clcpp");
-pub(crate) const SCENE_AABB_KERNEL_NAME: &str = "scene_aabb";
-pub(crate) const SCENE_AABB_OPENCL_SOURCE: &str = include_str!("kernels/scene_aabb.clcpp");
 pub(crate) const HELIO_RETAINED_TRANSFORM_KERNEL_NAME: &str = "helio_retained_transform";
 pub(crate) const HELIO_RETAINED_TRANSFORM_OPENCL_SOURCE: &str =
     include_str!("kernels/helio_retained_transform.clcpp");
@@ -112,7 +107,6 @@ pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_SOURCE_PATH: &str =
 pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
     match name {
         COPY_RECT_RGBA8_KERNEL_NAME => Some(COPY_RECT_RGBA8_OPENCL_SOURCE),
-        RESOLVE_TILE64_MSAA4_RGBA8_KERNEL_NAME => Some(RESOLVE_TILE64_MSAA4_RGBA8_OPENCL_SOURCE),
         FILL_RECT_RGBA8_KERNEL_NAME => Some(FILL_RECT_RGBA8_OPENCL_SOURCE),
         FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME => Some(FILL_RECT_WORKLIST_RGBA8_OPENCL_SOURCE),
         GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME => {
@@ -141,7 +135,6 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         KOKORO_QGEMM_U8_I8_KERNEL_NAME => Some(KOKORO_QGEMM_U8_I8_OPENCL_SOURCE),
         KOKORO_CONV1D_U8_U8_KERNEL_NAME => Some(KOKORO_CONV1D_U8_U8_OPENCL_SOURCE),
         FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => Some(FONT_OUTLINE_COVERAGE_R8_OPENCL_SOURCE),
-        SCENE_AABB_KERNEL_NAME => Some(SCENE_AABB_OPENCL_SOURCE),
         HELIO_RETAINED_TRANSFORM_KERNEL_NAME => Some(HELIO_RETAINED_TRANSFORM_OPENCL_SOURCE),
         LAB256_MULTIPHASE_KERNEL_NAME => Some(LAB256_MULTIPHASE_OPENCL_SOURCE),
         SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME => Some(SPIRIT_VFX_BACKGROUND_RGBA8_OPENCL_SOURCE),
@@ -153,9 +146,6 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
 pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
     match name {
         COPY_RECT_RGBA8_KERNEL_NAME => Some(COPY_RECT_RGBA8_SOURCE_PATH),
-        RESOLVE_TILE64_MSAA4_RGBA8_KERNEL_NAME => {
-            Some("src/intel/gpgpu/kernels/resolve_tile64_msaa4_rgba8.clcpp")
-        }
         FILL_RECT_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/fill_rect_rgba8.clcpp"),
         FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/fill_rect_worklist_rgba8.clcpp")
@@ -200,7 +190,6 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/font_outline_coverage_r8.clcpp")
         }
-        SCENE_AABB_KERNEL_NAME => Some("src/intel/gpgpu/kernels/scene_aabb.clcpp"),
         HELIO_RETAINED_TRANSFORM_KERNEL_NAME => Some(HELIO_RETAINED_TRANSFORM_SOURCE_PATH),
         LAB256_MULTIPHASE_KERNEL_NAME => {
             Some("crates/trueos-shader/gpgpu/kernels/lab256_multiphase.clcpp")
@@ -223,8 +212,6 @@ include!("kernels/artifacts/adls/cpp/helio_retained_transform.contract.rs");
 include!("kernels/artifacts/adls/cpp/lab256_multiphase.contract.rs");
 include!("kernels/artifacts/adls/cpp/mandel64_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/pixel_plasma_rgba8.contract.rs");
-include!("kernels/artifacts/adls/cpp/resolve_tile64_msaa4_rgba8.contract.rs");
-include!("kernels/artifacts/adls/cpp/scene_aabb.contract.rs");
 include!("kernels/artifacts/adls/cpp/skybox_sample_rgb565.contract.rs");
 include!("kernels/artifacts/adls/cpp/sprite_quad_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.contract.rs");
@@ -309,10 +296,6 @@ const _: () = {
         scalar += 1;
     }
 };
-pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/resolve_tile64_msaa4_rgba8.bin");
-pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/resolve_tile64_msaa4_rgba8.spv");
 pub(crate) const FILL_RECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/fill_rect_rgba8.bin");
 pub(crate) const FILL_RECT_RGBA8_ADLS_SPV: &[u8] =
@@ -679,10 +662,6 @@ pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/font_outline_coverage_r8.bin");
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/font_outline_coverage_r8.spv");
-pub(crate) const SCENE_AABB_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/scene_aabb.bin");
-pub(crate) const SCENE_AABB_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/scene_aabb.spv");
 // Keep the native retained-transform Zebin in release images even while the
 // ADL-S compatibility policy parks its submission path.  `.gpgpu_artifacts`
 // is retained by the linker script specifically for dormant, explicitly
@@ -754,8 +733,6 @@ const _: () = {
     assert!(sprite.per_thread_data_bytes == 96);
     assert!(sprite.bindings.len() == 3);
 };
-pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
-    RESOLVE_TILE64_MSAA4_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const FILL_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     FILL_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const FILL_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
@@ -789,8 +766,6 @@ pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     PIXEL_PLASMA_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_BIN_SHA256: [u8; 32] =
     FONT_OUTLINE_COVERAGE_R8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-pub(crate) const SCENE_AABB_ADLS_BIN_SHA256: [u8; 32] =
-    SCENE_AABB_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_BIN_SHA256: [u8; 32] =
     HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () = {

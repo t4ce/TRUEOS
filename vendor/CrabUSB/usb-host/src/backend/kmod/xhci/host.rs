@@ -41,6 +41,8 @@ use crate::{
 
 static TRANSFER_EVENT_TRACE: TraceSampler = TraceSampler::new();
 static EVENT_DRAIN_TRACE: TraceSampler = TraceSampler::new();
+const USB_LEGACY_OWNERSHIP_POLL_INTERVAL_MS: u64 = 100;
+const USB_LEGACY_OWNERSHIP_SLICE_BUDGET_MS: u64 = 5;
 
 pub struct Xhci {
     pub(crate) reg: Arc<RwLock<XhciRegisters>>,
@@ -550,16 +552,8 @@ impl Xhci {
 
     async fn legacy_init(&mut self, mut usb_legacy_support: UsbLegacySupport<MemMapper>) -> Result {
         debug!("legacy init");
-        usb_legacy_support.usblegsup.update_volatile(|r| {
-            r.set_hc_os_owned_semaphore();
-        });
-
-        loop {
-            let up = usb_legacy_support.usblegsup.read_volatile();
-            if up.hc_os_owned_semaphore() && !up.hc_bios_owned_semaphore() {
-                break;
-            }
-        }
+        self.USB_LEGENDARY_LEGACY_SAVEWRAPPER_LMAO(&mut usb_legacy_support)
+            .await?;
 
         debug!("claimed ownership from BIOS");
 
@@ -574,6 +568,59 @@ impl Xhci {
             r.clear_smi_on_pci_command();
             r.clear_smi_on_os_ownership_change();
         });
+
+        Ok(())
+    }
+
+    #[allow(non_snake_case)]
+    async fn USB_LEGENDARY_LEGACY_SAVEWRAPPER_LMAO(
+        &self,
+        usb_legacy_support: &mut UsbLegacySupport<MemMapper>,
+    ) -> Result {
+        usb_legacy_support.usblegsup.update_volatile(|r| {
+            r.set_hc_os_owned_semaphore();
+        });
+
+        let started_ms = self.kernel.monotonic_millis();
+        let mut polls = 0u64;
+        loop {
+            let slice_started_ms = self.kernel.monotonic_millis();
+            let up = usb_legacy_support.usblegsup.read_volatile();
+            polls = polls.saturating_add(1);
+            if up.hc_os_owned_semaphore() && !up.hc_bios_owned_semaphore() {
+                break;
+            }
+
+            let slice_elapsed_ms = slice_started_ms
+                .zip(self.kernel.monotonic_millis())
+                .map(|(started, now)| now.saturating_sub(started))
+                .unwrap_or(0);
+            if slice_elapsed_ms >= USB_LEGACY_OWNERSHIP_SLICE_BUDGET_MS {
+                warn!(
+                    "xhci: legacy BIOS ownership slice over budget budget_ms={} elapsed_ms={} polls={}",
+                    USB_LEGACY_OWNERSHIP_SLICE_BUDGET_MS,
+                    slice_elapsed_ms,
+                    polls,
+                );
+            }
+
+            self.kernel
+                .sleep(Duration::from_millis(
+                    USB_LEGACY_OWNERSHIP_POLL_INTERVAL_MS,
+                ))
+                .await;
+        }
+
+        info!(
+            "xhci: legacy BIOS ownership handoff complete polls={} elapsed_ms={} poll_interval_ms={} slice_budget_ms={}",
+            polls,
+            started_ms
+                .zip(self.kernel.monotonic_millis())
+                .map(|(started, now)| now.saturating_sub(started))
+                .unwrap_or(0),
+            USB_LEGACY_OWNERSHIP_POLL_INTERVAL_MS,
+            USB_LEGACY_OWNERSHIP_SLICE_BUDGET_MS,
+        );
 
         Ok(())
     }
@@ -745,7 +792,7 @@ impl Xhci {
         self.log_status("wait-for-running-ready");
 
         // 必须等待至少200ms，否则 port enable = false
-        self.kernel.delay(Duration::from_millis(200));
+        self.kernel.sleep(Duration::from_millis(200)).await;
         self.log_status("wait-for-running-after-settle");
     }
 

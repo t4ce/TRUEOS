@@ -352,21 +352,6 @@ impl Device {
         Ok(point)
     }
 
-    pub fn submit_scene_aabb(
-        self,
-        queue: Queue,
-        dispatch: &SceneAabbDispatch,
-    ) -> Result<SceneAabbResult, i32> {
-        if queue.device != self {
-            return Err(ERR_BAD_HANDLE);
-        }
-        let mut result = SceneAabbResult::default();
-        rc_result(unsafe {
-            vcabi::trueos_cabi_vgpu_submit_scene_aabb(self.0, queue.handle, dispatch, &mut result)
-        })?;
-        Ok(result)
-    }
-
     pub fn timeline(self, queue: Queue) -> Result<TimelineStatus, i32> {
         if queue.device != self {
             return Err(ERR_BAD_HANDLE);
@@ -503,9 +488,6 @@ impl Queue {
         self.handle
     }
 
-    pub fn submit_scene_aabb(self, dispatch: &SceneAabbDispatch) -> Result<SceneAabbResult, i32> {
-        self.device.submit_scene_aabb(self, dispatch)
-    }
 }
 
 fn rc_result(rc: i32) -> Result<(), i32> {

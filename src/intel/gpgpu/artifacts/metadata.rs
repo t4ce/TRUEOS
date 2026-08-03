@@ -96,14 +96,6 @@ pub(crate) const COPY_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         &COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
-pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::contracted(
-        RESOLVE_TILE64_MSAA4_RGBA8_KERNEL_NAME,
-        RESOLVE_TILE64_MSAA4_RGBA8_ADLS_BIN,
-        RESOLVE_TILE64_MSAA4_RGBA8_ADLS_SPV,
-        &RESOLVE_TILE64_MSAA4_RGBA8_ADLS_CPP_ABI_CONTRACT,
-    );
-
 pub(crate) const FILL_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         FILL_RECT_RGBA8_KERNEL_NAME,
@@ -282,13 +274,6 @@ pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         FONT_OUTLINE_COVERAGE_R8_ADLS_SPV,
         &FONT_OUTLINE_COVERAGE_R8_ADLS_CPP_ABI_CONTRACT,
     );
-
-pub(crate) const SCENE_AABB_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::contracted(
-    SCENE_AABB_KERNEL_NAME,
-    SCENE_AABB_ADLS_BIN,
-    SCENE_AABB_ADLS_SPV,
-    &SCENE_AABB_ADLS_CPP_ABI_CONTRACT,
-);
 
 pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(

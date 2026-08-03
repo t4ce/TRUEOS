@@ -59,35 +59,6 @@ pub(crate) fn copy_rect_rgba8_complete_mode(
     submit_copy_rect_2d(src, dst, params, direct_scanout)
 }
 
-/// Resolve one gfx12.5 Tile64 R8G8B8A8 4x-MSAA surface into linear RGBA8.
-///
-/// This is deliberately a single two-dimensional SIMD16 dispatch: resident
-/// scenes pay one GPU resolve per complete frame rather than one submission
-/// per scanline/span.
-pub(crate) fn resolve_tile64_msaa4_rgba8(
-    src: GpgpuRgba8Surface,
-    dst: GpgpuRgba8Surface,
-    width: u32,
-    height: u32,
-) -> bool {
-    resolve_tile64_msaa4_rgba8_mode(src, dst, width, height, false)
-}
-
-pub(crate) fn resolve_tile64_msaa4_rgba8_mode(
-    src: GpgpuRgba8Surface,
-    dst: GpgpuRgba8Surface,
-    width: u32,
-    height: u32,
-    direct_scanout: bool,
-) -> bool {
-    let Some(params) =
-        lower_copy_rect(src, GpgpuRect::new(0, 0, width, height), dst, GpgpuPoint::new(0, 0))
-    else {
-        return false;
-    };
-    submit_resolve_tile64_msaa4_2d(src, dst, params, direct_scanout)
-}
-
 fn reserve_font_coverage_gpu_va(bytes: usize) -> Option<u64> {
     let bytes = align_up(bytes, super::WARM_ALIGN)? as u64;
     {

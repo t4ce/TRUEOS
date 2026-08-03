@@ -89,7 +89,9 @@ pub mod net {
     pub const ICMP_VNET_MAX_INFLIGHT: usize = 32;
     pub const ICMP_VNET_TIMEOUT_MS: i64 = 2000;
     pub const CHECKED_UDP_SEND_RESULTS_CAP: usize = 256;
-    pub const NET_POLL_SLEEP_US: u64 = 100;
+    // Idle NICs need no sub-millisecond polling. Busy polls still request an
+    // immediate follow-up so this cap does not throttle active RX/TX drains.
+    pub const NET_POLL_IDLE_SOFTCAP_MS: u64 = 5;
     pub const NET_SERVICE_SLEEP_US: u64 = 100;
 
     pub const THROUGHPUT_BENCH_AUTOSTART: bool = false;

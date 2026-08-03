@@ -2175,21 +2175,7 @@ fn submit_resident_scene_capture_inner(
             }
             ResidentSceneFrameOutput::Readback => false,
         };
-        let resolved = if geometry_complete {
-            if let Some(target) = msaa_color {
-                crate::intel::gpgpu::resolve_tile64_msaa4_rgba8_mode(
-                    target.surface,
-                    output,
-                    target_width as u32,
-                    target_height as u32,
-                    direct_scanout_output,
-                )
-            } else {
-                true
-            }
-        } else {
-            false
-        };
+        let resolved = geometry_complete && msaa_color.is_none();
         let resolve_finished_ns = crate::chronos::monotonic_nanos();
         let mut completed_coverage_draws = 0usize;
         let mut coverage_submits = 0usize;

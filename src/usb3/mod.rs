@@ -15,9 +15,19 @@ const CRABUSB_CONTROLLER_ID: u32 = 3;
 const HOT_RESCAN_DEBOUNCE_MS: u64 = 100;
 const HOT_RESCAN_HANDOFF_SETTLE_MS: u64 = 500;
 static USB_PORT_CHANGE_SEQ: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+// Emergency BSP isolation switch. Keep this runtime-visible so the complete
+// USB path remains linked when temporarily taking the controller offline.
+static BSP_HEADLESS_SKIP_CRABUSB_XHCI_CLAIM: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 #[embassy_executor::task]
 pub async fn usb_controller_service_task() {
+    if BSP_HEADLESS_SKIP_CRABUSB_XHCI_CLAIM.load(core::sync::atomic::Ordering::Acquire) {
+        crate::log!(
+            "crabusb: BSP headless boot experiment enabled; xhci remains enumerated and unclaimed\n"
+        );
+        return;
+    }
     let Some((mmio, mmio_len, kernel, root_hub_policy)) = lib::known_xhci_host_inputs() else {
         return;
     };

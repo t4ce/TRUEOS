@@ -101,6 +101,20 @@ impl crabusb::KernelOp for TrueosCrabKernel {
         let delay_ms = duration.as_millis().try_into().unwrap_or(u64::MAX);
         let _ = crate::wait::spin_until_timeout_no_exec(delay_ms.max(1), || false);
     }
+
+    fn monotonic_millis(&self) -> Option<u64> {
+        Some(embassy_time::Instant::now().as_millis())
+    }
+
+    fn sleep<'a>(
+        &'a self,
+        duration: Duration,
+    ) -> core::pin::Pin<alloc::boxed::Box<dyn core::future::Future<Output = ()> + Send + 'a>> {
+        let delay_ms = duration.as_millis().try_into().unwrap_or(u64::MAX);
+        alloc::boxed::Box::pin(async move {
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(delay_ms.max(1))).await;
+        })
+    }
 }
 
 pub fn known_xhci_host_inputs()

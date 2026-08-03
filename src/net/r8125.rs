@@ -32,6 +32,10 @@ const EXP_R8125_TXPOLL_90_ENABLE: bool = true;
 const EXP_R8125_TXPOLL_90_VALUE: u16 = 0x0001;
 const EXP_R8125_TCR_OVERRIDE: Option<u32> = None;
 const TX_DOORBELL_DEBUG_FIRST: u64 = 16;
+const RX_TRACE_EARLY_POLLS: u64 = 8;
+const RX_TRACE_POLL_EVERY: u64 = 10_000;
+const RX_TRACE_EARLY_FRAMES: u64 = 8;
+const MAC_TRACE_POLL_EVERY: u64 = 10_000;
 const EXP_R8125_FORCE_CPLUS_OFF: bool = false;
 // If DMA memory is mapped cacheable and the platform/device is not fully
 // cache-coherent, we must write back TX descriptors/buffers before ringing the
@@ -281,12 +285,39 @@ unsafe impl Send for Mmio {}
 
 impl Mmio {
     #[inline]
+    fn write_overlaps_station_mac(off: u16, width: usize) -> bool {
+        let start = off as usize;
+        let end = start.saturating_add(width);
+        let mac_start = REG_IDR0 as usize;
+        let mac_end = mac_start + 6;
+        start < mac_end && end > mac_start
+    }
+
+    fn reject_station_mac_write(off: u16, width: usize, val: u32) -> bool {
+        if !Self::write_overlaps_station_mac(off, width) {
+            return false;
+        }
+
+        crate::log_warn!(
+            target: "net";
+            "net/r8125: BLOCKED station-MAC MMIO write off=0x{:04x} width={} val=0x{:08x}\n",
+            off,
+            width,
+            val
+        );
+        true
+    }
+
+    #[inline]
     unsafe fn read_u8(&self, off: u16) -> u8 {
         read_volatile(self.base.as_ptr().add(off as usize) as *const u8)
     }
 
     #[inline]
     unsafe fn write_u8(&self, off: u16, val: u8) {
+        if Self::reject_station_mac_write(off, 1, u32::from(val)) {
+            return;
+        }
         write_volatile(self.base.as_ptr().add(off as usize) as *mut u8, val);
     }
 
@@ -297,11 +328,17 @@ impl Mmio {
 
     #[inline]
     unsafe fn write_u16(&self, off: u16, val: u16) {
+        if Self::reject_station_mac_write(off, 2, u32::from(val)) {
+            return;
+        }
         write_volatile(self.base.as_ptr().add(off as usize) as *mut u16, val);
     }
 
     #[inline]
     unsafe fn write_u32(&self, off: u16, val: u32) {
+        if Self::reject_station_mac_write(off, 4, val) {
+            return;
+        }
         write_volatile(self.base.as_ptr().add(off as usize) as *mut u32, val);
     }
 
@@ -359,6 +396,8 @@ pub struct R8125Adapter {
     dbg_kick_readbacks: u64,
     dbg_doorbells: u64,
     dbg_tx_quarantined: bool,
+    dbg_mac_checks: u64,
+    dbg_mac_changes: u64,
 
     dbg_tx_link_down_drops: u64,
 }
@@ -367,6 +406,19 @@ pub struct R8125Adapter {
 unsafe impl Send for R8125Adapter {}
 
 impl R8125Adapter {
+    unsafe fn read_hw_mac(mmio: &Mmio) -> [u8; 6] {
+        let mut mac = [0u8; 6];
+        for (i, octet) in mac.iter_mut().enumerate() {
+            *octet = mmio.read_u8(REG_IDR0 + i as u16);
+        }
+        mac
+    }
+
+    #[inline]
+    fn mac_is_invalid(mac: [u8; 6]) -> bool {
+        mac == [0; 6] || mac == [0xff; 6] || (mac[0] & 1) != 0
+    }
+
     #[inline]
     const fn xid_from_tcr(tcr: u32) -> u16 {
         ((tcr >> 20) & 0x0fcf) as u16
@@ -599,6 +651,96 @@ impl R8125Adapter {
         );
     }
 
+    fn rx_ring_ownership(&self) -> (usize, usize, usize) {
+        let mut nic_owned = 0usize;
+        let mut host_ready = 0usize;
+        let mut zero_length = 0usize;
+        for idx in 0..RX_DESC_COUNT {
+            let desc = unsafe { read_volatile(self.rx_desc.add(idx)) };
+            let opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
+            if (opts1 & DESC_OWN) != 0 {
+                nic_owned += 1;
+            } else {
+                host_ready += 1;
+                if (opts1 & 0x3fff) == 0 {
+                    zero_length += 1;
+                }
+            }
+        }
+        (nic_owned, host_ready, zero_length)
+    }
+
+    fn log_poll_snapshot(&self, reason: &str, isr: u32) {
+        let idx = self.rx_idx;
+        let next_idx = (idx + 1) % RX_DESC_COUNT;
+        let desc = unsafe { read_volatile(self.rx_desc.add(idx)) };
+        let next = unsafe { read_volatile(self.rx_desc.add(next_idx)) };
+        let opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
+        let next_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(next.opts1)) };
+        let (nic_owned, host_ready, zero_length) = self.rx_ring_ownership();
+        let (cmd, imr, phy, rcr, rds_lo, rds_hi) = unsafe {
+            (
+                self.mmio.read_u8(REG_CMD),
+                self.mmio.read_u32(REG_INTR_MASK_8125),
+                self.mmio.read_u8(REG_PHYSTAT),
+                self.mmio.read_u32(REG_RCR),
+                self.mmio.read_u32(REG_RDSAR),
+                self.mmio.read_u32(REG_RDSAR_HI),
+            )
+        };
+        crate::log_trace!(
+            target: "net";
+            "net/r8125: poll-snapshot reason={} poll={} isr=0x{:08x} imr=0x{:08x} cmd=0x{:02x} phy=0x{:02x} rcr=0x{:08x} rdsar=0x{:08x}{:08x} cursor={} opts1=0x{:08x} next={} next_opts1=0x{:08x} nic_owned={} host_ready={} zero_len={} tx_head={} tx_tail={} rx_ok={}\n",
+            reason,
+            self.dbg_poll_ticks,
+            isr,
+            imr,
+            cmd,
+            phy,
+            rcr,
+            rds_hi,
+            rds_lo,
+            idx,
+            opts1,
+            next_idx,
+            next_opts1,
+            nic_owned,
+            host_ready,
+            zero_length,
+            self.tx_head,
+            self.tx_tail,
+            self.dbg_rx_ok
+        );
+    }
+
+    fn trace_mac_integrity(&mut self, reason: &str, force_log: bool) {
+        self.dbg_mac_checks = self.dbg_mac_checks.saturating_add(1);
+        let hw_mac = unsafe { Self::read_hw_mac(&self.mmio) };
+        if hw_mac != self.mac || Self::mac_is_invalid(hw_mac) {
+            self.dbg_mac_changes = self.dbg_mac_changes.saturating_add(1);
+            crate::log_warn!(
+                target: "net";
+                "net/r8125: MAC INTEGRITY VIOLATION reason={} poll={} checks={} changes={} expected={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} hardware={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} invalid={}\n",
+                reason,
+                self.dbg_poll_ticks,
+                self.dbg_mac_checks,
+                self.dbg_mac_changes,
+                self.mac[0], self.mac[1], self.mac[2], self.mac[3], self.mac[4], self.mac[5],
+                hw_mac[0], hw_mac[1], hw_mac[2], hw_mac[3], hw_mac[4], hw_mac[5],
+                Self::mac_is_invalid(hw_mac) as u8
+            );
+        } else if force_log {
+            crate::log_trace!(
+                target: "net";
+                "net/r8125: mac-integrity reason={} poll={} checks={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                reason,
+                self.dbg_poll_ticks,
+                self.dbg_mac_checks,
+                hw_mac[0], hw_mac[1], hw_mac[2], hw_mac[3], hw_mac[4], hw_mac[5]
+            );
+        }
+    }
+
     fn log_hw_state(&mut self, reason: &str) {
         self.dbg_state_dumps = self.dbg_state_dumps.saturating_add(1);
 
@@ -672,6 +814,30 @@ impl R8125Adapter {
             self.dbg_rx_crc,
             self.dbg_rx_len_bad
         );
+        let hw_mac = unsafe { Self::read_hw_mac(&self.mmio) };
+        let (mar0, mar4, mcu, cfg9346, cfg3, cfg5) = unsafe {
+            (
+                self.mmio.read_u32(REG_MAR0),
+                self.mmio.read_u32(REG_MAR4),
+                self.mmio.read_u8(REG_MCU),
+                self.mmio.read_u8(REG_CFG9346),
+                self.mmio.read_u8(REG_CONFIG3),
+                self.mmio.read_u8(REG_CONFIG5),
+            )
+        };
+        crate::log_trace!(
+            target: "net";
+            "net/r8125: state-extra reason={} expected_mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} hw_mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} mar=0x{:08x}{:08x} mcu=0x{:02x} cfg9346=0x{:02x} cfg3=0x{:02x} cfg5=0x{:02x}\n",
+            reason,
+            self.mac[0], self.mac[1], self.mac[2], self.mac[3], self.mac[4], self.mac[5],
+            hw_mac[0], hw_mac[1], hw_mac[2], hw_mac[3], hw_mac[4], hw_mac[5],
+            mar4,
+            mar0,
+            mcu,
+            cfg9346,
+            cfg3,
+            cfg5
+        );
     }
 
     pub fn init_all() -> alloc::vec::Vec<Self> {
@@ -735,6 +901,26 @@ impl R8125Adapter {
         // TxConfig carries the Realtek MAC XID. Capture it before reset or any
         // driver write so 10ec:8125 can be resolved to its actual MAC family.
         let initial_tcr = unsafe { mmio.read_u32(REG_TCR) };
+        let mac_before_reset = unsafe { Self::read_hw_mac(&mmio) };
+        let (cmd_before_reset, isr_before_reset, imr_before_reset, phy_before_reset, rcr_before_reset) = unsafe {
+            (
+                mmio.read_u8(REG_CMD),
+                mmio.read_u32(REG_INTR_STATUS_8125),
+                mmio.read_u32(REG_INTR_MASK_8125),
+                mmio.read_u8(REG_PHYSTAT),
+                mmio.read_u32(REG_RCR),
+            )
+        };
+        crate::log_trace!(
+            target: "net";
+            "net/r8125: phase=pre-reset bdf={:02x}:{:02x}.{} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} invalid={} cmd=0x{:02x} isr=0x{:08x} imr=0x{:08x} phy=0x{:02x} rcr=0x{:08x} tcr=0x{:08x}\n",
+            dev.bus, dev.slot, dev.function,
+            mac_before_reset[0], mac_before_reset[1], mac_before_reset[2],
+            mac_before_reset[3], mac_before_reset[4], mac_before_reset[5],
+            Self::mac_is_invalid(mac_before_reset) as u8,
+            cmd_before_reset, isr_before_reset, imr_before_reset, phy_before_reset,
+            rcr_before_reset, initial_tcr
+        );
         let xid = Self::xid_from_tcr(initial_tcr);
         let family = R8125Family::from_xid(xid);
         if family == R8125Family::Unknown {
@@ -765,9 +951,11 @@ impl R8125Adapter {
         // Reset
         let mut reset_done = false;
         let mut last_cmd: u8 = 0;
+        let mut reset_spins: u32 = 0;
         unsafe {
             mmio.write_u8(REG_CMD, CMD_RST);
-            for _ in 0..1_000_000 {
+            for spin in 0..1_000_000 {
+                reset_spins = spin + 1;
                 last_cmd = mmio.read_u8(REG_CMD);
                 if (last_cmd & CMD_RST) == 0 {
                     reset_done = true;
@@ -784,13 +972,28 @@ impl R8125Adapter {
             return Err(());
         }
 
-        let mac = unsafe {
-            let mut m = [0u8; 6];
-            for i in 0..6 {
-                m[i] = mmio.read_u8(REG_IDR0 + i as u16);
-            }
-            m
-        };
+        let mac = unsafe { Self::read_hw_mac(&mmio) };
+        crate::log_trace!(
+            target: "net";
+            "net/r8125: phase=post-reset spins={} cmd=0x{:02x} mac_before={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} mac_after={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} changed={} invalid={}\n",
+            reset_spins,
+            last_cmd,
+            mac_before_reset[0], mac_before_reset[1], mac_before_reset[2],
+            mac_before_reset[3], mac_before_reset[4], mac_before_reset[5],
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+            (mac != mac_before_reset) as u8,
+            Self::mac_is_invalid(mac) as u8
+        );
+        if mac != mac_before_reset || Self::mac_is_invalid(mac) {
+            crate::log_warn!(
+                target: "net";
+                "net/r8125: MAC changed across reset bdf={:02x}:{:02x}.{} before={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} after={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                dev.bus, dev.slot, dev.function,
+                mac_before_reset[0], mac_before_reset[1], mac_before_reset[2],
+                mac_before_reset[3], mac_before_reset[4], mac_before_reset[5],
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+            );
+        }
 
         // Allocate descriptor rings
         let rx_desc_bytes = core::mem::size_of::<RxDesc>() * RX_DESC_COUNT;
@@ -835,6 +1038,24 @@ impl R8125Adapter {
                 Self::publish_rx_descriptor(rx_desc.add(i), buf.phys(), eor);
             }
             rx_bufs.push(buf);
+        }
+        if crate::log_os::flags::R8125_VERBOSE_LOGS {
+            for idx in [0, 1, RX_DESC_COUNT - 2, RX_DESC_COUNT - 1] {
+                let desc = unsafe { read_volatile(rx_desc.add(idx)) };
+                let opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
+                let opts2 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts2)) };
+                let addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.addr)) };
+                crate::log_trace!(
+                    target: "net";
+                    "net/r8125: phase=rx-ring-published desc={} own={} eor={} opts1=0x{:08x} opts2=0x{:08x} addr=0x{:016x}\n",
+                    idx,
+                    ((opts1 & DESC_OWN) != 0) as u8,
+                    ((opts1 & DESC_EOR) != 0) as u8,
+                    opts1,
+                    opts2,
+                    addr
+                );
+            }
         }
 
         if crate::log_os::flags::R8125_VERBOSE_LOGS {
@@ -960,6 +1181,36 @@ impl R8125Adapter {
                 mmio.read_u8(REG_CONFIG5),
             )
         };
+        let mac_after_program = unsafe { Self::read_hw_mac(&mmio) };
+        crate::log_trace!(
+            target: "net";
+            "net/r8125: phase=engine-enabled cmd=0x{:02x} isr=0x{:08x} imr=0x{:08x} phy=0x{:02x} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} changed_since_reset={} invalid={} rcr=0x{:08x} tcr=0x{:08x} cplus=0x{:04x} rdsar=0x{:08x}{:08x} tnpds=0x{:08x}{:08x}\n",
+            unsafe { mmio.read_u8(REG_CMD) },
+            unsafe { mmio.read_u32(REG_INTR_STATUS_8125) },
+            unsafe { mmio.read_u32(REG_INTR_MASK_8125) },
+            unsafe { mmio.read_u8(REG_PHYSTAT) },
+            mac_after_program[0], mac_after_program[1], mac_after_program[2],
+            mac_after_program[3], mac_after_program[4], mac_after_program[5],
+            (mac_after_program != mac) as u8,
+            Self::mac_is_invalid(mac_after_program) as u8,
+            rcr_rb,
+            tcr_rb,
+            cplus_rb,
+            unsafe { mmio.read_u32(REG_RDSAR_HI) },
+            unsafe { mmio.read_u32(REG_RDSAR) },
+            unsafe { mmio.read_u32(REG_TNPDS_HI) },
+            unsafe { mmio.read_u32(REG_TNPDS) }
+        );
+        if mac_after_program != mac || Self::mac_is_invalid(mac_after_program) {
+            crate::log_warn!(
+                target: "net";
+                "net/r8125: MAC changed while programming datapath bdf={:02x}:{:02x}.{} expected={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} hardware={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                dev.bus, dev.slot, dev.function,
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                mac_after_program[0], mac_after_program[1], mac_after_program[2],
+                mac_after_program[3], mac_after_program[4], mac_after_program[5]
+            );
+        }
         if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!(
                 "net/r8125: cfg rb rcr=0x{:08x} tcr=0x{:08x} cplus=0x{:04x}\n",
@@ -1110,6 +1361,8 @@ impl R8125Adapter {
             dbg_kick_readbacks: 0,
             dbg_doorbells: 0,
             dbg_tx_quarantined: false,
+            dbg_mac_checks: 0,
+            dbg_mac_changes: 0,
 
             dbg_tx_link_down_drops: 0,
         })
@@ -1307,6 +1560,19 @@ impl R8125Adapter {
     fn poll_rx_ring(&mut self) {
         self.dbg_poll_ticks = self.dbg_poll_ticks.saturating_add(1);
 
+        let trace_poll = self.dbg_poll_ticks <= RX_TRACE_EARLY_POLLS
+            || self.dbg_poll_ticks.is_multiple_of(RX_TRACE_POLL_EVERY);
+        if self.dbg_poll_ticks <= RX_TRACE_EARLY_POLLS
+            || self.dbg_poll_ticks.is_multiple_of(MAC_TRACE_POLL_EVERY)
+        {
+            self.trace_mac_integrity("poll", trace_poll);
+        }
+
+        let early_isr = unsafe { self.mmio.read_u32(REG_INTR_STATUS_8125) };
+        if trace_poll {
+            self.log_poll_snapshot("poll-entry", early_isr);
+        }
+
         if self.dbg_poll_ticks.is_multiple_of(POLL_STATE_LOG_EVERY) {
             self.refresh_snapshot();
         }
@@ -1389,6 +1655,7 @@ impl R8125Adapter {
                         self.dbg_rx_ring_full,
                         isr
                     );
+                    self.log_poll_snapshot("rxdu-before-ack", isr);
                 }
             }
             // ISR can be chatty (e.g. link-related or RX OK); keep a small sample
@@ -1405,6 +1672,18 @@ impl R8125Adapter {
             }
             unsafe {
                 self.mmio.write_u32(REG_INTR_STATUS_8125, isr);
+            }
+            if crate::log_os::flags::R8125_VERBOSE_LOGS
+                && (isr & ISR_RX_DESC_UNAVAILABLE) != 0
+            {
+                let isr_after_ack = unsafe { self.mmio.read_u32(REG_INTR_STATUS_8125) };
+                crate::log_trace!(
+                    target: "net";
+                    "net/r8125: isr-ack poll={} wrote=0x{:08x} readback=0x{:08x}\n",
+                    self.dbg_poll_ticks,
+                    isr,
+                    isr_after_ack
+                );
             }
         }
 
@@ -1526,6 +1805,21 @@ impl R8125Adapter {
             let buf_ptr = self.rx_bufs[idx].virt();
             let data = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, len) };
 
+            if self.dbg_rx_ok < RX_TRACE_EARLY_FRAMES && len >= 14 {
+                crate::log_trace!(
+                    target: "net";
+                    "net/r8125: rx-l2 seq={} poll={} desc={} len={} opts1=0x{:08x} dst={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ethertype=0x{:02x}{:02x}\n",
+                    self.dbg_rx_ok + 1,
+                    self.dbg_poll_ticks,
+                    idx,
+                    len,
+                    opts1,
+                    data[0], data[1], data[2], data[3], data[4], data[5],
+                    data[6], data[7], data[8], data[9], data[10], data[11],
+                    data[12], data[13]
+                );
+            }
+
             unsafe {
                 let ring = &mut *ring_ptr;
                 if ring.push_rx_packet(data).is_err() {
@@ -1560,6 +1854,22 @@ impl R8125Adapter {
 
             self.rx_idx = (self.rx_idx + 1) % RX_DESC_COUNT;
             processed += 1;
+        }
+
+        if (processed != 0 && trace_poll) || (isr & ISR_RX_DESC_UNAVAILABLE) != 0 {
+            let isr_after_drain = unsafe { self.mmio.read_u32(REG_INTR_STATUS_8125) };
+            crate::log_trace!(
+                target: "net";
+                "net/r8125: rx-drain poll={} processed={} cursor={} isr_before=0x{:08x} isr_after=0x{:08x} rx_ok={} ring_full={}\n",
+                self.dbg_poll_ticks,
+                processed,
+                self.rx_idx,
+                isr,
+                isr_after_drain,
+                self.dbg_rx_ok,
+                self.dbg_rx_ring_full
+            );
+            self.log_poll_snapshot("rx-drain-end", isr_after_drain);
         }
 
         self.reclaim_tx();

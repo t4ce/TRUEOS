@@ -53,14 +53,5 @@ include!("rcs/descriptors.rs");
 include!("rcs/commands.rs");
 include!("rcs/context.rs");
 include!("rcs/helio_retained_transform.rs");
-include!("rcs/scene_aabb.rs");
 include!("rcs/lab256.rs");
 include!("rcs/spirit_vfx.rs");
-
-pub(crate) fn submit_tenant_scene_aabb(
-    tenant_root_phys: u64,
-    request: crate::gpu::physical::PhysicalSceneAabbRequest,
-) -> Result<crate::gpu::physical::PhysicalSceneAabbCompletion, crate::gpu::physical::PhysicalGpuError>
-{
-    submit_tenant_scene_aabb_rcs(tenant_root_phys, request)
-}

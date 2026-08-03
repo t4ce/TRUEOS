@@ -60,9 +60,7 @@ pub trait NetworkDriver: Driver {
     fn poll(&mut self);
 }
 
-// Keep RTL8125 enabled, but keep RTL8168 as the primary NIC (dev0) by init order.
-// Enable RTL8125 probing as a secondary NIC. Primary selection is kept stable (dev=0)
-// so the two adapters don't interfere.
+// Initialize both families and let physical link state select the primary NIC.
 const ENABLE_R8125: bool = true;
 
 enum ActiveDevice {
@@ -435,7 +433,44 @@ pub fn init() {
 }
 
 pub fn poll_at(index: usize) -> bool {
-    with_device_at(index, |dev| dev.poll_rx()).unwrap_or(false)
+    const STALL_WARN_MS: u64 = 10;
+
+    let lock_started_ms = embassy_time::Instant::now().as_millis();
+    let mut guard = DEVICES.lock();
+    let lock_acquired_ms = embassy_time::Instant::now().as_millis();
+    let lock_wait_ms = lock_acquired_ms.saturating_sub(lock_started_ms);
+
+    let Some(dev) = guard.get_mut(index) else {
+        return false;
+    };
+    let driver_started_ms = embassy_time::Instant::now().as_millis();
+    let busy = dev.poll_rx();
+    let driver_finished_ms = embassy_time::Instant::now().as_millis();
+    let driver_poll_ms = driver_finished_ms.saturating_sub(driver_started_ms);
+    drop(guard);
+
+    if lock_wait_ms >= STALL_WARN_MS {
+        crate::log_warn!(
+            target: "net";
+            "net-poll-path: DEVICE LOCK STALL dev={} wait_ms={} at_ms={}\n",
+            index,
+            lock_wait_ms,
+            lock_acquired_ms
+        );
+    }
+    if driver_poll_ms >= STALL_WARN_MS {
+        crate::log_warn!(
+            target: "net";
+            "net-poll-path: DRIVER POLL STALL dev={} elapsed_ms={} started_ms={} finished_ms={} busy={}\n",
+            index,
+            driver_poll_ms,
+            driver_started_ms,
+            driver_finished_ms,
+            busy as u8
+        );
+    }
+
+    busy
 }
 
 pub fn drain_rx_packets_each_at(

@@ -373,91 +373,6 @@ fn submit_font_fill_rect_2d(
     }
 }
 
-fn submit_resolve_tile64_msaa4_2d(
-    src: GpgpuRgba8Surface,
-    dst: GpgpuRgba8Surface,
-    params: CopyRectRgba8Params,
-    direct_scanout: bool,
-) -> bool {
-    if params.width == 0 || params.height == 0 {
-        return false;
-    }
-    let Some(dispatch) = fill_rect_2d_dispatch(params.width, params.height) else {
-        return false;
-    };
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
-    let Some(dev) = super::claimed_device() else {
-        return false;
-    };
-    let Some(upload) = upload_resolve_tile64_msaa4_rgba8_kernel() else {
-        return false;
-    };
-    let Some(state) = direct_rcs_state_once(dev) else {
-        return false;
-    };
-
-    let forcewake_ok = direct_rcs_forcewake(dev);
-    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
-    let kernel_ppgtt_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let src_ppgtt_ok =
-        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, params.src_gpu, src.phys, src.bytes);
-    let dst_ppgtt_ok = src_ppgtt_ok
-        && direct_rcs_map_ppgtt_destination(
-            state,
-            params.dst_gpu,
-            dst.phys,
-            dst.bytes,
-            direct_scanout,
-        );
-    let batch_ok = dst_ppgtt_ok
-        && direct_rcs_encode_resolve_tile64_msaa4_2d_batch(
-            state, upload, params, src.bytes, dst.bytes,
-        );
-    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let observed = if submitted {
-        direct_rcs_poll_result_slot_timeout_ms(
-            state,
-            COPY_RECT_POST_MARKER_SLOT,
-            COPY_RECT_POST_MARKER,
-            RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS,
-        )
-    } else {
-        0
-    };
-    let completed = observed == COPY_RECT_POST_MARKER;
-    if !completed {
-        let occurrence = RESOLVE_TILE64_MSAA4_INCOMPLETE_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
-        if occurrence <= 8 || occurrence.is_multiple_of(20) {
-            let pre_marker = direct_rcs_read_result_slot(state, COPY_RECT_PRE_MARKER_SLOT);
-            let potential_reason = if !batch_ok {
-                "batch-prepare"
-            } else if !submitted {
-                "guc-submit"
-            } else if pre_marker != COPY_RECT_PRE_MARKER {
-                "batch-not-started"
-            } else {
-                "walker-not-retired-before-timeout"
-            };
-            crate::log_warn!(
-                target: "intel-gpgpu";
-                "resolve_tile64_msaa4_rgba8 2d incomplete occurrence={} rect={}x{} groups={}x{} pre=0x{:08X} post=0x{:08X} timeout_ms={} potential_reason={} action=fail-closed\n",
-                occurrence,
-                params.width,
-                params.height,
-                dispatch.group_x,
-                dispatch.group_y,
-                pre_marker,
-                observed,
-                RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS,
-                potential_reason,
-            );
-        }
-    }
-    completed
-}
-
 fn submit_font_outline_coverage_runs_r8_2d(
     ops_phys: u64,
     ops_bytes: usize,
@@ -670,7 +585,7 @@ fn submit_glyph_mask_2d(
             state,
             COPY_RECT_POST_MARKER_SLOT,
             COPY_RECT_POST_MARKER,
-            RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS,
+            DIRECT_RCS_2D_COMPLETION_TIMEOUT_MS,
         )
     } else {
         0
@@ -737,7 +652,7 @@ fn submit_glyph_mask_layers_2d(
     let completion_timeout_ms = if direct_scanout {
         UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS
     } else {
-        RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS
+        DIRECT_RCS_2D_COMPLETION_TIMEOUT_MS
     };
     let observed = if submission.can_poll() {
         font_rcs_poll_result_slot_timeout_ms(
@@ -845,7 +760,7 @@ fn submit_font_instance_layers_2d(
     let completion_timeout_ms = if direct_scanout {
         UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS
     } else {
-        RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS
+        DIRECT_RCS_2D_COMPLETION_TIMEOUT_MS
     };
     let observed = if submission.can_poll() {
         font_rcs_poll_result_slot_timeout_ms(

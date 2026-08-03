@@ -104,28 +104,6 @@ pub(crate) fn upload_copy_rect_rgba8_kernel() -> Option<UploadedKernelArtifact> 
     Some(upload)
 }
 
-pub(crate) fn upload_resolve_tile64_msaa4_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *RESOLVE_TILE64_MSAA4_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: resolve-tile64-msaa4-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        RESOLVE_TILE64_MSAA4_RGBA8_ADLS_ARTIFACT,
-        RESOLVE_TILE64_MSAA4_RGBA8_ADLS_GPU,
-    )?;
-    *RESOLVE_TILE64_MSAA4_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
 pub(crate) fn upload_fill_rect_rgba8_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *FILL_RECT_RGBA8_UPLOAD.lock() {
         return Some(upload);
@@ -536,16 +514,6 @@ pub(crate) fn upload_font_outline_coverage_r8_kernel() -> Option<UploadedKernelA
     Some(upload)
 }
 
-pub(crate) fn upload_scene_aabb_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *SCENE_AABB_UPLOAD.lock() {
-        return Some(upload);
-    }
-    let dev = super::claimed_device()?;
-    let upload = upload_artifact(dev, SCENE_AABB_ADLS_ARTIFACT, SCENE_AABB_ADLS_GPU)?;
-    *SCENE_AABB_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
 pub(crate) fn upload_helio_retained_transform_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *HELIO_RETAINED_TRANSFORM_UPLOAD.lock() {
         return Some(upload);
@@ -634,7 +602,6 @@ struct GpgpuKnownArtifactSlot {
 
 const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     COPY_RECT_RGBA8_KERNEL_NAME,
-    RESOLVE_TILE64_MSAA4_RGBA8_KERNEL_NAME,
     FILL_RECT_RGBA8_KERNEL_NAME,
     FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME,
     GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,
@@ -654,7 +621,6 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     KOKORO_QGEMM_U8_I8_KERNEL_NAME,
     KOKORO_CONV1D_U8_U8_KERNEL_NAME,
     FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
-    SCENE_AABB_KERNEL_NAME,
     HELIO_RETAINED_TRANSFORM_KERNEL_NAME,
     LAB256_MULTIPHASE_KERNEL_NAME,
     SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME,
@@ -715,7 +681,6 @@ pub(crate) fn reload_known_kernel_artifact(
 fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
     match name {
         COPY_RECT_RGBA8_KERNEL_NAME
-        | RESOLVE_TILE64_MSAA4_RGBA8_KERNEL_NAME
         | FILL_RECT_RGBA8_KERNEL_NAME
         | FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME
         | ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME
@@ -736,7 +701,6 @@ fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
         | KOKORO_QGEMM_U8_I8_KERNEL_NAME
         | KOKORO_CONV1D_U8_U8_KERNEL_NAME
         | FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME
-        | SCENE_AABB_KERNEL_NAME
         | HELIO_RETAINED_TRANSFORM_KERNEL_NAME
         | LAB256_MULTIPHASE_KERNEL_NAME
         | SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME
@@ -763,11 +727,6 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: COPY_RECT_RGBA8_ADLS_ARTIFACT,
             gpu: COPY_RECT_RGBA8_ADLS_GPU,
             upload: &COPY_RECT_RGBA8_UPLOAD,
-        }),
-        RESOLVE_TILE64_MSAA4_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: RESOLVE_TILE64_MSAA4_RGBA8_ADLS_ARTIFACT,
-            gpu: RESOLVE_TILE64_MSAA4_RGBA8_ADLS_GPU,
-            upload: &RESOLVE_TILE64_MSAA4_RGBA8_UPLOAD,
         }),
         FILL_RECT_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: FILL_RECT_RGBA8_ADLS_ARTIFACT,
@@ -803,11 +762,6 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: FONT_INSTANCE_RGBA8_ADLS_ARTIFACT,
             gpu: FONT_INSTANCE_RGBA8_ADLS_GPU,
             upload: &FONT_INSTANCE_RGBA8_UPLOAD,
-        }),
-        SCENE_AABB_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: SCENE_AABB_ADLS_ARTIFACT,
-            gpu: SCENE_AABB_ADLS_GPU,
-            upload: &SCENE_AABB_UPLOAD,
         }),
         HELIO_RETAINED_TRANSFORM_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: HELIO_RETAINED_TRANSFORM_ADLS_ARTIFACT,

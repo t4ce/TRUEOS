@@ -30,8 +30,6 @@ single_entry_kernels=(
   helio_retained_transform
   mandel64_worklist_rgba8
   pixel_plasma_rgba8
-  resolve_tile64_msaa4_rgba8
-  scene_aabb
   skybox_sample_rgb565
   sprite_quad_worklist_rgba8
   ui4_compose_layers_rgba8

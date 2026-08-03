@@ -21,6 +21,17 @@ impl Kernel {
     pub fn delay(&self, duration: Duration) {
         self.osal.delay(duration)
     }
+
+    pub fn monotonic_millis(&self) -> Option<u64> {
+        self.osal.monotonic_millis()
+    }
+
+    pub fn sleep<'a>(
+        &'a self,
+        duration: Duration,
+    ) -> core::pin::Pin<alloc::boxed::Box<dyn core::future::Future<Output = ()> + Send + 'a>> {
+        self.osal.sleep(duration)
+    }
 }
 
 impl Deref for Kernel {
@@ -33,6 +44,17 @@ impl Deref for Kernel {
 
 pub trait KernelOp: DmaOp {
     fn delay(&self, duration: Duration);
+
+    fn monotonic_millis(&self) -> Option<u64> {
+        None
+    }
+
+    fn sleep<'a>(
+        &'a self,
+        duration: Duration,
+    ) -> core::pin::Pin<alloc::boxed::Box<dyn core::future::Future<Output = ()> + Send + 'a>> {
+        alloc::boxed::Box::pin(async move { self.delay(duration) })
+    }
 }
 
 pub(crate) struct SpinWhile<F>

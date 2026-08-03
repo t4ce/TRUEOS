@@ -150,29 +150,6 @@ pub(crate) enum PhysicalGpuFault {
     },
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PhysicalBufferSlice {
-    pub(crate) gpu: u64,
-    pub(crate) bytes: usize,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub(crate) struct PhysicalSceneAabbRequest {
-    pub(crate) vm: PhysicalGpuVmHandle,
-    pub(crate) bounds: [PhysicalBufferSlice; 6],
-    pub(crate) liveness: PhysicalBufferSlice,
-    pub(crate) output: PhysicalBufferSlice,
-    pub(crate) rows: u32,
-    pub(crate) query_min: [f32; 3],
-    pub(crate) query_max: [f32; 3],
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PhysicalSceneAabbCompletion {
-    pub(crate) serial: u64,
-    pub(crate) hits: u32,
-}
-
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PhysicalSchedulerStatus {
     pub(crate) context_capacity: usize,
@@ -251,11 +228,6 @@ pub(crate) trait PhysicalGpuDevice: Sync {
         gpu: u64,
         pages: &[u64],
     ) -> Result<bool, PhysicalGpuError>;
-
-    fn submit_scene_aabb(
-        &self,
-        request: PhysicalSceneAabbRequest,
-    ) -> Result<PhysicalSceneAabbCompletion, PhysicalGpuError>;
 
     fn register_context(
         &self,

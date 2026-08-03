@@ -81,18 +81,18 @@ pub(crate) mod flags {
         LogLevelPolicy::up(LevelFilter::Info);
     pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
 
-    pub(crate) const NET_LOG_RX_TAP: bool = false;
-    pub(crate) const NET_LOG_TX_TAP: bool = false;
+    pub(crate) const NET_LOG_RX_TAP: bool = true;
+    pub(crate) const NET_LOG_TX_TAP: bool = true;
     pub(crate) const NET_LOG_TCP_FLOW: bool = false;
     pub(crate) const NET_LOG_TCP_CONNECT_STATES: bool = false;
-    pub(crate) const NET_LOG_TCP_CONNECT_WIRE: bool = false;
+    pub(crate) const NET_LOG_TCP_CONNECT_WIRE: bool = true;
     pub(crate) const NET_LOG_TCP_SEND_FLUSH: bool = false;
-    pub(crate) const NET_LOG_ARP_RX: bool = false;
-    pub(crate) const NET_LOG_DHCP_VERBOSE: bool = false;
+    pub(crate) const NET_LOG_ARP_RX: bool = true;
+    pub(crate) const NET_LOG_DHCP_VERBOSE: bool = true;
     pub(crate) const NET_LOG_IPV6_RA: bool = false;
     pub(crate) const NET_LOG_DHCP6_SAMPLES: usize = 8;
     pub(crate) const VNET_EXERCISE_LOGS: bool = false;
-    pub(crate) const R8125_VERBOSE_LOGS: bool = false;
+    pub(crate) const R8125_VERBOSE_LOGS: bool = true;
     pub(crate) const BOOT_INFO_LOGS: bool = BOOT_DIAG_PROFILE_ENABLED;
     pub(crate) const HV_LOGS: bool = true;
     pub(crate) const PORTAL_LOGS: bool = true;

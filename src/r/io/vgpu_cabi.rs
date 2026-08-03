@@ -192,59 +192,6 @@ pub(crate) fn broker_vvideo_invalidate(
     .unwrap_or_else(|error| error.errno())
 }
 
-pub(crate) fn broker_submit_scene_aabb(
-    principal: Principal,
-    device: u64,
-    queue: u64,
-    dispatch: v::vgpu::SceneAabbDispatch,
-) -> Result<v::vgpu::SceneAabbResult, i32> {
-    let convert = |slice: v::vgpu::BufferSlice| -> Result<vgpu::BufferSlice, i32> {
-        Ok(vgpu::BufferSlice {
-            buffer: BufferHandle::from_raw(slice.buffer),
-            offset: usize::try_from(slice.offset).map_err(|_| -95)?,
-            bytes: usize::try_from(slice.bytes).map_err(|_| -95)?,
-        })
-    };
-    let mut bounds = [vgpu::BufferSlice {
-        buffer: BufferHandle::from_raw(0),
-        offset: 0,
-        bytes: 0,
-    }; 6];
-    for (dst, src) in bounds.iter_mut().zip(dispatch.bounds) {
-        *dst = convert(src)?;
-    }
-    let result = vgpu::submit_scene_aabb(
-        principal,
-        DeviceHandle::from_raw(device),
-        QueueHandle::from_raw(queue),
-        vgpu::SceneAabbDispatch {
-            bounds,
-            liveness: convert(dispatch.liveness)?,
-            output: convert(dispatch.output)?,
-            rows: dispatch.rows,
-            query_min: [
-                dispatch.query_min[0],
-                dispatch.query_min[1],
-                dispatch.query_min[2],
-            ],
-            query_max: [
-                dispatch.query_max[0],
-                dispatch.query_max[1],
-                dispatch.query_max[2],
-            ],
-        },
-    )
-    .map_err(|error| error.errno())?;
-    Ok(v::vgpu::SceneAabbResult {
-        point: v::vgpu::TimelinePoint {
-            value: result.point.value,
-            physical_serial: result.point.physical_serial,
-        },
-        hits: result.hits,
-        reserved: 0,
-    })
-}
-
 pub(crate) fn broker_queue_create(
     principal: Principal,
     device: u64,
@@ -716,33 +663,12 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_submit_control_nop(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_vgpu_submit_scene_aabb(
-    device: u64,
-    queue: u64,
-    dispatch: *const v::vgpu::SceneAabbDispatch,
-    out_result: *mut v::vgpu::SceneAabbResult,
+    _device: u64,
+    _queue: u64,
+    _dispatch: *const v::vgpu::SceneAabbDispatch,
+    _out_result: *mut v::vgpu::SceneAabbResult,
 ) -> i32 {
-    if dispatch.is_null() || out_result.is_null() {
-        return -14;
-    }
-    let dispatch = unsafe { dispatch.read() };
-    let request = unsafe {
-        core::slice::from_raw_parts(
-            (&dispatch as *const v::vgpu::SceneAabbDispatch).cast::<u8>(),
-            core::mem::size_of::<v::vgpu::SceneAabbDispatch>(),
-        )
-    };
-    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        guest_record(trueos_vm::vmcall::OP_BP_VGPU_SCENE_AABB, device, queue, request)
-    } else {
-        broker_submit_scene_aabb(direct_principal(), device, queue, dispatch)
-    };
-    match result {
-        Ok(result) => {
-            unsafe { out_result.write(result) };
-            0
-        }
-        Err(rc) => rc,
-    }
+    -95
 }
 
 #[unsafe(no_mangle)]

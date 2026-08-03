@@ -186,7 +186,8 @@ const UDP_TX_BUF_BYTES_MAX: usize = 64 * 1024;
 const ICMP_IDENT: u16 = 0x1234;
 const ICMP_VNET_MAX_INFLIGHT: usize = crate::allcaps::net::ICMP_VNET_MAX_INFLIGHT;
 const ICMP_VNET_TIMEOUT_MS: i64 = crate::allcaps::net::ICMP_VNET_TIMEOUT_MS;
-const NET_POLL_SLEEP_US: u64 = crate::allcaps::net::NET_POLL_SLEEP_US;
+const NET_POLL_IDLE_SOFTCAP_US: u64 =
+    crate::allcaps::net::NET_POLL_IDLE_SOFTCAP_MS * 1_000;
 const NET_SERVICE_SLEEP_US: u64 = crate::allcaps::net::NET_SERVICE_SLEEP_US;
 // DHCPv6 bring-up is easy to misdiagnose because failures often look like
 // "nothing happens". Keep a tiny amount of always-on logging on state changes
@@ -210,6 +211,7 @@ const RA_DNS6_MAX: usize = crate::allcaps::net::DNS_SERVER_MAX;
 const DHCP6_DNS6_MAX: usize = crate::allcaps::net::DNS_SERVER_MAX;
 pub const MAX_NET_DEVICES: usize = crate::allcaps::net::MAX_NET_DEVICES;
 const STATIC_FALLBACK_PREFIX_LEN: u8 = 24;
+const STATIC_FALLBACK_PRIMARY_IPV4: [u8; 4] = [192, 168, 178, 94];
 const STATIC_FALLBACK_BASE_IPV4: [u8; 4] = [192, 168, 178, 111];
 const STATIC_FALLBACK_GATEWAY: [u8; 4] = [192, 168, 178, 1];
 
@@ -5189,6 +5191,15 @@ fn ipv6_is_ula(ip: Ipv6Address) -> bool {
 }
 
 fn fallback_ipv4_for_device(device_index: usize) -> Ipv4Address {
+    if device_index == crate::net::primary_device_index() {
+        return Ipv4Address::new(
+            STATIC_FALLBACK_PRIMARY_IPV4[0],
+            STATIC_FALLBACK_PRIMARY_IPV4[1],
+            STATIC_FALLBACK_PRIMARY_IPV4[2],
+            STATIC_FALLBACK_PRIMARY_IPV4[3],
+        );
+    }
+
     let mut octets = STATIC_FALLBACK_BASE_IPV4;
     let base = octets[3] as usize;
     let host = (base + (device_index % 64)).clamp(2, 254) as u8;
@@ -5302,12 +5313,93 @@ pub fn service_tick_primary_once() -> bool {
 #[task(pool_size = MAX_NET_DEVICES)]
 pub async fn net_poll_task(index: usize) {
     async move {
+        const TRACE_EARLY_LOOPS: u64 = 16;
+        const TRACE_EVERY_LOOPS: u64 = 10_000;
+        const STALL_WARN_MS: u64 = 10;
+
+        let mut loop_count = 0u64;
+        let mut previous_loop_started_ms = embassy_time::Instant::now().as_millis();
         loop {
-            if crate::net::poll_at(index) {
-                Timer::after(EmbassyDuration::from_micros(0)).await;
-            } else {
-                Timer::after(EmbassyDuration::from_micros(NET_POLL_SLEEP_US)).await;
+            loop_count = loop_count.saturating_add(1);
+            let loop_started_ms = embassy_time::Instant::now().as_millis();
+            let loop_gap_ms = loop_started_ms.saturating_sub(previous_loop_started_ms);
+
+            let poll_started_ms = embassy_time::Instant::now().as_millis();
+            let busy = crate::net::poll_at(index);
+            let poll_finished_ms = embassy_time::Instant::now().as_millis();
+            let poll_elapsed_ms = poll_finished_ms.saturating_sub(poll_started_ms);
+            let requested_sleep_us = if busy { 0 } else { NET_POLL_IDLE_SOFTCAP_US };
+
+            let trace_loop = loop_count <= TRACE_EARLY_LOOPS
+                || loop_count.is_multiple_of(TRACE_EVERY_LOOPS);
+            if trace_loop {
+                crate::log_trace!(
+                    target: "net";
+                    "net-poll-task: loop dev={} n={} loop_start_ms={} gap_ms={} poll_ms={} busy={} next_sleep_us={}\n",
+                    index,
+                    loop_count,
+                    loop_started_ms,
+                    loop_gap_ms,
+                    poll_elapsed_ms,
+                    busy as u8,
+                    requested_sleep_us
+                );
             }
+            if loop_gap_ms >= STALL_WARN_MS {
+                crate::log_warn!(
+                    target: "net";
+                    "net-poll-task: LOOP WAKE STALL dev={} n={} gap_ms={} loop_start_ms={} poll_ms={} busy={}\n",
+                    index,
+                    loop_count,
+                    loop_gap_ms,
+                    loop_started_ms,
+                    poll_elapsed_ms,
+                    busy as u8
+                );
+            }
+            if poll_elapsed_ms >= STALL_WARN_MS {
+                crate::log_warn!(
+                    target: "net";
+                    "net-poll-task: POLL CALL STALL dev={} n={} elapsed_ms={} started_ms={} finished_ms={}\n",
+                    index,
+                    loop_count,
+                    poll_elapsed_ms,
+                    poll_started_ms,
+                    poll_finished_ms
+                );
+            }
+
+            let await_started_ms = embassy_time::Instant::now().as_millis();
+            Timer::after(EmbassyDuration::from_micros(requested_sleep_us)).await;
+            let await_finished_ms = embassy_time::Instant::now().as_millis();
+            let await_elapsed_ms = await_finished_ms.saturating_sub(await_started_ms);
+
+            if trace_loop {
+                crate::log_trace!(
+                    target: "net";
+                    "net-poll-task: timer dev={} n={} requested_us={} await_ms={} started_ms={} finished_ms={}\n",
+                    index,
+                    loop_count,
+                    requested_sleep_us,
+                    await_elapsed_ms,
+                    await_started_ms,
+                    await_finished_ms
+                );
+            }
+            if await_elapsed_ms >= STALL_WARN_MS {
+                crate::log_warn!(
+                    target: "net";
+                    "net-poll-task: TIMER WAKE STALL dev={} n={} requested_us={} await_ms={} started_ms={} finished_ms={}\n",
+                    index,
+                    loop_count,
+                    requested_sleep_us,
+                    await_elapsed_ms,
+                    await_started_ms,
+                    await_finished_ms
+                );
+            }
+
+            previous_loop_started_ms = loop_started_ms;
         }
     }
     .await;

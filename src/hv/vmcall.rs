@@ -54,7 +54,6 @@ pub const OP_BP_THERMAL_SNAPSHOT_READ: u32 = 0x94; // arg0 offset, arg1 cap -> l
 pub const OP_BP_VGPU_VVIDEO_CREATE: u32 = 0x95; // arg0 device,arg1 guest VA,payload bytes+usage -> buffer
 pub const OP_BP_VGPU_VVIDEO_FLUSH: u32 = 0x96; // arg0 device,arg1 buffer,payload offset+bytes -> rc
 pub const OP_BP_VGPU_VVIDEO_INVALIDATE: u32 = 0x97; // arg0 device,arg1 buffer,payload offset+bytes -> rc
-pub const OP_BP_VGPU_SCENE_AABB: u32 = 0x98; // arg0 device,arg1 queue,payload dispatch -> result
 pub const OP_BP_VGPU_DEVICE_DIAGNOSTICS: u32 = 0x90; // arg0 device -> counters + mapping proof
 pub const OP_BP_SYSTEM_SERVICES_SNAPSHOT_READ: u32 = 0xA4; // arg0 offset, arg1 cap -> task registry snapshot
 pub const OP_BP_VGPU_OPEN: u32 = 0xA5; // arg0 requested caps -> opaque device/rc
@@ -1296,37 +1295,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 })
                 .unwrap_or(-22);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_VGPU_SCENE_AABB => {
-            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
-            let dispatch = request_payload(vm_id, req_len)
-                .filter(|payload| {
-                    payload.len() >= core::mem::size_of::<v::vgpu::SceneAabbDispatch>()
-                })
-                .map(|payload| unsafe {
-                    core::ptr::read_unaligned(payload.as_ptr().cast::<v::vgpu::SceneAabbDispatch>())
-                });
-            let rows = dispatch.as_ref().map_or(0, |dispatch| dispatch.rows);
-            let result = dispatch.ok_or(-22).and_then(|dispatch| {
-                crate::r::io::vgpu_cabi::broker_submit_scene_aabb(principal, arg0, arg1, dispatch)
-            });
-            match result {
-                Ok(result) => {
-                    hvlogf(format_args!(
-                        "vgpu-vvideo: vm={} stage=scene-aabb status=ok rows={} hits={} timeline={} physical_serial={}",
-                        vm_id, rows, result.hits, result.point.value, result.point.physical_serial,
-                    ));
-                    write_record_response(vm_id, seq, 0, &result)
-                }
-                Err(rc) => {
-                    hvwarnf(format_args!(
-                        "vgpu-vvideo: vm={} stage=scene-aabb status=error rc={} rows={}",
-                        vm_id, rc, rows
-                    ));
-                    write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0)
-                }
-            }
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SOLARA_FONT_SIZES => {

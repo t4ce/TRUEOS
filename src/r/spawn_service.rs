@@ -1771,7 +1771,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TLS_SOCKET_SERVICE_STARTED,
         spawn_tls_socket_service,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ntp-sync",
         crate::r::readiness::NET_ANY_CONFIGURED,
         &NTP_SYNC_STARTED,
