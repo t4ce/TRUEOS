@@ -76,7 +76,7 @@ BAREMETAL_LOG_DRAIN := tools/baremetal-log-drain.sh
 TESTRIG_PHYSICAL_RESET_HELPER := tools/testrig-physical-reset-button.py
 BAREMETAL_LOG_HOST ?= 192.168.178.94
 BAREMETAL_LOG_PORT ?= 1
-BAREMETAL_LOG_DELAY ?= 15
+BAREMETAL_LOG_DELAY ?= 5
 BAREMETAL_LOG_RETRY_DELAY ?= 1
 BAREMETAL_LOG_DIR ?= bld/baremetal-logs
 BAREMETAL_LOG_SLOTS ?= 3
@@ -472,7 +472,12 @@ iso: artifacts images limine
 		-o $(ISO_PATH) $(ISO_BOOT_DIR)
 	$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" ISO_BOOT_DIR="$(ISO_BOOT_DIR)" ISO_PATH="$(ISO_PATH)" intel-gpu-verify-packaged-copy
 	@case "$(START_BAREMETAL_LOG)" in \
-		1) $(MAKE) --no-print-directory testrig-physical-reset-log ;; \
+		1) \
+			mkdir -p "$(BAREMETAL_LOG_DIR)"; \
+			setsid -f $(MAKE) --no-print-directory testrig-physical-reset-log \
+				</dev/null >"$(BAREMETAL_LOG_DIR)/testrig-physical-reset-log.log" 2>&1; \
+			echo "iso: dispatched baremetal reset/log verification (output=$(BAREMETAL_LOG_DIR)/testrig-physical-reset-log.log)" \
+			;; \
 		0) echo "iso: skipping baremetal deploy/log verification (START_BAREMETAL_LOG=0)" ;; \
 		*) echo "error: START_BAREMETAL_LOG must be 0 or 1, got '$(START_BAREMETAL_LOG)'" >&2; exit 2 ;; \
 	esac

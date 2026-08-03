@@ -18,6 +18,10 @@ pub(crate) mod flags {
     /// now so the normal USB area returns to Warn-only logging.
     pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = false;
 
+    /// Boot/network diagnostic profile for startup timing and first-net-process
+    /// operability logs.
+    pub(crate) const BOOT_DIAG_PROFILE_ENABLED: bool = true;
+
     /// Focused Lumen inference performance profile.
     ///
     /// Global/Info carries the cold model pack/seal, sampled RCS phases, sparse
@@ -36,13 +40,21 @@ pub(crate) mod flags {
     } else {
         LogLevelPolicy::up(LevelFilter::Info)
     };
-    pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = if BOOT_DIAG_PROFILE_ENABLED {
+        LogLevelPolicy::up(LevelFilter::Trace)
+    } else {
+        LogLevelPolicy::up(LevelFilter::Warn)
+    };
     pub(crate) const SERVICE_LOG_LEVEL: LogLevelPolicy = if LUMEN_PERF_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LevelFilter::Info)
     } else {
         LogLevelPolicy::up(LevelFilter::Warn)
     };
-    pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = if BOOT_DIAG_PROFILE_ENABLED {
+        LogLevelPolicy::up(LevelFilter::Trace)
+    } else {
+        LogLevelPolicy::up(LevelFilter::Warn)
+    };
     pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LevelFilter::Trace)
     } else if USB_RUNTIME_DIAG_PROFILE_ENABLED {
@@ -81,7 +93,7 @@ pub(crate) mod flags {
     pub(crate) const NET_LOG_DHCP6_SAMPLES: usize = 8;
     pub(crate) const VNET_EXERCISE_LOGS: bool = false;
     pub(crate) const R8125_VERBOSE_LOGS: bool = false;
-    pub(crate) const BOOT_INFO_LOGS: bool = false;
+    pub(crate) const BOOT_INFO_LOGS: bool = BOOT_DIAG_PROFILE_ENABLED;
     pub(crate) const HV_LOGS: bool = true;
     pub(crate) const PORTAL_LOGS: bool = true;
     pub(crate) const HTML_SHACK_VERBOSE: bool = false;
