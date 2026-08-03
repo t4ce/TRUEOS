@@ -70,8 +70,21 @@ pub async fn usb_controller_service_task() {
             return;
         }
     };
-    spawner.spawn(device_pool_token);
-    crate::log!("crabusb: device pool worker started\n");
+    if let Some((worker_slot, core_kind, worker_spawner)) =
+        crate::workers::pick_eff_background_spawner_with_slot()
+    {
+        worker_spawner.spawn(device_pool_token);
+        crate::log!(
+            "crabusb: device pool worker started placement=ecore slot={} core_kind={}\n",
+            worker_slot,
+            core_kind
+        );
+    } else {
+        spawner.spawn(device_pool_token);
+        crate::log!(
+            "crabusb: device pool worker started placement=bsp-fallback reason=no-eff-worker\n"
+        );
+    }
 
     let Some(news) = probe_devices_with_log(&mut host, "initial").await else {
         return;
@@ -80,13 +93,17 @@ pub async fn usb_controller_service_task() {
 
     let mut observed_port_change_seq =
         USB_PORT_CHANGE_SEQ.load(core::sync::atomic::Ordering::Acquire);
-    let mut snapshot_ticks = 0u8;
+    let mut next_snapshot = embassy_time::Instant::now()
+        + embassy_time::Duration::from_millis(
+            crate::allcaps::usb::CONTROLLER_SNAPSHOT_CADENCE_MS,
+        );
     loop {
-        while lab::service_one(&mut host).await {}
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(25)).await;
-        snapshot_ticks = snapshot_ticks.saturating_add(1);
-        if snapshot_ticks >= 10 {
-            snapshot_ticks = 0;
+        USB_LEGENDARY_LEGACY_SAVEWRAPPER_LMAO(&mut host).await;
+        if embassy_time::Instant::now() >= next_snapshot {
+            next_snapshot = embassy_time::Instant::now()
+                + embassy_time::Duration::from_millis(
+                    crate::allcaps::usb::CONTROLLER_SNAPSHOT_CADENCE_MS,
+                );
             if let Err(reason) = lab::refresh_snapshot(&mut host).await {
                 crate::log_trace!(
                     target: "usb";
@@ -117,25 +134,42 @@ pub async fn usb_controller_service_task() {
             "crabusb: probe_devices trigger=port-change seq={} quarantine=active\n",
             observed_port_change_seq
         );
-        let Some(news) = probe_devices_with_log(&mut host, "rescan").await else {
-            drop(quarantine);
-            continue;
-        };
-        if news.is_empty() {
-            drop(quarantine);
-            continue;
+        if let Some(news) = probe_devices_with_log(&mut host, "rescan").await {
+            if !news.is_empty() {
+                open_and_handoff_devices(&mut host, news, &spawner).await;
+                embassy_time::Timer::after(embassy_time::Duration::from_millis(
+                    HOT_RESCAN_HANDOFF_SETTLE_MS,
+                ))
+                .await;
+            }
         }
-        open_and_handoff_devices(&mut host, news, &spawner).await;
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(
-            HOT_RESCAN_HANDOFF_SETTLE_MS,
-        ))
-        .await;
         drop(quarantine);
+        // Port reset/probe work emits its own xHCI change events. Consume that
+        // resulting sequence here so maintenance cannot recursively rescan itself.
+        observed_port_change_seq =
+            USB_PORT_CHANGE_SEQ.load(core::sync::atomic::Ordering::Acquire);
         crate::log!(
             "crabusb: probe_devices trigger=port-change seq={} quarantine=released\n",
             observed_port_change_seq
         );
     }
+}
+
+#[allow(non_snake_case)]
+async fn USB_LEGENDARY_LEGACY_SAVEWRAPPER_LMAO(host: &mut crabusb::USBHost) {
+    let started = embassy_time::Instant::now();
+    let budget = embassy_time::Duration::from_millis(
+        crate::allcaps::usb::CONTROLLER_MAINTENANCE_BUDGET_MS,
+    );
+    while lab::service_one(host).await {
+        if embassy_time::Instant::now().duration_since(started) >= budget {
+            break;
+        }
+    }
+    embassy_time::Timer::after(embassy_time::Duration::from_millis(
+        crate::allcaps::usb::CONTROLLER_MAINTENANCE_CADENCE_MS,
+    ))
+    .await;
 }
 
 async fn probe_devices_with_log(

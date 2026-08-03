@@ -172,6 +172,7 @@ pub async fn mount_service_task() {
                             crate::log!("trueosfs: mount error {:?}\n", e);
                         }
                     }
+                    trueosfs_boot_work_yield().await;
                 }
             }
 
@@ -238,13 +239,38 @@ pub async fn format_blank_async(handle: block::DeviceHandle) -> Result<(), block
 
 struct KernelBlockIo {
     handle: block::DeviceHandle,
+    fair_boot_work: bool,
 }
 
 impl KernelBlockIo {
     #[inline]
     fn new(handle: block::DeviceHandle) -> Self {
-        Self { handle }
+        Self {
+            handle,
+            fair_boot_work: false,
+        }
     }
+
+    #[inline]
+    fn new_fair_boot_work(handle: block::DeviceHandle) -> Self {
+        Self {
+            handle,
+            fair_boot_work: true,
+        }
+    }
+
+    async fn fair_yield(&self) {
+        if self.fair_boot_work {
+            trueosfs_boot_work_yield().await;
+        }
+    }
+}
+
+async fn trueosfs_boot_work_yield() {
+    Timer::after(EmbassyDuration::from_millis(
+        crate::allcaps::storage::TRUEOSFS_BOOT_WORK_YIELD_MS,
+    ))
+    .await;
 }
 
 fn trueosfs_trace_now_ms() -> u64 {
@@ -313,6 +339,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
 
         if blocks <= max_blocks {
             let out = self.handle.read_blocks(lba, blocks).await?;
+            self.fair_yield().await;
             if trace {
                 let now_ms = trueosfs_trace_now_ms();
                 crate::log!(
@@ -345,6 +372,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
             let blocks_here = core::cmp::min(remaining, max_blocks);
             let tmp = self.handle.read_blocks(cur_lba, blocks_here).await?;
             out.extend_from_slice(&tmp);
+            self.fair_yield().await;
             cur_lba = cur_lba.saturating_add(blocks_here as u64);
             remaining = remaining.saturating_sub(blocks_here);
             done_blocks = done_blocks.saturating_add(blocks_here);
@@ -436,6 +464,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
 
         if blocks <= max_blocks {
             self.handle.read_blocks_into(lba, blocks, dst).await?;
+            self.fair_yield().await;
             if trace {
                 let now_ms = trueosfs_trace_now_ms();
                 crate::log!(
@@ -470,6 +499,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
             self.handle
                 .read_blocks_into(cur_lba, blocks_here, &mut dst[off..off + bytes_here])
                 .await?;
+            self.fair_yield().await;
             cur_lba = cur_lba.saturating_add(blocks_here as u64);
             remaining_blocks = remaining_blocks.saturating_sub(blocks_here);
             off = off.saturating_add(bytes_here);
@@ -1787,7 +1817,7 @@ pub async fn list_dir_async(
             data_lba: placement.data_lba,
             data_end_lba_exclusive: placement.data_end_lba_exclusive,
         };
-        let io = KernelBlockIo::new(disk);
+        let io = KernelBlockIo::new_fair_boot_work(disk);
         let out = trueos_fs::list_dir(&io, &params, dir)
             .await
             .map_err(map_engine_err)?;
@@ -1982,6 +2012,7 @@ async fn ensure_index_async(
         {
             had_checkpoint = true;
             replay_from = ckpt.replay_from_rel_blocks;
+            let mut checkpoint_entries_since_yield = 0usize;
             for (key, kind, lba) in ckpt.entries {
                 match kind {
                     trueos_fs::LogKind::Put => {
@@ -1997,6 +2028,13 @@ async fn ensure_index_async(
                         tree.remove(&key);
                     }
                     _ => {}
+                }
+                checkpoint_entries_since_yield += 1;
+                if checkpoint_entries_since_yield
+                    >= crate::allcaps::storage::TRUEOSFS_INDEX_CHECKPOINT_ENTRIES_PER_YIELD
+                {
+                    checkpoint_entries_since_yield = 0;
+                    trueosfs_boot_work_yield().await;
                 }
             }
         }

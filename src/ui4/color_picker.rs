@@ -23,10 +23,9 @@ const SERVICE_POLL_MS: u64 = 16;
 const PICKER_WIDTH: u32 = 256;
 const SV_HEIGHT: u32 = 256;
 const PANEL_GAP: u32 = 8;
-const SLIDER_HEIGHT: u32 = 16;
+const HUE_HEIGHT: u32 = 32;
 const HUE_Y: u32 = SV_HEIGHT + PANEL_GAP;
-const ALPHA_Y: u32 = HUE_Y + SLIDER_HEIGHT + PANEL_GAP;
-const PICKER_HEIGHT: u32 = ALPHA_Y + SLIDER_HEIGHT;
+const PICKER_HEIGHT: u32 = HUE_Y + HUE_HEIGHT + PANEL_GAP;
 const PICKER_MARGIN: u32 = 24;
 const MAX_ACTIVE_GESTURES: usize = 32;
 
@@ -43,7 +42,6 @@ struct ColorPickerOpenRequest {
 enum PickerPanel {
     SaturationValue,
     Hue,
-    Alpha,
 }
 
 #[derive(Copy, Clone)]
@@ -57,7 +55,6 @@ struct PickerColor {
     hue: u16,
     saturation: u8,
     value: u8,
-    alpha: u8,
 }
 
 impl PickerColor {
@@ -65,12 +62,10 @@ impl PickerColor {
         hue: 512,
         saturation: u8::MAX,
         value: u8::MAX,
-        alpha: 128,
     };
 
-    fn straight_rgba(self) -> [u8; 4] {
-        let [red, green, blue] = hsv_to_rgb(self.hue, self.saturation, self.value);
-        [red, green, blue, self.alpha]
+    fn rgb(self) -> [u8; 3] {
+        hsv_to_rgb(self.hue, self.saturation, self.value)
     }
 }
 
@@ -106,7 +101,7 @@ fn capture_escape(
 #[embassy_executor::task]
 pub(crate) async fn ui4_color_picker_service_task() {
     crate::log_info!(target: "ui4/color-picker";
-        "ui4/color-picker: service online lifecycle=context-menu-open+escape-close owner=kernel-internal presentation=slot4-software-cursor-plane/fixed/no-application-plane-fallback controls=sv256+hue+alpha commit=button-release target=pipe-a-bottom-color alpha=ui-only\n"
+        "ui4/color-picker: service online lifecycle=context-menu-open+escape-close owner=kernel-internal presentation=slot4-software-cursor-plane/fixed/no-application-plane-fallback controls=sv256+hue32 commit=button-release target=pipe-a-bottom-color color=rgb\n"
     );
     let mut active = None;
     loop {
@@ -219,7 +214,7 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
         gestures: [None; MAX_ACTIVE_GESTURES],
         picker_dirty: true,
     };
-    let initial = picker.color.straight_rgba();
+    let initial = picker.color.rgb();
     if !crate::intel::set_pipe_a_bottom_color_rgb8(initial[0], initial[1], initial[2]) {
         let _ = close_picker(&picker, "initial-bottom-color-program-failed");
         return Err("initial-bottom-color-program");
@@ -237,9 +232,9 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
         request.anchor.1,
     );
 
-    let rgba = picker.color.straight_rgba();
+    let rgb = picker.color.rgb();
     crate::log_info!(target: "ui4/color-picker";
-        "ui4/color-picker: opened session={} picker_frame={} picker_window={} plane=slot4-software-cursor/fixed picker={}x{}@{},{} rgba={},{},{},{} target=pipe-a-bottom-color alpha_unmapped=1 commit=release fallback_application_plane=0\n",
+        "ui4/color-picker: opened session={} picker_frame={} picker_window={} plane=slot4-software-cursor/fixed picker={}x{}@{},{} rgb={},{},{} target=pipe-a-bottom-color commit=release fallback_application_plane=0\n",
         session.raw(),
         picker_frame.raw(),
         picker_window.raw(),
@@ -247,10 +242,9 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
         PICKER_HEIGHT,
         picker_x,
         picker_y,
-        rgba[0],
-        rgba[1],
-        rgba[2],
-        rgba[3],
+        rgb[0],
+        rgb[1],
+        rgb[2],
     );
     Ok(picker)
 }
@@ -352,24 +346,20 @@ impl ActiveColorPicker {
                 let x = u32::from(panel_axis(local_x, 0, PICKER_WIDTH));
                 self.color.hue = ((x * 1535 + 127) / 255) as u16;
             }
-            PickerPanel::Alpha => {
-                self.color.alpha = panel_axis(local_x, 0, PICKER_WIDTH);
-            }
         }
         *SELECTED_COLOR.lock() = self.color;
         self.picker_dirty = true;
-        let rgba = self.color.straight_rgba();
-        let programmed = crate::intel::set_pipe_a_bottom_color_rgb8(rgba[0], rgba[1], rgba[2]);
+        let rgb = self.color.rgb();
+        let programmed = crate::intel::set_pipe_a_bottom_color_rgb8(rgb[0], rgb[1], rgb[2]);
         crate::log_info!(target: "ui4/color-picker";
-            "ui4/color-picker: selected panel={:?} hsv={},{},{} rgba={},{},{},{} pipe_a_bottom_programmed={} alpha_unmapped=1 picker_publish=pending\n",
+            "ui4/color-picker: selected panel={:?} hsv={},{},{} rgb={},{},{} pipe_a_bottom_programmed={} picker_publish=pending\n",
             panel,
             self.color.hue,
             self.color.saturation,
             self.color.value,
-            rgba[0],
-            rgba[1],
-            rgba[2],
-            rgba[3],
+            rgb[0],
+            rgb[1],
+            rgb[2],
             programmed as u8,
         );
     }
@@ -382,10 +372,8 @@ fn panel_at(x: i32, y: i32) -> Option<PickerPanel> {
     let y = y as u32;
     if y < SV_HEIGHT {
         Some(PickerPanel::SaturationValue)
-    } else if (HUE_Y..HUE_Y + SLIDER_HEIGHT).contains(&y) {
+    } else if (HUE_Y..HUE_Y + HUE_HEIGHT).contains(&y) {
         Some(PickerPanel::Hue)
-    } else if (ALPHA_Y..ALPHA_Y + SLIDER_HEIGHT).contains(&y) {
-        Some(PickerPanel::Alpha)
     } else {
         None
     }
@@ -402,7 +390,6 @@ fn panel_axis(value: i32, origin: u32, extent: u32) -> u8 {
 }
 
 fn render_picker(picker: &ActiveColorPicker) -> Result<(), ()> {
-    let selected_rgb = hsv_to_rgb(picker.color.hue, picker.color.saturation, picker.color.value);
     render_and_publish(
         picker.picker_frame,
         picker.picker_window,
@@ -420,23 +407,7 @@ fn render_picker(picker: &ActiveColorPicker) -> Result<(), ()> {
                 let hue =
                     ((u32::from(panel_axis(x as i32, 0, PICKER_WIDTH)) * 1535 + 127) / 255) as u16;
                 let rgb = hsv_to_rgb(hue, u8::MAX, u8::MAX);
-                for y in HUE_Y..HUE_Y + SLIDER_HEIGHT {
-                    write_opaque_pixel(pixels, pitch, x, y, rgb);
-                }
-            }
-            for x in 0..PICKER_WIDTH {
-                let alpha = panel_axis(x as i32, 0, PICKER_WIDTH);
-                for y in ALPHA_Y..ALPHA_Y + SLIDER_HEIGHT {
-                    let checker = if ((x / 8) + ((y - ALPHA_Y) / 8)).is_multiple_of(2) {
-                        214
-                    } else {
-                        112
-                    };
-                    let rgb = [
-                        blend_channel(selected_rgb[0], checker, alpha),
-                        blend_channel(selected_rgb[1], checker, alpha),
-                        blend_channel(selected_rgb[2], checker, alpha),
-                    ];
+                for y in HUE_Y..HUE_Y + HUE_HEIGHT {
                     write_opaque_pixel(pixels, pitch, x, y, rgb);
                 }
             }
@@ -472,11 +443,6 @@ fn write_opaque_pixel(pixels: &mut [u8], pitch: usize, x: u32, y: u32, rgb: [u8;
     if let Some(pixel) = pixels.get_mut(offset..offset + 4) {
         pixel.copy_from_slice(&[rgb[0], rgb[1], rgb[2], u8::MAX]);
     }
-}
-
-fn blend_channel(foreground: u8, background: u8, alpha: u8) -> u8 {
-    let alpha = u32::from(alpha);
-    ((u32::from(foreground) * alpha + u32::from(background) * (255 - alpha) + 127) / 255) as u8
 }
 
 /// HSV hue uses six 256-step sectors: 0 is red, 512 green, 1024 blue.
@@ -516,7 +482,8 @@ mod tests {
         assert_eq!(panel_at(0, 0), Some(PickerPanel::SaturationValue));
         assert_eq!(panel_at(255, 255), Some(PickerPanel::SaturationValue));
         assert_eq!(panel_at(0, HUE_Y as i32), Some(PickerPanel::Hue));
-        assert_eq!(panel_at(0, ALPHA_Y as i32), Some(PickerPanel::Alpha));
+        assert_eq!(panel_at(0, (HUE_Y + HUE_HEIGHT - 1) as i32), Some(PickerPanel::Hue));
         assert_eq!(panel_at(0, (HUE_Y - 1) as i32), None);
+        assert_eq!(panel_at(0, (HUE_Y + HUE_HEIGHT) as i32), None);
     }
 }

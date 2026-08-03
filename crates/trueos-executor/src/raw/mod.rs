@@ -45,6 +45,13 @@ use self::waker::try_task_from_waker;
 use super::SpawnToken;
 use crate::{Metadata, SpawnError};
 
+#[cfg(feature = "trueos-task-profile")]
+unsafe extern "Rust" {
+    fn __trueos_executor_task_new(executor_id: usize, task_id: usize, task_name: &'static str);
+    fn __trueos_executor_task_poll_begin(executor_id: usize, task_id: usize);
+    fn __trueos_executor_task_poll_end(executor_id: usize, task_id: usize);
+}
+
 #[unsafe(no_mangle)]
 extern "Rust" fn __embassy_time_queue_item_from_waker(
     waker: &Waker,
@@ -308,6 +315,11 @@ impl<F: Future + 'static> AvailableTask<F> {
     fn initialize_impl<S>(self, future: impl FnOnce() -> F) -> SpawnToken<S> {
         unsafe {
             self.task.raw.metadata.reset();
+            #[cfg(feature = "metadata-name")]
+            self.task
+                .raw
+                .metadata
+                .set_name(core::any::type_name::<F>());
             self.task.raw.migration_target.store(null_mut(), Ordering::Relaxed);
             self.task.raw.poll_fn.set(Some(TaskStorage::<F>::poll));
             self.task.future.write_in_place(future);
@@ -514,6 +526,15 @@ impl SyncExecutor {
             .store((self as *const Self).cast_mut(), Ordering::Relaxed);
         self.spawned_tasks.fetch_add(1, Ordering::AcqRel);
 
+        #[cfg(feature = "trueos-task-profile")]
+        unsafe {
+            __trueos_executor_task_new(
+                self as *const Self as usize,
+                task.as_ptr() as usize,
+                task.metadata().name().unwrap_or("unnamed-task"),
+            );
+        }
+
         #[cfg(feature = "_any_trace")]
         trace::task_new(self, &task);
 
@@ -563,10 +584,26 @@ impl SyncExecutor {
         self.note_task_dequeued();
         let task = p.header();
 
+        #[cfg(feature = "trueos-task-profile")]
+        unsafe {
+            __trueos_executor_task_poll_begin(
+                self as *const Self as usize,
+                p.as_ptr() as usize,
+            );
+        }
+
         #[cfg(feature = "_any_trace")]
         trace::task_exec_begin(self, &p);
 
         task.poll_fn.get().unwrap_unchecked()(p);
+
+        #[cfg(feature = "trueos-task-profile")]
+        unsafe {
+            __trueos_executor_task_poll_end(
+                self as *const Self as usize,
+                p.as_ptr() as usize,
+            );
+        }
 
         #[cfg(feature = "_any_trace")]
         trace::task_exec_end(self, &p);

@@ -21,6 +21,7 @@ const SKHYNIX_UAS_MAX_TRANSFER_BYTES: usize = 8 * 1024 * 1024;
 const SKHYNIX_UAS_WRITE_TRANSFER_BYTES: usize = 512 * 1024;
 const UAS_TRACE_STARTUP_OPS: u64 = 4;
 const UAS_TRACE_SAMPLE_EVERY: u64 = 64;
+const SKHYNIX_UAS_STARTUP_PHASE_YIELD_MS: u64 = 1;
 
 struct SkhynixUasRuntime {
     command_out: super::crabusb::Endpoint,
@@ -76,11 +77,39 @@ struct UasTarget {
     data_out_max_packet_size: u16,
 }
 
+async fn startup_phase_checkpoint(
+    startup_started_ms: u64,
+    phase_started_ms: u64,
+    phase: &'static str,
+) -> u64 {
+    let now_ms = embassy_time::Instant::now().as_millis();
+    crate::log_info!(target: "usb";
+        "crabusb: skhynix-green proof=startup-phase phase={} phase_ms={} total_ms={} yield_ms={}\n",
+        phase,
+        now_ms.saturating_sub(phase_started_ms),
+        now_ms.saturating_sub(startup_started_ms),
+        SKHYNIX_UAS_STARTUP_PHASE_YIELD_MS
+    );
+    embassy_time::Timer::after(embassy_time::Duration::from_millis(
+        SKHYNIX_UAS_STARTUP_PHASE_YIELD_MS,
+    ))
+    .await;
+    embassy_time::Instant::now().as_millis()
+}
+
 pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevice) {
+    let startup_started_ms = embassy_time::Instant::now().as_millis();
+    let mut phase_started_ms = startup_started_ms;
     // Initial configuration and SCSI discovery use the same endpoints as the
     // registered block device. Keep quarantine from cutting across this
     // one-time ownership handoff.
     let _lab_io = super::lab::begin_uas_io_when_available().await;
+    phase_started_ms = startup_phase_checkpoint(
+        startup_started_ms,
+        phase_started_ms,
+        "lab-io-gate",
+    )
+    .await;
     if let Some(config) = pooled.device.configurations().first() {
         crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=config-raw len={} bytes={:02x?}\n",
@@ -123,6 +152,12 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         target.data_out_max_packet_size,
         SKHYNIX_PREPOST_WRITE_DATA_OUT
     );
+    phase_started_ms = startup_phase_checkpoint(
+        startup_started_ms,
+        phase_started_ms,
+        "transport-plan",
+    )
+    .await;
 
     if let Err(err) = pooled
         .device
@@ -144,6 +179,12 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         pooled.product_id,
         target.configuration_value
     );
+    phase_started_ms = startup_phase_checkpoint(
+        startup_started_ms,
+        phase_started_ms,
+        "set-configuration",
+    )
+    .await;
 
     if let Err(err) = pooled
         .device
@@ -167,6 +208,12 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         target.interface_number,
         target.alternate_setting
     );
+    phase_started_ms = startup_phase_checkpoint(
+        startup_started_ms,
+        phase_started_ms,
+        "claim-interface",
+    )
+    .await;
 
     let command_out = match pooled.device.endpoint(target.command_out) {
         Ok(endpoint) => endpoint,
@@ -221,6 +268,12 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
     let mut status_in = status_in;
     let mut data_in = data_in;
     let data_out = data_out;
+    phase_started_ms = startup_phase_checkpoint(
+        startup_started_ms,
+        phase_started_ms,
+        "endpoint-open",
+    )
+    .await;
 
     let probe_info = match probe_mass_uas_skhynix(&mut command_out, &mut status_in, &mut data_in)
         .await
@@ -247,6 +300,12 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
             return;
         }
     };
+    phase_started_ms = startup_phase_checkpoint(
+        startup_started_ms,
+        phase_started_ms,
+        "scsi-probe",
+    )
+    .await;
 
     let runtime = SkhynixUasRuntime {
         command_out,
@@ -282,8 +341,10 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         write_bytes: 0,
         flush_ops: 0,
     };
-    let handle =
-        crate::disc::block::register_device_with_worker_deferred_mount(descriptor, block_device);
+    let handle = crate::disc::block::register_device_with_worker_deferred_mount_ecore_preferred(
+        descriptor,
+        block_device,
+    );
     crate::log!(
         "crabusb: skhynix-green {:04x}:{:04x} proof=block-register status=ok disc={} read_only=false max_xfer={} write_chunk={} mount=deferred\n",
         pooled.vendor_id,
@@ -302,6 +363,12 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         "crabusb: skhynix-green proof=trueosfs-mount status=requested disc={} path=ordinary-deferred-mount\n",
         handle.id()
     );
+    let _ = startup_phase_checkpoint(
+        startup_started_ms,
+        phase_started_ms,
+        "block-register-and-mount-request",
+    )
+    .await;
 }
 
 fn collect_uas_candidates(
@@ -1267,6 +1334,8 @@ async fn probe_mass_uas_skhynix(
     status_in: &mut super::crabusb::Endpoint,
     data_in: &mut super::crabusb::Endpoint,
 ) -> Result<MassProbeInfo, MassProbeError> {
+    let probe_started_ms = embassy_time::Instant::now().as_millis();
+    let mut phase_started_ms = probe_started_ms;
     let mut inquiry = [0u8; 36];
     let inquiry_cdb = cdb_inquiry(inquiry.len() as u16);
     let inquiry_read = uas_command_in(
@@ -1289,6 +1358,12 @@ async fn probe_mass_uas_skhynix(
         (inquiry[1] & 0x80) != 0,
         inquiry[0] & 0x1f
     );
+    phase_started_ms = startup_phase_checkpoint(
+        probe_started_ms,
+        phase_started_ms,
+        "scsi-inquiry",
+    )
+    .await;
 
     let mut read_capacity = [0u8; 8];
     let capacity_cdb = cdb_read_capacity_10();
@@ -1322,6 +1397,12 @@ async fn probe_mass_uas_skhynix(
     if block_size == 0 {
         return Err(MassProbeError::ShortData);
     }
+    let _ = startup_phase_checkpoint(
+        probe_started_ms,
+        phase_started_ms,
+        "scsi-read-capacity10",
+    )
+    .await;
 
     Ok(MassProbeInfo {
         block_size,

@@ -86,7 +86,7 @@ static TTS_SHELL_REQUESTS_FAILED: AtomicU64 = AtomicU64::new(0);
 static TTS_SHELL_REQUESTS_CANCELLED: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn try_parse_tts(
-    _spawner: &Spawner,
+    spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
@@ -127,16 +127,29 @@ pub(crate) fn try_parse_tts(
             return ParseOutcome::Handled;
         }
     };
+    if crate::r::ttstt_service::status().state != ServiceState::Ready {
+        match crate::r::ttstt_service::ensure_service_started(*spawner) {
+            Ok(started) => print_shell_line(
+                io,
+                alloc::format!(
+                    "tts: model service warming started={}; retry command when status=ready",
+                    started as u8
+                )
+                .as_str(),
+            ),
+            Err(error) => print_shell_line(
+                io,
+                alloc::format!("tts: model service start failed err={error:?}").as_str(),
+            ),
+        }
+        print_status(io, "tts");
+        return ParseOutcome::Handled;
+    }
     if crate::r::ttstt_service::speech_backend_name().is_none() {
         print_shell_line(
             io,
             "tts: unavailable reason=native-kokoro-backend-unregistered; models/pool status follows",
         );
-        print_status(io, "tts");
-        return ParseOutcome::Handled;
-    }
-    if crate::r::ttstt_service::status().state != ServiceState::Ready {
-        print_shell_line(io, "tts: unavailable reason=model-service-not-ready");
         print_status(io, "tts");
         return ParseOutcome::Handled;
     }
@@ -782,18 +795,28 @@ pub(crate) fn try_parse_stt(
         );
         return ParseOutcome::Handled;
     }
+    if crate::r::ttstt_service::status().state != ServiceState::Ready {
+        match crate::r::ttstt_service::ensure_service_started(*spawner) {
+            Ok(started) => print_shell_line(
+                io,
+                alloc::format!(
+                    "stt: model service warming started={}; retry command when status=ready",
+                    started as u8
+                )
+                .as_str(),
+            ),
+            Err(error) => print_shell_line(
+                io,
+                alloc::format!("stt: model service start failed err={error:?}").as_str(),
+            ),
+        }
+        print_status(io, "stt");
+        return ParseOutcome::Handled;
+    }
     if crate::r::ttstt_service::speech_backend_name().is_none() {
         print_shell_line(
             io,
             "stt: unavailable reason=native-whisper-backend-unregistered; no audio file was read",
-        );
-        print_status(io, "stt");
-        return ParseOutcome::Handled;
-    }
-    if crate::r::ttstt_service::status().state != ServiceState::Ready {
-        print_shell_line(
-            io,
-            "stt: unavailable reason=model-service-not-ready; no audio file was read",
         );
         print_status(io, "stt");
         return ParseOutcome::Handled;

@@ -176,6 +176,7 @@ struct ServicedBlockDevice {
     dma_alignment: u32,
     max_transfer_bytes: u64,
     writable: bool,
+    prefer_eff_worker: bool,
     next_seq: u64,
 }
 
@@ -196,6 +197,38 @@ impl ServicedBlockDevice {
             return Ok(());
         }
 
+        if self.prefer_eff_worker {
+            if let Some((worker_slot, core_kind, worker_spawner)) =
+                crate::workers::pick_eff_background_spawner_with_slot()
+            {
+                if self
+                    .front
+                    .spawned
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    match serviced_block_device_task(self.front) {
+                        Ok(token) => {
+                            worker_spawner.spawn(token);
+                            crate::log_info!(
+                                target: "storage";
+                                "block-service: worker placement=ecore slot={} core_kind={} policy=ecore-preferred-bsp-fallback pool_cap={}\n",
+                                worker_slot,
+                                core_kind,
+                                BLOCK_DEVICE_SERVICE_TASK_POOL,
+                            );
+                            return Ok(());
+                        }
+                        Err(_) => {
+                            self.front.spawned.store(false, Ordering::Release);
+                        }
+                    }
+                } else {
+                    return Ok(());
+                }
+            }
+        }
+
         let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
         if self
             .front
@@ -204,7 +237,16 @@ impl ServicedBlockDevice {
             .is_ok()
         {
             match serviced_block_device_task(self.front) {
-                Ok(token) => spawner.spawn(token),
+                Ok(token) => {
+                    spawner.spawn(token);
+                    if self.prefer_eff_worker {
+                        crate::log_info!(
+                            target: "storage";
+                            "block-service: worker placement=current-executor policy=ecore-preferred-bsp-fallback reason=no-available-ecore pool_cap={}\n",
+                            BLOCK_DEVICE_SERVICE_TASK_POOL,
+                        );
+                    }
+                }
                 Err(_) => {
                     self.front.spawned.store(false, Ordering::Release);
                     return Err(Error::NotReady);
@@ -710,6 +752,7 @@ fn register_device_with_worker_inner<D>(
     descriptor: DeviceDescriptor,
     device: D,
     request_trueosfs_mount: bool,
+    prefer_eff_worker: bool,
 ) -> DeviceHandle
 where
     D: BlockDevice + 'static,
@@ -729,6 +772,7 @@ where
         dma_alignment,
         max_transfer_bytes,
         writable,
+        prefer_eff_worker,
         next_seq: 1,
     };
 
@@ -739,7 +783,7 @@ pub fn register_device_with_worker<D>(descriptor: DeviceDescriptor, device: D) -
 where
     D: BlockDevice + 'static,
 {
-    register_device_with_worker_inner(descriptor, device, true)
+    register_device_with_worker_inner(descriptor, device, true, false)
 }
 
 pub fn register_device_with_worker_deferred_mount<D>(
@@ -749,7 +793,20 @@ pub fn register_device_with_worker_deferred_mount<D>(
 where
     D: BlockDevice + 'static,
 {
-    register_device_with_worker_inner(descriptor, device, false)
+    register_device_with_worker_inner(descriptor, device, false, false)
+}
+
+/// Register a deferred-mount device whose serialized transport worker should
+/// prefer an AP2+ efficiency core. If no E-core is available when first used,
+/// preserve the existing behavior and spawn on the calling executor.
+pub fn register_device_with_worker_deferred_mount_ecore_preferred<D>(
+    descriptor: DeviceDescriptor,
+    device: D,
+) -> DeviceHandle
+where
+    D: BlockDevice + 'static,
+{
+    register_device_with_worker_inner(descriptor, device, false, true)
 }
 
 pub fn device_handles() -> Vec<DeviceHandle> {

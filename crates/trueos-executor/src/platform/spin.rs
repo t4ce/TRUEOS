@@ -2,11 +2,41 @@
 pub use thread::*;
 #[cfg(feature = "executor-thread")]
 mod thread {
+    use core::arch::asm;
     use core::marker::PhantomData;
 
     pub use embassy_executor_macros::main_spin as main;
 
+    struct X86CriticalSection;
+
+    unsafe impl critical_section::Impl for X86CriticalSection {
+        unsafe fn acquire() -> bool {
+            let was_enabled: bool = interrupts_enabled();
+            if was_enabled {
+                asm!("cli", options(nomem));
+            }
+            was_enabled
+        }
+
+        unsafe fn release(restore_state: bool) {
+            if restore_state {
+                asm!("sti", options(nomem));
+            }
+        }
+    }
+
+    critical_section::set_impl!(X86CriticalSection);
+
     use crate::{Spawner, raw};
+
+    #[inline(always)]
+    fn interrupts_enabled() -> bool {
+        let rflags: u64;
+        unsafe {
+            asm!("pushfq", "pop {}", out(reg) rflags, options(nomem, preserves_flags));
+        }
+        rflags & (1u64 << 9) != 0
+    }
 
     #[unsafe(export_name = "__pender")]
     fn __pender(context: *mut ()) {

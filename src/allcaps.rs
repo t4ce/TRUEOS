@@ -8,6 +8,15 @@ pub mod boot {
     pub const BSP_BOOT_STACK_BYTES: usize = 8 * 1024 * 1024;
 }
 
+pub mod executor {
+    pub const BSP_TASK_PROFILE_ENABLED: bool = true;
+    pub const BSP_TASK_PROFILE_REPORT_MS: u64 = 1_000;
+    pub const BSP_TASK_PROFILE_SLOW_POLL_US: u64 = 2_000;
+    pub const BSP_TASK_PROFILE_SLOTS: usize = 128;
+    pub const BSP_TASK_PROFILE_HISTORY_SLOTS: usize = 1_024;
+    pub const BSP_TASK_PROFILE_WATCHERS: usize = 8;
+}
+
 pub mod probes {
     pub const MIO_BOOT_PROBE: bool = false;
     pub const UNIX_FD_PROBE: bool = false;
@@ -34,11 +43,17 @@ pub mod gfx {
 pub mod lumen {
     /// Current single-model intensive-test profile. Disable this one switch
     /// when boot-resident inference assets are no longer the desired policy.
-    pub const BOOT_RESIDENT_WARM_ENABLED: bool = true;
+    pub const BOOT_RESIDENT_WARM_ENABLED: bool = false;
 
     /// Let the compositor enter its steady service loop before model I/O and
     /// in-place Q8 packing begin on a background performance core.
     pub const BOOT_RESIDENT_WARM_SETTLE_MS: u64 = 2_000;
+}
+
+pub mod ttstt {
+    /// Keep the service available for command-driven lazy startup without
+    /// reading the complete model set during normal BSP boot.
+    pub const BOOT_RESIDENT_WARM_ENABLED: bool = false;
 }
 
 pub mod media_encode {
@@ -105,6 +120,14 @@ pub mod net {
     pub const MAX_NET_DEVICES: usize = 8;
 }
 
+pub mod usb {
+    // Keep the xHCI event pump responsive, but give controller-owner maintenance
+    // only a small cooperative window at a deliberately low idle cadence.
+    pub const CONTROLLER_MAINTENANCE_CADENCE_MS: u64 = 100;
+    pub const CONTROLLER_MAINTENANCE_BUDGET_MS: u64 = 5;
+    pub const CONTROLLER_SNAPSHOT_CADENCE_MS: u64 = 5_000;
+}
+
 pub mod storage {
     pub const NVME_ADMIN_TIMEOUT_MS: u64 = 1_500;
     pub const NVME_IO_TIMEOUT_MS: u64 = 5_000;
@@ -116,6 +139,11 @@ pub mod storage {
     pub const NVME_IO_TRANSFER_PAGES_CAP: u64 = 128;
 
     pub const USB_MASS_UAS_IO_TIMEOUT_MS: u64 = 10_000;
+
+    // BSP-owned TRUEOSFS mount/index work is throughput-insensitive at boot.
+    // Deliberately trade completion time for predictable executor fairness.
+    pub const TRUEOSFS_BOOT_WORK_YIELD_MS: u64 = 1;
+    pub const TRUEOSFS_INDEX_CHECKPOINT_ENTRIES_PER_YIELD: usize = 64;
 }
 
 pub mod input {

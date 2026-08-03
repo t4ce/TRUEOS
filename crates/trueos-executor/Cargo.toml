@@ -32,6 +32,7 @@ rtos-trace = [
 scheduler-deadline = []
 scheduler-priority = []
 trace = ["_any_trace"]
+trueos-task-profile = ["metadata-name"]
 turbowakers = []
 
 [lib]
@@ -44,6 +45,7 @@ features = ["no-cache-pad"]
 
 [dependencies.critical-section]
 version = "1.1"
+features = ["restore-state-bool"]
 
 [dependencies.defmt]
 version = "1.0.1"

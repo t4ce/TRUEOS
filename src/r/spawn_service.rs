@@ -335,7 +335,10 @@ pub(crate) fn retry_font_warm_pool_autostart() {
 }
 
 fn spawn_ttstt_cpu_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::ttstt_service::service_task())
+    match crate::r::ttstt_service::ensure_service_started(spawner) {
+        Ok(_) => SpawnAttempt::Spawned,
+        Err(error) => SpawnAttempt::Failed(error),
+    }
 }
 
 fn spawn_ttstt_capture_writer(spawner: Spawner) -> SpawnAttempt {
@@ -1703,7 +1706,8 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &FONT_KERNEL_SERVICE_STARTED,
         spawn_font_kernel_service,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::configured_gated(
+        crate::allcaps::ttstt::BOOT_RESIDENT_WARM_ENABLED,
         "ttstt-cpu-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         ttstt_cpu_service_gate,
@@ -2142,6 +2146,7 @@ fn format_system_service_snapshot() -> String {
             readiness_names(spec.required),
         );
     }
+    crate::executor_task_profile::append_snapshot_history_text(&mut out);
     out
 }
 

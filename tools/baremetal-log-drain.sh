@@ -5,7 +5,7 @@ cmd="${1:-start}"
 
 host="${TRUEOS_BAREMETAL_LOG_HOST:-192.168.178.94}"
 port="${TRUEOS_BAREMETAL_LOG_PORT:-1}"
-delay="${TRUEOS_BAREMETAL_LOG_DELAY:-5}"
+delay="${TRUEOS_BAREMETAL_LOG_DELAY:-1}"
 retry_delay="${TRUEOS_BAREMETAL_LOG_RETRY_DELAY:-1}"
 log_dir="${TRUEOS_BAREMETAL_LOG_DIR:-bld/baremetal-logs}"
 state_file="${TRUEOS_BAREMETAL_LOG_PID:-bld/baremetal-log-drain.pid}"
@@ -325,7 +325,7 @@ collect() {
 import socket
 import sys
 
-with socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=5.0) as stream:
+with socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=1.0) as stream:
     stream.settimeout(None)
     while True:
         data = stream.recv(64 * 1024)

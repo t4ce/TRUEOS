@@ -17,7 +17,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use embassy_executor::SpawnError;
+use embassy_executor::{SpawnError, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
@@ -63,6 +63,7 @@ static OUTSTANDING_JOBS: AtomicUsize = AtomicUsize::new(0);
 static OUTSTANDING_TTS_JOBS: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE_TTS_JOB_ID: AtomicU64 = AtomicU64::new(0);
 static BACKEND_WARM_STARTED: AtomicBool = AtomicBool::new(false);
+static SERVICE_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static TTS_PCM_CHUNKS_EMITTED: AtomicU64 = AtomicU64::new(0);
 static TTS_PCM_FRAMES_EMITTED: AtomicU64 = AtomicU64::new(0);
 static TTS_PCM_CHUNKS_BUFFERED: AtomicUsize = AtomicUsize::new(0);
@@ -133,6 +134,29 @@ pub fn status() -> ServiceStatus {
         tts_pcm_frames_buffered: TTS_PCM_FRAMES_BUFFERED.load(Ordering::Acquire),
         tts_streams_completed: TTS_STREAMS_COMPLETED.load(Ordering::Acquire),
         tts_streams_failed: TTS_STREAMS_FAILED.load(Ordering::Acquire),
+    }
+}
+
+/// Start the BSP-local model residency controller exactly once. Boot policy
+/// and command-driven lazy startup share this claim so they cannot duplicate
+/// the permanently resident model set.
+pub fn ensure_service_started(spawner: Spawner) -> Result<bool, SpawnError> {
+    if SERVICE_TASK_STARTED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Ok(false);
+    }
+
+    match service_task() {
+        Ok(token) => {
+            spawner.spawn(token);
+            Ok(true)
+        }
+        Err(error) => {
+            SERVICE_TASK_STARTED.store(false, Ordering::Release);
+            Err(error)
+        }
     }
 }
 
