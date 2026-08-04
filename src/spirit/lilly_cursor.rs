@@ -217,14 +217,23 @@ pub(super) fn queue_primary_click() -> Result<(), MouseControlError> {
 
 /// Replace Lilly's pending choreography with one bounded pointer action.
 ///
-/// The motion and optional primary click are submitted as one station program,
+/// The motion and optional primary click burst are submitted as one station program,
 /// so Dobby cannot expose a button-down half gesture or interleave another
-/// producer between the approach and click.
+/// producer between the approach and any click transitions.
 pub(super) fn queue_pointer_action(
     target_x: i32,
     target_y: i32,
+    pointer_buttons: u32,
     primary_click: bool,
+    click_count: u32,
+    click_delay_ms: u32,
 ) -> Result<u32, MouseControlError> {
+    if click_count == 0 || click_count > 10 {
+        return Err(MouseControlError::Invalid);
+    }
+    if !(100..=1000).contains(&click_delay_ms) {
+        return Err(MouseControlError::Invalid);
+    }
     let (screen_width, screen_height) =
         crate::intel::active_scanout_dimensions().ok_or(MouseControlError::Invalid)?;
     if screen_width == 0 || screen_height == 0 {
@@ -250,37 +259,89 @@ pub(super) fn queue_pointer_action(
     let duration_ms = u32::try_from(distance / 3)
         .unwrap_or(LILLY_DOBBY_MOVE_MAX_MS)
         .clamp(LILLY_DOBBY_MOVE_MIN_MS, LILLY_DOBBY_MOVE_MAX_MS);
-    let program = [
-        MouseControlCommand {
-            opcode: MOUSE_CONTROL_OPCODE_STROKE,
-            path: MOUSE_CONTROL_PATH_LINE,
-            easing: MOUSE_CONTROL_EASING_NATURAL,
-            flags: MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
-            duration_ms,
-            x: target_x,
-            y: target_y,
-            ..MouseControlCommand::default()
-        },
-        MouseControlCommand {
-            opcode: MOUSE_CONTROL_OPCODE_BUTTONS,
-            buttons_set: PRIMARY_BUTTON_MASK,
-            ..MouseControlCommand::default()
-        },
-        MouseControlCommand {
-            opcode: MOUSE_CONTROL_OPCODE_BUTTONS,
-            buttons_clear: PRIMARY_BUTTON_MASK,
-            ..MouseControlCommand::default()
-        },
-    ];
-    let commands = if primary_click {
-        &program[..]
+    let click_buttons = if primary_click {
+        if pointer_buttons == 0 {
+            PRIMARY_BUTTON_MASK
+        } else {
+            pointer_buttons
+        }
     } else {
-        &program[..1]
+        pointer_buttons
     };
+    let click_count = click_count.max(1);
+    let move_command = MouseControlCommand {
+        opcode: MOUSE_CONTROL_OPCODE_STROKE,
+        path: MOUSE_CONTROL_PATH_LINE,
+        easing: MOUSE_CONTROL_EASING_NATURAL,
+        flags: MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
+        duration_ms,
+        x: target_x,
+        y: target_y,
+        ..MouseControlCommand::default()
+    };
+    if primary_click {
+        let mut click_program = [MouseControlCommand::default(); 31];
+        let mut command_count = 0usize;
+        click_program[command_count] = move_command;
+        command_count += 1;
+        let mut click_index = 0u32;
+        while click_index < click_count {
+            click_program[command_count] = MouseControlCommand {
+                opcode: MOUSE_CONTROL_OPCODE_BUTTONS,
+                buttons_set: click_buttons,
+                ..MouseControlCommand::default()
+            };
+            command_count += 1;
+            click_program[command_count] = MouseControlCommand {
+                opcode: MOUSE_CONTROL_OPCODE_BUTTONS,
+                buttons_clear: click_buttons,
+                ..MouseControlCommand::default()
+            };
+            command_count += 1;
+            if click_index + 1 < click_count {
+                click_program[command_count] = MouseControlCommand {
+                    opcode: MOUSE_CONTROL_OPCODE_STROKE,
+                    path: MOUSE_CONTROL_PATH_LINE,
+                    easing: MOUSE_CONTROL_EASING_LINEAR,
+                    x: target_x,
+                    y: target_y,
+                    duration_ms: click_delay_ms,
+                    ..MouseControlCommand::default()
+                };
+                command_count += 1;
+            }
+            click_index += 1;
+        }
+        crate::r::mouse_motion_service::submit_program(
+            MouseControlPrincipal::Kernel,
+            cursor.handle,
+            &click_program[..command_count],
+        )?;
+        return Ok(duration_ms);
+    }
+    let buttons_down = crate::r::mouse_motion_service::cursor_buttons(
+        MouseControlPrincipal::Kernel,
+        cursor.handle,
+    )?;
+    let button_command = MouseControlCommand {
+        opcode: MOUSE_CONTROL_OPCODE_BUTTONS,
+        buttons_set: click_buttons & !buttons_down,
+        buttons_clear: buttons_down & !click_buttons,
+        ..MouseControlCommand::default()
+    };
+    if button_command.buttons_set == 0 && button_command.buttons_clear == 0 {
+        crate::r::mouse_motion_service::submit_program(
+            MouseControlPrincipal::Kernel,
+            cursor.handle,
+            core::slice::from_ref(&move_command),
+        )?;
+        return Ok(duration_ms);
+    }
+    let move_and_button_program = [button_command, move_command];
     crate::r::mouse_motion_service::submit_program(
         MouseControlPrincipal::Kernel,
         cursor.handle,
-        commands,
+        &move_and_button_program,
     )?;
     Ok(duration_ms)
 }

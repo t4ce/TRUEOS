@@ -552,6 +552,16 @@ pub(crate) fn cursor_position(
     Ok((cursor.x, cursor.y))
 }
 
+pub(crate) fn cursor_buttons(
+    principal: MouseControlPrincipal,
+    handle: u64,
+) -> Result<u32, MouseControlError> {
+    let station = STATION.lock();
+    let index = station.cursor_index(principal, handle)?;
+    let cursor = &station.cursors[index];
+    Ok(cursor.buttons_down)
+}
+
 #[embassy_executor::task]
 pub(crate) async fn mouse_motion_service_task() {
     crate::log_info!(target: "input";

@@ -39,6 +39,16 @@ const IO_RETRY_MS: u64 = 8;
 
 pub(crate) const POINTER_ACTION_MOVE: u32 = v::bp_abi::DOBBY_UI4_POINTER_MOVE;
 pub(crate) const POINTER_ACTION_PRIMARY_CLICK: u32 = v::bp_abi::DOBBY_UI4_POINTER_PRIMARY_CLICK;
+const POINTER_BUTTON_MASK: u32 = v::bp_abi::DOBBY_UI4_POINTER_BUTTON_MASK;
+const POINTER_BUTTON_SHIFT: u32 = v::bp_abi::DOBBY_UI4_POINTER_BUTTON_SHIFT;
+const POINTER_CLICK_COUNT_SHIFT: u32 = v::bp_abi::DOBBY_UI4_POINTER_CLICK_COUNT_SHIFT;
+const POINTER_CLICK_COUNT_MASK: u32 = v::bp_abi::DOBBY_UI4_POINTER_CLICK_COUNT_MASK;
+const POINTER_CLICK_COUNT_DEFAULT: u32 = v::bp_abi::DOBBY_UI4_POINTER_CLICK_COUNT_DEFAULT;
+const POINTER_CLICK_COUNT_MAX: u32 = v::bp_abi::DOBBY_UI4_POINTER_CLICK_COUNT_MAX;
+const POINTER_CLICK_DELAY_SHIFT: u32 = v::bp_abi::DOBBY_UI4_POINTER_CLICK_DELAY_SHIFT;
+const POINTER_CLICK_DELAY_MASK: u32 = v::bp_abi::DOBBY_UI4_POINTER_CLICK_DELAY_MASK;
+const POINTER_CLICK_DELAY_MIN_MS: u32 = v::bp_abi::DOBBY_UI4_POINTER_CLICK_DELAY_MIN_MS;
+const POINTER_CLICK_DELAY_MAX_MS: u32 = v::bp_abi::DOBBY_UI4_POINTER_CLICK_DELAY_MAX_MS;
 
 pub(crate) const KEY_ENTER: u32 = v::bp_abi::DOBBY_UI4_KEY_ENTER;
 pub(crate) const KEY_ESCAPE: u32 = v::bp_abi::DOBBY_UI4_KEY_ESCAPE;
@@ -453,11 +463,46 @@ fn normalized_axis(origin: i32, extent: u32, normalized: u16) -> Result<i32, i32
         .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
 }
 
-pub(crate) fn pointer(owner: u8, x: u16, y: u16, action: u32) -> i32 {
-    if !matches!(action, POINTER_ACTION_MOVE | POINTER_ACTION_PRIMARY_CLICK)
-        || x > crate::ui4::COMPACT_WINDOW_GRID_EXTENT as u16
-        || y > crate::ui4::COMPACT_WINDOW_GRID_EXTENT as u16
+fn parse_pointer_action(action: u32) -> Result<(u32, u32, u32, u32), i32> {
+    let action_code = action & (POINTER_ACTION_MOVE | POINTER_ACTION_PRIMARY_CLICK);
+    let click_count = (action & POINTER_CLICK_COUNT_MASK) >> POINTER_CLICK_COUNT_SHIFT;
+    let click_count = if click_count == 0 {
+        POINTER_CLICK_COUNT_DEFAULT
+    } else {
+        click_count
+    };
+    let click_delay_ms = (action & POINTER_CLICK_DELAY_MASK) >> POINTER_CLICK_DELAY_SHIFT;
+    if click_count > POINTER_CLICK_COUNT_MAX {
+        return Err(ERROR_BAD_INPUT);
+    }
+    if click_delay_ms != 0
+        && !(POINTER_CLICK_DELAY_MIN_MS..=POINTER_CLICK_DELAY_MAX_MS).contains(&click_delay_ms)
     {
+        return Err(ERROR_BAD_INPUT);
+    }
+    let click_delay_ms = if click_delay_ms == 0 {
+        POINTER_CLICK_DELAY_MIN_MS
+    } else {
+        click_delay_ms
+    };
+    let flags = (action & POINTER_BUTTON_MASK) >> POINTER_BUTTON_SHIFT;
+    match action_code {
+        POINTER_ACTION_MOVE | POINTER_ACTION_PRIMARY_CLICK => Ok((
+            action_code,
+            flags,
+            click_count,
+            click_delay_ms,
+        )),
+        _ => Err(ERROR_BAD_INPUT),
+    }
+}
+
+pub(crate) fn pointer(owner: u8, x: u16, y: u16, action: u32) -> i32 {
+    let (action, buttons, click_count, click_delay_ms) = match parse_pointer_action(action) {
+        Ok(result) => result,
+        Err(error) => return error,
+    };
+    if x > crate::ui4::COMPACT_WINDOW_GRID_EXTENT as u16 || y > crate::ui4::COMPACT_WINDOW_GRID_EXTENT as u16 {
         return ERROR_BAD_INPUT;
     }
     let _keyboard = match claim_dobby_io(owner) {
@@ -486,7 +531,10 @@ pub(crate) fn pointer(owner: u8, x: u16, y: u16, action: u32) -> i32 {
         super::lilly_cursor::queue_pointer_action(
             target_x,
             target_y,
+            buttons,
             action == POINTER_ACTION_PRIMARY_CLICK,
+            click_count,
+            click_delay_ms,
         )
         .map_err(|_| ERROR_UNAVAILABLE)?;
         Ok::<(), i32>(())
@@ -495,6 +543,54 @@ pub(crate) fn pointer(owner: u8, x: u16, y: u16, action: u32) -> i32 {
         release_dobby_io(owner);
     }
     result.map(|()| 0).unwrap_or_else(|error| error)
+}
+#[cfg(test)]
+mod tests {
+    use super::{
+        parse_pointer_action, POINTER_ACTION_MOVE, POINTER_ACTION_PRIMARY_CLICK, POINTER_CLICK_COUNT_MASK,
+        POINTER_CLICK_COUNT_SHIFT, POINTER_CLICK_DELAY_MASK, POINTER_CLICK_DELAY_SHIFT,
+    };
+
+    #[test]
+    fn parse_pointer_action_handles_click_move_and_button_bits() {
+        let click = POINTER_ACTION_PRIMARY_CLICK | (1 << 16);
+        let move_without_buttons = POINTER_ACTION_MOVE;
+        assert_eq!(
+            parse_pointer_action(click),
+            Ok((POINTER_ACTION_PRIMARY_CLICK, 1, 1, 100))
+        );
+        assert_eq!(
+            parse_pointer_action(move_without_buttons),
+            Ok((POINTER_ACTION_MOVE, 0, 1, 100))
+        );
+    }
+
+    #[test]
+    fn parse_pointer_action_handles_click_repeat_metadata() {
+        let click = POINTER_ACTION_PRIMARY_CLICK
+            | (5u32 << POINTER_CLICK_COUNT_SHIFT)
+            | (250u32 << POINTER_CLICK_DELAY_SHIFT);
+        assert_eq!(parse_pointer_action(click), Ok((POINTER_ACTION_PRIMARY_CLICK, 0, 5, 250)));
+        assert_eq!(
+            parse_pointer_action(POINTER_ACTION_PRIMARY_CLICK | (3u32 << POINTER_CLICK_COUNT_SHIFT)),
+            Ok((POINTER_ACTION_PRIMARY_CLICK, 0, 3, 100))
+        );
+        assert_eq!(
+            parse_pointer_action(
+                POINTER_ACTION_PRIMARY_CLICK | (3u32 << POINTER_CLICK_COUNT_SHIFT) | (250 << POINTER_CLICK_DELAY_SHIFT)
+            ),
+            Ok((POINTER_ACTION_PRIMARY_CLICK, 0, 3, 250))
+        );
+        let over_count =
+            POINTER_ACTION_PRIMARY_CLICK | POINTER_CLICK_COUNT_MASK | POINTER_CLICK_DELAY_MASK;
+        assert!(parse_pointer_action(over_count).is_err());
+    }
+
+    #[test]
+    fn parse_pointer_action_rejects_unknown_actions() {
+        assert!(parse_pointer_action(2).is_err());
+        assert_eq!(parse_pointer_action(POINTER_ACTION_MOVE | (99 << 16)), Ok((POINTER_ACTION_MOVE, 99, 1, 100)));
+    }
 }
 
 pub(crate) fn type_text(owner: u8, bytes: &[u8]) -> i32 {

@@ -36,9 +36,9 @@
 # pointer-free 64-byte control block; retained state and GPU addresses stay
 # kernel-owned and existing UI4 producers retain their prior frame lifecycle.
 # UI4 visual-frame open and ShaderToy render are strictly additive. Visual open
-# adds a kernel-enforced 60 Hz ceiling to streaming frames, while ShaderToy
-# render accepts only a versioned pointer-free 64-byte uniform block and an
-# immutable reviewed catalog id; executable bytes and GPU addresses stay
+# adds a kernel-enforced 60 Hz ceiling to GPU-only dirty/double frames, while
+# ShaderToy render accepts only a versioned pointer-free 64-byte uniform block
+# and an immutable reviewed catalog id; executable bytes and GPU addresses stay
 # kernel-owned.
 # The visual-frame begin call is strictly additive. It keeps one visual
 # admission request pending in the kernel until the brokered deadline and

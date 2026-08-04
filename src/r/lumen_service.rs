@@ -394,8 +394,7 @@ fn validate_silent_spirit_text(turn: u64, text: &[u8]) -> Result<&str, i32> {
 }
 
 /// Present remote or otherwise externally generated text through Spirit's
-/// bounded visual ingress. This capability is deliberately independent of a
-/// live Lumen session and never enters the local text-to-voice path.
+/// bounded visual ingress.
 pub(crate) fn spirit_text_present_silent(turn: u64, text: &[u8]) -> i32 {
     let text = match validate_silent_spirit_text(turn, text) {
         Ok(text) => text,
@@ -403,6 +402,20 @@ pub(crate) fn spirit_text_present_silent(turn: u64, text: &[u8]) -> i32 {
     };
     if !crate::spirit::enqueue_reasoning_response(turn, text) {
         return ERROR_UNAVAILABLE;
+    }
+    match crate::shell2::cmds::ttstt::enqueue_lumen_tts(text) {
+        Ok(request) => crate::log_info!(
+            target: "r";
+            "lumen-bp: voice queued owner=external turn={} tts_request={}\n",
+            turn,
+            request,
+        ),
+        Err(reason) => crate::log_warn!(
+            target: "r";
+            "lumen-bp: voice unavailable owner=external turn={} reason={} text_presentation=retained\n",
+            turn,
+            reason,
+        ),
     }
     0
 }

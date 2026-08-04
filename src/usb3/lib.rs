@@ -230,10 +230,6 @@ pub fn discover_first_controller() -> Option<UsbControllerInfo> {
     pci_usb_controllers().into_iter().next()
 }
 
-pub async fn crabusb_bsp_service(_index: usize) {
-    core::future::pending::<()>().await;
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TlbUsbTopologyNodeKind {
     RootPort,
