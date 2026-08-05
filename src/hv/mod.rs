@@ -1026,6 +1026,65 @@ pub fn default_app_instance_vm(archive: &str) -> Option<u8> {
     None
 }
 
+/// Live named instances of `archive`, as `(vm_id, label)` pairs. The default
+/// instance is excluded: it is the one this archive can only hold once, so the
+/// caller is listing the alternatives that already exist beside it.
+pub fn named_app_instance_vms(archive: &str) -> AllocVec<(u8, AllocString)> {
+    let mut out = AllocVec::new();
+    for vm_id in 0..TRUEOS_VM_ID_LIMIT {
+        let vm_id = vm_id as u8;
+        let Some(vm) = vm_slot(vm_id) else {
+            continue;
+        };
+        if !vm.running.load(Ordering::Acquire)
+            && !vm.starting.load(Ordering::Acquire)
+            && !vm.pause_latched.load(Ordering::Acquire)
+        {
+            continue;
+        }
+        let running_name = BLUEPRINT_LAUNCH_STATES.get(vm_id as usize).and_then(|slot| {
+            let state = slot.lock();
+            state.as_ref().and_then(|state| {
+                state
+                    .archive
+                    .eq_ignore_ascii_case(archive)
+                    .then(|| named_instance_label(state.identity.name.as_deref(), state.identity.peer.as_deref()))
+                    .flatten()
+            })
+        });
+        let label = running_name.or_else(|| {
+            BLUEPRINT_PENDING_LAUNCH_STATES.get(vm_id as usize).and_then(|slot| {
+                let pending = slot.lock();
+                pending.as_ref().and_then(|pending| {
+                    pending
+                        .archive
+                        .eq_ignore_ascii_case(archive)
+                        .then(|| {
+                            named_instance_label(
+                                pending.instance.name.as_deref(),
+                                pending.instance.peer.as_deref(),
+                            )
+                        })
+                        .flatten()
+                })
+            })
+        });
+        if let Some(label) = label {
+            out.push((vm_id, label));
+        }
+    }
+    out
+}
+
+fn named_instance_label(name: Option<&str>, peer: Option<&str>) -> Option<AllocString> {
+    match (peer, name) {
+        (Some(peer), Some(name)) => Some(alloc::format!("peer:{} / {}", peer, name)),
+        (Some(peer), None) => Some(alloc::format!("peer:{} / unnamed", peer)),
+        (None, Some(name)) => Some(AllocString::from(name)),
+        (None, None) => None,
+    }
+}
+
 fn set_blueprint_lifecycle_capability(vm_id: u8, archive: &str, replicatable: bool) {
     let Some(vm) = vm_slot(vm_id) else {
         return;

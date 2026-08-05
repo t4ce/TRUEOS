@@ -386,7 +386,7 @@ pub(super) fn spirit_cursor_arm(
 
     channel_state.pending = Some(access.surface);
     let was_visible = channel_state.visible;
-    crate::log_info!(
+    crate::log_trace!(
         target: "gfx";
         "trueos-spirit: arm fence={} pipe={} buffer={} pos_owner=spirit-cursor-task ctl=0x{:08X} base=0x{:08X} ddb=0x{:08X} first={}\n",
         access.channel,

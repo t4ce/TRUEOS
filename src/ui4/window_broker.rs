@@ -21,12 +21,24 @@ pub(super) const MAX_WINDOWS: usize = 256;
 // MAX_WINDOWS remains only the broker registry's hard storage bound.
 const MAX_WINDOWS_PER_SESSION: usize = 32;
 const MAX_SESSIONS: usize = 64;
-/// Temporary direct-scanout admission boundary. Non-shareable double- and
-/// triple-buffered windows each own one of the four application planes.
-/// Single-buffered windows, dirty/double FontScene members, and
-/// streaming/triple RenderScene members remain unrestricted by this soft cap
-/// and may share a requested plane through UI4 composition.
-pub(super) const MAX_EXPENSIVE_WINDOWS: usize = super::INTERACTION_OVERLAY_PLANE_SLOT;
+/// UI4 presents four hardware-blended application layers per output. Planes
+/// 1-3 are lease planes: one frame each, presented by the display engine and
+/// eligible for direct scanout. Plane 0 is the stack, where every frame which
+/// holds no lease presents together through one ordered painter submission.
+///
+/// A frame claims the lowest free lease plane when it is created, and a
+/// stacked frame may claim one by going hot. No admission ever fails: a frame
+/// which wins no lease is still presented, composed, and movable. This is the
+/// whole plane policy - it does not consult content, cadence or buffering.
+pub(super) const STACK_PLANE_SLOT: usize = super::PRIMARY_PLANE_SLOT;
+const FIRST_LEASE_PLANE_SLOT: usize = STACK_PLANE_SLOT + 1;
+pub(super) const LEASE_PLANE_COUNT: usize =
+    super::INTERACTION_OVERLAY_PLANE_SLOT - FIRST_LEASE_PLANE_SLOT;
+/// Idle grace after the last interaction before a lease becomes revocable.
+/// Revocation stays lazy: an expired lease is only taken when another frame
+/// actually challenges for it, so an idle winner keeps its plane for free and
+/// a continuously dragged frame is never evicted mid-gesture.
+const LEASE_IDLE_GRACE_MS: u64 = 500;
 pub(crate) const WINDOW_BROKER_SNAPSHOT_PERIOD_MS: u64 = 3_000;
 const WINDOW_BROKER_SNAPSHOT_RECEIVERS: usize = 8;
 const WINDOW_FIRST_PRESENTATION_QUEUE_CAP: usize = 32;
@@ -456,9 +468,21 @@ struct SessionRecord {
     active: bool,
 }
 
+/// One hardware lease plane's current holder.
+///
+/// The lease is owned by a frame, not by a cursor: N cursors may be dragging
+/// N frames, and each frame's claim is independent of which cursor moved it.
+#[derive(Copy, Clone)]
+struct PlaneLease {
+    window: WindowId,
+    last_hot_ms: u64,
+}
+
 struct WindowBroker {
     windows: Vec<WindowRecord>,
     sessions: Vec<SessionRecord>,
+    /// Indexed by lease plane, i.e. `FIRST_LEASE_PLANE_SLOT + index`.
+    leases: [Option<PlaneLease>; LEASE_PLANE_COUNT],
     /// Monotonic epoch for state which can change the compositor's plane plan.
     /// Damage acknowledgement deliberately does not advance this value.
     composition_revision: u64,
@@ -469,8 +493,162 @@ impl WindowBroker {
         Self {
             windows: Vec::new(),
             sessions: Vec::new(),
+            leases: [None; LEASE_PLANE_COUNT],
             composition_revision: 0,
         }
+    }
+
+    const fn lease_index(slot: usize) -> Option<usize> {
+        if slot >= FIRST_LEASE_PLANE_SLOT && slot < super::INTERACTION_OVERLAY_PLANE_SLOT {
+            Some(slot - FIRST_LEASE_PLANE_SLOT)
+        } else {
+            None
+        }
+    }
+
+    const fn lease_plane(index: usize) -> WindowPlane {
+        WindowPlane::Universal((FIRST_LEASE_PLANE_SLOT + index) as u8)
+    }
+
+    /// Drop this window's lease if it holds one, freeing the plane for the
+    /// next claimant. Safe to call for a window which never held a lease.
+    fn release_lease_of(&mut self, id: WindowId) {
+        for lease in &mut self.leases {
+            if lease.is_some_and(|held| held.window == id) {
+                *lease = None;
+            }
+        }
+    }
+
+    /// Claim a lease plane for `id`, preferring a free one and otherwise
+    /// revoking the plane whose holder has been idle longest past the grace
+    /// period. Returns `None` when every lease is still live, in which case
+    /// the caller stays on the stack - never an error.
+    fn claim_lease(&mut self, id: WindowId, now_ms: u64) -> Option<WindowPlane> {
+        let mut chosen = None;
+        for index in 0..LEASE_PLANE_COUNT {
+            let vacant = match self.leases[index] {
+                None => true,
+                Some(held) => self.window_is_closed(held.window),
+            };
+            if vacant {
+                chosen = Some(index);
+                break;
+            }
+        }
+        let index = match chosen {
+            Some(index) => index,
+            None => {
+                // Every plane is still held. Take the one whose holder has
+                // been idle longest, and only once it is past the grace
+                // period; otherwise this frame stays on the stack.
+                let mut oldest: Option<(usize, u64)> = None;
+                for index in 0..LEASE_PLANE_COUNT {
+                    let Some(held) = self.leases[index] else {
+                        continue;
+                    };
+                    if now_ms.saturating_sub(held.last_hot_ms) < LEASE_IDLE_GRACE_MS {
+                        continue;
+                    }
+                    if oldest.is_none_or(|(_, idle_ms)| held.last_hot_ms < idle_ms) {
+                        oldest = Some((index, held.last_hot_ms));
+                    }
+                }
+                oldest?.0
+            }
+        };
+        // Demote the outgoing holder before the plane changes hands, or its
+        // record would keep naming a plane it no longer owns and two windows
+        // would present on the same hardware layer.
+        if let Some(previous) = self.leases[index] {
+            self.demote_to_stack(previous.window);
+        }
+        self.leases[index] = Some(PlaneLease {
+            window: id,
+            last_hot_ms: now_ms,
+        });
+        Some(Self::lease_plane(index))
+    }
+
+    fn demote_to_stack(&mut self, id: WindowId) {
+        self.set_window_plane(id, WindowPlane::Primary);
+    }
+
+    fn set_window_plane(&mut self, id: WindowId, plane: WindowPlane) {
+        let Ok((slot, generation)) = unpack_handle(id.0) else {
+            return;
+        };
+        let Some(window) = self.windows.get_mut(slot) else {
+            return;
+        };
+        if window.generation != generation
+            || window.state == WindowState::Closed
+            || window.plane == WindowPlane::Interaction
+            || window.plane == plane
+        {
+            return;
+        }
+        window.plane = plane;
+        window.damage = Some(DamageRegion::FULL);
+        window.revision = next_serial(window.revision);
+    }
+
+    /// Raise the lease at `index` to the topmost lease plane, exchanging
+    /// places with whoever holds it.
+    ///
+    /// Planes blend in ascending hardware order, so this is what stops a
+    /// focused frame from staying visually behind another lease holder. It is
+    /// a swap rather than a compaction: exactly two windows change plane, both
+    /// commit in the same flip batch, and no other holder is disturbed.
+    fn raise_lease(&mut self, index: usize, now_ms: u64) -> WindowPlane {
+        let top = LEASE_PLANE_COUNT - 1;
+        let raised = Self::lease_plane(top);
+        if index == top {
+            return raised;
+        }
+        // The top plane is the won position and is held for the same grace as
+        // any other lease. A challenger arriving while the incumbent is still
+        // inside its window keeps its own plane: it stays focused, movable and
+        // hardware blended, it simply does not front yet. This is what stops
+        // several cursors from trading the top plane on every gesture, and it
+        // is why the grace exists rather than only bounding scarcity.
+        if let Some(incumbent) = self.leases[top]
+            && now_ms.saturating_sub(incumbent.last_hot_ms) < LEASE_IDLE_GRACE_MS
+        {
+            crate::log_trace!(
+                target: "ui4";
+                "ui4 window raise deferred holder_slot={} challenger_slot={} held_ms={} grace_ms={} policy=top-lease-protected\n",
+                Self::lease_plane(top).slot(),
+                Self::lease_plane(index).slot(),
+                now_ms.saturating_sub(incumbent.last_hot_ms),
+                LEASE_IDLE_GRACE_MS,
+            );
+            return Self::lease_plane(index);
+        }
+        let hot = self.leases[index];
+        let displaced = self.leases[top];
+        self.leases[top] = hot.map(|held| PlaneLease {
+            last_hot_ms: now_ms,
+            ..held
+        });
+        self.leases[index] = displaced;
+        if let Some(held) = hot {
+            self.set_window_plane(held.window, raised);
+        }
+        if let Some(held) = displaced {
+            self.set_window_plane(held.window, Self::lease_plane(index));
+        }
+        raised
+    }
+
+    fn window_is_closed(&self, id: WindowId) -> bool {
+        let Ok((slot, generation)) = unpack_handle(id.0) else {
+            return true;
+        };
+        self.windows
+            .get(slot)
+            .is_none_or(|window| window.generation != generation
+                || window.state == WindowState::Closed)
     }
 
     fn mark_composition_changed(&mut self) {
@@ -582,23 +760,27 @@ impl WindowBroker {
         Ok(())
     }
 
-    fn select_plane(
-        &self,
+    /// Choose the presentation plane for one window.
+    ///
+    /// Slot 4 keeps its exclusive interaction contract. Every other window
+    /// takes a lease plane when one is free or revocable, and otherwise joins
+    /// the stack on slot 0. This path has no capacity failure by design: a
+    /// frame which wins no lease is still presented, composed and movable.
+    /// Content, cadence and buffering are deliberately not consulted.
+    fn assign_plane(
+        &mut self,
         requested: WindowPlane,
-        buffering: FrameBuffering,
-        share_requested_plane: bool,
-        replacing_slot: Option<usize>,
+        id: WindowId,
         owner: WindowOwner,
-        session: WindowSessionId,
+        now_ms: u64,
     ) -> Result<WindowPlane, WindowBrokerError> {
-        // Interaction windows are permanently owned by slot 4. They neither
-        // consume an application-plane admission slot nor fall back to one.
+        let (id_slot, _) = unpack_handle(id.0)?;
         if requested == WindowPlane::Interaction {
             if owner != WindowOwner::COLOR_PICKER_SERVICE {
                 return Err(WindowBrokerError::InvalidPlane);
             }
             if self.windows.iter().enumerate().any(|(slot, window)| {
-                Some(slot) != replacing_slot
+                slot != id_slot
                     && window.state != WindowState::Closed
                     && window.plane == WindowPlane::Interaction
             }) {
@@ -606,60 +788,16 @@ impl WindowBroker {
             }
             return Ok(requested);
         }
-        if share_requested_plane {
-            return Ok(requested);
-        }
-
-        let mut occupied = [false; MAX_EXPENSIVE_WINDOWS];
-        let mut active = 0usize;
-        for (slot, window) in self.windows.iter().enumerate() {
-            let shares_compositor_plane = super::frame_snapshot(window.frame)
-                .is_ok_and(|snapshot| super::frame_plan_shares_compositor_plane(snapshot.plan));
-            if Some(slot) != replacing_slot
-                && window.state != WindowState::Closed
-                && window.plane.is_application()
-                && !shares_compositor_plane
-            {
-                active = active.saturating_add(1);
-                occupied[window.plane.slot()] = true;
-            }
-        }
-        if active >= MAX_EXPENSIVE_WINDOWS {
-            crate::log_error!(
-                target: "ui4";
-                "ui4 expensive-window soft-cap reached requested={} cap={} buffering={:?} owner={:?} session={} policy=temporary-soft-cap action=reject-expensive-admission\n",
-                active.saturating_add(1),
-                MAX_EXPENSIVE_WINDOWS,
-                buffering,
-                owner,
-                session.raw(),
-            );
-            return Err(WindowBrokerError::Capacity);
-        }
-
-        let requested_slot = requested.slot();
-        for offset in 0..MAX_EXPENSIVE_WINDOWS {
-            let slot = (requested_slot + offset) % MAX_EXPENSIVE_WINDOWS;
-            if !occupied[slot] {
-                return WindowPlane::from_slot(slot).ok_or(WindowBrokerError::InvalidPlane);
-            }
-        }
-        Err(WindowBrokerError::Capacity)
+        Ok(self
+            .claim_lease(id, now_ms)
+            .unwrap_or(WindowPlane::Primary))
     }
 
     fn create(
         &mut self,
-        request: WindowCreate,
-        buffering: FrameBuffering,
-    ) -> Result<WindowId, WindowBrokerError> {
-        self.create_with_plane_policy(request, buffering, buffering == FrameBuffering::Single)
-    }
-
-    fn create_with_plane_policy(
-        &mut self,
         mut request: WindowCreate,
         buffering: FrameBuffering,
-        share_requested_plane: bool,
+        now_ms: u64,
     ) -> Result<WindowId, WindowBrokerError> {
         self.checked_session(request.owner, request.session)?;
         if !request.placement.valid() {
@@ -678,44 +816,44 @@ impl WindowBroker {
         if count >= MAX_WINDOWS_PER_SESSION {
             return Err(WindowBrokerError::Capacity);
         }
+        // Reserve the registry slot before deciding the plane: a lease is
+        // keyed by window identity, which does not exist until the slot and
+        // its generation are known.
+        let (slot, generation) = match self
+            .windows
+            .iter()
+            .position(|window| window.state == WindowState::Closed)
+        {
+            Some(slot) => (slot, next_generation(self.windows[slot].generation)),
+            None => {
+                if self.windows.len() >= MAX_WINDOWS {
+                    return Err(WindowBrokerError::Capacity);
+                }
+                (self.windows.len(), 1)
+            }
+        };
+        let id = WindowId(pack_handle(slot, generation)?);
         let requested_plane = request.plane;
-        request.plane = self.select_plane(
-            request.plane,
-            buffering,
-            share_requested_plane,
-            None,
-            request.owner,
-            request.session,
-        )?;
+        request.plane = self.assign_plane(requested_plane, id, request.owner, now_ms)?;
         if request.plane != requested_plane {
             crate::log_info!(
                 target: "ui4";
-                "ui4 expensive-window plane isolated requested_slot={} assigned_slot={} buffering={:?} owner={:?} session={}\n",
+                "ui4 window plane assigned requested_slot={} assigned_slot={} presentation={} buffering={:?} owner={:?} session={} window={}\n",
                 requested_plane.slot(),
                 request.plane.slot(),
+                if request.plane.slot() == STACK_PLANE_SLOT { "stack" } else { "lease" },
                 buffering,
                 request.owner,
                 request.session.raw(),
+                id.raw(),
             );
         }
-        if let Some((slot, window)) = self
-            .windows
-            .iter_mut()
-            .enumerate()
-            .find(|(_, window)| window.state == WindowState::Closed)
-        {
-            let generation = next_generation(window.generation);
-            *window = WindowRecord::new(generation, request, buffering);
-            let id = WindowId(pack_handle(slot, generation)?);
-            self.mark_composition_changed();
-            return Ok(id);
+        let record = WindowRecord::new(generation, request, buffering);
+        if slot < self.windows.len() {
+            self.windows[slot] = record;
+        } else {
+            self.windows.push(record);
         }
-        if self.windows.len() >= MAX_WINDOWS {
-            return Err(WindowBrokerError::Capacity);
-        }
-        let slot = self.windows.len();
-        self.windows.push(WindowRecord::new(1, request, buffering));
-        let id = WindowId(pack_handle(slot, 1)?);
         self.mark_composition_changed();
         Ok(id)
     }
@@ -726,7 +864,6 @@ impl WindowBroker {
         id: WindowId,
         frame: FrameHandle,
         buffering: FrameBuffering,
-        share_requested_plane: bool,
     ) -> Result<(), WindowBrokerError> {
         let (slot, generation) = unpack_handle(id.0)?;
         let current = self
@@ -744,30 +881,11 @@ impl WindowBroker {
             WindowState::Closed => return Err(WindowBrokerError::Closed),
             WindowState::Pending | WindowState::Ready => {}
         }
-        let previous_plane = current.plane;
-        let plane = self.select_plane(
-            current.plane,
-            buffering,
-            share_requested_plane,
-            Some(slot),
-            current.owner,
-            current.session,
-        )?;
-        if plane != previous_plane {
-            crate::log_info!(
-                target: "ui4";
-                "ui4 replacement-frame plane isolated previous_slot={} assigned_slot={} buffering={:?} owner={:?} window={}\n",
-                previous_plane.slot(),
-                plane.slot(),
-                buffering,
-                owner,
-                id.raw(),
-            );
-        }
+        // The plane follows this window's lease, not its frame plan, so a
+        // replacement never migrates the window between planes.
         let window = &mut self.windows[slot];
         window.frame = frame;
         window.buffering = buffering;
-        window.plane = plane;
         window.state = WindowState::Pending;
         window.publish_serial = 0;
         window.damage = None;
@@ -1368,13 +1486,10 @@ pub(crate) fn create_window(request: WindowCreate) -> Result<WindowId, WindowBro
     let plan = super::frame_snapshot(request.frame)
         .map_err(|_| WindowBrokerError::InvalidHandle)?
         .plan;
-    let id = if super::frame_plan_shares_compositor_plane(plan) {
-        WINDOW_BROKER
-            .lock()
-            .create_with_plane_policy(request, plan.buffering, true)?
-    } else {
-        WINDOW_BROKER.lock().create(request, plan.buffering)?
-    };
+    let now_ms = embassy_time::Instant::now().as_millis();
+    let id = WINDOW_BROKER
+        .lock()
+        .create(request, plan.buffering, now_ms)?;
     if super::cursor_frame_inout::frame_opened(request.owner, request.session, id).is_err() {
         let _ = close_window(request.owner, id);
         return Err(WindowBrokerError::Capacity);
@@ -1390,13 +1505,9 @@ pub(crate) fn replace_window_frame(
     let plan = super::frame_snapshot(frame)
         .map_err(|_| WindowBrokerError::InvalidHandle)?
         .plan;
-    WINDOW_BROKER.lock().replace_frame(
-        owner,
-        id,
-        frame,
-        plan.buffering,
-        super::frame_plan_shares_compositor_plane(plan),
-    )?;
+    WINDOW_BROKER
+        .lock()
+        .replace_frame(owner, id, frame, plan.buffering)?;
     super::cursor_frame_inout::frame_visual_changed(owner, id);
     Ok(())
 }
@@ -1439,30 +1550,10 @@ pub(crate) fn commit_window_frame_replacement(
         WindowState::Pending | WindowState::Ready => {}
     }
     let previous_placement = current.placement;
-    let previous_plane = current.plane;
-    let plane = broker.select_plane(
-        current.plane,
-        plan.buffering,
-        super::frame_plan_shares_compositor_plane(plan),
-        Some(slot),
-        current.owner,
-        current.session,
-    )?;
-    if plane != previous_plane {
-        crate::log_info!(
-            target: "ui4";
-            "ui4 replacement-frame plane isolated previous_slot={} assigned_slot={} buffering={:?} owner={:?} window={} commit=published\n",
-            previous_plane.slot(),
-            plane.slot(),
-            plan.buffering,
-            owner,
-            id.raw(),
-        );
-    }
+    // The plane follows this window's lease, not its frame plan.
     let window = &mut broker.windows[slot];
     window.frame = frame;
     window.buffering = plan.buffering;
-    window.plane = plane;
     window.placement = placement;
     window.state = WindowState::Ready;
     window.publish_serial = next_serial(window.publish_serial);
@@ -1824,11 +1915,111 @@ pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), Windo
     window.state = WindowState::Closed;
     window.damage = None;
     window.revision = next_serial(window.revision);
+    broker.release_lease_of(id);
     broker.mark_composition_changed();
     drop(broker);
     super::cursor_frame_inout::frame_closed(owner, id);
     super::context_menu::dismiss_window(owner, id);
     Ok(())
+}
+
+/// Report that a frame became the target of user interaction.
+///
+/// A frame which already holds a lease refreshes it, so a continuous drag is
+/// never evicted mid-gesture. A stacked frame claims a free or revocable lease
+/// plane and migrates onto it; if every lease is still live it simply stays on
+/// the stack and keeps moving there. This never fails and never blocks a
+/// gesture: the plane is a presentation optimisation, not permission to
+/// interact. Returns the plane the window presents on after the call.
+pub(crate) fn note_window_hot(
+    owner: WindowOwner,
+    id: WindowId,
+) -> Result<WindowPlane, WindowBrokerError> {
+    note_window_interaction(owner, id, false)
+}
+
+/// Report that a frame took focus.
+///
+/// Identical to [`note_window_hot`], except that a frame which already holds a
+/// lease is also raised to the topmost lease plane. Raising is bound to focus
+/// rather than to motion on purpose: focus is a discrete user action, while a
+/// drag delivers continuous events, and two cursors dragging two frames would
+/// otherwise trade the top plane on every motion sample.
+pub(crate) fn note_window_focused(
+    owner: WindowOwner,
+    id: WindowId,
+) -> Result<WindowPlane, WindowBrokerError> {
+    note_window_interaction(owner, id, true)
+}
+
+fn note_window_interaction(
+    owner: WindowOwner,
+    id: WindowId,
+    raise: bool,
+) -> Result<WindowPlane, WindowBrokerError> {
+    let now_ms = embassy_time::Instant::now().as_millis();
+    let mut broker = WINDOW_BROKER.lock();
+    let (slot, _) = unpack_handle(id.0)?;
+    let current = broker.checked_window_mut(owner, id)?.plane;
+    if current == WindowPlane::Interaction {
+        return Ok(current);
+    }
+    if let Some(index) = WindowBroker::lease_index(current.slot())
+        && broker.leases[index].is_some_and(|held| held.window == id)
+    {
+        broker.leases[index] = Some(PlaneLease {
+            window: id,
+            last_hot_ms: now_ms,
+        });
+        if !raise {
+            return Ok(current);
+        }
+        let raised = broker.raise_lease(index, now_ms);
+        if raised == current {
+            return Ok(current);
+        }
+        broker.mark_composition_changed();
+        drop(broker);
+        crate::log_info!(
+            target: "ui4";
+            "ui4 window raised previous_slot={} assigned_slot={} owner={:?} window={} trigger=focus policy=swap-with-top-lease\n",
+            current.slot(),
+            raised.slot(),
+            owner,
+            id.raw(),
+        );
+        super::cursor_frame_inout::frame_visual_changed(owner, id);
+        return Ok(raised);
+    }
+    let Some(plane) = broker.claim_lease(id, now_ms) else {
+        return Ok(current);
+    };
+    // A frame arriving from the stack lands wherever a lease was available.
+    // Focus then raises it, so a click promotes and fronts in one transaction
+    // rather than leaving it behind the other lease holders.
+    let plane = if raise {
+        WindowBroker::lease_index(plane.slot())
+            .map_or(plane, |index| broker.raise_lease(index, now_ms))
+    } else {
+        plane
+    };
+    let window = &mut broker.windows[slot];
+    window.plane = plane;
+    window.damage = Some(DamageRegion::FULL);
+    window.revision = next_serial(window.revision);
+    broker.mark_composition_changed();
+    drop(broker);
+    crate::log_info!(
+        target: "ui4";
+        "ui4 window promoted previous_slot={} assigned_slot={} owner={:?} window={} trigger=hot-interaction grace_ms={}\n",
+        current.slot(),
+        plane.slot(),
+        owner,
+        id.raw(),
+        LEASE_IDLE_GRACE_MS,
+    );
+    super::cursor_frame_inout::frame_visual_changed(owner, id);
+    Ok(plane)
 }
 
 /// Cheap change detector for the compositor's idle path. The subsequent
@@ -2120,13 +2311,13 @@ mod tests {
         let mut broker = WindowBroker::new();
         let session = broker.begin_additional_session(owner).unwrap();
         let ready = broker
-            .create(test_window(owner, session, 1, 0, 4, true), FrameBuffering::Single)
+            .create(test_window(owner, session, 1, 0, 4, true), FrameBuffering::Single, 0)
             .unwrap();
         let closing = broker
-            .create(test_window(owner, session, 2, 1, 2, false), FrameBuffering::Single)
+            .create(test_window(owner, session, 2, 1, 2, false), FrameBuffering::Single, 0)
             .unwrap();
         let closed = broker
-            .create(test_window(owner, session, 3, 0, 1, true), FrameBuffering::Single)
+            .create(test_window(owner, session, 3, 0, 1, true), FrameBuffering::Single, 0)
             .unwrap();
 
         let (ready_slot, _) = unpack_handle(ready.raw()).unwrap();
@@ -2197,7 +2388,7 @@ mod tests {
         assert_eq!(broker.live_resource_counts(), (1, 0));
 
         let window = broker
-            .create(test_window(owner, session, 1, 0, 0, false), FrameBuffering::Single)
+            .create(test_window(owner, session, 1, 0, 0, false), FrameBuffering::Single, 0)
             .unwrap();
         assert_eq!(broker.live_resource_counts(), (1, 1));
 
@@ -2230,7 +2421,7 @@ mod tests {
         let mut broker = WindowBroker::new();
         let session = broker.begin_additional_session(owner).unwrap();
         let window = broker
-            .create(test_window(owner, session, 7, 0, 0, true), FrameBuffering::Triple)
+            .create(test_window(owner, session, 7, 0, 0, true), FrameBuffering::Triple, 0)
             .unwrap();
         let (slot, _) = unpack_handle(window.raw()).unwrap();
         let frame = broker.windows[slot].frame;
@@ -2262,67 +2453,94 @@ mod tests {
         assert!(broker.windows[slot].close_transition.is_none());
     }
 
+    fn plane_slot_of(broker: &WindowBroker, window: WindowId) -> usize {
+        let (slot, _) = unpack_handle(window.raw()).unwrap();
+        broker.windows[slot].plane.slot()
+    }
+
     #[test]
-    fn independent_expensive_sessions_fill_four_planes_and_reuse_the_released_slot() {
+    fn windows_fill_the_lease_planes_then_join_the_stack_without_failing() {
         let owner = WindowOwner::GRIDPAPER_SERVICE;
         let mut broker = WindowBroker::new();
-        let mut sessions = Vec::new();
         let mut windows = Vec::new();
 
-        for frame in 1..=MAX_EXPENSIVE_WINDOWS as u64 {
+        for frame in 1..=(LEASE_PLANE_COUNT as u64 + 2) {
             let session = broker.begin_additional_session(owner).unwrap();
-            let mut request = test_window(owner, session, frame, 0, frame as i32, true);
-            request.plane = WindowPlane::Universal(super::super::RGB_OVERLAY_PLANE_SLOT_2 as u8);
-            let window = broker
-                .create(request, FrameBuffering::Triple)
-                .expect("one independent window per application plane");
-            sessions.push(session);
-            windows.push(window);
+            let request = test_window(owner, session, frame, 0, frame as i32, true);
+            windows.push(
+                broker
+                    .create(request, FrameBuffering::Triple, 0)
+                    .expect("admission never fails once the lease planes are full"),
+            );
         }
 
         let assigned = windows
             .iter()
-            .map(|window| {
-                let (slot, _) = unpack_handle(window.raw()).unwrap();
-                broker.windows[slot].plane.slot()
-            })
+            .map(|window| plane_slot_of(&broker, *window))
             .collect::<Vec<_>>();
-        assert_eq!(assigned, Vec::from([2, 3, 0, 1]));
+        // The first three win planes 1-3; every later frame joins the stack.
+        assert_eq!(assigned, Vec::from([1, 2, 3, STACK_PLANE_SLOT, STACK_PLANE_SLOT]));
+    }
 
-        let waiting_session = broker.begin_additional_session(owner).unwrap();
-        let mut waiting = test_window(owner, waiting_session, 5, 0, 5, true);
-        waiting.plane = WindowPlane::Universal(super::super::RGB_OVERLAY_PLANE_SLOT_2 as u8);
-        assert_eq!(
-            broker.create(waiting, FrameBuffering::Triple),
-            Err(WindowBrokerError::Capacity)
-        );
-
-        broker
-            .finish_session(owner, sessions[0], false, false, false, false, false, 0)
-            .unwrap();
-        for window in windows.iter().skip(1) {
-            let (slot, _) = unpack_handle(window.raw()).unwrap();
-            assert_ne!(broker.windows[slot].state, WindowState::Closed);
+    #[test]
+    fn a_live_lease_is_never_revoked_but_an_idle_one_is() {
+        let owner = WindowOwner::GRIDPAPER_SERVICE;
+        let mut broker = WindowBroker::new();
+        let mut held = Vec::new();
+        for frame in 1..=LEASE_PLANE_COUNT as u64 {
+            let session = broker.begin_additional_session(owner).unwrap();
+            let request = test_window(owner, session, frame, 0, frame as i32, true);
+            held.push(broker.create(request, FrameBuffering::Triple, 1_000).unwrap());
         }
 
-        let admitted = broker
-            .create(waiting, FrameBuffering::Triple)
-            .expect("released application plane admits the waiting session");
-        let (slot, _) = unpack_handle(admitted.raw()).unwrap();
-        assert_eq!(broker.windows[slot].plane.slot(), 2);
+        // Every lease is still inside its grace period, so the stacked frame
+        // stays on the stack rather than displacing a live winner.
+        let session = broker.begin_additional_session(owner).unwrap();
+        let stacked = broker
+            .create(test_window(owner, session, 9, 0, 9, true), FrameBuffering::Triple, 1_000)
+            .unwrap();
+        assert_eq!(plane_slot_of(&broker, stacked), STACK_PLANE_SLOT);
+        assert!(broker.claim_lease(stacked, 1_000 + LEASE_IDLE_GRACE_MS - 1).is_none());
+
+        // Past the grace period the longest-idle holder gives up its plane and
+        // is demoted to the stack in the same transaction.
+        let plane = broker
+            .claim_lease(stacked, 1_000 + LEASE_IDLE_GRACE_MS)
+            .expect("an expired lease is revocable");
+        assert_eq!(plane.slot(), FIRST_LEASE_PLANE_SLOT);
+        assert_eq!(plane_slot_of(&broker, held[0]), STACK_PLANE_SLOT);
+    }
+
+    #[test]
+    fn closing_a_window_frees_its_lease_plane_for_the_next_claimant() {
+        let owner = WindowOwner::GRIDPAPER_SERVICE;
+        let mut broker = WindowBroker::new();
+        let session = broker.begin_additional_session(owner).unwrap();
+        let first = broker
+            .create(test_window(owner, session, 1, 0, 1, true), FrameBuffering::Triple, 0)
+            .unwrap();
+        assert_eq!(plane_slot_of(&broker, first), FIRST_LEASE_PLANE_SLOT);
+
+        let (slot, _) = unpack_handle(first.raw()).unwrap();
+        broker.windows[slot].state = WindowState::Closed;
+        broker.release_lease_of(first);
+
+        let next = broker
+            .create(test_window(owner, session, 2, 0, 2, true), FrameBuffering::Triple, 0)
+            .unwrap();
+        assert_eq!(plane_slot_of(&broker, next), FIRST_LEASE_PLANE_SLOT);
     }
 
     #[test]
     fn color_picker_interaction_plane_is_fixed_and_never_falls_back() {
         let mut broker = WindowBroker::new();
-        for frame in 1..=MAX_EXPENSIVE_WINDOWS as u64 {
+        for frame in 1..=LEASE_PLANE_COUNT as u64 {
             let owner = WindowOwner::GPGPU_PREVIEW;
             let session = broker.begin_additional_session(owner).unwrap();
-            let mut request = test_window(owner, session, frame, 0, frame as i32, true);
-            request.plane = WindowPlane::Universal(super::super::RGB_OVERLAY_PLANE_SLOT_2 as u8);
+            let request = test_window(owner, session, frame, 0, frame as i32, true);
             broker
-                .create(request, FrameBuffering::Triple)
-                .expect("fill one isolated application plane");
+                .create(request, FrameBuffering::Triple, 0)
+                .expect("fill every lease plane");
         }
 
         let owner = WindowOwner::COLOR_PICKER_SERVICE;
@@ -2330,28 +2548,21 @@ mod tests {
         let mut request = test_window(owner, session, 10, 0, 100, true);
         request.plane = WindowPlane::Interaction;
         let picker = broker
-            .create(request, FrameBuffering::Double)
-            .expect("slot 4 remains independent of full application-plane admission");
+            .create(request, FrameBuffering::Double, 0)
+            .expect("slot 4 remains independent of the lease planes");
         let (slot, _) = unpack_handle(picker.raw()).unwrap();
         assert_eq!(broker.windows[slot].plane, WindowPlane::Interaction);
         assert_eq!(broker.windows[slot].plane.slot(), super::super::INTERACTION_OVERLAY_PLANE_SLOT);
-        assert_eq!(WindowPlane::from_slot(super::super::INTERACTION_OVERLAY_PLANE_SLOT), None);
 
         broker
-            .replace_frame(
-                owner,
-                picker,
-                FrameHandle::from_raw(11).unwrap(),
-                FrameBuffering::Double,
-                false,
-            )
+            .replace_frame(owner, picker, FrameHandle::from_raw(11).unwrap(), FrameBuffering::Double)
             .expect("replacement remains on the fixed interaction plane");
         assert_eq!(broker.windows[slot].plane, WindowPlane::Interaction);
 
         let second_session = broker.begin_additional_session(owner).unwrap();
         let mut second = test_window(owner, second_session, 12, 0, 101, true);
         second.plane = WindowPlane::Interaction;
-        assert_eq!(broker.create(second, FrameBuffering::Double), Err(WindowBrokerError::Capacity));
+        assert_eq!(broker.create(second, FrameBuffering::Double, 0), Err(WindowBrokerError::Capacity));
     }
 
     #[test]
@@ -2361,7 +2572,7 @@ mod tests {
         let session = broker.begin_additional_session(owner).unwrap();
         let mut request = test_window(owner, session, 21, 0, 0, true);
         request.plane = WindowPlane::Interaction;
-        let window = broker.create(request, FrameBuffering::Double).unwrap();
+        let window = broker.create(request, FrameBuffering::Double, 0).unwrap();
         let (slot, _) = unpack_handle(window.raw()).unwrap();
         broker.windows[slot].state = WindowState::Closing;
         broker.windows[slot].publish_serial = 4;

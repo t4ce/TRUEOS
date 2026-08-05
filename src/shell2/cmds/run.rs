@@ -940,13 +940,41 @@ fn start_blueprint_launch(
     if request.instance.is_default()
         && let Some(existing_vm) = crate::hv::default_app_instance_vm(request.archive.as_str())
     {
+        let label = app_label_for_archive(request.archive.as_str());
         log(alloc::format!(
-            "apps: {} already has default instance vm{}; use `start new {} <name>`",
+            "apps: {} can run several instances at once, but plain `start {}` always claims the single shared default slot - vm{} is holding it",
             request.archive,
-            existing_vm,
-            app_label_for_archive(request.archive.as_str())
+            label,
+            existing_vm
         )
         .as_str());
+        log(alloc::format!(
+            "apps:   `start new {} <name>` - launch another instance beside vm{}",
+            label,
+            existing_vm
+        )
+        .as_str());
+        log(alloc::format!(
+            "apps:   `stop {}` - close the default instance, then `start {}` again",
+            existing_vm,
+            label
+        )
+        .as_str());
+        let named = crate::hv::named_app_instance_vms(request.archive.as_str());
+        if !named.is_empty() {
+            let mut live = String::new();
+            for (vm_id, name) in named.iter() {
+                if !live.is_empty() {
+                    live.push_str(", ");
+                }
+                live.push_str(alloc::format!("vm{} [{}]", vm_id, name).as_str());
+            }
+            log(alloc::format!(
+                "apps:   already running from earlier `new`: {} - switch to one of those instead of starting again",
+                live.as_str()
+            )
+            .as_str());
+        }
         return;
     }
     let Some(vm_id) = crate::hv::first_free_vm_id() else {

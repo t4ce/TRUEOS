@@ -4984,6 +4984,7 @@ pub(crate) enum Ui4AsyncCompositionPoll {
 pub(crate) fn queue_ui4_primary_composition(
     tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
+    sparse_static_painter: bool,
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
     if tiles.is_empty() {
@@ -5023,7 +5024,13 @@ pub(crate) fn queue_ui4_primary_composition(
         effective
     };
     let proof = prepare_ui4_composition_proof(tiles, effective, target.width, target.height, true);
-    match compose_premultiplied_rgba_tiles_into_primary_gpgpu(surface, tiles, effective, true) {
+    match compose_premultiplied_rgba_tiles_into_primary_gpgpu(
+        surface,
+        tiles,
+        effective,
+        true,
+        sparse_static_painter,
+    ) {
         GpgpuCompositionResult::Queued(gpu) => Ok(Ui4AsyncComposition {
             work: Some(Ui4AsyncCompositionWork::GucRcs(gpu)),
             target: Ui4AsyncCompositionTarget::Primary {
@@ -5870,6 +5877,7 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
     tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
     asynchronous: bool,
+    sparse_static_painter: bool,
 ) -> GpgpuCompositionResult {
     if surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES
         || (!asynchronous
@@ -5914,7 +5922,14 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
         return GpgpuCompositionResult::Unavailable;
     }
 
-    if asynchronous {
+    // The layer kernel dispatches one work item per pixel of the damage
+    // bounding rect and walks every layer inside it, so its cost follows the
+    // box that encloses the sources rather than the sources themselves. The
+    // painter below emits one ordered sprite-quad run per tile clipped to
+    // `tile & damage`, which is what slot0 needs once it carries the UI4 stack
+    // instead of a lone producer. Both paths blend premultiplied source-over;
+    // only the cost model differs.
+    if asynchronous && !sparse_static_painter {
         let Some(bounds) = damage
             .bounding_rect()
             .and_then(|rect| clip_composition_damage(rect, surface.width, surface.height))

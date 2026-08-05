@@ -403,6 +403,11 @@ impl InputBroker {
                 );
             }
             if let Some(next) = change.selected.map(WindowTarget::from) {
+                // Focus is the hot signal. The frame the user just reached for
+                // claims a hardware lease plane when one is free or revocable
+                // and otherwise keeps presenting from the stack, so this can
+                // neither fail nor gate the focus event below.
+                let _ = super::window_broker::note_window_focused(next.owner, next.window);
                 enqueue_owner_event(
                     next.owner,
                     Ui4InputEvent::Focus(Ui4FocusEvent {
@@ -692,6 +697,11 @@ impl InputBroker {
                     match super::move_window(target.owner, target.id, next) {
                         Ok(()) => {
                             target.placement = next;
+                            // Keep the lease alive for the whole gesture. The
+                            // idle grace is shorter than a long drag, so
+                            // without this refresh a continuously dragged
+                            // frame would become revocable mid-motion.
+                            let _ = super::window_broker::note_window_hot(target.owner, target.id);
                             crate::log_trace!(target: "ui4";
                                 "ui4/input: frame-drag owner={:?} window={} plane={} dx={} dy={} placement={},{} trigger=secondary-button\n",
                                 target.owner,

@@ -20,7 +20,7 @@ pub(crate) mod flags {
 
     /// Boot/network diagnostic profile for startup timing and first-net-process
     /// operability logs.
-    pub(crate) const BOOT_DIAG_PROFILE_ENABLED: bool = true;
+    pub(crate) const BOOT_DIAG_PROFILE_ENABLED: bool = false;
 
     /// Focused Lumen inference performance profile.
     ///
@@ -32,14 +32,25 @@ pub(crate) mod flags {
     /// trace traffic that would perturb the measurements. Functional upper-half
     /// MOCS ownership is independent of this logging switch. Setting it to
     /// false compile-folds Lumen submissions back to the unsampled path.
-    pub(crate) const LUMEN_PERF_DIAG_PROFILE_ENABLED: bool = true;
+    pub(crate) const LUMEN_PERF_DIAG_PROFILE_ENABLED: bool = false;
 
-    pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
-        // Preserve the original USB hunt's full Global side, including Debug.
-        LogLevelPolicy::up(LevelFilter::Trace)
-    } else {
-        LogLevelPolicy::up(LevelFilter::Info)
-    };
+    /// UI4 plane/lease/composition diagnostic profile.
+    ///
+    /// UI4 logs through the Global area, so its per-submission markers -
+    /// compositor backend selection (`sprite-quad-runs` versus the layer
+    /// kernel), deferred lease raises, frame retirement and per-drag frame
+    /// motion - only appear once Global admits Trace. Enable this while
+    /// working on the plane lease contract or the slot0 stack painter; it is
+    /// noisy by design and belongs off in ordinary boots.
+    pub(crate) const UI4_DIAG_PROFILE_ENABLED: bool = true;
+
+    pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy =
+        if USB_UAS_DIAG_PROFILE_ENABLED || UI4_DIAG_PROFILE_ENABLED {
+            // Preserve the original USB hunt's full Global side, including Debug.
+            LogLevelPolicy::up(LevelFilter::Trace)
+        } else {
+            LogLevelPolicy::up(LevelFilter::Info)
+        };
     pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = if BOOT_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LevelFilter::Trace)
     } else {
@@ -63,13 +74,16 @@ pub(crate) mod flags {
         LogLevelPolicy::up(LevelFilter::Warn)
     };
     pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    /// The display/cursor side is per-flip chatty and is not the subject of
+    /// the current UI4 work, so it stays at Warn while Global carries the
+    /// plane and composition markers.
     pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = if LUMEN_PERF_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LevelFilter::Info)
     } else {
         LogLevelPolicy::up(LevelFilter::Warn)
     };
-    pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
     pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
     pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);

@@ -30,6 +30,9 @@ static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_CPU_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_BCS0_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_GPU_RCS_LOGGED: AtomicBool = AtomicBool::new(false);
+/// The stack painter route is the contract's normal steady state, so report it
+/// once at info rather than leaving it only in the per-submission trace.
+static STACK_PAINTER_LOGGED: AtomicBool = AtomicBool::new(false);
 static MIXED_SLOT_COMPOSITION_LOGGED: AtomicBool = AtomicBool::new(false);
 static GPU_SOURCE_RELEASE_INVALID_WARNED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_SHARED_COMPOSITION_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -283,7 +286,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand expensive=nonshared-double+triple/one-per-slot/soft-cap-4 shared=single+dirty-font-double+streaming-render-scene-triple/slot-local-composition lone-source=direct-scanout-when-eligible mixed_slot=guc-rcs-all-sources/placement-old+new-repair static_single=released-gpu-rcs+cpu-bcs0/cpu-fallback slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
+        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0-stack+slot1-3-lease/on-demand admission=never-fails lease=one-frame-per-plane/claim-lowest-free/focus-raises-to-top/idle-grace-500ms/lazy-revoke stack=slot0/painter-runs-in-broker-z/premultiplied-src-over/overflow-and-demoted lone-source=direct-scanout-when-eligible mixed_slot=guc-rcs-all-sources/placement-old+new-repair static_single=released-gpu-rcs+cpu-bcs0/cpu-fallback slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
         CLOSE_TRANSITION_PERIOD_MS,
         PENDING_POLL_PERIOD_MS,
     );
@@ -818,8 +821,21 @@ fn queue_async_plane(
                 )
             })
         });
-    let sparse_static_painter = all_static_single;
+    // Slot0 carries the UI4 stack: every frame which does not hold one of the
+    // three hardware lease planes presents here, so its membership is arbitrary
+    // in content, cadence and buffering. The painter emits one ordered run per
+    // tile clipped to `tile & damage`, so its cost follows the tiles themselves
+    // and stays bounded as the stack grows. Plan uniformity is irrelevant to
+    // that contract; stack membership alone selects the painter. Overlap is
+    // resolved by ordered overdraw in broker z order rather than by a
+    // per-pixel walk over every layer in the enclosing damage box.
+    let stack_plane = target_plane_slot(plan.target) == super::PRIMARY_PLANE_SLOT;
+    let sparse_static_painter = all_static_single || stack_plane;
+    // Overlap inside the stack is the contract, not an anomaly. Keep the probe
+    // for the isolated single-plane painter, where it still reports an
+    // unresolved z specialization.
     if sparse_static_painter
+        && !stack_plane
         && same_slot_windows_overlap(&selected)
         && !STATIC_SINGLE_OVERLAP_WARNED.swap(true, Ordering::AcqRel)
     {
@@ -1043,7 +1059,21 @@ fn queue_async_plane(
     let has_released_gpu_source = tiles.iter().any(|tile| tile.gpgpu_scanout_cache);
     let queued = match plan.target {
         CompositionTarget::Primary => {
-            crate::intel::queue_ui4_primary_composition(&tiles, plan.damage, reason)
+            if sparse_static_painter
+                && tiles.len() > 1
+                && !STACK_PAINTER_LOGGED.swap(true, Ordering::AcqRel)
+            {
+                crate::log_info!(target: "ui4";
+                    "ui4/stack-painter: slot0 backend=guc-rcs-sprite-quad-runs windows={} order=broker-z blend=premultiplied-src-over runs=one-per-tile layer_kernel=0 cost=sum-of-tile-damage log=once\n",
+                    tiles.len(),
+                );
+            }
+            crate::intel::queue_ui4_primary_composition(
+                &tiles,
+                plan.damage,
+                sparse_static_painter,
+                reason,
+            )
         }
         CompositionTarget::Overlay(_) if sparse_static_painter && has_released_gpu_source => {
             if !STATIC_SINGLE_GPU_RCS_LOGGED.swap(true, Ordering::AcqRel) {

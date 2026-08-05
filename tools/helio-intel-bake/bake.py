@@ -656,7 +656,11 @@ def sha256(data: bytes) -> str:
 
 
 def vulkan_compile_flags() -> list[str]:
+    # The in-repo copy is searched first so a bake is reproducible from a clean
+    # checkout and does not depend on host packages or sibling working trees.
+    # The remaining roots stay as fallbacks for machines provisioned earlier.
     include_roots = [
+        TRUEOS / "vendor/vulkan-headers/include",
         Path("/usr/include"),
         TRUEOS.parent / "bak/reference/mesa/include",
         TRUEOS.parent / "blender-default-cube-toggle/lib/linux_x64/vulkan/include",

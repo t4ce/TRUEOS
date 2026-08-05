@@ -632,9 +632,10 @@ pub(crate) fn cancel_ui4_plane_surface_flip_batch() {
 pub(crate) fn queue_ui4_primary_composition(
     tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
+    sparse_static_painter: bool,
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
-    self::display::queue_ui4_primary_composition(tiles, damage, reason)
+    self::display::queue_ui4_primary_composition(tiles, damage, sparse_static_painter, reason)
 }
 
 pub(crate) fn queue_ui4_overlay_composition(
