@@ -8,14 +8,14 @@ use super::super::{
     print_shell_line, submit_online_to_target,
 };
 
-const GRID_APP: &str = "grid";
-const GRID_ARCHIVE: &str = "grid.bp";
+const GRIDP_APP: &str = "gridp";
+const GRIDP_ARCHIVE: &str = "gridp.bp";
 
-#[task(pool_size = 4)]
-async fn launch_grid(spawner: Spawner, target: MatrixTarget) {
+#[task(pool_size = 8)]
+async fn launch_gridp(spawner: Spawner, target: MatrixTarget) {
     match super::run::submit_archive_name_to_target_prefer_trueosfs_with_instance_async(
         target.clone(),
-        GRID_ARCHIVE,
+        GRIDP_ARCHIVE,
         Vec::new(),
         crate::hv::BlueprintInstanceRequest::default(),
     )
@@ -23,14 +23,19 @@ async fn launch_grid(spawner: Spawner, target: MatrixTarget) {
     {
         Ok(_) => {}
         Err(error) if error == "archive not found" => {
-            let online_args = alloc::vec![alloc::string::String::from(GRID_APP)];
-            if submit_online_to_target(&spawner, target.clone(), online_args).is_err() {
-                print_matrix_target_system_line(&target, "grid: online launch task unavailable");
+            if submit_online_to_target(
+                &spawner,
+                target.clone(),
+                alloc::vec![alloc::string::String::from(GRIDP_APP)],
+            )
+            .is_err()
+            {
+                print_matrix_target_system_line(&target, "gridp: online launch task unavailable");
             }
         }
         Err(error) => print_matrix_target_system_line(
             &target,
-            alloc::format!("grid: could not launch {GRID_ARCHIVE}: {error}").as_str(),
+            alloc::format!("gridp: could not launch {GRIDP_ARCHIVE}: {error}").as_str(),
         ),
     }
 }
@@ -42,19 +47,20 @@ pub(crate) fn try_parse(
 ) -> ParseOutcome {
     let trimmed = rest.trim();
     if matches!(trimmed, "help" | "-h" | "--help") {
-        print_shell_line(io, "grid: plain `grid` opens one buffered UI4 scene frame");
-        print_shell_line(io, "grid: repeated launches receive automatic containers");
+        print_shell_line(io, "gridp: plain `gridp` opens another movable UI4 frame");
         return ParseOutcome::Handled;
     }
     if !trimmed.is_empty() {
-        print_shell_line(io, "grid: launch arguments are not supported; configure it after launch");
+        print_shell_line(
+            io,
+            "gridp: launch arguments are not supported; configure it after launch",
+        );
         return ParseOutcome::Handled;
     }
-
     let target = matrix_target_for_backend(io);
-    match launch_grid(*spawner, target) {
+    match launch_gridp(*spawner, target) {
         Ok(token) => spawner.spawn(token),
-        Err(_) => print_shell_line(io, "grid: launch task unavailable"),
+        Err(_) => print_shell_line(io, "gridp: launch task unavailable"),
     }
     ParseOutcome::Handled
 }

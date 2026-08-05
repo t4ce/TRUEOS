@@ -1,6 +1,7 @@
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -22,6 +23,7 @@ const MIB: usize = 1024 * 1024;
 use alloc::collections::VecDeque;
 
 static APP_VM_RUN_QUEUE: Mutex<VecDeque<AppVmLaunchRequest>> = Mutex::new(VecDeque::new());
+static AUTO_CONTAINER_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 
 fn preferred_slot_for_archive(archive: &str) -> String {
     if archive == "hello_world" || archive == "hello_world.bp" {
@@ -71,6 +73,46 @@ fn app_label_for_instance(archive: &str, instance: &crate::hv::BlueprintInstance
         (_, Some(name)) => alloc::format!("{} [{}]", app_label_for_archive(archive), name),
         _ => String::from(app_label_for_archive(archive)),
     }
+}
+
+/// Preserve the first, historical unnamed launch as the default instance.
+/// A later plain launch must still start an app: give it a visible container
+/// identity before reserving a Matrix/VM target.
+fn name_occupied_default_instance(
+    target: &MatrixTarget,
+    archive: &str,
+    instance: crate::hv::BlueprintInstanceRequest,
+) -> crate::hv::BlueprintInstanceRequest {
+    let Some(existing_vm) = instance
+        .is_default()
+        .then(|| crate::hv::default_app_instance_vm(archive))
+        .flatten()
+    else {
+        return instance;
+    };
+    let name = loop {
+        let sequence = AUTO_CONTAINER_SEQUENCE
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let candidate = alloc::format!("container_{sequence}");
+        if !crate::hv::named_app_instance_vms(archive)
+            .iter()
+            .any(|(_, live_name)| live_name == &candidate)
+        {
+            break candidate;
+        }
+    };
+    log_run_target_line(
+        target,
+        alloc::format!(
+            "apps: default {} is vm{}; starting this additional copy as `{}`",
+            app_label_for_archive(archive),
+            existing_vm,
+            name,
+        )
+        .as_str(),
+    );
+    crate::hv::BlueprintInstanceRequest::named(name)
 }
 
 fn reserve_target_for_archive(target: &MatrixTarget, archive: &str) -> MatrixTarget {
@@ -942,26 +984,16 @@ fn start_blueprint_launch(
     {
         let label = app_label_for_archive(request.archive.as_str());
         log(alloc::format!(
-            "apps: {} can run several instances at once, but an unnamed launch always claims the single shared default slot - vm{} is holding it",
+            "apps: {} default instance is already vm{}",
             request.archive,
             existing_vm
         )
         .as_str());
+        log(alloc::format!("apps: launch `{}` again to create an automatic container", label,)
+            .as_str());
         log(alloc::format!(
-            "apps:   `{} <name>` - launch another instance beside vm{}",
-            label,
-            existing_vm
-        )
-        .as_str());
-        log(alloc::format!(
-            "apps:   `online new {} <name>` - same, launching from the online catalog",
-            label,
-        )
-        .as_str());
-        log(alloc::format!(
-            "apps:   `stop {}` - close the default instance, then `{}` again",
+            "apps: use `vmx_stop` inside vm{} to close the default instance",
             existing_vm,
-            label
         )
         .as_str());
         let named = crate::hv::named_app_instance_vms(request.archive.as_str());
@@ -973,11 +1005,7 @@ fn start_blueprint_launch(
                 }
                 live.push_str(alloc::format!("vm{} [{}]", vm_id, name).as_str());
             }
-            log(alloc::format!(
-                "apps:   already running from earlier `new`: {} - switch to one of those instead of starting again",
-                live.as_str()
-            )
-            .as_str());
+            log(alloc::format!("apps: already running containers: {}", live.as_str()).as_str());
         }
         return;
     }
@@ -1107,6 +1135,7 @@ pub(crate) fn enqueue_blueprint_bytes_with_instance(
         return Err(line);
     }
 
+    let instance = name_occupied_default_instance(&target, archive.as_str(), instance);
     let target = reserve_target_for_archive(&target, archive.as_str());
     let app_label = app_label_for_instance(archive.as_str(), &instance);
     set_matrix_target_app_label(&target, app_label.as_str());
@@ -1155,6 +1184,7 @@ async fn submit_module_bytes_to_target_async(
         log_run_target_line(&target, line.as_str());
         return Err(line);
     }
+    let instance = name_occupied_default_instance(&target, archive_name, instance);
     crate::allocators::with_host_alloc_domain(|| {
         let target = reserve_target_for_archive(&target, archive_name);
         let app_label = app_label_for_instance(archive_name, &instance);

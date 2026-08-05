@@ -1797,7 +1797,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     // Resident-scene consumers use independent direct planes and the same
     // triple-buffer release -> SURFLIVE ownership contract.
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "gridpaper-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &GRIDPAPER_SERVICE_STARTED,
@@ -1911,13 +1911,11 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TRUEOS_SPIRIT_STARTED,
         spawn_trueos_spirit_workers,
     ),
-    // Spirit owns no application plane while idle. Completed local-model
-    // responses reveal one retained kernel Gridpaper document, type through
-    // Lilly's paired virtual input devices, then hide its UI4 presentation.
-    TaskSpec::enabled_gated(
+    // Gridpaper is retired from the live UI path while GridP establishes the
+    // minimal UI4 baseline.  Spirit keeps its ordinary shell/log route.
+    TaskSpec::disabled(
         "spirit-response-gridpaper",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        ui4_compositor_gate,
         &SPIRIT_RESPONSE_WINDOW_STARTED,
         spawn_spirit_response_window_task,
     ),

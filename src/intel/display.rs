@@ -121,11 +121,6 @@ const OVERLAY_PLANE_GPU_STRIDE: u64 = DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PI
 const OVERLAY_UNIVERSAL_PLANE_COUNT: usize = crate::ui4::UNIVERSAL_PLANE_COUNT - 1;
 const DIRECT_RCS_OVERLAY_UNIVERSAL_PLANE_COUNT: usize = 3;
 const INTERACTION_OVERLAY_GPU_BASE: u64 = DISPLAY_DIRECT_RCS_VA_LIMIT;
-// Slot 0 is part of the premultiplied-RGBA application stack. Its compositor
-// swap aliases occupy the gap between slot 4's
-// interaction surfaces and the direct-scanout alias arena.
-const UI4_SLOT0_OVERLAY_GPU_BASE: u64 =
-    INTERACTION_OVERLAY_GPU_BASE + DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PIPE_GPU_STRIDE;
 // Published UI4 buffers keep producer-owned PPGTT addresses. Direct scanout
 // imports each producer surface into a display-owned GGTT alias. Keep enough
 // aliases for the deepest UI4 buffering contract so a four-buffer video bridge
@@ -176,10 +171,6 @@ const _: () = assert!(
 );
 const _: () = assert!(
     INTERACTION_OVERLAY_GPU_BASE + DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PIPE_GPU_STRIDE
-        <= UI4_SLOT0_OVERLAY_GPU_BASE
-);
-const _: () = assert!(
-    UI4_SLOT0_OVERLAY_GPU_BASE + DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PIPE_GPU_STRIDE
         <= UI4_DIRECT_SCANOUT_GPU_BASE
 );
 const _: () = assert!(
@@ -304,12 +295,6 @@ static OVERLAY_SURFACES_SLOT_1: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COU
     Mutex::new(OverlaySurfacePool::new()),
     Mutex::new(OverlaySurfacePool::new()),
 ];
-static OVERLAY_SURFACES_SLOT_0: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COUNT] = [
-    Mutex::new(OverlaySurfacePool::new()),
-    Mutex::new(OverlaySurfacePool::new()),
-    Mutex::new(OverlaySurfacePool::new()),
-    Mutex::new(OverlaySurfacePool::new()),
-];
 static OVERLAY_SURFACES_SLOT_2: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COUNT] = [
     Mutex::new(OverlaySurfacePool::new()),
     Mutex::new(OverlaySurfacePool::new()),
@@ -329,12 +314,6 @@ static OVERLAY_SURFACES_SLOT_4: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COU
     Mutex::new(OverlaySurfacePool::new()),
 ];
 static UI4_DIRECT_SCANOUT_SLOT_1: [Mutex<Ui4DirectScanoutPool>; DISPLAY_PIPELINE_COUNT] = [
-    Mutex::new(Ui4DirectScanoutPool::new()),
-    Mutex::new(Ui4DirectScanoutPool::new()),
-    Mutex::new(Ui4DirectScanoutPool::new()),
-    Mutex::new(Ui4DirectScanoutPool::new()),
-];
-static UI4_DIRECT_SCANOUT_SLOT_0: [Mutex<Ui4DirectScanoutPool>; DISPLAY_PIPELINE_COUNT] = [
     Mutex::new(Ui4DirectScanoutPool::new()),
     Mutex::new(Ui4DirectScanoutPool::new()),
     Mutex::new(Ui4DirectScanoutPool::new()),
@@ -1089,7 +1068,7 @@ const UI4_RGBA8_OVERLAY_CONTRACT: OverlayAlphaMode = OverlayAlphaMode::Premultip
 /// starts transparent and remains native premultiplied RGBA through scanout.
 /// Setting either UI4 compositor XRGB flag would inject an opaque base or drop
 /// the destination alpha (and swizzle its channels).
-const UI4_PRIMARY_COMPOSITION_FLAGS: u32 = 0;
+const UI4_PRIMARY_COMPOSITION_FLAGS: u32 = crate::intel::gpgpu::UI4_COMPOSE_FLAG_OPAQUE_RECTS;
 
 /// Give the firmware-compatible XRGB boot phase deterministic pixels. UI4
 /// discards this boot content when Slot0 becomes its transparent RGBA slice.
@@ -3236,9 +3215,9 @@ fn ui4_rgba8_plane_stack_ready(pipe: PipeInfo) -> bool {
         && UI4_RGBA8_PLANE_STACK_PIPE_SLOT.load(Ordering::Acquire) == pipe.slot as u32
 }
 
-/// Hand Slot0 to UI4 as an enabled, initially empty premultiplied-RGBA plane.
-/// Boot-phase XRGB pixels are deliberately discarded: the pipe bottom color is
-/// the permanent base beneath UI4's independently populated plane slices.
+/// Prepare UI4's transparent Slot0 compositor.  The real Pipe A bottom color
+/// remains visible wherever Slot0 contains no application pixels, while the
+/// preallocated primary swap buffers carry the virtual stack.
 pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
@@ -3247,60 +3226,54 @@ pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
         return false;
     };
     let pipe = primary.pipe;
-    if overlay_plane_dynamic_flip_guard(
+    if !ui4_rgba8_plane_stack_ready(pipe) || primary.virt.is_null() {
+        return false;
+    }
+    let mut plane_ready = overlay_plane_dynamic_flip_guard(
         dev,
         pipe,
         crate::ui4::PRIMARY_PLANE_SLOT,
         UI4_RGBA8_OVERLAY_CONTRACT,
     )
-    .is_ok()
-    {
-        return true;
-    }
-    if !ui4_rgba8_plane_stack_ready(pipe) || primary.virt.is_null() {
-        return false;
-    }
+    .is_ok();
+    if !plane_ready {
+        // This is the only full clear in the Slot0 lifecycle.  Zero alpha is
+        // not black here: it exposes Pipe A's programmed bottom color.
+        unsafe { core::ptr::write_bytes(primary.virt, 0, primary.byte_len) };
+        crate::intel::dma_flush(primary.virt, primary.byte_len);
 
-    // Slot0 remains enabled. Transparent pixels make it an empty slice rather
-    // than an opaque imitation of a background.
-    unsafe { core::ptr::write_bytes(primary.virt, 0, primary.byte_len) };
-    crate::intel::dma_flush(primary.virt, primary.byte_len);
-
-    let plane = pipe.plane(crate::ui4::PRIMARY_PLANE_SLOT);
-    let ctl_before = crate::intel::mmio_read(dev, plane.ctl());
-    let ctl = overlay_plane_ctl_enabled(ctl_before, UI4_RGBA8_OVERLAY_CONTRACT);
-    let color_ctl_off = plane.base() + UNI_PLANE_COLOR_CTL_OFF;
-    let color_ctl = plane_color_ctl_alpha(
-        crate::intel::mmio_read(dev, color_ctl_off),
-        UI4_RGBA8_OVERLAY_CONTRACT,
-    );
-    let surface = crate::intel::mmio_read(dev, plane.surf());
-    crate::intel::mmio_write(dev, plane.ctl(), ctl & !PLANE_CTL_ENABLE);
-    crate::intel::mmio_write(dev, color_ctl_off, color_ctl);
-    crate::intel::mmio_write(dev, plane.base() + UNI_PLANE_KEYVAL_OFF, 0);
-    program_overlay_plane_constant_alpha(dev, plane.base(), u8::MAX);
-    crate::intel::mmio_write(dev, plane.ctl(), ctl);
-    crate::intel::mmio_write(dev, plane.surf(), surface);
-    let (frame_before, frame_after, frame_wait) = wait_for_pipe_next_frame(dev, pipe);
-    let (live, live_iters) = wait_for_plane_live_for(dev, plane.base(), surface, 5_000_000);
-    let ready = live == surface
-        && overlay_plane_dynamic_flip_guard(
-            dev,
-            pipe,
-            crate::ui4::PRIMARY_PLANE_SLOT,
+        let plane = pipe.plane(crate::ui4::PRIMARY_PLANE_SLOT);
+        let ctl_before = crate::intel::mmio_read(dev, plane.ctl());
+        let ctl = overlay_plane_ctl_enabled(ctl_before, UI4_RGBA8_OVERLAY_CONTRACT);
+        let color_ctl_off = plane.base() + UNI_PLANE_COLOR_CTL_OFF;
+        let color_ctl = plane_color_ctl_alpha(
+            crate::intel::mmio_read(dev, color_ctl_off),
             UI4_RGBA8_OVERLAY_CONTRACT,
-        )
-        .is_ok();
+        );
+        let surface = crate::intel::mmio_read(dev, plane.surf());
+        crate::intel::mmio_write(dev, plane.ctl(), ctl & !PLANE_CTL_ENABLE);
+        crate::intel::mmio_write(dev, color_ctl_off, color_ctl);
+        crate::intel::mmio_write(dev, plane.base() + UNI_PLANE_KEYVAL_OFF, 0);
+        program_overlay_plane_constant_alpha(dev, plane.base(), u8::MAX);
+        crate::intel::mmio_write(dev, plane.ctl(), ctl);
+        crate::intel::mmio_write(dev, plane.surf(), surface);
+        let (_, _, _) = wait_for_pipe_next_frame(dev, pipe);
+        let (live, _) = wait_for_plane_live_for(dev, plane.base(), surface, 5_000_000);
+        plane_ready = live == surface
+            && overlay_plane_dynamic_flip_guard(
+                dev,
+                pipe,
+                crate::ui4::PRIMARY_PLANE_SLOT,
+                UI4_RGBA8_OVERLAY_CONTRACT,
+            )
+            .is_ok();
+    }
+    let ready =
+        plane_ready && prepare_ui4_primary_swap_surfaces(dev, pipe, primary.width, primary.height);
     crate::log_info!(target: "ui4";
-        "ui4/application-plane-stack rgba_handoff={} pipe={} slots=0-3/premultiplied-rgba8 slot4=interaction-only boot_primary=discarded slot0_initial=transparent pipe_bottom=permanent-base cpu_blend=0 frame={}=>{} frame_wait={} surf=0x{:08X} live=0x{:08X} live_iters={}\n",
+        "ui4/application-plane-stack slot0=rgba8-transparent/preallocated-double/cpu-src-over pipe_bottom=visible-where-slot0-alpha-zero slots=1-3=rgba8-direct-or-composed slot4=interaction-only ready={} pipe={}\n",
         ready as u8,
         pipe.name,
-        frame_before,
-        frame_after,
-        frame_wait,
-        surface,
-        live,
-        live_iters,
     );
     ready
 }
@@ -3959,7 +3932,6 @@ fn overlay_surface_pool(
     plane_slot: usize,
 ) -> Option<&'static Mutex<OverlaySurfacePool>> {
     match plane_slot {
-        0 => Some(&OVERLAY_SURFACES_SLOT_0[pipe.slot]),
         1 => Some(&OVERLAY_SURFACES_SLOT_1[pipe.slot]),
         2 => Some(&OVERLAY_SURFACES_SLOT_2[pipe.slot]),
         3 => Some(&OVERLAY_SURFACES_SLOT_3[pipe.slot]),
@@ -3973,7 +3945,6 @@ fn ui4_direct_scanout_pool(
     plane_slot: usize,
 ) -> Option<&'static Mutex<Ui4DirectScanoutPool>> {
     match plane_slot {
-        0 => Some(&UI4_DIRECT_SCANOUT_SLOT_0[pipe.slot]),
         1 => Some(&UI4_DIRECT_SCANOUT_SLOT_1[pipe.slot]),
         2 => Some(&UI4_DIRECT_SCANOUT_SLOT_2[pipe.slot]),
         3 => Some(&UI4_DIRECT_SCANOUT_SLOT_3[pipe.slot]),
@@ -4003,14 +3974,6 @@ fn primary_swap_surface_pool(pipe: PipeInfo) -> &'static Mutex<PrimarySwapSurfac
 }
 
 fn overlay_surface_gpu_for_index(pipe: PipeInfo, plane_slot: usize, index: usize) -> Option<u64> {
-    if plane_slot == crate::ui4::PRIMARY_PLANE_SLOT {
-        if index >= OVERLAY_SWAP_BUFFER_COUNT {
-            return None;
-        }
-        return UI4_SLOT0_OVERLAY_GPU_BASE
-            .checked_add((pipe.slot as u64).checked_mul(OVERLAY_PIPE_GPU_STRIDE)?)?
-            .checked_add((index as u64).checked_mul(OVERLAY_SWAP_GPU_STRIDE)?);
-    }
     let plane_index = plane_slot.checked_sub(1)?;
     if plane_index >= OVERLAY_UNIVERSAL_PLANE_COUNT || index >= OVERLAY_SWAP_BUFFER_COUNT {
         return None;
@@ -4463,8 +4426,12 @@ fn blend_premultiplied_rgba_tile_into_primary_clipped(
                 let under = (u16::from(under) * inverse_alpha + 127) / 255;
                 u16::from(src).saturating_add(under).min(255) as u8
             };
-            let pixel =
-                u32::from_le_bytes([blend(b, dst[0]), blend(g, dst[1]), blend(r, dst[2]), 0]);
+            let pixel = u32::from_le_bytes([
+                blend(b, dst[0]),
+                blend(g, dst[1]),
+                blend(r, dst[2]),
+                blend(a, dst[3]),
+            ]);
             unsafe {
                 core::ptr::write_volatile(dst_row.add(col), pixel);
             }
@@ -4859,6 +4826,43 @@ fn ensure_primary_swap_surface_for_pipe(
     Some(surface)
 }
 
+/// Allocate both primary swap buffers while the display is warm.  The fifth
+/// window must not be the first operation that asks the allocator for a full
+/// scanout-sized surface.
+fn prepare_ui4_primary_swap_surfaces(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+    width: u32,
+    height: u32,
+) -> bool {
+    {
+        let pool = primary_swap_surface_pool(pipe).lock();
+        if pool.matches(width, height, pipe) && pool.surfaces.iter().all(Option::is_some) {
+            return true;
+        }
+    }
+    let Some(first) = ensure_primary_swap_surface_for_pipe(dev, pipe, width, height) else {
+        return false;
+    };
+    {
+        let mut pool = primary_swap_surface_pool(pipe).lock();
+        if !pool.matches(width, height, pipe) {
+            return false;
+        }
+        pool.front_index = Some(first.buffer_index);
+    }
+    let second = ensure_primary_swap_surface_for_pipe(dev, pipe, width, height);
+    let mut pool = primary_swap_surface_pool(pipe).lock();
+    pool.front_index = None;
+    if second.is_none() || pool.surfaces.iter().any(Option::is_none) {
+        return false;
+    }
+    let full = CompositionDamageRegion::from_rect(CompositionDamageRect::new(0, 0, width, height));
+    pool.damage_debt = [full; PRIMARY_SWAP_BUFFER_COUNT];
+    pool.composited = [false; PRIMARY_SWAP_BUFFER_COUNT];
+    true
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum GpgpuCompositionResult {
     Unavailable,
@@ -4987,21 +4991,6 @@ pub(crate) fn queue_ui4_primary_composition(
     sparse_static_painter: bool,
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
-    if tiles.is_empty() {
-        // Retiring a direct Slot0 producer must not depend on the RCS
-        // compositor that the producer was deliberately routed around. The
-        // slot-local overlay pool supports plane 0, so reuse its proven
-        // transparent CPU park and batched SURFLIVE lifecycle. The returned
-        // target still names hardware plane 0; `Overlay` here describes the
-        // generic RGBA surface transaction, not a different plane.
-        return queue_ui4_overlay_composition(
-            crate::ui4::PRIMARY_PLANE_SLOT,
-            tiles,
-            damage,
-            false,
-            reason,
-        );
-    }
     let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
     let target = active_display_pipeline_target().ok_or(Ui4AsyncCompositionError::Unavailable)?;
     let pipe = target
@@ -5013,6 +5002,9 @@ pub(crate) fn queue_ui4_primary_composition(
     }
     let change = clip_composition_damage_region(damage, target.width, target.height);
     if change.is_empty() {
+        return Err(Ui4AsyncCompositionError::Unavailable);
+    }
+    if !prepare_ui4_primary_swap_surfaces(dev, pipe, target.width, target.height) {
         return Err(Ui4AsyncCompositionError::Unavailable);
     }
     let surface = ensure_primary_swap_surface_for_pipe(dev, pipe, target.width, target.height)
@@ -5922,14 +5914,10 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
         return GpgpuCompositionResult::Unavailable;
     }
 
-    // The layer kernel dispatches one work item per pixel of the damage
-    // bounding rect and walks every layer inside it, so its cost follows the
-    // box that encloses the sources rather than the sources themselves. The
-    // painter below emits one ordered sprite-quad run per tile clipped to
-    // `tile & damage`, which is what slot0 needs once it carries the UI4 stack
-    // instead of a lone producer. Both paths blend premultiplied source-over;
-    // only the cost model differs.
-    if asynchronous && !sparse_static_painter {
+    // The async Slot0 kernel owns one output pixel at a time.  In its opaque
+    // rectangle mode it walks the z descriptors from top to bottom, copies
+    // the first covering frame pixel, and never source-over blends frames.
+    if asynchronous {
         let Some(bounds) = damage
             .bounding_rect()
             .and_then(|rect| clip_composition_damage(rect, surface.width, surface.height))

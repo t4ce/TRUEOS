@@ -8,6 +8,7 @@ pub(crate) mod disc;
 pub(crate) mod format;
 pub(crate) mod fslog;
 pub(crate) mod grid;
+pub(crate) mod gridp;
 pub(crate) mod helio;
 pub(crate) mod hyper;
 pub(crate) mod install;

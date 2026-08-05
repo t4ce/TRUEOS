@@ -593,6 +593,58 @@ impl WindowBroker {
         window.revision = next_serial(window.revision);
     }
 
+    /// Give the visible application windows their deterministic base layout:
+    /// one window starts on opaque Slot0, then the next three occupy slots
+    /// 1-3.  Once there are more than four, the bottom windows share Slot0 in
+    /// broker-z order and the newest three retain the hardware planes.
+    fn rebalance_application_planes(&mut self, output: OutputId, now_ms: u64) {
+        let mut ordered: Vec<(WindowId, i32, usize)> = self
+            .windows
+            .iter()
+            .enumerate()
+            .filter(|(_, window)| {
+                window.state != WindowState::Closed
+                    && window.output == output
+                    && window.plane != WindowPlane::Interaction
+            })
+            .filter_map(|(slot, window)| {
+                Some((
+                    WindowId(pack_handle(slot, window.generation).ok()?),
+                    window.placement.z,
+                    slot,
+                ))
+            })
+            .collect();
+        ordered.sort_unstable_by_key(|(id, z, _)| (*z, *id));
+        let stack_count = ordered.len().saturating_sub(LEASE_PLANE_COUNT);
+        self.leases = [None; LEASE_PLANE_COUNT];
+        for (rank, (id, _, slot)) in ordered.into_iter().enumerate() {
+            let plane = if stack_count <= 1 {
+                if rank == 0 {
+                    WindowPlane::Primary
+                } else {
+                    Self::lease_plane(rank - 1)
+                }
+            } else if rank < stack_count {
+                WindowPlane::Primary
+            } else {
+                Self::lease_plane(rank - stack_count)
+            };
+            let window = &mut self.windows[slot];
+            if window.plane != plane {
+                window.plane = plane;
+                window.damage = Some(DamageRegion::FULL);
+                window.revision = next_serial(window.revision);
+            }
+            if let Some(index) = Self::lease_index(plane.slot()) {
+                self.leases[index] = Some(PlaneLease {
+                    window: id,
+                    last_hot_ms: now_ms,
+                });
+            }
+        }
+    }
+
     /// Raise the lease at `index` to the topmost lease plane, exchanging
     /// places with whoever holds it.
     ///
@@ -787,7 +839,8 @@ impl WindowBroker {
             }
             return Ok(requested);
         }
-        Ok(self.claim_lease(id, now_ms).unwrap_or(WindowPlane::Primary))
+        let _ = (id, now_ms);
+        Ok(WindowPlane::Primary)
     }
 
     fn create(
@@ -851,6 +904,7 @@ impl WindowBroker {
         } else {
             self.windows.push(record);
         }
+        self.rebalance_application_planes(request.output, now_ms);
         self.mark_composition_changed();
         Ok(id)
     }
@@ -1908,11 +1962,15 @@ pub(crate) fn publish_window_frames(
 
 pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), WindowBrokerError> {
     let mut broker = WINDOW_BROKER.lock();
-    let window = broker.checked_window_mut(owner, id)?;
-    window.state = WindowState::Closed;
-    window.damage = None;
-    window.revision = next_serial(window.revision);
+    let output = {
+        let window = broker.checked_window_mut(owner, id)?;
+        window.state = WindowState::Closed;
+        window.damage = None;
+        window.revision = next_serial(window.revision);
+        window.output
+    };
     broker.release_lease_of(id);
+    broker.rebalance_application_planes(output, embassy_time::Instant::now().as_millis());
     broker.mark_composition_changed();
     drop(broker);
     super::cursor_frame_inout::frame_closed(owner, id);

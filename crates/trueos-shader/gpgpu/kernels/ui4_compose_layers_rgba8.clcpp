@@ -12,6 +12,7 @@
 #define UI4_LAYER_DWORDS 12u
 #define UI4_COMPOSE_FLAG_BASE_XRGB (1u << 0)
 #define UI4_COMPOSE_FLAG_DEST_XRGB (1u << 1)
+#define UI4_COMPOSE_FLAG_OPAQUE_RECTS (1u << 2)
 
 static inline uint div255(uint value)
 {
@@ -96,6 +97,38 @@ __kernel void ui4_compose_layers_rgba8(
         color = xrgb_to_rgba(base_xrgb[y * base_pitch_pixels + x]);
     }
 
+    // Slot0 is a rectangular visibility stack. Its frame surfaces may have
+    // authored alpha internally, but frames are never source-over blended
+    // with each other: the topmost covering rectangle owns this output pixel.
+    // Display hardware subsequently blends Slot0's final RGBA pixel over Pipe A.
+    if ((flags & UI4_COMPOSE_FLAG_OPAQUE_RECTS) != 0u) {
+        for (uint reverse_index = layer_count; reverse_index > 0u; --reverse_index) {
+            uint layer_index = reverse_index - 1u;
+            uint d = layer_index * UI4_LAYER_DWORDS;
+            ulong src_gpu = ((ulong)layers[d + 1u] << 32) | (ulong)layers[d + 0u];
+            uint src_pitch_pixels = layers[d + 2u] >> 2;
+            uint src_width = layers[d + 3u];
+            uint src_height = layers[d + 4u];
+            int dst_x = as_int(layers[d + 5u]);
+            int dst_y = as_int(layers[d + 6u]);
+            uint layer_width = layers[d + 7u];
+            uint layer_height = layers[d + 8u];
+
+            int rel_x = (int)x - dst_x;
+            int rel_y = (int)y - dst_y;
+            if (rel_x < 0 || rel_y < 0 || (uint)rel_x >= layer_width
+                || (uint)rel_y >= layer_height || src_width == 0u || src_height == 0u
+                || layer_width == 0u || layer_height == 0u) {
+                continue;
+            }
+
+            uint sx = min(((uint)rel_x * src_width) / layer_width, src_width - 1u);
+            uint sy = min(((uint)rel_y * src_height) / layer_height, src_height - 1u);
+            __global const uint *src_rgba = (__global const uint *)src_gpu;
+            color = src_rgba[sy * src_pitch_pixels + sx];
+            break;
+        }
+    } else {
     __attribute__((opencl_unroll_hint(1)))
     for (uint layer_index = 0u; layer_index < layer_count; ++layer_index) {
         uint d = layer_index * UI4_LAYER_DWORDS;
@@ -122,6 +155,7 @@ __kernel void ui4_compose_layers_rgba8(
         __global const uint *src_rgba = (__global const uint *)src_gpu;
         uint src = apply_opacity(src_rgba[sy * src_pitch_pixels + sx], opacity);
         color = premul_src_over(src, color);
+    }
     }
 
     uint output = (flags & UI4_COMPOSE_FLAG_DEST_XRGB) != 0u

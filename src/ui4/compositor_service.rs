@@ -859,17 +859,13 @@ fn queue_async_plane(
             selected.len(),
         );
     }
-    // Slot0 joins the same premultiplied-RGBA application-plane contract at
-    // compositor startup and has its own direct-scanout alias pool. Keep the
-    // ordinary primary swap chain for real composition, but let a lone
-    // dirty/double FontScene use the exact released producer allocation on all
-    // four application planes. No render/compositor job is needed in that
-    // case: the display lease remains pinned until SURFLIVE proves the flip.
-    let direct_font_required =
-        local_direct.is_some_and(|(window, _)| dirty_double_font_scene(window));
-    let direct_target_allowed =
-        !matches!(plan.target, CompositionTarget::Primary) || direct_font_required;
-    if direct_target_allowed && let Some((window, view)) = local_direct {
+    // Slot0 is a transparent CPU-painted virtual stack.  It never imports a
+    // producer directly; slots 1-3 remain the hardware RGBA/direct path.
+    let direct_font_required = !matches!(plan.target, CompositionTarget::Primary)
+        && local_direct.is_some_and(|(window, _)| dirty_double_font_scene(window));
+    if !matches!(plan.target, CompositionTarget::Primary)
+        && let Some((window, view)) = local_direct
+    {
         let slot = target_plane_slot(plan.target);
         if direct_overlay_eligible(window, view) {
             if let Some(release) = view.gpu_release {
@@ -934,7 +930,7 @@ fn queue_async_plane(
                         && !DIRTY_FONT_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel)
                     {
                         crate::log_info!(target: "ui4";
-                            "ui4/font-direct-present: mode=lone-plane slots=0-3 buffering=dirty/double backend=display-ggtt-alias+surflive source_ownership=stable-front+producer-back compositor_jobs=0 cpu_frame_copy=0 fallback=retry-direct log=once\n"
+                            "ui4/font-direct-present: mode=lone-plane slots=1-3 buffering=dirty/double backend=display-ggtt-alias+surflive source_ownership=stable-front+producer-back compositor_jobs=0 cpu_frame_copy=0 fallback=retry-direct log=once\n"
                         );
                     }
                     if pending.direct_leases[slot].is_some() {
@@ -1068,6 +1064,10 @@ fn queue_async_plane(
                     tiles.len(),
                 );
             }
+            crate::log_trace!(target: "ui4";
+                "ui4/slot0-compose backend=cpu-premultiplied-src-over windows={} order=broker-z alpha=preserved pipe_bottom=visible-where-empty\n",
+                tiles.len(),
+            );
             crate::intel::queue_ui4_primary_composition(
                 &tiles,
                 plan.damage,

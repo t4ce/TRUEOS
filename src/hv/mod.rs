@@ -3403,20 +3403,20 @@ fn blueprint_forward_app_command(vm_id: u8, raw: &str) -> bool {
 
 fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
     let trimmed = raw.trim();
+    let vmx_command = trimmed.strip_prefix("vmx_");
     if blueprint_app_command_passthrough_enabled(vm_id) {
-        let mut words = trimmed.splitn(2, char::is_whitespace);
-        if words.next() == Some("vmx") {
-            let command = words
-                .next()
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            blueprint_control_shell_vmx_command(vm_id, command.unwrap_or("help"));
+        if let Some(command) = vmx_command {
+            blueprint_control_shell_vmx_command(vm_id, command);
         } else if !trimmed.is_empty() && !blueprint_forward_app_command(vm_id, trimmed) {
             blueprint_control_shell_line(vm_id, "vmx-shell: Blueprint command channel unavailable");
         }
         return;
     }
-    blueprint_control_shell_vmx_command(vm_id, raw);
+    let Some(command) = vmx_command else {
+        blueprint_control_shell_line(vm_id, "VMX controls require the `vmx_` prefix");
+        return;
+    };
+    blueprint_control_shell_vmx_command(vm_id, command);
 }
 
 fn blueprint_control_shell_vmx_command(vm_id: u8, raw: &str) {
@@ -3448,25 +3448,24 @@ fn blueprint_control_shell_vmx_command(vm_id: u8, raw: &str) {
         }
         "help" | "?" => {
             let text = if blueprint_app_command_passthrough_enabled(vm_id) {
-                "VM controls: vmx env|smp|help|stop|pause|snapshot|preserve\n\
-                 Player commands are entered without a prefix\n\
+                "VM controls: vmx_tui vmx_env vmx_smp vmx_leave vmx_stop vmx_pause vmx_snapshot vmx_preserve\n\
+                 Blueprint commands are entered without a prefix\n\
                  stop: stop without a checkpoint\n\
                  pause: preserve-pause; resume by vmid from F2 pause\n\
                  snapshot: Blueprint Ready checkpoint; durable and resumable\n\
                  preserve: preserve-stop; checkpoint first, then tear down"
             } else {
-                "commands: tui env smp leave help stop pause snapshot preserve\n\
-                 tui: re-enter this Blueprint's terminal UI\n\
-                 tui demo: launch the built-in three-button TUI preview\n\
-                 leave: return to the default Matrix slot\n\
-                 stop: stop without a checkpoint\n\
-                 pause: preserve-pause; resume by vmid from F2 pause\n\
-                 snapshot: Blueprint Ready checkpoint; durable and resumable\n\
-                 preserve: preserve-stop; checkpoint first, then tear down"
+                "VMX controls: vmx_tui vmx_env vmx_smp vmx_leave vmx_stop vmx_pause vmx_snapshot vmx_preserve\n\
+                 vmx_tui: re-enter this Blueprint's terminal UI\n\
+                 vmx_leave: return to the default Matrix slot\n\
+                 vmx_stop: stop without a checkpoint\n\
+                 vmx_pause: preserve-pause; resume by vmid from F2 pause\n\
+                 vmx_snapshot: Blueprint Ready checkpoint; durable and resumable\n\
+                 vmx_preserve: preserve-stop; checkpoint first, then tear down"
             };
             blueprint_control_shell_write_text(vm_id, text);
         }
-        "tui" | "terminal" | "term" => {
+        "tui" => {
             if blueprint_app_command_passthrough_enabled(vm_id) {
                 blueprint_control_shell_line(
                     vm_id,
@@ -3477,7 +3476,7 @@ fn blueprint_control_shell_vmx_command(vm_id: u8, raw: &str) {
                     blueprint_control_shell_line(vm_id, "vmx-shell: tui demo is not available");
                 }
             } else if argument.is_some() {
-                blueprint_control_shell_line(vm_id, "usage: tui [demo]");
+                blueprint_control_shell_line(vm_id, "usage: vmx_tui [demo]");
             } else if !blueprint_console_tui_reentry_ready(vm_id) {
                 blueprint_control_shell_line(
                     vm_id,
@@ -3527,7 +3526,7 @@ fn blueprint_control_shell_vmx_command(vm_id: u8, raw: &str) {
                 }
             }
         }
-        "snapshot" | "snap" => {
+        "snapshot" => {
             let state = vm_state(vm_id);
             if !state.replicatable {
                 blueprint_control_shell_line(

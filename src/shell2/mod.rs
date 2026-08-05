@@ -337,9 +337,6 @@ impl<'a> AlignedWriter<'a> {
         if !slot_text.is_empty() {
             self.left_text(STATUS_ROW, slot_text.as_str());
         }
-        if active_matrix_slot_is_vmx(output_mask) {
-            self.vmx_status();
-        }
         self.io.raw_write_str(ecma48::RESET);
     }
 
@@ -349,9 +346,26 @@ impl<'a> AlignedWriter<'a> {
             let styled =
                 alloc::format!("{}", term_style::paint("VMX").bold().color(VMX_STATUS_RGB));
             self.push_plain(&mut text, styled.as_str());
-            self.push_plain(&mut text, " ");
+            for (command, color) in [
+                ("tui", Some(VMX_TUI_RGB)),
+                ("env", None),
+                ("smp", None),
+                ("leave", None),
+            ] {
+                self.push_plain(&mut text, " ");
+                if let Some(color) = color {
+                    let styled = alloc::format!("{}", term_style::paint(command).color(color));
+                    self.push_plain(&mut text, styled.as_str());
+                } else {
+                    self.push_plain(&mut text, command);
+                }
+            }
             self.push_function_key_label(&mut text, "[ESC]");
-            self.push_plain(&mut text, " leave");
+            for command in ["stop", "pause", "snapshot", "preserve"] {
+                self.push_plain(&mut text, " ");
+                let styled = alloc::format!("{}", term_style::paint(command).color(VMX_STATUS_RGB));
+                self.push_plain(&mut text, styled.as_str());
+            }
         } else {
             self.push_plain(&mut text, self.mode_commands_text(mode).as_str());
         }
@@ -363,31 +377,6 @@ impl<'a> AlignedWriter<'a> {
             ShellMode2::Apps => shell2_apps::command_names_text(),
             ShellMode2::Cmd => command_names_status_text(),
         }
-    }
-
-    fn vmx_status(&self) {
-        let mut text = AllocString::new();
-        for (command, color) in [
-            ("tui", Some(VMX_TUI_RGB)),
-            ("env", None),
-            ("smp", None),
-            ("leave", None),
-            ("stop", Some(VMX_STATUS_RGB)),
-            ("pause", Some(VMX_STATUS_RGB)),
-            ("snapshot", Some(VMX_STATUS_RGB)),
-            ("preserve", Some(VMX_STATUS_RGB)),
-        ] {
-            if !text.is_empty() {
-                self.push_plain(&mut text, " ");
-            }
-            if let Some(color) = color {
-                let styled = alloc::format!("{}", term_style::paint(command).color(color));
-                self.push_plain(&mut text, styled.as_str());
-            } else {
-                self.push_plain(&mut text, command);
-            }
-        }
-        self.right_text(STATUS_ROW, text.as_str());
     }
 
     fn push_plain(&self, out: &mut AllocString, text: &str) {
@@ -710,7 +699,7 @@ fn banner_left_visible_width(output_mask: OutputMask) -> usize {
 
 fn banner_right_visible_width(output_mask: OutputMask) -> usize {
     if active_matrix_slot_is_vmx(output_mask) {
-        return ecma48::visible_width("VMX [ESC] leave");
+        return ecma48::visible_width("VMX tui env smp leave[ESC] stop pause snapshot preserve");
     }
 
     let cmd_width = ecma48::visible_width(command_names_status_text().as_str());
@@ -1287,16 +1276,22 @@ fn parse_double_section_operator(submitted: &str) -> Option<DoubleSectionOperato
 fn is_vmx_control_command(submitted: &str) -> bool {
     matches!(
         submitted.split_whitespace().next().unwrap_or(""),
-        "env" | "smp" | "stop" | "pause" | "snapshot" | "snap" | "preserve"
+        "vmx_env"
+            | "vmx_smp"
+            | "vmx_help"
+            | "vmx_stop"
+            | "vmx_pause"
+            | "vmx_snapshot"
+            | "vmx_preserve"
     )
 }
 
 fn is_vmx_tui_command(submitted: &str) -> bool {
-    matches!(submitted.split_whitespace().next().unwrap_or(""), "tui" | "terminal" | "term")
+    matches!(submitted.split_whitespace().next().unwrap_or(""), "vmx_tui")
 }
 
 fn is_vmx_leave_command(submitted: &str) -> bool {
-    matches!(submitted.split_whitespace().next().unwrap_or(""), "leave")
+    matches!(submitted.split_whitespace().next().unwrap_or(""), "vmx_leave")
 }
 
 fn redraw_active_view(

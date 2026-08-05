@@ -1007,23 +1007,25 @@ async fn start_app_task(
 }
 
 fn start_app(spawner: &Spawner, io: &'static dyn ShellBackend2, mut args: Vec<String>) {
-    let instance = if args.first().is_some_and(|arg| arg == "new") {
-        args.remove(0);
-        if args.len() < 2 {
-            line(io, "apps: usage `start new <app-id-or-name> <instance-name> [app args...]`");
-            return;
-        }
-        let name = args.remove(1);
-        crate::hv::BlueprintInstanceRequest::named(name)
-    } else {
-        crate::hv::BlueprintInstanceRequest::default()
-    };
-    let selector = (!args.is_empty()).then(|| args.remove(0));
-    let app_args = args;
+    if args.len() > 1 {
+        line(
+            io,
+            "apps: launch arguments are not supported; start the app, then configure it in VMX",
+        );
+        return;
+    }
+    let selector = args.pop();
+    let app_args = Vec::new();
     let target = matrix_target_for_backend(io);
     let width = line_width_for_backend(io);
     set_matrix_target_active(&target, true);
-    match start_app_task(target.clone(), width, selector, app_args, instance) {
+    match start_app_task(
+        target.clone(),
+        width,
+        selector,
+        app_args,
+        crate::hv::BlueprintInstanceRequest::default(),
+    ) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             set_matrix_target_active(&target, false);
@@ -1112,10 +1114,7 @@ pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitte
         AppsCommand::Online => online_app(spawner, io, rest),
         AppsCommand::Dl => {
             if rest.first().is_some_and(|arg| arg == "new") {
-                line(
-                    io,
-                    "apps: `dl` installs only; use `dl <app>`, then `start new <app> <instance-name>`",
-                );
+                line(io, "apps: `dl` installs only; use `dl <app>`, then `start <app>`");
             } else {
                 super::shell2_dl::submit_download_args(spawner, io, rest);
             }

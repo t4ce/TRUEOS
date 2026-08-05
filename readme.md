@@ -114,9 +114,9 @@ submodule/gitlink, or replaced ISO breaks the chain. Release assets also include
 
 ### Tools
 ```
-sudo apt install git make 7zip nodejs libigc2-tools rustup npm autoconf automake mtools nasm xorriso
+sudo apt install git make 7zip nodejs libigc2-tools rustup npm autoconf intel-ocloc  automake mtools nasm xorriso
 rustup toolchain install nightly-2026-07-10
-
+sudo apt-get install -y clang-21 llvm-spirv-21
 vs-code
 npm install express
 

@@ -366,10 +366,15 @@ async fn online_run_task(target: MatrixTarget, width: usize, mut args: Vec<Strin
         return;
     }
 
+    // Host launch is deliberately argument-free.  App configuration belongs
+    // to the VMX shell after the Blueprint is running.  `new` remains an
+    // internal compatibility transport for named launchers such as GridP.
     let instance = if args.first().is_some_and(|arg| arg == "new") {
         args.remove(0);
         if args.len() < 2 {
-            log("apps: usage `online new <app-id-or-name> <instance-name> [app args...]`");
+            log(
+                "apps: launch arguments are not supported; start the app, then configure it in VMX",
+            );
             set_matrix_target_active(&target, false);
             return;
         }
@@ -377,7 +382,16 @@ async fn online_run_task(target: MatrixTarget, width: usize, mut args: Vec<Strin
         let name = args.remove(0);
         (selector, crate::hv::BlueprintInstanceRequest::named(name))
     } else {
-        (args.remove(0), crate::hv::BlueprintInstanceRequest::default())
+        let selector = args.remove(0);
+        if !args.is_empty() {
+            log(
+                "apps: launch arguments are not supported; start the app, then configure it in VMX",
+            );
+            set_matrix_target_active(&target, false);
+            return;
+        }
+        let instance = crate::hv::BlueprintInstanceRequest::default();
+        (selector, instance)
     };
     let (selector, instance) = instance;
     let app_args = args;
