@@ -1060,12 +1060,12 @@ fn queue_async_plane(
                 && !STACK_PAINTER_LOGGED.swap(true, Ordering::AcqRel)
             {
                 crate::log_info!(target: "ui4";
-                    "ui4/stack-painter: slot0 backend=guc-rcs-sprite-quad-runs windows={} order=broker-z blend=premultiplied-src-over runs=one-per-tile layer_kernel=0 cost=sum-of-tile-damage log=once\n",
+                    "ui4/stack-painter: slot0 backend=guc-rcs-ui4-layer-kernel windows={} order=broker-z pixel_op=topmost-rect-overwrite layer_kernel=1 cost=one-walker-per-damage-pixel log=once\n",
                     tiles.len(),
                 );
             }
             crate::log_trace!(target: "ui4";
-                "ui4/slot0-compose backend=cpu-premultiplied-src-over windows={} order=broker-z alpha=preserved pipe_bottom=visible-where-empty\n",
+                "ui4/slot0-compose backend=guc-rcs-opaque-rect-overwrite windows={} order=broker-z frame_blend=none alpha=preserved pipe_bottom=visible-where-empty\n",
                 tiles.len(),
             );
             crate::intel::queue_ui4_primary_composition(

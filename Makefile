@@ -183,6 +183,12 @@ intel-gpu-bake-font-instance-cpp:
 intel-gpu-bake-lfm25-q8-packed-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_lfm25_q8_packed.sh"
 
+intel-gpu-bake-kokoro-conv1d-cpp:
+	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_kokoro_conv1d.sh"
+
+intel-gpu-bake-kokoro-qgemm-cpp:
+	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" bash "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_kokoro_qgemm.sh"
+
 intel-gpu-bake-spirit-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_spirit.sh"
 
@@ -195,6 +201,8 @@ intel-gpu-bake-cpp-artifacts:
 	$(MAKE) --no-print-directory intel-gpu-bake-shadertoy-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-font-instance-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-lfm25-q8-packed-cpp
+	$(MAKE) --no-print-directory intel-gpu-bake-kokoro-conv1d-cpp
+	$(MAKE) --no-print-directory intel-gpu-bake-kokoro-qgemm-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-spirit-cpp
 
 intel-gpu-refresh-cpp-artifacts: intel-gpu-bake-cpp-artifacts

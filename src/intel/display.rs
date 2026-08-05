@@ -3271,7 +3271,7 @@ pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
     let ready =
         plane_ready && prepare_ui4_primary_swap_surfaces(dev, pipe, primary.width, primary.height);
     crate::log_info!(target: "ui4";
-        "ui4/application-plane-stack slot0=rgba8-transparent/preallocated-double/cpu-src-over pipe_bottom=visible-where-slot0-alpha-zero slots=1-3=rgba8-direct-or-composed slot4=interaction-only ready={} pipe={}\n",
+        "ui4/application-plane-stack slot0=rgba8-transparent/preallocated-double/gpu-opaque-rect-overwrite pipe_bottom=visible-where-slot0-alpha-zero slots=1-3=rgba8-direct-or-composed slot4=interaction-only ready={} pipe={}\n",
         ready as u8,
         pipe.name,
     );
@@ -4354,90 +4354,6 @@ fn dma_flush_primary_swap_region(
     damage: CompositionDamageRegion,
 ) -> bool {
     dma_flush_surface_region(surface.virt, surface.byte_len, surface.pitch_bytes as usize, damage)
-}
-
-fn blend_premultiplied_rgba_tile_into_primary_clipped(
-    surface: PrimarySwapSurface,
-    tile: &RgbaOverlayTile<'_>,
-    damage: CompositionDamageRect,
-) -> bool {
-    if surface.virt.is_null()
-        || tile.width == 0
-        || tile.height == 0
-        || tile.source_width == 0
-        || tile.source_height == 0
-        || tile.pitch_bytes < tile.source_width as usize * 4
-    {
-        return false;
-    }
-    let Some(required) = tile
-        .pitch_bytes
-        .checked_mul(tile.source_height as usize - 1)
-        .and_then(|bytes| bytes.checked_add(tile.source_width as usize * 4))
-    else {
-        return false;
-    };
-    if tile.pixels.len() < required {
-        return false;
-    }
-
-    let tile_rect = CompositionDamageRect::new(tile.x, tile.y, tile.width, tile.height);
-    let Some(draw) = intersect_composition_damage(tile_rect, damage)
-        .and_then(|rect| clip_composition_damage(rect, surface.width, surface.height))
-    else {
-        return true;
-    };
-    let copy_w = draw.width as usize;
-    let copy_h = draw.height as usize;
-    let destination_x = draw.x.saturating_sub(tile.x);
-    let destination_y = draw.y.saturating_sub(tile.y);
-
-    for row in 0..copy_h {
-        let source_y = tile_source_coordinate(
-            u64::from(destination_y).saturating_add(row as u64),
-            tile.source_height,
-            tile.height,
-        );
-        let src_row = &tile.pixels[source_y * tile.pitch_bytes..];
-        let dst_row = unsafe {
-            surface
-                .virt
-                .add(
-                    (draw.y as usize + row)
-                        .saturating_mul(surface.pitch_bytes as usize)
-                        .saturating_add(draw.x as usize * 4),
-                )
-                .cast::<u32>()
-        };
-        for col in 0..copy_w {
-            let source_x = tile_source_coordinate(
-                u64::from(destination_x).saturating_add(col as u64),
-                tile.source_width,
-                tile.width,
-            );
-            let offset = source_x * 4;
-            let r = apply_tile_opacity(src_row[offset], tile.opacity);
-            let g = apply_tile_opacity(src_row[offset + 1], tile.opacity);
-            let b = apply_tile_opacity(src_row[offset + 2], tile.opacity);
-            let a = apply_tile_opacity(src_row[offset + 3], tile.opacity);
-            let dst = unsafe { core::ptr::read_volatile(dst_row.add(col)) }.to_le_bytes();
-            let inverse_alpha = u16::from(u8::MAX - a);
-            let blend = |src: u8, under: u8| -> u8 {
-                let under = (u16::from(under) * inverse_alpha + 127) / 255;
-                u16::from(src).saturating_add(under).min(255) as u8
-            };
-            let pixel = u32::from_le_bytes([
-                blend(b, dst[0]),
-                blend(g, dst[1]),
-                blend(r, dst[2]),
-                blend(a, dst[3]),
-            ]);
-            unsafe {
-                core::ptr::write_volatile(dst_row.add(col), pixel);
-            }
-        }
-    }
-    true
 }
 
 fn init_default_overlay_marker(dev: crate::intel::Dev, primary: PrimarySurface) -> bool {
@@ -5871,11 +5787,9 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
     asynchronous: bool,
     sparse_static_painter: bool,
 ) -> GpgpuCompositionResult {
-    if surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES
-        || (!asynchronous
-            && (!UI4_GPGPU_MULTI_RUN_COMPOSITOR_ENABLED
-                || !crate::intel::gpgpu::sprite_quad_worklist_ready()))
-    {
+    // Slot0 has exactly one legal compositor: the asynchronous layer kernel
+    // in opaque-rectangle mode. Do not revive the old sprite source-over path.
+    if !asynchronous || surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES {
         return GpgpuCompositionResult::Unavailable;
     }
     let Some(primary) = primary_surface_for_pipe(surface.pipe) else {

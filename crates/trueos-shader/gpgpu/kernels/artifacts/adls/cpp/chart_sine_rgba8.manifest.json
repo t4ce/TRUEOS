@@ -5,7 +5,7 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "17ed738f4dc6b89d6662799e7ce32c5766e2c03b792dd4249398350927a2f9ac",
+      "sha256": "4c113a84bfd66fb6dee7cce598df8a712bfea965ed9fafbb39dfa6a15806e2dc",
       "size_bytes": 35328,
       "type": "relocatable",
       "ze_info_section_offset": 27296,
@@ -414,7 +414,7 @@
           ]
         },
         "ze_info_major": 1,
-        "ze_info_minor": 64
+        "ze_info_minor": 62
       }
     ],
     "spirv": {
@@ -502,45 +502,33 @@
       "compiler_libraries": [
         {
           "aliases": [
-            "igc2/NOTICES.txt"
-          ],
-          "name": "igc2/NOTICES.txt",
-          "resolved_name": "NOTICES.txt",
-          "sha256": "3c9d5dffed3faf89159e3cc714c5512dee5e9c554faf57a5b00823f4356e2cf9",
-          "size_bytes": 29813
-        },
-        {
-          "aliases": [
-            "libiga64.so",
             "libiga64.so.2",
-            "libiga64.so.2.30.0+0"
+            "libiga64.so.2.28.4+0"
           ],
-          "name": "libiga64.so",
-          "resolved_name": "libiga64.so.2.30.0+0",
-          "sha256": "995a0a884635f646571baec65e0875c834ec9d8578695ea7745b2a8db67b95e5",
-          "size_bytes": 3622752
+          "name": "libiga64.so.2",
+          "resolved_name": "libiga64.so.2.28.4+0",
+          "sha256": "e7e369909ee38c51d8c92b4dc4f31cf57661c54dd6bc6fa7761324c53228a3c8",
+          "size_bytes": 3622928
         },
         {
           "aliases": [
-            "libigc.so",
             "libigc.so.2",
-            "libigc.so.2.30.0+0"
+            "libigc.so.2.28.4+0"
           ],
-          "name": "libigc.so",
-          "resolved_name": "libigc.so.2.30.0+0",
-          "sha256": "364b5fc477bbd0e0feb3251dce0f0bb1302f95d12f696e5e56d942a27f03e6b0",
-          "size_bytes": 92251800
+          "name": "libigc.so.2",
+          "resolved_name": "libigc.so.2.28.4+0",
+          "sha256": "7034ccb0013c7a52c087d6ac7cbb1c83579d8bcdb1659ba6fd7aa014bd903fec",
+          "size_bytes": 98574944
         },
         {
           "aliases": [
-            "libigdfcl.so",
             "libigdfcl.so.2",
-            "libigdfcl.so.2.30.0+0"
+            "libigdfcl.so.2.28.4+0"
           ],
-          "name": "libigdfcl.so",
-          "resolved_name": "libigdfcl.so.2.30.0+0",
-          "sha256": "73c884854e8524831cb847a2f1beef5e5de9845498213c5c6592c2e4fdc0222d",
-          "size_bytes": 2246232
+          "name": "libigdfcl.so.2",
+          "resolved_name": "libigdfcl.so.2.28.4+0",
+          "sha256": "c9403ea70f968adde3f211d4f9eec956e8e542832a00394d051a73bb8ecb6450",
+          "size_bytes": 2395160
         },
         {
           "aliases": [
@@ -548,8 +536,8 @@
           ],
           "name": "libocloc.so",
           "resolved_name": "libocloc.so",
-          "sha256": "d1e9ac0a406b123cc78a42e926e99faa30f74656bdfeb41e351225c108a8b177",
-          "size_bytes": 2456288
+          "sha256": "a266ec3b7e84e703583be917adb8d7dfe1679277596ecd5c11c72f8704d25450",
+          "size_bytes": 2001344
         },
         {
           "aliases": [
@@ -557,8 +545,8 @@
           ],
           "name": "libopencl-clang.so.16",
           "resolved_name": "libopencl-clang.so.16",
-          "sha256": "efceb7dc85e7f002e782a6189d79ad2d76221a982b39277fbe4fb60356d81b4c",
-          "size_bytes": 114866240
+          "sha256": "b2352ba42d29e2cb87ca75a74721aff6a3f719d818a26576efcbf8b759994479",
+          "size_bytes": 127154912
         }
       ],
       "frontend": "clang-clcpp",
@@ -589,27 +577,40 @@
           "version": "Ubuntu clang version 21.1.8 (6ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix"
         },
         "llvm_spirv": {
-          "dynamic_compiler_libraries": [],
-          "executable_sha256": "b4eb2c129fcad0fa301d3624be3cd298daca6bbdc83b83b251e62217a6be49c4",
-          "version": "LLVM (http://llvm.org/):\n  LLVM version 21.0.0git\n  Optimized build with assertions."
+          "dynamic_compiler_libraries": [
+            {
+              "resolved_name": "libLLVM.so.21.1",
+              "sha256": "12dca1fc2d9f5d4ff35315fc2aa3a97b615b41ec6a71d3ce545efb62c075d902",
+              "size_bytes": 138567144,
+              "soname": "libLLVM.so.21.1"
+            },
+            {
+              "resolved_name": "libLLVMSPIRVLib.so.21.1",
+              "sha256": "886522626cf769d94bf834dda08ee66615570b332a8b33c01cae53eb891deb2c",
+              "size_bytes": 4054864,
+              "soname": "libLLVMSPIRVLib.so.21.1"
+            }
+          ],
+          "executable_sha256": "c517b89fbeb3d58eb2d18c46dd006cd22660ff907a74987149156ad4e2af0b1b",
+          "version": "Ubuntu LLVM version 21.1.8\n  Optimized build."
         },
         "ocloc": {
           "dynamic_compiler_libraries": [
             {
               "resolved_name": "libocloc.so",
-              "sha256": "d1e9ac0a406b123cc78a42e926e99faa30f74656bdfeb41e351225c108a8b177",
-              "size_bytes": 2456288,
+              "sha256": "a266ec3b7e84e703583be917adb8d7dfe1679277596ecd5c11c72f8704d25450",
+              "size_bytes": 2001344,
               "soname": "libocloc.so"
             }
           ],
-          "executable_sha256": "a32b2551706458e01a855e14e974674a38102ec83b42586931b2b09f78cbb384",
-          "version": "25.31.034666"
+          "executable_sha256": "c7e3d9430b7ae2cab247029f72b22033fd7af5987fe5aab3996cf196602ef328",
+          "version": "26.05.037020"
         }
       }
     },
     "toolchain_lock": {
       "path": "tools/intel-gpu-bakery/toolchains/adls-cpp-proof.lock.json",
-      "sha256": "27ad3211d327aeba76fd7fa913ba603f23782b06a4b00c25af4ae72eba85c0e6"
+      "sha256": "048afdb4e1525e0e72dfd1033448e6b7776b6a71fbf04f093d13505e232d6671"
     }
   },
   "rust_symbols": {
