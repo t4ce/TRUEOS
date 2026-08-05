@@ -1754,6 +1754,7 @@ fn topmost_window_at(x: u32, y: u32) -> Option<WindowSnapshot> {
     super::visible_windows_for_output(output)
         .into_iter()
         .filter(|window| window.state == WindowState::Ready)
+        .filter(|window| window.interaction.hit_testable)
         .filter(|window| placement_contains(window.placement, x, y))
         // Plane slot is the hardware pipe-local stacking boundary. Only z
         // order windows against peers in the same slot; a later slot remains

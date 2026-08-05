@@ -129,7 +129,7 @@ pub(crate) use window_broker::{
     commit_window_frame_replacement, create_window, finish_window_session,
     finish_window_session_with_request, latest_window_broker_snapshot, move_window,
     publish_window_frame, publish_window_frames, replace_window_frame, retire_frame_when_released,
-    set_window_placement, set_windows_visible, subscribe_window_broker_snapshots,
+    set_window_hit_testable, set_window_placement, set_windows_visible, subscribe_window_broker_snapshots,
     take_window_first_presentation, toggle_window_maximized,
     ui4_window_broker_snapshot_service_task, visible_windows_for_output,
     visible_windows_for_output_with_revision, wait_for_window_composition_change,

@@ -130,6 +130,11 @@ static BLUEPRINT_PENDING_LAUNCH_STATES: [Mutex<Option<BlueprintPendingLaunchStat
     TRUEOS_VM_ID_LIMIT] = [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_LAUNCH_STATES: [Mutex<Option<BlueprintLaunchState>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
+// The loader consumes BLUEPRINT_LAUNCH_STATES at guest entry. Keep the
+// one-shot VMX minishell script separately so the guest can read it through
+// its virtual filesystem after entry.
+static BLUEPRINT_VMX_LAUNCH_SCRIPTS: [Mutex<Option<AllocString>>; TRUEOS_VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_PROCESS_CONTEXTS: [Mutex<Option<BlueprintProcessContext>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_CONSOLE_LOG_BUFFERS: [Mutex<Option<AllocString>>; TRUEOS_VM_ID_LIMIT] =
@@ -452,6 +457,7 @@ struct BlueprintPendingLaunchState {
     archive: AllocString,
     module_bytes: AllocVec<u8>,
     app_args: AllocVec<AllocString>,
+    launch_script: Option<AllocString>,
     instance: BlueprintInstanceRequest,
     console_target: Option<MatrixTarget>,
     console_surface: BlueprintConsoleSurface,
@@ -463,6 +469,9 @@ pub struct BlueprintLaunchState {
     pub module_bytes: AllocVec<u8>,
     pub unpacked_bytes: AllocVec<u8>,
     pub app_args: AllocVec<AllocString>,
+    /// Kernel-owned, one-shot VMX minishell input. It is exposed only through
+    /// the per-VM virtual `vFile:launch` stream and never through argv.
+    pub launch_script: Option<AllocString>,
     pub app_fs_root: AllocString,
     pub identity: BlueprintInstanceIdentity,
 }
@@ -1342,6 +1351,7 @@ pub fn start_blueprint_app_vm(
     archive: AllocString,
     module_bytes: AllocVec<u8>,
     app_args: AllocVec<AllocString>,
+    launch_script: Option<AllocString>,
     instance: BlueprintInstanceRequest,
     console_target: Option<MatrixTarget>,
     console_surface: BlueprintConsoleSurface,
@@ -1355,6 +1365,7 @@ pub fn start_blueprint_app_vm(
             archive,
             module_bytes,
             app_args,
+            launch_script,
             instance,
             console_target,
             console_surface,
@@ -1623,6 +1634,7 @@ pub fn eject(vm_id: u8) -> Result<bool, EjectError> {
     memory::release_guest_rel_exec_for_vm(vm_id);
     let launch = take_blueprint_launch(vm_id);
     drop(launch);
+    clear_blueprint_launch_script(vm_id);
     clear_blueprint_process_context(vm_id);
     if let Some(slot) = BLUEPRINT_INSTANCE_IDENTITIES.get(vm_id as usize) {
         let _ = slot.lock().take();
@@ -2291,6 +2303,7 @@ fn prepare_blueprint_launch_on_lane(
             module_bytes: pending.module_bytes,
             unpacked_bytes,
             app_args: pending.app_args,
+            launch_script: pending.launch_script,
             app_fs_root,
             identity,
         },
@@ -2320,6 +2333,9 @@ pub fn stage_blueprint_launch(
         return Err(StartError::UnsupportedVmId);
     };
     let Some(process_slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return Err(StartError::UnsupportedVmId);
+    };
+    let Some(launch_script_slot) = BLUEPRINT_VMX_LAUNCH_SCRIPTS.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };
     let app_fs_root = state.app_fs_root.clone();
@@ -2365,6 +2381,7 @@ pub fn stage_blueprint_launch(
         exit_reason: None,
     };
     let console_target = process_context.console_target.clone();
+    *launch_script_slot.lock() = state.launch_script.clone();
     *slot.lock() = Some(guest_state);
     *process_slot.lock() = Some(process_context);
     if let Some(log_slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
@@ -2393,6 +2410,21 @@ pub fn stage_blueprint_launch(
 
 pub fn take_blueprint_launch(vm_id: u8) -> Option<BlueprintLaunchState> {
     BLUEPRINT_LAUNCH_STATES.get(vm_id as usize)?.lock().take()
+}
+
+/// Consume the VMX minishell launch script for one guest filesystem read.
+/// The value deliberately is not serialized into a portable VM snapshot.
+pub(crate) fn take_blueprint_launch_script(vm_id: u8) -> Option<AllocString> {
+    BLUEPRINT_VMX_LAUNCH_SCRIPTS
+        .get(vm_id as usize)?
+        .lock()
+        .take()
+}
+
+fn clear_blueprint_launch_script(vm_id: u8) {
+    if let Some(slot) = BLUEPRINT_VMX_LAUNCH_SCRIPTS.get(vm_id as usize) {
+        let _ = slot.lock().take();
+    }
 }
 
 const BLUEPRINT_PORTABLE_MAGIC: u32 = u32::from_le_bytes(*b"BPS1");
@@ -2566,6 +2598,7 @@ pub fn restore_blueprint_portable_state(
         module_bytes,
         unpacked_bytes,
         app_args,
+        launch_script: None,
         app_fs_root,
         identity: identity.clone(),
     };
@@ -4117,6 +4150,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     } else {
         memory::release_guest_rel_exec_for_vm(vm_id);
         let _ = take_blueprint_launch(vm_id);
+        clear_blueprint_launch_script(vm_id);
         clear_blueprint_process_context(vm_id);
         if let Some(identity) = BLUEPRINT_INSTANCE_IDENTITIES.get(vm_id as usize) {
             let _ = identity.lock().take();

@@ -125,6 +125,7 @@ struct AppVmLaunchRequest {
     archive: String,
     module_bytes: Vec<u8>,
     app_args: Vec<String>,
+    launch_script: Option<String>,
     instance: crate::hv::BlueprintInstanceRequest,
     target: MatrixTarget,
     preflight_complete: bool,
@@ -491,21 +492,24 @@ fn enqueue_blueprint_request(
     source: &'static str,
     module_bytes: Vec<u8>,
     app_args: Vec<String>,
+    launch_script: Option<String>,
     instance: crate::hv::BlueprintInstanceRequest,
     preflight_complete: bool,
 ) {
     crate::log!(
-        "app-vm-run-queue: enqueue archive={} source={} bytes={} args={} preflight={}\n",
+        "app-vm-run-queue: enqueue archive={} source={} bytes={} args={} launch_script={} preflight={}\n",
         archive.as_str(),
         source,
         module_bytes.len(),
         app_args.len(),
+        launch_script.is_some() as u8,
         preflight_complete as u8
     );
     enqueue_request(AppVmLaunchRequest {
         archive,
         module_bytes,
         app_args,
+        launch_script,
         instance,
         target,
         preflight_complete,
@@ -1020,6 +1024,7 @@ fn start_blueprint_launch(
         request.archive.clone(),
         request.module_bytes.clone(),
         request.app_args.clone(),
+        request.launch_script.clone(),
         request.instance.clone(),
         Some(request.target.clone()),
         plan.console_surface,
@@ -1115,6 +1120,24 @@ pub(crate) fn enqueue_blueprint_bytes_with_instance(
     app_args: Vec<String>,
     instance: crate::hv::BlueprintInstanceRequest,
 ) -> Result<(), String> {
+    enqueue_blueprint_bytes_with_instance_and_launch_script(
+        target,
+        archive,
+        module_bytes,
+        app_args,
+        instance,
+        None,
+    )
+}
+
+pub(crate) fn enqueue_blueprint_bytes_with_instance_and_launch_script(
+    target: MatrixTarget,
+    archive: String,
+    module_bytes: Vec<u8>,
+    app_args: Vec<String>,
+    instance: crate::hv::BlueprintInstanceRequest,
+    launch_script: Option<String>,
+) -> Result<(), String> {
     let required_readiness = crate::hv::blueprint::prebind_required_readiness(
         module_bytes.as_slice(),
     )
@@ -1141,7 +1164,16 @@ pub(crate) fn enqueue_blueprint_bytes_with_instance(
     set_matrix_target_app_label(&target, app_label.as_str());
     let line = alloc::format!("apps: queued {}", app_label);
     log_run_target_line(&target, line.as_str());
-    enqueue_blueprint_request(target, archive, "direct", module_bytes, app_args, instance, false);
+    enqueue_blueprint_request(
+        target,
+        archive,
+        "direct",
+        module_bytes,
+        app_args,
+        launch_script,
+        instance,
+        false,
+    );
     Ok(())
 }
 
@@ -1197,6 +1229,7 @@ async fn submit_module_bytes_to_target_async(
             source,
             module_bytes,
             app_args,
+            None,
             instance,
             true,
         );

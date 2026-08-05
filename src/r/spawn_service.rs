@@ -1276,6 +1276,7 @@ struct BlueprintAutostart {
     online_selector: Option<&'static str>,
     slot: &'static str,
     args: &'static [&'static str],
+    launch_script: Option<&'static str>,
     settle_ms: u64,
 }
 
@@ -1287,6 +1288,17 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         online_selector: Some("swarm"),
         slot: "swm",
         args: &[],
+        launch_script: None,
+        settle_ms: 250,
+    },
+    BlueprintAutostart {
+        enabled: true,
+        label: "img",
+        archive: "img.bp",
+        online_selector: Some("img"),
+        slot: "img",
+        args: &[],
+        launch_script: Some("show kernel:logo center nohit\nshow kernel:intel-graphics bottom-left\nshow kernel:bgrt bottom-right"),
         settle_ms: 250,
     },
     BlueprintAutostart {
@@ -1296,6 +1308,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         online_selector: None,
         slot: "hor",
         args: &[],
+        launch_script: None,
         settle_ms: 250,
     },
     BlueprintAutostart {
@@ -1305,6 +1318,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         online_selector: None,
         slot: "man",
         args: &[],
+        launch_script: None,
         settle_ms: 750,
     },
     BlueprintAutostart {
@@ -1314,6 +1328,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         online_selector: None,
         slot: "flg",
         args: &[],
+        launch_script: None,
         settle_ms: 750,
     },
     BlueprintAutostart {
@@ -1323,6 +1338,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         online_selector: None,
         slot: "wth",
         args: &[],
+        launch_script: None,
         settle_ms: 750,
     },
     BlueprintAutostart {
@@ -1332,6 +1348,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         online_selector: None,
         slot: "chr",
         args: &[],
+        launch_script: None,
         settle_ms: 750,
     },
     BlueprintAutostart {
@@ -1341,6 +1358,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         online_selector: None,
         slot: "h_w",
         args: &[],
+        launch_script: None,
         settle_ms: 750,
     },
     BlueprintAutostart {
@@ -1350,6 +1368,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         online_selector: None,
         slot: "cht",
         args: &[],
+        launch_script: None,
         settle_ms: 750,
     },
     BlueprintAutostart {
@@ -1359,6 +1378,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         online_selector: None,
         slot: "fs",
         args: &[],
+        launch_script: None,
         settle_ms: 750,
     },
     BlueprintAutostart {
@@ -1368,6 +1388,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         online_selector: None,
         slot: "bat",
         args: &["--help"],
+        launch_script: None,
         settle_ms: 750,
     },
 ];
@@ -1404,10 +1425,18 @@ async fn bp_autostart_task(spawner: Spawner) {
         );
 
         if let Some(selector) = config.online_selector {
-            let mut args = Vec::with_capacity(config.args.len().saturating_add(1));
-            args.push(String::from(selector));
-            args.extend(config.args.iter().map(|arg| String::from(*arg)));
-            match crate::shell2::submit_online_to_target(&spawner, target, args) {
+            let submitted = match config.launch_script {
+                Some(script) => crate::shell2::submit_online_launch_script_to_target(
+                    &spawner, target, selector, script,
+                ),
+                None => {
+                    let mut args = Vec::with_capacity(config.args.len().saturating_add(1));
+                    args.push(String::from(selector));
+                    args.extend(config.args.iter().map(|arg| String::from(*arg)));
+                    crate::shell2::submit_online_to_target(&spawner, target, args)
+                }
+            };
+            match submitted {
                 Ok(()) => crate::log!(
                     "spawn-svc: bp-autostart submitted label={} selector={} slot={} source=online\n",
                     config.label,
@@ -1838,7 +1867,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     unix_fd_probe_task_spec(),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "bp-autostart",
         BP_AUTOSTART_READY,
         &BP_AUTOSTART_STARTED,

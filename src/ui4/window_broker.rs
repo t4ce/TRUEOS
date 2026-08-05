@@ -184,6 +184,8 @@ pub(crate) struct WindowInteraction {
     pub(crate) movable: bool,
     pub(crate) maximizable: bool,
     pub(crate) receives_input: bool,
+    /// Whether the window participates in cursor selection and pointer hit tests.
+    pub(crate) hit_testable: bool,
     /// The producer can replace its complete frame allocation after a
     /// maximize/restore extent notification. Fixed-size producers still use
     /// maximize as a broker-owned 1:1 centering operation.
@@ -197,6 +199,7 @@ impl WindowInteraction {
         movable: true,
         maximizable: true,
         receives_input: false,
+        hit_testable: true,
         resize_on_maximize: false,
     };
 
@@ -206,6 +209,7 @@ impl WindowInteraction {
         movable: true,
         maximizable: true,
         receives_input: true,
+        hit_testable: true,
         resize_on_maximize: false,
     };
 
@@ -215,6 +219,7 @@ impl WindowInteraction {
         movable: true,
         maximizable: true,
         receives_input: true,
+        hit_testable: true,
         resize_on_maximize: true,
     };
 }
@@ -1677,6 +1682,26 @@ pub(crate) fn set_window_placement(
     if changed {
         super::cursor_frame_inout::frame_visual_changed(owner, id);
     }
+    Ok(())
+}
+
+/// Include or exclude a window from cursor selection without changing its
+/// placement, rendered frame, or producer-owned input policy.
+pub(crate) fn set_window_hit_testable(
+    owner: WindowOwner,
+    id: WindowId,
+    hit_testable: bool,
+) -> Result<(), WindowBrokerError> {
+    let mut broker = WINDOW_BROKER.lock();
+    let window = broker.checked_window_mut(owner, id)?;
+    if window.interaction.hit_testable == hit_testable {
+        return Ok(());
+    }
+    window.interaction.hit_testable = hit_testable;
+    window.revision = next_serial(window.revision);
+    broker.mark_composition_changed();
+    drop(broker);
+    super::cursor_frame_inout::frame_visual_changed(owner, id);
     Ok(())
 }
 

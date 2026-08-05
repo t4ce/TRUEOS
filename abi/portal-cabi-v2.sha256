@@ -101,4 +101,10 @@
 # are cleanly split. UI4 keeps menu rendering, hit testing, and teardown, and no
 # application-owned slot-4 surface is introduced. The locked pointer-event
 # record is unchanged and older v2 artifacts import neither symbol.
-b53e137f7b1f8c1b87c206dce8822001b9cf62139ceb1ac612b3fe1ff2ebdd34
+# The image-source info/read calls are strictly additive. They copy bounded
+# kernel-owned image bytes into a Blueprint and do not expose kernel pointers;
+# older v2 artifacts import neither symbol.
+# The UI4 frame hit-testability call is strictly additive. It lets a Blueprint
+# exclude one frame from cursor selection without changing frame geometry,
+# composition, or the behavior of existing UI4 clients.
+30c85f0c97ed0d9752b7a0c619cbf841bd1147e4b8733530b481e1a79c53e94c

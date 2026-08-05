@@ -180,6 +180,9 @@ pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D; // arg0 window,payload 
 pub const OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN: u32 = 0x11E; // arg0 window -> kernel-deadline wait + acquired back buffer
 pub const OP_BP_UI4_CONTEXT_MENU_REGISTER: u32 = 0x11F; // arg0 window,payload labelled entries -> rc
 pub const OP_BP_UI4_CONTEXT_MENU_EVENT_TAKE: u32 = 0x120; // arg0 window -> rc + TrueosUi4ContextMenuEvent payload
+pub const OP_BP_IMAGE_SOURCE_INFO: u32 = 0x121; // payload source name -> ImageSourceInfo
+pub const OP_BP_IMAGE_SOURCE_READ: u32 = 0x122; // arg0 offset,arg1 cap,payload source name -> bytes
+pub const OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE: u32 = 0x123; // arg0 window,arg1 enabled -> rc
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1881,6 +1884,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE => {
+            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_set_hit_testable(
+                arg0 as u32,
+                arg1 as u32,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_UI4_SCENE_FRAME_RESIZE => {
             let (width, height) = unpack_u32_pair(arg1);
             let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_resize(
@@ -2176,6 +2187,45 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 let copied = (count as usize).min(cap);
                 write_record_slice_response(vm_id, seq, count as u64, &routes[..copied]);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_IMAGE_SOURCE_INFO => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Ok(name) = core::str::from_utf8(payload) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            match crate::ui4::blueprint_text::blueprint_image_source_info(name) {
+                Ok(info) => write_record_response(vm_id, seq, 0, &info),
+                Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_IMAGE_SOURCE_READ => {
+            const MAX_READ_BYTES: usize = 16 * 1024;
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Ok(name) = core::str::from_utf8(payload) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let capacity = (arg1 as usize).min(MAX_READ_BYTES);
+            if capacity == 0 {
+                write_response(vm_id, seq, STATUS_OK, (-3i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let mut bytes = alloc::vec![0u8; capacity];
+            match crate::ui4::blueprint_text::copy_blueprint_image_source(name, arg0 as usize, &mut bytes) {
+                Ok(copied) => {
+                    write_record_slice_response(vm_id, seq, copied as u64, &bytes[..copied])
+                }
+                Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
             }
             DispatchOutcome::Resume
         }
@@ -3302,17 +3352,24 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 );
                 return DispatchOutcome::Resume;
             };
-            let Ok(path) = crate::r::path::FsPath::parse(path, false) else {
-                write_response(
-                    vm_id,
-                    seq,
-                    STATUS_OK,
-                    (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
-                    0,
-                );
-                return DispatchOutcome::Resume;
+            // `vFile:` names kernel-provided virtual data, not TrueOSFS
+            // paths. Preserve the identifier verbatim so the async-FS
+            // provider can dispatch it before filesystem normalization.
+            let path = if op == OP_BP_ASYNC_FS_READ_START && path == "vFile:launch" {
+                path.into()
+            } else {
+                let Ok(path) = crate::r::path::FsPath::parse(path, false) else {
+                    write_response(
+                        vm_id,
+                        seq,
+                        STATUS_OK,
+                        (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                        0,
+                    );
+                    return DispatchOutcome::Resume;
+                };
+                path.to_relative_string()
             };
-            let path = path.to_relative_string();
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
             let rc = if op == OP_BP_ASYNC_FS_READ_START {
                 crate::r::io::async_fs_cabi::start_read(owner, path)

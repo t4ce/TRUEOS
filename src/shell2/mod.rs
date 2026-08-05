@@ -210,6 +210,7 @@ impl CsiInput {
 #[derive(Clone, PartialEq, Eq)]
 struct ChromeState {
     line_width: usize,
+    slot_strip_revision: u64,
     active_slot: matrix::MatrixSlotId,
     active_slot_activity: matrix::MatrixSlotActivity,
     app_label: Option<AllocString>,
@@ -628,6 +629,7 @@ fn configure_output_view(out: &AlignedWriter<'_>, output_mask: OutputMask) {
 fn current_chrome_state(output_mask: OutputMask, mode: ShellMode2) -> ChromeState {
     ChromeState {
         line_width: line_width_for_output(output_mask),
+        slot_strip_revision: matrix::slot_strip_revision(),
         active_slot: matrix::active_slot_id(output_mask),
         active_slot_activity: matrix::active_slot_activity(output_mask),
         app_label: matrix::active_slot_app_label(output_mask),
@@ -805,6 +807,23 @@ pub(crate) fn submit_online_to_target(
     let width = with_matrix_target_lease(&target, || line_width_for_output(target.output_mask))
         .unwrap_or(matrix::DEFAULT_MATRIX_SLOT_LINE_WIDTH);
     shell2_dl::submit_online_to_target(spawner, target, width, args)
+}
+
+pub(crate) fn submit_online_launch_script_to_target(
+    spawner: &Spawner,
+    target: MatrixTarget,
+    selector: &str,
+    launch_script: &str,
+) -> Result<(), embassy_executor::SpawnError> {
+    let width = with_matrix_target_lease(&target, || line_width_for_output(target.output_mask))
+        .unwrap_or(matrix::DEFAULT_MATRIX_SLOT_LINE_WIDTH);
+    shell2_dl::submit_online_launch_script_to_target(
+        spawner,
+        target,
+        width,
+        AllocString::from(selector),
+        AllocString::from(launch_script),
+    )
 }
 
 pub(crate) fn matrix_target_for_slot_name_selected(

@@ -49,6 +49,7 @@ use super::{
     gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, publish_frame_buffer,
     publish_gpgpu_scene_frame_buffer, publish_window_frame, replace_window_frame,
     set_window_cursor_icon, set_window_custom_cursor, set_window_placement,
+    set_window_hit_testable,
     take_owner_input_events, take_window_first_presentation, window_input_routes, window_placement,
     writable_rgba_view,
 };
@@ -66,6 +67,9 @@ const MAX_PENDING_POINTER_EVENTS: usize = 256;
 const MAX_PENDING_PAN_EVENTS: usize = 256;
 const MAX_PENDING_KEYBOARD_EVENTS: usize = 256;
 const MAX_INPUT_ROUTES: usize = 32;
+const IMAGE_SOURCE_READ_CHUNK_BYTES: usize = 16 * 1024;
+const IMAGE_SOURCE_FORMAT_JPEG: u32 = 1;
+const IMAGE_SOURCE_FORMAT_RGBA8: u32 = 2;
 const RETAINED_TEXT_MASK_BATCH_CAPACITY: usize = 64;
 const TEXT_ROWS_WIRE_HEADER_BYTES: usize = 16;
 const TEXT_ROW_WIRE_HEADER_BYTES: usize = 12;
@@ -90,6 +94,94 @@ const _: () = {
             <= crate::intel::gpgpu::DIRECT_RCS_PPGTT_LIMIT_BYTES
     );
 };
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct BlueprintImageSourceInfo {
+    pub format: u32,
+    pub width: u32,
+    pub height: u32,
+    pub byte_len: u32,
+}
+
+const IMAGE_SOURCE_FORMAT_PNG: u32 = 3;
+const INTEL_GRAPHICS_LOGO_PNG: &[u8] = include_bytes!("../../Intel_Graphics_logo.png");
+
+pub(crate) fn blueprint_image_source_info(name: &str) -> Result<BlueprintImageSourceInfo, i32> {
+    match name {
+        "kernel:logo" => Ok(BlueprintImageSourceInfo {
+            format: IMAGE_SOURCE_FORMAT_JPEG,
+            width: 0,
+            height: 0,
+            byte_len: crate::virtio_gpu_logo::embedded_logo_jpeg().len() as u32,
+        }),
+        "kernel:bgrt" => {
+            let Some((width, height, pixels)) = crate::efi::acpi::bgrt::decoded_logo_rgba() else {
+                return Err(ERROR_NOT_FOUND);
+            };
+            let byte_len = pixels.len().checked_mul(4).ok_or(ERROR_INVALID)?;
+            Ok(BlueprintImageSourceInfo {
+                format: IMAGE_SOURCE_FORMAT_RGBA8,
+                width: width as u32,
+                height: height as u32,
+                byte_len: byte_len as u32,
+            })
+        }
+        "kernel:intel-graphics" => Ok(BlueprintImageSourceInfo {
+            format: IMAGE_SOURCE_FORMAT_PNG,
+            width: 565,
+            height: 565,
+            byte_len: INTEL_GRAPHICS_LOGO_PNG.len() as u32,
+        }),
+        _ => Err(ERROR_NOT_FOUND),
+    }
+}
+
+pub(crate) fn copy_blueprint_image_source(
+    name: &str,
+    offset: usize,
+    out: &mut [u8],
+) -> Result<usize, i32> {
+    if out.len() > IMAGE_SOURCE_READ_CHUNK_BYTES {
+        return Err(ERROR_INVALID);
+    }
+    match name {
+        "kernel:logo" => {
+            let source = crate::virtio_gpu_logo::embedded_logo_jpeg();
+            let available = source.get(offset..).ok_or(ERROR_INVALID)?;
+            let copied = available.len().min(out.len());
+            out[..copied].copy_from_slice(&available[..copied]);
+            Ok(copied)
+        }
+        "kernel:bgrt" => {
+            let Some((_, _, pixels)) = crate::efi::acpi::bgrt::decoded_logo_rgba() else {
+                return Err(ERROR_NOT_FOUND);
+            };
+            let total = pixels.len().checked_mul(4).ok_or(ERROR_INVALID)?;
+            if offset > total {
+                return Err(ERROR_INVALID);
+            }
+            let copied = (total - offset).min(out.len());
+            for (relative, byte) in out[..copied].iter_mut().enumerate() {
+                let pixel = pixels[(offset + relative) / 4];
+                *byte = match (offset + relative) % 4 {
+                    0 => (pixel >> 16) as u8,
+                    1 => (pixel >> 8) as u8,
+                    2 => pixel as u8,
+                    _ => u8::MAX,
+                };
+            }
+            Ok(copied)
+        }
+        "kernel:intel-graphics" => {
+            let available = INTEL_GRAPHICS_LOGO_PNG.get(offset..).ok_or(ERROR_INVALID)?;
+            let copied = available.len().min(out.len());
+            out[..copied].copy_from_slice(&available[..copied]);
+            Ok(copied)
+        }
+        _ => Err(ERROR_NOT_FOUND),
+    }
+}
 
 /// Longest UTF-8 label one context-menu row may carry. UI4 renders a fixed
 /// number of characters per row; this bound keeps the wire record small while
@@ -1836,6 +1928,38 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i3
         return ERROR_UI4;
     }
     surface.placement = placement;
+    0
+}
+
+/// Include or exclude this Blueprint frame from UI4 cursor hit testing.
+pub extern "C" fn trueos_cabi_ui4_scene_frame_set_hit_testable(
+    window_id: u32,
+    enabled: u32,
+) -> i32 {
+    if enabled > 1 {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE,
+            window_id as u64,
+            enabled as u64,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface.window
+    };
+    if set_window_hit_testable(owner, window, enabled != 0).is_err() {
+        return ERROR_UI4;
+    }
     0
 }
 
@@ -3873,6 +3997,51 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_close(window_id: u32) -> i32 {
     trueos_cabi_ui4_solara_frame_close_requested(window_id, 0)
 }
 
+pub unsafe extern "C" fn trueos_cabi_image_source_info(
+    name_ptr: *const u8,
+    name_len: usize,
+    out: *mut BlueprintImageSourceInfo,
+) -> i32 {
+    if name_ptr.is_null() || out.is_null() || name_len == 0 {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_image_source_info(name_ptr, name_len, out) };
+    }
+    let Ok(name) = core::str::from_utf8(unsafe { core::slice::from_raw_parts(name_ptr, name_len) }) else {
+        return ERROR_INVALID;
+    };
+    match blueprint_image_source_info(name) {
+        Ok(info) => {
+            unsafe { out.write(info) };
+            0
+        }
+        Err(error) => error,
+    }
+}
+
+pub unsafe extern "C" fn trueos_cabi_image_source_read(
+    name_ptr: *const u8,
+    name_len: usize,
+    offset: usize,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if name_ptr.is_null() || out_ptr.is_null() || name_len == 0 || out_cap == 0 {
+        return ERROR_INVALID as isize;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_image_source_read(name_ptr, name_len, offset, out_ptr, out_cap) };
+    }
+    let Ok(name) = core::str::from_utf8(unsafe { core::slice::from_raw_parts(name_ptr, name_len) }) else {
+        return ERROR_INVALID as isize;
+    };
+    let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) };
+    copy_blueprint_image_source(name, offset, out)
+        .map(|copied| copied as isize)
+        .unwrap_or_else(|error| error as isize)
+}
+
 pub extern "C" fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, flags: u32) -> i32 {
     if flags & !CLOSE_VALID_FLAGS != 0 {
         return ERROR_INVALID;
@@ -3938,6 +4107,61 @@ unsafe fn guest_font_sizes(out: *mut TrueosUi4SolaraFontSize, out_cap: usize) ->
         }
     }
     count as isize
+}
+
+unsafe fn guest_image_source_info(
+    name_ptr: *const u8,
+    name_len: usize,
+    out: *mut BlueprintImageSourceInfo,
+) -> i32 {
+    let name = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let mut response = [0u8; core::mem::size_of::<BlueprintImageSourceInfo>()];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_IMAGE_SOURCE_INFO,
+        0,
+        0,
+        name,
+        &mut response,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4;
+    }
+    let result = data as i64 as i32;
+    if result != 0 {
+        return result;
+    }
+    unsafe { out.write(core::ptr::read_unaligned(response.as_ptr().cast())) };
+    0
+}
+
+unsafe fn guest_image_source_read(
+    name_ptr: *const u8,
+    name_len: usize,
+    offset: usize,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if out_cap > IMAGE_SOURCE_READ_CHUNK_BYTES {
+        return ERROR_INVALID as isize;
+    }
+    let name = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+    let mut response = alloc::vec![0u8; out_cap];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_IMAGE_SOURCE_READ,
+        offset as u64,
+        out_cap as u64,
+        name,
+        response.as_mut_slice(),
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4 as isize;
+    }
+    let copied = data as usize;
+    if copied > out_cap {
+        return ERROR_UI4 as isize;
+    }
+    unsafe { core::ptr::copy_nonoverlapping(response.as_ptr(), out_ptr, copied) };
+    copied as isize
 }
 
 unsafe fn guest_context_menu_register(

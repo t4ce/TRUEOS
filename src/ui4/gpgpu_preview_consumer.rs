@@ -1321,6 +1321,7 @@ fn create_cpp_font_rush_preview(
             movable: false,
             maximizable: false,
             receives_input: false,
+            hit_testable: true,
             resize_on_maximize: false,
         },
     }) {

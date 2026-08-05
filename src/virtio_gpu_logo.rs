@@ -9,6 +9,10 @@ use crate::{pci, wait};
 
 const LOGO_JPEG: &[u8] = include_bytes!("../logo.jpg");
 
+pub(crate) const fn embedded_logo_jpeg() -> &'static [u8] {
+    LOGO_JPEG
+}
+
 const VIRTIO_PCI_VENDOR: u16 = 0x1AF4;
 const VIRTIO_GPU_DEVICE_MODERN: u16 = 0x1050;
 const VIRTIO_GPU_DEVICE_TRANSITIONAL: u16 = 0x1010;

@@ -348,7 +348,12 @@ async fn write_file(
 }
 
 #[embassy_executor::task(pool_size = 2)]
-async fn online_run_task(target: MatrixTarget, width: usize, mut args: Vec<String>) {
+async fn online_run_task(
+    target: MatrixTarget,
+    width: usize,
+    mut args: Vec<String>,
+    launch_script: Option<String>,
+) {
     let log = |text: &str| print_matrix_target_line(&target, text);
     if !wait_for_online_ready().await {
         log("apps: online network unavailable");
@@ -417,12 +422,13 @@ async fn online_run_task(target: MatrixTarget, width: usize, mut args: Vec<Strin
                 set_matrix_target_active(&target, false);
                 return;
             }
-            let _ = run::enqueue_blueprint_bytes_with_instance(
+            let _ = run::enqueue_blueprint_bytes_with_instance_and_launch_script(
                 target.clone(),
                 app.archive_name.clone(),
                 module_bytes,
                 app_args,
                 instance,
+                launch_script,
             );
         }
         Err(err) => log(alloc::format!("apps: online fetch failed: {}", err).as_str()),
@@ -492,7 +498,27 @@ pub(crate) fn submit_online_to_target(
     args: Vec<String>,
 ) -> Result<(), SpawnError> {
     set_matrix_target_active(&target, true);
-    match online_run_task(target.clone(), width, args) {
+    match online_run_task(target.clone(), width, args, None) {
+        Ok(token) => {
+            spawner.spawn(token);
+            Ok(())
+        }
+        Err(err) => {
+            set_matrix_target_active(&target, false);
+            Err(err)
+        }
+    }
+}
+
+pub(crate) fn submit_online_launch_script_to_target(
+    spawner: &Spawner,
+    target: MatrixTarget,
+    width: usize,
+    selector: String,
+    launch_script: String,
+) -> Result<(), SpawnError> {
+    set_matrix_target_active(&target, true);
+    match online_run_task(target.clone(), width, alloc::vec![selector], Some(launch_script)) {
         Ok(token) => {
             spawner.spawn(token);
             Ok(())

@@ -54,6 +54,7 @@ struct MatrixState {
     slots: Vec<MatrixSlot>,
     active_slot_ids: [MatrixSlotId; super::OUTPUT_SCOPE_COUNT],
     active_view_revisions: [u64; super::OUTPUT_SCOPE_COUNT],
+    slot_strip_revision: u64,
     view_line_widths: [usize; super::OUTPUT_SCOPE_COUNT],
     view_terminal_rows: [usize; super::OUTPUT_SCOPE_COUNT],
     live_user_input_record: VecDeque<LiveUserInputEntry>,
@@ -69,6 +70,7 @@ fn state() -> &'static spin::Mutex<MatrixState> {
             slots: Vec::new(),
             active_slot_ids: core::array::from_fn(|_| default_slot_id()),
             active_view_revisions: [1; super::OUTPUT_SCOPE_COUNT],
+            slot_strip_revision: 1,
             view_line_widths: [DEFAULT_MATRIX_SLOT_LINE_WIDTH; super::OUTPUT_SCOPE_COUNT],
             view_terminal_rows: [DEFAULT_MATRIX_VIEW_ROWS; super::OUTPUT_SCOPE_COUNT],
             live_user_input_record: VecDeque::new(),
@@ -154,6 +156,20 @@ fn bump_active_view_revision(state: &mut MatrixState, output_mask: super::Output
     let revision = active_view_revision_mut(state, output_mask);
     *revision = revision.wrapping_add(1).max(1);
     bump_revision(state);
+}
+
+/// A granted Matrix slot changes the left-aligned slot strip for every shell
+/// view, even when no view's active page changes.
+fn bump_slot_strip_revision(state: &mut MatrixState) {
+    state.slot_strip_revision = state.slot_strip_revision.wrapping_add(1).max(1);
+    for revision in &mut state.active_view_revisions {
+        *revision = revision.wrapping_add(1).max(1);
+    }
+    bump_revision(state);
+}
+
+pub(crate) fn slot_strip_revision() -> u64 {
+    state().lock().slot_strip_revision
 }
 
 fn active_slot_id_ref(state: &MatrixState, output_mask: super::OutputMask) -> &MatrixSlotId {
@@ -303,7 +319,7 @@ pub(crate) fn reserve_available_vm_slot_selected(
 
     if preferred_id != default_id && reserve_vm_slot_id(&mut guard, &preferred_id) {
         *active_slot_id_mut(&mut guard, output_mask) = preferred_id.clone();
-        bump_active_view_revision(&mut guard, output_mask);
+        bump_slot_strip_revision(&mut guard);
         return preferred_id;
     }
 
@@ -314,7 +330,7 @@ pub(crate) fn reserve_available_vm_slot_selected(
         }
         if reserve_vm_slot_id(&mut guard, &candidate) {
             *active_slot_id_mut(&mut guard, output_mask) = candidate.clone();
-            bump_active_view_revision(&mut guard, output_mask);
+            bump_slot_strip_revision(&mut guard);
             return candidate;
         }
     }
@@ -323,14 +339,14 @@ pub(crate) fn reserve_available_vm_slot_selected(
         let candidate = broad_slot_candidate(attempt);
         if reserve_vm_slot_id(&mut guard, &candidate) {
             *active_slot_id_mut(&mut guard, output_mask) = candidate.clone();
-            bump_active_view_revision(&mut guard, output_mask);
+            bump_slot_strip_revision(&mut guard);
             return candidate;
         }
     }
 
     let _ = reserve_vm_slot_id(&mut guard, &preferred_id);
     *active_slot_id_mut(&mut guard, output_mask) = preferred_id.clone();
-    bump_active_view_revision(&mut guard, output_mask);
+    bump_slot_strip_revision(&mut guard);
     preferred_id
 }
 
@@ -383,13 +399,13 @@ pub(crate) fn claim_available_app_slot_selected(
         .map(|slot| slot.id.clone())
     {
         *active_slot_id_mut(&mut guard, output_mask) = existing.clone();
-        bump_active_view_revision(&mut guard, output_mask);
+        bump_slot_strip_revision(&mut guard);
         return existing;
     }
 
     if preferred_id != default_id && claim_app_slot(&mut guard, &preferred_id, app_label) {
         *active_slot_id_mut(&mut guard, output_mask) = preferred_id.clone();
-        bump_active_view_revision(&mut guard, output_mask);
+        bump_slot_strip_revision(&mut guard);
         return preferred_id;
     }
 
@@ -400,7 +416,7 @@ pub(crate) fn claim_available_app_slot_selected(
         }
         if claim_app_slot(&mut guard, &candidate, app_label) {
             *active_slot_id_mut(&mut guard, output_mask) = candidate.clone();
-            bump_active_view_revision(&mut guard, output_mask);
+            bump_slot_strip_revision(&mut guard);
             return candidate;
         }
     }
@@ -409,14 +425,14 @@ pub(crate) fn claim_available_app_slot_selected(
         let candidate = broad_slot_candidate(attempt);
         if claim_app_slot(&mut guard, &candidate, app_label) {
             *active_slot_id_mut(&mut guard, output_mask) = candidate.clone();
-            bump_active_view_revision(&mut guard, output_mask);
+            bump_slot_strip_revision(&mut guard);
             return candidate;
         }
     }
 
     let _ = claim_app_slot(&mut guard, &preferred_id, app_label);
     *active_slot_id_mut(&mut guard, output_mask) = preferred_id.clone();
-    bump_active_view_revision(&mut guard, output_mask);
+    bump_slot_strip_revision(&mut guard);
     preferred_id
 }
 
