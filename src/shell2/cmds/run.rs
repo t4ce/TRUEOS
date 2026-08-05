@@ -942,20 +942,24 @@ fn start_blueprint_launch(
     {
         let label = app_label_for_archive(request.archive.as_str());
         log(alloc::format!(
-            "apps: {} can run several instances at once, but plain `start {}` always claims the single shared default slot - vm{} is holding it",
+            "apps: {} can run several instances at once, but an unnamed launch always claims the single shared default slot - vm{} is holding it",
             request.archive,
+            existing_vm
+        )
+        .as_str());
+        log(alloc::format!(
+            "apps:   `{} <name>` - launch another instance beside vm{}",
             label,
             existing_vm
         )
         .as_str());
         log(alloc::format!(
-            "apps:   `start new {} <name>` - launch another instance beside vm{}",
+            "apps:   `online new {} <name>` - same, launching from the online catalog",
             label,
-            existing_vm
         )
         .as_str());
         log(alloc::format!(
-            "apps:   `stop {}` - close the default instance, then `start {}` again",
+            "apps:   `stop {}` - close the default instance, then `{}` again",
             existing_vm,
             label
         )
@@ -1175,6 +1179,26 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
     archive_name: &str,
     app_args: Vec<String>,
 ) -> Result<&'static str, String> {
+    submit_archive_name_to_target_prefer_trueosfs_with_instance_async(
+        target,
+        archive_name,
+        app_args,
+        crate::hv::BlueprintInstanceRequest::default(),
+    )
+    .await
+}
+
+/// Launch an archive as a specific instance.
+///
+/// The default request claims the single shared default slot, so a caller that
+/// wants a second live copy of the same archive must name it. Naming is the
+/// only difference: the archive itself is unchanged.
+pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_with_instance_async(
+    target: MatrixTarget,
+    archive_name: &str,
+    app_args: Vec<String>,
+    instance: crate::hv::BlueprintInstanceRequest,
+) -> Result<&'static str, String> {
     if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
         if let Some((module_bytes, source)) =
             trueosfs_module_by_archive_name(disk, archive_name).await?
@@ -1184,7 +1208,7 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
                 archive_name,
                 module_bytes,
                 app_args,
-                crate::hv::BlueprintInstanceRequest::default(),
+                instance,
                 source,
             )
             .await;
@@ -1197,7 +1221,7 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
             archive_name,
             module_bytes,
             app_args,
-            crate::hv::BlueprintInstanceRequest::default(),
+            instance,
             "boot embedded",
         )
         .await;

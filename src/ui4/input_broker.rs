@@ -621,7 +621,33 @@ impl InputBroker {
         if secondary_released {
             let had_anchor = self.cursors[index].secondary_anchor.take().is_some();
             if had_anchor && !secondary_drop && !self.cursors[index].suppress_context_menu_open {
-                self.cursors[index].context_menu = Some((x, y));
+                // A frame owns the secondary-click gesture over its own pixels
+                // whenever it has registered a menu. The broker's only job here
+                // is to say where the click landed; it does not own the menu.
+                // The kernel desktop menu is therefore the no-frame case, plus
+                // frames which registered nothing.
+                let color = self.cursors[index].color;
+                let frame_menu = hit.and_then(|window| {
+                    super::context_menu::registered_request(window.owner, window.id)
+                        .map(|request| (window.owner, window.id, request))
+                });
+                match frame_menu {
+                    Some((menu_owner, menu_window, request)) => {
+                        if super::context_menu::open(
+                            source,
+                            menu_owner,
+                            menu_window,
+                            (x, y),
+                            color,
+                            request,
+                        )
+                        .is_err()
+                        {
+                            self.cursors[index].context_menu = Some((x, y));
+                        }
+                    }
+                    None => self.cursors[index].context_menu = Some((x, y)),
+                }
             }
             self.cursors[index].secondary_dragged = false;
         }

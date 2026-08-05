@@ -58,10 +58,12 @@ const MIN_ANIMATION_DURATION_MS: u32 = 16;
 const MAX_ANIMATION_DURATION_MS: u32 = 600_000;
 const MIN_SCALE_PERCENT: u32 = 1;
 const MAX_SCALE_PERCENT: u32 = 800;
-/// Each Blueprint exposes one local GridPaper document. The kernel leases
-/// those local documents onto this many independent resident service slots.
-const BLUEPRINT_INSTANCE_CAPACITY: usize = 1;
 const GRIDPAPER_POOL_SOFT_CAP: usize = 10;
+/// A Blueprint may expose as many local GridPaper documents as the pool has
+/// resident service slots. The pool is keyed by `(owner, local_instance_id)`
+/// and every slot is independent, so this is the pool's own depth rather than
+/// a separate, smaller limit.
+const BLUEPRINT_INSTANCE_CAPACITY: usize = GRIDPAPER_POOL_SOFT_CAP;
 const PRIMARY_INSTANCE_ID: u32 = 0;
 const NATIVE_SCALE_PERCENT: u16 = 100;
 

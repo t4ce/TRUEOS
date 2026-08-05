@@ -66,7 +66,8 @@ pub(crate) use compositor_service::{
 };
 pub(crate) use context_menu::{
     ContextMenuCloseReason, ContextMenuEntry, ContextMenuError, ContextMenuRequest,
-    ContextMenuResult, MAX_CONTEXT_MENU_ENTRIES,
+    ContextMenuResult, MAX_CONTEXT_MENU_ENTRIES, clear_window_menu as clear_window_context_menu,
+    register_window_menu as register_window_context_menu,
 };
 pub(crate) use cursor_frame_inout::{
     CursorFrameKey, GlobalKeyboardDisposition, GlobalKeyboardHookId, Ui4CursorIcon,

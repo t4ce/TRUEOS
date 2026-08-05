@@ -1250,36 +1250,31 @@ fn blueprint_context_menu_complete(result: crate::ui4::ContextMenuResult) {
     events.push_back((result.owner, result.window, event));
 }
 
-/// Request one OS-rendered context menu anchored at the given cursor.
+/// Give this frame a standing context menu, replacing any previous one.
 ///
-/// UI4 rejects the request unless that cursor currently has this exact window
-/// selected, so a Blueprint can only raise a menu over its own focused frame.
-/// The menu is one-shot: there is no registry, and the outcome arrives through
+/// The frame owns the menu over its own pixels: UI4 raises it when a secondary
+/// click lands on this window, and leaves that gesture to the kernel's desktop
+/// menu for windows which register nothing. Passing zero entries clears the
+/// registration. Outcomes arrive through
 /// [`trueos_cabi_ui4_context_menu_event_take`].
-pub unsafe extern "C" fn trueos_cabi_ui4_context_menu_open(
+pub unsafe extern "C" fn trueos_cabi_ui4_context_menu_register(
     window_id: u32,
-    source: *const TrueosUi4CursorSource,
-    context: u64,
     entries: *const TrueosUi4ContextMenuEntry,
     entry_count: usize,
 ) -> i32 {
-    if source.is_null()
-        || entries.is_null()
-        || entry_count == 0
-        || entry_count > crate::ui4::MAX_CONTEXT_MENU_ENTRIES
+    if entry_count > crate::ui4::MAX_CONTEXT_MENU_ENTRIES || (entry_count != 0 && entries.is_null())
     {
         return ERROR_INVALID;
     }
-    // SAFETY: the C ABI requires one readable source record and `entry_count`
-    // readable entry records.
-    let raw_source = unsafe { source.read() };
-    let raw_entries = unsafe { core::slice::from_raw_parts(entries, entry_count) };
-    let Ok(hid_kind) = u8::try_from(raw_source.hid_kind) else {
-        return ERROR_INVALID;
+    // SAFETY: the C ABI requires `entry_count` readable entry records.
+    let raw_entries = if entry_count == 0 {
+        &[][..]
+    } else {
+        unsafe { core::slice::from_raw_parts(entries, entry_count) }
     };
 
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_context_menu_open(window_id, &raw_source, context, raw_entries) };
+        return unsafe { guest_context_menu_register(window_id, raw_entries) };
     }
 
     let mut menu_entries = Vec::with_capacity(entry_count);
@@ -1312,20 +1307,18 @@ pub unsafe extern "C" fn trueos_cabi_ui4_context_menu_open(
         };
         surface.window
     };
-    let request = crate::ui4::ContextMenuRequest {
-        entries: menu_entries,
-        context,
-        callback: blueprint_context_menu_complete,
-    };
-    let cursor = Ui4CursorSource {
-        controller_id: raw_source.controller_id,
-        slot_id: raw_source.slot_id,
-        ep_target: raw_source.ep_target,
-        hid_kind,
-    };
-    match crate::ui4::show_context_menu(cursor, owner, window, request) {
+    if menu_entries.is_empty() {
+        crate::ui4::clear_window_context_menu(owner, window);
+        return 0;
+    }
+    match crate::ui4::register_window_context_menu(
+        owner,
+        window,
+        u64::from(window_id),
+        menu_entries,
+        blueprint_context_menu_complete,
+    ) {
         Ok(()) => 0,
-        Err(crate::ui4::ContextMenuError::NotFocused) => ERROR_STATE,
         Err(_) => ERROR_INVALID,
     }
 }
@@ -3947,10 +3940,8 @@ unsafe fn guest_font_sizes(out: *mut TrueosUi4SolaraFontSize, out_cap: usize) ->
     count as isize
 }
 
-unsafe fn guest_context_menu_open(
+unsafe fn guest_context_menu_register(
     window_id: u32,
-    source: &TrueosUi4CursorSource,
-    context: u64,
     entries: &[TrueosUi4ContextMenuEntry],
 ) -> i32 {
     let mut payload = Vec::with_capacity(
@@ -3960,10 +3951,6 @@ unsafe fn guest_context_menu_open(
                 .saturating_mul(CONTEXT_MENU_ENTRY_WIRE_HEADER_BYTES + 16),
         ),
     );
-    payload.extend_from_slice(&source.controller_id.to_le_bytes());
-    payload.extend_from_slice(&source.slot_id.to_le_bytes());
-    payload.extend_from_slice(&source.ep_target.to_le_bytes());
-    payload.extend_from_slice(&source.hid_kind.to_le_bytes());
     payload.extend_from_slice(&(entries.len() as u32).to_le_bytes());
     for entry in entries {
         if entry.label_ptr.is_null()
@@ -3990,9 +3977,9 @@ unsafe fn guest_context_menu_open(
         payload.extend_from_slice(label);
     }
     guest_status(
-        trueos_vm::vmcall::OP_BP_UI4_CONTEXT_MENU_OPEN,
+        trueos_vm::vmcall::OP_BP_UI4_CONTEXT_MENU_REGISTER,
         window_id as u64,
-        context,
+        0,
         payload.as_slice(),
     )
 }

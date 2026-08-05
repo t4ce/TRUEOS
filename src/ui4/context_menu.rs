@@ -136,6 +136,105 @@ pub(super) fn validate_request(request: &ContextMenuRequest) -> Result<(), Conte
     Ok(())
 }
 
+/// A frame's standing claim on the secondary-click gesture over its own
+/// pixels.
+///
+/// Ownership of a frame's menu belongs to the frame, not to the input broker:
+/// the broker only reports where the click landed. A window with a registration
+/// here answers that click; a window without one leaves the gesture to the
+/// kernel's desktop menu, which is what keeps the two cleanly split.
+struct RegisteredWindowMenu {
+    owner: WindowOwner,
+    window: WindowId,
+    context: u64,
+    entries: Vec<ContextMenuEntry>,
+    callback: ContextMenuCallback,
+}
+
+static WINDOW_MENUS: Mutex<Vec<RegisteredWindowMenu>> = Mutex::new(Vec::new());
+
+/// Give this window a standing menu, replacing any previous registration.
+pub(crate) fn register_window_menu(
+    owner: WindowOwner,
+    window: WindowId,
+    context: u64,
+    entries: Vec<ContextMenuEntry>,
+    callback: ContextMenuCallback,
+) -> Result<(), ContextMenuError> {
+    if entries.is_empty() {
+        return Err(ContextMenuError::Empty);
+    }
+    if entries.len() > MAX_CONTEXT_MENU_ENTRIES {
+        return Err(ContextMenuError::TooManyEntries);
+    }
+    if entries.iter().any(|entry| entry.label.trim().is_empty()) {
+        return Err(ContextMenuError::EmptyLabel);
+    }
+    let mut menus = WINDOW_MENUS.lock();
+    let registration = RegisteredWindowMenu {
+        owner,
+        window,
+        context,
+        entries,
+        callback,
+    };
+    match menus
+        .iter()
+        .position(|menu| menu.owner == owner && menu.window == window)
+    {
+        Some(index) => menus[index] = registration,
+        None => menus.push(registration),
+    }
+    Ok(())
+}
+
+/// Drop this window's standing menu. The secondary-click gesture over its
+/// pixels returns to the kernel's desktop menu.
+pub(crate) fn clear_window_menu(owner: WindowOwner, window: WindowId) -> bool {
+    let mut menus = WINDOW_MENUS.lock();
+    match menus
+        .iter()
+        .position(|menu| menu.owner == owner && menu.window == window)
+    {
+        Some(index) => {
+            menus.remove(index);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Build one invocation from this window's standing menu, if it has one.
+/// Returns `None` when the window registered nothing, which is the caller's
+/// signal to fall back to the kernel desktop menu.
+pub(super) fn registered_request(
+    owner: WindowOwner,
+    window: WindowId,
+) -> Option<ContextMenuRequest> {
+    let menus = WINDOW_MENUS.lock();
+    let menu = menus
+        .iter()
+        .find(|menu| menu.owner == owner && menu.window == window)?;
+    Some(ContextMenuRequest {
+        entries: menu.entries.clone(),
+        context: menu.context,
+        callback: menu.callback,
+    })
+}
+
+/// Drop every standing menu belonging to one owner.
+pub(super) fn release_owner_registrations(owner: WindowOwner) -> usize {
+    let mut menus = WINDOW_MENUS.lock();
+    let before = menus.len();
+    menus.retain(|menu| menu.owner != owner);
+    before.saturating_sub(menus.len())
+}
+
+/// Drop one window's standing menu at window teardown.
+pub(super) fn release_window_registration(owner: WindowOwner, window: WindowId) -> bool {
+    clear_window_menu(owner, window)
+}
+
 pub(super) fn open(
     source: Ui4CursorSource,
     owner: WindowOwner,
@@ -286,7 +385,12 @@ pub(super) fn dismiss_window(owner: WindowOwner, window: WindowId) -> bool {
 }
 
 pub(super) fn release_owner(owner: WindowOwner) -> usize {
-    usize::from(dismiss_matching(|menu| menu.owner == owner, ContextMenuCloseReason::OwnerReleased))
+    let registrations = release_owner_registrations(owner);
+    let dismissed = usize::from(dismiss_matching(
+        |menu| menu.owner == owner,
+        ContextMenuCloseReason::OwnerReleased,
+    ));
+    dismissed.saturating_add(registrations)
 }
 
 fn dismiss_matching(

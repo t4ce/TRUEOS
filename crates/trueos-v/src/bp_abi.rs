@@ -173,7 +173,7 @@ pub struct TrueosUi4ResizeEvent {
     pub height: u32,
 }
 
-/// One row of a Blueprint-requested context menu. `enabled` is 0 for a greyed
+/// One row of a frame-owned context menu. `enabled` is 0 for a greyed
 /// label which reports no action, non-zero for a selectable row.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -546,10 +546,8 @@ unsafe extern "C" {
         window_id: u32,
         out: *mut TrueosUi4PointerEvent,
     ) -> i32;
-    pub fn trueos_cabi_ui4_context_menu_open(
+    pub fn trueos_cabi_ui4_context_menu_register(
         window_id: u32,
-        source: *const TrueosUi4CursorSource,
-        context: u64,
         entries: *const TrueosUi4ContextMenuEntry,
         entry_count: usize,
     ) -> i32;
