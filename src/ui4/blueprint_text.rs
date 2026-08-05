@@ -91,6 +91,15 @@ const _: () = {
     );
 };
 
+/// Longest UTF-8 label one context-menu row may carry. UI4 renders a fixed
+/// number of characters per row; this bound keeps the wire record small while
+/// leaving room for multi-byte scalars.
+const MAX_CONTEXT_MENU_LABEL_BYTES: usize = 64;
+/// Cursor identity plus entry count.
+const CONTEXT_MENU_WIRE_HEADER_BYTES: usize = 20;
+/// Action id, enabled flag, and label length per entry.
+const CONTEXT_MENU_ENTRY_WIRE_HEADER_BYTES: usize = 12;
+
 const ERROR_INVALID: i32 = -1;
 const ERROR_CONTEXT: i32 = -2;
 const ERROR_NOT_FOUND: i32 = -3;
@@ -196,6 +205,28 @@ pub struct TrueosUi4CursorSource {
 }
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4CursorSource>() == 4 * 4);
+
+/// One row of a Blueprint-requested context menu. `enabled` is zero for a
+/// greyed label which reports no action, non-zero for a selectable row.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct TrueosUi4ContextMenuEntry {
+    pub label_ptr: *const u8,
+    pub label_len: usize,
+    pub action_id: u32,
+    pub enabled: u32,
+}
+
+/// Outcome of one context-menu invocation. `selected` is non-zero only when
+/// the user chose an enabled row, in which case `action_id` is that row's id.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4ContextMenuEvent {
+    pub context: u64,
+    pub action_id: u32,
+    pub selected: u32,
+    pub reason: u32,
+}
 
 /// One selected-frame pointer event after UI4 hit testing and capture.
 #[repr(C)]
@@ -1183,6 +1214,152 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_pointer_event_take(
     let Some(event) = surface.pending_pointer_events.pop_front() else {
         return 1;
     };
+    // SAFETY: the non-null output points to one writable ABI event.
+    unsafe { out.write(event) };
+    0
+}
+
+/// Bounded landing area for context-menu outcomes. UI4's callback is a plain
+/// kernel function pointer with no captured state, so the result is parked here
+/// against its own window until the Blueprint takes it.
+static CONTEXT_MENU_EVENTS: Mutex<VecDeque<(WindowOwner, WindowId, TrueosUi4ContextMenuEvent)>> =
+    Mutex::new(VecDeque::new());
+const MAX_PENDING_CONTEXT_MENU_EVENTS: usize = 16;
+
+/// UI4's completion callback for every Blueprint-requested menu.
+fn blueprint_context_menu_complete(result: crate::ui4::ContextMenuResult) {
+    let reason = match result.reason {
+        crate::ui4::ContextMenuCloseReason::Selected => 0,
+        crate::ui4::ContextMenuCloseReason::Dismissed => 1,
+        crate::ui4::ContextMenuCloseReason::Replaced => 2,
+        crate::ui4::ContextMenuCloseReason::OwnerReleased => 3,
+        crate::ui4::ContextMenuCloseReason::WindowClosed => 4,
+    };
+    let event = TrueosUi4ContextMenuEvent {
+        context: result.context,
+        action_id: result.selected_action.unwrap_or(0),
+        selected: u32::from(result.selected_action.is_some()),
+        reason,
+    };
+    let mut events = CONTEXT_MENU_EVENTS.lock();
+    // One invocation is one outcome. A Blueprint which never polls must not be
+    // able to grow kernel memory, so the oldest outcome yields.
+    if events.len() >= MAX_PENDING_CONTEXT_MENU_EVENTS {
+        events.pop_front();
+    }
+    events.push_back((result.owner, result.window, event));
+}
+
+/// Request one OS-rendered context menu anchored at the given cursor.
+///
+/// UI4 rejects the request unless that cursor currently has this exact window
+/// selected, so a Blueprint can only raise a menu over its own focused frame.
+/// The menu is one-shot: there is no registry, and the outcome arrives through
+/// [`trueos_cabi_ui4_context_menu_event_take`].
+pub unsafe extern "C" fn trueos_cabi_ui4_context_menu_open(
+    window_id: u32,
+    source: *const TrueosUi4CursorSource,
+    context: u64,
+    entries: *const TrueosUi4ContextMenuEntry,
+    entry_count: usize,
+) -> i32 {
+    if source.is_null()
+        || entries.is_null()
+        || entry_count == 0
+        || entry_count > crate::ui4::MAX_CONTEXT_MENU_ENTRIES
+    {
+        return ERROR_INVALID;
+    }
+    // SAFETY: the C ABI requires one readable source record and `entry_count`
+    // readable entry records.
+    let raw_source = unsafe { source.read() };
+    let raw_entries = unsafe { core::slice::from_raw_parts(entries, entry_count) };
+    let Ok(hid_kind) = u8::try_from(raw_source.hid_kind) else {
+        return ERROR_INVALID;
+    };
+
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_context_menu_open(window_id, &raw_source, context, raw_entries) };
+    }
+
+    let mut menu_entries = Vec::with_capacity(entry_count);
+    for entry in raw_entries {
+        if entry.label_ptr.is_null()
+            || entry.label_len == 0
+            || entry.label_len > MAX_CONTEXT_MENU_LABEL_BYTES
+        {
+            return ERROR_INVALID;
+        }
+        // SAFETY: the C ABI requires `label_len` readable bytes per entry.
+        let label = unsafe { core::slice::from_raw_parts(entry.label_ptr, entry.label_len) };
+        let Ok(label) = core::str::from_utf8(label) else {
+            return ERROR_INVALID;
+        };
+        menu_entries.push(if entry.enabled == 0 {
+            crate::ui4::ContextMenuEntry::disabled(label)
+        } else {
+            crate::ui4::ContextMenuEntry::action(label, entry.action_id)
+        });
+    }
+
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface.window
+    };
+    let request = crate::ui4::ContextMenuRequest {
+        entries: menu_entries,
+        context,
+        callback: blueprint_context_menu_complete,
+    };
+    let cursor = Ui4CursorSource {
+        controller_id: raw_source.controller_id,
+        slot_id: raw_source.slot_id,
+        ep_target: raw_source.ep_target,
+        hid_kind,
+    };
+    match crate::ui4::show_context_menu(cursor, owner, window, request) {
+        Ok(()) => 0,
+        Err(crate::ui4::ContextMenuError::NotFocused) => ERROR_STATE,
+        Err(_) => ERROR_INVALID,
+    }
+}
+
+/// Take one context-menu outcome for this window. A return value of one means
+/// no invocation has completed; zero writes one outcome.
+pub unsafe extern "C" fn trueos_cabi_ui4_context_menu_event_take(
+    window_id: u32,
+    out: *mut TrueosUi4ContextMenuEvent,
+) -> i32 {
+    if out.is_null() {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_context_menu_event_take(window_id, out) };
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface.window
+    };
+    let mut events = CONTEXT_MENU_EVENTS.lock();
+    let Some(index) = events.iter().position(|(queued_owner, queued_window, _)| {
+        *queued_owner == owner && *queued_window == window
+    }) else {
+        return 1;
+    };
+    let (_, _, event) = events.remove(index).expect("located context menu outcome");
+    drop(events);
     // SAFETY: the non-null output points to one writable ABI event.
     unsafe { out.write(event) };
     0
@@ -3768,6 +3945,80 @@ unsafe fn guest_font_sizes(out: *mut TrueosUi4SolaraFontSize, out_cap: usize) ->
         }
     }
     count as isize
+}
+
+unsafe fn guest_context_menu_open(
+    window_id: u32,
+    source: &TrueosUi4CursorSource,
+    context: u64,
+    entries: &[TrueosUi4ContextMenuEntry],
+) -> i32 {
+    let mut payload = Vec::with_capacity(
+        CONTEXT_MENU_WIRE_HEADER_BYTES.saturating_add(
+            entries
+                .len()
+                .saturating_mul(CONTEXT_MENU_ENTRY_WIRE_HEADER_BYTES + 16),
+        ),
+    );
+    payload.extend_from_slice(&source.controller_id.to_le_bytes());
+    payload.extend_from_slice(&source.slot_id.to_le_bytes());
+    payload.extend_from_slice(&source.ep_target.to_le_bytes());
+    payload.extend_from_slice(&source.hid_kind.to_le_bytes());
+    payload.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    for entry in entries {
+        if entry.label_ptr.is_null()
+            || entry.label_len == 0
+            || entry.label_len > MAX_CONTEXT_MENU_LABEL_BYTES
+        {
+            return ERROR_INVALID;
+        }
+        let Some(required) = payload
+            .len()
+            .checked_add(CONTEXT_MENU_ENTRY_WIRE_HEADER_BYTES)
+            .and_then(|bytes| bytes.checked_add(entry.label_len))
+        else {
+            return ERROR_INVALID;
+        };
+        if required > trueos_vm::vmcall::PAYLOAD_CAP {
+            return ERROR_INVALID;
+        }
+        // SAFETY: the C ABI requires `label_len` readable bytes per entry.
+        let label = unsafe { core::slice::from_raw_parts(entry.label_ptr, entry.label_len) };
+        payload.extend_from_slice(&entry.action_id.to_le_bytes());
+        payload.extend_from_slice(&entry.enabled.to_le_bytes());
+        payload.extend_from_slice(&(entry.label_len as u32).to_le_bytes());
+        payload.extend_from_slice(label);
+    }
+    guest_status(
+        trueos_vm::vmcall::OP_BP_UI4_CONTEXT_MENU_OPEN,
+        window_id as u64,
+        context,
+        payload.as_slice(),
+    )
+}
+
+unsafe fn guest_context_menu_event_take(
+    window_id: u32,
+    out: *mut TrueosUi4ContextMenuEvent,
+) -> i32 {
+    let mut response = [0u8; core::mem::size_of::<TrueosUi4ContextMenuEvent>()];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_UI4_CONTEXT_MENU_EVENT_TAKE,
+        window_id as u64,
+        0,
+        &[],
+        &mut response,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4;
+    }
+    let result = data as i64 as i32;
+    if result != 0 {
+        return result;
+    }
+    let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
+    unsafe { out.write(event) };
+    0
 }
 
 unsafe fn guest_pointer_event_take(window_id: u32, out: *mut TrueosUi4PointerEvent) -> i32 {

@@ -287,7 +287,9 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_ORANGE_RGB),
         advertised: true,
         handler: dispatch_grid,
-        tool_description: Some("Open the Gridpaper Blueprint."),
+        tool_description: Some(
+            "Open the grid Blueprint: one buffered UI4 scene frame hosting the kernel shader demos.",
+        ),
         tool_parameters_json: Some(TOOL_JSON_GRID),
     },
     BuiltinShell2CmdEntry {

@@ -104,12 +104,8 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
     // registered block device. Keep quarantine from cutting across this
     // one-time ownership handoff.
     let _lab_io = super::lab::begin_uas_io_when_available().await;
-    phase_started_ms = startup_phase_checkpoint(
-        startup_started_ms,
-        phase_started_ms,
-        "lab-io-gate",
-    )
-    .await;
+    phase_started_ms =
+        startup_phase_checkpoint(startup_started_ms, phase_started_ms, "lab-io-gate").await;
     if let Some(config) = pooled.device.configurations().first() {
         crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=config-raw len={} bytes={:02x?}\n",
@@ -152,12 +148,8 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         target.data_out_max_packet_size,
         SKHYNIX_PREPOST_WRITE_DATA_OUT
     );
-    phase_started_ms = startup_phase_checkpoint(
-        startup_started_ms,
-        phase_started_ms,
-        "transport-plan",
-    )
-    .await;
+    phase_started_ms =
+        startup_phase_checkpoint(startup_started_ms, phase_started_ms, "transport-plan").await;
 
     if let Err(err) = pooled
         .device
@@ -179,12 +171,8 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         pooled.product_id,
         target.configuration_value
     );
-    phase_started_ms = startup_phase_checkpoint(
-        startup_started_ms,
-        phase_started_ms,
-        "set-configuration",
-    )
-    .await;
+    phase_started_ms =
+        startup_phase_checkpoint(startup_started_ms, phase_started_ms, "set-configuration").await;
 
     if let Err(err) = pooled
         .device
@@ -208,12 +196,8 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         target.interface_number,
         target.alternate_setting
     );
-    phase_started_ms = startup_phase_checkpoint(
-        startup_started_ms,
-        phase_started_ms,
-        "claim-interface",
-    )
-    .await;
+    phase_started_ms =
+        startup_phase_checkpoint(startup_started_ms, phase_started_ms, "claim-interface").await;
 
     let command_out = match pooled.device.endpoint(target.command_out) {
         Ok(endpoint) => endpoint,
@@ -268,12 +252,8 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
     let mut status_in = status_in;
     let mut data_in = data_in;
     let data_out = data_out;
-    phase_started_ms = startup_phase_checkpoint(
-        startup_started_ms,
-        phase_started_ms,
-        "endpoint-open",
-    )
-    .await;
+    phase_started_ms =
+        startup_phase_checkpoint(startup_started_ms, phase_started_ms, "endpoint-open").await;
 
     let probe_info = match probe_mass_uas_skhynix(&mut command_out, &mut status_in, &mut data_in)
         .await
@@ -300,12 +280,8 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
             return;
         }
     };
-    phase_started_ms = startup_phase_checkpoint(
-        startup_started_ms,
-        phase_started_ms,
-        "scsi-probe",
-    )
-    .await;
+    phase_started_ms =
+        startup_phase_checkpoint(startup_started_ms, phase_started_ms, "scsi-probe").await;
 
     let runtime = SkhynixUasRuntime {
         command_out,
@@ -1358,12 +1334,8 @@ async fn probe_mass_uas_skhynix(
         (inquiry[1] & 0x80) != 0,
         inquiry[0] & 0x1f
     );
-    phase_started_ms = startup_phase_checkpoint(
-        probe_started_ms,
-        phase_started_ms,
-        "scsi-inquiry",
-    )
-    .await;
+    phase_started_ms =
+        startup_phase_checkpoint(probe_started_ms, phase_started_ms, "scsi-inquiry").await;
 
     let mut read_capacity = [0u8; 8];
     let capacity_cdb = cdb_read_capacity_10();
@@ -1397,12 +1369,8 @@ async fn probe_mass_uas_skhynix(
     if block_size == 0 {
         return Err(MassProbeError::ShortData);
     }
-    let _ = startup_phase_checkpoint(
-        probe_started_ms,
-        phase_started_ms,
-        "scsi-read-capacity10",
-    )
-    .await;
+    let _ =
+        startup_phase_checkpoint(probe_started_ms, phase_started_ms, "scsi-read-capacity10").await;
 
     Ok(MassProbeInfo {
         block_size,

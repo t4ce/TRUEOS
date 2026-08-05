@@ -173,6 +173,30 @@ pub struct TrueosUi4ResizeEvent {
     pub height: u32,
 }
 
+/// One row of a Blueprint-requested context menu. `enabled` is 0 for a greyed
+/// label which reports no action, non-zero for a selectable row.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct TrueosUi4ContextMenuEntry {
+    pub label_ptr: *const u8,
+    pub label_len: usize,
+    pub action_id: u32,
+    pub enabled: u32,
+}
+
+/// Outcome of one context-menu invocation. `selected` is non-zero only when
+/// the user chose an enabled row, in which case `action_id` is that row's id.
+/// `reason` mirrors UI4's close reason: 0 selected, 1 dismissed, 2 replaced,
+/// 3 owner released, 4 window closed.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4ContextMenuEvent {
+    pub context: u64,
+    pub action_id: u32,
+    pub selected: u32,
+    pub reason: u32,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4CursorSource {
@@ -521,6 +545,17 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_scene_pointer_event_take(
         window_id: u32,
         out: *mut TrueosUi4PointerEvent,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_context_menu_open(
+        window_id: u32,
+        source: *const TrueosUi4CursorSource,
+        context: u64,
+        entries: *const TrueosUi4ContextMenuEntry,
+        entry_count: usize,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_context_menu_event_take(
+        window_id: u32,
+        out: *mut TrueosUi4ContextMenuEvent,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_keyboard_event_take(
         window_id: u32,

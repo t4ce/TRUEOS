@@ -902,7 +902,13 @@ impl R8125Adapter {
         // driver write so 10ec:8125 can be resolved to its actual MAC family.
         let initial_tcr = unsafe { mmio.read_u32(REG_TCR) };
         let mac_before_reset = unsafe { Self::read_hw_mac(&mmio) };
-        let (cmd_before_reset, isr_before_reset, imr_before_reset, phy_before_reset, rcr_before_reset) = unsafe {
+        let (
+            cmd_before_reset,
+            isr_before_reset,
+            imr_before_reset,
+            phy_before_reset,
+            rcr_before_reset,
+        ) = unsafe {
             (
                 mmio.read_u8(REG_CMD),
                 mmio.read_u32(REG_INTR_STATUS_8125),
@@ -1673,9 +1679,7 @@ impl R8125Adapter {
             unsafe {
                 self.mmio.write_u32(REG_INTR_STATUS_8125, isr);
             }
-            if crate::log_os::flags::R8125_VERBOSE_LOGS
-                && (isr & ISR_RX_DESC_UNAVAILABLE) != 0
-            {
+            if crate::log_os::flags::R8125_VERBOSE_LOGS && (isr & ISR_RX_DESC_UNAVAILABLE) != 0 {
                 let isr_after_ack = unsafe { self.mmio.read_u32(REG_INTR_STATUS_8125) };
                 crate::log_trace!(
                     target: "net";

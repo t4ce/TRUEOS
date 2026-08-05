@@ -15,8 +15,7 @@ use spin::Mutex;
 use super::physical::{
     PhysicalBufferSlice, PhysicalContextDescriptor, PhysicalContextFaultKind,
     PhysicalContextHandle, PhysicalContextPriority, PhysicalGpuDevice, PhysicalGpuError,
-    PhysicalGpuFault, PhysicalGpuVmHandle, PhysicalSchedulerStatus,
-    physical_device,
+    PhysicalGpuFault, PhysicalGpuVmHandle, PhysicalSchedulerStatus, physical_device,
 };
 
 const PAGE_BYTES: usize = 4096;

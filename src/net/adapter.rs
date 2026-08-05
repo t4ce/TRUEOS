@@ -186,8 +186,7 @@ const UDP_TX_BUF_BYTES_MAX: usize = 64 * 1024;
 const ICMP_IDENT: u16 = 0x1234;
 const ICMP_VNET_MAX_INFLIGHT: usize = crate::allcaps::net::ICMP_VNET_MAX_INFLIGHT;
 const ICMP_VNET_TIMEOUT_MS: i64 = crate::allcaps::net::ICMP_VNET_TIMEOUT_MS;
-const NET_POLL_IDLE_SOFTCAP_US: u64 =
-    crate::allcaps::net::NET_POLL_IDLE_SOFTCAP_MS * 1_000;
+const NET_POLL_IDLE_SOFTCAP_US: u64 = crate::allcaps::net::NET_POLL_IDLE_SOFTCAP_MS * 1_000;
 const NET_SERVICE_SLEEP_US: u64 = crate::allcaps::net::NET_SERVICE_SLEEP_US;
 // DHCPv6 bring-up is easy to misdiagnose because failures often look like
 // "nothing happens". Keep a tiny amount of always-on logging on state changes

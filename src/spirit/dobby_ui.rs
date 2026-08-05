@@ -487,12 +487,9 @@ fn parse_pointer_action(action: u32) -> Result<(u32, u32, u32, u32), i32> {
     };
     let flags = (action & POINTER_BUTTON_MASK) >> POINTER_BUTTON_SHIFT;
     match action_code {
-        POINTER_ACTION_MOVE | POINTER_ACTION_PRIMARY_CLICK => Ok((
-            action_code,
-            flags,
-            click_count,
-            click_delay_ms,
-        )),
+        POINTER_ACTION_MOVE | POINTER_ACTION_PRIMARY_CLICK => {
+            Ok((action_code, flags, click_count, click_delay_ms))
+        }
         _ => Err(ERROR_BAD_INPUT),
     }
 }
@@ -502,7 +499,9 @@ pub(crate) fn pointer(owner: u8, x: u16, y: u16, action: u32) -> i32 {
         Ok(result) => result,
         Err(error) => return error,
     };
-    if x > crate::ui4::COMPACT_WINDOW_GRID_EXTENT as u16 || y > crate::ui4::COMPACT_WINDOW_GRID_EXTENT as u16 {
+    if x > crate::ui4::COMPACT_WINDOW_GRID_EXTENT as u16
+        || y > crate::ui4::COMPACT_WINDOW_GRID_EXTENT as u16
+    {
         return ERROR_BAD_INPUT;
     }
     let _keyboard = match claim_dobby_io(owner) {
@@ -547,18 +546,16 @@ pub(crate) fn pointer(owner: u8, x: u16, y: u16, action: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_pointer_action, POINTER_ACTION_MOVE, POINTER_ACTION_PRIMARY_CLICK, POINTER_CLICK_COUNT_MASK,
+        POINTER_ACTION_MOVE, POINTER_ACTION_PRIMARY_CLICK, POINTER_CLICK_COUNT_MASK,
         POINTER_CLICK_COUNT_SHIFT, POINTER_CLICK_DELAY_MASK, POINTER_CLICK_DELAY_SHIFT,
+        parse_pointer_action,
     };
 
     #[test]
     fn parse_pointer_action_handles_click_move_and_button_bits() {
         let click = POINTER_ACTION_PRIMARY_CLICK | (1 << 16);
         let move_without_buttons = POINTER_ACTION_MOVE;
-        assert_eq!(
-            parse_pointer_action(click),
-            Ok((POINTER_ACTION_PRIMARY_CLICK, 1, 1, 100))
-        );
+        assert_eq!(parse_pointer_action(click), Ok((POINTER_ACTION_PRIMARY_CLICK, 1, 1, 100)));
         assert_eq!(
             parse_pointer_action(move_without_buttons),
             Ok((POINTER_ACTION_MOVE, 0, 1, 100))
@@ -572,12 +569,16 @@ mod tests {
             | (250u32 << POINTER_CLICK_DELAY_SHIFT);
         assert_eq!(parse_pointer_action(click), Ok((POINTER_ACTION_PRIMARY_CLICK, 0, 5, 250)));
         assert_eq!(
-            parse_pointer_action(POINTER_ACTION_PRIMARY_CLICK | (3u32 << POINTER_CLICK_COUNT_SHIFT)),
+            parse_pointer_action(
+                POINTER_ACTION_PRIMARY_CLICK | (3u32 << POINTER_CLICK_COUNT_SHIFT)
+            ),
             Ok((POINTER_ACTION_PRIMARY_CLICK, 0, 3, 100))
         );
         assert_eq!(
             parse_pointer_action(
-                POINTER_ACTION_PRIMARY_CLICK | (3u32 << POINTER_CLICK_COUNT_SHIFT) | (250 << POINTER_CLICK_DELAY_SHIFT)
+                POINTER_ACTION_PRIMARY_CLICK
+                    | (3u32 << POINTER_CLICK_COUNT_SHIFT)
+                    | (250 << POINTER_CLICK_DELAY_SHIFT)
             ),
             Ok((POINTER_ACTION_PRIMARY_CLICK, 0, 3, 250))
         );
@@ -589,7 +590,10 @@ mod tests {
     #[test]
     fn parse_pointer_action_rejects_unknown_actions() {
         assert!(parse_pointer_action(2).is_err());
-        assert_eq!(parse_pointer_action(POINTER_ACTION_MOVE | (99 << 16)), Ok((POINTER_ACTION_MOVE, 99, 1, 100)));
+        assert_eq!(
+            parse_pointer_action(POINTER_ACTION_MOVE | (99 << 16)),
+            Ok((POINTER_ACTION_MOVE, 99, 1, 100))
+        );
     }
 }
 

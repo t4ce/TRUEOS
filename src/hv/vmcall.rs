@@ -178,6 +178,8 @@ pub const OP_BP_DOBBY_UI4_KEY: u32 = 0x11B; // arg0 named key -> rc
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_VISUAL: u32 = 0x11C; // arg0 x/y,arg1 width/height,payload target_hz -> window
 pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D; // arg0 window,payload ShadertoyParamsV1 -> rc
 pub const OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN: u32 = 0x11E; // arg0 window -> kernel-deadline wait + acquired back buffer
+pub const OP_BP_UI4_CONTEXT_MENU_OPEN: u32 = 0x11F; // arg0 window,arg1 context,payload source+labelled entries -> rc
+pub const OP_BP_UI4_CONTEXT_MENU_EVENT_TAKE: u32 = 0x120; // arg0 window -> rc + TrueosUi4ContextMenuEvent payload
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1589,6 +1591,96 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_CONTEXT_MENU_OPEN => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(header) = payload.get(..20) else {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            };
+            let source = crate::ui4::blueprint_text::TrueosUi4CursorSource {
+                controller_id: u32::from_le_bytes([header[0], header[1], header[2], header[3]]),
+                slot_id: u32::from_le_bytes([header[4], header[5], header[6], header[7]]),
+                ep_target: u32::from_le_bytes([header[8], header[9], header[10], header[11]]),
+                hid_kind: u32::from_le_bytes([header[12], header[13], header[14], header[15]]),
+            };
+            let entry_count =
+                u32::from_le_bytes([header[16], header[17], header[18], header[19]]) as usize;
+            if entry_count == 0 || entry_count > 16 {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let mut offset = 20usize;
+            let mut entries = alloc::vec::Vec::with_capacity(entry_count);
+            for _ in 0..entry_count {
+                let Some(entry_header) = payload.get(offset..offset.saturating_add(12)) else {
+                    write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                    return DispatchOutcome::Resume;
+                };
+                let action_id = u32::from_le_bytes([
+                    entry_header[0],
+                    entry_header[1],
+                    entry_header[2],
+                    entry_header[3],
+                ]);
+                let enabled = u32::from_le_bytes([
+                    entry_header[4],
+                    entry_header[5],
+                    entry_header[6],
+                    entry_header[7],
+                ]);
+                let label_len = u32::from_le_bytes([
+                    entry_header[8],
+                    entry_header[9],
+                    entry_header[10],
+                    entry_header[11],
+                ]) as usize;
+                offset = offset.saturating_add(12);
+                let Some(label) = payload.get(offset..offset.saturating_add(label_len)) else {
+                    write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                    return DispatchOutcome::Resume;
+                };
+                entries.push(crate::ui4::blueprint_text::TrueosUi4ContextMenuEntry {
+                    label_ptr: label.as_ptr(),
+                    label_len,
+                    action_id,
+                    enabled,
+                });
+                offset = offset.saturating_add(label_len);
+            }
+            if offset != payload.len() {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let rc = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_context_menu_open(
+                    arg0 as u32,
+                    &source,
+                    arg1,
+                    entries.as_ptr(),
+                    entries.len(),
+                )
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_CONTEXT_MENU_EVENT_TAKE => {
+            let mut event = crate::ui4::blueprint_text::TrueosUi4ContextMenuEvent::default();
+            let rc = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_context_menu_event_take(
+                    arg0 as u32,
+                    &mut event,
+                )
+            };
+            if rc == 0 {
+                write_record_response(vm_id, seq, 0, &event);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            }
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SOLARA_FRAME_PUBLISH => {

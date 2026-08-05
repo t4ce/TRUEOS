@@ -355,10 +355,8 @@ pub fn append_snapshot_history_text(out: &mut String) {
 
 fn take_snapshot(tsc_hz: u64) -> ProfileSnapshot {
     let state = state_mut();
-    state.slow_poll_cycles = cycles_from_us(
-        crate::allcaps::executor::BSP_TASK_PROFILE_SLOW_POLL_US,
-        tsc_hz,
-    );
+    state.slow_poll_cycles =
+        cycles_from_us(crate::allcaps::executor::BSP_TASK_PROFILE_SLOW_POLL_US, tsc_hz);
 
     let mut snapshot = ProfileSnapshot {
         executor_id: state.bsp_executor_id,
@@ -403,14 +401,14 @@ fn take_snapshot(tsc_hz: u64) -> ProfileSnapshot {
 
 #[inline]
 fn cycles_from_us(us: u64, tsc_hz: u64) -> u64 {
-    ((us as u128).saturating_mul(tsc_hz.max(1) as u128) / 1_000_000u128)
-        .min(u64::MAX as u128) as u64
+    ((us as u128).saturating_mul(tsc_hz.max(1) as u128) / 1_000_000u128).min(u64::MAX as u128)
+        as u64
 }
 
 #[inline]
 fn cycles_to_us(cycles: u64, tsc_hz: u64) -> u64 {
-    ((cycles as u128).saturating_mul(1_000_000u128) / tsc_hz.max(1) as u128)
-        .min(u64::MAX as u128) as u64
+    ((cycles as u128).saturating_mul(1_000_000u128) / tsc_hz.max(1) as u128).min(u64::MAX as u128)
+        as u64
 }
 
 #[embassy_executor::task]
@@ -421,10 +419,8 @@ pub async fn bsp_task_profile_reporter_task(spawner: Spawner) {
     let mut previous_ms = Instant::now().as_millis();
 
     // Configure the cycle threshold before the first complete reporting window.
-    state_mut().slow_poll_cycles = cycles_from_us(
-        crate::allcaps::executor::BSP_TASK_PROFILE_SLOW_POLL_US,
-        tsc_hz,
-    );
+    state_mut().slow_poll_cycles =
+        cycles_from_us(crate::allcaps::executor::BSP_TASK_PROFILE_SLOW_POLL_US, tsc_hz);
 
     loop {
         Timer::after(Duration::from_millis(report_ms)).await;

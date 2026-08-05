@@ -94,9 +94,7 @@ pub async fn usb_controller_service_task() {
     let mut observed_port_change_seq =
         USB_PORT_CHANGE_SEQ.load(core::sync::atomic::Ordering::Acquire);
     let mut next_snapshot = embassy_time::Instant::now()
-        + embassy_time::Duration::from_millis(
-            crate::allcaps::usb::CONTROLLER_SNAPSHOT_CADENCE_MS,
-        );
+        + embassy_time::Duration::from_millis(crate::allcaps::usb::CONTROLLER_SNAPSHOT_CADENCE_MS);
     loop {
         USB_LEGENDARY_LEGACY_SAVEWRAPPER_LMAO(&mut host).await;
         if embassy_time::Instant::now() >= next_snapshot {
@@ -146,8 +144,7 @@ pub async fn usb_controller_service_task() {
         drop(quarantine);
         // Port reset/probe work emits its own xHCI change events. Consume that
         // resulting sequence here so maintenance cannot recursively rescan itself.
-        observed_port_change_seq =
-            USB_PORT_CHANGE_SEQ.load(core::sync::atomic::Ordering::Acquire);
+        observed_port_change_seq = USB_PORT_CHANGE_SEQ.load(core::sync::atomic::Ordering::Acquire);
         crate::log!(
             "crabusb: probe_devices trigger=port-change seq={} quarantine=released\n",
             observed_port_change_seq
@@ -158,9 +155,8 @@ pub async fn usb_controller_service_task() {
 #[allow(non_snake_case)]
 async fn USB_LEGENDARY_LEGACY_SAVEWRAPPER_LMAO(host: &mut crabusb::USBHost) {
     let started = embassy_time::Instant::now();
-    let budget = embassy_time::Duration::from_millis(
-        crate::allcaps::usb::CONTROLLER_MAINTENANCE_BUDGET_MS,
-    );
+    let budget =
+        embassy_time::Duration::from_millis(crate::allcaps::usb::CONTROLLER_MAINTENANCE_BUDGET_MS);
     while lab::service_one(host).await {
         if embassy_time::Instant::now().duration_since(started) >= budget {
             break;

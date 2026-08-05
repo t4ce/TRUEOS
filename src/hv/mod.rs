@@ -1042,32 +1042,41 @@ pub fn named_app_instance_vms(archive: &str) -> AllocVec<(u8, AllocString)> {
         {
             continue;
         }
-        let running_name = BLUEPRINT_LAUNCH_STATES.get(vm_id as usize).and_then(|slot| {
-            let state = slot.lock();
-            state.as_ref().and_then(|state| {
-                state
-                    .archive
-                    .eq_ignore_ascii_case(archive)
-                    .then(|| named_instance_label(state.identity.name.as_deref(), state.identity.peer.as_deref()))
-                    .flatten()
-            })
-        });
-        let label = running_name.or_else(|| {
-            BLUEPRINT_PENDING_LAUNCH_STATES.get(vm_id as usize).and_then(|slot| {
-                let pending = slot.lock();
-                pending.as_ref().and_then(|pending| {
-                    pending
+        let running_name = BLUEPRINT_LAUNCH_STATES
+            .get(vm_id as usize)
+            .and_then(|slot| {
+                let state = slot.lock();
+                state.as_ref().and_then(|state| {
+                    state
                         .archive
                         .eq_ignore_ascii_case(archive)
                         .then(|| {
                             named_instance_label(
-                                pending.instance.name.as_deref(),
-                                pending.instance.peer.as_deref(),
+                                state.identity.name.as_deref(),
+                                state.identity.peer.as_deref(),
                             )
                         })
                         .flatten()
                 })
-            })
+            });
+        let label = running_name.or_else(|| {
+            BLUEPRINT_PENDING_LAUNCH_STATES
+                .get(vm_id as usize)
+                .and_then(|slot| {
+                    let pending = slot.lock();
+                    pending.as_ref().and_then(|pending| {
+                        pending
+                            .archive
+                            .eq_ignore_ascii_case(archive)
+                            .then(|| {
+                                named_instance_label(
+                                    pending.instance.name.as_deref(),
+                                    pending.instance.peer.as_deref(),
+                                )
+                            })
+                            .flatten()
+                    })
+                })
         });
         if let Some(label) = label {
             out.push((vm_id, label));

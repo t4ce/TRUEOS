@@ -91,4 +91,11 @@
 # strictly additive and restricted to the Dobby Blueprint owner. They lend the
 # existing Spirit/Lilly input pair through bounded serialized operations; older
 # v2 artifacts import none of these symbols and retain their prior authority.
-2f27a33fd50d3c392079bf48528c92d73ad5f21c1fe50452c58aaeecf53ebac6
+# The UI4 context-menu open and event-take calls are strictly additive. They
+# let a Blueprint raise one OS-rendered, one-shot menu over a frame a cursor
+# already has selected, and take the outcome through the same take-call shape
+# as the pointer, keyboard, pan, and resize events. UI4 keeps menu rendering,
+# hit testing, and teardown; no application-owned slot-4 surface or persistent
+# menu registry is introduced, and the locked pointer-event record is unchanged.
+# Older v2 artifacts import neither symbol and are unaffected.
+1ad836ef06e5a23cec902a72e9e5df2e2b09a2a82ddea66c4fdc51483cb8a9f4

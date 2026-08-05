@@ -645,10 +645,9 @@ impl WindowBroker {
         let Ok((slot, generation)) = unpack_handle(id.0) else {
             return true;
         };
-        self.windows
-            .get(slot)
-            .is_none_or(|window| window.generation != generation
-                || window.state == WindowState::Closed)
+        self.windows.get(slot).is_none_or(|window| {
+            window.generation != generation || window.state == WindowState::Closed
+        })
     }
 
     fn mark_composition_changed(&mut self) {
@@ -788,9 +787,7 @@ impl WindowBroker {
             }
             return Ok(requested);
         }
-        Ok(self
-            .claim_lease(id, now_ms)
-            .unwrap_or(WindowPlane::Primary))
+        Ok(self.claim_lease(id, now_ms).unwrap_or(WindowPlane::Primary))
     }
 
     fn create(
@@ -2490,7 +2487,11 @@ mod tests {
         for frame in 1..=LEASE_PLANE_COUNT as u64 {
             let session = broker.begin_additional_session(owner).unwrap();
             let request = test_window(owner, session, frame, 0, frame as i32, true);
-            held.push(broker.create(request, FrameBuffering::Triple, 1_000).unwrap());
+            held.push(
+                broker
+                    .create(request, FrameBuffering::Triple, 1_000)
+                    .unwrap(),
+            );
         }
 
         // Every lease is still inside its grace period, so the stacked frame
@@ -2500,7 +2501,11 @@ mod tests {
             .create(test_window(owner, session, 9, 0, 9, true), FrameBuffering::Triple, 1_000)
             .unwrap();
         assert_eq!(plane_slot_of(&broker, stacked), STACK_PLANE_SLOT);
-        assert!(broker.claim_lease(stacked, 1_000 + LEASE_IDLE_GRACE_MS - 1).is_none());
+        assert!(
+            broker
+                .claim_lease(stacked, 1_000 + LEASE_IDLE_GRACE_MS - 1)
+                .is_none()
+        );
 
         // Past the grace period the longest-idle holder gives up its plane and
         // is demoted to the stack in the same transaction.
@@ -2555,14 +2560,22 @@ mod tests {
         assert_eq!(broker.windows[slot].plane.slot(), super::super::INTERACTION_OVERLAY_PLANE_SLOT);
 
         broker
-            .replace_frame(owner, picker, FrameHandle::from_raw(11).unwrap(), FrameBuffering::Double)
+            .replace_frame(
+                owner,
+                picker,
+                FrameHandle::from_raw(11).unwrap(),
+                FrameBuffering::Double,
+            )
             .expect("replacement remains on the fixed interaction plane");
         assert_eq!(broker.windows[slot].plane, WindowPlane::Interaction);
 
         let second_session = broker.begin_additional_session(owner).unwrap();
         let mut second = test_window(owner, second_session, 12, 0, 101, true);
         second.plane = WindowPlane::Interaction;
-        assert_eq!(broker.create(second, FrameBuffering::Double, 0), Err(WindowBrokerError::Capacity));
+        assert_eq!(
+            broker.create(second, FrameBuffering::Double, 0),
+            Err(WindowBrokerError::Capacity)
+        );
     }
 
     #[test]
