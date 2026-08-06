@@ -21,14 +21,17 @@ download_and_extract() {
     rm -f "${package}"_*.deb
     apt-get download "${package}=${version}"
   )
-  local archive
-  archive="${package_root}/${package}_${version}_amd64.deb"
-  if [[ ! -f "${archive}" ]]; then
-    echo "toolchain: apt-get did not download ${package}" >&2
+  local archives
+  mapfile -t archives < <(
+    find "${package_root}" -maxdepth 1 -type f \
+      -name "${package}_${version}_*.deb" -print | sort
+  )
+  if [[ "${#archives[@]}" -ne 1 ]]; then
+    echo "toolchain: expected one ${package} ${version} archive, found ${#archives[@]}" >&2
     exit 1
   fi
-  printf '%s  %s\n' "${sha512}" "${archive}" | sha512sum --check --status
-  dpkg-deb --extract "${archive}" "${install_root}"
+  printf '%s  %s\n' "${sha512}" "${archives[0]}" | sha512sum --check --status
+  dpkg-deb --extract "${archives[0]}" "${install_root}"
 }
 
 download_and_extract llvm-spirv-21 21.1.5-1 0c9ce43b1d2bb490e7baa399ab5a9b11afbd3c1a5bf119aaf729e73ca8dfb0e8fdc881b30dc68634996df0754528690e5a6feed63d0fcbc015c3b1c849f4145b
