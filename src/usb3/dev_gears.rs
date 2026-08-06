@@ -4,15 +4,23 @@ use spin::Mutex;
 use super::crabusb;
 
 pub const USB_DEVICE_POOL_CAP: usize = 8;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const USB_CLASS_HID: u8 = 0x03;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const USB_HID_SUBCLASS_BOOT: u8 = 0x01;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const USB_HID_PROTOCOL_MOUSE: u8 = 0x02;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const HID_REQ_SET_IDLE: u8 = 0x0A;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const HID_REQ_SET_PROTOCOL: u8 = 0x0B;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const HID_BOOT_PROTOCOL: u16 = 0;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const USB3_BOOT_MOUSE_POOL_CAP: usize = 4;
 
 static USB_DEVICE_POOL: Mutex<UsbDevicePool> = Mutex::new(UsbDevicePool::new());
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static USB_BOOT_MOUSE_POOL: Mutex<UsbBootMousePool> = Mutex::new(UsbBootMousePool::new());
 
 struct UsbDevicePool {
@@ -30,11 +38,13 @@ pub(super) struct PooledUsbDevice {
     pub(super) device: crabusb::Device,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct UsbBootMousePool {
     devices: Vec<PooledUsbBootMouse>,
 }
 
 #[derive(Clone, Copy, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct BootMouseTarget {
     configuration_value: u8,
     interface_number: u8,
@@ -44,6 +54,7 @@ struct BootMouseTarget {
     interval: u8,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct PooledUsbBootMouse {
     device: PooledUsbDevice,
     target: BootMouseTarget,
@@ -90,12 +101,14 @@ impl UsbDevicePool {
 }
 
 impl UsbBootMousePool {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     const fn new() -> Self {
         Self {
             devices: Vec::new(),
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn insert(&mut self, device: PooledUsbBootMouse) -> Result<usize, PooledUsbBootMouse> {
         if self.devices.len() >= USB3_BOOT_MOUSE_POOL_CAP {
             return Err(device);
@@ -104,6 +117,7 @@ impl UsbBootMousePool {
         Ok(self.devices.len())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn pop(&mut self) -> Option<PooledUsbBootMouse> {
         self.devices.pop()
     }
@@ -115,12 +129,14 @@ pub fn handoff_opened_device(device: crabusb::Device) -> Result<usize, crabusb::
     Ok(pool.len())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn has_boot_mouse_transport(
     configs: &[crabusb::usb_if::descriptor::ConfigurationDescriptor],
 ) -> bool {
     !collect_boot_mouse_candidates(configs).is_empty()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn handoff_boot_mouse_device(
     device: PooledUsbDevice,
     target: BootMouseTarget,
@@ -183,6 +199,7 @@ pub async fn usb_boot_mouse_worker_task() {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 async fn poll_usb3_boot_mouse(mouse: PooledUsbBootMouse) {
     let PooledUsbBootMouse {
         device: mut pooled,
@@ -360,6 +377,7 @@ async fn poll_usb3_boot_mouse(mouse: PooledUsbBootMouse) {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 async fn hid_class_control_out(
     device: &mut crabusb::Device,
     interface_number: u8,
@@ -380,6 +398,7 @@ async fn hid_class_control_out(
         .await
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn collect_boot_mouse_candidates(
     configs: &[crabusb::usb_if::descriptor::ConfigurationDescriptor],
 ) -> Vec<BootMouseTarget> {
@@ -418,6 +437,7 @@ fn collect_boot_mouse_candidates(
     out
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn pick_boot_mouse_target(candidates: &[BootMouseTarget]) -> Option<BootMouseTarget> {
     candidates.first().copied()
 }

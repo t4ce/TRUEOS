@@ -148,6 +148,7 @@ impl<'contract, 'payload> KernelValueWriter<'contract, 'payload> {
         self.set_typed_bytes(index, KernelValueType::U32, &value.to_le_bytes())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn set_i32(
         &mut self,
         index: u32,
@@ -164,6 +165,7 @@ impl<'contract, 'payload> KernelValueWriter<'contract, 'payload> {
         self.set_typed_bytes(index, KernelValueType::F32, &value.to_bits().to_le_bytes())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn set_u64(
         &mut self,
         index: u32,
@@ -172,6 +174,7 @@ impl<'contract, 'payload> KernelValueWriter<'contract, 'payload> {
         self.set_typed_bytes(index, KernelValueType::U64, &value.to_le_bytes())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn set_i64(
         &mut self,
         index: u32,
@@ -180,6 +183,7 @@ impl<'contract, 'payload> KernelValueWriter<'contract, 'payload> {
         self.set_typed_bytes(index, KernelValueType::I64, &value.to_le_bytes())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn set_f64(
         &mut self,
         index: u32,
@@ -188,6 +192,7 @@ impl<'contract, 'payload> KernelValueWriter<'contract, 'payload> {
         self.set_typed_bytes(index, KernelValueType::F64, &value.to_bits().to_le_bytes())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn set_i32x4(
         &mut self,
         index: u32,
@@ -201,6 +206,7 @@ impl<'contract, 'payload> KernelValueWriter<'contract, 'payload> {
         self.set_typed_bytes(index, KernelValueType::I32x4, &bytes)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn set_u32x4(
         &mut self,
         index: u32,
@@ -214,6 +220,7 @@ impl<'contract, 'payload> KernelValueWriter<'contract, 'payload> {
         self.set_typed_bytes(index, KernelValueType::U32x4, &bytes)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn set_f32x4(
         &mut self,
         index: u32,

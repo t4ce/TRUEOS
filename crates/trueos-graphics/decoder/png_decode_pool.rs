@@ -293,6 +293,7 @@ fn partition_rows(height: usize, part_count: usize) -> Vec<Range<usize>> {
     ranges
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn run_parallel(plan: RowExpandPlan) -> Result<Vec<u8>, PngDecodeError> {
     let part_count = desired_part_count(plan.width, plan.height);
     if part_count <= 1 {
@@ -304,10 +305,12 @@ fn run_parallel(plan: RowExpandPlan) -> Result<Vec<u8>, PngDecodeError> {
     unreachable!()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn job_height(job: &Arc<RowExpandJob>) -> usize {
     job.plan.height
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn job_placeholder() -> Arc<RowExpandJob> {
     unreachable!()
 }

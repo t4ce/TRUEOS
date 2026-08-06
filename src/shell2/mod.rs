@@ -61,9 +61,13 @@ pub(crate) const fn local_shell_session_output_mask(index: usize) -> OutputMask 
         0
     }
 }
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const SECTION_STATUS_TEXT: &str = "t4ce is with you";
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const SECTION_STATUS_HOLD_MS: u64 = 1000;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const SECTION_RAINBOW_FRAME_MS: u64 = 120;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const SECTION_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 const STATUS_NORMAL_RGB: (u8, u8, u8) = (255, 255, 255);
 const BANNER_TITLE_TEXT: &str = "TRUE OS";
@@ -277,6 +281,7 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str(s);
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn render_transcript(&self, transcript: &VecDeque<TranscriptEntry>) {
         self.render_transcript_at(SCROLL_TOP_ROW, transcript);
     }
@@ -429,7 +434,7 @@ impl<'a> AlignedWriter<'a> {
         out
     }
 
-    fn prompt(&self, output_mask: OutputMask) {
+    fn prompt(&self, _output_mask: OutputMask) {
         self.move_to(PROMPT_ROW, 1);
         self.clear_line();
         self.io.raw_write_str("\x1b[0m");
@@ -457,6 +462,7 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str(text);
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn center_text(&self, row: usize, text: &str) {
         let width = ecma48::visible_width(text);
         let col = self
@@ -520,6 +526,7 @@ pub(crate) fn line_width_for_backend(io: &'static dyn ShellBackend2) -> usize {
     line_width_for_output(output_target_for_backend(io))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn set_line_width_for_backend(io: &'static dyn ShellBackend2, width: usize) {
     set_line_width_for_output(output_target_for_backend(io), width);
 }
@@ -537,6 +544,7 @@ pub(crate) fn apply_reported_terminal_size_for_backend(
 /// Starting a Blueprint selects its Matrix application slot. The shell frontend
 /// is itself the terminal, so attaching it returns the shared net view to the
 /// default CLI slot before repainting that one canonical shell2 session.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn activate_net_shell_frontend_view(cols: usize, rows: usize) {
     let _ = matrix::switch_active_slot(OUTPUT_NET_TCP_MASK, "");
     let _ = apply_reported_terminal_size(OUTPUT_NET_TCP_MASK, cols, rows);
@@ -826,6 +834,7 @@ pub(crate) fn submit_online_launch_script_to_target(
     )
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn matrix_target_for_slot_name_selected(
     output_mask: OutputMask,
     requested: &str,
@@ -926,12 +935,14 @@ pub(crate) fn matrix_target_interrupted(target: &MatrixTarget) -> bool {
         != Some(target.interrupt_generation)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn matrix_targets_same_live_slot(left: &MatrixTarget, right: &MatrixTarget) -> bool {
     matrix_targets_same_slot_lifetime(left, right)
         && matrix::live_slot_interrupt_generation(&left.slot_id, left.slot_lifetime_generation)
             .is_some()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn matrix_targets_same_slot_lifetime(left: &MatrixTarget, right: &MatrixTarget) -> bool {
     left.slot_id == right.slot_id && left.slot_lifetime_generation == right.slot_lifetime_generation
 }
@@ -971,14 +982,17 @@ fn active_matrix_slot_is_vmx(output_mask: OutputMask) -> bool {
     active_matrix_vm_id(output_mask).is_some()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn history_total_lines() -> usize {
     matrix::history_total_lines()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn history_lines_text(start_line: usize, max_lines: usize) -> AllocString {
     matrix::history_lines_text(start_line, max_lines)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn command_registry_json() -> AllocString {
     cmds::command_registry_json()
 }
@@ -1333,6 +1347,7 @@ fn redraw_active_view(
     transcript
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn rainbow_status_text(phase: usize) -> AllocString {
     let mut out = AllocString::new();
     for (idx, ch) in SECTION_STATUS_TEXT.chars().enumerate() {
@@ -1359,6 +1374,7 @@ fn rainbow_status_text(phase: usize) -> AllocString {
     out
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn show_status_row_message(out: &AlignedWriter<'_>, text: &str) {
     out.move_to(STATUS_ROW, 1);
     out.clear_line();
@@ -1366,10 +1382,11 @@ fn show_status_row_message(out: &AlignedWriter<'_>, text: &str) {
     out.io.raw_write_str(ecma48::RESET);
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 async fn run_plain_section_status(
     out: &AlignedWriter<'_>,
     output_mask: OutputMask,
-    mode: ShellMode2,
+    _mode: ShellMode2,
     running_go2_phase: usize,
 ) {
     let white = alloc::format!(

@@ -3,6 +3,7 @@ extern crate alloc;
 use alloc::{format, string::String, vec, vec::Vec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum SPop3State {
     Authorization,
     Transaction,
@@ -10,12 +11,14 @@ pub enum SPop3State {
 }
 
 #[derive(Debug, Clone)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct SPop3Reply {
     pub ok: bool,
     pub lines: Vec<String>,
 }
 
 impl SPop3Reply {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn ok(line: impl Into<String>) -> Self {
         Self {
             ok: true,
@@ -23,6 +26,7 @@ impl SPop3Reply {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn err(line: impl Into<String>) -> Self {
         Self {
             ok: false,
@@ -30,12 +34,14 @@ impl SPop3Reply {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn multi_ok(first: impl Into<String>, mut tail: Vec<String>) -> Self {
         let mut lines = vec![first.into()];
         lines.append(&mut tail);
         Self { ok: true, lines }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn encode(&self) -> String {
         let mut out = String::new();
         let prefix = if self.ok { "+OK " } else { "-ERR " };
@@ -59,6 +65,7 @@ impl SPop3Reply {
 }
 
 #[derive(Debug, Clone)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct SPop3Message {
     pub from: String,
     pub subject: String,
@@ -67,14 +74,17 @@ pub struct SPop3Message {
 }
 
 impl SPop3Message {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn size(&self) -> usize {
         self.wire().len()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn wire(&self) -> String {
         format!("From: {}\r\nSubject: {}\r\n\r\n{}\r\n", self.from, self.subject, self.body)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn top(&self, body_lines: u32) -> String {
         let mut out = format!("From: {}\r\nSubject: {}\r\n\r\n", self.from, self.subject);
         for line in self.body.lines().take(body_lines as usize) {
@@ -86,6 +96,7 @@ impl SPop3Message {
 }
 
 #[derive(Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct SPop3Session {
     pub state: SPop3State,
     pub user: Option<String>,
@@ -94,6 +105,7 @@ pub struct SPop3Session {
 }
 
 impl SPop3Session {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn new() -> Self {
         Self {
             state: SPop3State::Authorization,
@@ -103,19 +115,23 @@ impl SPop3Session {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn greeting(&self) -> SPop3Reply {
         SPop3Reply::ok("trueos POP3 ready")
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn on_user(&mut self, user: &str) {
         self.user = Some(String::from(user));
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn on_auth_ok(&mut self) {
         self.authenticated = true;
         self.state = SPop3State::Transaction;
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn push_message(&mut self, from: &str, subject: &str, body: &str) {
         self.mailbox.push(SPop3Message {
             from: String::from(from),
@@ -125,11 +141,13 @@ impl SPop3Session {
         });
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn user(&mut self, user: &str) -> SPop3Reply {
         self.on_user(user);
         SPop3Reply::ok("User accepted")
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn pass(&mut self, password: &str) -> SPop3Reply {
         if self.user.is_none() {
             return SPop3Reply::err("USER required first");
@@ -142,6 +160,7 @@ impl SPop3Session {
         SPop3Reply::ok("Authentication successful")
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn stat(&self) -> SPop3Reply {
         if !self.authenticated {
             return SPop3Reply::err("Not authenticated");
@@ -157,6 +176,7 @@ impl SPop3Session {
         SPop3Reply::ok(format!("{} {}", count, bytes))
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn list(&self) -> SPop3Reply {
         if !self.authenticated {
             return SPop3Reply::err("Not authenticated");
@@ -171,6 +191,7 @@ impl SPop3Session {
         SPop3Reply::multi_ok("scan listing follows", items)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn retr(&self, msg_id: u32) -> SPop3Reply {
         if !self.authenticated {
             return SPop3Reply::err("Not authenticated");
@@ -189,6 +210,7 @@ impl SPop3Session {
         SPop3Reply::multi_ok(lines.remove(0), lines)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn top(&self, msg_id: u32, body_lines: u32) -> SPop3Reply {
         if !self.authenticated {
             return SPop3Reply::err("Not authenticated");
@@ -207,6 +229,7 @@ impl SPop3Session {
         SPop3Reply::multi_ok(lines.remove(0), lines)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn dele(&mut self, msg_id: u32) -> SPop3Reply {
         if !self.authenticated {
             return SPop3Reply::err("Not authenticated");
@@ -219,15 +242,18 @@ impl SPop3Session {
         SPop3Reply::ok("Message marked for deletion")
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn noop(&self) -> SPop3Reply {
         SPop3Reply::ok("Ok")
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn quit(&mut self) -> SPop3Reply {
         self.state = SPop3State::Update;
         SPop3Reply::ok("Bye")
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn handle_line(&mut self, line: &str) -> SPop3Reply {
         let trimmed = line.trim();
         let mut parts = trimmed.split_whitespace();
@@ -285,12 +311,14 @@ impl SPop3Session {
         SPop3Reply::err("Command not implemented")
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn get_message(&self, msg_id: u32) -> Option<&SPop3Message> {
         let idx = msg_id.checked_sub(1)? as usize;
         let msg = self.mailbox.get(idx)?;
         if msg.deleted { None } else { Some(msg) }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn get_message_mut(&mut self, msg_id: u32) -> Option<&mut SPop3Message> {
         let idx = msg_id.checked_sub(1)? as usize;
         let msg = self.mailbox.get_mut(idx)?;

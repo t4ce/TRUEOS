@@ -110,6 +110,7 @@ pub(crate) struct PreparedGlyphPlanDiagnostics {
 }
 
 impl PreparedGlyphPlanDiagnostics {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn producer(&self) -> &'static str {
         self.producer
     }
@@ -122,6 +123,7 @@ impl PreparedGlyphPlanDiagnostics {
         self.glyph_ids_sample.as_str()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn candidate_attempts(&self) -> u64 {
         self.candidate_attempts
     }
@@ -248,26 +250,32 @@ impl FontPlanCellRequest {
         self
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn position(self) -> [f32; 2] {
         self.position
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn font_pixels(self) -> f32 {
         self.font_pixels
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn max_work(self) -> u64 {
         self.max_work
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn rng_seed(self) -> u64 {
         self.rng_seed
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn fixed_scalar(self) -> Option<char> {
         self.fixed_scalar
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn worker_affinity(self) -> Option<u8> {
         self.worker_affinity
     }
@@ -316,18 +324,22 @@ impl FontPlanBatchRequest {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn font(&self) -> crate::intel::gpu_font::GpuFontFace {
         self.font
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn viewport_extent(&self) -> (u32, u32) {
         (self.viewport_width, self.viewport_height)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn raster_extent(&self) -> (u32, u32) {
         (self.raster_width, self.raster_height)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn cells(&self) -> &[FontPlanCellRequest] {
         self.cells.as_slice()
     }
@@ -655,10 +667,12 @@ pub(crate) struct PreparedGlyphPlanOutput {
 }
 
 impl PreparedGlyphPlanOutput {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn plan(&self) -> &PreparedGlyphPlan {
         &self.plan
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn stats(&self) -> FontPlanBuildStats {
         self.stats
     }
@@ -795,6 +809,7 @@ impl PendingPreparedGlyphPlan {
         self.batch.completion.try_take()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) async fn wait(self) -> Result<PreparedGlyphPlanOutput, FontPlanError> {
         self.batch.completion.join().await
     }

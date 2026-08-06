@@ -396,6 +396,7 @@ impl fmt::Display for PciAddress {
 pub struct DeviceSerial(String);
 
 impl DeviceSerial {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -426,6 +427,7 @@ pub struct DeviceInfo {
     pub capacity_bytes: u128,
     pub max_transfer_bytes: u64,
     pub dma_alignment: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub serial: Option<DeviceSerial>,
     pub writable: bool,
 }
@@ -741,6 +743,7 @@ where
     register_boxed_device(descriptor, Box::new(device), true)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn register_device_deferred_mount<D>(descriptor: DeviceDescriptor, device: D) -> DeviceHandle
 where
     D: BlockDevice + 'static,
@@ -786,6 +789,7 @@ where
     register_device_with_worker_inner(descriptor, device, true, false)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn register_device_with_worker_deferred_mount<D>(
     descriptor: DeviceDescriptor,
     device: D,

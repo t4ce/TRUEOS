@@ -65,6 +65,7 @@ const GUC_HXG_TYPE_NO_RESPONSE_BUSY: u32 = 3;
 const GUC_HXG_TYPE_NO_RESPONSE_RETRY: u32 = 5;
 const GUC_HXG_TYPE_RESPONSE_FAILURE: u32 = 6;
 const GUC_HXG_TYPE_RESPONSE_SUCCESS: u32 = 7;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GUC_ACTION_HOST2GUC_CONTROL_CTB: u32 = 0x4509;
 const GUC_SEND_TRIGGER: u32 = 1 << 0;
 const GUC_MMIO_POLL_ITERS: usize = 100_000;

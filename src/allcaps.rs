@@ -20,6 +20,7 @@ pub mod executor {
 pub mod probes {
     pub const MIO_BOOT_PROBE: bool = false;
     pub const UNIX_FD_PROBE: bool = false;
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS: bool = false;
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
 }
@@ -37,6 +38,7 @@ pub mod blueprint {
 }
 
 pub mod gfx {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const SCREENSHOT_CAPTURE_ENABLED: bool = false;
 }
 

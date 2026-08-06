@@ -9,14 +9,18 @@ use spin::Mutex;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WifiSecurity {
     Open,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     WEP,
     WPA,
     WPA2,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     WPA3,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Unknown,
 }
 
 impl WifiSecurity {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn as_str(&self) -> &'static str {
         match self {
             WifiSecurity::Open => "Open",
@@ -36,10 +40,12 @@ pub struct WifiNetwork {
     pub channel: u8,
     pub signal_dbm: i8,
     pub security: WifiSecurity,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub frequency_mhz: u16,
 }
 
 impl WifiNetwork {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn signal_quality(&self) -> u8 {
         // Convert dBm to percentage: -30 dBm = 100%, -90 dBm = 0%
         if self.signal_dbm >= -30 {
@@ -51,6 +57,7 @@ impl WifiNetwork {
         ((self.signal_dbm as i16 + 90) * 100 / 60) as u8
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn signal_bars(&self) -> u8 {
         match self.signal_quality() {
             80..=100 => 4,
@@ -64,6 +71,7 @@ impl WifiNetwork {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WifiState {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     NoHardware,
     Disabled,
     Disconnected,
@@ -71,14 +79,19 @@ pub enum WifiState {
     Connecting,
     Authenticating,
     Connected,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Failed,
 }
 
 pub trait WifiDriver: NetworkDriver + Send {
     fn wifi_state(&self) -> WifiState;
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn scan(&mut self) -> Result<(), &'static str>;
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn scan_results(&self) -> Vec<WifiNetwork>;
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn connect(&mut self, ssid: &str, password: &str) -> Result<(), &'static str>;
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn disconnect(&mut self) -> Result<(), &'static str>;
     fn connected_ssid(&self) -> Option<String>;
     fn current_channel(&self) -> Option<u8>;
@@ -86,36 +99,46 @@ pub trait WifiDriver: NetworkDriver + Send {
 }
 
 pub(crate) static WIFI_DRIVER: Mutex<Option<Box<dyn WifiDriver>>> = Mutex::new(None);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static WIFI_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Deferred WiFi PCI location (bus, device, function) — set during boot, probed on first use
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static DEFERRED_PCI: Mutex<Option<(u8, u8, u8)>> = Mutex::new(None);
 
 /// Last scan results (cached for UI)
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static SCAN_RESULTS: Mutex<Vec<WifiNetwork>> = Mutex::new(Vec::new());
 
 /// Current connection state
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static CONNECTION_STATE: Mutex<WifiState> = Mutex::new(WifiState::NoHardware);
 
 /// Currently connected SSID
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static CONNECTED_SSID: Mutex<Option<String>> = Mutex::new(None);
 
 /// Pending connection request
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static CONNECT_REQUEST: Mutex<Option<(String, String)>> = Mutex::new(None);
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_deferred_pci(bus: u8, device: u8, function: u8) {
     *DEFERRED_PCI.lock() = Some((bus, device, function));
     crate::log!("wifi: Deferred PCI probe stored: {}.{}.{}", bus, device, function);
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn has_wifi() -> bool {
     WIFI_ACTIVE.load(Ordering::Relaxed) || DEFERRED_PCI.lock().is_some()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn has_active_driver() -> bool {
     WIFI_ACTIVE.load(Ordering::Relaxed)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn lazy_probe() -> Result<(), &'static str> {
     // Already probed?
     if WIFI_ACTIVE.load(Ordering::Relaxed) {
@@ -148,18 +171,22 @@ pub fn lazy_probe() -> Result<(), &'static str> {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn state() -> WifiState {
     *CONNECTION_STATE.lock()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn is_connected() -> bool {
     *CONNECTION_STATE.lock() == WifiState::Connected
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn connected_ssid() -> Option<String> {
     CONNECTED_SSID.lock().clone()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn signal_strength() -> Option<i8> {
     WIFI_DRIVER
         .lock()
@@ -167,6 +194,7 @@ pub fn signal_strength() -> Option<i8> {
         .and_then(|d| d.signal_strength())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn ensure_started() -> Result<(), &'static str> {
     // Lazy probe if not yet done (deferred from boot)
     if !WIFI_ACTIVE.load(Ordering::Relaxed) {
@@ -194,6 +222,7 @@ pub fn ensure_started() -> Result<(), &'static str> {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn start_scan() -> Result<(), &'static str> {
     // Lazy probe + auto-start
     ensure_started()?;
@@ -206,10 +235,12 @@ pub fn start_scan() -> Result<(), &'static str> {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn get_scan_results() -> Vec<WifiNetwork> {
     SCAN_RESULTS.lock().clone()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn poll() {
     let mut guard = WIFI_DRIVER.lock();
     if let Some(driver) = guard.as_mut() {
@@ -251,6 +282,7 @@ pub fn poll() {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn request_connect(ssid: &str, password: &str) {
     if let Err(e) = ensure_started() {
         crate::log!("wifi: Cannot connect — start failed: {}", e);
@@ -259,6 +291,7 @@ pub fn request_connect(ssid: &str, password: &str) {
     *CONNECT_REQUEST.lock() = Some((String::from(ssid), String::from(password)));
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn disconnect() -> Result<(), &'static str> {
     let mut guard = WIFI_DRIVER.lock();
     let driver = guard.as_mut().ok_or("No WiFi driver")?;
@@ -268,6 +301,7 @@ pub fn disconnect() -> Result<(), &'static str> {
     Ok(())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_driver(driver: Box<dyn WifiDriver>) {
     crate::log!("wifi: WiFi driver active: {}", driver.info().name);
     *WIFI_DRIVER.lock() = Some(driver);
@@ -275,6 +309,7 @@ pub fn set_driver(driver: Box<dyn WifiDriver>) {
     *CONNECTION_STATE.lock() = WifiState::Disconnected;
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn probe_pci(pci_dev: &PciDevice) -> bool {
     // Debug: log every device we check
     crate::log!(

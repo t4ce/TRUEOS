@@ -56,6 +56,7 @@ pub(super) enum CaptureError {
     NoScanout,
     DimensionTooLarge,
     InvalidFrameLayout,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     WindowUnavailable(super::WindowId),
     Frame(FramePoolError),
 }
@@ -169,7 +170,9 @@ enum CaptureTrigger {
 enum CaptureSelection {
     Composition,
     Window {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         id: super::WindowId,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         plane_slot: usize,
     },
 }
@@ -177,11 +180,13 @@ enum CaptureSelection {
 #[derive(Copy, Clone)]
 struct CaptureRequest {
     trigger: CaptureTrigger,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     selection: CaptureSelection,
 }
 
 #[derive(Copy, Clone)]
 enum CaptureScope {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Composition,
     Window {
         id: super::WindowId,
@@ -200,7 +205,9 @@ struct CapturedComposition {
     scope: CaptureScope,
     path_override: Option<String>,
     release_interactive_gate: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     slot0_scanout_pixels: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     spirit_overlay_pixels: usize,
 }
 
@@ -445,6 +452,7 @@ fn enqueue_request(request: CaptureRequest) -> Option<usize> {
 /// `windows` is the immutable broker snapshot used for the frame. Slot 4 is
 /// sampled from its independent service only after a capture request is
 /// actually consumed. The hardware mouse cursor remains intentionally absent.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn capture_compositor_frame(windows: &[WindowSnapshot]) {
     let request = {
         let mut requests = CAPTURE_REQUESTS.lock();
@@ -523,6 +531,7 @@ pub(super) fn capture_compositor_frame(windows: &[WindowSnapshot]) {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn capture_scope_log_fields(selection: CaptureSelection) -> (&'static str, u32, usize) {
     match selection {
         CaptureSelection::Composition => ("composition", 0, 0),
@@ -530,6 +539,7 @@ fn capture_scope_log_fields(selection: CaptureSelection) -> (&'static str, u32, 
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn capture_windows(
     windows: &[WindowSnapshot],
     rects: &[crate::intel::LiveOverlayRect],

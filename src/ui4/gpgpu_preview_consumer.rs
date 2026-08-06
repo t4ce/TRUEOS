@@ -95,6 +95,7 @@ pub(crate) enum GpgpuPreviewPreset {
     Mandelbrot,
     Chart,
     Plasma,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Lab256,
     CppGallery,
     CppAurora,
@@ -888,6 +889,7 @@ fn log_cpp_font_rush_capabilities(
     );
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn request_gpgpu_lab256_startup(
     frame_limit: u64,
     target_hz: u64,

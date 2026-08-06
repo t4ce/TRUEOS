@@ -12,18 +12,6 @@ pub(crate) mod fmt;
 
 pub use embassy_executor_macros::task;
 
-macro_rules! check_at_most_one {
-    (@amo [$($feats:literal)*] [] [$($res:tt)*]) => {
-        #[cfg(any($($res)*))]
-        compile_error!(concat!("At most one of these features can be enabled at the same time:", $(" `", $feats, "`",)*));
-    };
-    (@amo $feats:tt [$curr:literal $($rest:literal)*] [$($res:tt)*]) => {
-        check_at_most_one!(@amo $feats [$($rest)*] [$($res)* $(all(feature=$curr, feature=$rest),)*]);
-    };
-    ($($f:literal),*$(,)?) => {
-        check_at_most_one!(@amo [$($f)*] [$($f)*] []);
-    };
-}
 #[cfg(feature = "_platform")]
 #[cfg_attr(feature = "platform-spin", path = "platform/spin.rs")]
 mod platform;

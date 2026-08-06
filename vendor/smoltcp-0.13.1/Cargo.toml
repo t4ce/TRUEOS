@@ -549,6 +549,12 @@ version = "0.17"
 [dev-dependencies.url]
 version = "2.0"
 
+[lints.rust]
+unreachable_patterns = "allow"
+unused_imports = "allow"
+unused_mut = "allow"
+unused_variables = "allow"
+
 [lints.rust.unexpected_cfgs]
 level = "warn"
 priority = 0

@@ -102,6 +102,7 @@ pub async fn load_runtime_config() -> Result<RuntimeMailConfig, &'static str> {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn save_runtime_config(config: &RuntimeMailConfig) -> Result<(), &'static str> {
     let disk = primary_root()?;
     ensure_mail_dir(disk).await?;
@@ -162,6 +163,7 @@ pub async fn runtime_smtp_account() -> Result<(String, String, String), &'static
     Ok((config.smtp_user, config.smtp_pass, from))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn redacted_status(config: &RuntimeMailConfig) -> serde_json::Value {
     serde_json::json!({
         "smtp_user": config.smtp_user,

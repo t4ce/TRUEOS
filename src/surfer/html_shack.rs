@@ -121,6 +121,7 @@ impl ByteFetchMethod {
 }
 
 pub struct ByteFetch {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub url: String,
     pub bytes: Vec<u8>,
 }
@@ -267,10 +268,12 @@ impl HtmlShack {
         self.ready_html_queue.len()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn get_ready_inline_html(&mut self, html: impl Into<String>) -> usize {
         self.put_ready_html(Html::new("inline", html))
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn get_ready_file_html(&mut self, file_ref: &str) -> Result<usize, HtmlShackFileError> {
         let path = normalize_file_reference(file_ref);
         let bytes = match crate::r::io::kfs::read_file(path.as_str()) {
@@ -371,6 +374,7 @@ pub fn with_html_shack<R>(f: impl FnOnce(&mut HtmlShack) -> R) -> R {
     f(shack)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn get_ready_inline_html(html: impl Into<String>) -> usize {
     let html = prepare_ready_inline_html(html);
     with_html_shack(|shack| shack.put_ready_html(html))
@@ -380,6 +384,7 @@ pub fn prepare_ready_inline_html(html: impl Into<String>) -> Html {
     Html::new("inline", html)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn get_ready_file_html(file_ref: &str) -> Result<usize, HtmlShackFileError> {
     let html = prepare_ready_file_html(file_ref)?;
     Ok(with_html_shack(|shack| shack.put_ready_html(html)))
@@ -1079,6 +1084,7 @@ fn parse_ipv4_literal(host: &str) -> Option<[u8; 4]> {
     if count == out.len() { Some(out) } else { None }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn build_dns_a_query(host: &str, id: u16) -> Result<Vec<u8>, HttpFetchError> {
     let mut out = Vec::new();
     out.extend_from_slice(&id.to_be_bytes());
@@ -1211,6 +1217,7 @@ fn https_body_from_response(response: &[u8], max_bytes: usize) -> Result<Vec<u8>
     Ok(body.to_vec())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn dns_skip_name(buf: &[u8], mut offset: usize) -> Option<usize> {
     loop {
         let len = *buf.get(offset)?;
@@ -1232,6 +1239,7 @@ fn dns_skip_name(buf: &[u8], mut offset: usize) -> Option<usize> {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_dns_a_response(buf: &[u8], id: u16) -> Option<[u8; 4]> {
     if buf.len() < 12 || u16::from_be_bytes([buf[0], buf[1]]) != id {
         return None;

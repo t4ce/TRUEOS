@@ -54,6 +54,7 @@ impl ClaimedInterface<'_> {
             .await
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) async fn endpoint_isochronous_in(
         &mut self,
         address: u8,

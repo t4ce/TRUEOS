@@ -43,6 +43,7 @@ impl<K: Copy + Eq, V, const N: usize> FixedKeyMap<K, V, N> {
         self.entries[index].as_mut().map(|entry| &mut entry.value)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn get_or_insert_with(&mut self, key: K, make_value: impl FnOnce() -> V) -> Option<&mut V> {
         if let Some(index) = self.find_index(key) {
             return self.entries[index].as_mut().map(|entry| &mut entry.value);

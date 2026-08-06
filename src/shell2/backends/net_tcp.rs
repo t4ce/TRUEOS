@@ -15,9 +15,12 @@ static NET_TCP_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 pub(crate) static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_DIRECT_OWNER: AtomicU32 = AtomicU32::new(0);
 static NET_SHELL_DIRECT_RX_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const NET_SHELL_RX_CAP: usize = 8 * 1024;
 const NET_SHELL_FRONTEND_REPLAY_CAP: usize = 256 * 1024;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const NET_SHELL_FRONTEND_FLAG_DROPPED: u32 = 1 << 0;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const NET_SHELL_FRONTEND_FLAG_HANDOFF: u32 = 1 << 1;
 // Direct terminal apps may stop before their userspace guard flushes its
 // cleanup, and release_net_shell_direct intentionally drops queued app paint.
@@ -47,6 +50,7 @@ pub(crate) static NET_SHELL_STATE: spin::Mutex<NetShellState> = spin::Mutex::new
 });
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct NetShellFrontendRead {
     pub(crate) len: usize,
     pub(crate) next_seq: u64,
@@ -79,6 +83,7 @@ pub(crate) fn net_shell_frontend_active() -> bool {
     NET_SHELL_STATE.lock().frontend_owner.is_some()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn attach_net_shell_frontend(vm_id: u8, cols: usize, rows: usize) -> i32 {
     if cols == 0 || rows == 0 || cols > 4_096 || rows > 4_096 {
         return -1;
@@ -98,6 +103,7 @@ pub(crate) fn attach_net_shell_frontend(vm_id: u8, cols: usize, rows: usize) -> 
     0
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn read_net_shell_frontend(
     vm_id: u8,
     read_seq: u64,
@@ -138,6 +144,7 @@ pub(crate) fn read_net_shell_frontend(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_net_shell_frontend_input(vm_id: u8, bytes: &[u8]) -> Result<usize, i32> {
     if bytes.is_empty() {
         return Ok(0);
@@ -159,6 +166,7 @@ pub(crate) fn submit_net_shell_frontend_input(vm_id: u8, bytes: &[u8]) -> Result
     Ok(accepted)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn release_net_shell_frontend(vm_id: u8) -> i32 {
     let mut st = NET_SHELL_STATE.lock();
     if st.frontend_owner != Some(vm_id) {
@@ -255,6 +263,7 @@ fn net_shell_terminal_owned_by(owner: TerminalHandoffOwner) -> bool {
     NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) == owner.raw()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn net_shell_terminal_read(owner: TerminalHandoffOwner, out: &mut [u8]) -> usize {
     if out.is_empty() || !net_shell_terminal_owned_by(owner) {
         return 0;
@@ -267,6 +276,7 @@ fn net_shell_terminal_read(owner: TerminalHandoffOwner, out: &mut [u8]) -> usize
     read
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn net_shell_terminal_write(owner: TerminalHandoffOwner, bytes: &[u8]) -> bool {
     if !net_shell_terminal_owned_by(owner) {
         return false;

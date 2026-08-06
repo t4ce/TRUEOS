@@ -143,6 +143,7 @@ impl UsbBaseClass {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn short_name(self) -> &'static str {
         match self {
             Self::PerInterface => "per-interface",

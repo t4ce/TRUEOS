@@ -3,12 +3,14 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum PcmAdapterError {
     UnsupportedChannels,
     BadFrameAlignment,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct PcmAdapterStats {
     pub source_frames: usize,
     pub sink_frames: usize,
@@ -16,6 +18,7 @@ pub struct PcmAdapterStats {
 }
 
 #[derive(Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct PcmSinkAdapter {
     source_channels: usize,
     source_sample_rate: u32,
@@ -24,6 +27,7 @@ pub struct PcmSinkAdapter {
 }
 
 impl PcmSinkAdapter {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn new(
         source_channels: usize,
         source_sample_rate: u32,
@@ -40,6 +44,7 @@ impl PcmSinkAdapter {
         })
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn convert_packet(
         &mut self,
         interleaved_f32: &[f32],
@@ -86,6 +91,7 @@ impl PcmSinkAdapter {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn f32_to_i16(sample: f32) -> (i16, bool) {
     let clipped = !(-1.0..=1.0).contains(&sample);
     let sample = sample.clamp(-1.0, 1.0);

@@ -31,6 +31,7 @@ macro_rules! hw_pic_info {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HwPicCodec {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Jpeg,
     H264,
 }
@@ -362,10 +363,12 @@ fn submit_encoded_with_media_session(
     Ok(id)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_encoded(codec: HwPicCodec, encoded: &[u8]) -> Result<u32, i32> {
     submit_encoded_with_media_session(codec, encoded, None)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
     submit_encoded(HwPicCodec::Jpeg, encoded)
 }

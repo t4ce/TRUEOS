@@ -10,10 +10,12 @@ use sha2::{Digest, Sha256};
 use spin::Mutex;
 
 const MAX_CACHE_ENTRIES: usize = 64;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const MAX_PENDING_REQUESTS: usize = 32;
 const MAX_COMPLETIONS: usize = 32;
 
 static SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 static CACHE: Mutex<BTreeMap<CacheKey, CacheEntry>> = Mutex::new(BTreeMap::new());
 static REQUESTS: Mutex<BTreeMap<u32, CacheRequest>> = Mutex::new(BTreeMap::new());
@@ -31,6 +33,7 @@ pub struct CacheEntry {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CacheError {
     DigestMismatch { actual: [u8; 32] },
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     QueueFull,
     Missing,
 }
@@ -38,45 +41,64 @@ pub enum CacheError {
 #[derive(Debug)]
 pub enum CacheCompletion {
     Stored {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         id: u32,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         key: CacheKey,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         len: usize,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         digest: [u8; 32],
     },
     Verified {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         id: u32,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         key: CacheKey,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         len: usize,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         digest: [u8; 32],
     },
     Hit {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         id: u32,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         key: CacheKey,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         bytes: Vec<u8>,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         digest: [u8; 32],
     },
     Failed {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         id: u32,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         key: CacheKey,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         error: CacheError,
     },
 }
 
 enum CacheRequest {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Store {
         key: CacheKey,
         bytes: Vec<u8>,
         expected_sha256: Option<[u8; 32]>,
     },
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Verify {
         key: CacheKey,
         expected_sha256: [u8; 32],
     },
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Load {
         key: CacheKey,
     },
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn cache_key_for_bytes(bytes: &[u8]) -> CacheKey {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for &byte in bytes {
@@ -132,6 +154,7 @@ pub fn load_cached_now(key: CacheKey) -> Option<CacheEntry> {
     CACHE.lock().get(&key).cloned()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn submit_store(
     key: CacheKey,
     bytes: Vec<u8>,
@@ -144,6 +167,7 @@ pub fn submit_store(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn submit_verify(key: CacheKey, expected_sha256: [u8; 32]) -> Result<u32, CacheError> {
     submit(CacheRequest::Verify {
         key,
@@ -151,14 +175,17 @@ pub fn submit_verify(key: CacheKey, expected_sha256: [u8; 32]) -> Result<u32, Ca
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn submit_load(key: CacheKey) -> Result<u32, CacheError> {
     submit(CacheRequest::Load { key })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn take_completion(id: u32) -> Option<CacheCompletion> {
     COMPLETIONS.lock().remove(&id)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn wait_completion(id: u32, timeout_ms: u64) -> Option<CacheCompletion> {
     if let Some(done) = take_completion(id) {
         return Some(done);
@@ -253,6 +280,7 @@ pub async fn cache_service_task() {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit(request: CacheRequest) -> Result<u32, CacheError> {
     let mut requests = REQUESTS.lock();
     if requests.len() >= MAX_PENDING_REQUESTS {

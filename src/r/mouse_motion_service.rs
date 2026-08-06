@@ -47,6 +47,7 @@ static NEXT_SLOT: AtomicU32 = AtomicU32::new(1);
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MouseControlPrincipal {
     Kernel,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     KernelApp(u8),
     Vm(u8),
 }

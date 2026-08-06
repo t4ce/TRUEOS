@@ -11,17 +11,20 @@ use super::{
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct KnownAotQueueProbe {
     pub(crate) known_kernels: usize,
     pub(crate) completed_commands: usize,
     pub(crate) fill_rect_uploaded: bool,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn fill_rect_worklist_runtime_example() -> ClResult<()> {
     let _ = fill_rect_worklist_queue_probe()?;
     Ok(())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn fill_rect_worklist_queue_probe() -> ClResult<KnownAotQueueProbe> {
     let device = DeviceId::from_raw(1);
     let backend = IntelOpenClBackend::new();

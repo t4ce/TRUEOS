@@ -13,6 +13,7 @@ pub(crate) enum PngEncodeError {
 }
 
 impl PngEncodeError {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn code(self) -> i32 {
         match self {
             Self::InvalidDimensions => -20,
@@ -22,6 +23,7 @@ impl PngEncodeError {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn encode_rgb_u32_png(
     width: u32,
     height: u32,
@@ -129,6 +131,7 @@ pub(crate) fn encode_rgba8_png(
     encode_filtered_png(width, height, 6, filtered.as_slice())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn checked_pixel_count(width: usize, height: usize) -> Result<usize, PngEncodeError> {
     width
         .checked_mul(height)

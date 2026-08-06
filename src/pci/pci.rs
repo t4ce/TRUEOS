@@ -18,24 +18,35 @@ const CFG_DATA: u16 = 0xCFC;
 const CFG_ENABLE: u32 = 0x8000_0000;
 
 const MAX_PCI_DEVICES: usize = 256;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const MAX_PCI_CLAIMS: usize = 64;
 
 const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
 const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_COMMAND_INTX_DISABLE: u16 = 1 << 10;
 const PCI_STATUS_CAP_LIST: u16 = 1 << 4;
 
 const PCI_CAP_PTR: u16 = 0x34;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_CAP_ID_MSI: u8 = 0x05;
 const PCI_CAP_ID_PCI_EXPRESS: u8 = 0x10;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_CONTROL: u16 = 0x02;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_ADDRESS_LO: u16 = 0x04;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_ADDRESS_HI: u16 = 0x08;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_DATA_32: u16 = 0x08;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_DATA_64: u16 = 0x0C;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_ENABLE: u16 = 1 << 0;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_MULTIPLE_MESSAGE_ENABLE: u16 = 0b111 << 1;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_64_BIT_CAPABLE: u16 = 1 << 7;
 const PCI_EXP_DEVCAP: u16 = 0x04;
 const PCI_EXP_DEVCTL: u16 = 0x08;
@@ -115,6 +126,7 @@ impl PciDevice {
 static DEVICES: Mutex<Vec<PciDevice, MAX_PCI_DEVICES>> = Mutex::new(Vec::new());
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct PciClaim {
     bus: u8,
     slot: u8,
@@ -123,11 +135,13 @@ struct PciClaim {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum PciClaimError {
     AlreadyClaimed(&'static str),
     RegistryFull,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static PCI_CLAIMS: Mutex<Vec<PciClaim, MAX_PCI_CLAIMS>> = Mutex::new(Vec::new());
 
 const ECAM_MAX_REGIONS: usize = 8;
@@ -423,6 +437,7 @@ pub fn with_devices<R, F: FnOnce(&[PciDevice]) -> R>(f: F) -> R {
 ///
 /// Repeating a claim by the same owner is idempotent. Different drivers cannot claim the
 /// same BDF until the current owner releases it (for example after hot-unplug).
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn claim_device(dev: &PciDevice, owner: &'static str) -> Result<(), PciClaimError> {
     let mut claims = PCI_CLAIMS.lock();
     if let Some(claim) = claims.iter().find(|claim| {
@@ -444,6 +459,7 @@ pub fn claim_device(dev: &PciDevice, owner: &'static str) -> Result<(), PciClaim
         .map_err(|_| PciClaimError::RegistryFull)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn release_device_claim(bus: u8, slot: u8, function: u8, owner: &'static str) -> bool {
     let mut claims = PCI_CLAIMS.lock();
     let Some(index) = claims.iter().position(|claim| {
@@ -498,6 +514,7 @@ pub fn enable_mem_and_bus_master(bus: u8, slot: u8, function: u8) {
 }
 
 /// Enable BAR memory decoding while explicitly leaving DMA/bus mastering disabled.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn enable_mem_space_only(bus: u8, slot: u8, function: u8) {
     let mut cmd = config_read_u16(bus, slot, function, 0x04);
     cmd |= PCI_COMMAND_MEM_SPACE;
@@ -514,6 +531,7 @@ pub fn enable_mem_space_only(bus: u8, slot: u8, function: u8) {
 /// DMA: an MSI is a device-originated Memory Write TLP, and PCIe suppresses it while
 /// Bus Master Enable is clear. Enabling the command bit grants requester permission;
 /// it does not create a DMA/requester datapath in the endpoint firmware.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn enable_single_msi(
     bus: u8,
     slot: u8,

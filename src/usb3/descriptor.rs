@@ -116,6 +116,7 @@ impl UsbDescriptorSkipReason {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const fn endpoint_transfer_type_label(
     transfer_type: usb_if::descriptor::EndpointType,
 ) -> &'static str {
@@ -138,6 +139,7 @@ pub(crate) const fn hid_optional_descriptor_skip_reason(
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn sanitize_usb_identity_string(raw: &str) -> Option<String> {
     let trimmed = raw.trim_matches(|ch: char| ch.is_ascii_whitespace() || ch == '\0');
     if trimmed.is_empty() {
@@ -170,6 +172,7 @@ pub(crate) fn sanitize_usb_identity_string(raw: &str) -> Option<String> {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) async fn read_optional_string_descriptor(
     device: &mut Device,
     index: Option<core::num::NonZero<u8>>,
@@ -320,6 +323,7 @@ fn log_hid_report_decode(slot_id: u32, interface_number: u8, report_desc: &[u8])
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) async fn log_hid_report_descriptors(
     host: &mut USBHost,
     dev_info: &crab_usb::DeviceInfo,

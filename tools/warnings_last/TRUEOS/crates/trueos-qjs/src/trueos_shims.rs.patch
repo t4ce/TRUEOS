@@ -1,0 +1,57 @@
+diff --git a/crates/trueos-qjs/src/trueos_shims.rs b/crates/trueos-qjs/src/trueos_shims.rs
+index 34d189369..f18746a8d 100644
+--- a/crates/trueos-qjs/src/trueos_shims.rs
++++ b/crates/trueos-qjs/src/trueos_shims.rs
+@@ -15,7 +15,7 @@ pub use v::qjs_abi::{
+     trueos_cabi_fs_read_file, trueos_cabi_fs_remove, trueos_cabi_fs_write_abort,
+     trueos_cabi_fs_write_begin, trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish,
+     trueos_cabi_hid_keyboard_read, trueos_cabi_input_cursor_buttons, trueos_cabi_input_cursor_pos,
+-    trueos_cabi_input_pop_mouse, trueos_cabi_input_read_cursor_events_since,
++    trueos_cabi_input_read_cursor_events_since,
+     trueos_cabi_input_write_cursor, trueos_cabi_malloc_usable_size, trueos_cabi_mouse_poll,
+     trueos_cabi_net_fetch_bytes_discard, trueos_cabi_net_fetch_bytes_read,
+     trueos_cabi_net_fetch_bytes_result_len, trueos_cabi_net_fetch_bytes_start,
+@@ -23,11 +23,10 @@ pub use v::qjs_abi::{
+     trueos_cabi_net_fetch_post_json_bytes_start, trueos_cabi_net_fetch_post_json_start,
+     trueos_cabi_net_fetch_result, trueos_cabi_net_fetch_start, trueos_cabi_net_fetch_wait,
+     trueos_cabi_net_prewarm_url_start, trueos_cabi_poll_once, trueos_cabi_qjs_mouse_pop,
+-    trueos_cabi_realloc, trueos_cabi_shell_command_registry_json, trueos_cabi_shell1_submit_input,
+-    trueos_cabi_shell2_print_line, trueos_cabi_trueosfs_json_all,
++    trueos_cabi_realloc, trueos_cabi_trueosfs_json_all,
+     trueos_cabi_trueosfs_primary_html_tree,
+ };
+-pub use v::vshell::{shell_command_registry_json, shell1_submit_input, shell2_print_line};
++pub use v::vshell::shell2_print_line;
+ pub use v::vsys::{log_error, log_info, write_log_stream};
+ 
+ #[inline]
+@@ -35,28 +34,6 @@ fn log_bytes(bytes: &[u8]) {
+     let _ = bytes;
+ }
+ 
+-#[inline]
+-pub fn input_write_keyboard_text(slot_id: u32, bytes: &[u8], flags: u32) -> i32 {
+-    match v::vinput::write_keyboard_text(slot_id, bytes, flags) {
+-        Ok(()) => 0,
+-        Err(rc) => rc,
+-    }
+-}
+-
+-#[inline]
+-pub fn input_write_keyboard_key(
+-    slot_id: u32,
+-    codepoint: u32,
+-    key_code: u32,
+-    modifiers: u32,
+-    flags: u32,
+-) -> i32 {
+-    match v::vinput::write_keyboard_key(slot_id, codepoint, key_code, modifiers, flags) {
+-        Ok(()) => 0,
+-        Err(rc) => rc,
+-    }
+-}
+-
+ #[inline]
+ fn log_str(s: &str) {
+     log_bytes(s.as_bytes())
+

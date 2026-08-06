@@ -43,6 +43,7 @@ static VIDEO_SURFLIVE_RELEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// or required no plane update. Slot 4 advances and acknowledges separately.
 static PRESENTED_BROKER_REVISION: AtomicU64 = AtomicU64::new(0);
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn ui4_compositor_presented_revision() -> u64 {
     PRESENTED_BROKER_REVISION.load(Ordering::Acquire)
 }

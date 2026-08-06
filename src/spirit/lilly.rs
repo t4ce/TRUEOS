@@ -131,12 +131,16 @@ struct LillyCatalogEntry {
 
 #[derive(Debug)]
 enum LillyLoadError {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Archive(crate::z7::SevenZError),
     ArchiveShape,
     PngHeader,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PngDecode(i32),
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Catalog(&'static str),
     AddressOverflow,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Resident(&'static str),
     ResidentWrite,
 }

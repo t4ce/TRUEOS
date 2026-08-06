@@ -16,7 +16,7 @@ static FINISHED_QUEUE_LOG_BUDGET: AtomicUsize = AtomicUsize::new(128);
 
 fn take_queue_log_budget() -> bool {
     FINISHED_QUEUE_LOG_BUDGET
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| left.checked_sub(1))
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |left| left.checked_sub(1))
         .is_ok()
 }
 

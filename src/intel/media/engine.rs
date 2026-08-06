@@ -458,6 +458,7 @@ pub(crate) enum MediaSubmissionTransport {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MediaKickoffStage {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     SubmissionWiring,
     CommandEncoding,
 }
@@ -528,23 +529,41 @@ pub(crate) struct MediaGpuWindowLayout {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct MediaEngineRuntimeSnapshot {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub name: &'static str,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub ring_base: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub observed: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub tail: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub head: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub start: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub ctl: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub acthd: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub mi_mode: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub mode: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub ctx_ctl: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub execlist_ctl: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub execlist_status_lo: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub execlist_status_hi: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub ipeir: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub ipehr: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub instdone: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub instps: u32,
 }
 
@@ -575,8 +594,11 @@ impl MediaEngineRuntimeSnapshot {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct MediaSliceWakeAck {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub name: &'static str,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub value: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub awake: bool,
 }
 
@@ -599,19 +621,27 @@ pub(super) struct MediaEngineForcewakeAck {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct MediaForcewakeSnapshot {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub global_req: u32,
     pub global_ack: u32,
     pub awake_count: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub slice_count: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub slices: [MediaSliceWakeAck; 8],
 }
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct MediaApiRoute {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub name: &'static str,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub workload: MediaWorkloadKind,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub preferred_engine_class: Option<MediaEngineClass>,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub transport: MediaSubmissionTransport,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub summary: &'static str,
 }
 
@@ -709,11 +739,14 @@ pub(crate) fn encode_readiness() -> MediaEncodeReadiness {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct MediaTopology {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub sku_name: &'static str,
     pub active_engine_count: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub planned_engine_count: usize,
     pub engines: [MediaEngineDescriptor; MAX_MEDIA_ENGINES],
     pub default_decode: Option<MediaEngineId>,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub default_enhance: Option<MediaEngineId>,
 }
 
@@ -785,49 +818,85 @@ impl MediaSurfaceProbe {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct MediaDecodeFrameState {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub ready: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub engine_name: &'static str,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub ring_gpu_addr: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub context_gpu_addr: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub batch_gpu_addr: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub result_gpu_addr: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub bitstream_gpu_addr: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub output_surface_gpu_addr: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub bitstream_phys: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub output_surface_phys: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub bitstream_bytes: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub output_surface_bytes: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub frame_width: u16,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub frame_height: u16,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub output_surface_pitch: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub sample_nal_count: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub has_idr: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub kickoff_marker: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub complete_marker: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub output_surface_signature: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub output_surface_nonzero_samples: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub output_surface_probe: MediaSurfaceProbe,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub submit_completed: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub present_attempted: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub present_ready: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub synthetic_preview: bool,
 }
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct MediaKickoffState {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub topology: MediaTopology,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub runtime_count: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub runtimes: [MediaEngineRuntimeSnapshot; MAX_MEDIA_ENGINES],
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub wake: MediaForcewakeSnapshot,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub api: MediaApiShape,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub preferred_transport: MediaSubmissionTransport,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub guc_ready: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub guc_status: u32,
     pub stage: MediaKickoffStage,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub last_decode_frame: Option<MediaDecodeFrameState>,
 }
 
 #[derive(Copy, Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct Media2FirstFrameState {
     pub ready: bool,
     pub submit_completed: bool,
@@ -1145,15 +1214,18 @@ pub(crate) fn decode_ran() -> bool {
     MEDIA_DECODE_RAN.load(Ordering::Acquire)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn store_kickoff_state(stage: MediaKickoffStage) {
     *MEDIA_KICKOFF_STATE.lock() = rebuild_kickoff_state(stage);
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn kickoff_once() {
     MEDIA_KICKOFF_RAN.store(true, Ordering::Release);
     store_kickoff_state(MediaKickoffStage::CommandEncoding);
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameState> {
     kickoff_once();
     crate::log!("intel/media2: disabled reason=jpeg-only-engine-cut\n");
@@ -1562,6 +1634,7 @@ fn luma_band_to_chroma_band(luma_row: usize, luma_rows: usize) -> (usize, usize)
     (chroma_row, chroma_end.saturating_sub(chroma_row))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn probe_output_surface(
     output_surface: &[u8],
     coded_width: u16,
@@ -2597,6 +2670,7 @@ fn install_media_ppgtt(ranges: &[crate::intel::ppgtt::PpgttRange]) -> Option<u64
 /// must keep the allocation and its producer lease alive until the submitted
 /// job retires. The hardware activation path will additionally perform its
 /// VDBOX TLB/context synchronization immediately before first use.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn map_media_ppgtt_range(gpu: u64, phys: u64, bytes: usize) -> bool {
     if gpu == 0
         || phys == 0
@@ -2614,6 +2688,7 @@ pub(super) fn map_media_ppgtt_range(gpu: u64, phys: u64, bytes: usize) -> bool {
         .is_some()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn unmap_media_ppgtt_range(gpu: u64, bytes: usize) -> bool {
     if gpu == 0
         || bytes == 0

@@ -7,6 +7,7 @@
 use super::{IntelGpuTarget, UploadedKernelRef, registry::KNOWN_AOT_KERNELS};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum KnownAotValidationIssueKind {
     EmptyRegistry,
     DuplicateKernelName,
@@ -32,6 +33,7 @@ pub(crate) enum KnownAotValidationIssueKind {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct KnownAotValidationIssue {
     pub(crate) index: usize,
     pub(crate) name: &'static str,
@@ -39,6 +41,7 @@ pub(crate) struct KnownAotValidationIssue {
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct KnownAotValidationReport {
     pub(crate) registry_kernels: usize,
     pub(crate) metadata_checked: usize,
@@ -50,14 +53,17 @@ pub(crate) struct KnownAotValidationReport {
 }
 
 impl KnownAotValidationReport {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn passed(self) -> bool {
         self.registry_kernels != 0 && self.issues == 0
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn all_uploads_ready(self) -> bool {
         self.passed() && self.ready_uploads == self.registry_kernels
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn record_issue(
         &mut self,
         index: usize,
@@ -71,6 +77,7 @@ impl KnownAotValidationReport {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn validate_known_aot_registry() -> KnownAotValidationReport {
     let mut report = KnownAotValidationReport {
         registry_kernels: KNOWN_AOT_KERNELS.len(),
@@ -168,6 +175,7 @@ pub(crate) fn validate_known_aot_registry() -> KnownAotValidationReport {
     report
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn validate_known_aot_status() -> KnownAotValidationReport {
     let mut report = validate_known_aot_registry();
 

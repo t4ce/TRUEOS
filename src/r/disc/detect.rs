@@ -60,6 +60,7 @@ fn looks_like_ext_superblock(sb: &[u8]) -> bool {
     sb.len() >= 58 && sb[56] == 0x53 && sb[57] == 0xEF
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn detect_physical_disk(handle: block::DeviceHandle) -> DiscStatus {
     detect_physical_disk_detail(handle).await.0
 }

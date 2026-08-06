@@ -13,7 +13,9 @@ use sha2::{Digest, Sha256};
 pub const NATIVE_IMAGE_PATH: &str = "models/lfm2.5/LFM2.5-350M-Q8_0.native.bin";
 pub const NATIVE_IMAGE_BYTES: u64 = trueos_lfm25_model::lfm25::PINNED_NATIVE_IMAGE_BYTES as u64;
 pub const NATIVE_IMAGE_SHA256: [u8; 32] = trueos_lfm25_model::lfm25::PINNED_NATIVE_IMAGE_SHA256;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const VERIFY_CHUNK_BYTES: usize = 256 * 1024;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const VERIFY_YIELD_MS: u64 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,6 +29,7 @@ pub enum Error {
         observed: u64,
         expected: u64,
     },
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     BufferUnavailable,
     Read {
         offset: u64,
@@ -37,6 +40,7 @@ pub enum Error {
         observed: usize,
         expected: usize,
     },
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     HashMismatch {
         observed: [u8; 32],
         expected: [u8; 32],
@@ -55,6 +59,7 @@ impl NativeImage {
     }
 
     #[inline]
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -95,6 +100,7 @@ pub async fn open() -> Result<NativeImage, Error> {
 }
 
 /// Stream and seal-check the exact native image. `progress` receives byte counts.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn verify_with_progress(
     image: &NativeImage,
     mut progress: impl FnMut(u64, u64),

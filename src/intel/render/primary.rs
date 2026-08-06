@@ -1,14 +1,22 @@
 use alloc::vec::Vec;
 
 pub(crate) struct RenderJokerResult {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) variant: &'static str,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) submit_name: &'static str,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) target: &'static str,
     pub(crate) completed: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) vs_counter: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) ps_state_marker: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) raster_packet: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) clip_counter: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) ps_observed: bool,
 }
 
@@ -21,6 +29,7 @@ pub(crate) struct FontRenderTargetReadback {
     pub(crate) pixels: Vec<u8>,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_font_mesh_once(
     vertices: &[[f32; 2]],
     indices: &[u32],
@@ -48,6 +57,7 @@ pub(crate) const fn font_native_scale_target_pixels(native_scale: u32) -> Option
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn transient_font_mesh_upload_bytes(
     vertex_count: usize,
     index_count: usize,
@@ -64,10 +74,12 @@ pub(crate) fn transient_font_mesh_upload_bytes(
     index_offset.checked_add(index_bytes)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const fn transient_font_mesh_upload_capacity_bytes() -> usize {
     WARM_VERTEX_BYTES
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const fn transient_font_mesh_refinement_budget_bytes() -> usize {
     FONT_MESH_REFINEMENT_BUDGET_BYTES
 }
@@ -76,6 +88,7 @@ pub(crate) const fn transient_font_mesh_refinement_budget_bytes() -> usize {
 ///
 /// Scaling is performed by the 3D viewport after tessellation: the mesh and
 /// index topology remain unchanged, and presentation remains a 1:1 copy.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_font_mesh_once_scaled(
     vertices: &[[f32; 2]],
     indices: &[u32],
@@ -87,6 +100,7 @@ pub(crate) fn submit_font_mesh_once_scaled(
 
 /// Render a transient font mesh once and return its transparent native-size
 /// RGBA target instead of claiming the hardware overlay plane.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_font_mesh_readback_once_scaled(
     vertices: &[[f32; 2]],
     indices: &[u32],
@@ -133,6 +147,7 @@ pub(crate) fn submit_font_mesh_readback_once_at_extent_reusing(
     Ok((render, readback.expect("font readback recycle slot")))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_font_mesh_once_scaled_inner(
     vertices: &[[f32; 2]],
     indices: &[u32],
@@ -256,6 +271,7 @@ fn submit_font_mesh_once_at_extent_inner(
 /// Draw a kernel-owned font mesh directly from its persistent render-PPGTT
 /// allocation. Only transient pipeline state and the target are rebuilt; the
 /// vertex and index bytes are neither copied nor uploaded again.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_resident_font_mesh_once(
     mesh: &ResidentFontMesh,
     native_scale: u32,
@@ -510,6 +526,7 @@ enum ResidentSceneIncompleteStage {
 }
 
 impl ResidentSceneIncompleteStage {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     const fn error(self) -> &'static str {
         match self {
             Self::Geometry => "resident-scene-geometry-incomplete",
@@ -525,9 +542,13 @@ impl ResidentSceneIncompleteStage {
 pub(crate) struct ResidentSceneFrameResult {
     pub(crate) completed_draws: usize,
     pub(crate) requested_draws: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) changed_pixels: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) presented: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) width: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) height: u32,
     pub(crate) frame_us: u64,
     pub(crate) geometry_us: u64,
@@ -538,17 +559,24 @@ pub(crate) struct ResidentSceneFrameResult {
     /// submission. This excludes CPU batch preparation and LRC setup.
     pub(crate) gpu_poll_us: u64,
     pub(crate) gpu_poll_iters: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) resolve_us: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) coverage_us: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) present_copy_us: u64,
     pub(crate) present_copy_performed: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) coverage_submits: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) coverage_walkers: usize,
     pub(crate) rgba: Option<Vec<u8>>,
     /// True only when geometry, resolve, coverage, and any compatibility copy
     /// completed. This remains separate from `release_fence`: a caller that
     /// appends one final GPU writer may deliberately defer the release proof.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) frame_complete: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     incomplete_stage: Option<ResidentSceneIncompleteStage>,
     /// Present only after the final GPU writer's cache release plus ordered
     /// post-sync retirement marker completed for the returned UI4 allocation.
@@ -556,6 +584,7 @@ pub(crate) struct ResidentSceneFrameResult {
 }
 
 impl ResidentSceneFrameResult {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn completion_error(&self) -> Option<&'static str> {
         match self.incomplete_stage {
             Some(stage) => Some(stage.error()),
@@ -606,10 +635,14 @@ fn resident_scene_release(
 
 #[derive(Copy, Clone)]
 enum ResidentSceneFrameOutput {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Readback,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     GpuSurface(crate::intel::gpgpu::GpgpuRgba8Surface),
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     GpuSurfaceDeferredRelease(crate::intel::gpgpu::GpgpuRgba8Surface),
     DirectGpuSurface(crate::intel::gpgpu::GpgpuRgba8Surface),
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     DirectGpuSurfaceDeferredRelease(crate::intel::gpgpu::GpgpuRgba8Surface),
 }
 
@@ -1092,6 +1125,7 @@ pub(crate) const fn resident_scene_target_dimensions() -> (usize, usize) {
 /// UI4-sized 4x triangle scene followed by persistent analytical font masks.
 /// Coverage is composited only after the MSAA resolve, preserving its R8 alpha
 /// steps instead of treating the mask as additional fixed-function samples.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4_with_coverage(
     draws: &[ResidentSceneDraw<'_>],
     coverage_draws: &[ResidentSceneCoverageDraw],
@@ -1120,6 +1154,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa
 /// buffer themselves. No full-frame CPU readback or staging allocation is
 /// performed. On hardware without the 4x path, the ordinary linear scratch
 /// target is copied as a compatibility fallback.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(
     draws: &[ResidentSceneDraw<'_>],
     coverage_draws: &[ResidentSceneCoverageDraw],
@@ -1144,6 +1179,7 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_msaa4_with_cove
 /// GridPaper's complete direct-render operation. Geometry targets the leased
 /// UI4 allocation directly; analytical coverage and cursor rectangles append
 /// their writes before one final scanout release is minted.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_coverage_and_rects_direct_to_surface(
     draws: &[ResidentSceneDraw<'_>],
     coverage_draws: &[ResidentSceneCoverageDraw],
@@ -2345,6 +2381,7 @@ fn submit_resident_scene_capture_inner(
     result
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_resident_font_mesh_readback_once(
     mesh: &ResidentFontMesh,
     native_scale: u32,
@@ -2355,6 +2392,7 @@ pub(crate) fn submit_resident_font_mesh_readback_once(
     Ok((render, readback))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_resident_font_mesh_inner(
     mesh: &ResidentFontMesh,
     native_scale: u32,
@@ -2407,6 +2445,7 @@ fn submit_resident_font_mesh_inner(
     result
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct RenderOaControlResult {
     pub(crate) action: &'static str,
     pub(crate) oactx: u32,
@@ -2414,6 +2453,7 @@ pub(crate) struct RenderOaControlResult {
     pub(crate) ctx_ctrl: u32,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct RenderArtificialFragmentResult {
     pub(crate) mode: &'static str,
     pub(crate) ok: bool,
@@ -2424,6 +2464,7 @@ pub(crate) struct RenderArtificialFragmentResult {
     pub(crate) remapped_render: bool,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RENDER_JOKER_VARIANTS: &[&str] = &[
     "canonical",
     "mesa",
@@ -2580,10 +2621,12 @@ const RENDER_JOKER_VARIANTS: &[&str] = &[
     "sync-cs-no-post",
 ];
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_joker_variant_names() -> &'static [&'static str] {
     RENDER_JOKER_VARIANTS
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_oa_control_action_names() -> &'static [&'static str] {
     &[
         "status",
@@ -2599,6 +2642,7 @@ pub(crate) fn render_oa_control_action_names() -> &'static [&'static str] {
     ]
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn retired_render_joker_variant_reason(name: &str) -> Option<&'static str> {
     if name.eq_ignore_ascii_case("point-oa-w8")
         || name.eq_ignore_ascii_case("point-oa-w8-clipmax")
@@ -2610,6 +2654,7 @@ fn retired_render_joker_variant_reason(name: &str) -> Option<&'static str> {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_oa_control_action(
     action: &str,
 ) -> Result<RenderOaControlResult, &'static str> {
@@ -2725,6 +2770,7 @@ pub(crate) fn render_oa_control_action(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn write_raster_wm_oa_selectors(dev: crate::intel::Dev) {
     crate::intel::mmio_write(dev, OAG_OASTARTTRIG1, 0);
     crate::intel::mmio_write(dev, OAG_OASTARTTRIG2, 0x0080_0000);
@@ -2737,6 +2783,7 @@ fn write_raster_wm_oa_selectors(dev: crate::intel::Dev) {
 }
 
 #[derive(Copy, Clone)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct RenderJokerSpec {
     variant: &'static str,
     submit_name: &'static str,
@@ -2748,10 +2795,12 @@ struct RenderJokerSpec {
 }
 
 #[derive(Copy, Clone)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 enum RenderJokerTarget {
     ScratchRt,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
     let scratch = RenderJokerTarget::ScratchRt;
     // Historical variants that once targeted the live primary are retained as
@@ -4368,6 +4417,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
     Some(spec)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn render_joker_real_vs_front_end_contract(variant: &str) -> Option<TriangleFrontEndContract> {
     match variant {
         "reemit-vs-retire" => Some(TRIANGLE_DEFAULT_FRONT_END_CONTRACT),
@@ -4386,6 +4436,7 @@ fn render_joker_real_vs_front_end_contract(variant: &str) -> Option<TriangleFron
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn render_joker_vf_experiment(variant: &str) -> StreamoutProofExperiment {
     match variant {
         "point-oa-pos0" => StreamoutProofExperiment::PositionSlot0,
@@ -4404,6 +4455,7 @@ fn render_joker_vf_experiment(variant: &str) -> StreamoutProofExperiment {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn render_joker_streamout_kind(variant: &str) -> Option<&'static str> {
     match variant {
         "so-vf" | "so-vf-header" => Some("vf"),
@@ -4412,6 +4464,7 @@ fn render_joker_streamout_kind(variant: &str) -> Option<&'static str> {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_render_joker_probe(name: &str) -> Result<RenderJokerResult, &'static str> {
     if let Some(reason) = retired_render_joker_variant_reason(name) {
         return Err(reason);
@@ -4433,6 +4486,7 @@ pub(crate) fn submit_render_joker_probe(name: &str) -> Result<RenderJokerResult,
     result
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_render_font_clip_field_isolate_probe<const N: usize>(
     vertices: [[f32; 3]; N],
 ) -> Result<RenderJokerResult, &'static str> {
@@ -4500,6 +4554,7 @@ pub(crate) fn submit_render_font_clip_field_isolate_probe<const N: usize>(
     result
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_render_font_clip_field_vf_vue_probe<const N: usize>(
     vertices: [[f32; 3]; N],
 ) -> Result<RenderJokerResult, &'static str> {
@@ -4577,6 +4632,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_probe<const N: usize>(
 }
 
 #[derive(Copy, Clone)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct FontPsLaunchReplayCase {
     index: u8,
     variant: &'static str,
@@ -4589,6 +4645,7 @@ struct FontPsLaunchReplayCase {
     note: &'static str,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const FONT_PS_LAUNCH_REPLAY_CASES: [FontPsLaunchReplayCase; 5] = [
     FontPsLaunchReplayCase {
         index: 1,
@@ -4647,6 +4704,7 @@ const FONT_PS_LAUNCH_REPLAY_CASES: [FontPsLaunchReplayCase; 5] = [
     },
 ];
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_render_font_clip_field_vf_vue_ps_replay_probe(
     _vertices: [[f32; 3]; TRIANGLE_DRAW_VERTICES],
 ) -> Result<RenderJokerResult, &'static str> {
@@ -4727,6 +4785,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_replay_probe(
 }
 
 #[derive(Copy, Clone)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct FontPsAdmissionProbeCase {
     index: u8,
     variant: &'static str,
@@ -4738,6 +4797,7 @@ struct FontPsAdmissionProbeCase {
     note: &'static str,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const FONT_PS_ADMISSION_PROBE_CASES: [FontPsAdmissionProbeCase; 6] = [
     FontPsAdmissionProbeCase {
         index: 1,
@@ -4801,8 +4861,10 @@ const FONT_PS_ADMISSION_PROBE_CASES: [FontPsAdmissionProbeCase; 6] = [
     },
 ];
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const FONT_PS_ADMISSION_ACTIVE_CASE: u8 = 6;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_probe(
     _vertices: [[f32; 3]; TRIANGLE_DRAW_VERTICES],
 ) -> Result<RenderJokerResult, &'static str> {
@@ -4882,6 +4944,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_probe(
     last_result.ok_or("no-admission-result")
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_render_font_clip_counter_sweep_probe()
 -> Result<RenderJokerResult, &'static str> {
     let vertices = [[0.25, 0.25, 0.0], [7.75, 0.25, 0.0], [0.25, 7.75, 0.0]];
@@ -4911,6 +4974,7 @@ pub(crate) fn submit_render_font_clip_counter_sweep_probe()
     result
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_render_font_clip_counter_vf_vue_probe()
 -> Result<RenderJokerResult, &'static str> {
     let vertices = [[0.25, 0.25, 0.0], [7.75, 0.25, 0.0], [0.25, 7.75, 0.0]];
@@ -4940,6 +5004,7 @@ pub(crate) fn submit_render_font_clip_counter_vf_vue_probe()
     result
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn scratch_vertices_to_ndc<const N: usize>(vertices: [[f32; 3]; N]) -> [[f32; 3]; N] {
     let mut ndc = vertices;
     for vertex in &mut ndc {
@@ -4957,6 +5022,7 @@ fn scratch_vertices_to_ndc<const N: usize>(vertices: [[f32; 3]; N]) -> [[f32; 3]
     ndc
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_render_artificial_fragment_sentinel()
 -> Result<RenderArtificialFragmentResult, &'static str> {
     if PRIMARY_PROBE_IN_FLIGHT
@@ -4971,6 +5037,7 @@ pub(crate) fn submit_render_artificial_fragment_sentinel()
     result
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_render_custom_triangle_probe_locked(
     vertices: &[[f32; 3]],
     indices: Option<&[u32]>,
@@ -5153,6 +5220,7 @@ fn submit_render_custom_triangle_probe_locked_at_extent(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_render_artificial_fragment_sentinel_locked()
 -> Result<RenderArtificialFragmentResult, &'static str> {
     let Some(dev) = crate::intel::claimed_device() else {
@@ -5242,6 +5310,7 @@ fn submit_render_artificial_fragment_sentinel_locked()
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_render_joker_probe_locked(
     spec: RenderJokerSpec,
 ) -> Result<RenderJokerResult, &'static str> {
@@ -5387,6 +5456,7 @@ fn submit_render_joker_probe_locked(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn seed_render_scratch_rt(warm: RenderWarmState) {
     unsafe {
         core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
@@ -5395,6 +5465,7 @@ fn seed_render_scratch_rt(warm: RenderWarmState) {
     crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
     let scratch_pitch = 8 * core::mem::size_of::<u32>();
     let aligned_scratch_pitch = 32 * core::mem::size_of::<u32>();
@@ -5784,6 +5855,7 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
     false
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn run_postdraw_pc_retire_spectrum(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -5824,6 +5896,7 @@ fn run_postdraw_pc_retire_spectrum(
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_triangle_vf_streamout_proof(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -5932,6 +6005,7 @@ fn submit_triangle_vf_streamout_proof(
     accepted
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_triangle_vf_draw_to_surface(
     submit_name: &'static str,
     dev: crate::intel::Dev,
@@ -5961,6 +6035,7 @@ fn submit_triangle_vf_draw_to_surface(
     )
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_triangle_vf_draw_to_surface_ext(
     submit_name: &'static str,
     dev: crate::intel::Dev,
@@ -6397,6 +6472,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
     completed
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn disable_raster_wm_oa_context(dev: crate::intel::Dev, submit_name: &'static str) {
     crate::intel::mmio_write(dev, RCS_OACTXCONTROL, 0);
     crate::intel::mmio_write(dev, OAR_OACONTROL, 0);
@@ -6411,6 +6487,7 @@ fn disable_raster_wm_oa_context(dev: crate::intel::Dev, submit_name: &'static st
     );
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn oa_report_slice(warm: RenderWarmState, base_dword: usize) -> Option<&'static [u32]> {
     if base_dword
         .checked_add(RESULT_OA_REPORT_DWORDS)?
@@ -6424,6 +6501,7 @@ fn oa_report_slice(warm: RenderWarmState, base_dword: usize) -> Option<&'static 
     dwords.get(base_dword..base_dword + RESULT_OA_REPORT_DWORDS)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn oa_counter_delta(before: u64, after: u64, bits: u32) -> u64 {
     if after >= before {
         after - before
@@ -6432,6 +6510,7 @@ fn oa_counter_delta(before: u64, after: u64, bits: u32) -> u64 {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn oa_a_counter_gfx125(report: &[u32], index: usize) -> Option<u64> {
     if report.len() < RESULT_OA_REPORT_DWORDS || index >= 36 {
         return None;
@@ -6453,6 +6532,7 @@ fn oa_a_counter_gfx125(report: &[u32], index: usize) -> Option<u64> {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn oa_a_delta_gfx125(begin: &[u32], end: &[u32], index: usize) -> u64 {
     let Some(before) = oa_a_counter_gfx125(begin, index) else {
         return 0;
@@ -6468,6 +6548,7 @@ fn oa_a_delta_gfx125(begin: &[u32], end: &[u32], index: usize) -> u64 {
     oa_counter_delta(before, after, bits)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn log_raster_wm_oa_raw_deltas(submit_name: &'static str, begin: &[u32], end: &[u32]) {
     let mut a = [0u64; 36];
     let mut changed = 0usize;
@@ -6530,6 +6611,7 @@ fn log_raster_wm_oa_raw_deltas(submit_name: &'static str, begin: &[u32], end: &[
     );
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn log_raster_wm_oa_probe(
     submit_name: &'static str,
     warm: RenderWarmState,
@@ -6605,6 +6687,7 @@ fn log_raster_wm_oa_probe(
     );
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_triangle_vs_streamout_proof(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -6735,6 +6818,7 @@ fn submit_triangle_vs_streamout_proof(
     accepted
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_triangle_streamout_proof(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -6865,6 +6949,7 @@ fn submit_triangle_streamout_proof(
     accepted
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_triangle_vs_draw_frontier_to_surface(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -6898,6 +6983,7 @@ fn submit_triangle_vs_draw_frontier_to_surface(
     false
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_triangle_vs_draw_frontier_to_scratch(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -6972,6 +7058,7 @@ fn submit_triangle_vs_draw_frontier_to_scratch(
     false
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn wait_eq(dev: crate::intel::Dev, reg: usize, mask: u32, want: u32, n: usize) -> bool {
     for _ in 0..n {
         if (crate::intel::mmio_read(dev, reg) & mask) == want {
@@ -7100,6 +7187,7 @@ fn ensure_smoke_buffers_mapped(dev: crate::intel::Dev, warm: RenderWarmState) ->
         && warm.mmio_len == dev.mmio_len
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn should_log_primary_probe(reason: &str, seq: u32) -> bool {
     reason == "boot-once" || seq <= 3 || seq.is_multiple_of(PRIMARY_PERIODIC_LOG_EVERY)
 }
@@ -7112,6 +7200,7 @@ fn should_log_primary_probe_detail() -> bool {
     seq <= 3 || seq.is_multiple_of(PRIMARY_PERIODIC_LOG_EVERY)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_triangle_draw_to_surface(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -7134,6 +7223,7 @@ fn submit_triangle_draw_to_surface(
     )
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_triangle_real_vs_draw_probe_to_surface(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -7162,6 +7252,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
     )
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -8070,6 +8161,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     completed
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_result_store_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
     let Some(render_lease) = reserve_warm_render_storage("mi-store-probe") else {
         return false;
@@ -8101,6 +8193,7 @@ fn submit_result_store_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> b
     )
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_3d_no_draw_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
     let Some(render_lease) = reserve_warm_render_storage("3d-no-draw") else {
         return false;

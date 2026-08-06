@@ -524,6 +524,7 @@ pub(crate) fn handle_mouse_report_values(
     mouse::handle_decoded_report(runtime, buttons, dx, dy, wheel, has_wheel, now_ms);
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn inject_usb3_mouse_relative_event(
     slot_id: u32,
     ep_target: u32,

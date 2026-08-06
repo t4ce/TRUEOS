@@ -82,11 +82,13 @@ impl<Backend> Lfm25Decode<Backend> {
     }
 
     /// Call only after `backend_mut()` has reset all recurrent and KV state.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn acknowledge_hardware_state_reset(&mut self) {
         self.session.get_mut().acknowledge_hardware_state_reset();
     }
 
     /// Initialization/control access; unavailable while `self` is shared by a future.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn backend_mut(&mut self) -> &mut Backend {
         self.backend.get_mut()
     }
@@ -177,6 +179,7 @@ pub(crate) async fn restore_intel_igc(
 }
 
 #[cfg(target_os = "trueos")]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) async fn open_hybrid_cpu() -> Result<
     Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::HybridCpuAotDecodeBackend>,
     crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError,

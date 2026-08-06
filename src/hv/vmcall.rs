@@ -208,6 +208,7 @@ pub const OP_BP_FS_REMOVE: u32 = 0x34; // payload path -> rc
 pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_data[63:32], optional payload kind:u32 len:u64
 pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61; // response is current TRUEOS vthread id
 pub const OP_BP_SERVICE_LANE_SUBMIT: u32 = 0x62; // arg0/arg1 boxed service-lane job raw parts
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = OP_BP_SERVICE_LANE_SUBMIT; // compatibility alias
 pub const OP_BP_PLATFORM_WAKE_ONE: u32 = 0x63; // arg0 VM-local wait key -> woke bool
 pub const OP_BP_PLATFORM_WAKE_ALL: u32 = 0x64; // arg0 VM-local wait key -> wake count
@@ -523,11 +524,13 @@ pub fn guest_unix_seconds() -> u64 {
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pack_i32_pair(a: i32, b: i32) -> u64 {
     ((a as u32 as u64) << 32) | (b as u32 as u64)
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pack_u32_pair(a: u32, b: u32) -> u64 {
     ((a as u64) << 32) | (b as u64)
 }

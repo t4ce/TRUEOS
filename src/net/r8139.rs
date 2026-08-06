@@ -9,12 +9,14 @@ use alloc::vec::Vec;
 use super::{Driver, DriverInfo, DriverStatus, NetworkDriver};
 use crate::pci::PciDevice;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct Rtl8139Driver {
     status: DriverStatus,
     mac: [u8; 6],
 }
 
 impl Rtl8139Driver {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn new() -> Self {
         Self {
             status: DriverStatus::Unloaded,
@@ -67,6 +69,7 @@ const DRIVER_INFO: DriverInfo = DriverInfo {
     ],
 };
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn register() {
     let _ = DRIVER_INFO;
     let _ = Box::new(Rtl8139Driver::new());

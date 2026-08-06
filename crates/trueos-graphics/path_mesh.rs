@@ -99,6 +99,7 @@ pub(crate) struct PathBuilder {
 }
 
 impl Path {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn builder() -> PathBuilder {
         Self::builder_with_options(&FillOptions::DEFAULT)
     }

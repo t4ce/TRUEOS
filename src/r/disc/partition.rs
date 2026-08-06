@@ -126,10 +126,13 @@ impl BlockRange {
 
 #[derive(Clone, Debug)]
 pub struct PartitionInfo {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub index: u32,
     pub type_guid: Guid,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub unique_guid: Guid,
     pub range: BlockRange,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub attributes: u64,
     pub name: Option<String>,
 }
@@ -139,6 +142,7 @@ impl PartitionInfo {}
 #[derive(Clone, Debug)]
 pub struct RegisteredPartition {
     pub id: DiscId,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub info: PartitionInfo,
 }
 
@@ -354,6 +358,7 @@ pub async fn register_gpt_partitions(device: DeviceHandle) -> Result<Vec<Registe
     Ok(registered)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn align_up_u64(value: u64, align: u64) -> u64 {
     if align <= 1 {
         return value;

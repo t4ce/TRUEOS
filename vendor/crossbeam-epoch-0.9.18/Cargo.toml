@@ -52,6 +52,11 @@ std = [
     "crossbeam-utils/std",
 ]
 
+[lints.rust.unexpected_cfgs]
+level = "warn"
+priority = 0
+check-cfg = ["cfg(crossbeam_loom)", "cfg(crossbeam_sanitize)"]
+
 [target."cfg(crossbeam_loom)".dependencies.loom-crate]
 version = "0.7.1"
 optional = true

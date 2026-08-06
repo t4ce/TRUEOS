@@ -11,7 +11,9 @@ const VM_RESERVED_FIRST_SLOT: u32 = 2;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum VmLaneRole {
     VmHull,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     TokioBlocking,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Worker,
 }
 
@@ -40,6 +42,7 @@ impl VmLaneProfile {
 
     /// Default placement for synchronous offload work that should stay off the
     /// BSP and the first two AP service lanes while still using disposable executor carriers.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn tokio_blocking_default() -> Self {
         Self {
             role: VmLaneRole::TokioBlocking,
@@ -47,6 +50,7 @@ impl VmLaneProfile {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn worker_default() -> Self {
         Self {
             role: VmLaneRole::Worker,
@@ -58,6 +62,7 @@ impl VmLaneProfile {
         matches!(self.placement, SpawnPlacement::ReservedVmLane)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn requires_disposable_worker_lane(self) -> bool {
         matches!(self.placement, SpawnPlacement::Worker)
     }
@@ -123,7 +128,9 @@ impl VmLanePickError {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub type GuestWorkProfile = VmLaneProfile;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub type GuestWorkTarget = VmLaneTarget;
 
 pub fn select_vm_lane_target(profile: VmLaneProfile) -> Result<VmLaneTarget, VmLanePickError> {
@@ -145,6 +152,7 @@ pub fn select_vm_lane_target(profile: VmLaneProfile) -> Result<VmLaneTarget, VmL
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pick_vm_lane_target(profile: VmLaneProfile) -> Option<VmLaneTarget> {
     select_vm_lane_target(profile).ok()
 }
@@ -153,14 +161,17 @@ pub fn pick_vm_hull_lane() -> Result<VmLaneTarget, VmLanePickError> {
     select_vm_lane_target(VmLaneProfile::vm_default())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pick_tokio_blocking_lane() -> Result<VmLaneTarget, VmLanePickError> {
     select_vm_lane_target(VmLaneProfile::tokio_blocking_default())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pick_worker_lane() -> Result<VmLaneTarget, VmLanePickError> {
     select_vm_lane_target(VmLaneProfile::worker_default())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pick_guest_work_target(profile: GuestWorkProfile) -> Option<GuestWorkTarget> {
     pick_vm_lane_target(profile)
 }

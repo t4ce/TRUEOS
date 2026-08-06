@@ -8,6 +8,7 @@ fn task_gate_always() -> bool {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SpawnPlacement {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Worker,
     ReservedVmLane,
 }

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Intel High Definition Audio (HDA) Driver
 //!
 //! Implements Intel HDA controller support for audio output.

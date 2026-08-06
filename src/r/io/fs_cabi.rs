@@ -1392,6 +1392,7 @@ fn konsole_write_bytes(data: &[u8]) -> usize {
     data.len()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn konsole_write_fmt(args: fmt::Arguments<'_>) -> usize {
     let text = alloc::format!("{}", args);
     konsole_write_bytes(text.as_bytes())

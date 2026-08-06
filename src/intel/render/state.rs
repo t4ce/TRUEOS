@@ -68,8 +68,11 @@ pub struct RenderWarmState {
     pub streamout_phys: u64,
     pub streamout_virt: *mut u8,
     pub streamout_len: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub gpgpu_arena_phys: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub gpgpu_arena_virt: *mut u8,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub gpgpu_arena_len: usize,
 }
 
@@ -82,6 +85,7 @@ struct TriangleIndexBufferPrep {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum TriangleVertexFormat {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Float2,
     Float3,
     /// Helio Churn's immutable `@location(0) position` plus
@@ -162,7 +166,9 @@ struct TriangleVertexUploadProof {
     vertex_stride: u32,
     byte_len: usize,
     gpu_addr: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     signed_area_2x: f32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     cpu_readback_ok: bool,
 }
 
@@ -378,6 +384,7 @@ pub(crate) struct ResidentChurnForward {
     native_vf: TriangleNativeDrawContract,
     front_end_contract: TriangleFrontEndContract,
     vertex_gpu_addr: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     vertex_count: u32,
     vertex_bytes: u32,
     index_gpu_addr: u64,
@@ -399,6 +406,7 @@ impl ResidentChurnForward {
         self.max_instances
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn index_count(&self) -> u32 {
         self.index_count
     }
@@ -591,6 +599,7 @@ struct TriangleProbeStateLayout {
     cc_viewport_offset_bytes: u32,
     sf_clip_viewport_offset_bytes: u32,
     scissor_rect_offset_bytes: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     push_constant_offset_bytes: u32,
     cps_state_offset_bytes: u32,
     slice_hash_table_offset_bytes: u32,
@@ -611,6 +620,7 @@ struct TriangleFrontEndContract {
 }
 
 #[derive(Copy, Clone)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct VsStreamoutProofConfig {
     pipeline: &'static crate::intel::shader::TrianglePipeline,
     shader_layout: TriangleShaderLayout,
@@ -618,9 +628,11 @@ struct VsStreamoutProofConfig {
 
 #[derive(Copy, Clone)]
 enum TriangleBlendProbeMode {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     ExplicitRt0,
     StraightAlpha,
     MesaZeroedState,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     MesaZeroedNoBlendPointer,
 }
 
@@ -642,6 +654,7 @@ struct TriangleDepthConfig {
 }
 
 impl TriangleBlendProbeMode {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn for_attempt(attempt: usize) -> Self {
         match attempt {
             1 => Self::MesaZeroedState,
@@ -671,129 +684,248 @@ impl TriangleBlendProbeMode {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum TriangleBatchMode {
     Draw,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     DrawScreenSpace,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     DrawScreenSpaceRect,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     VfDraw,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     VfScreenSpaceDraw,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     VfPointDraw,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     VfLineDraw,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     VfRectDraw,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     VfRectClipDraw,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     StreamoutProof,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     VfStreamoutProof,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     VsStreamoutProof,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum BackendProbeMode {
     MesaLike,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsBindingTableCountZero,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsBindingTableCountOne,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsWmNormalBt0,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsWmNormalBt0CpDep,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsPrmEarlyRasterGate,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsPrmRasterGateSbeBeforeSf,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsPrmSbeNoAttrSwizzle,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsPrmNoPrimitiveReplication,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     WmNormalDispatch,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsExtraBeforePs,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsWmReemitAfterPsExtra,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsOmitWmHzOp,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsSampleAll,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsSbeRead0,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsSbeBeforeSf,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsNoPrimitiveReplication,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsNoWriteableRt,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsNoCcPointer,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsDispatchSlot0,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsDispatchSlot1,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsDispatchSlot2,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsDispatchAllKspSlots,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsSimd16,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsEotOnly,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsCpsDisabled,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsPayloadPushConstant,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsPayloadAttributeEnable,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsPayloadSimpleHint,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsPayloadSourceDepthW,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsPayloadBaryPlanes,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsGrfStartR1,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsGrfStartR2,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsGrfStartR4,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsGrfMaxThreads31,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsGrfMaxThreads15,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     WmHzSampleMask,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     WmLateReemit,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOa,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaSurfaceHalign128,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaKillOff,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaSmoothPoint,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaMsRaster,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaMsRasterForced,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaDerefBlock0,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaNoHzOp,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaWmNormalDispatch,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaWmReemitAfterPsExtra,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaOmitHzOp,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPsDisabled,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaBtCountOne,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaScissorOnly,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaMesaSimpleRect,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaMesaSimpleRectEarly,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaMesaSimpleRectArtificial,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaMesaSimpleRectNoSrcHeader,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaEarlySample,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaEarlyKillOff,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaClipNormal,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaClipPerspective,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaClipDisabled,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaClipDisabledArtificial,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaClipForceMode,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaClipApiD3d,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaClipViewportXy,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaEarlyClipViewportXy,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaEarlyPointWidth1023,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaEarlyMsRasterForced,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaSbeBeforeClip,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaSbeBeforeSf,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaSbeRead0,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaDrawRectEarlyOnly,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaSampleMaskEarlyOnly,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPipeControlClipSf,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaWmHzOpBeforeWm,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaWmHzOpAfterPsExtra,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPayloadAttributeEnable,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPayloadSourceDepthW,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPayloadBaryPlanes,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaSampleAll,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaWmHandoff,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaSampleAllWmHandoff,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaFrontCcw,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaNoPrimitiveReplication,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaVfGeometryDistribution,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth8,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth8ClipMax,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64SurfaceHalign128,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64ClipMax,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64Early,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64EarlyScissor,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64Screen,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64Artificial,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64WmNormalDispatch,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64WmReemitAfterPsExtra,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64OmitHzOp,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64PsDisabled,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64PayloadAttributeEnable,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64PayloadSourceDepthW,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64PayloadBaryPlanes,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64SbeBeforeClip,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth64SbeBeforeSf,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth1023,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth1023NoWmPoint,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidth1023Scissor,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaPointWidthVertex,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaHammer,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RasterWmInputOaScreenHammer,
 }
 
@@ -810,6 +942,7 @@ enum PostDrawSyncVariant {
     FlushBit26Llc,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const POST_DRAW_PC_RETIRE_SPECTRUM: [PostDrawSyncVariant; 3] = [
     PostDrawSyncVariant::LightOnlyRetire,
     PostDrawSyncVariant::LightCsNoPostSync,
@@ -831,6 +964,7 @@ impl PostDrawSyncVariant {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn submit_name(self) -> &'static str {
         match self {
             Self::HeavyAll => "postdraw-heavy-all",
@@ -1068,6 +1202,7 @@ impl BackendProbeMode {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn is_payload_spectrum(self) -> bool {
         matches!(
             self,
@@ -1640,6 +1775,7 @@ impl BackendProbeMode {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 enum VfPrimitiveGeometry {
     Canonical,
     Oversized,
@@ -1662,6 +1798,7 @@ enum VfPrimitiveGeometry {
 }
 
 impl VfPrimitiveGeometry {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn label(self) -> &'static str {
         match self {
             Self::Canonical => "canonical",
@@ -1685,6 +1822,7 @@ impl VfPrimitiveGeometry {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn vertices(self) -> [[f32; 3]; TRIANGLE_DRAW_VERTICES] {
         match self {
             Self::Canonical => [[-0.25, -0.20, 0.0], [0.25, -0.20, 0.0], [0.00, 0.20, 0.0]],
@@ -1720,14 +1858,17 @@ impl VfPrimitiveGeometry {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn fullscreen_candidate(self) -> bool {
         matches!(self, Self::Oversized)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn point_candidate(self) -> bool {
         matches!(self, Self::CenterPoint | Self::ScreenSpacePoint8x8)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn screen_space_candidate(self) -> bool {
         matches!(
             self,
@@ -1741,6 +1882,7 @@ impl VfPrimitiveGeometry {
         )
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn rect_candidate(self) -> bool {
         matches!(
             self,
@@ -1755,10 +1897,12 @@ impl VfPrimitiveGeometry {
         )
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn line_candidate(self) -> bool {
         matches!(self, Self::ScreenSpaceLine8x8 | Self::NdcLine)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn ndc_rect_candidate(self) -> bool {
         matches!(
             self,
@@ -1773,14 +1917,20 @@ impl VfPrimitiveGeometry {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum StreamoutProofExperiment {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PositionSlot0,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PositionSlot1,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PrmVueHeaderPositionSlots01,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PrmVueHeaderPositionXywzSlots01,
     HeaderAndPositionSlots01,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PointSizeSlot0PositionSlot1,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const CMD_3DSTATE_VERTEX_ELEMENTS_2: u32 = 3 | (9 << 16) | (3 << 27) | (3 << 29);
 
 impl StreamoutProofExperiment {
@@ -1795,6 +1945,7 @@ impl StreamoutProofExperiment {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn alternate(self) -> Self {
         match self {
             Self::PositionSlot0 => Self::PositionSlot1,
@@ -1892,6 +2043,7 @@ impl StreamoutProofExperiment {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn select_streamout_proof_experiment(probe_seq: u32) -> StreamoutProofExperiment {
     match probe_seq % 3 {
         0 => StreamoutProofExperiment::PositionSlot1,
@@ -2156,6 +2308,7 @@ fn should_capture_scratch_rt_proof(submit_name: &str) -> bool {
     is_scratch_rt_submit_name(submit_name) && submit_name != "resident-scene"
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
     if let Some(base) = fragment_target_variant_base(submit_name) {
         return is_raster_wm_oa_submit_name(base);
@@ -2656,6 +2809,7 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
     )
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn is_artificial_fragment_marker_submit_name(submit_name: &str) -> bool {
     matches!(
         submit_name,
@@ -2665,6 +2819,7 @@ fn is_artificial_fragment_marker_submit_name(submit_name: &str) -> bool {
     )
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn reset_fragment_boundary_probe() {
     FRAGMENT_CANDIDATE_READY.store(false, Ordering::Release);
     FRAGMENT_BOUNDARY_OBSERVED.store(false, Ordering::Release);
@@ -2681,13 +2836,16 @@ fn record_fragment_boundary_probe(candidate_ready: bool, fragment_observed: bool
 
 #[derive(Clone, Copy)]
 pub(crate) struct RenderFrontierSummary {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) completed: bool,
     pub(crate) vs_counter: bool,
     pub(crate) ps_state_marker: bool,
     pub(crate) raster_packet: bool,
     pub(crate) clip_counter: bool,
     pub(crate) ps_observed: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fragment_candidate_ready: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fragment_observed: bool,
 }
 
@@ -2815,5 +2973,6 @@ static RENDER_FRONTIER_CLIP_COUNTER: AtomicBool = AtomicBool::new(false);
 static RENDER_FRONTIER_PS_OBSERVED: AtomicBool = AtomicBool::new(false);
 static WARM_BUFFERS_MAPPED: AtomicBool = AtomicBool::new(false);
 static MEMORY_PROOF_LOGGED: AtomicBool = AtomicBool::new(false);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static PRIMARY_STRIPE_X_PHASE: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_PROBE_SEQ: AtomicU32 = AtomicU32::new(0);

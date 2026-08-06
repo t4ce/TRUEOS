@@ -61,6 +61,9 @@ version = "0.5.1"
 
 [dev-dependencies]
 
+[lints.rust]
+unused_attributes = "allow"
+
 [lints.rust.unexpected_cfgs]
 level = "warn"
 priority = 0

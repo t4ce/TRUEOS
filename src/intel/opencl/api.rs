@@ -14,6 +14,7 @@ use super::{
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct KnownKernelInfo {
     pub(crate) index: usize,
     pub(crate) name: &'static str,
@@ -35,6 +36,7 @@ pub(crate) struct KnownKernelInfo {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct SourceBuildSmoke {
     pub(crate) known_source_aot_lookup_cap: bool,
     pub(crate) source_compile_cap: bool,
@@ -46,10 +48,12 @@ pub(crate) struct SourceBuildSmoke {
     pub(crate) queue_error: Option<ClError>,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn trueos_cl_known_kernel_count() -> usize {
     KNOWN_AOT_KERNELS.len()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn trueos_cl_known_kernel_info(index: usize) -> Option<KnownKernelInfo> {
     let kernel = KNOWN_AOT_KERNELS.get(index)?;
     Some(KnownKernelInfo {
@@ -73,20 +77,24 @@ pub(crate) fn trueos_cl_known_kernel_info(index: usize) -> Option<KnownKernelInf
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn trueos_cl_upload_known_kernel(name: &str) -> ClResult<UploadedKernelRef> {
     let backend = IntelOpenClBackend::new();
     backend.require_known_aot_upload(name)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn trueos_cl_reload_known_kernel(name: &str) -> ClResult<UploadedKernelRef> {
     IntelOpenClBackend::new().reload_known_aot(name)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn trueos_cl_reload_all_known_kernels() -> crate::intel::gpgpu::GpgpuArtifactReloadSummary
 {
     IntelOpenClBackend::new().reload_all_known_aot()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn trueos_cl_build_program_from_source(
     source: &str,
     options: &str,
@@ -94,6 +102,7 @@ pub(crate) fn trueos_cl_build_program_from_source(
     IntelOpenClBackend::new().build_program_from_source(source, options)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn trueos_cl_known_kernel_uploaded(name: &str) -> ClResult<bool> {
     if known_aot_kernel(name).is_none() {
         return Err(ClError::InvalidKernelName);
@@ -104,18 +113,22 @@ pub(crate) fn trueos_cl_known_kernel_uploaded(name: &str) -> ClResult<bool> {
         .unwrap_or(false))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn trueos_cl_probe_known_aot_queue() -> ClResult<KnownAotQueueProbe> {
     fill_rect_worklist_queue_probe()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn trueos_cl_validate_known_aot_registry() -> KnownAotValidationReport {
     validate_known_aot_registry()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn trueos_cl_validate_known_aot_status() -> KnownAotValidationReport {
     validate_known_aot_status()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn trueos_cl_source_build_smoke() -> SourceBuildSmoke {
     let backend = IntelOpenClBackend::new();
     let caps = backend.caps();

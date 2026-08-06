@@ -38,6 +38,7 @@ pub(crate) mod vgpu;
 pub(crate) mod vid;
 pub(crate) mod xhci;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn command_registry_json() -> AllocString {
     super::shell2_cmd_registry::command_registry_json()
 }

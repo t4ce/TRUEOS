@@ -67,6 +67,7 @@ impl VramSnapshot {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn has_data(&self) -> bool {
         self.sample_valid
     }
@@ -75,6 +76,7 @@ impl VramSnapshot {
 static VRAM_WATCH: Watch<crate::wait::EmbassySpinRawMutex, VramSnapshot, VRAM_WATCH_RECEIVERS> =
     Watch::new_with(VramSnapshot::empty());
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) type VramReceiver<'a> =
     WatchReceiver<'a, crate::wait::EmbassySpinRawMutex, VramSnapshot, VRAM_WATCH_RECEIVERS>;
 
@@ -86,10 +88,12 @@ pub(crate) fn latest_snapshot_text() -> String {
     format_snapshot_text(&latest_snapshot())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn subscribe() -> Option<VramReceiver<'static>> {
     VRAM_WATCH.receiver()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn anon_snapshot() -> VramSnapshot {
     let mut receiver = VRAM_WATCH.anon_receiver();
     receiver.try_get().unwrap_or_else(VramSnapshot::empty)

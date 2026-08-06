@@ -17,18 +17,21 @@ static FTP_SERVER_STARTED: AtomicBool = AtomicBool::new(false);
 static FTP_SERVER_NEXT_PASV_PORT: AtomicU16 = AtomicU16::new(ports::FTP_SERVER_PASV_MIN);
 
 #[derive(Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct ParsedFtpUrl {
     host: String,
     port: u16,
 }
 
 #[derive(Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct FtpResponse {
     pub code: u16,
     pub message: String,
 }
 
 #[derive(Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum FtpError {
     InvalidUrl,
     ConnectFailed,
@@ -41,6 +44,7 @@ pub enum FtpError {
     TooLarge,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct FtpSocket {
     net: VNet,
     ctrl_handle: NetHandle,
@@ -49,10 +53,12 @@ pub struct FtpSocket {
 }
 
 impl FtpSocket {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn connect(url: &str, timeout_ms: u32) -> Result<Self, FtpError> {
         Self::connect_with_profile(url, NetProfile::default(), timeout_ms).await
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn connect_with_profile(
         url: &str,
         profile: NetProfile,
@@ -128,6 +134,7 @@ impl FtpSocket {
         Ok(socket)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn login(&mut self, user: &str, pass: &str, timeout_ms: u32) -> Result<(), FtpError> {
         self.send_command(format!("USER {}", user).as_str())?;
         let user_rsp = self.read_response(timeout_ms).await?;
@@ -150,6 +157,7 @@ impl FtpSocket {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn quit(&mut self, timeout_ms: u32) -> Result<(), FtpError> {
         if self.closed {
             return Ok(());
@@ -165,6 +173,7 @@ impl FtpSocket {
         Ok(())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn retr(
         &mut self,
         path: &str,
@@ -240,6 +249,7 @@ impl FtpSocket {
         Ok(out)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn stor(&mut self, path: &str, data: &[u8], timeout_ms: u32) -> Result<(), FtpError> {
         let data_remote = self.enter_passive(timeout_ms).await?;
         let data_handle = self.open_data_socket(data_remote, timeout_ms).await?;
@@ -270,10 +280,12 @@ impl FtpSocket {
         Ok(())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn is_closed(&self) -> bool {
         self.closed
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn send_command(&self, command: &str) -> Result<(), FtpError> {
         if self.closed {
             return Err(FtpError::Closed);
@@ -289,6 +301,7 @@ impl FtpSocket {
         Ok(())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     async fn set_binary(&mut self, timeout_ms: u32) -> Result<(), FtpError> {
         self.send_command("TYPE I")?;
         let rsp = self.read_response(timeout_ms).await?;
@@ -299,6 +312,7 @@ impl FtpSocket {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     async fn read_response(&mut self, timeout_ms: u32) -> Result<FtpResponse, FtpError> {
         if self.closed {
             return Err(FtpError::Closed);
@@ -331,6 +345,7 @@ impl FtpSocket {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     async fn enter_passive(&mut self, timeout_ms: u32) -> Result<EndpointV4, FtpError> {
         self.send_command("PASV")?;
         let rsp = self.read_response(timeout_ms).await?;
@@ -341,6 +356,7 @@ impl FtpSocket {
         Ok(EndpointV4::new(addr, port))
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     async fn open_data_socket(
         &mut self,
         remote: EndpointV4,
@@ -385,6 +401,7 @@ impl FtpSocket {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_ftp_url(url: &str) -> Option<ParsedFtpUrl> {
     let u = url.strip_prefix("ftp://")?;
     let authority = match u.split_once('/') {
@@ -413,6 +430,7 @@ fn parse_ftp_url(url: &str) -> Option<ParsedFtpUrl> {
     Some(ParsedFtpUrl { host, port })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_ftp_response(buf: &[u8]) -> Option<(usize, FtpResponse)> {
     let first_end = find_crlf(buf)?;
     if first_end < 5 {
@@ -466,6 +484,7 @@ fn parse_ftp_response(buf: &[u8]) -> Option<(usize, FtpResponse)> {
     None
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_reply_code(line: &[u8]) -> Option<u16> {
     if line.len() < 3 {
         return None;
@@ -479,10 +498,12 @@ fn parse_reply_code(line: &[u8]) -> Option<u16> {
     Some(((a - b'0') as u16) * 100 + ((b - b'0') as u16) * 10 + (c - b'0') as u16)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn find_crlf(buf: &[u8]) -> Option<usize> {
     buf.windows(2).position(|w| w == b"\r\n")
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_pasv_endpoint(message: &str) -> Option<([u8; 4], u16)> {
     let start = message.find('(')?;
     let end = message[start..].find(')')? + start;
@@ -540,6 +561,7 @@ impl FtpServerSession {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn ftp_server_port() -> u16 {
     ports::FTP_SERVER_PORT
 }

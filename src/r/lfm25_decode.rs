@@ -13,7 +13,9 @@ use trueos_lfm25_model::lfm25_decode::{
     MissingCapability, PlanError, TiedLmHeadPlan,
 };
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const HIDDEN_ELEMENTS: usize = lfm25::MODEL_HIDDEN_SIZE as usize;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const HIDDEN_Q8_BLOCKS: usize = HIDDEN_ELEMENTS / lfm25::Q8_0_BLOCK_VALUES;
 /// Backend-owned storage identity for one fixed 1024-element tensor.
 ///
@@ -104,6 +106,7 @@ pub enum AotDecodeRequest {
         input: HiddenQ8,
     },
     OperatorResidual {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         layer: u8,
         residual: HiddenQ30,
         branch: HiddenQ30,
@@ -117,6 +120,7 @@ pub enum AotDecodeRequest {
         input: HiddenQ8,
     },
     FfnResidual {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         layer: u8,
         residual: HiddenQ30,
         branch: HiddenQ30,
@@ -315,6 +319,7 @@ impl DecodeSession {
     }
 
     /// Use only after the backend has reset all recurrent and KV state.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn acknowledge_hardware_state_reset(&mut self) {
         self.position = 0;
         self.shortconv_next = [0; 10];
@@ -709,9 +714,11 @@ impl Default for DecodeSession {
 
 /// Explicit production placeholder used until all required RTL capability magics land.
 /// It cannot accidentally execute a CPU implementation.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct FailClosedBackend;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct HardwareDecodeUnavailable;
 
 impl AotDecodeBackend for FailClosedBackend {

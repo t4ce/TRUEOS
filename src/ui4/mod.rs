@@ -61,9 +61,7 @@ impl InteractionCadence {
 }
 
 pub(crate) use color_picker::ui4_color_picker_service_task;
-pub(crate) use compositor_service::{
-    ui4_compositor_presented_revision, ui4_compositor_service_task,
-};
+pub(crate) use compositor_service::ui4_compositor_service_task;
 pub(crate) use context_menu::{
     ContextMenuCloseReason, ContextMenuEntry, ContextMenuError, ContextMenuRequest,
     ContextMenuResult, MAX_CONTEXT_MENU_ENTRIES, clear_window_menu as clear_window_context_menu,
@@ -71,9 +69,9 @@ pub(crate) use context_menu::{
 };
 pub(crate) use cursor_frame_inout::{
     CursorFrameKey, GlobalKeyboardDisposition, GlobalKeyboardHookId, Ui4CursorIcon,
-    Ui4CursorSource, cursor_color, cursor_icon_for, register_global_keyboard_hook, selected_frame,
+    Ui4CursorSource, cursor_color, register_global_keyboard_hook, selected_frame,
     selected_frame_for_source, selection_strips, set_window_cursor_icon, set_window_custom_cursor,
-    source_selected, unregister_global_keyboard_hook,
+    unregister_global_keyboard_hook,
 };
 pub(crate) use damage::{DamageRect, DamageRegion};
 pub(crate) use frame_pool::{
@@ -86,11 +84,10 @@ pub(crate) use frame_pool::{
     release_published_frame, retain_published_frame, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
-    GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_DURATION_MS,
-    GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewConfig, GpgpuPreviewMetrics,
+    GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewMetrics,
     GpgpuPreviewPreset, gpgpu_preview_consumer_service_task, gpgpu_preview_status,
     request_cpp_font_preview_start, request_cpp_font_rush_start, request_cpp_font_rush_stop,
-    request_cpp_gallery_start, request_gpgpu_lab256_startup, request_gpgpu_preview_stop,
+    request_cpp_gallery_start, request_gpgpu_preview_stop,
 };
 pub(crate) use gpgpu_svg_probe_consumer::{
     GpgpuSvgProbeConfig, gpgpu_svg_probe_consumer_service_task, gpgpu_svg_probe_status,
@@ -107,9 +104,8 @@ pub(crate) use input_broker::{
     window_input_routes,
 };
 pub(crate) use screenshot::{
-    COMPACT_WINDOW_GRID_EXTENT, COMPACT_WINDOW_GRID_MAJOR_STEP,
-    COMPACT_WINDOW_OBSERVATION_MAX_PNG_BYTES, CompactWindowObservation,
-    CompactWindowObservationError, capture_compact_window_observation, ui4_screenshot_service_task,
+    COMPACT_WINDOW_GRID_EXTENT, COMPACT_WINDOW_OBSERVATION_MAX_PNG_BYTES,
+    capture_compact_window_observation, ui4_screenshot_service_task,
 };
 pub(crate) use slot4_service::ui4_slot4_service_task;
 pub(crate) use video_frame::{
@@ -120,19 +116,18 @@ pub(crate) use video_frame::{
 };
 
 pub(crate) use window_broker::{
-    WINDOW_BROKER_SNAPSHOT_PERIOD_MS, WindowBrokerError, WindowBrokerSnapshot,
-    WindowBrokerSnapshotReceiver, WindowBrokerSnapshotStats, WindowCreate, WindowId,
+    WindowBrokerError, WindowCreate, WindowId,
     WindowInteraction, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
     WindowSessionId, WindowSnapshot, WindowState, acknowledge_window_frame,
     advance_window_close_transitions, application_windows_for_output_with_revision,
     begin_additional_window_session, begin_window_session, close_window,
     commit_window_frame_replacement, create_window, finish_window_session,
-    finish_window_session_with_request, latest_window_broker_snapshot, move_window,
+    finish_window_session_with_request, move_window,
     publish_window_frame, publish_window_frames, replace_window_frame, retire_frame_when_released,
-    set_window_hit_testable, set_window_placement, set_windows_visible, subscribe_window_broker_snapshots,
+    set_window_hit_testable, set_window_placement, set_windows_visible,
     take_window_first_presentation, toggle_window_maximized,
     ui4_window_broker_snapshot_service_task, visible_windows_for_output,
-    visible_windows_for_output_with_revision, wait_for_window_composition_change,
+    wait_for_window_composition_change,
     wait_for_window_first_presentation, window_close_transitions_active,
     window_composition_revision, window_placement,
 };
@@ -272,10 +267,12 @@ pub(crate) struct Ui4OutputCapabilities {
 }
 
 impl Ui4OutputCapabilities {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn application_plane_count(self) -> usize {
         self.application_plane_mask.count_ones() as usize
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn supports_application_plane(self, slot: usize) -> bool {
         slot < u8::BITS as usize && self.application_plane_mask & (1u8 << slot) != 0
     }
@@ -328,7 +325,9 @@ pub(crate) fn ui4_output_capabilities(output: OutputId) -> Option<Ui4OutputCapab
 pub(crate) enum FrameContent {
     Video,
     Image,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     CpuBlit,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     CopyEngine,
     FontScene2d,
     RenderScene3d,
@@ -368,6 +367,7 @@ impl FrameBuffering {
 pub(crate) struct FrameHandle(u64);
 
 impl FrameHandle {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn from_raw(raw: u64) -> Option<Self> {
         if raw == 0 { None } else { Some(Self(raw)) }
     }
@@ -384,12 +384,14 @@ pub(crate) enum ScanoutFormat {
     /// Opaque 8:8:8:8 primary-plane storage in RGB order.
     Xrgb8888,
     /// Opaque 8:8:8:8 primary-plane storage in BGR order.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Xbgr8888,
     /// Per-pixel alpha overlay storage; RGB is already multiplied by alpha.
     Rgba8888Premultiplied,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum Nv12Layout {
     Linear,
     YTiled,
@@ -399,6 +401,7 @@ pub(crate) enum Nv12Layout {
 /// assignment: the GuC conversion consumes it while rebuilding the primary
 /// XRGB swap surface.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct NativeNv12Surface {
     pub(crate) phys: u64,
     pub(crate) gpu: u64,

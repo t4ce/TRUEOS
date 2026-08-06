@@ -79,9 +79,13 @@ impl Drop for ResidentBuildClaim {
 
 #[derive(Debug)]
 pub enum HybridCpuBackendError {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Model(lfm25_model::Error),
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     F32(lfm25_f32::Error),
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Gpu(crate::intel::gpgpu::Lfm25Q8ProjectError),
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Kernel(cpu::Error),
     Tensor,
     TensorDomain,
@@ -89,7 +93,9 @@ pub enum HybridCpuBackendError {
     SessionImage,
     Allocation,
     ModelHash {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         observed: [u8; 32],
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         expected: [u8; 32],
     },
 }
@@ -205,6 +211,7 @@ impl Lfm25HybridCpuPerfCounters {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn snapshot(&self) -> Lfm25HybridCpuPerfStats {
         Lfm25HybridCpuPerfStats {
             attention_calls: self.attention_calls.load(Ordering::Relaxed),
@@ -246,6 +253,7 @@ fn elapsed_ticks_since(start_tick: u64) -> u64 {
     embassy_time_driver::now().saturating_sub(start_tick)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn ticks_to_us(ticks: u64) -> u64 {
     let elapsed_us =
         (ticks as u128).saturating_mul(1_000_000) / embassy_time_driver::TICK_HZ.max(1) as u128;
@@ -279,6 +287,7 @@ fn image_u64(image: &[u8], offset: usize) -> Result<u64, HybridCpuBackendError> 
     Ok(u64::from_le_bytes(bytes))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn lfm25_hybrid_cpu_perf_snapshot() -> Lfm25HybridCpuPerfStats {
     LFM25_HYBRID_CPU_PERF.snapshot()
 }
@@ -530,6 +539,7 @@ pub async fn open_intel_igc_backend() -> Result<IntelIgcAotDecodeBackend, Hybrid
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn open_hybrid_backend() -> Result<HybridCpuAotDecodeBackend, HybridCpuBackendError> {
     open_intel_igc_backend().await
 }

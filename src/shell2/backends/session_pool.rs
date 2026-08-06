@@ -12,6 +12,7 @@ const FRONTEND_CAPACITY_ERROR: i32 = -4;
 const FRONTEND_BUSY_ERROR: i32 = -5;
 pub(crate) const FRONTEND_FLAG_DROPPED: u32 = 1 << 0;
 pub(crate) const FRONTEND_FLAG_HANDOFF: u32 = 1 << 1;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const TERMINAL_RESET: &[u8] = b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[?1049l\x1b[0m\x1b[39;49m\x1b[r\x1b[?25h";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

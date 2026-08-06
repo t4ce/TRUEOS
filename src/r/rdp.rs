@@ -1,25 +1,31 @@
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn client_count() -> u32 {
     0
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn has_clients() -> bool {
     false
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn cached_texture_count() -> u32 {
     0
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn cached_texture_bytes() -> u32 {
     0
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_begin_frame(_seq: u32, _flags: u32, _clear_rgb: u32) {}
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_end_frame(
     _seq: u32,
     _flags: u32,
@@ -29,6 +35,7 @@ pub fn publish_end_frame(
 ) {
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_set_blend(
     _frame_seq: u32,
     _enabled: u32,
@@ -39,6 +46,7 @@ pub fn publish_set_blend(
 ) {
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_set_sampler(
     _frame_seq: u32,
     _wrap_s: u32,
@@ -48,19 +56,26 @@ pub fn publish_set_sampler(
 ) {
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_set_scissor(_frame_seq: u32, _x: u32, _y: u32, _width: u32, _height: u32) {}
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_clear_scissor(_frame_seq: u32) {}
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_set_render_target(_frame_seq: u32, _tex_id: u32) {}
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_clear_render_target(_frame_seq: u32) {}
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_clear_rect(_frame_seq: u32, _rgb: u32, _x: u32, _y: u32, _width: u32, _height: u32) {
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_clear_color_rgba(_frame_seq: u32, _r: u32, _g: u32, _b: u32, _a: u32) {}
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_texture_rgba(
     _tex_id: u32,
     _width: u32,
@@ -71,12 +86,16 @@ pub fn publish_texture_rgba(
 ) {
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_texture_png(_tex_id: u32, _flags: u32, _data: &[u8]) {}
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_texture_jpeg(_tex_id: u32, _flags: u32, _data: &[u8]) {}
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_draw_solid_batch(_frame_seq: u32, _rect_count: u32, _records: &[u8]) {}
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn publish_draw_sprite_batch(
     _frame_seq: u32,
     _tex_id: u32,

@@ -115,6 +115,7 @@ pub(crate) struct KeyEvent {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) enum MouseScrollDelta {
     LineDelta(f32, f32),
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PixelDelta(f64, f64),
 }
 
@@ -205,6 +206,7 @@ impl EventLoopInput {
             .is_ok()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn unregister_window(&mut self, id: WindowId) {
         if let Some(index) = self.windows.iter().position(|window| window.id == id) {
             self.windows.swap_remove(index);

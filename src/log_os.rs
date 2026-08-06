@@ -142,7 +142,6 @@ pub(crate) mod flags {
             LogArea::ExecutorCache => EXECUTOR_CACHE_LOG_LEVEL,
             LogArea::IntelMediaNgin => INTEL_MEDIA_NGIN_LOG_LEVEL,
             LogArea::Blueprint => BLUEPRINT_LOG_LEVEL,
-            _ => log_os_core::default_area_log_policy(area),
         }
     }
 
@@ -456,6 +455,7 @@ pub fn log_with_area_purpose(
     log_os_core::log_with_area_purpose(&TRUEOS_LOG_ROUTER, area, level, purpose, args);
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn log_with_target_purpose(
     target: &str,
     level: log::Level,

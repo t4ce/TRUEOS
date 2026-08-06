@@ -39,15 +39,19 @@ struct InternalNetbenchRequest {
 
 #[derive(Clone, Copy)]
 enum InternalNetbenchRemote {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     V4([u8; 4]),
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     V6([u8; 16]),
 }
 
 // Internal netbench is useful for performance tuning; allow a small amount of
 // concurrency to avoid per-flow caps on some networks.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const INTERNAL_NETBENCH_MAX_PENDING: usize = 8;
 const INTERNAL_NETBENCH_MAX_CONCURRENT_PER_NIC: usize = 4;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static INTERNAL_NETBENCH_NEXT_ID: AtomicU32 = AtomicU32::new(1);
 static INTERNAL_NETBENCH_REQS: spin::Mutex<Vec<InternalNetbenchRequest>> =
     spin::Mutex::new(Vec::new());
@@ -108,6 +112,7 @@ fn internal_netbench_format_speed(bps: u64) -> alloc::string::String {
 /// Submit a one-shot internal netbench run.
 ///
 /// Returns `false` if the internal netbench queue is full.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn internal_netbench_submit(
     device_index: usize,
     remote_ip: [u8; 4],
@@ -128,6 +133,7 @@ pub fn internal_netbench_submit(
     true
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn internal_netbench_submit_v6(
     device_index: usize,
     remote_ip: [u8; 16],
@@ -232,18 +238,22 @@ static PRIMARY_RA_DNS6: spin::Mutex<([[u8; 16]; RA_DNS6_MAX], u8)> =
 static PRIMARY_DHCP6_DNS6: spin::Mutex<([[u8; 16]; DHCP6_DNS6_MAX], u8)> =
     spin::Mutex::new(([[0u8; 16]; DHCP6_DNS6_MAX], 0));
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn primary_dhcp_dns_snapshot() -> ([[u8; 4]; DHCP_DNS_MAX], u8) {
     *PRIMARY_DHCP_DNS.lock()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn primary_ra_dns6_snapshot() -> ([[u8; 16]; RA_DNS6_MAX], u8) {
     *PRIMARY_RA_DNS6.lock()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn primary_dhcp6_dns6_snapshot() -> ([[u8; 16]; DHCP6_DNS6_MAX], u8) {
     *PRIMARY_DHCP6_DNS6.lock()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn dhcp_dns_snapshot_at(index: usize) -> Option<([[u8; 4]; DHCP_DNS_MAX], u8)> {
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
@@ -262,6 +272,7 @@ pub fn primary_ipv4_router_snapshot() -> Option<[u8; 4]> {
     ipv4_router_snapshot_at(crate::net::primary_device_index()).flatten()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn ra_dns6_snapshot_at(index: usize) -> Option<([[u8; 16]; RA_DNS6_MAX], u8)> {
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
@@ -269,6 +280,7 @@ pub fn ra_dns6_snapshot_at(index: usize) -> Option<([[u8; 16]; RA_DNS6_MAX], u8)
     Some((svc.ra_dns6, svc.ra_dns6_count))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn dhcp6_dns6_snapshot_at(index: usize) -> Option<([[u8; 16]; DHCP6_DNS6_MAX], u8)> {
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
@@ -659,6 +671,7 @@ pub enum NetEvent {
         handle: NetHandle,
         len: usize,
     },
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     IpPacket {
         handle: NetHandle,
         packet: Vec<u8>,
@@ -1681,9 +1694,13 @@ struct SocketRecord {
 struct TunRecord {
     owner: &'static str,
     handle: NetHandle,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     ipv4: [u8; 4],
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     ipv4_prefix_len: u8,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     ipv6: [u8; 16],
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     ipv6_prefix_len: u8,
     mtu: u16,
 }

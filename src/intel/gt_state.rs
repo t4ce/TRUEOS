@@ -27,6 +27,7 @@ const GEN12_CAGF_SHIFT: u32 = 11;
 const GEN9_SW_REQ_UNSLICE_RATIO_SHIFT: u32 = 23;
 const GEN9_SW_REQ_UNSLICE_RATIO_MASK: u32 = GEN12_CAGF_MASK << GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
 const GEN12_RP0_CAP_MASK: u32 = 0xFF;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GEN12_GT0_PERF_LIMIT_REASONS_MASK: u32 = 0x0DE3;
 static GEN12_LUMEN_GT_BOOST_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -151,6 +152,7 @@ pub(super) struct Gen12LumenMocsInitReport {
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct Gen12GtStateSnapshot {
     pub(crate) available: bool,
     pub(crate) actual_ratio: u32,
@@ -448,6 +450,7 @@ pub(super) fn actual_ratio(dev: super::Dev) -> u32 {
     (super::mmio_read(dev, GEN12_RPSTAT1) >> GEN12_CAGF_SHIFT) & GEN12_CAGF_MASK
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn read(dev: super::Dev) -> Gen12GtStateSnapshot {
     if !gt_state_registers_available(dev) {
         return Gen12GtStateSnapshot::default();

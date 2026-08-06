@@ -79,6 +79,7 @@ pub(crate) fn version_triplet(sw_version: u32) -> (u32, u32, u32) {
     ((sw_version >> 16) & 0xFF, (sw_version >> 8) & 0xFF, sw_version & 0xFF)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn read_le_u32(bytes: &[u8], offset: usize) -> u32 {
     let mut out = 0u32;
     let mut i = 0usize;
@@ -91,6 +92,7 @@ pub(crate) fn read_le_u32(bytes: &[u8], offset: usize) -> u32 {
     out
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn byte_signature(bytes: &[u8]) -> u32 {
     let mut sig = 0x811C_9DC5u32;
     for byte in bytes {

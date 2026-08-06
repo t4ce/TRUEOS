@@ -69,20 +69,30 @@ pub struct ThermalSample {
     pub delta_to_tjmax_celsius: u8,
     pub temperature_celsius: Option<i16>,
     pub thermal_status: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub thermal_log: bool,
     pub prochot_status: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub prochot_log: bool,
     pub critical_status: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub critical_log: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub threshold1_status: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub threshold1_log: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub threshold2_status: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub threshold2_log: bool,
     pub power_limit_status: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub power_limit_log: bool,
     pub current_limit_status: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub current_limit_log: bool,
     pub cross_domain_limit_status: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub cross_domain_limit_log: bool,
 }
 
@@ -90,6 +100,7 @@ pub struct ThermalSample {
 pub struct CoreThermalSample {
     pub slot: usize,
     pub online: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub completed: bool,
     pub core_kind: u8,
     pub executor_spawned: Option<usize>,
@@ -143,6 +154,7 @@ impl ThermalSnapshot {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn has_data(&self) -> bool {
         self.sample_valid
     }
@@ -174,6 +186,7 @@ static PASSIVE_CORE_PREV_APERF: [AtomicU64; THERMAL_CORE_LIMIT] =
 static PASSIVE_CORE_PREV_MPERF: [AtomicU64; THERMAL_CORE_LIMIT] =
     [const { AtomicU64::new(0) }; THERMAL_CORE_LIMIT];
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub type ThermalReceiver<'a> =
     WatchReceiver<'a, crate::wait::EmbassySpinRawMutex, ThermalSnapshot, THERMAL_WATCH_RECEIVERS>;
 
@@ -202,10 +215,12 @@ pub fn latest_snapshot_text() -> String {
     format_snapshot_text(&latest_snapshot())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn subscribe() -> Option<ThermalReceiver<'static>> {
     THERMAL_WATCH.receiver()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn anon_snapshot() -> ThermalSnapshot {
     let mut receiver = THERMAL_WATCH.anon_receiver();
     receiver.try_get().unwrap_or_else(ThermalSnapshot::empty)

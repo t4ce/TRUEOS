@@ -156,11 +156,13 @@ async fn query_ntp_words_for_device(dev_idx: usize, host: &str) -> Option<[u32; 
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn ntp_frame_snapshot() -> [u32; 12] {
     *NTP_FRAME_WORDS.lock()
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn ntp_last_sync_unix_seconds() -> Option<u64> {
     let v = NTP_LAST_SYNC_UNIX_SECS.load(Ordering::Acquire);
     if v == 0 { None } else { Some(v) }

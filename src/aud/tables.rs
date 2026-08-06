@@ -53,6 +53,7 @@ pub static MIDI_FREQ: [u32; 128] = [
 
 /// Note name → MIDI note number lookup
 /// Returns (midi_note, octave_offset) for common note names
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn note_name_to_midi(name: &str) -> Option<u8> {
     let bytes = name.as_bytes();
     if bytes.is_empty() {
@@ -106,6 +107,7 @@ pub fn note_name_to_midi(name: &str) -> Option<u8> {
 }
 
 /// MIDI note number → note name string (e.g., 69 → "A4")
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn midi_to_note_name(note: u8) -> &'static str {
     // Pre-computed names for the most common range (C2-C7 = notes 36-96)
     static NAMES: [&str; 12] = [
@@ -117,6 +119,7 @@ pub fn midi_to_note_name(note: u8) -> &'static str {
 }
 
 /// Get the octave of a MIDI note
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn midi_octave(note: u8) -> u8 {
     if note >= 12 { (note / 12) - 1 } else { 0 }
 }

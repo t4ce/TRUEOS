@@ -19,28 +19,47 @@ pub(crate) enum RenderStat {
     ClInvocationCount,
     ClPrimitivesCount,
     PsInvocationCount,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsInvocationCountSlice0,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsInvocationCountSlice1,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsInvocationCountSlice2,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsInvocationCountSlice4,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsInvocationCountSlice5,
     CpsInvocationCount,
     PsDepthCount,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsDepthCountSlice0,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsDepthCountSlice1,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsDepthCountSlice2,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsDepthCountSlice3,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsDepthCountSlice4,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PsDepthCountSlice5,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Timestamp,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     StreamOutput0WriteOffset,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     StreamOutput1WriteOffset,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     StreamOutput2WriteOffset,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     StreamOutput3WriteOffset,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     WindowHardwareGeneratedClearValue,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     CsCtxTimestamp,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const RENDER_STATS: &[RenderStat] = &[
     RenderStat::IaVerticesCount,
     RenderStat::IaPrimitivesCount,
@@ -130,6 +149,7 @@ impl RenderStat {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn description(self) -> Option<&'static str> {
         match self {
             Self::IaVerticesCount => Some("IA Vertices Count"),

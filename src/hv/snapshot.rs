@@ -48,17 +48,22 @@ const _: [(); 1056] = [(); core::mem::size_of::<VmSnapshotHeader>()];
 #[derive(Copy, Clone, Debug)]
 pub enum SaveError {
     UnsupportedVmId,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     NoRoot,
     NoSnapshot,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     BeginWrite,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Io(crate::disc::block::Error),
 }
 
 #[derive(Copy, Clone, Debug)]
 pub enum RestoreError {
     UnsupportedVmId,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     NoRoot,
     MissingFile,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Read(crate::disc::block::Error),
     BadSnapshot,
     CodeMismatch,

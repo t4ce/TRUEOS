@@ -56,25 +56,36 @@ static RESIDENT_TOKENIZER: Mutex<Option<Arc<trueos_lfm25_cpu::Lfm25Tokenizer>>> 
 pub enum Error {
     RootUnavailable,
     Missing,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Open(crate::disc::block::Error),
     Size {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         observed: u64,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         expected: u64,
     },
     Allocation,
     Read {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         offset: u64,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         source: crate::disc::block::Error,
     },
     ShortRead {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         offset: u64,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         observed: usize,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         expected: usize,
     },
     Hash {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         observed: [u8; 32],
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         expected: [u8; 32],
     },
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Artifact(trueos_lfm25_cpu::Error),
 }
 
@@ -163,6 +174,7 @@ pub async fn load() -> Result<Arc<trueos_lfm25_cpu::Lfm25Tokenizer>, Error> {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn resident_ready() -> bool {
     RESIDENT_TOKENIZER.lock().is_some()
 }

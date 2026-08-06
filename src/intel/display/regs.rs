@@ -10,9 +10,13 @@ pub(in crate::intel) const TRANS_HSYNC_A: usize = 0x60008;
 pub(in crate::intel) const TRANS_VTOTAL_A: usize = 0x6000C;
 pub(in crate::intel) const TRANS_VSYNC_A: usize = 0x60014;
 pub(in crate::intel) const TRANS_DDI_FUNC_CTL_A: usize = 0x60400;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const TRANS_PSR_CTL_A: usize = 0x60800;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const TRANS_PSR_STATUS_A: usize = 0x60840;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const TRANS_PSR2_CTL_A: usize = 0x60900;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const TRANS_PSR2_STATUS_A: usize = 0x60940;
 pub(in crate::intel) const HSW_PWR_WELL_CTL1: usize = 0x45400;
 pub(in crate::intel) const HSW_PWR_WELL_CTL2: usize = 0x45404;
@@ -25,6 +29,7 @@ pub(in crate::intel) const ICL_PWR_WELL_CTL_DDI1: usize = 0x45450;
 pub(in crate::intel) const ICL_PWR_WELL_CTL_DDI2: usize = 0x45454;
 pub(in crate::intel) const ICL_PWR_WELL_CTL_DDI4: usize = 0x4545C;
 pub(in crate::intel) const SKL_FUSE_STATUS: usize = 0x42000;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const CUR_SURFLIVE_A: usize = 0x700AC;
 pub(in crate::intel) const PIPE_FRMCOUNT_A: usize = 0x70040;
 pub(in crate::intel) const PIPE_MMIO_STRIDE: usize = 0x1000;
@@ -47,8 +52,11 @@ pub(in crate::intel) const UNI_PLANE_AUX_DIST_OFF: usize = 0x40;
 pub(in crate::intel) const UNI_PLANE_AUX_OFFSET_OFF: usize = 0x44;
 pub(in crate::intel) const UNI_PLANE_CUS_CTL_OFF: usize = 0x48;
 pub(in crate::intel) const UNI_PLANE_COLOR_CTL_OFF: usize = 0x4C;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const UNI_PLANE_INPUT_CSC_COEFF_OFF: usize = 0x60;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const UNI_PLANE_INPUT_CSC_PREOFF_OFF: usize = 0x78;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const UNI_PLANE_INPUT_CSC_POSTOFF_OFF: usize = 0x84;
 pub(in crate::intel) const UNI_PLANE_WM_0_OFF: usize = 0xC0;
 pub(in crate::intel) const UNI_PLANE_WM_LEVELS: usize = 8;
@@ -80,10 +88,13 @@ pub(in crate::intel) const PLANE_CTL_YUV420_Y_PLANE: u32 = 1 << 19;
 pub(in crate::intel) const PLANE_CTL_KEY_ENABLE_MASK: u32 = 0x03 << 21;
 pub(in crate::intel) const PLANE_CTL_TILED_MASK: u32 = 0x07 << 10;
 pub(in crate::intel) const PLANE_CTL_ROTATE_MASK: u32 = 0x03;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CTL_FORMAT_NV12: u32 = 1 << 24;
 pub(in crate::intel) const PLANE_CTL_FORMAT_XRGB_8888: u32 = 4 << 24;
 pub(in crate::intel) const PLANE_CTL_TILED_LINEAR: u32 = 0 << 10;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CTL_TILED_Y: u32 = 4 << 10;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CTL_TILED_YF: u32 = 5 << 10;
 pub(in crate::intel) const PLANE_KEYMSK_ALPHA_ENABLE: u32 = 1 << 31;
 pub(in crate::intel) const PLANE_KEYMAX_ALPHA_MASK: u32 = 0xFF << 24;
@@ -97,21 +108,36 @@ pub(in crate::intel) const PLANE_COLOR_PLANE_CSC_ENABLE: u32 = 1 << 21;
 pub(in crate::intel) const PLANE_COLOR_INPUT_CSC_ENABLE: u32 = 1 << 20;
 pub(in crate::intel) const PLANE_COLOR_CSC_MODE_MASK: u32 = 0x07 << 17;
 pub(in crate::intel) const PLANE_COLOR_CSC_MODE_BYPASS: u32 = 0x00 << 17;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_COLOR_CSC_MODE_YUV601_TO_RGB601: u32 = 0x01 << 17;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_COLOR_CSC_MODE_YUV709_TO_RGB709: u32 = 0x02 << 17;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_COLOR_CSC_MODE_YUV2020_TO_RGB2020: u32 = 0x03 << 17;
 pub(in crate::intel) const PLANE_COLOR_PLANE_GAMMA_DISABLE: u32 = 1 << 13;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CUS_ENABLE: u32 = 1 << 31;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CUS_Y_PLANE: u32 = 1 << 30;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CUS_HPHASE_SIGN_NEGATIVE: u32 = 1 << 19;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CUS_HPHASE_MASK: u32 = 0x03 << 16;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CUS_HPHASE_0: u32 = 0 << 16;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CUS_HPHASE_0_25: u32 = 1 << 16;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CUS_HPHASE_0_5: u32 = 2 << 16;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CUS_VPHASE_SIGN_NEGATIVE: u32 = 1 << 15;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CUS_VPHASE_MASK: u32 = 0x03 << 12;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CUS_VPHASE_0: u32 = 0 << 12;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CUS_VPHASE_0_25: u32 = 1 << 12;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) const PLANE_CUS_VPHASE_0_5: u32 = 2 << 12;
 pub(in crate::intel) const PLANE_WM_ENABLE: u32 = 1 << 31;
 // At 2560-wide RGBA8, the linear-plane fetch model consumes 21 512-byte
@@ -197,6 +223,7 @@ impl PlaneId {
         self.base() + UNI_PLANE_SURFLIVE_OFF
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(in crate::intel) const fn buf_cfg(self) -> usize {
         self.base() + UNI_PLANE_BUF_CFG_OFF
     }
@@ -225,6 +252,7 @@ pub(in crate::intel) const PIPES: [PipeInfo; 4] = [
     },
 ];
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(in crate::intel) fn plane_buf_cfg_for_pipe_slot(
     dev: crate::intel::Dev,
     pipe: PipeInfo,

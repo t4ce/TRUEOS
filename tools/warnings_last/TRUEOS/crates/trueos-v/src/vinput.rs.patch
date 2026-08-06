@@ -1,0 +1,75 @@
+diff --git a/crates/trueos-v/src/vinput.rs b/crates/trueos-v/src/vinput.rs
+index 9d29f9531..d0e549121 100644
+--- a/crates/trueos-v/src/vinput.rs
++++ b/crates/trueos-v/src/vinput.rs
+@@ -617,28 +617,6 @@ pub fn qjs_mouse_pop() -> Option<TrueosMouseState> {
+     if rc == 0 { Some(out) } else { None }
+ }
+ 
+-#[inline]
+-pub fn pop_mouse_delta() -> Option<(u8, i8, i8, i8)> {
+-    let mut buttons = 0u8;
+-    let mut dx = 0i8;
+-    let mut dy = 0i8;
+-    let mut wheel = 0i8;
+-    let rc =
+-        unsafe { vcabi::trueos_cabi_input_pop_mouse(&mut buttons, &mut dx, &mut dy, &mut wheel) };
+-    if rc == 1 {
+-        Some((buttons, dx, dy, wheel))
+-    } else {
+-        None
+-    }
+-}
+-
+-#[inline]
+-pub fn pop_tablet_event() -> Option<TrueosTabletEvent> {
+-    let mut out = TrueosTabletEvent::default();
+-    let rc = unsafe { vcabi::trueos_cabi_input_pop_tablet(&mut out) };
+-    if rc == 1 { Some(out) } else { None }
+-}
+-
+ #[inline]
+ pub fn cursor_pos(cursor_id: u32) -> Result<(i32, i32), i32> {
+     let mut x = 0i32;
+@@ -805,40 +783,6 @@ pub fn hid_hut_keyboards() -> Vec<TrueosHidHutKeyboardState> {
+     out
+ }
+ 
+-#[inline]
+-pub fn write_keyboard_text(slot_id: u32, bytes: &[u8], flags: u32) -> Result<(), i32> {
+-    if slot_id == 0 || bytes.is_empty() {
+-        return Err(-1);
+-    }
+-    let rc = unsafe {
+-        vcabi::trueos_cabi_input_write_keyboard_text(slot_id, bytes.as_ptr(), bytes.len(), flags)
+-    };
+-    if rc != 0 {
+-        return Err(rc);
+-    }
+-    Ok(())
+-}
+-
+-#[inline]
+-pub fn write_keyboard_key(
+-    slot_id: u32,
+-    codepoint: u32,
+-    key_code: u32,
+-    modifiers: u32,
+-    flags: u32,
+-) -> Result<(), i32> {
+-    if slot_id == 0 {
+-        return Err(-1);
+-    }
+-    let rc = unsafe {
+-        vcabi::trueos_cabi_input_write_keyboard_key(slot_id, codepoint, key_code, modifiers, flags)
+-    };
+-    if rc != 0 {
+-        return Err(rc);
+-    }
+-    Ok(())
+-}
+-
+ #[cfg(test)]
+ mod tests {
+     use super::InputComboColor;
+

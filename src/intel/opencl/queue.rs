@@ -5,6 +5,7 @@ use alloc::{collections::VecDeque, vec::Vec};
 use super::types;
 
 #[derive(Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum CommandKind {
     WriteBuffer {
         mem: types::MemId,
@@ -27,6 +28,7 @@ pub(crate) enum CommandKind {
 }
 
 impl CommandKind {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn byte_len(&self) -> usize {
         match self {
             Self::WriteBuffer { bytes, .. } => bytes.len(),
@@ -37,6 +39,7 @@ impl CommandKind {
 }
 
 #[derive(Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct Command {
     pub(crate) event: types::EventId,
     pub(crate) kind: CommandKind,
@@ -45,6 +48,7 @@ pub(crate) struct Command {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum EventStatus {
     Queued,
     Submitted,
@@ -54,6 +58,7 @@ pub(crate) enum EventStatus {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct EventRecord {
     pub(crate) event: types::EventId,
     pub(crate) queue: types::QueueId,
@@ -62,6 +67,7 @@ pub(crate) struct EventRecord {
 }
 
 #[derive(Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct CommandQueue {
     pub(crate) id: types::QueueId,
     pub(crate) context: types::ContextId,
@@ -73,6 +79,7 @@ pub(crate) struct CommandQueue {
 }
 
 impl CommandQueue {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn new(
         id: types::QueueId,
         context: types::ContextId,
@@ -90,6 +97,7 @@ impl CommandQueue {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn enqueue_write_buffer(
         &mut self,
         event: types::EventId,
@@ -109,6 +117,7 @@ impl CommandQueue {
         )
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn enqueue_read_buffer(
         &mut self,
         event: types::EventId,
@@ -128,6 +137,7 @@ impl CommandQueue {
         )
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn enqueue_kernel(
         &mut self,
         event: types::EventId,
@@ -138,6 +148,7 @@ impl CommandQueue {
         self.enqueue(event, CommandKind::Kernel { kernel, nd_range }, wait_for)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn enqueue_known_kernel(
         &mut self,
         event: types::EventId,
@@ -155,6 +166,7 @@ impl CommandQueue {
         )
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn finish_with<F>(&mut self, mut backend: F) -> types::ClResult<usize>
     where
         F: FnMut(&Command) -> types::ClResult<()>,
@@ -177,22 +189,27 @@ impl CommandQueue {
         Ok(completed)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn pending_len(&self) -> usize {
         self.pending.len()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn event_count(&self) -> usize {
         self.events.len()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn events(&self) -> &[EventRecord] {
         self.events.as_slice()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn event(&self, event: types::EventId) -> Option<&EventRecord> {
         self.events.iter().find(|record| record.event == event)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn enqueue(
         &mut self,
         event: types::EventId,
@@ -218,6 +235,7 @@ impl CommandQueue {
         Ok(event)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn set_event_status(&mut self, event: types::EventId, status: EventStatus) {
         if let Some(record) = self.events.iter_mut().find(|record| record.event == event) {
             record.status = status;

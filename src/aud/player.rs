@@ -18,6 +18,7 @@ use super::synth::SynthEngine;
 pub enum PlayerState {
     Stopped,
     Playing,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Paused,
 }
 
@@ -44,6 +45,7 @@ impl PatternPlayer {
     }
 
     /// Play a pattern for N loops (0 = once for safety in shell blocking mode)
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn play_pattern(
         &mut self,
         pattern: &Pattern,
@@ -157,12 +159,14 @@ impl PatternPlayer {
     }
 
     /// Stop playback
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn stop(&mut self) {
         self.state = PlayerState::Stopped;
         let _ = crate::hda::stop();
     }
 
     /// Get player status
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn status(&self) -> String {
         match self.state {
             PlayerState::Stopped => String::from("Player: Stopped\n"),

@@ -71,10 +71,14 @@ const DEFAULT_REGULAR_ROW_FONT_PIXELS: f32 = 24.0;
 pub(crate) const A4_WIDTH_MM: u32 = 210;
 pub(crate) const A4_HEIGHT_MM: u32 = 297;
 const CELL_EDGE_MM: u32 = 5;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const GRID_WIDTH_MM: u32 = COLUMNS as u32 * CELL_EDGE_MM;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const GRID_HEIGHT_MM: u32 = ROWS as u32 * CELL_EDGE_MM;
 pub(crate) const RULER_GUTTER_MM: u32 = 4;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const SURFACE_WIDTH_MM: u32 = RULER_GUTTER_MM + GRID_WIDTH_MM;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const SURFACE_HEIGHT_MM: u32 = RULER_GUTTER_MM + GRID_HEIGHT_MM;
 const SMALL_TICK_LENGTH_MM: f32 = 1.25;
 const CENTIMETER_TICK_LENGTH_MM: f32 = 2.5;
@@ -850,6 +854,7 @@ struct KeyboardGridOutcome {
     edited_cell: Option<GridCellSelection>,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn edit_snapshot_from_keyboard(
     snapshot: &mut OwnedSnapshot,
     selection: &mut GridCellSelection,

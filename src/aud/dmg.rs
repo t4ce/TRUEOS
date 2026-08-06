@@ -5,9 +5,12 @@
 
 use alloc::vec::Vec;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const SAMPLE_RATE_HZ: u32 = 48_000;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const STREAM_START_AHEAD_FRAMES: usize = SAMPLE_RATE_HZ as usize / 10;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct DmgAudioStream {
     started: bool,
     disabled: bool,
@@ -17,10 +20,12 @@ pub struct DmgAudioStream {
 }
 
 impl DmgAudioStream {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn new() -> Self {
         Self::new_with_start_ahead_frames(STREAM_START_AHEAD_FRAMES)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn new_with_start_ahead_frames(start_ahead_frames: usize) -> Self {
         Self {
             started: false,
@@ -31,10 +36,12 @@ impl DmgAudioStream {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn is_started(&self) -> bool {
         self.started
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn stop_reset(&mut self) {
         let _ = crate::hda::stop();
         crate::hda::reset_stream();
@@ -44,6 +51,7 @@ impl DmgAudioStream {
         self.dma_len_samples = 0;
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn writable_samples(&self, guard_samples: usize) -> Option<usize> {
         if !self.started {
             return Some(usize::MAX);
@@ -62,6 +70,7 @@ impl DmgAudioStream {
         )
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn queued_samples(&self) -> Option<usize> {
         if !self.started {
             return Some(0);
@@ -76,6 +85,7 @@ impl DmgAudioStream {
         Some(cursor_distance(play_cursor, self.write_cursor, cap))
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn push_samples(&mut self, samples: &[i16]) -> Result<(), &'static str> {
         if samples.is_empty() || self.disabled {
             return Ok(());
@@ -124,6 +134,7 @@ impl DmgAudioStream {
         Ok(())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn prepare_start(&mut self) -> Result<(), &'static str> {
         if !crate::hda::is_initialized() {
             return Ok(());
@@ -148,11 +159,13 @@ impl DmgAudioStream {
         Ok(())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn play_cursor(&self, cap: usize) -> usize {
         ((crate::hda::get_playback_position() as usize) / core::mem::size_of::<i16>()) % cap
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn cursor_distance(from: usize, to: usize, cap: usize) -> usize {
     if to >= from {
         to - from
@@ -161,12 +174,14 @@ fn cursor_distance(from: usize, to: usize, cap: usize) -> usize {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn quantize_4bit(sample: i32) -> i16 {
     let clamped = sample.clamp(-24_000, 24_000);
     let level = ((clamped + 24_000) * 15 + 24_000) / 48_000;
     (level * 3_200 - 24_000) as i16
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn push_square_note(samples: &mut Vec<i16>, freq_hz: u32, duration_ms: u32, volume: i32) {
     let frames = (SAMPLE_RATE_HZ as u64 * duration_ms as u64 / 1_000) as usize;
     let period = (SAMPLE_RATE_HZ / freq_hz.max(1)).max(1) as usize;
@@ -181,6 +196,7 @@ fn push_square_note(samples: &mut Vec<i16>, freq_hz: u32, duration_ms: u32, volu
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn push_noise_burst(samples: &mut Vec<i16>, duration_ms: u32, volume: i32) {
     let frames = (SAMPLE_RATE_HZ as u64 * duration_ms as u64 / 1_000) as usize;
     let mut lfsr = 0x7FFFu16;
@@ -196,6 +212,7 @@ fn push_noise_burst(samples: &mut Vec<i16>, duration_ms: u32, volume: i32) {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn apply_loop_edge_fade(samples: &mut [i16], fade_ms: u32) {
     let frames = samples.len() / 2;
     let fade_frames =
@@ -219,6 +236,7 @@ fn apply_loop_edge_fade(samples: &mut [i16], fade_ms: u32) {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn render_boot_chime() -> (Vec<i16>, u32) {
     let mut samples = Vec::with_capacity((SAMPLE_RATE_HZ / 5) as usize * 2);
     push_square_note(&mut samples, 988, 55, 18_000);
@@ -230,6 +248,7 @@ pub fn render_boot_chime() -> (Vec<i16>, u32) {
     (samples, duration_ms)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn play_boot_chime() -> Result<(), &'static str> {
     super::ensure_init()?;
 
@@ -237,6 +256,7 @@ pub fn play_boot_chime() -> Result<(), &'static str> {
     super::play_samples(samples.as_slice(), duration_ms)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn render_loop_bed() -> Vec<i16> {
     let mut samples = Vec::with_capacity(SAMPLE_RATE_HZ as usize * 2);
 
@@ -253,6 +273,7 @@ pub fn render_loop_bed() -> Vec<i16> {
     samples
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn start_loop_bed() -> Result<(), &'static str> {
     super::ensure_init()?;
 

@@ -30,6 +30,7 @@ const GUC_KLV_SELF_CFG_G2H_CTB_ADDR_KEY: u32 = 0x0905;
 const GUC_KLV_SELF_CFG_G2H_CTB_DESCRIPTOR_ADDR_KEY: u32 = 0x0906;
 const GUC_KLV_SELF_CFG_G2H_CTB_SIZE_KEY: u32 = 0x0907;
 const GUC_HXG_ORIGIN_GUC: u32 = 1;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GUC_HXG_TYPE_REQUEST: u32 = 0;
 const GUC_HXG_TYPE_EVENT: u32 = 1;
 const GUC_HXG_TYPE_FAST_REQUEST: u32 = 2;
@@ -148,6 +149,7 @@ pub(crate) struct CtbSendResult {
     pub(crate) response: u32,
     pub(crate) response_type: u32,
     pub(crate) error: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) h2g_poll_iters: usize,
     pub(crate) g2h_poll_iters: usize,
     /// Monotonic H2G stream position immediately after this message. A
@@ -262,6 +264,7 @@ pub(crate) fn init_and_enable(dev: crate::intel::Dev) -> bool {
     ok
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn send_hxg_action(dev: crate::intel::Dev, action: u32, args: &[u32]) -> CtbSendResult {
     send_hxg(dev, action, args, GUC_HXG_TYPE_REQUEST, true)
 }

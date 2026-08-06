@@ -1,9 +1,11 @@
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn bf16_to_f32(bits: u16) -> f32 {
     f32::from_bits((bits as u32) << 16)
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn f32_to_bf16_bits(value: f32) -> u16 {
     let bits = value.to_bits();
     let exp = bits & 0x7F80_0000;
@@ -16,10 +18,12 @@ pub(crate) fn f32_to_bf16_bits(value: f32) -> u16 {
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn bf16_rowmajor_len_bytes(n_rows: usize, k_dim: usize) -> Option<usize> {
     n_rows.checked_mul(k_dim)?.checked_mul(2)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn pack_f32_to_bf16_le(src: &[f32], dst: &mut [u8]) -> Result<(), Bf16MatvecError> {
     let Some(needed) = src.len().checked_mul(2) else {
         return Err(Bf16MatvecError::ShapeOverflow);
@@ -38,12 +42,14 @@ pub(crate) fn pack_f32_to_bf16_le(src: &[f32], dst: &mut [u8]) -> Result<(), Bf1
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Bf16MatvecLane {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Scalar,
     Sse2,
     Avx2Fma,
 }
 
 impl Bf16MatvecLane {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Scalar => "scalar",
@@ -54,6 +60,7 @@ impl Bf16MatvecLane {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum Bf16MatvecError {
     EmptyKDim,
     BadRowRange,
@@ -73,6 +80,7 @@ pub(crate) fn selected_bf16_matvec_lane() -> Bf16MatvecLane {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn validate_rowmajor_bf16_matvec(
     x: &[f32],
     w_rowmajor_bf16: &[u8],
@@ -103,6 +111,7 @@ pub(crate) fn validate_rowmajor_bf16_matvec(
     Ok(())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn matvec_rowmajor_bf16_dispatch(
     x: &[f32],
     w_rowmajor_bf16: &[u8],
@@ -130,6 +139,7 @@ pub(crate) fn matvec_rowmajor_bf16_dispatch(
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct Bf16HelperSmoke {
     pub rows: usize,
     pub k_dim: usize,
@@ -144,6 +154,7 @@ pub(crate) struct Bf16HelperSmoke {
     pub max_abs_delta: f32,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn exercise_bf16_helpers_once() -> Bf16HelperSmoke {
     const ROWS: usize = 5;
     const K_DIM: usize = 17;
@@ -233,6 +244,7 @@ pub(crate) async fn bf16_helper_boot_exercise_task() {
     );
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn checksum_f32_bits(values: &[f32]) -> u32 {
     let mut acc = 0xA5A5_5A5Au32;
     for (idx, value) in values.iter().enumerate() {
@@ -242,6 +254,7 @@ fn checksum_f32_bits(values: &[f32]) -> u32 {
     acc
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn max_abs_delta(a: &[f32], b: &[f32]) -> f32 {
     let mut max = 0.0f32;
     let len = a.len().min(b.len());
@@ -254,6 +267,7 @@ fn max_abs_delta(a: &[f32], b: &[f32]) -> f32 {
     max
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn matvec_rows_bf16_scalar(
     x: &[f32],
     w_rowmajor_bf16: &[u8],
@@ -276,6 +290,7 @@ pub(crate) fn matvec_rows_bf16_scalar(
 }
 
 #[target_feature(enable = "avx2,fma")]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) unsafe fn matvec_rows_bf16_avx2_fma(
     x: &[f32],
     w_rowmajor_bf16: &[u8],
@@ -441,6 +456,7 @@ pub(crate) unsafe fn matvec_rows_bf16_avx2_fma(
 }
 
 #[target_feature(enable = "sse2")]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) unsafe fn matvec_rows_bf16_sse2(
     x: &[f32],
     w_rowmajor_bf16: &[u8],

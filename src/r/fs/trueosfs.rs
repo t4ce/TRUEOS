@@ -96,6 +96,7 @@ impl FileReadHandle {
     }
 
     #[inline]
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn data_lba(&self) -> u64 {
         self.record.data_lba
     }
@@ -210,6 +211,7 @@ pub async fn index_service_task() {
 /// Async variant of [`format_blank`].
 ///
 /// This avoids `block_on` and is safe to call from async contexts.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn format_blank_async(handle: block::DeviceHandle) -> Result<(), block::Error> {
     if handle.parent().is_some() {
         return Err(block::Error::InvalidParam);
@@ -1374,6 +1376,7 @@ pub async fn file_out_async(
 ///
 /// Unlike `file_out_async`, this will not trigger index construction on a cold root.
 /// It is intended for opportunistic cache reads from latency-sensitive paths.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn file_out_if_index_ready_async(
     disk: block::DeviceHandle,
     name: &str,
@@ -2563,10 +2566,12 @@ pub fn primary_root_handle() -> Option<block::DeviceHandle> {
 }
 
 /// Returns read-only state for the current primary TRUEOSFS root disk.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn primary_root_is_read_only() -> Option<bool> {
     primary_root_handle().map(|h| h.info().is_read_only())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn root_seq(disk_id: block::DiscId) -> Option<u32> {
     let roots = ROOTS.lock();
     roots.iter().find(|m| m.disk_id == disk_id).map(|m| m.seq)

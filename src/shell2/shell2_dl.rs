@@ -539,6 +539,7 @@ pub(crate) fn submit_online(spawner: &Spawner, io: &'static dyn ShellBackend2, s
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_download(spawner: &Spawner, io: &'static dyn ShellBackend2, submitted: &str) {
     submit_download_args(spawner, io, submitted.split_whitespace().map(String::from).collect());
 }

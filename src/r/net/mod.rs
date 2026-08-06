@@ -51,16 +51,19 @@ impl Default for NetProfile {
 }
 
 impl NetProfile {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn new() -> Self {
         Self { nic_index: None }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn with_nic(nic_index: usize) -> Self {
         Self {
             nic_index: Some(nic_index),
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn nic_index(self) -> Option<usize> {
         self.nic_index
     }

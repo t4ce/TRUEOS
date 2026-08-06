@@ -60,6 +60,7 @@ enum CodecRequest {
         output_path: String,
         target: MatrixTarget,
     },
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     SevenZExtractMemory {
         id: u64,
         label: String,
@@ -110,29 +111,42 @@ pub struct QueuedCodecJob {
 #[derive(Clone)]
 pub enum CodecCompletedKind {
     FileArchive {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         source_path: String,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         archive_path: String,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         source_bytes: usize,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         archive_bytes: usize,
     },
     FileExtract {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         archive_path: String,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         output_path: String,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         archive_bytes: usize,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         output_bytes: usize,
     },
     MemoryBytes {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         label: String,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         bytes: Vec<u8>,
     },
     Failed {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         error: CodecError,
     },
 }
 
 #[derive(Clone)]
 pub struct CodecCompletedJob {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub id: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub kind: CodecCompletedKind,
 }
 
@@ -479,6 +493,7 @@ pub fn enqueue_7z_extract_file(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn enqueue_7z_extract_memory(
     label: &str,
     payload: Vec<u8>,
@@ -502,6 +517,7 @@ pub fn enqueue_7z_extract_memory(
     QueuedCodecJob { id, slot: None }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn take_completed(id: u64) -> Option<CodecCompletedJob> {
     let mut completed = COMPLETED.lock();
     let index = completed.iter().position(|job| job.id == id)?;

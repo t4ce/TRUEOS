@@ -10,11 +10,14 @@ pub(crate) type Shell2CmdHandler = fn(&Spawner, &'static dyn ShellBackend2, &str
 #[derive(Clone, Copy)]
 struct BuiltinShell2CmdEntry {
     name: &'static str,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     mode: &'static str,
     color: Option<(u8, u8, u8)>,
     advertised: bool,
     handler: Shell2CmdHandler,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     tool_description: Option<&'static str>,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     tool_parameters_json: Option<&'static str>,
 }
 
@@ -780,6 +783,7 @@ fn push_static_rainbow_token(out: &mut AllocString, text: &str) {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn command_registry_json() -> AllocString {
     let mut out = AllocString::from("{\"version\":1,\"commands\":[");
     let mut first = true;

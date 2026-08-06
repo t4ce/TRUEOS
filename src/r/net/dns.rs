@@ -133,6 +133,7 @@ pub async fn resolve_ipv4_primary(host: &str, cfg: DnsConfig) -> Result<[u8; 4],
     resolve_ipv4_for_device(device_index, host, cfg).await
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn resolve_ipv4_for_profile(
     profile: NetProfile,
     host: &str,

@@ -18,15 +18,25 @@ use crate::graphics::font::{FontTesselMesh, FontTesselSummary};
 pub(crate) use crate::graphics::primitives::Rgba8 as GpuFontRgba;
 
 pub(crate) const MAX_DYNAMIC_TEXT_CHARS: usize = 256;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const MIN_FONT_STAMP_SIZE_PERCENT: u32 = 1;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const MAX_FONT_STAMP_SIZE_PERCENT: u32 = 100;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const NATIVE_FONT_STAMP_PADDING_PIXELS: u32 = 2;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const UI4_DOCUMENT_MIN_FONT_PIXELS: f32 = 12.0;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const UI4_DOCUMENT_MAX_FONT_PIXELS: f32 = 128.0;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const UI4_DOCUMENT_LINE_HEIGHT_SCALE: f32 = 1.25;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const UI4_DOCUMENT_PADDING_PIXELS: u32 = 24;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DEFAULT_FONT_FILL_TOLERANCE: f32 = 0.1;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const MIN_NATIVE_FONT_FILL_TOLERANCE: f32 = 0.005;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const NATIVE_FONT_CURVE_ERROR_PIXELS: f32 = 0.2;
 const SMALL_FONT_HINT_MIN_RASTER_PX: f32 = 8.0;
 const SMALL_FONT_HINT_MAX_RASTER_PX: f32 = 32.0;
@@ -41,6 +51,7 @@ const ANALYTICAL_COVERAGE_MAX_SEGMENT_EVALUATIONS: u64 = 64_000_000;
 
 /// Default font color. It follows the same draw-time RGBA specialization as
 /// every other color; there is no separate baked-blue presentation path.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const GPU_FONT_DEFAULT_RGBA: GpuFontRgba = GpuFontRgba::new(0, 64, 255, 255);
 pub(crate) const GPU_FONT_COLOR_KEYFRAME_CAPACITY: usize = 8;
 
@@ -55,9 +66,13 @@ impl GpuFontColorChannels {
     const BLUE_BIT: u8 = 1 << 2;
     const ALPHA_BIT: u8 = 1 << 3;
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const RED: Self = Self(Self::RED_BIT);
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const GREEN: Self = Self(Self::GREEN_BIT);
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const BLUE: Self = Self(Self::BLUE_BIT);
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const ALPHA: Self = Self(Self::ALPHA_BIT);
     pub(crate) const RGB: Self = Self(Self::RED_BIT | Self::GREEN_BIT | Self::BLUE_BIT);
     pub(crate) const RGBA: Self = Self(Self::RGB.0 | Self::ALPHA_BIT);
@@ -74,6 +89,7 @@ impl GpuFontColorChannels {
         self.0
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn name(self) -> &'static str {
         match self.0 {
             Self::RED_BIT => "r",
@@ -100,6 +116,7 @@ pub(crate) enum GpuFontColorTiming {
 }
 
 impl GpuFontColorTiming {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Linear => "linear",
@@ -118,6 +135,7 @@ pub(crate) enum GpuFontColorIteration {
 }
 
 impl GpuFontColorIteration {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Once => "once",
@@ -164,12 +182,15 @@ pub(crate) struct GpuFontColorKeyframes {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GpuFontColorProgram {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Static(GpuFontRgba),
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Transition(GpuFontColorTransition),
     Keyframes(GpuFontColorKeyframes),
 }
 
 impl GpuFontColorProgram {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Static(_) => "static",
@@ -251,6 +272,7 @@ pub(crate) struct GpuFontInstanceProgram {
 }
 
 impl GpuFontInstanceProgram {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn color_only(color: GpuFontColorProgram) -> Self {
         Self {
             color: Some(color),
@@ -264,6 +286,7 @@ impl GpuFontInstanceProgram {
             .map_or(fallback, |program| program.sample(elapsed_ms))
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn needs_continuous_frames(self) -> bool {
         self.motion.is_active()
             || matches!(
@@ -451,6 +474,7 @@ pub(crate) fn font_face_supports_text(font: GpuFontFace, text: &str) -> bool {
 }
 
 impl GpuFontTextLayout {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::SingleLine => "single-line",
@@ -462,6 +486,7 @@ impl GpuFontTextLayout {
 #[derive(Clone, Copy)]
 pub(crate) enum GpuFontTextRequest<'a> {
     SingleLine(&'a str),
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Rows(&'a [&'a str]),
 }
 
@@ -546,6 +571,7 @@ impl GpuFontCoverageMask {
 /// changes. Only the 256-byte C++ font-instance descriptor is rewritten before
 /// the next restamp.
 #[derive(Clone, Copy, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontRetainedStyle {
     pub(crate) foreground: GpuFontRgba,
     pub(crate) background: GpuFontRgba,
@@ -557,6 +583,7 @@ pub(crate) struct GpuFontRetainedStyle {
 }
 
 impl GpuFontRetainedStyle {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn identity(foreground: GpuFontRgba) -> Self {
         Self {
             foreground,
@@ -572,6 +599,7 @@ impl GpuFontRetainedStyle {
 
 /// Bounded trigonometric motion evaluated by the C++ font-instance kernel.
 #[derive(Clone, Copy, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontRetainedMotion {
     pub(crate) period_seconds: f32,
     pub(crate) phase_cycles: f32,
@@ -582,6 +610,7 @@ pub(crate) struct GpuFontRetainedMotion {
 }
 
 impl GpuFontRetainedMotion {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const NONE: Self = Self {
         period_seconds: 0.0,
         phase_cycles: 0.0,
@@ -591,6 +620,7 @@ impl GpuFontRetainedMotion {
         translation_amplitude_px: [0.0, 0.0],
     };
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn is_active(self) -> bool {
         self.rotation_amplitude_radians.abs() > f32::EPSILON
             || self.scale_amplitude.abs() > f32::EPSILON
@@ -643,6 +673,7 @@ impl GpuFontRetainedScene {
         self.coverage.as_ref().map(GpuFontCoverageMask::origin_px)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn quarantined(&self) -> bool {
         self.quarantined.load(Ordering::Acquire)
     }
@@ -737,6 +768,7 @@ impl GpuFontRetainedScene {
     ///
     /// Layout and mask residency remain unchanged. Style and motion are copied
     /// into persistent descriptor storage immediately before this draw.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn restamp_instance(
         &self,
         destination: crate::intel::gpgpu::GpgpuRgba8Surface,
@@ -859,6 +891,7 @@ fn gpu_font_rgba_u32(rgba: GpuFontRgba) -> u32 {
     u32::from_le_bytes([rgba.r, rgba.g, rgba.b, rgba.a])
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn retained_font_style_valid(style: GpuFontRetainedStyle) -> bool {
     let values = [
         style.scale,
@@ -884,6 +917,7 @@ fn retained_font_style_valid(style: GpuFontRetainedStyle) -> bool {
 /// exactly the same pixel-for-pixel mask-over operation as the smaller glyph
 /// batch. Keeping this gate exact avoids silently dropping affine/background
 /// semantics when future retained-scene callers use them.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn retained_font_identity_translation(style: GpuFontRetainedStyle) -> Option<[i32; 2]> {
     if style.scale != 1.0
         || style.rotation_radians != 0.0
@@ -905,6 +939,7 @@ fn retained_font_identity_translation(style: GpuFontRetainedStyle) -> Option<[i3
     Some(translation)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn retained_font_dispatch_rect(
     origin: [i32; 2],
     mask_rect: crate::intel::gpgpu::GpgpuRect,
@@ -1003,10 +1038,12 @@ pub(crate) struct GpuFontGlyphRecipeKey {
 }
 
 impl GpuFontGlyphRecipeKey {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn font(self) -> GpuFontFace {
         self.font
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn glyph_id(self) -> u32 {
         self.glyph_id
     }
@@ -1072,10 +1109,12 @@ impl GpuFontGlyphRecipe {
         self.optical_bias_px
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn ppem(&self) -> f32 {
         self.ppem
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn estimated_segment_evaluations(&self) -> u64 {
         self.estimated_segment_evaluations
     }
@@ -1113,10 +1152,14 @@ impl GpuFontGlyphRecipe {
 
 /// One request-local placement of a shared glyph recipe.
 pub(crate) struct GpuFontPreparedCenteredGlyph {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     scalar: char,
     font: GpuFontFace,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     position_bits: [u32; 2],
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     font_pixels_bits: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     slant_bits: u32,
     viewport_width: u32,
     viewport_height: u32,
@@ -1164,6 +1207,7 @@ impl GpuFontPreparedCenteredGlyph {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn matches_request(
         &self,
         text: &str,
@@ -1353,20 +1397,24 @@ pub(crate) struct GpuFontJob<'a> {
 /// Tags are static deliberately: resident allocations must have a named kernel
 /// owner and purpose rather than inheriting arbitrary input text as identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontResidencyTag {
     owner: &'static str,
     name: &'static str,
 }
 
 impl GpuFontResidencyTag {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn new(owner: &'static str, name: &'static str) -> Self {
         Self { owner, name }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn owner(self) -> &'static str {
         self.owner
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn name(self) -> &'static str {
         self.name
     }
@@ -1378,6 +1426,7 @@ impl GpuFontResidencyTag {
 /// them for synchronous submission, and dropping it requests an unmap-then-free
 /// release. An uncertain GPU retirement quarantines the registry entry instead
 /// of freeing memory that hardware could still reference.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct PersistentGpuFontJob {
     id: u64,
     generation: u64,
@@ -1386,23 +1435,28 @@ pub(crate) struct PersistentGpuFontJob {
 }
 
 impl PersistentGpuFontJob {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn id(&self) -> u64 {
         self.id
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn generation(&self) -> u64 {
         self.generation
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn tag(&self) -> GpuFontResidencyTag {
         self.tag
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn submit(&self) -> Result<crate::intel::render::RenderJokerResult, &'static str> {
         self.submit_rgba(GPU_FONT_DEFAULT_RGBA)
     }
 
     /// Draw the resident geometry with a per-submission RGBA value.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn submit_rgba(
         &self,
         rgba: GpuFontRgba,
@@ -1410,6 +1464,7 @@ impl PersistentGpuFontJob {
         submit_persistent_font_job_rgba(self, rgba)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn submit_rgba_readback(
         &self,
         rgba: GpuFontRgba,
@@ -1426,6 +1481,7 @@ impl PersistentGpuFontJob {
     }
 
     /// Reuse the same resident geometry at another supported native size.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn submit_at_scale(
         &self,
         native_scale: u32,
@@ -1434,6 +1490,7 @@ impl PersistentGpuFontJob {
     }
 
     /// Reuse the same resident geometry with a draw-time size and color.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn submit_at_scale_rgba(
         &self,
         native_scale: u32,
@@ -1442,6 +1499,7 @@ impl PersistentGpuFontJob {
         submit_persistent_font_job_at_scale_rgba(self, native_scale, rgba)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn release(mut self) -> Result<(), &'static str> {
         if self.released {
             return Err("resident-lease-released");
@@ -1461,6 +1519,7 @@ impl Drop for PersistentGpuFontJob {
 }
 
 #[derive(Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontWarmResult {
     pub(crate) cache_hit: bool,
     pub(crate) generation: u64,
@@ -1474,6 +1533,7 @@ pub(crate) struct GpuFontWarmResult {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontCacheStatus {
     pub(crate) ready: bool,
     pub(crate) generation: u64,
@@ -1486,6 +1546,7 @@ pub(crate) struct GpuFontCacheStatus {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontResidentStatus {
     pub(crate) active_jobs: usize,
     pub(crate) resident_bytes: usize,
@@ -1498,6 +1559,7 @@ pub(crate) struct GpuFontResidentStatus {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontResidentAuditEntry {
     pub(crate) id: u64,
     pub(crate) generation: u64,
@@ -1519,6 +1581,7 @@ pub(crate) struct GpuFontResidentAuditEntry {
 /// The coordinates use the cached base size only as a tessellation-quality
 /// reference. Consumers should transform them at draw time rather than create
 /// a cache entry for every requested font size.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontGeometry<'a> {
     pub(crate) summary: &'a FontTesselSummary,
     pub(crate) vertices: &'a [[f32; 2]],
@@ -1526,6 +1589,7 @@ pub(crate) struct GpuFontGeometry<'a> {
     pub(crate) bounds: (f32, f32, f32, f32),
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontTextRender {
     pub(crate) summary: FontTesselSummary,
     pub(crate) render: crate::intel::render::RenderJokerResult,
@@ -1534,6 +1598,7 @@ pub(crate) struct GpuFontTextRender {
     pub(crate) rows: usize,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct GpuFontTextStamp {
     pub(crate) summary: FontTesselSummary,
     pub(crate) render: crate::intel::render::RenderJokerResult,
@@ -1555,6 +1620,7 @@ struct GpuFontTextStamp {
     pub(crate) stamp_height: u32,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontJobRender {
     pub(crate) summaries: Vec<FontTesselSummary>,
     pub(crate) render: crate::intel::render::RenderJokerResult,
@@ -1572,14 +1638,18 @@ struct BuiltGpuFontJob {
     indices: Vec<u32>,
     bounds: (f32, f32, f32, f32),
     entries: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     text_chars: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     rows: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     glyphs: usize,
 }
 
 /// One fully measured font stamp which has not acquired its UI4 destination
 /// yet. Keeping the owned geometry here lets the broker allocate only the
 /// fitted glyph extent instead of ten full-scanout double buffers.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct PreparedGpuFontStamp<'a> {
     request: GpuFontTextRequest<'a>,
     font: GpuFontFace,
@@ -1593,10 +1663,12 @@ pub(crate) struct PreparedGpuFontStamp<'a> {
 }
 
 impl PreparedGpuFontStamp<'_> {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn width(&self) -> u32 {
         self.stamp_width
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn height(&self) -> u32 {
         self.stamp_height
     }
@@ -1605,6 +1677,7 @@ impl PreparedGpuFontStamp<'_> {
 /// Result of the current GuC font producer writing one exact UI4 allocation.
 /// The release fence is deliberately opaque and can only be consumed by the
 /// UI4 frame-pool publication contract for this same physical surface.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontUi4Stamp {
     pub(crate) summary: FontTesselSummary,
     pub(crate) render: crate::intel::render::RenderJokerResult,
@@ -1624,6 +1697,7 @@ pub(crate) struct GpuFontUi4Stamp {
 /// Geometry is uploaded once into render PPGTT.  A viewport pan subsequently
 /// changes only fixed-function translation; neither line layout nor glyph
 /// geometry is rebuilt on the interactive path.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontUi4Document {
     mesh: crate::intel::render::ResidentTriangleMesh,
     color: [u8; 4],
@@ -1637,17 +1711,20 @@ pub(crate) struct GpuFontUi4Document {
     pub(crate) document_height: u32,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontUi4DocumentFrame {
     pub(crate) render: crate::intel::render::RenderJokerResult,
     pub(crate) producer_path: &'static str,
     pub(crate) release: crate::intel::render::ResidentSceneReleaseFence,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct CachedGpuFont {
     generation: u64,
     mesh: FontTesselMesh,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct ResidentGpuFontJobRecord {
     id: u64,
     generation: u64,
@@ -1664,6 +1741,7 @@ struct ResidentGpuFontJobRecord {
     quarantined: bool,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct KernelGpuFontService {
     default_font: Option<Arc<CachedGpuFont>>,
     generation: u64,
@@ -1683,6 +1761,7 @@ struct KernelGpuFontService {
 }
 
 impl KernelGpuFontService {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     const fn new() -> Self {
         Self {
             default_font: None,
@@ -1704,9 +1783,11 @@ impl KernelGpuFontService {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static GPU_FONT_SERVICE: Mutex<KernelGpuFontService> = Mutex::new(KernelGpuFontService::new());
 static TRANSIENT_FONT_STAMP_READBACK: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct PersistentGpuFontAnimation {
     lease: PersistentGpuFontJob,
     color_program: GpuFontColorProgram,
@@ -1718,6 +1799,7 @@ struct PersistentGpuFontAnimation {
     halted: bool,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct PersistentGpuFontGridCell {
     lease: PersistentGpuFontJob,
     color_program: GpuFontColorProgram,
@@ -1728,6 +1810,7 @@ struct PersistentGpuFontGridCell {
     halted: bool,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct PersistentGpuFontGrid {
     cells: Vec<PersistentGpuFontGridCell>,
     engine_frame_requests: u64,
@@ -1737,6 +1820,7 @@ struct PersistentGpuFontGrid {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct PersistentGpuFontAnimationStatus {
     pub(crate) id: u64,
     pub(crate) generation: u64,
@@ -1750,6 +1834,7 @@ pub(crate) struct PersistentGpuFontAnimationStatus {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct PersistentGpuFontGridStatus {
     pub(crate) cells: usize,
     pub(crate) engine_frame_requests: u64,
@@ -1760,7 +1845,9 @@ pub(crate) struct PersistentGpuFontGridStatus {
     pub(crate) color_proof_mismatches: u64,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static PERSISTENT_GPU_FONT_ANIMATION: Mutex<Option<PersistentGpuFontAnimation>> = Mutex::new(None);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static PERSISTENT_GPU_FONT_GRID: Mutex<Option<PersistentGpuFontGrid>> = Mutex::new(None);
 
 /// Return the single statically attributable shell-animation identity.
@@ -1769,6 +1856,7 @@ static PERSISTENT_GPU_FONT_GRID: Mutex<Option<PersistentGpuFontGrid>> = Mutex::n
 /// lease must retire and release before this tag can be acquired again. If a
 /// draw has uncertain retirement, the one record remains quarantined and the
 /// slot stays unavailable instead of accumulating replacement allocations.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn next_persistent_font_animation_tag() -> Result<GpuFontResidencyTag, &'static str> {
     const TAG: GpuFontResidencyTag = GpuFontResidencyTag::new("shell2", "font-persist-0");
 
@@ -1780,6 +1868,7 @@ pub(crate) fn next_persistent_font_animation_tag() -> Result<GpuFontResidencyTag
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn persistent_font_demo_grid_tag(
     index: usize,
 ) -> Result<GpuFontResidencyTag, &'static str> {
@@ -1803,6 +1892,7 @@ pub(crate) fn persistent_font_demo_grid_tag(
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn install_persistent_font_demo_grid(
     jobs: Vec<(PersistentGpuFontJob, GpuFontColorProgram)>,
     exact_color_check: bool,
@@ -1849,6 +1939,7 @@ pub(crate) fn install_persistent_font_demo_grid(
 /// Atomically replace the active animation after its new resident mesh exists.
 /// The old lease is dropped outside the animation lock and releases its PPGTT
 /// mapping through the normal retirement-aware path.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn install_persistent_font_animation(
     lease: PersistentGpuFontJob,
     color_program: GpuFontColorProgram,
@@ -1890,6 +1981,7 @@ pub(crate) fn install_persistent_font_animation(
 /// Replace only the volatile color contract of the active resident geometry.
 /// No outline parsing, tessellation, allocation, mapping, or VB/IB upload is
 /// performed by this operation.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn set_persistent_font_color_program(
     color_program: GpuFontColorProgram,
 ) -> Result<PersistentGpuFontAnimationStatus, &'static str> {
@@ -1918,6 +2010,7 @@ pub(crate) fn set_persistent_font_color_program(
     persistent_font_animation_status().ok_or("font-animation-update")
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn stop_persistent_font_animation() -> Result<bool, &'static str> {
     let old = PERSISTENT_GPU_FONT_ANIMATION.lock().take();
     let mut grid = PERSISTENT_GPU_FONT_GRID.lock().take();
@@ -1967,6 +2060,7 @@ pub(crate) fn stop_persistent_font_animation() -> Result<bool, &'static str> {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn persistent_font_animation_status() -> Option<PersistentGpuFontAnimationStatus> {
     let active = PERSISTENT_GPU_FONT_ANIMATION.lock();
     let animation = active.as_ref()?;
@@ -1985,6 +2079,7 @@ pub(crate) fn persistent_font_animation_status() -> Option<PersistentGpuFontAnim
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn persistent_font_demo_grid_status() -> Option<PersistentGpuFontGridStatus> {
     let active = PERSISTENT_GPU_FONT_GRID.lock();
     let grid = active.as_ref()?;
@@ -2002,6 +2097,7 @@ pub(crate) fn persistent_font_demo_grid_status() -> Option<PersistentGpuFontGrid
 /// Sample elapsed time and submit at most one color for one render-engine
 /// frame. Animation time is monotonic rather than submission-count based, so a
 /// slow draw reduces sampling frequency without slowing the requested effect.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_persistent_font_animation_engine_frame() {
     if submit_persistent_font_demo_grid_engine_frame() {
         return;
@@ -2067,6 +2163,7 @@ pub(crate) fn submit_persistent_font_animation_engine_frame() {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_persistent_font_demo_grid_engine_frame() -> bool {
     let mut active = PERSISTENT_GPU_FONT_GRID.lock();
     let Some(grid) = active.as_mut() else {
@@ -2152,6 +2249,7 @@ fn submit_persistent_font_demo_grid_engine_frame() -> bool {
     true
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn exact_font_readback_color(
     captured: &crate::intel::render::FontRenderTargetReadback,
     expected: GpuFontRgba,
@@ -2171,6 +2269,7 @@ fn exact_font_readback_color(
     (written, mismatches)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn acquire_default_font() -> Result<(Arc<CachedGpuFont>, bool), &'static str> {
     // Keep the lock during the first build. It is a one-time boot operation,
     // and doing so guarantees that concurrent first users cannot tessellate the
@@ -2226,6 +2325,7 @@ fn acquire_default_font() -> Result<(Arc<CachedGpuFont>, bool), &'static str> {
 /// Warm the embedded font and its default GPU-ready mesh exactly once.
 ///
 /// This is safe to call both during boot and lazily from a first consumer.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn warm_default_font_once() -> Result<GpuFontWarmResult, &'static str> {
     let (cached, cache_hit) = acquire_default_font()?;
     let summary = cached.mesh.summary.clone();
@@ -2243,6 +2343,7 @@ pub(crate) fn warm_default_font_once() -> Result<GpuFontWarmResult, &'static str
 }
 
 /// Use the cached base mesh without copying its vertex or index buffers.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn with_default_font_geometry<R>(
     use_geometry: impl FnOnce(GpuFontGeometry<'_>) -> R,
 ) -> Result<R, &'static str> {
@@ -2261,6 +2362,7 @@ pub(crate) fn with_default_font_geometry<R>(
 ///
 /// The scale changes the render target and viewport, not the cached geometry.
 /// Color remains a render-state concern and is deliberately absent here.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_default_font(
     native_scale: u32,
 ) -> Result<crate::intel::render::RenderJokerResult, &'static str> {
@@ -2276,6 +2378,7 @@ pub(crate) fn render_default_font(
 
 /// Tessellate one caller-provided string from the warmed outline registry,
 /// submit it immediately, and drop the invocation-specific mesh afterwards.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_text_once(
     request: GpuFontTextRequest<'_>,
     native_scale: u32,
@@ -2283,6 +2386,7 @@ pub(crate) fn render_text_once(
     render_text_once_with_font(request, GpuFontFace::Default, native_scale)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_text_once_with_font(
     request: GpuFontTextRequest<'_>,
     font: GpuFontFace,
@@ -2314,6 +2418,7 @@ pub(crate) fn render_text_once_with_font(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn render_analytical_font_stamp_readback(
     request: GpuFontTextRequest<'_>,
     font: GpuFontFace,
@@ -2416,6 +2521,7 @@ fn render_analytical_font_stamp_readback(
     ))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn composite_font_stamp_readback(
     readback: &mut crate::intel::render::FontRenderTargetReadback,
     rgba: GpuFontRgba,
@@ -2440,6 +2546,7 @@ fn composite_font_stamp_readback(
 /// Measure and tessellate one stamp before its UI4 slot acquires a back
 /// buffer. The returned object owns the invocation geometry and borrows only
 /// the command text for the duration of the synchronous presentation call.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn prepare_text_stamp_for_ui4<'a>(
     request: GpuFontTextRequest<'a>,
     font: GpuFontFace,
@@ -2484,6 +2591,7 @@ pub(crate) fn prepare_text_stamp_for_ui4<'a>(
 /// write lease. Both the analytical-mask path and the resident-triangle
 /// fallback use the current GuC clients; neither invokes the legacy execlist
 /// helpers or reads pixels back through the CPU.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_prepared_text_stamp_to_ui4(
     mut prepared: PreparedGpuFontStamp<'_>,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
@@ -2661,6 +2769,7 @@ pub(crate) fn render_prepared_text_stamp_to_ui4(
 /// its complete triangle mesh.  The UI4 viewport is intentionally smaller
 /// than the document: vertices outside it are clipped by RCS and become
 /// visible through draw-time viewport translation.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn prepare_ui4_font_document(
     request: GpuFontTextRequest<'_>,
     font: GpuFontFace,
@@ -2764,6 +2873,7 @@ pub(crate) fn prepare_ui4_font_document(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn wrap_ui4_document_rows(
     request: GpuFontTextRequest<'_>,
     registry_name: &'static str,
@@ -2791,6 +2901,7 @@ fn wrap_ui4_document_rows(
     Ok(wrapped)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn wrap_ui4_document_paragraph(
     source: &str,
     registry_name: &'static str,
@@ -2847,6 +2958,7 @@ fn wrap_ui4_document_paragraph(
 }
 
 /// Draw one crop of a retained font document into the exact UI4 lease.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_ui4_font_document_view(
     document: &GpuFontUi4Document,
     pan_x: u32,
@@ -2896,6 +3008,7 @@ pub(crate) fn render_ui4_font_document_view(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn release_ui4_font_document(document: &GpuFontUi4Document) -> bool {
     crate::intel::render::release_resident_font_mesh(&document.mesh)
 }
@@ -2904,6 +3017,7 @@ pub(crate) fn release_ui4_font_document(document: &GpuFontUi4Document) -> bool {
 /// tessellated result with the direct-to-UI4 producer. It has no display or
 /// broker entry point; live font stamps use [`prepare_text_stamp_for_ui4`] and
 /// [`render_prepared_text_stamp_to_ui4`].
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn render_legacy_font_stamp_readback_centered(
     request: GpuFontTextRequest<'_>,
     font: GpuFontFace,
@@ -3146,6 +3260,7 @@ fn render_legacy_font_stamp_readback_centered(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn native_font_fill_tolerance(
     bounds: (f32, f32, f32, f32),
     target_width: u32,
@@ -3179,6 +3294,7 @@ fn recycle_transient_font_readback(mut pixels: Vec<u8>) {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn visible_font_target_bounds(
     pixels: &[u8],
     width: u32,
@@ -3213,6 +3329,7 @@ fn visible_font_target_bounds(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn fit_font_stamp_to_scanout(
     source_width: u32,
     source_height: u32,
@@ -3241,6 +3358,7 @@ fn fit_font_stamp_to_scanout(
     (width as u32, height as u32)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn recolor_transient_font_target(pixels: &mut [u8], rgba: GpuFontRgba) {
     for pixel in pixels.chunks_exact_mut(4) {
         let coverage = pixel[3];
@@ -3259,6 +3377,7 @@ fn recolor_transient_font_target(pixels: &mut [u8], rgba: GpuFontRgba) {
 /// Each entry retains the 256-character text-request limit. A job has no
 /// aggregate character cap, allowing callers to compose many independently
 /// positioned lines/row groups without multiplying GPU submissions.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_font_job_once(job: GpuFontJob<'_>) -> Result<GpuFontJobRender, &'static str> {
     let native_scale = job.native_scale;
     let font = job.font;
@@ -3326,6 +3445,7 @@ pub(crate) fn render_font_job_readback_once(
 /// Render positioned text directly in a UI scene's pixel coordinate space.
 /// Unlike the stamp path, the complete mesh is not normalized to its own
 /// bounds: `(0, 0)..(width, height)` maps one-to-one onto the target.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_font_scene_readback_once(
     job: GpuFontJob<'_>,
     width: u32,
@@ -3440,6 +3560,7 @@ pub(crate) fn recycle_font_job_readback(readback: crate::intel::render::FontRend
 /// Unlike a font stamp, positions are mapped against the caller's complete
 /// viewport. The returned allocation can be included in resident scene draws
 /// until the owning service explicitly releases it.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn create_resident_font_scene_mesh(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,
@@ -3459,6 +3580,7 @@ pub(crate) fn create_resident_font_scene_mesh(
 /// Build a resident font scene whose entry positions denote the center of each
 /// entry's actual tessellated bounds. This is visual centering, independent of
 /// advance width, side bearings, ascenders, descenders, or the chosen face.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn create_resident_font_centered_scene_mesh(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,
@@ -3704,6 +3826,7 @@ pub(crate) fn place_gpu_font_centered_glyph_recipe(
 
 /// Uncached compatibility boundary used by non-pool callers and tests.
 #[allow(clippy::too_many_arguments)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn prepare_gpu_font_centered_glyph_at_raster(
     scalar: char,
     font: GpuFontFace,
@@ -4013,6 +4136,7 @@ fn coverage_integer_rect(
 #[derive(Clone, Copy)]
 enum GpuFontOutlineAccess {
     EnsureAvailable,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     RegisteredOnly,
 }
 
@@ -4113,6 +4237,7 @@ pub(crate) fn create_gpu_font_centered_coverage_mask_at_raster(
 
 /// Build the same default analytical mask for origin-positioned font scenes.
 /// This is the path used by the generic kernel font readback/stamp service.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn create_gpu_font_scene_coverage_mask_at_raster(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,
@@ -4539,6 +4664,7 @@ fn build_font_job_mesh(
     build_font_job_mesh_inner(entries, font, None, GpuFontJobPositioning::Origin, None)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn build_font_job_mesh_with_tolerance(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,
@@ -4705,6 +4831,7 @@ fn build_font_job_mesh_inner(
 /// `(owner, name)` must be unique among live jobs. This keeps every resident
 /// allocation attributable and prevents accidental replacement from orphaning
 /// the old GPU mapping.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn persist_font_job(
     tag: GpuFontResidencyTag,
     job: GpuFontJob<'_>,
@@ -4783,12 +4910,14 @@ pub(crate) fn persist_font_job(
 }
 
 /// Reuse a persistent job's resident VB/IB directly for one synchronous draw.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_persistent_font_job(
     lease: &PersistentGpuFontJob,
 ) -> Result<crate::intel::render::RenderJokerResult, &'static str> {
     submit_persistent_font_job_rgba(lease, GPU_FONT_DEFAULT_RGBA)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_persistent_font_job_rgba(
     lease: &PersistentGpuFontJob,
     rgba: GpuFontRgba,
@@ -4796,6 +4925,7 @@ pub(crate) fn submit_persistent_font_job_rgba(
     submit_persistent_font_job_inner(lease, None, rgba, None)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_persistent_font_job_at_scale(
     lease: &PersistentGpuFontJob,
     native_scale: u32,
@@ -4803,6 +4933,7 @@ pub(crate) fn submit_persistent_font_job_at_scale(
     submit_persistent_font_job_at_scale_rgba(lease, native_scale, GPU_FONT_DEFAULT_RGBA)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_persistent_font_job_at_scale_rgba(
     lease: &PersistentGpuFontJob,
     native_scale: u32,
@@ -4814,6 +4945,7 @@ pub(crate) fn submit_persistent_font_job_at_scale_rgba(
     submit_persistent_font_job_inner(lease, Some(native_scale), rgba, None)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_persistent_font_job_inner(
     lease: &PersistentGpuFontJob,
     native_scale_override: Option<u32>,
@@ -4902,6 +5034,7 @@ fn submit_persistent_font_job_inner(
     result
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn release_persistent_font_job(
     id: u64,
     generation: u64,
@@ -4966,6 +5099,7 @@ fn release_persistent_font_job(
     Ok(())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn resident_status() -> GpuFontResidentStatus {
     let service = GPU_FONT_SERVICE.lock();
     GpuFontResidentStatus {
@@ -4988,6 +5122,7 @@ pub(crate) fn resident_status() -> GpuFontResidentStatus {
 }
 
 /// Snapshot every live allocation together with its accountable owner tag.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn resident_audit() -> Vec<GpuFontResidentAuditEntry> {
     GPU_FONT_SERVICE
         .lock()
@@ -5011,6 +5146,7 @@ pub(crate) fn resident_audit() -> Vec<GpuFontResidentAuditEntry> {
         .collect()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn tessellate_text_request(
     request: GpuFontTextRequest<'_>,
     font: GpuFontFace,
@@ -5147,6 +5283,7 @@ const fn is_line_separator(ch: char) -> bool {
     matches!(ch, '\n' | '\r' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}')
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn cached_default_font_summary() -> Option<FontTesselSummary> {
     GPU_FONT_SERVICE
         .lock()
@@ -5155,6 +5292,7 @@ pub(crate) fn cached_default_font_summary() -> Option<FontTesselSummary> {
         .map(|cached| cached.mesh.summary.clone())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn cache_status() -> GpuFontCacheStatus {
     let service = GPU_FONT_SERVICE.lock();
     GpuFontCacheStatus {
@@ -5177,6 +5315,7 @@ pub(crate) fn cache_status() -> GpuFontCacheStatus {
 ///
 /// A future external-font loader should call this after replacing a registered
 /// font. Existing draws remain safe because active users retain an Arc.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn invalidate_font(font_name: &str, reason: &str) -> bool {
     let mut service = GPU_FONT_SERVICE.lock();
     let matches = service
@@ -5202,6 +5341,7 @@ pub(crate) fn invalidate_font(font_name: &str, reason: &str) -> bool {
 ///
 /// Use this for font replacement because the new font may not have the same
 /// name as the entry currently cached here.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn invalidate_all(reason: &str) -> bool {
     let mut service = GPU_FONT_SERVICE.lock();
     let Some(cached) = service.default_font.take() else {
@@ -5219,6 +5359,7 @@ pub(crate) fn invalidate_all(reason: &str) -> bool {
 }
 
 /// Rebuild after changed font data or a future tessellation-policy change.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn rebuild_default_font(reason: &str) -> Result<GpuFontWarmResult, &'static str> {
     let _ = invalidate_all(reason);
     warm_default_font_once()

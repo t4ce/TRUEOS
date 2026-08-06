@@ -16,12 +16,16 @@ use crate::net::tls_socket::{TlsCommand, TlsEvent, TlsTimeouts, register_tls_app
 use crate::r::net::dns::{self, DnsConfig};
 use crate::r::net::{NetProfile, Queue};
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const POP3_HOST: &str = crate::allports::mail::POP3_HOST;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const POP3_PORT: u16 = crate::allports::mail::POP3_PORT;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static POP3_TLS_SEQ: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum Pop3Error {
     DnsFailed,
     ConnectFailed,
@@ -34,6 +38,7 @@ pub enum Pop3Error {
     TooLarge,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct Pop3Client {
     cmds: &'static Queue<TlsCommand>,
     events: &'static Queue<TlsEvent>,
@@ -43,10 +48,12 @@ pub struct Pop3Client {
 }
 
 impl Pop3Client {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn connect(timeout_ms: u32) -> Result<Self, Pop3Error> {
         Self::connect_with_profile(NetProfile::default(), timeout_ms).await
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn connect_with_profile(
         profile: NetProfile,
         timeout_ms: u32,
@@ -137,6 +144,7 @@ impl Pop3Client {
         Err(Pop3Error::Timeout)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn login(
         &mut self,
         username: &str,
@@ -150,6 +158,7 @@ impl Pop3Client {
             .map_err(|_| Pop3Error::AuthFailed)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn stat(&mut self, timeout_ms: u32) -> Result<(u32, u64), Pop3Error> {
         self.send_line("STAT")?;
         let line = self.read_line(timeout_ms).await?;
@@ -170,6 +179,7 @@ impl Pop3Client {
         Ok((count, bytes))
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn list(&mut self, timeout_ms: u32) -> Result<Vec<(u32, u64)>, Pop3Error> {
         self.send_line("LIST")?;
         let first = self.read_line(timeout_ms).await?;
@@ -192,6 +202,7 @@ impl Pop3Client {
         Ok(out)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn list_one(
         &mut self,
         msg_id: u32,
@@ -216,6 +227,7 @@ impl Pop3Client {
         Ok((id, size))
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn retr(
         &mut self,
         msg_id: u32,
@@ -232,6 +244,7 @@ impl Pop3Client {
         Ok(text.into_bytes())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn top(
         &mut self,
         msg_id: u32,
@@ -249,15 +262,18 @@ impl Pop3Client {
         Ok(text.into_bytes())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn dele(&mut self, msg_id: u32, timeout_ms: u32) -> Result<(), Pop3Error> {
         self.command_ok(format!("DELE {}", msg_id).as_str(), timeout_ms)
             .await
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn noop(&mut self, timeout_ms: u32) -> Result<(), Pop3Error> {
         self.command_ok("NOOP", timeout_ms).await
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn quit(&mut self, timeout_ms: u32) -> Result<(), Pop3Error> {
         let _ = self.command_ok("QUIT", timeout_ms).await;
         if !self.closed {
@@ -271,6 +287,7 @@ impl Pop3Client {
         Ok(())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     async fn command_ok(&mut self, line: &str, timeout_ms: u32) -> Result<(), Pop3Error> {
         self.send_line(line)?;
         let reply = self.read_line(timeout_ms).await?;
@@ -281,6 +298,7 @@ impl Pop3Client {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn send_line(&mut self, line: &str) -> Result<(), Pop3Error> {
         if self.closed {
             return Err(Pop3Error::Closed);
@@ -295,6 +313,7 @@ impl Pop3Client {
             .map_err(|_| Pop3Error::Io)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     async fn read_line(&mut self, timeout_ms: u32) -> Result<String, Pop3Error> {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
         loop {
@@ -315,6 +334,7 @@ impl Pop3Client {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     async fn read_multiline(
         &mut self,
         timeout_ms: u32,
@@ -342,6 +362,7 @@ impl Pop3Client {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn pump_events(&mut self) -> Result<(), Pop3Error> {
         while let Some(ev) = self.events.pop() {
             match ev {
@@ -362,14 +383,17 @@ impl Pop3Client {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn find_crlf(buf: &[u8]) -> Option<usize> {
     buf.windows(2).position(|w| w == b"\r\n")
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn find_multiline_end(buf: &[u8]) -> Option<usize> {
     buf.windows(5).position(|w| w == b"\r\n.\r\n")
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn pop3_dot_unstuff(raw: &[u8]) -> Result<String, Pop3Error> {
     let txt = core::str::from_utf8(raw).map_err(|_| Pop3Error::Protocol)?;
     let mut out = String::new();

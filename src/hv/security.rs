@@ -4,16 +4,21 @@
 //! are implemented. The risk IDs are stable breadcrumbs for audit notes, boot
 //! logs, and follow-up patches.
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const HVSR_0001_VMEXIT_PREDICTOR_ISOLATION: &str = "HVSR-0001";
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const HVSR_0002_EPT_HOST_MEMORY_EXPOSURE: &str = "HVSR-0002";
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const HVSR_0003_EPT_PERMISSION_NARROWING: &str = "HVSR-0003";
 pub const HVSR_0004_GUEST_MSR_SURFACE: &str = "HVSR-0004";
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum VmexitMitigationMode {
     StubOnly,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn vmexit_mitigation_mode() -> VmexitMitigationMode {
     VmexitMitigationMode::StubOnly
 }

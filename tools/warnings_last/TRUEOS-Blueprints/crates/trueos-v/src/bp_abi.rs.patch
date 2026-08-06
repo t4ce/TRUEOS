@@ -1,0 +1,90 @@
+diff --git a/crates/trueos-v/src/bp_abi.rs b/crates/trueos-v/src/bp_abi.rs
+index 8d8f40e..660233a 100644
+--- a/crates/trueos-v/src/bp_abi.rs
++++ b/crates/trueos-v/src/bp_abi.rs
+@@ -679,27 +679,6 @@ unsafe extern "C" {
+     pub fn trueos_cabi_archive_report(id: u32, out: *mut TrueosArchiveReport) -> i32;
+     pub fn trueos_cabi_archive_discard(id: u32) -> i32;
+ 
+-    pub fn trueos_cabi_gfx_texture_dimensions(
+-        tex_id: u32,
+-        out_width: *mut u32,
+-        out_height: *mut u32,
+-    ) -> i32;
+-    pub fn trueos_cabi_gfx_texture_status(tex_id: u32) -> i32;
+-    pub fn trueos_cabi_gfx_upload_texture_rgba_image(
+-        tex_id: u32,
+-        width: u32,
+-        height: u32,
+-        data_ptr: *const u8,
+-        data_len: usize,
+-    ) -> i32;
+-    pub fn trueos_cabi_gfx_upload_skybox_rgb565(
+-        skybox_id: u32,
+-        width: u32,
+-        height: u32,
+-        data_ptr: *const u8,
+-        data_len: usize,
+-    ) -> i32;
+-
+     pub fn trueos_cabi_ui3_frame_create(
+         x: i32,
+         y: i32,
+@@ -974,13 +953,6 @@ unsafe extern "C" {
+     ) -> i32;
+     pub fn trueos_cabi_vgpu_wait(device: u64, queue: u64, value: u64) -> i32;
+ 
+-    pub fn trueos_cabi_input_pop_mouse(
+-        out_buttons: *mut u8,
+-        out_dx: *mut i8,
+-        out_dy: *mut i8,
+-        out_wheel: *mut i8,
+-    ) -> i32;
+-    pub fn trueos_cabi_input_pop_tablet(out: *mut TrueosTabletEvent) -> i32;
+     pub fn trueos_cabi_input_cursor_pos(cursor_id: u32, out_x: *mut i32, out_y: *mut i32) -> i32;
+     pub fn trueos_cabi_input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i32;
+     pub fn trueos_cabi_input_read_cursor_events_since(
+@@ -1110,19 +1082,6 @@ unsafe extern "C" {
+         out_cap: u32,
+     ) -> u32;
+     pub fn trueos_cabi_hid_hut_read_combos(out: *mut TrueosHidHutCombo, out_cap: u32) -> u32;
+-    pub fn trueos_cabi_input_write_keyboard_text(
+-        slot_id: u32,
+-        text_ptr: *const u8,
+-        text_len: usize,
+-        flags: u32,
+-    ) -> i32;
+-    pub fn trueos_cabi_input_write_keyboard_key(
+-        slot_id: u32,
+-        codepoint: u32,
+-        key_code: u32,
+-        modifiers: u32,
+-        flags: u32,
+-    ) -> i32;
+     pub fn trueos_cabi_input_pop_keyboard_output(out: *mut TrueosKeyboardOutputEvent) -> i32;
+     pub fn trueos_cabi_input_read_keyboard_output_since(
+         read_seq: u64,
+@@ -1146,7 +1105,6 @@ unsafe extern "C" {
+     pub fn trueos_cabi_lifecycle_poll(out: *mut TrueosLifecyclePreparePause) -> i32;
+     pub fn trueos_cabi_lifecycle_ready(operation: u64, checkpoint_version: u64) -> i32;
+     pub fn trueos_cabi_lifecycle_identity(out: *mut TrueosLifecycleIdentity) -> i32;
+-    pub fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
+     pub fn trueos_cabi_shell_attached_write(data_ptr: *const u8, data_len: usize) -> usize;
+     pub fn trueos_cabi_shell_attached_read_byte() -> i32;
+     pub fn trueos_cabi_shell_attached_retarget_slot(slot_ptr: *const u8, slot_len: usize) -> i32;
+@@ -1187,14 +1145,6 @@ unsafe extern "C" {
+     ) -> i32;
+     pub fn trueos_cabi_konsole_set_cursor(row: u32, col: u32, visible: u32) -> i32;
+     pub fn trueos_cabi_konsole_end_frame() -> i32;
+-    pub fn trueos_cabi_shell_command_registry_json(out_ptr: *mut u8, out_cap: usize) -> isize;
+-    pub fn trueos_cabi_shell_history_lines_all() -> usize;
+-    pub fn trueos_cabi_shell_history_lines(
+-        start_line: usize,
+-        max_lines: usize,
+-        out_ptr: *mut u8,
+-        out_cap: usize,
+-    ) -> isize;
+     pub fn trueos_cabi_ntp_current_unix_seconds() -> u64;
+     pub fn trueos_cabi_ntp_kernel_date_day_month_year(out_ptr: *mut u8, out_cap: usize) -> usize;
+ }
+

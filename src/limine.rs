@@ -100,7 +100,9 @@ pub fn executable_address_bases() -> Option<(u64, u64)> {
 }
 
 pub struct BootModule<'a> {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub path: &'a str,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub cmdline: &'a str,
     pub bytes: &'static [u8],
 }

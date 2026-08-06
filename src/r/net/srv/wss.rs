@@ -17,9 +17,12 @@ use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
 use crate::r::net::{NetProfile, Queue};
 use crate::time::unix_time_seconds;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static WSS_SEQ: AtomicU32 = AtomicU32::new(1);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RX_BUF_SIZE: usize = 16 * 1024;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct WssConnection {
     cmds: &'static Queue<TlsCommand>,
     events: &'static Queue<TlsEvent>,
@@ -32,6 +35,7 @@ pub struct WssConnection {
 }
 
 #[derive(Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum WssError {
     ConnectFailed,
     InvalidUrl,
@@ -43,14 +47,17 @@ pub enum WssError {
 }
 
 impl WssConnection {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn connect(url: &str) -> Result<Self, WssError> {
         Self::connect_with_profile(url, NetProfile::default()).await
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn connect_with_profile(url: &str, profile: NetProfile) -> Result<Self, WssError> {
         Self::connect_inner(url, profile, None).await
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn connect_with_headers<'a>(
         url: &str,
         additional_headers: &'a [&'a str],
@@ -58,6 +65,7 @@ impl WssConnection {
         Self::connect_inner(url, NetProfile::default(), Some(additional_headers)).await
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     async fn connect_inner<'a>(
         url: &str,
         profile: NetProfile,
@@ -260,6 +268,7 @@ impl WssConnection {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn send(&mut self, text: &str) -> Result<(), WssError> {
         if self.closed || !self.connected {
             return Err(WssError::Closed);
@@ -287,6 +296,7 @@ impl WssConnection {
         Ok(())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn recv(&mut self) -> Option<String> {
         // Drain TLS events
         while let Some(ev) = self.events.pop() {
@@ -388,6 +398,7 @@ impl WssConnection {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_wss_url(url: &str) -> Option<(String, u16, String)> {
     let url = url.strip_prefix("wss://")?;
     let (authority, path) = match url.split_once('/') {
@@ -402,6 +413,7 @@ fn parse_wss_url(url: &str) -> Option<(String, u16, String)> {
     Some((host, port, path))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn redact_wss_url(url: &str) -> String {
     if let Some(start) = url.find("access_token=") {
         let token_start = start + "access_token=".len();

@@ -38,6 +38,7 @@ fn push_output_bytes(bytes: &[u8]) {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn container_shell_submit_input(bytes: &[u8]) -> usize {
     if bytes.is_empty() {
         return 0;
@@ -49,10 +50,12 @@ pub(crate) fn container_shell_submit_input(bytes: &[u8]) -> usize {
     bytes.len()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn container_shell_read_output_byte() -> Option<u8> {
     CONTAINER_SHELL_STATE.lock().output_tx.pop_front()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn container_shell_drain_output(out: &mut [u8]) -> usize {
     if out.is_empty() {
         return 0;

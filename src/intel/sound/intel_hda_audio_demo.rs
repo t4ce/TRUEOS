@@ -10,12 +10,19 @@ const AUDIO_DEMO_LOOP_DELAY_MS: u64 = 250;
 const PIANO_NOTE_POLL_DELAY_MS: u64 = 25;
 const PIANO_CHORD_RENDER_MS: u32 = 50;
 const BASSLINE_IDLE_POLL_DELAY_MS: u64 = 25;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const HDA_WAV_LOOP_RETRY_DELAY_MS: u64 = 1_000;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const HDA_WAV_LOOP_IDLE_MS: u64 = 500;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const HDA_WAV_FETCH_TIMEOUT_MS: u32 = 60_000;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const HDA_WAV_FETCH_MAX_BYTES: usize = 32 * 1024 * 1024;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const HDA_WAV_SAMPLE_RATE_HZ: u64 = 48_000;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const HDA_WAV_CHANNELS: usize = 2;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const HDA_AUDIO_DEMO_WAV_TRACE_MARKER: &str = "hda-audio-demo-wav-trace-v3";
 
 fn piano_claimed() -> bool {
@@ -84,16 +91,19 @@ fn next_running_beat_ms(now_ms: u64, start_ms: u64, beat_ms: u64) -> u64 {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn le_u16(bytes: &[u8], off: usize) -> Option<u16> {
     let b = bytes.get(off..off + 2)?;
     Some(u16::from_le_bytes([b[0], b[1]]))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn le_u32(bytes: &[u8], off: usize) -> Option<u32> {
     let b = bytes.get(off..off + 4)?;
     Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn wav_pcm_s16_stereo_48k_data_range(bytes: &[u8]) -> Option<(usize, usize)> {
     if bytes.len() < 44 || bytes.get(0..4)? != b"RIFF" || bytes.get(8..12)? != b"WAVE" {
         return None;
@@ -134,6 +144,7 @@ fn wav_pcm_s16_stereo_48k_data_range(bytes: &[u8]) -> Option<(usize, usize)> {
     if fmt_ok { data_range } else { None }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn decode_wav_pcm_s16_stereo_48k(bytes: &[u8]) -> Result<Vec<i16>, &'static str> {
     let (data_off, data_len) =
         wav_pcm_s16_stereo_48k_data_range(bytes).ok_or("unsupported wav format")?;
@@ -151,6 +162,7 @@ fn decode_wav_pcm_s16_stereo_48k(bytes: &[u8]) -> Result<Vec<i16>, &'static str>
     Ok(samples)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn hda_duration_ms_for_samples(sample_count: usize) -> u32 {
     let frames = (sample_count / HDA_WAV_CHANNELS) as u64;
     let ms = ((frames * 1_000) + HDA_WAV_SAMPLE_RATE_HZ - 1) / HDA_WAV_SAMPLE_RATE_HZ;

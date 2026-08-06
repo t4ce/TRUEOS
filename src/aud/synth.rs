@@ -19,6 +19,7 @@ pub const SAMPLE_RATE: u32 = 48000;
 /// Number of audio channels (stereo)
 pub const CHANNELS: u32 = 2;
 /// Bytes per sample (16-bit)
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const BYTES_PER_SAMPLE: u32 = 2;
 /// Maximum simultaneous voices
 pub const MAX_VOICES: usize = 32;
@@ -45,6 +46,7 @@ pub enum Waveform {
     Sawtooth,
     Triangle,
     TriSine,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Noise,
 }
 
@@ -62,6 +64,7 @@ fn soft_limit(sample: i32) -> i32 {
 
 impl Waveform {
     /// Parse from string
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "sine" | "sin" | "s" => Some(Waveform::Sine),
@@ -75,6 +78,7 @@ impl Waveform {
     }
 
     /// Short display name
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn short_name(&self) -> &'static str {
         match self {
             Waveform::Sine => "Sin",
@@ -152,6 +156,7 @@ impl Envelope {
     }
 
     /// Organ-style: instant attack, full sustain, quick release
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn organ() -> Self {
         Self::new(1, 1, 100, 10)
     }
@@ -258,6 +263,7 @@ impl Envelope {
     }
 
     /// Get current state name
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn state_name(&self) -> &'static str {
         match self.state {
             EnvState::Idle => "Idle",
@@ -283,6 +289,7 @@ pub struct Oscillator {
     /// Phase increment per sample (Q16.16)
     phase_inc: u32,
     /// Current frequency in Hz
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub freq_hz: u32,
     /// LFSR state for noise generation
     lfsr: u16,
@@ -309,18 +316,21 @@ impl Oscillator {
     }
 
     /// Set frequency
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn set_freq(&mut self, freq_hz: u32) {
         self.freq_hz = freq_hz;
         self.phase_inc = Self::calc_phase_inc(freq_hz);
     }
 
     /// Set frequency from MIDI note
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn set_midi_note(&mut self, note: u8) {
         let freq = MIDI_FREQ[note.min(127) as usize];
         self.set_freq(freq);
     }
 
     /// Reset phase to 0
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn reset_phase(&mut self) {
         self.phase = 0;
     }
@@ -675,6 +685,7 @@ impl SynthEngine {
     }
 
     /// Set the default envelope (ADSR in ms, sustain in %)
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn set_adsr(&mut self, attack_ms: u32, decay_ms: u32, sustain_pct: u32, release_ms: u32) {
         self.envelope = Envelope::new(attack_ms, decay_ms, sustain_pct, release_ms);
     }
@@ -758,6 +769,7 @@ impl SynthEngine {
     }
 
     /// Play a note by name, e.g., "C4", "A#3"
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn play_note_by_name(
         &mut self,
         name: &str,
@@ -769,6 +781,7 @@ impl SynthEngine {
     }
 
     /// Render a tone at a specific frequency (Hz) for a given duration
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn render_freq(&mut self, freq_hz: u32, duration_ms: u32) -> Vec<i16> {
         let total_samples = ms_to_samples(duration_ms) as usize;
         let release_samples = self.envelope.release_samples as usize;
@@ -802,6 +815,7 @@ impl SynthEngine {
     }
 
     /// Get synth status string
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn status(&self) -> String {
         let mut s = String::new();
         s.push_str(&format!("TrustSynth Engine\n"));
@@ -870,6 +884,7 @@ pub fn ms_to_samples(ms: u32) -> u32 {
 }
 
 /// Convert samples to milliseconds
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn samples_to_ms(samples: u32) -> u32 {
     (samples * 1000) / SAMPLE_RATE
 }

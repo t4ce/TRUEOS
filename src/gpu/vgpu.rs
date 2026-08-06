@@ -105,6 +105,7 @@ pub(crate) enum KernelClient {
 impl KernelClient {
     pub(crate) const RENDER_CARRIERS: [Self; 3] = [Self::Render, Self::Render1, Self::Render2];
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn render_carrier(index: usize) -> Option<Self> {
         match index {
             0 => Some(Self::Render),
@@ -114,6 +115,7 @@ impl KernelClient {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn render_carrier_index(self) -> Option<usize> {
         match self {
             Self::Render => Some(0),
@@ -333,6 +335,7 @@ pub(crate) enum QueueClass {
 }
 
 impl QueueClass {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn from_raw(raw: u32) -> Option<Self> {
         match raw {
             1 => Some(Self::Render),
@@ -342,6 +345,7 @@ impl QueueClass {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn raw(self) -> u32 {
         match self {
             Self::Render => 1,
@@ -350,6 +354,7 @@ impl QueueClass {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Render => "render",
@@ -433,6 +438,7 @@ pub(crate) struct BufferInfo {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct BufferSlice {
     pub(crate) buffer: BufferHandle,
     pub(crate) offset: usize,
@@ -548,10 +554,12 @@ impl Quota {
 
 enum BufferBacking {
     Dma {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         phys: u64,
         virt: *mut u8,
     },
     GuestPages {
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         vm_id: u8,
         guest_va: u64,
         pages: Vec<u64>,
@@ -1518,6 +1526,7 @@ pub(crate) fn submit_control_nop(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn validate_vvideo_slice(
     device: &VirtualDevice,
     slice: BufferSlice,
@@ -2194,6 +2203,7 @@ pub(crate) async fn gpu_fault_containment_task() {
 
 /// Reset/device-loss hook for the physical driver. All tenant handles remain
 /// queryable for diagnosis but reject further allocation and submission.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn notify_physical_device_lost() -> u64 {
     let mut broker = BROKER.lock();
     let (epoch, newly_lost, clients) = mark_physical_device_lost_locked(&mut broker);
@@ -2952,6 +2962,7 @@ fn lookup_buffer(device: &VirtualDevice, handle: BufferHandle) -> Result<&Buffer
     entry.record.as_ref().ok_or(VgpuError::InvalidHandle)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn lookup_buffer_mut(
     device: &mut VirtualDevice,
     handle: BufferHandle,

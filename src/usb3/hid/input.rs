@@ -113,8 +113,11 @@ fn now_ms() -> u64 {
 #[derive(Copy, Clone, Debug)]
 pub struct KeyboardEvent {
     pub slot_id: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub modifiers: u8,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub keys: [u8; 6],
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub ascii: [u8; 6],
 }
 
@@ -125,6 +128,7 @@ pub struct MouseEvent {
     pub dx: i8,
     pub dy: i8,
     pub wheel: i8,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub has_wheel: bool, // true=4-byte, false=3-byte
 }
 
@@ -233,6 +237,7 @@ pub(crate) fn remove_slot(slot_id: u32) -> usize {
     removed
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pop_mouse_event() -> Option<MouseEvent> {
     let mut q = INPUT_QUEUE.lock();
     let mut idx = 0usize;
@@ -246,6 +251,7 @@ pub fn pop_mouse_event() -> Option<MouseEvent> {
     None
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pop_tablet_event() -> Option<TabletEvent> {
     let mut q = INPUT_QUEUE.lock();
     let mut idx = 0usize;

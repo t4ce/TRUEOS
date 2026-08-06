@@ -5,38 +5,50 @@ use crate::intel::gpgpu::GpgpuKernelArtifact;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum KernelArgKind {
     Buffer,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Image1d,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Image2d,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Image3d,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Sampler,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     LocalMemory,
     Scalar,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Pod,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Opaque,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpuArtifactProducer {
     IntelIgcOcloc,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     TrueosC4Eu32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     HandEu32,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum KernelArgAccess {
     ReadOnly,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     WriteOnly,
     ReadWrite,
     ByValue,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum IntelGpuTarget {
     AdlS,
     Rpl,
 }
 
 impl IntelGpuTarget {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::AdlS => "adls",
@@ -44,12 +56,14 @@ impl IntelGpuTarget {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn device_family(self) -> &'static str {
         match self {
             Self::AdlS | Self::Rpl => "gfx12-xelp",
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn from_label(label: &str) -> Option<Self> {
         match label {
             "adls" | "adl-s" => Some(Self::AdlS),
@@ -60,6 +74,7 @@ impl IntelGpuTarget {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct KernelArgLayout<'a> {
     pub(crate) index: u32,
     pub(crate) name: &'a str,
@@ -72,6 +87,7 @@ pub(crate) struct KernelArgLayout<'a> {
 }
 
 impl<'a> KernelArgLayout<'a> {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn from_call_arg(arg: KernelCallArg<'a>) -> Self {
         Self {
             index: arg.index,
@@ -90,8 +106,10 @@ impl<'a> KernelArgLayout<'a> {
 pub(crate) enum KernelLaunchModel {
     NdRange1d,
     NdRange2d,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Simd16LaneLoop,
     Simd16DescriptorWorklist,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Simd16TiledDescriptorWorklist,
 }
 
@@ -151,6 +169,7 @@ impl<'a> KernelCallArg<'a> {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn value_kind(
         index: u32,
         name: &'a str,
@@ -263,6 +282,7 @@ impl KernelLaunchContract {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn tiled_descriptor_worklist(
         descriptors_per_walker: u32,
         tile_pixels_per_lane: u32,
@@ -297,12 +317,14 @@ pub(crate) struct GpuKernelContract<'a> {
 }
 
 impl<'a> GpuKernelContract<'a> {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn indirect_bytes(self) -> u32 {
         self.cross_thread_bytes + self.per_thread_bytes
     }
 }
 
 #[derive(Copy, Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuKernelBlob<'a> {
     pub(crate) name: &'a str,
     pub(crate) target: IntelGpuTarget,
@@ -321,6 +343,7 @@ pub(crate) struct GpuKernelBlob<'a> {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuKernelBlobMetadata<'a> {
     pub(crate) grf_count: u32,
     pub(crate) scratch_size: u32,
@@ -332,6 +355,7 @@ pub(crate) struct GpuKernelBlobMetadata<'a> {
 }
 
 impl<'a> GpuKernelBlobMetadata<'a> {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn empty(arg_layout: &'a [KernelArgLayout<'a>]) -> Self {
         Self {
             grf_count: 0,
@@ -346,6 +370,7 @@ impl<'a> GpuKernelBlobMetadata<'a> {
 }
 
 impl<'a> GpuKernelBlob<'a> {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn from_artifact_contract(
         artifact: &'a GpgpuKernelArtifact,
         contract: &'a GpuKernelContract<'a>,
@@ -376,6 +401,7 @@ impl<'a> GpuKernelBlob<'a> {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct KernelArgDesc<'a> {
     pub(crate) index: u32,
     pub(crate) name: &'a str,
@@ -386,6 +412,7 @@ pub(crate) struct KernelArgDesc<'a> {
 }
 
 impl<'a> KernelArgDesc<'a> {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn new(
         index: u32,
         name: &'a str,
@@ -404,6 +431,7 @@ impl<'a> KernelArgDesc<'a> {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn from_call_arg(arg: KernelCallArg<'a>) -> Self {
         Self {
             index: arg.index,
@@ -417,6 +445,7 @@ impl<'a> KernelArgDesc<'a> {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct KernelMetadata<'a> {
     pub(crate) name: &'a str,
     pub(crate) args: &'a [KernelArgDesc<'a>],
@@ -429,6 +458,7 @@ pub(crate) struct KernelMetadata<'a> {
 }
 
 impl<'a> KernelMetadata<'a> {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn new(name: &'a str, args: &'a [KernelArgDesc<'a>]) -> Self {
         Self {
             name,
@@ -442,6 +472,7 @@ impl<'a> KernelMetadata<'a> {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn with_gpgpu_artifact(
         name: &'a str,
         args: &'a [KernelArgDesc<'a>],
@@ -459,24 +490,29 @@ impl<'a> KernelMetadata<'a> {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn arg_count(&self) -> usize {
         self.args.len()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn arg(&self, index: u32) -> Option<&KernelArgDesc<'a>> {
         self.args.iter().find(|arg| arg.index == index)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn arg_by_name(&self, name: &str) -> Option<&KernelArgDesc<'a>> {
         self.args.iter().find(|arg| arg.name == name)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn has_arg_count(&self, count: usize) -> bool {
         self.arg_count() == count
     }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum ProgramBinaryKind {
     IntelGenBinary,
     SpirV,
@@ -486,6 +522,7 @@ pub(crate) enum ProgramBinaryKind {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct ProgramArtifact<'a> {
     pub(crate) name: &'a str,
     pub(crate) target: &'a str,
@@ -500,6 +537,7 @@ pub(crate) struct ProgramArtifact<'a> {
 }
 
 impl<'a> ProgramArtifact<'a> {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn new(
         name: &'a str,
         target: &'a str,
@@ -521,6 +559,7 @@ impl<'a> ProgramArtifact<'a> {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn from_gpgpu_kernel(
         artifact: &'a GpgpuKernelArtifact,
         kernels: &'a [KernelMetadata<'a>],
@@ -539,30 +578,36 @@ impl<'a> ProgramArtifact<'a> {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn kernel_count(&self) -> usize {
         self.kernels.len()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn find_kernel(&self, name: &str) -> Option<&KernelMetadata<'a>> {
         self.kernels.iter().find(|kernel| kernel.name == name)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn has_kernel(&self, name: &str) -> bool {
         self.find_kernel(name).is_some()
     }
 }
 
 #[derive(Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct BuiltProgram<'a> {
     pub(crate) artifact: &'a ProgramArtifact<'a>,
     pub(crate) kernels: Vec<KernelObject<'a>>,
 }
 
 impl<'a> BuiltProgram<'a> {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn new(artifact: &'a ProgramArtifact<'a>, kernels: Vec<KernelObject<'a>>) -> Self {
         Self { artifact, kernels }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn from_artifact(artifact: &'a ProgramArtifact<'a>) -> Self {
         let mut kernels = Vec::with_capacity(artifact.kernels.len());
         for metadata in artifact.kernels {
@@ -571,20 +616,24 @@ impl<'a> BuiltProgram<'a> {
         Self { artifact, kernels }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn kernel_count(&self) -> usize {
         self.kernels.len()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn find_kernel(&self, name: &str) -> Option<&KernelObject<'a>> {
         self.kernels.iter().find(|kernel| kernel.name() == name)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn has_kernel(&self, name: &str) -> bool {
         self.find_kernel(name).is_some()
     }
 }
 
 #[derive(Copy, Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct KernelObject<'a> {
     pub(crate) program: &'a ProgramArtifact<'a>,
     pub(crate) metadata: &'a KernelMetadata<'a>,
@@ -592,6 +641,7 @@ pub(crate) struct KernelObject<'a> {
 }
 
 impl<'a> KernelObject<'a> {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn new(
         program: &'a ProgramArtifact<'a>,
         metadata: &'a KernelMetadata<'a>,
@@ -603,18 +653,22 @@ impl<'a> KernelObject<'a> {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn name(&self) -> &'a str {
         self.metadata.name
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn arg_count(&self) -> usize {
         self.metadata.arg_count()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn arg(&self, index: u32) -> Option<&KernelArgDesc<'a>> {
         self.metadata.arg(index)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn arg_by_name(&self, name: &str) -> Option<&KernelArgDesc<'a>> {
         self.metadata.arg_by_name(name)
     }

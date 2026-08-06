@@ -19,18 +19,24 @@ pub(crate) type StatusFn = fn() -> Option<gpgpu::UploadedKernelArtifact>;
 #[derive(Copy, Clone)]
 pub(crate) struct KnownAotKernel {
     pub(crate) name: &'static str,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) artifact: &'static gpgpu::GpgpuKernelArtifact,
     pub(crate) contract: &'static GpuKernelContract<'static>,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) upload: UploadFn,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) status: StatusFn,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) role: KnownKernelRole,
 }
 
 impl KnownAotKernel {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn upload(self) -> Option<gpgpu::UploadedKernelArtifact> {
         (self.upload)()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn status(self) -> Option<gpgpu::UploadedKernelArtifact> {
         (self.status)()
     }
@@ -837,6 +843,7 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
     },
 ];
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static SOURCE_PROGRAM_CACHE: Mutex<BTreeMap<&'static str, &'static ProgramArtifact<'static>>> =
     Mutex::new(BTreeMap::new());
 
@@ -844,16 +851,19 @@ pub(crate) fn known_aot_kernel(name: &str) -> Option<&'static KnownAotKernel> {
     KNOWN_AOT_KERNELS.iter().find(|kernel| kernel.name == name)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn is_known_aot_kernel(name: &str) -> bool {
     known_aot_kernel(name).is_some()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn known_aot_kernel_by_source(source: &str) -> Option<&'static KnownAotKernel> {
     KNOWN_AOT_KERNELS
         .iter()
         .find(|kernel| gpgpu::kernel_opencl_source(kernel.name) == Some(source))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn build_program_from_known_source(
     source: &str,
     build_options: &str,

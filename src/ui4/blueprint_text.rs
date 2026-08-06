@@ -653,6 +653,7 @@ impl BlueprintFontCanvasDescription {
 }
 
 impl BlueprintRetainedTextDescription {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn same_scene(&self, next: &Self) -> bool {
         self.font == next.font
             && self.viewport_width == next.viewport_width

@@ -671,6 +671,7 @@ pub(crate) fn set_slot_activity(slot_id: &MatrixSlotId, activity: MatrixSlotActi
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn begin_slot_running(slot_id: &MatrixSlotId) {
     let mut guard = state().lock();
     let idx = ensure_slot_index(&mut guard.slots, slot_id);
@@ -699,6 +700,7 @@ pub(crate) fn begin_live_slot_running(slot_id: &MatrixSlotId, lifetime_generatio
     true
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn end_slot_running(slot_id: &MatrixSlotId) {
     let mut guard = state().lock();
     let idx = ensure_slot_index(&mut guard.slots, slot_id);
@@ -802,6 +804,7 @@ pub(crate) fn bind_live_slot_vm(
     true
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn set_slot_app_label(slot_id: &MatrixSlotId, label: &str) {
     let mut guard = state().lock();
     let idx = ensure_slot_index(&mut guard.slots, slot_id);
@@ -896,6 +899,7 @@ pub(crate) fn slot_views(output_mask: super::OutputMask) -> Vec<MatrixSlotView> 
     out
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn revision() -> u64 {
     state().lock().revision
 }
@@ -922,6 +926,7 @@ pub(crate) fn try_visible_revision(output_mask: super::OutputMask) -> Option<u64
     )
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn history_total_lines() -> usize {
     let mut guard = state().lock();
     let default_id = default_slot_id();
@@ -929,6 +934,7 @@ pub(crate) fn history_total_lines() -> usize {
     guard.slots[idx].lines.len()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn history_lines_text(start_line: usize, max_lines: usize) -> AllocString {
     if max_lines == 0 {
         return AllocString::new();
@@ -958,6 +964,7 @@ pub(crate) fn history_lines_text(start_line: usize, max_lines: usize) -> AllocSt
     out
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn slot_transcript_text(slot_id: &MatrixSlotId) -> AllocString {
     let mut guard = state().lock();
     let idx = ensure_slot_index(&mut guard.slots, slot_id);

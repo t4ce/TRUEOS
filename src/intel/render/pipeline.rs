@@ -4056,6 +4056,7 @@ fn encode_triangle_probe_batch(
     Ok(cursor * core::mem::size_of::<u32>())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn encode_minimal_streamout_proof_batch(
     batch_dwords: &mut [u32],
     warm: RenderWarmState,
@@ -4821,6 +4822,7 @@ fn encode_minimal_streamout_proof_batch(
     Ok(cursor * core::mem::size_of::<u32>())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn encode_vf_streamout_proof_batch(
     batch_dwords: &mut [u32],
     warm: RenderWarmState,
@@ -4846,6 +4848,7 @@ fn encode_vf_streamout_proof_batch(
     )
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn encode_vs_streamout_proof_batch(
     batch_dwords: &mut [u32],
     warm: RenderWarmState,
@@ -4872,6 +4875,7 @@ fn encode_vs_streamout_proof_batch(
     )
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn encode_3d_no_draw_probe_batch(
     batch_dwords: &mut [u32],
     warm: RenderWarmState,

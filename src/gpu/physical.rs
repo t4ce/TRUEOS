@@ -151,6 +151,7 @@ pub(crate) enum PhysicalGpuFault {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct PhysicalBufferSlice {
     pub(crate) gpu: u64,
     pub(crate) bytes: usize,
@@ -177,9 +178,11 @@ pub(crate) struct PhysicalSchedulerStatus {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PhysicalGpuError {
     NotReady,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Unsupported,
     OutOfMemory,
     InvalidGpuVm,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     InvalidContext,
     MapFailed,
     UnmapFailed,

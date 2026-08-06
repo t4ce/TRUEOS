@@ -86,6 +86,7 @@ impl<'a> Paint<'a> {
         self
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn dim(mut self) -> Self {
         self.dim = true;
         self

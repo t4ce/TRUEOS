@@ -410,6 +410,7 @@ pub(crate) fn rustc_runtime_import_note(name: &str) -> Option<&'static str> {
     None
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn portal_logf(args: core::fmt::Arguments<'_>) {
     if crate::log_os::flags::PORTAL_LOGS {
         crate::log!("{}\n", args);
@@ -1769,6 +1770,7 @@ pub(crate) fn build_process_env(
     vars
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn sha256_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let digest = Sha256::digest(bytes);

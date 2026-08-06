@@ -4,38 +4,66 @@ use spin::Mutex;
 
 use super::*;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PRIMARY_REARM_RGB_PLANE_PROBE_ENABLED: bool = false;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PRIMARY_REARM_RGB_PLANE_PROBE_SLOT_MASK: u8 = 1 << 2;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RGB_PLANE_PROBE_SLOT_COUNT: usize = 3;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RGB_PLANE_PROBE_GPU_BASE: u64 = crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RGB_PLANE_PROBE_GPU_STRIDE: u64 = 0x0010_0000;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_PLANE_PROBE_ENABLED: bool = true;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_LINEAR_PATTERN_PROBE_ONLY: bool = false;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_LINEAR_PATTERN_GPU: u64 = 0x1200_0000;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_LINEAR_PATTERN_WIDTH: u32 = 640;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_LINEAR_PATTERN_HEIGHT: u32 = 360;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_DECODED_LINEAR_STAGING_ENABLED: bool = true;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_DECODED_LINEAR_STAGING_SCALE: u32 = 2;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_DECODED_LINEAR_STAGING_GPU: u64 = 0x1300_0000;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT: usize = 3;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_DECODED_LINEAR_STAGING_GPU_STRIDE: u64 = 0x0040_0000;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_INPUT_CSC_PROBE_ENABLED: bool = true;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_LINKED_PLANES_PROBE_ENABLED: bool = true;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_LINKED_PLANES_SURF_ONLY_FLIP: bool = true;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_PLANE_PROBE_CYCLE_CANDIDATES: bool = false;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_PLANE_PROBE_SLOT: usize = VIDEO_NV12_PLANE_SLOT;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_Y_PLANE_PROBE_SLOT: usize = VIDEO_NV12_Y_PLANE_SLOT;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static DIRECT_NV12_PLANE_PROBE_SEQ: AtomicU32 = AtomicU32::new(0);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static DIRECT_NV12_LINEAR_PATTERN_ARMED: AtomicBool = AtomicBool::new(false);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static RGB_PLANE_PROBE_SURFACES: Mutex<[Option<RgbPlaneProbeSurface>; RGB_PLANE_PROBE_SLOT_COUNT]> =
     Mutex::new([None; RGB_PLANE_PROBE_SLOT_COUNT]);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static DIRECT_NV12_LINEAR_PATTERN_SURFACE: Mutex<Option<Nv12PlaneProbeSurface>> = Mutex::new(None);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static DIRECT_NV12_DECODED_LINEAR_STAGING_SURFACES: Mutex<
     [Option<crate::ui4::NativeNv12Surface>; DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT],
 > = Mutex::new([None; DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT]);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static DIRECT_NV12_DECODED_LINEAR_STAGING_NEXT: AtomicU32 = AtomicU32::new(0);
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn log_decoded_nv12_plane_alpha_program(
     seq: u32,
     phase: &str,
@@ -69,6 +97,7 @@ fn log_decoded_nv12_plane_alpha_program(
 }
 
 #[derive(Copy, Clone)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct RgbPlaneProbeSurface {
     width: u32,
     height: u32,
@@ -85,6 +114,7 @@ unsafe impl Send for RgbPlaneProbeSurface {}
 unsafe impl Sync for RgbPlaneProbeSurface {}
 
 #[derive(Copy, Clone)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct Nv12PlaneProbeSurface {
     width: u32,
     height: u32,
@@ -100,6 +130,7 @@ struct Nv12PlaneProbeSurface {
 unsafe impl Send for Nv12PlaneProbeSurface {}
 unsafe impl Sync for Nv12PlaneProbeSurface {}
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn log_display_plane_ladder_probe(label: &str) {
     crate::log!("intel/display: display-ladder label={} stage=read-only begin\n", label);
     log_primary_surface_samples("display-ladder-primary");
@@ -109,6 +140,7 @@ pub(crate) fn log_display_plane_ladder_probe(label: &str) {
     crate::log!("intel/display: display-ladder label={} stage=read-only end\n", label);
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn probe_primary_present_psr(
     dev: crate::intel::Dev,
     surface: PrimarySurface,
@@ -140,6 +172,7 @@ pub(super) fn probe_primary_present_psr(
     );
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn log_active_pipe_raw_state(label: &str) {
     let Some(dev) = crate::intel::claimed_device() else {
         return;
@@ -195,6 +228,7 @@ fn log_active_pipe_raw_state(label: &str) {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 enum DirectNv12PlaneTiling {
     Y,
     Yf,
@@ -202,6 +236,7 @@ enum DirectNv12PlaneTiling {
 }
 
 impl DirectNv12PlaneTiling {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     const fn name(self) -> &'static str {
         match self {
             Self::Y => "y",
@@ -210,6 +245,7 @@ impl DirectNv12PlaneTiling {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     const fn ctl_bits(self) -> u32 {
         match self {
             Self::Y => PLANE_CTL_TILED_Y,
@@ -219,6 +255,7 @@ impl DirectNv12PlaneTiling {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_nv12_probe_tiling_for_seq(seq: u32) -> DirectNv12PlaneTiling {
     if !DIRECT_NV12_PLANE_PROBE_CYCLE_CANDIDATES {
         return DirectNv12PlaneTiling::Linear;
@@ -230,6 +267,7 @@ fn direct_nv12_probe_tiling_for_seq(seq: u32) -> DirectNv12PlaneTiling {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_nv12_decoded_probe_tiling_for_seq(seq: u32) -> DirectNv12PlaneTiling {
     if DIRECT_NV12_PLANE_PROBE_CYCLE_CANDIDATES {
         direct_nv12_probe_tiling_for_seq(seq)
@@ -238,6 +276,7 @@ fn direct_nv12_decoded_probe_tiling_for_seq(seq: u32) -> DirectNv12PlaneTiling {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_nv12_plane_ctl_enabled(ctl_before: u32, tiling: DirectNv12PlaneTiling) -> u32 {
     (ctl_before
         & !(PLANE_CTL_ENABLE
@@ -253,10 +292,12 @@ fn direct_nv12_plane_ctl_enabled(ctl_before: u32, tiling: DirectNv12PlaneTiling)
         | tiling.ctl_bits()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_nv12_y_plane_ctl_enabled(ctl_before: u32, tiling: DirectNv12PlaneTiling) -> u32 {
     direct_nv12_plane_ctl_enabled(ctl_before, tiling) | PLANE_CTL_YUV420_Y_PLANE
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_nv12_plane_color_ctl_enabled(color_ctl_before: u32) -> u32 {
     let color_ctl = (color_ctl_before
         & !(PLANE_COLOR_ALPHA_MASK
@@ -274,6 +315,7 @@ fn direct_nv12_plane_color_ctl_enabled(color_ctl_before: u32) -> u32 {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_nv12_plane_cus_ctl_enabled() -> u32 {
     if DIRECT_NV12_INPUT_CSC_PROBE_ENABLED {
         PLANE_CUS_ENABLE
@@ -285,6 +327,7 @@ fn direct_nv12_plane_cus_ctl_enabled() -> u32 {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const fn plane_input_csc_coeff_value(index: usize) -> u32 {
     match index {
         0 => (0x7C98 << 16) | 0x7800,
@@ -297,6 +340,7 @@ const fn plane_input_csc_coeff_value(index: usize) -> u32 {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const fn plane_input_csc_preoff_value(index: usize) -> u32 {
     match index {
         0 => 0x1800,
@@ -306,6 +350,7 @@ const fn plane_input_csc_preoff_value(index: usize) -> u32 {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn program_direct_nv12_input_csc(
     dev: crate::intel::Dev,
     plane_base: usize,
@@ -390,6 +435,7 @@ fn program_direct_nv12_input_csc(
     );
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn fill_linear_nv12_pattern(
     ptr: *mut u8,
     pitch_bytes: usize,
@@ -451,6 +497,7 @@ fn fill_linear_nv12_pattern(
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn sample_probe_byte(ptr: *const u8, byte_len: usize, offset: usize) -> u8 {
     if offset >= byte_len {
         return 0;
@@ -458,6 +505,7 @@ fn sample_probe_byte(ptr: *const u8, byte_len: usize, offset: usize) -> u8 {
     unsafe { core::ptr::read_volatile(ptr.add(offset)) }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn sample_probe_pair(ptr: *const u8, byte_len: usize, offset: usize) -> (u8, u8) {
     (
         sample_probe_byte(ptr, byte_len, offset),
@@ -465,6 +513,7 @@ fn sample_probe_pair(ptr: *const u8, byte_len: usize, offset: usize) -> (u8, u8)
     )
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn log_nv12_probe_surface_samples(
     label: &str,
     ptr: *const u8,
@@ -552,6 +601,7 @@ fn log_nv12_probe_surface_samples(
     );
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn ensure_linear_nv12_pattern_surface(
     dev: crate::intel::Dev,
     pipe: PipeInfo,
@@ -632,6 +682,7 @@ fn ensure_linear_nv12_pattern_surface(
     Some(surface)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn arm_linear_nv12_pattern_video_plane_probe(
     dev: crate::intel::Dev,
     pipe: PipeInfo,
@@ -675,6 +726,7 @@ fn arm_linear_nv12_pattern_video_plane_probe(
     armed
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn ensure_decoded_linear_nv12_staging_surface(
     dev: crate::intel::Dev,
     pipe: PipeInfo,
@@ -687,6 +739,7 @@ fn ensure_decoded_linear_nv12_staging_surface(
         .map(|surface| (surface, slot))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn ensure_decoded_linear_nv12_staging_surface_at(
     dev: crate::intel::Dev,
     pipe: PipeInfo,
@@ -782,6 +835,7 @@ fn ensure_decoded_linear_nv12_staging_surface_at(
     Some(surface)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn retire_decoded_linear_nv12_staging_surface(
     dev: crate::intel::Dev,
     surface: crate::ui4::NativeNv12Surface,
@@ -828,6 +882,7 @@ fn retire_decoded_linear_nv12_staging_surface(
 }
 
 #[inline(always)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn decoded_nv12_ytile_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
     const YTILE_W: usize = 128;
     const YTILE_H: usize = 32;
@@ -842,6 +897,7 @@ fn decoded_nv12_ytile_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: us
     (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn native_plane_slot_bar_nv12_offset(
     tiling: DirectNv12PlaneTiling,
     pitch_bytes: usize,
@@ -874,6 +930,7 @@ fn native_plane_slot_bar_nv12_offset(
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn native_plane_slot_bar_source_position(
     slot: usize,
     plane_x: u32,
@@ -1045,6 +1102,7 @@ fn stamp_native_plane_slot_bars_nv12_surface(
     stamped
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn copy_decoded_ytile_nv12_to_linear_staging(
     src_virt: usize,
     src_byte_len: usize,
@@ -1136,6 +1194,7 @@ fn copy_decoded_ytile_nv12_to_linear_staging(
     true
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn log_linear_nv12_green_probe(
     reason: &str,
     pipe: PipeInfo,
@@ -1229,6 +1288,7 @@ fn log_linear_nv12_green_probe(
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn arm_decoded_linear_nv12_staging_video_plane_probe(
     dev: crate::intel::Dev,
     pipe: PipeInfo,
@@ -1332,6 +1392,7 @@ fn arm_decoded_linear_nv12_staging_video_plane_probe(
     ))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn arm_nv12_video_plane_probe_surface(
     probe_name: &str,
     owner: &str,
@@ -1575,6 +1636,7 @@ fn arm_nv12_video_plane_probe_surface(
     ok
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn arm_nv12_linked_video_plane_probe_surface(
     probe_name: &str,
     owner: &str,
@@ -1870,6 +1932,7 @@ fn arm_nv12_linked_video_plane_probe_surface(
     ok
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn rgb_plane_probe_spec(index: usize) -> Option<(usize, u32, u32, u32, u32, u32, &'static str)> {
     match index {
         0 => Some((1, 256, 64, 0, 0, 0x00FF_0000, "red")),
@@ -1879,11 +1942,13 @@ fn rgb_plane_probe_spec(index: usize) -> Option<(usize, u32, u32, u32, u32, u32,
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn rgb_plane_probe_gpu(index: usize) -> Option<u64> {
     let offset = (index as u64).checked_mul(RGB_PLANE_PROBE_GPU_STRIDE)?;
     RGB_PLANE_PROBE_GPU_BASE.checked_add(offset)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn ensure_rgb_plane_probe_surface(
     dev: crate::intel::Dev,
     pipe: PipeInfo,
@@ -1953,6 +2018,7 @@ fn ensure_rgb_plane_probe_surface(
     Some(surface)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn rgb_plane_probe_needs_rearm(dev: crate::intel::Dev, surface: RgbPlaneProbeSurface) -> bool {
     let Some((_slot, _width, _height, x, y, _color, _name)) =
         rgb_plane_probe_spec(surface.plane_slot.saturating_sub(1))
@@ -1976,6 +2042,7 @@ fn rgb_plane_probe_needs_rearm(dev: crate::intel::Dev, surface: RgbPlaneProbeSur
         || surf_live != want_surf
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn arm_rgb_plane_probe(
     dev: crate::intel::Dev,
     surface: RgbPlaneProbeSurface,
@@ -2079,6 +2146,7 @@ fn arm_rgb_plane_probe(
     live
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn arm_rgb_plane_probe_planes(dev: crate::intel::Dev, pipe: PipeInfo, reason: &str) {
     if !PRIMARY_REARM_RGB_PLANE_PROBE_ENABLED {
         return;
@@ -2108,6 +2176,7 @@ pub(super) fn arm_rgb_plane_probe_planes(dev: crate::intel::Dev, pipe: PipeInfo,
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn primary_format_probe_name() -> &'static str {
     match PRIMARY_FORMAT_PROBE_MODE {
         PRIMARY_FORMAT_PROBE_XRGB => "xrgb8888",

@@ -509,8 +509,10 @@ pub(crate) fn status() -> PoolStatus {
 
 #[derive(Copy, Clone, Debug)]
 enum GameError {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Artifact(trueos_helio_runtime::Error),
     Frame(crate::ui4::FramePoolError),
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Window(crate::ui4::WindowBrokerError),
     Render(&'static str),
     NativeUnavailable(&'static str),

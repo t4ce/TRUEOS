@@ -31,6 +31,7 @@ pub struct UiSurfaceHandle(u32);
 
 impl UiSurfaceHandle {
     #[inline]
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn raw(self) -> u32 {
         self.0
     }
@@ -76,6 +77,7 @@ unsafe impl Send for UiSurfaceRgbaAccess {}
 unsafe impl Sync for UiSurfaceRgbaAccess {}
 
 #[derive(Clone, Copy)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct UiSurfacePixelAccess {
     pub virt: *mut u8,
     pub byte_len: usize,
@@ -268,6 +270,7 @@ pub fn destroy_surface(handle: UiSurfaceHandle) -> bool {
     true
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn surface(handle: UiSurfaceHandle) -> Option<UiSurface> {
     lookup(handle).map(|surface| surface.desc)
 }
@@ -288,6 +291,7 @@ pub(crate) fn rgba_access(handle: UiSurfaceHandle) -> Option<UiSurfaceRgbaAccess
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn pixel_access(handle: UiSurfaceHandle) -> Option<UiSurfacePixelAccess> {
     let surface = lookup(handle)?;
     Some(UiSurfacePixelAccess {
@@ -317,6 +321,7 @@ pub(crate) fn gpgpu_rgba_surface(
     )
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn flush_surface(handle: UiSurfaceHandle) -> bool {
     let Some(surface) = lookup(handle) else {
         return false;
@@ -325,6 +330,7 @@ pub(crate) fn flush_surface(handle: UiSurfaceHandle) -> bool {
     true
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn write_surface_rgba(
     handle: UiSurfaceHandle,
     dst: UiRect,
@@ -364,6 +370,7 @@ pub fn write_surface_rgba(
     Ok(())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn clear_surface_rgb(handle: UiSurfaceHandle, rgb: u32) -> Result<()> {
     let surface = lookup(handle).ok_or(Error::NotFound)?;
     let rect = UiRect::new(0, 0, surface.desc.width, surface.desc.height);
@@ -407,6 +414,7 @@ fn aligned_pitch_bytes(width: u32) -> Result<u32> {
         .ok_or(Error::Invalid)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn clip_rect_to_surface(rect: UiRect, surface: UiSurface) -> Option<UiRect> {
     if rect.is_empty() || rect.x >= surface.width || rect.y >= surface.height {
         return None;
@@ -420,6 +428,7 @@ fn clip_rect_to_surface(rect: UiRect, surface: UiSurface) -> Option<UiRect> {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn write_rgba_to_xrgb_surface(
     surface: TrustedUiSurface,
     dst: UiRect,
@@ -449,6 +458,7 @@ fn write_rgba_to_xrgb_surface(
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn flush_surface_rect(surface: TrustedUiSurface, rect: UiRect) {
     let start = (rect.y as usize)
         .saturating_mul(surface.desc.pitch as usize)

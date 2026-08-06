@@ -48,6 +48,9 @@ pub(crate) use value::{
     KernelValueError, KernelValueType, KernelValueWriter, MAX_TRACKED_VALUE_ARG_INDEX,
 };
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const TRUEOS_OPENCL_PLATFORM_NAME: &str = "TRUEOS Intel OpenCL AOT Runtime";
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const TRUEOS_OPENCL_PROFILE: &str = "EMBEDDED_PROFILE";
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const TRUEOS_OPENCL_VERSION: &str = "OpenCL 1.2 TRUEOS-AOT";

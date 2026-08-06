@@ -285,3 +285,8 @@ codegen-units = 1
 debug = 0
 debug-assertions = false
 rpath = false
+
+[lints.rust]
+dead_code = "allow"
+mismatched_lifetime_syntaxes = "allow"
+unused_imports = "allow"

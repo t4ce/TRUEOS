@@ -156,6 +156,7 @@ pub const VMEXIT_REASON_VMX_PREEMPTION_TIMER: u64 = 0x34;
 
 const VMEXIT_INTERRUPTION_INFO_VALID: u32 = 1 << 31;
 const VMEXIT_INTERRUPTION_INFO_ERROR_CODE_VALID: u32 = 1 << 11;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const VMEXIT_INTERRUPTION_INFO_NMI_UNBLOCKING: u32 = 1 << 12;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -194,6 +195,7 @@ impl VmExitInterruptionInfo {
     }
 
     #[inline]
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn nmi_unblocking_due_to_iret(self) -> bool {
         (self.raw & VMEXIT_INTERRUPTION_INFO_NMI_UNBLOCKING) != 0
     }

@@ -50,6 +50,7 @@ struct ActiveMidiStream {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct PianoNoteSnapshot {
     pub seq: u16,
     pub note: u8,
@@ -151,6 +152,7 @@ fn pack_note_snapshot(seq: u16, note: u8, velocity: u8) -> u32 {
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn unpack_note_snapshot(packed: u32) -> Option<PianoNoteSnapshot> {
     if packed == 0 {
         return None;
@@ -202,6 +204,7 @@ fn piano_record_held_note_off(note: u8) {
     held.seq = held.seq.wrapping_add(1).max(1);
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn piano_note_snapshot() -> Option<PianoNoteSnapshot> {
     if PIANO_SLOT.load(Ordering::Acquire) == 0 {
         return None;

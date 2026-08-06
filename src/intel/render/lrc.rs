@@ -256,6 +256,7 @@ fn read_gen12_lrc_ring_head(warm: RenderWarmState) -> u32 {
     unsafe { core::ptr::read_volatile(address.cast::<u32>()) }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn encode_rgb_triangle_store_batch(
     batch_dwords: &mut [u32],
     dst_gpu_addr: u64,
@@ -352,6 +353,7 @@ fn encode_rgb_triangle_store_batch(
     Ok(idx * core::mem::size_of::<u32>())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn encode_result_store_probe_batch(
     batch_dwords: &mut [u32],
     result_gpu_addr: u64,
@@ -370,6 +372,7 @@ fn encode_result_store_probe_batch(
     Ok(6 * core::mem::size_of::<u32>())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn encode_single_store_probe_batch(
     batch_dwords: &mut [u32],
     dst_gpu_addr: u64,
@@ -394,6 +397,7 @@ fn encode_single_store_probe_batch(
     Ok(10 * core::mem::size_of::<u32>())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn encode_vertical_stripe_store_batch(
     batch_dwords: &mut [u32],
     dst_gpu_addr: u64,
@@ -473,6 +477,7 @@ fn encode_vertical_stripe_store_batch(
     Ok(idx * core::mem::size_of::<u32>())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn edge_fn(ax: i32, ay: i32, bx: i32, by: i32, px: i32, py: i32) -> i64 {
     let ax = ax as i64;
     let ay = ay as i64;
@@ -483,6 +488,7 @@ fn edge_fn(ax: i32, ay: i32, bx: i32, by: i32, px: i32, py: i32) -> i64 {
     (px - ax) * (by - ay) - (py - ay) * (bx - ax)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn edge_fn2(ax: i32, ay: i32, bx: i32, by: i32, px2: i32, py2: i32) -> i64 {
     let ax2 = (ax * 2) as i64;
     let ay2 = (ay * 2) as i64;
@@ -493,20 +499,24 @@ fn edge_fn2(ax: i32, ay: i32, bx: i32, by: i32, px2: i32, py2: i32) -> i64 {
     (px2 - ax2) * (by2 - ay2) - (py2 - ay2) * (bx2 - ax2)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn same_sign_or_zero(area: i64, value: i64) -> bool {
     if area >= 0 { value >= 0 } else { value <= 0 }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn bary_to_u8(weight: i64, area: i64) -> u32 {
     let num = weight.unsigned_abs().saturating_mul(255);
     let den = area.unsigned_abs().max(1);
     ((num + (den / 2)) / den).min(255) as u32
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn pack_xrgb8888(r: u32, g: u32, b: u32) -> u32 {
     (r << 16) | (g << 8) | b
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct CursorPlaneCaps {
     platform: &'static str,
     layout: &'static str,
@@ -515,6 +525,7 @@ struct CursorPlaneCaps {
     pipe_count: u8,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct SpritePlaneCaps {
     platform: &'static str,
     display_ver: u8,
@@ -527,6 +538,7 @@ struct SpritePlaneCaps {
     damage_clips: bool,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn cursor_plane_caps(device_id: u16) -> CursorPlaneCaps {
     match device_id {
         0x4680 | 0x4682 | 0x4688 | 0x468A | 0x468B | 0x4690 | 0x4692 | 0x4693 => CursorPlaneCaps {
@@ -554,6 +566,7 @@ fn cursor_plane_caps(device_id: u16) -> CursorPlaneCaps {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn sprite_plane_caps(device_id: u16) -> SpritePlaneCaps {
     match device_id {
         0x4680 | 0x4682 | 0x4688 | 0x468A | 0x468B | 0x4690 | 0x4692 | 0x4693 => SpritePlaneCaps {

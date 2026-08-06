@@ -1,20 +1,27 @@
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const FORCEWAKE_RENDER: usize = 0x0A278;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const FORCEWAKE_GT: usize = 0x0A188;
 const FORCEWAKE_ACK_RENDER: usize = 0x0D84;
 const FORCEWAKE_ACK_GT: usize = 0x130044;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const FORCEWAKE_KERNEL: u32 = 1 << 0;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const FORCEWAKE_FALLBACK: u32 = 1 << 15;
 const TBIMR_BATCH_SIZE_OVERRIDE: u32 = 1 << 1;
 const TBIMR_OPEN_BATCH_ENABLE: u32 = 1 << 4;
 const TBIMR_FAST_CLIP: u32 = 1 << 5;
 const FF_DOP_CLOCK_GATE_DISABLE: u32 = 1 << 1;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const FORCEWAKE_POLL_ITERS: usize = 20_000;
 const RCS_RING_BASE: usize = 0x0000_2000;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_CS_GPR_REL_BASE: usize = 0x600;
 const RCS_CS_GPR_BASE: usize = RCS_RING_BASE + 0x600;
 const RCS_CS_GPR_COUNT: usize = 16;
 const RCS_RING_TAIL: usize = RCS_RING_BASE + 0x30;
 const RCS_RING_HEAD: usize = RCS_RING_BASE + 0x34;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_RING_START: usize = RCS_RING_BASE + 0x38;
 const RCS_RING_CTL: usize = RCS_RING_BASE + 0x3C;
 const RCS_RING_PSMI_CTL: usize = RCS_RING_BASE + 0x50;
@@ -25,9 +32,11 @@ const RCS_RING_INSTPS: usize = RCS_RING_BASE + 0x70;
 const RCS_RING_DMA_FADD: usize = RCS_RING_BASE + 0x78;
 const RCS_RING_NOPID: usize = RCS_RING_BASE + 0x94;
 const RCS_RING_MI_MODE: usize = RCS_RING_BASE + 0x9C;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_RING_IMR: usize = RCS_RING_BASE + 0xA8;
 const RCS_CS_DEBUG_MODE1: usize = RCS_RING_BASE + 0xEC;
 const RCS_CS_DEBUG_MODE2: usize = RCS_RING_BASE + 0xD8;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const CS_DEBUG_MODE2_CONSTANT_BUFFER_ADDRESS_OFFSET_DISABLE: u32 = 1 << 4;
 const RCS_RING_EIR: usize = RCS_RING_BASE + 0xB0;
 const RCS_RING_ESR: usize = RCS_RING_BASE + 0xB8;
@@ -47,6 +56,7 @@ const GEN12_RING_FAULT_REG: usize = 0xCEC4;
 const ERROR_GEN6: usize = 0x40A0;
 const GFX_MODE: usize = 0x2520;
 const GEN12_RCU_MODE: usize = 0x14800;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GEN12_RCU_MODE_CCS_ENABLE: u32 = 1 << 0;
 const CHICKEN_RASTER_2: usize = 0x6208;
 const INSTDONE_GEOM: usize = 0x666C;
@@ -62,19 +72,31 @@ const TDL_THR_PF_COUNT: usize = 0xE5BC;
 const TDL_THR_PF_STATUS0: usize = 0xE6B8;
 const TDL_THR_PF_STATUS1: usize = 0xE7B8;
 const RCS_RING_CONTEXT_CONTROL: usize = RCS_RING_BASE + 0x244;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_RING_CONTEXT_CONTROL_REF: usize = RCS_RING_BASE + 0x5A0;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_RING_MODE_GEN7: usize = RCS_RING_BASE + 0x29C;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_RING_EXECLIST_SUBMIT_PORT: usize = RCS_RING_BASE + 0x230;
 const RCS_RING_EXECLIST_STATUS_LO: usize = RCS_RING_BASE + 0x234;
 const RCS_RING_EXECLIST_STATUS_HI: usize = RCS_RING_BASE + 0x238;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_RING_EXECLIST_CONTROL: usize = RCS_RING_BASE + 0x550;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_RING_EXECLIST_SQ_LO: usize = RCS_RING_BASE + 0x510;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_RING_EXECLIST_SQ_HI: usize = RCS_RING_BASE + 0x514;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_RING_HWS_PGA: usize = RCS_RING_BASE + 0x80;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GDRST: usize = 0x0000_941C;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const CURSOR_A_OFFSET: usize = 0x70080;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const CURSOR_B_OFFSET: usize = 0x71080;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const CURSOR_C_OFFSET: usize = 0x72080;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const CURSOR_D_OFFSET: usize = 0x73080;
 const WARM_RING_BYTES: usize = 4096;
 const WARM_CONTEXT_BYTES: usize = 22 * 4096;
@@ -88,6 +110,7 @@ const WARM_VERTEX_BYTES: usize = 128 * 4096;
 // Optional target-aware retessellation must stay a small quality optimization.
 // Raising the upload allocation must not also authorize an 8x increase in CPU
 // tessellation work for contour-heavy glyphs.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const FONT_MESH_REFINEMENT_BUDGET_BYTES: usize = 16 * 4096;
 const WARM_RESULT_BYTES: usize = 4096;
 const LINEAR_RENDER_TARGET_PITCH_ALIGN: usize = 64;
@@ -95,6 +118,7 @@ const LINEAR_RENDER_TARGET_PITCH_ALIGN: usize = 64;
 // Shell2's one-shot stamp path bypasses this scale API and uses a fitted
 // rectangular target up to the full scanout dimensions below.
 const FONT_PROOF_TARGET_SIZE: usize = 512;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const FONT_STAMP_DEFAULT_NATIVE_SCALE: u32 = 5;
 const FONT_STAMP_BASE_SIZE: usize = 64;
 pub(crate) const FONT_STAMP_MAX_NATIVE_SCALE: u32 =
@@ -171,6 +195,7 @@ const _: () = {
 };
 // Keep the imported 64 KiB compute mesh outside the 14.0625 MiB 1440p scene
 // target at 0x0088_0000..0x0169_0000 and below the batch at 0x0180_0000.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
 // Long-lived render resources share one collision-free VA allocator. Fonts
 // were its first client; Spirit's decoded visual assets use the same lifetime
@@ -181,7 +206,9 @@ static PERSISTENT_RESOURCE_GPU_VA_CURSOR: AtomicU64 =
     AtomicU64::new(GPU_VA_PERSISTENT_RESOURCE_BASE);
 static PERSISTENT_RESOURCE_GPU_VA_FREE: spin::Mutex<alloc::vec::Vec<(u64, u64)>> =
     spin::Mutex::new(alloc::vec::Vec::new());
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GPGPU_EU_KERNEL_OFFSET_BYTES: usize = 0x3000;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GPGPU_WALKER_SCRATCH_OFFSET_BYTES: usize = 0x3800;
 const GPGPU_TILE_ROWS: usize = 256;
 const GPGPU_TILE_K_DIM: usize = 2048;
@@ -198,17 +225,25 @@ const GPGPU_TILE_ARENA_REQUIRED_BYTES: usize = GPGPU_TILE_TARGET_TILES * GPGPU_W
     + GPGPU_TILE_TARGET_TILES * GPGPU_OUTPUT_TILE_BYTES;
 const GPGPU_TILE_ARENA_BYTES: usize = (GPGPU_TILE_ARENA_REQUIRED_BYTES + 4095) & !4095;
 const RING_VALID: u32 = 1;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const EL_CTRL_LOAD: u32 = 1 << 0;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const CTX_CTRL_RS_CTX_ENABLE: u32 = 1 << 1;
 const CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT: u32 = 1 << 0;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT: u32 = 1 << 2;
 const CTX_CTRL_INHIBIT_SYN_CTX_SWITCH: u32 = 1 << 3;
 const CTX_CTRL_OAC_CONTEXT_ENABLE: u32 = 1 << 8;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const CTX_DESC_FORCE_RESTORE: u32 = 1 << 2;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GFX_RUN_LIST_ENABLE: u32 = 1 << 15;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const MODE_IDLE: u32 = 1 << 9;
 const RING_MI_MODE_STOP_RING: u32 = 1 << 8;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GRDOM_RENDER: u32 = 1 << 1;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
 // MI_BATCH_BUFFER_END returns to the caller only for a second-level batch.
@@ -232,19 +267,27 @@ const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_NOOP: u32 = 0;
 const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
 const GEN8_CTX_VALID: u32 = 1 << 0;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GEN8_CTX_PPGTT_ENABLE: u32 = 1 << 5;
 const GEN8_CTX_PRIVILEGE: u32 = 1 << 8;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GEN12_CTX_PRIORITY_NORMAL: u32 = 1 << 9;
 const GEN8_CTX_ADDRESSING_MODE_SHIFT: u32 = 3;
 const GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT: u32 = 0xD;
 const RCS_EXEC_RESULT_DONE: u32 = 0xC0DE_7701;
 const RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO: u32 = 0xC0DE_7741;
 const RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI: u32 = 0xC0DE_7742;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_EXEC_RESULT_MI_PROBE_DONE: u32 = 0xC0DE_7711;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_EXEC_RESULT_MI_SCANOUT_DONE: u32 = 0xC0DE_7713;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_EXEC_RESULT_GPGPU_PREFLIGHT_DONE: u32 = 0xC0DE_7731;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_EXEC_RESULT_COMPUTE_WALKER_DONE: u32 = 0xC0DE_7732;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_EXEC_RESULT_GPGPU_EU_C_STORE_DONE: u32 = 0xC0DE_7733;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_EXEC_RESULT_3D_NO_DRAW_DONE: u32 = 0xC0DE_7712;
 const RCS_EXEC_RESULT_DRAW_PRE3D: u32 = 0xC0DE_7721;
 const RCS_EXEC_RESULT_DRAW_POST_VF: u32 = 0xC0DE_7723;
@@ -258,18 +301,25 @@ const RCS_EXEC_RESULT_DRAW_BATCH_ENTRY: u32 = 0xC0DE_772A;
 const RCS_EXEC_RESULT_DRAW_POST3D: u32 = 0xC0DE_7722;
 const RCS_ARTIFICIAL_FRAGMENT_PRE_COLOR: u32 = 0xA17F_1001;
 const RCS_ARTIFICIAL_FRAGMENT_POST_COLOR: u32 = 0xA17F_1002;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS: usize = 3;
 // Temporary one-boot quiet switch: keep RCS render/GPGPU probes off while
 // validating the rest of boot without render-engine traffic.
 const PRIMARY_DISABLE_RENDER_BRINGUP: bool = true;
 const RENDER_JOKER_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED: bool = true;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GPGPU_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED: bool = true;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const MI_STRIPE_COUNT: usize = 12;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const MI_STRIPE_WIDTH_PX: usize = 4;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const MI_STRIPE_X_STEP_PX: u32 = 1;
 const PRIMARY_PERIODIC_LOG_EVERY: u32 = 30;
 const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const TS_GPGPU_THREADS_DISPATCHED_LO: usize = 0x2290;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const TS_GPGPU_THREADS_DISPATCHED_HI: usize = 0x2294;
 const RENDER_MOCS: u32 = 4;
 // The verified Gen12 Mesa draw uses MOCS 4 for vertex buffers.  Gen12 also
@@ -293,6 +343,7 @@ const SURFACE_FORMAT_RAW: u32 = 0x1FF;
 const SURFACE_FORMAT_B8G8R8A8_UNORM: u32 = 192;
 const SURFACE_FORMAT_R8G8B8A8_UNORM: u32 = 199;
 const SURFACE_FORMAT_R32G32B32A32_FLOAT: u32 = 0;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const SURFACE_FORMAT_R32G32B32A32_UINT: u32 = 2;
 const SURFACE_FORMAT_R32G32B32_FLOAT: u32 = 64;
 const SURFACE_FORMAT_R32G32_FLOAT: u32 = 133;
@@ -402,6 +453,7 @@ const CLIP_PERSPECTIVE_DIVIDE_DISABLE: u32 = 1 << 9;
 const CLIP_MODE_ACCEPT_ALL: u32 = 4 << 13;
 const WM_FORCE_KILL_PIXEL_OFF: u32 = 1;
 const PS_VECTOR_MASK_ENABLE: u32 = 1 << 30;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PS_SINGLE_PROGRAM_FLOW: u32 = 1 << 31;
 const PS_PUSH_CONSTANT_ENABLE: u32 = 1 << 11;
 const PS_MAX_THREADS_SHIFT: u32 = 23;
@@ -460,6 +512,7 @@ const CMD_3DSTATE_DS: u32 = 9 | (29 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_STREAMOUT: u32 = 3 | (30 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_PRIMITIVE_REPLICATION: u32 = 4 | (108 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_SO_BUFFER_INDEX_0: u32 = 6 | (0x60 << 16) | (3 << 27) | (3 << 29);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const CMD_3DSTATE_SO_DECL_LIST_1: u32 = 3 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_SBE: u32 = 4 | (31 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_PS: u32 = 10 | (32 << 16) | (3 << 27) | (3 << 29);
@@ -567,6 +620,7 @@ const PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS: u32 =
 const PIPE_CONTROL_POST_DRAW_LIGHT_POSTSYNC_NO_STALL_BITS: u32 =
     PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_DEST_GGTT;
 const PIPE_CONTROL_POST_DRAW_LIGHT_CS_STALL_ONLY_BITS: u32 = PIPE_CONTROL_CS_STALL;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PIPE_CONTROL_POST_DRAW_SYNC_BITS: u32 =
     PIPE_CONTROL_FLUSH_BITS | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_DEST_GGTT;
 const _: () = {
@@ -644,11 +698,16 @@ const RESULT_SLOT_BATCH_ENTRY_DWORD: usize = 14;
 // the primary's secondary-return breadcrumb at slot 30.
 const RESULT_DEBUG_DWORD_COUNT: usize = 31;
 const RESULT_SLOT_GPGPU_PREFLIGHT_MARKER_DWORD: usize = 16;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RESULT_SLOT_GPGPU_PREFLIGHT_DOT_DWORD: usize = 17;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RESULT_SLOT_GPGPU_PREFLIGHT_SUM_A_DWORD: usize = 18;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RESULT_SLOT_GPGPU_PREFLIGHT_SUM_B_DWORD: usize = 19;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RESULT_SLOT_GPGPU_PREFLIGHT_LANES_DWORD: usize = 20;
 const RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD: usize = 21;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RESULT_SLOT_GPGPU_EU_C_STORE_DWORD: usize = 22;
 // The scene release is written by PIPE_CONTROL as a QWord post-sync
 // operation. Keep its destination 8-byte aligned; both DWORDs are checked so
@@ -682,6 +741,7 @@ const TRIANGLE_DEFAULT_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFr
     force_sbe_read_length: true,
     force_vs_with_vf_synthesized_vue: false,
 };
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
     TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
     TriangleFrontEndContract {
@@ -712,6 +772,7 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
         force_vs_with_vf_synthesized_vue: false,
     },
 ];
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const VS_DRAW_SBE_READ0_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "sbe-read0",
     vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
@@ -721,6 +782,7 @@ const VS_DRAW_SBE_READ0_CONTRACT: TriangleFrontEndContract = TriangleFrontEndCon
     force_sbe_read_length: true,
     force_vs_with_vf_synthesized_vue: false,
 };
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const VF_VUE_REAL_VS_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "vf-vue-clip",
     vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
@@ -740,12 +802,17 @@ const GFX125_SLICE_HASH_TABLE_DWORDS_PER_TABLE: usize = GFX125_SLICE_HASH_TABLE_
 const GFX125_SLICE_HASH_TABLE_DWORDS: usize = 224;
 const GFX125_SLICE_HASH_TABLE_BYTES: usize = GFX125_SLICE_HASH_TABLE_DWORDS * 4;
 const GFX125_3D_MODE_CROSS_SLICE_HASHING_32X32: u32 = 3;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const VF_STREAMOUT_SLICE_HASH_TABLE_OFFSET: usize = 0x1200;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const TRIANGLE_MIN_DIM: usize = 8;
 // This proof path emits one MI_STORE_DATA_IMM per covered pixel, so keep the
 // triangle intentionally small until we switch to an actual draw pipeline.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const TRIANGLE_MAX_W: usize = 20;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const TRIANGLE_MAX_H: usize = 18;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const TRIANGLE_DRAW_VERTICES: usize = 3;
 const TRIANGLE_DRAW_VERTEX_DWORDS: usize = crate::intel::shader::TRIANGLE_VERTEX_COMPONENTS;
 const TRIANGLE_DRAW_VERTEX_STRIDE: usize = crate::intel::shader::TRIANGLE_VERTEX_STRIDE_BYTES;

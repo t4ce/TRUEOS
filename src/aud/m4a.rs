@@ -6,19 +6,26 @@ use symphonia_core::audio::{AudioBuffer, AudioBufferRef, Layout, Signal};
 use symphonia_core::codecs::{CODEC_TYPE_AAC, CodecParameters, Decoder, DecoderOptions};
 use symphonia_core::formats::Packet;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const PCM_SAMPLE_RATE_HZ: u32 = 48_000;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const PCM_CHANNELS: usize = 2;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const PCM_SAMPLE_BITS: usize = 16;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const PCM_SAMPLE_BYTES: usize = PCM_SAMPLE_BITS / 8;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const PCM_FRAME_BYTES: usize = PCM_CHANNELS * PCM_SAMPLE_BYTES;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct DecodedPcm48kStereo {
     pub samples: Vec<i16>,
     pub frames: usize,
 }
 
 impl DecodedPcm48kStereo {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn new(samples: Vec<i16>) -> Result<Self, M4aDecodeError> {
         if samples.len() % PCM_CHANNELS != 0 {
             return Err(M4aDecodeError::InvalidPcmSampleCount {
@@ -32,28 +39,34 @@ impl DecodedPcm48kStereo {
         })
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn sample_rate_hz(&self) -> u32 {
         PCM_SAMPLE_RATE_HZ
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn channels(&self) -> usize {
         PCM_CHANNELS
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn sample_bits(&self) -> usize {
         PCM_SAMPLE_BITS
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn frame_bytes(&self) -> usize {
         PCM_FRAME_BYTES
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn duration_ms_ceil(&self) -> u32 {
         duration_ms_for_frames(self.frames)
     }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct M4aContainerInfo {
     pub ftyp_offset: usize,
     pub ftyp_size: usize,
@@ -64,17 +77,21 @@ pub struct M4aContainerInfo {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct FourCc(pub [u8; 4]);
 
 impl FourCc {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn from_bytes(bytes: [u8; 4]) -> Self {
         Self(bytes)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn as_bytes(self) -> [u8; 4] {
         self.0
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn is_m4a(self) -> bool {
         self.0 == *b"M4A "
     }
@@ -93,6 +110,7 @@ impl fmt::Display for FourCc {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum M4aDecodeError {
     NotM4aContainer,
     TruncatedBoxHeader,
@@ -131,6 +149,7 @@ pub enum M4aDecodeError {
 }
 
 impl M4aDecodeError {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn code(self) -> i32 {
         match self {
             Self::NotM4aContainer => -1,
@@ -151,11 +170,13 @@ impl M4aDecodeError {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn is_decoder_missing(self) -> bool {
         matches!(self, Self::DecoderMissing { .. })
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn decode_m4a_to_pcm_48k_stereo_s16(
     bytes: &[u8],
 ) -> Result<DecodedPcm48kStereo, M4aDecodeError> {
@@ -234,6 +255,7 @@ pub fn decode_m4a_to_pcm_48k_stereo_s16(
     DecodedPcm48kStereo::new(samples)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn append_decoded_as_stereo_s16(
     decoded: &AudioBufferRef<'_>,
     out: &mut Vec<i16>,
@@ -293,6 +315,7 @@ fn append_decoded_as_stereo_s16(
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn set_or_check_stream_shape(
     rate: u32,
     channels: usize,
@@ -321,10 +344,12 @@ fn set_or_check_stream_shape(
     Ok(())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn f32_to_i16(sample: f32) -> i16 {
     (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn resample_stereo_s16_to_48k(
     samples: &[i16],
     source_rate: u32,
@@ -365,6 +390,7 @@ fn resample_stereo_s16_to_48k(
     Ok(out)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn lerp_i16(a: i16, b: i16, frac: u32, denom: u32) -> i16 {
     let a = i64::from(a);
     let b = i64::from(b);
@@ -374,6 +400,7 @@ fn lerp_i16(a: i16, b: i16, frac: u32, denom: u32) -> i16 {
     (mixed / denom).clamp(i64::from(i16::MIN), i64::from(i16::MAX)) as i16
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn detect_m4a_container(bytes: &[u8]) -> Result<M4aContainerInfo, M4aDecodeError> {
     let mut offset = 0usize;
 
@@ -401,6 +428,7 @@ pub fn detect_m4a_container(bytes: &[u8]) -> Result<M4aContainerInfo, M4aDecodeE
     Err(M4aDecodeError::NotM4aContainer)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn duration_ms_for_frames(frames: usize) -> u32 {
     let ms = (((frames as u128) * 1_000) + u128::from(PCM_SAMPLE_RATE_HZ) - 1)
         / u128::from(PCM_SAMPLE_RATE_HZ);
@@ -408,12 +436,14 @@ pub fn duration_ms_for_frames(frames: usize) -> u32 {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct BoxHeader {
     size: usize,
     header_size: usize,
     kind: FourCc,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_ftyp(
     bytes: &[u8],
     ftyp_offset: usize,
@@ -464,6 +494,7 @@ fn parse_ftyp(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn read_box_header(bytes: &[u8], offset: usize) -> Result<BoxHeader, M4aDecodeError> {
     if bytes.len().saturating_sub(offset) < 8 {
         return Err(M4aDecodeError::TruncatedBoxHeader);
@@ -524,15 +555,18 @@ fn read_box_header(bytes: &[u8], offset: usize) -> Result<BoxHeader, M4aDecodeEr
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn is_allowed_before_ftyp(kind: FourCc) -> bool {
     matches!(kind.0, [b'f', b'r', b'e', b'e'] | [b's', b'k', b'i', b'p'] | [b'w', b'i', b'd', b'e'])
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn be_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     let bytes = bytes.get(offset..offset + 4)?;
     Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn be_u64(bytes: &[u8], offset: usize) -> Option<u64> {
     let bytes = bytes.get(offset..offset + 8)?;
     Some(u64::from_be_bytes([
@@ -540,11 +574,13 @@ fn be_u64(bytes: &[u8], offset: usize) -> Option<u64> {
     ]))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn read_array_4(bytes: &[u8], offset: usize) -> Option<[u8; 4]> {
     let bytes = bytes.get(offset..offset + 4)?;
     Some([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn fmt_fourcc(f: &mut fmt::Formatter<'_>, bytes: [u8; 4]) -> fmt::Result {
     f.write_str("'")?;
     for byte in bytes {

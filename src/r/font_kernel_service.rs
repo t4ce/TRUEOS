@@ -628,10 +628,12 @@ pub(crate) struct PreparedFrameStampRejection {
 }
 
 impl PreparedFrameStampRejection {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn error(&self) -> FontKernelError {
         self.error
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn plan(&self) -> &PreparedGlyphPlan {
         &self.plan
     }
@@ -877,6 +879,7 @@ impl FontStampedBuffer {
         self.active_walkers
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn readback_tight_rgba(&self) -> Option<Vec<u8>> {
         self.storage.readback_tight_rgba()
     }
@@ -903,6 +906,7 @@ impl PendingRetainScene {
         self.reply.try_take()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) async fn wait(self) -> Result<FontKernelRetainedScene, FontKernelError> {
         self.reply.wait().await
     }

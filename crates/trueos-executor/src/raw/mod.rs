@@ -498,7 +498,7 @@ impl SyncExecutor {
     fn note_task_dequeued(&self) {
         let _ = self
             .ready_tasks
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 Some(count.saturating_sub(1))
             });
     }

@@ -80,6 +80,7 @@ const TRUEOS_EAI_NONAME: c_int = 8;
 const TRUEOS_EAI_SERVICE: c_int = 9;
 const TRUEOS_EAI_SOCKTYPE: c_int = 10;
 const TRUEOS_ETIMEDOUT: c_int = 110;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const TRUEOS_ENOMEM: c_int = 12;
 const TRUEOS_O_ACCMODE: c_int = 0x3;
 const TRUEOS_O_RDONLY: c_int = 0;
@@ -95,6 +96,7 @@ const TRUEOS_F_GETFL: c_int = 3;
 const TRUEOS_F_SETFL: c_int = 4;
 const TRUEOS_FD_CLOEXEC: c_int = 1;
 const TRUEOS_SC_PAGESIZE: c_int = 30;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const TRUEOS_SC_PAGE_SIZE: c_int = TRUEOS_SC_PAGESIZE;
 const TRUEOS_SC_NPROCESSORS_CONF: c_int = 83;
 const TRUEOS_SC_NPROCESSORS_ONLN: c_int = 84;
@@ -282,6 +284,7 @@ pub(crate) enum OpenFile {
 }
 
 enum SocketFd {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Cabi {
         backend: u32,
     },

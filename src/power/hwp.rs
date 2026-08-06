@@ -60,6 +60,7 @@ pub struct HwpCapabilities {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct HwpRequestFields {
     pub minimum: u8,
     pub maximum: u8,
@@ -147,10 +148,12 @@ impl ScopedHwpPerformance {
         })
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn previous_request(&self) -> u64 {
         self.previous_request
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn requested(&self) -> u64 {
         self.requested
     }
@@ -233,6 +236,7 @@ pub const fn decode_capabilities(raw: u64) -> HwpCapabilities {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const fn decode_request(raw: u64) -> HwpRequestFields {
     HwpRequestFields {
         minimum: byte(raw, REQUEST_MIN_SHIFT),

@@ -10,9 +10,12 @@ const FACTORY_RAM_PROBE_DELAY_SECS: u64 = 5;
 #[derive(Clone, Debug)]
 pub struct FactoryRamProbeSnapshot {
     pub page_phys: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub page_bytes: usize,
     pub sample_count: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub sample_phys: [u64; FACTORY_RAM_PROBE_SAMPLE_BYTES],
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub sample_values: [u8; FACTORY_RAM_PROBE_SAMPLE_BYTES],
 }
 
@@ -26,6 +29,7 @@ struct FactoryRamProbeState {
 
 static FACTORY_RAM_PROBE_STATE: Mutex<Option<FactoryRamProbeState>> = Mutex::new(None);
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn factory_ram_probe_snapshot() -> Option<FactoryRamProbeSnapshot> {
     let guard = FACTORY_RAM_PROBE_STATE.lock();
     let state = guard.as_ref()?;

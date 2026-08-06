@@ -14,6 +14,7 @@ impl TerminalHandoffOwner {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn stream(session_id: u32) -> Self {
         Self {
             raw: Self::STREAM_KIND | (session_id & !Self::STREAM_KIND),
@@ -23,6 +24,7 @@ impl TerminalHandoffOwner {
 
     /// Bind this owner token to one incarnation of a recyclable local shell.
     /// Net-shell ownership remains transport-global and uses generation zero.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn for_local_session(self, generation: u64) -> Self {
         Self {
             raw: self.raw,
@@ -30,6 +32,7 @@ impl TerminalHandoffOwner {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn local_session_generation(self) -> Option<u64> {
         if self.local_session_generation == 0 {
             None
@@ -71,24 +74,29 @@ pub(crate) trait ShellBackend2: ShellIo2 {
     /// The shell task remains alive while a handoff is active, but it neither
     /// consumes input nor paints chrome. Backends without a raw terminal path
     /// keep the default unsupported implementation.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn claim_terminal_handoff(&self, _owner: TerminalHandoffOwner) -> bool {
         false
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn release_terminal_handoff(&self, _owner: TerminalHandoffOwner) {}
 
     fn terminal_handoff_active(&self) -> bool {
         false
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn supports_terminal_handoff(&self) -> bool {
         false
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn terminal_handoff_read(&self, _owner: TerminalHandoffOwner, _out: &mut [u8]) -> usize {
         0
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn terminal_handoff_write(&self, _owner: TerminalHandoffOwner, _bytes: &[u8]) -> bool {
         false
     }

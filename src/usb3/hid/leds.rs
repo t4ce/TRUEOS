@@ -8,37 +8,51 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const LED_VID_JGINYUE: u16 = 0x0416;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const LED_PID_JGINYUE: u16 = 0xA125;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const LED_PROBE_ENABLED: bool = false;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const LED_COMMIT_REPORT: [u8; 7] = [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const LED_SWEEP_PERIOD_MS: u64 = 250;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const LED_FEATURE_REPORT_ID: u8 = 4;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const LED_FEATURE_REPORT_LEN: usize = 301;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const LED_FEATURE_BACKING_LEN: usize = 512;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const LED_ENABLE_EARLY_FEATURE_GET_REPORT: bool = false;
 
 #[derive(Copy, Clone, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct LedProbeTarget {
     configuration_value: u8,
     interface_number: u8,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct ActiveLedProbe {
     controller_id: u32,
     slot_id: u32,
     interface_number: u8,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static LED_PROBES_ACTIVE: Mutex<Vec<ActiveLedProbe>> = Mutex::new(Vec::new());
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn is_supported_led_controller(vid: u16, pid: u16) -> bool {
     LED_PROBE_ENABLED && vid == LED_VID_JGINYUE && pid == LED_PID_JGINYUE
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn pick_led_probe_target(
     configs: &[usb_if::descriptor::ConfigurationDescriptor],
 ) -> Option<LedProbeTarget> {
@@ -73,11 +87,13 @@ fn pick_led_probe_target(
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn should_share_probe_device(dev_info: &DeviceInfo) -> bool {
     let desc = dev_info.descriptor();
     is_supported_led_controller(desc.vendor_id, desc.product_id)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn register_active_probe(probe: ActiveLedProbe) -> bool {
     let mut probes = LED_PROBES_ACTIVE.lock();
     if probes.iter().any(|active| *active == probe) {
@@ -87,6 +103,7 @@ fn register_active_probe(probe: ActiveLedProbe) -> bool {
     true
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn unregister_active_probe(probe: ActiveLedProbe) {
     let mut probes = LED_PROBES_ACTIVE.lock();
     if let Some(idx) = probes.iter().position(|active| *active == probe) {
@@ -94,6 +111,7 @@ fn unregister_active_probe(probe: ActiveLedProbe) {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 async fn send_hid_set_report(
     device: &mut Device,
     interface_number: u8,
@@ -115,6 +133,7 @@ async fn send_hid_set_report(
         .map(|_| ())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 async fn read_hid_get_report_feature(
     device: &mut Device,
     interface_number: u8,
@@ -135,6 +154,7 @@ async fn read_hid_get_report_feature(
         .await
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 async fn read_led_feature_report_early(device: &mut Device, target: LedProbeTarget) {
     let desc = device.descriptor();
     let vendor_id = desc.vendor_id;
@@ -245,6 +265,7 @@ async fn read_led_feature_report_early(device: &mut Device, target: LedProbeTarg
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 async fn log_led_live_state(device: &mut Device, target: LedProbeTarget) -> bool {
     let desc = device.descriptor();
     let vendor_id = desc.vendor_id;
@@ -294,11 +315,13 @@ async fn log_led_live_state(device: &mut Device, target: LedProbeTarget) -> bool
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const fn bit01(phase: u8, bit: u8) -> u8 {
     (phase >> bit) & 0x01
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn led_binary_payload(phase: u8) -> [u8; 7] {
     [
         bit01(phase, 0),
@@ -311,6 +334,7 @@ fn led_binary_payload(phase: u8) -> [u8; 7] {
     ]
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 async fn submit_led_phase(device: &mut Device, target: LedProbeTarget, phase: u8) -> bool {
     let desc = device.descriptor();
     let vendor_id = desc.vendor_id;
@@ -437,6 +461,7 @@ async fn led_probe_task(mut device: Device, controller_id: u32, target: LedProbe
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) async fn maybe_start_led_controller_with_device(
     device: Device,
     dev_info: &DeviceInfo,
@@ -497,6 +522,7 @@ pub(crate) async fn maybe_start_led_controller_with_device(
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) async fn maybe_start_led_controller(
     host: &mut USBHost,
     dev_info: &DeviceInfo,

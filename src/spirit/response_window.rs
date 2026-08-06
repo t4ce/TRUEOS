@@ -108,6 +108,7 @@ impl SpiritGridInputRun {
 /// presenter; they never await the cursor, Gridpaper, or virtual keyboard.
 /// Dropping an unfinished handle aborts the partial presentation.
 #[must_use = "finish the response stream or let Drop abort it"]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct ReasoningResponseStream {
     id: u64,
     turn: u64,
@@ -119,6 +120,7 @@ impl ReasoningResponseStream {
     ///
     /// Coalescing snapshots instead of queueing token events bounds ingress
     /// even when inference outruns the emulated keyboard.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn update(&self, text_prefix: &str) -> bool {
         update_response_prefix(self.id, text_prefix)
     }
@@ -126,12 +128,14 @@ impl ReasoningResponseStream {
     /// Seal the final display-safe text into Spirit's ingress and close the
     /// producer. A true result means ingress accepted the final snapshot;
     /// asynchronous Gridpaper/keyboard delivery is reported by the presenter.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn finish(mut self, text: &str) -> bool {
         let accepted = finish_response(self.id, text);
         self.closed = true;
         accepted
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn turn(&self) -> u64 {
         self.turn
     }
@@ -199,6 +203,7 @@ fn log_replaced_response(
 /// Start one live local-model response in Spirit's bounded presentation
 /// ingress. The presenter may begin revealing and focusing its retained window
 /// before the first stable word is available.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn begin_reasoning_response(turn: u64) -> Option<ReasoningResponseStream> {
     let id = next_response_id();
     let request = ResponseRequest {
@@ -241,6 +246,7 @@ pub(crate) fn begin_reasoning_response(turn: u64) -> Option<ReasoningResponseStr
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn update_response_prefix(id: u64, text_prefix: &str) -> bool {
     let accepted = {
         let mut queue = RESPONSE_QUEUE.lock();
@@ -264,6 +270,7 @@ fn update_response_prefix(id: u64, text_prefix: &str) -> bool {
     accepted
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn finish_response(id: u64, text: &str) -> bool {
     let accepted = {
         let mut queue = RESPONSE_QUEUE.lock();
@@ -285,6 +292,7 @@ fn finish_response(id: u64, text: &str) -> bool {
     accepted
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn abort_response(id: u64) {
     let aborted = {
         let mut queue = RESPONSE_QUEUE.lock();

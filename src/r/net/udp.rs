@@ -123,6 +123,7 @@ impl<'a> VNetUdpEndpoint<'a> {
         self.net.pop_udp_send_result(self.handle, receipt)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn send_v6(&self, remote: vnet::EndpointV6, data: &[u8]) -> Result<(), ()> {
         if self.closed {
             return Err(());
@@ -154,6 +155,7 @@ impl<'a> VNetUdpEndpoint<'a> {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn next_event(
         &mut self,
         timeout: EmbassyDuration,

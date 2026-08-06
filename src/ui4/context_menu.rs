@@ -231,6 +231,7 @@ pub(super) fn release_owner_registrations(owner: WindowOwner) -> usize {
 }
 
 /// Drop one window's standing menu at window teardown.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn release_window_registration(owner: WindowOwner, window: WindowId) -> bool {
     clear_window_menu(owner, window)
 }

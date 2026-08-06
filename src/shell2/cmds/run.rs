@@ -1098,6 +1098,7 @@ pub(crate) async fn app_vm_run_queue_task(spawner: Spawner) {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn enqueue_blueprint_bytes(
     target: MatrixTarget,
     archive: String,
@@ -1113,6 +1114,7 @@ pub(crate) fn enqueue_blueprint_bytes(
     )
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn enqueue_blueprint_bytes_with_instance(
     target: MatrixTarget,
     archive: String,
@@ -1414,6 +1416,7 @@ async fn submit_archive_entry(
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) async fn submit_archive_id(
     target: MatrixTarget,
     width: usize,

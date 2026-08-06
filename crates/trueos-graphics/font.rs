@@ -25,11 +25,13 @@ use super::path_mesh::{
 };
 
 const FONT_ENDSTATE_OUTLINE_COMMANDS: &str = "font-units-outline-commands";
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const FONT_TESSEL_SAMPLE_TEXT: &str = "True OS §";
 pub(crate) const FONT_TESSEL_BASE_PX: f32 = 48.0;
 pub(crate) const FONT_GPU_OUTLINE_OP_WORDS: usize = 8;
 // The restored render probes retain their one/two/all clip-field dispatch
 // labels. Keep the original full-field vertex count at the graphics boundary.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const FONT_CLIP_FIELD_VERTICES: usize = 6 * 3 * 3;
 
 const EMBEDDED_FONTS: [EmbeddedFontSpec; 2] = [
@@ -102,37 +104,57 @@ pub(crate) struct FontWarmSummary {
     pub(crate) name: &'static str,
     pub(crate) file_name: &'static str,
     pub(crate) endstate: &'static str,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) bytes: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) tables: usize,
     pub(crate) glyphs: u16,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) units_per_em: u16,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) range_bytes: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) op_bytes: usize,
     pub(crate) cache_bytes: usize,
     pub(crate) resident_bytes: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) range_first_glyph: u16,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) range_last_glyph: u16,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) range_max_ops: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) outline_glyphs: usize,
     pub(crate) outline_success: usize,
     pub(crate) outline_failures: usize,
     pub(crate) empty_outlines: usize,
     pub(crate) commands: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) move_to: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) line_to: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) quad_to: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) curve_to: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) close: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) min_x: f32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) min_y: f32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) max_x: f32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) max_y: f32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) parse_ms: u64,
     pub(crate) outline_ms: u64,
     pub(crate) total_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct FontRegistrySummary {
     pub(crate) fonts: usize,
     pub(crate) endstates: usize,
@@ -143,31 +165,52 @@ pub(crate) struct FontRegistrySummary {
 pub(crate) struct FontTesselSummary {
     pub(crate) status: &'static str,
     pub(crate) reason: &'static str,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) text: String,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) font_name: &'static str,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) font_file: &'static str,
     pub(crate) outline_source: &'static str,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) px_size: f32,
     pub(crate) glyphs: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) glyph_hits: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) glyph_misses: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) outline_glyphs: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) empty_glyphs: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) path_commands: usize,
     pub(crate) tessellate_failures: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) vertices: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) indices: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) triangles: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) vertex_bytes: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) index_bytes: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) geometry_bytes: usize,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) min_x: f32,
     pub(crate) min_y: f32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) max_x: f32,
     pub(crate) max_y: f32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) charmap_ms: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) path_ms: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) tessellate_ms: u64,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) total_ms: u64,
 }
 
@@ -212,6 +255,7 @@ pub(crate) struct FontGpuGlyphOutline {
     pub(crate) ops: Vec<[u32; FONT_GPU_OUTLINE_OP_WORDS]>,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn default_gpu_outline() -> Result<FontGpuOutline, &'static str> {
     gpu_outline_for_text("font", FONT_TESSEL_SAMPLE_TEXT)
 }
@@ -394,6 +438,7 @@ impl FontTesselSummary {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn default_font_summary() -> Option<FontWarmSummary> {
     font_summary("font")
 }
@@ -464,6 +509,7 @@ pub(crate) fn text_advance_width(
     Ok(advance)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn registry_summary() -> FontRegistrySummary {
     let fonts = FONT_REGISTRY.lock().fonts.clone();
     let mut endstates = 0usize;
@@ -482,10 +528,12 @@ pub(crate) fn registry_summary() -> FontRegistrySummary {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn tessellate_default_text() -> FontTesselSummary {
     tessellate_default_text_mesh().summary
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn tessellate_default_text_mesh() -> FontTesselMesh {
     tessellate_text_mesh("font", FONT_TESSEL_SAMPLE_TEXT, FONT_TESSEL_BASE_PX)
 }
@@ -865,6 +913,7 @@ fn tessellate_text_mesh_grouped(
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn warm_embedded_fonts_once() -> Result<Vec<FontWarmSummary>, skrifa::raw::ReadError> {
     let mut summaries = Vec::with_capacity(EMBEDDED_FONTS.len());
     for index in 0..EMBEDDED_FONTS.len() {
@@ -1537,6 +1586,7 @@ impl FontWarmEndState {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn cache_bytes(&self) -> usize {
         match self {
             FontWarmEndState::Outline(outline) => outline.cache_bytes(),
@@ -1644,6 +1694,7 @@ impl FontOutlineCache {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn cache_bytes(&self) -> usize {
         self.ranges
             .len()

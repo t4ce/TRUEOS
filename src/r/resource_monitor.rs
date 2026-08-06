@@ -27,7 +27,9 @@ const RESOURCE_MONITOR_ASSET_PREFIX: &str = "resource/asset-";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EncodedKind {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Png,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Jpeg,
 }
 
@@ -50,6 +52,7 @@ struct PreserveRequest {
 }
 
 #[derive(Clone)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct EncodedAsset {
     pub tex_id: u32,
     pub kind: EncodedKind,
@@ -60,37 +63,45 @@ pub struct EncodedAsset {
 
 static RESOURCE_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
 static RESOURCE_MONITOR_ONLINE: AtomicBool = AtomicBool::new(false);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static RESOURCE_MONITOR_DROPPED: AtomicU32 = AtomicU32::new(0);
 static RESOURCE_MONITOR_PRESERVED: AtomicU32 = AtomicU32::new(0);
 static RESOURCE_MONITOR_BYTES: AtomicU64 = AtomicU64::new(0);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static RESOURCE_MONITOR_SEQ: AtomicU64 = AtomicU64::new(1);
 static RESOURCE_MONITOR_FLUSHED_SEQ: AtomicU64 = AtomicU64::new(0);
 static RESOURCE_MONITOR_DISK: Mutex<Option<block::DeviceHandle>> = Mutex::new(None);
 static RESOURCE_MONITOR_QUEUE: Mutex<Deque<PreserveRequest, RESOURCE_MONITOR_QUEUE_CAP>> =
     Mutex::new(Deque::new());
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static RESOURCE_MONITOR_ENCODED: Mutex<Vec<EncodedAsset>> = Mutex::new(Vec::new());
 static RESOURCE_MONITOR_WAIT: WaitQueue = WaitQueue::new();
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn online() -> bool {
     RESOURCE_MONITOR_ONLINE.load(Ordering::Acquire)
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn preserved_count() -> u32 {
     RESOURCE_MONITOR_PRESERVED.load(Ordering::Acquire)
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn preserved_bytes() -> u64 {
     RESOURCE_MONITOR_BYTES.load(Ordering::Acquire)
 }
 
 #[inline]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn dropped_count() -> u32 {
     RESOURCE_MONITOR_DROPPED.load(Ordering::Acquire)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn preserve_encoded_texture(
     tex_id: u32,
     kind: EncodedKind,
@@ -151,6 +162,7 @@ pub fn preserve_encoded_texture(
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn encoded_texture(tex_id: u32) -> Option<EncodedAsset> {
     RESOURCE_MONITOR_ENCODED
         .lock()
@@ -159,12 +171,14 @@ pub fn encoded_texture(tex_id: u32) -> Option<EncodedAsset> {
         .cloned()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn encoded_assets_snapshot() -> Vec<EncodedAsset> {
     let mut assets = RESOURCE_MONITOR_ENCODED.lock().clone();
     assets.sort_by_key(|asset| asset.seq);
     assets
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn latest_encoded_seq() -> u64 {
     RESOURCE_MONITOR_ENCODED
         .lock()
@@ -174,6 +188,7 @@ pub fn latest_encoded_seq() -> u64 {
         .unwrap_or(0)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn wait_until_flushed(target_seq: u64, timeout_ms: u64) -> bool {
     if target_seq == 0 {
         return true;

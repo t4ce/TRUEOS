@@ -1,11 +1,14 @@
 use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not};
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const CL_SUCCESS: i32 = 0;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) type ClResult<T> = core::result::Result<T, ClError>;
 
 #[repr(i32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum ClError {
     DeviceNotFound = -1,
     DeviceNotAvailable = -2,
@@ -68,10 +71,12 @@ pub(crate) enum ClError {
 }
 
 impl ClError {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn code(self) -> i32 {
         self as i32
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn from_code(code: i32) -> Option<Self> {
         match code {
             -1 => Some(Self::DeviceNotFound),
@@ -138,12 +143,14 @@ impl ClError {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum ClStatus {
     Success,
     Error(ClError),
 }
 
 impl ClStatus {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn code(self) -> i32 {
         match self {
             Self::Success => CL_SUCCESS,
@@ -151,6 +158,7 @@ impl ClStatus {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn from_code(code: i32) -> Option<Self> {
         match code {
             CL_SUCCESS => Some(Self::Success),
@@ -161,10 +169,12 @@ impl ClStatus {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn is_success(self) -> bool {
         matches!(self, Self::Success)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn into_result(self) -> ClResult<()> {
         match self {
             Self::Success => Ok(()),
@@ -177,8 +187,10 @@ macro_rules! id_newtype {
     ($name:ident) => {
         #[repr(transparent)]
         #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+        #[allow(dead_code)]
         pub(crate) struct $name(u32);
 
+        #[allow(dead_code)]
         impl $name {
             pub(crate) const INVALID: Self = Self(0);
 
@@ -211,6 +223,7 @@ id_newtype!(MemId);
 id_newtype!(EventId);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum DeviceKind {
     Default,
     Cpu,
@@ -221,6 +234,7 @@ pub(crate) enum DeviceKind {
 }
 
 impl DeviceKind {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn cl_bits(self) -> u64 {
         match self {
             Self::Default => 1 << 0,
@@ -237,8 +251,10 @@ macro_rules! bitflags_newtype {
     ($name:ident, $bits:ty, $valid:expr, {$($flag:ident = $value:expr,)*}) => {
         #[repr(transparent)]
         #[derive(Copy, Clone, Default, Debug, Eq, PartialEq)]
+        #[allow(dead_code)]
         pub(crate) struct $name($bits);
 
+        #[allow(dead_code)]
         impl $name {
             pub(crate) const EMPTY: Self = Self(0);
             pub(crate) const VALID_BITS: $bits = $valid;
@@ -325,14 +341,19 @@ bitflags_newtype!(AccessFlags, u32, 0x3, {
 });
 
 impl AccessFlags {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const READ_ONLY: Self = Self::READ;
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const WRITE_ONLY: Self = Self::WRITE;
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const READ_WRITE: Self = Self(Self::READ.bits() | Self::WRITE.bits());
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn can_read(self) -> bool {
         self.contains(Self::READ)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn can_write(self) -> bool {
         self.contains(Self::WRITE)
     }
@@ -352,6 +373,7 @@ bitflags_newtype!(MemFlags, u64, 0x0000_0000_0000_13BF, {
 });
 
 impl MemFlags {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn device_access(self) -> AccessFlags {
         if self.contains(Self::READ_ONLY) {
             AccessFlags::READ
@@ -362,6 +384,7 @@ impl MemFlags {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn host_access(self) -> AccessFlags {
         if self.contains(Self::HOST_NO_ACCESS) {
             AccessFlags::EMPTY
@@ -383,6 +406,7 @@ bitflags_newtype!(QueueProperties, u64, 0xF, {
 });
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct NdRange {
     work_dim: u8,
     global_offset: [usize; 3],
@@ -391,6 +415,7 @@ pub(crate) struct NdRange {
 }
 
 impl NdRange {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn new(
         work_dim: u8,
         global_offset: [usize; 3],
@@ -407,6 +432,7 @@ impl NdRange {
         Ok(range)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn new_1d(global_size: usize) -> Self {
         Self {
             work_dim: 1,
@@ -416,6 +442,7 @@ impl NdRange {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn new_2d(global_width: usize, global_height: usize) -> Self {
         Self {
             work_dim: 2,
@@ -425,6 +452,7 @@ impl NdRange {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn new_3d(
         global_width: usize,
         global_height: usize,
@@ -438,46 +466,56 @@ impl NdRange {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn with_global_offset(mut self, global_offset: [usize; 3]) -> Self {
         self.global_offset = global_offset;
         self
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn with_local_size(mut self, local_size: [usize; 3]) -> Self {
         self.local_size = Some(local_size);
         self
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn work_dim(self) -> u8 {
         self.work_dim
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn global_offset_array(self) -> [usize; 3] {
         self.global_offset
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn global_size_array(self) -> [usize; 3] {
         self.global_size
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn local_size_array(self) -> Option<[usize; 3]> {
         self.local_size
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn global_offset(&self) -> &[usize] {
         &self.global_offset[..self.work_dim as usize]
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn global_size(&self) -> &[usize] {
         &self.global_size[..self.work_dim as usize]
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn local_size(&self) -> Option<&[usize]> {
         self.local_size
             .as_ref()
             .map(|local_size| &local_size[..self.work_dim as usize])
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn validate(&self) -> ClResult<()> {
         let work_dim = self.work_dim as usize;
         if work_dim == 0 || work_dim > 3 {
@@ -512,6 +550,7 @@ impl NdRange {
         Ok(())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn global_work_items(&self) -> usize {
         self.global_size()
             .iter()
@@ -519,6 +558,7 @@ impl NdRange {
             .fold(1usize, usize::saturating_mul)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn local_work_items(&self) -> Option<usize> {
         self.local_size().map(|local_size| {
             local_size

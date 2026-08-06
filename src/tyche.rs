@@ -39,6 +39,7 @@ impl SoftRng {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn reseed(&mut self, seed: u64) {
         self.state = if seed == 0 { SPLITMIX_GAMMA } else { seed };
     }
@@ -48,6 +49,7 @@ impl SoftRng {
         mix64(self.state)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn next_u32(&mut self) -> u32 {
         (self.next_u64() >> 32) as u32
     }
@@ -67,10 +69,12 @@ impl SoftRng {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn bool(&mut self) -> bool {
         (self.next_u64() & 1) != 0
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn shuffle<T>(&mut self, values: &mut [T]) {
         for idx in (1..values.len()).rev() {
             let swap_with = self.usize_below(idx + 1);

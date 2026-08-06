@@ -1,11 +1,15 @@
 use alloc::vec::Vec;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const UPSTREAM_INTEL_MEDIA_DRIVER_REPO: &str = "https://github.com/intel/media-driver";
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const UPSTREAM_INTEL_MEDIA_DRIVER_COMMIT: &str = "a203cfc";
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const UPSTREAM_AVC_PLATFORM: &str = "Xe_LPM_plus_base";
 pub(crate) const AVC_MAX_SLICES_PER_PICTURE: usize = 64;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum AvcDecodePhase {
     Prolog,
     Picture,
@@ -14,6 +18,7 @@ pub(crate) enum AvcDecodePhase {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct AvcDecodeCommandStep {
     pub phase: AvcDecodePhase,
     pub command: &'static str,
@@ -31,6 +36,7 @@ pub(crate) struct AvcCommandBlock {
     pub upstream_symbol: &'static str,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const AVC_DECODE_COMMAND_RECIPE: &[AvcDecodeCommandStep] = &[
     AvcDecodeCommandStep {
         phase: AvcDecodePhase::Prolog,
@@ -154,6 +160,7 @@ pub(crate) const AVC_DECODE_COMMAND_RECIPE: &[AvcDecodeCommandStep] = &[
 ];
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum AvcDecodePortMilestone {
     LongFormatSingleIdr,
 }
@@ -188,15 +195,20 @@ impl AvcSliceClass {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AvcPictureStructure {
     Frame,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     TopField,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     BottomField,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AvcChromaFormat {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Monochrome,
     Yuv420,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Yuv422,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Yuv444,
 }
 
@@ -417,6 +429,7 @@ pub(crate) struct AvcFrameDebug {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct AvcLongFormatIdrPacketParams {
     pub pipe_mode_select: MfxPipeModeSelectParams,
     pub surface_state: MfxSurfaceStateParams,
@@ -634,6 +647,7 @@ pub(crate) struct AvcGpuResourceRange {
 }
 
 impl AvcGpuResourceRange {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn end_gpu_addr(self) -> u64 {
         self.gpu_addr.saturating_add(self.bytes as u64)
     }
@@ -745,6 +759,7 @@ pub(crate) struct AvcReferenceState {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AvcMilestoneBlocker {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     NotLongFormatSingleIdr,
     UnsupportedPictureStructure,
     UnsupportedChromaFormat,
@@ -759,6 +774,7 @@ pub(crate) enum AvcMilestoneBlocker {
     MissingDmvBuffer,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn build_long_format_single_idr_packet_params(
     plan: AvcLongFormatIdrPlan,
 ) -> Result<AvcLongFormatIdrPacketParams, AvcMilestoneBlocker> {
@@ -779,6 +795,7 @@ pub(crate) fn build_long_format_single_idr_packet_params(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn build_long_format_single_idr_command_stream(
     plan: AvcLongFormatIdrPlan,
     resources: AvcPacketResourceBindings,
@@ -973,6 +990,7 @@ pub(crate) fn build_long_format_single_picture_command_stream(
     Ok(stream)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn validate_long_format_single_idr_command_stream_shape(
     stream: &AvcLongFormatIdrCommandStream,
 ) -> bool {
@@ -1182,6 +1200,7 @@ pub(crate) fn validate_long_format_single_idr_resource_bindings(
     Ok(())
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn parse_annexb_single_idr_plan(
     bytes: &[u8],
 ) -> Result<AvcLongFormatIdrPlan, AvcAnnexBPlanError> {
@@ -1400,6 +1419,7 @@ pub(crate) fn parse_annexb_single_picture_debug(
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn validate_long_format_single_idr(
     plan: AvcLongFormatIdrPlan,
 ) -> Result<(), AvcMilestoneBlocker> {
@@ -1993,6 +2013,7 @@ pub(crate) const MFX_AVC_SLICE_TYPE_I: u8 = 2;
 pub(crate) const MFX_GENERAL_STATE_ALIGNMENT: u64 = 64;
 pub(crate) const AVC_NAL_UNIT_BYTES_INCLUDED: u32 = 1;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const fn avc_missing_reference_surface_offset(dest_surface_bytes: usize) -> usize {
     align_ceil_usize(dest_surface_bytes, MFX_GENERAL_STATE_ALIGNMENT as usize)
 }
@@ -2181,6 +2202,7 @@ pub(crate) const fn encode_mfx_bsp_buf_base_addr_state(
     MfxBspBufBaseAddrStateDwords { dwords }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const fn mfd_avc_dpb_state_params_for_idr() -> MfdAvcDpbStateParams {
     MfdAvcDpbStateParams {
         non_existing_frame_flags: 0,
@@ -2373,6 +2395,7 @@ pub(crate) const fn encode_mfx_qm_state(params: MfxQmStateParams) -> MfxQmStateD
     MfxQmStateDwords { dwords }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const fn mfx_avc_directmode_state_params_for_idr(
     plan: AvcLongFormatIdrPlan,
 ) -> MfxAvcDirectmodeStateParams {
@@ -2540,6 +2563,7 @@ pub(crate) const fn encode_mfx_avc_weightoffset_state(
     MfxAvcWeightOffsetStateDwords { dwords }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const fn mfx_avc_slice_state_params_for_single_idr(
     plan: AvcLongFormatIdrPlan,
 ) -> MfxAvcSliceStateParams {
@@ -2661,6 +2685,7 @@ pub(crate) const fn encode_mfx_avc_slice_state(
     MfxAvcSliceStateDwords { dwords }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const fn mfd_avc_bsd_object_params_for_single_idr(
     plan: AvcLongFormatIdrPlan,
 ) -> MfdAvcBsdObjectParams {
@@ -3557,6 +3582,7 @@ const fn align_ceil_usize(value: usize, alignment: usize) -> usize {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const fn align_ceil_u64(value: u64, alignment: u64) -> u64 {
     if alignment == 0 {
         value

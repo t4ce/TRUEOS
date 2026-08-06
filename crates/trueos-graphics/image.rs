@@ -2,13 +2,11 @@
 
 use alloc::vec::Vec;
 
-pub(crate) use super::decoder;
 pub(crate) use super::jpeg_codec;
-pub(crate) use super::jpeg_layout;
 pub(crate) use super::png_codec;
-pub(crate) use super::png_decode_pool;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum EncodedImageKind {
     Png,
     Jpeg,
@@ -16,6 +14,7 @@ pub(crate) enum EncodedImageKind {
 }
 
 impl EncodedImageKind {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Png => "png",
@@ -24,6 +23,7 @@ impl EncodedImageKind {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn decode_error_code(self) -> i32 {
         match self {
             Self::Png | Self::Jpeg => -7,
@@ -32,6 +32,7 @@ impl EncodedImageKind {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct DecodedRgbaImage {
     pub(crate) kind: EncodedImageKind,
     pub(crate) width: u32,
@@ -39,6 +40,7 @@ pub(crate) struct DecodedRgbaImage {
     pub(crate) rgba: Vec<u8>,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn infer_encoded_image_kind(
     declared_kind: &str,
     url: &str,
@@ -60,6 +62,7 @@ pub(crate) fn infer_encoded_image_kind(
     EncodedImageKind::Unknown
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn decode_encoded_image_rgba(
     declared_kind: &str,
     url: &str,
@@ -68,6 +71,7 @@ pub(crate) fn decode_encoded_image_rgba(
     decode_encoded_image_kind_rgba(infer_encoded_image_kind(declared_kind, url, bytes), bytes)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn decode_encoded_image_kind_rgba(
     kind: EncodedImageKind,
     bytes: &[u8],

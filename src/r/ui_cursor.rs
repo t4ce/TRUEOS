@@ -1,6 +1,7 @@
 use crate::graphics::primitives::Rgba8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct CursorOverlayGlyphSpec {
     pub tex_id: u32,
     pub draw_w_px: u16,
@@ -13,6 +14,7 @@ pub(crate) struct CursorOverlayGlyphSpec {
     pub atlas_h: u16,
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn cursor_overlay_glyph_spec(
     _cursor_id: u32,
     _slot_id: u32,
@@ -21,6 +23,7 @@ pub(crate) fn cursor_overlay_glyph_spec(
     None
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn cursor_color_rgba8_for_cursor_id(cursor_id: u32) -> Rgba8 {
     const COLORS: [Rgba8; 6] = [
         Rgba8::new(255, 0, 0, 255),

@@ -65,8 +65,10 @@ unsafe extern "C" {
     #[link_name = "__bss_end"]
     fn image_bss_end() -> !;
     #[link_name = "trueos_vmx_hull_text_start"]
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn hull_text_start() -> !;
     #[link_name = "trueos_vmx_hull_text_end"]
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn hull_text_end() -> !;
     #[link_name = "trueos_vmx_guest_entry"]
     pub fn entry() -> !;

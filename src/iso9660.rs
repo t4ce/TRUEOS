@@ -155,6 +155,7 @@ pub fn looks_like_iso9660(iso: &[u8]) -> bool {
 /// mode (Copy, non-solid), so it contains the raw ISO bytes verbatim.
 /// We avoid implementing full 7z decompression by scanning for the Primary
 /// Volume Descriptor signature and validating it.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn find_embedded_iso9660_start(blob: &[u8]) -> Option<usize> {
     // PVD signature is at ISO offset 16*2048 and begins with: 0x01 "CD001" 0x01
     const SIG: &[u8; 7] = b"\x01CD001\x01";

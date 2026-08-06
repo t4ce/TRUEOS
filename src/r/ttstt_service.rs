@@ -221,6 +221,7 @@ impl ModelImage {
 
 #[derive(Debug)]
 pub struct ModelSet {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     whisper: ModelImage,
     kokoro: ModelImage,
     kokoro_voices: ModelImage,
@@ -230,6 +231,7 @@ pub struct ModelSet {
 }
 
 impl ModelSet {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn whisper(&self) -> &ModelImage {
         &self.whisper
     }
@@ -347,9 +349,11 @@ pub struct TtsSynthesisSummary {
 #[derive(Debug)]
 pub enum TtsOutputError {
     WouldBlock(TtsAudioChunk),
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Closed(TtsAudioChunk),
     Invalid {
         reason: &'static str,
+        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         chunk: TtsAudioChunk,
     },
 }
@@ -617,6 +621,7 @@ impl TtsStream {
             .map(TtsStreamEvent::Finished)
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn next(&self) -> TtsStreamEvent {
         loop {
             if let Some(event) = self.try_next() {
@@ -645,10 +650,12 @@ impl TtsStream {
         self.state.wait.notify_all();
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn pending_chunks(&self) -> usize {
         self.state.chunks.lock().len()
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn pending_frames(&self) -> usize {
         self.state
             .chunks
@@ -699,8 +706,11 @@ pub struct BackendTtsRequest {
 
 pub struct SttRequest {
     pub pcm_f32_mono_16k: Vec<f32>,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub language: Option<String>,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub translate: bool,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub complete: SttCompletion,
 }
 
@@ -955,6 +965,7 @@ impl Bf16KernelLane {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum KernelError {
     InvalidShape,
 }
@@ -962,10 +973,12 @@ pub enum KernelError {
 #[derive(Clone, Copy, Debug)]
 pub struct WorkerContext {
     pub slot: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub core_kind: u8,
     /// Best `u8 x i8` Kokoro lane detected on this worker's current CPU.
     pub q8_lane: KernelLane,
     /// Per-current-CPU dispatcher; safe entry points recheck lane support.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub q8_dispatcher: trueos_ttstt_cpu::Dispatcher,
     pub bf16_lane: Bf16KernelLane,
 }
@@ -973,6 +986,7 @@ pub struct WorkerContext {
 impl WorkerContext {
     /// Execute the existing TRUEOS BF16 matvec dispatch. On x86 this selects
     /// AVX2/FMA when enabled, with the established SSE2 fallback.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn matvec_bf16(
         self,
         x: &[f32],
@@ -1025,6 +1039,7 @@ enum JobCompletion {
 
 /// Queue a cooperative warmup or STT job on the resident AP2+ worker pool.
 /// TTS must enter through [`submit_tts`] so its bounded stream guard is present.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn submit(job: Box<dyn InferenceJob>) -> Result<u64, SubmitError> {
     let direction = job.direction();
     submit_with_completion(job, JobCompletion::None, direction)

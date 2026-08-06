@@ -9,6 +9,7 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use raw_cpuid::CpuId;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const AP_HEARTBEAT_TASK_POOL: usize = 256;
 static ATOMIC_BOMB_RESTARTS: AtomicU32 = AtomicU32::new(0);
 
@@ -121,6 +122,7 @@ impl CpuProfile {
         })
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn for_lapic_id(lapic_id: u32) -> Option<Self> {
         let slot = percpu::slot_for_lapic_id(lapic_id) as u32;
         let profile = Self::for_slot(slot)?;
@@ -139,6 +141,7 @@ impl CpuProfile {
         self.lapic_id
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn core_kind(self) -> u8 {
         self.core_kind
     }
@@ -151,14 +154,17 @@ impl CpuProfile {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn is_bsp(self) -> bool {
         self.slot == 0
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn is_perf(self) -> bool {
         self.core_kind == crate::workers::CORE_KIND_PERF
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn is_eff(self) -> bool {
         self.core_kind == crate::workers::CORE_KIND_EFF
     }

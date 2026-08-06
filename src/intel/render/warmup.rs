@@ -411,6 +411,7 @@ pub fn warm_state() -> Option<RenderWarmState> {
     *WARM_STATE.lock()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn log_cursor_plane_info(warm: RenderWarmState) {
     let caps = cursor_plane_caps(warm.device_id);
     intel_render_verbose_log!(
@@ -428,6 +429,7 @@ pub fn log_cursor_plane_info(warm: RenderWarmState) {
     );
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn log_sprite_plane_info(warm: RenderWarmState) {
     let caps = sprite_plane_caps(warm.device_id);
     intel_render_verbose_log!(
@@ -714,6 +716,7 @@ fn gfx125_3d_mode_dw3() -> u32 {
     (1 << 15) | (1 << 31)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn forcewake_render_sanity(warm: RenderWarmState) {
     let dev = crate::intel::Dev {
         bus: 0,

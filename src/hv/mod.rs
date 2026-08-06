@@ -490,6 +490,7 @@ impl BlueprintInstanceRequest {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn from_peer(name: impl Into<AllocString>, peer: impl Into<AllocString>) -> Self {
         Self {
             name: Some(name.into()),
@@ -680,6 +681,7 @@ pub struct HvStatus {
 
 #[derive(Copy, Clone, Debug)]
 pub struct HvVmState {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub id: u8,
     pub supported: bool,
     pub running: bool,
@@ -1810,6 +1812,7 @@ pub fn mark_replicatable_resumed(vm_id: u8) {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn save_snapshot(vm_id: u8) -> Result<usize, SaveError> {
     if vm_slot(vm_id).is_none() {
         return Err(SaveError::UnsupportedVmId);
@@ -1819,6 +1822,7 @@ pub fn save_snapshot(vm_id: u8) -> Result<usize, SaveError> {
     crate::hv::store::save_bytes(vm_id, bytes).map_err(map_store_save_error)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn restore_snapshot(vm_id: u8) -> Result<usize, RestoreError> {
     if vm_slot(vm_id).is_none() {
         return Err(RestoreError::UnsupportedVmId);
@@ -1900,6 +1904,7 @@ pub fn finish_restore(vm_id: u8) {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn map_store_save_error(err: crate::hv::store::VmStoreError) -> SaveError {
     match err {
         crate::hv::store::VmStoreError::ServiceOffline => {
@@ -1996,6 +2001,7 @@ fn snapshot_on_preserve_exit(vm_id: u8) {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn request_preserve_active_vm() -> bool {
     if let Some(vm_id) = current_vm_id() {
         return request_preserve(vm_id).unwrap_or(false);
@@ -3639,6 +3645,7 @@ pub(crate) fn blueprint_console_submit_stdin(vm_id: u8, data: &[u8]) -> usize {
     data.len()
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn blueprint_console_submit_input(vm_id: u8, data: &[u8]) -> usize {
     const MAX_CONSOLE_INPUT: usize = 64 * 1024;
     if data.is_empty() {
@@ -3761,6 +3768,7 @@ pub(crate) fn blueprint_console_print_line(vm_id: u8, line: &str) {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn blueprint_process_context(vm_id: u8) -> Option<BlueprintProcessContext> {
     BLUEPRINT_PROCESS_CONTEXTS
         .get(vm_id as usize)?

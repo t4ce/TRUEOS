@@ -10,6 +10,7 @@ use crate::r::net::dns::{self, DnsConfig};
 use crate::r::net::{NetProfile, VNet};
 
 pub const IRC_DEFAULT_PORT: u16 = crate::allports::well_known::IRC;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const IRC_TLS_PORT: u16 = crate::allports::well_known::IRC_TLS;
 
 #[derive(Debug)]
@@ -42,6 +43,7 @@ pub struct IrcSession {
 }
 
 /// Parsed IRC message: `[:prefix] command [params...] [:trailing]`
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct IrcMessage {
     /// Optional prefix (without leading `:`), e.g. `"nick!user@host"`.
     pub prefix: Option<String>,
@@ -55,6 +57,7 @@ pub struct IrcMessage {
 
 impl IrcMessage {
     /// Parse a single raw IRC line (without the CRLF terminator).
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn parse(line: &str) -> Option<Self> {
         let mut rest = line;
 
@@ -100,6 +103,7 @@ impl IrcSession {
     }
 
     /// Direct TLS connect (port 6697). TLS handshake begins immediately after TCP establishment.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn connect_tls(
         host: &str,
         port: u16,
@@ -301,6 +305,7 @@ impl IrcSession {
     }
 
     /// Send `PASS <password>` — call before `register()` when the server requires a connection password.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn pass(&mut self, password: &str) -> Result<(), IrcError> {
         self.send_raw(&format!("PASS {}", password))
     }
@@ -351,12 +356,14 @@ impl IrcSession {
     }
 
     /// Send `JOIN #channel` and wait for end-of-names (366) confirming the join succeeded.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn join_wait(&mut self, channel: &str, timeout_ms: u32) -> Result<(), IrcError> {
         self.send_raw(&format!("JOIN {}", channel))?;
         self.wait_for_join(channel, timeout_ms).await
     }
 
     /// Wait for end-of-names (366) on the given channel after a JOIN has been sent.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn wait_for_join(&mut self, channel: &str, timeout_ms: u32) -> Result<(), IrcError> {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
         let chan_upper = channel.to_ascii_uppercase();
@@ -383,16 +390,19 @@ impl IrcSession {
         }
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn privmsg(&mut self, target: &str, text: &str) -> Result<(), IrcError> {
         self.send_raw(&format!("PRIVMSG {} :{}", target, text))
     }
 
     /// Leave a channel with an optional reason.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn part(&mut self, channel: &str, reason: &str) -> Result<(), IrcError> {
         self.send_raw(&format!("PART {} :{}", channel, reason))
     }
 
     /// Change nick mid-session.
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn nick(&mut self, new_nick: &str) -> Result<(), IrcError> {
         self.send_raw(&format!("NICK {}", new_nick))
     }

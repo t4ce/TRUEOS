@@ -95,6 +95,7 @@ fn ensure_init() -> Result<(), &'static str> {
 }
 
 /// Play a single note by name (e.g., "C4", "A#3") for a duration
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn play_note(name: &str, duration_ms: u32) -> Result<(), &'static str> {
     ensure_init()?;
 
@@ -124,6 +125,7 @@ pub fn play_midi_note(note: u8, velocity: u8, duration_ms: u32) -> Result<(), &'
 }
 
 /// Play a tone at a specific frequency
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn play_freq(freq_hz: u32, duration_ms: u32) -> Result<(), &'static str> {
     ensure_init()?;
 
@@ -138,6 +140,7 @@ pub fn play_freq(freq_hz: u32, duration_ms: u32) -> Result<(), &'static str> {
 }
 
 /// Set the default waveform
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_waveform(wf: Waveform) -> Result<(), &'static str> {
     ensure_init()?;
     let mut synth = SYNTH.lock();
@@ -147,6 +150,7 @@ pub fn set_waveform(wf: Waveform) -> Result<(), &'static str> {
 }
 
 /// Set ADSR envelope parameters
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_adsr(
     attack_ms: u32,
     decay_ms: u32,
@@ -161,6 +165,7 @@ pub fn set_adsr(
 }
 
 /// Set envelope preset
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_envelope_preset(name: &str) -> Result<(), &'static str> {
     ensure_init()?;
     let env = match name {
@@ -177,6 +182,7 @@ pub fn set_envelope_preset(name: &str) -> Result<(), &'static str> {
 }
 
 /// Set master volume (0-255)
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_volume(vol: u8) -> Result<(), &'static str> {
     ensure_init()?;
     let mut synth = SYNTH.lock();
@@ -186,6 +192,7 @@ pub fn set_volume(vol: u8) -> Result<(), &'static str> {
 }
 
 /// Get synth status
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn status() -> String {
     let synth = SYNTH.lock();
     match synth.as_ref() {
@@ -215,6 +222,7 @@ fn play_samples(samples: &[i16], duration_ms: u32) -> Result<(), &'static str> {
     crate::hda::write_samples_and_play(samples, duration_ms)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn request_bassline_toggle() -> u32 {
     BASSLINE_TOGGLE_SEQ
         .fetch_add(1, Ordering::AcqRel)
@@ -347,6 +355,7 @@ fn ensure_patterns() -> Result<(), &'static str> {
 }
 
 /// Create a new pattern
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pattern_new(name: &str, steps: usize, bpm: u16) -> Result<(), &'static str> {
     ensure_patterns()?;
     let pattern = Pattern::new(name, steps, bpm);
@@ -357,6 +366,7 @@ pub fn pattern_new(name: &str, steps: usize, bpm: u16) -> Result<(), &'static st
 }
 
 /// Set a note in a pattern
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pattern_set_note(name: &str, step: usize, note_name: &str) -> Result<(), &'static str> {
     ensure_patterns()?;
     let mut bank = PATTERNS.lock();
@@ -366,6 +376,7 @@ pub fn pattern_set_note(name: &str, step: usize, note_name: &str) -> Result<(), 
 }
 
 /// Set BPM on a pattern
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pattern_set_bpm(name: &str, bpm: u16) -> Result<(), &'static str> {
     ensure_patterns()?;
     let mut bank = PATTERNS.lock();
@@ -376,6 +387,7 @@ pub fn pattern_set_bpm(name: &str, bpm: u16) -> Result<(), &'static str> {
 }
 
 /// Set waveform on a pattern
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pattern_set_wave(name: &str, wf: Waveform) -> Result<(), &'static str> {
     ensure_patterns()?;
     let mut bank = PATTERNS.lock();
@@ -386,6 +398,7 @@ pub fn pattern_set_wave(name: &str, wf: Waveform) -> Result<(), &'static str> {
 }
 
 /// Display a pattern
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pattern_show(name: &str) -> Result<String, &'static str> {
     ensure_patterns()?;
     let bank = PATTERNS.lock();
@@ -395,6 +408,7 @@ pub fn pattern_show(name: &str) -> Result<String, &'static str> {
 }
 
 /// List all patterns
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pattern_list() -> String {
     let bank = PATTERNS.lock();
     match bank.as_ref() {
@@ -404,6 +418,7 @@ pub fn pattern_list() -> String {
 }
 
 /// Remove a pattern
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pattern_remove(name: &str) -> Result<(), &'static str> {
     ensure_patterns()?;
     let mut bank = PATTERNS.lock();
@@ -432,6 +447,7 @@ pub fn pattern_play(name: &str, loops: u32) -> Result<(), &'static str> {
 }
 
 /// Play a short generated phrase seeded from the latest piano MIDI note.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pattern_play_piano_audio_demo(
     note: u8,
     velocity: u8,
@@ -461,6 +477,7 @@ pub fn pattern_play_piano_audio_demo(
 }
 
 /// Stop pattern playback
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pattern_stop() -> Result<(), &'static str> {
     let mut player_lock = PLAYER.lock();
     if let Some(player) = player_lock.as_mut() {

@@ -9,9 +9,13 @@ use raw_cpuid::CpuId;
 use spin::Once;
 
 use x86_64::registers::model_specific::Msr;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const IA32_MSR_PLATFORM_INFO: u32 = 0xCE;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const IA32_MSR_PERF_STATUS: u32 = 0x198;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const IA32_MSR_PERF_CTL: u32 = 0x199;
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const IA32_MSR_HWP_CAPABILITIES: u32 = 0x771;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +121,7 @@ pub fn msr_details() -> Option<&'static PowerMsrDetails> {
 /// If the MSRs being probed are not implemented by the CPU/firmware, the reads
 /// will raise #GP. If your exception path is not safe, this can reboot the
 /// machine. Keep this opt-in and only call when you're prepared.
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub unsafe fn probe_msr_details() -> Option<&'static PowerMsrDetails> {
     if !msr_armed() {
         return None;
@@ -130,11 +135,13 @@ pub fn idle_policy() -> IdlePolicy {
     IdlePolicy::from_u8(IDLE_POLICY.load(Ordering::Acquire))
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_idle_policy(policy: IdlePolicy) -> IdlePolicy {
     let prev = IDLE_POLICY.swap(policy as u8, Ordering::AcqRel);
     IdlePolicy::from_u8(prev)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn current_ratio() -> Option<u8> {
     let caps = caps()?;
     if !msr_armed() || !caps.has_msr || !caps.has_eist {
@@ -144,6 +151,7 @@ pub fn current_ratio() -> Option<u8> {
     Some(((value >> 8) & 0xff) as u8)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_pstate_ratio(requested: u8) -> Result<u8, &'static str> {
     let caps = caps().ok_or("no power caps")?;
     if !msr_armed() || !caps.has_msr || !caps.has_eist {
@@ -184,6 +192,7 @@ fn detect_caps_cpuid_only() -> Option<PowerCaps> {
     })
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn detect_msr_details() -> Option<PowerMsrDetails> {
     let caps = caps()?;
     if !caps.vendor_intel || !caps.has_msr {

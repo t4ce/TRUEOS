@@ -74,6 +74,7 @@ pub(crate) enum PrintDocument {
 
 pub(crate) struct PrintJob {
     pub id: u32,
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub owner: u8,
     pub document: PrintDocument,
     pub printer_uri: Option<String>,

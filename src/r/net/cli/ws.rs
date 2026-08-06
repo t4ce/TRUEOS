@@ -14,9 +14,12 @@ use v::vnet::{Command, EndpointV4, Event, NetHandle, SocketKind};
 use crate::r::net::{NetProfile, VNet};
 use crate::time::unix_time_seconds;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static WS_SEQ: AtomicU32 = AtomicU32::new(1);
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RX_BUF_SIZE: usize = 4096;
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct WsConnection {
     net: VNet,
     handle: Option<NetHandle>,
@@ -27,6 +30,7 @@ pub struct WsConnection {
 }
 
 #[derive(Debug)]
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum WsError {
     ConnectFailed,
     InvalidUrl,
@@ -37,10 +41,12 @@ pub enum WsError {
 }
 
 impl WsConnection {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn connect(url: &str) -> Result<Self, WsError> {
         Self::connect_with_profile(url, NetProfile::default()).await
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn connect_with_profile(url: &str, profile: NetProfile) -> Result<Self, WsError> {
         let (host, port, path) = parse_ws_url(url).ok_or(WsError::InvalidUrl)?;
 
@@ -192,6 +198,7 @@ impl WsConnection {
         })
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn send(&mut self, text: &str) -> Result<(), WsError> {
         if self.closed || !self.connected {
             return Err(WsError::Closed);
@@ -216,6 +223,7 @@ impl WsConnection {
         Ok(())
     }
 
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn recv(&mut self) -> Option<String> {
         while let Some(ev) = self.net.pop_event() {
             match ev {
@@ -294,6 +302,7 @@ impl WsConnection {
     }
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_ws_url(url: &str) -> Option<(String, u16, String)> {
     let url = url.strip_prefix("ws://")?;
     let (authority, path) = match url.split_once('/') {
