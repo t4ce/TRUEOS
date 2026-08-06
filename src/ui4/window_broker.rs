@@ -628,19 +628,12 @@ impl WindowBroker {
             })
             .collect();
         ordered.sort_unstable_by_key(|(id, z, _)| (*z, *id));
-        let stack_count = ordered.len().saturating_sub(LEASE_PLANE_COUNT);
         self.leases = [None; LEASE_PLANE_COUNT];
         for (rank, (id, _, slot)) in ordered.into_iter().enumerate() {
-            let plane = if stack_count <= 1 {
-                if rank == 0 {
-                    WindowPlane::Primary
-                } else {
-                    Self::lease_plane(rank - 1)
-                }
-            } else if rank < stack_count {
-                WindowPlane::Primary
+            let plane = if rank < LEASE_PLANE_COUNT {
+                Self::lease_plane(rank)
             } else {
-                Self::lease_plane(rank - stack_count)
+                WindowPlane::Primary
             };
             let window = &mut self.windows[slot];
             if window.plane != plane {

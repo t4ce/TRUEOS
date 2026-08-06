@@ -92,6 +92,9 @@ pub(crate) struct FrameRgbaView {
     /// Retired producer release for this exact allocation. Released GPU
     /// frames may direct-scan only through their producer-specific contract.
     pub(crate) gpu_release: Option<FrameGpuRelease>,
+    /// The producer cleared every pixel with alpha 255 before any subsequent
+    /// source-over rendering, so the full source rectangle is opaque.
+    pub(crate) fully_opaque: bool,
 }
 
 unsafe impl Send for FrameRgbaView {}
@@ -148,6 +151,7 @@ struct FrameRecord {
     readers: [u16; FRAME_BUFFER_CAPACITY],
     gpu_authored: [bool; FRAME_BUFFER_CAPACITY],
     gpu_release: [Option<FrameGpuRelease>; FRAME_BUFFER_CAPACITY],
+    fully_opaque: [bool; FRAME_BUFFER_CAPACITY],
     /// Pixels are intentionally uninitialized until a full-frame GPU write.
     /// Ordinary CPU publication is forbidden for every lease in this frame.
     gpu_full_overwrite_required: bool,
@@ -169,6 +173,7 @@ impl FrameRecord {
             readers: [0; FRAME_BUFFER_CAPACITY],
             gpu_authored: [false; FRAME_BUFFER_CAPACITY],
             gpu_release: [None; FRAME_BUFFER_CAPACITY],
+            fully_opaque: [false; FRAME_BUFFER_CAPACITY],
             gpu_full_overwrite_required: false,
             next_token: 0,
             publish_serial: 0,
@@ -192,6 +197,7 @@ impl FrameRecord {
         self.readers = [0; FRAME_BUFFER_CAPACITY];
         self.gpu_authored = [false; FRAME_BUFFER_CAPACITY];
         self.gpu_release = [None; FRAME_BUFFER_CAPACITY];
+        self.fully_opaque = [false; FRAME_BUFFER_CAPACITY];
         self.gpu_full_overwrite_required = gpu_full_overwrite_required;
         self.next_token = 0;
         self.publish_serial = 0;
@@ -430,6 +436,7 @@ pub(crate) fn acquire_frame_buffer(handle: FrameHandle) -> Result<FrameWriteLeas
     frame.next_buffer = (index + 1) % count;
     frame.gpu_authored[index as usize] = false;
     frame.gpu_release[index as usize] = None;
+    frame.fully_opaque[index as usize] = false;
     frame.next_token = next_serial(frame.next_token);
     let acquired = AcquiredBuffer {
         index,
@@ -503,7 +510,7 @@ pub(crate) fn retain_published_frame(
 }
 
 pub(crate) fn published_rgba_view(lease: FrameReadLease) -> Result<FrameRgbaView, FramePoolError> {
-    let (surface, gpu_authored, gpu_release) = {
+    let (surface, gpu_authored, gpu_release, fully_opaque) = {
         let pool = FRAME_POOL.lock();
         let frame = pool.checked(lease.frame)?;
         if frame.readers[lease.buffer_index as usize] == 0 {
@@ -516,6 +523,7 @@ pub(crate) fn published_rgba_view(lease: FrameReadLease) -> Result<FrameRgbaView
             frame.surfaces[lease.buffer_index as usize].ok_or(FramePoolError::InvalidLease)?,
             frame.gpu_authored[lease.buffer_index as usize],
             frame.gpu_release[lease.buffer_index as usize],
+            frame.fully_opaque[lease.buffer_index as usize],
         )
     };
     let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
@@ -529,6 +537,7 @@ pub(crate) fn published_rgba_view(lease: FrameReadLease) -> Result<FrameRgbaView
         pitch: access.pitch,
         gpu_authored,
         gpu_release,
+        fully_opaque,
     })
 }
 
@@ -553,6 +562,7 @@ pub(crate) fn writable_rgba_view(lease: FrameWriteLease) -> Result<FrameRgbaView
         pitch: access.pitch,
         gpu_authored: false,
         gpu_release: None,
+        fully_opaque: false,
     })
 }
 
@@ -628,6 +638,19 @@ pub(crate) fn mark_frame_buffer_cpu_authored(lease: FrameWriteLease) -> Result<(
     let index = lease.buffer_index as usize;
     frame.gpu_authored[index] = false;
     frame.gpu_release[index] = None;
+    Ok(())
+}
+
+/// Mark a leased frame as fully opaque after the producer has overwritten the
+/// complete allocation with alpha 255. Later GPU source-over rendering retains
+/// this invariant, enabling an ordered copy fallback for the slot-0 stack.
+pub(crate) fn mark_frame_buffer_fully_opaque(
+    lease: FrameWriteLease,
+) -> Result<(), FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    frame.fully_opaque[lease.buffer_index as usize] = true;
     Ok(())
 }
 

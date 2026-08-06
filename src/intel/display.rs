@@ -5053,6 +5053,122 @@ pub(crate) fn queue_ui4_primary_composition(
     }
 }
 
+/// Compose fully opaque static frames into the slot-0 swap surface through
+/// ordered BCS copies. This is the low-overhead fallback when the primary RCS
+/// destination cannot be mapped, and intentionally cannot blend transparent
+/// producers.
+pub(crate) fn queue_ui4_static_primary_composition_bcs0(
+    tiles: &[RgbaOverlayTile<'_>],
+    damage: CompositionDamageRegion,
+    reason: &'static str,
+) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
+    let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let target = active_display_pipeline_target().ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let pipe = target
+        .pipeline
+        .pipe()
+        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let change = clip_composition_damage_region(damage, target.width, target.height);
+    if change.is_empty() || tiles.is_empty() {
+        return Err(Ui4AsyncCompositionError::Unavailable);
+    }
+    if !prepare_ui4_primary_swap_surfaces(dev, pipe, target.width, target.height) {
+        return Err(Ui4AsyncCompositionError::Unavailable);
+    }
+    let surface = ensure_primary_swap_surface_for_pipe(dev, pipe, target.width, target.height)
+        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let effective = {
+        let pool = primary_swap_surface_pool(surface.pipe).lock();
+        let mut effective = pool.damage_debt[surface.buffer_index];
+        effective.add_region(change);
+        effective
+    };
+    for damaged in effective.rects().iter().copied() {
+        if !restore_primary_composition_base_rect(surface, damaged) {
+            return Err(Ui4AsyncCompositionError::Failed);
+        }
+    }
+    if !dma_flush_primary_swap_region(surface, effective) {
+        return Err(Ui4AsyncCompositionError::Failed);
+    }
+
+    let destination_gpu = primary_compose_rcs_gpu_for_surface(surface)
+        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let destination = crate::intel::GucBcs0RgbaSurface {
+        phys: surface.phys,
+        gpu: destination_gpu,
+        bytes: surface.byte_len,
+        width: surface.width,
+        height: surface.height,
+        pitch_bytes: surface.pitch_bytes,
+    };
+    let mut copies = Vec::with_capacity(tiles.len());
+    for tile in tiles {
+        if tile.opacity != u8::MAX
+            || !tile.known_opaque
+            || tile.width != tile.source_width
+            || tile.height != tile.source_height
+        {
+            return Err(Ui4AsyncCompositionError::Unavailable);
+        }
+        let source = tile
+            .gpgpu_surface
+            .filter(|source| source.is_valid())
+            .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+        let Some(draw) = clip_composition_damage(
+            CompositionDamageRect::new(tile.x, tile.y, tile.width, tile.height),
+            surface.width,
+            surface.height,
+        ) else {
+            continue;
+        };
+        copies.push(crate::intel::GucBcs0RgbaCopy {
+            source: crate::intel::GucBcs0RgbaSurface {
+                phys: source.phys,
+                gpu: source.gpu,
+                bytes: source.bytes,
+                width: source.width,
+                height: source.height,
+                pitch_bytes: source.pitch_bytes,
+            },
+            source_x: draw.x.saturating_sub(tile.x),
+            source_y: draw.y.saturating_sub(tile.y),
+            destination_x: draw.x,
+            destination_y: draw.y,
+            width: draw.width,
+            height: draw.height,
+        });
+    }
+    if copies.is_empty() {
+        return Err(Ui4AsyncCompositionError::Unavailable);
+    }
+    let blit = crate::intel::queue_guc_bcs0_rgba_copies(destination, &copies).map_err(|error| {
+        match error {
+            crate::intel::GucBcs0CopySubmitError::Busy => Ui4AsyncCompositionError::Busy,
+            crate::intel::GucBcs0CopySubmitError::Unavailable => {
+                Ui4AsyncCompositionError::Unavailable
+            }
+            crate::intel::GucBcs0CopySubmitError::InvalidRequest
+            | crate::intel::GucBcs0CopySubmitError::SubmitFailed => {
+                Ui4AsyncCompositionError::Failed
+            }
+        }
+    })?;
+    Ok(Ui4AsyncComposition {
+        work: Some(Ui4AsyncCompositionWork::GucBcs(blit)),
+        target: Ui4AsyncCompositionTarget::Primary {
+            surface,
+            pipeline: target.pipeline,
+        },
+        proof: None,
+        change,
+        effective,
+        tile_count: tiles.len(),
+        queued_ns: crate::chronos::monotonic_nanos(),
+        reason,
+    })
+}
+
 /// Park Slot0 after its final stack window leaves for a direct hardware
 /// plane.  A pristine swap surface is already a transparent copy of the UI4
 /// primary base, so the common one-window handoff needs only a SURF flip.  If

@@ -29,6 +29,7 @@ static COMPUTE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_CPU_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_BCS0_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
+static PRIMARY_BCS0_FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_GPU_RCS_LOGGED: AtomicBool = AtomicBool::new(false);
 /// The stack painter route is the contract's normal steady state, so report it
 /// once at info rather than leaving it only in the per-submission trace.
@@ -1068,9 +1069,10 @@ fn queue_async_plane(
             ),
             gpgpu_scanout_cache: composition_source_uses_scanout_cache(window, *view),
             opacity: window.placement.opacity,
-            known_opaque: frame_snapshot(window.frame)
-                .map(|snapshot| snapshot.plan.content == FrameContent::Video)
-                .unwrap_or(false),
+            known_opaque: view.fully_opaque
+                || frame_snapshot(window.frame)
+                    .map(|snapshot| snapshot.plan.content == FrameContent::Video)
+                    .unwrap_or(false),
             expected_rgba: None,
         })
         .collect();
@@ -1092,12 +1094,31 @@ fn queue_async_plane(
                 "ui4/slot0-compose backend=guc-rcs-opaque-rect-overwrite windows={} order=broker-z frame_blend=none alpha=preserved pipe_bottom=visible-where-empty\n",
                 tiles.len(),
             );
-            crate::intel::queue_ui4_primary_composition(
+            let primary = crate::intel::queue_ui4_primary_composition(
                 &tiles,
                 plan.damage,
                 sparse_static_painter,
                 reason,
-            )
+            );
+            match primary {
+                Ok(composition) => Ok(composition),
+                Err(crate::intel::Ui4AsyncCompositionError::Unavailable)
+                | Err(crate::intel::Ui4AsyncCompositionError::Failed)
+                    if tiles.iter().all(|tile| tile.known_opaque) =>
+                {
+                    if !PRIMARY_BCS0_FALLBACK_LOGGED.swap(true, Ordering::AcqRel) {
+                        crate::log_warn!(target: "ui4";
+                            "ui4/stack-painter-fallback: backend=guc-bcs0-ordered-copy reason=primary-rcs-unavailable sources=fully-opaque gpu-read=1 cpu-readback=0 alpha-blend=0 damage=old+new-placement log=once\n"
+                        );
+                    }
+                    crate::intel::queue_ui4_static_primary_composition_bcs0(
+                        &tiles,
+                        plan.damage,
+                        reason,
+                    )
+                }
+                Err(error) => Err(error),
+            }
         }
         CompositionTarget::Overlay(_) if sparse_static_painter && has_released_gpu_source => {
             if !STATIC_SINGLE_GPU_RCS_LOGGED.swap(true, Ordering::AcqRel) {

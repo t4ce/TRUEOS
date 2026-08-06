@@ -46,7 +46,8 @@ use super::{
     begin_additional_window_session, cancel_frame_buffer, commit_window_frame_replacement,
     create_frame, create_gpu_full_overwrite_frame, create_window, destroy_frame,
     finish_window_session, finish_window_session_with_request, focused_keyboard_state,
-    gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, publish_frame_buffer,
+    gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, mark_frame_buffer_fully_opaque,
+    publish_frame_buffer,
     publish_gpgpu_scene_frame_buffer, publish_window_frame, replace_window_frame,
     set_window_cursor_icon, set_window_custom_cursor, set_window_placement,
     set_window_hit_testable,
@@ -972,7 +973,7 @@ fn open_blueprint_frame(
     } {
         Ok(frame) => frame,
         Err(error) => {
-            crate::log_error!(target: "ui4/solara-text"; "frame open allocation failed owner={:?} error={:?}\n", owner, error);
+            log_blueprint_frame_open_failure("frame-allocation", owner, width, height, error);
             return 0;
         }
     };
@@ -980,7 +981,7 @@ fn open_blueprint_frame(
         Ok(session) => session,
         Err(error) => {
             let _ = destroy_frame(frame);
-            crate::log_error!(target: "ui4/solara-text"; "frame open session failed owner={:?} error={:?}\n", owner, error);
+            log_blueprint_frame_open_failure("session-allocation", owner, width, height, error);
             return 0;
         }
     };
@@ -1011,7 +1012,7 @@ fn open_blueprint_frame(
         Err(error) => {
             let _ = finish_window_session(owner, session);
             let _ = destroy_frame(frame);
-            crate::log_error!(target: "ui4/solara-text"; "frame open window failed owner={:?} error={:?}\n", owner, error);
+            log_blueprint_frame_open_failure("window-allocation", owner, width, height, error);
             return 0;
         }
     };
@@ -1019,6 +1020,13 @@ fn open_blueprint_frame(
     let mut surfaces = SURFACES.lock();
     if surfaces.len() >= MAX_SURFACES {
         drop(surfaces);
+        log_blueprint_frame_open_failure(
+            "blueprint-surface-capacity",
+            owner,
+            width,
+            height,
+            MAX_SURFACES,
+        );
         release_surface(
             BlueprintSceneSurface {
                 owner,
@@ -1107,6 +1115,31 @@ fn open_blueprint_frame(
     };
     crate::log_info!(target: "ui4/blueprint-frame"; "frame open owner={:?} window={} extent={}x{} cadence={} visual_hz={} visual_soft_cap_hz={} buffers={} plane=slot{} scene=text+shader\n", owner, window.raw(), width, height, cadence_name, visual_target_hz.unwrap_or(0), UI4_VISUAL_SOFT_CAP_HZ, buffer_count, plane_slot);
     window.raw()
+}
+
+fn log_blueprint_frame_open_failure(
+    stage: &str,
+    owner: WindowOwner,
+    width: u32,
+    height: u32,
+    error: impl core::fmt::Debug,
+) {
+    let usage = super::ui4_live_resource_usage();
+    let pmm = crate::phys::pmm_stats();
+    crate::log_error!(target: "ui4/blueprint-frame";
+        "frame open rejected stage={} owner={:?} extent={}x{} error={:?} active_frames={} active_sessions={} live_windows={} pmm_free_bytes={} pmm_largest_free_bytes={} pmm_free_regions={} action=inspect-exact-admission-before-changing-frame-policy\n",
+        stage,
+        owner,
+        width,
+        height,
+        error,
+        usage.active_frames,
+        usage.active_sessions,
+        usage.live_windows,
+        pmm.map_or(0, |stats| stats.free_bytes),
+        pmm.map_or(0, |stats| stats.largest_free_region),
+        pmm.map_or(0, |stats| stats.free_regions),
+    );
 }
 
 /// Acquire and clear the non-front UI4 buffer for a new scene paint pass.
@@ -1260,6 +1293,9 @@ pub(crate) fn begin_blueprint_frame(
             chunk.copy_from_slice(&pixel);
         }
         crate::intel::dma_flush(view.virt, view.byte_len);
+        if a == u8::MAX {
+            let _ = mark_frame_buffer_fully_opaque(lease);
+        }
     }
     surface.pending_gpu_release = None;
     surface.sprite_clear_rgba = (!cpu_clear).then_some(clear_rgba);
