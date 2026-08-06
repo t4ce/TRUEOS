@@ -1867,7 +1867,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     unix_fd_probe_task_spec(),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "bp-autostart",
         BP_AUTOSTART_READY,
         &BP_AUTOSTART_STARTED,

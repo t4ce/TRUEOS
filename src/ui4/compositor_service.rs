@@ -790,6 +790,16 @@ fn queue_async_plane(
             (window, view)
         })
         .collect();
+    if selected.is_empty() && matches!(plan.target, CompositionTarget::Primary) {
+        crate::log_trace!(target: "ui4";
+            "ui4/slot0-park backend=transparent-swap windows=0 action=clear-stale-damage-and-flip layer_kernel=0 frame_blend=0\n",
+        );
+        return crate::intel::queue_ui4_primary_transparent_park(
+            plan.damage,
+            overlay_async_reason(0),
+        )
+        .map_err(|_| Ui4CompositorError::PresentFailed);
+    }
     // A lone eligible source may be imported directly. Two or more sources
     // always retain their complete broker/z order and compose into one
     // display-owned plane surface, regardless of producer cadence or buffer
@@ -1042,7 +1052,7 @@ fn queue_async_plane(
                 view.height,
                 view.pitch,
             ),
-            gpgpu_scanout_cache: view.gpu_release.is_some(),
+            gpgpu_scanout_cache: composition_source_uses_scanout_cache(window, *view),
             opacity: window.placement.opacity,
             known_opaque: frame_snapshot(window.frame)
                 .map(|snapshot| snapshot.plan.content == FrameContent::Video)
@@ -1128,6 +1138,28 @@ fn queue_async_plane(
     queued.map_err(|_| Ui4CompositorError::PresentFailed)
 }
 
+/// The immutable Blueprint frame is composed by UI4 when it starts in Slot0.
+/// Its one-shot font stamp supplies a producer release, but it has not been
+/// imported by a display plane.  Sampling it through the compositor's stable
+/// PAT0 source mapping is therefore correct; marking it as a display/PAT3
+/// source would ask the persistent compositor PPGTT to change an existing
+/// source VA's cache policy and it must reject that transaction.
+fn composition_source_uses_scanout_cache(window: &WindowSnapshot, view: FrameRgbaView) -> bool {
+    if view.gpu_release.is_none() {
+        return false;
+    }
+    !frame_snapshot(window.frame).is_ok_and(|snapshot| {
+        matches!(
+            (snapshot.plan.content, snapshot.plan.cadence, snapshot.plan.buffering),
+            (
+                FrameContent::BlueprintScene,
+                super::FrameCadence::Immutable,
+                super::FrameBuffering::Single,
+            )
+        )
+    })
+}
+
 fn same_slot_windows_overlap(selected: &[(WindowSnapshot, FrameRgbaView)]) -> bool {
     selected.iter().enumerate().any(|(left_index, (left, _))| {
         selected
@@ -1186,9 +1218,10 @@ const fn compute_release_direct_contract(
     cadence: super::FrameCadence,
     buffering: super::FrameBuffering,
 ) -> bool {
-    // A released immutable/single Blueprint snapshot uses the same
-    // display-owned static composition path as Static30. Keep direct import for
-    // streaming Blueprint scenes and the established dynamic producer plans.
+    // An immutable Blueprint snapshot and a FontScene2d frame both have one
+    // complete, exact released RGBA allocation. Admit those one-shot surfaces
+    // directly so moving a static stamped label changes only plane geometry
+    // instead of scheduling an RCS re-composition for every pointer sample.
     matches!(
         (content, buffering),
         (FrameContent::Image, super::FrameBuffering::Double)
@@ -1197,19 +1230,32 @@ const fn compute_release_direct_contract(
             | (FrameContent::Video, super::FrameBuffering::Quad)
     ) || matches!(
         (content, cadence, buffering),
-        (FrameContent::FontScene2d, super::FrameCadence::Dirty, super::FrameBuffering::Double,)
+        (
+            FrameContent::BlueprintScene,
+            super::FrameCadence::Immutable,
+            super::FrameBuffering::Single,
+        ) | (
+            FrameContent::FontScene2d,
+            super::FrameCadence::Immutable,
+            super::FrameBuffering::Single
+        ) | (FrameContent::FontScene2d, super::FrameCadence::Dirty, super::FrameBuffering::Double,)
     )
 }
 
 const _: () = {
     assert!(!compute_release_direct_contract(
         FrameContent::BlueprintScene,
+        super::FrameCadence::Dirty,
+        super::FrameBuffering::Single,
+    ));
+    assert!(compute_release_direct_contract(
+        FrameContent::BlueprintScene,
         super::FrameCadence::Immutable,
         super::FrameBuffering::Single,
     ));
-    assert!(!compute_release_direct_contract(
-        FrameContent::BlueprintScene,
-        super::FrameCadence::Dirty,
+    assert!(compute_release_direct_contract(
+        FrameContent::FontScene2d,
+        super::FrameCadence::Immutable,
         super::FrameBuffering::Single,
     ));
     assert!(compute_release_direct_contract(

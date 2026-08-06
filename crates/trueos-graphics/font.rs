@@ -11,6 +11,7 @@ use core::{
 };
 
 use embassy_executor::SpawnError;
+use embassy_sync::watch::Watch;
 use skrifa::{
     FontRef, GlyphId, MetadataProvider,
     instance::{LocationRef, Size},
@@ -56,6 +57,17 @@ static FONT_REGISTRY: Mutex<FontRegistry> = Mutex::new(FontRegistry::new());
 static FONT_WARM_WORKERS_ADMITTED: AtomicU8 = AtomicU8::new(0);
 static FONT_WARM_READY: AtomicU8 = AtomicU8::new(0);
 static FONT_WARM_READY_LOGGED: AtomicBool = AtomicBool::new(false);
+// Font publication is append-only. Consumers that require a TrueOSFS face
+// therefore wait for this one monotonic notification rather than treating a
+// boot-order race as a failed text/frame request.
+const FONT_REGISTRY_WATCH_RECEIVERS: usize = 16;
+static FONT_REGISTRY_WATCH: Watch<
+    crate::wait::EmbassySpinRawMutex,
+    u64,
+    FONT_REGISTRY_WATCH_RECEIVERS,
+> = Watch::new_with(0);
+static FONT_REGISTRY_EPOCH: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
 
 #[derive(Clone, Copy)]
 enum FontWarmJob {
@@ -891,6 +903,27 @@ pub(crate) fn font_is_available(name: &str) -> bool {
         .is_some()
 }
 
+/// Wait for a font's completed outline end-state to be published.
+///
+/// This is specifically the external-font startup contract: a request may
+/// arrive after TrueOSFS is live but before its warm worker has parsed and
+/// published the face. Waiting here keeps the request pending instead of
+/// making the caller retry or lose its window session.
+pub(crate) async fn wait_for_font_available(name: &'static str) {
+    if font_is_available(name) {
+        return;
+    }
+    let mut receiver = FONT_REGISTRY_WATCH
+        .receiver()
+        .expect("font registry watch receiver capacity exhausted");
+    loop {
+        if font_is_available(name) {
+            return;
+        }
+        let _ = receiver.changed().await;
+    }
+}
+
 fn warm_embedded_font_by_name(
     name: &str,
 ) -> Result<Option<FontWarmSummary>, skrifa::raw::ReadError> {
@@ -1011,6 +1044,8 @@ fn register_warmed_font(
         return endstate.summary(existing, "warm-cache", 0, 0, 0);
     }
     registry.fonts.push(Arc::new(prepared));
+    let epoch = FONT_REGISTRY_EPOCH.fetch_add(1, Ordering::AcqRel).saturating_add(1);
+    FONT_REGISTRY_WATCH.sender().send(epoch);
     summary
 }
 

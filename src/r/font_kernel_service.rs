@@ -25,8 +25,10 @@ use crate::intel::gpu_font::{
     GpuFontFace, GpuFontGlyphRecipe, GpuFontGlyphRecipeKey, GpuFontJobEntry,
     GpuFontPreparedCenteredGlyph, GpuFontRetainedScene, GpuFontRetainedSceneError, GpuFontRgba,
     GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS, classify_gpu_font_prepared_placements,
-    ensure_font_face_available, font_face_supports_text, retain_gpu_font_centered_scene_at_raster,
+    ensure_font_face_available, font_face_is_available, font_face_supports_text,
+    retain_gpu_font_centered_scene_at_raster,
     retain_gpu_font_prepared_centered_scene, retain_gpu_font_scene_at_raster,
+    wait_for_font_face_available,
 };
 use crate::r::font_plan_service::PreparedGlyphPlan;
 
@@ -1097,6 +1099,44 @@ impl QueuedFontRequest {
         };
         FontKernelConsumer::new(path, self.ticket().raw())
     }
+
+    /// Requests built from raw text must not enter the service lane until all
+    /// their faces have a complete registered outline. Prepared plans have
+    /// already crossed that boundary; Font Rush cache operations contain no
+    /// raw face lookup at all.
+    async fn wait_for_fonts(&self) {
+        match self {
+            Self::Retain { request, .. } => {
+                wait_for_font_registration(self.ticket(), request.font).await;
+            }
+            Self::Stamp { request, .. }
+            | Self::FrameStamp {
+                input: FrameStampInput::Request(request),
+                ..
+            } => {
+                for layer in &request.layers {
+                    wait_for_font_registration(self.ticket(), layer.scene.font).await;
+                }
+            }
+            Self::FrameStamp { .. } | Self::FontRushCacheCharge { .. } => {}
+        }
+    }
+}
+
+async fn wait_for_font_registration(ticket: FontKernelTicket, font: GpuFontFace) {
+    if font_face_is_available(font) {
+        return;
+    }
+    let started_ms = Instant::now().as_millis();
+    crate::log_info!(target: "global";
+        "font-kernel-service: registration-wait ticket={} font={} action=hold-request-before-gpu-lane\n",
+        ticket.raw(), font.registry_name(),
+    );
+    wait_for_font_face_available(font).await;
+    crate::log_info!(target: "global";
+        "font-kernel-service: registration-ready ticket={} font={} waited_ms={} action=resume-request\n",
+        ticket.raw(), font.registry_name(), Instant::now().as_millis().saturating_sub(started_ms),
+    );
 }
 
 struct FrameStampQueueRejection {
@@ -3304,6 +3344,8 @@ pub(crate) async fn font_kernel_service_task() {
             continue;
         };
         let ticket = request.ticket();
+        set_active_stage(ticket, "font-registration-wait");
+        request.wait_for_fonts().await;
         set_active_stage(ticket, "lane-admission");
         let consumer = request.consumer();
         let gpu_lane = acquire_gpu_lane(consumer).await;

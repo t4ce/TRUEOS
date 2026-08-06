@@ -4356,6 +4356,30 @@ fn dma_flush_primary_swap_region(
     dma_flush_surface_region(surface.virt, surface.byte_len, surface.pitch_bytes as usize, damage)
 }
 
+fn clear_primary_swap_surface_region(
+    surface: PrimarySwapSurface,
+    damage: CompositionDamageRegion,
+) -> Option<()> {
+    if surface.virt.is_null() || surface.pitch_bytes < surface.width.saturating_mul(4) {
+        return None;
+    }
+    for rect in damage.rects().iter().copied() {
+        let rect = clip_composition_damage(rect, surface.width, surface.height)?;
+        let row_bytes = (rect.width as usize).checked_mul(PRIMARY_BYTES_PER_PIXEL as usize)?;
+        for row in 0..rect.height as usize {
+            let offset = (rect.y as usize)
+                .checked_add(row)?
+                .checked_mul(surface.pitch_bytes as usize)?
+                .checked_add((rect.x as usize).checked_mul(PRIMARY_BYTES_PER_PIXEL as usize)?)?;
+            if offset.checked_add(row_bytes)? > surface.byte_len {
+                return None;
+            }
+            unsafe { core::ptr::write_bytes(surface.virt.add(offset), 0, row_bytes) };
+        }
+    }
+    Some(())
+}
+
 fn init_default_overlay_marker(dev: crate::intel::Dev, primary: PrimarySurface) -> bool {
     if !DEFAULT_OVERLAY_MARKER_ENABLED {
         return false;
@@ -4955,6 +4979,68 @@ pub(crate) fn queue_ui4_primary_composition(
         GpgpuCompositionResult::SubmittedIncomplete => Err(Ui4AsyncCompositionError::Busy),
         _ => Err(Ui4AsyncCompositionError::Failed),
     }
+}
+
+/// Park Slot0 after its final stack window leaves for a direct hardware
+/// plane.  A pristine swap surface is already a transparent copy of the UI4
+/// primary base, so the common one-window handoff needs only a SURF flip.  If
+/// the selected back buffer has been used before, clear only its accumulated
+/// stale damage to transparent; there is no layer walk and no source blend.
+pub(crate) fn queue_ui4_primary_transparent_park(
+    damage: CompositionDamageRegion,
+    reason: &'static str,
+) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
+    let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let target = active_display_pipeline_target().ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let pipe = target
+        .pipeline
+        .pipe()
+        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    if target.width == 0 || target.height == 0 {
+        return Err(Ui4AsyncCompositionError::Unavailable);
+    }
+    let change = clip_composition_damage_region(damage, target.width, target.height);
+    if change.is_empty()
+        || !prepare_ui4_primary_swap_surfaces(dev, pipe, target.width, target.height)
+    {
+        return Err(Ui4AsyncCompositionError::Unavailable);
+    }
+    let surface = ensure_primary_swap_surface_for_pipe(dev, pipe, target.width, target.height)
+        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let (effective, fresh_transparent) = {
+        let pool = primary_swap_surface_pool(surface.pipe).lock();
+        let mut effective = pool.damage_debt[surface.buffer_index];
+        effective.add_region(change);
+        (effective, !pool.composited[surface.buffer_index])
+    };
+    let work_damage = if fresh_transparent {
+        CompositionDamageRegion::EMPTY
+    } else {
+        effective
+    };
+    if !work_damage.is_empty() {
+        clear_primary_swap_surface_region(surface, work_damage)
+            .ok_or(Ui4AsyncCompositionError::Failed)?;
+        if !dma_flush_primary_swap_region(surface, work_damage) {
+            // A large fragmented history is still safe: it is one bounded
+            // CPU clear followed by a complete cache flush, never an RCS
+            // composition fallback.
+            crate::intel::dma_flush(surface.virt, surface.byte_len);
+        }
+    }
+    Ok(Ui4AsyncComposition {
+        work: None,
+        target: Ui4AsyncCompositionTarget::Primary {
+            surface,
+            pipeline: target.pipeline,
+        },
+        proof: None,
+        change,
+        effective: work_damage,
+        tile_count: 0,
+        queued_ns: crate::chronos::monotonic_nanos(),
+        reason,
+    })
 }
 
 pub(crate) fn queue_ui4_overlay_composition(

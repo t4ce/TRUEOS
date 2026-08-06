@@ -440,6 +440,12 @@ pub(crate) fn font_face_is_available(font: GpuFontFace) -> bool {
     crate::graphics::font::font_is_available(font.registry_name())
 }
 
+/// Await the append-only raw-font registry publication for this face.  No
+/// layout, raster work, GPU submission, or inline TrueOSFS load occurs here.
+pub(crate) async fn wait_for_font_face_available(font: GpuFontFace) {
+    crate::graphics::font::wait_for_font_available(font.registry_name()).await;
+}
+
 pub(crate) fn font_face_supports_text(font: GpuFontFace, text: &str) -> bool {
     crate::graphics::font::font_supports_text(font.registry_name(), text)
 }

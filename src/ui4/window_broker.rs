@@ -663,25 +663,10 @@ impl WindowBroker {
         if index == top {
             return raised;
         }
-        // The top plane is the won position and is held for the same grace as
-        // any other lease. A challenger arriving while the incumbent is still
-        // inside its window keeps its own plane: it stays focused, movable and
-        // hardware blended, it simply does not front yet. This is what stops
-        // several cursors from trading the top plane on every gesture, and it
-        // is why the grace exists rather than only bounding scarcity.
-        if let Some(incumbent) = self.leases[top]
-            && now_ms.saturating_sub(incumbent.last_hot_ms) < LEASE_IDLE_GRACE_MS
-        {
-            crate::log_trace!(
-                target: "ui4";
-                "ui4 window raise deferred holder_slot={} challenger_slot={} held_ms={} grace_ms={} policy=top-lease-protected\n",
-                Self::lease_plane(top).slot(),
-                Self::lease_plane(index).slot(),
-                now_ms.saturating_sub(incumbent.last_hot_ms),
-                LEASE_IDLE_GRACE_MS,
-            );
-            return Self::lease_plane(index);
-        }
+        // Lease grace governs whether a stacked window may reclaim a busy
+        // hardware plane. It must not defer a focused lease holder: slot
+        // order is global visual order, so focus must reach the top plane in
+        // this same broker transaction.
         let hot = self.leases[index];
         let displaced = self.leases[top];
         self.leases[top] = hot.map(|held| PlaneLease {
@@ -890,19 +875,6 @@ impl WindowBroker {
         let id = WindowId(pack_handle(slot, generation)?);
         let requested_plane = request.plane;
         request.plane = self.assign_plane(requested_plane, id, request.owner, now_ms)?;
-        if request.plane != requested_plane {
-            crate::log_info!(
-                target: "ui4";
-                "ui4 window plane assigned requested_slot={} assigned_slot={} presentation={} buffering={:?} owner={:?} session={} window={}\n",
-                requested_plane.slot(),
-                request.plane.slot(),
-                if request.plane.slot() == STACK_PLANE_SLOT { "stack" } else { "lease" },
-                buffering,
-                request.owner,
-                request.session.raw(),
-                id.raw(),
-            );
-        }
         let record = WindowRecord::new(generation, request, buffering);
         if slot < self.windows.len() {
             self.windows[slot] = record;
@@ -910,6 +882,20 @@ impl WindowBroker {
             self.windows.push(record);
         }
         self.rebalance_application_planes(request.output, now_ms);
+        let assigned_plane = self.windows[slot].plane;
+        if assigned_plane != requested_plane {
+            crate::log_info!(
+                target: "ui4";
+                "ui4 window plane assigned requested_slot={} assigned_slot={} presentation={} buffering={:?} owner={:?} session={} window={} phase=post-spawn-rebalance\n",
+                requested_plane.slot(),
+                assigned_plane.slot(),
+                if assigned_plane.slot() == STACK_PLANE_SLOT { "stack" } else { "lease" },
+                buffering,
+                request.owner,
+                request.session.raw(),
+                id.raw(),
+            );
+        }
         self.mark_composition_changed();
         Ok(id)
     }
@@ -2597,6 +2583,35 @@ mod tests {
             .expect("an expired lease is revocable");
         assert_eq!(plane.slot(), FIRST_LEASE_PLANE_SLOT);
         assert_eq!(plane_slot_of(&broker, held[0]), STACK_PLANE_SLOT);
+    }
+
+    #[test]
+    fn focused_lease_reaches_the_top_plane_without_waiting_for_reclaim_grace() {
+        let owner = WindowOwner::GRIDPAPER_SERVICE;
+        let mut broker = WindowBroker::new();
+        let mut windows = Vec::new();
+        for frame in 1..=LEASE_PLANE_COUNT as u64 {
+            let session = broker.begin_additional_session(owner).unwrap();
+            windows.push(
+                broker
+                    .create(
+                        test_window(owner, session, frame, 0, frame as i32, true),
+                        FrameBuffering::Triple,
+                        1_000,
+                    )
+                    .unwrap(),
+            );
+        }
+
+        assert_eq!(plane_slot_of(&broker, windows[0]), FIRST_LEASE_PLANE_SLOT);
+        assert_eq!(
+            broker.raise_lease(0, 1_001).slot(),
+            FIRST_LEASE_PLANE_SLOT + LEASE_PLANE_COUNT - 1
+        );
+        assert_eq!(
+            plane_slot_of(&broker, windows[0]),
+            FIRST_LEASE_PLANE_SLOT + LEASE_PLANE_COUNT - 1
+        );
     }
 
     #[test]

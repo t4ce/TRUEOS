@@ -638,6 +638,13 @@ pub(crate) fn queue_ui4_primary_composition(
     self::display::queue_ui4_primary_composition(tiles, damage, sparse_static_painter, reason)
 }
 
+pub(crate) fn queue_ui4_primary_transparent_park(
+    damage: CompositionDamageRegion,
+    reason: &'static str,
+) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
+    self::display::queue_ui4_primary_transparent_park(damage, reason)
+}
+
 pub(crate) fn queue_ui4_overlay_composition(
     plane_slot: usize,
     tiles: &[RgbaOverlayTile<'_>],
