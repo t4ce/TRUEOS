@@ -11,10 +11,10 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use super::{
     DamageRect, FrameContent, FrameGpuRelease, FrameHandle, FramePoolError, FrameReadLease,
-    FrameRgbaView, OutputId, WindowId, WindowPlacement, WindowSnapshot, acknowledge_window_frame,
-    acquire_published_frame, application_windows_for_output_with_revision, frame_snapshot,
-    published_rgba_view, release_published_frame, retain_published_frame,
-    window_composition_revision,
+    FrameRgbaView, OutputId, WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSnapshot,
+    acknowledge_window_frame, acquire_published_frame,
+    application_windows_for_output_with_revision, frame_snapshot, published_rgba_view,
+    release_published_frame, retain_published_frame, window_composition_revision,
 };
 
 const CLOSE_TRANSITION_PERIOD_MS: u64 = 16;
@@ -38,6 +38,7 @@ static GPU_SOURCE_RELEASE_INVALID_WARNED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_SHARED_COMPOSITION_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_DIRECT_ADMISSION_WARNED: AtomicBool = AtomicBool::new(false);
+static FONT_RUSH_PRIMARY_DIRECT_LOGGED: AtomicBool = AtomicBool::new(false);
 static VIDEO_SURFLIVE_RELEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// Latest broker revision whose slot 0-3 application state reached SURFLIVE
 /// or required no plane update. Slot 4 advances and acknowledges separately.
@@ -870,11 +871,17 @@ fn queue_async_plane(
             selected.len(),
         );
     }
-    // Slot0 is a transparent CPU-painted virtual stack.  It never imports a
-    // producer directly; slots 1-3 remain the hardware RGBA/direct path.
-    let direct_font_required = !matches!(plan.target, CompositionTarget::Primary)
-        && local_direct.is_some_and(|(window, _)| dirty_double_font_scene(window));
-    if !matches!(plan.target, CompositionTarget::Primary)
+    // Slot0 remains a transparent CPU-painted virtual stack except for Font
+    // Rush. Its admission owns UI4 exclusively and its lone full-screen font
+    // frame must publish directly, because its scanout proof gates the next
+    // staged consumer.
+    let direct_primary_font_rush = matches!(plan.target, CompositionTarget::Primary)
+        && local_direct
+            .is_some_and(|(window, view)| cpp_font_rush_primary_direct_candidate(window, view));
+    let direct_font_required = direct_primary_font_rush
+        || (!matches!(plan.target, CompositionTarget::Primary)
+            && local_direct.is_some_and(|(window, _)| dirty_double_font_scene(window)));
+    if (!matches!(plan.target, CompositionTarget::Primary) || direct_primary_font_rush)
         && let Some((window, view)) = local_direct
     {
         let slot = target_plane_slot(plan.target);
@@ -937,7 +944,13 @@ fn queue_async_plane(
             );
             match queued {
                 Ok(composition) => {
-                    if direct_font_required
+                    if direct_primary_font_rush
+                        && !FONT_RUSH_PRIMARY_DIRECT_LOGGED.swap(true, Ordering::AcqRel)
+                    {
+                        crate::log_info!(target: "ui4";
+                            "ui4/font-rush-primary-bypass: mode=exclusive-lone-fullscreen-primary buffering=dirty/double backend=display-ggtt-alias+surflive source_ownership=stable-front+producer-back compositor_jobs=0 cpu_frame_copy=0 stack_composition=disabled-for-font-rush log=once\n"
+                        );
+                    } else if direct_font_required
                         && !DIRTY_FONT_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel)
                     {
                         crate::log_info!(target: "ui4";
@@ -1272,6 +1285,23 @@ fn dirty_double_font_scene(window: WindowSnapshot) -> bool {
             (snapshot.plan.content, snapshot.plan.cadence, snapshot.plan.buffering,),
             (FrameContent::FontScene2d, super::FrameCadence::Dirty, super::FrameBuffering::Double,)
         )
+    })
+}
+
+fn cpp_font_rush_primary_direct_candidate(window: WindowSnapshot, view: FrameRgbaView) -> bool {
+    if window.owner != WindowOwner::GPGPU_PREVIEW
+        || window.plane != WindowPlane::Primary
+        || !dirty_double_font_scene(window)
+    {
+        return false;
+    }
+    crate::intel::active_scanout_dimensions().is_some_and(|(width, height)| {
+        window.placement.x == 0
+            && window.placement.y == 0
+            && window.placement.width == width
+            && window.placement.height == height
+            && view.width == width
+            && view.height == height
     })
 }
 

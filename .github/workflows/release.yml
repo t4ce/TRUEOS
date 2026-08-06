@@ -33,7 +33,6 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
-      DPCPP_COMMIT: 383a356a5caf9ba3f5bbd1c0812da350c62870ba
 
     steps:
       - name: Checkout source
@@ -76,30 +75,21 @@ jobs:
             xorriso \
             zstd
 
-      - name: Checkout pinned C++ shader toolchain
+      - name: Install C++ shader toolchain
         shell: bash
-        env:
-          GIT_LFS_SKIP_SMUDGE: "1"
         run: |
           set -euo pipefail
 
-          toolchain_path="${RUNNER_TEMP}/trueos-dpcpp"
-          git init "${toolchain_path}"
-          git -C "${toolchain_path}" remote add origin https://github.com/t4ce/dpcpp.git
-          git -C "${toolchain_path}" fetch --depth=1 origin "${DPCPP_COMMIT}"
-          git -C "${toolchain_path}" checkout --detach FETCH_HEAD
-          git -C "${toolchain_path}" lfs install --local
-          git -C "${toolchain_path}" lfs pull
+          tools/shadertoy-cpp-offline/bootstrap_toolchain.sh
 
-          test "$(git -C "${toolchain_path}" rev-parse HEAD)" = "${DPCPP_COMMIT}"
-          test -x "${toolchain_path}/bin/llvm-spirv"
-          test -x "${toolchain_path}/lib/ocloc/bin/ocloc"
-          test -x "${toolchain_path}/lib/igc/bin/iga64"
+          toolchain_path="${GITHUB_WORKSPACE}/bld/shadertoy-cpp-toolchain/root"
+          ocloc="$(find "${toolchain_path}/usr/bin" -maxdepth 1 -type f -name 'ocloc*' -perm -111 -print -quit)"
+          test -x "${toolchain_path}/usr/bin/llvm-spirv-21"
+          test -n "${ocloc}"
 
-          echo "LLVM_SPIRV=${toolchain_path}/bin/llvm-spirv" >> "${GITHUB_ENV}"
-          echo "OCLOC=${toolchain_path}/lib/ocloc/bin/ocloc" >> "${GITHUB_ENV}"
-          echo "OCLOC_LD_LIBRARY_PATH=${toolchain_path}/lib/ocloc/lib:${toolchain_path}/lib/igc/lib:${toolchain_path}/lib/igc/lib/igc2" >> "${GITHUB_ENV}"
-          echo "${toolchain_path}/lib/igc/bin" >> "${GITHUB_PATH}"
+          echo "LLVM_SPIRV=${toolchain_path}/usr/bin/llvm-spirv-21" >> "${GITHUB_ENV}"
+          echo "OCLOC=${ocloc}" >> "${GITHUB_ENV}"
+          echo "OCLOC_LD_LIBRARY_PATH=${toolchain_path}/usr/lib/x86_64-linux-gnu" >> "${GITHUB_ENV}"
 
       - name: Install locked Clang frontend
         shell: bash
