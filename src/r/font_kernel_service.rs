@@ -63,6 +63,7 @@ const _: () = assert!(
 );
 
 static NEXT_TICKET: AtomicU64 = AtomicU64::new(1);
+#[expect(dead_code, reason = "raw Font Rush now bypasses the retained RGBA8 cache experiment")]
 static NEXT_FONT_RUSH_RGBA8_CACHE_ID: AtomicU64 = AtomicU64::new(1);
 static ONLINE: AtomicBool = AtomicBool::new(false);
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
@@ -223,6 +224,7 @@ impl FontRushRgba8Cache {
         self.id
     }
 
+    #[expect(dead_code, reason = "raw Font Rush now bypasses the retained RGBA8 cache experiment")]
     pub(crate) const fn atlas_extent(&self) -> (u32, u32) {
         (
             crate::intel::gpgpu::GPGPU_FONT_RUSH_RGBA8_ATLAS_WIDTH,
@@ -350,6 +352,7 @@ impl FontRushRgba8Cache {
     }
 }
 
+#[expect(dead_code, reason = "raw Font Rush now bypasses the retained RGBA8 cache experiment")]
 pub(crate) fn allocate_font_rush_rgba8_cache() -> Result<Arc<FontRushRgba8Cache>, FontKernelError> {
     let atlases = [
         crate::intel::gpgpu::allocate_font_rush_rgba8_atlas(0),
@@ -572,6 +575,7 @@ enum FrameStampInput {
         raster_width: u32,
         raster_height: u32,
     },
+    #[expect(dead_code, reason = "raw Font Rush now routes terminal waves through prepared plans")]
     FontRushRgba8Blast {
         cache: Arc<FontRushRgba8Cache>,
         wave: u64,
@@ -1374,6 +1378,7 @@ pub(crate) fn submit_font_rush_showcase_sprite_frame(
 }
 
 /// Queue one terminal Font Rush wave using only sealed RGBA8 tiles.
+#[expect(dead_code, reason = "raw Font Rush now routes terminal waves through prepared plans")]
 pub(crate) fn submit_font_rush_rgba8_cache_blast(
     cache: Arc<FontRushRgba8Cache>,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,

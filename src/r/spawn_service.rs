@@ -1829,9 +1829,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &HELIO_GAME_STARTED,
         spawn_helio_game,
     ),
-    // Resident-scene consumers use independent direct planes and the same
-    // triple-buffer release -> SURFLIVE ownership contract.
-    TaskSpec::disabled(
+    // The current Gridpaper Blueprint still submits snapshots to this
+    // consumer, which owns the corresponding UI4 presentation.
+    TaskSpec::enabled(
         "gridpaper-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &GRIDPAPER_SERVICE_STARTED,

@@ -5650,6 +5650,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
 #[embassy_executor::task(pool_size = GRIDPAPER_POOL_SOFT_CAP)]
 async fn gridpaper_instance_worker_task(pool_slot: usize) {
     let mut observed_lease_epoch = 0u64;
+    let mut last_unpresentable_epoch = 0u64;
     let mut runtime: Option<GridPaperRuntime> = None;
     let mut presentation_session = None;
     let mut last_init_error = None;
@@ -5662,6 +5663,7 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
                 destroy_runtime(old_runtime, &mut presentation_session);
             }
             observed_lease_epoch = lease.epoch;
+            last_unpresentable_epoch = 0;
             last_init_error = None;
             last_presentation_error = None;
             presentation_retry_after_ms = 0;
@@ -5671,6 +5673,25 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
             Timer::after(EmbassyDuration::from_millis(250)).await;
             continue;
         };
+
+        if lease.presentable_producer.is_none()
+            && let Some(GridPaperProducer::Blueprint(owner)) = lease.producer
+            && last_unpresentable_epoch != lease.epoch
+        {
+            let state = crate::hv::vm_state(owner);
+            crate::log_warn!(
+                target: "gridpaper";
+                "gridpaper: presentation withheld pool_slot={} owner={} local_instance={} lease_epoch={} vm_running={} vm_starting={} vm_pause_latched={} action=wait-for-vm-lifecycle\n",
+                pool_slot,
+                owner,
+                instance_id,
+                lease.epoch,
+                state.running as u8,
+                state.starting as u8,
+                state.pause_latched as u8,
+            );
+            last_unpresentable_epoch = lease.epoch;
+        }
 
         if runtime.is_none() {
             match initialize_surface(pool_slot, instance_id, lease.size) {
