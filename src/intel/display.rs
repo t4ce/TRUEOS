@@ -344,6 +344,12 @@ static UI4_DIRECT_SCANOUT_SLOT_1: [Mutex<Ui4DirectScanoutPool>; DISPLAY_PIPELINE
     Mutex::new(Ui4DirectScanoutPool::new()),
     Mutex::new(Ui4DirectScanoutPool::new()),
 ];
+static UI4_DIRECT_SCANOUT_SLOT_0: [Mutex<Ui4DirectScanoutPool>; DISPLAY_PIPELINE_COUNT] = [
+    Mutex::new(Ui4DirectScanoutPool::new()),
+    Mutex::new(Ui4DirectScanoutPool::new()),
+    Mutex::new(Ui4DirectScanoutPool::new()),
+    Mutex::new(Ui4DirectScanoutPool::new()),
+];
 static UI4_DIRECT_SCANOUT_SLOT_2: [Mutex<Ui4DirectScanoutPool>; DISPLAY_PIPELINE_COUNT] = [
     Mutex::new(Ui4DirectScanoutPool::new()),
     Mutex::new(Ui4DirectScanoutPool::new()),
@@ -4005,6 +4011,7 @@ fn ui4_direct_scanout_pool(
     plane_slot: usize,
 ) -> Option<&'static Mutex<Ui4DirectScanoutPool>> {
     match plane_slot {
+        0 => Some(&UI4_DIRECT_SCANOUT_SLOT_0[pipe.slot]),
         1 => Some(&UI4_DIRECT_SCANOUT_SLOT_1[pipe.slot]),
         2 => Some(&UI4_DIRECT_SCANOUT_SLOT_2[pipe.slot]),
         3 => Some(&UI4_DIRECT_SCANOUT_SLOT_3[pipe.slot]),

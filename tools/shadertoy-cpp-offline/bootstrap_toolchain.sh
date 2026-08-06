@@ -17,7 +17,7 @@ download_and_extract() {
   (
     cd "${package_root}"
     rm -f "${package}"_*.deb
-    apt-get download "${package}"
+    apt-get download "${package}:amd64"
   )
   local archive
   archive="$(find "${package_root}" -maxdepth 1 -type f -name "${package}_*.deb" -print -quit)"
