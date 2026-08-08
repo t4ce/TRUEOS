@@ -66,6 +66,7 @@ static GPGPU_RECT_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mu
 static GPGPU_MANDEL64_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mutex::new(None);
 static GPGPU_SPRITE_QUAD_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> =
     Mutex::new(None);
+static HELIO_SPRITE_ATLAS_SURFACE: spin::Once<GpgpuRgba8Surface> = spin::Once::new();
 // Font owns a separate descriptor allocation even though its private PPGTT can
 // reuse the ordinary sprite descriptor VA.  An ambiguous Font submission pins
 // these exact bytes without preventing UI4 or the system-service context from

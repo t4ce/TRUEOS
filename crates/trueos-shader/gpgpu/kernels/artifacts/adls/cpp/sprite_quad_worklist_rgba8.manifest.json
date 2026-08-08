@@ -5,11 +5,11 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "ffb91c850b0f1f2c3774e42994181b5eebf5915f9851168017a3f2757b793f85",
-      "size_bytes": 40224,
+      "sha256": "54b35985d5286c42b592ddcb283695b172d0e275f932d32622a4f45f14e86d31",
+      "size_bytes": 54952,
       "type": "relocatable",
-      "ze_info_section_offset": 34008,
-      "ze_info_section_size": 5377
+      "ze_info_section_offset": 48784,
+      "ze_info_section_size": 5335
     },
     "kernels": [
       {
@@ -29,7 +29,6 @@
         ],
         "cross_thread_data_bytes": 128,
         "execution_env": {
-          "disable_mid_thread_preemption": true,
           "eu_thread_count": 7,
           "grf_count": 128,
           "has_no_stateless_write": true,
@@ -292,13 +291,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 7152,
+          "entry_size": 14768,
           "section_alignment": 0,
           "section_name": ".text.sprite_quad_worklist_rgba8",
           "section_offset": 64,
-          "section_size": 7296,
-          "sha256": "20ab943f0b29b6e247bd24845f2ccf7ff521832b384b36bac0876270e50d1a23",
-          "symbol_size": 7152,
+          "section_size": 14912,
+          "sha256": "feda5fc47f314dca236df0542e841bfa220622d1a66027f12e9d763385d83c9d",
+          "symbol_size": 14768,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -314,10 +313,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 7432,
-      "embedded_section_size": 26504,
-      "sha256": "64d5a15b9a3e51f2338d62b7344281642d7849e0acd31ae7d0ec51006e901bd1",
-      "size_bytes": 26504
+      "embedded_section_offset": 15048,
+      "embedded_section_size": 33660,
+      "sha256": "554d12a0649f8f84b69649a8ae030692f20b6b2e9c6e6684d7ab3058e4f25f8f",
+      "size_bytes": 33660
     }
   },
   "provenance": {
@@ -517,8 +516,8 @@
     "inputs": [
       {
         "path": "crates/trueos-shader/gpgpu/kernels/sprite_quad_worklist_rgba8.clcpp",
-        "sha256": "50cb44029285fc67507d4215a07047aabef9a890f13f2d28f73c83c66a31b74f",
-        "size_bytes": 7786
+        "sha256": "ef6e331ccfaf425ba2f9c378f1eb80d5ac10a7c19accdc8391b8232e9bf75ea8",
+        "size_bytes": 11556
       }
     ],
     "language": "C++ for OpenCL",

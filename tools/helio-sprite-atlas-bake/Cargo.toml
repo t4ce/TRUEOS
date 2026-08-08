@@ -1,0 +1,9 @@
+[package]
+name = "helio-sprite-atlas-bake"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+crc32fast = "1.5"
+image = { version = "0.25", default-features = false, features = ["png"] }

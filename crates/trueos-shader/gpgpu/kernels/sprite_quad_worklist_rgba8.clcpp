@@ -19,7 +19,11 @@
 #define SPRITE_QUAD_FLAG_CLEAR (1u << 2)
 #define SPRITE_QUAD_FLAG_SOURCE_XRGB (1u << 3)
 #define SPRITE_QUAD_FLAG_DEST_XRGB (1u << 4)
+#define SPRITE_QUAD_FLAG_TILEMAP (1u << 5)
 #define SPRITE_QUAD_TILE_ROWS 1u
+#define SPRITE_QUAD_MAX_DESCS 256u
+#define SPRITE_QUAD_TILEMAP_STATE_DWORD (SPRITE_QUAD_MAX_DESCS * SPRITE_QUAD_DESC_DWORDS)
+#define SPRITE_QUAD_TILEMAP_MAGIC 0x454C4954u
 
 static inline uint div255(uint value)
 {
@@ -126,6 +130,91 @@ static inline uint sample_rgba(
     return src_rgba[(uint)sy * src_pitch_pixels + (uint)sx];
 }
 
+// One full-frame tilemap descriptor replaces thousands of ordinary terrain
+// quads. The state immediately follows the fixed 256-descriptor array:
+// header, dense atlas rectangles, one f32 surface height per column, then
+// four u8 tile IDs per dword in column-major order. Ordinary sprite
+// descriptors in the same ordered worklist draw the player, crack, placed
+// blocks, and hotbar over this base.
+static inline uint render_tilemap(
+    __global const uint *src_rgba,
+    __global const uint *descs,
+    uint src_pitch_pixels,
+    uint src_width,
+    uint src_height,
+    uint x,
+    uint y,
+    uint dst_width,
+    uint dst_height)
+{
+    __global const uint *state = descs + SPRITE_QUAD_TILEMAP_STATE_DWORD;
+    if (state[0] != SPRITE_QUAD_TILEMAP_MAGIC || state[1] != 1u) {
+        return 0xFFFF00FFu;
+    }
+    uint rect_count = state[2];
+    uint map_cols = state[3];
+    uint map_rows = state[4];
+    float tile = as_float(state[5]);
+    float zoom = as_float(state[6]);
+    float camera_x = as_float(state[7]);
+    float camera_y = as_float(state[8]);
+    uint background = state[9];
+    uint rects_offset = state[10];
+    uint heights_offset = state[11];
+    uint cells_offset = state[12];
+    uint cell_words = state[13];
+    if (rect_count < 5u || map_cols == 0u || map_rows == 0u || tile <= 0.0f || zoom <= 0.0f) {
+        return 0xFFFF00FFu;
+    }
+
+    float world_x = camera_x + ((float)x + 0.5f - (float)dst_width * 0.5f) / zoom;
+    float world_y = camera_y - ((float)y + 0.5f - (float)dst_height * 0.5f) / zoom;
+    int col = (int)floor(world_x / tile + 0.5f);
+    if (col < 0 || (uint)col >= map_cols) {
+        return background;
+    }
+    float top = as_float(state[heights_offset + (uint)col]);
+    int row = (int)floor((top - tile * 0.5f - world_y) / tile + 0.5f);
+    if (row < 0 || (uint)row >= map_rows) {
+        return background;
+    }
+    uint cell_index = (uint)col * map_rows + (uint)row;
+    uint cell_word = cell_index >> 2;
+    if (cell_word >= cell_words) {
+        return 0xFFFF00FFu;
+    }
+    uint tile_id = (state[cells_offset + cell_word] >> ((cell_index & 3u) * 8u)) & 0xFFu;
+    if (tile_id == 0u || tile_id >= rect_count) {
+        return background;
+    }
+
+    uint rect_offset = rects_offset + tile_id * 2u;
+    uint rect_xy = state[rect_offset];
+    uint rect_wh = state[rect_offset + 1u];
+    uint rect_x = rect_xy & 0xFFFFu;
+    uint rect_y = rect_xy >> 16;
+    uint rect_w = rect_wh & 0xFFFFu;
+    uint rect_h = rect_wh >> 16;
+    if (rect_w == 0u || rect_h == 0u) {
+        return 0xFFFF00FFu;
+    }
+
+    float left = (float)col * tile - tile * 0.5f;
+    float center_y = top - tile * 0.5f - (float)row * tile;
+    float local_u = clamp((world_x - left) / tile, 0.0f, 0.999999f);
+    float local_v = clamp((center_y + tile * 0.5f - world_y) / tile, 0.0f, 0.999999f);
+    float atlas_u = ((float)rect_x + local_u * (float)rect_w) / (float)src_width;
+    float atlas_v = ((float)rect_y + local_v * (float)rect_h) / (float)src_height;
+    uint sampled = sample_rgba(
+        src_rgba,
+        src_pitch_pixels,
+        src_width,
+        src_height,
+        atlas_u,
+        atlas_v);
+    return src_over(sampled, background, 0u);
+}
+
 __attribute__((intel_reqd_sub_group_size(16)))
 __kernel void sprite_quad_worklist_rgba8(
     __global const uint *src_rgba,
@@ -209,6 +298,19 @@ __kernel void sprite_quad_worklist_rgba8(
         }
 
         uint dst_index = y * dst_pitch_pixels + x;
+        if ((flags & SPRITE_QUAD_FLAG_TILEMAP) != 0u) {
+            dst_rgba[dst_index] = render_tilemap(
+                src_rgba,
+                descs,
+                src_pitch_pixels,
+                src_width,
+                src_height,
+                x,
+                y,
+                dst_width,
+                dst_height);
+            continue;
+        }
         if ((flags & SPRITE_QUAD_FLAG_CLEAR) != 0u) {
             dst_rgba[dst_index] = 0u;
             continue;

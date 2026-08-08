@@ -27,6 +27,8 @@ const fn example_name(id: u8) -> &'static str {
         2 => "churn-benchmark",
         3 => "shape-battle-royale",
         4 => "pendulum-bigcloth",
+        5 => "sprite-dig-demo",
+        6 => "portal-rooms",
         _ => "reserved",
     }
 }
@@ -37,6 +39,8 @@ fn print_list(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "  2  churn-benchmark   live retained-batch stress scene");
     print_shell_line(io, "  3  shape-battle-royale   physics arena scene");
     print_shell_line(io, "  4  pendulum-bigcloth     linked-cloth physics scene");
+    print_shell_line(io, "  5  sprite-dig-demo      interactive 2D mining/platformer scene");
+    print_shell_line(io, "  6  portal-rooms         six clipped rooms with UI4 fly camera");
     print_shell_line(io, "  probe 2|4             one launch-scoped ADL-S retained-GPU proof");
     print_shell_line(io, "  stop INSTANCE_ID        close one generated instance");
     print_shell_line(io, "  stop all                close every Helio instance");
@@ -326,6 +330,8 @@ fn parse_id(value: &str) -> Option<u8> {
         "2" => Some(2),
         "3" => Some(3),
         "4" => Some(4),
+        "5" => Some(5),
+        "6" => Some(6),
         _ => None,
     }
 }
@@ -354,11 +360,11 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         (Some("help" | "-h" | "--help"), None, None) => {
             print_shell_line(
                 io,
-                "helio: usage `helio [1|2|3|4|probe 2|probe 4|list|status|stop INSTANCE_ID|stop all|monitor [SECONDS|status|off]]`",
+                "helio: usage `helio [1|2|3|4|5|6|probe 2|probe 4|list|status|stop INSTANCE_ID|stop all|monitor [SECONDS|status|off]]`",
             );
             print_shell_line(
                 io,
-                "helio: examples 1=simple-cube, 2=churn-benchmark, 3=shape-battle-royale, 4=pendulum-bigcloth",
+                "helio: examples 1=simple-cube, 2=churn-benchmark, 3=shape-battle-royale, 4=pendulum-bigcloth, 5=sprite-dig-demo, 6=portal-rooms",
             );
             print_shell_line(
                 io,
@@ -401,7 +407,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         (Some(id), None, None) if parse_id(id).is_some() => launch(io, parse_id(id).unwrap()),
         _ => print_shell_line(
             io,
-            "helio: expected 1, 2, 3, 4, probe, list, status, stop, or monitor/perf/logger",
+            "helio: expected 1, 2, 3, 4, 5, 6, probe, list, status, stop, or monitor/perf/logger",
         ),
     }
     ParseOutcome::Handled
@@ -411,8 +417,8 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 mod tests {
     use super::{
         MONITOR_DEFAULT_SECONDS, MonitorCommand, StopTarget, eviction_message, example_name,
-        parse_instance_id, parse_monitor_command, parse_stop_target, queued_launch_message,
-        stop_message,
+        parse_id, parse_instance_id, parse_monitor_command, parse_stop_target,
+        queued_launch_message, stop_message,
     };
     use crate::r::helio_game::StopRequest;
 
@@ -422,7 +428,9 @@ mod tests {
         assert_eq!(example_name(2), "churn-benchmark");
         assert_eq!(example_name(3), "shape-battle-royale");
         assert_eq!(example_name(4), "pendulum-bigcloth");
-        assert_eq!(example_name(5), "reserved");
+        assert_eq!(example_name(5), "sprite-dig-demo");
+        assert_eq!(example_name(6), "portal-rooms");
+        assert_eq!(parse_id("6"), Some(6));
     }
 
     #[test]

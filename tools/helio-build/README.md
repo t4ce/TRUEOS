@@ -50,8 +50,25 @@ tools/helio-build/build-churn-forward.sh
 tools/helio-build/build-churn-forward.sh --validate-only
 ```
 
-`make iso` runs the lightweight validation for both checked-in programs before
-linking. It does not repeat the hosted Vulkan compilation on every OS build.
+`build-sprite-dig-atlas.sh` selects the original terrain and character frames
+from the sibling Helio checkout, normalizes the animation frames, creates the
+three deterministic crack textures, and atomically publishes the strict
+`HDIGATL` RGBA container used by example 5:
+
+```sh
+tools/helio-build/build-sprite-dig-atlas.sh
+tools/helio-build/build-sprite-dig-atlas.sh --validate-only
+```
+
+Its pixel CRC, dense 38-entry sprite table, dimensions, reserved fields, and
+normalized player extent are validated independently of the Helio scene
+container. The runtime feeds this atlas to the Bakery-produced C++ for OpenCL
+sprite kernel: one tilemap descriptor covers terrain, followed by bounded
+ordinary descriptors for animation, cracks, placement, and the hotbar.
+
+`make iso` runs the lightweight validation for both checked-in programs and
+the Sprite Dig atlas before linking. It does not repeat the hosted Vulkan
+compilation or atlas extraction on every OS build.
 Use the explicit build scripts when Helio, WGPU, a shader, or a captured ABI
 changes; a failed rebuild never replaces the last validated asset.
 
@@ -92,3 +109,19 @@ material/face light batches while preserving one Helio indirect command per
 batch and one GuC-scheduled frame. Press `C` in the UI4 window to toggle the
 bounded collision-style burst; press it again to return to the procedural
 orbit.
+
+The simple-cube artifact additionally carries `scene/sprite-dig-v1.bin` for
+Shell2 Helio example 5. The fixed 256-byte section describes the 240-column
+terrain, dirt/stone depth, lake bounds, pool limits, original movement and
+mining constants, hotbar layout, camera bias, and retained visualization
+colors. The validator treats those values as a strict gameplay ABI. Runtime
+input comes from UI4's winit-shaped event bridge: A/D or arrows move, Space
+jumps, holding the left mouse button mines, right-click places the selected
+block, and the wheel changes the hotbar selection.
+
+It also carries `scene/portal-rooms-v1.bin` for Shell2 Helio example 6. The
+fixed 3,072-byte section describes six portal frames, fourteen materials, and
+74 texture-free room objects. Runtime projection clips each room's boxes and
+octa-spheres against its portal rectangle and camera depth planes before the
+retained Intel batch dispatch; UI4 provides fly-camera control and Tab toggles
+the editor-style checkerboard overlay.

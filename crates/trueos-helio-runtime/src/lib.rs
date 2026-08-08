@@ -9,7 +9,9 @@ extern crate alloc;
 pub mod battle;
 pub mod churn;
 pub mod pendulum_bigcloth;
+pub mod portal_rooms;
 pub mod retained_transform;
+pub mod sprite_dig;
 
 use alloc::vec::Vec;
 use trueos_helio_artifact::render_ir::{
@@ -197,6 +199,11 @@ pub enum Error {
     InvalidBattleScene,
     MissingPendulumScene,
     InvalidPendulumScene,
+    MissingSpriteDigScene,
+    InvalidSpriteDigScene,
+    InvalidSpriteDigAtlas,
+    MissingPortalRoomsScene,
+    InvalidPortalRoomsScene,
     MissingRetainedTransformTemplate,
     InvalidRetainedTransformTemplate,
 }

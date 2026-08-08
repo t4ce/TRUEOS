@@ -80,7 +80,8 @@ pub(crate) use frame_pool::{
     create_gpu_full_overwrite_frame, destroy_frame, frame_buffer_ownership_probe, frame_snapshot,
     gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, mark_frame_buffer_fully_opaque,
     publish_frame_buffer,
-    publish_gpgpu_frame_buffer, publish_gpgpu_scene_frame_buffer, publish_gpgpu_video_frame_buffer,
+    publish_gpgpu_frame_buffer, publish_gpgpu_render_frame_buffer,
+    publish_gpgpu_scene_frame_buffer, publish_gpgpu_video_frame_buffer,
     publish_gpu_font_frame_buffer, publish_gpu_frame_buffer, published_rgba_view,
     release_published_frame, retain_published_frame, writable_rgba_view,
 };

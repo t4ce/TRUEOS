@@ -1,3 +1,50 @@
+/// Upload one immutable tightly-packed Helio RGBA atlas into its dedicated
+/// system-service PPGTT range. The allocation intentionally lives for the
+/// kernel lifetime; all Sprite Dig instances share the exact same pixels.
+pub(crate) fn prepare_helio_sprite_atlas_rgba8(
+    width: u32,
+    height: u32,
+    pitch_bytes: u32,
+    pixels: &[u8],
+) -> Option<GpgpuRgba8Surface> {
+    if let Some(surface) = HELIO_SPRITE_ATLAS_SURFACE.get().copied() {
+        return (surface.width == width
+            && surface.height == height
+            && surface.pitch_bytes == pitch_bytes)
+            .then_some(surface);
+    }
+    if width == 0
+        || height == 0
+        || pitch_bytes != width.checked_mul(core::mem::size_of::<u32>() as u32)?
+    {
+        return None;
+    }
+    let raw_bytes = (pitch_bytes as usize).checked_mul(height as usize)?;
+    if pixels.len() != raw_bytes || raw_bytes > HELIO_SPRITE_ATLAS_MAX_BYTES {
+        return None;
+    }
+    let bytes = align_up(raw_bytes, super::WARM_ALIGN)?;
+    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+    unsafe {
+        core::ptr::write_bytes(virt, 0, bytes);
+        core::ptr::copy_nonoverlapping(pixels.as_ptr(), virt, pixels.len());
+    }
+    super::dma_flush(virt, bytes);
+    let Some(surface) =
+        GpgpuRgba8Surface::new(phys, HELIO_SPRITE_ATLAS_GPU, bytes, width, height, pitch_bytes)
+    else {
+        crate::dma::dealloc(virt, bytes);
+        return None;
+    };
+    let published = *HELIO_SPRITE_ATLAS_SURFACE.call_once(|| surface);
+    if published.phys != surface.phys {
+        // Another caller won publication. Its immutable allocation is the
+        // canonical one; reclaim this never-mapped duplicate immediately.
+        crate::dma::dealloc(virt, bytes);
+    }
+    Some(published)
+}
+
 pub(crate) fn sprite_quad_worklist_rgba8_runs_over_result(
     dst: GpgpuRgba8Surface,
     runs: &[GpgpuSpriteQuadWorklistRun<'_>],
@@ -53,6 +100,85 @@ pub(crate) fn sprite_quad_worklist_rgba8_runs_over_result(
     });
     stats.submits = 1;
     GpgpuWorklistSubmitResult { stats, outcome }
+}
+
+/// Render one bounded atlas tilemap followed by ordinary ordered sprite
+/// descriptors directly into a UI4 producer allocation.
+///
+/// The C++/SPIR-V kernel reads `tilemap_state` after its fixed descriptor
+/// array. A complete result includes the exact compute release required by
+/// UI4; an ambiguous submitted result quarantines the system-service RCS lane
+/// and deliberately returns no release.
+pub(crate) fn sprite_quad_tilemap_rgba8_direct_result(
+    dst: GpgpuRgba8Surface,
+    atlas: GpgpuRgba8Surface,
+    descs: &[GpgpuSpriteQuadWorklistDesc],
+    tilemap_state: &[u32],
+) -> GpgpuSpriteQuadWorklistResult {
+    if !sprite_quad_worklist_ready()
+        || !dst.is_valid()
+        || !atlas.is_valid()
+        || dst.storage_order != GpgpuRgba8StorageOrder::Rgba
+        || atlas.storage_order != GpgpuRgba8StorageOrder::Rgba
+        || descs.is_empty()
+        || descs.len() > SPRITE_QUAD_WORKLIST_MAX_DESCS
+        || descs[0].flags != SPRITE_QUAD_WORKLIST_FLAG_TILEMAP
+        || descs[1..]
+            .iter()
+            .any(|desc| desc.flags & SPRITE_QUAD_WORKLIST_FLAG_TILEMAP != 0)
+        || tilemap_state.len() > SPRITE_QUAD_TILEMAP_STATE_MAX_DWORDS
+        || tilemap_state.get(0) != Some(&SPRITE_QUAD_TILEMAP_MAGIC)
+        || tilemap_state.get(1) != Some(&SPRITE_QUAD_TILEMAP_VERSION)
+        || gpu_ranges_overlap(atlas.gpu, atlas.bytes, dst.gpu, dst.bytes)
+        || gpu_ranges_overlap(atlas.phys, atlas.bytes, dst.phys, dst.bytes)
+    {
+        return GpgpuSpriteQuadWorklistResult::default();
+    }
+    let Some(desc_buffer) = sprite_quad_worklist_desc_buffer_once() else {
+        return GpgpuSpriteQuadWorklistResult::default();
+    };
+    let state_bytes = tilemap_state.len() * core::mem::size_of::<u32>();
+    if SPRITE_QUAD_TILEMAP_STATE_OFFSET_BYTES.saturating_add(state_bytes) > desc_buffer.bytes {
+        return GpgpuSpriteQuadWorklistResult::default();
+    }
+
+    let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
+    if direct_rcs_context_is_quarantined() {
+        return GpgpuSpriteQuadWorklistResult::default();
+    }
+    unsafe {
+        core::ptr::write_bytes(desc_buffer.virt, 0, desc_buffer.bytes);
+        core::ptr::copy_nonoverlapping(
+            descs.as_ptr() as *const u8,
+            desc_buffer.virt,
+            core::mem::size_of_val(descs),
+        );
+        core::ptr::copy_nonoverlapping(
+            tilemap_state.as_ptr() as *const u8,
+            desc_buffer.virt.add(SPRITE_QUAD_TILEMAP_STATE_OFFSET_BYTES),
+            state_bytes,
+        );
+    }
+    super::dma_flush(desc_buffer.virt, desc_buffer.bytes);
+
+    let run = GpgpuSpriteQuadWorklistRun { src: atlas, descs };
+    let started = direct_rcs_now_tick();
+    let outcome = submit_sprite_quad_worklist_runs(dst, desc_buffer, core::slice::from_ref(&run));
+    if outcome == GpgpuSubmissionOutcome::SubmittedIncomplete {
+        quarantine_direct_rcs_context("helio-sprite-tilemap-marker-timeout");
+    }
+    let complete = outcome == GpgpuSubmissionOutcome::Complete;
+    GpgpuSpriteQuadWorklistResult {
+        stats: GpgpuWorklistSubmitStats {
+            descs: complete.then_some(descs.len()).unwrap_or(0),
+            walkers: complete.then_some(descs.len()).unwrap_or(0),
+            submits: usize::from(complete),
+            submit_ms: direct_rcs_elapsed_ms_since(started),
+            ..GpgpuWorklistSubmitStats::default()
+        },
+        outcome,
+        release: complete.then(|| gpgpu_rgba8_release(dst)),
+    }
 }
 
 fn font_sprite_quad_worklist_desc_buffer_once() -> Option<GpgpuRectWorklistDescBuffer> {
@@ -180,12 +306,7 @@ pub(crate) fn prepare_font_sprite_quad_worklist_rgba8() -> bool {
         && direct_rcs_map_state(dev, state)
         && font_rcs_init_ppgtt_once(state)
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
-        && direct_rcs_map_ppgtt_kernel(
-            state,
-            desc_buffer.gpu,
-            desc_buffer.phys,
-            desc_buffer.bytes,
-        )
+        && direct_rcs_map_ppgtt_kernel(state, desc_buffer.gpu, desc_buffer.phys, desc_buffer.bytes)
 }
 
 /// Stamp one ordered set of immutable linear-RGBA tiles over an exact UI4

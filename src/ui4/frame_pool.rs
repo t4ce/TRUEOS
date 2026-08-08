@@ -682,6 +682,33 @@ pub(crate) fn publish_gpu_frame_buffer(
     publish_checked_frame(frame, lease)
 }
 
+/// Publish a streaming render-scene frame whose final writer was the compute
+/// sprite path rather than the retained 3D renderer.
+pub(crate) fn publish_gpgpu_render_frame_buffer(
+    lease: FrameWriteLease,
+    release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
+) -> Result<PublishedFrame, FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    let index = lease.buffer_index as usize;
+    if frame.plan.content != FrameContent::RenderScene3d
+        || frame.plan.cadence != super::FrameCadence::Streaming
+        || frame.plan.buffering != super::FrameBuffering::Triple
+        || frame.plan.format != ScanoutFormat::Rgba8888Premultiplied
+        || !frame.gpu_authored[index]
+    {
+        return Err(FramePoolError::ProducerReleaseRequired);
+    }
+    let surface = frame.surfaces[index].ok_or(FramePoolError::InvalidLease)?;
+    let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
+    if !release.matches(access.phys, access.byte_len) {
+        return Err(FramePoolError::InvalidLease);
+    }
+    frame.gpu_release[index] = Some(FrameGpuRelease::Compute(release));
+    publish_checked_frame(frame, lease)
+}
+
 /// Publish one full-surface compute allocation only after its final
 /// PIPE_CONTROL and post-sync marker retired. This is the double-buffered
 /// counterpart to resident-scene publication: metadata changes ownership, while the

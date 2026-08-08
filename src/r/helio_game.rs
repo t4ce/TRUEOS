@@ -10,6 +10,7 @@ use embassy_time::{Duration, Instant, Timer};
 const GAME_ARTIFACT: &[u8] = include_bytes!("../../assets/helio/simple-cube.trueos.intel.helio");
 const CHURN_FORWARD_ARTIFACT: &[u8] =
     include_bytes!("../../assets/helio/churn-forward.trueos.intel.helio");
+const SPRITE_DIG_ATLAS: &[u8] = include_bytes!("../../assets/helio/sprite-dig-atlas.trueos.rgba");
 const PLANE_SLOT: usize = crate::ui4::RGB_OVERLAY_PLANE_SLOT_2;
 const MARGIN: u32 = 48;
 const TRANSPARENT_CLEAR_RGBA: [u8; 4] = [0, 0, 0, 0];
@@ -323,7 +324,7 @@ pub(crate) fn request_retained_probe_launch(example_id: u8) -> LaunchRequest {
 }
 
 fn request_launch_mode(example_id: u8, mode: LaunchMode) -> LaunchRequest {
-    if !(1..=4).contains(&example_id) {
+    if !(1..=6).contains(&example_id) {
         return LaunchRequest::Reserved;
     }
     if mode.is_probe() && !matches!(example_id, 2 | 4) {
@@ -1496,6 +1497,7 @@ fn apply_pendulum_key_actions(
 enum PortedSceneEngine {
     Battle(trueos_helio_runtime::battle::Engine),
     Pendulum(trueos_helio_runtime::pendulum_bigcloth::Engine),
+    PortalRooms(trueos_helio_runtime::portal_rooms::Engine),
 }
 
 impl PortedSceneEngine {
@@ -1507,6 +1509,9 @@ impl PortedSceneEngine {
             4 => trueos_helio_runtime::pendulum_bigcloth::Spec::decode_artifact(GAME_ARTIFACT)
                 .and_then(trueos_helio_runtime::pendulum_bigcloth::Engine::new)
                 .map(Self::Pendulum),
+            6 => trueos_helio_runtime::portal_rooms::Spec::decode_artifact(GAME_ARTIFACT)
+                .and_then(trueos_helio_runtime::portal_rooms::Engine::new)
+                .map(Self::PortalRooms),
             _ => Err(trueos_helio_runtime::Error::Artifact),
         }
     }
@@ -1515,6 +1520,7 @@ impl PortedSceneEngine {
         match self {
             Self::Battle(_) => "shape-battle-royale",
             Self::Pendulum(_) => "pendulum-bigcloth",
+            Self::PortalRooms(engine) => engine.name(),
         }
     }
 
@@ -1522,6 +1528,7 @@ impl PortedSceneEngine {
         match self {
             Self::Battle(_) => "WASD+Space+Shift,left-drag-look,+/-shape-count",
             Self::Pendulum(_) => "WASD+Space+Shift,left-drag-look,C-pause,R-reset",
+            Self::PortalRooms(engine) => engine.controls(),
         }
     }
 
@@ -1529,6 +1536,7 @@ impl PortedSceneEngine {
         match self {
             Self::Battle(engine) => engine.shape_count(),
             Self::Pendulum(engine) => engine.segment_count(),
+            Self::PortalRooms(engine) => engine.object_count(),
         }
     }
 
@@ -1536,6 +1544,7 @@ impl PortedSceneEngine {
         match self {
             Self::Battle(engine) => engine.camera(),
             Self::Pendulum(engine) => engine.camera(),
+            Self::PortalRooms(engine) => engine.camera(),
         }
     }
 
@@ -1546,6 +1555,7 @@ impl PortedSceneEngine {
         match self {
             Self::Battle(engine) => engine.set_camera(camera),
             Self::Pendulum(engine) => engine.set_camera(camera),
+            Self::PortalRooms(engine) => engine.set_camera(camera),
         }
     }
 
@@ -1556,6 +1566,7 @@ impl PortedSceneEngine {
         match self {
             Self::Battle(engine) => engine.step(aspect),
             Self::Pendulum(engine) => engine.step(aspect),
+            Self::PortalRooms(engine) => engine.step(aspect),
         }
     }
 
@@ -1563,6 +1574,14 @@ impl PortedSceneEngine {
         match self {
             Self::Battle(engine) => engine.batches(),
             Self::Pendulum(engine) => engine.batches(),
+            Self::PortalRooms(engine) => engine.batches(),
+        }
+    }
+
+    fn clear_rgba(&self) -> [u8; 4] {
+        match self {
+            Self::PortalRooms(_) => [0, 0, 0, 255],
+            Self::Battle(_) | Self::Pendulum(_) => TRANSPARENT_CLEAR_RGBA,
         }
     }
 
@@ -1629,6 +1648,17 @@ impl PortedSceneEngine {
                     }
                     _ => {}
                 },
+                Self::PortalRooms(engine) => {
+                    if key == KeyCode::Tab {
+                        engine.toggle_editor_mode();
+                        crate::log_info!(
+                            target: "helio";
+                            "helio instance={} portal-rooms input editor_overlay={} source=ui4-winit-bridge\n",
+                            instance_id,
+                            engine.editor_mode(),
+                        );
+                    }
+                }
             }
         }
     }
@@ -2826,6 +2856,498 @@ async fn run_churn(context: InstanceContext) -> Result<(), GameError> {
     result
 }
 
+fn sprite_dig_input_frame(
+    input: &crate::ui4::winit_input::EventLoopInput,
+    window: crate::ui4::WindowId,
+    events: &[crate::ui4::winit_input::Event],
+) -> trueos_helio_runtime::sprite_dig::InputFrame {
+    use crate::ui4::winit_input::{
+        ElementState, Event, KeyCode, MouseButton, MouseScrollDelta, WindowEvent,
+    };
+
+    let mut frame = trueos_helio_runtime::sprite_dig::InputFrame {
+        move_left: input.key_is_down(window, KeyCode::KeyA)
+            || input.key_is_down(window, KeyCode::ArrowLeft),
+        move_right: input.key_is_down(window, KeyCode::KeyD)
+            || input.key_is_down(window, KeyCode::ArrowRight),
+        jump: input.key_is_down(window, KeyCode::Space),
+        ..Default::default()
+    };
+    for event in events {
+        let Event::WindowEvent {
+            window_id, event, ..
+        } = *event
+        else {
+            continue;
+        };
+        if window_id != window {
+            continue;
+        }
+        match event {
+            WindowEvent::CursorMoved { position } => {
+                frame.cursor_px = Some([position.0 as f32, position.1 as f32]);
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+            } => frame.mine_button = Some(true),
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+            }
+            | WindowEvent::Focused(false) => frame.mine_button = Some(false),
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Right,
+            } => frame.place_pressed = true,
+            WindowEvent::MouseWheel {
+                delta: MouseScrollDelta::LineDelta(_, lines),
+            } => frame.wheel_lines += lines,
+            WindowEvent::MouseWheel {
+                delta: MouseScrollDelta::PixelDelta(_, pixels),
+            } => frame.wheel_lines += pixels as f32 * 0.02,
+            _ => {}
+        }
+    }
+    frame
+}
+
+#[derive(Clone, Copy)]
+struct SpriteDigGpuFrame {
+    descriptors: usize,
+    submit_ms: u64,
+}
+
+fn sprite_dig_descriptor(
+    sprite: trueos_helio_runtime::sprite_dig::TexturedSprite,
+    atlas: &trueos_helio_runtime::sprite_dig::Atlas<'_>,
+) -> Result<crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc, GameError> {
+    let source = atlas
+        .sprite(sprite.sprite_id)
+        .ok_or(GameError::Render("helio-sprite-atlas-entry"))?;
+    let u0 = f32::from(source.x) / atlas.width as f32;
+    let u1 = f32::from(source.x + source.width) / atlas.width as f32;
+    let v0 = f32::from(source.y) / atlas.height as f32;
+    let v1 = f32::from(source.y + source.height) / atlas.height as f32;
+    let (left_u, right_u) = if sprite.flip_x { (u1, u0) } else { (u0, u1) };
+    let [left, top, right, bottom] = sprite.rect_px;
+    Ok(crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
+        c0_x: left,
+        c0_y: top,
+        c0_u: left_u,
+        c0_v: v0,
+        c1_x: right,
+        c1_y: top,
+        c1_u: right_u,
+        c1_v: v0,
+        c2_x: right,
+        c2_y: bottom,
+        c2_u: right_u,
+        c2_v: v1,
+        c3_x: left,
+        c3_y: bottom,
+        c3_u: left_u,
+        c3_v: v1,
+        color_rgba: u32::from_le_bytes(sprite.tint),
+        flags: crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER,
+    })
+}
+
+fn sprite_dig_dispatch_data(
+    engine: &trueos_helio_runtime::sprite_dig::Engine,
+    atlas: &trueos_helio_runtime::sprite_dig::Atlas<'_>,
+    width: u32,
+    height: u32,
+) -> Result<(Vec<crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc>, Vec<u32>), GameError> {
+    const HEADER_DWORDS: usize = 14;
+    const BACKGROUND_RGBA: [u8; 4] = [107, 179, 240, 255];
+    let frame = engine
+        .texture_frame(width, height, atlas.player_size)
+        .map_err(GameError::Artifact)?;
+    let (cols, rows, tile, zoom, camera) = engine.tilemap_spec();
+    if frame.surface_heights.len() != cols || frame.cells.len() != cols.saturating_mul(rows) {
+        return Err(GameError::Render("helio-sprite-tilemap-shape"));
+    }
+
+    let rects_offset = HEADER_DWORDS;
+    let heights_offset = rects_offset + atlas.sprites().len() * 2;
+    let cells_offset = heights_offset + frame.surface_heights.len();
+    let cell_words = frame.cells.len().div_ceil(4);
+    let mut state = vec![0u32; cells_offset + cell_words];
+    state[0] = crate::intel::gpgpu::SPRITE_QUAD_TILEMAP_MAGIC;
+    state[1] = crate::intel::gpgpu::SPRITE_QUAD_TILEMAP_VERSION;
+    state[2] = atlas.sprites().len() as u32;
+    state[3] = cols as u32;
+    state[4] = rows as u32;
+    state[5] = tile.to_bits();
+    state[6] = zoom.to_bits();
+    state[7] = camera[0].to_bits();
+    state[8] = camera[1].to_bits();
+    state[9] = u32::from_le_bytes(BACKGROUND_RGBA);
+    state[10] = rects_offset as u32;
+    state[11] = heights_offset as u32;
+    state[12] = cells_offset as u32;
+    state[13] = cell_words as u32;
+    for (index, sprite) in atlas.sprites().iter().enumerate() {
+        state[rects_offset + index * 2] = u32::from(sprite.x) | (u32::from(sprite.y) << 16);
+        state[rects_offset + index * 2 + 1] =
+            u32::from(sprite.width) | (u32::from(sprite.height) << 16);
+    }
+    for (index, height) in frame.surface_heights.iter().enumerate() {
+        state[heights_offset + index] = height.to_bits();
+    }
+    for (index, tile_id) in frame.cells.iter().copied().enumerate() {
+        state[cells_offset + index / 4] |= u32::from(tile_id) << ((index % 4) * 8);
+    }
+    if state.len() > crate::intel::gpgpu::SPRITE_QUAD_TILEMAP_STATE_MAX_DWORDS {
+        return Err(GameError::Render("helio-sprite-tilemap-capacity"));
+    }
+
+    let mut descriptors = Vec::with_capacity(frame.sprites.len() + 1);
+    descriptors.push(crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
+        c0_x: 0.0,
+        c0_y: 0.0,
+        c0_u: 0.0,
+        c0_v: 0.0,
+        c1_x: width as f32,
+        c1_y: 0.0,
+        c1_u: 1.0,
+        c1_v: 0.0,
+        c2_x: width as f32,
+        c2_y: height as f32,
+        c2_u: 1.0,
+        c2_v: 1.0,
+        c3_x: 0.0,
+        c3_y: height as f32,
+        c3_u: 0.0,
+        c3_v: 1.0,
+        color_rgba: u32::MAX,
+        flags: crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_TILEMAP,
+    });
+    for sprite in frame.sprites {
+        descriptors.push(sprite_dig_descriptor(sprite, atlas)?);
+    }
+    if descriptors.len() > crate::intel::gpgpu::sprite_quad_worklist_max_descs() {
+        return Err(GameError::Render("helio-sprite-descriptor-capacity"));
+    }
+    Ok((descriptors, state))
+}
+
+async fn render_sprite_dig_frame(
+    frame: crate::ui4::FrameHandle,
+    width: u32,
+    height: u32,
+    atlas_surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+    descriptors: &[crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc],
+    tilemap_state: &[u32],
+) -> Result<SpriteDigGpuFrame, GameError> {
+    let lease = crate::ui4::acquire_frame_buffer(frame)?;
+    let destination = match crate::ui4::gpgpu_rgba_surface(lease) {
+        Ok(destination) if destination.width == width && destination.height == height => {
+            destination
+        }
+        Ok(_) => {
+            let _ = crate::ui4::cancel_frame_buffer(lease);
+            return Err(GameError::InvalidFrame);
+        }
+        Err(error) => {
+            let _ = crate::ui4::cancel_frame_buffer(lease);
+            return Err(error.into());
+        }
+    };
+    let result = crate::intel::gpgpu::sprite_quad_tilemap_rgba8_direct_result(
+        destination,
+        atlas_surface,
+        descriptors,
+        tilemap_state,
+    );
+    match result.outcome {
+        crate::intel::gpgpu::GpgpuSubmissionOutcome::Unavailable => {
+            let _ = crate::ui4::cancel_frame_buffer(lease);
+            Err(GameError::Render("helio-sprite-gpu-unavailable"))
+        }
+        crate::intel::gpgpu::GpgpuSubmissionOutcome::SubmittedIncomplete => {
+            // The exact producer allocation remains pinned by its outstanding
+            // lease; the direct context was quarantined at the dispatch layer.
+            Err(GameError::Render("helio-sprite-incomplete-direct-frame"))
+        }
+        crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete => {
+            let release = result
+                .release
+                .ok_or(GameError::Render("helio-sprite-missing-release"))?;
+            crate::ui4::mark_frame_buffer_fully_opaque(lease)?;
+            if let Err(error) = crate::ui4::publish_gpgpu_render_frame_buffer(lease, release) {
+                let _ = crate::ui4::cancel_frame_buffer(lease);
+                return Err(error.into());
+            }
+            Ok(SpriteDigGpuFrame {
+                descriptors: result.stats.descs,
+                submit_ms: result.stats.submit_ms,
+            })
+        }
+    }
+}
+
+async fn run_sprite_dig(context: InstanceContext) -> Result<(), GameError> {
+    const FRAME_PERIOD_MS: u64 = 33;
+
+    let mut surface = create_surface(context)?;
+    let spec = match trueos_helio_runtime::sprite_dig::Spec::decode_artifact(GAME_ARTIFACT) {
+        Ok(spec) => spec,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(GameError::Artifact(error));
+        }
+    };
+    let mut engine = match trueos_helio_runtime::sprite_dig::Engine::new(spec) {
+        Ok(engine) => engine,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(GameError::Artifact(error));
+        }
+    };
+    if let Err(error) = engine.step(
+        Default::default(),
+        surface.width,
+        surface.height,
+        FRAME_PERIOD_MS as f32 / 1_000.0,
+    ) {
+        destroy_unpublished_surface(surface);
+        return Err(GameError::Artifact(error));
+    }
+    let atlas = match trueos_helio_runtime::sprite_dig::Atlas::decode(SPRITE_DIG_ATLAS) {
+        Ok(atlas) => atlas,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(GameError::Artifact(error));
+        }
+    };
+    let Some(atlas_surface) = crate::intel::gpgpu::prepare_helio_sprite_atlas_rgba8(
+        atlas.width,
+        atlas.height,
+        atlas.pitch_bytes,
+        atlas.pixels,
+    ) else {
+        destroy_unpublished_surface(surface);
+        return Err(GameError::Render("helio-sprite-atlas-upload"));
+    };
+
+    let mut input = crate::ui4::winit_input::EventLoopInput::new(context.owner);
+    let mut first_frame = true;
+    let mut frame_prepared = true;
+    let mut frame_index = 0u64;
+    let mut busy_retries = 0u64;
+    let mut incomplete_retries = 0u64;
+    let mut last_successful_publish: Option<Instant> = None;
+    let mut retired_frames = Vec::new();
+    let mut pending_resize: Option<PendingGameResize> = None;
+    let mut previous_gameplay = (
+        engine.broken_count(),
+        engine.placed_count(),
+        engine.inventory_count(),
+        engine.selected_material(),
+        engine.mining_stage(),
+    );
+    let result = loop {
+        retire_frames(&mut retired_frames);
+        if context.is_stopping() {
+            break Ok(());
+        }
+        if !first_frame && !frame_prepared {
+            let Some(window) = surface.window else {
+                break Err(GameError::InvalidFrame);
+            };
+            let events = input.poll();
+            if escape_pressed(window, &events) {
+                context.request_stop("focused-window-escape");
+                break Ok(());
+            }
+            if pending_resize.is_none()
+                && let Some((width, height)) = desired_resize(&surface)
+            {
+                match prepare_resize(&surface, width, height) {
+                    Ok(replacement) => {
+                        crate::log_info!(target: "helio";
+                            "helio instance={} sprite-dig resize prepared window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap\n",
+                            context.instance_id,
+                            window.raw(),
+                            surface.width,
+                            surface.height,
+                            width,
+                            height,
+                            replacement.frame.raw(),
+                        );
+                        pending_resize = Some(replacement);
+                    }
+                    Err(error) => {
+                        crate::log_warn!(target: "helio";
+                            "helio instance={} sprite-dig resize deferred window={} requested={}x{} error={:?} action=retain-current-frame\n",
+                            context.instance_id,
+                            window.raw(),
+                            width,
+                            height,
+                            error,
+                        );
+                    }
+                }
+            }
+            let (render_width, render_height) = pending_resize
+                .map_or((surface.width, surface.height), |replacement| {
+                    (replacement.width, replacement.height)
+                });
+            let frame_input = sprite_dig_input_frame(&input, window, &events);
+            if let Err(error) = engine.step(
+                frame_input,
+                render_width,
+                render_height,
+                FRAME_PERIOD_MS as f32 / 1_000.0,
+            ) {
+                break Err(GameError::Artifact(error));
+            }
+            let gameplay = (
+                engine.broken_count(),
+                engine.placed_count(),
+                engine.inventory_count(),
+                engine.selected_material(),
+                engine.mining_stage(),
+            );
+            if gameplay != previous_gameplay {
+                crate::log_info!(target: "helio";
+                    "helio instance={} sprite-dig input broken={} placed={} inventory={} hotbar_selected={} mining_stage={} source=ui4-winit-bridge\n",
+                    context.instance_id,
+                    gameplay.0,
+                    gameplay.1,
+                    gameplay.2,
+                    gameplay.3,
+                    gameplay.4,
+                );
+                previous_gameplay = gameplay;
+            }
+            frame_prepared = true;
+        }
+
+        let (render_frame_handle, render_width, render_height) = pending_resize
+            .map_or((surface.frame, surface.width, surface.height), |replacement| {
+                (replacement.frame, replacement.width, replacement.height)
+            });
+        let (descriptors, tilemap_state) =
+            match sprite_dig_dispatch_data(&engine, &atlas, render_width, render_height) {
+                Ok(data) => data,
+                Err(error) => break Err(error),
+            };
+        match render_sprite_dig_frame(
+            render_frame_handle,
+            render_width,
+            render_height,
+            atlas_surface,
+            &descriptors,
+            &tilemap_state,
+        )
+        .await
+        {
+            Ok(rendered) => {
+                if let Some(replacement) = pending_resize.take() {
+                    match commit_resize(&mut surface, replacement) {
+                        Ok(previous) => {
+                            retired_frames.push(previous);
+                            crate::log_info!(target: "helio";
+                                "helio instance={} sprite-dig resize committed window={} extent={}x{} frame={} action=broker-swap-after-first-guc-release cpu_readback=0 cpu_frame_copy=0\n",
+                                context.instance_id,
+                                surface.window.map_or(0, crate::ui4::WindowId::raw),
+                                surface.width,
+                                surface.height,
+                                surface.frame.raw(),
+                            );
+                        }
+                        Err(error) => {
+                            let _ = crate::ui4::destroy_frame(replacement.frame);
+                            frame_prepared = false;
+                            crate::log_warn!(target: "helio";
+                                "helio instance={} sprite-dig resize commit rejected requested={}x{} error={:?} action=old-front-restored\n",
+                                context.instance_id,
+                                replacement.width,
+                                replacement.height,
+                                error,
+                            );
+                            Timer::after(Duration::from_millis(16)).await;
+                            continue;
+                        }
+                    }
+                } else if let Err(error) = publish_surface_window(&mut surface) {
+                    break Err(error);
+                }
+                frame_prepared = false;
+                frame_index = frame_index.saturating_add(1);
+                let published_at = Instant::now();
+                let cadence_us = last_successful_publish
+                    .map(|previous| published_at.saturating_duration_since(previous).as_micros())
+                    .unwrap_or(0);
+                last_successful_publish = Some(published_at);
+                crate::log_debug!(target: "helio";
+                    "helio instance={} sprite-dig gpu-frame={} descriptors={} submit_ms={} cadence_us={} busy_retries={} incomplete_retries={}\n",
+                    context.instance_id,
+                    frame_index,
+                    rendered.descriptors,
+                    rendered.submit_ms,
+                    cadence_us,
+                    busy_retries,
+                    incomplete_retries,
+                );
+            }
+            Err(GameError::Frame(crate::ui4::FramePoolError::Busy))
+            | Err(GameError::Render("render-busy" | "render-storage-busy")) => {
+                busy_retries = busy_retries.saturating_add(1);
+                Timer::after(Duration::from_millis(16)).await;
+                continue;
+            }
+            Err(GameError::Render("helio-sprite-incomplete-direct-frame")) => {
+                incomplete_retries = incomplete_retries.saturating_add(1);
+                crate::log_error!(target: "helio";
+                    "helio instance={} sprite-dig gpu submission incomplete retries={} action=quarantine-direct-context-and-pin-frame\n",
+                    context.instance_id,
+                    incomplete_retries,
+                );
+                break Err(GameError::Render("helio-sprite-incomplete-direct-frame"));
+            }
+            Err(error) => break Err(error),
+        }
+        if first_frame {
+            let window = surface.window.expect("published Helio sprite-dig window");
+            if !input.register_window(window) {
+                break Err(GameError::Render("helio-input-window-capacity"));
+            }
+            if !context.mark_online() {
+                break Ok(());
+            }
+            crate::log_info!(target: "helio";
+                "helio instance={} example=5 name={} online artifact_bytes={} atlas_bytes={} atlas={}x{} sprites={} objects={} frame={} window={} extent={}x{} plane={} controls={} input=ui4-owner-broker->winit-shaped-events keyboard=held-state mouse=cursor+buttons+wheel resize=ui4-broker->atomic-frame-swap path=helio-sprite-atlas-v1+tilemap-state-v1->cpp-for-opencl->spirv->igc-zebin->one-guc-schedule->ui4-triple-direct terrain=single-full-frame-walker overlays=ordered-atlas-sprites alpha=premultiplied-opaque cpu_readback=0 cpu_frame_copy=0\n",
+                context.instance_id,
+                engine.name(),
+                GAME_ARTIFACT.len(),
+                SPRITE_DIG_ATLAS.len(),
+                atlas.width,
+                atlas.height,
+                atlas.sprites().len(),
+                engine.object_count(),
+                surface.frame.raw(),
+                window.raw(),
+                surface.width,
+                surface.height,
+                PLANE_SLOT,
+                engine.controls(),
+            );
+            first_frame = false;
+        }
+        Timer::after(Duration::from_millis(FRAME_PERIOD_MS)).await;
+    };
+    if let Some(replacement) = pending_resize {
+        crate::ui4::retire_frame_when_released(replacement.frame);
+    }
+    transfer_retired_frames(&mut retired_frames);
+    destroy_unpublished_surface(surface);
+    result
+}
+
 async fn run_ported_scene(context: InstanceContext) -> Result<(), GameError> {
     let example_id = context.example_id;
     let mut surface = create_surface(context)?;
@@ -2937,7 +3459,7 @@ async fn run_ported_scene(context: InstanceContext) -> Result<(), GameError> {
             render_width,
             render_height,
             &resident,
-            TRANSPARENT_CLEAR_RGBA,
+            engine.clear_rgba(),
         )
         .await
         {
@@ -3028,7 +3550,7 @@ async fn run_ported_scene(context: InstanceContext) -> Result<(), GameError> {
             }
             crate::log_info!(
                 target: "helio";
-                "helio instance={} example={} name={} online artifact_bytes={} objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=transparent-rgba alpha=premultiplied input=ui4-owner-broker->winit-shaped-events controls={} resize=ui4-broker->render-native-or-half-scale-ring->atomic-frame-swap->direct-plane-1x-or-2x path=helioa-v1+scene-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
+                "helio instance={} example={} name={} online artifact_bytes={} objects={} resident_batches={} frame={} window={} extent={}x{} plane={} background=scene-defined alpha=premultiplied input=ui4-owner-broker->winit-shaped-events controls={} resize=ui4-broker->render-native-or-half-scale-ring->atomic-frame-swap->direct-plane-1x-or-2x path=helioa-v1+scene-v1->resident-batches->helio-indirect-v1->one-guc-schedule->ui4-triple-direct cpu_readback=0 cpu_frame_copy=0\n",
                 context.instance_id,
                 example_id,
                 engine.name(),
@@ -3083,6 +3605,8 @@ async fn helio_game_instance_task(context: InstanceContext) {
             2 => run_churn(context).await,
             3 => run_ported_scene(context).await,
             4 => run_pendulum(context).await,
+            5 => run_sprite_dig(context).await,
+            6 => run_ported_scene(context).await,
             _ => Err(GameError::Render("helio-example-reserved")),
         };
         match result {

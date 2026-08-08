@@ -101,6 +101,11 @@ pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC: u32 = 1 << 1;
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_CLEAR: u32 = 1 << 2;
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_SOURCE_XRGB: u32 = 1 << 3;
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_DEST_XRGB: u32 = 1 << 4;
+pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_TILEMAP: u32 = 1 << 5;
+
+pub(crate) const SPRITE_QUAD_TILEMAP_MAGIC: u32 = 0x454C_4954;
+pub(crate) const SPRITE_QUAD_TILEMAP_VERSION: u32 = 1;
+pub(crate) const SPRITE_QUAD_TILEMAP_STATE_MAX_DWORDS: usize = 2_048;
 
 pub(crate) const fn sprite_quad_worklist_max_descs() -> usize {
     SPRITE_QUAD_WORKLIST_MAX_DESCS

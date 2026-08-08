@@ -23,6 +23,8 @@ CHURN_FORWARD_PS = "intel-xe-lp/churn-forward.ps.simd8.bin"
 CHURN_LIGHT_SECTION = "scene/churn-light-v1.bin"
 BATTLE_SECTION = "scene/shape-battle-v1.bin"
 BIGCLOTH_SECTION = "scene/pendulum-bigcloth-v1.bin"
+SPRITE_DIG_SECTION = "scene/sprite-dig-v1.bin"
+PORTAL_ROOMS_SECTION = "scene/portal-rooms-v1.bin"
 RETAINED_TRANSFORM_SECTION = "scene/retained-transform-template-v1.bin"
 RETAINED_TRANSFORM_MAGIC = b"HRTXFM\0\0"
 RETAINED_TRANSFORM_HEADER_BYTES = 80
@@ -563,6 +565,76 @@ def validate_scene_contracts(sections: dict[str, tuple[int, bytes]]) -> None:
         fail("pendulum-bigcloth topology contract changed")
     if any(cloth[56:60]) or any(cloth[156:]):
         fail("nonzero pendulum-bigcloth reserved bytes")
+
+    sprite_dig = section(sections, SPRITE_DIG_SECTION, 0xFFFF)
+    if len(sprite_dig) != 256 or sprite_dig[:8] != b"HDIG2D\0\0":
+        fail("bad sprite-dig scene header")
+    if (u16(sprite_dig, 8), u16(sprite_dig, 10), u32(sprite_dig, 12)) != (1, 256, 256):
+        fail("unsupported sprite-dig scene version")
+    if tuple(u16(sprite_dig, offset) for offset in range(16, 32, 2)) != (
+        240, 8, 14, 7500, 8, 64, 42, 50,
+    ):
+        fail("sprite-dig world/capacity contract changed")
+    expected_scalars = (
+        48.0, 1.5, 2.0, -2400.0, 260.0, 780.0, 0.22,
+        56.0, 40.0, 46.0, 100.0,
+    )
+    if sprite_dig[32:76] != struct.pack("<11f", *expected_scalars):
+        fail("sprite-dig gameplay contract changed")
+    if u32(sprite_dig, 76) != 3:
+        fail("sprite-dig mining-stage contract changed")
+    expected_colors = (
+        (0.32, 0.55, 0.12, 1.0),
+        (0.12, 0.45, 0.65, 1.0),
+        (0.22, 0.17, 0.07, 1.0),
+        (0.35, 0.37, 0.40, 1.0),
+        (0.70, 0.50, 0.20, 1.0),
+        (0.95, 0.65, 0.12, 1.0),
+        (0.80, 0.12, 0.08, 0.75),
+        (0.45, 0.72, 0.18, 1.0),
+        (0.42, 0.30, 0.12, 1.0),
+        (0.58, 0.61, 0.66, 1.0),
+        (1.00, 0.85, 0.20, 0.45),
+    )
+    if sprite_dig[80:] != b"".join(struct.pack("<4f", *rgba) for rgba in expected_colors):
+        fail("sprite-dig retained-color contract changed")
+
+    portal_rooms = section(sections, PORTAL_ROOMS_SECTION, 0xFFFF)
+    if len(portal_rooms) < 64 or portal_rooms[:8] != b"HPORTAL\0":
+        fail("bad portal-rooms scene header")
+    version, header_bytes, total_bytes = struct.unpack_from("<HHI", portal_rooms, 8)
+    portal_count, material_count, object_count, object_stride = struct.unpack_from(
+        "<4H", portal_rooms, 16
+    )
+    if (version, header_bytes, total_bytes) != (1, 64, len(portal_rooms)):
+        fail("unsupported portal-rooms scene version")
+    if (portal_count, material_count, object_count, object_stride) != (6, 14, 74, 32):
+        fail("portal-rooms count contract changed")
+    portal_offset = 64
+    material_offset = portal_offset + portal_count * 32
+    object_offset = material_offset + material_count * 32
+    if object_offset + object_count * object_stride != len(portal_rooms) or any(portal_rooms[56:64]):
+        fail("portal-rooms table layout changed")
+    if portal_rooms[24:56] != struct.pack(
+        "<8f", 6.0, 0.15, 6.0, 4.0, 0.002, 0.7853981633974483, 0.1, 300.0
+    ):
+        fail("portal-rooms camera/world contract changed")
+    for index in range(portal_count):
+        offset = portal_offset + index * 32
+        base, accent, reserved = struct.unpack_from("<HHI", portal_rooms, offset + 24)
+        if (base, accent, reserved) != (2 + index * 2, 3 + index * 2, 0):
+            fail(f"portal-rooms portal {index} material mapping changed")
+    for index in range(material_count):
+        offset = material_offset + index * 32
+        if any(portal_rooms[offset + 20:offset + 32]):
+            fail(f"portal-rooms material {index} reserved bytes changed")
+    for index in range(object_count):
+        offset = object_offset + index * object_stride
+        portal, material, shape = struct.unpack_from("<HHB", portal_rooms, offset)
+        if portal >= portal_count or material >= material_count or shape > 1:
+            fail(f"portal-rooms object {index} reference changed")
+        if any(portal_rooms[offset + 5:offset + 8]):
+            fail(f"portal-rooms object {index} reserved bytes changed")
 
 
 def main() -> None:

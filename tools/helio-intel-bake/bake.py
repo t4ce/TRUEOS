@@ -49,6 +49,8 @@ CHURN_FORWARD_BYTES = 768
 CHURN_LIGHT_SECTION = "scene/churn-light-v1.bin"
 CHURN_LIGHT_MAGIC = b"HCHLIT\0\0"
 CHURN_LIGHT_BYTES = 160
+SPRITE_DIG_SECTION = "scene/sprite-dig-v1.bin"
+PORTAL_ROOMS_SECTION = "scene/portal-rooms-v1.bin"
 RETAINED_TRANSFORM_SECTION = "scene/retained-transform-template-v1.bin"
 RETAINED_TRANSFORM_MAGIC = b"HRTXFM\0\0"
 RETAINED_TRANSFORM_HEADER_BYTES = 80
@@ -392,6 +394,158 @@ def encode_pendulum_bigcloth_scene() -> bytes:
     _put_f32s(out, 120, (0.25, 0.25, 0.30, 1.0))
     struct.pack_into("<f", out, 136, 50.0)
     _put_f32s(out, 140, (0.0, 0.0, 0.0, 0.0))
+    return bytes(out)
+
+
+def encode_sprite_dig_scene() -> bytes:
+    """Encode the stable no_std gameplay contract for sprite_dig_demo.rs."""
+    out = bytearray(256)
+    out[:8] = b"HDIG2D\0\0"
+    struct.pack_into("<HHI", out, 8, 1, len(out), len(out))
+    # WORLD_COLS, DIRT_ROWS, STONE_ROWS, POOL_CAPACITY, hotbar/placed caps,
+    # and the authored lake band. The first four values are copied directly
+    # from Helio's demo; the two caps bound TRUEOS-owned dynamic state.
+    struct.pack_into("<8H", out, 16, 240, 8, 14, 7500, 8, 64, 42, 50)
+    _put_f32s(out, 32, (
+        48.0, 1.5, 2.0, -2400.0, 260.0, 780.0, 0.22,
+        56.0, 40.0, 46.0, 100.0,
+    ))
+    struct.pack_into("<I", out, 76, 3)
+    # Retained color-quad visualization for the atlas-backed hosted scene:
+    # grass, water, dirt, stone, placed block, player, crack overlay, three
+    # hotbar material icons, and selected-slot highlight.
+    for index, rgba in enumerate((
+        (0.32, 0.55, 0.12, 1.0),
+        (0.12, 0.45, 0.65, 1.0),
+        (0.22, 0.17, 0.07, 1.0),
+        (0.35, 0.37, 0.40, 1.0),
+        (0.70, 0.50, 0.20, 1.0),
+        (0.95, 0.65, 0.12, 1.0),
+        (0.80, 0.12, 0.08, 0.75),
+        (0.45, 0.72, 0.18, 1.0),
+        (0.42, 0.30, 0.12, 1.0),
+        (0.58, 0.61, 0.66, 1.0),
+        (1.00, 0.85, 0.20, 0.45),
+    )):
+        _put_f32s(out, 80 + index * 16, rgba)
+    return bytes(out)
+
+
+def encode_portal_rooms_scene() -> bytes:
+    """Encode portal_rooms.rs's texture-free portals, rooms, and furniture."""
+    hub_half = 6.0
+    wall_t = 0.15
+    room_half = 6.0
+    portals = (
+        ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+        ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+        ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+        ((0.0, -1.0, 0.0), (0.0, 0.0, 1.0)),
+        ((0.0, 0.0, 1.0), (0.0, 1.0, 0.0)),
+        ((0.0, 0.0, -1.0), (0.0, 1.0, 0.0)),
+    )
+    themes = (
+        ((0.55, 0.12, 0.08, 1.0), (1.0, 0.35, 0.1, 1.0)),
+        ((0.08, 0.4, 0.14, 1.0), (0.25, 1.0, 0.35, 1.0)),
+        ((0.55, 0.45, 0.05, 1.0), (1.0, 0.85, 0.15, 1.0)),
+        ((0.05, 0.1, 0.4, 1.0), (0.2, 0.4, 1.0, 1.0)),
+        ((0.42, 0.08, 0.48, 1.0), (0.9, 0.25, 1.0, 1.0)),
+        ((0.08, 0.4, 0.45, 1.0), (0.2, 0.95, 1.0, 1.0)),
+    )
+    # material: linear RGBA plus an emissive contribution used by the
+    # retained compatibility lighting. IDs 0/1 are shared wood/metal;
+    # each room then owns its wall/base and accent pair.
+    materials = [
+        ((0.32, 0.2, 0.11, 1.0), 0.0),
+        ((0.5, 0.51, 0.54, 1.0), 0.0),
+    ]
+    for base, accent in themes:
+        materials.extend(((base, 0.0), (accent, 0.8)))
+
+    # object: portal, material, shape (0 box / 1 octa-sphere), local center
+    # (right, height relative to room center, depth from portal), half extent.
+    objects: list[tuple[int, int, int, tuple[float, ...], tuple[float, ...]]] = []
+    def add(portal: int, material: int, shape: int, rx: float, height: float,
+            depth: float, hr: float, hu: float, hn: float) -> None:
+        objects.append((portal, material, shape, (rx, height - room_half, depth), (hr, hu, hn)))
+
+    for portal in range(6):
+        base = 2 + portal * 2
+        # Five real shell panels; the entrance at depth zero stays open.
+        add(portal, base, 0, -room_half, room_half, room_half, wall_t, room_half, room_half)
+        add(portal, base, 0, room_half, room_half, room_half, wall_t, room_half, room_half)
+        add(portal, base, 0, 0.0, 0.0, room_half, room_half, wall_t, room_half)
+        add(portal, base, 0, 0.0, 2.0 * room_half, room_half, room_half, wall_t, room_half)
+        add(portal, base, 0, 0.0, room_half, 2.0 * room_half, room_half, room_half, wall_t)
+
+    # Furniture copied from portal_rooms.rs's six furnish_room branches.
+    b, s = 0, 1
+    base, accent = 2, 3
+    for args in (
+        (0, 0, b, -1.5, .7, 8.5, 2.4, .7, 3.0), (0, base, b, -1.5, 1.5, 8.5, 2.2, .3, 2.8),
+        (0, base, b, -1.5, 1.9, 10.3, 1.0, .25, .7), (0, 0, b, 1.5, .5, 9.5, .6, .5, .6),
+        (0, accent, s, 1.5, 1.4, 9.5, .4, .4, .4), (0, 0, b, -4.8, 1.8, 2.2, .8, 1.8, 1.0),
+        (0, base, b, -1.0, .04, 6.0, 2.6, .04, 3.2),
+    ):
+        add(*args)
+    base, accent = 4, 5
+    add(1, 0, b, 0., .5, 5., 1.8, .5, .9)
+    for rx in (-2.5, 0.0, 2.5):
+        add(1, 0, b, rx, .5, 10.5, .6, .5, .6); add(1, accent, s, rx, 1.4, 10.5, .55, .55, .55)
+    add(1, 0, b, -4.5, .4, 2., .5, .4, 1.8)
+    base, accent = 6, 7
+    for args in (
+        (2, 1, b, 0., .7, 10.5, 4.5, .7, .8), (2, 1, b, -1.5, 1.55, 10.5, .8, .15, .6),
+        (2, accent, s, -1.8, 1.72, 10.5, .16, .16, .16), (2, accent, s, -1.2, 1.72, 10.5, .16, .16, .16),
+        (2, 0, b, 0., .75, 5., 1.5, .1, 1.5), (2, 0, b, -2., .4, 5., .45, .4, .45),
+        (2, 0, b, 2., .4, 5., .45, .4, .45), (2, accent, s, 0., 11., 6., .5, .5, .5),
+    ):
+        add(*args)
+    base, accent = 8, 9
+    add(3, 0, b, 0., 3., 11.3, 4.5, 3., .5)
+    for index, rx in enumerate((-3., -1.5, 0., 1.5, 3.)):
+        add(3, accent if index % 2 == 0 else base, b, rx, 4.2, 11., .4, .9, .15)
+    add(3, 0, b, 0., .75, 4.5, 1.6, .1, .9); add(3, base, b, 0., .45, 3., .5, .45, .5)
+    add(3, accent, s, 1.2, 1.5, 4.5, .3, .3, .3)
+    base, accent = 10, 11
+    for args in (
+        (4, base, b, 0., .45, 9.5, 2.6, .45, 1.), (4, base, b, 0., 1.2, 10.4, 2.6, .5, .25),
+        (4, accent, b, 0., 3.4, 11.7, 1.8, 1., .12), (4, 0, b, 0., .4, 6.5, 1.2, .15, .7),
+        (4, 1, b, -4.5, 1.9, 4.5, .1, 1.9, .1), (4, accent, s, -4.5, 4., 4.5, .5, .5, .5),
+    ):
+        add(*args)
+    base, accent = 12, 13
+    for args in (
+        (5, 1, b, 0., .55, 8.5, 1.8, .55, 1.3), (5, 1, b, -4., .75, 2.5, 1., .1, .7),
+        (5, accent, b, -4., 2., 11.7, .8, .9, .12), (5, 0, b, 3., .35, 3.5, .4, .35, .4),
+        (5, accent, s, 3.5, 1.1, 7., .4, .4, .4), (5, accent, s, -3.5, 1.1, 8., .35, .35, .35),
+    ):
+        add(*args)
+
+    header_bytes, portal_bytes, material_bytes, object_bytes = 64, 32, 32, 32
+    total = header_bytes + len(portals) * portal_bytes + len(materials) * material_bytes + len(objects) * object_bytes
+    out = bytearray(total)
+    out[:8] = b"HPORTAL\0"
+    struct.pack_into("<HHI4H", out, 8, 1, header_bytes, total, len(portals), len(materials), len(objects), object_bytes)
+    _put_f32s(out, 24, (hub_half, wall_t, room_half, 4.0, 0.002, 0.7853981633974483, 0.1, 300.0))
+    portal_offset = header_bytes
+    material_offset = portal_offset + len(portals) * portal_bytes
+    object_offset = material_offset + len(materials) * material_bytes
+    # Table offsets are derived from the fixed header/record strides. Keep
+    # the final header words reserved so malformed layouts cannot redirect a
+    # no_std decoder into unrelated container bytes.
+    struct.pack_into("<II", out, 56, 0, 0)
+    for index, (normal, up) in enumerate(portals):
+        offset = portal_offset + index * portal_bytes
+        _put_f32s(out, offset, normal + up)
+        struct.pack_into("<HHI", out, offset + 24, 2 + index * 2, 3 + index * 2, 0)
+    for index, (color, emissive) in enumerate(materials):
+        offset = material_offset + index * material_bytes
+        _put_f32s(out, offset, color + (emissive,))
+    for index, (portal, material, shape, center, half) in enumerate(objects):
+        offset = object_offset + index * object_bytes
+        struct.pack_into("<HHB3x", out, offset, portal, material, shape)
+        _put_f32s(out, offset + 8, center + half)
     return bytes(out)
 
 
@@ -942,6 +1096,12 @@ def main() -> None:
     )
     sections["scene/pendulum-bigcloth-v1.bin"] = (
         OTHER_SECTION_KIND, encode_pendulum_bigcloth_scene(),
+    )
+    sections[SPRITE_DIG_SECTION] = (
+        OTHER_SECTION_KIND, encode_sprite_dig_scene(),
+    )
+    sections[PORTAL_ROOMS_SECTION] = (
+        OTHER_SECTION_KIND, encode_portal_rooms_scene(),
     )
     try:
         render_ir_kind, render_ir = sections[RENDER_IR_SECTION]

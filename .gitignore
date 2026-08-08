@@ -9,6 +9,7 @@ Cargo.lock
 !tools/wgpu-video-mesh/Cargo.lock
 !tools/remoteai/Cargo.lock
 !tools/trueos-ttstt/Cargo.lock
+!tools/helio-sprite-atlas-bake/Cargo.lock
 node_modules
 package.json
 package-lock.json
