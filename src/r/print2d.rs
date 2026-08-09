@@ -42,6 +42,12 @@ pub enum PrintJobState {
     OutcomeUnknown = 11,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PrintOwner {
+    Blueprint(u8),
+    Kernel,
+}
+
 impl PrintJobState {
     pub const fn name(self) -> &'static str {
         match self {
@@ -75,7 +81,7 @@ pub(crate) enum PrintDocument {
 pub(crate) struct PrintJob {
     pub id: u32,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    pub owner: u8,
+    pub owner: PrintOwner,
     pub document: PrintDocument,
     pub printer_uri: Option<String>,
 }
@@ -83,7 +89,7 @@ pub(crate) struct PrintJob {
 #[derive(Clone, Copy)]
 struct JobRecord {
     id: u32,
-    owner: u8,
+    owner: PrintOwner,
     state: PrintJobState,
 }
 
@@ -132,7 +138,11 @@ fn next_job_id() -> u32 {
     }
 }
 
-fn enqueue(owner: u8, document: PrintDocument, printer_uri: Option<String>) -> Result<u32, i64> {
+fn enqueue(
+    owner: PrintOwner,
+    document: PrintDocument,
+    printer_uri: Option<String>,
+) -> Result<u32, i64> {
     let id = next_job_id();
     {
         let mut queue = PRINT_QUEUE.lock();
@@ -174,12 +184,12 @@ fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
         queue.retain_status_capacity();
         queue.records.push_back(JobRecord {
             id,
-            owner,
+            owner: PrintOwner::Blueprint(owner),
             state: PrintJobState::Queued,
         });
         queue.pending.push_back(PrintJob {
             id,
-            owner,
+            owner: PrintOwner::Blueprint(owner),
             document: PrintDocument::GridPaperA4 {
                 generation,
                 size,
@@ -217,7 +227,7 @@ pub(crate) fn submit_for_owner(owner: u8, document_kind: u32, subject: u64, raw:
         _ => return ERROR_INVALID_DOCUMENT,
     };
 
-    match enqueue(owner, document, None) {
+    match enqueue(PrintOwner::Blueprint(owner), document, None) {
         Ok(id) => i64::from(id),
         Err(error) => error,
     }
@@ -234,7 +244,46 @@ pub(crate) fn submit_gridpaper_to_printer(
         return Err(ERROR_INVALID_DOCUMENT);
     }
     enqueue(
-        owner,
+        PrintOwner::Blueprint(owner),
+        PrintDocument::GridPaperA4 {
+            generation,
+            size,
+            raw,
+        },
+        Some(printer_uri.to_string()),
+    )
+}
+
+pub(crate) fn submit_kernel_gridpaper(
+    generation: u64,
+    size: crate::r::gridpaper_service::GridSize,
+    raw: Vec<u8>,
+) -> Result<u32, i64> {
+    if !crate::r::gridpaper_service::valid_print_snapshot(&raw) {
+        return Err(ERROR_INVALID_DOCUMENT);
+    }
+    enqueue(
+        PrintOwner::Kernel,
+        PrintDocument::GridPaperA4 {
+            generation,
+            size,
+            raw,
+        },
+        None,
+    )
+}
+
+pub(crate) fn submit_kernel_gridpaper_to_printer(
+    generation: u64,
+    size: crate::r::gridpaper_service::GridSize,
+    raw: Vec<u8>,
+    printer_uri: &str,
+) -> Result<u32, i64> {
+    if printer_uri.is_empty() || !crate::r::gridpaper_service::valid_print_snapshot(&raw) {
+        return Err(ERROR_INVALID_DOCUMENT);
+    }
+    enqueue(
+        PrintOwner::Kernel,
         PrintDocument::GridPaperA4 {
             generation,
             size,
@@ -271,7 +320,7 @@ pub(crate) fn status_for_owner(owner: u8, job_id: u32) -> i32 {
     let Some(record) = queue.records.iter().find(|record| record.id == job_id) else {
         return ERROR_UNKNOWN_JOB;
     };
-    if record.owner != owner {
+    if record.owner != PrintOwner::Blueprint(owner) {
         return ERROR_NOT_OWNER as i32;
     }
     record.state as i32

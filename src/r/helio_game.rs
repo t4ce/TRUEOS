@@ -2968,7 +2968,7 @@ fn sprite_dig_descriptor(
 }
 
 fn sprite_dig_dispatch_data(
-    engine: &trueos_helio_runtime::sprite_dig::Engine,
+    engine: &mut trueos_helio_runtime::sprite_dig::Engine,
     atlas: &trueos_helio_runtime::sprite_dig::Atlas<'_>,
     width: u32,
     height: u32,
@@ -2978,6 +2978,14 @@ fn sprite_dig_dispatch_data(
     let frame = engine
         .texture_frame(width, height, atlas.player_size)
         .map_err(GameError::Artifact)?;
+    crate::log_debug!(target: "helio";
+        "helio sprite-dig scene-boundary epoch={} retained_rows={} live_rows={} dirty_first={} dirty_count={} ownership=game-write/render-read derived=visibility+indirect compatibility_lowering=tilemap+ordered-overlays\n",
+        frame.scene_epoch,
+        frame.scene_rows,
+        frame.scene_live_rows,
+        frame.scene_dirty.first,
+        frame.scene_dirty.count,
+    );
     let (cols, rows, tile, zoom, camera) = engine.tilemap_spec();
     if frame.surface_heights.len() != cols || frame.cells.len() != cols.saturating_mul(rows) {
         return Err(GameError::Render("helio-sprite-tilemap-shape"));
@@ -3264,7 +3272,7 @@ async fn run_sprite_dig(context: InstanceContext) -> Result<(), GameError> {
                 (replacement.frame, replacement.width, replacement.height)
             });
         let (descriptors, tilemap_state) =
-            match sprite_dig_dispatch_data(&engine, &atlas, render_width, render_height) {
+            match sprite_dig_dispatch_data(&mut engine, &atlas, render_width, render_height) {
                 Ok(data) => data,
                 Err(error) => break Err(error),
             };
@@ -3353,7 +3361,7 @@ async fn run_sprite_dig(context: InstanceContext) -> Result<(), GameError> {
                 break Ok(());
             }
             crate::log_info!(target: "helio";
-                "helio instance={} example=5 name={} online artifact_bytes={} atlas_bytes={} atlas={}x{} sprites={} objects={} frame={} window={} extent={}x{} plane={} controls={} input=ui4-owner-broker->winit-shaped-events keyboard=held-state mouse=cursor+buttons+wheel resize=ui4-broker->atomic-frame-swap path=helio-sprite-atlas-v2+retained-scene-handles+tilemap-state-v1->cpp-for-opencl->spirv->igc-zebin->one-guc-schedule->ui4-triple-direct terrain=single-full-frame-walker overlays=depth-ordered-atlas-sprites alpha=straight-src-over cpu_readback=0 cpu_frame_copy=0\n",
+                "helio instance={} example=5 name={} online artifact_bytes={} atlas_bytes={} atlas={}x{} sprites={} objects={} frame={} window={} extent={}x{} plane={} controls={} input=ui4-owner-broker->winit-shaped-events keyboard=held-state mouse=cursor+buttons+wheel resize=ui4-broker->atomic-frame-swap path=game-scenedb-publication-v1->helio-sprite-atlas-v2+tilemap-state-v1->cpp-for-opencl->spirv->igc-zebin->one-guc-schedule->ui4-triple-direct scene_ownership=game-write/render-read terrain=single-full-frame-compatibility-walker overlays=depth-ordered-atlas-sprites alpha=straight-src-over cpu_readback=0 cpu_frame_copy=0\n",
                 context.instance_id,
                 engine.name(),
                 GAME_ARTIFACT.len(),

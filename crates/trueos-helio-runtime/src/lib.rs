@@ -11,6 +11,7 @@ pub mod churn;
 pub mod pendulum_bigcloth;
 pub mod portal_rooms;
 pub mod retained_transform;
+pub mod scene_db;
 pub mod sprite_dig;
 
 use alloc::vec::Vec;

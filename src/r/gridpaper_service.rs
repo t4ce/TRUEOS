@@ -107,8 +107,29 @@ const GRIDPAPER_FONT_INSTANCE_TRANSFORMS_ENABLED: bool = false;
 const GRID_CURSOR_STROKE_PX: u32 = 3;
 const GRID_CURSOR_STATE_CAPACITY: usize = 32;
 const PRINT_REQUEST_CAPACITY: usize = 8;
-const PRINTER_MENU_CONTEXT_CAPACITY: usize = 8;
+const PRINTER_MENU_CONTEXT_CAPACITY: usize = GRIDPAPER_POOL_SOFT_CAP + 8;
 const PRINT_CAPTURE_LONG_EDGE: u32 = 1_440;
+
+const SEEDED_TEXT_COLOR_COUNT: usize = 17;
+const SEEDED_UNICODE_WAVES: [[&str; SEEDED_TEXT_COLOR_COUNT]; 3] = [
+    [
+        "α", "β", "γ", "δ", "λ", "π", "Σ", "Ω", "∞", "∫", "√", "≈", "≠", "≤", "≥", "±", "∂",
+    ],
+    [
+        "Ж", "Я", "Д", "Ф", "Ю", "♪", "♫", "▲", "△", "◆", "◇", "●", "○", "♠", "♣", "♥", "♦",
+    ],
+    [
+        "←", "↖", "↑", "↗", "→", "↘", "↓", "↙", "⇐", "⇑", "⇒", "⇓", "⇔", "⊕", "⊗", "⊙", "⊥",
+    ],
+];
+const SEEDED_ASCII_DIGITS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+const SEEDED_ASCII_LETTERS: [&str; 7] = ["a", "b", "c", "d", "e", "f", "g"];
+const SEEDED_ASCII_ROWS: [(usize, usize); 3] = [(14, 17), (31, 34), (48, 51)];
+const SEEDED_ASCII_STYLES: [u8; SEEDED_ASCII_ROWS.len()] = [0, STYLE_BOLD, STYLE_ITALIC];
+const SEEDED_ASCII_COLOR_PHASES: [usize; SEEDED_ASCII_ROWS.len()] = [0, 5, 10];
+const SEEDED_WAVE_BASE_ROWS: [usize; SEEDED_UNICODE_WAVES.len()] = [5, 22, 39];
+const SEEDED_WAVE_ROW_OFFSETS: [usize; SEEDED_TEXT_COLOR_COUNT] =
+    [0, 1, 3, 5, 6, 5, 3, 1, 0, 1, 3, 5, 6, 5, 3, 1, 0];
 
 const ERROR_INVALID_SNAPSHOT: i32 = -1;
 const ERROR_INVALID_SCALE: i32 = -2;
@@ -441,6 +462,100 @@ fn find_kernel_pool_slot(
         .position(|store| store.kernel_owner == Some(owner))
 }
 
+fn write_seeded_cell(
+    raw: &mut [u8; PAGE_BYTES],
+    size: GridSize,
+    column: usize,
+    row: usize,
+    primary: &str,
+    upper: Option<&str>,
+    foreground: u8,
+    style: u8,
+) {
+    if column >= size.columns() || row >= size.rows() {
+        return;
+    }
+    let primary = primary.as_bytes();
+    let upper = upper.unwrap_or("").as_bytes();
+    debug_assert!(primary.len() <= GLYPH_UTF8_CAPACITY);
+    debug_assert!(upper.len() <= GLYPH_UTF8_CAPACITY);
+    let offset = (row * COLUMNS + column) * CELL_BYTES;
+    let cell = &mut raw[offset..offset + CELL_BYTES];
+    cell.fill(0);
+    cell[PRIMARY_LENGTH_OFFSET] = primary.len() as u8;
+    cell[UPPER_LENGTH_OFFSET] = upper.len() as u8;
+    cell[FOREGROUND_OFFSET] = foreground;
+    cell[BACKGROUND_OFFSET] = COLOR_TRANSPARENT;
+    cell[STYLE_OFFSET] = style;
+    cell[PRIMARY_OFFSET..PRIMARY_OFFSET + primary.len()].copy_from_slice(primary);
+    cell[UPPER_OFFSET..UPPER_OFFSET + upper.len()].copy_from_slice(upper);
+}
+
+/// Reproduce the deterministic Gridpaper specimen that the Blueprint carried
+/// while the native service was unreachable. Coordinates outside a requested
+/// smaller grid are simply omitted.
+fn seed_shell_gridpaper(raw: &mut [u8; PAGE_BYTES], size: GridSize) {
+    raw.fill(0);
+    for (wave_index, glyphs) in SEEDED_UNICODE_WAVES.iter().enumerate() {
+        for (selector, glyph) in glyphs.iter().enumerate() {
+            let style = match wave_index {
+                0 => 0,
+                1 => STYLE_BOLD,
+                _ => match selector % 4 {
+                    0 => STYLE_UNDERLINE,
+                    1 => STYLE_STRIKEOUT,
+                    2 => STYLE_ITALIC,
+                    _ => STYLE_BOLD | STYLE_UNDERLINE,
+                },
+            };
+            write_seeded_cell(
+                raw,
+                size,
+                2 + selector * 2,
+                SEEDED_WAVE_BASE_ROWS[wave_index] + SEEDED_WAVE_ROW_OFFSETS[selector],
+                glyph,
+                None,
+                selector as u8,
+                style,
+            );
+        }
+    }
+    for (specimen, ((digit_row, letter_row), style)) in SEEDED_ASCII_ROWS
+        .iter()
+        .copied()
+        .zip(SEEDED_ASCII_STYLES.iter().copied())
+        .enumerate()
+    {
+        let color_phase = SEEDED_ASCII_COLOR_PHASES[specimen];
+        for (index, glyph) in SEEDED_ASCII_DIGITS.iter().enumerate() {
+            write_seeded_cell(
+                raw,
+                size,
+                9 + index * 2,
+                digit_row,
+                glyph,
+                None,
+                ((index + color_phase) % SEEDED_TEXT_COLOR_COUNT) as u8,
+                style,
+            );
+        }
+        for (index, glyph) in SEEDED_ASCII_LETTERS.iter().enumerate() {
+            write_seeded_cell(
+                raw,
+                size,
+                12 + index * 2,
+                letter_row,
+                glyph,
+                None,
+                ((index + 10 + color_phase) % SEEDED_TEXT_COLOR_COUNT) as u8,
+                style,
+            );
+        }
+    }
+    write_seeded_cell(raw, size, 18, 11, "x", Some("²"), 13, 0);
+    debug_assert!(validate_page(raw).is_ok());
+}
+
 fn request_kernel_grid(
     client: KernelGridClient,
     columns: u32,
@@ -491,6 +606,10 @@ fn request_kernel_grid(
         token: next_kernel_grid_token(),
     };
     stores[slot].claim_kernel(owner, size, scale_percent, client == KernelGridClient::Shell2);
+    if client == KernelGridClient::Shell2 {
+        let published = stores[slot].published;
+        seed_shell_gridpaper(&mut stores[slot].buffers[published], size);
+    }
     crate::log_info!(
         target: "gridpaper";
         "gridpaper: kernel lease claimed slot={} client={:?} token={} grid={}x{} scale={} soft_cap={}\n",
@@ -713,10 +832,34 @@ struct PrintRenderRequest {
     raw: Vec<u8>,
 }
 
+#[derive(Clone)]
+enum PrinterMenuSnapshotSource {
+    Frozen(OwnedSnapshot),
+    PoolSlot(usize),
+}
+
+#[derive(Clone)]
 struct PrinterMenuContext {
     id: u64,
-    snapshot: OwnedSnapshot,
+    snapshot: PrinterMenuSnapshotSource,
     printers: Vec<crate::r::net::printer::PrinterSnapshot>,
+    persistent: bool,
+}
+
+impl PrinterMenuContext {
+    fn snapshot(&self) -> Option<OwnedSnapshot> {
+        match &self.snapshot {
+            PrinterMenuSnapshotSource::Frozen(snapshot) => Some(snapshot.clone()),
+            PrinterMenuSnapshotSource::PoolSlot(pool_slot) => snapshot_after(*pool_slot, 0),
+        }
+    }
+
+    fn blueprint_owner(&self) -> Option<u8> {
+        match &self.snapshot {
+            PrinterMenuSnapshotSource::Frozen(snapshot) => snapshot.producer.blueprint_owner(),
+            PrinterMenuSnapshotSource::PoolSlot(_) => None,
+        }
+    }
 }
 
 pub(crate) struct PrintRasterFrame {
@@ -1216,7 +1359,7 @@ pub(crate) fn checkpoint_snapshot_for_owner(owner: u8, instance_id: u32, out: &m
         .retain(|request| request.owner != owner || request.instance_id != instance_id);
     PRINTER_MENU_CONTEXTS
         .lock()
-        .retain(|context| context.snapshot.producer.blueprint_owner() != Some(owner));
+        .retain(|context| context.blueprint_owner() != Some(owner));
     crate::log_info!(
         target: "gridpaper";
         "gridpaper: checkpoint captured and pool lease released slot={} owner={} local_instance={} bytes={} action=destroy-ui4+gpu-scene+frame\n",
@@ -1253,7 +1396,7 @@ pub(crate) fn close_owner(owner: u8, instance_id: u32) -> i32 {
             .retain(|request| request.owner != owner || request.instance_id != instance_id);
         PRINTER_MENU_CONTEXTS
             .lock()
-            .retain(|context| context.snapshot.producer.blueprint_owner() != Some(owner));
+            .retain(|context| context.blueprint_owner() != Some(owner));
         crate::log_info!(
             target: "gridpaper";
             "gridpaper: pool lease released slot={} owner={} local_instance={} soft_cap={}\n",
@@ -1286,7 +1429,7 @@ pub(crate) fn release_owner_lifecycle(owner: u8) -> usize {
         .retain(|request| request.owner != owner);
     PRINTER_MENU_CONTEXTS
         .lock()
-        .retain(|context| context.snapshot.producer.blueprint_owner() != Some(owner));
+        .retain(|context| context.blueprint_owner() != Some(owner));
 
     if released != 0 {
         crate::log_info!(
@@ -4312,6 +4455,9 @@ struct GridPaperRuntime {
     dirty_cells: VecDeque<GridCellSelection>,
     presented_cell_patch_serial: u64,
     keyboard_edits: u64,
+    printer_menu_context: u64,
+    printer_menu_window: Option<crate::ui4::WindowId>,
+    printer_menu_printers: Vec<crate::r::net::printer::PrinterSnapshot>,
     last_build_error: Option<&'static str>,
     last_render_error: Option<ServiceError>,
 }
@@ -4343,6 +4489,9 @@ impl GridPaperRuntime {
             dirty_cells: VecDeque::new(),
             presented_cell_patch_serial: 0,
             keyboard_edits: 0,
+            printer_menu_context: next_printer_menu_context(),
+            printer_menu_window: None,
+            printer_menu_printers: Vec::new(),
             last_build_error: None,
             last_render_error: None,
         }
@@ -4512,6 +4661,7 @@ fn release_runtime_presentation(
     session: crate::ui4::WindowSessionId,
     retire_frame: bool,
 ) -> bool {
+    clear_registered_gridpaper_printer_menu(runtime);
     let close_request = if retire_frame {
         crate::ui4::WindowSessionCloseRequest::default().direct_plane_animate_and_retire_frames()
     } else {
@@ -4900,7 +5050,7 @@ fn edit_gridpaper_cell(
         .latest_snapshot
         .as_ref()
         .expect("GridPaper edited snapshot remains resident");
-    mirror_blueprint_cell_edit(runtime.surface.pool_slot, snapshot, edited);
+    mirror_gridpaper_cell_edit(runtime.surface.pool_slot, snapshot, edited);
     let active_matches = runtime.active.as_ref().is_some_and(|page| {
         page.serial == snapshot.serial
             && page.generation == snapshot.generation
@@ -4954,23 +5104,22 @@ fn edit_gridpaper_cell(
     }
 }
 
-fn mirror_blueprint_cell_edit(
+fn mirror_gridpaper_cell_edit(
     pool_slot: usize,
     snapshot: &OwnedSnapshot,
     selection: GridCellSelection,
 ) {
-    let GridPaperProducer::Blueprint(owner) = snapshot.producer else {
-        return;
-    };
     let offset = (selection.row * COLUMNS + selection.column) * CELL_BYTES;
     let end = offset + CELL_BYTES;
     let mut stores = SNAPSHOTS.lock();
     let Some(store) = stores.get_mut(pool_slot) else {
         return;
     };
-    if store.owner != Some(owner)
-        || store.serial != snapshot.serial
-        || store.generation != snapshot.generation
+    let same_producer = match snapshot.producer {
+        GridPaperProducer::Blueprint(owner) => store.owner == Some(owner),
+        GridPaperProducer::Kernel(owner) => store.kernel_owner == Some(owner),
+    };
+    if !same_producer || store.serial != snapshot.serial || store.generation != snapshot.generation
     {
         return;
     }
@@ -5122,8 +5271,57 @@ fn remove_printer_menu_context(context: u64) -> Option<PrinterMenuContext> {
     contexts.remove(index)
 }
 
+fn take_printer_menu_context(context: u64) -> Option<PrinterMenuContext> {
+    let mut contexts = PRINTER_MENU_CONTEXTS.lock();
+    let index = contexts
+        .iter()
+        .position(|candidate| candidate.id == context)?;
+    if contexts[index].persistent {
+        Some(contexts[index].clone())
+    } else {
+        contexts.remove(index)
+    }
+}
+
+fn submit_gridpaper_snapshot_to_printer(
+    snapshot: OwnedSnapshot,
+    printer_uri: &str,
+) -> Result<u32, i64> {
+    match snapshot.producer {
+        GridPaperProducer::Blueprint(owner) => crate::r::print2d::submit_gridpaper_to_printer(
+            owner,
+            snapshot.generation,
+            snapshot.size,
+            snapshot.raw,
+            printer_uri,
+        ),
+        GridPaperProducer::Kernel(_) => crate::r::print2d::submit_kernel_gridpaper_to_printer(
+            snapshot.generation,
+            snapshot.size,
+            snapshot.raw,
+            printer_uri,
+        ),
+    }
+}
+
+fn submit_gridpaper_snapshot_to_default_printer(
+    instance_id: u32,
+    snapshot: &OwnedSnapshot,
+) -> Result<u32, i64> {
+    match snapshot.producer {
+        GridPaperProducer::Blueprint(_) => {
+            queue_print_request(instance_id, snapshot).ok_or(crate::r::print2d::ERROR_QUEUE_FULL)
+        }
+        GridPaperProducer::Kernel(_) => crate::r::print2d::submit_kernel_gridpaper(
+            snapshot.generation,
+            snapshot.size,
+            snapshot.raw.clone(),
+        ),
+    }
+}
+
 fn complete_gridpaper_printer_menu(result: crate::ui4::ContextMenuResult) {
-    let Some(context) = remove_printer_menu_context(result.context) else {
+    let Some(context) = take_printer_menu_context(result.context) else {
         return;
     };
     if result.owner != UI4_OWNER {
@@ -5162,38 +5360,40 @@ fn complete_gridpaper_printer_menu(result: crate::ui4::ContextMenuResult) {
         );
         return;
     };
-    let Some(owner) = context.snapshot.producer.blueprint_owner() else {
+    let Some(snapshot) = context.snapshot() else {
         return;
     };
     let printer_name = printer.name.clone();
     let printer_uri = printer.uri.clone();
-    match crate::r::print2d::submit_gridpaper_to_printer(
-        owner,
-        context.snapshot.generation,
-        context.snapshot.size,
-        context.snapshot.raw,
-        printer_uri.as_str(),
-    ) {
+    let producer = snapshot.producer;
+    let trigger = if context.persistent {
+        "secondary-click"
+    } else {
+        "F10"
+    };
+    match submit_gridpaper_snapshot_to_printer(snapshot, printer_uri.as_str()) {
         Ok(job_id) => {
             crate::log_info!(
                 target: "gridpaper";
-                "gridpaper: printer menu selection accepted context={} action={} printer={} uri={} job={} owner={} trigger=F10\n",
+                "gridpaper: printer menu selection accepted context={} action={} printer={} uri={} job={} producer={:?} trigger={}\n",
                 result.context,
                 action,
                 printer_name,
                 printer_uri,
                 job_id,
-                owner,
+                producer,
+                trigger,
             );
         }
         Err(error) => {
             crate::log_warn!(
                 target: "gridpaper";
-                "gridpaper: printer menu selection rejected context={} action={} printer={} error={} trigger=F10\n",
+                "gridpaper: printer menu selection rejected context={} action={} printer={} error={} trigger={}\n",
                 result.context,
                 action,
                 printer_name,
                 error,
+                trigger,
             );
         }
     }
@@ -5203,12 +5403,7 @@ fn show_gridpaper_printer_menu(runtime: &GridPaperRuntime, event: crate::ui4::Ui
     let Some(window) = runtime.presented_window() else {
         return;
     };
-    let Some(snapshot) = runtime
-        .latest_snapshot
-        .as_ref()
-        .filter(|snapshot| snapshot.producer.blueprint_owner().is_some())
-        .cloned()
-    else {
+    let Some(snapshot) = runtime.latest_snapshot.as_ref().cloned() else {
         return;
     };
     let mut printers = crate::r::net::printer::snapshot()
@@ -5249,8 +5444,9 @@ fn show_gridpaper_printer_menu(runtime: &GridPaperRuntime, event: crate::ui4::Ui
         }
         contexts.push_back(PrinterMenuContext {
             id: context_id,
-            snapshot,
+            snapshot: PrinterMenuSnapshotSource::Frozen(snapshot),
             printers,
+            persistent: false,
         });
     }
     let request = crate::ui4::ContextMenuRequest {
@@ -5270,6 +5466,104 @@ fn show_gridpaper_printer_menu(runtime: &GridPaperRuntime, event: crate::ui4::Ui
     }
 }
 
+fn clear_registered_gridpaper_printer_menu(runtime: &mut GridPaperRuntime) {
+    if let Some(window) = runtime.printer_menu_window.take() {
+        let _ = crate::ui4::clear_window_context_menu(UI4_OWNER, window);
+    }
+    let _ = remove_printer_menu_context(runtime.printer_menu_context);
+    runtime.printer_menu_printers.clear();
+}
+
+fn refresh_registered_gridpaper_printer_menu(runtime: &mut GridPaperRuntime) {
+    let Some(window) = runtime.presented_window() else {
+        clear_registered_gridpaper_printer_menu(runtime);
+        return;
+    };
+    if !matches!(
+        runtime.presented_producer(),
+        Some(GridPaperProducer::Kernel(KernelGridOwner {
+            client: KernelGridClient::Shell2,
+            ..
+        }))
+    ) {
+        clear_registered_gridpaper_printer_menu(runtime);
+        return;
+    }
+
+    let mut printers = crate::r::net::printer::snapshot()
+        .into_iter()
+        .filter(crate::r::net::printer::supports_gridpaper_print)
+        .collect::<Vec<_>>();
+    if printers.len() > crate::ui4::MAX_CONTEXT_MENU_ENTRIES {
+        printers.truncate(crate::ui4::MAX_CONTEXT_MENU_ENTRIES);
+    }
+    if runtime.printer_menu_window == Some(window) && runtime.printer_menu_printers == printers {
+        return;
+    }
+
+    let entries = if printers.is_empty() {
+        vec![crate::ui4::ContextMenuEntry::disabled("NO PRINTERS")]
+    } else {
+        printers
+            .iter()
+            .enumerate()
+            .map(|(index, printer)| {
+                crate::ui4::ContextMenuEntry::action(&printer.name, index as u32)
+            })
+            .collect()
+    };
+    {
+        let mut contexts = PRINTER_MENU_CONTEXTS.lock();
+        contexts.retain(|context| context.id != runtime.printer_menu_context);
+        if contexts.len() >= PRINTER_MENU_CONTEXT_CAPACITY {
+            crate::log_warn!(
+                target: "gridpaper";
+                "gridpaper: standing printer menu rejected pool_slot={} window={} reason=context-capacity capacity={}\n",
+                runtime.surface.pool_slot,
+                window.raw(),
+                PRINTER_MENU_CONTEXT_CAPACITY,
+            );
+            return;
+        }
+        contexts.push_back(PrinterMenuContext {
+            id: runtime.printer_menu_context,
+            snapshot: PrinterMenuSnapshotSource::PoolSlot(runtime.surface.pool_slot),
+            printers: printers.clone(),
+            persistent: true,
+        });
+    }
+    match crate::ui4::register_window_context_menu(
+        UI4_OWNER,
+        window,
+        runtime.printer_menu_context,
+        entries,
+        complete_gridpaper_printer_menu,
+    ) {
+        Ok(()) => {
+            runtime.printer_menu_window = Some(window);
+            runtime.printer_menu_printers = printers;
+            crate::log_info!(
+                target: "gridpaper";
+                "gridpaper: standing printer menu registered pool_slot={} window={} context={} printers={} trigger=secondary-click\n",
+                runtime.surface.pool_slot,
+                window.raw(),
+                runtime.printer_menu_context,
+                runtime.printer_menu_printers.len(),
+            );
+        }
+        Err(error) => {
+            let _ = remove_printer_menu_context(runtime.printer_menu_context);
+            crate::log_warn!(
+                target: "gridpaper";
+                "gridpaper: standing printer menu rejected pool_slot={} window={} error={:?}\n",
+                runtime.surface.pool_slot,
+                window.raw(),
+                error,
+            );
+        }
+    }
+}
+
 fn dispatch_gridpaper_input(runtime: &mut GridPaperRuntime, event: crate::ui4::Ui4InputEvent) {
     if runtime.presented_window() != Some(input_event_window(event)) {
         return;
@@ -5282,14 +5576,26 @@ fn dispatch_gridpaper_input(runtime: &mut GridPaperRuntime, event: crate::ui4::U
             select_gridpaper_cell(runtime, event.source, event.local_x, event.local_y);
         }
         crate::ui4::Ui4InputEvent::Keyboard(event) if is_gridpaper_print_key(event.event) => {
-            if let Some(snapshot) = runtime.latest_snapshot.as_ref()
-                && queue_print_request(runtime.surface.instance_id, snapshot).is_none()
-            {
-                crate::log_os::print2d_job_state(
-                    0,
-                    "request-dropped",
-                    "gridpaper-PrintScreen-queue-full",
-                );
+            if let Some(snapshot) = runtime.latest_snapshot.as_ref() {
+                match submit_gridpaper_snapshot_to_default_printer(
+                    runtime.surface.instance_id,
+                    snapshot,
+                ) {
+                    Ok(job_or_token) => crate::log_info!(
+                        target: "gridpaper";
+                        "gridpaper: default print accepted instance={} producer={:?} job_or_token={} trigger=PrintScreen\n",
+                        runtime.surface.instance_id,
+                        snapshot.producer,
+                        job_or_token,
+                    ),
+                    Err(error) => crate::log_warn!(
+                        target: "gridpaper";
+                        "gridpaper: default print rejected instance={} producer={:?} error={} trigger=PrintScreen\n",
+                        runtime.surface.instance_id,
+                        snapshot.producer,
+                        error,
+                    ),
+                }
             }
         }
         crate::ui4::Ui4InputEvent::Keyboard(event)
@@ -5801,6 +6107,7 @@ async fn gridpaper_instance_worker_task(pool_slot: usize) {
         }
 
         refresh_runtime(runtime_ref);
+        refresh_registered_gridpaper_printer_menu(runtime_ref);
         for event in take_routed_input_events(pool_slot) {
             dispatch_gridpaper_input(runtime_ref, event);
         }
@@ -5942,6 +6249,31 @@ mod tests {
         assert_eq!(store.scale_percent, NATIVE_SCALE_PERCENT);
         assert!(!store.lifecycle_paused);
         assert!(store.producer_connected);
+    }
+
+    #[test]
+    fn shell_grid_seed_matches_the_complete_blueprint_specimen() {
+        let mut raw = [0u8; PAGE_BYTES];
+        seed_shell_gridpaper(&mut raw, GridSize::FULL);
+
+        assert!(validate_page(&raw).is_ok());
+        assert_eq!(
+            raw.chunks_exact(CELL_BYTES)
+                .filter(|cell| cell[PRIMARY_LENGTH_OFFSET] != 0)
+                .count(),
+            103,
+        );
+        let x_squared = (11 * COLUMNS + 18) * CELL_BYTES;
+        let cell = &raw[x_squared..x_squared + CELL_BYTES];
+        assert_eq!(cell[PRIMARY_LENGTH_OFFSET], 1);
+        assert_eq!(cell[UPPER_LENGTH_OFFSET], "²".len() as u8);
+        assert_eq!(&cell[PRIMARY_OFFSET..PRIMARY_OFFSET + 1], b"x");
+        assert_eq!(&cell[UPPER_OFFSET..UPPER_OFFSET + "²".len()], "²".as_bytes(),);
+        assert_eq!(cell[FOREGROUND_OFFSET], 13);
+
+        let mut tiny = [0u8; PAGE_BYTES];
+        seed_shell_gridpaper(&mut tiny, GridSize::new(1, 1).expect("valid tiny grid"));
+        assert!(tiny.iter().all(|byte| *byte == 0));
     }
 
     #[test]

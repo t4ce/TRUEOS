@@ -24,6 +24,10 @@ pub(crate) fn try_parse(
             io,
             "grid: opens one native Gridpaper kernel-service scene; up to ten are resident",
         );
+        print_shell_line(
+            io,
+            "grid: secondary-click opens its printer menu; PrintScreen queues the default printer",
+        );
         return ParseOutcome::Handled;
     }
 
@@ -36,13 +40,19 @@ pub(crate) fn try_parse(
     };
 
     match crate::r::gridpaper_service::request_shell_grid(columns, rows, scale_percent) {
-        Ok(_) => print_shell_line(
-            io,
-            alloc::format!(
-                "grid: native Gridpaper requested {columns}x{rows} at {scale_percent}% (kernel pool, no Blueprint container)"
-            )
-            .as_str(),
-        ),
+        Ok(_) => {
+            print_shell_line(
+                io,
+                alloc::format!(
+                    "grid: native Gridpaper requested {columns}x{rows} at {scale_percent}% (kernel pool, no Blueprint container)"
+                )
+                .as_str(),
+            );
+            print_shell_line(
+                io,
+                "grid: secondary-click the scene for printers; PrintScreen uses the default",
+            );
+        }
         Err(error) => print_shell_line(
             io,
             alloc::format!("grid: native Gridpaper request failed: {error:?}").as_str(),

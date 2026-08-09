@@ -12,8 +12,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::churn::Batch;
+use crate::scene_db::{DirtyRows, PublishedScene, SceneStore};
 use crate::{Error, linear_rgba_to_srgba8};
 use trueos_helio_artifact::SectionKind;
+
+pub use crate::scene_db::SceneHandle as SpriteHandle;
 
 pub const SECTION_NAME: &str = "scene/sprite-dig-v1.bin";
 pub const ATLAS_MAGIC: &[u8; 8] = b"HDIGATL\0";
@@ -200,6 +203,13 @@ pub struct TextureFrame {
     /// Column-major dense tile IDs, including the top surface row.
     pub cells: Vec<u8>,
     pub sprites: Vec<TexturedSprite>,
+    /// Publication metadata for the stable retained-prop rows from which the
+    /// compatibility overlay list was lowered.  A native backend uses this
+    /// to delta-upload the parallel row/liveness/generation buffers instead.
+    pub scene_epoch: u64,
+    pub scene_rows: usize,
+    pub scene_live_rows: usize,
+    pub scene_dirty: DirtyRows,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -354,25 +364,107 @@ struct InventorySlot {
     count: u32,
 }
 
-/// Slot + generation identity mirroring Helio's persistent `SpriteHandle`.
-/// Scene objects keep this identity across animation and every GPU frame;
-/// descriptors are only the per-frame lowering of these retained objects.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SpriteHandle {
-    pub slot: u32,
-    pub generation: u32,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RetainedSprite {
+    pub sprite_id: u16,
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+    pub depth: f32,
+    pub rotation: f32,
+    pub tint: [u8; 4],
+    pub atlas_layer: u32,
+    pub flip_x: bool,
+    breakable: bool,
+    /// The compatibility tilemap kernel reconstructs retained terrain itself;
+    /// only sparse rows must also be lowered into ordered overlay descriptors.
+    compatibility_overlay: bool,
 }
 
+/// Byte-exact twin of Helio's `SpriteInstance` / `sprite.wgsl` storage row.
+/// The explicit padding preserves the two 16-byte-aligned `vec4` fields.
+#[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct SceneSprite {
-    handle: SpriteHandle,
-    sprite_id: u16,
-    position: [f32; 2],
-    size: [f32; 2],
-    depth: f32,
-    flip_x: bool,
-    breakable: bool,
-    alive: bool,
+pub struct GpuSpriteInstance {
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+    pub rotation: f32,
+    pub depth: f32,
+    pad_uv: [f32; 2],
+    pub uv_rect: [f32; 4],
+    pub color: [f32; 4],
+    pub atlas_layer: u32,
+    pad_tail: [u32; 3],
+}
+
+impl GpuSpriteInstance {
+    pub const BYTE_LEN: usize = 80;
+
+    pub fn to_le_bytes(self) -> [u8; Self::BYTE_LEN] {
+        let float_fields = [
+            self.position[0],
+            self.position[1],
+            self.size[0],
+            self.size[1],
+            self.rotation,
+            self.depth,
+            self.pad_uv[0],
+            self.pad_uv[1],
+            self.uv_rect[0],
+            self.uv_rect[1],
+            self.uv_rect[2],
+            self.uv_rect[3],
+            self.color[0],
+            self.color[1],
+            self.color[2],
+            self.color[3],
+        ];
+        let mut bytes = [0u8; Self::BYTE_LEN];
+        for (index, value) in float_fields.into_iter().enumerate() {
+            bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_bits().to_le_bytes());
+        }
+        bytes[64..68].copy_from_slice(&self.atlas_layer.to_le_bytes());
+        for (index, value) in self.pad_tail.into_iter().enumerate() {
+            let offset = 68 + index * 4;
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<GpuSpriteInstance>() == GpuSpriteInstance::BYTE_LEN);
+
+impl RetainedSprite {
+    /// Resolve the stable artifact sprite identity into Helio's native GPU
+    /// row. Atlas pixels stay independently resident; only normalized UVs
+    /// and the layer identity enter the instance buffer.
+    pub fn gpu_instance(&self, atlas: &Atlas<'_>) -> Result<GpuSpriteInstance, Error> {
+        let sprite = atlas
+            .sprite(self.sprite_id)
+            .ok_or(Error::InvalidSpriteDigAtlas)?;
+        let inv_width = 1.0 / atlas.width as f32;
+        let inv_height = 1.0 / atlas.height as f32;
+        let mut u0 = f32::from(sprite.x) * inv_width;
+        let mut u1 = f32::from(sprite.x + sprite.width) * inv_width;
+        if self.flip_x {
+            core::mem::swap(&mut u0, &mut u1);
+        }
+        Ok(GpuSpriteInstance {
+            position: self.position,
+            size: self.size,
+            rotation: self.rotation,
+            depth: self.depth,
+            pad_uv: [0.0; 2],
+            uv_rect: [
+                u0,
+                f32::from(sprite.y) * inv_height,
+                u1,
+                f32::from(sprite.y + sprite.height) * inv_height,
+            ],
+            color: self.tint.map(|component| f32::from(component) / 255.0),
+            atlas_layer: self.atlas_layer,
+            pad_tail: [0; 3],
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -401,6 +493,8 @@ struct Mining {
 pub struct Engine {
     spec: Spec,
     broken: Vec<bool>,
+    terrain_handles: Vec<SpriteHandle>,
+    player_handle: SpriteHandle,
     placed: Vec<PlacedBlock>,
     inventory: Vec<InventorySlot>,
     selected_hotbar: usize,
@@ -415,7 +509,7 @@ pub struct Engine {
     player_native_size: [f32; 2],
     camera_center: [f32; 2],
     elapsed: f32,
-    scene_sprites: Vec<SceneSprite>,
+    scene_sprites: SceneStore<RetainedSprite>,
     critters: Vec<Critter>,
     scene_installed: bool,
     batches: Vec<Batch>,
@@ -449,9 +543,56 @@ impl Engine {
             spec.tile * 4.0,
             surface_top_world_y(spec.tile, 4) + player_height * 0.5,
         ];
+        let mut scene_sprites = SceneStore::with_capacity(spec.pool_capacity);
+        let mut terrain_handles = Vec::with_capacity(terrain_count);
+        for col in 0..spec.world_cols {
+            let top = surface_top_world_y(spec.tile, col);
+            for row in 0..=terrain_rows {
+                let sprite_id = if row == 0 {
+                    if (spec.lake_start..spec.lake_end).contains(&col) {
+                        SPRITE_WATER
+                    } else {
+                        SPRITE_GRASS
+                    }
+                } else if row <= DIRT_LAYERS {
+                    SPRITE_DIRT
+                } else {
+                    SPRITE_STONE
+                };
+                terrain_handles.push(scene_sprites.insert(RetainedSprite {
+                    sprite_id,
+                    position: [
+                        col as f32 * spec.tile,
+                        top - spec.tile * 0.5 - row as f32 * spec.tile,
+                    ],
+                    size: [spec.tile + 1.0; 2],
+                    depth: 0.0,
+                    rotation: 0.0,
+                    tint: [255; 4],
+                    atlas_layer: 0,
+                    flip_x: false,
+                    breakable: true,
+                    compatibility_overlay: false,
+                }));
+            }
+        }
+        let player_handle = scene_sprites.insert(RetainedSprite {
+            sprite_id: SPRITE_PLAYER_IDLE_BASE,
+            position: player_position,
+            size: [20.0 * spec.player_scale, 40.0 * spec.player_scale],
+            depth: 0.5,
+            rotation: 0.0,
+            tint: [255; 4],
+            atlas_layer: 0,
+            flip_x: false,
+            breakable: false,
+            compatibility_overlay: true,
+        });
         Ok(Self {
             spec: spec.clone(),
             broken: vec![false; terrain_count],
+            terrain_handles,
+            player_handle,
             placed: vec![
                 PlacedBlock {
                     active: false,
@@ -474,7 +615,7 @@ impl Engine {
             player_native_size: [20.0, 40.0],
             camera_center: player_position,
             elapsed: 0.0,
-            scene_sprites: Vec::new(),
+            scene_sprites,
             critters: Vec::new(),
             scene_installed: false,
             batches,
@@ -499,6 +640,15 @@ impl Engine {
                 + self.player_native_size[1] * self.spec.player_scale * 0.5,
         ];
         self.camera_center = self.player_position;
+        let player = self
+            .scene_sprites
+            .get_mut(self.player_handle)
+            .ok_or(Error::InvalidSpriteDigScene)?;
+        player.position = self.player_position;
+        player.size = [
+            self.player_native_size[0] * self.spec.player_scale,
+            self.player_native_size[1] * self.spec.player_scale,
+        ];
         let mut rng = SceneRng::new(0xC0FF_EE12_3456_7890);
 
         // Spawn ground cover.
@@ -628,25 +778,21 @@ impl Engine {
         flip_x: bool,
         breakable: bool,
     ) -> Result<SpriteHandle, Error> {
-        if self.scene_sprites.len() >= self.spec.pool_capacity {
+        if self.scene_sprites.live_count() >= self.spec.pool_capacity {
             return Err(Error::InvalidSpriteDigScene);
         }
-        let handle = SpriteHandle {
-            slot: u32::try_from(self.scene_sprites.len())
-                .map_err(|_| Error::InvalidSpriteDigScene)?,
-            generation: 1,
-        };
-        self.scene_sprites.push(SceneSprite {
-            handle,
+        Ok(self.scene_sprites.insert(RetainedSprite {
             sprite_id,
             position,
             size,
             depth,
+            rotation: 0.0,
+            tint: [255; 4],
+            atlas_layer: 0,
             flip_x,
             breakable,
-            alive: true,
-        });
-        Ok(handle)
+            compatibility_overlay: true,
+        }))
     }
 
     fn place_prop(
@@ -808,14 +954,7 @@ impl Engine {
     }
 
     pub fn object_count(&self) -> usize {
-        self.broken.iter().filter(|broken| !**broken).count()
-            + self.placed.iter().filter(|placed| placed.active).count()
-            + self
-                .scene_sprites
-                .iter()
-                .filter(|sprite| sprite.alive)
-                .count()
-            + 1
+        self.placed.iter().filter(|placed| placed.active).count() + self.scene_sprites.live_count()
     }
 
     pub fn broken_count(&self) -> usize {
@@ -985,14 +1124,14 @@ impl Engine {
     fn hit_test(&self, point: [f32; 2]) -> Option<MineTarget> {
         let mut scene_hit = None;
         let mut scene_depth = f32::NEG_INFINITY;
-        for sprite in &self.scene_sprites {
-            if sprite.alive
+        for (handle, sprite) in self.scene_sprites.iter_with_handles() {
+            if sprite.compatibility_overlay
                 && sprite.breakable
                 && (point[0] - sprite.position[0]).abs() <= sprite.size[0] * 0.5
                 && (point[1] - sprite.position[1]).abs() <= sprite.size[1] * 0.5
                 && sprite.depth > scene_depth
             {
-                scene_hit = Some(MineTarget::Scene(sprite.handle));
+                scene_hit = Some(MineTarget::Scene(handle));
                 scene_depth = sprite.depth;
             }
         }
@@ -1028,6 +1167,7 @@ impl Engine {
                     return;
                 }
                 self.broken[index] = true;
+                let _ = self.scene_sprites.remove(self.terrain_handles[index]);
                 let sprite_id = if row == 0 {
                     if (self.spec.lake_start..self.spec.lake_end).contains(&col) {
                         SPRITE_WATER
@@ -1052,16 +1192,15 @@ impl Engine {
                 (placed.sprite_id, placed.size)
             }
             MineTarget::Scene(handle) => {
-                let Some(sprite) = self.scene_sprites.get_mut(handle.slot as usize) else {
+                let Some(sprite) = self.scene_sprites.get(handle).copied() else {
                     return;
                 };
-                if sprite.handle.generation != handle.generation
-                    || !sprite.alive
-                    || !sprite.breakable
-                {
+                if !sprite.breakable {
                     return;
                 }
-                sprite.alive = false;
+                if !self.scene_sprites.remove(handle) {
+                    return;
+                }
                 self.critters.retain(|critter| critter.handle != handle);
                 (sprite.sprite_id, sprite.size)
             }
@@ -1115,11 +1254,62 @@ impl Engine {
         }
     }
 
+    fn sync_retained_animations(&mut self, player_native_size: [u16; 2]) -> Result<(), Error> {
+        if player_native_size.contains(&0) {
+            return Err(Error::InvalidSpriteDigScene);
+        }
+        // Animation is an authoritative scene write. Stable rows change in
+        // place; publication exposes only their enclosing dirty span.
+        for critter in &self.critters {
+            let frame = (libm::floorf(self.elapsed * critter.fps) as u16) % critter.frame_count;
+            if let Some(retained) = self.scene_sprites.get_mut(critter.handle) {
+                retained.sprite_id = critter.frame_base + frame;
+                retained.position = [
+                    critter.base_position[0],
+                    critter.base_position[1] + libm::sinf(self.elapsed * 2.0 + critter.phase) * 6.0,
+                ];
+            }
+        }
+        let (animation_base, animation_frames, fps) = match self.player_animation {
+            PlayerAnimation::Idle => (SPRITE_PLAYER_IDLE_BASE, 4u16, 7.0),
+            PlayerAnimation::Run => (SPRITE_PLAYER_RUN_BASE, 8u16, 12.0),
+            PlayerAnimation::Jump => (SPRITE_PLAYER_JUMP_BASE, 15u16, 14.0),
+            PlayerAnimation::Fall => (SPRITE_PLAYER_FALL_BASE, 3u16, 10.0),
+        };
+        let animation_index =
+            (libm::floorf(self.player_animation_time * fps) as u16) % animation_frames;
+        let player = self
+            .scene_sprites
+            .get_mut(self.player_handle)
+            .ok_or(Error::InvalidSpriteDigScene)?;
+        player.sprite_id = animation_base + animation_index;
+        player.position = self.player_position;
+        player.size = [
+            f32::from(player_native_size[0]) * self.spec.player_scale,
+            f32::from(player_native_size[1]) * self.spec.player_scale,
+        ];
+        player.flip_x = !self.player_facing_right;
+        Ok(())
+    }
+
+    /// Publish the authoritative retained rows directly to a renderer.
+    ///
+    /// This is the native-backend seam: rows/liveness/generations are owned
+    /// here, while visibility lists, sorting and indirect commands remain
+    /// renderer-derived data exactly as in Helio's SceneDB integration.
+    pub fn publish_retained_scene(
+        &mut self,
+        player_native_size: [u16; 2],
+    ) -> Result<PublishedScene<'_, RetainedSprite>, Error> {
+        self.sync_retained_animations(player_native_size)?;
+        Ok(self.scene_sprites.publish())
+    }
+
     /// Build the compact state consumed by the Bakery C++ tilemap kernel.
     /// Terrain stays column-major so the GPU can locate a tile directly;
     /// sparse and animated objects remain a small ordered sprite overlay.
     pub fn texture_frame(
-        &self,
+        &mut self,
         width: u32,
         height: u32,
         player_native_size: [u16; 2],
@@ -1127,6 +1317,7 @@ impl Engine {
         if width == 0 || height == 0 || player_native_size.contains(&0) {
             return Err(Error::InvalidSpriteDigScene);
         }
+        self.sync_retained_animations(player_native_size)?;
         let rows = self.terrain_rows() + 1;
         let mut surface_heights = Vec::with_capacity(self.spec.world_cols);
         let mut cells = Vec::with_capacity(self.spec.world_cols * rows);
@@ -1184,33 +1375,20 @@ impl Engine {
             );
         }
 
-        for retained in self.scene_sprites.iter().filter(|sprite| sprite.alive) {
-            let critter = self
-                .critters
-                .iter()
-                .find(|critter| critter.handle == retained.handle);
-            let (sprite_id, position) = if let Some(critter) = critter {
-                let frame = (libm::floorf(self.elapsed * critter.fps) as u16) % critter.frame_count;
-                (
-                    critter.frame_base + frame,
-                    [
-                        critter.base_position[0],
-                        critter.base_position[1]
-                            + libm::sinf(self.elapsed * 2.0 + critter.phase) * 6.0,
-                    ],
-                )
-            } else {
-                (retained.sprite_id, retained.position)
-            };
+        for retained in self
+            .scene_sprites
+            .iter()
+            .filter(|sprite| sprite.compatibility_overlay)
+        {
             push_world_sprite(
                 &mut sprites,
-                position,
+                retained.position,
                 retained.size,
-                sprite_id,
-                [255; 4],
+                retained.sprite_id,
+                retained.tint,
                 retained.flip_x,
                 retained.depth,
-                0.0,
+                retained.rotation,
                 self.camera_center,
                 self.spec.zoom,
                 width,
@@ -1234,32 +1412,6 @@ impl Engine {
             );
         }
 
-        let (animation_base, animation_frames, fps) = match self.player_animation {
-            PlayerAnimation::Idle => (SPRITE_PLAYER_IDLE_BASE, 4u16, 7.0),
-            PlayerAnimation::Run => (SPRITE_PLAYER_RUN_BASE, 8u16, 12.0),
-            PlayerAnimation::Jump => (SPRITE_PLAYER_JUMP_BASE, 15u16, 14.0),
-            PlayerAnimation::Fall => (SPRITE_PLAYER_FALL_BASE, 3u16, 10.0),
-        };
-        let animation_index =
-            (libm::floorf(self.player_animation_time * fps) as u16) % animation_frames;
-        push_world_sprite(
-            &mut sprites,
-            self.player_position,
-            [
-                f32::from(player_native_size[0]) * self.spec.player_scale,
-                f32::from(player_native_size[1]) * self.spec.player_scale,
-            ],
-            animation_base + animation_index,
-            [255; 4],
-            !self.player_facing_right,
-            0.5,
-            0.0,
-            self.camera_center,
-            self.spec.zoom,
-            width,
-            height,
-        );
-
         if let Some(mining) = self.mining
             && self.mining_stage() != 0
         {
@@ -1276,7 +1428,7 @@ impl Engine {
                 MineTarget::Placed { slot } => (self.placed[slot].position, 0.2),
                 MineTarget::Scene(handle) => self
                     .scene_sprites
-                    .get(handle.slot as usize)
+                    .get(handle)
                     .map(|sprite| (sprite.position, sprite.depth))
                     .unwrap_or(([0.0; 2], 0.0)),
             };
@@ -1338,10 +1490,15 @@ impl Engine {
             );
         }
         sprites.sort_by(|left, right| left.depth.total_cmp(&right.depth));
+        let publication = self.scene_sprites.publish();
         Ok(TextureFrame {
             surface_heights,
             cells,
             sprites,
+            scene_epoch: publication.epoch,
+            scene_rows: publication.rows.len(),
+            scene_live_rows: publication.live_count,
+            scene_dirty: publication.dirty,
         })
     }
 
@@ -1463,7 +1620,7 @@ impl Engine {
                 MineTarget::Placed { slot } => self.placed[slot].position,
                 MineTarget::Scene(handle) => self
                     .scene_sprites
-                    .get(handle.slot as usize)
+                    .get(handle)
                     .map_or([0.0; 2], |sprite| sprite.position),
             };
             let stage = self.mining_stage().min(self.spec.break_stages);
@@ -1778,6 +1935,39 @@ mod tests {
     }
 
     #[test]
+    fn native_publication_exposes_retained_terrain_and_player_mirrors() {
+        let atlas = Atlas::decode(ATLAS).unwrap();
+        let spec = Spec::decode_artifact(ARTIFACT).unwrap();
+        let expected_rows = spec.world_cols * (spec.dirt_rows + spec.stone_rows + 1) + 1;
+        let mut engine = Engine::new(spec).unwrap();
+        let publication = engine.publish_retained_scene(atlas.player_size).unwrap();
+        assert_eq!(publication.rows.len(), expected_rows);
+        assert_eq!(publication.alive.len(), expected_rows);
+        assert_eq!(publication.generations.len(), expected_rows);
+        assert_eq!(publication.live_count, expected_rows);
+        assert!(publication.alive.iter().all(|alive| *alive == 1));
+        assert!(
+            publication
+                .generations
+                .iter()
+                .all(|generation| *generation == 1)
+        );
+        assert_eq!(publication.dirty.first, 0);
+        assert_eq!(publication.dirty.count as usize, expected_rows);
+        let gpu = publication.rows[0].gpu_instance(&atlas).unwrap();
+        assert_eq!(core::mem::size_of_val(&gpu), super::GpuSpriteInstance::BYTE_LEN);
+        assert_eq!(gpu.position, publication.rows[0].position);
+        assert_eq!(gpu.size, publication.rows[0].size);
+        assert_eq!(gpu.atlas_layer, 0);
+        assert!(
+            gpu.uv_rect
+                .iter()
+                .all(|component| (0.0..=1.0).contains(component))
+        );
+        assert_eq!(&gpu.to_le_bytes()[64..80], &[0; 16]);
+    }
+
+    #[test]
     fn installed_scene_retains_upstream_props_trees_critters_and_background() {
         let atlas = Atlas::decode(ATLAS).unwrap();
         let spec = Spec::decode_artifact(ARTIFACT).unwrap();
@@ -1807,6 +1997,11 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair[0].depth <= pair[1].depth)
         );
+        assert_eq!(frame.scene_epoch, 1);
+        assert_eq!(frame.scene_live_rows, engine.scene_sprites.live_count());
+        assert_eq!(frame.scene_rows, engine.scene_sprites.len());
+        assert_eq!(frame.scene_dirty.first, 0);
+        assert_eq!(frame.scene_dirty.count as usize, frame.scene_rows);
     }
 
     #[test]
@@ -1817,18 +2012,18 @@ mod tests {
         engine.install_atlas_scene(&atlas).unwrap();
         let cabin = engine
             .scene_sprites
-            .iter()
-            .find(|sprite| sprite.sprite_id == super::SPRITE_CABIN)
-            .copied()
+            .iter_with_handles()
+            .find(|(_, sprite)| sprite.sprite_id == super::SPRITE_CABIN)
+            .map(|(handle, sprite)| (handle, *sprite))
             .unwrap();
-        engine.finish_mining(super::MineTarget::Scene(cabin.handle));
+        engine.finish_mining(super::MineTarget::Scene(cabin.0));
         assert_eq!(engine.inventory.len(), 1);
         assert_eq!(engine.inventory[0].sprite_id, super::SPRITE_CABIN);
-        assert_eq!(engine.inventory[0].size, cabin.size);
+        assert_eq!(engine.inventory[0].size, cabin.1.size);
         engine.place_selected([123.0, 45.0]);
         let placed = engine.placed.iter().find(|placed| placed.active).unwrap();
         assert_eq!(placed.sprite_id, super::SPRITE_CABIN);
-        assert_eq!(placed.size, cabin.size);
+        assert_eq!(placed.size, cabin.1.size);
         assert!(engine.inventory.is_empty());
     }
 
@@ -1840,6 +2035,7 @@ mod tests {
             .step(InputFrame::default(), 1280, 720, 1.0 / 30.0)
             .unwrap();
         let before = engine.player_position();
+        let player_handle = engine.player_handle;
         engine
             .step(
                 InputFrame {
@@ -1854,6 +2050,12 @@ mod tests {
             .unwrap();
         assert!(engine.player_position()[0] > before[0]);
         assert!(engine.player_position()[1] >= before[1]);
+        let atlas = Atlas::decode(ATLAS).unwrap();
+        let _ = engine.texture_frame(1280, 720, atlas.player_size).unwrap();
+        assert_eq!(
+            engine.scene_sprites.get(player_handle).unwrap().position,
+            engine.player_position()
+        );
     }
 
     #[test]
@@ -1865,6 +2067,8 @@ mod tests {
             .step(InputFrame::default(), 1280, 720, 1.0 / 30.0)
             .unwrap();
         let col = 4usize;
+        let terrain_handle = engine.terrain_handles[engine.terrain_index(col, 0)];
+        assert!(engine.scene_sprites.contains(terrain_handle));
         let target = [
             col as f32 * tile,
             super::surface_top_world_y(tile, col) - tile * 0.5,
@@ -1888,6 +2092,7 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(engine.broken_count(), 1);
+        assert!(!engine.scene_sprites.contains(terrain_handle));
         assert_eq!(engine.inventory_count(), 1);
         engine
             .step(
