@@ -1303,7 +1303,9 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         online_selector: Some("img"),
         slot: "img",
         args: &[],
-        launch_script: Some("show kernel:logo center nohit\nshow kernel:intel-graphics bottom-left\nshow kernel:bgrt bottom-right"),
+        launch_script: Some(
+            "show kernel:logo center nohit\nshow kernel:intel-graphics bottom-left\nshow kernel:bgrt bottom-right",
+        ),
         settle_ms: 250,
     },
     BlueprintAutostart {
@@ -1945,9 +1947,11 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TRUEOS_SPIRIT_STARTED,
         spawn_trueos_spirit_workers,
     ),
-    // Gridpaper is retired from the live UI path while GridP establishes the
-    // minimal UI4 baseline.  Spirit keeps its ordinary shell/log route.
-    TaskSpec::disabled(
+    // Spirit owns one retained Gridpaper pool lease. The response worker
+    // waits for its paired Lilly keyboard and UI4 presentation internally,
+    // types through the ordinary input route, and hides without releasing the
+    // resident scene between replies.
+    TaskSpec::enabled(
         "spirit-response-gridpaper",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &SPIRIT_RESPONSE_WINDOW_STARTED,

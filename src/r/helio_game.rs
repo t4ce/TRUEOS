@@ -3173,6 +3173,7 @@ async fn run_sprite_dig(context: InstanceContext) -> Result<(), GameError> {
     let mut last_successful_publish: Option<Instant> = None;
     let mut retired_frames = Vec::new();
     let mut pending_resize: Option<PendingGameResize> = None;
+    let mut next_frame = Instant::now();
     let mut previous_gameplay = (
         engine.broken_count(),
         engine.placed_count(),
@@ -3370,7 +3371,15 @@ async fn run_sprite_dig(context: InstanceContext) -> Result<(), GameError> {
             );
             first_frame = false;
         }
-        Timer::after(Duration::from_millis(FRAME_PERIOD_MS)).await;
+        // Pace against the publication deadline, as the native Helio paths
+        // do. A fixed post-render sleep adds the entire frame period to a
+        // GPU-bound frame and halves the useful cadence once rendering takes
+        // longer than the target budget.
+        next_frame += Duration::from_millis(FRAME_PERIOD_MS);
+        if next_frame <= Instant::now() {
+            next_frame = Instant::now();
+        }
+        Timer::at(next_frame).await;
     };
     if let Some(replacement) = pending_resize {
         crate::ui4::retire_frame_when_released(replacement.frame);
