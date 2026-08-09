@@ -296,7 +296,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         advertised: true,
         handler: dispatch_grid,
         tool_description: Some(
-            "Open one native Gridpaper scene from the ten-worker kernel service pool, with optional grid size and raster scale.",
+            "Launch one Gridpaper Blueprint whose scene is executed by the ten-worker kernel service pool, with optional grid size and raster scale.",
         ),
         tool_parameters_json: Some(TOOL_JSON_GRID),
     },

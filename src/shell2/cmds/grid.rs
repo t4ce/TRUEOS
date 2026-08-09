@@ -1,7 +1,15 @@
+use alloc::{string::String, vec::Vec};
 use embassy_executor::Spawner;
+use embassy_executor::task;
 
 use super::super::shell2_cmd::ParseOutcome;
-use super::super::{ShellBackend2, print_shell_line};
+use super::super::{
+    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_system_line,
+    print_shell_line, submit_online_to_target,
+};
+
+const GRID_APP: &str = "gridpaper";
+const GRID_ARCHIVE: &str = "gridpaper.bp";
 
 const GRID_COLUMN_SOFT_CAP: u32 = 39;
 const GRID_ROW_SOFT_CAP: u32 = 55;
@@ -9,8 +17,47 @@ const GRID_MIN_SCALE_PERCENT: u16 = 1;
 const GRID_MAX_SCALE_PERCENT: u16 = 800;
 const GRID_DEFAULT_SCALE_PERCENT: u16 = 100;
 
+#[task(pool_size = 10)]
+async fn launch_gridpaper(
+    spawner: Spawner,
+    target: MatrixTarget,
+    columns: u32,
+    rows: u32,
+    scale_percent: u16,
+) {
+    let args = alloc::vec![
+        alloc::format!("{columns}x{rows}"),
+        alloc::format!("{scale_percent}%"),
+    ];
+    match super::run::submit_archive_name_to_target_prefer_trueosfs_with_instance_async(
+        target.clone(),
+        GRID_ARCHIVE,
+        args.clone(),
+        crate::hv::BlueprintInstanceRequest::default(),
+    )
+    .await
+    {
+        Ok(_) => {}
+        Err(error) if error == "archive not found" => {
+            let mut online_args = Vec::<String>::with_capacity(args.len() + 1);
+            online_args.push(String::from(GRID_APP));
+            online_args.extend(args);
+            if submit_online_to_target(&spawner, target.clone(), online_args).is_err() {
+                print_matrix_target_system_line(
+                    &target,
+                    "grid: online Gridpaper launch task unavailable",
+                );
+            }
+        }
+        Err(error) => print_matrix_target_system_line(
+            &target,
+            alloc::format!("grid: could not launch {GRID_ARCHIVE}: {error}").as_str(),
+        ),
+    }
+}
+
 pub(crate) fn try_parse(
-    _spawner: &Spawner,
+    spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
@@ -22,11 +69,11 @@ pub(crate) fn try_parse(
         );
         print_shell_line(
             io,
-            "grid: opens one native Gridpaper kernel-service scene; up to ten are resident",
+            "grid: launches one Gridpaper Blueprint backed by the ten-worker kernel scene pool",
         );
         print_shell_line(
             io,
-            "grid: secondary-click opens its printer menu; PrintScreen queues the default printer",
+            "grid: secondary-click opens its printer menu; PrintScreen queues the default; Escape closes",
         );
         return ParseOutcome::Handled;
     }
@@ -39,24 +86,23 @@ pub(crate) fn try_parse(
         return ParseOutcome::Handled;
     };
 
-    match crate::r::gridpaper_service::request_shell_grid(columns, rows, scale_percent) {
-        Ok(_) => {
+    let target = matrix_target_for_backend(io);
+    match launch_gridpaper(*spawner, target, columns, rows, scale_percent) {
+        Ok(token) => {
+            spawner.spawn(token);
             print_shell_line(
                 io,
                 alloc::format!(
-                    "grid: native Gridpaper requested {columns}x{rows} at {scale_percent}% (kernel pool, no Blueprint container)"
+                    "grid: Gridpaper Blueprint requested {columns}x{rows} at {scale_percent}% (kernel scene pool)"
                 )
                 .as_str(),
             );
             print_shell_line(
                 io,
-                "grid: secondary-click the scene for printers; PrintScreen uses the default",
+                "grid: secondary-click selects a printer; PrintScreen uses the default; Escape closes",
             );
         }
-        Err(error) => print_shell_line(
-            io,
-            alloc::format!("grid: native Gridpaper request failed: {error:?}").as_str(),
-        ),
+        Err(_) => print_shell_line(io, "grid: Blueprint launch task unavailable"),
     }
     ParseOutcome::Handled
 }
