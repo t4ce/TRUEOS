@@ -43,6 +43,7 @@ download_and_extract llvm-spirv-21 21.1.5-1
 download_and_extract libllvmspirvlib21.1 21.1.5-1
 download_and_extract intel-ocloc 26.05.37020.3-1
 download_and_extract libigc2 2.28.4-4
+download_and_extract libigc2-tools 2.28.4-4
 download_and_extract libigdfcl2 2.28.4-4
 download_and_extract libigdgmm12 22.9.0+ds1-1
 download_and_extract intel-opencl-icd 26.05.37020.3-1
@@ -54,6 +55,7 @@ printf '%s\n' 'libigdrcl.so' > "${install_root}/etc/OpenCL/vendors/intel.icd"
 
 test -x "${install_root}/usr/lib/llvm-21/bin/clang"
 test -x "${install_root}/usr/bin/llvm-spirv-21"
+test -x "${install_root}/usr/bin/iga64"
 find "${install_root}/usr/bin" -maxdepth 1 -type f -name 'ocloc*' -perm -111 \
   -print -quit | grep -q .
 test -f "${install_root}/usr/lib/x86_64-linux-gnu/intel-opencl/libigdrcl.so"
