@@ -772,19 +772,29 @@ fn submit_sprite_quad_worklist_rgba8_probe(force: bool) -> bool {
         }
         return false;
     }
+    // Readiness may be queried by the synchronous display fallback before
+    // Intel device claim completes. That is a transient ordering condition,
+    // not a completed probe: consuming the one-shot here permanently left
+    // later Helio/UI4 users at `gpu-unavailable` even after the device existed.
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: sprite-quad-worklist-rgba8 deferred reason=no-claimed-device probe_consumed=0 retryable=1\n"
+        );
+        return false;
+    };
     if !force && SPRITE_QUAD_WORKLIST_RAN.swap(true, Ordering::AcqRel) {
+        crate::log_debug!(
+            target: "gpgpu";
+            "intel/gpgpu: sprite-quad-worklist-rgba8 readiness cached ran=1 ok={} quarantined={}\n",
+            SPRITE_QUAD_WORKLIST_OK.load(Ordering::Acquire) as u8,
+            direct_rcs_context_is_quarantined() as u8,
+        );
         return false;
     }
     SPRITE_QUAD_WORKLIST_RAN.store(true, Ordering::Release);
     SPRITE_QUAD_WORKLIST_OK.store(false, Ordering::Release);
 
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: sprite-quad-worklist-rgba8 skipped reason=no-claimed-device\n"
-        );
-        return false;
-    };
     let Some(state) = direct_rcs_state_once(dev) else {
         crate::log_info!(
             target: "gpgpu";
@@ -816,6 +826,10 @@ fn submit_sprite_quad_worklist_rgba8_probe(force: bool) -> bool {
 
     let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
     if direct_rcs_context_is_quarantined() {
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/gpgpu: sprite-quad-worklist-rgba8 failed rung=submit-lock reason=system-service-lane-quarantined\n"
+        );
         return false;
     }
     let src00 = 0xFF00_00FF;
@@ -878,22 +892,26 @@ fn submit_sprite_quad_worklist_rgba8_probe(force: bool) -> bool {
     let post_marker = direct_rcs_read_result_slot(state, SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT);
     let row1 = direct_rcs_read_worklist_probe_span(state, 1, 10);
     let row2 = direct_rcs_read_worklist_probe_span(state, 2, 10);
-    let ok = submitted
-        && pre_marker == SPRITE_QUAD_WORKLIST_PRE_MARKER
-        && post_marker == SPRITE_QUAD_WORKLIST_POST_MARKER
-        && row1[0] == src00
+    let pre_ok = pre_marker == SPRITE_QUAD_WORKLIST_PRE_MARKER;
+    let post_ok = post_marker == SPRITE_QUAD_WORKLIST_POST_MARKER;
+    let pixels_ok = row1[0] == src00
         && row1[1] == src01
         && row2[0] == src10
         && row2[1] == src11;
+    let ok = submitted && pre_ok && post_ok && pixels_ok;
 
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: sprite-quad-worklist-rgba8 forcewake=1 ggtt=1 ppgtt=1 kernel_ppgtt=1 src_ppgtt=1 dst_ppgtt=1 desc_ppgtt=1 batch=1 submitted={} ok={} submit_ms={} descs=1 walkers={} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} src_gpu=0x{:X} dst_gpu=0x{:X} desc_gpu=0x{:X} row1=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row2=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] artifact={}\n",
+        "intel/gpgpu: sprite-quad-worklist-rgba8 forcewake=1 ggtt=1 ppgtt=1 kernel_ppgtt=1 src_ppgtt=1 dst_ppgtt=1 desc_ppgtt=1 batch=1 submitted={} ok={} pre_ok={} post_ok={} pixels_ok={} submit_ms={} descs=1 walkers={} pre_marker=0x{:08X} expected_pre=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} src_gpu=0x{:X} dst_gpu=0x{:X} desc_gpu=0x{:X} row1=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row2=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] artifact={}\n",
         submitted as u8,
         ok as u8,
+        pre_ok as u8,
+        post_ok as u8,
+        pixels_ok as u8,
         submit_ms,
         sprite_quad_worklist_walker_count(1),
         pre_marker,
+        SPRITE_QUAD_WORKLIST_PRE_MARKER,
         post_marker,
         SPRITE_QUAD_WORKLIST_POST_MARKER,
         SPRITE_QUAD_WORKLIST_RGBA8_ADLS_GPU,

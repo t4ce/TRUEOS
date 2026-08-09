@@ -138,11 +138,19 @@ fn submit_sprite_quad_worklist_runs(
     let batch_ok = src_ppgtt_ok
         && direct_rcs_encode_sprite_quad_worklist_runs_batch(state, upload, dst, desc, runs);
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    // Unlike the one-descriptor readiness probe, a production sprite scene
+    // may cover a full UI4 frame and issue hundreds of walkers. Give it the
+    // same deadline-based retirement contract used by the Font sprite lane
+    // and other UI4 compute producers. The former smoke-spin poll could
+    // expire before GuC had even saved the advanced ring head, poisoning an
+    // otherwise healthy system-service context before the first publication.
+    let retire_timeout_ms = sprite_quad_worklist_retire_timeout_ms(dst);
     let observed = if submitted {
-        direct_rcs_poll_result_slot(
+        direct_rcs_poll_result_slot_timeout_ms(
             state,
             SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
             SPRITE_QUAD_WORKLIST_POST_MARKER,
+            retire_timeout_ms,
         )
     } else {
         0
@@ -151,7 +159,7 @@ fn submit_sprite_quad_worklist_runs(
         let fail_count = SPRITE_QUAD_WORKLIST_SUBMIT_FAIL_LOGS.fetch_add(1, Ordering::Relaxed) + 1;
         if fail_count <= 16 || fail_count.is_power_of_two() {
             crate::log!(
-                "intel/gpgpu: sprite-quad-worklist-runs submit failed count={} forcewake={} mapped={} ppgtt={} kernel={} dst={} desc={} src={} batch={} submitted={} observed=0x{:X} want=0x{:X} runs={} descs={} ppgtt_limit=0x{:X} upload_gpu=0x{:X} dst_gpu=0x{:X} dst_end=0x{:X} desc_gpu=0x{:X} desc_end=0x{:X}\n",
+                "intel/gpgpu: sprite-quad-worklist-runs submit failed count={} forcewake={} mapped={} ppgtt={} kernel={} dst={} desc={} src={} batch={} submitted={} observed=0x{:X} want=0x{:X} runs={} descs={} retire_timeout_ms={} ppgtt_limit=0x{:X} upload_gpu=0x{:X} dst_gpu=0x{:X} dst_end=0x{:X} desc_gpu=0x{:X} desc_end=0x{:X}\n",
                 fail_count,
                 forcewake_ok as u8,
                 mapped_ok as u8,
@@ -166,6 +174,7 @@ fn submit_sprite_quad_worklist_runs(
                 SPRITE_QUAD_WORKLIST_POST_MARKER,
                 runs.len(),
                 total_descs,
+                retire_timeout_ms,
                 direct_rcs_ppgtt_limit_bytes(),
                 upload.gpu,
                 dst.gpu,
@@ -182,6 +191,22 @@ fn submit_sprite_quad_worklist_runs(
     } else {
         GpgpuSubmissionOutcome::Unavailable
     }
+}
+
+fn sprite_quad_worklist_retire_timeout_ms(dst: GpgpuRgba8Surface) -> u64 {
+    // The reference scene is Helio's ordinary 768x512 window. Descriptor
+    // walkers scale with covered pixels, and a maximized UI4 window also puts
+    // a full-output compositor job ahead of or behind this context on RCS0.
+    // Preserve the established one-second floor while scaling larger producer
+    // surfaces linearly, with a finite fail-closed ceiling for true hangs.
+    const REFERENCE_PIXELS: u64 = 768 * 512;
+    const MAX_TIMEOUT_MS: u64 = 5_000;
+
+    let pixels = u64::from(dst.width).saturating_mul(u64::from(dst.height));
+    pixels
+        .saturating_mul(UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS)
+        .div_ceil(REFERENCE_PIXELS)
+        .clamp(UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS, MAX_TIMEOUT_MS)
 }
 
 /// Submit an ordered sprite-run batch on the Font lane. The caller holds

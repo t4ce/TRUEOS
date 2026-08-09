@@ -8,23 +8,55 @@ pub(crate) fn prepare_helio_sprite_atlas_rgba8(
     pixels: &[u8],
 ) -> Option<GpgpuRgba8Surface> {
     if let Some(surface) = HELIO_SPRITE_ATLAS_SURFACE.get().copied() {
-        return (surface.width == width
+        let matches = surface.width == width
             && surface.height == height
-            && surface.pitch_bytes == pitch_bytes)
-            .then_some(surface);
+            && surface.pitch_bytes == pitch_bytes;
+        if !matches {
+            crate::log_warn!(target: "gpgpu";
+                "intel/gpgpu: helio-sprite-atlas rejected reason=resident-contract-mismatch requested={}x{} pitch={} resident={}x{} pitch={}\n",
+                width,
+                height,
+                pitch_bytes,
+                surface.width,
+                surface.height,
+                surface.pitch_bytes,
+            );
+        }
+        return matches.then_some(surface);
     }
     if width == 0
         || height == 0
         || pitch_bytes != width.checked_mul(core::mem::size_of::<u32>() as u32)?
     {
+        crate::log_warn!(target: "gpgpu";
+            "intel/gpgpu: helio-sprite-atlas rejected reason=invalid-extent width={} height={} pitch={} expected_pitch={}\n",
+            width,
+            height,
+            pitch_bytes,
+            width.saturating_mul(core::mem::size_of::<u32>() as u32),
+        );
         return None;
     }
     let raw_bytes = (pitch_bytes as usize).checked_mul(height as usize)?;
     if pixels.len() != raw_bytes || raw_bytes > HELIO_SPRITE_ATLAS_MAX_BYTES {
+        crate::log_warn!(target: "gpgpu";
+            "intel/gpgpu: helio-sprite-atlas rejected reason=payload-bounds payload={} expected={} capacity={}\n",
+            pixels.len(),
+            raw_bytes,
+            HELIO_SPRITE_ATLAS_MAX_BYTES,
+        );
         return None;
     }
     let bytes = align_up(raw_bytes, super::WARM_ALIGN)?;
-    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+    let Some((phys, virt)) = crate::dma::alloc(bytes, super::WARM_ALIGN) else {
+        crate::log_warn!(target: "gpgpu";
+            "intel/gpgpu: helio-sprite-atlas rejected reason=dma-allocation bytes={} alignment={} capacity={}\n",
+            bytes,
+            super::WARM_ALIGN,
+            HELIO_SPRITE_ATLAS_MAX_BYTES,
+        );
+        return None;
+    };
     unsafe {
         core::ptr::write_bytes(virt, 0, bytes);
         core::ptr::copy_nonoverlapping(pixels.as_ptr(), virt, pixels.len());
@@ -42,7 +74,61 @@ pub(crate) fn prepare_helio_sprite_atlas_rgba8(
         // canonical one; reclaim this never-mapped duplicate immediately.
         crate::dma::dealloc(virt, bytes);
     }
+    crate::log_info!(target: "gpgpu";
+        "intel/gpgpu: helio-sprite-atlas resident=1 extent={}x{} pitch={} payload_bytes={} allocation_bytes={} gpu=0x{:X} phys=0x{:X} publication={}\n",
+        published.width,
+        published.height,
+        published.pitch_bytes,
+        raw_bytes,
+        published.bytes,
+        published.gpu,
+        published.phys,
+        if published.phys == surface.phys { "installed" } else { "reused-race-winner" },
+    );
     Some(published)
+}
+
+fn log_helio_sprite_tilemap_rejection(
+    reason: &'static str,
+    dst: GpgpuRgba8Surface,
+    atlas: GpgpuRgba8Surface,
+    desc_count: usize,
+    state_dwords: usize,
+) {
+    let sequence = HELIO_SPRITE_TILEMAP_REJECTION_LOGS
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    if sequence > 16 && !sequence.is_power_of_two() {
+        return;
+    }
+    crate::log_warn!(target: "gpgpu";
+        "intel/gpgpu: helio-sprite-tilemap unavailable seq={} reason={} direct_rcs_enabled={} claimed_device={} probe_ran={} probe_ok={} kernel_uploaded={} atlas_resident={} direct_state={} desc_resident={} quarantined={} dst_valid={} atlas_valid={} dst={}x{}:pitch{}:bytes{} atlas={}x{}:pitch{}:bytes{} descs={}/{} state_dwords={}/{}\n",
+        sequence,
+        reason,
+        DIRECT_RCS_ENABLED as u8,
+        super::claimed_device().is_some() as u8,
+        SPRITE_QUAD_WORKLIST_RAN.load(Ordering::Acquire) as u8,
+        SPRITE_QUAD_WORKLIST_OK.load(Ordering::Acquire) as u8,
+        SPRITE_QUAD_WORKLIST_RGBA8_UPLOAD.lock().is_some() as u8,
+        HELIO_SPRITE_ATLAS_SURFACE.get().is_some() as u8,
+        DIRECT_RCS_STATE.lock().is_some() as u8,
+        GPGPU_SPRITE_QUAD_WORKLIST_DESC.lock().is_some() as u8,
+        direct_rcs_context_is_quarantined() as u8,
+        dst.is_valid() as u8,
+        atlas.is_valid() as u8,
+        dst.width,
+        dst.height,
+        dst.pitch_bytes,
+        dst.bytes,
+        atlas.width,
+        atlas.height,
+        atlas.pitch_bytes,
+        atlas.bytes,
+        desc_count,
+        SPRITE_QUAD_WORKLIST_MAX_DESCS,
+        state_dwords,
+        SPRITE_QUAD_TILEMAP_STATE_MAX_DWORDS,
+    );
 }
 
 pub(crate) fn sprite_quad_worklist_rgba8_runs_over_result(
@@ -115,37 +201,60 @@ pub(crate) fn sprite_quad_tilemap_rgba8_direct_result(
     descs: &[GpgpuSpriteQuadWorklistDesc],
     tilemap_state: &[u32],
 ) -> GpgpuSpriteQuadWorklistResult {
-    if !sprite_quad_worklist_ready()
-        || !dst.is_valid()
-        || !atlas.is_valid()
-        || dst.storage_order != GpgpuRgba8StorageOrder::Rgba
+    let reject = |reason| {
+        log_helio_sprite_tilemap_rejection(reason, dst, atlas, descs.len(), tilemap_state.len());
+        GpgpuSpriteQuadWorklistResult::default()
+    };
+    if !sprite_quad_worklist_ready() {
+        return reject("sprite-kernel-probe-not-ready");
+    }
+    if !dst.is_valid() {
+        return reject("destination-surface-invalid");
+    }
+    if !atlas.is_valid() {
+        return reject("atlas-surface-invalid");
+    }
+    if dst.storage_order != GpgpuRgba8StorageOrder::Rgba
         || atlas.storage_order != GpgpuRgba8StorageOrder::Rgba
-        || descs.is_empty()
-        || descs.len() > SPRITE_QUAD_WORKLIST_MAX_DESCS
-        || descs
-            .iter()
-            .filter(|desc| desc.flags & SPRITE_QUAD_WORKLIST_FLAG_TILEMAP != 0)
-            .count()
-            != 1
-        || tilemap_state.len() > SPRITE_QUAD_TILEMAP_STATE_MAX_DWORDS
-        || tilemap_state.get(0) != Some(&SPRITE_QUAD_TILEMAP_MAGIC)
-        || tilemap_state.get(1) != Some(&SPRITE_QUAD_TILEMAP_VERSION)
-        || gpu_ranges_overlap(atlas.gpu, atlas.bytes, dst.gpu, dst.bytes)
-        || gpu_ranges_overlap(atlas.phys, atlas.bytes, dst.phys, dst.bytes)
     {
-        return GpgpuSpriteQuadWorklistResult::default();
+        return reject("storage-order-not-rgba");
+    }
+    if descs.is_empty() || descs.len() > SPRITE_QUAD_WORKLIST_MAX_DESCS {
+        return reject("descriptor-count");
+    }
+    if descs
+        .iter()
+        .filter(|desc| desc.flags & SPRITE_QUAD_WORKLIST_FLAG_TILEMAP != 0)
+        .count()
+        != 1
+    {
+        return reject("tilemap-descriptor-count");
+    }
+    if tilemap_state.len() > SPRITE_QUAD_TILEMAP_STATE_MAX_DWORDS {
+        return reject("tilemap-state-capacity");
+    }
+    if tilemap_state.get(0) != Some(&SPRITE_QUAD_TILEMAP_MAGIC)
+        || tilemap_state.get(1) != Some(&SPRITE_QUAD_TILEMAP_VERSION)
+    {
+        return reject("tilemap-state-header");
+    }
+    if gpu_ranges_overlap(atlas.gpu, atlas.bytes, dst.gpu, dst.bytes) {
+        return reject("gpu-range-overlap");
+    }
+    if gpu_ranges_overlap(atlas.phys, atlas.bytes, dst.phys, dst.bytes) {
+        return reject("physical-range-overlap");
     }
     let Some(desc_buffer) = sprite_quad_worklist_desc_buffer_once() else {
-        return GpgpuSpriteQuadWorklistResult::default();
+        return reject("descriptor-buffer-allocation");
     };
     let state_bytes = tilemap_state.len() * core::mem::size_of::<u32>();
     if SPRITE_QUAD_TILEMAP_STATE_OFFSET_BYTES.saturating_add(state_bytes) > desc_buffer.bytes {
-        return GpgpuSpriteQuadWorklistResult::default();
+        return reject("descriptor-buffer-state-capacity");
     }
 
     let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
     if direct_rcs_context_is_quarantined() {
-        return GpgpuSpriteQuadWorklistResult::default();
+        return reject("system-service-lane-quarantined");
     }
     unsafe {
         core::ptr::write_bytes(desc_buffer.virt, 0, desc_buffer.bytes);
@@ -165,6 +274,15 @@ pub(crate) fn sprite_quad_tilemap_rgba8_direct_result(
     let run = GpgpuSpriteQuadWorklistRun { src: atlas, descs };
     let started = direct_rcs_now_tick();
     let outcome = submit_sprite_quad_worklist_runs(dst, desc_buffer, core::slice::from_ref(&run));
+    if outcome == GpgpuSubmissionOutcome::Unavailable {
+        log_helio_sprite_tilemap_rejection(
+            "direct-submit-unavailable",
+            dst,
+            atlas,
+            descs.len(),
+            tilemap_state.len(),
+        );
+    }
     if outcome == GpgpuSubmissionOutcome::SubmittedIncomplete {
         quarantine_direct_rcs_context("helio-sprite-tilemap-marker-timeout");
     }

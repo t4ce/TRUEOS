@@ -139,9 +139,14 @@ pub extern "C" fn kmain() -> ! {
     core::hint::black_box(&ring::digest::SHA256);
     log_os::init_log_facade();
     crate::log_info!(
-        target: "boot";
-        "boot: stage=bsp-early log_config boot_level={:?}\n",
-        crate::log_os::flags::BOOT_LOG_LEVEL
+        target: "global";
+        "boot: stage=bsp-early log_config boot_level={:?} gfx_level={:?} gpgpu_level={:?} render_level={:?} helio_gfx_diag={} ui4_diag={}\n",
+        crate::log_os::flags::BOOT_LOG_LEVEL,
+        crate::log_os::flags::GFX_LOG_LEVEL,
+        crate::log_os::flags::GPGPU_LOG_LEVEL,
+        crate::log_os::flags::RENDER_LOG_LEVEL,
+        crate::log_os::flags::HELIO_GFX_DIAG_PROFILE_ENABLED as u8,
+        crate::log_os::flags::UI4_DIAG_PROFILE_ENABLED as u8,
     );
     exceptions::init();
     if crate::log_os::flags::BOOT_INFO_LOGS {

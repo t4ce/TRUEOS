@@ -1272,4 +1272,33 @@ mod direct_rcs_fail_closed_tests {
         assert_eq!(batch[12], MI_BATCH_BUFFER_END);
         assert_eq!(batch[13], MI_NOOP);
     }
+
+    #[test]
+    fn sprite_pre_marker_does_not_alias_completion_qword() {
+        assert!(SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT.is_multiple_of(2));
+        assert_ne!(
+            SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT,
+            SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT
+        );
+        assert_ne!(
+            SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT,
+            SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT + 1
+        );
+
+        let mut batch = [0u32; 4];
+        let mut cursor = 0usize;
+        assert!(direct_rcs_push_store_marker_at(
+            &mut batch,
+            &mut cursor,
+            DIRECT_RCS_GPU_VA_RESULT_BASE,
+            SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT,
+            SPRITE_QUAD_WORKLIST_PRE_MARKER,
+        ));
+        let marker_gpu = DIRECT_RCS_GPU_VA_RESULT_BASE
+            + (SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT * core::mem::size_of::<u32>()) as u64;
+        assert_eq!(batch[0], MI_STORE_DATA_IMM_GGTT_DW1);
+        assert_eq!(batch[1], marker_gpu as u32);
+        assert_eq!(batch[2], (marker_gpu >> 32) as u32);
+        assert_eq!(batch[3], SPRITE_QUAD_WORKLIST_PRE_MARKER);
+    }
 }

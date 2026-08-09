@@ -219,6 +219,7 @@ static NEXT_KERNEL_GRID_TOKEN: core::sync::atomic::AtomicU32 =
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum KernelGridClient {
+    Shell2,
     SpiritResponse,
 }
 
@@ -440,7 +441,8 @@ fn find_kernel_pool_slot(
         .position(|store| store.kernel_owner == Some(owner))
 }
 
-fn request_spirit_grid(
+fn request_kernel_grid(
+    client: KernelGridClient,
     columns: u32,
     rows: u32,
     scale_percent: u16,
@@ -450,11 +452,13 @@ fn request_spirit_grid(
         return Err(KernelGridError::InvalidScale);
     }
     let mut stores = SNAPSHOTS.lock();
-    if let Some((slot, store)) = stores.iter_mut().enumerate().find(|(_, store)| {
-        store
-            .kernel_owner
-            .is_some_and(|owner| owner.client == KernelGridClient::SpiritResponse)
-    }) {
+    if client == KernelGridClient::SpiritResponse
+        && let Some((slot, store)) = stores.iter_mut().enumerate().find(|(_, store)| {
+            store
+                .kernel_owner
+                .is_some_and(|owner| owner.client == KernelGridClient::SpiritResponse)
+        })
+    {
         let owner = store
             .kernel_owner
             .expect("matched Spirit Gridpaper kernel owner");
@@ -483,10 +487,10 @@ fn request_spirit_grid(
         return Err(KernelGridError::PoolFull);
     };
     let owner = KernelGridOwner {
-        client: KernelGridClient::SpiritResponse,
+        client,
         token: next_kernel_grid_token(),
     };
-    stores[slot].claim_kernel(owner, size, scale_percent, false);
+    stores[slot].claim_kernel(owner, size, scale_percent, client == KernelGridClient::Shell2);
     crate::log_info!(
         target: "gridpaper";
         "gridpaper: kernel lease claimed slot={} client={:?} token={} grid={}x{} scale={} soft_cap={}\n",
@@ -501,6 +505,18 @@ fn request_spirit_grid(
     Ok(KernelGridLease { owner })
 }
 
+/// Open a user-requested Gridpaper document directly in one resident kernel
+/// service slot. No Blueprint guest, archive, or virtual container participates.
+/// Each request claims a new slot; the shared pool holds ten independent scenes
+/// in total across shell, Spirit, and Blueprint producers.
+pub(crate) fn request_shell_grid(
+    columns: u32,
+    rows: u32,
+    scale_percent: u16,
+) -> Result<KernelGridLease, KernelGridError> {
+    request_kernel_grid(KernelGridClient::Shell2, columns, rows, scale_percent)
+}
+
 /// Obtain Spirit's one stable Gridpaper document. Repeated calls return the
 /// same lease so its GPU scene can stay warm while its UI4 presentation is
 /// hidden between replies.
@@ -509,7 +525,7 @@ pub(crate) fn request_spirit_response_grid(
     rows: u32,
     scale_percent: u16,
 ) -> Result<KernelGridLease, KernelGridError> {
-    request_spirit_grid(columns, rows, scale_percent)
+    request_kernel_grid(KernelGridClient::SpiritResponse, columns, rows, scale_percent)
 }
 
 fn with_kernel_grid_store<R>(
@@ -5908,6 +5924,24 @@ mod tests {
         assert_eq!(store.size, size);
         assert_eq!(store.scale_percent, 150);
         assert!(store.lifecycle_paused);
+    }
+
+    #[test]
+    fn shell_grid_claim_is_immediately_visible_and_keeps_native_scale() {
+        let owner = KernelGridOwner {
+            client: KernelGridClient::Shell2,
+            token: 2,
+        };
+        let size = GridSize::new(39, 55).expect("full shell Gridpaper size is valid");
+        let mut store = SnapshotStore::new();
+
+        store.claim_kernel(owner, size, NATIVE_SCALE_PERCENT, true);
+
+        assert_eq!(store.kernel_owner, Some(owner));
+        assert_eq!(store.size, GridSize::FULL);
+        assert_eq!(store.scale_percent, NATIVE_SCALE_PERCENT);
+        assert!(!store.lifecycle_paused);
+        assert!(store.producer_connected);
     }
 
     #[test]

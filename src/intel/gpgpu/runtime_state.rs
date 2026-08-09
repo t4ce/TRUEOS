@@ -124,6 +124,7 @@ static FILL_RECT_WORKLIST_OK: AtomicBool = AtomicBool::new(false);
 static SPRITE_QUAD_WORKLIST_OK: AtomicBool = AtomicBool::new(false);
 
 static SPRITE_QUAD_WORKLIST_SUBMIT_FAIL_LOGS: AtomicU32 = AtomicU32::new(0);
+static HELIO_SPRITE_TILEMAP_REJECTION_LOGS: AtomicU32 = AtomicU32::new(0);
 static FONT_SPRITE_QUAD_WORKLIST_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 static DIRECT_RCS_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(0);

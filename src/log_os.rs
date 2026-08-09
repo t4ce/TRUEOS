@@ -44,6 +44,14 @@ pub(crate) mod flags {
     /// noisy by design and belongs off in ordinary boots.
     pub(crate) const UI4_DIAG_PROFILE_ENABLED: bool = true;
 
+    /// Focused Helio/Intel graphics bring-up profile.
+    ///
+    /// This admits the iGPU device, display, render and direct-RCS readiness
+    /// ladders needed to distinguish artifact upload, PPGTT residency, GuC
+    /// admission and kernel-probe failures. Keep it explicit: GFX Debug can
+    /// include per-frame/display state that is too noisy for normal boots.
+    pub(crate) const HELIO_GFX_DIAG_PROFILE_ENABLED: bool = true;
+
     pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy =
         if USB_UAS_DIAG_PROFILE_ENABLED || UI4_DIAG_PROFILE_ENABLED {
             // Preserve the original USB hunt's full Global side, including Debug.
@@ -74,16 +82,25 @@ pub(crate) mod flags {
         LogLevelPolicy::up(LevelFilter::Warn)
     };
     pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
-    /// The display/cursor side is per-flip chatty and is not the subject of
-    /// the current UI4 work, so it stays at Warn while Global carries the
-    /// plane and composition markers.
-    pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
-    pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = if LUMEN_PERF_DIAG_PROFILE_ENABLED {
+    /// The display/cursor side is per-flip chatty, so it normally stays at
+    /// Warn; the explicit Helio profile temporarily admits its Debug ladder.
+    pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = if HELIO_GFX_DIAG_PROFILE_ENABLED {
+        LogLevelPolicy::up(LevelFilter::Debug)
+    } else {
+        LogLevelPolicy::up(LevelFilter::Warn)
+    };
+    pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = if HELIO_GFX_DIAG_PROFILE_ENABLED {
+        LogLevelPolicy::up(LevelFilter::Debug)
+    } else if LUMEN_PERF_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LevelFilter::Info)
     } else {
         LogLevelPolicy::up(LevelFilter::Warn)
     };
-    pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
+    pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy = if HELIO_GFX_DIAG_PROFILE_ENABLED {
+        LogLevelPolicy::up(LevelFilter::Debug)
+    } else {
+        LogLevelPolicy::up(LevelFilter::Info)
+    };
     pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
     pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
