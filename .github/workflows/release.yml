@@ -82,15 +82,21 @@ jobs:
             git \
             git-lfs \
             libasound2-dev \
+            libedit2 \
+            libffi8 \
+            libxml2-16 \
+            libzstd1 \
             linux-firmware \
             mtools \
             nasm \
+            ocl-icd-libopencl1 \
             ovmf \
             p7zip-full \
             pkg-config \
             python3-cryptography \
             rustup \
             xorriso \
+            zlib1g \
             zstd
 
       - name: Install C++ shader toolchain
