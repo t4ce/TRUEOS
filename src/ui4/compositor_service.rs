@@ -1274,6 +1274,11 @@ const fn compute_release_direct_contract(
             super::FrameCadence::Immutable,
             super::FrameBuffering::Single
         ) | (FrameContent::FontScene2d, super::FrameCadence::Dirty, super::FrameBuffering::Double,)
+            | (
+                FrameContent::RenderScene3d,
+                super::FrameCadence::Streaming,
+                super::FrameBuffering::Triple,
+            )
     )
 }
 
@@ -1746,6 +1751,11 @@ mod damage_tests {
             FrameContent::FontScene2d,
             super::super::FrameCadence::Dirty,
             super::super::FrameBuffering::Double,
+        ));
+        assert!(compute_release_direct_contract(
+            FrameContent::RenderScene3d,
+            super::super::FrameCadence::Streaming,
+            super::super::FrameBuffering::Triple,
         ));
         assert!(!compute_release_direct_contract(
             FrameContent::FontScene2d,

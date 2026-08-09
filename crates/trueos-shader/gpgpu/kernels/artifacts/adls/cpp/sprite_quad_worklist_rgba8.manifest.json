@@ -5,10 +5,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "fdac04233109e671b252bacfaece9e697696ced640afcb4e87cc9f9cb519aa7d",
-      "size_bytes": 54992,
+      "sha256": "d4e75acec4af2b707ec7085e4652f9cd4847fcc219fe4199baee86fe490e1fd8",
+      "size_bytes": 54152,
       "type": "relocatable",
-      "ze_info_section_offset": 48824,
+      "ze_info_section_offset": 47984,
       "ze_info_section_size": 5335
     },
     "kernels": [
@@ -291,13 +291,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 14816,
+          "entry_size": 13968,
           "section_alignment": 0,
           "section_name": ".text.sprite_quad_worklist_rgba8",
           "section_offset": 64,
-          "section_size": 14976,
-          "sha256": "fa9903981c728cb3c7aa412c75f6ee531f3eebcbbbc21b6c86b011fdb52c476a",
-          "symbol_size": 14816,
+          "section_size": 14144,
+          "sha256": "6d518824ad37fe8335557f01275c7b8113a6e3321e8fbe51c3a71468f6128710",
+          "symbol_size": 13968,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -313,10 +313,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 15112,
-      "embedded_section_size": 33640,
-      "sha256": "46aee01cd83fdafe01768f15fcfc76b927b72817f86f364e3c653a0ccc6d150a",
-      "size_bytes": 33640
+      "embedded_section_offset": 14280,
+      "embedded_section_size": 33628,
+      "sha256": "5125112fb4cc29521a4c12779d169531ac6d005db0d88ad626408b17a7cb2455",
+      "size_bytes": 33628
     }
   },
   "provenance": {
@@ -516,8 +516,8 @@
     "inputs": [
       {
         "path": "crates/trueos-shader/gpgpu/kernels/sprite_quad_worklist_rgba8.clcpp",
-        "sha256": "d49369e94ff8b931f1dd8648a93488d96696638b720beb587d37615168da25cc",
-        "size_bytes": 11545
+        "sha256": "1f37734d87269934396ee637f1ec6fc4ee8e8b27ac004963c66f03068ff105dd",
+        "size_bytes": 11592
       }
     ],
     "language": "C++ for OpenCL",

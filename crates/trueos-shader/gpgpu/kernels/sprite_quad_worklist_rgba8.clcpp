@@ -162,6 +162,7 @@ static inline uint render_tilemap(
     uint heights_offset = state[11];
     uint cells_offset = state[12];
     uint cell_words = state[13];
+    uint background_rgba = state[9];
     if (rect_count < 5u || map_cols == 0u || map_rows == 0u || tile <= 0.0f || zoom <= 0.0f) {
         return 0xFFFF00FFu;
     }
@@ -170,12 +171,12 @@ static inline uint render_tilemap(
     float world_y = camera_y - ((float)y + 0.5f - (float)dst_height * 0.5f) / zoom;
     int col = (int)floor(world_x / tile + 0.5f);
     if (col < 0 || (uint)col >= map_cols) {
-        return 0u;
+        return background_rgba;
     }
     float top = as_float(state[heights_offset + (uint)col]);
     int row = (int)floor((top - tile * 0.5f - world_y) / tile + 0.5f);
     if (row < 0 || (uint)row >= map_rows) {
-        return 0u;
+        return background_rgba;
     }
     uint cell_index = (uint)col * map_rows + (uint)row;
     uint cell_word = cell_index >> 2;
@@ -183,8 +184,11 @@ static inline uint render_tilemap(
         return 0xFFFF00FFu;
     }
     uint tile_id = (state[cells_offset + cell_word] >> ((cell_index & 3u) * 8u)) & 0xFFu;
-    if (tile_id == 0u || tile_id >= rect_count) {
-        return 0u;
+    if (tile_id == 0u) {
+        return background_rgba;
+    }
+    if (tile_id >= rect_count) {
+        return 0xFFFF00FFu;
     }
 
     uint rect_offset = rects_offset + tile_id * 2u;
@@ -298,7 +302,7 @@ __kernel void sprite_quad_worklist_rgba8(
 
         uint dst_index = y * dst_pitch_pixels + x;
         if ((flags & SPRITE_QUAD_FLAG_TILEMAP) != 0u) {
-            uint terrain = render_tilemap(
+            dst_rgba[dst_index] = render_tilemap(
                 src_rgba,
                 descs,
                 src_pitch_pixels,
@@ -308,7 +312,6 @@ __kernel void sprite_quad_worklist_rgba8(
                 y,
                 dst_width,
                 dst_height);
-            dst_rgba[dst_index] = src_over(terrain, dst_rgba[dst_index], 0u);
             continue;
         }
         if ((flags & SPRITE_QUAD_FLAG_CLEAR) != 0u) {

@@ -3025,18 +3025,9 @@ fn sprite_dig_dispatch_data(
         return Err(GameError::Render("helio-sprite-tilemap-capacity"));
     }
 
-    let mut descriptors = Vec::with_capacity(frame.sprites.len() + 2);
-    descriptors.push(sprite_dig_descriptor(
-        trueos_helio_runtime::sprite_dig::TexturedSprite {
-            rect_px: [0.0, 0.0, width as f32, height as f32],
-            sprite_id: trueos_helio_runtime::sprite_dig::SPRITE_WHITE,
-            tint: BACKGROUND_RGBA,
-            flip_x: false,
-            depth: f32::NEG_INFINITY,
-            rotation: 0.0,
-        },
-        atlas,
-    )?);
+    // The tilemap walker consumes state[9] for empty/out-of-world pixels, so
+    // it establishes the opaque sky and terrain in one full-frame pass.
+    let mut descriptors = Vec::with_capacity(frame.sprites.len() + 1);
     let foreground = frame.sprites.partition_point(|sprite| sprite.depth < 0.0);
     for sprite in frame.sprites[..foreground].iter().copied() {
         descriptors.push(sprite_dig_descriptor(sprite, atlas)?);
