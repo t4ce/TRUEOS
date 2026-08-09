@@ -255,8 +255,8 @@ const KOKORO_CONV1D_ARENA_GPU_LIMIT: u64 = 0x2300_0000;
 // kernel lifetime, so no later frame can remap texture bytes under an active
 // sprite dispatch.
 const HELIO_SPRITE_ATLAS_GPU: u64 = 0x2300_0000;
-const HELIO_SPRITE_ATLAS_MAX_BYTES: usize = 4 * 1024 * 1024;
-const HELIO_SPRITE_ATLAS_GPU_LIMIT: u64 = 0x2340_0000;
+const HELIO_SPRITE_ATLAS_MAX_BYTES: usize = 8 * 1024 * 1024;
+const HELIO_SPRITE_ATLAS_GPU_LIMIT: u64 = 0x2380_0000;
 const _: () = assert!(KOKORO_CONV1D_ARENA_GPU_LIMIT <= HELIO_SPRITE_ATLAS_GPU);
 const _: () = assert!(
     HELIO_SPRITE_ATLAS_GPU + HELIO_SPRITE_ATLAS_MAX_BYTES as u64 == HELIO_SPRITE_ATLAS_GPU_LIMIT

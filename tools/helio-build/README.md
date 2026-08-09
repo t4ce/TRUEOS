@@ -50,9 +50,10 @@ tools/helio-build/build-churn-forward.sh
 tools/helio-build/build-churn-forward.sh --validate-only
 ```
 
-`build-sprite-dig-atlas.sh` selects the original terrain and character frames
-from the sibling Helio checkout, normalizes the animation frames, creates the
-three deterministic crack textures, and atomically publishes the strict
+`build-sprite-dig-atlas.sh` selects the complete used Sprite Dig texture set
+from the sibling Helio checkout: terrain, normalized player/mob animation
+groups, bushes, cabin, layered tree variants, background, and the three
+deterministic crack textures. It atomically publishes the strict
 `HDIGATL` RGBA container used by example 5:
 
 ```sh
@@ -60,11 +61,12 @@ tools/helio-build/build-sprite-dig-atlas.sh
 tools/helio-build/build-sprite-dig-atlas.sh --validate-only
 ```
 
-Its pixel CRC, dense 38-entry sprite table, dimensions, reserved fields, and
+Its pixel CRC, dense 93-entry sprite identity table, dimensions, reserved fields, and
 normalized player extent are validated independently of the Helio scene
 container. The runtime feeds this atlas to the Bakery-produced C++ for OpenCL
-sprite kernel: one tilemap descriptor covers terrain, followed by bounded
-ordinary descriptors for animation, cracks, placement, and the hotbar.
+sprite kernel: sky and negative-depth background descriptors precede one
+alpha-composited tilemap descriptor, followed by the depth-ordered retained
+world, animation, cracks, arbitrary placement, and hotbar descriptors.
 
 `make iso` runs the lightweight validation for both checked-in programs and
 the Sprite Dig atlas before linking. It does not repeat the hosted Vulkan

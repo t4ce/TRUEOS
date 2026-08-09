@@ -2931,21 +2931,35 @@ fn sprite_dig_descriptor(
     let v1 = f32::from(source.y + source.height) / atlas.height as f32;
     let (left_u, right_u) = if sprite.flip_x { (u1, u0) } else { (u0, u1) };
     let [left, top, right, bottom] = sprite.rect_px;
+    let center = [(left + right) * 0.5, (top + bottom) * 0.5];
+    let half = [(right - left) * 0.5, (bottom - top) * 0.5];
+    let cosine = libm::cosf(sprite.rotation);
+    let sine = libm::sinf(sprite.rotation);
+    let corner = |x: f32, y: f32| {
+        [
+            center[0] + x * cosine - y * sine,
+            center[1] + x * sine + y * cosine,
+        ]
+    };
+    let c0 = corner(-half[0], -half[1]);
+    let c1 = corner(half[0], -half[1]);
+    let c2 = corner(half[0], half[1]);
+    let c3 = corner(-half[0], half[1]);
     Ok(crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
-        c0_x: left,
-        c0_y: top,
+        c0_x: c0[0],
+        c0_y: c0[1],
         c0_u: left_u,
         c0_v: v0,
-        c1_x: right,
-        c1_y: top,
+        c1_x: c1[0],
+        c1_y: c1[1],
         c1_u: right_u,
         c1_v: v0,
-        c2_x: right,
-        c2_y: bottom,
+        c2_x: c2[0],
+        c2_y: c2[1],
         c2_u: right_u,
         c2_v: v1,
-        c3_x: left,
-        c3_y: bottom,
+        c3_x: c3[0],
+        c3_y: c3[1],
         c3_u: left_u,
         c3_v: v1,
         color_rgba: u32::from_le_bytes(sprite.tint),
@@ -3003,7 +3017,22 @@ fn sprite_dig_dispatch_data(
         return Err(GameError::Render("helio-sprite-tilemap-capacity"));
     }
 
-    let mut descriptors = Vec::with_capacity(frame.sprites.len() + 1);
+    let mut descriptors = Vec::with_capacity(frame.sprites.len() + 2);
+    descriptors.push(sprite_dig_descriptor(
+        trueos_helio_runtime::sprite_dig::TexturedSprite {
+            rect_px: [0.0, 0.0, width as f32, height as f32],
+            sprite_id: trueos_helio_runtime::sprite_dig::SPRITE_WHITE,
+            tint: BACKGROUND_RGBA,
+            flip_x: false,
+            depth: f32::NEG_INFINITY,
+            rotation: 0.0,
+        },
+        atlas,
+    )?);
+    let foreground = frame.sprites.partition_point(|sprite| sprite.depth < 0.0);
+    for sprite in frame.sprites[..foreground].iter().copied() {
+        descriptors.push(sprite_dig_descriptor(sprite, atlas)?);
+    }
     descriptors.push(crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
         c0_x: 0.0,
         c0_y: 0.0,
@@ -3024,7 +3053,7 @@ fn sprite_dig_dispatch_data(
         color_rgba: u32::MAX,
         flags: crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_TILEMAP,
     });
-    for sprite in frame.sprites {
+    for sprite in frame.sprites[foreground..].iter().copied() {
         descriptors.push(sprite_dig_descriptor(sprite, atlas)?);
     }
     if descriptors.len() > crate::intel::gpgpu::sprite_quad_worklist_max_descs() {
@@ -3106,6 +3135,17 @@ async fn run_sprite_dig(context: InstanceContext) -> Result<(), GameError> {
             return Err(GameError::Artifact(error));
         }
     };
+    let atlas = match trueos_helio_runtime::sprite_dig::Atlas::decode(SPRITE_DIG_ATLAS) {
+        Ok(atlas) => atlas,
+        Err(error) => {
+            destroy_unpublished_surface(surface);
+            return Err(GameError::Artifact(error));
+        }
+    };
+    if let Err(error) = engine.install_atlas_scene(&atlas) {
+        destroy_unpublished_surface(surface);
+        return Err(GameError::Artifact(error));
+    }
     if let Err(error) = engine.step(
         Default::default(),
         surface.width,
@@ -3115,13 +3155,6 @@ async fn run_sprite_dig(context: InstanceContext) -> Result<(), GameError> {
         destroy_unpublished_surface(surface);
         return Err(GameError::Artifact(error));
     }
-    let atlas = match trueos_helio_runtime::sprite_dig::Atlas::decode(SPRITE_DIG_ATLAS) {
-        Ok(atlas) => atlas,
-        Err(error) => {
-            destroy_unpublished_surface(surface);
-            return Err(GameError::Artifact(error));
-        }
-    };
     let Some(atlas_surface) = crate::intel::gpgpu::prepare_helio_sprite_atlas_rgba8(
         atlas.width,
         atlas.height,
@@ -3320,7 +3353,7 @@ async fn run_sprite_dig(context: InstanceContext) -> Result<(), GameError> {
                 break Ok(());
             }
             crate::log_info!(target: "helio";
-                "helio instance={} example=5 name={} online artifact_bytes={} atlas_bytes={} atlas={}x{} sprites={} objects={} frame={} window={} extent={}x{} plane={} controls={} input=ui4-owner-broker->winit-shaped-events keyboard=held-state mouse=cursor+buttons+wheel resize=ui4-broker->atomic-frame-swap path=helio-sprite-atlas-v1+tilemap-state-v1->cpp-for-opencl->spirv->igc-zebin->one-guc-schedule->ui4-triple-direct terrain=single-full-frame-walker overlays=ordered-atlas-sprites alpha=premultiplied-opaque cpu_readback=0 cpu_frame_copy=0\n",
+                "helio instance={} example=5 name={} online artifact_bytes={} atlas_bytes={} atlas={}x{} sprites={} objects={} frame={} window={} extent={}x{} plane={} controls={} input=ui4-owner-broker->winit-shaped-events keyboard=held-state mouse=cursor+buttons+wheel resize=ui4-broker->atomic-frame-swap path=helio-sprite-atlas-v2+retained-scene-handles+tilemap-state-v1->cpp-for-opencl->spirv->igc-zebin->one-guc-schedule->ui4-triple-direct terrain=single-full-frame-walker overlays=depth-ordered-atlas-sprites alpha=straight-src-over cpu_readback=0 cpu_frame_copy=0\n",
                 context.instance_id,
                 engine.name(),
                 GAME_ARTIFACT.len(),

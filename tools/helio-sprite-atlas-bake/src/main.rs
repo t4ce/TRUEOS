@@ -6,10 +6,12 @@ use std::path::{Path, PathBuf};
 use image::{Rgba, RgbaImage};
 
 const MAGIC: &[u8; 8] = b"HDIGATL\0";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 const HEADER_BYTES: usize = 64;
 const ENTRY_BYTES: usize = 16;
-const ATLAS_WIDTH: u32 = 512;
+// Match the hosted demo's shelf width so UV packing and large background/tree
+// assets retain the same filtering margin and need no runtime repack.
+const ATLAS_WIDTH: u32 = 1536;
 const GAP: u32 = 2;
 
 const WHITE: u16 = 0;
@@ -22,7 +24,23 @@ const PLAYER_IDLE_BASE: u16 = 8;
 const PLAYER_RUN_BASE: u16 = 12;
 const PLAYER_JUMP_BASE: u16 = 20;
 const PLAYER_FALL_BASE: u16 = 35;
-const EXPECTED_ENTRY_COUNT: usize = 38;
+const BOAR_WALK_BASE: u16 = 38;
+const BOAR_IDLE_BASE: u16 = 44;
+const BEE_FLY_BASE: u16 = 48;
+const SNAIL_WALK_BASE: u16 = 52;
+const BUSH_BASE: u16 = 60;
+const CABIN: u16 = 64;
+const TREE_GREEN_TALL_BASE: u16 = 65;
+const TREE_GREEN_MED_BASE: u16 = 68;
+const TREE_DARK_TALL_BASE: u16 = 71;
+const TREE_DARK_MED_BASE: u16 = 74;
+const TREE_RED_TALL_BASE: u16 = 77;
+const TREE_GOLDEN_TALL_BASE: u16 = 80;
+const TREE_GOLDEN_MED_BASE: u16 = 83;
+const TREE_YELLOW_TALL_BASE: u16 = 86;
+const TREE_YELLOW_MED_BASE: u16 = 89;
+const BACKGROUND: u16 = 92;
+const EXPECTED_ENTRY_COUNT: usize = 93;
 
 #[derive(Clone, Copy)]
 struct Placement {
@@ -116,34 +134,229 @@ fn crack(stage: u32) -> RgbaImage {
     image
 }
 
-fn player_frames(sprites: &Path) -> Vec<(u16, RgbaImage)> {
-    let sheets = [
-        (PLAYER_IDLE_BASE, sprites.join("Character/Idle/Idle-Sheet.png"), 64, 80, 4),
-        (PLAYER_RUN_BASE, sprites.join("Character/Run/Run-Sheet.png"), 80, 80, 8),
-        (PLAYER_JUMP_BASE, sprites.join("Character/Jumlp-All/Jump-All-Sheet.png"), 64, 64, 15),
-        (PLAYER_FALL_BASE, sprites.join("Character/Jump-End/Jump-End-Sheet.png"), 64, 64, 3),
-    ];
+#[derive(Clone, Copy)]
+struct AnimationSheet<'a> {
+    path: &'a str,
+    cell_width: u32,
+    cell_height: u32,
+    count: u32,
+    output_base: Option<u16>,
+}
+
+/// Reproduce `slice_sheets`' group-wide normalization. Sheets that are not
+/// rendered by this demo still participate in the common box so switching
+/// between the retained animation groups cannot change feet alignment.
+fn normalized_animation_frames(
+    sprites: &Path,
+    sheets: &[AnimationSheet<'_>],
+) -> Vec<(u16, RgbaImage)> {
     let mut raw = Vec::new();
-    for (base, path, cell_width, cell_height, count) in sheets {
-        let sheet = load_rgba(&path);
-        for frame in 0..count {
+    for spec in sheets {
+        let sheet = load_rgba(&sprites.join(spec.path));
+        for frame in 0..spec.count {
             raw.push((
-                base + frame as u16,
-                trim(&crop(&sheet, frame * cell_width, 0, cell_width, cell_height)),
+                spec.output_base.map(|base| base + frame as u16),
+                trim(&crop(&sheet, frame * spec.cell_width, 0, spec.cell_width, spec.cell_height)),
             ));
         }
     }
     let box_width = raw.iter().map(|(_, image)| image.width()).max().unwrap();
     let box_height = raw.iter().map(|(_, image)| image.height()).max().unwrap();
     raw.into_iter()
-        .map(|(id, image)| {
+        .filter_map(|(id, image)| {
+            let id = id?;
             let mut canvas = RgbaImage::new(box_width, box_height);
             let x = (box_width - image.width()) / 2;
             let y = box_height - image.height();
             image::imageops::overlay(&mut canvas, &image, i64::from(x), i64::from(y));
-            (id, canvas)
+            Some((id, canvas))
         })
         .collect()
+}
+
+fn player_frames(sprites: &Path) -> Vec<(u16, RgbaImage)> {
+    normalized_animation_frames(
+        sprites,
+        &[
+            AnimationSheet {
+                path: "Character/Idle/Idle-Sheet.png",
+                cell_width: 64,
+                cell_height: 80,
+                count: 4,
+                output_base: Some(PLAYER_IDLE_BASE),
+            },
+            AnimationSheet {
+                path: "Character/Run/Run-Sheet.png",
+                cell_width: 80,
+                cell_height: 80,
+                count: 8,
+                output_base: Some(PLAYER_RUN_BASE),
+            },
+            AnimationSheet {
+                path: "Character/Attack-01/Attack-01-Sheet.png",
+                cell_width: 96,
+                cell_height: 80,
+                count: 8,
+                output_base: None,
+            },
+            AnimationSheet {
+                path: "Character/Jumlp-All/Jump-All-Sheet.png",
+                cell_width: 64,
+                cell_height: 64,
+                count: 15,
+                output_base: Some(PLAYER_JUMP_BASE),
+            },
+            AnimationSheet {
+                path: "Character/Jump-Start/Jump-Start-Sheet.png",
+                cell_width: 64,
+                cell_height: 64,
+                count: 4,
+                output_base: None,
+            },
+            AnimationSheet {
+                path: "Character/Jump-End/Jump-End-Sheet.png",
+                cell_width: 64,
+                cell_height: 64,
+                count: 3,
+                output_base: Some(PLAYER_FALL_BASE),
+            },
+            AnimationSheet {
+                path: "Character/Dead/Dead-Sheet.png",
+                cell_width: 80,
+                cell_height: 64,
+                count: 8,
+                output_base: None,
+            },
+        ],
+    )
+}
+
+fn critter_frames(sprites: &Path) -> Vec<(u16, RgbaImage)> {
+    let mut frames = normalized_animation_frames(
+        sprites,
+        &[
+            AnimationSheet {
+                path: "Mob/Boar/Idle/Idle-Sheet.png",
+                cell_width: 48,
+                cell_height: 32,
+                count: 4,
+                output_base: Some(BOAR_IDLE_BASE),
+            },
+            AnimationSheet {
+                path: "Mob/Boar/Run/Run-Sheet.png",
+                cell_width: 48,
+                cell_height: 32,
+                count: 6,
+                output_base: None,
+            },
+            AnimationSheet {
+                path: "Mob/Boar/Walk/Walk-Base-Sheet.png",
+                cell_width: 48,
+                cell_height: 32,
+                count: 6,
+                output_base: Some(BOAR_WALK_BASE),
+            },
+            AnimationSheet {
+                path: "Mob/Boar/Hit-Vanish/Hit-Sheet.png",
+                cell_width: 48,
+                cell_height: 32,
+                count: 4,
+                output_base: None,
+            },
+        ],
+    );
+    frames.extend(normalized_animation_frames(
+        sprites,
+        &[
+            AnimationSheet {
+                path: "Mob/Small Bee/Attack/Attack-Sheet.png",
+                cell_width: 64,
+                cell_height: 64,
+                count: 4,
+                output_base: None,
+            },
+            AnimationSheet {
+                path: "Mob/Small Bee/Fly/Fly-Sheet.png",
+                cell_width: 64,
+                cell_height: 64,
+                count: 4,
+                output_base: Some(BEE_FLY_BASE),
+            },
+            AnimationSheet {
+                path: "Mob/Small Bee/Hit/Hit-Sheet.png",
+                cell_width: 64,
+                cell_height: 64,
+                count: 4,
+                output_base: None,
+            },
+        ],
+    ));
+    frames.extend(normalized_animation_frames(
+        sprites,
+        &[
+            AnimationSheet {
+                path: "Mob/Snail/walk-Sheet.png",
+                cell_width: 48,
+                cell_height: 32,
+                count: 8,
+                output_base: Some(SNAIL_WALK_BASE),
+            },
+            AnimationSheet {
+                path: "Mob/Snail/Hide-Sheet.png",
+                cell_width: 48,
+                cell_height: 32,
+                count: 8,
+                output_base: None,
+            },
+            AnimationSheet {
+                path: "Mob/Snail/Dead-Sheet.png",
+                cell_width: 48,
+                cell_height: 32,
+                count: 8,
+                output_base: None,
+            },
+        ],
+    ));
+    frames
+}
+
+fn push_trimmed_rects(
+    selected: &mut Vec<(u16, RgbaImage)>,
+    source: &RgbaImage,
+    base: u16,
+    rects: &[(u32, u32, u32, u32)],
+) {
+    for (index, &(x, y, width, height)) in rects.iter().enumerate() {
+        selected.push((base + index as u16, trim(&crop(source, x, y, width, height))));
+    }
+}
+
+fn push_tree_pair(
+    selected: &mut Vec<(u16, RgbaImage)>,
+    sprites: &Path,
+    path: &str,
+    tall_base: u16,
+    medium_base: Option<u16>,
+) {
+    let image = load_rgba(&sprites.join(path));
+    push_trimmed_rects(
+        selected,
+        &image,
+        tall_base,
+        &[(0, 0, 107, 368), (112, 0, 107, 368), (224, 0, 107, 368)],
+    );
+    if let Some(base) = medium_base {
+        push_trimmed_rects(
+            selected,
+            &image,
+            base,
+            &[
+                (0, 391, 107, 313),
+                (112, 391, 107, 313),
+                (224, 391, 107, 313),
+            ],
+        );
+    }
 }
 
 fn selected_sprites(helio: &Path) -> Vec<(u16, RgbaImage)> {
@@ -151,15 +364,60 @@ fn selected_sprites(helio: &Path) -> Vec<(u16, RgbaImage)> {
     let tiles = load_rgba(&sprites.join("Assets/Tiles.png"));
     let mut selected = vec![
         (WHITE, RgbaImage::from_pixel(4, 4, Rgba([255, 255, 255, 255]))),
-        (GRASS, crop(&tiles, 16, 16, 16, 16)),
-        (WATER, crop(&tiles, 3 * 16, 17 * 16, 16, 16)),
-        (DIRT, crop(&tiles, 16, 3 * 16, 16, 16)),
-        (STONE, crop(&tiles, 16, 6 * 16, 16, 16)),
+        (GRASS, trim(&crop(&tiles, 16, 16, 16, 16))),
+        (WATER, trim(&crop(&tiles, 3 * 16, 17 * 16, 16, 16))),
+        (DIRT, trim(&crop(&tiles, 16, 3 * 16, 16, 16))),
+        (STONE, trim(&crop(&tiles, 16, 6 * 16, 16, 16))),
     ];
     for stage in 1..=3 {
         selected.push((CRACK_BASE + stage as u16 - 1, crack(stage)));
     }
     selected.extend(player_frames(&sprites));
+    selected.extend(critter_frames(&sprites));
+
+    let bushes = load_rgba(&sprites.join("Assets/Tree-Assets.png"));
+    push_trimmed_rects(
+        &mut selected,
+        &bushes,
+        BUSH_BASE,
+        &[
+            (210, 5, 124, 86),
+            (210, 101, 124, 86),
+            (210, 197, 124, 86),
+            (210, 293, 124, 86),
+        ],
+    );
+    selected.push((CABIN, trim(&load_rgba(&sprites.join("cabin.png")))));
+    push_tree_pair(
+        &mut selected,
+        &sprites,
+        "Trees/Green-Tree.png",
+        TREE_GREEN_TALL_BASE,
+        Some(TREE_GREEN_MED_BASE),
+    );
+    push_tree_pair(
+        &mut selected,
+        &sprites,
+        "Trees/Dark-Tree.png",
+        TREE_DARK_TALL_BASE,
+        Some(TREE_DARK_MED_BASE),
+    );
+    push_tree_pair(&mut selected, &sprites, "Trees/Red-Tree.png", TREE_RED_TALL_BASE, None);
+    push_tree_pair(
+        &mut selected,
+        &sprites,
+        "Trees/Golden-Tree.png",
+        TREE_GOLDEN_TALL_BASE,
+        Some(TREE_GOLDEN_MED_BASE),
+    );
+    push_tree_pair(
+        &mut selected,
+        &sprites,
+        "Trees/Yellow-Tree.png",
+        TREE_YELLOW_TALL_BASE,
+        Some(TREE_YELLOW_MED_BASE),
+    );
+    selected.push((BACKGROUND, trim(&load_rgba(&sprites.join("Background/Background.png")))));
     selected.sort_by_key(|(id, _)| *id);
     assert_eq!(selected.len(), EXPECTED_ENTRY_COUNT);
     for (expected, (actual, _)) in selected.iter().enumerate() {

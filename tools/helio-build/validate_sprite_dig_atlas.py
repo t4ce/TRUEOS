@@ -21,11 +21,11 @@ def main() -> None:
     count, entry_bytes = struct.unpack_from("<HH", data, 24)
     entries_offset, pixels_offset, pixels_bytes, pixels_crc = struct.unpack_from("<IIII", data, 28)
     player_width, player_height = struct.unpack_from("<HH", data, 44)
-    if (version, header_bytes, total_bytes) != (1, 64, len(data)):
+    if (version, header_bytes, total_bytes) != (2, 64, len(data)):
         fail("unsupported version or length")
-    if width != 512 or height == 0 or height % 16 or pitch != width * 4:
+    if width != 1536 or height == 0 or height % 16 or pitch != width * 4:
         fail("invalid atlas extent")
-    if count != 38 or entry_bytes != 16 or entries_offset != 64:
+    if count != 93 or entry_bytes != 16 or entries_offset != 64:
         fail("invalid entry table")
     if pixels_offset % 64 or pixels_bytes != pitch * height or pixels_offset + pixels_bytes != len(data):
         fail("invalid pixel payload")

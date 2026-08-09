@@ -122,10 +122,11 @@ pub(crate) fn sprite_quad_tilemap_rgba8_direct_result(
         || atlas.storage_order != GpgpuRgba8StorageOrder::Rgba
         || descs.is_empty()
         || descs.len() > SPRITE_QUAD_WORKLIST_MAX_DESCS
-        || descs[0].flags != SPRITE_QUAD_WORKLIST_FLAG_TILEMAP
-        || descs[1..]
+        || descs
             .iter()
-            .any(|desc| desc.flags & SPRITE_QUAD_WORKLIST_FLAG_TILEMAP != 0)
+            .filter(|desc| desc.flags & SPRITE_QUAD_WORKLIST_FLAG_TILEMAP != 0)
+            .count()
+            != 1
         || tilemap_state.len() > SPRITE_QUAD_TILEMAP_STATE_MAX_DWORDS
         || tilemap_state.get(0) != Some(&SPRITE_QUAD_TILEMAP_MAGIC)
         || tilemap_state.get(1) != Some(&SPRITE_QUAD_TILEMAP_VERSION)

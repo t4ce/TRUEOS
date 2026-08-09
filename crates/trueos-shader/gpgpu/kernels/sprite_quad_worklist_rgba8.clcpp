@@ -158,7 +158,6 @@ static inline uint render_tilemap(
     float zoom = as_float(state[6]);
     float camera_x = as_float(state[7]);
     float camera_y = as_float(state[8]);
-    uint background = state[9];
     uint rects_offset = state[10];
     uint heights_offset = state[11];
     uint cells_offset = state[12];
@@ -171,12 +170,12 @@ static inline uint render_tilemap(
     float world_y = camera_y - ((float)y + 0.5f - (float)dst_height * 0.5f) / zoom;
     int col = (int)floor(world_x / tile + 0.5f);
     if (col < 0 || (uint)col >= map_cols) {
-        return background;
+        return 0u;
     }
     float top = as_float(state[heights_offset + (uint)col]);
     int row = (int)floor((top - tile * 0.5f - world_y) / tile + 0.5f);
     if (row < 0 || (uint)row >= map_rows) {
-        return background;
+        return 0u;
     }
     uint cell_index = (uint)col * map_rows + (uint)row;
     uint cell_word = cell_index >> 2;
@@ -185,7 +184,7 @@ static inline uint render_tilemap(
     }
     uint tile_id = (state[cells_offset + cell_word] >> ((cell_index & 3u) * 8u)) & 0xFFu;
     if (tile_id == 0u || tile_id >= rect_count) {
-        return background;
+        return 0u;
     }
 
     uint rect_offset = rects_offset + tile_id * 2u;
@@ -212,7 +211,7 @@ static inline uint render_tilemap(
         src_height,
         atlas_u,
         atlas_v);
-    return src_over(sampled, background, 0u);
+    return sampled;
 }
 
 __attribute__((intel_reqd_sub_group_size(16)))
@@ -299,7 +298,7 @@ __kernel void sprite_quad_worklist_rgba8(
 
         uint dst_index = y * dst_pitch_pixels + x;
         if ((flags & SPRITE_QUAD_FLAG_TILEMAP) != 0u) {
-            dst_rgba[dst_index] = render_tilemap(
+            uint terrain = render_tilemap(
                 src_rgba,
                 descs,
                 src_pitch_pixels,
@@ -309,6 +308,7 @@ __kernel void sprite_quad_worklist_rgba8(
                 y,
                 dst_width,
                 dst_height);
+            dst_rgba[dst_index] = src_over(terrain, dst_rgba[dst_index], 0u);
             continue;
         }
         if ((flags & SPRITE_QUAD_FLAG_CLEAR) != 0u) {
