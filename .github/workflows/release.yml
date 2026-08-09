@@ -59,6 +59,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           git submodule update --init \
             crates/trueos-shader \
             vendor/CrabUSB \
