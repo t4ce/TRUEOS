@@ -1253,10 +1253,10 @@ const fn compute_release_direct_contract(
     cadence: super::FrameCadence,
     buffering: super::FrameBuffering,
 ) -> bool {
-    // An immutable Blueprint snapshot and a FontScene2d frame both have one
-    // complete, exact released RGBA allocation. Admit those one-shot surfaces
-    // directly so moving a static stamped label changes only plane geometry
-    // instead of scheduling an RCS re-composition for every pointer sample.
+    // Immutable Blueprint/Font surfaces and streaming render scenes each
+    // publish one complete, exact released RGBA allocation. RenderScene3d may
+    // be authored by either the native resident renderer or a compatibility
+    // compute producer; the release kind does not change scanout ownership.
     matches!(
         (content, buffering),
         (FrameContent::Image, super::FrameBuffering::Double)
