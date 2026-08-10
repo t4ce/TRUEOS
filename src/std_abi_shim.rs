@@ -258,6 +258,7 @@ pub(crate) struct BytePipe {
     pub(crate) write_open: bool,
 }
 
+#[derive(Clone)]
 pub(crate) enum OpenFile {
     Regular {
         path: Option<String>,
@@ -2359,13 +2360,21 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
         return -1;
     }
     if fd == 0 {
-        let n = unsafe { sys_read(fd as u32, buf.cast::<u8>(), count) };
-        if n == 0 && STD_FD_FLAGS[0].load(Ordering::Relaxed) & TRUEOS_O_NONBLOCK != 0 {
-            TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
-            return -1;
+        loop {
+            let n = unsafe { sys_read(fd as u32, buf.cast::<u8>(), count) };
+            if n != 0 {
+                TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                return n as isize;
+            }
+            if STD_FD_FLAGS[0].load(Ordering::Relaxed) & TRUEOS_O_NONBLOCK != 0 {
+                TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+                return -1;
+            }
+
+            // An attached console with no queued bytes is not at EOF. Yield the
+            // guest until input arrives, matching blocking Unix terminal reads.
+            crate::r::io::fs_cabi::trueos_cabi_sleep_ms(10);
         }
-        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
-        return n as isize;
     }
 
     if fd < 0 {
@@ -3990,6 +3999,34 @@ pub unsafe extern "C" fn chdir(_path: *const c_char) -> c_int {
 pub unsafe extern "C" fn chroot(_path: *const c_char) -> c_int {
     TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
     -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dup(fd: c_int) -> c_int {
+    if fd < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+
+    // The three process console descriptors are permanently open in the
+    // Blueprint runtime. They have no independently closeable kernel object,
+    // so retaining the descriptor is the closest supported representation.
+    if (0..=2).contains(&fd) {
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        return fd;
+    }
+
+    let Some(file) = OPEN_FILES.lock().get(fd).cloned() else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let next = next_file_fd();
+    if OPEN_FILES.lock().insert(next, file).is_err() {
+        TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    next
 }
 
 #[unsafe(no_mangle)]

@@ -795,28 +795,237 @@ impl EmulatorUi {
     }
 }
 
-#[embassy_executor::task]
-async fn emulator_ui_service_task() {
-    crate::log_info!(
-        target: "gfx";
-        "boot-probe: virtio-gpu-ui task start\n"
-    );
-    let Some(mut ui) = EmulatorUi::init() else {
-        crate::log_warn!(
-            target: "gfx";
-            "virtio-gpu-ui: init failed\n"
-        );
-        return;
-    };
+#[derive(Clone, Copy)]
+struct LimineFramebufferInfo {
+    address: *mut u8,
+    width: u32,
+    height: u32,
+    pitch: usize,
+    bytes_per_pixel: usize,
+    bpp: u16,
+    red_mask_size: u8,
+    red_mask_shift: u8,
+    green_mask_size: u8,
+    green_mask_shift: u8,
+    blue_mask_size: u8,
+    blue_mask_shift: u8,
+}
 
-    loop {
-        ui.update_cursor();
-        Timer::after(EmbassyDuration::from_millis(CURSOR_UPDATE_MS)).await;
+fn framebuffer_mask(size: u8, shift: u8, bpp: u16) -> Option<u32> {
+    if size == 0 || size > 16 || u16::from(shift) + u16::from(size) > bpp {
+        return None;
+    }
+    Some((((1u64 << size) - 1) << shift) as u32)
+}
+
+fn limine_framebuffer_info() -> Result<LimineFramebufferInfo, &'static str> {
+    let response = crate::limine::framebuffer_response().ok_or("no-framebuffer-response")?;
+    let framebuffer = response
+        .framebuffers()
+        .first()
+        .copied()
+        .ok_or("no-framebuffer")?;
+    if framebuffer.address().is_null() {
+        return Err("null-address");
+    }
+    if framebuffer.memory_model != limine::framebuffer::FRAMEBUFFER_RGB {
+        return Err("unsupported-memory-model");
+    }
+    let width = u32::try_from(framebuffer.width).map_err(|_| "width-out-of-range")?;
+    let height = u32::try_from(framebuffer.height).map_err(|_| "height-out-of-range")?;
+    if width == 0 || height == 0 || width > 32_768 || height > 32_768 {
+        return Err("invalid-dimensions");
+    }
+    if !(15..=32).contains(&framebuffer.bpp) {
+        return Err("unsupported-bpp");
+    }
+    let bytes_per_pixel = usize::from(framebuffer.bpp.div_ceil(8));
+    let pitch = usize::try_from(framebuffer.pitch).map_err(|_| "pitch-out-of-range")?;
+    let row_bytes = usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(bytes_per_pixel))
+        .ok_or("row-size-overflow")?;
+    if pitch < row_bytes {
+        return Err("pitch-too-small");
+    }
+    usize::try_from(height)
+        .ok()
+        .and_then(|height| height.checked_mul(pitch))
+        .ok_or("framebuffer-size-overflow")?;
+
+    let red_mask =
+        framebuffer_mask(framebuffer.red_mask_size, framebuffer.red_mask_shift, framebuffer.bpp)
+            .ok_or("invalid-red-mask")?;
+    let green_mask = framebuffer_mask(
+        framebuffer.green_mask_size,
+        framebuffer.green_mask_shift,
+        framebuffer.bpp,
+    )
+    .ok_or("invalid-green-mask")?;
+    let blue_mask =
+        framebuffer_mask(framebuffer.blue_mask_size, framebuffer.blue_mask_shift, framebuffer.bpp)
+            .ok_or("invalid-blue-mask")?;
+    if red_mask & green_mask != 0 || red_mask & blue_mask != 0 || green_mask & blue_mask != 0 {
+        return Err("overlapping-color-masks");
+    }
+
+    Ok(LimineFramebufferInfo {
+        address: framebuffer.address().cast(),
+        width,
+        height,
+        pitch,
+        bytes_per_pixel,
+        bpp: framebuffer.bpp,
+        red_mask_size: framebuffer.red_mask_size,
+        red_mask_shift: framebuffer.red_mask_shift,
+        green_mask_size: framebuffer.green_mask_size,
+        green_mask_shift: framebuffer.green_mask_shift,
+        blue_mask_size: framebuffer.blue_mask_size,
+        blue_mask_shift: framebuffer.blue_mask_shift,
+    })
+}
+
+fn scale_channel(value: u8, bits: u8) -> u32 {
+    let max = (1u32 << bits) - 1;
+    (u32::from(value) * max + 127) / 255
+}
+
+fn pack_limine_rgb(framebuffer: LimineFramebufferInfo, red: u8, green: u8, blue: u8) -> u32 {
+    (scale_channel(red, framebuffer.red_mask_size) << framebuffer.red_mask_shift)
+        | (scale_channel(green, framebuffer.green_mask_size) << framebuffer.green_mask_shift)
+        | (scale_channel(blue, framebuffer.blue_mask_size) << framebuffer.blue_mask_shift)
+}
+
+unsafe fn write_limine_pixel(address: *mut u8, bytes_per_pixel: usize, pixel: u32) {
+    for byte in 0..bytes_per_pixel {
+        unsafe {
+            core::ptr::write_volatile(address.add(byte), (pixel >> (byte * 8)) as u8);
+        }
     }
 }
 
-pub(crate) fn emulator_ui_task() -> Result<SpawnToken<impl Send>, SpawnError> {
-    emulator_ui_service_task()
+fn draw_centered_limine_logo(
+    framebuffer: LimineFramebufferInfo,
+    logo: &crate::graphics::jpeg_codec::DecodedJpeg,
+) -> LogoCopy {
+    let copy = centered_logo_copy(framebuffer.width, framebuffer.height, logo.width, logo.height);
+    for y in 0..framebuffer.height as usize {
+        let row = unsafe { framebuffer.address.add(y * framebuffer.pitch) };
+        for x in 0..framebuffer.width as usize {
+            unsafe {
+                write_limine_pixel(
+                    row.add(x * framebuffer.bytes_per_pixel),
+                    framebuffer.bytes_per_pixel,
+                    0,
+                );
+            }
+        }
+    }
+
+    for y in 0..copy.copy_h {
+        let src_row = ((copy.src_y + y) as usize)
+            .saturating_mul(logo.width as usize)
+            .saturating_add(copy.src_x as usize)
+            .saturating_mul(4);
+        let dst_row = unsafe {
+            framebuffer
+                .address
+                .add((copy.dst_y + y) as usize * framebuffer.pitch)
+        };
+        for x in 0..copy.copy_w as usize {
+            let source = src_row + x * 4;
+            let alpha = logo.rgba[source + 3] as u16;
+            let red = ((logo.rgba[source] as u16 * alpha) / 255) as u8;
+            let green = ((logo.rgba[source + 1] as u16 * alpha) / 255) as u8;
+            let blue = ((logo.rgba[source + 2] as u16 * alpha) / 255) as u8;
+            let pixel = pack_limine_rgb(framebuffer, red, green, blue);
+            unsafe {
+                write_limine_pixel(
+                    dst_row.add((copy.dst_x as usize + x) * framebuffer.bytes_per_pixel),
+                    framebuffer.bytes_per_pixel,
+                    pixel,
+                );
+            }
+        }
+    }
+    fence(Ordering::Release);
+    unsafe {
+        core::arch::asm!("sfence", options(nostack, preserves_flags));
+    }
+    copy
+}
+
+fn present_limine_logo() -> Result<(), &'static str> {
+    let framebuffer = limine_framebuffer_info()?;
+    let logo = crate::graphics::jpeg_codec::decode_jpeg_rgba(LOGO_JPEG)
+        .map_err(|_| "jpeg-decode-failed")?;
+    let copy = draw_centered_limine_logo(framebuffer, &logo);
+    crate::log_info!(target: "gfx";
+        "fallback-logo-ui: logo presented backend=limine-linear-framebuffer size={}x{} pitch=0x{:X} bpp={} masks=r{}@{},g{}@{},b{}@{} logo={}x{} copy={}x{} src={},{} dst={},{}\n",
+        framebuffer.width,
+        framebuffer.height,
+        framebuffer.pitch,
+        framebuffer.bpp,
+        framebuffer.red_mask_size,
+        framebuffer.red_mask_shift,
+        framebuffer.green_mask_size,
+        framebuffer.green_mask_shift,
+        framebuffer.blue_mask_size,
+        framebuffer.blue_mask_shift,
+        logo.width,
+        logo.height,
+        copy.copy_w,
+        copy.copy_h,
+        copy.src_x,
+        copy.src_y,
+        copy.dst_x,
+        copy.dst_y,
+    );
+    Ok(())
+}
+
+#[embassy_executor::task]
+async fn fallback_logo_service_task() {
+    crate::log_info!(
+        target: "gfx";
+        "boot-probe: fallback-logo-ui task start intel_claimed={} virtio_present={} limine_present={}\n",
+        crate::intel::has_claimed_device() as u8,
+        present() as u8,
+        limine_framebuffer_info().is_ok() as u8,
+    );
+    if crate::intel::has_claimed_device() {
+        crate::log_warn!(target: "gfx";
+            "fallback-logo-ui: skipped reason=intel-igpu-backend-active\n"
+        );
+        return;
+    }
+
+    if present() {
+        if let Some(mut ui) = EmulatorUi::init() {
+            loop {
+                ui.update_cursor();
+                Timer::after(EmbassyDuration::from_millis(CURSOR_UPDATE_MS)).await;
+            }
+        }
+        crate::log_warn!(target: "gfx";
+            "fallback-logo-ui: virtio initialization failed action=try-limine\n"
+        );
+    }
+
+    if let Err(reason) = present_limine_logo() {
+        crate::log_warn!(target: "gfx";
+            "fallback-logo-ui: unavailable backend=limine-linear-framebuffer reason={}\n",
+            reason,
+        );
+    }
+}
+
+pub(crate) fn fallback_logo_task() -> Result<SpawnToken<impl Send>, SpawnError> {
+    fallback_logo_service_task()
+}
+
+pub(crate) fn fallback_logo_available() -> bool {
+    !crate::intel::has_claimed_device() && (present() || limine_framebuffer_info().is_ok())
 }
 
 pub(crate) fn present() -> bool {
@@ -855,6 +1064,19 @@ struct LogoCopy {
     copy_h: u32,
 }
 
+fn centered_logo_copy(dst_w: u32, dst_h: u32, src_w: u32, src_h: u32) -> LogoCopy {
+    let copy_w = dst_w.min(src_w);
+    let copy_h = dst_h.min(src_h);
+    LogoCopy {
+        src_x: src_w.saturating_sub(copy_w) / 2,
+        src_y: src_h.saturating_sub(copy_h) / 2,
+        dst_x: dst_w.saturating_sub(copy_w) / 2,
+        dst_y: dst_h.saturating_sub(copy_h) / 2,
+        copy_w,
+        copy_h,
+    }
+}
+
 fn draw_centered_logo(
     dst: *mut u8,
     dst_w: u32,
@@ -864,23 +1086,18 @@ fn draw_centered_logo(
     let dst_len = bytes_for_surface(dst_w, dst_h).unwrap_or(0);
     unsafe { core::ptr::write_bytes(dst, 0, dst_len) };
 
-    let copy_w = dst_w.min(logo.width);
-    let copy_h = dst_h.min(logo.height);
-    let src_x = logo.width.saturating_sub(copy_w) / 2;
-    let src_y = logo.height.saturating_sub(copy_h) / 2;
-    let dst_x = dst_w.saturating_sub(copy_w) / 2;
-    let dst_y = dst_h.saturating_sub(copy_h) / 2;
+    let copy = centered_logo_copy(dst_w, dst_h, logo.width, logo.height);
 
-    for y in 0..copy_h {
-        let src_row = ((src_y + y) as usize)
+    for y in 0..copy.copy_h {
+        let src_row = ((copy.src_y + y) as usize)
             .saturating_mul(logo.width as usize)
-            .saturating_add(src_x as usize)
+            .saturating_add(copy.src_x as usize)
             .saturating_mul(4);
-        let dst_row = ((dst_y + y) as usize)
+        let dst_row = ((copy.dst_y + y) as usize)
             .saturating_mul(dst_w as usize)
-            .saturating_add(dst_x as usize)
+            .saturating_add(copy.dst_x as usize)
             .saturating_mul(4);
-        for x in 0..copy_w as usize {
+        for x in 0..copy.copy_w as usize {
             let si = src_row + x * 4;
             let di = dst_row + x * 4;
             let r = logo.rgba[si];
@@ -899,14 +1116,7 @@ fn draw_centered_logo(
         }
     }
 
-    LogoCopy {
-        src_x,
-        src_y,
-        dst_x,
-        dst_y,
-        copy_w,
-        copy_h,
-    }
+    copy
 }
 
 fn fill_cursor_sprite(dst: *mut u8) {

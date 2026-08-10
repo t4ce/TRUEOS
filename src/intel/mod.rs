@@ -39,6 +39,7 @@ use spin::Once;
 
 pub(crate) const INTEL_VENDOR_ID: u16 = 0x8086;
 pub(crate) const PCI_CLASS_DISPLAY: u8 = 0x03;
+const PCI_CLAIM_OWNER: &str = "intel-gen12-gpu";
 // Permanent GuC GGTT reservations. Firmware stays below the legacy RCS arena.
 // ADS and CTB use the otherwise empty 0x0700_0000..0x0800_0000 window between
 // the display cursor and media arenas; GuC 70.49 requests about 8 MiB of
@@ -107,6 +108,7 @@ const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const PCI_DEVICE_ALDER_LAKE_S_GT1: u16 = 0x4680;
 const PCI_DEVICE_ALDER_LAKE_N_N100_UHD: u16 = 0x46D1;
 const PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770: u16 = 0xA780;
+const PCI_DEVICE_WHISKEY_LAKE_UHD_620_GT2: [u16; 2] = [0x3EA0, 0x3EA1];
 const GEN11_GT_VEBOX_VDBOX_DISABLE: usize = 0x9140;
 const GEN12_S_GT_PLATFORM_VDBOX_MASK: u8 = (1 << 0) | (1 << 2);
 static INIT: AtomicBool = AtomicBool::new(false);
@@ -194,10 +196,11 @@ pub fn init_once() {
     };
     let guc_boot = guc_boot_enabled_for_device(dev.device_id);
     crate::log!(
-        "intel: claimed {:02X}:{:02X}.{} device=0x{:04X} name={} rev=0x{:02X} mmio_len=0x{:X} guc_boot={} media_decode={}\n",
+        "intel: claimed {:02X}:{:02X}.{} owner={} device=0x{:04X} name={} rev=0x{:02X} mmio_len=0x{:X} guc_boot={} media_decode={}\n",
         dev.bus,
         dev.slot,
         dev.function,
+        PCI_CLAIM_OWNER,
         dev.device_id,
         display_device_name(dev.device_id),
         dev.revision_id,
@@ -907,11 +910,57 @@ fn find_dev() -> Option<Dev> {
     crate::pci::with_devices(|list| {
         for d in list {
             if d.vendor == INTEL_VENDOR_ID && d.class == PCI_CLASS_DISPLAY && out.is_none() {
+                if !device_uses_gen12_integrated_pat(d.device) {
+                    crate::log!(
+                        "intel: refusing unsupported display {:02X}:{:02X}.{} device=0x{:04X} reason=not-gen12-xelp\n",
+                        d.bus,
+                        d.slot,
+                        d.function,
+                        d.device,
+                    );
+                    continue;
+                }
+                match crate::pci::claim_device(d, PCI_CLAIM_OWNER) {
+                    Ok(()) => {}
+                    Err(crate::pci::PciClaimError::AlreadyClaimed(owner)) => {
+                        crate::log!(
+                            "intel: cannot claim display {:02X}:{:02X}.{} device=0x{:04X} owner={}\n",
+                            d.bus,
+                            d.slot,
+                            d.function,
+                            d.device,
+                            owner,
+                        );
+                        continue;
+                    }
+                    Err(crate::pci::PciClaimError::RegistryFull) => {
+                        crate::log!(
+                            "intel: cannot claim display {:02X}:{:02X}.{} device=0x{:04X} reason=pci-claim-registry-full\n",
+                            d.bus,
+                            d.slot,
+                            d.function,
+                            d.device,
+                        );
+                        continue;
+                    }
+                }
                 let Some(size) = crate::pci::bar0_size_bytes(d.bus, d.slot, d.function) else {
+                    let _ = crate::pci::release_device_claim(
+                        d.bus,
+                        d.slot,
+                        d.function,
+                        PCI_CLAIM_OWNER,
+                    );
                     continue;
                 };
                 let (lo, hi) = crate::pci::read_bar0_raw(d.bus, d.slot, d.function);
                 if lo == 0 || lo == 0xFFFF_FFFF || (lo & 1) != 0 {
+                    let _ = crate::pci::release_device_claim(
+                        d.bus,
+                        d.slot,
+                        d.function,
+                        PCI_CLAIM_OWNER,
+                    );
                     continue;
                 }
                 let phys = if let Some(hi) = hi {
@@ -919,13 +968,19 @@ fn find_dev() -> Option<Dev> {
                 } else {
                     (lo as u64) & !0xF
                 };
-                crate::pci::enable_mem_and_bus_master(d.bus, d.slot, d.function);
                 let Some(mmio) = crate::pci::mmio::map_mmio_region_exact(phys, size as usize)
                     .ok()
                     .map(|p| p.as_ptr())
                 else {
+                    let _ = crate::pci::release_device_claim(
+                        d.bus,
+                        d.slot,
+                        d.function,
+                        PCI_CLAIM_OWNER,
+                    );
                     continue;
                 };
+                crate::pci::enable_mem_and_bus_master(d.bus, d.slot, d.function);
                 out = Some(Dev {
                     bus: d.bus,
                     slot: d.slot,
@@ -1020,7 +1075,7 @@ fn retain_forcewake_for_boot(dev: Dev) -> (bool, bool, bool) {
     (render_ready, media_ready, gt_ready)
 }
 
-fn device_uses_gen12_integrated_pat(device_id: u16) -> bool {
+const fn device_uses_gen12_integrated_pat(device_id: u16) -> bool {
     matches!(
         device_id,
         PCI_DEVICE_ALDER_LAKE_S_GT1
@@ -1035,6 +1090,11 @@ fn device_uses_gen12_integrated_pat(device_id: u16) -> bool {
             | PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770
     )
 }
+
+const _: () = {
+    assert!(!device_uses_gen12_integrated_pat(PCI_DEVICE_WHISKEY_LAKE_UHD_620_GT2[0]));
+    assert!(!device_uses_gen12_integrated_pat(PCI_DEVICE_WHISKEY_LAKE_UHD_620_GT2[1]));
+};
 
 fn init_gen12_integrated_pat(dev: Dev) -> bool {
     if !device_uses_gen12_integrated_pat(dev.device_id) {

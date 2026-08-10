@@ -93,7 +93,7 @@ define_started_flags!(
     GPGPU_UI4_PREVIEW_CONSUMER_STARTED,
     GPGPU_UI4_SVG_PROBE_CONSUMER_STARTED,
     HW_PIC_SERVICE_STARTED,
-    VIRTIO_GPU_UI_STARTED,
+    FALLBACK_LOGO_UI_STARTED,
     INTEL_HDA_AUDIO_DEMO_STARTED,
     RAPLE_SERVICE_STARTED,
     THERMAL_SERVICE_STARTED,
@@ -938,8 +938,8 @@ fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_pic_service())
 }
 
-fn spawn_virtio_gpu_ui_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::virtio_gpu_logo::emulator_ui_task())
+fn spawn_fallback_logo_ui_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::virtio_gpu_logo::fallback_logo_task())
 }
 
 fn spawn_intel_hda_audio_demo_task(spawner: Spawner) -> SpawnAttempt {
@@ -1018,8 +1018,8 @@ fn h264_lastap_service_gate() -> bool {
 }
 
 #[inline]
-fn virtio_gpu_ui_gate() -> bool {
-    crate::virtio_gpu_logo::present()
+fn fallback_logo_ui_gate() -> bool {
+    crate::virtio_gpu_logo::fallback_logo_available()
 }
 
 #[inline]
@@ -2061,11 +2061,11 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_hw_pic_service,
     ),
     TaskSpec::enabled_gated(
-        "virtio-gpu-ui",
+        "fallback-logo-ui",
         0,
-        virtio_gpu_ui_gate,
-        &VIRTIO_GPU_UI_STARTED,
-        spawn_virtio_gpu_ui_task,
+        fallback_logo_ui_gate,
+        &FALLBACK_LOGO_UI_STARTED,
+        spawn_fallback_logo_ui_task,
     ),
     TaskSpec::disabled(
         "intel-hda-audio-demo",

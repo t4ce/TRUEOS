@@ -210,7 +210,7 @@ pub unsafe extern "C" fn socketpair(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn poll(fds: *mut PollFd, nfds: usize, _timeout: c_int) -> c_int {
+pub unsafe extern "C" fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> c_int {
     if nfds != 0 && fds.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
@@ -224,41 +224,63 @@ pub unsafe extern "C" fn poll(fds: *mut PollFd, nfds: usize, _timeout: c_int) ->
     };
     let pollfds = unsafe { slice::from_raw_parts_mut(pollfds.as_mut_ptr().cast::<PollFd>(), nfds) };
 
-    let table = OPEN_FILES.lock();
-    let mut ready = 0;
-    for pollfd in pollfds.iter_mut() {
-        pollfd.revents = 0;
-        if pollfd.fd < 0 {
-            continue;
+    let mut remaining_ms = (timeout >= 0).then_some(timeout as u64);
+    loop {
+        let ready = {
+            let table = OPEN_FILES.lock();
+            let mut ready = 0;
+            for pollfd in pollfds.iter_mut() {
+                pollfd.revents = 0;
+                if pollfd.fd < 0 {
+                    continue;
+                }
+                let mut revents = 0;
+                if let Some(file) = table.get(pollfd.fd) {
+                    if pollfd.events & TRUEOS_POLLIN != 0 && open_file_read_ready(file) {
+                        revents |= TRUEOS_POLLIN;
+                    }
+                    if pollfd.events & TRUEOS_POLLOUT != 0 && open_file_write_ready(file) {
+                        revents |= TRUEOS_POLLOUT;
+                    }
+                } else if (0..=2).contains(&pollfd.fd) {
+                    if pollfd.fd == 0
+                        && pollfd.events & TRUEOS_POLLIN != 0
+                        && crate::r::io::fs_cabi::trueos_cabi_shell_attached_readable_len() != 0
+                    {
+                        revents |= TRUEOS_POLLIN;
+                    }
+                    if pollfd.events & TRUEOS_POLLOUT != 0 {
+                        revents |= TRUEOS_POLLOUT;
+                    }
+                } else {
+                    revents |= TRUEOS_POLLNVAL;
+                }
+                pollfd.revents = revents;
+                if revents != 0 {
+                    ready += 1;
+                }
+            }
+            ready
+        };
+
+        if ready != 0 {
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            return ready;
         }
-        let mut revents = 0;
-        if let Some(file) = table.get(pollfd.fd) {
-            if pollfd.events & TRUEOS_POLLIN != 0 && open_file_read_ready(file) {
-                revents |= TRUEOS_POLLIN;
+
+        let sleep_ms = match remaining_ms {
+            Some(0) => {
+                TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                return 0;
             }
-            if pollfd.events & TRUEOS_POLLOUT != 0 && open_file_write_ready(file) {
-                revents |= TRUEOS_POLLOUT;
-            }
-        } else if (0..=2).contains(&pollfd.fd) {
-            if pollfd.fd == 0
-                && pollfd.events & TRUEOS_POLLIN != 0
-                && crate::r::io::fs_cabi::trueos_cabi_shell_attached_readable_len() != 0
-            {
-                revents |= TRUEOS_POLLIN;
-            }
-            if pollfd.events & TRUEOS_POLLOUT != 0 {
-                revents |= TRUEOS_POLLOUT;
-            }
-        } else {
-            revents |= TRUEOS_POLLNVAL;
-        }
-        pollfd.revents = revents;
-        if revents != 0 {
-            ready += 1;
+            Some(remaining) => remaining.min(10),
+            None => 10,
+        };
+        crate::r::io::fs_cabi::trueos_cabi_sleep_ms(sleep_ms);
+        if let Some(remaining) = &mut remaining_ms {
+            *remaining = remaining.saturating_sub(sleep_ms);
         }
     }
-    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
-    ready
 }
 
 #[unsafe(no_mangle)]

@@ -270,6 +270,15 @@ pub unsafe extern "C" fn trueos_cabi_log(
     let message = message.trim_end_matches(&['\r', '\n'][..]);
     let purpose = crate::log_os::purpose_for_level(level);
 
+    // Keep Blueprint application records visible in the global diagnostic
+    // stream as well. The Apps area is commonly filtered more aggressively,
+    // which otherwise hides startup failures before terminal handoff.
+    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
+        crate::log!("blueprint-app: vm{} {}: {}\n", vm_id, target, message);
+    } else {
+        crate::log!("blueprint-app: {}: {}\n", target, message);
+    }
+
     if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
         crate::log_os::log_with_area_purpose(
             crate::log_os::flags::LogArea::Apps,

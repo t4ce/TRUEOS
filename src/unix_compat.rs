@@ -31,6 +31,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "dlerror"
             | "dlopen"
             | "dlsym"
+            | "dup"
             | "dup2"
             | "environ"
             | "errno_location"
@@ -188,6 +189,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "dlerror" => Some(crate::std_abi_shim::dlerror as *const () as usize),
         "dlopen" => Some(crate::std_abi_shim::dlopen as *const () as usize),
         "dlsym" => Some(crate::std_abi_shim::dlsym as *const () as usize),
+        "dup" => Some(crate::std_abi_shim::dup as *const () as usize),
         "dup2" => Some(crate::std_abi_shim::dup2 as *const () as usize),
         "environ" => Some(core::ptr::addr_of!(crate::std_abi_shim::TRUEOS_ENVIRON) as usize),
         "errno_location" => Some(crate::std_abi_shim::errno_location as *const () as usize),

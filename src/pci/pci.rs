@@ -18,7 +18,6 @@ const CFG_DATA: u16 = 0xCFC;
 const CFG_ENABLE: u32 = 0x8000_0000;
 
 const MAX_PCI_DEVICES: usize = 256;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const MAX_PCI_CLAIMS: usize = 64;
 
 const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
@@ -126,7 +125,6 @@ impl PciDevice {
 static DEVICES: Mutex<Vec<PciDevice, MAX_PCI_DEVICES>> = Mutex::new(Vec::new());
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct PciClaim {
     bus: u8,
     slot: u8,
@@ -135,13 +133,11 @@ struct PciClaim {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum PciClaimError {
     AlreadyClaimed(&'static str),
     RegistryFull,
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static PCI_CLAIMS: Mutex<Vec<PciClaim, MAX_PCI_CLAIMS>> = Mutex::new(Vec::new());
 
 const ECAM_MAX_REGIONS: usize = 8;
@@ -437,7 +433,6 @@ pub fn with_devices<R, F: FnOnce(&[PciDevice]) -> R>(f: F) -> R {
 ///
 /// Repeating a claim by the same owner is idempotent. Different drivers cannot claim the
 /// same BDF until the current owner releases it (for example after hot-unplug).
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn claim_device(dev: &PciDevice, owner: &'static str) -> Result<(), PciClaimError> {
     let mut claims = PCI_CLAIMS.lock();
     if let Some(claim) = claims.iter().find(|claim| {
@@ -459,7 +454,6 @@ pub fn claim_device(dev: &PciDevice, owner: &'static str) -> Result<(), PciClaim
         .map_err(|_| PciClaimError::RegistryFull)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn release_device_claim(bus: u8, slot: u8, function: u8, owner: &'static str) -> bool {
     let mut claims = PCI_CLAIMS.lock();
     let Some(index) = claims.iter().position(|claim| {
