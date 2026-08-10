@@ -5,6 +5,8 @@ QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
 ISO_PATH="${ISO_PATH:-bld/trueos.iso}"
 QEMU_NVME_IMG="${QEMU_NVME_IMG:-tools/nvme.img}"
 QEMU_MEMORY="${QEMU_MEMORY:-12000M}"
+QEMU_NIC_DEVICE="${QEMU_NIC_DEVICE:-virtio-net-pci,disable-modern=off}"
+QEMU_SERIAL="${QEMU_SERIAL:-tcp:127.0.0.1:5555,server,nowait}"
 
 QEMU_MODE="${1:-iso}"
 if [[ "${QEMU_MODE}" == "iso" || "${QEMU_MODE}" == "iso-debug" ]]; then
@@ -61,9 +63,9 @@ exec env -i \
     -m "${QEMU_MEMORY}" \
     -smp cores=14 \
     -cpu host,host-phys-bits=true \
-    -serial tcp:127.0.0.1:5555,server,nowait \
+    -serial "${QEMU_SERIAL}" \
     -netdev "${QEMU_NETDEV_USER}" \
-    -device virtio-net-pci,netdev=net1,disable-modern=off,bus=pcie.0,addr=0x3 \
+    -device "${QEMU_NIC_DEVICE},netdev=net1,bus=pcie.0,addr=0x3" \
     -object rng-random,filename=/dev/urandom,id=rng0 \
     -device virtio-rng-pci,rng=rng0,disable-modern=off,bus=pcie.0,addr=0x4 \
     -audiodev none,id=snd0 \
