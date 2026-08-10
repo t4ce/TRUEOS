@@ -1196,6 +1196,7 @@ async fn submit_module_bytes_to_target_async(
     module_bytes: Vec<u8>,
     app_args: Vec<String>,
     instance: crate::hv::BlueprintInstanceRequest,
+    launch_script: Option<String>,
     source: &'static str,
 ) -> Result<&'static str, String> {
     preflight_archive_name_to_target_async(&target, archive_name, module_bytes.as_slice()).await?;
@@ -1231,7 +1232,7 @@ async fn submit_module_bytes_to_target_async(
             source,
             module_bytes,
             app_args,
-            None,
+            launch_script,
             instance,
             true,
         );
@@ -1253,6 +1254,21 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
     .await
 }
 
+pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_with_launch_script_async(
+    target: MatrixTarget,
+    archive_name: &str,
+    launch_script: String,
+) -> Result<&'static str, String> {
+    submit_archive_name_to_target_prefer_trueosfs_with_instance_and_launch_script_async(
+        target,
+        archive_name,
+        Vec::new(),
+        crate::hv::BlueprintInstanceRequest::default(),
+        Some(launch_script),
+    )
+    .await
+}
+
 /// Launch an archive as a specific instance.
 ///
 /// The default request claims the single shared default slot, so a caller that
@@ -1264,6 +1280,23 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_with_instance_
     app_args: Vec<String>,
     instance: crate::hv::BlueprintInstanceRequest,
 ) -> Result<&'static str, String> {
+    submit_archive_name_to_target_prefer_trueosfs_with_instance_and_launch_script_async(
+        target,
+        archive_name,
+        app_args,
+        instance,
+        None,
+    )
+    .await
+}
+
+async fn submit_archive_name_to_target_prefer_trueosfs_with_instance_and_launch_script_async(
+    target: MatrixTarget,
+    archive_name: &str,
+    app_args: Vec<String>,
+    instance: crate::hv::BlueprintInstanceRequest,
+    launch_script: Option<String>,
+) -> Result<&'static str, String> {
     if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
         if let Some((module_bytes, source)) =
             trueosfs_module_by_archive_name(disk, archive_name).await?
@@ -1274,6 +1307,7 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_with_instance_
                 module_bytes,
                 app_args,
                 instance,
+                launch_script,
                 source,
             )
             .await;
@@ -1287,6 +1321,7 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_with_instance_
             module_bytes,
             app_args,
             instance,
+            launch_script,
             "boot embedded",
         )
         .await;
@@ -1307,6 +1342,7 @@ pub(crate) async fn submit_archive_name_to_target_prefer_embedded_async(
             module_bytes,
             app_args,
             crate::hv::BlueprintInstanceRequest::default(),
+            None,
             "boot embedded",
         )
         .await;
@@ -1322,6 +1358,7 @@ pub(crate) async fn submit_archive_name_to_target_prefer_embedded_async(
                 module_bytes,
                 app_args,
                 crate::hv::BlueprintInstanceRequest::default(),
+                None,
                 source,
             )
             .await;
@@ -1401,6 +1438,7 @@ async fn submit_archive_entry(
         module_bytes,
         app_args,
         instance,
+        None,
         source,
     )
     .await

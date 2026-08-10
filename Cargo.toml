@@ -11,8 +11,7 @@ test = false
 bench = false
 
 [features]
-default = ["trueos_rdp", "trueos_lumen", "trueos_h264_encode_stream"]
-trueos_rdp = []
+default = ["trueos_lumen", "trueos_h264_encode_stream"]
 trueos_lumen = []
 trueos_h264_encode_stream = []
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]

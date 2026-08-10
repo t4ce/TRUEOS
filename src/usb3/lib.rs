@@ -7,6 +7,16 @@ use spin::Mutex;
 
 static OBSERVED_USB_DEVICES: Mutex<Vec<TlbUsbDevice>> = Mutex::new(Vec::new());
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DmaRemapTrace {
+    size: usize,
+    align: usize,
+    orig_phys: u64,
+    bounce_phys: u64,
+}
+
+static LAST_DMA_REMAP_TRACE: Mutex<Option<DmaRemapTrace>> = Mutex::new(None);
+
 struct TrueosCrabKernel;
 
 static TRUEOS_CRAB_KERNEL: TrueosCrabKernel = TrueosCrabKernel;
@@ -51,13 +61,21 @@ impl crabusb::DmaOp for TrueosCrabKernel {
                 }
             }
 
-            if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS {
-                crate::log!(
+            let trace = DmaRemapTrace {
+                size,
+                align: layout.align(),
+                orig_phys: phys,
+                bounce_phys,
+            };
+            if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS
+                && LAST_DMA_REMAP_TRACE.lock().replace(trace) != Some(trace)
+            {
+                crate::log_trace!(target: "usb";
                     "crabusb: dma remap size={} align={} orig_phys=0x{:X} bounce_phys=0x{:X}\n",
-                    size,
-                    layout.align(),
-                    phys,
-                    bounce_phys
+                    trace.size,
+                    trace.align,
+                    trace.orig_phys,
+                    trace.bounce_phys
                 );
             }
 

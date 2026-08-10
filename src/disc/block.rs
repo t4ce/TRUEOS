@@ -472,11 +472,6 @@ impl DeviceDescriptor {
         self
     }
 
-    pub fn mark_internal_hidden(mut self) -> Self {
-        self.user_visible = false;
-        self
-    }
-
     pub fn with_pci(mut self, pci: PciAddress) -> Self {
         self.pci = Some(pci);
         self

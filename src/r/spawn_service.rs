@@ -113,9 +113,6 @@ define_started_flags!(
     UNIX_FD_PROBE_STARTED
 );
 
-#[cfg(feature = "trueos_rdp")]
-static RESOURCE_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
-
 macro_rules! define_stop_flags {
     ($($name:ident),* $(,)?) => {
         $(#[allow(dead_code)] static $name: AtomicBool = AtomicBool::new(false);)*
@@ -710,11 +707,6 @@ fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_hid_udp_srv(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::hid_udp_srv::hid_udp_srv_task())
-}
-
-#[cfg(feature = "trueos_rdp")]
-fn spawn_resource_monitor(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::resource_monitor::resource_monitor_task())
 }
 
 fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
@@ -1687,7 +1679,6 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 const TASK_COUNT: usize = 73
-    + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1845,8 +1836,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &HID_UDP_SRV_STARTED,
         spawn_hid_udp_srv,
     ),
-    #[cfg(feature = "trueos_rdp")]
-    TaskSpec::enabled("resource-monitor", 0, &RESOURCE_MONITOR_STARTED, spawn_resource_monitor),
     TaskSpec::enabled(
         "logtotcp",
         crate::r::readiness::NET_ANY_CONFIGURED,

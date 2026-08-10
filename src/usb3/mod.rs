@@ -5,6 +5,9 @@ mod dev_gears;
 pub mod hid;
 pub(crate) mod lab;
 mod lib;
+mod mass;
+mod pen;
+mod scsi;
 mod skhynix;
 
 pub use self::hid::midi;
@@ -14,6 +17,8 @@ pub use crab_usb as crabusb;
 const CRABUSB_CONTROLLER_ID: u32 = 3;
 const HOT_RESCAN_DEBOUNCE_MS: u64 = 100;
 const HOT_RESCAN_HANDOFF_SETTLE_MS: u64 = 500;
+const TEMPORARY_SKHYNIX_FS_RESCAN_READY: u32 =
+    crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY;
 static USB_PORT_CHANGE_SEQ: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 // Emergency BSP isolation switch. Keep this runtime-visible so the complete
 // USB path remains linked when temporarily taking the controller offline.
@@ -114,7 +119,20 @@ pub async fn usb_controller_service_task() {
         if next_port_change_seq == observed_port_change_seq {
             continue;
         }
-        observed_port_change_seq = next_port_change_seq;
+
+        // TEMPORARY boot-ordering bridge, not a USB device dependency: the
+        // current SKHynix filesystem replay can outlive the normal quarantine
+        // timeout. Retain the pending port change until that replay publishes
+        // its root and index, then let every waiting USB device probe normally.
+        if !crate::r::readiness::is_set(TEMPORARY_SKHYNIX_FS_RESCAN_READY) {
+            crate::log_warn!(target: "usb";
+                "crabusb: temporary rescan gate waiting for SKHynix-backed TRUEOSFS root+index readiness; HID/other USB devices are not functionally dependent on SKHynix action=retain-pending-port-change\n"
+            );
+            crate::r::readiness::wait_for(TEMPORARY_SKHYNIX_FS_RESCAN_READY).await;
+            crate::log!(
+                "crabusb: temporary rescan gate released by TRUEOSFS root+index readiness action=resume-normal-usb-probe\n"
+            );
+        }
         let quarantine = match lab::enter_controller_quarantine().await {
             Ok(guard) => guard,
             Err(reason) => {
@@ -126,6 +144,9 @@ pub async fn usb_controller_service_task() {
                 continue;
             }
         };
+        // Only consume the sequence after normal probing has actually been
+        // admitted. A failed quarantine must leave the rescan pending.
+        observed_port_change_seq = next_port_change_seq;
         embassy_time::Timer::after(embassy_time::Duration::from_millis(HOT_RESCAN_DEBOUNCE_MS))
             .await;
         crate::log!(
@@ -226,6 +247,13 @@ async fn open_and_handoff_devices(
                     continue;
                 }
 
+                if (vendor_id != 0x152e || product_id != 0x7001)
+                    && pen::maybe_start_mass_storage(host, &info, spawner, CRABUSB_CONTROLLER_ID)
+                        .await
+                {
+                    continue;
+                }
+
                 if vendor_id != 0x152e || product_id != 0x7001 {
                     crate::log!(
                         "crabusb: device id={} ignored reason=no-usb3-driver vid={:04x} pid={:04x}\n",
@@ -306,6 +334,7 @@ fn log_hub_device_info(hub: &crabusb::HubDeviceInfo) {
 
 #[embassy_executor::task]
 pub async fn usb_event_pump_task(handler: crabusb::EventHandler) {
+    let mut last_transfer_activity_count = None;
     loop {
         let mut active = false;
         for _ in 0..64 {
@@ -318,8 +347,14 @@ pub async fn usb_event_pump_task(handler: crabusb::EventHandler) {
                 }
                 crabusb::Event::TransferActivity { count } => {
                     active = true;
-                    if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS {
-                        crate::log!("crabusb: event transfer-activity count={}\n", count);
+                    if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS
+                        && last_transfer_activity_count != Some(count)
+                    {
+                        last_transfer_activity_count = Some(count);
+                        crate::log_trace!(target: "usb";
+                            "crabusb: event transfer-activity count={}\n",
+                            count
+                        );
                     }
                 }
                 crabusb::Event::Stopped => {

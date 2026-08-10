@@ -12,13 +12,6 @@ pub struct RamdiskDevice {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TrueosPrivateError {
-    Create(block::Error),
-    Format(block::Error),
-    Validate(block::Error),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TrueosPublicError {
     Create(block::Error),
     Format(block::Error),
@@ -219,31 +212,11 @@ impl block::BlockDevice for RamdiskDevice {
 fn create_labeled(
     size_bytes: u64,
     block_size: u32,
-    user_visible: bool,
     label: impl Into<String>,
 ) -> Result<block::DeviceHandle, block::Error> {
     let dev = RamdiskDevice::new(size_bytes, block_size)?;
-    let mut desc = block::DeviceDescriptor::new(block::DeviceKind::Ramdisk).with_label(label);
-    if !user_visible {
-        desc = desc.mark_internal_hidden();
-    }
+    let desc = block::DeviceDescriptor::new(block::DeviceKind::Ramdisk).with_label(label);
     Ok(block::register_device(desc, dev))
-}
-
-pub async fn create_trueos_private(
-    size_bytes: u64,
-    block_size: u32,
-    label: impl Into<String>,
-) -> Result<block::DeviceHandle, TrueosPrivateError> {
-    let disk =
-        create_labeled(size_bytes, block_size, false, label).map_err(TrueosPrivateError::Create)?;
-    crate::r::fs::trueosfs::format_blank_force_async(disk)
-        .await
-        .map_err(TrueosPrivateError::Format)?;
-    crate::r::fs::trueosfs::validate_private_medium_async(disk, 0)
-        .await
-        .map_err(TrueosPrivateError::Validate)?;
-    Ok(disk)
 }
 
 pub async fn create_trueos_public(
@@ -251,8 +224,7 @@ pub async fn create_trueos_public(
     block_size: u32,
     label: impl Into<String>,
 ) -> Result<block::DeviceHandle, TrueosPublicError> {
-    let disk =
-        create_labeled(size_bytes, block_size, true, label).map_err(TrueosPublicError::Create)?;
+    let disk = create_labeled(size_bytes, block_size, label).map_err(TrueosPublicError::Create)?;
     crate::r::fs::trueosfs::format_blank_force_async(disk)
         .await
         .map_err(TrueosPublicError::Format)?;

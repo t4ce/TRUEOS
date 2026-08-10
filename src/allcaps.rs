@@ -141,6 +141,23 @@ pub mod storage {
     pub const NVME_IO_TRANSFER_PAGES_CAP: u64 = 128;
 
     pub const USB_MASS_UAS_IO_TIMEOUT_MS: u64 = 10_000;
+    pub const USB_MASS_MAX_RUNTIMES: usize = 8;
+    pub const USB_MASS_MAX_ACTIVE_STREAMS: usize = 8;
+    pub const USB_MASS_BOT_KEEPALIVE_ENABLED: bool = false;
+    pub const USB_MASS_FORCE_CONSERVATIVE_BOT: bool = true;
+    pub const USB_MASS_BOT_IO_TIMEOUT_MS: u64 = 2_000;
+    pub const USB_MASS_BOT_RECOVERY_SETTLE_MS: u64 = 1_000;
+    pub const USB_MASS_KEEPALIVE_MS: u64 = 2_000;
+    pub const USB_MASS_IO_RETRY_LIMIT: u8 = 8;
+    pub const USB_MASS_IO_RETRY_DELAY_MS: u64 = 25;
+    pub const USB_MASS_RUNTIME_WAIT_LIMIT: u16 = 500;
+    pub const USB_MASS_RUNTIME_WAIT_DELAY_MS: u64 = 10;
+    pub const USB_MASS_MIN_IO_BYTES: usize = 8 * 1024;
+    pub const USB_MASS_MAX_IO_BYTES: usize = 1024 * 1024;
+    pub const USB_MASS_IO_GROW_SUCCESS_TARGET: u16 = 16;
+    pub const USB_MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT: u16 = 4;
+    pub const USB_MASS_FAST_BOT_INITIAL_IO_BYTES: usize = 1024 * 1024;
+    pub const USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES: usize = 128 * 1024;
 
     // BSP-owned TRUEOSFS mount/index work is throughput-insensitive at boot.
     // Deliberately trade completion time for predictable executor fairness.

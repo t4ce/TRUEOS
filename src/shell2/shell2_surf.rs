@@ -1,20 +1,17 @@
 use alloc::boxed::Box;
 use alloc::string::String;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_executor::{SendSpawner, Spawner};
 
 use super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_system_line,
-    print_shell_line, submit_online_to_target,
+    print_shell_line, submit_online_launch_script_to_target,
 };
 use crate::surfer::html_shack::{self, HtmlRoad, HtmlShackFileError};
 
 const SOLARA_APP: &str = "solara";
 const SOLARA_ARCHIVE: &str = "solara.bp";
-const SOLARA_RENDER_ONCE_ARG: &str = "--trueos-render-once";
-const SOLARA_HTML_TAG_ARG: &str = "--trueos-html-tag";
-const SOLARA_SOURCE_URL_ARG: &str = "--trueos-source-url";
+const SOLARA_SURF_LAUNCH_HEADER: &str = "solara-surf-v1";
 const SURF_HANDOFF_DIR: &str = "apps/common/solara/surf";
 static SURF_HANDOFF_SEQUENCE: AtomicU32 = AtomicU32::new(1);
 
@@ -78,6 +75,19 @@ async fn remove_solara_handoff(tag: &str) {
     }
 }
 
+fn solara_surf_launch_script(tag: &str, source_url: &str) -> Result<String, &'static str> {
+    if source_url.is_empty() {
+        return Err("source URL is empty");
+    }
+    if source_url
+        .bytes()
+        .any(|byte| matches!(byte, b'\r' | b'\n' | 0))
+    {
+        return Err("source URL contains a control character");
+    }
+    Ok(alloc::format!("{SOLARA_SURF_LAUNCH_HEADER}\n{tag}\n{source_url}"))
+}
+
 #[embassy_executor::task(pool_size = 4)]
 async fn launch_solara_task(target: MatrixTarget, html: html_shack::Html) {
     let tag = match persist_solara_handoff(&html).await {
@@ -90,21 +100,22 @@ async fn launch_solara_task(target: MatrixTarget, html: html_shack::Html) {
             return;
         }
     };
-    let app_args = alloc::vec![
-        String::from(SOLARA_RENDER_ONCE_ARG),
-        String::from(SOLARA_HTML_TAG_ARG),
-        tag.clone(),
-        String::from(SOLARA_SOURCE_URL_ARG),
-        html.url.clone(),
-    ];
-    let online_args = core::iter::once(String::from(SOLARA_APP))
-        .chain(app_args.iter().cloned())
-        .collect::<Vec<_>>();
+    let launch_script = match solara_surf_launch_script(tag.as_str(), html.url.as_str()) {
+        Ok(script) => script,
+        Err(error) => {
+            remove_solara_handoff(tag.as_str()).await;
+            print_matrix_target_system_line(
+                &target,
+                alloc::format!("surf: Solara runtime handoff failed: {error}").as_str(),
+            );
+            return;
+        }
+    };
 
-    match super::cmds::run::submit_archive_name_to_target_prefer_trueosfs_async(
+    match super::cmds::run::submit_archive_name_to_target_prefer_trueosfs_with_launch_script_async(
         target.clone(),
         SOLARA_ARCHIVE,
-        app_args,
+        launch_script.clone(),
     )
     .await
     {
@@ -116,7 +127,14 @@ async fn launch_solara_task(target: MatrixTarget, html: html_shack::Html) {
         }
         Err(error) if error == "archive not found" => {
             let spawner = unsafe { Spawner::for_current_executor().await };
-            if submit_online_to_target(&spawner, target.clone(), online_args).is_err() {
+            if submit_online_launch_script_to_target(
+                &spawner,
+                target.clone(),
+                SOLARA_APP,
+                launch_script.as_str(),
+            )
+            .is_err()
+            {
                 remove_solara_handoff(tag.as_str()).await;
                 print_matrix_target_system_line(
                     &target,

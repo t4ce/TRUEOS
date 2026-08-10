@@ -97,6 +97,9 @@ pub(crate) struct ClaimedEndpoint {
     direction: Direction,
 }
 
+pub(crate) type EndpointBulkIn = ClaimedEndpoint;
+pub(crate) type EndpointBulkOut = ClaimedEndpoint;
+
 impl ClaimedEndpoint {
     pub(crate) async fn submit_and_wait(
         &mut self,
@@ -105,6 +108,20 @@ impl ClaimedEndpoint {
         let request = match (self.transfer_type, self.direction) {
             (EndpointType::Interrupt, Direction::In) => TransferRequest::interrupt_in(buffer),
             (EndpointType::Bulk, Direction::In) => TransferRequest::bulk_in(buffer),
+            (EndpointType::Bulk, Direction::Out) => TransferRequest::bulk_out(buffer),
+            _ => return Err(TransferError::InvalidEndpoint),
+        };
+        self.endpoint
+            .wait(request)
+            .await
+            .map(|done| done.actual_length)
+    }
+
+    pub(crate) async fn submit_out_and_wait(
+        &mut self,
+        buffer: &[u8],
+    ) -> Result<usize, TransferError> {
+        let request = match (self.transfer_type, self.direction) {
             (EndpointType::Bulk, Direction::Out) => TransferRequest::bulk_out(buffer),
             _ => return Err(TransferError::InvalidEndpoint),
         };
