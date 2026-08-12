@@ -1328,7 +1328,7 @@ fn request_desktop_shell_launch(source: Ui4CursorSource) {
     if queued {
         DESKTOP_SHELL_LAUNCH_SIGNAL.signal(());
         crate::log_info!(target: "ui4";
-            "ui4/input: desktop shell launch requested cursor={}:{}:{} action=run-shell\n",
+            "ui4/input: desktop shell launch requested cursor={}:{}:{} action=online-shell\n",
             source.controller_id,
             source.slot_id,
             source.ep_target,
@@ -1346,6 +1346,7 @@ fn request_desktop_shell_launch(source: Ui4CursorSource) {
 
 #[embassy_executor::task(pool_size = 1)]
 async fn ui4_desktop_shell_launcher_task() {
+    let shell_spawner = embassy_executor::SendSpawner::for_current_executor().await;
     loop {
         let request = loop {
             let request = {
@@ -1360,22 +1361,19 @@ async fn ui4_desktop_shell_launcher_task() {
 
         let target =
             crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, "");
-        match crate::shell2::cmds::run::submit_archive_name_to_target_prefer_trueosfs_async(
+        match crate::shell2::submit_online_to_send_target(
+            &shell_spawner,
             target,
-            "shell.bp",
-            alloc::vec::Vec::new(),
-        )
-        .await
-        {
-            Ok(source) => crate::log_info!(target: "ui4";
-                "ui4/input: desktop shell queued cursor={}:{}:{} archive=shell.bp source={}\n",
+            alloc::vec![alloc::string::String::from("shell")],
+        ) {
+            Ok(()) => crate::log_info!(target: "ui4";
+                "ui4/input: desktop shell queued cursor={}:{}:{} action=online-shell\n",
                 request.controller_id,
                 request.slot_id,
                 request.ep_target,
-                source,
             ),
             Err(error) => crate::log_warn!(target: "ui4";
-                "ui4/input: desktop shell launch rejected cursor={}:{}:{} archive=shell.bp error={}\n",
+                "ui4/input: desktop shell launch rejected cursor={}:{}:{} action=online-shell error={:?}\n",
                 request.controller_id,
                 request.slot_id,
                 request.ep_target,

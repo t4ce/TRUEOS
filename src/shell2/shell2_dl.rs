@@ -2,7 +2,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::Write;
 
-use embassy_executor::{SpawnError, Spawner};
+use embassy_executor::{SendSpawner, SpawnError, Spawner};
 use embassy_time::Duration as EmbassyDuration;
 use sha2::{Digest, Sha256};
 
@@ -493,6 +493,25 @@ async fn download_task(target: MatrixTarget, width: usize, selector: Option<Stri
 
 pub(crate) fn submit_online_to_target(
     spawner: &Spawner,
+    target: MatrixTarget,
+    width: usize,
+    args: Vec<String>,
+) -> Result<(), SpawnError> {
+    set_matrix_target_active(&target, true);
+    match online_run_task(target.clone(), width, args, None) {
+        Ok(token) => {
+            spawner.spawn(token);
+            Ok(())
+        }
+        Err(err) => {
+            set_matrix_target_active(&target, false);
+            Err(err)
+        }
+    }
+}
+
+pub(crate) fn submit_online_to_send_target(
+    spawner: &SendSpawner,
     target: MatrixTarget,
     width: usize,
     args: Vec<String>,

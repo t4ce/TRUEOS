@@ -1,0 +1,87 @@
+{
+  "attributes": [
+    "float32x3@0",
+    "float32x2@12"
+  ],
+  "bindings": [
+    "sampled-rgba8-2d@0",
+    "sampler@1"
+  ],
+  "device": {
+    "device_id": 42880,
+    "name": "Intel(R) Graphics (RPL-S)",
+    "vendor_id": 32902
+  },
+  "executables": [
+    {
+      "description": "SIMD8 vertex shader",
+      "name": "vertex",
+      "simd_width": 8,
+      "stage": "vertex",
+      "statistics": {
+        "Cycle Count": 74,
+        "Fill Count": 0,
+        "GRF registers": 0,
+        "Instruction Count": 13,
+        "Loop Count": 0,
+        "Max dispatch width": 8,
+        "Max live registers": 15,
+        "Non SSA regs after NIR": 3,
+        "SEND Count": 2,
+        "Scratch Memory Size": 0,
+        "Source hash": 127588501,
+        "Spill Count": 0,
+        "Workgroup Memory Size": 0
+      }
+    },
+    {
+      "description": "SIMD8 fragment shader",
+      "name": "SIMD8 fragment",
+      "simd_width": 8,
+      "stage": "fragment",
+      "statistics": {
+        "Cycle Count": 786,
+        "Fill Count": 0,
+        "GRF registers": 0,
+        "Instruction Count": 7,
+        "Loop Count": 0,
+        "Max dispatch width": 16,
+        "Max live registers": 7,
+        "Non SSA regs after NIR": 5,
+        "SEND Count": 2,
+        "Scratch Memory Size": 0,
+        "Source hash": 3364886817,
+        "Spill Count": 0,
+        "Workgroup Memory Size": 0
+      }
+    },
+    {
+      "description": "SIMD16 fragment shader",
+      "name": "SIMD16 fragment",
+      "simd_width": 16,
+      "stage": "fragment",
+      "statistics": {
+        "Cycle Count": 812,
+        "Fill Count": 0,
+        "GRF registers": 0,
+        "Instruction Count": 11,
+        "Loop Count": 0,
+        "Max dispatch width": 16,
+        "Max live registers": 13,
+        "Non SSA regs after NIR": 5,
+        "SEND Count": 2,
+        "Scratch Memory Size": 0,
+        "Source hash": 3364886817,
+        "Spill Count": 0,
+        "Workgroup Memory Size": 0
+      }
+    }
+  ],
+  "native_bytes": {
+    "ps16": 160,
+    "ps8": 96,
+    "vs": 176
+  },
+  "vertex_stride": 20,
+  "wgsl_fnv1a64": "0xd2a3b942fa0924b6"
+}
