@@ -432,7 +432,9 @@ fn software_cursor_rects() -> Slot4Rects {
             push_overlay_rect(
                 &mut rects,
                 menu_rect.x.saturating_add(12),
-                menu_rect.y.saturating_add(row * 27),
+                menu_rect.y.saturating_add(
+                    row.saturating_mul(super::input_broker::CONTEXT_MENU_ROW_HEIGHT_PX),
+                ),
                 menu_rect.width.saturating_sub(24),
                 1,
                 Rgba8::new(180, 188, 204, 150),
@@ -443,6 +445,16 @@ fn software_cursor_rects() -> Slot4Rects {
             menu_rect.x.saturating_add(12),
             menu_rect.y.saturating_add(7),
             "COLOR PICKER",
+            Rgba8::new(236, 240, 248, 245),
+        );
+        push_tiny_menu_text(
+            &mut rects,
+            menu_rect.x.saturating_add(12),
+            menu_rect
+                .y
+                .saturating_add(super::input_broker::CONTEXT_MENU_ROW_HEIGHT_PX)
+                .saturating_add(7),
+            "SHELL",
             Rgba8::new(236, 240, 248, 245),
         );
     }

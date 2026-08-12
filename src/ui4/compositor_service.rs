@@ -1234,8 +1234,11 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
     frame_snapshot(window.frame).is_ok_and(|snapshot| match release {
         FrameGpuRelease::ResidentScene(_) => {
             window.plane.slot() < super::INTERACTION_OVERLAY_PLANE_SLOT
-                && snapshot.plan.content == FrameContent::RenderScene3d
-                && snapshot.plan.buffering == super::FrameBuffering::Triple
+                && resident_release_direct_contract(
+                    snapshot.plan.content,
+                    snapshot.plan.cadence,
+                    snapshot.plan.buffering,
+                )
         }
         FrameGpuRelease::Compute(_) => {
             window.plane.slot() < super::INTERACTION_OVERLAY_PLANE_SLOT
@@ -1246,6 +1249,21 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
                 )
         }
     })
+}
+
+const fn resident_release_direct_contract(
+    content: FrameContent,
+    cadence: super::FrameCadence,
+    buffering: super::FrameBuffering,
+) -> bool {
+    matches!(
+        (content, cadence, buffering),
+        (
+            FrameContent::RenderScene3d | FrameContent::BlueprintScene,
+            super::FrameCadence::Streaming,
+            super::FrameBuffering::Triple,
+        )
+    )
 }
 
 const fn compute_release_direct_contract(
@@ -1283,6 +1301,21 @@ const fn compute_release_direct_contract(
 }
 
 const _: () = {
+    assert!(resident_release_direct_contract(
+        FrameContent::BlueprintScene,
+        super::FrameCadence::Streaming,
+        super::FrameBuffering::Triple,
+    ));
+    assert!(resident_release_direct_contract(
+        FrameContent::RenderScene3d,
+        super::FrameCadence::Streaming,
+        super::FrameBuffering::Triple,
+    ));
+    assert!(!resident_release_direct_contract(
+        FrameContent::BlueprintScene,
+        super::FrameCadence::Dirty,
+        super::FrameBuffering::Double,
+    ));
     assert!(!compute_release_direct_contract(
         FrameContent::BlueprintScene,
         super::FrameCadence::Dirty,

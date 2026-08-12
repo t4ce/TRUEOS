@@ -107,10 +107,24 @@
 # The UI4 frame hit-testability call is strictly additive. It lets a Blueprint
 # exclude one frame from cursor selection without changing frame geometry,
 # composition, or the behavior of existing UI4 clients.
+# The vGPU UI4 surface acquire/discard calls are strictly additive. They map
+# only the caller's active Blueprint write lease into that caller's isolated
+# GPUVM and revoke the mapping before the exact lease is cancelled; no physical
+# address or display-plane authority crosses the ABI.
+# The vGPU UI4 surface-clear submission is likewise additive. It implements
+# WebGPU render-pass clear as a mediated, bounded GPU command, consumes the
+# imported lease only after exact retirement, and transfers its opaque producer
+# release back to UI4 for the existing frame-publish/SURFLIVE path.
+# The vGPU shader-module, render-pipeline, and indexed UI4 submission calls are
+# strictly additive. They admit only an authenticated shader-package digest,
+# immutable bounded vertex-layout state, caller-owned opaque buffers, and an
+# imported caller-owned UI4 lease. Vertex/index bytes are range checked and no
+# guest command packet, physical address, voxel concept, or Helio object crosses
+# the ABI. Older v2 Blueprints import none of these five symbols.
 # Thirteen legacy declarations which never had kernel exports are intentionally
 # removed from both SDK copies: four old gfx texture calls, four raw input
 # queue/injection calls, and five shell1/shell-history/registry/line calls.
 # No runnable artifact could resolve these names. Blueprint line output remains
 # live through trueos_cabi_shell_attached_write; supported input and Shell2
 # frontend contracts are unchanged.
-43457378f891fd9097041cd63db2fadbf0f8d36866078298f6255fe3fe1a010d
+d42826f7fdd787cc4c48aa7b8e30a5982f9d811e932a4b4781de1bff7db4f8a5

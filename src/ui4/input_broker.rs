@@ -33,13 +33,22 @@ const SCREENSHOT_BUTTON_MASK: u32 = (1 << 3) | (1 << 4);
 const INTERACTIVE_SCREENSHOT_ENABLED: bool = false;
 const FRAME_DRAG_GESTURE_MIN_TRAVEL_PX: u32 = 8;
 const MAXIMIZE_LATCH_TOP_PX: u32 = 48;
-const CONTEXT_MENU_OFFSET_PX: u32 = 14;
-const CONTEXT_MENU_WIDTH_PX: u32 = 196;
-const CONTEXT_MENU_HEIGHT_PX: u32 = 116;
-const CONTEXT_MENU_ROW_HEIGHT_PX: u32 = 27;
+pub(super) const CONTEXT_MENU_OFFSET_PX: u32 = 14;
+pub(super) const CONTEXT_MENU_WIDTH_PX: u32 = 196;
+pub(super) const CONTEXT_MENU_HEIGHT_PX: u32 = 116;
+pub(super) const CONTEXT_MENU_ROW_HEIGHT_PX: u32 = 27;
 
 static OWNER_QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
 static KEYBOARD_TEXT_FORWARDS: AtomicU32 = AtomicU32::new(0);
+static DESKTOP_SHELL_LAUNCH_REQUESTS: Mutex<Vec<Ui4CursorSource, MAX_CURSOR_ROUTES>> =
+    Mutex::new(Vec::new());
+static DESKTOP_SHELL_LAUNCH_SIGNAL: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum DesktopContextMenuAction {
+    ColorPicker,
+    Shell,
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4PointerEvent {
@@ -242,7 +251,7 @@ struct CursorRoute {
     maximize_preview: Option<Ui4VisualRect>,
     context_menu: Option<(u32, u32)>,
     context_menu_owns_gesture: bool,
-    context_menu_picker_pressed: bool,
+    context_menu_pressed_action: Option<DesktopContextMenuAction>,
     requested_context_menu_gesture: Option<u64>,
     suppress_context_menu_open: bool,
     selection_anchor: Option<(u32, u32)>,
@@ -268,7 +277,7 @@ impl CursorRoute {
             maximize_preview: None,
             context_menu: None,
             context_menu_owns_gesture: false,
-            context_menu_picker_pressed: false,
+            context_menu_pressed_action: None,
             requested_context_menu_gesture: None,
             suppress_context_menu_open: false,
             selection_anchor: None,
@@ -291,7 +300,7 @@ impl CursorRoute {
         self.clear_frame_interaction();
         self.context_menu = None;
         self.context_menu_owns_gesture = false;
-        self.context_menu_picker_pressed = false;
+        self.context_menu_pressed_action = None;
         self.requested_context_menu_gesture = None;
         self.suppress_context_menu_open = false;
     }
@@ -311,11 +320,10 @@ impl CursorRoute {
         let menu = context_menu_rect(anchor, screen_width, screen_height);
         if visual_rect_contains(menu, x, y) {
             self.context_menu_owns_gesture = true;
-            self.context_menu_picker_pressed =
-                visual_rect_contains(context_menu_picker_row_rect(menu), x, y);
+            self.context_menu_pressed_action = desktop_context_menu_action_at(menu, x, y);
         } else {
             self.context_menu = None;
-            self.context_menu_picker_pressed = false;
+            self.context_menu_pressed_action = None;
             self.suppress_context_menu_open = true;
         }
     }
@@ -542,21 +550,24 @@ impl InputBroker {
             self.cursors[index].y = y;
             self.cursors[index].buttons_down = event.buttons_down;
             if buttons_down == 0 {
-                let picker_anchor = self.cursors[index].context_menu.filter(|anchor| {
-                    self.cursors[index].context_menu_picker_pressed
-                        && visual_rect_contains(
-                            context_menu_picker_row_rect(context_menu_rect(*anchor, width, height)),
-                            x,
-                            y,
-                        )
+                let selected = self.cursors[index].context_menu.and_then(|anchor| {
+                    let menu = context_menu_rect(anchor, width, height);
+                    let released_action = desktop_context_menu_action_at(menu, x, y);
+                    (released_action == self.cursors[index].context_menu_pressed_action)
+                        .then_some((anchor, released_action?))
                 });
                 self.cursors[index].context_menu_owns_gesture = false;
-                self.cursors[index].context_menu_picker_pressed = false;
+                self.cursors[index].context_menu_pressed_action = None;
                 self.cursors[index].absorb_select = false;
                 self.cursors[index].suppress_context_menu_open = false;
-                if let Some(anchor) = picker_anchor {
+                if let Some((anchor, action)) = selected {
                     self.cursors[index].context_menu = None;
-                    super::color_picker::request_open(source, anchor);
+                    match action {
+                        DesktopContextMenuAction::ColorPicker => {
+                            super::color_picker::request_open(source, anchor);
+                        }
+                        DesktopContextMenuAction::Shell => request_desktop_shell_launch(source),
+                    }
                 }
             }
             return;
@@ -605,7 +616,7 @@ impl InputBroker {
             self.cursors[index].secondary_dragged = false;
             self.cursors[index].secondary_restored_from_maximize = false;
             self.cursors[index].context_menu = None;
-            self.cursors[index].context_menu_picker_pressed = false;
+            self.cursors[index].context_menu_pressed_action = None;
         }
         if buttons_down & SECONDARY_BUTTON_MASK != 0
             && self.cursors[index].secondary_anchor.is_some_and(|anchor| {
@@ -1281,9 +1292,24 @@ static OWNER_QUEUES: Mutex<Vec<OwnerQueue, MAX_OWNER_QUEUES>> = Mutex::new(Vec::
 static SLOT4_VISUAL_CHANGE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 
 #[embassy_executor::task]
-pub(crate) async fn ui4_input_service_task() {
+pub(crate) async fn ui4_input_service_task(ap1_spawner: crate::workers::WorkerSpawner) {
+    let launcher_spawner = crate::workers::pick_background_spawner().unwrap_or(ap1_spawner);
+    match ui4_desktop_shell_launcher_task() {
+        Ok(token) => {
+            launcher_spawner.spawn(token);
+            crate::log_info!(target: "ui4";
+                "ui4/input: desktop shell launcher online carrier_slot={} fallback_ap1={}\n",
+                launcher_spawner.cpu_slot(),
+                launcher_spawner.cpu_slot() == ap1_spawner.cpu_slot(),
+            );
+        }
+        Err(error) => crate::log_warn!(target: "ui4";
+            "ui4/input: desktop shell launcher unavailable error={:?}\n",
+            error,
+        ),
+    }
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings pump_hz={} pump_clock=absolute-fractional selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/per-cursor-selected-frame-only maximize=interaction-capability-gated outline=primary-button/selected-frame-only owner_events=selected-frame-only screenshot=parked\n",
+        "ui4/input: service online source=hid-sequence-rings pump_hz={} pump_clock=absolute-fractional selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/per-cursor-selected-frame-only maximize=interaction-capability-gated outline=primary-button/selected-frame-only desktop_menu=per-cursor/color-picker+shell owner_events=selected-frame-only screenshot=parked\n",
         super::INTERACTION_CADENCE_HZ,
     );
     let mut cadence = super::InteractionCadence::new();
@@ -1294,6 +1320,68 @@ pub(crate) async fn ui4_input_service_task() {
             SLOT4_VISUAL_CHANGE.signal(());
         }
         Timer::at(cadence.next_deadline()).await;
+    }
+}
+
+fn request_desktop_shell_launch(source: Ui4CursorSource) {
+    let queued = DESKTOP_SHELL_LAUNCH_REQUESTS.lock().push(source).is_ok();
+    if queued {
+        DESKTOP_SHELL_LAUNCH_SIGNAL.signal(());
+        crate::log_info!(target: "ui4";
+            "ui4/input: desktop shell launch requested cursor={}:{}:{} action=run-shell\n",
+            source.controller_id,
+            source.slot_id,
+            source.ep_target,
+        );
+    } else {
+        crate::log_warn!(target: "ui4";
+            "ui4/input: desktop shell launch dropped cursor={}:{}:{} reason=request-queue-full capacity={}\n",
+            source.controller_id,
+            source.slot_id,
+            source.ep_target,
+            MAX_CURSOR_ROUTES,
+        );
+    }
+}
+
+#[embassy_executor::task(pool_size = 1)]
+async fn ui4_desktop_shell_launcher_task() {
+    loop {
+        let request = loop {
+            let request = {
+                let mut requests = DESKTOP_SHELL_LAUNCH_REQUESTS.lock();
+                (!requests.is_empty()).then(|| requests.remove(0))
+            };
+            if let Some(request) = request {
+                break request;
+            }
+            DESKTOP_SHELL_LAUNCH_SIGNAL.wait().await;
+        };
+
+        let target =
+            crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, "");
+        match crate::shell2::cmds::run::submit_archive_name_to_target_prefer_trueosfs_async(
+            target,
+            "shell.bp",
+            alloc::vec::Vec::new(),
+        )
+        .await
+        {
+            Ok(source) => crate::log_info!(target: "ui4";
+                "ui4/input: desktop shell queued cursor={}:{}:{} archive=shell.bp source={}\n",
+                request.controller_id,
+                request.slot_id,
+                request.ep_target,
+                source,
+            ),
+            Err(error) => crate::log_warn!(target: "ui4";
+                "ui4/input: desktop shell launch rejected cursor={}:{}:{} archive=shell.bp error={}\n",
+                request.controller_id,
+                request.slot_id,
+                request.ep_target,
+                error,
+            ),
+        }
     }
 }
 
@@ -1357,7 +1445,7 @@ pub(crate) fn show_context_menu(
         }
         route.context_menu = None;
         route.context_menu_owns_gesture = false;
-        route.context_menu_picker_pressed = false;
+        route.context_menu_pressed_action = None;
         route.suppress_context_menu_open = false;
         ((route.x, route.y), route.color)
     };
@@ -1679,12 +1767,18 @@ pub(crate) fn context_menu_rect(
     }
 }
 
-fn context_menu_picker_row_rect(menu: Ui4VisualRect) -> Ui4VisualRect {
-    Ui4VisualRect {
-        x: menu.x,
-        y: menu.y,
-        width: menu.width,
-        height: CONTEXT_MENU_ROW_HEIGHT_PX.min(menu.height),
+fn desktop_context_menu_action_at(
+    menu: Ui4VisualRect,
+    x: u32,
+    y: u32,
+) -> Option<DesktopContextMenuAction> {
+    if !visual_rect_contains(menu, x, y) {
+        return None;
+    }
+    match y.saturating_sub(menu.y) / CONTEXT_MENU_ROW_HEIGHT_PX {
+        0 => Some(DesktopContextMenuAction::ColorPicker),
+        1 => Some(DesktopContextMenuAction::Shell),
+        _ => None,
     }
 }
 

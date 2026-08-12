@@ -165,6 +165,26 @@ pub extern "C" fn tanf(x: f32) -> f32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn sinhf(x: f32) -> f32 {
+    libm::sinhf(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn coshf(x: f32) -> f32 {
+    libm::coshf(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn asinhf(x: f32) -> f32 {
+    libm::asinhf(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn acoshf(x: f32) -> f32 {
+    libm::acoshf(x)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn log2f(x: f32) -> f32 {
     log2_f32(x)
 }
@@ -180,8 +200,18 @@ pub extern "C" fn log10f(x: f32) -> f32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn log1pf(x: f32) -> f32 {
+    libm::log1pf(x)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn expf(x: f32) -> f32 {
     exp_f32(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn exp2f(x: f32) -> f32 {
+    libm::exp2f(x)
 }
 
 #[unsafe(no_mangle)]
@@ -266,6 +296,11 @@ pub extern "C" fn log10(x: f64) -> f64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn exp(x: f64) -> f64 {
     exp_f64(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn exp2(x: f64) -> f64 {
+    libm::exp2(x)
 }
 
 #[unsafe(no_mangle)]
@@ -523,6 +558,19 @@ pub fn render_mandelbrot_rgb32_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blueprint_c_math_wrappers_cover_hyperbolic_and_exponential_edges() {
+        assert_eq!(acoshf(1.0), 0.0);
+        assert_eq!(asinhf(-0.0).to_bits(), (-0.0f32).to_bits());
+        assert_eq!(coshf(0.0), 1.0);
+        assert_eq!(sinhf(0.0), 0.0);
+        assert_eq!(exp2(3.0), 8.0);
+        assert_eq!(exp2f(-2.0), 0.25);
+        assert_eq!(log1pf(0.0), 0.0);
+        assert!(acoshf(0.0).is_nan());
+        assert_eq!(log1pf(-1.0), f32::NEG_INFINITY);
+    }
 
     #[test]
     fn mandelbrot_smoke() {

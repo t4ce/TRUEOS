@@ -82,7 +82,8 @@ pub(crate) use frame_pool::{
     publish_frame_buffer,
     publish_gpgpu_frame_buffer, publish_gpgpu_render_frame_buffer,
     publish_gpgpu_scene_frame_buffer, publish_gpgpu_video_frame_buffer,
-    publish_gpu_font_frame_buffer, publish_gpu_frame_buffer, published_rgba_view,
+    publish_gpu_font_frame_buffer, publish_gpu_frame_buffer,
+    publish_resident_scene_frame_buffer, published_rgba_view,
     release_published_frame, retain_published_frame, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{

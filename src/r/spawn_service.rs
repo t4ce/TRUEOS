@@ -835,7 +835,7 @@ fn spawn_gamepad_control_service_task(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ui4_input_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_input_service_task())
+    spawn_on_ap1_ui_core(spawner, |ap1_spawner| crate::ui4::ui4_input_service_task(ap1_spawner))
 }
 
 fn spawn_ui4_slot4_service_task(spawner: Spawner) -> SpawnAttempt {

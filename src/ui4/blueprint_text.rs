@@ -47,7 +47,7 @@ use super::{
     create_frame, create_gpu_full_overwrite_frame, create_window, destroy_frame,
     finish_window_session, finish_window_session_with_request, focused_keyboard_state,
     gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, mark_frame_buffer_fully_opaque,
-    publish_frame_buffer,
+    publish_frame_buffer, publish_resident_scene_frame_buffer,
     publish_gpgpu_scene_frame_buffer, publish_window_frame, replace_window_frame,
     set_window_cursor_icon, set_window_custom_cursor, set_window_placement,
     set_window_hit_testable,
@@ -511,7 +511,9 @@ struct BlueprintSceneSurface {
     pending_resize: Option<BlueprintPendingResize>,
     write_lease: Option<FrameWriteLease>,
     pending_gpu_release: Option<GpgpuRgba8ReleaseFence>,
+    pending_render_release: Option<crate::intel::render::ResidentSceneReleaseFence>,
     gpu_submission_unretired: bool,
+    vgpu_surface: Option<u64>,
     particle_craft: Option<GpgpuOwnedParticleCraftState>,
     placement: WindowPlacement,
     skybox: Option<OwnedRgb565Surface>,
@@ -1040,7 +1042,9 @@ fn open_blueprint_frame(
                 pending_resize: None,
                 write_lease: None,
                 pending_gpu_release: None,
+                pending_render_release: None,
                 gpu_submission_unretired: false,
+                vgpu_surface: None,
                 particle_craft: None,
                 placement,
                 skybox: None,
@@ -1082,7 +1086,9 @@ fn open_blueprint_frame(
         pending_resize: None,
         write_lease: None,
         pending_gpu_release: None,
+        pending_render_release: None,
         gpu_submission_unretired: false,
+        vgpu_surface: None,
         particle_craft: None,
         placement,
         skybox: None,
@@ -1175,6 +1181,121 @@ pub extern "C" fn trueos_cabi_ui4_scene_sprite_frame_begin(window_id: u32, clear
         return ERROR_CONTEXT;
     };
     begin_blueprint_frame(owner, window_id, clear_rgba, false)
+}
+
+pub(crate) fn begin_vgpu_surface_import(
+    owner: WindowOwner,
+    window_id: u32,
+) -> Result<crate::gpu::vgpu::Ui4SurfaceDescriptor, i32> {
+    let mut surfaces = SURFACES.lock();
+    let surface = surface_mut(&mut surfaces, owner, window_id).ok_or(ERROR_NOT_FOUND)?;
+    if surface.vgpu_surface.is_some() || surface.gpu_submission_unretired {
+        return Err(ERROR_BUSY);
+    }
+    let lease = surface.write_lease.ok_or(ERROR_STATE)?;
+    let destination = gpgpu_rgba_surface(lease).map_err(|_| ERROR_UI4)?;
+    surface.vgpu_surface = Some(0);
+    surface.gpu_submission_unretired = true;
+    Ok(crate::gpu::vgpu::Ui4SurfaceDescriptor {
+        window_id,
+        phys: destination.phys,
+        producer_gpu: destination.gpu,
+        bytes: destination.bytes,
+        width: destination.width,
+        height: destination.height,
+        pitch: destination.pitch_bytes,
+    })
+}
+
+pub(crate) fn complete_vgpu_surface_submission(
+    owner: WindowOwner,
+    window_id: u32,
+    surface_handle: u64,
+    release: GpgpuRgba8ReleaseFence,
+) -> Result<(), i32> {
+    let mut surfaces = SURFACES.lock();
+    let surface = surface_mut(&mut surfaces, owner, window_id).ok_or(ERROR_NOT_FOUND)?;
+    if surface.vgpu_surface != Some(surface_handle) || !surface.gpu_submission_unretired {
+        return Err(ERROR_STATE);
+    }
+    let lease = surface.write_lease.ok_or(ERROR_STATE)?;
+    let destination = gpgpu_rgba_surface(lease).map_err(|_| ERROR_UI4)?;
+    if !release.matches(destination.phys, destination.bytes) {
+        return Err(ERROR_UI4);
+    }
+    surface.vgpu_surface = None;
+    surface.gpu_submission_unretired = false;
+    surface.pending_gpu_release = Some(release);
+    Ok(())
+}
+
+pub(crate) fn complete_vgpu_resident_surface_submission(
+    owner: WindowOwner,
+    window_id: u32,
+    surface_handle: u64,
+    release: crate::intel::render::ResidentSceneReleaseFence,
+) -> Result<(), i32> {
+    let mut surfaces = SURFACES.lock();
+    let surface = surface_mut(&mut surfaces, owner, window_id).ok_or(ERROR_NOT_FOUND)?;
+    if surface.vgpu_surface != Some(surface_handle) || !surface.gpu_submission_unretired {
+        return Err(ERROR_STATE);
+    }
+    let lease = surface.write_lease.ok_or(ERROR_STATE)?;
+    let destination = gpgpu_rgba_surface(lease).map_err(|_| ERROR_UI4)?;
+    if !release.matches(destination.phys, destination.bytes) {
+        return Err(ERROR_UI4);
+    }
+    surface.vgpu_surface = None;
+    surface.gpu_submission_unretired = false;
+    surface.pending_render_release = Some(release);
+    Ok(())
+}
+
+pub(crate) fn commit_vgpu_surface_import(
+    owner: WindowOwner,
+    window_id: u32,
+    surface_handle: u64,
+) -> Result<(), i32> {
+    if surface_handle == 0 {
+        return Err(ERROR_INVALID);
+    }
+    let mut surfaces = SURFACES.lock();
+    let surface = surface_mut(&mut surfaces, owner, window_id).ok_or(ERROR_NOT_FOUND)?;
+    if surface.vgpu_surface != Some(0) || !surface.gpu_submission_unretired {
+        return Err(ERROR_STATE);
+    }
+    surface.vgpu_surface = Some(surface_handle);
+    Ok(())
+}
+
+pub(crate) fn abort_vgpu_surface_import(owner: WindowOwner, window_id: u32) {
+    let mut surfaces = SURFACES.lock();
+    if let Some(surface) = surface_mut(&mut surfaces, owner, window_id)
+        && surface.vgpu_surface == Some(0)
+    {
+        surface.vgpu_surface = None;
+        surface.gpu_submission_unretired = false;
+    }
+}
+
+pub(crate) fn complete_vgpu_surface_discard(
+    owner: WindowOwner,
+    window_id: u32,
+    surface_handle: u64,
+) -> Result<(), i32> {
+    let mut surfaces = SURFACES.lock();
+    let surface = surface_mut(&mut surfaces, owner, window_id).ok_or(ERROR_NOT_FOUND)?;
+    if surface.vgpu_surface != Some(surface_handle) || !surface.gpu_submission_unretired {
+        return Err(ERROR_STATE);
+    }
+    let lease = surface.write_lease.ok_or(ERROR_STATE)?;
+    cancel_frame_buffer(lease).map_err(|_| ERROR_UI4)?;
+    surface.vgpu_surface = None;
+    surface.gpu_submission_unretired = false;
+    surface.pending_gpu_release = None;
+    surface.pending_render_release = None;
+    surface.write_lease = None;
+    Ok(())
 }
 
 /// Wait in the kernel for one visual cadence ticket, then acquire its exact
@@ -1298,6 +1419,7 @@ pub(crate) fn begin_blueprint_frame(
         }
     }
     surface.pending_gpu_release = None;
+    surface.pending_render_release = None;
     surface.sprite_clear_rgba = (!cpu_clear).then_some(clear_rgba);
     surface.sprite_scene_upload = None;
     surface.retained_text_cursor = 0;
@@ -3944,10 +4066,13 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
         surface.write_lease = Some(lease);
         return ERROR_BUSY;
     }
-    let release = surface.pending_gpu_release.take();
-    let publish = match release {
-        Some(release) => publish_gpgpu_scene_frame_buffer(lease, release),
-        None => publish_frame_buffer(lease),
+    let compute_release = surface.pending_gpu_release.take();
+    let render_release = surface.pending_render_release.take();
+    let publish = match (compute_release, render_release) {
+        (Some(release), None) => publish_gpgpu_scene_frame_buffer(lease, release),
+        (None, Some(release)) => publish_resident_scene_frame_buffer(lease, release),
+        (None, None) => publish_frame_buffer(lease),
+        (Some(_), Some(_)) => Err(super::FramePoolError::ProducerReleaseRequired),
     };
     if let Err(error) = publish {
         crate::log_warn!(
@@ -3958,11 +4083,12 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
             lease.frame.raw(),
             lease.buffer_index,
             surface.cadence,
-            u8::from(release.is_some()),
+            u8::from(compute_release.is_some() || render_release.is_some()),
             error,
         );
         surface.write_lease = Some(lease);
-        surface.pending_gpu_release = release;
+        surface.pending_gpu_release = compute_release;
+        surface.pending_render_release = render_release;
         return ERROR_UI4;
     }
     if let Some(pending) = surface.pending_resize {
@@ -4103,6 +4229,9 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, f
         else {
             return ERROR_NOT_FOUND;
         };
+        if surfaces[slot].gpu_submission_unretired || surfaces[slot].vgpu_surface.is_some() {
+            return ERROR_BUSY;
+        }
         surfaces.remove(slot)
     };
     let release = if flags & CLOSE_PERSIST_FINAL_FRAME != 0 {

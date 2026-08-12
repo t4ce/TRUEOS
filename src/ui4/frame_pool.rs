@@ -682,6 +682,35 @@ pub(crate) fn publish_gpu_frame_buffer(
     publish_checked_frame(frame, lease)
 }
 
+/// Publish one Blueprint scene written directly by the resident Render0
+/// producer. This is the graphics-pipeline counterpart to
+/// `publish_gpgpu_scene_frame_buffer`: both retain the Blueprint frame's
+/// cadence-selected ring, but the release proof identifies the engine that
+/// performed the final write.
+pub(crate) fn publish_resident_scene_frame_buffer(
+    lease: FrameWriteLease,
+    release: crate::intel::render::ResidentSceneReleaseFence,
+) -> Result<PublishedFrame, FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    let index = lease.buffer_index as usize;
+    if frame.plan.content != FrameContent::BlueprintScene
+        || !blueprint_gpu_release_plan(frame.plan.cadence, frame.plan.buffering)
+        || frame.plan.format != ScanoutFormat::Rgba8888Premultiplied
+        || !frame.gpu_authored[index]
+    {
+        return Err(FramePoolError::ProducerReleaseRequired);
+    }
+    let surface = frame.surfaces[index].ok_or(FramePoolError::InvalidLease)?;
+    let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
+    if !release.matches(access.phys, access.byte_len) {
+        return Err(FramePoolError::InvalidLease);
+    }
+    frame.gpu_release[index] = Some(FrameGpuRelease::ResidentScene(release));
+    publish_checked_frame(frame, lease)
+}
+
 /// Publish a streaming render-scene frame whose final writer was the compute
 /// sprite path rather than the retained 3D renderer.
 pub(crate) fn publish_gpgpu_render_frame_buffer(
@@ -818,7 +847,7 @@ pub(crate) fn publish_gpgpu_scene_frame_buffer(
     checked_lease(frame, lease)?;
     let index = lease.buffer_index as usize;
     if frame.plan.content != FrameContent::BlueprintScene
-        || !blueprint_compute_release_plan(frame.plan.cadence, frame.plan.buffering)
+        || !blueprint_gpu_release_plan(frame.plan.cadence, frame.plan.buffering)
         || !frame.gpu_authored[index]
     {
         return Err(FramePoolError::ProducerReleaseRequired);
@@ -832,7 +861,7 @@ pub(crate) fn publish_gpgpu_scene_frame_buffer(
     publish_checked_frame(frame, lease)
 }
 
-const fn blueprint_compute_release_plan(
+const fn blueprint_gpu_release_plan(
     cadence: super::FrameCadence,
     buffering: super::FrameBuffering,
 ) -> bool {
@@ -845,19 +874,19 @@ const fn blueprint_compute_release_plan(
 }
 
 const _: () = {
-    assert!(blueprint_compute_release_plan(
+    assert!(blueprint_gpu_release_plan(
         super::FrameCadence::Immutable,
         super::FrameBuffering::Single,
     ));
-    assert!(blueprint_compute_release_plan(
+    assert!(blueprint_gpu_release_plan(
         super::FrameCadence::Dirty,
         super::FrameBuffering::Double,
     ));
-    assert!(blueprint_compute_release_plan(
+    assert!(blueprint_gpu_release_plan(
         super::FrameCadence::Streaming,
         super::FrameBuffering::Triple,
     ));
-    assert!(!blueprint_compute_release_plan(
+    assert!(!blueprint_gpu_release_plan(
         super::FrameCadence::Immutable,
         super::FrameBuffering::Triple,
     ));

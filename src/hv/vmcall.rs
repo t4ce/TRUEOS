@@ -69,6 +69,14 @@ pub const OP_BP_VGPU_TIMELINE: u32 = 0xAE; // arg0 device,arg1 queue -> Timeline
 pub const OP_BP_VGPU_WAIT: u32 = 0xAF; // arg0 device,arg1 queue,payload value -> rc
 pub const OP_BP_VGPU_BUFFER_WRITE: u32 = 0xB0; // arg0 device,arg1 buffer,payload offset+bytes
 pub const OP_BP_VGPU_BUFFER_READ: u32 = 0xB1; // arg0 device,arg1 buffer,payload offset+len
+pub const OP_BP_VGPU_UI4_SURFACE_ACQUIRE: u32 = 0x124; // arg0 device,arg1 window -> SurfaceInfo
+pub const OP_BP_VGPU_UI4_SURFACE_DISCARD: u32 = 0x125; // arg0 device,arg1 surface -> rc
+pub const OP_BP_VGPU_UI4_SURFACE_CLEAR_SUBMIT: u32 = 0x126; // arg0 device,arg1 queue,payload surface+rgba -> TimelinePoint
+pub const OP_BP_VGPU_SHADER_MODULE_CREATE: u32 = 0x127; // arg0 device,arg1 package digest -> shader
+pub const OP_BP_VGPU_SHADER_MODULE_DESTROY: u32 = 0x128; // arg0 device,arg1 shader -> rc
+pub const OP_BP_VGPU_RENDER_PIPELINE_CREATE: u32 = 0x129; // arg0 device,arg1 shader,payload stride+position -> pipeline
+pub const OP_BP_VGPU_RENDER_PIPELINE_DESTROY: u32 = 0x12A; // arg0 device,arg1 pipeline -> rc
+pub const OP_BP_VGPU_UI4_INDEXED_SUBMIT: u32 = 0x12B; // arg0 device,arg1 queue,payload IndexedDraw -> TimelinePoint
 pub const OP_BP_UI4_SOLARA_FONT_SIZES: u32 = 0xB2; // arg0 cap -> count + FontSize payload
 pub const OP_BP_UI4_SOLARA_FRAME_OPEN: u32 = 0xB3; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SOLARA_FRAME_BEGIN: u32 = 0xB4; // arg0 window,arg1 clear RGBA -> rc
@@ -1176,6 +1184,95 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
             match crate::r::io::vgpu_cabi::broker_buffer_info(principal, arg0, arg1) {
                 Ok(info) => write_record_response(vm_id, seq, 0, &info),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_UI4_SURFACE_ACQUIRE => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            match crate::r::io::vgpu_cabi::broker_ui4_surface_acquire(
+                principal,
+                arg0,
+                arg1 as u32,
+            ) {
+                Ok(info) => write_record_response(vm_id, seq, 0, &info),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_UI4_SURFACE_DISCARD => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let rc = crate::r::io::vgpu_cabi::broker_ui4_surface_discard(principal, arg0, arg1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_UI4_SURFACE_CLEAR_SUBMIT => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let parsed = request_payload(vm_id, req_len)
+                .filter(|payload| payload.len() >= 12)
+                .map(|payload| {
+                    let surface = u64::from_le_bytes(payload[..8].try_into().unwrap());
+                    let rgba = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+                    (surface, rgba)
+                });
+            let result = parsed.ok_or(-22).and_then(|(surface, rgba)| {
+                crate::r::io::vgpu_cabi::broker_ui4_surface_clear_submit(
+                    principal, arg0, arg1, surface, rgba,
+                )
+            });
+            match result {
+                Ok(point) => write_record_response(vm_id, seq, 0, &point),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_SHADER_MODULE_CREATE => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let data = crate::r::io::vgpu_cabi::broker_shader_module_create(principal, arg0, arg1)
+                .unwrap_or_else(|rc| (rc as i64) as u64);
+            write_response(vm_id, seq, STATUS_OK, data, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_SHADER_MODULE_DESTROY => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let rc = crate::r::io::vgpu_cabi::broker_shader_module_destroy(principal, arg0, arg1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_RENDER_PIPELINE_CREATE => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let parsed = request_payload(vm_id, req_len)
+                .filter(|payload| payload.len() == 8)
+                .map(|payload| (
+                    u32::from_le_bytes(payload[..4].try_into().unwrap()),
+                    u32::from_le_bytes(payload[4..].try_into().unwrap()),
+                ));
+            let data = parsed.ok_or(-22).and_then(|(stride, position)| {
+                crate::r::io::vgpu_cabi::broker_render_pipeline_create(
+                    principal, arg0, arg1, stride, position,
+                )
+            }).unwrap_or_else(|rc| (rc as i64) as u64);
+            write_response(vm_id, seq, STATUS_OK, data, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_RENDER_PIPELINE_DESTROY => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let rc = crate::r::io::vgpu_cabi::broker_render_pipeline_destroy(principal, arg0, arg1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_UI4_INDEXED_SUBMIT => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let draw = request_payload(vm_id, req_len)
+                .filter(|payload| payload.len() == core::mem::size_of::<v::vgpu::IndexedDraw>())
+                .map(|payload| unsafe {
+                    core::ptr::read_unaligned(payload.as_ptr().cast::<v::vgpu::IndexedDraw>())
+                });
+            let result = draw.ok_or(-22).and_then(|draw| {
+                crate::r::io::vgpu_cabi::broker_ui4_indexed_submit(principal, arg0, arg1, draw)
+            });
+            match result {
+                Ok(point) => write_record_response(vm_id, seq, 0, &point),
                 Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
             }
             DispatchOutcome::Resume
