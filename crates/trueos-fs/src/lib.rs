@@ -7,6 +7,7 @@ extern crate alloc;
 extern crate std;
 
 use alloc::{collections::BTreeSet, format, string::String, vec, vec::Vec};
+use trueos_crypto::{KeyHandle, KeyRef, ProviderId};
 
 pub const MAGIC: [u8; 8] = *b"TRUEOSFS";
 
@@ -194,6 +195,28 @@ pub const LOG_ENTRY_MAGIC: [u8; 8] = *b"TOSFLOG\0";
 pub const DELETE_REF_BYTES: usize = 8;
 const ZERO_INTEGRITY_TAG: [u8; 32] = [0u8; 32];
 
+// Record-key extension in the otherwise reserved portion of every log header.
+// Legacy records have zeroes in this region and therefore decode as FFA.
+const RECORD_KEY_MAGIC: [u8; 4] = *b"TOSK";
+const RECORD_KEY_VERSION: u8 = 1;
+const RECORD_KEY_EXT_OFF: usize = 52;
+const RECORD_KEY_KIND_OFF: usize = RECORD_KEY_EXT_OFF + 5;
+const RECORD_KEY_PROVIDER_OFF: usize = RECORD_KEY_EXT_OFF + 8;
+const RECORD_KEY_HANDLE_OFF: usize = RECORD_KEY_PROVIDER_OFF + 16;
+pub const RECORD_KEY_HEADER_MIN_BYTES: usize = RECORD_KEY_HANDLE_OFF + 32;
+
+/// Native access identity stored in each TRUEOSFS record header.
+///
+/// This is metadata only for now: the filesystem persists and reports it, but
+/// key-provider authorization and stream encryption are intentionally later
+/// layers. `KeyRef` never contains private key material.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RecordKey {
+    #[default]
+    Ffa,
+    Key(KeyRef),
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LogKind {
@@ -212,6 +235,7 @@ struct LogHeader {
     // Reserved compatibility bytes in baseline mode.
     // Writers currently store ZERO_INTEGRITY_TAG and readers ignore this field.
     integrity_tag: [u8; 32],
+    record_key: RecordKey,
 }
 
 /// Decoded index checkpoint payload.
@@ -238,6 +262,7 @@ pub struct RawLogRecord {
     pub delete_ref_lba: Option<u64>,
     pub checkpoint_replay_from_rel_blocks: Option<u64>,
     pub checkpoint_entry_count: Option<usize>,
+    pub record_key: RecordKey,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -338,6 +363,23 @@ impl LogHeader {
         for b in block[52..].iter_mut() {
             *b = 0;
         }
+        if block.len() < RECORD_KEY_HEADER_MIN_BYTES {
+            return;
+        }
+        block[RECORD_KEY_EXT_OFF..RECORD_KEY_EXT_OFF + 4].copy_from_slice(&RECORD_KEY_MAGIC);
+        block[RECORD_KEY_EXT_OFF + 4] = RECORD_KEY_VERSION;
+        match self.record_key {
+            RecordKey::Ffa => {
+                block[RECORD_KEY_KIND_OFF] = 0;
+            }
+            RecordKey::Key(key) => {
+                block[RECORD_KEY_KIND_OFF] = 1;
+                block[RECORD_KEY_PROVIDER_OFF..RECORD_KEY_PROVIDER_OFF + 16]
+                    .copy_from_slice(key.provider.as_bytes());
+                block[RECORD_KEY_HANDLE_OFF..RECORD_KEY_HANDLE_OFF + 32]
+                    .copy_from_slice(key.handle.as_bytes());
+            }
+        }
     }
 
     fn decode_from_block(block: &[u8]) -> Option<Self> {
@@ -361,13 +403,54 @@ impl LogHeader {
         ]);
         let mut integrity_tag = [0u8; 32];
         integrity_tag.copy_from_slice(&block[20..52]);
+        let record_key = decode_record_key(block)?;
         Some(Self {
             kind,
             committed,
             name_len,
             data_len,
             integrity_tag,
+            record_key,
         })
+    }
+}
+
+fn decode_record_key(block: &[u8]) -> Option<RecordKey> {
+    if block.len() < RECORD_KEY_HEADER_MIN_BYTES {
+        return Some(RecordKey::Ffa);
+    }
+    let extension = &block[RECORD_KEY_EXT_OFF..RECORD_KEY_HEADER_MIN_BYTES];
+    if extension.iter().all(|byte| *byte == 0) {
+        return Some(RecordKey::Ffa);
+    }
+    if block[RECORD_KEY_EXT_OFF..RECORD_KEY_EXT_OFF + 4] != RECORD_KEY_MAGIC
+        || block[RECORD_KEY_EXT_OFF + 4] != RECORD_KEY_VERSION
+    {
+        return None;
+    }
+    match block[RECORD_KEY_KIND_OFF] {
+        0 => {
+            if block[RECORD_KEY_PROVIDER_OFF..RECORD_KEY_HEADER_MIN_BYTES]
+                .iter()
+                .any(|byte| *byte != 0)
+            {
+                return None;
+            }
+            Some(RecordKey::Ffa)
+        }
+        1 => {
+            let provider_bytes: [u8; 16] = block
+                [RECORD_KEY_PROVIDER_OFF..RECORD_KEY_PROVIDER_OFF + 16]
+                .try_into()
+                .ok()?;
+            let handle_bytes: [u8; 32] = block[RECORD_KEY_HANDLE_OFF..RECORD_KEY_HANDLE_OFF + 32]
+                .try_into()
+                .ok()?;
+            let provider = ProviderId::new(provider_bytes)?;
+            let handle = KeyHandle::new(handle_bytes)?;
+            Some(RecordKey::Key(KeyRef::new(provider, handle)))
+        }
+        _ => None,
     }
 }
 
@@ -376,6 +459,7 @@ struct FileRecord {
     entry_lba: u64,
     data_len: u64,
     data_lba: u64,
+    record_key: RecordKey,
 }
 
 fn disk_data_end_lba_exclusive<D: BlockIo>(dev: &D, params: &FsParams) -> u64 {
@@ -599,6 +683,7 @@ pub async fn write_index_checkpoint<D: BlockIo>(
         name_len: 0,
         data_len: payload.len() as u64,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        record_key: RecordKey::Ffa,
     }
     .encode_into_block(&mut hdr0);
     dev.write_blocks(entry_lba, &hdr0)
@@ -638,6 +723,7 @@ pub async fn write_index_checkpoint<D: BlockIo>(
         name_len: 0,
         data_len: payload.len() as u64,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        record_key: RecordKey::Ffa,
     }
     .encode_into_block(&mut hdr1);
     dev.write_blocks(entry_lba, &hdr1)
@@ -881,6 +967,7 @@ pub async fn scan_raw_log<D: BlockIo>(
             delete_ref_lba,
             checkpoint_replay_from_rel_blocks,
             checkpoint_entry_count,
+            record_key: hdr.record_key,
         });
 
         lba = lba.saturating_add(blocks);
@@ -980,6 +1067,7 @@ pub struct PutWriteStream {
     batch: Vec<u8>,
     batch_off: usize,
     pending: Vec<u8>,
+    record_key: RecordKey,
 }
 
 pub fn write_stream_record_ref(stream: &PutWriteStream) -> FileRecordRef {
@@ -991,6 +1079,7 @@ pub fn write_stream_record_ref(stream: &PutWriteStream) -> FileRecordRef {
             .saturating_add(1)
             .saturating_add(name_blocks as u64),
         data_len: stream.data_len,
+        record_key: stream.record_key,
     }
 }
 
@@ -1032,11 +1121,29 @@ pub async fn begin_write_file_stream<D: BlockIo>(
     name: &str,
     data_len: u64,
 ) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
+    let record_key = find_latest_record(dev, params, name)
+        .await?
+        .map(|record| record.record_key)
+        .unwrap_or(RecordKey::Ffa);
+    begin_write_file_stream_with_key(dev, params, name, data_len, record_key).await
+}
+
+/// Begin a streamed `Put` whose record header carries `record_key`.
+pub async fn begin_write_file_stream_with_key<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    data_len: u64,
+    record_key: RecordKey,
+) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
     if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
         return Ok(None);
     }
     let bs = dev.block_size();
     if bs == 0 {
+        return Err(FsError::InvalidParam);
+    }
+    if matches!(record_key, RecordKey::Key(_)) && bs < RECORD_KEY_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
     }
     let data_len_usize = usize::try_from(data_len).map_err(|_| FsError::InvalidParam)?;
@@ -1055,6 +1162,7 @@ pub async fn begin_write_file_stream<D: BlockIo>(
         name_len: name.len() as u16,
         data_len,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        record_key,
     }
     .encode_into_block(&mut hdr0);
     dev.write_blocks(entry_lba, &hdr0)
@@ -1098,6 +1206,7 @@ pub async fn begin_write_file_stream<D: BlockIo>(
         batch: Vec::with_capacity(batch_capacity),
         batch_off: 0,
         pending: Vec::new(),
+        record_key,
     }))
 }
 
@@ -1214,6 +1323,7 @@ pub async fn finish_write_file_stream<D: BlockIo>(
         name_len: stream.name_len,
         data_len: stream.data_len,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        record_key: stream.record_key,
     }
     .encode_into_block(&mut hdr1);
     dev.write_blocks(stream.entry_lba, &hdr1)
@@ -1231,6 +1341,7 @@ async fn write_delete_entry<D: BlockIo>(
     entry_lba: u64,
     name: &str,
     deleted_entry_lba: u64,
+    record_key: RecordKey,
 ) -> Result<u64, FsError<D::Error>> {
     let bs = dev.block_size();
     if bs == 0 {
@@ -1247,6 +1358,7 @@ async fn write_delete_entry<D: BlockIo>(
         name_len: name_len as u16,
         data_len: DELETE_REF_BYTES as u64,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        record_key,
     }
     .encode_into_block(&mut hdr0);
     dev.write_blocks(entry_lba, &hdr0)
@@ -1313,6 +1425,7 @@ async fn write_delete_entry<D: BlockIo>(
         name_len: name_len as u16,
         data_len: DELETE_REF_BYTES as u64,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        record_key,
     }
     .encode_into_block(&mut hdr1);
     dev.write_blocks(entry_lba, &hdr1)
@@ -1343,6 +1456,7 @@ async fn write_rename_tree_entry<D: BlockIo>(
         name_len: name_len as u16,
         data_len: data_len as u64,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        record_key: RecordKey::Ffa,
     }
     .encode_into_block(&mut hdr0);
     dev.write_blocks(entry_lba, &hdr0)
@@ -1407,6 +1521,7 @@ async fn write_rename_tree_entry<D: BlockIo>(
         name_len: name_len as u16,
         data_len: data_len as u64,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        record_key: RecordKey::Ffa,
     }
     .encode_into_block(&mut hdr1);
     dev.write_blocks(entry_lba, &hdr1)
@@ -1419,7 +1534,7 @@ async fn write_rename_tree_entry<D: BlockIo>(
 async fn read_put_entry_data<D: BlockIo>(
     dev: &D,
     entry_lba: u64,
-) -> Result<Option<Vec<u8>>, FsError<D::Error>> {
+) -> Result<Option<(Vec<u8>, RecordKey)>, FsError<D::Error>> {
     let bs = dev.block_size();
     if bs == 0 {
         return Err(FsError::InvalidParam);
@@ -1447,7 +1562,7 @@ async fn read_put_entry_data<D: BlockIo>(
     let mut out = vec![0u8; data_len];
     read_exact_bytes(dev, data_lba, 0, &mut out).await?;
 
-    Ok(Some(out))
+    Ok(Some((out, hdr.record_key)))
 }
 
 async fn find_latest_delete_ref<D: BlockIo>(
@@ -1560,11 +1675,11 @@ pub async fn undelete_file<D: BlockIo>(
     };
 
     // Restore from the referenced Put entry.
-    let Some(data) = read_put_entry_data(dev, deleted_entry_lba).await? else {
+    let Some((data, record_key)) = read_put_entry_data(dev, deleted_entry_lba).await? else {
         return Ok(false);
     };
 
-    write_file(dev, params, name, &data).await
+    write_file_with_key(dev, params, name, &data, record_key).await
 }
 
 async fn find_latest_record<D: BlockIo>(
@@ -1644,6 +1759,7 @@ async fn find_latest_record<D: BlockIo>(
                             entry_lba: lba,
                             data_len: hdr.data_len,
                             data_lba,
+                            record_key: hdr.record_key,
                         });
                     }
                     LogKind::Delete => {
@@ -1675,9 +1791,28 @@ pub async fn write_file<D: BlockIo>(
     Ok(true)
 }
 
+/// Write a complete file with an explicit native record key.
+pub async fn write_file_with_key<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    bytes: &[u8],
+    record_key: RecordKey,
+) -> Result<bool, FsError<D::Error>> {
+    let Some(mut stream) =
+        begin_write_file_stream_with_key(dev, params, name, bytes.len() as u64, record_key).await?
+    else {
+        return Ok(false);
+    };
+    write_file_stream_chunk(dev, &mut stream, bytes).await?;
+    finish_write_file_stream(dev, params, stream).await?;
+    Ok(true)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileInfo {
     pub data_len: u64,
+    pub record_key: RecordKey,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1685,6 +1820,7 @@ pub struct FileRecordRef {
     pub entry_lba: u64,
     pub data_lba: u64,
     pub data_len: u64,
+    pub record_key: RecordKey,
 }
 
 pub async fn read_file_info<D: BlockIo>(
@@ -1697,6 +1833,7 @@ pub async fn read_file_info<D: BlockIo>(
     };
     Ok(Some(FileInfo {
         data_len: rec.data_len,
+        record_key: rec.record_key,
     }))
 }
 
@@ -1712,6 +1849,7 @@ pub async fn lookup_file_record<D: BlockIo>(
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
         data_len: rec.data_len,
+        record_key: rec.record_key,
     }))
 }
 
@@ -1719,6 +1857,7 @@ pub async fn lookup_file_record<D: BlockIo>(
 pub fn file_info_from_record(record: &FileRecordRef) -> FileInfo {
     FileInfo {
         data_len: record.data_len,
+        record_key: record.record_key,
     }
 }
 
@@ -1735,6 +1874,7 @@ pub async fn read_file<D: BlockIo>(
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
         data_len: rec.data_len,
+        record_key: rec.record_key,
     };
 
     read_file_at_record(dev, params, &rec).await
@@ -1822,6 +1962,7 @@ pub async fn get_file_record_at<D: BlockIo>(
         entry_lba,
         data_lba,
         data_len: hdr.data_len,
+        record_key: hdr.record_key,
     }))
 }
 
@@ -1839,6 +1980,7 @@ pub async fn read_file_range<D: BlockIo>(
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
         data_len: rec.data_len,
+        record_key: rec.record_key,
     };
     read_file_range_at(dev, params, &rec, offset, out).await
 }
@@ -1980,6 +2122,28 @@ pub async fn read_entry_kind_at_named<D: BlockIo>(
     Ok(Some(hdr.kind))
 }
 
+/// Read the native key metadata from one committed log record header.
+///
+/// This performs one bounded block read and does not inspect or return payload
+/// bytes. It is used by metadata/index consumers such as TRUEOS LSD.
+pub async fn read_record_key_at<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    entry_lba: u64,
+) -> Result<Option<RecordKey>, FsError<D::Error>> {
+    if entry_lba < params.data_lba || entry_lba >= disk_data_end_lba_exclusive(dev, params) {
+        return Ok(None);
+    }
+    let hdr_block = read_one_block(dev, entry_lba).await?;
+    let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
+        return Ok(None);
+    };
+    if !hdr.committed {
+        return Ok(None);
+    }
+    Ok(Some(hdr.record_key))
+}
+
 /// Read a file from a specific entry LBA, but only if the entry's name matches
 /// `expected_name`.
 ///
@@ -2114,6 +2278,7 @@ async fn append_delete_for_entry<D: BlockIo>(
     params: &FsParams,
     name: &str,
     deleted_entry_lba: u64,
+    record_key: RecordKey,
 ) -> Result<bool, FsError<D::Error>> {
     if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
         return Ok(false);
@@ -2135,7 +2300,8 @@ async fn append_delete_for_entry<D: BlockIo>(
         return Ok(false);
     }
 
-    let written_blocks = write_delete_entry(dev, entry_lba, name, deleted_entry_lba).await?;
+    let written_blocks =
+        write_delete_entry(dev, entry_lba, name, deleted_entry_lba, record_key).await?;
     advance_log_head(dev, params, sb, written_blocks).await?;
     Ok(true)
 }
@@ -2162,7 +2328,7 @@ pub async fn delete_file_at_record<D: BlockIo>(
         return Ok(false);
     }
 
-    append_delete_for_entry(dev, params, name, validated.entry_lba).await
+    append_delete_for_entry(dev, params, name, validated.entry_lba, validated.record_key).await
 }
 
 /// Delete `name` by resolving it from the on-disk log.
@@ -2182,7 +2348,7 @@ pub async fn delete_file<D: BlockIo>(
         return Ok(false);
     };
 
-    append_delete_for_entry(dev, params, name, base.entry_lba).await
+    append_delete_for_entry(dev, params, name, base.entry_lba, base.record_key).await
 }
 
 pub async fn rename_tree<D: BlockIo>(
@@ -2424,11 +2590,14 @@ pub async fn append_file<D: BlockIo>(
         return Ok(true);
     }
 
-    let Some(mut base) = read_file(dev, params, name).await? else {
+    let Some(record) = lookup_file_record(dev, params, name).await? else {
         return write_file(dev, params, name, append_bytes).await;
     };
+    let Some(mut base) = read_file_at_record(dev, params, &record).await? else {
+        return Ok(false);
+    };
     base.extend_from_slice(append_bytes);
-    write_file(dev, params, name, &base).await
+    write_file_with_key(dev, params, name, &base, record.record_key).await
 }
 
 #[cfg(test)]
@@ -2463,6 +2632,12 @@ mod tests {
 
         fn read_count(&self) -> usize {
             self.reads.load(Ordering::Acquire)
+        }
+
+        fn clear_record_key_extension(&self, entry_lba: u64) {
+            let start = entry_lba as usize * BLOCK_SIZE;
+            let mut bytes = self.bytes.lock().unwrap();
+            bytes[start + RECORD_KEY_EXT_OFF..start + RECORD_KEY_HEADER_MIN_BYTES].fill(0);
         }
     }
 
@@ -2520,6 +2695,107 @@ mod tests {
                 Poll::Pending => std::thread::yield_now(),
             }
         }
+    }
+
+    fn test_key() -> KeyRef {
+        KeyRef::new(ProviderId::new([0x31; 16]).unwrap(), KeyHandle::new([0xa7; 32]).unwrap())
+    }
+
+    #[test]
+    fn legacy_zero_extension_decodes_as_ffa() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(write_file(&disk, &params, "legacy", b"data").await, Ok(true));
+            let record = lookup_file_record(&disk, &params, "legacy")
+                .await
+                .unwrap()
+                .unwrap();
+            disk.clear_record_key_extension(record.entry_lba);
+
+            let info = read_file_info(&disk, &params, "legacy")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(info.record_key, RecordKey::Ffa);
+        });
+    }
+
+    #[test]
+    fn keyed_record_round_trips_through_metadata() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            let record_key = RecordKey::Key(test_key());
+            assert_eq!(
+                write_file_with_key(&disk, &params, "sealed", b"data", record_key).await,
+                Ok(true)
+            );
+
+            let info = read_file_info(&disk, &params, "sealed")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(info.record_key, record_key);
+            let record = lookup_file_record(&disk, &params, "sealed")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.record_key, record_key);
+        });
+    }
+
+    #[test]
+    fn ordinary_overwrite_preserves_existing_record_key() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            let record_key = RecordKey::Key(test_key());
+            assert_eq!(
+                write_file_with_key(&disk, &params, "sealed", b"one", record_key).await,
+                Ok(true)
+            );
+            assert_eq!(write_file(&disk, &params, "sealed", b"two").await, Ok(true));
+
+            let info = read_file_info(&disk, &params, "sealed")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(info.record_key, record_key);
+        });
+    }
+
+    #[test]
+    fn tombstone_and_undelete_preserve_record_key() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            let record_key = RecordKey::Key(test_key());
+            assert_eq!(
+                write_file_with_key(&disk, &params, "sealed", b"secret", record_key).await,
+                Ok(true)
+            );
+            let record = lookup_file_record(&disk, &params, "sealed")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(delete_file_at_record(&disk, &params, "sealed", &record).await, Ok(true));
+
+            let scan = scan_raw_log(&disk, &params, 16).await.unwrap();
+            let tombstone = scan
+                .records
+                .iter()
+                .find(|record| record.kind == LogKind::Delete)
+                .unwrap();
+            assert_eq!(tombstone.record_key, record_key);
+
+            assert_eq!(undelete_file(&disk, &params, "sealed").await, Ok(true));
+            let restored = read_file_info(&disk, &params, "sealed")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(restored.record_key, record_key);
+        });
     }
 
     #[test]

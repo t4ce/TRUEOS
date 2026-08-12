@@ -25,6 +25,7 @@ pub mod kfs {
         pub name: String,
         pub kind: FsEntryKind,
         pub depth: usize,
+        pub record_key: trueos_fs::RecordKey,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,6 +54,17 @@ pub mod kfs {
         name: String,
         kind: String,
         depth: usize,
+        #[serde(default)]
+        key: Option<FsRecordKeyWire>,
+    }
+
+    #[derive(Clone, Debug, Deserialize)]
+    struct FsRecordKeyWire {
+        kind: String,
+        #[serde(default)]
+        provider: String,
+        #[serde(default)]
+        handle: String,
     }
 
     impl FsEntryKind {
@@ -62,6 +74,40 @@ pub mod kfs {
                 "dir" => Self::Dir,
                 _ => Self::Other,
             }
+        }
+    }
+
+    fn decode_hex<const N: usize>(text: &str) -> Option<[u8; N]> {
+        if text.len() != N * 2 {
+            return None;
+        }
+        let mut out = [0u8; N];
+        for (index, pair) in text.as_bytes().chunks_exact(2).enumerate() {
+            let high = (pair[0] as char).to_digit(16)? as u8;
+            let low = (pair[1] as char).to_digit(16)? as u8;
+            out[index] = (high << 4) | low;
+        }
+        Some(out)
+    }
+
+    fn record_key_from_wire(key: Option<FsRecordKeyWire>) -> Result<trueos_fs::RecordKey, i32> {
+        let Some(key) = key else {
+            // Version-1 listings predate record-key metadata.
+            return Ok(trueos_fs::RecordKey::Ffa);
+        };
+        match key.kind.as_str() {
+            "ffa" => Ok(trueos_fs::RecordKey::Ffa),
+            "key" => {
+                let provider = trueos_crypto::ProviderId::new(
+                    decode_hex::<16>(key.provider.as_str()).ok_or(-1)?,
+                )
+                .ok_or(-1)?;
+                let handle =
+                    trueos_crypto::KeyHandle::new(decode_hex::<32>(key.handle.as_str()).ok_or(-1)?)
+                        .ok_or(-1)?;
+                Ok(trueos_fs::RecordKey::Key(trueos_crypto::KeyRef::new(provider, handle)))
+            }
+            _ => Err(-1),
         }
     }
 
@@ -75,14 +121,17 @@ pub mod kfs {
             entries: wire
                 .entries
                 .into_iter()
-                .map(|entry| FsTreeEntry {
-                    id: entry.id,
-                    path: entry.path,
-                    name: entry.name,
-                    kind: FsEntryKind::from_wire(entry.kind.as_str()),
-                    depth: entry.depth,
+                .map(|entry| {
+                    Ok(FsTreeEntry {
+                        id: entry.id,
+                        path: entry.path,
+                        name: entry.name,
+                        kind: FsEntryKind::from_wire(entry.kind.as_str()),
+                        depth: entry.depth,
+                        record_key: record_key_from_wire(entry.key)?,
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, i32>>()?,
         })
     }
 
@@ -210,5 +259,32 @@ pub mod kfs {
             .filter(|entry| matches!(entry.kind, FsEntryKind::File))
             .map(|entry| entry.path)
             .collect())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn version_one_tree_entries_default_to_ffa() {
+            let snapshot = parse_snapshot(
+                r#"{"version":1,"root":"/","max_entries":1,"truncated":false,"entries":[{"id":8,"path":"one","name":"one","kind":"file","depth":0}]}"#,
+            )
+            .unwrap();
+            assert_eq!(snapshot.entries[0].record_key, trueos_fs::RecordKey::Ffa);
+        }
+
+        #[test]
+        fn keyed_tree_entry_decodes_full_key_ref() {
+            let snapshot = parse_snapshot(
+                r#"{"version":2,"root":"/","max_entries":1,"truncated":false,"entries":[{"id":8,"path":"one","name":"one","kind":"file","depth":0,"key":{"kind":"key","provider":"11111111111111111111111111111111","handle":"abababababababababababababababababababababababababababababababab"}}]}"#,
+            )
+            .unwrap();
+            let expected = trueos_fs::RecordKey::Key(trueos_crypto::KeyRef::new(
+                trueos_crypto::ProviderId::new([0x11; 16]).unwrap(),
+                trueos_crypto::KeyHandle::new([0xab; 32]).unwrap(),
+            ));
+            assert_eq!(snapshot.entries[0].record_key, expected);
+        }
     }
 }

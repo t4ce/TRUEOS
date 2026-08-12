@@ -84,6 +84,7 @@ struct Entry {
     kind: kfs::FsEntryKind,
     depth: usize,
     len: Option<u64>,
+    record_key: trueos_fs::RecordKey,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -94,12 +95,9 @@ pub struct TableListing {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TableRow {
-    pub mode: &'static str,
+    pub key: String,
     pub id: String,
-    pub owner: &'static str,
-    pub group: &'static str,
     pub size: String,
-    pub date: &'static str,
     pub kind: &'static str,
     pub name: String,
 }
@@ -252,7 +250,7 @@ fn entry_size(path: &str) -> Option<u64> {
     api::stat(path.as_bytes()).ok().map(|stat| stat.len)
 }
 
-fn indexed_id(path: &str) -> u64 {
+fn indexed_record(path: &str) -> (u64, trueos_fs::RecordKey) {
     kfs::tree(MAX_ENTRIES)
         .ok()
         .and_then(|snapshot| {
@@ -260,10 +258,10 @@ fn indexed_id(path: &str) -> u64 {
                 .entries
                 .into_iter()
                 .filter(|entry| entry.path == path)
-                .map(|entry| entry.id)
-                .max()
+                .max_by_key(|entry| entry.id)
         })
-        .unwrap_or(0)
+        .map(|entry| (entry.id, entry.record_key))
+        .unwrap_or((0, trueos_fs::RecordKey::Ffa))
 }
 
 fn is_under_prefix(entry_path: &str, prefix: &str) -> bool {
@@ -335,6 +333,11 @@ fn immediate_entries(prefix: &str) -> io::Result<Vec<Entry>> {
         } else {
             raw.kind
         };
+        let record_key = if rest.contains('/') {
+            trueos_fs::RecordKey::Ffa
+        } else {
+            raw.record_key
+        };
         let depth = path_depth(path.as_str());
 
         children
@@ -352,6 +355,7 @@ fn immediate_entries(prefix: &str) -> io::Result<Vec<Entry>> {
                 kind,
                 depth,
                 len: None,
+                record_key,
             });
     }
 
@@ -399,6 +403,11 @@ fn tree_entries(prefix: &str) -> io::Result<Vec<Entry>> {
             } else {
                 kfs::FsEntryKind::Dir
             };
+            let record_key = if is_leaf {
+                raw.record_key
+            } else {
+                trueos_fs::RecordKey::Ffa
+            };
             let depth = path_depth(current.as_str());
             entries
                 .entry(current.clone())
@@ -415,6 +424,7 @@ fn tree_entries(prefix: &str) -> io::Result<Vec<Entry>> {
                     kind,
                     depth,
                     len: None,
+                    record_key,
                 });
         }
     }
@@ -525,29 +535,22 @@ fn human_size(len: Option<u64>, is_dir: bool, style: SizeStyle) -> String {
     }
 }
 
-fn authority(path: &str) -> (&'static str, &'static str) {
-    if path == "apps/common" || path.starts_with("apps/common/") {
-        ("common", "vmx")
-    } else if path.starts_with("apps/") {
-        ("vm", "vmx")
-    } else {
-        ("kernel", "system")
-    }
+fn push_hex_byte(out: &mut String, byte: u8) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    out.push(HEX[(byte >> 4) as usize] as char);
+    out.push(HEX[(byte & 0x0f) as usize] as char);
 }
 
-fn permissions(entry: &Entry, style: PermissionStyle) -> &'static str {
-    match style {
-        PermissionStyle::Disable => "-",
-        PermissionStyle::Octal => match entry.kind {
-            kfs::FsEntryKind::Dir => "770",
-            kfs::FsEntryKind::File => "660",
-            kfs::FsEntryKind::Other => "000",
-        },
-        PermissionStyle::Rwx | PermissionStyle::Attributes => match entry.kind {
-            kfs::FsEntryKind::Dir => "drwxrwx---",
-            kfs::FsEntryKind::File => "-rw-rw----",
-            kfs::FsEntryKind::Other => "?---------",
-        },
+fn record_key_text(record_key: trueos_fs::RecordKey) -> String {
+    match record_key {
+        trueos_fs::RecordKey::Ffa => String::from("FFA"),
+        trueos_fs::RecordKey::Key(key) => {
+            let mut out = String::from("KEY:");
+            for byte in key.handle.as_bytes()[..4].iter().copied() {
+                push_hex_byte(&mut out, byte);
+            }
+            out
+        }
     }
 }
 
@@ -568,7 +571,6 @@ fn entry_id(entry: &Entry) -> String {
 }
 
 fn table_row(entry: &Entry, base_depth: usize, options: &Options) -> TableRow {
-    let (owner, group) = authority(entry.path.as_str());
     let is_dir = matches!(entry.kind, kfs::FsEntryKind::Dir);
     let depth = if options.tree {
         entry.depth.saturating_sub(base_depth.saturating_add(1))
@@ -576,12 +578,9 @@ fn table_row(entry: &Entry, base_depth: usize, options: &Options) -> TableRow {
         0
     };
     TableRow {
-        mode: permissions(entry, options.permission),
+        key: record_key_text(entry.record_key),
         id: entry_id(entry),
-        owner,
-        group,
         size: human_size(entry.len, is_dir, options.size),
-        date: "-",
         kind: kind_text(entry.kind),
         name: format!("{}{}", "  ".repeat(depth), hyperlink_name(entry, options)),
     }
@@ -628,7 +627,7 @@ fn render_long_header<W>(write_line: &mut W)
 where
     W: FnMut(&str),
 {
-    write_line("FileID   Mode       Owner   Group      Size       Date Name");
+    write_line("FileID   Key               Size  Kind Name");
 }
 
 fn render_long<W>(entries: &[Entry], options: &Options, write_line: &mut W)
@@ -647,8 +646,8 @@ fn render_long_entry<W>(entry: &Entry, name_prefix: String, options: &Options, w
 where
     W: FnMut(&str),
 {
-    let (owner, group) = authority(entry.path.as_str());
     let size = human_size(entry.len, matches!(entry.kind, kfs::FsEntryKind::Dir), options.size);
+    let record_key = record_key_text(entry.record_key);
     let name = colorize(
         format!("{name_prefix}{}", hyperlink_name(entry, options)).as_str(),
         entry.kind,
@@ -656,13 +655,11 @@ where
     );
     write_line(
         format!(
-            "{:<8} {} {:<7} {:<7} {:>7} {:>10} {}",
+            "{:<8} {:<12} {:>7} {:<5} {}",
             entry_id(entry),
-            permissions(entry, options.permission),
-            owner,
-            group,
+            record_key,
             size,
-            "-",
+            kind_text(entry.kind),
             name
         )
         .as_str(),
@@ -794,18 +791,20 @@ where
 
 fn self_entry(path: &str, kind: kfs::FsEntryKind, len: Option<u64>) -> Entry {
     let normalized = normalize_path(path);
+    let (id, record_key) = indexed_record(normalized.as_str());
     let name = if normalized.is_empty() {
         String::from(".")
     } else {
         String::from(basename(normalized.as_str()))
     };
     Entry {
-        id: indexed_id(normalized.as_str()),
+        id,
         path: normalized.clone(),
         name,
         kind,
         depth: path_depth(normalized.as_str()),
         len,
+        record_key,
     }
 }
 
@@ -818,6 +817,7 @@ fn more_entry(prefix: &str) -> Entry {
         name: String::from("..."),
         kind: kfs::FsEntryKind::Other,
         len: None,
+        record_key: trueos_fs::RecordKey::Ffa,
     }
 }
 
@@ -1146,14 +1146,18 @@ pub fn table_listings(args: &[String]) -> io::Result<Vec<TableListing>> {
         let normalized = normalize_path(path.as_str());
         let mut entries = if !normalized.is_empty() {
             match api::stat(normalized.as_bytes()) {
-                Ok(stat) if matches!(stat.kind, api::FsNodeKind::File) => vec![Entry {
-                    id: indexed_id(normalized.as_str()),
-                    path: normalized.clone(),
-                    name: normalized.clone(),
-                    kind: kfs::FsEntryKind::File,
-                    depth: path_depth(normalized.as_str()),
-                    len: Some(stat.len),
-                }],
+                Ok(stat) if matches!(stat.kind, api::FsNodeKind::File) => {
+                    let (id, record_key) = indexed_record(normalized.as_str());
+                    vec![Entry {
+                        id,
+                        path: normalized.clone(),
+                        name: normalized.clone(),
+                        kind: kfs::FsEntryKind::File,
+                        depth: path_depth(normalized.as_str()),
+                        len: Some(stat.len),
+                        record_key,
+                    }]
+                }
                 Ok(stat) if options.directory_only => {
                     vec![self_entry(
                         normalized.as_str(),
@@ -1215,12 +1219,23 @@ mod tests {
 
     use super::{
         DEFAULT_GRID_WIDTH, Entry, HyperlinkStyle, Options, SortColumn, entry_is_ignored,
-        hyperlink_name, parse_args_with_config, runtime_config,
+        hyperlink_name, parse_args_with_config, record_key_text, runtime_config,
     };
     use v::vio::kfs;
 
     fn argv(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| String::from(*value)).collect()
+    }
+
+    #[test]
+    fn native_record_key_labels_replace_unix_permissions() {
+        assert_eq!(record_key_text(trueos_fs::RecordKey::Ffa), "FFA");
+
+        let key = trueos_crypto::KeyRef::new(
+            trueos_crypto::ProviderId::new([0x11; 16]).unwrap(),
+            trueos_crypto::KeyHandle::new([0xab; 32]).unwrap(),
+        );
+        assert_eq!(record_key_text(trueos_fs::RecordKey::Key(key)), "KEY:abababab");
     }
 
     #[test]
@@ -1284,6 +1299,7 @@ hyperlink: always
             kind: kfs::FsEntryKind::File,
             depth: 5,
             len: Some(1),
+            record_key: trueos_fs::RecordKey::Ffa,
         };
         let tmp_entry = Entry {
             id: 2,
@@ -1292,6 +1308,7 @@ hyperlink: always
             kind: kfs::FsEntryKind::File,
             depth: 3,
             len: Some(1),
+            record_key: trueos_fs::RecordKey::Ffa,
         };
 
         assert!(entry_is_ignored(&git_entry, 2, &options));
@@ -1309,6 +1326,7 @@ hyperlink: always
             kind: kfs::FsEntryKind::File,
             depth: 2,
             len: Some(1),
+            record_key: trueos_fs::RecordKey::Ffa,
         };
 
         assert_eq!(

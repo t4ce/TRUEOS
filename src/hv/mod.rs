@@ -573,6 +573,14 @@ fn blueprint_uses_net_shell_direct_path(
         })
 }
 
+fn blueprint_uses_local_terminal_handoff(
+    console_surface: BlueprintConsoleSurface,
+    console_target: Option<&MatrixTarget>,
+) -> bool {
+    console_surface.is_terminal()
+        && console_target.is_some_and(crate::shell2::matrix_target_supports_terminal_handoff)
+}
+
 #[derive(Clone)]
 pub(crate) struct BlueprintProcessContext {
     args: AllocVec<AllocString>,
@@ -2365,6 +2373,15 @@ pub fn stage_blueprint_launch(
         hvwarnf(format_args!("hv: vm{} console route: terminal direct net-shell busy", vm_id));
         return Err(StartError::ConsoleBusy);
     }
+    if !console_route.is_net_shell_direct()
+        && blueprint_uses_local_terminal_handoff(console_surface, console_target.as_ref())
+        && !console_target.as_ref().is_some_and(|target| {
+            crate::shell2::claim_matrix_target_terminal_handoff(target, vm_id)
+        })
+    {
+        hvwarnf(format_args!("hv: vm{} console route: local terminal handoff busy", vm_id));
+        return Err(StartError::ConsoleBusy);
+    }
     let process_context = BlueprintProcessContext {
         args: crate::hv::blueprint::build_process_args(
             state.archive.as_str(),
@@ -2878,7 +2895,7 @@ pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
         return data.len();
     }
     if surface.is_terminal() {
-        let written = blueprint_console_write_raw_to_target(target.as_ref(), data);
+        let written = blueprint_console_write_raw_to_target(vm_id, target.as_ref(), data);
         blueprint_console_text_lines(vm_id, None, &data[..core::cmp::min(written, data.len())]);
         written
     } else {
@@ -2907,7 +2924,7 @@ pub(crate) fn blueprint_console_raw_write(vm_id: u8, data: &[u8]) -> usize {
         return data.len();
     }
     if surface.is_terminal() {
-        blueprint_console_write_raw_to_target(target.as_ref(), data)
+        blueprint_console_write_raw_to_target(vm_id, target.as_ref(), data)
     } else {
         blueprint_console_text_lines(vm_id, target.as_ref(), data);
         data.len()
@@ -2989,12 +3006,17 @@ pub(crate) fn blueprint_console_return_to_cli(vm_id: u8) -> bool {
     let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
         return false;
     };
-    let (target, was_direct) = {
+    let (target, was_direct, was_local_handoff) = {
         let mut guard = slot.lock();
         let Some(context) = guard.as_mut() else {
             return false;
         };
         let was_direct = context.console_route.is_net_shell_direct();
+        let was_local_handoff = !was_direct
+            && blueprint_uses_local_terminal_handoff(
+                context.console_surface,
+                context.console_target.as_ref(),
+            );
         if !was_direct && context.console_surface == BlueprintConsoleSurface::Text {
             return false;
         }
@@ -3003,7 +3025,7 @@ pub(crate) fn blueprint_console_return_to_cli(vm_id: u8) -> bool {
         context.terminal_reentry_ready = true;
         context.console_input.clear();
         context.control_shell_line.clear();
-        (context.console_target.clone(), was_direct)
+        (context.console_target.clone(), was_direct, was_local_handoff)
     };
 
     // The Blueprint keeps its VM and selected Matrix slot; only terminal
@@ -3011,6 +3033,9 @@ pub(crate) fn blueprint_console_return_to_cli(vm_id: u8) -> bool {
     // direct input exposes its mini-shell and lets `tui` re-enter later.
     if was_direct {
         crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
+    }
+    if was_local_handoff && let Some(target) = target.as_ref() {
+        crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
     }
     if let Some(target) = target.as_ref() {
         crate::shell2::bind_matrix_target_vm(target, vm_id);
@@ -3045,6 +3070,18 @@ pub(crate) fn blueprint_console_enter_tui(vm_id: u8) -> bool {
     if direct && !crate::shell2::backends::net_tcp::claim_net_shell_direct(vm_id) {
         return false;
     }
+    let local_handoff = !direct
+        && blueprint_uses_local_terminal_handoff(
+            BlueprintConsoleSurface::Terminal,
+            target.as_ref(),
+        );
+    if local_handoff
+        && !target.as_ref().is_some_and(|target| {
+            crate::shell2::claim_matrix_target_terminal_handoff(target, vm_id)
+        })
+    {
+        return false;
+    }
 
     let committed = {
         let mut guard = slot.lock();
@@ -3073,6 +3110,9 @@ pub(crate) fn blueprint_console_enter_tui(vm_id: u8) -> bool {
     if !committed {
         if direct {
             crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
+        }
+        if local_handoff && let Some(target) = target.as_ref() {
+            crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
         }
         return false;
     }
@@ -3109,9 +3149,13 @@ pub(crate) fn blueprint_console_enter_tui(vm_id: u8) -> bool {
     true
 }
 
-fn blueprint_console_write_raw_to_target(target: Option<&MatrixTarget>, data: &[u8]) -> usize {
+fn blueprint_console_write_raw_to_target(
+    vm_id: u8,
+    target: Option<&MatrixTarget>,
+    data: &[u8],
+) -> usize {
     if let Some(target) = target {
-        return crate::shell2::raw_write_matrix_target_owned(&target, data);
+        return crate::shell2::raw_write_matrix_target_owned(&target, vm_id, data);
     }
     data.len()
 }
@@ -3674,7 +3718,7 @@ pub(crate) fn blueprint_console_submit_input(vm_id: u8, data: &[u8]) -> usize {
     for &byte in data {
         match byte {
             b'\r' | b'\n' => {
-                let _ = blueprint_console_write_raw_to_target(target.as_ref(), b"\r\n");
+                let _ = blueprint_console_write_raw_to_target(vm_id, target.as_ref(), b"\r\n");
                 let line_bytes = core::mem::take(&mut context.control_shell_line);
                 drop(guard);
                 let line = core::str::from_utf8(line_bytes.as_slice()).unwrap_or("");
@@ -3683,13 +3727,14 @@ pub(crate) fn blueprint_console_submit_input(vm_id: u8, data: &[u8]) -> usize {
             }
             0x08 | 0x7f => {
                 if context.control_shell_line.pop().is_some() {
-                    let _ = blueprint_console_write_raw_to_target(target.as_ref(), b"\x08 \x08");
+                    let _ =
+                        blueprint_console_write_raw_to_target(vm_id, target.as_ref(), b"\x08 \x08");
                 }
             }
             byte if byte.is_ascii_graphic() || byte == b' ' => {
                 if context.control_shell_line.len() < 512 {
                     context.control_shell_line.push(byte);
-                    let _ = blueprint_console_write_raw_to_target(target.as_ref(), &[byte]);
+                    let _ = blueprint_console_write_raw_to_target(vm_id, target.as_ref(), &[byte]);
                 }
             }
             _ => {
@@ -3722,6 +3767,34 @@ pub(crate) fn blueprint_console_read(vm_id: u8, out: &mut [u8]) -> usize {
                 drop(guard);
                 return crate::shell2::backends::net_tcp::net_shell_direct_read(vm_id, out);
             }
+            if blueprint_uses_local_terminal_handoff(
+                context.console_surface,
+                context.console_target.as_ref(),
+            ) {
+                let target = context.console_target.clone();
+                let mut read = 0usize;
+                while read < out.len() {
+                    let Some(byte) = context.console_input.pop_front() else {
+                        break;
+                    };
+                    out[read] = byte;
+                    read += 1;
+                }
+                drop(guard);
+                if read < out.len() {
+                    read += target
+                        .as_ref()
+                        .map(|target| {
+                            crate::shell2::read_matrix_target_terminal_handoff(
+                                target,
+                                vm_id,
+                                &mut out[read..],
+                            )
+                        })
+                        .unwrap_or(0);
+                }
+                return read;
+            }
             let mut read = 0usize;
             while read < out.len() {
                 let Some(byte) = context.console_input.pop_front() else {
@@ -3745,6 +3818,22 @@ pub(crate) fn blueprint_console_readable_len(vm_id: u8) -> usize {
             }
             if context.console_route.is_net_shell_direct() {
                 return crate::shell2::backends::net_tcp::net_shell_direct_readable_len(vm_id);
+            }
+            if blueprint_uses_local_terminal_handoff(
+                context.console_surface,
+                context.console_target.as_ref(),
+            ) {
+                return context.console_input.len().saturating_add(
+                    context
+                        .console_target
+                        .as_ref()
+                        .map(|target| {
+                            crate::shell2::matrix_target_terminal_handoff_readable_len(
+                                target, vm_id,
+                            )
+                        })
+                        .unwrap_or(0),
+                );
             }
             return context.console_input.len();
         }
@@ -3796,6 +3885,16 @@ fn clear_blueprint_process_context(vm_id: u8) {
                 crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
             }
             if context.console_attached
+                && !context.console_route.is_net_shell_direct()
+                && blueprint_uses_local_terminal_handoff(
+                    context.console_surface,
+                    context.console_target.as_ref(),
+                )
+                && let Some(target) = context.console_target.as_ref()
+            {
+                crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+            }
+            if context.console_attached
                 && let Some(target) = context.console_target.as_ref()
             {
                 crate::shell2::unbind_matrix_target_vm(target, vm_id);
@@ -3822,6 +3921,7 @@ fn suspend_blueprint_process_context(vm_id: u8) {
     if detached.0.is_net_shell_direct() {
         crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
     } else if let Some(target) = detached.1.as_ref() {
+        crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
         crate::shell2::unbind_matrix_target_vm(target, vm_id);
     }
 }
@@ -3843,14 +3943,20 @@ fn resume_blueprint_process_context(vm_id: u8) {
     let attached = if presentation.0.is_net_shell_direct() {
         crate::shell2::backends::net_tcp::claim_net_shell_direct(vm_id)
     } else {
-        if let Some(target) = presentation.2.as_ref() {
+        let local_handoff =
+            blueprint_uses_local_terminal_handoff(presentation.1, presentation.2.as_ref());
+        let claimed = !local_handoff
+            || presentation.2.as_ref().is_some_and(|target| {
+                crate::shell2::claim_matrix_target_terminal_handoff(target, vm_id)
+            });
+        if claimed && let Some(target) = presentation.2.as_ref() {
             if presentation.1.is_terminal() {
                 crate::shell2::bind_matrix_target_vm_input(target, vm_id);
             } else {
                 crate::shell2::bind_matrix_target_vm(target, vm_id);
             }
         }
-        true
+        claimed
     };
     if attached {
         if let Some(context) = slot.lock().as_mut() {

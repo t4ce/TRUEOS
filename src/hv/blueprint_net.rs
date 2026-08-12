@@ -91,6 +91,20 @@ pub(crate) fn poll_event(vm_id: u8, session_id: u32, out: &mut [u8]) -> Result<O
                 handle.0
             ));
         }
+        api::Event::TcpData { handle, ref data } => {
+            use core::sync::atomic::{AtomicUsize, Ordering};
+
+            static TCP_DATA_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
+            let count = TCP_DATA_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
+            if count < 32 || count.is_power_of_two() {
+                crate::hv::hvlogf(format_args!(
+                    "hv: blueprint-net event tcp-data handle={} bytes={} count={}",
+                    handle.0,
+                    data.as_slice().len(),
+                    count
+                ));
+            }
+        }
         api::Event::Error { .. } => {
             crate::hv::hverrorf(format_args!("hv: blueprint-net event error"));
         }

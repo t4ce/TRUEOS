@@ -227,7 +227,6 @@ pub unsafe extern "C" fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> 
     let mut remaining_ms = (timeout >= 0).then_some(timeout as u64);
     loop {
         let ready = {
-            let table = OPEN_FILES.lock();
             let mut ready = 0;
             for pollfd in pollfds.iter_mut() {
                 pollfd.revents = 0;
@@ -235,13 +234,25 @@ pub unsafe extern "C" fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> 
                     continue;
                 }
                 let mut revents = 0;
-                if let Some(file) = table.get(pollfd.fd) {
-                    if pollfd.events & TRUEOS_POLLIN != 0 && open_file_read_ready(file) {
-                        revents |= TRUEOS_POLLIN;
-                    }
-                    if pollfd.events & TRUEOS_POLLOUT != 0 && open_file_write_ready(file) {
-                        revents |= TRUEOS_POLLOUT;
-                    }
+                let file_revents = {
+                    let table = OPEN_FILES.lock();
+                    table.get(pollfd.fd).map(|file| {
+                        let mut revents = 0;
+                        if pollfd.events & TRUEOS_POLLIN != 0 && open_file_read_ready(file) {
+                            revents |= TRUEOS_POLLIN;
+                        }
+                        if pollfd.events & TRUEOS_POLLOUT != 0 && open_file_write_ready(file) {
+                            revents |= TRUEOS_POLLOUT;
+                        }
+                        revents
+                    })
+                };
+                if let Some(file_revents) = file_revents {
+                    revents = file_revents;
+                } else if let Some(socket_revents) =
+                    crate::std_abi_shim::socket_poll_events(pollfd.fd, pollfd.events)
+                {
+                    revents = socket_revents;
                 } else if (0..=2).contains(&pollfd.fd) {
                     if pollfd.fd == 0
                         && pollfd.events & TRUEOS_POLLIN != 0

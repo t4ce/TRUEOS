@@ -957,6 +957,58 @@ pub(crate) fn bind_matrix_target_vm_input(target: &MatrixTarget, vm_id: u8) {
         matrix::bind_live_slot_vm(&target.slot_id, target.slot_lifetime_generation, vm_id, true);
 }
 
+fn matrix_target_terminal_backend(
+    target: &MatrixTarget,
+) -> Option<(&'static dyn ShellBackend2, u64)> {
+    let generation = target.local_session_generation?;
+    let backend = backends::session_pool::backend_for_output_mask(target.output_mask)?;
+    Some((backend, generation))
+}
+
+fn matrix_target_terminal_handoff(
+    target: &MatrixTarget,
+    vm_id: u8,
+) -> Option<(&'static dyn ShellBackend2, TerminalHandoffOwner)> {
+    let (backend, generation) = matrix_target_terminal_backend(target)?;
+    let owner = TerminalHandoffOwner::blueprint(vm_id).for_local_session(generation);
+    Some((backend, owner))
+}
+
+pub(crate) fn matrix_target_supports_terminal_handoff(target: &MatrixTarget) -> bool {
+    matrix_target_terminal_backend(target)
+        .is_some_and(|(backend, _)| backend.supports_terminal_handoff())
+}
+
+pub(crate) fn claim_matrix_target_terminal_handoff(target: &MatrixTarget, vm_id: u8) -> bool {
+    matrix_target_terminal_handoff(target, vm_id)
+        .is_some_and(|(backend, owner)| backend.claim_terminal_handoff(owner))
+}
+
+pub(crate) fn release_matrix_target_terminal_handoff(target: &MatrixTarget, vm_id: u8) {
+    if let Some((backend, owner)) = matrix_target_terminal_handoff(target, vm_id) {
+        backend.release_terminal_handoff(owner);
+    }
+}
+
+pub(crate) fn read_matrix_target_terminal_handoff(
+    target: &MatrixTarget,
+    vm_id: u8,
+    out: &mut [u8],
+) -> usize {
+    matrix_target_terminal_handoff(target, vm_id)
+        .map(|(backend, owner)| backend.terminal_handoff_read(owner, out))
+        .unwrap_or(0)
+}
+
+pub(crate) fn matrix_target_terminal_handoff_readable_len(
+    target: &MatrixTarget,
+    vm_id: u8,
+) -> usize {
+    matrix_target_terminal_handoff(target, vm_id)
+        .map(|(backend, owner)| backend.terminal_handoff_readable_len(owner))
+        .unwrap_or(0)
+}
+
 pub(crate) fn unbind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
     let _ = matrix::unbind_live_slot_vm(&target.slot_id, target.slot_lifetime_generation, vm_id);
 }
@@ -1094,9 +1146,20 @@ pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> us
     bytes.len()
 }
 
-pub(crate) fn raw_write_matrix_target_owned(target: &MatrixTarget, bytes: &[u8]) -> usize {
-    let _ = target;
-    bytes.len()
+pub(crate) fn raw_write_matrix_target_owned(
+    target: &MatrixTarget,
+    vm_id: u8,
+    bytes: &[u8],
+) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    matrix_target_terminal_handoff(target, vm_id)
+        .filter(|(backend, _)| backend.supports_terminal_handoff())
+        .map(|(backend, owner)| backend.terminal_handoff_write(owner, bytes))
+        .unwrap_or(false)
+        .then_some(bytes.len())
+        .unwrap_or(0)
 }
 
 pub(crate) fn konsole_viewport_size_for_target(target: &MatrixTarget) -> (usize, usize) {

@@ -16,11 +16,11 @@ const STATUS_NOT_FOUND: i32 = -5;
 const STATUS_IO: i32 = -6;
 const STATUS_NO_DEVICE: i32 = -8;
 
-const READY_READABLE: u8 = 0b0000_0001;
-const READY_WRITABLE: u8 = 0b0000_0010;
-const READY_ERROR: u8 = 0b0000_0100;
-const READY_READ_CLOSED: u8 = 0b0000_1000;
-const READY_WRITE_CLOSED: u8 = 0b0001_0000;
+pub(crate) const READY_READABLE: u8 = 0b0000_0001;
+pub(crate) const READY_WRITABLE: u8 = 0b0000_0010;
+pub(crate) const READY_ERROR: u8 = 0b0000_0100;
+pub(crate) const READY_READ_CLOSED: u8 = 0b0000_1000;
+pub(crate) const READY_WRITE_CLOSED: u8 = 0b0001_0000;
 const TCP_LISTENER_PREPOST: usize = 32;
 
 const CONNECT_COMPAT_WAIT_NS: u64 = 2_000_000_000;
@@ -1285,6 +1285,19 @@ impl MioCompat {
     }
 }
 
+pub(crate) fn mio_socket_poll_ready_host(socket_id: u32, interests: u8) -> Option<u8> {
+    with_compat(|compat| {
+        compat.kick_net();
+        // The process-fd table has already resolved this opaque backend id.
+        // Tokio can poll from a host-carried service lane whose transient VM
+        // context differs from the lane that created the socket, so do not
+        // re-authorize the backend through ambient CPU context here. Direct
+        // Blueprint Mio calls still enforce ownership at their ABI boundary.
+        let socket = compat.socket(socket_id)?;
+        Some(compat.ready_mask(socket, interests))
+    })
+}
+
 pub(crate) unsafe fn mio_tcp_listener_bind_host(
     addr: TrueosMioSocketAddr,
     out_socket_id: *mut u32,
@@ -1920,6 +1933,48 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
     })
 }
 
+/// Read from a backend already authorized by the process descriptor table.
+///
+/// Unlike the public Mio ABI, this path must not infer ownership from the
+/// currently executing CPU lane. The std ABI has already resolved a process
+/// fd to this opaque socket id, and Tokio may perform the I/O from a different
+/// host-carried lane than the one that created the listener.
+pub(crate) unsafe fn mio_tcp_stream_read_resolved_host(
+    socket_id: u32,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if out_ptr.is_null() && out_cap != 0 {
+        return STATUS_INVALID_INPUT as isize;
+    }
+    with_compat(|compat| {
+        compat.pump();
+        let Some(socket) = compat.socket_mut(socket_id) else {
+            return STATUS_NOT_FOUND as isize;
+        };
+        if socket.kind != MioSocketKind::TcpStream {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        if socket.rx_stream.is_empty() {
+            return if socket.closed {
+                0
+            } else {
+                STATUS_WOULD_BLOCK as isize
+            };
+        }
+
+        let len = out_cap.min(socket.rx_stream.len());
+        for index in 0..len {
+            unsafe {
+                out_ptr
+                    .add(index)
+                    .write(socket.rx_stream.pop_front().unwrap());
+            }
+        }
+        len as isize
+    })
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
     socket_id: u32,
@@ -2047,6 +2102,56 @@ pub(crate) unsafe fn mio_tcp_stream_write_host(
                 data_len
             );
         }
+        let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
+        match compat.submit(api::Command::SendTcp {
+            handle,
+            data: api::ByteBuf::from_slice_trunc(data),
+        }) {
+            Ok(()) => len as isize,
+            Err(status) => status as isize,
+        }
+    })
+}
+
+/// Write to a backend already authorized by the process descriptor table.
+pub(crate) unsafe fn mio_tcp_stream_write_resolved_host(
+    socket_id: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> isize {
+    if data_ptr.is_null() && data_len != 0 {
+        return STATUS_INVALID_INPUT as isize;
+    }
+    with_compat(|compat| {
+        compat.pump();
+        let owner_vm = compat.socket(socket_id).and_then(|socket| socket.owner_vm);
+        if let Some(socket) = compat.socket(socket_id)
+            && socket.kind == MioSocketKind::TcpStream
+            && !socket.connected
+            && !socket.closed
+            && socket.error == STATUS_OK
+        {
+            let _ =
+                compat.drive_tcp_connect_until_status(socket_id, owner_vm, CONNECT_IO_FASTPATH_NS);
+        }
+        let Some(socket) = compat.socket(socket_id) else {
+            return STATUS_NOT_FOUND as isize;
+        };
+        if socket.kind != MioSocketKind::TcpStream {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        if !socket.connected {
+            return if socket.error != STATUS_OK {
+                socket.error as isize
+            } else {
+                STATUS_WOULD_BLOCK as isize
+            };
+        }
+        let Some(handle) = socket.handle else {
+            return STATUS_NOT_CONNECTED as isize;
+        };
+
+        let len = data_len.min(api::MAX_MSG);
         let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
         match compat.submit(api::Command::SendTcp {
             handle,

@@ -136,6 +136,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "setpgid"
             | "setsid"
             | "setsockopt"
+            | "shutdown"
             | "setuid"
             | "sigaction"
             | "signal"
@@ -328,6 +329,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "setpgid" => Some(crate::std_abi_shim::setpgid as *const () as usize),
         "setsid" => Some(crate::std_abi_shim::setsid as *const () as usize),
         "setsockopt" => Some(crate::std_abi_shim::setsockopt as *const () as usize),
+        "shutdown" => Some(crate::std_abi_shim::shutdown as *const () as usize),
         "setuid" => Some(crate::std_abi_shim::setuid as *const () as usize),
         "sigaction" => Some(crate::std_abi_shim::sigaction as *const () as usize),
         "signal" => Some(crate::std_abi_shim::signal as *const () as usize),

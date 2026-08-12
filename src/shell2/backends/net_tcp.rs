@@ -263,7 +263,6 @@ fn net_shell_terminal_owned_by(owner: TerminalHandoffOwner) -> bool {
     NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) == owner.raw()
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn net_shell_terminal_read(owner: TerminalHandoffOwner, out: &mut [u8]) -> usize {
     if out.is_empty() || !net_shell_terminal_owned_by(owner) {
         return 0;
@@ -276,7 +275,6 @@ fn net_shell_terminal_read(owner: TerminalHandoffOwner, out: &mut [u8]) -> usize
     read
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn net_shell_terminal_write(owner: TerminalHandoffOwner, bytes: &[u8]) -> bool {
     if !net_shell_terminal_owned_by(owner) {
         return false;

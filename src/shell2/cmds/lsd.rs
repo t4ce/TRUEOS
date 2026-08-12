@@ -10,9 +10,7 @@ use super::super::{
 use super::tlb_helper::TlbTable;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
-const TABLE_HEADERS: [&str; 8] = [
-    "FileID", "Mode", "Owner", "Group", "Size", "Date", "Kind", "Name",
-];
+const TABLE_HEADERS: [&str; 5] = ["FileID", "Key", "Size", "Kind", "Name"];
 const ARCHIVE_HEADERS: [&str; 4] = ["#", "Size", "CRC", "Name"];
 const ARCHIVE_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 
@@ -118,8 +116,7 @@ fn parse_args(rest: &str) -> Result<Vec<String>, &'static str> {
 fn run_lsd_table(target: &MatrixTarget, args: Vec<String>, width: usize) -> trueos_io::Result<()> {
     let listings = trueos_lsd::table_listings(args.as_slice())?;
     let multiple = listings.len() > 1;
-    let table = TlbTable::with_width(&TABLE_HEADERS, width)
-        .with_max_col_widths(&[8, 10, 7, 7, 8, 10, 5, 0]);
+    let table = TlbTable::with_width(&TABLE_HEADERS, width).with_max_col_widths(&[8, 12, 8, 5, 0]);
 
     for (idx, listing) in listings.iter().enumerate() {
         if listing.rows.is_empty() {
@@ -136,11 +133,8 @@ fn run_lsd_table(target: &MatrixTarget, args: Vec<String>, width: usize) -> true
         for row in listing.rows.iter() {
             let cells = [
                 row.id.as_str(),
-                row.mode,
-                row.owner,
-                row.group,
+                row.key.as_str(),
                 row.size.as_str(),
-                row.date,
                 row.kind,
                 row.name.as_str(),
             ];

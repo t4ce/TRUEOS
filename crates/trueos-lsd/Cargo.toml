@@ -13,3 +13,5 @@ path = "src/lib.rs"
 [dependencies]
 trueos-io = { path = "../trueos-io" }
 v = { path = "../trueos-v" }
+trueos-fs = { path = "../trueos-fs" }
+trueos-crypto = { path = "../trueos-crypto" }

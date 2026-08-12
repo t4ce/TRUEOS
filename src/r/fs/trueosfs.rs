@@ -6,7 +6,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
-pub use trueos_fs::FileInfo;
+pub use trueos_fs::{FileInfo, RecordKey};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct IndexRef {
@@ -1059,6 +1059,23 @@ pub async fn file_in_async(
     name: &str,
     bytes: &[u8],
 ) -> Result<bool, block::Error> {
+    let record_key = file_info_async(disk, name)
+        .await?
+        .map(|info| info.record_key)
+        .unwrap_or(RecordKey::Ffa);
+    file_in_with_key_async(disk, name, bytes, record_key).await
+}
+
+/// Async TRUEOSFS write with an explicit native record key.
+///
+/// Key enforcement/encryption is not active yet; this persists the identity
+/// contract in the record header and exposes it through metadata.
+pub async fn file_in_with_key_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    bytes: &[u8],
+    record_key: RecordKey,
+) -> Result<bool, block::Error> {
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -1072,10 +1089,15 @@ pub async fn file_in_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    let Some(mut stream) =
-        trueos_fs::begin_write_file_stream(&io, &params, name, bytes.len() as u64)
-            .await
-            .map_err(map_engine_err)?
+    let Some(mut stream) = trueos_fs::begin_write_file_stream_with_key(
+        &io,
+        &params,
+        name,
+        bytes.len() as u64,
+        record_key,
+    )
+    .await
+    .map_err(map_engine_err)?
     else {
         return Ok(false);
     };
@@ -1134,6 +1156,20 @@ pub async fn file_write_begin_async(
     name: &str,
     total_len: u64,
 ) -> Result<Option<u32>, block::Error> {
+    let record_key = file_info_async(disk, name)
+        .await?
+        .map(|info| info.record_key)
+        .unwrap_or(RecordKey::Ffa);
+    file_write_begin_with_key_async(disk, name, total_len, record_key).await
+}
+
+/// Begin a streamed file write with an explicit native record key.
+pub async fn file_write_begin_with_key_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    total_len: u64,
+    record_key: RecordKey,
+) -> Result<Option<u32>, block::Error> {
     crate::log!(
         "trueosfs: file-write-begin stage=start disk={} path={} bytes={}\n",
         disk.id().raw(),
@@ -1169,9 +1205,10 @@ pub async fn file_write_begin_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    let Some(stream) = trueos_fs::begin_write_file_stream(&io, &params, name, total_len)
-        .await
-        .map_err(map_engine_err)?
+    let Some(stream) =
+        trueos_fs::begin_write_file_stream_with_key(&io, &params, name, total_len, record_key)
+            .await
+            .map_err(map_engine_err)?
     else {
         crate::log!(
             "trueosfs: file-write-begin failed stage=engine disk={} err=no-space\n",
@@ -1641,11 +1678,14 @@ pub async fn file_rename_async(
         return Ok(false);
     }
 
+    let Some(source_info) = file_info_async(disk, src).await? else {
+        return Ok(false);
+    };
     let Some(bytes) = file_out_async(disk, src).await? else {
         return Ok(false);
     };
 
-    let ok = file_in_async(disk, dst, bytes.as_slice()).await?;
+    let ok = file_in_with_key_async(disk, dst, bytes.as_slice(), source_info.record_key).await?;
     if !ok {
         return Ok(false);
     }
@@ -2162,6 +2202,29 @@ fn push_json_string_escaped(out: &mut String, value: &str) {
     out.push('"');
 }
 
+fn push_hex_bytes(out: &mut String, bytes: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in bytes.iter().copied() {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+}
+
+fn push_record_key_json(out: &mut String, record_key: RecordKey) {
+    out.push_str(",\"key\":{");
+    match record_key {
+        RecordKey::Ffa => out.push_str("\"kind\":\"ffa\""),
+        RecordKey::Key(key) => {
+            out.push_str("\"kind\":\"key\",\"provider\":\"");
+            push_hex_bytes(out, key.provider.as_bytes());
+            out.push_str("\",\"handle\":\"");
+            push_hex_bytes(out, key.handle.as_bytes());
+            out.push('"');
+        }
+    }
+    out.push('}');
+}
+
 /// Async TRUEOSFS: return a compact broad-first JSON listing of the primary tree.
 ///
 /// Returns `Ok(None)` if the disk does not contain TRUEOSFS.
@@ -2195,6 +2258,8 @@ pub async fn json_all_async(
         kind: &'static str,
         name: String,
         id: u64,
+        record_lba: Option<u64>,
+        record_key: RecordKey,
     }
 
     let mut by_depth: BTreeMap<usize, Vec<JsonEntry>> = BTreeMap::new();
@@ -2230,17 +2295,15 @@ pub async fn json_all_async(
                     continue;
                 }
 
+                let record_lba = if depth + 1 == segments.len() {
+                    Some(index_ref.entry_lba)
+                } else {
+                    let marker = alloc::format!("{}/.keep", rel_path);
+                    index.get(marker.as_bytes()).map(|entry| entry.entry_lba)
+                };
                 by_depth.entry(depth).or_default().push(JsonEntry {
                     depth,
-                    id: if depth + 1 == segments.len() {
-                        index_ref.entry_lba
-                    } else {
-                        let marker = alloc::format!("{}/.keep", rel_path);
-                        index
-                            .get(marker.as_bytes())
-                            .map(|entry| entry.entry_lba)
-                            .unwrap_or(index_ref.entry_lba)
-                    },
+                    id: record_lba.unwrap_or(index_ref.entry_lba),
                     path: rel_path,
                     name: String::from(segments[depth]),
                     kind: if depth + 1 == segments.len() {
@@ -2248,6 +2311,8 @@ pub async fn json_all_async(
                     } else {
                         "dir"
                     },
+                    record_lba,
+                    record_key: RecordKey::Ffa,
                 });
 
                 let count = by_depth.values().map(|items| items.len()).sum::<usize>();
@@ -2266,9 +2331,27 @@ pub async fn json_all_async(
             max_entries
         );
     }
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+    for entries in by_depth.values_mut() {
+        for entry in entries.iter_mut() {
+            if let Some(entry_lba) = entry.record_lba {
+                entry.record_key = trueos_fs::read_record_key_at(&io, &params, entry_lba)
+                    .await
+                    .map_err(map_engine_err)?
+                    .ok_or(block::Error::Corrupted)?;
+            }
+        }
+    }
+
     let mut written = 0usize;
     let mut out = String::new();
-    out.push_str("{\"version\":1,\"root\":\"/\",\"max_entries\":");
+    out.push_str("{\"version\":2,\"root\":\"/\",\"max_entries\":");
     out.push_str(alloc::format!("{}", effective_limit).as_str());
     out.push_str(",\"truncated\":");
     out.push_str(if truncated { "true" } else { "false" });
@@ -2300,6 +2383,7 @@ pub async fn json_all_async(
             out.push_str(alloc::format!("{}", entry.depth).as_str());
             out.push_str(",\"id\":");
             out.push_str(alloc::format!("{}", entry.id).as_str());
+            push_record_key_json(&mut out, entry.record_key);
             out.push('}');
             written += 1;
         }
@@ -2309,7 +2393,7 @@ pub async fn json_all_async(
         if !first {
             out.push(',');
         }
-        out.push_str("{\"path\":\"...\",\"name\":\"...\",\"kind\":\"more\",\"depth\":0,\"id\":0}");
+        out.push_str("{\"path\":\"...\",\"name\":\"...\",\"kind\":\"more\",\"depth\":0,\"id\":0,\"key\":{\"kind\":\"ffa\"}}");
     }
 
     out.push_str("]}");
@@ -2340,19 +2424,34 @@ pub async fn file_append_async(
         return Ok(true);
     }
 
-    let mut bytes = match trueos_fs::read_file(&io, &params, name)
-        .await
-        .map_err(map_engine_err)?
-    {
-        Some(existing) => existing,
-        None => Vec::new(),
+    let disk_id = disk.id();
+    let record = match file_record_cache_lookup(disk_id, name) {
+        Some(record) => Some(record),
+        None => lookup_via_index_async(disk, &placement, name).await?,
+    };
+    let (mut bytes, record_key) = match record {
+        Some(record) => {
+            let Some(existing) = trueos_fs::read_file_at_record(&io, &params, &record)
+                .await
+                .map_err(map_engine_err)?
+            else {
+                return Ok(false);
+            };
+            (existing, record.record_key)
+        }
+        None => (Vec::new(), RecordKey::Ffa),
     };
     bytes.extend_from_slice(append_bytes);
 
-    let Some(mut stream) =
-        trueos_fs::begin_write_file_stream(&io, &params, name, bytes.len() as u64)
-            .await
-            .map_err(map_engine_err)?
+    let Some(mut stream) = trueos_fs::begin_write_file_stream_with_key(
+        &io,
+        &params,
+        name,
+        bytes.len() as u64,
+        record_key,
+    )
+    .await
+    .map_err(map_engine_err)?
     else {
         return Ok(false);
     };
@@ -2364,7 +2463,6 @@ pub async fn file_append_async(
         .await
         .map_err(map_engine_err)?;
 
-    let disk_id = disk.id();
     bump_root_cache_gen(disk_id);
     file_record_cache_invalidate_path(disk_id, name);
     file_record_cache_insert(disk_id, name, record);
