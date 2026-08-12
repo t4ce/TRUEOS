@@ -32,7 +32,6 @@ pub(crate) mod tlb;
 pub(crate) mod tlb_helper;
 pub(crate) mod tlb_smbios;
 pub(crate) mod ttstt;
-pub(crate) mod txt;
 pub(crate) mod update;
 pub(crate) mod vgpu;
 pub(crate) mod vid;

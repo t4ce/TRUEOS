@@ -55,7 +55,6 @@ const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"in
 const TOOL_JSON_SSH: &str = r#"{"type":"object","properties":{"endpoint":{"type":"string","description":"SSH target in [user@]host[:port] form. Port 22 is used when omitted."}},"required":["endpoint"],"additionalProperties":false}"#;
 const TOOL_JSON_SURF: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["https","http","file","html"],"description":"Surf input type."},"input":{"type":"string","description":"Host, URL, TRUEOSFS path, or inline HTML selected by subcommand."}},"required":["subcommand","input"],"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","smbios","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"action":{"type":"string","enum":["store"],"description":"Optional RAPL action when target=rapl."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
-const TOOL_JSON_TXT: &str = r#"{"type":"object","properties":{"file":{"type":"string","description":"Optional file path to open in the Blueprint terminal editor."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_TTS: &str = r#"{"type":"object","properties":{"text":{"type":"string","maxLength":8192,"description":"Text to synthesize asynchronously. The native backend performs G2P and splits it into ordered model chunks of at most 510 phonemes."},"voice":{"type":"string","description":"Kokoro voice name; defaults to af_heart."},"speed":{"type":"number","minimum":0.5,"maximum":2.0,"description":"Kokoro speech speed multiplier."}},"required":["text"],"additionalProperties":false}"#;
 const TOOL_JSON_STT: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path to a mono/stereo signed-16-bit PCM WAV file."},"language":{"type":"string","description":"Whisper language code or auto."},"translate":{"type":"boolean","description":"Translate recognized speech to English."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_VID: &str = r#"{"type":"object","properties":{"source":{"type":"string","enum":["fs","on","online"],"description":"Read an Annex-B asset from TRUEOSFS, or download the fixed online AVC1 MP4 asset."},"path":{"type":"string","description":"Optional TRUEOSFS Annex-B path when source=fs; defaults to x31_head_movie.annexb.h264."},"loop":{"type":"boolean","description":"Repeat playback while retaining the same UI4 Frame and window lifetime."}},"required":["source"],"additionalProperties":false}"#;
@@ -195,10 +194,6 @@ fn dispatch_ram(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
 fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::tlb::try_parse(spawner, io, &mut args)
-}
-
-fn dispatch_txt(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::txt::try_parse(spawner, io, rest)
 }
 
 fn dispatch_tts(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -472,15 +467,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_TLB),
     },
     BuiltinShell2CmdEntry {
-        name: "txt",
-        mode: "cmd",
-        color: Some(STATUS_ORANGE_RGB),
-        advertised: true,
-        handler: dispatch_txt,
-        tool_description: Some("Open a file in the txt Blueprint terminal editor."),
-        tool_parameters_json: Some(TOOL_JSON_TXT),
-    },
-    BuiltinShell2CmdEntry {
         name: "xhci",
         mode: "cmd",
         color: Some(STATUS_GRAY_RGB),
@@ -687,8 +673,8 @@ pub(crate) fn try_dispatch(
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
         "7z", "lsd", "rm", "mv", "sha", "disc", "cry", "backup", "install", "update", "hyper",
-        "surf", "net", "ssh", "qjs", "txt", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud",
-        "vid", "acpi", "tlb", "ram", "smp", "etc",
+        "surf", "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid",
+        "acpi", "tlb", "ram", "smp", "etc",
     ];
 
     let mut out = AllocString::new();

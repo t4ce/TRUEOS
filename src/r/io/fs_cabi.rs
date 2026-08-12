@@ -274,7 +274,10 @@ pub unsafe extern "C" fn trueos_cabi_log(
     // stream as well. The Apps area is commonly filtered more aggressively,
     // which otherwise hides startup failures before terminal handoff.
     if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
-        crate::log!("blueprint-app: vm{} {}: {}\n", vm_id, target, message);
+        // A Hull executes with a private kernel data image, so the ordinary
+        // log router is not the BSP's global stream. Forward through the Hull
+        // reporting path used by the loader itself.
+        crate::hv::hvlogf(format_args!("blueprint-app: vm{} {}: {}", vm_id, target, message));
     } else {
         crate::log!("blueprint-app: {}: {}\n", target, message);
     }
