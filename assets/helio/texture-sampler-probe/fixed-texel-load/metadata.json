@@ -7,7 +7,7 @@
     "sampled-rgba8-2d@0",
     "sampler@1"
   ],
-  "contract": "filtered-sample",
+  "contract": "fixed-texel-load",
   "device": {
     "device_id": 42880,
     "name": "Intel(R) Graphics (RPL-S)",
@@ -41,17 +41,17 @@
       "simd_width": 8,
       "stage": "fragment",
       "statistics": {
-        "Cycle Count": 786,
+        "Cycle Count": 846,
         "Fill Count": 0,
         "GRF registers": 0,
-        "Instruction Count": 7,
+        "Instruction Count": 17,
         "Loop Count": 0,
         "Max dispatch width": 16,
         "Max live registers": 7,
-        "Non SSA regs after NIR": 5,
+        "Non SSA regs after NIR": 6,
         "SEND Count": 2,
         "Scratch Memory Size": 0,
-        "Source hash": 3364886817,
+        "Source hash": 1392617000,
         "Spill Count": 0,
         "Workgroup Memory Size": 0
       }
@@ -62,27 +62,27 @@
       "simd_width": 16,
       "stage": "fragment",
       "statistics": {
-        "Cycle Count": 812,
+        "Cycle Count": 886,
         "Fill Count": 0,
         "GRF registers": 0,
-        "Instruction Count": 11,
+        "Instruction Count": 21,
         "Loop Count": 0,
         "Max dispatch width": 16,
         "Max live registers": 13,
-        "Non SSA regs after NIR": 5,
+        "Non SSA regs after NIR": 6,
         "SEND Count": 2,
         "Scratch Memory Size": 0,
-        "Source hash": 3364886817,
+        "Source hash": 1392617000,
         "Spill Count": 0,
         "Workgroup Memory Size": 0
       }
     }
   ],
   "native_bytes": {
-    "ps16": 160,
-    "ps8": 96,
+    "ps16": 256,
+    "ps8": 192,
     "vs": 176
   },
   "vertex_stride": 20,
-  "wgsl_fnv1a64": "0xd2a3b942fa0924b6"
+  "wgsl_fnv1a64": "0x0cfe4ddbc8858871"
 }

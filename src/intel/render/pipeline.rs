@@ -28,14 +28,35 @@ const fn sbe_swiz_first_payload_dw(artifact_native_fixed_function: bool) -> u32 
     }
 }
 
+/// 3DSTATE_WM barycentric interpolation payload required by a fragment
+/// executable with user varyings.
+///
+/// This follows the pixel-shader ABI, not the draw-source kind. HelioV's
+/// sampled shader is an ordinary VF-fed draw, but it consumes one perspective
+/// UV varying just as the artifact-native Churn shader consumes its inputs.
+const fn wm_barycentric_mode(num_varying_inputs: u8, force_barycentric_planes: bool) -> u32 {
+    if num_varying_inputs != 0 || force_barycentric_planes {
+        1 << 11
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod churn_sbe_swiz_tests {
-    use super::sbe_swiz_first_payload_dw;
+    use super::{sbe_swiz_first_payload_dw, wm_barycentric_mode};
 
     #[test]
     fn native_churn_routes_normal_and_material_identity() {
         assert_eq!(sbe_swiz_first_payload_dw(true), 0x0001_0000);
         assert_eq!(sbe_swiz_first_payload_dw(false), 0);
+    }
+
+    #[test]
+    fn sampled_fragment_varying_enables_perspective_pixel_payload() {
+        assert_eq!(wm_barycentric_mode(1, false), 1 << 11);
+        assert_eq!(wm_barycentric_mode(0, false), 0);
+        assert_eq!(wm_barycentric_mode(0, true), 1 << 11);
     }
 }
 
@@ -392,6 +413,8 @@ fn write_triangle_probe_state_with_flush(
     }
     let binding_table_entries = if draw.native.is_some() {
         4usize
+    } else if draw.sampled_texture.is_some() {
+        3usize
     } else {
         1usize
     };
@@ -567,10 +590,23 @@ fn write_triangle_probe_state_with_flush(
                 raw2[0], raw2[1], raw2[2], raw2[3], raw2[7], raw2[8], raw2[9], raw2[11],
             );
         }
+    } else if let Some(texture) = draw.sampled_texture {
+        let start = surface_state_offset / 4 + 2 * 16;
+        write_triangle_sampled_rgba8_surface_state(
+            &mut dwords[start..start + 16],
+            texture,
+        )?;
     }
 
     let sampler = &mut dwords[sampler_state_offset / 4..sampler_state_offset / 4 + 4];
     sampler.fill(0);
+    if let Some(texture) = draw.sampled_texture
+        && texture.sampler_flags
+            != (crate::gpu::vgpu::SAMPLER_ADDRESS_U_REPEAT
+                | crate::gpu::vgpu::SAMPLER_ADDRESS_V_REPEAT)
+    {
+        return Err("probe-sampler-mode");
+    }
 
     let blend = &mut dwords[blend_state_offset / 4..blend_state_offset / 4 + 16];
     blend.fill(0);
@@ -713,6 +749,38 @@ fn write_triangle_raw_buffer_surface_state(
     Ok(())
 }
 
+fn write_triangle_sampled_rgba8_surface_state(
+    surface: &mut [u32],
+    texture: TriangleSampledTextureBinding,
+) -> Result<(), &'static str> {
+    if surface.len() != 16
+        || texture.width == 0
+        || texture.height == 0
+        || texture.pitch < texture.width.saturating_mul(4)
+    {
+        return Err("probe-sampled-texture-surface");
+    }
+    surface.fill(0);
+    surface[0] = (SURFTYPE_2D << 29)
+        | (SURFACE_FORMAT_R8G8B8A8_UNORM << 18)
+        | (SURFACE_HALIGN_4 << 14)
+        | (SURFACE_VALIGN_4 << 16);
+    surface[1] = (RENDER_MOCS << 24)
+        // TGL/ADL requires this for UNORM surfaces, including sampler reads.
+        // Omitting it is not a legal way to describe a linear RGBA8 texture.
+        | (1 << 31);
+    surface[2] = texture.width.saturating_sub(1)
+        | (texture.height.saturating_sub(1) << 16);
+    surface[3] = texture.pitch.saturating_sub(1);
+    surface[7] = (SHADER_CHANNEL_ALPHA << 16)
+        | (SHADER_CHANNEL_BLUE << 19)
+        | (SHADER_CHANNEL_GREEN << 22)
+        | (SHADER_CHANNEL_RED << 25);
+    surface[8] = texture.gpu_addr as u32;
+    surface[9] = (texture.gpu_addr >> 32) as u32;
+    Ok(())
+}
+
 #[cfg(test)]
 mod churn_raw_surface_tests {
     use super::{
@@ -775,6 +843,32 @@ mod churn_raw_surface_tests {
             ),
             Err("probe-native-buffer-surface")
         );
+    }
+}
+
+#[cfg(test)]
+mod sampled_rgba8_surface_tests {
+    use super::{
+        RENDER_MOCS, TriangleSampledTextureBinding, write_triangle_sampled_rgba8_surface_state,
+    };
+
+    #[test]
+    fn enables_the_adls_unorm_sampler_path() {
+        let mut surface = [0u32; 16];
+        write_triangle_sampled_rgba8_surface_state(
+            &mut surface,
+            TriangleSampledTextureBinding {
+                gpu_addr: 0x1234_5000,
+                width: 16,
+                height: 16,
+                pitch: 64,
+                sampler_flags: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(surface[1], (RENDER_MOCS << 24) | (1 << 31));
+        assert_eq!(surface[8], 0x1234_5000);
+        assert_eq!(surface[9], 0);
     }
 }
 
@@ -1002,6 +1096,7 @@ mod retained_native_matrix_draw_contract_tests {
             }),
             indirect_args_gpu_addr: Some(INDIRECT_GPU),
             native: Some(native),
+            sampled_texture: None,
             state_gpu_addr: 0x2600_0000,
             rt_gpu_addr: 0x2700_0000,
             rt_surface_format: 0,
@@ -1481,14 +1576,17 @@ fn encode_triangle_probe_batch(
     }
     let vs_ksp_offset = shader_layout.vs.code_offset_bytes + shader_layout.vs.ksp_offset_bytes;
     let ps_ksp_offset = shader_layout.ps.code_offset_bytes + shader_layout.ps.ksp_offset_bytes;
-    let sbe_vertex_read_offset = if (mesa_host_fixed_function && !artifact_native_fixed_function)
+    let host_pipeline_has_no_varyings = mesa_host_fixed_function
+        && !artifact_native_fixed_function
+        && pipeline.ps.meta.num_varying_inputs == 0;
+    let sbe_vertex_read_offset = if host_pipeline_has_no_varyings
         || backend_probe_mode.force_sbe_read0()
     {
         0
     } else {
         front_end_contract.sbe_read_offset as u32
     };
-    let sbe_vertex_read_length = if (mesa_host_fixed_function && !artifact_native_fixed_function)
+    let sbe_vertex_read_length = if host_pipeline_has_no_varyings
         || backend_probe_mode.force_sbe_read0()
     {
         0
@@ -1687,17 +1785,13 @@ fn encode_triangle_probe_batch(
     // Mesa's simple-shader path emits a nearly all-default WM packet here.
     // Keep this dedicated triangle path equally boring rather than forcing
     // point-rule / line-AA bits that the host reference never asked for.
-    // Churn's authenticated fragment ISA starts with a perspective-pixel
-    // barycentric payload read.  The empty leading draw never launches a PS,
-    // which hid this omission until the first live retained group.  Program
-    // the payload mode from the native shader contract; the probe override is
-    // retained for the synthetic diagnostic shaders.
-    let wm_barycentric_mode =
-        if artifact_native_fixed_function || backend_probe_mode.force_ps_bary_planes() {
-            1 << 11
-        } else {
-            0
-        };
+    // Program interpolation from the fragment executable ABI. HelioV's
+    // sampled shader is not an artifact-native Churn draw, but it still reads
+    // a perspective UV varying and therefore needs the same pixel payload.
+    let wm_barycentric_mode = wm_barycentric_mode(
+        pipeline.ps.meta.num_varying_inputs,
+        backend_probe_mode.force_ps_bary_planes(),
+    );
     let force_wm_thread_dispatch = (matches!(backend_probe_mode, BackendProbeMode::WmLateReemit)
         || (batch_mode.vf_synthesized_vue()
             && !mesa_simple_rect_stack
@@ -2387,6 +2481,30 @@ fn encode_triangle_probe_batch(
                 VFCOMP_STORE_SRC,
                 VFCOMP_STORE_1_FP,
             )?,
+            TriangleVertexFormat::PosUv => {
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    0,
+                    0,
+                    SURFACE_FORMAT_R32G32B32_FLOAT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_1_FP,
+                )?;
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    0,
+                    12,
+                    SURFACE_FORMAT_R32G32_FLOAT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_1_FP,
+                )?;
+            }
             TriangleVertexFormat::PosNormal => {
                 push_vertex_element_state(
                     batch_dwords,
@@ -3355,7 +3473,10 @@ fn encode_triangle_probe_batch(
 
         log_batch_offset(cursor, "3DSTATE_WM verified-host-tail");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_WM)?;
-        push(batch_dwords, &mut cursor, 0x8000_0040)?;
+        // This late verified-host packet supersedes the earlier WM state.
+        // Preserve the shader-derived barycentric mode instead of silently
+        // reverting VF-fed sampled shaders to a no-varying payload.
+        push(batch_dwords, &mut cursor, 0x8000_0040 | wm_barycentric_mode)?;
         log_batch_offset(cursor, "3DSTATE_PS_BLEND verified-host-tail");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_BLEND)?;
         push(batch_dwords, &mut cursor, 0x518C_6200)?;

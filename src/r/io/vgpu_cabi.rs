@@ -241,7 +241,10 @@ pub(crate) fn broker_ui4_indexed_submit(
     queue: u64,
     draw: v::vgpu::IndexedDraw,
 ) -> Result<v::vgpu::TimelinePoint, i32> {
-    if draw.reserved != 0 {
+    if draw.reserved != 0
+        || draw.texture_reserved != 0
+        || draw.sampler_flags & !v::vgpu::SAMPLER_FLAGS_ALL != 0
+    {
         return Err(-22);
     }
     let owner = ui4_owner(principal)?;
@@ -260,6 +263,11 @@ pub(crate) fn broker_ui4_indexed_submit(
             first_index: draw.first_index,
             base_vertex: draw.base_vertex,
             clear_rgba8_srgb: draw.clear_rgba8_srgb,
+            sampled_texture: BufferHandle::from_raw(draw.sampled_texture),
+            texture_width: draw.texture_width,
+            texture_height: draw.texture_height,
+            texture_pitch: draw.texture_pitch,
+            sampler_flags: draw.sampler_flags,
         },
     )
     .map_err(|error| error.errno())?;

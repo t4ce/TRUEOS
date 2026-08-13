@@ -36,9 +36,16 @@ const BUFFER_USAGE_ALL: u32 = BUFFER_USAGE_MAP_READ
     | BUFFER_USAGE_COPY_DST
     | BUFFER_USAGE_VERTEX
     | BUFFER_USAGE_INDEX;
+pub(crate) const SAMPLER_FLAGS_ALL: u32 = 0xF;
+pub(crate) const SAMPLER_ADDRESS_U_REPEAT: u32 = 1 << 0;
+pub(crate) const SAMPLER_ADDRESS_V_REPEAT: u32 = 1 << 1;
 
 pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64: u64 =
     0x1438_5963_136A_A36F;
+pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64: u64 =
+    0xD2A3_B942_FA09_24B6;
+pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64: u64 =
+    0x0CFE_4DDB_C885_8871;
 const SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR: u32 = u32::from_le_bytes([118, 221, 153, 255]);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -603,7 +610,10 @@ impl Quota {
     };
     const GUEST: Self = Self {
         memory_bytes: 32 * 1024 * 1024,
-        buffers: 64,
+        // WGPU engines intentionally split persistent scene state across many
+        // small buffers.  Keep the byte quota as the isolation boundary, but
+        // allow enough opaque handles for a normal Helio scene graph.
+        buffers: 256,
         queues: 4,
         contexts: 2,
     };
@@ -1644,7 +1654,10 @@ pub(crate) fn create_shader_module(
     device_handle: DeviceHandle,
     package_digest: u64,
 ) -> Result<ShaderModuleHandle, VgpuError> {
-    if package_digest != SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64 {
+    if package_digest != SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64
+        && package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
+        && package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64
+    {
         return Err(VgpuError::Unsupported);
     }
     let mut broker = BROKER.lock();
@@ -1703,6 +1716,15 @@ pub(crate) fn create_render_pipeline(
     if shader.epoch != device.epoch {
         return Err(VgpuError::InvalidHandle);
     }
+    if matches!(
+        shader.package_digest,
+        SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
+            | SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64
+    )
+        && (vertex_stride != 20 || position_offset != 0)
+    {
+        return Err(VgpuError::Unsupported);
+    }
     let record = RenderPipelineRecord {
         package_digest: shader.package_digest,
         vertex_stride,
@@ -1740,6 +1762,11 @@ pub(crate) struct Ui4IndexedDrawDescriptor {
     pub(crate) first_index: u32,
     pub(crate) base_vertex: i32,
     pub(crate) clear_rgba8_srgb: u32,
+    pub(crate) sampled_texture: BufferHandle,
+    pub(crate) texture_width: u32,
+    pub(crate) texture_height: u32,
+    pub(crate) texture_pitch: u32,
+    pub(crate) sampler_flags: u32,
 }
 
 pub(crate) struct Ui4SurfaceIndexedCompletion {
@@ -1747,6 +1774,19 @@ pub(crate) struct Ui4SurfaceIndexedCompletion {
     pub(crate) surface: SurfaceInfo,
     pub(crate) release: crate::intel::render::ResidentSceneReleaseFence,
     pub(crate) point: TimelinePoint,
+}
+
+enum IndexedVertexPayload {
+    Position(Vec<[f32; 3]>),
+    PositionUv(Vec<[f32; 5]>),
+}
+
+struct IndexedTexturePayload {
+    bytes: Vec<u8>,
+    width: u32,
+    height: u32,
+    pitch: u32,
+    sampler_flags: u32,
 }
 
 /// Resolve one bounded WGPU indexed draw into the existing authenticated
@@ -1762,7 +1802,19 @@ pub(crate) fn submit_ui4_indexed_draw(
     if draw.index_count == 0 || draw.base_vertex != 0 {
         return Err(VgpuError::Unsupported);
     }
-    let (window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, indices) = {
+    let (
+        window_id,
+        phys,
+        producer_gpu,
+        bytes,
+        width,
+        height,
+        pitch,
+        package_digest,
+        vertices,
+        indices,
+        texture,
+    ) = {
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
@@ -1773,9 +1825,28 @@ pub(crate) fn submit_ui4_indexed_draw(
         }
         let pipeline = lookup_render_pipeline(device, draw.pipeline)?;
         if pipeline.epoch != device.epoch
-            || pipeline.package_digest != SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64
+            || !matches!(
+                pipeline.package_digest,
+                SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64
+                    | SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
+                    | SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64
+            )
         {
             return Err(VgpuError::InvalidHandle);
+        }
+        let package_digest = pipeline.package_digest;
+        let textured = matches!(
+            package_digest,
+            SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
+                | SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64
+        );
+        if textured
+            != (draw.sampled_texture.raw() != 0
+                && draw.texture_width != 0
+                && draw.texture_height != 0
+                && draw.texture_pitch != 0)
+        {
+            return Err(VgpuError::Unsupported);
         }
         let vertex_stride = pipeline.vertex_stride as usize;
         let position_offset = pipeline.position_offset as usize;
@@ -1820,19 +1891,73 @@ pub(crate) fn submit_ui4_indexed_draw(
             if vertex_end > vertex_record.bytes { return Err(VgpuError::Unsupported); }
             let vertex_virt = match vertex_record.backing { BufferBacking::Dma { virt, .. } => virt, BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported) };
             crate::intel::dma_flush(unsafe { vertex_virt.add(draw.vertex_offset) }, vertex_end - draw.vertex_offset);
-            let mut vertices = Vec::with_capacity(vertex_count);
-            for vertex in 0..vertex_count {
-                let start = draw.vertex_offset + vertex * vertex_stride + position_offset;
-                let raw = unsafe { core::slice::from_raw_parts(vertex_virt.add(start), 12) };
-                vertices.push([
-                    f32::from_le_bytes(raw[0..4].try_into().unwrap()),
-                    f32::from_le_bytes(raw[4..8].try_into().unwrap()),
-                    f32::from_le_bytes(raw[8..12].try_into().unwrap()),
-                ]);
-            }
-            Ok((vertices, indices))
+            let vertices = if textured {
+                let mut vertices = Vec::with_capacity(vertex_count);
+                for vertex in 0..vertex_count {
+                    let start = draw.vertex_offset + vertex * vertex_stride + position_offset;
+                    let raw = unsafe { core::slice::from_raw_parts(vertex_virt.add(start), 20) };
+                    vertices.push([
+                        f32::from_le_bytes(raw[0..4].try_into().unwrap()),
+                        f32::from_le_bytes(raw[4..8].try_into().unwrap()),
+                        f32::from_le_bytes(raw[8..12].try_into().unwrap()),
+                        f32::from_le_bytes(raw[12..16].try_into().unwrap()),
+                        f32::from_le_bytes(raw[16..20].try_into().unwrap()),
+                    ]);
+                }
+                IndexedVertexPayload::PositionUv(vertices)
+            } else {
+                let mut vertices = Vec::with_capacity(vertex_count);
+                for vertex in 0..vertex_count {
+                    let start = draw.vertex_offset + vertex * vertex_stride + position_offset;
+                    let raw = unsafe { core::slice::from_raw_parts(vertex_virt.add(start), 12) };
+                    vertices.push([
+                        f32::from_le_bytes(raw[0..4].try_into().unwrap()),
+                        f32::from_le_bytes(raw[4..8].try_into().unwrap()),
+                        f32::from_le_bytes(raw[8..12].try_into().unwrap()),
+                    ]);
+                }
+                IndexedVertexPayload::Position(vertices)
+            };
+            let texture = if textured {
+                let texture_bytes = usize::try_from(
+                    u64::from(draw.texture_pitch)
+                        .checked_mul(u64::from(draw.texture_height))
+                        .ok_or(VgpuError::Unsupported)?,
+                )
+                .map_err(|_| VgpuError::Unsupported)?;
+                if draw.texture_pitch < draw.texture_width.saturating_mul(4)
+                    || !draw.texture_pitch.is_multiple_of(4)
+                    || draw.sampler_flags
+                        != (SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT)
+                {
+                    return Err(VgpuError::Unsupported);
+                }
+                let texture_record = lookup_buffer(device, draw.sampled_texture)?;
+                if texture_record.usage & BUFFER_USAGE_STORAGE == 0
+                    || texture_bytes > texture_record.bytes
+                {
+                    return Err(VgpuError::PermissionDenied);
+                }
+                let texture_virt = match texture_record.backing {
+                    BufferBacking::Dma { virt, .. } => virt,
+                    BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+                };
+                crate::intel::dma_flush(texture_virt, texture_bytes);
+                Some(IndexedTexturePayload {
+                    bytes: unsafe {
+                        core::slice::from_raw_parts(texture_virt, texture_bytes).to_vec()
+                    },
+                    width: draw.texture_width,
+                    height: draw.texture_height,
+                    pitch: draw.texture_pitch,
+                    sampler_flags: draw.sampler_flags,
+                })
+            } else {
+                None
+            };
+            Ok((vertices, indices, texture))
         })();
-        let (vertices, mut indices) = match copied {
+        let (vertices, mut indices, texture) = match copied {
             Ok(copied) => copied,
             Err(error) => {
                 lookup_surface_mut(device, draw.surface)?.in_flight = 1;
@@ -1845,27 +1970,89 @@ pub(crate) fn submit_ui4_indexed_draw(
         // winding. Canonicalize each projected triangle without changing its
         // topology; depth still resolves the visible voxel faces.
         for triangle in indices.chunks_exact_mut(3) {
-            let a = vertices[triangle[0] as usize];
-            let b = vertices[triangle[1] as usize];
-            let c = vertices[triangle[2] as usize];
+            let position = |index: u32| match &vertices {
+                IndexedVertexPayload::Position(vertices) => vertices[index as usize],
+                IndexedVertexPayload::PositionUv(vertices) => {
+                    let vertex = vertices[index as usize];
+                    [vertex[0], vertex[1], vertex[2]]
+                }
+            };
+            let a = position(triangle[0]);
+            let b = position(triangle[1]);
+            let c = position(triangle[2]);
             let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
             if area < 0.0 { triangle.swap(1, 2); }
         }
-        (window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, indices)
+        (
+            window_id,
+            phys,
+            producer_gpu,
+            bytes,
+            width,
+            height,
+            pitch,
+            package_digest,
+            vertices,
+            indices,
+            texture,
+        )
     };
 
     let destination = crate::intel::gpgpu::GpgpuRgba8Surface::new(phys, producer_gpu, bytes, width, height, pitch)
         .ok_or(VgpuError::Unsupported)?;
-    let mesh = match crate::intel::render::create_resident_triangle_mesh(&vertices, &indices) {
+    let mesh = match &vertices {
+        IndexedVertexPayload::Position(vertices) => {
+            crate::intel::render::create_resident_triangle_mesh(vertices, &indices)
+        }
+        IndexedVertexPayload::PositionUv(vertices) => {
+            crate::intel::render::create_resident_textured_triangle_mesh(vertices, &indices)
+        }
+    };
+    let mesh = match mesh {
         Ok(mesh) => mesh,
         Err(_) => {
             rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
             return Err(VgpuError::OutOfMemory);
         }
     };
+    let resident_texture = match texture {
+        Some(texture) => match crate::intel::render::create_resident_sampled_rgba8_texture(
+            texture.width,
+            texture.height,
+            texture.pitch,
+            texture.sampler_flags,
+            &texture.bytes,
+        ) {
+            Ok(texture) => Some(texture),
+            Err(_) => {
+                let _ = crate::intel::render::release_resident_triangle_mesh(&mesh);
+                rollback_indexed_submission_lease(
+                    principal,
+                    device_handle,
+                    queue_handle,
+                    draw.surface,
+                );
+                return Err(VgpuError::OutOfMemory);
+            }
+        },
+        None => None,
+    };
     let scene_draw = crate::intel::render::ResidentSceneDraw {
         mesh: &mesh,
         rgba: SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR.to_le_bytes(),
+        sampled_texture: resident_texture.as_ref(),
+        fragment_contract: match package_digest {
+            SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64 => {
+                crate::intel::render::ResidentSceneFragmentContract::ConstantRgba
+            }
+            SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64 => {
+                crate::intel::render::ResidentSceneFragmentContract::FilteredSample
+            }
+            SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64 => {
+                crate::intel::render::ResidentSceneFragmentContract::FixedTexelLoadProbe
+            }
+            _ => unreachable!("shader package was validated before resident draw creation"),
+        },
         viewport_translation_px: [0.0, 0.0],
     };
     let rendered = crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_direct_to_surface(
@@ -1874,15 +2061,18 @@ pub(crate) fn submit_ui4_indexed_draw(
         destination,
         false,
     );
-    let released_mesh = if rendered.is_ok() || matches!(rendered, Err("render-busy")) {
-        crate::intel::render::release_resident_triangle_mesh(&mesh)
+    let released_resources = if rendered.is_ok() || matches!(rendered, Err("render-busy")) {
+        let texture_released = resident_texture
+            .as_ref()
+            .is_none_or(crate::intel::render::release_resident_sampled_texture);
+        crate::intel::render::release_resident_triangle_mesh(&mesh) && texture_released
     } else {
         // Physical completion is ambiguous. Keep the resident geometry pinned
         // with the lost device instead of recycling storage still reachable by
         // Render0.
         false
     };
-    if matches!(rendered, Err("render-busy")) && released_mesh {
+    if matches!(rendered, Err("render-busy")) && released_resources {
         rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
         return Err(VgpuError::Busy);
     }
@@ -1891,7 +2081,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             .then_some(result.release_fence)
             .flatten()
     }).filter(|release| release.matches(phys, bytes));
-    let Some(release) = release.filter(|_| released_mesh) else {
+    let Some(release) = release.filter(|_| released_resources) else {
         let mut broker = BROKER.lock();
         if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
             device.lost = true;
@@ -1927,7 +2117,7 @@ pub(crate) fn submit_ui4_indexed_draw(
     crate::log_info!(target: "vgpu";
         "vgpu: indexed UI4 draw retired principal={:?} shader_package=fnv1a64:{:016X} pipeline={} vertex_buffer={} index_buffer={} indices={} target={}x{} timeline={} render_release={} path=opaque-wgpu-objects->resident-render0->ui4\n",
         principal,
-        SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64,
+        package_digest,
         draw.pipeline.raw(),
         draw.vertex_buffer.raw(),
         draw.index_buffer.raw(),
@@ -3337,6 +3527,11 @@ const fn quota_for(principal: Principal) -> Quota {
         Principal::RuntimeTest(_) => Quota::TEST,
     }
 }
+
+const _: () = {
+    assert!(Quota::GUEST.memory_bytes == 32 * 1024 * 1024);
+    assert!(Quota::GUEST.buffers == 256);
+};
 
 fn ensure_kernel_device(
     broker: &mut Broker,

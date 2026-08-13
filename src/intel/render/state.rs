@@ -88,6 +88,8 @@ enum TriangleVertexFormat {
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Float2,
     Float3,
+    /// One Float32x3 clip-space position and one Float32x2 texture coordinate.
+    PosUv,
     /// Helio Churn's immutable `@location(0) position` plus
     /// `@location(1) normal` input, both Float32x3.
     PosNormal,
@@ -97,6 +99,15 @@ enum TriangleVertexFormat {
 struct TriangleStorageBufferBinding {
     gpu_addr: u64,
     byte_len: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct TriangleSampledTextureBinding {
+    gpu_addr: u64,
+    width: u32,
+    height: u32,
+    pitch: u32,
+    sampler_flags: u32,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -136,6 +147,7 @@ struct TriangleDrawPrep {
     indirect_args_gpu_addr: Option<u64>,
     /// Present only after a complete artifact/native ABI validation.
     native: Option<TriangleNativeDrawContract>,
+    sampled_texture: Option<TriangleSampledTextureBinding>,
     state_gpu_addr: u64,
     rt_gpu_addr: u64,
     rt_surface_format: u32,
@@ -185,6 +197,8 @@ pub(crate) struct ResidentTriangleMesh {
     pub(crate) vertex_gpu_addr: u64,
     pub(crate) vertex_count: u32,
     pub(crate) vertex_bytes: u32,
+    pub(crate) vertex_stride: u32,
+    vertex_format: TriangleVertexFormat,
     pub(crate) index_gpu_addr: u64,
     pub(crate) index_count: u32,
     pub(crate) index_bytes: u32,
@@ -262,6 +276,20 @@ impl ResidentRenderBuffer {
         crate::intel::dma_flush(self.storage_virt, self.storage_bytes);
     }
 }
+
+/// Immutable RGBA8 texture copied into the render engine's persistent PPGTT.
+/// The vGPU broker creates this from a generic client buffer; neither this
+/// object nor the renderer knows anything about the originating application.
+pub(crate) struct ResidentSampledTexture {
+    pub(crate) storage: ResidentRenderBuffer,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch: u32,
+    pub(crate) sampler_flags: u32,
+}
+
+unsafe impl Send for ResidentSampledTexture {}
+unsafe impl Sync for ResidentSampledTexture {}
 
 // The authenticated instruction allocation is process-lifetime resident in
 // the GPGPU artifact catalog. Render adds one stable alias to its own PPGTT and
@@ -2126,10 +2154,13 @@ fn is_vf_streamout_submit_name(submit_name: &str) -> bool {
 }
 
 fn is_triangle_debug_submit_name(submit_name: &str) -> bool {
-    submit_name != "resident-scene"
+    matches!(
+        submit_name,
+        "resident-scene-fixed-texel-probe" | "resident-scene-filtered-sample"
+    ) || (submit_name != "resident-scene"
         && (is_surface_draw_submit_name(submit_name)
             || is_streamout_submit_name(submit_name)
-            || is_scratch_rt_submit_name(submit_name))
+            || is_scratch_rt_submit_name(submit_name)))
 }
 
 fn fragment_target_variant_base(submit_name: &str) -> Option<&str> {
@@ -2152,7 +2183,12 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
     }
     if matches!(
         submit_name,
-        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d" | "resident-scene"
+        "font-tessel-3d-once"
+            | "font-outline-gpu-mesh-3d"
+            | "font-resident-3d"
+            | "resident-scene"
+            | "resident-scene-fixed-texel-probe"
+            | "resident-scene-filtered-sample"
     ) || is_vs_draw_frontier_scratch_submit_name(submit_name)
         || is_font_vf_vue_ps_replay_submit_name(submit_name)
     {

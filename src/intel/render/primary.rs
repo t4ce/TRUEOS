@@ -283,9 +283,18 @@ pub(crate) fn submit_resident_font_mesh_once(
 pub(crate) struct ResidentSceneDraw<'a> {
     pub(crate) mesh: &'a ResidentTriangleMesh,
     pub(crate) rgba: [u8; 4],
+    pub(crate) sampled_texture: Option<&'a ResidentSampledTexture>,
+    pub(crate) fragment_contract: ResidentSceneFragmentContract,
     /// Per-draw translation applied by the fixed-function viewport transform.
     /// Resident vertex and index storage is not rewritten or re-uploaded.
     pub(crate) viewport_translation_px: [f32; 2],
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ResidentSceneFragmentContract {
+    ConstantRgba,
+    FilteredSample,
+    FixedTexelLoadProbe,
 }
 
 #[derive(Copy, Clone)]
@@ -1280,17 +1289,38 @@ fn stage_resident_scene_secondary(
     blend_mode: TriangleBlendProbeMode,
     depth_config: Option<TriangleDepthConfig>,
     rgba: [u8; 4],
+    sampled_texture: Option<&ResidentSampledTexture>,
+    fragment_contract: ResidentSceneFragmentContract,
     viewport_translation_px: [f32; 2],
     secondary_index: usize,
 ) -> Result<usize, &'static str> {
     draw.state_gpu_addr = state_gpu;
-    // The cache extractor now identifies this executable from the GEN
-    // assembly's mov(16)/sendc(16), rather than assuming the first fragment
-    // slice was SIMD16.  With SIMD16 as the only enabled width, variable pixel
-    // dispatch selects this executable through KSP0.
-    let pipeline = crate::intel::shader::triangle_pipeline_simd16();
-    let shader_layout =
-        upload_triangle_shader_pipeline_at(state_warm, pipeline, Some(rgba), state_gpu, false)?;
+    let pipeline = match (fragment_contract, sampled_texture.is_some()) {
+        (ResidentSceneFragmentContract::ConstantRgba, false) => {
+            crate::intel::shader::triangle_pipeline_simd16()
+        }
+        (ResidentSceneFragmentContract::FilteredSample, true) => {
+            crate::intel::shader::heliov_textured_pipeline()
+        }
+        (ResidentSceneFragmentContract::FixedTexelLoadProbe, true) => {
+            crate::intel::shader::heliov_texel_load_pipeline()
+        }
+        _ => return Err("scene-fragment-contract-texture-mismatch"),
+    };
+    draw.sampled_texture = sampled_texture.map(|texture| TriangleSampledTextureBinding {
+        gpu_addr: texture.storage.gpu_base(),
+        width: texture.width,
+        height: texture.height,
+        pitch: texture.pitch,
+        sampler_flags: texture.sampler_flags,
+    });
+    let shader_layout = upload_triangle_shader_pipeline_at(
+        state_warm,
+        pipeline,
+        sampled_texture.is_none().then_some(rgba),
+        state_gpu,
+        false,
+    )?;
     let probe_state = write_triangle_probe_state_unflushed(
         state_warm,
         draw,
@@ -1625,6 +1655,8 @@ fn submit_resident_scene_geometry_batched(
         TriangleBlendProbeMode::MesaZeroedState,
         clear_depth,
         clear,
+        None,
+        ResidentSceneFragmentContract::ConstantRgba,
         [0.0, 0.0],
         0,
     )?;
@@ -1668,6 +1700,8 @@ fn submit_resident_scene_geometry_batched(
             blend_mode,
             draw_depth,
             scene_draw.rgba,
+            scene_draw.sampled_texture,
+            scene_draw.fragment_contract,
             scene_draw.viewport_translation_px,
             secondary_count,
         )?;
@@ -1677,26 +1711,40 @@ fn submit_resident_scene_geometry_batched(
     let primary_bytes = encode_resident_scene_primary_batch(warm, secondary_count)?;
     crate::intel::dma_flush(warm.batch_virt, primary_bytes);
     if !RESIDENT_SCENE_BATCH_PATH_LOGGED.swap(true, Ordering::AcqRel) {
+        let textured = draws.iter().any(|draw| draw.sampled_texture.is_some());
         crate::log_info!(
             target: "render";
-            "resident-scene: frame launch path=helio-indexed-indirect-v1->one-guc-scene-schedule draws={} secondaries={} command_owner=helio-gpu-record draw_parameter_translation=0 guc_role=schedule-only render_submits=1 per_mesh_context_rebuilds=0 target={}x{} fragment_contract=standalone-simd16-corrected dispatch=010 ksp0=simd16 ksp1=off ksp2=off vector_mask=1 color=specialized-per-draw\n",
+            "resident-scene: frame launch path=helio-indexed-indirect-v1->one-guc-scene-schedule draws={} secondaries={} command_owner=helio-gpu-record draw_parameter_translation=0 guc_role=schedule-only render_submits=1 per_mesh_context_rebuilds=0 target={}x{} fragment_contract={} dispatch=010 ksp0=simd16 ksp1=off ksp2=off vector_mask=1 color={}\n",
             draws.len(),
             secondary_count,
             target_width,
             target_height,
+            if textured { "sampled-rgba8-simd16" } else { "constant-rgba-simd16" },
+            if textured { "sampled-texture" } else { "specialized-per-draw" },
         );
     }
     let prepare_us = crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
+    let submit_name = if draws.iter().any(|draw| {
+        draw.fragment_contract == ResidentSceneFragmentContract::FixedTexelLoadProbe
+    }) {
+        "resident-scene-fixed-texel-probe"
+    } else if draws.iter().any(|draw| {
+        draw.fragment_contract == ResidentSceneFragmentContract::FilteredSample
+    }) {
+        "resident-scene-filtered-sample"
+    } else {
+        "resident-scene"
+    };
     let completed = submit_warm_render_batch(
         &render_lease,
         dev,
         warm,
         RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
         RESULT_SLOT_SCENE_FRAME_DWORD,
-        "resident-scene",
+        submit_name,
     );
     if !completed {
-        record_render_engine_after_nonretired_submit(dev, "resident-scene");
+        record_render_engine_after_nonretired_submit(dev, submit_name);
     }
     let (gpu_poll_us, gpu_poll_iters) = resident_scene_last_gpu_poll_profile();
     Ok(ResidentSceneGeometryResult {
@@ -1779,6 +1827,8 @@ fn submit_resident_churn_forward_geometry_batched(
         TriangleBlendProbeMode::MesaZeroedState,
         Some(clear_depth),
         clear,
+        None,
+        ResidentSceneFragmentContract::ConstantRgba,
         [0.0, 0.0],
         clear_secondary_index,
     )?;
@@ -1832,6 +1882,8 @@ fn submit_resident_churn_forward_geometry_batched(
                     TriangleBlendProbeMode::MesaZeroedState,
                     Some(draw_depth),
                     resident.material_rgba(group % trueos_helio_runtime::churn::MATERIAL_COUNT),
+                    None,
+                    ResidentSceneFragmentContract::ConstantRgba,
                     [0.0, 0.0],
                     secondary_index,
                 )?;

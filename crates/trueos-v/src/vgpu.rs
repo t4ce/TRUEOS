@@ -36,6 +36,21 @@ pub const SURFACE_FORMAT_RGBA8_UNORM_SRGB: u32 = 1;
 /// The value is the stable FNV-1a digest of the exact WGSL accepted by the
 /// HelioV adapter, not an application/demo selector.
 pub const SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64: u64 = 0x1438_5963_136A_A36F;
+/// Authenticated WGPU package for one Float32x3 position, one Float32x2 UV,
+/// and a fragment-stage sampled RGBA8 texture plus filtering sampler.
+pub const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64: u64 = 0xD2A3_B942_FA09_24B6;
+/// Diagnostic-only fixed mip-0 texel load used to isolate the Intel sampler
+/// surface/message contract from implicit derivatives and filtering.
+pub const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64: u64 =
+    0x0CFE_4DDB_C885_8871;
+pub const SAMPLER_ADDRESS_U_REPEAT: u32 = 1 << 0;
+pub const SAMPLER_ADDRESS_V_REPEAT: u32 = 1 << 1;
+pub const SAMPLER_MAG_LINEAR: u32 = 1 << 2;
+pub const SAMPLER_MIN_LINEAR: u32 = 1 << 3;
+pub const SAMPLER_FLAGS_ALL: u32 = SAMPLER_ADDRESS_U_REPEAT
+    | SAMPLER_ADDRESS_V_REPEAT
+    | SAMPLER_MAG_LINEAR
+    | SAMPLER_MIN_LINEAR;
 const VVIDEO_PAGE_BYTES: usize = 4096;
 
 /// Return the byte length of the latest cached, best-effort vGPU memory snapshot.
@@ -177,6 +192,14 @@ pub struct IndexedDraw {
     pub base_vertex: i32,
     pub clear_rgba8_srgb: u32,
     pub reserved: u32,
+    /// Optional buffer-backed tightly packed RGBA8 sampled texture. The
+    /// authenticated shader package decides whether this must be present.
+    pub sampled_texture: u64,
+    pub texture_width: u32,
+    pub texture_height: u32,
+    pub texture_pitch: u32,
+    pub sampler_flags: u32,
+    pub texture_reserved: u32,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -479,6 +502,7 @@ impl Device {
         draw.vertex_buffer = vertex_buffer.0;
         draw.index_buffer = index_buffer.0;
         draw.reserved = 0;
+        draw.texture_reserved = 0;
         let mut point = TimelinePoint::default();
         rc_result(unsafe {
             vcabi::trueos_cabi_vgpu_ui4_indexed_submit(
@@ -702,7 +726,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<BufferInfo>(), 16);
         assert_eq!(core::mem::size_of::<BufferSlice>(), 24);
         assert_eq!(core::mem::size_of::<SurfaceInfo>(), 32);
-        assert_eq!(core::mem::size_of::<IndexedDraw>(), 72);
+        assert_eq!(core::mem::size_of::<IndexedDraw>(), 104);
         assert_eq!(core::mem::size_of::<TimelinePoint>(), 16);
         assert_eq!(core::mem::size_of::<TimelineStatus>(), 32);
     }

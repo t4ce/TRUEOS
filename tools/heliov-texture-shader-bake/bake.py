@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 from pathlib import Path
@@ -15,8 +16,8 @@ import tempfile
 TRUEOS = Path(__file__).resolve().parents[2]
 HELIO = TRUEOS.parent / "Helio"
 BLUEPRINTS = TRUEOS.parent / "TRUEOS-Blueprints"
-WGSL = BLUEPRINTS / "apps/HelioV/src/voxel_textured.wgsl"
-OUT = TRUEOS / "assets/helio/heliov-textured-mesh"
+DEFAULT_WGSL = BLUEPRINTS / "apps/HelioV/src/voxel_textured.wgsl"
+DEFAULT_OUT = TRUEOS / "assets/helio/heliov-textured-mesh"
 BAKER_PATH = TRUEOS / "tools/helio-intel-bake/bake.py"
 
 
@@ -35,14 +36,34 @@ def replace_once(source: str, old: str, new: str) -> str:
     return source.replace(old, new)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Bake one authenticated HelioV texture shader package",
+    )
+    parser.add_argument("--wgsl", type=Path, default=DEFAULT_WGSL)
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--stem", default="voxel_textured")
+    parser.add_argument(
+        "--contract",
+        default="filtered-sample",
+        choices=("filtered-sample", "fixed-texel-load"),
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    wgsl = args.wgsl.expanduser().resolve()
+    out = args.out.expanduser().resolve()
+    if not wgsl.is_file():
+        raise SystemExit(f"missing WGSL source: {wgsl}")
     baker = load_baker()
     with tempfile.TemporaryDirectory(prefix="heliov-texture-bake-") as raw:
         work = Path(raw)
-        vs_spv = work / "voxel-textured.vs.spv"
-        fs_spv = work / "voxel-textured.fs.spv"
-        baker.naga_compile(WGSL, "vs_main", vs_spv)
-        baker.naga_compile(WGSL, "fs_main", fs_spv)
+        vs_spv = work / f"{args.stem}.vs.spv"
+        fs_spv = work / f"{args.stem}.fs.spv"
+        baker.naga_compile(wgsl, "vs_main", vs_spv)
+        baker.naga_compile(wgsl, "fs_main", fs_spv)
 
         dumper_source = work / "textured_pipeline_dump.c"
         baker.make_compile_only_dumper(dumper_source)
@@ -116,25 +137,26 @@ def main() -> None:
         device, executables = baker.parse_compile_log(log.read_text())
         vs, ps8, ps16 = baker.extract_native(exec_dir, work / "native")
 
-        OUT.mkdir(parents=True, exist_ok=True)
-        (OUT / "voxel_textured.vs.bin").write_bytes(vs)
-        (OUT / "voxel_textured.ps.simd8.bin").write_bytes(ps8)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"{args.stem}.vs.bin").write_bytes(vs)
+        (out / f"{args.stem}.ps.simd8.bin").write_bytes(ps8)
         if ps16 is not None:
-            (OUT / "voxel_textured.ps.simd16.bin").write_bytes(ps16)
-        shutil.copy2(WGSL, OUT / "voxel_textured.wgsl")
-        shutil.copy2(log, OUT / "compile.log")
+            (out / f"{args.stem}.ps.simd16.bin").write_bytes(ps16)
+        shutil.copy2(wgsl, out / f"{args.stem}.wgsl")
+        shutil.copy2(log, out / "compile.log")
         for assembly in exec_dir.glob("*_GEN_Assembly.txt"):
-            shutil.copy2(assembly, OUT / assembly.name)
+            shutil.copy2(assembly, out / assembly.name)
         metadata = {
+            "contract": args.contract,
             "device": device,
             "executables": list(executables.values()),
-            "wgsl_fnv1a64": f"0x{fnv1a64(WGSL.read_bytes()):016x}",
+            "wgsl_fnv1a64": f"0x{fnv1a64(wgsl.read_bytes()):016x}",
             "vertex_stride": 20,
             "attributes": ["float32x3@0", "float32x2@12"],
             "bindings": ["sampled-rgba8-2d@0", "sampler@1"],
             "native_bytes": {"vs": len(vs), "ps8": len(ps8), "ps16": len(ps16 or b"")},
         }
-        (OUT / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+        (out / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
         print(json.dumps(metadata, indent=2, sort_keys=True))
 
 

@@ -510,6 +510,7 @@ fn prepare_triangle_draw_resources_for_geometry(
         index_buffer: None,
         indirect_args_gpu_addr: None,
         native: None,
+        sampled_texture: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -626,6 +627,7 @@ fn prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
         index_buffer: None,
         indirect_args_gpu_addr: None,
         native: None,
+        sampled_texture: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -709,6 +711,7 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
         }),
         indirect_args_gpu_addr: None,
         native: None,
+        sampled_texture: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -790,6 +793,44 @@ pub(crate) fn create_resident_triangle_mesh(
     {
         return Err("resident-triangle-shape");
     }
+    create_resident_triangle_mesh_typed(
+        draw_vertices,
+        draw_indices,
+        TriangleVertexFormat::Float3,
+    )
+}
+
+/// Upload the authenticated WGPU position+UV vertex contract without
+/// discarding the second attribute at the broker boundary.
+pub(crate) fn create_resident_textured_triangle_mesh(
+    draw_vertices: &[[f32; 5]],
+    draw_indices: &[u32],
+) -> Result<ResidentTriangleMesh, &'static str> {
+    if draw_vertices.len() < 3
+        || draw_indices.is_empty()
+        || !draw_indices.len().is_multiple_of(3)
+        || draw_vertices
+            .iter()
+            .flatten()
+            .any(|component| !component.is_finite())
+        || draw_indices
+            .iter()
+            .any(|index| *index as usize >= draw_vertices.len())
+    {
+        return Err("resident-textured-triangle-shape");
+    }
+    create_resident_triangle_mesh_typed(
+        draw_vertices,
+        draw_indices,
+        TriangleVertexFormat::PosUv,
+    )
+}
+
+fn create_resident_triangle_mesh_typed<T: Copy>(
+    draw_vertices: &[T],
+    draw_indices: &[u32],
+    vertex_format: TriangleVertexFormat,
+) -> Result<ResidentTriangleMesh, &'static str> {
     if crate::intel::claimed_device().is_none() {
         return Err("no-device");
     }
@@ -800,7 +841,7 @@ pub(crate) fn create_resident_triangle_mesh(
 
     let vertex_bytes = draw_vertices
         .len()
-        .checked_mul(core::mem::size_of::<[f32; 3]>())
+        .checked_mul(core::mem::size_of::<T>())
         .ok_or("resident-triangle-bytes")?;
     let index_offset = crate::intel::align_up(vertex_bytes, 64).ok_or("resident-triangle-align")?;
     let index_bytes = draw_indices
@@ -870,6 +911,9 @@ pub(crate) fn create_resident_triangle_mesh(
         vertex_gpu_addr: gpu_base,
         vertex_count,
         vertex_bytes: vertex_bytes_u32,
+        vertex_stride: u32::try_from(core::mem::size_of::<T>())
+            .map_err(|_| "resident-triangle-count")?,
+        vertex_format,
         index_gpu_addr,
         index_count,
         index_bytes: index_bytes_u32,
@@ -2209,6 +2253,7 @@ fn prepare_resident_churn_forward_draw(
                 + (group * trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
         ),
         native: Some(resident.native_vf),
+        sampled_texture: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -2255,6 +2300,7 @@ fn prepare_resident_churn_expanded_draw(
                 + (group * trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
         ),
         native: None,
+        sampled_texture: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -2456,6 +2502,40 @@ pub(crate) fn allocate_resident_render_buffer(
     })
 }
 
+pub(crate) fn create_resident_sampled_rgba8_texture(
+    width: u32,
+    height: u32,
+    pitch: u32,
+    sampler_flags: u32,
+    bytes: &[u8],
+) -> Result<ResidentSampledTexture, &'static str> {
+    if width == 0
+        || height == 0
+        || pitch < width.saturating_mul(4)
+        || !pitch.is_multiple_of(4)
+        || sampler_flags & !crate::gpu::vgpu::SAMPLER_FLAGS_ALL != 0
+        || usize::try_from(u64::from(pitch) * u64::from(height)).ok() != Some(bytes.len())
+    {
+        return Err("resident-texture-shape");
+    }
+    let storage = allocate_resident_render_buffer(bytes.len())?;
+    if !storage.write_and_flush(0, bytes) {
+        let _ = release_resident_render_buffer(&storage);
+        return Err("resident-texture-write");
+    }
+    Ok(ResidentSampledTexture {
+        storage,
+        width,
+        height,
+        pitch,
+        sampler_flags,
+    })
+}
+
+pub(crate) fn release_resident_sampled_texture(texture: &ResidentSampledTexture) -> bool {
+    release_resident_render_buffer(&texture.storage)
+}
+
 /// Tear down a resident render resource. Spirit intentionally never calls
 /// this after publishing its runtime catalog, but failed cold-path loads use
 /// it to avoid leaving a partial allocation behind.
@@ -2589,9 +2669,9 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
     }
     Some(TriangleDrawPrep {
         vertex_count: mesh.index_count,
-        vertex_stride: core::mem::size_of::<[f32; 3]>() as u32,
+        vertex_stride: mesh.vertex_stride,
         vertex_buffer_bytes: mesh.vertex_bytes,
-        vertex_format: TriangleVertexFormat::Float3,
+        vertex_format: mesh.vertex_format,
         vertex_gpu_addr: mesh.vertex_gpu_addr,
         index_buffer: Some(TriangleIndexBufferPrep {
             index_count: mesh.index_count,
@@ -2600,6 +2680,7 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
         }),
         indirect_args_gpu_addr: None,
         native: None,
+        sampled_texture: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -2648,6 +2729,7 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
         index_buffer: None,
         indirect_args_gpu_addr: None,
         native: None,
+        sampled_texture: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -3071,6 +3153,7 @@ fn prepare_vf_streamout_proof_resources(
         index_buffer: None,
         indirect_args_gpu_addr: None,
         native: None,
+        sampled_texture: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,

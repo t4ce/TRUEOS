@@ -1174,6 +1174,8 @@ async fn render_frame(
         .map(|triangle| crate::intel::render::ResidentSceneDraw {
             mesh: &triangle.mesh,
             rgba: triangle.rgba,
+            sampled_texture: None,
+            fragment_contract: crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
             viewport_translation_px: [0.0, 0.0],
         })
         .collect::<Vec<_>>();

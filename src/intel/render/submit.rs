@@ -562,7 +562,7 @@ fn submit_warm_render_batch(
         let sc_extra = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA);
         let sc_extra2 = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2);
         intel_render_focus_log!(
-            "{} stall-detail acthd_batch_off=0x{:08X} ipehr=0x{:08X} instdone_geom=0x{:08X} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X}\n",
+            "{} stall-detail acthd_batch_off=0x{:08X} ipehr=0x{:08X} instdone_geom=0x{:08X} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} sampler_instdone=0x{:08X} row_instdone=0x{:08X} fault_gen12=0x{:08X}\n",
             submit_name,
             acthd_batch_off,
             crate::intel::mmio_read(dev, RCS_RING_IPEHR),
@@ -570,6 +570,9 @@ fn submit_warm_render_batch(
             sc_instdone,
             sc_extra,
             sc_extra2,
+            crate::intel::mmio_read(dev, SAMPLER_INSTDONE),
+            crate::intel::mmio_read(dev, ROW_INSTDONE),
+            crate::intel::mmio_read(dev, GEN12_RING_FAULT_REG),
         );
         log_not_done_units(submit_name, "stall-geom-not-done", instdone_geom, GEOM_INSTDONE_BITS);
         log_not_done_units(submit_name, "stall-sc-not-done", sc_instdone, SC_INSTDONE_BITS);
