@@ -359,8 +359,11 @@ fn direct_rcs_encode_sprite_quad_worklist_batch(
     if desc_count == 0 || sprite_quad_worklist_walker_count(desc_count) != desc_count {
         return false;
     }
-    let payload_end = SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES
-        + desc_count * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
+    let Some(payload_end) = SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES.checked_add(
+        desc_count.saturating_mul(SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES),
+    ) else {
+        return false;
+    };
     if payload_end > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
@@ -393,8 +396,12 @@ fn direct_rcs_encode_sprite_quad_worklist_batch(
         return false;
     }
     for descriptor in 0..desc_count {
-        let payload_offset = SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES
-            + descriptor * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
+        let Some(payload_offset) = sprite_quad_worklist_payload_offset(
+            SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES,
+            descriptor,
+        ) else {
+            return false;
+        };
         let payload_params = SpriteQuadWorklistRgba8Params {
             desc_base: params.desc_base.saturating_add(descriptor as u32),
             desc_count: 1,
@@ -454,8 +461,11 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
     else {
         return false;
     };
-    let payload_end = payload_base
-        .saturating_add(total_descs.saturating_mul(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES));
+    let Some(payload_end) = payload_base.checked_add(
+        total_descs.saturating_mul(SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES),
+    ) else {
+        return false;
+    };
     if payload_end > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
@@ -497,8 +507,12 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
             return false;
         }
         for descriptor in 0..run.descs.len() {
-            let payload_offset = payload_base
-                + desc_base.saturating_add(descriptor) * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
+            let Some(payload_offset) = sprite_quad_worklist_payload_offset(
+                payload_base,
+                desc_base.saturating_add(descriptor),
+            ) else {
+                return false;
+            };
             let params = SpriteQuadWorklistRgba8Params {
                 src_gpu: run.src.gpu,
                 dst_gpu: dst.gpu,
@@ -821,8 +835,12 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
             else {
                 return false;
             };
-            let payload_offset = payload_base
-                + descriptor_base.saturating_add(descriptor) * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
+            let Some(payload_offset) = sprite_quad_worklist_payload_offset(
+                payload_base,
+                descriptor_base.saturating_add(descriptor),
+            ) else {
+                return false;
+            };
             ok &= direct_rcs_push_sprite_quad_worklist_walker(
                 batch,
                 &mut cursor,
@@ -888,8 +906,12 @@ fn direct_rcs_encode_sprite_quad_worklist_command_stream(
         return false;
     };
     for descriptor in 0..desc_count {
-        let payload_offset = SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES
-            + descriptor * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
+        let Some(payload_offset) = sprite_quad_worklist_payload_offset(
+            SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES,
+            descriptor,
+        ) else {
+            return false;
+        };
         ok &= direct_rcs_push_sprite_quad_worklist_walker(
             batch,
             &mut cursor,

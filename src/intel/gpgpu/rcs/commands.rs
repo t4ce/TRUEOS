@@ -187,7 +187,13 @@ fn direct_rcs_push_sprite_quad_worklist_walker(
     group_y: u32,
     right_mask: u32,
 ) -> bool {
-    if group_x == 0 || group_y == 0 || group_x as usize > SPRITE_QUAD_WORKLIST_MAX_GROUPS_PER_WALKER
+    if group_x == 0
+        || group_y == 0
+        || group_x as usize > SPRITE_QUAD_WORKLIST_MAX_GROUPS_PER_WALKER
+        || !payload_offset.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES)
+        || payload_offset
+            .checked_add(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES)
+            .is_none_or(|end| end > DIRECT_RCS_BATCH_BYTES)
     {
         return false;
     }

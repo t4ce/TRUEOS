@@ -9,6 +9,7 @@ extern crate alloc;
 pub mod battle;
 pub mod churn;
 pub mod pendulum_bigcloth;
+pub mod picasso_scene;
 pub mod portal_rooms;
 pub mod retained_transform;
 pub mod scene_db;

@@ -27,8 +27,13 @@ static PTHREAD_TLS_VALUES: Mutex<FixedKeyMap<PthreadTlsSlot, usize, PTHREAD_TLS_
     Mutex::new(FixedKeyMap::new());
 static PTHREAD_THREADS: Mutex<FixedKeyMap<usize, PthreadThreadState, PTHREAD_THREAD_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
+static SIGNAL_ACTIONS: Mutex<
+    FixedKeyMap<SignalActionKey, TrueosSigAction, SIGNAL_ACTION_CAPACITY>,
+> = Mutex::new(FixedKeyMap::new());
 pub(crate) static OPEN_FILES: Mutex<FixedKeyMap<c_int, OpenFile, OPEN_FILE_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
+static REGULAR_FILE_WORLDS: Mutex<RegularFileWorldRegistry> =
+    Mutex::new(RegularFileWorldRegistry::new());
 static FD_FLAGS: Mutex<FixedKeyMap<c_int, c_int, FD_FLAG_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
 pub(crate) static STD_FD_FLAGS: [AtomicI32; 3] =
@@ -49,6 +54,7 @@ const C_ALLOCATION_CAPACITY: usize = 65536;
 const PTHREAD_KEY_CAPACITY: usize = 128;
 const PTHREAD_TLS_VALUE_CAPACITY: usize = 512;
 const PTHREAD_THREAD_CAPACITY: usize = 64;
+const SIGNAL_ACTION_CAPACITY: usize = 256;
 // Guest Hull BSS and host-carrier BSS intentionally have independent thread
 // counters. Tag carrier-issued opaque pthread handles inside the u32 range so
 // equal local sequence numbers can never become the same mutex owner.
@@ -80,6 +86,13 @@ const TRUEOS_EAI_NONAME: c_int = 8;
 const TRUEOS_EAI_SERVICE: c_int = 9;
 const TRUEOS_EAI_SOCKTYPE: c_int = 10;
 const TRUEOS_ETIMEDOUT: c_int = 110;
+const TRUEOS_SIG_DFL: usize = 0;
+const TRUEOS_SIG_IGN: usize = 1;
+const TRUEOS_SIG_ERR: usize = usize::MAX;
+const TRUEOS_SA_SIGINFO: c_int = 0x0000_0004;
+const TRUEOS_SIGKILL: c_int = 9;
+const TRUEOS_SIGSTOP: c_int = 19;
+const TRUEOS_SIGNAL_MAX: c_int = 64;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const TRUEOS_ENOMEM: c_int = 12;
 const TRUEOS_O_ACCMODE: c_int = 0x3;
@@ -94,7 +107,14 @@ const TRUEOS_F_GETFD: c_int = 1;
 const TRUEOS_F_SETFD: c_int = 2;
 const TRUEOS_F_GETFL: c_int = 3;
 const TRUEOS_F_SETFL: c_int = 4;
+const TRUEOS_F_DUPFD: c_int = 0;
+const TRUEOS_F_DUPFD_CLOEXEC: c_int = 1030;
 const TRUEOS_FD_CLOEXEC: c_int = 1;
+// The x86-64 C ABI requires malloc-family results to be suitable for any
+// fundamental type. In particular, the TRUEOS target data layout gives i128
+// 16-byte alignment, and optimized Rust/C code may legally issue aligned SSE
+// loads from malloc-backed storage.
+const TRUEOS_C_MALLOC_ALIGN: usize = 16;
 const TRUEOS_SC_PAGESIZE: c_int = 30;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const TRUEOS_SC_PAGE_SIZE: c_int = TRUEOS_SC_PAGESIZE;
@@ -108,6 +128,7 @@ const TRUEOS_S_IFREG: u32 = 0o100000;
 const TRUEOS_DIR_MODE: u32 = TRUEOS_S_IFDIR | 0o755;
 const TRUEOS_FILE_MODE: u32 = TRUEOS_S_IFREG | 0o644;
 const TRUEOS_ASYNC_WRITE_BEGIN_RETRIES: usize = 100;
+const POSIX_FILE_WORLD_PROBE_PATH: &str = "/common/posix-file-world-probe.bin";
 // TRUEOSFS writes can spend real time in placement/index work on cold or busy
 // media. A POSIX close/fsync path should fail on actual IO errors, not on a
 // short userland-style patience budget.
@@ -154,6 +175,40 @@ struct TrueosAddrInfo {
     ai_canonname: *mut c_char,
     ai_addr: *mut c_void,
     ai_next: *mut TrueosAddrInfo,
+}
+
+// The TRUEOS target intentionally uses the x86_64 musl POSIX ABI. Keep this
+// layout in lockstep with libc::sigaction for that target: handler, 1024-bit
+// mask, flags, natural padding, restorer.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TrueosSigAction {
+    handler: usize,
+    mask: [u64; 16],
+    flags: c_int,
+    restorer: usize,
+}
+
+impl TrueosSigAction {
+    const fn default_action() -> Self {
+        Self {
+            handler: TRUEOS_SIG_DFL,
+            mask: [0; 16],
+            flags: 0,
+            restorer: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct SignalActionKey {
+    owner: usize,
+    signal: c_int,
+}
+
+#[repr(C, align(8))]
+struct TrueosSigInfo {
+    bytes: [u8; 128],
 }
 
 #[repr(C)]
@@ -261,11 +316,10 @@ pub(crate) struct BytePipe {
 pub(crate) enum OpenFile {
     Regular {
         path: Option<String>,
-        bytes: Vec<u8>,
+        world: Arc<Mutex<RegularFileWorld>>,
         offset: usize,
         readable: bool,
         writable: bool,
-        dirty: bool,
         flags: c_int,
     },
     PipeRead {
@@ -281,6 +335,58 @@ pub(crate) enum OpenFile {
         tx: Arc<Mutex<BytePipe>>,
         flags: c_int,
     },
+}
+
+pub(crate) struct RegularFileWorld {
+    bytes: Vec<u8>,
+    dirty: bool,
+    revision: u64,
+}
+
+struct RegularFileWorldRegistryEntry {
+    path: String,
+    world: Arc<Mutex<RegularFileWorld>>,
+}
+
+struct RegularFileWorldRegistry {
+    entries: [Option<RegularFileWorldRegistryEntry>; OPEN_FILE_CAPACITY],
+}
+
+impl RegularFileWorldRegistry {
+    const fn new() -> Self {
+        Self {
+            entries: [const { None }; OPEN_FILE_CAPACITY],
+        }
+    }
+
+    fn get(&self, path: &str) -> Option<Arc<Mutex<RegularFileWorld>>> {
+        self.entries
+            .iter()
+            .flatten()
+            .find(|entry| entry.path == path)
+            .map(|entry| Arc::clone(&entry.world))
+    }
+
+    fn insert(&mut self, path: String, world: Arc<Mutex<RegularFileWorld>>) -> bool {
+        let Some(slot) = self.entries.iter_mut().find(|entry| entry.is_none()) else {
+            return false;
+        };
+        *slot = Some(RegularFileWorldRegistryEntry { path, world });
+        true
+    }
+
+    fn remove_if_last_and_clean(&mut self, path: &str, world: &Arc<Mutex<RegularFileWorld>>) {
+        let Some(slot) = self.entries.iter_mut().find(|entry| {
+            entry
+                .as_ref()
+                .is_some_and(|entry| entry.path == path && Arc::ptr_eq(&entry.world, world))
+        }) else {
+            return;
+        };
+        if Arc::strong_count(world) == 2 && !world.lock().dirty {
+            *slot = None;
+        }
+    }
 }
 
 enum SocketFd {
@@ -315,7 +421,7 @@ impl SocketFd {
 impl OpenFile {
     fn len(&self) -> usize {
         match self {
-            Self::Regular { bytes, .. } => bytes.len(),
+            Self::Regular { world, .. } => world.lock().bytes.len(),
             Self::PipeRead { pipe, .. } | Self::PipeWrite { pipe, .. } => pipe.lock().bytes.len(),
             Self::UnixSocket { rx, .. } => rx.lock().bytes.len(),
         }
@@ -340,16 +446,15 @@ impl OpenFile {
     fn resize(&mut self, next: usize) -> bool {
         match self {
             Self::Regular {
-                bytes,
-                writable,
-                dirty,
-                ..
+                world, writable, ..
             } => {
                 if !*writable {
                     return false;
                 }
-                bytes.resize(next, 0);
-                *dirty = true;
+                let mut world = world.lock();
+                world.bytes.resize(next, 0);
+                world.dirty = true;
+                world.revision = world.revision.wrapping_add(1);
                 true
             }
             Self::PipeRead { .. } | Self::PipeWrite { .. } | Self::UnixSocket { .. } => false,
@@ -376,7 +481,7 @@ impl OpenFile {
 
     pub(crate) fn readable_len(&self) -> usize {
         match self {
-            Self::Regular { bytes, offset, .. } => bytes.len().saturating_sub(*offset),
+            Self::Regular { world, offset, .. } => world.lock().bytes.len().saturating_sub(*offset),
             Self::PipeRead { pipe, .. } => pipe.lock().bytes.len(),
             Self::PipeWrite { .. } => 0,
             Self::UnixSocket { rx, .. } => rx.lock().bytes.len(),
@@ -951,7 +1056,7 @@ fn c_free_ptr(ptr: *mut c_void) {
 
 fn c_realloc_ptr(ptr: *mut c_void, size: usize) -> *mut c_void {
     if ptr.is_null() {
-        return c_malloc_aligned(size, core::mem::align_of::<usize>());
+        return c_malloc_aligned(size, TRUEOS_C_MALLOC_ALIGN);
     }
     if size == 0 {
         c_free_ptr(ptr);
@@ -977,7 +1082,7 @@ fn c_realloc_ptr(ptr: *mut c_void, size: usize) -> *mut c_void {
 }
 
 pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
-    c_malloc_aligned(size, core::mem::align_of::<usize>())
+    c_malloc_aligned(size, TRUEOS_C_MALLOC_ALIGN)
 }
 
 pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
@@ -988,7 +1093,7 @@ pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
     if total == 0 {
         return ptr::null_mut();
     }
-    let ptr = c_malloc_aligned(total, core::mem::align_of::<usize>());
+    let ptr = c_malloc_aligned(total, TRUEOS_C_MALLOC_ALIGN);
     if !ptr.is_null() {
         unsafe { ptr::write_bytes(ptr, 0, total) };
     }
@@ -1017,7 +1122,7 @@ pub struct TrueosCabiHeapStats {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_alloc(size: usize) -> *mut u8 {
-    c_malloc_aligned(size, core::mem::align_of::<usize>()).cast::<u8>()
+    c_malloc_aligned(size, TRUEOS_C_MALLOC_ALIGN).cast::<u8>()
 }
 
 #[unsafe(no_mangle)]
@@ -1393,6 +1498,84 @@ fn write_file_to_cabi(path: &str, bytes: &[u8]) -> Result<(), c_int> {
     Ok(())
 }
 
+fn trace_posix_file_world(path: Option<&str>) -> bool {
+    path == Some(POSIX_FILE_WORLD_PROBE_PATH)
+}
+
+fn open_regular_file_world(
+    path: &str,
+    should_create: bool,
+    should_truncate: bool,
+    writable: bool,
+) -> Result<(Arc<Mutex<RegularFileWorld>>, bool), c_int> {
+    let mut registry = REGULAR_FILE_WORLDS.lock();
+    if let Some(world) = registry.get(path) {
+        if should_truncate && writable {
+            let mut world = world.lock();
+            world.bytes.clear();
+            world.dirty = true;
+            world.revision = world.revision.wrapping_add(1);
+        }
+        return Ok((world, true));
+    }
+
+    let mut dirty = false;
+    let mut bytes = if should_truncate && writable && should_create {
+        dirty = true;
+        Vec::new()
+    } else {
+        match read_file_from_cabi(path) {
+            Ok(bytes) => bytes,
+            Err(TRUEOS_ENOENT) if should_create => {
+                dirty = writable;
+                Vec::new()
+            }
+            Err(errno) => return Err(errno),
+        }
+    };
+    if should_truncate && writable {
+        bytes.clear();
+        dirty = true;
+    }
+
+    let world = Arc::new(Mutex::new(RegularFileWorld {
+        bytes,
+        dirty,
+        revision: u64::from(dirty),
+    }));
+    if !registry.insert(String::from(path), Arc::clone(&world)) {
+        return Err(TRUEOS_EAGAIN);
+    }
+    Ok((world, false))
+}
+
+fn writeback_regular_file_world(
+    path: &str,
+    world: &Arc<Mutex<RegularFileWorld>>,
+) -> Result<Option<usize>, c_int> {
+    let (bytes, revision) = {
+        let world = world.lock();
+        if !world.dirty {
+            return Ok(None);
+        }
+        (world.bytes.clone(), world.revision)
+    };
+    write_file_to_cabi(path, bytes.as_slice())?;
+    let mut world = world.lock();
+    if world.revision == revision {
+        world.dirty = false;
+    }
+    Ok(Some(bytes.len()))
+}
+
+fn cleanup_regular_file_world(path: Option<&str>, world: &Arc<Mutex<RegularFileWorld>>) {
+    if let Some(path) = path {
+        REGULAR_FILE_WORLDS
+            .lock()
+            .remove_if_last_and_clean(path, world);
+    }
+}
+
 async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(), c_int> {
     crate::log!("std-abi-shim: async-write stage=resolve path={} bytes={}\n", path, bytes.len());
     let Some(path) = crate::r::io::env::resolve_fs_path(path, false) else {
@@ -1513,6 +1696,20 @@ async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(), c_
 
 pub(crate) fn next_file_fd() -> c_int {
     NEXT_FILE_FD.fetch_add(1, Ordering::AcqRel)
+}
+
+fn next_file_fd_at_least(minimum: c_int) -> Option<c_int> {
+    let minimum = minimum.max(3);
+    let mut current = NEXT_FILE_FD.load(Ordering::Acquire);
+    loop {
+        let selected = current.max(minimum);
+        let next = selected.checked_add(1)?;
+        match NEXT_FILE_FD.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => return Some(selected),
+            Err(actual) => current = actual,
+        }
+    }
 }
 
 unsafe fn freeaddrinfo_chain(mut res: *mut TrueosAddrInfo) {
@@ -2308,23 +2505,34 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
     };
     match file {
         OpenFile::Regular {
-            bytes,
+            path,
+            world,
             offset,
             writable,
-            dirty,
             ..
         } => {
             if !*writable {
                 TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
                 return -1;
             }
+            let mut world = world.lock();
             let end = offset.saturating_add(input.len());
-            if bytes.len() < end {
-                bytes.resize(end, 0);
+            if world.bytes.len() < end {
+                world.bytes.resize(end, 0);
             }
-            bytes[*offset..end].copy_from_slice(input);
+            world.bytes[*offset..end].copy_from_slice(input);
             *offset = end;
-            *dirty = true;
+            world.dirty = true;
+            world.revision = world.revision.wrapping_add(1);
+            if trace_posix_file_world(path.as_deref()) {
+                crate::log!(
+                    "posix-file-world: event=write fd={} bytes={} next_offset={} world_len={} dirty=1 backing_write=0\n",
+                    fd,
+                    input.len(),
+                    *offset,
+                    world.bytes.len()
+                );
+            }
         }
         OpenFile::PipeWrite { pipe, .. } => {
             let mut pipe = pipe.lock();
@@ -2387,7 +2595,8 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
     };
     let copied = match file {
         OpenFile::Regular {
-            bytes,
+            path,
+            world,
             offset,
             readable,
             ..
@@ -2396,13 +2605,23 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
                 TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
                 return -1;
             }
-            let remaining = bytes.len().saturating_sub(*offset);
+            let world = world.lock();
+            let remaining = world.bytes.len().saturating_sub(*offset);
             let n = core::cmp::min(count, remaining);
-            if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &bytes[*offset..*offset + n]) {
+            if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &world.bytes[*offset..*offset + n]) {
                 TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
                 return -1;
             }
             *offset = offset.saturating_add(n);
+            if trace_posix_file_world(path.as_deref()) {
+                crate::log!(
+                    "posix-file-world: event=read fd={} bytes={} next_offset={} world_len={} backing_read=0\n",
+                    fd,
+                    n,
+                    *offset,
+                    world.bytes.len()
+                );
+            }
             n
         }
         OpenFile::PipeRead { pipe, flags } => {
@@ -2444,7 +2663,7 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
 
 pub(crate) fn open_file_read_ready(file: &OpenFile) -> bool {
     match file {
-        OpenFile::Regular { bytes, offset, .. } => *offset < bytes.len(),
+        OpenFile::Regular { world, offset, .. } => *offset < world.lock().bytes.len(),
         OpenFile::PipeRead { pipe, .. } => !pipe.lock().bytes.is_empty(),
         OpenFile::PipeWrite { .. } => false,
         OpenFile::UnixSocket { rx, .. } => !rx.lock().bytes.is_empty(),
@@ -3094,38 +3313,44 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _mode: c_int) -
     let writable = access == TRUEOS_O_WRONLY || access == TRUEOS_O_RDWR;
     let should_truncate = flags & TRUEOS_O_TRUNC != 0;
     let should_create = flags & TRUEOS_O_CREAT != 0;
+    let trace_file_world = path == POSIX_FILE_WORLD_PROBE_PATH;
 
     let file = match access {
         TRUEOS_O_RDONLY | TRUEOS_O_WRONLY | TRUEOS_O_RDWR => {
-            let mut dirty = false;
-            let bytes = if should_truncate && writable && should_create {
-                dirty = true;
-                Vec::new()
-            } else {
-                let mut bytes = match read_file_from_cabi(path.as_str()) {
-                    Ok(bytes) => bytes,
-                    Err(TRUEOS_ENOENT) if should_create => {
-                        dirty = writable;
-                        Vec::new()
-                    }
-                    Err(errno) => {
-                        TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
-                        return -1;
-                    }
-                };
-                if should_truncate {
-                    bytes.clear();
-                    dirty |= writable;
+            let (world, reused) = match open_regular_file_world(
+                path.as_str(),
+                should_create,
+                should_truncate,
+                writable,
+            ) {
+                Ok(world) => world,
+                Err(errno) => {
+                    TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+                    return -1;
                 }
-                bytes
             };
+            if trace_file_world {
+                let world = world.lock();
+                crate::log!(
+                    "posix-file-world: event=open-materialize path={} world_len={} readable={} writable={} dirty={} source={}\n",
+                    path.as_str(),
+                    world.bytes.len(),
+                    readable,
+                    writable,
+                    world.dirty,
+                    if reused {
+                        "shared-world"
+                    } else {
+                        "TRUEOSFS-whole-file"
+                    }
+                );
+            }
             OpenFile::Regular {
-                path: writable.then_some(path),
-                bytes,
+                path: Some(path),
+                world,
                 offset: 0,
                 readable,
                 writable,
-                dirty,
                 flags,
             }
         }
@@ -3135,9 +3360,15 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _mode: c_int) -
         }
     };
     let fd = next_file_fd();
-    if OPEN_FILES.lock().insert(fd, file).is_err() {
+    if let Err(file) = OPEN_FILES.lock().insert(fd, file) {
+        if let OpenFile::Regular { path, world, .. } = &file {
+            cleanup_regular_file_world(path.as_deref(), world);
+        }
         TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
         return -1;
+    }
+    if trace_file_world {
+        crate::log!("posix-file-world: event=open-ready fd={}\n", fd);
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     fd
@@ -3192,20 +3423,50 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
     match file {
         OpenFile::Regular {
             path,
-            bytes,
+            world,
             writable,
-            dirty,
             ..
         } => {
+            let trace_file_world = trace_posix_file_world(path.as_deref());
+            let (world_len, dirty) = {
+                let world = world.lock();
+                (world.bytes.len(), world.dirty)
+            };
+            if trace_file_world {
+                crate::log!(
+                    "posix-file-world: event=close fd={} world_len={} dirty={} action={}\n",
+                    fd,
+                    world_len,
+                    dirty,
+                    if writable && dirty {
+                        "writeback"
+                    } else {
+                        "discard"
+                    }
+                );
+            }
             if writable
                 && dirty
-                && let Some(path) = path
+                && let Some(path) = path.as_deref()
             {
-                if let Err(errno) = write_file_to_cabi(path.as_str(), bytes.as_slice()) {
-                    TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
-                    return -1;
+                match writeback_regular_file_world(path, &world) {
+                    Ok(Some(bytes)) => {
+                        if trace_file_world {
+                            crate::log!(
+                                "posix-file-world: event=close-writeback-complete fd={} bytes={} target=TRUEOSFS\n",
+                                fd,
+                                bytes
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(errno) => {
+                        TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+                        return -1;
+                    }
                 }
             }
+            cleanup_regular_file_world(path.as_deref(), &world);
         }
         OpenFile::PipeRead { pipe, .. } => {
             pipe.lock().read_open = false;
@@ -3237,20 +3498,28 @@ pub async fn close_async(fd: c_int) -> c_int {
     match file {
         OpenFile::Regular {
             path,
-            bytes,
+            world,
             writable,
-            dirty,
             ..
         } => {
+            let (bytes, revision, dirty) = {
+                let world = world.lock();
+                (world.bytes.clone(), world.revision, world.dirty)
+            };
             if writable
                 && dirty
-                && let Some(path) = path
-                && let Err(errno) =
-                    write_file_to_trueosfs_async(path.as_str(), bytes.as_slice()).await
+                && let Some(path) = path.as_deref()
             {
-                TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
-                return -1;
+                if let Err(errno) = write_file_to_trueosfs_async(path, bytes.as_slice()).await {
+                    TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+                    return -1;
+                }
+                let mut world = world.lock();
+                if world.revision == revision {
+                    world.dirty = false;
+                }
             }
+            cleanup_regular_file_world(path.as_deref(), &world);
         }
         OpenFile::PipeRead { pipe, .. } => {
             pipe.lock().read_open = false;
@@ -3341,6 +3610,30 @@ pub unsafe extern "C" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) -> c_int {
         return -1;
     };
     match cmd {
+        TRUEOS_F_DUPFD | TRUEOS_F_DUPFD_CLOEXEC => {
+            if arg < 0 {
+                TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+                return -1;
+            }
+            let Some(next) = next_file_fd_at_least(arg) else {
+                TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+                return -1;
+            };
+            let duplicate = file.clone();
+            if table.insert(next, duplicate).is_err() {
+                TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+                return -1;
+            }
+            if cmd == TRUEOS_F_DUPFD_CLOEXEC
+                && FD_FLAGS.lock().insert(next, TRUEOS_FD_CLOEXEC).is_err()
+            {
+                let _ = table.remove(next);
+                TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+                return -1;
+            }
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            next
+        }
         TRUEOS_F_GETFD => {
             TRUEOS_ERRNO.store(0, Ordering::Relaxed);
             FD_FLAGS.lock().get(fd).copied().unwrap_or(0)
@@ -3490,6 +3783,19 @@ pub unsafe extern "C" fn lseek(fd: c_int, offset: isize, whence: c_int) -> isize
         return -1;
     }
     file.set_offset(next as usize);
+    if let OpenFile::Regular { path, world, .. } = file
+        && trace_posix_file_world(path.as_deref())
+    {
+        let world_len = world.lock().bytes.len();
+        crate::log!(
+            "posix-file-world: event=lseek fd={} whence={} requested={} next_offset={} world_len={} backing_read=0\n",
+            fd,
+            whence,
+            offset,
+            next,
+            world_len
+        );
+    }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     next
 }
@@ -3511,18 +3817,31 @@ pub unsafe extern "C" fn pread64(fd: c_int, buf: *mut c_void, count: usize, offs
     };
     match file {
         OpenFile::Regular {
-            bytes, readable, ..
+            path,
+            world,
+            readable,
+            ..
         } => {
             if !*readable {
                 TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
                 return -1;
             }
+            let world = world.lock();
             let offset = offset as usize;
-            let remaining = bytes.len().saturating_sub(offset);
+            let remaining = world.bytes.len().saturating_sub(offset);
             let n = core::cmp::min(count, remaining);
-            if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &bytes[offset..offset + n]) {
+            if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &world.bytes[offset..offset + n]) {
                 TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
                 return -1;
+            }
+            if trace_posix_file_world(path.as_deref()) {
+                crate::log!(
+                    "posix-file-world: event=pread fd={} offset={} bytes={} world_len={} backing_read=0\n",
+                    fd,
+                    offset,
+                    n,
+                    world.bytes.len()
+                );
             }
             TRUEOS_ERRNO.store(0, Ordering::Relaxed);
             n as isize
@@ -3565,22 +3884,33 @@ pub unsafe extern "C" fn pwrite64(
     };
     match file {
         OpenFile::Regular {
-            bytes,
+            path,
+            world,
             writable,
-            dirty,
             ..
         } => {
             if !*writable {
                 TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
                 return -1;
             }
+            let mut world = world.lock();
             let offset = offset as usize;
             let end = offset.saturating_add(input.len());
-            if bytes.len() < end {
-                bytes.resize(end, 0);
+            if world.bytes.len() < end {
+                world.bytes.resize(end, 0);
             }
-            bytes[offset..end].copy_from_slice(input);
-            *dirty = true;
+            world.bytes[offset..end].copy_from_slice(input);
+            world.dirty = true;
+            world.revision = world.revision.wrapping_add(1);
+            if trace_posix_file_world(path.as_deref()) {
+                crate::log!(
+                    "posix-file-world: event=pwrite fd={} offset={} bytes={} world_len={} dirty=1 backing_write=0\n",
+                    fd,
+                    offset,
+                    input.len(),
+                    world.bytes.len()
+                );
+            }
             TRUEOS_ERRNO.store(0, Ordering::Relaxed);
             input.len() as isize
         }
@@ -3598,9 +3928,35 @@ pub unsafe extern "C" fn pwrite(fd: c_int, buf: *const c_void, count: usize, off
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fsync(fd: c_int) -> c_int {
-    if fd < 0 || OPEN_FILES.lock().get(fd).is_none() {
+    if fd < 0 {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
+    }
+    let table = OPEN_FILES.lock();
+    let Some(OpenFile::Regular { path, world, .. }) = table.get(fd) else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let Some(path) = path.as_deref() else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let trace_file_world = trace_posix_file_world(Some(path));
+    if trace_file_world {
+        let world = world.lock();
+        crate::log!(
+            "posix-file-world: event=fsync fd={} world_len={} dirty={} action=writeback\n",
+            fd,
+            world.bytes.len(),
+            world.dirty
+        );
+    }
+    if let Err(errno) = writeback_regular_file_world(path, world) {
+        TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+        return -1;
+    }
+    if trace_file_world {
+        crate::log!("posix-file-world: event=fsync-writeback-complete fd={}\n", fd);
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     0
@@ -4119,18 +4475,205 @@ pub unsafe extern "C" fn sched_yield() -> c_int {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn signal(_signum: c_int, handler: usize) -> usize {
-    handler
+pub unsafe extern "C" fn signal(signum: c_int, handler: usize) -> usize {
+    let action = TrueosSigAction {
+        handler,
+        mask: [0; 16],
+        flags: 0,
+        restorer: 0,
+    };
+    let mut old_action = TrueosSigAction::default_action();
+    if unsafe {
+        sigaction(
+            signum,
+            (&action as *const TrueosSigAction).cast(),
+            (&mut old_action as *mut TrueosSigAction).cast(),
+        )
+    } == 0
+    {
+        old_action.handler
+    } else {
+        TRUEOS_SIG_ERR
+    }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sigaction(
-    _signum: c_int,
-    _action: *const c_void,
-    _old_action: *mut c_void,
+    signum: c_int,
+    action: *const c_void,
+    old_action: *mut c_void,
 ) -> c_int {
-    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
-    -1
+    if !valid_catchable_signal(signum) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+
+    let key = current_signal_action_key(signum);
+    let previous = SIGNAL_ACTIONS
+        .lock()
+        .get(key)
+        .copied()
+        .unwrap_or_else(TrueosSigAction::default_action);
+
+    if !old_action.is_null() && !write_signal_action(old_action, previous) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+
+    if !action.is_null() {
+        let Some(next) = abi_read_struct(action.cast::<TrueosSigAction>()) else {
+            TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+            return -1;
+        };
+        let mut actions = SIGNAL_ACTIONS.lock();
+        let result = if next.handler == TRUEOS_SIG_DFL {
+            let _ = actions.remove(key);
+            Ok(())
+        } else {
+            actions.insert(key, next).map_err(|_| ())
+        };
+        if result.is_err() {
+            TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+            return -1;
+        }
+    }
+
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+fn valid_signal(signum: c_int) -> bool {
+    (1..=TRUEOS_SIGNAL_MAX).contains(&signum)
+}
+
+fn valid_catchable_signal(signum: c_int) -> bool {
+    valid_signal(signum) && !matches!(signum, TRUEOS_SIGKILL | TRUEOS_SIGSTOP)
+}
+
+fn current_signal_owner() -> usize {
+    crate::hv::current_hull_guest_context_vm_id()
+        .or_else(crate::hv::current_guest_execution_context_vm_id)
+        .or_else(crate::hv::current_vm_id_by_lapic_low)
+        .map_or(0, |vm_id| usize::from(vm_id) + 1)
+}
+
+fn current_signal_action_key(signum: c_int) -> SignalActionKey {
+    SignalActionKey {
+        owner: current_signal_owner(),
+        signal: signum,
+    }
+}
+
+fn write_signal_action(out: *mut c_void, action: TrueosSigAction) -> bool {
+    let Some(bytes) = abi_write_bytes(out.cast::<u8>(), core::mem::size_of::<TrueosSigAction>())
+    else {
+        return false;
+    };
+    unsafe { ptr::write_unaligned(bytes.as_mut_ptr().cast::<TrueosSigAction>(), action) };
+    true
+}
+
+fn deliver_registered_signal(signum: c_int) -> c_int {
+    let action = SIGNAL_ACTIONS
+        .lock()
+        .get(current_signal_action_key(signum))
+        .copied()
+        .unwrap_or_else(TrueosSigAction::default_action);
+
+    match action.handler {
+        TRUEOS_SIG_IGN => 0,
+        TRUEOS_SIG_DFL => {
+            // The process-shaped Blueprint runtime cannot yet suspend and
+            // resume a realm for default stop signals. Catchable signals used
+            // here have either an installed action or retain their default
+            // process-termination meaning.
+            unsafe { sys_halt() }
+        }
+        handler if (action.flags & TRUEOS_SA_SIGINFO) != 0 => {
+            let handler: unsafe extern "C" fn(c_int, *mut c_void, *mut c_void) =
+                unsafe { core::mem::transmute(handler) };
+            let mut info = TrueosSigInfo { bytes: [0; 128] };
+            info.bytes[..core::mem::size_of::<c_int>()].copy_from_slice(&signum.to_ne_bytes());
+            unsafe { handler(signum, (&mut info as *mut TrueosSigInfo).cast(), ptr::null_mut()) };
+            0
+        }
+        handler => {
+            let handler: unsafe extern "C" fn(c_int) = unsafe { core::mem::transmute(handler) };
+            unsafe { handler(signum) };
+            0
+        }
+    }
+}
+
+#[cfg(test)]
+mod signal_tests {
+    use super::*;
+
+    static BASIC_DELIVERY: AtomicI32 = AtomicI32::new(0);
+    static SIGINFO_DELIVERY: AtomicI32 = AtomicI32::new(0);
+
+    unsafe extern "C" fn basic_handler(signum: c_int) {
+        BASIC_DELIVERY.store(signum, Ordering::Release);
+    }
+
+    unsafe extern "C" fn siginfo_handler(signum: c_int, info: *mut c_void, _context: *mut c_void) {
+        if !info.is_null() {
+            SIGINFO_DELIVERY.store(signum, Ordering::Release);
+        }
+    }
+
+    fn install_for_test(signum: c_int, handler: usize, flags: c_int) {
+        let action = TrueosSigAction {
+            handler,
+            mask: [0; 16],
+            flags,
+            restorer: 0,
+        };
+        assert_eq!(
+            unsafe {
+                sigaction(signum, (&action as *const TrueosSigAction).cast(), ptr::null_mut())
+            },
+            0
+        );
+    }
+
+    fn restore_default(signum: c_int) {
+        let action = TrueosSigAction::default_action();
+        assert_eq!(
+            unsafe {
+                sigaction(signum, (&action as *const TrueosSigAction).cast(), ptr::null_mut())
+            },
+            0
+        );
+    }
+
+    #[test]
+    fn musl_x86_64_sigaction_layout_is_stable() {
+        assert_eq!(core::mem::size_of::<TrueosSigAction>(), 152);
+        assert_eq!(core::mem::align_of::<TrueosSigAction>(), 8);
+    }
+
+    #[test]
+    fn pthread_kill_delivers_basic_registered_action() {
+        const TEST_SIGNAL: c_int = 10;
+        BASIC_DELIVERY.store(0, Ordering::Release);
+        install_for_test(TEST_SIGNAL, basic_handler as usize, 0);
+        let thread = unsafe { pthread_self() };
+        assert_eq!(unsafe { pthread_kill(thread, TEST_SIGNAL) }, 0);
+        assert_eq!(BASIC_DELIVERY.load(Ordering::Acquire), TEST_SIGNAL);
+        restore_default(TEST_SIGNAL);
+    }
+
+    #[test]
+    fn pthread_kill_delivers_siginfo_action_with_non_null_info() {
+        const TEST_SIGNAL: c_int = 12;
+        SIGINFO_DELIVERY.store(0, Ordering::Release);
+        install_for_test(TEST_SIGNAL, siginfo_handler as usize, TRUEOS_SA_SIGINFO);
+        let thread = unsafe { pthread_self() };
+        assert_eq!(unsafe { pthread_kill(thread, TEST_SIGNAL) }, 0);
+        assert_eq!(SIGINFO_DELIVERY.load(Ordering::Acquire), TEST_SIGNAL);
+        restore_default(TEST_SIGNAL);
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -4273,14 +4816,16 @@ pub unsafe extern "C" fn pthread_key_delete(key: u32) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_kill(thread: usize, signal: c_int) -> c_int {
     // pthread APIs return the error number directly rather than through errno.
-    if signal != 0 {
-        return TRUEOS_ENOSYS;
+    if !valid_signal(signal) && signal != 0 {
+        return TRUEOS_EINVAL;
     }
-    if thread == pthread_current_id() || PTHREAD_THREADS.lock().get(thread).is_some() {
-        0
-    } else {
-        TRUEOS_ESRCH
+    if thread != pthread_current_id() && PTHREAD_THREADS.lock().get(thread).is_none() {
+        return TRUEOS_ESRCH;
     }
+    if signal == 0 {
+        return 0;
+    }
+    deliver_registered_signal(signal)
 }
 
 #[unsafe(no_mangle)]

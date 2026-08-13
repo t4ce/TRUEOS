@@ -38,6 +38,9 @@ impl DirtyRows {
 /// absent from this type.
 pub struct PublishedScene<'a, T> {
     pub epoch: u64,
+    /// Epoch whose complete contents the dirty upload range advances from.
+    /// A consumer at any other epoch must rebuild the whole component.
+    pub dirty_base_epoch: u64,
     pub rows: &'a [T],
     pub alive: &'a [u32],
     pub generations: &'a [u32],
@@ -59,6 +62,9 @@ pub struct SceneStore<T> {
     live_count: usize,
     epoch: u64,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EpochExhausted;
 
 impl<T> SceneStore<T> {
     pub const fn new() -> Self {
@@ -160,8 +166,10 @@ impl<T> SceneStore<T> {
         }
         let index = handle.slot as usize;
         self.alive[index] = 0;
-        self.generations[index] = self.generations[index].wrapping_add(1).max(1);
-        self.free.push(handle.slot);
+        if let Some(next_generation) = self.generations[index].checked_add(1) {
+            self.generations[index] = next_generation;
+            self.free.push(handle.slot);
+        }
         self.live_count -= 1;
         self.mark_dirty(index);
         true
@@ -194,8 +202,9 @@ impl<T> SceneStore<T> {
     /// Close the simulation write phase and expose one coherent renderer
     /// publication.  Calling it again without writes advances the epoch but
     /// reports an empty upload range.
-    pub fn publish(&mut self) -> PublishedScene<'_, T> {
-        self.epoch = self.epoch.wrapping_add(1).max(1);
+    pub fn try_publish(&mut self) -> Result<PublishedScene<'_, T>, EpochExhausted> {
+        let dirty_base_epoch = self.epoch;
+        self.epoch = self.epoch.checked_add(1).ok_or(EpochExhausted)?;
         let dirty = self
             .dirty
             .take()
@@ -203,14 +212,23 @@ impl<T> SceneStore<T> {
                 first: first as u32,
                 count: (end - first) as u32,
             });
-        PublishedScene {
+        Ok(PublishedScene {
             epoch: self.epoch,
+            dirty_base_epoch,
             rows: &self.rows,
             alive: &self.alive,
             generations: &self.generations,
             dirty,
             live_count: self.live_count,
-        }
+        })
+    }
+
+    /// Compatibility publication for existing trusted simulations. New
+    /// long-lived producers should use [`Self::try_publish`] and replace the
+    /// containing scene identity if its epoch is exhausted.
+    pub fn publish(&mut self) -> PublishedScene<'_, T> {
+        self.try_publish()
+            .expect("scene publication epoch exhausted")
     }
 
     fn mark_dirty(&mut self, slot: usize) {
@@ -276,5 +294,45 @@ mod tests {
         let publication = scene.publish();
         assert_eq!(publication.epoch, 2);
         assert_eq!(publication.dirty, DirtyRows::EMPTY);
+    }
+
+    #[test]
+    fn publication_names_exact_dirty_base_epoch() {
+        let mut scene = SceneStore::new();
+        let _ = scene.insert(1u8);
+        let first = scene.publish();
+        assert_eq!((first.dirty_base_epoch, first.epoch), (0, 1));
+        let second = scene.publish();
+        assert_eq!((second.dirty_base_epoch, second.epoch), (1, 2));
+    }
+
+    #[test]
+    fn generation_exhaustion_permanently_retires_slot() {
+        let mut scene = SceneStore::new();
+        let mut handle = scene.insert(1u8);
+        scene.generations[handle.slot as usize] = u32::MAX;
+        handle.generation = u32::MAX;
+        assert!(scene.remove(handle));
+        let replacement = scene.insert(2u8);
+        assert_ne!(replacement.slot, handle.slot);
+        assert!(!scene.contains(handle));
+    }
+
+    #[test]
+    fn epoch_exhaustion_is_nonwrapping_and_preserves_dirty_state() {
+        let mut scene = SceneStore::new();
+        let handle = scene.insert(1u8);
+        scene.epoch = u64::MAX;
+        assert!(matches!(scene.try_publish(), Err(EpochExhausted)));
+        scene.epoch = 0;
+        let publication = scene.try_publish().unwrap();
+        assert_eq!(publication.epoch, 1);
+        assert_eq!(
+            publication.dirty,
+            DirtyRows {
+                first: handle.slot,
+                count: 1
+            }
+        );
     }
 }
