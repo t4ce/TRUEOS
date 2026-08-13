@@ -519,11 +519,7 @@ fn guest_mio_socket_out(op: u32, addr: TrueosMioSocketAddr, out_socket_id: *mut 
             STATUS_INVALID_INPUT
         }
     } else {
-        crate::log!(
-            "mio_compat: guest socket bind rejected op=0x{:x} status={}\n",
-            op,
-            rc
-        );
+        crate::log!("mio_compat: guest socket bind rejected op=0x{:x} status={}\n", op, rc);
         rc
     }
 }

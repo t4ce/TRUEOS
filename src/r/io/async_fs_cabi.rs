@@ -694,10 +694,7 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_record_key_start(
         Err(code) => return code,
     };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        guest_start(
-            trueos_vm::vmcall::OP_BP_ASYNC_FS_RECORD_KEY_START,
-            path.as_str(),
-        )
+        guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_RECORD_KEY_START, path.as_str())
     } else {
         start_record_key(direct_owner(), path)
     }

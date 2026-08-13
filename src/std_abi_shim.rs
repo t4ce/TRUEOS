@@ -115,6 +115,8 @@ const TRUEOS_SC_NPROCESSORS_ONLN: c_int = 84;
 const TRUEOS_AF_UNSPEC: c_int = 0;
 const TRUEOS_AF_INET: c_int = 2;
 const TRUEOS_SOCK_STREAM: c_int = 1;
+const TRUEOS_SOCK_DGRAM: c_int = 2;
+const TRUEOS_IPPROTO_UDP: c_int = 17;
 const TRUEOS_S_IFDIR: u32 = 0o040000;
 const TRUEOS_S_IFREG: u32 = 0o100000;
 const TRUEOS_DIR_MODE: u32 = TRUEOS_S_IFDIR | 0o755;
@@ -390,11 +392,15 @@ enum SocketFd {
         backend: u32,
         local: Option<SocketAddrV4>,
     },
+    PendingUdp,
     MioListener {
         backend: u32,
         local: SocketAddrV4,
     },
     MioStream {
+        backend: u32,
+    },
+    MioUdp {
         backend: u32,
     },
 }
@@ -564,7 +570,9 @@ impl SocketFd {
             Self::Cabi { backend }
             | Self::PendingListener { backend, .. }
             | Self::MioListener { backend, .. }
-            | Self::MioStream { backend } => *backend,
+            | Self::MioStream { backend }
+            | Self::MioUdp { backend } => *backend,
+            Self::PendingUdp => 0,
         }
     }
 }
@@ -2906,8 +2914,12 @@ pub(crate) fn socket_poll_events(fd: c_int, events: i16) -> Option<i16> {
     let backend = {
         let sockets = SOCKET_FDS.lock();
         match sockets.get(fd)? {
-            SocketFd::MioListener { backend, .. } | SocketFd::MioStream { backend } => *backend,
-            SocketFd::Cabi { .. } | SocketFd::PendingListener { .. } => return Some(0),
+            SocketFd::MioListener { backend, .. }
+            | SocketFd::MioStream { backend }
+            | SocketFd::MioUdp { backend } => *backend,
+            SocketFd::Cabi { .. } | SocketFd::PendingListener { .. } | SocketFd::PendingUdp => {
+                return Some(0);
+            }
         }
     };
     let mut interests = 0u8;
@@ -2959,6 +2971,20 @@ pub(crate) fn socket_poll_events(fd: c_int, events: i16) -> Option<i16> {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn socket(domain: c_int, socket_type: c_int, protocol: c_int) -> c_int {
+    if domain == TRUEOS_AF_INET
+        && socket_type == TRUEOS_SOCK_DGRAM
+        && matches!(protocol, 0 | TRUEOS_IPPROTO_UDP)
+    {
+        let fd = next_file_fd();
+        if SOCKET_FDS.lock().insert(fd, SocketFd::PendingUdp).is_err() {
+            TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+            return -1;
+        }
+        crate::hv::hvlogf(format_args!("std-abi socket-open-udp fd={}", fd));
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        return fd;
+    }
+
     let backend = posix_rc_i32(crate::r::net::socket_cabi::trueos_cabi_socket_tcp_open(
         domain,
         socket_type,
@@ -3008,7 +3034,12 @@ pub unsafe extern "C" fn setsockopt(
     let backend = {
         let sockets = SOCKET_FDS.lock();
         match sockets.get(socket_id) {
-            Some(SocketFd::MioListener { .. } | SocketFd::MioStream { .. }) => {
+            Some(
+                SocketFd::MioListener { .. }
+                | SocketFd::MioStream { .. }
+                | SocketFd::MioUdp { .. }
+                | SocketFd::PendingUdp,
+            ) => {
                 TRUEOS_ERRNO.store(0, Ordering::Relaxed);
                 return 0;
             }
@@ -3034,6 +3065,40 @@ pub unsafe extern "C" fn bind(socket_id: c_int, addr: *const c_void, addr_len: u
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     };
+    let is_pending_udp = {
+        let sockets = SOCKET_FDS.lock();
+        let Some(socket) = sockets.get(socket_id) else {
+            TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+            return -1;
+        };
+        matches!(socket, SocketFd::PendingUdp)
+    };
+    if is_pending_udp {
+        let mut backend = 0u32;
+        let rc = unsafe {
+            crate::mio_compat::mio_udp_socket_bind_host(
+                socket_v4_to_mio(local),
+                &mut backend as *mut u32,
+            )
+        };
+        if rc != 0 {
+            return posix_mio_i32(rc);
+        }
+        let mut sockets = SOCKET_FDS.lock();
+        if !matches!(sockets.get(socket_id), Some(SocketFd::PendingUdp)) {
+            let _ = unsafe { crate::mio_compat::mio_socket_close_host(backend) };
+            TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+            return -1;
+        }
+        let _ = sockets.insert(socket_id, SocketFd::MioUdp { backend });
+        crate::hv::hvlogf(format_args!(
+            "std-abi socket-bind-udp fd={} backend={} port={}",
+            socket_id, backend, local.port
+        ));
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        return 0;
+    }
+
     let mut sockets = SOCKET_FDS.lock();
     let Some(socket) = sockets.get_mut(socket_id) else {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
@@ -3050,7 +3115,10 @@ pub unsafe extern "C" fn bind(socket_id: c_int, addr: *const c_void, addr_len: u
             TRUEOS_ERRNO.store(0, Ordering::Relaxed);
             0
         }
-        SocketFd::Cabi { .. } | SocketFd::MioStream { .. } => {
+        SocketFd::Cabi { .. }
+        | SocketFd::MioStream { .. }
+        | SocketFd::MioUdp { .. }
+        | SocketFd::PendingUdp => {
             TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
             -1
         }
@@ -3088,7 +3156,10 @@ pub unsafe extern "C" fn listen(socket_id: c_int, _backlog: c_int) -> c_int {
                 },
                 *backend,
             ),
-            SocketFd::Cabi { .. } | SocketFd::MioStream { .. } => {
+            SocketFd::Cabi { .. }
+            | SocketFd::MioStream { .. }
+            | SocketFd::MioUdp { .. }
+            | SocketFd::PendingUdp => {
                 TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
                 return -1;
             }
@@ -3203,6 +3274,75 @@ pub unsafe extern "C" fn shutdown(socket_id: c_int, how: c_int) -> c_int {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect(socket_id: c_int, addr: *const c_void, addr_len: u32) -> c_int {
+    if socket_id < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    let Some(peer) = parse_sockaddr_v4(addr, addr_len) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let udp_backend = {
+        let sockets = SOCKET_FDS.lock();
+        match sockets.get(socket_id) {
+            Some(SocketFd::MioUdp { backend }) => Some(*backend),
+            Some(SocketFd::PendingUdp) => {
+                TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+                return -1;
+            }
+            Some(_) => None,
+            None => {
+                TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+                return -1;
+            }
+        }
+    };
+    let Some(backend) = udp_backend else {
+        TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+        return -1;
+    };
+    let rc =
+        unsafe { crate::mio_compat::mio_udp_socket_connect_host(backend, socket_v4_to_mio(peer)) };
+    posix_mio_i32(rc)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn getsockopt(
+    socket_id: c_int,
+    _level: c_int,
+    _optname: c_int,
+    optval: *mut c_void,
+    optlen: *mut u32,
+) -> c_int {
+    if socket_id < 0 || SOCKET_FDS.lock().get(socket_id).is_none() {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    if optval.is_null() || optlen.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    let Some(len_bytes) = abi_read_bytes(optlen.cast::<u8>(), core::mem::size_of::<u32>()) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let len = u32::from_ne_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]);
+    if len < core::mem::size_of::<c_int>() as u32
+        || !copy_to_abi_out(optval.cast::<u8>(), &0i32.to_ne_bytes())
+        || !copy_to_abi_out(
+            optlen.cast::<u8>(),
+            &(core::mem::size_of::<c_int>() as u32).to_ne_bytes(),
+        )
+    {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn send(
     socket_id: c_int,
     buf: *const c_void,
@@ -3216,6 +3356,33 @@ pub unsafe extern "C" fn send(
     if len != 0 && buf.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
+    }
+
+    let udp_backend = {
+        let sockets = SOCKET_FDS.lock();
+        match sockets.get(socket_id) {
+            Some(SocketFd::MioUdp { backend }) => Some(*backend),
+            _ => None,
+        }
+    };
+    if let Some(backend) = udp_backend {
+        let Some(input) = abi_read_bytes(buf.cast::<u8>(), len) else {
+            TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+            return -1;
+        };
+        let mut peer = crate::mio_compat::TrueosMioSocketAddr::default();
+        let rc = unsafe { crate::mio_compat::mio_socket_peer_addr_host(backend, &mut peer) };
+        if rc != 0 {
+            return posix_mio_isize(rc as isize);
+        }
+        return posix_mio_isize(unsafe {
+            crate::mio_compat::mio_udp_socket_send_to_host(
+                backend,
+                peer,
+                input.as_ptr(),
+                input.len(),
+            )
+        });
     }
 
     // `std::os::unix::net::UnixStream::write` is implemented with `send(2)`,
@@ -3311,6 +3478,29 @@ pub unsafe extern "C" fn recv(
         return -1;
     }
 
+    let udp_backend = {
+        let sockets = SOCKET_FDS.lock();
+        match sockets.get(socket_id) {
+            Some(SocketFd::MioUdp { backend }) => Some(*backend),
+            _ => None,
+        }
+    };
+    if let Some(backend) = udp_backend {
+        let Some(output) = abi_write_bytes(buf.cast::<u8>(), len) else {
+            TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+            return -1;
+        };
+        let mut from = crate::mio_compat::TrueosMioSocketAddr::default();
+        return posix_mio_isize(unsafe {
+            crate::mio_compat::mio_udp_socket_recv_from_host(
+                backend,
+                &mut from,
+                output.as_mut_ptr(),
+                output.len(),
+            )
+        });
+    }
+
     // See the matching Unix-socket branch in `send`. The Tokio signal driver
     // drains its registered socketpair receiver through `recv(2)` after Mio's
     // poll-backed selector reports it readable.
@@ -3391,6 +3581,107 @@ pub unsafe extern "C" fn recv(
         ));
     }
     result
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sendto(
+    socket_id: c_int,
+    buf: *const c_void,
+    len: usize,
+    _flags: c_int,
+    addr: *const c_void,
+    addr_len: u32,
+) -> isize {
+    if socket_id < 0 || (len != 0 && buf.is_null()) {
+        TRUEOS_ERRNO.store(
+            if socket_id < 0 {
+                TRUEOS_EBADF
+            } else {
+                TRUEOS_EINVAL
+            },
+            Ordering::Relaxed,
+        );
+        return -1;
+    }
+    let Some(peer) = parse_sockaddr_v4(addr, addr_len) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let backend = {
+        let sockets = SOCKET_FDS.lock();
+        let Some(SocketFd::MioUdp { backend }) = sockets.get(socket_id) else {
+            TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+            return -1;
+        };
+        *backend
+    };
+    let Some(input) = abi_read_bytes(buf.cast::<u8>(), len) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    posix_mio_isize(unsafe {
+        crate::mio_compat::mio_udp_socket_send_to_host(
+            backend,
+            socket_v4_to_mio(peer),
+            input.as_ptr(),
+            input.len(),
+        )
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn recvfrom(
+    socket_id: c_int,
+    buf: *mut c_void,
+    len: usize,
+    _flags: c_int,
+    addr: *mut c_void,
+    addr_len: *mut u32,
+) -> isize {
+    if socket_id < 0 || (len != 0 && buf.is_null()) {
+        TRUEOS_ERRNO.store(
+            if socket_id < 0 {
+                TRUEOS_EBADF
+            } else {
+                TRUEOS_EINVAL
+            },
+            Ordering::Relaxed,
+        );
+        return -1;
+    }
+    let backend = {
+        let sockets = SOCKET_FDS.lock();
+        let Some(SocketFd::MioUdp { backend }) = sockets.get(socket_id) else {
+            TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+            return -1;
+        };
+        *backend
+    };
+    let Some(output) = abi_write_bytes(buf.cast::<u8>(), len) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let mut from = crate::mio_compat::TrueosMioSocketAddr::default();
+    let rc = unsafe {
+        crate::mio_compat::mio_udp_socket_recv_from_host(
+            backend,
+            &mut from,
+            output.as_mut_ptr(),
+            output.len(),
+        )
+    };
+    if rc < 0 {
+        return posix_mio_isize(rc);
+    }
+    let Some(from) = socket_v4_from_mio(from) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    if !write_sockaddr_v4(addr, addr_len, from) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    posix_mio_isize(rc)
 }
 
 #[cfg(test)]
@@ -3754,9 +4045,12 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
             SocketFd::Cabi { backend } | SocketFd::PendingListener { backend, .. } => {
                 crate::r::net::socket_cabi::trueos_cabi_socket_tcp_close(backend)
             }
-            SocketFd::MioListener { backend, .. } | SocketFd::MioStream { backend } => unsafe {
+            SocketFd::MioListener { backend, .. }
+            | SocketFd::MioStream { backend }
+            | SocketFd::MioUdp { backend } => unsafe {
                 crate::mio_compat::trueos_mio_socket_close(backend)
             },
+            SocketFd::PendingUdp => 0,
         };
         return if rc < 0 {
             TRUEOS_ERRNO.store(rc.saturating_neg(), Ordering::Relaxed);
@@ -4067,6 +4361,18 @@ pub unsafe extern "C" fn getsockname(
                     None
                 }
             }
+            SocketFd::MioUdp { backend } => {
+                let mut mio_addr = crate::mio_compat::TrueosMioSocketAddr::default();
+                let rc = unsafe {
+                    crate::mio_compat::mio_socket_local_addr_host(*backend, &mut mio_addr)
+                };
+                if rc == 0 {
+                    socket_v4_from_mio(mio_addr)
+                } else {
+                    None
+                }
+            }
+            SocketFd::PendingUdp => None,
             SocketFd::Cabi { .. } => None,
         }
     }

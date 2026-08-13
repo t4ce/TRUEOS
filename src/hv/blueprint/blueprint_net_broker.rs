@@ -85,11 +85,7 @@ impl VmxBroker {
         // ordering across Hull and worker execution realms.
         if crate::hv::current_hull_guest_context_vm_id().is_none() {
             let vm_id = crate::hv::current_guest_execution_context_vm_id().ok_or(())?;
-            return crate::hv::blueprint_net::submit(
-                vm_id,
-                self.session_id,
-                &request[..len],
-            );
+            return crate::hv::blueprint_net::submit(vm_id, self.session_id, &request[..len]);
         }
 
         let mut response = [0u8; 1];
@@ -112,12 +108,8 @@ impl VmxBroker {
 
         if crate::hv::current_hull_guest_context_vm_id().is_none() {
             let vm_id = crate::hv::current_guest_execution_context_vm_id()?;
-            let len = crate::hv::blueprint_net::poll_event(
-                vm_id,
-                self.session_id,
-                &mut response,
-            )
-            .ok()??;
+            let len = crate::hv::blueprint_net::poll_event(vm_id, self.session_id, &mut response)
+                .ok()??;
             return crate::blueprint_net_wire::decode_event(&response[..len]).ok();
         }
 

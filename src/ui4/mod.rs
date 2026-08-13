@@ -79,12 +79,10 @@ pub(crate) use frame_pool::{
     acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer, create_frame,
     create_gpu_full_overwrite_frame, destroy_frame, frame_buffer_ownership_probe, frame_snapshot,
     gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, mark_frame_buffer_fully_opaque,
-    publish_frame_buffer,
-    publish_gpgpu_frame_buffer, publish_gpgpu_render_frame_buffer,
+    publish_frame_buffer, publish_gpgpu_frame_buffer, publish_gpgpu_render_frame_buffer,
     publish_gpgpu_scene_frame_buffer, publish_gpgpu_video_frame_buffer,
-    publish_gpu_font_frame_buffer, publish_gpu_frame_buffer,
-    publish_resident_scene_frame_buffer, published_rgba_view,
-    release_published_frame, retain_published_frame, writable_rgba_view,
+    publish_gpu_font_frame_buffer, publish_gpu_frame_buffer, publish_resident_scene_frame_buffer,
+    published_rgba_view, release_published_frame, retain_published_frame, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewMetrics,
@@ -119,21 +117,18 @@ pub(crate) use video_frame::{
 };
 
 pub(crate) use window_broker::{
-    WindowBrokerError, WindowCreate, WindowId,
-    WindowInteraction, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
-    WindowSessionId, WindowSnapshot, WindowState, acknowledge_window_frame,
-    advance_window_close_transitions, advance_window_placement_transitions,
-    application_windows_for_output_with_revision,
+    WindowBrokerError, WindowCreate, WindowId, WindowInteraction, WindowOwner, WindowPlacement,
+    WindowPlane, WindowSessionCloseRequest, WindowSessionId, WindowSnapshot, WindowState,
+    acknowledge_window_frame, advance_window_close_transitions,
+    advance_window_placement_transitions, application_windows_for_output_with_revision,
     begin_additional_window_session, begin_window_session, close_window,
     commit_window_frame_replacement, create_window, finish_window_session,
-    finish_window_session_with_request, move_window,
-    publish_window_frame, publish_window_frames, replace_window_frame, retire_frame_when_released,
-    set_window_hit_testable, set_window_placement, set_windows_visible,
-    take_window_first_presentation, toggle_window_maximized,
-    ui4_window_broker_snapshot_service_task, visible_windows_for_output,
-    wait_for_window_composition_change,
-    wait_for_window_first_presentation, window_composition_revision, window_placement,
-    window_transitions_active,
+    finish_window_session_with_request, move_window, publish_window_frame, publish_window_frames,
+    replace_window_frame, retire_frame_when_released, set_window_hit_testable,
+    set_window_placement, set_windows_visible, take_window_first_presentation,
+    toggle_window_maximized, ui4_window_broker_snapshot_service_task, visible_windows_for_output,
+    wait_for_window_composition_change, wait_for_window_first_presentation,
+    window_composition_revision, window_placement, window_transitions_active,
 };
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

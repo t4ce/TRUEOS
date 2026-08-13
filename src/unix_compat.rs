@@ -25,6 +25,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "clock_gettime"
             | "close"
             | "closedir"
+            | "connect"
             | "dirfd"
             | "dladdr"
             | "dlclose"
@@ -58,6 +59,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "getpeername"
             | "getpid"
             | "getsockname"
+            | "getsockopt"
             | "gettimeofday"
             | "ioctl"
             | "isatty"
@@ -127,10 +129,12 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "realpath"
             | "realloc"
             | "recv"
+            | "recvfrom"
             | "rename"
             | "rmdir"
             | "sched_yield"
             | "send"
+            | "sendto"
             | "setgid"
             | "setgroups"
             | "setpgid"
@@ -184,6 +188,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "clock_gettime" => Some(trueos_qjs::trueos_shims::clock_gettime as *const () as usize),
         "close" => Some(crate::std_abi_shim::close as *const () as usize),
         "closedir" => Some(crate::std_abi_shim::closedir as *const () as usize),
+        "connect" => Some(crate::std_abi_shim::connect as *const () as usize),
         "dirfd" => Some(crate::std_abi_shim::dirfd as *const () as usize),
         "dladdr" => Some(crate::std_abi_shim::dladdr as *const () as usize),
         "dlclose" => Some(crate::std_abi_shim::dlclose as *const () as usize),
@@ -217,6 +222,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "getpeername" => Some(crate::std_abi_shim::getpeername as *const () as usize),
         "getpid" => Some(crate::std_abi_shim::getpid as *const () as usize),
         "getsockname" => Some(crate::std_abi_shim::getsockname as *const () as usize),
+        "getsockopt" => Some(crate::std_abi_shim::getsockopt as *const () as usize),
         "gettimeofday" => Some(crate::std_abi_shim::gettimeofday as *const () as usize),
         "ioctl" => Some(crate::unix_abi_shim::ioctl as *const () as usize),
         "isatty" => Some(crate::unix_abi_shim::isatty as *const () as usize),
@@ -320,10 +326,12 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "realpath" => Some(crate::std_abi_shim::realpath as *const () as usize),
         "realloc" => Some(crate::std_abi_shim::realloc as *const () as usize),
         "recv" => Some(crate::std_abi_shim::recv as *const () as usize),
+        "recvfrom" => Some(crate::std_abi_shim::recvfrom as *const () as usize),
         "rename" => Some(crate::std_abi_shim::rename as *const () as usize),
         "rmdir" => Some(crate::std_abi_shim::rmdir as *const () as usize),
         "sched_yield" => Some(crate::std_abi_shim::sched_yield as *const () as usize),
         "send" => Some(crate::std_abi_shim::send as *const () as usize),
+        "sendto" => Some(crate::std_abi_shim::sendto as *const () as usize),
         "setgid" => Some(crate::std_abi_shim::setgid as *const () as usize),
         "setgroups" => Some(crate::std_abi_shim::setgroups as *const () as usize),
         "setpgid" => Some(crate::std_abi_shim::setpgid as *const () as usize),
@@ -365,18 +373,22 @@ mod tests {
         for name in [
             "chdir",
             "chroot",
+            "connect",
             "dladdr",
             "dup2",
             "environ",
             "execvp",
             "fdopendir",
             "fork",
+            "getsockopt",
             "linkat",
             "mmap",
             "mprotect",
             "openat",
             "pthread_kill",
             "rename",
+            "recvfrom",
+            "sendto",
             "sigaction",
             "unlinkat",
         ] {
